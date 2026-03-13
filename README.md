@@ -2,7 +2,15 @@
 
 An open-source log viewer inspired by Microsoft's CMTrace.exe, built with Tauri v2 + React + TypeScript + Rust. Includes built-in diagnostics.
 
-<!-- ![Screenshot](docs/screenshot.png) -->
+## Screenshots
+
+### Main Window
+
+![Main Window](references/main_window_wlog.png)
+
+### Intune Analysis
+
+![Intune Diagnostics](references/intune_diag.png)
 
 ## Features
 

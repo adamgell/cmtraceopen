@@ -1,0 +1,17 @@
+<![LOG[Powershell execution is done, exitCode = 1]LOG]!><time="11:16:37.3093207" date="3-12-2026" component="HealthScripts" context="" type="1" thread="50" file="">
+<![LOG[[HS] err output = Downloaded profile payload is not valid JSON.
+At C:\Windows\IMECache\HealthScripts\script.ps1:457 char:9
++ Invoke-RestMethod -Method Post -Uri $serviceUrl -Body $payload
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+CategoryInfo          : InvalidData: (:) [Invoke-RestMethod], InvalidDataException
+FullyQualifiedErrorId : System.Management.Automation.InvalidDataException,Microsoft.PowerShell.Commands.InvokeRestMethodCommand
+Download request correlation id: 54f1cc16-1a36-4b1a-9ed0-acde01234567
+Response body preview: { "error": "bad payload" }
+Stack trace: line 457 in script.ps1
+Recommendation: validate JSON profile before upload
+Additional detail 1
+Additional detail 2
+Additional detail 3
+Additional detail 4
+Additional detail 5
+]LOG]!><time="11:16:42.3322734" date="3-12-2026" component="HealthScripts" context="" type="3" thread="50" file="">

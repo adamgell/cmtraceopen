@@ -1,0 +1,287 @@
+//! CCM/SCCM format parser.
+//!
+//! Parses log lines in the format:
+//!   <![LOG[message text]LOG]!><time="HH:mm:ss.fff+TZO" date="MM-dd-yyyy"
+//!     component="Name" context="" type="N" thread="N" file="source.cpp">
+//!
+//! The regex patterns are derived directly from the scanf format strings
+//! extracted from the CMTrace.exe binary (see REVERSE_ENGINEERING.md).
+
+use once_cell::sync::Lazy;
+use regex::Regex;
+
+use super::severity::detect_severity_from_text;
+use crate::models::log_entry::{LogEntry, LogFormat, ParserSpecialization, Severity};
+
+/// Compiled regex matching a complete CCM log line.
+///
+/// Based on the binary's scanf pattern:
+///   <time="%02u:%02u:%02u.%03u%d" date="%02u-%02u-%04u"
+///    component="%100[^"]" context="" type="%u" thread="%u" file="%100[^"]"
+static CCM_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(concat!(
+        r#"<!\[LOG\[(?P<msg>[\s\S]*?)\]LOG\]!>"#,
+        r#"<time="(?P<h>\d{1,2}):(?P<m>\d{1,2}):(?P<s>\d{1,2})\.(?P<ms>\d+)(?P<tz>[+-]?\d+)""#,
+        r#"\s+date="(?P<mon>\d{1,2})-(?P<day>\d{1,2})-(?P<yr>\d{4})""#,
+        r#"\s+component="(?P<comp>[^"]*)""#,
+        r#"\s+context="[^"]*""#,
+        r#"\s+type="(?P<typ>\d)""#,
+        r#"\s+thread="(?P<thr>\d+)""#,
+        r#"(?:\s+file="(?P<file>[^"]*)")?"#,
+    ))
+    .expect("CCM regex must compile")
+});
+
+/// Parse a single CCM-format log line.
+/// Returns None if the line doesn't match the CCM format.
+fn parse_line(line: &str) -> Option<CcmParsed> {
+    let caps = CCM_RE.captures(line)?;
+
+    let msg = caps.name("msg").map(|m| m.as_str().to_string())?;
+    let h: u32 = caps.name("h")?.as_str().parse().ok()?;
+    let m: u32 = caps.name("m")?.as_str().parse().ok()?;
+    let s: u32 = caps.name("s")?.as_str().parse().ok()?;
+    let ms_str = caps.name("ms")?.as_str();
+    // Truncate milliseconds to 3 digits (matching CMTrace behavior)
+    let ms = truncate_subsecond_to_millis(ms_str)?;
+    let tz: i32 = caps.name("tz")?.as_str().parse().ok()?;
+    let mon: u32 = caps.name("mon")?.as_str().parse().ok()?;
+    let day: u32 = caps.name("day")?.as_str().parse().ok()?;
+    let yr: i32 = caps.name("yr")?.as_str().parse().ok()?;
+    let comp = caps.name("comp").map(|m| m.as_str().to_string());
+    let typ: u32 = caps.name("typ")?.as_str().parse().ok()?;
+    let thr: u32 = caps.name("thr")?.as_str().parse().ok()?;
+    let file = caps.name("file").map(|m| m.as_str().to_string());
+
+    let severity = severity_from_type_field(Some(typ), &msg);
+    let (timestamp, timestamp_display) = build_timestamp(mon, day, yr, h, m, s, ms);
+    let thread_display = Some(format_thread_display(thr));
+
+    Some(CcmParsed {
+        message: msg,
+        component: comp,
+        timestamp,
+        timestamp_display,
+        severity,
+        thread: thr,
+        thread_display,
+        source_file: file,
+        timezone_offset: tz,
+    })
+}
+
+struct CcmParsed {
+    message: String,
+    component: Option<String>,
+    timestamp: Option<i64>,
+    timestamp_display: Option<String>,
+    severity: Severity,
+    thread: u32,
+    thread_display: Option<String>,
+    source_file: Option<String>,
+    timezone_offset: i32,
+}
+
+pub(crate) fn truncate_subsecond_to_millis(value: &str) -> Option<u32> {
+    if value.len() > 3 {
+        value[..3].parse().ok()
+    } else {
+        value.parse().ok()
+    }
+}
+
+pub(crate) fn build_timestamp(
+    month: u32,
+    day: u32,
+    year: i32,
+    hour: u32,
+    minute: u32,
+    second: u32,
+    millis: u32,
+) -> (Option<i64>, Option<String>) {
+    let timestamp = chrono::NaiveDate::from_ymd_opt(year, month, day)
+        .and_then(|date| date.and_hms_milli_opt(hour, minute, second, millis))
+        .map(|value| value.and_utc().timestamp_millis());
+    let timestamp_display = Some(format!(
+        "{:02}-{:02}-{:04} {:02}:{:02}:{:02}.{:03}",
+        month, day, year, hour, minute, second, millis
+    ));
+
+    (timestamp, timestamp_display)
+}
+
+pub(crate) fn severity_from_type_field(type_value: Option<u32>, message: &str) -> Severity {
+    match type_value {
+        Some(2) => Severity::Warning,
+        Some(3) => Severity::Error,
+        Some(_) => Severity::Info,
+        None => detect_severity_from_text(message),
+    }
+}
+
+pub(crate) fn format_thread_display(thread: u32) -> String {
+    format!("{} (0x{:04X})", thread, thread)
+}
+
+pub fn parse_content(
+    content: &str,
+    file_path: &str,
+    specialization: Option<ParserSpecialization>,
+) -> (Vec<LogEntry>, u32) {
+    match specialization {
+        Some(ParserSpecialization::Ime) => crate::intune::ime_parser::parse_ime_entries(content, file_path),
+        None => {
+            let lines: Vec<&str> = content.lines().collect();
+            parse_lines(&lines, file_path)
+        }
+    }
+}
+
+pub fn parse_lines_with_specialization(
+    lines: &[&str],
+    file_path: &str,
+    specialization: Option<ParserSpecialization>,
+) -> (Vec<LogEntry>, u32) {
+    match specialization {
+        Some(ParserSpecialization::Ime) => parse_content(&lines.join("\n"), file_path, specialization),
+        None => parse_lines(lines, file_path),
+    }
+}
+
+/// Parse all lines as CCM format.
+/// Returns (entries, parse_error_count).
+pub fn parse_lines(lines: &[&str], file_path: &str) -> (Vec<LogEntry>, u32) {
+    let mut entries = Vec::with_capacity(lines.len());
+    let mut errors = 0u32;
+    let mut id_counter = 0u64;
+
+    for (i, line) in lines.iter().enumerate() {
+        if line.trim().is_empty() {
+            continue;
+        }
+
+        match parse_line(line) {
+            Some(parsed) => {
+                entries.push(LogEntry {
+                    id: id_counter,
+                    line_number: (i + 1) as u32,
+                    message: parsed.message,
+                    component: parsed.component,
+                    timestamp: parsed.timestamp,
+                    timestamp_display: parsed.timestamp_display,
+                    severity: parsed.severity,
+                    thread: Some(parsed.thread),
+                    thread_display: parsed.thread_display,
+                    source_file: parsed.source_file,
+                    format: LogFormat::Ccm,
+                    file_path: file_path.to_string(),
+                    timezone_offset: Some(parsed.timezone_offset),
+                });
+                id_counter += 1;
+            }
+            None => {
+                // Line didn't match CCM format — treat as plain text continuation
+                // or standalone plain text entry
+                entries.push(LogEntry {
+                    id: id_counter,
+                    line_number: (i + 1) as u32,
+                    message: line.to_string(),
+                    component: None,
+                    timestamp: None,
+                    timestamp_display: None,
+                    severity: detect_severity_from_text(line),
+                    thread: None,
+                    thread_display: None,
+                    source_file: None,
+                    format: LogFormat::Plain,
+                    file_path: file_path.to_string(),
+                    timezone_offset: None,
+                });
+                id_counter += 1;
+                errors += 1;
+            }
+        }
+    }
+
+    (entries, errors)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_ccm_line() {
+        let line = r#"<![LOG[Successfully connected to \\server\share]LOG]!><time="08:06:34.590-060" date="09-02-2016" component="ContentTransferManager" context="" type="1" thread="3692" file="datatransfer.cpp">"#;
+        let parsed = parse_line(line).expect("should parse");
+        assert_eq!(parsed.message, r"Successfully connected to \\server\share");
+        assert_eq!(parsed.component.as_deref(), Some("ContentTransferManager"));
+        assert_eq!(parsed.severity, Severity::Info);
+        assert_eq!(parsed.thread, 3692);
+        assert_eq!(parsed.source_file.as_deref(), Some("datatransfer.cpp"));
+        assert_eq!(parsed.timezone_offset, -60);
+        assert_eq!(
+            parsed.timestamp_display.as_deref(),
+            Some("09-02-2016 08:06:34.590")
+        );
+    }
+
+    #[test]
+    fn test_parse_ccm_error() {
+        let line = r#"<![LOG[Failed to download content. Error 0x80070005]LOG]!><time="14:30:45.123+000" date="11-15-2023" component="ContentAccess" context="" type="3" thread="4480" file="contentaccess.cpp">"#;
+        let parsed = parse_line(line).expect("should parse");
+        assert_eq!(parsed.severity, Severity::Error);
+        assert_eq!(parsed.component.as_deref(), Some("ContentAccess"));
+    }
+
+    #[test]
+    fn test_parse_ccm_warning() {
+        let line = r#"<![LOG[Retrying request]LOG]!><time="10:00:00.000+000" date="01-01-2024" component="Test" context="" type="2" thread="100" file="">"#;
+        let parsed = parse_line(line).expect("should parse");
+        assert_eq!(parsed.severity, Severity::Warning);
+    }
+
+    #[test]
+    fn test_severity_from_text() {
+        assert_eq!(
+            detect_severity_from_text("An error occurred"),
+            Severity::Error
+        );
+        assert_eq!(
+            detect_severity_from_text("Connection failed"),
+            Severity::Error
+        );
+        assert_eq!(
+            detect_severity_from_text("Failover to backup"),
+            Severity::Info
+        );
+        assert_eq!(
+            detect_severity_from_text("Warning: low disk"),
+            Severity::Warning
+        );
+        assert_eq!(detect_severity_from_text("All good"), Severity::Info);
+    }
+
+    #[test]
+    fn test_parse_lines_with_ime_specialization_preserves_logical_records() {
+        let lines = [
+            r#"<![LOG[Powershell execution is done, exitCode = 1]LOG]!><time="11:16:37.3093207" date="3-12-2026" component="HealthScripts" context="" type="1" thread="50" file="">"#,
+            r#"<![LOG[[HS] err output = Downloaded profile payload is not valid JSON."#,
+            r#"At C:\Windows\IMECache\HealthScripts\script.ps1:457 char:9"#,
+            r#"]LOG]!><time="11:16:42.3322734" date="3-12-2026" component="HealthScripts" context="" type="3" thread="50" file="">"#,
+        ];
+
+        let (entries, parse_errors) = parse_lines_with_specialization(
+            &lines,
+            "HealthScripts.log",
+            Some(ParserSpecialization::Ime),
+        );
+
+        assert_eq!(parse_errors, 0);
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].format, LogFormat::Ccm);
+        assert_eq!(entries[1].line_number, 2);
+        assert!(entries[1].message.contains("Downloaded profile payload is not valid JSON"));
+        assert!(entries[1].message.contains("At C:\\Windows\\IMECache\\HealthScripts\\script.ps1:457 char:9"));
+    }
+}

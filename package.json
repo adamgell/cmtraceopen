@@ -1,0 +1,38 @@
+{
+  "name": "cmtrace-open",
+  "version": "0.2.0",
+  "private": true,
+  "description": "Open-source CMTrace log viewer with built-in Intune diagnostics",
+  "scripts": {
+    "frontend:dev": "vite",
+    "frontend:build": "tsc && vite build",
+    "frontend:preview": "vite preview",
+    "app:dev": "tauri dev",
+    "app:build:debug": "tauri build --debug",
+    "app:build:release": "tauri build",
+    "dev": "npm run frontend:dev",
+    "build": "npm run frontend:build",
+    "preview": "npm run frontend:preview",
+    "tauri": "tauri"
+  },
+  "license": "MIT",
+  "type": "module",
+  "dependencies": {
+    "@tanstack/react-virtual": "^3.13.21",
+    "@tauri-apps/api": "^2.10.1",
+    "@tauri-apps/plugin-clipboard-manager": "^2.3.2",
+    "@tauri-apps/plugin-dialog": "^2.6.0",
+    "@tauri-apps/plugin-fs": "^2.4.5",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
+    "zustand": "^5.0.11"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.10.1",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^5.1.4",
+    "typescript": "^5.9.3",
+    "vite": "^7.3.1"
+  }
+}

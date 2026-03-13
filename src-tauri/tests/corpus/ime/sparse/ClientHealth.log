@@ -1,0 +1,4 @@
+<![LOG[Client Health evaluation starts.]LOG]!><time="23:00:10.6893636" date="11-12-2025" component="ClientHealth" context="" type="1" thread="1" file="">
+
+<![LOG[OnStart, public cloud env.]LOG]!><time="23:00:11.4573058" date="11-12-2025" component="ClientHealth" context="" type="1" thread="1" file="">
+<![LOG[Set MdmDeviceCertificate : 3788C1E384FDCB3F173A3222CB4191883A94224E

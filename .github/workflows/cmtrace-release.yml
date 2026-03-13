@@ -72,7 +72,7 @@ jobs:
             ### Downloads
             | Platform | File |
             |----------|------|
-            | Windows (x64) | signed `.msi` / signed `.exe` |
+            | Windows (x64 / arm64) | signed `.msi` / signed `.exe` |
             | macOS (ARM) | `.dmg` disk image |
             | macOS (Intel) | `.dmg` disk image |
             | Linux (x64) | `.deb` / `.AppImage` |

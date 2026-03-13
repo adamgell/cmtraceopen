@@ -1,0 +1,5 @@
+orphan preamble
+2024-01-15 08:00:00, Info                  DISM   DISM Package Manager: Processing package
+Continuation detail
+2024-01-15 08:00:01, UnexpectedLevel       DISM   malformed header
+2024-01-15 08:00:02, Error                 DISM   DISM Package Manager: Failed finalizing changes

@@ -17,9 +17,12 @@ permissions:
   contents: write
 
 jobs:
-  windows-signed-release:
-    name: Signed Windows Release
+  prepare-windows-release:
+    name: Prepare Windows Release
     runs-on: windows-latest
+    outputs:
+      version: ${{ steps.resolve_version.outputs.version }}
+      tag_name: ${{ steps.resolve_version.outputs.tag_name }}
 
     steps:
       - uses: actions/checkout@v4
@@ -32,14 +35,6 @@ jobs:
           node-version: "20"
           cache: npm
           cache-dependency-path: package-lock.json
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: x86_64-pc-windows-msvc
-
-      - name: Install frontend dependencies
-        run: npm ci
 
       - name: Resolve release version
         id: resolve_version
@@ -104,16 +99,78 @@ jobs:
             git push origin $env:TAG_NAME
           }
 
+      - name: Ensure GitHub release exists
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: ${{ steps.resolve_version.outputs.tag_name }}
+        run: |
+          $releaseTitle = "CMTrace Open $env:TAG_NAME"
+          $releaseNotes = @"
+          ## CMTrace Open $env:TAG_NAME
+
+          Open-source CMTrace log viewer with built-in Intune diagnostics.
+
+          ### Windows Downloads
+          - Signed standalone EXE (x64)
+          - Signed MSI installer (x64)
+          - Signed standalone EXE (arm64)
+          - Signed MSI installer (arm64)
+          "@
+
+          gh release view $env:TAG_NAME *> $null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $env:TAG_NAME --title $releaseTitle --notes $releaseNotes
+          }
+
+  windows-signed-release:
+    name: Signed Windows Release (${{ matrix.label }})
+    needs: prepare-windows-release
+    runs-on: windows-latest
+    environment: codesigning
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: Windows-x64
+            rust_target: x86_64-pc-windows-msvc
+            artifact_suffix: x64
+          - label: Windows-arm64
+            rust_target: aarch64-pc-windows-msvc
+            artifact_suffix: arm64
+
+    env:
+      VERSION: ${{ needs.prepare-windows-release.outputs.version }}
+      TAG_NAME: ${{ needs.prepare-windows-release.outputs.tag_name }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
+
+      - name: Install frontend dependencies
+        run: npm ci
+
       - name: Build Windows MSI and standalone EXE
-        run: npm run app:build:release -- --target x86_64-pc-windows-msvc --bundles msi
+        run: npm run app:build:release -- --target ${{ matrix.rust_target }} --bundles msi
 
       - name: Stage Windows release artifacts
         id: stage_artifacts
         shell: pwsh
-        env:
-          VERSION: ${{ steps.resolve_version.outputs.version }}
         run: |
-          $releaseDir = Join-Path $PWD "src-tauri\target\x86_64-pc-windows-msvc\release"
+          $releaseDir = Join-Path $PWD "src-tauri\target\${{ matrix.rust_target }}\release"
           $bundleMsiDir = Join-Path $releaseDir "bundle\msi"
           $artifactDir = Join-Path $PWD "release-artifacts"
 
@@ -136,8 +193,8 @@ jobs:
             throw "Expected exactly one MSI in $bundleMsiDir. Found: $names"
           }
 
-          $stagedExe = Join-Path $artifactDir "CMTrace-Open_$($env:VERSION)_x64.exe"
-          $stagedMsi = Join-Path $artifactDir "CMTrace-Open_$($env:VERSION)_x64.msi"
+          $stagedExe = Join-Path $artifactDir "CMTrace-Open_$($env:VERSION)_${{ matrix.artifact_suffix }}.exe"
+          $stagedMsi = Join-Path $artifactDir "CMTrace-Open_$($env:VERSION)_${{ matrix.artifact_suffix }}.msi"
 
           Copy-Item $appExeCandidates[0].FullName $stagedExe -Force
           Copy-Item $msiCandidates[0].FullName $stagedMsi -Force
@@ -178,7 +235,7 @@ jobs:
       - name: Upload signed workflow artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: cmtrace-open-windows-signed-${{ steps.resolve_version.outputs.version }}
+          name: cmtrace-open-windows-signed-${{ matrix.artifact_suffix }}-${{ env.VERSION }}
           path: |
             ${{ steps.stage_artifacts.outputs.signed_exe_path }}
             ${{ steps.stage_artifacts.outputs.signed_msi_path }}
@@ -188,24 +245,7 @@ jobs:
         shell: pwsh
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG_NAME: ${{ steps.resolve_version.outputs.tag_name }}
           SIGNED_EXE_PATH: ${{ steps.stage_artifacts.outputs.signed_exe_path }}
           SIGNED_MSI_PATH: ${{ steps.stage_artifacts.outputs.signed_msi_path }}
         run: |
-          $releaseTitle = "CMTrace Open $env:TAG_NAME"
-          $releaseNotes = @"
-          ## CMTrace Open $env:TAG_NAME
-
-          Open-source CMTrace log viewer with built-in Intune diagnostics.
-
-          ### Windows Downloads
-          - Signed standalone EXE
-          - Signed MSI installer
-          "@
-
-          gh release view $env:TAG_NAME *> $null
-          if ($LASTEXITCODE -ne 0) {
-            gh release create $env:TAG_NAME $env:SIGNED_EXE_PATH $env:SIGNED_MSI_PATH --title $releaseTitle --notes $releaseNotes
-          } else {
-            gh release upload $env:TAG_NAME $env:SIGNED_EXE_PATH $env:SIGNED_MSI_PATH --clobber
-          }
+          gh release upload $env:TAG_NAME $env:SIGNED_EXE_PATH $env:SIGNED_MSI_PATH --clobber

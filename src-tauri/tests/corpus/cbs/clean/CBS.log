@@ -1,0 +1,4 @@
+2024-01-15 08:00:00, Info                  CBS    Exec: Processing package
+Continuation detail
+    indented continuation
+2024-01-15 08:00:05, Error                 CSI    [SR] Cannot repair file
