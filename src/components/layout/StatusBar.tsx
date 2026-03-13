@@ -16,7 +16,6 @@ import {
   useUiStore,
 } from "../../stores/ui-store";
 import { useIntuneStore } from "../../stores/intune-store";
-import type { LogEntry } from "../../types/log";
 
 interface SeverityCounts {
   errors: number;
@@ -24,31 +23,11 @@ interface SeverityCounts {
   info: number;
 }
 
-function computeSeverityCounts(entries: LogEntry[]): SeverityCounts {
-  let errors = 0;
-  let warnings = 0;
-  let info = 0;
-  for (const entry of entries) {
-    switch (entry.severity) {
-      case "Error":
-        errors++;
-        break;
-      case "Warning":
-        warnings++;
-        break;
-      case "Info":
-        info++;
-        break;
-    }
-  }
-  return { errors, warnings, info };
-}
-
 function formatSeverityCounts(counts: SeverityCounts): string {
   const parts: string[] = [];
   if (counts.errors > 0) parts.push(`${counts.errors} error${counts.errors === 1 ? "" : "s"}`);
   if (counts.warnings > 0) parts.push(`${counts.warnings} warning${counts.warnings === 1 ? "" : "s"}`);
-  parts.push(`${counts.info} info`);
+  if (counts.info > 0) parts.push(`${counts.info} info`);
   return parts.join(", ");
 }
 
@@ -79,18 +58,51 @@ export function StatusBar() {
   const isFiltering = useFilterStore((s) => s.isFiltering);
   const filterError = useFilterStore((s) => s.filterError);
 
-  const severityCounts = useMemo(() => computeSeverityCounts(entries), [entries]);
+  const { filteredCount, severityCounts } = useMemo(() => {
+    let errors = 0;
+    let warnings = 0;
+    let info = 0;
+    let counter = 0;
 
-  const displayEntries = useMemo(() => {
-    if (!filteredIds) return entries;
-    return entries.filter((entry) => filteredIds.has(entry.id));
+    for (const entry of entries) {
+      if (filteredIds && !filteredIds.has(entry.id)) continue;
+      counter++;
+      switch (entry.severity) {
+        case "Error":
+          errors++;
+          break;
+        case "Warning":
+          warnings++;
+          break;
+        case "Info":
+          info++;
+          break;
+      }
+    }
+
+    return {
+      filteredCount: counter,
+      severityCounts: { errors, warnings, info },
+    };
   }, [entries, filteredIds]);
 
   const selectedPosition = useMemo(() => {
-    if (selectedId === null || displayEntries.length === 0) return null;
-    const index = displayEntries.findIndex((e) => e.id === selectedId);
-    return index === -1 ? null : index + 1;
-  }, [displayEntries, selectedId]);
+    if (selectedId === null) {
+      return null;
+    }
+
+    let counter = 0;
+
+    for (const entry of entries) {
+      if (filteredIds && !filteredIds.has(entry.id)) continue;
+      counter++;
+      if (entry.id === selectedId) {
+        return counter;
+      }
+    }
+
+    return null;
+  }, [entries, filteredIds, selectedId]);
 
   let elapsedText = "";
   if (activeView === "log" && selectedId !== null && entries.length > 0) {
@@ -148,16 +160,16 @@ export function StatusBar() {
 
     const positionText =
       selectedPosition !== null
-        ? `Entry ${selectedPosition} of ${displayEntries.length}`
+        ? `Entry ${selectedPosition} of ${filteredCount}`
         : null;
 
     const severityText =
-      entries.length > 0 ? formatSeverityCounts(severityCounts) : null;
+      filteredCount > 0 ? formatSeverityCounts(severityCounts) : null;
 
     const logStatusText =
       entries.length > 0
         ? [
-          positionText ?? `${displayEntries.length} entries`,
+          positionText ?? `${filteredCount} entries`,
           `${totalLines} lines`,
           severityText,
           `${formatDetected ?? "Unknown"} format`,
