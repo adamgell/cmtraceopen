@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { save } from "@tauri-apps/plugin-dialog";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { writeTextFile } from "@tauri-apps/plugin-fs";
@@ -544,7 +544,7 @@ export function DsregcmdWorkspace() {
   const analysisState = useDsregcmdStore((s) => s.analysisState);
   const isAnalyzing = useDsregcmdStore((s) => s.isAnalyzing);
   const { openSourceFileDialog, openSourceFolderDialog, pasteDsregcmdSource, captureDsregcmdSource } = useAppActions();
-  const [exportMessage, setExportMessage] = useState<string | null>(null);
+  const [exportStatus, setExportStatus] = useState<{ tone: "success" | "error"; message: string } | null>(null);
   const [showRawInput, setShowRawInput] = useState(false);
 
   const diagnostics = result?.diagnostics ?? [];
@@ -562,13 +562,42 @@ export function DsregcmdWorkspace() {
     [result]
   );
 
+  useEffect(() => {
+    if (!exportStatus) {
+      return undefined;
+    }
+
+    const timer = window.setTimeout(() => {
+      setExportStatus(null);
+    }, 5000);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [exportStatus]);
+
+  const setExportSuccess = useCallback((message: string) => {
+    setExportStatus({ tone: "success", message });
+  }, []);
+
+  const setExportError = useCallback((message: string) => {
+    setExportStatus({ tone: "error", message });
+  }, []);
+
   const handleCopyJson = async () => {
     if (!result) {
       return;
     }
 
-    await writeText(JSON.stringify(result, null, 2));
-    setExportMessage("Copied dsregcmd analysis JSON to the clipboard.");
+    try {
+      await writeText(JSON.stringify(result, null, 2));
+      setExportSuccess("Copied dsregcmd analysis JSON to the clipboard.");
+    } catch (error) {
+      console.error("[dsregcmd] failed to copy JSON export", { error });
+      setExportError(
+        error instanceof Error ? error.message : "Could not copy dsregcmd JSON to the clipboard."
+      );
+    }
   };
 
   const handleCopySummary = async () => {
@@ -576,8 +605,15 @@ export function DsregcmdWorkspace() {
       return;
     }
 
-    await writeText(summaryText);
-    setExportMessage("Copied dsregcmd summary to the clipboard.");
+    try {
+      await writeText(summaryText);
+      setExportSuccess("Copied dsregcmd summary to the clipboard.");
+    } catch (error) {
+      console.error("[dsregcmd] failed to copy summary export", { error });
+      setExportError(
+        error instanceof Error ? error.message : "Could not copy the dsregcmd summary to the clipboard."
+      );
+    }
   };
 
   const handleSaveExport = async (kind: "json" | "summary") => {
@@ -588,21 +624,32 @@ export function DsregcmdWorkspace() {
     const defaultPath =
       kind === "json" ? "dsregcmd-analysis.json" : "dsregcmd-summary.txt";
 
-    const destination = await save({
-      defaultPath,
-      filters:
-        kind === "json"
-          ? [{ name: "JSON", extensions: ["json"] }]
-          : [{ name: "Text", extensions: ["txt"] }],
-    });
+    try {
+      const destination = await save({
+        defaultPath,
+        filters:
+          kind === "json"
+            ? [{ name: "JSON", extensions: ["json"] }]
+            : [{ name: "Text", extensions: ["txt"] }],
+      });
 
-    if (!destination) {
-      return;
+      if (!destination) {
+        return;
+      }
+
+      const contents = kind === "json" ? JSON.stringify(result, null, 2) : summaryText;
+      await writeTextFile(destination, contents);
+      setExportSuccess(
+        `Saved ${kind === "json" ? "JSON export" : "summary export"} to ${destination}.`
+      );
+    } catch (error) {
+      console.error("[dsregcmd] failed to save export", { error, kind });
+      setExportError(
+        error instanceof Error
+          ? error.message
+          : `Could not save the ${kind === "json" ? "JSON" : "summary"} export.`
+      );
     }
-
-    const contents = kind === "json" ? JSON.stringify(result, null, 2) : summaryText;
-    await writeTextFile(destination, contents);
-    setExportMessage(`Saved ${kind === "json" ? "JSON export" : "summary export"} to ${destination}.`);
   };
 
   if (!result && isAnalyzing) {
@@ -899,8 +946,16 @@ export function DsregcmdWorkspace() {
               {showRawInput ? "Hide Raw Input" : "Show Raw Input"}
             </button>
           </div>
-          {exportMessage && (
-            <div style={{ marginTop: "10px", fontSize: "12px", color: "#166534" }}>{exportMessage}</div>
+          {exportStatus && (
+            <div
+              style={{
+                marginTop: "10px",
+                fontSize: "12px",
+                color: exportStatus.tone === "error" ? "#991b1b" : "#166534",
+              }}
+            >
+              {exportStatus.message}
+            </div>
           )}
           {showRawInput && (
             <textarea

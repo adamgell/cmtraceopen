@@ -187,7 +187,7 @@ export function StatusBar() {
           : "No analysis",
     ];
 
-    if (dsregcmdSourceContext.displayLabel) {
+    if (dsregcmdSourceContext.source !== null) {
       leftParts.push(`Source ${dsregcmdSourceContext.displayLabel}`);
     }
 

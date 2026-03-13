@@ -165,23 +165,19 @@ export async function analyzeDsregcmdSource(
 
 export async function analyzeDsregcmdPath(
   path: string,
-  options: { preferFolder?: boolean; fallbackToFolder?: boolean } = {}
+  options: { fallbackToFolder?: boolean } = {}
 ): Promise<DsregcmdAnalysisResult> {
-  const tryFolderFirst = options.preferFolder === true;
-
   try {
     const fileInfo = await stat(path);
-
     if (fileInfo.isDirectory) {
       return analyzeDsregcmdSource({ kind: "folder", path });
+    }
+    if (fileInfo.isFile) {
+      return analyzeDsregcmdSource({ kind: "file", path });
     }
 
     return analyzeDsregcmdSource({ kind: "file", path });
   } catch (error) {
-    if (tryFolderFirst) {
-      throw error;
-    }
-
     if (options.fallbackToFolder === false) {
       throw error;
     }

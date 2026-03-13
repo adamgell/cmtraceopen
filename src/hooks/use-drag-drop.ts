@@ -1,6 +1,5 @@
 import { useEffect } from "react";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
-import { useFilterStore } from "../stores/filter-store";
 import { useAppActions } from "../components/layout/Toolbar";
 
 /**
@@ -8,7 +7,6 @@ import { useAppActions } from "../components/layout/Toolbar";
  * It routes dropped paths through the active workspace's source-loading flow.
  */
 export function useDragDrop() {
-  const clearFilter = useFilterStore((s) => s.clearFilter);
   const { openPathForActiveWorkspace } = useAppActions();
 
   useEffect(() => {
@@ -25,7 +23,6 @@ export function useDragDrop() {
       }
 
       const droppedPath = paths[0];
-      clearFilter();
 
       try {
         await openPathForActiveWorkspace(droppedPath);
@@ -40,5 +37,5 @@ export function useDragDrop() {
     return () => {
       unlisten.then((fn) => fn());
     };
-  }, [clearFilter, openPathForActiveWorkspace]);
+  }, [openPathForActiveWorkspace]);
 }
