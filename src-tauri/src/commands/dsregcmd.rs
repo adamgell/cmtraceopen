@@ -93,7 +93,9 @@ fn resolve_system32_binary(file_name: &str) -> Result<PathBuf, String> {
 fn verify_dsregcmd_signature(dsregcmd_path: &Path) -> Result<(), String> {
     let powershell_path = resolve_system32_binary(r"WindowsPowerShell\v1.0\powershell.exe")?;
     let script = r#"
-$sig = Get-AuthenticodeSignature -LiteralPath $args[0]
+$ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::UTF8
+$sig = Get-AuthenticodeSignature -LiteralPath $env:CMTRACEOPEN_DSREGCMD_PATH
 [pscustomobject]@{
   Status = $sig.Status.ToString()
   Subject = if ($sig.SignerCertificate) { $sig.SignerCertificate.Subject } else { $null }
@@ -101,8 +103,15 @@ $sig = Get-AuthenticodeSignature -LiteralPath $args[0]
 "#;
 
     let output = std::process::Command::new(&powershell_path)
-        .args(["-NoProfile", "-NonInteractive", "-Command", script])
-        .arg(dsregcmd_path)
+        .env("CMTRACEOPEN_DSREGCMD_PATH", dsregcmd_path)
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            script,
+        ])
         .output()
         .map_err(|error| {
             format!(
@@ -131,13 +140,14 @@ $sig = Get-AuthenticodeSignature -LiteralPath $args[0]
         });
     }
 
-    let signature = serde_json::from_slice::<WindowsSignatureCheck>(&output.stdout).map_err(|error| {
-        format!(
-            "Could not parse the digital signature check output for '{}': {}",
-            dsregcmd_path.display(),
-            error
-        )
-    })?;
+    let signature =
+        parse_windows_signature_check_output(&output.stdout).map_err(|error| {
+            format!(
+                "Could not parse the digital signature check output for '{}': {}",
+                dsregcmd_path.display(),
+                error
+            )
+        })?;
 
     if is_expected_dsregcmd_signature(
         signature.status.as_str(),
@@ -154,13 +164,25 @@ $sig = Get-AuthenticodeSignature -LiteralPath $args[0]
     ))
 }
 
-#[cfg(target_os = "windows")]
-#[derive(serde::Deserialize)]
+#[cfg(any(target_os = "windows", test))]
+#[derive(Debug, serde::Deserialize)]
 struct WindowsSignatureCheck {
     #[serde(rename = "Status")]
     status: String,
     #[serde(rename = "Subject")]
     subject: Option<String>,
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn parse_windows_signature_check_output(output: &[u8]) -> Result<WindowsSignatureCheck, String> {
+    let payload = String::from_utf8_lossy(output);
+    let payload = payload.trim_start_matches('\u{feff}').trim();
+
+    if payload.is_empty() {
+        return Err("PowerShell returned no JSON output.".to_string());
+    }
+
+    serde_json::from_str(payload).map_err(|error| error.to_string())
 }
 
 #[cfg(target_os = "windows")]
@@ -180,6 +202,7 @@ fn is_expected_dsregcmd_signature(status: &str, subject: Option<&str>) -> bool {
 mod tests {
     #[cfg(not(target_os = "windows"))]
     use super::capture_dsregcmd;
+    use super::parse_windows_signature_check_output;
     #[cfg(target_os = "windows")]
     use super::is_expected_dsregcmd_signature;
 
@@ -200,5 +223,23 @@ mod tests {
     fn capture_command_returns_clear_error_on_unsupported_platform() {
         let error = capture_dsregcmd().expect_err("expected unsupported platform error");
         assert!(error.contains("only supported on Windows"));
+    }
+
+    #[test]
+    fn signature_output_parser_handles_bom_and_whitespace() {
+        let output = b"\xEF\xBB\xBF  {\"Status\":\"Valid\",\"Subject\":\"CN=Microsoft Windows\"}\r\n";
+        let signature =
+            parse_windows_signature_check_output(output).expect("expected signature JSON to parse");
+
+        assert_eq!(signature.status, "Valid");
+        assert_eq!(signature.subject.as_deref(), Some("CN=Microsoft Windows"));
+    }
+
+    #[test]
+    fn signature_output_parser_rejects_empty_output() {
+        let error = parse_windows_signature_check_output(b"  \r\n\t")
+            .expect_err("expected empty signature output to fail");
+
+        assert!(error.contains("no JSON output"));
     }
 }
