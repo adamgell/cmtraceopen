@@ -40,6 +40,9 @@ pub fn run() {
         })
         .manage(AppState::new(initial_file_path))
         .invoke_handler(tauri::generate_handler![
+            commands::file_association::get_file_association_prompt_status,
+            commands::file_association::associate_log_files_with_app,
+            commands::file_association::set_file_association_prompt_suppressed,
             commands::file_ops::open_log_file,
             commands::file_ops::list_log_folder,
             commands::file_ops::get_known_log_sources,

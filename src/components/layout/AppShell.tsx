@@ -9,6 +9,7 @@ import { FindDialog } from "../dialogs/FindDialog";
 import { FilterDialog } from "../dialogs/FilterDialog";
 import { ErrorLookupDialog } from "../dialogs/ErrorLookupDialog";
 import { AboutDialog } from "../dialogs/AboutDialog";
+import { FileAssociationPromptDialog } from "../dialogs/FileAssociationPromptDialog";
 import { IntuneDashboard } from "../intune/IntuneDashboard";
 import { DsregcmdWorkspace } from "../dsregcmd/DsregcmdWorkspace";
 import type { FilterClause } from "../dialogs/FilterDialog";
@@ -20,6 +21,7 @@ import { useFileWatcher } from "../../hooks/use-file-watcher";
 import { useKeyboard } from "../../hooks/use-keyboard";
 import { useDragDrop } from "../../hooks/use-drag-drop";
 import { useFileAssociation } from "../../hooks/use-file-association";
+import { useFileAssociationPrompt } from "../../hooks/use-file-association-prompt";
 
 function buildFilterRunSignature(entries: LogEntry[], clauses: FilterClause[]): string {
   const lastId = entries.length > 0 ? entries[entries.length - 1].id : -1;
@@ -39,12 +41,18 @@ export function AppShell() {
   const showFilterDialog = useUiStore((s) => s.showFilterDialog);
   const showErrorLookupDialog = useUiStore((s) => s.showErrorLookupDialog);
   const showAboutDialog = useUiStore((s) => s.showAboutDialog);
+  const showFileAssociationPrompt = useUiStore(
+    (s) => s.showFileAssociationPrompt
+  );
   const setShowFindDialog = useUiStore((s) => s.setShowFindDialog);
   const setShowFilterDialog = useUiStore((s) => s.setShowFilterDialog);
   const setShowErrorLookupDialog = useUiStore(
     (s) => s.setShowErrorLookupDialog
   );
   const setShowAboutDialog = useUiStore((s) => s.setShowAboutDialog);
+  const setShowFileAssociationPrompt = useUiStore(
+    (s) => s.setShowFileAssociationPrompt
+  );
 
   const entries = useLogStore((s) => s.entries);
   const filterClauses = useFilterStore((s) => s.clauses);
@@ -149,6 +157,8 @@ export function AppShell() {
   useDragDrop();
   // Handle file path passed via OS file association at startup
   useFileAssociation();
+  // Prompt standalone Windows users to associate .log files like CMTrace.exe
+  useFileAssociationPrompt();
 
   const handleApplyFilter = useCallback(
     async (clauses: FilterClause[]) => {
@@ -253,6 +263,10 @@ export function AppShell() {
       <AboutDialog
         isOpen={showAboutDialog}
         onClose={() => setShowAboutDialog(false)}
+      />
+      <FileAssociationPromptDialog
+        isOpen={showFileAssociationPrompt}
+        onClose={() => setShowFileAssociationPrompt(false)}
       />
     </div>
   );

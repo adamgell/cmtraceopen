@@ -47,6 +47,7 @@ interface UiState {
   showFilterDialog: boolean;
   showErrorLookupDialog: boolean;
   showAboutDialog: boolean;
+  showFileAssociationPrompt: boolean;
 
   setActiveWorkspace: (workspace: WorkspaceId) => void;
   setActiveView: (view: AppView) => void;
@@ -59,6 +60,7 @@ interface UiState {
   setShowFilterDialog: (show: boolean) => void;
   setShowErrorLookupDialog: (show: boolean) => void;
   setShowAboutDialog: (show: boolean) => void;
+  setShowFileAssociationPrompt: (show: boolean) => void;
   closeTransientDialogs: (trigger: string) => void;
 }
 
@@ -74,6 +76,7 @@ export const useUiStore = create<UiState>((set, get) => ({
   showFilterDialog: false,
   showErrorLookupDialog: false,
   showAboutDialog: false,
+  showFileAssociationPrompt: false,
 
   setActiveWorkspace: (workspace) => {
     const previousWorkspace = get().activeWorkspace;
@@ -123,6 +126,7 @@ export const useUiStore = create<UiState>((set, get) => ({
   setShowFilterDialog: (show) => set({ showFilterDialog: show }),
   setShowErrorLookupDialog: (show) => set({ showErrorLookupDialog: show }),
   setShowAboutDialog: (show) => set({ showAboutDialog: show }),
+  setShowFileAssociationPrompt: (show) => set({ showFileAssociationPrompt: show }),
   closeTransientDialogs: (trigger) => {
     const state = get();
 
@@ -130,7 +134,8 @@ export const useUiStore = create<UiState>((set, get) => ({
       !state.showFindDialog &&
       !state.showFilterDialog &&
       !state.showErrorLookupDialog &&
-      !state.showAboutDialog
+      !state.showAboutDialog &&
+      !state.showFileAssociationPrompt
     ) {
       return;
     }
@@ -142,6 +147,7 @@ export const useUiStore = create<UiState>((set, get) => ({
       showFilterDialog: false,
       showErrorLookupDialog: false,
       showAboutDialog: false,
+      showFileAssociationPrompt: false,
     });
   },
 }));

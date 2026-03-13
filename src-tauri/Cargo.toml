@@ -29,6 +29,9 @@ log = "0.4"
 notify = "7"
 tokio = { version = "1", features = ["fs", "io-util", "sync", "rt"] }
 
+[target.'cfg(target_os = "windows")'.dependencies]
+winreg = "0.52"
+
 [dev-dependencies]
 criterion = "0.5"
 tempfile = "3"
