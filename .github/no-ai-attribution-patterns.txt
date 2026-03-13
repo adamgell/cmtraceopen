@@ -1,0 +1,6 @@
+# Case-insensitive extended regular expressions.
+# Keep this file as the single source of truth for blocked explicit AI attribution markers.
+co-authored-by:.*(copilot|chatgpt|claude|gemini|cursor|codeium|openai|anthropic)
+generated-by:.*(copilot|chatgpt|claude|gemini|cursor|codeium|openai|anthropic)
+authored-by:.*(copilot|chatgpt|claude|gemini|cursor|codeium|openai|anthropic)
+(written|generated|created)\s+(with|by)\s+.*(copilot|chatgpt|claude|gemini|cursor|codeium|openai|anthropic)

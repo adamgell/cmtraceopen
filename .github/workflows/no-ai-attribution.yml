@@ -1,0 +1,23 @@
+name: No AI Attribution Policy
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+  push:
+    branches:
+      - main
+
+jobs:
+  enforce-policy:
+    name: Enforce No AI Attribution Markers
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate explicit AI attribution markers
+        shell: bash
+        run: bash .github/scripts/check-no-ai-attribution.sh
