@@ -1,4 +1,5 @@
 mod commands;
+pub mod dsregcmd;
 mod error_db;
 pub mod intune;
 mod menu;
@@ -37,6 +38,8 @@ pub fn run() {
             commands::filter::apply_filter,
             commands::error_lookup::lookup_error_code,
             commands::intune::analyze_intune_logs,
+            commands::dsregcmd::analyze_dsregcmd,
+            commands::dsregcmd::capture_dsregcmd,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

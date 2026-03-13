@@ -7,6 +7,7 @@ import type {
   ParseResult,
 } from "../types/log";
 import type { IntuneAnalysisResult } from "../types/intune";
+import type { DsregcmdAnalysisResult } from "../types/dsregcmd";
 
 export async function openLogFile(path: string): Promise<ParseResult> {
   return invoke<ParseResult>("open_log_file", { path });
@@ -76,4 +77,14 @@ export async function analyzeIntuneLogs(
   path: string
 ): Promise<IntuneAnalysisResult> {
   return invoke<IntuneAnalysisResult>("analyze_intune_logs", { path });
+}
+
+export async function analyzeDsregcmd(
+  input: string
+): Promise<DsregcmdAnalysisResult> {
+  return invoke<DsregcmdAnalysisResult>("analyze_dsregcmd", { input });
+}
+
+export async function captureDsregcmd(): Promise<string> {
+  return invoke<string>("capture_dsregcmd");
 }

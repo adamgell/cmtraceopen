@@ -8,18 +8,26 @@ import {
   type ChangeEvent,
 } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
+import { stat } from "@tauri-apps/plugin-fs";
 import { analyzeIntuneLogs } from "../../lib/commands";
+import {
+  analyzeDsregcmdPath,
+  analyzeDsregcmdSource,
+  refreshCurrentDsregcmdSource,
+} from "../../lib/dsregcmd-source";
 import {
   getStreamStateSnapshot,
   useLogStore,
 } from "../../stores/log-store";
 import { useFilterStore } from "../../stores/filter-store";
 import { useIntuneStore } from "../../stores/intune-store";
+import { useDsregcmdStore } from "../../stores/dsregcmd-store";
 import { type WorkspaceId, useUiStore } from "../../stores/ui-store";
 import {
   getLogSourcePath,
   getKnownSourceMetadataById,
   loadLogSource,
+  loadPathAsLogSource,
   refreshKnownLogSources,
   resolveKnownSourceIdFromCatalogAction,
   type KnownSourceCatalogActionIds,
@@ -62,10 +70,63 @@ const INTUNE_FILE_DIALOG_FILTERS = [
   { name: "All Files", extensions: ["*"] },
 ];
 
+const DSREGCMD_FILE_DIALOG_FILTERS = [
+  { name: "Text Files", extensions: ["txt"] },
+  { name: "Log Files", extensions: ["log"] },
+  { name: "All Files", extensions: ["*"] },
+];
+
 function getOpenFileDialogFilters(workspace: WorkspaceId) {
-  return workspace === "intune"
-    ? INTUNE_FILE_DIALOG_FILTERS
-    : LOG_FILE_DIALOG_FILTERS;
+  if (workspace === "intune") {
+    return INTUNE_FILE_DIALOG_FILTERS;
+  }
+
+  if (workspace === "dsregcmd") {
+    return DSREGCMD_FILE_DIALOG_FILTERS;
+  }
+
+  return LOG_FILE_DIALOG_FILTERS;
+}
+
+function getOpenActionLabels(workspace: WorkspaceId) {
+  if (workspace === "dsregcmd") {
+    return {
+      file: "Open Text File",
+      folder: "Open Evidence Folder",
+      openPlaceholder: "Open dsregcmd Source...",
+    };
+  }
+
+  if (workspace === "intune") {
+    return {
+      file: "Open IME Log File",
+      folder: "Open IME Log Folder",
+      openPlaceholder: "Open Intune Source...",
+    };
+  }
+
+  return {
+    file: "Open File",
+    folder: "Open Folder",
+    openPlaceholder: "Open...",
+  };
+}
+
+async function inferPathKind(path: string): Promise<"file" | "folder" | "unknown"> {
+  try {
+    const fileInfo = await stat(path);
+    if (fileInfo.isDirectory) {
+      return "folder";
+    }
+
+    if (fileInfo.isFile) {
+      return "file";
+    }
+
+    return "unknown";
+  } catch {
+    return "unknown";
+  }
 }
 
 export interface OpenKnownSourceCatalogAction
@@ -75,6 +136,7 @@ export interface OpenKnownSourceCatalogAction
 
 export interface AppCommandState {
   canOpenSources: boolean;
+  canOpenKnownSources: boolean;
   canPauseResume: boolean;
   canFind: boolean;
   canFilter: boolean;
@@ -89,18 +151,21 @@ export interface AppCommandState {
   activeFilterCount: number;
   isFiltering: boolean;
   filterError: string | null;
-  activeView: "log" | "intune";
+  activeView: WorkspaceId;
 }
 
 export interface AppActionHandlers {
   commandState: AppCommandState;
   openSourceFileDialog: () => Promise<void>;
   openSourceFolderDialog: () => Promise<void>;
+  openPathForActiveWorkspace: (path: string) => Promise<void>;
   openKnownSourceCatalogAction: (
     action: OpenKnownSourceCatalogAction
   ) => Promise<void>;
   openKnownSourceById: (sourceId: string, trigger: string) => Promise<void>;
   openKnownSourcePresetByMenuId: (presetMenuId: string) => Promise<void>;
+  pasteDsregcmdSource: () => Promise<void>;
+  captureDsregcmdSource: () => Promise<void>;
   showFindDialog: () => void;
   showFilterDialog: () => void;
   showErrorLookupDialog: () => void;
@@ -148,6 +213,8 @@ export function useAppActions(): AppActionHandlers {
   const beginIntuneAnalysis = useIntuneStore((s) => s.beginAnalysis);
   const failIntuneAnalysis = useIntuneStore((s) => s.failAnalysis);
   const setIntuneResults = useIntuneStore((s) => s.setResults);
+  const dsregcmdIsAnalyzing = useDsregcmdStore((s) => s.isAnalyzing);
+  const dsregcmdSource = useDsregcmdStore((s) => s.sourceContext.source);
 
   const activeWorkspace = useUiStore((s) => s.activeWorkspace);
   const activeView = useUiStore((s) => s.activeView);
@@ -168,21 +235,31 @@ export function useAppActions(): AppActionHandlers {
     () => resolveRefreshSource(activeSource, openFilePath),
     [activeSource, openFilePath]
   );
-  const isSourceCommandBusy = isLoading || intuneIsAnalyzing;
+  const isSourceCommandBusy = isLoading || intuneIsAnalyzing || dsregcmdIsAnalyzing;
 
   const commandState = useMemo<AppCommandState>(
     () => ({
       canOpenSources: !isSourceCommandBusy,
+      canOpenKnownSources:
+        !isSourceCommandBusy && activeWorkspace !== "dsregcmd",
       canPauseResume:
         activeWorkspace === "log" && !isLoading && refreshSource !== null,
-      canFind: entriesCount > 0,
-      canFilter: entriesCount > 0 && !isFiltering,
-      canRefresh: !isSourceCommandBusy && refreshSource !== null,
+      canFind: activeWorkspace === "log" && entriesCount > 0,
+      canFilter:
+        activeWorkspace === "log" && entriesCount > 0 && !isFiltering,
+      canRefresh:
+        !isSourceCommandBusy &&
+        (activeWorkspace === "dsregcmd"
+          ? dsregcmdSource !== null
+          : refreshSource !== null),
       canToggleDetailsPane: activeView === "log",
       canToggleInfoPane: activeView === "log",
       isLoading: isSourceCommandBusy,
       isPaused,
-      hasActiveSource: refreshSource !== null,
+      hasActiveSource:
+        activeWorkspace === "dsregcmd"
+          ? dsregcmdSource !== null
+          : refreshSource !== null,
       isDetailsVisible: showDetails,
       isInfoPaneVisible: showInfoPane,
       activeFilterCount,
@@ -194,6 +271,7 @@ export function useAppActions(): AppActionHandlers {
       activeWorkspace,
       activeFilterCount,
       activeView,
+      dsregcmdSource,
       entriesCount,
       filterError,
       intuneIsAnalyzing,
@@ -251,7 +329,12 @@ export function useAppActions(): AppActionHandlers {
             result.summary,
             result.diagnostics,
             result.sourceFile,
-            result.sourceFiles
+            result.sourceFiles,
+            {
+              diagnosticsConfidence: result.diagnosticsConfidence,
+              diagnosticsCoverage: result.diagnosticsCoverage,
+              repeatedFailures: result.repeatedFailures,
+            }
           );
         });
       } catch (error) {
@@ -266,6 +349,19 @@ export function useAppActions(): AppActionHandlers {
     [beginIntuneAnalysis, failIntuneAnalysis, setIntuneResults]
   );
 
+  const analyzeDsregcmdWorkspaceSource = useCallback(
+    async (source: LogSource, trigger: string) => {
+      useUiStore.getState().ensureWorkspaceVisible("dsregcmd", trigger);
+
+      if (source.kind === "known") {
+        throw new Error("Known log presets are not supported in the dsregcmd workspace.");
+      }
+
+      await analyzeDsregcmdSource(source);
+    },
+    []
+  );
+
   const openSourceForWorkspace = useCallback(
     async (source: LogSource, trigger: string, workspace: WorkspaceId) => {
       if (workspace === "intune") {
@@ -273,9 +369,45 @@ export function useAppActions(): AppActionHandlers {
         return;
       }
 
+      if (workspace === "dsregcmd") {
+        await analyzeDsregcmdWorkspaceSource(source, trigger);
+        return;
+      }
+
       await loadLogWorkspaceSource(source, trigger);
     },
-    [analyzeIntuneWorkspaceSource, loadLogWorkspaceSource]
+    [
+      analyzeDsregcmdWorkspaceSource,
+      analyzeIntuneWorkspaceSource,
+      loadLogWorkspaceSource,
+    ]
+  );
+
+  const openPathForActiveWorkspace = useCallback(
+    async (path: string) => {
+      if (activeWorkspace === "dsregcmd") {
+        useUiStore.getState().ensureWorkspaceVisible("dsregcmd", "drag-drop.path-open");
+        await analyzeDsregcmdPath(path, { fallbackToFolder: true });
+        return;
+      }
+
+      if (activeWorkspace === "intune") {
+        const pathKind = await inferPathKind(path);
+        const source: LogSource =
+          pathKind === "folder"
+            ? { kind: "folder", path }
+            : { kind: "file", path };
+        await analyzeIntuneWorkspaceSource(source, "drag-drop.path-open");
+        return;
+      }
+
+      useUiStore.getState().ensureLogViewVisible("drag-drop.path-open");
+      useFilterStore.getState().clearFilter();
+      await loadPathAsLogSource(path, {
+        fallbackToFolder: true,
+      });
+    },
+    [activeWorkspace, analyzeIntuneWorkspaceSource]
   );
 
   const openKnownSourceCatalogAction = useCallback(
@@ -287,6 +419,10 @@ export function useAppActions(): AppActionHandlers {
           action,
         });
         return;
+      }
+
+      if (activeWorkspace === "dsregcmd") {
+        throw new Error("Known source presets are not available in the dsregcmd workspace.");
       }
 
       const metadata = await getKnownSourceMetadataById(sourceId);
@@ -374,6 +510,24 @@ export function useAppActions(): AppActionHandlers {
     [openKnownSourceCatalogAction]
   );
 
+  const pasteDsregcmdSource = useCallback(async () => {
+    if (isSourceCommandBusy) {
+      return;
+    }
+
+    useUiStore.getState().ensureWorkspaceVisible("dsregcmd", "app-actions.dsregcmd-paste");
+    await analyzeDsregcmdSource({ kind: "clipboard" });
+  }, [isSourceCommandBusy]);
+
+  const captureDsregcmdSource = useCallback(async () => {
+    if (isSourceCommandBusy) {
+      return;
+    }
+
+    useUiStore.getState().ensureWorkspaceVisible("dsregcmd", "app-actions.dsregcmd-capture");
+    await analyzeDsregcmdSource({ kind: "capture" });
+  }, [isSourceCommandBusy]);
+
   const showFindDialog = useCallback(() => {
     if (!commandState.canFind) {
       return;
@@ -409,7 +563,16 @@ export function useAppActions(): AppActionHandlers {
   }, [commandState.canPauseResume]);
 
   const refreshActiveSource = useCallback(async () => {
-    if (!commandState.canRefresh || !refreshSource) {
+    if (!commandState.canRefresh) {
+      return;
+    }
+
+    if (activeWorkspace === "dsregcmd") {
+      await refreshCurrentDsregcmdSource();
+      return;
+    }
+
+    if (!refreshSource) {
       return;
     }
 
@@ -456,9 +619,12 @@ export function useAppActions(): AppActionHandlers {
     commandState,
     openSourceFileDialog,
     openSourceFolderDialog,
+    openPathForActiveWorkspace,
     openKnownSourceCatalogAction,
     openKnownSourceById,
     openKnownSourcePresetByMenuId,
+    pasteDsregcmdSource,
+    captureDsregcmdSource,
     showFindDialog,
     showFilterDialog,
     showErrorLookupDialog,
@@ -479,6 +645,7 @@ export function Toolbar() {
   const isPaused = useLogStore((s) => s.isPaused);
   const activeSource = useLogStore((s) => s.activeSource);
   const openFilePath = useLogStore((s) => s.openFilePath);
+  const dsregcmdIsAnalyzing = useDsregcmdStore((s) => s.isAnalyzing);
 
   const activeView = useUiStore((s) => s.activeView);
   const setActiveView = useUiStore((s) => s.setActiveView);
@@ -488,6 +655,8 @@ export function Toolbar() {
     openSourceFileDialog,
     openSourceFolderDialog,
     openKnownSourceCatalogAction,
+    pasteDsregcmdSource,
+    captureDsregcmdSource,
     showErrorLookupDialog,
     togglePauseResume,
     refreshActiveSource,
@@ -504,6 +673,11 @@ export function Toolbar() {
     });
   }, []);
 
+  const openLabels = useMemo(
+    () => getOpenActionLabels(activeView),
+    [activeView]
+  );
+
   const handleOpenActionChange = async (
     event: ChangeEvent<HTMLSelectElement>
   ) => {
@@ -519,6 +693,10 @@ export function Toolbar() {
         await openSourceFileDialog();
       } else if (action === "open-folder") {
         await openSourceFolderDialog();
+      } else if (action === "paste-dsregcmd") {
+        await pasteDsregcmdSource();
+      } else if (action === "capture-dsregcmd") {
+        await captureDsregcmdSource();
       }
     } catch (error) {
       console.error("[toolbar] failed to open source from toolbar dropdown", {
@@ -553,7 +731,7 @@ export function Toolbar() {
   };
 
   const streamState = getStreamStateSnapshot(
-    isLoading,
+    isLoading || dsregcmdIsAnalyzing,
     isPaused,
     activeSource,
     openFilePath
@@ -573,23 +751,28 @@ export function Toolbar() {
         flexShrink: 0,
       }}
     >
-      {/* Source Actions */}
       <div style={{ display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap" }}>
         <select
           value={selectedOpenAction}
           onChange={handleOpenActionChange}
-          title="Open"
+          title={openLabels.openPlaceholder}
           style={{
             ...getToolbarControlStyle({ disabled: !commandState.canOpenSources }),
             fontSize: "12px",
             padding: "2px 4px",
-            minWidth: "120px",
+            minWidth: activeView === "dsregcmd" ? "180px" : "140px",
           }}
           disabled={!commandState.canOpenSources}
         >
-          <option value="">Open...</option>
-          <option value="open-file">Open File</option>
-          <option value="open-folder">Open Folder</option>
+          <option value="">{openLabels.openPlaceholder}</option>
+          <option value="open-file">{openLabels.file}</option>
+          <option value="open-folder">{openLabels.folder}</option>
+          {activeView === "dsregcmd" && (
+            <>
+              <option value="paste-dsregcmd">Paste Clipboard</option>
+              <option value="capture-dsregcmd">Capture Live Output</option>
+            </>
+          )}
         </select>
         <select
           value={selectedKnownSourceId}
@@ -598,18 +781,22 @@ export function Toolbar() {
           style={{
             ...getToolbarControlStyle({
               disabled:
-                !commandState.canOpenSources || knownSourceToolbarGroups.length === 0,
+                !commandState.canOpenKnownSources || knownSourceToolbarGroups.length === 0,
             }),
             fontSize: "12px",
             padding: "2px 4px",
             minWidth: "260px",
           }}
-          disabled={!commandState.canOpenSources || knownSourceToolbarGroups.length === 0}
+          disabled={!commandState.canOpenKnownSources || knownSourceToolbarGroups.length === 0}
         >
           <option value="">
-            {knownSourceToolbarGroups.length > 0
-              ? "Open Known Log Source..."
-              : "No Known Log Sources"}
+            {commandState.canOpenKnownSources
+              ? knownSourceToolbarGroups.length > 0
+                ? activeView === "intune"
+                  ? "Open Known Intune Source..."
+                  : "Open Known Log Source..."
+                : "No Known Log Sources"
+              : "Known Sources Unavailable"}
           </option>
           {knownSourceToolbarGroups.map((group) => (
             <optgroup key={group.id} label={group.label}>
@@ -651,7 +838,6 @@ export function Toolbar() {
         </button>
       </div>
 
-      {/* Analysis Actions */}
       <div style={{ display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap", flexGrow: 1, minWidth: "250px" }}>
         <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
           <label
@@ -669,6 +855,7 @@ export function Toolbar() {
             value={highlightText}
             onChange={(e) => setHighlightText(e.target.value)}
             placeholder="Enter text to highlight..."
+            disabled={commandState.activeView !== "log"}
             style={{
               width: "200px",
               fontSize: "12px",
@@ -692,7 +879,6 @@ export function Toolbar() {
         </button>
       </div>
 
-      {/* View Controls */}
       <div style={{ display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap", justifyContent: "flex-end" }}>
         <button
           onClick={toggleDetailsPane}
@@ -721,21 +907,25 @@ export function Toolbar() {
 
         <div style={{ width: "1px", height: "16px", backgroundColor: "#c0c0c0", margin: "0 2px" }} />
 
-        <button
-          onClick={() =>
-            setActiveView(activeView === "log" ? "intune" : "log")
-          }
-          title="Toggle the Intune diagnostics workspace"
-          aria-pressed={activeView === "intune"}
-          style={getToolbarControlStyle({
-            disabled: false,
-            active: activeView === "intune",
-          })}
-        >
-          {activeView === "intune" ? "← Log Explorer" : "Intune Diagnostics"}
-        </button>
+        {([
+          ["log", "Log Explorer"],
+          ["intune", "Intune Diagnostics"],
+          ["dsregcmd", "dsregcmd"],
+        ] as const).map(([workspaceId, label]) => (
+          <button
+            key={workspaceId}
+            onClick={() => setActiveView(workspaceId)}
+            title={`Switch to ${label}`}
+            aria-pressed={activeView === workspaceId}
+            style={getToolbarControlStyle({
+              disabled: false,
+              active: activeView === workspaceId,
+            })}
+          >
+            {label}
+          </button>
+        ))}
       </div>
     </div>
   );
 }
-

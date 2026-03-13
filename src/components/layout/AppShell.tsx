@@ -10,6 +10,7 @@ import { FilterDialog } from "../dialogs/FilterDialog";
 import { ErrorLookupDialog } from "../dialogs/ErrorLookupDialog";
 import { AboutDialog } from "../dialogs/AboutDialog";
 import { IntuneDashboard } from "../intune/IntuneDashboard";
+import { DsregcmdWorkspace } from "../dsregcmd/DsregcmdWorkspace";
 import type { FilterClause } from "../dialogs/FilterDialog";
 import type { LogEntry } from "../../types/log";
 import { useUiStore } from "../../stores/ui-store";
@@ -142,11 +143,8 @@ export function AppShell() {
     });
   }, [entries, filterClauses, runFilter, setFilteredIds, setIsFiltering]);
 
-  // Start file tailing when a file is opened
   useFileWatcher();
-  // Register keyboard shortcuts
   useKeyboard();
-  // Handle file drag-and-drop
   useDragDrop();
 
   const handleApplyFilter = useCallback(
@@ -156,6 +154,49 @@ export function AppShell() {
     },
     [entries, runFilter, setClauses]
   );
+
+  const renderWorkspace = () => {
+    if (activeView === "log") {
+      return (
+        <>
+          <div
+            style={{
+              flex: 1,
+              overflow: "hidden",
+            }}
+          >
+            <LogListView />
+          </div>
+
+          {showInfoPane && (
+            <div
+              style={{
+                height: `${infoPaneHeight}px`,
+                flexShrink: 0,
+                overflow: "hidden",
+              }}
+            >
+              <InfoPane />
+            </div>
+          )}
+        </>
+      );
+    }
+
+    if (activeView === "intune") {
+      return (
+        <div style={{ flex: 1, overflow: "hidden" }}>
+          <IntuneDashboard />
+        </div>
+      );
+    }
+
+    return (
+      <div style={{ flex: 1, overflow: "hidden" }}>
+        <DsregcmdWorkspace />
+      </div>
+    );
+  };
 
   return (
     <div
@@ -186,40 +227,12 @@ export function AppShell() {
             overflow: "hidden",
           }}
         >
-          {activeView === "log" ? (
-            <>
-              <div
-                style={{
-                  flex: 1,
-                  overflow: "hidden",
-                }}
-              >
-                <LogListView />
-              </div>
-
-              {showInfoPane && (
-                <div
-                  style={{
-                    height: `${infoPaneHeight}px`,
-                    flexShrink: 0,
-                    overflow: "hidden",
-                  }}
-                >
-                  <InfoPane />
-                </div>
-              )}
-            </>
-          ) : (
-            <div style={{ flex: 1, overflow: "hidden" }}>
-              <IntuneDashboard />
-            </div>
-          )}
+          {renderWorkspace()}
         </div>
       </div>
 
       <StatusBar />
 
-      {/* Dialogs */}
       <FindDialog
         isOpen={showFindDialog}
         onClose={() => setShowFindDialog(false)}

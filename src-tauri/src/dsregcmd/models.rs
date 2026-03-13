@@ -1,0 +1,213 @@
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+
+use crate::intune::models::IntuneDiagnosticSeverity;
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum DsregcmdJoinType {
+    HybridEntraIdJoined,
+    EntraIdJoined,
+    NotJoined,
+    #[default]
+    Unknown,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DsregcmdJoinState {
+    pub azure_ad_joined: Option<bool>,
+    pub domain_joined: Option<bool>,
+    pub workplace_joined: Option<bool>,
+    pub enterprise_joined: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DsregcmdDeviceDetails {
+    pub device_id: Option<String>,
+    pub thumbprint: Option<String>,
+    pub device_certificate_validity: Option<String>,
+    pub key_container_id: Option<String>,
+    pub key_provider: Option<String>,
+    pub tpm_protected: Option<bool>,
+    pub device_auth_status: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DsregcmdTenantDetails {
+    pub tenant_id: Option<String>,
+    pub tenant_name: Option<String>,
+    pub domain_name: Option<String>,
+    pub idp: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DsregcmdManagementDetails {
+    pub mdm_url: Option<String>,
+    pub mdm_compliance_url: Option<String>,
+    pub mdm_tou_url: Option<String>,
+    pub settings_url: Option<String>,
+    pub device_management_srv_ver: Option<String>,
+    pub device_management_srv_url: Option<String>,
+    pub device_management_srv_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DsregcmdServiceEndpoints {
+    pub auth_code_url: Option<String>,
+    pub access_token_url: Option<String>,
+    pub join_srv_version: Option<String>,
+    pub join_srv_url: Option<String>,
+    pub join_srv_id: Option<String>,
+    pub key_srv_version: Option<String>,
+    pub key_srv_url: Option<String>,
+    pub key_srv_id: Option<String>,
+    pub web_authn_srv_version: Option<String>,
+    pub web_authn_srv_url: Option<String>,
+    pub web_authn_srv_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DsregcmdUserState {
+    pub ngc_set: Option<bool>,
+    pub ngc_key_id: Option<String>,
+    pub can_reset: Option<String>,
+    pub wam_default_set: Option<bool>,
+    pub wam_default_authority: Option<String>,
+    pub wam_default_id: Option<String>,
+    pub wam_default_guid: Option<String>,
+    pub is_device_joined: Option<bool>,
+    pub is_user_azure_ad: Option<bool>,
+    pub policy_enabled: Option<bool>,
+    pub post_logon_enabled: Option<bool>,
+    pub device_eligible: Option<bool>,
+    pub session_is_not_remote: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DsregcmdSsoState {
+    pub azure_ad_prt: Option<bool>,
+    pub azure_ad_prt_authority: Option<String>,
+    pub azure_ad_prt_update_time: Option<String>,
+    pub acquire_prt_diagnostics: Option<String>,
+    pub enterprise_prt: Option<bool>,
+    pub enterprise_prt_update_time: Option<String>,
+    pub enterprise_prt_expiry_time: Option<String>,
+    pub enterprise_prt_authority: Option<String>,
+    pub on_prem_tgt: Option<bool>,
+    pub cloud_tgt: Option<bool>,
+    pub adfs_refresh_token: Option<bool>,
+    pub adfs_ra_is_ready: Option<bool>,
+    pub kerb_top_level_names: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DsregcmdDiagnosticFields {
+    pub previous_prt_attempt: Option<String>,
+    pub attempt_status: Option<String>,
+    pub user_identity: Option<String>,
+    pub credential_type: Option<String>,
+    pub correlation_id: Option<String>,
+    pub endpoint_uri: Option<String>,
+    pub http_method: Option<String>,
+    pub http_error: Option<String>,
+    pub http_status: Option<u16>,
+    pub request_id: Option<String>,
+    pub diagnostics_reference: Option<String>,
+    pub user_context: Option<String>,
+    pub client_time: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DsregcmdPreJoinTests {
+    pub ad_connectivity_test: Option<String>,
+    pub ad_configuration_test: Option<String>,
+    pub drs_discovery_test: Option<String>,
+    pub drs_connectivity_test: Option<String>,
+    pub token_acquisition_test: Option<String>,
+    pub fallback_to_sync_join: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DsregcmdRegistrationState {
+    pub previous_registration: Option<String>,
+    pub error_phase: Option<String>,
+    pub cert_enrollment: Option<String>,
+    pub logon_cert_template_ready: Option<String>,
+    pub pre_req_result: Option<String>,
+    pub client_error_code: Option<String>,
+    pub server_error_code: Option<String>,
+    pub server_message: Option<String>,
+    pub server_error_description: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DsregcmdFacts {
+    pub join_state: DsregcmdJoinState,
+    pub device_details: DsregcmdDeviceDetails,
+    pub tenant_details: DsregcmdTenantDetails,
+    pub management_details: DsregcmdManagementDetails,
+    pub service_endpoints: DsregcmdServiceEndpoints,
+    pub user_state: DsregcmdUserState,
+    pub sso_state: DsregcmdSsoState,
+    pub diagnostics: DsregcmdDiagnosticFields,
+    pub pre_join_tests: DsregcmdPreJoinTests,
+    pub registration: DsregcmdRegistrationState,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct DsregcmdDerived {
+    pub join_type: DsregcmdJoinType,
+    pub join_type_label: String,
+    pub mdm_enrolled: Option<bool>,
+    pub missing_mdm: Option<bool>,
+    pub compliance_url_present: Option<bool>,
+    pub missing_compliance_url: Option<bool>,
+    pub azure_ad_prt_present: Option<bool>,
+    pub stale_prt: Option<bool>,
+    pub prt_last_update: Option<DateTime<Utc>>,
+    pub prt_reference_time: Option<DateTime<Utc>>,
+    pub prt_age_hours: Option<f64>,
+    pub tpm_protected: Option<bool>,
+    pub certificate_valid_from: Option<DateTime<Utc>>,
+    pub certificate_valid_to: Option<DateTime<Utc>>,
+    pub certificate_expiring_soon: Option<bool>,
+    pub certificate_days_remaining: Option<i64>,
+    pub network_error_code: Option<String>,
+    pub has_network_error: bool,
+    pub remote_session_system: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DsregcmdDiagnosticInsight {
+    pub id: String,
+    pub severity: IntuneDiagnosticSeverity,
+    pub category: String,
+    pub title: String,
+    pub summary: String,
+    pub evidence: Vec<String>,
+    pub next_checks: Vec<String>,
+    #[serde(default)]
+    pub suggested_fixes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct DsregcmdAnalysisResult {
+    pub facts: DsregcmdFacts,
+    pub derived: DsregcmdDerived,
+    #[serde(default)]
+    pub diagnostics: Vec<DsregcmdDiagnosticInsight>,
+}

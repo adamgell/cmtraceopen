@@ -1,6 +1,6 @@
 import { create } from "zustand";
 
-export type WorkspaceId = "log" | "intune";
+export type WorkspaceId = "log" | "intune" | "dsregcmd";
 export type AppView = WorkspaceId;
 
 export interface UiChromeStatus {
@@ -14,11 +14,19 @@ export function getUiChromeStatus(
   showDetails: boolean,
   showInfoPane: boolean
 ): UiChromeStatus {
-  if (activeView !== "log") {
+  if (activeView === "intune") {
     return {
-      viewLabel: "Intune view",
-      detailsLabel: "Details hidden in Intune view",
-      infoLabel: "Info hidden in Intune view",
+      viewLabel: "Intune workspace",
+      detailsLabel: "Details hidden in Intune workspace",
+      infoLabel: "Info hidden in Intune workspace",
+    };
+  }
+
+  if (activeView === "dsregcmd") {
+    return {
+      viewLabel: "dsregcmd workspace",
+      detailsLabel: "Details hidden in dsregcmd workspace",
+      infoLabel: "Info hidden in dsregcmd workspace",
     };
   }
 

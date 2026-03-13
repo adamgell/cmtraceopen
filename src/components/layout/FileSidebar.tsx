@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { loadLogSource, loadSelectedLogFile } from "../../lib/log-source";
 import { useFilterStore } from "../../stores/filter-store";
 import { useIntuneStore } from "../../stores/intune-store";
+import { useDsregcmdStore } from "../../stores/dsregcmd-store";
 import {
   getActiveSourceLabel,
   getActiveSourcePath,
@@ -10,12 +11,14 @@ import {
   useLogStore,
 } from "../../stores/log-store";
 import type { FolderEntry, LogSource } from "../../types/log";
+import type { WorkspaceId } from "../../stores/ui-store";
+import { useAppActions } from "./Toolbar";
 
 export const FILE_SIDEBAR_RECOMMENDED_WIDTH = 280;
 
 interface FileSidebarProps {
   width?: number | string;
-  activeView: "log" | "intune";
+  activeView: WorkspaceId;
 }
 
 function isFolderLikeSource(source: LogSource | null): boolean {
@@ -66,33 +69,6 @@ function formatModified(unixMs: number | null): string {
   } catch {
     return "Modified time unavailable";
   }
-}
-
-function getSourcePresentation(
-  source: LogSource | null,
-  knownSourceLabel: string | null
-): { badge: string; title: string; subtitle: string } {
-  if (!source) {
-    return {
-      badge: "No source",
-      title: "Open a log file or folder",
-      subtitle: "Choose a source to start viewing logs.",
-    };
-  }
-
-  if (source.kind === "file") {
-    return { badge: "File", title: getBaseName(source.path), subtitle: source.path };
-  }
-
-  if (source.kind === "folder") {
-    return { badge: "Folder", title: getBaseName(source.path), subtitle: source.path };
-  }
-
-  return {
-    badge: source.pathKind === "folder" ? "Known folder" : "Known file",
-    title: knownSourceLabel ?? source.sourceId,
-    subtitle: source.defaultPath,
-  };
 }
 
 function SectionHeader({ title, caption }: { title: string; caption?: string }) {
@@ -214,34 +190,6 @@ function SourceStatusNotice({
   );
 }
 
-function ContextRow({ entry }: { entry: FolderEntry }) {
-  return (
-    <div
-      title={entry.path}
-      aria-label={`${entry.name}, folder`}
-      style={{
-        padding: "7px 10px",
-        borderBottom: "1px solid #f1f5f9",
-        fontFamily: "'Segoe UI', Tahoma, sans-serif",
-        backgroundColor: "#fbfbfb",
-      }}
-    >
-      <div
-        style={{
-          fontSize: "12px",
-          color: "#4b5563",
-          overflow: "hidden",
-          textOverflow: "ellipsis",
-          whiteSpace: "nowrap",
-        }}
-      >
-        {entry.name}
-      </div>
-      <div style={{ marginTop: "2px", fontSize: "11px", color: "#9ca3af" }}>Folder</div>
-    </div>
-  );
-}
-
 function FileRow({
   entry,
   isSelected,
@@ -290,16 +238,7 @@ function FileRow({
           {entry.name}
         </div>
         {isSelected && (
-          <span
-            style={{
-              flexShrink: 0,
-              fontSize: "10px",
-              fontWeight: 700,
-              color: "#1d4ed8",
-              textTransform: "uppercase",
-              letterSpacing: "0.03em",
-            }}
-          >
+          <span style={{ flexShrink: 0, fontSize: "10px", fontWeight: 700, color: "#1d4ed8" }}>
             Active
           </span>
         )}
@@ -307,7 +246,6 @@ function FileRow({
           <span style={{ flexShrink: 0, fontSize: "10px", color: "#2563eb" }}>Loading...</span>
         )}
       </div>
-
       <div
         style={{
           marginTop: "3px",
@@ -324,7 +262,70 @@ function FileRow({
   );
 }
 
-export function FileSidebar({ width = FILE_SIDEBAR_RECOMMENDED_WIDTH, activeView }: FileSidebarProps) {
+function SourceSummaryCard({
+  badge,
+  title,
+  subtitle,
+  body,
+}: {
+  badge: string;
+  title: string;
+  subtitle: string;
+  body: ReactNode;
+}) {
+  return (
+    <div
+      style={{
+        padding: "10px",
+        borderBottom: "1px solid #c0c0c0",
+        backgroundColor: "#f8f8f8",
+        fontFamily: "'Segoe UI', Tahoma, sans-serif",
+      }}
+    >
+      <div
+        style={{
+          fontSize: "11px",
+          fontWeight: 700,
+          color: "#4b5563",
+          textTransform: "uppercase",
+          letterSpacing: "0.05em",
+        }}
+      >
+        {badge}
+      </div>
+      <div
+        title={title}
+        style={{
+          marginTop: "3px",
+          fontSize: "13px",
+          fontWeight: 600,
+          color: "#111827",
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap",
+        }}
+      >
+        {title}
+      </div>
+      <div
+        title={subtitle}
+        style={{
+          marginTop: "3px",
+          fontSize: "11px",
+          color: "#6b7280",
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap",
+        }}
+      >
+        {subtitle}
+      </div>
+      <div style={{ marginTop: "8px" }}>{body}</div>
+    </div>
+  );
+}
+
+function LogSidebar() {
   const activeSource = useLogStore((s) => s.activeSource);
   const sourceEntries = useLogStore((s) => s.sourceEntries);
   const selectedSourceFilePath = useLogStore((s) => s.selectedSourceFilePath);
@@ -333,13 +334,6 @@ export function FileSidebar({ width = FILE_SIDEBAR_RECOMMENDED_WIDTH, activeView
   const knownSources = useLogStore((s) => s.knownSources);
   const sourceStatus = useLogStore((s) => s.sourceStatus);
   const clearFilter = useFilterStore((s) => s.clearFilter);
-
-  const intuneAnalysisState = useIntuneStore((s) => s.analysisState);
-  const intuneIsAnalyzing = useIntuneStore((s) => s.isAnalyzing);
-  const intuneSummary = useIntuneStore((s) => s.summary);
-  const intuneSourceContext = useIntuneStore((s) => s.sourceContext);
-  const intuneTimelineScope = useIntuneStore((s) => s.timelineScope);
-  const setIntuneTimelineFileScope = useIntuneStore((s) => s.setTimelineFileScope);
 
   const [pendingPath, setPendingPath] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -357,27 +351,12 @@ export function FileSidebar({ width = FILE_SIDEBAR_RECOMMENDED_WIDTH, activeView
 
   const folderLike = isFolderLikeSource(activeSource);
   const sourcePath = getActiveSourcePath(activeSource);
-  const knownSourceLabel = useMemo(() => {
-    if (!activeSource || activeSource.kind !== "known") {
-      return null;
-    }
-
-    return knownSources.find((source) => source.id === activeSource.sourceId)?.label ?? null;
-  }, [activeSource, knownSources]);
-
-  const sourcePresentation = useMemo(
-    () => getSourcePresentation(activeSource, knownSourceLabel),
-    [activeSource, knownSourceLabel]
-  );
-
   const sourceLabel = useMemo(
     () => getActiveSourceLabel(activeSource, knownSources),
     [activeSource, knownSources]
   );
-
   const folders = useMemo(() => sourceEntries.filter((entry) => entry.isDir), [sourceEntries]);
   const files = useMemo(() => sourceEntries.filter((entry) => !entry.isDir), [sourceEntries]);
-
   const activeFilePath = selectedSourceFilePath ?? openFilePath;
   const activeFileName = getBaseName(activeFilePath) || "No file selected";
   const sourceFailureReason = getSourceFailureReason(sourceStatus);
@@ -436,142 +415,32 @@ export function FileSidebar({ width = FILE_SIDEBAR_RECOMMENDED_WIDTH, activeView
   const canRetryFailedSelection =
     Boolean(lastFailedPath) && folderLike && !isLoading && !isRefreshingSource && !pendingPath;
 
-  const showRecoveryActions =
-    Boolean(activeSource) &&
-    folderLike &&
-    (sourceStatus.kind === "missing" ||
-      sourceStatus.kind === "error" ||
-      sourceStatus.kind === "empty" ||
-      sourceStatus.kind === "awaiting-file-selection" ||
-      Boolean(lastFailedPath));
-  const summary = useMemo(() => {
-    if (!activeSource) {
-      return "No source selected";
-    }
-
-    if (!folderLike) {
-      return "Single file source";
-    }
-
-    return [formatCount(files.length, "file"), formatCount(folders.length, "folder")].join(" • ");
-  }, [activeSource, files.length, folderLike, folders.length]);
-
-  const intuneIncludedFiles = intuneSourceContext.includedFiles;
-  const intuneSelectedFilePath = intuneTimelineScope.filePath;
-  const intuneRequestedPath = intuneAnalysisState.requestedPath;
-  const hasIntuneResults = intuneSummary != null || intuneIncludedFiles.length > 0;
-
   return (
-    <aside
-      aria-label="Source files"
-      style={{
-        width,
-        minWidth: typeof width === "number" ? `${width}px` : width,
-        display: "flex",
-        flexDirection: "column",
-        overflow: "hidden",
-        backgroundColor: "#ffffff",
-        borderRight: "1px solid #c0c0c0",
-      }}
-    >
-      <div
-        style={{
-          padding: "10px",
-          borderBottom: "1px solid #c0c0c0",
-          backgroundColor: "#f8f8f8",
-          fontFamily: "'Segoe UI', Tahoma, sans-serif",
-        }}
-      >
-        <div
-          style={{
-            fontSize: "11px",
-            fontWeight: 700,
-            color: "#4b5563",
-            textTransform: "uppercase",
-            letterSpacing: "0.05em",
-          }}
-        >
-          {sourcePresentation.badge}
-        </div>
-        <div
-          title={sourcePresentation.title}
-          style={{
-            marginTop: "3px",
-            fontSize: "13px",
-            fontWeight: 600,
-            color: "#111827",
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
-          }}
-        >
-          {sourcePresentation.title}
-        </div>
-        <div
-          title={sourcePresentation.subtitle}
-          style={{
-            marginTop: "3px",
-            fontSize: "11px",
-            color: "#6b7280",
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
-          }}
-        >
-          {sourcePresentation.subtitle}
-        </div>
-        <div style={{ marginTop: "8px", fontSize: "11px", color: "#4b5563" }}>
-          {isLoading && !activeFilePath ? "Loading source..." : `${summary} • ${sourceStatus.message}`}
-        </div>
-        <div
-          style={{
-            marginTop: "8px",
-            padding: "7px 8px",
-            border: "1px solid #e5e7eb",
-            backgroundColor: "#ffffff",
-            fontSize: "11px",
-            color: "#374151",
-            lineHeight: 1.45,
-          }}
-        >
+    <>
+      <SourceSummaryCard
+        badge={activeSource ? (folderLike ? "Folder Source" : "File Source") : "No Source"}
+        title={activeSource ? sourceLabel : "Open a log file or folder"}
+        subtitle={sourcePath ?? "Choose a source to start viewing logs."}
+        body={
           <div
             style={{
-              display: "grid",
-              gridTemplateColumns: "72px 1fr",
-              gap: "2px 6px",
-              alignItems: "start",
+              padding: "7px 8px",
+              border: "1px solid #e5e7eb",
+              backgroundColor: "#ffffff",
+              fontSize: "11px",
+              color: "#374151",
+              lineHeight: 1.45,
             }}
           >
-            <span style={{ color: "#6b7280" }}>Source:</span>
-            <span title={sourceLabel} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-              {sourceLabel}
-            </span>
-            <span style={{ color: "#6b7280" }}>Selected file:</span>
-            <span
-              title={activeFilePath ?? undefined}
-              style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
-            >
-              {activeFileName}
-            </span>
+            <div>{folderLike ? `${formatCount(files.length, "file")} • ${formatCount(folders.length, "folder")}` : "Single file source"}</div>
+            <div style={{ marginTop: "4px" }}>Selected: {activeFileName}</div>
+            <div style={{ marginTop: "4px" }}>{sourceStatus.message}</div>
+            {sourceFailureReason && (
+              <div style={{ marginTop: "6px", color: "#991b1b" }}>Failure reason: {sourceFailureReason}</div>
+            )}
           </div>
-          {sourceFailureReason && (
-            <div
-              title={sourceFailureReason}
-              style={{
-                marginTop: "6px",
-                paddingTop: "6px",
-                borderTop: "1px solid #fee2e2",
-                color: "#991b1b",
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-                whiteSpace: "nowrap",
-              }}
-            >
-              Failure reason: {sourceFailureReason}
-            </div>
-          )}
-        </div>
-      </div>
+        }
+      />
 
       {sourceStatus.kind !== "idle" && sourceStatus.kind !== "loading" && (
         <SourceStatusNotice
@@ -581,7 +450,7 @@ export function FileSidebar({ width = FILE_SIDEBAR_RECOMMENDED_WIDTH, activeView
         />
       )}
 
-      {showRecoveryActions && (
+      {activeSource && folderLike && (
         <div
           style={{
             padding: "8px 10px",
@@ -610,349 +479,306 @@ export function FileSidebar({ width = FILE_SIDEBAR_RECOMMENDED_WIDTH, activeView
       )}
 
       {refreshErrorMessage && (
-        <div
-          role="alert"
-          style={{
-            padding: "8px 10px",
-            borderBottom: "1px solid #fecaca",
-            backgroundColor: "#fef2f2",
-            color: "#991b1b",
-            fontSize: "12px",
-            fontFamily: "'Segoe UI', Tahoma, sans-serif",
-          }}
-        >
+        <div role="alert" style={{ padding: "8px 10px", borderBottom: "1px solid #fecaca", backgroundColor: "#fef2f2", color: "#991b1b", fontSize: "12px" }}>
           {refreshErrorMessage}
         </div>
       )}
-
       {errorMessage && (
-        <div
-          role="alert"
-          style={{
-            padding: "8px 10px",
-            borderBottom: "1px solid #fecaca",
-            backgroundColor: "#fef2f2",
-            color: "#991b1b",
-            fontSize: "12px",
-            fontFamily: "'Segoe UI', Tahoma, sans-serif",
-          }}
-        >
+        <div role="alert" style={{ padding: "8px 10px", borderBottom: "1px solid #fecaca", backgroundColor: "#fef2f2", color: "#991b1b", fontSize: "12px" }}>
           {errorMessage}
         </div>
       )}
 
       <div style={{ flex: 1, overflow: "auto" }}>
-        {activeView === "intune" && (
+        {!activeSource && (
+          <EmptyState
+            title="No file source open"
+            body="Open a file for the classic single-log workflow, or open a folder to browse sibling files here."
+          />
+        )}
+
+        {activeSource && !folderLike && (
           <>
-            <SectionHeader title="Intune Diagnostics" caption={intuneAnalysisState.message} />
-            <div
-              style={{
-                padding: "12px 10px",
-                fontFamily: "'Segoe UI', Tahoma, sans-serif",
-                borderBottom: "1px solid #eef2f7",
-                fontSize: "12px",
-                color: "#374151",
-              }}
-            >
-              <div style={{ marginBottom: "6px" }}>
-                <span style={{ fontWeight: 600 }}>Requested source:</span>{" "}
-                <span title={intuneRequestedPath ?? undefined}>
-                  {intuneRequestedPath ?? "No analysis requested"}
-                </span>
-              </div>
-              <div style={{ marginBottom: "6px" }}>
-                <span style={{ fontWeight: 600 }}>Analyzed file:</span>{" "}
-                <span title={intuneSourceContext.analyzedPath ?? undefined}>
-                  {intuneSourceContext.analyzedPath ?? "Pending analysis"}
-                </span>
-              </div>
-              <div>
-                <span style={{ fontWeight: 600 }}>Timeline scope:</span>{" "}
-                <span title={intuneSelectedFilePath ?? undefined}>
-                  {getBaseName(intuneSelectedFilePath) || "All included files"}
-                </span>
-              </div>
-            </div>
-
-            {(intuneAnalysisState.phase === "analyzing" ||
-              intuneAnalysisState.phase === "error" ||
-              intuneAnalysisState.phase === "empty") && (
-                <SourceStatusNotice
-                  kind={
-                    intuneAnalysisState.phase === "error"
-                      ? "error"
-                      : intuneAnalysisState.phase === "empty"
-                        ? "empty"
-                        : "info"
-                  }
-                  message={intuneAnalysisState.message}
-                  detail={intuneAnalysisState.detail ?? undefined}
-                />
-              )}
-
-            {!hasIntuneResults && !intuneIsAnalyzing && intuneAnalysisState.phase !== "error" && (
-              <EmptyState
-                title="No Intune diagnostics data"
-                body="Select an Intune Management Extension (IME) log source to begin analysis."
-              />
-            )}
-
-            {intuneIsAnalyzing && (
-              <EmptyState
-                title="Analyzing Intune logs"
-                body="Scanning source files for events, downloads, and metrics..."
-              />
-            )}
-
-            {!hasIntuneResults && intuneAnalysisState.phase === "empty" && (
-              <EmptyState
-                title="No IME logs found"
-                body={
-                  intuneAnalysisState.detail ??
-                  "Choose a folder that contains Intune IME log files such as IntuneManagementExtension.log."
-                }
-              />
-            )}
-
-            {!hasIntuneResults && intuneAnalysisState.phase === "error" && (
-              <EmptyState
-                title="Intune diagnostics failed"
-                body={intuneAnalysisState.detail ?? "The selected Intune source could not be analyzed."}
-              />
-            )}
-
-            {intuneSummary && (
-              <>
-                <SectionHeader title="Diagnostics Summary" caption="Overview of the current Intune diagnostics data" />
-                <div
-                  style={{
-                    padding: "12px 10px",
-                    fontFamily: "'Segoe UI', Tahoma, sans-serif",
-                    borderBottom: "1px solid #eef2f7",
-                    fontSize: "12px",
-                    color: "#374151"
-                  }}
-                >
-                  <div style={{ marginBottom: "6px" }}>
-                    <span style={{ fontWeight: 600 }}>Total Events:</span> {intuneSummary.totalEvents}
-                  </div>
-                  <div style={{ marginBottom: "6px" }}>
-                    <span style={{ fontWeight: 600 }}>Downloads:</span> {intuneSummary.totalDownloads}
-                  </div>
-                  {intuneSummary.logTimeSpan && (
-                    <div style={{ marginBottom: "6px" }}>
-                      <span style={{ fontWeight: 600 }}>Time Span:</span> {intuneSummary.logTimeSpan}
-                    </div>
-                  )}
-                </div>
-
-                {intuneIncludedFiles.length > 0 && (
-                  <>
-                    <SectionHeader
-                      title={`Included IME Log Files (${intuneIncludedFiles.length})`}
-                      caption="Click a file to scope the timeline to that log only"
-                    />
-                    <div>
-                      {intuneIncludedFiles.map((path) => {
-                        const isSelected = intuneSelectedFilePath === path;
-
-                        return (
-                          <button
-                            key={path}
-                            type="button"
-                            onClick={() => setIntuneTimelineFileScope(isSelected ? null : path)}
-                            aria-pressed={isSelected}
-                            title={path}
-                            style={{
-                              width: "100%",
-                              textAlign: "left",
-                              padding: "6px 10px",
-                              border: "none",
-                              borderLeft: isSelected ? "3px solid #3b82f6" : "3px solid transparent",
-                              borderBottom: "1px solid #eef2f7",
-                              fontFamily: "'Segoe UI', Tahoma, sans-serif",
-                              fontSize: "11px",
-                              color: isSelected ? "#1d4ed8" : "#4b5563",
-                              backgroundColor: isSelected ? "#eff6ff" : "#ffffff",
-                              cursor: "pointer",
-                            }}
-                          >
-                            <div
-                              style={{
-                                overflow: "hidden",
-                                textOverflow: "ellipsis",
-                                whiteSpace: "nowrap",
-                                fontWeight: isSelected ? 600 : 400,
-                              }}
-                            >
-                              {getBaseName(path)}
-                            </div>
-                            <div
-                              style={{
-                                marginTop: "2px",
-                                overflow: "hidden",
-                                textOverflow: "ellipsis",
-                                whiteSpace: "nowrap",
-                                color: isSelected ? "#2563eb" : "#6b7280",
-                              }}
-                            >
-                              {isSelected ? "Timeline scope active" : path}
-                            </div>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </>
-                )}
-              </>
-            )}
+            <SectionHeader title="Current file" caption="Classic single-file workflow" />
+            <EmptyState
+              title={activeFileName}
+              body={sourcePath ?? "Use Open to choose a log file."}
+            />
           </>
         )}
 
-        {activeView === "log" && (
+        {activeSource && folderLike && sourceEntries.length === 0 && isLoading && (
+          <EmptyState title="Loading files" body="Reading the selected folder and preparing the file list." />
+        )}
+
+        {activeSource && folderLike && sourceEntries.length === 0 && !isLoading && (
+          <EmptyState
+            title={sourceStatus.kind === "missing" || sourceStatus.kind === "error" ? "Source path unavailable" : "This folder is empty"}
+            body={sourceStatus.detail ?? "No files were found in the selected folder."}
+          />
+        )}
+
+        {activeSource && folderLike && sourceEntries.length > 0 && (
           <>
-            {!activeSource && (
-              <EmptyState
-                title="No file source open"
-                body="Open a file for the classic single-log workflow, or open a folder to browse files here."
-              />
-            )}
-
-            {activeSource && !folderLike && (
+            {folders.length > 0 && (
               <>
-                <SectionHeader title="Current file" caption="Classic single-file workflow" />
-                <div
-                  style={{
-                    padding: "12px 10px",
-                    fontFamily: "'Segoe UI', Tahoma, sans-serif",
-                    borderBottom: "1px solid #eef2f7",
-                  }}
-                >
-                  <div
-                    style={{
-                      fontSize: "12px",
-                      fontWeight: 600,
-                      color: "#111827",
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                      whiteSpace: "nowrap",
-                    }}
-                    title={getBaseName(activeFilePath)}
-                  >
-                    {getBaseName(activeFilePath) || "No file selected"}
+                <SectionHeader title={`Folders (${folders.length})`} caption="Shown for context." />
+                {folders.map((entry) => (
+                  <div key={entry.path} style={{ padding: "7px 10px", borderBottom: "1px solid #f1f5f9", fontSize: "12px", color: "#4b5563" }}>
+                    {entry.name}
                   </div>
-                  <div
-                    style={{
-                      marginTop: "4px",
-                      fontSize: "11px",
-                      color: "#6b7280",
-                      lineHeight: 1.45,
-                      wordBreak: "break-word",
-                    }}
-                    title={sourcePath ?? undefined}
-                  >
-                    {sourcePath ?? "Use Open to choose a log file."}
-                  </div>
-                </div>
-                <EmptyState
-                  title="Sidebar stays compact for single files"
-                  body="When a folder source is open, this area becomes a file picker so switching between sibling logs feels immediate."
-                />
+                ))}
               </>
             )}
-
-            {activeSource && folderLike && sourceEntries.length === 0 && isLoading && (
-              <EmptyState title="Loading files" body="Reading the selected folder and preparing the file list." />
-            )}
-
-            {activeSource &&
-              folderLike &&
-              sourceEntries.length === 0 &&
-              !isLoading &&
-              sourceStatus.kind !== "missing" &&
-              sourceStatus.kind !== "error" && (
-                <EmptyState
-                  title="This folder is empty"
-                  body="No files were found in the selected folder. Choose another folder or reopen with a different source."
+            <SectionHeader
+              title={`Files (${files.length})`}
+              caption={activeFilePath ? "Select a file to replace the active log view." : "Select a file to begin viewing log entries."}
+            />
+            {files.length === 0 ? (
+              <EmptyState title="No files available" body="This source only returned folders." />
+            ) : (
+              files.map((entry) => (
+                <FileRow
+                  key={entry.path}
+                  entry={entry}
+                  isSelected={entry.path === activeFilePath}
+                  isPending={entry.path === pendingPath}
+                  disabled={Boolean(pendingPath)}
+                  onSelect={handleSelectFile}
                 />
-              )}
-
-            {activeSource &&
-              folderLike &&
-              sourceEntries.length === 0 &&
-              !isLoading &&
-              (sourceStatus.kind === "missing" || sourceStatus.kind === "error") && (
-                <EmptyState
-                  title="Source path unavailable"
-                  body={sourceStatus.detail ?? "The selected source path could not be read."}
-                />
-              )}
-
-            {activeSource && folderLike && sourceEntries.length > 0 && (
-              <>
-                {folders.length > 0 && (
-                  <div>
-                    <SectionHeader
-                      title={`Folders (${folders.length})`}
-                      caption="Shown for context; nested browsing can be added later."
-                    />
-                    {folders.map((entry) => (
-                      <ContextRow key={entry.path} entry={entry} />
-                    ))}
-                  </div>
-                )}
-
-                <div>
-                  <SectionHeader
-                    title={`Files (${files.length})`}
-                    caption={
-                      activeFilePath
-                        ? "Select a file to replace the active log view."
-                        : "Select a file to begin tailing and viewing log entries."
-                    }
-                  />
-                  {files.length === 0 ? (
-                    <EmptyState
-                      title="No files available"
-                      body="This source only returned folders. Open one of those folders directly when nested navigation is added."
-                    />
-                  ) : (
-                    files.map((entry) => (
-                      <FileRow
-                        key={entry.path}
-                        entry={entry}
-                        isSelected={entry.path === activeFilePath}
-                        isPending={entry.path === pendingPath}
-                        disabled={Boolean(pendingPath)}
-                        onSelect={handleSelectFile}
-                      />
-                    ))
-                  )}
-                </div>
-              </>
+              ))
             )}
           </>
         )}
       </div>
 
-      {activeView === "log" && activeSource && folderLike && !activeFilePath && !isLoading && (
-        <div
-          style={{
-            padding: "8px 10px",
-            borderTop: "1px solid #c0c0c0",
-            backgroundColor: "#fafafa",
-            fontSize: "11px",
-            color: "#4b5563",
-            fontFamily: "'Segoe UI', Tahoma, sans-serif",
-          }}
-        >
+      {activeSource && folderLike && !activeFilePath && !isLoading && (
+        <div style={{ padding: "8px 10px", borderTop: "1px solid #c0c0c0", backgroundColor: "#fafafa", fontSize: "11px", color: "#4b5563", fontFamily: "'Segoe UI', Tahoma, sans-serif" }}>
           {sourceStatus.kind === "awaiting-file-selection"
             ? sourceStatus.message
             : "Select a file to populate the main log list."}
         </div>
       )}
-    </aside>
+    </>
   );
 }
 
+function IntuneSidebar() {
+  const intuneAnalysisState = useIntuneStore((s) => s.analysisState);
+  const intuneIsAnalyzing = useIntuneStore((s) => s.isAnalyzing);
+  const intuneSummary = useIntuneStore((s) => s.summary);
+  const intuneSourceContext = useIntuneStore((s) => s.sourceContext);
+  const intuneTimelineScope = useIntuneStore((s) => s.timelineScope);
+  const setIntuneTimelineFileScope = useIntuneStore((s) => s.setTimelineFileScope);
 
+  const intuneIncludedFiles = intuneSourceContext.includedFiles;
+  const intuneSelectedFilePath = intuneTimelineScope.filePath;
+  const intuneRequestedPath = intuneAnalysisState.requestedPath;
+  const hasIntuneResults = intuneSummary != null || intuneIncludedFiles.length > 0;
+
+  return (
+    <>
+      <SourceSummaryCard
+        badge="Intune"
+        title={getBaseName(intuneRequestedPath) || "Intune diagnostics workspace"}
+        subtitle={intuneRequestedPath ?? "Select an IME log source to begin analysis."}
+        body={
+          <div style={{ fontSize: "11px", color: "#374151", lineHeight: 1.45 }}>
+            <div>{intuneAnalysisState.message}</div>
+            <div style={{ marginTop: "4px" }}>Included files: {intuneIncludedFiles.length}</div>
+            {intuneSummary && <div style={{ marginTop: "4px" }}>Events: {intuneSummary.totalEvents}</div>}
+          </div>
+        }
+      />
+
+      {(intuneAnalysisState.phase === "analyzing" ||
+        intuneAnalysisState.phase === "error" ||
+        intuneAnalysisState.phase === "empty") && (
+        <SourceStatusNotice
+          kind={
+            intuneAnalysisState.phase === "error"
+              ? "error"
+              : intuneAnalysisState.phase === "empty"
+                ? "empty"
+                : "info"
+          }
+          message={intuneAnalysisState.message}
+          detail={intuneAnalysisState.detail ?? undefined}
+        />
+      )}
+
+      <div style={{ flex: 1, overflow: "auto" }}>
+        {!hasIntuneResults && !intuneIsAnalyzing && intuneAnalysisState.phase !== "error" && (
+          <EmptyState
+            title="No Intune diagnostics data"
+            body="Select an Intune Management Extension (IME) log source to begin analysis."
+          />
+        )}
+
+        {intuneIsAnalyzing && (
+          <EmptyState
+            title="Analyzing Intune logs"
+            body="Scanning source files for events, downloads, and metrics..."
+          />
+        )}
+
+        {!hasIntuneResults && intuneAnalysisState.phase === "error" && (
+          <EmptyState
+            title="Intune diagnostics failed"
+            body={intuneAnalysisState.detail ?? "The selected Intune source could not be analyzed."}
+          />
+        )}
+
+        {intuneSummary && (
+          <>
+            <SectionHeader title="Diagnostics Summary" caption="Overview of the current Intune diagnostics data" />
+            <div style={{ padding: "12px 10px", borderBottom: "1px solid #eef2f7", fontSize: "12px", color: "#374151" }}>
+              <div>Total events: {intuneSummary.totalEvents}</div>
+              <div style={{ marginTop: "6px" }}>Downloads: {intuneSummary.totalDownloads}</div>
+              {intuneSummary.logTimeSpan && <div style={{ marginTop: "6px" }}>Time span: {intuneSummary.logTimeSpan}</div>}
+            </div>
+          </>
+        )}
+
+        {intuneIncludedFiles.length > 0 && (
+          <>
+            <SectionHeader title={`Included IME Log Files (${intuneIncludedFiles.length})`} caption="Click a file to scope the timeline to that log only" />
+            {intuneIncludedFiles.map((path) => {
+              const isSelected = intuneSelectedFilePath === path;
+              return (
+                <button
+                  key={path}
+                  type="button"
+                  onClick={() => setIntuneTimelineFileScope(isSelected ? null : path)}
+                  aria-pressed={isSelected}
+                  title={path}
+                  style={{
+                    width: "100%",
+                    textAlign: "left",
+                    padding: "6px 10px",
+                    border: "none",
+                    borderLeft: isSelected ? "3px solid #3b82f6" : "3px solid transparent",
+                    borderBottom: "1px solid #eef2f7",
+                    fontSize: "11px",
+                    color: isSelected ? "#1d4ed8" : "#4b5563",
+                    backgroundColor: isSelected ? "#eff6ff" : "#ffffff",
+                    cursor: "pointer",
+                  }}
+                >
+                  <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontWeight: isSelected ? 600 : 400 }}>
+                    {getBaseName(path)}
+                  </div>
+                  <div style={{ marginTop: "2px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: isSelected ? "#2563eb" : "#6b7280" }}>
+                    {isSelected ? "Timeline scope active" : path}
+                  </div>
+                </button>
+              );
+            })}
+          </>
+        )}
+      </div>
+    </>
+  );
+}
+
+function DsregcmdSidebar() {
+  const result = useDsregcmdStore((s) => s.result);
+  const sourceContext = useDsregcmdStore((s) => s.sourceContext);
+  const analysisState = useDsregcmdStore((s) => s.analysisState);
+  const isAnalyzing = useDsregcmdStore((s) => s.isAnalyzing);
+  const { openSourceFileDialog, openSourceFolderDialog, pasteDsregcmdSource, captureDsregcmdSource } = useAppActions();
+
+  const diagnostics = result?.diagnostics ?? [];
+  const errorCount = diagnostics.filter((item) => item.severity === "Error").length;
+  const warningCount = diagnostics.filter((item) => item.severity === "Warning").length;
+  const infoCount = diagnostics.filter((item) => item.severity === "Info").length;
+
+  return (
+    <>
+      <SourceSummaryCard
+        badge="dsregcmd"
+        title={sourceContext.displayLabel}
+        subtitle={sourceContext.resolvedPath ?? sourceContext.requestedPath ?? "Open a dsregcmd source to begin."}
+        body={
+          <div style={{ fontSize: "11px", color: "#374151", lineHeight: 1.5 }}>
+            <div>{analysisState.message}</div>
+            <div style={{ marginTop: "4px" }}>Lines: {sourceContext.rawLineCount}</div>
+            <div style={{ marginTop: "4px" }}>Chars: {sourceContext.rawCharCount}</div>
+            {result && <div style={{ marginTop: "4px" }}>Join type: {result.derived.joinTypeLabel}</div>}
+          </div>
+        }
+      />
+
+      {(analysisState.phase === "analyzing" || analysisState.phase === "error") && (
+        <SourceStatusNotice
+          kind={analysisState.phase === "error" ? "error" : "info"}
+          message={analysisState.message}
+          detail={analysisState.detail ?? undefined}
+        />
+      )}
+
+      <div style={{ padding: "8px 10px", borderBottom: "1px solid #e5e7eb", backgroundColor: "#f8fafc", display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px" }}>
+        <SidebarActionButton label="Capture" disabled={isAnalyzing} onClick={() => void captureDsregcmdSource()} />
+        <SidebarActionButton label="Paste" disabled={isAnalyzing} onClick={() => void pasteDsregcmdSource()} />
+        <SidebarActionButton label="Open file" disabled={isAnalyzing} onClick={() => void openSourceFileDialog()} />
+        <SidebarActionButton label="Open folder" disabled={isAnalyzing} onClick={() => void openSourceFolderDialog()} />
+      </div>
+
+      <div style={{ flex: 1, overflow: "auto" }}>
+        {!result && !isAnalyzing && analysisState.phase !== "error" && (
+          <EmptyState
+            title="No dsregcmd analysis yet"
+            body="Capture live output, paste clipboard text, open a text file, or select an evidence bundle folder that contains evidence/command-output/dsregcmd-status.txt."
+          />
+        )}
+
+        {result && (
+          <>
+            <SectionHeader title="Triage Summary" caption="Fast sidebar readout of the current dsregcmd result" />
+            <div style={{ padding: "12px 10px", borderBottom: "1px solid #eef2f7", fontSize: "12px", color: "#374151", lineHeight: 1.5 }}>
+              <div><strong>Join type:</strong> {result.derived.joinTypeLabel}</div>
+              <div style={{ marginTop: "6px" }}><strong>PRT present:</strong> {result.derived.azureAdPrtPresent === null ? 'Unknown' : result.derived.azureAdPrtPresent ? 'Yes' : 'No'}</div>
+              <div style={{ marginTop: "6px" }}><strong>MDM enrolled:</strong> {result.derived.mdmEnrolled === null ? 'Unknown' : result.derived.mdmEnrolled ? 'Yes' : 'No'}</div>
+              <div style={{ marginTop: "6px" }}><strong>Issues:</strong> {errorCount} errors • {warningCount} warnings • {infoCount} info</div>
+              {sourceContext.evidenceFilePath && (
+                <div style={{ marginTop: "6px", wordBreak: "break-word" }}><strong>Evidence file:</strong> {sourceContext.evidenceFilePath}</div>
+              )}
+            </div>
+
+            <SectionHeader title="Top Findings" caption="Highest-priority diagnostics first" />
+            {diagnostics.length === 0 ? (
+              <EmptyState title="No diagnostics" body="The backend parser did not emit diagnostic findings for this capture." />
+            ) : (
+              diagnostics.slice(0, 8).map((item) => (
+                <div key={item.id} style={{ padding: "8px 10px", borderBottom: "1px solid #eef2f7", backgroundColor: item.severity === 'Error' ? '#fef2f2' : item.severity === 'Warning' ? '#fffbeb' : '#eff6ff' }}>
+                  <div style={{ fontSize: "11px", textTransform: "uppercase", fontWeight: 700, color: item.severity === 'Error' ? '#991b1b' : item.severity === 'Warning' ? '#92400e' : '#1e40af' }}>{item.severity}</div>
+                  <div style={{ marginTop: "4px", fontSize: "12px", fontWeight: 600, color: "#111827" }}>{item.title}</div>
+                  <div style={{ marginTop: "3px", fontSize: "11px", color: "#4b5563", lineHeight: 1.45 }}>{item.summary}</div>
+                </div>
+              ))
+            )}
+          </>
+        )}
+      </div>
+    </>
+  );
+}
+
+export function FileSidebar({ width = FILE_SIDEBAR_RECOMMENDED_WIDTH, activeView }: FileSidebarProps) {
+  return (
+    <aside
+      aria-label="Source files"
+      style={{
+        width,
+        minWidth: typeof width === "number" ? `${width}px` : width,
+        display: "flex",
+        flexDirection: "column",
+        overflow: "hidden",
+        backgroundColor: "#ffffff",
+        borderRight: "1px solid #c0c0c0",
+      }}
+    >
+      {activeView === "log" ? <LogSidebar /> : activeView === "intune" ? <IntuneSidebar /> : <DsregcmdSidebar />}
+    </aside>
+  );
+}
