@@ -648,6 +648,7 @@ fn windows_known_log_sources() -> Vec<KnownSourceMetadata> {
     ]
 }
 
+#[cfg(target_os = "windows")]
 fn build_known_log_sources() -> Vec<KnownSourceMetadata> {
     #[cfg(target_os = "windows")]
     {
