@@ -4,7 +4,6 @@ use serde::{Deserialize, Serialize};
 use crate::intune::models::IntuneDiagnosticSeverity;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(rename_all = "camelCase")]
 pub enum DsregcmdJoinType {
     HybridEntraIdJoined,
     EntraIdJoined,
@@ -210,4 +209,29 @@ pub struct DsregcmdAnalysisResult {
     pub derived: DsregcmdDerived,
     #[serde(default)]
     pub diagnostics: Vec<DsregcmdDiagnosticInsight>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::DsregcmdJoinType;
+
+    #[test]
+    fn join_type_serializes_with_pascal_case_variants() {
+        assert_eq!(
+            serde_json::to_string(&DsregcmdJoinType::HybridEntraIdJoined).expect("serialize join type"),
+            "\"HybridEntraIdJoined\""
+        );
+        assert_eq!(
+            serde_json::to_string(&DsregcmdJoinType::EntraIdJoined).expect("serialize join type"),
+            "\"EntraIdJoined\""
+        );
+        assert_eq!(
+            serde_json::to_string(&DsregcmdJoinType::NotJoined).expect("serialize join type"),
+            "\"NotJoined\""
+        );
+        assert_eq!(
+            serde_json::to_string(&DsregcmdJoinType::Unknown).expect("serialize join type"),
+            "\"Unknown\""
+        );
+    }
 }
