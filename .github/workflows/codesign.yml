@@ -118,9 +118,25 @@ jobs:
           - Signed MSI installer (arm64)
           "@
 
-          gh release view $env:TAG_NAME *> $null
-          if ($LASTEXITCODE -ne 0) {
-            gh release create $env:TAG_NAME --title $releaseTitle --notes $releaseNotes
+          $releaseExists = $false
+          for ($attempt = 1; $attempt -le 12; $attempt++) {
+            gh release view $env:TAG_NAME *> $null
+            if ($LASTEXITCODE -eq 0) {
+              $releaseExists = $true
+              break
+            }
+
+            Start-Sleep -Seconds 10
+          }
+
+          if (-not $releaseExists) {
+            gh release create $env:TAG_NAME --title $releaseTitle --notes $releaseNotes *> $null
+            if ($LASTEXITCODE -ne 0) {
+              gh release view $env:TAG_NAME *> $null
+              if ($LASTEXITCODE -ne 0) {
+                throw "GitHub release $env:TAG_NAME was not available and could not be created."
+              }
+            }
           }
 
   windows-signed-release:
