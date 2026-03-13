@@ -60,6 +60,25 @@ function toneForBool(value: boolean | null | undefined): FactRow["tone"] {
   return "neutral";
 }
 
+function toneForJoinType(joinType: DsregcmdAnalysisResult["derived"]["joinType"]): FactRow["tone"] {
+  return joinType === "NotJoined" ? "bad" : "good";
+}
+
+function toneForPrtState(
+  prtPresent: boolean | null,
+  stalePrt: boolean | null | undefined
+): FactRow["tone"] {
+  if (prtPresent === null) {
+    return "neutral";
+  }
+
+  if (!prtPresent) {
+    return "bad";
+  }
+
+  return stalePrt ? "warn" : "good";
+}
+
 function getSeverityColor(severity: DsregcmdSeverity) {
   switch (severity) {
     case "Error":
@@ -762,7 +781,7 @@ export function DsregcmdWorkspace() {
             title="Join Type"
             value={result.derived.joinTypeLabel}
             caption="Derived from AzureAdJoined and DomainJoined fields."
-            tone={result.derived.joinType === "NotJoined" ? "bad" : "good"}
+            tone={toneForJoinType(result.derived.joinType)}
           />
           <StatCard
             title="Issues"
@@ -778,7 +797,7 @@ export function DsregcmdWorkspace() {
                 ? `Stale by ${result.derived.prtAgeHours?.toFixed(1) ?? "?"} hours.`
                 : "Primary Refresh Token presence derived from SSO state."
             }
-            tone={result.derived.azureAdPrtPresent ? (result.derived.stalePrt ? "warn" : "good") : "bad"}
+            tone={toneForPrtState(result.derived.azureAdPrtPresent, result.derived.stalePrt)}
           />
           <StatCard
             title="MDM"
@@ -885,7 +904,7 @@ export function DsregcmdWorkspace() {
             <FlowBox
               title="Join posture"
               detail={`${result.derived.joinTypeLabel}. Azure AD joined: ${formatBool(result.facts.joinState.azureAdJoined)}. Domain joined: ${formatBool(result.facts.joinState.domainJoined)}.`}
-              tone={result.derived.joinType === "NotJoined" ? "bad" : "good"}
+              tone={toneForJoinType(result.derived.joinType)}
             />
             <FlowBox
               title="Device authentication"
@@ -900,7 +919,7 @@ export function DsregcmdWorkspace() {
             <FlowBox
               title="PRT and session"
               detail={`PRT present: ${formatBool(result.derived.azureAdPrtPresent)}. Stale: ${formatBool(result.derived.stalePrt)}. Remote SYSTEM: ${formatBool(result.derived.remoteSessionSystem)}.`}
-              tone={result.derived.azureAdPrtPresent ? (result.derived.stalePrt ? "warn" : "good") : "bad"}
+              tone={toneForPrtState(result.derived.azureAdPrtPresent, result.derived.stalePrt)}
             />
           </div>
         </SectionFrame>
