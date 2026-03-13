@@ -19,6 +19,7 @@ import { useFilterStore } from "../../stores/filter-store";
 import { useFileWatcher } from "../../hooks/use-file-watcher";
 import { useKeyboard } from "../../hooks/use-keyboard";
 import { useDragDrop } from "../../hooks/use-drag-drop";
+import { useFileAssociation } from "../../hooks/use-file-association";
 
 function buildFilterRunSignature(entries: LogEntry[], clauses: FilterClause[]): string {
   const lastId = entries.length > 0 ? entries[entries.length - 1].id : -1;
@@ -146,6 +147,8 @@ export function AppShell() {
   useFileWatcher();
   useKeyboard();
   useDragDrop();
+  // Handle file path passed via OS file association at startup
+  useFileAssociation();
 
   const handleApplyFilter = useCallback(
     async (clauses: FilterClause[]) => {

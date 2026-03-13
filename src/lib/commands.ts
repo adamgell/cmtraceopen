@@ -119,3 +119,7 @@ export async function loadDsregcmdSource(
     path,
   });
 }
+
+export async function getInitialFilePath(): Promise<string | null> {
+  return invoke<string | null>("get_initial_file_path");
+}
