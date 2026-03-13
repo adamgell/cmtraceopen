@@ -1,7 +1,13 @@
 use crate::dsregcmd::{analyze_text, DsregcmdAnalysisResult};
 
 #[cfg(target_os = "windows")]
+use std::ffi::c_void;
+#[cfg(target_os = "windows")]
+use std::os::windows::ffi::OsStrExt;
+#[cfg(target_os = "windows")]
 use std::path::{Path, PathBuf};
+#[cfg(target_os = "windows")]
+use std::ptr::{null, null_mut};
 
 #[tauri::command]
 pub fn analyze_dsregcmd(input: String) -> Result<DsregcmdAnalysisResult, String> {
@@ -91,155 +97,140 @@ fn resolve_system32_binary(file_name: &str) -> Result<PathBuf, String> {
 
 #[cfg(target_os = "windows")]
 fn verify_dsregcmd_signature(dsregcmd_path: &Path) -> Result<(), String> {
-    let powershell_path = resolve_system32_binary(r"WindowsPowerShell\v1.0\powershell.exe")?;
-    let script = r#"
-$ErrorActionPreference = 'Stop'
-[Console]::OutputEncoding = [System.Text.UTF8Encoding]::UTF8
-$sig = Get-AuthenticodeSignature -LiteralPath $env:CMTRACEOPEN_DSREGCMD_PATH
-[pscustomobject]@{
-  Status = $sig.Status.ToString()
-  Subject = if ($sig.SignerCertificate) { $sig.SignerCertificate.Subject } else { $null }
-} | ConvertTo-Json -Compress
-"#;
+    let mut wide_path = dsregcmd_path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<u16>>();
 
-    let output = std::process::Command::new(&powershell_path)
-        .env("CMTRACEOPEN_DSREGCMD_PATH", dsregcmd_path)
-        .args([
-            "-NoProfile",
-            "-NonInteractive",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-Command",
-            script,
-        ])
-        .output()
-        .map_err(|error| {
-            format!(
-                "Failed to verify the digital signature of '{}': {}",
-                dsregcmd_path.display(),
-                error
-            )
-        })?;
+    let mut file_info = WinTrustFileInfo {
+        cbStruct: std::mem::size_of::<WinTrustFileInfo>() as u32,
+        pcwszFilePath: wide_path.as_mut_ptr(),
+        hFile: 0,
+        pgKnownSubject: null(),
+    };
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        let exit_code = output.status.code().unwrap_or_default();
-        return Err(if stderr.is_empty() {
-            format!(
-                "Digital signature verification failed for '{}' with exit code {}.",
-                dsregcmd_path.display(),
-                exit_code
-            )
-        } else {
-            format!(
-                "Digital signature verification failed for '{}' with exit code {}: {}",
-                dsregcmd_path.display(),
-                exit_code,
-                stderr
-            )
-        });
-    }
+    let mut trust_data = WinTrustData {
+        cbStruct: std::mem::size_of::<WinTrustData>() as u32,
+        pPolicyCallbackData: null_mut(),
+        pSIPClientData: null_mut(),
+        dwUIChoice: WTD_UI_NONE,
+        fdwRevocationChecks: WTD_REVOKE_NONE,
+        dwUnionChoice: WTD_CHOICE_FILE,
+        Anonymous: WinTrustDataChoice {
+            pFile: &mut file_info,
+        },
+        dwStateAction: WTD_STATEACTION_IGNORE,
+        hWVTStateData: 0,
+        pwszURLReference: null(),
+        dwProvFlags: 0,
+        dwUIContext: 0,
+        pSignatureSettings: null_mut(),
+    };
 
-    let signature =
-        parse_windows_signature_check_output(&output.stdout).map_err(|error| {
-            format!(
-                "Could not parse the digital signature check output for '{}': {}",
-                dsregcmd_path.display(),
-                error
-            )
-        })?;
+    let status = unsafe {
+        WinVerifyTrust(
+            null_mut(),
+            &WINTRUST_ACTION_GENERIC_VERIFY_V2,
+            &mut trust_data as *mut _ as *mut c_void,
+        )
+    };
 
-    if is_expected_dsregcmd_signature(
-        signature.status.as_str(),
-        signature.subject.as_deref(),
-    ) {
+    if status == 0 {
         return Ok(());
     }
 
     Err(format!(
-        "Refusing to execute '{}': expected a valid Microsoft digital signature but got status '{}' and subject '{}'.",
+        "Refusing to execute '{}': expected a valid Authenticode signature but WinVerifyTrust returned {}.",
         dsregcmd_path.display(),
-        signature.status,
-        signature.subject.unwrap_or_else(|| "(missing signer subject)".to_string())
+        format_winverifytrust_status(status)
     ))
 }
 
-#[cfg(any(target_os = "windows", test))]
-#[derive(Debug, serde::Deserialize)]
-struct WindowsSignatureCheck {
-    #[serde(rename = "Status")]
-    status: String,
-    #[serde(rename = "Subject")]
-    subject: Option<String>,
-}
-
-#[cfg(any(target_os = "windows", test))]
-fn parse_windows_signature_check_output(output: &[u8]) -> Result<WindowsSignatureCheck, String> {
-    let payload = String::from_utf8_lossy(output);
-    let payload = payload.trim_start_matches('\u{feff}').trim();
-
-    if payload.is_empty() {
-        return Err("PowerShell returned no JSON output.".to_string());
+#[cfg(target_os = "windows")]
+fn format_winverifytrust_status(status: i32) -> String {
+    match status as u32 {
+        0x800B0100 => "0x800B0100 (TRUST_E_NOSIGNATURE)".to_string(),
+        0x800B0101 => "0x800B0101 (CERT_E_EXPIRED)".to_string(),
+        0x800B0109 => "0x800B0109 (CERT_E_UNTRUSTEDROOT)".to_string(),
+        0x80096010 => "0x80096010 (TRUST_E_BAD_DIGEST)".to_string(),
+        code => format!("0x{code:08X}"),
     }
-
-    serde_json::from_str(payload).map_err(|error| error.to_string())
 }
 
 #[cfg(target_os = "windows")]
-fn is_expected_dsregcmd_signature(status: &str, subject: Option<&str>) -> bool {
-    if !status.eq_ignore_ascii_case("Valid") {
-        return false;
-    }
+#[repr(C)]
+struct Guid {
+    data1: u32,
+    data2: u16,
+    data3: u16,
+    data4: [u8; 8],
+}
 
-    let Some(subject) = subject else {
-        return false;
-    };
+#[cfg(target_os = "windows")]
+#[repr(C)]
+struct WinTrustFileInfo {
+    cbStruct: u32,
+    pcwszFilePath: *mut u16,
+    hFile: isize,
+    pgKnownSubject: *const Guid,
+}
 
-    subject.to_ascii_lowercase().contains("microsoft")
+#[cfg(target_os = "windows")]
+#[repr(C)]
+union WinTrustDataChoice {
+    pFile: *mut WinTrustFileInfo,
+}
+
+#[cfg(target_os = "windows")]
+#[repr(C)]
+struct WinTrustData {
+    cbStruct: u32,
+    pPolicyCallbackData: *mut c_void,
+    pSIPClientData: *mut c_void,
+    dwUIChoice: u32,
+    fdwRevocationChecks: u32,
+    dwUnionChoice: u32,
+    Anonymous: WinTrustDataChoice,
+    dwStateAction: u32,
+    hWVTStateData: isize,
+    pwszURLReference: *const u16,
+    dwProvFlags: u32,
+    dwUIContext: u32,
+    pSignatureSettings: *mut c_void,
+}
+
+#[cfg(target_os = "windows")]
+const WINTRUST_ACTION_GENERIC_VERIFY_V2: Guid = Guid {
+    data1: 0x00AAC56B,
+    data2: 0xCD44,
+    data3: 0x11D0,
+    data4: [0x8C, 0xC2, 0x00, 0xC0, 0x4F, 0xC2, 0x95, 0xEE],
+};
+
+#[cfg(target_os = "windows")]
+const WTD_UI_NONE: u32 = 2;
+#[cfg(target_os = "windows")]
+const WTD_REVOKE_NONE: u32 = 0;
+#[cfg(target_os = "windows")]
+const WTD_CHOICE_FILE: u32 = 1;
+#[cfg(target_os = "windows")]
+const WTD_STATEACTION_IGNORE: u32 = 0;
+
+#[cfg(target_os = "windows")]
+extern "system" {
+    fn WinVerifyTrust(hwnd: *mut c_void, pg_action_id: *const Guid, p_wvt_data: *mut c_void) -> i32;
 }
 
 #[cfg(test)]
 mod tests {
     #[cfg(not(target_os = "windows"))]
     use super::capture_dsregcmd;
-    use super::parse_windows_signature_check_output;
-    #[cfg(target_os = "windows")]
-    use super::is_expected_dsregcmd_signature;
-
-    #[cfg(target_os = "windows")]
-    #[test]
-    fn expected_signature_requires_valid_microsoft_subject() {
-        assert!(is_expected_dsregcmd_signature(
-            "Valid",
-            Some("CN=Microsoft Windows, O=Microsoft Corporation, L=Redmond, S=Washington, C=US")
-        ));
-        assert!(!is_expected_dsregcmd_signature("UnknownError", Some("CN=Microsoft Windows")));
-        assert!(!is_expected_dsregcmd_signature("Valid", Some("CN=Contoso Test")));
-        assert!(!is_expected_dsregcmd_signature("Valid", None));
-    }
 
     #[cfg(not(target_os = "windows"))]
     #[test]
     fn capture_command_returns_clear_error_on_unsupported_platform() {
         let error = capture_dsregcmd().expect_err("expected unsupported platform error");
         assert!(error.contains("only supported on Windows"));
-    }
-
-    #[test]
-    fn signature_output_parser_handles_bom_and_whitespace() {
-        let output = b"\xEF\xBB\xBF  {\"Status\":\"Valid\",\"Subject\":\"CN=Microsoft Windows\"}\r\n";
-        let signature =
-            parse_windows_signature_check_output(output).expect("expected signature JSON to parse");
-
-        assert_eq!(signature.status, "Valid");
-        assert_eq!(signature.subject.as_deref(), Some("CN=Microsoft Windows"));
-    }
-
-    #[test]
-    fn signature_output_parser_rejects_empty_output() {
-        let error = parse_windows_signature_check_output(b"  \r\n\t")
-            .expect_err("expected empty signature output to fail");
-
-        assert!(error.contains("no JSON output"));
     }
 }
