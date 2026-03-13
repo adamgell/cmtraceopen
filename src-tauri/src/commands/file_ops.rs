@@ -648,17 +648,13 @@ fn windows_known_log_sources() -> Vec<KnownSourceMetadata> {
     ]
 }
 
-#[cfg(target_os = "windows")]
 fn build_known_log_sources() -> Vec<KnownSourceMetadata> {
     #[cfg(target_os = "windows")]
     {
-        windows_known_log_sources()
+        return windows_known_log_sources();
     }
 
-    #[cfg(not(target_os = "windows"))]
-    {
-        Vec::new()
-    }
+    Vec::new()
 }
 
 /// Return known platform log source metadata.

@@ -176,16 +176,21 @@ export function StatusBar() {
 
     const logStatusText =
       entries.length > 0
-    ? [
-        positionText ?? `${filteredCount} entries`,
-        `${totalLines} lines`,
-        severityText,
-        `${formatDetected ?? "Unknown"} format`,
-        parserDisplay?.provenanceLabel,
-        parserDisplay?.qualityLabel,
-      ]
-        .filter((part): part is string => Boolean(part))
-        .join(" | ")
+        ? [
+            positionText ?? `${filteredCount} entries`,
+            `${totalLines} lines`,
+            severityText,
+            `${formatDetected ?? "Unknown"} format`,
+            parserDisplay?.provenanceLabel,
+            parserDisplay?.qualityLabel,
+          ]
+            .filter((part): part is string => Boolean(part))
+            .join(" | ")
+        : failureReason
+          ? `Reason: ${failureReason}`
+          : sourceStatus.kind !== "idle"
+            ? sourceStatus.detail ?? sourceStatus.message
+            : "";
 
     const filterStatusText = filterError ? `Filter error: ${filterError}` : filterStatus.label;
 
