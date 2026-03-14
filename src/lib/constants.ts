@@ -55,7 +55,8 @@ export const COLORS = LOG_SEVERITY_PALETTES.classic;
 export function getLogSeverityPalette(
   mode: LogSeverityPaletteMode
 ): LogSeverityPalette {
-  return LOG_SEVERITY_PALETTES[mode];
+  const palette = LOG_SEVERITY_PALETTES[mode];
+  return palette ?? LOG_SEVERITY_PALETTES.classic;
 }
 
 /** Default update interval in ms (minimum 500, from string table ID=37) */
