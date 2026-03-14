@@ -1,5 +1,5 @@
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
@@ -58,7 +58,52 @@ fn write_file_association_preferences(
 #[cfg(target_os = "windows")]
 fn get_expected_open_command() -> Result<String, String> {
     let executable_path = std::env::current_exe().map_err(|e| e.to_string())?;
+
+    if let Some(launcher_path) = resolve_dev_launcher_path(&executable_path) {
+        return Ok(format!(
+            "\"{}\" -OpenPath \"%1\"",
+            launcher_path.to_string_lossy()
+        ));
+    }
+
     Ok(format!("\"{}\" \"%1\"", executable_path.to_string_lossy()))
+}
+
+#[cfg(target_os = "windows")]
+fn resolve_dev_launcher_path(executable_path: &Path) -> Option<PathBuf> {
+    let debug_dir = executable_path.parent()?;
+    if !debug_dir
+        .file_name()
+        .and_then(|value| value.to_str())
+        .map(|value| value.eq_ignore_ascii_case("debug"))
+        .unwrap_or(false)
+    {
+        return None;
+    }
+
+    let target_dir = debug_dir.parent()?;
+    if !target_dir
+        .file_name()
+        .and_then(|value| value.to_str())
+        .map(|value| value.eq_ignore_ascii_case("target"))
+        .unwrap_or(false)
+    {
+        return None;
+    }
+
+    let src_tauri_dir = target_dir.parent()?;
+    if !src_tauri_dir
+        .file_name()
+        .and_then(|value| value.to_str())
+        .map(|value| value.eq_ignore_ascii_case("src-tauri"))
+        .unwrap_or(false)
+    {
+        return None;
+    }
+
+    let repo_root = src_tauri_dir.parent()?;
+    let launcher_path = repo_root.join("Launch-CMTraceOpen.cmd");
+    launcher_path.is_file().then_some(launcher_path)
 }
 
 #[cfg(target_os = "windows")]

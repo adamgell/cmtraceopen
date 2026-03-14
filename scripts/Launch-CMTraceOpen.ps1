@@ -2,7 +2,8 @@
 param(
     [ValidateSet('Dev', 'Build', 'BuildAndRun')]
     [string]$Mode = 'Dev',
-    [switch]$InstallDependencies
+    [switch]$InstallDependencies,
+    [string]$OpenPath
 )
 
 Set-StrictMode -Version Latest
@@ -139,10 +140,23 @@ else {
 }
 
 $modeConfiguration = Get-ModeConfiguration -Mode $Mode
-Invoke-CheckedCommand -Command 'npm.cmd' -Arguments @('run', $modeConfiguration.NpmScript)
+
+$npmArguments = @('run', $modeConfiguration.NpmScript)
+if ($OpenPath) {
+    $npmArguments += '--'
+    $npmArguments += '--'
+    $npmArguments += $OpenPath
+}
+
+Invoke-CheckedCommand -Command 'npm.cmd' -Arguments $npmArguments
 
 if ($modeConfiguration.RequiresBuiltArtifact) {
     $builtExecutable = Resolve-BuiltArtifactPath -AppRoot $appRoot
     Write-Step "Launching built app from '$builtExecutable'"
-    Start-Process -FilePath $builtExecutable
+    if ($OpenPath) {
+        Start-Process -FilePath $builtExecutable -ArgumentList @($OpenPath)
+    }
+    else {
+        Start-Process -FilePath $builtExecutable
+    }
 }
