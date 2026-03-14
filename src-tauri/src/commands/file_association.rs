@@ -1,5 +1,8 @@
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
+
+#[cfg(target_os = "windows")]
+use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
