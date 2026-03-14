@@ -1,9 +1,7 @@
 use crate::dsregcmd::{analyze_text, registry, DsregcmdAnalysisResult};
 
-#[cfg(target_os = "windows")]
-use serde::Deserialize;
-#[cfg(target_os = "windows")]
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use std::path::Path;
 #[cfg(target_os = "windows")]
 use std::ffi::c_void;
 #[cfg(target_os = "windows")]
@@ -13,7 +11,7 @@ use std::os::windows::ffi::OsStrExt;
 #[cfg(target_os = "windows")]
 use std::os::windows::io::AsRawHandle;
 #[cfg(target_os = "windows")]
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 #[cfg(target_os = "windows")]
 use std::ptr::{null, null_mut};
 #[cfg(target_os = "windows")]
@@ -836,6 +834,7 @@ const DRIVER_ACTION_VERIFY: Guid = Guid {
 };
 
 #[cfg(target_os = "windows")]
+#[link(name = "wintrust")]
 extern "system" {
     fn WinVerifyTrust(hwnd: *mut c_void, pg_action_id: *const Guid, p_wvt_data: *mut c_void) -> i32;
     fn CryptCATAdminAcquireContext(
