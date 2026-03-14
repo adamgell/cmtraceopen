@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import {
   DEFAULT_LOG_DETAILS_FONT_SIZE,
   DEFAULT_LOG_LIST_FONT_SIZE,
@@ -52,6 +52,8 @@ export function AccessibilityDialog({ isOpen, onClose }: AccessibilityDialogProp
   const resetLogAccessibilityPreferences = useUiStore(
     (state) => state.resetLogAccessibilityPreferences
   );
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  const previouslyFocusedElementRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
     if (!isOpen) {
@@ -67,6 +69,24 @@ export function AccessibilityDialog({ isOpen, onClose }: AccessibilityDialogProp
     window.addEventListener("keydown", handleKey);
     return () => window.removeEventListener("keydown", handleKey);
   }, [isOpen, onClose]);
+
+  useEffect(() => {
+    if (isOpen) {
+      if (document.activeElement instanceof HTMLElement) {
+        previouslyFocusedElementRef.current = document.activeElement;
+      } else {
+        previouslyFocusedElementRef.current = null;
+      }
+      const dialogNode = dialogRef.current;
+      if (dialogNode) {
+        dialogNode.focus();
+      }
+    } else {
+      if (previouslyFocusedElementRef.current) {
+        previouslyFocusedElementRef.current.focus();
+      }
+    }
+  }, [isOpen]);
 
   if (!isOpen) {
     return null;
@@ -92,6 +112,52 @@ export function AccessibilityDialog({ isOpen, onClose }: AccessibilityDialogProp
       }}
     >
       <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Accessibility settings"
+        tabIndex={-1}
+        onKeyDown={(event) => {
+          if (event.key !== "Tab") {
+            return;
+          }
+          const dialogNode = dialogRef.current;
+          if (!dialogNode) {
+            return;
+          }
+          const focusableSelectors = [
+            'a[href]',
+            'button:not([disabled])',
+            'textarea:not([disabled])',
+            'input:not([disabled])',
+            'select:not([disabled])',
+            '[tabindex]:not([tabindex="-1"])',
+          ];
+          const focusableElements = Array.from(
+            dialogNode.querySelectorAll<HTMLElement>(focusableSelectors.join(","))
+          ).filter(
+            (el) =>
+              !el.hasAttribute("disabled") &&
+              el.getAttribute("aria-hidden") !== "true"
+          );
+          if (focusableElements.length === 0) {
+            event.preventDefault();
+            dialogNode.focus();
+            return;
+          }
+          const firstElement = focusableElements[0];
+          const lastElement =
+            focusableElements[focusableElements.length - 1];
+          const activeElement = document.activeElement as HTMLElement | null;
+
+          if (!event.shiftKey && activeElement === lastElement) {
+            event.preventDefault();
+            firstElement.focus();
+          } else if (event.shiftKey && activeElement === firstElement) {
+            event.preventDefault();
+            lastElement.focus();
+          }
+        }}
         style={{
           backgroundColor: "#f0f0f0",
           border: "1px solid #999",
