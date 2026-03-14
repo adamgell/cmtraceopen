@@ -1,6 +1,6 @@
 {
     "profileName": "intune-windows-endpoint-v1",
-    "profileVersion": "1.3.0",
+    "profileVersion": "1.3.2",
     "logs": [
         {
             "id": "ime-logs",
@@ -95,6 +95,13 @@
             "notes": "Current device PolicyManager state relevant to MDM troubleshooting."
         },
         {
+            "id": "policymanager-providers",
+            "family": "policymanager-provider-state",
+            "path": "HKLM\\SOFTWARE\\Microsoft\\PolicyManager\\Providers",
+            "fileName": "policymanager-providers.reg",
+            "notes": "Provider-delivered PolicyManager state used to compare intended values against the current effective device policy."
+        },
+        {
             "id": "autopilot-esp-diagnostics",
             "family": "autopilot-esp-diagnostics",
             "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\Autopilot\\EnrollmentStatusTracking\\ESPTrackingInfo\\Diagnostics",
@@ -128,6 +135,41 @@
             "path": "HKLM\\SOFTWARE\\Microsoft\\Provisioning\\OMADM\\SyncML\\ODJApplied",
             "fileName": "omadm-syncml-odjapplied.reg",
             "notes": "Hybrid join offline domain join application marker referenced during Autopilot and ODJ troubleshooting."
+        },
+        {
+            "id": "cloud-domain-join-tenantinfo",
+            "family": "cloud-domain-join-tenantinfo",
+            "path": "HKLM\\SYSTEM\\CurrentControlSet\\Control\\CloudDomainJoin\\TenantInfo",
+            "fileName": "cloud-domain-join-tenantinfo.reg",
+            "notes": "Cloud domain join tenant metadata, including MDM enrollment URL hints that help correlate tenant-scoped policy evidence."
+        },
+        {
+            "id": "policy-hkcu",
+            "family": "windows-user-policy-hive",
+            "path": "HKCU\\Software\\Policies",
+            "fileName": "hkcu-policies.reg",
+            "notes": "User-scoped Windows policy hive captured alongside dsregcmd evidence for future deterministic policy correlation."
+        },
+        {
+            "id": "policy-hklm",
+            "family": "windows-machine-policy-hive",
+            "path": "HKLM\\Software\\Policies",
+            "fileName": "hklm-policies.reg",
+            "notes": "Machine-scoped Windows policy hive captured alongside dsregcmd evidence for future deterministic policy correlation."
+        },
+        {
+            "id": "policy-microsoft-hkcu",
+            "family": "windows-user-microsoft-policy-hive",
+            "path": "HKCU\\Software\\Microsoft\\Policies",
+            "fileName": "hkcu-microsoft-policies.reg",
+            "notes": "User-scoped Microsoft policy hive captured for PassportForWork and related policy correlation not covered by the generic Policies export."
+        },
+        {
+            "id": "policy-microsoft-hklm",
+            "family": "windows-machine-microsoft-policy-hive",
+            "path": "HKLM\\Software\\Microsoft\\Policies",
+            "fileName": "hklm-microsoft-policies.reg",
+            "notes": "Machine-scoped Microsoft policy hive captured for PassportForWork and related policy correlation not covered by the generic Policies export."
         }
     ],
     "eventLogs": [

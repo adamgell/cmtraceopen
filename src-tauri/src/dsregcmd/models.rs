@@ -12,6 +12,61 @@ pub enum DsregcmdJoinType {
     Unknown,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum DsregcmdDiagnosticPhase {
+    Precheck,
+    Discover,
+    Auth,
+    Join,
+    PostJoin,
+    #[default]
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum DsregcmdCaptureConfidence {
+    High,
+    #[default]
+    Medium,
+    Low,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DsregcmdEvidenceSource {
+    Dsregcmd,
+    PolicyManagerCurrent,
+    PolicyManagerProvider,
+    PolicyManagerComparison,
+    WindowsPolicyMachine,
+    WindowsPolicyUser,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DsregcmdPolicyEvidenceValue {
+    pub display_value: Option<bool>,
+    pub current_value: Option<bool>,
+    pub provider_value: Option<bool>,
+    pub source: Option<DsregcmdEvidenceSource>,
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DsregcmdWhfbPolicyEvidence {
+    pub policy_enabled: DsregcmdPolicyEvidenceValue,
+    pub post_logon_enabled: DsregcmdPolicyEvidenceValue,
+    pub pin_recovery_enabled: DsregcmdPolicyEvidenceValue,
+    pub require_security_device: DsregcmdPolicyEvidenceValue,
+    pub use_certificate_for_on_prem_auth: DsregcmdPolicyEvidenceValue,
+    pub use_cloud_trust_for_on_prem_auth: DsregcmdPolicyEvidenceValue,
+    #[serde(default)]
+    pub artifact_paths: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct DsregcmdJoinState {
@@ -151,6 +206,13 @@ pub struct DsregcmdRegistrationState {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+pub struct DsregcmdPostJoinDiagnostics {
+    pub aad_recovery_enabled: Option<bool>,
+    pub key_sign_test: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct DsregcmdFacts {
     pub join_state: DsregcmdJoinState,
     pub device_details: DsregcmdDeviceDetails,
@@ -162,6 +224,7 @@ pub struct DsregcmdFacts {
     pub diagnostics: DsregcmdDiagnosticFields,
     pub pre_join_tests: DsregcmdPreJoinTests,
     pub registration: DsregcmdRegistrationState,
+    pub post_join_diagnostics: DsregcmdPostJoinDiagnostics,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -169,6 +232,10 @@ pub struct DsregcmdFacts {
 pub struct DsregcmdDerived {
     pub join_type: DsregcmdJoinType,
     pub join_type_label: String,
+    pub dominant_phase: DsregcmdDiagnosticPhase,
+    pub phase_summary: String,
+    pub capture_confidence: DsregcmdCaptureConfidence,
+    pub capture_confidence_reason: String,
     pub mdm_enrolled: Option<bool>,
     pub missing_mdm: Option<bool>,
     pub compliance_url_present: Option<bool>,
@@ -209,11 +276,16 @@ pub struct DsregcmdAnalysisResult {
     pub derived: DsregcmdDerived,
     #[serde(default)]
     pub diagnostics: Vec<DsregcmdDiagnosticInsight>,
+    #[serde(default)]
+    pub policy_evidence: DsregcmdWhfbPolicyEvidence,
 }
 
 #[cfg(test)]
 mod tests {
-    use super::DsregcmdJoinType;
+    use super::{
+        DsregcmdCaptureConfidence, DsregcmdDiagnosticPhase, DsregcmdEvidenceSource,
+        DsregcmdJoinType,
+    };
 
     #[test]
     fn join_type_serializes_with_pascal_case_variants() {
@@ -232,6 +304,30 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&DsregcmdJoinType::Unknown).expect("serialize join type"),
             "\"Unknown\""
+        );
+    }
+
+    #[test]
+    fn phase_and_confidence_serialize_with_expected_strings() {
+        assert_eq!(
+            serde_json::to_string(&DsregcmdDiagnosticPhase::PostJoin)
+                .expect("serialize diagnostic phase"),
+            "\"post_join\""
+        );
+        assert_eq!(
+            serde_json::to_string(&DsregcmdCaptureConfidence::High)
+                .expect("serialize capture confidence"),
+            "\"high\""
+        );
+        assert_eq!(
+            serde_json::to_string(&DsregcmdEvidenceSource::PolicyManagerCurrent)
+                .expect("serialize evidence source"),
+            "\"policy_manager_current\""
+        );
+        assert_eq!(
+            serde_json::to_string(&DsregcmdEvidenceSource::WindowsPolicyMachine)
+                .expect("serialize evidence source"),
+            "\"windows_policy_machine\""
         );
     }
 }

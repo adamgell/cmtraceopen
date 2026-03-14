@@ -5,6 +5,42 @@ export type DsregcmdJoinType =
   | "NotJoined"
   | "Unknown";
 
+export type DsregcmdDiagnosticPhase =
+  | "precheck"
+  | "discover"
+  | "auth"
+  | "join"
+  | "post_join"
+  | "unknown";
+
+export type DsregcmdCaptureConfidence = "high" | "medium" | "low";
+
+export type DsregcmdEvidenceSource =
+  | "dsregcmd"
+  | "policy_manager_current"
+  | "policy_manager_provider"
+  | "policy_manager_comparison"
+  | "windows_policy_machine"
+  | "windows_policy_user";
+
+export interface DsregcmdPolicyEvidenceValue {
+  displayValue: boolean | null;
+  currentValue: boolean | null;
+  providerValue: boolean | null;
+  source: DsregcmdEvidenceSource | null;
+  note: string | null;
+}
+
+export interface DsregcmdWhfbPolicyEvidence {
+  policyEnabled: DsregcmdPolicyEvidenceValue;
+  postLogonEnabled: DsregcmdPolicyEvidenceValue;
+  pinRecoveryEnabled: DsregcmdPolicyEvidenceValue;
+  requireSecurityDevice: DsregcmdPolicyEvidenceValue;
+  useCertificateForOnPremAuth: DsregcmdPolicyEvidenceValue;
+  useCloudTrustForOnPremAuth: DsregcmdPolicyEvidenceValue;
+  artifactPaths: string[];
+}
+
 export interface DsregcmdJoinState {
   azureAdJoined: boolean | null;
   domainJoined: boolean | null;
@@ -122,6 +158,11 @@ export interface DsregcmdRegistrationState {
   serverErrorDescription: string | null;
 }
 
+export interface DsregcmdPostJoinDiagnostics {
+  aadRecoveryEnabled: boolean | null;
+  keySignTest: string | null;
+}
+
 export interface DsregcmdFacts {
   joinState: DsregcmdJoinState;
   deviceDetails: DsregcmdDeviceDetails;
@@ -133,11 +174,16 @@ export interface DsregcmdFacts {
   diagnostics: DsregcmdDiagnosticFields;
   preJoinTests: DsregcmdPreJoinTests;
   registration: DsregcmdRegistrationState;
+  postJoinDiagnostics: DsregcmdPostJoinDiagnostics;
 }
 
 export interface DsregcmdDerived {
   joinType: DsregcmdJoinType;
   joinTypeLabel: string;
+  dominantPhase: DsregcmdDiagnosticPhase;
+  phaseSummary: string;
+  captureConfidence: DsregcmdCaptureConfidence;
+  captureConfidenceReason: string;
   mdmEnrolled: boolean | null;
   missingMdm: boolean | null;
   complianceUrlPresent: boolean | null;
@@ -172,6 +218,20 @@ export interface DsregcmdAnalysisResult {
   facts: DsregcmdFacts;
   derived: DsregcmdDerived;
   diagnostics: DsregcmdDiagnosticInsight[];
+  policyEvidence: DsregcmdWhfbPolicyEvidence;
+}
+
+export interface DsregcmdCaptureResult {
+  input: string;
+  bundlePath: string | null;
+  evidenceFilePath: string | null;
+}
+
+export interface DsregcmdResolvedSource {
+  input: string;
+  bundlePath: string | null;
+  resolvedPath: string | null;
+  evidenceFilePath: string | null;
 }
 
 export type DsregcmdSourceKind = "file" | "folder" | "clipboard" | "capture" | "text";

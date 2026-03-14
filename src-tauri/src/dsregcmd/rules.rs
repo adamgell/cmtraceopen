@@ -1,10 +1,10 @@
-use chrono::{DateTime, NaiveDateTime, Utc};
+use chrono::{DateTime, Local, LocalResult, NaiveDateTime, TimeZone, Utc};
 use once_cell::sync::Lazy;
 use regex::Regex;
 
 use crate::dsregcmd::models::{
-    DsregcmdAnalysisResult, DsregcmdDerived, DsregcmdDiagnosticInsight, DsregcmdFacts,
-    DsregcmdJoinType,
+    DsregcmdAnalysisResult, DsregcmdCaptureConfidence, DsregcmdDerived,
+    DsregcmdDiagnosticInsight, DsregcmdDiagnosticPhase, DsregcmdFacts, DsregcmdJoinType,
 };
 use crate::intune::models::IntuneDiagnosticSeverity;
 
@@ -30,32 +30,43 @@ pub fn analyze_facts(facts: DsregcmdFacts, raw_input: &str) -> DsregcmdAnalysisR
         facts,
         derived,
         diagnostics,
+        policy_evidence: Default::default(),
     }
 }
 
 fn derive_facts(facts: &DsregcmdFacts, raw_input: &str) -> DsregcmdDerived {
     let join_type = derive_join_type(facts);
     let join_type_label = join_type_label(join_type).to_string();
-    let mdm_enrolled = facts
-        .management_details
-        .mdm_url
-        .as_ref()
-        .map(|_| true)
-        .or_else(|| {
-            if facts.management_details.mdm_compliance_url.is_some() {
-                Some(true)
-            } else {
-                Some(false)
-            }
-        });
-    let missing_mdm = mdm_enrolled.map(|value| !value);
-    let compliance_url_present = facts
-        .management_details
-        .mdm_compliance_url
-        .as_ref()
-        .map(|_| true)
-        .or(Some(false));
-    let missing_compliance_url = compliance_url_present.map(|value| !value);
+    let mdm_enrolled = if facts.management_details.mdm_url.is_some()
+        || facts.management_details.mdm_compliance_url.is_some()
+    {
+        Some(true)
+    } else {
+        None
+    };
+    let missing_mdm = match (
+        facts.management_details.mdm_url.is_some(),
+        facts.management_details.mdm_compliance_url.is_some(),
+    ) {
+        (false, true) => Some(true),
+        (true, _) => Some(false),
+        (false, false) => None,
+    };
+    let compliance_url_present = if facts.management_details.mdm_compliance_url.is_some() {
+        Some(true)
+    } else if facts.management_details.mdm_url.is_some() {
+        Some(false)
+    } else {
+        None
+    };
+    let missing_compliance_url = match (
+        facts.management_details.mdm_url.is_some(),
+        facts.management_details.mdm_compliance_url.is_some(),
+    ) {
+        (true, false) => Some(true),
+        (true, true) => Some(false),
+        (false, _) => None,
+    };
     let azure_ad_prt_present = facts.sso_state.azure_ad_prt;
     let prt_reference_time = facts
         .diagnostics
@@ -69,12 +80,13 @@ fn derive_facts(facts: &DsregcmdFacts, raw_input: &str) -> DsregcmdDerived {
         .as_deref()
         .and_then(parse_dsregcmd_timestamp);
     let prt_age_hours = match (prt_reference_time, prt_last_update) {
-        (Some(reference_time), Some(last_update)) => Some(
-            reference_time
+        (Some(reference_time), Some(last_update)) => {
+            let age_hours = reference_time
                 .signed_duration_since(last_update)
                 .num_minutes() as f64
-                / 60.0,
-        ),
+                / 60.0;
+            Some(age_hours.max(0.0))
+        }
         _ => None,
     };
     let stale_prt = prt_age_hours.map(|hours| hours > 4.0);
@@ -104,10 +116,18 @@ fn derive_facts(facts: &DsregcmdFacts, raw_input: &str) -> DsregcmdDerived {
         (Some(_), Some(_)) => Some(false),
         _ => None,
     };
+    let dominant_phase = derive_dominant_phase(facts);
+    let phase_summary = phase_summary(dominant_phase).to_string();
+    let (capture_confidence, capture_confidence_reason) =
+        derive_capture_confidence(facts, prt_reference_time, remote_session_system);
 
     DsregcmdDerived {
         join_type,
         join_type_label,
+        dominant_phase,
+        phase_summary,
+        capture_confidence,
+        capture_confidence_reason,
         mdm_enrolled,
         missing_mdm,
         compliance_url_present,
@@ -306,6 +326,325 @@ fn build_diagnostics(
         vec!["Correct the AD hybrid join configuration and retry registration.".to_string()],
     );
 
+    if has_code(facts, "0xcaa90017") {
+        diagnostics.push(issue(
+            "adal-protocol-not-supported",
+            IntuneDiagnosticSeverity::Error,
+            "authentication",
+            "Federation service does not support the required WS-Trust protocol",
+            "The failure pattern matches ERROR_ADAL_PROTOCOL_NOT_SUPPORTED (0xcaa90017), which means the federated identity provider is not exposing the WS-Trust protocol flow that hybrid join expects.",
+            vec![render_phase_code_evidence(facts, "0xcaa90017")],
+            vec![
+                "Review federation settings and confirm the on-premises identity provider supports WS-Trust for device registration flows.".to_string(),
+                "Check whether the endpoint returned by federation metadata matches the protocol expected by Windows.".to_string(),
+            ],
+            vec!["Enable or repair the required WS-Trust support in the identity provider.".to_string()],
+        ));
+    }
+
+    if has_code(facts, "0xcaa9002c") {
+        diagnostics.push(issue(
+            "adal-parse-xml-failed",
+            IntuneDiagnosticSeverity::Error,
+            "configuration",
+            "Federation metadata XML could not be parsed",
+            "The failure pattern matches ERROR_ADAL_FAILED_TO_PARSE_XML (0xcaa9002c), which usually means the MEX or WS-Trust endpoint returned malformed or unexpected XML.",
+            vec![render_phase_code_evidence(facts, "0xcaa9002c")],
+            vec![
+                "Inspect the MEX endpoint response for valid XML and correct WS-Trust metadata.".to_string(),
+                "Check whether a proxy is replacing the expected federation XML with an HTML or otherwise modified response.".to_string(),
+            ],
+            vec!["Repair the federation metadata response so it returns valid XML.".to_string()],
+        ));
+    }
+
+    if has_code(facts, "0xcaa90023") {
+        diagnostics.push(issue(
+            "adal-password-endpoint-missing",
+            IntuneDiagnosticSeverity::Error,
+            "configuration",
+            "Federation metadata is missing the username or password endpoint",
+            "The failure pattern matches ERROR_ADAL_COULDNOT_DISCOVER_USERNAME_PASSWORD_ENDPOINT (0xcaa90023), which means the MEX response does not advertise the WS-Trust endpoint Windows expects to use.",
+            vec![render_phase_code_evidence(facts, "0xcaa90023")],
+            vec![
+                "Review the MEX response for the required WS-Trust username/password endpoints.".to_string(),
+                "Confirm the identity provider publishes the correct endpoints for federated hybrid join.".to_string(),
+            ],
+            vec!["Fix the federation metadata so the required endpoints are advertised.".to_string()],
+        ));
+    }
+
+    if has_code(facts, "0xcaa82ee2") {
+        diagnostics.push(issue(
+            "adal-timeout",
+            IntuneDiagnosticSeverity::Error,
+            "network",
+            "Federated authentication timed out",
+            "The failure pattern matches ERROR_ADAL_INTERNET_TIMEOUT (0xcaa82ee2), which means the device could not complete communication with Microsoft Entra or the federation endpoint in time.",
+            vec![render_phase_code_evidence(facts, "0xcaa82ee2")],
+            vec![
+                "Verify connectivity to https://login.microsoftonline.com and the federated identity provider from the effective system or user context.".to_string(),
+                "Check proxy behavior, network stability, and endpoint reachability.".to_string(),
+            ],
+            vec!["Resolve the network timeout path before retrying authentication.".to_string()],
+        ));
+    }
+
+    if has_code(facts, "0xcaa82efe") {
+        diagnostics.push(issue(
+            "adal-connection-aborted",
+            IntuneDiagnosticSeverity::Error,
+            "network",
+            "Federated authentication connection was aborted",
+            "The failure pattern matches ERROR_ADAL_INTERNET_CONNECTION_ABORTED (0xcaa82efe), which means the connection to the authorization endpoint terminated unexpectedly.",
+            vec![render_phase_code_evidence(facts, "0xcaa82efe")],
+            vec![
+                "Check for unstable network links or intermediary devices terminating the connection.".to_string(),
+                "Retry from a more stable network path and compare results.".to_string(),
+            ],
+            vec!["Stabilize the network path or endpoint availability before retrying.".to_string()],
+        ));
+    }
+
+    if has_code(facts, "0xcaa82f8f") {
+        diagnostics.push(issue(
+            "adal-secure-failure",
+            IntuneDiagnosticSeverity::Error,
+            "network",
+            "TLS validation failed during federated authentication",
+            "The failure pattern matches ERROR_ADAL_INTERNET_SECURE_FAILURE (0xcaa82f8f), which usually means certificate validation or time skew blocked the secure connection.",
+            vec![render_phase_code_evidence(facts, "0xcaa82f8f")],
+            vec![
+                "Check device time skew and certificate trust for the federated endpoint.".to_string(),
+                "Review whether TLS inspection or certificate replacement is breaking trust.".to_string(),
+            ],
+            vec!["Fix certificate trust or time skew before retrying federated authentication.".to_string()],
+        ));
+    }
+
+    if has_code(facts, "0xcaa82efd") {
+        diagnostics.push(issue(
+            "adal-cannot-connect",
+            IntuneDiagnosticSeverity::Error,
+            "network",
+            "The device could not connect to the federated or Microsoft Entra endpoint",
+            "The failure pattern matches ERROR_ADAL_INTERNET_CANNOT_CONNECT (0xcaa82efd), which means the connection to the authentication endpoint could not be established.",
+            vec![render_phase_code_evidence(facts, "0xcaa82efd")],
+            vec![
+                "Check endpoint URI reachability and whether outbound proxy rules allow the traffic.".to_string(),
+                "Validate DNS resolution and HTTPS connectivity for the authentication endpoint.".to_string(),
+            ],
+            vec!["Restore connectivity to the authentication endpoint and retry.".to_string()],
+        ));
+    }
+
+    if has_code(facts, "0xcaa20003") {
+        diagnostics.push(issue(
+            "adal-invalid-grant",
+            IntuneDiagnosticSeverity::Error,
+            "authentication",
+            "Microsoft Entra rejected the federated assertion as an invalid grant",
+            "The failure pattern matches ERROR_ADAL_SERVER_ERROR_INVALID_GRANT (0xcaa20003), which means Microsoft Entra rejected the SAML assertion supplied by the federated identity provider.",
+            vec![render_phase_code_evidence(facts, "0xcaa20003")],
+            vec![
+                "Review federation logs and server error details for why the assertion was rejected.".to_string(),
+                "Check claim issuance rules and token content from the identity provider.".to_string(),
+            ],
+            vec!["Repair the federation assertion flow before retrying sign-in.".to_string()],
+        ));
+    }
+
+    if has_code(facts, "0xcaa90014") {
+        diagnostics.push(issue(
+            "adal-wstrust-request-failed",
+            IntuneDiagnosticSeverity::Error,
+            "authentication",
+            "The WS-Trust request failed with a server-side fault",
+            "The failure pattern matches ERROR_ADAL_WSTRUST_REQUEST_SECURITYTOKEN_FAILED (0xcaa90014), which means the federation service returned a WS-Trust fault instead of the expected assertion.",
+            vec![render_phase_code_evidence(facts, "0xcaa90014")],
+            vec![
+                "Review federation server logs for the specific WS-Trust fault returned to the device.".to_string(),
+                "Check whether metadata, claim rules, or certificate trust issues are causing the failure.".to_string(),
+            ],
+            vec!["Repair the WS-Trust issuance path before retrying authentication.".to_string()],
+        ));
+    }
+
+    if has_code(facts, "0xcaa90006") {
+        diagnostics.push(issue(
+            "adal-token-request-failed",
+            IntuneDiagnosticSeverity::Error,
+            "authentication",
+            "The federated token request failed before an access token was returned",
+            "The failure pattern matches ERROR_ADAL_WSTRUST_TOKEN_REQUEST_FAIL (0xcaa90006), which means the device could not complete token acquisition against the WS-Trust endpoint.",
+            vec![render_phase_code_evidence(facts, "0xcaa90006")],
+            vec![
+                "Check the underlying federation endpoint error and whether the request reached the token service.".to_string(),
+                "Review WS-Trust endpoint health and metadata correctness.".to_string(),
+            ],
+            vec!["Resolve the WS-Trust token issuance failure and retry.".to_string()],
+        ));
+    }
+
+    if has_code(facts, "0xcaa1002d") {
+        diagnostics.push(issue(
+            "adal-operation-pending",
+            IntuneDiagnosticSeverity::Warning,
+            "authentication",
+            "The federated authentication operation is still reported as pending",
+            "The failure pattern matches ERROR_ADAL_OPERATION_PENDING (0xcaa1002d), which is a broad ADAL failure that usually needs the underlying suberror or server code to narrow down the root cause.",
+            vec![render_phase_code_evidence(facts, "0xcaa1002d")],
+            vec![
+                "Check any accompanying federation server or suberror details in the capture.".to_string(),
+                "Look for a more specific network, WS-Trust, or server-side error in the surrounding fields.".to_string(),
+            ],
+            Vec::new(),
+        ));
+    }
+
+    if contains_text(&facts.registration.client_error_code, "0x801c001d")
+        || contains_text(&facts.pre_join_tests.ad_configuration_test, "0x801c001d")
+    {
+        diagnostics.push(issue(
+            "scp-read-failed",
+            IntuneDiagnosticSeverity::Error,
+            "configuration",
+            "Service Connection Point lookup failed",
+            "The failure pattern matches DSREG_AUTOJOIN_ADCONFIG_READ_FAILED (0x801c001d), which usually means the device could not read or validate the Service Connection Point for hybrid join.",
+            vec![
+                render_optional("AD Configuration Test", &facts.pre_join_tests.ad_configuration_test),
+                render_optional("Client ErrorCode", &facts.registration.client_error_code),
+            ],
+            vec![
+                "Verify the SCP exists in the correct forest and points to the expected verified tenant domain.".to_string(),
+                "Check whether the device can read the SCP from a reachable domain controller.".to_string(),
+            ],
+            vec![
+                "Correct the hybrid join SCP configuration before retrying registration.".to_string(),
+            ],
+        ));
+    }
+
+    if contains_text(&facts.registration.client_error_code, "0x801c0021")
+        || contains_text(&facts.pre_join_tests.drs_discovery_test, "0x801c0021")
+    {
+        diagnostics.push(issue(
+            "drs-discovery-code",
+            IntuneDiagnosticSeverity::Error,
+            "discovery",
+            "DRS discovery metadata retrieval failed",
+            "The failure pattern matches DSREG_AUTOJOIN_DISC_FAILED (0x801c0021), which points to tenant discovery metadata retrieval failing before registration can proceed.",
+            vec![
+                render_optional("DRS Discovery Test", &facts.pre_join_tests.drs_discovery_test),
+                render_optional("Client ErrorCode", &facts.registration.client_error_code),
+            ],
+            vec![
+                "Verify access to https://enterpriseregistration.windows.net from the effective system context.".to_string(),
+                "Check proxy, DNS, and TLS inspection behavior around discovery endpoints.".to_string(),
+            ],
+            vec!["Restore discovery endpoint access and retry hybrid join.".to_string()],
+        ));
+    }
+
+    if contains_text(&facts.registration.client_error_code, "0x801c001f")
+        || contains_text(&facts.pre_join_tests.drs_discovery_test, "0x801c001f")
+    {
+        diagnostics.push(issue(
+            "drs-discovery-timeout",
+            IntuneDiagnosticSeverity::Error,
+            "network",
+            "DRS discovery timed out",
+            "The failure pattern matches DSREG_AUTOJOIN_DISC_WAIT_TIMEOUT (0x801c001f), which usually indicates the discovery endpoint could not be reached reliably from the current system context.",
+            vec![
+                render_optional("DRS Discovery Test", &facts.pre_join_tests.drs_discovery_test),
+                render_optional("Client ErrorCode", &facts.registration.client_error_code),
+            ],
+            vec![
+                "Confirm outbound HTTPS connectivity to https://enterpriseregistration.windows.net.".to_string(),
+                "Check WinHTTP proxy configuration and whether the computer account can authenticate through the proxy.".to_string(),
+            ],
+            vec!["Resolve the discovery timeout path before retrying join.".to_string()],
+        ));
+    }
+
+    if contains_text(&facts.registration.client_error_code, "0x801c003d") {
+        diagnostics.push(issue(
+            "user-realm-discovery-failed",
+            IntuneDiagnosticSeverity::Error,
+            "authentication",
+            "User realm discovery failed",
+            "The failure pattern matches DSREG_AUTOJOIN_USERREALM_DISCOVERY_FAILED (0x801c003d), which means the device could not determine whether the user domain is managed or federated.",
+            vec![render_optional("Client ErrorCode", &facts.registration.client_error_code)],
+            vec![
+                "Verify the user realm lookup can reach https://login.microsoftonline.com from the system context.".to_string(),
+                "Check whether proxy requirements or tenant domain configuration are interfering with realm discovery.".to_string(),
+            ],
+            vec!["Restore user realm discovery before retrying hybrid join.".to_string()],
+        ));
+    }
+
+    if contains_text(&facts.registration.client_error_code, "0x8007000d")
+        || contains_text(&facts.diagnostics.http_error, "0x8007000d")
+    {
+        diagnostics.push(issue(
+            "invalid-discovery-response",
+            IntuneDiagnosticSeverity::Error,
+            "network",
+            "Discovery response could not be parsed",
+            "The failure pattern matches E_INVALIDDATA (0x8007000d), which often happens when a proxy or intermediary returns HTML or a modified response instead of the expected discovery JSON.",
+            vec![
+                render_optional("Client ErrorCode", &facts.registration.client_error_code),
+                render_optional("HTTP Error", &facts.diagnostics.http_error),
+                render_optional("Endpoint URI", &facts.diagnostics.endpoint_uri),
+            ],
+            vec![
+                "Check whether an outbound proxy is intercepting or rewriting the discovery response.".to_string(),
+                "Compare the endpoint behavior from the system context against a healthy device.".to_string(),
+            ],
+            vec!["Fix the proxy or response path so discovery returns the expected JSON.".to_string()],
+        ));
+    }
+
+    if contains_text(&facts.registration.client_error_code, "0x801c0002") {
+        diagnostics.push(issue(
+            "join-device-authentication-error",
+            IntuneDiagnosticSeverity::Error,
+            "authentication",
+            "Join failed because device authentication was rejected",
+            "The failure pattern matches DSREG_E_DEVICE_AUTHENTICATION_ERROR (0x801c0002), which means the DRS service rejected device authentication during join.",
+            vec![
+                render_optional("Client ErrorCode", &facts.registration.client_error_code),
+                render_optional("Server ErrorCode", &facts.registration.server_error_code),
+                render_optional("Server Message", &facts.registration.server_message),
+            ],
+            vec![
+                "Validate the device certificate, device object state, and sync status in Entra ID.".to_string(),
+                "Check whether the server error indicates an authentication mismatch or stale registration state.".to_string(),
+            ],
+            vec!["Repair device registration state before retrying join.".to_string()],
+        ));
+    }
+
+    if contains_text(&facts.registration.client_error_code, "0x801c0006") {
+        diagnostics.push(issue(
+            "join-internal-service-error",
+            IntuneDiagnosticSeverity::Error,
+            "join",
+            "Join failed because the registration service returned an internal error",
+            "The failure pattern matches DSREG_E_DEVICE_INTERNALSERVICE_ERROR (0x801c0006), which means the DRS service returned an internal failure during join processing.",
+            vec![
+                render_optional("Client ErrorCode", &facts.registration.client_error_code),
+                render_optional("Server ErrorCode", &facts.registration.server_error_code),
+                render_optional("Server Message", &facts.registration.server_message),
+            ],
+            vec![
+                "Check whether the failure is transient or whether server-side throttling or directory errors are also present.".to_string(),
+                "Compare with another registration attempt after a short wait.".to_string(),
+            ],
+            vec!["Retry the join after confirming the service-side condition has cleared.".to_string()],
+        ));
+    }
+
     if facts.sso_state.azure_ad_prt == Some(false) {
         diagnostics.push(issue(
             "no-azure-prt",
@@ -342,6 +681,184 @@ fn build_diagnostics(
         ));
     }
 
+    if contains_text(&facts.diagnostics.attempt_status, "0xc000006a") {
+        diagnostics.push(issue(
+            "wrong-password",
+            IntuneDiagnosticSeverity::Error,
+            "credentials",
+            "PRT acquisition failed because the password was rejected",
+            "Attempt Status contains 0xc000006a, which maps to STATUS_WRONG_PASSWORD during PRT acquisition.",
+            vec![
+                render_optional("Attempt Status", &facts.diagnostics.attempt_status),
+                render_optional("User Identity", &facts.diagnostics.user_identity),
+            ],
+            vec![
+                "Check whether the user recently changed their password and Entra password sync has not completed yet.".to_string(),
+                "Confirm the user is signing in with the intended UPN and password.".to_string(),
+            ],
+            vec!["Retry sign-in after password sync finishes or after correcting credentials.".to_string()],
+        ));
+    }
+
+    if contains_text(&facts.diagnostics.attempt_status, "0xc00000d0") {
+        diagnostics.push(issue(
+            "request-not-accepted",
+            IntuneDiagnosticSeverity::Error,
+            "authentication",
+            "PRT request was not accepted by the authentication endpoint",
+            "Attempt Status contains 0xc00000d0, which lines up with an HTTP 400-style rejection from the Microsoft Entra or WS-Trust endpoint.",
+            vec![
+                render_optional("Attempt Status", &facts.diagnostics.attempt_status),
+                render_optional("HTTP Status", &facts.diagnostics.http_status.as_ref().map(|value| value.to_string())),
+                render_optional("Endpoint URI", &facts.diagnostics.endpoint_uri),
+            ],
+            vec![
+                "Review server error details and endpoint URI for the rejected request.".to_string(),
+                "Check for federation or proxy behavior that alters the request flow.".to_string(),
+            ],
+            vec!["Resolve the endpoint rejection cause before retrying PRT acquisition.".to_string()],
+        ));
+    }
+
+    if contains_text(&facts.diagnostics.attempt_status, "0xc000023c")
+        || contains_text(&facts.diagnostics.attempt_status, "0xc00000be")
+        || contains_text(&facts.diagnostics.attempt_status, "0xc00000c4")
+    {
+        diagnostics.push(issue(
+            "prt-network-path-error",
+            IntuneDiagnosticSeverity::Error,
+            "network",
+            "PRT acquisition failed because the network path was unavailable",
+            "Attempt Status matches a documented network-path failure during PRT acquisition, which usually means the required Microsoft Entra or federation endpoint was unreachable or the connection failed mid-flight.",
+            vec![
+                render_optional("Attempt Status", &facts.diagnostics.attempt_status),
+                render_optional("Endpoint URI", &facts.diagnostics.endpoint_uri),
+                render_optional("HTTP Error", &facts.diagnostics.http_error),
+            ],
+            vec![
+                "Check network reachability to the endpoint URI from the current device context.".to_string(),
+                "Review proxy requirements and intermittent network stability issues.".to_string(),
+            ],
+            vec!["Restore the endpoint network path and retry token acquisition.".to_string()],
+        ));
+    }
+
+    if contains_text(&facts.diagnostics.attempt_status, "0xc000005f") {
+        diagnostics.push(issue(
+            "prt-user-realm-not-found",
+            IntuneDiagnosticSeverity::Error,
+            "user",
+            "PRT acquisition could not resolve the user realm",
+            "Attempt Status contains 0xc000005f, which usually means Microsoft Entra could not find the user's domain during realm discovery.",
+            vec![
+                render_optional("Attempt Status", &facts.diagnostics.attempt_status),
+                render_optional("User Identity", &facts.diagnostics.user_identity),
+            ],
+            vec![
+                "Check whether the user's UPN suffix is a verified custom domain in the target tenant.".to_string(),
+                "If the on-premises domain is nonroutable, review Alternate Login ID configuration.".to_string(),
+            ],
+            vec!["Correct the user realm or UPN configuration before retrying sign-in.".to_string()],
+        ));
+    }
+
+    if contains_text(&facts.diagnostics.attempt_status, "0xc004844c") {
+        diagnostics.push(issue(
+            "malformed-upn",
+            IntuneDiagnosticSeverity::Error,
+            "user",
+            "The user principal name format is invalid for PRT acquisition",
+            "Attempt Status contains 0xc004844c, which indicates the user's UPN is not in the expected internet-style format.",
+            vec![
+                render_optional("Attempt Status", &facts.diagnostics.attempt_status),
+                render_optional("User Identity", &facts.diagnostics.user_identity),
+            ],
+            vec![
+                "Validate the returned UPN format for the signed-in user.".to_string(),
+                "For hybrid join, compare with whoami /upn on the device and confirm the domain controller returns the expected value.".to_string(),
+            ],
+            vec!["Correct the user's UPN formatting or Alternate Login ID configuration.".to_string()],
+        ));
+    }
+
+    if contains_text(&facts.diagnostics.attempt_status, "0xc0048442") {
+        diagnostics.push(issue(
+            "missing-user-sid-in-token",
+            IntuneDiagnosticSeverity::Error,
+            "authentication",
+            "The returned identity token did not include a user SID",
+            "Attempt Status contains 0xc0048442, which means the token returned by Microsoft Entra did not contain the expected user SID claim.",
+            vec![
+                render_optional("Attempt Status", &facts.diagnostics.attempt_status),
+                render_optional("Endpoint URI", &facts.diagnostics.endpoint_uri),
+            ],
+            vec![
+                "Check whether a network proxy is rewriting or interfering with the token response.".to_string(),
+                "Compare the behavior from another network path without TLS or proxy interception.".to_string(),
+            ],
+            vec!["Fix the token response path before retrying sign-in.".to_string()],
+        ));
+    }
+
+    if contains_text(&facts.diagnostics.attempt_status, "0xc00484c1") {
+        diagnostics.push(issue(
+            "wstrust-empty-saml",
+            IntuneDiagnosticSeverity::Error,
+            "authentication",
+            "The WS-Trust endpoint returned an unusable SAML response",
+            "Attempt Status contains 0xc00484c1, which indicates the WS-Trust response did not contain the expected SAML tokens for federated authentication.",
+            vec![
+                render_optional("Attempt Status", &facts.diagnostics.attempt_status),
+                render_optional("Endpoint URI", &facts.diagnostics.endpoint_uri),
+            ],
+            vec![
+                "Review the WS-Trust endpoint response and whether a proxy is modifying it.".to_string(),
+                "Check federation logs for server-side faults during token issuance.".to_string(),
+            ],
+            vec!["Repair the WS-Trust response path before retrying authentication.".to_string()],
+        ));
+    }
+
+    if contains_text(&facts.diagnostics.attempt_status, "0xc004848b")
+        || contains_text(&facts.diagnostics.attempt_status, "0xc004848c")
+    {
+        diagnostics.push(issue(
+            "mex-endpoint-misconfigured",
+            IntuneDiagnosticSeverity::Error,
+            "configuration",
+            "The federation MEX metadata is missing required endpoints",
+            "Attempt Status matches the documented MEX endpoint misconfiguration where password or certificate URLs are missing from the federation metadata response.",
+            vec![
+                render_optional("Attempt Status", &facts.diagnostics.attempt_status),
+                render_optional("Endpoint URI", &facts.diagnostics.endpoint_uri),
+            ],
+            vec![
+                "Review the federation MEX response for missing WS-Trust password or certificate endpoints.".to_string(),
+                "Check whether a proxy is modifying the federation metadata response.".to_string(),
+            ],
+            vec!["Fix the MEX configuration to advertise the required endpoints.".to_string()],
+        ));
+    }
+
+    if contains_text(&facts.diagnostics.attempt_status, "0xc00cee4f") {
+        diagnostics.push(issue(
+            "federation-xml-dtd-prohibited",
+            IntuneDiagnosticSeverity::Error,
+            "configuration",
+            "The federation XML response included a prohibited DTD",
+            "Attempt Status contains 0xc00cee4f, which means the WS-Trust XML response included a DTD that the parser rejects.",
+            vec![
+                render_optional("Attempt Status", &facts.diagnostics.attempt_status),
+                render_optional("Endpoint URI", &facts.diagnostics.endpoint_uri),
+            ],
+            vec![
+                "Inspect the federation XML response for a DTD or other invalid additions.".to_string(),
+                "Check whether the identity provider or proxy is modifying the XML document.".to_string(),
+            ],
+            vec!["Remove the DTD from the federation XML response and retry authentication.".to_string()],
+        ));
+    }
+
     if contains_text(&facts.registration.server_error_description, "aadsts50126") {
         diagnostics.push(issue(
             "aadsts50126-detailed",
@@ -360,6 +877,70 @@ fn build_diagnostics(
             vec![
                 "Retry sign-in with valid credentials after confirming the correct account.".to_string(),
             ],
+        ));
+    }
+
+    if has_code(facts, "0x80090016") {
+        diagnostics.push(issue(
+            "tpm-bad-keyset",
+            IntuneDiagnosticSeverity::Error,
+            "configuration",
+            "TPM key material is missing or invalid",
+            "The failure pattern matches NTE_BAD_KEYSET (0x80090016), which usually means the TPM-backed keyset no longer exists or the device image was prepared from a bad joined-state source.",
+            vec![render_phase_code_evidence(facts, "0x80090016")],
+            vec![
+                "Check whether the TPM was cleared or whether the device image came from a machine that was already registered or joined.".to_string(),
+                "Compare with device registration history and account recovery behavior on the machine.".to_string(),
+            ],
+            vec!["Repair or re-register the device after correcting the TPM keyset issue.".to_string()],
+        ));
+    }
+
+    if has_code(facts, "0x80290407") {
+        diagnostics.push(issue(
+            "tpm-internal-error",
+            IntuneDiagnosticSeverity::Error,
+            "configuration",
+            "The TPM reported an internal failure during join",
+            "The failure pattern matches TPM_E_PCP_INTERNAL_ERROR (0x80290407), which indicates a TPM failure that can block TPM-backed device registration.",
+            vec![render_phase_code_evidence(facts, "0x80290407")],
+            vec![
+                "Check TPM health and whether Windows can use the TPM normally on this device.".to_string(),
+                "Compare with a retry that uses a non-TPM path if the platform and Windows version support it.".to_string(),
+            ],
+            vec!["Resolve or bypass the unhealthy TPM path before retrying join.".to_string()],
+        ));
+    }
+
+    if has_code(facts, "0x80280036") {
+        diagnostics.push(issue(
+            "tpm-not-fips",
+            IntuneDiagnosticSeverity::Error,
+            "configuration",
+            "The TPM is in an unsupported FIPS mode for this flow",
+            "The failure pattern matches TPM_E_NOTFIPS (0x80280036), which means the TPM state is not supported for this registration flow.",
+            vec![render_phase_code_evidence(facts, "0x80280036")],
+            vec![
+                "Review the TPM configuration and whether the device is enforcing a TPM mode unsupported for this join path.".to_string(),
+                "Check whether the Windows version can fall back to a non-TPM registration path.".to_string(),
+            ],
+            vec!["Correct the TPM mode or use a supported fallback path before retrying.".to_string()],
+        ));
+    }
+
+    if has_code(facts, "0x80090031") {
+        diagnostics.push(issue(
+            "tpm-locked-out",
+            IntuneDiagnosticSeverity::Warning,
+            "configuration",
+            "The TPM appears to be locked out temporarily",
+            "The failure pattern matches NTE_AUTHENTICATION_IGNORED (0x80090031), which is commonly a transient TPM lockout or anti-hammering condition.",
+            vec![render_phase_code_evidence(facts, "0x80090031")],
+            vec![
+                "Wait for the TPM lockout cool-down period to expire before retrying.".to_string(),
+                "Check whether repeated recent authentication failures triggered TPM anti-hammering.".to_string(),
+            ],
+            Vec::new(),
         ));
     }
 
@@ -427,51 +1008,41 @@ fn build_diagnostics(
     if derived.missing_mdm == Some(true) {
         diagnostics.push(issue(
             "no-mdm",
-            IntuneDiagnosticSeverity::Warning,
+            IntuneDiagnosticSeverity::Info,
             "configuration",
-            "MDM enrollment URL is missing",
-            "No MdmUrl was present in the capture, so dsregcmd does not show active MDM enrollment information.",
-            vec![render_optional("MdmUrl", &facts.management_details.mdm_url)],
+            "MDM enrollment URL is not present",
+            "MdmComplianceUrl is present but MdmUrl is not. That usually means the capture is incomplete or the tenant advertises only part of the management metadata, not that the device is definitively broken.",
             vec![
-                "Confirm the device should be enrolled into MDM for this tenant.".to_string(),
-                "Review automatic enrollment scope and licensing.".to_string(),
+                render_optional("MdmUrl", &facts.management_details.mdm_url),
+                render_optional(
+                    "MdmComplianceUrl",
+                    &facts.management_details.mdm_compliance_url,
+                ),
             ],
-            vec!["Trigger or repair MDM enrollment after confirming tenant policy scope.".to_string()],
+            vec![
+                "Confirm whether this tenant and user are actually in scope for automatic MDM enrollment.".to_string(),
+                "Compare with a healthy capture from the same org before treating missing MDM metadata as a failure.".to_string(),
+            ],
+            Vec::new(),
         ));
     }
 
     if derived.missing_compliance_url == Some(true) {
         diagnostics.push(issue(
             "no-compliance",
-            IntuneDiagnosticSeverity::Warning,
+            IntuneDiagnosticSeverity::Info,
             "configuration",
-            "Compliance URL is missing",
-            "No MdmComplianceUrl was present, so the device is missing the normal compliance service endpoint in dsregcmd.",
+            "Compliance URL is not present",
+            "MdmUrl is present but MdmComplianceUrl is not. dsregcmd management fields are tenant- and scope-dependent, so this is context rather than proof of an enrollment problem.",
             vec![render_optional(
                 "MdmComplianceUrl",
                 &facts.management_details.mdm_compliance_url,
             )],
             vec![
-                "Check whether the device is enrolled to the expected MDM authority.".to_string(),
-                "Compare with another healthy device from the same tenant.".to_string(),
+                "Confirm whether compliance reporting is expected for this org and user scope.".to_string(),
+                "Compare with another healthy capture from the same tenant before escalating.".to_string(),
             ],
-            vec!["Repair enrollment if the device should be managed and compliance-capable.".to_string()],
-        ));
-    }
-
-    if facts.user_state.ngc_set == Some(false) {
-        diagnostics.push(issue(
-            "ngc-not-set",
-            IntuneDiagnosticSeverity::Warning,
-            "configuration",
-            "Windows Hello for Business is not set",
-            "NgcSet is NO, so a Windows Hello for Business container is not configured for the current user context.",
-            vec![render_bool("NgcSet", facts.user_state.ngc_set)],
-            vec![
-                "Check whether WHfB is expected on this device and user.".to_string(),
-                "Review prereq state and provisioning policy details.".to_string(),
-            ],
-            vec!["Provision or re-provision Windows Hello for Business if required.".to_string()],
+            Vec::new(),
         ));
     }
 
@@ -506,27 +1077,42 @@ fn build_diagnostics(
         ));
     }
 
+    let has_specific_network_issue = diagnostics.iter().any(|item| {
+        matches!(
+            item.id.as_str(),
+            "drs-discovery-timeout"
+                | "invalid-discovery-response"
+                | "prt-network-path-error"
+                | "adal-timeout"
+                | "adal-connection-aborted"
+                | "adal-secure-failure"
+                | "adal-cannot-connect"
+        )
+    });
+
     if let Some(network_error_code) = derived.network_error_code.as_deref() {
-        diagnostics.push(issue(
-            "network-issue",
-            IntuneDiagnosticSeverity::Warning,
-            "network",
-            "Network connectivity marker detected",
-            &format!(
-                "The capture contains {}, which points to a network, DNS, proxy, or transport-layer problem during registration or token acquisition.",
-                network_error_code
-            ),
-            vec![
-                format!("NetworkErrorCode: {}", network_error_code),
-                render_optional("HTTP Error", &facts.diagnostics.http_error),
-                render_optional("Endpoint URI", &facts.diagnostics.endpoint_uri),
-            ],
-            vec![
-                "Test name resolution and HTTPS connectivity to the endpoint URI.".to_string(),
-                "Check WinHTTP proxy configuration and outbound firewall policy.".to_string(),
-            ],
-            vec!["Resolve the network path issue and re-run dsregcmd /status.".to_string()],
-        ));
+        if !has_specific_network_issue {
+            diagnostics.push(issue(
+                "network-issue",
+                IntuneDiagnosticSeverity::Warning,
+                "network",
+                "Network connectivity marker detected",
+                &format!(
+                    "The capture contains {}, which points to a network, DNS, proxy, or transport-layer problem during registration or token acquisition.",
+                    network_error_code
+                ),
+                vec![
+                    format!("NetworkErrorCode: {}", network_error_code),
+                    render_optional("HTTP Error", &facts.diagnostics.http_error),
+                    render_optional("Endpoint URI", &facts.diagnostics.endpoint_uri),
+                ],
+                vec![
+                    "Test name resolution and HTTPS connectivity to the endpoint URI.".to_string(),
+                    "Check WinHTTP proxy configuration and outbound firewall policy.".to_string(),
+                ],
+                vec!["Resolve the network path issue and re-run dsregcmd /status.".to_string()],
+            ));
+        }
     }
 
     if derived.stale_prt == Some(true) {
@@ -558,43 +1144,50 @@ fn build_diagnostics(
     }
 
     if facts.device_details.tpm_protected == Some(false) {
-        diagnostics.push(issue(
-            "no-tpm-protection",
-            IntuneDiagnosticSeverity::Warning,
-            "configuration",
-            "Device keys are not TPM protected",
-            "TpmProtected is NO, so the device registration keys are not currently backed by TPM protection.",
-            vec![render_bool("TpmProtected", facts.device_details.tpm_protected)],
-            vec![
-                "Confirm whether the device has a healthy TPM and that it is available to Windows.".to_string(),
-                "Compare the key provider and key container details with a healthy device.".to_string(),
-            ],
-            vec!["Resolve TPM availability issues or re-register the device using hardware-backed keys.".to_string()],
-        ));
+        let has_specific_tpm_issue = diagnostics.iter().any(|item| {
+            matches!(
+                item.id.as_str(),
+                "tpm-bad-keyset" | "tpm-internal-error" | "tpm-not-fips" | "tpm-locked-out"
+            )
+        });
+        if !has_specific_tpm_issue {
+            diagnostics.push(issue(
+                "no-tpm-protection",
+                IntuneDiagnosticSeverity::Warning,
+                "configuration",
+                "Device keys are not TPM protected",
+                "TpmProtected is NO, so the device registration keys are not currently backed by TPM protection.",
+                vec![render_bool("TpmProtected", facts.device_details.tpm_protected)],
+                vec![
+                    "Confirm whether the device has a healthy TPM and that it is available to Windows.".to_string(),
+                    "Compare the key provider and key container details with a healthy device.".to_string(),
+                ],
+                vec!["Resolve TPM availability issues or re-register the device using hardware-backed keys.".to_string()],
+            ));
+        }
     }
 
     if let Some(logon_cert_template_ready) = facts.registration.logon_cert_template_ready.as_deref()
     {
-        if !logon_cert_template_ready.contains("StateReady") {
+        if !logon_cert_template_ready.contains("StateReady")
+            && equals_text(&facts.registration.cert_enrollment, "enrollment authority")
+        {
             diagnostics.push(issue(
                 "logon-cert-not-ready",
-                IntuneDiagnosticSeverity::Warning,
+                IntuneDiagnosticSeverity::Info,
                 "configuration",
                 "Logon certificate template is not ready",
-                "LogonCertTemplateReady is present but does not report StateReady.",
+                "LogonCertTemplateReady is present but does not report StateReady. This is supporting context for Windows Hello certificate-trust readiness, not a standalone device health failure.",
                 vec![render_optional(
                     "LogonCertTemplateReady",
                     &facts.registration.logon_cert_template_ready,
                 )],
                 vec![
                     "Review certificate enrollment prerequisites and issuance policy.".to_string(),
-                    "Check whether the device can reach the issuing CA or enrollment service."
+                    "Check whether the device can reach the issuing CA or enrollment service when certificate-trust WHfB is expected."
                         .to_string(),
                 ],
-                vec![
-                    "Resolve certificate enrollment prerequisites and retry the registration flow."
-                        .to_string(),
-                ],
+                Vec::new(),
             ));
         }
     }
@@ -652,15 +1245,18 @@ fn build_diagnostics(
         ));
     }
 
-    if facts.join_state.workplace_joined == Some(false) {
+    if facts.join_state.workplace_joined == Some(true) {
         diagnostics.push(issue(
-            "not-workplace-joined",
+            "workplace-joined-present",
             IntuneDiagnosticSeverity::Info,
             "configuration",
-            "Workplace join is not present",
-            "WorkplaceJoined is NO.",
+            "Workplace join is present",
+            "WorkplaceJoined is YES.",
             vec![render_bool("WorkplaceJoined", facts.join_state.workplace_joined)],
-            vec!["This is informational unless workplace join is specifically expected for the scenario.".to_string()],
+            vec![
+                "Workplace join is scenario-specific and is not required for most standard Entra joined device flows.".to_string(),
+                "Confirm that this registration is expected before treating it as important during triage.".to_string(),
+            ],
             Vec::new(),
         ));
     }
@@ -720,16 +1316,45 @@ fn build_diagnostics(
         ));
     }
 
-    if facts.join_state.enterprise_joined == Some(true) {
+    if is_failure_text(&facts.post_join_diagnostics.key_sign_test) {
         diagnostics.push(issue(
-            "enterprise-joined",
-            IntuneDiagnosticSeverity::Info,
+            "ngc-key-sign-failed",
+            IntuneDiagnosticSeverity::Warning,
             "configuration",
-            "EnterpriseJoined is enabled",
-            "EnterpriseJoined is YES.",
-            vec![render_bool("EnterpriseJoined", facts.join_state.enterprise_joined)],
-            vec!["Use this as additional context when reviewing legacy join or federation scenarios.".to_string()],
-            Vec::new(),
+            "Windows Hello key health check failed",
+            "KeySignTest did not pass, which means the device could not validate the current Windows Hello key material during post-join diagnostics.",
+            vec![render_optional(
+                "KeySignTest",
+                &facts.post_join_diagnostics.key_sign_test,
+            )],
+            vec![
+                "Re-run dsregcmd /status from an elevated prompt because KeySignTest requires elevation to be reliable.".to_string(),
+                "Check whether the device is entering a recovery or re-registration flow for Windows Hello for Business.".to_string(),
+            ],
+            vec![
+                "Repair or recover the Windows Hello key state before expecting WHfB sign-in to behave normally.".to_string(),
+            ],
+        ));
+    }
+
+    if facts.post_join_diagnostics.aad_recovery_enabled == Some(true) {
+        diagnostics.push(issue(
+            "ngc-recovery-enabled",
+            IntuneDiagnosticSeverity::Warning,
+            "configuration",
+            "Windows Hello key recovery is enabled",
+            "AadRecoveryEnabled is YES, which means the current device key state is marked for recovery and the next sign-in may trigger device recovery or re-registration behavior.",
+            vec![render_bool(
+                "AadRecoveryEnabled",
+                facts.post_join_diagnostics.aad_recovery_enabled,
+            )],
+            vec![
+                "Confirm whether recent WHfB sign-in, PIN reset, or recovery prompts were observed on the device.".to_string(),
+                "Review adjacent device registration or Hello for Business logs for the recovery trigger.".to_string(),
+            ],
+            vec![
+                "Allow the device recovery flow to complete and then capture dsregcmd again to confirm the key state stabilizes.".to_string(),
+            ],
         ));
     }
 
@@ -778,6 +1403,158 @@ fn join_type_label(join_type: DsregcmdJoinType) -> &'static str {
     }
 }
 
+fn derive_dominant_phase(facts: &DsregcmdFacts) -> DsregcmdDiagnosticPhase {
+    if let Some(phase) = facts
+        .registration
+        .error_phase
+        .as_deref()
+        .and_then(parse_phase)
+    {
+        return phase;
+    }
+
+    if facts.diagnostics.attempt_status.is_some()
+        || facts.diagnostics.previous_prt_attempt.is_some()
+        || facts.sso_state.acquire_prt_diagnostics.is_some()
+    {
+        return DsregcmdDiagnosticPhase::PostJoin;
+    }
+
+    if is_failure(&facts.pre_join_tests.ad_connectivity_test) {
+        return DsregcmdDiagnosticPhase::Precheck;
+    }
+
+    if is_failure(&facts.pre_join_tests.ad_configuration_test)
+        || is_failure(&facts.pre_join_tests.drs_discovery_test)
+        || is_failure(&facts.pre_join_tests.drs_connectivity_test)
+    {
+        return DsregcmdDiagnosticPhase::Discover;
+    }
+
+    if is_failure(&facts.pre_join_tests.token_acquisition_test)
+        || has_any_code(
+            facts,
+            &[
+                "0xcaa90017",
+                "0xcaa9002c",
+                "0xcaa90023",
+                "0xcaa82ee2",
+                "0xcaa82efe",
+                "0xcaa82f8f",
+                "0xcaa82efd",
+                "0xcaa20003",
+                "0xcaa90014",
+                "0xcaa90006",
+                "0xcaa1002d",
+            ],
+        )
+    {
+        return DsregcmdDiagnosticPhase::Auth;
+    }
+
+    if facts.registration.client_error_code.is_some()
+        || facts.registration.server_error_code.is_some()
+        || facts.registration.server_message.is_some()
+    {
+        return DsregcmdDiagnosticPhase::Join;
+    }
+
+    if facts.sso_state.azure_ad_prt == Some(false) || facts.sso_state.azure_ad_prt_update_time.is_some() {
+        return DsregcmdDiagnosticPhase::PostJoin;
+    }
+
+    DsregcmdDiagnosticPhase::Unknown
+}
+
+fn phase_summary(phase: DsregcmdDiagnosticPhase) -> &'static str {
+    match phase {
+        DsregcmdDiagnosticPhase::Precheck => {
+            "Current evidence points to a precheck failure before discovery could complete."
+        }
+        DsregcmdDiagnosticPhase::Discover => {
+            "Current evidence points to a discover-phase failure while locating or reaching registration services."
+        }
+        DsregcmdDiagnosticPhase::Auth => {
+            "Current evidence points to an authentication-phase failure during federation or token acquisition."
+        }
+        DsregcmdDiagnosticPhase::Join => {
+            "Current evidence points to a join-phase failure while registering the device with Entra."
+        }
+        DsregcmdDiagnosticPhase::PostJoin => {
+            "Current evidence points to a post-join token, session, or refresh problem."
+        }
+        DsregcmdDiagnosticPhase::Unknown => {
+            "Current evidence does not isolate a single failure phase from this capture."
+        }
+    }
+}
+
+fn derive_capture_confidence(
+    facts: &DsregcmdFacts,
+    reference_time: Option<DateTime<Utc>>,
+    remote_session_system: Option<bool>,
+) -> (DsregcmdCaptureConfidence, String) {
+    if remote_session_system == Some(true) {
+        return (
+            DsregcmdCaptureConfidence::Low,
+            "Capture was taken as SYSTEM in a remote session, so user-scoped token and session evidence may be distorted.".to_string(),
+        );
+    }
+
+    if let Some(client_time) = facts
+        .diagnostics
+        .client_time
+        .as_deref()
+        .and_then(parse_dsregcmd_timestamp)
+    {
+        let age_minutes = Utc::now().signed_duration_since(client_time).num_minutes().abs();
+        if age_minutes <= 15
+            && facts.user_state.session_is_not_remote == Some(true)
+            && !matches!(facts.diagnostics.user_context.as_deref(), Some(context) if context.eq_ignore_ascii_case("SYSTEM"))
+        {
+            return (
+                DsregcmdCaptureConfidence::High,
+                "Capture looks recent and interactive, so user-scoped evidence should be trustworthy.".to_string(),
+            );
+        }
+
+        if age_minutes <= 24 * 60 {
+            return (
+                DsregcmdCaptureConfidence::Medium,
+                "Capture looks reasonably recent, but it may not exactly match the current device state.".to_string(),
+            );
+        }
+
+        return (
+            DsregcmdCaptureConfidence::Low,
+            "Capture looks old relative to the device clock, so conclusions may no longer match the current state.".to_string(),
+        );
+    }
+
+    if reference_time.is_some() {
+        return (
+            DsregcmdCaptureConfidence::Medium,
+            "Capture included enough timing context to analyze, but it did not provide a clearly recent interactive client timestamp.".to_string(),
+        );
+    }
+
+    (
+        DsregcmdCaptureConfidence::Medium,
+        "Capture confidence is moderate because the source lacked enough timing and session context to judge freshness precisely.".to_string(),
+    )
+}
+
+fn parse_phase(value: &str) -> Option<DsregcmdDiagnosticPhase> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "pre-check" | "precheck" => Some(DsregcmdDiagnosticPhase::Precheck),
+        "discover" => Some(DsregcmdDiagnosticPhase::Discover),
+        "auth" | "authentication" => Some(DsregcmdDiagnosticPhase::Auth),
+        "join" => Some(DsregcmdDiagnosticPhase::Join),
+        "post_join" | "post-join" | "postjoin" => Some(DsregcmdDiagnosticPhase::PostJoin),
+        _ => None,
+    }
+}
+
 fn parse_dsregcmd_timestamp(value: &str) -> Option<DateTime<Utc>> {
     let trimmed = value.trim();
     if let Ok(parsed) = DateTime::parse_from_rfc3339(trimmed) {
@@ -787,15 +1564,26 @@ fn parse_dsregcmd_timestamp(value: &str) -> Option<DateTime<Utc>> {
     for format in [
         "%Y-%m-%d %H:%M:%S%.f UTC",
         "%Y-%m-%d %H:%M:%S UTC",
-        "%Y-%m-%d %H:%M:%S%.f",
-        "%Y-%m-%d %H:%M:%S",
         "%m/%d/%Y %H:%M:%S%.f UTC",
         "%m/%d/%Y %H:%M:%S UTC",
+    ] {
+        if let Ok(parsed) = NaiveDateTime::parse_from_str(trimmed, format) {
+            return Some(DateTime::<Utc>::from_naive_utc_and_offset(parsed, Utc));
+        }
+    }
+
+    for format in [
+        "%Y-%m-%d %H:%M:%S%.f",
+        "%Y-%m-%d %H:%M:%S",
         "%m/%d/%Y %H:%M:%S%.f",
         "%m/%d/%Y %H:%M:%S",
     ] {
         if let Ok(parsed) = NaiveDateTime::parse_from_str(trimmed, format) {
-            return Some(DateTime::<Utc>::from_naive_utc_and_offset(parsed, Utc));
+            return match Local.from_local_datetime(&parsed) {
+                LocalResult::Single(local_time) => Some(local_time.with_timezone(&Utc)),
+                LocalResult::Ambiguous(local_time, _) => Some(local_time.with_timezone(&Utc)),
+                LocalResult::None => None,
+            };
         }
     }
 
@@ -837,6 +1625,61 @@ fn aggregated_error_text(facts: &DsregcmdFacts) -> String {
     .collect::<Vec<_>>()
     .join(" ")
     .to_ascii_lowercase()
+}
+
+fn has_code(facts: &DsregcmdFacts, code: &str) -> bool {
+    contains_text(&facts.registration.client_error_code, code)
+        || contains_text(&facts.registration.server_error_code, code)
+        || contains_text(&facts.registration.server_message, code)
+        || contains_text(&facts.registration.server_error_description, code)
+        || contains_text(&facts.diagnostics.attempt_status, code)
+        || contains_text(&facts.diagnostics.http_error, code)
+        || contains_text(&facts.pre_join_tests.token_acquisition_test, code)
+        || contains_text(&facts.pre_join_tests.drs_discovery_test, code)
+        || contains_text(&facts.pre_join_tests.ad_configuration_test, code)
+}
+
+fn has_any_code(facts: &DsregcmdFacts, codes: &[&str]) -> bool {
+    codes.iter().any(|code| has_code(facts, code))
+}
+
+fn is_failure(field: &Option<String>) -> bool {
+    field
+        .as_deref()
+        .map(|value| value.to_ascii_uppercase().contains("FAIL"))
+        .unwrap_or(false)
+}
+
+fn is_failure_text(field: &Option<String>) -> bool {
+    field
+        .as_deref()
+        .map(|value| {
+            let normalized = value.to_ascii_uppercase();
+            normalized.contains("FAIL") || normalized.contains("ERROR")
+        })
+        .unwrap_or(false)
+}
+
+fn render_phase_code_evidence(facts: &DsregcmdFacts, code: &str) -> String {
+    let sources = [
+        ("Client ErrorCode", facts.registration.client_error_code.as_deref()),
+        ("Attempt Status", facts.diagnostics.attempt_status.as_deref()),
+        ("HTTP Error", facts.diagnostics.http_error.as_deref()),
+        (
+            "Token Acquisition Test",
+            facts.pre_join_tests.token_acquisition_test.as_deref(),
+        ),
+    ];
+
+    for (label, value) in sources {
+        if let Some(value) = value {
+            if value.to_ascii_lowercase().contains(&code.to_ascii_lowercase()) {
+                return format!("{label}: {value}");
+            }
+        }
+    }
+
+    format!("Code: {code}")
 }
 
 fn push_test_failure(
@@ -946,9 +1789,12 @@ fn is_missing(field: &Option<String>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::analyze_facts;
-    use crate::dsregcmd::models::DsregcmdJoinType;
+    use crate::dsregcmd::models::{
+        DsregcmdCaptureConfidence, DsregcmdDiagnosticPhase, DsregcmdJoinType,
+    };
     use crate::dsregcmd::parser::parse_dsregcmd;
     use crate::intune::models::IntuneDiagnosticSeverity;
+    use chrono::Utc;
 
     const HYBRID_SAMPLE: &str = r#"
  AzureAdJoined : YES
@@ -976,8 +1822,11 @@ mod tests {
  Fallback to Sync-Join : ENABLED
  Server Message : AADSTS50126 Invalid username or password ERROR_WINHTTP_TIMEOUT
  Server Error Description : AADSTS50126: Invalid username or password.
+ CertEnrollment : enrollment authority
  LogonCertTemplateReady : Pending
  PreReqResult : WillProvision
+ KeySignTest : FAILED
+ AadRecoveryEnabled : YES
 "#;
 
     const NOT_JOINED_SAMPLE: &str = r#"
@@ -989,6 +1838,43 @@ mod tests {
  MdmUrl : -
  MdmComplianceUrl : -
  AzureAdPrt : NO
+"#;
+
+    const PHASE_AWARE_SAMPLE: &str = r#"
+ AzureAdJoined : NO
+ DomainJoined : YES
+ WorkplaceJoined : NO
+ TenantId : 11111111-2222-3333-4444-555555555555
+ DeviceId : abcdefab-1111-2222-3333-abcdefabcdef
+ DRS Discovery Test : FAIL [0x801c0021/0x80072ee2]
+ AD Configuration Test : FAIL [0x801c001d]
+ Client ErrorCode : 0x801c001d
+ Error Phase : discover
+ Attempt Status : 0xc004844c
+ User Identity : user@contoso.local
+ Endpoint URI : https://login.microsoftonline.com/11111111-2222-3333-4444-555555555555/oauth2/token/
+ HTTP Error : 0x8007000d
+ HTTP status : 400
+ AzureAdPrt : NO
+"#;
+
+    const ADAL_AND_TPM_SAMPLE: &str = r#"
+ AzureAdJoined : NO
+ DomainJoined : YES
+ WorkplaceJoined : NO
+ TenantId : 11111111-2222-3333-4444-555555555555
+ DeviceId : abcdefab-1111-2222-3333-abcdefabcdef
+ Token Acquisition Test : FAIL [0xcaa90017]
+ Client ErrorCode : 0xcaa9002c
+ Attempt Status : 0xcaa90023
+ HTTP Error : 0xcaa82f8f
+ Server ErrorDescription : 0xcaa20003
+ Server Message : 0xcaa90014 0xcaa90006 0xcaa1002d
+ Endpoint URI : https://fs.contoso.com/adfs/services/trust/mex
+ AzureAdPrt : NO
+ DeviceAuthStatus : FAILED
+ TpmProtected : NO
+ Server ErrorCode : 0x80090016 0x80290407 0x80280036 0x80090031
 "#;
 
     #[test]
@@ -1009,6 +1895,11 @@ mod tests {
             Some("ERROR_WINHTTP_TIMEOUT")
         );
         assert_eq!(analysis.derived.remote_session_system, Some(true));
+        assert_eq!(analysis.derived.dominant_phase, DsregcmdDiagnosticPhase::PostJoin);
+        assert_eq!(
+            analysis.derived.capture_confidence,
+            DsregcmdCaptureConfidence::Low
+        );
     }
 
     #[test]
@@ -1037,7 +1928,6 @@ mod tests {
             "join-type-hybrid",
             "hybrid-fallback-enabled",
             "ngc-will-provision",
-            "enterprise-joined",
         ] {
             assert!(ids.contains(&expected), "missing diagnostic: {expected}");
         }
@@ -1066,11 +1956,167 @@ mod tests {
             "missing-tenant",
             "missing-deviceid",
             "no-azure-prt",
-            "no-mdm",
-            "no-compliance",
-            "not-workplace-joined",
         ] {
             assert!(ids.contains(&expected), "missing diagnostic: {expected}");
         }
+    }
+
+    #[test]
+    fn missing_mdm_urls_do_not_create_warnings_by_default() {
+        let facts = parse_dsregcmd(NOT_JOINED_SAMPLE).expect("parse not joined sample");
+        let analysis = analyze_facts(facts, NOT_JOINED_SAMPLE);
+
+        assert_eq!(analysis.derived.mdm_enrolled, None);
+        assert_eq!(analysis.derived.missing_mdm, None);
+        assert_eq!(analysis.derived.missing_compliance_url, None);
+        assert!(!analysis
+            .diagnostics
+            .iter()
+            .any(|item| item.id == "no-mdm" || item.id == "no-compliance"));
+    }
+
+    #[test]
+    fn ngc_prereq_fields_stay_lightweight_when_context_is_healthy() {
+        let sample = r#"
+ AzureAdJoined : YES
+ DomainJoined : YES
+ WorkplaceJoined : NO
+ TenantId : 11111111-2222-3333-4444-555555555555
+ DeviceId : abcdefab-1111-2222-3333-abcdefabcdef
+ AzureAdPrt : YES
+ AzureAdPrtUpdateTime : 2025-03-10 09:00:00.000 UTC
+ Client Time : 2025-03-10 10:00:00.000 UTC
+ NgcSet : NO
+ IsDeviceJoined : YES
+ IsUserAzureAD : YES
+ PolicyEnabled : YES
+ PostLogonEnabled : YES
+ DeviceEligible : YES
+ SessionIsNotRemote : YES
+ CertEnrollment : none
+ PreReqResult : WillProvision
+ KeySignTest : PASSED
+ AadRecoveryEnabled : NO
+"#;
+
+        let facts = parse_dsregcmd(sample).expect("parse ngc sample");
+        let analysis = analyze_facts(facts, sample);
+
+        assert!(analysis.diagnostics.iter().any(|item| item.id == "ngc-will-provision"));
+        assert!(!analysis
+            .diagnostics
+            .iter()
+            .any(|item| {
+                item.id == "ngc-not-set"
+                    || item.id == "logon-cert-not-ready"
+                    || item.id == "ngc-key-sign-failed"
+                    || item.id == "ngc-recovery-enabled"
+            }));
+    }
+
+    #[test]
+    fn emits_ngc_post_join_health_diagnostics_when_present() {
+        let sample = r#"
+ AzureAdJoined : YES
+ DomainJoined : NO
+ WorkplaceJoined : NO
+ NgcSet : YES
+ KeySignTest : FAILED
+ AadRecoveryEnabled : YES
+ AzureAdPrt : YES
+"#;
+
+        let facts = parse_dsregcmd(sample).expect("parse ngc post join sample");
+        let analysis = analyze_facts(facts, sample);
+        let ids: Vec<&str> = analysis
+            .diagnostics
+            .iter()
+            .map(|item| item.id.as_str())
+            .collect();
+
+        assert!(ids.contains(&"ngc-key-sign-failed"));
+        assert!(ids.contains(&"ngc-recovery-enabled"));
+    }
+
+    #[test]
+    fn emits_phase_aware_discovery_and_prt_code_diagnostics() {
+        let facts = parse_dsregcmd(PHASE_AWARE_SAMPLE).expect("parse phase aware sample");
+        let analysis = analyze_facts(facts, PHASE_AWARE_SAMPLE);
+        let ids: Vec<&str> = analysis
+            .diagnostics
+            .iter()
+            .map(|item| item.id.as_str())
+            .collect();
+
+        for expected in [
+            "scp-read-failed",
+            "drs-discovery-code",
+            "invalid-discovery-response",
+            "malformed-upn",
+            "no-azure-prt",
+        ] {
+            assert!(ids.contains(&expected), "missing diagnostic: {expected}");
+        }
+
+        assert_eq!(analysis.derived.dominant_phase, DsregcmdDiagnosticPhase::Discover);
+    }
+
+    #[test]
+    fn emits_remaining_adal_and_tpm_mappings() {
+        let facts = parse_dsregcmd(ADAL_AND_TPM_SAMPLE).expect("parse adal and tpm sample");
+        let analysis = analyze_facts(facts, ADAL_AND_TPM_SAMPLE);
+        let ids: Vec<&str> = analysis
+            .diagnostics
+            .iter()
+            .map(|item| item.id.as_str())
+            .collect();
+
+        for expected in [
+            "adal-protocol-not-supported",
+            "adal-parse-xml-failed",
+            "adal-password-endpoint-missing",
+            "adal-secure-failure",
+            "adal-invalid-grant",
+            "adal-wstrust-request-failed",
+            "adal-token-request-failed",
+            "adal-operation-pending",
+            "tpm-bad-keyset",
+            "tpm-internal-error",
+            "tpm-not-fips",
+            "tpm-locked-out",
+        ] {
+            assert!(ids.contains(&expected), "missing diagnostic: {expected}");
+        }
+    }
+
+    #[test]
+    fn derives_high_capture_confidence_for_recent_interactive_capture() {
+        let now = Utc::now().format("%Y-%m-%d %H:%M:%S%.3f UTC").to_string();
+        let sample = format!(
+            "\n AzureAdJoined : YES\n DomainJoined : YES\n AzureAdPrt : YES\n AzureAdPrtUpdateTime : {now}\n Client Time : {now}\n User Context : UN-ELEVATED User\n SessionIsNotRemote : YES\n"
+        );
+
+        let facts = parse_dsregcmd(&sample).expect("parse high confidence sample");
+        let analysis = analyze_facts(facts, &sample);
+
+        assert_eq!(analysis.derived.capture_confidence, DsregcmdCaptureConfidence::High);
+    }
+
+    #[test]
+    fn derives_low_capture_confidence_for_remote_system_capture() {
+        let sample = r#"
+ AzureAdJoined : YES
+ DomainJoined : YES
+ AzureAdPrt : YES
+ AzureAdPrtUpdateTime : 2025-03-10 05:00:00.000 UTC
+ Client Time : 2025-03-10 10:30:00.000 UTC
+ User Context : SYSTEM
+ SessionIsNotRemote : NO
+"#;
+
+        let facts = parse_dsregcmd(sample).expect("parse low confidence sample");
+        let analysis = analyze_facts(facts, sample);
+
+        assert_eq!(analysis.derived.capture_confidence, DsregcmdCaptureConfidence::Low);
     }
 }

@@ -6,6 +6,9 @@ dist/
 
 # Rust
 src-tauri/target/
+src-tauri/target-test/debug/
+src-tauri/target-test/release/
+src-tauri/target-test
 
 # IDE
 .vscode/
@@ -18,3 +21,5 @@ Thumbs.db
 # Env
 .env
 .env.local
+
+

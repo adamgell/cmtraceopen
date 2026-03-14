@@ -8,8 +8,7 @@ import {
   type ChangeEvent,
 } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
-import { stat } from "@tauri-apps/plugin-fs";
-import { analyzeIntuneLogs } from "../../lib/commands";
+import { analyzeIntuneLogs, inspectPathKind } from "../../lib/commands";
 import {
   analyzeDsregcmdPath,
   analyzeDsregcmdSource,
@@ -114,16 +113,7 @@ function getOpenActionLabels(workspace: WorkspaceId) {
 
 async function inferPathKind(path: string): Promise<"file" | "folder" | "unknown"> {
   try {
-    const fileInfo = await stat(path);
-    if (fileInfo.isDirectory) {
-      return "folder";
-    }
-
-    if (fileInfo.isFile) {
-      return "file";
-    }
-
-    return "unknown";
+    return await inspectPathKind(path);
   } catch {
     return "unknown";
   }
@@ -910,7 +900,7 @@ export function Toolbar() {
         {([
           ["log", "Log Explorer"],
           ["intune", "Intune Diagnostics"],
-          ["dsregcmd", "dsregcmd"],
+          ["dsregcmd", "Troubleshoot with dsregcmd"],
         ] as const).map(([workspaceId, label]) => (
           <button
             key={workspaceId}

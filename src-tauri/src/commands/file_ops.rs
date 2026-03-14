@@ -31,6 +31,14 @@ pub enum LogSourceKind {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub enum PathKind {
+    File,
+    Folder,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum KnownSourcePathKind {
     File,
     Folder,
@@ -146,6 +154,31 @@ pub fn open_log_file(path: String, state: State<'_, AppState>) -> Result<ParseRe
     );
 
     Ok(result)
+}
+
+#[tauri::command]
+pub fn inspect_path_kind(path: String) -> Result<PathKind, String> {
+    let requested_path = PathBuf::from(&path);
+
+    if !requested_path.exists() {
+        return Ok(PathKind::Unknown);
+    }
+
+    if requested_path.is_dir() {
+        return Ok(PathKind::Folder);
+    }
+
+    if requested_path.is_file() {
+        return Ok(PathKind::File);
+    }
+
+    Ok(PathKind::Unknown)
+}
+
+#[tauri::command]
+pub fn write_text_output_file(path: String, contents: String) -> Result<(), String> {
+    fs::write(&path, contents)
+        .map_err(|error| format!("failed to write file {}: {}", path, error))
 }
 
 fn normalize_path_string(path: &Path) -> String {
@@ -651,10 +684,13 @@ fn windows_known_log_sources() -> Vec<KnownSourceMetadata> {
 fn build_known_log_sources() -> Vec<KnownSourceMetadata> {
     #[cfg(target_os = "windows")]
     {
-        return windows_known_log_sources();
+        windows_known_log_sources()
     }
 
-    Vec::new()
+    #[cfg(not(target_os = "windows"))]
+    {
+        Vec::new()
+    }
 }
 
 /// Return known platform log source metadata.

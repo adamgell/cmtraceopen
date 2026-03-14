@@ -1,23 +1,64 @@
-use crate::dsregcmd::{analyze_text, DsregcmdAnalysisResult};
+use crate::dsregcmd::{analyze_text, registry, DsregcmdAnalysisResult};
 
+#[cfg(target_os = "windows")]
+use serde::Deserialize;
+#[cfg(target_os = "windows")]
+use serde::Serialize;
 #[cfg(target_os = "windows")]
 use std::ffi::c_void;
 #[cfg(target_os = "windows")]
+use std::fs::{self, File};
+#[cfg(target_os = "windows")]
 use std::os::windows::ffi::OsStrExt;
+#[cfg(target_os = "windows")]
+use std::os::windows::io::AsRawHandle;
 #[cfg(target_os = "windows")]
 use std::path::{Path, PathBuf};
 #[cfg(target_os = "windows")]
 use std::ptr::{null, null_mut};
+#[cfg(target_os = "windows")]
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DsregcmdCaptureResult {
+    pub input: String,
+    pub bundle_path: Option<String>,
+    pub evidence_file_path: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum DsregcmdPathSourceKind {
+    File,
+    Folder,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DsregcmdResolvedSource {
+    pub input: String,
+    pub bundle_path: Option<String>,
+    pub resolved_path: Option<String>,
+    pub evidence_file_path: Option<String>,
+}
 
 #[tauri::command]
-pub fn analyze_dsregcmd(input: String) -> Result<DsregcmdAnalysisResult, String> {
+pub fn analyze_dsregcmd(
+    input: String,
+    bundle_path: Option<String>,
+) -> Result<DsregcmdAnalysisResult, String> {
     eprintln!(
         "event=dsregcmd_analysis_start input_chars={} input_lines={}",
         input.len(),
         input.lines().count()
     );
 
-    let result = analyze_text(&input)?;
+    let mut result = analyze_text(&input)?;
+
+    if let Some(bundle_path) = bundle_path.as_deref() {
+        result.policy_evidence = registry::load_whfb_policy_evidence(Path::new(bundle_path));
+    }
 
     eprintln!(
         "event=dsregcmd_analysis_complete diagnostics_count={} join_type={:?}",
@@ -29,13 +70,23 @@ pub fn analyze_dsregcmd(input: String) -> Result<DsregcmdAnalysisResult, String>
 }
 
 #[tauri::command]
-pub fn capture_dsregcmd() -> Result<String, String> {
+pub fn capture_dsregcmd() -> Result<DsregcmdCaptureResult, String> {
     capture_dsregcmd_impl()
 }
 
+#[tauri::command]
+pub fn load_dsregcmd_source(
+    kind: DsregcmdPathSourceKind,
+    path: String,
+) -> Result<DsregcmdResolvedSource, String> {
+    load_dsregcmd_source_impl(kind, Path::new(&path))
+}
+
 #[cfg(target_os = "windows")]
-fn capture_dsregcmd_impl() -> Result<String, String> {
+fn capture_dsregcmd_impl() -> Result<DsregcmdCaptureResult, String> {
     eprintln!("event=dsregcmd_capture_start platform=windows");
+
+    cleanup_old_capture_bundles();
 
     let dsregcmd_path = resolve_system32_binary("dsregcmd.exe")?;
     verify_dsregcmd_signature(&dsregcmd_path)?;
@@ -65,17 +116,358 @@ fn capture_dsregcmd_impl() -> Result<String, String> {
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let capture_bundle = stage_live_capture_bundle(&stdout)?;
+
     eprintln!(
-        "event=dsregcmd_capture_complete platform=windows stdout_chars={} stdout_lines={}",
+        "event=dsregcmd_capture_complete platform=windows stdout_chars={} stdout_lines={} bundle_path={}",
         stdout.len(),
-        stdout.lines().count()
+        stdout.lines().count(),
+        capture_bundle.bundle_path.display()
     );
-    Ok(stdout)
+
+    Ok(DsregcmdCaptureResult {
+        input: stdout,
+        bundle_path: Some(capture_bundle.bundle_path.to_string_lossy().to_string()),
+        evidence_file_path: Some(capture_bundle.evidence_file_path.to_string_lossy().to_string()),
+    })
 }
 
 #[cfg(not(target_os = "windows"))]
-fn capture_dsregcmd_impl() -> Result<String, String> {
+fn capture_dsregcmd_impl() -> Result<DsregcmdCaptureResult, String> {
     Err("dsregcmd capture is only supported on Windows.".to_string())
+}
+
+#[cfg(target_os = "windows")]
+fn load_dsregcmd_source_impl(
+    kind: DsregcmdPathSourceKind,
+    path: &Path,
+) -> Result<DsregcmdResolvedSource, String> {
+    match kind {
+        DsregcmdPathSourceKind::File => {
+            let input = fs::read_to_string(path).map_err(|error| {
+                format!(
+                    "Failed to read the dsregcmd file '{}': {}",
+                    path.display(),
+                    error
+                )
+            })?;
+            let bundle_path = resolve_bundle_root_from_file_path(path)
+                .map(|value| value.to_string_lossy().to_string());
+            Ok(DsregcmdResolvedSource {
+                input,
+                bundle_path,
+                resolved_path: Some(path.to_string_lossy().to_string()),
+                evidence_file_path: Some(path.to_string_lossy().to_string()),
+            })
+        }
+        DsregcmdPathSourceKind::Folder => {
+            let (bundle_path, evidence_file_path) = resolve_folder_bundle_evidence(path)?;
+            let input = fs::read_to_string(&evidence_file_path).map_err(|error| {
+                format!(
+                    "Failed to read the dsregcmd evidence file '{}': {}",
+                    evidence_file_path.display(),
+                    error
+                )
+            })?;
+            Ok(DsregcmdResolvedSource {
+                input,
+                bundle_path: Some(bundle_path.to_string_lossy().to_string()),
+                resolved_path: Some(evidence_file_path.to_string_lossy().to_string()),
+                evidence_file_path: Some(evidence_file_path.to_string_lossy().to_string()),
+            })
+        }
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn load_dsregcmd_source_impl(
+    _kind: DsregcmdPathSourceKind,
+    _path: &Path,
+) -> Result<DsregcmdResolvedSource, String> {
+    Err("dsregcmd source loading is only supported on Windows.".to_string())
+}
+
+#[cfg(target_os = "windows")]
+struct LiveCaptureBundle {
+    bundle_path: PathBuf,
+    evidence_file_path: PathBuf,
+}
+
+#[cfg(target_os = "windows")]
+struct RegistryExportSpec {
+    key_path: &'static str,
+    file_name: &'static str,
+}
+
+#[cfg(target_os = "windows")]
+const LIVE_CAPTURE_REGISTRY_EXPORTS: &[RegistryExportSpec] = &[
+    RegistryExportSpec {
+        key_path: r"HKLM\SOFTWARE\Microsoft\PolicyManager\Current\Device",
+        file_name: "policymanager-device.reg",
+    },
+    RegistryExportSpec {
+        key_path: r"HKLM\SOFTWARE\Microsoft\PolicyManager\Providers",
+        file_name: "policymanager-providers.reg",
+    },
+    RegistryExportSpec {
+        key_path: r"HKCU\Software\Policies",
+        file_name: "hkcu-policies.reg",
+    },
+    RegistryExportSpec {
+        key_path: r"HKLM\Software\Policies",
+        file_name: "hklm-policies.reg",
+    },
+    RegistryExportSpec {
+        key_path: r"HKCU\Software\Microsoft\Policies",
+        file_name: "hkcu-microsoft-policies.reg",
+    },
+    RegistryExportSpec {
+        key_path: r"HKLM\Software\Microsoft\Policies",
+        file_name: "hklm-microsoft-policies.reg",
+    },
+];
+
+#[cfg(target_os = "windows")]
+const DSREGCMD_EVIDENCE_RELATIVE_PATH: [&str; 3] = ["evidence", "command-output", "dsregcmd-status.txt"];
+#[cfg(target_os = "windows")]
+const DSREGCMD_TOP_LEVEL_FALLBACK_FILE: &str = "dsregcmd-status.txt";
+#[cfg(target_os = "windows")]
+const MANIFEST_FILE: &str = "manifest.json";
+#[cfg(target_os = "windows")]
+const EVIDENCE_FOLDER_NAME: &str = "evidence";
+#[cfg(target_os = "windows")]
+const COMMAND_OUTPUT_FOLDER_NAME: &str = "command-output";
+
+#[cfg(target_os = "windows")]
+fn stage_live_capture_bundle(stdout: &str) -> Result<LiveCaptureBundle, String> {
+    let bundle_path = create_capture_bundle_root()?;
+    let evidence_command_output = bundle_path.join("evidence").join("command-output");
+    let evidence_registry = bundle_path.join("evidence").join("registry");
+    fs::create_dir_all(&evidence_command_output).map_err(|error| {
+        format!(
+            "Failed to create the live capture command-output folder '{}': {}",
+            evidence_command_output.display(),
+            error
+        )
+    })?;
+    fs::create_dir_all(&evidence_registry).map_err(|error| {
+        format!(
+            "Failed to create the live capture registry folder '{}': {}",
+            evidence_registry.display(),
+            error
+        )
+    })?;
+
+    let evidence_file_path = evidence_command_output.join("dsregcmd-status.txt");
+    fs::write(&evidence_file_path, stdout).map_err(|error| {
+        format!(
+            "Failed to write the live dsregcmd capture to '{}': {}",
+            evidence_file_path.display(),
+            error
+        )
+    })?;
+
+    let manifest_path = bundle_path.join("manifest.json");
+    fs::write(
+        &manifest_path,
+        "{\n  \"manifestPath\": \"manifest.json\",\n  \"source\": \"live-dsregcmd-capture\"\n}\n",
+    )
+    .map_err(|error| {
+        format!(
+            "Failed to write the live capture manifest '{}': {}",
+            manifest_path.display(),
+            error
+        )
+    })?;
+
+    export_live_registry_evidence(&evidence_registry);
+
+    Ok(LiveCaptureBundle {
+        bundle_path,
+        evidence_file_path,
+    })
+}
+
+#[cfg(target_os = "windows")]
+fn resolve_bundle_root_from_file_path(path: &Path) -> Option<PathBuf> {
+    let mut candidate = path.parent();
+
+    while let Some(directory) = candidate {
+        if directory.join(MANIFEST_FILE).is_file() {
+            return Some(directory.to_path_buf());
+        }
+
+        candidate = directory.parent();
+    }
+
+    None
+}
+
+#[cfg(target_os = "windows")]
+fn resolve_folder_bundle_evidence(folder_path: &Path) -> Result<(PathBuf, PathBuf), String> {
+    let bundle_root = resolve_canonical_bundle_root_from_folder_path(folder_path).ok_or_else(|| {
+        "Selected folder is not a supported dsregcmd evidence bundle location. Choose the bundle root, the bundle's evidence folder, or the bundle's command-output folder.".to_string()
+    })?;
+
+    let evidence_file_path = DSREGCMD_EVIDENCE_RELATIVE_PATH
+        .iter()
+        .fold(bundle_root.clone(), |path, segment| path.join(segment));
+    if evidence_file_path.is_file() {
+        return Ok((bundle_root, evidence_file_path));
+    }
+
+    let top_level_path = bundle_root.join(DSREGCMD_TOP_LEVEL_FALLBACK_FILE);
+    if top_level_path.is_file() {
+        return Ok((bundle_root, top_level_path));
+    }
+
+    Err(format!(
+        "Resolved bundle root does not contain dsregcmd evidence. Expected '{}' or '{}'.",
+        DSREGCMD_EVIDENCE_RELATIVE_PATH.join("/"),
+        DSREGCMD_TOP_LEVEL_FALLBACK_FILE
+    ))
+}
+
+#[cfg(target_os = "windows")]
+fn resolve_canonical_bundle_root_from_folder_path(folder_path: &Path) -> Option<PathBuf> {
+    if folder_path.join(MANIFEST_FILE).is_file() {
+        return Some(folder_path.to_path_buf());
+    }
+
+    if path_ends_with_directory(folder_path, COMMAND_OUTPUT_FOLDER_NAME) {
+        let bundle_root = folder_path.parent().and_then(Path::parent);
+        if let Some(bundle_root) = bundle_root {
+            if bundle_root.join(MANIFEST_FILE).is_file() {
+                return Some(bundle_root.to_path_buf());
+            }
+        }
+    }
+
+    if path_ends_with_directory(folder_path, EVIDENCE_FOLDER_NAME) {
+        if let Some(bundle_root) = folder_path.parent() {
+            if bundle_root.join(MANIFEST_FILE).is_file() {
+                return Some(bundle_root.to_path_buf());
+            }
+        }
+    }
+
+    let mut candidate = Some(folder_path);
+    while let Some(directory) = candidate {
+        if directory.join(MANIFEST_FILE).is_file() {
+            return Some(directory.to_path_buf());
+        }
+
+        candidate = directory.parent();
+    }
+
+    None
+}
+
+#[cfg(target_os = "windows")]
+fn path_ends_with_directory(path: &Path, directory_name: &str) -> bool {
+    path.file_name()
+        .and_then(|value| value.to_str())
+        .map(|value| value.eq_ignore_ascii_case(directory_name))
+        .unwrap_or(false)
+}
+
+#[cfg(target_os = "windows")]
+fn create_capture_bundle_root() -> Result<PathBuf, String> {
+    let temp_root = std::env::temp_dir();
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_else(|_| Duration::from_secs(0))
+        .as_millis();
+    let bundle_path = temp_root.join(format!(
+        "cmtraceopen-dsregcmd-capture-{}-{}",
+        std::process::id(),
+        timestamp
+    ));
+    fs::create_dir_all(&bundle_path).map_err(|error| {
+        format!(
+            "Failed to create the live capture bundle root '{}': {}",
+            bundle_path.display(),
+            error
+        )
+    })?;
+    Ok(bundle_path)
+}
+
+#[cfg(target_os = "windows")]
+fn export_live_registry_evidence(registry_root: &Path) {
+    let Ok(reg_path) = resolve_system32_binary("reg.exe") else {
+        eprintln!(
+            "event=dsregcmd_registry_export_skipped reason=reg_not_found registry_root={}",
+            registry_root.display()
+        );
+        return;
+    };
+
+    for export in LIVE_CAPTURE_REGISTRY_EXPORTS {
+        let output_path = registry_root.join(export.file_name);
+        match std::process::Command::new(&reg_path)
+            .args(["export", export.key_path, &output_path.to_string_lossy(), "/y"])
+            .output()
+        {
+            Ok(output) if output.status.success() => {
+                eprintln!(
+                    "event=dsregcmd_registry_export_complete key={} file={}",
+                    export.key_path,
+                    output_path.display()
+                );
+            }
+            Ok(output) => {
+                let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+                eprintln!(
+                    "event=dsregcmd_registry_export_failed key={} file={} exit_code={} stderr={}",
+                    export.key_path,
+                    output_path.display(),
+                    output.status.code().unwrap_or_default(),
+                    stderr
+                );
+            }
+            Err(error) => {
+                eprintln!(
+                    "event=dsregcmd_registry_export_failed key={} file={} error={}",
+                    export.key_path,
+                    output_path.display(),
+                    error
+                );
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn cleanup_old_capture_bundles() {
+    let temp_root = std::env::temp_dir();
+    let Ok(entries) = fs::read_dir(&temp_root) else {
+        return;
+    };
+
+    let cutoff = SystemTime::now()
+        .checked_sub(Duration::from_secs(24 * 60 * 60))
+        .unwrap_or(SystemTime::UNIX_EPOCH);
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let file_name = entry.file_name();
+        let file_name = file_name.to_string_lossy();
+        if !file_name.starts_with("cmtraceopen-dsregcmd-capture-") {
+            continue;
+        }
+
+        let is_old = entry
+            .metadata()
+            .ok()
+            .and_then(|metadata| metadata.modified().ok())
+            .map(|modified| modified <= cutoff)
+            .unwrap_or(false);
+
+        if is_old {
+            let _ = fs::remove_dir_all(&path);
+        }
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -104,28 +496,28 @@ fn verify_dsregcmd_signature(dsregcmd_path: &Path) -> Result<(), String> {
         .collect::<Vec<u16>>();
 
     let mut file_info = WinTrustFileInfo {
-        cbStruct: std::mem::size_of::<WinTrustFileInfo>() as u32,
-        pcwszFilePath: wide_path.as_mut_ptr(),
-        hFile: 0,
-        pgKnownSubject: null(),
+        cb_struct: std::mem::size_of::<WinTrustFileInfo>() as u32,
+        pcwsz_file_path: wide_path.as_mut_ptr(),
+        h_file: 0,
+        pg_known_subject: null(),
     };
 
     let mut trust_data = WinTrustData {
-        cbStruct: std::mem::size_of::<WinTrustData>() as u32,
-        pPolicyCallbackData: null_mut(),
-        pSIPClientData: null_mut(),
-        dwUIChoice: WTD_UI_NONE,
-        fdwRevocationChecks: WTD_REVOKE_NONE,
-        dwUnionChoice: WTD_CHOICE_FILE,
-        Anonymous: WinTrustDataChoice {
-            pFile: &mut file_info,
+        cb_struct: std::mem::size_of::<WinTrustData>() as u32,
+        p_policy_callback_data: null_mut(),
+        p_sip_client_data: null_mut(),
+        dw_ui_choice: WTD_UI_NONE,
+        fdw_revocation_checks: WTD_REVOKE_NONE,
+        dw_union_choice: WTD_CHOICE_FILE,
+        anonymous: WinTrustDataChoice {
+            p_file: &mut file_info,
         },
-        dwStateAction: WTD_STATEACTION_IGNORE,
-        hWVTStateData: 0,
-        pwszURLReference: null(),
-        dwProvFlags: 0,
-        dwUIContext: 0,
-        pSignatureSettings: null_mut(),
+        dw_state_action: WTD_STATEACTION_IGNORE,
+        h_wvtstate_data: 0,
+        pwsz_url_reference: null(),
+        dw_prov_flags: 0,
+        dw_ui_context: 0,
+        p_signature_settings: null_mut(),
     };
 
     let status = unsafe {
@@ -140,11 +532,171 @@ fn verify_dsregcmd_signature(dsregcmd_path: &Path) -> Result<(), String> {
         return Ok(());
     }
 
+    if status as u32 == TRUST_E_NOSIGNATURE && verify_catalog_signature(dsregcmd_path)? {
+        eprintln!(
+            "event=dsregcmd_signature_verification_fallback method=catalog status=valid path={}",
+            dsregcmd_path.display()
+        );
+        return Ok(());
+    }
+
     Err(format!(
         "Refusing to execute '{}': expected a valid Authenticode signature but WinVerifyTrust returned {}.",
         dsregcmd_path.display(),
         format_winverifytrust_status(status)
     ))
+}
+
+#[cfg(target_os = "windows")]
+fn verify_catalog_signature(dsregcmd_path: &Path) -> Result<bool, String> {
+    let file = File::open(dsregcmd_path).map_err(|error| {
+        format!(
+            "Failed to open '{}' for catalog signature verification: {}",
+            dsregcmd_path.display(),
+            error
+        )
+    })?;
+    let file_handle = file.as_raw_handle() as isize;
+
+    let mut cat_admin_handle = 0isize;
+    let acquired = unsafe {
+        CryptCATAdminAcquireContext(&mut cat_admin_handle, &DRIVER_ACTION_VERIFY, 0)
+    };
+    if acquired == 0 {
+        return Err(format!(
+            "Failed to acquire a catalog admin context for '{}': {}",
+            dsregcmd_path.display(),
+            std::io::Error::last_os_error()
+        ));
+    }
+    let cat_admin = CatalogAdminHandle(cat_admin_handle);
+
+    let mut hash_len = 0u32;
+    let hash_size_status = unsafe {
+        CryptCATAdminCalcHashFromFileHandle(file_handle, &mut hash_len, null_mut(), 0)
+    };
+    if hash_size_status == 0 && hash_len == 0 {
+        return Err(format!(
+            "Failed to determine the catalog hash size for '{}': {}",
+            dsregcmd_path.display(),
+            std::io::Error::last_os_error()
+        ));
+    }
+
+    let mut hash = vec![0u8; hash_len as usize];
+    let hash_status = unsafe {
+        CryptCATAdminCalcHashFromFileHandle(file_handle, &mut hash_len, hash.as_mut_ptr(), 0)
+    };
+    if hash_status == 0 {
+        return Err(format!(
+            "Failed to calculate the catalog hash for '{}': {}",
+            dsregcmd_path.display(),
+            std::io::Error::last_os_error()
+        ));
+    }
+    hash.truncate(hash_len as usize);
+
+    let mut previous_catalog_context = 0isize;
+    let catalog_context = unsafe {
+        CryptCATAdminEnumCatalogFromHash(
+            cat_admin.0,
+            hash.as_ptr(),
+            hash_len,
+            0,
+            &mut previous_catalog_context,
+        )
+    };
+    if catalog_context == 0 {
+        return Ok(false);
+    }
+    let catalog = CatalogContextHandle {
+        admin_handle: cat_admin.0,
+        catalog_handle: catalog_context,
+    };
+
+    let mut catalog_info = CatalogInfo {
+        cb_struct: std::mem::size_of::<CatalogInfo>() as u32,
+        wsz_catalog_file: [0; 260],
+    };
+    let catalog_info_status = unsafe {
+        CryptCATCatalogInfoFromContext(catalog.catalog_handle, &mut catalog_info, 0)
+    };
+    if catalog_info_status == 0 {
+        return Err(format!(
+            "Failed to read catalog metadata for '{}': {}",
+            dsregcmd_path.display(),
+            std::io::Error::last_os_error()
+        ));
+    }
+
+    let member_tag = hex_encode_wide(&hash);
+    let member_path = dsregcmd_path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<u16>>();
+
+    let mut catalog_trust_info = WinTrustCatalogInfo {
+        cb_struct: std::mem::size_of::<WinTrustCatalogInfo>() as u32,
+        dw_catalog_version: 0,
+        pcwsz_catalog_file_path: catalog_info.wsz_catalog_file.as_ptr(),
+        pcwsz_member_tag: member_tag.as_ptr(),
+        pcwsz_member_file_path: member_path.as_ptr(),
+        h_member_file: file_handle,
+        pb_calculated_file_hash: hash.as_mut_ptr(),
+        cb_calculated_file_hash: hash_len,
+        pc_catalog_context: null_mut(),
+        h_cat_admin: cat_admin.0,
+    };
+
+    let mut trust_data = WinTrustData {
+        cb_struct: std::mem::size_of::<WinTrustData>() as u32,
+        p_policy_callback_data: null_mut(),
+        p_sip_client_data: null_mut(),
+        dw_ui_choice: WTD_UI_NONE,
+        fdw_revocation_checks: WTD_REVOKE_NONE,
+        dw_union_choice: WTD_CHOICE_CATALOG,
+        anonymous: WinTrustDataChoice {
+            p_catalog: &mut catalog_trust_info,
+        },
+        dw_state_action: WTD_STATEACTION_IGNORE,
+        h_wvtstate_data: 0,
+        pwsz_url_reference: null(),
+        dw_prov_flags: 0,
+        dw_ui_context: 0,
+        p_signature_settings: null_mut(),
+    };
+
+    let status = unsafe {
+        WinVerifyTrust(
+            null_mut(),
+            &WINTRUST_ACTION_GENERIC_VERIFY_V2,
+            &mut trust_data as *mut _ as *mut c_void,
+        )
+    };
+
+    Ok(status == 0)
+}
+
+#[cfg(target_os = "windows")]
+fn hex_encode_wide(bytes: &[u8]) -> Vec<u16> {
+    let mut wide = Vec::with_capacity((bytes.len() * 2) + 1);
+    for byte in bytes {
+        let upper = byte >> 4;
+        let lower = byte & 0x0F;
+        wide.push(nibble_to_hex(upper) as u16);
+        wide.push(nibble_to_hex(lower) as u16);
+    }
+    wide.push(0);
+    wide
+}
+
+#[cfg(target_os = "windows")]
+const fn nibble_to_hex(nibble: u8) -> u8 {
+    match nibble {
+        0..=9 => b'0' + nibble,
+        _ => b'A' + (nibble - 10),
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -170,34 +722,88 @@ struct Guid {
 #[cfg(target_os = "windows")]
 #[repr(C)]
 struct WinTrustFileInfo {
-    cbStruct: u32,
-    pcwszFilePath: *mut u16,
-    hFile: isize,
-    pgKnownSubject: *const Guid,
+    cb_struct: u32,
+    pcwsz_file_path: *mut u16,
+    h_file: isize,
+    pg_known_subject: *const Guid,
 }
 
 #[cfg(target_os = "windows")]
 #[repr(C)]
 union WinTrustDataChoice {
-    pFile: *mut WinTrustFileInfo,
+    p_file: *mut WinTrustFileInfo,
+    p_catalog: *mut WinTrustCatalogInfo,
 }
 
 #[cfg(target_os = "windows")]
 #[repr(C)]
 struct WinTrustData {
-    cbStruct: u32,
-    pPolicyCallbackData: *mut c_void,
-    pSIPClientData: *mut c_void,
-    dwUIChoice: u32,
-    fdwRevocationChecks: u32,
-    dwUnionChoice: u32,
-    Anonymous: WinTrustDataChoice,
-    dwStateAction: u32,
-    hWVTStateData: isize,
-    pwszURLReference: *const u16,
-    dwProvFlags: u32,
-    dwUIContext: u32,
-    pSignatureSettings: *mut c_void,
+    cb_struct: u32,
+    p_policy_callback_data: *mut c_void,
+    p_sip_client_data: *mut c_void,
+    dw_ui_choice: u32,
+    fdw_revocation_checks: u32,
+    dw_union_choice: u32,
+    anonymous: WinTrustDataChoice,
+    dw_state_action: u32,
+    h_wvtstate_data: isize,
+    pwsz_url_reference: *const u16,
+    dw_prov_flags: u32,
+    dw_ui_context: u32,
+    p_signature_settings: *mut c_void,
+}
+
+#[cfg(target_os = "windows")]
+#[repr(C)]
+struct WinTrustCatalogInfo {
+    cb_struct: u32,
+    dw_catalog_version: u32,
+    pcwsz_catalog_file_path: *const u16,
+    pcwsz_member_tag: *const u16,
+    pcwsz_member_file_path: *const u16,
+    h_member_file: isize,
+    pb_calculated_file_hash: *mut u8,
+    cb_calculated_file_hash: u32,
+    pc_catalog_context: *mut c_void,
+    h_cat_admin: isize,
+}
+
+#[cfg(target_os = "windows")]
+#[repr(C)]
+struct CatalogInfo {
+    cb_struct: u32,
+    wsz_catalog_file: [u16; 260],
+}
+
+#[cfg(target_os = "windows")]
+struct CatalogAdminHandle(isize);
+
+#[cfg(target_os = "windows")]
+impl Drop for CatalogAdminHandle {
+    fn drop(&mut self) {
+        if self.0 != 0 {
+            unsafe {
+                CryptCATAdminReleaseContext(self.0, 0);
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+struct CatalogContextHandle {
+    admin_handle: isize,
+    catalog_handle: isize,
+}
+
+#[cfg(target_os = "windows")]
+impl Drop for CatalogContextHandle {
+    fn drop(&mut self) {
+        if self.catalog_handle != 0 {
+            unsafe {
+                CryptCATAdminReleaseCatalogContext(self.admin_handle, self.catalog_handle, 0);
+            }
+        }
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -215,11 +821,52 @@ const WTD_REVOKE_NONE: u32 = 0;
 #[cfg(target_os = "windows")]
 const WTD_CHOICE_FILE: u32 = 1;
 #[cfg(target_os = "windows")]
+const WTD_CHOICE_CATALOG: u32 = 2;
+#[cfg(target_os = "windows")]
 const WTD_STATEACTION_IGNORE: u32 = 0;
+#[cfg(target_os = "windows")]
+const TRUST_E_NOSIGNATURE: u32 = 0x800B0100;
+
+#[cfg(target_os = "windows")]
+const DRIVER_ACTION_VERIFY: Guid = Guid {
+    data1: 0xF750E6C3,
+    data2: 0x38EE,
+    data3: 0x11D1,
+    data4: [0x85, 0xE5, 0x00, 0xC0, 0x4F, 0xC2, 0x95, 0xEE],
+};
 
 #[cfg(target_os = "windows")]
 extern "system" {
     fn WinVerifyTrust(hwnd: *mut c_void, pg_action_id: *const Guid, p_wvt_data: *mut c_void) -> i32;
+    fn CryptCATAdminAcquireContext(
+        ph_cat_admin: *mut isize,
+        pg_subsystem: *const Guid,
+        dw_flags: u32,
+    ) -> i32;
+    fn CryptCATAdminCalcHashFromFileHandle(
+        h_file: isize,
+        pcb_hash: *mut u32,
+        pb_hash: *mut u8,
+        dw_flags: u32,
+    ) -> i32;
+    fn CryptCATAdminEnumCatalogFromHash(
+        h_cat_admin: isize,
+        pb_hash: *const u8,
+        cb_hash: u32,
+        dw_flags: u32,
+        ph_prev_cat_info: *mut isize,
+    ) -> isize;
+    fn CryptCATCatalogInfoFromContext(
+        h_cat_info: isize,
+        ps_cat_info: *mut CatalogInfo,
+        dw_flags: u32,
+    ) -> i32;
+    fn CryptCATAdminReleaseCatalogContext(
+        h_cat_admin: isize,
+        h_cat_info: isize,
+        dw_flags: u32,
+    ) -> i32;
+    fn CryptCATAdminReleaseContext(h_cat_admin: isize, dw_flags: u32) -> i32;
 }
 
 #[cfg(test)]

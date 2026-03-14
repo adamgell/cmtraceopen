@@ -215,6 +215,11 @@ fn apply_field(facts: &mut DsregcmdFacts, key: &str, value: &str) -> bool {
         "servererrordescription" => {
             set_string(&mut facts.registration.server_error_description, value)
         }
+        "aadrecoveryenabled" => {
+            facts.post_join_diagnostics.aad_recovery_enabled = parse_bool(value);
+            true
+        }
+        "keysigntest" => set_string(&mut facts.post_join_diagnostics.key_sign_test, value),
         _ => false,
     }
 }
@@ -282,6 +287,8 @@ mod tests {
  AD Connectivity Test : PASS
  DRS Discovery Test : FAIL [0x801c0021]
  Client ErrorCode : 0x801c03f2
+ KeySignTest : PASSED
+ AadRecoveryEnabled : NO
  DeviceCertificateValidity : [ 2025-03-01 00:00:00.000 UTC -- 2025-03-20 00:00:00.000 UTC ]
 "#;
 
@@ -306,6 +313,11 @@ mod tests {
             facts.registration.client_error_code.as_deref(),
             Some("0x801c03f2")
         );
+        assert_eq!(
+            facts.post_join_diagnostics.key_sign_test.as_deref(),
+            Some("PASSED")
+        );
+        assert_eq!(facts.post_join_diagnostics.aad_recovery_enabled, Some(false));
     }
 
     #[test]

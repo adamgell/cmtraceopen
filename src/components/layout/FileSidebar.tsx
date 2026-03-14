@@ -728,7 +728,7 @@ function DsregcmdSidebar() {
         {!result && !isAnalyzing && analysisState.phase !== "error" && (
           <EmptyState
             title="No dsregcmd analysis yet"
-            body="Capture live output, paste clipboard text, open a text file, or select an evidence bundle folder that contains evidence/command-output/dsregcmd-status.txt."
+            body="Capture live output with registry evidence, paste clipboard text, open a text file, or select a bundle root, evidence folder, or command-output folder."
           />
         )}
 

@@ -31,6 +31,7 @@ tokio = { version = "1", features = ["fs", "io-util", "sync", "rt"] }
 
 [dev-dependencies]
 criterion = "0.5"
+tempfile = "3"
 
 [[bench]]
 name = "intune_pipeline"

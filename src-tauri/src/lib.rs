@@ -31,6 +31,8 @@ pub fn run() {
             commands::file_ops::open_log_file,
             commands::file_ops::list_log_folder,
             commands::file_ops::get_known_log_sources,
+            commands::file_ops::inspect_path_kind,
+            commands::file_ops::write_text_output_file,
             commands::parsing::start_tail,
             commands::parsing::stop_tail,
             commands::parsing::pause_tail,
@@ -40,6 +42,7 @@ pub fn run() {
             commands::intune::analyze_intune_logs,
             commands::dsregcmd::analyze_dsregcmd,
             commands::dsregcmd::capture_dsregcmd,
+            commands::dsregcmd::load_dsregcmd_source,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

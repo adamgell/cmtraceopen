@@ -7,7 +7,11 @@ import type {
   ParseResult,
 } from "../types/log";
 import type { IntuneAnalysisResult } from "../types/intune";
-import type { DsregcmdAnalysisResult } from "../types/dsregcmd";
+import type {
+  DsregcmdAnalysisResult,
+  DsregcmdCaptureResult,
+  DsregcmdResolvedSource,
+} from "../types/dsregcmd";
 
 export async function openLogFile(path: string): Promise<ParseResult> {
   return invoke<ParseResult>("open_log_file", { path });
@@ -80,11 +84,38 @@ export async function analyzeIntuneLogs(
 }
 
 export async function analyzeDsregcmd(
-  input: string
+  input: string,
+  bundlePath?: string | null
 ): Promise<DsregcmdAnalysisResult> {
-  return invoke<DsregcmdAnalysisResult>("analyze_dsregcmd", { input });
+  return invoke<DsregcmdAnalysisResult>("analyze_dsregcmd", {
+    input,
+    bundlePath: bundlePath ?? null,
+  });
 }
 
-export async function captureDsregcmd(): Promise<string> {
-  return invoke<string>("capture_dsregcmd");
+export async function captureDsregcmd(): Promise<DsregcmdCaptureResult> {
+  return invoke<DsregcmdCaptureResult>("capture_dsregcmd");
+}
+
+export async function inspectPathKind(
+  path: string
+): Promise<"file" | "folder" | "unknown"> {
+  return invoke<"file" | "folder" | "unknown">("inspect_path_kind", { path });
+}
+
+export async function writeTextOutputFile(
+  path: string,
+  contents: string
+): Promise<void> {
+  return invoke("write_text_output_file", { path, contents });
+}
+
+export async function loadDsregcmdSource(
+  kind: "file" | "folder",
+  path: string
+): Promise<DsregcmdResolvedSource> {
+  return invoke<DsregcmdResolvedSource>("load_dsregcmd_source", {
+    kind,
+    path,
+  });
 }

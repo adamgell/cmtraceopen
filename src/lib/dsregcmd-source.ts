@@ -1,15 +1,11 @@
 import { readText } from "@tauri-apps/plugin-clipboard-manager";
-import { exists, readTextFile, stat } from "@tauri-apps/plugin-fs";
 import type {
   DsregcmdAnalysisResult,
   DsregcmdSourceContext,
   DsregcmdSourceDescriptor,
 } from "../types/dsregcmd";
-import { analyzeDsregcmd, captureDsregcmd } from "./commands";
+import { analyzeDsregcmd, captureDsregcmd, loadDsregcmdSource } from "./commands";
 import { useDsregcmdStore } from "../stores/dsregcmd-store";
-
-const EVIDENCE_RELATIVE_PATH = ["evidence", "command-output", "dsregcmd-status.txt"];
-const TOP_LEVEL_FALLBACK_FILE = "dsregcmd-status.txt";
 
 function getBaseName(path: string | null): string {
   if (!path) {
@@ -17,17 +13,6 @@ function getBaseName(path: string | null): string {
   }
 
   return path.split(/[\\/]/).pop() ?? path;
-}
-
-function getPathSeparator(path: string): string {
-  return path.includes("\\") && !path.includes("/") ? "\\" : "/";
-}
-
-function joinNativePath(basePath: string, ...parts: string[]): string {
-  const separator = getPathSeparator(basePath);
-  const normalizedBase = basePath.replace(/[\\/]+$/, "");
-  const normalizedParts = parts.map((part) => part.replace(/^[\\/]+|[\\/]+$/g, ""));
-  return [normalizedBase, ...normalizedParts].join(separator);
 }
 
 function buildSourceContext(
@@ -56,43 +41,29 @@ function buildSourceContext(
   };
 }
 
-async function resolveFolderEvidenceFilePath(folderPath: string): Promise<string> {
-  const evidencePath = joinNativePath(folderPath, ...EVIDENCE_RELATIVE_PATH);
-  if (await exists(evidencePath)) {
-    return evidencePath;
-  }
-
-  const topLevelPath = joinNativePath(folderPath, TOP_LEVEL_FALLBACK_FILE);
-  if (await exists(topLevelPath)) {
-    return topLevelPath;
-  }
-
-  throw new Error(
-    `Folder does not contain dsregcmd evidence. Expected '${EVIDENCE_RELATIVE_PATH.join("/")}' or '${TOP_LEVEL_FALLBACK_FILE}'.`
-  );
-}
-
 async function readDsregcmdSource(source: DsregcmdSourceDescriptor): Promise<{
   rawInput: string;
   resolvedPath: string | null;
   evidenceFilePath: string | null;
+  bundleRootPath: string | null;
 }> {
   switch (source.kind) {
     case "file": {
-      const rawInput = await readTextFile(source.path);
+      const loadedSource = await loadDsregcmdSource("file", source.path);
       return {
-        rawInput,
-        resolvedPath: source.path,
-        evidenceFilePath: source.path,
+        rawInput: loadedSource.input,
+        resolvedPath: loadedSource.resolvedPath,
+        evidenceFilePath: loadedSource.evidenceFilePath,
+        bundleRootPath: loadedSource.bundlePath,
       };
     }
     case "folder": {
-      const evidenceFilePath = await resolveFolderEvidenceFilePath(source.path);
-      const rawInput = await readTextFile(evidenceFilePath);
+      const loadedSource = await loadDsregcmdSource("folder", source.path);
       return {
-        rawInput,
-        resolvedPath: evidenceFilePath,
-        evidenceFilePath,
+        rawInput: loadedSource.input,
+        resolvedPath: loadedSource.resolvedPath,
+        evidenceFilePath: loadedSource.evidenceFilePath,
+        bundleRootPath: loadedSource.bundlePath,
       };
     }
     case "clipboard": {
@@ -101,14 +72,16 @@ async function readDsregcmdSource(source: DsregcmdSourceDescriptor): Promise<{
         rawInput,
         resolvedPath: null,
         evidenceFilePath: null,
+        bundleRootPath: null,
       };
     }
     case "capture": {
-      const rawInput = await captureDsregcmd();
+      const captureResult = await captureDsregcmd();
       return {
-        rawInput,
-        resolvedPath: null,
-        evidenceFilePath: null,
+        rawInput: captureResult.input,
+        resolvedPath: captureResult.evidenceFilePath,
+        evidenceFilePath: captureResult.evidenceFilePath,
+        bundleRootPath: captureResult.bundlePath,
       };
     }
     case "text": {
@@ -130,7 +103,7 @@ export async function analyzeDsregcmdText(
       throw new Error("dsregcmd input was empty.");
     }
 
-    const result = await analyzeDsregcmd(input);
+    const result = await analyzeDsregcmd(input, null);
     const context = buildSourceContext(source, input, null, null);
     useDsregcmdStore.getState().setResults(input, result, context);
     return result;
@@ -147,13 +120,17 @@ export async function analyzeDsregcmdSource(
   store.beginAnalysis(source, "path" in source ? source.path : null);
 
   try {
-    const { rawInput, resolvedPath, evidenceFilePath } = await readDsregcmdSource(source);
+    const { rawInput, resolvedPath, evidenceFilePath, bundleRootPath } =
+      await readDsregcmdSource(source);
 
     if (!rawInput.trim()) {
       throw new Error("The selected dsregcmd source did not contain any text.");
     }
 
-    const result = await analyzeDsregcmd(rawInput);
+    const result = await analyzeDsregcmd(
+      rawInput,
+      bundleRootPath
+    );
     const context = buildSourceContext(source, rawInput, resolvedPath, evidenceFilePath);
     useDsregcmdStore.getState().setResults(rawInput, result, context);
     return result;
@@ -168,14 +145,6 @@ export async function analyzeDsregcmdPath(
   options: { fallbackToFolder?: boolean } = {}
 ): Promise<DsregcmdAnalysisResult> {
   try {
-    const fileInfo = await stat(path);
-    if (fileInfo.isDirectory) {
-      return analyzeDsregcmdSource({ kind: "folder", path });
-    }
-    if (fileInfo.isFile) {
-      return analyzeDsregcmdSource({ kind: "file", path });
-    }
-
     return analyzeDsregcmdSource({ kind: "file", path });
   } catch (error) {
     if (options.fallbackToFolder === false) {
