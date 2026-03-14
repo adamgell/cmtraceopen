@@ -15,6 +15,10 @@ import {
   COLUMN_NAMES,
   getLogViewGridTemplateColumns,
 } from "../../lib/constants";
+import {
+  getLogListMetrics,
+  LOG_UI_FONT_FAMILY,
+} from "../../lib/log-accessibility";
 
 export function LogListView() {
   const entries = useLogStore((s) => s.entries);
@@ -24,6 +28,10 @@ export function LogListView() {
   const highlightCaseSensitive = useLogStore((s) => s.highlightCaseSensitive);
   const isPaused = useLogStore((s) => s.isPaused);
   const showDetails = useUiStore((s) => s.showDetails);
+  const logListFontSize = useUiStore((s) => s.logListFontSize);
+  const logSeverityPaletteMode = useUiStore(
+    (s) => s.logSeverityPaletteMode
+  );
   const filteredIds = useFilterStore((s) => s.filteredIds);
 
   const [hasKeyboardFocus, setHasKeyboardFocus] = useState(false);
@@ -45,11 +53,15 @@ export function LogListView() {
     () => getLogViewGridTemplateColumns(showDetails),
     [showDetails]
   );
+  const listMetrics = useMemo(
+    () => getLogListMetrics(logListFontSize),
+    [logListFontSize]
+  );
 
   const virtualizer = useVirtualizer({
     count: displayEntries.length,
     getScrollElement: () => parentRef.current,
-    estimateSize: () => 22,
+    estimateSize: () => listMetrics.rowHeight,
     overscan: 20,
   });
 
@@ -139,10 +151,10 @@ export function LogListView() {
           gridTemplateColumns,
           backgroundColor: "#f0f0f0",
           borderBottom: "2px solid #c0c0c0",
-          fontSize: "13px",
+          fontSize: `${listMetrics.headerFontSize}px`,
           fontWeight: "bold",
-          fontFamily: "'Segoe UI', Tahoma, sans-serif",
-          lineHeight: "24px",
+          fontFamily: LOG_UI_FONT_FAMILY,
+          lineHeight: `${listMetrics.headerLineHeight}px`,
           whiteSpace: "nowrap",
           flexShrink: 0,
           boxSizing: "border-box",
@@ -241,6 +253,9 @@ export function LogListView() {
                   rowDomId={`log-list-row-${entry.id}`}
                   isSelected={entry.id === selectedId}
                   showDetails={showDetails}
+                  listFontSize={listMetrics.fontSize}
+                  rowLineHeight={listMetrics.rowLineHeight}
+                  severityPaletteMode={logSeverityPaletteMode}
                   highlightText={highlightText}
                   highlightCaseSensitive={highlightCaseSensitive}
                   onClick={selectEntry}

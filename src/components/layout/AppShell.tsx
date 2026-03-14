@@ -9,6 +9,7 @@ import { FindDialog } from "../dialogs/FindDialog";
 import { FilterDialog } from "../dialogs/FilterDialog";
 import { ErrorLookupDialog } from "../dialogs/ErrorLookupDialog";
 import { AboutDialog } from "../dialogs/AboutDialog";
+import { AccessibilityDialog } from "../dialogs/AccessibilityDialog";
 import { FileAssociationPromptDialog } from "../dialogs/FileAssociationPromptDialog";
 import { IntuneDashboard } from "../intune/IntuneDashboard";
 import { DsregcmdWorkspace } from "../dsregcmd/DsregcmdWorkspace";
@@ -41,6 +42,9 @@ export function AppShell() {
   const showFilterDialog = useUiStore((s) => s.showFilterDialog);
   const showErrorLookupDialog = useUiStore((s) => s.showErrorLookupDialog);
   const showAboutDialog = useUiStore((s) => s.showAboutDialog);
+  const showAccessibilityDialog = useUiStore(
+    (s) => s.showAccessibilityDialog
+  );
   const showFileAssociationPrompt = useUiStore(
     (s) => s.showFileAssociationPrompt
   );
@@ -50,6 +54,9 @@ export function AppShell() {
     (s) => s.setShowErrorLookupDialog
   );
   const setShowAboutDialog = useUiStore((s) => s.setShowAboutDialog);
+  const setShowAccessibilityDialog = useUiStore(
+    (s) => s.setShowAccessibilityDialog
+  );
   const setShowFileAssociationPrompt = useUiStore(
     (s) => s.setShowFileAssociationPrompt
   );
@@ -263,6 +270,10 @@ export function AppShell() {
       <AboutDialog
         isOpen={showAboutDialog}
         onClose={() => setShowAboutDialog(false)}
+      />
+      <AccessibilityDialog
+        isOpen={showAccessibilityDialog}
+        onClose={() => setShowAccessibilityDialog(false)}
       />
       <FileAssociationPromptDialog
         isOpen={showFileAssociationPrompt}

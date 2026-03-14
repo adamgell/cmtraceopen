@@ -160,6 +160,10 @@ export interface AppActionHandlers {
   showFilterDialog: () => void;
   showErrorLookupDialog: () => void;
   showAboutDialog: () => void;
+  showAccessibilityDialog: () => void;
+  increaseLogListTextSize: () => void;
+  decreaseLogListTextSize: () => void;
+  resetLogListTextSize: () => void;
   togglePauseResume: () => void;
   refreshActiveSource: () => Promise<void>;
   toggleDetailsPane: () => void;
@@ -216,6 +220,16 @@ export function useAppActions(): AppActionHandlers {
     (s) => s.setShowErrorLookupDialog
   );
   const setShowAboutDialog = useUiStore((s) => s.setShowAboutDialog);
+  const setShowAccessibilityDialog = useUiStore(
+    (s) => s.setShowAccessibilityDialog
+  );
+  const increaseLogListFontSize = useUiStore(
+    (s) => s.increaseLogListFontSize
+  );
+  const decreaseLogListFontSize = useUiStore(
+    (s) => s.decreaseLogListFontSize
+  );
+  const resetLogListFontSize = useUiStore((s) => s.resetLogListFontSize);
 
   const activeFilterCount = useFilterStore((s) => s.clauses.length);
   const isFiltering = useFilterStore((s) => s.isFiltering);
@@ -544,6 +558,22 @@ export function useAppActions(): AppActionHandlers {
     setShowAboutDialog(true);
   }, [setShowAboutDialog]);
 
+  const showAccessibilityDialog = useCallback(() => {
+    setShowAccessibilityDialog(true);
+  }, [setShowAccessibilityDialog]);
+
+  const increaseLogListTextSize = useCallback(() => {
+    increaseLogListFontSize();
+  }, [increaseLogListFontSize]);
+
+  const decreaseLogListTextSize = useCallback(() => {
+    decreaseLogListFontSize();
+  }, [decreaseLogListFontSize]);
+
+  const resetLogListTextSize = useCallback(() => {
+    resetLogListFontSize();
+  }, [resetLogListFontSize]);
+
   const togglePauseResume = useCallback(() => {
     if (!commandState.canPauseResume) {
       return;
@@ -619,6 +649,10 @@ export function useAppActions(): AppActionHandlers {
     showFilterDialog,
     showErrorLookupDialog,
     showAboutDialog,
+    showAccessibilityDialog,
+    increaseLogListTextSize,
+    decreaseLogListTextSize,
+    resetLogListTextSize,
     togglePauseResume,
     refreshActiveSource,
     toggleDetailsPane,
