@@ -545,9 +545,7 @@ mod tests {
 
     #[test]
     fn test_parse_ime_entries_parses_attributes_without_regex_map_overhead() {
-        let content = concat!(
-            "<![LOG[Case-insensitive attribute parse]LOG]!><THREAD=\"50\" TYPE=\"3\" context=\"\" COMPONENT=\"HealthScripts\" DATE=\"3-12-2026\" TIME=\"11:16:42.3322734\" FILE=\"script.ps1\">"
-        );
+        let content = "<![LOG[Case-insensitive attribute parse]LOG]!><THREAD=\"50\" TYPE=\"3\" context=\"\" COMPONENT=\"HealthScripts\" DATE=\"3-12-2026\" TIME=\"11:16:42.3322734\" FILE=\"script.ps1\">";
 
         let (entries, parse_errors) = parse_ime_entries(content, "HealthScripts.log");
 
