@@ -87,6 +87,35 @@ interface UiState {
 
 const DEFAULT_WORKSPACE: WorkspaceId = "log";
 
+const sanitizePersistedUiState = (
+  state: Partial<UiState>
+): Partial<UiState> => {
+  const sanitized: Partial<UiState> = { ...state };
+
+  if (sanitized.logListFontSize !== undefined) {
+    const raw = Number(sanitized.logListFontSize);
+    const base = Number.isFinite(raw) ? raw : DEFAULT_LOG_LIST_FONT_SIZE;
+    sanitized.logListFontSize = clampLogListFontSize(base);
+  }
+
+  if (sanitized.logDetailsFontSize !== undefined) {
+    const raw = Number(sanitized.logDetailsFontSize);
+    const base = Number.isFinite(raw) ? raw : DEFAULT_LOG_DETAILS_FONT_SIZE;
+    sanitized.logDetailsFontSize = clampLogDetailsFontSize(base);
+  }
+
+  if (sanitized.logSeverityPaletteMode !== undefined) {
+    const validModes: LogSeverityPaletteMode[] = ["classic"];
+    const mode = sanitized.logSeverityPaletteMode as LogSeverityPaletteMode;
+
+    if (!validModes.includes(mode)) {
+      sanitized.logSeverityPaletteMode = "classic";
+    }
+  }
+
+  return sanitized;
+};
+
 export const useUiStore = create<UiState>()(
   persist(
     (set, get) => ({
@@ -210,6 +239,15 @@ export const useUiStore = create<UiState>()(
         logDetailsFontSize: state.logDetailsFontSize,
         logSeverityPaletteMode: state.logSeverityPaletteMode,
       }),
+      merge: (persistedState, currentState) => {
+        const sanitized = sanitizePersistedUiState(
+          persistedState as Partial<UiState>
+        );
+        return {
+          ...currentState,
+          ...sanitized,
+        };
+      },
     }
   )
 );
