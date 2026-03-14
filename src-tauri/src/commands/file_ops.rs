@@ -181,6 +181,19 @@ pub fn write_text_output_file(path: String, contents: String) -> Result<(), Stri
         .map_err(|error| format!("failed to write file {}: {}", path, error))
 }
 
+/// Returns the file path passed as a CLI argument at startup via OS file association.
+///
+/// When the user opens a `.log` or `.lo_` file with CMTrace Open (e.g. by
+/// double-clicking it in Explorer or right-clicking and choosing "Open with"),
+/// the OS launches the application with the file path as a command-line
+/// argument. This command retrieves that path so the frontend can open it.
+/// The path is consumed on the first call so it is only processed once.
+#[tauri::command]
+pub fn get_initial_file_path(state: State<'_, AppState>) -> Result<Option<String>, String> {
+    let mut guard = state.initial_file_path.lock().map_err(|e| e.to_string())?;
+    Ok(guard.take())
+}
+
 fn normalize_path_string(path: &Path) -> String {
     path.to_string_lossy().to_string()
 }

@@ -13,6 +13,12 @@ import type {
   DsregcmdResolvedSource,
 } from "../types/dsregcmd";
 
+export interface FileAssociationPromptStatus {
+  supported: boolean;
+  shouldPrompt: boolean;
+  isAssociated: boolean;
+}
+
 export async function openLogFile(path: string): Promise<ParseResult> {
   return invoke<ParseResult>("open_log_file", { path });
 }
@@ -118,4 +124,22 @@ export async function loadDsregcmdSource(
     kind,
     path,
   });
+}
+
+export async function getInitialFilePath(): Promise<string | null> {
+  return invoke<string | null>("get_initial_file_path");
+}
+
+export async function getFileAssociationPromptStatus(): Promise<FileAssociationPromptStatus> {
+  return invoke<FileAssociationPromptStatus>("get_file_association_prompt_status");
+}
+
+export async function associateLogFilesWithApp(): Promise<void> {
+  return invoke("associate_log_files_with_app");
+}
+
+export async function setFileAssociationPromptSuppressed(
+  suppressed: boolean
+): Promise<void> {
+  return invoke("set_file_association_prompt_suppressed", { suppressed });
 }

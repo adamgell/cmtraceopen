@@ -109,6 +109,9 @@ export function useKeyboard() {
     (state) => state.showErrorLookupDialog
   );
   const showAboutDialogOpen = useUiStore((state) => state.showAboutDialog);
+  const showFileAssociationPromptOpen = useUiStore(
+    (state) => state.showFileAssociationPrompt
+  );
   const {
     openSourceFileDialog,
     showFindDialog,
@@ -128,7 +131,8 @@ export function useKeyboard() {
         showFindDialogOpen ||
         showFilterDialogOpen ||
         showErrorLookupDialogOpen ||
-        showAboutDialogOpen;
+        showAboutDialogOpen ||
+        showFileAssociationPromptOpen;
 
       if (ctrl && event.key.toLowerCase() === "o") {
         event.preventDefault();
@@ -259,6 +263,7 @@ export function useKeyboard() {
     showErrorLookupDialogOpen,
     showFilterDialog,
     showFilterDialogOpen,
+    showFileAssociationPromptOpen,
     showFindDialog,
     showFindDialogOpen,
     toggleDetailsPane,

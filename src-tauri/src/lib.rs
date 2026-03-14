@@ -10,8 +10,20 @@ mod watcher;
 
 use state::app_state::AppState;
 
+/// Returns the first non-flag CLI argument as a potential file path.
+///
+/// When the OS opens the application via a file association (e.g. double-clicking
+/// a `.log` file), the file path is passed as the first positional argument.
+/// Flags (arguments starting with `-`) are skipped so that internal Tauri or
+/// platform arguments do not get misidentified as a file path.
+fn get_initial_file_path_from_args() -> Option<String> {
+    std::env::args().skip(1).find(|arg| !arg.starts_with('-'))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let initial_file_path = get_initial_file_path_from_args();
+
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
@@ -26,13 +38,17 @@ pub fn run() {
 
             Ok(())
         })
-        .manage(AppState::default())
+        .manage(AppState::new(initial_file_path))
         .invoke_handler(tauri::generate_handler![
+            commands::file_association::get_file_association_prompt_status,
+            commands::file_association::associate_log_files_with_app,
+            commands::file_association::set_file_association_prompt_suppressed,
             commands::file_ops::open_log_file,
             commands::file_ops::list_log_folder,
             commands::file_ops::get_known_log_sources,
             commands::file_ops::inspect_path_kind,
             commands::file_ops::write_text_output_file,
+            commands::file_ops::get_initial_file_path,
             commands::parsing::start_tail,
             commands::parsing::stop_tail,
             commands::parsing::pause_tail,
