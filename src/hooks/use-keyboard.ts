@@ -103,12 +103,16 @@ function navigateSelection(key: string): boolean {
  *   F5      → Refresh
  */
 export function useKeyboard() {
+  const activeView = useUiStore((state) => state.activeView);
   const showFindDialogOpen = useUiStore((state) => state.showFindDialog);
   const showFilterDialogOpen = useUiStore((state) => state.showFilterDialog);
   const showErrorLookupDialogOpen = useUiStore(
     (state) => state.showErrorLookupDialog
   );
   const showAboutDialogOpen = useUiStore((state) => state.showAboutDialog);
+  const showAccessibilityDialogOpen = useUiStore(
+    (state) => state.showAccessibilityDialog
+  );
   const showFileAssociationPromptOpen = useUiStore(
     (state) => state.showFileAssociationPrompt
   );
@@ -117,6 +121,9 @@ export function useKeyboard() {
     showFindDialog,
     showFilterDialog,
     showErrorLookupDialog,
+    increaseLogListTextSize,
+    decreaseLogListTextSize,
+    resetLogListTextSize,
     togglePauseResume,
     refreshActiveSource,
     toggleDetailsPane,
@@ -132,7 +139,30 @@ export function useKeyboard() {
         showFilterDialogOpen ||
         showErrorLookupDialogOpen ||
         showAboutDialogOpen ||
+        showAccessibilityDialogOpen ||
         showFileAssociationPromptOpen;
+
+      if (ctrl && !isInput && activeView === "log") {
+        const normalizedKey = event.key.toLowerCase();
+
+        if (normalizedKey === "=" || event.key === "+") {
+          event.preventDefault();
+          increaseLogListTextSize();
+          return;
+        }
+
+        if (normalizedKey === "-") {
+          event.preventDefault();
+          decreaseLogListTextSize();
+          return;
+        }
+
+        if (normalizedKey === "0") {
+          event.preventDefault();
+          resetLogListTextSize();
+          return;
+        }
+      }
 
       if (ctrl && event.key.toLowerCase() === "o") {
         event.preventDefault();
@@ -255,9 +285,14 @@ export function useKeyboard() {
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [
+    activeView,
+    decreaseLogListTextSize,
     dismissTransientDialogs,
+    increaseLogListTextSize,
     openSourceFileDialog,
     refreshActiveSource,
+    resetLogListTextSize,
+    showAccessibilityDialogOpen,
     showAboutDialogOpen,
     showErrorLookupDialog,
     showErrorLookupDialogOpen,

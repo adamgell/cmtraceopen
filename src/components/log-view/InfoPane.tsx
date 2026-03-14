@@ -2,13 +2,20 @@ import {
   getParserSelectionDisplay,
   useLogStore,
 } from "../../stores/log-store";
+import { useUiStore } from "../../stores/ui-store";
+import {
+  getLogDetailsLineHeight,
+  LOG_MONOSPACE_FONT_FAMILY,
+} from "../../lib/log-accessibility";
 
 export function InfoPane() {
   const entries = useLogStore((state) => state.entries);
   const selectedId = useLogStore((state) => state.selectedId);
   const parserSelection = useLogStore((state) => state.parserSelection);
+  const logDetailsFontSize = useUiStore((state) => state.logDetailsFontSize);
 
   const parserDisplay = getParserSelectionDisplay(parserSelection);
+  const detailLineHeight = getLogDetailsLineHeight(logDetailsFontSize);
 
   const selectedEntry =
     selectedId !== null
@@ -20,8 +27,9 @@ export function InfoPane() {
       <div
         style={{
           padding: "8px",
-          fontFamily: "'Courier New', monospace",
-          fontSize: "13px",
+          fontFamily: LOG_MONOSPACE_FONT_FAMILY,
+          fontSize: `${logDetailsFontSize}px`,
+          lineHeight: `${detailLineHeight}px`,
           color: "#888",
           height: "100%",
           overflow: "auto",
@@ -40,8 +48,9 @@ export function InfoPane() {
     <div
       style={{
         padding: "8px",
-        fontFamily: "'Courier New', monospace",
-        fontSize: "13px",
+        fontFamily: LOG_MONOSPACE_FONT_FAMILY,
+        fontSize: `${logDetailsFontSize}px`,
+        lineHeight: `${detailLineHeight}px`,
         height: "100%",
         overflow: "auto",
         backgroundColor: "#fafafa",
@@ -57,7 +66,7 @@ export function InfoPane() {
           style={{
             marginBottom: "8px",
             color: "#666",
-            fontSize: "12px",
+            fontSize: `${Math.max(logDetailsFontSize - 1, 11)}px`,
           }}
         >
           {[
