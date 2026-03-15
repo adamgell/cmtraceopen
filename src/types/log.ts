@@ -128,6 +128,22 @@ export interface ParseResult {
   byteOffset: number;
 }
 
+export interface AggregateParsedFileResult {
+  filePath: string;
+  totalLines: number;
+  parseErrors: number;
+  fileSize: number;
+  byteOffset: number;
+}
+
+export interface AggregateParseResult {
+  entries: LogEntry[];
+  totalLines: number;
+  parseErrors: number;
+  folderPath: string;
+  files: AggregateParsedFileResult[];
+}
+
 /** Payload emitted by the Rust tail watcher */
 export interface TailPayload {
   entries: LogEntry[];

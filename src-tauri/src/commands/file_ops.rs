@@ -10,7 +10,8 @@ use tauri::State;
 use crate::dsregcmd::registry::{inspect_registry_snapshot_file, RegistrySnapshotSummary};
 use crate::intune::models::{EvidenceBundleArtifactCounts, EvidenceBundleMetadata};
 use crate::models::log_entry::{
-    ParseQuality, ParseResult, ParserKind, ParserSelectionInfo, ParserSpecialization,
+    AggregateParseResult, AggregateParsedFileResult, LogEntry, ParseQuality, ParseResult,
+    ParserKind, ParserSelectionInfo, ParserSpecialization,
 };
 use crate::parser;
 use crate::state::app_state::{AppState, OpenFile};
@@ -274,6 +275,76 @@ pub fn open_log_file(path: String, state: State<'_, AppState>) -> Result<ParseRe
     Ok(result)
 }
 
+/// Open and parse every file in a folder, returning one combined log stream.
+/// Stores backend parser selections in AppState so each included file can be tailed.
+#[tauri::command]
+pub fn open_log_folder_aggregate(
+    path: String,
+    state: State<'_, AppState>,
+) -> Result<AggregateParseResult, String> {
+    let listing = list_log_folder(path.clone())?;
+    let file_entries: Vec<&FolderEntry> = listing.entries.iter().filter(|entry| !entry.is_dir).collect();
+
+    let mut aggregate_entries: Vec<LogEntry> = Vec::new();
+    let mut aggregate_files = Vec::with_capacity(file_entries.len());
+    let mut open_file_states = Vec::with_capacity(file_entries.len());
+    let mut total_lines = 0u32;
+    let mut parse_errors = 0u32;
+
+    for entry in file_entries {
+        let (result, parser_selection) = parser::parse_file(&entry.path)?;
+
+        total_lines = total_lines.saturating_add(result.total_lines);
+        parse_errors = parse_errors.saturating_add(result.parse_errors);
+        aggregate_entries.extend(result.entries);
+        aggregate_files.push(AggregateParsedFileResult {
+            file_path: result.file_path.clone(),
+            total_lines: result.total_lines,
+            parse_errors: result.parse_errors,
+            file_size: result.file_size,
+            byte_offset: result.byte_offset,
+        });
+        open_file_states.push((
+            PathBuf::from(&result.file_path),
+            parser_selection,
+            result.byte_offset,
+        ));
+    }
+
+    let file_order: std::collections::HashMap<String, usize> = aggregate_files
+        .iter()
+        .enumerate()
+        .map(|(index, file)| (file.file_path.clone(), index))
+        .collect();
+
+    aggregate_entries.sort_by(|left, right| compare_aggregate_entries(left, right, &file_order));
+
+    for (index, entry) in aggregate_entries.iter_mut().enumerate() {
+        entry.id = index as u64;
+    }
+
+    let mut open_files = state.open_files.lock().map_err(|e| e.to_string())?;
+    for (path_buf, parser_selection, byte_offset) in open_file_states {
+        open_files.insert(
+            path_buf.clone(),
+            OpenFile {
+                path: path_buf,
+                entries: vec![],
+                parser_selection,
+                byte_offset,
+            },
+        );
+    }
+
+    Ok(AggregateParseResult {
+        entries: aggregate_entries,
+        total_lines,
+        parse_errors,
+        folder_path: path,
+        files: aggregate_files,
+    })
+}
+
 #[tauri::command]
 pub fn inspect_path_kind(path: String) -> Result<PathKind, String> {
     let requested_path = PathBuf::from(&path);
@@ -333,6 +404,25 @@ fn compare_folder_entries(left: &FolderEntry, right: &FolderEntry) -> Ordering {
                 .then_with(|| left.name.cmp(&right.name))
                 .then_with(|| left.path.cmp(&right.path))
         }
+    }
+}
+
+fn compare_aggregate_entries(
+    left: &LogEntry,
+    right: &LogEntry,
+    file_order: &std::collections::HashMap<String, usize>,
+) -> Ordering {
+    match (left.timestamp, right.timestamp) {
+        (Some(left_ts), Some(right_ts)) if left_ts != right_ts => left_ts.cmp(&right_ts),
+        (Some(_), None) => Ordering::Less,
+        (None, Some(_)) => Ordering::Greater,
+        _ => file_order
+            .get(&left.file_path)
+            .copied()
+            .unwrap_or(usize::MAX)
+            .cmp(&file_order.get(&right.file_path).copied().unwrap_or(usize::MAX))
+            .then_with(|| left.line_number.cmp(&right.line_number))
+            .then_with(|| left.message.cmp(&right.message)),
     }
 }
 

@@ -329,6 +329,8 @@ function LogSidebar() {
   const activeSource = useLogStore((s) => s.activeSource);
   const sourceEntries = useLogStore((s) => s.sourceEntries);
   const bundleMetadata = useLogStore((s) => s.bundleMetadata);
+  const sourceOpenMode = useLogStore((s) => s.sourceOpenMode);
+  const aggregateFiles = useLogStore((s) => s.aggregateFiles);
   const selectedSourceFilePath = useLogStore((s) => s.selectedSourceFilePath);
   const openFilePath = useLogStore((s) => s.openFilePath);
   const isLoading = useLogStore((s) => s.isLoading);
@@ -348,7 +350,7 @@ function LogSidebar() {
     setLastFailedPath(null);
     setIsRefreshingSource(false);
     setRefreshErrorMessage(null);
-  }, [activeSource, selectedSourceFilePath]);
+  }, [activeSource, selectedSourceFilePath, sourceOpenMode]);
 
   const folderLike = isFolderLikeSource(activeSource);
   const sourcePath = getActiveSourcePath(activeSource);
@@ -549,7 +551,13 @@ function LogSidebar() {
             )}
             <SectionHeader
               title={`Files (${files.length})`}
-              caption={activeFilePath ? "Select a file to replace the active log view." : "Select a file to begin viewing log entries."}
+              caption={
+                sourceOpenMode === "aggregate-folder"
+                  ? "Folder is loaded as a merged aggregate view. Select a file to replace it with a single-file view."
+                  : activeFilePath
+                    ? "Select a file to replace the active log view."
+                    : "Select a file to begin viewing log entries."
+              }
             />
             {files.length === 0 ? (
               <EmptyState title="No files available" body="This source only returned folders." />
@@ -571,7 +579,9 @@ function LogSidebar() {
 
       {activeSource && folderLike && !activeFilePath && !isLoading && (
         <div style={{ padding: "8px 10px", borderTop: "1px solid #c0c0c0", backgroundColor: "#fafafa", fontSize: "11px", color: "#4b5563", fontFamily: "'Segoe UI', Tahoma, sans-serif" }}>
-          {sourceStatus.kind === "awaiting-file-selection"
+          {sourceOpenMode === "aggregate-folder"
+            ? `Merged folder view active across ${aggregateFiles.length} file${aggregateFiles.length === 1 ? "" : "s"}.`
+            : sourceStatus.kind === "awaiting-file-selection"
             ? sourceStatus.message
             : "Select a file to populate the main log list."}
         </div>

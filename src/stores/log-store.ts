@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import type {
+  AggregateParsedFileResult,
   EvidenceBundleMetadata,
   FolderEntry,
   KnownSourceMetadata,
@@ -45,6 +46,8 @@ export interface ParserSelectionDisplay {
   framingLabel: string;
   dateOrderLabel: string | null;
 }
+
+export type SourceOpenMode = "single-file" | "aggregate-folder" | null;
 
 type FindDirection = "forward" | "backward";
 
@@ -292,6 +295,41 @@ export function getParserSelectionDisplay(
   };
 }
 
+function buildAggregateFileOrder(files: AggregateParsedFileResult[]): Record<string, number> {
+  return Object.fromEntries(files.map((file, index) => [file.filePath, index]));
+}
+
+function compareMergedLogEntries(
+  left: LogEntry,
+  right: LogEntry,
+  fileOrder: Record<string, number>
+): number {
+  if (left.timestamp != null && right.timestamp != null && left.timestamp !== right.timestamp) {
+    return left.timestamp - right.timestamp;
+  }
+
+  if (left.timestamp != null && right.timestamp == null) {
+    return -1;
+  }
+
+  if (left.timestamp == null && right.timestamp != null) {
+    return 1;
+  }
+
+  const leftOrder = fileOrder[left.filePath] ?? Number.MAX_SAFE_INTEGER;
+  const rightOrder = fileOrder[right.filePath] ?? Number.MAX_SAFE_INTEGER;
+
+  if (leftOrder !== rightOrder) {
+    return leftOrder - rightOrder;
+  }
+
+  if (left.lineNumber !== right.lineNumber) {
+    return left.lineNumber - right.lineNumber;
+  }
+
+  return left.message.localeCompare(right.message);
+}
+
 function buildToolbarKnownSourceGroups(
   sources: KnownSourceMetadata[]
 ): KnownSourceToolbarGroup[] {
@@ -350,6 +388,7 @@ interface LogState {
   selectedId: number | null;
   isPaused: boolean;
   isLoading: boolean;
+  sourceOpenMode: SourceOpenMode;
   formatDetected: LogFormat | null;
   parserSelection: ParserSelectionInfo | null;
   totalLines: number;
@@ -367,6 +406,8 @@ interface LogState {
   knownSourceToolbarGroups: KnownSourceToolbarGroup[];
   /** Selected file inside the active source container. */
   selectedSourceFilePath: string | null;
+  /** Included files when the active source is loaded as an aggregate folder stream. */
+  aggregateFiles: AggregateParsedFileResult[];
   /** User-visible source loading/selection state. */
   sourceStatus: SourceStatus;
   highlightText: string;
@@ -386,7 +427,7 @@ interface LogState {
   selectEntry: (id: number | null) => void;
   togglePause: () => void;
   setLoading: (loading: boolean) => void;
-  setFormatDetected: (format: LogFormat) => void;
+  setFormatDetected: (format: LogFormat | null) => void;
   setParserSelection: (selection: ParserSelectionInfo | null) => void;
   setTotalLines: (count: number) => void;
   setOpenFilePath: (path: string | null) => void;
@@ -398,10 +439,13 @@ interface LogState {
   setSourceStatus: (status: SourceStatus) => void;
   clearSourceStatus: () => void;
   setByteOffset: (offset: number) => void;
+  setSourceOpenMode: (mode: SourceOpenMode) => void;
+  setAggregateFiles: (files: AggregateParsedFileResult[]) => void;
   setHighlightText: (text: string) => void;
   setHighlightCaseSensitive: (sensitive: boolean) => void;
   setFindQuery: (text: string) => void;
   setFindCaseSensitive: (sensitive: boolean) => void;
+  appendAggregateEntries: (filePath: string, entries: LogEntry[]) => void;
   findNext: (trigger: string) => boolean;
   findPrevious: (trigger: string) => boolean;
   clearFindStatus: () => void;
@@ -469,6 +513,7 @@ export const useLogStore = create<LogState>((set, get) => ({
   selectedId: null,
   isPaused: false,
   isLoading: false,
+  sourceOpenMode: null,
   formatDetected: null,
   parserSelection: null,
   totalLines: 0,
@@ -479,6 +524,7 @@ export const useLogStore = create<LogState>((set, get) => ({
   knownSources: [],
   knownSourceToolbarGroups: [],
   selectedSourceFilePath: null,
+  aggregateFiles: [],
   sourceStatus: {
     kind: "idle",
     message: "Ready",
@@ -513,12 +559,35 @@ export const useLogStore = create<LogState>((set, get) => ({
       entries: [...state.entries, ...newEntries],
       totalLines: state.totalLines + newEntries.length,
     })),
+  appendAggregateEntries: (filePath, newEntries) =>
+    set((state) => {
+      const nextId = state.entries.reduce(
+        (maxId, entry) => Math.max(maxId, entry.id),
+        -1
+      ) + 1;
+      const entriesWithIds = newEntries.map((entry, index) => ({
+        ...entry,
+        filePath,
+        id: nextId + index,
+      }));
+      const fileOrder = buildAggregateFileOrder(state.aggregateFiles);
+      const entries = [...state.entries, ...entriesWithIds].sort((left, right) =>
+        compareMergedLogEntries(left, right, fileOrder)
+      );
+
+      return {
+        entries,
+        totalLines: state.totalLines + entriesWithIds.length,
+      };
+    }),
   selectEntry: (id) => set({ selectedId: id }),
   togglePause: () => set((state) => ({ isPaused: !state.isPaused })),
   setLoading: (loading) => set({ isLoading: loading }),
   setFormatDetected: (format) => set({ formatDetected: format }),
   setParserSelection: (selection) => set({ parserSelection: selection }),
   setTotalLines: (count) => set({ totalLines: count }),
+  setSourceOpenMode: (mode) => set({ sourceOpenMode: mode }),
+  setAggregateFiles: (files) => set({ aggregateFiles: files }),
   setOpenFilePath: (path) =>
     set({ openFilePath: path, selectedSourceFilePath: path }),
   setActiveSource: (source) => set({ activeSource: source }),
@@ -563,11 +632,13 @@ export const useLogStore = create<LogState>((set, get) => ({
       entries: [],
       selectedId: null,
       isPaused: false,
+      sourceOpenMode: null,
       formatDetected: null,
       parserSelection: null,
       totalLines: 0,
       openFilePath: null,
       selectedSourceFilePath: null,
+      aggregateFiles: [],
       byteOffset: 0,
       findStatusText: "",
       findLastMatchId: null,
@@ -577,6 +648,7 @@ export const useLogStore = create<LogState>((set, get) => ({
       entries: [],
       selectedId: null,
       isPaused: false,
+      sourceOpenMode: null,
       formatDetected: null,
       parserSelection: null,
       totalLines: 0,
@@ -587,6 +659,7 @@ export const useLogStore = create<LogState>((set, get) => ({
       knownSources: [],
       knownSourceToolbarGroups: [],
       selectedSourceFilePath: null,
+      aggregateFiles: [],
       sourceStatus: {
         kind: "idle",
         message: "Ready",

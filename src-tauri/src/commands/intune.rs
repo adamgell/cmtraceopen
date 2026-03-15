@@ -3,8 +3,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
+use serde::Serialize;
 use serde_json::Value;
-use tauri::async_runtime;
+use tauri::{async_runtime, AppHandle, Emitter};
 
 use crate::error_db::lookup::lookup_error_code;
 use crate::intune::download_stats;
@@ -14,8 +15,8 @@ use crate::intune::models::{
     DownloadStat, EvidenceBundleArtifactCounts, EvidenceBundleMetadata, IntuneAnalysisResult,
     IntuneDiagnosticInsight, IntuneDiagnosticSeverity, IntuneDiagnosticsConfidence,
     IntuneDiagnosticsConfidenceLevel, IntuneDiagnosticsCoverage, IntuneDiagnosticsFileCoverage,
-    IntuneDominantSource, IntuneEvent, IntuneEventType, IntuneRepeatedFailureGroup,
-    IntuneStatus, IntuneSummary, IntuneTimestampBounds,
+    IntuneDominantSource, IntuneEvent, IntuneEventType, IntuneRepeatedFailureGroup, IntuneStatus,
+    IntuneSummary, IntuneTimestampBounds,
 };
 use crate::intune::timeline;
 
@@ -42,21 +43,53 @@ const DEFAULT_BUNDLE_PRIMARY_ENTRY_POINTS: &[&str] = &[
     "evidence/command-output",
 ];
 
+const INTUNE_ANALYSIS_PROGRESS_EVENT: &str = "intune-analysis-progress";
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct IntuneAnalysisProgressPayload {
+    request_id: String,
+    stage: &'static str,
+    message: String,
+    detail: Option<String>,
+    current_file: Option<String>,
+    completed_files: usize,
+    total_files: Option<usize>,
+}
+
 /// Analyze Intune Management Extension logs and return structured results.
 ///
 /// Supports either:
 /// - A single IME log file path
 /// - A directory containing IME logs (aggregated)
 #[tauri::command]
-pub async fn analyze_intune_logs(path: String) -> Result<IntuneAnalysisResult, String> {
-    async_runtime::spawn_blocking(move || analyze_intune_logs_blocking(path))
+pub async fn analyze_intune_logs(
+    path: String,
+    request_id: String,
+    app: AppHandle,
+) -> Result<IntuneAnalysisResult, String> {
+    async_runtime::spawn_blocking(move || analyze_intune_logs_blocking(path, request_id, app))
         .await
         .map_err(|error| format!("Intune analysis task failed: {}", error))?
 }
 
-fn analyze_intune_logs_blocking(path: String) -> Result<IntuneAnalysisResult, String> {
+fn analyze_intune_logs_blocking(
+    path: String,
+    request_id: String,
+    app: AppHandle,
+) -> Result<IntuneAnalysisResult, String> {
     let analysis_started = Instant::now();
     eprintln!("event=intune_analysis_start path=\"{}\"", path);
+    emit_analysis_progress(
+        &app,
+        &request_id,
+        "resolving",
+        "Resolving Intune source...".to_string(),
+        Some(path.clone()),
+        None,
+        0,
+        None,
+    );
 
     let input_path = Path::new(&path);
     let resolved_input = resolve_intune_input(input_path)?;
@@ -67,6 +100,21 @@ fn analyze_intune_logs_blocking(path: String) -> Result<IntuneAnalysisResult, St
         path,
         source_paths.len()
     );
+    let total_files = source_paths.len();
+    emit_analysis_progress(
+        &app,
+        &request_id,
+        "enumerating",
+        if total_files == 1 {
+            "Found 1 IME log file".to_string()
+        } else {
+            format!("Found {} IME log files", total_files)
+        },
+        Some(path.clone()),
+        None,
+        0,
+        Some(total_files),
+    );
 
     let source_files: Vec<String> = source_paths
         .iter()
@@ -76,11 +124,27 @@ fn analyze_intune_logs_blocking(path: String) -> Result<IntuneAnalysisResult, St
     let mut all_events = Vec::new();
     let mut all_downloads = Vec::new();
     let mut coverage = Vec::new();
+    let mut completed_files = 0usize;
 
-    for source_path in &source_paths {
+    for (index, source_path) in source_paths.iter().enumerate() {
         let file_started = Instant::now();
         let source_file = source_path.to_string_lossy().to_string();
         eprintln!("event=intune_analysis_file_start file=\"{}\"", source_file);
+        emit_analysis_progress(
+            &app,
+            &request_id,
+            "reading-file",
+            format!(
+                "Reading {} ({}/{})",
+                display_file_name(&source_file),
+                index + 1,
+                total_files
+            ),
+            Some(format_progress_detail(index, total_files, &source_file)),
+            Some(source_file.clone()),
+            completed_files,
+            Some(total_files),
+        );
         let content = fs::read_to_string(source_path)
             .map_err(|e| format!("Failed to read file '{}': {}", source_file, e))?;
 
@@ -103,6 +167,26 @@ fn analyze_intune_logs_blocking(path: String) -> Result<IntuneAnalysisResult, St
                 "event=intune_analysis_file_complete file=\"{}\" line_count=0 event_count=0 download_count=0 elapsed_ms={}",
                 source_file,
                 file_started.elapsed().as_millis()
+            );
+            completed_files += 1;
+            emit_analysis_progress(
+                &app,
+                &request_id,
+                "completed-file",
+                format!(
+                    "Indexed {} ({}/{})",
+                    display_file_name(&source_file),
+                    completed_files,
+                    total_files
+                ),
+                Some(format_progress_detail(
+                    completed_files,
+                    total_files,
+                    &source_file,
+                )),
+                Some(source_file.clone()),
+                completed_files,
+                Some(total_files),
             );
             continue;
         }
@@ -133,9 +217,45 @@ fn analyze_intune_logs_blocking(path: String) -> Result<IntuneAnalysisResult, St
             file_started.elapsed().as_millis()
         );
 
+        completed_files += 1;
+        emit_analysis_progress(
+            &app,
+            &request_id,
+            "completed-file",
+            format!(
+                "Indexed {} ({}/{})",
+                display_file_name(&source_file),
+                completed_files,
+                total_files
+            ),
+            Some(format_progress_detail(
+                completed_files,
+                total_files,
+                &source_file,
+            )),
+            Some(source_file.clone()),
+            completed_files,
+            Some(total_files),
+        );
+
         all_events.extend(file_events);
         all_downloads.extend(file_downloads);
     }
+
+    emit_analysis_progress(
+        &app,
+        &request_id,
+        "finalizing",
+        "Building Intune diagnostics view...".to_string(),
+        Some(if total_files == 0 {
+            path.clone()
+        } else {
+            format!("{} file(s) scanned", total_files)
+        }),
+        None,
+        completed_files,
+        Some(total_files),
+    );
 
     if all_events.is_empty() {
         let download_summary = summarize_download_signals(&[], &all_downloads);
@@ -159,12 +279,8 @@ fn analyze_intune_logs_blocking(path: String) -> Result<IntuneAnalysisResult, St
         let diagnostics = build_diagnostics(&[], &all_downloads, &summary);
         let diagnostics_coverage = finalize_coverage(coverage, &[], &all_downloads);
         let repeated_failures = build_repeated_failures(&[]);
-        let diagnostics_confidence = build_diagnostics_confidence(
-            &summary,
-            &diagnostics_coverage,
-            &repeated_failures,
-            &[],
-        );
+        let diagnostics_confidence =
+            build_diagnostics_confidence(&summary, &diagnostics_coverage, &repeated_failures, &[]);
 
         eprintln!(
             "event=intune_analysis_complete path=\"{}\" source_count={} event_count=0 download_count={} diagnostics_count={} elapsed_ms={}",
@@ -194,12 +310,8 @@ fn analyze_intune_logs_blocking(path: String) -> Result<IntuneAnalysisResult, St
     let diagnostics = build_diagnostics(&events, &all_downloads, &summary);
     let diagnostics_coverage = finalize_coverage(coverage, &events, &all_downloads);
     let repeated_failures = build_repeated_failures(&events);
-    let diagnostics_confidence = build_diagnostics_confidence(
-        &summary,
-        &diagnostics_coverage,
-        &repeated_failures,
-        &events,
-    );
+    let diagnostics_confidence =
+        build_diagnostics_confidence(&summary, &diagnostics_coverage, &repeated_failures, &events);
     let payload_chars: usize = events
         .iter()
         .map(|event| {
@@ -233,6 +345,46 @@ fn analyze_intune_logs_blocking(path: String) -> Result<IntuneAnalysisResult, St
         repeated_failures,
         evidence_bundle,
     })
+}
+
+fn emit_analysis_progress(
+    app: &AppHandle,
+    request_id: &str,
+    stage: &'static str,
+    message: String,
+    detail: Option<String>,
+    current_file: Option<String>,
+    completed_files: usize,
+    total_files: Option<usize>,
+) {
+    let payload = IntuneAnalysisProgressPayload {
+        request_id: request_id.to_string(),
+        stage,
+        message,
+        detail,
+        current_file,
+        completed_files,
+        total_files,
+    };
+
+    if let Err(error) = app.emit(INTUNE_ANALYSIS_PROGRESS_EVENT, payload) {
+        log::warn!("Failed to emit Intune analysis progress: {}", error);
+    }
+}
+
+fn format_progress_detail(completed_files: usize, total_files: usize, source_file: &str) -> String {
+    format!(
+        "{} of {} complete | {}",
+        completed_files, total_files, source_file
+    )
+}
+
+fn display_file_name(path: &str) -> String {
+    Path::new(path)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| path.to_string())
 }
 
 #[derive(Debug, Clone)]
@@ -325,8 +477,13 @@ fn finalize_coverage(
         }
     }
 
-    let files: Vec<IntuneDiagnosticsFileCoverage> = coverage.into_iter().map(|file| file.coverage).collect();
-    let timestamp_bounds = merge_timestamp_bounds(files.iter().filter_map(|file| file.timestamp_bounds.as_ref()));
+    let files: Vec<IntuneDiagnosticsFileCoverage> =
+        coverage.into_iter().map(|file| file.coverage).collect();
+    let timestamp_bounds = merge_timestamp_bounds(
+        files
+            .iter()
+            .filter_map(|file| file.timestamp_bounds.as_ref()),
+    );
     let has_rotated_logs = files.iter().any(|file| file.rotation_group.is_some());
     let dominant_source = build_dominant_source(&files, events, downloads);
 
@@ -545,32 +702,30 @@ fn is_rotation_suffix(value: &str) -> bool {
 fn build_repeated_failures(events: &[IntuneEvent]) -> Vec<IntuneRepeatedFailureGroup> {
     let mut groups: HashMap<String, RepeatedFailureAccumulator> = HashMap::new();
 
-    for event in events.iter().filter(|event| {
-        matches!(event.status, IntuneStatus::Failed | IntuneStatus::Timeout)
-    }) {
+    for event in events
+        .iter()
+        .filter(|event| matches!(event.status, IntuneStatus::Failed | IntuneStatus::Timeout))
+    {
         let reason = normalize_failure_reason(event);
         let subject_key = event
             .guid
             .clone()
             .unwrap_or_else(|| normalize_group_label(&event.name));
-        let key = format!(
-            "{:?}|{}|{}",
-            event.event_type,
-            subject_key,
-            reason.key
-        );
+        let key = format!("{:?}|{}|{}", event.event_type, subject_key, reason.key);
 
-        let entry = groups.entry(key).or_insert_with(|| RepeatedFailureAccumulator {
-            name: event.name.clone(),
-            event_type: event.event_type,
-            error_code: event.error_code.clone(),
-            occurrences: 0,
-            source_files: HashSet::new(),
-            sample_event_ids: Vec::new(),
-            earliest: None,
-            latest: None,
-            reason_display: reason.display.clone(),
-        });
+        let entry = groups
+            .entry(key)
+            .or_insert_with(|| RepeatedFailureAccumulator {
+                name: event.name.clone(),
+                event_type: event.event_type,
+                error_code: event.error_code.clone(),
+                occurrences: 0,
+                source_files: HashSet::new(),
+                sample_event_ids: Vec::new(),
+                earliest: None,
+                latest: None,
+                reason_display: reason.display.clone(),
+            });
 
         entry.occurrences += 1;
         entry.source_files.insert(event.source_file.clone());
@@ -660,7 +815,10 @@ fn normalize_failure_reason(event: &IntuneEvent) -> FailureReason {
         ("file not found", "file not found"),
         ("execution policy", "execution policy blocked execution"),
         ("digitally signed", "script signing blocked execution"),
-        ("running scripts is disabled", "script execution is disabled"),
+        (
+            "running scripts is disabled",
+            "script execution is disabled",
+        ),
         ("timed out", "timed out"),
         ("timeout", "timed out"),
         ("stalled", "stalled"),
@@ -811,7 +969,9 @@ fn build_diagnostics_confidence(
 
     if coverage.timestamp_bounds.is_some() {
         score += 0.1;
-        reasons.push("Parsed timestamps were available for the overall diagnostics window.".to_string());
+        reasons.push(
+            "Parsed timestamps were available for the overall diagnostics window.".to_string(),
+        );
     }
 
     if !repeated_failures.is_empty() {
@@ -824,7 +984,10 @@ fn build_diagnostics_confidence(
 
     if coverage.has_rotated_logs {
         score += 0.05;
-        reasons.push("Rotated log segments were available, which improves continuity across retries.".to_string());
+        reasons.push(
+            "Rotated log segments were available, which improves continuity across retries."
+                .to_string(),
+        );
     }
 
     if contributing_files <= 1 {
@@ -841,22 +1004,32 @@ fn build_diagnostics_confidence(
 
     if summary.total_events == 0 && summary.total_downloads > 0 {
         score -= 0.2;
-        reasons.push("Only download statistics were available; no correlated Intune events were extracted.".to_string());
+        reasons.push(
+            "Only download statistics were available; no correlated Intune events were extracted."
+                .to_string(),
+        );
     }
 
-    if summary.in_progress + summary.pending > summary.failed + summary.succeeded && summary.total_events > 0 {
+    if summary.in_progress + summary.pending > summary.failed + summary.succeeded
+        && summary.total_events > 0
+    {
         score -= 0.1;
         reasons.push("Most observed work is still pending or in progress, so the failure picture may be incomplete.".to_string());
     }
 
     if has_app_or_download_failures(events) && !has_source_kind(&coverage.files, "appworkload") {
         score -= 0.15;
-        reasons.push("AppWorkload evidence was not available for app or download failures.".to_string());
+        reasons.push(
+            "AppWorkload evidence was not available for app or download failures.".to_string(),
+        );
     }
 
     if has_policy_failures(events) && !has_source_kind(&coverage.files, "appactionprocessor") {
         score -= 0.15;
-        reasons.push("AppActionProcessor evidence was not available for applicability or policy failures.".to_string());
+        reasons.push(
+            "AppActionProcessor evidence was not available for applicability or policy failures."
+                .to_string(),
+        );
     }
 
     if has_script_failures(events)
@@ -899,7 +1072,8 @@ fn distinct_source_kinds(files: &[IntuneDiagnosticsFileCoverage]) -> usize {
 
 fn has_source_kind(files: &[IntuneDiagnosticsFileCoverage], kind: &str) -> bool {
     files.iter().any(|file| {
-        (file.event_count > 0 || file.download_count > 0) && source_kind_key(&file.file_path) == kind
+        (file.event_count > 0 || file.download_count > 0)
+            && source_kind_key(&file.file_path) == kind
     })
 }
 
@@ -929,7 +1103,9 @@ fn has_app_or_download_failures(events: &[IntuneEvent]) -> bool {
         matches!(event.status, IntuneStatus::Failed | IntuneStatus::Timeout)
             && matches!(
                 event.event_type,
-                IntuneEventType::Win32App | IntuneEventType::WinGetApp | IntuneEventType::ContentDownload
+                IntuneEventType::Win32App
+                    | IntuneEventType::WinGetApp
+                    | IntuneEventType::ContentDownload
             )
     })
 }
@@ -937,7 +1113,10 @@ fn has_app_or_download_failures(events: &[IntuneEvent]) -> bool {
 fn has_policy_failures(events: &[IntuneEvent]) -> bool {
     events.iter().any(|event| {
         event.event_type == IntuneEventType::PolicyEvaluation
-            && matches!(event.status, IntuneStatus::Failed | IntuneStatus::Timeout | IntuneStatus::Pending)
+            && matches!(
+                event.status,
+                IntuneStatus::Failed | IntuneStatus::Timeout | IntuneStatus::Pending
+            )
     })
 }
 
@@ -954,7 +1133,10 @@ fn has_script_failures(events: &[IntuneEvent]) -> bool {
 fn describe_path_access_error(path: &Path, error: &std::io::Error) -> String {
     match error.kind() {
         std::io::ErrorKind::NotFound => {
-            format!("The selected Intune source was not found: '{}'", path.display())
+            format!(
+                "The selected Intune source was not found: '{}'",
+                path.display()
+            )
         }
         std::io::ErrorKind::PermissionDenied => format!(
             "The selected Intune source could not be accessed because permission was denied: '{}'",
@@ -1016,7 +1198,8 @@ fn collect_input_paths(path: &Path) -> Result<Vec<PathBuf>, String> {
 }
 
 fn collect_directory_log_paths(path: &Path) -> Result<Vec<PathBuf>, String> {
-    let entries = fs::read_dir(path).map_err(|error| describe_directory_read_error(path, &error))?;
+    let entries =
+        fs::read_dir(path).map_err(|error| describe_directory_read_error(path, &error))?;
 
     let mut files: Vec<PathBuf> = entries
         .filter_map(|entry| entry.ok())
@@ -1268,7 +1451,8 @@ fn prioritize_ime_log_paths(candidates: Vec<PathBuf>) -> Vec<PathBuf> {
 }
 
 fn resolve_bundle_primary_entry_points(bundle_root: &Path, manifest: &Value) -> Vec<PathBuf> {
-    let manifest_entry_points = json_string_array_at(manifest, &["intakeHints", "primaryEntryPoints"]);
+    let manifest_entry_points =
+        json_string_array_at(manifest, &["intakeHints", "primaryEntryPoints"]);
     let entry_points = if manifest_entry_points.is_empty() {
         DEFAULT_BUNDLE_PRIMARY_ENTRY_POINTS
             .iter()
@@ -1343,16 +1527,15 @@ fn is_ime_related_log_file(path: &Path) -> bool {
     path.file_name()
         .map(|name| {
             let name = name.to_string_lossy().to_ascii_lowercase();
-            IME_LOG_PATTERNS.iter().any(|pattern| name.contains(pattern))
+            IME_LOG_PATTERNS
+                .iter()
+                .any(|pattern| name.contains(pattern))
         })
         .unwrap_or(false)
 }
 
 /// Build summary statistics from events and downloads.
-fn build_summary(
-    events: &[IntuneEvent],
-    downloads: &[DownloadStat],
-) -> IntuneSummary {
+fn build_summary(events: &[IntuneEvent], downloads: &[DownloadStat]) -> IntuneSummary {
     let summary_events: Vec<&IntuneEvent> = events
         .iter()
         .filter(|event| is_summary_signal_event(event))
@@ -1432,7 +1615,10 @@ fn is_summary_signal_event(event: &IntuneEvent) -> bool {
         | IntuneEventType::SyncSession => true,
         IntuneEventType::Other => matches!(
             event.status,
-            IntuneStatus::Failed | IntuneStatus::Timeout | IntuneStatus::Pending | IntuneStatus::InProgress
+            IntuneStatus::Failed
+                | IntuneStatus::Timeout
+                | IntuneStatus::Pending
+                | IntuneStatus::InProgress
         ),
     }
 }
@@ -1517,7 +1703,9 @@ fn download_signal_key_for_event(event: &IntuneEvent) -> Option<String> {
 }
 
 fn download_signal_key_for_stat(download: &DownloadStat) -> String {
-    if !download.content_id.trim().is_empty() && !download.content_id.eq_ignore_ascii_case("unknown") {
+    if !download.content_id.trim().is_empty()
+        && !download.content_id.eq_ignore_ascii_case("unknown")
+    {
         return format!("guid:{}", download.content_id.to_ascii_lowercase());
     }
 
@@ -1529,7 +1717,11 @@ fn download_signal_key_for_stat(download: &DownloadStat) -> String {
     format!(
         "timestamp:{}|result:{}",
         download.timestamp.as_deref().unwrap_or("unknown"),
-        if download.success { "success" } else { "failed" }
+        if download.success {
+            "success"
+        } else {
+            "failed"
+        }
     )
 }
 
@@ -1550,7 +1742,9 @@ fn upsert_download_signal(
 ) {
     let candidate_timestamp = timestamp.map(|value| value.to_string());
     let should_replace = match signals.get(&key) {
-        Some(existing) => should_replace_download_signal(existing, state, candidate_timestamp.as_deref()),
+        Some(existing) => {
+            should_replace_download_signal(existing, state, candidate_timestamp.as_deref())
+        }
         None => true,
     };
 
@@ -1573,14 +1767,21 @@ fn should_replace_download_signal(
     match compare_optional_timestamps(candidate_timestamp, existing.timestamp.as_deref()) {
         std::cmp::Ordering::Greater => true,
         std::cmp::Ordering::Less => false,
-        std::cmp::Ordering::Equal => download_signal_rank(candidate_state) >= download_signal_rank(existing.state),
+        std::cmp::Ordering::Equal => {
+            download_signal_rank(candidate_state) >= download_signal_rank(existing.state)
+        }
     }
 }
 
 fn compare_optional_timestamps(left: Option<&str>, right: Option<&str>) -> std::cmp::Ordering {
     match (left, right) {
-        (Some(left), Some(right)) => match (timeline::parse_timestamp(left), timeline::parse_timestamp(right)) {
-            (Some(left_time), Some(right_time)) => left_time.cmp(&right_time).then_with(|| left.cmp(right)),
+        (Some(left), Some(right)) => match (
+            timeline::parse_timestamp(left),
+            timeline::parse_timestamp(right),
+        ) {
+            (Some(left_time), Some(right_time)) => {
+                left_time.cmp(&right_time).then_with(|| left.cmp(right))
+            }
             _ => left.cmp(right),
         },
         (Some(_), None) => std::cmp::Ordering::Greater,
@@ -1614,8 +1815,10 @@ fn build_diagnostics(
     let install_failures: Vec<&IntuneEvent> = events
         .iter()
         .filter(|event| {
-            matches!(event.event_type, IntuneEventType::Win32App | IntuneEventType::WinGetApp)
-                && matches!(event.status, IntuneStatus::Failed | IntuneStatus::Timeout)
+            matches!(
+                event.event_type,
+                IntuneEventType::Win32App | IntuneEventType::WinGetApp
+            ) && matches!(event.status, IntuneStatus::Failed | IntuneStatus::Timeout)
                 && contains_any(
                     &event.detail,
                     &[
@@ -1663,7 +1866,11 @@ fn build_diagnostics(
         if let Some(stall) = stalled_download_evidence(&failed_download_events) {
             evidence.push(stall);
         }
-        evidence.extend(repeated_group_evidence(&failed_download_events, 2, "Repeated failed download pattern"));
+        evidence.extend(repeated_group_evidence(
+            &failed_download_events,
+            2,
+            "Repeated failed download pattern",
+        ));
 
         insights.push(IntuneDiagnosticInsight {
             id: "download-failures".to_string(),
@@ -1721,7 +1928,11 @@ fn build_diagnostics(
             timed_out_events.len()
         )];
         evidence.extend(top_event_labels(&timed_out_events, 2));
-        evidence.extend(repeated_group_evidence(&timed_out_events, 2, "Timeout loop"));
+        evidence.extend(repeated_group_evidence(
+            &timed_out_events,
+            2,
+            "Timeout loop",
+        ));
 
         let (title, summary) = if timeout_loops.is_empty() {
             (
@@ -1773,7 +1984,11 @@ fn build_diagnostics(
         )];
         evidence.extend(top_event_labels(&script_failures, 3));
         evidence.extend(top_event_detail_matches(&script_failures, 2));
-        evidence.extend(repeated_group_evidence(&script_failures, 2, "Recurring script failure"));
+        evidence.extend(repeated_group_evidence(
+            &script_failures,
+            2,
+            "Recurring script failure",
+        ));
         evidence.extend(script_scope_evidence(&script_failures));
         if let Some(error_hint) = &script_hint {
             evidence.push(format!(
@@ -1805,7 +2020,11 @@ fn build_diagnostics(
         )];
         evidence.extend(top_event_labels(&policy_events, 2));
         evidence.extend(top_event_detail_matches(&policy_events, 2));
-        evidence.extend(repeated_group_evidence(&policy_events, 2, "Repeated policy block"));
+        evidence.extend(repeated_group_evidence(
+            &policy_events,
+            2,
+            "Repeated policy block",
+        ));
         if let Some(reason) = applicability_reason_evidence(&policy_events) {
             evidence.push(reason);
         }
@@ -1914,7 +2133,13 @@ fn classify_download_failure_case(
         event.status == IntuneStatus::Timeout
             || contains_any(
                 &event.detail,
-                &["stalled", "not progressing", "no progress", "timed out", "timeout"],
+                &[
+                    "stalled",
+                    "not progressing",
+                    "no progress",
+                    "timed out",
+                    "timeout",
+                ],
             )
     }) {
         return DownloadFailureCase {
@@ -1943,10 +2168,12 @@ fn classify_download_failure_case(
         };
     }
 
-    if events
-        .iter()
-        .any(|event| contains_any(&event.detail, &["staging", "content cached", "cache location"]))
-    {
+    if events.iter().any(|event| {
+        contains_any(
+            &event.detail,
+            &["staging", "content cached", "cache location"],
+        )
+    }) {
         return DownloadFailureCase {
             title: "Content staging failed after download",
             summary: "The workload reached caching or staging, but the local handoff into install-ready content did not complete successfully.",
@@ -1970,7 +2197,10 @@ fn classify_download_failure_case(
         };
     }
 
-    if downloads.iter().any(|download| !download.success && download.do_percentage == 0.0) {
+    if downloads
+        .iter()
+        .any(|download| !download.success && download.do_percentage == 0.0)
+    {
         return DownloadFailureCase {
             title: "Content retrieval failed before local staging",
             summary: "The workload is failing during content acquisition rather than install, and the logs do not show healthy Delivery Optimization contribution.",
@@ -2068,9 +2298,10 @@ fn classify_script_failure_case(events: &[&IntuneEvent]) -> ScriptFailureCase {
         };
     }
 
-    if events.iter().any(|event| {
-        contains_any(&event.detail, &["parsererror", "syntax error", "exception"])
-    }) {
+    if events
+        .iter()
+        .any(|event| contains_any(&event.detail, &["parsererror", "syntax error", "exception"]))
+    {
         return ScriptFailureCase {
             title: "Script syntax or runtime errors detected",
             summary: "The script started but then failed because of a parser, command, or runtime error rather than a packaging or download issue.",
@@ -2127,10 +2358,12 @@ fn classify_policy_failure_case(events: &[&IntuneEvent]) -> PolicyFailureCase {
         };
     }
 
-    if events
-        .iter()
-        .any(|event| contains_any(&event.detail, &["detection rule", "detected", "already installed"]))
-    {
+    if events.iter().any(|event| {
+        contains_any(
+            &event.detail,
+            &["detection rule", "detected", "already installed"],
+        )
+    }) {
         return PolicyFailureCase {
             title: "Detection-state evidence blocked enforcement",
             summary: "AppActionProcessor indicates the deployment was evaluated, but detection-state logic made IME treat the app as already present or otherwise not needing enforcement.",
@@ -2203,7 +2436,11 @@ fn script_failure_suggested_fixes(
     if events.iter().any(|event| {
         contains_any(
             &event.detail,
-            &["execution policy", "digitally signed", "running scripts is disabled"],
+            &[
+                "execution policy",
+                "digitally signed",
+                "running scripts is disabled",
+            ],
         )
     }) {
         fixes.push(
@@ -2214,7 +2451,13 @@ fn script_failure_suggested_fixes(
     if events.iter().any(|event| {
         contains_any(
             &event.detail,
-            &["cannot find path", "path not found", "file not found", "module", "not recognized"],
+            &[
+                "cannot find path",
+                "path not found",
+                "file not found",
+                "module",
+                "not recognized",
+            ],
         )
     }) {
         fixes.push(
@@ -2222,7 +2465,9 @@ fn script_failure_suggested_fixes(
         );
     }
 
-    if events.iter().any(|event| event.status == IntuneStatus::Timeout)
+    if events
+        .iter()
+        .any(|event| event.status == IntuneStatus::Timeout)
         || !repeated_failure_groups(events, 2).is_empty()
     {
         fixes.push(
@@ -2280,7 +2525,12 @@ fn top_event_detail_matches(events: &[&IntuneEvent], limit: usize) -> Vec<String
 fn repeated_retry_evidence(events: &[&IntuneEvent]) -> Option<String> {
     let retry_count = events
         .iter()
-        .filter(|event| contains_any(&event.detail, &["retry", "retrying", "reattempt", "will retry"]))
+        .filter(|event| {
+            contains_any(
+                &event.detail,
+                &["retry", "retrying", "reattempt", "will retry"],
+            )
+        })
         .count();
 
     if retry_count > 0 {
@@ -2300,7 +2550,13 @@ fn stalled_download_evidence(events: &[&IntuneEvent]) -> Option<String> {
             event.status == IntuneStatus::Timeout
                 || contains_any(
                     &event.detail,
-                    &["stalled", "not progressing", "no progress", "timed out", "timeout"],
+                    &[
+                        "stalled",
+                        "not progressing",
+                        "no progress",
+                        "timed out",
+                        "timeout",
+                    ],
                 )
         })
         .count();
@@ -2330,14 +2586,17 @@ fn applicability_reason_evidence(events: &[&IntuneEvent]) -> Option<String> {
         .any(|event| contains_any(&event.detail, &["requirement rule", "requirements"]))
     {
         return Some(
-            "Requirement-rule evidence appears in the policy-evaluation flow for the affected app.".to_string(),
+            "Requirement-rule evidence appears in the policy-evaluation flow for the affected app."
+                .to_string(),
         );
     }
 
-    if events
-        .iter()
-        .any(|event| contains_any(&event.detail, &["detection rule", "already installed", "detected"]))
-    {
+    if events.iter().any(|event| {
+        contains_any(
+            &event.detail,
+            &["detection rule", "already installed", "detected"],
+        )
+    }) {
         return Some(
             "Detection-rule evidence appears to be short-circuiting enforcement for the affected app.".to_string(),
         );
@@ -2380,7 +2639,12 @@ fn repeated_group_evidence(
 ) -> Vec<String> {
     repeated_failure_groups(events, minimum_occurrences)
         .into_iter()
-        .map(|group| format!("{}: {} ({} occurrence(s)).", prefix, group.label, group.occurrences))
+        .map(|group| {
+            format!(
+                "{}: {} ({} occurrence(s)).",
+                prefix, group.label, group.occurrences
+            )
+        })
         .collect()
 }
 
@@ -2453,7 +2717,9 @@ fn normalize_group_label(value: &str) -> String {
 
 fn contains_any(value: &str, terms: &[&str]) -> bool {
     let normalized = value.to_ascii_lowercase();
-    terms.iter().any(|term| normalized.contains(&term.to_ascii_lowercase()))
+    terms
+        .iter()
+        .any(|term| normalized.contains(&term.to_ascii_lowercase()))
 }
 
 fn top_event_labels(events: &[&IntuneEvent], limit: usize) -> Vec<String> {
@@ -2481,9 +2747,9 @@ fn top_event_labels(events: &[&IntuneEvent], limit: usize) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_diagnostics, build_diagnostics_confidence, build_repeated_failures,
-        build_summary, build_timestamp_bounds, collect_input_paths, finalize_coverage,
-        resolve_intune_input, CoverageAccumulator,
+        build_diagnostics, build_diagnostics_confidence, build_repeated_failures, build_summary,
+        build_timestamp_bounds, collect_input_paths, finalize_coverage, resolve_intune_input,
+        CoverageAccumulator,
     };
     use crate::intune::models::{
         DownloadStat, IntuneDiagnosticSeverity, IntuneDiagnosticsConfidenceLevel,
@@ -2499,8 +2765,7 @@ mod tests {
 
         fs::write(test_dir.join("IntuneManagementExtension.log"), "primary")
             .expect("write primary log");
-        fs::write(test_dir.join("AppWorkload.log"), "sidecar")
-            .expect("write app workload log");
+        fs::write(test_dir.join("AppWorkload.log"), "sidecar").expect("write app workload log");
         fs::write(test_dir.join("AppActionProcessor.log"), "app actions")
             .expect("write app action processor log");
         fs::write(test_dir.join("AgentExecutor.log"), "executor")
@@ -2511,24 +2776,21 @@ mod tests {
             .expect("write client health log");
         fs::write(test_dir.join("ClientCertCheck.log"), "client cert")
             .expect("write client cert check log");
-        fs::write(
-            test_dir.join("DeviceHealthMonitoring.log"),
-            "device health",
-        )
-        .expect("write device health monitoring log");
-        fs::write(test_dir.join("Sensor.log"), "sensor")
-            .expect("write sensor log");
+        fs::write(test_dir.join("DeviceHealthMonitoring.log"), "device health")
+            .expect("write device health monitoring log");
+        fs::write(test_dir.join("Sensor.log"), "sensor").expect("write sensor log");
         fs::write(test_dir.join("Win32AppInventory.log"), "inventory")
             .expect("write win32 app inventory log");
-        fs::write(test_dir.join("ImeUI.log"), "ui")
-            .expect("write ime ui log");
-        fs::write(test_dir.join("random.log"), "other")
-            .expect("write unrelated log");
+        fs::write(test_dir.join("ImeUI.log"), "ui").expect("write ime ui log");
+        fs::write(test_dir.join("random.log"), "other").expect("write unrelated log");
 
         let collected = collect_input_paths(&test_dir).expect("collect input paths");
         let file_names: Vec<String> = collected
             .iter()
-            .filter_map(|path| path.file_name().map(|name| name.to_string_lossy().into_owned()))
+            .filter_map(|path| {
+                path.file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+            })
             .collect();
 
         assert_eq!(
@@ -2551,57 +2813,63 @@ mod tests {
         fs::remove_dir_all(&test_dir).expect("remove temp dir");
     }
 
-        #[test]
-        fn collect_input_paths_reads_bundle_logs_from_manifest_guided_entry_points() {
-                let bundle_dir = create_temp_dir("intune-bundle");
-                let logs_dir = bundle_dir.join("evidence").join("logs");
-                fs::create_dir_all(&logs_dir).expect("create logs dir");
-                fs::write(logs_dir.join("IntuneManagementExtension.log"), "primary")
-                        .expect("write primary log");
-                fs::write(logs_dir.join("AppWorkload.log"), "sidecar").expect("write sidecar");
-                fs::write(bundle_dir.join("manifest.json"), sample_bundle_manifest()).expect("write manifest");
+    #[test]
+    fn collect_input_paths_reads_bundle_logs_from_manifest_guided_entry_points() {
+        let bundle_dir = create_temp_dir("intune-bundle");
+        let logs_dir = bundle_dir.join("evidence").join("logs");
+        fs::create_dir_all(&logs_dir).expect("create logs dir");
+        fs::write(logs_dir.join("IntuneManagementExtension.log"), "primary")
+            .expect("write primary log");
+        fs::write(logs_dir.join("AppWorkload.log"), "sidecar").expect("write sidecar");
+        fs::write(bundle_dir.join("manifest.json"), sample_bundle_manifest())
+            .expect("write manifest");
 
-                let collected = collect_input_paths(&bundle_dir).expect("collect input paths");
-                let file_names: Vec<String> = collected
-                        .iter()
-                        .filter_map(|path| path.file_name().map(|name| name.to_string_lossy().into_owned()))
-                        .collect();
+        let collected = collect_input_paths(&bundle_dir).expect("collect input paths");
+        let file_names: Vec<String> = collected
+            .iter()
+            .filter_map(|path| {
+                path.file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+            })
+            .collect();
 
-                assert_eq!(
-                        file_names,
-                        vec![
-                                "IntuneManagementExtension.log".to_string(),
-                                "AppWorkload.log".to_string(),
-                        ]
-                );
+        assert_eq!(
+            file_names,
+            vec![
+                "IntuneManagementExtension.log".to_string(),
+                "AppWorkload.log".to_string(),
+            ]
+        );
 
-                fs::remove_dir_all(&bundle_dir).expect("remove temp bundle dir");
-        }
+        fs::remove_dir_all(&bundle_dir).expect("remove temp bundle dir");
+    }
 
-        #[test]
-        fn resolve_intune_input_retains_bundle_metadata_and_allows_sparse_bundle() {
-                let bundle_dir = create_temp_dir("intune-sparse-bundle");
-                fs::create_dir_all(bundle_dir.join("evidence").join("logs")).expect("create sparse logs dir");
-                fs::write(bundle_dir.join("notes.md"), "notes").expect("write notes");
-                fs::write(bundle_dir.join("manifest.json"), sample_bundle_manifest()).expect("write manifest");
+    #[test]
+    fn resolve_intune_input_retains_bundle_metadata_and_allows_sparse_bundle() {
+        let bundle_dir = create_temp_dir("intune-sparse-bundle");
+        fs::create_dir_all(bundle_dir.join("evidence").join("logs"))
+            .expect("create sparse logs dir");
+        fs::write(bundle_dir.join("notes.md"), "notes").expect("write notes");
+        fs::write(bundle_dir.join("manifest.json"), sample_bundle_manifest())
+            .expect("write manifest");
 
-                let resolved = resolve_intune_input(&bundle_dir).expect("resolve bundle input");
+        let resolved = resolve_intune_input(&bundle_dir).expect("resolve bundle input");
 
-                assert!(resolved.source_paths.is_empty());
-                let bundle = resolved.evidence_bundle.expect("bundle metadata");
-                assert_eq!(bundle.bundle_id.as_deref(), Some("CMTRACE-123"));
-                assert_eq!(bundle.device_name.as_deref(), Some("GELL-VM-5879648"));
-                assert_eq!(bundle.available_primary_entry_points.len(), 1);
-                assert!(bundle
-                        .available_primary_entry_points
-                        .iter()
-                        .any(|path| path.ends_with("evidence\\logs") || path.ends_with("evidence/logs")));
+        assert!(resolved.source_paths.is_empty());
+        let bundle = resolved.evidence_bundle.expect("bundle metadata");
+        assert_eq!(bundle.bundle_id.as_deref(), Some("CMTRACE-123"));
+        assert_eq!(bundle.device_name.as_deref(), Some("GELL-VM-5879648"));
+        assert_eq!(bundle.available_primary_entry_points.len(), 1);
+        assert!(bundle
+            .available_primary_entry_points
+            .iter()
+            .any(|path| path.ends_with("evidence\\logs") || path.ends_with("evidence/logs")));
 
-                fs::remove_dir_all(&bundle_dir).expect("remove temp sparse bundle dir");
-        }
+        fs::remove_dir_all(&bundle_dir).expect("remove temp sparse bundle dir");
+    }
 
-        fn sample_bundle_manifest() -> &'static str {
-                r#"{
+    fn sample_bundle_manifest() -> &'static str {
+        r#"{
     "bundle": {
         "bundleId": "CMTRACE-123",
         "bundleLabel": "intune-endpoint-evidence",
@@ -2654,7 +2922,7 @@ mod tests {
         }
     ]
 }"#
-        }
+    }
 
     fn create_temp_dir(prefix: &str) -> PathBuf {
         let unique = SystemTime::now()
@@ -2759,7 +3027,10 @@ mod tests {
         assert_eq!(diagnostics.len(), 4);
         assert_eq!(diagnostics[0].id, "download-failures");
         assert_eq!(diagnostics[0].severity, IntuneDiagnosticSeverity::Error);
-        assert_eq!(diagnostics[0].title, "Content hash or staging validation failed");
+        assert_eq!(
+            diagnostics[0].title,
+            "Content hash or staging validation failed"
+        );
         assert!(diagnostics[0]
             .evidence
             .iter()
@@ -2772,7 +3043,9 @@ mod tests {
         assert!(diagnostics
             .iter()
             .any(|item| item.id == "install-enforcement-failures"));
-        assert!(diagnostics.iter().any(|item| item.id == "policy-applicability"));
+        assert!(diagnostics
+            .iter()
+            .any(|item| item.id == "policy-applicability"));
 
         let install = diagnostics
             .iter()
@@ -2826,7 +3099,10 @@ mod tests {
         assert_eq!(repeated[0].occurrences, 2);
         assert_eq!(repeated[0].source_files.len(), 2);
         assert!(repeated[0].name.contains("Contoso App Install"));
-        assert!(repeated[0].name.contains("Access is denied") || repeated[0].name.contains("0x80070005"));
+        assert!(
+            repeated[0].name.contains("Access is denied")
+                || repeated[0].name.contains("0x80070005")
+        );
     }
 
     #[test]
@@ -2885,9 +3161,18 @@ mod tests {
         let finalized = finalize_coverage(coverage, &events, &downloads);
 
         assert!(finalized.has_rotated_logs);
-        assert_eq!(finalized.files[0].rotation_group.as_deref(), Some("appworkload"));
+        assert_eq!(
+            finalized.files[0].rotation_group.as_deref(),
+            Some("appworkload")
+        );
         assert!(finalized.files[1].is_rotated_segment);
-        assert_eq!(finalized.dominant_source.as_ref().map(|item| item.file_path.as_str()), Some("C:/Logs/AppWorkload.log"));
+        assert_eq!(
+            finalized
+                .dominant_source
+                .as_ref()
+                .map(|item| item.file_path.as_str()),
+            Some("C:/Logs/AppWorkload.log")
+        );
     }
 
     #[test]

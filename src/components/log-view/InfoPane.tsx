@@ -61,6 +61,9 @@ export function InfoPane() {
         {`Line ${selectedEntry.lineNumber} | ${selectedEntry.severity}${selectedEntry.component ? ` | ${selectedEntry.component}` : ""
           }${selectedEntry.timestampDisplay ? ` | ${selectedEntry.timestampDisplay}` : ""}`}
       </div>
+      <div style={{ marginBottom: "8px", color: "#666" }}>
+        {`File ${selectedEntry.filePath}`}
+      </div>
       {parserDisplay ? (
         <div
           style={{

@@ -148,3 +148,25 @@ pub struct ParseResult {
     /// Byte offset where parsing ended — used as the starting point for tailing
     pub byte_offset: u64,
 }
+
+/// Per-file parse metadata for an aggregated folder open.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AggregateParsedFileResult {
+    pub file_path: String,
+    pub total_lines: u32,
+    pub parse_errors: u32,
+    pub file_size: u64,
+    pub byte_offset: u64,
+}
+
+/// Result of parsing every file in a folder into one combined view.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AggregateParseResult {
+    pub entries: Vec<LogEntry>,
+    pub total_lines: u32,
+    pub parse_errors: u32,
+    pub folder_path: String,
+    pub files: Vec<AggregateParsedFileResult>,
+}

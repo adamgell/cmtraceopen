@@ -2,6 +2,7 @@ import { create } from "zustand";
 import type { EvidenceBundleMetadata } from "../types/evidence";
 import type {
   DownloadStat,
+  IntuneAnalysisProgressEvent,
   IntuneAnalysisSourceKind,
   IntuneAnalysisState,
   IntuneDiagnosticInsight,
@@ -139,9 +140,11 @@ const defaultAnalysisState: IntuneAnalysisState = {
   phase: "idle",
   requestedPath: null,
   requestedKind: null,
+  requestId: null,
   message: "Choose an Intune log file or folder to analyze.",
   detail: null,
   lastError: null,
+  progress: null,
 };
 
 interface IntuneState {
@@ -168,8 +171,10 @@ interface IntuneState {
 
   beginAnalysis: (
     requestedPath: string | null,
-    requestedKind?: IntuneAnalysisSourceKind
+    requestedKind?: IntuneAnalysisSourceKind,
+    requestId?: string | null
   ) => void;
+  updateAnalysisProgress: (progress: IntuneAnalysisProgressEvent) => void;
   setResults: (
     events: IntuneEvent[],
     downloads: DownloadStat[],
@@ -215,7 +220,7 @@ export const useIntuneStore = create<IntuneState>((set) => ({
   timelineScope: emptyTimelineScope,
   ...defaultInteractionState,
 
-  beginAnalysis: (requestedPath, requestedKind = "unknown") =>
+  beginAnalysis: (requestedPath, requestedKind = "unknown", requestId = null) =>
     set({
       events: [],
       downloads: [],
@@ -233,16 +238,47 @@ export const useIntuneStore = create<IntuneState>((set) => ({
         phase: "analyzing",
         requestedPath,
         requestedKind,
+        requestId,
         message:
           requestedKind === "folder"
             ? "Analyzing Intune folder..."
             : "Analyzing Intune log source...",
         detail: requestedPath,
         lastError: null,
+        progress: null,
       },
       sourceSelection: buildSourceSelection(null),
       timelineScope: emptyTimelineScope,
       ...defaultInteractionState,
+    }),
+
+  updateAnalysisProgress: (progress) =>
+    set((state) => {
+      if (state.analysisState.phase !== "analyzing") {
+        return state;
+      }
+
+      if (
+        state.analysisState.requestId != null &&
+        state.analysisState.requestId !== progress.requestId
+      ) {
+        return state;
+      }
+
+      return {
+        analysisState: {
+          ...state.analysisState,
+          requestId: progress.requestId,
+          message: progress.message,
+          detail: progress.detail,
+          progress: {
+            stage: progress.stage,
+            currentFile: progress.currentFile,
+            completedFiles: progress.completedFiles,
+            totalFiles: progress.totalFiles,
+          },
+        },
+      };
     }),
 
   setResults: (events, downloads, summary, diagnostics, sourceFile, sourceFiles, metadata) =>
@@ -275,12 +311,14 @@ export const useIntuneStore = create<IntuneState>((set) => ({
           phase: "ready",
           requestedPath: state.analysisState.requestedPath ?? sourceFile,
           requestedKind,
+          requestId: null,
           message:
             sourceFiles.length > 1
               ? `Analysis complete (${sourceFiles.length} files)`
               : "Analysis complete",
           detail: sourceFile,
           lastError: null,
+          progress: null,
         },
         resultRevision: state.resultRevision + 1,
         sourceSelection: buildSourceSelection(null),
@@ -301,7 +339,9 @@ export const useIntuneStore = create<IntuneState>((set) => ({
         analysisState: {
           requestedPath: state.analysisState.requestedPath,
           requestedKind: state.analysisState.requestedKind,
+          requestId: null,
           ...failureState,
+          progress: null,
         },
       };
     }),

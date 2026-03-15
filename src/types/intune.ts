@@ -165,13 +165,35 @@ export type IntuneAnalysisPhase = "idle" | "analyzing" | "ready" | "empty" | "er
 
 export type IntuneAnalysisSourceKind = "file" | "folder" | "known" | "unknown";
 
+export type IntuneAnalysisProgressStage =
+  | "resolving"
+  | "enumerating"
+  | "reading-file"
+  | "completed-file"
+  | "finalizing";
+
+export interface IntuneAnalysisProgress {
+  stage: IntuneAnalysisProgressStage;
+  currentFile: string | null;
+  completedFiles: number;
+  totalFiles: number | null;
+}
+
+export interface IntuneAnalysisProgressEvent extends IntuneAnalysisProgress {
+  requestId: string;
+  message: string;
+  detail: string | null;
+}
+
 export interface IntuneAnalysisState {
   phase: IntuneAnalysisPhase;
   requestedPath: string | null;
   requestedKind: IntuneAnalysisSourceKind | null;
+  requestId: string | null;
   message: string;
   detail: string | null;
   lastError: string | null;
+  progress: IntuneAnalysisProgress | null;
 }
 
 export interface IntuneAnalysisResult {

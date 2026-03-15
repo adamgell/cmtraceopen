@@ -2,11 +2,13 @@ import {
   getKnownLogSources,
   listLogSourceFolder,
   openLogFile,
+  openLogSourceFolderAggregate,
   openLogSourceFile,
   stopTail,
 } from "./commands";
 import { useLogStore } from "../stores/log-store";
 import type {
+  AggregateParseResult,
   FolderEntry,
   KnownSourceMetadata,
   LogSource,
@@ -224,22 +226,32 @@ export function getLogSourcePath(source: LogSource): string {
 }
 
 async function stopCurrentTailIfNeeded(nextFilePath: string | null): Promise<void> {
-  const currentPath = useLogStore.getState().openFilePath;
+  const state = useLogStore.getState();
+  const currentPaths =
+    state.sourceOpenMode === "aggregate-folder"
+      ? state.aggregateFiles.map((file) => file.filePath)
+      : state.openFilePath
+        ? [state.openFilePath]
+        : [];
 
-  if (!currentPath) {
+  if (currentPaths.length === 0) {
     return;
   }
 
-  if (nextFilePath && currentPath === nextFilePath) {
+  if (nextFilePath && currentPaths.length === 1 && currentPaths[0] === nextFilePath) {
     return;
   }
 
-  await stopTail(currentPath).catch((error) => {
-    console.warn("[log-source] failed to stop current tail", {
-      currentPath,
-      error,
-    });
-  });
+  await Promise.all(
+    currentPaths.map((currentPath) =>
+      stopTail(currentPath).catch((error) => {
+        console.warn("[log-source] failed to stop current tail", {
+          currentPath,
+          error,
+        });
+      })
+    )
+  );
 }
 
 function applyParseResultToStore(
@@ -251,6 +263,8 @@ function applyParseResultToStore(
 
   state.setActiveSource(source);
   state.setSelectedSourceFilePath(selectedFilePath);
+  state.setSourceOpenMode("single-file");
+  state.setAggregateFiles([]);
   state.setEntries(result.entries);
   state.setFormatDetected(result.formatDetected);
   state.setParserSelection(result.parserSelection);
@@ -269,6 +283,38 @@ function clearSelectedFileState(source: LogSource, entries: FolderEntry[]): void
   state.setActiveSource(source);
   state.setSourceEntries(entries);
   state.clearActiveFile();
+}
+
+function applyAggregateParseResultToStore(
+  source: LogSource,
+  entries: FolderEntry[],
+  result: AggregateParseResult
+): void {
+  const state = useLogStore.getState();
+
+  state.setActiveSource(source);
+  state.setSourceEntries(entries);
+  state.setSelectedSourceFilePath(null);
+  state.setSourceOpenMode("aggregate-folder");
+  state.setAggregateFiles(result.files);
+  state.setEntries(result.entries);
+  state.setFormatDetected(null);
+  state.setParserSelection(null);
+  state.setTotalLines(result.totalLines);
+  state.setByteOffset(0);
+  state.selectEntry(null);
+  state.setSourceStatus(
+    result.files.length === 0
+      ? {
+        kind: "empty",
+        message: "Source loaded, but no files were found.",
+      }
+      : {
+        kind: "loaded",
+        message: `Loaded ${result.files.length} file${result.files.length === 1 ? "" : "s"} from ${getBaseName(result.folderPath)}.`,
+        detail: "Folder opened as a merged aggregate view.",
+      }
+  );
 }
 async function recoverFromSelectedFileLoadFailure(
   source: LogSource,
@@ -494,8 +540,8 @@ export async function loadLogSource(
 
       if (!requestedFilePath) {
         await stopCurrentTailIfNeeded(null);
-        clearSelectedFileState(source, listing.entries);
-        setAwaitingSelectionStatus(source, listing.entries);
+        const aggregateResult = await openLogSourceFolderAggregate(source);
+        applyAggregateParseResultToStore(source, listing.entries, aggregateResult);
 
         return {
           source,

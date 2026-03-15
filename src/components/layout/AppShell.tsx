@@ -20,6 +20,7 @@ import { useUiStore } from "../../stores/ui-store";
 import { useLogStore } from "../../stores/log-store";
 import { useFilterStore } from "../../stores/filter-store";
 import { useFileWatcher } from "../../hooks/use-file-watcher";
+import { useIntuneAnalysisProgress } from "../../hooks/use-intune-analysis-progress";
 import { useKeyboard } from "../../hooks/use-keyboard";
 import { useDragDrop } from "../../hooks/use-drag-drop";
 import { useFileAssociation } from "../../hooks/use-file-association";
@@ -167,6 +168,7 @@ export function AppShell() {
   }, [entries, filterClauses, runFilter, setFilteredIds, setIsFiltering]);
 
   useFileWatcher();
+  useIntuneAnalysisProgress();
   useKeyboard();
   useDragDrop();
   // Handle file path passed via OS file association at startup

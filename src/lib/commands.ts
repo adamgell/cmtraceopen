@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
+  AggregateParseResult,
   FolderListingResult,
   KnownSourceMetadata,
   LogFormat,
@@ -80,6 +81,28 @@ export async function listLogSourceFolder(
   );
 }
 
+export async function openLogFolderAggregate(
+  path: string
+): Promise<AggregateParseResult> {
+  return invoke<AggregateParseResult>("open_log_folder_aggregate", { path });
+}
+
+export async function openLogSourceFolderAggregate(
+  source: LogSource
+): Promise<AggregateParseResult> {
+  if (source.kind === "folder") {
+    return openLogFolderAggregate(source.path);
+  }
+
+  if (source.kind === "known" && source.pathKind === "folder") {
+    return openLogFolderAggregate(source.defaultPath);
+  }
+
+  throw new Error(
+    `Source kind '${source.kind}' does not resolve to a folder path.`
+  );
+}
+
 export async function startTail(
   path: string,
   format: LogFormat,
@@ -103,9 +126,10 @@ export async function resumeTail(path: string): Promise<void> {
 }
 
 export async function analyzeIntuneLogs(
-  path: string
+  path: string,
+  requestId: string
 ): Promise<IntuneAnalysisResult> {
-  return invoke<IntuneAnalysisResult>("analyze_intune_logs", { path });
+  return invoke<IntuneAnalysisResult>("analyze_intune_logs", { path, requestId });
 }
 
 export async function analyzeDsregcmd(

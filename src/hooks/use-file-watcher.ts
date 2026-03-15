@@ -13,18 +13,41 @@ import type { TailPayload } from "../types/log";
  */
 export function useFileWatcher() {
   const openFilePath = useLogStore((s) => s.openFilePath);
+  const sourceOpenMode = useLogStore((s) => s.sourceOpenMode);
+  const aggregateFiles = useLogStore((s) => s.aggregateFiles);
   const formatDetected = useLogStore((s) => s.formatDetected);
   const isPaused = useLogStore((s) => s.isPaused);
   const appendEntries = useLogStore((s) => s.appendEntries);
+  const appendAggregateEntries = useLogStore((s) => s.appendAggregateEntries);
   const setParserSelection = useLogStore((s) => s.setParserSelection);
 
   // Start/stop tailing when file changes
   useEffect(() => {
+    if (sourceOpenMode === "aggregate-folder") {
+      if (aggregateFiles.length === 0) {
+        return;
+      }
+
+      const tailFormat = formatDetected ?? "Plain";
+
+      for (const file of aggregateFiles) {
+        startTail(file.filePath, tailFormat, file.byteOffset, 0, file.totalLines + 1).catch(
+          (err) => console.error("Failed to start aggregate tail:", err)
+        );
+      }
+
+      return () => {
+        for (const file of aggregateFiles) {
+          stopTail(file.filePath).catch((err) =>
+            console.error("Failed to stop aggregate tail:", err)
+          );
+        }
+      };
+    }
+
     if (!openFilePath || !formatDetected) return;
 
-    // Get byte offset from the store (set after initial parse)
     const byteOffset = useLogStore.getState().byteOffset;
-
     const currentEntries = useLogStore.getState().entries;
     const nextId =
       currentEntries.length > 0
@@ -44,10 +67,24 @@ export function useFileWatcher() {
         console.error("Failed to stop tail:", err)
       );
     };
-  }, [openFilePath, formatDetected]);
+  }, [aggregateFiles, formatDetected, openFilePath, sourceOpenMode]);
 
   // Handle pause/resume
   useEffect(() => {
+    if (sourceOpenMode === "aggregate-folder") {
+      if (aggregateFiles.length === 0) {
+        return;
+      }
+
+      for (const file of aggregateFiles) {
+        const action = isPaused ? pauseTail : resumeTail;
+        action(file.filePath).catch((err) =>
+          console.error(`Failed to ${isPaused ? "pause" : "resume"} aggregate tail:`, err)
+        );
+      }
+      return;
+    }
+
     if (!openFilePath) return;
 
     if (isPaused) {
@@ -59,13 +96,26 @@ export function useFileWatcher() {
         console.error("Failed to resume tail:", err)
       );
     }
-  }, [isPaused, openFilePath]);
+  }, [aggregateFiles, isPaused, openFilePath, sourceOpenMode]);
 
   // Listen for new tail entries from the Rust backend
   useEffect(() => {
     const unlisten = listen<TailPayload>("tail-new-entries", (event) => {
       const { entries: newEntries, filePath, parserSelection } = event.payload;
-      const currentPath = useLogStore.getState().openFilePath;
+      const state = useLogStore.getState();
+
+      if (state.sourceOpenMode === "aggregate-folder") {
+        const isTrackedFile = state.aggregateFiles.some((file) => file.filePath === filePath);
+
+        if (!isTrackedFile || newEntries.length === 0) {
+          return;
+        }
+
+        appendAggregateEntries(filePath, newEntries);
+        return;
+      }
+
+      const currentPath = state.openFilePath;
 
       if (!currentPath || currentPath !== filePath || newEntries.length === 0) {
         return;
@@ -81,5 +131,5 @@ export function useFileWatcher() {
     return () => {
       unlisten.then((fn) => fn());
     };
-  }, [appendEntries, setParserSelection]);
+  }, [appendAggregateEntries, appendEntries, setParserSelection]);
 }

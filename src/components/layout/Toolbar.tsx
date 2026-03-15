@@ -119,6 +119,10 @@ async function inferPathKind(path: string): Promise<"file" | "folder" | "unknown
   }
 }
 
+function createIntuneAnalysisRequestId(): string {
+  return `intune-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
 export interface OpenKnownSourceCatalogAction
   extends KnownSourceCatalogActionIds {
   trigger: string;
@@ -327,9 +331,11 @@ export function useAppActions(): AppActionHandlers {
   const analyzeIntuneWorkspaceSource = useCallback(
     async (source: LogSource, trigger: string) => {
       useUiStore.getState().ensureWorkspaceVisible("intune", trigger);
+      const requestId = createIntuneAnalysisRequestId();
       beginIntuneAnalysis(
         getLogSourcePath(source),
-        source.kind === "known" ? "known" : source.kind
+        source.kind === "known" ? "known" : source.kind,
+        requestId
       );
 
       try {
@@ -341,7 +347,7 @@ export function useAppActions(): AppActionHandlers {
           });
         });
 
-        const result = await analyzeIntuneLogs(getLogSourcePath(source));
+        const result = await analyzeIntuneLogs(getLogSourcePath(source), requestId);
 
         startTransition(() => {
           setIntuneResults(

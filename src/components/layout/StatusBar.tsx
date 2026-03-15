@@ -39,6 +39,8 @@ export function StatusBar() {
   const parserSelection = useLogStore((s) => s.parserSelection);
   const openFilePath = useLogStore((s) => s.openFilePath);
   const selectedSourceFilePath = useLogStore((s) => s.selectedSourceFilePath);
+  const sourceOpenMode = useLogStore((s) => s.sourceOpenMode);
+  const aggregateFiles = useLogStore((s) => s.aggregateFiles);
   const activeSource = useLogStore((s) => s.activeSource);
   const knownSources = useLogStore((s) => s.knownSources);
   const selectedId = useLogStore((s) => s.selectedId);
@@ -155,7 +157,11 @@ export function StatusBar() {
       uiChromeStatus.viewLabel,
       uiChromeStatus.detailsLabel,
       uiChromeStatus.infoLabel,
-      activeFileName ? `Source ${activeFileName}` : `Source ${activeSourceLabel}`,
+      sourceOpenMode === "aggregate-folder"
+        ? `Source ${aggregateFiles.length} file${aggregateFiles.length === 1 ? "" : "s"}`
+        : activeFileName
+          ? `Source ${activeFileName}`
+          : `Source ${activeSourceLabel}`,
     ];
 
     if (parserDisplay) {
@@ -179,6 +185,9 @@ export function StatusBar() {
         ? [
             positionText ?? `${filteredCount} entries`,
             `${totalLines} lines`,
+            sourceOpenMode === "aggregate-folder"
+              ? `${aggregateFiles.length} files`
+              : null,
             severityText,
             `${formatDetected ?? "Unknown"} format`,
             parserDisplay?.provenanceLabel,
