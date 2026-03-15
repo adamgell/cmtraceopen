@@ -1,19 +1,63 @@
-/** Color rules extracted from CMTrace binary */
-export const COLORS = {
+export type LogSeverityPaletteMode = "classic" | "accessible";
+
+export interface LogSeverityPalette {
   error: {
-    background: "#FF0000",
-    text: "#FFFF00",
-  },
+    background: string;
+    text: string;
+  };
   warning: {
-    background: "#FFFF00",
-    text: "#000000",
-  },
+    background: string;
+    text: string;
+  };
   info: {
-    background: "#FFFFFF",
-    text: "#000000",
+    background: string;
+    text: string;
+  };
+  highlightDefault: string;
+}
+
+/** Color rules extracted from CMTrace binary */
+const LOG_SEVERITY_PALETTES: Record<LogSeverityPaletteMode, LogSeverityPalette> = {
+  classic: {
+    error: {
+      background: "#FF0000",
+      text: "#FFFF00",
+    },
+    warning: {
+      background: "#FFFF00",
+      text: "#000000",
+    },
+    info: {
+      background: "#FFFFFF",
+      text: "#000000",
+    },
+    highlightDefault: "#FFFF00",
   },
-  highlightDefault: "#FFFF00",
-} as const;
+  accessible: {
+    error: {
+      background: "#FEE2E2",
+      text: "#7F1D1D",
+    },
+    warning: {
+      background: "#FEF3C7",
+      text: "#78350F",
+    },
+    info: {
+      background: "#FFFFFF",
+      text: "#111827",
+    },
+    highlightDefault: "#FDE68A",
+  },
+};
+
+export const COLORS = LOG_SEVERITY_PALETTES.classic;
+
+export function getLogSeverityPalette(
+  mode: LogSeverityPaletteMode
+): LogSeverityPalette {
+  const palette = LOG_SEVERITY_PALETTES[mode];
+  return palette ?? LOG_SEVERITY_PALETTES.classic;
+}
 
 /** Default update interval in ms (minimum 500, from string table ID=37) */
 export const DEFAULT_UPDATE_INTERVAL_MS = 500;

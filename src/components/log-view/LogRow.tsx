@@ -1,17 +1,31 @@
 import type { LogEntry } from "../../types/log";
-import { COLORS, getLogViewGridTemplateColumns } from "../../lib/constants";
+import {
+  getLogSeverityPalette,
+  getLogViewGridTemplateColumns,
+  type LogSeverityPaletteMode,
+} from "../../lib/constants";
+import { LOG_UI_FONT_FAMILY } from "../../lib/log-accessibility";
 
 interface LogRowProps {
   entry: LogEntry;
   rowDomId: string;
   isSelected: boolean;
   showDetails: boolean;
+  listFontSize: number;
+  rowLineHeight: number;
+  severityPaletteMode: LogSeverityPaletteMode;
   highlightText: string;
   highlightCaseSensitive: boolean;
   onClick: (id: number) => void;
 }
 
-function getRowStyle(entry: LogEntry, isSelected: boolean) {
+function getRowStyle(
+  entry: LogEntry,
+  isSelected: boolean,
+  severityPaletteMode: LogSeverityPaletteMode
+) {
+  const palette = getLogSeverityPalette(severityPaletteMode);
+
   if (isSelected) {
     return {
       backgroundColor: "#0078D7",
@@ -22,18 +36,18 @@ function getRowStyle(entry: LogEntry, isSelected: boolean) {
   switch (entry.severity) {
     case "Error":
       return {
-        backgroundColor: COLORS.error.background,
-        color: COLORS.error.text,
+        backgroundColor: palette.error.background,
+        color: palette.error.text,
       };
     case "Warning":
       return {
-        backgroundColor: COLORS.warning.background,
-        color: COLORS.warning.text,
+        backgroundColor: palette.warning.background,
+        color: palette.warning.text,
       };
     default:
       return {
-        backgroundColor: COLORS.info.background,
-        color: COLORS.info.text,
+        backgroundColor: palette.info.background,
+        color: palette.info.text,
       };
   }
 }
@@ -41,10 +55,12 @@ function getRowStyle(entry: LogEntry, isSelected: boolean) {
 function highlightMessage(
   text: string,
   highlight: string,
-  caseSensitive: boolean
+  caseSensitive: boolean,
+  severityPaletteMode: LogSeverityPaletteMode
 ): React.ReactNode {
   if (!highlight) return text;
 
+  const palette = getLogSeverityPalette(severityPaletteMode);
   const flags = caseSensitive ? "g" : "gi";
   const escaped = highlight.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const regex = new RegExp(`(${escaped})`, flags);
@@ -60,7 +76,7 @@ function highlightMessage(
         <mark
           key={i}
           style={{
-            backgroundColor: COLORS.highlightDefault,
+            backgroundColor: palette.highlightDefault,
             color: "#000",
           }}
         >
@@ -78,11 +94,14 @@ export function LogRow({
   rowDomId,
   isSelected,
   showDetails,
+  listFontSize,
+  rowLineHeight,
+  severityPaletteMode,
   highlightText,
   highlightCaseSensitive,
   onClick,
 }: LogRowProps) {
-  const style = getRowStyle(entry, isSelected);
+  const style = getRowStyle(entry, isSelected, severityPaletteMode);
   const gridTemplateColumns = getLogViewGridTemplateColumns(showDetails);
 
   return (
@@ -98,9 +117,9 @@ export function LogRow({
         gridTemplateColumns,
         cursor: "pointer",
         borderBottom: "1px solid #e0e0e0",
-        fontSize: "13px",
-        fontFamily: "'Segoe UI', Tahoma, sans-serif",
-        lineHeight: "20px",
+        fontSize: `${listFontSize}px`,
+        fontFamily: LOG_UI_FONT_FAMILY,
+        lineHeight: `${rowLineHeight}px`,
         whiteSpace: "nowrap",
         transition: "filter 80ms linear",
         boxShadow: `inset 3px 0 0 ${isSelected ? "#FFFFFF" : "transparent"}`,
@@ -116,7 +135,12 @@ export function LogRow({
           padding: "1px 4px",
         }}
       >
-        {highlightMessage(entry.message, highlightText, highlightCaseSensitive)}
+        {highlightMessage(
+          entry.message,
+          highlightText,
+          highlightCaseSensitive,
+          severityPaletteMode
+        )}
       </div>
       {showDetails && (
         <>

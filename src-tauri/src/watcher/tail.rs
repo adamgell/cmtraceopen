@@ -535,10 +535,9 @@ mod tests {
             .append(true)
             .open(&path)
             .expect("should reopen temp file");
-        write!(
+        writeln!(
             file,
-            "{}",
-            "]LOG]!><time=\"11:16:42.3322734\" date=\"3-12-2026\" component=\"HealthScripts\" context=\"\" type=\"3\" thread=\"50\" file=\"\">\n"
+            "]LOG]!><time=\"11:16:42.3322734\" date=\"3-12-2026\" component=\"HealthScripts\" context=\"\" type=\"3\" thread=\"50\" file=\"\">"
         )
         .expect("should append IME record terminator");
         drop(file);

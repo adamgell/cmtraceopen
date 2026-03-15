@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [ValidateSet('Dev', 'Build', 'BuildAndRun')]
+    [ValidateSet('Dev', 'Build', 'BuildExeOnly', 'BuildAndRun')]
     [string]$Mode = 'Dev',
     [switch]$InstallDependencies,
     [string]$OpenPath
@@ -16,6 +16,43 @@ function Write-Step {
     )
 
     Write-Host "==> $Message" -ForegroundColor Cyan
+}
+
+function Add-PathEntryIfExists {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$PathEntry
+    )
+
+    if (-not (Test-Path $PathEntry)) {
+        return
+    }
+
+    $pathSegments = @($env:Path -split ';') | Where-Object { $_ }
+    if ($pathSegments -contains $PathEntry) {
+        return
+    }
+
+    $env:Path = "$PathEntry;$env:Path"
+}
+
+function Add-RustToolchainToPath {
+    $cargoBin = Join-Path $env:USERPROFILE '.cargo\bin'
+    Add-PathEntryIfExists -PathEntry $cargoBin
+}
+
+function Assert-CommandAvailable {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$CommandName,
+
+        [Parameter(Mandatory = $true)]
+        [string]$ErrorMessage
+    )
+
+    if (-not (Get-Command $CommandName -ErrorAction SilentlyContinue)) {
+        throw $ErrorMessage
+    }
 }
 
 function Resolve-VsWherePath {
@@ -74,7 +111,7 @@ function Invoke-CheckedCommand {
 function Get-ModeConfiguration {
     param(
         [Parameter(Mandatory = $true)]
-        [ValidateSet('Dev', 'Build', 'BuildAndRun')]
+        [ValidateSet('Dev', 'Build', 'BuildExeOnly', 'BuildAndRun')]
         [string]$Mode
     )
 
@@ -88,6 +125,12 @@ function Get-ModeConfiguration {
         'Build' {
             return @{
                 NpmScript             = 'app:build:release'
+                RequiresBuiltArtifact = $false
+            }
+        }
+        'BuildExeOnly' {
+            return @{
+                NpmScript             = 'app:build:exe-only'
                 RequiresBuiltArtifact = $false
             }
         }
@@ -126,9 +169,15 @@ $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $appRoot = Split-Path -Parent $scriptRoot
 $nodeModulesPath = Join-Path $appRoot 'node_modules'
 
+Write-Step 'Ensuring Rust toolchain is available on PATH'
+Add-RustToolchainToPath
+
 Write-Step 'Entering Visual Studio Developer PowerShell'
 $vsInstallPath = Enable-VsDeveloperPowerShell
 Write-Host "Using Visual Studio at $vsInstallPath" -ForegroundColor DarkGray
+
+Add-RustToolchainToPath
+Assert-CommandAvailable -CommandName 'cargo.exe' -ErrorMessage 'Could not find cargo.exe on PATH. Install Rust via rustup or run scripts/Install-CMTraceOpenBuildPrereqs.ps1, then open a new terminal and retry.'
 
 Set-Location $appRoot
 
