@@ -15,6 +15,13 @@ static PANTHER_HEADER_RE: Lazy<Regex> = Lazy::new(|| {
     .unwrap()
 });
 
+static PANTHER_RELAXED_HEADER_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(
+        r"^(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2}):(\d{2}),\s+([A-Za-z][A-Za-z0-9_-]{1,31})\s+(?:(\[0x[0-9A-Fa-f]+\])\s+)?(?:([A-Z][A-Z0-9_.-]{1,31})\s+)?(.*)$",
+    )
+    .unwrap()
+});
+
 struct PendingEntry {
     entry: LogEntry,
     start_line: u32,
@@ -73,7 +80,15 @@ pub fn parse_lines(lines: &[&str], file_path: &str) -> (Vec<LogEntry>, u32) {
 }
 
 fn parse_header(line: &str, file_path: &str) -> Option<LogEntry> {
-    let caps = PANTHER_HEADER_RE.captures(line)?;
+    if let Some(caps) = PANTHER_HEADER_RE.captures(line) {
+        return build_entry_from_caps(&caps, file_path);
+    }
+
+    let caps = PANTHER_RELAXED_HEADER_RE.captures(line)?;
+    build_entry_from_caps(&caps, file_path)
+}
+
+fn build_entry_from_caps(caps: &regex::Captures<'_>, file_path: &str) -> Option<LogEntry> {
 
     let year: i32 = caps.get(1)?.as_str().parse().ok()?;
     let month: u32 = caps.get(2)?.as_str().parse().ok()?;
@@ -182,7 +197,7 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_lines_keeps_fallback_for_malformed_segments() {
+    fn test_parse_lines_salvages_structural_segments_with_unexpected_levels() {
         let lines = [
             "orphan preamble",
             "2024-01-15 08:00:00, Info SP Setup started",
@@ -193,11 +208,12 @@ mod tests {
 
         let (entries, parse_errors) = parse_lines(&lines, "C:/Windows/Panther/setuperr.log");
 
-        assert_eq!(parse_errors, 2);
+        assert_eq!(parse_errors, 1);
         assert_eq!(entries.len(), 4);
         assert_eq!(entries[0].message, "orphan preamble");
         assert_eq!(entries[1].message, "Setup started\ncontinuation detail");
-        assert_eq!(entries[2].message, "2024-01-15 08:00:01, UnexpectedLevel SP malformed header");
+        assert_eq!(entries[2].message, "malformed header");
+        assert_eq!(entries[2].component.as_deref(), Some("SP"));
         assert_eq!(entries[3].severity, Severity::Error);
         assert_eq!(entries[3].component.as_deref(), Some("SP"));
     }

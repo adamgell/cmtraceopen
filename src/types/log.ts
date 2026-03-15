@@ -1,3 +1,5 @@
+import type { EvidenceBundleMetadata } from "./evidence";
+
 export type Severity = "Info" | "Warning" | "Error";
 export type LogFormat = "Ccm" | "Simple" | "Plain" | "Timestamped";
 export type ParserKind =
@@ -19,6 +21,7 @@ export type ParserProvenance = "dedicated" | "heuristic" | "fallback";
 export type ParseQuality = "structured" | "semiStructured" | "textFallback";
 export type RecordFraming = "physicalLine" | "logicalRecord";
 export type DateFieldOrder = "monthFirst" | "dayFirst";
+export type ParserSpecialization = "ime";
 
 export type LogSourceKind = "file" | "folder" | "known";
 export type KnownSourcePathKind = "file" | "folder";
@@ -57,7 +60,10 @@ export interface FolderListingResult {
   sourceKind: LogSourceKind;
   source: LogSource;
   entries: FolderEntry[];
+  bundleMetadata?: EvidenceBundleMetadata | null;
 }
+
+export type { EvidenceBundleMetadata } from "./evidence";
 
 export interface KnownSourceGroupingMetadata {
   familyId: string;
@@ -108,6 +114,7 @@ export interface ParserSelectionInfo {
   parseQuality: ParseQuality;
   recordFraming: RecordFraming;
   dateOrder: DateFieldOrder | null;
+  specialization?: ParserSpecialization | null;
 }
 
 export interface ParseResult {

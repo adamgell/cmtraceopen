@@ -310,6 +310,56 @@ Desktop debug build:
 npm run app:build:debug
 ```
 
+### VS Code live debugging on Windows
+
+The repo includes a Windows-first F5 workflow in `.vscode/launch.json` and
+`.vscode/tasks.json`.
+
+Primary launch profile:
+
+- `CMTrace Open: Debug (Windows)`
+
+What it does:
+
+1. Runs the `tauri:prepare-debug` task
+2. Builds the Rust desktop target with
+   `cargo build --manifest-path src-tauri/Cargo.toml`
+3. Starts the Vite dev server on `http://localhost:1420`
+4. Waits for the Vite server to advertise its local URL before launching the
+   desktop app
+5. Launches `src-tauri/target/debug/cmtrace-open.exe` under the VS Code debugger
+
+This is the intended day-to-day live-debug path for the app on Windows. It gives
+you Rust breakpoint support in the desktop process while still loading the dev
+UI from Vite, so frontend edits continue to use live reload.
+
+Optional secondary launch profile:
+
+- `CMTrace Open: Frontend Debug (Edge)`
+
+Use that only when you want browser-style frontend inspection against the Vite
+dev server. It is intentionally secondary; the desktop F5 workflow remains the
+source of truth for full-app debugging.
+
+Recommended VS Code extensions:
+
+- `ms-vscode.cpp-devtools`
+- `rust-lang.rust-analyzer`
+
+Common Windows debugging failure points:
+
+1. Vite cannot bind to port `1420` because another process is already listening.
+2. `WebView2 Runtime` is missing, so the Tauri desktop window cannot initialize.
+3. The MSVC Rust toolchain or Visual Studio C++ build tools are not installed.
+4. The debug executable under `src-tauri/target/debug/` is locked by a running
+   app instance.
+5. A previous terminal is still holding the Vite dev server open on the same
+   port.
+
+When F5 fails, check the `ui:dev` and `rust:build-debug` task output first. The
+repo task configuration is designed so Vite startup and Rust compile failures
+are visible in VS Code rather than failing silently.
+
 Desktop release build:
 
 ```bash

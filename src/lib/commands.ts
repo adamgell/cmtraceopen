@@ -6,6 +6,7 @@ import type {
   LogSource,
   ParseResult,
 } from "../types/log";
+import type { EvidenceArtifactPreview, EvidenceBundleDetails, EvidenceArtifactIntakeKind } from "../types/evidence";
 import type { IntuneAnalysisResult } from "../types/intune";
 import type {
   DsregcmdAnalysisResult,
@@ -25,6 +26,24 @@ export async function openLogFile(path: string): Promise<ParseResult> {
 
 export async function listLogFolder(path: string): Promise<FolderListingResult> {
   return invoke<FolderListingResult>("list_log_folder", { path });
+}
+
+export async function inspectEvidenceBundle(
+  path: string
+): Promise<EvidenceBundleDetails> {
+  return invoke<EvidenceBundleDetails>("inspect_evidence_bundle", { path });
+}
+
+export async function inspectEvidenceArtifact(
+  path: string,
+  intakeKind: EvidenceArtifactIntakeKind,
+  originPath?: string | null
+): Promise<EvidenceArtifactPreview> {
+  return invoke<EvidenceArtifactPreview>("inspect_evidence_artifact", {
+    path,
+    intakeKind,
+    originPath: originPath ?? null,
+  });
 }
 
 export async function getKnownLogSources(): Promise<KnownSourceMetadata[]> {

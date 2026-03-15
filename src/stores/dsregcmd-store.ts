@@ -10,6 +10,7 @@ const emptySourceContext: DsregcmdSourceContext = {
   source: null,
   requestedPath: null,
   resolvedPath: null,
+  bundlePath: null,
   displayLabel: "No dsregcmd source selected",
   evidenceFilePath: null,
   rawLineCount: 0,

@@ -4,13 +4,19 @@ use regex::Regex;
 use super::severity::detect_severity_from_text;
 use crate::models::log_entry::{LogEntry, LogFormat, Severity};
 
-static CBS_PREFIX_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2},").unwrap()
-});
+static CBS_PREFIX_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2},").unwrap());
 
 static CBS_HEADER_RE: Lazy<Regex> = Lazy::new(|| {
     Regex::new(
         r"^(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2}):(\d{2}),\s+(Info|Warning|Error|Perf|Verbose|Debug)\s+([A-Za-z][A-Za-z0-9_.-]{1,31})\s+(.*)$",
+    )
+    .unwrap()
+});
+
+static CBS_RELAXED_HEADER_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(
+        r"^(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2}):(\d{2}),\s+([A-Za-z][A-Za-z0-9_-]{1,31})\s+([A-Za-z][A-Za-z0-9_.-]{1,31})\s+(.*)$",
     )
     .unwrap()
 });
@@ -86,8 +92,26 @@ pub fn parse_lines(lines: &[&str], file_path: &str) -> (Vec<LogEntry>, u32) {
 }
 
 fn parse_header(line: &str, file_path: &str) -> Option<LogEntry> {
-    let caps = CBS_HEADER_RE.captures(line)?;
+    if let Some(caps) = CBS_HEADER_RE.captures(line) {
+        return build_entry_from_caps(&caps, file_path);
+    }
 
+    let caps = CBS_RELAXED_HEADER_RE.captures(line)?;
+    let component = caps.get(8)?.as_str().to_ascii_uppercase();
+    let message = caps.get(9).map(|m| m.as_str()).unwrap_or("");
+
+    if !matches!(
+        component.as_str(),
+        "CBS" | "CSI" | "TI" | "SR" | "SFC" | "RIBS" | "OC" | "POQ" | "SQM" | "DWLD"
+    ) && !message.starts_with("[SR]")
+    {
+        return None;
+    }
+
+    build_entry_from_caps(&caps, file_path)
+}
+
+fn build_entry_from_caps(caps: &regex::Captures<'_>, file_path: &str) -> Option<LogEntry> {
     let year: i32 = caps.get(1)?.as_str().parse().ok()?;
     let month: u32 = caps.get(2)?.as_str().parse().ok()?;
     let day: u32 = caps.get(3)?.as_str().parse().ok()?;
@@ -96,7 +120,12 @@ fn parse_header(line: &str, file_path: &str) -> Option<LogEntry> {
     let second: u32 = caps.get(6)?.as_str().parse().ok()?;
     let level = caps.get(7)?.as_str();
     let component = caps.get(8)?.as_str().to_string();
-    let message = caps.get(9).map(|m| m.as_str()).unwrap_or("").trim_end().to_string();
+    let message = caps
+        .get(9)
+        .map(|m| m.as_str())
+        .unwrap_or("")
+        .trim_end()
+        .to_string();
 
     let timestamp = chrono::NaiveDate::from_ymd_opt(year, month, day)
         .and_then(|date| date.and_hms_opt(hour, minute, second))
@@ -131,7 +160,11 @@ fn severity_from_level(level: &str, message: &str) -> Severity {
     }
 }
 
-fn flush_pending(entries: &mut Vec<LogEntry>, pending: &mut Option<PendingEntry>, next_id: &mut u64) {
+fn flush_pending(
+    entries: &mut Vec<LogEntry>,
+    pending: &mut Option<PendingEntry>,
+    next_id: &mut u64,
+) {
     if let Some(mut pending_entry) = pending.take() {
         pending_entry.entry.id = *next_id;
         pending_entry.entry.line_number = pending_entry.start_line;
@@ -194,7 +227,7 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_lines_keeps_fallback_for_malformed_segments() {
+    fn test_parse_lines_salvages_structural_segments_with_unexpected_levels() {
         let lines = [
             "orphan preamble",
             "2024-01-15 08:00:00, Info                  CBS    Exec: Processing package",
@@ -205,14 +238,15 @@ mod tests {
 
         let (entries, parse_errors) = parse_lines(&lines, "C:/Windows/Logs/CBS/CBS.log");
 
-        assert_eq!(parse_errors, 2);
+        assert_eq!(parse_errors, 1);
         assert_eq!(entries.len(), 4);
         assert_eq!(entries[0].message, "orphan preamble");
-        assert_eq!(entries[1].message, "Exec: Processing package\nContinuation detail");
         assert_eq!(
-            entries[2].message,
-            "2024-01-15 08:00:01, UnexpectedLevel       CBS    malformed header"
+            entries[1].message,
+            "Exec: Processing package\nContinuation detail"
         );
+        assert_eq!(entries[2].message, "malformed header");
+        assert_eq!(entries[2].component.as_deref(), Some("CBS"));
         assert_eq!(entries[3].severity, Severity::Warning);
         assert_eq!(entries[3].component.as_deref(), Some("CSI"));
     }

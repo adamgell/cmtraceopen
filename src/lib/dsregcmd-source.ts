@@ -19,7 +19,8 @@ function buildSourceContext(
   source: DsregcmdSourceDescriptor,
   rawInput: string,
   resolvedPath: string | null,
-  evidenceFilePath: string | null
+  evidenceFilePath: string | null,
+  bundlePath: string | null
 ): DsregcmdSourceContext {
   const displayLabel =
     source.kind === "clipboard"
@@ -34,6 +35,7 @@ function buildSourceContext(
     source,
     requestedPath: "path" in source ? source.path : null,
     resolvedPath,
+    bundlePath,
     evidenceFilePath,
     displayLabel,
     rawLineCount: rawInput.length === 0 ? 0 : rawInput.split(/\r?\n/).length,
@@ -104,7 +106,7 @@ export async function analyzeDsregcmdText(
     }
 
     const result = await analyzeDsregcmd(input, null);
-    const context = buildSourceContext(source, input, null, null);
+    const context = buildSourceContext(source, input, null, null, null);
     useDsregcmdStore.getState().setResults(input, result, context);
     return result;
   } catch (error) {
@@ -131,7 +133,13 @@ export async function analyzeDsregcmdSource(
       rawInput,
       bundleRootPath
     );
-    const context = buildSourceContext(source, rawInput, resolvedPath, evidenceFilePath);
+    const context = buildSourceContext(
+      source,
+      rawInput,
+      resolvedPath,
+      evidenceFilePath,
+      bundleRootPath
+    );
     useDsregcmdStore.getState().setResults(rawInput, result, context);
     return result;
   } catch (error) {

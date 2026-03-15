@@ -89,7 +89,7 @@ pub enum ParserSpecialization {
 }
 
 /// Rich parser selection metadata returned to the frontend.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ParserSelectionInfo {
     pub parser: ParserKind,

@@ -10,6 +10,7 @@ import { FilterDialog } from "../dialogs/FilterDialog";
 import { ErrorLookupDialog } from "../dialogs/ErrorLookupDialog";
 import { AboutDialog } from "../dialogs/AboutDialog";
 import { AccessibilityDialog } from "../dialogs/AccessibilityDialog";
+import { EvidenceBundleDialog } from "../dialogs/EvidenceBundleDialog";
 import { FileAssociationPromptDialog } from "../dialogs/FileAssociationPromptDialog";
 import { IntuneDashboard } from "../intune/IntuneDashboard";
 import { DsregcmdWorkspace } from "../dsregcmd/DsregcmdWorkspace";
@@ -45,6 +46,9 @@ export function AppShell() {
   const showAccessibilityDialog = useUiStore(
     (s) => s.showAccessibilityDialog
   );
+  const showEvidenceBundleDialog = useUiStore(
+    (s) => s.showEvidenceBundleDialog
+  );
   const showFileAssociationPrompt = useUiStore(
     (s) => s.showFileAssociationPrompt
   );
@@ -56,6 +60,9 @@ export function AppShell() {
   const setShowAboutDialog = useUiStore((s) => s.setShowAboutDialog);
   const setShowAccessibilityDialog = useUiStore(
     (s) => s.setShowAccessibilityDialog
+  );
+  const setShowEvidenceBundleDialog = useUiStore(
+    (s) => s.setShowEvidenceBundleDialog
   );
   const setShowFileAssociationPrompt = useUiStore(
     (s) => s.setShowFileAssociationPrompt
@@ -274,6 +281,10 @@ export function AppShell() {
       <AccessibilityDialog
         isOpen={showAccessibilityDialog}
         onClose={() => setShowAccessibilityDialog(false)}
+      />
+      <EvidenceBundleDialog
+        isOpen={showEvidenceBundleDialog}
+        onClose={() => setShowEvidenceBundleDialog(false)}
       />
       <FileAssociationPromptDialog
         isOpen={showFileAssociationPrompt}

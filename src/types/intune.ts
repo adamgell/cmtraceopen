@@ -1,3 +1,5 @@
+import type { EvidenceBundleMetadata } from "./evidence";
+
 export type IntuneEventType =
   | "Win32App"
   | "WinGetApp"
@@ -182,10 +184,12 @@ export interface IntuneAnalysisResult {
   diagnosticsCoverage: IntuneDiagnosticsCoverage;
   diagnosticsConfidence: IntuneDiagnosticsConfidence;
   repeatedFailures: IntuneRepeatedFailureGroup[];
+  evidenceBundle?: EvidenceBundleMetadata | null;
 }
 
 export interface IntuneResultMetadata {
   diagnosticsCoverage: IntuneDiagnosticsCoverage;
   diagnosticsConfidence: IntuneDiagnosticsConfidence;
   repeatedFailures: IntuneRepeatedFailureGroup[];
+  evidenceBundle?: EvidenceBundleMetadata | null;
 }

@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import type { EvidenceBundleMetadata } from "../types/evidence";
 import type {
   DownloadStat,
   IntuneAnalysisSourceKind,
@@ -151,6 +152,7 @@ interface IntuneState {
   diagnosticsCoverage: IntuneDiagnosticsCoverage;
   diagnosticsConfidence: IntuneDiagnosticsConfidence;
   repeatedFailures: IntuneRepeatedFailureGroup[];
+  evidenceBundle: EvidenceBundleMetadata | null;
   sourceFile: string | null;
   sourceFiles: string[];
   sourceContext: IntuneSourceContext;
@@ -202,6 +204,7 @@ export const useIntuneStore = create<IntuneState>((set) => ({
   diagnosticsCoverage: emptyDiagnosticsCoverage,
   diagnosticsConfidence: emptyDiagnosticsConfidence,
   repeatedFailures: [],
+  evidenceBundle: null,
   sourceFile: null,
   sourceFiles: [],
   sourceContext: emptySourceContext,
@@ -221,6 +224,7 @@ export const useIntuneStore = create<IntuneState>((set) => ({
       diagnosticsCoverage: emptyDiagnosticsCoverage,
       diagnosticsConfidence: emptyDiagnosticsConfidence,
       repeatedFailures: [],
+      evidenceBundle: null,
       sourceFile: null,
       sourceFiles: [],
       sourceContext: emptySourceContext,
@@ -262,6 +266,7 @@ export const useIntuneStore = create<IntuneState>((set) => ({
         diagnosticsCoverage: resultMetadata.diagnosticsCoverage,
         diagnosticsConfidence: resultMetadata.diagnosticsConfidence,
         repeatedFailures: resultMetadata.repeatedFailures,
+        evidenceBundle: metadata?.evidenceBundle ?? null,
         sourceFile,
         sourceFiles,
         sourceContext,
@@ -367,6 +372,7 @@ export const useIntuneStore = create<IntuneState>((set) => ({
       diagnosticsCoverage: emptyDiagnosticsCoverage,
       diagnosticsConfidence: emptyDiagnosticsConfidence,
       repeatedFailures: [],
+      evidenceBundle: null,
       sourceFile: null,
       sourceFiles: [],
       sourceContext: emptySourceContext,
