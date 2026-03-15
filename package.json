@@ -9,6 +9,7 @@
     "frontend:preview": "vite preview",
     "app:dev": "tauri dev",
     "app:build:debug": "tauri build --debug",
+    "app:build:exe-only": "tauri build --no-bundle",
     "app:build:release": "tauri build",
     "dev": "npm run frontend:dev",
     "build": "npm run frontend:build",
