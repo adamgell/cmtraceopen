@@ -473,6 +473,7 @@ export async function loadLogSource(
       const result = await openLogSourceFile(source);
 
       state.setSourceEntries([]);
+      state.setBundleMetadata(null);
       applyParseResultToStore(source, result.filePath, result);
 
       return {
@@ -489,6 +490,7 @@ export async function loadLogSource(
 
       state.setActiveSource(source);
       state.setSourceEntries(listing.entries);
+      state.setBundleMetadata(listing.bundleMetadata ?? null);
 
       if (!requestedFilePath) {
         await stopCurrentTailIfNeeded(null);
@@ -533,6 +535,7 @@ export async function loadLogSource(
       const result = await openLogSourceFile(source);
 
       state.setSourceEntries([]);
+      state.setBundleMetadata(null);
       applyParseResultToStore(source, result.filePath, result);
 
       return {
@@ -550,6 +553,7 @@ export async function loadLogSource(
 
     state.setActiveSource(source);
     state.setSourceEntries(listing.entries);
+    state.setBundleMetadata(listing.bundleMetadata ?? null);
 
     if (!autoSelectedFilePath) {
       await stopCurrentTailIfNeeded(null);
@@ -620,6 +624,7 @@ export async function loadLogSource(
 
     state.setActiveSource(source);
     state.setSourceEntries([]);
+    state.setBundleMetadata(null);
     state.clearActiveFile();
     state.setSourceStatus({
       kind,

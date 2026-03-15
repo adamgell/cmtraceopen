@@ -180,14 +180,12 @@ fn panther_mixed_fixture_preserves_fallback_segments() {
         "Timestamped",
     );
     assert_eq!(parsed.total_lines, 5);
-    assert_eq!(parsed.parse_errors, 2);
+    assert_eq!(parsed.parse_errors, 1);
     assert_eq!(parsed.entries.len(), 4);
     assert_eq!(parsed.entries[0].message, "orphan preamble");
     assert_eq!(parsed.entries[1].message, "Setup started\ncontinuation detail");
-    assert_eq!(
-        parsed.entries[2].message,
-        "2024-01-15 08:00:01, UnexpectedLevel SP malformed header"
-    );
+    assert_eq!(parsed.entries[2].message, "malformed header");
+    assert_eq!(parsed.entries[2].component.as_deref(), Some("SP"));
     assert_eq!(parsed.entries[3].component.as_deref(), Some("SP"));
     assert_eq!(parsed.entries[3].severity, "Error");
 }
@@ -249,14 +247,12 @@ fn cbs_mixed_fixture_preserves_fallback_segments() {
         "Timestamped",
     );
     assert_eq!(parsed.total_lines, 5);
-    assert_eq!(parsed.parse_errors, 2);
+    assert_eq!(parsed.parse_errors, 1);
     assert_eq!(parsed.entries.len(), 4);
     assert_eq!(parsed.entries[0].message, "orphan preamble");
     assert_eq!(parsed.entries[1].message, "Exec: Processing package\nContinuation detail");
-    assert_eq!(
-        parsed.entries[2].message,
-        "2024-01-15 08:00:01, UnexpectedLevel       CBS    malformed header"
-    );
+    assert_eq!(parsed.entries[2].message, "malformed header");
+    assert_eq!(parsed.entries[2].component.as_deref(), Some("CBS"));
     assert_eq!(parsed.entries[3].component.as_deref(), Some("CSI"));
     assert_eq!(parsed.entries[3].severity, "Warning");
 }
@@ -317,17 +313,15 @@ fn dism_mixed_fixture_preserves_fallback_segments() {
         "Timestamped",
     );
     assert_eq!(parsed.total_lines, 5);
-    assert_eq!(parsed.parse_errors, 2);
+    assert_eq!(parsed.parse_errors, 1);
     assert_eq!(parsed.entries.len(), 4);
     assert_eq!(parsed.entries[0].message, "orphan preamble");
     assert_eq!(
         parsed.entries[1].message,
         "DISM Package Manager: Processing package\nContinuation detail"
     );
-    assert_eq!(
-        parsed.entries[2].message,
-        "2024-01-15 08:00:01, UnexpectedLevel       DISM   malformed header"
-    );
+    assert_eq!(parsed.entries[2].message, "malformed header");
+    assert_eq!(parsed.entries[2].component.as_deref(), Some("DISM"));
     assert_eq!(parsed.entries[3].component.as_deref(), Some("DISM"));
     assert_eq!(parsed.entries[3].severity, "Error");
 }

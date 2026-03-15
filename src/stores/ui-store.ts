@@ -56,6 +56,7 @@ interface UiState {
   showErrorLookupDialog: boolean;
   showAboutDialog: boolean;
   showAccessibilityDialog: boolean;
+  showEvidenceBundleDialog: boolean;
   showFileAssociationPrompt: boolean;
   logListFontSize: number;
   logDetailsFontSize: number;
@@ -73,6 +74,7 @@ interface UiState {
   setShowErrorLookupDialog: (show: boolean) => void;
   setShowAboutDialog: (show: boolean) => void;
   setShowAccessibilityDialog: (show: boolean) => void;
+  setShowEvidenceBundleDialog: (show: boolean) => void;
   setShowFileAssociationPrompt: (show: boolean) => void;
   setLogListFontSize: (fontSize: number) => void;
   increaseLogListFontSize: () => void;
@@ -129,6 +131,7 @@ export const useUiStore = create<UiState>()(
       showErrorLookupDialog: false,
       showAboutDialog: false,
       showAccessibilityDialog: false,
+      showEvidenceBundleDialog: false,
       showFileAssociationPrompt: false,
       logListFontSize: DEFAULT_LOG_LIST_FONT_SIZE,
       logDetailsFontSize: DEFAULT_LOG_DETAILS_FONT_SIZE,
@@ -183,6 +186,7 @@ export const useUiStore = create<UiState>()(
       setShowErrorLookupDialog: (show) => set({ showErrorLookupDialog: show }),
       setShowAboutDialog: (show) => set({ showAboutDialog: show }),
       setShowAccessibilityDialog: (show) => set({ showAccessibilityDialog: show }),
+      setShowEvidenceBundleDialog: (show) => set({ showEvidenceBundleDialog: show }),
       setShowFileAssociationPrompt: (show) => set({ showFileAssociationPrompt: show }),
       setLogListFontSize: (fontSize) =>
         set({ logListFontSize: clampLogListFontSize(fontSize) }),
@@ -215,6 +219,7 @@ export const useUiStore = create<UiState>()(
           !state.showErrorLookupDialog &&
           !state.showAboutDialog &&
           !state.showAccessibilityDialog &&
+          !state.showEvidenceBundleDialog &&
           !state.showFileAssociationPrompt
         ) {
           return;
@@ -228,6 +233,7 @@ export const useUiStore = create<UiState>()(
           showErrorLookupDialog: false,
           showAboutDialog: false,
           showAccessibilityDialog: false,
+          showEvidenceBundleDialog: false,
           showFileAssociationPrompt: false,
         });
       },

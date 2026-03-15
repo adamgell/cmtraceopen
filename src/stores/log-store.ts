@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import type {
+  EvidenceBundleMetadata,
   FolderEntry,
   KnownSourceMetadata,
   LogEntry,
@@ -358,6 +359,8 @@ interface LogState {
   activeSource: LogSource | null;
   /** Folder entries for folder-like sources. */
   sourceEntries: FolderEntry[];
+  /** Evidence bundle metadata when the active folder is a recognized bundle root. */
+  bundleMetadata: EvidenceBundleMetadata | null;
   /** Known source metadata catalog for menu/sidebar usage. */
   knownSources: KnownSourceMetadata[];
   /** Toolbar-ready grouped known source catalog. */
@@ -389,6 +392,7 @@ interface LogState {
   setOpenFilePath: (path: string | null) => void;
   setActiveSource: (source: LogSource | null) => void;
   setSourceEntries: (entries: FolderEntry[]) => void;
+  setBundleMetadata: (metadata: EvidenceBundleMetadata | null) => void;
   setKnownSources: (sources: KnownSourceMetadata[]) => void;
   setSelectedSourceFilePath: (path: string | null) => void;
   setSourceStatus: (status: SourceStatus) => void;
@@ -471,6 +475,7 @@ export const useLogStore = create<LogState>((set, get) => ({
   openFilePath: null,
   activeSource: null,
   sourceEntries: [],
+  bundleMetadata: null,
   knownSources: [],
   knownSourceToolbarGroups: [],
   selectedSourceFilePath: null,
@@ -518,6 +523,7 @@ export const useLogStore = create<LogState>((set, get) => ({
     set({ openFilePath: path, selectedSourceFilePath: path }),
   setActiveSource: (source) => set({ activeSource: source }),
   setSourceEntries: (entries) => set({ sourceEntries: entries }),
+  setBundleMetadata: (metadata) => set({ bundleMetadata: metadata }),
   setKnownSources: (sources) =>
     set({
       knownSources: sources,
@@ -577,6 +583,7 @@ export const useLogStore = create<LogState>((set, get) => ({
       openFilePath: null,
       activeSource: null,
       sourceEntries: [],
+      bundleMetadata: null,
       knownSources: [],
       knownSourceToolbarGroups: [],
       selectedSourceFilePath: null,

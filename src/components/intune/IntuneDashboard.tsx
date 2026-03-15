@@ -32,6 +32,8 @@ export function IntuneDashboard() {
   const downloads = useIntuneStore((s) => s.downloads);
   const summary = useIntuneStore((s) => s.summary);
   const diagnostics = useIntuneStore((s) => s.diagnostics);
+  const evidenceBundle = useIntuneStore((s) => s.evidenceBundle);
+  const diagnosticsCoverage = useIntuneStore((s) => s.diagnosticsCoverage);
   const sourceContext = useIntuneStore((s) => s.sourceContext);
   const analysisState = useIntuneStore((s) => s.analysisState);
   const isAnalyzing = useIntuneStore((s) => s.isAnalyzing);
@@ -89,6 +91,14 @@ export function IntuneDashboard() {
   const hasAnyResult = summary != null || events.length > 0 || downloads.length > 0;
   const sourceFiles = sourceContext.includedFiles;
   const sourceLabel = analysisState.requestedPath ?? sourceContext.analyzedPath;
+  const sourceFamilies = useMemo(
+    () => buildSourceFamilySummary(diagnosticsCoverage.files),
+    [diagnosticsCoverage.files]
+  );
+  const emptySourceFamilies = useMemo(
+    () => sourceFamilies.filter((family) => family.contributingFileCount === 0),
+    [sourceFamilies]
+  );
   const sourceStatusTone =
     analysisState.phase === "error"
       ? "#b91c1c"
@@ -186,6 +196,20 @@ export function IntuneDashboard() {
                     : sourceFiles.length > 0
                       ? `${sourceFiles.length} included files`
                       : analysisState.detail}
+              </span>
+            )}
+            {evidenceBundle && (
+              <span
+                style={{
+                  marginTop: "4px",
+                  fontSize: "10px",
+                  color: emptySourceFamilies.length > 0 ? "#92400e" : "#1d4ed8",
+                  fontWeight: 600,
+                }}
+              >
+                Bundle {evidenceBundle.bundleLabel ?? evidenceBundle.bundleId ?? "attached"}
+                {sourceFamilies.length > 0 ? ` • ${sourceFamilies.length} file family${sourceFamilies.length === 1 ? "" : "ies"}` : ""}
+                {emptySourceFamilies.length > 0 ? ` • ${emptySourceFamilies.length} quiet family${emptySourceFamilies.length === 1 ? "" : "ies"}` : ""}
               </span>
             )}
           </div>
@@ -554,6 +578,7 @@ function SummaryView({
   sourceFile: string | null;
   sourceFiles: string[];
 }) {
+  const evidenceBundle = useIntuneStore((s) => s.evidenceBundle);
   const setActiveTab = useIntuneStore((s) => s.setActiveTab);
   const diagnosticsCoverage = useIntuneStore((s) => s.diagnosticsCoverage);
   const diagnosticsConfidence = useIntuneStore((s) => s.diagnosticsConfidence);
@@ -581,6 +606,9 @@ function SummaryView({
     [diagnosticsCoverage.files]
   );
   const visibleSourceFamilies = sourceFamilies.slice(0, 4);
+  const inactiveSourceFamilies = sourceFamilies.filter(
+    (family) => family.contributingFileCount === 0
+  );
   const hiddenSourceFamilyCount = Math.max(
     sourceFamilies.length - visibleSourceFamilies.length,
     0
@@ -668,6 +696,36 @@ function SummaryView({
       {sourceFile && (
         <div style={{ marginBottom: "12px", color: "#666" }}>
           <strong>Analyzed Path:</strong> {sourceFile}
+        </div>
+      )}
+
+      {evidenceBundle && (
+        <div
+          style={{
+            marginBottom: "12px",
+            padding: "10px 12px",
+            borderRadius: "8px",
+            border: inactiveSourceFamilies.length > 0 ? "1px solid #fde68a" : "1px solid #bfdbfe",
+            backgroundColor: inactiveSourceFamilies.length > 0 ? "#fffbeb" : "#eff6ff",
+            color: inactiveSourceFamilies.length > 0 ? "#92400e" : "#1e3a8a",
+          }}
+        >
+          <div style={{ fontSize: "12px", fontWeight: 700 }}>
+            Evidence bundle: {evidenceBundle.bundleLabel ?? evidenceBundle.bundleId ?? "Detected bundle"}
+          </div>
+          <div style={{ marginTop: "4px", fontSize: "12px", lineHeight: 1.5 }}>
+            {evidenceBundle.caseReference
+              ? `Case ${evidenceBundle.caseReference}. `
+              : ""}
+            {sourceFamilies.length > 0
+              ? `${sourceFamilies.length} source family${sourceFamilies.length === 1 ? "" : "ies"} contributed to this analysis.`
+              : "Bundle metadata is attached to this analysis result."}
+          </div>
+          {inactiveSourceFamilies.length > 0 && (
+            <div style={{ marginTop: "6px", fontSize: "11px", lineHeight: 1.45 }}>
+              Bundle files were present for {inactiveSourceFamilies.map((family) => family.label).join(", ")}, but no parsed events or downloads came from them in this view.
+            </div>
+          )}
         </div>
       )}
 

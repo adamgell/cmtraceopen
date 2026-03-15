@@ -113,6 +113,9 @@ export function useKeyboard() {
   const showAccessibilityDialogOpen = useUiStore(
     (state) => state.showAccessibilityDialog
   );
+  const showEvidenceBundleDialogOpen = useUiStore(
+    (state) => state.showEvidenceBundleDialog
+  );
   const showFileAssociationPromptOpen = useUiStore(
     (state) => state.showFileAssociationPrompt
   );
@@ -140,6 +143,7 @@ export function useKeyboard() {
         showErrorLookupDialogOpen ||
         showAboutDialogOpen ||
         showAccessibilityDialogOpen ||
+        showEvidenceBundleDialogOpen ||
         showFileAssociationPromptOpen;
 
       if (ctrl && !isInput && activeView === "log") {
@@ -292,6 +296,7 @@ export function useKeyboard() {
     openSourceFileDialog,
     refreshActiveSource,
     resetLogListTextSize,
+    showEvidenceBundleDialogOpen,
     showAccessibilityDialogOpen,
     showAboutDialogOpen,
     showErrorLookupDialog,

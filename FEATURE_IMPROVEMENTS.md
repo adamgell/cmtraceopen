@@ -1,100 +1,234 @@
 # CMTrace Open — Feature Improvements Roadmap
 
-Internal planning document focused on unfinished work. Active priorities stay near the top; shipped work is summarized at the bottom for reference.
+Internal planning document focused on unfinished work. Active priorities stay
+near the top; shipped work is summarized at the bottom for reference.
 
-**Status key**: Active Focus = current priority, Next Slice = recommended near-term implementation, Completed = shipped unless a regression is found  
-**Priority key**: P0 = critical path, P1 = high value, P2 = useful follow-on, P3 = future consideration  
-**Effort key**: S = small (< 4 hours), M = medium (4–16 hours), L = large (16–40 hours), XL = 40+ hours
+**Status key**: Active Focus = current priority, Next Slice = recommended
+near-term implementation, In Progress = partially shipped with clear follow-on
+work, Completed = shipped unless a regression is found  
+**Priority key**: P0 = critical path, P1 = high value, P2 = useful follow-on, P3
+= future consideration  
+**Effort key**: S = small (< 4 hours), M = medium (4–16 hours), L = large (16–40
+hours), XL = 40+ hours
 
 ## Active Focus
 
-The current focus is sample-driven hardening and broader evidence-bundle intake. The tracked template under `templates/evidence-bundle/` and the PowerShell collector at `scripts/collection/Invoke-CmtraceEvidenceCollection.ps1` now define the working bundle shape, so the next work should prioritize better sample intake, evidence inventory, parser hardening from real samples, registry state capture, curated adjacent evidence sources, and remote collection that feeds the same structure.
+The evidence-bundle intake baseline is now in place. The current focus is
+finishing Push 3 parser hardening beyond the first CBS/DISM/Panther salvage
+pass, then moving into the first correlated investigation views and the
+remaining workflow backlog without re-opening already-shipped intake work.
 
 ## Recommended Next Implementation Slice
 
-1. Make the tracked template and script-produced evidence bundle shape the canonical intake contract for investigations.
-2. Add a practical sample-intake flow that records what evidence was provided, what was recognized, and what is still unknown or unsupported.
-3. Build an evidence inventory so each local investigation starts with coverage and provenance instead of assumptions.
-4. Harden existing parsers and Intune evidence rules from real samples before expanding speculative source coverage.
-5. Treat registry snapshots and curated event-log exports as first-class adjacent evidence sources for live-device investigations.
-6. Ensure remote collection paths feed the same evidence-bundle shape instead of introducing a separate intake format.
+1. Continue Push 3 with another sample-driven hardening slice, prioritizing
+   remaining noisy parser families and IME rule gaps rather than adding
+   speculative formats.
+2. Start Push 4 by turning the existing evidence inventory, registry snapshot
+   preview, and curated event export preview into correlated investigation
+   views.
+3. Pull in isolated Push 5 workflow wins only where they do not interrupt the
+   evidence-first path.
+4. Leave broad parser expansion, scale work, and advanced integrations behind
+   validated evidence gaps.
+
+---
+
+## Push Backlog Status
+
+This is the current state of the evidence-first push backlog that replaced the
+older phase ordering.
+
+### Push 1 — Evidence Intake Foundation — Completed
+
+- Canonical evidence-bundle intake now follows the tracked bundle shape and
+  script-produced `manifest.json` + `notes.md` + `evidence/` layout.
+- Bundle inspection classifies artifacts into logs, registry snapshots,
+  event-log exports, command output, screenshots, exports, and unknown
+  artifacts.
+- Intake now exposes recognized source families, parser selection, parse
+  diagnostics, and obvious missing-evidence gaps through the bundle summary
+  flow.
+- The first evidence inventory UI is shipped via the bundle summary dialog, with
+  artifact inventory, expected evidence, notes, and manifest preview.
+
+### Push 2 — Adjacent Evidence Foundation — Mostly Completed
+
+- Registry snapshot inspection is shipped for exported `.reg` snapshots and is
+  surfaced as structured adjacent evidence in the bundle flow.
+- Curated event-log export intake is shipped as adjacent evidence preview for
+  offline/exported artifacts under the same bundle shape.
+- Provenance is retained across log, Intune, and dsregcmd bundle-backed views.
+- Remaining work is to turn these previews into richer correlated investigation
+  surfaces instead of stopping at intake and preview.
+
+### Push 3 — Parser Hardening and Evidence Quality — In Progress
+
+- Artifact-level parser quality diagnostics are shipped in the intake summary.
+- CBS, DISM, and Panther now salvage structurally valid timestamped records with
+  unexpected level tokens instead of dropping them to raw fallback.
+- Remaining work is to keep hardening the next highest-value parser and IME rule
+  gaps from real samples, using the same regression-driven approach.
+
+### Push 4 — Correlated Investigation Views — Not Started
+
+- The prerequisites now exist: bundle inventory, registry snapshot preview,
+  curated event export preview, provenance, and parser quality diagnostics.
+- The next slice should correlate logs, registry state, and adjacent event
+  evidence into source-aware investigation views.
+
+### Push 5 — Workflow and CMTrace Parity — Not Started
+
+- Time delta, Save As/export, regex find/filter, quick severity filters, richer
+  status-bar counts, and stronger embedded error lookup remain open.
+
+### Push 6 — Parser and Diagnostics Expansion — Not Started
+
+- Additional parser families such as WindowsUpdate, SetupAPI, MSI,
+  ReportingEvents expansion, and follow-on Intune maintenance remain open behind
+  sample demand.
+
+### Push 7 — Performance and Scale — Not Started
+
+- Incremental parsing, multi-file preparation, and large-investigation scaling
+  remain open.
+
+### Push 8 — Advanced Integration and Polish — Not Started
+
+- Remote collection convergence, MDM report viewing, print/history/bookmarks,
+  CLI shaping, and optional Graph enrichment remain open.
 
 ---
 
 ## Prioritized Backlog: Next Implementation Slices
 
-### 0.1 Sample Intake Baseline — P0 / M
+### 0.1 Sample Intake Baseline — Completed
 
-**Expected outcome**: a dropped local evidence bundle produces a stable intake summary showing recognized artifacts, unsupported artifacts, parse status, and obvious evidence gaps.
+**Expected outcome**: a dropped local evidence bundle produces a stable intake
+summary showing recognized artifacts, unsupported artifacts, parse status, and
+obvious evidence gaps.
 
-- Treat the tracked template under `templates/evidence-bundle/` as the canonical local intake layout.
-- Accept the same layout whether it came from a manual local copy workflow or from `scripts/collection/Invoke-CmtraceEvidenceCollection.ps1`.
-- Accept a local investigation folder as a mixed evidence bundle, not just a log directory.
-- Classify inputs into logs, registry exports, event-log exports, and unknown artifacts.
-- Show recognized source families, parse success/failure, and any high-value missing evidence.
-- Preserve deterministic ordering so intake results are easy to compare across runs and samples.
+- Treat the tracked template under `templates/evidence-bundle/` as the canonical
+  local intake layout.
+- Accept the same layout whether it came from a manual local copy workflow or
+  from `scripts/collection/Invoke-CmtraceEvidenceCollection.ps1`.
+- Accept a local investigation folder as a mixed evidence bundle, not just a log
+  directory.
+- Classify inputs into logs, registry exports, event-log exports, and unknown
+  artifacts.
+- Show recognized source families, parse success/failure, and any high-value
+  missing evidence.
+- Preserve deterministic ordering so intake results are easy to compare across
+  runs and samples.
+- Shipped status: bundle inspection, intake classification, expected-evidence
+  gap reporting, and bundle summary UI now cover this baseline.
 
-### 0.2 Evidence Inventory and Provenance — P0 / M
+### 0.2 Evidence Inventory and Provenance — Completed
 
-**Expected outcome**: each diagnostic summary can answer which artifacts were included, which were ignored, and which file or snapshot produced each notable event.
+**Expected outcome**: each diagnostic summary can answer which artifacts were
+included, which were ignored, and which file or snapshot produced each notable
+event.
 
-- Use `manifest.json` and `notes.md` as first-class inventory inputs when they are present.
-- Add an evidence inventory view with source type, origin path, time coverage, and parse status.
-- Surface provenance throughout summaries and timelines instead of collapsing everything into a single implied source.
-- Make it obvious when conclusions are based on partial evidence or a narrow subset of the supplied bundle.
+- Use `manifest.json` and `notes.md` as first-class inventory inputs when they
+  are present.
+- Add an evidence inventory view with source type, origin path, time coverage,
+  and parse status.
+- Surface provenance throughout summaries and timelines instead of collapsing
+  everything into a single implied source.
+- Make it obvious when conclusions are based on partial evidence or a narrow
+  subset of the supplied bundle.
+- Shipped status: inventory, provenance, expected evidence, notes, and manifest
+  preview are now exposed in the bundle dialog, and bundle context is surfaced
+  in Intune and dsregcmd views.
 
-### 0.3 Parser Hardening from Real Samples — P1 / M
+### 0.3 Parser Hardening from Real Samples — In Progress
 
-**Expected outcome**: existing Windows and IME parsers fail less often on real samples and produce fewer generic or misclassified events.
+**Expected outcome**: existing Windows and IME parsers fail less often on real
+samples and produce fewer generic or misclassified events.
 
-- Use real investigation samples to tighten detection, multiline handling, timestamp parsing, and severity mapping.
-- Prioritize the parsers that already unlock common device investigations before adding niche formats.
-- Track unsupported line patterns and unknown source families so hardening work stays sample-led.
+- Use real investigation samples to tighten detection, multiline handling,
+  timestamp parsing, and severity mapping.
+- Prioritize the parsers that already unlock common device investigations before
+  adding niche formats.
+- Track unsupported line patterns and unknown source families so hardening work
+  stays sample-led.
+- Current status: artifact-level parse diagnostics are live, and
+  CBS/DISM/Panther already salvage unexpected-level structural records more
+  cleanly. Remaining work is further sample-led hardening for other parser
+  families and IME rules.
 
-### 0.4 Registry Snapshot Support — P1 / L
+### 0.4 Registry Snapshot Support — Mostly Completed
 
-**Expected outcome**: registry evidence is ingested as structured device state that can be queried, compared, and correlated with log timelines.
+**Expected outcome**: registry evidence is ingested as structured device state
+that can be queried, compared, and correlated with log timelines.
 
 - Treat registry data as state snapshots, not as another line-log parser.
-- Start with exported `.reg` and other practical snapshot inputs that show enrollment, policy, and app-management state.
-- Align collector output and manual bundle intake so registry snapshots land under the same `evidence/registry/` shape.
-- Normalize keys, values, and hives so policy, enrollment, and health views can reference them directly.
-- Support side-by-side comparison of intended state, effective state, and observed failures where that evidence exists.
+- Start with exported `.reg` and other practical snapshot inputs that show
+  enrollment, policy, and app-management state.
+- Align collector output and manual bundle intake so registry snapshots land
+  under the same `evidence/registry/` shape.
+- Normalize keys, values, and hives so policy, enrollment, and health views can
+  reference them directly.
+- Support side-by-side comparison of intended state, effective state, and
+  observed failures where that evidence exists.
+- Current status: exported `.reg` inspection and preview are shipped; richer
+  state comparison and correlation views remain open.
 
-### 0.5 Curated Event Log Intake — P1 / M
+### 0.5 Curated Event Log Intake — Mostly Completed
 
-**Expected outcome**: adjacent event evidence can be added to a local investigation in a focused way without requiring a full generic event viewer first.
+**Expected outcome**: adjacent event evidence can be added to a local
+investigation in a focused way without requiring a full generic event viewer
+first.
 
-- Start with curated channels relevant to MDM, Autopilot, enrollment, BitLocker, LAPS, and Defender.
-- Prefer practical intake paths such as saved exports or offline investigation artifacts before expanding to a broad live-channel browser.
-- Align collector output and manual bundle intake so curated event exports land under the same `evidence/event-logs/` shape.
-- Correlate event IDs, levels, and timestamps back into the shared evidence inventory and timelines.
+- Start with curated channels relevant to MDM, Autopilot, enrollment, BitLocker,
+  LAPS, and Defender.
+- Prefer practical intake paths such as saved exports or offline investigation
+  artifacts before expanding to a broad live-channel browser.
+- Align collector output and manual bundle intake so curated event exports land
+  under the same `evidence/event-logs/` shape.
+- Correlate event IDs, levels, and timestamps back into the shared evidence
+  inventory and timelines.
+- Current status: curated event-log exports are classified and previewed in the
+  bundle flow. Full event extraction and correlation remain open.
 
-### 0.6 Remote Collection Feeding Shared Bundle Shape — P1 / M
+### 0.6 Remote Collection Feeding Shared Bundle Shape — Not Started
 
-**Expected outcome**: evidence collected remotely still lands in the same reviewable bundle shape as local manual copies and local script runs.
+**Expected outcome**: evidence collected remotely still lands in the same
+reviewable bundle shape as local manual copies and local script runs.
 
-- Keep remote execution focused on producing `manifest.json`, `notes.md`, and the existing `evidence/` folder layout.
-- Support Intune or other management delivery only as transport and execution layers, not as a different evidence schema.
-- Reuse the same intake, inventory, and provenance logic regardless of whether the bundle was assembled locally or remotely.
+- Keep remote execution focused on producing `manifest.json`, `notes.md`, and
+  the existing `evidence/` folder layout.
+- Support Intune or other management delivery only as transport and execution
+  layers, not as a different evidence schema.
+- Reuse the same intake, inventory, and provenance logic regardless of whether
+  the bundle was assembled locally or remotely.
 
-### 0.7 Intune Rule Maintenance from New Samples — P2 / S
+### 0.7 Intune Rule Maintenance from New Samples — In Progress
 
-**Expected outcome**: current Intune diagnostics stays useful without becoming the primary feature track.
+**Expected outcome**: current Intune diagnostics stays useful without becoming
+the primary feature track.
 
 - Keep refining IME rules only when new samples expose repeatable gaps.
-- Expand remediation guidance only where evidence remains deterministic and reviewable.
-- Avoid large new Intune-only UI work unless it directly supports the broader evidence-bundle intake flow.
+- Expand remediation guidance only where evidence remains deterministic and
+  reviewable.
+- Avoid large new Intune-only UI work unless it directly supports the broader
+  evidence-bundle intake flow.
+- Current status: diagnostics coverage, provenance, repeated-failure grouping,
+  and evidence-based summaries are already stronger; more IME rule maintenance
+  remains sample-led rather than roadmap-led.
 
 ---
 
 ## 1. Parser Expansion
 
-Current state: core CMTrace, simple, plain text, and timestamped parsing are in place. Additional Windows log families remain useful, but parser work should now be driven by real evidence intake and evidence gaps rather than format coverage for its own sake.
+Current state: core CMTrace, simple, plain text, and timestamped parsing are in
+place. Additional Windows log families remain useful, but parser work should now
+be driven by real evidence intake and evidence gaps rather than format coverage
+for its own sake.
 
 ### 1.1 CBS/Panther Format Family — P1 / M
 
-**Covers**: `CBS.log`, `dism.log`, `DPX\setupact.log`, `setupact.log`, `setuperr.log`, `WinSetup`, `MoSetup`
+**Covers**: `CBS.log`, `dism.log`, `DPX\setupact.log`, `setupact.log`,
+`setuperr.log`, `WinSetup`, `MoSetup`
 
 Shared line pattern:
 
@@ -119,7 +253,8 @@ YYYY-MM-DD HH:MM:SS, <Level> <Component> <Message>
 
 **Covers**: `setupapi.dev.log`, `setupapi.setup.log`
 
-Section-delimited format using `>>>` and `<<<` markers rather than one entry per line.
+Section-delimited format using `>>>` and `<<<` markers rather than one entry per
+line.
 
 ```text
 >>>  [Device Install (Hardware initiated) - USB\VID_045E&PID_07A5\...]
@@ -138,7 +273,8 @@ Section-delimited format using `>>>` and `<<<` markers rather than one entry per
 - Model each section as a collapsed logical entry.
 - Use the section title as the message and the section type as the component.
 - Map `FAILURE` to Error and `SUCCESS` to Info.
-- Tree-like expansion is optional follow-on UI work, not a prerequisite for parser support.
+- Tree-like expansion is optional follow-on UI work, not a prerequisite for
+  parser support.
 
 ### 1.3 MSI Multi-Format Parser — P2 / M
 
@@ -179,7 +315,8 @@ YYYY/MM/DD HH:MM:SS.mmmmmmm PID  TID  <Component>  <Message>
 
 **Covers**: `C:\Windows\SoftwareDistribution\ReportingEvents.log`
 
-Tab-delimited rows containing GUID, timestamp, event ID, category, level, update GUID, HRESULT, agent, status, operation, and message.
+Tab-delimited rows containing GUID, timestamp, event ID, category, level, update
+GUID, HRESULT, agent, status, operation, and message.
 
 **Implementation notes**:
 
@@ -198,7 +335,8 @@ Self-describing format using a `#Fields:` header.
 - Parse the `#Fields:` header into a dynamic column map.
 - Skip comment lines beginning with `#`.
 - Map `DROP` to Warning and `ALLOW` to Info.
-- Opening firewall logs should still explain that logging is often disabled by default.
+- Opening firewall logs should still explain that logging is often disabled by
+  default.
 
 ### 1.7 XML Log Format — P3 / S
 
@@ -208,7 +346,8 @@ Self-describing format using a `#Fields:` header.
 
 - Use `quick-xml`.
 - Map each `<Diagnostic>` element to one log entry.
-- Default `Diagerr.xml` to Error and `Diagwrn.xml` to Warning unless the XML payload says otherwise.
+- Default `Diagerr.xml` to Error and `Diagwrn.xml` to Warning unless the XML
+  payload says otherwise.
 
 ### 1.8 UTF-16 Encoded Logs — P3 / S
 
@@ -218,7 +357,8 @@ Self-describing format using a `#Fields:` header.
 
 - Add UTF-16 LE BOM detection to the encoding path.
 - `PFRO.log` should parse operation lines and error codes.
-- `SrtTrail.txt` should surface section and key-value content as structured entries.
+- `SrtTrail.txt` should surface section and key-value content as structured
+  entries.
 
 ### 1.9 Auto-Detection Update
 
@@ -241,59 +381,72 @@ Extend `parser/detect.rs` in roughly this priority order:
 
 ## 2. Intune Diagnostics
 
-Current state: folder-based IME analysis, source provenance, sidecar-aware event extraction, timeline attribution, deterministic counters, issue clustering, and first-pass suggested fixes are already in place. This area is good enough for now; remaining work should be sample-driven maintenance plus correlation with broader device evidence.
+Current state: folder-based IME analysis, source provenance, sidecar-aware event
+extraction, timeline attribution, deterministic counters, issue clustering, and
+first-pass suggested fixes are already in place. This area is good enough for
+now; remaining work should be sample-driven maintenance plus correlation with
+broader device evidence.
 
 ### 2.1 IME Rule Hardening from Real Samples — P1 / M
 
-The core sidecar set is already ingested. The remaining gap is richer extraction and stronger evidence quality from the highest-value files in `C:\ProgramData\Microsoft\IntuneManagementExtension\Logs\`, but that work should stay behind real sample demand instead of driving the roadmap on its own.
+The core sidecar set is already ingested. The remaining gap is richer extraction
+and stronger evidence quality from the highest-value files in
+`C:\ProgramData\Microsoft\IntuneManagementExtension\Logs\`, but that work should
+stay behind real sample demand instead of driving the roadmap on its own.
 
-| Log File | Diagnostic Value | Remaining Gap |
-| --- | --- | --- |
-| `AppWorkload.log` | Detailed Win32 and WinGet download, staging, and install flow | Better classification of stalled, partial, and retried download/install paths |
-| `AppActionProcessor.log` | Assignment decisions, applicability, and workflow transitions | Better evidence for applicability and policy-evaluation failures |
-| `AgentExecutor.log` | Script command lines, output, and exit codes | More reliable remediation of script-specific failure patterns |
-| `HealthScripts.log` | Proactive remediation scheduling and execution | Better detection vs. remediation separation and recurring failure patterns |
-| `ClientHealth.log` | Agent startup and service health | Low-volume but useful health evidence still missing |
-| `ClientCertCheck.log` | Certificate validation | Specific certificate-failure signatures still missing |
-| `DeviceHealthMonitoring.log` | Readiness and app-crash telemetry | Not yet tied into diagnostics summaries |
-| `Sensor.log` | SensorFramework events | Likely lower-value unless sample sets prove otherwise |
-| `Win32AppInventory.log` | Inventory scans | Useful for app state context, not yet correlated deeply |
-| `ImeUI.log` | End-user notification flow | Nice context, low priority for root-cause diagnostics |
+| Log File                     | Diagnostic Value                                              | Remaining Gap                                                                 |
+| ---------------------------- | ------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| `AppWorkload.log`            | Detailed Win32 and WinGet download, staging, and install flow | Better classification of stalled, partial, and retried download/install paths |
+| `AppActionProcessor.log`     | Assignment decisions, applicability, and workflow transitions | Better evidence for applicability and policy-evaluation failures              |
+| `AgentExecutor.log`          | Script command lines, output, and exit codes                  | More reliable remediation of script-specific failure patterns                 |
+| `HealthScripts.log`          | Proactive remediation scheduling and execution                | Better detection vs. remediation separation and recurring failure patterns    |
+| `ClientHealth.log`           | Agent startup and service health                              | Low-volume but useful health evidence still missing                           |
+| `ClientCertCheck.log`        | Certificate validation                                        | Specific certificate-failure signatures still missing                         |
+| `DeviceHealthMonitoring.log` | Readiness and app-crash telemetry                             | Not yet tied into diagnostics summaries                                       |
+| `Sensor.log`                 | SensorFramework events                                        | Likely lower-value unless sample sets prove otherwise                         |
+| `Win32AppInventory.log`      | Inventory scans                                               | Useful for app state context, not yet correlated deeply                       |
+| `ImeUI.log`                  | End-user notification flow                                    | Nice context, low priority for root-cause diagnostics                         |
 
 **Implementation notes**:
 
-- Keep `AppWorkload.log` first because service release 2408 shifted more download and install detail there.
-- Bias toward explicit rule coverage for retries, stalled content, applicability rejection, timeout loops, and recurring remediation failures.
+- Keep `AppWorkload.log` first because service release 2408 shifted more
+  download and install detail there.
+- Bias toward explicit rule coverage for retries, stalled content, applicability
+  rejection, timeout loops, and recurring remediation failures.
 - Prefer evidence that can be quoted back to the user in the summary panel.
 
 ### 2.2 Curated Event Log Channel Integration — P1 / M
 
-Event logs remain the largest adjacent diagnostic gap for MDM, Autopilot, BitLocker, LAPS, and Defender.
+Event logs remain the largest adjacent diagnostic gap for MDM, Autopilot,
+BitLocker, LAPS, and Defender.
 
 **Priority channels**:
 
-| Channel | Use Case |
-| --- | --- |
-| `DeviceManagement-Enterprise-Diagnostics-Provider/Admin` | Primary MDM failures and CSP operations |
-| `DeviceManagement-Enterprise-Diagnostics-Provider/Operational` | Ongoing MDM activity |
-| `Microsoft-Windows-AAD/Operational` | Entra registration and token flow |
-| `Microsoft-Windows-ModernDeployment-Diagnostics-Provider/Autopilot` | Autopilot deployment events |
-| `Microsoft-Windows-BitLocker/BitLocker Management` | Encryption and key rotation |
-| `Microsoft-Windows-LAPS/Operational` | LAPS events |
-| `Microsoft-Windows-SENSE/Operational` | Defender onboarding and connectivity |
-| `Intune-Bootstrapper-Agent` | Autopilot Device Preparation |
+| Channel                                                             | Use Case                                |
+| ------------------------------------------------------------------- | --------------------------------------- |
+| `DeviceManagement-Enterprise-Diagnostics-Provider/Admin`            | Primary MDM failures and CSP operations |
+| `DeviceManagement-Enterprise-Diagnostics-Provider/Operational`      | Ongoing MDM activity                    |
+| `Microsoft-Windows-AAD/Operational`                                 | Entra registration and token flow       |
+| `Microsoft-Windows-ModernDeployment-Diagnostics-Provider/Autopilot` | Autopilot deployment events             |
+| `Microsoft-Windows-BitLocker/BitLocker Management`                  | Encryption and key rotation             |
+| `Microsoft-Windows-LAPS/Operational`                                | LAPS events                             |
+| `Microsoft-Windows-SENSE/Operational`                               | Defender onboarding and connectivity    |
+| `Intune-Bootstrapper-Agent`                                         | Autopilot Device Preparation            |
 
 **Implementation notes**:
 
-- Start with curated exports and focused channel intake before building a broad event-log browser.
-- Use the `windows` crate for native EVTX access on Windows where native channel access is needed.
+- Start with curated exports and focused channel intake before building a broad
+  event-log browser.
+- Use the `windows` crate for native EVTX access on Windows where native channel
+  access is needed.
 - Map Event ID, Level, and message text into the existing entry model.
 - Start with curated channel presets instead of a full generic event viewer.
 - Offline `.evtx` file support can follow later.
 
 ### 2.3 Autopilot Diagnostics Panel — P1 / L
 
-Build a dedicated Autopilot view that correlates profile files, ESP state, relevant event logs, and setup logs.
+Build a dedicated Autopilot view that correlates profile files, ESP state,
+relevant event logs, and setup logs.
 
 **Panel goals**:
 
@@ -320,7 +473,8 @@ Read structured device state from registry paths such as:
 
 **Implementation note**:
 
-- Treat registry intake as structured state and correlation data, not as another log stream.
+- Treat registry intake as structured state and correlation data, not as another
+  log stream.
 
 ### 2.5 macOS Intune Log Support — P3 / XL
 
@@ -338,14 +492,19 @@ DateTime | Process | LogLevel | PID | Task | TaskInfo
 
 ### 2.6 Diagnostics Coverage and Guided Insight — P1 / M
 
-The current diagnostics panel is useful, but it still needs better confidence and coverage reporting.
+The current diagnostics panel is useful, but it still needs better confidence
+and coverage reporting.
 
 **Remaining work**:
 
-- Add per-file counts, oldest/newest timestamps, rotation awareness, and dominant-source reporting.
-- Improve repeated-failure grouping for apps, scripts, downloads, and timeout loops.
-- Expand rule-based suggested fixes only where known error codes or evidence are strong enough.
-- Keep the output auditable with sections such as `Likely Cause`, `Evidence`, `Next Checks`, and `Suggested Fix`.
+- Add per-file counts, oldest/newest timestamps, rotation awareness, and
+  dominant-source reporting.
+- Improve repeated-failure grouping for apps, scripts, downloads, and timeout
+  loops.
+- Expand rule-based suggested fixes only where known error codes or evidence are
+  strong enough.
+- Keep the output auditable with sections such as `Likely Cause`, `Evidence`,
+  `Next Checks`, and `Suggested Fix`.
 
 ---
 
@@ -377,7 +536,8 @@ Export the current filtered view to:
 
 ### 3.3 Preferences / Settings Dialog — P1 / M
 
-Persist application settings such as highlight behavior, column state, window placement, theme, font size, recent files, and find history.
+Persist application settings such as highlight behavior, column state, window
+placement, theme, font size, recent files, and find history.
 
 **Implementation notes**:
 
@@ -419,15 +579,18 @@ Allow resize, reorder, and show/hide column state with persistence.
 
 ### 4.1 Severity Quick-Filter Buttons — P0 / S
 
-Add toolbar toggles for Errors, Warnings, and Info with count badges and keyboard shortcuts.
+Add toolbar toggles for Errors, Warnings, and Info with count badges and
+keyboard shortcuts.
 
 ### 4.2 Dark Theme — P1 / S
 
-Add theme support using CSS custom properties plus System, Light, and Dark selection.
+Add theme support using CSS custom properties plus System, Light, and Dark
+selection.
 
 ### 4.3 Entry Count and Position Indicator — P1 / S
 
-Show current position, total entries, filtered count, and severity totals in the status bar.
+Show current position, total entries, filtered count, and severity totals in the
+status bar.
 
 ### 4.4 Go-To Line / Go-To Timestamp — P2 / S
 
@@ -439,11 +602,13 @@ Support session bookmarks, quick navigation, and a visible bookmark indicator.
 
 ### 4.6 Log Entry Detail Enhancement — P2 / S
 
-Improve the info pane with structured parsed fields, source metadata, inline error lookup, and clickable URLs.
+Improve the info pane with structured parsed fields, source metadata, inline
+error lookup, and clickable URLs.
 
 ### 4.7 Tail Mode Indicator — P1 / S
 
-Make live tail state obvious with a `LIVE` badge, jump-to-latest affordance, and entry-rate context.
+Make live tail state obvious with a `LIVE` badge, jump-to-latest affordance, and
+entry-rate context.
 
 ---
 
@@ -466,15 +631,18 @@ Current coverage is still well below CMTrace's embedded set.
 
 - Consider generating from public Microsoft references where practical.
 - Use `FormatMessage` on Windows as a fallback for unknown codes.
-- A data file may be easier to maintain than an ever-growing hardcoded Rust table.
+- A data file may be easier to maintain than an ever-growing hardcoded Rust
+  table.
 
 ### 5.2 Inline Error Detection — P1 / S
 
-Detect common hex and decimal error-code patterns in messages and expose hover or click lookup.
+Detect common hex and decimal error-code patterns in messages and expose hover
+or click lookup.
 
 ### 5.3 Error Code Hyperlinking — P2 / S
 
-Link recognized codes to inline lookup and, where appropriate, external documentation for that error family.
+Link recognized codes to inline lookup and, where appropriate, external
+documentation for that error family.
 
 ---
 
@@ -482,19 +650,23 @@ Link recognized codes to inline lookup and, where appropriate, external document
 
 ### 6.1 Incremental Parsing — P1 / M
 
-Avoid full re-parse on each tail cycle by tracking byte offsets and appending only newly parsed entries.
+Avoid full re-parse on each tail cycle by tracking byte offsets and appending
+only newly parsed entries.
 
 ### 6.2 Background Parsing with Progress — P2 / M
 
-For large files, show parse progress, stream results progressively, and allow cancellation.
+For large files, show parse progress, stream results progressively, and allow
+cancellation.
 
 ### 6.3 Parser Plugin System — P3 / XL
 
-Custom parser definitions remain a long-term architectural option, not a near-term priority.
+Custom parser definitions remain a long-term architectural option, not a
+near-term priority.
 
 ### 6.4 Memory-Mapped File Reading — P3 / M
 
-Use mapped I/O for very large files only if simpler parsing improvements stop being sufficient.
+Use mapped I/O for very large files only if simpler parsing improvements stop
+being sufficient.
 
 ---
 
@@ -502,48 +674,54 @@ Use mapped I/O for very large files only if simpler parsing improvements stop be
 
 ### 7.1 Collect Diagnostics Bundle Support — P1 / L
 
-Open remotely collected diagnostics bundles and expose logs, registry exports, event-log exports, and command output from one entry point, using the same evidence-bundle shape as the tracked template and local PowerShell collector.
+Open remotely collected diagnostics bundles and expose logs, registry exports,
+event-log exports, and command output from one entry point, using the same
+evidence-bundle shape as the tracked template and local PowerShell collector.
 
 ### 7.2 MDM Diagnostic Report Viewer — P2 / M
 
-Parse `MDMDiagHtmlReport.html` and `MDMDiagReport.xml` to surface policy values, enrollment variables, certificates, and conflicts.
+Parse `MDMDiagHtmlReport.html` and `MDMDiagReport.xml` to surface policy values,
+enrollment variables, certificates, and conflicts.
 
 ### 7.3 Graph API GUID Resolution — P2 / L
 
-Optionally resolve extracted Intune app and policy GUIDs to friendly names through Microsoft Graph.
+Optionally resolve extracted Intune app and policy GUIDs to friendly names
+through Microsoft Graph.
 
 ### 7.4 Command-Line Interface — P2 / S
 
-Support startup arguments for opening files, launching Intune analysis, and applying an initial filter.
+Support startup arguments for opening files, launching Intune analysis, and
+applying an initial filter.
 
 ### 7.5 Log File Health Check — P3 / S
 
-When opening an IME directory, summarize rotation state, time coverage, large gaps, and size vs. configured limits.
+When opening an IME directory, summarize rotation state, time coverage, large
+gaps, and size vs. configured limits.
 
 ---
 
 ## 8. Prioritized Implementation Phases
 
-These phases reflect unfinished work only and keep the near-term sequence aligned with the current evidence-bundle-first focus.
+These phases now reflect what is still unfinished after the completed
+evidence-intake pushes landed.
 
-### Phase 1 — Evidence Intake Baseline
+### Phase 1 — Remaining Push 3 Work
 
 Target: immediate next slice. Estimated effort: 3–5 days.
 
-1. Sample intake baseline using the tracked template and script-produced bundle shape (0.1)
-2. Evidence inventory and provenance foundation (0.2)
-3. Remote collection feeding the shared bundle shape (0.6)
-4. Collect diagnostics bundle support (7.1)
+1. Parser hardening from real samples (0.3)
+2. IME rule maintenance from new samples (0.7)
+3. Log file health check (7.5)
 
-### Phase 2 — Evidence Quality and Adjacent Evidence
+### Phase 2 — Correlated Investigation Views
 
 Target: following release. Estimated effort: 1–2 weeks.
 
-1. Parser hardening from real samples (0.3)
-2. Registry snapshot support (0.4)
-3. Curated event-log intake (0.5)
-4. IME rule maintenance from new samples (0.7)
-5. Event log channel integration foundation (2.2)
+1. Collect diagnostics bundle support (7.1)
+2. Event log channel integration foundation (2.2)
+3. Autopilot diagnostics panel (2.3)
+4. MDM policy viewer (2.4)
+5. MDM diagnostic report viewer (7.2)
 
 ### Phase 3 — Workflow and Investigation UX
 
@@ -561,14 +739,12 @@ Target: after intake and evidence quality land. Estimated effort: 2–3 weeks.
 
 Target: later follow-on release. Estimated effort: 2–3 weeks.
 
-1. CBS/Panther parser (1.1)
-2. WindowsUpdate.log parser (1.4)
-3. SetupAPI section parser (1.2)
-4. MSI multi-format parser (1.3)
-5. ReportingEvents.log parser (1.5)
-6. W3C extended log parser (1.6)
-7. Autopilot diagnostics panel (2.3)
-8. MDM diagnostic report viewer (7.2)
+1. WindowsUpdate.log parser (1.4)
+2. SetupAPI section parser (1.2)
+3. MSI multi-format parser (1.3)
+4. ReportingEvents.log parser (1.5)
+5. W3C extended log parser (1.6)
+6. Background parsing with progress (6.2)
 
 ### Phase 5 — Longer-Term Additions
 
@@ -596,17 +772,45 @@ Target: no fixed timeline.
 
 Shipped work that should no longer appear as active roadmap items:
 
-- The tracked evidence-bundle template lives under `templates/evidence-bundle/` and is intended to be copied to a local working folder outside the repo.
-- The PowerShell collector at `scripts/collection/Invoke-CmtraceEvidenceCollection.ps1` produces the same high-level `manifest.json` + `notes.md` + `evidence/` bundle shape for local or remote execution.
+- The tracked evidence-bundle template lives under `templates/evidence-bundle/`
+  and is intended to be copied to a local working folder outside the repo.
+- The PowerShell collector at
+  `scripts/collection/Invoke-CmtraceEvidenceCollection.ps1` produces the same
+  high-level `manifest.json` + `notes.md` + `evidence/` bundle shape for local
+  or remote execution.
+- Evidence bundle inspection is available from the app and now exposes artifact
+  intake classification, expected evidence, manifest and notes preview, and
+  parser-quality summary.
+- Bundle inventory is surfaced through the shipped bundle summary dialog instead
+  of living only in the collector output.
+- Registry snapshot exports can be inspected as structured adjacent evidence
+  from the bundle flow.
+- Curated event-log exports can be classified and previewed from the same bundle
+  flow.
+- Log, Intune, and dsregcmd workspaces now retain bundle provenance so
+  investigations can tell when results came from a bundle-backed source.
+- Artifact-level parse diagnostics are available for recognized log artifacts.
+- CBS, DISM, and Panther parsers now salvage structurally valid timestamped
+  records with unexpected level tokens instead of dropping them to raw fallback.
 - Log sources are first-class inputs: file, folder, and known platform presets.
-- Folder open and file browsing are available in the main log workflow, including toolbar access.
-- Known source presets include Windows IME logs and route through the shared source-loading flow.
+- Folder open and file browsing are available in the main log workflow,
+  including toolbar access.
+- Known source presets include Windows IME logs and route through the shared
+  source-loading flow.
 - Intune analysis accepts an IME folder path, not only a single file.
-- IME folder discovery includes the documented sidecar bundle instead of narrowing to `IntuneManagementExtension*.log` only.
-- Intune results retain and display expanded source-file provenance in the frontend model, summary/header, and event timeline.
-- File-aware Intune extraction covers `AppWorkload.log`, `AppActionProcessor.log`, `AgentExecutor.log`, and `HealthScripts.log`.
-- Sidecar events use more specific heuristic naming for install phases, policy evaluation, and detection/remediation context.
-- Aggregated IME timelines sort by parsed timestamps and collapse duplicate completion events more reliably.
-- Intune summary output includes deterministic counters for pending, timed out, failed downloads, successful downloads, and failed scripts.
-- Intune diagnostics include evidence-based issue clustering, next checks, and rule-based suggested fixes where evidence is specific enough.
-- Parser expansion has been intentionally deprioritized behind sample-driven Intune diagnostics refinement.
+- IME folder discovery includes the documented sidecar bundle instead of
+  narrowing to `IntuneManagementExtension*.log` only.
+- Intune results retain and display expanded source-file provenance in the
+  frontend model, summary/header, and event timeline.
+- File-aware Intune extraction covers `AppWorkload.log`,
+  `AppActionProcessor.log`, `AgentExecutor.log`, and `HealthScripts.log`.
+- Sidecar events use more specific heuristic naming for install phases, policy
+  evaluation, and detection/remediation context.
+- Aggregated IME timelines sort by parsed timestamps and collapse duplicate
+  completion events more reliably.
+- Intune summary output includes deterministic counters for pending, timed out,
+  failed downloads, successful downloads, and failed scripts.
+- Intune diagnostics include evidence-based issue clustering, next checks, and
+  rule-based suggested fixes where evidence is specific enough.
+- Parser expansion has been intentionally deprioritized behind sample-driven
+  evidence quality and correlated investigation work.

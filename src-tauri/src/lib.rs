@@ -45,6 +45,8 @@ pub fn run() {
             commands::file_association::set_file_association_prompt_suppressed,
             commands::file_ops::open_log_file,
             commands::file_ops::list_log_folder,
+            commands::file_ops::inspect_evidence_bundle,
+            commands::file_ops::inspect_evidence_artifact,
             commands::file_ops::get_known_log_sources,
             commands::file_ops::inspect_path_kind,
             commands::file_ops::write_text_output_file,

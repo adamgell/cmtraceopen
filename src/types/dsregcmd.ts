@@ -247,6 +247,7 @@ export interface DsregcmdSourceContext {
   source: DsregcmdSourceDescriptor | null;
   requestedPath: string | null;
   resolvedPath: string | null;
+  bundlePath: string | null;
   displayLabel: string;
   evidenceFilePath: string | null;
   rawLineCount: number;

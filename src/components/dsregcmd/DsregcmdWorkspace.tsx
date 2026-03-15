@@ -1504,6 +1504,8 @@ export function DsregcmdWorkspace() {
     confidence: result.derived.captureConfidence,
     reason: result.derived.captureConfidenceReason,
   };
+  const hasBundleContext = sourceContext.bundlePath != null;
+  const hasRegistryPolicyEvidence = result.policyEvidence.artifactPaths.length > 0;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", backgroundColor: "#f8fafc" }}>
@@ -1546,6 +1548,71 @@ export function DsregcmdWorkspace() {
       </div>
 
       <div style={{ flex: 1, overflow: "auto", padding: "16px", display: "flex", flexDirection: "column", gap: "16px" }}>
+        {(hasBundleContext || sourceContext.evidenceFilePath) && (
+          <SectionFrame
+            title="Evidence Provenance"
+            caption="What bundle context was available for this dsregcmd analysis."
+          >
+            <div style={{ display: "grid", gap: "10px" }}>
+              <div
+                style={{
+                  padding: "10px 12px",
+                  border: hasRegistryPolicyEvidence ? "1px solid #bfdbfe" : "1px solid #fde68a",
+                  backgroundColor: hasRegistryPolicyEvidence ? "#eff6ff" : "#fffbeb",
+                  color: hasRegistryPolicyEvidence ? "#1e3a8a" : "#92400e",
+                  borderRadius: "8px",
+                  fontSize: "12px",
+                  lineHeight: 1.5,
+                }}
+              >
+                <div style={{ fontWeight: 700 }}>
+                  {hasRegistryPolicyEvidence
+                    ? "Bundle-backed policy evidence is available."
+                    : "Bundle-backed registry policy evidence is missing for this capture."}
+                </div>
+                <div style={{ marginTop: "4px" }}>
+                  {hasRegistryPolicyEvidence
+                    ? `WHfB policy interpretation can reference ${result.policyEvidence.artifactPaths.length} sibling registry artifact${result.policyEvidence.artifactPaths.length === 1 ? "" : "s"}.`
+                    : "The dsregcmd text was analyzed, but policy and registry corroboration was not available from sibling bundle artifacts."}
+                </div>
+              </div>
+
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: "10px" }}>
+                {sourceContext.bundlePath && (
+                  <div style={{ border: "1px solid #e5e7eb", backgroundColor: "#ffffff", padding: "10px 12px", borderRadius: "8px" }}>
+                    <div style={{ fontSize: "11px", fontWeight: 700, color: "#475569", textTransform: "uppercase", letterSpacing: "0.04em" }}>
+                      Bundle root
+                    </div>
+                    <div style={{ marginTop: "4px", fontSize: "12px", color: "#111827", wordBreak: "break-word" }}>
+                      {sourceContext.bundlePath}
+                    </div>
+                  </div>
+                )}
+                {sourceContext.evidenceFilePath && (
+                  <div style={{ border: "1px solid #e5e7eb", backgroundColor: "#ffffff", padding: "10px 12px", borderRadius: "8px" }}>
+                    <div style={{ fontSize: "11px", fontWeight: 700, color: "#475569", textTransform: "uppercase", letterSpacing: "0.04em" }}>
+                      Evidence file
+                    </div>
+                    <div style={{ marginTop: "4px", fontSize: "12px", color: "#111827", wordBreak: "break-word" }}>
+                      {sourceContext.evidenceFilePath}
+                    </div>
+                  </div>
+                )}
+                <div style={{ border: "1px solid #e5e7eb", backgroundColor: "#ffffff", padding: "10px 12px", borderRadius: "8px" }}>
+                  <div style={{ fontSize: "11px", fontWeight: 700, color: "#475569", textTransform: "uppercase", letterSpacing: "0.04em" }}>
+                    Registry artifacts
+                  </div>
+                  <div style={{ marginTop: "4px", fontSize: "12px", color: "#111827", wordBreak: "break-word" }}>
+                    {hasRegistryPolicyEvidence
+                      ? formatRegistryArtifacts(result.policyEvidence.artifactPaths)
+                      : "No sibling registry artifacts were available."}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </SectionFrame>
+        )}
+
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "12px" }}>
           <StatCard
             title="Join Type"

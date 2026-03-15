@@ -2,6 +2,8 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use serde::{Deserialize, Serialize};
+
 use crate::dsregcmd::models::{
     DsregcmdEvidenceSource, DsregcmdPolicyEvidenceValue, DsregcmdWhfbPolicyEvidence,
 };
@@ -20,7 +22,40 @@ enum RegistryValue {
     String(String),
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RegistrySnapshotValuePreview {
+    pub name: String,
+    pub value_type: String,
+    pub value: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RegistrySnapshotKeyPreview {
+    pub path: String,
+    pub value_count: u32,
+    pub values: Vec<RegistrySnapshotValuePreview>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RegistrySnapshotSummary {
+    pub key_count: u32,
+    pub value_count: u32,
+    pub keys: Vec<RegistrySnapshotKeyPreview>,
+}
+
 type RegistryKeyMap = HashMap<String, HashMap<String, RegistryValue>>;
+
+pub fn inspect_registry_snapshot_file(path: &Path) -> Option<RegistrySnapshotSummary> {
+    let content = fs::read_to_string(path)
+        .ok()
+        .or_else(|| fs::read(path).ok().and_then(|bytes| decode_reg_content(&bytes)))?;
+    let registry = parse_reg_snapshot(&content);
+
+    Some(build_registry_snapshot_summary(&registry))
+}
 
 pub fn load_whfb_policy_evidence(bundle_path: &Path) -> DsregcmdWhfbPolicyEvidence {
     let mut evidence = DsregcmdWhfbPolicyEvidence::default();
@@ -154,6 +189,59 @@ fn decode_reg_content(bytes: &[u8]) -> Option<String> {
     }
 
     String::from_utf8(bytes.to_vec()).ok()
+}
+
+fn build_registry_snapshot_summary(registry: &RegistryKeyMap) -> RegistrySnapshotSummary {
+    let mut keys = registry.iter().collect::<Vec<_>>();
+    keys.sort_by(|left, right| left.0.cmp(right.0));
+
+    let key_count = u32::try_from(keys.len()).unwrap_or(u32::MAX);
+    let value_count = u32::try_from(
+        registry
+            .values()
+            .map(|values| values.len())
+            .sum::<usize>(),
+    )
+    .unwrap_or(u32::MAX);
+
+    let keys = keys
+        .into_iter()
+        .take(6)
+        .map(|(path, values)| {
+            let mut values = values.iter().collect::<Vec<_>>();
+            values.sort_by(|left, right| left.0.cmp(right.0));
+
+            RegistrySnapshotKeyPreview {
+                path: path.clone(),
+                value_count: u32::try_from(values.len()).unwrap_or(u32::MAX),
+                values: values
+                    .into_iter()
+                    .take(8)
+                    .map(|(name, value)| {
+                        let (value_type, rendered_value) = render_registry_value(value);
+                        RegistrySnapshotValuePreview {
+                            name: name.clone(),
+                            value_type,
+                            value: rendered_value,
+                        }
+                    })
+                    .collect(),
+            }
+        })
+        .collect();
+
+    RegistrySnapshotSummary {
+        key_count,
+        value_count,
+        keys,
+    }
+}
+
+fn render_registry_value(value: &RegistryValue) -> (String, String) {
+    match value {
+        RegistryValue::Dword(raw) => ("dword".to_string(), format!("0x{raw:08X} ({raw})")),
+        RegistryValue::String(raw) => ("string".to_string(), raw.clone()),
+    }
 }
 
 fn current_policy_value(registry: &RegistryKeyMap, value_name: &str) -> Option<bool> {
@@ -369,7 +457,10 @@ fn parse_registry_bool(value: &RegistryValue) -> Option<bool> {
 
 #[cfg(test)]
 mod tests {
-    use super::{decode_reg_content, load_whfb_policy_evidence, parse_reg_snapshot};
+    use super::{
+        decode_reg_content, inspect_registry_snapshot_file, load_whfb_policy_evidence,
+        parse_reg_snapshot,
+    };
     use crate::dsregcmd::models::DsregcmdEvidenceSource;
 
     #[test]
@@ -448,6 +539,32 @@ mod tests {
         ];
         let decoded = decode_reg_content(&utf16).expect("decode utf16 reg export");
         assert_eq!(decoded, "Windows");
+    }
+
+    #[test]
+    fn inspects_registry_snapshot_file_summary() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let path = temp_dir.path().join("snapshot.reg");
+        std::fs::write(
+            &path,
+            r#"Windows Registry Editor Version 5.00
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\PolicyManager\Current\Device\PassportForWork\Policies]
+"UsePassportForWork"=dword:00000001
+"TenantName"="Contoso"
+"#,
+        )
+        .expect("write registry snapshot");
+
+        let summary = inspect_registry_snapshot_file(&path).expect("registry summary");
+        assert_eq!(summary.key_count, 1);
+        assert_eq!(summary.value_count, 2);
+        assert!(summary
+            .keys
+            .first()
+            .expect("key preview")
+            .path
+            .contains("PassportForWork"));
     }
 
     #[test]

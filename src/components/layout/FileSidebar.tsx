@@ -328,6 +328,7 @@ function SourceSummaryCard({
 function LogSidebar() {
   const activeSource = useLogStore((s) => s.activeSource);
   const sourceEntries = useLogStore((s) => s.sourceEntries);
+  const bundleMetadata = useLogStore((s) => s.bundleMetadata);
   const selectedSourceFilePath = useLogStore((s) => s.selectedSourceFilePath);
   const openFilePath = useLogStore((s) => s.openFilePath);
   const isLoading = useLogStore((s) => s.isLoading);
@@ -418,7 +419,15 @@ function LogSidebar() {
   return (
     <>
       <SourceSummaryCard
-        badge={activeSource ? (folderLike ? "Folder Source" : "File Source") : "No Source"}
+        badge={
+          activeSource
+            ? bundleMetadata
+              ? "Evidence Bundle"
+              : folderLike
+                ? "Folder Source"
+                : "File Source"
+            : "No Source"
+        }
         title={activeSource ? sourceLabel : "Open a log file or folder"}
         subtitle={sourcePath ?? "Choose a source to start viewing logs."}
         body={
@@ -433,6 +442,14 @@ function LogSidebar() {
             }}
           >
             <div>{folderLike ? `${formatCount(files.length, "file")} • ${formatCount(folders.length, "folder")}` : "Single file source"}</div>
+            {bundleMetadata && (
+              <div style={{ marginTop: "4px" }}>
+                Bundle: {bundleMetadata.bundleLabel ?? bundleMetadata.bundleId ?? "Detected"}
+              </div>
+            )}
+            {bundleMetadata?.caseReference && (
+              <div style={{ marginTop: "4px" }}>Case: {bundleMetadata.caseReference}</div>
+            )}
             <div style={{ marginTop: "4px" }}>Selected: {activeFileName}</div>
             <div style={{ marginTop: "4px" }}>{sourceStatus.message}</div>
             {sourceFailureReason && (
@@ -567,6 +584,7 @@ function IntuneSidebar() {
   const intuneAnalysisState = useIntuneStore((s) => s.analysisState);
   const intuneIsAnalyzing = useIntuneStore((s) => s.isAnalyzing);
   const intuneSummary = useIntuneStore((s) => s.summary);
+  const intuneEvidenceBundle = useIntuneStore((s) => s.evidenceBundle);
   const intuneSourceContext = useIntuneStore((s) => s.sourceContext);
   const intuneTimelineScope = useIntuneStore((s) => s.timelineScope);
   const setIntuneTimelineFileScope = useIntuneStore((s) => s.setTimelineFileScope);
@@ -579,13 +597,18 @@ function IntuneSidebar() {
   return (
     <>
       <SourceSummaryCard
-        badge="Intune"
+        badge={intuneEvidenceBundle ? "Intune Bundle" : "Intune"}
         title={getBaseName(intuneRequestedPath) || "Intune diagnostics workspace"}
         subtitle={intuneRequestedPath ?? "Select an IME log source to begin analysis."}
         body={
           <div style={{ fontSize: "11px", color: "#374151", lineHeight: 1.45 }}>
             <div>{intuneAnalysisState.message}</div>
             <div style={{ marginTop: "4px" }}>Included files: {intuneIncludedFiles.length}</div>
+            {intuneEvidenceBundle && (
+              <div style={{ marginTop: "4px" }}>
+                Bundle: {intuneEvidenceBundle.bundleLabel ?? intuneEvidenceBundle.bundleId ?? "Detected"}
+              </div>
+            )}
             {intuneSummary && <div style={{ marginTop: "4px" }}>Events: {intuneSummary.totalEvents}</div>}
           </div>
         }
@@ -742,6 +765,9 @@ function DsregcmdSidebar() {
               <div style={{ marginTop: "6px" }}><strong>Issues:</strong> {errorCount} errors • {warningCount} warnings • {infoCount} info</div>
               {sourceContext.evidenceFilePath && (
                 <div style={{ marginTop: "6px", wordBreak: "break-word" }}><strong>Evidence file:</strong> {sourceContext.evidenceFilePath}</div>
+              )}
+              {sourceContext.bundlePath && (
+                <div style={{ marginTop: "6px", wordBreak: "break-word" }}><strong>Bundle root:</strong> {sourceContext.bundlePath}</div>
               )}
             </div>
 

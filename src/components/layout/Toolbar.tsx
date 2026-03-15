@@ -133,6 +133,7 @@ export interface AppCommandState {
   canRefresh: boolean;
   canToggleDetailsPane: boolean;
   canToggleInfoPane: boolean;
+  canShowEvidenceBundle: boolean;
   isLoading: boolean;
   isPaused: boolean;
   hasActiveSource: boolean;
@@ -161,6 +162,7 @@ export interface AppActionHandlers {
   showErrorLookupDialog: () => void;
   showAboutDialog: () => void;
   showAccessibilityDialog: () => void;
+  showEvidenceBundleDialog: () => void;
   increaseLogListTextSize: () => void;
   decreaseLogListTextSize: () => void;
   resetLogListTextSize: () => void;
@@ -203,12 +205,15 @@ export function useAppActions(): AppActionHandlers {
   const activeSource = useLogStore((s) => s.activeSource);
   const openFilePath = useLogStore((s) => s.openFilePath);
   const selectedSourceFilePath = useLogStore((s) => s.selectedSourceFilePath);
+  const bundleMetadata = useLogStore((s) => s.bundleMetadata);
   const intuneIsAnalyzing = useIntuneStore((s) => s.isAnalyzing);
+  const intuneEvidenceBundle = useIntuneStore((s) => s.evidenceBundle);
   const beginIntuneAnalysis = useIntuneStore((s) => s.beginAnalysis);
   const failIntuneAnalysis = useIntuneStore((s) => s.failAnalysis);
   const setIntuneResults = useIntuneStore((s) => s.setResults);
   const dsregcmdIsAnalyzing = useDsregcmdStore((s) => s.isAnalyzing);
   const dsregcmdSource = useDsregcmdStore((s) => s.sourceContext.source);
+  const dsregcmdBundlePath = useDsregcmdStore((s) => s.sourceContext.bundlePath);
 
   const activeWorkspace = useUiStore((s) => s.activeWorkspace);
   const activeView = useUiStore((s) => s.activeView);
@@ -222,6 +227,9 @@ export function useAppActions(): AppActionHandlers {
   const setShowAboutDialog = useUiStore((s) => s.setShowAboutDialog);
   const setShowAccessibilityDialog = useUiStore(
     (s) => s.setShowAccessibilityDialog
+  );
+  const setShowEvidenceBundleDialog = useUiStore(
+    (s) => s.setShowEvidenceBundleDialog
   );
   const increaseLogListFontSize = useUiStore(
     (s) => s.increaseLogListFontSize
@@ -258,6 +266,12 @@ export function useAppActions(): AppActionHandlers {
           : refreshSource !== null),
       canToggleDetailsPane: activeView === "log",
       canToggleInfoPane: activeView === "log",
+      canShowEvidenceBundle:
+        activeView === "log"
+          ? bundleMetadata !== null
+          : activeView === "intune"
+            ? intuneEvidenceBundle !== null
+            : dsregcmdBundlePath !== null,
       isLoading: isSourceCommandBusy,
       isPaused,
       hasActiveSource:
@@ -275,9 +289,12 @@ export function useAppActions(): AppActionHandlers {
       activeWorkspace,
       activeFilterCount,
       activeView,
+      bundleMetadata,
+      dsregcmdBundlePath,
       dsregcmdSource,
       entriesCount,
       filterError,
+      intuneEvidenceBundle,
       intuneIsAnalyzing,
       isFiltering,
       isLoading,
@@ -338,6 +355,7 @@ export function useAppActions(): AppActionHandlers {
               diagnosticsConfidence: result.diagnosticsConfidence,
               diagnosticsCoverage: result.diagnosticsCoverage,
               repeatedFailures: result.repeatedFailures,
+              evidenceBundle: result.evidenceBundle ?? null,
             }
           );
         });
@@ -562,6 +580,27 @@ export function useAppActions(): AppActionHandlers {
     setShowAccessibilityDialog(true);
   }, [setShowAccessibilityDialog]);
 
+  const showEvidenceBundleDialog = useCallback(() => {
+    const canShowForView =
+      activeView === "log"
+        ? bundleMetadata !== null
+        : activeView === "intune"
+          ? intuneEvidenceBundle !== null
+          : dsregcmdBundlePath !== null;
+
+    if (!canShowForView) {
+      return;
+    }
+
+    setShowEvidenceBundleDialog(true);
+  }, [
+    activeView,
+    bundleMetadata,
+    dsregcmdBundlePath,
+    intuneEvidenceBundle,
+    setShowEvidenceBundleDialog,
+  ]);
+
   const increaseLogListTextSize = useCallback(() => {
     increaseLogListFontSize();
   }, [increaseLogListFontSize]);
@@ -650,6 +689,7 @@ export function useAppActions(): AppActionHandlers {
     showErrorLookupDialog,
     showAboutDialog,
     showAccessibilityDialog,
+    showEvidenceBundleDialog,
     increaseLogListTextSize,
     decreaseLogListTextSize,
     resetLogListTextSize,
@@ -682,6 +722,7 @@ export function Toolbar() {
     pasteDsregcmdSource,
     captureDsregcmdSource,
     showErrorLookupDialog,
+    showEvidenceBundleDialog,
     togglePauseResume,
     refreshActiveSource,
     toggleDetailsPane,
@@ -894,6 +935,14 @@ export function Toolbar() {
 
         <div style={{ width: "1px", height: "16px", backgroundColor: "#c0c0c0", margin: "0 2px" }} />
 
+        <button
+          onClick={showEvidenceBundleDialog}
+          title="Show collected bundle summary"
+          disabled={!commandState.canShowEvidenceBundle}
+          style={getToolbarControlStyle({ disabled: !commandState.canShowEvidenceBundle })}
+        >
+          Bundle Summary
+        </button>
         <button
           onClick={showErrorLookupDialog}
           title="Error Lookup (Ctrl+E)"
