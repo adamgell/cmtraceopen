@@ -43,12 +43,16 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Install-CMTraceOpenBuildPrere
 
 Optional flags:
 
-- `-VisualStudioSku Community` installs the full Visual Studio Community SKU instead of Build Tools.
-- `-EnableVbScript` enables the Windows optional feature needed for local MSI packaging.
-- `-InstallRepoDependencies` runs `npm ci` in the repo after the machine prerequisites are installed.
+- `-VisualStudioSku Community` installs the full Visual Studio Community SKU
+  instead of Build Tools.
+- `-EnableVbScript` enables the Windows optional feature needed for local MSI
+  packaging.
+- `-InstallRepoDependencies` runs `npm ci` in the repo after the machine
+  prerequisites are installed.
 
-The script is safe to rerun and skips packages that are already installed.
-It installs the Visual Studio C++ workload before `rustup` so Rust does not warn about a missing MSVC toolchain prerequisite during setup.
+The script is safe to rerun and skips packages that are already installed. It
+installs the Visual Studio C++ workload before `rustup` so Rust does not warn
+about a missing MSVC toolchain prerequisite during setup.
 
 Run these in an elevated terminal on the new box:
 
@@ -75,8 +79,9 @@ winget install --id Microsoft.VisualStudio.2022.BuildTools --exact ^
 
 Notes:
 
-- The Visual Studio Build Tools command installs the `Desktop development with
-  C++` workload through `Microsoft.VisualStudio.Workload.VCTools`.
+- The Visual Studio Build Tools command installs the
+  `Desktop development with C++` workload through
+  `Microsoft.VisualStudio.Workload.VCTools`.
 - The command also adds `Microsoft.VisualStudio.Component.Windows11SDK.26100`
   explicitly so the Windows SDK is not left to installer defaults.
 - If you prefer the full Visual Studio IDE instead of Build Tools only, use this
@@ -113,7 +118,8 @@ Current box path:
 
 ### Node.js
 
-Needed for the Vite/React frontend and the local Tauri CLI dependency in `package.json`.
+Needed for the Vite/React frontend and the local Tauri CLI dependency in
+`package.json`.
 
 Repo facts:
 
@@ -171,8 +177,8 @@ Why the SDK matters:
 - The MSVC compiler alone is not enough for a reliable native Windows build
 - Missing SDK headers or libraries can block Tauri and Rust native linking on a
   fresh box
-- This was a real setup pain point on the current machine, so the handoff
-  should treat it as explicit, not implied
+- This was a real setup pain point on the current machine, so the handoff should
+  treat it as explicit, not implied
 
 ### WebView2 Runtime
 
@@ -195,8 +201,8 @@ Why this matters in this repo:
 - Tauri documents that MSI creation can fail without the Windows `VBSCRIPT`
   optional feature enabled
 
-If you only need local development with `npm run tauri dev`, this is not
-usually required.
+If you only need local development with `npm run tauri dev`, this is not usually
+required.
 
 ## What You Do Not Need To Install Separately
 
@@ -208,6 +214,22 @@ This repo already carries the CLI as a dev dependency:
 
 After `npm ci` or `npm install`, use the local scripts from `package.json`.
 
+If you only want the raw Windows executable and do not want NSIS or MSI
+installers, use one of these instead of the full release bundle build:
+
+```bash
+npm run app:build:exe-only
+```
+
+or:
+
+```powershell
+.\scripts\Launch-CMTraceOpen.ps1 -Mode BuildExeOnly
+```
+
+That produces the app executable under `src-tauri\target\release\` without
+running the Tauri bundling step.
+
 ## Fresh Machine Setup
 
 ### 1. Install the base tools
@@ -216,13 +238,15 @@ Install, in this order:
 
 1. Git
 2. Node.js 20 LTS
-3. Visual Studio 2022 Build Tools or Community with `Desktop development with C++`
+3. Visual Studio 2022 Build Tools or Community with
+   `Desktop development with C++`
 4. Confirm the Windows SDK component is installed with Visual Studio
 5. WebView2 Runtime if it is not already present
 6. Rust using `rustup`, keeping the default `stable-x86_64-pc-windows-msvc`
-  toolchain
+   toolchain
 
-After installing Node.js and Rust, restart the terminal before validating versions.
+After installing Node.js and Rust, restart the terminal before validating
+versions.
 
 ### 2. Verify the toolchain
 
@@ -313,12 +337,12 @@ cargo clippy -- -D warnings
 
 ## Repo-Specific Notes
 
-- CI is pinned to Node.js `20`, so matching that on the new box is the safest choice.
+- CI is pinned to Node.js `20`, so matching that on the new box is the safest
+  choice.
 - `package-lock.json` and `src-tauri/Cargo.lock` are present, so dependency
   resolution is already pinned.
-- `src-tauri/tauri.conf.json` uses `beforeDevCommand:
-  "npm run frontend:dev"` and `beforeBuildCommand:
-  "npm run frontend:build"`.
+- `src-tauri/tauri.conf.json` uses `beforeDevCommand: "npm run frontend:dev"`
+  and `beforeBuildCommand: "npm run frontend:build"`.
 - Windows packaging is enabled through Tauri bundle targets, so
   packaging-related failures are usually toolchain or Windows-feature issues,
   not frontend issues.
