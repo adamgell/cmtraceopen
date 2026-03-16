@@ -14,13 +14,11 @@ use crate::intune::eventlog_win32;
 use crate::intune::models::{
     EvidenceBundleMetadata, EventLogAnalysis, EventLogAnalysisSource, EventLogChannel,
     EventLogChannelSummary, EventLogCorrelationKind, EventLogCorrelationLink, EventLogEntry,
-    EventLogSeverity, IntuneDiagnosticInsight, IntuneEvent, IntuneEventType, IntuneStatus,
-    IntuneTimestampBounds,
+    EventLogLiveQueryMetadata, EventLogSeverity, IntuneDiagnosticInsight, IntuneEvent,
+    IntuneEventType, IntuneStatus, IntuneTimestampBounds,
 };
 #[cfg(target_os = "windows")]
-use crate::intune::models::{
-    EventLogLiveQueryChannelResult, EventLogLiveQueryMetadata, EventLogLiveQueryStatus,
-};
+use crate::intune::models::{EventLogLiveQueryChannelResult, EventLogLiveQueryStatus};
 
 /// Maximum entries to parse from a single .evtx file to prevent memory issues.
 const MAX_ENTRIES_PER_FILE: usize = 50_000;
