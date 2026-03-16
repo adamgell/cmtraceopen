@@ -1416,6 +1416,8 @@ fn build_diagnostics(
     // Device sync status inference — sync pending
     if facts.join_state.domain_joined == Some(true)
         && facts.join_state.azure_ad_joined == Some(false)
+        && facts.pre_join_tests.ad_connectivity_test.is_some()
+        && facts.pre_join_tests.ad_configuration_test.is_some()
         && !is_failure(&facts.pre_join_tests.ad_connectivity_test)
         && !is_failure(&facts.pre_join_tests.ad_configuration_test)
         && !diagnostics.iter().any(|item| item.id == "entra-sync-pending")
@@ -1449,8 +1451,8 @@ fn build_diagnostics(
             "fallback-sync-join-active",
             IntuneDiagnosticSeverity::Info,
             "sync",
-            "Hybrid join is using sync-join fallback path",
-            "Fallback to Sync-Join is active, which means the device will rely on directory synchronization to complete its hybrid join rather than the immediate online path.",
+            "Sync-join fallback is active on a device not yet hybrid-joined",
+            "Fallback to Sync-Join is active on a device that is not hybrid-joined, which means the device will rely on directory synchronization to complete its join rather than the immediate online path.",
             vec![render_optional(
                 "Fallback to Sync-Join",
                 &facts.pre_join_tests.fallback_to_sync_join,
