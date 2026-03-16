@@ -194,7 +194,7 @@ interface SyncmlStore {
 
 ```toml
 # In src-tauri/Cargo.toml - Windows-only ETW support
-[target.'cfg(windows)'.dependencies]
+[target.'cfg(target_os = "windows")'.dependencies]
 ferrisetw = "1"  # Microsoft's Rust ETW library
 # OR
 windows = { version = "0.58", features = ["Win32_System_Diagnostics_Etw"] }
@@ -207,7 +207,7 @@ quick-xml = "0.36"
 
 ## Key Considerations
 
-- **Windows-only**: ETW is a Windows technology. The SyncML workspace should only be available on Windows (similar to how dsregcmd is Windows-only via `winreg`)
+- **ETW is Windows-only**: The ETW capture and trigger commands are Windows-only and must be gated with `#[cfg(target_os = "windows")]`. The workspace UI itself can exist on all platforms with ETW-dependent actions disabled/hidden on non-Windows (consistent with the dsregcmd workspace, where only certain commands are Windows-gated).
 - **Admin required**: ETW trace sessions require elevated privileges. Need clear UX for this
 - **64KB ETW buffer limit**: Must handle truncated messages gracefully (the original tool appends synthetic closing tags)
 - **Real-time streaming**: Messages arrive via ETW callbacks — needs async channel from Rust → frontend (similar pattern to the existing file tail watcher using Tauri events)
