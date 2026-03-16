@@ -17,10 +17,6 @@ pub const MENU_ID_TOOLS_ERROR_LOOKUP: &str = "tools.error_lookup";
 pub const MENU_ID_WINDOW_TOGGLE_DETAILS: &str = "window.toggle.details";
 pub const MENU_ID_WINDOW_TOGGLE_INFO: &str = "window.toggle.info";
 pub const MENU_ID_WINDOW_ACCESSIBILITY_SETTINGS: &str = "window.accessibility.settings";
-pub const MENU_ID_WINDOW_INCREASE_LOG_TEXT: &str = "window.log_text.increase";
-pub const MENU_ID_WINDOW_DECREASE_LOG_TEXT: &str = "window.log_text.decrease";
-pub const MENU_ID_WINDOW_RESET_LOG_TEXT: &str = "window.log_text.reset";
-
 pub const MENU_ID_HELP_ABOUT: &str = "help.about";
 
 pub const MENU_ID_PRESET_WINDOWS_IME: &str = "preset.windows.ime";
@@ -94,28 +90,6 @@ pub fn build_app_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> 
         true,
         None::<&str>,
     )?;
-    let increase_log_text = MenuItem::with_id(
-        app,
-        MENU_ID_WINDOW_INCREASE_LOG_TEXT,
-        "Increase Log List Text Size",
-        true,
-        None::<&str>,
-    )?;
-    let decrease_log_text = MenuItem::with_id(
-        app,
-        MENU_ID_WINDOW_DECREASE_LOG_TEXT,
-        "Decrease Log List Text Size",
-        true,
-        None::<&str>,
-    )?;
-    let reset_log_text = MenuItem::with_id(
-        app,
-        MENU_ID_WINDOW_RESET_LOG_TEXT,
-        "Reset Log List Text Size",
-        true,
-        None::<&str>,
-    )?;
-
     let about = MenuItem::with_id(app, MENU_ID_HELP_ABOUT, "About CMTrace Open", true, None::<&str>)?;
 
     let file_menu = Submenu::with_items(
@@ -134,9 +108,6 @@ pub fn build_app_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> 
             &toggle_details,
             &toggle_info,
             &accessibility_settings,
-            &increase_log_text,
-            &decrease_log_text,
-            &reset_log_text,
         ],
     )?;
     let help_menu = Submenu::with_items(app, "Help", true, &[&about])?;
@@ -274,33 +245,6 @@ fn payload_for_menu_id(menu_id: &str) -> Option<AppMenuActionPayload> {
             version: 1,
             menu_id: MENU_ID_WINDOW_ACCESSIBILITY_SETTINGS,
             action: "show_accessibility_settings",
-            category: "window",
-            trigger: "menu",
-            preset_id: None,
-            platform: None,
-        },
-        MENU_ID_WINDOW_INCREASE_LOG_TEXT => AppMenuActionPayload {
-            version: 1,
-            menu_id: MENU_ID_WINDOW_INCREASE_LOG_TEXT,
-            action: "increase_log_text_size",
-            category: "window",
-            trigger: "menu",
-            preset_id: None,
-            platform: None,
-        },
-        MENU_ID_WINDOW_DECREASE_LOG_TEXT => AppMenuActionPayload {
-            version: 1,
-            menu_id: MENU_ID_WINDOW_DECREASE_LOG_TEXT,
-            action: "decrease_log_text_size",
-            category: "window",
-            trigger: "menu",
-            preset_id: None,
-            platform: None,
-        },
-        MENU_ID_WINDOW_RESET_LOG_TEXT => AppMenuActionPayload {
-            version: 1,
-            menu_id: MENU_ID_WINDOW_RESET_LOG_TEXT,
-            action: "reset_log_text_size",
             category: "window",
             trigger: "menu",
             preset_id: None,

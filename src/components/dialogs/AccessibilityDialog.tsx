@@ -177,7 +177,10 @@ export function AccessibilityDialog({ isOpen, onClose }: AccessibilityDialogProp
 
         <section style={{ marginBottom: "14px" }}>
           <div style={{ fontSize: "13px", fontWeight: 700, marginBottom: "6px" }}>
-            Log list text size
+            Application text size
+          </div>
+          <div style={{ fontSize: "11px", color: "#666", marginBottom: "6px" }}>
+            Controls text size across log lists, Intune workspace, timelines, and evidence surfaces.
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
             <input
@@ -187,6 +190,7 @@ export function AccessibilityDialog({ isOpen, onClose }: AccessibilityDialogProp
               value={logListFontSize}
               onChange={(event) => setLogListFontSize(Number(event.target.value))}
               style={{ flex: 1 }}
+              aria-label={`Application text size: ${logListFontSize} pixels`}
             />
             <div style={{ width: "68px", textAlign: "right", fontSize: "12px" }}>
               {logListFontSize}px

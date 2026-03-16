@@ -1,9 +1,11 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import {
-  Badge,
-  Button,
-  Textarea,
-} from "@fluentui/react-components";
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactNode,
+} from "react";
+import { Badge, Button, Textarea } from "@fluentui/react-components";
 import { save } from "@tauri-apps/plugin-dialog";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import {
@@ -63,7 +65,9 @@ function formatBool(value: boolean | null): string {
   return "Unknown";
 }
 
-function formatValue(value: string | number | boolean | null | undefined): string {
+function formatValue(
+  value: string | number | boolean | null | undefined,
+): string {
   if (value === null || value === undefined || value === "") {
     return NOT_REPORTED_LABEL;
   }
@@ -75,7 +79,9 @@ function formatValue(value: string | number | boolean | null | undefined): strin
   return String(value);
 }
 
-function formatEvidenceSource(source: DsregcmdEvidenceSource | null | undefined): string {
+function formatEvidenceSource(
+  source: DsregcmdEvidenceSource | null | undefined,
+): string {
   switch (source) {
     case "dsregcmd":
       return "dsregcmd";
@@ -100,7 +106,7 @@ function getPathBaseName(path: string): string {
 
 function getPolicyDisplayValue(
   dsregValue: boolean | null | undefined,
-  policyValue: DsregcmdPolicyEvidenceValue
+  policyValue: DsregcmdPolicyEvidenceValue,
 ): string {
   if (dsregValue != null) {
     return `${formatBool(dsregValue)} (dsregcmd)`;
@@ -118,7 +124,7 @@ function getPolicyDisplayValue(
 
 function getPolicyValueTone(
   dsregValue: boolean | null | undefined,
-  policyValue: DsregcmdPolicyEvidenceValue
+  policyValue: DsregcmdPolicyEvidenceValue,
 ): FactRow["tone"] {
   if (dsregValue != null) {
     return toneForBool(dsregValue);
@@ -133,11 +139,17 @@ function formatPolicyEvidenceValue(value: DsregcmdPolicyEvidenceValue): string {
   }
 
   const currentLabel =
-    value.currentValue == null ? null : `effective ${formatBool(value.currentValue)}`;
+    value.currentValue == null
+      ? null
+      : `effective ${formatBool(value.currentValue)}`;
   const providerLabel =
-    value.providerValue == null ? null : `provider ${formatBool(value.providerValue)}`;
+    value.providerValue == null
+      ? null
+      : `provider ${formatBool(value.providerValue)}`;
   const sourceLabel = formatEvidenceSource(value.source);
-  const parts = [currentLabel, providerLabel].filter((part): part is string => Boolean(part));
+  const parts = [currentLabel, providerLabel].filter((part): part is string =>
+    Boolean(part),
+  );
 
   if (parts.length > 0 && sourceLabel) {
     return `${parts.join(" / ")} (${sourceLabel})`;
@@ -164,7 +176,11 @@ function getPolicyEvidenceSummary(result: DsregcmdAnalysisResult): string {
   }
 
   const firstNote = uniqueNotes[0];
-  if (firstNote.includes("no mapped PassportForWork PolicyManager values were present")) {
+  if (
+    firstNote.includes(
+      "no mapped PassportForWork PolicyManager values were present",
+    )
+  ) {
     return "Registry captured, but no mapped WHfB policy values were found.";
   }
 
@@ -184,19 +200,31 @@ function formatRegistryArtifacts(paths: string[]): string {
   return `${names.slice(0, 2).join(" | ")} +${names.length - 2} more`;
 }
 
-function getEffectivePolicyEnabled(result: DsregcmdAnalysisResult): boolean | null {
-  return result.facts.userState.policyEnabled ?? result.policyEvidence.policyEnabled.displayValue;
+function getEffectivePolicyEnabled(
+  result: DsregcmdAnalysisResult,
+): boolean | null {
+  return (
+    result.facts.userState.policyEnabled ??
+    result.policyEvidence.policyEnabled.displayValue
+  );
 }
 
-function getEffectivePostLogonEnabled(result: DsregcmdAnalysisResult): boolean | null {
-  return result.facts.userState.postLogonEnabled ?? result.policyEvidence.postLogonEnabled.displayValue;
+function getEffectivePostLogonEnabled(
+  result: DsregcmdAnalysisResult,
+): boolean | null {
+  return (
+    result.facts.userState.postLogonEnabled ??
+    result.policyEvidence.postLogonEnabled.displayValue
+  );
 }
 
 function formatLocalDateTime(value: string | null | undefined): string | null {
   return formatDisplayDateTime(value);
 }
 
-function parseCertificateValidityRange(value: string | null | undefined): { from: string; to: string } | null {
+function parseCertificateValidityRange(
+  value: string | null | undefined,
+): { from: string; to: string } | null {
   if (!value) {
     return null;
   }
@@ -212,11 +240,13 @@ function parseCertificateValidityRange(value: string | null | undefined): { from
 function formatCertificateValidityRange(
   rawValue: string | null | undefined,
   validFrom: string | null | undefined,
-  validTo: string | null | undefined
+  validTo: string | null | undefined,
 ): string {
   const parsedRange = parseCertificateValidityRange(rawValue);
-  const from = formatLocalDateTime(validFrom) ?? formatLocalDateTime(parsedRange?.from);
-  const to = formatLocalDateTime(validTo) ?? formatLocalDateTime(parsedRange?.to);
+  const from =
+    formatLocalDateTime(validFrom) ?? formatLocalDateTime(parsedRange?.from);
+  const to =
+    formatLocalDateTime(validTo) ?? formatLocalDateTime(parsedRange?.to);
 
   if (from && to) {
     return `${from} to ${to}`;
@@ -260,7 +290,9 @@ function toneForBool(value: boolean | null | undefined): FactRow["tone"] {
   return "neutral";
 }
 
-function toneForWorkplaceJoined(value: boolean | null | undefined): FactRow["tone"] {
+function toneForWorkplaceJoined(
+  value: boolean | null | undefined,
+): FactRow["tone"] {
   if (value === true) {
     return "warn";
   }
@@ -268,11 +300,15 @@ function toneForWorkplaceJoined(value: boolean | null | undefined): FactRow["ton
   return "neutral";
 }
 
-function toneForEnterpriseJoined(_value: boolean | null | undefined): FactRow["tone"] {
+function toneForEnterpriseJoined(
+  _value: boolean | null | undefined,
+): FactRow["tone"] {
   return "neutral";
 }
 
-function toneForDomainJoined(value: boolean | null | undefined): FactRow["tone"] {
+function toneForDomainJoined(
+  value: boolean | null | undefined,
+): FactRow["tone"] {
   if (value === true) {
     return "good";
   }
@@ -280,7 +316,9 @@ function toneForDomainJoined(value: boolean | null | undefined): FactRow["tone"]
   return "neutral";
 }
 
-function toneForEnterprisePrt(value: boolean | null | undefined): FactRow["tone"] {
+function toneForEnterprisePrt(
+  value: boolean | null | undefined,
+): FactRow["tone"] {
   if (value === true) {
     return "good";
   }
@@ -288,13 +326,15 @@ function toneForEnterprisePrt(value: boolean | null | undefined): FactRow["tone"
   return "neutral";
 }
 
-function toneForJoinType(joinType: DsregcmdAnalysisResult["derived"]["joinType"]): FactRow["tone"] {
+function toneForJoinType(
+  joinType: DsregcmdAnalysisResult["derived"]["joinType"],
+): FactRow["tone"] {
   return joinType === "NotJoined" ? "bad" : "good";
 }
 
 function toneForPrtState(
   prtPresent: boolean | null,
-  stalePrt: boolean | null | undefined
+  stalePrt: boolean | null | undefined,
 ): FactRow["tone"] {
   if (prtPresent === null) {
     return "neutral";
@@ -307,7 +347,9 @@ function toneForPrtState(
   return stalePrt ? "warn" : "good";
 }
 
-function formatPhaseLabel(phase: DsregcmdAnalysisResult["derived"]["dominantPhase"]): string {
+function formatPhaseLabel(
+  phase: DsregcmdAnalysisResult["derived"]["dominantPhase"],
+): string {
   switch (phase) {
     case "precheck":
       return "Precheck";
@@ -324,7 +366,9 @@ function formatPhaseLabel(phase: DsregcmdAnalysisResult["derived"]["dominantPhas
   }
 }
 
-function toneForPhase(phase: DsregcmdAnalysisResult["derived"]["dominantPhase"]): FactRow["tone"] {
+function toneForPhase(
+  phase: DsregcmdAnalysisResult["derived"]["dominantPhase"],
+): FactRow["tone"] {
   if (phase === "unknown") {
     return "neutral";
   }
@@ -333,7 +377,7 @@ function toneForPhase(phase: DsregcmdAnalysisResult["derived"]["dominantPhase"])
 }
 
 function formatConfidenceLabel(
-  confidence: DsregcmdAnalysisResult["derived"]["captureConfidence"]
+  confidence: DsregcmdAnalysisResult["derived"]["captureConfidence"],
 ): string {
   switch (confidence) {
     case "high":
@@ -346,7 +390,7 @@ function formatConfidenceLabel(
 }
 
 function toneForCaptureConfidence(
-  confidence: DsregcmdAnalysisResult["derived"]["captureConfidence"]
+  confidence: DsregcmdAnalysisResult["derived"]["captureConfidence"],
 ): FactRow["tone"] {
   switch (confidence) {
     case "high":
@@ -360,22 +404,25 @@ function toneForCaptureConfidence(
 
 function qualifyByCaptureConfidence(
   confidence: DsregcmdAnalysisResult["derived"]["captureConfidence"],
-  text: string
+  text: string,
 ): string {
-  return confidence === "high" ? text : `Based on this capture, ${text.charAt(0).toLowerCase()}${text.slice(1)}`;
+  return confidence === "high"
+    ? text
+    : `Based on this capture, ${text.charAt(0).toLowerCase()}${text.slice(1)}`;
 }
 
 function getDisplayPhaseAssessment(
   result: DsregcmdAnalysisResult,
   errorCount: number,
-  warningCount: number
+  warningCount: number,
 ): DisplayPhaseAssessment {
   if (errorCount === 0 && warningCount === 0) {
     return {
       phase: "unknown",
       label: "No Active Issue",
       tone: "good",
-      summary: "Current evidence does not show an active failure phase in this capture.",
+      summary:
+        "Current evidence does not show an active failure phase in this capture.",
     };
   }
 
@@ -389,9 +436,12 @@ function getDisplayPhaseAssessment(
 
 function getDisplayConfidenceAssessment(
   result: DsregcmdAnalysisResult,
-  sourceContext: DsregcmdSourceContext
+  sourceContext: DsregcmdSourceContext,
 ): DisplayConfidenceAssessment {
-  if (sourceContext.source?.kind === "capture" && result.derived.remoteSessionSystem !== true) {
+  if (
+    sourceContext.source?.kind === "capture" &&
+    result.derived.remoteSessionSystem !== true
+  ) {
     return {
       confidence: "high",
       reason:
@@ -406,18 +456,24 @@ function getDisplayConfidenceAssessment(
 }
 
 function toneForMdmVisibility(
-  derived: DsregcmdAnalysisResult["derived"]
+  derived: DsregcmdAnalysisResult["derived"],
 ): FactRow["tone"] {
   if (derived.mdmEnrolled === true) {
-    return derived.missingMdm || derived.missingComplianceUrl ? "neutral" : "good";
+    return derived.missingMdm || derived.missingComplianceUrl
+      ? "neutral"
+      : "good";
   }
 
   return "neutral";
 }
 
-function getMdmVisibilityLabel(derived: DsregcmdAnalysisResult["derived"]): string {
+function getMdmVisibilityLabel(
+  derived: DsregcmdAnalysisResult["derived"],
+): string {
   if (derived.mdmEnrolled === true) {
-    return derived.missingMdm || derived.missingComplianceUrl ? "Partial" : "Present";
+    return derived.missingMdm || derived.missingComplianceUrl
+      ? "Partial"
+      : "Present";
   }
 
   return "Unknown";
@@ -431,7 +487,9 @@ function getNgcReadinessValue(result: DsregcmdAnalysisResult): string {
     return "Recovery Required";
   }
 
-  if ((facts.postJoinDiagnostics.keySignTest ?? "").toLowerCase().includes("fail")) {
+  if (
+    (facts.postJoinDiagnostics.keySignTest ?? "").toLowerCase().includes("fail")
+  ) {
     return "Key Health Issue";
   }
 
@@ -439,7 +497,9 @@ function getNgcReadinessValue(result: DsregcmdAnalysisResult): string {
     return "Configured";
   }
 
-  if ((facts.registration.preReqResult ?? "").toLowerCase() === "willprovision") {
+  if (
+    (facts.registration.preReqResult ?? "").toLowerCase() === "willprovision"
+  ) {
     return "Will Provision";
   }
 
@@ -461,7 +521,9 @@ function toneForNgcReadiness(result: DsregcmdAnalysisResult): FactRow["tone"] {
     return "warn";
   }
 
-  if ((facts.postJoinDiagnostics.keySignTest ?? "").toLowerCase().includes("fail")) {
+  if (
+    (facts.postJoinDiagnostics.keySignTest ?? "").toLowerCase().includes("fail")
+  ) {
     return "warn";
   }
 
@@ -469,7 +531,9 @@ function toneForNgcReadiness(result: DsregcmdAnalysisResult): FactRow["tone"] {
     return "good";
   }
 
-  if ((facts.registration.preReqResult ?? "").toLowerCase() === "willprovision") {
+  if (
+    (facts.registration.preReqResult ?? "").toLowerCase() === "willprovision"
+  ) {
     return "good";
   }
 
@@ -485,7 +549,9 @@ function getNgcCaption(result: DsregcmdAnalysisResult): string {
     return "Post-join diagnostics indicate the current Windows Hello key state is marked for recovery.";
   }
 
-  if ((facts.postJoinDiagnostics.keySignTest ?? "").toLowerCase().includes("fail")) {
+  if (
+    (facts.postJoinDiagnostics.keySignTest ?? "").toLowerCase().includes("fail")
+  ) {
     return "Post-join diagnostics indicate the Windows Hello key health check did not pass.";
   }
 
@@ -501,7 +567,9 @@ function getNgcCaption(result: DsregcmdAnalysisResult): string {
     return "Windows Hello for Business is already configured for the current user.";
   }
 
-  if ((facts.registration.preReqResult ?? "").toLowerCase() === "willprovision") {
+  if (
+    (facts.registration.preReqResult ?? "").toLowerCase() === "willprovision"
+  ) {
     return "Prerequisites look satisfied enough for Windows Hello provisioning to happen later.";
   }
 
@@ -531,16 +599,16 @@ function getFactGroups(
   displayedPrtAgeHours: number | null,
   displayPhase: DisplayPhaseAssessment,
   displayConfidence: DisplayConfidenceAssessment,
-  sourceContext: DsregcmdSourceContext
+  sourceContext: DsregcmdSourceContext,
 ): FactGroup[] {
   const { facts, derived } = result;
   const policyEnabledDisplay = getPolicyDisplayValue(
     facts.userState.policyEnabled,
-    result.policyEvidence.policyEnabled
+    result.policyEvidence.policyEnabled,
   );
   const postLogonEnabledDisplay = getPolicyDisplayValue(
     facts.userState.postLogonEnabled,
-    result.policyEvidence.postLogonEnabled
+    result.policyEvidence.postLogonEnabled,
   );
   const ngcRows = withNotReportedMetadata([
     {
@@ -561,14 +629,17 @@ function getFactGroups(
     {
       label: "Policy Enabled",
       value: policyEnabledDisplay,
-      tone: getPolicyValueTone(facts.userState.policyEnabled, result.policyEvidence.policyEnabled),
+      tone: getPolicyValueTone(
+        facts.userState.policyEnabled,
+        result.policyEvidence.policyEnabled,
+      ),
     },
     {
       label: "Post-Logon Enabled",
       value: postLogonEnabledDisplay,
       tone: getPolicyValueTone(
         facts.userState.postLogonEnabled,
-        result.policyEvidence.postLogonEnabled
+        result.policyEvidence.postLogonEnabled,
       ),
     },
     {
@@ -588,7 +659,10 @@ function getFactGroups(
     },
   ]);
 
-  if (facts.registration.certEnrollment && facts.registration.certEnrollment.toLowerCase() !== "none") {
+  if (
+    facts.registration.certEnrollment &&
+    facts.registration.certEnrollment.toLowerCase() !== "none"
+  ) {
     ngcRows.push({
       label: "Cert Enrollment",
       value: formatValue(facts.registration.certEnrollment),
@@ -616,7 +690,9 @@ function getFactGroups(
     ngcRows.push({
       label: "Logon Cert Template",
       value: formatValue(facts.registration.logonCertTemplateReady),
-      tone: facts.registration.logonCertTemplateReady.includes("StateReady") ? "good" : "neutral",
+      tone: facts.registration.logonCertTemplateReady.includes("StateReady")
+        ? "good"
+        : "neutral",
     });
   }
 
@@ -624,7 +700,9 @@ function getFactGroups(
     ngcRows.push({
       label: "Key Sign Test",
       value: formatValue(facts.postJoinDiagnostics.keySignTest),
-      tone: facts.postJoinDiagnostics.keySignTest.toLowerCase().includes("pass") ? "good" : "warn",
+      tone: facts.postJoinDiagnostics.keySignTest.toLowerCase().includes("pass")
+        ? "good"
+        : "warn",
     });
   }
 
@@ -640,7 +718,8 @@ function getFactGroups(
     {
       id: "phase-evidence",
       title: "Phase and Confidence",
-      caption: "Derived stage and evidence used to explain where the current problem appears to sit.",
+      caption:
+        "Derived stage and evidence used to explain where the current problem appears to sit.",
       rows: withNotReportedMetadata([
         {
           label: "Dominant Phase",
@@ -662,17 +741,38 @@ function getFactGroups(
           value: displayConfidence.reason,
           tone: "neutral",
         },
-        { label: "Error Phase", value: formatValue(facts.registration.errorPhase) },
-        { label: "Client Error", value: formatValue(facts.registration.clientErrorCode) },
-        { label: "DRS Discovery", value: formatValue(facts.preJoinTests.drsDiscoveryTest) },
+        {
+          label: "Error Phase",
+          value: formatValue(facts.registration.errorPhase),
+        },
+        {
+          label: "Client Error",
+          value: formatValue(facts.registration.clientErrorCode),
+        },
+        {
+          label: "DRS Discovery",
+          value: formatValue(facts.preJoinTests.drsDiscoveryTest),
+        },
         {
           label: "Token Acquisition",
           value: formatValue(facts.preJoinTests.tokenAcquisitionTest),
         },
-        { label: "Attempt Status", value: formatValue(facts.diagnostics.attemptStatus) },
-        { label: "HTTP Status", value: formatValue(facts.diagnostics.httpStatus) },
-        { label: "Endpoint URI", value: formatValue(facts.diagnostics.endpointUri) },
-        { label: "User Context", value: formatValue(facts.diagnostics.userContext) },
+        {
+          label: "Attempt Status",
+          value: formatValue(facts.diagnostics.attemptStatus),
+        },
+        {
+          label: "HTTP Status",
+          value: formatValue(facts.diagnostics.httpStatus),
+        },
+        {
+          label: "Endpoint URI",
+          value: formatValue(facts.diagnostics.endpointUri),
+        },
+        {
+          label: "User Context",
+          value: formatValue(facts.diagnostics.userContext),
+        },
       ]),
     },
     {
@@ -680,7 +780,11 @@ function getFactGroups(
       title: "Join State",
       caption: "Identity, join posture, and major derived signals.",
       rows: withNotReportedMetadata([
-        { label: "Join Type", value: formatValue(derived.joinTypeLabel), tone: "good" },
+        {
+          label: "Join Type",
+          value: formatValue(derived.joinTypeLabel),
+          tone: "good",
+        },
         {
           label: "Azure AD Joined",
           value: formatBool(facts.joinState.azureAdJoined),
@@ -718,11 +822,26 @@ function getFactGroups(
       title: "Tenant and Device",
       caption: "Core identifiers and certificate-related device details.",
       rows: withNotReportedMetadata([
-        { label: "Tenant Id", value: formatValue(facts.tenantDetails.tenantId) },
-        { label: "Tenant Name", value: formatValue(facts.tenantDetails.tenantName) },
-        { label: "Domain Name", value: formatValue(facts.tenantDetails.domainName) },
-        { label: "Device Id", value: formatValue(facts.deviceDetails.deviceId) },
-        { label: "Thumbprint", value: formatValue(facts.deviceDetails.thumbprint) },
+        {
+          label: "Tenant Id",
+          value: formatValue(facts.tenantDetails.tenantId),
+        },
+        {
+          label: "Tenant Name",
+          value: formatValue(facts.tenantDetails.tenantName),
+        },
+        {
+          label: "Domain Name",
+          value: formatValue(facts.tenantDetails.domainName),
+        },
+        {
+          label: "Device Id",
+          value: formatValue(facts.deviceDetails.deviceId),
+        },
+        {
+          label: "Thumbprint",
+          value: formatValue(facts.deviceDetails.thumbprint),
+        },
         {
           label: "TPM Protected",
           value: formatBool(facts.deviceDetails.tpmProtected),
@@ -733,7 +852,7 @@ function getFactGroups(
           value: formatCertificateValidityRange(
             facts.deviceDetails.deviceCertificateValidity,
             derived.certificateValidFrom,
-            derived.certificateValidTo
+            derived.certificateValidTo,
           ),
           tone: derived.certificateExpiringSoon ? "warn" : "neutral",
         },
@@ -742,7 +861,8 @@ function getFactGroups(
     {
       id: "management",
       title: "Management and MDM",
-      caption: "Management visibility and tenant-advertised endpoints. Missing values can be out of scope, unconfigured, or simply absent from this capture.",
+      caption:
+        "Management visibility and tenant-advertised endpoints. Missing values can be out of scope, unconfigured, or simply absent from this capture.",
       rows: withNotReportedMetadata([
         {
           label: "MDM Visibility",
@@ -759,7 +879,10 @@ function getFactGroups(
           value: formatValue(facts.managementDetails.mdmComplianceUrl),
           tone: derived.missingComplianceUrl ? "neutral" : "neutral",
         },
-        { label: "Settings URL", value: formatValue(facts.managementDetails.settingsUrl) },
+        {
+          label: "Settings URL",
+          value: formatValue(facts.managementDetails.settingsUrl),
+        },
         {
           label: "DM Service URL",
           value: formatValue(facts.managementDetails.deviceManagementSrvUrl),
@@ -812,15 +935,42 @@ function getFactGroups(
       title: "Diagnostics and Errors",
       caption: "Correlation, transport, and registration error fields.",
       rows: withNotReportedMetadata([
-        { label: "Attempt Status", value: formatValue(facts.diagnostics.attemptStatus) },
-        { label: "HTTP Error", value: formatValue(facts.diagnostics.httpError) },
-        { label: "HTTP Status", value: formatValue(facts.diagnostics.httpStatus) },
-        { label: "Endpoint URI", value: formatValue(facts.diagnostics.endpointUri) },
-        { label: "Correlation ID", value: formatValue(facts.diagnostics.correlationId) },
-        { label: "Request ID", value: formatValue(facts.diagnostics.requestId) },
-        { label: "Client Error", value: formatValue(facts.registration.clientErrorCode) },
-        { label: "Server Error", value: formatValue(facts.registration.serverErrorCode) },
-        { label: "Server Message", value: formatValue(facts.registration.serverMessage) },
+        {
+          label: "Attempt Status",
+          value: formatValue(facts.diagnostics.attemptStatus),
+        },
+        {
+          label: "HTTP Error",
+          value: formatValue(facts.diagnostics.httpError),
+        },
+        {
+          label: "HTTP Status",
+          value: formatValue(facts.diagnostics.httpStatus),
+        },
+        {
+          label: "Endpoint URI",
+          value: formatValue(facts.diagnostics.endpointUri),
+        },
+        {
+          label: "Correlation ID",
+          value: formatValue(facts.diagnostics.correlationId),
+        },
+        {
+          label: "Request ID",
+          value: formatValue(facts.diagnostics.requestId),
+        },
+        {
+          label: "Client Error",
+          value: formatValue(facts.registration.clientErrorCode),
+        },
+        {
+          label: "Server Error",
+          value: formatValue(facts.registration.serverErrorCode),
+        },
+        {
+          label: "Server Message",
+          value: formatValue(facts.registration.serverMessage),
+        },
       ]),
     },
     {
@@ -828,10 +978,22 @@ function getFactGroups(
       title: "Pre-Join and Registration",
       caption: "Hybrid join readiness and registration workflow checks.",
       rows: withNotReportedMetadata([
-        { label: "AD Connectivity", value: formatValue(facts.preJoinTests.adConnectivityTest) },
-        { label: "AD Configuration", value: formatValue(facts.preJoinTests.adConfigurationTest) },
-        { label: "DRS Discovery", value: formatValue(facts.preJoinTests.drsDiscoveryTest) },
-        { label: "DRS Connectivity", value: formatValue(facts.preJoinTests.drsConnectivityTest) },
+        {
+          label: "AD Connectivity",
+          value: formatValue(facts.preJoinTests.adConnectivityTest),
+        },
+        {
+          label: "AD Configuration",
+          value: formatValue(facts.preJoinTests.adConfigurationTest),
+        },
+        {
+          label: "DRS Discovery",
+          value: formatValue(facts.preJoinTests.drsDiscoveryTest),
+        },
+        {
+          label: "DRS Connectivity",
+          value: formatValue(facts.preJoinTests.drsConnectivityTest),
+        },
         {
           label: "Token Acquisition",
           value: formatValue(facts.preJoinTests.tokenAcquisitionTest),
@@ -840,7 +1002,10 @@ function getFactGroups(
           label: "Fallback to Sync-Join",
           value: formatValue(facts.preJoinTests.fallbackToSyncJoin),
         },
-        { label: "Error Phase", value: formatValue(facts.registration.errorPhase) },
+        {
+          label: "Error Phase",
+          value: formatValue(facts.registration.errorPhase),
+        },
         {
           label: "Logon Cert Template",
           value: formatValue(facts.registration.logonCertTemplateReady),
@@ -850,13 +1015,15 @@ function getFactGroups(
     {
       id: "ngc-readiness",
       title: "Windows Hello and NGC",
-      caption: "Lightweight Windows Hello for Business readiness context. These fields are posture signals, not default failure indicators.",
+      caption:
+        "Lightweight Windows Hello for Business readiness context. These fields are posture signals, not default failure indicators.",
       rows: ngcRows,
     },
     {
       id: "policy-evidence",
       title: "Policy Evidence",
-      caption: "Registry-backed WHfB policy state used only when dsregcmd leaves policy fields unreported.",
+      caption:
+        "Registry-backed WHfB policy state used only when dsregcmd leaves policy fields unreported.",
       rows: withNotReportedMetadata([
         {
           label: "Policy Enabled Evidence",
@@ -865,28 +1032,48 @@ function getFactGroups(
         },
         {
           label: "Post-Logon Evidence",
-          value: formatPolicyEvidenceValue(result.policyEvidence.postLogonEnabled),
-          tone: toneForBool(result.policyEvidence.postLogonEnabled.displayValue),
+          value: formatPolicyEvidenceValue(
+            result.policyEvidence.postLogonEnabled,
+          ),
+          tone: toneForBool(
+            result.policyEvidence.postLogonEnabled.displayValue,
+          ),
         },
         {
           label: "PIN Recovery Policy",
-          value: formatPolicyEvidenceValue(result.policyEvidence.pinRecoveryEnabled),
-          tone: toneForBool(result.policyEvidence.pinRecoveryEnabled.displayValue),
+          value: formatPolicyEvidenceValue(
+            result.policyEvidence.pinRecoveryEnabled,
+          ),
+          tone: toneForBool(
+            result.policyEvidence.pinRecoveryEnabled.displayValue,
+          ),
         },
         {
           label: "Require Security Device",
-          value: formatPolicyEvidenceValue(result.policyEvidence.requireSecurityDevice),
-          tone: toneForBool(result.policyEvidence.requireSecurityDevice.displayValue),
+          value: formatPolicyEvidenceValue(
+            result.policyEvidence.requireSecurityDevice,
+          ),
+          tone: toneForBool(
+            result.policyEvidence.requireSecurityDevice.displayValue,
+          ),
         },
         {
           label: "Use Certificate Trust",
-          value: formatPolicyEvidenceValue(result.policyEvidence.useCertificateForOnPremAuth),
-          tone: toneForBool(result.policyEvidence.useCertificateForOnPremAuth.displayValue),
+          value: formatPolicyEvidenceValue(
+            result.policyEvidence.useCertificateForOnPremAuth,
+          ),
+          tone: toneForBool(
+            result.policyEvidence.useCertificateForOnPremAuth.displayValue,
+          ),
         },
         {
           label: "Use Cloud Trust",
-          value: formatPolicyEvidenceValue(result.policyEvidence.useCloudTrustForOnPremAuth),
-          tone: toneForBool(result.policyEvidence.useCloudTrustForOnPremAuth.displayValue),
+          value: formatPolicyEvidenceValue(
+            result.policyEvidence.useCloudTrustForOnPremAuth,
+          ),
+          tone: toneForBool(
+            result.policyEvidence.useCloudTrustForOnPremAuth.displayValue,
+          ),
         },
         {
           label: "Evidence Status",
@@ -903,11 +1090,26 @@ function getFactGroups(
       title: "Service Endpoints",
       caption: "Relevant identity and registration service URLs.",
       rows: withNotReportedMetadata([
-        { label: "Join Server URL", value: formatValue(facts.serviceEndpoints.joinSrvUrl) },
-        { label: "Join Server ID", value: formatValue(facts.serviceEndpoints.joinSrvId) },
-        { label: "Key Server URL", value: formatValue(facts.serviceEndpoints.keySrvUrl) },
-        { label: "Auth Code URL", value: formatValue(facts.serviceEndpoints.authCodeUrl) },
-        { label: "Access Token URL", value: formatValue(facts.serviceEndpoints.accessTokenUrl) },
+        {
+          label: "Join Server URL",
+          value: formatValue(facts.serviceEndpoints.joinSrvUrl),
+        },
+        {
+          label: "Join Server ID",
+          value: formatValue(facts.serviceEndpoints.joinSrvId),
+        },
+        {
+          label: "Key Server URL",
+          value: formatValue(facts.serviceEndpoints.keySrvUrl),
+        },
+        {
+          label: "Auth Code URL",
+          value: formatValue(facts.serviceEndpoints.authCodeUrl),
+        },
+        {
+          label: "Access Token URL",
+          value: formatValue(facts.serviceEndpoints.accessTokenUrl),
+        },
         {
           label: "WebAuthn Service URL",
           value: formatValue(facts.serviceEndpoints.webAuthnSrvUrl),
@@ -917,11 +1119,18 @@ function getFactGroups(
     {
       id: "source-details",
       title: "Source Details",
-      caption: "Where this dsregcmd analysis came from and how much text was processed.",
+      caption:
+        "Where this dsregcmd analysis came from and how much text was processed.",
       rows: withNotReportedMetadata([
         { label: "Source", value: sourceContext.displayLabel },
-        { label: "Resolved Path", value: formatValue(sourceContext.resolvedPath) },
-        { label: "Evidence File", value: formatValue(sourceContext.evidenceFilePath) },
+        {
+          label: "Resolved Path",
+          value: formatValue(sourceContext.resolvedPath),
+        },
+        {
+          label: "Evidence File",
+          value: formatValue(sourceContext.evidenceFilePath),
+        },
         { label: "Lines", value: String(sourceContext.rawLineCount) },
         { label: "Characters", value: String(sourceContext.rawCharCount) },
       ]),
@@ -933,12 +1142,20 @@ function getSummaryText(
   result: DsregcmdAnalysisResult,
   sourceLabel: string,
   displayPhase: DisplayPhaseAssessment,
-  displayConfidence: DisplayConfidenceAssessment
+  displayConfidence: DisplayConfidenceAssessment,
 ): string {
-  const errorCount = result.diagnostics.filter((item) => item.severity === "Error").length;
-  const warningCount = result.diagnostics.filter((item) => item.severity === "Warning").length;
-  const infoCount = result.diagnostics.filter((item) => item.severity === "Info").length;
-  const criticalIssue = result.diagnostics.find((item) => item.severity === "Error");
+  const errorCount = result.diagnostics.filter(
+    (item) => item.severity === "Error",
+  ).length;
+  const warningCount = result.diagnostics.filter(
+    (item) => item.severity === "Warning",
+  ).length;
+  const infoCount = result.diagnostics.filter(
+    (item) => item.severity === "Info",
+  ).length;
+  const criticalIssue = result.diagnostics.find(
+    (item) => item.severity === "Error",
+  );
 
   return [
     `Source: ${sourceLabel}`,
@@ -948,22 +1165,24 @@ function getSummaryText(
     `Capture confidence: ${formatConfidenceLabel(displayConfidence.confidence)}`,
     `Confidence note: ${displayConfidence.reason}`,
     `Diagnostics: ${errorCount} errors, ${warningCount} warnings, ${infoCount} info`,
-    criticalIssue ? `Top issue: ${criticalIssue.title}` : "Top issue: No critical issues detected",
+    criticalIssue
+      ? `Top issue: ${criticalIssue.title}`
+      : "Top issue: No critical issues detected",
     qualifyByCaptureConfidence(
       displayConfidence.confidence,
-      `PRT present: ${formatBool(result.derived.azureAdPrtPresent)}`
+      `PRT present: ${formatBool(result.derived.azureAdPrtPresent)}`,
     ),
     qualifyByCaptureConfidence(
       displayConfidence.confidence,
-      `MDM visibility: ${getMdmVisibilityLabel(result.derived)}`
+      `MDM visibility: ${getMdmVisibilityLabel(result.derived)}`,
     ),
     qualifyByCaptureConfidence(
       displayConfidence.confidence,
-      `NGC readiness: ${getNgcReadinessValue(result)}`
+      `NGC readiness: ${getNgcReadinessValue(result)}`,
     ),
     qualifyByCaptureConfidence(
       displayConfidence.confidence,
-      `Device auth status: ${formatValue(result.facts.deviceDetails.deviceAuthStatus)}`
+      `Device auth status: ${formatValue(result.facts.deviceDetails.deviceAuthStatus)}`,
     ),
   ].join("\n");
 }
@@ -998,20 +1217,50 @@ function StatCard({
         borderRadius: "10px",
       }}
     >
-      <div style={{ fontSize: "11px", color: "#5b6472", textTransform: "uppercase", letterSpacing: "0.04em" }}>
+      <div
+        style={{
+          fontSize: "11px",
+          color: "#5b6472",
+          textTransform: "uppercase",
+          letterSpacing: "0.04em",
+        }}
+      >
         {title}
       </div>
-      <div style={{ marginTop: "6px", fontSize: "20px", fontWeight: 700, color: colors.value, lineHeight: 1.2 }}>
+      <div
+        style={{
+          marginTop: "6px",
+          fontSize: "20px",
+          fontWeight: 700,
+          color: colors.value,
+          lineHeight: 1.2,
+        }}
+      >
         {value}
       </div>
-      <div style={{ marginTop: "6px", fontSize: "12px", color: "#3f4752", lineHeight: 1.45 }}>
+      <div
+        style={{
+          marginTop: "6px",
+          fontSize: "12px",
+          color: "#3f4752",
+          lineHeight: 1.45,
+        }}
+      >
         {caption}
       </div>
     </div>
   );
 }
 
-function SectionFrame({ title, caption, children }: { title: string; caption: string; children: ReactNode }) {
+function SectionFrame({
+  title,
+  caption,
+  children,
+}: {
+  title: string;
+  caption: string;
+  children: ReactNode;
+}) {
   return (
     <section
       style={{
@@ -1023,8 +1272,12 @@ function SectionFrame({ title, caption, children }: { title: string; caption: st
       }}
     >
       <div style={{ padding: "12px 14px", backgroundColor: "#f6f9fc" }}>
-        <div style={{ fontSize: "14px", fontWeight: 700, color: "#111827" }}>{title}</div>
-        <div style={{ marginTop: "4px", fontSize: "12px", color: "#5b6472" }}>{caption}</div>
+        <div style={{ fontSize: "14px", fontWeight: 700, color: "#111827" }}>
+          {title}
+        </div>
+        <div style={{ marginTop: "4px", fontSize: "12px", color: "#5b6472" }}>
+          {caption}
+        </div>
       </div>
       <div style={{ borderTop: "1px solid #e2e8f0" }} />
       <div style={{ padding: "14px" }}>{children}</div>
@@ -1044,7 +1297,14 @@ function IssueCard({ issue }: { issue: DsregcmdDiagnosticInsight }) {
         borderRadius: "10px",
       }}
     >
-      <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: "8px",
+          flexWrap: "wrap",
+        }}
+      >
         <Badge
           appearance="outline"
           style={{
@@ -1059,17 +1319,50 @@ function IssueCard({ issue }: { issue: DsregcmdDiagnosticInsight }) {
         >
           {issue.severity}
         </Badge>
-        <span style={{ fontSize: "11px", color: "#5b6472", textTransform: "uppercase" }}>
+        <span
+          style={{
+            fontSize: "11px",
+            color: "#5b6472",
+            textTransform: "uppercase",
+          }}
+        >
           {issue.category}
         </span>
       </div>
-      <div style={{ marginTop: "8px", fontSize: "15px", fontWeight: 700, color: "#111827" }}>{issue.title}</div>
-      <div style={{ marginTop: "6px", fontSize: "13px", color: "#374151", lineHeight: 1.5 }}>{issue.summary}</div>
+      <div
+        style={{
+          marginTop: "8px",
+          fontSize: "15px",
+          fontWeight: 700,
+          color: "#111827",
+        }}
+      >
+        {issue.title}
+      </div>
+      <div
+        style={{
+          marginTop: "6px",
+          fontSize: "13px",
+          color: "#374151",
+          lineHeight: 1.5,
+        }}
+      >
+        {issue.summary}
+      </div>
 
       {issue.suggestedFixes.length > 0 && (
         <div style={{ marginTop: "10px" }}>
-          <div style={{ fontSize: "12px", fontWeight: 700, color: "#111827" }}>Suggested fixes</div>
-          <ul style={{ marginTop: "6px", paddingLeft: "18px", color: "#374151", lineHeight: 1.5 }}>
+          <div style={{ fontSize: "12px", fontWeight: 700, color: "#111827" }}>
+            Suggested fixes
+          </div>
+          <ul
+            style={{
+              marginTop: "6px",
+              paddingLeft: "18px",
+              color: "#374151",
+              lineHeight: 1.5,
+            }}
+          >
             {issue.suggestedFixes.map((item) => (
               <li key={item}>{item}</li>
             ))}
@@ -1079,8 +1372,17 @@ function IssueCard({ issue }: { issue: DsregcmdDiagnosticInsight }) {
 
       {issue.nextChecks.length > 0 && (
         <div style={{ marginTop: "10px" }}>
-          <div style={{ fontSize: "12px", fontWeight: 700, color: "#111827" }}>Next checks</div>
-          <ul style={{ marginTop: "6px", paddingLeft: "18px", color: "#374151", lineHeight: 1.5 }}>
+          <div style={{ fontSize: "12px", fontWeight: 700, color: "#111827" }}>
+            Next checks
+          </div>
+          <ul
+            style={{
+              marginTop: "6px",
+              paddingLeft: "18px",
+              color: "#374151",
+              lineHeight: 1.5,
+            }}
+          >
             {issue.nextChecks.map((item) => (
               <li key={item}>{item}</li>
             ))}
@@ -1090,8 +1392,17 @@ function IssueCard({ issue }: { issue: DsregcmdDiagnosticInsight }) {
 
       {issue.evidence.length > 0 && (
         <div style={{ marginTop: "10px" }}>
-          <div style={{ fontSize: "12px", fontWeight: 700, color: "#111827" }}>Evidence</div>
-          <ul style={{ marginTop: "6px", paddingLeft: "18px", color: "#374151", lineHeight: 1.5 }}>
+          <div style={{ fontSize: "12px", fontWeight: 700, color: "#111827" }}>
+            Evidence
+          </div>
+          <ul
+            style={{
+              marginTop: "6px",
+              paddingLeft: "18px",
+              color: "#374151",
+              lineHeight: 1.5,
+            }}
+          >
             {issue.evidence.map((item) => (
               <li key={item}>{item}</li>
             ))}
@@ -1102,7 +1413,13 @@ function IssueCard({ issue }: { issue: DsregcmdDiagnosticInsight }) {
   );
 }
 
-function FactsTable({ group, showNotReported }: { group: FactGroup; showNotReported: boolean }) {
+function FactsTable({
+  group,
+  showNotReported,
+}: {
+  group: FactGroup;
+  showNotReported: boolean;
+}) {
   const visibleRows = showNotReported
     ? group.rows
     : group.rows.filter((row) => row.isNotReported !== true);
@@ -1118,56 +1435,81 @@ function FactsTable({ group, showNotReported }: { group: FactGroup; showNotRepor
       }}
     >
       <div style={{ padding: "10px 12px", backgroundColor: "#f8fafc" }}>
-        <div style={{ fontSize: "13px", fontWeight: 700, color: "#111827" }}>{group.title}</div>
-        <div style={{ marginTop: "4px", fontSize: "11px", color: "#5b6472" }}>{group.caption}</div>
+        <div style={{ fontSize: "13px", fontWeight: 700, color: "#111827" }}>
+          {group.title}
+        </div>
+        <div style={{ marginTop: "4px", fontSize: "11px", color: "#5b6472" }}>
+          {group.caption}
+        </div>
       </div>
       <div style={{ borderTop: "1px solid #e2e8f0" }} />
       <div>
         {visibleRows.length === 0 ? (
-          <div style={{ padding: "10px 12px", fontSize: "12px", color: "#5b6472" }}>
-            All fields in this group were not reported by dsregcmd for this capture.
+          <div
+            style={{ padding: "10px 12px", fontSize: "12px", color: "#5b6472" }}
+          >
+            All fields in this group were not reported by dsregcmd for this
+            capture.
           </div>
-        ) : visibleRows.map((row) => {
-          const tones = {
-            neutral: { value: "#111827", background: "#ffffff" },
-            good: { value: "#166534", background: "#f0fdf4" },
-            warn: { value: "#92400e", background: "#fffbeb" },
-            bad: { value: "#991b1b", background: "#fef2f2" },
-          } as const;
-          const palette = tones[row.tone ?? "neutral"];
+        ) : (
+          visibleRows.map((row) => {
+            const tones = {
+              neutral: { value: "#111827", background: "#ffffff" },
+              good: { value: "#166534", background: "#f0fdf4" },
+              warn: { value: "#92400e", background: "#fffbeb" },
+              bad: { value: "#991b1b", background: "#fef2f2" },
+            } as const;
+            const palette = tones[row.tone ?? "neutral"];
 
-          return (
-            <div
-              key={`${group.id}-${row.label}`}
-              style={{
-                display: "grid",
-                gridTemplateColumns: "170px minmax(0, 1fr)",
-                gap: "8px",
-                padding: "9px 12px",
-                borderTop: "1px solid #edf1f5",
-                alignItems: "start",
-              }}
-            >
-              <div style={{ fontSize: "12px", fontWeight: 600, color: "#4b5563" }}>{row.label}</div>
+            return (
               <div
+                key={`${group.id}-${row.label}`}
                 style={{
-                  fontSize: "12px",
-                  color: palette.value,
-                  backgroundColor: palette.background,
-                  padding: "2px 6px",
-                  borderRadius: "2px",
-                  wordBreak: "break-word",
-                  whiteSpace: "pre-wrap",
+                  display: "grid",
+                  gridTemplateColumns: "170px minmax(0, 1fr)",
+                  gap: "8px",
+                  padding: "9px 12px",
+                  borderTop: "1px solid #edf1f5",
+                  alignItems: "start",
                 }}
               >
-                {row.value}
+                <div
+                  style={{
+                    fontSize: "12px",
+                    fontWeight: 600,
+                    color: "#4b5563",
+                  }}
+                >
+                  {row.label}
+                </div>
+                <div
+                  style={{
+                    fontSize: "12px",
+                    color: palette.value,
+                    backgroundColor: palette.background,
+                    padding: "2px 6px",
+                    borderRadius: "2px",
+                    wordBreak: "break-word",
+                    whiteSpace: "pre-wrap",
+                  }}
+                >
+                  {row.value}
+                </div>
               </div>
-            </div>
-          );
-        })}
+            );
+          })
+        )}
         {!showNotReported && hiddenCount > 0 && (
-          <div style={{ padding: "10px 12px", borderTop: "1px solid #edf1f5", fontSize: "11px", color: "#5b6472" }}>
-            {hiddenCount} not reported {hiddenCount === 1 ? "field" : "fields"} hidden.
+          <div
+            style={{
+              padding: "10px 12px",
+              borderTop: "1px solid #edf1f5",
+              fontSize: "11px",
+              color: "#5b6472",
+            }}
+          >
+            {hiddenCount} not reported {hiddenCount === 1 ? "field" : "fields"}{" "}
+            hidden.
           </div>
         )}
       </div>
@@ -1187,13 +1529,20 @@ function EmptyWorkspace({ title, body }: { title: string; body: string }) {
         borderRadius: "12px",
       }}
     >
-      <div style={{ fontSize: "18px", fontWeight: 700, color: "#0f172a" }}>{title}</div>
-      <div style={{ marginTop: "8px", fontSize: "13px", lineHeight: 1.6 }}>{body}</div>
+      <div style={{ fontSize: "18px", fontWeight: 700, color: "#0f172a" }}>
+        {title}
+      </div>
+      <div style={{ marginTop: "8px", fontSize: "13px", lineHeight: 1.6 }}>
+        {body}
+      </div>
     </div>
   );
 }
 
-function buildTimelineItems(facts: DsregcmdFacts, result: DsregcmdAnalysisResult) {
+function buildTimelineItems(
+  facts: DsregcmdFacts,
+  result: DsregcmdAnalysisResult,
+) {
   return [
     {
       id: "cert-valid-from",
@@ -1211,7 +1560,9 @@ function buildTimelineItems(facts: DsregcmdFacts, result: DsregcmdAnalysisResult
         formatLocalDateTime(result.derived.certificateValidTo) ??
         result.derived.certificateValidTo ??
         facts.deviceDetails.deviceCertificateValidity,
-      tone: result.derived.certificateExpiringSoon ? "warn" as const : "neutral" as const,
+      tone: result.derived.certificateExpiringSoon
+        ? ("warn" as const)
+        : ("neutral" as const),
     },
     {
       id: "previous-prt",
@@ -1223,7 +1574,7 @@ function buildTimelineItems(facts: DsregcmdFacts, result: DsregcmdAnalysisResult
       id: "prt-update",
       label: "Azure AD PRT update",
       value: formatDateTimeValue(facts.ssoState.azureAdPrtUpdateTime),
-      tone: result.derived.stalePrt ? "warn" as const : "good" as const,
+      tone: result.derived.stalePrt ? ("warn" as const) : ("good" as const),
     },
     {
       id: "client-time",
@@ -1234,7 +1585,15 @@ function buildTimelineItems(facts: DsregcmdFacts, result: DsregcmdAnalysisResult
   ].filter((item) => item.value);
 }
 
-function FlowBox({ title, detail, tone = "neutral" }: { title: string; detail: string; tone?: "neutral" | "good" | "warn" | "bad" }) {
+function FlowBox({
+  title,
+  detail,
+  tone = "neutral",
+}: {
+  title: string;
+  detail: string;
+  tone?: "neutral" | "good" | "warn" | "bad";
+}) {
   const colors = {
     neutral: { border: "#d1d5db", background: "#ffffff", text: "#111827" },
     good: { border: "#bbf7d0", background: "#f0fdf4", text: "#166534" },
@@ -1254,8 +1613,19 @@ function FlowBox({ title, detail, tone = "neutral" }: { title: string; detail: s
         borderRadius: "10px",
       }}
     >
-      <div style={{ fontSize: "12px", fontWeight: 700, color: palette.text }}>{title}</div>
-      <div style={{ marginTop: "6px", fontSize: "12px", color: "#374151", lineHeight: 1.5 }}>{detail}</div>
+      <div style={{ fontSize: "12px", fontWeight: 700, color: palette.text }}>
+        {title}
+      </div>
+      <div
+        style={{
+          marginTop: "6px",
+          fontSize: "12px",
+          color: "#374151",
+          lineHeight: 1.5,
+        }}
+      >
+        {detail}
+      </div>
     </div>
   );
 }
@@ -1266,14 +1636,26 @@ export function DsregcmdWorkspace() {
   const sourceContext = useDsregcmdStore((s) => s.sourceContext);
   const analysisState = useDsregcmdStore((s) => s.analysisState);
   const isAnalyzing = useDsregcmdStore((s) => s.isAnalyzing);
-  const { openSourceFileDialog, openSourceFolderDialog, pasteDsregcmdSource, captureDsregcmdSource } = useAppActions();
-  const [exportStatus, setExportStatus] = useState<{ tone: "success" | "error"; message: string } | null>(null);
+  const {
+    openSourceFileDialog,
+    openSourceFolderDialog,
+    pasteDsregcmdSource,
+    captureDsregcmdSource,
+  } = useAppActions();
+  const [exportStatus, setExportStatus] = useState<{
+    tone: "success" | "error";
+    message: string;
+  } | null>(null);
   const [showRawInput, setShowRawInput] = useState(false);
   const [showNotReported, setShowNotReported] = useState(false);
 
   const diagnostics = result?.diagnostics ?? [];
-  const errorCount = diagnostics.filter((item) => item.severity === "Error").length;
-  const warningCount = diagnostics.filter((item) => item.severity === "Warning").length;
+  const errorCount = diagnostics.filter(
+    (item) => item.severity === "Error",
+  ).length;
+  const warningCount = diagnostics.filter(
+    (item) => item.severity === "Warning",
+  ).length;
 
   const displayedPrtAgeHours = useMemo(() => {
     if (!result) {
@@ -1293,31 +1675,52 @@ export function DsregcmdWorkspace() {
   }, [result, sourceContext.source]);
 
   const displayPhase = useMemo(
-    () => (result ? getDisplayPhaseAssessment(result, errorCount, warningCount) : null),
-    [errorCount, result, warningCount]
+    () =>
+      result
+        ? getDisplayPhaseAssessment(result, errorCount, warningCount)
+        : null,
+    [errorCount, result, warningCount],
   );
   const displayConfidence = useMemo(
-    () => (result ? getDisplayConfidenceAssessment(result, sourceContext) : null),
-    [result, sourceContext]
+    () =>
+      result ? getDisplayConfidenceAssessment(result, sourceContext) : null,
+    [result, sourceContext],
   );
 
   const factGroups = useMemo(
     () =>
       result && displayPhase && displayConfidence
-        ? getFactGroups(result, displayedPrtAgeHours, displayPhase, displayConfidence, sourceContext)
+        ? getFactGroups(
+            result,
+            displayedPrtAgeHours,
+            displayPhase,
+            displayConfidence,
+            sourceContext,
+          )
         : [],
-    [displayConfidence, displayPhase, displayedPrtAgeHours, result, sourceContext]
+    [
+      displayConfidence,
+      displayPhase,
+      displayedPrtAgeHours,
+      result,
+      sourceContext,
+    ],
   );
   const summaryText = useMemo(
     () =>
       result && displayPhase && displayConfidence
-        ? getSummaryText(result, sourceContext.displayLabel, displayPhase, displayConfidence)
+        ? getSummaryText(
+            result,
+            sourceContext.displayLabel,
+            displayPhase,
+            displayConfidence,
+          )
         : "",
-    [displayConfidence, displayPhase, result, sourceContext.displayLabel]
+    [displayConfidence, displayPhase, result, sourceContext.displayLabel],
   );
   const timelineItems = useMemo(
     () => (result ? buildTimelineItems(result.facts, result) : []),
-    [result]
+    [result],
   );
 
   useEffect(() => {
@@ -1353,7 +1756,9 @@ export function DsregcmdWorkspace() {
     } catch (error) {
       console.error("[dsregcmd] failed to copy JSON export", { error });
       setExportError(
-        error instanceof Error ? error.message : "Could not copy dsregcmd JSON to the clipboard."
+        error instanceof Error
+          ? error.message
+          : "Could not copy dsregcmd JSON to the clipboard.",
       );
     }
   };
@@ -1369,7 +1774,9 @@ export function DsregcmdWorkspace() {
     } catch (error) {
       console.error("[dsregcmd] failed to copy summary export", { error });
       setExportError(
-        error instanceof Error ? error.message : "Could not copy the dsregcmd summary to the clipboard."
+        error instanceof Error
+          ? error.message
+          : "Could not copy the dsregcmd summary to the clipboard.",
       );
     }
   };
@@ -1386,7 +1793,9 @@ export function DsregcmdWorkspace() {
     } catch (error) {
       console.error("[dsregcmd] failed to copy raw status", { error });
       setExportError(
-        error instanceof Error ? error.message : "Could not copy dsregcmd status text to the clipboard."
+        error instanceof Error
+          ? error.message
+          : "Could not copy dsregcmd status text to the clipboard.",
       );
     }
   };
@@ -1412,17 +1821,18 @@ export function DsregcmdWorkspace() {
         return;
       }
 
-      const contents = kind === "json" ? JSON.stringify(result, null, 2) : summaryText;
+      const contents =
+        kind === "json" ? JSON.stringify(result, null, 2) : summaryText;
       await writeTextOutputFile(destination, contents);
       setExportSuccess(
-        `Saved ${kind === "json" ? "JSON export" : "summary export"} to ${destination}.`
+        `Saved ${kind === "json" ? "JSON export" : "summary export"} to ${destination}.`,
       );
     } catch (error) {
       console.error("[dsregcmd] failed to save export", { error, kind });
       setExportError(
         error instanceof Error
           ? error.message
-          : `Could not save the ${kind === "json" ? "JSON" : "summary"} export.`
+          : `Could not save the ${kind === "json" ? "JSON" : "summary"} export.`,
       );
     }
   };
@@ -1431,7 +1841,10 @@ export function DsregcmdWorkspace() {
     return (
       <EmptyWorkspace
         title="Analyzing dsregcmd source"
-        body={analysisState.detail ?? "Reading source text, extracting facts, and building the first-pass health view..."}
+        body={
+          analysisState.detail ??
+          "Reading source text, extracting facts, and building the first-pass health view..."
+        }
       />
     );
   }
@@ -1440,14 +1853,24 @@ export function DsregcmdWorkspace() {
     return (
       <EmptyWorkspace
         title="dsregcmd analysis failed"
-        body={analysisState.detail ?? "The selected dsregcmd source could not be analyzed."}
+        body={
+          analysisState.detail ??
+          "The selected dsregcmd source could not be analyzed."
+        }
       />
     );
   }
 
   if (!result) {
     return (
-      <div style={{ display: "flex", flexDirection: "column", height: "100%", backgroundColor: "#f8fafc" }}>
+      <div
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          height: "100%",
+          backgroundColor: "#f8fafc",
+        }}
+      >
         <div
           style={{
             display: "flex",
@@ -1460,22 +1883,41 @@ export function DsregcmdWorkspace() {
           }}
         >
           <div>
-            <div style={{ fontSize: "14px", fontWeight: 700, color: "#111827" }}>dsregcmd Workspace</div>
-            <div style={{ marginTop: "4px", fontSize: "12px", color: "#4b5563" }}>
-              Capture a live snapshot, paste clipboard text, open a text file, or select an evidence bundle folder.
+            <div
+              style={{ fontSize: "14px", fontWeight: 700, color: "#111827" }}
+            >
+              dsregcmd Workspace
+            </div>
+            <div
+              style={{ marginTop: "4px", fontSize: "12px", color: "#4b5563" }}
+            >
+              Capture a live snapshot, paste clipboard text, open a text file,
+              or select an evidence bundle folder.
             </div>
           </div>
           <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
-            <Button appearance="primary" onClick={() => void captureDsregcmdSource()}>
+            <Button
+              appearance="primary"
+              onClick={() => void captureDsregcmdSource()}
+            >
               Capture
             </Button>
-            <Button appearance="secondary" onClick={() => void pasteDsregcmdSource()}>
+            <Button
+              appearance="secondary"
+              onClick={() => void pasteDsregcmdSource()}
+            >
               Paste
             </Button>
-            <Button appearance="secondary" onClick={() => void openSourceFileDialog()}>
+            <Button
+              appearance="secondary"
+              onClick={() => void openSourceFileDialog()}
+            >
               Open Text File
             </Button>
-            <Button appearance="secondary" onClick={() => void openSourceFolderDialog()}>
+            <Button
+              appearance="secondary"
+              onClick={() => void openSourceFolderDialog()}
+            >
               Open Evidence Folder
             </Button>
           </div>
@@ -1489,7 +1931,10 @@ export function DsregcmdWorkspace() {
     );
   }
 
-  const issueSpotlight = diagnostics.find((item) => item.severity === "Error") ?? diagnostics[0] ?? null;
+  const issueSpotlight =
+    diagnostics.find((item) => item.severity === "Error") ??
+    diagnostics[0] ??
+    null;
   const stage = displayPhase ?? {
     phase: result.derived.dominantPhase,
     label: formatPhaseLabel(result.derived.dominantPhase),
@@ -1501,10 +1946,18 @@ export function DsregcmdWorkspace() {
     reason: result.derived.captureConfidenceReason,
   };
   const hasBundleContext = sourceContext.bundlePath != null;
-  const hasRegistryPolicyEvidence = result.policyEvidence.artifactPaths.length > 0;
+  const hasRegistryPolicyEvidence =
+    result.policyEvidence.artifactPaths.length > 0;
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%", backgroundColor: "#f8fafc" }}>
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        height: "100%",
+        backgroundColor: "#f8fafc",
+      }}
+    >
       <div
         style={{
           display: "flex",
@@ -1518,98 +1971,75 @@ export function DsregcmdWorkspace() {
         }}
       >
         <div style={{ minWidth: 0 }}>
-          <div style={{ fontSize: "14px", fontWeight: 700, color: "#111827" }}>dsregcmd Workspace</div>
-          <div style={{ marginTop: "4px", fontSize: "12px", color: "#4b5563", lineHeight: 1.4 }}>
+          <div style={{ fontSize: "14px", fontWeight: 700, color: "#111827" }}>
+            dsregcmd Workspace
+          </div>
+          <div
+            style={{
+              marginTop: "4px",
+              fontSize: "12px",
+              color: "#4b5563",
+              lineHeight: 1.4,
+            }}
+          >
             {sourceContext.displayLabel}
             {sourceContext.resolvedPath && ` • ${sourceContext.resolvedPath}`}
-            {sourceContext.evidenceFilePath && sourceContext.evidenceFilePath !== sourceContext.resolvedPath
+            {sourceContext.evidenceFilePath &&
+            sourceContext.evidenceFilePath !== sourceContext.resolvedPath
               ? ` • evidence ${sourceContext.evidenceFilePath}`
               : ""}
           </div>
         </div>
         <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
-          <Button appearance="primary" onClick={() => void captureDsregcmdSource()} disabled={isAnalyzing}>
+          <Button
+            appearance="primary"
+            onClick={() => void captureDsregcmdSource()}
+            disabled={isAnalyzing}
+          >
             Capture
           </Button>
-          <Button appearance="secondary" onClick={() => void pasteDsregcmdSource()} disabled={isAnalyzing}>
+          <Button
+            appearance="secondary"
+            onClick={() => void pasteDsregcmdSource()}
+            disabled={isAnalyzing}
+          >
             Paste
           </Button>
-          <Button appearance="secondary" onClick={() => void openSourceFileDialog()} disabled={isAnalyzing}>
+          <Button
+            appearance="secondary"
+            onClick={() => void openSourceFileDialog()}
+            disabled={isAnalyzing}
+          >
             Open Text File
           </Button>
-          <Button appearance="secondary" onClick={() => void openSourceFolderDialog()} disabled={isAnalyzing}>
+          <Button
+            appearance="secondary"
+            onClick={() => void openSourceFolderDialog()}
+            disabled={isAnalyzing}
+          >
             Open Evidence Folder
           </Button>
         </div>
       </div>
 
-      <div style={{ flex: 1, overflow: "auto", padding: "16px", display: "flex", flexDirection: "column", gap: "16px" }}>
-        {(hasBundleContext || sourceContext.evidenceFilePath) && (
-          <SectionFrame
-            title="Evidence Provenance"
-            caption="What bundle context was available for this dsregcmd analysis."
-          >
-            <div style={{ display: "grid", gap: "10px" }}>
-              <div
-                style={{
-                  padding: "10px 12px",
-                  border: hasRegistryPolicyEvidence ? "1px solid #bfdbfe" : "1px solid #fde68a",
-                  backgroundColor: hasRegistryPolicyEvidence ? "#eff6ff" : "#fffbeb",
-                  color: hasRegistryPolicyEvidence ? "#1e3a8a" : "#92400e",
-                  borderRadius: "8px",
-                  fontSize: "12px",
-                  lineHeight: 1.5,
-                }}
-              >
-                <div style={{ fontWeight: 700 }}>
-                  {hasRegistryPolicyEvidence
-                    ? "Bundle-backed policy evidence is available."
-                    : "Bundle-backed registry policy evidence is missing for this capture."}
-                </div>
-                <div style={{ marginTop: "4px" }}>
-                  {hasRegistryPolicyEvidence
-                    ? `WHfB policy interpretation can reference ${result.policyEvidence.artifactPaths.length} sibling registry artifact${result.policyEvidence.artifactPaths.length === 1 ? "" : "s"}.`
-                    : "The dsregcmd text was analyzed, but policy and registry corroboration was not available from sibling bundle artifacts."}
-                </div>
-              </div>
-
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: "10px" }}>
-                {sourceContext.bundlePath && (
-                  <div style={{ border: "1px solid #e5e7eb", backgroundColor: "#ffffff", padding: "10px 12px", borderRadius: "8px" }}>
-                    <div style={{ fontSize: "11px", fontWeight: 700, color: "#475569", textTransform: "uppercase", letterSpacing: "0.04em" }}>
-                      Bundle root
-                    </div>
-                    <div style={{ marginTop: "4px", fontSize: "12px", color: "#111827", wordBreak: "break-word" }}>
-                      {sourceContext.bundlePath}
-                    </div>
-                  </div>
-                )}
-                {sourceContext.evidenceFilePath && (
-                  <div style={{ border: "1px solid #e5e7eb", backgroundColor: "#ffffff", padding: "10px 12px", borderRadius: "8px" }}>
-                    <div style={{ fontSize: "11px", fontWeight: 700, color: "#475569", textTransform: "uppercase", letterSpacing: "0.04em" }}>
-                      Evidence file
-                    </div>
-                    <div style={{ marginTop: "4px", fontSize: "12px", color: "#111827", wordBreak: "break-word" }}>
-                      {sourceContext.evidenceFilePath}
-                    </div>
-                  </div>
-                )}
-                <div style={{ border: "1px solid #e5e7eb", backgroundColor: "#ffffff", padding: "10px 12px", borderRadius: "8px" }}>
-                  <div style={{ fontSize: "11px", fontWeight: 700, color: "#475569", textTransform: "uppercase", letterSpacing: "0.04em" }}>
-                    Registry artifacts
-                  </div>
-                  <div style={{ marginTop: "4px", fontSize: "12px", color: "#111827", wordBreak: "break-word" }}>
-                    {hasRegistryPolicyEvidence
-                      ? formatRegistryArtifacts(result.policyEvidence.artifactPaths)
-                      : "No sibling registry artifacts were available."}
-                  </div>
-                </div>
-              </div>
-            </div>
-          </SectionFrame>
-        )}
-
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "12px", flexShrink: 0 }}>
+      <div
+        style={{
+          flex: 1,
+          overflow: "auto",
+          padding: "16px",
+          display: "flex",
+          flexDirection: "column",
+          gap: "16px",
+        }}
+      >
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
+            gap: "12px",
+            flexShrink: 0,
+          }}
+        >
           <StatCard
             title="Join Type"
             value={result.derived.joinTypeLabel}
@@ -1634,29 +2064,35 @@ export function DsregcmdWorkspace() {
             caption={
               result.derived.stalePrt
                 ? qualifyByCaptureConfidence(
-                  confidence.confidence,
-                  `PRT looks stale by ${formatHourDuration(result.derived.prtAgeHours)}.`
-                )
+                    confidence.confidence,
+                    `PRT looks stale by ${formatHourDuration(result.derived.prtAgeHours)}.`,
+                  )
                 : qualifyByCaptureConfidence(
-                  confidence.confidence,
-                  "Primary Refresh Token presence was derived from SSO state."
-                )
+                    confidence.confidence,
+                    "Primary Refresh Token presence was derived from SSO state.",
+                  )
             }
-            tone={toneForPrtState(result.derived.azureAdPrtPresent, result.derived.stalePrt)}
+            tone={toneForPrtState(
+              result.derived.azureAdPrtPresent,
+              result.derived.stalePrt,
+            )}
           />
           <StatCard
             title="MDM Signals"
             value={getMdmVisibilityLabel(result.derived)}
             caption={qualifyByCaptureConfidence(
               confidence.confidence,
-              "visible tenant management metadata can be out of scope, not configured, or simply absent from this capture."
+              "visible tenant management metadata can be out of scope, not configured, or simply absent from this capture.",
             )}
             tone={toneForMdmVisibility(result.derived)}
           />
           <StatCard
             title="NGC"
             value={getNgcReadinessValue(result)}
-            caption={qualifyByCaptureConfidence(confidence.confidence, getNgcCaption(result))}
+            caption={qualifyByCaptureConfidence(
+              confidence.confidence,
+              getNgcCaption(result),
+            )}
             tone={toneForNgcReadiness(result)}
           />
           <StatCard
@@ -1671,39 +2107,135 @@ export function DsregcmdWorkspace() {
           />
         </div>
 
-        <SectionFrame title="Health Summary" caption="Fast first-pass readout of the current dsregcmd capture.">
-          <div style={{ display: "grid", gridTemplateColumns: "minmax(260px, 1.2fr) minmax(220px, 0.8fr)", gap: "16px" }}>
+        <SectionFrame
+          title="Health Summary"
+          caption="Fast first-pass readout of the current dsregcmd capture."
+        >
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "minmax(260px, 1.2fr) minmax(220px, 0.8fr)",
+              gap: "16px",
+            }}
+          >
             <div>
-              <div style={{ fontSize: "13px", lineHeight: 1.6, color: "#374151", whiteSpace: "pre-wrap" }}>{summaryText}</div>
+              <div
+                style={{
+                  fontSize: "13px",
+                  lineHeight: 1.6,
+                  color: "#374151",
+                  whiteSpace: "pre-wrap",
+                }}
+              >
+                {summaryText}
+              </div>
               {issueSpotlight && (
-                <div style={{ marginTop: "12px", padding: "10px", border: "1px solid #e5e7eb", backgroundColor: "#f9fafb" }}>
-                  <div style={{ fontSize: "12px", fontWeight: 700, color: "#111827" }}>Issue spotlight</div>
-                  <div style={{ marginTop: "6px", fontSize: "13px", fontWeight: 600, color: "#111827" }}>{issueSpotlight.title}</div>
-                  <div style={{ marginTop: "4px", fontSize: "12px", color: "#4b5563", lineHeight: 1.5 }}>
-                    {issueSpotlight.summary} {confidence.confidence === "high" ? "" : `Interpret this in the context of ${formatConfidenceLabel(confidence.confidence).toLowerCase()} capture confidence.`}
+                <div
+                  style={{
+                    marginTop: "12px",
+                    padding: "10px",
+                    border: "1px solid #e5e7eb",
+                    backgroundColor: "#f9fafb",
+                  }}
+                >
+                  <div
+                    style={{
+                      fontSize: "12px",
+                      fontWeight: 700,
+                      color: "#111827",
+                    }}
+                  >
+                    Issue spotlight
+                  </div>
+                  <div
+                    style={{
+                      marginTop: "6px",
+                      fontSize: "13px",
+                      fontWeight: 600,
+                      color: "#111827",
+                    }}
+                  >
+                    {issueSpotlight.title}
+                  </div>
+                  <div
+                    style={{
+                      marginTop: "4px",
+                      fontSize: "12px",
+                      color: "#4b5563",
+                      lineHeight: 1.5,
+                    }}
+                  >
+                    {issueSpotlight.summary}{" "}
+                    {confidence.confidence === "high"
+                      ? ""
+                      : `Interpret this in the context of ${formatConfidenceLabel(confidence.confidence).toLowerCase()} capture confidence.`}
                   </div>
                 </div>
               )}
             </div>
-            <div style={{ border: "1px solid #e5e7eb", backgroundColor: "#ffffff", padding: "12px" }}>
-              <div style={{ fontSize: "12px", fontWeight: 700, color: "#111827" }}>Quick interpretation</div>
-              <ul style={{ marginTop: "8px", paddingLeft: "18px", color: "#374151", lineHeight: 1.6 }}>
+            <div
+              style={{
+                border: "1px solid #e5e7eb",
+                backgroundColor: "#ffffff",
+                padding: "12px",
+              }}
+            >
+              <div
+                style={{ fontSize: "12px", fontWeight: 700, color: "#111827" }}
+              >
+                Quick interpretation
+              </div>
+              <ul
+                style={{
+                  marginTop: "8px",
+                  paddingLeft: "18px",
+                  color: "#374151",
+                  lineHeight: 1.6,
+                }}
+              >
                 <li>{stage.summary}</li>
                 <li>{`Capture confidence is ${formatConfidenceLabel(confidence.confidence).toLowerCase()}: ${confidence.reason}`}</li>
-                <li>{result.policyEvidence.artifactPaths.length > 0 ? "Registry-backed WHfB policy evidence is available for this bundle." : "No sibling registry policy evidence was available for this capture."}</li>
-                <li>{result.derived.hasNetworkError ? `Network marker detected: ${result.derived.networkErrorCode}.` : "No explicit network marker was detected in the capture."}</li>
-                <li>{result.derived.remoteSessionSystem ? "Capture looks like SYSTEM in a remote session, so user token fields may be misleading." : "Capture does not look like a SYSTEM remote-session snapshot."}</li>
-                <li>{result.derived.certificateExpiringSoon ? "Device certificate is nearing expiry and deserves follow-up." : "Certificate expiry was not flagged as near-term."}</li>
+                <li>
+                  {result.policyEvidence.artifactPaths.length > 0
+                    ? "Registry-backed WHfB policy evidence is available for this bundle."
+                    : "No sibling registry policy evidence was available for this capture."}
+                </li>
+                <li>
+                  {result.derived.hasNetworkError
+                    ? `Network marker detected: ${result.derived.networkErrorCode}.`
+                    : "No explicit network marker was detected in the capture."}
+                </li>
+                <li>
+                  {result.derived.remoteSessionSystem
+                    ? "Capture looks like SYSTEM in a remote session, so user token fields may be misleading."
+                    : "Capture does not look like a SYSTEM remote-session snapshot."}
+                </li>
+                <li>
+                  {result.derived.certificateExpiringSoon
+                    ? "Device certificate is nearing expiry and deserves follow-up."
+                    : "Certificate expiry was not flagged as near-term."}
+                </li>
               </ul>
             </div>
           </div>
         </SectionFrame>
 
-        <SectionFrame title="Issues Overview" caption="Ordered diagnostic findings with evidence, recommended checks, and suggested fixes.">
+        <SectionFrame
+          title="Issues Overview"
+          caption="Ordered diagnostic findings with evidence, recommended checks, and suggested fixes."
+        >
           {diagnostics.length === 0 ? (
-            <div style={{ fontSize: "13px", color: "#374151" }}>No diagnostics were produced for this dsregcmd capture.</div>
+            <div style={{ fontSize: "13px", color: "#374151" }}>
+              No diagnostics were produced for this dsregcmd capture.
+            </div>
           ) : (
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: "12px" }}>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))",
+                gap: "12px",
+              }}
+            >
               {diagnostics.map((issue) => (
                 <IssueCard key={issue.id} issue={issue} />
               ))}
@@ -1711,24 +2243,55 @@ export function DsregcmdWorkspace() {
           )}
         </SectionFrame>
 
-        <SectionFrame title="Facts by Group" caption="Backend-extracted facts organized for quick review rather than raw line order.">
-          <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "12px" }}>
-            <Button appearance={showNotReported ? "primary" : "secondary"} onClick={() => setShowNotReported((value) => !value)}>
-              {showNotReported ? "Hide Not Reported Fields" : "Show Not Reported Fields"}
+        <SectionFrame
+          title="Facts by Group"
+          caption="Backend-extracted facts organized for quick review rather than raw line order."
+        >
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "flex-end",
+              marginBottom: "12px",
+            }}
+          >
+            <Button
+              appearance={showNotReported ? "primary" : "secondary"}
+              onClick={() => setShowNotReported((value) => !value)}
+            >
+              {showNotReported
+                ? "Hide Not Reported Fields"
+                : "Show Not Reported Fields"}
             </Button>
           </div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(360px, 1fr))", gap: "12px" }}>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fit, minmax(360px, 1fr))",
+              gap: "12px",
+            }}
+          >
             {factGroups.map((group) => (
-              <FactsTable key={group.id} group={group} showNotReported={showNotReported} />
+              <FactsTable
+                key={group.id}
+                group={group}
+                showNotReported={showNotReported}
+              />
             ))}
           </div>
         </SectionFrame>
 
-        <SectionFrame title="Timeline" caption="Important timestamps surfaced from PRT, certificate, and diagnostics fields.">
+        <SectionFrame
+          title="Timeline"
+          caption="Important timestamps surfaced from PRT, certificate, and diagnostics fields."
+        >
           {timelineItems.length === 0 ? (
-            <div style={{ fontSize: "13px", color: "#374151" }}>No timeline-friendly timestamps were found in this capture.</div>
+            <div style={{ fontSize: "13px", color: "#374151" }}>
+              No timeline-friendly timestamps were found in this capture.
+            </div>
           ) : (
-            <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+            <div
+              style={{ display: "flex", flexDirection: "column", gap: "10px" }}
+            >
               {timelineItems.map((item, index) => {
                 const palette =
                   item.tone === "warn"
@@ -1738,16 +2301,68 @@ export function DsregcmdWorkspace() {
                       : { line: "#94a3b8", dot: "#64748b", card: "#f8fafc" };
 
                 return (
-                  <div key={item.id} style={{ display: "grid", gridTemplateColumns: "20px 1fr", gap: "10px", alignItems: "stretch" }}>
-                    <div style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
-                      <div style={{ width: "10px", height: "10px", borderRadius: "999px", backgroundColor: palette.dot, marginTop: "8px" }} />
+                  <div
+                    key={item.id}
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "20px 1fr",
+                      gap: "10px",
+                      alignItems: "stretch",
+                    }}
+                  >
+                    <div
+                      style={{
+                        display: "flex",
+                        flexDirection: "column",
+                        alignItems: "center",
+                      }}
+                    >
+                      <div
+                        style={{
+                          width: "10px",
+                          height: "10px",
+                          borderRadius: "999px",
+                          backgroundColor: palette.dot,
+                          marginTop: "8px",
+                        }}
+                      />
                       {index < timelineItems.length - 1 && (
-                        <div style={{ flex: 1, width: "2px", backgroundColor: palette.line, marginTop: "4px" }} />
+                        <div
+                          style={{
+                            flex: 1,
+                            width: "2px",
+                            backgroundColor: palette.line,
+                            marginTop: "4px",
+                          }}
+                        />
                       )}
                     </div>
-                    <div style={{ border: "1px solid #e5e7eb", backgroundColor: palette.card, padding: "10px 12px" }}>
-                      <div style={{ fontSize: "12px", fontWeight: 700, color: "#111827" }}>{item.label}</div>
-                      <div style={{ marginTop: "4px", fontSize: "12px", color: "#374151", wordBreak: "break-word" }}>{item.value}</div>
+                    <div
+                      style={{
+                        border: "1px solid #e5e7eb",
+                        backgroundColor: palette.card,
+                        padding: "10px 12px",
+                      }}
+                    >
+                      <div
+                        style={{
+                          fontSize: "12px",
+                          fontWeight: 700,
+                          color: "#111827",
+                        }}
+                      >
+                        {item.label}
+                      </div>
+                      <div
+                        style={{
+                          marginTop: "4px",
+                          fontSize: "12px",
+                          color: "#374151",
+                          wordBreak: "break-word",
+                        }}
+                      >
+                        {item.value}
+                      </div>
                     </div>
                   </div>
                 );
@@ -1756,8 +2371,18 @@ export function DsregcmdWorkspace() {
           )}
         </SectionFrame>
 
-        <SectionFrame title="Flows" caption="Pragmatic first-pass flow boxes for registration, management, and token health.">
-          <div style={{ display: "flex", gap: "10px", flexWrap: "wrap", alignItems: "stretch" }}>
+        <SectionFrame
+          title="Flows"
+          caption="Pragmatic first-pass flow boxes for registration, management, and token health."
+        >
+          <div
+            style={{
+              display: "flex",
+              gap: "10px",
+              flexWrap: "wrap",
+              alignItems: "stretch",
+            }}
+          >
             <FlowBox
               title="Current phase"
               detail={`${stage.label}. ${stage.summary}`}
@@ -1772,15 +2397,20 @@ export function DsregcmdWorkspace() {
               title="Device authentication"
               detail={qualifyByCaptureConfidence(
                 confidence.confidence,
-                `device auth status is ${formatValue(result.facts.deviceDetails.deviceAuthStatus)} and TPM protected is ${formatBool(result.facts.deviceDetails.tpmProtected)}.`
+                `device auth status is ${formatValue(result.facts.deviceDetails.deviceAuthStatus)} and TPM protected is ${formatBool(result.facts.deviceDetails.tpmProtected)}.`,
               )}
-              tone={result.facts.deviceDetails.deviceAuthStatus?.toUpperCase() === "SUCCESS" ? "good" : "bad"}
+              tone={
+                result.facts.deviceDetails.deviceAuthStatus?.toUpperCase() ===
+                "SUCCESS"
+                  ? "good"
+                  : "bad"
+              }
             />
             <FlowBox
               title="Management"
               detail={qualifyByCaptureConfidence(
                 confidence.confidence,
-                `MDM visibility is ${getMdmVisibilityLabel(result.derived)} and compliance URL present is ${formatBool(result.derived.complianceUrlPresent)}. Missing fields are not proof that management is broken.`
+                `MDM visibility is ${getMdmVisibilityLabel(result.derived)} and compliance URL present is ${formatBool(result.derived.complianceUrlPresent)}. Missing fields are not proof that management is broken.`,
               )}
               tone={toneForMdmVisibility(result.derived)}
             />
@@ -1788,15 +2418,18 @@ export function DsregcmdWorkspace() {
               title="PRT and session"
               detail={qualifyByCaptureConfidence(
                 confidence.confidence,
-                `PRT present is ${formatBool(result.derived.azureAdPrtPresent)}, stale is ${formatBool(result.derived.stalePrt)}, and remote SYSTEM is ${formatBool(result.derived.remoteSessionSystem)}.`
+                `PRT present is ${formatBool(result.derived.azureAdPrtPresent)}, stale is ${formatBool(result.derived.stalePrt)}, and remote SYSTEM is ${formatBool(result.derived.remoteSessionSystem)}.`,
               )}
-              tone={toneForPrtState(result.derived.azureAdPrtPresent, result.derived.stalePrt)}
+              tone={toneForPrtState(
+                result.derived.azureAdPrtPresent,
+                result.derived.stalePrt,
+              )}
             />
             <FlowBox
               title="NGC readiness"
               detail={qualifyByCaptureConfidence(
                 confidence.confidence,
-                `NGC is ${formatBool(result.facts.userState.ngcSet)}, policy enabled is ${getPolicyDisplayValue(result.facts.userState.policyEnabled, result.policyEvidence.policyEnabled)}, PreReq Result is ${formatValue(result.facts.registration.preReqResult)}, and device eligible is ${formatBool(result.facts.userState.deviceEligible)}.`
+                `NGC is ${formatBool(result.facts.userState.ngcSet)}, policy enabled is ${getPolicyDisplayValue(result.facts.userState.policyEnabled, result.policyEvidence.policyEnabled)}, PreReq Result is ${formatValue(result.facts.registration.preReqResult)}, and device eligible is ${formatBool(result.facts.userState.deviceEligible)}.`,
               )}
               tone={toneForNgcReadiness(result)}
             />
@@ -1808,47 +2441,135 @@ export function DsregcmdWorkspace() {
           </div>
         </SectionFrame>
 
-        <SectionFrame title="Explainer" caption="Short practical notes for what this workspace is showing and how to use it.">
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "12px" }}>
-            <div style={{ border: "1px solid #e5e7eb", padding: "12px", backgroundColor: "#ffffff" }}>
-              <div style={{ fontSize: "12px", fontWeight: 700, color: "#111827" }}>What the health cards mean</div>
-              <div style={{ marginTop: "8px", fontSize: "12px", lineHeight: 1.6, color: "#374151" }}>
-                Cards summarize join posture, token state, MDM visibility, certificate lifetime, and issue counts. They are not a replacement for the raw dsregcmd output, but they do make triage faster.
+        <SectionFrame
+          title="Explainer"
+          caption="Short practical notes for what this workspace is showing and how to use it."
+        >
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
+              gap: "12px",
+            }}
+          >
+            <div
+              style={{
+                border: "1px solid #e5e7eb",
+                padding: "12px",
+                backgroundColor: "#ffffff",
+              }}
+            >
+              <div
+                style={{ fontSize: "12px", fontWeight: 700, color: "#111827" }}
+              >
+                What the health cards mean
+              </div>
+              <div
+                style={{
+                  marginTop: "8px",
+                  fontSize: "12px",
+                  lineHeight: 1.6,
+                  color: "#374151",
+                }}
+              >
+                Cards summarize join posture, token state, MDM visibility,
+                certificate lifetime, and issue counts. They are not a
+                replacement for the raw dsregcmd output, but they do make triage
+                faster.
               </div>
             </div>
-            <div style={{ border: "1px solid #e5e7eb", padding: "12px", backgroundColor: "#ffffff" }}>
-              <div style={{ fontSize: "12px", fontWeight: 700, color: "#111827" }}>When the capture may mislead</div>
-              <div style={{ marginTop: "8px", fontSize: "12px", lineHeight: 1.6, color: "#374151" }}>
-                SYSTEM and remote-session captures can distort user-scoped token state. Evidence bundle captures can also be older than the current device state, so compare timestamps before acting.
+            <div
+              style={{
+                border: "1px solid #e5e7eb",
+                padding: "12px",
+                backgroundColor: "#ffffff",
+              }}
+            >
+              <div
+                style={{ fontSize: "12px", fontWeight: 700, color: "#111827" }}
+              >
+                When the capture may mislead
+              </div>
+              <div
+                style={{
+                  marginTop: "8px",
+                  fontSize: "12px",
+                  lineHeight: 1.6,
+                  color: "#374151",
+                }}
+              >
+                SYSTEM and remote-session captures can distort user-scoped token
+                state. Evidence bundle captures can also be older than the
+                current device state, so compare timestamps before acting.
               </div>
             </div>
-            <div style={{ border: "1px solid #e5e7eb", padding: "12px", backgroundColor: "#ffffff" }}>
-              <div style={{ fontSize: "12px", fontWeight: 700, color: "#111827" }}>Suggested next step</div>
-              <div style={{ marginTop: "8px", fontSize: "12px", lineHeight: 1.6, color: "#374151" }}>
-                Start with the highest-severity issue card, validate the evidence line items against the grouped facts below, and then re-run capture after remediation to confirm the signal changes.
+            <div
+              style={{
+                border: "1px solid #e5e7eb",
+                padding: "12px",
+                backgroundColor: "#ffffff",
+              }}
+            >
+              <div
+                style={{ fontSize: "12px", fontWeight: 700, color: "#111827" }}
+              >
+                Suggested next step
+              </div>
+              <div
+                style={{
+                  marginTop: "8px",
+                  fontSize: "12px",
+                  lineHeight: 1.6,
+                  color: "#374151",
+                }}
+              >
+                Start with the highest-severity issue card, validate the
+                evidence line items against the grouped facts below, and then
+                re-run capture after remediation to confirm the signal changes.
               </div>
             </div>
           </div>
         </SectionFrame>
 
-        <SectionFrame title="Export" caption="No-dependency export controls for handing off or attaching analysis output.">
+        <SectionFrame
+          title="Export"
+          caption="No-dependency export controls for handing off or attaching analysis output."
+        >
           <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
-            <Button appearance="secondary" onClick={() => void handleCopyJson()}>
+            <Button
+              appearance="secondary"
+              onClick={() => void handleCopyJson()}
+            >
               Copy JSON
             </Button>
-            <Button appearance="secondary" onClick={() => void handleCopyStatus()}>
+            <Button
+              appearance="secondary"
+              onClick={() => void handleCopyStatus()}
+            >
               Copy Status Text
             </Button>
-            <Button appearance="secondary" onClick={() => void handleCopySummary()}>
+            <Button
+              appearance="secondary"
+              onClick={() => void handleCopySummary()}
+            >
               Copy Summary
             </Button>
-            <Button appearance="secondary" onClick={() => void handleSaveExport("json")}>
+            <Button
+              appearance="secondary"
+              onClick={() => void handleSaveExport("json")}
+            >
               Save JSON
             </Button>
-            <Button appearance="secondary" onClick={() => void handleSaveExport("summary")}>
+            <Button
+              appearance="secondary"
+              onClick={() => void handleSaveExport("summary")}
+            >
               Save Summary
             </Button>
-            <Button appearance={showRawInput ? "primary" : "secondary"} onClick={() => setShowRawInput((value) => !value)}>
+            <Button
+              appearance={showRawInput ? "primary" : "secondary"}
+              onClick={() => setShowRawInput((value) => !value)}
+            >
               {showRawInput ? "Hide Raw Input" : "Show Raw Input"}
             </Button>
           </div>

@@ -301,11 +301,7 @@ pub fn extract_events(lines: &[ImeLine], source_file: &str) -> Vec<IntuneEvent> 
         let guid = extract_guid(&line.message);
         let status = determine_status(&line.message, source_kind);
         let name = build_event_name(&event_type, &guid, &line.message, source_kind);
-        let detail = if line.message.len() > 300 {
-            format!("{}...", &line.message[..300])
-        } else {
-            line.message.clone()
-        };
+        let detail = line.message.clone();
 
         events.push(IntuneEvent {
             id: next_id,
@@ -412,7 +408,7 @@ fn build_appworkload_name(
 ) -> String {
     if *event_type == IntuneEventType::WinGetApp {
         return match guid.as_deref().map(short_guid) {
-            Some(short) => format!("AppWorkload WinGet ({short}...)"),
+            Some(short) => format!("AppWorkload WinGet ({short})"),
             None => "AppWorkload WinGet".to_string(),
         };
     }
@@ -434,21 +430,13 @@ fn build_appworkload_name(
     };
 
     match guid.as_deref().map(short_guid) {
-        Some(short) => format!("AppWorkload {phase} ({short}...)"),
+        Some(short) => format!("AppWorkload {phase} ({short})"),
         None => format!("AppWorkload {phase}"),
     }
 }
 
 fn build_detail(msg: &str) -> String {
-    if msg.len() > 300 {
-        let mut end = 300;
-        while end > 0 && !msg.is_char_boundary(end) {
-            end -= 1;
-        }
-        format!("{}...", &msg[..end])
-    } else {
-        msg.to_string()
-    }
+    msg.to_string()
 }
 
 fn classify_source_kind(source_file: &str) -> ImeSourceKind {
@@ -851,9 +839,9 @@ fn build_event_name(
 
     if let Some(guid) = guid {
         let short = short_guid(guid);
-        format!("{label} ({short}...)")
+        format!("{label} ({short})")
     } else {
-        format!("{label}: {}", msg.chars().take(50).collect::<String>())
+        format!("{label}: {msg}")
     }
 }
 
@@ -883,7 +871,7 @@ fn build_source_specific_name(
                 return None;
             };
             Some(match short_guid {
-                Some(short) => format!("AppWorkload {phase} ({short}...)"),
+                Some(short) => format!("AppWorkload {phase} ({short})"),
                 None => format!("AppWorkload {phase}"),
             })
         }
@@ -900,7 +888,7 @@ fn build_source_specific_name(
                 return None;
             };
             Some(match short_guid {
-                Some(short) => format!("AppActionProcessor {area} ({short}...)"),
+                Some(short) => format!("AppActionProcessor {area} ({short})"),
                 None => format!("AppActionProcessor {area}"),
             })
         }
@@ -917,7 +905,7 @@ fn build_source_specific_name(
                 "PowerShell Script"
             };
             Some(match short_guid {
-                Some(short) => format!("AgentExecutor {area} ({short}...)"),
+                Some(short) => format!("AgentExecutor {area} ({short})"),
                 None => format!("AgentExecutor {area}"),
             })
         }
@@ -932,7 +920,7 @@ fn build_source_specific_name(
                 "Schedule"
             };
             Some(match short_guid {
-                Some(short) => format!("HealthScripts {area} ({short}...)"),
+                Some(short) => format!("HealthScripts {area} ({short})"),
                 None => format!("HealthScripts {area}"),
             })
         }
@@ -1037,11 +1025,7 @@ fn parse_win32_app_inventory_delta(msg: &str) -> Option<(u32, u32, u32)> {
 }
 
 fn short_guid(value: &str) -> &str {
-    if value.len() > 8 {
-        &value[..8]
-    } else {
-        value
-    }
+    value
 }
 
 fn contains_case_insensitive(value: &str, needle: &str) -> bool {

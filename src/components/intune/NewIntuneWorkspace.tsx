@@ -13,12 +13,14 @@ import {
   tokens,
 } from "@fluentui/react-components";
 import { formatDisplayDateTime } from "../../lib/date-time-format";
+import { getLogListMetrics } from "../../lib/log-accessibility";
 import {
   useIntuneStore,
   getEventLogEntryIdsForDiagnostic,
 } from "../../stores/intune-store";
+import { useUiStore } from "../../stores/ui-store";
 import { useAppActions } from "../layout/Toolbar";
-import { DownloadStats } from "./DownloadStats";
+import { DownloadSurface } from "./DownloadSurface";
 import { EventLogSurface } from "./EventLogSurface";
 import { EventTimeline } from "./EventTimeline";
 import type { EventLogEntry } from "../../types/event-log";
@@ -136,8 +138,6 @@ const useStyles = makeStyles({
     backgroundColor: "rgba(255,255,255,0.96)",
   },
   metricValue: {
-    fontSize: "30px",
-    lineHeight: "34px",
     fontWeight: 700,
     color: tokens.colorNeutralForeground1,
     overflow: "hidden",
@@ -267,8 +267,16 @@ const useStyles = makeStyles({
   },
 });
 
+/** Inline style that forces Fluent typography components to inherit font size. */
+const inheritFontSize: React.CSSProperties = { fontSize: "inherit" };
+
 export function NewIntuneWorkspace() {
   const styles = useStyles();
+  const logListFontSize = useUiStore((s) => s.logListFontSize);
+  const metrics = useMemo(
+    () => getLogListMetrics(logListFontSize),
+    [logListFontSize]
+  );
   const LIVE_COLLECTION_SOURCE_ID = "windows-intune-ime-logs";
   const events = useIntuneStore((s) => s.events);
   const downloads = useIntuneStore((s) => s.downloads);
@@ -459,8 +467,8 @@ export function NewIntuneWorkspace() {
               <Badge appearance="filled" color="brand">
                 New Intune Workspace
               </Badge>
-              <Title3>Start from the signals, not the scrollback</Title3>
-              <Body1>
+              <Title3 style={inheritFontSize}>Start from the signals, not the scrollback</Title3>
+              <Body1 style={inheritFontSize}>
                 This workspace is tuned for triage-first Intune diagnostics.
                 Analyze the live IME logs and live Windows event channels
                 directly from the machine, or open a captured file or evidence
@@ -498,14 +506,14 @@ export function NewIntuneWorkspace() {
   }
 
   return (
-    <div className={styles.root}>
+    <div className={styles.root} style={{ fontSize: `${metrics.fontSize}px`, lineHeight: `${metrics.rowLineHeight}px` }}>
       <div className={styles.hero}>
         <div className={styles.heroTop}>
           <div className={styles.heroTitleBlock}>
             <Badge appearance="filled" color="brand">
               New Intune Workspace
             </Badge>
-            <Title3>
+            <Title3 style={inheritFontSize}>
               Operational Triage for Intune Evidence
             </Title3>
             <Caption1 className={styles.bandCaption}>
@@ -548,18 +556,18 @@ export function NewIntuneWorkspace() {
 
         <div className={styles.sourcePillRow}>
           <div className={styles.sourcePill}>
-            <Caption1>Source</Caption1>
-            <Body1Strong title={sourceLabel ?? undefined}>
+            <Caption1 style={inheritFontSize}>Source</Caption1>
+            <Body1Strong style={inheritFontSize} title={sourceLabel ?? undefined}>
               {sourceLabel ?? "No source selected"}
             </Body1Strong>
           </div>
           <div className={styles.sourcePill}>
-            <Caption1>State</Caption1>
-            <Body1Strong>{analysisState.message}</Body1Strong>
+            <Caption1 style={inheritFontSize}>State</Caption1>
+            <Body1Strong style={inheritFontSize}>{analysisState.message}</Body1Strong>
           </div>
           <div className={styles.sourcePill}>
-            <Caption1>Bundle</Caption1>
-            <Body1Strong>
+            <Caption1 style={inheritFontSize}>Bundle</Caption1>
+            <Body1Strong style={inheritFontSize}>
               {evidenceBundle?.bundleLabel ??
                 evidenceBundle?.bundleId ??
                 "Standalone logs"}
@@ -568,11 +576,13 @@ export function NewIntuneWorkspace() {
         </div>
       </div>
 
-      <div className={styles.surfaceNav}>
-        <div className={styles.navButtons}>
+      <nav className={styles.surfaceNav} aria-label="Intune analysis views">
+        <div className={styles.navButtons} role="tablist">
           <Button
             appearance={surface === "overview" ? "primary" : "secondary"}
             onClick={() => setSurface("overview")}
+            role="tab"
+            aria-selected={surface === "overview"}
           >
             Overview
           </Button>
@@ -580,6 +590,8 @@ export function NewIntuneWorkspace() {
             appearance={surface === "timeline" ? "primary" : "secondary"}
             onClick={() => setSurface("timeline")}
             disabled={events.length === 0}
+            role="tab"
+            aria-selected={surface === "timeline"}
           >
             Event Evidence
           </Button>
@@ -587,6 +599,8 @@ export function NewIntuneWorkspace() {
             appearance={surface === "downloads" ? "primary" : "secondary"}
             onClick={() => setSurface("downloads")}
             disabled={downloads.length === 0}
+            role="tab"
+            aria-selected={surface === "downloads"}
           >
             Download Evidence
           </Button>
@@ -594,6 +608,8 @@ export function NewIntuneWorkspace() {
             appearance={surface === "event-logs" ? "primary" : "secondary"}
             onClick={() => setSurface("event-logs")}
             disabled={!hasEventLogAnalysis}
+            role="tab"
+            aria-selected={surface === "event-logs"}
           >
             Event Log Evidence
             {eventLogAnalysis && eventLogAnalysis.errorEntryCount > 0 && (
@@ -633,16 +649,17 @@ export function NewIntuneWorkspace() {
             </Badge>
           )}
         </div>
-      </div>
+      </nav>
 
       <div
         className={
           surface === "event-logs" ? styles.investigationBody : styles.body
         }
+        role="tabpanel"
       >
         {surface === "overview" ? (
           <div>
-            <div className={styles.metricsGrid}>
+            <div className={styles.metricsGrid} role="region" aria-label="Analysis metrics">
               <MetricCard
                 title="Active issues"
                 value={String(sortedDiagnostics.length)}
@@ -689,6 +706,14 @@ export function NewIntuneWorkspace() {
                   accent="#7c3aed"
                 />
               )}
+              {(summary?.totalDownloads ?? 0) > 0 && (
+                <MetricCard
+                  title="Content downloads"
+                  value={String(summary?.totalDownloads ?? 0)}
+                  hint={`${summary?.successfulDownloads ?? 0} succeeded, ${summary?.failedDownloads ?? 0} failed`}
+                  accent="#ea580c"
+                />
+              )}
             </div>
 
             <div className={styles.overviewGrid}>
@@ -696,8 +721,8 @@ export function NewIntuneWorkspace() {
                 <Card className={styles.sectionCard}>
                   <div className={styles.sectionHeader}>
                     <div className={styles.textStack}>
-                      <Title3>Priority issues</Title3>
-                      <Caption1>
+                      <Title3 style={inheritFontSize}>Priority issues</Title3>
+                      <Caption1 style={inheritFontSize}>
                         These are the best entry points into the current
                         investigation set.
                       </Caption1>
@@ -733,7 +758,7 @@ export function NewIntuneWorkspace() {
                         );
                       })
                     ) : (
-                      <Body1>
+                      <Body1 style={inheritFontSize}>
                         No diagnostics were generated for this analysis set.
                       </Body1>
                     )}
@@ -743,8 +768,8 @@ export function NewIntuneWorkspace() {
                 <Card className={styles.sectionCard}>
                   <div className={styles.sectionHeader}>
                     <div className={styles.textStack}>
-                      <Title3>Evidence quality</Title3>
-                      <Caption1>
+                      <Title3 style={inheritFontSize}>Evidence quality</Title3>
+                      <Caption1 style={inheritFontSize}>
                         Why the current confidence level is what it is.
                       </Caption1>
                     </div>
@@ -764,7 +789,7 @@ export function NewIntuneWorkspace() {
                           <BulletItem key={reason} text={reason} />
                         ))
                     ) : (
-                      <Body1>
+                      <Body1 style={inheritFontSize}>
                         No confidence rationale was produced for this result.
                       </Body1>
                     )}
@@ -776,8 +801,8 @@ export function NewIntuneWorkspace() {
                 <Card className={styles.sectionCard}>
                   <div className={styles.sectionHeader}>
                     <div className={styles.textStack}>
-                      <Title3>Failure patterns</Title3>
-                      <Caption1>
+                      <Title3 style={inheritFontSize}>Failure patterns</Title3>
+                      <Caption1 style={inheritFontSize}>
                         Repeated groups are usually the fastest way to isolate
                         broken cycles.
                       </Caption1>
@@ -805,8 +830,8 @@ export function NewIntuneWorkspace() {
                             )}
                           </div>
                           <div className={styles.textStack}>
-                            <Body1Strong>{group.name}</Body1Strong>
-                            <Caption1>
+                            <Body1Strong style={inheritFontSize}>{group.name}</Body1Strong>
+                            <Caption1 style={inheritFontSize}>
                               {group.timestampBounds?.lastTimestamp
                                 ? `Last seen ${formatDisplayDateTime(group.timestampBounds.lastTimestamp) ?? group.timestampBounds.lastTimestamp}`
                                 : "Timestamp unavailable"}
@@ -834,7 +859,7 @@ export function NewIntuneWorkspace() {
                         </div>
                       ))
                     ) : (
-                      <Body1>No repeated failure clusters were detected.</Body1>
+                      <Body1 style={inheritFontSize}>No repeated failure clusters were detected.</Body1>
                     )}
                   </div>
                 </Card>
@@ -842,8 +867,8 @@ export function NewIntuneWorkspace() {
                 <Card className={styles.sectionCard}>
                   <div className={styles.sectionHeader}>
                     <div className={styles.textStack}>
-                      <Title3>Source coverage</Title3>
-                      <Caption1>
+                      <Title3 style={inheritFontSize}>Source coverage</Title3>
+                      <Caption1 style={inheritFontSize}>
                         Use this when you need to move from guidance to proof in
                         a specific log family.
                       </Caption1>
@@ -857,14 +882,14 @@ export function NewIntuneWorkspace() {
                     {sourceFamilies.length > 0 ? (
                       sourceFamilies.map((family) => (
                         <div key={family.label} className={styles.compactFact}>
-                          <Body1Strong>{family.label}</Body1Strong>
-                          <Caption1>
+                          <Body1Strong style={inheritFontSize}>{family.label}</Body1Strong>
+                          <Caption1 style={inheritFontSize}>
                             {family.count} file{family.count === 1 ? "" : "s"}
                           </Caption1>
                         </div>
                       ))
                     ) : (
-                      <Body1>No source family summary is available yet.</Body1>
+                      <Body1 style={inheritFontSize}>No source family summary is available yet.</Body1>
                     )}
                   </div>
                 </Card>
@@ -873,8 +898,8 @@ export function NewIntuneWorkspace() {
                   <Card className={styles.sectionCard}>
                     <div className={styles.sectionHeader}>
                       <div className={styles.textStack}>
-                        <Title3>Correlated event log evidence</Title3>
-                        <Caption1>
+                        <Title3 style={inheritFontSize}>Correlated event log evidence</Title3>
+                        <Caption1 style={inheritFontSize}>
                           Windows Event Log entries linked to IME diagnostics by
                           time, channel, or error code.
                         </Caption1>
@@ -917,7 +942,7 @@ export function NewIntuneWorkspace() {
                                 ID {entry.eventId}
                               </Badge>
                               {timeDelta != null && (
-                                <Caption1>
+                                <Caption1 style={inheritFontSize}>
                                   {timeDelta < 60
                                     ? `${Math.round(timeDelta)}s delta`
                                     : timeDelta < 3600
@@ -937,7 +962,7 @@ export function NewIntuneWorkspace() {
                               >
                                 {entry.message || "(no message)"}
                               </Body1>
-                              <Caption1>
+                              <Caption1 style={inheritFontSize}>
                                 {formatDisplayDateTime(entry.timestamp) ??
                                   entry.timestamp}
                               </Caption1>
@@ -972,12 +997,12 @@ export function NewIntuneWorkspace() {
             <Card className={styles.investigationFrame}>
               <div className={styles.investigationHeader}>
                 <div className={styles.textStack}>
-                  <Title3>
+                  <Title3 style={inheritFontSize}>
                     {surface === "timeline"
                       ? "Event evidence"
                       : "Download evidence"}
                   </Title3>
-                  <Caption1>
+                  <Caption1 style={inheritFontSize}>
                     {surface === "timeline"
                       ? "Timeline filters and file scope are driven by the triage actions you choose above."
                       : "Download rows remain available as the supporting evidence surface for content retrieval failures."}
@@ -1006,7 +1031,7 @@ export function NewIntuneWorkspace() {
                 {surface === "timeline" ? (
                   <EventTimeline events={events} />
                 ) : (
-                  <DownloadStats downloads={downloads} />
+                  <DownloadSurface downloads={downloads} />
                 )}
               </div>
             </Card>
@@ -1029,15 +1054,29 @@ function MetricCard({
   accent: string;
 }) {
   const styles = useStyles();
+  const logListFontSize = useUiStore((s) => s.logListFontSize);
+  const metricFontSize = Math.round(
+    getLogListMetrics(logListFontSize).fontSize * 2.2,
+  );
 
   return (
     <Card
       className={styles.metricCard}
       style={{ borderTop: `4px solid ${accent}` }}
+      role="group"
+      aria-label={`${title}: ${value}`}
     >
-      <Caption1>{title}</Caption1>
-      <div className={styles.metricValue}>{value}</div>
-      <Body1>{hint}</Body1>
+      <Caption1 style={inheritFontSize}>{title}</Caption1>
+      <div
+        className={styles.metricValue}
+        style={{
+          fontSize: `${metricFontSize}px`,
+          lineHeight: `${metricFontSize + 4}px`,
+        }}
+      >
+        {value}
+      </div>
+      <Body1 style={inheritFontSize}>{hint}</Body1>
     </Card>
   );
 }
@@ -1083,14 +1122,14 @@ function DiagnosticTriageCard({
       </div>
 
       <div className={styles.textStack}>
-        <Body1Strong>{diagnostic.title}</Body1Strong>
-        <Body1>{diagnostic.summary}</Body1>
+        <Body1Strong style={inheritFontSize}>{diagnostic.title}</Body1Strong>
+        <Body1 style={inheritFontSize}>{diagnostic.summary}</Body1>
       </div>
 
       {diagnostic.likelyCause && (
         <div className={styles.textStack}>
-          <Caption1>Likely cause</Caption1>
-          <Body1>{diagnostic.likelyCause}</Body1>
+          <Caption1 style={inheritFontSize}>Likely cause</Caption1>
+          <Body1 style={inheritFontSize}>{diagnostic.likelyCause}</Body1>
         </div>
       )}
 

@@ -22,4 +22,5 @@ Thumbs.db
 .env
 .env.local
 
-
+#logcollection
+loginventory/

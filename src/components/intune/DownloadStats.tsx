@@ -1,5 +1,6 @@
 import { useMemo } from "react";
 import type { DownloadStat } from "../../types/intune";
+import { formatDisplayDateTime } from "../../lib/date-time-format";
 
 interface DownloadStatsProps {
   downloads: DownloadStat[];
@@ -142,7 +143,7 @@ export function DownloadStats({ downloads }: DownloadStatsProps) {
                   {dl.durationSecs > 0 ? `${dl.durationSecs.toFixed(1)}s` : "—"}
                 </td>
                 <td style={{ ...tdStyle, color: "#64748b", fontFamily: "'Courier New', monospace", fontSize: "10px" }}>
-                  {dl.timestamp || "—"}
+                  {(dl.timestamp && formatDisplayDateTime(dl.timestamp)) || "—"}
                 </td>
               </tr>
             ))}

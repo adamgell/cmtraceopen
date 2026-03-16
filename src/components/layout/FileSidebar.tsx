@@ -6,6 +6,7 @@ import {
   Subtitle2,
 } from "@fluentui/react-components";
 import { formatDisplayDateTime } from "../../lib/date-time-format";
+import { getLogListMetrics, LOG_UI_FONT_FAMILY } from "../../lib/log-accessibility";
 import { loadLogSource, loadSelectedLogFile } from "../../lib/log-source";
 import { useFilterStore } from "../../stores/filter-store";
 import { useIntuneStore } from "../../stores/intune-store";
@@ -109,7 +110,7 @@ function EmptyState({ title, body }: { title: string; body: string }) {
       style={{
         padding: "18px 14px",
         color: "#6b7280",
-        fontSize: "12px",
+        fontSize: "inherit",
         lineHeight: 1.5,
       }}
     >
@@ -169,7 +170,7 @@ function SourceStatusNotice({
         borderBottom: `1px solid ${colors.border}`,
         backgroundColor: colors.background,
         color: colors.text,
-        fontSize: "12px",
+        fontSize: "inherit",
         lineHeight: 1.4,
       }}
     >
@@ -218,7 +219,7 @@ function FileRow({
             overflow: "hidden",
             textOverflow: "ellipsis",
             whiteSpace: "nowrap",
-            fontSize: "12px",
+            fontSize: "inherit",
             fontWeight: isSelected ? 600 : 400,
             color: "#111827",
           }}
@@ -239,7 +240,7 @@ function FileRow({
       <div
         style={{
           marginTop: "3px",
-          fontSize: "11px",
+          fontSize: "inherit",
           color: "#6b7280",
           overflow: "hidden",
           textOverflow: "ellipsis",
@@ -285,8 +286,11 @@ function SourceSummaryCard({
       <Subtitle2
         title={title}
         style={{
-          marginTop: "3px",
+          display: "block",
+          marginTop: "8px",
           color: "#111827",
+          fontSize: "inherit",
+          fontWeight: 600,
           overflow: "hidden",
           textOverflow: "ellipsis",
           whiteSpace: "nowrap",
@@ -297,8 +301,10 @@ function SourceSummaryCard({
       <Caption1
         title={subtitle}
         style={{
-          marginTop: "3px",
+          display: "block",
+          marginTop: "4px",
           color: "#6b7280",
+          fontSize: "0.85em",
           overflow: "hidden",
           textOverflow: "ellipsis",
           whiteSpace: "nowrap",
@@ -306,7 +312,7 @@ function SourceSummaryCard({
       >
         {subtitle}
       </Caption1>
-      <div style={{ marginTop: "8px" }}>{body}</div>
+      <div style={{ marginTop: "10px" }}>{body}</div>
     </div>
   );
 }
@@ -425,7 +431,7 @@ function LogSidebar() {
               border: "1px solid #d8e1ec",
               borderRadius: "8px",
               backgroundColor: "#ffffff",
-              fontSize: "11px",
+              fontSize: "inherit",
               color: "#374151",
               lineHeight: 1.45,
             }}
@@ -485,12 +491,12 @@ function LogSidebar() {
       )}
 
       {refreshErrorMessage && (
-        <div role="alert" style={{ padding: "9px 12px", borderBottom: "1px solid #fecaca", backgroundColor: "#fef2f2", color: "#991b1b", fontSize: "12px" }}>
+        <div role="alert" style={{ padding: "9px 12px", borderBottom: "1px solid #fecaca", backgroundColor: "#fef2f2", color: "#991b1b", fontSize: "inherit" }}>
           {refreshErrorMessage}
         </div>
       )}
       {errorMessage && (
-        <div role="alert" style={{ padding: "9px 12px", borderBottom: "1px solid #fecaca", backgroundColor: "#fef2f2", color: "#991b1b", fontSize: "12px" }}>
+        <div role="alert" style={{ padding: "9px 12px", borderBottom: "1px solid #fecaca", backgroundColor: "#fef2f2", color: "#991b1b", fontSize: "inherit" }}>
           {errorMessage}
         </div>
       )}
@@ -530,7 +536,7 @@ function LogSidebar() {
               <>
                 <SectionHeader title={`Folders (${folders.length})`} caption="Shown for context." />
                 {folders.map((entry) => (
-                  <div key={entry.path} style={{ padding: "7px 10px", borderBottom: "1px solid #f1f5f9", fontSize: "12px", color: "#4b5563" }}>
+                  <div key={entry.path} style={{ padding: "7px 10px", borderBottom: "1px solid #f1f5f9", fontSize: "inherit", color: "#4b5563" }}>
                     {entry.name}
                   </div>
                 ))}
@@ -565,7 +571,7 @@ function LogSidebar() {
       </div>
 
       {activeSource && folderLike && !activeFilePath && !isLoading && (
-        <div style={{ padding: "8px 10px", borderTop: "1px solid #c0c0c0", backgroundColor: "#fafafa", fontSize: "11px", color: "#4b5563", fontFamily: "'Segoe UI', Tahoma, sans-serif" }}>
+        <div style={{ padding: "8px 10px", borderTop: "1px solid #c0c0c0", backgroundColor: "#fafafa", fontSize: "inherit", color: "#4b5563" }}>
           {sourceOpenMode === "aggregate-folder"
             ? `Merged folder view active across ${aggregateFiles.length} file${aggregateFiles.length === 1 ? "" : "s"}.`
             : sourceStatus.kind === "awaiting-file-selection"
@@ -602,7 +608,7 @@ function IntuneSidebar() {
         title={getBaseName(intuneRequestedPath) || workspaceTitle}
         subtitle={intuneRequestedPath ?? "Select an IME log source to begin analysis."}
         body={
-          <div style={{ fontSize: "11px", color: "#374151", lineHeight: 1.45 }}>
+          <div style={{ fontSize: "inherit", color: "#374151", lineHeight: 1.45 }}>
             <div>{intuneAnalysisState.message}</div>
             <div style={{ marginTop: "4px" }}>Included files: {intuneIncludedFiles.length}</div>
             {intuneEvidenceBundle && (
@@ -664,27 +670,52 @@ function IntuneSidebar() {
         {intuneSummary && (
           <>
             <SectionHeader title="Diagnostics Summary" caption="Overview of the current Intune diagnostics data" />
-            <div style={{ padding: "12px 10px", borderBottom: "1px solid #eef2f7", fontSize: "12px", color: "#374151" }}>
-              <div>Total events: {intuneSummary.totalEvents}</div>
-              <div style={{ marginTop: "6px" }}>Downloads: {intuneSummary.totalDownloads}</div>
+            <div style={{
+              padding: "10px",
+              borderBottom: "1px solid #eef2f7",
+              fontSize: "inherit",
+              color: "#374151",
+              display: "grid",
+              gridTemplateColumns: "auto 1fr",
+              gap: "4px 10px",
+              alignItems: "baseline",
+            }}>
+              <span style={{ fontWeight: 600, color: "#6b7280" }}>Events</span>
+              <span>{intuneSummary.totalEvents.toLocaleString()}</span>
+              <span style={{ fontWeight: 600, color: "#6b7280" }}>Downloads</span>
+              <span>{intuneSummary.totalDownloads}</span>
               {eventLogAnalysis && (
-                <div style={{ marginTop: "6px" }}>
-                  Event logs: {eventLogAnalysis.totalEntryCount} entries, {eventLogAnalysis.errorEntryCount} errors, {eventLogAnalysis.warningEntryCount} warnings
-                </div>
+                <>
+                  <span style={{ fontWeight: 600, color: "#6b7280" }}>Event logs</span>
+                  <span>{eventLogAnalysis.totalEntryCount.toLocaleString()} entries</span>
+                  <span style={{ fontWeight: 600, color: "#6b7280" }}>Severity</span>
+                  <span>{eventLogAnalysis.errorEntryCount} errors, {eventLogAnalysis.warningEntryCount} warnings</span>
+                </>
               )}
               {eventLogAnalysis?.sourceKind === "Live" && eventLogAnalysis.liveQuery && (
-                <div style={{ marginTop: "6px" }}>
-                  Live query: {eventLogAnalysis.liveQuery.successfulChannelCount} successful, {eventLogAnalysis.liveQuery.failedChannelCount} failed
-                </div>
+                <>
+                  <span style={{ fontWeight: 600, color: "#6b7280" }}>Live query</span>
+                  <span>{eventLogAnalysis.liveQuery.successfulChannelCount} ok, {eventLogAnalysis.liveQuery.failedChannelCount} failed</span>
+                </>
               )}
-              {intuneSummary.logTimeSpan && <div style={{ marginTop: "6px" }}>Time span: {intuneSummary.logTimeSpan}</div>}
+              {intuneSummary.logTimeSpan && (
+                <>
+                  <span style={{ fontWeight: 600, color: "#6b7280" }}>Time span</span>
+                  <span>{intuneSummary.logTimeSpan}</span>
+                </>
+              )}
             </div>
           </>
         )}
 
         {intuneIncludedFiles.length > 0 && (
           <>
-            <SectionHeader title={`Included IME Log Files (${intuneIncludedFiles.length})`} caption="Click a file to scope the timeline to that log only" />
+            <SectionHeader
+              title={`Included Files (${intuneIncludedFiles.length})`}
+              caption={intuneSelectedFilePath
+                ? "Timeline is scoped — click the active file to clear scope"
+                : "Click a file to scope the timeline to that log only"}
+            />
             {intuneIncludedFiles.map((path) => {
               const isSelected = intuneSelectedFilePath === path;
               return (
@@ -697,22 +728,50 @@ function IntuneSidebar() {
                   style={{
                     width: "100%",
                     textAlign: "left",
-                    padding: "6px 10px",
+                    padding: isSelected ? "10px 10px 10px 9px" : "7px 10px 7px 9px",
                     border: "none",
-                    borderLeft: isSelected ? "3px solid #3b82f6" : "3px solid transparent",
+                    borderLeft: isSelected ? "4px solid #3b82f6" : "4px solid transparent",
                     borderBottom: "1px solid #edf2f7",
-                    fontSize: "11px",
-                    color: isSelected ? "#1d4ed8" : "#4b5563",
-                    backgroundColor: isSelected ? "#eff6ff" : "#ffffff",
+                    fontSize: "inherit",
+                    color: isSelected ? "#1e3a8a" : "#374151",
+                    backgroundColor: isSelected ? "#dbeafe" : "#ffffff",
                     cursor: "pointer",
+                    transition: "background-color 100ms ease",
                   }}
                 >
-                  <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontWeight: isSelected ? 600 : 400 }}>
-                    {getBaseName(path)}
+                  <div style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "8px",
+                  }}>
+                    <div style={{
+                      flex: 1,
+                      minWidth: 0,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                      fontWeight: isSelected ? 700 : 400,
+                    }}>
+                      {getBaseName(path)}
+                    </div>
+                    {isSelected && (
+                      <Badge appearance="filled" color="brand" size="small" style={{ flexShrink: 0 }}>
+                        Scoped
+                      </Badge>
+                    )}
                   </div>
-                  <div style={{ marginTop: "2px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: isSelected ? "#2563eb" : "#6b7280" }}>
-                    {isSelected ? "Timeline scope active" : path}
-                  </div>
+                  {isSelected && (
+                    <div style={{
+                      marginTop: "4px",
+                      fontSize: "0.85em",
+                      color: "#2563eb",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }}>
+                      {path}
+                    </div>
+                  )}
                 </button>
               );
             })}
@@ -742,7 +801,7 @@ function DsregcmdSidebar() {
         title={sourceContext.displayLabel}
         subtitle={sourceContext.resolvedPath ?? sourceContext.requestedPath ?? "Open a dsregcmd source to begin."}
         body={
-          <div style={{ fontSize: "11px", color: "#374151", lineHeight: 1.5 }}>
+          <div style={{ fontSize: "inherit", color: "#374151", lineHeight: 1.5 }}>
             <div>{analysisState.message}</div>
             <div style={{ marginTop: "4px" }}>Lines: {sourceContext.rawLineCount}</div>
             <div style={{ marginTop: "4px" }}>Chars: {sourceContext.rawCharCount}</div>
@@ -777,7 +836,7 @@ function DsregcmdSidebar() {
         {result && (
           <>
             <SectionHeader title="Triage Summary" caption="Fast sidebar readout of the current dsregcmd result" />
-            <div style={{ padding: "12px 10px", borderBottom: "1px solid #eef2f7", fontSize: "12px", color: "#374151", lineHeight: 1.5 }}>
+            <div style={{ padding: "12px 10px", borderBottom: "1px solid #eef2f7", fontSize: "inherit", color: "#374151", lineHeight: 1.5 }}>
               <div><strong>Join type:</strong> {result.derived.joinTypeLabel}</div>
               <div style={{ marginTop: "6px" }}><strong>PRT present:</strong> {result.derived.azureAdPrtPresent === null ? 'Unknown' : result.derived.azureAdPrtPresent ? 'Yes' : 'No'}</div>
               <div style={{ marginTop: "6px" }}><strong>MDM enrolled:</strong> {result.derived.mdmEnrolled === null ? 'Unknown' : result.derived.mdmEnrolled ? 'Yes' : 'No'}</div>
@@ -796,9 +855,9 @@ function DsregcmdSidebar() {
             ) : (
               diagnostics.slice(0, 8).map((item) => (
                 <div key={item.id} style={{ padding: "8px 10px", borderBottom: "1px solid #eef2f7", backgroundColor: item.severity === 'Error' ? '#fef2f2' : item.severity === 'Warning' ? '#fffbeb' : '#eff6ff' }}>
-                  <div style={{ fontSize: "11px", textTransform: "uppercase", fontWeight: 700, color: item.severity === 'Error' ? '#991b1b' : item.severity === 'Warning' ? '#92400e' : '#1e40af' }}>{item.severity}</div>
-                  <div style={{ marginTop: "4px", fontSize: "12px", fontWeight: 600, color: "#111827" }}>{item.title}</div>
-                  <div style={{ marginTop: "3px", fontSize: "11px", color: "#4b5563", lineHeight: 1.45 }}>{item.summary}</div>
+                  <div style={{ fontSize: "inherit", textTransform: "uppercase", fontWeight: 700, color: item.severity === 'Error' ? '#991b1b' : item.severity === 'Warning' ? '#92400e' : '#1e40af' }}>{item.severity}</div>
+                  <div style={{ marginTop: "4px", fontSize: "inherit", fontWeight: 600, color: "#111827" }}>{item.title}</div>
+                  <div style={{ marginTop: "3px", fontSize: "inherit", color: "#4b5563", lineHeight: 1.45 }}>{item.summary}</div>
                 </div>
               ))
             )}
@@ -810,6 +869,9 @@ function DsregcmdSidebar() {
 }
 
 export function FileSidebar({ width = FILE_SIDEBAR_RECOMMENDED_WIDTH, activeView }: FileSidebarProps) {
+  const logListFontSize = useUiStore((s) => s.logListFontSize);
+  const metrics = useMemo(() => getLogListMetrics(logListFontSize), [logListFontSize]);
+
   return (
     <aside
       aria-label="Source files"
@@ -821,6 +883,9 @@ export function FileSidebar({ width = FILE_SIDEBAR_RECOMMENDED_WIDTH, activeView
         overflow: "hidden",
         backgroundColor: "#fbfdff",
         borderRight: "1px solid #d8e1ec",
+        fontSize: `${metrics.fontSize}px`,
+        lineHeight: `${metrics.rowLineHeight}px`,
+        fontFamily: LOG_UI_FONT_FAMILY,
       }}
     >
       {activeView === "log" ? <LogSidebar /> : isIntuneWorkspace(activeView) ? <IntuneSidebar /> : <DsregcmdSidebar />}

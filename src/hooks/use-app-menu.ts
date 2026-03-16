@@ -24,9 +24,6 @@ export function useAppMenu() {
     showErrorLookupDialog,
     showAboutDialog,
     showAccessibilityDialog,
-    increaseLogListTextSize,
-    decreaseLogListTextSize,
-    resetLogListTextSize,
     togglePauseResume,
     refreshActiveSource,
     toggleDetailsPane,
@@ -78,15 +75,6 @@ export function useAppMenu() {
           case "show_accessibility_settings":
             showAccessibilityDialog();
             return;
-          case "increase_log_text_size":
-            increaseLogListTextSize();
-            return;
-          case "decrease_log_text_size":
-            decreaseLogListTextSize();
-            return;
-          case "reset_log_text_size":
-            resetLogListTextSize();
-            return;
           case "load_known_source_preset": {
             await openKnownSourceCatalogAction({
               presetMenuId: payload.preset_id,
@@ -128,10 +116,7 @@ export function useAppMenu() {
     openKnownSourceCatalogAction,
     openSourceFileDialog,
     openSourceFolderDialog,
-    decreaseLogListTextSize,
-    increaseLogListTextSize,
     refreshActiveSource,
-    resetLogListTextSize,
     showAccessibilityDialog,
     showAboutDialog,
     showErrorLookupDialog,

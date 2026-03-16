@@ -4,6 +4,9 @@ use std::path::Path;
 use once_cell::sync::Lazy;
 use regex::Regex;
 
+use super::guid_registry::{
+    extract_json_field, setup_file_name, APP_ID_JSON_RE, APP_NAME_JSON_RE, SETUP_FILE_JSON_RE,
+};
 use super::ime_parser::ImeLine;
 use super::models::DownloadStat;
 
@@ -65,12 +68,7 @@ static DURATION_RE: Lazy<Regex> = Lazy::new(|| {
     )
     .unwrap()
 });
-static APP_ID_JSON_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r#"\"AppId\"\s*:\s*\"([0-9a-fA-F-]{36})\""#).unwrap());
-static APP_NAME_JSON_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r#"(?i)\"(?:ApplicationName|Name)\"\s*:\s*\"([^\",\}]+)"#).unwrap());
-static SETUP_FILE_JSON_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r#"\"SetUpFilePath\"\s*:\s*\"([^\"]+)\""#).unwrap());
+// APP_ID_JSON_RE, APP_NAME_JSON_RE, SETUP_FILE_JSON_RE imported from guid_registry
 
 pub fn extract_downloads(lines: &[ImeLine], source_file: &str) -> Vec<DownloadStat> {
     let source_kind = classify_download_source(source_file);
@@ -335,20 +333,7 @@ fn extract_display_name(msg: &str) -> Option<String> {
         })
 }
 
-fn extract_json_field<'a>(msg: &'a str, prefix: &str, suffix: &str) -> Option<&'a str> {
-    let start = msg.find(prefix)? + prefix.len();
-    let remainder = msg.get(start..)?;
-    let end = remainder.find(suffix)?;
-    remainder.get(..end)
-}
-
-fn setup_file_name(path: &str) -> String {
-    Path::new(path)
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or(path)
-        .to_string()
-}
+// extract_json_field and setup_file_name imported from guid_registry
 
 fn apply_download_analysis(
     download: &mut PartialDownload,
@@ -473,11 +458,7 @@ fn finalize_download(
 }
 
 fn short_id(id: &str) -> String {
-    if id.len() > 8 && id.contains('-') {
-        format!("Download ({id}...)", id = &id[..8])
-    } else {
-        format!("Download: {id}")
-    }
+    format!("Download ({id})")
 }
 
 #[cfg(test)]

@@ -1,11 +1,15 @@
 import { useEffect, useMemo, useRef } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
+import { tokens } from "@fluentui/react-components";
 import { formatDisplayDateTime } from "../../lib/date-time-format";
+import {
+  LOG_UI_FONT_FAMILY,
+  LOG_MONOSPACE_FONT_FAMILY,
+  getLogListMetrics,
+} from "../../lib/log-accessibility";
+import { useUiStore } from "../../stores/ui-store";
 import type { IntuneEvent, IntuneStatus, IntuneEventType } from "../../types/intune";
 import { useIntuneStore } from "../../stores/intune-store";
-
-const COLLAPSED_ROW_ESTIMATE = 28;
-const EXPANDED_ROW_ESTIMATE = 160;
 
 const STATUS_COLORS: Record<IntuneStatus, string> = {
   Success: "#22c55e",
@@ -40,6 +44,15 @@ export function EventTimeline({ events }: EventTimelineProps) {
   const filterEventType = useIntuneStore((s) => s.filterEventType);
   const filterStatus = useIntuneStore((s) => s.filterStatus);
   const showSourceFileLabel = sourceFiles.length > 1 && timelineScope.filePath == null;
+
+  const logListFontSize = useUiStore((s) => s.logListFontSize);
+  const metrics = useMemo(
+    () => getLogListMetrics(logListFontSize),
+    [logListFontSize]
+  );
+
+  const collapsedRowEstimate = metrics.rowHeight + 2;
+  const expandedRowEstimate = Math.max(160, metrics.rowHeight * 5);
 
   const filteredEvents = useMemo(() => {
     return events.filter((e) => {
@@ -77,7 +90,7 @@ export function EventTimeline({ events }: EventTimelineProps) {
     count: filteredEvents.length,
     getScrollElement: () => parentRef.current,
     estimateSize: (index) =>
-      filteredEvents[index]?.id === selectedEventId ? EXPANDED_ROW_ESTIMATE : COLLAPSED_ROW_ESTIMATE,
+      filteredEvents[index]?.id === selectedEventId ? expandedRowEstimate : collapsedRowEstimate,
     getItemKey: (index) => filteredEvents[index]?.id ?? index,
     overscan: 10,
   });
@@ -90,9 +103,14 @@ export function EventTimeline({ events }: EventTimelineProps) {
     }
   }, [selectedIndex, virtualizer]);
 
+  const fontSize = metrics.fontSize;
+  const smallFontSize = Math.max(9, fontSize - 3);
+  const monoFontSize = Math.max(10, fontSize - 1);
+  const lineHeight = `${metrics.rowLineHeight}px`;
+
   if (events.length === 0) {
     return (
-      <div style={{ padding: "20px", color: "#666", textAlign: "center", fontSize: "12px" }}>
+      <div style={{ padding: "20px", color: tokens.colorNeutralForeground3, textAlign: "center", fontSize: `${fontSize}px`, fontFamily: LOG_UI_FONT_FAMILY }}>
         No Intune timeline events were found in this analysis.
       </div>
     );
@@ -100,7 +118,7 @@ export function EventTimeline({ events }: EventTimelineProps) {
 
   if (filteredEvents.length === 0) {
     return (
-      <div style={{ padding: "20px", color: "#666", textAlign: "center", fontSize: "12px" }}>
+      <div style={{ padding: "20px", color: tokens.colorNeutralForeground3, textAlign: "center", fontSize: `${fontSize}px`, fontFamily: LOG_UI_FONT_FAMILY }}>
         {timelineScope.filePath
           ? `No events from ${getFileName(timelineScope.filePath)} match the current timeline scope${filterEventType !== "All" || filterStatus !== "All" ? " and filters." : "."
           }`
@@ -112,11 +130,14 @@ export function EventTimeline({ events }: EventTimelineProps) {
   return (
     <div
       ref={parentRef}
+      role="listbox"
+      aria-label={`Intune event timeline — ${filteredEvents.length} events`}
       style={{
         overflowY: "auto",
         height: "100%",
         padding: "0",
-        backgroundColor: "#ffffff",
+        backgroundColor: tokens.colorNeutralBackground1,
+        fontFamily: LOG_UI_FONT_FAMILY,
       }}
     >
       <div
@@ -145,33 +166,50 @@ export function EventTimeline({ events }: EventTimelineProps) {
                 data-index={virtualRow.index}
                 ref={virtualizer.measureElement}
                 onClick={() => selectEvent(isSelected ? null : event.id)}
+                role="option"
+                aria-selected={isSelected}
                 style={{
                   display: "flex",
                   flexDirection: isSelected ? "column" : "row",
                   alignItems: isSelected ? "stretch" : "center",
                   padding: isSelected ? "8px 12px" : "2px 12px",
                   cursor: "pointer",
-                  backgroundColor: isSelected ? "#eff6ff" : virtualRow.index % 2 === 0 ? "#ffffff" : "#fafafa",
+                  backgroundColor: isSelected
+                    ? tokens.colorNeutralBackground1Selected
+                    : virtualRow.index % 2 === 0
+                      ? tokens.colorNeutralBackground1
+                      : tokens.colorNeutralBackground2,
                   borderLeft: `4px solid ${STATUS_COLORS[event.status]}`,
-                  borderBottom: "1px solid #f1f5f9",
+                  borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
                   height: "100%",
                   boxSizing: "border-box",
+                  fontSize: `${fontSize}px`,
+                  lineHeight,
                 }}
               >
                 {/* Header / Summary Line */}
                 <div style={{ display: "flex", alignItems: "center", width: "100%", minWidth: 0, gap: "10px" }}>
-                  <div style={{ fontSize: "10px", color: "#64748b", flexShrink: 0, width: "165px", fontFamily: "'Courier New', monospace" }} title={event.startTime ?? undefined}>
+                  <div
+                    style={{
+                      fontSize: `${monoFontSize}px`,
+                      color: tokens.colorNeutralForeground3,
+                      flexShrink: 0,
+                      width: "165px",
+                      fontFamily: LOG_MONOSPACE_FONT_FAMILY,
+                    }}
+                    title={event.startTime ?? undefined}
+                  >
                     {formatDisplayDateTime(event.startTime) ?? "Not timestamped"}
                   </div>
 
                   <div
                     style={{
-                      fontSize: "9px",
+                      fontSize: `${smallFontSize}px`,
                       fontWeight: 700,
                       padding: "2px 6px",
                       borderRadius: "3px",
-                      backgroundColor: "#e2e8f0",
-                      color: "#475569",
+                      backgroundColor: tokens.colorNeutralBackground4,
+                      color: tokens.colorNeutralForeground2,
                       width: "55px",
                       textAlign: "center",
                       flexShrink: 0,
@@ -184,9 +222,9 @@ export function EventTimeline({ events }: EventTimelineProps) {
                   <div
                     style={{
                       flex: 1,
-                      fontSize: "12px",
+                      fontSize: `${fontSize}px`,
                       fontWeight: isSelected ? 600 : 500,
-                      color: isSelected ? "#1e3a8a" : "#1e293b",
+                      color: isSelected ? tokens.colorBrandForeground1 : tokens.colorNeutralForeground1,
                       overflow: "hidden",
                       textOverflow: "ellipsis",
                       whiteSpace: "nowrap",
@@ -197,7 +235,7 @@ export function EventTimeline({ events }: EventTimelineProps) {
                   </div>
 
                   {event.errorCode && !isSelected && (
-                    <div style={{ fontSize: "11px", color: "#ef4444", fontFamily: "'Courier New', monospace", flexShrink: 0 }}>
+                    <div style={{ fontSize: `${monoFontSize}px`, color: tokens.colorPaletteRedForeground1, fontFamily: LOG_MONOSPACE_FONT_FAMILY, flexShrink: 0 }}>
                       {event.errorCode}
                     </div>
                   )}
@@ -206,10 +244,10 @@ export function EventTimeline({ events }: EventTimelineProps) {
                     <div
                       title={event.sourceFile}
                       style={{
-                        fontSize: "10px",
-                        color: "#475569",
-                        backgroundColor: "#f1f5f9",
-                        border: "1px solid #e2e8f0",
+                        fontSize: `${smallFontSize}px`,
+                        color: tokens.colorNeutralForeground2,
+                        backgroundColor: tokens.colorNeutralBackground3,
+                        border: `1px solid ${tokens.colorNeutralStroke2}`,
                         borderRadius: "999px",
                         padding: "2px 6px",
                         maxWidth: "130px",
@@ -224,14 +262,14 @@ export function EventTimeline({ events }: EventTimelineProps) {
                   )}
 
                   {event.durationSecs != null && (
-                    <div style={{ fontSize: "11px", color: "#94a3b8", width: "50px", textAlign: "right", flexShrink: 0 }}>
+                    <div style={{ fontSize: `${monoFontSize}px`, color: tokens.colorNeutralForeground4, width: "50px", textAlign: "right", flexShrink: 0 }}>
                       {formatDuration(event.durationSecs)}
                     </div>
                   )}
 
                   <div
                     style={{
-                      fontSize: "9px",
+                      fontSize: `${smallFontSize}px`,
                       fontWeight: 700,
                       padding: "2px 6px",
                       borderRadius: "3px",
@@ -253,36 +291,37 @@ export function EventTimeline({ events }: EventTimelineProps) {
                     <div style={{ flex: 1 }}>
                       <div
                         style={{
-                          fontSize: "11px",
-                          color: "#334155",
-                          fontFamily: "'Courier New', monospace",
+                          fontSize: `${monoFontSize}px`,
+                          color: tokens.colorNeutralForeground1,
+                          fontFamily: LOG_MONOSPACE_FONT_FAMILY,
                           whiteSpace: "pre-wrap",
                           wordBreak: "break-all",
-                          maxHeight: "80px",
+                          maxHeight: "120px",
                           overflow: "auto",
-                          backgroundColor: "#fff",
-                          border: "1px solid #cbd5e1",
+                          backgroundColor: tokens.colorNeutralBackground1,
+                          border: `1px solid ${tokens.colorNeutralStroke1}`,
                           padding: "6px",
                           borderRadius: "4px",
+                          lineHeight: `${metrics.rowLineHeight + 2}px`,
                         }}
                       >
                         {event.detail}
                       </div>
                     </div>
 
-                    <div style={{ display: "flex", flexDirection: "column", gap: "6px", width: "200px", flexShrink: 0, fontSize: "11px" }}>
+                    <div style={{ display: "flex", flexDirection: "column", gap: "6px", width: "200px", flexShrink: 0, fontSize: `${monoFontSize}px` }}>
                       {event.startTime && (
-                        <div><strong style={{ color: "#64748b" }}>Start:</strong> {formatDisplayDateTime(event.startTime) ?? event.startTime}</div>
+                        <div><strong style={{ color: tokens.colorNeutralForeground3 }}>Start:</strong> {formatDisplayDateTime(event.startTime) ?? event.startTime}</div>
                       )}
                       {event.endTime && (
-                        <div><strong style={{ color: "#64748b" }}>End:</strong> {formatDisplayDateTime(event.endTime) ?? event.endTime}</div>
+                        <div><strong style={{ color: tokens.colorNeutralForeground3 }}>End:</strong> {formatDisplayDateTime(event.endTime) ?? event.endTime}</div>
                       )}
                       {event.errorCode && (
-                        <div><strong style={{ color: "#64748b" }}>Error:</strong> <span style={{ color: "#ef4444", fontFamily: "'Courier New', monospace" }}>{event.errorCode}</span></div>
+                        <div><strong style={{ color: tokens.colorNeutralForeground3 }}>Error:</strong> <span style={{ color: tokens.colorPaletteRedForeground1, fontFamily: LOG_MONOSPACE_FONT_FAMILY }}>{event.errorCode}</span></div>
                       )}
                       <div>
-                        <strong style={{ color: "#64748b" }}>Source:</strong>
-                        <span style={{ fontFamily: "'Courier New', monospace", display: "block", color: "#475569" }} title={event.sourceFile}>
+                        <strong style={{ color: tokens.colorNeutralForeground3 }}>Source:</strong>
+                        <span style={{ fontFamily: LOG_MONOSPACE_FONT_FAMILY, display: "block", color: tokens.colorNeutralForeground2 }} title={event.sourceFile}>
                           {formatSourceLabel(event.sourceFile, event.lineNumber)}
                         </span>
                       </div>

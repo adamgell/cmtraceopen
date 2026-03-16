@@ -1,5 +1,7 @@
 use std::collections::{HashMap, HashSet};
+use std::fmt::Write as FmtWrite;
 use std::fs;
+use std::io::Write as IoWrite;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
@@ -13,6 +15,7 @@ use crate::error_db::lookup::lookup_error_code;
 use crate::intune::download_stats;
 use crate::intune::event_tracker;
 use crate::intune::evtx_parser;
+use crate::intune::guid_registry::GuidRegistry;
 use crate::intune::ime_parser;
 use crate::intune::models::{
     DownloadStat, EventLogAnalysis, EvidenceBundleArtifactCounts, EvidenceBundleMetadata,
@@ -148,6 +151,13 @@ fn analyze_intune_logs_blocking(
     processed_files.sort_by_key(|file| file.index);
 
     let completed_files = completed_files.load(Ordering::Relaxed);
+
+    // Build global GUID→name registry from all files
+    let mut guid_registry = GuidRegistry::new();
+    for processed_file in &processed_files {
+        guid_registry.merge(&processed_file.guid_registry);
+    }
+
     let mut all_events = Vec::new();
     let mut all_downloads = Vec::new();
     let mut coverage = Vec::new();
@@ -156,6 +166,75 @@ fn analyze_intune_logs_blocking(
         all_events.extend(processed_file.events);
         all_downloads.extend(processed_file.downloads);
         coverage.push(processed_file.coverage);
+    }
+
+    // Enrich event and download names using the global GUID registry
+    let mut diag_buffer = String::new();
+    let mut enriched_events = 0u32;
+    let mut enriched_downloads = 0u32;
+    let mut missed_events = 0u32;
+    let mut missed_downloads = 0u32;
+    if !guid_registry.is_empty() {
+        let _ = writeln!(diag_buffer, "event=guid_registry_global entries={}", guid_registry.len());
+        for (guid, entry) in guid_registry.iter() {
+            let _ = writeln!(diag_buffer, "  guid={} name=\"{}\" source={:?}", guid, entry.name, entry.source);
+        }
+
+        for event in &mut all_events {
+            if let Some(guid) = &event.guid {
+                if let Some(enriched) = guid_registry.enrich_event_name(&event.name, guid) {
+                    let _ = writeln!(diag_buffer, "event=guid_enriched_event old=\"{}\" new=\"{}\" guid={}", event.name, enriched, guid);
+                    event.name = enriched;
+                    enriched_events += 1;
+                } else if event.name.ends_with(')') && event.name.contains('(') {
+                    let _ = writeln!(diag_buffer, "event=guid_enrich_miss name=\"{}\" guid={} registry_has={}", event.name, guid, guid_registry.resolve(guid).unwrap_or("NOT_FOUND"));
+                    missed_events += 1;
+                }
+            } else if event.name.ends_with(')') && event.name.contains('(') {
+                let _ = writeln!(diag_buffer, "event=guid_enrich_skip_no_guid name=\"{}\"", event.name);
+                missed_events += 1;
+            }
+        }
+        for dl in &mut all_downloads {
+            if let Some(resolved) = guid_registry.resolve_fallback_name(&dl.name, &dl.content_id)
+            {
+                let _ = writeln!(diag_buffer, "event=guid_enriched_download old=\"{}\" new=\"{}\" guid={}", dl.name, resolved, dl.content_id);
+                dl.name = resolved;
+                enriched_downloads += 1;
+            } else if dl.name.starts_with("Download (") || dl.name.starts_with("Download:") {
+                let _ = writeln!(diag_buffer, "event=guid_enrich_miss_download name=\"{}\" guid={} registry_has={}", dl.name, dl.content_id, guid_registry.resolve(&dl.content_id).unwrap_or("NOT_FOUND"));
+                missed_downloads += 1;
+            }
+        }
+    }
+
+    // Append pipeline summary and write diag file (verbose detail to file only, summary to stderr)
+    {
+        let _ = writeln!(diag_buffer, "event=pipeline_summary event_count={} download_count={} guid_registry_entries={}", all_events.len(), all_downloads.len(), guid_registry.len());
+        for (i, dl) in all_downloads.iter().enumerate() {
+            let _ = writeln!(diag_buffer, "  download[{}] content_id={} name=\"{}\" success={} size={}", i, dl.content_id, dl.name, dl.success, dl.size_bytes);
+        }
+        eprintln!(
+            "event=guid_enrichment_summary registry={} enriched_events={} missed_events={} enriched_downloads={} missed_downloads={} total_downloads={}",
+            guid_registry.len(), enriched_events, missed_events, enriched_downloads, missed_downloads, all_downloads.len()
+        );
+        let diag_path = std::env::temp_dir().join("cmtrace-guid-diag.log");
+        if let Ok(mut f) = fs::File::create(&diag_path) {
+            let _ = f.write_all(diag_buffer.as_bytes());
+            eprintln!("event=guid_diag_written path=\"{}\"", diag_path.display());
+        }
+    }
+
+    // Fallback: synthesize DownloadStat records from ContentDownload events
+    // when the regex-based download_stats extractor found nothing.
+    if all_downloads.is_empty() {
+        all_downloads = synthesize_downloads_from_events(&all_events);
+        if !all_downloads.is_empty() {
+            eprintln!(
+                "event=download_synthesized_from_events count={}",
+                all_downloads.len()
+            );
+        }
     }
 
     emit_analysis_progress(
@@ -439,6 +518,7 @@ struct ProcessedIntuneFile {
     events: Vec<IntuneEvent>,
     downloads: Vec<DownloadStat>,
     coverage: CoverageAccumulator,
+    guid_registry: GuidRegistry,
 }
 
 #[derive(Debug, Clone)]
@@ -563,6 +643,8 @@ fn analyze_intune_source_file(
     let lines = ime_parser::parse_ime_content(&content);
     let rotation = detect_rotation_metadata(source_path);
 
+    let mut file_guid_registry = GuidRegistry::new();
+
     let (file_events, file_downloads, file_timestamp_bounds, line_count): (
         Vec<IntuneEvent>,
         Vec<DownloadStat>,
@@ -571,6 +653,15 @@ fn analyze_intune_source_file(
     ) = if lines.is_empty() {
         (Vec::new(), Vec::new(), None, 0usize)
     } else {
+        file_guid_registry.ingest_lines(&lines);
+        eprintln!(
+            "event=guid_registry_file file=\"{}\" entries={}",
+            source_file,
+            file_guid_registry.len()
+        );
+        for (guid, entry) in file_guid_registry.iter() {
+            eprintln!("  guid={} name=\"{}\" source={:?}", guid, entry.name, entry.source);
+        }
         let file_events = event_tracker::extract_events(&lines, &source_file);
         let file_downloads = download_stats::extract_downloads(&lines, &source_file);
         let file_timestamp_bounds = build_timestamp_bounds(&file_events, &file_downloads);
@@ -627,6 +718,7 @@ fn analyze_intune_source_file(
         events: file_events,
         downloads: file_downloads,
         coverage,
+        guid_registry: file_guid_registry,
     })
 }
 
@@ -1785,6 +1877,50 @@ fn is_summary_signal_event(event: &IntuneEvent) -> bool {
     }
 }
 
+/// Synthesize `DownloadStat` records from ContentDownload events when
+/// the regex-based `download_stats` extractor found nothing (i.e. the log
+/// format didn't match `DOWNLOAD_RE`). Groups events by GUID and picks the
+/// latest status per GUID as the outcome.
+fn synthesize_downloads_from_events(events: &[IntuneEvent]) -> Vec<DownloadStat> {
+    let mut by_guid: HashMap<String, Vec<&IntuneEvent>> = HashMap::new();
+    for event in events {
+        if event.event_type != IntuneEventType::ContentDownload {
+            continue;
+        }
+        let key = event
+            .guid
+            .clone()
+            .unwrap_or_else(|| event.name.clone());
+        by_guid.entry(key).or_default().push(event);
+    }
+
+    let mut downloads = Vec::new();
+    for (content_id, group) in &by_guid {
+        // Use the last event's status as the outcome
+        let last = group.iter().max_by_key(|e| e.id).unwrap();
+        let success = last.status == IntuneStatus::Success;
+        let name = last.name.clone();
+        let timestamp = last
+            .start_time
+            .clone()
+            .or_else(|| last.end_time.clone());
+
+        downloads.push(DownloadStat {
+            content_id: content_id.clone(),
+            name,
+            size_bytes: 0,
+            speed_bps: 0.0,
+            do_percentage: 0.0,
+            duration_secs: last.duration_secs.unwrap_or(0.0),
+            success,
+            timestamp,
+        });
+    }
+
+    downloads.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
+    downloads
+}
+
 fn summarize_download_signals(
     events: &[IntuneEvent],
     downloads: &[DownloadStat],
@@ -2835,12 +2971,7 @@ fn top_event_detail_matches(events: &[&IntuneEvent], limit: usize) -> Vec<String
                 format!("Failing app: {}", name)
             }
         } else {
-            let shortened = if snippet.len() > 120 {
-                format!("{}...", &snippet[..120])
-            } else {
-                snippet.to_string()
-            };
-            format!("Observed detail: {}", shortened)
+            format!("Observed detail: {}", snippet)
         };
 
         *evidence_counts.entry(evidence).or_insert(0) += 1;
@@ -3615,7 +3746,7 @@ mod tests {
         let events = vec![IntuneEvent {
             id: 1,
             event_type: IntuneEventType::ContentDownload,
-            name: "AppWorkload Download Stall (abcd1234...)".to_string(),
+            name: "AppWorkload Download Stall (a1b2c3d4-e5f6-7890-abcd-ef1234567890)".to_string(),
             guid: Some("a1b2c3d4-e5f6-7890-abcd-ef1234567890".to_string()),
             status: IntuneStatus::Timeout,
             start_time: Some("01-15-2024 10:00:00.000".to_string()),
