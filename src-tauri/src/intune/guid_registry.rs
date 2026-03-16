@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::path::Path;
 
 use once_cell::sync::Lazy;
 use regex::Regex;
@@ -35,10 +34,12 @@ pub(crate) fn extract_json_field<'a>(msg: &'a str, prefix: &str, suffix: &str) -
 }
 
 /// Extract just the filename from a SetUpFilePath value.
+/// Handles Windows-style backslash paths on all platforms.
 pub(crate) fn setup_file_name(path: &str) -> String {
-    Path::new(path)
-        .file_name()
-        .and_then(|name| name.to_str())
+    // Split on both forward and backslash to handle Windows paths on Linux CI
+    path.rsplit(|c| c == '\\' || c == '/')
+        .next()
+        .filter(|s| !s.is_empty())
         .unwrap_or(path)
         .to_string()
 }

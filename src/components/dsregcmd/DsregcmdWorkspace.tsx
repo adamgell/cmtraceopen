@@ -2120,10 +2120,6 @@ export function DsregcmdWorkspace() {
     confidence: result.derived.captureConfidence,
     reason: result.derived.captureConfidenceReason,
   };
-  const hasBundleContext = sourceContext.bundlePath != null;
-  const hasRegistryPolicyEvidence =
-    result.policyEvidence.artifactPaths.length > 0;
-
   return (
     <div
       style={{
