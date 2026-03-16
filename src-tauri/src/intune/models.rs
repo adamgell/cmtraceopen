@@ -45,18 +45,48 @@ pub enum IntuneDiagnosticSeverity {
     Error,
 }
 
+/// Diagnostic category used to group related remediation guidance.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum IntuneDiagnosticCategory {
+    Download,
+    Install,
+    Timeout,
+    Script,
+    Policy,
+    State,
+    General,
+}
+
+/// Priority used to order remediation guidance.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum IntuneRemediationPriority {
+    Monitor,
+    Medium,
+    High,
+    Immediate,
+}
+
 /// Deterministic diagnostic guidance derived from Intune analysis results.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct IntuneDiagnosticInsight {
     pub id: String,
     pub severity: IntuneDiagnosticSeverity,
+    pub category: IntuneDiagnosticCategory,
+    pub remediation_priority: IntuneRemediationPriority,
     pub title: String,
     pub summary: String,
+    pub likely_cause: Option<String>,
     pub evidence: Vec<String>,
     pub next_checks: Vec<String>,
     #[serde(default)]
     pub suggested_fixes: Vec<String>,
+    #[serde(default)]
+    pub focus_areas: Vec<String>,
+    #[serde(default)]
+    pub affected_source_files: Vec<String>,
+    #[serde(default)]
+    pub related_error_codes: Vec<String>,
 }
 
 /// Type of Intune event detected from log analysis.
@@ -214,6 +244,240 @@ pub struct IntuneRepeatedFailureGroup {
     pub sample_event_ids: Vec<u64>,
 }
 
+// ---------------------------------------------------------------------------
+// Windows Event Log (EVTX) models
+// ---------------------------------------------------------------------------
+
+/// Severity level from a Windows Event Log record (`System.Level`).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub enum EventLogSeverity {
+    Critical,
+    Error,
+    Warning,
+    Information,
+    Verbose,
+    Unknown,
+}
+
+impl EventLogSeverity {
+    /// Map the numeric `Level` value from an EVTX record to a severity.
+    pub fn from_level(level: u8) -> Self {
+        match level {
+            1 => Self::Critical,
+            2 => Self::Error,
+            3 => Self::Warning,
+            4 => Self::Information,
+            5 => Self::Verbose,
+            _ => Self::Unknown,
+        }
+    }
+
+    pub fn is_error_or_warning(&self) -> bool {
+        matches!(self, Self::Critical | Self::Error | Self::Warning)
+    }
+}
+
+/// Typed Windows Event Log channel corresponding to the curated channels
+/// collected by the evidence profile.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub enum EventLogChannel {
+    DeviceManagementAdmin,
+    DeviceManagementOperational,
+    Autopilot,
+    AadOperational,
+    DeliveryOptimizationOperational,
+    ManagementService,
+    ProvisioningDiagnosticsAdmin,
+    ShellCoreOperational,
+    TimeServiceOperational,
+    UserDeviceRegistrationAdmin,
+    Other(String),
+}
+
+impl EventLogChannel {
+    /// Map the full channel name string from an EVTX record to a typed variant.
+    pub fn from_channel_string(raw: &str) -> Self {
+        let lower = raw.to_ascii_lowercase();
+        if lower.contains("devicemanagement")
+            && lower.contains("/admin")
+            && !lower.contains("/operational")
+        {
+            Self::DeviceManagementAdmin
+        } else if lower.contains("devicemanagement") && lower.contains("/operational") {
+            Self::DeviceManagementOperational
+        } else if lower.contains("moderndeployment") && lower.contains("autopilot") {
+            Self::Autopilot
+        } else if lower.contains("-aad/operational") {
+            Self::AadOperational
+        } else if lower.contains("deliveryoptimization") && lower.contains("/operational") {
+            Self::DeliveryOptimizationOperational
+        } else if lower.contains("moderndeployment") && lower.contains("managementservice") {
+            Self::ManagementService
+        } else if lower.contains("provisioning-diagnostics") && lower.contains("/admin") {
+            Self::ProvisioningDiagnosticsAdmin
+        } else if lower.contains("shell-core") && lower.contains("/operational") {
+            Self::ShellCoreOperational
+        } else if lower.contains("time-service") && lower.contains("/operational") {
+            Self::TimeServiceOperational
+        } else if lower.contains("user device registration") && lower.contains("/admin") {
+            Self::UserDeviceRegistrationAdmin
+        } else if raw.is_empty() {
+            Self::Other("Unknown".to_string())
+        } else {
+            Self::Other(raw.to_string())
+        }
+    }
+
+    /// Short display name for UI badges and labels.
+    pub fn display_name(&self) -> &str {
+        match self {
+            Self::DeviceManagementAdmin => "MDM Admin",
+            Self::DeviceManagementOperational => "MDM Operational",
+            Self::Autopilot => "Autopilot",
+            Self::AadOperational => "AAD Operational",
+            Self::DeliveryOptimizationOperational => "DO Operational",
+            Self::ManagementService => "Management Service",
+            Self::ProvisioningDiagnosticsAdmin => "Provisioning Admin",
+            Self::ShellCoreOperational => "Shell Core",
+            Self::TimeServiceOperational => "Time Service",
+            Self::UserDeviceRegistrationAdmin => "User Device Reg",
+            Self::Other(name) => name.as_str(),
+        }
+    }
+}
+
+/// A single parsed record from a Windows Event Log (.evtx) file.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EventLogEntry {
+    /// Sequential ID across all parsed entries (chronological after sorting).
+    pub id: u64,
+    /// Typed channel enum.
+    pub channel: EventLogChannel,
+    /// Human-readable channel display name.
+    pub channel_display: String,
+    /// Provider name from `System.Provider`.
+    pub provider: String,
+    /// Windows Event ID.
+    pub event_id: u32,
+    /// Severity mapped from `System.Level`.
+    pub severity: EventLogSeverity,
+    /// ISO 8601 UTC timestamp.
+    pub timestamp: String,
+    /// Computer name from `System.Computer`.
+    pub computer: Option<String>,
+    /// Extracted message from EventData/UserData.
+    pub message: String,
+    /// Correlation activity ID from `System.Correlation`.
+    pub correlation_activity_id: Option<String>,
+    /// Path to the .evtx source file.
+    pub source_file: String,
+}
+
+/// Per-channel summary rollup for the UI.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EventLogChannelSummary {
+    pub channel: EventLogChannel,
+    pub channel_display: String,
+    pub entry_count: u32,
+    pub error_count: u32,
+    pub warning_count: u32,
+    pub timestamp_bounds: Option<IntuneTimestampBounds>,
+    pub source_file: String,
+}
+
+/// The kind of deterministic correlation between an event log entry
+/// and an IME-derived Intune event or diagnostic.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum EventLogCorrelationKind {
+    /// Temporal proximity within a contextually relevant channel.
+    TimeWindowChannelMatch,
+    /// Error code from an IME event appears in the event log message.
+    ErrorCodeMatch,
+    /// Enrollment/registration activity near ESP or sync events.
+    EnrollmentContextMatch,
+}
+
+/// A deterministic link between an event log entry and an IME event or diagnostic.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EventLogCorrelationLink {
+    /// Points to `EventLogEntry.id`.
+    pub event_log_entry_id: u64,
+    /// Points to `IntuneEvent.id` when this is an event-level link.
+    pub linked_intune_event_id: Option<u64>,
+    /// Points to `IntuneDiagnosticInsight.id` when this is a diagnostic-level link.
+    pub linked_diagnostic_id: Option<String>,
+    /// Which correlation strategy produced this link.
+    pub correlation_kind: EventLogCorrelationKind,
+    /// Time gap in seconds between the linked items (for display/sorting).
+    pub time_delta_secs: Option<f64>,
+}
+
+/// Source category for the current event log analysis payload.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub enum EventLogAnalysisSource {
+    #[default]
+    Bundle,
+    Live,
+}
+
+/// Per-channel outcome status for a live Windows Event Log query.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub enum EventLogLiveQueryStatus {
+    #[default]
+    Success,
+    Empty,
+    Failed,
+}
+
+/// Per-channel metadata retained for a live Windows Event Log query attempt.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EventLogLiveQueryChannelResult {
+    pub channel: EventLogChannel,
+    pub channel_display: String,
+    pub channel_path: String,
+    pub source_file: String,
+    pub status: EventLogLiveQueryStatus,
+    pub entry_count: u32,
+    pub error_message: Option<String>,
+}
+
+/// Live Windows Event Log query summary for UI status and empty-state behavior.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct EventLogLiveQueryMetadata {
+    pub attempted_channel_count: u32,
+    pub successful_channel_count: u32,
+    pub channels_with_results_count: u32,
+    pub failed_channel_count: u32,
+    pub per_channel_entry_limit: u32,
+    #[serde(default)]
+    pub channels: Vec<EventLogLiveQueryChannelResult>,
+}
+
+/// Top-level container for all parsed and correlated Windows Event Log data.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct EventLogAnalysis {
+    pub source_kind: EventLogAnalysisSource,
+    pub entries: Vec<EventLogEntry>,
+    pub channel_summaries: Vec<EventLogChannelSummary>,
+    pub correlation_links: Vec<EventLogCorrelationLink>,
+    pub parsed_file_count: u32,
+    pub total_entry_count: u32,
+    pub error_entry_count: u32,
+    pub warning_entry_count: u32,
+    pub timestamp_bounds: Option<IntuneTimestampBounds>,
+    pub live_query: Option<EventLogLiveQueryMetadata>,
+}
+
+// ---------------------------------------------------------------------------
+// Intune analysis result
+// ---------------------------------------------------------------------------
+
 /// Complete result of Intune log analysis.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -244,6 +508,9 @@ pub struct IntuneAnalysisResult {
     /// Bundle metadata retained when the analyzed path is an evidence bundle root.
     #[serde(default)]
     pub evidence_bundle: Option<EvidenceBundleMetadata>,
+    /// Parsed and correlated Windows Event Log data from evidence bundle .evtx files.
+    #[serde(default)]
+    pub event_log_analysis: Option<EventLogAnalysis>,
 }
 
 impl Serialize for IntuneAnalysisResult {
@@ -251,7 +518,7 @@ impl Serialize for IntuneAnalysisResult {
     where
         S: Serializer,
     {
-        let mut state = serializer.serialize_struct("IntuneAnalysisResult", 10)?;
+        let mut state = serializer.serialize_struct("IntuneAnalysisResult", 11)?;
         state.serialize_field("events", &self.events)?;
         state.serialize_field("downloads", &self.downloads)?;
         state.serialize_field("summary", &self.summary)?;
@@ -262,6 +529,7 @@ impl Serialize for IntuneAnalysisResult {
         state.serialize_field("diagnosticsConfidence", &self.diagnostics_confidence)?;
         state.serialize_field("repeatedFailures", &self.repeated_failures)?;
         state.serialize_field("evidenceBundle", &self.evidence_bundle)?;
+        state.serialize_field("eventLogAnalysis", &self.event_log_analysis)?;
         state.end()
     }
 }
@@ -322,6 +590,7 @@ mod tests {
             diagnostics_coverage: IntuneDiagnosticsCoverage::default(),
             diagnostics_confidence: IntuneDiagnosticsConfidence::default(),
             repeated_failures: Vec::new(),
+            event_log_analysis: None,
             evidence_bundle: Some(EvidenceBundleMetadata {
                 manifest_path: "bundle-root/manifest.json".to_string(),
                 notes_path: Some("bundle-root/notes.md".to_string()),

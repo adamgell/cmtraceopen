@@ -3,6 +3,7 @@ import {
   useLogStore,
 } from "../../stores/log-store";
 import { useUiStore } from "../../stores/ui-store";
+import { formatLogEntryTimestamp } from "../../lib/date-time-format";
 import {
   getLogDetailsLineHeight,
   LOG_MONOSPACE_FONT_FAMILY,
@@ -21,6 +22,9 @@ export function InfoPane() {
     selectedId !== null
       ? entries.find((entry) => entry.id === selectedId) ?? null
       : null;
+  const selectedTimestamp = selectedEntry
+    ? formatLogEntryTimestamp(selectedEntry)
+    : null;
 
   if (!selectedEntry) {
     return (
@@ -59,7 +63,7 @@ export function InfoPane() {
     >
       <div style={{ marginBottom: "8px", color: "#444" }}>
         {`Line ${selectedEntry.lineNumber} | ${selectedEntry.severity}${selectedEntry.component ? ` | ${selectedEntry.component}` : ""
-          }${selectedEntry.timestampDisplay ? ` | ${selectedEntry.timestampDisplay}` : ""}`}
+          }${selectedTimestamp ? ` | ${selectedTimestamp}` : ""}`}
       </div>
       <div style={{ marginBottom: "8px", color: "#666" }}>
         {`File ${selectedEntry.filePath}`}

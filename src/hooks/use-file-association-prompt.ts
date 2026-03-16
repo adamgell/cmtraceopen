@@ -13,23 +13,25 @@ export function useFileAssociationPrompt() {
 
   useEffect(() => {
     let isDisposed = false;
+    const startupDelayHandle = window.setTimeout(() => {
+      getFileAssociationPromptStatus()
+        .then((status) => {
+          if (isDisposed || !status.supported || !status.shouldPrompt) {
+            return;
+          }
 
-    getFileAssociationPromptStatus()
-      .then((status) => {
-        if (isDisposed || !status.supported || !status.shouldPrompt) {
-          return;
-        }
-
-        setShowFileAssociationPrompt(true);
-      })
-      .catch((error) => {
-        console.error("[file-association-prompt] failed to load prompt status", {
-          error,
+          setShowFileAssociationPrompt(true);
+        })
+        .catch((error) => {
+          console.error("[file-association-prompt] failed to load prompt status", {
+            error,
+          });
         });
-      });
+    }, 350);
 
     return () => {
       isDisposed = true;
+      window.clearTimeout(startupDelayHandle);
     };
   }, [setShowFileAssociationPrompt]);
 }

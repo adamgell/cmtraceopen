@@ -1,6 +1,15 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import {
+  Badge,
+  Button,
+  Textarea,
+} from "@fluentui/react-components";
 import { save } from "@tauri-apps/plugin-dialog";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
+import {
+  formatDisplayDateTime,
+  parseDisplayDateTime,
+} from "../../lib/date-time-format";
 import { useDsregcmdStore } from "../../stores/dsregcmd-store";
 import { useAppActions } from "../layout/Toolbar";
 import { writeTextOutputFile } from "../../lib/commands";
@@ -39,16 +48,6 @@ interface DisplayConfidenceAssessment {
   confidence: DsregcmdAnalysisResult["derived"]["captureConfidence"];
   reason: string;
 }
-
-const localDateTimeFormatter = new Intl.DateTimeFormat(undefined, {
-  year: "numeric",
-  month: "short",
-  day: "numeric",
-  hour: "numeric",
-  minute: "2-digit",
-  second: "2-digit",
-  timeZoneName: "short",
-});
 
 const NOT_REPORTED_LABEL = "Not Reported";
 
@@ -193,27 +192,8 @@ function getEffectivePostLogonEnabled(result: DsregcmdAnalysisResult): boolean |
   return result.facts.userState.postLogonEnabled ?? result.policyEvidence.postLogonEnabled.displayValue;
 }
 
-function parseDsregcmdDateTime(value: string | null | undefined): Date | null {
-  if (!value) {
-    return null;
-  }
-
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return null;
-  }
-
-  const normalized = /^\d{4}-\d{2}-\d{2} /.test(trimmed) && trimmed.endsWith(" UTC")
-    ? `${trimmed.slice(0, -4).replace(" ", "T")}Z`
-    : trimmed;
-
-  const parsed = new Date(normalized);
-  return Number.isNaN(parsed.getTime()) ? null : parsed;
-}
-
 function formatLocalDateTime(value: string | null | undefined): string | null {
-  const parsed = parseDsregcmdDateTime(value);
-  return parsed ? localDateTimeFormatter.format(parsed) : null;
+  return formatDisplayDateTime(value);
 }
 
 function parseCertificateValidityRange(value: string | null | undefined): { from: string; to: string } | null {
@@ -1015,15 +995,16 @@ function StatCard({
         backgroundColor: colors.background,
         padding: "12px",
         minWidth: 0,
+        borderRadius: "10px",
       }}
     >
-      <div style={{ fontSize: "11px", color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.04em" }}>
+      <div style={{ fontSize: "11px", color: "#5b6472", textTransform: "uppercase", letterSpacing: "0.04em" }}>
         {title}
       </div>
-      <div style={{ marginTop: "6px", fontSize: "20px", fontWeight: 700, color: colors.value }}>
+      <div style={{ marginTop: "6px", fontSize: "20px", fontWeight: 700, color: colors.value, lineHeight: 1.2 }}>
         {value}
       </div>
-      <div style={{ marginTop: "6px", fontSize: "12px", color: "#4b5563", lineHeight: 1.4 }}>
+      <div style={{ marginTop: "6px", fontSize: "12px", color: "#3f4752", lineHeight: 1.45 }}>
         {caption}
       </div>
     </div>
@@ -1036,12 +1017,16 @@ function SectionFrame({ title, caption, children }: { title: string; caption: st
       style={{
         border: "1px solid #d1d5db",
         backgroundColor: "#ffffff",
+        borderRadius: "10px",
+        overflow: "hidden",
+        flexShrink: 0,
       }}
     >
-      <div style={{ padding: "12px 14px", borderBottom: "1px solid #e5e7eb", backgroundColor: "#f9fafb" }}>
+      <div style={{ padding: "12px 14px", backgroundColor: "#f6f9fc" }}>
         <div style={{ fontSize: "14px", fontWeight: 700, color: "#111827" }}>{title}</div>
-        <div style={{ marginTop: "4px", fontSize: "12px", color: "#6b7280" }}>{caption}</div>
+        <div style={{ marginTop: "4px", fontSize: "12px", color: "#5b6472" }}>{caption}</div>
       </div>
+      <div style={{ borderTop: "1px solid #e2e8f0" }} />
       <div style={{ padding: "14px" }}>{children}</div>
     </section>
   );
@@ -1056,14 +1041,15 @@ function IssueCard({ issue }: { issue: DsregcmdDiagnosticInsight }) {
         border: `1px solid ${colors.border}`,
         backgroundColor: colors.background,
         padding: "12px",
+        borderRadius: "10px",
       }}
     >
       <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
-        <span
+        <Badge
+          appearance="outline"
           style={{
             fontSize: "10px",
             fontWeight: 700,
-            padding: "2px 6px",
             border: `1px solid ${colors.border}`,
             color: colors.text,
             backgroundColor: "#ffffff",
@@ -1072,8 +1058,8 @@ function IssueCard({ issue }: { issue: DsregcmdDiagnosticInsight }) {
           }}
         >
           {issue.severity}
-        </span>
-        <span style={{ fontSize: "11px", color: "#6b7280", textTransform: "uppercase" }}>
+        </Badge>
+        <span style={{ fontSize: "11px", color: "#5b6472", textTransform: "uppercase" }}>
           {issue.category}
         </span>
       </div>
@@ -1123,14 +1109,22 @@ function FactsTable({ group, showNotReported }: { group: FactGroup; showNotRepor
   const hiddenCount = group.rows.length - visibleRows.length;
 
   return (
-    <div style={{ border: "1px solid #e5e7eb", backgroundColor: "#ffffff" }}>
-      <div style={{ padding: "10px 12px", borderBottom: "1px solid #e5e7eb", backgroundColor: "#f9fafb" }}>
+    <div
+      style={{
+        border: "1px solid #d1d5db",
+        backgroundColor: "#ffffff",
+        borderRadius: "10px",
+        overflow: "hidden",
+      }}
+    >
+      <div style={{ padding: "10px 12px", backgroundColor: "#f8fafc" }}>
         <div style={{ fontSize: "13px", fontWeight: 700, color: "#111827" }}>{group.title}</div>
-        <div style={{ marginTop: "4px", fontSize: "11px", color: "#6b7280" }}>{group.caption}</div>
+        <div style={{ marginTop: "4px", fontSize: "11px", color: "#5b6472" }}>{group.caption}</div>
       </div>
+      <div style={{ borderTop: "1px solid #e2e8f0" }} />
       <div>
         {visibleRows.length === 0 ? (
-          <div style={{ padding: "10px 12px", fontSize: "12px", color: "#6b7280" }}>
+          <div style={{ padding: "10px 12px", fontSize: "12px", color: "#5b6472" }}>
             All fields in this group were not reported by dsregcmd for this capture.
           </div>
         ) : visibleRows.map((row) => {
@@ -1150,7 +1144,7 @@ function FactsTable({ group, showNotReported }: { group: FactGroup; showNotRepor
                 gridTemplateColumns: "170px minmax(0, 1fr)",
                 gap: "8px",
                 padding: "9px 12px",
-                borderTop: "1px solid #f3f4f6",
+                borderTop: "1px solid #edf1f5",
                 alignItems: "start",
               }}
             >
@@ -1172,7 +1166,7 @@ function FactsTable({ group, showNotReported }: { group: FactGroup; showNotRepor
           );
         })}
         {!showNotReported && hiddenCount > 0 && (
-          <div style={{ padding: "10px 12px", borderTop: "1px solid #f3f4f6", fontSize: "11px", color: "#6b7280" }}>
+          <div style={{ padding: "10px 12px", borderTop: "1px solid #edf1f5", fontSize: "11px", color: "#5b6472" }}>
             {hiddenCount} not reported {hiddenCount === 1 ? "field" : "fields"} hidden.
           </div>
         )}
@@ -1190,9 +1184,10 @@ function EmptyWorkspace({ title, body }: { title: string; body: string }) {
         backgroundColor: "#f8fafc",
         padding: "24px",
         color: "#334155",
+        borderRadius: "12px",
       }}
     >
-      <div style={{ fontSize: "18px", fontWeight: 700 }}>{title}</div>
+      <div style={{ fontSize: "18px", fontWeight: 700, color: "#0f172a" }}>{title}</div>
       <div style={{ marginTop: "8px", fontSize: "13px", lineHeight: 1.6 }}>{body}</div>
     </div>
   );
@@ -1256,6 +1251,7 @@ function FlowBox({ title, detail, tone = "neutral" }: { title: string; detail: s
         border: `1px solid ${palette.border}`,
         backgroundColor: palette.background,
         padding: "12px",
+        borderRadius: "10px",
       }}
     >
       <div style={{ fontSize: "12px", fontWeight: 700, color: palette.text }}>{title}</div>
@@ -1285,7 +1281,7 @@ export function DsregcmdWorkspace() {
     }
 
     if (sourceContext.source?.kind === "capture") {
-      const lastUpdate = parseDsregcmdDateTime(result.derived.prtLastUpdate);
+      const lastUpdate = parseDisplayDateTime(result.derived.prtLastUpdate);
       if (!lastUpdate) {
         return result.derived.prtAgeHours;
       }
@@ -1470,18 +1466,18 @@ export function DsregcmdWorkspace() {
             </div>
           </div>
           <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
-            <button type="button" onClick={() => void captureDsregcmdSource()}>
+            <Button appearance="primary" onClick={() => void captureDsregcmdSource()}>
               Capture
-            </button>
-            <button type="button" onClick={() => void pasteDsregcmdSource()}>
+            </Button>
+            <Button appearance="secondary" onClick={() => void pasteDsregcmdSource()}>
               Paste
-            </button>
-            <button type="button" onClick={() => void openSourceFileDialog()}>
+            </Button>
+            <Button appearance="secondary" onClick={() => void openSourceFileDialog()}>
               Open Text File
-            </button>
-            <button type="button" onClick={() => void openSourceFolderDialog()}>
+            </Button>
+            <Button appearance="secondary" onClick={() => void openSourceFolderDialog()}>
               Open Evidence Folder
-            </button>
+            </Button>
           </div>
         </div>
 
@@ -1532,18 +1528,18 @@ export function DsregcmdWorkspace() {
           </div>
         </div>
         <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
-          <button type="button" onClick={() => void captureDsregcmdSource()} disabled={isAnalyzing}>
+          <Button appearance="primary" onClick={() => void captureDsregcmdSource()} disabled={isAnalyzing}>
             Capture
-          </button>
-          <button type="button" onClick={() => void pasteDsregcmdSource()} disabled={isAnalyzing}>
+          </Button>
+          <Button appearance="secondary" onClick={() => void pasteDsregcmdSource()} disabled={isAnalyzing}>
             Paste
-          </button>
-          <button type="button" onClick={() => void openSourceFileDialog()} disabled={isAnalyzing}>
+          </Button>
+          <Button appearance="secondary" onClick={() => void openSourceFileDialog()} disabled={isAnalyzing}>
             Open Text File
-          </button>
-          <button type="button" onClick={() => void openSourceFolderDialog()} disabled={isAnalyzing}>
+          </Button>
+          <Button appearance="secondary" onClick={() => void openSourceFolderDialog()} disabled={isAnalyzing}>
             Open Evidence Folder
-          </button>
+          </Button>
         </div>
       </div>
 
@@ -1613,7 +1609,7 @@ export function DsregcmdWorkspace() {
           </SectionFrame>
         )}
 
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "12px" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "12px", flexShrink: 0 }}>
           <StatCard
             title="Join Type"
             value={result.derived.joinTypeLabel}
@@ -1717,9 +1713,9 @@ export function DsregcmdWorkspace() {
 
         <SectionFrame title="Facts by Group" caption="Backend-extracted facts organized for quick review rather than raw line order.">
           <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "12px" }}>
-            <button type="button" onClick={() => setShowNotReported((value) => !value)}>
+            <Button appearance={showNotReported ? "primary" : "secondary"} onClick={() => setShowNotReported((value) => !value)}>
               {showNotReported ? "Hide Not Reported Fields" : "Show Not Reported Fields"}
-            </button>
+            </Button>
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(360px, 1fr))", gap: "12px" }}>
             {factGroups.map((group) => (
@@ -1837,24 +1833,24 @@ export function DsregcmdWorkspace() {
 
         <SectionFrame title="Export" caption="No-dependency export controls for handing off or attaching analysis output.">
           <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
-            <button type="button" onClick={() => void handleCopyStatus()}>
-              Copy Status
-            </button>
-            <button type="button" onClick={() => void handleCopyJson()}>
+            <Button appearance="secondary" onClick={() => void handleCopyJson()}>
               Copy JSON
-            </button>
-            <button type="button" onClick={() => void handleCopySummary()}>
+            </Button>
+            <Button appearance="secondary" onClick={() => void handleCopyStatus()}>
+              Copy Status Text
+            </Button>
+            <Button appearance="secondary" onClick={() => void handleCopySummary()}>
               Copy Summary
-            </button>
-            <button type="button" onClick={() => void handleSaveExport("json")}>
+            </Button>
+            <Button appearance="secondary" onClick={() => void handleSaveExport("json")}>
               Save JSON
-            </button>
-            <button type="button" onClick={() => void handleSaveExport("summary")}>
+            </Button>
+            <Button appearance="secondary" onClick={() => void handleSaveExport("summary")}>
               Save Summary
-            </button>
-            <button type="button" onClick={() => setShowRawInput((value) => !value)}>
+            </Button>
+            <Button appearance={showRawInput ? "primary" : "secondary"} onClick={() => setShowRawInput((value) => !value)}>
               {showRawInput ? "Hide Raw Input" : "Show Raw Input"}
-            </button>
+            </Button>
           </div>
           {exportStatus && (
             <div
@@ -1868,7 +1864,7 @@ export function DsregcmdWorkspace() {
             </div>
           )}
           {showRawInput && (
-            <textarea
+            <Textarea
               readOnly
               value={rawInput}
               style={{

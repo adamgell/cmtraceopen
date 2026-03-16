@@ -52,6 +52,7 @@ pub fn run() {
             commands::file_ops::inspect_path_kind,
             commands::file_ops::write_text_output_file,
             commands::file_ops::get_initial_file_path,
+            commands::system_preferences::get_system_date_time_preferences,
             commands::parsing::start_tail,
             commands::parsing::stop_tail,
             commands::parsing::pause_tail,

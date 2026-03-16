@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
+import { formatDisplayDateTime } from "../../lib/date-time-format";
 import type { IntuneEvent, IntuneStatus, IntuneEventType } from "../../types/intune";
 import { useIntuneStore } from "../../stores/intune-store";
 
@@ -159,8 +160,8 @@ export function EventTimeline({ events }: EventTimelineProps) {
               >
                 {/* Header / Summary Line */}
                 <div style={{ display: "flex", alignItems: "center", width: "100%", minWidth: 0, gap: "10px" }}>
-                  <div style={{ fontSize: "11px", color: "#64748b", flexShrink: 0, width: "65px", fontFamily: "'Courier New', monospace" }}>
-                    {event.startTime ? event.startTime.split(" ")[1] || event.startTime : "--:--:--"}
+                  <div style={{ fontSize: "10px", color: "#64748b", flexShrink: 0, width: "165px", fontFamily: "'Courier New', monospace" }} title={event.startTime ?? undefined}>
+                    {formatDisplayDateTime(event.startTime) ?? "Not timestamped"}
                   </div>
 
                   <div
@@ -271,7 +272,10 @@ export function EventTimeline({ events }: EventTimelineProps) {
 
                     <div style={{ display: "flex", flexDirection: "column", gap: "6px", width: "200px", flexShrink: 0, fontSize: "11px" }}>
                       {event.startTime && (
-                        <div><strong style={{ color: "#64748b" }}>Start:</strong> {event.startTime}</div>
+                        <div><strong style={{ color: "#64748b" }}>Start:</strong> {formatDisplayDateTime(event.startTime) ?? event.startTime}</div>
+                      )}
+                      {event.endTime && (
+                        <div><strong style={{ color: "#64748b" }}>End:</strong> {formatDisplayDateTime(event.endTime) ?? event.endTime}</div>
                       )}
                       {event.errorCode && (
                         <div><strong style={{ color: "#64748b" }}>Error:</strong> <span style={{ color: "#ef4444", fontFamily: "'Courier New', monospace" }}>{event.errorCode}</span></div>

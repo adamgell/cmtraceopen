@@ -1,3 +1,4 @@
+use chrono::{FixedOffset, Local, LocalResult, TimeZone, Utc};
 use once_cell::sync::Lazy;
 use regex::Regex;
 
@@ -10,6 +11,7 @@ use crate::parser::severity::detect_severity_from_text;
 pub struct ImeLine {
     pub line_number: u32,
     pub timestamp: Option<String>,
+    pub timestamp_utc: Option<String>,
     pub message: String,
     pub component: Option<String>,
 }
@@ -52,11 +54,7 @@ struct ParsedImeAttrs<'a> {
 /// Parse IME log content into structured logical records.
 pub fn parse_ime_content(content: &str) -> Vec<ImeLine> {
     let parsed = parse_ime_records(content);
-    parsed
-        .entries
-        .into_iter()
-        .map(|entry| entry.line)
-        .collect()
+    parsed.entries.into_iter().map(|entry| entry.line).collect()
 }
 
 /// Parse IME log content into shared log entries while preserving logical records.
@@ -136,13 +134,20 @@ fn parse_ime_records(content: &str) -> ParsedImeChunk {
     );
 
     if matched_any {
-        ParsedImeChunk { entries, parse_errors }
+        ParsedImeChunk {
+            entries,
+            parse_errors,
+        }
     } else {
         parse_fallback_lines(content)
     }
 }
 
-fn parse_record(caps: &regex::Captures<'_>, offset: usize, line_starts: &[usize]) -> Option<ParsedImeRecord> {
+fn parse_record(
+    caps: &regex::Captures<'_>,
+    offset: usize,
+    line_starts: &[usize],
+) -> Option<ParsedImeRecord> {
     let message = caps.name("msg")?.as_str().to_string();
     let attrs = parse_attributes(caps.name("attrs")?.as_str());
     let component = attrs
@@ -156,13 +161,14 @@ fn parse_record(caps: &regex::Captures<'_>, offset: usize, line_starts: &[usize]
     let thread = attrs.thread;
     let thread_display = thread.map(format_thread_display);
     let severity = severity_from_type_field(attrs.type_value, &message);
-    let (timestamp_millis, timestamp_display, timezone_offset, line_timestamp) =
+    let (timestamp_millis, timestamp_display, timezone_offset, line_timestamp, line_timestamp_utc) =
         parse_timestamp_fields(attrs.date, attrs.time);
 
     Some(ParsedImeRecord {
         line: ImeLine {
             line_number: line_number_for_offset(line_starts, offset),
             timestamp: line_timestamp,
+            timestamp_utc: line_timestamp_utc,
             message,
             component,
         },
@@ -188,7 +194,8 @@ fn parse_attributes(attrs: &str) -> ParsedImeAttrs<'_> {
         }
 
         let key_start = index;
-        while index < bytes.len() && (bytes[index].is_ascii_alphanumeric() || bytes[index] == b'_') {
+        while index < bytes.len() && (bytes[index].is_ascii_alphanumeric() || bytes[index] == b'_')
+        {
             index += 1;
         }
 
@@ -227,30 +234,92 @@ fn parse_attributes(attrs: &str) -> ParsedImeAttrs<'_> {
 fn parse_timestamp_fields(
     date: Option<&str>,
     time: Option<&str>,
-) -> (Option<i64>, Option<String>, Option<i32>, Option<String>) {
+) -> (
+    Option<i64>,
+    Option<String>,
+    Option<i32>,
+    Option<String>,
+    Option<String>,
+) {
     let Some(date) = date else {
-        return (None, None, None, None);
+        return (None, None, None, None, None);
     };
     let Some(time) = time else {
-        return (None, None, None, None);
+        return (None, None, None, None, None);
     };
 
     let Some((month, day, year)) = parse_date(date) else {
-        return (None, None, None, None);
+        return (None, None, None, None, None);
     };
     let Some((hour, minute, second, millis, timezone_offset)) = parse_time(time) else {
-        return (None, None, None, None);
+        return (None, None, None, None, None);
     };
 
     let (timestamp_millis, timestamp_display) =
         build_timestamp(month, day, year, hour, minute, second, millis);
     let line_timestamp = timestamp_display.clone();
+    let line_timestamp_utc = build_utc_timestamp(
+        month,
+        day,
+        year,
+        hour,
+        minute,
+        second,
+        millis,
+        timezone_offset,
+    );
 
     (
         timestamp_millis,
         timestamp_display,
         timezone_offset,
         line_timestamp,
+        line_timestamp_utc,
+    )
+}
+
+fn build_utc_timestamp(
+    month: u32,
+    day: u32,
+    year: i32,
+    hour: u32,
+    minute: u32,
+    second: u32,
+    millis: u32,
+    timezone_offset: Option<i32>,
+) -> Option<String> {
+    let naive = chrono::NaiveDate::from_ymd_opt(year, month, day)?
+        .and_hms_milli_opt(hour, minute, second, millis)?;
+
+    let utc_value = if let Some(offset_minutes) = timezone_offset {
+        let offset = FixedOffset::east_opt(offset_minutes.checked_mul(60)?)?;
+        offset
+            .from_local_datetime(&naive)
+            .single()?
+            .with_timezone(&Utc)
+    } else {
+        match Local.from_local_datetime(&naive) {
+            LocalResult::Single(local_value) => local_value.with_timezone(&Utc),
+            LocalResult::Ambiguous(local_value, _) => local_value.with_timezone(&Utc),
+            LocalResult::None => return None,
+        }
+    };
+
+    Some(utc_value.to_rfc3339_opts(chrono::SecondsFormat::Millis, true))
+}
+
+fn parse_fallback_timestamp_utc(value: &str) -> Option<String> {
+    let naive = chrono::NaiveDateTime::parse_from_str(value, "%Y-%m-%d %H:%M:%S%.f").ok()?;
+    let local_value = match Local.from_local_datetime(&naive) {
+        LocalResult::Single(local_value) => local_value,
+        LocalResult::Ambiguous(local_value, _) => local_value,
+        LocalResult::None => return None,
+    };
+
+    Some(
+        local_value
+            .with_timezone(&Utc)
+            .to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
     )
 }
 
@@ -274,7 +343,9 @@ fn parse_time(time: &str) -> Option<(u32, u32, u32, u32, Option<i32>)> {
     let (minute, second_and_fraction) = remainder.split_once(':')?;
     let (second, fraction) = second_and_fraction
         .split_once('.')
-        .map_or((second_and_fraction, ""), |(seconds, fraction)| (seconds, fraction));
+        .map_or((second_and_fraction, ""), |(seconds, fraction)| {
+            (seconds, fraction)
+        });
     let millis = if fraction.is_empty() {
         0
     } else {
@@ -426,6 +497,7 @@ fn push_unmatched_segment(
                 line: ImeLine {
                     line_number: line_number_for_offset(line_starts, base_offset + local_offset),
                     timestamp: None,
+                    timestamp_utc: None,
                     message: trimmed.to_string(),
                     component: None,
                 },
@@ -455,6 +527,7 @@ fn parse_fallback_lines(content: &str) -> ParsedImeChunk {
 
         if let Some(caps) = SIMPLE_TS_RE.captures(trimmed) {
             let timestamp = caps.name("ts").map(|value| value.as_str().to_string());
+            let timestamp_utc = timestamp.as_deref().and_then(parse_fallback_timestamp_utc);
             let message = caps
                 .name("msg")
                 .map(|value| value.as_str().to_string())
@@ -463,6 +536,7 @@ fn parse_fallback_lines(content: &str) -> ParsedImeChunk {
                 line: ImeLine {
                     line_number: (index + 1) as u32,
                     timestamp: timestamp.clone(),
+                    timestamp_utc,
                     message: message.clone(),
                     component: None,
                 },
@@ -480,6 +554,7 @@ fn parse_fallback_lines(content: &str) -> ParsedImeChunk {
                 line: ImeLine {
                     line_number: (index + 1) as u32,
                     timestamp: None,
+                    timestamp_utc: None,
                     message: trimmed.to_string(),
                     component: None,
                 },
@@ -515,12 +590,14 @@ mod tests {
         );
 
         let lines = parse_ime_content(content);
+        let expected_utc = parse_fallback_timestamp_utc("2026-03-12 11:16:37.309");
 
         assert_eq!(lines.len(), 3);
         assert_eq!(lines[0].line_number, 1);
         assert_eq!(lines[1].line_number, 2);
         assert_eq!(lines[2].line_number, 4);
         assert_eq!(lines[1].message, "Second line one\nSecond line two");
+        assert_eq!(lines[0].timestamp_utc, expected_utc);
     }
 
     #[test]
@@ -558,6 +635,19 @@ mod tests {
         assert_eq!(
             entries[0].timestamp_display.as_deref(),
             Some("03-12-2026 11:16:42.332")
+        );
+    }
+
+    #[test]
+    fn test_parse_ime_content_normalizes_timezone_offset_to_utc() {
+        let content = "<![LOG[Timezone aware]LOG]!><time=\"08:06:34.590-060\" date=\"09-02-2016\" component=\"ContentTransferManager\" context=\"\" type=\"1\" thread=\"3692\" file=\"datatransfer.cpp\">";
+
+        let lines = parse_ime_content(content);
+
+        assert_eq!(lines.len(), 1);
+        assert_eq!(
+            lines[0].timestamp_utc.as_deref(),
+            Some("2016-09-02T09:06:34.590Z")
         );
     }
 }

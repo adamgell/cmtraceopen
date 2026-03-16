@@ -4,6 +4,7 @@ import {
   getLogViewGridTemplateColumns,
   type LogSeverityPaletteMode,
 } from "../../lib/constants";
+import { formatLogEntryTimestamp } from "../../lib/date-time-format";
 import { LOG_UI_FONT_FAMILY } from "../../lib/log-accessibility";
 
 interface LogRowProps {
@@ -103,6 +104,7 @@ export function LogRow({
 }: LogRowProps) {
   const style = getRowStyle(entry, isSelected, severityPaletteMode);
   const gridTemplateColumns = getLogViewGridTemplateColumns(showDetails);
+  const timestampLabel = formatLogEntryTimestamp(entry);
 
   return (
     <div
@@ -164,7 +166,7 @@ export function LogRow({
               borderLeft: "1px solid #d0d0d0",
             }}
           >
-            {entry.timestampDisplay ?? ""}
+            {timestampLabel ?? ""}
           </div>
           <div
             className="col-thread"

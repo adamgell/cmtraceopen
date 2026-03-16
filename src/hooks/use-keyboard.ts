@@ -4,6 +4,7 @@ import { useLogStore } from "../stores/log-store";
 import { useUiStore } from "../stores/ui-store";
 import { useFilterStore } from "../stores/filter-store";
 import { useAppActions } from "../components/layout/Toolbar";
+import { formatLogEntryTimestamp } from "../lib/date-time-format";
 
 function isTypingTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) {
@@ -258,7 +259,7 @@ export function useKeyboard() {
         const text = [
           entry.message,
           entry.component ?? "",
-          entry.timestampDisplay ?? "",
+          formatLogEntryTimestamp(entry) ?? "",
           entry.threadDisplay ?? "",
         ].join("\t");
 

@@ -13,6 +13,7 @@ import { AccessibilityDialog } from "../dialogs/AccessibilityDialog";
 import { EvidenceBundleDialog } from "../dialogs/EvidenceBundleDialog";
 import { FileAssociationPromptDialog } from "../dialogs/FileAssociationPromptDialog";
 import { IntuneDashboard } from "../intune/IntuneDashboard";
+import { NewIntuneWorkspace } from "../intune/NewIntuneWorkspace";
 import { DsregcmdWorkspace } from "../dsregcmd/DsregcmdWorkspace";
 import type { FilterClause } from "../dialogs/FilterDialog";
 import type { LogEntry } from "../../types/log";
@@ -220,6 +221,14 @@ export function AppShell() {
       );
     }
 
+    if (activeView === "new-intune") {
+      return (
+        <div style={{ flex: 1, overflow: "hidden" }}>
+          <NewIntuneWorkspace />
+        </div>
+      );
+    }
+
     return (
       <div style={{ flex: 1, overflow: "hidden" }}>
         <DsregcmdWorkspace />
@@ -234,7 +243,7 @@ export function AppShell() {
         flexDirection: "column",
         height: "100vh",
         overflow: "hidden",
-        backgroundColor: "#ffffff",
+        backgroundColor: "#f4f7fb",
       }}
     >
       <Toolbar />
@@ -244,6 +253,7 @@ export function AppShell() {
           flex: 1,
           display: "flex",
           overflow: "hidden",
+          backgroundColor: "#eef3f8",
         }}
       >
         <FileSidebar width={FILE_SIDEBAR_RECOMMENDED_WIDTH} activeView={activeView} />
@@ -254,6 +264,7 @@ export function AppShell() {
             display: "flex",
             flexDirection: "column",
             overflow: "hidden",
+            backgroundColor: "#ffffff",
           }}
         >
           {renderWorkspace()}

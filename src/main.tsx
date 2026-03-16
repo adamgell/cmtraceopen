@@ -1,7 +1,12 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
+import { FluentProvider } from "@fluentui/react-components";
 import App from "./App";
 import { useAppMenu } from "./hooks/use-app-menu";
+import { cmtraceFluentTheme } from "./lib/fluent-theme";
+import { initializeDateTimeFormatting } from "./lib/date-time-format";
+
+const RootWrapper = import.meta.env.DEV ? React.Fragment : React.StrictMode;
 
 function AppRoot() {
   useAppMenu();
@@ -21,24 +26,7 @@ style.textContent = `
     overflow: hidden;
     font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
     font-size: 13px;
-  }
-  button {
-    font-size: 12px;
-    padding: 2px 8px;
-    cursor: pointer;
-    border: 1px solid #999;
-    background: #e8e8e8;
-    border-radius: 2px;
-  }
-  button:hover {
-    background: #d0d0d0;
-  }
-  button:active {
-    background: #c0c0c0;
-  }
-  input {
-    border: 1px solid #999;
-    border-radius: 2px;
+    background: #f4f7fb;
   }
   mark {
     padding: 0;
@@ -46,8 +34,16 @@ style.textContent = `
 `;
 document.head.appendChild(style);
 
-ReactDOM.createRoot(document.getElementById("root")!).render(
-  <React.StrictMode>
-    <AppRoot />
-  </React.StrictMode>
-);
+async function bootstrap() {
+  await initializeDateTimeFormatting();
+
+  ReactDOM.createRoot(document.getElementById("root")!).render(
+    <RootWrapper>
+      <FluentProvider theme={cmtraceFluentTheme} style={{ height: "100%" }}>
+        <AppRoot />
+      </FluentProvider>
+    </RootWrapper>
+  );
+}
+
+void bootstrap();

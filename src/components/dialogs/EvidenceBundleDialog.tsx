@@ -3,7 +3,8 @@ import { inspectEvidenceArtifact, inspectEvidenceBundle } from "../../lib/comman
 import { useDsregcmdStore } from "../../stores/dsregcmd-store";
 import { useIntuneStore } from "../../stores/intune-store";
 import { useLogStore } from "../../stores/log-store";
-import { useUiStore } from "../../stores/ui-store";
+import { isIntuneWorkspace, useUiStore } from "../../stores/ui-store";
+import { formatDisplayDateTime } from "../../lib/date-time-format";
 import { useAppActions } from "../layout/Toolbar";
 import type {
   EvidenceArtifactRecord,
@@ -55,20 +56,7 @@ function formatUtcDateTime(value: string | null): string {
     return "Not reported";
   }
 
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) {
-    return value;
-  }
-
-  return new Intl.DateTimeFormat(undefined, {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-    second: "2-digit",
-    timeZoneName: "short",
-  }).format(parsed);
+  return formatDisplayDateTime(value) ?? value;
 }
 
 function formatCategoryLabel(category: string): string {
@@ -279,7 +267,7 @@ function getArtifactNavigationState(
     };
   }
 
-  if (activeView === "intune") {
+  if (isIntuneWorkspace(activeView)) {
     if (artifact.category !== "logs" || !isTextLikeArtifactPath(artifact.absolutePath)) {
       return {
         canOpen: false,
@@ -298,8 +286,14 @@ function getArtifactNavigationState(
 
     return {
       canOpen: true,
-      reason: "Open this artifact in the Intune workspace.",
-      actionLabel: "Open in Intune workspace",
+      reason:
+        activeView === "new-intune"
+          ? "Open this artifact in New Intune Workspace."
+          : "Open this artifact in the Intune workspace.",
+      actionLabel:
+        activeView === "new-intune"
+          ? "Open in New Intune Workspace"
+          : "Open in Intune workspace",
     };
   }
 
@@ -407,7 +401,7 @@ export function EvidenceBundleDialog({ isOpen, onClose }: EvidenceBundleDialogPr
       return getDirectoryName(logBundleMetadata.manifestPath);
     }
 
-    if (activeView === "intune") {
+    if (isIntuneWorkspace(activeView)) {
       return intuneEvidenceBundle ? getDirectoryName(intuneEvidenceBundle.manifestPath) : null;
     }
 
@@ -421,13 +415,17 @@ export function EvidenceBundleDialog({ isOpen, onClose }: EvidenceBundleDialogPr
   ]);
 
   const selectedSourceFilePath =
-    activeView === "log" ? logSelectedSourceFilePath : intuneSourceContext.analyzedPath;
+    activeView === "log"
+      ? logSelectedSourceFilePath
+      : isIntuneWorkspace(activeView)
+        ? intuneSourceContext.analyzedPath
+        : null;
   const sourceEntries = activeView === "log" ? logSourceEntries : [];
   const bundleMetadata =
     details?.metadata ??
     (activeView === "log"
       ? logBundleMetadata
-      : activeView === "intune"
+      : isIntuneWorkspace(activeView)
         ? intuneEvidenceBundle
         : null);
 

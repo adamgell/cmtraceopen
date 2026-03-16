@@ -1,10 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { formatDisplayDateTime, parseDisplayDateTimeValue } from "../../lib/date-time-format";
 import { useIntuneStore } from "../../stores/intune-store";
 import { useAppActions } from "../layout/Toolbar";
 import { EventTimeline } from "./EventTimeline";
 import { DownloadStats } from "./DownloadStats";
 import type {
+  DownloadStat,
+  IntuneDiagnosticCategory,
   IntuneDiagnosticInsight,
+  IntuneRemediationPriority,
   IntuneDiagnosticSeverity,
   IntuneDiagnosticsConfidence,
   IntuneDiagnosticsCoverage,
@@ -16,6 +20,7 @@ import type {
   IntuneStatus,
   IntuneSourceFamilySummary,
   IntuneSummary,
+  IntuneTimeWindowPreset,
   IntuneTimestampBounds,
 } from "../../types/intune";
 
@@ -38,26 +43,47 @@ export function IntuneDashboard() {
   const analysisState = useIntuneStore((s) => s.analysisState);
   const isAnalyzing = useIntuneStore((s) => s.isAnalyzing);
   const timelineScope = useIntuneStore((s) => s.timelineScope);
+  const timeWindow = useIntuneStore((s) => s.timeWindow);
   const activeTab = useIntuneStore((s) => s.activeTab);
   const setActiveTab = useIntuneStore((s) => s.setActiveTab);
   const clearTimelineFileScope = useIntuneStore((s) => s.clearTimelineFileScope);
+  const setTimeWindow = useIntuneStore((s) => s.setTimeWindow);
   const filterEventType = useIntuneStore((s) => s.filterEventType);
   const filterStatus = useIntuneStore((s) => s.filterStatus);
   const setFilterEventType = useIntuneStore((s) => s.setFilterEventType);
   const setFilterStatus = useIntuneStore((s) => s.setFilterStatus);
   const { commandState, openSourceFileDialog, openSourceFolderDialog } = useAppActions();
 
+  const timeWindowAnchor = useMemo(
+    () => getLatestActivityTimestamp(events, downloads),
+    [downloads, events]
+  );
+  const filteredEventsByTime = useMemo(
+    () => filterEventsByTimeWindow(events, timeWindow, timeWindowAnchor),
+    [events, timeWindow, timeWindowAnchor]
+  );
+  const filteredDownloadsByTime = useMemo(
+    () => filterDownloadsByTimeWindow(downloads, timeWindow, timeWindowAnchor),
+    [downloads, timeWindow, timeWindowAnchor]
+  );
+  const filteredSummary = useMemo(
+    () => buildWindowedSummary(filteredEventsByTime, filteredDownloadsByTime),
+    [filteredDownloadsByTime, filteredEventsByTime]
+  );
+  const timeWindowLabel = getTimeWindowLabel(timeWindow);
+  const isWindowFiltered = timeWindow !== "all";
+
   const availableTabs = useMemo(
     () => ({
-      timeline: events.length > 0,
-      downloads: downloads.length > 0,
+      timeline: filteredEventsByTime.length > 0,
+      downloads: filteredDownloadsByTime.length > 0,
       summary: summary != null,
     }),
-    [downloads.length, events.length, summary]
+    [filteredDownloadsByTime.length, filteredEventsByTime.length, summary]
   );
 
   const filteredEventCount = useMemo(() => {
-    return events.filter((event) => {
+    return filteredEventsByTime.filter((event) => {
       if (filterEventType !== "All" && event.eventType !== filterEventType) {
         return false;
       }
@@ -66,7 +92,7 @@ export function IntuneDashboard() {
       }
       return true;
     }).length;
-  }, [events, filterEventType, filterStatus]);
+  }, [filteredEventsByTime, filterEventType, filterStatus]);
 
   const hasActiveFilters = filterEventType !== "All" || filterStatus !== "All";
 
@@ -153,7 +179,7 @@ export function IntuneDashboard() {
               void openSourceFolderDialog();
             }}
             disabled={!commandState.canOpenSources}
-            label={isAnalyzing ? "Analyzing..." : "Open IME Log Folder..."}
+            label={isAnalyzing ? "Analyzing..." : "Open IME Or Evidence Folder..."}
           />
 
           {(analysisState.phase === "analyzing" || analysisState.phase === "error" || analysisState.phase === "empty") && (
@@ -234,7 +260,7 @@ export function IntuneDashboard() {
               label={TAB_LABELS[tabId]}
               active={activeTab === tabId}
               disabled={isAnalyzing || !availableTabs[tabId]}
-              count={tabId === "timeline" ? events.length : tabId === "downloads" ? downloads.length : summary ? 1 : 0}
+              count={tabId === "timeline" ? filteredEventsByTime.length : tabId === "downloads" ? filteredDownloadsByTime.length : summary ? 1 : 0}
               onClick={() => setActiveTab(tabId)}
             />
           ))}
@@ -261,17 +287,25 @@ export function IntuneDashboard() {
                 alignItems: "center",
               }}
             >
-              <StrongBadge label="Total" value={summary.totalEvents} />
-              <StrongBadge label="Success" value={summary.succeeded} color="#16a34a" />
-              <StrongBadge label="Fail" value={summary.failed} color="#dc2626" />
-              <StrongBadge label="Prog" value={summary.inProgress} color="#2563eb" />
-              <StrongBadge label="Win32" value={summary.win32Apps} />
-              <StrongBadge label="WinGet" value={summary.wingetApps} />
-              {summary.logTimeSpan && (
+              <StrongBadge label="Total" value={filteredSummary.totalEvents} />
+              <StrongBadge label="Success" value={filteredSummary.succeeded} color="#16a34a" />
+              <StrongBadge label="Fail" value={filteredSummary.failed} color="#dc2626" />
+              <StrongBadge label="Prog" value={filteredSummary.inProgress} color="#2563eb" />
+              <StrongBadge label="Win32" value={filteredSummary.win32Apps} />
+              <StrongBadge label="WinGet" value={filteredSummary.wingetApps} />
+              {filteredSummary.logTimeSpan && (
                 <>
                   <div style={{ width: "1px", height: "12px", backgroundColor: "#cbd5e1", margin: "0 4px" }} />
                   <span style={{ fontSize: "11px", color: "#64748b", fontWeight: 500 }}>
-                    {summary.logTimeSpan}
+                    {filteredSummary.logTimeSpan}
+                  </span>
+                </>
+              )}
+              {isWindowFiltered && (
+                <>
+                  <div style={{ width: "1px", height: "12px", backgroundColor: "#cbd5e1", margin: "0 4px" }} />
+                  <span style={{ fontSize: "11px", color: "#1d4ed8", fontWeight: 700 }}>
+                    {timeWindowLabel}
                   </span>
                 </>
               )}
@@ -279,7 +313,23 @@ export function IntuneDashboard() {
           </div>
         )}
 
-        {activeTab === "timeline" && events.length > 0 && (
+        <div style={{ display: "flex", alignItems: "center", gap: "8px", marginLeft: "auto", paddingLeft: "12px" }}>
+          <span style={{ fontSize: "10px", color: "#6b7280", fontWeight: 600, textTransform: "uppercase" }}>Window:</span>
+          <select
+            value={timeWindow}
+            onChange={(e) => setTimeWindow(e.target.value as IntuneTimeWindowPreset)}
+            style={selectStyle}
+            disabled={isAnalyzing}
+          >
+            <option value="all">All Activity</option>
+            <option value="last-hour">Last Hour</option>
+            <option value="last-6-hours">Last 6 Hours</option>
+            <option value="last-day">Last Day</option>
+            <option value="last-7-days">Last 7 Days</option>
+          </select>
+        </div>
+
+        {activeTab === "timeline" && filteredEventsByTime.length > 0 && (
           <div style={{ display: "flex", alignItems: "center", gap: "6px", marginLeft: "auto", paddingLeft: "12px" }}>
             <span style={{ fontSize: "10px", color: "#6b7280", fontWeight: 600, textTransform: "uppercase" }}>Filters:</span>
             <select
@@ -333,7 +383,7 @@ export function IntuneDashboard() {
               Reset
             </button>
             <span style={{ fontSize: "11px", color: "#64748b", fontWeight: 500, marginLeft: "4px" }}>
-              {filteredEventCount}/{events.length}
+              {filteredEventCount}/{filteredEventsByTime.length}
             </span>
             {timelineScope.filePath && (
               <>
@@ -453,15 +503,17 @@ export function IntuneDashboard() {
           </div>
         ) : (
           <>
-            {activeTab === "timeline" && <EventTimeline events={events} />}
-            {activeTab === "downloads" && <DownloadStats downloads={downloads} />}
+            {activeTab === "timeline" && <EventTimeline events={filteredEventsByTime} />}
+            {activeTab === "downloads" && <DownloadStats downloads={filteredDownloadsByTime} />}
             {activeTab === "summary" && summary && (
               <SummaryView
-                summary={summary}
+                summary={filteredSummary}
                 diagnostics={diagnostics}
-                events={events}
+                events={filteredEventsByTime}
                 sourceFile={sourceContext.analyzedPath}
                 sourceFiles={sourceContext.includedFiles}
+                timeWindow={timeWindow}
+                timeWindowLabel={timeWindowLabel}
               />
             )}
           </>
@@ -571,12 +623,16 @@ function SummaryView({
   events,
   sourceFile,
   sourceFiles,
+  timeWindow,
+  timeWindowLabel,
 }: {
   summary: IntuneSummary;
   diagnostics: IntuneDiagnosticInsight[];
   events: IntuneEvent[];
   sourceFile: string | null;
   sourceFiles: string[];
+  timeWindow: IntuneTimeWindowPreset;
+  timeWindowLabel: string;
 }) {
   const evidenceBundle = useIntuneStore((s) => s.evidenceBundle);
   const setActiveTab = useIntuneStore((s) => s.setActiveTab);
@@ -592,6 +648,7 @@ function SummaryView({
   const [showAllConfidenceReasons, setShowAllConfidenceReasons] = useState(false);
   const [showAllRepeatedFailures, setShowAllRepeatedFailures] = useState(false);
   const [showCoverageDetails, setShowCoverageDetails] = useState(false);
+  const isWindowFiltered = timeWindow !== "all";
 
   const coverageSectionRef = useRef<HTMLDivElement | null>(null);
   const confidenceSectionRef = useRef<HTMLDivElement | null>(null);
@@ -637,6 +694,10 @@ function SummaryView({
         repeatedFailures,
       }),
     [diagnostics, diagnosticsConfidence, diagnosticsCoverage, repeatedFailures, summary]
+  );
+  const remediationPlan = useMemo(
+    () => buildRemediationPlan(diagnostics),
+    [diagnostics]
   );
 
   function scrollToSection(section: SummaryConclusionSection) {
@@ -765,6 +826,26 @@ function SummaryView({
       {summary.logTimeSpan && (
         <div style={{ marginBottom: "12px", color: "#666" }}>
           <strong>Log Time Span:</strong> {summary.logTimeSpan}
+        </div>
+      )}
+
+      {isWindowFiltered && (
+        <div
+          style={{
+            marginBottom: "12px",
+            padding: "10px 12px",
+            borderRadius: "8px",
+            border: "1px solid #bfdbfe",
+            backgroundColor: "#eff6ff",
+            color: "#1e3a8a",
+            fontSize: "12px",
+            lineHeight: 1.5,
+          }}
+        >
+          <div style={{ fontWeight: 700, marginBottom: "4px" }}>Activity window: {timeWindowLabel}</div>
+          <div>
+            Timeline events, download rows, and activity metrics are filtered to this recent slice relative to the latest parsed log activity. Diagnostics guidance, confidence, and repeated-failure analysis still reflect the full analyzed source set.
+          </div>
         </div>
       )}
 
@@ -1015,6 +1096,72 @@ function SummaryView({
         </SectionCard>
       </div>
 
+      {remediationPlan.length > 0 && (
+        <div style={{ margin: "16px 0 20px" }}>
+          <SectionCard
+            title="Remediation Assistant"
+            subtitle="Start with the highest-priority actions that best match the current failure pattern."
+          >
+            <div style={{ display: "grid", gap: "10px" }}>
+              {remediationPlan.map((step, index) => (
+                <div
+                  key={`${step.diagnosticId}-${step.title}`}
+                  style={{
+                    border: "1px solid #dbe3ee",
+                    borderRadius: "8px",
+                    backgroundColor: "#f8fafc",
+                    padding: "10px 12px",
+                  }}
+                >
+                  <div
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      gap: "12px",
+                      alignItems: "center",
+                      marginBottom: "6px",
+                      flexWrap: "wrap",
+                    }}
+                  >
+                    <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+                      <span
+                        style={{
+                          width: "22px",
+                          height: "22px",
+                          borderRadius: "999px",
+                          backgroundColor: "#dbeafe",
+                          color: "#1d4ed8",
+                          display: "inline-flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          fontSize: "11px",
+                          fontWeight: 800,
+                        }}
+                      >
+                        {index + 1}
+                      </span>
+                      <div style={{ fontSize: "13px", fontWeight: 700, color: "#0f172a" }}>{step.title}</div>
+                    </div>
+                    <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
+                      <DiagnosticMetaBadge label={step.priority} tone={getPriorityTone(step.priority)} />
+                      <DiagnosticMetaBadge label={step.category} tone={getCategoryTone(step.category)} />
+                    </div>
+                  </div>
+
+                  <div style={{ fontSize: "12px", color: "#334155", marginBottom: "8px", lineHeight: 1.45 }}>
+                    {step.action}
+                  </div>
+
+                  <div style={{ fontSize: "11px", color: "#64748b", lineHeight: 1.45 }}>
+                    {step.reason}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </SectionCard>
+        </div>
+      )}
+
       {diagnostics.length > 0 && (
         <div ref={diagnosticsGuidanceSectionRef} style={{ marginBottom: "20px" }}>
           <h4
@@ -1110,6 +1257,15 @@ interface SummaryConclusion {
   action: SummaryConclusionAction;
 }
 
+interface RemediationPlanStep {
+  diagnosticId: string;
+  title: string;
+  action: string;
+  reason: string;
+  priority: IntuneRemediationPriority;
+  category: IntuneDiagnosticCategory;
+}
+
 const secondaryToggleButtonStyle: React.CSSProperties = {
   fontSize: "11px",
   padding: "4px 8px",
@@ -1119,6 +1275,67 @@ const secondaryToggleButtonStyle: React.CSSProperties = {
   color: "#334155",
   cursor: "pointer",
 };
+
+function DiagnosticMetaBadge({ label, tone }: { label: string; tone: string }) {
+  return (
+    <span
+      style={{
+        fontSize: "10px",
+        textTransform: "uppercase",
+        letterSpacing: "0.06em",
+        color: tone,
+        border: `1px solid ${tone}33`,
+        backgroundColor: `${tone}12`,
+        fontWeight: 700,
+        borderRadius: "999px",
+        padding: "3px 8px",
+      }}
+    >
+      {label}
+    </span>
+  );
+}
+
+function DiagnosticChipRow({
+  label,
+  items,
+  itemTone,
+  background,
+  border,
+}: {
+  label: string;
+  items: string[];
+  itemTone: string;
+  background: string;
+  border: string;
+}) {
+  return (
+    <div>
+      <div style={{ fontSize: "11px", textTransform: "uppercase", letterSpacing: "0.05em", color: "#6b7280", marginBottom: "4px" }}>
+        {label}
+      </div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: "6px" }}>
+        {items.map((item) => (
+          <span
+            key={`${label}-${item}`}
+            style={{
+              fontSize: "10px",
+              borderRadius: "999px",
+              padding: "3px 8px",
+              color: itemTone,
+              backgroundColor: background,
+              border: `1px solid ${border}`,
+              fontWeight: 600,
+            }}
+            title={item}
+          >
+            {item}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 function ConclusionButton({
   conclusion,
@@ -1732,17 +1949,7 @@ function formatTimestampBounds(bounds: IntuneTimestampBounds): string {
 }
 
 function formatTimestamp(value: string): string {
-  const timestamp = new Date(value);
-  if (Number.isNaN(timestamp.getTime())) {
-    return value;
-  }
-  return timestamp.toLocaleString(undefined, {
-    year: "numeric",
-    month: "short",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+  return formatDisplayDateTime(value) ?? value;
 }
 
 function formatEventShare(value: number): string {
@@ -1806,6 +2013,8 @@ function DiagnosticCard({
   diagnostic: IntuneDiagnosticInsight;
 }) {
   const accent = getDiagnosticAccent(diagnostic.severity);
+  const priorityTone = getPriorityTone(diagnostic.remediationPriority);
+  const categoryTone = getCategoryTone(diagnostic.category);
 
   return (
     <div
@@ -1829,22 +2038,65 @@ function DiagnosticCard({
         <div style={{ fontSize: "13px", fontWeight: 600, color: "#111827" }}>
           {diagnostic.title}
         </div>
-        <span
-          style={{
-            fontSize: "10px",
-            textTransform: "uppercase",
-            letterSpacing: "0.06em",
-            color: accent.accent,
-            fontWeight: 700,
-          }}
-        >
-          {diagnostic.severity}
-        </span>
+        <div style={{ display: "flex", gap: "6px", flexWrap: "wrap", justifyContent: "flex-end" }}>
+          <DiagnosticMetaBadge label={diagnostic.severity} tone={accent.accent} />
+          <DiagnosticMetaBadge label={diagnostic.category} tone={categoryTone} />
+          <DiagnosticMetaBadge label={diagnostic.remediationPriority} tone={priorityTone} />
+        </div>
       </div>
 
       <div style={{ fontSize: "12px", color: "#374151", marginBottom: "10px" }}>
         {diagnostic.summary}
       </div>
+
+      {diagnostic.likelyCause && (
+        <div
+          style={{
+            marginBottom: "10px",
+            padding: "8px 10px",
+            borderRadius: "6px",
+            backgroundColor: "rgba(255,255,255,0.55)",
+            border: `1px solid ${accent.border}`,
+          }}
+        >
+          <div style={{ fontSize: "11px", textTransform: "uppercase", letterSpacing: "0.05em", color: "#6b7280", marginBottom: "4px" }}>
+            Likely Cause
+          </div>
+          <div style={{ fontSize: "12px", color: "#1f2937", lineHeight: 1.45 }}>{diagnostic.likelyCause}</div>
+        </div>
+      )}
+
+      {(diagnostic.focusAreas.length > 0 || diagnostic.affectedSourceFiles.length > 0 || diagnostic.relatedErrorCodes.length > 0) && (
+        <div style={{ display: "grid", gap: "8px", marginBottom: "10px" }}>
+          {diagnostic.focusAreas.length > 0 && (
+            <DiagnosticChipRow
+              label="Focus Areas"
+              items={diagnostic.focusAreas}
+              itemTone="#0f766e"
+              background="#ecfeff"
+              border="#99f6e4"
+            />
+          )}
+          {diagnostic.affectedSourceFiles.length > 0 && (
+            <DiagnosticChipRow
+              label="Affected Sources"
+              items={diagnostic.affectedSourceFiles.map((file) => getFileName(file))}
+              itemTone="#1d4ed8"
+              background="#eff6ff"
+              border="#bfdbfe"
+            />
+          )}
+          {diagnostic.relatedErrorCodes.length > 0 && (
+            <DiagnosticChipRow
+              label="Error Codes"
+              items={diagnostic.relatedErrorCodes}
+              itemTone="#b45309"
+              background="#fffbeb"
+              border="#fde68a"
+            />
+          )}
+        </div>
+      )}
 
       <div style={{ display: "grid", gap: "8px" }}>
         <div>
@@ -1940,6 +2192,78 @@ function getDiagnosticAccent(severity: IntuneDiagnosticSeverity) {
   }
 }
 
+function getPriorityTone(priority: IntuneRemediationPriority) {
+  switch (priority) {
+    case "Immediate":
+      return "#b91c1c";
+    case "High":
+      return "#b45309";
+    case "Medium":
+      return "#1d4ed8";
+    case "Monitor":
+    default:
+      return "#475569";
+  }
+}
+
+function getCategoryTone(category: IntuneDiagnosticCategory) {
+  switch (category) {
+    case "Download":
+      return "#c2410c";
+    case "Install":
+      return "#7c3aed";
+    case "Timeout":
+      return "#b45309";
+    case "Script":
+      return "#0f766e";
+    case "Policy":
+      return "#2563eb";
+    case "State":
+      return "#0f766e";
+    case "General":
+    default:
+      return "#475569";
+  }
+}
+
+function buildRemediationPlan(
+  diagnostics: IntuneDiagnosticInsight[]
+): RemediationPlanStep[] {
+  return [...diagnostics]
+    .sort((left, right) => {
+      return remediationPriorityRank(right.remediationPriority) - remediationPriorityRank(left.remediationPriority);
+    })
+    .slice(0, 3)
+    .map((diagnostic) => ({
+      diagnosticId: diagnostic.id,
+      title: diagnostic.title,
+      action:
+        diagnostic.suggestedFixes[0] ??
+        diagnostic.nextChecks[0] ??
+        diagnostic.summary,
+      reason:
+        diagnostic.likelyCause ??
+        diagnostic.evidence[0] ??
+        diagnostic.summary,
+      priority: diagnostic.remediationPriority,
+      category: diagnostic.category,
+    }));
+}
+
+function remediationPriorityRank(priority: IntuneRemediationPriority): number {
+  switch (priority) {
+    case "Immediate":
+      return 4;
+    case "High":
+      return 3;
+    case "Medium":
+      return 2;
+    case "Monitor":
+    default:
+      return 1;
+  }
+}
+
 function getConclusionTone(tone: SummaryConclusion["tone"]) {
   switch (tone) {
     case "critical":
@@ -1996,6 +2320,244 @@ function getFileName(path: string): string {
   const normalized = path.replace(/\\/g, "/");
   const segments = normalized.split("/");
   return segments[segments.length - 1] || path;
+}
+
+function getLatestActivityTimestamp(
+  events: IntuneEvent[],
+  downloads: DownloadStat[]
+): number | null {
+  let latest: number | null = null;
+
+  for (const event of events) {
+    const candidate = parseIntuneTimestamp(event.startTime) ?? parseIntuneTimestamp(event.endTime);
+    if (candidate != null && (latest == null || candidate > latest)) {
+      latest = candidate;
+    }
+  }
+
+  for (const download of downloads) {
+    const candidate = parseIntuneTimestamp(download.timestamp);
+    if (candidate != null && (latest == null || candidate > latest)) {
+      latest = candidate;
+    }
+  }
+
+  return latest;
+}
+
+function filterEventsByTimeWindow(
+  events: IntuneEvent[],
+  preset: IntuneTimeWindowPreset,
+  anchorTimestamp: number | null
+): IntuneEvent[] {
+  const windowMs = getTimeWindowDurationMs(preset);
+  if (windowMs == null || anchorTimestamp == null) {
+    return events;
+  }
+
+  const threshold = anchorTimestamp - windowMs;
+  return events.filter((event) => {
+    const timestamp = parseIntuneTimestamp(event.startTime) ?? parseIntuneTimestamp(event.endTime);
+    return timestamp != null && timestamp >= threshold;
+  });
+}
+
+function filterDownloadsByTimeWindow(
+  downloads: DownloadStat[],
+  preset: IntuneTimeWindowPreset,
+  anchorTimestamp: number | null
+): DownloadStat[] {
+  const windowMs = getTimeWindowDurationMs(preset);
+  if (windowMs == null || anchorTimestamp == null) {
+    return downloads;
+  }
+
+  const threshold = anchorTimestamp - windowMs;
+  return downloads.filter((download) => {
+    const timestamp = parseIntuneTimestamp(download.timestamp);
+    return timestamp != null && timestamp >= threshold;
+  });
+}
+
+function buildWindowedSummary(
+  events: IntuneEvent[],
+  downloads: DownloadStat[]
+): IntuneSummary {
+  const summaryEvents = events.filter((event) => isSummarySignalEvent(event));
+  let win32Apps = 0;
+  let wingetApps = 0;
+  let scripts = 0;
+  let remediations = 0;
+  let succeeded = 0;
+  let failed = 0;
+  let inProgress = 0;
+  let pending = 0;
+  let timedOut = 0;
+  let failedScripts = 0;
+
+  for (const event of summaryEvents) {
+    switch (event.eventType) {
+      case "Win32App":
+        win32Apps += 1;
+        break;
+      case "WinGetApp":
+        wingetApps += 1;
+        break;
+      case "PowerShellScript":
+        scripts += 1;
+        break;
+      case "Remediation":
+        remediations += 1;
+        break;
+      default:
+        break;
+    }
+
+    switch (event.status) {
+      case "Success":
+        succeeded += 1;
+        break;
+      case "Failed":
+        failed += 1;
+        if (event.eventType === "PowerShellScript") {
+          failedScripts += 1;
+        }
+        break;
+      case "InProgress":
+        inProgress += 1;
+        break;
+      case "Pending":
+        pending += 1;
+        break;
+      case "Timeout":
+        timedOut += 1;
+        failed += 1;
+        if (event.eventType === "PowerShellScript") {
+          failedScripts += 1;
+        }
+        break;
+      default:
+        break;
+    }
+  }
+
+  const successfulDownloads = downloads.filter((download) => download.success).length;
+  const failedDownloads = downloads.length - successfulDownloads;
+
+  return {
+    totalEvents: summaryEvents.length,
+    win32Apps,
+    wingetApps,
+    scripts,
+    remediations,
+    succeeded,
+    failed,
+    inProgress,
+    pending,
+    timedOut,
+    totalDownloads: downloads.length,
+    successfulDownloads,
+    failedDownloads,
+    failedScripts,
+    logTimeSpan: calculateEventTimeSpan(events),
+  };
+}
+
+function isSummarySignalEvent(event: IntuneEvent): boolean {
+  switch (event.eventType) {
+    case "Win32App":
+    case "WinGetApp":
+    case "PowerShellScript":
+    case "Remediation":
+    case "PolicyEvaluation":
+    case "ContentDownload":
+    case "Esp":
+    case "SyncSession":
+      return true;
+    case "Other":
+      return event.status === "Failed"
+        || event.status === "Timeout"
+        || event.status === "Pending"
+        || event.status === "InProgress";
+    default:
+      return false;
+  }
+}
+
+function calculateEventTimeSpan(events: IntuneEvent[]): string | null {
+  let earliest: number | null = null;
+  let latest: number | null = null;
+
+  for (const event of events) {
+    for (const rawTimestamp of [event.startTime, event.endTime]) {
+      const timestamp = parseIntuneTimestamp(rawTimestamp);
+      if (timestamp == null) {
+        continue;
+      }
+
+      if (earliest == null || timestamp < earliest) {
+        earliest = timestamp;
+      }
+      if (latest == null || timestamp > latest) {
+        latest = timestamp;
+      }
+    }
+  }
+
+  if (earliest == null || latest == null) {
+    return null;
+  }
+
+  const totalSeconds = Math.max(0, Math.round((latest - earliest) / 1000));
+  if (totalSeconds < 60) {
+    return `${totalSeconds}s`;
+  }
+
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+
+  if (hours > 0) {
+    return `${hours}h ${minutes}m ${seconds}s`;
+  }
+
+  return `${minutes}m ${seconds}s`;
+}
+
+function getTimeWindowDurationMs(preset: IntuneTimeWindowPreset): number | null {
+  switch (preset) {
+    case "last-hour":
+      return 60 * 60 * 1000;
+    case "last-6-hours":
+      return 6 * 60 * 60 * 1000;
+    case "last-day":
+      return 24 * 60 * 60 * 1000;
+    case "last-7-days":
+      return 7 * 24 * 60 * 60 * 1000;
+    case "all":
+    default:
+      return null;
+  }
+}
+
+function getTimeWindowLabel(preset: IntuneTimeWindowPreset): string {
+  switch (preset) {
+    case "last-hour":
+      return "Last Hour";
+    case "last-6-hours":
+      return "Last 6 Hours";
+    case "last-day":
+      return "Last Day";
+    case "last-7-days":
+      return "Last 7 Days";
+    case "all":
+    default:
+      return "All Activity";
+  }
+}
+
+function parseIntuneTimestamp(value: string | null | undefined): number | null {
+  return parseDisplayDateTimeValue(value);
 }
 
 function SummaryCard({

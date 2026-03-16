@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(grep -rn \"const analyzeDsregcmdSource\\\\|function analyzeDsregcmdSource\" /c/Users/AdamGell/Documents/GitHub/cmtraceopen/src --include=*.ts --include=*.tsx)",
+      "Bash(find /c/Users/AdamGell/Documents/GitHub/cmtraceopen -type f -name *evidence* -o -name *intune-profile*)",
+      "Bash(cargo check:*)",
+      "Bash(npx tsc:*)",
+      "Bash(cargo test:*)"
+    ]
+  }
+}

@@ -45,8 +45,7 @@ static APPWORKLOAD_INSTALL_RE: Lazy<Regex> = Lazy::new(|| {
     .unwrap()
 });
 static APPWORKLOAD_RETRY_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r#"(?i)(?:retry|retrying|reattempt|will\s+retry|attempt\s+\d+\s+of\s+\d+)"#)
-        .unwrap()
+    Regex::new(r#"(?i)(?:retry|retrying|reattempt|will\s+retry|attempt\s+\d+\s+of\s+\d+)"#).unwrap()
 });
 static APPWORKLOAD_STALL_RE: Lazy<Regex> = Lazy::new(|| {
     Regex::new(
@@ -148,8 +147,7 @@ static ERROR_CODE_RE: Lazy<Regex> = Lazy::new(|| {
     .unwrap()
 });
 static EXIT_CODE_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r#"(?i)exit\s*code(?:\s+of\s+the\s+script)?\s*(?:is|[=:])\s*(-?\d+)"#)
-        .unwrap()
+    Regex::new(r#"(?i)exit\s*code(?:\s+of\s+the\s+script)?\s*(?:is|[=:])\s*(-?\d+)"#).unwrap()
 });
 static PENDING_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r#"(?i)(?:pending|queued|waiting|scheduled|requesting)"#).unwrap());
@@ -315,7 +313,10 @@ pub fn extract_events(lines: &[ImeLine], source_file: &str) -> Vec<IntuneEvent> 
             name,
             guid,
             status,
-            start_time: line.timestamp.clone(),
+            start_time: line
+                .timestamp_utc
+                .clone()
+                .or_else(|| line.timestamp.clone()),
             end_time: None,
             duration_secs: None,
             error_code: extract_error_code(&line.message),
@@ -376,7 +377,10 @@ fn extract_appworkload_event(
         name,
         guid,
         status,
-        start_time: line.timestamp.clone(),
+        start_time: line
+            .timestamp_utc
+            .clone()
+            .or_else(|| line.timestamp.clone()),
         end_time: None,
         duration_secs: None,
         error_code: extract_error_code(msg),
@@ -621,8 +625,7 @@ fn is_appworkload_event_candidate(msg: &str) -> bool {
             "cangenerate",
             "isappreportable",
         ],
-    )
-    {
+    ) {
         return false;
     }
 
@@ -669,8 +672,7 @@ fn is_healthscripts_event_candidate(msg: &str) -> bool {
             "job is queued and will be scheduled",
             "completed user session",
         ],
-    )
-    {
+    ) {
         return false;
     }
 
@@ -694,7 +696,10 @@ fn is_healthscripts_event_candidate(msg: &str) -> bool {
 fn is_client_health_event_candidate(msg: &str) -> bool {
     CLIENT_HEALTH_HEARTBEAT_SUCCESS_RE.is_match(msg)
         || CLIENT_HEALTH_HEARTBEAT_FAILURE_RE.is_match(msg)
-        || matches!(parse_client_health_summary(msg), Some((_, IntuneStatus::Failed, _)))
+        || matches!(
+            parse_client_health_summary(msg),
+            Some((_, IntuneStatus::Failed, _))
+        )
 }
 
 fn is_client_cert_check_event_candidate(msg: &str) -> bool {
@@ -878,7 +883,7 @@ fn build_source_specific_name(
                 return None;
             };
             Some(match short_guid {
-                Some(short) => format!("AppWorkload {phase} ({short}...)") ,
+                Some(short) => format!("AppWorkload {phase} ({short}...)"),
                 None => format!("AppWorkload {phase}"),
             })
         }
@@ -895,12 +900,14 @@ fn build_source_specific_name(
                 return None;
             };
             Some(match short_guid {
-                Some(short) => format!("AppActionProcessor {area} ({short}...)") ,
+                Some(short) => format!("AppActionProcessor {area} ({short}...)"),
                 None => format!("AppActionProcessor {area}"),
             })
         }
         ImeSourceKind::AgentExecutor => {
-            let area = if REMEDIATION_SCRIPT_RE.is_match(msg) || *event_type == IntuneEventType::Remediation {
+            let area = if REMEDIATION_SCRIPT_RE.is_match(msg)
+                || *event_type == IntuneEventType::Remediation
+            {
                 "Remediation Script"
             } else if DETECTION_SCRIPT_RE.is_match(msg) {
                 "Detection Script"
@@ -910,7 +917,7 @@ fn build_source_specific_name(
                 "PowerShell Script"
             };
             Some(match short_guid {
-                Some(short) => format!("AgentExecutor {area} ({short}...)") ,
+                Some(short) => format!("AgentExecutor {area} ({short}...)"),
                 None => format!("AgentExecutor {area}"),
             })
         }
@@ -925,7 +932,7 @@ fn build_source_specific_name(
                 "Schedule"
             };
             Some(match short_guid {
-                Some(short) => format!("HealthScripts {area} ({short}...)") ,
+                Some(short) => format!("HealthScripts {area} ({short}...)"),
                 None => format!("HealthScripts {area}"),
             })
         }
@@ -963,14 +970,14 @@ fn build_source_specific_name(
                 None
             }
         }
-        ImeSourceKind::DeviceHealthMonitoring => parse_device_health_app_crash(msg).map(
-            |(app_name, exception_code)| {
+        ImeSourceKind::DeviceHealthMonitoring => {
+            parse_device_health_app_crash(msg).map(|(app_name, exception_code)| {
                 format!(
                     "DeviceHealthMonitoring App Crash: {} ({})",
                     app_name, exception_code
                 )
-            },
-        ),
+            })
+        }
         ImeSourceKind::Sensor => {
             if SENSOR_MEMORY_FAILURE_RE.is_match(msg) {
                 Some("Sensor Hardware Readiness Memory Failure".to_string())
@@ -1089,7 +1096,10 @@ fn pair_events(events: &mut Vec<IntuneEvent>) {
             continue;
         }
 
-        let Some(start_index) = open_events.get_mut(&identity_key).and_then(|indices| indices.pop()) else {
+        let Some(start_index) = open_events
+            .get_mut(&identity_key)
+            .and_then(|indices| indices.pop())
+        else {
             continue;
         };
         if consumed_end_indices.contains(&index) {
@@ -1103,7 +1113,10 @@ fn pair_events(events: &mut Vec<IntuneEvent>) {
             .clone()
             .or_else(|| events[start_index].error_code.clone());
 
-        if let (Some(start), Some(end)) = (&events[start_index].start_time, &events[start_index].end_time) {
+        if let (Some(start), Some(end)) = (
+            &events[start_index].start_time,
+            &events[start_index].end_time,
+        ) {
             events[start_index].duration_secs = estimate_duration(start, end);
         }
 
@@ -1177,6 +1190,12 @@ fn normalize_identity_fragment(value: &str) -> String {
 }
 
 fn estimate_duration(start: &str, end: &str) -> Option<f64> {
+    if let (Some(start_dt), Some(end_dt)) =
+        (parse_event_timestamp(start), parse_event_timestamp(end))
+    {
+        return Some((end_dt - start_dt).num_milliseconds().abs() as f64 / 1000.0);
+    }
+
     let parse_seconds = |ts: &str| -> Option<f64> {
         let time_part = ts.split_whitespace().last()?;
         let parts: Vec<&str> = time_part.split(':').collect();
@@ -1200,6 +1219,18 @@ fn estimate_duration(start: &str, end: &str) -> Option<f64> {
     }
 }
 
+fn parse_event_timestamp(value: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+    if let Ok(parsed) = chrono::DateTime::parse_from_rfc3339(value) {
+        return Some(parsed.with_timezone(&chrono::Utc));
+    }
+
+    let naive = chrono::NaiveDateTime::parse_from_str(value, "%m-%d-%Y %H:%M:%S%.f").ok()?;
+    Some(chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(
+        naive,
+        chrono::Utc,
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1208,9 +1239,38 @@ mod tests {
         ImeLine {
             line_number,
             timestamp: Some(timestamp.to_string()),
+            timestamp_utc: Some(timestamp.to_string()),
             message: message.to_string(),
             component: None,
         }
+    }
+
+    #[test]
+    fn extract_events_prefers_utc_normalized_timestamp() {
+        let events = extract_events(
+            &[ImeLine {
+                line_number: 1,
+                timestamp: Some("03-12-2026 11:16:42.332".to_string()),
+                timestamp_utc: Some("2026-03-12T11:16:42.332Z".to_string()),
+                message: "Assignment evaluation failed for app with id: a1b2c3d4-e5f6-7890-abcd-ef1234567890".to_string(),
+                component: None,
+            }],
+            "C:/Logs/AppActionProcessor.log",
+        );
+
+        assert_eq!(events.len(), 1);
+        assert_eq!(
+            events[0].start_time.as_deref(),
+            Some("2026-03-12T11:16:42.332Z")
+        );
+    }
+
+    #[test]
+    fn estimate_duration_supports_iso_timestamps() {
+        assert_eq!(
+            estimate_duration("2026-03-12T11:16:42.332Z", "2026-03-12T11:16:47.332Z"),
+            Some(5.0)
+        );
     }
 
     #[test]
@@ -1442,7 +1502,10 @@ mod tests {
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].event_type, IntuneEventType::ContentDownload);
         assert_eq!(events[0].status, IntuneStatus::Success);
-        assert_eq!(events[0].guid.as_deref(), Some("a1b2c3d4-e5f6-7890-abcd-ef1234567890"));
+        assert_eq!(
+            events[0].guid.as_deref(),
+            Some("a1b2c3d4-e5f6-7890-abcd-ef1234567890")
+        );
         assert_eq!(events[0].duration_secs, Some(5.0));
     }
 }

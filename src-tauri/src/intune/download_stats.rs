@@ -66,7 +66,7 @@ static APP_ID_JSON_RE: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r#"\"AppId\"\s*:\s*\"([0-9a-fA-F-]{36})\""#).unwrap()
 });
 static APP_NAME_JSON_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r#"\"ApplicationName\"\s*:\s*\"([^\"]+)\""#).unwrap()
+    Regex::new(r#"\"(?:ApplicationName|Name)\"\s*:\s*\"([^\"]+)\""#).unwrap()
 });
 static SETUP_FILE_JSON_RE: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r#"\"SetUpFilePath\"\s*:\s*\"([^\"]+)\""#).unwrap()
@@ -83,6 +83,8 @@ pub fn extract_downloads(lines: &[ImeLine], source_file: &str) -> Vec<DownloadSt
 
     for line in lines {
         let msg = &line.message;
+        let timestamp = line.timestamp_utc.as_deref().or(line.timestamp.as_deref());
+        let timestamp_owned = timestamp.map(|value| value.to_string());
         let Some(analysis) = DownloadLineAnalysis::from_message(msg) else {
             continue;
         };
@@ -99,7 +101,7 @@ pub fn extract_downloads(lines: &[ImeLine], source_file: &str) -> Vec<DownloadSt
                 Some(content_id.clone()),
                 display_name.clone(),
                 &analysis,
-                line.timestamp.as_deref(),
+                timestamp,
                 false,
             ) {
                 downloads.push(stat);
@@ -107,7 +109,7 @@ pub fn extract_downloads(lines: &[ImeLine], source_file: &str) -> Vec<DownloadSt
 
             active.insert(
                 content_id.clone(),
-                PartialDownload::new(Some(content_id), display_name, line.timestamp.clone()),
+                PartialDownload::new(Some(content_id), display_name, timestamp_owned.clone()),
             );
             continue;
         }
@@ -117,10 +119,10 @@ pub fn extract_downloads(lines: &[ImeLine], source_file: &str) -> Vec<DownloadSt
                 PartialDownload::new(
                     Some(content_id.clone()),
                     display_name.clone(),
-                    line.timestamp.clone(),
+                    timestamp_owned.clone(),
                 )
             });
-            apply_download_analysis(entry, &analysis, line.timestamp.as_deref());
+            apply_download_analysis(entry, &analysis, timestamp);
         }
 
         if analysis.is_complete {
@@ -129,7 +131,7 @@ pub fn extract_downloads(lines: &[ImeLine], source_file: &str) -> Vec<DownloadSt
                 Some(content_id),
                 display_name,
                 &analysis,
-                line.timestamp.as_deref(),
+                timestamp,
                 true,
             ) {
                 downloads.push(stat);
@@ -143,7 +145,7 @@ pub fn extract_downloads(lines: &[ImeLine], source_file: &str) -> Vec<DownloadSt
                 Some(content_id),
                 display_name,
                 &analysis,
-                line.timestamp.as_deref(),
+                timestamp,
                 false,
             ) {
                 downloads.push(stat);
@@ -493,12 +495,14 @@ mod tests {
             ImeLine {
                 line_number: 1,
                 timestamp: Some("01-15-2024 10:00:00.000".to_string()),
+                timestamp_utc: None,
                 message: "Starting content download for app id: a1b2c3d4-e5f6-7890-abcd-ef1234567890".to_string(),
                 component: None,
             },
             ImeLine {
                 line_number: 2,
                 timestamp: Some("01-15-2024 10:00:05.000".to_string()),
+                timestamp_utc: None,
                 message: "Download completed successfully. Content size: 5242880 bytes, speed: 1048576 Bps, Delivery Optimization: 75.5%".to_string(),
                 component: None,
             },
@@ -516,12 +520,14 @@ mod tests {
             ImeLine {
                 line_number: 1,
                 timestamp: Some("01-15-2024 10:00:00.000".to_string()),
+                timestamp_utc: None,
                 message: "Starting content download for app id: a1b2c3d4-e5f6-7890-abcd-ef1234567890".to_string(),
                 component: None,
             },
             ImeLine {
                 line_number: 2,
                 timestamp: Some("01-15-2024 10:00:30.000".to_string()),
+                timestamp_utc: None,
                 message: "Content download stalled with no progress for app id: a1b2c3d4-e5f6-7890-abcd-ef1234567890".to_string(),
                 component: None,
             },
@@ -537,6 +543,7 @@ mod tests {
         let lines = vec![ImeLine {
             line_number: 1,
             timestamp: Some("01-15-2024 10:00:00.000".to_string()),
+            timestamp_utc: None,
             message: "Starting content download for app id: a1b2c3d4-e5f6-7890-abcd-ef1234567890".to_string(),
             component: None,
         }];
@@ -551,12 +558,14 @@ mod tests {
             ImeLine {
                 line_number: 1,
                 timestamp: Some("01-15-2024 10:00:00.000".to_string()),
+                timestamp_utc: None,
                 message: "Starting content download for app id: a1b2c3d4-e5f6-7890-abcd-ef1234567890".to_string(),
                 component: None,
             },
             ImeLine {
                 line_number: 2,
                 timestamp: Some("01-15-2024 10:00:05.000".to_string()),
+                timestamp_utc: None,
                 message: "Download failed, retrying content download for app id: a1b2c3d4-e5f6-7890-abcd-ef1234567890".to_string(),
                 component: None,
             },
@@ -572,6 +581,7 @@ mod tests {
         let lines = vec![ImeLine {
             line_number: 1,
             timestamp: Some("01-15-2024 10:00:00.000".to_string()),
+            timestamp_utc: None,
             message: "Adding new state transition - From: Install In Progress To: Download In Progress With Event: Download Started.".to_string(),
             component: None,
         }];
@@ -585,6 +595,7 @@ mod tests {
         let lines = vec![ImeLine {
             line_number: 1,
             timestamp: Some("01-15-2024 10:00:00.000".to_string()),
+            timestamp_utc: None,
             message: r#"RequestPayload: {\"AppId\":\"a1b2c3d4-e5f6-7890-abcd-ef1234567890\",\"MaxRetries\":3,\"RetryIntervalInMinutes\":5,\"DownloadStartTimeUTC\":\"\\/Date(-62135578800000)\\/\"}"#.to_string(),
             component: None,
         }];
@@ -599,12 +610,14 @@ mod tests {
             ImeLine {
                 line_number: 1,
                 timestamp: Some("01-15-2024 10:00:00.000".to_string()),
+                timestamp_utc: None,
                 message: r#"Starting content download RequestPayload: {\"AppId\":\"a1b2c3d4-e5f6-7890-abcd-ef1234567890\",\"ApplicationName\":\"Contoso App\"}"#.to_string(),
                 component: None,
             },
             ImeLine {
                 line_number: 2,
                 timestamp: Some("01-15-2024 10:00:05.000".to_string()),
+                timestamp_utc: None,
                 message: r#"Download completed successfully RequestPayload: {\"AppId\":\"a1b2c3d4-e5f6-7890-abcd-ef1234567890\",\"ApplicationName\":\"Contoso App\"}"#.to_string(),
                 component: None,
             },

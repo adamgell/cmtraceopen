@@ -1,4 +1,5 @@
 import type { EvidenceBundleMetadata } from "./evidence";
+import type { EventLogAnalysis } from "./event-log";
 
 export type IntuneEventType =
   | "Win32App"
@@ -137,14 +138,35 @@ export interface IntuneSummary {
 
 export type IntuneDiagnosticSeverity = "Info" | "Warning" | "Error";
 
+export type IntuneDiagnosticCategory =
+  | "Download"
+  | "Install"
+  | "Timeout"
+  | "Script"
+  | "Policy"
+  | "State"
+  | "General";
+
+export type IntuneRemediationPriority =
+  | "Monitor"
+  | "Medium"
+  | "High"
+  | "Immediate";
+
 export interface IntuneDiagnosticInsight {
   id: string;
   severity: IntuneDiagnosticSeverity;
+  category: IntuneDiagnosticCategory;
+  remediationPriority: IntuneRemediationPriority;
   title: string;
   summary: string;
+  likelyCause: string | null;
   evidence: string[];
   nextChecks: string[];
   suggestedFixes: string[];
+  focusAreas: string[];
+  affectedSourceFiles: string[];
+  relatedErrorCodes: string[];
 }
 
 export interface IntuneSourceContext {
@@ -161,6 +183,13 @@ export interface IntuneTimelineScope {
   filePath: string | null;
 }
 
+export type IntuneTimeWindowPreset =
+  | "all"
+  | "last-hour"
+  | "last-6-hours"
+  | "last-day"
+  | "last-7-days";
+
 export type IntuneAnalysisPhase = "idle" | "analyzing" | "ready" | "empty" | "error";
 
 export type IntuneAnalysisSourceKind = "file" | "folder" | "known" | "unknown";
@@ -170,6 +199,7 @@ export type IntuneAnalysisProgressStage =
   | "enumerating"
   | "reading-file"
   | "completed-file"
+  | "parsing-event-logs"
   | "finalizing";
 
 export interface IntuneAnalysisProgress {
@@ -207,6 +237,7 @@ export interface IntuneAnalysisResult {
   diagnosticsConfidence: IntuneDiagnosticsConfidence;
   repeatedFailures: IntuneRepeatedFailureGroup[];
   evidenceBundle?: EvidenceBundleMetadata | null;
+  eventLogAnalysis?: EventLogAnalysis | null;
 }
 
 export interface IntuneResultMetadata {
@@ -214,4 +245,5 @@ export interface IntuneResultMetadata {
   diagnosticsConfidence: IntuneDiagnosticsConfidence;
   repeatedFailures: IntuneRepeatedFailureGroup[];
   evidenceBundle?: EvidenceBundleMetadata | null;
+  eventLogAnalysis?: EventLogAnalysis | null;
 }

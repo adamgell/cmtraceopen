@@ -5,3 +5,4 @@ pub mod file_ops;
 pub mod filter;
 pub mod intune;
 pub mod parsing;
+pub mod system_preferences;

@@ -1,8 +1,10 @@
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
+use rayon::prelude::*;
 use serde::Serialize;
 use serde_json::Value;
 use tauri::{async_runtime, AppHandle, Emitter};
@@ -10,12 +12,14 @@ use tauri::{async_runtime, AppHandle, Emitter};
 use crate::error_db::lookup::lookup_error_code;
 use crate::intune::download_stats;
 use crate::intune::event_tracker;
+use crate::intune::evtx_parser;
 use crate::intune::ime_parser;
 use crate::intune::models::{
-    DownloadStat, EvidenceBundleArtifactCounts, EvidenceBundleMetadata, IntuneAnalysisResult,
-    IntuneDiagnosticInsight, IntuneDiagnosticSeverity, IntuneDiagnosticsConfidence,
-    IntuneDiagnosticsConfidenceLevel, IntuneDiagnosticsCoverage, IntuneDiagnosticsFileCoverage,
-    IntuneDominantSource, IntuneEvent, IntuneEventType, IntuneRepeatedFailureGroup, IntuneStatus,
+    DownloadStat, EvidenceBundleArtifactCounts, EvidenceBundleMetadata, EventLogAnalysis,
+    IntuneAnalysisResult, IntuneDiagnosticCategory, IntuneDiagnosticInsight,
+    IntuneDiagnosticSeverity, IntuneDiagnosticsConfidence, IntuneDiagnosticsConfidenceLevel,
+    IntuneDiagnosticsCoverage, IntuneDiagnosticsFileCoverage, IntuneDominantSource, IntuneEvent,
+    IntuneEventType, IntuneRemediationPriority, IntuneRepeatedFailureGroup, IntuneStatus,
     IntuneSummary, IntuneTimestampBounds,
 };
 use crate::intune::timeline;
@@ -66,9 +70,12 @@ struct IntuneAnalysisProgressPayload {
 pub async fn analyze_intune_logs(
     path: String,
     request_id: String,
+    include_live_event_logs: bool,
     app: AppHandle,
 ) -> Result<IntuneAnalysisResult, String> {
-    async_runtime::spawn_blocking(move || analyze_intune_logs_blocking(path, request_id, app))
+    async_runtime::spawn_blocking(move || {
+        analyze_intune_logs_blocking(path, request_id, include_live_event_logs, app)
+    })
         .await
         .map_err(|error| format!("Intune analysis task failed: {}", error))?
 }
@@ -76,6 +83,7 @@ pub async fn analyze_intune_logs(
 fn analyze_intune_logs_blocking(
     path: String,
     request_id: String,
+    include_live_event_logs: bool,
     app: AppHandle,
 ) -> Result<IntuneAnalysisResult, String> {
     let analysis_started = Instant::now();
@@ -121,125 +129,33 @@ fn analyze_intune_logs_blocking(
         .map(|p| p.to_string_lossy().to_string())
         .collect();
 
+    let completed_files = AtomicUsize::new(0);
+    let mut processed_files: Vec<ProcessedIntuneFile> = source_paths
+        .par_iter()
+        .enumerate()
+        .map(|(index, source_path)| {
+            analyze_intune_source_file(
+                source_path,
+                index,
+                total_files,
+                &request_id,
+                &app,
+                &completed_files,
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    processed_files.sort_by_key(|file| file.index);
+
+    let completed_files = completed_files.load(Ordering::Relaxed);
     let mut all_events = Vec::new();
     let mut all_downloads = Vec::new();
     let mut coverage = Vec::new();
-    let mut completed_files = 0usize;
 
-    for (index, source_path) in source_paths.iter().enumerate() {
-        let file_started = Instant::now();
-        let source_file = source_path.to_string_lossy().to_string();
-        eprintln!("event=intune_analysis_file_start file=\"{}\"", source_file);
-        emit_analysis_progress(
-            &app,
-            &request_id,
-            "reading-file",
-            format!(
-                "Reading {} ({}/{})",
-                display_file_name(&source_file),
-                index + 1,
-                total_files
-            ),
-            Some(format_progress_detail(index, total_files, &source_file)),
-            Some(source_file.clone()),
-            completed_files,
-            Some(total_files),
-        );
-        let content = fs::read_to_string(source_path)
-            .map_err(|e| format!("Failed to read file '{}': {}", source_file, e))?;
-
-        let lines = ime_parser::parse_ime_content(&content);
-        let rotation = detect_rotation_metadata(source_path);
-        if lines.is_empty() {
-            coverage.push(CoverageAccumulator {
-                coverage: IntuneDiagnosticsFileCoverage {
-                    file_path: source_file.clone(),
-                    event_count: 0,
-                    download_count: 0,
-                    timestamp_bounds: None,
-                    is_rotated_segment: false,
-                    rotation_group: None,
-                },
-                rotation_candidate: rotation.rotation_group,
-                is_explicit_rotated_segment: rotation.is_rotated_segment,
-            });
-            eprintln!(
-                "event=intune_analysis_file_complete file=\"{}\" line_count=0 event_count=0 download_count=0 elapsed_ms={}",
-                source_file,
-                file_started.elapsed().as_millis()
-            );
-            completed_files += 1;
-            emit_analysis_progress(
-                &app,
-                &request_id,
-                "completed-file",
-                format!(
-                    "Indexed {} ({}/{})",
-                    display_file_name(&source_file),
-                    completed_files,
-                    total_files
-                ),
-                Some(format_progress_detail(
-                    completed_files,
-                    total_files,
-                    &source_file,
-                )),
-                Some(source_file.clone()),
-                completed_files,
-                Some(total_files),
-            );
-            continue;
-        }
-
-        let file_events = event_tracker::extract_events(&lines, &source_file);
-        let file_downloads = download_stats::extract_downloads(&lines, &source_file);
-        let file_timestamp_bounds = build_timestamp_bounds(&file_events, &file_downloads);
-
-        coverage.push(CoverageAccumulator {
-            coverage: IntuneDiagnosticsFileCoverage {
-                file_path: source_file.clone(),
-                event_count: file_events.len() as u32,
-                download_count: file_downloads.len() as u32,
-                timestamp_bounds: file_timestamp_bounds,
-                is_rotated_segment: false,
-                rotation_group: None,
-            },
-            rotation_candidate: rotation.rotation_group,
-            is_explicit_rotated_segment: rotation.is_rotated_segment,
-        });
-
-        eprintln!(
-            "event=intune_analysis_file_complete file=\"{}\" line_count={} event_count={} download_count={} elapsed_ms={}",
-            source_file,
-            lines.len(),
-            file_events.len(),
-            file_downloads.len(),
-            file_started.elapsed().as_millis()
-        );
-
-        completed_files += 1;
-        emit_analysis_progress(
-            &app,
-            &request_id,
-            "completed-file",
-            format!(
-                "Indexed {} ({}/{})",
-                display_file_name(&source_file),
-                completed_files,
-                total_files
-            ),
-            Some(format_progress_detail(
-                completed_files,
-                total_files,
-                &source_file,
-            )),
-            Some(source_file.clone()),
-            completed_files,
-            Some(total_files),
-        );
-
-        all_events.extend(file_events);
-        all_downloads.extend(file_downloads);
+    for processed_file in processed_files {
+        all_events.extend(processed_file.events);
+        all_downloads.extend(processed_file.downloads);
+        coverage.push(processed_file.coverage);
     }
 
     emit_analysis_progress(
@@ -258,6 +174,17 @@ fn analyze_intune_logs_blocking(
     );
 
     if all_events.is_empty() {
+        // Parse event logs even when no IME events were found
+        let mut event_log_analysis = load_event_log_analysis(
+            Path::new(&path),
+            &evidence_bundle,
+            include_live_event_logs,
+            &app,
+            &request_id,
+            completed_files,
+            total_files,
+        );
+
         let download_summary = summarize_download_signals(&[], &all_downloads);
         let summary = IntuneSummary {
             total_events: 0,
@@ -276,18 +203,41 @@ fn analyze_intune_logs_blocking(
             failed_scripts: 0,
             log_time_span: None,
         };
-        let diagnostics = build_diagnostics(&[], &all_downloads, &summary);
+        let mut diagnostics = build_diagnostics(&[], &all_downloads, &summary);
         let diagnostics_coverage = finalize_coverage(coverage, &[], &all_downloads);
         let repeated_failures = build_repeated_failures(&[]);
-        let diagnostics_confidence =
-            build_diagnostics_confidence(&summary, &diagnostics_coverage, &repeated_failures, &[]);
+
+        // Run correlation (no IME events, but diagnostics may have error codes)
+        if let Some(ref mut ela) = event_log_analysis {
+            ela.correlation_links =
+                evtx_parser::build_event_log_correlations(&[], &ela.entries, &diagnostics);
+
+            // Enrich diagnostics with event log corroboration evidence
+            for diag in &mut diagnostics {
+                let corroboration = evtx_parser::build_corroboration_evidence(
+                    &ela.entries,
+                    &ela.correlation_links,
+                    &diag.id,
+                );
+                diag.evidence.extend(corroboration);
+            }
+        }
+
+        let diagnostics_confidence = build_diagnostics_confidence(
+            &summary,
+            &diagnostics_coverage,
+            &repeated_failures,
+            &[],
+            &event_log_analysis,
+        );
 
         eprintln!(
-            "event=intune_analysis_complete path=\"{}\" source_count={} event_count=0 download_count={} diagnostics_count={} elapsed_ms={}",
+            "event=intune_analysis_complete path=\"{}\" source_count={} event_count=0 download_count={} diagnostics_count={} evtx_entries={} elapsed_ms={}",
             path,
             source_files.len(),
             all_downloads.len(),
             diagnostics.len(),
+            event_log_analysis.as_ref().map_or(0, |e| e.total_entry_count),
             analysis_started.elapsed().as_millis()
         );
 
@@ -302,16 +252,51 @@ fn analyze_intune_logs_blocking(
             diagnostics_confidence,
             repeated_failures,
             evidence_bundle,
+            event_log_analysis,
         });
     }
 
+    // Parse Windows Event Logs from evidence bundle (if present)
+    let mut event_log_analysis = load_event_log_analysis(
+        Path::new(&path),
+        &evidence_bundle,
+        include_live_event_logs,
+        &app,
+        &request_id,
+        completed_files,
+        total_files,
+    );
+
     let events = timeline::build_timeline(all_events);
     let summary = build_summary(&events, &all_downloads);
-    let diagnostics = build_diagnostics(&events, &all_downloads, &summary);
+    let mut diagnostics = build_diagnostics(&events, &all_downloads, &summary);
     let diagnostics_coverage = finalize_coverage(coverage, &events, &all_downloads);
     let repeated_failures = build_repeated_failures(&events);
-    let diagnostics_confidence =
-        build_diagnostics_confidence(&summary, &diagnostics_coverage, &repeated_failures, &events);
+
+    // Run event log correlation after diagnostics are built
+    if let Some(ref mut ela) = event_log_analysis {
+        ela.correlation_links =
+            evtx_parser::build_event_log_correlations(&events, &ela.entries, &diagnostics);
+
+        // Enrich diagnostics with event log corroboration evidence
+        for diag in &mut diagnostics {
+            let corroboration = evtx_parser::build_corroboration_evidence(
+                &ela.entries,
+                &ela.correlation_links,
+                &diag.id,
+            );
+            diag.evidence.extend(corroboration);
+        }
+    }
+
+    let diagnostics_confidence = build_diagnostics_confidence(
+        &summary,
+        &diagnostics_coverage,
+        &repeated_failures,
+        &events,
+        &event_log_analysis,
+    );
+
     let payload_chars: usize = events
         .iter()
         .map(|event| {
@@ -323,12 +308,13 @@ fn analyze_intune_logs_blocking(
         .sum();
 
     eprintln!(
-        "event=intune_analysis_complete path=\"{}\" source_count={} event_count={} download_count={} diagnostics_count={} payload_chars={} elapsed_ms={}",
+        "event=intune_analysis_complete path=\"{}\" source_count={} event_count={} download_count={} diagnostics_count={} evtx_entries={} payload_chars={} elapsed_ms={}",
         path,
         source_files.len(),
         events.len(),
         all_downloads.len(),
         diagnostics.len(),
+        event_log_analysis.as_ref().map_or(0, |e| e.total_entry_count),
         payload_chars,
         analysis_started.elapsed().as_millis()
     );
@@ -344,7 +330,48 @@ fn analyze_intune_logs_blocking(
         diagnostics_confidence,
         repeated_failures,
         evidence_bundle,
+        event_log_analysis,
     })
+}
+
+fn load_event_log_analysis(
+    input_path: &Path,
+    evidence_bundle: &Option<EvidenceBundleMetadata>,
+    include_live_event_logs: bool,
+    app: &AppHandle,
+    request_id: &str,
+    completed_files: usize,
+    total_files: usize,
+) -> Option<EventLogAnalysis> {
+    if evidence_bundle.is_some() {
+        emit_analysis_progress(
+            app,
+            request_id,
+            "parsing-event-logs",
+            "Parsing Windows Event Logs...".to_string(),
+            None,
+            None,
+            completed_files,
+            Some(total_files),
+        );
+        return evtx_parser::parse_bundle_event_logs(input_path, evidence_bundle);
+    }
+
+    if include_live_event_logs {
+        emit_analysis_progress(
+            app,
+            request_id,
+            "parsing-event-logs",
+            "Querying live Windows Event Logs...".to_string(),
+            None,
+            None,
+            completed_files,
+            Some(total_files),
+        );
+        return evtx_parser::parse_live_event_logs();
+    }
+
+    None
 }
 
 fn emit_analysis_progress(
@@ -404,6 +431,14 @@ struct CoverageAccumulator {
 struct RotationMetadata {
     is_rotated_segment: bool,
     rotation_group: Option<String>,
+}
+
+#[derive(Debug)]
+struct ProcessedIntuneFile {
+    index: usize,
+    events: Vec<IntuneEvent>,
+    downloads: Vec<DownloadStat>,
+    coverage: CoverageAccumulator,
 }
 
 #[derive(Debug, Clone)]
@@ -493,6 +528,106 @@ fn finalize_coverage(
         has_rotated_logs,
         dominant_source,
     }
+}
+
+fn analyze_intune_source_file(
+    source_path: &Path,
+    index: usize,
+    total_files: usize,
+    request_id: &str,
+    app: &AppHandle,
+    completed_files: &AtomicUsize,
+) -> Result<ProcessedIntuneFile, String> {
+    let file_started = Instant::now();
+    let source_file = source_path.to_string_lossy().to_string();
+    eprintln!("event=intune_analysis_file_start file=\"{}\"", source_file);
+    emit_analysis_progress(
+        app,
+        request_id,
+        "reading-file",
+        format!(
+            "Reading {} ({}/{})",
+            display_file_name(&source_file),
+            index + 1,
+            total_files
+        ),
+        Some(format_progress_detail(index, total_files, &source_file)),
+        Some(source_file.clone()),
+        completed_files.load(Ordering::Relaxed),
+        Some(total_files),
+    );
+
+    let content = fs::read_to_string(source_path)
+        .map_err(|error| format!("Failed to read file '{}': {}", source_file, error))?;
+
+    let lines = ime_parser::parse_ime_content(&content);
+    let rotation = detect_rotation_metadata(source_path);
+
+    let (file_events, file_downloads, file_timestamp_bounds, line_count): (
+        Vec<IntuneEvent>,
+        Vec<DownloadStat>,
+        Option<IntuneTimestampBounds>,
+        usize,
+    ) = if lines.is_empty() {
+        (Vec::new(), Vec::new(), None, 0usize)
+    } else {
+        let file_events = event_tracker::extract_events(&lines, &source_file);
+        let file_downloads = download_stats::extract_downloads(&lines, &source_file);
+        let file_timestamp_bounds = build_timestamp_bounds(&file_events, &file_downloads);
+
+        (
+            file_events,
+            file_downloads,
+            file_timestamp_bounds,
+            lines.len(),
+        )
+    };
+
+    let coverage = CoverageAccumulator {
+        coverage: IntuneDiagnosticsFileCoverage {
+            file_path: source_file.clone(),
+            event_count: file_events.len() as u32,
+            download_count: file_downloads.len() as u32,
+            timestamp_bounds: file_timestamp_bounds,
+            is_rotated_segment: false,
+            rotation_group: None,
+        },
+        rotation_candidate: rotation.rotation_group,
+        is_explicit_rotated_segment: rotation.is_rotated_segment,
+    };
+
+    eprintln!(
+        "event=intune_analysis_file_complete file=\"{}\" line_count={} event_count={} download_count={} elapsed_ms={}",
+        source_file,
+        line_count,
+        file_events.len(),
+        file_downloads.len(),
+        file_started.elapsed().as_millis()
+    );
+
+    let completed = completed_files.fetch_add(1, Ordering::Relaxed) + 1;
+    emit_analysis_progress(
+        app,
+        request_id,
+        "completed-file",
+        format!(
+            "Indexed {} ({}/{})",
+            display_file_name(&source_file),
+            completed,
+            total_files
+        ),
+        Some(format_progress_detail(completed, total_files, &source_file)),
+        Some(source_file.clone()),
+        completed,
+        Some(total_files),
+    );
+
+    Ok(ProcessedIntuneFile {
+        index,
+        events: file_events,
+        downloads: file_downloads,
+        coverage,
+    })
 }
 
 fn count_events_by_source(events: &[IntuneEvent]) -> HashMap<String, u32> {
@@ -900,6 +1035,7 @@ fn build_diagnostics_confidence(
     coverage: &IntuneDiagnosticsCoverage,
     repeated_failures: &[IntuneRepeatedFailureGroup],
     events: &[IntuneEvent],
+    event_log_analysis: &Option<EventLogAnalysis>,
 ) -> IntuneDiagnosticsConfidence {
     if summary.total_events == 0 && summary.total_downloads == 0 {
         return IntuneDiagnosticsConfidence {
@@ -1038,6 +1174,32 @@ fn build_diagnostics_confidence(
     {
         score -= 0.15;
         reasons.push("AgentExecutor or HealthScripts evidence was not available for script-related failures.".to_string());
+    }
+
+    // Event log evidence boosts
+    if let Some(ref ela) = event_log_analysis {
+        if ela.error_entry_count + ela.warning_entry_count > 0 {
+            score += 0.15;
+            reasons.push(format!(
+                "Windows Event Log evidence available with {} error/warning entries across {} channel(s).",
+                ela.error_entry_count + ela.warning_entry_count,
+                ela.channel_summaries.len()
+            ));
+        }
+        if !ela.correlation_links.is_empty() {
+            let linked_ime_count = ela
+                .correlation_links
+                .iter()
+                .filter(|l| l.linked_intune_event_id.is_some())
+                .count();
+            if linked_ime_count > 0 {
+                score += 0.10;
+                reasons.push(format!(
+                    "Event log entries correlated with {} IME event(s).",
+                    linked_ime_count
+                ));
+            }
+        }
     }
 
     score = score.clamp(0.0, 1.0);
@@ -1875,8 +2037,11 @@ fn build_diagnostics(
         insights.push(IntuneDiagnosticInsight {
             id: "download-failures".to_string(),
             severity: IntuneDiagnosticSeverity::Error,
+            category: IntuneDiagnosticCategory::Download,
+            remediation_priority: IntuneRemediationPriority::Immediate,
             title: download_case.title.to_string(),
             summary: download_case.summary.to_string(),
+            likely_cause: Some(download_case.likely_cause.to_string()),
             evidence,
             next_checks: vec![
                 "Review AppWorkload download, staging, and hash-validation lines for the affected content IDs.".to_string(),
@@ -1888,6 +2053,13 @@ fn build_diagnostics(
                 .into_iter()
                 .map(|item| item.to_string())
                 .collect(),
+            focus_areas: vec![
+                "AppWorkload download and staging transitions".to_string(),
+                "Delivery Optimization, proxy, and content reachability".to_string(),
+                "IME cache health and package revision consistency".to_string(),
+            ],
+            affected_source_files: related_source_files(&failed_download_events, 4),
+            related_error_codes: related_error_codes(&failed_download_events, 3),
         });
     }
 
@@ -1909,8 +2081,16 @@ fn build_diagnostics(
         insights.push(IntuneDiagnosticInsight {
             id: "install-enforcement-failures".to_string(),
             severity: IntuneDiagnosticSeverity::Error,
+            category: IntuneDiagnosticCategory::Install,
+            remediation_priority: IntuneRemediationPriority::High,
             title: "App install or enforcement failures detected".to_string(),
             summary: "The workload progressed past content acquisition but failed during installer launch, enforcement, or completion tracking.".to_string(),
+            likely_cause: Some(
+                install_hint
+                    .as_ref()
+                    .map(|hint| format!("Installer enforcement is failing with {} ({}).", hint.code, hint.description))
+                    .unwrap_or_else(|| "Installer launch, execution, or detection handoff is failing after content acquisition completed.".to_string()),
+            ),
             evidence,
             next_checks: vec![
                 "Inspect AppWorkload install and enforcement rows near the failure for the last successful phase before the installer returned control.".to_string(),
@@ -1918,6 +2098,13 @@ fn build_diagnostics(
                 "Correlate the failure with AgentExecutor or remediation activity if the deployment depends on prerequisite scripts.".to_string(),
             ],
             suggested_fixes: install_failure_suggested_fixes(install_hint),
+            focus_areas: vec![
+                "Installer command line and return-code mapping".to_string(),
+                "Detection-rule accuracy after install".to_string(),
+                "Prerequisite scripts and execution context".to_string(),
+            ],
+            affected_source_files: related_source_files(&install_failures, 4),
+            related_error_codes: related_error_codes(&install_failures, 3),
         });
     }
 
@@ -1963,8 +2150,19 @@ fn build_diagnostics(
         insights.push(IntuneDiagnosticInsight {
             id: "operation-timeouts".to_string(),
             severity: IntuneDiagnosticSeverity::Error,
+            category: IntuneDiagnosticCategory::Timeout,
+            remediation_priority: if timeout_loops.is_empty() {
+                IntuneRemediationPriority::High
+            } else {
+                IntuneRemediationPriority::Immediate
+            },
             title: title.to_string(),
             summary: summary.to_string(),
+            likely_cause: Some(if timeout_loops.is_empty() {
+                "The operation is running long enough to hit IME timeout thresholds without a definitive completion signal.".to_string()
+            } else {
+                "The same timeout path is repeating across retries, which means the blocking condition is persisting between attempts.".to_string()
+            }),
             evidence,
             next_checks: vec![
                 "Inspect the matching event rows around the timeout for the last successful phase before the stall.".to_string(),
@@ -1972,6 +2170,13 @@ fn build_diagnostics(
                 "Look for repeated retries or follow-on failure codes in AppWorkload, AgentExecutor, or HealthScripts logs.".to_string(),
             ],
             suggested_fixes,
+            focus_areas: vec![
+                "Last successful phase before the stall".to_string(),
+                "Installer or script wait conditions".to_string(),
+                "External dependencies that never become ready".to_string(),
+            ],
+            affected_source_files: related_source_files(&timed_out_events, 4),
+            related_error_codes: related_error_codes(&timed_out_events, 3),
         });
     }
 
@@ -2000,8 +2205,11 @@ fn build_diagnostics(
         insights.push(IntuneDiagnosticInsight {
             id: "script-failures".to_string(),
             severity: IntuneDiagnosticSeverity::Error,
+            category: IntuneDiagnosticCategory::Script,
+            remediation_priority: IntuneRemediationPriority::High,
             title: script_case.title.to_string(),
             summary: script_case.summary.to_string(),
+            likely_cause: Some(script_case.likely_cause.to_string()),
             evidence,
             next_checks: vec![
                 "Review AgentExecutor and HealthScripts entries for stdout, stderr, and explicit exit-code lines around the affected script.".to_string(),
@@ -2009,6 +2217,13 @@ fn build_diagnostics(
                 "Validate script prerequisites such as execution context, file paths, network access, and required modules or commands.".to_string(),
             ],
             suggested_fixes: script_failure_suggested_fixes(&script_failures, script_hint),
+            focus_areas: vec![
+                "AgentExecutor and HealthScripts output around failure".to_string(),
+                "Execution context, paths, and dependency availability".to_string(),
+                "Detection vs remediation script separation".to_string(),
+            ],
+            affected_source_files: related_source_files(&script_failures, 4),
+            related_error_codes: related_error_codes(&script_failures, 3),
         });
     }
 
@@ -2032,8 +2247,11 @@ fn build_diagnostics(
         insights.push(IntuneDiagnosticInsight {
             id: "policy-applicability".to_string(),
             severity: IntuneDiagnosticSeverity::Warning,
+            category: IntuneDiagnosticCategory::Policy,
+            remediation_priority: IntuneRemediationPriority::Medium,
             title: policy_case.title.to_string(),
             summary: policy_case.summary.to_string(),
+            likely_cause: Some(policy_case.likely_cause.to_string()),
             evidence,
             next_checks: vec![
                 "Review AppActionProcessor requirement-rule, detection-rule, and applicability lines for the affected app GUIDs.".to_string(),
@@ -2045,6 +2263,13 @@ fn build_diagnostics(
                 .into_iter()
                 .map(|item| item.to_string())
                 .collect(),
+            focus_areas: vec![
+                "AppActionProcessor applicability and requirement evaluation".to_string(),
+                "Assignment targeting and deployment intent".to_string(),
+                "Detection-rule and applicability-rule truthfulness".to_string(),
+            ],
+            affected_source_files: related_source_files(&policy_events, 4),
+            related_error_codes: related_error_codes(&policy_events, 3),
         });
     }
 
@@ -2053,8 +2278,11 @@ fn build_diagnostics(
             insights.push(IntuneDiagnosticInsight {
                 id: "work-in-progress".to_string(),
                 severity: IntuneDiagnosticSeverity::Info,
+                category: IntuneDiagnosticCategory::State,
+                remediation_priority: IntuneRemediationPriority::Monitor,
                 title: "Workload still in progress".to_string(),
                 summary: "The current IME snapshot shows pending or in-progress work without a dominant failure pattern yet.".to_string(),
+                likely_cause: Some("The device is still moving through the current IME cycle, so a stable failure signature has not formed yet.".to_string()),
                 evidence: vec![
                     format!("{} event(s) are still in progress.", summary.in_progress),
                     format!("{} event(s) are still pending.", summary.pending),
@@ -2066,13 +2294,22 @@ fn build_diagnostics(
                 suggested_fixes: vec![
                     "Allow the current IME cycle to finish before changing the deployment unless a repeated stall pattern appears.".to_string(),
                 ],
+                focus_areas: vec![
+                    "Most recent active timeline items".to_string(),
+                    "Whether progress converts into success or a stable failure".to_string(),
+                ],
+                affected_source_files: Vec::new(),
+                related_error_codes: Vec::new(),
             });
         } else if summary.total_events > 0 {
             insights.push(IntuneDiagnosticInsight {
                 id: "no-dominant-blocker".to_string(),
                 severity: IntuneDiagnosticSeverity::Info,
+                category: IntuneDiagnosticCategory::General,
+                remediation_priority: IntuneRemediationPriority::Monitor,
                 title: "No dominant blocker detected".to_string(),
                 summary: "The analyzed IME logs do not show a strong failure cluster in downloads, scripts, policy evaluation, or timeouts.".to_string(),
+                likely_cause: Some("The current evidence set is not clustered around a single dominant failure path, so more correlation is needed before changing packaging or targeting.".to_string()),
                 evidence: vec![
                     format!("{} event(s) succeeded.", summary.succeeded),
                     format!("{} total event(s) were analyzed.", summary.total_events),
@@ -2084,11 +2321,62 @@ fn build_diagnostics(
                 suggested_fixes: vec![
                     "Do not change packaging or targeting yet; gather one failing sample with adjacent logs before tuning heuristics further.".to_string(),
                 ],
+                focus_areas: vec![
+                    "Last non-success timeline event".to_string(),
+                    "Correlation with portal assignment state and device conditions".to_string(),
+                ],
+                affected_source_files: Vec::new(),
+                related_error_codes: Vec::new(),
             });
         }
     }
 
     insights
+}
+
+fn related_source_files(events: &[&IntuneEvent], limit: usize) -> Vec<String> {
+    let mut files = Vec::new();
+
+    for event in events {
+        if files.contains(&event.source_file) {
+            continue;
+        }
+
+        files.push(event.source_file.clone());
+        if files.len() >= limit {
+            break;
+        }
+    }
+
+    files
+}
+
+fn related_error_codes(events: &[&IntuneEvent], limit: usize) -> Vec<String> {
+    let mut labels = Vec::new();
+
+    for event in events {
+        let Some(error_code) = &event.error_code else {
+            continue;
+        };
+
+        let lookup = lookup_error_code(error_code);
+        let label = if lookup.found {
+            format!("{} ({})", lookup.code_hex, lookup.description)
+        } else {
+            format!("{} ({})", error_code, lookup.description)
+        };
+
+        if labels.contains(&label) {
+            continue;
+        }
+
+        labels.push(label);
+        if labels.len() >= limit {
+            break;
+        }
+    }
+
+    labels
 }
 
 fn top_failed_download_labels(downloads: &[DownloadStat], limit: usize) -> Vec<String> {
@@ -2122,6 +2410,7 @@ struct ErrorHint {
 struct DownloadFailureCase {
     title: &'static str,
     summary: &'static str,
+    likely_cause: &'static str,
     suggested_fixes: Vec<&'static str>,
 }
 
@@ -2145,6 +2434,7 @@ fn classify_download_failure_case(
         return DownloadFailureCase {
             title: "Content download stalled or timed out",
             summary: "The device started content acquisition, but AppWorkload shows the same payload stopping without forward progress before install-ready staging completed.",
+            likely_cause: "Content transfer is starting but losing forward progress before staging completes.",
             suggested_fixes: vec![
                 "Check for content-transfer stalls, Delivery Optimization blockage, or proxy/VPN interference before forcing another retry.",
                 "If the same content repeatedly stalls, clear stale IME cache state on the test device and retry with fresh logs.",
@@ -2160,6 +2450,7 @@ fn classify_download_failure_case(
         return DownloadFailureCase {
             title: "Content hash or staging validation failed",
             summary: "The device downloaded content, but staging or hash verification indicates the package may be incomplete, stale, or mismatched.",
+            likely_cause: "The downloaded payload does not match the content revision expected during staging or validation.",
             suggested_fixes: vec![
                 "Re-upload or redistribute the app content in Intune so the device receives a clean package revision.",
                 "Verify that the package contents and detection logic still match the deployed app version.",
@@ -2177,6 +2468,7 @@ fn classify_download_failure_case(
         return DownloadFailureCase {
             title: "Content staging failed after download",
             summary: "The workload reached caching or staging, but the local handoff into install-ready content did not complete successfully.",
+            likely_cause: "The package transfer finished, but local cache handoff or disk-backed staging is failing.",
             suggested_fixes: vec![
                 "Validate local disk space and permissions on the IME content cache path.",
                 "Retry with a fresh content download if cached payloads appear stale or partially written.",
@@ -2189,6 +2481,7 @@ fn classify_download_failure_case(
         return DownloadFailureCase {
             title: "Content download is retrying without completing",
             summary: "The same content is cycling through retry attempts, which points to a persistent transfer or staging blocker instead of a one-off transient miss.",
+            likely_cause: "The retry loop is masking a persistent download or cache blocker that is not changing between attempts.",
             suggested_fixes: vec![
                 "Review the first failed download attempt for the real cause instead of focusing only on the later retry lines.",
                 "Validate network path, Delivery Optimization policy, and local cache health before forcing additional sync cycles.",
@@ -2204,6 +2497,7 @@ fn classify_download_failure_case(
         return DownloadFailureCase {
             title: "Content retrieval failed before local staging",
             summary: "The workload is failing during content acquisition rather than install, and the logs do not show healthy Delivery Optimization contribution.",
+            likely_cause: "The device is failing before content ever reaches a healthy local cache or staging state.",
             suggested_fixes: vec![
                 "Validate proxy, VPN, firewall, and Delivery Optimization reachability for the content source.",
                 "Test the same deployment on a network path without restrictive content filtering.",
@@ -2215,6 +2509,7 @@ fn classify_download_failure_case(
     DownloadFailureCase {
         title: "Content download failures detected",
         summary: "App content did not download cleanly, so enforcement may never reach install or detection stages.",
+        likely_cause: "Content acquisition is failing early enough that install and detection phases cannot start reliably.",
         suggested_fixes: vec![
             "Confirm the app payload is still available and matches the expected content in Intune.",
             "Check device network reachability to Microsoft content endpoints and any proxy path in between.",
@@ -2249,6 +2544,7 @@ fn best_error_hint(events: &[&IntuneEvent]) -> Option<ErrorHint> {
 struct ScriptFailureCase {
     title: &'static str,
     summary: &'static str,
+    likely_cause: &'static str,
 }
 
 fn classify_script_failure_case(events: &[&IntuneEvent]) -> ScriptFailureCase {
@@ -2265,6 +2561,7 @@ fn classify_script_failure_case(events: &[&IntuneEvent]) -> ScriptFailureCase {
         return ScriptFailureCase {
             title: "Script execution policy or signing blocked execution",
             summary: "The script did not fail inside its own logic; PowerShell policy or signing requirements blocked it before it could run normally.",
+            likely_cause: "PowerShell policy or signature requirements are preventing script startup.",
         };
     }
 
@@ -2277,6 +2574,7 @@ fn classify_script_failure_case(events: &[&IntuneEvent]) -> ScriptFailureCase {
         return ScriptFailureCase {
             title: "Script execution failed due to permissions or access",
             summary: "The script path is being reached, but the execution context does not have access to one or more required resources.",
+            likely_cause: "The IME execution context cannot reach or modify one of the resources the script expects.",
         };
     }
 
@@ -2295,6 +2593,7 @@ fn classify_script_failure_case(events: &[&IntuneEvent]) -> ScriptFailureCase {
         return ScriptFailureCase {
             title: "Script dependency or path resolution failed",
             summary: "The script is calling a path, command, or module that is not available in the IME execution context on the device.",
+            likely_cause: "One or more script dependencies are missing or resolved differently under IME.",
         };
     }
 
@@ -2305,6 +2604,7 @@ fn classify_script_failure_case(events: &[&IntuneEvent]) -> ScriptFailureCase {
         return ScriptFailureCase {
             title: "Script syntax or runtime errors detected",
             summary: "The script started but then failed because of a parser, command, or runtime error rather than a packaging or download issue.",
+            likely_cause: "The script is running but failing inside its own logic or command flow.",
         };
     }
 
@@ -2312,11 +2612,13 @@ fn classify_script_failure_case(events: &[&IntuneEvent]) -> ScriptFailureCase {
         ScriptFailureCase {
             title: "Script execution failures detected",
             summary: "Detection or remediation logic returned a non-zero outcome or never completed, which can block compliance or app enforcement.",
+            likely_cause: "Detection or remediation logic is failing consistently enough to block downstream enforcement decisions.",
         }
     } else {
         ScriptFailureCase {
             title: "Recurring script or remediation failures detected",
             summary: "The same detection or remediation path is failing across multiple attempts, which points to a persistent script issue instead of a one-time transient failure.",
+            likely_cause: "The same script path is re-entering failure with no device-state change between attempts.",
         }
     }
 }
@@ -2324,6 +2626,7 @@ fn classify_script_failure_case(events: &[&IntuneEvent]) -> ScriptFailureCase {
 struct PolicyFailureCase {
     title: &'static str,
     summary: &'static str,
+    likely_cause: &'static str,
     suggested_fixes: Vec<&'static str>,
 }
 
@@ -2335,6 +2638,7 @@ fn classify_policy_failure_case(events: &[&IntuneEvent]) -> PolicyFailureCase {
         return PolicyFailureCase {
             title: "Applicability blocked enforcement",
             summary: "AppActionProcessor shows the deployment was evaluated, but the app was rejected as not applicable before enforcement could continue.",
+            likely_cause: "Applicability logic is determining the target is not eligible, so enforcement never starts.",
             suggested_fixes: vec![
                 "Review assignment targeting and applicability conditions to confirm the device should actually qualify.",
                 "If the device should be included, correct the applicability logic instead of forcing repeated retries.",
@@ -2350,6 +2654,7 @@ fn classify_policy_failure_case(events: &[&IntuneEvent]) -> PolicyFailureCase {
         return PolicyFailureCase {
             title: "Requirement rules blocked enforcement",
             summary: "The assignment reached policy evaluation, but a requirement-rule decision prevented the app from entering the enforcement path.",
+            likely_cause: "Requirement-rule evaluation is filtering the device out before the install workflow begins.",
             suggested_fixes: vec![
                 "Validate every requirement-rule input on the affected device, especially OS version, architecture, and custom script results.",
                 "Re-test the rule with the same device context that IME uses instead of assuming portal targeting is enough.",
@@ -2367,6 +2672,7 @@ fn classify_policy_failure_case(events: &[&IntuneEvent]) -> PolicyFailureCase {
         return PolicyFailureCase {
             title: "Detection-state evidence blocked enforcement",
             summary: "AppActionProcessor indicates the deployment was evaluated, but detection-state logic made IME treat the app as already present or otherwise not needing enforcement.",
+            likely_cause: "Detection-state evidence is convincing IME that enforcement is unnecessary or already satisfied.",
             suggested_fixes: vec![
                 "Verify that the detection rule is not falsely reporting success on the affected device.",
                 "Compare detection-rule logic with the actual install footprint created by the package.",
@@ -2378,6 +2684,7 @@ fn classify_policy_failure_case(events: &[&IntuneEvent]) -> PolicyFailureCase {
     PolicyFailureCase {
         title: "Policy applicability needs review",
         summary: "Assignment or applicability evaluation may be preventing enforcement even when content and scripts are available.",
+        likely_cause: "The device is reaching policy evaluation, but assignment or applicability state is not lining up with the expected outcome.",
         suggested_fixes: vec![
             "Review assignment targeting, intent, and any deadlines or retry windows for the affected policy.",
             "Validate that prerequisite policies or dependent apps are not blocking the enforcement path.",
@@ -2496,6 +2803,7 @@ fn script_failure_suggested_fixes(
 
 fn top_event_detail_matches(events: &[&IntuneEvent], limit: usize) -> Vec<String> {
     let mut labels = Vec::new();
+    let name_re = regex::Regex::new(r#"(?i)\"(?:ApplicationName|Name)\"\s*:\s*\"([^\"]+)\""#).ok();
 
     for event in events {
         let snippet = event.detail.trim();
@@ -2503,12 +2811,26 @@ fn top_event_detail_matches(events: &[&IntuneEvent], limit: usize) -> Vec<String
             continue;
         }
 
-        let shortened = if snippet.len() > 120 {
-            format!("{}...", &snippet[..120])
+        let extracted_name = name_re.as_ref().and_then(|re| {
+            re.captures(snippet).map(|caps| caps[1].to_string())
+        });
+
+        let evidence = if let Some(name) = extracted_name {
+            if event.event_type == IntuneEventType::PowerShellScript || event.event_type == IntuneEventType::Remediation {
+                format!("Failing script: {}", name)
+            } else if event.event_type == IntuneEventType::PolicyEvaluation {
+                format!("Affected policy: {}", name)
+            } else {
+                format!("Failing app: {}", name)
+            }
         } else {
-            snippet.to_string()
+            let shortened = if snippet.len() > 120 {
+                format!("{}...", &snippet[..120])
+            } else {
+                snippet.to_string()
+            };
+            format!("Observed detail: {}", shortened)
         };
-        let evidence = format!("Observed detail: {}", shortened);
 
         if !labels.contains(&evidence) {
             labels.push(evidence);
@@ -3254,7 +3576,7 @@ mod tests {
             },
         ];
 
-        let confidence = build_diagnostics_confidence(&summary, &coverage, &[], &events);
+        let confidence = build_diagnostics_confidence(&summary, &coverage, &[], &events, &None);
         assert_eq!(confidence.level, IntuneDiagnosticsConfidenceLevel::Low);
         assert!(confidence
             .reasons

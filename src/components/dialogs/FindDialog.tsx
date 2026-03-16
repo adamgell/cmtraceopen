@@ -1,4 +1,17 @@
 import { useEffect, useRef } from "react";
+import {
+  Button,
+  Caption1,
+  Checkbox,
+  Dialog,
+  DialogActions,
+  DialogBody,
+  DialogContent,
+  DialogSurface,
+  DialogTitle,
+  Field,
+  Input,
+} from "@fluentui/react-components";
 import { useLogStore } from "../../stores/log-store";
 
 interface FindDialogProps {
@@ -30,11 +43,6 @@ export function FindDialog({ isOpen, onClose }: FindDialogProps) {
     }
 
     const handleKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        onClose();
-        return;
-      }
-
       if (event.key === "Enter" || event.key === "F3") {
         event.preventDefault();
 
@@ -56,83 +64,55 @@ export function FindDialog({ isOpen, onClose }: FindDialogProps) {
   }
 
   return (
-    <div
-      style={{
-        position: "fixed",
-        top: 0,
-        left: 0,
-        right: 0,
-        bottom: 0,
-        backgroundColor: "rgba(0,0,0,0.3)",
-        display: "flex",
-        alignItems: "flex-start",
-        justifyContent: "center",
-        paddingTop: "80px",
-        zIndex: 1000,
-      }}
-      onClick={(event) => {
-        if (event.target === event.currentTarget) {
+    <Dialog
+      open={isOpen}
+      modalType="modal"
+      onOpenChange={(_, data) => {
+        if (!data.open) {
           onClose();
         }
       }}
     >
-      <div
+      <DialogSurface
         style={{
-          backgroundColor: "#f0f0f0",
-          border: "1px solid #999",
-          borderRadius: "4px",
-          padding: "12px",
-          minWidth: "400px",
-          boxShadow: "0 4px 12px rgba(0,0,0,0.3)",
+          width: "min(460px, calc(100vw - 32px))",
+          paddingTop: "8px",
         }}
       >
-        <div
-          style={{
-            fontSize: "13px",
-            fontWeight: "bold",
-            marginBottom: "8px",
-          }}
-        >
-          Find
-        </div>
+        <DialogBody>
+          <DialogTitle>Find</DialogTitle>
+          <DialogContent style={{ display: "grid", gap: "12px" }}>
+            <Field label="Find what:">
+              <Input
+                ref={inputRef}
+                value={searchText}
+                onChange={(_, data) => setFindQuery(data.value)}
+                placeholder="Search the current log view"
+              />
+            </Field>
 
-        <div style={{ display: "flex", gap: "6px", marginBottom: "8px" }}>
-          <label style={{ fontSize: "12px", lineHeight: "24px" }}>
-            Find what:
-          </label>
-          <input
-            ref={inputRef}
-            type="text"
-            value={searchText}
-            onChange={(event) => setFindQuery(event.target.value)}
-            style={{
-              flex: 1,
-              fontSize: "12px",
-              padding: "2px 4px",
-            }}
-          />
-        </div>
-
-        <div style={{ display: "flex", gap: "8px", alignItems: "center", marginBottom: "8px" }}>
-          <label style={{ fontSize: "12px", display: "flex", alignItems: "center", gap: "4px" }}>
-            <input
-              type="checkbox"
-              checked={caseSensitive}
-              onChange={(event) => setFindCaseSensitive(event.target.checked)}
-            />
-            Match case
-          </label>
-          {statusText && (
-            <span style={{ fontSize: "11px", color: "#666" }}>{statusText}</span>
-          )}
-        </div>
-
-        <div style={{ display: "flex", gap: "6px", justifyContent: "flex-end" }}>
-          <button onClick={() => findPrevious("find-dialog.button.previous")}>Find Previous</button>
-          <button onClick={() => findNext("find-dialog.button.next")}>Find Next</button>
-          <button onClick={onClose}>Close</button>
-        </div>
-      </div>
-    </div>
+            <div style={{ display: "grid", gap: "8px" }}>
+              <Checkbox
+                label="Match case"
+                checked={caseSensitive}
+                onChange={(_, data) => setFindCaseSensitive(Boolean(data.checked))}
+              />
+              {statusText && <Caption1>{statusText}</Caption1>}
+            </div>
+          </DialogContent>
+          <DialogActions>
+            <Button appearance="secondary" onClick={() => findPrevious("find-dialog.button.previous")}>
+              Find Previous
+            </Button>
+            <Button appearance="primary" onClick={() => findNext("find-dialog.button.next")}>
+              Find Next
+            </Button>
+            <Button appearance="secondary" onClick={onClose}>
+              Close
+            </Button>
+          </DialogActions>
+        </DialogBody>
+      </DialogSurface>
+    </Dialog>
   );
 }
