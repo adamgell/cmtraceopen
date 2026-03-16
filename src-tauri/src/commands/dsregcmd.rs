@@ -1,4 +1,4 @@
-use crate::dsregcmd::{analyze_text, registry, DsregcmdAnalysisResult};
+use crate::dsregcmd::{analyze_text, connectivity, registry, rules, DsregcmdAnalysisResult};
 
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -55,8 +55,20 @@ pub fn analyze_dsregcmd(
     let mut result = analyze_text(&input)?;
 
     if let Some(bundle_path) = bundle_path.as_deref() {
-        result.policy_evidence = registry::load_whfb_policy_evidence(Path::new(bundle_path));
+        let bp = Path::new(bundle_path);
+        result.policy_evidence = registry::load_whfb_policy_evidence(bp);
+        result.os_version = registry::load_os_version_evidence(bp);
+        result.proxy_evidence = registry::load_proxy_evidence(bp);
+        result.enrollment_evidence = registry::load_enrollment_evidence(bp);
+        result.active_evidence = load_active_evidence_from_bundle(bp);
+        result.event_log_analysis = load_event_log_from_bundle(bp);
     }
+
+    // Run extended diagnostics (Phase 2, 3, 4) after all evidence is loaded
+    let mut extended = rules::build_extended_diagnostics(&result);
+    extended.append(&mut rules::build_active_diagnostics_rules(&result));
+    extended.append(&mut rules::build_event_log_diagnostics(&result));
+    result.diagnostics.append(&mut extended);
 
     eprintln!(
         "event=dsregcmd_analysis_complete diagnostics_count={} join_type={:?}",
@@ -65,6 +77,47 @@ pub fn analyze_dsregcmd(
     );
 
     Ok(result)
+}
+
+fn load_active_evidence_from_bundle(
+    bundle_path: &Path,
+) -> Option<crate::dsregcmd::DsregcmdActiveEvidence> {
+    let connectivity_dir = bundle_path.join("evidence").join("connectivity");
+
+    let tests_path = connectivity_dir.join("endpoint-tests.json");
+    let scp_path = connectivity_dir.join("scp-query.json");
+
+    let connectivity_tests: Vec<crate::dsregcmd::DsregcmdConnectivityResult> =
+        std::fs::read_to_string(&tests_path)
+            .ok()
+            .and_then(|json| serde_json::from_str(&json).ok())
+            .unwrap_or_default();
+
+    let scp_query: Option<crate::dsregcmd::DsregcmdScpQueryResult> =
+        std::fs::read_to_string(&scp_path)
+            .ok()
+            .and_then(|json| serde_json::from_str(&json).ok());
+
+    if connectivity_tests.is_empty() && scp_query.is_none() {
+        return None;
+    }
+
+    Some(crate::dsregcmd::DsregcmdActiveEvidence {
+        connectivity_tests,
+        scp_query,
+    })
+}
+
+fn load_event_log_from_bundle(
+    bundle_path: &Path,
+) -> Option<crate::intune::models::EventLogAnalysis> {
+    let path = bundle_path
+        .join("evidence")
+        .join("event-logs")
+        .join("dsregcmd-events.json");
+    std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|json| serde_json::from_str(&json).ok())
 }
 
 #[tauri::command]
@@ -223,6 +276,30 @@ const LIVE_CAPTURE_REGISTRY_EXPORTS: &[RegistryExportSpec] = &[
         key_path: r"HKLM\Software\Microsoft\Policies",
         file_name: "hklm-microsoft-policies.reg",
     },
+    RegistryExportSpec {
+        key_path: r"HKLM\SYSTEM\CurrentControlSet\Control\CloudDomainJoin\JoinInfo",
+        file_name: "cdj-joininfo.reg",
+    },
+    RegistryExportSpec {
+        key_path: r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\CDJ\AAD",
+        file_name: "cdj-aad.reg",
+    },
+    RegistryExportSpec {
+        key_path: r"HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion",
+        file_name: "os-version.reg",
+    },
+    RegistryExportSpec {
+        key_path: r"HKLM\SYSTEM\CurrentControlSet\Services\WinHttpAutoProxySvc\Parameters\Connections",
+        file_name: "proxy-connections.reg",
+    },
+    RegistryExportSpec {
+        key_path: r"HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings",
+        file_name: "proxy-internet-settings.reg",
+    },
+    RegistryExportSpec {
+        key_path: r"HKLM\SOFTWARE\Microsoft\Enrollments",
+        file_name: "enrollments.reg",
+    },
 ];
 
 #[cfg(target_os = "windows")]
@@ -279,6 +356,31 @@ fn stage_live_capture_bundle(stdout: &str) -> Result<LiveCaptureBundle, String> 
     })?;
 
     export_live_registry_evidence(&evidence_registry);
+
+    // Phase 3: Active diagnostics (connectivity + SCP)
+    let evidence_connectivity = bundle_path.join("evidence").join("connectivity");
+    if fs::create_dir_all(&evidence_connectivity).is_ok() {
+        let active_evidence = connectivity::run_active_diagnostics();
+        if let Ok(json) = serde_json::to_string_pretty(&active_evidence.connectivity_tests) {
+            let _ = fs::write(evidence_connectivity.join("endpoint-tests.json"), json);
+        }
+        if let Some(ref scp) = active_evidence.scp_query {
+            if let Ok(json) = serde_json::to_string_pretty(scp) {
+                let _ = fs::write(evidence_connectivity.join("scp-query.json"), json);
+            }
+        }
+    }
+
+    // Phase 4: Event log collection
+    let event_log_analysis = crate::dsregcmd::event_logs::collect_dsregcmd_event_logs();
+    if let Some(ref analysis) = event_log_analysis {
+        let evidence_event_logs = bundle_path.join("evidence").join("event-logs");
+        if fs::create_dir_all(&evidence_event_logs).is_ok() {
+            if let Ok(json) = serde_json::to_string_pretty(analysis) {
+                let _ = fs::write(evidence_event_logs.join("dsregcmd-events.json"), json);
+            }
+        }
+    }
 
     Ok(LiveCaptureBundle {
         bundle_path,

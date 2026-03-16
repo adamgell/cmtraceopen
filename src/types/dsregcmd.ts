@@ -214,11 +214,67 @@ export interface DsregcmdDiagnosticInsight {
   suggestedFixes: string[];
 }
 
+export interface DsregcmdOsVersionEvidence {
+  currentBuild: string | null;
+  displayVersion: string | null;
+  productName: string | null;
+  ubr: number | null;
+  editionId: string | null;
+}
+
+export interface DsregcmdProxyEvidence {
+  proxyEnabled: boolean | null;
+  proxyServer: string | null;
+  proxyOverride: string | null;
+  autoConfigUrl: string | null;
+  wpadDetected: boolean;
+  winhttpProxy: string | null;
+}
+
+export interface DsregcmdEnrollmentEntry {
+  upn: string | null;
+  providerId: string | null;
+  enrollmentState: number | null;
+}
+
+export interface DsregcmdEnrollmentEvidence {
+  enrollmentCount: number;
+  enrollments: DsregcmdEnrollmentEntry[];
+}
+
+export interface DsregcmdConnectivityResult {
+  endpoint: string;
+  reachable: boolean;
+  statusCode: number | null;
+  latencyMs: number | null;
+  errorMessage: string | null;
+  timestamp: string;
+}
+
+export interface DsregcmdScpQueryResult {
+  scpFound: boolean;
+  tenantDomain: string | null;
+  azureadId: string | null;
+  keywords: string[];
+  domainController: string | null;
+  error: string | null;
+}
+
+export interface DsregcmdActiveEvidence {
+  connectivityTests: DsregcmdConnectivityResult[];
+  scpQuery: DsregcmdScpQueryResult | null;
+}
+
 export interface DsregcmdAnalysisResult {
   facts: DsregcmdFacts;
   derived: DsregcmdDerived;
   diagnostics: DsregcmdDiagnosticInsight[];
   policyEvidence: DsregcmdWhfbPolicyEvidence;
+  osVersion: DsregcmdOsVersionEvidence | null;
+  proxyEvidence: DsregcmdProxyEvidence | null;
+  enrollmentEvidence: DsregcmdEnrollmentEvidence | null;
+  activeEvidence: DsregcmdActiveEvidence | null;
+  eventLogAnalysis: import("./event-log").EventLogAnalysis | null;
 }
 
 export interface DsregcmdCaptureResult {

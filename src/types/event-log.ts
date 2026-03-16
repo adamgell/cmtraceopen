@@ -23,6 +23,9 @@ export type EventLogChannel =
   | "ShellCoreOperational"
   | "TimeServiceOperational"
   | "UserDeviceRegistrationAdmin"
+  | "CryptoDpapiOperational"
+  | "KerberosOperational"
+  | "SystemLog"
   | { Other: string };
 
 export interface EventLogEntry {

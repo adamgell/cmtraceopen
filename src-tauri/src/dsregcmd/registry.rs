@@ -5,7 +5,9 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::dsregcmd::models::{
-    DsregcmdEvidenceSource, DsregcmdPolicyEvidenceValue, DsregcmdWhfbPolicyEvidence,
+    DsregcmdEnrollmentEntry, DsregcmdEnrollmentEvidence, DsregcmdEvidenceSource,
+    DsregcmdOsVersionEvidence, DsregcmdPolicyEvidenceValue, DsregcmdProxyEvidence,
+    DsregcmdWhfbPolicyEvidence,
 };
 
 const REGISTRY_FOLDER: [&str; 2] = ["evidence", "registry"];
@@ -15,6 +17,10 @@ const HKCU_POLICIES_FILE: &str = "hkcu-policies.reg";
 const HKLM_POLICIES_FILE: &str = "hklm-policies.reg";
 const HKCU_MICROSOFT_POLICIES_FILE: &str = "hkcu-microsoft-policies.reg";
 const HKLM_MICROSOFT_POLICIES_FILE: &str = "hklm-microsoft-policies.reg";
+const OS_VERSION_FILE: &str = "os-version.reg";
+const PROXY_INTERNET_SETTINGS_FILE: &str = "proxy-internet-settings.reg";
+const PROXY_CONNECTIONS_FILE: &str = "proxy-connections.reg";
+const ENROLLMENTS_FILE: &str = "enrollments.reg";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum RegistryValue {
@@ -124,6 +130,138 @@ pub fn load_whfb_policy_evidence(bundle_path: &Path) -> DsregcmdWhfbPolicyEviden
     annotate_missing_policy_evidence(&mut evidence);
 
     evidence
+}
+
+pub fn load_os_version_evidence(bundle_path: &Path) -> Option<DsregcmdOsVersionEvidence> {
+    let path = registry_file_path(bundle_path, OS_VERSION_FILE);
+    let mut artifact_paths = Vec::new();
+    let registry = load_registry_map(&path, &mut artifact_paths);
+    if artifact_paths.is_empty() {
+        return None;
+    }
+
+    let mut evidence = DsregcmdOsVersionEvidence::default();
+    for (key_path, values) in &registry {
+        let lower = key_path.to_ascii_lowercase();
+        if !lower.contains("\\windows nt\\currentversion") {
+            continue;
+        }
+        evidence.current_build = extract_string_value(values, "CurrentBuild")
+            .or_else(|| extract_string_value(values, "CurrentBuildNumber"));
+        evidence.display_version = extract_string_value(values, "DisplayVersion");
+        evidence.product_name = extract_string_value(values, "ProductName");
+        evidence.ubr = extract_dword_value(values, "UBR");
+        evidence.edition_id = extract_string_value(values, "EditionID");
+        break;
+    }
+
+    Some(evidence)
+}
+
+pub fn load_proxy_evidence(bundle_path: &Path) -> Option<DsregcmdProxyEvidence> {
+    let ie_path = registry_file_path(bundle_path, PROXY_INTERNET_SETTINGS_FILE);
+    let conn_path = registry_file_path(bundle_path, PROXY_CONNECTIONS_FILE);
+
+    let mut artifact_paths = Vec::new();
+    let ie_registry = load_registry_map(&ie_path, &mut artifact_paths);
+    let conn_registry = load_registry_map(&conn_path, &mut artifact_paths);
+
+    if artifact_paths.is_empty() {
+        return None;
+    }
+
+    let mut evidence = DsregcmdProxyEvidence::default();
+
+    for (key_path, values) in &ie_registry {
+        let lower = key_path.to_ascii_lowercase();
+        if !lower.contains("\\internet settings") {
+            continue;
+        }
+        evidence.proxy_enabled = extract_dword_value(values, "ProxyEnable").map(|v| v != 0);
+        evidence.proxy_server = extract_string_value(values, "ProxyServer");
+        evidence.proxy_override = extract_string_value(values, "ProxyOverride");
+        evidence.auto_config_url = extract_string_value(values, "AutoConfigURL");
+        break;
+    }
+
+    if let Some(ref url) = evidence.auto_config_url {
+        evidence.wpad_detected = url.to_ascii_lowercase().contains("wpad");
+    }
+
+    // Check for WinHTTP proxy in connections registry
+    for (key_path, values) in &conn_registry {
+        let lower = key_path.to_ascii_lowercase();
+        if lower.contains("\\internet settings\\connections") {
+            evidence.winhttp_proxy =
+                extract_string_value(values, "WinHttpSettings")
+                    .or_else(|| extract_string_value(values, "DefaultConnectionSettings"));
+            break;
+        }
+    }
+
+    Some(evidence)
+}
+
+pub fn load_enrollment_evidence(bundle_path: &Path) -> Option<DsregcmdEnrollmentEvidence> {
+    let path = registry_file_path(bundle_path, ENROLLMENTS_FILE);
+    let mut artifact_paths = Vec::new();
+    let registry = load_registry_map(&path, &mut artifact_paths);
+    if artifact_paths.is_empty() {
+        return None;
+    }
+
+    let mut enrollments = Vec::new();
+
+    for (key_path, values) in &registry {
+        let lower = key_path.to_ascii_lowercase();
+        // Each enrollment is under a GUID subkey: ...\Enrollments\{GUID}
+        if !lower.contains("\\enrollments\\{") {
+            continue;
+        }
+        // Skip deeper subkeys (e.g., ...\{GUID}\FirstSync)
+        let after_guid = key_path
+            .rfind('}')
+            .map(|pos| &key_path[pos + 1..])
+            .unwrap_or("");
+        if after_guid.contains('\\') {
+            continue;
+        }
+
+        enrollments.push(DsregcmdEnrollmentEntry {
+            upn: extract_string_value(values, "UPN"),
+            provider_id: extract_string_value(values, "ProviderID"),
+            enrollment_state: extract_dword_value(values, "EnrollmentState"),
+        });
+    }
+
+    let enrollment_count = u32::try_from(enrollments.len()).unwrap_or(u32::MAX);
+
+    Some(DsregcmdEnrollmentEvidence {
+        enrollment_count,
+        enrollments,
+    })
+}
+
+fn extract_string_value(
+    values: &HashMap<String, RegistryValue>,
+    value_name: &str,
+) -> Option<String> {
+    let key = value_name.to_ascii_lowercase();
+    values.get(&key).map(|v| match v {
+        RegistryValue::String(s) => s.clone(),
+        RegistryValue::Dword(d) => d.to_string(),
+    })
+}
+
+fn extract_dword_value(
+    values: &HashMap<String, RegistryValue>,
+    value_name: &str,
+) -> Option<u32> {
+    let key = value_name.to_ascii_lowercase();
+    values.get(&key).and_then(|v| match v {
+        RegistryValue::Dword(d) => Some(*d),
+        RegistryValue::String(s) => s.trim().parse().ok(),
+    })
 }
 
 fn annotate_missing_policy_evidence(evidence: &mut DsregcmdWhfbPolicyEvidence) {
@@ -458,7 +596,8 @@ fn parse_registry_bool(value: &RegistryValue) -> Option<bool> {
 #[cfg(test)]
 mod tests {
     use super::{
-        decode_reg_content, inspect_registry_snapshot_file, load_whfb_policy_evidence,
+        decode_reg_content, inspect_registry_snapshot_file, load_enrollment_evidence,
+        load_os_version_evidence, load_proxy_evidence, load_whfb_policy_evidence,
         parse_reg_snapshot,
     };
     use crate::dsregcmd::models::DsregcmdEvidenceSource;
@@ -589,5 +728,96 @@ mod tests {
             Some(DsregcmdEvidenceSource::WindowsPolicyMachine)
         );
         assert_eq!(evidence.post_logon_enabled.display_value, Some(true));
+    }
+
+    #[test]
+    fn loads_os_version_evidence_from_bundle() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let registry_dir = temp_dir.path().join("evidence").join("registry");
+        std::fs::create_dir_all(&registry_dir).expect("create registry dir");
+
+        std::fs::write(
+            registry_dir.join("os-version.reg"),
+            r#"Windows Registry Editor Version 5.00
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows NT\CurrentVersion]
+"CurrentBuild"="22631"
+"DisplayVersion"="23H2"
+"ProductName"="Windows 11 Enterprise"
+"UBR"=dword:00000FA0
+"EditionID"="Enterprise"
+"#,
+        )
+        .expect("write os version sample");
+
+        let evidence = load_os_version_evidence(temp_dir.path()).expect("os version evidence");
+        assert_eq!(evidence.current_build.as_deref(), Some("22631"));
+        assert_eq!(evidence.display_version.as_deref(), Some("23H2"));
+        assert_eq!(evidence.product_name.as_deref(), Some("Windows 11 Enterprise"));
+        assert_eq!(evidence.ubr, Some(4000));
+        assert_eq!(evidence.edition_id.as_deref(), Some("Enterprise"));
+    }
+
+    #[test]
+    fn returns_none_when_os_version_file_missing() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        assert!(load_os_version_evidence(temp_dir.path()).is_none());
+    }
+
+    #[test]
+    fn loads_proxy_evidence_from_bundle() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let registry_dir = temp_dir.path().join("evidence").join("registry");
+        std::fs::create_dir_all(&registry_dir).expect("create registry dir");
+
+        std::fs::write(
+            registry_dir.join("proxy-internet-settings.reg"),
+            r#"Windows Registry Editor Version 5.00
+
+[HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Internet Settings]
+"ProxyEnable"=dword:00000001
+"ProxyServer"="http://proxy.contoso.com:8080"
+"ProxyOverride"="*.contoso.com;localhost"
+"AutoConfigURL"="http://wpad.contoso.com/wpad.dat"
+"#,
+        )
+        .expect("write proxy sample");
+
+        let evidence = load_proxy_evidence(temp_dir.path()).expect("proxy evidence");
+        assert_eq!(evidence.proxy_enabled, Some(true));
+        assert_eq!(evidence.proxy_server.as_deref(), Some("http://proxy.contoso.com:8080"));
+        assert!(evidence.wpad_detected);
+    }
+
+    #[test]
+    fn loads_enrollment_evidence_from_bundle() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let registry_dir = temp_dir.path().join("evidence").join("registry");
+        std::fs::create_dir_all(&registry_dir).expect("create registry dir");
+
+        std::fs::write(
+            registry_dir.join("enrollments.reg"),
+            r#"Windows Registry Editor Version 5.00
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Enrollments\{11111111-2222-3333-4444-555555555555}]
+"UPN"="user@contoso.com"
+"ProviderID"="MS DM Server"
+"EnrollmentState"=dword:00000001
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Enrollments\{11111111-2222-3333-4444-555555555555}\FirstSync]
+"SyncComplete"=dword:00000001
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Enrollments\{22222222-3333-4444-5555-666666666666}]
+"UPN"="admin@contoso.com"
+"ProviderID"="MS DM Server"
+"EnrollmentState"=dword:00000001
+"#,
+        )
+        .expect("write enrollments sample");
+
+        let evidence = load_enrollment_evidence(temp_dir.path()).expect("enrollment evidence");
+        assert_eq!(evidence.enrollment_count, 2);
+        assert_eq!(evidence.enrollments.len(), 2);
+        assert!(evidence.enrollments.iter().any(|e| e.upn.as_deref() == Some("user@contoso.com")));
     }
 }

@@ -407,7 +407,7 @@ pub fn parse_live_event_logs() -> Option<EventLogAnalysis> {
     }
 }
 
-fn build_event_log_analysis(
+pub(crate) fn build_event_log_analysis(
     mut all_entries: Vec<EventLogEntry>,
     parsed_file_count: u32,
     source_kind: EventLogAnalysisSource,
@@ -458,7 +458,7 @@ fn build_event_log_analysis(
 }
 
 #[cfg(target_os = "windows")]
-fn parse_live_event_record(
+pub(crate) fn parse_live_event_record(
     xml: &str,
     source_file: &str,
     rendered_message: Option<String>,

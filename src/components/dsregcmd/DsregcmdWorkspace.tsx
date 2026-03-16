@@ -13,6 +13,7 @@ import {
   parseDisplayDateTime,
 } from "../../lib/date-time-format";
 import { useDsregcmdStore } from "../../stores/dsregcmd-store";
+import { DsregcmdEventLogSurface } from "./DsregcmdEventLogSurface";
 import { useAppActions } from "../layout/Toolbar";
 import { writeTextOutputFile } from "../../lib/commands";
 import type {
@@ -1116,6 +1117,176 @@ function getFactGroups(
         },
       ]),
     },
+    ...(result.osVersion
+      ? [
+          {
+            id: "os-version",
+            title: "Operating System",
+            caption: "OS version details from the registry evidence.",
+            rows: withNotReportedMetadata([
+              {
+                label: "Product Name",
+                value: formatValue(result.osVersion.productName),
+              },
+              {
+                label: "Display Version",
+                value: formatValue(result.osVersion.displayVersion),
+              },
+              {
+                label: "Current Build",
+                value: formatValue(result.osVersion.currentBuild),
+              },
+              {
+                label: "UBR",
+                value:
+                  result.osVersion.ubr != null
+                    ? String(result.osVersion.ubr)
+                    : "Not reported",
+              },
+              {
+                label: "Edition",
+                value: formatValue(result.osVersion.editionId),
+              },
+            ]),
+          },
+        ]
+      : []),
+    ...(result.proxyEvidence
+      ? [
+          {
+            id: "proxy-config",
+            title: "Proxy Configuration",
+            caption: "Proxy settings that may affect connectivity to Entra ID endpoints.",
+            rows: withNotReportedMetadata([
+              {
+                label: "Proxy Enabled",
+                value: formatBool(result.proxyEvidence.proxyEnabled ?? null),
+                tone: result.proxyEvidence.proxyEnabled === true
+                  ? ("warn" as const)
+                  : ("neutral" as const),
+              },
+              {
+                label: "Proxy Server",
+                value: formatValue(result.proxyEvidence.proxyServer),
+              },
+              {
+                label: "Proxy Override",
+                value: formatValue(result.proxyEvidence.proxyOverride),
+              },
+              {
+                label: "Auto Config URL",
+                value: formatValue(result.proxyEvidence.autoConfigUrl),
+              },
+              {
+                label: "WPAD Detected",
+                value: result.proxyEvidence.wpadDetected ? "Yes" : "No",
+                tone: result.proxyEvidence.wpadDetected
+                  ? ("warn" as const)
+                  : ("neutral" as const),
+              },
+              {
+                label: "WinHTTP Proxy",
+                value: formatValue(result.proxyEvidence.winhttpProxy),
+              },
+            ]),
+          },
+        ]
+      : []),
+    ...(result.enrollmentEvidence
+      ? [
+          {
+            id: "enrollment-status",
+            title: "Enrollment Status",
+            caption: "MDM enrollment entries found in the registry.",
+            rows: withNotReportedMetadata([
+              {
+                label: "Enrollment Count",
+                value: String(result.enrollmentEvidence.enrollmentCount),
+                tone:
+                  result.enrollmentEvidence.enrollmentCount === 0 &&
+                  facts.joinState.azureAdJoined === true
+                    ? ("warn" as const)
+                    : result.enrollmentEvidence.enrollmentCount > 1
+                      ? ("warn" as const)
+                      : ("good" as const),
+              },
+              ...result.enrollmentEvidence.enrollments.map((e, i) => ({
+                label: `Enrollment ${i + 1}`,
+                value: [
+                  e.upn ?? "(no UPN)",
+                  e.providerId ?? "(no provider)",
+                  e.enrollmentState != null
+                    ? `state=${e.enrollmentState}`
+                    : "",
+                ]
+                  .filter(Boolean)
+                  .join(" — "),
+              })),
+            ]),
+          },
+        ]
+      : []),
+    ...(result.activeEvidence?.connectivityTests?.length
+      ? [
+          {
+            id: "endpoint-connectivity",
+            title: "Endpoint Connectivity",
+            caption: "Live reachability tests to required Microsoft Entra endpoints.",
+            rows: result.activeEvidence.connectivityTests.map((test) => ({
+              label: new URL(test.endpoint).hostname,
+              value: test.reachable
+                ? `Reachable${test.statusCode ? ` (${test.statusCode})` : ""}${test.latencyMs != null ? ` — ${test.latencyMs}ms` : ""}`
+                : `Unreachable${test.errorMessage ? ` — ${test.errorMessage}` : ""}`,
+              tone: test.reachable
+                ? test.latencyMs != null && test.latencyMs > 2000
+                  ? ("warn" as const)
+                  : ("good" as const)
+                : ("bad" as const),
+            })),
+          },
+        ]
+      : []),
+    ...(result.activeEvidence?.scpQuery
+      ? [
+          {
+            id: "scp-config",
+            title: "SCP Configuration",
+            caption: "Service Connection Point query results from Active Directory.",
+            rows: withNotReportedMetadata([
+              {
+                label: "SCP Found",
+                value: result.activeEvidence.scpQuery.scpFound ? "Yes" : "No",
+                tone: result.activeEvidence.scpQuery.scpFound
+                  ? ("good" as const)
+                  : facts.joinState.domainJoined === true
+                    ? ("bad" as const)
+                    : ("neutral" as const),
+              },
+              {
+                label: "Tenant Domain",
+                value: formatValue(result.activeEvidence.scpQuery.tenantDomain),
+              },
+              {
+                label: "Azure AD ID",
+                value: formatValue(result.activeEvidence.scpQuery.azureadId),
+              },
+              {
+                label: "Domain Controller",
+                value: formatValue(result.activeEvidence.scpQuery.domainController),
+              },
+              ...(result.activeEvidence.scpQuery.error
+                ? [
+                    {
+                      label: "Error",
+                      value: result.activeEvidence.scpQuery.error,
+                      tone: "warn" as const,
+                    },
+                  ]
+                : []),
+            ]),
+          },
+        ]
+      : []),
     {
       id: "source-details",
       title: "Source Details",
@@ -1648,6 +1819,10 @@ export function DsregcmdWorkspace() {
   } | null>(null);
   const [showRawInput, setShowRawInput] = useState(false);
   const [showNotReported, setShowNotReported] = useState(false);
+  const activeTab = useDsregcmdStore((s) => s.activeTab);
+  const setActiveTab = useDsregcmdStore((s) => s.setActiveTab);
+
+  const eventLogEntryCount = result?.eventLogAnalysis?.totalEntryCount ?? 0;
 
   const diagnostics = result?.diagnostics ?? [];
   const errorCount = diagnostics.filter(
@@ -2022,6 +2197,35 @@ export function DsregcmdWorkspace() {
         </div>
       </div>
 
+      {/* Tab strip */}
+      <div
+        style={{
+          display: "flex",
+          gap: 2,
+          padding: "0 12px",
+          borderBottom: "1px solid #d1d5db",
+          background: "#f3f4f6",
+          flexShrink: 0,
+        }}
+      >
+        <TabButton
+          label="Analysis"
+          isActive={activeTab === "analysis"}
+          onClick={() => setActiveTab("analysis")}
+        />
+        <TabButton
+          label="Event Logs"
+          count={eventLogEntryCount}
+          isActive={activeTab === "event-logs"}
+          onClick={() => setActiveTab("event-logs")}
+        />
+      </div>
+
+      {activeTab === "event-logs" && result.eventLogAnalysis ? (
+        <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+          <DsregcmdEventLogSurface eventLogAnalysis={result.eventLogAnalysis} />
+        </div>
+      ) : (
       <div
         style={{
           flex: 1,
@@ -2603,6 +2807,55 @@ export function DsregcmdWorkspace() {
           )}
         </SectionFrame>
       </div>
+      )}
     </div>
+  );
+}
+
+function TabButton({
+  label,
+  count,
+  isActive,
+  onClick,
+}: {
+  label: string;
+  count?: number;
+  isActive: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      style={{
+        padding: "8px 14px",
+        fontSize: 13,
+        fontWeight: isActive ? 600 : 400,
+        color: isActive ? "#2563eb" : "#6b7280",
+        background: "transparent",
+        border: "none",
+        borderBottom: isActive ? "2px solid #2563eb" : "2px solid transparent",
+        cursor: "pointer",
+        transition: "border-color 0.15s, color 0.15s",
+        display: "flex",
+        alignItems: "center",
+        gap: 6,
+      }}
+    >
+      {label}
+      {count != null && count > 0 && (
+        <span
+          style={{
+            fontSize: 11,
+            padding: "1px 6px",
+            borderRadius: 10,
+            background: isActive ? "#dbeafe" : "#e5e7eb",
+            color: isActive ? "#1e40af" : "#4b5563",
+          }}
+        >
+          {count}
+        </span>
+      )}
+    </button>
   );
 }

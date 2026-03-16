@@ -291,6 +291,9 @@ pub enum EventLogChannel {
     ShellCoreOperational,
     TimeServiceOperational,
     UserDeviceRegistrationAdmin,
+    CryptoDpapiOperational,
+    KerberosOperational,
+    SystemLog,
     Other(String),
 }
 
@@ -321,6 +324,12 @@ impl EventLogChannel {
             Self::TimeServiceOperational
         } else if lower.contains("user device registration") && lower.contains("/admin") {
             Self::UserDeviceRegistrationAdmin
+        } else if lower.contains("crypto-dpapi") && lower.contains("/operational") {
+            Self::CryptoDpapiOperational
+        } else if lower.contains("kerberos") && lower.contains("/operational") {
+            Self::KerberosOperational
+        } else if lower == "system" || lower.contains("system log") {
+            Self::SystemLog
         } else if raw.is_empty() {
             Self::Other("Unknown".to_string())
         } else {
@@ -341,6 +350,9 @@ impl EventLogChannel {
             Self::ShellCoreOperational => "Shell Core",
             Self::TimeServiceOperational => "Time Service",
             Self::UserDeviceRegistrationAdmin => "User Device Reg",
+            Self::CryptoDpapiOperational => "Crypto DPAPI",
+            Self::KerberosOperational => "Kerberos",
+            Self::SystemLog => "System",
             Self::Other(name) => name.as_str(),
         }
     }

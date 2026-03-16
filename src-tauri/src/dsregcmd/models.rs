@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::intune::models::IntuneDiagnosticSeverity;
+use crate::intune::models::{EventLogAnalysis, IntuneDiagnosticSeverity};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub enum DsregcmdJoinType {
@@ -269,6 +269,72 @@ pub struct DsregcmdDiagnosticInsight {
     pub suggested_fixes: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct DsregcmdOsVersionEvidence {
+    pub current_build: Option<String>,
+    pub display_version: Option<String>,
+    pub product_name: Option<String>,
+    pub ubr: Option<u32>,
+    pub edition_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct DsregcmdProxyEvidence {
+    pub proxy_enabled: Option<bool>,
+    pub proxy_server: Option<String>,
+    pub proxy_override: Option<String>,
+    pub auto_config_url: Option<String>,
+    pub wpad_detected: bool,
+    pub winhttp_proxy: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct DsregcmdEnrollmentEntry {
+    pub upn: Option<String>,
+    pub provider_id: Option<String>,
+    pub enrollment_state: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct DsregcmdEnrollmentEvidence {
+    pub enrollment_count: u32,
+    #[serde(default)]
+    pub enrollments: Vec<DsregcmdEnrollmentEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct DsregcmdConnectivityResult {
+    pub endpoint: String,
+    pub reachable: bool,
+    pub status_code: Option<u16>,
+    pub latency_ms: Option<u64>,
+    pub error_message: Option<String>,
+    pub timestamp: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct DsregcmdScpQueryResult {
+    pub scp_found: bool,
+    pub tenant_domain: Option<String>,
+    pub azuread_id: Option<String>,
+    pub keywords: Vec<String>,
+    pub domain_controller: Option<String>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct DsregcmdActiveEvidence {
+    pub connectivity_tests: Vec<DsregcmdConnectivityResult>,
+    pub scp_query: Option<DsregcmdScpQueryResult>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct DsregcmdAnalysisResult {
@@ -278,6 +344,16 @@ pub struct DsregcmdAnalysisResult {
     pub diagnostics: Vec<DsregcmdDiagnosticInsight>,
     #[serde(default)]
     pub policy_evidence: DsregcmdWhfbPolicyEvidence,
+    #[serde(default)]
+    pub os_version: Option<DsregcmdOsVersionEvidence>,
+    #[serde(default)]
+    pub proxy_evidence: Option<DsregcmdProxyEvidence>,
+    #[serde(default)]
+    pub enrollment_evidence: Option<DsregcmdEnrollmentEvidence>,
+    #[serde(default)]
+    pub active_evidence: Option<DsregcmdActiveEvidence>,
+    #[serde(default)]
+    pub event_log_analysis: Option<EventLogAnalysis>,
 }
 
 #[cfg(test)]

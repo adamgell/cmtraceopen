@@ -1,12 +1,16 @@
+pub mod connectivity;
+pub mod event_logs;
 pub mod models;
 pub mod parser;
 pub mod registry;
 pub mod rules;
 
 pub use models::{
-    DsregcmdAnalysisResult, DsregcmdDerived, DsregcmdDiagnosticInsight,
-    DsregcmdEvidenceSource, DsregcmdFacts, DsregcmdJoinType, DsregcmdPolicyEvidenceValue,
-    DsregcmdWhfbPolicyEvidence,
+    DsregcmdActiveEvidence, DsregcmdAnalysisResult, DsregcmdConnectivityResult,
+    DsregcmdDerived, DsregcmdDiagnosticInsight, DsregcmdEnrollmentEntry,
+    DsregcmdEnrollmentEvidence, DsregcmdEvidenceSource, DsregcmdFacts, DsregcmdJoinType,
+    DsregcmdOsVersionEvidence, DsregcmdPolicyEvidenceValue, DsregcmdProxyEvidence,
+    DsregcmdScpQueryResult, DsregcmdWhfbPolicyEvidence,
 };
 
 pub fn analyze_text(input: &str) -> Result<DsregcmdAnalysisResult, String> {

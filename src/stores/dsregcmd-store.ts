@@ -5,6 +5,7 @@ import type {
   DsregcmdSourceContext,
   DsregcmdSourceDescriptor,
 } from "../types/dsregcmd";
+import type { EventLogChannel, EventLogSeverity } from "../types/event-log";
 
 const emptySourceContext: DsregcmdSourceContext = {
   source: null,
@@ -26,6 +27,8 @@ const defaultAnalysisState: DsregcmdAnalysisState = {
   lastError: null,
 };
 
+export type DsregcmdTabId = "analysis" | "event-logs";
+
 interface DsregcmdState {
   result: DsregcmdAnalysisResult | null;
   rawInput: string;
@@ -33,6 +36,11 @@ interface DsregcmdState {
   analysisState: DsregcmdAnalysisState;
   isAnalyzing: boolean;
   resultRevision: number;
+
+  activeTab: DsregcmdTabId;
+  eventLogFilterChannel: EventLogChannel | "All";
+  eventLogFilterSeverity: EventLogSeverity | "All";
+  selectedEventLogEntryId: number | null;
 
   beginAnalysis: (source: DsregcmdSourceDescriptor, detail?: string | null) => void;
   setResults: (
@@ -42,6 +50,10 @@ interface DsregcmdState {
   ) => void;
   failAnalysis: (error: unknown) => void;
   clear: () => void;
+  setActiveTab: (tab: DsregcmdTabId) => void;
+  setEventLogFilterChannel: (channel: EventLogChannel | "All") => void;
+  setEventLogFilterSeverity: (severity: EventLogSeverity | "All") => void;
+  selectEventLogEntry: (id: number | null) => void;
 }
 
 export const useDsregcmdStore = create<DsregcmdState>((set) => ({
@@ -51,6 +63,11 @@ export const useDsregcmdStore = create<DsregcmdState>((set) => ({
   analysisState: defaultAnalysisState,
   isAnalyzing: false,
   resultRevision: 0,
+
+  activeTab: "analysis" as DsregcmdTabId,
+  eventLogFilterChannel: "All" as EventLogChannel | "All",
+  eventLogFilterSeverity: "All" as EventLogSeverity | "All",
+  selectedEventLogEntryId: null,
 
   beginAnalysis: (source, detail = null) =>
     set({
@@ -135,5 +152,21 @@ export const useDsregcmdStore = create<DsregcmdState>((set) => ({
       sourceContext: emptySourceContext,
       analysisState: defaultAnalysisState,
       isAnalyzing: false,
+      activeTab: "analysis",
+      selectedEventLogEntryId: null,
     }),
+
+  setActiveTab: (tab) => set({ activeTab: tab }),
+
+  setEventLogFilterChannel: (channel) =>
+    set({ eventLogFilterChannel: channel, selectedEventLogEntryId: null }),
+
+  setEventLogFilterSeverity: (severity) =>
+    set({ eventLogFilterSeverity: severity, selectedEventLogEntryId: null }),
+
+  selectEventLogEntry: (id) =>
+    set((state) => ({
+      selectedEventLogEntryId:
+        state.selectedEventLogEntryId === id ? null : id,
+    })),
 }));

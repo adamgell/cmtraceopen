@@ -34,6 +34,7 @@ evtx = "0.8"
 [target.'cfg(target_os = "windows")'.dependencies]
 winreg = "0.52"
 windows = { version = "0.58", features = ["Win32_Foundation", "Win32_System_EventLog", "Win32_Security"] }
+ureq = "2"
 
 [dev-dependencies]
 criterion = "0.5"
