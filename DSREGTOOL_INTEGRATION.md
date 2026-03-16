@@ -22,7 +22,7 @@ Our DSRegCMD workspace is already a mature analysis engine:
 - **Capture confidence scoring** — `high` / `medium` / `low` based on timestamp freshness and session type (remote vs. interactive)
 - **20+ error rules, 10+ warning rules, 10+ info rules** — Comprehensive diagnostic insight generation in `rules.rs` (~2100 lines)
 - **Live capture on Windows** — Executes `dsregcmd /status` with Microsoft signature verification, collects registry evidence into a structured bundle
-- **5 input methods** — File, folder, clipboard, live capture, manual text
+- **4 input methods** — File, folder, clipboard, live capture
 - **Export capabilities** — JSON and formatted summary text, copy to clipboard, save to file
 
 ---
