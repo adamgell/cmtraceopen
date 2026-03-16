@@ -84,11 +84,49 @@ Enrollment Account IDs are read from: `HKLM\SOFTWARE\Microsoft\Enrollments`
 | `HKLM\SOFTWARE\Microsoft\IntuneManagementExtension` | IME presence check |
 | `HKLM\SOFTWARE\Microsoft\DeclaredConfiguration` | DC host OS config |
 
+### SyncML Extraction Regex
+
+The original C# uses this regex to extract complete SyncML blocks from raw event data:
+
+```regex
+<SyncML[\s\S]*?</SyncML>
+```
+
+Both SessionID and MsgID regexes are case-insensitive.
+
+### Local MDM API (`mdmlocalmanagement.dll`)
+
+SyncMLViewer includes a separate **Executer** binary that interfaces with the undocumented `mdmlocalmanagement.dll` via P/Invoke to send local SyncML requests directly to the device's MDM stack — no MDM server needed.
+
+**P/Invoke signatures:**
+- `ApplyLocalManagementSyncML(string syncMLRequest, out IntPtr syncMLResult)` — sends a SyncML request locally and gets a response
+- `RegisterDeviceWithLocalManagement(out bool alreadyRegistered)` — registers the device for local management (creates enrollment type 20, ProviderID `"Local_Management"`)
+- `UnregisterDeviceWithLocalManagement()` — removes local management enrollment
+
+**Prerequisites:** EmbeddedMode must be enabled — requires setting a SHA-256 hash of the SMBIOS UUID in registry at `HKLM\SYSTEM\CurrentControlSet\Services\EmbeddedMode\Parameters\Flags`.
+
+The main application extracts the Executer binary from embedded resources at runtime, validates its **SHA-256 hash** before execution, and requires a **64-bit process** with **MTA threading model**.
+
+### Declared Configuration / MMP-C Support
+
+The newer Microsoft Managed Platform Cloud (MMP-C) uses a desired-state model but still transports over the same OMA-DM SyncML protocol. SyncMLViewer captures MMP-C traffic with the same ETW approach. There is also support for triggering MMP-C syncs separately from standard MDM syncs.
+
+### Command-Line Arguments (Original Tool)
+
+| Flag | Purpose |
+|---|---|
+| `/s` | Trigger MDM sync on startup |
+| `/m` | Trigger MMP-C sync on startup |
+| `/b` | Enable background logging to XML files |
+| `/h` | Hide when minimized (system tray) |
+
 ### Views in Original Tool
 
 1. **Stream View** — continuous raw XML log of all SyncML messages (searchable)
-2. **Session View** — hierarchical: Sessions → Messages, with XML viewer and folding
+2. **Session View** — hierarchical: Sessions → Messages, with XML viewer (AvalonEdit) and code folding
 3. **Status Code Reference** — built-in OMA SyncML response code documentation
+
+Additional features: Base64/Hex decoding, Autopilot hardware hash decoding, NodeCache lookup, WiFi profile enumeration via `netsh`, VPN profile retrieval via PowerShell, MDM diagnostics report generation.
 
 ---
 
@@ -98,10 +136,11 @@ Enrollment Account IDs are read from: `HKLM\SOFTWARE\Microsoft\Enrollments`
 
 #### New Files
 - `mod.rs` — module exports
-- `etw.rs` — ETW trace session management (start/stop capture)
-- `parser.rs` — SyncML XML extraction and formatting
+- `etw.rs` — ETW trace session management (start/stop capture, session named `"CMTraceOpen-SyncML"`)
+- `parser.rs` — SyncML XML extraction and formatting (regex: `<SyncML[\s\S]*?</SyncML>`)
 - `models.rs` — `SyncMlSession`, `SyncMlMessage` data structures
-- `trigger.rs` — MDM sync trigger via scheduled tasks
+- `trigger.rs` — MDM sync trigger via scheduled tasks and MMP-C sync
+- `local_mdm.rs` — (future) Local MDM API via `mdmlocalmanagement.dll` FFI for sending SyncML requests without a server
 
 #### ETW in Rust
 
@@ -215,3 +254,6 @@ quick-xml = "0.36"
 - [ferrisetw - Rust ETW library by Microsoft](https://github.com/microsoft/ferrisetw)
 - [ETW Providers GUID list](https://gist.github.com/guitarrapc/35a94b908bad677a7310)
 - [Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider manifest](https://github.com/repnz/etw-providers-docs/blob/master/Manifests-Win10-17134/Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider.xml)
+- [SyncML Viewer Update with Autopilot hash decoding (2025)](https://oliverkieselbach.com/2025/01/27/syncml-viewer-update-with-autopilot-hash-decoding/)
+- [MS-MDM SyncML Message Specification](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-mdm/221ba29e-f0da-4b04-af9e-42f8631aea68)
+- [Send MDM commands without an MDM service (Michael Niehaus)](https://oofhours.com/2022/08/26/send-mdm-commands-without-an-mdm-service-using-powershell/)
