@@ -15,7 +15,7 @@ use crate::intune::event_tracker;
 use crate::intune::evtx_parser;
 use crate::intune::ime_parser;
 use crate::intune::models::{
-    DownloadStat, EvidenceBundleArtifactCounts, EvidenceBundleMetadata, EventLogAnalysis,
+    DownloadStat, EventLogAnalysis, EvidenceBundleArtifactCounts, EvidenceBundleMetadata,
     IntuneAnalysisResult, IntuneDiagnosticCategory, IntuneDiagnosticInsight,
     IntuneDiagnosticSeverity, IntuneDiagnosticsConfidence, IntuneDiagnosticsConfidenceLevel,
     IntuneDiagnosticsCoverage, IntuneDiagnosticsFileCoverage, IntuneDominantSource, IntuneEvent,
@@ -76,8 +76,8 @@ pub async fn analyze_intune_logs(
     async_runtime::spawn_blocking(move || {
         analyze_intune_logs_blocking(path, request_id, include_live_event_logs, app)
     })
-        .await
-        .map_err(|error| format!("Intune analysis task failed: {}", error))?
+    .await
+    .map_err(|error| format!("Intune analysis task failed: {}", error))?
 }
 
 fn analyze_intune_logs_blocking(
@@ -2380,7 +2380,8 @@ fn related_error_codes(events: &[&IntuneEvent], limit: usize) -> Vec<String> {
 }
 
 fn top_failed_download_labels(downloads: &[DownloadStat], limit: usize) -> Vec<String> {
-    let mut labels = Vec::new();
+    let mut label_counts: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
 
     for download in downloads.iter().filter(|download| !download.success) {
         let label = if download.name.trim().is_empty() {
@@ -2389,16 +2390,23 @@ fn top_failed_download_labels(downloads: &[DownloadStat], limit: usize) -> Vec<S
             format!("Affected content: {}", download.name)
         };
 
-        if !labels.contains(&label) {
-            labels.push(label);
-        }
-
-        if labels.len() >= limit {
-            break;
-        }
+        *label_counts.entry(label).or_insert(0) += 1;
     }
 
-    labels
+    let mut sorted_counts: Vec<(String, usize)> = label_counts.into_iter().collect();
+    sorted_counts.sort_by(|a, b| b.1.cmp(&a.1));
+
+    sorted_counts
+        .into_iter()
+        .take(limit)
+        .map(|(label, count)| {
+            if count > 1 {
+                format!("{} ({} times)", label, count)
+            } else {
+                label
+            }
+        })
+        .collect()
 }
 
 #[derive(Clone)]
@@ -2802,8 +2810,9 @@ fn script_failure_suggested_fixes(
 }
 
 fn top_event_detail_matches(events: &[&IntuneEvent], limit: usize) -> Vec<String> {
-    let mut labels = Vec::new();
-    let name_re = regex::Regex::new(r#"(?i)\"(?:ApplicationName|Name)\"\s*:\s*\"([^\"]+)\""#).ok();
+    let mut evidence_counts: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
+    let name_re = regex::Regex::new(r#"(?i)\"(?:ApplicationName|Name)\"\s*:\s*\"([^\",\}]+)"#).ok();
 
     for event in events {
         let snippet = event.detail.trim();
@@ -2811,12 +2820,14 @@ fn top_event_detail_matches(events: &[&IntuneEvent], limit: usize) -> Vec<String
             continue;
         }
 
-        let extracted_name = name_re.as_ref().and_then(|re| {
-            re.captures(snippet).map(|caps| caps[1].to_string())
-        });
+        let extracted_name = name_re
+            .as_ref()
+            .and_then(|re| re.captures(snippet).map(|caps| caps[1].trim().to_string()));
 
         let evidence = if let Some(name) = extracted_name {
-            if event.event_type == IntuneEventType::PowerShellScript || event.event_type == IntuneEventType::Remediation {
+            if event.event_type == IntuneEventType::PowerShellScript
+                || event.event_type == IntuneEventType::Remediation
+            {
                 format!("Failing script: {}", name)
             } else if event.event_type == IntuneEventType::PolicyEvaluation {
                 format!("Affected policy: {}", name)
@@ -2832,16 +2843,23 @@ fn top_event_detail_matches(events: &[&IntuneEvent], limit: usize) -> Vec<String
             format!("Observed detail: {}", shortened)
         };
 
-        if !labels.contains(&evidence) {
-            labels.push(evidence);
-        }
-
-        if labels.len() >= limit {
-            break;
-        }
+        *evidence_counts.entry(evidence).or_insert(0) += 1;
     }
 
-    labels
+    let mut sorted_counts: Vec<(String, usize)> = evidence_counts.into_iter().collect();
+    sorted_counts.sort_by(|a, b| b.1.cmp(&a.1));
+
+    sorted_counts
+        .into_iter()
+        .take(limit)
+        .map(|(evidence, count)| {
+            if count > 1 {
+                format!("{} ({} times)", evidence, count)
+            } else {
+                evidence
+            }
+        })
+        .collect()
 }
 
 fn repeated_retry_evidence(events: &[&IntuneEvent]) -> Option<String> {
@@ -3045,7 +3063,8 @@ fn contains_any(value: &str, terms: &[&str]) -> bool {
 }
 
 fn top_event_labels(events: &[&IntuneEvent], limit: usize) -> Vec<String> {
-    let mut labels = Vec::new();
+    let mut label_counts: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
 
     for event in events {
         let mut label = event.name.clone();
@@ -3054,16 +3073,23 @@ fn top_event_labels(events: &[&IntuneEvent], limit: usize) -> Vec<String> {
         }
 
         let evidence = format!("Affected event: {}", label);
-        if !labels.contains(&evidence) {
-            labels.push(evidence);
-        }
-
-        if labels.len() >= limit {
-            break;
-        }
+        *label_counts.entry(evidence).or_insert(0) += 1;
     }
 
-    labels
+    let mut sorted_counts: Vec<(String, usize)> = label_counts.into_iter().collect();
+    sorted_counts.sort_by(|a, b| b.1.cmp(&a.1));
+
+    sorted_counts
+        .into_iter()
+        .take(limit)
+        .map(|(label, count)| {
+            if count > 1 {
+                format!("{} ({} times)", label, count)
+            } else {
+                label
+            }
+        })
+        .collect()
 }
 
 #[cfg(test)]
