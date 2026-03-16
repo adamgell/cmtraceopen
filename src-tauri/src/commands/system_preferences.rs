@@ -44,12 +44,12 @@ pub fn get_system_date_time_preferences() -> Result<SystemDateTimePreferences, S
             .ok()
             .filter(|value| !value.trim().is_empty());
 
-        return Ok(SystemDateTimePreferences {
+        Ok(SystemDateTimePreferences {
             date_pattern,
             time_pattern,
             am_designator,
             pm_designator,
-        });
+        })
     }
 
     #[cfg(not(target_os = "windows"))]

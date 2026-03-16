@@ -1,6 +1,6 @@
-use crate::dsregcmd::models::{
-    DsregcmdActiveEvidence, DsregcmdConnectivityResult, DsregcmdScpQueryResult,
-};
+use crate::dsregcmd::models::DsregcmdActiveEvidence;
+#[cfg(target_os = "windows")]
+use crate::dsregcmd::models::{DsregcmdConnectivityResult, DsregcmdScpQueryResult};
 
 #[cfg(target_os = "windows")]
 const TEST_ENDPOINTS: &[&str] = &[

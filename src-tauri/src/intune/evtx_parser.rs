@@ -3,7 +3,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use evtx::EvtxParser;
+#[cfg(target_os = "windows")]
 use once_cell::sync::Lazy;
+#[cfg(target_os = "windows")]
 use regex::Regex;
 use serde_json::Value;
 
@@ -12,9 +14,12 @@ use crate::intune::eventlog_win32;
 use crate::intune::models::{
     EvidenceBundleMetadata, EventLogAnalysis, EventLogAnalysisSource, EventLogChannel,
     EventLogChannelSummary, EventLogCorrelationKind, EventLogCorrelationLink, EventLogEntry,
-    EventLogLiveQueryChannelResult, EventLogLiveQueryMetadata, EventLogLiveQueryStatus,
     EventLogSeverity, IntuneDiagnosticInsight, IntuneEvent, IntuneEventType, IntuneStatus,
     IntuneTimestampBounds,
+};
+#[cfg(target_os = "windows")]
+use crate::intune::models::{
+    EventLogLiveQueryChannelResult, EventLogLiveQueryMetadata, EventLogLiveQueryStatus,
 };
 
 /// Maximum entries to parse from a single .evtx file to prevent memory issues.
@@ -393,12 +398,12 @@ pub fn parse_live_event_logs() -> Option<EventLogAnalysis> {
             }
         }
 
-        return build_event_log_analysis(
+        build_event_log_analysis(
             all_entries,
             parsed_file_count,
             EventLogAnalysisSource::Live,
             Some(build_live_query_metadata(live_channels)),
-        );
+        )
     }
 
     #[cfg(not(target_os = "windows"))]

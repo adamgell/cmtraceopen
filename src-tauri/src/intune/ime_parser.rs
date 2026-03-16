@@ -231,6 +231,7 @@ fn parse_attributes(attrs: &str) -> ParsedImeAttrs<'_> {
     parsed
 }
 
+#[expect(clippy::type_complexity, reason = "tuple return avoids extra struct for internal parsing")]
 fn parse_timestamp_fields(
     date: Option<&str>,
     time: Option<&str>,
@@ -278,6 +279,7 @@ fn parse_timestamp_fields(
     )
 }
 
+#[expect(clippy::too_many_arguments, reason = "timestamp construction keeps calendar fields explicit")]
 fn build_utc_timestamp(
     month: u32,
     day: u32,

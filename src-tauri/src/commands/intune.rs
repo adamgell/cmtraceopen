@@ -453,6 +453,7 @@ fn load_event_log_analysis(
     None
 }
 
+#[expect(clippy::too_many_arguments, reason = "progress event keeps all fields explicit")]
 fn emit_analysis_progress(
     app: &AppHandle,
     request_id: &str,

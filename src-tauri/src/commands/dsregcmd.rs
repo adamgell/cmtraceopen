@@ -1,4 +1,6 @@
-use crate::dsregcmd::{analyze_text, connectivity, registry, rules, DsregcmdAnalysisResult};
+use crate::dsregcmd::{analyze_text, registry, rules, DsregcmdAnalysisResult};
+#[cfg(target_os = "windows")]
+use crate::dsregcmd::connectivity;
 
 use serde::{Deserialize, Serialize};
 use std::path::Path;

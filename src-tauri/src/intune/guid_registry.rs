@@ -37,7 +37,7 @@ pub(crate) fn extract_json_field<'a>(msg: &'a str, prefix: &str, suffix: &str) -
 /// Handles Windows-style backslash paths on all platforms.
 pub(crate) fn setup_file_name(path: &str) -> String {
     // Split on both forward and backslash to handle Windows paths on Linux CI
-    path.rsplit(|c| c == '\\' || c == '/')
+    path.rsplit(['\\', '/'])
         .next()
         .filter(|s| !s.is_empty())
         .unwrap_or(path)
@@ -148,11 +148,8 @@ impl GuidRegistry {
     pub fn enrich_event_name(&self, current_name: &str, guid: &str) -> Option<String> {
         let resolved = self.resolve(guid)?;
         // Strip the trailing "(shortguid...)" suffix and replace with the resolved name
-        if let Some(prefix) = strip_short_guid_suffix(current_name) {
-            Some(format!("{prefix}{resolved}"))
-        } else {
-            None
-        }
+        strip_short_guid_suffix(current_name)
+            .map(|prefix| format!("{prefix}{resolved}"))
     }
 
     /// Number of entries in the registry.
