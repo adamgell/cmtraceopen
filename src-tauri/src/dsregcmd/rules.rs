@@ -1379,6 +1379,145 @@ fn build_diagnostics(
         ));
     }
 
+    // ── DSRegTool integration — Phase 1 quick-win rules ──────────────────────
+
+    // Built-in Administrator account detection
+    {
+        let is_builtin_admin = contains_text(&facts.diagnostics.user_identity, "administrator")
+            || facts
+                .diagnostics
+                .user_identity
+                .as_deref()
+                .map(|id| id.trim().ends_with("-500"))
+                .unwrap_or(false);
+        if is_builtin_admin
+            && matches!(
+                derived.join_type,
+                DsregcmdJoinType::NotJoined | DsregcmdJoinType::Unknown
+            )
+        {
+            diagnostics.push(issue(
+                "builtin-admin-cannot-join",
+                IntuneDiagnosticSeverity::Error,
+                "user",
+                "Built-in Administrator account cannot perform Azure AD Join",
+                "The user identity appears to be the built-in Administrator account (or SID ending in -500), which cannot perform Azure AD Join.",
+                vec![render_optional("User Identity", &facts.diagnostics.user_identity)],
+                vec![
+                    "Sign in with a standard user or non-built-in admin account.".to_string(),
+                ],
+                vec![
+                    "Create or use a non-built-in administrator account.".to_string(),
+                ],
+            ));
+        }
+    }
+
+    // Device sync status inference — sync pending
+    if facts.join_state.domain_joined == Some(true)
+        && facts.join_state.azure_ad_joined == Some(false)
+        && !is_failure(&facts.pre_join_tests.ad_connectivity_test)
+        && !is_failure(&facts.pre_join_tests.ad_configuration_test)
+        && !diagnostics.iter().any(|item| item.id == "entra-sync-pending")
+    {
+        diagnostics.push(issue(
+            "entra-sync-pending-inference",
+            IntuneDiagnosticSeverity::Warning,
+            "sync",
+            "Domain-joined device not yet synced to Entra ID",
+            "The device is domain-joined but not Azure AD joined, and pre-join AD tests are not failing. This commonly indicates the device object has not yet been synchronized to Entra ID via Azure AD Connect or Cloud Sync.",
+            vec![
+                render_bool("DomainJoined", facts.join_state.domain_joined),
+                render_bool("AzureAdJoined", facts.join_state.azure_ad_joined),
+            ],
+            vec![
+                "Check Azure AD Connect or Cloud Sync health and verify the device object exists on-premises.".to_string(),
+                "Confirm the OU containing the computer object is in scope for directory synchronization.".to_string(),
+            ],
+            vec![
+                "Wait for the next sync cycle or force a delta sync, then retry registration.".to_string(),
+            ],
+        ));
+    }
+
+    // Device sync status inference — fallback to sync-join active (non-hybrid)
+    if derived.join_type != DsregcmdJoinType::HybridEntraIdJoined
+        && (contains_text(&facts.pre_join_tests.fallback_to_sync_join, "enabled")
+            || contains_text(&facts.pre_join_tests.fallback_to_sync_join, "yes"))
+    {
+        diagnostics.push(issue(
+            "fallback-sync-join-active",
+            IntuneDiagnosticSeverity::Info,
+            "sync",
+            "Hybrid join is using sync-join fallback path",
+            "Fallback to Sync-Join is active, which means the device will rely on directory synchronization to complete its hybrid join rather than the immediate online path.",
+            vec![render_optional(
+                "Fallback to Sync-Join",
+                &facts.pre_join_tests.fallback_to_sync_join,
+            )],
+            vec![
+                "Monitor Azure AD Connect sync cycles for the device object to appear in Entra ID.".to_string(),
+            ],
+            Vec::new(),
+        ));
+    }
+
+    // Enhanced SCP heuristic — SCP verification needed
+    {
+        let has_drs_discovery_failure = is_failure(&facts.pre_join_tests.drs_discovery_test);
+        let is_domain_joined_not_hybrid = facts.join_state.domain_joined == Some(true)
+            && matches!(
+                derived.join_type,
+                DsregcmdJoinType::HybridEntraIdJoined | DsregcmdJoinType::NotJoined
+            );
+        if has_drs_discovery_failure && is_domain_joined_not_hybrid {
+            diagnostics.push(issue(
+                "scp-verify-needed",
+                IntuneDiagnosticSeverity::Warning,
+                "discovery",
+                "DRS discovery failed — verify Service Connection Point (SCP) configuration",
+                "DRS discovery failed on a domain-joined device. In hybrid join scenarios, this commonly points to a missing, misconfigured, or unreachable Service Connection Point (SCP) in Active Directory.",
+                vec![
+                    render_optional("DRS Discovery Test", &facts.pre_join_tests.drs_discovery_test),
+                    render_bool("DomainJoined", facts.join_state.domain_joined),
+                ],
+                vec![
+                    "Verify the SCP exists in Active Directory under CN=62a0ff2e-97b9-4513-943f-0d221bd30080,CN=Device Registration Configuration,CN=Services,CN=Configuration,DC=...".to_string(),
+                    "Confirm the SCP points to the correct verified tenant domain.".to_string(),
+                ],
+                vec![
+                    "Create or correct the SCP using Azure AD Connect or manually in Active Directory.".to_string(),
+                ],
+            ));
+        }
+    }
+
+    // Enhanced SCP heuristic — SCP tenant mismatch hint
+    if is_failure(&facts.pre_join_tests.drs_discovery_test)
+        && is_failure(&facts.pre_join_tests.ad_configuration_test)
+        && facts.tenant_details.tenant_id.is_some()
+    {
+        diagnostics.push(issue(
+            "scp-tenant-mismatch-hint",
+            IntuneDiagnosticSeverity::Warning,
+            "configuration",
+            "Check SCP tenant alignment after migration or reconfiguration",
+            "Both DRS discovery and AD configuration tests failed while tenant details are present. This pattern can occur when the SCP points to a different tenant than expected, such as after a tenant migration or domain reconfiguration.",
+            vec![
+                render_optional("DRS Discovery Test", &facts.pre_join_tests.drs_discovery_test),
+                render_optional("AD Configuration Test", &facts.pre_join_tests.ad_configuration_test),
+                render_optional("TenantId", &facts.tenant_details.tenant_id),
+            ],
+            vec![
+                "Compare the tenant ID in the SCP with the expected target tenant.".to_string(),
+                "Check if the organization recently migrated tenants or reconfigured hybrid join.".to_string(),
+            ],
+            vec![
+                "Update the SCP to point to the correct tenant domain and re-run Azure AD Connect.".to_string(),
+            ],
+        ));
+    }
+
     diagnostics
 }
 
@@ -2118,5 +2257,180 @@ mod tests {
         let analysis = analyze_facts(facts, sample);
 
         assert_eq!(analysis.derived.capture_confidence, DsregcmdCaptureConfidence::Low);
+    }
+
+    #[test]
+    fn emits_builtin_admin_cannot_join_for_administrator_identity() {
+        let sample = r#"
+ AzureAdJoined : NO
+ DomainJoined : NO
+ WorkplaceJoined : NO
+ AzureAdPrt : NO
+ User Identity : Administrator
+"#;
+        let facts = parse_dsregcmd(sample).expect("parse admin sample");
+        let analysis = analyze_facts(facts, sample);
+        let ids: Vec<&str> = analysis.diagnostics.iter().map(|i| i.id.as_str()).collect();
+
+        assert!(ids.contains(&"builtin-admin-cannot-join"), "missing builtin-admin-cannot-join");
+        let rule = analysis.diagnostics.iter().find(|i| i.id == "builtin-admin-cannot-join").unwrap();
+        assert_eq!(rule.severity, IntuneDiagnosticSeverity::Error);
+    }
+
+    #[test]
+    fn emits_builtin_admin_for_sid_ending_in_500() {
+        let sample = r#"
+ AzureAdJoined : NO
+ DomainJoined : NO
+ WorkplaceJoined : NO
+ AzureAdPrt : NO
+ User Identity : S-1-5-21-3623811015-3361044348-30300820-500
+"#;
+        let facts = parse_dsregcmd(sample).expect("parse sid admin sample");
+        let analysis = analyze_facts(facts, sample);
+        let ids: Vec<&str> = analysis.diagnostics.iter().map(|i| i.id.as_str()).collect();
+
+        assert!(ids.contains(&"builtin-admin-cannot-join"), "missing builtin-admin-cannot-join for SID -500");
+    }
+
+    #[test]
+    fn does_not_emit_builtin_admin_when_already_joined() {
+        let sample = r#"
+ AzureAdJoined : YES
+ DomainJoined : NO
+ WorkplaceJoined : NO
+ AzureAdPrt : YES
+ User Identity : Administrator
+"#;
+        let facts = parse_dsregcmd(sample).expect("parse joined admin sample");
+        let analysis = analyze_facts(facts, sample);
+        let ids: Vec<&str> = analysis.diagnostics.iter().map(|i| i.id.as_str()).collect();
+
+        assert!(!ids.contains(&"builtin-admin-cannot-join"), "should not fire when already joined");
+    }
+
+    #[test]
+    fn emits_entra_sync_pending_inference_for_domain_joined_not_aad() {
+        let sample = r#"
+ AzureAdJoined : NO
+ DomainJoined : YES
+ WorkplaceJoined : NO
+ AzureAdPrt : NO
+ AD Connectivity Test : PASSED
+ AD Configuration Test : PASSED
+"#;
+        let facts = parse_dsregcmd(sample).expect("parse sync pending sample");
+        let analysis = analyze_facts(facts, sample);
+        let ids: Vec<&str> = analysis.diagnostics.iter().map(|i| i.id.as_str()).collect();
+
+        assert!(ids.contains(&"entra-sync-pending-inference"), "missing entra-sync-pending-inference");
+        let rule = analysis.diagnostics.iter().find(|i| i.id == "entra-sync-pending-inference").unwrap();
+        assert_eq!(rule.severity, IntuneDiagnosticSeverity::Warning);
+    }
+
+    #[test]
+    fn does_not_emit_sync_pending_inference_when_ad_tests_fail() {
+        let sample = r#"
+ AzureAdJoined : NO
+ DomainJoined : YES
+ WorkplaceJoined : NO
+ AzureAdPrt : NO
+ AD Connectivity Test : FAIL [0x54b]
+ AD Configuration Test : PASSED
+"#;
+        let facts = parse_dsregcmd(sample).expect("parse ad fail sample");
+        let analysis = analyze_facts(facts, sample);
+        let ids: Vec<&str> = analysis.diagnostics.iter().map(|i| i.id.as_str()).collect();
+
+        assert!(!ids.contains(&"entra-sync-pending-inference"), "should not fire when AD tests fail");
+    }
+
+    #[test]
+    fn emits_fallback_sync_join_active_for_not_joined_device() {
+        let sample = r#"
+ AzureAdJoined : NO
+ DomainJoined : YES
+ WorkplaceJoined : NO
+ AzureAdPrt : NO
+ Fallback to Sync-Join : ENABLED
+"#;
+        let facts = parse_dsregcmd(sample).expect("parse fallback sync sample");
+        let analysis = analyze_facts(facts, sample);
+        let ids: Vec<&str> = analysis.diagnostics.iter().map(|i| i.id.as_str()).collect();
+
+        assert!(ids.contains(&"fallback-sync-join-active"), "missing fallback-sync-join-active");
+        let rule = analysis.diagnostics.iter().find(|i| i.id == "fallback-sync-join-active").unwrap();
+        assert_eq!(rule.severity, IntuneDiagnosticSeverity::Info);
+    }
+
+    #[test]
+    fn emits_scp_verify_needed_for_drs_failure_on_domain_joined() {
+        let sample = r#"
+ AzureAdJoined : NO
+ DomainJoined : YES
+ WorkplaceJoined : NO
+ AzureAdPrt : NO
+ DRS Discovery Test : FAIL [0x801c0021]
+"#;
+        let facts = parse_dsregcmd(sample).expect("parse scp verify sample");
+        let analysis = analyze_facts(facts, sample);
+        let ids: Vec<&str> = analysis.diagnostics.iter().map(|i| i.id.as_str()).collect();
+
+        assert!(ids.contains(&"scp-verify-needed"), "missing scp-verify-needed");
+        let rule = analysis.diagnostics.iter().find(|i| i.id == "scp-verify-needed").unwrap();
+        assert_eq!(rule.severity, IntuneDiagnosticSeverity::Warning);
+    }
+
+    #[test]
+    fn does_not_emit_scp_verify_when_not_domain_joined() {
+        let sample = r#"
+ AzureAdJoined : NO
+ DomainJoined : NO
+ WorkplaceJoined : NO
+ AzureAdPrt : NO
+ DRS Discovery Test : FAIL [0x801c0021]
+"#;
+        let facts = parse_dsregcmd(sample).expect("parse scp non-domain sample");
+        let analysis = analyze_facts(facts, sample);
+        let ids: Vec<&str> = analysis.diagnostics.iter().map(|i| i.id.as_str()).collect();
+
+        assert!(!ids.contains(&"scp-verify-needed"), "should not fire when not domain-joined");
+    }
+
+    #[test]
+    fn emits_scp_tenant_mismatch_hint_when_both_tests_fail() {
+        let sample = r#"
+ AzureAdJoined : NO
+ DomainJoined : YES
+ WorkplaceJoined : NO
+ TenantId : 11111111-2222-3333-4444-555555555555
+ AzureAdPrt : NO
+ DRS Discovery Test : FAIL [0x801c0021]
+ AD Configuration Test : FAIL [0x801c001d]
+"#;
+        let facts = parse_dsregcmd(sample).expect("parse tenant mismatch sample");
+        let analysis = analyze_facts(facts, sample);
+        let ids: Vec<&str> = analysis.diagnostics.iter().map(|i| i.id.as_str()).collect();
+
+        assert!(ids.contains(&"scp-tenant-mismatch-hint"), "missing scp-tenant-mismatch-hint");
+        let rule = analysis.diagnostics.iter().find(|i| i.id == "scp-tenant-mismatch-hint").unwrap();
+        assert_eq!(rule.severity, IntuneDiagnosticSeverity::Warning);
+    }
+
+    #[test]
+    fn does_not_emit_scp_tenant_mismatch_without_tenant_id() {
+        let sample = r#"
+ AzureAdJoined : NO
+ DomainJoined : YES
+ WorkplaceJoined : NO
+ AzureAdPrt : NO
+ DRS Discovery Test : FAIL [0x801c0021]
+ AD Configuration Test : FAIL [0x801c001d]
+"#;
+        let facts = parse_dsregcmd(sample).expect("parse no tenant sample");
+        let analysis = analyze_facts(facts, sample);
+        let ids: Vec<&str> = analysis.diagnostics.iter().map(|i| i.id.as_str()).collect();
+
+        assert!(!ids.contains(&"scp-tenant-mismatch-hint"), "should not fire without tenant ID");
     }
 }
