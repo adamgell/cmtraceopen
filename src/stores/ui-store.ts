@@ -120,7 +120,7 @@ const sanitizePersistedUiState = (
   }
 
   if (sanitized.logSeverityPaletteMode !== undefined) {
-    const validModes: LogSeverityPaletteMode[] = ["classic"];
+    const validModes: LogSeverityPaletteMode[] = ["classic", "accessible"];
     const mode = sanitized.logSeverityPaletteMode as LogSeverityPaletteMode;
 
     if (!validModes.includes(mode)) {
