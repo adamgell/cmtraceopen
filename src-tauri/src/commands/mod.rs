@@ -6,3 +6,6 @@ pub mod filter;
 pub mod intune;
 pub mod parsing;
 pub mod system_preferences;
+
+#[cfg(feature = "clustering")]
+pub mod clustering;

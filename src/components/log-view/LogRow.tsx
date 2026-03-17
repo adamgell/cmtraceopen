@@ -11,6 +11,7 @@ interface LogRowProps {
   entry: LogEntry;
   rowDomId: string;
   isSelected: boolean;
+  isAnomaly?: boolean;
   showDetails: boolean;
   listFontSize: number;
   rowLineHeight: number;
@@ -94,6 +95,7 @@ export function LogRow({
   entry,
   rowDomId,
   isSelected,
+  isAnomaly,
   showDetails,
   listFontSize,
   rowLineHeight,
@@ -106,6 +108,11 @@ export function LogRow({
   const gridTemplateColumns = getLogViewGridTemplateColumns(showDetails);
   const timestampLabel = formatLogEntryTimestamp(entry);
 
+  // Anomaly indicator: amber left border accent
+  const anomalyBorder = isAnomaly && !isSelected
+    ? "inset 3px 0 0 #d4880f"
+    : `inset 3px 0 0 ${isSelected ? "#FFFFFF" : "transparent"}`;
+
   return (
     <div
       id={rowDomId}
@@ -113,6 +120,7 @@ export function LogRow({
       aria-selected={isSelected}
       data-selected={isSelected}
       className="log-row"
+      title={isAnomaly ? "Anomaly — does not match any cluster pattern" : undefined}
       style={{
         ...style,
         display: "grid",
@@ -124,7 +132,7 @@ export function LogRow({
         lineHeight: `${rowLineHeight}px`,
         whiteSpace: "nowrap",
         transition: "filter 80ms linear",
-        boxShadow: `inset 3px 0 0 ${isSelected ? "#FFFFFF" : "transparent"}`,
+        boxShadow: anomalyBorder,
       }}
       onClick={() => onClick(entry.id)}
     >

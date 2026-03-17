@@ -19,6 +19,7 @@ import {
 } from "../../stores/ui-store";
 import { useIntuneStore } from "../../stores/intune-store";
 import { useDsregcmdStore } from "../../stores/dsregcmd-store";
+import { useClusteringStore } from "../../stores/clustering-store";
 
 interface SeverityCounts {
   errors: number;
@@ -68,6 +69,10 @@ export function StatusBar() {
   const filteredIds = useFilterStore((s) => s.filteredIds);
   const isFiltering = useFilterStore((s) => s.isFiltering);
   const filterError = useFilterStore((s) => s.filterError);
+
+  const clusteringPhase = useClusteringStore((s) => s.phase);
+  const clusteringResult = useClusteringStore((s) => s.result);
+  const clusteringProgress = useClusteringStore((s) => s.progressMessage);
 
   const { filteredCount, severityCounts } = useMemo(() => {
     let errors = 0;
@@ -254,6 +259,29 @@ export function StatusBar() {
     } else {
       rightStatusText = intuneAnalysisState.message;
     }
+  } else if (activeView === "clustering") {
+    leftParts = [
+      "Pattern Analysis",
+      clusteringPhase === "analyzing"
+        ? "Analyzing"
+        : clusteringPhase === "ready" && clusteringResult
+          ? `${clusteringResult.clusters.length} clusters`
+          : clusteringPhase === "error"
+            ? "Analysis failed"
+            : "No analysis",
+    ];
+
+    if (clusteringPhase === "analyzing") {
+      rightStatusText = clusteringProgress;
+      rightTone = "#1d4ed8";
+    } else if (clusteringResult) {
+      rightStatusText = [
+        `${clusteringResult.clusters.length} clusters`,
+        `${clusteringResult.anomalyEntryIds.length} anomalies`,
+        `${clusteringResult.totalEntries} entries`,
+        `${(clusteringResult.processingTimeMs / 1000).toFixed(1)}s`,
+      ].join(" | ");
+    }
   } else {
     const diagnostics = dsregcmdResult?.diagnostics ?? [];
     const errorCount = diagnostics.filter((item) => item.severity === "Error").length;
@@ -301,7 +329,9 @@ export function StatusBar() {
         ? "Intune"
         : activeView === "new-intune"
           ? "New Intune"
-        : "dsregcmd";
+          : activeView === "clustering"
+            ? "Patterns"
+            : "dsregcmd";
 
   return (
     <div

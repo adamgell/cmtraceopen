@@ -10,6 +10,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { useLogStore } from "../../stores/log-store";
 import { useUiStore } from "../../stores/ui-store";
 import { useFilterStore } from "../../stores/filter-store";
+import { useClusteringStore } from "../../stores/clustering-store";
 import { LogRow } from "./LogRow";
 import {
   COLUMN_NAMES,
@@ -33,14 +34,24 @@ export function LogListView() {
     (s) => s.logSeverityPaletteMode
   );
   const filteredIds = useFilterStore((s) => s.filteredIds);
+  const anomalyIds = useClusteringStore((s) => s.anomalyIds);
+  const activeClusterEntryIds = useClusteringStore(
+    (s) => s.activeClusterEntryIds
+  );
 
   const [hasKeyboardFocus, setHasKeyboardFocus] = useState(false);
   const [scrollbarWidth, setScrollbarWidth] = useState(0);
 
   const displayEntries = useMemo(() => {
-    if (!filteredIds) return entries;
-    return entries.filter((entry) => filteredIds.has(entry.id));
-  }, [entries, filteredIds]);
+    let result = entries;
+    if (filteredIds) {
+      result = result.filter((entry) => filteredIds.has(entry.id));
+    }
+    if (activeClusterEntryIds) {
+      result = result.filter((entry) => activeClusterEntryIds.has(entry.id));
+    }
+    return result;
+  }, [entries, filteredIds, activeClusterEntryIds]);
 
   const selectedEntryIndex = useMemo(
     () => displayEntries.findIndex((entry) => entry.id === selectedId),
@@ -252,6 +263,7 @@ export function LogListView() {
                   entry={entry}
                   rowDomId={`log-list-row-${entry.id}`}
                   isSelected={entry.id === selectedId}
+                  isAnomaly={anomalyIds?.has(entry.id) ?? false}
                   showDetails={showDetails}
                   listFontSize={listMetrics.fontSize}
                   rowLineHeight={listMetrics.rowLineHeight}

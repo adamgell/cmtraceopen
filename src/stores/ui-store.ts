@@ -9,7 +9,7 @@ import {
 import { type LogSeverityPaletteMode } from "../lib/constants";
 
 export type IntuneWorkspaceId = "intune" | "new-intune";
-export type WorkspaceId = "log" | IntuneWorkspaceId | "dsregcmd";
+export type WorkspaceId = "log" | IntuneWorkspaceId | "dsregcmd" | "clustering";
 export type AppView = WorkspaceId;
 
 export function isIntuneWorkspace(workspace: WorkspaceId): workspace is IntuneWorkspaceId {
@@ -48,6 +48,14 @@ export function getUiChromeStatus(
       viewLabel: "dsregcmd workspace",
       detailsLabel: "Details hidden in dsregcmd workspace",
       infoLabel: "Info hidden in dsregcmd workspace",
+    };
+  }
+
+  if (activeView === "clustering") {
+    return {
+      viewLabel: "Pattern Analysis",
+      detailsLabel: "Details hidden in Pattern Analysis",
+      infoLabel: "Info hidden in Pattern Analysis",
     };
   }
 

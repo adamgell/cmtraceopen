@@ -14,6 +14,8 @@ import type {
   DsregcmdCaptureResult,
   DsregcmdResolvedSource,
 } from "../types/dsregcmd";
+import type { ClusterResult, IncrementalClusterResult } from "../types/clustering";
+import type { LogEntry } from "../types/log";
 
 export interface FileAssociationPromptStatus {
   supported: boolean;
@@ -234,4 +236,30 @@ export async function setFileAssociationPromptSuppressed(
 
 export async function getSystemDateTimePreferences(): Promise<SystemDateTimePreferences> {
   return invokeCommand<SystemDateTimePreferences>("get_system_date_time_preferences");
+}
+
+// --- Clustering (requires backend built with `clustering` feature) ---
+
+export async function analyzeClusters(path: string): Promise<ClusterResult> {
+  return invokeCommand<ClusterResult>("analyze_clusters", { path });
+}
+
+export async function getClusterSummary(
+  path: string
+): Promise<ClusterResult | null> {
+  return invokeCommand<ClusterResult | null>("get_cluster_summary", { path });
+}
+
+export async function getAnomalies(path: string): Promise<number[]> {
+  return invokeCommand<number[]>("get_anomalies", { path });
+}
+
+export async function assignTailEntriesToClusters(
+  path: string,
+  newEntries: LogEntry[]
+): Promise<IncrementalClusterResult> {
+  return invokeCommand<IncrementalClusterResult>(
+    "assign_tail_entries_to_clusters",
+    { path, newEntries }
+  );
 }

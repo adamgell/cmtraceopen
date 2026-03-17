@@ -7,6 +7,11 @@ license = "MIT"
 edition = "2021"
 rust-version = "1.77.2"
 
+[features]
+default = []
+clustering = ["ort", "ndarray", "linfa", "linfa-clustering", "tokenizers", "ureq"]
+bundle-model = ["clustering"]
+
 [lib]
 name = "app_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
@@ -30,6 +35,14 @@ notify = "7"
 tokio = { version = "1", features = ["fs", "io-util", "sync", "rt"] }
 rayon = "1.10"
 evtx = "0.8"
+
+# Clustering feature dependencies (optional)
+ort = { version = "2.0.0-rc.12", optional = true }
+ndarray = { version = "0.17", optional = true }
+linfa = { version = "0.8", optional = true }
+linfa-clustering = { version = "0.8", optional = true }
+tokenizers = { version = "0.22", optional = true, default-features = false }
+ureq = { version = "2", optional = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 winreg = "0.52"
