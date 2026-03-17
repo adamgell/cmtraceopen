@@ -302,10 +302,17 @@ export const useClusteringStore = create<ClusteringState>((set, get) => ({
     const { result } = get();
     if (!result) return;
 
+    const existingIds = new Set(result.clusters.map((c) => c.id));
     const updatedClusters = result.clusters.map((existing) => {
       const updated = clusters.find((c) => c.id === existing.id);
       return updated ?? existing;
     });
+    // Append any new clusters not already in the result set
+    for (const cluster of clusters) {
+      if (!existingIds.has(cluster.id)) {
+        updatedClusters.push(cluster);
+      }
+    }
 
     set({
       result: { ...result, clusters: updatedClusters },

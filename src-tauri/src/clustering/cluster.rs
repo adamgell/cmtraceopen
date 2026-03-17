@@ -32,7 +32,7 @@ pub fn dbscan_cluster(
 
     // Compute pairwise cosine distance matrix (1 - similarity)
     // For L2-normalized vectors, cosine similarity = dot product
-    let distance_threshold = 1.0 - (1.0 - epsilon); // cosine distance threshold = epsilon
+    let distance_threshold = epsilon;
 
     // DBSCAN implementation
     let mut labels = vec![-1i32; n]; // -1 = unvisited, -2 = noise
@@ -52,11 +52,12 @@ pub fn dbscan_cluster(
 
         // Start a new cluster
         labels[i] = cluster_id;
-        let mut seed_set: Vec<usize> = neighbors.into_iter().filter(|&j| j != i).collect();
+        let mut seed_set: HashSet<usize> = neighbors.into_iter().filter(|&j| j != i).collect();
+        let mut queue: Vec<usize> = seed_set.iter().copied().collect();
         let mut idx = 0;
 
-        while idx < seed_set.len() {
-            let q = seed_set[idx];
+        while idx < queue.len() {
+            let q = queue[idx];
             if labels[q] == -2 {
                 labels[q] = cluster_id; // Change noise to border point
             }
@@ -70,7 +71,8 @@ pub fn dbscan_cluster(
             if q_neighbors.len() >= min_points {
                 for nb in q_neighbors {
                     if !seed_set.contains(&nb) && labels[nb] <= -1 {
-                        seed_set.push(nb);
+                        seed_set.insert(nb);
+                        queue.push(nb);
                     }
                 }
             }

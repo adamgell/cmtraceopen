@@ -24,6 +24,7 @@ pub struct Cluster {
 }
 
 /// Persistent state for a clustering session, enabling incremental updates.
+#[derive(Clone)]
 pub struct ClusteringSession {
     pub result: ClusterResult,
     pub centroids: Vec<Vec<f32>>,

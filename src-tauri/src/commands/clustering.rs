@@ -432,15 +432,6 @@ pub async fn assign_tail_entries_to_clusters(
 ) -> Result<IncrementalClusterResult, String> {
     let file_path = PathBuf::from(&path);
 
-    let mut sessions = state
-        .clustering_sessions
-        .lock()
-        .map_err(|e| format!("Lock error: {}", e))?;
-
-    let session = sessions
-        .get_mut(&file_path)
-        .ok_or_else(|| "No clustering session for this file".to_string())?;
-
     if new_entries.is_empty() {
         return Ok(IncrementalClusterResult {
             assignments: HashMap::new(),
@@ -449,16 +440,42 @@ pub async fn assign_tail_entries_to_clusters(
         });
     }
 
-    // For incremental mode, we embed each new entry individually
-    // (no chunking context needed — just the message text)
+    // Clone session data so we can release the lock before expensive work
+    let session_snapshot = {
+        let sessions = state
+            .clustering_sessions
+            .lock()
+            .map_err(|e| format!("Lock error: {}", e))?;
+        sessions
+            .get(&file_path)
+            .ok_or_else(|| "No clustering session for this file".to_string())?
+            .clone()
+    };
+    // Lock is released here
+
+    // Expensive: model loading + embedding computation (no lock held)
     let (model_path, tokenizer_path) = model_manager::ensure_model(|_, _| {})?;
     let embedder = Embedder::new(&model_path, &tokenizer_path)?;
     let texts: Vec<String> = new_entries.iter().map(|e| e.message.clone()).collect();
     let embeddings = embedder.embed_batch(&texts)?;
-
     let new_entry_ids: Vec<u64> = new_entries.iter().map(|e| e.id).collect();
 
-    let result = assign_to_existing_clusters(&new_entry_ids, &embeddings, session);
+    // Assign using the snapshot (read-only centroid comparison)
+    let mut session_for_assign = session_snapshot;
+    let result = assign_to_existing_clusters(&new_entry_ids, &embeddings, &mut session_for_assign);
+
+    // Briefly re-acquire lock to persist updated session state
+    {
+        let mut sessions = state
+            .clustering_sessions
+            .lock()
+            .map_err(|e| format!("Lock error: {}", e))?;
+        if let Some(session) = sessions.get_mut(&file_path) {
+            session.result = session_for_assign.result;
+            session.centroids = session_for_assign.centroids;
+            session.chunk_embeddings = session_for_assign.chunk_embeddings;
+        }
+    }
 
     Ok(result)
 }

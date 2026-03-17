@@ -45,12 +45,6 @@ impl AppState {
 
 impl Default for AppState {
     fn default() -> Self {
-        Self {
-            open_files: Mutex::new(HashMap::new()),
-            tail_sessions: Mutex::new(HashMap::new()),
-            initial_file_path: Mutex::new(None),
-            #[cfg(feature = "clustering")]
-            clustering_sessions: Mutex::new(HashMap::new()),
-        }
+        Self::new(None)
     }
 }
