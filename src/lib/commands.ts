@@ -14,7 +14,7 @@ import type {
   DsregcmdCaptureResult,
   DsregcmdResolvedSource,
 } from "../types/dsregcmd";
-import type { ClusterResult, IncrementalClusterResult } from "../types/clustering";
+import type { ClusterResult, ClusterableEntry, IncrementalClusterResult, MultiSourceClusterResult } from "../types/clustering";
 import type { LogEntry } from "../types/log";
 
 export interface FileAssociationPromptStatus {
@@ -242,6 +242,12 @@ export async function getSystemDateTimePreferences(): Promise<SystemDateTimePref
 
 export async function analyzeClusters(path: string): Promise<ClusterResult> {
   return invokeCommand<ClusterResult>("analyze_clusters", { path });
+}
+
+export async function analyzeAllSources(
+  entries: ClusterableEntry[]
+): Promise<MultiSourceClusterResult> {
+  return invokeCommand<MultiSourceClusterResult>("analyze_all_sources", { entries });
 }
 
 export async function getClusterSummary(

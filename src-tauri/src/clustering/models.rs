@@ -75,3 +75,48 @@ pub struct ClusteringProgress {
     pub message: String,
     pub percent: Option<f32>,
 }
+
+/// A generic entry from any workspace that can be clustered.
+/// The frontend normalizes data from all sources into this format.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClusterableEntry {
+    pub id: u64,
+    pub message: String,
+    pub source: String,
+    pub severity: Option<String>,
+    pub timestamp: Option<String>,
+}
+
+/// Summary of sources included in a clustering analysis.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClusteringSourceSummary {
+    pub source: String,
+    pub count: usize,
+}
+
+/// Extended cluster result that includes source breakdown.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MultiSourceClusterResult {
+    pub clusters: Vec<MultiSourceCluster>,
+    pub anomaly_entry_ids: Vec<u64>,
+    pub anomaly_entries: Vec<ClusterableEntry>,
+    pub total_entries: usize,
+    pub clustered_entries: usize,
+    pub processing_time_ms: u64,
+    pub sources: Vec<ClusteringSourceSummary>,
+}
+
+/// A cluster with source breakdown information.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MultiSourceCluster {
+    pub id: u32,
+    pub label: String,
+    pub entry_ids: Vec<u64>,
+    pub representative_message: String,
+    pub size: usize,
+    pub source_breakdown: Vec<ClusteringSourceSummary>,
+}

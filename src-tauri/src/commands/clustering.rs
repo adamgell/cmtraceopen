@@ -11,7 +11,9 @@ use crate::clustering::embedder::Embedder;
 use crate::clustering::incremental::assign_to_existing_clusters;
 use crate::clustering::model_manager;
 use crate::clustering::models::{
-    ClusterResult, ClusteringConfig, ClusteringSession, IncrementalClusterResult,
+    ClusterResult, ClusterableEntry, ClusteringConfig, ClusteringSession,
+    ClusteringSourceSummary, IncrementalClusterResult, MultiSourceCluster,
+    MultiSourceClusterResult,
 };
 use crate::parser;
 use crate::state::app_state::AppState;
@@ -239,6 +241,182 @@ pub fn get_anomalies(
         .get(&file_path)
         .map(|s| s.result.anomaly_entry_ids.clone())
         .unwrap_or_default())
+}
+
+/// Run embedding + DBSCAN clustering on entries from all workspace sources.
+///
+/// The frontend collects text data from every workspace (log entries, Intune
+/// events/diagnostics, DSRegCmd diagnostics/event logs) into a flat
+/// `Vec<ClusterableEntry>` and sends it here.  The backend chunks, embeds,
+/// clusters, and returns results with per-cluster source breakdowns.
+#[tauri::command]
+pub async fn analyze_all_sources(
+    entries: Vec<ClusterableEntry>,
+    app: AppHandle,
+) -> Result<MultiSourceClusterResult, String> {
+    if entries.is_empty() {
+        return Err("No entries to cluster".to_string());
+    }
+
+    let result = async_runtime::spawn_blocking(move || {
+        analyze_all_sources_blocking(&entries, &app)
+    })
+    .await
+    .map_err(|e| format!("Clustering task failed: {}", e))??;
+
+    Ok(result)
+}
+
+fn analyze_all_sources_blocking(
+    entries: &[ClusterableEntry],
+    app: &AppHandle,
+) -> Result<MultiSourceClusterResult, String> {
+    let started = Instant::now();
+    let config = ClusteringConfig::default();
+
+    // Build source summary
+    let mut source_counts: HashMap<String, usize> = HashMap::new();
+    for entry in entries {
+        *source_counts.entry(entry.source.clone()).or_default() += 1;
+    }
+    let sources: Vec<ClusteringSourceSummary> = source_counts
+        .iter()
+        .map(|(source, &count)| ClusteringSourceSummary {
+            source: source.clone(),
+            count,
+        })
+        .collect();
+
+    emit_progress(
+        app,
+        "parsing",
+        &format!("Collected {} entries from {} sources", entries.len(), sources.len()),
+        Some(0.0),
+    );
+
+    // Stage 1: Ensure model is available
+    emit_progress(app, "model", "Checking embedding model...", Some(5.0));
+    let (model_path, tokenizer_path) = model_manager::ensure_model(|msg, pct| {
+        emit_progress(app, "model", msg, Some(pct * 0.1 + 5.0));
+    })?;
+
+    // Stage 2: Initialize embedder
+    emit_progress(app, "init", "Initializing embedding engine...", Some(15.0));
+    let embedder = Embedder::new(&model_path, &tokenizer_path)?;
+
+    // Stage 3: Chunk entries
+    emit_progress(app, "chunking", "Grouping entries into chunks...", Some(18.0));
+    let chunks = chunker::chunk_clusterable_entries(entries, config.window_size);
+    let num_chunks = chunks.len();
+    emit_progress(
+        app,
+        "chunking",
+        &format!("Created {} chunks from {} entries", num_chunks, entries.len()),
+        Some(20.0),
+    );
+
+    // Stage 4: Compute embeddings in batches
+    emit_progress(app, "embedding", "Computing embeddings...", Some(20.0));
+    let texts: Vec<String> = chunks.iter().map(|c| c.text.clone()).collect();
+
+    let batch_size = 256;
+    let mut all_embeddings: Vec<Vec<f32>> = Vec::with_capacity(texts.len());
+    let total_batches = (texts.len() + batch_size - 1) / batch_size;
+
+    for (batch_idx, batch) in texts.chunks(batch_size).enumerate() {
+        let batch_vec: Vec<String> = batch.to_vec();
+        let batch_embeddings = embedder.embed_batch(&batch_vec)?;
+        all_embeddings.extend(batch_embeddings);
+
+        let pct = 20.0 + ((batch_idx + 1) as f32 / total_batches.max(1) as f32) * 55.0;
+        emit_progress(
+            app,
+            "embedding",
+            &format!(
+                "Embedded {}/{} chunks",
+                all_embeddings.len().min(num_chunks),
+                num_chunks
+            ),
+            Some(pct),
+        );
+    }
+
+    // Stage 5: Cluster
+    emit_progress(app, "clustering", "Running DBSCAN clustering...", Some(80.0));
+
+    let messages: HashMap<u64, String> = entries
+        .iter()
+        .map(|e| (e.id, e.message.clone()))
+        .collect();
+
+    let entry_source_map: HashMap<u64, String> = entries
+        .iter()
+        .map(|e| (e.id, e.source.clone()))
+        .collect();
+
+    let (clusters, anomaly_entry_ids) =
+        dbscan_cluster(&chunks, &all_embeddings, &messages, config.epsilon, config.min_points);
+
+    // Convert Cluster -> MultiSourceCluster with source breakdowns
+    let multi_clusters: Vec<MultiSourceCluster> = clusters
+        .into_iter()
+        .map(|c| {
+            let mut breakdown: HashMap<String, usize> = HashMap::new();
+            for &eid in &c.entry_ids {
+                if let Some(src) = entry_source_map.get(&eid) {
+                    *breakdown.entry(src.clone()).or_default() += 1;
+                }
+            }
+            let source_breakdown: Vec<ClusteringSourceSummary> = breakdown
+                .into_iter()
+                .map(|(source, count)| ClusteringSourceSummary { source, count })
+                .collect();
+
+            MultiSourceCluster {
+                id: c.id,
+                label: c.label,
+                entry_ids: c.entry_ids,
+                representative_message: c.representative_message,
+                size: c.size,
+                source_breakdown,
+            }
+        })
+        .collect();
+
+    let clustered_entries: usize = multi_clusters.iter().map(|c| c.size).sum();
+    let processing_time_ms = started.elapsed().as_millis() as u64;
+
+    // Collect anomaly entries with full info
+    let anomaly_entries: Vec<ClusterableEntry> = entries
+        .iter()
+        .filter(|e| anomaly_entry_ids.contains(&e.id))
+        .cloned()
+        .collect();
+
+    let result = MultiSourceClusterResult {
+        clusters: multi_clusters,
+        anomaly_entry_ids: anomaly_entry_ids.clone(),
+        anomaly_entries,
+        total_entries: entries.len(),
+        clustered_entries,
+        processing_time_ms,
+        sources,
+    };
+
+    emit_progress(
+        app,
+        "complete",
+        &format!(
+            "Found {} clusters and {} anomalies across {} sources in {:.1}s",
+            result.clusters.len(),
+            result.anomaly_entry_ids.len(),
+            result.sources.len(),
+            processing_time_ms as f32 / 1000.0
+        ),
+        Some(100.0),
+    );
+
+    Ok(result)
 }
 
 /// Incrementally assign new tail entries to existing clusters.

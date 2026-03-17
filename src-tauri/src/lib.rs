@@ -78,6 +78,7 @@ fn build_invoke_handler() -> impl Fn(tauri::ipc::Invoke) -> bool {
         commands::dsregcmd::capture_dsregcmd,
         commands::dsregcmd::load_dsregcmd_source,
         commands::clustering::analyze_clusters,
+        commands::clustering::analyze_all_sources,
         commands::clustering::get_cluster_summary,
         commands::clustering::get_anomalies,
         commands::clustering::assign_tail_entries_to_clusters,

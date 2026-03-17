@@ -10,14 +10,41 @@ import {
 } from "@fluentui/react-components";
 import { useClusteringStore } from "../../stores/clustering-store";
 import { useLogStore } from "../../stores/log-store";
-import type { Cluster } from "../../types/clustering";
+import { useIntuneStore } from "../../stores/intune-store";
+import { useDsregcmdStore } from "../../stores/dsregcmd-store";
+import type {
+  MultiSourceCluster,
+  ClusteringSourceSummary,
+} from "../../types/clustering";
 
-function ClusterCard({
+function SourceBadges({
+  breakdown,
+}: {
+  breakdown: ClusteringSourceSummary[];
+}) {
+  if (breakdown.length === 0) return null;
+  return (
+    <div style={{ display: "flex", gap: "4px", flexWrap: "wrap", marginTop: "4px" }}>
+      {breakdown.map((s) => (
+        <Badge
+          key={s.source}
+          appearance="outline"
+          size="small"
+          color="subtle"
+        >
+          {s.source}: {s.count}
+        </Badge>
+      ))}
+    </div>
+  );
+}
+
+function MultiSourceClusterCard({
   cluster,
   isActive,
   onSelect,
 }: {
-  cluster: Cluster;
+  cluster: MultiSourceCluster;
   isActive: boolean;
   onSelect: (id: number | null) => void;
 }) {
@@ -60,6 +87,7 @@ function ClusterCard({
       >
         {cluster.representativeMessage}
       </Caption1>
+      <SourceBadges breakdown={cluster.sourceBreakdown} />
     </div>
   );
 }
@@ -81,7 +109,7 @@ function AnalyzingView() {
       }}
     >
       <Spinner size="large" />
-      <Subtitle2>Analyzing Log Patterns</Subtitle2>
+      <Subtitle2>Analyzing Patterns</Subtitle2>
       <Caption1 style={{ color: "#666", textAlign: "center" }}>
         {progressMessage}
       </Caption1>
@@ -95,9 +123,17 @@ function AnalyzingView() {
   );
 }
 
-function IdleView({ onAnalyze }: { onAnalyze: () => void }) {
-  const hasSource = useLogStore((s) => s.openFilePath !== null);
-
+function IdleView({
+  onAnalyzeFile,
+  onAnalyzeAll,
+  hasFile,
+  hasAnyData,
+}: {
+  onAnalyzeFile: () => void;
+  onAnalyzeAll: () => void;
+  hasFile: boolean;
+  hasAnyData: boolean;
+}) {
   return (
     <div
       style={{
@@ -110,7 +146,7 @@ function IdleView({ onAnalyze }: { onAnalyze: () => void }) {
         padding: "40px",
       }}
     >
-      <Title3>Log Pattern Analysis</Title3>
+      <Title3>Pattern Analysis</Title3>
       <Caption1
         style={{
           color: "#666",
@@ -119,22 +155,34 @@ function IdleView({ onAnalyze }: { onAnalyze: () => void }) {
           lineHeight: "1.5",
         }}
       >
-        Use semantic embeddings to discover patterns in your log file. Entries
-        are grouped by meaning, and outliers are flagged as anomalies. This
-        requires the embedding model (~80 MB) which will be downloaded on first
-        use.
+        Use semantic embeddings to discover patterns across all your
+        workspace data. Entries from log files, Intune events and
+        diagnostics, and DSRegCmd analysis are grouped by meaning, and
+        outliers are flagged as anomalies. The embedding model (~80 MB)
+        will be downloaded on first use.
       </Caption1>
-      <Button
-        appearance="primary"
-        size="large"
-        disabled={!hasSource}
-        onClick={onAnalyze}
-      >
-        Analyze Patterns
-      </Button>
-      {!hasSource && (
+      <div style={{ display: "flex", gap: "12px" }}>
+        <Button
+          appearance="primary"
+          size="large"
+          disabled={!hasAnyData}
+          onClick={onAnalyzeAll}
+        >
+          Analyze All Sources
+        </Button>
+        {hasFile && (
+          <Button
+            appearance="secondary"
+            size="large"
+            onClick={onAnalyzeFile}
+          >
+            Analyze Log File Only
+          </Button>
+        )}
+      </div>
+      {!hasAnyData && (
         <Caption1 style={{ color: "#999" }}>
-          Open a log file first to analyze patterns.
+          Open a log file or run workspace analysis first.
         </Caption1>
       )}
     </div>
@@ -180,22 +228,37 @@ function ErrorView({
 export function ClusteringWorkspace() {
   const phase = useClusteringStore((s) => s.phase);
   const result = useClusteringStore((s) => s.result);
+  const multiSourceResult = useClusteringStore((s) => s.multiSourceResult);
   const activeClusterId = useClusteringStore((s) => s.activeClusterId);
   const errorMessage = useClusteringStore((s) => s.errorMessage);
   const setActiveCluster = useClusteringStore((s) => s.setActiveCluster);
-  const analyze = useClusteringStore((s) => s.analyzeClusters);
+  const analyzeSingleFile = useClusteringStore((s) => s.analyzeClusters);
+  const analyzeAll = useClusteringStore((s) => s.analyzeAllSources);
   const openFilePath = useLogStore((s) => s.openFilePath);
+  const hasIntuneData = useIntuneStore((s) => s.events.length > 0);
+  const hasDsregData = useDsregcmdStore((s) => s.result !== null);
+  const hasLogData = useLogStore((s) => s.entries.length > 0);
 
-  const handleAnalyze = useCallback(() => {
+  const hasFile = openFilePath !== null;
+  const hasAnyData = hasLogData || hasIntuneData || hasDsregData;
+
+  const handleAnalyzeFile = useCallback(() => {
     if (openFilePath) {
-      analyze(openFilePath);
+      analyzeSingleFile(openFilePath);
     }
-  }, [analyze, openFilePath]);
+  }, [analyzeSingleFile, openFilePath]);
+
+  const handleAnalyzeAll = useCallback(() => {
+    analyzeAll();
+  }, [analyzeAll]);
+
+  // Use multi-source result if available, fall back to single-file result
+  const activeResult = multiSourceResult ?? result;
 
   const sortedClusters = useMemo(() => {
-    if (!result) return [];
-    return [...result.clusters].sort((a, b) => b.size - a.size);
-  }, [result]);
+    if (!activeResult) return [];
+    return [...activeResult.clusters].sort((a, b) => b.size - a.size);
+  }, [activeResult]);
 
   if (phase === "analyzing") {
     return <AnalyzingView />;
@@ -205,16 +268,29 @@ export function ClusteringWorkspace() {
     return (
       <ErrorView
         message={errorMessage ?? "Unknown error"}
-        onRetry={handleAnalyze}
+        onRetry={handleAnalyzeAll}
       />
     );
   }
 
-  if (phase === "idle" || !result) {
-    return <IdleView onAnalyze={handleAnalyze} />;
+  if (phase === "idle" || !activeResult) {
+    return (
+      <IdleView
+        onAnalyzeFile={handleAnalyzeFile}
+        onAnalyzeAll={handleAnalyzeAll}
+        hasFile={hasFile}
+        hasAnyData={hasAnyData}
+      />
+    );
   }
 
   // Ready state — show results
+  const isMultiSource = multiSourceResult !== null;
+  const sources = isMultiSource ? multiSourceResult.sources : [];
+  const anomalyEntries = isMultiSource
+    ? multiSourceResult.anomalyEntries
+    : [];
+
   return (
     <div
       style={{
@@ -234,26 +310,27 @@ export function ClusteringWorkspace() {
           borderBottom: "1px solid #e0e0e0",
           backgroundColor: "#f8f9fa",
           flexShrink: 0,
+          flexWrap: "wrap",
         }}
       >
         <Subtitle2>Pattern Analysis</Subtitle2>
         <Badge appearance="tint" color="brand">
-          {result.clusters.length} clusters
+          {activeResult.clusters.length} clusters
         </Badge>
         <Badge
           appearance="tint"
-          color={result.anomalyEntryIds.length > 0 ? "warning" : "success"}
+          color={activeResult.anomalyEntryIds.length > 0 ? "warning" : "success"}
         >
-          {result.anomalyEntryIds.length} anomalies
+          {activeResult.anomalyEntryIds.length} anomalies
         </Badge>
         <Caption1 style={{ color: "#999", marginLeft: "auto" }}>
-          {result.totalEntries} entries analyzed in{" "}
-          {(result.processingTimeMs / 1000).toFixed(1)}s
+          {activeResult.totalEntries} entries analyzed in{" "}
+          {(activeResult.processingTimeMs / 1000).toFixed(1)}s
         </Caption1>
         <Button
           appearance="secondary"
           size="small"
-          onClick={handleAnalyze}
+          onClick={handleAnalyzeAll}
         >
           Re-analyze
         </Button>
@@ -268,6 +345,30 @@ export function ClusteringWorkspace() {
         )}
       </div>
 
+      {/* Source summary (multi-source only) */}
+      {isMultiSource && sources.length > 0 && (
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "8px",
+            padding: "8px 16px",
+            borderBottom: "1px solid #eee",
+            backgroundColor: "#fafbfc",
+            flexWrap: "wrap",
+          }}
+        >
+          <Caption1 style={{ fontWeight: 600, color: "#555" }}>
+            Sources:
+          </Caption1>
+          {sources.map((s) => (
+            <Badge key={s.source} appearance="outline" size="small">
+              {s.source} ({s.count})
+            </Badge>
+          ))}
+        </div>
+      )}
+
       {/* Cluster list */}
       <div
         style={{
@@ -276,7 +377,7 @@ export function ClusteringWorkspace() {
           padding: "16px",
         }}
       >
-        {result.anomalyEntryIds.length > 0 && (
+        {activeResult.anomalyEntryIds.length > 0 && (
           <div style={{ marginBottom: "16px" }}>
             <Caption1
               style={{
@@ -286,9 +387,64 @@ export function ClusteringWorkspace() {
                 marginBottom: "8px",
               }}
             >
-              Anomalies — {result.anomalyEntryIds.length} entries that don't
-              fit any pattern
+              Anomalies — {activeResult.anomalyEntryIds.length} entries
+              that don&apos;t fit any pattern
             </Caption1>
+            {isMultiSource && anomalyEntries.length > 0 && (
+              <div
+                style={{
+                  maxHeight: "200px",
+                  overflow: "auto",
+                  marginBottom: "8px",
+                  borderRadius: "4px",
+                  border: "1px solid #f0d9a0",
+                  backgroundColor: "#fffcf5",
+                }}
+              >
+                {anomalyEntries.slice(0, 20).map((entry) => (
+                  <div
+                    key={entry.id}
+                    style={{
+                      padding: "6px 12px",
+                      borderBottom: "1px solid #f5ecd5",
+                      fontSize: "12px",
+                      display: "flex",
+                      gap: "8px",
+                    }}
+                  >
+                    <Badge
+                      appearance="outline"
+                      size="small"
+                      color="subtle"
+                      style={{ flexShrink: 0 }}
+                    >
+                      {entry.source}
+                    </Badge>
+                    <span
+                      style={{
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                        color: "#555",
+                      }}
+                    >
+                      {entry.message}
+                    </span>
+                  </div>
+                ))}
+                {anomalyEntries.length > 20 && (
+                  <div
+                    style={{
+                      padding: "6px 12px",
+                      fontSize: "12px",
+                      color: "#999",
+                    }}
+                  >
+                    ...and {anomalyEntries.length - 20} more
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         )}
 
@@ -302,14 +458,30 @@ export function ClusteringWorkspace() {
           Discovered Clusters
         </Caption1>
 
-        {sortedClusters.map((cluster) => (
-          <ClusterCard
-            key={cluster.id}
-            cluster={cluster}
-            isActive={activeClusterId === cluster.id}
-            onSelect={setActiveCluster}
-          />
-        ))}
+        {sortedClusters.map((cluster) => {
+          if (isMultiSource && "sourceBreakdown" in cluster) {
+            return (
+              <MultiSourceClusterCard
+                key={cluster.id}
+                cluster={cluster as MultiSourceCluster}
+                isActive={activeClusterId === cluster.id}
+                onSelect={setActiveCluster}
+              />
+            );
+          }
+          // Single-file cluster fallback
+          return (
+            <MultiSourceClusterCard
+              key={cluster.id}
+              cluster={{
+                ...cluster,
+                sourceBreakdown: [],
+              }}
+              isActive={activeClusterId === cluster.id}
+              onSelect={setActiveCluster}
+            />
+          );
+        })}
       </div>
     </div>
   );

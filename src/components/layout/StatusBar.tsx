@@ -71,7 +71,9 @@ export function StatusBar() {
   const filterError = useFilterStore((s) => s.filterError);
 
   const clusteringPhase = useClusteringStore((s) => s.phase);
-  const clusteringResult = useClusteringStore((s) => s.result);
+  const clusteringResult = useClusteringStore(
+    (s) => s.multiSourceResult ?? s.result
+  );
   const clusteringProgress = useClusteringStore((s) => s.progressMessage);
 
   const { filteredCount, severityCounts } = useMemo(() => {

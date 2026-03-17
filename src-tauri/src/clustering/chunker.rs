@@ -1,6 +1,6 @@
 use crate::models::log_entry::LogEntry;
 
-use super::models::EmbeddingChunk;
+use super::models::{ClusterableEntry, EmbeddingChunk};
 
 /// Groups temporally adjacent log entries into overlapping chunks for embedding.
 ///
@@ -87,6 +87,55 @@ pub fn chunk_tail_entries(
         }
 
         let window = &combined[i..end];
+        let text = window
+            .iter()
+            .map(|e| e.message.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let entry_ids: Vec<u64> = window.iter().map(|e| e.id).collect();
+        let anchor_id = entry_ids[entry_ids.len() / 2];
+
+        chunks.push(EmbeddingChunk {
+            text,
+            entry_ids,
+            anchor_id,
+        });
+    }
+
+    chunks
+}
+
+/// Groups ClusterableEntry items into overlapping chunks for embedding.
+/// Same sliding-window approach as chunk_entries but operates on the generic type.
+pub fn chunk_clusterable_entries(
+    entries: &[ClusterableEntry],
+    window_size: usize,
+) -> Vec<EmbeddingChunk> {
+    if entries.is_empty() {
+        return Vec::new();
+    }
+
+    let window_size = window_size.max(1);
+
+    if entries.len() <= window_size {
+        let text = entries
+            .iter()
+            .map(|e| e.message.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let entry_ids: Vec<u64> = entries.iter().map(|e| e.id).collect();
+        let anchor_id = entry_ids[entry_ids.len() / 2];
+        return vec![EmbeddingChunk {
+            text,
+            entry_ids,
+            anchor_id,
+        }];
+    }
+
+    let mut chunks = Vec::with_capacity(entries.len() - window_size + 1);
+
+    for i in 0..=(entries.len() - window_size) {
+        let window = &entries[i..i + window_size];
         let text = window
             .iter()
             .map(|e| e.message.as_str())
