@@ -30,7 +30,7 @@ impl Embedder {
     }
 
     /// Embeds a batch of texts, returning normalized 384-dim vectors.
-    pub fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, String> {
+    pub fn embed_batch(&mut self, texts: &[String]) -> Result<Vec<Vec<f32>>, String> {
         if texts.is_empty() {
             return Ok(Vec::new());
         }
@@ -47,7 +47,7 @@ impl Embedder {
         Ok(all_embeddings)
     }
 
-    fn embed_sub_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, String> {
+    fn embed_sub_batch(&mut self, texts: &[String]) -> Result<Vec<Vec<f32>>, String> {
         let encodings = self
             .tokenizer
             .encode_batch(texts.to_vec(), true)
@@ -89,11 +89,11 @@ impl Embedder {
             Array2::from_shape_vec((batch_len, max_len), token_type_ids)
                 .map_err(|e| format!("Array shape error: {}", e))?;
 
-        let input_ids_value = Value::from_array(input_ids_array.view())
+        let input_ids_value = Value::from_array(input_ids_array)
             .map_err(|e| format!("Input tensor error: {}", e))?;
-        let attention_mask_value = Value::from_array(attention_mask_array.view())
+        let attention_mask_value = Value::from_array(attention_mask_array)
             .map_err(|e| format!("Attention mask tensor error: {}", e))?;
-        let token_type_ids_value = Value::from_array(token_type_ids_array.view())
+        let token_type_ids_value = Value::from_array(token_type_ids_array)
             .map_err(|e| format!("Token type ids tensor error: {}", e))?;
 
         let outputs = self
@@ -102,16 +102,16 @@ impl Embedder {
                 "input_ids" => input_ids_value,
                 "attention_mask" => attention_mask_value,
                 "token_type_ids" => token_type_ids_value,
-            ].map_err(|e| format!("Input creation error: {}", e))?)
+            ])
             .map_err(|e| format!("ONNX inference error: {}", e))?;
 
         // Extract last_hidden_state: (batch, seq_len, hidden_dim)
-        let output_tensor = outputs[0]
-            .try_extract_tensor::<f32>()
+        let output_view = outputs[0]
+            .try_extract_array::<f32>()
             .map_err(|e| format!("Output extraction error: {}", e))?;
 
-        let shape = output_tensor.shape();
-        let hidden_dim = shape[2];
+        let output_shape = output_view.shape();
+        let hidden_dim = output_shape[2];
 
         let mut embeddings = Vec::with_capacity(batch_len);
 
@@ -126,7 +126,7 @@ impl Embedder {
                         0.0
                     };
                     for k in 0..hidden_dim {
-                        pooled[k] += output_tensor[[i, j, k]] * mask_val;
+                        pooled[k] += output_view[[i, j, k]] * mask_val;
                     }
                     mask_val
                 })

@@ -39,7 +39,7 @@ evtx = "0.8"
 # Clustering feature dependencies (optional)
 ort = { version = "2.0.0-rc.12", optional = true }
 ndarray = { version = "0.17", optional = true }
-tokenizers = { version = "0.22", optional = true, default-features = false }
+tokenizers = { version = "0.22", optional = true, default-features = false, features = ["onig"] }
 ureq = { version = "2", optional = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]

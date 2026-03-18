@@ -105,11 +105,11 @@ fn analyze_clusters_blocking(
 
     // Stage 2: Initialize embedder
     emit_progress(app, "init", "Initializing embedding engine...", Some(15.0));
-    let embedder = Embedder::new(&model_path, &tokenizer_path)?;
+    let mut embedder = Embedder::new(&model_path, &tokenizer_path)?;
 
     // Stage 3: Chunk entries
     emit_progress(app, "chunking", "Grouping log entries into chunks...", Some(18.0));
-    let chunks = chunker::chunk_entries(&entries, config.window_size);
+    let chunks = chunker::chunk_entries_with_stride(&entries, config.window_size, config.stride);
     let num_chunks = chunks.len();
     emit_progress(
         app,
@@ -302,11 +302,11 @@ fn analyze_all_sources_blocking(
 
     // Stage 2: Initialize embedder
     emit_progress(app, "init", "Initializing embedding engine...", Some(15.0));
-    let embedder = Embedder::new(&model_path, &tokenizer_path)?;
+    let mut embedder = Embedder::new(&model_path, &tokenizer_path)?;
 
     // Stage 3: Chunk entries
     emit_progress(app, "chunking", "Grouping entries into chunks...", Some(18.0));
-    let chunks = chunker::chunk_clusterable_entries(entries, config.window_size);
+    let chunks = chunker::chunk_clusterable_entries(entries, config.window_size, config.stride);
     let num_chunks = chunks.len();
     emit_progress(
         app,
@@ -455,7 +455,7 @@ pub async fn assign_tail_entries_to_clusters(
 
     // Expensive: model loading + embedding computation (no lock held)
     let (model_path, tokenizer_path) = model_manager::ensure_model(|_, _| {})?;
-    let embedder = Embedder::new(&model_path, &tokenizer_path)?;
+    let mut embedder = Embedder::new(&model_path, &tokenizer_path)?;
     let texts: Vec<String> = new_entries.iter().map(|e| e.message.clone()).collect();
     let embeddings = embedder.embed_batch(&texts)?;
     let new_entry_ids: Vec<u64> = new_entries.iter().map(|e| e.id).collect();

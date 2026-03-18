@@ -139,7 +139,12 @@ function shouldSyncSourceBeforeIntuneAnalysis(source: LogSource): boolean {
   return source.kind === "known" && source.pathKind === "file";
 }
 
-function shouldIncludeLiveEventLogs(source: LogSource): boolean {
+function shouldIncludeEventLogs(source: LogSource): boolean {
+  const { analysisOptions } = useIntuneStore.getState();
+  if (!analysisOptions.includeEventLogs) {
+    return false;
+  }
+  // Live event log querying is only available when opening the known live source preset
   return source.kind === "known" && source.sourceId === LIVE_INTUNE_SOURCE_ID;
 }
 
@@ -370,7 +375,7 @@ export function useAppActions(): AppActionHandlers {
         }
 
         const result = await analyzeIntuneLogs(getLogSourcePath(source), requestId, {
-          includeLiveEventLogs: shouldIncludeLiveEventLogs(source),
+          includeLiveEventLogs: shouldIncludeEventLogs(source),
         });
 
         startTransition(() => {

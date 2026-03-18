@@ -8,14 +8,22 @@ use super::models::{ClusterableEntry, EmbeddingChunk};
 /// The anchor entry (used as the chunk's representative) is the middle entry.
 /// Uses a sliding window with stride 1.
 pub fn chunk_entries(entries: &[LogEntry], window_size: usize) -> Vec<EmbeddingChunk> {
+    chunk_entries_with_stride(entries, window_size, 1)
+}
+
+pub fn chunk_entries_with_stride(
+    entries: &[LogEntry],
+    window_size: usize,
+    stride: usize,
+) -> Vec<EmbeddingChunk> {
     if entries.is_empty() {
         return Vec::new();
     }
 
     let window_size = window_size.max(1);
+    let stride = stride.max(1);
 
     if entries.len() <= window_size {
-        // Single chunk covering all entries
         let text = entries
             .iter()
             .map(|e| e.message.as_str())
@@ -30,9 +38,11 @@ pub fn chunk_entries(entries: &[LogEntry], window_size: usize) -> Vec<EmbeddingC
         }];
     }
 
-    let mut chunks = Vec::with_capacity(entries.len() - window_size + 1);
+    let num_chunks = (entries.len() - window_size) / stride + 1;
+    let mut chunks = Vec::with_capacity(num_chunks);
 
-    for i in 0..=(entries.len() - window_size) {
+    let mut i = 0;
+    while i + window_size <= entries.len() {
         let window = &entries[i..i + window_size];
         let text = window
             .iter()
@@ -47,6 +57,7 @@ pub fn chunk_entries(entries: &[LogEntry], window_size: usize) -> Vec<EmbeddingC
             entry_ids,
             anchor_id,
         });
+        i += stride;
     }
 
     chunks
@@ -110,12 +121,14 @@ pub fn chunk_tail_entries(
 pub fn chunk_clusterable_entries(
     entries: &[ClusterableEntry],
     window_size: usize,
+    stride: usize,
 ) -> Vec<EmbeddingChunk> {
     if entries.is_empty() {
         return Vec::new();
     }
 
     let window_size = window_size.max(1);
+    let stride = stride.max(1);
 
     if entries.len() <= window_size {
         let text = entries
@@ -132,9 +145,11 @@ pub fn chunk_clusterable_entries(
         }];
     }
 
-    let mut chunks = Vec::with_capacity(entries.len() - window_size + 1);
+    let num_chunks = (entries.len() - window_size) / stride + 1;
+    let mut chunks = Vec::with_capacity(num_chunks);
 
-    for i in 0..=(entries.len() - window_size) {
+    let mut i = 0;
+    while i + window_size <= entries.len() {
         let window = &entries[i..i + window_size];
         let text = window
             .iter()
@@ -149,6 +164,7 @@ pub fn chunk_clusterable_entries(
             entry_ids,
             anchor_id,
         });
+        i += stride;
     }
 
     chunks

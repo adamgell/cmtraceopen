@@ -45,6 +45,7 @@ pub struct EmbeddingChunk {
 #[serde(rename_all = "camelCase")]
 pub struct ClusteringConfig {
     pub window_size: usize,
+    pub stride: usize,
     pub epsilon: f32,
     pub min_points: usize,
 }
@@ -53,6 +54,7 @@ impl Default for ClusteringConfig {
     fn default() -> Self {
         Self {
             window_size: 3,
+            stride: 2,
             epsilon: 0.3,
             min_points: 3,
         }

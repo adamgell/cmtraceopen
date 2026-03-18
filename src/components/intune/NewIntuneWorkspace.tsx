@@ -6,6 +6,7 @@ import {
   Button,
   Caption1,
   Card,
+  Checkbox,
   Divider,
   Title3,
   makeStyles,
@@ -20,6 +21,7 @@ import {
 } from "../../stores/intune-store";
 import { useUiStore } from "../../stores/ui-store";
 import { useAppActions } from "../layout/Toolbar";
+import { useIntuneTailWatcher } from "../../hooks/use-intune-tail-watcher";
 import { DownloadSurface } from "./DownloadSurface";
 import { EventLogSurface } from "./EventLogSurface";
 import { EventTimeline } from "./EventTimeline";
@@ -124,6 +126,10 @@ const useStyles = makeStyles({
   emptyCard: {
     width: "min(720px, 100%)",
     backgroundColor: "rgba(255,255,255,0.96)",
+  },
+  optionsSection: {
+    display: "grid",
+    gap: "2px",
   },
   metricsGrid: {
     display: "grid",
@@ -277,6 +283,10 @@ export function NewIntuneWorkspace() {
     () => getLogListMetrics(logListFontSize),
     [logListFontSize]
   );
+  useIntuneTailWatcher();
+  const isTailing = useIntuneStore((s) => s.isTailing);
+  const analysisOptions = useIntuneStore((s) => s.analysisOptions);
+  const setAnalysisOptions = useIntuneStore((s) => s.setAnalysisOptions);
   const LIVE_COLLECTION_SOURCE_ID = "windows-intune-ime-logs";
   const events = useIntuneStore((s) => s.events);
   const downloads = useIntuneStore((s) => s.downloads);
@@ -476,13 +486,31 @@ export function NewIntuneWorkspace() {
               </Body1>
             </div>
             <Divider />
+            <div className={styles.optionsSection}>
+              <Caption1 style={inheritFontSize}>Analysis Options</Caption1>
+              <Checkbox
+                label="Include Windows Event Logs"
+                checked={analysisOptions.includeEventLogs}
+                onChange={(_, data) =>
+                  setAnalysisOptions({ includeEventLogs: Boolean(data.checked) })
+                }
+              />
+              <Checkbox
+                label="Enable live tailing after analysis"
+                checked={analysisOptions.enableLiveTailing}
+                onChange={(_, data) =>
+                  setAnalysisOptions({ enableLiveTailing: Boolean(data.checked) })
+                }
+              />
+            </div>
+            <Divider />
             <div className={styles.heroActions}>
               <Button
                 appearance="primary"
                 onClick={startLiveAnalysis}
                 disabled={!commandState.canOpenKnownSources}
               >
-                Analyze Live Logs + Event Logs
+                Analyze Live Logs{analysisOptions.includeEventLogs ? " + Event Logs" : ""}
               </Button>
               <Button
                 appearance="secondary"
@@ -563,7 +591,19 @@ export function NewIntuneWorkspace() {
           </div>
           <div className={styles.sourcePill}>
             <Caption1 style={inheritFontSize}>State</Caption1>
-            <Body1Strong style={inheritFontSize}>{analysisState.message}</Body1Strong>
+            <Body1Strong style={inheritFontSize}>
+              {analysisState.message}
+              {isTailing && (
+                <Badge
+                  size="small"
+                  color="success"
+                  appearance="filled"
+                  style={{ marginLeft: 6, verticalAlign: "middle" }}
+                >
+                  Live
+                </Badge>
+              )}
+            </Body1Strong>
           </div>
           <div className={styles.sourcePill}>
             <Caption1 style={inheritFontSize}>Bundle</Caption1>

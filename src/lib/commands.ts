@@ -42,11 +42,24 @@ function getInvokeErrorMessage(error: unknown): string {
   return String(error);
 }
 
+const CLUSTERING_COMMANDS = new Set([
+  "analyze_clusters",
+  "analyze_all_sources",
+  "get_cluster_summary",
+  "get_anomalies",
+  "assign_tail_entries_to_clusters",
+]);
+
 function normalizeCommandInvokeError(commandName: string, error: unknown): Error {
   const message = getInvokeErrorMessage(error);
   const missingCommandPattern = new RegExp(`command\\s+${commandName}\\s+not found`, "i");
 
   if (missingCommandPattern.test(message)) {
+    if (CLUSTERING_COMMANDS.has(commandName)) {
+      return new Error(
+        "Pattern Analysis requires the clustering feature. Rebuild with: cargo build --features clustering"
+      );
+    }
     return new Error(
       `The running desktop backend does not expose '${commandName}'. Restart CMTrace Open so the frontend and Tauri backend are on the same build.`
     );
@@ -177,6 +190,14 @@ export async function analyzeIntuneLogs(
     requestId,
     includeLiveEventLogs: options?.includeLiveEventLogs ?? false,
   });
+}
+
+export async function startIntuneTail(sourceFiles: string[]): Promise<void> {
+  return invokeCommand<void>("start_intune_tail", { sourceFiles });
+}
+
+export async function stopIntuneTail(sourceFiles: string[]): Promise<void> {
+  return invokeCommand<void>("stop_intune_tail", { sourceFiles });
 }
 
 export async function analyzeDsregcmd(
