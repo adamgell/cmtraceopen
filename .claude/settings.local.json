@@ -5,7 +5,9 @@
       "Bash(find /c/Users/AdamGell/Documents/GitHub/cmtraceopen -type f -name *evidence* -o -name *intune-profile*)",
       "Bash(cargo check:*)",
       "Bash(npx tsc:*)",
-      "Bash(cargo test:*)"
+      "Bash(cargo test:*)",
+      "Bash(tasklist:*)",
+      "Bash(cd:*)"
     ]
   }
 }

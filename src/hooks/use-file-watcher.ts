@@ -1,7 +1,14 @@
 import { useEffect } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { useLogStore } from "../stores/log-store";
-import { startTail, stopTail, pauseTail, resumeTail } from "../lib/commands";
+import { useClusteringStore } from "../stores/clustering-store";
+import {
+  startTail,
+  stopTail,
+  pauseTail,
+  resumeTail,
+  assignTailEntriesToClusters,
+} from "../lib/commands";
 import type { TailPayload } from "../types/log";
 
 /**
@@ -126,6 +133,23 @@ export function useFileWatcher() {
       }
 
       appendEntries(newEntries);
+
+      // Incrementally assign new entries to existing clusters if analysis is ready
+      const clusteringState = useClusteringStore.getState();
+      if (clusteringState.phase === "ready" && currentPath) {
+        assignTailEntriesToClusters(currentPath, newEntries)
+          .then((result) => {
+            if (result.newAnomalyIds.length > 0) {
+              useClusteringStore.getState().addAnomalyIds(result.newAnomalyIds);
+            }
+            if (result.updatedClusters.length > 0) {
+              useClusteringStore.getState().updateClusters(result.updatedClusters);
+            }
+          })
+          .catch((err) =>
+            console.error("Failed to assign tail entries to clusters:", err)
+          );
+      }
     });
 
     return () => {

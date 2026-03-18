@@ -14,6 +14,8 @@ import type {
   DsregcmdCaptureResult,
   DsregcmdResolvedSource,
 } from "../types/dsregcmd";
+import type { ClusterResult, ClusterableEntry, IncrementalClusterResult, MultiSourceClusterResult } from "../types/clustering";
+import type { LogEntry } from "../types/log";
 
 export interface FileAssociationPromptStatus {
   supported: boolean;
@@ -40,11 +42,24 @@ function getInvokeErrorMessage(error: unknown): string {
   return String(error);
 }
 
+const CLUSTERING_COMMANDS = new Set([
+  "analyze_clusters",
+  "analyze_all_sources",
+  "get_cluster_summary",
+  "get_anomalies",
+  "assign_tail_entries_to_clusters",
+]);
+
 function normalizeCommandInvokeError(commandName: string, error: unknown): Error {
   const message = getInvokeErrorMessage(error);
   const missingCommandPattern = new RegExp(`command\\s+${commandName}\\s+not found`, "i");
 
   if (missingCommandPattern.test(message)) {
+    if (CLUSTERING_COMMANDS.has(commandName)) {
+      return new Error(
+        "Pattern Analysis requires the clustering feature. Rebuild with: cargo build --features clustering"
+      );
+    }
     return new Error(
       `The running desktop backend does not expose '${commandName}'. Restart CMTrace Open so the frontend and Tauri backend are on the same build.`
     );
@@ -177,6 +192,14 @@ export async function analyzeIntuneLogs(
   });
 }
 
+export async function startIntuneTail(sourceFiles: string[]): Promise<void> {
+  return invokeCommand<void>("start_intune_tail", { sourceFiles });
+}
+
+export async function stopIntuneTail(sourceFiles: string[]): Promise<void> {
+  return invokeCommand<void>("stop_intune_tail", { sourceFiles });
+}
+
 export async function analyzeDsregcmd(
   input: string,
   bundlePath?: string | null
@@ -234,4 +257,36 @@ export async function setFileAssociationPromptSuppressed(
 
 export async function getSystemDateTimePreferences(): Promise<SystemDateTimePreferences> {
   return invokeCommand<SystemDateTimePreferences>("get_system_date_time_preferences");
+}
+
+// --- Clustering (requires backend built with `clustering` feature) ---
+
+export async function analyzeClusters(path: string): Promise<ClusterResult> {
+  return invokeCommand<ClusterResult>("analyze_clusters", { path });
+}
+
+export async function analyzeAllSources(
+  entries: ClusterableEntry[]
+): Promise<MultiSourceClusterResult> {
+  return invokeCommand<MultiSourceClusterResult>("analyze_all_sources", { entries });
+}
+
+export async function getClusterSummary(
+  path: string
+): Promise<ClusterResult | null> {
+  return invokeCommand<ClusterResult | null>("get_cluster_summary", { path });
+}
+
+export async function getAnomalies(path: string): Promise<number[]> {
+  return invokeCommand<number[]>("get_anomalies", { path });
+}
+
+export async function assignTailEntriesToClusters(
+  path: string,
+  newEntries: LogEntry[]
+): Promise<IncrementalClusterResult> {
+  return invokeCommand<IncrementalClusterResult>(
+    "assign_tail_entries_to_clusters",
+    { path, newEntries }
+  );
 }

@@ -250,3 +250,14 @@ export interface IntuneResultMetadata {
   eventLogAnalysis?: EventLogAnalysis | null;
   anomalyAnalysis?: AnomalyAnalysis | null;
 }
+
+export interface IntuneTailPayload {
+  events: IntuneEvent[];
+  downloads: DownloadStat[];
+  sourceFile: string;
+}
+
+export interface IntuneAnalysisOptions {
+  includeEventLogs: boolean;
+  enableLiveTailing: boolean;
+}

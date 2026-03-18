@@ -10,6 +10,7 @@ import type {
 } from "../types/event-log";
 import type {
   DownloadStat,
+  IntuneAnalysisOptions,
   IntuneAnalysisProgressEvent,
   IntuneAnalysisSourceKind,
   IntuneAnalysisState,
@@ -171,6 +172,7 @@ interface IntuneState {
   sourceFiles: string[];
   sourceContext: IntuneSourceContext;
   isAnalyzing: boolean;
+  isTailing: boolean;
   analysisState: IntuneAnalysisState;
   selectedEventId: number | null;
   selectedEventLogEntryId: number | null;
@@ -181,9 +183,11 @@ interface IntuneState {
   filterStatus: IntuneStatus | "All";
   eventLogFilterChannel: EventLogChannel | "All";
   eventLogFilterSeverity: EventLogSeverity | "All";
+  analysisOptions: IntuneAnalysisOptions;
   activeTab: IntuneWorkspaceTab;
   resultRevision: number;
 
+  setAnalysisOptions: (options: Partial<IntuneAnalysisOptions>) => void;
   beginAnalysis: (
     requestedPath: string | null,
     requestedKind?: IntuneAnalysisSourceKind,
@@ -209,9 +213,19 @@ interface IntuneState {
   setEventLogFilterChannel: (channel: EventLogChannel | "All") => void;
   setEventLogFilterSeverity: (severity: EventLogSeverity | "All") => void;
   selectEventLogEntry: (id: number | null) => void;
+  setTailing: (isTailing: boolean) => void;
+  appendResults: (
+    newEvents: IntuneEvent[],
+    newDownloads: DownloadStat[]
+  ) => void;
   setActiveTab: (tab: IntuneWorkspaceTab) => void;
   clear: () => void;
 }
+
+const defaultAnalysisOptions: IntuneAnalysisOptions = {
+  includeEventLogs: true,
+  enableLiveTailing: true,
+};
 
 const defaultInteractionState = {
   selectedEventId: null,
@@ -239,11 +253,18 @@ export const useIntuneStore = create<IntuneState>((set) => ({
   sourceFiles: [],
   sourceContext: emptySourceContext,
   isAnalyzing: false,
+  isTailing: false,
+  analysisOptions: defaultAnalysisOptions,
   analysisState: defaultAnalysisState,
   resultRevision: 0,
   sourceSelection: buildSourceSelection(null),
   timelineScope: emptyTimelineScope,
   ...defaultInteractionState,
+
+  setAnalysisOptions: (options) =>
+    set((state) => ({
+      analysisOptions: { ...state.analysisOptions, ...options },
+    })),
 
   beginAnalysis: (requestedPath, requestedKind = "unknown", requestId = null) =>
     set({
@@ -261,6 +282,7 @@ export const useIntuneStore = create<IntuneState>((set) => ({
       sourceFiles: [],
       sourceContext: emptySourceContext,
       isAnalyzing: true,
+      isTailing: false,
       analysisState: {
         phase: "analyzing",
         requestedPath,
@@ -433,6 +455,49 @@ export const useIntuneStore = create<IntuneState>((set) => ({
   setFilterStatus: (status) => set({ filterStatus: status }),
   setEventLogFilterChannel: (channel) => set({ eventLogFilterChannel: channel }),
   setEventLogFilterSeverity: (severity) => set({ eventLogFilterSeverity: severity }),
+  setTailing: (isTailing) => set({ isTailing }),
+
+  appendResults: (newEvents, newDownloads) =>
+    set((state) => {
+      if (newEvents.length === 0 && newDownloads.length === 0) {
+        return state;
+      }
+
+      // Reassign IDs on incoming events so they are unique
+      const startId = state.events.length;
+      const reIdEvents = newEvents.map((event, index) => ({
+        ...event,
+        id: startId + index,
+      }));
+
+      const mergedEvents = [...state.events, ...reIdEvents];
+      const mergedDownloads = [...state.downloads, ...newDownloads];
+
+      // Rebuild summary incrementally
+      const summary = state.summary
+        ? buildIncrementalSummary(state.summary, reIdEvents, newDownloads)
+        : null;
+
+      const sourceContext = state.sourceContext;
+
+      const resultMetadata = buildResultMetadata(
+        mergedEvents,
+        mergedDownloads,
+        summary ?? buildZeroSummary(),
+        sourceContext.includedFiles
+      );
+
+      return {
+        events: mergedEvents,
+        downloads: mergedDownloads,
+        summary,
+        diagnosticsCoverage: resultMetadata.diagnosticsCoverage,
+        diagnosticsConfidence: resultMetadata.diagnosticsConfidence,
+        repeatedFailures: resultMetadata.repeatedFailures,
+        resultRevision: state.resultRevision + 1,
+      };
+    }),
+
   selectEventLogEntry: (id) => set({ selectedEventLogEntryId: id }),
   setActiveTab: (tab) => set({ activeTab: tab }),
 
@@ -452,6 +517,7 @@ export const useIntuneStore = create<IntuneState>((set) => ({
       sourceFiles: [],
       sourceContext: emptySourceContext,
       isAnalyzing: false,
+      isTailing: false,
       analysisState: defaultAnalysisState,
       resultRevision: 0,
       sourceSelection: buildSourceSelection(null),
@@ -1057,4 +1123,81 @@ export function getCorrelationLinksForEntry(
   links: EventLogCorrelationLink[]
 ): EventLogCorrelationLink[] {
   return links.filter((l) => l.eventLogEntryId === entryId);
+}
+
+// ---------------------------------------------------------------------------
+// Incremental summary helpers (used by appendResults)
+// ---------------------------------------------------------------------------
+
+function buildZeroSummary(): IntuneSummary {
+  return {
+    totalEvents: 0,
+    win32Apps: 0,
+    wingetApps: 0,
+    scripts: 0,
+    remediations: 0,
+    succeeded: 0,
+    failed: 0,
+    inProgress: 0,
+    pending: 0,
+    timedOut: 0,
+    totalDownloads: 0,
+    successfulDownloads: 0,
+    failedDownloads: 0,
+    failedScripts: 0,
+    logTimeSpan: null,
+  };
+}
+
+function buildIncrementalSummary(
+  prev: IntuneSummary,
+  newEvents: IntuneEvent[],
+  newDownloads: DownloadStat[]
+): IntuneSummary {
+  let { win32Apps, wingetApps, scripts, remediations, succeeded, failed, inProgress, pending, timedOut, failedScripts } = prev;
+
+  for (const event of newEvents) {
+    if (event.eventType === "Win32App") win32Apps++;
+    else if (event.eventType === "WinGetApp") wingetApps++;
+    else if (event.eventType === "PowerShellScript") scripts++;
+    else if (event.eventType === "Remediation") remediations++;
+
+    if (event.status === "Success") succeeded++;
+    else if (event.status === "Failed") failed++;
+    else if (event.status === "InProgress") inProgress++;
+    else if (event.status === "Pending") pending++;
+    else if (event.status === "Timeout") timedOut++;
+
+    if (
+      (event.eventType === "PowerShellScript" || event.eventType === "Remediation") &&
+      (event.status === "Failed" || event.status === "Timeout")
+    ) {
+      failedScripts++;
+    }
+  }
+
+  let successfulDownloads = prev.successfulDownloads;
+  let failedDownloads = prev.failedDownloads;
+  for (const dl of newDownloads) {
+    if (dl.success) successfulDownloads++;
+    else failedDownloads++;
+  }
+
+  return {
+    totalEvents: prev.totalEvents + newEvents.length,
+    win32Apps,
+    wingetApps,
+    scripts,
+    remediations,
+    succeeded,
+    failed,
+    inProgress,
+    pending,
+    timedOut,
+    totalDownloads: prev.totalDownloads + newDownloads.length,
+    successfulDownloads,
+    failedDownloads,
+    failedScripts,
+    logTimeSpan: prev.logTimeSpan,
+  };
 }

@@ -9,7 +9,7 @@ use std::time::Instant;
 use rayon::prelude::*;
 use serde::Serialize;
 use serde_json::Value;
-use tauri::{async_runtime, AppHandle, Emitter};
+use tauri::{async_runtime, AppHandle, Emitter, State};
 
 use crate::error_db::lookup::lookup_error_code;
 use crate::intune::download_stats;
@@ -26,6 +26,9 @@ use crate::intune::models::{
     IntuneSummary, IntuneTimestampBounds,
 };
 use crate::intune::timeline;
+use crate::parser::detect::detect_parser;
+use crate::state::app_state::AppState;
+use crate::watcher::tail;
 
 const IME_LOG_PATTERNS: &[&str] = &[
     "intunemanagementextension",
@@ -3231,6 +3234,116 @@ fn top_event_labels(events: &[&IntuneEvent], limit: usize) -> Vec<String> {
             }
         })
         .collect()
+}
+
+// ---------------------------------------------------------------------------
+// Live tail for Intune workspace
+// ---------------------------------------------------------------------------
+
+/// Payload emitted to the frontend when new tail entries are processed
+/// through the Intune pipeline.
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IntuneTailPayload {
+    pub events: Vec<IntuneEvent>,
+    pub downloads: Vec<DownloadStat>,
+    pub source_file: String,
+}
+
+/// Convert a `LogEntry` (from the tail reader) into an `ImeLine` for the
+/// Intune event/download extractors.
+fn log_entry_to_ime_line(entry: &crate::models::log_entry::LogEntry) -> ime_parser::ImeLine {
+    ime_parser::ImeLine {
+        line_number: entry.line_number,
+        timestamp: entry.timestamp_display.clone(),
+        timestamp_utc: None,
+        message: entry.message.clone(),
+        component: entry.component.clone(),
+    }
+}
+
+/// Start tailing one or more Intune source files and emit incremental
+/// `intune-tail-update` events as new log records are parsed into
+/// `IntuneEvent` / `DownloadStat` objects.
+#[tauri::command]
+pub fn start_intune_tail(
+    source_files: Vec<String>,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    for source_file in source_files {
+        let path_buf = PathBuf::from(&source_file);
+
+        // Stop any existing tail session for this file
+        {
+            let mut sessions = state.tail_sessions.lock().map_err(|e| e.to_string())?;
+            if let Some(old_session) = sessions.remove(&path_buf) {
+                old_session.stop();
+            }
+        }
+
+        // Read a sample of the file to detect the parser
+        let content_sample = fs::read_to_string(&path_buf)
+            .map_err(|e| format!("Failed to read '{}' for parser detection: {}", source_file, e))?;
+        let parser_selection = detect_parser(&source_file, &content_sample);
+
+        // Start tailing from the end of the current file
+        let file_size = fs::metadata(&path_buf)
+            .map_err(|e| format!("Failed to stat '{}': {}", source_file, e))?
+            .len();
+
+        let app_handle = app.clone();
+        let source_file_for_event = source_file.clone();
+        let session = tail::start_tail_session(
+            path_buf.clone(),
+            file_size,
+            parser_selection,
+            0, // next_id — IDs are re-assigned by the frontend
+            0, // next_line — not meaningful for intune tail
+            move |entries| {
+                let ime_lines: Vec<ime_parser::ImeLine> =
+                    entries.iter().map(log_entry_to_ime_line).collect();
+                if ime_lines.is_empty() {
+                    return;
+                }
+                let events = event_tracker::extract_events(&ime_lines, &source_file_for_event);
+                let downloads =
+                    download_stats::extract_downloads(&ime_lines, &source_file_for_event);
+                if events.is_empty() && downloads.is_empty() {
+                    return;
+                }
+                let payload = IntuneTailPayload {
+                    events,
+                    downloads,
+                    source_file: source_file_for_event.clone(),
+                };
+                if let Err(e) = app_handle.emit("intune-tail-update", &payload) {
+                    log::error!("Failed to emit intune-tail-update: {}", e);
+                }
+            },
+        )?;
+
+        let mut sessions = state.tail_sessions.lock().map_err(|e| e.to_string())?;
+        sessions.insert(path_buf, session);
+    }
+
+    Ok(())
+}
+
+/// Stop tailing all Intune source files.
+#[tauri::command]
+pub fn stop_intune_tail(
+    source_files: Vec<String>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let mut sessions = state.tail_sessions.lock().map_err(|e| e.to_string())?;
+    for source_file in source_files {
+        let path_buf = PathBuf::from(&source_file);
+        if let Some(session) = sessions.remove(&path_buf) {
+            session.stop();
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]

@@ -1,8 +1,9 @@
 [CmdletBinding()]
 param(
-    [ValidateSet('Dev', 'Build', 'BuildExeOnly', 'BuildAndRun')]
+    [ValidateSet('Dev', 'Build', 'BuildExeOnly', 'BuildAndRun', 'FullRebuildDev')]
     [string]$Mode = 'Dev',
     [switch]$InstallDependencies,
+    [switch]$EnablePatternAnalysis,
     [string]$OpenPath
 )
 
@@ -111,7 +112,7 @@ function Invoke-CheckedCommand {
 function Get-ModeConfiguration {
     param(
         [Parameter(Mandatory = $true)]
-        [ValidateSet('Dev', 'Build', 'BuildExeOnly', 'BuildAndRun')]
+        [ValidateSet('Dev', 'Build', 'BuildExeOnly', 'BuildAndRun', 'FullRebuildDev')]
         [string]$Mode
     )
 
@@ -137,7 +138,15 @@ function Get-ModeConfiguration {
         'BuildAndRun' {
             return @{
                 NpmScript             = 'app:build:release'
-                RequiresBuiltArtifact = $true
+                RequiresBuiltArtifact = $false
+                FullClean             = $false
+            }
+        }
+        'FullRebuildDev' {
+            return @{
+                NpmScript             = 'app:dev'
+                RequiresBuiltArtifact = $false
+                FullClean             = $true
             }
         }
     }
@@ -190,14 +199,46 @@ else {
 
 $modeConfiguration = Get-ModeConfiguration -Mode $Mode
 
-$npmArguments = @('run', $modeConfiguration.NpmScript)
-if ($OpenPath) {
-    $npmArguments += '--'
-    $npmArguments += '--'
-    $npmArguments += $OpenPath
+if ($modeConfiguration.ContainsKey('FullClean') -and $modeConfiguration.FullClean) {
+    Write-Step 'Cleaning Rust build artifacts (cargo clean)'
+    Invoke-CheckedCommand -Command 'cargo.exe' -Arguments @('clean', '--manifest-path', (Join-Path $appRoot 'src-tauri\Cargo.toml'))
+
+    $frontendDist = Join-Path $appRoot 'dist'
+    if (Test-Path $frontendDist) {
+        Write-Step 'Removing frontend dist folder'
+        Remove-Item -Recurse -Force $frontendDist
+    }
+
+    Write-Step 'Reinstalling npm dependencies'
+    Invoke-CheckedCommand -Command 'npm.cmd' -Arguments @('ci')
 }
 
-Invoke-CheckedCommand -Command 'npm.cmd' -Arguments $npmArguments
+if ($EnablePatternAnalysis) {
+    Write-Step 'Enabling Pattern Analysis workspace (clustering feature)'
+    $tauriArgs = @()
+
+    switch ($modeConfiguration.NpmScript) {
+        'app:dev'           { $tauriArgs += 'dev' }
+        'app:build:release' { $tauriArgs += @('build', '--release') }
+        'app:build:exe-only'{ $tauriArgs += @('build', '--no-bundle') }
+    }
+
+    $tauriArgs += @('-f', 'clustering')
+
+    if ($OpenPath) {
+        $tauriArgs += @('--', $OpenPath)
+    }
+
+    Invoke-CheckedCommand -Command 'npx.cmd' -Arguments (@('tauri') + $tauriArgs)
+}
+else {
+    $npmArguments = @('run', $modeConfiguration.NpmScript)
+    if ($OpenPath) {
+        $npmArguments += @('--', '--', $OpenPath)
+    }
+
+    Invoke-CheckedCommand -Command 'npm.cmd' -Arguments $npmArguments
+}
 
 if ($modeConfiguration.RequiresBuiltArtifact) {
     $builtExecutable = Resolve-BuiltArtifactPath -AppRoot $appRoot
