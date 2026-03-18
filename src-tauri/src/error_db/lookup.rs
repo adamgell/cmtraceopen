@@ -100,4 +100,29 @@ mod tests {
         assert!(!result.found);
         assert_eq!(result.code_hex, "0xDEADBEEF");
     }
+
+    #[test]
+    fn test_lookup_ime_custom_error_decimal() {
+        // IME CustomErrorCodes.FailedToDownloadContent = -2016214938 = 0x87D30066
+        let result = lookup_error_code("-2016214938");
+        assert!(result.found);
+        assert!(result.description.contains("IME_FAILED_TO_DOWNLOAD_CONTENT"));
+        assert_eq!(result.code_hex, "0x87D30066");
+    }
+
+    #[test]
+    fn test_lookup_ime_custom_error_hex() {
+        // IME CustomErrorCodes.ProcessTimeout = 0x87D300C9
+        let result = lookup_error_code("0x87D300C9");
+        assert!(result.found);
+        assert!(result.description.contains("IME_PROCESS_TIMEOUT"));
+    }
+
+    #[test]
+    fn test_lookup_ime_do_timeout() {
+        // IME CustomErrorCodes.DeliveryOptimizationJobTimeout = -2016214935 = 0x87D30069
+        let result = lookup_error_code("-2016214935");
+        assert!(result.found);
+        assert!(result.description.contains("IME_DO_JOB_TIMEOUT"));
+    }
 }

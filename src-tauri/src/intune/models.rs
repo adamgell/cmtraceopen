@@ -1,5 +1,7 @@
 use serde::{ser::SerializeStruct, Deserialize, Serialize, Serializer};
 
+use super::anomaly::models::AnomalyAnalysis;
+
 /// Artifact count summary retained from an evidence bundle manifest.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -523,6 +525,9 @@ pub struct IntuneAnalysisResult {
     /// Parsed and correlated Windows Event Log data from evidence bundle .evtx files.
     #[serde(default)]
     pub event_log_analysis: Option<EventLogAnalysis>,
+    /// Anomaly analysis results from the Smart Anomaly Engine.
+    #[serde(default)]
+    pub anomaly_analysis: Option<AnomalyAnalysis>,
 }
 
 impl Serialize for IntuneAnalysisResult {
@@ -530,7 +535,7 @@ impl Serialize for IntuneAnalysisResult {
     where
         S: Serializer,
     {
-        let mut state = serializer.serialize_struct("IntuneAnalysisResult", 11)?;
+        let mut state = serializer.serialize_struct("IntuneAnalysisResult", 12)?;
         state.serialize_field("events", &self.events)?;
         state.serialize_field("downloads", &self.downloads)?;
         state.serialize_field("summary", &self.summary)?;
@@ -542,6 +547,7 @@ impl Serialize for IntuneAnalysisResult {
         state.serialize_field("repeatedFailures", &self.repeated_failures)?;
         state.serialize_field("evidenceBundle", &self.evidence_bundle)?;
         state.serialize_field("eventLogAnalysis", &self.event_log_analysis)?;
+        state.serialize_field("anomalyAnalysis", &self.anomaly_analysis)?;
         state.end()
     }
 }
@@ -603,6 +609,7 @@ mod tests {
             diagnostics_confidence: IntuneDiagnosticsConfidence::default(),
             repeated_failures: Vec::new(),
             event_log_analysis: None,
+            anomaly_analysis: None,
             evidence_bundle: Some(EvidenceBundleMetadata {
                 manifest_path: "bundle-root/manifest.json".to_string(),
                 notes_path: Some("bundle-root/notes.md".to_string()),

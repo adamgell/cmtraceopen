@@ -1,3 +1,4 @@
+pub mod anomaly;
 pub mod download_stats;
 pub mod event_tracker;
 pub mod eventlog_win32;
