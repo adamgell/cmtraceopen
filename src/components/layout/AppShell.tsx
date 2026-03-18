@@ -15,6 +15,7 @@ import { FileAssociationPromptDialog } from "../dialogs/FileAssociationPromptDia
 import { IntuneDashboard } from "../intune/IntuneDashboard";
 import { NewIntuneWorkspace } from "../intune/NewIntuneWorkspace";
 import { DsregcmdWorkspace } from "../dsregcmd/DsregcmdWorkspace";
+import { ClusteringWorkspace } from "../clustering/ClusteringWorkspace";
 import type { FilterClause } from "../dialogs/FilterDialog";
 import type { LogEntry } from "../../types/log";
 import { useUiStore } from "../../stores/ui-store";
@@ -26,6 +27,7 @@ import { useKeyboard } from "../../hooks/use-keyboard";
 import { useDragDrop } from "../../hooks/use-drag-drop";
 import { useFileAssociation } from "../../hooks/use-file-association";
 import { useFileAssociationPrompt } from "../../hooks/use-file-association-prompt";
+import { useClusteringProgress } from "../../hooks/use-clustering-progress";
 
 function buildFilterRunSignature(entries: LogEntry[], clauses: FilterClause[]): string {
   const lastId = entries.length > 0 ? entries[entries.length - 1].id : -1;
@@ -170,6 +172,7 @@ export function AppShell() {
 
   useFileWatcher();
   useIntuneAnalysisProgress();
+  useClusteringProgress();
   useKeyboard();
   useDragDrop();
   // Handle file path passed via OS file association at startup
@@ -225,6 +228,14 @@ export function AppShell() {
       return (
         <div style={{ flex: 1, overflow: "hidden" }}>
           <NewIntuneWorkspace />
+        </div>
+      );
+    }
+
+    if (activeView === "clustering") {
+      return (
+        <div style={{ flex: 1, overflow: "hidden" }}>
+          <ClusteringWorkspace />
         </div>
       );
     }

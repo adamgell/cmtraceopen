@@ -247,3 +247,14 @@ export interface IntuneResultMetadata {
   evidenceBundle?: EvidenceBundleMetadata | null;
   eventLogAnalysis?: EventLogAnalysis | null;
 }
+
+export interface IntuneTailPayload {
+  events: IntuneEvent[];
+  downloads: DownloadStat[];
+  sourceFile: string;
+}
+
+export interface IntuneAnalysisOptions {
+  includeEventLogs: boolean;
+  enableLiveTailing: boolean;
+}

@@ -1,4 +1,6 @@
 mod commands;
+#[cfg(feature = "clustering")]
+pub mod clustering;
 pub mod dsregcmd;
 mod error_db;
 pub mod intune;
@@ -20,6 +22,73 @@ fn get_initial_file_path_from_args() -> Option<String> {
     std::env::args().skip(1).find(|arg| !arg.starts_with('-'))
 }
 
+#[cfg(not(feature = "clustering"))]
+fn build_invoke_handler() -> impl Fn(tauri::ipc::Invoke) -> bool {
+    tauri::generate_handler![
+        commands::file_association::get_file_association_prompt_status,
+        commands::file_association::associate_log_files_with_app,
+        commands::file_association::set_file_association_prompt_suppressed,
+        commands::file_ops::open_log_file,
+        commands::file_ops::open_log_folder_aggregate,
+        commands::file_ops::list_log_folder,
+        commands::file_ops::inspect_evidence_bundle,
+        commands::file_ops::inspect_evidence_artifact,
+        commands::file_ops::get_known_log_sources,
+        commands::file_ops::inspect_path_kind,
+        commands::file_ops::write_text_output_file,
+        commands::file_ops::get_initial_file_path,
+        commands::system_preferences::get_system_date_time_preferences,
+        commands::parsing::start_tail,
+        commands::parsing::stop_tail,
+        commands::parsing::pause_tail,
+        commands::parsing::resume_tail,
+        commands::filter::apply_filter,
+        commands::error_lookup::lookup_error_code,
+        commands::intune::analyze_intune_logs,
+        commands::intune::start_intune_tail,
+        commands::intune::stop_intune_tail,
+        commands::dsregcmd::analyze_dsregcmd,
+        commands::dsregcmd::capture_dsregcmd,
+        commands::dsregcmd::load_dsregcmd_source,
+    ]
+}
+
+#[cfg(feature = "clustering")]
+fn build_invoke_handler() -> impl Fn(tauri::ipc::Invoke) -> bool {
+    tauri::generate_handler![
+        commands::file_association::get_file_association_prompt_status,
+        commands::file_association::associate_log_files_with_app,
+        commands::file_association::set_file_association_prompt_suppressed,
+        commands::file_ops::open_log_file,
+        commands::file_ops::open_log_folder_aggregate,
+        commands::file_ops::list_log_folder,
+        commands::file_ops::inspect_evidence_bundle,
+        commands::file_ops::inspect_evidence_artifact,
+        commands::file_ops::get_known_log_sources,
+        commands::file_ops::inspect_path_kind,
+        commands::file_ops::write_text_output_file,
+        commands::file_ops::get_initial_file_path,
+        commands::system_preferences::get_system_date_time_preferences,
+        commands::parsing::start_tail,
+        commands::parsing::stop_tail,
+        commands::parsing::pause_tail,
+        commands::parsing::resume_tail,
+        commands::filter::apply_filter,
+        commands::error_lookup::lookup_error_code,
+        commands::intune::analyze_intune_logs,
+        commands::intune::start_intune_tail,
+        commands::intune::stop_intune_tail,
+        commands::dsregcmd::analyze_dsregcmd,
+        commands::dsregcmd::capture_dsregcmd,
+        commands::dsregcmd::load_dsregcmd_source,
+        commands::clustering::analyze_clusters,
+        commands::clustering::analyze_all_sources,
+        commands::clustering::get_cluster_summary,
+        commands::clustering::get_anomalies,
+        commands::clustering::assign_tail_entries_to_clusters,
+    ]
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let initial_file_path = get_initial_file_path_from_args();
@@ -39,31 +108,7 @@ pub fn run() {
             Ok(())
         })
         .manage(AppState::new(initial_file_path))
-        .invoke_handler(tauri::generate_handler![
-            commands::file_association::get_file_association_prompt_status,
-            commands::file_association::associate_log_files_with_app,
-            commands::file_association::set_file_association_prompt_suppressed,
-            commands::file_ops::open_log_file,
-            commands::file_ops::open_log_folder_aggregate,
-            commands::file_ops::list_log_folder,
-            commands::file_ops::inspect_evidence_bundle,
-            commands::file_ops::inspect_evidence_artifact,
-            commands::file_ops::get_known_log_sources,
-            commands::file_ops::inspect_path_kind,
-            commands::file_ops::write_text_output_file,
-            commands::file_ops::get_initial_file_path,
-            commands::system_preferences::get_system_date_time_preferences,
-            commands::parsing::start_tail,
-            commands::parsing::stop_tail,
-            commands::parsing::pause_tail,
-            commands::parsing::resume_tail,
-            commands::filter::apply_filter,
-            commands::error_lookup::lookup_error_code,
-            commands::intune::analyze_intune_logs,
-            commands::dsregcmd::analyze_dsregcmd,
-            commands::dsregcmd::capture_dsregcmd,
-            commands::dsregcmd::load_dsregcmd_source,
-        ])
+        .invoke_handler(build_invoke_handler())
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
