@@ -1,5 +1,6 @@
 use ndarray::Array2;
 use ort::{session::Session, value::Value};
+use rayon::prelude::*;
 use std::path::Path;
 use tokenizers::Tokenizer;
 
@@ -38,7 +39,7 @@ impl Embedder {
         let mut all_embeddings = Vec::with_capacity(texts.len());
 
         // Process in sub-batches to limit memory usage
-        let batch_size = 32;
+        let batch_size = 64;
         for batch in texts.chunks(batch_size) {
             let batch_embeddings = self.embed_sub_batch(batch)?;
             all_embeddings.extend(batch_embeddings);
@@ -113,41 +114,42 @@ impl Embedder {
         let output_shape = output_view.shape();
         let hidden_dim = output_shape[2];
 
-        let mut embeddings = Vec::with_capacity(batch_len);
+        // Mean pooling + L2 normalization parallelized across batch items
+        let embeddings: Vec<Vec<f32>> = (0..batch_len)
+            .into_par_iter()
+            .map(|i| {
+                let mut pooled = vec![0.0f32; hidden_dim];
+                let mask_sum: f32 = (0..max_len)
+                    .map(|j| {
+                        let mask_val = if j < encodings[i].get_attention_mask().len() {
+                            encodings[i].get_attention_mask()[j] as f32
+                        } else {
+                            0.0
+                        };
+                        for k in 0..hidden_dim {
+                            pooled[k] += output_view[[i, j, k]] * mask_val;
+                        }
+                        mask_val
+                    })
+                    .sum();
 
-        for i in 0..batch_len {
-            // Mean pooling with attention mask
-            let mut pooled = vec![0.0f32; hidden_dim];
-            let mask_sum: f32 = (0..max_len)
-                .map(|j| {
-                    let mask_val = if j < encodings[i].get_attention_mask().len() {
-                        encodings[i].get_attention_mask()[j] as f32
-                    } else {
-                        0.0
-                    };
-                    for k in 0..hidden_dim {
-                        pooled[k] += output_view[[i, j, k]] * mask_val;
+                if mask_sum > 0.0 {
+                    for val in &mut pooled {
+                        *val /= mask_sum;
                     }
-                    mask_val
-                })
-                .sum();
-
-            if mask_sum > 0.0 {
-                for val in &mut pooled {
-                    *val /= mask_sum;
                 }
-            }
 
-            // L2 normalize
-            let norm: f32 = pooled.iter().map(|v| v * v).sum::<f32>().sqrt();
-            if norm > 0.0 {
-                for val in &mut pooled {
-                    *val /= norm;
+                // L2 normalize
+                let norm: f32 = pooled.iter().map(|v| v * v).sum::<f32>().sqrt();
+                if norm > 0.0 {
+                    for val in &mut pooled {
+                        *val /= norm;
+                    }
                 }
-            }
 
-            embeddings.push(pooled);
-        }
+                pooled
+            })
+            .collect();
 
         Ok(embeddings)
     }

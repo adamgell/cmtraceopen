@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Instant;
 
+use rayon::prelude::*;
 use serde::Serialize;
 use tauri::{async_runtime, AppHandle, Emitter, State};
 
@@ -127,8 +128,7 @@ fn analyze_clusters_blocking(
     let total_batches = (texts.len() + batch_size - 1) / batch_size;
 
     for (batch_idx, batch) in texts.chunks(batch_size).enumerate() {
-        let batch_vec: Vec<String> = batch.to_vec();
-        let batch_embeddings = embedder.embed_batch(&batch_vec)?;
+        let batch_embeddings = embedder.embed_batch(batch)?;
         all_embeddings.extend(batch_embeddings);
 
         let pct = 20.0 + ((batch_idx + 1) as f32 / total_batches.max(1) as f32) * 55.0;
@@ -158,9 +158,9 @@ fn analyze_clusters_blocking(
     let clustered_entries: usize = clusters.iter().map(|c| c.size).sum();
     let processing_time_ms = started.elapsed().as_millis() as u64;
 
-    // Build centroids for incremental mode
+    // Build centroids for incremental mode (parallelized)
     let centroids: Vec<Vec<f32>> = clusters
-        .iter()
+        .par_iter()
         .map(|cluster| {
             let cluster_chunk_indices: Vec<usize> = chunks
                 .iter()
@@ -324,8 +324,7 @@ fn analyze_all_sources_blocking(
     let total_batches = (texts.len() + batch_size - 1) / batch_size;
 
     for (batch_idx, batch) in texts.chunks(batch_size).enumerate() {
-        let batch_vec: Vec<String> = batch.to_vec();
-        let batch_embeddings = embedder.embed_batch(&batch_vec)?;
+        let batch_embeddings = embedder.embed_batch(batch)?;
         all_embeddings.extend(batch_embeddings);
 
         let pct = 20.0 + ((batch_idx + 1) as f32 / total_batches.max(1) as f32) * 55.0;
