@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { formatDisplayDateTime, parseDisplayDateTimeValue } from "../../lib/date-time-format";
 import { useIntuneStore } from "../../stores/intune-store";
 import { useAppActions } from "../layout/Toolbar";
+import { AnomalySurface } from "./AnomalySurface";
 import { EventTimeline } from "./EventTimeline";
 import { DownloadStats } from "./DownloadStats";
 import type {
@@ -24,12 +25,13 @@ import type {
   IntuneTimestampBounds,
 } from "../../types/intune";
 
-type TabId = "timeline" | "downloads" | "summary";
+type TabId = "timeline" | "downloads" | "summary" | "anomalies";
 
 const TAB_LABELS: Record<TabId, string> = {
   timeline: "Timeline",
   downloads: "Downloads",
   summary: "Summary",
+  anomalies: "Anomalies",
 };
 
 export function IntuneDashboard() {
@@ -38,6 +40,7 @@ export function IntuneDashboard() {
   const summary = useIntuneStore((s) => s.summary);
   const diagnostics = useIntuneStore((s) => s.diagnostics);
   const evidenceBundle = useIntuneStore((s) => s.evidenceBundle);
+  const anomalyAnalysis = useIntuneStore((s) => s.anomalyAnalysis);
   const diagnosticsCoverage = useIntuneStore((s) => s.diagnosticsCoverage);
   const sourceContext = useIntuneStore((s) => s.sourceContext);
   const analysisState = useIntuneStore((s) => s.analysisState);
@@ -78,8 +81,9 @@ export function IntuneDashboard() {
       timeline: filteredEventsByTime.length > 0,
       downloads: filteredDownloadsByTime.length > 0,
       summary: summary != null,
+      anomalies: anomalyAnalysis != null && anomalyAnalysis.anomalies.length > 0,
     }),
-    [filteredDownloadsByTime.length, filteredEventsByTime.length, summary]
+    [anomalyAnalysis, filteredDownloadsByTime.length, filteredEventsByTime.length, summary]
   );
 
   const filteredEventCount = useMemo(() => {
@@ -108,6 +112,10 @@ export function IntuneDashboard() {
       }
       if (availableTabs.summary) {
         setActiveTab("summary");
+        return;
+      }
+      if (availableTabs.anomalies) {
+        setActiveTab("anomalies");
         return;
       }
       setActiveTab("timeline");
@@ -260,7 +268,7 @@ export function IntuneDashboard() {
               label={TAB_LABELS[tabId]}
               active={activeTab === tabId}
               disabled={isAnalyzing || !availableTabs[tabId]}
-              count={tabId === "timeline" ? filteredEventsByTime.length : tabId === "downloads" ? filteredDownloadsByTime.length : summary ? 1 : 0}
+              count={tabId === "timeline" ? filteredEventsByTime.length : tabId === "downloads" ? filteredDownloadsByTime.length : tabId === "anomalies" ? (anomalyAnalysis?.summary.totalAnomalies ?? 0) : summary ? 1 : 0}
               onClick={() => setActiveTab(tabId)}
             />
           ))}
@@ -515,6 +523,9 @@ export function IntuneDashboard() {
                 timeWindow={timeWindow}
                 timeWindowLabel={timeWindowLabel}
               />
+            )}
+            {activeTab === "anomalies" && anomalyAnalysis && (
+              <AnomalySurface analysis={anomalyAnalysis} />
             )}
           </>
         )}
