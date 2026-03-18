@@ -158,4 +158,65 @@ pub static ERROR_CODES: &[(u32, &str)] = &[
     (0x8A150002, "APPINSTALLER_CLI_ERROR_INVALID_CL - Invalid command line"),
     (0x8A150003, "APPINSTALLER_CLI_ERROR_COMMAND_FAILED - Command failed"),
     (0x8A150014, "APPINSTALLER_CLI_ERROR_NO_APPLICABLE_INSTALLER - No applicable installer found"),
+
+    // -----------------------------------------------------------------------
+    // IME Custom Error Codes (from DLL reflection of StatusServiceLibrary)
+    // Source: Microsoft.Management.Clients.IntuneManagementExtension.StatusServiceLibrary.CustomErrorCodes
+    // -----------------------------------------------------------------------
+
+    // Detection rule errors (0x87D30001 – 0x87D3000A)
+    (0x87D30000, "IME_UNKNOWN - Intune Management Extension unknown error"),
+    (0x87D30001, "IME_INVALID_DETECTION_RULE_EMPTY - Detection rule is empty"),
+    (0x87D30002, "IME_INVALID_DETECTION_RULE_PARSE_TYPE - Failed to parse detection type"),
+    (0x87D30003, "IME_INVALID_DETECTION_RULE_TYPE_NONE - Detection type is None"),
+    (0x87D30004, "IME_INVALID_DETECTION_RULE_UNKNOWN_TYPE - Unknown detection type"),
+    (0x87D30005, "IME_INVALID_DETECTION_RULE_NULL_VALUE - Detection value is null"),
+    (0x87D30006, "IME_INVALID_DETECTION_RULE_INVALID_VALUE - Invalid detection value"),
+    (0x87D30007, "IME_INVALID_DETECTION_RULE_PRODUCT_VERSION - Failed to get product version for detection"),
+    (0x87D30008, "IME_INVALID_DETECTION_RULE_PARSE_OPERATOR - Failed to parse detection operator"),
+    (0x87D30009, "IME_INVALID_DETECTION_RULE_UNKNOWN_OPERATOR - Unknown detection operator"),
+    (0x87D3000A, "IME_INVALID_DETECTION_RULE_BAD_FORMAT - Detection rule has bad format"),
+
+    // Requirement rule errors (0x87D3000B – 0x87D30018)
+    (0x87D3000B, "IME_INVALID_REQUIREMENT_RULE_EMPTY - Requirement rule is empty"),
+    (0x87D3000C, "IME_INVALID_REQUIREMENT_RULE_PARSE_TYPE - Failed to parse requirement type"),
+    (0x87D3000D, "IME_INVALID_REQUIREMENT_RULE_TYPE_NONE - Requirement type is None"),
+    (0x782CFFF2, "IME_INVALID_REQUIREMENT_RULE_UNKNOWN_TYPE - Unknown requirement rule type"),
+    (0x87D3000F, "IME_INVALID_REQUIREMENT_RULE_NULL_VALUE - Requirement value is null"),
+    (0x87D30010, "IME_INVALID_REQUIREMENT_RULE_INVALID_VALUE - Invalid requirement value"),
+    (0x87D30011, "IME_INVALID_REQUIREMENT_RULE_PRODUCT_VERSION - Failed to get product version for requirement"),
+    (0x87D30012, "IME_INVALID_REQUIREMENT_RULE_PARSE_OPERATOR - Failed to parse requirement operator"),
+    (0x87D30013, "IME_INVALID_REQUIREMENT_RULE_UNKNOWN_OPERATOR - Unknown requirement operator"),
+    (0x87D30014, "IME_INVALID_REQUIREMENT_RULE_BAD_FORMAT - Requirement rule has bad format"),
+    (0x87D30015, "IME_INVALID_REQUIREMENT_RULE_FILE_NOT_EXIST - Required file does not exist"),
+    (0x87D30016, "IME_INVALID_REQUIREMENT_RULE_UNSUPPORTED_OPERATOR - Unsupported requirement operator"),
+    (0x87D30017, "IME_WINGET_PACKAGE_NOT_FOUND - WinGet package not found"),
+    (0x87D30018, "IME_WINGET_PROCESS_TIMEOUT - WinGet process timed out"),
+
+    // Content download errors (0x87D30065 – 0x87D3006C)
+    (0x87D30065, "IME_FAILED_TO_GET_CONTENT_INFO - Failed to get content info from Intune service"),
+    (0x87D30066, "IME_FAILED_TO_DOWNLOAD_CONTENT - Failed to download content"),
+    (0x87D30067, "IME_UNZIP_ERROR - Failed to unzip/extract downloaded content"),
+    (0x87D30068, "IME_OTHER_DOWNLOAD_ERROR - Other download error"),
+    (0x87D30069, "IME_DO_JOB_TIMEOUT - Delivery Optimization job timed out"),
+    (0x87D3006A, "IME_CDN_DOWNLOAD_TIMEOUT - CDN download timed out"),
+    (0x87D3006B, "IME_INVALID_DOWNLOAD_MODE - Invalid download mode"),
+    (0x87D3006C, "IME_DO_JOB_ERROR_OR_CANCELLED - Delivery Optimization job in error or cancelled state"),
+
+    // Execution errors (0x87D300C9 – 0x87D300D7)
+    (0x87D300C9, "IME_PROCESS_TIMEOUT - Application install process timed out"),
+    (0x87D300CA, "IME_OTHER_EXECUTION_ERROR - Other execution error during install"),
+    (0x87D300CB, "IME_COMMAND_LINE_EMPTY - Install command line is empty"),
+    (0x87D300CC, "IME_INVALID_INSTALL_EX - Invalid install execution parameters"),
+    (0x87D300CD, "IME_USER_LOGOFF_FOR_USER_CONTEXT - User logged off during user-context install"),
+    (0x87D300CE, "IME_APP_LOG_UPLOAD_FILE_SIZE_EXCEED - App log upload file size exceeded"),
+    (0x87D300CF, "IME_UNINSTALL_REFERENCED_BY_CHAIN - Cannot uninstall app referenced by dependency chain"),
+    (0x87D300D0, "IME_CIRCULAR_DEPENDENCY - Failed to process app due to circular dependency"),
+    (0x87D300D1, "IME_APP_LOG_UPLOAD_NO_VALID_FILES - No valid files for app log upload"),
+    (0x87D300D2, "IME_APP_LOG_UPLOAD_SAS_URL_EXPIRED - App log upload SAS URL expired"),
+    (0x87D300D3, "IME_APP_LOG_UPLOAD_INVALID_PUBLIC_KEY - App log upload has invalid public key"),
+    (0x87D300D4, "IME_APP_LOG_UPLOAD_FILE_COUNT_EXCEED - App log upload file count exceeded limit"),
+    (0x87D300D5, "IME_APP_LOG_UPLOAD_SYMMETRIC_KEY_ENCRYPT_ERROR - App log upload symmetric key encryption error"),
+    (0x87D300D6, "IME_APP_LOG_UPLOAD_OTHER_ZIP_ERROR - App log upload other zip error"),
+    (0x87D300D7, "IME_APP_LOG_UPLOAD_ASYMMETRIC_KEY_ENCRYPT_ERROR - App log upload asymmetric key encryption error"),
 ];

@@ -335,6 +335,7 @@ fn analyze_intune_logs_blocking(
             repeated_failures,
             evidence_bundle,
             event_log_analysis,
+            anomaly_analysis: None,
         });
     }
 
@@ -401,6 +402,13 @@ fn analyze_intune_logs_blocking(
         analysis_started.elapsed().as_millis()
     );
 
+    // Run anomaly analysis on structured Intune data
+    let anomaly_analysis = crate::intune::anomaly::run_anomaly_analysis(
+        &events,
+        &all_downloads,
+        event_log_analysis.as_ref(),
+    );
+
     Ok(IntuneAnalysisResult {
         events,
         downloads: all_downloads,
@@ -413,6 +421,7 @@ fn analyze_intune_logs_blocking(
         repeated_failures,
         evidence_bundle,
         event_log_analysis,
+        anomaly_analysis: Some(anomaly_analysis),
     })
 }
 
