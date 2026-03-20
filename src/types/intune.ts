@@ -1,3 +1,4 @@
+import type { AnomalyAnalysis } from "./anomaly";
 import type { EvidenceBundleMetadata } from "./evidence";
 import type { EventLogAnalysis } from "./event-log";
 
@@ -167,6 +168,11 @@ export interface IntuneDiagnosticInsight {
   focusAreas: string[];
   affectedSourceFiles: string[];
   relatedErrorCodes: string[];
+  knowledgeBaseLinks: Array<{
+    title: string;
+    url: string;
+    relevance: string;
+  }>;
 }
 
 export interface IntuneSourceContext {
@@ -238,6 +244,7 @@ export interface IntuneAnalysisResult {
   repeatedFailures: IntuneRepeatedFailureGroup[];
   evidenceBundle?: EvidenceBundleMetadata | null;
   eventLogAnalysis?: EventLogAnalysis | null;
+  anomalyAnalysis?: AnomalyAnalysis | null;
 }
 
 export interface IntuneResultMetadata {
@@ -246,6 +253,7 @@ export interface IntuneResultMetadata {
   repeatedFailures: IntuneRepeatedFailureGroup[];
   evidenceBundle?: EvidenceBundleMetadata | null;
   eventLogAnalysis?: EventLogAnalysis | null;
+  anomalyAnalysis?: AnomalyAnalysis | null;
 }
 
 export interface IntuneTailPayload {

@@ -335,6 +335,7 @@ fn analyze_intune_logs_blocking(
             repeated_failures,
             evidence_bundle,
             event_log_analysis,
+            anomaly_analysis: None,
         });
     }
 
@@ -401,6 +402,22 @@ fn analyze_intune_logs_blocking(
         analysis_started.elapsed().as_millis()
     );
 
+    // Run anomaly analysis on structured Intune data
+    let anomaly_analysis = crate::intune::anomaly::run_anomaly_analysis(
+        &events,
+        &all_downloads,
+        event_log_analysis.as_ref(),
+        None, // ETL events not yet wired to UI
+    );
+
+    // Generate remediation insights from anomaly analysis
+    let anomaly_insights = crate::intune::anomaly::remediation::build_anomaly_insights(
+        &anomaly_analysis.anomalies,
+        &anomaly_analysis.causal_chains,
+        &events,
+    );
+    diagnostics.extend(anomaly_insights);
+
     Ok(IntuneAnalysisResult {
         events,
         downloads: all_downloads,
@@ -413,6 +430,7 @@ fn analyze_intune_logs_blocking(
         repeated_failures,
         evidence_bundle,
         event_log_analysis,
+        anomaly_analysis: Some(anomaly_analysis),
     })
 }
 
@@ -440,17 +458,54 @@ fn load_event_log_analysis(
     }
 
     if include_live_event_logs {
+        let channel_count = evtx_parser::LIVE_CHANNEL_COUNT;
         emit_analysis_progress(
             app,
             request_id,
             "parsing-event-logs",
-            "Querying live Windows Event Logs...".to_string(),
-            None,
+            format!(
+                "Querying {} Windows Event Log channels...",
+                channel_count
+            ),
+            Some(format!("Up to {} events per channel", 200)),
             None,
             completed_files,
             Some(total_files),
         );
-        return evtx_parser::parse_live_event_logs();
+
+        let app_clone = app.clone();
+        let request_id_owned = request_id.to_string();
+        return evtx_parser::parse_live_event_logs(
+            move |done, total, channel, entry_count| {
+                // Extract short channel name from full path
+                let short_name = channel
+                    .rsplit('/')
+                    .next()
+                    .or_else(|| channel.rsplit('\\').next())
+                    .unwrap_or(channel);
+                let provider = channel
+                    .split('/')
+                    .next()
+                    .and_then(|s| s.strip_prefix("Microsoft-Windows-"))
+                    .unwrap_or(channel);
+                emit_analysis_progress(
+                    &app_clone,
+                    &request_id_owned,
+                    "parsing-event-logs",
+                    format!(
+                        "Querying Event Logs ({} of {})...",
+                        done, total
+                    ),
+                    Some(format!(
+                        "{}/{} \u{2014} {} entries",
+                        provider, short_name, entry_count
+                    )),
+                    Some(channel.to_string()),
+                    completed_files,
+                    Some(total_files),
+                );
+            },
+        );
     }
 
     None
@@ -2200,6 +2255,7 @@ fn build_diagnostics(
             ],
             affected_source_files: related_source_files(&failed_download_events, 4),
             related_error_codes: related_error_codes(&failed_download_events, 3),
+            knowledge_base_links: vec![],
         });
     }
 
@@ -2245,6 +2301,7 @@ fn build_diagnostics(
             ],
             affected_source_files: related_source_files(&install_failures, 4),
             related_error_codes: related_error_codes(&install_failures, 3),
+            knowledge_base_links: vec![],
         });
     }
 
@@ -2317,6 +2374,7 @@ fn build_diagnostics(
             ],
             affected_source_files: related_source_files(&timed_out_events, 4),
             related_error_codes: related_error_codes(&timed_out_events, 3),
+            knowledge_base_links: vec![],
         });
     }
 
@@ -2364,6 +2422,7 @@ fn build_diagnostics(
             ],
             affected_source_files: related_source_files(&script_failures, 4),
             related_error_codes: related_error_codes(&script_failures, 3),
+            knowledge_base_links: vec![],
         });
     }
 
@@ -2410,6 +2469,7 @@ fn build_diagnostics(
             ],
             affected_source_files: related_source_files(&policy_events, 4),
             related_error_codes: related_error_codes(&policy_events, 3),
+            knowledge_base_links: vec![],
         });
     }
 
@@ -2440,6 +2500,7 @@ fn build_diagnostics(
                 ],
                 affected_source_files: Vec::new(),
                 related_error_codes: Vec::new(),
+                knowledge_base_links: vec![],
             });
         } else if summary.total_events > 0 {
             insights.push(IntuneDiagnosticInsight {
@@ -2467,6 +2528,7 @@ fn build_diagnostics(
                 ],
                 affected_source_files: Vec::new(),
                 related_error_codes: Vec::new(),
+                knowledge_base_links: vec![],
             });
         }
     }
@@ -3335,6 +3397,11 @@ pub fn stop_intune_tail(
         }
     }
     Ok(())
+}
+
+#[tauri::command]
+pub async fn parse_etl_file(path: String) -> Result<Vec<crate::parser::etl::EtlEvent>, String> {
+    crate::parser::etl::parse_etl_file(&path)
 }
 
 #[cfg(test)]

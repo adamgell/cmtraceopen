@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { parseDisplayDateTimeValue } from "../lib/date-time-format";
+import type { AnomalyAnalysis } from "../types/anomaly";
 import type { EvidenceBundleMetadata } from "../types/evidence";
 import type {
   EventLogAnalysis,
@@ -30,7 +31,7 @@ import type {
   IntuneTimestampBounds,
 } from "../types/intune";
 
-export type IntuneWorkspaceTab = "timeline" | "downloads" | "summary";
+export type IntuneWorkspaceTab = "timeline" | "downloads" | "summary" | "anomalies" | "triage";
 
 function buildSourceContext(
   sourceFile: string | null,
@@ -166,6 +167,7 @@ interface IntuneState {
   repeatedFailures: IntuneRepeatedFailureGroup[];
   evidenceBundle: EvidenceBundleMetadata | null;
   eventLogAnalysis: EventLogAnalysis | null;
+  anomalyAnalysis: AnomalyAnalysis | null;
   sourceFile: string | null;
   sourceFiles: string[];
   sourceContext: IntuneSourceContext;
@@ -246,6 +248,7 @@ export const useIntuneStore = create<IntuneState>((set) => ({
   repeatedFailures: [],
   evidenceBundle: null,
   eventLogAnalysis: null,
+  anomalyAnalysis: null,
   sourceFile: null,
   sourceFiles: [],
   sourceContext: emptySourceContext,
@@ -274,6 +277,7 @@ export const useIntuneStore = create<IntuneState>((set) => ({
       repeatedFailures: [],
       evidenceBundle: null,
       eventLogAnalysis: null,
+      anomalyAnalysis: null,
       sourceFile: null,
       sourceFiles: [],
       sourceContext: emptySourceContext,
@@ -349,6 +353,7 @@ export const useIntuneStore = create<IntuneState>((set) => ({
         repeatedFailures: resultMetadata.repeatedFailures,
         evidenceBundle: metadata?.evidenceBundle ?? null,
         eventLogAnalysis: metadata?.eventLogAnalysis ?? null,
+        anomalyAnalysis: metadata?.anomalyAnalysis ?? null,
         sourceFile,
         sourceFiles,
         sourceContext,
@@ -507,6 +512,7 @@ export const useIntuneStore = create<IntuneState>((set) => ({
       repeatedFailures: [],
       evidenceBundle: null,
       eventLogAnalysis: null,
+      anomalyAnalysis: null,
       sourceFile: null,
       sourceFiles: [],
       sourceContext: emptySourceContext,

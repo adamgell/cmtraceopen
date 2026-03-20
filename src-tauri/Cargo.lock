@@ -539,6 +539,7 @@ dependencies = [
  "notify",
  "once_cell",
  "ort",
+ "quick-xml 0.36.2",
  "rayon",
  "regex",
  "serde",

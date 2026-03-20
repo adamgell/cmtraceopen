@@ -222,7 +222,7 @@ export function StatusBar() {
     );
 
     leftParts = [
-      activeView === "new-intune" ? "New Intune Workspace" : "Intune Diagnostics",
+      "New Intune Workspace",
       intuneAnalysisState.phase === "analyzing"
         ? "Analyzing"
         : intuneAnalysisState.phase === "error"
@@ -327,13 +327,11 @@ export function StatusBar() {
   const activeViewLabel =
     activeView === "log"
       ? "Log"
-      : activeView === "intune"
-        ? "Intune"
-        : activeView === "new-intune"
-          ? "New Intune"
-          : activeView === "clustering"
-            ? "Patterns"
-            : "dsregcmd";
+      : activeView === "new-intune"
+        ? "New Intune"
+        : activeView === "clustering"
+          ? "Patterns"
+          : "dsregcmd";
 
   return (
     <div

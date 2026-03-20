@@ -53,8 +53,8 @@ pub struct ClusteringConfig {
 impl Default for ClusteringConfig {
     fn default() -> Self {
         Self {
-            window_size: 3,
-            stride: 2,
+            window_size: 5,
+            stride: 4,
             epsilon: 0.3,
             min_points: 3,
         }

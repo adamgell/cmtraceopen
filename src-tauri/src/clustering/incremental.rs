@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use super::cluster::compute_centroid;
 use super::embedder::cosine_similarity;
-use super::models::{Cluster, ClusteringSession, IncrementalClusterResult};
+use super::models::{ClusteringSession, IncrementalClusterResult};
 
 /// Assigns new entry embeddings to existing clusters or flags them as anomalies.
 ///
