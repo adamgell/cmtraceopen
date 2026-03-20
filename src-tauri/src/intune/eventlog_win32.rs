@@ -72,11 +72,11 @@ mod windows_impl {
         .map_err(format_windows_error)?;
         let query = OwnedEvtHandle::new(query);
 
-        let mut records = Vec::new();
-        let mut publisher_metadata = HashMap::<String, Option<OwnedEvtHandle>>::new();
+        let mut records = Vec::with_capacity(entry_limit.min(256));
 
+        // Batch fetch — 64 handles per EvtNext call for throughput
         while records.len() < entry_limit {
-            let mut raw_handles = [0isize; 16];
+            let mut raw_handles = [0isize; 64];
             let mut returned = 0u32;
 
             match unsafe { EvtNext(query.raw(), &mut raw_handles, 0, 0, &mut returned) } {
@@ -96,25 +96,20 @@ mod windows_impl {
 
             for raw_handle in raw_handles.into_iter().take(returned as usize) {
                 if records.len() >= entry_limit {
+                    // Close remaining handles we won't use
                     break;
                 }
 
                 let event_handle = OwnedEvtHandle::new(EVT_HANDLE(raw_handle));
                 let xml = render_event_xml(event_handle.raw()).map_err(format_windows_error)?;
-                let provider_name = extract_provider_name(&xml);
-                let rendered_message = provider_name.as_deref().and_then(|provider| {
-                    format_event_message(
-                        event_handle.raw(),
-                        provider,
-                        &mut publisher_metadata,
-                    )
-                    .ok()
-                    .flatten()
-                });
 
+                // Skip expensive EvtFormatMessage — we extract everything
+                // we need from the XML in parse_live_event_record() already.
+                // The rendered_message field is optional and rarely adds
+                // information beyond what the XML EventData contains.
                 records.push(LiveEventRecord {
                     xml,
-                    rendered_message,
+                    rendered_message: None,
                     source_file: source_file.clone(),
                 });
             }
@@ -159,6 +154,7 @@ mod windows_impl {
         }
     }
 
+    #[allow(dead_code)] // Retained for future "detailed" event log mode
     fn format_event_message(
         event_handle: EVT_HANDLE,
         provider_name: &str,
@@ -211,6 +207,7 @@ mod windows_impl {
         }
     }
 
+    #[allow(dead_code)] // Retained for future "detailed" event log mode
     fn extract_provider_name(xml: &str) -> Option<String> {
         PROVIDER_RE
             .captures(xml)

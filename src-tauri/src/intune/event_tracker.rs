@@ -218,8 +218,8 @@ static FAILED_RE: Lazy<Regex> = Lazy::new(|| {
     .unwrap()
 });
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ImeSourceKind {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ImeSourceKind {
     PrimaryIme,
     AppWorkload,
     AppActionProcessor,
@@ -439,7 +439,7 @@ fn build_detail(msg: &str) -> String {
     msg.to_string()
 }
 
-fn classify_source_kind(source_file: &str) -> ImeSourceKind {
+pub fn classify_source_kind(source_file: &str) -> ImeSourceKind {
     let file_name = Path::new(source_file)
         .file_name()
         .map(|name| name.to_string_lossy().to_ascii_lowercase())

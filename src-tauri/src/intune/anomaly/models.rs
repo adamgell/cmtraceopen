@@ -126,6 +126,9 @@ pub struct Anomaly {
     pub time_range: Option<AnomalyTimeRange>,
     pub flow_context: Option<FlowAnomalyContext>,
     pub statistical_context: Option<StatisticalContext>,
+    /// Error codes found in this anomaly's description, enriched with human-readable names.
+    #[serde(default)]
+    pub enriched_error_codes: Vec<String>,
 }
 
 /// A causal chain linking a root event to a downstream failure.

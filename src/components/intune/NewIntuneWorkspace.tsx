@@ -25,6 +25,7 @@ import { useIntuneTailWatcher } from "../../hooks/use-intune-tail-watcher";
 import { DownloadSurface } from "./DownloadSurface";
 import { EventLogSurface } from "./EventLogSurface";
 import { EventTimeline } from "./EventTimeline";
+import { TriageCenter } from "./TriageCenter";
 import type { EventLogEntry } from "../../types/event-log";
 import type {
   IntuneDiagnosticInsight,
@@ -36,7 +37,7 @@ import type {
   IntuneStatus,
 } from "../../types/intune";
 
-type NewIntuneSurface = "overview" | "timeline" | "downloads" | "event-logs";
+type NewIntuneSurface = "overview" | "timeline" | "downloads" | "event-logs" | "triage";
 
 const useStyles = makeStyles({
   root: {
@@ -662,6 +663,24 @@ export function NewIntuneWorkspace() {
               </Badge>
             )}
           </Button>
+          <Button
+            appearance={surface === "triage" ? "primary" : "secondary"}
+            onClick={() => setSurface("triage")}
+            disabled={diagnostics.length === 0}
+            role="tab"
+            aria-selected={surface === "triage"}
+          >
+            Triage
+            {diagnostics.length > 0 && (
+              <Badge
+                appearance="filled"
+                color="important"
+                style={{ marginLeft: 6 }}
+              >
+                {diagnostics.length}
+              </Badge>
+            )}
+          </Button>
           <Button appearance="secondary" onClick={resetInvestigation}>
             Reset Investigation
           </Button>
@@ -693,7 +712,7 @@ export function NewIntuneWorkspace() {
 
       <div
         className={
-          surface === "event-logs" ? styles.investigationBody : styles.body
+          surface === "event-logs" || surface === "triage" ? styles.investigationBody : styles.body
         }
         role="tabpanel"
       >
@@ -1023,6 +1042,17 @@ export function NewIntuneWorkspace() {
                 )}
               </div>
             </div>
+          </div>
+        ) : surface === "triage" ? (
+          <div className={styles.investigationShell}>
+            <Card className={styles.investigationFrame}>
+              <div className={styles.investigationBody}>
+                <TriageCenter
+                  diagnostics={diagnostics}
+                  onNavigateToAnomaly={() => setSurface("overview")}
+                />
+              </div>
+            </Card>
           </div>
         ) : surface === "event-logs" ? (
           <EventLogSurface

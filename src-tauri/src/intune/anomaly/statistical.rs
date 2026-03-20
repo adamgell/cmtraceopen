@@ -226,6 +226,7 @@ fn detect_duration_outliers(events: &[IntuneEvent], anomalies: &mut Vec<Anomaly>
                             population_stddev: stddev,
                             z_score: z,
                         }),
+                        enriched_error_codes: vec![],
                     });
                 }
             }
@@ -341,6 +342,7 @@ fn detect_frequency_anomalies(
                             population_stddev: stddev,
                             z_score: z,
                         }),
+                        enriched_error_codes: vec![],
                     });
                 }
             }
@@ -392,6 +394,7 @@ fn detect_frequency_anomalies(
                             0.0
                         },
                     }),
+                        enriched_error_codes: vec![],
                 });
             }
         }
@@ -447,6 +450,7 @@ fn detect_download_outliers(downloads: &[DownloadStat], anomalies: &mut Vec<Anom
                             population_stddev: stddev,
                             z_score: z,
                         }),
+                        enriched_error_codes: vec![],
                     });
                 }
             }
@@ -498,6 +502,7 @@ fn detect_download_outliers(downloads: &[DownloadStat], anomalies: &mut Vec<Anom
                     population_stddev: 0.0,
                     z_score: 0.0,
                 }),
+                        enriched_error_codes: vec![],
             });
         }
     }
@@ -602,6 +607,7 @@ fn detect_error_rate_trend(
                     population_stddev: 0.0,
                     z_score: 0.0,
                 }),
+                        enriched_error_codes: vec![],
             });
         }
     }

@@ -230,6 +230,18 @@ function Detail({ anomaly, onSelectEventId }: { anomaly: Anomaly; onSelectEventI
           </div>
         </div>
       )}
+      {anomaly.enrichedErrorCodes && anomaly.enrichedErrorCodes.length > 0 && (
+        <div style={{ marginBottom: 10 }}>
+          <div style={sectionHead}>Error Codes</div>
+          <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+            {anomaly.enrichedErrorCodes.map((code, i) => (
+              <span key={i} style={{ fontSize: 10, padding: "2px 8px", borderRadius: 3, background: "#fef3c7", color: "#92400e", border: "1px solid #fcd34d", fontFamily: "monospace" }}>
+                {code}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
       {anomaly.affectedEventIds.length > 0 && (
         <div>
           <div style={sectionHead}>Affected Events</div>

@@ -66,7 +66,7 @@ impl Embedder {
         // Build padded input tensors
         let mut input_ids = vec![0i64; batch_len * max_len];
         let mut attention_mask = vec![0i64; batch_len * max_len];
-        let mut token_type_ids = vec![0i64; batch_len * max_len];
+        let token_type_ids = vec![0i64; batch_len * max_len];
 
         for (i, encoding) in encodings.iter().enumerate() {
             let ids = encoding.get_ids();

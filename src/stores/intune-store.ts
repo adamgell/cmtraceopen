@@ -31,7 +31,7 @@ import type {
   IntuneTimestampBounds,
 } from "../types/intune";
 
-export type IntuneWorkspaceTab = "timeline" | "downloads" | "summary" | "anomalies";
+export type IntuneWorkspaceTab = "timeline" | "downloads" | "summary" | "anomalies" | "triage";
 
 function buildSourceContext(
   sourceFile: string | null,

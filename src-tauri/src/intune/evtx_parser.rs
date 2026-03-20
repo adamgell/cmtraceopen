@@ -74,6 +74,11 @@ static ACTIVITY_RE: Lazy<Regex> = Lazy::new(|| {
 static MESSAGE_RE: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"(?s)<Message>(.*?)</Message>").expect("message regex must compile")
 });
+#[cfg(target_os = "windows")]
+static EVENT_DATA_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r#"<Data\s+Name=['\"]([^'\"]+)['\"]>([^<]*)</Data>"#)
+        .expect("event data regex must compile")
+});
 
 // ---------------------------------------------------------------------------
 // File discovery
@@ -327,16 +332,67 @@ pub fn parse_bundle_event_logs(
     )
 }
 
-pub fn parse_live_event_logs() -> Option<EventLogAnalysis> {
+/// Number of live event log channels queried.
+pub const LIVE_CHANNEL_COUNT: usize = {
+    // Compile-time constant — avoids exposing the actual array to callers.
     #[cfg(target_os = "windows")]
     {
+        10 // Must match LIVE_EVENT_CHANNELS.len()
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        0
+    }
+};
+
+pub fn parse_live_event_logs(
+    on_channel_complete: impl Fn(usize, usize, &str, usize) + Send + Sync,
+) -> Option<EventLogAnalysis> {
+    #[cfg(target_os = "windows")]
+    {
+        let total_channels = LIVE_EVENT_CHANNELS.len();
+        let completed = std::sync::atomic::AtomicUsize::new(0);
+
+        // Query all channels in parallel — each channel is fully independent.
+        let channel_results: Vec<_> = std::thread::scope(|scope| {
+            let handles: Vec<_> = LIVE_EVENT_CHANNELS
+                .iter()
+                .map(|channel| {
+                    let completed_ref = &completed;
+                    let callback_ref = &on_channel_complete;
+                    scope.spawn(move || {
+                        let started = std::time::Instant::now();
+                        let result = eventlog_win32::query_live_channel(
+                            channel,
+                            MAX_LIVE_ENTRIES_PER_CHANNEL,
+                        );
+                        let entry_count = result.as_ref().map_or(0, |r| r.records.len());
+                        let done = completed_ref
+                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                            + 1;
+                        eprintln!(
+                            "event=live_channel_queried channel=\"{}\" entries={} elapsed_ms={}",
+                            channel,
+                            entry_count,
+                            started.elapsed().as_millis()
+                        );
+                        callback_ref(done, total_channels, channel, entry_count);
+                        (*channel, result)
+                    })
+                })
+                .collect();
+
+            handles.into_iter().map(|h| h.join().unwrap()).collect()
+        });
+
+        // Merge results sequentially (fast — no Win32 API calls)
         let mut all_entries = Vec::new();
         let mut id_offset = 0u64;
         let mut parsed_file_count = 0u32;
         let mut live_channels = Vec::with_capacity(LIVE_EVENT_CHANNELS.len());
 
-        for channel in LIVE_EVENT_CHANNELS {
-            match eventlog_win32::query_live_channel(channel, MAX_LIVE_ENTRIES_PER_CHANNEL) {
+        for (channel, query_result) in channel_results {
+            match query_result {
                 Ok(result) => {
                     let channel_enum = EventLogChannel::from_channel_string(&result.channel_path);
                     let entry_count = result.records.len() as u32;
@@ -406,6 +462,7 @@ pub fn parse_live_event_logs() -> Option<EventLogAnalysis> {
 
     #[cfg(not(target_os = "windows"))]
     {
+        let _ = on_channel_complete;
         None
     }
 }
@@ -484,11 +541,12 @@ pub(crate) fn parse_live_event_record(
     let correlation_activity_id = extract_regex_value(xml, &ACTIVITY_RE);
     let message = rendered_message
         .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| {
+        .or_else(|| {
             extract_regex_value(xml, &MESSAGE_RE)
                 .map(|value| decode_xml_text(&value))
-                .unwrap_or_default()
-        });
+                .filter(|value| !value.trim().is_empty())
+        })
+        .unwrap_or_else(|| build_message_from_event_data(xml));
 
     Some(EventLogEntry {
         id,
@@ -521,6 +579,25 @@ fn sanitize_channel_name(channel: &str) -> String {
             other => other,
         })
         .collect()
+}
+
+/// Build a human-readable message from `<EventData><Data Name="...">value</Data>`
+/// elements when `EvtFormatMessage` was not used.
+#[cfg(target_os = "windows")]
+fn build_message_from_event_data(xml: &str) -> String {
+    let parts: Vec<String> = EVENT_DATA_RE
+        .captures_iter(xml)
+        .filter_map(|cap| {
+            let name = cap.get(1)?.as_str();
+            let value = cap.get(2)?.as_str().trim();
+            if value.is_empty() {
+                return None;
+            }
+            Some(format!("{}: {}", name, decode_xml_text(value)))
+        })
+        .take(8) // Keep messages reasonably sized
+        .collect();
+    parts.join("; ")
 }
 
 #[cfg(target_os = "windows")]

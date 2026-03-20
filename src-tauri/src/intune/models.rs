@@ -68,6 +68,15 @@ pub enum IntuneRemediationPriority {
     Immediate,
 }
 
+/// A link to a knowledge base article relevant to a diagnostic insight.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KnowledgeBaseLink {
+    pub title: String,
+    pub url: String,
+    pub relevance: String,
+}
+
 /// Deterministic diagnostic guidance derived from Intune analysis results.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -89,6 +98,8 @@ pub struct IntuneDiagnosticInsight {
     pub affected_source_files: Vec<String>,
     #[serde(default)]
     pub related_error_codes: Vec<String>,
+    #[serde(default)]
+    pub knowledge_base_links: Vec<KnowledgeBaseLink>,
 }
 
 /// Type of Intune event detected from log analysis.

@@ -8,12 +8,12 @@ import {
 } from "../lib/log-accessibility";
 import { type LogSeverityPaletteMode } from "../lib/constants";
 
-export type IntuneWorkspaceId = "intune" | "new-intune";
+export type IntuneWorkspaceId = "new-intune";
 export type WorkspaceId = "log" | IntuneWorkspaceId | "dsregcmd" | "clustering";
 export type AppView = WorkspaceId;
 
 export function isIntuneWorkspace(workspace: WorkspaceId): workspace is IntuneWorkspaceId {
-  return workspace === "intune" || workspace === "new-intune";
+  return workspace === "new-intune";
 }
 
 export interface UiChromeStatus {
@@ -32,14 +32,6 @@ export function getUiChromeStatus(
       viewLabel: "New Intune Workspace",
       detailsLabel: "Details hidden in New Intune Workspace",
       infoLabel: "Info hidden in New Intune Workspace",
-    };
-  }
-
-  if (activeView === "intune") {
-    return {
-      viewLabel: "Intune workspace",
-      detailsLabel: "Details hidden in Intune workspace",
-      infoLabel: "Info hidden in Intune workspace",
     };
   }
 

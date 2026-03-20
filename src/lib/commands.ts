@@ -9,6 +9,7 @@ import type {
 } from "../types/log";
 import type { EvidenceArtifactPreview, EvidenceBundleDetails, EvidenceArtifactIntakeKind } from "../types/evidence";
 import type { IntuneAnalysisResult } from "../types/intune";
+import type { EtlEvent } from "../types/etl";
 import type {
   DsregcmdAnalysisResult,
   DsregcmdCaptureResult,
@@ -198,6 +199,10 @@ export async function startIntuneTail(sourceFiles: string[]): Promise<void> {
 
 export async function stopIntuneTail(sourceFiles: string[]): Promise<void> {
   return invokeCommand<void>("stop_intune_tail", { sourceFiles });
+}
+
+export async function parseEtlFile(path: string): Promise<EtlEvent[]> {
+  return invokeCommand<EtlEvent[]>("parse_etl_file", { path });
 }
 
 export async function analyzeDsregcmd(

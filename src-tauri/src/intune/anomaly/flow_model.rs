@@ -285,6 +285,7 @@ pub fn detect_flow_anomalies(events: &[IntuneEvent]) -> (Vec<Anomaly>, Vec<Causa
                         subject_guid: Some(guid.clone()),
                     }),
                     statistical_context: None,
+                    enriched_error_codes: vec![],
                 });
             }
         }
@@ -331,6 +332,7 @@ pub fn detect_flow_anomalies(events: &[IntuneEvent]) -> (Vec<Anomaly>, Vec<Causa
                                 subject_guid: Some(guid.clone()),
                             }),
                             statistical_context: None,
+                            enriched_error_codes: vec![],
                         });
                     }
                 }
@@ -372,6 +374,7 @@ pub fn detect_flow_anomalies(events: &[IntuneEvent]) -> (Vec<Anomaly>, Vec<Causa
                         subject_guid: Some(guid.clone()),
                     }),
                     statistical_context: None,
+                    enriched_error_codes: vec![],
                 });
             }
         }
@@ -411,6 +414,7 @@ pub fn detect_flow_anomalies(events: &[IntuneEvent]) -> (Vec<Anomaly>, Vec<Causa
                         subject_guid: Some(guid.clone()),
                     }),
                     statistical_context: None,
+                    enriched_error_codes: vec![],
                 });
             }
         }

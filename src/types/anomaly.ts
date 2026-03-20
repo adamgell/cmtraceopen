@@ -57,6 +57,7 @@ export interface Anomaly {
   timeRange: AnomalyTimeRange | null;
   flowContext: FlowAnomalyContext | null;
   statisticalContext: StatisticalContext | null;
+  enrichedErrorCodes: string[];
 }
 
 export interface CausalChain {

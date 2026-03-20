@@ -5,6 +5,8 @@ use criterion::{
     black_box, criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion, Throughput,
 };
 
+use app_lib::intune::models::{IntuneEvent, IntuneEventType, IntuneStatus};
+
 #[path = "../tests/common/mod.rs"]
 mod common;
 
@@ -146,9 +148,62 @@ fn validate_fixture(fixture: &common::IntuneBenchFixture, source_file: &str, con
     assert_eq!(downloads.len(), fixture.expected_download_count, "Expected one download summary per app");
 }
 
+fn anomaly_analysis_10k(c: &mut Criterion) {
+    let events: Vec<IntuneEvent> = (0..10_000u64)
+        .map(|i| {
+            let status = match i % 10 {
+                0 => IntuneStatus::Failed,
+                1 => IntuneStatus::Timeout,
+                _ => IntuneStatus::Success,
+            };
+            let source = match i % 3 {
+                0 => "IntuneManagementExtension.log",
+                1 => "AppWorkload.log",
+                _ => "AgentExecutor.log",
+            };
+            IntuneEvent {
+                id: i,
+                event_type: IntuneEventType::Win32App,
+                name: format!("Event {}", i),
+                guid: Some(format!("guid-{}", i / 10)),
+                status,
+                start_time: Some(format!(
+                    "01-15-2024 10:{:02}:{:02}.000",
+                    (i / 60) % 60,
+                    i % 60
+                )),
+                end_time: None,
+                duration_secs: Some((i % 30) as f64),
+                error_code: if status == IntuneStatus::Failed {
+                    Some("0x87D300CA".to_string())
+                } else {
+                    None
+                },
+                detail: String::new(),
+                source_file: source.to_string(),
+                line_number: i as u32,
+            }
+        })
+        .collect();
+
+    let mut group = c.benchmark_group("anomaly_pipeline");
+    group.throughput(Throughput::Elements(10_000));
+    group.bench_function("anomaly_analysis_10k", |b| {
+        b.iter(|| {
+            app_lib::intune::anomaly::run_anomaly_analysis(
+                black_box(&events),
+                black_box(&[]),
+                None,
+                None,
+            )
+        });
+    });
+    group.finish();
+}
+
 criterion_group! {
     name = benches;
     config = configured_criterion();
-    targets = bench_intune_pipeline
+    targets = bench_intune_pipeline, anomaly_analysis_10k
 }
 criterion_main!(benches);

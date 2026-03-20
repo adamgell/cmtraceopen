@@ -168,6 +168,11 @@ export interface IntuneDiagnosticInsight {
   focusAreas: string[];
   affectedSourceFiles: string[];
   relatedErrorCodes: string[];
+  knowledgeBaseLinks: Array<{
+    title: string;
+    url: string;
+    relevance: string;
+  }>;
 }
 
 export interface IntuneSourceContext {

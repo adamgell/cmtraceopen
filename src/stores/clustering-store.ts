@@ -95,7 +95,7 @@ function collectAllEntries(): ClusterableEntry[] {
     entries.push({
       id: nextId++,
       message: parts.join(" — "),
-      source: "Intune Diagnostics",
+      source: "Intune Analysis",
       severity: diag.severity ?? null,
       timestamp: null,
     });

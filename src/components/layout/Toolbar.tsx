@@ -1012,7 +1012,6 @@ export function Toolbar() {
 
         {([
           ["log", "Log Explorer"],
-          ["intune", "Intune Diagnostics"],
           ["new-intune", "New Intune Workspace"],
           ["dsregcmd", "Troubleshoot with dsregcmd"],
           ["clustering", "Pattern Analysis"],

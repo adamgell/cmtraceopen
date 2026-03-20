@@ -12,7 +12,6 @@ import { AboutDialog } from "../dialogs/AboutDialog";
 import { AccessibilityDialog } from "../dialogs/AccessibilityDialog";
 import { EvidenceBundleDialog } from "../dialogs/EvidenceBundleDialog";
 import { FileAssociationPromptDialog } from "../dialogs/FileAssociationPromptDialog";
-import { IntuneDashboard } from "../intune/IntuneDashboard";
 import { NewIntuneWorkspace } from "../intune/NewIntuneWorkspace";
 import { DsregcmdWorkspace } from "../dsregcmd/DsregcmdWorkspace";
 import { ClusteringWorkspace } from "../clustering/ClusteringWorkspace";
@@ -213,14 +212,6 @@ export function AppShell() {
             </div>
           )}
         </>
-      );
-    }
-
-    if (activeView === "intune") {
-      return (
-        <div style={{ flex: 1, overflow: "hidden" }}>
-          <IntuneDashboard />
-        </div>
       );
     }
 

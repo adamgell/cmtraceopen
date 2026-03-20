@@ -584,7 +584,6 @@ function LogSidebar() {
 }
 
 function IntuneSidebar() {
-  const activeView = useUiStore((s) => s.activeView);
   const intuneAnalysisState = useIntuneStore((s) => s.analysisState);
   const intuneIsAnalyzing = useIntuneStore((s) => s.isAnalyzing);
   const intuneSummary = useIntuneStore((s) => s.summary);
@@ -598,8 +597,8 @@ function IntuneSidebar() {
   const intuneSelectedFilePath = intuneTimelineScope.filePath;
   const intuneRequestedPath = intuneAnalysisState.requestedPath;
   const hasIntuneResults = intuneSummary != null || intuneIncludedFiles.length > 0;
-  const workspaceTitle = activeView === "new-intune" ? "New Intune Workspace" : "Intune diagnostics workspace";
-  const workspaceBadge = activeView === "new-intune" ? "New Intune" : intuneEvidenceBundle ? "Intune Bundle" : "Intune";
+  const workspaceTitle = "New Intune Workspace";
+  const workspaceBadge = "New Intune";
 
   return (
     <>

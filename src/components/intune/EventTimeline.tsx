@@ -9,6 +9,7 @@ import {
 } from "../../lib/log-accessibility";
 import { useUiStore } from "../../stores/ui-store";
 import type { IntuneEvent, IntuneStatus, IntuneEventType } from "../../types/intune";
+import type { Anomaly, AnomalySeverity } from "../../types/anomaly";
 import { useIntuneStore } from "../../stores/intune-store";
 
 const STATUS_COLORS: Record<IntuneStatus, string> = {
@@ -18,6 +19,18 @@ const STATUS_COLORS: Record<IntuneStatus, string> = {
   Pending: "#9ca3af",
   Timeout: "#f59e0b",
   Unknown: "#6b7280",
+};
+
+const ANOMALY_DOT_COLORS: Record<AnomalySeverity, string> = {
+  Critical: "#ef4444",
+  Warning: "#f59e0b",
+  Info: "#3b82f6",
+};
+
+const SEVERITY_RANK: Record<AnomalySeverity, number> = {
+  Critical: 2,
+  Warning: 1,
+  Info: 0,
 };
 
 const EVENT_TYPE_LABELS: Record<IntuneEventType, string> = {
@@ -34,9 +47,10 @@ const EVENT_TYPE_LABELS: Record<IntuneEventType, string> = {
 
 interface EventTimelineProps {
   events: IntuneEvent[];
+  anomalies?: Anomaly[];
 }
 
-export function EventTimeline({ events }: EventTimelineProps) {
+export function EventTimeline({ events, anomalies }: EventTimelineProps) {
   const selectedEventId = useIntuneStore((s) => s.selectedEventId);
   const selectEvent = useIntuneStore((s) => s.selectEvent);
   const timelineScope = useIntuneStore((s) => s.timelineScope);
@@ -44,6 +58,21 @@ export function EventTimeline({ events }: EventTimelineProps) {
   const filterEventType = useIntuneStore((s) => s.filterEventType);
   const filterStatus = useIntuneStore((s) => s.filterStatus);
   const showSourceFileLabel = sourceFiles.length > 1 && timelineScope.filePath == null;
+
+  // Build event-id → highest-severity anomaly lookup
+  const anomalyByEventId = useMemo(() => {
+    if (!anomalies || anomalies.length === 0) return null;
+    const map = new Map<number, Anomaly>();
+    for (const a of anomalies) {
+      for (const eid of a.affectedEventIds) {
+        const existing = map.get(eid);
+        if (!existing || SEVERITY_RANK[a.severity] > SEVERITY_RANK[existing.severity]) {
+          map.set(eid, a);
+        }
+      }
+    }
+    return map;
+  }, [anomalies]);
 
   const logListFontSize = useUiStore((s) => s.logListFontSize);
   const metrics = useMemo(
@@ -283,6 +312,23 @@ export function EventTimeline({ events }: EventTimelineProps) {
                   >
                     {event.status}
                   </div>
+
+                  {anomalyByEventId?.has(event.id) && (() => {
+                    const a = anomalyByEventId.get(event.id)!;
+                    return (
+                      <div
+                        title={a.title}
+                        style={{
+                          width: "8px",
+                          height: "8px",
+                          borderRadius: "50%",
+                          backgroundColor: ANOMALY_DOT_COLORS[a.severity],
+                          flexShrink: 0,
+                          boxShadow: `0 0 3px ${ANOMALY_DOT_COLORS[a.severity]}`,
+                        }}
+                      />
+                    );
+                  })()}
                 </div>
 
                 {/* Expanded Details */}

@@ -7,7 +7,15 @@
       "Bash(npx tsc:*)",
       "Bash(cargo test:*)",
       "Bash(tasklist:*)",
-      "Bash(cd:*)"
+      "Bash(cd:*)",
+      "Bash(find /c/Users/AdamGell/Documents/GitHub/cmtraceopen/src-tauri/src -name *.rs -path */intune/anomaly*)",
+      "Bash(xargs grep:*)",
+      "Bash(wc -l /c/Users/AdamGell/Documents/GitHub/cmtraceopen/src-tauri/src/clustering/*.rs)",
+      "Bash(cargo clean:*)",
+      "Bash(cargo clippy:*)",
+      "Bash(grep -r \"etl\\\\|tracerpt\\\\|ETL\" C:UsersAdamGellDocumentsGitHubcmtraceopen --include=*.rs --include=*.toml)",
+      "Skill(commit-commands:commit)",
+      "Skill(commit-commands:commit:*)"
     ]
   }
 }

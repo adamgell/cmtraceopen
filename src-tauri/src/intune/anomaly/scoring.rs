@@ -308,6 +308,7 @@ mod tests {
             time_range,
             flow_context: None,
             statistical_context: None,
+            enriched_error_codes: vec![],
         }
     }
 
