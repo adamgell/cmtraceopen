@@ -103,6 +103,32 @@ pub enum IntuneEventType {
     Other,
 }
 
+/// High-level business category grouping Intune event types into admin-facing domains.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub enum IntuneBusinessCategory {
+    Devices,
+    Apps,
+    Configurations,
+    Compliance,
+    Sync,
+    Other,
+}
+
+impl IntuneBusinessCategory {
+    pub fn from_event_type(event_type: &IntuneEventType) -> Self {
+        match event_type {
+            IntuneEventType::Esp => Self::Devices,
+            IntuneEventType::Win32App
+            | IntuneEventType::WinGetApp
+            | IntuneEventType::ContentDownload => Self::Apps,
+            IntuneEventType::PolicyEvaluation => Self::Configurations,
+            IntuneEventType::Remediation | IntuneEventType::PowerShellScript => Self::Compliance,
+            IntuneEventType::SyncSession => Self::Sync,
+            IntuneEventType::Other => Self::Other,
+        }
+    }
+}
+
 /// Status of an Intune operation.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub enum IntuneStatus {

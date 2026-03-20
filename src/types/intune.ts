@@ -20,6 +20,39 @@ export type IntuneStatus =
   | "Timeout"
   | "Unknown";
 
+export type IntuneBusinessCategory =
+  | "Devices"
+  | "Apps"
+  | "Configurations"
+  | "Compliance"
+  | "Sync"
+  | "Other";
+
+export const BUSINESS_CATEGORY_MAP: Record<IntuneEventType, IntuneBusinessCategory> = {
+  Esp: "Devices",
+  Win32App: "Apps",
+  WinGetApp: "Apps",
+  ContentDownload: "Apps",
+  PolicyEvaluation: "Configurations",
+  Remediation: "Compliance",
+  PowerShellScript: "Compliance",
+  SyncSession: "Sync",
+  Other: "Other",
+};
+
+export const BUSINESS_CATEGORIES: IntuneBusinessCategory[] = [
+  "Devices",
+  "Apps",
+  "Configurations",
+  "Compliance",
+  "Sync",
+  "Other",
+];
+
+export function getBusinessCategory(eventType: IntuneEventType): IntuneBusinessCategory {
+  return BUSINESS_CATEGORY_MAP[eventType];
+}
+
 export interface IntuneEvent {
   id: number;
   eventType: IntuneEventType;

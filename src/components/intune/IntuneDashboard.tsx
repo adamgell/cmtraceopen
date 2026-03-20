@@ -4,6 +4,7 @@ import { useIntuneStore } from "../../stores/intune-store";
 import { useAppActions } from "../layout/Toolbar";
 import { EventTimeline } from "./EventTimeline";
 import { DownloadStats } from "./DownloadStats";
+import { CategoryCards } from "./CategoryCards";
 import type {
   DownloadStat,
   IntuneDiagnosticCategory,
@@ -23,13 +24,15 @@ import type {
   IntuneTimeWindowPreset,
   IntuneTimestampBounds,
 } from "../../types/intune";
+import { getBusinessCategory } from "../../types/intune";
 
-type TabId = "timeline" | "downloads" | "summary";
+type TabId = "timeline" | "downloads" | "summary" | "categories";
 
 const TAB_LABELS: Record<TabId, string> = {
   timeline: "Timeline",
   downloads: "Downloads",
   summary: "Summary",
+  categories: "Categories",
 };
 
 export function IntuneDashboard() {
@@ -50,8 +53,10 @@ export function IntuneDashboard() {
   const setTimeWindow = useIntuneStore((s) => s.setTimeWindow);
   const filterEventType = useIntuneStore((s) => s.filterEventType);
   const filterStatus = useIntuneStore((s) => s.filterStatus);
+  const filterBusinessCategory = useIntuneStore((s) => s.filterBusinessCategory);
   const setFilterEventType = useIntuneStore((s) => s.setFilterEventType);
   const setFilterStatus = useIntuneStore((s) => s.setFilterStatus);
+  const setFilterBusinessCategory = useIntuneStore((s) => s.setFilterBusinessCategory);
   const { commandState, openSourceFileDialog, openSourceFolderDialog } = useAppActions();
 
   const timeWindowAnchor = useMemo(
@@ -78,12 +83,16 @@ export function IntuneDashboard() {
       timeline: filteredEventsByTime.length > 0,
       downloads: filteredDownloadsByTime.length > 0,
       summary: summary != null,
+      categories: filteredEventsByTime.length > 0,
     }),
     [filteredDownloadsByTime.length, filteredEventsByTime.length, summary]
   );
 
   const filteredEventCount = useMemo(() => {
     return filteredEventsByTime.filter((event) => {
+      if (filterBusinessCategory !== "All" && getBusinessCategory(event.eventType) !== filterBusinessCategory) {
+        return false;
+      }
       if (filterEventType !== "All" && event.eventType !== filterEventType) {
         return false;
       }
@@ -92,9 +101,9 @@ export function IntuneDashboard() {
       }
       return true;
     }).length;
-  }, [filteredEventsByTime, filterEventType, filterStatus]);
+  }, [filteredEventsByTime, filterEventType, filterStatus, filterBusinessCategory]);
 
-  const hasActiveFilters = filterEventType !== "All" || filterStatus !== "All";
+  const hasActiveFilters = filterEventType !== "All" || filterStatus !== "All" || filterBusinessCategory !== "All";
 
   useEffect(() => {
     if (!availableTabs[activeTab]) {
@@ -260,7 +269,7 @@ export function IntuneDashboard() {
               label={TAB_LABELS[tabId]}
               active={activeTab === tabId}
               disabled={isAnalyzing || !availableTabs[tabId]}
-              count={tabId === "timeline" ? filteredEventsByTime.length : tabId === "downloads" ? filteredDownloadsByTime.length : summary ? 1 : 0}
+              count={tabId === "timeline" ? filteredEventsByTime.length : tabId === "downloads" ? filteredDownloadsByTime.length : tabId === "categories" ? filteredEventsByTime.length : summary ? 1 : 0}
               onClick={() => setActiveTab(tabId)}
             />
           ))}
@@ -367,6 +376,7 @@ export function IntuneDashboard() {
               onClick={() => {
                 setFilterEventType("All");
                 setFilterStatus("All");
+                setFilterBusinessCategory("All");
               }}
               disabled={!hasActiveFilters || isAnalyzing}
               style={{
@@ -385,6 +395,39 @@ export function IntuneDashboard() {
             <span style={{ fontSize: "11px", color: "#64748b", fontWeight: 500, marginLeft: "4px" }}>
               {filteredEventCount}/{filteredEventsByTime.length}
             </span>
+            {filterBusinessCategory !== "All" && (
+              <>
+                <div style={{ width: "1px", height: "16px", backgroundColor: "#cbd5e1", margin: "0 2px" }} />
+                <span
+                  style={{
+                    fontSize: "11px",
+                    color: "#1d4ed8",
+                    backgroundColor: "#eff6ff",
+                    border: "1px solid #93c5fd",
+                    borderRadius: "999px",
+                    padding: "3px 8px",
+                    fontWeight: 600,
+                  }}
+                >
+                  Category: {filterBusinessCategory}
+                </span>
+                <button
+                  onClick={() => setFilterBusinessCategory("All")}
+                  disabled={isAnalyzing}
+                  style={{
+                    fontSize: "10px",
+                    padding: "2px 6px",
+                    border: "1px solid #d1d5db",
+                    borderRadius: "3px",
+                    backgroundColor: "#fff",
+                    color: "#1e293b",
+                    cursor: isAnalyzing ? "not-allowed" : "pointer",
+                  }}
+                >
+                  Clear
+                </button>
+              </>
+            )}
             {timelineScope.filePath && (
               <>
                 <div style={{ width: "1px", height: "16px", backgroundColor: "#cbd5e1", margin: "0 2px" }} />
@@ -505,6 +548,7 @@ export function IntuneDashboard() {
           <>
             {activeTab === "timeline" && <EventTimeline events={filteredEventsByTime} />}
             {activeTab === "downloads" && <DownloadStats downloads={filteredDownloadsByTime} />}
+            {activeTab === "categories" && <CategoryCards events={filteredEventsByTime} />}
             {activeTab === "summary" && summary && (
               <SummaryView
                 summary={filteredSummary}

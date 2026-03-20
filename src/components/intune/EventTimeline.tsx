@@ -9,6 +9,7 @@ import {
 } from "../../lib/log-accessibility";
 import { useUiStore } from "../../stores/ui-store";
 import type { IntuneEvent, IntuneStatus, IntuneEventType } from "../../types/intune";
+import { getBusinessCategory } from "../../types/intune";
 import { useIntuneStore } from "../../stores/intune-store";
 
 const STATUS_COLORS: Record<IntuneStatus, string> = {
@@ -43,6 +44,7 @@ export function EventTimeline({ events }: EventTimelineProps) {
   const sourceFiles = useIntuneStore((s) => s.sourceFiles);
   const filterEventType = useIntuneStore((s) => s.filterEventType);
   const filterStatus = useIntuneStore((s) => s.filterStatus);
+  const filterBusinessCategory = useIntuneStore((s) => s.filterBusinessCategory);
   const showSourceFileLabel = sourceFiles.length > 1 && timelineScope.filePath == null;
 
   const logListFontSize = useUiStore((s) => s.logListFontSize);
@@ -59,6 +61,9 @@ export function EventTimeline({ events }: EventTimelineProps) {
       if (timelineScope.filePath != null && e.sourceFile !== timelineScope.filePath) {
         return false;
       }
+      if (filterBusinessCategory !== "All" && getBusinessCategory(e.eventType) !== filterBusinessCategory) {
+        return false;
+      }
       if (filterEventType !== "All" && e.eventType !== filterEventType) {
         return false;
       }
@@ -67,7 +72,7 @@ export function EventTimeline({ events }: EventTimelineProps) {
       }
       return true;
     });
-  }, [events, filterEventType, filterStatus, timelineScope.filePath]);
+  }, [events, filterEventType, filterStatus, filterBusinessCategory, timelineScope.filePath]);
 
   useEffect(() => {
     if (selectedEventId == null) {

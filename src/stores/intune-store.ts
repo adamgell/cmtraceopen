@@ -12,6 +12,7 @@ import type {
   IntuneAnalysisProgressEvent,
   IntuneAnalysisSourceKind,
   IntuneAnalysisState,
+  IntuneBusinessCategory,
   IntuneDiagnosticInsight,
   IntuneDiagnosticsConfidence,
   IntuneDiagnosticsCoverage,
@@ -29,7 +30,7 @@ import type {
   IntuneTimestampBounds,
 } from "../types/intune";
 
-export type IntuneWorkspaceTab = "timeline" | "downloads" | "summary";
+export type IntuneWorkspaceTab = "timeline" | "downloads" | "summary" | "categories";
 
 function buildSourceContext(
   sourceFile: string | null,
@@ -177,6 +178,7 @@ interface IntuneState {
   timeWindow: IntuneTimeWindowPreset;
   filterEventType: IntuneEventType | "All";
   filterStatus: IntuneStatus | "All";
+  filterBusinessCategory: IntuneBusinessCategory | "All";
   eventLogFilterChannel: EventLogChannel | "All";
   eventLogFilterSeverity: EventLogSeverity | "All";
   activeTab: IntuneWorkspaceTab;
@@ -204,6 +206,8 @@ interface IntuneState {
   setTimeWindow: (preset: IntuneTimeWindowPreset) => void;
   setFilterEventType: (type_: IntuneEventType | "All") => void;
   setFilterStatus: (status: IntuneStatus | "All") => void;
+  setFilterBusinessCategory: (category: IntuneBusinessCategory | "All") => void;
+  drillIntoCategory: (category: IntuneBusinessCategory) => void;
   setEventLogFilterChannel: (channel: EventLogChannel | "All") => void;
   setEventLogFilterSeverity: (severity: EventLogSeverity | "All") => void;
   selectEventLogEntry: (id: number | null) => void;
@@ -217,6 +221,7 @@ const defaultInteractionState = {
   timeWindow: "all" as const,
   filterEventType: "All" as const,
   filterStatus: "All" as const,
+  filterBusinessCategory: "All" as IntuneBusinessCategory | "All",
   eventLogFilterChannel: "All" as EventLogChannel | "All",
   eventLogFilterSeverity: "All" as EventLogSeverity | "All",
   activeTab: "timeline" as const,
@@ -426,6 +431,9 @@ export const useIntuneStore = create<IntuneState>((set) => ({
   setTimeWindow: (preset) => set({ timeWindow: preset }),
   setFilterEventType: (type_) => set({ filterEventType: type_ }),
   setFilterStatus: (status) => set({ filterStatus: status }),
+  setFilterBusinessCategory: (category) => set({ filterBusinessCategory: category }),
+  drillIntoCategory: (category) =>
+    set({ filterBusinessCategory: category, activeTab: "timeline" }),
   setEventLogFilterChannel: (channel) => set({ eventLogFilterChannel: channel }),
   setEventLogFilterSeverity: (severity) => set({ eventLogFilterSeverity: severity }),
   selectEventLogEntry: (id) => set({ selectedEventLogEntryId: id }),
