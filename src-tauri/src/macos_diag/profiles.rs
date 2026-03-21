@@ -142,6 +142,9 @@ fn parse_profiles_plist(data: &[u8]) -> Vec<MacosMdmProfile> {
                                     .get("PayloadUUID")
                                     .and_then(|v| v.as_string())
                                     .map(|s| s.to_string()),
+                                payload_data: None,
+                                payload_description: None,
+                                payload_version: None,
                             })
                         })
                         .collect::<Vec<_>>()
@@ -169,8 +172,159 @@ fn parse_profiles_plist(data: &[u8]) -> Vec<MacosMdmProfile> {
                 payloads,
                 is_managed: is_managed_section,
                 verification_state,
+                description: None,
+                source: None,
+                removal_disallowed: None,
             });
         }
+    }
+
+    profiles
+}
+
+/// Extracts the ISO date portion from a system_profiler install date string.
+///
+/// system_profiler formats dates like:
+/// `"Sunday, January 11, 2026 at 8:40:06 PM (2026-01-12 01:40:06 +0000)"`
+///
+/// This function extracts the parenthesized ISO portion: `"2026-01-12 01:40:06 +0000"`.
+/// If no parenthesized segment is found, returns the original string as-is.
+#[allow(dead_code)] // Used by parse_system_profiler_plist; wired in next commit
+fn extract_iso_date(raw: &str) -> String {
+    if let Some(start) = raw.find('(') {
+        if let Some(end) = raw[start..].find(')') {
+            return raw[start + 1..start + end].trim().to_string();
+        }
+    }
+    raw.trim().to_string()
+}
+
+/// Parses the plist XML output of
+/// `system_profiler SPConfigurationProfileDataType -xml`
+/// into a list of MDM profiles.
+///
+/// The plist structure is:
+///   root array → first dict → `_items` array → first dict (section) →
+///   `_items` array of profile dicts.  Each profile dict may contain a nested
+///   `_items` array of payload dicts.
+#[allow(dead_code)] // Wired into list_profiles_impl in next commit
+fn parse_system_profiler_plist(data: &[u8]) -> Vec<MacosMdmProfile> {
+    let root: plist::Value = match plist::from_bytes(data) {
+        Ok(v) => v,
+        Err(e) => {
+            log::warn!("Failed to parse system_profiler plist: {}", e);
+            return Vec::new();
+        }
+    };
+
+    // root array → first dict
+    let root_arr = match root.as_array() {
+        Some(a) => a,
+        None => return Vec::new(),
+    };
+    let top_dict = match root_arr.first().and_then(|v| v.as_dictionary()) {
+        Some(d) => d,
+        None => return Vec::new(),
+    };
+
+    // top dict → _items array → first dict (section)
+    let section_items = match top_dict.get("_items").and_then(|v| v.as_array()) {
+        Some(a) => a,
+        None => return Vec::new(),
+    };
+    let section_dict = match section_items.first().and_then(|v| v.as_dictionary()) {
+        Some(d) => d,
+        None => return Vec::new(),
+    };
+
+    // section dict → _items array of profile dicts
+    let profile_items = match section_dict.get("_items").and_then(|v| v.as_array()) {
+        Some(a) => a,
+        None => return Vec::new(),
+    };
+
+    let mut profiles = Vec::new();
+
+    for profile_val in profile_items {
+        let dict = match profile_val.as_dictionary() {
+            Some(d) => d,
+            None => continue,
+        };
+
+        let get_str = |key: &str| -> Option<String> {
+            dict.get(key)
+                .and_then(|v| v.as_string())
+                .map(|s| s.to_string())
+        };
+
+        let profile_identifier = get_str("spconfigprofile_profile_identifier")
+            .unwrap_or_else(|| "unknown".to_string());
+        let profile_display_name =
+            get_str("_name").unwrap_or_else(|| profile_identifier.clone());
+
+        let install_date =
+            get_str("spconfigprofile_install_date").map(|s| extract_iso_date(&s));
+
+        let verification_state = get_str("spconfigprofile_verification_state");
+        let description = get_str("spconfigprofile_description");
+        let source = get_str("spconfigprofile_install_source");
+        let removal_disallowed = get_str("spconfigprofile_RemovalDisallowed")
+            .map(|s| s.eq_ignore_ascii_case("yes"));
+
+        // Parse payload items from nested _items
+        let payloads = dict
+            .get("_items")
+            .and_then(|v| v.as_array())
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|item| {
+                        let d = item.as_dictionary()?;
+                        let get_payload_str = |key: &str| -> Option<String> {
+                            d.get(key)
+                                .and_then(|v| v.as_string())
+                                .map(|s| s.to_string())
+                        };
+                        let payload_type =
+                            get_payload_str("_name").unwrap_or_else(|| "unknown".to_string());
+                        let payload_identifier = get_payload_str(
+                            "spconfigprofile_payload_identifier",
+                        )
+                        .unwrap_or_else(|| "unknown".to_string());
+                        let payload_version = d
+                            .get("spconfigprofile_payload_version")
+                            .and_then(|v| v.as_string())
+                            .and_then(|s| s.parse::<u32>().ok());
+                        Some(MacosMdmPayload {
+                            payload_identifier,
+                            payload_display_name: get_payload_str(
+                                "spconfigprofile_payload_display_name",
+                            ),
+                            payload_type,
+                            payload_uuid: get_payload_str("spconfigprofile_payload_uuid"),
+                            payload_data: get_payload_str("spconfigprofile_payload_data"),
+                            payload_description: get_payload_str("spconfigprofile_description"),
+                            payload_version,
+                        })
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+
+        profiles.push(MacosMdmProfile {
+            profile_identifier,
+            profile_display_name,
+            profile_organization: get_str("spconfigprofile_organization"),
+            profile_type: None,
+            profile_uuid: get_str("spconfigprofile_profile_uuid"),
+            install_date,
+            payloads,
+            is_managed: true,
+            verification_state,
+            description,
+            source,
+            removal_disallowed,
+        });
     }
 
     profiles
@@ -300,8 +454,188 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_profiles_plist_empty() {
-        let profiles = parse_profiles_plist(b"not valid plist data");
+    fn test_parse_system_profiler_plist() {
+        // Realistic system_profiler SPConfigurationProfileDataType -xml fixture
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<array>
+  <dict>
+    <key>_items</key>
+    <array>
+      <dict>
+        <key>_name</key>
+        <string>Configuration Profiles</string>
+        <key>_items</key>
+        <array>
+          <dict>
+            <key>_name</key>
+            <string>MDM Profile</string>
+            <key>spconfigprofile_profile_identifier</key>
+            <string>com.microsoft.wdav</string>
+            <key>spconfigprofile_organization</key>
+            <string>Contoso</string>
+            <key>spconfigprofile_description</key>
+            <string>MDM managed profile</string>
+            <key>spconfigprofile_profile_uuid</key>
+            <string>AAAA-BBBB-CCCC</string>
+            <key>spconfigprofile_install_date</key>
+            <string>Sunday, January 11, 2026 at 8:40:06 PM (2026-01-12 01:40:06 +0000)</string>
+            <key>spconfigprofile_verification_state</key>
+            <string>verified</string>
+            <key>spconfigprofile_install_source</key>
+            <string>MDM</string>
+            <key>spconfigprofile_RemovalDisallowed</key>
+            <string>yes</string>
+            <key>_items</key>
+            <array>
+              <dict>
+                <key>_name</key>
+                <string>com.apple.ManagedClient.preferences</string>
+                <key>spconfigprofile_payload_identifier</key>
+                <string>com.microsoft.wdav.atp</string>
+                <key>spconfigprofile_payload_display_name</key>
+                <string>WDAV Config</string>
+                <key>spconfigprofile_payload_uuid</key>
+                <string>1111-2222-3333</string>
+                <key>spconfigprofile_payload_data</key>
+                <string>antivirusEngine: passive mode</string>
+                <key>spconfigprofile_description</key>
+                <string>Defender configuration</string>
+                <key>spconfigprofile_payload_version</key>
+                <string>1</string>
+              </dict>
+            </array>
+          </dict>
+          <dict>
+            <key>_name</key>
+            <string>Wi-Fi Profile</string>
+            <key>spconfigprofile_profile_identifier</key>
+            <string>com.contoso.wifi</string>
+            <key>spconfigprofile_organization</key>
+            <string>Contoso IT</string>
+            <key>spconfigprofile_profile_uuid</key>
+            <string>DDDD-EEEE-FFFF</string>
+            <key>spconfigprofile_install_date</key>
+            <string>Monday, February 3, 2026 at 10:00:00 AM (2026-02-03 15:00:00 +0000)</string>
+            <key>spconfigprofile_verification_state</key>
+            <string>verified</string>
+            <key>_items</key>
+            <array>
+              <dict>
+                <key>_name</key>
+                <string>com.apple.wifi.managed</string>
+                <key>spconfigprofile_payload_identifier</key>
+                <string>com.contoso.wifi.payload</string>
+                <key>spconfigprofile_payload_display_name</key>
+                <string>Corporate Wi-Fi</string>
+                <key>spconfigprofile_payload_uuid</key>
+                <string>4444-5555-6666</string>
+              </dict>
+              <dict>
+                <key>_name</key>
+                <string>com.apple.security.certificateroot</string>
+                <key>spconfigprofile_payload_identifier</key>
+                <string>com.contoso.cert</string>
+                <key>spconfigprofile_payload_display_name</key>
+                <string>Root CA</string>
+                <key>spconfigprofile_payload_uuid</key>
+                <string>7777-8888-9999</string>
+                <key>spconfigprofile_payload_version</key>
+                <string>2</string>
+              </dict>
+            </array>
+          </dict>
+        </array>
+      </dict>
+    </array>
+  </dict>
+</array>
+</plist>"#;
+
+        let profiles = parse_system_profiler_plist(xml.as_bytes());
+        assert_eq!(profiles.len(), 2);
+
+        // First profile — has payload_data on its payload
+        let p0 = &profiles[0];
+        assert_eq!(p0.profile_display_name, "MDM Profile");
+        assert_eq!(p0.profile_identifier, "com.microsoft.wdav");
+        assert_eq!(p0.profile_organization.as_deref(), Some("Contoso"));
+        assert_eq!(p0.description.as_deref(), Some("MDM managed profile"));
+        assert_eq!(p0.profile_uuid.as_deref(), Some("AAAA-BBBB-CCCC"));
+        assert_eq!(
+            p0.install_date.as_deref(),
+            Some("2026-01-12 01:40:06 +0000")
+        );
+        assert_eq!(p0.verification_state.as_deref(), Some("verified"));
+        assert_eq!(p0.source.as_deref(), Some("MDM"));
+        assert_eq!(p0.removal_disallowed, Some(true));
+        assert!(p0.is_managed);
+        assert!(p0.profile_type.is_none());
+        assert_eq!(p0.payloads.len(), 1);
+
+        let pay0 = &p0.payloads[0];
+        assert_eq!(pay0.payload_type, "com.apple.ManagedClient.preferences");
+        assert_eq!(pay0.payload_identifier, "com.microsoft.wdav.atp");
+        assert_eq!(pay0.payload_display_name.as_deref(), Some("WDAV Config"));
+        assert_eq!(pay0.payload_uuid.as_deref(), Some("1111-2222-3333"));
+        assert_eq!(
+            pay0.payload_data.as_deref(),
+            Some("antivirusEngine: passive mode")
+        );
+        assert_eq!(
+            pay0.payload_description.as_deref(),
+            Some("Defender configuration")
+        );
+        assert_eq!(pay0.payload_version, Some(1));
+
+        // Second profile — 2 payloads, no payload_data
+        let p1 = &profiles[1];
+        assert_eq!(p1.profile_display_name, "Wi-Fi Profile");
+        assert_eq!(p1.profile_identifier, "com.contoso.wifi");
+        assert_eq!(p1.payloads.len(), 2);
+        assert!(p1.description.is_none());
+        assert!(p1.source.is_none());
+        assert!(p1.removal_disallowed.is_none());
+
+        let pay1a = &p1.payloads[0];
+        assert_eq!(pay1a.payload_type, "com.apple.wifi.managed");
+        assert!(pay1a.payload_data.is_none());
+        assert!(pay1a.payload_description.is_none());
+        assert!(pay1a.payload_version.is_none());
+
+        let pay1b = &p1.payloads[1];
+        assert_eq!(pay1b.payload_type, "com.apple.security.certificateroot");
+        assert_eq!(pay1b.payload_version, Some(2));
+    }
+
+    #[test]
+    fn test_parse_system_profiler_plist_invalid() {
+        let profiles = parse_system_profiler_plist(b"not valid plist data");
+        assert!(profiles.is_empty());
+    }
+
+    #[test]
+    fn test_parse_system_profiler_plist_empty_dict() {
+        // Valid plist but with empty _items
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<array>
+  <dict>
+    <key>_items</key>
+    <array>
+      <dict>
+        <key>_name</key>
+        <string>Configuration Profiles</string>
+        <key>_items</key>
+        <array/>
+      </dict>
+    </array>
+  </dict>
+</array>
+</plist>"#;
+        let profiles = parse_system_profiler_plist(xml.as_bytes());
         assert!(profiles.is_empty());
     }
 }
