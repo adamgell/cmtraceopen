@@ -6,6 +6,7 @@ import {
   useState,
   useLayoutEffect,
 } from "react";
+import { tokens } from "@fluentui/react-components";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useLogStore } from "../../stores/log-store";
 import { useUiStore } from "../../stores/ui-store";
@@ -152,8 +153,8 @@ export function LogListView() {
         style={{
           display: "grid",
           gridTemplateColumns,
-          backgroundColor: "#f0f0f0",
-          borderBottom: "2px solid #c0c0c0",
+          backgroundColor: tokens.colorNeutralBackground4,
+          borderBottom: `2px solid ${tokens.colorNeutralStroke2}`,
           fontSize: `${listMetrics.headerFontSize}px`,
           fontWeight: "bold",
           fontFamily: LOG_UI_FONT_FAMILY,
@@ -179,7 +180,7 @@ export function LogListView() {
             <div
               style={{
                 padding: "1px 4px",
-                borderLeft: "1px solid #c0c0c0",
+                borderLeft: `1px solid ${tokens.colorNeutralStroke2}`,
                 overflow: "hidden",
                 textOverflow: "ellipsis",
               }}
@@ -189,7 +190,7 @@ export function LogListView() {
             <div
               style={{
                 padding: "1px 4px",
-                borderLeft: "1px solid #c0c0c0",
+                borderLeft: `1px solid ${tokens.colorNeutralStroke2}`,
                 overflow: "hidden",
                 textOverflow: "ellipsis",
               }}
@@ -199,7 +200,7 @@ export function LogListView() {
             <div
               style={{
                 padding: "1px 4px",
-                borderLeft: "1px solid #c0c0c0",
+                borderLeft: `1px solid ${tokens.colorNeutralStroke2}`,
                 overflow: "hidden",
                 textOverflow: "ellipsis",
               }}
@@ -225,7 +226,7 @@ export function LogListView() {
           flex: 1,
           overflow: "auto",
           outline: "none",
-          boxShadow: hasKeyboardFocus ? "inset 0 0 0 1px #0078D7" : "none",
+          boxShadow: hasKeyboardFocus ? `inset 0 0 0 1px ${tokens.colorBrandStroke1}` : "none",
           scrollbarGutter: "stable",
         }}
       >

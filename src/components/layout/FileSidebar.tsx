@@ -4,6 +4,7 @@ import {
   Button,
   Caption1,
   Subtitle2,
+  tokens,
 } from "@fluentui/react-components";
 import { formatDisplayDateTime } from "../../lib/date-time-format";
 import { getLogListMetrics, LOG_UI_FONT_FAMILY } from "../../lib/log-accessibility";
@@ -75,14 +76,14 @@ function SectionHeader({ title, caption }: { title: string; caption?: string }) 
     <div
       style={{
         padding: "10px 12px 8px",
-        borderBottom: "1px solid #e2e8f0",
-        backgroundColor: "#f8fafc",
+        borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
+        backgroundColor: tokens.colorNeutralBackground2,
       }}
     >
       <Caption1
         style={{
           fontWeight: 600,
-          color: "#526071",
+          color: tokens.colorNeutralForeground3,
           textTransform: "uppercase",
           letterSpacing: "0.04em",
         }}
@@ -94,7 +95,7 @@ function SectionHeader({ title, caption }: { title: string; caption?: string }) 
           style={{
             display: "block",
             marginTop: "2px",
-            color: "#6b7280",
+            color: tokens.colorNeutralForeground3,
           }}
         >
           {caption}
@@ -109,12 +110,12 @@ function EmptyState({ title, body }: { title: string; body: string }) {
     <div
       style={{
         padding: "18px 14px",
-        color: "#6b7280",
+        color: tokens.colorNeutralForeground3,
         fontSize: "inherit",
         lineHeight: 1.5,
       }}
     >
-      <Subtitle2 style={{ color: "#1f2937", marginBottom: "4px" }}>{title}</Subtitle2>
+      <Subtitle2 style={{ color: tokens.colorNeutralForeground1, marginBottom: "4px" }}>{title}</Subtitle2>
       <div>{body}</div>
     </div>
   );
@@ -157,10 +158,10 @@ function SourceStatusNotice({
 }) {
   const colors =
     kind === "missing" || kind === "error"
-      ? { border: "#fecaca", background: "#fef2f2", text: "#991b1b" }
+      ? { border: tokens.colorPaletteRedBorder2, background: tokens.colorPaletteRedBackground1, text: tokens.colorPaletteRedForeground2 }
       : kind === "empty" || kind === "awaiting-file-selection"
-        ? { border: "#fde68a", background: "#fffbeb", text: "#92400e" }
-        : { border: "#bfdbfe", background: "#eff6ff", text: "#1e40af" };
+        ? { border: tokens.colorPaletteYellowBorder2, background: tokens.colorPaletteYellowBackground1, text: tokens.colorPaletteMarigoldForeground2 }
+        : { border: tokens.colorPaletteBlueBorderActive, background: tokens.colorPaletteBlueBackground2, text: tokens.colorPaletteBlueForeground2 };
 
   return (
     <div
@@ -205,9 +206,9 @@ function FileRow({
         textAlign: "left",
         padding: "8px 10px",
         border: "none",
-        borderBottom: "1px solid #edf2f7",
-        borderLeft: isSelected ? "3px solid #3b82f6" : "3px solid transparent",
-        backgroundColor: isSelected ? "#dbeafe" : isPending ? "#eff6ff" : "#ffffff",
+        borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
+        borderLeft: isSelected ? `3px solid ${tokens.colorCompoundBrandStroke}` : "3px solid transparent",
+        backgroundColor: isSelected ? tokens.colorNeutralBackground1Selected : isPending ? tokens.colorNeutralBackground1Hover : tokens.colorNeutralBackground1,
         cursor: disabled ? "default" : "pointer",
         opacity: disabled && !isSelected ? 0.7 : 1,
       }}
@@ -221,7 +222,7 @@ function FileRow({
             whiteSpace: "nowrap",
             fontSize: "inherit",
             fontWeight: isSelected ? 600 : 400,
-            color: "#111827",
+            color: tokens.colorNeutralForeground1,
           }}
         >
           {entry.name}
@@ -241,7 +242,7 @@ function FileRow({
         style={{
           marginTop: "3px",
           fontSize: "inherit",
-          color: "#6b7280",
+          color: tokens.colorNeutralForeground3,
           overflow: "hidden",
           textOverflow: "ellipsis",
           whiteSpace: "nowrap",
@@ -268,8 +269,8 @@ function SourceSummaryCard({
     <div
       style={{
         padding: "12px",
-        borderBottom: "1px solid #d8e1ec",
-        backgroundColor: "#f7fafc",
+        borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
+        backgroundColor: tokens.colorNeutralBackground2,
       }}
     >
       <Badge
@@ -288,7 +289,7 @@ function SourceSummaryCard({
         style={{
           display: "block",
           marginTop: "8px",
-          color: "#111827",
+          color: tokens.colorNeutralForeground1,
           fontSize: "inherit",
           fontWeight: 600,
           overflow: "hidden",
@@ -303,7 +304,7 @@ function SourceSummaryCard({
         style={{
           display: "block",
           marginTop: "4px",
-          color: "#6b7280",
+          color: tokens.colorNeutralForeground3,
           fontSize: "0.85em",
           overflow: "hidden",
           textOverflow: "ellipsis",
@@ -428,11 +429,11 @@ function LogSidebar() {
           <div
             style={{
               padding: "8px 10px",
-              border: "1px solid #d8e1ec",
+              border: `1px solid ${tokens.colorNeutralStroke2}`,
               borderRadius: "8px",
-              backgroundColor: "#ffffff",
+              backgroundColor: tokens.colorNeutralBackground1,
               fontSize: "inherit",
-              color: "#374151",
+              color: tokens.colorNeutralForeground2,
               lineHeight: 1.45,
             }}
           >
@@ -448,7 +449,7 @@ function LogSidebar() {
             <div style={{ marginTop: "4px" }}>Selected: {activeFileName}</div>
             <div style={{ marginTop: "4px" }}>{sourceStatus.message}</div>
             {sourceFailureReason && (
-              <div style={{ marginTop: "6px", color: "#991b1b" }}>Failure reason: {sourceFailureReason}</div>
+              <div style={{ marginTop: "6px", color: tokens.colorPaletteRedForeground2 }}>Failure reason: {sourceFailureReason}</div>
             )}
           </div>
         }
@@ -466,8 +467,8 @@ function LogSidebar() {
         <div
           style={{
             padding: "8px 10px",
-            borderBottom: "1px solid #e2e8f0",
-            backgroundColor: "#f8fafc",
+            borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
+            backgroundColor: tokens.colorNeutralBackground2,
             display: "flex",
             alignItems: "center",
             gap: "6px",
@@ -491,12 +492,12 @@ function LogSidebar() {
       )}
 
       {refreshErrorMessage && (
-        <div role="alert" style={{ padding: "9px 12px", borderBottom: "1px solid #fecaca", backgroundColor: "#fef2f2", color: "#991b1b", fontSize: "inherit" }}>
+        <div role="alert" style={{ padding: "9px 12px", borderBottom: `1px solid ${tokens.colorPaletteRedBorder2}`, backgroundColor: tokens.colorPaletteRedBackground1, color: tokens.colorPaletteRedForeground2, fontSize: "inherit" }}>
           {refreshErrorMessage}
         </div>
       )}
       {errorMessage && (
-        <div role="alert" style={{ padding: "9px 12px", borderBottom: "1px solid #fecaca", backgroundColor: "#fef2f2", color: "#991b1b", fontSize: "inherit" }}>
+        <div role="alert" style={{ padding: "9px 12px", borderBottom: `1px solid ${tokens.colorPaletteRedBorder2}`, backgroundColor: tokens.colorPaletteRedBackground1, color: tokens.colorPaletteRedForeground2, fontSize: "inherit" }}>
           {errorMessage}
         </div>
       )}
@@ -536,7 +537,7 @@ function LogSidebar() {
               <>
                 <SectionHeader title={`Folders (${folders.length})`} caption="Shown for context." />
                 {folders.map((entry) => (
-                  <div key={entry.path} style={{ padding: "7px 10px", borderBottom: "1px solid #f1f5f9", fontSize: "inherit", color: "#4b5563" }}>
+                  <div key={entry.path} style={{ padding: "7px 10px", borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, fontSize: "inherit", color: tokens.colorNeutralForeground2 }}>
                     {entry.name}
                   </div>
                 ))}
@@ -571,7 +572,7 @@ function LogSidebar() {
       </div>
 
       {activeSource && folderLike && !activeFilePath && !isLoading && (
-        <div style={{ padding: "8px 10px", borderTop: "1px solid #c0c0c0", backgroundColor: "#fafafa", fontSize: "inherit", color: "#4b5563" }}>
+        <div style={{ padding: "8px 10px", borderTop: `1px solid ${tokens.colorNeutralStroke2}`, backgroundColor: tokens.colorNeutralBackground2, fontSize: "inherit", color: tokens.colorNeutralForeground2 }}>
           {sourceOpenMode === "aggregate-folder"
             ? `Merged folder view active across ${aggregateFiles.length} file${aggregateFiles.length === 1 ? "" : "s"}.`
             : sourceStatus.kind === "awaiting-file-selection"
@@ -608,7 +609,7 @@ function IntuneSidebar() {
         title={getBaseName(intuneRequestedPath) || workspaceTitle}
         subtitle={intuneRequestedPath ?? "Select an IME log source to begin analysis."}
         body={
-          <div style={{ fontSize: "inherit", color: "#374151", lineHeight: 1.45 }}>
+          <div style={{ fontSize: "inherit", color: tokens.colorNeutralForeground2, lineHeight: 1.45 }}>
             <div>{intuneAnalysisState.message}</div>
             <div style={{ marginTop: "4px" }}>Included files: {intuneIncludedFiles.length}</div>
             {intuneEvidenceBundle && (
@@ -672,35 +673,35 @@ function IntuneSidebar() {
             <SectionHeader title="Diagnostics Summary" caption="Overview of the current Intune diagnostics data" />
             <div style={{
               padding: "10px",
-              borderBottom: "1px solid #eef2f7",
+              borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
               fontSize: "inherit",
-              color: "#374151",
+              color: tokens.colorNeutralForeground2,
               display: "grid",
               gridTemplateColumns: "auto 1fr",
               gap: "4px 10px",
               alignItems: "baseline",
             }}>
-              <span style={{ fontWeight: 600, color: "#6b7280" }}>Events</span>
+              <span style={{ fontWeight: 600, color: tokens.colorNeutralForeground3 }}>Events</span>
               <span>{intuneSummary.totalEvents.toLocaleString()}</span>
-              <span style={{ fontWeight: 600, color: "#6b7280" }}>Downloads</span>
+              <span style={{ fontWeight: 600, color: tokens.colorNeutralForeground3 }}>Downloads</span>
               <span>{intuneSummary.totalDownloads}</span>
               {eventLogAnalysis && (
                 <>
-                  <span style={{ fontWeight: 600, color: "#6b7280" }}>Event logs</span>
+                  <span style={{ fontWeight: 600, color: tokens.colorNeutralForeground3 }}>Event logs</span>
                   <span>{eventLogAnalysis.totalEntryCount.toLocaleString()} entries</span>
-                  <span style={{ fontWeight: 600, color: "#6b7280" }}>Severity</span>
+                  <span style={{ fontWeight: 600, color: tokens.colorNeutralForeground3 }}>Severity</span>
                   <span>{eventLogAnalysis.errorEntryCount} errors, {eventLogAnalysis.warningEntryCount} warnings</span>
                 </>
               )}
               {eventLogAnalysis?.sourceKind === "Live" && eventLogAnalysis.liveQuery && (
                 <>
-                  <span style={{ fontWeight: 600, color: "#6b7280" }}>Live query</span>
+                  <span style={{ fontWeight: 600, color: tokens.colorNeutralForeground3 }}>Live query</span>
                   <span>{eventLogAnalysis.liveQuery.successfulChannelCount} ok, {eventLogAnalysis.liveQuery.failedChannelCount} failed</span>
                 </>
               )}
               {intuneSummary.logTimeSpan && (
                 <>
-                  <span style={{ fontWeight: 600, color: "#6b7280" }}>Time span</span>
+                  <span style={{ fontWeight: 600, color: tokens.colorNeutralForeground3 }}>Time span</span>
                   <span>{intuneSummary.logTimeSpan}</span>
                 </>
               )}
@@ -730,11 +731,11 @@ function IntuneSidebar() {
                     textAlign: "left",
                     padding: isSelected ? "10px 10px 10px 9px" : "7px 10px 7px 9px",
                     border: "none",
-                    borderLeft: isSelected ? "4px solid #3b82f6" : "4px solid transparent",
-                    borderBottom: "1px solid #edf2f7",
+                    borderLeft: isSelected ? `4px solid ${tokens.colorCompoundBrandStroke}` : "4px solid transparent",
+                    borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
                     fontSize: "inherit",
-                    color: isSelected ? "#1e3a8a" : "#374151",
-                    backgroundColor: isSelected ? "#dbeafe" : "#ffffff",
+                    color: isSelected ? tokens.colorBrandForeground1 : tokens.colorNeutralForeground2,
+                    backgroundColor: isSelected ? tokens.colorNeutralBackground1Selected : tokens.colorNeutralBackground1,
                     cursor: "pointer",
                     transition: "background-color 100ms ease",
                   }}
@@ -764,7 +765,7 @@ function IntuneSidebar() {
                     <div style={{
                       marginTop: "4px",
                       fontSize: "0.85em",
-                      color: "#2563eb",
+                      color: tokens.colorBrandForeground1,
                       overflow: "hidden",
                       textOverflow: "ellipsis",
                       whiteSpace: "nowrap",
@@ -801,7 +802,7 @@ function DsregcmdSidebar() {
         title={sourceContext.displayLabel}
         subtitle={sourceContext.resolvedPath ?? sourceContext.requestedPath ?? "Open a dsregcmd source to begin."}
         body={
-          <div style={{ fontSize: "inherit", color: "#374151", lineHeight: 1.5 }}>
+          <div style={{ fontSize: "inherit", color: tokens.colorNeutralForeground2, lineHeight: 1.5 }}>
             <div>{analysisState.message}</div>
             <div style={{ marginTop: "4px" }}>Lines: {sourceContext.rawLineCount}</div>
             <div style={{ marginTop: "4px" }}>Chars: {sourceContext.rawCharCount}</div>
@@ -818,7 +819,7 @@ function DsregcmdSidebar() {
         />
       )}
 
-      <div style={{ padding: "8px 10px", borderBottom: "1px solid #e5e7eb", backgroundColor: "#f8fafc", display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px" }}>
+      <div style={{ padding: "8px 10px", borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, backgroundColor: tokens.colorNeutralBackground2, display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px" }}>
         <SidebarActionButton label="Capture" disabled={isAnalyzing} onClick={() => void captureDsregcmdSource()} />
         <SidebarActionButton label="Paste" disabled={isAnalyzing} onClick={() => void pasteDsregcmdSource()} />
         <SidebarActionButton label="Open file" disabled={isAnalyzing} onClick={() => void openSourceFileDialog()} />
@@ -836,7 +837,7 @@ function DsregcmdSidebar() {
         {result && (
           <>
             <SectionHeader title="Triage Summary" caption="Fast sidebar readout of the current dsregcmd result" />
-            <div style={{ padding: "12px 10px", borderBottom: "1px solid #eef2f7", fontSize: "inherit", color: "#374151", lineHeight: 1.5 }}>
+            <div style={{ padding: "12px 10px", borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, fontSize: "inherit", color: tokens.colorNeutralForeground2, lineHeight: 1.5 }}>
               <div><strong>Join type:</strong> {result.derived.joinTypeLabel}</div>
               <div style={{ marginTop: "6px" }}><strong>PRT present:</strong> {result.derived.azureAdPrtPresent === null ? 'Unknown' : result.derived.azureAdPrtPresent ? 'Yes' : 'No'}</div>
               <div style={{ marginTop: "6px" }}><strong>MDM enrolled:</strong> {result.derived.mdmEnrolled === null ? 'Unknown' : result.derived.mdmEnrolled ? 'Yes' : 'No'}</div>
@@ -854,10 +855,10 @@ function DsregcmdSidebar() {
               <EmptyState title="No diagnostics" body="The backend parser did not emit diagnostic findings for this capture." />
             ) : (
               diagnostics.slice(0, 8).map((item) => (
-                <div key={item.id} style={{ padding: "8px 10px", borderBottom: "1px solid #eef2f7", backgroundColor: item.severity === 'Error' ? '#fef2f2' : item.severity === 'Warning' ? '#fffbeb' : '#eff6ff' }}>
-                  <div style={{ fontSize: "inherit", textTransform: "uppercase", fontWeight: 700, color: item.severity === 'Error' ? '#991b1b' : item.severity === 'Warning' ? '#92400e' : '#1e40af' }}>{item.severity}</div>
-                  <div style={{ marginTop: "4px", fontSize: "inherit", fontWeight: 600, color: "#111827" }}>{item.title}</div>
-                  <div style={{ marginTop: "3px", fontSize: "inherit", color: "#4b5563", lineHeight: 1.45 }}>{item.summary}</div>
+                <div key={item.id} style={{ padding: "8px 10px", borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, backgroundColor: item.severity === 'Error' ? tokens.colorPaletteRedBackground1 : item.severity === 'Warning' ? tokens.colorPaletteYellowBackground1 : tokens.colorPaletteBlueBackground2 }}>
+                  <div style={{ fontSize: "inherit", textTransform: "uppercase", fontWeight: 700, color: item.severity === 'Error' ? tokens.colorPaletteRedForeground2 : item.severity === 'Warning' ? tokens.colorPaletteMarigoldForeground2 : tokens.colorPaletteBlueForeground2 }}>{item.severity}</div>
+                  <div style={{ marginTop: "4px", fontSize: "inherit", fontWeight: 600, color: tokens.colorNeutralForeground1 }}>{item.title}</div>
+                  <div style={{ marginTop: "3px", fontSize: "inherit", color: tokens.colorNeutralForeground2, lineHeight: 1.45 }}>{item.summary}</div>
                 </div>
               ))
             )}
@@ -881,8 +882,8 @@ export function FileSidebar({ width = FILE_SIDEBAR_RECOMMENDED_WIDTH, activeView
         display: "flex",
         flexDirection: "column",
         overflow: "hidden",
-        backgroundColor: "#fbfdff",
-        borderRight: "1px solid #d8e1ec",
+        backgroundColor: tokens.colorNeutralBackground2,
+        borderRight: `1px solid ${tokens.colorNeutralStroke2}`,
         fontSize: `${metrics.fontSize}px`,
         lineHeight: `${metrics.rowLineHeight}px`,
         fontFamily: LOG_UI_FONT_FAMILY,

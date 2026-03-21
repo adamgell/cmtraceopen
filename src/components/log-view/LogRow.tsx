@@ -1,3 +1,4 @@
+import { tokens } from "@fluentui/react-components";
 import type { LogEntry } from "../../types/log";
 import {
   getLogViewGridTemplateColumns,
@@ -27,8 +28,8 @@ function getRowStyle(
 
   if (isSelected) {
     return {
-      backgroundColor: "#0078D7",
-      color: "#FFFFFF",
+      backgroundColor: tokens.colorBrandBackground,
+      color: tokens.colorNeutralForegroundOnBrand,
     };
   }
 
@@ -74,7 +75,7 @@ function highlightMessage(
           key={i}
           style={{
             backgroundColor: palette.highlightDefault,
-            color: "#000",
+            color: tokens.colorNeutralForeground1,
           }}
         >
           {part}
@@ -114,13 +115,13 @@ export function LogRow({
         display: "grid",
         gridTemplateColumns,
         cursor: "pointer",
-        borderBottom: "1px solid #e0e0e0",
+        borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
         fontSize: `${listFontSize}px`,
         fontFamily: LOG_UI_FONT_FAMILY,
         lineHeight: `${rowLineHeight}px`,
         whiteSpace: "nowrap",
         transition: "filter 80ms linear",
-        boxShadow: `inset 3px 0 0 ${isSelected ? "#FFFFFF" : "transparent"}`,
+        boxShadow: `inset 3px 0 0 ${isSelected ? tokens.colorNeutralForegroundOnBrand : "transparent"}`,
       }}
       onClick={() => onClick(entry.id)}
     >
@@ -148,7 +149,7 @@ export function LogRow({
               overflow: "hidden",
               textOverflow: "ellipsis",
               padding: "1px 4px",
-              borderLeft: "1px solid #d0d0d0",
+              borderLeft: `1px solid ${tokens.colorNeutralStroke1}`,
             }}
           >
             {entry.component ?? ""}
@@ -159,7 +160,7 @@ export function LogRow({
               overflow: "hidden",
               textOverflow: "ellipsis",
               padding: "1px 4px",
-              borderLeft: "1px solid #d0d0d0",
+              borderLeft: `1px solid ${tokens.colorNeutralStroke1}`,
             }}
           >
             {timestampLabel ?? ""}
@@ -170,7 +171,7 @@ export function LogRow({
               overflow: "hidden",
               textOverflow: "ellipsis",
               padding: "1px 4px",
-              borderLeft: "1px solid #d0d0d0",
+              borderLeft: `1px solid ${tokens.colorNeutralStroke1}`,
             }}
           >
             {entry.threadDisplay ?? ""}

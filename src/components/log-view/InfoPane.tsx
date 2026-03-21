@@ -1,3 +1,4 @@
+import { tokens } from "@fluentui/react-components";
 import {
   getParserSelectionDisplay,
   useLogStore,
@@ -34,11 +35,11 @@ export function InfoPane() {
           fontFamily: LOG_MONOSPACE_FONT_FAMILY,
           fontSize: `${logDetailsFontSize}px`,
           lineHeight: `${detailLineHeight}px`,
-          color: "#888",
+          color: tokens.colorNeutralForeground3,
           height: "100%",
           overflow: "auto",
-          backgroundColor: "#fafafa",
-          borderTop: "2px solid #c0c0c0",
+          backgroundColor: tokens.colorNeutralBackground2,
+          borderTop: `2px solid ${tokens.colorNeutralStroke2}`,
         }}
       >
         {entries.length === 0
@@ -57,22 +58,22 @@ export function InfoPane() {
         lineHeight: `${detailLineHeight}px`,
         height: "100%",
         overflow: "auto",
-        backgroundColor: "#fafafa",
-        borderTop: "2px solid #c0c0c0",
+        backgroundColor: tokens.colorNeutralBackground2,
+        borderTop: `2px solid ${tokens.colorNeutralStroke2}`,
       }}
     >
-      <div style={{ marginBottom: "8px", color: "#444" }}>
+      <div style={{ marginBottom: "8px", color: tokens.colorNeutralForeground2 }}>
         {`Line ${selectedEntry.lineNumber} | ${selectedEntry.severity}${selectedEntry.component ? ` | ${selectedEntry.component}` : ""
           }${selectedTimestamp ? ` | ${selectedTimestamp}` : ""}`}
       </div>
-      <div style={{ marginBottom: "8px", color: "#666" }}>
+      <div style={{ marginBottom: "8px", color: tokens.colorNeutralForeground3 }}>
         {`File ${selectedEntry.filePath}`}
       </div>
       {parserDisplay ? (
         <div
           style={{
             marginBottom: "8px",
-            color: "#666",
+            color: tokens.colorNeutralForeground3,
             fontSize: `${Math.max(logDetailsFontSize - 1, 11)}px`,
           }}
         >
@@ -92,7 +93,7 @@ export function InfoPane() {
         style={{
           whiteSpace: "pre-wrap",
           wordBreak: "break-word",
-          color: "#111",
+          color: tokens.colorNeutralForeground1,
         }}
       >
         {selectedEntry.message}

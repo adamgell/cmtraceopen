@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { Badge } from "@fluentui/react-components";
+import { Badge, tokens } from "@fluentui/react-components";
 import {
   getActiveSourceLabel,
   getBaseName,
@@ -208,7 +208,7 @@ export function StatusBar() {
     rightStatusText = [logStatusText, filterStatusText]
       .filter((part) => part.length > 0)
       .join(" | ");
-    rightTone = filterStatus.tone === "error" ? "#991b1b" : undefined;
+    rightTone = filterStatus.tone === "error" ? tokens.colorPaletteRedForeground2 : undefined;
   } else if (isIntuneWorkspace(activeView)) {
     const intuneSourceLabel = getBaseName(
       intuneAnalysisState.requestedPath ?? intuneSourceContext.analyzedPath
@@ -237,12 +237,12 @@ export function StatusBar() {
 
     if (intuneAnalysisState.phase === "analyzing") {
       rightStatusText = intuneAnalysisState.detail ?? intuneAnalysisState.message;
-      rightTone = "#1d4ed8";
+      rightTone = tokens.colorPaletteBlueForeground2;
     } else if (intuneAnalysisState.phase === "error" || intuneAnalysisState.phase === "empty") {
       rightStatusText = [intuneAnalysisState.message, intuneAnalysisState.detail]
         .filter((part): part is string => Boolean(part))
         .join(" | ");
-      rightTone = intuneAnalysisState.phase === "error" ? "#991b1b" : "#92400e";
+      rightTone = intuneAnalysisState.phase === "error" ? tokens.colorPaletteRedForeground2 : tokens.colorPaletteMarigoldForeground2;
     } else if (intuneSummary) {
       rightStatusText = [
         `${intuneSummary.totalEvents} events`,
@@ -274,12 +274,12 @@ export function StatusBar() {
 
     if (dsregcmdAnalysisState.phase === "analyzing") {
       rightStatusText = dsregcmdAnalysisState.detail ?? dsregcmdAnalysisState.message;
-      rightTone = "#1d4ed8";
+      rightTone = tokens.colorPaletteBlueForeground2;
     } else if (dsregcmdAnalysisState.phase === "error") {
       rightStatusText = [dsregcmdAnalysisState.message, dsregcmdAnalysisState.detail]
         .filter((part): part is string => Boolean(part))
         .join(" | ");
-      rightTone = "#991b1b";
+      rightTone = tokens.colorPaletteRedForeground2;
     } else if (dsregcmdResult) {
       rightStatusText = [
         `${diagnostics.length} diagnostics`,
@@ -310,8 +310,8 @@ export function StatusBar() {
         justifyContent: "space-between",
         alignItems: "center",
         padding: "6px 10px",
-        backgroundColor: "#f8fafc",
-        borderTop: "1px solid #d8e1ec",
+        backgroundColor: tokens.colorNeutralBackground2,
+        borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
         fontSize: "12px",
         fontFamily: "'Segoe UI', Tahoma, sans-serif",
         flexShrink: 0,
