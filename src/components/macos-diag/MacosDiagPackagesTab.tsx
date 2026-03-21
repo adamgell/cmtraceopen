@@ -16,6 +16,56 @@ import {
 } from "../../lib/commands";
 import { getLogListMetrics } from "../../lib/log-accessibility";
 
+/** pkgutil install-time is a Unix timestamp (seconds). Parse to Date. */
+function formatInstallTime(raw: string | null): string {
+  if (!raw) return "--";
+  const num = Number(raw);
+  if (isNaN(num) || num <= 0) return "--";
+  return new Date(num * 1000).toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+}
+
+/** Map well-known Microsoft package IDs to friendly names. */
+const PACKAGE_FRIENDLY_NAMES: Record<string, string> = {
+  "com.microsoft.edgemac": "Microsoft Edge",
+  "com.microsoft.Word": "Microsoft Word",
+  "com.microsoft.Excel": "Microsoft Excel",
+  "com.microsoft.Powerpoint": "Microsoft PowerPoint",
+  "com.microsoft.Outlook": "Microsoft Outlook",
+  "com.microsoft.onenote.mac": "Microsoft OneNote",
+  "com.microsoft.OneDrive": "OneDrive",
+  "com.microsoft.teams": "Microsoft Teams",
+  "com.microsoft.teams2": "Microsoft Teams (New)",
+  "com.microsoft.CompanyPortalMac": "Company Portal",
+  "com.microsoft.intuneMDMAgent": "Intune MDM Agent",
+  "com.microsoft.remotehelp": "Remote Help",
+  "com.microsoft.rdc.macos": "Remote Desktop",
+  "com.microsoft.wdav": "Microsoft Defender",
+  "com.microsoft.powershell": "PowerShell",
+  "com.microsoft.package.Microsoft_AutoUpdate.app": "Microsoft AutoUpdate",
+};
+
+function getPackageFriendlyName(packageId: string): string | null {
+  // Exact match first
+  if (PACKAGE_FRIENDLY_NAMES[packageId]) return PACKAGE_FRIENDLY_NAMES[packageId];
+  // Try prefix match for dotnet SDK components
+  if (packageId.startsWith("com.microsoft.dotnet.")) {
+    const parts = packageId.replace("com.microsoft.dotnet.", "").split(".");
+    // e.g. "sharedframework.Microsoft.NETCore.App.10.0.3..." → ".NET Runtime 10.0.3"
+    if (packageId.includes("sharedframework")) return `.NET Runtime`;
+    if (packageId.includes("sharedhost")) return `.NET Shared Host`;
+    if (packageId.includes("hostfxr")) return `.NET Host FX Resolver`;
+    if (packageId.includes("pack.targeting")) return `.NET Targeting Pack`;
+    if (packageId.includes("pack.apphost")) return `.NET App Host Pack`;
+    if (packageId.includes("dev.")) return `.NET SDK`;
+    return `.NET (${parts[0]})`;
+  }
+  return null;
+}
+
 const useStyles = makeStyles({
   statCards: {
     display: "grid",
@@ -279,12 +329,7 @@ export function MacosDiagPackagesTab() {
         <div className={styles.statCard}>
           <div className={styles.statLabel}>Latest Install</div>
           <div className={styles.statValue}>
-            {latestPkg?.installTime
-              ? new Date(latestPkg.installTime).toLocaleDateString("en-US", {
-                  month: "short",
-                  day: "numeric",
-                })
-              : "--"}
+            {formatInstallTime(latestPkg?.installTime ?? null)}
           </div>
           <div className={styles.statSub}>
             {latestPkg?.packageId ?? "No packages"}
@@ -317,18 +362,19 @@ export function MacosDiagPackagesTab() {
                 }
                 style={{ height: metrics.rowHeight }}
               >
-                <td className={`${styles.td} ${styles.mono}`} style={{ fontSize: metrics.fontSize }}>
-                  {pkg.packageId}
+                <td className={styles.td} style={{ fontSize: metrics.fontSize }}>
+                  {getPackageFriendlyName(pkg.packageId) ? (
+                    <>
+                      <div style={{ fontWeight: 600 }}>{getPackageFriendlyName(pkg.packageId)}</div>
+                      <div style={{ fontSize: metrics.fontSize - 2, color: tokens.colorNeutralForeground3, fontFamily: tokens.fontFamilyMonospace }}>{pkg.packageId}</div>
+                    </>
+                  ) : (
+                    <span style={{ fontFamily: tokens.fontFamilyMonospace }}>{pkg.packageId}</span>
+                  )}
                 </td>
                 <td className={styles.td} style={{ fontSize: metrics.fontSize }}>{pkg.version}</td>
                 <td className={styles.td} style={{ fontSize: metrics.fontSize }}>
-                  {pkg.installTime
-                    ? new Date(pkg.installTime).toLocaleDateString("en-US", {
-                        month: "short",
-                        day: "numeric",
-                        year: "numeric",
-                      })
-                    : "--"}
+                  {formatInstallTime(pkg.installTime)}
                 </td>
                 <td className={styles.td} style={{ fontSize: metrics.fontSize }}>
                   <Button
