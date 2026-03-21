@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "CMTrace Open",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "identifier": "com.cmtrace.open",
   "build": {
     "frontendDist": "../dist",
