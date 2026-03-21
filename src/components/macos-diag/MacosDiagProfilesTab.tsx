@@ -320,6 +320,7 @@ export function MacosDiagProfilesTab() {
   const [expandedProfiles, setExpandedProfiles] = useState<Set<string>>(
     new Set()
   );
+  const [copied, setCopied] = useState(false);
 
   const fetch = useCallback(async () => {
     setLoading(true);
@@ -337,6 +338,14 @@ export function MacosDiagProfilesTab() {
       fetch();
     }
   }, [profilesResult, loading, fetch]);
+
+  const copyAll = useCallback(() => {
+    if (!profilesResult) return;
+    navigator.clipboard.writeText(profilesResult.rawOutput).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  }, [profilesResult]);
 
   const toggleProfile = (id: string) => {
     setExpandedProfiles((prev) => {
@@ -411,6 +420,9 @@ export function MacosDiagProfilesTab() {
           Installed Configuration Profiles ({profiles.length})
         </div>
         <div className={styles.sectionActions}>
+          <Button size="small" appearance="subtle" onClick={copyAll}>
+            {copied ? "Copied!" : "Copy All"}
+          </Button>
           <Button size="small" appearance="subtle" onClick={fetch}>
             Refresh
           </Button>
