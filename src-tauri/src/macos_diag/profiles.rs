@@ -64,124 +64,6 @@ pub fn parse_enrollment_status(output: &str) -> MacosEnrollmentStatus {
     }
 }
 
-/// Parses the plist XML output of `profiles list -output stdout-xml` (or `profiles show -all`)
-/// into a list of MDM profiles.
-///
-/// The plist is a dictionary whose top-level key `_computerlevel` contains an
-/// array of profile dictionaries. Each profile dict contains keys like
-/// `ProfileIdentifier`, `ProfileDisplayName`, `ProfileItems` (array of payload
-/// dicts), etc.
-fn parse_profiles_plist(data: &[u8]) -> Vec<MacosMdmProfile> {
-    let root: plist::Value = match plist::from_bytes(data) {
-        Ok(v) => v,
-        Err(e) => {
-            log::warn!("Failed to parse profiles plist: {}", e);
-            return Vec::new();
-        }
-    };
-
-    let root_dict = match root.as_dictionary() {
-        Some(d) => d,
-        None => return Vec::new(),
-    };
-
-    let mut profiles = Vec::new();
-
-    // The profiles command may emit profiles under `_computerlevel` and/or
-    // `_userlevel` arrays.
-    for section_key in &["_computerlevel", "_userlevel"] {
-        let section_arr = match root_dict.get(section_key).and_then(|v| v.as_array()) {
-            Some(a) => a,
-            None => continue,
-        };
-
-        let is_managed_section = *section_key == "_computerlevel";
-
-        for profile_val in section_arr {
-            let dict = match profile_val.as_dictionary() {
-                Some(d) => d,
-                None => continue,
-            };
-
-            let get_str = |key: &str| -> Option<String> {
-                dict.get(key).and_then(|v| v.as_string()).map(|s| s.to_string())
-            };
-
-            let profile_identifier =
-                get_str("ProfileIdentifier").unwrap_or_else(|| "unknown".to_string());
-            let profile_display_name =
-                get_str("ProfileDisplayName").unwrap_or_else(|| profile_identifier.clone());
-
-            // Parse payload items
-            let payloads = dict
-                .get("ProfileItems")
-                .and_then(|v| v.as_array())
-                .map(|items| {
-                    items
-                        .iter()
-                        .filter_map(|item| {
-                            let d = item.as_dictionary()?;
-                            let payload_identifier = d
-                                .get("PayloadIdentifier")
-                                .and_then(|v| v.as_string())
-                                .unwrap_or("unknown")
-                                .to_string();
-                            let payload_type = d
-                                .get("PayloadType")
-                                .and_then(|v| v.as_string())
-                                .unwrap_or("unknown")
-                                .to_string();
-                            Some(MacosMdmPayload {
-                                payload_identifier,
-                                payload_display_name: d
-                                    .get("PayloadDisplayName")
-                                    .and_then(|v| v.as_string())
-                                    .map(|s| s.to_string()),
-                                payload_type,
-                                payload_uuid: d
-                                    .get("PayloadUUID")
-                                    .and_then(|v| v.as_string())
-                                    .map(|s| s.to_string()),
-                                payload_data: None,
-                                payload_description: None,
-                                payload_version: None,
-                            })
-                        })
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default();
-
-            let verification_state = get_str("ProfileVerificationState");
-
-            // Try to extract install date as string
-            let install_date = dict
-                .get("ProfileInstallDate")
-                .and_then(|v| {
-                    // plist dates come through as Date type; try to_string
-                    v.as_date().map(|d| format!("{:?}", d))
-                })
-                .or_else(|| get_str("ProfileInstallDate"));
-
-            profiles.push(MacosMdmProfile {
-                profile_identifier,
-                profile_display_name,
-                profile_organization: get_str("ProfileOrganization"),
-                profile_type: get_str("ProfileType"),
-                profile_uuid: get_str("ProfileUUID"),
-                install_date,
-                payloads,
-                is_managed: is_managed_section,
-                verification_state,
-                description: None,
-                source: None,
-                removal_disallowed: None,
-            });
-        }
-    }
-
-    profiles
-}
-
 /// Extracts the ISO date portion from a system_profiler install date string.
 ///
 /// system_profiler formats dates like:
@@ -189,7 +71,6 @@ fn parse_profiles_plist(data: &[u8]) -> Vec<MacosMdmProfile> {
 ///
 /// This function extracts the parenthesized ISO portion: `"2026-01-12 01:40:06 +0000"`.
 /// If no parenthesized segment is found, returns the original string as-is.
-#[allow(dead_code)] // Used by parse_system_profiler_plist; wired in next commit
 fn extract_iso_date(raw: &str) -> String {
     if let Some(start) = raw.find('(') {
         if let Some(end) = raw[start..].find(')') {
@@ -207,7 +88,6 @@ fn extract_iso_date(raw: &str) -> String {
 ///   root array → first dict → `_items` array → first dict (section) →
 ///   `_items` array of profile dicts.  Each profile dict may contain a nested
 ///   `_items` array of payload dicts.
-#[allow(dead_code)] // Wired into list_profiles_impl in next commit
 fn parse_system_profiler_plist(data: &[u8]) -> Vec<MacosMdmProfile> {
     let root: plist::Value = match plist::from_bytes(data) {
         Ok(v) => v,
@@ -338,42 +218,35 @@ fn parse_system_profiler_plist(data: &[u8]) -> Vec<MacosMdmProfile> {
 pub fn list_profiles_impl() -> Result<MacosProfilesResult, String> {
     use std::process::Command;
 
-    log::info!("Listing macOS MDM profiles");
+    log::info!("Listing macOS MDM profiles via system_profiler");
 
-    // --- Collect profiles via plist output ---
+    // --- Collect profiles via system_profiler XML plist output ---
     let profiles = {
-        let output = Command::new("profiles")
-            .args(["show", "-all", "-output", "stdout-xml"])
+        let output = Command::new("system_profiler")
+            .args(["SPConfigurationProfileDataType", "-xml"])
             .output();
 
         match output {
-            Ok(out) if out.status.success() => parse_profiles_plist(&out.stdout),
+            Ok(out) if out.status.success() => parse_system_profiler_plist(&out.stdout),
             Ok(out) => {
                 let stderr = String::from_utf8_lossy(&out.stderr);
                 log::warn!(
-                    "profiles show exited with status {}: {}",
+                    "system_profiler exited with status {}: {}",
                     out.status,
                     stderr
                 );
-                // Fall back to `profiles list` text output
-                let list_out = Command::new("profiles")
-                    .args(["list", "-output", "stdout-xml"])
-                    .output();
-                match list_out {
-                    Ok(lo) if lo.status.success() => parse_profiles_plist(&lo.stdout),
-                    _ => Vec::new(),
-                }
+                Vec::new()
             }
             Err(e) => {
-                log::warn!("Failed to run profiles command: {}", e);
+                log::warn!("Failed to run system_profiler: {}", e);
                 Vec::new()
             }
         }
     };
 
     // --- Collect raw text output for display ---
-    let raw_output = Command::new("profiles")
-        .args(["list"])
+    let raw_output = Command::new("system_profiler")
+        .args(["SPConfigurationProfileDataType"])
         .output()
         .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
         .unwrap_or_default();
