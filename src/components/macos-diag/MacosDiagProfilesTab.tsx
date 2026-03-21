@@ -155,6 +155,92 @@ const useStyles = makeStyles({
     ...shorthands.padding("1px", "6px"),
     ...shorthands.borderRadius(tokens.borderRadiusSmall),
   },
+  metadataGrid: {
+    display: "grid",
+    gridTemplateColumns: "auto 1fr",
+    gap: "4px 12px",
+    marginBottom: "12px",
+    ...shorthands.padding("10px", "0px"),
+  },
+  metadataLabel: {
+    fontSize: "11px",
+    fontWeight: 600,
+    color: tokens.colorNeutralForeground3,
+    textTransform: "uppercase" as const,
+    letterSpacing: "0.3px",
+    whiteSpace: "nowrap" as const,
+  },
+  metadataValue: {
+    fontSize: "12px",
+    color: tokens.colorNeutralForeground1,
+    fontFamily: tokens.fontFamilyMonospace,
+    wordBreak: "break-all" as const,
+  },
+  payloadCard: {
+    backgroundColor: tokens.colorNeutralBackground3,
+    ...shorthands.borderRadius(tokens.borderRadiusMedium),
+    ...shorthands.padding("10px", "12px"),
+    marginBottom: "6px",
+  },
+  payloadHeader: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: "4px",
+  },
+  payloadName: {
+    fontWeight: 600,
+    color: tokens.colorNeutralForeground1,
+  },
+  payloadId: {
+    fontFamily: tokens.fontFamilyMonospace,
+    color: tokens.colorNeutralForeground3,
+    marginTop: "2px",
+  },
+  payloadDataBlock: {
+    fontFamily: tokens.fontFamilyMonospace,
+    fontSize: "11px",
+    backgroundColor: tokens.colorNeutralBackground1,
+    ...shorthands.border("1px", "solid", tokens.colorNeutralStroke1),
+    ...shorthands.borderRadius(tokens.borderRadiusSmall),
+    ...shorthands.padding("8px", "10px"),
+    marginTop: "8px",
+    whiteSpace: "pre-wrap" as const,
+    wordBreak: "break-all" as const,
+    lineHeight: "1.5",
+    color: tokens.colorNeutralForeground1,
+    overflowX: "auto" as const,
+  },
+  payloadsHeader: {
+    fontSize: "11px",
+    fontWeight: 600,
+    color: tokens.colorNeutralForeground3,
+    textTransform: "uppercase" as const,
+    letterSpacing: "0.3px",
+    marginBottom: "8px",
+    ...shorthands.padding("8px", "0px", "4px"),
+    borderBottom: `1px solid ${tokens.colorNeutralStroke1}`,
+  },
+  verifiedBadge: {
+    fontSize: "10px",
+    fontWeight: 600,
+    ...shorthands.padding("2px", "7px"),
+    ...shorthands.borderRadius("100px"),
+    textTransform: "uppercase" as const,
+    letterSpacing: "0.3px",
+    backgroundColor: "#e6f4ea",
+    color: "#137333",
+  },
+  sourceBadge: {
+    fontSize: "10px",
+    fontWeight: 600,
+    ...shorthands.padding("2px", "7px"),
+    ...shorthands.borderRadius("100px"),
+    textTransform: "uppercase" as const,
+    letterSpacing: "0.3px",
+    backgroundColor: "#e8f0fe",
+    color: "#0f6cbd",
+  },
   centered: {
     display: "flex",
     justifyContent: "center",
@@ -299,9 +385,15 @@ export function MacosDiagProfilesTab() {
                   {profile.isManaged && (
                     <span className={styles.managedBadge}>Managed</span>
                   )}
+                  {profile.source && (
+                    <span className={styles.sourceBadge}>{profile.source}</span>
+                  )}
+                  {profile.verificationState === "verified" && (
+                    <span className={styles.verifiedBadge}>Verified</span>
+                  )}
                   {profile.installDate && (
                     <span className={styles.installDate} style={{ fontSize: metrics.fontSize - 2 }}>
-                      Installed {profile.installDate}
+                      {profile.installDate}
                     </span>
                   )}
                   <span
@@ -312,24 +404,85 @@ export function MacosDiagProfilesTab() {
                 </div>
               </div>
 
-              {isExpanded && profile.payloads.length > 0 && (
+              {isExpanded && (
                 <div className={styles.profileCardBody}>
-                  <div className={styles.payloadList}>
-                    {profile.payloads.map((payload) => (
-                      <div
-                        key={payload.payloadIdentifier}
-                        className={styles.payloadItem}
-                        style={{ fontSize: metrics.fontSize }}
-                      >
-                        <span>
-                          {payload.payloadDisplayName ?? payload.payloadIdentifier}
-                        </span>
-                        <span className={styles.payloadType}>
-                          {payload.payloadType}
-                        </span>
-                      </div>
-                    ))}
+                  {/* Metadata Grid */}
+                  <div className={styles.metadataGrid}>
+                    {profile.profileOrganization && (
+                      <>
+                        <span className={styles.metadataLabel} style={{ fontSize: metrics.fontSize - 2 }}>Organization</span>
+                        <span className={styles.metadataValue} style={{ fontSize: metrics.fontSize - 1 }}>{profile.profileOrganization}</span>
+                      </>
+                    )}
+                    {profile.description && (
+                      <>
+                        <span className={styles.metadataLabel} style={{ fontSize: metrics.fontSize - 2 }}>Description</span>
+                        <span className={styles.metadataValue} style={{ fontSize: metrics.fontSize - 1 }}>{profile.description}</span>
+                      </>
+                    )}
+                    {profile.source && (
+                      <>
+                        <span className={styles.metadataLabel} style={{ fontSize: metrics.fontSize - 2 }}>Source</span>
+                        <span className={styles.metadataValue} style={{ fontSize: metrics.fontSize - 1 }}>{profile.source}</span>
+                      </>
+                    )}
+                    {profile.verificationState && (
+                      <>
+                        <span className={styles.metadataLabel} style={{ fontSize: metrics.fontSize - 2 }}>Verified</span>
+                        <span className={styles.metadataValue} style={{ fontSize: metrics.fontSize - 1 }}>{profile.verificationState}</span>
+                      </>
+                    )}
+                    {profile.removalDisallowed != null && (
+                      <>
+                        <span className={styles.metadataLabel} style={{ fontSize: metrics.fontSize - 2 }}>Removal</span>
+                        <span className={styles.metadataValue} style={{ fontSize: metrics.fontSize - 1 }}>{profile.removalDisallowed ? "Disallowed" : "Allowed"}</span>
+                      </>
+                    )}
+                    {profile.installDate && (
+                      <>
+                        <span className={styles.metadataLabel} style={{ fontSize: metrics.fontSize - 2 }}>Installed</span>
+                        <span className={styles.metadataValue} style={{ fontSize: metrics.fontSize - 1 }}>{profile.installDate}</span>
+                      </>
+                    )}
+                    {profile.profileUuid && (
+                      <>
+                        <span className={styles.metadataLabel} style={{ fontSize: metrics.fontSize - 2 }}>UUID</span>
+                        <span className={styles.metadataValue} style={{ fontSize: metrics.fontSize - 1 }}>{profile.profileUuid}</span>
+                      </>
+                    )}
                   </div>
+
+                  {/* Payloads */}
+                  {profile.payloads.length > 0 && (
+                    <>
+                      <div className={styles.payloadsHeader}>
+                        Payloads ({profile.payloads.length})
+                      </div>
+                      {profile.payloads.map((payload) => (
+                        <div key={payload.payloadIdentifier} className={styles.payloadCard}>
+                          <div className={styles.payloadHeader}>
+                            <span className={styles.payloadName} style={{ fontSize: metrics.fontSize }}>
+                              {payload.payloadDisplayName ?? payload.payloadType}
+                            </span>
+                            <span className={styles.payloadType}>
+                              {payload.payloadType}
+                            </span>
+                          </div>
+                          <div className={styles.payloadId} style={{ fontSize: metrics.fontSize - 2 }}>
+                            {payload.payloadIdentifier}
+                          </div>
+                          {payload.payloadData && (
+                            <div
+                              className={styles.payloadDataBlock}
+                              style={{ fontSize: Math.max(10, metrics.fontSize - 2) }}
+                            >
+                              {payload.payloadData}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </>
+                  )}
                 </div>
               )}
             </div>
