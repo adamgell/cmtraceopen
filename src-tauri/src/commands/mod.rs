@@ -6,3 +6,4 @@ pub mod filter;
 pub mod intune;
 pub mod parsing;
 pub mod system_preferences;
+pub mod macos_diag;

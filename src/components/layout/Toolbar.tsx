@@ -1010,6 +1010,7 @@ export function Toolbar() {
           ["intune", "Intune Diagnostics"],
           ["new-intune", "New Intune Workspace"],
           ["dsregcmd", "Troubleshoot with dsregcmd"],
+          ["macos-diag", "macOS Diagnostics"],
         ] as const).map(([workspaceId, label]) => (
           <Button
             key={workspaceId}

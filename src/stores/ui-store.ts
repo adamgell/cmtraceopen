@@ -9,7 +9,7 @@ import {
 import { type LogSeverityPaletteMode } from "../lib/constants";
 
 export type IntuneWorkspaceId = "intune" | "new-intune";
-export type WorkspaceId = "log" | IntuneWorkspaceId | "dsregcmd";
+export type WorkspaceId = "log" | IntuneWorkspaceId | "dsregcmd" | "macos-diag";
 export type AppView = WorkspaceId;
 
 export function isIntuneWorkspace(workspace: WorkspaceId): workspace is IntuneWorkspaceId {
@@ -48,6 +48,14 @@ export function getUiChromeStatus(
       viewLabel: "dsregcmd workspace",
       detailsLabel: "Details hidden in dsregcmd workspace",
       infoLabel: "Info hidden in dsregcmd workspace",
+    };
+  }
+
+  if (activeView === "macos-diag") {
+    return {
+      viewLabel: "macOS Diagnostics workspace",
+      detailsLabel: "Details hidden in macOS Diagnostics workspace",
+      infoLabel: "Info hidden in macOS Diagnostics workspace",
     };
   }
 

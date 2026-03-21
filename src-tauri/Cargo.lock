@@ -514,6 +514,7 @@ dependencies = [
  "log",
  "notify",
  "once_cell",
+ "plist",
  "rayon",
  "regex",
  "serde",

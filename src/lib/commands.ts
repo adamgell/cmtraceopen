@@ -235,3 +235,56 @@ export async function setFileAssociationPromptSuppressed(
 export async function getSystemDateTimePreferences(): Promise<SystemDateTimePreferences> {
   return invokeCommand<SystemDateTimePreferences>("get_system_date_time_preferences");
 }
+
+// --- macOS Diagnostics ---
+
+import type {
+  MacosDiagEnvironment,
+  MacosIntuneLogScanResult,
+  MacosProfilesResult,
+  MacosDefenderResult,
+  MacosPackagesResult,
+  MacosPackageInfo,
+  MacosPackageFiles,
+  MacosUnifiedLogResult,
+} from "../types/macos-diag";
+
+export async function macosScanEnvironment(): Promise<MacosDiagEnvironment> {
+  return invokeCommand<MacosDiagEnvironment>("macos_scan_environment");
+}
+
+export async function macosScanIntuneLogs(): Promise<MacosIntuneLogScanResult> {
+  return invokeCommand<MacosIntuneLogScanResult>("macos_scan_intune_logs");
+}
+
+export async function macosListProfiles(): Promise<MacosProfilesResult> {
+  return invokeCommand<MacosProfilesResult>("macos_list_profiles");
+}
+
+export async function macosInspectDefender(): Promise<MacosDefenderResult> {
+  return invokeCommand<MacosDefenderResult>("macos_inspect_defender");
+}
+
+export async function macosListPackages(): Promise<MacosPackagesResult> {
+  return invokeCommand<MacosPackagesResult>("macos_list_packages");
+}
+
+export async function macosGetPackageInfo(packageId: string): Promise<MacosPackageInfo> {
+  return invokeCommand<MacosPackageInfo>("macos_get_package_info", { packageId });
+}
+
+export async function macosGetPackageFiles(packageId: string): Promise<MacosPackageFiles> {
+  return invokeCommand<MacosPackageFiles>("macos_get_package_files", { packageId });
+}
+
+export async function macosQueryUnifiedLog(
+  presetId: string,
+  timeRangeMinutes: number,
+  maxResults: number
+): Promise<MacosUnifiedLogResult> {
+  return invokeCommand<MacosUnifiedLogResult>("macos_query_unified_log", {
+    presetId,
+    timeRangeMinutes,
+    maxResults,
+  });
+}
