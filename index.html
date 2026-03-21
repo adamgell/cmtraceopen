@@ -2,11 +2,77 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <link rel="icon" type="image/png" href="/splash-logo.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>CMTrace Open</title>
+    <style>
+      #splash {
+        position: fixed;
+        inset: 0;
+        z-index: 99999;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        background: #111;
+        transition: opacity 0.4s ease-out;
+      }
+      #splash.fade-out {
+        opacity: 0;
+        pointer-events: none;
+      }
+      #splash img {
+        width: 180px;
+        height: 180px;
+        animation: pulse 2s ease-in-out infinite;
+      }
+      #splash .title {
+        margin-top: 24px;
+        font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
+        font-size: 22px;
+        font-weight: 600;
+        color: #e0e0e0;
+        letter-spacing: 0.5px;
+      }
+      #splash .subtitle {
+        margin-top: 8px;
+        font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
+        font-size: 13px;
+        color: #888;
+      }
+      #splash .loader {
+        margin-top: 32px;
+        width: 40px;
+        height: 4px;
+        background: #333;
+        border-radius: 2px;
+        overflow: hidden;
+      }
+      #splash .loader-bar {
+        width: 50%;
+        height: 100%;
+        background: #007768;
+        border-radius: 2px;
+        animation: slide 1.2s ease-in-out infinite;
+      }
+      @keyframes pulse {
+        0%, 100% { transform: scale(1); }
+        50% { transform: scale(1.05); }
+      }
+      @keyframes slide {
+        0% { transform: translateX(-100%); }
+        50% { transform: translateX(150%); }
+        100% { transform: translateX(-100%); }
+      }
+    </style>
   </head>
   <body>
+    <div id="splash">
+      <img src="/splash-logo.png" alt="CMTrace Open" />
+      <div class="title">CMTrace Open</div>
+      <div class="subtitle">Log Viewer &amp; Troubleshooting Tool</div>
+      <div class="loader"><div class="loader-bar"></div></div>
+    </div>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

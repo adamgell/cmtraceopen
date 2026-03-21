@@ -9,8 +9,22 @@ import { initializeDateTimeFormatting } from "./lib/date-time-format";
 
 const RootWrapper = import.meta.env.DEV ? React.Fragment : React.StrictMode;
 
+function dismissSplash() {
+  const splash = document.getElementById("splash");
+  if (splash) {
+    splash.classList.add("fade-out");
+    setTimeout(() => splash.remove(), 500);
+  }
+}
+
 function AppRoot() {
   useAppMenu();
+
+  useEffect(() => {
+    // Dismiss splash screen once the app has mounted
+    dismissSplash();
+  }, []);
+
   return <App />;
 }
 
