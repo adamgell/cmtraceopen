@@ -3,6 +3,16 @@
 An open-source log viewer inspired by Microsoft's CMTrace.exe, built with
 Tauri v2 + React + TypeScript + Rust. Includes built-in diagnostics.
 
+## Getting Started
+
+### Build for development 
+
+For a Windows-focused developer setup guide, see [windows_build_from_source.md](windows_build_from_source.md).
+
+### Install 
+
+Download the latest release from [Releases](https://github.com/adamgell/CMTraceOpen/releases).
+
 ## Screenshots
 
 ### Main Window
@@ -37,16 +47,6 @@ PowerShell scripts, remediations, ESP, and sync sessions
 - **Download statistics** — size, speed, and Delivery Optimization percentage
 - **Summary dashboard** — event counts, success/failure rates, and log time span
 - **GUID extraction** — automatic app and policy identifier detection
-
-## Getting Started
-
-### Build for development 
-
-For a Windows-focused developer setup guide, see [windows_build_from_source.md](windows_build_from_source.md).
-
-### Install 
-
-Download the latest release from [Releases](https://github.com/adamgell/CMTraceOpen/releases).
 
 ## Disclaimer
 
