@@ -316,7 +316,10 @@ export const useUiStore = create<UiState>()(
       },
 
       openTab: (filePath, fileName) => {
-        if (!filePath) return;
+        if (!filePath) {
+          console.warn("[ui-store] openTab called with empty filePath, ignoring");
+          return;
+        }
         const { openTabs } = get();
         const existingIndex = openTabs.findIndex((t) => t.filePath === filePath);
         if (existingIndex >= 0) {

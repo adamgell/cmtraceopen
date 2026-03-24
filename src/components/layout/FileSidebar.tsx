@@ -820,10 +820,10 @@ function DsregcmdSidebar() {
       )}
 
       <div style={{ padding: "8px 10px", borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, backgroundColor: tokens.colorNeutralBackground2, display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px" }}>
-        <SidebarActionButton label="Capture" disabled={isAnalyzing} onClick={() => void captureDsregcmdSource()} />
-        <SidebarActionButton label="Paste" disabled={isAnalyzing} onClick={() => void pasteDsregcmdSource()} />
-        <SidebarActionButton label="Open file" disabled={isAnalyzing} onClick={() => void openSourceFileDialog()} />
-        <SidebarActionButton label="Open folder" disabled={isAnalyzing} onClick={() => void openSourceFolderDialog()} />
+        <SidebarActionButton label="Capture" disabled={isAnalyzing} onClick={() => void captureDsregcmdSource().catch((err) => console.error("[dsregcmd-sidebar] capture failed", err))} />
+        <SidebarActionButton label="Paste" disabled={isAnalyzing} onClick={() => void pasteDsregcmdSource().catch((err) => console.error("[dsregcmd-sidebar] paste failed", err))} />
+        <SidebarActionButton label="Open file" disabled={isAnalyzing} onClick={() => void openSourceFileDialog().catch((err) => console.error("[dsregcmd-sidebar] open file failed", err))} />
+        <SidebarActionButton label="Open folder" disabled={isAnalyzing} onClick={() => void openSourceFolderDialog().catch((err) => console.error("[dsregcmd-sidebar] open folder failed", err))} />
       </div>
 
       <div style={{ flex: 1, overflow: "auto", backgroundColor: tokens.colorNeutralBackground2 }}>
