@@ -8,7 +8,6 @@ import {
   type ChangeEvent,
 } from "react";
 import {
-  Badge,
   Button,
   Divider,
   Input,
@@ -21,10 +20,7 @@ import {
   analyzeDsregcmdSource,
   refreshCurrentDsregcmdSource,
 } from "../../lib/dsregcmd-source";
-import {
-  getStreamStateSnapshot,
-  useLogStore,
-} from "../../stores/log-store";
+import { useLogStore } from "../../stores/log-store";
 import { useFilterStore } from "../../stores/filter-store";
 import { useIntuneStore } from "../../stores/intune-store";
 import { useDsregcmdStore } from "../../stores/dsregcmd-store";
@@ -738,11 +734,6 @@ export function Toolbar() {
   const highlightText = useLogStore((s) => s.highlightText);
   const setHighlightText = useLogStore((s) => s.setHighlightText);
   const knownSourceToolbarGroups = useLogStore((s) => s.knownSourceToolbarGroups);
-  const isLoading = useLogStore((s) => s.isLoading);
-  const isPaused = useLogStore((s) => s.isPaused);
-  const activeSource = useLogStore((s) => s.activeSource);
-  const openFilePath = useLogStore((s) => s.openFilePath);
-  const dsregcmdIsAnalyzing = useDsregcmdStore((s) => s.isAnalyzing);
 
   const activeView = useUiStore((s) => s.activeView);
   const setActiveView = useUiStore((s) => s.setActiveView);
@@ -755,9 +746,6 @@ export function Toolbar() {
     pasteDsregcmdSource,
     captureDsregcmdSource,
     showErrorLookupDialog,
-    showEvidenceBundleDialog,
-    togglePauseResume,
-    refreshActiveSource,
     toggleDetailsPane,
     toggleInfoPane,
   } = useAppActions();
@@ -828,20 +816,12 @@ export function Toolbar() {
     }
   };
 
-  const streamState = getStreamStateSnapshot(
-    isLoading || dsregcmdIsAnalyzing,
-    isPaused,
-    activeSource,
-    openFilePath
-  );
-
   return (
     <div
       style={{
         display: "flex",
         flexWrap: "wrap",
         alignItems: "center",
-        justifyContent: "space-between",
         gap: "10px",
         padding: "10px 12px",
         backgroundColor: tokens.colorNeutralBackground2,
@@ -849,186 +829,151 @@ export function Toolbar() {
         flexShrink: 0,
       }}
     >
-      <div style={{ display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap" }}>
-        <select
-          value={selectedOpenAction}
-          onChange={handleOpenActionChange}
-          title={openLabels.openPlaceholder}
-          style={{
-            ...getToolbarControlStyle({ disabled: !commandState.canOpenSources }),
-            fontSize: "12px",
-            padding: "2px 4px",
-            minWidth: activeView === "dsregcmd" ? "180px" : "140px",
-          }}
-          disabled={!commandState.canOpenSources}
-        >
-          <option value="">{openLabels.openPlaceholder}</option>
-          <option value="open-file">{openLabels.file}</option>
-          <option value="open-folder">{openLabels.folder}</option>
-          {activeView === "dsregcmd" && (
-            <>
-              <option value="paste-dsregcmd">Paste Clipboard</option>
-              <option value="capture-dsregcmd">Capture Live Output</option>
-            </>
-          )}
-        </select>
-        <select
-          value={selectedKnownSourceId}
-          onChange={handleKnownSourceChange}
-          title="Open a known log source"
-          style={{
-            ...getToolbarControlStyle({
-              disabled:
-                !commandState.canOpenKnownSources || knownSourceToolbarGroups.length === 0,
-            }),
-            fontSize: "12px",
-            padding: "2px 4px",
-            minWidth: "260px",
-          }}
-          disabled={!commandState.canOpenKnownSources || knownSourceToolbarGroups.length === 0}
-        >
-          <option value="">
-            {commandState.canOpenKnownSources
-              ? knownSourceToolbarGroups.length > 0
-                ? isIntuneWorkspace(activeView)
-                  ? "Open Known Intune Source..."
-                  : "Open Known Log Source..."
-                : "No Known Log Sources"
-              : "Known Sources Unavailable"}
-          </option>
-          {knownSourceToolbarGroups.map((group) => (
-            <optgroup key={group.id} label={group.label}>
-              {group.sources.map((source) => (
-                <option key={source.id} value={source.id} title={source.description}>
-                  {source.label}
-                </option>
-              ))}
-            </optgroup>
-          ))}
-        </select>
-
-        <Divider vertical />
-
-        <Button
-          onClick={togglePauseResume}
-          title={`Pause / Resume (Ctrl+U) • ${streamState.label}`}
-          disabled={!commandState.canPauseResume}
-          aria-pressed={commandState.isPaused}
-          size="small"
-          appearance={commandState.isPaused ? "primary" : "secondary"}
-        >
-          {commandState.isPaused ? "Resume" : "Pause"}
-        </Button>
-        <Button
-          onClick={() => {
-            refreshActiveSource().catch((error) => {
-              console.error("[toolbar] failed to refresh source", { error });
-            });
-          }}
-          title="Refresh (F5)"
-          disabled={!commandState.canRefresh}
-          size="small"
-          appearance="secondary"
-        >
-          Refresh
-        </Button>
-        <Badge appearance="outline" color={streamState.label === "Paused" ? "warning" : streamState.label === "Loading" ? "informative" : "brand"}>
-          {streamState.label}
-        </Badge>
-      </div>
-
-      <div style={{ display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap", flexGrow: 1, minWidth: "250px" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
-          <label
-            style={{
-              fontSize: "12px",
-              fontFamily: "'Segoe UI', Tahoma, sans-serif",
-              color: commandState.activeView === "log" ? tokens.colorNeutralForeground1 : tokens.colorNeutralForeground3,
-              whiteSpace: "nowrap",
-            }}
-          >
-            Highlight:
-          </label>
-          <Input
-            value={highlightText}
-            onChange={(e) => setHighlightText(e.target.value)}
-            placeholder="Enter text to highlight..."
-            disabled={commandState.activeView !== "log"}
-            size="small"
-            style={{
-              width: "200px",
-              minWidth: "120px",
-            }}
-          />
-        </div>
-
-        <Divider vertical />
-
-        <Button
-          onClick={showEvidenceBundleDialog}
-          title="Show collected bundle summary"
-          disabled={!commandState.canShowEvidenceBundle}
-          size="small"
-          appearance="secondary"
-        >
-          Bundle Summary
-        </Button>
-        <Button
-          onClick={showErrorLookupDialog}
-          title="Error Lookup (Ctrl+E)"
-          size="small"
-          appearance="secondary"
-        >
-          Error Lookup
-        </Button>
-        <Divider vertical />
-        <ThemePicker />
-      </div>
-
-      <div style={{ display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap", justifyContent: "flex-end" }}>
-        <Button
-          onClick={toggleDetailsPane}
-          title="Show / Hide Details (Ctrl+H)"
-          disabled={!commandState.canToggleDetailsPane}
-          aria-pressed={commandState.isDetailsVisible}
-          size="small"
-          appearance={commandState.isDetailsVisible ? "primary" : "secondary"}
-        >
-          Details
-        </Button>
-        <Button
-          onClick={toggleInfoPane}
-          title="Toggle Info Pane"
-          disabled={!commandState.canToggleInfoPane}
-          aria-pressed={commandState.isInfoPaneVisible}
-          size="small"
-          appearance={commandState.isInfoPaneVisible ? "primary" : "secondary"}
-        >
-          Info
-        </Button>
-
-        <Divider vertical />
-
-        {([
-          ["log", "Log Explorer"],
-          ["intune", "Intune Diagnostics"],
-          ["new-intune", "New Intune Workspace"],
-          ["dsregcmd", "Troubleshoot with dsregcmd"],
-          ["macos-diag", "macOS Diagnostics"],
-        ] as const).map(([workspaceId, label]) => (
-          <Button
-            key={workspaceId}
-            onClick={() => setActiveView(workspaceId)}
-            title={`Switch to ${label}`}
-            aria-pressed={activeView === workspaceId}
-            size="small"
-            appearance={activeView === workspaceId ? "primary" : "secondary"}
-          >
-            {label}
-          </Button>
+      <select
+        value={selectedOpenAction}
+        onChange={handleOpenActionChange}
+        title={openLabels.openPlaceholder}
+        style={{
+          ...getToolbarControlStyle({ disabled: !commandState.canOpenSources }),
+          fontSize: "12px",
+          padding: "2px 4px",
+          minWidth: activeView === "dsregcmd" ? "180px" : "140px",
+        }}
+        disabled={!commandState.canOpenSources}
+      >
+        <option value="">{openLabels.openPlaceholder}</option>
+        <option value="open-file">{openLabels.file}</option>
+        <option value="open-folder">{openLabels.folder}</option>
+        {activeView === "dsregcmd" && (
+          <>
+            <option value="paste-dsregcmd">Paste Clipboard</option>
+            <option value="capture-dsregcmd">Capture Live Output</option>
+          </>
+        )}
+      </select>
+      <select
+        value={selectedKnownSourceId}
+        onChange={handleKnownSourceChange}
+        title="Open a known log source"
+        style={{
+          ...getToolbarControlStyle({
+            disabled:
+              !commandState.canOpenKnownSources || knownSourceToolbarGroups.length === 0,
+          }),
+          fontSize: "12px",
+          padding: "2px 4px",
+          minWidth: "260px",
+        }}
+        disabled={!commandState.canOpenKnownSources || knownSourceToolbarGroups.length === 0}
+      >
+        <option value="">
+          {commandState.canOpenKnownSources
+            ? knownSourceToolbarGroups.length > 0
+              ? isIntuneWorkspace(activeView)
+                ? "Open Known Intune Source..."
+                : "Open Known Log Source..."
+              : "No Known Log Sources"
+            : "Known Sources Unavailable"}
+        </option>
+        {knownSourceToolbarGroups.map((group) => (
+          <optgroup key={group.id} label={group.label}>
+            {group.sources.map((source) => (
+              <option key={source.id} value={source.id} title={source.description}>
+                {source.label}
+              </option>
+            ))}
+          </optgroup>
         ))}
+      </select>
 
-      </div>
+      <Divider vertical />
+
+      <Input
+        value={highlightText}
+        onChange={(e) => setHighlightText(e.target.value)}
+        placeholder="Highlight..."
+        disabled={commandState.activeView !== "log"}
+        size="small"
+        style={{
+          width: "200px",
+          minWidth: "120px",
+        }}
+      />
+
+      <Divider vertical />
+
+      <Button
+        onClick={showErrorLookupDialog}
+        title="Error Lookup (Ctrl+E)"
+        size="small"
+        appearance="secondary"
+      >
+        Error Lookup
+      </Button>
+
+      <Divider vertical />
+
+      <Button
+        onClick={toggleDetailsPane}
+        title="Show / Hide Details (Ctrl+H)"
+        disabled={!commandState.canToggleDetailsPane}
+        aria-pressed={commandState.isDetailsVisible}
+        size="small"
+        appearance={commandState.isDetailsVisible ? "primary" : "secondary"}
+      >
+        Details
+      </Button>
+      <Button
+        onClick={toggleInfoPane}
+        title="Toggle Info Pane"
+        disabled={!commandState.canToggleInfoPane}
+        aria-pressed={commandState.isInfoPaneVisible}
+        size="small"
+        appearance={commandState.isInfoPaneVisible ? "primary" : "secondary"}
+      >
+        Info
+      </Button>
+
+      <Divider vertical />
+
+      <label
+        style={{
+          fontSize: "11px",
+          color: tokens.colorNeutralForeground3,
+          whiteSpace: "nowrap",
+        }}
+      >
+        Workspace:
+      </label>
+      <select
+        value={activeView}
+        onChange={(e) => setActiveView(e.target.value as WorkspaceId)}
+        title="Switch workspace"
+        style={{
+          ...getToolbarControlStyle({ disabled: false, active: true }),
+          padding: "5px 28px 5px 10px",
+          fontSize: "11px",
+          fontWeight: 600,
+          minWidth: "160px",
+          appearance: "none" as const,
+          WebkitAppearance: "none" as const,
+          backgroundImage:
+            "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='5' viewBox='0 0 8 5'%3E%3Cpath d='M0 0l4 5 4-5z' fill='%23888'/%3E%3C/svg%3E\")",
+          backgroundRepeat: "no-repeat",
+          backgroundPosition: "right 9px center",
+          borderColor: tokens.colorBrandStroke1,
+        }}
+      >
+        <option value="log">Log Explorer</option>
+        <option value="intune">Intune Diagnostics</option>
+        <option value="new-intune">New Intune Workspace</option>
+        <option value="dsregcmd">dsregcmd</option>
+        <option value="macos-diag">macOS Diagnostics</option>
+      </select>
+
+      <div style={{ flex: 1 }} />
+
+      <ThemePicker />
     </div>
   );
 }
