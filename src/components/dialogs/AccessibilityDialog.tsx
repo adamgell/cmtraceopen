@@ -136,19 +136,20 @@ export function AccessibilityDialog({ isOpen, onClose }: AccessibilityDialogProp
           }
         }}
         style={{
-          backgroundColor: "#f0f0f0",
-          border: "1px solid #999",
+          backgroundColor: tokens.colorNeutralBackground1,
+          border: `1px solid ${tokens.colorNeutralStroke1}`,
           borderRadius: "4px",
           padding: "16px",
           minWidth: "520px",
           maxWidth: "640px",
           boxShadow: "0 4px 12px rgba(0,0,0,0.3)",
+          color: tokens.colorNeutralForeground1,
         }}
       >
         <div style={{ fontSize: "16px", fontWeight: "bold", marginBottom: "4px" }}>
           Accessibility Settings
         </div>
-        <div style={{ fontSize: "12px", color: "#555", marginBottom: "14px", lineHeight: 1.5 }}>
+        <div style={{ fontSize: "12px", color: tokens.colorNeutralForeground3, marginBottom: "14px", lineHeight: 1.5 }}>
           Adjust log-reading text sizes independently and choose whether severity rows use classic CMTrace colors or a more accessible palette.
         </div>
 
@@ -156,7 +157,7 @@ export function AccessibilityDialog({ isOpen, onClose }: AccessibilityDialogProp
           <div style={{ fontSize: "13px", fontWeight: 700, marginBottom: "6px" }}>
             Application text size
           </div>
-          <div style={{ fontSize: "11px", color: "#666", marginBottom: "6px" }}>
+          <div style={{ fontSize: "11px", color: tokens.colorNeutralForeground3, marginBottom: "6px" }}>
             Controls text size across log lists, Intune workspace, timelines, and evidence surfaces.
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
@@ -173,7 +174,7 @@ export function AccessibilityDialog({ isOpen, onClose }: AccessibilityDialogProp
               {logListFontSize}px
             </div>
           </div>
-          <div style={{ fontSize: "11px", color: "#666", marginTop: "4px" }}>
+          <div style={{ fontSize: "11px", color: tokens.colorNeutralForeground3, marginTop: "4px" }}>
             Quick actions: Ctrl/Cmd + =, Ctrl/Cmd + -, Ctrl/Cmd + 0
           </div>
         </section>
@@ -208,8 +209,8 @@ export function AccessibilityDialog({ isOpen, onClose }: AccessibilityDialogProp
 
         <section
           style={{
-            backgroundColor: "#ffffff",
-            border: "1px solid #d1d5db",
+            backgroundColor: tokens.colorNeutralBackground2,
+            border: `1px solid ${tokens.colorNeutralStroke2}`,
             borderRadius: "4px",
             padding: "10px",
             marginBottom: "14px",
@@ -223,7 +224,7 @@ export function AccessibilityDialog({ isOpen, onClose }: AccessibilityDialogProp
               padding: "4px 6px",
               backgroundColor: palette.info.background,
               color: palette.info.text,
-              border: "1px solid #e5e7eb",
+              border: `1px solid ${tokens.colorNeutralStroke2}`,
               fontFamily: LOG_MONOSPACE_FONT_FAMILY,
             }}
           >
@@ -234,7 +235,7 @@ export function AccessibilityDialog({ isOpen, onClose }: AccessibilityDialogProp
               fontSize: `${logDetailsFontSize}px`,
               lineHeight: 1.6,
               padding: "8px 6px 0 6px",
-              color: "#111827",
+              color: tokens.colorNeutralForeground1,
               fontFamily: LOG_MONOSPACE_FONT_FAMILY,
             }}
           >
@@ -243,12 +244,38 @@ export function AccessibilityDialog({ isOpen, onClose }: AccessibilityDialogProp
         </section>
 
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <div style={{ fontSize: "11px", color: "#666" }}>
+          <div style={{ fontSize: "11px", color: tokens.colorNeutralForeground3 }}>
             Defaults: list {DEFAULT_LOG_LIST_FONT_SIZE}px, details {DEFAULT_LOG_DETAILS_FONT_SIZE}px
           </div>
           <div style={{ display: "flex", gap: "8px" }}>
-            <button onClick={resetLogAccessibilityPreferences}>Reset Defaults</button>
-            <button onClick={onClose}>Close</button>
+            <button
+              onClick={resetLogAccessibilityPreferences}
+              style={{
+                padding: "4px 12px",
+                fontSize: "12px",
+                border: `1px solid ${tokens.colorNeutralStroke1}`,
+                borderRadius: "4px",
+                background: tokens.colorNeutralBackground3,
+                color: tokens.colorNeutralForeground1,
+                cursor: "pointer",
+              }}
+            >
+              Reset Defaults
+            </button>
+            <button
+              onClick={onClose}
+              style={{
+                padding: "4px 12px",
+                fontSize: "12px",
+                border: `1px solid ${tokens.colorNeutralStroke1}`,
+                borderRadius: "4px",
+                background: tokens.colorNeutralBackground3,
+                color: tokens.colorNeutralForeground1,
+                cursor: "pointer",
+              }}
+            >
+              Close
+            </button>
           </div>
         </div>
       </div>
