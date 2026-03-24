@@ -9,6 +9,7 @@ import {
 import type { ThemeId } from "../lib/themes/types";
 import { DEFAULT_THEME_ID } from "../lib/themes";
 import { clearCachedTabSnapshot } from "./log-store";
+import type { ColumnId } from "../lib/column-config";
 
 export interface ErrorLookupHistoryEntry {
   codeHex: string;
@@ -121,6 +122,9 @@ interface UiState {
   logListFontSize: number;
   logDetailsFontSize: number;
   themeId: ThemeId;
+  columnWidths: Record<string, number>;
+  columnOrder: ColumnId[] | null;
+  sidebarCollapsed: boolean;
   openTabs: TabState[];
   activeTabIndex: number;
   errorLookupHistory: ErrorLookupHistoryEntry[];
@@ -164,6 +168,12 @@ interface UiState {
   addErrorLookupHistoryEntry: (entry: ErrorLookupHistoryEntry) => void;
   clearErrorLookupHistory: () => void;
   closeTransientDialogs: (trigger: string) => void;
+  setColumnWidth: (columnId: string, width: number) => void;
+  resetColumnWidths: () => void;
+  setColumnOrder: (order: ColumnId[]) => void;
+  resetColumnOrder: () => void;
+  toggleSidebar: () => void;
+  resetColumns: () => void;
   openTab: (filePath: string, fileName: string, sourceContext?: TabSourceContext | null) => void;
   closeTab: (index: number) => void;
   switchTab: (index: number) => void;
@@ -221,6 +231,9 @@ export const useUiStore = create<UiState>()(
       logListFontSize: DEFAULT_LOG_LIST_FONT_SIZE,
       logDetailsFontSize: DEFAULT_LOG_DETAILS_FONT_SIZE,
       themeId: DEFAULT_THEME_ID,
+      columnWidths: {},
+      columnOrder: null,
+      sidebarCollapsed: false,
       openTabs: [],
       activeTabIndex: -1,
       errorLookupHistory: [],
@@ -336,6 +349,17 @@ export const useUiStore = create<UiState>()(
         });
       },
 
+      setColumnWidth: (columnId, width) =>
+        set((state) => ({
+          columnWidths: { ...state.columnWidths, [columnId]: width },
+        })),
+      resetColumnWidths: () => set({ columnWidths: {} }),
+      setColumnOrder: (order) => set({ columnOrder: order }),
+      resetColumnOrder: () => set({ columnOrder: null }),
+      toggleSidebar: () =>
+        set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed })),
+      resetColumns: () => set({ columnWidths: {}, columnOrder: null }),
+
       openTab: (filePath, fileName, sourceContext) => {
         if (!filePath) {
           console.warn("[ui-store] openTab called with empty filePath, ignoring");
@@ -414,6 +438,9 @@ export const useUiStore = create<UiState>()(
         logListFontSize: state.logListFontSize,
         logDetailsFontSize: state.logDetailsFontSize,
         themeId: state.themeId,
+        columnWidths: state.columnWidths,
+        columnOrder: state.columnOrder,
+        sidebarCollapsed: state.sidebarCollapsed,
       }),
       merge: (persistedState, currentState) => {
         const raw = persistedState as Partial<UiState> & {

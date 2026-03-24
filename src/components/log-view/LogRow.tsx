@@ -1,5 +1,5 @@
 import { tokens } from "@fluentui/react-components";
-import type { LogEntry, ErrorCodeSpan } from "../../types/log";
+import type { LogEntry, ErrorCodeSpan, Severity } from "../../types/log";
 import type { LogSeverityPalette } from "../../lib/constants";
 import type { ColumnDefinition } from "../../lib/column-config";
 import { formatLogEntryTimestamp } from "../../lib/date-time-format";
@@ -180,6 +180,20 @@ function renderMessageWithSpans(
   return <>{segments}</>;
 }
 
+function getSeverityDotColor(
+  severity: Severity,
+  palette: LogSeverityPalette
+): string {
+  switch (severity) {
+    case "Error":
+      return palette.error.text;
+    case "Warning":
+      return palette.warning.text;
+    default:
+      return tokens.colorNeutralForeground4;
+  }
+}
+
 const detailCellStyle: React.CSSProperties = {
   overflow: "hidden",
   textOverflow: "ellipsis",
@@ -226,6 +240,37 @@ export function LogRow({
       onClick={() => onClick(entry.id)}
     >
       {visibleColumns.map((col) => {
+        // Severity column: colored dot indicator
+        if (col.id === "severity") {
+          return (
+            <div
+              key="severity"
+              aria-label={entry.severity}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                overflow: "hidden",
+                padding: "1px 2px",
+              }}
+            >
+              <span
+                style={{
+                  display: "inline-block",
+                  width: 8,
+                  height: 8,
+                  borderRadius: "50%",
+                  backgroundColor: getSeverityDotColor(
+                    entry.severity,
+                    severityPalette
+                  ),
+                  flexShrink: 0,
+                }}
+              />
+            </div>
+          );
+        }
+
         // Message column: rich rendering with highlights and error code spans
         if (col.id === "message") {
           return (

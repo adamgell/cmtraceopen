@@ -2,10 +2,11 @@ import type { LogEntry, ParserKind } from "../types/log";
 
 /** Unique identifier for each possible log viewer column. */
 export type ColumnId =
+  | "severity"
   | "lineNumber"
+  | "dateTime"
   | "message"
   | "component"
-  | "dateTime"
   | "thread"
   | "sourceFile"
   | "filePath";
@@ -14,35 +15,60 @@ export type ColumnId =
 export interface ColumnDefinition {
   id: ColumnId;
   label: string;
-  /** CSS grid column width: "180px" or "minmax(0, 1fr)" */
-  width: string;
+  /** Default width in pixels. -1 means flex (fills remaining space). */
+  defaultWidth: number;
+  /** Minimum width in pixels when resizing. */
+  minWidth: number;
   /** True only for the message column (takes remaining space). */
   isFlex: boolean;
-  /** True = hidden when showDetails is off. Only "message" is false. */
+  /** True = hidden when showDetails is off. Severity is always visible. */
   isDetail: boolean;
   /**
    * Read the display value from a LogEntry.
    * Returns null when the field is not populated by the parser.
-   * Note: "dateTime" uses formatLogEntryTimestamp() instead of this accessor,
-   * and "message" has special rich rendering — both are handled in the view layer.
+   * Note: "severity" renders a colored dot, "dateTime" uses formatLogEntryTimestamp(),
+   * and "message" has special rich rendering — all handled in the view layer.
    */
   accessor: (entry: LogEntry) => string | number | null;
 }
 
-/** Ordered catalog of every possible column. Rendering order follows this array. */
+/**
+ * Ordered catalog of every possible column.
+ * Default rendering order follows this array (severity first, timestamp before message).
+ */
 export const ALL_COLUMNS: readonly ColumnDefinition[] = [
+  {
+    id: "severity",
+    label: "",
+    defaultWidth: 28,
+    minWidth: 24,
+    isFlex: false,
+    isDetail: false,
+    accessor: (e) => e.severity,
+  },
   {
     id: "lineNumber",
     label: "#",
-    width: "60px",
+    defaultWidth: 60,
+    minWidth: 40,
     isFlex: false,
     isDetail: true,
     accessor: (e) => e.lineNumber,
   },
   {
+    id: "dateTime",
+    label: "Date/Time",
+    defaultWidth: 200,
+    minWidth: 100,
+    isFlex: false,
+    isDetail: true,
+    accessor: () => null, // handled via formatLogEntryTimestamp() in view layer
+  },
+  {
     id: "message",
     label: "Log Text",
-    width: "minmax(0, 1fr)",
+    defaultWidth: -1,
+    minWidth: 100,
     isFlex: true,
     isDetail: false,
     accessor: (e) => e.message,
@@ -50,23 +76,17 @@ export const ALL_COLUMNS: readonly ColumnDefinition[] = [
   {
     id: "component",
     label: "Component",
-    width: "180px",
+    defaultWidth: 180,
+    minWidth: 60,
     isFlex: false,
     isDetail: true,
     accessor: (e) => e.component,
   },
   {
-    id: "dateTime",
-    label: "Date/Time",
-    width: "200px",
-    isFlex: false,
-    isDetail: true,
-    accessor: () => null, // handled via formatLogEntryTimestamp() in view layer
-  },
-  {
     id: "thread",
     label: "Thread",
-    width: "120px",
+    defaultWidth: 120,
+    minWidth: 60,
     isFlex: false,
     isDetail: true,
     accessor: (e) => e.threadDisplay,
@@ -74,7 +94,8 @@ export const ALL_COLUMNS: readonly ColumnDefinition[] = [
   {
     id: "sourceFile",
     label: "Source",
-    width: "160px",
+    defaultWidth: 160,
+    minWidth: 60,
     isFlex: false,
     isDetail: true,
     accessor: (e) => e.sourceFile,
@@ -82,7 +103,8 @@ export const ALL_COLUMNS: readonly ColumnDefinition[] = [
   {
     id: "filePath",
     label: "File",
-    width: "180px",
+    defaultWidth: 180,
+    minWidth: 60,
     isFlex: false,
     isDetail: true,
     accessor: (e) => e.filePath.split(/[\\/]/).pop() ?? e.filePath,
@@ -94,25 +116,30 @@ const COLUMN_BY_ID = new Map<ColumnId, ColumnDefinition>(
   ALL_COLUMNS.map((c) => [c.id, c])
 );
 
-/** Which columns each parser populates (in display order). */
+export function getColumnDef(id: ColumnId): ColumnDefinition | undefined {
+  return COLUMN_BY_ID.get(id);
+}
+
+/** Which columns each parser populates (in display order — severity first, timestamp before message). */
 const PARSER_COLUMN_MAP: Record<ParserKind, ColumnId[]> = {
-  ccm: ["message", "component", "dateTime", "thread", "sourceFile"],
-  simple: ["message", "component", "dateTime", "thread"],
-  dism: ["message", "component", "dateTime"],
-  panther: ["message", "component", "dateTime"],
-  cbs: ["message", "component", "dateTime"],
-  reportingEvents: ["message", "component", "dateTime"],
-  timestamped: ["message", "dateTime"],
-  plain: ["message"],
-  msi: ["message", "component", "dateTime", "thread"],
-  psadtLegacy: ["message", "component", "dateTime", "sourceFile"],
+  ccm: ["severity", "dateTime", "message", "component", "thread", "sourceFile"],
+  simple: ["severity", "dateTime", "message", "component", "thread"],
+  dism: ["severity", "dateTime", "message", "component"],
+  panther: ["severity", "dateTime", "message", "component"],
+  cbs: ["severity", "dateTime", "message", "component"],
+  reportingEvents: ["severity", "dateTime", "message", "component"],
+  timestamped: ["severity", "dateTime", "message"],
+  plain: ["severity", "message"],
+  msi: ["severity", "dateTime", "message", "component", "thread"],
+  psadtLegacy: ["severity", "dateTime", "message", "component", "sourceFile"],
 };
 
-/** Default columns used before any file is loaded. Matches legacy hardcoded layout. */
+/** Default columns used before any file is loaded. */
 export const DEFAULT_COLUMNS: ColumnId[] = [
+  "severity",
+  "dateTime",
   "message",
   "component",
-  "dateTime",
   "thread",
 ];
 
@@ -123,7 +150,7 @@ export function getColumnsForParser(parser: ParserKind): ColumnId[] {
 
 /** Get the union of columns for an aggregate folder view (mixed parsers). */
 export function getColumnsForAggregate(parsers: ParserKind[]): ColumnId[] {
-  const unionSet = new Set<ColumnId>(["message", "filePath"]);
+  const unionSet = new Set<ColumnId>(["severity", "message", "filePath"]);
   for (const parser of parsers) {
     for (const col of getColumnsForParser(parser)) {
       unionSet.add(col);
@@ -134,8 +161,28 @@ export function getColumnsForAggregate(parsers: ParserKind[]): ColumnId[] {
 }
 
 /**
+ * Apply a user-specified column order to the active column set.
+ * Filters the user order to only include columns that are active (parser-relevant).
+ * Any active columns not in the user order are appended at the end.
+ */
+export function applyColumnOrder(
+  activeColumns: ColumnId[],
+  userOrder: ColumnId[] | null
+): ColumnId[] {
+  if (!userOrder) return activeColumns;
+  const activeSet = new Set(activeColumns);
+  // Start with user-ordered columns that are active
+  const ordered = userOrder.filter((id) => activeSet.has(id));
+  // Append any active columns not in user order
+  for (const id of activeColumns) {
+    if (!ordered.includes(id)) ordered.push(id);
+  }
+  return ordered;
+}
+
+/**
  * Filter active columns by showDetails toggle, returning full ColumnDefinition objects.
- * When showDetails is off, only non-detail columns (message) are returned.
+ * When showDetails is off, only non-detail columns (severity, message) are returned.
  */
 export function getVisibleColumns(
   activeColumns: ColumnId[],
@@ -151,9 +198,19 @@ export function getVisibleColumns(
   return result;
 }
 
-/** Build a CSS grid-template-columns string from visible column definitions. */
+/**
+ * Build a CSS grid-template-columns string from visible column definitions.
+ * Uses width overrides from user preferences when available, otherwise defaults.
+ */
 export function buildGridTemplateColumns(
-  columns: ColumnDefinition[]
+  columns: ColumnDefinition[],
+  widthOverrides?: Record<string, number>
 ): string {
-  return columns.map((c) => c.width).join(" ");
+  return columns
+    .map((c) => {
+      if (c.isFlex) return "minmax(0, 1fr)";
+      const w = widthOverrides?.[c.id] ?? c.defaultWidth;
+      return `${w}px`;
+    })
+    .join(" ");
 }

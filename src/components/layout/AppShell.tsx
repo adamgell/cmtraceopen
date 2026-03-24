@@ -44,6 +44,8 @@ function buildFilterRunSignature(entries: LogEntry[], clauses: FilterClause[]): 
 
 export function AppShell() {
   const activeView = useUiStore((s) => s.activeView);
+  const sidebarCollapsed = useUiStore((s) => s.sidebarCollapsed);
+  const toggleSidebar = useUiStore((s) => s.toggleSidebar);
   const showInfoPane = useUiStore((s) => s.showInfoPane);
   const infoPaneHeight = useUiStore((s) => s.infoPaneHeight);
   const showFindDialog = useUiStore((s) => s.showFindDialog);
@@ -347,7 +349,47 @@ export function AppShell() {
           backgroundColor: tokens.colorNeutralBackground2,
         }}
       >
-        <FileSidebar width={FILE_SIDEBAR_RECOMMENDED_WIDTH} activeView={activeView} />
+        {sidebarCollapsed ? (
+          <div
+            style={{
+              width: 36,
+              minWidth: 36,
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              borderRight: `1px solid ${tokens.colorNeutralStroke2}`,
+              backgroundColor: tokens.colorNeutralBackground2,
+              paddingTop: 8,
+            }}
+          >
+            <button
+              onClick={toggleSidebar}
+              title="Expand sidebar (Ctrl+B)"
+              aria-label="Expand sidebar"
+              style={{
+                background: "none",
+                border: "none",
+                cursor: "pointer",
+                padding: 6,
+                borderRadius: 4,
+                color: tokens.colorNeutralForeground2,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+              }}
+            >
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                <path d="M6 3l5 5-5 5V3z" />
+              </svg>
+            </button>
+          </div>
+        ) : (
+          <FileSidebar
+            width={FILE_SIDEBAR_RECOMMENDED_WIDTH}
+            activeView={activeView}
+            onCollapse={toggleSidebar}
+          />
+        )}
 
         <div
           style={{

@@ -14,8 +14,12 @@ import { useFilterStore } from "../../stores/filter-store";
 import { LogRow } from "./LogRow";
 import type { ErrorCodeSpan } from "../../types/log";
 import {
+  applyColumnOrder,
   getVisibleColumns,
   buildGridTemplateColumns,
+  getColumnDef,
+  type ColumnId,
+  type ColumnDefinition,
 } from "../../lib/column-config";
 import { getThemeById } from "../../lib/themes";
 import {
@@ -39,6 +43,12 @@ export function LogListView() {
   );
   const filteredIds = useFilterStore((s) => s.filteredIds);
 
+  // Column preferences from ui-store (persisted)
+  const columnWidths = useUiStore((s) => s.columnWidths);
+  const columnOrder = useUiStore((s) => s.columnOrder);
+  const setColumnWidth = useUiStore((s) => s.setColumnWidth);
+  const setColumnOrder = useUiStore((s) => s.setColumnOrder);
+
   const [hasKeyboardFocus, setHasKeyboardFocus] = useState(false);
   const [scrollbarWidth, setScrollbarWidth] = useState(0);
 
@@ -56,13 +66,19 @@ export function LogListView() {
 
   const parentRef = useRef<HTMLDivElement>(null);
   const isAtBottomRef = useRef(true);
+
+  // Apply user column order, then filter by showDetails
+  const orderedColumns = useMemo(
+    () => applyColumnOrder(activeColumns, columnOrder),
+    [activeColumns, columnOrder]
+  );
   const visibleColumns = useMemo(
-    () => getVisibleColumns(activeColumns, showDetails),
-    [activeColumns, showDetails]
+    () => getVisibleColumns(orderedColumns, showDetails),
+    [orderedColumns, showDetails]
   );
   const gridTemplateColumns = useMemo(
-    () => buildGridTemplateColumns(visibleColumns),
-    [visibleColumns]
+    () => buildGridTemplateColumns(visibleColumns, columnWidths),
+    [visibleColumns, columnWidths]
   );
   const listMetrics = useMemo(
     () => getLogListMetrics(logListFontSize),
@@ -70,7 +86,6 @@ export function LogListView() {
   );
 
   const handleErrorCodeClick = useCallback((span: ErrorCodeSpan) => {
-    // Open info pane if not already open
     if (!useUiStore.getState().showInfoPane) {
       useUiStore.getState().toggleInfoPane();
     }
@@ -91,11 +106,7 @@ export function LogListView() {
 
   const handleScroll = useCallback(() => {
     const element = parentRef.current;
-
-    if (!element) {
-      return;
-    }
-
+    if (!element) return;
     const threshold = 50;
     isAtBottomRef.current =
       element.scrollHeight - element.scrollTop - element.clientHeight < threshold;
@@ -103,12 +114,10 @@ export function LogListView() {
 
   const updateScrollbarWidth = useCallback(() => {
     const element = parentRef.current;
-
     if (!element) {
       setScrollbarWidth(0);
       return;
     }
-
     setScrollbarWidth(element.offsetWidth - element.clientWidth);
   }, []);
 
@@ -123,37 +132,114 @@ export function LogListView() {
     ) {
       virtualizer.scrollToIndex(displayEntries.length - 1, { align: "end" });
     }
-
     prevCount.current = displayEntries.length;
   }, [displayEntries.length, isPaused, virtualizer]);
 
   useEffect(() => {
-    if (selectedEntryIndex < 0) {
-      return;
-    }
-
+    if (selectedEntryIndex < 0) return;
     virtualizer.scrollToIndex(selectedEntryIndex, { align: "center" });
   }, [selectedEntryIndex, virtualizer]);
 
   useLayoutEffect(() => {
     updateScrollbarWidth();
-
     const element = parentRef.current;
-
-    if (!element || typeof ResizeObserver === "undefined") {
-      return;
-    }
-
-    const observer = new ResizeObserver(() => {
-      updateScrollbarWidth();
-    });
-
+    if (!element || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => updateScrollbarWidth());
     observer.observe(element);
-
-    return () => {
-      observer.disconnect();
-    };
+    return () => observer.disconnect();
   }, [displayEntries.length, showDetails, updateScrollbarWidth]);
+
+  // ── Column resize ────────────────────────────────────────────────────
+  const resizeRef = useRef<{
+    colId: ColumnId;
+    startX: number;
+    startWidth: number;
+  } | null>(null);
+
+  const onResizeStart = useCallback(
+    (colId: ColumnId, e: React.MouseEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const def = getColumnDef(colId);
+      const currentWidth = columnWidths[colId] ?? def?.defaultWidth ?? 100;
+      resizeRef.current = { colId, startX: e.clientX, startWidth: currentWidth };
+    },
+    [columnWidths]
+  );
+
+  useEffect(() => {
+    const onMouseMove = (e: MouseEvent) => {
+      if (!resizeRef.current) return;
+      const { colId, startX, startWidth } = resizeRef.current;
+      const def = getColumnDef(colId);
+      const minW = def?.minWidth ?? 40;
+      const newWidth = Math.max(minW, startWidth + (e.clientX - startX));
+      setColumnWidth(colId, newWidth);
+    };
+    const onMouseUp = () => {
+      resizeRef.current = null;
+    };
+    window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("mouseup", onMouseUp);
+    return () => {
+      window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("mouseup", onMouseUp);
+    };
+  }, [setColumnWidth]);
+
+  // ── Column drag-to-reorder ───────────────────────────────────────────
+  const [dragState, setDragState] = useState<{
+    draggedIndex: number;
+    dropTarget: { index: number; side: "left" | "right" } | null;
+  } | null>(null);
+
+  const onDragStart = useCallback(
+    (index: number, e: React.DragEvent) => {
+      e.dataTransfer.effectAllowed = "move";
+      e.dataTransfer.setData("text/plain", String(index));
+      setDragState({ draggedIndex: index, dropTarget: null });
+    },
+    []
+  );
+
+  const onDragOver = useCallback(
+    (index: number, e: React.DragEvent) => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "move";
+      if (!dragState) return;
+      const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+      const midX = rect.left + rect.width / 2;
+      const side = e.clientX < midX ? "left" : "right";
+      setDragState((prev) =>
+        prev ? { ...prev, dropTarget: { index, side } } : null
+      );
+    },
+    [dragState]
+  );
+
+  const onDrop = useCallback(
+    (e: React.DragEvent) => {
+      e.preventDefault();
+      if (!dragState?.dropTarget) return;
+      const { draggedIndex, dropTarget } = dragState;
+      const cols = [...visibleColumns.map((c) => c.id)];
+      const [dragged] = cols.splice(draggedIndex, 1);
+      let insertAt = dropTarget.index;
+      if (draggedIndex < dropTarget.index) insertAt--;
+      if (dropTarget.side === "right") insertAt++;
+      cols.splice(insertAt, 0, dragged);
+      // Build full order including hidden detail columns
+      const fullOrder = [...cols];
+      for (const id of orderedColumns) {
+        if (!fullOrder.includes(id)) fullOrder.push(id);
+      }
+      setColumnOrder(fullOrder);
+      setDragState(null);
+    },
+    [dragState, visibleColumns, orderedColumns, setColumnOrder]
+  );
+
+  const onDragEnd = useCallback(() => setDragState(null), []);
 
   const activeRowDomId =
     selectedEntryIndex >= 0
@@ -169,6 +255,7 @@ export function LogListView() {
         overflow: "hidden",
       }}
     >
+      {/* Column header with resize handles and drag-to-reorder */}
       <div
         style={{
           display: "grid",
@@ -185,23 +272,24 @@ export function LogListView() {
           paddingRight: `${scrollbarWidth}px`,
         }}
       >
-        {visibleColumns.map((col) => (
-          <div
+        {visibleColumns.map((col, i) => (
+          <HeaderCell
             key={col.id}
-            style={{
-              ...(col.isFlex ? { minWidth: 0 } : {}),
-              padding: "1px 4px",
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              ...(col.isFlex
-                ? {}
-                : {
-                    borderLeft: `1px solid ${tokens.colorNeutralStroke2}`,
-                  }),
-            }}
-          >
-            {col.label}
-          </div>
+            col={col}
+            index={i}
+            isFirst={i === 0}
+            isDragged={dragState?.draggedIndex === i}
+            dropIndicator={
+              dragState?.dropTarget?.index === i
+                ? dragState.dropTarget.side
+                : null
+            }
+            onResizeStart={onResizeStart}
+            onDragStart={onDragStart}
+            onDragOver={onDragOver}
+            onDrop={onDrop}
+            onDragEnd={onDragEnd}
+          />
         ))}
       </div>
 
@@ -233,7 +321,6 @@ export function LogListView() {
         >
           {virtualizer.getVirtualItems().map((virtualRow) => {
             const entry = displayEntries[virtualRow.index];
-
             return (
               <div
                 key={entry.id}
@@ -265,6 +352,87 @@ export function LogListView() {
           })}
         </div>
       </div>
+    </div>
+  );
+}
+
+// ── Header cell with resize handle + drag-to-reorder ─────────────────
+
+interface HeaderCellProps {
+  col: ColumnDefinition;
+  index: number;
+  isFirst: boolean;
+  isDragged: boolean;
+  dropIndicator: "left" | "right" | null;
+  onResizeStart: (colId: ColumnId, e: React.MouseEvent) => void;
+  onDragStart: (index: number, e: React.DragEvent) => void;
+  onDragOver: (index: number, e: React.DragEvent) => void;
+  onDrop: (e: React.DragEvent) => void;
+  onDragEnd: () => void;
+}
+
+function HeaderCell({
+  col,
+  index,
+  isFirst,
+  isDragged,
+  dropIndicator,
+  onResizeStart,
+  onDragStart,
+  onDragOver,
+  onDrop,
+  onDragEnd,
+}: HeaderCellProps) {
+  const [resizeHover, setResizeHover] = useState(false);
+
+  return (
+    <div
+      draggable
+      onDragStart={(e) => onDragStart(index, e)}
+      onDragOver={(e) => onDragOver(index, e)}
+      onDrop={onDrop}
+      onDragEnd={onDragEnd}
+      style={{
+        position: "relative",
+        ...(col.isFlex ? { minWidth: 0 } : {}),
+        padding: "1px 4px",
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+        cursor: "grab",
+        opacity: isDragged ? 0.5 : 1,
+        ...(isFirst
+          ? {}
+          : { borderLeft: `1px solid ${tokens.colorNeutralStroke2}` }),
+        // Drop indicator
+        ...(dropIndicator === "left"
+          ? { boxShadow: `inset 3px 0 0 ${tokens.colorBrandStroke1}` }
+          : dropIndicator === "right"
+            ? { boxShadow: `inset -3px 0 0 ${tokens.colorBrandStroke1}` }
+            : {}),
+      }}
+    >
+      {col.label}
+
+      {/* Resize handle — not on flex (message) column */}
+      {!col.isFlex && (
+        <div
+          onMouseDown={(e) => onResizeStart(col.id, e)}
+          onMouseEnter={() => setResizeHover(true)}
+          onMouseLeave={() => setResizeHover(false)}
+          style={{
+            position: "absolute",
+            right: 0,
+            top: 0,
+            bottom: 0,
+            width: 5,
+            cursor: "col-resize",
+            backgroundColor: resizeHover
+              ? tokens.colorBrandStroke1
+              : "transparent",
+            zIndex: 1,
+          }}
+        />
+      )}
     </div>
   );
 }

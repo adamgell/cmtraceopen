@@ -28,6 +28,7 @@ export const FILE_SIDEBAR_RECOMMENDED_WIDTH = 280;
 interface FileSidebarProps {
   width?: number | string;
   activeView: WorkspaceId;
+  onCollapse?: () => void;
 }
 
 function isFolderLikeSource(source: LogSource | null): boolean {
@@ -940,7 +941,7 @@ function SidebarFooter() {
   );
 }
 
-export function FileSidebar({ width = FILE_SIDEBAR_RECOMMENDED_WIDTH, activeView }: FileSidebarProps) {
+export function FileSidebar({ width = FILE_SIDEBAR_RECOMMENDED_WIDTH, activeView, onCollapse }: FileSidebarProps) {
   const logListFontSize = useUiStore((s) => s.logListFontSize);
   const metrics = useMemo(() => getLogListMetrics(logListFontSize), [logListFontSize]);
 
@@ -960,6 +961,31 @@ export function FileSidebar({ width = FILE_SIDEBAR_RECOMMENDED_WIDTH, activeView
         fontFamily: LOG_UI_FONT_FAMILY,
       }}
     >
+      {/* Collapse button */}
+      {onCollapse && (
+        <div style={{ display: "flex", justifyContent: "flex-end", padding: "4px 4px 0" }}>
+          <button
+            onClick={onCollapse}
+            title="Collapse sidebar (Ctrl+B)"
+            aria-label="Collapse sidebar"
+            style={{
+              background: "none",
+              border: "none",
+              cursor: "pointer",
+              padding: 4,
+              borderRadius: 4,
+              color: tokens.colorNeutralForeground3,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+              <path d="M10 3L5 8l5 5V3z" />
+            </svg>
+          </button>
+        </div>
+      )}
       {activeView === "log" ? <LogSidebar /> : isIntuneWorkspace(activeView) ? <IntuneSidebar /> : <DsregcmdSidebar />}
       {activeView === "log" && <SidebarFooter />}
     </aside>
