@@ -1526,6 +1526,42 @@ fn macos_known_log_sources() -> Vec<KnownSourceMetadata> {
             },
             None,
         ),
+        // --- macOS wifi.log ---
+        macos_known_source(
+            "macos-wifi-log",
+            "Wi-Fi Log",
+            "macOS Wi-Fi diagnostic log",
+            KnownSourcePathKind::File,
+            "/var/log/wifi.log",
+            &["wifi.log"],
+            KnownSourceGroupingMetadata {
+                family_id: "macos-system".to_string(),
+                family_label: "macOS System".to_string(),
+                group_id: "system-logs".to_string(),
+                group_label: "System Logs".to_string(),
+                group_order: 30,
+                source_order: 30,
+            },
+            None,
+        ),
+        // --- macOS appfirewall.log ---
+        macos_known_source(
+            "macos-appfirewall-log",
+            "Application Firewall Log",
+            "macOS application firewall log",
+            KnownSourcePathKind::File,
+            "/var/log/appfirewall.log",
+            &["appfirewall.log"],
+            KnownSourceGroupingMetadata {
+                family_id: "macos-system".to_string(),
+                family_label: "macOS System".to_string(),
+                group_id: "system-logs".to_string(),
+                group_label: "System Logs".to_string(),
+                group_order: 30,
+                source_order: 40,
+            },
+            None,
+        ),
         // --- Microsoft Defender logs ---
         macos_known_source(
             "macos-defender-logs",
