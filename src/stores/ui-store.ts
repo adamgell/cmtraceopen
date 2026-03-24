@@ -9,6 +9,15 @@ import {
 import type { ThemeId } from "../lib/themes/types";
 import { DEFAULT_THEME_ID } from "../lib/themes";
 
+export interface ErrorLookupHistoryEntry {
+  codeHex: string;
+  codeDecimal: string;
+  description: string;
+  category: string;
+  found: boolean;
+  timestamp: number;
+}
+
 export type IntuneWorkspaceId = "intune" | "new-intune";
 export type WorkspaceId = "log" | IntuneWorkspaceId | "dsregcmd" | "macos-diag";
 export type AppView = WorkspaceId;
@@ -83,6 +92,7 @@ interface UiState {
   logListFontSize: number;
   logDetailsFontSize: number;
   themeId: ThemeId;
+  errorLookupHistory: ErrorLookupHistoryEntry[];
 
   setActiveWorkspace: (workspace: WorkspaceId) => void;
   setActiveView: (view: AppView) => void;
@@ -106,6 +116,8 @@ interface UiState {
   resetLogDetailsFontSize: () => void;
   setThemeId: (id: ThemeId) => void;
   resetLogAccessibilityPreferences: () => void;
+  addErrorLookupHistoryEntry: (entry: ErrorLookupHistoryEntry) => void;
+  clearErrorLookupHistory: () => void;
   closeTransientDialogs: (trigger: string) => void;
 }
 
@@ -160,6 +172,7 @@ export const useUiStore = create<UiState>()(
       logListFontSize: DEFAULT_LOG_LIST_FONT_SIZE,
       logDetailsFontSize: DEFAULT_LOG_DETAILS_FONT_SIZE,
       themeId: DEFAULT_THEME_ID,
+      errorLookupHistory: [],
 
       setActiveWorkspace: (workspace) => {
         const previousWorkspace = get().activeWorkspace;
@@ -234,6 +247,14 @@ export const useUiStore = create<UiState>()(
           logDetailsFontSize: DEFAULT_LOG_DETAILS_FONT_SIZE,
           themeId: DEFAULT_THEME_ID,
         }),
+      addErrorLookupHistoryEntry: (entry) =>
+        set((state) => ({
+          errorLookupHistory: [
+            entry,
+            ...state.errorLookupHistory.filter((e) => e.codeHex !== entry.codeHex),
+          ].slice(0, 10),
+        })),
+      clearErrorLookupHistory: () => set({ errorLookupHistory: [] }),
       closeTransientDialogs: (trigger) => {
         const state = get();
 
