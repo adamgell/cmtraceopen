@@ -9,6 +9,7 @@ import type {
   LogSource,
   ParserSelectionInfo,
 } from "../types/log";
+import { type ColumnId, DEFAULT_COLUMNS } from "../lib/column-config";
 
 /**
  * Snapshot of parsed file state — cached in memory so tab switches
@@ -22,6 +23,7 @@ export interface TabEntrySnapshot {
   byteOffset: number;
   selectedSourceFilePath: string | null;
   sourceOpenMode: SourceOpenMode;
+  activeColumns: ColumnId[];
 }
 
 /** Module-level cache: filePath → parsed snapshot. Lives outside Zustand to avoid triggering re-renders. */
@@ -458,6 +460,8 @@ interface LogState {
   findLastMatchId: number | null;
   /** Byte offset in the file after initial parse — used to start tailing */
   byteOffset: number;
+  /** Which columns to show — derived from detected parser, not a user preference. */
+  activeColumns: ColumnId[];
   /** Folder loading progress (0–1) while progressive loading is active, null otherwise. */
   folderLoadProgress: number | null;
   /** Name of the file currently being parsed during folder loading. */
@@ -487,6 +491,7 @@ interface LogState {
   setSourceStatus: (status: SourceStatus) => void;
   clearSourceStatus: () => void;
   setByteOffset: (offset: number) => void;
+  setActiveColumns: (columns: ColumnId[]) => void;
   setSourceOpenMode: (mode: SourceOpenMode) => void;
   setAggregateFiles: (files: AggregateParsedFileResult[]) => void;
   setHighlightText: (text: string) => void;
@@ -593,6 +598,7 @@ export const useLogStore = create<LogState>((set, get) => ({
   folderLoadCurrentFile: null,
   folderLoadTotalFiles: null,
   folderLoadCompletedFiles: null,
+  activeColumns: DEFAULT_COLUMNS,
 
   hasActiveSource: () => {
     const state = get();
@@ -666,6 +672,7 @@ export const useLogStore = create<LogState>((set, get) => ({
       },
     }),
   setByteOffset: (offset) => set({ byteOffset: offset }),
+  setActiveColumns: (columns) => set({ activeColumns: columns }),
   setHighlightText: (text) => set({ highlightText: text }),
   setHighlightCaseSensitive: (sensitive) =>
     set({ highlightCaseSensitive: sensitive }),
@@ -696,6 +703,7 @@ export const useLogStore = create<LogState>((set, get) => ({
       openFilePath: null,
       selectedSourceFilePath: null,
       aggregateFiles: [],
+      activeColumns: DEFAULT_COLUMNS,
       byteOffset: 0,
       findStatusText: "",
       findLastMatchId: null,
@@ -717,6 +725,7 @@ export const useLogStore = create<LogState>((set, get) => ({
       knownSourceToolbarGroups: [],
       selectedSourceFilePath: null,
       aggregateFiles: [],
+      activeColumns: DEFAULT_COLUMNS,
       sourceStatus: {
         kind: "idle",
         message: "Ready",

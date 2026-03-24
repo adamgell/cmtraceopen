@@ -7,6 +7,7 @@ import {
   stopTail,
 } from "./commands";
 import { useLogStore, setCachedTabSnapshot, getCachedTabSnapshot } from "../stores/log-store";
+import { getColumnsForParser, getColumnsForAggregate } from "./column-config";
 import { useUiStore, type TabSourceContext } from "../stores/ui-store";
 import type {
   FolderEntry,
@@ -138,6 +139,8 @@ function applyParseResultToStore(
   state.setParserSelection(result.parserSelection);
   state.setTotalLines(result.totalLines);
   state.setByteOffset(result.byteOffset);
+  const columns = getColumnsForParser(result.parserSelection.parser);
+  state.setActiveColumns(columns);
   state.selectEntry(null);
   state.setSourceStatus({
     kind: "loaded",
@@ -153,6 +156,7 @@ function applyParseResultToStore(
     byteOffset: result.byteOffset,
     selectedSourceFilePath: selectedFilePath,
     sourceOpenMode: "single-file",
+    activeColumns: columns,
   });
 
   // Open (or switch to) a tab for the loaded file
@@ -219,6 +223,7 @@ async function loadFolderProgressive(
 
   // Cache each file's entries for instant tab switching
   for (const result of results) {
+    const fileColumns = getColumnsForParser(result.parserSelection.parser);
     setCachedTabSnapshot(result.filePath, {
       entries: result.entries,
       formatDetected: result.formatDetected,
@@ -227,6 +232,7 @@ async function loadFolderProgressive(
       byteOffset: result.byteOffset,
       selectedSourceFilePath: result.filePath,
       sourceOpenMode: "single-file",
+      activeColumns: fileColumns,
     });
   }
 
@@ -263,6 +269,11 @@ async function loadFolderProgressive(
   state.setParserSelection(null);
   state.setTotalLines(totalLines);
   state.setByteOffset(0);
+  // Derive aggregate columns from the union of all parsers + filePath
+  const aggregateColumns = getColumnsForAggregate(
+    results.map((r) => r.parserSelection.parser)
+  );
+  state.setActiveColumns(aggregateColumns);
   state.selectEntry(null);
   state.setFolderLoadProgress(null);
   state.setSourceStatus({
@@ -424,6 +435,7 @@ export async function loadSelectedLogFile(
     state.setTotalLines(cached.totalLines);
     state.setByteOffset(cached.byteOffset);
     state.setSourceOpenMode(cached.sourceOpenMode);
+    state.setActiveColumns(cached.activeColumns);
     state.selectEntry(null);
     state.setSourceStatus({
       kind: "loaded",
@@ -506,6 +518,7 @@ export async function switchToTab(
     logState.setParserSelection(cached.parserSelection);
     logState.setTotalLines(cached.totalLines);
     logState.setByteOffset(cached.byteOffset);
+    logState.setActiveColumns(cached.activeColumns);
     logState.setAggregateFiles([]);
     logState.selectEntry(null);
     logState.setSourceStatus({

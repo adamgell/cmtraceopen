@@ -14,9 +14,9 @@ import { useFilterStore } from "../../stores/filter-store";
 import { LogRow } from "./LogRow";
 import type { ErrorCodeSpan } from "../../types/log";
 import {
-  COLUMN_NAMES,
-  getLogViewGridTemplateColumns,
-} from "../../lib/constants";
+  getVisibleColumns,
+  buildGridTemplateColumns,
+} from "../../lib/column-config";
 import { getThemeById } from "../../lib/themes";
 import {
   getLogListMetrics,
@@ -52,11 +52,17 @@ export function LogListView() {
     [displayEntries, selectedId]
   );
 
+  const activeColumns = useLogStore((s) => s.activeColumns);
+
   const parentRef = useRef<HTMLDivElement>(null);
   const isAtBottomRef = useRef(true);
+  const visibleColumns = useMemo(
+    () => getVisibleColumns(activeColumns, showDetails),
+    [activeColumns, showDetails]
+  );
   const gridTemplateColumns = useMemo(
-    () => getLogViewGridTemplateColumns(showDetails),
-    [showDetails]
+    () => buildGridTemplateColumns(visibleColumns),
+    [visibleColumns]
   );
   const listMetrics = useMemo(
     () => getLogListMetrics(logListFontSize),
@@ -179,50 +185,24 @@ export function LogListView() {
           paddingRight: `${scrollbarWidth}px`,
         }}
       >
-        <div
-          style={{
-            minWidth: 0,
-            padding: "1px 4px",
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-          }}
-        >
-          {COLUMN_NAMES.logText}
-        </div>
-        {showDetails && (
-          <>
-            <div
-              style={{
-                padding: "1px 4px",
-                borderLeft: `1px solid ${tokens.colorNeutralStroke2}`,
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-              }}
-            >
-              {COLUMN_NAMES.component}
-            </div>
-            <div
-              style={{
-                padding: "1px 4px",
-                borderLeft: `1px solid ${tokens.colorNeutralStroke2}`,
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-              }}
-            >
-              {COLUMN_NAMES.dateTime}
-            </div>
-            <div
-              style={{
-                padding: "1px 4px",
-                borderLeft: `1px solid ${tokens.colorNeutralStroke2}`,
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-              }}
-            >
-              {COLUMN_NAMES.thread}
-            </div>
-          </>
-        )}
+        {visibleColumns.map((col) => (
+          <div
+            key={col.id}
+            style={{
+              ...(col.isFlex ? { minWidth: 0 } : {}),
+              padding: "1px 4px",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              ...(col.isFlex
+                ? {}
+                : {
+                    borderLeft: `1px solid ${tokens.colorNeutralStroke2}`,
+                  }),
+            }}
+          >
+            {col.label}
+          </div>
+        ))}
       </div>
 
       <div
@@ -270,7 +250,8 @@ export function LogListView() {
                   entry={entry}
                   rowDomId={`log-list-row-${entry.id}`}
                   isSelected={entry.id === selectedId}
-                  showDetails={showDetails}
+                  visibleColumns={visibleColumns}
+                  gridTemplateColumns={gridTemplateColumns}
                   listFontSize={listMetrics.fontSize}
                   rowLineHeight={listMetrics.rowLineHeight}
                   severityPalette={severityPalette}
