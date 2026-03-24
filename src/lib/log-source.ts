@@ -167,13 +167,19 @@ function clearSelectedFileState(source: LogSource, entries: FolderEntry[]): void
   state.clearActiveFile();
 }
 
-/** Max concurrent IPC file-parse calls during folder loading. */
-const FOLDER_LOAD_CONCURRENCY = 4;
+/** Files per batch — each batch runs sequentially (one IPC at a time)
+ *  with a UI yield between batches so the browser can paint. */
+const FOLDER_LOAD_BATCH_SIZE = 2;
+
+/** Yield to the browser event loop so it can paint / respond to input. */
+function yieldToUI(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
 
 /**
- * Progressive folder loader: parses files concurrently (up to FOLDER_LOAD_CONCURRENCY
- * at a time) via individual IPC calls, driving a visible ProgressBar + status text
- * in real time. Each file is cached as it completes for instant tab switching.
+ * Progressive folder loader: parses files in small sequential batches,
+ * yielding to the UI thread between batches so the progress bar animates
+ * and the window stays responsive. Each file is cached on completion.
  */
 async function loadFolderProgressive(
   source: LogSource,
@@ -200,89 +206,81 @@ async function loadFolderProgressive(
     return;
   }
 
-  // Signal the UI to show the progress bar
+  // Show the progress overlay immediately
   state.setFolderLoadProgress({ current: 0, total: fileEntries.length, currentFile: "" });
   state.setSourceStatus({
     kind: "loading",
     message: `Parsing ${fileEntries.length} files from ${folderName}...`,
   });
 
-  interface FileResult {
-    result: ParseResult;
-    index: number;
-  }
+  // Yield once so the overlay renders before we start heavy IPC work
+  await yieldToUI();
 
-  const results: FileResult[] = [];
+  const allResults: { result: ParseResult; index: number }[] = [];
   let completed = 0;
 
-  // Process files in concurrent batches
-  const parseOne = async (index: number): Promise<void> => {
-    const file = fileEntries[index];
-    try {
-      const result = await openLogFile(file.path);
+  // Process in small batches, yielding between each to keep UI alive
+  for (let batchStart = 0; batchStart < fileEntries.length; batchStart += FOLDER_LOAD_BATCH_SIZE) {
+    const batchEnd = Math.min(batchStart + FOLDER_LOAD_BATCH_SIZE, fileEntries.length);
+    const batchPromises: Promise<void>[] = [];
 
-      // Cache immediately for instant tab switching
-      setCachedTabSnapshot(result.filePath, {
-        entries: result.entries,
-        formatDetected: result.formatDetected,
-        parserSelection: result.parserSelection,
-        totalLines: result.totalLines,
-        byteOffset: result.byteOffset,
-        selectedSourceFilePath: result.filePath,
-        sourceOpenMode: "single-file",
-      });
+    for (let i = batchStart; i < batchEnd; i++) {
+      const file = fileEntries[i];
+      const idx = i;
 
-      results.push({ result, index });
-    } catch (err) {
-      console.warn("[log-source] skipping unparseable file in folder", {
-        filePath: file.path,
-        error: err,
-      });
+      batchPromises.push(
+        openLogFile(file.path)
+          .then((result) => {
+            // Cache for instant tab switching
+            setCachedTabSnapshot(result.filePath, {
+              entries: result.entries,
+              formatDetected: result.formatDetected,
+              parserSelection: result.parserSelection,
+              totalLines: result.totalLines,
+              byteOffset: result.byteOffset,
+              selectedSourceFilePath: result.filePath,
+              sourceOpenMode: "single-file",
+            });
+            allResults.push({ result, index: idx });
+          })
+          .catch((err) => {
+            console.warn("[log-source] skipping unparseable file in folder", {
+              filePath: file.path,
+              error: err,
+            });
+          })
+      );
     }
 
-    completed++;
-    // Update progress bar + status text
+    // Wait for the batch to finish
+    await Promise.all(batchPromises);
+    completed = batchEnd;
+
+    // Update progress (once per batch, not per file — reduces re-renders)
+    const lastFile = fileEntries[batchEnd - 1];
     state.setFolderLoadProgress({
       current: completed,
       total: fileEntries.length,
-      currentFile: getBaseName(file.path),
+      currentFile: getBaseName(lastFile.path),
     });
     state.setSourceStatus({
       kind: "loading",
       message: `Parsed ${completed} of ${fileEntries.length} files`,
-      detail: getBaseName(file.path),
+      detail: getBaseName(lastFile.path),
     });
-  };
 
-  // Run with bounded concurrency
-  const pending: Promise<void>[] = [];
-  for (let i = 0; i < fileEntries.length; i++) {
-    const p = parseOne(i);
-    pending.push(p);
-
-    if (pending.length >= FOLDER_LOAD_CONCURRENCY) {
-      await Promise.race(pending);
-      // Remove settled promises
-      for (let j = pending.length - 1; j >= 0; j--) {
-        const settled = await Promise.race([
-          pending[j].then(() => true),
-          Promise.resolve(false),
-        ]);
-        if (settled) pending.splice(j, 1);
-      }
-    }
+    // Yield to browser so it can repaint the progress bar
+    await yieldToUI();
   }
-  // Wait for remaining
-  await Promise.all(pending);
 
   // Sort results by original file order, merge entries
-  results.sort((a, b) => a.index - b.index);
+  allResults.sort((a, b) => a.index - b.index);
 
   const allEntries: LogEntry[] = [];
   const aggregateFiles: import("../types/log").AggregateParsedFileResult[] = [];
   let totalLines = 0;
 
-  for (const { result } of results) {
+  for (const { result } of allResults) {
     allEntries.push(...result.entries);
     totalLines += result.totalLines;
     aggregateFiles.push({
@@ -321,7 +319,7 @@ async function loadFolderProgressive(
   console.info("[log-source] progressive folder load complete", {
     fileCount: aggregateFiles.length,
     totalEntries: allEntries.length,
-    concurrency: FOLDER_LOAD_CONCURRENCY,
+    batchSize: FOLDER_LOAD_BATCH_SIZE,
   });
 }
 async function recoverFromSelectedFileLoadFailure(
