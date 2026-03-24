@@ -3,15 +3,19 @@ import {
   useCallback,
   useEffect,
   useMemo,
-  useState,
-  type CSSProperties,
-  type ChangeEvent,
 } from "react";
 import {
   Button,
   Divider,
   Dropdown,
   Input,
+  Menu,
+  MenuGroup,
+  MenuGroupHeader,
+  MenuItem,
+  MenuList,
+  MenuPopover,
+  MenuTrigger,
   Option,
   tokens,
 } from "@fluentui/react-components";
@@ -205,30 +209,6 @@ export interface AppActionHandlers {
   dismissTransientDialogs: (trigger: string) => void;
 }
 
-function getToolbarControlStyle(options: {
-  disabled: boolean;
-  active?: boolean;
-  tone?: "neutral" | "busy" | "warning" | "error";
-}): CSSProperties {
-  const { disabled, active = false, tone = "neutral" } = options;
-
-  const toneColors: Record<string, string> = {
-    neutral: active ? tokens.colorPaletteBlueBackground2 : tokens.colorNeutralBackground1,
-    busy: tokens.colorPaletteYellowBackground2,
-    warning: tokens.colorPaletteMarigoldBackground2,
-    error: tokens.colorPaletteRedBackground2,
-  };
-
-  return {
-    border: `1px solid ${tokens.colorNeutralStroke1}`,
-    borderRadius: "6px",
-    backgroundColor: disabled ? tokens.colorNeutralBackgroundDisabled : toneColors[tone],
-    color: disabled ? tokens.colorNeutralForeground3 : tokens.colorNeutralForeground1,
-    fontWeight: active ? 600 : 400,
-    opacity: disabled ? 0.75 : 1,
-    cursor: disabled ? "not-allowed" : "pointer",
-  };
-}
 
 export function useAppActions(): AppActionHandlers {
   const isLoading = useLogStore((s) => s.isLoading);
@@ -760,8 +740,6 @@ export function Toolbar() {
     toggleInfoPane,
   } = useAppActions();
 
-  const [selectedOpenAction, setSelectedOpenAction] = useState("");
-  const [selectedKnownSourceId, setSelectedKnownSourceId] = useState("");
 
   useEffect(() => {
     refreshKnownLogSources().catch((error) => {
@@ -774,57 +752,6 @@ export function Toolbar() {
     [activeView]
   );
 
-  const handleOpenActionChange = async (
-    event: ChangeEvent<HTMLSelectElement>
-  ) => {
-    const action = event.target.value;
-    setSelectedOpenAction(action);
-
-    if (!action) {
-      return;
-    }
-
-    try {
-      if (action === "open-file") {
-        await openSourceFileDialog();
-      } else if (action === "open-folder") {
-        await openSourceFolderDialog();
-      } else if (action === "paste-dsregcmd") {
-        await pasteDsregcmdSource();
-      } else if (action === "capture-dsregcmd") {
-        await captureDsregcmdSource();
-      }
-    } catch (error) {
-      console.error("[toolbar] failed to open source from toolbar dropdown", {
-        action,
-        error,
-      });
-    } finally {
-      setSelectedOpenAction("");
-    }
-  };
-
-  const handleKnownSourceChange = async (
-    event: ChangeEvent<HTMLSelectElement>
-  ) => {
-    const sourceId = event.target.value;
-    setSelectedKnownSourceId(sourceId);
-
-    if (!sourceId) {
-      return;
-    }
-
-    try {
-      await openKnownSourceCatalogAction({
-        sourceId,
-        trigger: "toolbar.known-source-select",
-      });
-    } catch (error) {
-      console.error("[toolbar] failed to open known source", { sourceId, error });
-    } finally {
-      setSelectedKnownSourceId("");
-    }
-  };
 
   return (
     <div
@@ -839,62 +766,80 @@ export function Toolbar() {
         flexShrink: 0,
       }}
     >
-      <select
-        value={selectedOpenAction}
-        onChange={handleOpenActionChange}
-        title={openLabels.openPlaceholder}
-        style={{
-          ...getToolbarControlStyle({ disabled: !commandState.canOpenSources }),
-          fontSize: "12px",
-          padding: "2px 4px",
-          minWidth: activeView === "dsregcmd" ? "180px" : "140px",
-        }}
-        disabled={!commandState.canOpenSources}
-      >
-        <option value="">{openLabels.openPlaceholder}</option>
-        <option value="open-file">{openLabels.file}</option>
-        <option value="open-folder">{openLabels.folder}</option>
-        {activeView === "dsregcmd" && (
-          <>
-            <option value="paste-dsregcmd">Paste Clipboard</option>
-            <option value="capture-dsregcmd">Capture Live Output</option>
-          </>
-        )}
-      </select>
-      <select
-        value={selectedKnownSourceId}
-        onChange={handleKnownSourceChange}
-        title="Open a known log source"
-        style={{
-          ...getToolbarControlStyle({
-            disabled:
-              !commandState.canOpenKnownSources || knownSourceToolbarGroups.length === 0,
-          }),
-          fontSize: "12px",
-          padding: "2px 4px",
-          minWidth: "260px",
-        }}
-        disabled={!commandState.canOpenKnownSources || knownSourceToolbarGroups.length === 0}
-      >
-        <option value="">
-          {commandState.canOpenKnownSources
-            ? knownSourceToolbarGroups.length > 0
-              ? isIntuneWorkspace(activeView)
-                ? "Open Known Intune Source..."
-                : "Open Known Log Source..."
-              : "No Known Log Sources"
-            : "Known Sources Unavailable"}
-        </option>
-        {knownSourceToolbarGroups.map((group) => (
-          <optgroup key={group.id} label={group.label}>
-            {group.sources.map((source) => (
-              <option key={source.id} value={source.id} title={source.description}>
-                {source.label}
-              </option>
+      <Menu>
+        <MenuTrigger disableButtonEnhancement>
+          <Button
+            size="small"
+            disabled={!commandState.canOpenSources}
+            title={openLabels.openPlaceholder}
+          >
+            {openLabels.openPlaceholder}
+          </Button>
+        </MenuTrigger>
+        <MenuPopover>
+          <MenuList>
+            <MenuItem onClick={() => openSourceFileDialog()}>
+              {openLabels.file}
+            </MenuItem>
+            <MenuItem onClick={() => openSourceFolderDialog()}>
+              {openLabels.folder}
+            </MenuItem>
+            {activeView === "dsregcmd" && (
+              <>
+                <MenuItem onClick={() => pasteDsregcmdSource()}>
+                  Paste Clipboard
+                </MenuItem>
+                <MenuItem onClick={() => captureDsregcmdSource()}>
+                  Capture Live Output
+                </MenuItem>
+              </>
+            )}
+          </MenuList>
+        </MenuPopover>
+      </Menu>
+      <Menu>
+        <MenuTrigger disableButtonEnhancement>
+          <Button
+            size="small"
+            disabled={
+              !commandState.canOpenKnownSources ||
+              knownSourceToolbarGroups.length === 0
+            }
+            title="Open a known log source"
+          >
+            {commandState.canOpenKnownSources
+              ? knownSourceToolbarGroups.length > 0
+                ? isIntuneWorkspace(activeView)
+                  ? "Open Known Intune Source..."
+                  : "Open Known Log Source..."
+                : "No Known Log Sources"
+              : "Known Sources Unavailable"}
+          </Button>
+        </MenuTrigger>
+        <MenuPopover>
+          <MenuList>
+            {knownSourceToolbarGroups.map((group) => (
+              <MenuGroup key={group.id}>
+                <MenuGroupHeader>{group.label}</MenuGroupHeader>
+                {group.sources.map((source) => (
+                  <MenuItem
+                    key={source.id}
+                    title={source.description}
+                    onClick={() =>
+                      openKnownSourceCatalogAction({
+                        sourceId: source.id,
+                        trigger: "toolbar.known-source-select",
+                      })
+                    }
+                  >
+                    {source.label}
+                  </MenuItem>
+                ))}
+              </MenuGroup>
             ))}
-          </optgroup>
-        ))}
-      </select>
+          </MenuList>
+        </MenuPopover>
+      </Menu>
 
       <Divider vertical />
 
