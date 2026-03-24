@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef } from "react";
 import { tokens } from "@fluentui/react-components";
 import { invoke } from "@tauri-apps/api/core";
 import { Toolbar } from "./Toolbar";
+import { TabStrip } from "./TabStrip";
 import { StatusBar } from "./StatusBar";
 import { FileSidebar, FILE_SIDEBAR_RECOMMENDED_WIDTH } from "./FileSidebar";
 import { LogListView } from "../log-view/LogListView";
@@ -257,6 +258,7 @@ export function AppShell() {
       }}
     >
       <Toolbar />
+      {activeView === "log" && <TabStrip />}
 
       <div
         style={{
