@@ -55,7 +55,7 @@ Add error code span detection during parsing. A lightweight regex (`0x[0-9A-Fa-f
 
 ```rust
 pub struct ErrorCodeSpan {
-    pub start: usize,    // byte offset in message
+    pub start: usize,    // character index in message (for JS String.slice())
     pub end: usize,
     pub code_hex: String,
     pub description: String,

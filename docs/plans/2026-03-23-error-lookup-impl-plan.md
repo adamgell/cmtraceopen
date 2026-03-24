@@ -1,6 +1,6 @@
 # Error Lookup UI/UX Redesign Implementation Plan
 
-> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
+> Implementation note: Follow this plan step-by-step during development and update it if implementation details change.
 
 **Goal:** Redesign the error lookup feature with Fluent UI dialog, unified search, inline log error code highlighting, expanded categorized database, and improved discoverability.
 
@@ -501,7 +501,7 @@ Add to `src-tauri/src/error_db/lookup.rs` tests:
 fn test_detect_error_code_spans() {
     let spans = detect_error_code_spans("Failed with error 0x80070005 during install");
     assert_eq!(spans.len(), 1);
-    assert_eq!(spans[0].start, 18); // byte offset of "0x80070005"
+    assert_eq!(spans[0].start, 18); // character index of "0x80070005" (for JS string slicing)
     assert_eq!(spans[0].end, 28);
     assert_eq!(spans[0].code_hex, "0x80070005");
     assert!(spans[0].description.contains("Access is denied"));

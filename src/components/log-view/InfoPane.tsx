@@ -92,6 +92,7 @@ export function InfoPane() {
         icon={<DismissRegular />}
         onClick={() => setFocusedErrorCode(null)}
         title="Dismiss"
+        aria-label="Dismiss error details"
       />
     </div>
   ) : null;

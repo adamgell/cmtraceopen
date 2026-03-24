@@ -90,6 +90,7 @@ export function ErrorLookupDialog({ isOpen, onClose }: ErrorLookupDialogProps) {
   const [searchError, setSearchError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const requestIdRef = useRef(0);
 
   const history = useUiStore((s) => s.errorLookupHistory);
   const addHistoryEntry = useUiStore((s) => s.addErrorLookupHistoryEntry);
@@ -99,14 +100,17 @@ export function ErrorLookupDialog({ isOpen, onClose }: ErrorLookupDialogProps) {
       if (!q.trim()) {
         setResults([]);
         setSearchError(null);
+        setIsSearching(false);
         return;
       }
+      const reqId = ++requestIdRef.current;
       setIsSearching(true);
       setSearchError(null);
       try {
         const res = await invoke<ErrorSearchResult[]>("search_error_codes", {
           query: q,
         });
+        if (reqId !== requestIdRef.current) return;
         setResults(res);
 
         // Add to history when search returns exactly one exact match
@@ -122,9 +126,13 @@ export function ErrorLookupDialog({ isOpen, onClose }: ErrorLookupDialogProps) {
           });
         }
       } catch (err) {
-        setSearchError(String(err));
+        if (reqId !== requestIdRef.current) return;
+        const message = err instanceof Error ? err.message : String(err);
+        setSearchError(message);
       } finally {
-        setIsSearching(false);
+        if (reqId === requestIdRef.current) {
+          setIsSearching(false);
+        }
       }
     },
     [addHistoryEntry]
@@ -345,7 +353,14 @@ export function ErrorLookupDialog({ isOpen, onClose }: ErrorLookupDialogProps) {
                     }}
                     onClick={() => handleHistoryClick(h)}
                     onKeyDown={(e) => {
-                      if (e.key === "Enter" || e.key === " ") {
+                      if (e.key === " ") {
+                        e.preventDefault();
+                      } else if (e.key === "Enter") {
+                        handleHistoryClick(h);
+                      }
+                    }}
+                    onKeyUp={(e) => {
+                      if (e.key === " ") {
                         handleHistoryClick(h);
                       }
                     }}
