@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { getIdentifier, getName, getTauriVersion, getVersion } from "@tauri-apps/api/app";
+import { tokens } from "@fluentui/react-components";
 
 interface AboutDialogProps {
   isOpen: boolean;
@@ -75,8 +76,9 @@ export function AboutDialog({ isOpen, onClose }: AboutDialogProps) {
     >
       <div
         style={{
-          backgroundColor: "#f0f0f0",
-          border: "1px solid #999",
+          backgroundColor: tokens.colorNeutralBackground1,
+          color: tokens.colorNeutralForeground1,
+          border: `1px solid ${tokens.colorNeutralStroke1}`,
           borderRadius: "4px",
           padding: "16px",
           minWidth: "420px",
@@ -93,7 +95,7 @@ export function AboutDialog({ isOpen, onClose }: AboutDialogProps) {
         >
           {appName}
         </div>
-        <div style={{ fontSize: "12px", color: "#666", marginBottom: "10px" }}>
+        <div style={{ fontSize: "12px", color: tokens.colorNeutralForeground3, marginBottom: "10px" }}>
           Version {appVersion}
         </div>
 
@@ -104,8 +106,8 @@ export function AboutDialog({ isOpen, onClose }: AboutDialogProps) {
 
         <div
           style={{
-            backgroundColor: "#fff",
-            border: "1px solid #ccc",
+            backgroundColor: tokens.colorNeutralBackground2,
+            border: `1px solid ${tokens.colorNeutralStroke2}`,
             borderRadius: "2px",
             padding: "8px",
             marginBottom: "10px",
@@ -123,12 +125,25 @@ export function AboutDialog({ isOpen, onClose }: AboutDialogProps) {
           </div>
         </div>
 
-        <div style={{ fontSize: "11px", color: "#555", marginBottom: "14px" }}>
+        <div style={{ fontSize: "11px", color: tokens.colorNeutralForeground3, marginBottom: "14px" }}>
           Project repository: github.com/adamgell/homelab-code
         </div>
 
         <div style={{ display: "flex", justifyContent: "flex-end" }}>
-          <button onClick={onClose}>OK</button>
+          <button
+            onClick={onClose}
+            style={{
+              padding: "2px 12px",
+              fontSize: "12px",
+              border: `1px solid ${tokens.colorNeutralStroke1}`,
+              borderRadius: "2px",
+              background: tokens.colorNeutralBackground3,
+              color: tokens.colorNeutralForeground1,
+              cursor: "pointer",
+            }}
+          >
+            OK
+          </button>
         </div>
       </div>
     </div>

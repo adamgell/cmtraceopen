@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { tokens } from "@fluentui/react-components";
 
 interface ErrorLookupResult {
   codeHex: string;
@@ -99,8 +100,9 @@ export function ErrorLookupDialog({ isOpen, onClose }: ErrorLookupDialogProps) {
     >
       <div
         style={{
-          backgroundColor: "#f0f0f0",
-          border: "1px solid #999",
+          backgroundColor: tokens.colorNeutralBackground1,
+          color: tokens.colorNeutralForeground1,
+          border: `1px solid ${tokens.colorNeutralStroke1}`,
           borderRadius: "4px",
           padding: "12px",
           minWidth: "450px",
@@ -145,23 +147,35 @@ export function ErrorLookupDialog({ isOpen, onClose }: ErrorLookupDialogProps) {
             }}
             disabled={isLookingUp}
           />
-          <button onClick={() => void handleLookup()} disabled={isLookingUp}>
+          <button
+            onClick={() => void handleLookup()}
+            disabled={isLookingUp}
+            style={{
+              padding: "2px 12px",
+              fontSize: "12px",
+              border: `1px solid ${tokens.colorNeutralStroke1}`,
+              borderRadius: "2px",
+              background: tokens.colorNeutralBackground3,
+              color: tokens.colorNeutralForeground1,
+              cursor: isLookingUp ? "default" : "pointer",
+            }}
+          >
             {isLookingUp ? "Looking up..." : "Lookup"}
           </button>
         </div>
 
         <div aria-live="polite" style={{ minHeight: "18px", marginBottom: "8px" }}>
-          {isLookingUp && <span style={{ fontSize: "11px", color: "#555" }}>Searching known error codes...</span>}
+          {isLookingUp && <span style={{ fontSize: "11px", color: tokens.colorNeutralForeground3 }}>Searching known error codes...</span>}
           {!isLookingUp && lookupError && (
-            <span style={{ fontSize: "11px", color: "#a40000" }}>{lookupError}</span>
+            <span style={{ fontSize: "11px", color: tokens.colorPaletteRedForeground1 }}>{lookupError}</span>
           )}
         </div>
 
         {result && (
           <div
             style={{
-              backgroundColor: "#fff",
-              border: "1px solid #ccc",
+              backgroundColor: tokens.colorNeutralBackground2,
+              border: `1px solid ${tokens.colorNeutralStroke2}`,
               borderRadius: "2px",
               padding: "8px",
               fontSize: "12px",
@@ -182,7 +196,7 @@ export function ErrorLookupDialog({ isOpen, onClose }: ErrorLookupDialogProps) {
             <div
               style={{
                 marginTop: "6px",
-                color: result.found ? "#000" : "#666",
+                color: result.found ? tokens.colorNeutralForeground1 : tokens.colorNeutralForeground3,
               }}
             >
               <strong>{result.found ? "Description:" : "Not found:"}</strong>{" "}
@@ -198,7 +212,20 @@ export function ErrorLookupDialog({ isOpen, onClose }: ErrorLookupDialogProps) {
             marginTop: "10px",
           }}
         >
-          <button onClick={onClose}>Close</button>
+          <button
+            onClick={onClose}
+            style={{
+              padding: "2px 12px",
+              fontSize: "12px",
+              border: `1px solid ${tokens.colorNeutralStroke1}`,
+              borderRadius: "2px",
+              background: tokens.colorNeutralBackground3,
+              color: tokens.colorNeutralForeground1,
+              cursor: "pointer",
+            }}
+          >
+            Close
+          </button>
         </div>
       </div>
     </div>
