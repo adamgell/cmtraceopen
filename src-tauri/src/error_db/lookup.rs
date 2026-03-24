@@ -1,8 +1,40 @@
 use once_cell::sync::Lazy;
 use regex::Regex;
 
-use super::codes::ERROR_CODES;
+use super::codes::{ErrorCode, ERROR_CODES};
 use serde::{Deserialize, Serialize};
+
+/// Look up an error code with HRESULT decomposition.
+/// Tries direct hit first. If miss and code is FACILITY_WIN32 (0x8007xxxx),
+/// extracts lower 16 bits as a Win32 code and looks that up.
+/// Conversely, if the code is a small Win32 value (<=0xFFFF), tries its
+/// HRESULT form (0x80070000 | code).
+fn find_error_code(code: u32) -> Option<&'static ErrorCode> {
+    // Direct table hit
+    if let Some(ec) = ERROR_CODES.iter().find(|ec| ec.code == code) {
+        return Some(ec);
+    }
+
+    // FACILITY_WIN32 decomposition: if code is 0x8007xxxx, the lower 16 bits
+    // are a Win32 error code. Some Win32 codes may be stored without the
+    // HRESULT wrapper in the table.
+    if (code & 0xFFFF_0000) == 0x8007_0000 {
+        let win32_code = code & 0x0000_FFFF;
+        if let Some(ec) = ERROR_CODES.iter().find(|ec| ec.code == win32_code) {
+            return Some(ec);
+        }
+    }
+
+    // Reverse: if user typed a small Win32 code (e.g., 5), try its HRESULT form
+    if code <= 0xFFFF {
+        let hresult = 0x8007_0000 | code;
+        if let Some(ec) = ERROR_CODES.iter().find(|ec| ec.code == hresult) {
+            return Some(ec);
+        }
+    }
+
+    None
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -25,7 +57,7 @@ pub fn detect_error_code_spans(message: &str) -> Vec<ErrorCodeSpan> {
         .filter_map(|m| {
             let hex_str = &message[m.start()..m.end()];
             let code_val = u32::from_str_radix(&hex_str[2..], 16).ok()?;
-            let ec = ERROR_CODES.iter().find(|ec| ec.code == code_val)?;
+            let ec = find_error_code(code_val)?;
             Some(ErrorCodeSpan {
                 start: m.start(),
                 end: m.end(),
@@ -85,10 +117,10 @@ pub fn lookup_error_code(input: &str) -> ErrorLookupResult {
 
     match try_parse_error_code(input) {
         Some(c) => {
-            if let Some(ec) = ERROR_CODES.iter().find(|ec| ec.code == c) {
+            if let Some(ec) = find_error_code(c) {
                 ErrorLookupResult {
-                    code_hex: format!("0x{:08X}", c),
-                    code_decimal: format!("{}", c as i32),
+                    code_hex: format!("0x{:08X}", ec.code),
+                    code_decimal: format!("{}", ec.code as i32),
                     description: ec.description.to_string(),
                     category: ec.category.label().to_string(),
                     found: true,
@@ -124,7 +156,7 @@ pub fn search_error_codes(query: &str) -> Vec<ErrorSearchResult> {
 
     // Try exact code lookup first
     if let Some(code_val) = try_parse_error_code(query) {
-        if let Some(ec) = ERROR_CODES.iter().find(|ec| ec.code == code_val) {
+        if let Some(ec) = find_error_code(code_val) {
             return vec![ErrorSearchResult {
                 code_hex: format!("0x{:08X}", ec.code),
                 code_decimal: format!("{}", ec.code as i32),
@@ -308,5 +340,55 @@ mod tests {
     fn test_detect_unrecognized_code_ignored() {
         let spans = detect_error_code_spans("Code 0xDEADBEEF is not in our database");
         assert!(spans.is_empty());
+    }
+
+    // --- HRESULT decomposition tests ---
+
+    #[test]
+    fn test_lookup_win32_code_finds_hresult_entry() {
+        // Win32 code 5 should resolve via HRESULT form 0x80070005
+        let result = lookup_error_code("5");
+        assert!(result.found);
+        assert!(result.description.contains("Access is denied"));
+        // Should show the canonical HRESULT form, not 0x00000005
+        assert_eq!(result.code_hex, "0x80070005");
+    }
+
+    #[test]
+    fn test_lookup_hresult_facility_win32_direct() {
+        // 0x80070005 should resolve directly
+        let result = lookup_error_code("0x80070005");
+        assert!(result.found);
+        assert!(result.description.contains("Access is denied"));
+    }
+
+    #[test]
+    fn test_search_win32_code_finds_hresult_entry() {
+        // Searching for "5" as a code should find 0x80070005
+        let results = search_error_codes("5");
+        assert_eq!(results.len(), 1);
+        assert!(results[0].found);
+        assert!(results[0].description.contains("Access is denied"));
+    }
+
+    #[test]
+    fn test_find_error_code_direct_hit() {
+        let ec = find_error_code(0x80070005);
+        assert!(ec.is_some());
+        assert!(ec.unwrap().description.contains("Access is denied"));
+    }
+
+    #[test]
+    fn test_find_error_code_win32_to_hresult() {
+        // Small Win32 code 2 should map to 0x80070002
+        let ec = find_error_code(2);
+        assert!(ec.is_some());
+        assert!(ec.unwrap().description.contains("file"));
+    }
+
+    #[test]
+    fn test_find_error_code_no_match() {
+        let ec = find_error_code(0xDEADBEEF);
+        assert!(ec.is_none());
     }
 }
