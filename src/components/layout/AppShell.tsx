@@ -23,6 +23,7 @@ import type { LogEntry } from "../../types/log";
 import { useUiStore } from "../../stores/ui-store";
 import { useLogStore } from "../../stores/log-store";
 import { useFilterStore } from "../../stores/filter-store";
+import { loadPathAsLogSource } from "../../lib/log-source";
 import { useFileWatcher } from "../../hooks/use-file-watcher";
 import { useIntuneAnalysisProgress } from "../../hooks/use-intune-analysis-progress";
 import { useKeyboard } from "../../hooks/use-keyboard";
@@ -72,6 +73,9 @@ export function AppShell() {
   const setShowFileAssociationPrompt = useUiStore(
     (s) => s.setShowFileAssociationPrompt
   );
+
+  const activeTabIndex = useUiStore((s) => s.activeTabIndex);
+  const openTabs = useUiStore((s) => s.openTabs);
 
   const entries = useLogStore((s) => s.entries);
   const filterClauses = useFilterStore((s) => s.clauses);
@@ -179,6 +183,19 @@ export function AppShell() {
   useFileAssociation();
   // Prompt standalone Windows users to associate .log files like CMTrace.exe
   useFileAssociationPrompt();
+
+  // When the active tab changes, load the corresponding file
+  useEffect(() => {
+    if (activeTabIndex < 0 || activeTabIndex >= openTabs.length) return;
+    const tab = openTabs[activeTabIndex];
+    const currentPath = useLogStore.getState().openFilePath;
+    if (currentPath === tab.filePath) return;
+
+    useUiStore.getState().ensureLogViewVisible("tab-switch");
+    loadPathAsLogSource(tab.filePath).catch((err) => {
+      console.error("[tab-switch] failed to load", tab.filePath, err);
+    });
+  }, [activeTabIndex, openTabs]);
 
   const handleApplyFilter = useCallback(
     async (clauses: FilterClause[]) => {

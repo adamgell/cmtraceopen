@@ -7,6 +7,7 @@ import {
   stopTail,
 } from "./commands";
 import { useLogStore } from "../stores/log-store";
+import { useUiStore } from "../stores/ui-store";
 import type {
   AggregateParseResult,
   FolderEntry,
@@ -129,6 +130,10 @@ function applyParseResultToStore(
     kind: "loaded",
     message: `Loaded ${getBaseName(selectedFilePath)}.`,
   });
+
+  // Open (or switch to) a tab for the loaded file
+  const fileName = selectedFilePath.split(/[\\/]/).pop() ?? selectedFilePath;
+  useUiStore.getState().openTab(selectedFilePath, fileName);
 }
 
 function clearSelectedFileState(source: LogSource, entries: FolderEntry[]): void {
