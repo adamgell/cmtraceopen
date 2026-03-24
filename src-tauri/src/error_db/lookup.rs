@@ -7,6 +7,7 @@ pub struct ErrorLookupResult {
     pub code_hex: String,
     pub code_decimal: String,
     pub description: String,
+    pub category: String,
     pub found: bool,
 }
 
@@ -35,11 +36,12 @@ pub fn lookup_error_code(input: &str) -> ErrorLookupResult {
 
     match code {
         Some(c) => {
-            if let Some((_, desc)) = ERROR_CODES.iter().find(|(ec, _)| *ec == c) {
+            if let Some(ec) = ERROR_CODES.iter().find(|ec| ec.code == c) {
                 ErrorLookupResult {
                     code_hex: format!("0x{:08X}", c),
                     code_decimal: format!("{}", c as i32),
-                    description: desc.to_string(),
+                    description: ec.description.to_string(),
+                    category: ec.category.label().to_string(),
                     found: true,
                 }
             } else {
@@ -48,6 +50,7 @@ pub fn lookup_error_code(input: &str) -> ErrorLookupResult {
                     code_hex: format!("0x{:08X}", c),
                     code_decimal: format!("{}", c as i32),
                     description: "Unknown error code".to_string(),
+                    category: String::new(),
                     found: false,
                 }
             }
@@ -56,6 +59,7 @@ pub fn lookup_error_code(input: &str) -> ErrorLookupResult {
             code_hex: String::new(),
             code_decimal: String::new(),
             description: "Invalid error code format".to_string(),
+            category: String::new(),
             found: false,
         },
     }
@@ -99,5 +103,36 @@ mod tests {
         let result = lookup_error_code("0xDEADBEEF");
         assert!(!result.found);
         assert_eq!(result.code_hex, "0xDEADBEEF");
+    }
+
+    #[test]
+    fn test_error_codes_have_categories() {
+        use super::super::codes::{ERROR_CODES, ErrorCategory};
+        let intune_count = ERROR_CODES
+            .iter()
+            .filter(|ec| matches!(ec.category, ErrorCategory::Intune))
+            .count();
+        assert!(intune_count > 0, "Should have Intune-categorized codes");
+    }
+
+    #[test]
+    fn test_no_duplicate_error_codes() {
+        use super::super::codes::ERROR_CODES;
+        use std::collections::HashSet;
+        let mut seen = HashSet::new();
+        for ec in ERROR_CODES.iter() {
+            assert!(
+                seen.insert(ec.code),
+                "Duplicate error code: 0x{:08X}",
+                ec.code
+            );
+        }
+    }
+
+    #[test]
+    fn test_lookup_includes_category() {
+        let result = lookup_error_code("0x87D00215");
+        assert!(result.found);
+        assert_eq!(result.category, "Intune");
     }
 }
