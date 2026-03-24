@@ -12,6 +12,7 @@ import type {
   AggregateParseResult,
   FolderEntry,
   KnownSourceMetadata,
+  LogEntry,
   LogSource,
   ParseResult,
 } from "../types/log";
@@ -198,6 +199,41 @@ function applyAggregateParseResultToStore(
         detail: "Folder opened as a merged aggregate view.",
       }
   );
+
+  // Pre-cache per-file entry snapshots so tab switches within this folder
+  // are instant. Each LogEntry already carries its filePath, so we group
+  // the merged array back into per-file buckets without any extra IPC.
+  if (result.files.length > 0 && result.entries.length > 0) {
+    const fileMetaMap = new Map(result.files.map((f) => [f.filePath, f]));
+    const perFile = new Map<string, LogEntry[]>();
+
+    for (const entry of result.entries) {
+      let bucket = perFile.get(entry.filePath);
+      if (!bucket) {
+        bucket = [];
+        perFile.set(entry.filePath, bucket);
+      }
+      bucket.push(entry);
+    }
+
+    for (const [filePath, fileEntries] of perFile) {
+      const meta = fileMetaMap.get(filePath);
+      setCachedTabSnapshot(filePath, {
+        entries: fileEntries,
+        formatDetected: null,
+        parserSelection: null,
+        totalLines: meta?.totalLines ?? fileEntries.length,
+        byteOffset: meta?.byteOffset ?? 0,
+        selectedSourceFilePath: filePath,
+        sourceOpenMode: "single-file",
+      });
+    }
+
+    console.info("[log-source] pre-cached entries for folder files", {
+      fileCount: perFile.size,
+      totalEntries: result.entries.length,
+    });
+  }
 }
 async function recoverFromSelectedFileLoadFailure(
   source: LogSource,
