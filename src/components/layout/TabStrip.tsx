@@ -2,7 +2,10 @@ import { type CSSProperties, type KeyboardEvent, type MouseEvent as ReactMouseEv
 import { tokens } from "@fluentui/react-components";
 import { useUiStore } from "../../stores/ui-store";
 
-const MAX_VISIBLE_TABS = 6;
+/** Minimum width a tab can shrink to before being pushed to overflow */
+const MIN_TAB_WIDTH = 100;
+/** Width reserved for the overflow chevron button */
+const OVERFLOW_BUTTON_WIDTH = 36;
 
 export function TabStrip() {
   const openTabs = useUiStore((s) => s.openTabs);
@@ -12,8 +15,43 @@ export function TabStrip() {
 
   const [hoveredTabIndex, setHoveredTabIndex] = useState<number | null>(null);
   const [overflowOpen, setOverflowOpen] = useState(false);
+  const [visibleCount, setVisibleCount] = useState(openTabs.length);
+
+  const stripRef = useRef<HTMLDivElement>(null);
   const overflowRef = useRef<HTMLDivElement>(null);
   const tabRefs = useRef<(HTMLDivElement | null)[]>([]);
+
+  // Measure available width and compute how many tabs fit
+  useEffect(() => {
+    const el = stripRef.current;
+    if (!el) return;
+
+    const computeVisible = () => {
+      const containerWidth = el.clientWidth;
+      if (openTabs.length === 0) {
+        setVisibleCount(0);
+        return;
+      }
+
+      // Try fitting all tabs first
+      const widthPerTab = containerWidth / openTabs.length;
+      if (widthPerTab >= MIN_TAB_WIDTH) {
+        setVisibleCount(openTabs.length);
+        return;
+      }
+
+      // Reserve space for the overflow button, then fit as many as possible
+      const availableWidth = containerWidth - OVERFLOW_BUTTON_WIDTH;
+      const count = Math.max(1, Math.floor(availableWidth / MIN_TAB_WIDTH));
+      setVisibleCount(Math.min(count, openTabs.length));
+    };
+
+    computeVisible();
+
+    const observer = new ResizeObserver(computeVisible);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [openTabs.length]);
 
   // Close overflow dropdown when clicking outside
   useEffect(() => {
@@ -55,18 +93,18 @@ export function TabStrip() {
 
   const handleTabKeyDown = useCallback(
     (e: KeyboardEvent<HTMLDivElement>, index: number) => {
-      const visibleCount = Math.min(openTabs.length, MAX_VISIBLE_TABS);
+      const vc = Math.min(openTabs.length, visibleCount);
       if (e.key === "Enter" || e.key === " ") {
         e.preventDefault();
         switchTab(index);
       } else if (e.key === "ArrowRight") {
         e.preventDefault();
-        const next = (index + 1) % visibleCount;
+        const next = (index + 1) % vc;
         switchTab(next);
         tabRefs.current[next]?.focus();
       } else if (e.key === "ArrowLeft") {
         e.preventDefault();
-        const prev = (index - 1 + visibleCount) % visibleCount;
+        const prev = (index - 1 + vc) % vc;
         switchTab(prev);
         tabRefs.current[prev]?.focus();
       } else if (e.key === "Home") {
@@ -75,12 +113,12 @@ export function TabStrip() {
         tabRefs.current[0]?.focus();
       } else if (e.key === "End") {
         e.preventDefault();
-        const last = visibleCount - 1;
+        const last = vc - 1;
         switchTab(last);
         tabRefs.current[last]?.focus();
       }
     },
-    [openTabs.length, switchTab]
+    [openTabs.length, visibleCount, switchTab]
   );
 
   const handleOverflowSelect = useCallback(
@@ -91,86 +129,117 @@ export function TabStrip() {
     [switchTab]
   );
 
+  const handleOverflowClose = useCallback(
+    (e: ReactMouseEvent, index: number) => {
+      e.stopPropagation();
+      closeTab(index);
+    },
+    [closeTab]
+  );
+
   if (openTabs.length === 0) {
     return null;
   }
 
-  const visibleTabs = openTabs.slice(0, MAX_VISIBLE_TABS);
-  const overflowTabs = openTabs.slice(MAX_VISIBLE_TABS);
+  const visibleTabs = openTabs.slice(0, visibleCount);
+  const overflowTabs = openTabs.slice(visibleCount);
   const hasOverflow = overflowTabs.length > 0;
-  const focusableIndex = activeTabIndex < visibleTabs.length ? activeTabIndex : 0;
+  const focusableIndex = activeTabIndex < visibleCount ? activeTabIndex : 0;
 
   tabRefs.current.length = visibleTabs.length;
 
   return (
-    <div role="tablist" aria-label="Open log files" style={stripStyle}>
-      {visibleTabs.map((tab, index) => {
-        const isActive = index === activeTabIndex;
-        const isHovered = index === hoveredTabIndex;
+    <div style={outerStripStyle}>
+      {/* Tabs area: clipped so extra tabs don't spill */}
+      <div ref={stripRef} role="tablist" aria-label="Open log files" style={tabsAreaStyle}>
+        {visibleTabs.map((tab, index) => {
+          const isActive = index === activeTabIndex;
+          const isHovered = index === hoveredTabIndex;
 
-        return (
-          <div
-            key={tab.id}
-            ref={(el) => { tabRefs.current[index] = el; }}
-            role="tab"
-            aria-selected={isActive}
-            tabIndex={index === focusableIndex ? 0 : -1}
-            style={{
-              ...tabStyle,
-              ...(isActive ? activeTabStyle : inactiveTabStyle),
-            }}
-            onClick={() => handleSwitchTab(index)}
-            onKeyDown={(e) => handleTabKeyDown(e, index)}
-            onMouseEnter={() => setHoveredTabIndex(index)}
-            onMouseLeave={() => setHoveredTabIndex(null)}
-          >
-            <span style={tabLabelStyle}>{tab.fileName}</span>
-            <button
-              aria-label={`Close ${tab.fileName}`}
+          return (
+            <div
+              key={tab.id}
+              ref={(el) => { tabRefs.current[index] = el; }}
+              role="tab"
+              aria-selected={isActive}
+              tabIndex={index === focusableIndex ? 0 : -1}
               style={{
-                ...closeButtonBaseStyle,
-                visibility: isHovered || isActive ? "visible" : "hidden",
+                ...tabStyle,
+                ...(isActive ? activeTabStyle : inactiveTabStyle),
+                flex: hasOverflow ? `0 0 ${MIN_TAB_WIDTH}px` : "1 1 0",
+                maxWidth: hasOverflow ? undefined : 200,
               }}
-              onClick={(e) => handleCloseTab(e, index)}
+              onClick={() => handleSwitchTab(index)}
+              onKeyDown={(e) => handleTabKeyDown(e, index)}
+              onMouseEnter={() => setHoveredTabIndex(index)}
+              onMouseLeave={() => setHoveredTabIndex(null)}
             >
-              ×
-            </button>
-          </div>
-        );
-      })}
+              <span style={tabLabelStyle}>{tab.fileName}</span>
+              <button
+                aria-label={`Close ${tab.fileName}`}
+                style={{
+                  ...closeButtonBaseStyle,
+                  visibility: isHovered || isActive ? "visible" : "hidden",
+                }}
+                onClick={(e) => handleCloseTab(e, index)}
+              >
+                ×
+              </button>
+            </div>
+          );
+        })}
+      </div>
+      {/* Overflow chevron: sits outside the clipped area so dropdown isn't clipped */}
       {hasOverflow && (
         <div ref={overflowRef} style={overflowContainerStyle}>
           <button
-            style={overflowButtonStyle}
+            style={overflowChevronStyle}
             aria-haspopup="listbox"
             aria-expanded={overflowOpen}
+            aria-label={`${overflowTabs.length} more tabs`}
+            title={`${overflowTabs.length} more tabs`}
             onClick={handleToggleOverflow}
           >
-            {overflowTabs.length} more...
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor">
+              <path d="M2.5 4.5L6 8L9.5 4.5" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
           </button>
           {overflowOpen && (
             <div role="listbox" style={overflowDropdownStyle}>
               {overflowTabs.map((tab, i) => {
-                const realIndex = MAX_VISIBLE_TABS + i;
+                const realIndex = visibleCount + i;
                 const isActive = realIndex === activeTabIndex;
                 return (
-                  <button
+                  <div
                     key={tab.id}
                     role="option"
                     aria-selected={isActive}
                     style={{
                       ...overflowItemStyle,
                       backgroundColor: isActive
-                        ? tokens.colorNeutralBackground1
+                        ? tokens.colorNeutralBackground1Selected
                         : "transparent",
-                      color: isActive
-                        ? tokens.colorNeutralForeground1
-                        : tokens.colorNeutralForeground3,
+                      fontWeight: isActive ? 600 : 400,
                     }}
                     onClick={() => handleOverflowSelect(realIndex)}
+                    onMouseEnter={(e) => {
+                      (e.currentTarget as HTMLDivElement).style.backgroundColor =
+                        tokens.colorNeutralBackground1Hover;
+                    }}
+                    onMouseLeave={(e) => {
+                      (e.currentTarget as HTMLDivElement).style.backgroundColor =
+                        isActive ? tokens.colorNeutralBackground1Selected : "transparent";
+                    }}
                   >
-                    {tab.fileName}
-                  </button>
+                    <span style={overflowItemLabelStyle}>{tab.fileName}</span>
+                    <button
+                      aria-label={`Close ${tab.fileName}`}
+                      style={overflowItemCloseStyle}
+                      onClick={(e) => handleOverflowClose(e, realIndex)}
+                    >
+                      ×
+                    </button>
+                  </div>
                 );
               })}
             </div>
@@ -183,14 +252,24 @@ export function TabStrip() {
 
 // --- Styles ---
 
-const stripStyle: CSSProperties = {
+/** Outer wrapper: flex row, no clipping so the overflow dropdown can escape */
+const outerStripStyle: CSSProperties = {
   display: "flex",
   alignItems: "center",
   height: 34,
   backgroundColor: tokens.colorNeutralBackground3,
   borderBottom: `1px solid ${tokens.colorNeutralStroke1}`,
-  overflow: "hidden",
   flexShrink: 0,
+};
+
+/** Inner tab area: clips so tabs don't spill past the measured width */
+const tabsAreaStyle: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  height: "100%",
+  flex: 1,
+  minWidth: 0,
+  overflow: "hidden",
 };
 
 const tabStyle: CSSProperties = {
@@ -198,8 +277,7 @@ const tabStyle: CSSProperties = {
   alignItems: "center",
   gap: 4,
   height: "100%",
-  maxWidth: 200,
-  minWidth: 80,
+  minWidth: 0,
   padding: "0 8px",
   cursor: "pointer",
   boxSizing: "border-box",
@@ -224,6 +302,7 @@ const tabLabelStyle: CSSProperties = {
   textOverflow: "ellipsis",
   whiteSpace: "nowrap",
   flex: 1,
+  minWidth: 0,
 };
 
 const closeButtonBaseStyle: CSSProperties = {
@@ -249,27 +328,28 @@ const overflowContainerStyle: CSSProperties = {
   height: "100%",
   display: "flex",
   alignItems: "center",
+  flexShrink: 0,
 };
 
-const overflowButtonStyle: CSSProperties = {
-  padding: "0 10px",
-  fontSize: 12,
-  color: tokens.colorNeutralForeground3,
+const overflowChevronStyle: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  width: OVERFLOW_BUTTON_WIDTH,
+  height: "100%",
   cursor: "pointer",
-  whiteSpace: "nowrap",
-  userSelect: "none",
   border: "none",
   background: "none",
-  height: "100%",
-  fontFamily: "inherit",
+  color: tokens.colorNeutralForeground3,
+  padding: 0,
 };
 
 const overflowDropdownStyle: CSSProperties = {
   position: "absolute",
   top: "100%",
   right: 0,
-  minWidth: 180,
-  maxWidth: 280,
+  minWidth: 200,
+  maxWidth: 300,
   backgroundColor: tokens.colorNeutralBackground1,
   border: `1px solid ${tokens.colorNeutralStroke1}`,
   borderRadius: 4,
@@ -279,17 +359,36 @@ const overflowDropdownStyle: CSSProperties = {
 };
 
 const overflowItemStyle: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
   padding: "6px 12px",
   fontSize: 12,
   cursor: "pointer",
+  color: tokens.colorNeutralForeground1,
+  gap: 8,
+};
+
+const overflowItemLabelStyle: CSSProperties = {
   overflow: "hidden",
   textOverflow: "ellipsis",
   whiteSpace: "nowrap",
-  width: "100%",
-  textAlign: "left",
+  flex: 1,
+  minWidth: 0,
+};
+
+const overflowItemCloseStyle: CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  width: 16,
+  height: 16,
+  fontSize: 11,
+  lineHeight: 1,
+  borderRadius: 2,
+  flexShrink: 0,
+  cursor: "pointer",
   border: "none",
   background: "none",
-  fontFamily: "inherit",
-  display: "block",
-  boxSizing: "border-box",
+  padding: 0,
+  color: tokens.colorNeutralForeground3,
 };
