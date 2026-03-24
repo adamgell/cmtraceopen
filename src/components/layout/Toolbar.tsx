@@ -778,18 +778,18 @@ export function Toolbar() {
         </MenuTrigger>
         <MenuPopover>
           <MenuList>
-            <MenuItem onClick={() => openSourceFileDialog()}>
+            <MenuItem onClick={() => void openSourceFileDialog().catch((err) => console.error("Failed to open file dialog", err))}>
               {openLabels.file}
             </MenuItem>
-            <MenuItem onClick={() => openSourceFolderDialog()}>
+            <MenuItem onClick={() => void openSourceFolderDialog().catch((err) => console.error("Failed to open folder dialog", err))}>
               {openLabels.folder}
             </MenuItem>
             {activeView === "dsregcmd" && (
               <>
-                <MenuItem onClick={() => pasteDsregcmdSource()}>
+                <MenuItem onClick={() => void pasteDsregcmdSource().catch((err) => console.error("Failed to paste dsregcmd source", err))}>
                   Paste Clipboard
                 </MenuItem>
-                <MenuItem onClick={() => captureDsregcmdSource()}>
+                <MenuItem onClick={() => void captureDsregcmdSource().catch((err) => console.error("Failed to capture dsregcmd source", err))}>
                   Capture Live Output
                 </MenuItem>
               </>
@@ -826,10 +826,10 @@ export function Toolbar() {
                     key={source.id}
                     title={source.description}
                     onClick={() =>
-                      openKnownSourceCatalogAction({
+                      void openKnownSourceCatalogAction({
                         sourceId: source.id,
                         trigger: "toolbar.known-source-select",
-                      })
+                      }).catch((err) => console.error("Failed to open known source catalog action", err))
                     }
                   >
                     {source.label}

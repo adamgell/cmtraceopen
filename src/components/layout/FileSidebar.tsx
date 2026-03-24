@@ -874,7 +874,7 @@ function SidebarFooter() {
   const isLoading = useLogStore((s) => s.isLoading);
   const activeSource = useLogStore((s) => s.activeSource);
   const openFilePath = useLogStore((s) => s.openFilePath);
-  const { togglePauseResume, refreshActiveSource } = useAppActions();
+  const { commandState, togglePauseResume, refreshActiveSource } = useAppActions();
 
   const hasActiveSource = activeSource !== null || openFilePath !== null;
 
@@ -905,7 +905,7 @@ function SidebarFooter() {
       <Button
         size="small"
         appearance="subtle"
-        disabled={!hasActiveSource || isLoading}
+        disabled={!commandState.canPauseResume}
         onClick={togglePauseResume}
         style={{ fontSize: "10px", padding: "3px 8px", minWidth: 0 }}
       >
@@ -914,7 +914,7 @@ function SidebarFooter() {
       <Button
         size="small"
         appearance="subtle"
-        disabled={!hasActiveSource || isLoading}
+        disabled={!commandState.canRefresh}
         onClick={() => void refreshActiveSource()}
         style={{ fontSize: "10px", padding: "3px 8px", minWidth: 0 }}
       >
@@ -961,7 +961,7 @@ export function FileSidebar({ width = FILE_SIDEBAR_RECOMMENDED_WIDTH, activeView
       }}
     >
       {activeView === "log" ? <LogSidebar /> : isIntuneWorkspace(activeView) ? <IntuneSidebar /> : <DsregcmdSidebar />}
-      <SidebarFooter />
+      {activeView === "log" && <SidebarFooter />}
     </aside>
   );
 }
