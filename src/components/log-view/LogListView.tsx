@@ -72,6 +72,8 @@ export function LogListView() {
 
   const parentRef = useRef<HTMLDivElement>(null);
   const isAtBottomRef = useRef(true);
+  /** When true, the next selectedEntryIndex change should NOT auto-scroll (user clicked a visible row). */
+  const suppressScrollRef = useRef(false);
 
   // Apply user column order, then filter by showDetails
   const orderedColumns = useMemo(
@@ -143,6 +145,10 @@ export function LogListView() {
 
   useEffect(() => {
     if (selectedEntryIndex < 0) return;
+    if (suppressScrollRef.current) {
+      suppressScrollRef.current = false;
+      return;
+    }
     virtualizer.scrollToIndex(selectedEntryIndex, { align: "center" });
   }, [selectedEntryIndex, virtualizer]);
 
@@ -374,7 +380,7 @@ export function LogListView() {
                   severityPalette={severityPalette}
                   highlightText={highlightText}
                   highlightCaseSensitive={highlightCaseSensitive}
-                  onClick={selectEntry}
+                  onClick={(id) => { if (id !== selectedId) { suppressScrollRef.current = true; } selectEntry(id); }}
                   onErrorCodeClick={handleErrorCodeClick}
                 />
               </div>
