@@ -140,6 +140,29 @@ export function LogListView() {
     virtualizer.scrollToIndex(selectedEntryIndex, { align: "center" });
   }, [selectedEntryIndex, virtualizer]);
 
+  // ── Consume pending scroll target from deployment workspace ────────
+  const pendingScrollTarget = useLogStore((s) => s.pendingScrollTarget);
+  const openFilePath = useLogStore((s) => s.openFilePath);
+
+  useEffect(() => {
+    if (!pendingScrollTarget) return;
+    if (displayEntries.length === 0) return;
+    // Only consume if the loaded file matches the target
+    if (openFilePath !== pendingScrollTarget.filePath) return;
+
+    const targetLine = pendingScrollTarget.lineNumber;
+    // Find the entry closest to the target line number
+    const targetEntry = displayEntries.find((e) => e.lineNumber >= targetLine)
+      ?? displayEntries[displayEntries.length - 1];
+
+    if (targetEntry) {
+      selectEntry(targetEntry.id);
+    }
+
+    // Clear the pending target
+    useLogStore.getState().setPendingScrollTarget(null);
+  }, [pendingScrollTarget, displayEntries, openFilePath, selectEntry]);
+
   useLayoutEffect(() => {
     updateScrollbarWidth();
     const element = parentRef.current;

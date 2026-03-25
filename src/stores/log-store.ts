@@ -490,6 +490,8 @@ interface LogState {
   folderLoadTotalFiles: number | null;
   /** Number of files completed so far. */
   folderLoadCompletedFiles: number | null;
+  /** Pending scroll target set by deployment workspace — consumed by LogListView after load. */
+  pendingScrollTarget: { filePath: string; lineNumber: number } | null;
 
   hasActiveSource: () => boolean;
   canRefreshSource: () => boolean;
@@ -529,6 +531,7 @@ interface LogState {
     total: number;
     currentFile: string;
   } | null) => void;
+  setPendingScrollTarget: (target: { filePath: string; lineNumber: number } | null) => void;
 }
 
 function runSharedFind(trigger: string, direction: FindDirection): boolean {
@@ -619,6 +622,7 @@ export const useLogStore = create<LogState>((set, get) => ({
   folderLoadTotalFiles: null,
   folderLoadCompletedFiles: null,
   activeColumns: DEFAULT_COLUMNS,
+  pendingScrollTarget: null,
 
   hasActiveSource: () => {
     const state = get();
@@ -727,6 +731,7 @@ export const useLogStore = create<LogState>((set, get) => ({
       byteOffset: 0,
       findStatusText: "",
       findLastMatchId: null,
+      pendingScrollTarget: null,
     }),
   clear: () =>
     set({
@@ -753,6 +758,7 @@ export const useLogStore = create<LogState>((set, get) => ({
       byteOffset: 0,
       findStatusText: "",
       findLastMatchId: null,
+      pendingScrollTarget: null,
     }),
   setFolderLoadProgress: (progress) =>
     set(
@@ -770,4 +776,5 @@ export const useLogStore = create<LogState>((set, get) => ({
             folderLoadCompletedFiles: null,
           }
     ),
+  setPendingScrollTarget: (target) => set({ pendingScrollTarget: target }),
 }));

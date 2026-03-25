@@ -3,6 +3,9 @@ import {
   useDeploymentStore,
   type DeploymentLogFile,
 } from "../../stores/deployment-store";
+import { useLogStore } from "../../stores/log-store";
+import { useUiStore } from "../../stores/ui-store";
+import { loadPathAsLogSource } from "../../lib/log-source";
 
 export function DeploymentErrorCard({
   file,
@@ -14,6 +17,26 @@ export function DeploymentErrorCard({
   const expandedErrorIndex = useDeploymentStore((s) => s.expandedErrorIndex);
   const toggleErrorExpanded = useDeploymentStore((s) => s.toggleErrorExpanded);
   const isExpanded = expandedErrorIndex === index;
+
+  const handleOpenInLogViewer = async (lineNumber: number) => {
+    // Set the pending scroll target before loading so it's ready when entries arrive
+    useLogStore.getState().setPendingScrollTarget({
+      filePath: file.path,
+      lineNumber,
+    });
+    // Switch to log view
+    useUiStore.getState().setActiveView("log");
+    // Load the file
+    try {
+      await loadPathAsLogSource(file.path);
+    } catch (err) {
+      console.error("[deployment] failed to open file in log viewer", err);
+    }
+  };
+
+  // Find the first error line to determine which line to scroll to
+  const firstErrorLine = file.errorLines.find((l) => l.severity === "Error")
+    ?? file.errorLines[0];
 
   return (
     <div
@@ -64,15 +87,26 @@ export function DeploymentErrorCard({
             </span>
           </div>
         </div>
-        {file.errorLines.length > 0 && (
+        <div style={{ display: "flex", gap: "4px" }}>
           <Button
             size="small"
             appearance="subtle"
-            onClick={() => toggleErrorExpanded(index)}
+            onClick={() =>
+              handleOpenInLogViewer(firstErrorLine?.lineNumber ?? 1)
+            }
           >
-            {isExpanded ? "Collapse" : `${file.errorLines.length} errors`}
+            Open in Log Viewer
           </Button>
-        )}
+          {file.errorLines.length > 0 && (
+            <Button
+              size="small"
+              appearance="subtle"
+              onClick={() => toggleErrorExpanded(index)}
+            >
+              {isExpanded ? "Collapse" : `${file.errorLines.length} errors`}
+            </Button>
+          )}
+        </div>
       </div>
 
       {file.errorSummary && (
@@ -105,16 +139,32 @@ export function DeploymentErrorCard({
               key={i}
               style={{
                 padding: "2px 0",
+                display: "flex",
+                alignItems: "baseline",
+                gap: "4px",
                 color:
                   line.severity === "Error"
                     ? tokens.colorPaletteRedForeground1
                     : tokens.colorPaletteYellowForeground1,
               }}
             >
-              <span style={{ color: tokens.colorNeutralForeground3 }}>
-                L{line.lineNumber}:
-              </span>{" "}
-              {line.message}
+              <button
+                onClick={() => handleOpenInLogViewer(line.lineNumber)}
+                title={`Open at line ${line.lineNumber}`}
+                style={{
+                  background: "none",
+                  border: "none",
+                  padding: 0,
+                  cursor: "pointer",
+                  color: tokens.colorNeutralForeground3,
+                  fontFamily: "monospace",
+                  fontSize: "inherit",
+                  textDecoration: "underline",
+                }}
+              >
+                L{line.lineNumber}
+              </button>
+              <span>{line.message}</span>
             </div>
           ))}
         </div>
