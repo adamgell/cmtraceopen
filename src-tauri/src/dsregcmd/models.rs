@@ -293,6 +293,7 @@ pub struct DsregcmdProxyEvidence {
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct DsregcmdEnrollmentEntry {
+    pub guid: Option<String>,
     pub upn: Option<String>,
     pub provider_id: Option<String>,
     pub enrollment_state: Option<u32>,
@@ -335,6 +336,13 @@ pub struct DsregcmdActiveEvidence {
     pub scp_query: Option<DsregcmdScpQueryResult>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct DsregcmdScheduledTaskEvidence {
+    #[serde(default)]
+    pub enterprise_mgmt_guids: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct DsregcmdAnalysisResult {
@@ -352,6 +360,8 @@ pub struct DsregcmdAnalysisResult {
     pub enrollment_evidence: Option<DsregcmdEnrollmentEvidence>,
     #[serde(default)]
     pub active_evidence: Option<DsregcmdActiveEvidence>,
+    #[serde(default)]
+    pub scheduled_task_evidence: Option<DsregcmdScheduledTaskEvidence>,
     #[serde(default)]
     pub event_log_analysis: Option<EventLogAnalysis>,
 }

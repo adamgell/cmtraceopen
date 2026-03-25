@@ -227,7 +227,14 @@ pub fn load_enrollment_evidence(bundle_path: &Path) -> Option<DsregcmdEnrollment
             continue;
         }
 
+        let guid = key_path
+            .rfind('{')
+            .and_then(|start| {
+                key_path.rfind('}').map(|end| key_path[start..=end].to_string())
+            });
+
         enrollments.push(DsregcmdEnrollmentEntry {
+            guid,
             upn: extract_string_value(values, "UPN"),
             provider_id: extract_string_value(values, "ProviderID"),
             enrollment_state: extract_dword_value(values, "EnrollmentState"),
@@ -819,5 +826,26 @@ mod tests {
         assert_eq!(evidence.enrollment_count, 2);
         assert_eq!(evidence.enrollments.len(), 2);
         assert!(evidence.enrollments.iter().any(|e| e.upn.as_deref() == Some("user@contoso.com")));
+
+        // Verify GUID extraction
+        let user_entry = evidence
+            .enrollments
+            .iter()
+            .find(|e| e.upn.as_deref() == Some("user@contoso.com"))
+            .expect("user enrollment entry");
+        assert_eq!(
+            user_entry.guid.as_deref(),
+            Some("{11111111-2222-3333-4444-555555555555}")
+        );
+
+        let admin_entry = evidence
+            .enrollments
+            .iter()
+            .find(|e| e.upn.as_deref() == Some("admin@contoso.com"))
+            .expect("admin enrollment entry");
+        assert_eq!(
+            admin_entry.guid.as_deref(),
+            Some("{22222222-3333-4444-5555-666666666666}")
+        );
     }
 }

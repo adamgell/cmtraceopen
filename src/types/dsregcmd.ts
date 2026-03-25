@@ -232,6 +232,7 @@ export interface DsregcmdProxyEvidence {
 }
 
 export interface DsregcmdEnrollmentEntry {
+  guid: string | null;
   upn: string | null;
   providerId: string | null;
   enrollmentState: number | null;
@@ -265,6 +266,10 @@ export interface DsregcmdActiveEvidence {
   scpQuery: DsregcmdScpQueryResult | null;
 }
 
+export interface DsregcmdScheduledTaskEvidence {
+  enterpriseMgmtGuids: string[];
+}
+
 export interface DsregcmdAnalysisResult {
   facts: DsregcmdFacts;
   derived: DsregcmdDerived;
@@ -274,6 +279,7 @@ export interface DsregcmdAnalysisResult {
   proxyEvidence: DsregcmdProxyEvidence | null;
   enrollmentEvidence: DsregcmdEnrollmentEvidence | null;
   activeEvidence: DsregcmdActiveEvidence | null;
+  scheduledTaskEvidence: DsregcmdScheduledTaskEvidence | null;
   eventLogAnalysis: import("./event-log").EventLogAnalysis | null;
 }
 

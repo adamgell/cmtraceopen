@@ -10,7 +10,7 @@ pub use models::{
     DsregcmdDerived, DsregcmdDiagnosticInsight, DsregcmdEnrollmentEntry,
     DsregcmdEnrollmentEvidence, DsregcmdEvidenceSource, DsregcmdFacts, DsregcmdJoinType,
     DsregcmdOsVersionEvidence, DsregcmdPolicyEvidenceValue, DsregcmdProxyEvidence,
-    DsregcmdScpQueryResult, DsregcmdWhfbPolicyEvidence,
+    DsregcmdScheduledTaskEvidence, DsregcmdScpQueryResult, DsregcmdWhfbPolicyEvidence,
 };
 
 pub fn analyze_text(input: &str) -> Result<DsregcmdAnalysisResult, String> {
