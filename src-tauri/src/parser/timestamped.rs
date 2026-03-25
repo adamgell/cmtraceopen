@@ -1,3 +1,4 @@
+use crate::parser::ccm::naive_to_utc_millis;
 use once_cell::sync::Lazy;
 use regex::Regex;
 
@@ -189,7 +190,7 @@ fn try_iso(line: &str) -> Option<LogEntry> {
 
     let timestamp = chrono::NaiveDate::from_ymd_opt(yr, mon, day)
         .and_then(|d| d.and_hms_milli_opt(h, m, s, ms))
-        .map(|dt| dt.and_utc().timestamp_millis());
+        .map(|naive| naive_to_utc_millis(naive, tz_offset));
 
     let timestamp_display = Some(format!(
         "{:04}-{:02}-{:02} {:02}:{:02}:{:02}.{:03}",
@@ -439,6 +440,8 @@ fn month_name_to_number(name: &str) -> Option<u32> {
 mod tests {
     use super::*;
     use crate::models::log_entry::Severity;
+    use chrono::FixedOffset;
+    use chrono::TimeZone;
 
     #[test]
     fn test_iso_with_z() {
@@ -465,6 +468,19 @@ mod tests {
         .unwrap();
         assert_eq!(entry.timezone_offset, Some(330));
         assert_eq!(entry.severity, Severity::Info);
+        // Verify the epoch millis are correct: 14:30 at UTC+5:30 = 09:00 UTC
+        let expected_ts = FixedOffset::east_opt(330 * 60)
+            .unwrap()
+            .from_local_datetime(
+                &chrono::NaiveDate::from_ymd_opt(2024, 1, 15)
+                    .unwrap()
+                    .and_hms_milli_opt(14, 30, 0, 0)
+                    .unwrap(),
+            )
+            .single()
+            .unwrap()
+            .timestamp_millis();
+        assert_eq!(entry.timestamp, Some(expected_ts));
     }
 
     #[test]

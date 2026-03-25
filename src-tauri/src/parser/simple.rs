@@ -10,7 +10,7 @@
 use once_cell::sync::Lazy;
 use regex::Regex;
 
-use super::ccm::format_thread_display;
+use super::ccm::{build_timestamp, format_thread_display};
 use super::severity::detect_severity_from_text;
 use crate::models::log_entry::{LogEntry, LogFormat, Severity};
 
@@ -58,14 +58,7 @@ fn parse_line(line: &str) -> Option<SimpleParsed> {
         .get(9)
         .and_then(|m| m.as_str().parse::<u32>().ok());
 
-    let timestamp = chrono::NaiveDate::from_ymd_opt(yr, mon, day)
-        .and_then(|d| d.and_hms_milli_opt(h, m, s, ms))
-        .map(|dt| dt.and_utc().timestamp_millis());
-
-    let timestamp_display = Some(format!(
-        "{:02}-{:02}-{:04} {:02}:{:02}:{:02}.{:03}",
-        mon, day, yr, h, m, s, ms
-    ));
+    let (timestamp, timestamp_display) = build_timestamp(mon, day, yr, h, m, s, ms, Some(tz));
 
     // Reuse cached thread display from ccm module
     let thread_display = thread.map(format_thread_display);
@@ -173,6 +166,14 @@ mod tests {
         assert_eq!(parsed.thread, Some(4116));
         assert_eq!(parsed.severity, Severity::Info);
         assert_eq!(parsed.timezone_offset, 240);
+        // Verify epoch millis: 09:12:45.332 at UTC+4 = 05:12:45.332 UTC
+        let expected_ts = chrono::NaiveDate::from_ymd_opt(2023, 7, 15)
+            .unwrap()
+            .and_hms_milli_opt(5, 12, 45, 332)
+            .unwrap()
+            .and_utc()
+            .timestamp_millis();
+        assert_eq!(parsed.timestamp, Some(expected_ts));
     }
 
     #[test]

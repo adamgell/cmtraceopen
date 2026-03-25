@@ -303,7 +303,7 @@ fn parse_timestamp_fields(
     };
 
     let (timestamp_millis, timestamp_display) =
-        build_timestamp(month, day, year, hour, minute, second, millis);
+        build_timestamp(month, day, year, hour, minute, second, millis, timezone_offset);
     let line_timestamp = timestamp_display.clone();
     let line_timestamp_utc = build_utc_timestamp(
         month,
@@ -340,16 +340,17 @@ fn build_utc_timestamp(
         .and_hms_milli_opt(hour, minute, second, millis)?;
 
     let utc_value = if let Some(offset_minutes) = timezone_offset {
-        let offset = FixedOffset::east_opt(offset_minutes.checked_mul(60)?)?;
-        offset
-            .from_local_datetime(&naive)
-            .single()?
-            .with_timezone(&Utc)
+        offset_minutes
+            .checked_mul(60)
+            .and_then(FixedOffset::east_opt)
+            .and_then(|offset| offset.from_local_datetime(&naive).single())
+            .map(|dt| dt.with_timezone(&Utc))
+            .unwrap_or_else(|| naive.and_utc())
     } else {
         match Local.from_local_datetime(&naive) {
             LocalResult::Single(local_value) => local_value.with_timezone(&Utc),
             LocalResult::Ambiguous(local_value, _) => local_value.with_timezone(&Utc),
-            LocalResult::None => return None,
+            LocalResult::None => naive.and_utc(),
         }
     };
 
@@ -697,5 +698,13 @@ mod tests {
             lines[0].timestamp_utc.as_deref(),
             Some("2016-09-02T09:06:34.590Z")
         );
+    }
+
+    #[test]
+    fn test_build_utc_timestamp_extreme_offset_falls_back() {
+        // Extreme offset should fall back to UTC-as-local, not return None
+        let result = super::build_utc_timestamp(1, 1, 2024, 10, 0, 0, 0, Some(99999));
+        assert!(result.is_some(), "extreme offset should fall back, not return None");
+        assert_eq!(result.unwrap(), "2024-01-01T10:00:00.000Z");
     }
 }
