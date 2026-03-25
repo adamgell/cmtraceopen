@@ -575,6 +575,114 @@ async function restoreFolderContext(
   }
 }
 
+/**
+ * Load multiple files as a merged aggregate view.
+ * Reuses the same batch-parse + merge logic as folder loading.
+ */
+export async function loadFilesAsLogSource(paths: string[]): Promise<void> {
+  if (paths.length === 0) return;
+
+  // Single file — use normal single-file flow
+  if (paths.length === 1) {
+    await loadPathAsLogSource(paths[0], { fallbackToFolder: false });
+    return;
+  }
+
+  const state = useLogStore.getState();
+
+  state.setLoading(true);
+  state.setFolderLoadProgress({ current: 0, total: paths.length, currentFile: "" });
+  state.setSourceStatus({
+    kind: "loading",
+    message: `Parsing ${paths.length} files...`,
+    detail: "Files are being parsed in parallel",
+  });
+
+  const startTime = performance.now();
+
+  try {
+    const results = await parseFilesBatch(paths);
+    const parseMs = Math.round(performance.now() - startTime);
+
+    // Cache each file for instant tab switching
+    for (const result of results) {
+      const fileColumns = getColumnsForParser(result.parserSelection.parser);
+      setCachedTabSnapshot(result.filePath, {
+        entries: result.entries,
+        formatDetected: result.formatDetected,
+        parserSelection: result.parserSelection,
+        totalLines: result.totalLines,
+        byteOffset: result.byteOffset,
+        selectedSourceFilePath: result.filePath,
+        sourceOpenMode: "single-file",
+        activeColumns: fileColumns,
+      });
+    }
+
+    // Build aggregate view
+    const allEntries: LogEntry[] = [];
+    const aggregateFiles: import("../types/log").AggregateParsedFileResult[] = [];
+    let totalLines = 0;
+
+    for (const result of results) {
+      allEntries.push(...result.entries);
+      totalLines += result.totalLines;
+      aggregateFiles.push({
+        filePath: result.filePath,
+        totalLines: result.totalLines,
+        parseErrors: result.parseErrors,
+        fileSize: result.fileSize,
+        byteOffset: result.byteOffset,
+      });
+    }
+
+    // Re-assign sequential IDs
+    for (let i = 0; i < allEntries.length; i++) {
+      allEntries[i] = { ...allEntries[i], id: i };
+    }
+
+    // Build a synthetic "multi-file" source
+    const source: LogSource = { kind: "file", path: paths[0] };
+
+    // Build sidebar entries from the file list
+    const folderEntries: FolderEntry[] = results.map((r) => ({
+      path: r.filePath,
+      name: r.filePath.split(/[\\/]/).pop() ?? r.filePath,
+      isDir: false,
+      sizeBytes: r.fileSize,
+      modifiedUnixMs: 0,
+    }));
+
+    state.setActiveSource(source);
+    state.setSourceEntries(folderEntries);
+    state.setSelectedSourceFilePath(null);
+    state.setSourceOpenMode("aggregate-folder");
+    state.setAggregateFiles(aggregateFiles);
+    state.setEntries(allEntries);
+    state.setFormatDetected(null);
+    state.setParserSelection(null);
+    state.setTotalLines(totalLines);
+    state.setByteOffset(0);
+    const aggregateColumns = getColumnsForAggregate(
+      results.map((r) => r.parserSelection.parser)
+    );
+    state.setActiveColumns(aggregateColumns);
+    state.selectEntry(null);
+    state.setFolderLoadProgress(null);
+
+    useUiStore.getState().ensureLogViewVisible("multi-file-open");
+
+    state.setSourceStatus({
+      kind: "loaded",
+      message: `Loaded ${aggregateFiles.length} files.`,
+      detail: `Parsed in ${parseMs} ms (parallel).`,
+    });
+  } finally {
+    state.setLoading(false);
+    state.setFolderLoadProgress(null);
+  }
+}
+
 export async function loadPathAsLogSource(
   path: string,
   options: LoadPathAsLogSourceOptions = {}

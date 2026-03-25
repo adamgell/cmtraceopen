@@ -1,10 +1,12 @@
 import { useEffect } from "react";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { useAppActions } from "../components/layout/Toolbar";
+import { loadFilesAsLogSource } from "../lib/log-source";
 
 /**
  * Hook that handles file/folder drag-and-drop onto the application window.
- * It routes dropped paths through the active workspace's source-loading flow.
+ * Single file/folder drops route through the active workspace's source-loading flow.
+ * Multiple file drops merge into an aggregate view.
  */
 export function useDragDrop() {
   const { openPathForActiveWorkspace } = useAppActions();
@@ -22,13 +24,15 @@ export function useDragDrop() {
         return;
       }
 
-      const droppedPath = paths[0];
-
       try {
-        await openPathForActiveWorkspace(droppedPath);
+        if (paths.length === 1) {
+          await openPathForActiveWorkspace(paths[0]);
+        } else {
+          await loadFilesAsLogSource(paths);
+        }
       } catch (error) {
-        console.error("[drag-drop] failed to open dropped path", {
-          droppedPath,
+        console.error("[drag-drop] failed to open dropped paths", {
+          pathCount: paths.length,
           error,
         });
       }
