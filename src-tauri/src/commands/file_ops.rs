@@ -412,17 +412,17 @@ pub fn write_text_output_file(path: String, contents: String) -> Result<(), Stri
     fs::write(&path, contents).map_err(|error| format!("failed to write file {}: {}", path, error))
 }
 
-/// Returns the file path passed as a CLI argument at startup via OS file association.
+/// Returns file paths passed as CLI arguments at startup via OS file association.
 ///
-/// When the user opens a `.log` or `.lo_` file with CMTrace Open (e.g. by
-/// double-clicking it in Explorer or right-clicking and choosing "Open with"),
-/// the OS launches the application with the file path as a command-line
-/// argument. This command retrieves that path so the frontend can open it.
-/// The path is consumed on the first call so it is only processed once.
+/// When the user opens `.log` files with CMTrace Open (e.g. by selecting
+/// multiple files and choosing "Open with"), the OS launches the application
+/// with the file paths as command-line arguments. This command retrieves those
+/// paths so the frontend can open them. Consumed on the first call.
 #[tauri::command]
-pub fn get_initial_file_path(state: State<'_, AppState>) -> Result<Option<String>, String> {
-    let mut guard = state.initial_file_path.lock().map_err(|e| e.to_string())?;
-    Ok(guard.take())
+pub fn get_initial_file_paths(state: State<'_, AppState>) -> Result<Vec<String>, String> {
+    let mut guard = state.initial_file_paths.lock().map_err(|e| e.to_string())?;
+    let paths = std::mem::take(&mut *guard);
+    Ok(paths)
 }
 
 fn normalize_path_string(path: &Path) -> String {

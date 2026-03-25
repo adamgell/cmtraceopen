@@ -11,19 +11,23 @@ mod watcher;
 
 use state::app_state::AppState;
 
-/// Returns the first non-flag CLI argument as a potential file path.
+/// Returns all non-flag CLI arguments as potential file paths.
 ///
 /// When the OS opens the application via a file association (e.g. double-clicking
-/// a `.log` file), the file path is passed as the first positional argument.
+/// a `.log` file), the file path is passed as a positional argument.
+/// Multiple files can be passed (e.g. `cmtraceopen file1.log file2.log`).
 /// Flags (arguments starting with `-`) are skipped so that internal Tauri or
-/// platform arguments do not get misidentified as a file path.
-fn get_initial_file_path_from_args() -> Option<String> {
-    std::env::args().skip(1).find(|arg| !arg.starts_with('-'))
+/// platform arguments do not get misidentified as file paths.
+fn get_initial_file_paths_from_args() -> Vec<String> {
+    std::env::args()
+        .skip(1)
+        .filter(|arg| !arg.starts_with('-'))
+        .collect()
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let initial_file_path = get_initial_file_path_from_args();
+    let initial_file_paths = get_initial_file_paths_from_args();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -40,7 +44,7 @@ pub fn run() {
 
             Ok(())
         })
-        .manage(AppState::new(initial_file_path))
+        .manage(AppState::new(initial_file_paths))
         .invoke_handler(tauri::generate_handler![
             commands::file_association::get_file_association_prompt_status,
             commands::file_association::associate_log_files_with_app,
@@ -54,7 +58,7 @@ pub fn run() {
             commands::file_ops::get_known_log_sources,
             commands::file_ops::inspect_path_kind,
             commands::file_ops::write_text_output_file,
-            commands::file_ops::get_initial_file_path,
+            commands::file_ops::get_initial_file_paths,
             commands::system_preferences::get_system_date_time_preferences,
             commands::parsing::start_tail,
             commands::parsing::stop_tail,

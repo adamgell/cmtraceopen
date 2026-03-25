@@ -517,22 +517,29 @@ export function useAppActions(): AppActionHandlers {
       return;
     }
 
+    const isLogWorkspace = activeWorkspace === "log";
+
     const selected = await open({
-      multiple: false,
+      multiple: isLogWorkspace,
       filters: getOpenFileDialogFilters(activeWorkspace),
     });
 
-    const filePath = normalizeDialogSelection(selected);
+    if (!selected) return;
 
-    if (!filePath) {
-      return;
+    // Normalize: open() returns string | string[] | null depending on multiple flag
+    const paths = Array.isArray(selected) ? selected : [selected];
+    if (paths.length === 0) return;
+
+    if (paths.length === 1) {
+      await openSourceForWorkspace(
+        { kind: "file", path: paths[0] },
+        "app-actions.open-file",
+        activeWorkspace
+      );
+    } else {
+      const { loadFilesAsLogSource } = await import("../../lib/log-source");
+      await loadFilesAsLogSource(paths);
     }
-
-    await openSourceForWorkspace(
-      { kind: "file", path: filePath },
-      "app-actions.open-file",
-      activeWorkspace
-    );
   }, [activeWorkspace, commandState.canOpenSources, openSourceForWorkspace]);
 
   const openSourceFolderDialog = useCallback(async () => {
