@@ -9,7 +9,12 @@ import type {
   LogSource,
   ParserSelectionInfo,
 } from "../types/log";
-import { type ColumnId, DEFAULT_COLUMNS } from "../lib/column-config";
+import {
+  type ColumnId,
+  DEFAULT_COLUMNS,
+  getColumnDef,
+} from "../lib/column-config";
+import { formatLogEntryTimestamp } from "../lib/date-time-format";
 
 /**
  * Snapshot of parsed file state — cached in memory so tab switches
@@ -91,66 +96,84 @@ export interface ParserSelectionDisplay {
 
 export type SourceOpenMode = "single-file" | "aggregate-folder" | null;
 
-type FindDirection = "forward" | "backward";
 
 const UNGROUPED_TOOLBAR_GROUP_ID = "ungrouped";
 const UNGROUPED_TOOLBAR_GROUP_LABEL = "Other Sources";
 const LAST_SORT_ORDER = Number.MAX_SAFE_INTEGER;
 
-function normalizeFindText(text: string, caseSensitive: boolean): string {
-  return caseSensitive ? text : text.toLowerCase();
+/**
+ * Build a test function for the find query.
+ * Returns null if the query is empty or (in regex mode) invalid.
+ */
+function buildFindMatcher(
+  query: string,
+  caseSensitive: boolean,
+  useRegex: boolean
+): ((text: string) => boolean) | null {
+  if (!query) return null;
+
+  if (useRegex) {
+    try {
+      const flags = caseSensitive ? "" : "i";
+      const re = new RegExp(query, flags);
+      return (text) => re.test(text);
+    } catch {
+      return null; // invalid regex
+    }
+  }
+
+  const needle = caseSensitive ? query : query.toLowerCase();
+  return (text) => {
+    const haystack = caseSensitive ? text : text.toLowerCase();
+    return haystack.includes(needle);
+  };
 }
 
-function runFindSearch(
+/**
+ * Collect all entry text values that should be searched,
+ * based on the currently active columns.
+ */
+function getSearchableText(entry: LogEntry, columns: ColumnId[]): string {
+  const parts: string[] = [entry.message];
+
+  for (const colId of columns) {
+    if (colId === "message" || colId === "severity" || colId === "lineNumber") continue;
+    if (colId === "dateTime") {
+      const ts = formatLogEntryTimestamp(entry);
+      if (ts) parts.push(ts);
+      continue;
+    }
+    const def = getColumnDef(colId);
+    if (def) {
+      const val = def.accessor(entry);
+      if (val != null) parts.push(String(val));
+    }
+  }
+
+  return parts.join(" ");
+}
+
+/**
+ * Scan all entries and return ordered array of matching entry IDs.
+ */
+function computeFindMatches(
   entries: LogEntry[],
-  selectedId: number | null,
-  searchText: string,
+  query: string,
   caseSensitive: boolean,
-  direction: FindDirection
-): { entry: LogEntry; wrapped: boolean } | null {
-  if (entries.length === 0 || searchText.length === 0) {
-    return null;
-  }
+  useRegex: boolean,
+  activeColumns: ColumnId[]
+): number[] {
+  const matcher = buildFindMatcher(query.trim(), caseSensitive, useRegex);
+  if (!matcher) return [];
 
-  const selectedIndex =
-    selectedId === null ? -1 : entries.findIndex((entry) => entry.id === selectedId);
-  const totalCount = entries.length;
-  const expectedText = normalizeFindText(searchText, caseSensitive);
-
-  let currentIndex =
-    direction === "forward"
-      ? (selectedIndex + 1) % totalCount
-      : selectedIndex <= 0
-        ? totalCount - 1
-        : selectedIndex - 1;
-
-  let wrapped = false;
-
-  for (let i = 0; i < totalCount; i += 1) {
-    const entry = entries[currentIndex];
-    const message = normalizeFindText(entry.message, caseSensitive);
-
-    if (message.includes(expectedText)) {
-      return {
-        entry,
-        wrapped,
-      };
-    }
-
-    if (direction === "forward") {
-      currentIndex = (currentIndex + 1) % totalCount;
-      if (currentIndex === 0) {
-        wrapped = true;
-      }
-    } else {
-      currentIndex = currentIndex <= 0 ? totalCount - 1 : currentIndex - 1;
-      if (currentIndex === totalCount - 1) {
-        wrapped = true;
-      }
+  const matchIds: number[] = [];
+  for (const entry of entries) {
+    const text = getSearchableText(entry, activeColumns);
+    if (matcher(text)) {
+      matchIds.push(entry.id);
     }
   }
-
-  return null;
+  return matchIds;
 }
 
 export function getBaseName(path: string | null): string {
@@ -476,8 +499,10 @@ interface LogState {
   highlightCaseSensitive: boolean;
   findQuery: string;
   findCaseSensitive: boolean;
-  findStatusText: string;
-  findLastMatchId: number | null;
+  findUseRegex: boolean;
+  findRegexError: string | null;
+  findMatchIds: number[];
+  findCurrentIndex: number;
   /** Byte offset in the file after initial parse — used to start tailing */
   byteOffset: number;
   /** Which columns to show — derived from detected parser, not a user preference. */
@@ -520,10 +545,12 @@ interface LogState {
   setHighlightCaseSensitive: (sensitive: boolean) => void;
   setFindQuery: (text: string) => void;
   setFindCaseSensitive: (sensitive: boolean) => void;
+  setFindUseRegex: (useRegex: boolean) => void;
+  recomputeFindMatches: () => void;
   appendAggregateEntries: (filePath: string, entries: LogEntry[]) => void;
-  findNext: (trigger: string) => boolean;
-  findPrevious: (trigger: string) => boolean;
-  clearFindStatus: () => void;
+  findNext: (trigger: string) => void;
+  findPrevious: (trigger: string) => void;
+  clearFind: () => void;
   clearActiveFile: () => void;
   clear: () => void;
   setFolderLoadProgress: (progress: {
@@ -534,59 +561,60 @@ interface LogState {
   setPendingScrollTarget: (target: { filePath: string; lineNumber: number } | null) => void;
 }
 
-function runSharedFind(trigger: string, direction: FindDirection): boolean {
+/** Recompute matches and update store state. Called on query/option changes. */
+function recomputeAndSetMatches(): void {
   const state = useLogStore.getState();
   const query = state.findQuery.trim();
 
   if (!query) {
-    console.info("[log-store] skipping find because no active query", {
-      trigger,
-      direction,
-    });
-    state.clearFindStatus();
-    return false;
+    useLogStore.setState({ findMatchIds: [], findCurrentIndex: -1, findRegexError: null });
+    return;
   }
 
-  const result = runFindSearch(
+  // Validate regex before computing
+  if (state.findUseRegex) {
+    try {
+      new RegExp(query, state.findCaseSensitive ? "" : "i");
+    } catch (e) {
+      useLogStore.setState({
+        findMatchIds: [],
+        findCurrentIndex: -1,
+        findRegexError: e instanceof Error ? e.message : "Invalid regex",
+      });
+      return;
+    }
+  }
+
+  const matchIds = computeFindMatches(
     state.entries,
-    state.selectedId,
     query,
     state.findCaseSensitive,
-    direction
+    state.findUseRegex,
+    state.activeColumns
   );
 
-  if (!result) {
-    console.info("[log-store] find returned no matches", {
-      trigger,
-      direction,
-      query,
-      caseSensitive: state.findCaseSensitive,
-      entriesCount: state.entries.length,
-    });
-
-    useLogStore.setState({
-      findStatusText: "Not found",
-      findLastMatchId: null,
-    });
-    return false;
+  // Try to keep current position near the previously selected entry
+  let newIndex = -1;
+  if (matchIds.length > 0) {
+    if (state.selectedId !== null) {
+      const idx = matchIds.indexOf(state.selectedId);
+      if (idx >= 0) {
+        newIndex = idx;
+      } else {
+        // Find the nearest match after the current selection
+        newIndex = 0;
+      }
+    } else {
+      newIndex = 0;
+    }
   }
 
-  console.info("[log-store] find matched entry", {
-    trigger,
-    direction,
-    query,
-    caseSensitive: state.findCaseSensitive,
-    entryId: result.entry.id,
-    lineNumber: result.entry.lineNumber,
-    wrapped: result.wrapped,
-  });
-
   useLogStore.setState({
-    selectedId: result.entry.id,
-    findLastMatchId: result.entry.id,
-    findStatusText: result.wrapped ? `Found (wrapped) at line ${result.entry.lineNumber}` : "",
+    findMatchIds: matchIds,
+    findCurrentIndex: newIndex,
+    findRegexError: null,
+    ...(newIndex >= 0 ? { selectedId: matchIds[newIndex] } : {}),
   });
-  return true;
 }
 
 export const useLogStore = create<LogState>((set, get) => ({
@@ -614,8 +642,10 @@ export const useLogStore = create<LogState>((set, get) => ({
   highlightCaseSensitive: false,
   findQuery: "",
   findCaseSensitive: false,
-  findStatusText: "",
-  findLastMatchId: null,
+  findUseRegex: false,
+  findRegexError: null,
+  findMatchIds: [],
+  findCurrentIndex: -1,
   byteOffset: 0,
   folderLoadProgress: null,
   folderLoadCurrentFile: null,
@@ -632,7 +662,7 @@ export const useLogStore = create<LogState>((set, get) => ({
     const state = get();
     return !state.isLoading && hasSourceContext(state.activeSource, state.openFilePath);
   },
-  hasFindSession: () => get().findQuery.trim().length > 0,
+  hasFindSession: () => get().findQuery.trim().length > 0 && get().findMatchIds.length > 0,
   setEntries: (entries) =>
     set((state) => ({
       entries,
@@ -700,21 +730,39 @@ export const useLogStore = create<LogState>((set, get) => ({
   setHighlightText: (text) => set({ highlightText: text }),
   setHighlightCaseSensitive: (sensitive) =>
     set({ highlightCaseSensitive: sensitive }),
-  setFindQuery: (text) =>
-    set({
-      findQuery: text,
-      findStatusText: "",
-      findLastMatchId: null,
-    }),
-  setFindCaseSensitive: (sensitive) =>
-    set({
-      findCaseSensitive: sensitive,
-      findStatusText: "",
-      findLastMatchId: null,
-    }),
-  findNext: (trigger) => runSharedFind(trigger, "forward"),
-  findPrevious: (trigger) => runSharedFind(trigger, "backward"),
-  clearFindStatus: () => set({ findStatusText: "" }),
+  setFindQuery: (text) => {
+    set({ findQuery: text });
+    recomputeAndSetMatches();
+  },
+  setFindCaseSensitive: (sensitive) => {
+    set({ findCaseSensitive: sensitive });
+    recomputeAndSetMatches();
+  },
+  setFindUseRegex: (useRegex) => {
+    set({ findUseRegex: useRegex });
+    recomputeAndSetMatches();
+  },
+  recomputeFindMatches: () => recomputeAndSetMatches(),
+  findNext: (_trigger) => {
+    const state = get();
+    if (state.findMatchIds.length === 0) return;
+    const nextIndex = (state.findCurrentIndex + 1) % state.findMatchIds.length;
+    set({ findCurrentIndex: nextIndex, selectedId: state.findMatchIds[nextIndex] });
+  },
+  findPrevious: (_trigger) => {
+    const state = get();
+    if (state.findMatchIds.length === 0) return;
+    const prevIndex = state.findCurrentIndex <= 0
+      ? state.findMatchIds.length - 1
+      : state.findCurrentIndex - 1;
+    set({ findCurrentIndex: prevIndex, selectedId: state.findMatchIds[prevIndex] });
+  },
+  clearFind: () => set({
+    findQuery: "",
+    findMatchIds: [],
+    findCurrentIndex: -1,
+    findRegexError: null,
+  }),
   clearActiveFile: () =>
     set({
       entries: [],
@@ -729,8 +777,9 @@ export const useLogStore = create<LogState>((set, get) => ({
       aggregateFiles: [],
       activeColumns: DEFAULT_COLUMNS,
       byteOffset: 0,
-      findStatusText: "",
-      findLastMatchId: null,
+      findMatchIds: [],
+      findCurrentIndex: -1,
+      findRegexError: null,
       pendingScrollTarget: null,
     }),
   clear: () =>
@@ -756,8 +805,9 @@ export const useLogStore = create<LogState>((set, get) => ({
         message: "Ready",
       },
       byteOffset: 0,
-      findStatusText: "",
-      findLastMatchId: null,
+      findMatchIds: [],
+      findCurrentIndex: -1,
+      findRegexError: null,
       pendingScrollTarget: null,
     }),
   setFolderLoadProgress: (progress) =>

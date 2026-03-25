@@ -105,7 +105,7 @@ function navigateSelection(key: string): boolean {
  */
 export function useKeyboard() {
   const activeView = useUiStore((state) => state.activeView);
-  const showFindDialogOpen = useUiStore((state) => state.showFindDialog);
+  const showFindBarOpen = useUiStore((state) => state.showFindBar);
   const showFilterDialogOpen = useUiStore((state) => state.showFilterDialog);
   const showErrorLookupDialogOpen = useUiStore(
     (state) => state.showErrorLookupDialog
@@ -122,7 +122,7 @@ export function useKeyboard() {
   );
   const {
     openSourceFileDialog,
-    showFindDialog,
+    showFindBar,
     showFilterDialog,
     showErrorLookupDialog,
     increaseLogListTextSize,
@@ -139,7 +139,7 @@ export function useKeyboard() {
       const ctrl = event.ctrlKey || event.metaKey;
       const isInput = isTypingTarget(event.target);
       const isDialogOpen =
-        showFindDialogOpen ||
+        showFindBarOpen ||
         showFilterDialogOpen ||
         showErrorLookupDialogOpen ||
         showAboutDialogOpen ||
@@ -177,12 +177,12 @@ export function useKeyboard() {
 
       if (ctrl && event.key.toLowerCase() === "f") {
         event.preventDefault();
-        showFindDialog();
+        showFindBar();
         return;
       }
 
       if (event.key === "F3" && !isInput) {
-        if (showFindDialogOpen) {
+        if (showFindBarOpen) {
           return;
         }
 
@@ -191,7 +191,7 @@ export function useKeyboard() {
         const logState = useLogStore.getState();
 
         if (!logState.hasFindSession()) {
-          showFindDialog();
+          showFindBar();
           return;
         }
 
@@ -312,8 +312,8 @@ export function useKeyboard() {
     showFilterDialog,
     showFilterDialogOpen,
     showFileAssociationPromptOpen,
-    showFindDialog,
-    showFindDialogOpen,
+    showFindBar,
+    showFindBarOpen,
     toggleDetailsPane,
     togglePauseResume,
   ]);

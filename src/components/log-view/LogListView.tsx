@@ -34,6 +34,7 @@ export function LogListView() {
   const highlightText = useLogStore((s) => s.highlightText);
   const highlightCaseSensitive = useLogStore((s) => s.highlightCaseSensitive);
   const isPaused = useLogStore((s) => s.isPaused);
+  const findMatchIds = useLogStore((s) => s.findMatchIds);
   const showDetails = useUiStore((s) => s.showDetails);
   const logListFontSize = useUiStore((s) => s.logListFontSize);
   const themeId = useUiStore((s) => s.themeId);
@@ -51,6 +52,11 @@ export function LogListView() {
 
   const [hasKeyboardFocus, setHasKeyboardFocus] = useState(false);
   const [scrollbarWidth, setScrollbarWidth] = useState(0);
+
+  const findMatchSet = useMemo(
+    () => new Set(findMatchIds),
+    [findMatchIds]
+  );
 
   const displayEntries = useMemo(() => {
     if (!filteredIds) return entries;
@@ -360,6 +366,7 @@ export function LogListView() {
                   entry={entry}
                   rowDomId={`log-list-row-${entry.id}`}
                   isSelected={entry.id === selectedId}
+                  isFindMatch={findMatchSet.has(entry.id)}
                   visibleColumns={visibleColumns}
                   gridTemplateColumns={gridTemplateColumns}
                   listFontSize={listMetrics.fontSize}

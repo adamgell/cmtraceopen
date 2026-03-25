@@ -131,7 +131,7 @@ interface UiState {
   showInfoPane: boolean;
   showDetails: boolean;
   infoPaneHeight: number;
-  showFindDialog: boolean;
+  showFindBar: boolean;
   showFilterDialog: boolean;
   showErrorLookupDialog: boolean;
   showAboutDialog: boolean;
@@ -164,7 +164,7 @@ interface UiState {
   toggleInfoPane: () => void;
   toggleDetails: () => void;
   setInfoPaneHeight: (height: number) => void;
-  setShowFindDialog: (show: boolean) => void;
+  setShowFindBar: (show: boolean) => void;
   setShowFilterDialog: (show: boolean) => void;
   setShowErrorLookupDialog: (show: boolean) => void;
   setShowAboutDialog: (show: boolean) => void;
@@ -251,7 +251,7 @@ export const useUiStore = create<UiState>()(
       showInfoPane: true,
       showDetails: true,
       infoPaneHeight: 200,
-      showFindDialog: false,
+      showFindBar: false,
       showFilterDialog: false,
       showErrorLookupDialog: false,
       showAboutDialog: false,
@@ -328,7 +328,7 @@ export const useUiStore = create<UiState>()(
       toggleDetails: () =>
         set((state) => ({ showDetails: !state.showDetails })),
       setInfoPaneHeight: (height) => set({ infoPaneHeight: height }),
-      setShowFindDialog: (show) => set({ showFindDialog: show }),
+      setShowFindBar: (show) => set({ showFindBar: show }),
       setShowFilterDialog: (show) => set({ showFilterDialog: show }),
       setShowErrorLookupDialog: (show) => set({ showErrorLookupDialog: show }),
       setShowAboutDialog: (show) => set({ showAboutDialog: show }),
@@ -373,7 +373,7 @@ export const useUiStore = create<UiState>()(
         const state = get();
 
         if (
-          !state.showFindDialog &&
+          !state.showFindBar &&
           !state.showFilterDialog &&
           !state.showErrorLookupDialog &&
           !state.showAboutDialog &&
@@ -387,7 +387,7 @@ export const useUiStore = create<UiState>()(
         console.info("[ui-store] closing transient dialogs", { trigger });
 
         set({
-          showFindDialog: false,
+          showFindBar: false,
           showFilterDialog: false,
           showErrorLookupDialog: false,
           showAboutDialog: false,

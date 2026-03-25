@@ -9,6 +9,7 @@ interface LogRowProps {
   entry: LogEntry;
   rowDomId: string;
   isSelected: boolean;
+  isFindMatch: boolean;
   visibleColumns: ColumnDefinition[];
   gridTemplateColumns: string;
   listFontSize: number;
@@ -20,9 +21,13 @@ interface LogRowProps {
   onErrorCodeClick?: (span: ErrorCodeSpan) => void;
 }
 
+/** Subtle tint for find-match rows (not the active selection). */
+const FIND_MATCH_OVERLAY = "rgba(255, 210, 50, 0.18)";
+
 function getRowStyle(
   entry: LogEntry,
   isSelected: boolean,
+  isFindMatch: boolean,
   palette: LogSeverityPalette
 ) {
 
@@ -33,23 +38,29 @@ function getRowStyle(
     };
   }
 
+  let bg: string;
+  let color: string;
+
   switch (entry.severity) {
     case "Error":
-      return {
-        backgroundColor: palette.error.background,
-        color: palette.error.text,
-      };
+      bg = palette.error.background;
+      color = palette.error.text;
+      break;
     case "Warning":
-      return {
-        backgroundColor: palette.warning.background,
-        color: palette.warning.text,
-      };
+      bg = palette.warning.background;
+      color = palette.warning.text;
+      break;
     default:
-      return {
-        backgroundColor: palette.info.background,
-        color: palette.info.text,
-      };
+      bg = palette.info.background;
+      color = palette.info.text;
+      break;
   }
+
+  if (isFindMatch) {
+    return { backgroundColor: FIND_MATCH_OVERLAY, color };
+  }
+
+  return { backgroundColor: bg, color };
 }
 
 function highlightMessage(
@@ -205,6 +216,7 @@ export function LogRow({
   entry,
   rowDomId,
   isSelected,
+  isFindMatch,
   visibleColumns,
   gridTemplateColumns,
   listFontSize,
@@ -215,7 +227,7 @@ export function LogRow({
   onClick,
   onErrorCodeClick,
 }: LogRowProps) {
-  const style = getRowStyle(entry, isSelected, severityPalette);
+  const style = getRowStyle(entry, isSelected, isFindMatch, severityPalette);
 
   return (
     <div

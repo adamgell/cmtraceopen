@@ -7,7 +7,7 @@ import { StatusBar } from "./StatusBar";
 import { FileSidebar, FILE_SIDEBAR_RECOMMENDED_WIDTH } from "./FileSidebar";
 import { LogListView } from "../log-view/LogListView";
 import { InfoPane } from "../log-view/InfoPane";
-import { FindDialog } from "../dialogs/FindDialog";
+import { FindBar } from "./FindBar";
 import { FilterDialog } from "../dialogs/FilterDialog";
 import { ErrorLookupDialog } from "../dialogs/ErrorLookupDialog";
 import { AboutDialog } from "../dialogs/AboutDialog";
@@ -48,7 +48,7 @@ export function AppShell() {
   const toggleSidebar = useUiStore((s) => s.toggleSidebar);
   const showInfoPane = useUiStore((s) => s.showInfoPane);
   const infoPaneHeight = useUiStore((s) => s.infoPaneHeight);
-  const showFindDialog = useUiStore((s) => s.showFindDialog);
+  const showFindBar = useUiStore((s) => s.showFindBar);
   const showFilterDialog = useUiStore((s) => s.showFilterDialog);
   const showErrorLookupDialog = useUiStore((s) => s.showErrorLookupDialog);
   const showAboutDialog = useUiStore((s) => s.showAboutDialog);
@@ -61,7 +61,7 @@ export function AppShell() {
   const showFileAssociationPrompt = useUiStore(
     (s) => s.showFileAssociationPrompt
   );
-  const setShowFindDialog = useUiStore((s) => s.setShowFindDialog);
+  const setShowFindBar = useUiStore((s) => s.setShowFindBar);
   const setShowFilterDialog = useUiStore((s) => s.setShowFilterDialog);
   const setShowErrorLookupDialog = useUiStore(
     (s) => s.setShowErrorLookupDialog
@@ -340,6 +340,9 @@ export function AppShell() {
     >
       <Toolbar />
       {activeView === "log" && <TabStrip />}
+      {showFindBar && activeView === "log" && (
+        <FindBar onClose={() => setShowFindBar(false)} />
+      )}
 
       <div
         style={{
@@ -406,10 +409,6 @@ export function AppShell() {
 
       <StatusBar />
 
-      <FindDialog
-        isOpen={showFindDialog}
-        onClose={() => setShowFindDialog(false)}
-      />
       <FilterDialog
         isOpen={showFilterDialog}
         onClose={() => setShowFilterDialog(false)}

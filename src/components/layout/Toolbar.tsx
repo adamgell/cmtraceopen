@@ -195,7 +195,7 @@ export interface AppActionHandlers {
   openKnownSourcePresetByMenuId: (presetMenuId: string) => Promise<void>;
   pasteDsregcmdSource: () => Promise<void>;
   captureDsregcmdSource: () => Promise<void>;
-  showFindDialog: () => void;
+  showFindBar: () => void;
   showFilterDialog: () => void;
   showErrorLookupDialog: () => void;
   showAboutDialog: () => void;
@@ -233,7 +233,7 @@ export function useAppActions(): AppActionHandlers {
   const activeView = useUiStore((s) => s.activeView);
   const showDetails = useUiStore((s) => s.showDetails);
   const showInfoPane = useUiStore((s) => s.showInfoPane);
-  const setShowFindDialog = useUiStore((s) => s.setShowFindDialog);
+  const setShowFindBar = useUiStore((s) => s.setShowFindBar);
   const setShowFilterDialog = useUiStore((s) => s.setShowFilterDialog);
   const setShowErrorLookupDialog = useUiStore(
     (s) => s.setShowErrorLookupDialog
@@ -596,14 +596,14 @@ export function useAppActions(): AppActionHandlers {
     await analyzeDsregcmdSource({ kind: "capture" });
   }, [isSourceCommandBusy]);
 
-  const showFindDialog = useCallback(() => {
+  const showFindBar = useCallback(() => {
     if (!commandState.canFind) {
       return;
     }
 
     useUiStore.getState().ensureLogViewVisible("app-actions.show-find");
-    setShowFindDialog(true);
-  }, [commandState.canFind, setShowFindDialog]);
+    setShowFindBar(true);
+  }, [commandState.canFind, setShowFindBar]);
 
   const showFilterDialog = useCallback(() => {
     if (!commandState.canFilter) {
@@ -730,7 +730,7 @@ export function useAppActions(): AppActionHandlers {
     openKnownSourcePresetByMenuId,
     pasteDsregcmdSource,
     captureDsregcmdSource,
-    showFindDialog,
+    showFindBar,
     showFilterDialog,
     showErrorLookupDialog,
     showAboutDialog,

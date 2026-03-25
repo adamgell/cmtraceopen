@@ -18,7 +18,7 @@ export function useAppMenu() {
     openSourceFileDialog,
     openSourceFolderDialog,
     openKnownSourceCatalogAction,
-    showFindDialog,
+    showFindBar,
     showFilterDialog,
     showErrorLookupDialog,
     showEvidenceBundleDialog,
@@ -49,7 +49,7 @@ export function useAppMenu() {
             await openSourceFolderDialog();
             return;
           case "show_find":
-            showFindDialog();
+            showFindBar();
             return;
           case "show_filter":
             showFilterDialog();
@@ -128,7 +128,7 @@ export function useAppMenu() {
     showErrorLookupDialog,
     showEvidenceBundleDialog,
     showFilterDialog,
-    showFindDialog,
+    showFindBar,
     toggleDetailsPane,
     toggleInfoPane,
     togglePauseResume,
