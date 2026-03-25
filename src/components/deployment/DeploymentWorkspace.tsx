@@ -226,6 +226,7 @@ export function DeploymentWorkspace() {
   const succeededFiles = result.files.filter(
     (f) => f.outcome === "success" || f.outcome === "deferred"
   );
+  const unknownFiles = result.files.filter((f) => f.outcome === "unknown");
 
   return (
     <div
@@ -303,6 +304,22 @@ export function DeploymentWorkspace() {
             Succeeded / Deferred
           </div>
           <DeploymentSuccessTable files={succeededFiles} />
+        </div>
+      )}
+
+      {unknownFiles.length > 0 && (
+        <div>
+          <div
+            style={{
+              fontSize: "13px",
+              fontWeight: 600,
+              marginBottom: "8px",
+              color: tokens.colorNeutralForeground3,
+            }}
+          >
+            Other / Unclassified ({unknownFiles.length})
+          </div>
+          <DeploymentSuccessTable files={unknownFiles} />
         </div>
       )}
     </div>

@@ -98,8 +98,9 @@ static PSADT_EXIT_CODE_RE: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"(?i)exit\s*code\s*[\[:\s]*(\d+)").unwrap()
 });
 
-static BURN_RETURN_CODE_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"(?i)(?:error|return)\s*code[:\s]+(\d+)").unwrap()
+/// Burn exit code: "Exit code: 0x0" or "Exit code: 0x80070005" (hex)
+static BURN_EXIT_CODE_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"(?i)exit\s*code:\s*0x([0-9A-Fa-f]+)").unwrap()
 });
 
 // MSI metadata: Property(S): ProductName = <value>
@@ -416,12 +417,11 @@ fn extract_exit_code(format: &DeploymentFormat, entries: &[LogEntry]) -> Option<
             None
         }
         DeploymentFormat::Burn => {
+            // Burn exit line: "Exit code: 0xN" (any severity, typically i007)
             for entry in entries.iter().rev() {
-                if entry.severity == Severity::Error {
-                    if let Some(caps) = BURN_RETURN_CODE_RE.captures(&entry.message) {
-                        if let Ok(code) = caps[1].parse::<i32>() {
-                            return Some(code);
-                        }
+                if let Some(caps) = BURN_EXIT_CODE_RE.captures(&entry.message) {
+                    if let Ok(code) = u32::from_str_radix(&caps[1], 16) {
+                        return Some(code as i32);
                     }
                 }
             }
