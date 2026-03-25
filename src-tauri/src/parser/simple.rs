@@ -166,6 +166,14 @@ mod tests {
         assert_eq!(parsed.thread, Some(4116));
         assert_eq!(parsed.severity, Severity::Info);
         assert_eq!(parsed.timezone_offset, 240);
+        // Verify epoch millis: 09:12:45.332 at UTC+4 = 05:12:45.332 UTC
+        let expected_ts = chrono::NaiveDate::from_ymd_opt(2023, 7, 15)
+            .unwrap()
+            .and_hms_milli_opt(5, 12, 45, 332)
+            .unwrap()
+            .and_utc()
+            .timestamp_millis();
+        assert_eq!(parsed.timestamp, Some(expected_ts));
     }
 
     #[test]

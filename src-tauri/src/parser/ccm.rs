@@ -7,7 +7,7 @@
 //! The regex patterns are derived directly from the scanf format strings
 //! extracted from the CMTrace.exe binary (see REVERSE_ENGINEERING.md).
 
-use chrono::FixedOffset;
+use chrono::{FixedOffset, TimeZone};
 use once_cell::sync::Lazy;
 use regex::Regex;
 
@@ -91,6 +91,22 @@ pub(crate) fn truncate_subsecond_to_millis(value: &str) -> Option<u32> {
     }
 }
 
+/// Convert a naive local datetime + optional timezone offset (in minutes) to UTC epoch millis.
+/// Falls back to treating naive as UTC if the offset is invalid or overflows.
+pub(crate) fn naive_to_utc_millis(naive: chrono::NaiveDateTime, offset_minutes: Option<i32>) -> i64 {
+    if let Some(offset_minutes) = offset_minutes {
+        offset_minutes
+            .checked_mul(60)
+            .and_then(FixedOffset::east_opt)
+            .and_then(|offset| offset.from_local_datetime(&naive).single())
+            .map(|dt| dt.timestamp_millis())
+            .unwrap_or_else(|| naive.and_utc().timestamp_millis())
+    } else {
+        naive.and_utc().timestamp_millis()
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn build_timestamp(
     month: u32,
     day: u32,
@@ -101,18 +117,10 @@ pub(crate) fn build_timestamp(
     millis: u32,
     timezone_offset: Option<i32>,
 ) -> (Option<i64>, Option<String>) {
-    let naive = chrono::NaiveDate::from_ymd_opt(year, month, day)
-        .and_then(|date| date.and_hms_milli_opt(hour, minute, second, millis));
+    let timestamp = chrono::NaiveDate::from_ymd_opt(year, month, day)
+        .and_then(|date| date.and_hms_milli_opt(hour, minute, second, millis))
+        .map(|naive| naive_to_utc_millis(naive, timezone_offset));
 
-    let timestamp = naive.and_then(|naive| {
-        if let Some(offset_minutes) = timezone_offset {
-            FixedOffset::east_opt(offset_minutes * 60)
-                .and_then(|offset| offset.from_local_datetime(&naive).single())
-                .map(|dt| dt.timestamp_millis())
-        } else {
-            Some(naive.and_utc().timestamp_millis())
-        }
-    });
     let timestamp_display = Some(format!(
         "{:02}-{:02}-{:04} {:02}:{:02}:{:02}.{:03}",
         month, day, year, hour, minute, second, millis
@@ -364,5 +372,45 @@ mod tests {
         assert_eq!(entries[1].line_number, 2);
         assert!(entries[1].message.contains("Downloaded profile payload is not valid JSON"));
         assert!(entries[1].message.contains("At C:\\Windows\\IMECache\\HealthScripts\\script.ps1:457 char:9"));
+    }
+
+    #[test]
+    fn test_build_timestamp_none_offset_treats_as_utc() {
+        let (ts, _) = build_timestamp(1, 1, 2024, 10, 0, 0, 0, None);
+        let expected = chrono::NaiveDate::from_ymd_opt(2024, 1, 1)
+            .unwrap()
+            .and_hms_milli_opt(10, 0, 0, 0)
+            .unwrap()
+            .and_utc()
+            .timestamp_millis();
+        assert_eq!(ts, Some(expected));
+    }
+
+    #[test]
+    fn test_build_timestamp_midnight_crossing_offset() {
+        // 01:00 local at UTC+3 = 22:00 UTC on the previous day
+        let (ts, _) = build_timestamp(1, 2, 2024, 1, 0, 0, 0, Some(180));
+        let expected = chrono::NaiveDate::from_ymd_opt(2024, 1, 1)
+            .unwrap()
+            .and_hms_milli_opt(22, 0, 0, 0)
+            .unwrap()
+            .and_utc()
+            .timestamp_millis();
+        assert_eq!(ts, Some(expected));
+    }
+
+    #[test]
+    fn test_build_timestamp_extreme_offset_falls_back_to_utc() {
+        // Offset of 99999 minutes would overflow FixedOffset range.
+        // Should fall back to treating naive as UTC, not return None.
+        let (ts, display) = build_timestamp(1, 1, 2024, 10, 0, 0, 0, Some(99999));
+        let expected_utc = chrono::NaiveDate::from_ymd_opt(2024, 1, 1)
+            .unwrap()
+            .and_hms_milli_opt(10, 0, 0, 0)
+            .unwrap()
+            .and_utc()
+            .timestamp_millis();
+        assert_eq!(ts, Some(expected_utc), "extreme offset should fall back to UTC");
+        assert!(display.is_some(), "display should always be present");
     }
 }
