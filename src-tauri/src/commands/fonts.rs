@@ -10,7 +10,7 @@ pub struct SystemFontList {
 static CACHED_FONTS: Lazy<SystemFontList> = Lazy::new(|| {
     let source = font_kit::source::SystemSource::new();
     let mut families = source.all_families().unwrap_or_default();
-    families.sort_unstable_by(|a, b| a.to_ascii_lowercase().cmp(&b.to_ascii_lowercase()));
+    families.sort_unstable_by_key(|a| a.to_ascii_lowercase());
     families.dedup();
     families.retain(|name| !name.starts_with('.') && !name.starts_with('#') && !name.is_empty());
     SystemFontList { families }
