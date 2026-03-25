@@ -45,10 +45,11 @@ export const sharedOverrides: Partial<Theme> = {
 
   // ── Font families ─────────────────────────────────────────────
   fontFamilyBase:
-    "'Segoe UI', 'Segoe UI Web (West European)', -apple-system, BlinkMacSystemFont, Roboto, 'Helvetica Neue', sans-serif",
-  fontFamilyMonospace: "Consolas, 'Courier New', Courier, monospace",
+    "var(--cmtrace-font-family-ui, 'Segoe UI', 'Segoe UI Web (West European)', -apple-system, BlinkMacSystemFont, Roboto, 'Helvetica Neue', sans-serif)",
+  fontFamilyMonospace:
+    "var(--cmtrace-font-family-mono, Consolas, 'Courier New', Courier, monospace)",
   fontFamilyNumeric:
-    "Bahnschrift, 'Segoe UI', 'Segoe UI Web (West European)', -apple-system, BlinkMacSystemFont, Roboto, 'Helvetica Neue', sans-serif",
+    "var(--cmtrace-font-family-ui, Bahnschrift, 'Segoe UI', 'Segoe UI Web (West European)', -apple-system, BlinkMacSystemFont, Roboto, 'Helvetica Neue', sans-serif)",
 
   // ── Font weights ──────────────────────────────────────────────
   fontWeightRegular: 400,

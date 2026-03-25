@@ -1,5 +1,7 @@
-export const LOG_UI_FONT_FAMILY = "'Segoe UI', Tahoma, sans-serif";
-export const LOG_MONOSPACE_FONT_FAMILY = "'Consolas', 'Cascadia Mono', 'Courier New', monospace";
+export const LOG_UI_FONT_FAMILY =
+  "var(--cmtrace-font-family-ui, 'Segoe UI', Tahoma, sans-serif)";
+export const LOG_MONOSPACE_FONT_FAMILY =
+  "var(--cmtrace-font-family-mono, 'Consolas', 'Cascadia Mono', 'Courier New', monospace)";
 
 export const DEFAULT_LOG_LIST_FONT_SIZE = 13;
 export const MIN_LOG_LIST_FONT_SIZE = 11;
