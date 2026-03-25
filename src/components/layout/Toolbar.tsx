@@ -754,6 +754,7 @@ export function Toolbar() {
 
   const activeView = useUiStore((s) => s.activeView);
   const setActiveView = useUiStore((s) => s.setActiveView);
+  const currentPlatform = useUiStore((s) => s.currentPlatform);
 
   const {
     commandState,
@@ -952,8 +953,8 @@ export function Toolbar() {
         style={{ minWidth: "180px" }}
         aria-label="Workspace"
       >
-        {(Object.entries(WORKSPACE_LABELS) as [WorkspaceId, string][]).map(([value, label]) => (
-          <Option key={value} value={value}>{label}</Option>
+        {getAvailableWorkspaces(currentPlatform).map((wsId) => (
+          <Option key={wsId} value={wsId}>{WORKSPACE_LABELS[wsId]}</Option>
         ))}
       </Dropdown>
 
