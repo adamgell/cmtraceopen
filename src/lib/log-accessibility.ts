@@ -1,5 +1,7 @@
-export const LOG_UI_FONT_FAMILY = "'Segoe UI', Tahoma, sans-serif";
-export const LOG_MONOSPACE_FONT_FAMILY = "'Consolas', 'Cascadia Mono', 'Courier New', monospace";
+export const LOG_UI_FONT_FAMILY =
+  "var(--cmtrace-font-family-ui, 'Segoe UI', Tahoma, sans-serif)";
+export const LOG_MONOSPACE_FONT_FAMILY =
+  "var(--cmtrace-font-family-mono, 'Consolas', 'Cascadia Mono', 'Courier New', monospace)";
 
 export const DEFAULT_LOG_LIST_FONT_SIZE = 13;
 export const MIN_LOG_LIST_FONT_SIZE = 11;
@@ -32,11 +34,12 @@ export interface LogListMetrics {
 export function getLogListMetrics(fontSize: number): LogListMetrics {
   const clampedFontSize = clampLogListFontSize(fontSize);
   const rowLineHeight = Math.max(20, Math.round(clampedFontSize * 1.5));
+  const rowVerticalPadding = 2;
 
   return {
     fontSize: clampedFontSize,
     rowLineHeight,
-    rowHeight: rowLineHeight + 2,
+    rowHeight: rowLineHeight + rowVerticalPadding + 1,
     headerFontSize: Math.max(12, clampedFontSize),
     headerLineHeight: rowLineHeight + 4,
   };

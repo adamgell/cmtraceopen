@@ -4,6 +4,55 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.6.0-pre.1] - 2026-03-24
+
+### Highlights
+
+Major UX overhaul and parser expansion. The log viewer now has dynamic columns derived from the detected parser, a severity icon column, resizable and reorderable columns, a collapsible sidebar, workspace dropdown, multi-file tabs, and a font family picker. Five new log parsers added. The Software Deployment workspace now analyzes folders for MSI/PSADT/Burn deployment outcomes.
+
+### Added
+
+- **Workspace dropdown**: Replaced 5 workspace buttons with a single dropdown selector.
+- **Log file tabs**: Tab strip below the toolbar for switching between multiple open log files with overflow dropdown.
+- **Dynamic columns**: Columns are now derived automatically from the detected parser — plain text shows only the message column, CCM shows component/dateTime/thread/sourceFile.
+- **Severity icon column**: Colored dot (red/yellow/gray) as the leftmost column, always visible.
+- **Timestamp-first layout**: Date/Time column now appears before Log Text by default.
+- **Resizable columns**: Drag column header borders to resize any column, including Log Text. Widths persist.
+- **Reorderable columns**: Drag column headers to reorder. Order persists.
+- **Collapsible sidebar**: Chevron button or Ctrl+B to collapse/expand the sidebar. State persists.
+- **Font family picker**: Choose any system font in the Accessibility dialog. Font applies to entire app and persists.
+- **macOS Intune MDM Daemon parser**: Dedicated parser for pipe-delimited `/Library/Logs/Microsoft/Intune/IntuneMDMDaemon*.log` files. Extracts process, severity, thread, sub-component.
+- **Windows DHCP Server parser**: Dedicated parser for `DhcpSrvLog-*.log` and `DhcpV6SrvLog-*.log` with IP Address, Host Name, and MAC Address columns.
+- **WiX/Burn bootstrapper parser**: Dedicated parser for `[PID:TID][ISO-timestamp]sNNN:` format logs (vc_redist, .NET runtime, etc.).
+- **MSI verbose log parser**: Handles ~12 line patterns including engine messages, action tracking, property dumps, and `MainEngineThread` return values.
+- **PSADT Legacy format parser**: Parses `[timestamp] [section] [source] [severity] :: message` logs from PSAppDeployToolkit v4.
+- **IME subsystem enrichment**: Extracts `[Subsystem]` prefixes (Win32App, PowerShell, Flighting, etc.) from IME log messages into the Source column.
+- **Deployment workspace backend**: `analyze_deployment_folder` Rust command scans folders recursively, classifies format/outcome, extracts exit codes, generates error summaries with error code lookup.
+- **PatchMyPC known sources**: Added PatchMyPC Logs Folder and PatchMyPC Install Logs to the Known Sources menu.
+- **Batch file parsing**: Single IPC call parses all files in a folder via Rayon parallel processing.
+- **Tab entry caching**: Parsed file entries cached in memory for instant tab switching (zero re-parse).
+- **Folder load progress overlay**: Full-screen ProgressBar + Spinner during folder loading.
+
+### Changed
+
+- **Toolbar reorganization**: Moved Pause/Refresh/Streaming to sidebar footer, removed Highlight label, replaced native selects with Fluent UI Menu/Dropdown components, pushed Theme to far right.
+- **Known Log Sources**: Menu dynamically populated from the full catalog instead of hardcoded single item.
+
+### Performance
+
+- **Zero-allocation severity detection**: Replaced `.to_lowercase()` with byte-level ASCII case folding — eliminates heap allocation per log line.
+- **Cached thread display**: `format_thread_display()` cached with thread-local HashMap — ~15 allocations instead of ~30K per file.
+- **Combined Simple parser regex**: Merged timestamp and thread regexes into single pass.
+- **Error code pre-check**: Fast `"0x"` substring check before running regex on every log line.
+- **Timestamped format caching**: Detected format reused for subsequent lines — avoids up to 3 wasted regex attempts per line.
+
+### Fixed
+
+- Dark mode fixes for Accessibility, Filter, ErrorLookup, About, and FileAssociation dialogs.
+- Log row height calculation corrected to prevent overlap at larger font sizes.
+- Tab strip overflow dropdown now works (was clipped by `overflow: hidden`).
+- Sidebar routing for deployment and macOS workspaces (was falling through to DSRegCmd).
+
 ## [0.3.0] - 2026-03-13
 
 ### Highlights

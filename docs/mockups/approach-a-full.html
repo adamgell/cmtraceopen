@@ -1,0 +1,1052 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CMTrace Open - Approach A Full Mockup</title>
+<style>
+  :root {
+    --bg-app: #1e1e1e;
+    --bg-toolbar: #2d2d2d;
+    --bg-tab-bar: #252526;
+    --bg-tab-active: #1e1e1e;
+    --bg-tab-inactive: #2d2d2d;
+    --bg-tab-hover: #353535;
+    --bg-content: #1e1e1e;
+    --bg-sidebar: #252526;
+    --bg-status: #0078d4;
+    --bg-dropdown: #313131;
+    --bg-dropdown-hover: #094771;
+    --bg-menu: #2d2d2d;
+    --bg-menu-hover: #094771;
+    --border: #3e3e3e;
+    --border-tab: #2b2b2b;
+    --border-focus: #0078d4;
+    --text: #cccccc;
+    --text-muted: #858585;
+    --text-bright: #e0e0e0;
+    --text-active: #ffffff;
+    --accent: #0078d4;
+    --accent-light: #1a8ad4;
+    --warning: #e8a838;
+    --error: #f14c4c;
+    --info: #3794ff;
+    --success: #4ec9b0;
+    --row-alt: #262626;
+    --row-hover: #2a2d2e;
+    --row-selected: #04395e;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: var(--bg-app);
+    color: var(--text);
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    user-select: none;
+  }
+
+  /* ══════════════════════════════ */
+  /*  MENU BAR                      */
+  /* ══════════════════════════════ */
+  .menu-bar {
+    display: flex;
+    align-items: center;
+    padding: 0 6px;
+    background: #2d2d2d;
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+    height: 28px;
+  }
+  .menu-item {
+    padding: 4px 10px;
+    font-size: 11px;
+    color: var(--text);
+    cursor: pointer;
+    border-radius: 3px;
+    position: relative;
+  }
+  .menu-item:hover {
+    background: rgba(255,255,255,0.08);
+  }
+  .menu-item.open {
+    background: var(--accent);
+    color: #fff;
+  }
+  .menu-dropdown {
+    display: none;
+    position: absolute;
+    top: 100%;
+    left: 0;
+    background: var(--bg-menu);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    box-shadow: 0 8px 30px rgba(0,0,0,0.5);
+    min-width: 220px;
+    z-index: 200;
+    padding: 4px;
+    margin-top: 2px;
+  }
+  .menu-dropdown.show { display: block; }
+  .menu-dropdown-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 5px 12px;
+    font-size: 11px;
+    color: var(--text);
+    border-radius: 4px;
+    cursor: pointer;
+  }
+  .menu-dropdown-item:hover {
+    background: var(--bg-menu-hover);
+    color: var(--text-active);
+  }
+  .menu-dropdown-item .shortcut {
+    color: var(--text-muted);
+    font-size: 10px;
+    margin-left: 24px;
+  }
+  .menu-dropdown-item.disabled {
+    color: var(--text-muted);
+    cursor: default;
+  }
+  .menu-dropdown-item.disabled:hover {
+    background: transparent;
+    color: var(--text-muted);
+  }
+  .menu-sep {
+    height: 1px;
+    background: var(--border);
+    margin: 4px 8px;
+  }
+  .menu-dropdown-sub {
+    position: relative;
+  }
+  .menu-dropdown-sub::after {
+    content: '>';
+    margin-left: auto;
+    color: var(--text-muted);
+    font-size: 10px;
+  }
+
+  /* ══════════════════════════════ */
+  /*  TITLE BAR                     */
+  /* ══════════════════════════════ */
+  .title-bar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 7px 14px;
+    background: #1a1a1a;
+    font-size: 12px;
+    color: var(--text-muted);
+    flex-shrink: 0;
+    -webkit-app-region: drag;
+  }
+  .title-bar .dots { display: flex; gap: 7px; }
+  .title-bar .dot { width: 11px; height: 11px; border-radius: 50%; }
+  .dot-red { background: #ff5f56; }
+  .dot-yellow { background: #ffbd2e; }
+  .dot-green { background: #27c93f; }
+  .title-bar .title-text { flex: 1; text-align: center; font-size: 11px; }
+
+  /* ══════════════════════════════ */
+  /*  TOOLBAR                       */
+  /* ══════════════════════════════ */
+  .toolbar {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 8px 12px;
+    background: var(--bg-toolbar);
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+  .toolbar-section {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .toolbar-spacer { flex: 1; }
+
+  /* Buttons */
+  .btn {
+    padding: 5px 11px;
+    font-size: 11px;
+    font-weight: 400;
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    background: var(--bg-toolbar);
+    color: var(--text);
+    cursor: pointer;
+    white-space: nowrap;
+    transition: all 0.1s;
+    font-family: inherit;
+    line-height: 1.3;
+  }
+  .btn:hover { background: var(--bg-tab-hover); border-color: #555; }
+  .btn:active { background: #404040; }
+  .btn-active {
+    background: #1a3a5c;
+    border-color: var(--accent);
+    color: var(--text-bright);
+    font-weight: 500;
+  }
+
+  /* Dropdown select */
+  .toolbar-select {
+    padding: 5px 28px 5px 10px;
+    font-size: 11px;
+    font-family: inherit;
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    background: var(--bg-dropdown);
+    color: var(--text);
+    cursor: pointer;
+    appearance: none;
+    -webkit-appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='5' viewBox='0 0 8 5'%3E%3Cpath d='M0 0l4 5 4-5z' fill='%23888'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 9px center;
+    line-height: 1.3;
+  }
+  .toolbar-select:hover { border-color: #666; }
+  .toolbar-select:focus { outline: none; border-color: var(--accent); }
+
+  /* Workspace selector - highlighted */
+  .workspace-select {
+    font-weight: 600;
+    min-width: 160px;
+    border-color: var(--accent);
+    background: #1a2a3a;
+    color: var(--text-bright);
+  }
+  .workspace-select:hover { background: #1f3040; }
+
+  /* Divider */
+  .v-divider {
+    width: 1px;
+    height: 22px;
+    background: var(--border);
+    margin: 0 1px;
+    flex-shrink: 0;
+  }
+
+  /* Input */
+  .toolbar-input {
+    padding: 5px 9px;
+    font-size: 11px;
+    font-family: inherit;
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    background: var(--bg-content);
+    color: var(--text);
+    width: 180px;
+    line-height: 1.3;
+  }
+  .toolbar-input:focus { outline: none; border-color: var(--accent); }
+  .toolbar-input::placeholder { color: var(--text-muted); }
+
+  /* Badge */
+  .status-badge {
+    font-size: 10px;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 10px;
+    letter-spacing: 0.3px;
+  }
+  .badge-streaming { background: #0e4429; color: #3fb950; }
+  .badge-paused { background: #3d2e00; color: var(--warning); }
+
+  /* ══════════════════════════════ */
+  /*  TAB STRIP                     */
+  /* ══════════════════════════════ */
+  .tab-strip {
+    display: flex;
+    align-items: stretch;
+    background: var(--bg-tab-bar);
+    border-bottom: 1px solid var(--border);
+    height: 34px;
+    flex-shrink: 0;
+    overflow: hidden;
+  }
+  .tab {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 0 6px 0 12px;
+    font-size: 11px;
+    color: var(--text-muted);
+    cursor: pointer;
+    border-right: 1px solid var(--border-tab);
+    white-space: nowrap;
+    position: relative;
+    transition: background 0.1s, color 0.1s;
+    flex-shrink: 0;
+    max-width: 200px;
+    min-width: 80px;
+  }
+  .tab .tab-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .tab:hover {
+    background: var(--bg-tab-hover);
+    color: var(--text);
+  }
+  .tab.active {
+    background: var(--bg-tab-active);
+    color: var(--text-active);
+  }
+  .tab.active::after {
+    content: '';
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 2px;
+    background: var(--accent);
+  }
+  .tab .tab-icon {
+    font-size: 13px;
+    flex-shrink: 0;
+  }
+  .tab .tab-close {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    border-radius: 3px;
+    font-size: 15px;
+    line-height: 1;
+    color: var(--text-muted);
+    opacity: 0;
+    transition: opacity 0.1s, background 0.1s;
+    flex-shrink: 0;
+    margin-left: auto;
+  }
+  .tab:hover .tab-close,
+  .tab.active .tab-close { opacity: 1; }
+  .tab .tab-close:hover {
+    background: rgba(255,255,255,0.1);
+    color: var(--text-bright);
+  }
+  /* Modified indicator dot */
+  .tab .modified-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--text-muted);
+    flex-shrink: 0;
+  }
+  .tab:hover .modified-dot { display: none; }
+  .tab.active .modified-dot { display: none; }
+
+  .tab-overflow-btn {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 0 10px;
+    font-size: 11px;
+    color: var(--text-muted);
+    cursor: pointer;
+    border-left: 1px solid var(--border-tab);
+    margin-left: auto;
+    white-space: nowrap;
+    flex-shrink: 0;
+    transition: background 0.1s;
+    position: relative;
+  }
+  .tab-overflow-btn:hover {
+    background: var(--bg-tab-hover);
+    color: var(--text);
+  }
+
+  /* Overflow dropdown menu */
+  .overflow-menu {
+    display: none;
+    position: absolute;
+    top: 100%;
+    right: 0;
+    background: var(--bg-menu);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    box-shadow: 0 8px 30px rgba(0,0,0,0.5);
+    min-width: 240px;
+    z-index: 100;
+    padding: 4px;
+    margin-top: 2px;
+  }
+  .overflow-menu.show { display: block; }
+  .overflow-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    font-size: 11px;
+    color: var(--text);
+    border-radius: 4px;
+    cursor: pointer;
+  }
+  .overflow-item:hover { background: var(--bg-menu-hover); color: var(--text-active); }
+  .overflow-item .ov-icon { font-size: 12px; }
+  .overflow-item .ov-path { color: var(--text-muted); font-size: 10px; margin-left: auto; }
+
+  /* ══════════════════════════════ */
+  /*  MAIN CONTENT AREA             */
+  /* ══════════════════════════════ */
+  .main-area {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+  }
+
+  /* Sidebar */
+  .sidebar {
+    width: 200px;
+    background: var(--bg-sidebar);
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    flex-shrink: 0;
+    overflow-y: auto;
+  }
+  .sidebar-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 12px 6px;
+  }
+  .sidebar-title {
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    color: var(--text-muted);
+  }
+  .sidebar-action {
+    font-size: 16px;
+    color: var(--text-muted);
+    cursor: pointer;
+    line-height: 1;
+  }
+  .sidebar-action:hover { color: var(--text-bright); }
+  .sidebar-group {
+    padding: 0 6px 8px;
+  }
+  .sidebar-group-label {
+    font-size: 10px;
+    color: var(--text-muted);
+    padding: 6px 6px 3px;
+    font-weight: 500;
+  }
+  .sidebar-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 8px;
+    border-radius: 4px;
+    cursor: pointer;
+    color: var(--text);
+    font-size: 11px;
+    transition: background 0.1s;
+  }
+  .sidebar-item:hover { background: var(--bg-tab-hover); }
+  .sidebar-item.active { background: var(--accent); color: #fff; }
+  .sidebar-item .si-icon { font-size: 12px; flex-shrink: 0; }
+  .sidebar-item .si-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .sidebar-item .si-count {
+    margin-left: auto;
+    font-size: 9px;
+    color: var(--text-muted);
+    background: rgba(255,255,255,0.06);
+    padding: 1px 5px;
+    border-radius: 8px;
+  }
+  .sidebar-item.active .si-count { color: rgba(255,255,255,0.7); background: rgba(255,255,255,0.15); }
+
+  /* Sidebar footer */
+  .sidebar-footer {
+    margin-top: auto;
+    padding: 6px 8px;
+    border-top: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    flex-shrink: 0;
+  }
+  .sidebar-footer .btn {
+    padding: 3px 8px;
+    font-size: 10px;
+  }
+  .sidebar-footer .status-badge {
+    font-size: 9px;
+    padding: 2px 6px;
+  }
+
+  /* Log view */
+  .log-view {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .log-columns {
+    display: flex;
+    background: var(--bg-toolbar);
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+  .log-columns span {
+    padding: 5px 10px;
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    border-right: 1px solid rgba(62,62,62,0.5);
+  }
+  .col-ln { width: 50px; text-align: right; }
+  .col-time { width: 90px; }
+  .col-comp { width: 140px; }
+  .col-sev { width: 60px; }
+  .col-msg { flex: 1; border-right: none !important; }
+
+  .log-rows {
+    flex: 1;
+    overflow-y: auto;
+    font-family: 'Cascadia Code', 'Fira Code', 'Consolas', 'SF Mono', monospace;
+    font-size: 11.5px;
+    line-height: 1;
+  }
+  .log-row {
+    display: flex;
+    border-bottom: 1px solid rgba(62,62,62,0.2);
+    cursor: default;
+  }
+  .log-row:nth-child(even) { background: var(--row-alt); }
+  .log-row:hover { background: var(--row-hover); }
+  .log-row.selected { background: var(--row-selected); }
+  .log-row span {
+    padding: 4px 10px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 11px;
+  }
+  .sev-info { color: var(--info); }
+  .sev-warn { color: var(--warning); }
+  .sev-error { color: var(--error); font-weight: 500; }
+  .sev-verbose { color: var(--text-muted); }
+  .highlight-match { background: rgba(255,255,0,0.18); }
+
+  /* ══════════════════════════════ */
+  /*  STATUS BAR                    */
+  /* ══════════════════════════════ */
+  .status-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 3px 14px;
+    background: var(--bg-status);
+    color: #fff;
+    font-size: 10.5px;
+    flex-shrink: 0;
+  }
+  .status-bar-left, .status-bar-right {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+  }
+  .status-sep {
+    width: 1px;
+    height: 12px;
+    background: rgba(255,255,255,0.25);
+  }
+
+  /* ══════════════════════════════ */
+  /*  INTERACTIVITY                 */
+  /* ══════════════════════════════ */
+  .clickable { cursor: pointer; }
+</style>
+</head>
+<body>
+
+<!-- TITLE BAR -->
+<div class="title-bar">
+  <div class="dots">
+    <div class="dot dot-red"></div>
+    <div class="dot dot-yellow"></div>
+    <div class="dot dot-green"></div>
+  </div>
+  <span class="title-text" id="window-title">CMTrace Open &mdash; IntuneManagementExtension.log</span>
+  <span style="width:60px"></span>
+</div>
+
+<!-- MENU BAR -->
+<div class="menu-bar">
+  <div class="menu-item" onclick="toggleMenu(event, 'file-menu')">
+    File
+    <div class="menu-dropdown" id="file-menu">
+      <div class="menu-dropdown-item">Open Log File...</div>
+      <div class="menu-dropdown-item">Open Log Folder...</div>
+      <div class="menu-dropdown-item menu-dropdown-sub">Known Log Sources</div>
+      <div class="menu-sep"></div>
+      <div class="menu-dropdown-item">Exit</div>
+    </div>
+  </div>
+  <div class="menu-item" onclick="toggleMenu(event, 'edit-menu')">
+    Edit
+    <div class="menu-dropdown" id="edit-menu">
+      <div class="menu-dropdown-item">Find...<span class="shortcut">Ctrl+F</span></div>
+      <div class="menu-dropdown-item">Filter...<span class="shortcut">Ctrl+L</span></div>
+    </div>
+  </div>
+  <div class="menu-item" onclick="toggleMenu(event, 'tools-menu')">
+    Tools
+    <div class="menu-dropdown" id="tools-menu">
+      <div class="menu-dropdown-item">Lookup Error Code...</div>
+      <div class="menu-dropdown-item">Bundle Summary...</div>
+    </div>
+  </div>
+  <div class="menu-item" onclick="toggleMenu(event, 'window-menu')">
+    Window
+    <div class="menu-dropdown" id="window-menu">
+      <div class="menu-dropdown-item">Toggle Details Pane</div>
+      <div class="menu-dropdown-item">Toggle Info Pane</div>
+      <div class="menu-sep"></div>
+      <div class="menu-dropdown-item">Accessibility Settings...</div>
+    </div>
+  </div>
+  <div class="menu-item" onclick="toggleMenu(event, 'help-menu')">
+    Help
+    <div class="menu-dropdown" id="help-menu">
+      <div class="menu-dropdown-item">About CMTrace Open</div>
+    </div>
+  </div>
+</div>
+
+<!-- TOOLBAR -->
+<div class="toolbar" style="justify-content:flex-start;">
+  <div class="toolbar-section">
+    <select class="toolbar-select" id="open-select">
+      <option value="">Open...</option>
+      <option value="file">Open File...</option>
+      <option value="folder">Open Folder...</option>
+    </select>
+    <select class="toolbar-select">
+      <option value="">Open Known Log Source...</option>
+      <optgroup label="SCCM / ConfigMgr">
+        <option>AppEnforcement.log</option>
+        <option>CAS.log</option>
+        <option>PolicyAgent.log</option>
+      </optgroup>
+      <optgroup label="Intune">
+        <option>IntuneManagementExtension.log</option>
+        <option>AgentExecutor.log</option>
+      </optgroup>
+    </select>
+    <div class="v-divider"></div>
+    <input class="toolbar-input" placeholder="Highlight..." id="highlight-input">
+    <div class="v-divider"></div>
+    <button class="btn">Error Lookup</button>
+    <div class="v-divider"></div>
+    <button class="btn" id="details-btn" onclick="toggleDetails()">Details</button>
+    <button class="btn btn-active" id="info-btn">Info</button>
+    <div class="v-divider"></div>
+
+    <!-- WORKSPACE DROPDOWN -->
+    <label style="font-size:11px;color:var(--text-muted);white-space:nowrap;">Workspace:</label>
+    <select class="toolbar-select workspace-select" id="workspace-select" onchange="switchWorkspace(this.value)">
+      <option value="log" selected>Log Explorer</option>
+      <option value="intune">Intune Diagnostics</option>
+      <option value="new-intune">New Intune Workspace</option>
+      <option value="dsregcmd">dsregcmd</option>
+      <option value="macos-diag">macOS Diagnostics</option>
+    </select>
+  </div>
+
+  <div class="toolbar-spacer"></div>
+
+  <div class="toolbar-section">
+    <button class="btn" style="font-size:11px;">Theme</button>
+  </div>
+</div>
+
+<!-- TAB STRIP -->
+<div class="tab-strip" id="tab-strip">
+  <div class="tab active" data-tab="0" onclick="switchTab(0)">
+<span class="tab-label">IntuneManagementExtension.log</span>
+    <span class="tab-close" onclick="closeTab(event, 0)">&times;</span>
+  </div>
+  <div class="tab" data-tab="1" onclick="switchTab(1)">
+<span class="tab-label">AppEnforcement.log</span>
+    <span class="tab-close" onclick="closeTab(event, 1)">&times;</span>
+  </div>
+  <div class="tab" data-tab="2" onclick="switchTab(2)">
+<span class="tab-label">ClientHealth.log</span>
+    <span class="tab-close" onclick="closeTab(event, 2)">&times;</span>
+  </div>
+  <div class="tab" data-tab="3" onclick="switchTab(3)">
+<span class="tab-label">CAS.log</span>
+    <span class="tab-close" onclick="closeTab(event, 3)">&times;</span>
+  </div>
+  <div class="tab" data-tab="4" onclick="switchTab(4)">
+<span class="tab-label">PolicyAgent.log</span>
+    <span class="tab-close" onclick="closeTab(event, 4)">&times;</span>
+  </div>
+
+  <!-- Overflow dropdown -->
+  <div class="tab-overflow-btn" onclick="toggleOverflow(event)">
+    3 more...
+    <div class="overflow-menu" id="overflow-menu">
+      <div class="overflow-item" onclick="switchTab(5)">
+StatusAgent.log
+        <span class="ov-path">C:\Windows\CCM\Logs</span>
+      </div>
+      <div class="overflow-item" onclick="switchTab(6)">
+execmgr.log
+        <span class="ov-path">C:\Windows\CCM\Logs</span>
+      </div>
+      <div class="overflow-item" onclick="switchTab(7)">
+ContentTransferManager.log
+        <span class="ov-path">C:\Windows\CCM\Logs</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- MAIN CONTENT -->
+<div class="main-area">
+
+  <!-- SIDEBAR -->
+  <div class="sidebar">
+    <div class="sidebar-header">
+      <span class="sidebar-title">Source Files</span>
+      <span class="sidebar-action" title="Collapse">-</span>
+    </div>
+
+    <div class="sidebar-group">
+      <div class="sidebar-group-label">Open Files</div>
+      <div class="sidebar-item active" data-sidebar="0" onclick="switchTab(0)">
+<span class="si-name">IntuneManagementExtension.log</span>
+        <span class="si-count">1.2K</span>
+      </div>
+      <div class="sidebar-item" data-sidebar="1" onclick="switchTab(1)">
+<span class="si-name">AppEnforcement.log</span>
+        <span class="si-count">847</span>
+      </div>
+      <div class="sidebar-item" data-sidebar="2" onclick="switchTab(2)">
+<span class="si-name">ClientHealth.log</span>
+        <span class="si-count">234</span>
+      </div>
+      <div class="sidebar-item" data-sidebar="3" onclick="switchTab(3)">
+<span class="si-name">CAS.log</span>
+        <span class="si-count">5.1K</span>
+      </div>
+      <div class="sidebar-item" data-sidebar="4" onclick="switchTab(4)">
+<span class="si-name">PolicyAgent.log</span>
+        <span class="si-count">312</span>
+      </div>
+    </div>
+
+    <div class="sidebar-group">
+      <div class="sidebar-group-label">Overflow</div>
+      <div class="sidebar-item" data-sidebar="5" onclick="switchTab(5)">
+<span class="si-name">StatusAgent.log</span>
+        <span class="si-count">98</span>
+      </div>
+      <div class="sidebar-item" data-sidebar="6" onclick="switchTab(6)">
+<span class="si-name">execmgr.log</span>
+        <span class="si-count">2.3K</span>
+      </div>
+      <div class="sidebar-item" data-sidebar="7" onclick="switchTab(7)">
+<span class="si-name">ContentTransferManager.log</span>
+        <span class="si-count">561</span>
+      </div>
+    </div>
+
+    <!-- Sidebar footer: Pause/Resume + Streaming badge -->
+    <div class="sidebar-footer">
+      <button class="btn sidebar-pause-btn" id="pause-btn" onclick="togglePause()">Pause</button>
+      <button class="btn sidebar-pause-btn">Refresh</button>
+      <span class="status-badge badge-streaming" id="stream-badge">Streaming</span>
+    </div>
+  </div>
+
+  <!-- LOG VIEW -->
+  <div class="log-view" id="log-view">
+    <div class="log-columns">
+      <span class="col-ln">#</span>
+      <span class="col-time">Time</span>
+      <span class="col-comp">Component</span>
+      <span class="col-sev">Severity</span>
+      <span class="col-msg">Message</span>
+    </div>
+    <div class="log-rows" id="log-rows">
+      <!-- Rows injected by JS -->
+    </div>
+  </div>
+</div>
+
+<!-- STATUS BAR -->
+<div class="status-bar">
+  <div class="status-bar-left">
+    <span>Log Explorer</span>
+    <span class="status-sep"></span>
+    <span id="status-file">IntuneManagementExtension.log</span>
+    <span class="status-sep"></span>
+    <span id="status-tab">Tab 1 of 8</span>
+  </div>
+  <div class="status-bar-right">
+    <span id="status-lines">1,247 lines</span>
+    <span class="status-sep"></span>
+    <span>UTF-8</span>
+    <span class="status-sep"></span>
+    <span id="status-format">CCM Format</span>
+  </div>
+</div>
+
+<script>
+// ═══════════════════════════════════════
+// LOG DATA FOR EACH TAB
+// ═══════════════════════════════════════
+const tabData = [
+  {
+    name: "IntuneManagementExtension.log",
+    format: "CCM Format",
+    lines: "1,247",
+    rows: [
+      { ln: 1, time: "09:14:02.441", comp: "IntuneManagement", sev: "Info", msg: "=== Intune Management Extension starting ===" },
+      { ln: 2, time: "09:14:02.512", comp: "IntuneManagement", sev: "Info", msg: "Service version: 1.78.206.0, OS: Windows 11 (22H2)" },
+      { ln: 3, time: "09:14:03.108", comp: "EnrollmentValidator", sev: "Info", msg: "Checking MDM enrollment status with authority..." },
+      { ln: 4, time: "09:14:03.221", comp: "EnrollmentValidator", sev: "Info", msg: "Device is enrolled. Tenant: contoso.onmicrosoft.com" },
+      { ln: 5, time: "09:14:04.005", comp: "PolicySync", sev: "Info", msg: "Initiating policy sync with Intune service endpoint" },
+      { ln: 6, time: "09:14:05.892", comp: "PolicySync", sev: "Warn", msg: "Certificate chain validation warning: intermediate cert expires in 14 days" },
+      { ln: 7, time: "09:14:06.123", comp: "PolicySync", sev: "Info", msg: "Processing 12 pending policy assignments" },
+      { ln: 8, time: "09:14:07.445", comp: "AppDownloader", sev: "Info", msg: "Downloading app content for: Microsoft Teams (x64)" },
+      { ln: 9, time: "09:14:08.901", comp: "AppDownloader", sev: "Error", msg: "Download failed: 0x80070005 Access Denied - CDN endpoint blocked" },
+      { ln: 10, time: "09:14:09.022", comp: "AppDownloader", sev: "Info", msg: "Retrying with fallback CDN endpoint (attempt 1/3)" },
+      { ln: 11, time: "09:14:12.334", comp: "AppDownloader", sev: "Info", msg: "Download completed successfully via fallback CDN (341 MB)" },
+      { ln: 12, time: "09:14:13.556", comp: "DetectionMgr", sev: "Warn", msg: "Detection script returned unexpected exit code: 1 (expected: 0)" },
+      { ln: 13, time: "09:14:14.001", comp: "DetectionMgr", sev: "Info", msg: "Re-evaluating detection rules after script failure" },
+      { ln: 14, time: "09:14:15.789", comp: "AppInstaller", sev: "Info", msg: "Starting installation for app ID: ab3c4d5e-6f78-9012-ab34-cd5678ef9012" },
+      { ln: 15, time: "09:14:18.234", comp: "AppInstaller", sev: "Info", msg: "Installation completed. Exit code: 0 (Success)" },
+      { ln: 16, time: "09:14:19.001", comp: "DetectionMgr", sev: "Info", msg: "Post-install detection check: app detected successfully" },
+      { ln: 17, time: "09:14:20.112", comp: "StatusReporter", sev: "Info", msg: "Reporting installation success to Intune service" },
+      { ln: 18, time: "09:14:21.554", comp: "PolicySync", sev: "Info", msg: "Processing next assignment: PowerShell script execution" },
+      { ln: 19, time: "09:14:22.876", comp: "ScriptExecutor", sev: "Info", msg: "Executing script: Set-CompanyBranding.ps1 (timeout: 60s)" },
+      { ln: 20, time: "09:14:45.003", comp: "ScriptExecutor", sev: "Error", msg: "Script execution failed: timeout exceeded after 60 seconds" },
+    ]
+  },
+  {
+    name: "AppEnforcement.log",
+    format: "CCM Format",
+    lines: "847",
+    rows: [
+      { ln: 1, time: "08:30:01.112", comp: "AppEnforce", sev: "Info", msg: "+++ Starting App Enforcement cycle +++" },
+      { ln: 2, time: "08:30:01.234", comp: "AppEnforce", sev: "Info", msg: "Loading deployment types for application: 7-Zip 23.01 (x64)" },
+      { ln: 3, time: "08:30:01.567", comp: "AppDetection", sev: "Info", msg: "Evaluating detection method: MSI product code match" },
+      { ln: 4, time: "08:30:01.789", comp: "AppDetection", sev: "Info", msg: "Application not detected. Enforcement required." },
+      { ln: 5, time: "08:30:02.001", comp: "ContentAccess", sev: "Info", msg: "Requesting content location from management point" },
+      { ln: 6, time: "08:30:02.334", comp: "ContentAccess", sev: "Info", msg: "Content location resolved: DP01.contoso.com (local DP)" },
+      { ln: 7, time: "08:30:03.556", comp: "AppEnforce", sev: "Info", msg: "Installing MSI: 7z2301-x64.msi with ALLUSERS=1 /qn" },
+      { ln: 8, time: "08:30:15.778", comp: "AppEnforce", sev: "Info", msg: "Installation returned exit code 0 - Success" },
+      { ln: 9, time: "08:30:16.001", comp: "AppDetection", sev: "Info", msg: "Post-install detection: Application detected successfully" },
+      { ln: 10, time: "08:30:16.234", comp: "AppEnforce", sev: "Info", msg: "Enforcement completed. Status: Success" },
+      { ln: 11, time: "08:30:17.001", comp: "AppEnforce", sev: "Info", msg: "Loading deployment types for: Adobe Acrobat Reader DC" },
+      { ln: 12, time: "08:30:17.334", comp: "AppDetection", sev: "Info", msg: "Evaluating detection: Registry key HKLM\\SOFTWARE\\Adobe" },
+      { ln: 13, time: "08:30:17.556", comp: "AppDetection", sev: "Info", msg: "Application detected. Version 23.008.20470. No action needed." },
+      { ln: 14, time: "08:30:18.112", comp: "AppEnforce", sev: "Warn", msg: "Supersedence: Old version of Notepad++ (8.5.4) found, upgrade required" },
+      { ln: 15, time: "08:30:18.890", comp: "ContentAccess", sev: "Error", msg: "Content download failed: 0x80070002 - File not found on DP" },
+    ]
+  },
+  {
+    name: "ClientHealth.log",
+    format: "Simple Format",
+    lines: "234",
+    rows: [
+      { ln: 1, time: "07:00:00.001", comp: "HealthCheck", sev: "Info", msg: "=== Client Health Evaluation started ===" },
+      { ln: 2, time: "07:00:01.112", comp: "HealthCheck", sev: "Info", msg: "Evaluating WMI repository integrity..." },
+      { ln: 3, time: "07:00:02.334", comp: "HealthCheck", sev: "Info", msg: "WMI repository: Consistent" },
+      { ln: 4, time: "07:00:03.001", comp: "HealthCheck", sev: "Info", msg: "Checking BITS service status..." },
+      { ln: 5, time: "07:00:03.445", comp: "HealthCheck", sev: "Info", msg: "BITS service: Running (Automatic)" },
+      { ln: 6, time: "07:00:04.112", comp: "HealthCheck", sev: "Warn", msg: "Windows Update Agent version outdated: 10.0.19041.1 (expected: 10.0.22621.x)" },
+      { ln: 7, time: "07:00:05.334", comp: "HealthCheck", sev: "Info", msg: "Checking certificate store for SMS certificates..." },
+      { ln: 8, time: "07:00:06.001", comp: "HealthCheck", sev: "Info", msg: "SMS signing certificate: Valid (expires 2025-06-15)" },
+      { ln: 9, time: "07:00:07.112", comp: "HealthCheck", sev: "Error", msg: "Hardware inventory cycle overdue: last run 8 days ago (threshold: 7)" },
+      { ln: 10, time: "07:00:07.445", comp: "Remediation", sev: "Info", msg: "Triggering hardware inventory cycle to remediate" },
+    ]
+  },
+  {
+    name: "CAS.log",
+    format: "CCM Format",
+    lines: "5,102",
+    rows: [
+      { ln: 1, time: "09:00:01.001", comp: "ContentAccess", sev: "Info", msg: "Content request initiated for package PKG00234" },
+      { ln: 2, time: "09:00:01.234", comp: "ContentAccess", sev: "Info", msg: "Attempting to find local cache for content ID: PKG00234.1" },
+      { ln: 3, time: "09:00:01.445", comp: "ContentAccess", sev: "Info", msg: "Content not found in local cache. Requesting from DP." },
+      { ln: 4, time: "09:00:02.001", comp: "LocationSvc", sev: "Info", msg: "Distribution point list received: 3 DPs available" },
+      { ln: 5, time: "09:00:02.334", comp: "LocationSvc", sev: "Info", msg: "Selected DP: DP01.contoso.com (closest, boundary group: HQ)" },
+      { ln: 6, time: "09:00:03.112", comp: "DataTransfer", sev: "Info", msg: "Starting BITS download job for PKG00234.1 (256 MB)" },
+      { ln: 7, time: "09:00:15.445", comp: "DataTransfer", sev: "Info", msg: "Download progress: 45% (115 MB / 256 MB)" },
+      { ln: 8, time: "09:00:28.112", comp: "DataTransfer", sev: "Info", msg: "Download progress: 89% (228 MB / 256 MB)" },
+      { ln: 9, time: "09:00:35.334", comp: "DataTransfer", sev: "Info", msg: "Download completed successfully. Verifying hash..." },
+      { ln: 10, time: "09:00:36.001", comp: "ContentAccess", sev: "Info", msg: "Content hash verified. Content cached at: C:\\ccmcache\\a4" },
+    ]
+  },
+  {
+    name: "PolicyAgent.log",
+    format: "CCM Format",
+    lines: "312",
+    rows: [
+      { ln: 1, time: "09:10:01.001", comp: "PolicyAgent", sev: "Info", msg: "Policy evaluation cycle initiated (Machine)" },
+      { ln: 2, time: "09:10:01.334", comp: "PolicyAgent", sev: "Info", msg: "Requesting machine policy from management point MP01.contoso.com" },
+      { ln: 3, time: "09:10:02.112", comp: "PolicyAgent", sev: "Info", msg: "Policy reply received. Policy version: 45.00" },
+      { ln: 4, time: "09:10:02.445", comp: "PolicyAgent", sev: "Info", msg: "Compiling policy body from 23 policy documents" },
+      { ln: 5, time: "09:10:03.001", comp: "PolicyAgent", sev: "Info", msg: "Policy compiled successfully. Applying to local store." },
+      { ln: 6, time: "09:10:03.667", comp: "PolicyAgent", sev: "Info", msg: "Raising policy change event for: SoftwareUpdatesAgent" },
+      { ln: 7, time: "09:10:03.890", comp: "PolicyAgent", sev: "Info", msg: "Raising policy change event for: ApplicationManagement" },
+      { ln: 8, time: "09:10:04.112", comp: "PolicyAgent", sev: "Warn", msg: "Policy conflict detected: two deployment deadlines for same CI. Using earliest." },
+      { ln: 9, time: "09:10:04.556", comp: "PolicyAgent", sev: "Info", msg: "Machine policy evaluation complete. Next cycle: +60 minutes" },
+      { ln: 10, time: "09:10:05.001", comp: "PolicyAgent", sev: "Info", msg: "User policy evaluation deferred (no user logged in)" },
+    ]
+  },
+];
+
+let activeTab = 0;
+let paused = false;
+
+function renderLog(tabIndex) {
+  const data = tabData[tabIndex];
+  if (!data) return;
+
+  const container = document.getElementById('log-rows');
+  container.innerHTML = '';
+
+  data.rows.forEach((row, i) => {
+    const div = document.createElement('div');
+    div.className = 'log-row' + (i === 4 ? ' selected' : '');
+    const sevClass = row.sev === 'Error' ? 'sev-error' : row.sev === 'Warn' ? 'sev-warn' : row.sev === 'Verbose' ? 'sev-verbose' : 'sev-info';
+    div.innerHTML = `
+      <span class="col-ln">${row.ln}</span>
+      <span class="col-time">${row.time}</span>
+      <span class="col-comp">${row.comp}</span>
+      <span class="col-sev ${sevClass}">${row.sev}</span>
+      <span class="col-msg">${row.msg}</span>
+    `;
+    container.appendChild(div);
+  });
+
+  // Update status bar
+  document.getElementById('status-file').textContent = data.name;
+  document.getElementById('status-lines').textContent = data.lines + ' lines';
+  document.getElementById('status-format').textContent = data.format;
+  document.getElementById('status-tab').textContent = `Tab ${tabIndex + 1} of ${tabData.length + 3}`;
+  document.getElementById('window-title').innerHTML = `CMTrace Open &mdash; ${data.name}`;
+}
+
+function switchTab(tabIndex) {
+  if (tabIndex >= tabData.length) return;
+
+  activeTab = tabIndex;
+
+  // Update tab strip
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  const tab = document.querySelector(`.tab[data-tab="${tabIndex}"]`);
+  if (tab) tab.classList.add('active');
+
+  // Update sidebar
+  document.querySelectorAll('.sidebar-item').forEach(s => s.classList.remove('active'));
+  const sidebarItem = document.querySelector(`.sidebar-item[data-sidebar="${tabIndex}"]`);
+  if (sidebarItem) sidebarItem.classList.add('active');
+
+  // Close overflow menu
+  document.getElementById('overflow-menu').classList.remove('show');
+
+  renderLog(tabIndex);
+}
+
+function closeTab(event, tabIndex) {
+  event.stopPropagation();
+  const tab = document.querySelector(`.tab[data-tab="${tabIndex}"]`);
+  if (tab) {
+    tab.style.transition = 'opacity 0.15s, max-width 0.2s';
+    tab.style.opacity = '0';
+    tab.style.maxWidth = '0';
+    tab.style.padding = '0';
+    tab.style.overflow = 'hidden';
+    setTimeout(() => tab.remove(), 200);
+  }
+  if (activeTab === tabIndex && tabIndex > 0) {
+    switchTab(tabIndex - 1);
+  }
+}
+
+function toggleOverflow(event) {
+  event.stopPropagation();
+  const menu = document.getElementById('overflow-menu');
+  menu.classList.toggle('show');
+}
+
+function togglePause() {
+  paused = !paused;
+  const btn = document.getElementById('pause-btn');
+  const badge = document.getElementById('stream-badge');
+  btn.textContent = paused ? 'Resume' : 'Pause';
+  badge.textContent = paused ? 'Paused' : 'Streaming';
+  badge.className = 'status-badge ' + (paused ? 'badge-paused' : 'badge-streaming');
+}
+
+function toggleDetails() {
+  const btn = document.getElementById('details-btn');
+  btn.classList.toggle('btn-active');
+}
+
+function switchWorkspace(value) {
+  const tabStrip = document.getElementById('tab-strip');
+  const logView = document.getElementById('log-view');
+  if (value === 'log') {
+    tabStrip.style.display = 'flex';
+  } else {
+    tabStrip.style.display = 'none';
+  }
+}
+
+function toggleMenu(event, menuId) {
+  event.stopPropagation();
+  const allMenus = document.querySelectorAll('.menu-dropdown');
+  const menu = document.getElementById(menuId);
+  const wasOpen = menu.classList.contains('show');
+  allMenus.forEach(m => m.classList.remove('show'));
+  document.querySelectorAll('.menu-item').forEach(m => m.classList.remove('open'));
+  if (!wasOpen) {
+    menu.classList.add('show');
+    event.currentTarget.classList.add('open');
+  }
+}
+
+// Close menus and overflow on click outside
+document.addEventListener('click', () => {
+  document.getElementById('overflow-menu').classList.remove('show');
+  document.querySelectorAll('.menu-dropdown').forEach(m => m.classList.remove('show'));
+  document.querySelectorAll('.menu-item').forEach(m => m.classList.remove('open'));
+});
+
+// Initial render
+renderLog(0);
+</script>
+
+</body>
+</html>

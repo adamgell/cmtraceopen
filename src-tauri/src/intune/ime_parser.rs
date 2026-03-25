@@ -79,10 +79,55 @@ pub fn parse_ime_entries(content: &str, file_path: &str) -> (Vec<LogEntry>, u32)
             file_path: file_path.to_string(),
             timezone_offset: entry.timezone_offset,
             error_code_spans: Vec::new(),
+                    ip_address: None,
+                    host_name: None,
+                    mac_address: None,
         })
         .collect();
 
+    // Post-process: extract [Subsystem] prefix from message into source_file
+    // when the CCM file="" attribute is empty (common in IME logs).
+    let entries = enrich_subsystem_source(entries);
+
     (entries, parsed.parse_errors)
+}
+
+/// Extract `[SubSystem]` prefix from IME log messages and populate `source_file`
+/// when it is empty. This surfaces the sub-component in the "Source" column.
+///
+/// Examples:
+/// - `[Win32App] Starting app check in` → source_file = "Win32App"
+/// - `[Win32App][Win32AppDownloadExecutor] Execution completed` → source_file = "Win32App"
+/// - `[PowerShell] Script parameters tamper validation` → source_file = "PowerShell"
+fn enrich_subsystem_source(mut entries: Vec<LogEntry>) -> Vec<LogEntry> {
+    for entry in &mut entries {
+        if entry.source_file.is_some() {
+            continue;
+        }
+        if let Some(subsystem) = extract_subsystem_prefix(&entry.message) {
+            entry.source_file = Some(subsystem);
+        }
+    }
+    entries
+}
+
+/// Extract the first `[Name]` prefix from a message string.
+/// Returns the name without brackets, or None if no prefix found.
+fn extract_subsystem_prefix(message: &str) -> Option<String> {
+    let msg = message.trim_start();
+    if !msg.starts_with('[') {
+        return None;
+    }
+    let end = msg.find(']')?;
+    let name = &msg[1..end];
+    // Skip if it looks like a GUID or timestamp rather than a subsystem name
+    if name.contains('-') && name.len() > 20 {
+        return None;
+    }
+    if name.is_empty() {
+        return None;
+    }
+    Some(name.to_string())
 }
 
 struct ParsedImeChunk {

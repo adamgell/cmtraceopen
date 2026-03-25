@@ -1,9 +1,14 @@
+pub mod burn;
 pub mod cbs;
 pub mod panther;
 pub mod ccm;
 pub mod detect;
+pub mod dhcp;
 pub mod dism;
+pub mod intune_macos;
+pub mod msi;
 pub mod plain;
+pub mod psadt;
 pub mod reporting_events;
 pub mod severity;
 pub mod simple;
@@ -75,6 +80,21 @@ pub fn parse_lines_with_selection(
         crate::models::log_entry::ParserImplementation::PlainText => {
             plain::parse_lines(lines, file_path)
         }
+        crate::models::log_entry::ParserImplementation::Msi => {
+            msi::parse_lines(lines, file_path)
+        }
+        crate::models::log_entry::ParserImplementation::PsadtLegacy => {
+            psadt::parse_lines(lines, file_path)
+        }
+        crate::models::log_entry::ParserImplementation::IntuneMacOs => {
+            intune_macos::parse_lines(lines, file_path)
+        }
+        crate::models::log_entry::ParserImplementation::Dhcp => {
+            dhcp::parse_lines(lines, file_path)
+        }
+        crate::models::log_entry::ParserImplementation::Burn => {
+            burn::parse_lines(lines, file_path)
+        }
         crate::models::log_entry::ParserImplementation::GenericTimestamped => match selection.parser {
             crate::models::log_entry::ParserKind::Cbs => cbs::parse_lines(lines, file_path),
             crate::models::log_entry::ParserKind::Dism => dism::parse_lines(lines, file_path),
@@ -120,28 +140,78 @@ pub fn parse_content_with_selection(
     }
 }
 
+/// Encoding detected from file BOM, used for both initial read and tailing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FileEncoding {
+    Utf8,
+    Utf16Le,
+    Utf16Be,
+}
+
+/// Detect encoding from the leading bytes of a file.
+pub fn detect_encoding(bytes: &[u8]) -> FileEncoding {
+    if bytes.starts_with(&[0xFF, 0xFE]) {
+        FileEncoding::Utf16Le
+    } else if bytes.starts_with(&[0xFE, 0xFF]) {
+        FileEncoding::Utf16Be
+    } else {
+        FileEncoding::Utf8
+    }
+}
+
+/// Decode raw bytes to a String based on the detected encoding.
+/// For UTF-16, also normalizes CRLF to LF.
+pub fn decode_bytes(bytes: &[u8], encoding: FileEncoding) -> Result<String, String> {
+    match encoding {
+        FileEncoding::Utf16Le => {
+            let data = if bytes.starts_with(&[0xFF, 0xFE]) {
+                &bytes[2..]
+            } else {
+                bytes
+            };
+            let (cow, _, had_errors) = encoding_rs::UTF_16LE.decode(data);
+            if had_errors {
+                log::warn!("Encoding errors during UTF-16LE decode");
+            }
+            Ok(cow.into_owned().replace("\r\n", "\n"))
+        }
+        FileEncoding::Utf16Be => {
+            let data = if bytes.starts_with(&[0xFE, 0xFF]) {
+                &bytes[2..]
+            } else {
+                bytes
+            };
+            let (cow, _, had_errors) = encoding_rs::UTF_16BE.decode(data);
+            if had_errors {
+                log::warn!("Encoding errors during UTF-16BE decode");
+            }
+            Ok(cow.into_owned().replace("\r\n", "\n"))
+        }
+        FileEncoding::Utf8 => {
+            let bytes_no_bom = if bytes.starts_with(&[0xEF, 0xBB, 0xBF]) {
+                &bytes[3..]
+            } else {
+                bytes
+            };
+            match std::str::from_utf8(bytes_no_bom) {
+                Ok(s) => Ok(s.to_string()),
+                Err(_) => {
+                    let (cow, _, had_errors) = encoding_rs::WINDOWS_1252.decode(bytes_no_bom);
+                    if had_errors {
+                        log::warn!("Encoding errors during Windows-1252 fallback decode");
+                    }
+                    Ok(cow.into_owned())
+                }
+            }
+        }
+    }
+}
+
 /// Read file content, handling BOM and encoding fallback.
 fn read_file_content(path: &str) -> Result<String, String> {
     let bytes = std::fs::read(path).map_err(|e| format!("Failed to read file {}: {}", path, e))?;
-
-    // Try UTF-8 first (strip BOM if present)
-    let bytes_no_bom = if bytes.starts_with(&[0xEF, 0xBB, 0xBF]) {
-        &bytes[3..]
-    } else {
-        &bytes
-    };
-
-    match std::str::from_utf8(bytes_no_bom) {
-        Ok(s) => Ok(s.to_string()),
-        Err(_) => {
-            // Fallback to Windows-1252 (common for SCCM logs)
-            let (cow, _, had_errors) = encoding_rs::WINDOWS_1252.decode(bytes_no_bom);
-            if had_errors {
-                log::warn!("Encoding errors while reading {}", path);
-            }
-            Ok(cow.into_owned())
-        }
-    }
+    let encoding = detect_encoding(&bytes);
+    decode_bytes(&bytes, encoding)
 }
 
 #[cfg(test)]

@@ -1,26 +1,46 @@
 use crate::models::log_entry::Severity;
 
+/// Case-insensitive substring check without allocating a lowercased copy.
+/// Uses byte-level ASCII case folding since all keywords are ASCII.
+#[inline]
+fn contains_ci(haystack: &str, needle: &[u8]) -> bool {
+    let h = haystack.as_bytes();
+    let n_len = needle.len();
+    if h.len() < n_len {
+        return false;
+    }
+    for window in h.windows(n_len) {
+        if window
+            .iter()
+            .zip(needle.iter())
+            .all(|(a, b)| a.to_ascii_lowercase() == *b)
+        {
+            return true;
+        }
+    }
+    false
+}
+
 /// Centralized text-based severity detection.
 /// Checks message content for keywords indicating error, warning, or info severity.
+/// Uses zero-allocation case-insensitive matching instead of `.to_lowercase()`.
 pub fn detect_severity_from_text(text: &str) -> Severity {
-    let lower = text.to_lowercase();
-
     // Error keywords
-    if lower.contains("error")
-        || lower.contains("exception")
-        || lower.contains("critical")
-        || lower.contains("fatal")
+    if contains_ci(text, b"error")
+        || contains_ci(text, b"exception")
+        || contains_ci(text, b"critical")
+        || contains_ci(text, b"fatal")
     {
         return Severity::Error;
     }
 
     // "fail" family — exclude "failover" (legitimate networking term)
-    if lower.contains("fail") && !lower.contains("failover") {
+    if contains_ci(text, b"fail") && !contains_ci(text, b"failover") {
         return Severity::Error;
     }
 
     // Warning keywords
-    if lower.contains("warn") {
+    if contains_ci(text, b"warn") {
         return Severity::Warning;
     }
 

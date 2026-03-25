@@ -1,9 +1,7 @@
 import { tokens } from "@fluentui/react-components";
-import type { LogEntry, ErrorCodeSpan } from "../../types/log";
-import {
-  getLogViewGridTemplateColumns,
-  type LogSeverityPalette,
-} from "../../lib/constants";
+import type { LogEntry, ErrorCodeSpan, Severity } from "../../types/log";
+import type { LogSeverityPalette } from "../../lib/constants";
+import type { ColumnDefinition } from "../../lib/column-config";
 import { formatLogEntryTimestamp } from "../../lib/date-time-format";
 import { LOG_UI_FONT_FAMILY } from "../../lib/log-accessibility";
 
@@ -11,7 +9,8 @@ interface LogRowProps {
   entry: LogEntry;
   rowDomId: string;
   isSelected: boolean;
-  showDetails: boolean;
+  visibleColumns: ColumnDefinition[];
+  gridTemplateColumns: string;
   listFontSize: number;
   rowLineHeight: number;
   severityPalette: LogSeverityPalette;
@@ -181,11 +180,33 @@ function renderMessageWithSpans(
   return <>{segments}</>;
 }
 
+function getSeverityDotColor(
+  severity: Severity,
+  palette: LogSeverityPalette
+): string {
+  switch (severity) {
+    case "Error":
+      return palette.error.text;
+    case "Warning":
+      return palette.warning.text;
+    default:
+      return tokens.colorNeutralForeground4;
+  }
+}
+
+const detailCellStyle: React.CSSProperties = {
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  padding: "1px 4px",
+  borderLeft: `1px solid ${tokens.colorNeutralStroke1}`,
+};
+
 export function LogRow({
   entry,
   rowDomId,
   isSelected,
-  showDetails,
+  visibleColumns,
+  gridTemplateColumns,
   listFontSize,
   rowLineHeight,
   severityPalette,
@@ -195,8 +216,6 @@ export function LogRow({
   onErrorCodeClick,
 }: LogRowProps) {
   const style = getRowStyle(entry, isSelected, severityPalette);
-  const gridTemplateColumns = getLogViewGridTemplateColumns(showDetails);
-  const timestampLabel = formatLogEntryTimestamp(entry);
 
   return (
     <div
@@ -220,62 +239,81 @@ export function LogRow({
       }}
       onClick={() => onClick(entry.id)}
     >
-      <div
-        className="col-message"
-        style={{
-          minWidth: 0,
-          overflow: "hidden",
-          textOverflow: "ellipsis",
-          padding: "1px 4px",
-        }}
-      >
-        {renderMessageWithSpans(
-          entry.message,
-          entry.errorCodeSpans,
-          highlightText,
-          highlightCaseSensitive,
-          severityPalette,
-          isSelected,
-          onErrorCodeClick
-        )}
-      </div>
-      {showDetails && (
-        <>
-          <div
-            className="col-component"
-            style={{
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              padding: "1px 4px",
-              borderLeft: `1px solid ${tokens.colorNeutralStroke1}`,
-            }}
-          >
-            {entry.component ?? ""}
+      {visibleColumns.map((col) => {
+        // Severity column: colored dot indicator
+        if (col.id === "severity") {
+          return (
+            <div
+              key="severity"
+              aria-label={entry.severity}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                overflow: "hidden",
+                padding: "1px 2px",
+              }}
+            >
+              <span
+                style={{
+                  display: "inline-block",
+                  width: 8,
+                  height: 8,
+                  borderRadius: "50%",
+                  backgroundColor: getSeverityDotColor(
+                    entry.severity,
+                    severityPalette
+                  ),
+                  flexShrink: 0,
+                }}
+              />
+            </div>
+          );
+        }
+
+        // Message column: rich rendering with highlights and error code spans
+        if (col.id === "message") {
+          return (
+            <div
+              key="message"
+              className="col-message"
+              style={{
+                minWidth: 0,
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                padding: "1px 4px",
+              }}
+            >
+              {renderMessageWithSpans(
+                entry.message,
+                entry.errorCodeSpans,
+                highlightText,
+                highlightCaseSensitive,
+                severityPalette,
+                isSelected,
+                onErrorCodeClick
+              )}
+            </div>
+          );
+        }
+
+        // DateTime column: use dedicated formatter
+        if (col.id === "dateTime") {
+          return (
+            <div key="dateTime" style={detailCellStyle}>
+              {formatLogEntryTimestamp(entry) ?? ""}
+            </div>
+          );
+        }
+
+        // All other columns: use the accessor
+        const value = col.accessor(entry);
+        return (
+          <div key={col.id} style={detailCellStyle}>
+            {value != null ? String(value) : ""}
           </div>
-          <div
-            className="col-datetime"
-            style={{
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              padding: "1px 4px",
-              borderLeft: `1px solid ${tokens.colorNeutralStroke1}`,
-            }}
-          >
-            {timestampLabel ?? ""}
-          </div>
-          <div
-            className="col-thread"
-            style={{
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              padding: "1px 4px",
-              borderLeft: `1px solid ${tokens.colorNeutralStroke1}`,
-            }}
-          >
-            {entry.threadDisplay ?? ""}
-          </div>
-        </>
-      )}
+        );
+      })}
     </div>
   );
 }

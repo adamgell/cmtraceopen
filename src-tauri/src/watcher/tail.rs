@@ -6,7 +6,7 @@ use std::sync::Arc;
 use notify::{Config, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 
 use crate::models::log_entry::{LogEntry, ParserSpecialization, RecordFraming};
-use crate::parser::{self, ResolvedParser};
+use crate::parser::{self, ResolvedParser, FileEncoding};
 
 const IME_RECORD_START: &str = "<![LOG[";
 const IME_RECORD_ATTRS_START: &str = "]LOG]!><";
@@ -20,6 +20,10 @@ pub struct TailReader {
     next_line: u32,
     /// Leftover partial record fragment from the previous read.
     pending_fragment: String,
+    /// File encoding detected from BOM during initial parse.
+    encoding: FileEncoding,
+    /// Leftover partial byte from a UTF-16 read boundary split.
+    pending_byte: Option<u8>,
 }
 
 impl TailReader {
@@ -31,6 +35,11 @@ impl TailReader {
         next_id: u64,
         next_line: u32,
     ) -> Self {
+        // Detect encoding from the file's BOM
+        let encoding = std::fs::read(&path)
+            .map(|bytes| crate::parser::detect_encoding(&bytes))
+            .unwrap_or(FileEncoding::Utf8);
+
         Self {
             path,
             byte_offset,
@@ -38,6 +47,8 @@ impl TailReader {
             next_id,
             next_line,
             pending_fragment: String::new(),
+            encoding,
+            pending_byte: None,
         }
     }
 
@@ -57,6 +68,7 @@ impl TailReader {
         if file_size < self.byte_offset {
             self.byte_offset = 0;
             self.pending_fragment.clear();
+            self.pending_byte = None;
         }
 
         // No new data
@@ -73,14 +85,28 @@ impl TailReader {
         file.read_exact(&mut buffer)
             .map_err(|e| format!("Failed to read new bytes: {}", e))?;
 
-        // Decode (UTF-8 with Windows-1252 fallback)
-        let new_text = match std::str::from_utf8(&buffer) {
-            Ok(s) => s.to_string(),
-            Err(_) => {
-                let (cow, _, _) = encoding_rs::WINDOWS_1252.decode(&buffer);
-                cow.into_owned()
-            }
+        // For UTF-16, handle partial code unit from previous read
+        let decode_buffer = if let Some(prev_byte) = self.pending_byte.take() {
+            let mut combined = vec![prev_byte];
+            combined.extend_from_slice(&buffer);
+            combined
+        } else {
+            buffer
         };
+
+        // For UTF-16, save trailing odd byte
+        let (to_decode, leftover) = match self.encoding {
+            FileEncoding::Utf16Le | FileEncoding::Utf16Be if decode_buffer.len() % 2 != 0 => {
+                let split = decode_buffer.len() - 1;
+                self.pending_byte = Some(decode_buffer[split]);
+                (&decode_buffer[..split], true)
+            }
+            _ => (&decode_buffer[..], false),
+        };
+        let _ = leftover; // suppress unused warning
+
+        let new_text = crate::parser::decode_bytes(to_decode, self.encoding)
+            .map_err(|e| format!("Failed to decode tailed bytes: {}", e))?;
 
         // Prepend any partial record fragment from the last read.
         let full_text = if self.pending_fragment.is_empty() {

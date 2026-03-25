@@ -59,7 +59,14 @@ static HEX_CODE_RE: Lazy<Regex> =
 
 /// Scan a message string for recognized error codes and return their spans.
 /// Only returns spans for codes that exist in the error database.
+/// Short-circuits if the message contains no "0x" or "0X" prefix (common case).
 pub fn detect_error_code_spans(message: &str) -> Vec<ErrorCodeSpan> {
+    // Fast pre-check: skip the regex entirely if no hex prefix exists.
+    // Most log lines have no error codes, so this avoids regex overhead.
+    if !message.contains("0x") && !message.contains("0X") {
+        return Vec::new();
+    }
+
     HEX_CODE_RE
         .find_iter(message)
         .filter_map(|m| {

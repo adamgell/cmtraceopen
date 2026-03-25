@@ -29,6 +29,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(tauri_plugin_os::init())
         .setup(|app| {
             let native_menu = menu::build_app_menu(app.handle())?;
             app.set_menu(native_menu)?;
@@ -45,6 +46,7 @@ pub fn run() {
             commands::file_association::associate_log_files_with_app,
             commands::file_association::set_file_association_prompt_suppressed,
             commands::file_ops::open_log_file,
+            commands::file_ops::parse_files_batch,
             commands::file_ops::open_log_folder_aggregate,
             commands::file_ops::list_log_folder,
             commands::file_ops::inspect_evidence_bundle,
@@ -62,6 +64,8 @@ pub fn run() {
             commands::error_lookup::lookup_error_code,
             commands::error_lookup::search_error_codes,
             commands::intune::analyze_intune_logs,
+            commands::deployment::analyze_deployment_folder,
+            commands::fonts::list_system_fonts,
             commands::dsregcmd::analyze_dsregcmd,
             commands::dsregcmd::capture_dsregcmd,
             commands::dsregcmd::load_dsregcmd_source,
@@ -74,6 +78,7 @@ pub fn run() {
             commands::macos_diag::macos_get_package_files,
             commands::macos_diag::macos_query_unified_log,
             commands::macos_diag::macos_open_system_settings,
+            commands::fonts::list_system_fonts,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

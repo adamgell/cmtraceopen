@@ -1,0 +1,257 @@
+﻿<![LOG[OnStart, public cloud env.]LOG]!><time="17:19:49.1590494" date="3-21-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+<![LOG[Set MdmDeviceCertificate : 4038190E01EAB87F1A8D369D311E7F0A1D4B7473]LOG]!><time="17:19:50.0779254" date="3-21-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+<![LOG[Service URL is https://agents.amsua0102.manage.microsoft.com/TrafficGateway/TrafficRoutingService/SideCar/StatelessSideCarGatewayService]LOG]!><time="17:19:50.0789897" date="3-21-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+<![LOG[Starting ECS flighting client initialization]LOG]!><time="17:19:50.0949943" date="3-21-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+<![LOG[aria logger is turned off. deviceid=fd7b187b-9e5a-4e69-9d75-8e1926b2c288, os=10.0.26100]LOG]!><time="17:19:50.3015867" date="3-21-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+<![LOG[Start processing rule Verify Intune Management Extension service exists.]LOG]!><time="17:19:50.3176570" date="3-21-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+<![LOG[Finish processing rule Verify Intune Management Extension service exists.]LOG]!><time="17:19:50.3335306" date="3-21-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+<![LOG[Summary: rule Verify Intune Management Extension service exists. with ID b862e7a7-fe34-47f3-a648-edd4803f781a, result = Pass, details = N/A]LOG]!><time="17:19:50.3335306" date="3-21-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+<![LOG[Start processing rule Verify/Remediate Intune Management Extension Service startup type.]LOG]!><time="17:19:50.3335306" date="3-21-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+<![LOG[Finish processing rule Verify/Remediate Intune Management Extension Service startup type.]LOG]!><time="17:19:51.7518349" date="3-21-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+<![LOG[Summary: rule Verify/Remediate Intune Management Extension Service startup type. with ID 05980f21-0099-4ac4-8ba7-c9f5f0cd0b7f, result = Pass, details = N/A]LOG]!><time="17:19:51.7518349" date="3-21-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+<![LOG[Start processing rule Verify/Remediate Intune Management Extension service status.]LOG]!><time="17:19:51.7679084" date="3-21-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+<![LOG[Finish processing rule Verify/Remediate Intune Management Extension service status.]LOG]!><time="17:19:51.7679084" date="3-21-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+<![LOG[Summary: rule Verify/Remediate Intune Management Extension service status. with ID 64103933-cde5-419b-abc7-4bfe5c535c4a, result = Pass, details = N/A]LOG]!><time="17:19:51.7679084" date="3-21-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+<![LOG[Start processing rule Verify/Remediate Intune Management Extension memory usage.]LOG]!><time="17:19:51.7679084" date="3-21-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+<![LOG[Finish processing rule Verify/Remediate Intune Management Extension memory usage.]LOG]!><time="17:19:51.7860492" date="3-21-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+<![LOG[Exception happens when processing non-leaf rule, rule id = 0cf538cd-6bba-4690-8776-e1f63f6d8d63, rule description = Verify/Remediate Intune Management Extension memory usage., exception = System.InvalidOperationException: Service IntuneWindowsAgent was not found on computer '.'. ---> System.ComponentModel.Win32Exception: The specified service does not exist as an installed service
+   --- End of inner exception stack trace ---
+   at System.ServiceProcess.ServiceController.GenerateNames()
+   at System.ServiceProcess.ServiceController.get_ServiceName()
+   at System.ServiceProcess.ServiceController.Stop()
+   at Microsoft.Management.EndUser.IntuneWindowsAgent.ClientHealth.RuleHandler.MemoryCheckRuleHandler.RemediateMemoryIssue(Process proc, Int64 memSize, RuleResult& result)
+   at Microsoft.Management.EndUser.IntuneWindowsAgent.ClientHealth.RuleHandler.MemoryCheckRuleHandler.Process(ClientHealthRule rule)
+   at Microsoft.Management.EndUser.IntuneWindowsAgent.ClientHealth.ClientHealthRuleEngine.Process()]LOG]!><time="17:19:51.7998455" date="3-21-2026" component="ClientHealth" context="" type="3" thread="1" file="">
+<![LOG[Summary: rule Verify/Remediate Intune Management Extension memory usage. with ID 0cf538cd-6bba-4690-8776-e1f63f6d8d63, result = Fail, details = Exception happens when processing non-leaf rule, rule id = 0cf538cd-6bba-4690-8776-e1f63f6d8d63, rule description = Verify/Remediate Intune Management Extension memory usage., exception = System.InvalidOperationException: Service IntuneWindowsAgent was not found on computer '.'. ---> System.ComponentModel.Win32Exception: The specified service does not exist as an installed service
+   --- End of inner exception stack trace ---
+   at System.ServiceProcess.ServiceController.GenerateNames()
+   at System.ServiceProcess.ServiceController.get_ServiceName()
+   at System.ServiceProcess.ServiceController.Stop()
+   at Microsoft.Management.EndUser.IntuneWindowsAgent.ClientHealth.RuleHandler.MemoryCheckRuleHandler.RemediateMemoryIssue(Process proc, Int64 memSize, RuleResult& result)
+   at Microsoft.Management.EndUser.IntuneWindowsAgent.ClientHealth.RuleHandler.MemoryCheckRuleHandler.Process(ClientHealthRule rule)
+   at Microsoft.Management.EndUser.IntuneWindowsAgent.ClientHealth.ClientHealthRuleEngine.Process()]LOG]!><time="17:19:51.7998455" date="3-21-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+<![LOG[Heartbeat report is enabled result True]LOG]!><time="17:19:52.2043911" date="3-21-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+<![LOG[TCP probe is enabled result True]LOG]!><time="17:19:52.2043911" date="3-21-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+<![LOG[SideCarGatewayServiceURL service URL is https://agents.amsua0102.manage.microsoft.com/TrafficGateway/TrafficRoutingService/SideCar/StatelessSideCarGatewayService]LOG]!><time="17:19:52.2043911" date="3-21-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+<![LOG[Heartbeat service URL is https://agentsN.amsua0102.manage.microsoft.com/TrafficGateway/TrafficRoutingService/SideCar/StatelessSideCarGatewayService]LOG]!><time="17:19:52.2043911" date="3-21-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+<![LOG[Start sending health report..]LOG]!><time="17:19:52.2043911" date="3-21-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+<![LOG[Set MdmDeviceCertificate : 4038190E01EAB87F1A8D369D311E7F0A1D4B7473]LOG]!><time="17:19:52.2043911" date="3-21-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+<![LOG[Sending heartbeat report uri: https://agentsn.amsua0102.manage.microsoft.com/TrafficGateway/TrafficRoutingService/SideCar/StatelessSideCarGatewayService/SideCarHealthReports('78b78df6-560a-4ac9-a9e5-24fe6b838a8a')%3Fapi-version=1.5]LOG]!><time="17:19:52.2043911" date="3-21-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+<![LOG[The client heart beat health report failed to send. Response was empty or null.]LOG]!><time="17:19:52.5062334" date="3-21-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+<![LOG[Starting TCP probe after heartbeat call]LOG]!><time="17:19:52.5062334" date="3-21-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+<![LOG[Phase 1: Testing same endpoint TCP connection to resolved IP 13.107.228.23 (subnet: SD2)]LOG]!><time="17:19:52.5223649" date="3-21-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+<![LOG[TCP probe Phase 1 completed. Same endpoint test: SUCCESS, Resolved IP: 13.107.228.23, Subnet: SD2]LOG]!><time="17:19:52.5383227" date="3-21-2026" component="ClientHealth" context="" type="1" thread="5" file="">
+<![LOG[TCP probe detected public cloud environment - testing public subnets]LOG]!><time="17:19:52.5566549" date="3-21-2026" component="ClientHealth" context="" type="1" thread="5" file="">
+<![LOG[TCP probe Phase 2: Using public cloud reliable IPs]LOG]!><time="17:19:52.5701234" date="3-21-2026" component="ClientHealth" context="" type="1" thread="5" file="">
+<![LOG[TCP probe Phase 2: Testing 7 subnets with reliable IPs (skipping subnet: SD2)]LOG]!><time="17:19:52.5701234" date="3-21-2026" component="ClientHealth" context="" type="1" thread="5" file="">
+<![LOG[Phase 2: Testing subnet SD0 with reliable IPs]LOG]!><time="17:19:52.5701234" date="3-21-2026" component="ClientHealth" context="" type="1" thread="5" file="">
+<![LOG[Phase 2: Selected 3 IPs for subnet SD0 based on day-based rotation]LOG]!><time="17:19:52.5860848" date="3-21-2026" component="ClientHealth" context="" type="1" thread="5" file="">
+<![LOG[TCP probe Phase 2 SD0: SUCCESS (IPs attempted: 1)]LOG]!><time="17:19:52.5860848" date="3-21-2026" component="ClientHealth" context="" type="1" thread="5" file="">
+<![LOG[Phase 2: Testing subnet SD1 with reliable IPs]LOG]!><time="17:19:52.5860848" date="3-21-2026" component="ClientHealth" context="" type="1" thread="5" file="">
+<![LOG[Phase 2: Selected 3 IPs for subnet SD1 based on day-based rotation]LOG]!><time="17:19:52.5860848" date="3-21-2026" component="ClientHealth" context="" type="1" thread="5" file="">
+<![LOG[TCP probe Phase 2 SD1: SUCCESS (IPs attempted: 1)]LOG]!><time="17:19:52.6021575" date="3-21-2026" component="ClientHealth" context="" type="1" thread="5" file="">
+<![LOG[Phase 2: Skipping subnet SD2 (already tested in Phase 1)]LOG]!><time="17:19:52.6021575" date="3-21-2026" component="ClientHealth" context="" type="1" thread="5" file="">
+<![LOG[Phase 2: Testing subnet SD3 with reliable IPs]LOG]!><time="17:19:52.6021575" date="3-21-2026" component="ClientHealth" context="" type="1" thread="5" file="">
+<![LOG[Phase 2: Selected 3 IPs for subnet SD3 based on day-based rotation]LOG]!><time="17:19:52.6021575" date="3-21-2026" component="ClientHealth" context="" type="1" thread="5" file="">
+<![LOG[TCP probe Phase 2 SD3: SUCCESS (IPs attempted: 1)]LOG]!><time="17:19:52.8307433" date="3-21-2026" component="ClientHealth" context="" type="1" thread="5" file="">
+<![LOG[Phase 2: Testing subnet SD4 with reliable IPs]LOG]!><time="17:19:52.8307433" date="3-21-2026" component="ClientHealth" context="" type="1" thread="5" file="">
+<![LOG[Phase 2: Selected 3 IPs for subnet SD4 based on day-based rotation]LOG]!><time="17:19:52.8307433" date="3-21-2026" component="ClientHealth" context="" type="1" thread="5" file="">
+<![LOG[TCP probe Phase 2 SD4: FAILED (IPs attempted: 3) (DAILY_SELECTED_IPS_FAILED_TIMEOUT)]LOG]!><time="17:20:07.8523453" date="3-21-2026" component="ClientHealth" context="" type="1" thread="9" file="">
+<![LOG[Phase 2: Testing subnet SD5 with reliable IPs]LOG]!><time="17:20:07.8523453" date="3-21-2026" component="ClientHealth" context="" type="1" thread="9" file="">
+<![LOG[Phase 2: Selected 3 IPs for subnet SD5 based on day-based rotation]LOG]!><time="17:20:07.8523453" date="3-21-2026" component="ClientHealth" context="" type="1" thread="9" file="">
+<![LOG[TCP probe Phase 2 SD5: FAILED (IPs attempted: 3) (DAILY_SELECTED_IPS_FAILED_TIMEOUT)]LOG]!><time="17:20:22.8739316" date="3-21-2026" component="ClientHealth" context="" type="1" thread="12" file="">
+<![LOG[Phase 2: Testing subnet SD6 with reliable IPs]LOG]!><time="17:20:22.8739316" date="3-21-2026" component="ClientHealth" context="" type="1" thread="12" file="">
+<![LOG[Phase 2: Selected 3 IPs for subnet SD6 based on day-based rotation]LOG]!><time="17:20:22.8739316" date="3-21-2026" component="ClientHealth" context="" type="1" thread="12" file="">
+<![LOG[TCP probe Phase 2 SD6: FAILED (IPs attempted: 3) (DAILY_SELECTED_IPS_FAILED_TIMEOUT)]LOG]!><time="17:20:37.8995898" date="3-21-2026" component="ClientHealth" context="" type="1" thread="8" file="">
+<![LOG[TCP probe completed. Phase 1: SUCCESS, Phase 2 subnets tested: 6]LOG]!><time="17:20:37.8995898" date="3-21-2026" component="ClientHealth" context="" type="1" thread="8" file="">
+<![LOG[TCP probe completed with status: Enabled. Phase 1: SUCCESS, Phase 2 Results count: 6]LOG]!><time="17:20:37.8995898" date="3-21-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+<![LOG[Added AFD tracking to result details - ClientRequestId: dc6788a0-749a-40f6-925c-76936fa9e0aa, AfdId: 20260321T211952Z-r189cb8d5d46fvkkhC1BL1eps80000002ey0000000009e8g, ExceptionDetails: WebException-Attempt1: ProtocolError | HTTP: Unauthorized(401), TcpProbeResults: Phase1:SUCCESS(SD2,13.107.228.23);Phase2:Total(6),Success(3),Failed(3),SuccessSubnets(SD0,SD1,SD3),FailedSubnets(SD4(DAILY_SELECTED_IPS_FAILED_TIMEOUT),SD5(DAILY_SELECTED_IPS_FAILED_TIMEOUT),SD6(DAILY_SELECTED_IPS_FAILED_TIMEOUT))]LOG]!><time="17:20:37.9032085" date="3-21-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+<![LOG[Finish sending health report.]LOG]!><time="17:20:37.9032085" date="3-21-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+<![LOG[Start sending health report..]LOG]!><time="17:20:37.9032085" date="3-21-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+<![LOG[Finish sending health report.]LOG]!><time="17:20:38.2327994" date="3-21-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+<![LOG[The client health report was sent successfully. Done.]LOG]!><time="17:20:38.2327994" date="3-21-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+<![LOG[Client Health evaluation completes.]LOG]!><time="17:20:38.2327994" date="3-21-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+]LOG]!><time="17:19:52.5701234" date="3-21-2026" component="IntuneManagementExtension" context="" type="1" thread="5" file="">
+<![LOG[Found 1 MDM certificates from Local Computer Store.]LOG]!><time="17:19:52.5701234" date="3-21-2026" component="IntuneManagementExtension" context="" type="1" thread="5" file="">
+<![LOG[Found 1 MDM certificates from Local Computer Store.]LOG]!><time="17:19:52.5701234" date="3-21-2026" component="IntuneManagementExtension" context="" type="1" thread="5" file="">
+<![LOG[[ClientHealthRuleEngine](SendHeartbeatReport) {"Message":"Failed","Colmetadata":"Details;TcpProbe;AfdId;ClientRequestId;ExceptionDetails;","Col1":"SD2","Col2":"Phase1:SUCCESS(SD2,13.107.228.23);Phase2:Total(6),Success(3),Failed(3),SuccessSubnets(SD0,SD1,SD3),FailedSubnets(SD4(DAILY_SELECTED_IPS_FAILED_TIMEOUT),SD5(DAILY_SELECTED_IPS_FAILED_TIMEOUT),SD6(DAILY_SELECTED_IPS_FAILED_TIMEOUT))","Col3":"20260321T211952Z-r189cb8d5d46fvkkhC1BL1eps80000002ey0000000009e8g","Col4":"dc6788a0-749a-40f6-925c-76936fa9e0aa","Col5":"WebException-Attempt1: ProtocolError | HTTP: Unauthorized(401)","Col6":""}]LOG]!><time="17:20:37.9032085" date="3-21-2026" component="IntuneManagementExtension" context="" type="1" thread="1" file="">
+<![LOG[[ServiceBase], check in using device check in AAD App]LOG]!><time="17:20:37.9032085" date="3-21-2026" component="IntuneManagementExtension" context="" type="1" thread="1" file="">
+<![LOG[[SendWebRequestInternal] iteration [0] started, total retryCount: 3]LOG]!><time="17:20:37.9152495" date="3-21-2026" component="IntuneManagementExtension" context="" type="1" thread="1" file="">
+<![LOG[PrepareHeaders, client-request-id: 3932676b-b94b-42d4-afd6-9453417c1eb3, Method: PUT]LOG]!><time="17:20:37.9152495" date="3-21-2026" component="IntuneManagementExtension" context="" type="1" thread="1" file="">
+<![LOG[Userless session, skip UserToken for device check-in]LOG]!><time="17:20:37.9152495" date="3-21-2026" component="IntuneManagementExtension" context="" type="1" thread="1" file="">
+<![LOG[Found 1 MDM certificates from Local Computer Store.]LOG]!><time="17:20:37.9152495" date="3-21-2026" component="IntuneManagementExtension" context="" type="1" thread="1" file="">
+<![LOG[Add MdmDeviceCertificate 4038190E01EAB87F1A8D369D311E7F0A1D4B7473 into WebRequest with True]LOG]!><time="17:20:37.9152495" date="3-21-2026" component="IntuneManagementExtension" context="" type="1" thread="1" file="">
+<![LOG[[SendWebRequestInternal] Sending network request...  Current proxy is https://agents.amsua0102.manage.microsoft.com/TrafficGateway/TrafficRoutingService/SideCar/StatelessSideCarGatewayService/SideCarHealthReports('05127d05-e837-4ff5-85e8-adba4bec35df')%3Fapi-version=1.5]LOG]!><time="17:20:37.9152495" date="3-21-2026" component="IntuneManagementExtension" context="" type="1" thread="1" file="">
+<![LOG[[SendWebRequestInternal] Succeeded, client-request-id: 3932676b-b94b-42d4-afd6-9453417c1eb3, AfdRef: ]LOG]!><time="17:20:38.2327994" date="3-21-2026" component="IntuneManagementExtension" context="" type="1" thread="8" file="">
+<![LOG[Client Health evaluation starts.]LOG]!><time="16:59:38.1170316" date="3-22-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+<![LOG[OnStart, public cloud env.]LOG]!><time="16:59:38.1648794" date="3-22-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+<![LOG[Set MdmDeviceCertificate : 4038190E01EAB87F1A8D369D311E7F0A1D4B7473]LOG]!><time="16:59:38.6828601" date="3-22-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+<![LOG[Service URL is https://agents.amsua0102.manage.microsoft.com/TrafficGateway/TrafficRoutingService/SideCar/StatelessSideCarGatewayService]LOG]!><time="16:59:38.6828601" date="3-22-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+<![LOG[Starting ECS flighting client initialization]LOG]!><time="16:59:38.7195498" date="3-22-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+<![LOG[aria logger is turned off. deviceid=fd7b187b-9e5a-4e69-9d75-8e1926b2c288, os=10.0.26100]LOG]!><time="16:59:38.9184619" date="3-22-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+<![LOG[Start processing rule Verify Intune Management Extension service exists.]LOG]!><time="16:59:38.9184619" date="3-22-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+<![LOG[Finish processing rule Verify Intune Management Extension service exists.]LOG]!><time="16:59:38.9344746" date="3-22-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+<![LOG[Summary: rule Verify Intune Management Extension service exists. with ID b862e7a7-fe34-47f3-a648-edd4803f781a, result = Pass, details = N/A]LOG]!><time="16:59:38.9344746" date="3-22-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+<![LOG[Start processing rule Verify/Remediate Intune Management Extension Service startup type.]LOG]!><time="16:59:38.9344746" date="3-22-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+<![LOG[Finish processing rule Verify/Remediate Intune Management Extension Service startup type.]LOG]!><time="16:59:40.3859594" date="3-22-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+<![LOG[Summary: rule Verify/Remediate Intune Management Extension Service startup type. with ID 05980f21-0099-4ac4-8ba7-c9f5f0cd0b7f, result = Pass, details = N/A]LOG]!><time="16:59:40.3859594" date="3-22-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+<![LOG[Start processing rule Verify/Remediate Intune Management Extension service status.]LOG]!><time="16:59:40.3859594" date="3-22-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+<![LOG[Finish processing rule Verify/Remediate Intune Management Extension service status.]LOG]!><time="16:59:40.4020032" date="3-22-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+<![LOG[Summary: rule Verify/Remediate Intune Management Extension service status. with ID 64103933-cde5-419b-abc7-4bfe5c535c4a, result = Pass, details = N/A]LOG]!><time="16:59:40.4020032" date="3-22-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+<![LOG[Start processing rule Verify/Remediate Intune Management Extension memory usage.]LOG]!><time="16:59:40.4020032" date="3-22-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+<![LOG[Finish processing rule Verify/Remediate Intune Management Extension memory usage.]LOG]!><time="16:59:40.4181138" date="3-22-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+<![LOG[Exception happens when processing non-leaf rule, rule id = 0cf538cd-6bba-4690-8776-e1f63f6d8d63, rule description = Verify/Remediate Intune Management Extension memory usage., exception = System.InvalidOperationException: Service IntuneWindowsAgent was not found on computer '.'. ---> System.ComponentModel.Win32Exception: The specified service does not exist as an installed service
+   --- End of inner exception stack trace ---
+   at System.ServiceProcess.ServiceController.GenerateNames()
+   at System.ServiceProcess.ServiceController.get_ServiceName()
+   at System.ServiceProcess.ServiceController.Stop()
+   at Microsoft.Management.EndUser.IntuneWindowsAgent.ClientHealth.RuleHandler.MemoryCheckRuleHandler.RemediateMemoryIssue(Process proc, Int64 memSize, RuleResult& result)
+   at Microsoft.Management.EndUser.IntuneWindowsAgent.ClientHealth.RuleHandler.MemoryCheckRuleHandler.Process(ClientHealthRule rule)
+   at Microsoft.Management.EndUser.IntuneWindowsAgent.ClientHealth.ClientHealthRuleEngine.Process()]LOG]!><time="16:59:40.4340927" date="3-22-2026" component="ClientHealth" context="" type="3" thread="1" file="">
+<![LOG[Summary: rule Verify/Remediate Intune Management Extension memory usage. with ID 0cf538cd-6bba-4690-8776-e1f63f6d8d63, result = Fail, details = Exception happens when processing non-leaf rule, rule id = 0cf538cd-6bba-4690-8776-e1f63f6d8d63, rule description = Verify/Remediate Intune Management Extension memory usage., exception = System.InvalidOperationException: Service IntuneWindowsAgent was not found on computer '.'. ---> System.ComponentModel.Win32Exception: The specified service does not exist as an installed service
+   --- End of inner exception stack trace ---
+   at System.ServiceProcess.ServiceController.GenerateNames()
+   at System.ServiceProcess.ServiceController.get_ServiceName()
+   at System.ServiceProcess.ServiceController.Stop()
+   at Microsoft.Management.EndUser.IntuneWindowsAgent.ClientHealth.RuleHandler.MemoryCheckRuleHandler.RemediateMemoryIssue(Process proc, Int64 memSize, RuleResult& result)
+   at Microsoft.Management.EndUser.IntuneWindowsAgent.ClientHealth.RuleHandler.MemoryCheckRuleHandler.Process(ClientHealthRule rule)
+   at Microsoft.Management.EndUser.IntuneWindowsAgent.ClientHealth.ClientHealthRuleEngine.Process()]LOG]!><time="16:59:40.4340927" date="3-22-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+<![LOG[Heartbeat report is enabled result True]LOG]!><time="16:59:40.8583765" date="3-22-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+<![LOG[TCP probe is enabled result True]LOG]!><time="16:59:40.8707907" date="3-22-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+<![LOG[SideCarGatewayServiceURL service URL is https://agents.amsua0102.manage.microsoft.com/TrafficGateway/TrafficRoutingService/SideCar/StatelessSideCarGatewayService]LOG]!><time="16:59:40.8707907" date="3-22-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+<![LOG[Heartbeat service URL is https://agentsN.amsua0102.manage.microsoft.com/TrafficGateway/TrafficRoutingService/SideCar/StatelessSideCarGatewayService]LOG]!><time="16:59:40.8707907" date="3-22-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+<![LOG[Start sending health report..]LOG]!><time="16:59:40.8707907" date="3-22-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+<![LOG[Set MdmDeviceCertificate : 4038190E01EAB87F1A8D369D311E7F0A1D4B7473]LOG]!><time="16:59:40.8707907" date="3-22-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+<![LOG[Sending heartbeat report uri: https://agentsn.amsua0102.manage.microsoft.com/TrafficGateway/TrafficRoutingService/SideCar/StatelessSideCarGatewayService/SideCarHealthReports('78b78df6-560a-4ac9-a9e5-24fe6b838a8a')%3Fapi-version=1.5]LOG]!><time="16:59:40.8707907" date="3-22-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+<![LOG[The client heart beat health report failed to send. Response was empty or null.]LOG]!><time="16:59:41.1624617" date="3-22-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+<![LOG[Starting TCP probe after heartbeat call]LOG]!><time="16:59:41.1624617" date="3-22-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+<![LOG[Phase 1: Testing same endpoint TCP connection to resolved IP 13.107.228.23 (subnet: SD2)]LOG]!><time="16:59:41.1782910" date="3-22-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+<![LOG[TCP probe Phase 1 completed. Same endpoint test: SUCCESS, Resolved IP: 13.107.228.23, Subnet: SD2]LOG]!><time="16:59:41.1940140" date="3-22-2026" component="ClientHealth" context="" type="1" thread="4" file="">
+<![LOG[TCP probe detected public cloud environment - testing public subnets]LOG]!><time="16:59:41.2097550" date="3-22-2026" component="ClientHealth" context="" type="1" thread="4" file="">
+<![LOG[TCP probe Phase 2: Using public cloud reliable IPs]LOG]!><time="16:59:41.2258977" date="3-22-2026" component="ClientHealth" context="" type="1" thread="4" file="">
+<![LOG[TCP probe Phase 2: Testing 7 subnets with reliable IPs (skipping subnet: SD2)]LOG]!><time="16:59:41.2258977" date="3-22-2026" component="ClientHealth" context="" type="1" thread="4" file="">
+<![LOG[Phase 2: Testing subnet SD0 with reliable IPs]LOG]!><time="16:59:41.2258977" date="3-22-2026" component="ClientHealth" context="" type="1" thread="4" file="">
+<![LOG[Phase 2: Selected 3 IPs for subnet SD0 based on day-based rotation]LOG]!><time="16:59:41.2415892" date="3-22-2026" component="ClientHealth" context="" type="1" thread="4" file="">
+<![LOG[TCP probe Phase 2 SD0: SUCCESS (IPs attempted: 1)]LOG]!><time="16:59:41.2458694" date="3-22-2026" component="ClientHealth" context="" type="1" thread="4" file="">
+<![LOG[Phase 2: Testing subnet SD1 with reliable IPs]LOG]!><time="16:59:41.2458694" date="3-22-2026" component="ClientHealth" context="" type="1" thread="4" file="">
+<![LOG[Phase 2: Selected 3 IPs for subnet SD1 based on day-based rotation]LOG]!><time="16:59:41.2576177" date="3-22-2026" component="ClientHealth" context="" type="1" thread="4" file="">
+<![LOG[TCP probe Phase 2 SD1: SUCCESS (IPs attempted: 1)]LOG]!><time="16:59:41.2734747" date="3-22-2026" component="ClientHealth" context="" type="1" thread="4" file="">
+<![LOG[Phase 2: Skipping subnet SD2 (already tested in Phase 1)]LOG]!><time="16:59:41.2734747" date="3-22-2026" component="ClientHealth" context="" type="1" thread="4" file="">
+<![LOG[Phase 2: Testing subnet SD3 with reliable IPs]LOG]!><time="16:59:41.2734747" date="3-22-2026" component="ClientHealth" context="" type="1" thread="4" file="">
+<![LOG[Phase 2: Selected 3 IPs for subnet SD3 based on day-based rotation]LOG]!><time="16:59:41.2734747" date="3-22-2026" component="ClientHealth" context="" type="1" thread="4" file="">
+<![LOG[TCP probe Phase 2 SD3: SUCCESS (IPs attempted: 1)]LOG]!><time="16:59:41.3050571" date="3-22-2026" component="ClientHealth" context="" type="1" thread="4" file="">
+<![LOG[Phase 2: Testing subnet SD4 with reliable IPs]LOG]!><time="16:59:41.3050571" date="3-22-2026" component="ClientHealth" context="" type="1" thread="4" file="">
+<![LOG[Phase 2: Selected 3 IPs for subnet SD4 based on day-based rotation]LOG]!><time="16:59:41.3050571" date="3-22-2026" component="ClientHealth" context="" type="1" thread="4" file="">
+<![LOG[TCP probe Phase 2 SD4: FAILED (IPs attempted: 3) (DAILY_SELECTED_IPS_FAILED_TIMEOUT)]LOG]!><time="16:59:56.3215247" date="3-22-2026" component="ClientHealth" context="" type="1" thread="9" file="">
+<![LOG[Phase 2: Testing subnet SD5 with reliable IPs]LOG]!><time="16:59:56.3215247" date="3-22-2026" component="ClientHealth" context="" type="1" thread="9" file="">
+<![LOG[Phase 2: Selected 3 IPs for subnet SD5 based on day-based rotation]LOG]!><time="16:59:56.3215247" date="3-22-2026" component="ClientHealth" context="" type="1" thread="9" file="">
+<![LOG[TCP probe Phase 2 SD5: FAILED (IPs attempted: 3) (DAILY_SELECTED_IPS_FAILED_TIMEOUT)]LOG]!><time="17:00:11.3452794" date="3-22-2026" component="ClientHealth" context="" type="1" thread="9" file="">
+<![LOG[Phase 2: Testing subnet SD6 with reliable IPs]LOG]!><time="17:00:11.3452794" date="3-22-2026" component="ClientHealth" context="" type="1" thread="9" file="">
+<![LOG[Phase 2: Selected 3 IPs for subnet SD6 based on day-based rotation]LOG]!><time="17:00:11.3452794" date="3-22-2026" component="ClientHealth" context="" type="1" thread="9" file="">
+<![LOG[TCP probe Phase 2 SD6: FAILED (IPs attempted: 3) (DAILY_SELECTED_IPS_FAILED_TIMEOUT)]LOG]!><time="17:00:26.3774008" date="3-22-2026" component="ClientHealth" context="" type="1" thread="9" file="">
+<![LOG[TCP probe completed. Phase 1: SUCCESS, Phase 2 subnets tested: 6]LOG]!><time="17:00:26.3774008" date="3-22-2026" component="ClientHealth" context="" type="1" thread="9" file="">
+<![LOG[TCP probe completed with status: Enabled. Phase 1: SUCCESS, Phase 2 Results count: 6]LOG]!><time="17:00:26.3774008" date="3-22-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+<![LOG[Added AFD tracking to result details - ClientRequestId: 7e7ffe0f-6974-467a-8ff6-5ac064637d1f, AfdId: 20260322T205941Z-r1c4c859db58rm56hC1IADw3xs0000001q2g00000000204r, ExceptionDetails: WebException-Attempt1: ProtocolError | HTTP: Unauthorized(401), TcpProbeResults: Phase1:SUCCESS(SD2,13.107.228.23);Phase2:Total(6),Success(3),Failed(3),SuccessSubnets(SD0,SD1,SD3),FailedSubnets(SD4(DAILY_SELECTED_IPS_FAILED_TIMEOUT),SD5(DAILY_SELECTED_IPS_FAILED_TIMEOUT),SD6(DAILY_SELECTED_IPS_FAILED_TIMEOUT))]LOG]!><time="17:00:26.3774008" date="3-22-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+<![LOG[Finish sending health report.]LOG]!><time="17:00:26.3774008" date="3-22-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+<![LOG[Start sending health report..]LOG]!><time="17:00:26.3774008" date="3-22-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+<![LOG[Finish sending health report.]LOG]!><time="17:00:26.7018798" date="3-22-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+<![LOG[The client health report was sent successfully. Done.]LOG]!><time="17:00:26.7018798" date="3-22-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+<![LOG[Client Health evaluation completes.]LOG]!><time="17:00:26.7018798" date="3-22-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+re.]LOG]!><time="16:59:41.2258977" date="3-22-2026" component="IntuneManagementExtension" context="" type="1" thread="4" file="">
+<![LOG[Found 1 MDM certificates from Local Computer Store.]LOG]!><time="16:59:41.2258977" date="3-22-2026" component="IntuneManagementExtension" context="" type="1" thread="4" file="">
+<![LOG[Found 1 MDM certificates from Local Computer Store.]LOG]!><time="16:59:41.2258977" date="3-22-2026" component="IntuneManagementExtension" context="" type="1" thread="4" file="">
+<![LOG[[ClientHealthRuleEngine](SendHeartbeatReport) {"Message":"Failed","Colmetadata":"Details;TcpProbe;AfdId;ClientRequestId;ExceptionDetails;","Col1":"SD2","Col2":"Phase1:SUCCESS(SD2,13.107.228.23);Phase2:Total(6),Success(3),Failed(3),SuccessSubnets(SD0,SD1,SD3),FailedSubnets(SD4(DAILY_SELECTED_IPS_FAILED_TIMEOUT),SD5(DAILY_SELECTED_IPS_FAILED_TIMEOUT),SD6(DAILY_SELECTED_IPS_FAILED_TIMEOUT))","Col3":"20260322T205941Z-r1c4c859db58rm56hC1IADw3xs0000001q2g00000000204r","Col4":"7e7ffe0f-6974-467a-8ff6-5ac064637d1f","Col5":"WebException-Attempt1: ProtocolError | HTTP: Unauthorized(401)","Col6":""}]LOG]!><time="17:00:26.3774008" date="3-22-2026" component="IntuneManagementExtension" context="" type="1" thread="1" file="">
+<![LOG[[ServiceBase], check in using device check in AAD App]LOG]!><time="17:00:26.3933748" date="3-22-2026" component="IntuneManagementExtension" context="" type="1" thread="1" file="">
+<![LOG[[SendWebRequestInternal] iteration [0] started, total retryCount: 3]LOG]!><time="17:00:26.3933748" date="3-22-2026" component="IntuneManagementExtension" context="" type="1" thread="1" file="">
+<![LOG[PrepareHeaders, client-request-id: 7c842c72-275a-4ca1-bdcf-2c66b7c703f9, Method: PUT]LOG]!><time="17:00:26.3933748" date="3-22-2026" component="IntuneManagementExtension" context="" type="1" thread="1" file="">
+<![LOG[Userless session, skip UserToken for device check-in]LOG]!><time="17:00:26.3933748" date="3-22-2026" component="IntuneManagementExtension" context="" type="1" thread="1" file="">
+<![LOG[Found 1 MDM certificates from Local Computer Store.]LOG]!><time="17:00:26.4092635" date="3-22-2026" component="IntuneManagementExtension" context="" type="1" thread="1" file="">
+<![LOG[Add MdmDeviceCertificate 4038190E01EAB87F1A8D369D311E7F0A1D4B7473 into WebRequest with True]LOG]!><time="17:00:26.4092635" date="3-22-2026" component="IntuneManagementExtension" context="" type="1" thread="1" file="">
+<![LOG[[SendWebRequestInternal] Sending network request...  Current proxy is https://agents.amsua0102.manage.microsoft.com/TrafficGateway/TrafficRoutingService/SideCar/StatelessSideCarGatewayService/SideCarHealthReports('d41c5437-03b8-403b-a48c-94eaf0e9adba')%3Fapi-version=1.5]LOG]!><time="17:00:26.4092635" date="3-22-2026" component="IntuneManagementExtension" context="" type="1" thread="1" file="">
+<![LOG[[SendWebRequestInternal] Succeeded, client-request-id: 7c842c72-275a-4ca1-bdcf-2c66b7c703f9, AfdRef: ]LOG]!><time="17:00:26.7018798" date="3-22-2026" component="IntuneManagementExtension" context="" type="1" thread="9" file="">
+<![LOG[Client Health evaluation starts.]LOG]!><time="17:10:19.1539793" date="3-23-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+<![LOG[OnStart, public cloud env.]LOG]!><time="17:10:19.1994978" date="3-23-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+<![LOG[Set MdmDeviceCertificate : 4038190E01EAB87F1A8D369D311E7F0A1D4B7473]LOG]!><time="17:10:19.8882976" date="3-23-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+<![LOG[Service URL is https://agents.amsua0102.manage.microsoft.com/TrafficGateway/TrafficRoutingService/SideCar/StatelessSideCarGatewayService]LOG]!><time="17:10:19.8882976" date="3-23-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+<![LOG[Starting ECS flighting client initialization]LOG]!><time="17:10:19.9204047" date="3-23-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+<![LOG[aria logger is turned off. deviceid=fd7b187b-9e5a-4e69-9d75-8e1926b2c288, os=10.0.26100]LOG]!><time="17:10:20.1409542" date="3-23-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+<![LOG[Start processing rule Verify Intune Management Extension service exists.]LOG]!><time="17:10:20.1409542" date="3-23-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+<![LOG[Finish processing rule Verify Intune Management Extension service exists.]LOG]!><time="17:10:20.1567523" date="3-23-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+<![LOG[Summary: rule Verify Intune Management Extension service exists. with ID b862e7a7-fe34-47f3-a648-edd4803f781a, result = Pass, details = N/A]LOG]!><time="17:10:20.1567523" date="3-23-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+<![LOG[Start processing rule Verify/Remediate Intune Management Extension Service startup type.]LOG]!><time="17:10:20.1567523" date="3-23-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+<![LOG[Finish processing rule Verify/Remediate Intune Management Extension Service startup type.]LOG]!><time="17:10:21.6704181" date="3-23-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+<![LOG[Summary: rule Verify/Remediate Intune Management Extension Service startup type. with ID 05980f21-0099-4ac4-8ba7-c9f5f0cd0b7f, result = Pass, details = N/A]LOG]!><time="17:10:21.6704181" date="3-23-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+<![LOG[Start processing rule Verify/Remediate Intune Management Extension service status.]LOG]!><time="17:10:21.6704181" date="3-23-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+<![LOG[Finish processing rule Verify/Remediate Intune Management Extension service status.]LOG]!><time="17:10:21.6862843" date="3-23-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+<![LOG[Summary: rule Verify/Remediate Intune Management Extension service status. with ID 64103933-cde5-419b-abc7-4bfe5c535c4a, result = Pass, details = N/A]LOG]!><time="17:10:21.6862843" date="3-23-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+<![LOG[Start processing rule Verify/Remediate Intune Management Extension memory usage.]LOG]!><time="17:10:21.6862843" date="3-23-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+<![LOG[Finish processing rule Verify/Remediate Intune Management Extension memory usage.]LOG]!><time="17:10:21.7019321" date="3-23-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+<![LOG[Exception happens when processing non-leaf rule, rule id = 0cf538cd-6bba-4690-8776-e1f63f6d8d63, rule description = Verify/Remediate Intune Management Extension memory usage., exception = System.InvalidOperationException: Service IntuneWindowsAgent was not found on computer '.'. ---> System.ComponentModel.Win32Exception: The specified service does not exist as an installed service
+   --- End of inner exception stack trace ---
+   at System.ServiceProcess.ServiceController.GenerateNames()
+   at System.ServiceProcess.ServiceController.get_ServiceName()
+   at System.ServiceProcess.ServiceController.Stop()
+   at Microsoft.Management.EndUser.IntuneWindowsAgent.ClientHealth.RuleHandler.MemoryCheckRuleHandler.RemediateMemoryIssue(Process proc, Int64 memSize, RuleResult& result)
+   at Microsoft.Management.EndUser.IntuneWindowsAgent.ClientHealth.RuleHandler.MemoryCheckRuleHandler.Process(ClientHealthRule rule)
+   at Microsoft.Management.EndUser.IntuneWindowsAgent.ClientHealth.ClientHealthRuleEngine.Process()]LOG]!><time="17:10:21.7178718" date="3-23-2026" component="ClientHealth" context="" type="3" thread="1" file="">
+<![LOG[Summary: rule Verify/Remediate Intune Management Extension memory usage. with ID 0cf538cd-6bba-4690-8776-e1f63f6d8d63, result = Fail, details = Exception happens when processing non-leaf rule, rule id = 0cf538cd-6bba-4690-8776-e1f63f6d8d63, rule description = Verify/Remediate Intune Management Extension memory usage., exception = System.InvalidOperationException: Service IntuneWindowsAgent was not found on computer '.'. ---> System.ComponentModel.Win32Exception: The specified service does not exist as an installed service
+   --- End of inner exception stack trace ---
+   at System.ServiceProcess.ServiceController.GenerateNames()
+   at System.ServiceProcess.ServiceController.get_ServiceName()
+   at System.ServiceProcess.ServiceController.Stop()
+   at Microsoft.Management.EndUser.IntuneWindowsAgent.ClientHealth.RuleHandler.MemoryCheckRuleHandler.RemediateMemoryIssue(Process proc, Int64 memSize, RuleResult& result)
+   at Microsoft.Management.EndUser.IntuneWindowsAgent.ClientHealth.RuleHandler.MemoryCheckRuleHandler.Process(ClientHealthRule rule)
+   at Microsoft.Management.EndUser.IntuneWindowsAgent.ClientHealth.ClientHealthRuleEngine.Process()]LOG]!><time="17:10:21.7178718" date="3-23-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+<![LOG[Heartbeat report is enabled result True]LOG]!><time="17:10:22.2656265" date="3-23-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+<![LOG[TCP probe is enabled result True]LOG]!><time="17:10:22.2814374" date="3-23-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+<![LOG[SideCarGatewayServiceURL service URL is https://agents.amsua0102.manage.microsoft.com/TrafficGateway/TrafficRoutingService/SideCar/StatelessSideCarGatewayService]LOG]!><time="17:10:22.2814374" date="3-23-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+<![LOG[Heartbeat service URL is https://agentsN.amsua0102.manage.microsoft.com/TrafficGateway/TrafficRoutingService/SideCar/StatelessSideCarGatewayService]LOG]!><time="17:10:22.2814374" date="3-23-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+<![LOG[Start sending health report..]LOG]!><time="17:10:22.2814374" date="3-23-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+<![LOG[Set MdmDeviceCertificate : 4038190E01EAB87F1A8D369D311E7F0A1D4B7473]LOG]!><time="17:10:22.2814374" date="3-23-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+<![LOG[Sending heartbeat report uri: https://agentsn.amsua0102.manage.microsoft.com/TrafficGateway/TrafficRoutingService/SideCar/StatelessSideCarGatewayService/SideCarHealthReports('78b78df6-560a-4ac9-a9e5-24fe6b838a8a')%3Fapi-version=1.5]LOG]!><time="17:10:22.2814374" date="3-23-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+<![LOG[The client heart beat health report failed to send. Response was empty or null.]LOG]!><time="17:10:22.4728687" date="3-23-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+<![LOG[Starting TCP probe after heartbeat call]LOG]!><time="17:10:22.4728687" date="3-23-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+<![LOG[Phase 1: Testing same endpoint TCP connection to resolved IP 13.107.228.23 (subnet: SD2)]LOG]!><time="17:10:22.4888340" date="3-23-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+<![LOG[TCP probe Phase 1 completed. Same endpoint test: SUCCESS, Resolved IP: 13.107.228.23, Subnet: SD2]LOG]!><time="17:10:22.5206891" date="3-23-2026" component="ClientHealth" context="" type="1" thread="4" file="">
+<![LOG[TCP probe detected public cloud environment - testing public subnets]LOG]!><time="17:10:22.5384684" date="3-23-2026" component="ClientHealth" context="" type="1" thread="4" file="">
+<![LOG[TCP probe Phase 2: Using public cloud reliable IPs]LOG]!><time="17:10:22.5522817" date="3-23-2026" component="ClientHealth" context="" type="1" thread="4" file="">
+<![LOG[TCP probe Phase 2: Testing 7 subnets with reliable IPs (skipping subnet: SD2)]LOG]!><time="17:10:22.5522817" date="3-23-2026" component="ClientHealth" context="" type="1" thread="4" file="">
+<![LOG[Phase 2: Testing subnet SD0 with reliable IPs]LOG]!><time="17:10:22.5522817" date="3-23-2026" component="ClientHealth" context="" type="1" thread="4" file="">
+<![LOG[Phase 2: Selected 3 IPs for subnet SD0 based on day-based rotation]LOG]!><time="17:10:22.5522817" date="3-23-2026" component="ClientHealth" context="" type="1" thread="4" file="">
+<![LOG[TCP probe Phase 2 SD0: SUCCESS (IPs attempted: 1)]LOG]!><time="17:10:22.5683492" date="3-23-2026" component="ClientHealth" context="" type="1" thread="4" file="">
+<![LOG[Phase 2: Testing subnet SD1 with reliable IPs]LOG]!><time="17:10:22.5683492" date="3-23-2026" component="ClientHealth" context="" type="1" thread="4" file="">
+<![LOG[Phase 2: Selected 3 IPs for subnet SD1 based on day-based rotation]LOG]!><time="17:10:22.5683492" date="3-23-2026" component="ClientHealth" context="" type="1" thread="4" file="">
+<![LOG[TCP probe Phase 2 SD1: SUCCESS (IPs attempted: 1)]LOG]!><time="17:10:22.5841336" date="3-23-2026" component="ClientHealth" context="" type="1" thread="4" file="">
+<![LOG[Phase 2: Skipping subnet SD2 (already tested in Phase 1)]LOG]!><time="17:10:22.5841336" date="3-23-2026" component="ClientHealth" context="" type="1" thread="4" file="">
+<![LOG[Phase 2: Testing subnet SD3 with reliable IPs]LOG]!><time="17:10:22.5841336" date="3-23-2026" component="ClientHealth" context="" type="1" thread="4" file="">
+<![LOG[Phase 2: Selected 3 IPs for subnet SD3 based on day-based rotation]LOG]!><time="17:10:22.5841336" date="3-23-2026" component="ClientHealth" context="" type="1" thread="4" file="">
+<![LOG[TCP probe Phase 2 SD3: SUCCESS (IPs attempted: 1)]LOG]!><time="17:10:22.6001876" date="3-23-2026" component="ClientHealth" context="" type="1" thread="4" file="">
+<![LOG[Phase 2: Testing subnet SD4 with reliable IPs]LOG]!><time="17:10:22.6001876" date="3-23-2026" component="ClientHealth" context="" type="1" thread="4" file="">
+<![LOG[Phase 2: Selected 3 IPs for subnet SD4 based on day-based rotation]LOG]!><time="17:10:22.6001876" date="3-23-2026" component="ClientHealth" context="" type="1" thread="4" file="">
+<![LOG[TCP probe Phase 2 SD4: FAILED (IPs attempted: 3) (DAILY_SELECTED_IPS_FAILED_TIMEOUT)]LOG]!><time="17:10:37.6240969" date="3-23-2026" component="ClientHealth" context="" type="1" thread="9" file="">
+<![LOG[Phase 2: Testing subnet SD5 with reliable IPs]LOG]!><time="17:10:37.6240969" date="3-23-2026" component="ClientHealth" context="" type="1" thread="9" file="">
+<![LOG[Phase 2: Selected 3 IPs for subnet SD5 based on day-based rotation]LOG]!><time="17:10:37.6240969" date="3-23-2026" component="ClientHealth" context="" type="1" thread="9" file="">
+<![LOG[TCP probe Phase 2 SD5: FAILED (IPs attempted: 3) (DAILY_SELECTED_IPS_FAILED_TIMEOUT)]LOG]!><time="17:10:52.6446681" date="3-23-2026" component="ClientHealth" context="" type="1" thread="9" file="">
+<![LOG[Phase 2: Testing subnet SD6 with reliable IPs]LOG]!><time="17:10:52.6466744" date="3-23-2026" component="ClientHealth" context="" type="1" thread="9" file="">
+<![LOG[Phase 2: Selected 3 IPs for subnet SD6 based on day-based rotation]LOG]!><time="17:10:52.6466744" date="3-23-2026" component="ClientHealth" context="" type="1" thread="9" file="">
+<![LOG[TCP probe Phase 2 SD6: FAILED (IPs attempted: 3) (DAILY_SELECTED_IPS_FAILED_TIMEOUT)]LOG]!><time="17:11:07.6821827" date="3-23-2026" component="ClientHealth" context="" type="1" thread="9" file="">
+<![LOG[TCP probe completed. Phase 1: SUCCESS, Phase 2 subnets tested: 6]LOG]!><time="17:11:07.6821827" date="3-23-2026" component="ClientHealth" context="" type="1" thread="9" file="">
+<![LOG[TCP probe completed with status: Enabled. Phase 1: SUCCESS, Phase 2 Results count: 6]LOG]!><time="17:11:07.6821827" date="3-23-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+<![LOG[Added AFD tracking to result details - ClientRequestId: a28e1ff4-8c00-4ce6-acc6-c3eba38102e4, AfdId: 20260323T211022Z-17ff8b4d4c9ptmhrhC1IAD2qrc0000000nb00000000001cd, ExceptionDetails: WebException-Attempt1: ProtocolError | HTTP: Unauthorized(401), TcpProbeResults: Phase1:SUCCESS(SD2,13.107.228.23);Phase2:Total(6),Success(3),Failed(3),SuccessSubnets(SD0,SD1,SD3),FailedSubnets(SD4(DAILY_SELECTED_IPS_FAILED_TIMEOUT),SD5(DAILY_SELECTED_IPS_FAILED_TIMEOUT),SD6(DAILY_SELECTED_IPS_FAILED_TIMEOUT))]LOG]!><time="17:11:07.6821827" date="3-23-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+<![LOG[Finish sending health report.]LOG]!><time="17:11:07.6821827" date="3-23-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+<![LOG[Start sending health report..]LOG]!><time="17:11:07.6821827" date="3-23-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+<![LOG[Finish sending health report.]LOG]!><time="17:11:08.0163819" date="3-23-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+<![LOG[The client health report was sent successfully. Done.]LOG]!><time="17:11:08.0163819" date="3-23-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+<![LOG[Client Health evaluation completes.]LOG]!><time="17:11:08.0163819" date="3-23-2026" component="ClientHealth" context="" type="1" thread="1" file="">
+re.]LOG]!><time="17:10:22.5444883" date="3-23-2026" component="IntuneManagementExtension" context="" type="1" thread="4" file="">
+<![LOG[Found 1 MDM certificates from Local Computer Store.]LOG]!><time="17:10:22.5485284" date="3-23-2026" component="IntuneManagementExtension" context="" type="1" thread="4" file="">
+<![LOG[Found 1 MDM certificates from Local Computer Store.]LOG]!><time="17:10:22.5522817" date="3-23-2026" component="IntuneManagementExtension" context="" type="1" thread="4" file="">
+<![LOG[[ClientHealthRuleEngine](SendHeartbeatReport) {"Message":"Failed","Colmetadata":"Details;TcpProbe;AfdId;ClientRequestId;ExceptionDetails;","Col1":"SD2","Col2":"Phase1:SUCCESS(SD2,13.107.228.23);Phase2:Total(6),Success(3),Failed(3),SuccessSubnets(SD0,SD1,SD3),FailedSubnets(SD4(DAILY_SELECTED_IPS_FAILED_TIMEOUT),SD5(DAILY_SELECTED_IPS_FAILED_TIMEOUT),SD6(DAILY_SELECTED_IPS_FAILED_TIMEOUT))","Col3":"20260323T211022Z-17ff8b4d4c9ptmhrhC1IAD2qrc0000000nb00000000001cd","Col4":"a28e1ff4-8c00-4ce6-acc6-c3eba38102e4","Col5":"WebException-Attempt1: ProtocolError | HTTP: Unauthorized(401)","Col6":""}]LOG]!><time="17:11:07.6821827" date="3-23-2026" component="IntuneManagementExtension" context="" type="1" thread="1" file="">
+<![LOG[[ServiceBase], check in using device check in AAD App]LOG]!><time="17:11:07.6981222" date="3-23-2026" component="IntuneManagementExtension" context="" type="1" thread="1" file="">
+<![LOG[[SendWebRequestInternal] iteration [0] started, total retryCount: 3]LOG]!><time="17:11:07.6981222" date="3-23-2026" component="IntuneManagementExtension" context="" type="1" thread="1" file="">
+<![LOG[PrepareHeaders, client-request-id: 24e84a0a-6435-4053-a7b2-313d6b9a8342, Method: PUT]LOG]!><time="17:11:07.6981222" date="3-23-2026" component="IntuneManagementExtension" context="" type="1" thread="1" file="">
+<![LOG[Userless session, skip UserToken for device check-in]LOG]!><time="17:11:07.6981222" date="3-23-2026" component="IntuneManagementExtension" context="" type="1" thread="1" file="">
+<![LOG[Found 1 MDM certificates from Local Computer Store.]LOG]!><time="17:11:07.7142192" date="3-23-2026" component="IntuneManagementExtension" context="" type="1" thread="1" file="">
+<![LOG[Add MdmDeviceCertificate 4038190E01EAB87F1A8D369D311E7F0A1D4B7473 into WebRequest with True]LOG]!><time="17:11:07.7142192" date="3-23-2026" component="IntuneManagementExtension" context="" type="1" thread="1" file="">
+<![LOG[[SendWebRequestInternal] Sending network request...  Current proxy is https://agents.amsua0102.manage.microsoft.com/TrafficGateway/TrafficRoutingService/SideCar/StatelessSideCarGatewayService/SideCarHealthReports('8db3773f-005d-4711-94f8-2c363d12de5d')%3Fapi-version=1.5]LOG]!><time="17:11:07.7142192" date="3-23-2026" component="IntuneManagementExtension" context="" type="1" thread="1" file="">
+<![LOG[[SendWebRequestInternal] Succeeded, client-request-id: 24e84a0a-6435-4053-a7b2-313d6b9a8342, AfdRef: ]LOG]!><time="17:11:08.0163819" date="3-23-2026" component="IntuneManagementExtension" context="" type="1" thread="9" file="">

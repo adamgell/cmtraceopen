@@ -10,13 +10,23 @@ export type ParserKind =
   | "panther"
   | "cbs"
   | "dism"
-  | "reportingEvents";
+  | "reportingEvents"
+  | "msi"
+  | "psadtLegacy"
+  | "intuneMacOs"
+  | "dhcp"
+  | "burn";
 export type ParserImplementation =
   | "ccm"
   | "simple"
   | "genericTimestamped"
   | "reportingEvents"
-  | "plainText";
+  | "plainText"
+  | "msi"
+  | "psadtLegacy"
+  | "intuneMacOs"
+  | "dhcp"
+  | "burn";
 export type ParserProvenance = "dedicated" | "heuristic" | "fallback";
 export type ParseQuality = "structured" | "semiStructured" | "textFallback";
 export type RecordFraming = "physicalLine" | "logicalRecord";
@@ -115,6 +125,9 @@ export interface LogEntry {
   filePath: string;
   timezoneOffset: number | null;
   errorCodeSpans?: ErrorCodeSpan[];
+  ipAddress?: string | null;
+  hostName?: string | null;
+  macAddress?: string | null;
 }
 
 export interface ParserSelectionInfo {

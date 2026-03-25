@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { tokens } from "@fluentui/react-components";
+import { LOG_UI_FONT_FAMILY, LOG_MONOSPACE_FONT_FAMILY } from "../../lib/log-accessibility";
 import { formatDisplayDateTime, parseDisplayDateTimeValue } from "../../lib/date-time-format";
 import { useIntuneStore } from "../../stores/intune-store";
 import { useAppActions } from "../layout/Toolbar";
@@ -162,7 +163,7 @@ export function IntuneDashboard() {
               fontSize: "13px",
               fontWeight: 600,
               color: tokens.colorNeutralForeground1,
-              fontFamily: "'Segoe UI', Tahoma, sans-serif",
+              fontFamily: LOG_UI_FONT_FAMILY,
             }}
           >
             Intune Diagnostics Workspace
@@ -749,7 +750,7 @@ function SummaryView({
         style={{
           margin: "0 0 12px 0",
           fontSize: "15px",
-          fontFamily: "'Segoe UI', Tahoma, sans-serif",
+          fontFamily: LOG_UI_FONT_FAMILY,
         }}
       >
         Intune Diagnostics Summary
@@ -814,7 +815,7 @@ function SummaryView({
                   border: `1px solid ${tokens.colorPaletteBlueBorderActive}`,
                   color: tokens.colorPaletteBlueForeground2,
                   fontSize: "11px",
-                  fontFamily: "'Courier New', monospace",
+                  fontFamily: LOG_MONOSPACE_FONT_FAMILY,
                 }}
               >
                 {getFileName(file)}

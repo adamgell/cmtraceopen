@@ -13,7 +13,7 @@
 //! - Otherwise → Plain text
 
 use super::{
-    cbs, dism, panther, reporting_events,
+    burn, cbs, dhcp, dism, intune_macos, msi, panther, psadt, reporting_events,
     timestamped::{self, DateOrder},
 };
 use crate::models::log_entry::{
@@ -162,12 +162,77 @@ impl ResolvedParser {
         )
     }
 
+    pub fn msi() -> Self {
+        Self::new(
+            ParserKind::Msi,
+            ParserImplementation::Msi,
+            ParserProvenance::Dedicated,
+            ParseQuality::SemiStructured,
+            RecordFraming::PhysicalLine,
+            DateOrder::MonthFirst,
+            None,
+        )
+    }
+
+    pub fn burn() -> Self {
+        Self::new(
+            ParserKind::Burn,
+            ParserImplementation::Burn,
+            ParserProvenance::Dedicated,
+            ParseQuality::Structured,
+            RecordFraming::PhysicalLine,
+            DateOrder::default(),
+            None,
+        )
+    }
+
+    pub fn dhcp() -> Self {
+        Self::new(
+            ParserKind::Dhcp,
+            ParserImplementation::Dhcp,
+            ParserProvenance::Dedicated,
+            ParseQuality::Structured,
+            RecordFraming::PhysicalLine,
+            DateOrder::MonthFirst,
+            None,
+        )
+    }
+
+    pub fn intune_macos() -> Self {
+        Self::new(
+            ParserKind::IntuneMacOs,
+            ParserImplementation::IntuneMacOs,
+            ParserProvenance::Dedicated,
+            ParseQuality::Structured,
+            RecordFraming::PhysicalLine,
+            DateOrder::default(),
+            None,
+        )
+    }
+
+    pub fn psadt_legacy() -> Self {
+        Self::new(
+            ParserKind::PsadtLegacy,
+            ParserImplementation::PsadtLegacy,
+            ParserProvenance::Dedicated,
+            ParseQuality::Structured,
+            RecordFraming::PhysicalLine,
+            DateOrder::default(),
+            None,
+        )
+    }
+
     pub fn compatibility_format(&self) -> LogFormat {
         match self.implementation {
             ParserImplementation::Ccm => LogFormat::Ccm,
             ParserImplementation::Simple => LogFormat::Simple,
             ParserImplementation::GenericTimestamped => LogFormat::Timestamped,
             ParserImplementation::ReportingEvents => LogFormat::Timestamped,
+            ParserImplementation::Msi => LogFormat::Timestamped,
+            ParserImplementation::PsadtLegacy => LogFormat::Timestamped,
+            ParserImplementation::IntuneMacOs => LogFormat::Timestamped,
+            ParserImplementation::Dhcp => LogFormat::Timestamped,
+            ParserImplementation::Burn => LogFormat::Timestamped,
             ParserImplementation::PlainText => LogFormat::Plain,
         }
     }
@@ -202,6 +267,19 @@ pub fn detect_parser(path: &str, content: &str) -> ResolvedParser {
         .take(20)
         .collect();
 
+    // Early detection: DHCP logs have a ~35-line header before any CSV data.
+    // The first 20 non-empty lines are all header text, so content-based matching
+    // won't find data rows. Detect via header signature or path hint + header.
+    {
+        let content_lower = content.to_ascii_lowercase();
+        if content_lower.starts_with("\t\tmicrosoft dhcp")
+            || content_lower.contains("microsoft dhcp service activity log")
+            || content_lower.contains("microsoft dhcpv6 service activity log")
+        {
+            return ResolvedParser::dhcp();
+        }
+    }
+
     let path_lower = path.to_ascii_lowercase();
     let panther_path_hint = path_lower.contains("panther")
         || path_lower.ends_with("setupact.log")
@@ -227,12 +305,24 @@ pub fn detect_parser(path: &str, content: &str) -> ResolvedParser {
         )
     );
 
+    let dhcp_path_hint = path_lower.contains("dhcpsrvlog")
+        || path_lower.contains("dhcpv6srvlog")
+        || path_lower.contains("dhcp_logs");
+
+    let intune_macos_path_hint = path_lower.contains("intunemdmdaemon")
+        || path_lower.contains("/logs/microsoft/intune/");
+
     let mut ccm_count = 0;
     let mut cbs_count = 0;
     let mut dism_count = 0;
     let mut reporting_events_count = 0;
     let mut simple_count = 0;
     let mut panther_count = 0;
+    let mut msi_count = 0u32;
+    let mut psadt_legacy_count = 0u32;
+    let mut intune_macos_count = 0u32;
+    let mut dhcp_count = 0u32;
+    let mut burn_count = 0u32;
     let mut timestamp_count = 0;
     let mut has_day_first = false;
 
@@ -254,7 +344,19 @@ pub fn detect_parser(path: &str, content: &str) -> ResolvedParser {
             timestamp_count += 1;
         } else if panther::matches_panther_record(line.trim()) {
             panther_count += 1;
-        } else if timestamped::matches_any_timestamp(line.trim()) {
+        } else if burn::matches_burn_record(line.trim()) {
+            burn_count += 1;
+            timestamp_count += 1;
+        } else if dhcp::matches_dhcp_record(line.trim()) {
+            dhcp_count += 1;
+        } else if intune_macos::matches_intune_macos(line.trim()) {
+            intune_macos_count += 1;
+            timestamp_count += 1;
+        } else {
+            msi_count += msi::matches_msi_content(line.trim());
+            psadt_legacy_count += psadt::matches_psadt_legacy_content(line.trim());
+        }
+        if timestamped::matches_any_timestamp(line.trim()) {
             timestamp_count += 1;
             // Check for EU-style dates (first field > 12 → must be day)
             if let Some(first_field) = timestamped::slash_date_first_field(line.trim()) {
@@ -283,6 +385,16 @@ pub fn detect_parser(path: &str, content: &str) -> ResolvedParser {
         ResolvedParser::reporting_events()
     } else if dism_count >= 2 {
         ResolvedParser::dism()
+    } else if burn_count >= 2 {
+        ResolvedParser::burn()
+    } else if (dhcp_path_hint && dhcp_count >= 1) || dhcp_count >= 3 {
+        ResolvedParser::dhcp()
+    } else if (intune_macos_path_hint && intune_macos_count >= 1) || intune_macos_count >= 2 {
+        ResolvedParser::intune_macos()
+    } else if msi_count >= 2 {
+        ResolvedParser::msi()
+    } else if psadt_legacy_count >= 2 {
+        ResolvedParser::psadt_legacy()
     } else if timestamp_count >= 2 {
         // Require at least 2 timestamp matches to avoid false positives
         ResolvedParser::generic_timestamped(if has_day_first {

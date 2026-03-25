@@ -1,6 +1,7 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useMemo, useRef, useCallback } from "react";
 import { tokens } from "@fluentui/react-components";
+import { LOG_MONOSPACE_FONT_FAMILY } from "../../lib/log-accessibility";
 import { useDsregcmdStore } from "../../stores/dsregcmd-store";
 import type { EventLogAnalysis, EventLogEntry, EventLogChannel, EventLogSeverity } from "../../types/event-log";
 
@@ -352,7 +353,7 @@ function EventLogRow({ entry, isExpanded, onClick }: EventLogRowProps) {
               background: tokens.colorNeutralBackground3,
               padding: 8,
               borderRadius: 4,
-              fontFamily: "monospace",
+              fontFamily: LOG_MONOSPACE_FONT_FAMILY,
               fontSize: 11,
               whiteSpace: "pre-wrap",
               wordBreak: "break-word",
@@ -379,7 +380,7 @@ function EventLogRow({ entry, isExpanded, onClick }: EventLogRowProps) {
             {entry.correlationActivityId && (
               <>
                 <span>Activity ID:</span>
-                <span style={{ color: tokens.colorNeutralForeground2, fontFamily: "monospace", fontSize: 11 }}>
+                <span style={{ color: tokens.colorNeutralForeground2, fontFamily: LOG_MONOSPACE_FONT_FAMILY, fontSize: 11 }}>
                   {entry.correlationActivityId}
                 </span>
               </>

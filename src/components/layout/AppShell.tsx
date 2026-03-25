@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef } from "react";
-import { tokens } from "@fluentui/react-components";
+import { tokens, ProgressBar, Spinner } from "@fluentui/react-components";
 import { invoke } from "@tauri-apps/api/core";
 import { Toolbar } from "./Toolbar";
+import { TabStrip } from "./TabStrip";
 import { StatusBar } from "./StatusBar";
 import { FileSidebar, FILE_SIDEBAR_RECOMMENDED_WIDTH } from "./FileSidebar";
 import { LogListView } from "../log-view/LogListView";
@@ -17,11 +18,13 @@ import { IntuneDashboard } from "../intune/IntuneDashboard";
 import { NewIntuneWorkspace } from "../intune/NewIntuneWorkspace";
 import { DsregcmdWorkspace } from "../dsregcmd/DsregcmdWorkspace";
 import { MacosDiagWorkspace } from "../macos-diag/MacosDiagWorkspace";
+import { DeploymentWorkspace } from "../deployment/DeploymentWorkspace";
 import type { FilterClause } from "../dialogs/FilterDialog";
 import type { LogEntry } from "../../types/log";
 import { useUiStore } from "../../stores/ui-store";
 import { useLogStore } from "../../stores/log-store";
 import { useFilterStore } from "../../stores/filter-store";
+import { switchToTab } from "../../lib/log-source";
 import { useFileWatcher } from "../../hooks/use-file-watcher";
 import { useIntuneAnalysisProgress } from "../../hooks/use-intune-analysis-progress";
 import { useKeyboard } from "../../hooks/use-keyboard";
@@ -41,6 +44,8 @@ function buildFilterRunSignature(entries: LogEntry[], clauses: FilterClause[]): 
 
 export function AppShell() {
   const activeView = useUiStore((s) => s.activeView);
+  const sidebarCollapsed = useUiStore((s) => s.sidebarCollapsed);
+  const toggleSidebar = useUiStore((s) => s.toggleSidebar);
   const showInfoPane = useUiStore((s) => s.showInfoPane);
   const infoPaneHeight = useUiStore((s) => s.infoPaneHeight);
   const showFindDialog = useUiStore((s) => s.showFindDialog);
@@ -71,6 +76,8 @@ export function AppShell() {
   const setShowFileAssociationPrompt = useUiStore(
     (s) => s.setShowFileAssociationPrompt
   );
+
+  const activeTabIndex = useUiStore((s) => s.activeTabIndex);
 
   const entries = useLogStore((s) => s.entries);
   const filterClauses = useFilterStore((s) => s.clauses);
@@ -179,6 +186,22 @@ export function AppShell() {
   // Prompt standalone Windows users to associate .log files like CMTrace.exe
   useFileAssociationPrompt();
 
+  // When the active tab changes, load the corresponding file using stored source context.
+  // This avoids redundant folder re-parsing — switchToTab uses the tab's source context
+  // to restore the folder sidebar and load only the selected file.
+  useEffect(() => {
+    const tabs = useUiStore.getState().openTabs;
+    if (activeTabIndex < 0 || activeTabIndex >= tabs.length) return;
+    const tab = tabs[activeTabIndex];
+    const currentPath = useLogStore.getState().openFilePath;
+    if (currentPath === tab.filePath) return;
+
+    useUiStore.getState().ensureLogViewVisible("tab-switch");
+    switchToTab(tab.filePath, tab.sourceContext).catch((err) => {
+      console.error("[tab-switch] failed to load", tab.filePath, err);
+    });
+  }, [activeTabIndex]);
+
   const handleApplyFilter = useCallback(
     async (clauses: FilterClause[]) => {
       setClauses(clauses);
@@ -186,6 +209,10 @@ export function AppShell() {
     },
     [entries, runFilter, setClauses]
   );
+
+  const folderLoadProgress = useLogStore((s) => s.folderLoadProgress);
+  const folderLoadCurrentFile = useLogStore((s) => s.folderLoadCurrentFile);
+  const folderLoadTotalFiles = useLogStore((s) => s.folderLoadTotalFiles);
 
   const renderWorkspace = () => {
     if (activeView === "log") {
@@ -195,9 +222,56 @@ export function AppShell() {
             style={{
               flex: 1,
               overflow: "hidden",
+              position: "relative",
             }}
           >
             <LogListView />
+
+            {/* Folder loading overlay with progress bar */}
+            {folderLoadProgress !== null && (
+              <div
+                style={{
+                  position: "absolute",
+                  inset: 0,
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  background: tokens.colorNeutralBackground1,
+                  opacity: 0.95,
+                  zIndex: 100,
+                  gap: "16px",
+                  padding: "32px",
+                }}
+              >
+                <Spinner size="large" />
+                <div style={{ width: "100%", maxWidth: "400px" }}>
+                  <ProgressBar
+                    thickness="large"
+                    color="brand"
+                  />
+                </div>
+                <div
+                  style={{
+                    fontSize: "14px",
+                    fontWeight: 600,
+                    color: tokens.colorNeutralForeground1,
+                  }}
+                >
+                  Parsing {folderLoadTotalFiles ?? 0} files in parallel...
+                </div>
+                {folderLoadCurrentFile && (
+                  <div
+                    style={{
+                      fontSize: "12px",
+                      color: tokens.colorNeutralForeground3,
+                    }}
+                  >
+                    {folderLoadCurrentFile}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
           {showInfoPane && (
@@ -239,6 +313,14 @@ export function AppShell() {
       );
     }
 
+    if (activeView === "deployment") {
+      return (
+        <div style={{ flex: 1, overflow: "hidden" }}>
+          <DeploymentWorkspace />
+        </div>
+      );
+    }
+
     return (
       <div style={{ flex: 1, overflow: "hidden" }}>
         <DsregcmdWorkspace />
@@ -257,6 +339,7 @@ export function AppShell() {
       }}
     >
       <Toolbar />
+      {activeView === "log" && <TabStrip />}
 
       <div
         style={{
@@ -266,7 +349,47 @@ export function AppShell() {
           backgroundColor: tokens.colorNeutralBackground2,
         }}
       >
-        <FileSidebar width={FILE_SIDEBAR_RECOMMENDED_WIDTH} activeView={activeView} />
+        {sidebarCollapsed ? (
+          <div
+            style={{
+              width: 36,
+              minWidth: 36,
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              borderRight: `1px solid ${tokens.colorNeutralStroke2}`,
+              backgroundColor: tokens.colorNeutralBackground2,
+              paddingTop: 8,
+            }}
+          >
+            <button
+              onClick={toggleSidebar}
+              title="Expand sidebar (Ctrl+B)"
+              aria-label="Expand sidebar"
+              style={{
+                background: "none",
+                border: "none",
+                cursor: "pointer",
+                padding: 6,
+                borderRadius: 4,
+                color: tokens.colorNeutralForeground2,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+              }}
+            >
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                <path d="M6 3l5 5-5 5V3z" />
+              </svg>
+            </button>
+          </div>
+        ) : (
+          <FileSidebar
+            width={FILE_SIDEBAR_RECOMMENDED_WIDTH}
+            activeView={activeView}
+            onCollapse={toggleSidebar}
+          />
+        )}
 
         <div
           style={{

@@ -10,19 +10,19 @@
 use once_cell::sync::Lazy;
 use regex::Regex;
 
+use super::ccm::format_thread_display;
 use super::severity::detect_severity_from_text;
 use crate::models::log_entry::{LogEntry, LogFormat, Severity};
 
-/// Regex for the timestamp portion: <MM-dd-yyyy HH:mm:ss.fff±TTTTT>
-static TIMESTAMP_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r#"<(\d{1,2})-(\d{1,2})-(\d{4})\s+(\d{1,2}):(\d{1,2}):(\d{1,2})\.(\d+)([+-]?\d+)>"#)
-        .expect("Simple timestamp regex must compile")
-});
-
-/// Regex for the thread portion: <thread=N (0xNNNN)> or <thread=N>
-static THREAD_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r#"<thread=(\d+)(?:\s*\(0x[0-9a-fA-F]+\))?>"#)
-        .expect("Simple thread regex must compile")
+/// Combined regex for timestamp and thread portions in a single pass.
+/// Matches: <MM-dd-yyyy HH:mm:ss.fff±TTTTT><thread=N (0xNNNN)>
+/// The thread group is optional to handle lines without thread info.
+static META_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(concat!(
+        r#"<(\d{1,2})-(\d{1,2})-(\d{4})\s+(\d{1,2}):(\d{1,2}):(\d{1,2})\.(\d+)([+-]?\d+)>"#,
+        r#"(?:<thread=(\d+)(?:\s*\(0x[0-9a-fA-F]+\))?>)?"#,
+    ))
+    .expect("Simple metadata regex must compile")
 });
 
 /// Parse a single simple-format log line.
@@ -37,26 +37,25 @@ fn parse_line(line: &str) -> Option<SimpleParsed> {
     let component = metadata[..comp_end].to_string();
     let rest = &metadata[comp_end + 1..];
 
-    // Extract timestamp
-    let ts_caps = TIMESTAMP_RE.captures(rest)?;
-    let mon: u32 = ts_caps.get(1)?.as_str().parse().ok()?;
-    let day: u32 = ts_caps.get(2)?.as_str().parse().ok()?;
-    let yr: i32 = ts_caps.get(3)?.as_str().parse().ok()?;
-    let h: u32 = ts_caps.get(4)?.as_str().parse().ok()?;
-    let m: u32 = ts_caps.get(5)?.as_str().parse().ok()?;
-    let s: u32 = ts_caps.get(6)?.as_str().parse().ok()?;
-    let ms_str = ts_caps.get(7)?.as_str();
+    // Single regex pass extracts both timestamp and thread
+    let caps = META_RE.captures(rest)?;
+    let mon: u32 = caps.get(1)?.as_str().parse().ok()?;
+    let day: u32 = caps.get(2)?.as_str().parse().ok()?;
+    let yr: i32 = caps.get(3)?.as_str().parse().ok()?;
+    let h: u32 = caps.get(4)?.as_str().parse().ok()?;
+    let m: u32 = caps.get(5)?.as_str().parse().ok()?;
+    let s: u32 = caps.get(6)?.as_str().parse().ok()?;
+    let ms_str = caps.get(7)?.as_str();
     let ms: u32 = if ms_str.len() > 3 {
         ms_str[..3].parse().ok()?
     } else {
         ms_str.parse().ok()?
     };
-    let tz: i32 = ts_caps.get(8)?.as_str().parse().ok()?;
+    let tz: i32 = caps.get(8)?.as_str().parse().ok()?;
 
-    // Extract thread
-    let thread = THREAD_RE
-        .captures(rest)
-        .and_then(|c| c.get(1))
+    // Thread is optional (captured by the combined regex)
+    let thread = caps
+        .get(9)
         .and_then(|m| m.as_str().parse::<u32>().ok());
 
     let timestamp = chrono::NaiveDate::from_ymd_opt(yr, mon, day)
@@ -68,7 +67,8 @@ fn parse_line(line: &str) -> Option<SimpleParsed> {
         mon, day, yr, h, m, s, ms
     ));
 
-    let thread_display = thread.map(|t| format!("{} (0x{:04X})", t, t));
+    // Reuse cached thread display from ccm module
+    let thread_display = thread.map(format_thread_display);
 
     // Text-based severity detection (no type field in simple format)
     let severity = detect_severity_from_text(&message);
@@ -124,6 +124,9 @@ pub fn parse_lines(lines: &[&str], file_path: &str) -> (Vec<LogEntry>, u32) {
                     file_path: file_path.to_string(),
                     timezone_offset: Some(parsed.timezone_offset),
                     error_code_spans: Vec::new(),
+                    ip_address: None,
+                    host_name: None,
+                    mac_address: None,
                 });
                 id_counter += 1;
             }
@@ -144,6 +147,9 @@ pub fn parse_lines(lines: &[&str], file_path: &str) -> (Vec<LogEntry>, u32) {
                     file_path: file_path.to_string(),
                     timezone_offset: None,
                     error_code_spans: Vec::new(),
+                    ip_address: None,
+                    host_name: None,
+                    mac_address: None,
                 });
                 id_counter += 1;
                 errors += 1;

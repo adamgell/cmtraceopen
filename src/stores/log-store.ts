@@ -9,6 +9,48 @@ import type {
   LogSource,
   ParserSelectionInfo,
 } from "../types/log";
+import { type ColumnId, DEFAULT_COLUMNS } from "../lib/column-config";
+
+/**
+ * Snapshot of parsed file state — cached in memory so tab switches
+ * can restore instantly without re-reading / re-parsing the file.
+ */
+export interface TabEntrySnapshot {
+  entries: LogEntry[];
+  formatDetected: LogFormat | null;
+  parserSelection: ParserSelectionInfo | null;
+  totalLines: number;
+  byteOffset: number;
+  selectedSourceFilePath: string | null;
+  sourceOpenMode: SourceOpenMode;
+  activeColumns: ColumnId[];
+}
+
+/** Module-level cache: filePath → parsed snapshot. Lives outside Zustand to avoid triggering re-renders. */
+const tabEntryCache = new Map<string, TabEntrySnapshot>();
+
+const TAB_CACHE_MAX_SIZE = 30;
+
+export function getCachedTabSnapshot(filePath: string): TabEntrySnapshot | undefined {
+  return tabEntryCache.get(filePath);
+}
+
+export function setCachedTabSnapshot(filePath: string, snapshot: TabEntrySnapshot): void {
+  // Evict oldest if at capacity
+  if (tabEntryCache.size >= TAB_CACHE_MAX_SIZE && !tabEntryCache.has(filePath)) {
+    const oldestKey = tabEntryCache.keys().next().value;
+    if (oldestKey) tabEntryCache.delete(oldestKey);
+  }
+  tabEntryCache.set(filePath, snapshot);
+}
+
+export function clearCachedTabSnapshot(filePath: string): void {
+  tabEntryCache.delete(filePath);
+}
+
+export function clearAllTabSnapshots(): void {
+  tabEntryCache.clear();
+}
 
 export type SourceStatusKind =
   | "idle"
@@ -212,6 +254,16 @@ function getParserLabel(parser: ParserSelectionInfo["parser"]): string {
       return "DISM";
     case "reportingEvents":
       return "ReportingEvents";
+    case "msi":
+      return "MSI";
+    case "psadtLegacy":
+      return "PSADT Legacy";
+    case "intuneMacOs":
+      return "Intune macOS";
+    case "dhcp":
+      return "DHCP Server";
+    case "burn":
+      return "WiX/Burn";
   }
 }
 
@@ -229,6 +281,16 @@ function getImplementationLabel(
       return "ReportingEvents parser";
     case "plainText":
       return "Plain text parser";
+    case "msi":
+      return "MSI verbose parser";
+    case "psadtLegacy":
+      return "PSADT Legacy parser";
+    case "intuneMacOs":
+      return "Intune macOS pipe-delimited parser";
+    case "dhcp":
+      return "DHCP Server CSV parser";
+    case "burn":
+      return "WiX/Burn bootstrapper parser";
   }
 }
 
@@ -418,6 +480,18 @@ interface LogState {
   findLastMatchId: number | null;
   /** Byte offset in the file after initial parse — used to start tailing */
   byteOffset: number;
+  /** Which columns to show — derived from detected parser, not a user preference. */
+  activeColumns: ColumnId[];
+  /** Folder loading progress (0–1) while progressive loading is active, null otherwise. */
+  folderLoadProgress: number | null;
+  /** Name of the file currently being parsed during folder loading. */
+  folderLoadCurrentFile: string | null;
+  /** Total file count in the current folder load. */
+  folderLoadTotalFiles: number | null;
+  /** Number of files completed so far. */
+  folderLoadCompletedFiles: number | null;
+  /** Pending scroll target set by deployment workspace — consumed by LogListView after load. */
+  pendingScrollTarget: { filePath: string; lineNumber: number } | null;
 
   hasActiveSource: () => boolean;
   canRefreshSource: () => boolean;
@@ -439,6 +513,7 @@ interface LogState {
   setSourceStatus: (status: SourceStatus) => void;
   clearSourceStatus: () => void;
   setByteOffset: (offset: number) => void;
+  setActiveColumns: (columns: ColumnId[]) => void;
   setSourceOpenMode: (mode: SourceOpenMode) => void;
   setAggregateFiles: (files: AggregateParsedFileResult[]) => void;
   setHighlightText: (text: string) => void;
@@ -451,6 +526,12 @@ interface LogState {
   clearFindStatus: () => void;
   clearActiveFile: () => void;
   clear: () => void;
+  setFolderLoadProgress: (progress: {
+    current: number;
+    total: number;
+    currentFile: string;
+  } | null) => void;
+  setPendingScrollTarget: (target: { filePath: string; lineNumber: number } | null) => void;
 }
 
 function runSharedFind(trigger: string, direction: FindDirection): boolean {
@@ -536,6 +617,12 @@ export const useLogStore = create<LogState>((set, get) => ({
   findStatusText: "",
   findLastMatchId: null,
   byteOffset: 0,
+  folderLoadProgress: null,
+  folderLoadCurrentFile: null,
+  folderLoadTotalFiles: null,
+  folderLoadCompletedFiles: null,
+  activeColumns: DEFAULT_COLUMNS,
+  pendingScrollTarget: null,
 
   hasActiveSource: () => {
     const state = get();
@@ -609,6 +696,7 @@ export const useLogStore = create<LogState>((set, get) => ({
       },
     }),
   setByteOffset: (offset) => set({ byteOffset: offset }),
+  setActiveColumns: (columns) => set({ activeColumns: columns }),
   setHighlightText: (text) => set({ highlightText: text }),
   setHighlightCaseSensitive: (sensitive) =>
     set({ highlightCaseSensitive: sensitive }),
@@ -639,9 +727,11 @@ export const useLogStore = create<LogState>((set, get) => ({
       openFilePath: null,
       selectedSourceFilePath: null,
       aggregateFiles: [],
+      activeColumns: DEFAULT_COLUMNS,
       byteOffset: 0,
       findStatusText: "",
       findLastMatchId: null,
+      pendingScrollTarget: null,
     }),
   clear: () =>
     set({
@@ -660,6 +750,7 @@ export const useLogStore = create<LogState>((set, get) => ({
       knownSourceToolbarGroups: [],
       selectedSourceFilePath: null,
       aggregateFiles: [],
+      activeColumns: DEFAULT_COLUMNS,
       sourceStatus: {
         kind: "idle",
         message: "Ready",
@@ -667,5 +758,23 @@ export const useLogStore = create<LogState>((set, get) => ({
       byteOffset: 0,
       findStatusText: "",
       findLastMatchId: null,
+      pendingScrollTarget: null,
     }),
+  setFolderLoadProgress: (progress) =>
+    set(
+      progress
+        ? {
+            folderLoadProgress: progress.current / progress.total,
+            folderLoadCurrentFile: progress.currentFile,
+            folderLoadTotalFiles: progress.total,
+            folderLoadCompletedFiles: progress.current,
+          }
+        : {
+            folderLoadProgress: null,
+            folderLoadCurrentFile: null,
+            folderLoadTotalFiles: null,
+            folderLoadCompletedFiles: null,
+          }
+    ),
+  setPendingScrollTarget: (target) => set({ pendingScrollTarget: target }),
 }));

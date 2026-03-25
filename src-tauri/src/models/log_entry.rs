@@ -34,6 +34,11 @@ pub enum ParserKind {
     Cbs,
     Dism,
     ReportingEvents,
+    Msi,
+    PsadtLegacy,
+    IntuneMacOs,
+    Dhcp,
+    Burn,
 }
 
 /// Concrete parser implementation currently used by the backend.
@@ -45,6 +50,11 @@ pub enum ParserImplementation {
     GenericTimestamped,
     ReportingEvents,
     PlainText,
+    Msi,
+    PsadtLegacy,
+    IntuneMacOs,
+    Dhcp,
+    Burn,
 }
 
 /// How the backend arrived at the parser selection.
@@ -135,6 +145,15 @@ pub struct LogEntry {
     /// Spans of recognized error codes within the message text
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub error_code_spans: Vec<crate::error_db::lookup::ErrorCodeSpan>,
+    /// IP address (DHCP logs)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ip_address: Option<String>,
+    /// Host/device name (DHCP logs)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_name: Option<String>,
+    /// MAC address (DHCP logs)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mac_address: Option<String>,
 }
 
 /// Result of parsing a complete log file.

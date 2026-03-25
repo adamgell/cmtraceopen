@@ -275,6 +275,49 @@ pub fn open_log_file(path: String, state: State<'_, AppState>) -> Result<ParseRe
     Ok(result)
 }
 
+/// Parse multiple files in parallel using Rayon, returning all results in a single
+/// IPC response. This eliminates N-1 IPC round-trips compared to calling
+/// `open_log_file` N times individually from the frontend.
+///
+/// Each file is parsed independently and its backend parser selection is stored
+/// in AppState for future tail reading.
+#[tauri::command]
+pub fn parse_files_batch(
+    paths: Vec<String>,
+    state: State<'_, AppState>,
+) -> Result<Vec<ParseResult>, String> {
+    use rayon::prelude::*;
+
+    // Parse all files in parallel on Rayon's thread pool (lock-free)
+    let results: Vec<Result<(ParseResult, crate::parser::ResolvedParser, String), String>> = paths
+        .par_iter()
+        .map(|path| {
+            let (result, parser_selection) = parser::parse_file(path)?;
+            Ok((result, parser_selection, path.clone()))
+        })
+        .collect();
+
+    // Collect successes and store parser state (requires lock, done sequentially)
+    let mut parse_results = Vec::with_capacity(results.len());
+    let mut open_files = state.open_files.lock().map_err(|e| e.to_string())?;
+
+    for item in results {
+        let (result, parser_selection, path) = item?;
+        open_files.insert(
+            PathBuf::from(&path),
+            OpenFile {
+                path: PathBuf::from(&path),
+                entries: vec![],
+                parser_selection,
+                byte_offset: result.byte_offset,
+            },
+        );
+        parse_results.push(result);
+    }
+
+    Ok(parse_results)
+}
+
 /// Open and parse every file in a folder, returning one combined log stream.
 /// Stores backend parser selections in AppState so each included file can be tailed.
 #[tauri::command]
@@ -916,6 +959,11 @@ fn describe_parser_selection(parser_selection: &ParserSelectionInfo) -> String {
             ParserKind::Cbs => "CBS servicing log".to_string(),
             ParserKind::Dism => "DISM servicing log".to_string(),
             ParserKind::ReportingEvents => "Windows Update reporting log".to_string(),
+            ParserKind::Msi => "MSI verbose log".to_string(),
+            ParserKind::PsadtLegacy => "PSADT Legacy format log".to_string(),
+            ParserKind::IntuneMacOs => "Intune macOS MDM log".to_string(),
+            ParserKind::Dhcp => "Windows DHCP Server log".to_string(),
+            ParserKind::Burn => "WiX/Burn bootstrapper log".to_string(),
         },
     }
 }
@@ -1364,6 +1412,110 @@ fn windows_known_log_sources() -> Vec<KnownSourceMetadata> {
             },
             None,
         ),
+        // ── Software Deployment ──────────────────────────────────────
+        windows_known_source(
+            "windows-deployment-logs-software",
+            "Software Logs Folder",
+            "Common deployment log output folder used by PSADT, SCCM, and custom installers.",
+            KnownSourcePathKind::Folder,
+            "C:\\Windows\\Logs\\Software",
+            &["*.log"],
+            KnownSourceGroupingMetadata {
+                family_id: "windows-deployment".to_string(),
+                family_label: "Software Deployment".to_string(),
+                group_id: "deployment-logs".to_string(),
+                group_label: "Deployment Logs".to_string(),
+                group_order: 50,
+                source_order: 10,
+            },
+            None,
+        ),
+        windows_known_source(
+            "windows-deployment-ccmcache",
+            "ccmcache Folder",
+            "ConfigMgr client cache folder where packages and scripts are staged.",
+            KnownSourcePathKind::Folder,
+            "C:\\Windows\\ccmcache",
+            &["*.log"],
+            KnownSourceGroupingMetadata {
+                family_id: "windows-deployment".to_string(),
+                family_label: "Software Deployment".to_string(),
+                group_id: "deployment-logs".to_string(),
+                group_label: "Deployment Logs".to_string(),
+                group_order: 50,
+                source_order: 20,
+            },
+            None,
+        ),
+        windows_known_source(
+            "windows-deployment-psadt",
+            "PSADT Logs Folder",
+            "Default PSAppDeployToolkit log output directory.",
+            KnownSourcePathKind::Folder,
+            "C:\\Windows\\Logs\\Software",
+            &["*_PSAppDeployToolkit*.log", "*Deploy-Application*.log", "*.log"],
+            KnownSourceGroupingMetadata {
+                family_id: "windows-deployment".to_string(),
+                family_label: "Software Deployment".to_string(),
+                group_id: "deployment-psadt".to_string(),
+                group_label: "PSADT".to_string(),
+                group_order: 50,
+                source_order: 30,
+            },
+            None,
+        ),
+        windows_known_source(
+            "windows-deployment-msi-log",
+            "MSI Verbose Log Folder",
+            "Default location for MSI verbose install logs (%TEMP%).",
+            KnownSourcePathKind::Folder,
+            "C:\\Windows\\Temp",
+            &["MSI*.LOG", "MSI*.log"],
+            KnownSourceGroupingMetadata {
+                family_id: "windows-deployment".to_string(),
+                family_label: "Software Deployment".to_string(),
+                group_id: "deployment-msi".to_string(),
+                group_label: "MSI Logs".to_string(),
+                group_order: 50,
+                source_order: 40,
+            },
+            None,
+        ),
+        // ── PatchMyPC ───────────────────────────────────────────────────
+        windows_known_source(
+            "windows-deployment-patchmypc-logs",
+            "PatchMyPC Logs Folder",
+            "PatchMyPC client and notification logs (CMTrace format).",
+            KnownSourcePathKind::Folder,
+            "C:\\ProgramData\\PatchMyPC\\Logs",
+            &["*.log"],
+            KnownSourceGroupingMetadata {
+                family_id: "windows-deployment".to_string(),
+                family_label: "Software Deployment".to_string(),
+                group_id: "deployment-patchmypc".to_string(),
+                group_label: "PatchMyPC".to_string(),
+                group_order: 50,
+                source_order: 50,
+            },
+            None,
+        ),
+        windows_known_source(
+            "windows-deployment-patchmypc-install-logs",
+            "PatchMyPC Install Logs",
+            "MSI verbose and WiX/Burn bootstrapper logs from PatchMyPC-managed installations.",
+            KnownSourcePathKind::Folder,
+            "C:\\ProgramData\\PatchMyPCInstallLogs",
+            &["*.log"],
+            KnownSourceGroupingMetadata {
+                family_id: "windows-deployment".to_string(),
+                family_label: "Software Deployment".to_string(),
+                group_id: "deployment-patchmypc".to_string(),
+                group_label: "PatchMyPC".to_string(),
+                group_order: 50,
+                source_order: 60,
+            },
+            None,
+        ),
     ]
 }
 
@@ -1526,6 +1678,42 @@ fn macos_known_log_sources() -> Vec<KnownSourceMetadata> {
             },
             None,
         ),
+        // --- macOS wifi.log ---
+        macos_known_source(
+            "macos-wifi-log",
+            "Wi-Fi Log",
+            "macOS Wi-Fi diagnostic log",
+            KnownSourcePathKind::File,
+            "/var/log/wifi.log",
+            &["wifi.log"],
+            KnownSourceGroupingMetadata {
+                family_id: "macos-system".to_string(),
+                family_label: "macOS System".to_string(),
+                group_id: "system-logs".to_string(),
+                group_label: "System Logs".to_string(),
+                group_order: 30,
+                source_order: 30,
+            },
+            None,
+        ),
+        // --- macOS appfirewall.log ---
+        macos_known_source(
+            "macos-appfirewall-log",
+            "Application Firewall Log",
+            "macOS application firewall log",
+            KnownSourcePathKind::File,
+            "/var/log/appfirewall.log",
+            &["appfirewall.log"],
+            KnownSourceGroupingMetadata {
+                family_id: "macos-system".to_string(),
+                family_label: "macOS System".to_string(),
+                group_id: "system-logs".to_string(),
+                group_label: "System Logs".to_string(),
+                group_order: 30,
+                source_order: 40,
+            },
+            None,
+        ),
         // --- Microsoft Defender logs ---
         macos_known_source(
             "macos-defender-logs",
@@ -1554,7 +1742,7 @@ fn macos_known_log_sources() -> Vec<KnownSourceMetadata> {
     ]
 }
 
-fn build_known_log_sources() -> Vec<KnownSourceMetadata> {
+pub fn build_known_log_sources() -> Vec<KnownSourceMetadata> {
     #[cfg(target_os = "windows")]
     {
         windows_known_log_sources()

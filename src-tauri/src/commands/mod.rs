@@ -1,9 +1,11 @@
+pub mod deployment;
 pub mod dsregcmd;
 pub mod error_lookup;
 pub mod file_association;
 pub mod file_ops;
 pub mod filter;
+pub mod fonts;
 pub mod intune;
+pub mod macos_diag;
 pub mod parsing;
 pub mod system_preferences;
-pub mod macos_diag;

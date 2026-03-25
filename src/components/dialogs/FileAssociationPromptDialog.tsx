@@ -3,6 +3,7 @@ import {
   associateLogFilesWithApp,
   setFileAssociationPromptSuppressed,
 } from "../../lib/commands";
+import { tokens } from "@fluentui/react-components";
 
 interface FileAssociationPromptDialogProps {
   isOpen: boolean;
@@ -95,8 +96,9 @@ export function FileAssociationPromptDialog({
     >
       <div
         style={{
-          backgroundColor: "#f0f0f0",
-          border: "1px solid #999",
+          backgroundColor: tokens.colorNeutralBackground1,
+          color: tokens.colorNeutralForeground1,
+          border: `1px solid ${tokens.colorNeutralStroke1}`,
           borderRadius: "4px",
           padding: "16px",
           minWidth: "440px",
@@ -122,13 +124,13 @@ export function FileAssociationPromptDialog({
 
         <div
           style={{
-            backgroundColor: "#fff",
-            border: "1px solid #ccc",
+            backgroundColor: tokens.colorNeutralBackground2,
+            border: `1px solid ${tokens.colorNeutralStroke2}`,
             borderRadius: "2px",
             padding: "8px",
             marginBottom: "12px",
             fontSize: "11px",
-            color: "#333",
+            color: tokens.colorNeutralForeground1,
           }}
         >
           If you choose <strong>Associate</strong>, CMTrace Open will register
@@ -138,7 +140,7 @@ export function FileAssociationPromptDialog({
         {errorMessage && (
           <div
             style={{
-              color: "#8b0000",
+              color: tokens.colorPaletteRedForeground1,
               fontSize: "11px",
               marginBottom: "12px",
             }}
@@ -154,13 +156,49 @@ export function FileAssociationPromptDialog({
             gap: "8px",
           }}
         >
-          <button onClick={onClose} disabled={isSubmitting}>
+          <button
+            onClick={onClose}
+            disabled={isSubmitting}
+            style={{
+              padding: "2px 12px",
+              fontSize: "12px",
+              border: `1px solid ${tokens.colorNeutralStroke1}`,
+              borderRadius: "2px",
+              background: tokens.colorNeutralBackground3,
+              color: tokens.colorNeutralForeground1,
+              cursor: isSubmitting ? "default" : "pointer",
+            }}
+          >
             Ask Later
           </button>
-          <button onClick={() => void handleDontAskAgain()} disabled={isSubmitting}>
+          <button
+            onClick={() => void handleDontAskAgain()}
+            disabled={isSubmitting}
+            style={{
+              padding: "2px 12px",
+              fontSize: "12px",
+              border: `1px solid ${tokens.colorNeutralStroke1}`,
+              borderRadius: "2px",
+              background: tokens.colorNeutralBackground3,
+              color: tokens.colorNeutralForeground1,
+              cursor: isSubmitting ? "default" : "pointer",
+            }}
+          >
             Don&apos;t Ask Again
           </button>
-          <button onClick={() => void handleAssociate()} disabled={isSubmitting}>
+          <button
+            onClick={() => void handleAssociate()}
+            disabled={isSubmitting}
+            style={{
+              padding: "2px 12px",
+              fontSize: "12px",
+              border: `1px solid ${tokens.colorNeutralStroke1}`,
+              borderRadius: "2px",
+              background: tokens.colorNeutralBackground3,
+              color: tokens.colorNeutralForeground1,
+              cursor: isSubmitting ? "default" : "pointer",
+            }}
+          >
             {isSubmitting ? "Working..." : "Associate"}
           </button>
         </div>

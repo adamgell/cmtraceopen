@@ -30,12 +30,31 @@ function AppRoot() {
 
 function ThemedApp() {
   const themeId = useUiStore((s) => s.themeId);
+  const fontFamily = useUiStore((s) => s.fontFamily);
   const activeTheme = getThemeById(themeId);
 
   useEffect(() => {
     document.documentElement.style.setProperty("color-scheme", activeTheme.colorScheme);
     document.body.style.background = activeTheme.fluentTheme.colorNeutralBackground1 as string;
   }, [activeTheme]);
+
+  useEffect(() => {
+    const root = document.documentElement;
+    if (fontFamily) {
+      const quoted = `'${fontFamily}'`;
+      root.style.setProperty(
+        "--cmtrace-font-family-ui",
+        `${quoted}, 'Segoe UI', Tahoma, sans-serif`
+      );
+      root.style.setProperty(
+        "--cmtrace-font-family-mono",
+        `${quoted}, Consolas, 'Cascadia Mono', 'Courier New', monospace`
+      );
+    } else {
+      root.style.removeProperty("--cmtrace-font-family-ui");
+      root.style.removeProperty("--cmtrace-font-family-mono");
+    }
+  }, [fontFamily]);
 
   return (
     <FluentProvider theme={activeTheme.fluentTheme} style={{ height: "100%" }}>
@@ -55,7 +74,7 @@ style.textContent = `
   html, body, #root {
     height: 100%;
     overflow: hidden;
-    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    font-family: var(--cmtrace-font-family-ui, 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif);
     font-size: 13px;
   }
   mark {

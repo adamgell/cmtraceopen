@@ -8,6 +8,8 @@ import {
 } from "../lib/log-accessibility";
 import type { ThemeId } from "../lib/themes/types";
 import { DEFAULT_THEME_ID } from "../lib/themes";
+import { clearCachedTabSnapshot } from "./log-store";
+import type { ColumnId } from "../lib/column-config";
 
 export interface ErrorLookupHistoryEntry {
   codeHex: string;
@@ -19,8 +21,47 @@ export interface ErrorLookupHistoryEntry {
 }
 
 export type IntuneWorkspaceId = "intune" | "new-intune";
-export type WorkspaceId = "log" | IntuneWorkspaceId | "dsregcmd" | "macos-diag";
+export type WorkspaceId = "log" | IntuneWorkspaceId | "dsregcmd" | "macos-diag" | "deployment";
 export type AppView = WorkspaceId;
+
+export type PlatformId = "windows" | "macos" | "linux";
+
+/** Which workspaces are available on each platform. */
+const WORKSPACE_PLATFORM_MAP: Record<WorkspaceId, PlatformId[] | "all"> = {
+  log: "all",
+  intune: "all",
+  "new-intune": "all",
+  dsregcmd: ["windows"],
+  "macos-diag": ["macos"],
+  deployment: ["windows"],
+};
+
+export function getAvailableWorkspaces(platform: PlatformId): WorkspaceId[] {
+  return (Object.keys(WORKSPACE_PLATFORM_MAP) as WorkspaceId[]).filter((ws) => {
+    const platforms = WORKSPACE_PLATFORM_MAP[ws];
+    return platforms === "all" || platforms.includes(platform);
+  });
+}
+
+/** Source context for a tab — enough to restore sidebar and skip redundant folder re-parsing. */
+export interface TabSourceContext {
+  /** The broad source container kind that produced this tab's content. */
+  sourceKind: "file" | "folder" | "known";
+  /** The folder or known-source container path (null for standalone file tabs). */
+  sourcePath: string | null;
+  /** The full LogSource object for restoring state on tab switch. */
+  source: import("../types/log").LogSource;
+}
+
+export interface TabState {
+  id: string;
+  filePath: string;
+  fileName: string;
+  scrollPosition: number;
+  selectedLineId: number | null;
+  /** Source context — where this file was loaded from. Null for legacy/migrated tabs. */
+  sourceContext: TabSourceContext | null;
+}
 
 export function isIntuneWorkspace(workspace: WorkspaceId): workspace is IntuneWorkspaceId {
   return workspace === "intune" || workspace === "new-intune";
@@ -69,6 +110,14 @@ export function getUiChromeStatus(
     };
   }
 
+  if (activeView === "deployment") {
+    return {
+      viewLabel: "Software Deployment workspace",
+      detailsLabel: "Details hidden in Software Deployment workspace",
+      infoLabel: "Info hidden in Software Deployment workspace",
+    };
+  }
+
   return {
     viewLabel: "Log view",
     detailsLabel: showDetails ? "Details on" : "Details off",
@@ -91,7 +140,13 @@ interface UiState {
   showFileAssociationPrompt: boolean;
   logListFontSize: number;
   logDetailsFontSize: number;
+  fontFamily: string | null;
   themeId: ThemeId;
+  columnWidths: Record<string, number>;
+  columnOrder: ColumnId[] | null;
+  sidebarCollapsed: boolean;
+  openTabs: TabState[];
+  activeTabIndex: number;
   errorLookupHistory: ErrorLookupHistoryEntry[];
   focusedErrorCode: {
     codeHex: string;
@@ -99,8 +154,10 @@ interface UiState {
     description: string;
     category: string;
   } | null;
+  currentPlatform: PlatformId;
 
   setActiveWorkspace: (workspace: WorkspaceId) => void;
+  setCurrentPlatform: (platform: PlatformId) => void;
   setActiveView: (view: AppView) => void;
   ensureWorkspaceVisible: (workspace: WorkspaceId, trigger: string) => void;
   ensureLogViewVisible: (trigger: string) => void;
@@ -120,6 +177,8 @@ interface UiState {
   resetLogListFontSize: () => void;
   setLogDetailsFontSize: (fontSize: number) => void;
   resetLogDetailsFontSize: () => void;
+  setFontFamily: (family: string | null) => void;
+  resetFontFamily: () => void;
   setThemeId: (id: ThemeId) => void;
   resetLogAccessibilityPreferences: () => void;
   setFocusedErrorCode: (
@@ -133,6 +192,16 @@ interface UiState {
   addErrorLookupHistoryEntry: (entry: ErrorLookupHistoryEntry) => void;
   clearErrorLookupHistory: () => void;
   closeTransientDialogs: (trigger: string) => void;
+  setColumnWidth: (columnId: string, width: number) => void;
+  resetColumnWidths: () => void;
+  setColumnOrder: (order: ColumnId[]) => void;
+  resetColumnOrder: () => void;
+  toggleSidebar: () => void;
+  resetColumns: () => void;
+  openTab: (filePath: string, fileName: string, sourceContext?: TabSourceContext | null) => void;
+  closeTab: (index: number) => void;
+  switchTab: (index: number) => void;
+  saveTabScrollState: (index: number, scrollPosition: number, selectedLineId: number | null) => void;
 }
 
 const DEFAULT_WORKSPACE: WorkspaceId = "log";
@@ -152,6 +221,12 @@ const sanitizePersistedUiState = (
     const raw = Number(sanitized.logDetailsFontSize);
     const base = Number.isFinite(raw) ? raw : DEFAULT_LOG_DETAILS_FONT_SIZE;
     sanitized.logDetailsFontSize = clampLogDetailsFontSize(base);
+  }
+
+  if (sanitized.fontFamily !== undefined && sanitized.fontFamily !== null) {
+    if (typeof sanitized.fontFamily !== "string") {
+      sanitized.fontFamily = null;
+    }
   }
 
   if (sanitized.themeId !== undefined) {
@@ -185,11 +260,25 @@ export const useUiStore = create<UiState>()(
       showFileAssociationPrompt: false,
       logListFontSize: DEFAULT_LOG_LIST_FONT_SIZE,
       logDetailsFontSize: DEFAULT_LOG_DETAILS_FONT_SIZE,
+      fontFamily: null,
       themeId: DEFAULT_THEME_ID,
+      columnWidths: {},
+      columnOrder: null,
+      sidebarCollapsed: false,
+      openTabs: [],
+      activeTabIndex: -1,
       errorLookupHistory: [],
       focusedErrorCode: null,
+      currentPlatform: "windows" as PlatformId,
 
+      setCurrentPlatform: (platform) => set({ currentPlatform: platform }),
       setActiveWorkspace: (workspace) => {
+        const available = getAvailableWorkspaces(get().currentPlatform);
+        if (!available.includes(workspace)) {
+          console.warn(`Workspace "${workspace}" not available on ${get().currentPlatform}`);
+          return;
+        }
+
         const previousWorkspace = get().activeWorkspace;
 
         if (previousWorkspace === workspace) {
@@ -210,6 +299,12 @@ export const useUiStore = create<UiState>()(
         get().setActiveWorkspace(view);
       },
       ensureWorkspaceVisible: (workspace, trigger) => {
+        const available = getAvailableWorkspaces(get().currentPlatform);
+        if (!available.includes(workspace)) {
+          console.warn(`Workspace "${workspace}" not available on ${get().currentPlatform}`);
+          return;
+        }
+
         if (get().activeWorkspace === workspace) {
           console.info("[ui-store] workspace already visible", { trigger, workspace });
           return;
@@ -255,11 +350,14 @@ export const useUiStore = create<UiState>()(
         set({ logDetailsFontSize: clampLogDetailsFontSize(fontSize) }),
       resetLogDetailsFontSize: () =>
         set({ logDetailsFontSize: DEFAULT_LOG_DETAILS_FONT_SIZE }),
+      setFontFamily: (family) => set({ fontFamily: family }),
+      resetFontFamily: () => set({ fontFamily: null }),
       setThemeId: (id) => set({ themeId: id }),
       resetLogAccessibilityPreferences: () =>
         set({
           logListFontSize: DEFAULT_LOG_LIST_FONT_SIZE,
           logDetailsFontSize: DEFAULT_LOG_DETAILS_FONT_SIZE,
+          fontFamily: null,
           themeId: DEFAULT_THEME_ID,
         }),
       setFocusedErrorCode: (code) => set({ focusedErrorCode: code }),
@@ -298,13 +396,100 @@ export const useUiStore = create<UiState>()(
           showFileAssociationPrompt: false,
         });
       },
+
+      setColumnWidth: (columnId, width) =>
+        set((state) => ({
+          columnWidths: { ...state.columnWidths, [columnId]: width },
+        })),
+      resetColumnWidths: () => set({ columnWidths: {} }),
+      setColumnOrder: (order) => set({ columnOrder: order }),
+      resetColumnOrder: () => set({ columnOrder: null }),
+      toggleSidebar: () =>
+        set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed })),
+      resetColumns: () => set({ columnWidths: {}, columnOrder: null }),
+
+      openTab: (filePath, fileName, sourceContext) => {
+        if (!filePath) {
+          console.warn("[ui-store] openTab called with empty filePath, ignoring");
+          return;
+        }
+        const { openTabs } = get();
+        const existingIndex = openTabs.findIndex((t) => t.filePath === filePath);
+        if (existingIndex >= 0) {
+          // Update source context if provided (may have changed)
+          if (sourceContext) {
+            const updatedTabs = [...openTabs];
+            updatedTabs[existingIndex] = { ...updatedTabs[existingIndex], sourceContext };
+            set({ openTabs: updatedTabs, activeTabIndex: existingIndex });
+          } else {
+            set({ activeTabIndex: existingIndex });
+          }
+          return;
+        }
+        const newTab: TabState = {
+          id: crypto.randomUUID(),
+          filePath,
+          fileName,
+          scrollPosition: 0,
+          selectedLineId: null,
+          sourceContext: sourceContext ?? null,
+        };
+        set({
+          openTabs: [...openTabs, newTab],
+          activeTabIndex: openTabs.length,
+        });
+      },
+
+      closeTab: (index) => {
+        const { openTabs, activeTabIndex } = get();
+        if (index < 0 || index >= openTabs.length) {
+          console.warn("[ui-store] closeTab: invalid index", { index, tabCount: openTabs.length });
+          return;
+        }
+        // Evict parsed entry cache for the closed tab
+        clearCachedTabSnapshot(openTabs[index].filePath);
+        const newTabs = openTabs.filter((_, i) => i !== index);
+        let newActive = activeTabIndex;
+        if (newTabs.length === 0) {
+          newActive = -1;
+        } else if (index === activeTabIndex) {
+          newActive = index > 0 ? index - 1 : 0;
+        } else if (index < activeTabIndex) {
+          newActive = activeTabIndex - 1;
+        }
+        set({ openTabs: newTabs, activeTabIndex: newActive });
+      },
+
+      switchTab: (index) => {
+        const { openTabs } = get();
+        if (index < 0 || index >= openTabs.length) {
+          console.warn("[ui-store] switchTab: invalid index", { index, tabCount: openTabs.length });
+          return;
+        }
+        set({ activeTabIndex: index });
+      },
+
+      saveTabScrollState: (index, scrollPosition, selectedLineId) => {
+        const { openTabs } = get();
+        if (index < 0 || index >= openTabs.length) {
+          console.warn("[ui-store] saveTabScrollState: invalid index", { index, tabCount: openTabs.length });
+          return;
+        }
+        const updated = [...openTabs];
+        updated[index] = { ...updated[index], scrollPosition, selectedLineId };
+        set({ openTabs: updated });
+      },
     }),
     {
       name: "cmtraceopen-ui-preferences",
       partialize: (state) => ({
         logListFontSize: state.logListFontSize,
         logDetailsFontSize: state.logDetailsFontSize,
+        fontFamily: state.fontFamily,
         themeId: state.themeId,
+        columnWidths: state.columnWidths,
+        columnOrder: state.columnOrder,
+        sidebarCollapsed: state.sidebarCollapsed,
       }),
       merge: (persistedState, currentState) => {
         const raw = persistedState as Partial<UiState> & {

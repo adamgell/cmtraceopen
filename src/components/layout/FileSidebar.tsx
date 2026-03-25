@@ -28,6 +28,7 @@ export const FILE_SIDEBAR_RECOMMENDED_WIDTH = 280;
 interface FileSidebarProps {
   width?: number | string;
   activeView: WorkspaceId;
+  onCollapse?: () => void;
 }
 
 function isFolderLikeSource(source: LogSource | null): boolean {
@@ -820,10 +821,10 @@ function DsregcmdSidebar() {
       )}
 
       <div style={{ padding: "8px 10px", borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, backgroundColor: tokens.colorNeutralBackground2, display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px" }}>
-        <SidebarActionButton label="Capture" disabled={isAnalyzing} onClick={() => void captureDsregcmdSource()} />
-        <SidebarActionButton label="Paste" disabled={isAnalyzing} onClick={() => void pasteDsregcmdSource()} />
-        <SidebarActionButton label="Open file" disabled={isAnalyzing} onClick={() => void openSourceFileDialog()} />
-        <SidebarActionButton label="Open folder" disabled={isAnalyzing} onClick={() => void openSourceFolderDialog()} />
+        <SidebarActionButton label="Capture" disabled={isAnalyzing} onClick={() => void captureDsregcmdSource().catch((err) => console.error("[dsregcmd-sidebar] capture failed", err))} />
+        <SidebarActionButton label="Paste" disabled={isAnalyzing} onClick={() => void pasteDsregcmdSource().catch((err) => console.error("[dsregcmd-sidebar] paste failed", err))} />
+        <SidebarActionButton label="Open file" disabled={isAnalyzing} onClick={() => void openSourceFileDialog().catch((err) => console.error("[dsregcmd-sidebar] open file failed", err))} />
+        <SidebarActionButton label="Open folder" disabled={isAnalyzing} onClick={() => void openSourceFolderDialog().catch((err) => console.error("[dsregcmd-sidebar] open folder failed", err))} />
       </div>
 
       <div style={{ flex: 1, overflow: "auto", backgroundColor: tokens.colorNeutralBackground2 }}>
@@ -869,7 +870,78 @@ function DsregcmdSidebar() {
   );
 }
 
-export function FileSidebar({ width = FILE_SIDEBAR_RECOMMENDED_WIDTH, activeView }: FileSidebarProps) {
+function SidebarFooter() {
+  const isPaused = useLogStore((s) => s.isPaused);
+  const isLoading = useLogStore((s) => s.isLoading);
+  const activeSource = useLogStore((s) => s.activeSource);
+  const openFilePath = useLogStore((s) => s.openFilePath);
+  const { commandState, togglePauseResume, refreshActiveSource } = useAppActions();
+
+  const hasActiveSource = activeSource !== null || openFilePath !== null;
+
+  const statusLabel = isLoading ? "Loading" : isPaused ? "Paused" : "Streaming";
+  const statusBg = isLoading
+    ? tokens.colorPaletteBlueBackground2
+    : isPaused
+      ? tokens.colorPaletteYellowBackground1
+      : tokens.colorPaletteGreenBackground1;
+  const statusFg = isLoading
+    ? tokens.colorPaletteBlueForeground2
+    : isPaused
+      ? tokens.colorPaletteMarigoldForeground2
+      : tokens.colorPaletteGreenForeground1;
+
+  return (
+    <div
+      style={{
+        marginTop: "auto",
+        padding: "6px 8px",
+        borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
+        display: "flex",
+        gap: "5px",
+        alignItems: "center",
+        flexShrink: 0,
+      }}
+    >
+      <Button
+        size="small"
+        appearance="subtle"
+        disabled={!commandState.canPauseResume}
+        onClick={togglePauseResume}
+        style={{ fontSize: "10px", padding: "3px 8px", minWidth: 0 }}
+      >
+        {isPaused ? "Resume" : "Pause"}
+      </Button>
+      <Button
+        size="small"
+        appearance="subtle"
+        disabled={!commandState.canRefresh}
+        onClick={() => { refreshActiveSource().catch((err) => console.error("[sidebar-footer] refresh failed", err)); }}
+        style={{ fontSize: "10px", padding: "3px 8px", minWidth: 0 }}
+      >
+        Refresh
+      </Button>
+      {hasActiveSource && (
+        <span
+          style={{
+            marginLeft: "auto",
+            fontSize: "9px",
+            padding: "2px 6px",
+            borderRadius: "10px",
+            backgroundColor: statusBg,
+            color: statusFg,
+            fontWeight: 600,
+            flexShrink: 0,
+          }}
+        >
+          {statusLabel}
+        </span>
+      )}
+    </div>
+  );
+}
+
+export function FileSidebar({ width = FILE_SIDEBAR_RECOMMENDED_WIDTH, activeView, onCollapse }: FileSidebarProps) {
   const logListFontSize = useUiStore((s) => s.logListFontSize);
   const metrics = useMemo(() => getLogListMetrics(logListFontSize), [logListFontSize]);
 
@@ -889,7 +961,37 @@ export function FileSidebar({ width = FILE_SIDEBAR_RECOMMENDED_WIDTH, activeView
         fontFamily: LOG_UI_FONT_FAMILY,
       }}
     >
-      {activeView === "log" ? <LogSidebar /> : isIntuneWorkspace(activeView) ? <IntuneSidebar /> : <DsregcmdSidebar />}
+      {/* Collapse button */}
+      {onCollapse && (
+        <div style={{ display: "flex", justifyContent: "flex-end", padding: "4px 4px 0" }}>
+          <button
+            onClick={onCollapse}
+            title="Collapse sidebar (Ctrl+B)"
+            aria-label="Collapse sidebar"
+            style={{
+              background: "none",
+              border: "none",
+              cursor: "pointer",
+              padding: 4,
+              borderRadius: 4,
+              color: tokens.colorNeutralForeground3,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+              <path d="M10 3L5 8l5 5V3z" />
+            </svg>
+          </button>
+        </div>
+      )}
+      {activeView === "log" || activeView === "deployment" || activeView === "macos-diag"
+        ? <LogSidebar />
+        : isIntuneWorkspace(activeView)
+          ? <IntuneSidebar />
+          : <DsregcmdSidebar />}
+      {(activeView === "log" || activeView === "deployment") && <SidebarFooter />}
     </aside>
   );
 }

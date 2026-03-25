@@ -6,6 +6,7 @@ import {
   type ReactNode,
 } from "react";
 import { Badge, Button, Textarea, tokens } from "@fluentui/react-components";
+import { LOG_MONOSPACE_FONT_FAMILY } from "../../lib/log-accessibility";
 import { save } from "@tauri-apps/plugin-dialog";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import {
@@ -2793,7 +2794,7 @@ export function DsregcmdWorkspace() {
                 width: "100%",
                 minHeight: "220px",
                 resize: "vertical",
-                fontFamily: "Consolas, 'Courier New', monospace",
+                fontFamily: LOG_MONOSPACE_FONT_FAMILY,
                 fontSize: "12px",
                 padding: "10px",
                 border: `1px solid ${tokens.colorNeutralStroke2}`,

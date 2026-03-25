@@ -1,5 +1,6 @@
 import { useMemo } from "react";
 import { Badge, tokens } from "@fluentui/react-components";
+import { LOG_UI_FONT_FAMILY } from "../../lib/log-accessibility";
 import {
   getActiveSourceLabel,
   getBaseName,
@@ -19,6 +20,7 @@ import {
 } from "../../stores/ui-store";
 import { useIntuneStore } from "../../stores/intune-store";
 import { useDsregcmdStore } from "../../stores/dsregcmd-store";
+import { useDeploymentStore } from "../../stores/deployment-store";
 
 interface SeverityCounts {
   errors: number;
@@ -53,6 +55,8 @@ export function StatusBar() {
   const activeView = useUiStore((s) => s.activeView);
   const showDetails = useUiStore((s) => s.showDetails);
   const showInfoPane = useUiStore((s) => s.showInfoPane);
+  const openTabs = useUiStore((s) => s.openTabs);
+  const activeTabIndex = useUiStore((s) => s.activeTabIndex);
 
   const intuneAnalysisState = useIntuneStore((s) => s.analysisState);
   const intuneSummary = useIntuneStore((s) => s.summary);
@@ -63,6 +67,9 @@ export function StatusBar() {
   const dsregcmdSourceContext = useDsregcmdStore((s) => s.sourceContext);
   const dsregcmdResult = useDsregcmdStore((s) => s.result);
   const dsregcmdIsAnalyzing = useDsregcmdStore((s) => s.isAnalyzing);
+
+  const deploymentPhase = useDeploymentStore((s) => s.phase);
+  const deploymentResult = useDeploymentStore((s) => s.result);
 
   const filterClauseCount = useFilterStore((s) => s.clauses.length);
   const filteredIds = useFilterStore((s) => s.filteredIds);
@@ -166,6 +173,10 @@ export function StatusBar() {
           : `Source ${activeSourceLabel}`,
     ];
 
+    if (openTabs.length > 0) {
+      leftParts.push(`Tab ${activeTabIndex + 1} of ${openTabs.length}`);
+    }
+
     if (parserDisplay) {
       leftParts.push(`Parser ${parserDisplay.parserLabel}`);
     }
@@ -254,6 +265,26 @@ export function StatusBar() {
     } else {
       rightStatusText = intuneAnalysisState.message;
     }
+  } else if (activeView === "deployment") {
+    leftParts = [
+      "Software Deployment",
+      deploymentPhase === "analyzing"
+        ? "Analyzing"
+        : deploymentPhase === "ready" && deploymentResult
+          ? `${deploymentResult.totalFiles} files`
+          : deploymentPhase === "error"
+            ? "Analysis failed"
+            : deploymentPhase === "empty"
+              ? "No deployment logs found"
+              : "Ready",
+    ];
+    if (deploymentResult) {
+      rightStatusText = [
+        `${deploymentResult.succeeded} succeeded`,
+        `${deploymentResult.failed} failed`,
+        deploymentResult.deferred > 0 ? `${deploymentResult.deferred} deferred` : null,
+      ].filter(Boolean).join(" | ");
+    }
   } else {
     const diagnostics = dsregcmdResult?.diagnostics ?? [];
     const errorCount = diagnostics.filter((item) => item.severity === "Error").length;
@@ -313,7 +344,7 @@ export function StatusBar() {
         backgroundColor: tokens.colorNeutralBackground2,
         borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
         fontSize: "12px",
-        fontFamily: "'Segoe UI', Tahoma, sans-serif",
+        fontFamily: LOG_UI_FONT_FAMILY,
         flexShrink: 0,
         minHeight: "34px",
         gap: "10px",

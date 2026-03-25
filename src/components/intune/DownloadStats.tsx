@@ -1,5 +1,6 @@
 import { useMemo } from "react";
 import { tokens } from "@fluentui/react-components";
+import { LOG_UI_FONT_FAMILY, LOG_MONOSPACE_FONT_FAMILY } from "../../lib/log-accessibility";
 import type { DownloadStat } from "../../types/intune";
 import { formatDisplayDateTime } from "../../lib/date-time-format";
 
@@ -61,7 +62,7 @@ export function DownloadStats({ downloads }: DownloadStatsProps) {
             width: "100%",
             borderCollapse: "collapse",
             fontSize: "11px",
-            fontFamily: "'Segoe UI', Tahoma, sans-serif",
+            fontFamily: LOG_UI_FONT_FAMILY,
           }}
         >
           <thead style={{ position: "sticky", top: 0, zIndex: 1 }}>
@@ -105,10 +106,10 @@ export function DownloadStats({ downloads }: DownloadStatsProps) {
                 <td style={{ ...tdStyle, color: tokens.colorNeutralForeground1, fontWeight: 500 }} title={dl.contentId}>
                   {dl.name}
                 </td>
-                <td style={{ ...tdStyle, textAlign: "right", color: tokens.colorNeutralForeground3, fontFamily: "'Courier New', monospace" }}>
+                <td style={{ ...tdStyle, textAlign: "right", color: tokens.colorNeutralForeground3, fontFamily: LOG_MONOSPACE_FONT_FAMILY }}>
                   {formatBytes(dl.sizeBytes)}
                 </td>
-                <td style={{ ...tdStyle, textAlign: "right", color: tokens.colorNeutralForeground3, fontFamily: "'Courier New', monospace" }}>
+                <td style={{ ...tdStyle, textAlign: "right", color: tokens.colorNeutralForeground3, fontFamily: LOG_MONOSPACE_FONT_FAMILY }}>
                   {dl.speedBps > 0 ? `${formatBytes(dl.speedBps)}/s` : "—"}
                 </td>
                 <td style={tdStyle}>
@@ -140,10 +141,10 @@ export function DownloadStats({ downloads }: DownloadStatsProps) {
                     <span style={{ color: tokens.colorNeutralForeground4 }}>—</span>
                   )}
                 </td>
-                <td style={{ ...tdStyle, textAlign: "right", color: tokens.colorNeutralForeground3, fontFamily: "'Courier New', monospace" }}>
+                <td style={{ ...tdStyle, textAlign: "right", color: tokens.colorNeutralForeground3, fontFamily: LOG_MONOSPACE_FONT_FAMILY }}>
                   {dl.durationSecs > 0 ? `${dl.durationSecs.toFixed(1)}s` : "—"}
                 </td>
-                <td style={{ ...tdStyle, color: tokens.colorNeutralForeground3, fontFamily: "'Courier New', monospace", fontSize: "10px" }}>
+                <td style={{ ...tdStyle, color: tokens.colorNeutralForeground3, fontFamily: LOG_MONOSPACE_FONT_FAMILY, fontSize: "10px" }}>
                   {(dl.timestamp && formatDisplayDateTime(dl.timestamp)) || "—"}
                 </td>
               </tr>

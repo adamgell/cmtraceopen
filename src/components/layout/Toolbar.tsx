@@ -3,32 +3,35 @@ import {
   useCallback,
   useEffect,
   useMemo,
-  useState,
-  type CSSProperties,
-  type ChangeEvent,
 } from "react";
 import {
-  Badge,
   Button,
   Divider,
+  Dropdown,
   Input,
+  Menu,
+  MenuGroup,
+  MenuGroupHeader,
+  MenuItem,
+  MenuList,
+  MenuPopover,
+  MenuTrigger,
+  Option,
   tokens,
 } from "@fluentui/react-components";
 import { open } from "@tauri-apps/plugin-dialog";
+import { platform } from "@tauri-apps/plugin-os";
 import { analyzeIntuneLogs, inspectPathKind } from "../../lib/commands";
 import {
   analyzeDsregcmdPath,
   analyzeDsregcmdSource,
   refreshCurrentDsregcmdSource,
 } from "../../lib/dsregcmd-source";
-import {
-  getStreamStateSnapshot,
-  useLogStore,
-} from "../../stores/log-store";
+import { useLogStore } from "../../stores/log-store";
 import { useFilterStore } from "../../stores/filter-store";
 import { useIntuneStore } from "../../stores/intune-store";
 import { useDsregcmdStore } from "../../stores/dsregcmd-store";
-import { isIntuneWorkspace, type IntuneWorkspaceId, type WorkspaceId, useUiStore } from "../../stores/ui-store";
+import { isIntuneWorkspace, getAvailableWorkspaces, type IntuneWorkspaceId, type WorkspaceId, type PlatformId, useUiStore } from "../../stores/ui-store";
 import { ThemePicker } from "./ThemePicker";
 import {
   getLogSourcePath,
@@ -84,6 +87,15 @@ const DSREGCMD_FILE_DIALOG_FILTERS = [
 ];
 
 const LIVE_INTUNE_SOURCE_ID = "windows-intune-ime-logs";
+
+const WORKSPACE_LABELS: Record<WorkspaceId, string> = {
+  log: "Log Explorer",
+  intune: "Intune Diagnostics",
+  "new-intune": "New Intune Workspace",
+  dsregcmd: "dsregcmd",
+  "macos-diag": "macOS Diagnostics",
+  deployment: "Software Deployment",
+};
 
 function getOpenFileDialogFilters(workspace: WorkspaceId) {
   if (isIntuneWorkspace(workspace)) {
@@ -199,30 +211,6 @@ export interface AppActionHandlers {
   dismissTransientDialogs: (trigger: string) => void;
 }
 
-function getToolbarControlStyle(options: {
-  disabled: boolean;
-  active?: boolean;
-  tone?: "neutral" | "busy" | "warning" | "error";
-}): CSSProperties {
-  const { disabled, active = false, tone = "neutral" } = options;
-
-  const toneColors: Record<string, string> = {
-    neutral: active ? tokens.colorPaletteBlueBackground2 : tokens.colorNeutralBackground1,
-    busy: tokens.colorPaletteYellowBackground2,
-    warning: tokens.colorPaletteMarigoldBackground2,
-    error: tokens.colorPaletteRedBackground2,
-  };
-
-  return {
-    border: `1px solid ${tokens.colorNeutralStroke1}`,
-    borderRadius: "6px",
-    backgroundColor: disabled ? tokens.colorNeutralBackgroundDisabled : toneColors[tone],
-    color: disabled ? tokens.colorNeutralForeground3 : tokens.colorNeutralForeground1,
-    fontWeight: active ? 600 : 400,
-    opacity: disabled ? 0.75 : 1,
-    cursor: disabled ? "not-allowed" : "pointer",
-  };
-}
 
 export function useAppActions(): AppActionHandlers {
   const isLoading = useLogStore((s) => s.isLoading);
@@ -334,7 +322,11 @@ export function useAppActions(): AppActionHandlers {
 
   const loadLogWorkspaceSource = useCallback(
     async (source: LogSource, trigger: string) => {
-      useUiStore.getState().ensureLogViewVisible(trigger);
+      // Don't switch away from deployment workspace — it shows logs too
+      const currentWorkspace = useUiStore.getState().activeWorkspace;
+      if (currentWorkspace !== "deployment") {
+        useUiStore.getState().ensureLogViewVisible(trigger);
+      }
       useFilterStore.getState().clearFilter();
 
       try {
@@ -429,6 +421,21 @@ export function useAppActions(): AppActionHandlers {
         return;
       }
 
+      if (workspace === "deployment") {
+        // Extract folder path from source
+        const folderPath =
+          source.kind === "folder"
+            ? source.path
+            : source.kind === "known"
+              ? source.defaultPath
+              : null;
+        if (folderPath) {
+          const { useDeploymentStore } = await import("../../stores/deployment-store");
+          await useDeploymentStore.getState().analyzeFolder(folderPath);
+          return;
+        }
+      }
+
       await loadLogWorkspaceSource(source, trigger);
     },
     [
@@ -453,6 +460,12 @@ export function useAppActions(): AppActionHandlers {
             ? { kind: "folder", path }
             : { kind: "file", path };
         await analyzeIntuneWorkspaceSource(source, "drag-drop.path-open", activeWorkspace);
+        return;
+      }
+
+      if (activeWorkspace === "deployment") {
+        const { useDeploymentStore } = await import("../../stores/deployment-store");
+        await useDeploymentStore.getState().analyzeFolder(path);
         return;
       }
 
@@ -738,14 +751,10 @@ export function Toolbar() {
   const highlightText = useLogStore((s) => s.highlightText);
   const setHighlightText = useLogStore((s) => s.setHighlightText);
   const knownSourceToolbarGroups = useLogStore((s) => s.knownSourceToolbarGroups);
-  const isLoading = useLogStore((s) => s.isLoading);
-  const isPaused = useLogStore((s) => s.isPaused);
-  const activeSource = useLogStore((s) => s.activeSource);
-  const openFilePath = useLogStore((s) => s.openFilePath);
-  const dsregcmdIsAnalyzing = useDsregcmdStore((s) => s.isAnalyzing);
 
   const activeView = useUiStore((s) => s.activeView);
   const setActiveView = useUiStore((s) => s.setActiveView);
+  const currentPlatform = useUiStore((s) => s.currentPlatform);
 
   const {
     commandState,
@@ -755,20 +764,28 @@ export function Toolbar() {
     pasteDsregcmdSource,
     captureDsregcmdSource,
     showErrorLookupDialog,
-    showEvidenceBundleDialog,
-    togglePauseResume,
-    refreshActiveSource,
     toggleDetailsPane,
     toggleInfoPane,
   } = useAppActions();
 
-  const [selectedOpenAction, setSelectedOpenAction] = useState("");
-  const [selectedKnownSourceId, setSelectedKnownSourceId] = useState("");
 
   useEffect(() => {
     refreshKnownLogSources().catch((error) => {
       console.warn("[toolbar] failed to refresh known sources", { error });
     });
+
+    try {
+      const p = platform();
+      const mapped: PlatformId = p === "macos" ? "macos" : p === "windows" ? "windows" : "linux";
+      const store = useUiStore.getState();
+      store.setCurrentPlatform(mapped);
+      const available = getAvailableWorkspaces(mapped);
+      if (!available.includes(store.activeWorkspace)) {
+        store.setActiveWorkspace("log");
+      }
+    } catch (error) {
+      console.warn("[toolbar] failed to detect platform", { error });
+    }
   }, []);
 
   const openLabels = useMemo(
@@ -776,64 +793,6 @@ export function Toolbar() {
     [activeView]
   );
 
-  const handleOpenActionChange = async (
-    event: ChangeEvent<HTMLSelectElement>
-  ) => {
-    const action = event.target.value;
-    setSelectedOpenAction(action);
-
-    if (!action) {
-      return;
-    }
-
-    try {
-      if (action === "open-file") {
-        await openSourceFileDialog();
-      } else if (action === "open-folder") {
-        await openSourceFolderDialog();
-      } else if (action === "paste-dsregcmd") {
-        await pasteDsregcmdSource();
-      } else if (action === "capture-dsregcmd") {
-        await captureDsregcmdSource();
-      }
-    } catch (error) {
-      console.error("[toolbar] failed to open source from toolbar dropdown", {
-        action,
-        error,
-      });
-    } finally {
-      setSelectedOpenAction("");
-    }
-  };
-
-  const handleKnownSourceChange = async (
-    event: ChangeEvent<HTMLSelectElement>
-  ) => {
-    const sourceId = event.target.value;
-    setSelectedKnownSourceId(sourceId);
-
-    if (!sourceId) {
-      return;
-    }
-
-    try {
-      await openKnownSourceCatalogAction({
-        sourceId,
-        trigger: "toolbar.known-source-select",
-      });
-    } catch (error) {
-      console.error("[toolbar] failed to open known source", { sourceId, error });
-    } finally {
-      setSelectedKnownSourceId("");
-    }
-  };
-
-  const streamState = getStreamStateSnapshot(
-    isLoading || dsregcmdIsAnalyzing,
-    isPaused,
-    activeSource,
-    openFilePath
-  );
 
   return (
     <div
@@ -841,7 +800,6 @@ export function Toolbar() {
         display: "flex",
         flexWrap: "wrap",
         alignItems: "center",
-        justifyContent: "space-between",
         gap: "10px",
         padding: "10px 12px",
         backgroundColor: tokens.colorNeutralBackground2,
@@ -849,45 +807,47 @@ export function Toolbar() {
         flexShrink: 0,
       }}
     >
-      <div style={{ display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap" }}>
-        <select
-          value={selectedOpenAction}
-          onChange={handleOpenActionChange}
-          title={openLabels.openPlaceholder}
-          style={{
-            ...getToolbarControlStyle({ disabled: !commandState.canOpenSources }),
-            fontSize: "12px",
-            padding: "2px 4px",
-            minWidth: activeView === "dsregcmd" ? "180px" : "140px",
-          }}
-          disabled={!commandState.canOpenSources}
-        >
-          <option value="">{openLabels.openPlaceholder}</option>
-          <option value="open-file">{openLabels.file}</option>
-          <option value="open-folder">{openLabels.folder}</option>
-          {activeView === "dsregcmd" && (
-            <>
-              <option value="paste-dsregcmd">Paste Clipboard</option>
-              <option value="capture-dsregcmd">Capture Live Output</option>
-            </>
-          )}
-        </select>
-        <select
-          value={selectedKnownSourceId}
-          onChange={handleKnownSourceChange}
-          title="Open a known log source"
-          style={{
-            ...getToolbarControlStyle({
-              disabled:
-                !commandState.canOpenKnownSources || knownSourceToolbarGroups.length === 0,
-            }),
-            fontSize: "12px",
-            padding: "2px 4px",
-            minWidth: "260px",
-          }}
-          disabled={!commandState.canOpenKnownSources || knownSourceToolbarGroups.length === 0}
-        >
-          <option value="">
+      <Menu>
+        <MenuTrigger disableButtonEnhancement>
+          <Button
+            size="small"
+            disabled={!commandState.canOpenSources}
+            title={openLabels.openPlaceholder}
+          >
+            {openLabels.openPlaceholder}
+          </Button>
+        </MenuTrigger>
+        <MenuPopover>
+          <MenuList>
+            <MenuItem onClick={() => void openSourceFileDialog().catch((err) => console.error("Failed to open file dialog", err))}>
+              {openLabels.file}
+            </MenuItem>
+            <MenuItem onClick={() => void openSourceFolderDialog().catch((err) => console.error("Failed to open folder dialog", err))}>
+              {openLabels.folder}
+            </MenuItem>
+            {activeView === "dsregcmd" && (
+              <>
+                <MenuItem onClick={() => void pasteDsregcmdSource().catch((err) => console.error("Failed to paste dsregcmd source", err))}>
+                  Paste Clipboard
+                </MenuItem>
+                <MenuItem onClick={() => void captureDsregcmdSource().catch((err) => console.error("Failed to capture dsregcmd source", err))}>
+                  Capture Live Output
+                </MenuItem>
+              </>
+            )}
+          </MenuList>
+        </MenuPopover>
+      </Menu>
+      <Menu>
+        <MenuTrigger disableButtonEnhancement>
+          <Button
+            size="small"
+            disabled={
+              !commandState.canOpenKnownSources ||
+              knownSourceToolbarGroups.length === 0
+            }
+            title="Open a known log source"
+          >
             {commandState.canOpenKnownSources
               ? knownSourceToolbarGroups.length > 0
                 ? isIntuneWorkspace(activeView)
@@ -895,140 +855,112 @@ export function Toolbar() {
                   : "Open Known Log Source..."
                 : "No Known Log Sources"
               : "Known Sources Unavailable"}
-          </option>
-          {knownSourceToolbarGroups.map((group) => (
-            <optgroup key={group.id} label={group.label}>
-              {group.sources.map((source) => (
-                <option key={source.id} value={source.id} title={source.description}>
-                  {source.label}
-                </option>
-              ))}
-            </optgroup>
-          ))}
-        </select>
-
-        <Divider vertical />
-
-        <Button
-          onClick={togglePauseResume}
-          title={`Pause / Resume (Ctrl+U) • ${streamState.label}`}
-          disabled={!commandState.canPauseResume}
-          aria-pressed={commandState.isPaused}
-          size="small"
-          appearance={commandState.isPaused ? "primary" : "secondary"}
-        >
-          {commandState.isPaused ? "Resume" : "Pause"}
-        </Button>
-        <Button
-          onClick={() => {
-            refreshActiveSource().catch((error) => {
-              console.error("[toolbar] failed to refresh source", { error });
-            });
-          }}
-          title="Refresh (F5)"
-          disabled={!commandState.canRefresh}
-          size="small"
-          appearance="secondary"
-        >
-          Refresh
-        </Button>
-        <Badge appearance="outline" color={streamState.label === "Paused" ? "warning" : streamState.label === "Loading" ? "informative" : "brand"}>
-          {streamState.label}
-        </Badge>
-      </div>
-
-      <div style={{ display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap", flexGrow: 1, minWidth: "250px" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
-          <label
-            style={{
-              fontSize: "12px",
-              fontFamily: "'Segoe UI', Tahoma, sans-serif",
-              color: commandState.activeView === "log" ? tokens.colorNeutralForeground1 : tokens.colorNeutralForeground3,
-              whiteSpace: "nowrap",
-            }}
-          >
-            Highlight:
-          </label>
-          <Input
-            value={highlightText}
-            onChange={(e) => setHighlightText(e.target.value)}
-            placeholder="Enter text to highlight..."
-            disabled={commandState.activeView !== "log"}
-            size="small"
-            style={{
-              width: "200px",
-              minWidth: "120px",
-            }}
-          />
-        </div>
-
-        <Divider vertical />
-
-        <Button
-          onClick={showEvidenceBundleDialog}
-          title="Show collected bundle summary"
-          disabled={!commandState.canShowEvidenceBundle}
-          size="small"
-          appearance="secondary"
-        >
-          Bundle Summary
-        </Button>
-        <Button
-          onClick={showErrorLookupDialog}
-          title="Error Lookup (Ctrl+E)"
-          size="small"
-          appearance="secondary"
-        >
-          Error Lookup
-        </Button>
-        <Divider vertical />
-        <ThemePicker />
-      </div>
-
-      <div style={{ display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap", justifyContent: "flex-end" }}>
-        <Button
-          onClick={toggleDetailsPane}
-          title="Show / Hide Details (Ctrl+H)"
-          disabled={!commandState.canToggleDetailsPane}
-          aria-pressed={commandState.isDetailsVisible}
-          size="small"
-          appearance={commandState.isDetailsVisible ? "primary" : "secondary"}
-        >
-          Details
-        </Button>
-        <Button
-          onClick={toggleInfoPane}
-          title="Toggle Info Pane"
-          disabled={!commandState.canToggleInfoPane}
-          aria-pressed={commandState.isInfoPaneVisible}
-          size="small"
-          appearance={commandState.isInfoPaneVisible ? "primary" : "secondary"}
-        >
-          Info
-        </Button>
-
-        <Divider vertical />
-
-        {([
-          ["log", "Log Explorer"],
-          ["intune", "Intune Diagnostics"],
-          ["new-intune", "New Intune Workspace"],
-          ["dsregcmd", "Troubleshoot with dsregcmd"],
-          ["macos-diag", "macOS Diagnostics"],
-        ] as const).map(([workspaceId, label]) => (
-          <Button
-            key={workspaceId}
-            onClick={() => setActiveView(workspaceId)}
-            title={`Switch to ${label}`}
-            aria-pressed={activeView === workspaceId}
-            size="small"
-            appearance={activeView === workspaceId ? "primary" : "secondary"}
-          >
-            {label}
           </Button>
-        ))}
+        </MenuTrigger>
+        <MenuPopover>
+          <MenuList>
+            {knownSourceToolbarGroups.map((group) => (
+              <MenuGroup key={group.id}>
+                <MenuGroupHeader>{group.label}</MenuGroupHeader>
+                {group.sources.map((source) => (
+                  <MenuItem
+                    key={source.id}
+                    title={source.description}
+                    onClick={() =>
+                      void openKnownSourceCatalogAction({
+                        sourceId: source.id,
+                        trigger: "toolbar.known-source-select",
+                      }).catch((err) => console.error("Failed to open known source catalog action", err))
+                    }
+                  >
+                    {source.label}
+                  </MenuItem>
+                ))}
+              </MenuGroup>
+            ))}
+          </MenuList>
+        </MenuPopover>
+      </Menu>
 
-      </div>
+      <Divider vertical />
+
+      <Input
+        value={highlightText}
+        onChange={(e) => setHighlightText(e.target.value)}
+        placeholder="Highlight..."
+        disabled={commandState.activeView !== "log"}
+        size="small"
+        style={{
+          width: "200px",
+          minWidth: "120px",
+        }}
+      />
+
+      <Divider vertical />
+
+      <Button
+        onClick={showErrorLookupDialog}
+        title="Error Lookup (Ctrl+E)"
+        size="small"
+        appearance="secondary"
+      >
+        Error Lookup
+      </Button>
+
+      <Divider vertical />
+
+      <Button
+        onClick={toggleDetailsPane}
+        title="Show / Hide Details (Ctrl+H)"
+        disabled={!commandState.canToggleDetailsPane}
+        aria-pressed={commandState.isDetailsVisible}
+        size="small"
+        appearance={commandState.isDetailsVisible ? "primary" : "secondary"}
+      >
+        Details
+      </Button>
+      <Button
+        onClick={toggleInfoPane}
+        title="Toggle Info Pane"
+        disabled={!commandState.canToggleInfoPane}
+        aria-pressed={commandState.isInfoPaneVisible}
+        size="small"
+        appearance={commandState.isInfoPaneVisible ? "primary" : "secondary"}
+      >
+        Info
+      </Button>
+
+      <Divider vertical />
+
+      <label
+        style={{
+          fontSize: "11px",
+          color: tokens.colorNeutralForeground3,
+          whiteSpace: "nowrap",
+        }}
+      >
+        Workspace:
+      </label>
+      <Dropdown
+        value={WORKSPACE_LABELS[activeView]}
+        selectedOptions={[activeView]}
+        onOptionSelect={(_e, data) => {
+          if (data.optionValue) {
+            setActiveView(data.optionValue as WorkspaceId);
+          }
+        }}
+        size="small"
+        style={{ minWidth: "180px" }}
+        aria-label="Workspace"
+      >
+        {getAvailableWorkspaces(currentPlatform).map((wsId) => (
+          <Option key={wsId} value={wsId}>{WORKSPACE_LABELS[wsId]}</Option>
+        ))}
+      </Dropdown>
+
+      <div style={{ flex: 1 }} />
+
+      <ThemePicker />
     </div>
   );
 }

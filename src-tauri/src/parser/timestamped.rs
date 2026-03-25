@@ -48,12 +48,58 @@ static TIME_ONLY_RE: Lazy<Regex> =
 // Public API — matches same pattern as ccm/simple/plain parsers
 // ---------------------------------------------------------------------------
 
+/// Which timestamp pattern matched — used to try the same pattern first on subsequent lines.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TimestampFormat {
+    Iso,
+    SlashDate,
+    Syslog,
+    TimeOnly,
+}
+
+/// Try a specific pattern first, then fall back to the full search.
+fn parse_line_with_hint(
+    line: &str,
+    date_order: DateOrder,
+    hint: Option<TimestampFormat>,
+) -> Option<(LogEntry, TimestampFormat)> {
+    // Try the hinted format first (common case: same format as previous line)
+    if let Some(fmt) = hint {
+        if let Some(entry) = match fmt {
+            TimestampFormat::Iso => try_iso(line),
+            TimestampFormat::SlashDate => try_slash_date(line, date_order),
+            TimestampFormat::Syslog => try_syslog(line),
+            TimestampFormat::TimeOnly => try_time_only(line),
+        } {
+            return Some((entry, fmt));
+        }
+    }
+
+    // Full search in priority order
+    if let Some(entry) = try_iso(line) {
+        return Some((entry, TimestampFormat::Iso));
+    }
+    if let Some(entry) = try_slash_date(line, date_order) {
+        return Some((entry, TimestampFormat::SlashDate));
+    }
+    if let Some(entry) = try_syslog(line) {
+        return Some((entry, TimestampFormat::Syslog));
+    }
+    if let Some(entry) = try_time_only(line) {
+        return Some((entry, TimestampFormat::TimeOnly));
+    }
+    None
+}
+
 /// Parse all lines, extracting timestamps where possible.
 /// Lines that don't match any timestamp pattern are included as plain-text entries.
+/// Caches the detected format from the first match and tries it first on subsequent
+/// lines, avoiding up to 3 wasted regex attempts per line.
 pub fn parse_lines(lines: &[&str], file_path: &str, date_order: DateOrder) -> (Vec<LogEntry>, u32) {
     let mut entries = Vec::with_capacity(lines.len());
     let mut parse_errors: u32 = 0;
     let mut id: u64 = 0;
+    let mut format_hint: Option<TimestampFormat> = None;
 
     for (i, line) in lines.iter().enumerate() {
         let trimmed = line.trim();
@@ -61,11 +107,12 @@ pub fn parse_lines(lines: &[&str], file_path: &str, date_order: DateOrder) -> (V
             continue;
         }
 
-        if let Some(mut entry) = parse_line(trimmed, date_order) {
+        if let Some((mut entry, fmt)) = parse_line_with_hint(trimmed, date_order, format_hint) {
             entry.id = id;
             entry.line_number = (i + 1) as u32;
             entry.file_path = file_path.to_string();
             entries.push(entry);
+            format_hint = Some(fmt);
         } else {
             // Fallback: treat as plain text with severity detection
             entries.push(LogEntry {
@@ -83,6 +130,9 @@ pub fn parse_lines(lines: &[&str], file_path: &str, date_order: DateOrder) -> (V
                 file_path: file_path.to_string(),
                 timezone_offset: None,
                 error_code_spans: Vec::new(),
+                    ip_address: None,
+                    host_name: None,
+                    mac_address: None,
             });
             parse_errors += 1;
         }
@@ -96,20 +146,9 @@ pub fn parse_lines(lines: &[&str], file_path: &str, date_order: DateOrder) -> (V
 // Internal — try each pattern in priority order
 // ---------------------------------------------------------------------------
 
+#[cfg(test)]
 fn parse_line(line: &str, date_order: DateOrder) -> Option<LogEntry> {
-    if let Some(entry) = try_iso(line) {
-        return Some(entry);
-    }
-    if let Some(entry) = try_slash_date(line, date_order) {
-        return Some(entry);
-    }
-    if let Some(entry) = try_syslog(line) {
-        return Some(entry);
-    }
-    if let Some(entry) = try_time_only(line) {
-        return Some(entry);
-    }
-    None
+    parse_line_with_hint(line, date_order, None).map(|(entry, _)| entry)
 }
 
 /// Check whether a line matches any supported timestamp pattern (used by detect.rs).
@@ -174,6 +213,9 @@ fn try_iso(line: &str) -> Option<LogEntry> {
         file_path: String::new(),
         timezone_offset: tz_offset,
         error_code_spans: Vec::new(),
+                    ip_address: None,
+                    host_name: None,
+                    mac_address: None,
     })
 }
 
@@ -236,6 +278,9 @@ fn try_slash_date(line: &str, date_order: DateOrder) -> Option<LogEntry> {
         file_path: String::new(),
         timezone_offset: None,
         error_code_spans: Vec::new(),
+                    ip_address: None,
+                    host_name: None,
+                    mac_address: None,
     })
 }
 
@@ -285,6 +330,9 @@ fn try_syslog(line: &str) -> Option<LogEntry> {
         file_path: String::new(),
         timezone_offset: None,
         error_code_spans: Vec::new(),
+                    ip_address: None,
+                    host_name: None,
+                    mac_address: None,
     })
 }
 
@@ -324,6 +372,9 @@ fn try_time_only(line: &str) -> Option<LogEntry> {
         file_path: String::new(),
         timezone_offset: None,
         error_code_spans: Vec::new(),
+                    ip_address: None,
+                    host_name: None,
+                    mac_address: None,
     })
 }
 

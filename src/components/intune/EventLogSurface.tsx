@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useCallback } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { tokens } from "@fluentui/react-components";
+import { LOG_MONOSPACE_FONT_FAMILY } from "../../lib/log-accessibility";
 import { formatDisplayDateTime } from "../../lib/date-time-format";
 import type {
   EventLogEntry,
@@ -362,7 +363,7 @@ export function EventLogSurface({
                   {/* Timestamp */}
                   <span
                     style={{
-                      fontFamily: "Consolas, 'Courier New', monospace",
+                      fontFamily: LOG_MONOSPACE_FONT_FAMILY,
                       fontSize: 11,
                       color: tokens.colorNeutralForeground1,
                       whiteSpace: "nowrap",
@@ -445,7 +446,7 @@ export function EventLogSurface({
                     {/* Full message */}
                     <div
                       style={{
-                        fontFamily: "Consolas, 'Courier New', monospace",
+                        fontFamily: LOG_MONOSPACE_FONT_FAMILY,
                         fontSize: 11,
                         padding: "6px 8px",
                         background: tokens.colorNeutralCardBackground,

@@ -228,6 +228,13 @@ export function useKeyboard() {
         return;
       }
 
+      // Ctrl+B: toggle sidebar
+      if (ctrl && event.key.toLowerCase() === "b") {
+        event.preventDefault();
+        useUiStore.getState().toggleSidebar();
+        return;
+      }
+
       if (event.key === "F5" && !isInput) {
         event.preventDefault();
 

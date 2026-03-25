@@ -1,6 +1,6 @@
 {
   "name": "cmtrace-open",
-  "version": "0.5.1",
+  "version": "0.6.0-pre.1",
   "private": true,
   "description": "Open-source CMTrace log viewer with built-in Intune diagnostics",
   "scripts": {
@@ -25,6 +25,7 @@
     "@tauri-apps/plugin-clipboard-manager": "^2.3.2",
     "@tauri-apps/plugin-dialog": "^2.6.0",
     "@tauri-apps/plugin-fs": "^2.4.5",
+    "@tauri-apps/plugin-os": "^2.3.2",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
     "zustand": "^5.0.11"

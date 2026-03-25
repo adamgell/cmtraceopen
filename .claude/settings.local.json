@@ -5,7 +5,17 @@
       "Bash(find /c/Users/AdamGell/Documents/GitHub/cmtraceopen -type f -name *evidence* -o -name *intune-profile*)",
       "Bash(cargo check:*)",
       "Bash(npx tsc:*)",
-      "Bash(cargo test:*)"
+      "Bash(cargo test:*)",
+      "Bash(git pull:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(gh run:*)",
+      "Bash(ls -la /Users/Adam.Gell/repo/cmtraceopen/src-tauri/src/parser/*.rs)",
+      "WebSearch",
+      "Bash(gh issue:*)",
+      "Bash(ls -1 /Users/Adam.Gell/repo/cmtraceopen/*.md)",
+      "Bash(gh pr:*)"
     ]
   }
 }

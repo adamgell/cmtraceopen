@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import { tokens } from "@fluentui/react-components";
 import { useFilterStore } from "../../stores/filter-store";
 
 export type FilterOp =
@@ -166,8 +167,9 @@ export function FilterDialog({
     >
       <div
         style={{
-          backgroundColor: "#f0f0f0",
-          border: "1px solid #999",
+          backgroundColor: tokens.colorNeutralBackground1,
+          color: tokens.colorNeutralForeground1,
+          border: `1px solid ${tokens.colorNeutralStroke1}`,
           borderRadius: "4px",
           padding: "12px",
           minWidth: "520px",
@@ -198,7 +200,7 @@ export function FilterDialog({
               <span
                 style={{
                   fontSize: "11px",
-                  color: "#666",
+                  color: tokens.colorNeutralForeground3,
                   width: "30px",
                   textAlign: "center",
                 }}
@@ -256,7 +258,15 @@ export function FilterDialog({
               <button
                 onClick={() => removeClause(index)}
                 disabled={isFiltering}
-                style={{ fontSize: "11px", padding: "1px 4px" }}
+                style={{
+                  fontSize: "11px",
+                  padding: "1px 4px",
+                  border: `1px solid ${tokens.colorNeutralStroke1}`,
+                  borderRadius: "4px",
+                  background: tokens.colorNeutralBackground3,
+                  color: tokens.colorNeutralForeground1,
+                  cursor: "pointer",
+                }}
                 title="Remove clause"
               >
                 ✕
@@ -269,7 +279,7 @@ export function FilterDialog({
           style={{
             marginTop: "6px",
             fontSize: "11px",
-            color: filterError ? "#991b1b" : isFiltering ? "#1d4ed8" : "#555",
+            color: filterError ? tokens.colorPaletteRedForeground1 : isFiltering ? tokens.colorBrandForeground1 : tokens.colorNeutralForeground3,
           }}
         >
           {statusText}
@@ -286,7 +296,15 @@ export function FilterDialog({
             marginTop: "10px",
           }}
         >
-          <button onClick={addClause} disabled={isFiltering} style={{ fontSize: "11px" }}>
+          <button onClick={addClause} disabled={isFiltering} style={{
+            padding: "4px 12px",
+            fontSize: "11px",
+            border: `1px solid ${tokens.colorNeutralStroke1}`,
+            borderRadius: "4px",
+            background: tokens.colorNeutralBackground3,
+            color: tokens.colorNeutralForeground1,
+            cursor: "pointer",
+          }}>
             + Add Clause
           </button>
           <div style={{ display: "flex", gap: "6px" }}>
@@ -297,6 +315,15 @@ export function FilterDialog({
                 });
               }}
               disabled={isFiltering}
+              style={{
+                padding: "4px 12px",
+                fontSize: "12px",
+                border: `1px solid ${tokens.colorNeutralStroke1}`,
+                borderRadius: "4px",
+                background: tokens.colorNeutralBackground3,
+                color: tokens.colorNeutralForeground1,
+                cursor: "pointer",
+              }}
             >
               Clear Filter
             </button>
@@ -307,10 +334,27 @@ export function FilterDialog({
                 });
               }}
               disabled={isFiltering}
+              style={{
+                padding: "4px 12px",
+                fontSize: "12px",
+                border: `1px solid ${tokens.colorNeutralStroke1}`,
+                borderRadius: "4px",
+                background: tokens.colorNeutralBackground3,
+                color: tokens.colorNeutralForeground1,
+                cursor: "pointer",
+              }}
             >
               {isFiltering ? "Applying..." : "Apply"}
             </button>
-            <button onClick={onClose} disabled={isFiltering}>
+            <button onClick={onClose} disabled={isFiltering} style={{
+              padding: "4px 12px",
+              fontSize: "12px",
+              border: `1px solid ${tokens.colorNeutralStroke1}`,
+              borderRadius: "4px",
+              background: tokens.colorNeutralBackground3,
+              color: tokens.colorNeutralForeground1,
+              cursor: "pointer",
+            }}>
               Cancel
             </button>
           </div>

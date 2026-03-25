@@ -1,0 +1,186 @@
+﻿<![LOG[[Proxy Poller using ExectorLog] AgentExecutor log path : C:\ProgramData\Microsoft\IntuneManagementExtension\Logs\AgentExecutor.log]LOG]!><time="11:19:59.4204997" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="80" file="">
+<![LOG[ExecutorLog AgentExecutor gets invoked]LOG]!><time="11:19:59.6789192" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[Creating command line parser, name delimiter is - and value separator is  .]LOG]!><time="11:19:59.6898709" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[Getting Ordered Parameters]LOG]!><time="11:19:59.6928518" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[Parsing Ordered Parameters.]LOG]!><time="11:19:59.6948425" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[Adding argument proxy with value AzureAD\AdamGell to the named argument list.]LOG]!><time="11:19:59.6968173" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[[proxy poller] Getting proxy info. url is https://agents.amsua0102.manage.microsoft.com/TrafficGateway/TrafficRoutingService/SideCar/StatelessSideCarGatewayService]LOG]!><time="11:19:59.7203861" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[autodetect=True]LOG]!><time="11:19:59.7754255" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[autoconfiguration url=]LOG]!><time="11:19:59.7774424" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[bypasslist=]LOG]!><time="11:19:59.7783695" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[static proxy=]LOG]!><time="11:19:59.7793847" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[DNS detection: WinHttpGetProxyForUrl call failed because of error 12180]LOG]!><time="11:19:59.7854592" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[DHCP detection: WinHttpGetProxyForUrl call failed because of error 12180]LOG]!><time="11:19:59.7873651" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[[Proxy Poller] Fetching the tempPath through environment variables.]LOG]!><time="11:19:59.7893659" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[[Proxy Poller] Found the TempPath from TMP envVarible : path is C:\Windows\TEMP]LOG]!><time="11:19:59.7904291" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[C:\Windows\TEMP\IntuneWindowsAgent_Proxy_AzureAD_AdamGell.txt]LOG]!><time="11:19:59.7913839" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[ExecutorLog AgentExecutor gets invoked]LOG]!><time="11:29:38.8718243" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[Creating command line parser, name delimiter is - and value separator is  .]LOG]!><time="11:29:38.8817851" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[Getting Ordered Parameters]LOG]!><time="11:29:38.8837717" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[Parsing Ordered Parameters.]LOG]!><time="11:29:38.8857894" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[Adding argument remediationScript with value C:\Windows\IMECache\HealthScripts\5e2ea864-0523-4c69-9383-a108412dd85a_1\detect.ps1 to the named argument list.]LOG]!><time="11:29:38.8867895" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[remediation script option gets invoked]LOG]!><time="11:29:38.8927699" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[C:\Windows\IMECache\HealthScripts\5e2ea864-0523-4c69-9383-a108412dd85a_1\detect.ps1]LOG]!><time="11:29:38.8938804" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[C:\Windows\IMECache\HealthScripts\5e2ea864-0523-4c69-9383-a108412dd85a_1\6007c43c-9d2d-4605-bdaf-5cfa74d9ade6_PreDetectScript.output]LOG]!><time="11:29:38.8947744" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[C:\Windows\IMECache\HealthScripts\5e2ea864-0523-4c69-9383-a108412dd85a_1\6007c43c-9d2d-4605-bdaf-5cfa74d9ade6_PreDetectScript.error]LOG]!><time="11:29:38.8967993" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[C:\Windows\IMECache\HealthScripts\5e2ea864-0523-4c69-9383-a108412dd85a_1\6007c43c-9d2d-4605-bdaf-5cfa74d9ade6_PreDetectScript.timeout]LOG]!><time="11:29:38.8967993" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[C:\Windows\IMECache\HealthScripts\5e2ea864-0523-4c69-9383-a108412dd85a_1\6007c43c-9d2d-4605-bdaf-5cfa74d9ade6_PreDetectScript.exit]LOG]!><time="11:29:38.8977723" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[Prepare to run Powershell Script ..]LOG]!><time="11:29:38.9017713" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[cmd line for running powershell is -NoProfile -executionPolicy bypass -file  "C:\Windows\IMECache\HealthScripts\5e2ea864-0523-4c69-9383-a108412dd85a_1\detect.ps1" <ScriptParams not logged for remediation scripts>]LOG]!><time="11:29:38.9027714" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[runAs32BitOn64 = False, so Disable Wow64FsRedirection]LOG]!><time="11:29:38.9037710" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[PowerShell path is C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe]LOG]!><time="11:29:38.9047703" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[[Executor] created powershell with process id 6904]LOG]!><time="11:29:38.9277698" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[Powershell exit code is 0]LOG]!><time="11:29:39.8365856" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[length of out=75]LOG]!><time="11:29:39.8376505" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[length of error=2]LOG]!><time="11:29:39.8376505" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[error from script =
+]LOG]!><time="11:29:39.8386114" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[Powershell script is successfully executed.]LOG]!><time="11:29:39.8386114" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[write output done. output = Compliant: Windows UEFI CA 2023 is present in the Secure Boot database.
+
+, error = 
+]LOG]!><time="11:29:39.8406103" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[Revert Wow64FsRedirection]LOG]!><time="11:29:39.8425840" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[ExecutorLog AgentExecutor gets invoked]LOG]!><time="11:32:10.5261503" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[Creating command line parser, name delimiter is - and value separator is  .]LOG]!><time="11:32:10.5360474" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[Getting Ordered Parameters]LOG]!><time="11:32:10.5370432" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[Parsing Ordered Parameters.]LOG]!><time="11:32:10.5390429" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[Adding argument remediationScript with value C:\Windows\IMECache\HealthScripts\79880037-a3c4-489a-a7e6-a6a705b52b78_1\detect.ps1 to the named argument list.]LOG]!><time="11:32:10.5400481" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[remediation script option gets invoked]LOG]!><time="11:32:10.5470587" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[C:\Windows\IMECache\HealthScripts\79880037-a3c4-489a-a7e6-a6a705b52b78_1\detect.ps1]LOG]!><time="11:32:10.5480527" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[C:\Windows\IMECache\HealthScripts\79880037-a3c4-489a-a7e6-a6a705b52b78_1\457f7522-4bc3-46ad-9e0f-a2d52fbeae40_PreDetectScript.output]LOG]!><time="11:32:10.5480527" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[C:\Windows\IMECache\HealthScripts\79880037-a3c4-489a-a7e6-a6a705b52b78_1\457f7522-4bc3-46ad-9e0f-a2d52fbeae40_PreDetectScript.error]LOG]!><time="11:32:10.5490305" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[C:\Windows\IMECache\HealthScripts\79880037-a3c4-489a-a7e6-a6a705b52b78_1\457f7522-4bc3-46ad-9e0f-a2d52fbeae40_PreDetectScript.timeout]LOG]!><time="11:32:10.5500533" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[C:\Windows\IMECache\HealthScripts\79880037-a3c4-489a-a7e6-a6a705b52b78_1\457f7522-4bc3-46ad-9e0f-a2d52fbeae40_PreDetectScript.exit]LOG]!><time="11:32:10.5510321" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[Prepare to run Powershell Script ..]LOG]!><time="11:32:10.5560304" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[cmd line for running powershell is -NoProfile -executionPolicy bypass -file  "C:\Windows\IMECache\HealthScripts\79880037-a3c4-489a-a7e6-a6a705b52b78_1\detect.ps1" <ScriptParams not logged for remediation scripts>]LOG]!><time="11:32:10.5570430" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[runAs32BitOn64 = False, so Disable Wow64FsRedirection]LOG]!><time="11:32:10.5580517" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[PowerShell path is C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe]LOG]!><time="11:32:10.5590480" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[[Executor] created powershell with process id 14400]LOG]!><time="11:32:10.5830322" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[Powershell exit code is 0]LOG]!><time="11:32:11.4134278" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[length of out=40]LOG]!><time="11:32:11.4144276" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[length of error=2]LOG]!><time="11:32:11.4154284" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[error from script =
+]LOG]!><time="11:32:11.4164175" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[Powershell script is successfully executed.]LOG]!><time="11:32:11.4164175" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[write output done. output = FleetDeck Agent detected and running
+
+, error = 
+]LOG]!><time="11:32:11.4194202" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[Revert Wow64FsRedirection]LOG]!><time="11:32:11.4204168" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[ExecutorLog AgentExecutor gets invoked]LOG]!><time="11:32:21.7296272" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[Creating command line parser, name delimiter is - and value separator is  .]LOG]!><time="11:32:21.7385983" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[Getting Ordered Parameters]LOG]!><time="11:32:21.7406025" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[Parsing Ordered Parameters.]LOG]!><time="11:32:21.7425991" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[Adding argument remediationScript with value C:\Windows\IMECache\HealthScripts\efb3f73e-a40f-4357-9429-24f5d95d3b9c_1\detect.ps1 to the named argument list.]LOG]!><time="11:32:21.7436085" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[remediation script option gets invoked]LOG]!><time="11:32:21.7505992" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[C:\Windows\IMECache\HealthScripts\efb3f73e-a40f-4357-9429-24f5d95d3b9c_1\detect.ps1]LOG]!><time="11:32:21.7516001" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[C:\Windows\IMECache\HealthScripts\efb3f73e-a40f-4357-9429-24f5d95d3b9c_1\0ec2a50a-2f67-449a-a1fe-ef408517d5ab_PreDetectScript.output]LOG]!><time="11:32:21.7536000" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[C:\Windows\IMECache\HealthScripts\efb3f73e-a40f-4357-9429-24f5d95d3b9c_1\0ec2a50a-2f67-449a-a1fe-ef408517d5ab_PreDetectScript.error]LOG]!><time="11:32:21.7546002" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[C:\Windows\IMECache\HealthScripts\efb3f73e-a40f-4357-9429-24f5d95d3b9c_1\0ec2a50a-2f67-449a-a1fe-ef408517d5ab_PreDetectScript.timeout]LOG]!><time="11:32:21.7555991" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[C:\Windows\IMECache\HealthScripts\efb3f73e-a40f-4357-9429-24f5d95d3b9c_1\0ec2a50a-2f67-449a-a1fe-ef408517d5ab_PreDetectScript.exit]LOG]!><time="11:32:21.7566038" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[Prepare to run Powershell Script ..]LOG]!><time="11:32:21.7616526" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[cmd line for running powershell is -NoProfile -executionPolicy bypass -file  "C:\Windows\IMECache\HealthScripts\efb3f73e-a40f-4357-9429-24f5d95d3b9c_1\detect.ps1" <ScriptParams not logged for remediation scripts>]LOG]!><time="11:32:21.7626596" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[runAs32BitOn64 = False, so Disable Wow64FsRedirection]LOG]!><time="11:32:21.7636252" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[PowerShell path is C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe]LOG]!><time="11:32:21.7656272" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[[Executor] created powershell with process id 6752]LOG]!><time="11:32:21.7875966" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[Powershell exit code is 0]LOG]!><time="11:32:22.4919773" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[length of out=75]LOG]!><time="11:32:22.4929677" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[length of error=2]LOG]!><time="11:32:22.4929677" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[error from script =
+]LOG]!><time="11:32:22.4939183" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[Powershell script is successfully executed.]LOG]!><time="11:32:22.4949176" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[write output done. output = Compliant: Windows UEFI CA 2023 is present in the Secure Boot database.
+
+, error = 
+]LOG]!><time="11:32:22.4979184" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[Revert Wow64FsRedirection]LOG]!><time="11:32:22.4999183" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[ExecutorLog AgentExecutor gets invoked]LOG]!><time="11:32:32.8090881" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[Creating command line parser, name delimiter is - and value separator is  .]LOG]!><time="11:32:32.8180464" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[Getting Ordered Parameters]LOG]!><time="11:32:32.8200394" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[Parsing Ordered Parameters.]LOG]!><time="11:32:32.8220367" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[Adding argument remediationScript with value C:\Windows\IMECache\HealthScripts\5e45f6fd-5e31-44d8-98fe-951096870ef5_8\detect.ps1 to the named argument list.]LOG]!><time="11:32:32.8230830" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[remediation script option gets invoked]LOG]!><time="11:32:32.8300304" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[C:\Windows\IMECache\HealthScripts\5e45f6fd-5e31-44d8-98fe-951096870ef5_8\detect.ps1]LOG]!><time="11:32:32.8310412" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[C:\Windows\IMECache\HealthScripts\5e45f6fd-5e31-44d8-98fe-951096870ef5_8\5fdec6b0-7078-48de-93cf-2f987b933423_PreDetectScript.output]LOG]!><time="11:32:32.8320753" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[C:\Windows\IMECache\HealthScripts\5e45f6fd-5e31-44d8-98fe-951096870ef5_8\5fdec6b0-7078-48de-93cf-2f987b933423_PreDetectScript.error]LOG]!><time="11:32:32.8330200" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[C:\Windows\IMECache\HealthScripts\5e45f6fd-5e31-44d8-98fe-951096870ef5_8\5fdec6b0-7078-48de-93cf-2f987b933423_PreDetectScript.timeout]LOG]!><time="11:32:32.8330200" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[C:\Windows\IMECache\HealthScripts\5e45f6fd-5e31-44d8-98fe-951096870ef5_8\5fdec6b0-7078-48de-93cf-2f987b933423_PreDetectScript.exit]LOG]!><time="11:32:32.8340402" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[Prepare to run Powershell Script ..]LOG]!><time="11:32:32.8381158" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[cmd line for running powershell is -NoProfile -executionPolicy bypass -file  "C:\Windows\IMECache\HealthScripts\5e45f6fd-5e31-44d8-98fe-951096870ef5_8\detect.ps1" <ScriptParams not logged for remediation scripts>]LOG]!><time="11:32:32.8390222" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[runAs32BitOn64 = False, so Disable Wow64FsRedirection]LOG]!><time="11:32:32.8400239" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[PowerShell path is C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe]LOG]!><time="11:32:32.8410221" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[[Executor] created powershell with process id 18360]LOG]!><time="11:32:32.8650234" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[Powershell exit code is 1]LOG]!><time="11:32:33.5718302" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[length of out=12]LOG]!><time="11:32:33.5728114" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[length of error=2]LOG]!><time="11:32:33.5737884" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[error from script =
+]LOG]!><time="11:32:33.5748065" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[Powershell script is failed to execute]LOG]!><time="11:32:33.5767926" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[write output done. output = no-state
+
+, error = 
+]LOG]!><time="11:32:33.5787917" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[Revert Wow64FsRedirection]LOG]!><time="11:32:33.5808099" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[ExecutorLog AgentExecutor gets invoked]LOG]!><time="11:32:38.8708114" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[Creating command line parser, name delimiter is - and value separator is  .]LOG]!><time="11:32:38.8817201" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[Getting Ordered Parameters]LOG]!><time="11:32:38.8827405" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[Parsing Ordered Parameters.]LOG]!><time="11:32:38.8847196" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[Adding argument remediationScript with value C:\Windows\IMECache\HealthScripts\5e45f6fd-5e31-44d8-98fe-951096870ef5_8\remediate.ps1 to the named argument list.]LOG]!><time="11:32:38.8857191" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[remediation script option gets invoked]LOG]!><time="11:32:38.8927318" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[C:\Windows\IMECache\HealthScripts\5e45f6fd-5e31-44d8-98fe-951096870ef5_8\remediate.ps1]LOG]!><time="11:32:38.8937228" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[C:\Windows\IMECache\HealthScripts\5e45f6fd-5e31-44d8-98fe-951096870ef5_8\435b82d6-9347-4db4-8501-37e77f40d047_RemediationScript.output]LOG]!><time="11:32:38.8947199" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[C:\Windows\IMECache\HealthScripts\5e45f6fd-5e31-44d8-98fe-951096870ef5_8\435b82d6-9347-4db4-8501-37e77f40d047_RemediationScript.error]LOG]!><time="11:32:38.8957511" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[C:\Windows\IMECache\HealthScripts\5e45f6fd-5e31-44d8-98fe-951096870ef5_8\435b82d6-9347-4db4-8501-37e77f40d047_RemediationScript.timeout]LOG]!><time="11:32:38.8967184" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[C:\Windows\IMECache\HealthScripts\5e45f6fd-5e31-44d8-98fe-951096870ef5_8\435b82d6-9347-4db4-8501-37e77f40d047_RemediationScript.exit]LOG]!><time="11:32:38.8977213" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[Prepare to run Powershell Script ..]LOG]!><time="11:32:38.9017416" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[cmd line for running powershell is -NoProfile -executionPolicy bypass -file  "C:\Windows\IMECache\HealthScripts\5e45f6fd-5e31-44d8-98fe-951096870ef5_8\remediate.ps1" <ScriptParams not logged for remediation scripts>]LOG]!><time="11:32:38.9027193" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[runAs32BitOn64 = False, so Disable Wow64FsRedirection]LOG]!><time="11:32:38.9037213" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[PowerShell path is C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe]LOG]!><time="11:32:38.9047199" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[[Executor] created powershell with process id 19788]LOG]!><time="11:32:38.9257192" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[Powershell exit code is 0]LOG]!><time="11:32:54.1376303" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[length of out=1937]LOG]!><time="11:32:54.1385700" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[length of error=2]LOG]!><time="11:32:54.1395700" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[error from script =
+]LOG]!><time="11:32:54.1395700" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[Powershell script is successfully executed.]LOG]!><time="11:32:54.1405702" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[write output done. output = stage=bootstrap; status=starting; payloadId=sha256:5353b409a3533c38; delayMinutes=2; localOnly=False; processArch=x64; stagedCollector=C:\ProgramData\CmtraceOpen\Staging\Invoke-CmtraceEvidenceCollection-20260324T153240Z-91b4f6721d3f4a2286c963f56cf62da2.ps1; stagedProfile=C:\ProgramData\CmtraceOpen\Staging\intune-evidence-profile-20260324T153240Z-91b4f6721d3f4a2286c963f56cf62da2.json; stagingRunId=20260324T153240Z-91b4f6721d3f4a2286c963f56cf62da2; throttleHours=24; transcript=C:\ProgramData\CmtraceOpen\Logs\Remediate-CmtraceEvidenceBootstrap-20260324T153239Z.log; transcriptStatus=enabled
+stage=payloads; status=ready; payloadId=sha256:5353b409a3533c38; collector=C:\ProgramData\CmtraceOpen\Staging\Invoke-CmtraceEvidenceCollection-20260324T153240Z-91b4f6721d3f4a2286c963f56cf62da2.ps1; profile=C:\ProgramData\CmtraceOpen\Staging\intune-evidence-profile-20260324T153240Z-91b4f6721d3f4a2286c963f56cf62da2.json; stagingRun=20260324T153240Z-91b4f6721d3f4a2286c963f56cf62da2; transcript=C:\ProgramData\CmtraceOpen\Logs\Remediate-CmtraceEvidenceBootstrap-20260324T153239Z.log
+stage=runtime; status=ready; payloadId=sha256:5353b409a3533c38; executable=C:\Program Files\PowerShell\7\pwsh.exe; transcript=C:\ProgramData\CmtraceOpen\Logs\Remediate-CmtraceEvidenceBootstrap-20260324T153239Z.log; version=7.6.0
+stage=bootstrap; status=scheduled; payloadId=sha256:5353b409a3533c38; collector=C:\ProgramData\CmtraceOpen\Staging\Invoke-CmtraceEvidenceCollection-20260324T153240Z-91b4f6721d3f4a2286c963f56cf62da2.ps1; outputRoot=C:\ProgramData\CmtraceOpen\Evidence; profile=C:\ProgramData\CmtraceOpen\Staging\intune-evidence-profile-20260324T153240Z-91b4f6721d3f4a2286c963f56cf62da2.json; state=C:\ProgramData\CmtraceOpen\State\collection-bootstrap.json; task=CmtraceOpen-EvidenceCollection-Once; taskPath=\; transcript=C:\ProgramData\CmtraceOpen\Logs\Remediate-CmtraceEvidenceBootstrap-20260324T153239Z.log; triggerUtc=2026-03-24T15:34:50Z
+
+, error = 
+]LOG]!><time="11:32:54.1425892" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[Revert Wow64FsRedirection]LOG]!><time="11:32:54.1446323" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[ExecutorLog AgentExecutor gets invoked]LOG]!><time="11:32:59.4280496" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[Creating command line parser, name delimiter is - and value separator is  .]LOG]!><time="11:32:59.4380816" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[Getting Ordered Parameters]LOG]!><time="11:32:59.4400640" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[Parsing Ordered Parameters.]LOG]!><time="11:32:59.4420473" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[Adding argument remediationScript with value C:\Windows\IMECache\HealthScripts\5e45f6fd-5e31-44d8-98fe-951096870ef5_8\detect.ps1 to the named argument list.]LOG]!><time="11:32:59.4430465" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[remediation script option gets invoked]LOG]!><time="11:32:59.4490222" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[C:\Windows\IMECache\HealthScripts\5e45f6fd-5e31-44d8-98fe-951096870ef5_8\detect.ps1]LOG]!><time="11:32:59.4500215" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[C:\Windows\IMECache\HealthScripts\5e45f6fd-5e31-44d8-98fe-951096870ef5_8\010aefdc-4558-4a12-8ed0-b6a841e27666_PreDetectScript.output]LOG]!><time="11:32:59.4510209" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[C:\Windows\IMECache\HealthScripts\5e45f6fd-5e31-44d8-98fe-951096870ef5_8\010aefdc-4558-4a12-8ed0-b6a841e27666_PreDetectScript.error]LOG]!><time="11:32:59.4530181" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[C:\Windows\IMECache\HealthScripts\5e45f6fd-5e31-44d8-98fe-951096870ef5_8\010aefdc-4558-4a12-8ed0-b6a841e27666_PreDetectScript.timeout]LOG]!><time="11:32:59.4530181" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[C:\Windows\IMECache\HealthScripts\5e45f6fd-5e31-44d8-98fe-951096870ef5_8\010aefdc-4558-4a12-8ed0-b6a841e27666_PreDetectScript.exit]LOG]!><time="11:32:59.4540181" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[Prepare to run Powershell Script ..]LOG]!><time="11:32:59.4580465" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[cmd line for running powershell is -NoProfile -executionPolicy bypass -file  "C:\Windows\IMECache\HealthScripts\5e45f6fd-5e31-44d8-98fe-951096870ef5_8\detect.ps1" <ScriptParams not logged for remediation scripts>]LOG]!><time="11:32:59.4590364" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[runAs32BitOn64 = False, so Disable Wow64FsRedirection]LOG]!><time="11:32:59.4600437" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[PowerShell path is C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe]LOG]!><time="11:32:59.4610392" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[[Executor] created powershell with process id 2752]LOG]!><time="11:32:59.4831140" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[Powershell exit code is 1]LOG]!><time="11:33:00.3929300" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[length of out=17]LOG]!><time="11:33:00.3939299" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[length of error=2]LOG]!><time="11:33:00.3949305" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[error from script =
+]LOG]!><time="11:33:00.3959453" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[Powershell script is failed to execute]LOG]!><time="11:33:00.3969292" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[write output done. output = expired-state
+
+, error = 
+]LOG]!><time="11:33:00.3989354" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[Revert Wow64FsRedirection]LOG]!><time="11:33:00.4009508" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[ExecutorLog AgentExecutor gets invoked]LOG]!><time="11:54:38.5369510" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[Creating command line parser, name delimiter is - and value separator is  .]LOG]!><time="11:54:38.5469521" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[Getting Ordered Parameters]LOG]!><time="11:54:38.5479763" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[Parsing Ordered Parameters.]LOG]!><time="11:54:38.5509658" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">
+<![LOG[Adding argument toast with value ToastDownloadingMessage to the named argument list.]LOG]!><time="11:54:38.5519511" date="3-24-2026" component="AgentExecutor" context="" type="1" thread="1" file="">

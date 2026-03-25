@@ -105,6 +105,9 @@ fn parse_line(line: &str, file_path: &str) -> Option<LogEntry> {
         file_path: file_path.to_string(),
         timezone_offset: None,
         error_code_spans: Vec::new(),
+                    ip_address: None,
+                    host_name: None,
+                    mac_address: None,
     })
 }
 
@@ -268,6 +271,9 @@ fn fallback_entry(id: u64, line_number: u32, line: &str, file_path: &str) -> Log
         file_path: file_path.to_string(),
         timezone_offset: None,
         error_code_spans: Vec::new(),
+                    ip_address: None,
+                    host_name: None,
+                    mac_address: None,
     }
 }
 

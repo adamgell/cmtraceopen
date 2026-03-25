@@ -112,6 +112,7 @@ pub(crate) fn build_timestamp(
 
 pub(crate) fn severity_from_type_field(type_value: Option<u32>, message: &str) -> Severity {
     match type_value {
+        Some(0) => Severity::Info, // PSADT v4 Success type — treated as Info
         Some(2) => Severity::Warning,
         Some(3) => Severity::Error,
         Some(_) => Severity::Info,
@@ -119,8 +120,23 @@ pub(crate) fn severity_from_type_field(type_value: Option<u32>, message: &str) -
     }
 }
 
+/// Cache for thread display strings. Thread IDs repeat heavily in log files
+/// (typically 5-20 unique threads across thousands of entries), so caching
+/// avoids a `format!()` allocation per line.
 pub(crate) fn format_thread_display(thread: u32) -> String {
-    format!("{} (0x{:04X})", thread, thread)
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+
+    thread_local! {
+        static CACHE: RefCell<HashMap<u32, String>> = RefCell::new(HashMap::new());
+    }
+
+    CACHE.with(|cache| {
+        let mut map = cache.borrow_mut();
+        map.entry(thread)
+            .or_insert_with(|| format!("{} (0x{:04X})", thread, thread))
+            .clone()
+    })
 }
 
 pub fn parse_content(
@@ -177,6 +193,9 @@ pub fn parse_lines(lines: &[&str], file_path: &str) -> (Vec<LogEntry>, u32) {
                     file_path: file_path.to_string(),
                     timezone_offset: Some(parsed.timezone_offset),
                     error_code_spans: Vec::new(),
+                    ip_address: None,
+                    host_name: None,
+                    mac_address: None,
                 });
                 id_counter += 1;
             }
@@ -198,6 +217,9 @@ pub fn parse_lines(lines: &[&str], file_path: &str) -> (Vec<LogEntry>, u32) {
                     file_path: file_path.to_string(),
                     timezone_offset: None,
                     error_code_spans: Vec::new(),
+                    ip_address: None,
+                    host_name: None,
+                    mac_address: None,
                 });
                 id_counter += 1;
                 errors += 1;

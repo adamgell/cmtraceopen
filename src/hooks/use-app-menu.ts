@@ -10,8 +10,7 @@ interface AppMenuActionPayload {
   action: string;
   category: string;
   trigger: string;
-  preset_id: string | null;
-  platform: string | null;
+  source_id: string | null;
 }
 
 export function useAppMenu() {
@@ -22,6 +21,7 @@ export function useAppMenu() {
     showFindDialog,
     showFilterDialog,
     showErrorLookupDialog,
+    showEvidenceBundleDialog,
     showAboutDialog,
     showAccessibilityDialog,
     togglePauseResume,
@@ -57,6 +57,9 @@ export function useAppMenu() {
           case "show_error_lookup":
             showErrorLookupDialog();
             return;
+          case "show_evidence_bundle":
+            showEvidenceBundleDialog();
+            return;
           case "toggle_pause":
             togglePauseResume();
             return;
@@ -75,12 +78,15 @@ export function useAppMenu() {
           case "show_accessibility_settings":
             showAccessibilityDialog();
             return;
-          case "load_known_source_preset": {
-            await openKnownSourceCatalogAction({
-              presetMenuId: payload.preset_id,
-              menuId: payload.menu_id,
-              trigger: payload.trigger || "native-menu.log-preset-selected",
-            });
+          case "open_known_source": {
+            if (payload.source_id) {
+              await openKnownSourceCatalogAction({
+                sourceId: payload.source_id,
+                trigger: payload.trigger || "native-menu.known-source",
+              });
+            } else {
+              console.warn("[app-menu] open_known_source received without source_id", { payload });
+            }
             return;
           }
           default:
@@ -120,6 +126,7 @@ export function useAppMenu() {
     showAccessibilityDialog,
     showAboutDialog,
     showErrorLookupDialog,
+    showEvidenceBundleDialog,
     showFilterDialog,
     showFindDialog,
     toggleDetailsPane,

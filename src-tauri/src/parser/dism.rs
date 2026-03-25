@@ -140,6 +140,9 @@ fn build_entry_from_caps(caps: &regex::Captures<'_>, file_path: &str) -> Option<
         file_path: file_path.to_string(),
         timezone_offset: None,
         error_code_spans: Vec::new(),
+                    ip_address: None,
+                    host_name: None,
+                    mac_address: None,
     })
 }
 
@@ -181,6 +184,9 @@ fn fallback_entry(id: u64, line_number: u32, line: &str, file_path: &str) -> Log
         file_path: file_path.to_string(),
         timezone_offset: None,
         error_code_spans: Vec::new(),
+                    ip_address: None,
+                    host_name: None,
+                    mac_address: None,
     }
 }
 
