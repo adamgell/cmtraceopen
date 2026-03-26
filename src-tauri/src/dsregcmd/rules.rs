@@ -1653,7 +1653,7 @@ pub fn build_extended_diagnostics(
     if let Some(enrollment) = result.enrollment_evidence.as_ref() {
         let is_joined = result.facts.join_state.azure_ad_joined == Some(true);
 
-        if enrollment.enrollment_count == 0 && is_joined {
+        if enrollment.enrollment_count == 0 && is_joined && result.derived.mdm_enrolled != Some(true) {
             diagnostics.push(issue(
                 "enrollment-missing-on-joined",
                 IntuneDiagnosticSeverity::Warning,
@@ -2988,5 +2988,62 @@ mod tests {
         // Cross-reference should NOT upgrade because GUIDs don't match
         apply_enrollment_cross_reference(&mut result);
         assert_eq!(result.derived.mdm_enrolled, None, "should stay None when GUIDs don't match");
+    }
+
+    /// Regression: on a joined device with enrollment_count == 0 but cross-reference
+    /// confirming MDM, the "enrollment-missing-on-joined" warning must NOT fire.
+    const JOINED_NO_MDM_URLS_SAMPLE: &str = r#"
+ AzureAdJoined : YES
+ DomainJoined : NO
+ WorkplaceJoined : NO
+ TenantId : 11111111-2222-3333-4444-555555555555
+ DeviceId : abcdefab-1111-2222-3333-abcdefabcdef
+ AzureAdPrt : YES
+ AzureAdPrtUpdateTime : 2025-03-10 05:00:00.000 UTC
+"#;
+
+    #[test]
+    fn enrollment_missing_warning_suppressed_when_cross_reference_confirms_mdm() {
+        use crate::dsregcmd::models::{
+            DsregcmdEnrollmentEntry, DsregcmdEnrollmentEvidence,
+            DsregcmdScheduledTaskEvidence,
+        };
+        use super::{apply_enrollment_cross_reference, build_extended_diagnostics};
+
+        let facts = parse_dsregcmd(JOINED_NO_MDM_URLS_SAMPLE).expect("parse sample");
+        let mut result = analyze_facts(facts, JOINED_NO_MDM_URLS_SAMPLE);
+
+        // enrollment_count is 0 in registry evidence, but scheduled tasks have matching GUIDs
+        result.enrollment_evidence = Some(DsregcmdEnrollmentEvidence {
+            enrollment_count: 0,
+            enrollments: vec![DsregcmdEnrollmentEntry {
+                guid: Some("{AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE}".to_string()),
+                upn: Some("user@contoso.com".to_string()),
+                provider_id: Some("MS DM Server".to_string()),
+                enrollment_state: Some(1),
+            }],
+        });
+        result.scheduled_task_evidence = Some(DsregcmdScheduledTaskEvidence {
+            enterprise_mgmt_guids: vec![
+                "{AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE}".to_string(),
+            ],
+        });
+
+        apply_enrollment_cross_reference(&mut result);
+        assert_eq!(result.derived.mdm_enrolled, Some(true));
+
+        let extended = build_extended_diagnostics(&result);
+
+        // The cross-reference info diagnostic SHOULD fire
+        assert!(
+            extended.iter().any(|d| d.id == "mdm-confirmed-via-registry"),
+            "should fire mdm-confirmed-via-registry diagnostic"
+        );
+
+        // The enrollment-missing warning should NOT fire — MDM was confirmed
+        assert!(
+            !extended.iter().any(|d| d.id == "enrollment-missing-on-joined"),
+            "enrollment-missing-on-joined should be suppressed when cross-reference confirms MDM"
+        );
     }
 }
