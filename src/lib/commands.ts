@@ -263,11 +263,13 @@ export interface CollectionResult {
 
 export async function collectDiagnostics(
   requestId: string,
-  outputRoot?: string | null
+  outputRoot?: string | null,
+  enabledFamilies?: string[] | null,
 ): Promise<CollectionResult> {
   return invokeCommand<CollectionResult>("collect_diagnostics", {
     requestId,
     outputRoot: outputRoot ?? null,
+    enabledFamilies: enabledFamilies ?? null,
   });
 }
 
