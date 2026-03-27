@@ -14,6 +14,8 @@ import { AboutDialog } from "../dialogs/AboutDialog";
 import { AccessibilityDialog } from "../dialogs/AccessibilityDialog";
 import { EvidenceBundleDialog } from "../dialogs/EvidenceBundleDialog";
 import { FileAssociationPromptDialog } from "../dialogs/FileAssociationPromptDialog";
+import { CollectDiagnosticsDialog } from "../dialogs/CollectDiagnosticsDialog";
+import { CollectionCompleteDialog } from "../dialogs/CollectionCompleteDialog";
 import { IntuneDashboard } from "../intune/IntuneDashboard";
 import { NewIntuneWorkspace } from "../intune/NewIntuneWorkspace";
 import { DsregcmdWorkspace } from "../dsregcmd/DsregcmdWorkspace";
@@ -80,6 +82,10 @@ export function AppShell() {
 
   const activeTabIndex = useUiStore((s) => s.activeTabIndex);
   const collectionProgress = useUiStore((s) => s.collectionProgress);
+  const collectionResult = useUiStore((s) => s.collectionResult);
+  const setCollectionResult = useUiStore((s) => s.setCollectionResult);
+  const showCollectDiagnosticsDialog = useUiStore((s) => s.showCollectDiagnosticsDialog);
+  const setShowCollectDiagnosticsDialog = useUiStore((s) => s.setShowCollectDiagnosticsDialog);
 
   useCollectionProgressListener();
 
@@ -413,49 +419,37 @@ export function AppShell() {
 
       <StatusBar />
 
-      {collectionProgress && (
+      {collectionProgress && collectionProgress.completedItems < collectionProgress.totalItems && (
         <div
           style={{
-            position: "fixed",
-            inset: 0,
             display: "flex",
-            flexDirection: "column",
             alignItems: "center",
-            justifyContent: "center",
-            background: "rgba(0, 0, 0, 0.6)",
-            zIndex: 9999,
-            gap: "16px",
-            padding: "32px",
+            gap: "10px",
+            padding: "6px 16px",
+            backgroundColor: tokens.colorNeutralBackground3,
+            borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
+            fontSize: "12px",
+            color: tokens.colorNeutralForeground2,
           }}
         >
-          <Spinner size="large" />
-          <div style={{ width: "100%", maxWidth: "400px" }}>
-            <ProgressBar
-              thickness="large"
-              color="brand"
-              value={collectionProgress.totalItems > 0 ? collectionProgress.completedItems / collectionProgress.totalItems : undefined}
-            />
-          </div>
-          <div
-            style={{
-              fontSize: "14px",
-              fontWeight: 600,
-              color: tokens.colorNeutralForegroundOnBrand,
-            }}
-          >
-            {collectionProgress.message}
-          </div>
-          {collectionProgress.totalItems > 0 && (
+          <Spinner size="tiny" />
+          <span>Collecting diagnostics…</span>
+          <div style={{ flex: 1, height: "4px", backgroundColor: tokens.colorNeutralBackground5, borderRadius: "2px", overflow: "hidden" }}>
             <div
               style={{
-                fontSize: "12px",
-                color: tokens.colorNeutralForegroundOnBrand,
-                opacity: 0.8,
+                width: collectionProgress.totalItems > 0
+                  ? `${(collectionProgress.completedItems / collectionProgress.totalItems) * 100}%`
+                  : "0%",
+                height: "100%",
+                backgroundColor: tokens.colorBrandBackground,
+                borderRadius: "2px",
+                transition: "width 0.3s ease",
               }}
-            >
-              {collectionProgress.completedItems} / {collectionProgress.totalItems} artifacts
-            </div>
-          )}
+            />
+          </div>
+          <span style={{ color: tokens.colorNeutralForeground3, whiteSpace: "nowrap" }}>
+            {collectionProgress.completedItems} / {collectionProgress.totalItems}
+          </span>
         </div>
       )}
 
@@ -484,6 +478,14 @@ export function AppShell() {
       <FileAssociationPromptDialog
         isOpen={showFileAssociationPrompt}
         onClose={() => setShowFileAssociationPrompt(false)}
+      />
+      <CollectDiagnosticsDialog
+        isOpen={showCollectDiagnosticsDialog}
+        onClose={() => setShowCollectDiagnosticsDialog(false)}
+      />
+      <CollectionCompleteDialog
+        result={collectionResult}
+        onClose={() => setCollectionResult(null)}
       />
     </div>
   );

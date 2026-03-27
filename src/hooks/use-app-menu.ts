@@ -1,8 +1,6 @@
-import { useEffect, useRef, useCallback } from "react";
+import { useEffect } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { useAppActions } from "../components/layout/Toolbar";
-import { collectDiagnostics } from "../lib/commands";
-import { loadPathAsLogSource } from "../lib/log-source";
 import { useUiStore } from "../stores/ui-store";
 
 const MENU_EVENT_APP_ACTION = "app-menu-action";
@@ -32,37 +30,6 @@ export function useAppMenu() {
     toggleDetailsPane,
     toggleInfoPane,
   } = useAppActions();
-
-  const collectingRef = useRef(false);
-
-  const handleCollectDiagnostics = useCallback(async () => {
-    if (collectingRef.current) {
-      console.warn("[app-menu] diagnostics collection already in progress");
-      return;
-    }
-
-    collectingRef.current = true;
-    const setCollectionProgress = useUiStore.getState().setCollectionProgress;
-
-    const requestId = `collect-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    setCollectionProgress({ requestId, message: "Starting collection...", completedItems: 0, totalItems: 0, currentItem: null });
-
-    try {
-      const result = await collectDiagnostics(requestId);
-      setCollectionProgress(null);
-      console.info("[app-menu] diagnostics collection complete", result);
-
-      // Auto-open the bundle in the log workspace.
-      if (result.bundlePath) {
-        await loadPathAsLogSource(result.bundlePath, { preferFolder: true });
-      }
-    } catch (error) {
-      setCollectionProgress(null);
-      console.error("[app-menu] diagnostics collection failed", { error });
-    } finally {
-      collectingRef.current = false;
-    }
-  }, []);
 
   useEffect(() => {
     let disposed = false;
@@ -113,7 +80,7 @@ export function useAppMenu() {
             showAccessibilityDialog();
             return;
           case "collect_diagnostics":
-            await handleCollectDiagnostics();
+            useUiStore.getState().setShowCollectDiagnosticsDialog(true);
             return;
           case "open_known_source": {
             if (payload.source_id) {
@@ -156,7 +123,6 @@ export function useAppMenu() {
         });
     };
   }, [
-    handleCollectDiagnostics,
     openKnownSourceCatalogAction,
     openSourceFileDialog,
     openSourceFolderDialog,
