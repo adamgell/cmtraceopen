@@ -4,6 +4,34 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-03-28
+
+### Highlights
+
+First stable release. CMTrace Open 1.0.0 adds a Diagnostics Collection workspace (Windows-only) for gathering Intune device diagnostics, deeper Windows Setup log analysis with four new structured columns, a fix for the 4-hour timestamp display offset in Intune IME logs, and a TypeScript 6.0 upgrade.
+
+### Added
+
+- **Diagnostics Collection workspace** (Windows-only): New "Collect Diagnostics" command in the Tools menu opens a dialog with category presets (Enrollment, Win32 Apps, Policies, etc.), a full category tree for fine-grained selection, live progress tracking, and a completion summary with per-category gap detection.
+- **GUID-to-app-name registry**: Consolidated App/GUID resolution with a serializable registry exposed to the frontend for richer app name display in the Intune workspace.
+- **Panther parser — four new columns**: `result_code`, `gle_code`, `setup_phase`, and `operation_name` extracted from Windows Setup (`setupact.log` / `setuperr.log`) message text and surfaced as detail columns.
+- **Panther parser — source and thread enrichment**: `source_file` populated from `[exe]` bracketed tags and `Class::Method(line):` patterns in message text; `thread` populated from DISM `TID=` fields.
+- **InfoPane metadata row**: When a selected log entry has a result code, GLE code, setup phase, or operation name, a compact summary line is shown at the top of the detail pane.
+
+### Fixed
+
+- **IME log timestamp display** (4-hour offset): Intune IME logs omit the timezone offset from the `time=` field, causing timestamps to be stored as UTC and displayed offset by the local UTC difference (e.g., 4 hours early for EDT users). The parser now falls back to the machine's local timezone when no offset is present.
+- **CCM/SCCM log timestamp display**: Timestamps in logs that embed a timezone offset (e.g., `+240` for UTC+4) are now correctly converted to UTC before display.
+
+### Changed
+
+- **TypeScript 6.0**: Frontend toolchain upgraded from TypeScript 5.9.3 to 6.0.2.
+
+### Build
+
+- Hardened Windows build prerequisites script (`Install-CMTraceOpenBuildPrereqs.ps1`) for fresh machines where Visual Studio is absent — resolves null-array crash and `vswhere.exe` not-found errors.
+- Winget package detection now queries `winget list` once and checks all packages against a cached in-memory set, eliminating N individual lookups.
+
 ## [0.6.0] - 2026-03-24
 
 ### Highlights
