@@ -8,33 +8,136 @@ All notable changes to this project will be documented in this file.
 
 ### Highlights
 
-First stable release. CMTrace Open 1.0.0 ships multi-file open and drag-drop, an inline Ctrl+F find bar with regex support, a Diagnostics Collection workspace (Windows-only), deeper Windows Setup log analysis with four new structured columns, a fix for the 4-hour timestamp display offset in Intune IME logs, and improved DSRegCmd MDM enrollment detection.
+First stable release. Since v0.5.0, CMTrace Open has received a complete UX overhaul with eight themes, a multi-tab file browser, dynamic parser-aware columns, five new log parsers, an embedded 411-code error intelligence layer, a Software Deployment analysis workspace, a Windows Diagnostics Collection tool, multi-file open and drag-drop, an inline Ctrl+F find bar, timezone-correct timestamps across all parsers, and deeper Windows Setup and DSRegCmd analysis.
 
-### Added
+### Workspaces
 
-- **Multi-file open**: The file open dialog now supports selecting multiple log files at once. Drag-and-dropping multiple files merges them into a unified view. Launching the app from the command line with multiple paths loads all files simultaneously.
-- **Inline find bar** (Ctrl+F): A persistent find bar slides in at the bottom of the log workspace. Supports plain-text and regex search with live match highlighting. Navigate matches with F3 / Shift+F3. Invalid regex patterns display a clear inline error rather than failing silently.
-- **Diagnostics Collection workspace** (Windows-only): New "Collect Diagnostics" command in the Tools menu opens a dialog with category presets (Full, Intune + Autopilot, Networking, Security, Quick) and a granular family-level category tree. Collection runs concurrently and emits real-time progress events. A completion summary shows per-type artifact counts (logs, registry, event logs, exports, commands), total duration, and gap details. The bundle output folder can be opened directly into the log workspace from the summary dialog. The embedded profile covers 32 log patterns, 61 registry keys, 42 event log channels, and 30 command outputs across Intune, Autopilot, networking, security, BitLocker, Windows Update, ConfigMgr, and general diagnostics categories.
-- **GUID-to-app-name registry**: App/GUID resolution is now consolidated into a single ranked registry (by source confidence: ApplicationName > NameField > SetUpFilePath) and serialized to the frontend. Download stats and event tracking both draw from the same source, eliminating duplicate lookups and surfacing richer app names in the Intune workspace.
-- **Panther parser — four new columns**: `result_code`, `gle_code`, `setup_phase`, and `operation_name` are extracted from Windows Setup (`setupact.log` / `setuperr.log`) message text using targeted regex patterns and surfaced as detail columns.
-- **Panther parser — source and thread enrichment**: `source_file` is populated from `[exe.exe]` bracketed tags and `CClassName::MethodName(line):` patterns in message text. `thread` is populated from DISM `TID=` fields. `Perf`-level messages are now correctly classified as Info.
-- **InfoPane metadata row**: When a selected log entry has a result code, GLE code, setup phase, or operation name, a compact `Result | GLE | Phase | Op` summary line is shown at the top of the detail pane.
+- **Software Deployment workspace**: Analyze a deployment folder (MSI, PSADT, WiX/Burn logs) in one click. `analyze_deployment_folder` scans recursively, classifies each log's format and outcome, extracts exit codes, app name, version, deploy type, and timestamps, and generates per-entry error summaries with code lookups. Deployment errors appear as rich cards with an "Open in Log Viewer" button that scrolls directly to the offending line.
+- **Diagnostics Collection workspace** (Windows-only): "Collect Diagnostics" in the Tools menu concurrently collects 32 log patterns, 61 registry keys, 42 event log channels, 6 file exports, and 30 command outputs across Intune, Autopilot, Networking, Security, BitLocker, Windows Update, ConfigMgr, and general categories. A preset picker (Full / Intune+Autopilot / Networking / Security / Quick) and a granular family-level tree let users scope the collection before running. Real-time progress events drive a visual overlay. A completion summary shows per-type artifact counts, total duration, and gap details; the resulting bundle folder opens directly into the log workspace with one click.
+- **DSRegCmd — MDM enrollment cross-reference**: The workspace now reads scheduled tasks under `\Microsoft\Windows\EnterpriseMgmt\` and cross-references their GUIDs against `HKLM\SOFTWARE\Microsoft\Enrollments\{GUID}` (checking `EnrollmentState=1`). Devices that are genuinely enrolled but whose `dsregcmd /status` output lacks MDM URLs no longer trigger a false "enrollment missing" warning.
+
+### Log Parsing
+
+#### New parsers (since v0.5.0)
+
+- **Windows DHCP Server**: Dedicated parser for `DhcpSrvLog-*.log` and `DhcpV6SrvLog-*.log`, detected via header signature. Surfaces IP Address, Host Name, and MAC Address as dedicated columns.
+- **macOS Intune MDM Daemon**: Parses pipe-delimited `/Library/Logs/Microsoft/Intune/IntuneMDMDaemon*.log`. Extracts process, severity, thread, and sub-component.
+- **WiX/Burn bootstrapper**: Handles `[PID:TID][ISO-timestamp]sNNN:` format logs (vc_redist, .NET runtime, etc.).
+- **MSI verbose log**: Handles ~12 distinct line patterns — engine messages, action start/end, property dumps, and `MainEngineThread` return values. Embeds MSI exit code descriptions (1000–3002).
+- **PSADT Legacy**: Parses `[timestamp] [section] [source] [severity] :: message` logs from PSAppDeployToolkit v4. Embeds PSADT exit codes (60001–60012).
+
+#### Parser enrichment
+
+- **Dynamic columns**: Column set is now auto-derived from the detected parser. Plain text shows only Message; CCM/IME shows Component, Date/Time, Thread, and Source; DHCP shows IP, Host, and MAC; etc. Details-mode columns can be toggled independently.
+- **Severity icon column**: Colored dot (red/yellow/gray) as the leftmost column, always visible regardless of which other columns are shown.
+- **Panther (Windows Setup) — four new detail columns**: `result_code`, `gle_code`, `setup_phase`, and `operation_name` extracted from `setupact.log` / `setuperr.log` message text and surfaced in the column grid and InfoPane.
+- **Panther — source and thread enrichment**: `source_file` populated from `[exe.exe]` bracketed tags and `CClassName::MethodName(line):` patterns; `thread` populated from DISM `TID=` fields; `Perf`-level messages classified as Info.
+- **IME subsystem enrichment**: `[Subsystem]` prefixes (Win32App, PowerShell, Flighting, etc.) extracted from IME log messages into the Source column.
+- **InfoPane metadata row**: Entries with a result code, GLE code, setup phase, or operation name show a compact `Result | GLE | Phase | Op` line at the top of the detail pane.
+
+#### Timestamp / timezone fixes
+
+- **IME logs — 4-hour offset fixed**: IME logs write timestamps without a timezone suffix; the parser now falls back to the machine's local UTC offset instead of treating local time as UTC.
+- **CCM/SCCM/Simple/ISO logs**: Embedded timezone offsets (e.g. `+240` for UTC-4) are now correctly applied when converting log-local time to UTC for display. Extreme or malformed offsets fall back safely to UTC.
+
+### Error Intelligence
+
+- **Inline error code highlighting**: After parsing, entries are scanned for `0x`-prefixed codes. Matching codes are underlined; selecting the entry shows the decoded description, category, and HRESULT facility breakdown in the InfoPane.
+- **411-code error database**: Embedded database covers Windows/Win32 error codes, HRESULT facilities, ConfigMgr client errors (0x87D0xxxx / 0x87D1xxxx), and Windows Update agent codes (0x8024xxxx). Searchable via the Error Lookup dialog.
+- **HRESULT decomposition**: WIN32 error codes are decomposed into facility + status for fallback lookup when not in the primary database.
+- **Error Lookup dialog — rebuilt**: Replaced the native dialog with a Fluent UI panel that includes a search bar with live substring matching, result list, category badges, and lookup history.
+- **Error code search IPC**: `search_error_codes` backend command with substring search exposed to the frontend.
+
+### UI & Chrome
+
+#### Themes
+
+- **8 named themes**: Classic CMTrace, Dark, Light, Dracula, Nord, Solarized Dark, High Contrast, and Hotdog Stand — each with custom token palette and typography.
+- **Toolbar theme picker**: Real-time theme switching from a dropdown in the upper-right toolbar.
+- **Fluent UI token migration**: 86 hardcoded hex colors migrated to Fluent UI design tokens, enabling consistent dark-mode and theme support across all dialogs (Accessibility, Filter, Error Lookup, About, File Association).
+
+#### Navigation & layout
+
+- **Log file tabs**: A tab strip below the toolbar shows every open file. Switching tabs is instant (zero re-parse — entries are cached in memory). Overflow dropdown handles more than ~6 tabs. Tab count shown in the status bar.
+- **Workspace dropdown**: Replaced the five standalone workspace buttons with a single compact dropdown.
+- **Platform-aware workspaces**: On startup the app detects the host OS via `tauri-plugin-os` and filters the workspace list accordingly. macOS hides DSRegCmd and Deployment; Linux hides those plus diagnostics-only views. An invalid persisted workspace auto-corrects to Log Explorer.
+- **Collapsible sidebar**: Chevron button or Ctrl+B collapses the sidebar to a 36 px icon strip. State persists across sessions.
+- **Pause / Refresh / Streaming footer**: These controls moved from the toolbar into a dedicated sidebar footer, freeing toolbar space.
+
+#### Columns
+
+- **Resizable columns**: Drag any column header's right edge to resize. Minimum/maximum widths enforced. Widths persist to `localStorage`. Resize grab zone widened to 12 px with a visible grip indicator.
+- **Reorderable columns**: Drag column headers left/right to reorder. Drop indicator shows the insertion point. Order persists.
+
+#### Known Sources & menus
+
+- **Dynamic Known Log Sources menu**: Populated at runtime from the full source catalog, grouped by Family → Group → Source. Platform-specific sources (Wi-Fi, Firewall on macOS; IME, security, deployment on Windows) are filtered per OS.
+- **Wi-Fi and Firewall log sources** added for macOS.
+- **PatchMyPC log sources** added for Windows.
+- **Fluent UI menus**: Replaced native `<select>` elements in Open and Known Sources dropdowns with Fluent UI Menu/Dropdown for consistent styling and dark-mode support.
+- **Bundle Summary** added to the Tools menu.
+
+#### Font system
+
+- **Font family picker**: Choose any system font in the Accessibility dialog. Selection applies to the entire app and persists. Powered by `font-kit` for cross-platform system font enumeration.
+- **CSS custom property font system**: All hardcoded font strings replaced with `var(--font-family)` and centralized constants.
+
+#### Miscellaneous UX
+
+- **Show/Hide Details toggle**: Toolbar button hides detail-only columns while keeping severity, timestamp, and message visible.
+- **App icon**: Updated to campfire logo with splash screen.
+- **macOS code signing and notarization**: Release workflow signs and notarizes macOS artifacts for Gatekeeper compatibility.
+
+### Search
+
+- **Inline find bar** (Ctrl+F): A persistent find bar at the bottom of the log workspace replaces the old modal dialog. Features: live search-as-you-type with hit count; plain-text and regex mode with inline red error feedback for invalid patterns; match case toggle; Prev/Next navigation (F3 / Shift+F3 / Enter / Shift+Enter); Escape to close. Searches across all visible columns. Matches highlighted in all rows; current match uses selection highlight. Navigation finds the nearest match after the currently selected entry rather than always jumping to the first result. Debounced at 150 ms to prevent jank on fast typing.
+
+### File Handling
+
+- **Multi-file open**: The file open dialog accepts multiple files via Shift/Ctrl+click. All selected files are merged into a single aggregate view.
+- **Multi-file drag-drop**: Drop multiple files at once to merge them (previously only the first was loaded).
+- **CLI multi-file**: `cmtraceopen file1.log file2.log ...` opens all paths as a merged aggregate.
+- **OS file association multi-file**: Opening multiple `.log` / `.lo_` files together via Explorer passes all paths to the app.
+- Multi-file open is gated to the Log workspace; dropping files while in another workspace loads them without switching away.
+
+### Performance
+
+- **Zero-allocation severity detection**: Replaced `.to_lowercase()` with byte-level ASCII case folding — eliminates one heap allocation per log line.
+- **Cached thread display**: `format_thread_display()` uses a thread-local `HashMap` — ~15 allocations per file instead of ~30 K.
+- **Combined Simple parser regex**: Timestamp and thread regexes merged into a single pass.
+- **Error code pre-check**: Fast `"0x"` substring scan before running the full regex on every line.
+- **Timestamped format caching**: Detected sub-format reused for subsequent lines, avoiding up to 3 wasted regex attempts per line.
+- **Batch folder parse**: Single IPC call parses all files in a folder via Rayon parallelism (replaces sequential per-file calls).
+- **In-memory tab cache**: Parsed entries cached per file — tab switches are instant with zero re-parse.
+- **Progressive folder load**: Batch size of 4 with a live progress bar and full-screen overlay keeps the UI responsive during large folder loads.
+- **GUID lookup optimization**: DSRegCmd workspace precomputes a `Set`/`Map` for GUID lookups (O(1) per entry instead of O(n·m) scan).
 
 ### Fixed
 
-- **IME log timestamp display** (4-hour offset): Intune IME logs omit the timezone offset from the `time=` field, causing timestamps to be stored as UTC and displayed shifted by the local UTC offset (e.g., 4 hours early for EDT users). The parser now falls back to the machine's local timezone when no offset is present in the log.
-- **CCM/SCCM log timestamp display**: Timestamps in logs that embed a timezone offset (e.g., `+240` for UTC-4 in Windows bias convention) are now correctly converted to UTC before display. Extreme or malformed offsets fall back safely to UTC rather than panicking.
-- **DSRegCmd MDM enrollment detection**: The DSRegCmd workspace now cross-references scheduled tasks under `\Microsoft\Windows\EnterpriseMgmt\` against `HKLM\SOFTWARE\Microsoft\Enrollments\{GUID}` (checking `EnrollmentState=1`) to confirm active enrollment when `dsregcmd /status` output lacks MDM URLs. This eliminates false "enrollment missing" warnings on enrolled devices.
-- **Log row scroll suppression on click**: Clicking an already-visible row no longer causes an unexpected scroll jump. Scroll suppression now only activates when a click changes the selected entry, leaving keyboard and programmatic navigation unaffected.
+- Log row scroll no longer jumps when clicking an already-visible row; suppression only activates when the click changes the selected entry.
+- Tab strip overflow dropdown no longer clipped by `overflow: hidden`.
+- Sidebar routing for Deployment and macOS workspaces (was falling through to DSRegCmd).
+- Burn log classification: logs detected as Timestamped/Plain now re-classified as Burn when content matches.
+- Burn exit code extraction: handles hex-format codes and surfaces previously-hidden unknown files.
+- Deployment workspace: no longer navigates away when a folder is opened while already in the workspace.
+- Auto-scroll behavior: only suppressed when a click changes selection; keyboard/programmatic navigation unaffected.
+- `NeXTSTEP` payload parser: handles quoted keys, arrays-of-dicts, and nested arrays in macOS configuration profiles.
+- `Invalid Date` display in the macOS diagnostics packages tab.
+- macOS script classification: all `NSURLSession` task lifecycle events classified as noise; only summaries kept.
+- False hex matches prevented in GUID error-code lookups.
+- Clipboard read errors handled gracefully.
+- Row height calculation corrected to prevent text overlap at larger font sizes.
+- GUID-to-app-name deduplication: `download_stats` and `event_tracker` now share a single `GuidRegistry` source of truth, eliminating duplicate lookups and inconsistent app name resolution.
+- `sort_unstable_by_key` used where clippy previously warned.
 
-### Changed
+### Build & Dependencies
 
-- **TypeScript 6.0**: Frontend toolchain upgraded from TypeScript 5.9.3 to 6.0.2 with no source changes required.
-
-### Build
-
-- Hardened Windows build prerequisites script (`Install-CMTraceOpenBuildPrereqs.ps1`) for fresh machines where Visual Studio is absent — resolves null-array crash and `vswhere.exe` not-found errors on clean systems.
-- Winget package detection now queries `winget list` once and checks all packages against a cached in-memory set, eliminating N individual subprocess invocations.
+- **TypeScript 6.0**: Upgraded from 5.9.3 → 6.0.2; no source changes required.
+- **macOS signing/notarization**: CI release workflow signs and notarizes macOS arm64 and x64 artifacts.
+- **Windows build prerequisites script hardened** (`Install-CMTraceOpenBuildPrereqs.ps1`): fixes null-array crash and `vswhere.exe` not-found errors on machines without Visual Studio; `winget list` queried once and results cached in a `HashSet` (eliminates N per-package subprocess calls); tolerates "already installed" and "no applicable upgrade" winget exit codes; re-verifies and modifies the C++ workload if the initial install silently skipped components.
+- `tauri-plugin-os` added for runtime platform detection.
+- `font-kit` added for cross-platform system font enumeration.
+- picomatch bumped 4.0.3 → 4.0.4.
 
 ## [0.6.0] - 2026-03-24
 
