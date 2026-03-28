@@ -4,6 +4,7 @@ use std::path::Path;
 use once_cell::sync::Lazy;
 use regex::Regex;
 
+use super::guid_registry::{self, GuidRegistry, GUID_RE};
 use super::ime_parser::ImeLine;
 use super::models::{IntuneEvent, IntuneEventType, IntuneStatus};
 
@@ -136,10 +137,7 @@ static ESP_RE: Lazy<Regex> = Lazy::new(|| {
 });
 static SYNC_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r#"(?i)(?:sync\s+session|check-in|SyncSession)"#).unwrap());
-static GUID_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r#"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})"#)
-        .unwrap()
-});
+// GUID_RE imported from guid_registry
 static ERROR_CODE_RE: Lazy<Regex> = Lazy::new(|| {
     Regex::new(
         r#"(?i)(?:error\s*(?:code)?|exit\s*code(?:\s+of\s+the\s+script)?|hresult|hr|result|return\s*code)\s*(?:is|[=:])\s*(0x[0-9a-fA-F]+|-?\d+)"#,
@@ -280,14 +278,20 @@ impl AppWorkloadMatchFlags {
     }
 }
 
-pub fn extract_events(lines: &[ImeLine], source_file: &str) -> Vec<IntuneEvent> {
+pub fn extract_events(
+    lines: &[ImeLine],
+    source_file: &str,
+    registry: &GuidRegistry,
+) -> Vec<IntuneEvent> {
     let mut events = Vec::new();
     let mut next_id = 0u64;
     let source_kind = classify_source_kind(source_file);
 
     for line in lines {
         if source_kind == ImeSourceKind::AppWorkload {
-            if let Some(event) = extract_appworkload_event(line, source_file, next_id) {
+            if let Some(event) =
+                extract_appworkload_event(line, source_file, next_id, registry)
+            {
                 events.push(event);
                 next_id += 1;
             }
@@ -298,9 +302,18 @@ pub fn extract_events(lines: &[ImeLine], source_file: &str) -> Vec<IntuneEvent> 
             continue;
         };
 
-        let guid = extract_guid(&line.message);
+        // Try primary extract_guid, fall back to guid_registry::extract_app_id
+        let guid = extract_guid(&line.message)
+            .or_else(|| guid_registry::extract_app_id(&line.message));
         let status = determine_status(&line.message, source_kind);
-        let name = build_event_name(&event_type, &guid, &line.message, source_kind);
+        let raw_name = build_event_name(&event_type, &guid, &line.message, source_kind);
+
+        // Inline enrichment: resolve GUID suffix immediately if possible
+        let name = match guid.as_deref() {
+            Some(g) => registry.enrich_event_name(&raw_name, g).unwrap_or(raw_name),
+            None => raw_name,
+        };
+
         let detail = line.message.clone();
 
         events.push(IntuneEvent {
@@ -331,6 +344,7 @@ fn extract_appworkload_event(
     line: &ImeLine,
     source_file: &str,
     next_id: u64,
+    registry: &GuidRegistry,
 ) -> Option<IntuneEvent> {
     let msg = line.message.as_str();
     if contains_any_ascii_case_insensitive(
@@ -363,9 +377,16 @@ fn extract_appworkload_event(
         return None;
     };
 
-    let guid = extract_guid(msg);
+    // Try primary extract_guid, fall back to guid_registry::extract_app_id
+    let guid = extract_guid(msg).or_else(|| guid_registry::extract_app_id(msg));
     let status = determine_appworkload_status(msg, flags);
-    let name = build_appworkload_name(&event_type, &guid, msg, flags);
+    let raw_name = build_appworkload_name(&event_type, &guid, msg, flags);
+
+    // Inline enrichment: resolve GUID suffix immediately if possible
+    let name = match guid.as_deref() {
+        Some(g) => registry.enrich_event_name(&raw_name, g).unwrap_or(raw_name),
+        None => raw_name,
+    };
 
     Some(IntuneEvent {
         id: next_id,
@@ -1219,6 +1240,10 @@ fn parse_event_timestamp(value: &str) -> Option<chrono::DateTime<chrono::Utc>> {
 mod tests {
     use super::*;
 
+    fn empty_registry() -> GuidRegistry {
+        GuidRegistry::new()
+    }
+
     fn line(message: &str, timestamp: &str, line_number: u32) -> ImeLine {
         ImeLine {
             line_number,
@@ -1240,6 +1265,7 @@ mod tests {
                 component: None,
             }],
             "C:/Logs/AppActionProcessor.log",
+            &empty_registry(),
         );
 
         assert_eq!(events.len(), 1);
@@ -1266,6 +1292,7 @@ mod tests {
                 1,
             )],
             "C:/Logs/AppWorkload.log",
+            &empty_registry(),
         );
 
         assert_eq!(events.len(), 1);
@@ -1282,6 +1309,7 @@ mod tests {
                 1,
             )],
             "C:/Logs/AppActionProcessor.log",
+            &empty_registry(),
         );
 
         assert_eq!(events.len(), 1);
@@ -1298,6 +1326,7 @@ mod tests {
                 1,
             )],
             "C:/Logs/AgentExecutor.log",
+            &empty_registry(),
         );
 
         assert_eq!(events.len(), 1);
@@ -1321,6 +1350,7 @@ mod tests {
                 ),
             ],
             "C:/Logs/AgentExecutor.log",
+            &empty_registry(),
         );
 
         assert!(events.is_empty());
@@ -1335,6 +1365,7 @@ mod tests {
                 1,
             )],
             "C:/Logs/ClientHealth.log",
+            &empty_registry(),
         );
 
         assert_eq!(events.len(), 1);
@@ -1352,6 +1383,7 @@ mod tests {
                 1,
             )],
             "C:/Logs/ClientHealth.log",
+            &empty_registry(),
         );
 
         assert!(events.is_empty());
@@ -1366,6 +1398,7 @@ mod tests {
                 1,
             )],
             "C:/Logs/ClientCertCheck.log",
+            &empty_registry(),
         );
 
         assert_eq!(events.len(), 1);
@@ -1383,6 +1416,7 @@ mod tests {
                 1,
             )],
             "C:/Logs/DeviceHealthMonitoring.log",
+            &empty_registry(),
         );
 
         assert_eq!(events.len(), 1);
@@ -1403,6 +1437,7 @@ mod tests {
                 1,
             )],
             "C:/Logs/Sensor.log",
+            &empty_registry(),
         );
 
         assert_eq!(events.len(), 1);
@@ -1420,6 +1455,7 @@ mod tests {
                 1,
             )],
             "C:/Logs/Win32AppInventory.log",
+            &empty_registry(),
         );
 
         assert_eq!(events.len(), 1);
@@ -1437,6 +1473,7 @@ mod tests {
                 1,
             )],
             "C:/Logs/Win32AppInventory.log",
+            &empty_registry(),
         );
 
         assert!(events.is_empty());
@@ -1458,6 +1495,7 @@ mod tests {
                 ),
             ],
             "C:/Logs/IntuneManagementExtension.log",
+            &empty_registry(),
         );
 
         assert_eq!(events.len(), 1);
@@ -1481,6 +1519,7 @@ mod tests {
                 ),
             ],
             "C:/Logs/AppWorkload.log",
+            &empty_registry(),
         );
 
         assert_eq!(events.len(), 1);

@@ -226,6 +226,13 @@ export interface IntuneAnalysisState {
   progress: IntuneAnalysisProgress | null;
 }
 
+export type GuidNameSource = "SetUpFilePath" | "NameField" | "ApplicationName";
+
+export interface GuidRegistryEntry {
+  name: string;
+  source: GuidNameSource;
+}
+
 export interface IntuneAnalysisResult {
   events: IntuneEvent[];
   downloads: DownloadStat[];
@@ -238,6 +245,7 @@ export interface IntuneAnalysisResult {
   repeatedFailures: IntuneRepeatedFailureGroup[];
   evidenceBundle?: EvidenceBundleMetadata | null;
   eventLogAnalysis?: EventLogAnalysis | null;
+  guidRegistry: Record<string, GuidRegistryEntry>;
 }
 
 export interface IntuneResultMetadata {

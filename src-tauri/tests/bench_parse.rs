@@ -28,12 +28,13 @@ fn synthetic_intune_benchmark_fixture_matches_pipeline_counts() {
     assert_eq!(content.len(), bench_file.file_size_bytes, "Expected synthetic IME fixture size to remain stable");
     assert_eq!(lines.len(), bench_file.logical_record_count, "Expected all IME logical records parsed");
 
-    let events = app_lib::intune::event_tracker::extract_events(&lines, &path);
+    let registry = app_lib::intune::guid_registry::GuidRegistry::new();
+    let events = app_lib::intune::event_tracker::extract_events(&lines, &path, &registry);
     assert_eq!(events.len(), bench_file.expected_event_count, "Expected one paired content-download event per app");
 
     let timeline = app_lib::intune::timeline::build_timeline(events);
     assert_eq!(timeline.len(), bench_file.expected_timeline_count, "Expected timeline deduplication to preserve one event per app");
 
-    let downloads = app_lib::intune::download_stats::extract_downloads(&lines, &path);
+    let downloads = app_lib::intune::download_stats::extract_downloads(&lines, &path, &registry);
     assert_eq!(downloads.len(), bench_file.expected_download_count, "Expected one download summary per app");
 }

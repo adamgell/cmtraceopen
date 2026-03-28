@@ -4,9 +4,7 @@ use std::path::Path;
 use once_cell::sync::Lazy;
 use regex::Regex;
 
-use super::guid_registry::{
-    extract_json_field, setup_file_name, APP_ID_JSON_RE, APP_NAME_JSON_RE, SETUP_FILE_JSON_RE,
-};
+use super::guid_registry::{extract_app_id, extract_app_name, is_fallback_name, GuidRegistry};
 use super::ime_parser::ImeLine;
 use super::models::DownloadStat;
 
@@ -68,9 +66,12 @@ static DURATION_RE: Lazy<Regex> = Lazy::new(|| {
     )
     .unwrap()
 });
-// APP_ID_JSON_RE, APP_NAME_JSON_RE, SETUP_FILE_JSON_RE imported from guid_registry
 
-pub fn extract_downloads(lines: &[ImeLine], source_file: &str) -> Vec<DownloadStat> {
+pub fn extract_downloads(
+    lines: &[ImeLine],
+    source_file: &str,
+    registry: &GuidRegistry,
+) -> Vec<DownloadStat> {
     let source_kind = classify_download_source(source_file);
     if source_kind == DownloadSourceKind::Unsupported {
         return Vec::new();
@@ -101,6 +102,7 @@ pub fn extract_downloads(lines: &[ImeLine], source_file: &str) -> Vec<DownloadSt
                 &analysis,
                 timestamp,
                 false,
+                registry,
             ) {
                 downloads.push(stat);
             }
@@ -131,6 +133,7 @@ pub fn extract_downloads(lines: &[ImeLine], source_file: &str) -> Vec<DownloadSt
                 &analysis,
                 timestamp,
                 true,
+                registry,
             ) {
                 downloads.push(stat);
             }
@@ -145,6 +148,7 @@ pub fn extract_downloads(lines: &[ImeLine], source_file: &str) -> Vec<DownloadSt
                 &analysis,
                 timestamp,
                 false,
+                registry,
             ) {
                 downloads.push(stat);
             }
@@ -153,14 +157,25 @@ pub fn extract_downloads(lines: &[ImeLine], source_file: &str) -> Vec<DownloadSt
 
     for partial in active.into_values() {
         if partial.saw_failure_signal || partial.saw_retry_signal {
+            let cid = partial
+                .content_id
+                .clone()
+                .unwrap_or_else(|| "unknown".to_string());
+            let raw_name = partial
+                .display_name
+                .clone()
+                .unwrap_or_else(|| short_id(&cid));
+            let name = if is_fallback_name(&raw_name) {
+                registry
+                    .resolve(&cid)
+                    .map(|n| n.to_string())
+                    .unwrap_or(raw_name)
+            } else {
+                raw_name
+            };
             downloads.push(DownloadStat {
-                content_id: partial
-                    .content_id
-                    .clone()
-                    .unwrap_or_else(|| "unknown".to_string()),
-                name: partial.display_name.clone().unwrap_or_else(|| {
-                    short_id(partial.content_id.as_deref().unwrap_or("unknown"))
-                }),
+                content_id: cid,
+                name,
                 size_bytes: partial.size_bytes.unwrap_or(0),
                 speed_bps: partial.speed_bps.unwrap_or(0.0),
                 do_percentage: partial.do_percentage.unwrap_or(0.0),
@@ -288,52 +303,20 @@ fn classify_download_source(source_file: &str) -> DownloadSourceKind {
 }
 
 fn extract_content_id(msg: &str) -> Option<String> {
-    if let Some(value) = extract_json_field(msg, "\"AppId\":\"", "\"") {
-        return Some(value.to_string());
-    }
-    if let Some(value) = extract_json_field(msg, "\\\"AppId\\\":\\\"", "\\\"") {
-        return Some(value.to_string());
-    }
-
-    CONTENT_ID_RE
-        .captures(msg)
-        .and_then(|captures| captures.get(1))
-        .map(|value| value.as_str().to_string())
-        .or_else(|| {
-            APP_ID_JSON_RE
-                .captures(msg)
-                .and_then(|captures| captures.get(1))
-                .map(|value| value.as_str().to_string())
-        })
+    // Primary: shared extraction from guid_registry (handles AppId, Id, etc.)
+    extract_app_id(msg).or_else(|| {
+        // Fallback: download-specific broader pattern (e.g. "content id: <GUID>")
+        CONTENT_ID_RE
+            .captures(msg)
+            .and_then(|captures| captures.get(1))
+            .map(|value| value.as_str().to_string())
+    })
 }
 
 fn extract_display_name(msg: &str) -> Option<String> {
-    if let Some(value) = extract_json_field(msg, "\"ApplicationName\":\"", "\"") {
-        return Some(value.to_string());
-    }
-    if let Some(value) = extract_json_field(msg, "\\\"ApplicationName\\\":\\\"", "\\\"") {
-        return Some(value.to_string());
-    }
-    if let Some(value) = extract_json_field(msg, "\"SetUpFilePath\":\"", "\"") {
-        return Some(setup_file_name(value));
-    }
-    if let Some(value) = extract_json_field(msg, "\\\"SetUpFilePath\\\":\\\"", "\\\"") {
-        return Some(setup_file_name(value));
-    }
-
-    APP_NAME_JSON_RE
-        .captures(msg)
-        .and_then(|captures| captures.get(1))
-        .map(|value| value.as_str().to_string())
-        .or_else(|| {
-            SETUP_FILE_JSON_RE
-                .captures(msg)
-                .and_then(|captures| captures.get(1))
-                .map(|value| setup_file_name(value.as_str()))
-        })
+    // Delegates to shared extraction in guid_registry (handles ApplicationName, Name, SetUpFilePath)
+    extract_app_name(msg)
 }
-
-// extract_json_field and setup_file_name imported from guid_registry
 
 fn apply_download_analysis(
     download: &mut PartialDownload,
@@ -417,6 +400,7 @@ fn finalize_download(
     analysis: &DownloadLineAnalysis,
     timestamp: Option<&str>,
     success: bool,
+    registry: &GuidRegistry,
 ) -> Option<DownloadStat> {
     let mut partial = partial.unwrap_or_else(|| {
         PartialDownload::new(
@@ -439,12 +423,24 @@ fn finalize_download(
         return None;
     }
 
+    // Resolve display name: use existing name if it's a real name,
+    // otherwise try the GUID registry, otherwise fall back to short ID
+    let raw_name = partial
+        .display_name
+        .clone()
+        .unwrap_or_else(|| short_id(&resolved_content_id));
+    let name = if is_fallback_name(&raw_name) {
+        registry
+            .resolve(&resolved_content_id)
+            .map(|n| n.to_string())
+            .unwrap_or(raw_name)
+    } else {
+        raw_name
+    };
+
     Some(DownloadStat {
-        content_id: resolved_content_id.clone(),
-        name: partial
-            .display_name
-            .clone()
-            .unwrap_or_else(|| short_id(&resolved_content_id)),
+        content_id: resolved_content_id,
+        name,
         size_bytes: partial.size_bytes.unwrap_or(0),
         speed_bps: partial.speed_bps.unwrap_or(0.0),
         do_percentage: partial.do_percentage.unwrap_or(0.0),
@@ -465,6 +461,10 @@ fn short_id(id: &str) -> String {
 mod tests {
     use super::*;
 
+    fn empty_registry() -> GuidRegistry {
+        GuidRegistry::new()
+    }
+
     #[test]
     fn completed_download_is_recorded() {
         let lines = vec![
@@ -484,7 +484,7 @@ mod tests {
             },
         ];
 
-        let downloads = extract_downloads(&lines, "C:/Logs/AppWorkload.log");
+        let downloads = extract_downloads(&lines, "C:/Logs/AppWorkload.log", &empty_registry());
         assert_eq!(downloads.len(), 1);
         assert!(downloads[0].success);
         assert_eq!(downloads[0].size_bytes, 5242880);
@@ -509,7 +509,7 @@ mod tests {
             },
         ];
 
-        let downloads = extract_downloads(&lines, "C:/Logs/AppWorkload.log");
+        let downloads = extract_downloads(&lines, "C:/Logs/AppWorkload.log", &empty_registry());
         assert_eq!(downloads.len(), 1);
         assert!(!downloads[0].success);
     }
@@ -525,7 +525,7 @@ mod tests {
             component: None,
         }];
 
-        let downloads = extract_downloads(&lines, "C:/Logs/AppWorkload.log");
+        let downloads = extract_downloads(&lines, "C:/Logs/AppWorkload.log", &empty_registry());
         assert!(downloads.is_empty());
     }
 
@@ -548,7 +548,7 @@ mod tests {
             },
         ];
 
-        let downloads = extract_downloads(&lines, "C:/Logs/AppWorkload.log");
+        let downloads = extract_downloads(&lines, "C:/Logs/AppWorkload.log", &empty_registry());
         assert_eq!(downloads.len(), 1);
         assert!(!downloads[0].success);
     }
@@ -563,7 +563,7 @@ mod tests {
             component: None,
         }];
 
-        let downloads = extract_downloads(&lines, "C:/Logs/IntuneManagementExtension.log");
+        let downloads = extract_downloads(&lines, "C:/Logs/IntuneManagementExtension.log", &empty_registry());
         assert!(downloads.is_empty());
     }
 
@@ -577,7 +577,7 @@ mod tests {
             component: None,
         }];
 
-        let downloads = extract_downloads(&lines, "C:/Logs/AppWorkload.log");
+        let downloads = extract_downloads(&lines, "C:/Logs/AppWorkload.log", &empty_registry());
         assert!(downloads.is_empty());
     }
 
@@ -600,7 +600,7 @@ mod tests {
             },
         ];
 
-        let downloads = extract_downloads(&lines, "C:/Logs/AppWorkload.log");
+        let downloads = extract_downloads(&lines, "C:/Logs/AppWorkload.log", &empty_registry());
         assert_eq!(downloads.len(), 1);
         assert_eq!(
             downloads[0].content_id,
@@ -613,10 +613,12 @@ mod tests {
     fn escaped_json_fields_are_extracted_without_normalization() {
         let message = r#"Download completed successfully RequestPayload: {\"AppId\":\"a1b2c3d4-e5f6-7890-abcd-ef1234567890\",\"ApplicationName\":\"Contoso App\",\"SetUpFilePath\":\"C:\\Cache\\setup.exe\"}"#;
 
+        // extract_content_id delegates to guid_registry::extract_app_id + CONTENT_ID_RE fallback
         assert_eq!(
             extract_content_id(message).as_deref(),
             Some("a1b2c3d4-e5f6-7890-abcd-ef1234567890")
         );
+        // extract_display_name delegates to guid_registry::extract_app_name
         assert_eq!(
             extract_display_name(message).as_deref(),
             Some("Contoso App")

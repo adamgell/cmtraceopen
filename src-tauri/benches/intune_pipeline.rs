@@ -26,7 +26,7 @@ fn bench_intune_pipeline(c: &mut Criterion) {
     validate_fixture(&fixture, &source_file, &content);
 
     let lines = app_lib::intune::ime_parser::parse_ime_content(&content);
-    let events = app_lib::intune::event_tracker::extract_events(&lines, &source_file);
+    let events = app_lib::intune::event_tracker::extract_events(&lines, &source_file, &app_lib::intune::guid_registry::GuidRegistry::new());
 
     let mut group = c.benchmark_group("intune_pipeline");
 
@@ -60,9 +60,11 @@ fn bench_intune_pipeline(c: &mut Criterion) {
         BenchmarkId::new("event_extraction", fixture.logical_record_count),
         |b| {
             b.iter(|| {
+                let registry = app_lib::intune::guid_registry::GuidRegistry::new();
                 let events = app_lib::intune::event_tracker::extract_events(
                     black_box(lines.as_slice()),
                     black_box(&source_file),
+                    &registry,
                 );
                 assert_eq!(events.len(), fixture.expected_event_count, "Expected one paired content-download event per app");
                 black_box(events)
@@ -91,9 +93,11 @@ fn bench_intune_pipeline(c: &mut Criterion) {
         BenchmarkId::new("downloads", fixture.logical_record_count),
         |b| {
             b.iter(|| {
+                let dl_registry = app_lib::intune::guid_registry::GuidRegistry::new();
                 let downloads = app_lib::intune::download_stats::extract_downloads(
                     black_box(lines.as_slice()),
                     black_box(&source_file),
+                    &dl_registry,
                 );
                 assert_eq!(downloads.len(), fixture.expected_download_count, "Expected one download summary per app");
                 black_box(downloads)
@@ -113,13 +117,13 @@ fn bench_intune_pipeline(c: &mut Criterion) {
                 let lines = app_lib::intune::ime_parser::parse_ime_content(&content);
                 assert_eq!(lines.len(), fixture.logical_record_count, "Expected IME parse to emit one logical record per synthetic line");
 
-                let events = app_lib::intune::event_tracker::extract_events(&lines, &source_file);
+                let events = app_lib::intune::event_tracker::extract_events(&lines, &source_file, &app_lib::intune::guid_registry::GuidRegistry::new());
                 assert_eq!(events.len(), fixture.expected_event_count, "Expected one paired content-download event per app");
 
                 let timeline = app_lib::intune::timeline::build_timeline(events);
                 assert_eq!(timeline.len(), fixture.expected_timeline_count, "Expected timeline to preserve one event per app after deduplication");
 
-                let downloads = app_lib::intune::download_stats::extract_downloads(&lines, &source_file);
+                let downloads = app_lib::intune::download_stats::extract_downloads(&lines, &source_file, &app_lib::intune::guid_registry::GuidRegistry::new());
                 assert_eq!(downloads.len(), fixture.expected_download_count, "Expected one download summary per app");
 
                 black_box((timeline, downloads))
@@ -136,13 +140,13 @@ fn validate_fixture(fixture: &common::IntuneBenchFixture, source_file: &str, con
     let lines = app_lib::intune::ime_parser::parse_ime_content(content);
     assert_eq!(lines.len(), fixture.logical_record_count, "Expected all synthetic IME logical records to parse");
 
-    let events = app_lib::intune::event_tracker::extract_events(&lines, source_file);
+    let events = app_lib::intune::event_tracker::extract_events(&lines, source_file, &app_lib::intune::guid_registry::GuidRegistry::new());
     assert_eq!(events.len(), fixture.expected_event_count, "Expected one paired content-download event per app");
 
     let timeline = app_lib::intune::timeline::build_timeline(events);
     assert_eq!(timeline.len(), fixture.expected_timeline_count, "Expected timeline deduplication to preserve one event per app");
 
-    let downloads = app_lib::intune::download_stats::extract_downloads(&lines, source_file);
+    let downloads = app_lib::intune::download_stats::extract_downloads(&lines, source_file, &app_lib::intune::guid_registry::GuidRegistry::new());
     assert_eq!(downloads.len(), fixture.expected_download_count, "Expected one download summary per app");
 }
 

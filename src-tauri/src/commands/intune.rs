@@ -157,6 +157,7 @@ fn analyze_intune_logs_blocking(
     for processed_file in &processed_files {
         guid_registry.merge(&processed_file.guid_registry);
     }
+    let guid_registry_map = guid_registry.to_serializable();
 
     let mut all_events = Vec::new();
     let mut all_downloads = Vec::new();
@@ -332,6 +333,7 @@ fn analyze_intune_logs_blocking(
             repeated_failures,
             evidence_bundle,
             event_log_analysis,
+            guid_registry: guid_registry_map,
         });
     }
 
@@ -410,6 +412,7 @@ fn analyze_intune_logs_blocking(
         repeated_failures,
         evidence_bundle,
         event_log_analysis,
+        guid_registry: guid_registry_map,
     })
 }
 
@@ -663,8 +666,8 @@ fn analyze_intune_source_file(
         for (guid, entry) in file_guid_registry.iter() {
             eprintln!("  guid={} name=\"{}\" source={:?}", guid, entry.name, entry.source);
         }
-        let file_events = event_tracker::extract_events(&lines, &source_file);
-        let file_downloads = download_stats::extract_downloads(&lines, &source_file);
+        let file_events = event_tracker::extract_events(&lines, &source_file, &file_guid_registry);
+        let file_downloads = download_stats::extract_downloads(&lines, &source_file, &file_guid_registry);
         let file_timestamp_bounds = build_timestamp_bounds(&file_events, &file_downloads);
 
         (

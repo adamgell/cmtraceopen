@@ -1,4 +1,8 @@
+use std::collections::HashMap;
+
 use serde::{ser::SerializeStruct, Deserialize, Serialize, Serializer};
+
+use super::guid_registry::GuidRegistryEntry;
 
 /// Artifact count summary retained from an evidence bundle manifest.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
@@ -523,6 +527,9 @@ pub struct IntuneAnalysisResult {
     /// Parsed and correlated Windows Event Log data from evidence bundle .evtx files.
     #[serde(default)]
     pub event_log_analysis: Option<EventLogAnalysis>,
+    /// Global GUID→app-name registry for frontend display (tooltips, lookup panel).
+    #[serde(default)]
+    pub guid_registry: HashMap<String, GuidRegistryEntry>,
 }
 
 impl Serialize for IntuneAnalysisResult {
@@ -530,7 +537,7 @@ impl Serialize for IntuneAnalysisResult {
     where
         S: Serializer,
     {
-        let mut state = serializer.serialize_struct("IntuneAnalysisResult", 11)?;
+        let mut state = serializer.serialize_struct("IntuneAnalysisResult", 12)?;
         state.serialize_field("events", &self.events)?;
         state.serialize_field("downloads", &self.downloads)?;
         state.serialize_field("summary", &self.summary)?;
@@ -542,6 +549,7 @@ impl Serialize for IntuneAnalysisResult {
         state.serialize_field("repeatedFailures", &self.repeated_failures)?;
         state.serialize_field("evidenceBundle", &self.evidence_bundle)?;
         state.serialize_field("eventLogAnalysis", &self.event_log_analysis)?;
+        state.serialize_field("guidRegistry", &self.guid_registry)?;
         state.end()
     }
 }
@@ -569,6 +577,8 @@ pub struct IntuneSummary {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::{
         EvidenceBundleArtifactCounts, EvidenceBundleMetadata, IntuneAnalysisResult,
         IntuneDiagnosticsConfidence, IntuneDiagnosticsCoverage, IntuneSummary,
@@ -603,6 +613,7 @@ mod tests {
             diagnostics_confidence: IntuneDiagnosticsConfidence::default(),
             repeated_failures: Vec::new(),
             event_log_analysis: None,
+            guid_registry: HashMap::new(),
             evidence_bundle: Some(EvidenceBundleMetadata {
                 manifest_path: "bundle-root/manifest.json".to_string(),
                 notes_path: Some("bundle-root/notes.md".to_string()),
