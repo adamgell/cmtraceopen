@@ -1,11 +1,12 @@
 use std::cmp::Ordering;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
 use std::time::UNIX_EPOCH;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tauri::State;
+use tauri::{AppHandle, Emitter, State};
 
 use crate::dsregcmd::registry::{inspect_registry_snapshot_file, RegistrySnapshotSummary};
 use crate::intune::models::{EvidenceBundleArtifactCounts, EvidenceBundleMetadata};
@@ -281,21 +282,80 @@ pub fn open_log_file(path: String, state: State<'_, AppState>) -> Result<ParseRe
 ///
 /// Each file is parsed independently and its backend parser selection is stored
 /// in AppState for future tail reading.
+/// Payload emitted as `"parse-progress"` for each file that finishes parsing.
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ParseProgressPayload {
+    file_path: String,
+    file_name: String,
+    completed: u32,
+    total: u32,
+    entries: u32,
+    file_size: u64,
+    parse_ms: u64,
+}
+
 #[tauri::command]
 pub fn parse_files_batch(
     paths: Vec<String>,
     state: State<'_, AppState>,
+    app: AppHandle,
 ) -> Result<Vec<ParseResult>, String> {
     use rayon::prelude::*;
+
+    let total = paths.len() as u32;
+    eprintln!("event=parse_files_batch_start file_count={total}");
+    for (i, path) in paths.iter().enumerate() {
+        eprintln!("  batch_file[{i}] = \"{path}\"");
+    }
+
+    let batch_start = std::time::Instant::now();
+    let completed = AtomicU32::new(0);
 
     // Parse all files in parallel on Rayon's thread pool (lock-free)
     let results: Vec<Result<(ParseResult, crate::parser::ResolvedParser, String), String>> = paths
         .par_iter()
         .map(|path| {
+            let file_start = std::time::Instant::now();
             let (result, parser_selection) = parser::parse_file(path)?;
+            let file_ms = file_start.elapsed().as_millis() as u64;
+
+            let done = completed.fetch_add(1, AtomicOrdering::Relaxed) + 1;
+            let file_name = Path::new(path)
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default();
+
+            eprintln!(
+                "  event=parse_file_done [{done}/{total}] path=\"{path}\" entries={} lines={} size={} ms={file_ms}",
+                result.entries.len(),
+                result.total_lines,
+                result.file_size,
+            );
+
+            // Fire-and-forget progress event to the frontend
+            let _ = app.emit(
+                "parse-progress",
+                ParseProgressPayload {
+                    file_path: path.clone(),
+                    file_name,
+                    completed: done,
+                    total,
+                    entries: result.entries.len() as u32,
+                    file_size: result.file_size,
+                    parse_ms: file_ms,
+                },
+            );
+
             Ok((result, parser_selection, path.clone()))
         })
         .collect();
+
+    let parse_ms = batch_start.elapsed().as_millis();
+    eprintln!(
+        "event=parse_files_batch_parsed file_count={} ms={parse_ms}",
+        results.len()
+    );
 
     // Collect successes and store parser state (requires lock, done sequentially)
     let mut parse_results = Vec::with_capacity(results.len());
@@ -314,6 +374,13 @@ pub fn parse_files_batch(
         );
         parse_results.push(result);
     }
+
+    let total_ms = batch_start.elapsed().as_millis();
+    eprintln!(
+        "event=parse_files_batch_complete file_count={} results={} total_ms={total_ms}",
+        paths.len(),
+        parse_results.len()
+    );
 
     Ok(parse_results)
 }
@@ -469,19 +536,112 @@ fn compare_aggregate_entries(
     }
 }
 
-fn bundle_entry_rank(entry: &FolderEntry) -> usize {
-    match entry.name.to_ascii_lowercase().as_str() {
-        "manifest.json" => 0,
-        "notes.md" => 1,
-        "evidence" => 2,
-        _ => 3,
-    }
-}
+/// File extensions that are binary / non-parseable as text logs.
+/// These are skipped during recursive bundle collection.
+const BINARY_EXTENSIONS: &[&str] = &[
+    "etl", "dat", "zip", "cab", "tmp", "dir", "que", "evtx",
+];
 
-fn compare_bundle_folder_entries(left: &FolderEntry, right: &FolderEntry) -> Ordering {
-    bundle_entry_rank(left)
-        .cmp(&bundle_entry_rank(right))
-        .then_with(|| compare_folder_entries(left, right))
+/// Maximum file size (in bytes) to include in batch aggregate parsing.
+/// Files larger than this are still listed in the sidebar but excluded from
+/// the automatic batch load to avoid long stalls (e.g. 180 MB CBS logs).
+/// Users can still open them individually.
+const BUNDLE_BATCH_MAX_FILE_SIZE: u64 = 50 * 1024 * 1024; // 50 MB
+
+/// Recursively collects all **text-parseable files** under `root`, returning
+/// them as flat `FolderEntry` items (no directory entries).  Used when opening
+/// an evidence bundle so that every nested artifact is included in the listing.
+///
+/// Files with known binary extensions and files exceeding
+/// `BUNDLE_BATCH_MAX_FILE_SIZE` are excluded from the listing and logged as
+/// skipped.  They remain accessible from the sidebar for individual opening.
+fn collect_files_recursive(root: &Path) -> Vec<FolderEntry> {
+    let mut out = Vec::new();
+    let mut skipped_binary = 0u32;
+    let mut skipped_large = 0u32;
+    let mut stack: Vec<PathBuf> = vec![root.to_path_buf()];
+
+    while let Some(dir) = stack.pop() {
+        let read_dir = match fs::read_dir(&dir) {
+            Ok(rd) => rd,
+            Err(e) => {
+                eprintln!(
+                    "event=collect_files_recursive_skip reason=read_dir_error path=\"{}\" error=\"{e}\"",
+                    dir.display()
+                );
+                continue;
+            }
+        };
+
+        for entry_result in read_dir {
+            let entry = match entry_result {
+                Ok(v) => v,
+                Err(e) => {
+                    eprintln!(
+                        "event=collect_files_recursive_skip reason=entry_error dir=\"{}\" error=\"{e}\"",
+                        dir.display()
+                    );
+                    continue;
+                }
+            };
+
+            let entry_path = entry.path();
+            let metadata = match entry.metadata() {
+                Ok(m) => m,
+                Err(e) => {
+                    eprintln!(
+                        "event=collect_files_recursive_skip reason=metadata_error path=\"{}\" error=\"{e}\"",
+                        entry_path.display()
+                    );
+                    continue;
+                }
+            };
+
+            if metadata.is_dir() {
+                stack.push(entry_path);
+                continue;
+            }
+
+            // Skip known binary extensions
+            if let Some(ext) = entry_path.extension().and_then(|e| e.to_str()) {
+                if BINARY_EXTENSIONS.iter().any(|b| b.eq_ignore_ascii_case(ext)) {
+                    skipped_binary += 1;
+                    eprintln!(
+                        "event=collect_files_recursive_skip reason=binary_extension path=\"{}\"",
+                        entry_path.display()
+                    );
+                    continue;
+                }
+            }
+
+            // Skip files exceeding the size cap
+            let size = metadata.len();
+            if size > BUNDLE_BATCH_MAX_FILE_SIZE {
+                skipped_large += 1;
+                eprintln!(
+                    "event=collect_files_recursive_skip reason=file_too_large path=\"{}\" size={size}",
+                    entry_path.display()
+                );
+                continue;
+            }
+
+            out.push(FolderEntry {
+                name: entry.file_name().to_string_lossy().to_string(),
+                path: normalize_path_string(&entry_path),
+                is_dir: false,
+                size_bytes: Some(size),
+                modified_unix_ms: metadata_modified_unix_ms(&metadata),
+            });
+        }
+    }
+
+    eprintln!(
+        "event=collect_files_recursive_done root=\"{}\" included={} skipped_binary={skipped_binary} skipped_large={skipped_large}",
+        root.display(),
+        out.len()
+    );
+
+    out
 }
 
 fn detect_evidence_bundle_metadata(path: &Path) -> Option<EvidenceBundleMetadata> {
@@ -964,6 +1124,7 @@ fn describe_parser_selection(parser_selection: &ParserSelectionInfo) -> String {
             ParserKind::IntuneMacOs => "Intune macOS MDM log".to_string(),
             ParserKind::Dhcp => "Windows DHCP Server log".to_string(),
             ParserKind::Burn => "WiX/Burn bootstrapper log".to_string(),
+            ParserKind::Registry => "Windows Registry export".to_string(),
         },
     }
 }
@@ -1150,15 +1311,19 @@ pub fn list_log_folder(path: String) -> Result<FolderListingResult, String> {
 
     let bundle_metadata = detect_evidence_bundle_metadata(&requested_path);
     if bundle_metadata.is_some() {
-        entries.sort_by(compare_bundle_folder_entries);
+        // For evidence bundles, recursively collect all files from the entire
+        // directory tree so that every nested artifact is loaded.
+        entries = collect_files_recursive(&requested_path);
+        entries.sort_by(compare_folder_entries);
     } else {
         entries.sort_by(compare_folder_entries);
     }
 
     eprintln!(
-        "event=list_log_folder_complete path=\"{}\" entry_count={}",
+        "event=list_log_folder_complete path=\"{}\" entry_count={} is_bundle={}",
         requested_path.display(),
-        entries.len()
+        entries.len(),
+        bundle_metadata.is_some(),
     );
 
     Ok(FolderListingResult {
@@ -1760,6 +1925,13 @@ pub fn build_known_log_sources() -> Vec<KnownSourceMetadata> {
 }
 
 /// Return known platform log source metadata.
+#[tauri::command]
+pub fn parse_registry_file(path: String) -> Result<crate::parser::registry::RegistryParseResult, String> {
+    let content = parser::read_file_content(&path)?;
+    let file_size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+    Ok(crate::parser::registry::parse_registry_content(&content, &path, file_size))
+}
+
 #[tauri::command]
 pub fn get_known_log_sources() -> Result<Vec<KnownSourceMetadata>, String> {
     let sources = build_known_log_sources();

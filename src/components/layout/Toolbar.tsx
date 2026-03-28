@@ -72,6 +72,7 @@ function resolveRefreshSource(
 const LOG_FILE_DIALOG_FILTERS = [
   { name: "Log Files", extensions: ["log"] },
   { name: "Old Log Files", extensions: ["lo_"] },
+  { name: "Registry Files", extensions: ["reg"] },
   { name: "All Files", extensions: ["*"] },
 ];
 

@@ -9,6 +9,7 @@ pub mod intune_macos;
 pub mod msi;
 pub mod plain;
 pub mod psadt;
+pub mod registry;
 pub mod reporting_events;
 pub mod severity;
 pub mod simple;
@@ -94,6 +95,10 @@ pub fn parse_lines_with_selection(
         }
         crate::models::log_entry::ParserImplementation::Burn => {
             burn::parse_lines(lines, file_path)
+        }
+        crate::models::log_entry::ParserImplementation::Registry => {
+            // Registry files are parsed via a dedicated IPC command, not the log pipeline.
+            (vec![], 0)
         }
         crate::models::log_entry::ParserImplementation::GenericTimestamped => match selection.parser {
             crate::models::log_entry::ParserKind::Cbs => cbs::parse_lines(lines, file_path),
@@ -208,7 +213,7 @@ pub fn decode_bytes(bytes: &[u8], encoding: FileEncoding) -> Result<String, Stri
 }
 
 /// Read file content, handling BOM and encoding fallback.
-fn read_file_content(path: &str) -> Result<String, String> {
+pub fn read_file_content(path: &str) -> Result<String, String> {
     let bytes = std::fs::read(path).map_err(|e| format!("Failed to read file {}: {}", path, e))?;
     let encoding = detect_encoding(&bytes);
     decode_bytes(&bytes, encoding)

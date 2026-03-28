@@ -51,6 +51,10 @@ export function StatusBar() {
   const isLoading = useLogStore((s) => s.isLoading);
   const isPaused = useLogStore((s) => s.isPaused);
   const sourceStatus = useLogStore((s) => s.sourceStatus);
+  const folderLoadProgress = useLogStore((s) => s.folderLoadProgress);
+  const folderLoadCurrentFile = useLogStore((s) => s.folderLoadCurrentFile);
+  const folderLoadCompletedFiles = useLogStore((s) => s.folderLoadCompletedFiles);
+  const folderLoadTotalFiles = useLogStore((s) => s.folderLoadTotalFiles);
 
   const activeView = useUiStore((s) => s.activeView);
   const showDetails = useUiStore((s) => s.showDetails);
@@ -193,8 +197,16 @@ export function StatusBar() {
     const severityText =
       filteredCount > 0 ? formatSeverityCounts(severityCounts) : null;
 
+    // When a folder load is in progress, show real-time per-file progress
+    // from Rust parse events instead of the generic status text.
+    const folderLoadStatusText =
+      folderLoadProgress !== null && folderLoadTotalFiles
+        ? `Parsing ${folderLoadCompletedFiles ?? 0} of ${folderLoadTotalFiles} files${folderLoadCurrentFile ? ` — ${folderLoadCurrentFile}` : ""}`
+        : null;
+
     const logStatusText =
-      entries.length > 0
+      folderLoadStatusText
+        ?? (entries.length > 0
         ? [
             positionText ?? `${filteredCount} entries`,
             `${totalLines} lines`,
@@ -212,7 +224,7 @@ export function StatusBar() {
           ? `Reason: ${failureReason}`
           : sourceStatus.kind !== "idle"
             ? sourceStatus.detail ?? sourceStatus.message
-            : "";
+            : "");
 
     const filterStatusText = filterError ? `Filter error: ${filterError}` : filterStatus.label;
 

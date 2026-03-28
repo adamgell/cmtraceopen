@@ -210,6 +210,18 @@ impl ResolvedParser {
         )
     }
 
+    pub fn registry() -> Self {
+        Self::new(
+            ParserKind::Registry,
+            ParserImplementation::Registry,
+            ParserProvenance::Dedicated,
+            ParseQuality::Structured,
+            RecordFraming::PhysicalLine,
+            DateOrder::default(),
+            None,
+        )
+    }
+
     pub fn psadt_legacy() -> Self {
         Self::new(
             ParserKind::PsadtLegacy,
@@ -234,6 +246,7 @@ impl ResolvedParser {
             ParserImplementation::Dhcp => LogFormat::Timestamped,
             ParserImplementation::Burn => LogFormat::Timestamped,
             ParserImplementation::PlainText => LogFormat::Plain,
+            ParserImplementation::Registry => LogFormat::Plain,
         }
     }
 
@@ -261,6 +274,16 @@ impl ResolvedParser {
 /// Detect the parser selection from file content.
 /// Examines up to the first 20 non-empty lines.
 pub fn detect_parser(path: &str, content: &str) -> ResolvedParser {
+    // Registry export file — unambiguous header, check first.
+    {
+        let trimmed_start = content.trim_start();
+        if trimmed_start.starts_with("Windows Registry Editor Version 5.00")
+            || trimmed_start.starts_with("REGEDIT4")
+        {
+            return ResolvedParser::registry();
+        }
+    }
+
     let sample_lines: Vec<&str> = content
         .lines()
         .filter(|l| !l.trim().is_empty())

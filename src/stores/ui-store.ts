@@ -62,6 +62,8 @@ export interface TabSourceContext {
   source: import("../types/log").LogSource;
 }
 
+export type TabFileKind = "log" | "registry";
+
 export interface TabState {
   id: string;
   filePath: string;
@@ -70,6 +72,8 @@ export interface TabState {
   selectedLineId: number | null;
   /** Source context — where this file was loaded from. Null for legacy/migrated tabs. */
   sourceContext: TabSourceContext | null;
+  /** What kind of viewer to use for this tab. Defaults to "log". */
+  fileKind: TabFileKind;
 }
 
 export function isIntuneWorkspace(workspace: WorkspaceId): workspace is IntuneWorkspaceId {
@@ -210,7 +214,7 @@ interface UiState {
   resetColumnOrder: () => void;
   toggleSidebar: () => void;
   resetColumns: () => void;
-  openTab: (filePath: string, fileName: string, sourceContext?: TabSourceContext | null) => void;
+  openTab: (filePath: string, fileName: string, sourceContext?: TabSourceContext | null, fileKind?: TabFileKind) => void;
   closeTab: (index: number) => void;
   switchTab: (index: number) => void;
   saveTabScrollState: (index: number, scrollPosition: number, selectedLineId: number | null) => void;
@@ -428,7 +432,7 @@ export const useUiStore = create<UiState>()(
         set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed })),
       resetColumns: () => set({ columnWidths: {}, columnOrder: null }),
 
-      openTab: (filePath, fileName, sourceContext) => {
+      openTab: (filePath, fileName, sourceContext, fileKind) => {
         if (!filePath) {
           console.warn("[ui-store] openTab called with empty filePath, ignoring");
           return;
@@ -436,10 +440,13 @@ export const useUiStore = create<UiState>()(
         const { openTabs } = get();
         const existingIndex = openTabs.findIndex((t) => t.filePath === filePath);
         if (existingIndex >= 0) {
-          // Update source context if provided (may have changed)
-          if (sourceContext) {
+          // Update source context and fileKind if provided (may have changed)
+          const updates: Partial<TabState> = {};
+          if (sourceContext) updates.sourceContext = sourceContext;
+          if (fileKind) updates.fileKind = fileKind;
+          if (Object.keys(updates).length > 0) {
             const updatedTabs = [...openTabs];
-            updatedTabs[existingIndex] = { ...updatedTabs[existingIndex], sourceContext };
+            updatedTabs[existingIndex] = { ...updatedTabs[existingIndex], ...updates };
             set({ openTabs: updatedTabs, activeTabIndex: existingIndex });
           } else {
             set({ activeTabIndex: existingIndex });
@@ -453,6 +460,7 @@ export const useUiStore = create<UiState>()(
           scrollPosition: 0,
           selectedLineId: null,
           sourceContext: sourceContext ?? null,
+          fileKind: fileKind ?? "log",
         };
         set({
           openTabs: [...openTabs, newTab],

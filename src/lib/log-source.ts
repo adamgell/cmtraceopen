@@ -4,6 +4,7 @@ import {
   openLogFile,
   openLogSourceFile,
   parseFilesBatch,
+  parseRegistryFile,
   stopTail,
 } from "./commands";
 import { useLogStore, setCachedTabSnapshot, getCachedTabSnapshot } from "../stores/log-store";
@@ -124,12 +125,54 @@ async function stopCurrentTailIfNeeded(nextFilePath: string | null): Promise<voi
   );
 }
 
-function applyParseResultToStore(
+async function applyParseResultToStore(
   source: LogSource,
   selectedFilePath: string,
   result: ParseResult
-): void {
+): Promise<void> {
   const state = useLogStore.getState();
+
+  // Registry files use a dedicated viewer — load structured data instead of log entries
+  if (result.parserSelection?.parser === "registry") {
+    state.setActiveSource(source);
+    state.setSelectedSourceFilePath(selectedFilePath);
+    state.setSourceOpenMode("single-file");
+    state.setAggregateFiles([]);
+    state.setEntries([]);
+    state.setFormatDetected(result.formatDetected);
+    state.setParserSelection(result.parserSelection);
+    state.setSourceStatus({
+      kind: "loaded",
+      message: `Loaded ${getBaseName(selectedFilePath)}.`,
+    });
+
+    // Cache a minimal snapshot so tab switching works
+    setCachedTabSnapshot(selectedFilePath, {
+      entries: [],
+      formatDetected: result.formatDetected,
+      parserSelection: result.parserSelection,
+      totalLines: 0,
+      byteOffset: 0,
+      selectedSourceFilePath: selectedFilePath,
+      sourceOpenMode: "single-file",
+      activeColumns: [],
+    });
+
+    const fileName = selectedFilePath.split(/[\\/]/).pop() ?? selectedFilePath;
+    useUiStore.getState().openTab(selectedFilePath, fileName, buildTabSourceContext(source), "registry");
+
+    // Load registry data asynchronously — the RegistryViewer component will pick it up
+    try {
+      const { setCachedRegistry } = await import("../stores/registry-store");
+      const regData = await parseRegistryFile(selectedFilePath);
+      setCachedRegistry(selectedFilePath, regData);
+      const { useRegistryStore } = await import("../stores/registry-store");
+      useRegistryStore.getState().setRegistryData(regData);
+    } catch (err) {
+      console.error("[log-source] failed to load registry file", err);
+    }
+    return;
+  }
 
   state.setActiveSource(source);
   state.setSelectedSourceFilePath(selectedFilePath);
@@ -206,24 +249,56 @@ async function loadFolderProgressive(
     return;
   }
 
-  // Show loading overlay (indeterminate — Rust handles all the work)
-  state.setFolderLoadProgress({ current: 0, total: fileEntries.length, currentFile: "" });
+  // Show loading overlay with progress tracking
+  const totalFiles = fileEntries.length;
+  state.setFolderLoadProgress({ current: 0, total: totalFiles, currentFile: "" });
   state.setSourceStatus({
     kind: "loading",
-    message: `Parsing ${fileEntries.length} files from ${folderName}...`,
-    detail: "Files are being parsed in parallel",
+    message: `Parsing ${totalFiles} files from ${folderName}...`,
+    detail: "Files are being parsed in parallel batches",
   });
 
   const startTime = performance.now();
 
-  // Single IPC call → Rayon parses all files in parallel on Rust thread pool
+  // Parse files in batches to avoid IPC / memory pressure crashes on large
+  // evidence bundles (200+ files).  Each batch is sent as a single IPC call
+  // and parsed in parallel on Rust's Rayon thread pool.
+  const BATCH_SIZE = 30;
+  const allResults: ParseResult[] = [];
   const paths = fileEntries.map((e) => e.path);
-  const results = await parseFilesBatch(paths);
+
+  const totalBatches = Math.ceil(paths.length / BATCH_SIZE);
+  console.info(`[log-source] starting batched parse: ${totalFiles} files in ${totalBatches} batches of ${BATCH_SIZE}`);
+
+  for (let offset = 0; offset < paths.length; offset += BATCH_SIZE) {
+    const batchIndex = Math.floor(offset / BATCH_SIZE) + 1;
+    const batch = paths.slice(offset, offset + BATCH_SIZE);
+
+    console.info(`[log-source] batch ${batchIndex}/${totalBatches} — sending ${batch.length} files to Rust:`, batch);
+
+    // Yield to the browser so React can paint progress updates (driven
+    // by real-time "parse-progress" events from Rust) before we kick off
+    // the next batch IPC call.
+    await new Promise((r) => setTimeout(r, 0));
+
+    const batchStart = performance.now();
+    const batchResults = await parseFilesBatch(batch);
+    const batchMs = Math.round(performance.now() - batchStart);
+
+    console.info(`[log-source] batch ${batchIndex}/${totalBatches} — completed ${batchResults.length} files in ${batchMs} ms`);
+
+    allResults.push(...batchResults);
+  }
 
   const parseMs = Math.round(performance.now() - startTime);
+  console.info(`[log-source] all batches complete in ${parseMs} ms — assembling aggregate view`);
+
+  // Yield so the "Finalizing..." progress text renders before the heavy
+  // in-memory assembly work below.
+  await new Promise((r) => setTimeout(r, 0));
 
   // Cache each file's entries for instant tab switching
-  for (const result of results) {
+  for (const result of allResults) {
     const fileColumns = getColumnsForParser(result.parserSelection.parser);
     setCachedTabSnapshot(result.filePath, {
       entries: result.entries,
@@ -237,14 +312,15 @@ async function loadFolderProgressive(
     });
   }
 
-  // Build aggregate view
-  const allEntries: LogEntry[] = [];
+  // Build aggregate view — use Array.concat or indexed copy instead of
+  // push(...spread) to avoid blowing the JS call stack on large entry arrays.
   const aggregateFiles: import("../types/log").AggregateParsedFileResult[] = [];
   let totalLines = 0;
+  let totalEntryCount = 0;
 
-  for (const result of results) {
-    allEntries.push(...result.entries);
+  for (const result of allResults) {
     totalLines += result.totalLines;
+    totalEntryCount += result.entries.length;
     aggregateFiles.push({
       filePath: result.filePath,
       totalLines: result.totalLines,
@@ -254,9 +330,14 @@ async function loadFolderProgressive(
     });
   }
 
-  // Re-assign sequential IDs across the merged entries
-  for (let i = 0; i < allEntries.length; i++) {
-    allEntries[i] = { ...allEntries[i], id: i };
+  // Pre-allocate and copy with sequential IDs in one pass
+  const allEntries = new Array<LogEntry>(totalEntryCount);
+  let writeIndex = 0;
+  for (const result of allResults) {
+    for (let j = 0; j < result.entries.length; j++) {
+      allEntries[writeIndex] = { ...result.entries[j], id: writeIndex };
+      writeIndex++;
+    }
   }
 
   // Apply the final aggregate state
@@ -272,7 +353,7 @@ async function loadFolderProgressive(
   state.setByteOffset(0);
   // Derive aggregate columns from the union of all parsers + filePath
   const aggregateColumns = getColumnsForAggregate(
-    results.map((r) => r.parserSelection.parser)
+    allResults.map((r) => r.parserSelection.parser)
   );
   state.setActiveColumns(aggregateColumns);
   state.selectEntry(null);
@@ -426,6 +507,42 @@ export async function loadSelectedLogFile(
   // batch load), skip the IPC call entirely and apply from cache.
   const cached = getCachedTabSnapshot(filePath);
   if (cached) {
+    // Registry files from cache — load via the registry pipeline
+    if (cached.parserSelection?.parser === "registry") {
+      console.info("[log-source] loadSelectedLogFile registry from cache", { filePath });
+      state.setSelectedSourceFilePath(filePath);
+      state.setSourceOpenMode("single-file");
+      state.setEntries([]);
+      state.setFormatDetected(cached.formatDetected);
+      state.setParserSelection(cached.parserSelection);
+      state.setSourceStatus({
+        kind: "loaded",
+        message: `Loaded ${getBaseName(filePath)}.`,
+      });
+      const fileName = filePath.split(/[\\/]/).pop() ?? filePath;
+      useUiStore.getState().openTab(filePath, fileName, buildTabSourceContext(source), "registry");
+
+      // Load registry data
+      const { getCachedRegistry, setCachedRegistry, useRegistryStore } = await import("../stores/registry-store");
+      let regData = getCachedRegistry(filePath);
+      if (!regData) {
+        regData = await parseRegistryFile(filePath);
+        setCachedRegistry(filePath, regData);
+      }
+      useRegistryStore.getState().setRegistryData(regData);
+
+      return {
+        entries: [],
+        formatDetected: cached.formatDetected ?? null,
+        parserSelection: cached.parserSelection ?? null,
+        totalLines: 0,
+        parseErrors: 0,
+        filePath,
+        fileSize: 0,
+        byteOffset: 0,
+      } as ParseResult;
+    }
+
     console.info("[log-source] loadSelectedLogFile from cache (instant)", { filePath });
 
     state.setEntries(cached.entries);
@@ -474,7 +591,7 @@ export async function loadSelectedLogFile(
 
   try {
     const result = await openLogFile(filePath);
-    applyParseResultToStore(source, result.filePath, result);
+    await applyParseResultToStore(source, result.filePath, result);
     return result;
   } finally {
     state.setLoading(false);
@@ -495,6 +612,39 @@ export async function switchToTab(
 
   // Already showing this file — nothing to do
   if (currentPath === filePath) return;
+
+  // ── Registry tab: restore from registry cache ──────────────────────
+  {
+    const uiTabs = useUiStore.getState().openTabs;
+    const tab = uiTabs.find((t) => t.filePath === filePath);
+    if (tab?.fileKind === "registry") {
+      logState.setOpenFilePath(filePath);
+      logState.setSelectedSourceFilePath(filePath);
+      logState.setEntries([]);
+      logState.setSourceOpenMode("single-file");
+
+      // Restore sidebar context
+      if (sourceContext && sourceContext.sourceKind !== "file") {
+        await restoreFolderContext(logState, sourceContext);
+      } else if (sourceContext?.sourceKind === "file") {
+        logState.setActiveSource(sourceContext.source);
+        logState.setSourceEntries([]);
+        logState.setBundleMetadata(null);
+      }
+
+      // Restore registry data from cache (or reload)
+      const { getCachedRegistry, setCachedRegistry, useRegistryStore } = await import("../stores/registry-store");
+      const cachedReg = getCachedRegistry(filePath);
+      if (cachedReg) {
+        useRegistryStore.getState().setRegistryData(cachedReg);
+      } else {
+        const regData = await parseRegistryFile(filePath);
+        setCachedRegistry(filePath, regData);
+        useRegistryStore.getState().setRegistryData(regData);
+      }
+      return;
+    }
+  }
 
   // ── Try cache first (instant, no IPC) ──────────────────────────────
   const cached = getCachedTabSnapshot(filePath);
@@ -624,14 +774,14 @@ export async function loadFilesAsLogSource(paths: string[]): Promise<void> {
       });
     }
 
-    // Build aggregate view
-    const allEntries: LogEntry[] = [];
+    // Build aggregate view — avoid push(...spread) to prevent call stack overflow
     const aggregateFiles: import("../types/log").AggregateParsedFileResult[] = [];
     let totalLines = 0;
+    let totalEntryCount = 0;
 
     for (const result of results) {
-      allEntries.push(...result.entries);
       totalLines += result.totalLines;
+      totalEntryCount += result.entries.length;
       aggregateFiles.push({
         filePath: result.filePath,
         totalLines: result.totalLines,
@@ -641,9 +791,14 @@ export async function loadFilesAsLogSource(paths: string[]): Promise<void> {
       });
     }
 
-    // Re-assign sequential IDs
-    for (let i = 0; i < allEntries.length; i++) {
-      allEntries[i] = { ...allEntries[i], id: i };
+    // Pre-allocate and copy with sequential IDs in one pass
+    const allEntries = new Array<LogEntry>(totalEntryCount);
+    let writeIndex = 0;
+    for (const result of results) {
+      for (let j = 0; j < result.entries.length; j++) {
+        allEntries[writeIndex] = { ...result.entries[j], id: writeIndex };
+        writeIndex++;
+      }
     }
 
     // Derive a common parent folder for the multi-file source so the sidebar
@@ -766,7 +921,7 @@ export async function loadLogSource(
 
       state.setSourceEntries([]);
       state.setBundleMetadata(null);
-      applyParseResultToStore(source, result.filePath, result);
+      await applyParseResultToStore(source, result.filePath, result);
 
       return {
         source,
@@ -817,7 +972,7 @@ export async function loadLogSource(
 
       state.setSourceEntries([]);
       state.setBundleMetadata(null);
-      applyParseResultToStore(source, result.filePath, result);
+      await applyParseResultToStore(source, result.filePath, result);
 
       return {
         source,

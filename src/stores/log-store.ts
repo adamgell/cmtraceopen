@@ -287,6 +287,8 @@ function getParserLabel(parser: ParserSelectionInfo["parser"]): string {
       return "DHCP Server";
     case "burn":
       return "WiX/Burn";
+    case "registry":
+      return "Registry";
   }
 }
 
@@ -314,6 +316,8 @@ function getImplementationLabel(
       return "DHCP Server CSV parser";
     case "burn":
       return "WiX/Burn bootstrapper parser";
+    case "registry":
+      return "Windows Registry export parser";
   }
 }
 

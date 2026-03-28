@@ -15,7 +15,14 @@
       "WebSearch",
       "Bash(gh issue:*)",
       "Bash(ls -1 /Users/Adam.Gell/repo/cmtraceopen/*.md)",
-      "Bash(gh pr:*)"
+      "Bash(gh pr:*)",
+      "Bash(git checkout:*)",
+      "Bash(git stash:*)",
+      "Bash(xargs grep:*)",
+      "Bash(grep -r \"setupact\\\\|setuperr\" /c/GitHub/cmtraceopen/src-tauri --include=*.rs)",
+      "Bash(powershell -Command \"cd ''C:\\\\GitHub\\\\cmtraceopen\\\\src-tauri''; cargo test panther 2>&1\")",
+      "Bash(powershell.exe -NoProfile -Command \"Set-Location ''C:\\\\GitHub\\\\cmtraceopen''; git add src-tauri/src/intune/ime_parser.rs src-tauri/src/models/log_entry.rs src-tauri/src/parser/panther.rs src-tauri/src/parser/burn.rs src-tauri/src/parser/cbs.rs src-tauri/src/parser/ccm.rs src-tauri/src/parser/dhcp.rs src-tauri/src/parser/dism.rs src-tauri/src/parser/intune_macos.rs src-tauri/src/parser/plain.rs src-tauri/src/parser/psadt.rs src-tauri/src/parser/reporting_events.rs src-tauri/src/parser/simple.rs src-tauri/src/parser/timestamped.rs src-tauri/src/parser/msi.rs src-tauri/src/commands/deployment.rs src/components/log-view/InfoPane.tsx src/lib/column-config.ts src/types/log.ts; git status --short 2>&1\")",
+      "WebFetch(domain:github.com)"
     ]
   }
 }

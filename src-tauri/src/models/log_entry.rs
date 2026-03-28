@@ -39,6 +39,7 @@ pub enum ParserKind {
     IntuneMacOs,
     Dhcp,
     Burn,
+    Registry,
 }
 
 /// Concrete parser implementation currently used by the backend.
@@ -55,6 +56,7 @@ pub enum ParserImplementation {
     IntuneMacOs,
     Dhcp,
     Burn,
+    Registry,
 }
 
 /// How the backend arrived at the parser selection.

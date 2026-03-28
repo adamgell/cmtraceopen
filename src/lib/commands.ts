@@ -8,6 +8,7 @@ import type {
   ParseResult,
 } from "../types/log";
 import type { EvidenceArtifactPreview, EvidenceBundleDetails, EvidenceArtifactIntakeKind } from "../types/evidence";
+import type { RegistryParseResult } from "../types/registry";
 import type { IntuneAnalysisResult } from "../types/intune";
 import type {
   DsregcmdAnalysisResult,
@@ -91,6 +92,10 @@ export async function inspectEvidenceArtifact(
     intakeKind,
     originPath: originPath ?? null,
   });
+}
+
+export async function parseRegistryFile(path: string): Promise<RegistryParseResult> {
+  return invokeCommand<RegistryParseResult>("parse_registry_file", { path });
 }
 
 export async function getKnownLogSources(): Promise<KnownSourceMetadata[]> {

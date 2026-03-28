@@ -21,6 +21,7 @@ import { NewIntuneWorkspace } from "../intune/NewIntuneWorkspace";
 import { DsregcmdWorkspace } from "../dsregcmd/DsregcmdWorkspace";
 import { MacosDiagWorkspace } from "../macos-diag/MacosDiagWorkspace";
 import { DeploymentWorkspace } from "../deployment/DeploymentWorkspace";
+import { RegistryViewer } from "../registry-view/RegistryViewer";
 import type { FilterClause } from "../dialogs/FilterDialog";
 import type { LogEntry } from "../../types/log";
 import { useUiStore } from "../../stores/ui-store";
@@ -34,6 +35,7 @@ import { useDragDrop } from "../../hooks/use-drag-drop";
 import { useFileAssociation } from "../../hooks/use-file-association";
 import { useFileAssociationPrompt } from "../../hooks/use-file-association-prompt";
 import { useCollectionProgressListener } from "../../hooks/use-collection-progress-listener";
+import { useParseProgressListener } from "../../hooks/use-parse-progress-listener";
 
 function buildFilterRunSignature(entries: LogEntry[], clauses: FilterClause[]): string {
   const lastId = entries.length > 0 ? entries[entries.length - 1].id : -1;
@@ -88,6 +90,7 @@ export function AppShell() {
   const setShowCollectDiagnosticsDialog = useUiStore((s) => s.setShowCollectDiagnosticsDialog);
 
   useCollectionProgressListener();
+  useParseProgressListener();
 
   const entries = useLogStore((s) => s.entries);
   const filterClauses = useFilterStore((s) => s.clauses);
@@ -223,9 +226,21 @@ export function AppShell() {
   const folderLoadProgress = useLogStore((s) => s.folderLoadProgress);
   const folderLoadCurrentFile = useLogStore((s) => s.folderLoadCurrentFile);
   const folderLoadTotalFiles = useLogStore((s) => s.folderLoadTotalFiles);
+  const folderLoadCompletedFiles = useLogStore((s) => s.folderLoadCompletedFiles);
 
   const renderWorkspace = () => {
     if (activeView === "log") {
+      // Check if active tab is a registry file
+      const tabs = useUiStore.getState().openTabs;
+      const activeTab = tabs[useUiStore.getState().activeTabIndex];
+      if (activeTab?.fileKind === "registry") {
+        return (
+          <div style={{ flex: 1, overflow: "hidden" }}>
+            <RegistryViewer />
+          </div>
+        );
+      }
+
       return (
         <>
           <div
@@ -259,6 +274,8 @@ export function AppShell() {
                   <ProgressBar
                     thickness="large"
                     color="brand"
+                    value={folderLoadProgress ?? undefined}
+                    max={1}
                   />
                 </div>
                 <div
@@ -268,7 +285,7 @@ export function AppShell() {
                     color: tokens.colorNeutralForeground1,
                   }}
                 >
-                  Parsing {folderLoadTotalFiles ?? 0} files in parallel...
+                  Parsing files{folderLoadTotalFiles ? ` — ${folderLoadCompletedFiles ?? 0} of ${folderLoadTotalFiles}` : ""}...
                 </div>
                 {folderLoadCurrentFile && (
                   <div
