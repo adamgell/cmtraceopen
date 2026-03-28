@@ -143,6 +143,10 @@ fn build_entry_from_caps(caps: &regex::Captures<'_>, file_path: &str) -> Option<
                     ip_address: None,
                     host_name: None,
                     mac_address: None,
+                    result_code: None,
+                    gle_code: None,
+                    setup_phase: None,
+                    operation_name: None,
     })
 }
 
@@ -187,6 +191,10 @@ fn fallback_entry(id: u64, line_number: u32, line: &str, file_path: &str) -> Log
                     ip_address: None,
                     host_name: None,
                     mac_address: None,
+                    result_code: None,
+                    gle_code: None,
+                    setup_phase: None,
+                    operation_name: None,
     }
 }
 

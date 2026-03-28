@@ -154,6 +154,21 @@ pub struct LogEntry {
     /// MAC address (DHCP logs)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mac_address: Option<String>,
+    /// Primary result/error code extracted from the message (Panther logs)
+    /// e.g. from "Result = 0x80070490", "Error: 0x80070002", "Status: 0xC000000F"
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result_code: Option<String>,
+    /// GetLastError code from "[gle=0x...]" (Panther logs)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gle_code: Option<String>,
+    /// Windows setup phase name (Panther logs)
+    /// e.g. "SetupPhaseInstall", "SetupPhasePrepare", "SetupPhaseFinalize"
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub setup_phase: Option<String>,
+    /// Setup operation being executed or completed (Panther logs)
+    /// e.g. "Apply Drivers", "Mount WIM file", "Set Language Settings"
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operation_name: Option<String>,
 }
 
 /// Result of parsing a complete log file.

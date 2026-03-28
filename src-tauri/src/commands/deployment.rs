@@ -698,6 +698,10 @@ mod tests {
             ip_address: None,
             host_name: None,
             mac_address: None,
+            result_code: None,
+            gle_code: None,
+            setup_phase: None,
+            operation_name: None,
         }
     }
 

@@ -161,6 +161,24 @@ export function InfoPane() {
             .join(" | ")}
         </div>
       ) : null}
+      {(selectedEntry.resultCode || selectedEntry.gleCode || selectedEntry.setupPhase || selectedEntry.operationName) && (
+        <div
+          style={{
+            marginBottom: "8px",
+            color: tokens.colorNeutralForeground3,
+            fontSize: `${Math.max(logDetailsFontSize - 1, 11)}px`,
+          }}
+        >
+          {[
+            selectedEntry.resultCode ? `Result ${selectedEntry.resultCode}` : null,
+            selectedEntry.gleCode ? `GLE ${selectedEntry.gleCode}` : null,
+            selectedEntry.setupPhase ? `Phase ${selectedEntry.setupPhase}` : null,
+            selectedEntry.operationName ? `Op: ${selectedEntry.operationName}` : null,
+          ]
+            .filter((part): part is string => Boolean(part))
+            .join(" | ")}
+        </div>
+      )}
       <div
         style={{
           whiteSpace: "pre-wrap",

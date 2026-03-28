@@ -8,6 +8,44 @@ static PANTHER_PREFIX_RE: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2},").unwrap()
 });
 
+/// Matches a bracketed executable tag at the start of the message, e.g. `[SetupPlatform.exe]`.
+static EXE_TAG_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"^\[([^\]]+\.[Ee][Xx][Ee])\]\s*").unwrap()
+});
+
+/// Matches C++ class::method patterns, e.g. `CSetupManager::GetWuIdFromRegistry(13192):`.
+static CLASS_METHOD_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"^([A-Z][A-Za-z0-9_]*(?:::[A-Za-z_]\w*)+)(?:\(\d+\))?:\s*").unwrap()
+});
+
+/// Matches DISM-style thread IDs embedded in the message, e.g. `PID=1452 TID=776`.
+static TID_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"TID=(\d+)").unwrap()
+});
+
+/// Matches a primary result/error/status code, e.g.:
+///   `Result = 0x80070490`, `Error: 0x80070002`, `Status: 0xC000000F`
+static RESULT_CODE_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"(?:Result\s*=|Error:|Status:)\s*(0x[0-9A-Fa-f]+)").unwrap()
+});
+
+/// Matches a GetLastError annotation, e.g. `[gle=0x00000002]`.
+static GLE_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"\[gle=(0x[0-9A-Fa-f]+)\]").unwrap()
+});
+
+/// Matches the current setup phase, e.g. `CurrentSetupPhase [SetupPhaseInstall]`.
+static SETUP_PHASE_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"CurrentSetupPhase\s+\[([A-Za-z0-9]+)\]").unwrap()
+});
+
+/// Matches an operation being executed or completed, e.g.:
+///   `Executing operation: Apply Drivers`
+///   `Operation completed successfully: Apply Drivers`
+static OPERATION_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"(?:Executing operation|Operation completed successfully):\s*(.+)").unwrap()
+});
+
 static PANTHER_HEADER_RE: Lazy<Regex> = Lazy::new(|| {
     Regex::new(
         r"^(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2}):(\d{2}),\s+(Info|Warning|Error|Fatal Error|Perf)\s+(?:(\[0x[0-9A-Fa-f]+\])\s+)?(?:([A-Z][A-Z0-9_.-]{1,31})\s+)?(.*)$",
@@ -110,7 +148,7 @@ fn build_entry_from_caps(caps: &regex::Captures<'_>, file_path: &str) -> Option<
         .and_then(|date| date.and_hms_opt(hour, minute, second))
         .map(|dt| dt.and_utc().timestamp_millis());
 
-    Some(LogEntry {
+    let mut entry = LogEntry {
         id: 0,
         line_number: 0,
         message,
@@ -128,16 +166,77 @@ fn build_entry_from_caps(caps: &regex::Captures<'_>, file_path: &str) -> Option<
         file_path: file_path.to_string(),
         timezone_offset: None,
         error_code_spans: Vec::new(),
-                    ip_address: None,
-                    host_name: None,
-                    mac_address: None,
-    })
+        ip_address: None,
+        host_name: None,
+        mac_address: None,
+        result_code: None,
+        gle_code: None,
+        setup_phase: None,
+        operation_name: None,
+    };
+
+    post_process_entry(&mut entry);
+
+    Some(entry)
+}
+
+/// Extract additional structured fields from the message text.
+fn post_process_entry(entry: &mut LogEntry) {
+    // 1. Extract bracketed exe tag → source_file + component fallback
+    if let Some(caps) = EXE_TAG_RE.captures(&entry.message) {
+        let exe_name = caps.get(1).unwrap().as_str().to_string();
+        // Strip the tag from the message
+        entry.message = entry.message[caps.get(0).unwrap().end()..].to_string();
+        // Use as component fallback when none was matched by the header regex
+        if entry.component.is_none() {
+            entry.component = Some(exe_name.trim_end_matches(".exe").to_string());
+        }
+        entry.source_file = Some(exe_name);
+    }
+
+    // 2. Extract C++ Class::Method as source_file (keep in message for context)
+    if entry.source_file.is_none() {
+        if let Some(caps) = CLASS_METHOD_RE.captures(&entry.message) {
+            entry.source_file = Some(caps.get(1).unwrap().as_str().to_string());
+        }
+    }
+
+    // 3. Extract DISM TID as thread
+    if entry.thread.is_none() {
+        if let Some(caps) = TID_RE.captures(&entry.message) {
+            if let Ok(tid) = caps.get(1).unwrap().as_str().parse::<u32>() {
+                entry.thread = Some(tid);
+                entry.thread_display = Some(format!("{} (0x{:04X})", tid, tid));
+            }
+        }
+    }
+
+    // 4. Extract primary result/error/status code
+    if let Some(caps) = RESULT_CODE_RE.captures(&entry.message) {
+        entry.result_code = Some(caps.get(1).unwrap().as_str().to_uppercase());
+    }
+
+    // 5. Extract GetLastError code
+    if let Some(caps) = GLE_RE.captures(&entry.message) {
+        entry.gle_code = Some(caps.get(1).unwrap().as_str().to_uppercase());
+    }
+
+    // 6. Extract current setup phase
+    if let Some(caps) = SETUP_PHASE_RE.captures(&entry.message) {
+        entry.setup_phase = Some(caps.get(1).unwrap().as_str().to_string());
+    }
+
+    // 7. Extract operation name from execution/completion lines
+    if let Some(caps) = OPERATION_RE.captures(&entry.message) {
+        entry.operation_name = Some(caps.get(1).unwrap().as_str().trim().to_string());
+    }
 }
 
 fn severity_from_level(level: &str, message: &str) -> Severity {
     match level {
         "Error" | "Fatal Error" => Severity::Error,
         "Warning" => Severity::Warning,
+        "Perf" | "Info" => Severity::Info,
         _ => detect_severity_from_text(message),
     }
 }
@@ -167,9 +266,13 @@ fn fallback_entry(id: u64, line_number: u32, line: &str, file_path: &str) -> Log
         file_path: file_path.to_string(),
         timezone_offset: None,
         error_code_spans: Vec::new(),
-                    ip_address: None,
-                    host_name: None,
-                    mac_address: None,
+        ip_address: None,
+        host_name: None,
+        mac_address: None,
+        result_code: None,
+        gle_code: None,
+        setup_phase: None,
+        operation_name: None,
     }
 }
 
@@ -236,5 +339,77 @@ mod tests {
         assert_eq!(entries.len(), 1);
         assert!(entries[0].component.is_none());
         assert_eq!(entries[0].severity, Severity::Error);
+    }
+
+    #[test]
+    fn test_exe_tag_extracted_as_source_file_and_component_fallback() {
+        let lines =
+            ["2024-01-15 08:00:00, Error                  [SetupPlatform.exe] System disks found"];
+
+        let (entries, _) = parse_lines(&lines, "C:/Windows/Panther/setuperr.log");
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(
+            entries[0].source_file.as_deref(),
+            Some("SetupPlatform.exe")
+        );
+        assert_eq!(
+            entries[0].component.as_deref(),
+            Some("SetupPlatform")
+        );
+        assert_eq!(entries[0].message, "System disks found");
+    }
+
+    #[test]
+    fn test_exe_tag_does_not_overwrite_existing_component() {
+        let lines = [
+            "2024-01-15 08:00:00, Warning               MOUPG  [SetupHost.exe] Something happened",
+        ];
+
+        let (entries, _) = parse_lines(&lines, "C:/Windows/Panther/setupact.log");
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].component.as_deref(), Some("MOUPG"));
+        assert_eq!(entries[0].source_file.as_deref(), Some("SetupHost.exe"));
+    }
+
+    #[test]
+    fn test_class_method_extracted_as_source_file() {
+        let lines = [
+            "2024-01-15 08:00:00, Error                 MOUPG  CUnattendManager::Initialize(90): Result = 0x80070490",
+        ];
+
+        let (entries, _) = parse_lines(&lines, "C:/Windows/Panther/setuperr.log");
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(
+            entries[0].source_file.as_deref(),
+            Some("CUnattendManager::Initialize")
+        );
+        // Message should still contain the full text for context
+        assert!(entries[0].message.contains("CUnattendManager::Initialize"));
+    }
+
+    #[test]
+    fn test_dism_tid_extracted_as_thread() {
+        let lines = [
+            "2024-01-15 08:00:00, Info                  DISM   API: PID=1452 TID=776 DismApi.dll: session started",
+        ];
+
+        let (entries, _) = parse_lines(&lines, "C:/Windows/Panther/setupact.log");
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].thread, Some(776));
+        assert_eq!(entries[0].thread_display.as_deref(), Some("776 (0x0308)"));
+    }
+
+    #[test]
+    fn test_perf_severity_mapped_to_info() {
+        let lines = ["2024-01-15 08:00:00, Perf                   SP     Timing checkpoint reached"];
+
+        let (entries, _) = parse_lines(&lines, "C:/Windows/Panther/setupact.log");
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].severity, Severity::Info);
     }
 }

@@ -128,6 +128,10 @@ export interface LogEntry {
   ipAddress?: string | null;
   hostName?: string | null;
   macAddress?: string | null;
+  resultCode?: string | null;
+  gleCode?: string | null;
+  setupPhase?: string | null;
+  operationName?: string | null;
 }
 
 export interface ParserSelectionInfo {

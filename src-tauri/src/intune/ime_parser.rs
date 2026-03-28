@@ -82,6 +82,10 @@ pub fn parse_ime_entries(content: &str, file_path: &str) -> (Vec<LogEntry>, u32)
                     ip_address: None,
                     host_name: None,
                     mac_address: None,
+                    result_code: None,
+                    gle_code: None,
+                    setup_phase: None,
+                    operation_name: None,
         })
         .collect();
 
@@ -302,8 +306,16 @@ fn parse_timestamp_fields(
         return (None, None, None, None, None);
     };
 
+    // When no timezone offset is embedded in the log (the norm for IME logs),
+    // fall back to the machine's current local UTC offset so the display column
+    // shows the correct local time rather than treating local time as UTC.
+    let effective_tz = timezone_offset.or_else(|| {
+        let offset_secs = chrono::Local::now().offset().local_minus_utc();
+        offset_secs.checked_div(60)
+    });
+
     let (timestamp_millis, timestamp_display) =
-        build_timestamp(month, day, year, hour, minute, second, millis, timezone_offset);
+        build_timestamp(month, day, year, hour, minute, second, millis, effective_tz);
     let line_timestamp = timestamp_display.clone();
     let line_timestamp_utc = build_utc_timestamp(
         month,
@@ -706,5 +718,47 @@ mod tests {
         let result = super::build_utc_timestamp(1, 1, 2024, 10, 0, 0, 0, Some(99999));
         assert!(result.is_some(), "extreme offset should fall back, not return None");
         assert_eq!(result.unwrap(), "2024-01-01T10:00:00.000Z");
+    }
+
+    /// IME logs typically omit the timezone offset from the time field.
+    /// Verify that the local-time fallback is applied so the stored UTC millis
+    /// differ from a naive UTC interpretation by the machine's current offset.
+    #[test]
+    fn test_no_timezone_in_time_field_uses_local_fallback() {
+        // A record whose time= field has no +/- suffix (typical IME format)
+        let content = "<![LOG[EMS Agent Started]LOG]!><time=\"00:22:30.000\" date=\"3-27-2026\" component=\"IntuneManagementExtension\" context=\"\" type=\"1\" thread=\"1\" file=\"\">";
+
+        let (entries, _) = parse_ime_entries(content, "IntuneManagementExtension.log");
+        assert_eq!(entries.len(), 1);
+
+        let ts = entries[0].timestamp.expect("timestamp should be set");
+
+        // Compute what the timestamp would be if naive time were treated as UTC (the old bug).
+        let naive_utc = chrono::NaiveDate::from_ymd_opt(2026, 3, 27)
+            .unwrap()
+            .and_hms_milli_opt(0, 22, 30, 0)
+            .unwrap()
+            .and_utc()
+            .timestamp_millis();
+
+        // Compute what the timestamp should be with the local-timezone fallback.
+        let local_offset_mins = chrono::Local::now().offset().local_minus_utc() / 60;
+        let expected = crate::parser::ccm::naive_to_utc_millis(
+            chrono::NaiveDate::from_ymd_opt(2026, 3, 27)
+                .unwrap()
+                .and_hms_milli_opt(0, 22, 30, 0)
+                .unwrap(),
+            Some(local_offset_mins),
+        );
+
+        assert_eq!(ts, expected, "timestamp should use local-timezone fallback");
+
+        // If the machine is not UTC, the stored value must differ from the naive-UTC value.
+        if local_offset_mins != 0 {
+            assert_ne!(
+                ts, naive_utc,
+                "timestamp must not treat naive local time as UTC when offset is non-zero"
+            );
+        }
     }
 }

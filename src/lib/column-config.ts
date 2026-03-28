@@ -12,7 +12,11 @@ export type ColumnId =
   | "filePath"
   | "ipAddress"
   | "hostName"
-  | "macAddress";
+  | "macAddress"
+  | "resultCode"
+  | "gleCode"
+  | "setupPhase"
+  | "operationName";
 
 /** Static definition for a column — label, width, and how to read data from a LogEntry. */
 export interface ColumnDefinition {
@@ -139,6 +143,42 @@ export const ALL_COLUMNS: readonly ColumnDefinition[] = [
     isDetail: true,
     accessor: (e) => e.macAddress ?? null,
   },
+  {
+    id: "resultCode",
+    label: "Result Code",
+    defaultWidth: 130,
+    minWidth: 80,
+    isFlex: false,
+    isDetail: true,
+    accessor: (e) => e.resultCode ?? null,
+  },
+  {
+    id: "gleCode",
+    label: "GLE",
+    defaultWidth: 100,
+    minWidth: 60,
+    isFlex: false,
+    isDetail: true,
+    accessor: (e) => e.gleCode ?? null,
+  },
+  {
+    id: "setupPhase",
+    label: "Setup Phase",
+    defaultWidth: 160,
+    minWidth: 80,
+    isFlex: false,
+    isDetail: true,
+    accessor: (e) => e.setupPhase ?? null,
+  },
+  {
+    id: "operationName",
+    label: "Operation",
+    defaultWidth: 220,
+    minWidth: 80,
+    isFlex: false,
+    isDetail: true,
+    accessor: (e) => e.operationName ?? null,
+  },
 ];
 
 /** Lookup from ColumnId to its definition for O(1) access. */
@@ -155,7 +195,7 @@ const PARSER_COLUMN_MAP: Record<ParserKind, ColumnId[]> = {
   ccm: ["severity", "dateTime", "message", "component", "thread", "sourceFile"],
   simple: ["severity", "dateTime", "message", "component", "thread"],
   dism: ["severity", "dateTime", "message", "component"],
-  panther: ["severity", "dateTime", "message", "component"],
+  panther: ["severity", "dateTime", "message", "component", "thread", "sourceFile", "resultCode", "gleCode", "setupPhase", "operationName"],
   cbs: ["severity", "dateTime", "message", "component"],
   reportingEvents: ["severity", "dateTime", "message", "component"],
   timestamped: ["severity", "dateTime", "message"],

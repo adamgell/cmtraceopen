@@ -99,6 +99,10 @@ pub fn parse_lines(lines: &[&str], file_path: &str) -> (Vec<LogEntry>, u32) {
                     ip_address: None,
                     host_name: None,
                     mac_address: None,
+                    result_code: None,
+                    gle_code: None,
+                    setup_phase: None,
+                    operation_name: None,
             });
         } else {
             // Non-matching line (e.g., continuation/JSON dump) — plain text
@@ -120,6 +124,10 @@ pub fn parse_lines(lines: &[&str], file_path: &str) -> (Vec<LogEntry>, u32) {
                     ip_address: None,
                     host_name: None,
                     mac_address: None,
+                    result_code: None,
+                    gle_code: None,
+                    setup_phase: None,
+                    operation_name: None,
             });
             parse_errors += 1;
         }

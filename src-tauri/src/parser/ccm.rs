@@ -215,6 +215,10 @@ pub fn parse_lines(lines: &[&str], file_path: &str) -> (Vec<LogEntry>, u32) {
                     ip_address: None,
                     host_name: None,
                     mac_address: None,
+                    result_code: None,
+                    gle_code: None,
+                    setup_phase: None,
+                    operation_name: None,
                 });
                 id_counter += 1;
             }
@@ -239,6 +243,10 @@ pub fn parse_lines(lines: &[&str], file_path: &str) -> (Vec<LogEntry>, u32) {
                     ip_address: None,
                     host_name: None,
                     mac_address: None,
+                    result_code: None,
+                    gle_code: None,
+                    setup_phase: None,
+                    operation_name: None,
                 });
                 id_counter += 1;
                 errors += 1;

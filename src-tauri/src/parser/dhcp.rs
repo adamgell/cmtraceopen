@@ -96,6 +96,10 @@ pub fn parse_lines(lines: &[&str], file_path: &str) -> (Vec<LogEntry>, u32) {
                 ip_address: None,
                 host_name: None,
                 mac_address: None,
+                result_code: None,
+                gle_code: None,
+                setup_phase: None,
+                operation_name: None,
             });
             id += 1;
             continue;
@@ -134,6 +138,10 @@ pub fn parse_lines(lines: &[&str], file_path: &str) -> (Vec<LogEntry>, u32) {
             ip_address: ip_address.map(|s| s.to_string()),
             host_name: host_name.map(|s| s.to_string()),
             mac_address: mac_address.map(format_mac),
+            result_code: None,
+            gle_code: None,
+            setup_phase: None,
+            operation_name: None,
         });
         id += 1;
     }
