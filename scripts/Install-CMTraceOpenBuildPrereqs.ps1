@@ -116,30 +116,45 @@ function Invoke-NativeCommandCapture {
     }
 }
 
+# Cache of installed winget package IDs, populated once on first use.
+$script:InstalledWingetPackages = $null
+
+function Get-InstalledWingetPackages {
+    if ($null -ne $script:InstalledWingetPackages) {
+        return $script:InstalledWingetPackages
+    }
+
+    $wingetPath = Resolve-WingetPath
+    Write-Step "$wingetPath list --source winget"
+
+    $output = & $wingetPath list --source winget 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to enumerate installed winget packages (exit code $LASTEXITCODE)."
+    }
+
+    # Parse the tabular output: each installed package has its ID in the second column.
+    # Lines that look like package rows contain at least two whitespace-separated tokens
+    # where the second token contains a dot (e.g., "Git.Git").
+    $ids = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($line in $output) {
+        $text = $line.ToString().Trim()
+        if ($text -match '\S+\s+(\S+\.\S+)') {
+            [void]$ids.Add($Matches[1])
+        }
+    }
+
+    $script:InstalledWingetPackages = $ids
+    return $ids
+}
+
 function Test-WingetPackageInstalled {
     param(
         [Parameter(Mandatory = $true)]
         [string]$PackageId
     )
 
-    $wingetPath = Resolve-WingetPath
-    $result = Invoke-NativeCommandCapture -Command $wingetPath -Arguments @(
-        'list',
-        '--id', $PackageId,
-        '--exact',
-        '--source', 'winget'
-    )
-
-    if ($result.ExitCode -eq 0) {
-        return $true
-    }
-
-    if ($result.Output -match 'No installed package found matching input criteria\.') {
-        return $false
-    }
-
-    $joinedOutput = ($result.Output | ForEach-Object { $_.ToString() }) -join [Environment]::NewLine
-    throw "Failed to query installed state for package '$PackageId'. winget exit code: $($result.ExitCode)`n$joinedOutput"
+    $installed = Get-InstalledWingetPackages
+    return $installed.Contains($PackageId)
 }
 
 function Install-WingetPackage {
@@ -167,7 +182,26 @@ function Install-WingetPackage {
     }
 
     if ($PSCmdlet.ShouldProcess($PackageId, 'Install package with winget')) {
-        Invoke-CheckedCommand -Command $wingetPath -Arguments $arguments
+        $displayArguments = $arguments -join ' '
+        Write-Step "$wingetPath $displayArguments"
+
+        & $wingetPath @arguments
+        $ec = $LASTEXITCODE
+
+        # 0                  = success
+        # -1978335189 (0x8A150017) = APPINSTALLER_CLI_ERROR_NO_APPLICABLE_UPGRADE
+        #   winget found the package already installed with no newer version available.
+        # -1978335135 (0x8A150081) = APPINSTALLER_CLI_ERROR_PACKAGE_ALREADY_INSTALLED
+        if ($ec -ne 0 -and $ec -ne -1978335189 -and $ec -ne -1978335135) {
+            throw ("Command failed with exit code {0}: {1} {2}" -f $ec, $wingetPath, $displayArguments)
+        }
+
+        if ($ec -eq -1978335189 -or $ec -eq -1978335135) {
+            Write-Step "Skipping $PackageId — already installed (detected by winget installer)."
+        }
+
+        # Invalidate the cache so subsequent checks see the newly installed package.
+        $script:InstalledWingetPackages = $null
         Refresh-SessionPath
     }
 }
@@ -178,7 +212,7 @@ function Resolve-VisualStudioInstallerPath {
         (Join-Path $env:ProgramFiles 'Microsoft Visual Studio\Installer\setup.exe')
     ) | Where-Object { $_ -and (Test-Path $_) }
 
-    if (@($candidates).Count -gt 0) {
+    if ($null -ne $candidates -and $candidates.Count -gt 0) {
         return $candidates[0]
     }
 
@@ -193,7 +227,13 @@ function Get-VisualStudioInstallationPath {
         [string[]]$Requires = @()
     )
 
-    $vsWherePath = Resolve-VsWherePath
+    try {
+        $vsWherePath = Resolve-VsWherePath
+    }
+    catch {
+        # vswhere.exe not found means Visual Studio is not installed at all.
+        return $null
+    }
     $arguments = @('-latest', '-products', $ProductRequirement)
 
     foreach ($requirement in $Requires) {
@@ -276,6 +316,28 @@ function Install-VisualStudioTools {
     }
 
     Install-WingetPackage -PackageId $packageId -AdditionalArguments @('--override', $override)
+
+    # After winget install, the package may already have been registered without the
+    # C++ workload (winget skips if the package ID is present). Re-check and modify
+    # the installation to add the required components if they are still missing.
+    $postInstallPath = Get-VisualStudioInstallationPath -ProductRequirement $productRequirement
+    if ($postInstallPath) {
+        $postCompliantPath = Get-VisualStudioInstallationPath -ProductRequirement $productRequirement -Requires @($vcComponent)
+        if (-not $postCompliantPath) {
+            $installerPath = Resolve-VisualStudioInstallerPath
+            Write-Step "Adding the C++ workload and Windows SDK to the installation at '$postInstallPath'."
+            Invoke-CheckedProcess -FilePath $installerPath -ArgumentList @(
+                'modify',
+                '--installPath', $postInstallPath,
+                '--add', $workload,
+                '--add', $vcComponent,
+                '--add', $sdk,
+                '--includeRecommended',
+                '--passive',
+                '--norestart'
+            )
+        }
+    }
 }
 
 function Enable-VbScriptFeature {
@@ -290,7 +352,7 @@ function Resolve-VsWherePath {
         (Join-Path $env:ProgramFiles 'Microsoft Visual Studio\Installer\vswhere.exe')
     ) | Where-Object { $_ -and (Test-Path $_) }
 
-    if (@($candidates).Count -gt 0) {
+    if ($null -ne $candidates -and $candidates.Count -gt 0) {
         return $candidates[0]
     }
 
