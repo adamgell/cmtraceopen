@@ -155,6 +155,18 @@ fn build_entry_from_caps(caps: &regex::Captures<'_>, file_path: &str) -> Option<
                     gle_code: None,
                     setup_phase: None,
                     operation_name: None,
+                    http_method: None,
+                    uri_stem: None,
+                    uri_query: None,
+                    status_code: None,
+                    sub_status: None,
+                    time_taken_ms: None,
+                    client_ip: None,
+                    server_ip: None,
+                    user_agent: None,
+                    server_port: None,
+                    username: None,
+                    win32_status: None,
     })
 }
 
@@ -203,6 +215,18 @@ fn fallback_entry(id: u64, line_number: u32, line: &str, file_path: &str) -> Log
                     gle_code: None,
                     setup_phase: None,
                     operation_name: None,
+                    http_method: None,
+                    uri_stem: None,
+                    uri_query: None,
+                    status_code: None,
+                    sub_status: None,
+                    time_taken_ms: None,
+                    client_ip: None,
+                    server_ip: None,
+                    user_agent: None,
+                    server_port: None,
+                    username: None,
+                    win32_status: None,
     }
 }
 

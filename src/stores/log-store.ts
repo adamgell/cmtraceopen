@@ -269,6 +269,8 @@ function getParserLabel(parser: ParserSelectionInfo["parser"]): string {
       return "Timestamped";
     case "plain":
       return "Plain text";
+    case "iisW3c":
+      return "IIS W3C";
     case "panther":
       return "Panther";
     case "cbs":
@@ -302,6 +304,8 @@ function getImplementationLabel(
       return "Simple parser";
     case "genericTimestamped":
       return "Generic timestamped parser";
+    case "iisW3c":
+      return "IIS W3C Extended Log parser";
     case "reportingEvents":
       return "ReportingEvents parser";
     case "plainText":

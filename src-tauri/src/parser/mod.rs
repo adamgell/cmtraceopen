@@ -6,6 +6,7 @@ pub mod detect;
 pub mod dhcp;
 pub mod dism;
 pub mod intune_macos;
+pub mod iis_w3c;
 pub mod msi;
 pub mod plain;
 pub mod psadt;
@@ -74,6 +75,9 @@ pub fn parse_lines_with_selection(
         }
         crate::models::log_entry::ParserImplementation::Simple => {
             simple::parse_lines(lines, file_path)
+        }
+        crate::models::log_entry::ParserImplementation::IisW3c => {
+            iis_w3c::parse_lines(lines, file_path)
         }
         crate::models::log_entry::ParserImplementation::ReportingEvents => {
             reporting_events::parse_lines(lines, file_path)

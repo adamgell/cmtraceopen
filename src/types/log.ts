@@ -7,6 +7,7 @@ export type ParserKind =
   | "simple"
   | "timestamped"
   | "plain"
+  | "iisW3c"
   | "panther"
   | "cbs"
   | "dism"
@@ -21,6 +22,7 @@ export type ParserImplementation =
   | "ccm"
   | "simple"
   | "genericTimestamped"
+  | "iisW3c"
   | "reportingEvents"
   | "plainText"
   | "msi"
@@ -134,6 +136,18 @@ export interface LogEntry {
   gleCode?: string | null;
   setupPhase?: string | null;
   operationName?: string | null;
+  httpMethod?: string | null;
+  uriStem?: string | null;
+  uriQuery?: string | null;
+  statusCode?: number | null;
+  subStatus?: number | null;
+  timeTakenMs?: number | null;
+  clientIp?: string | null;
+  serverIp?: string | null;
+  userAgent?: string | null;
+  serverPort?: number | null;
+  username?: string | null;
+  win32Status?: number | null;
 }
 
 export interface ParserSelectionInfo {

@@ -706,6 +706,18 @@ fn make_entry(
                     gle_code: None,
                     setup_phase: None,
                     operation_name: None,
+                    http_method: None,
+                    uri_stem: None,
+                    uri_query: None,
+                    status_code: None,
+                    sub_status: None,
+                    time_taken_ms: None,
+                    client_ip: None,
+                    server_ip: None,
+                    user_agent: None,
+                    server_port: None,
+                    username: None,
+                    win32_status: None,
     }
 }
 
