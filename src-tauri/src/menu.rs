@@ -22,6 +22,7 @@ pub const MENU_ID_TOOLS_COLLECT_DIAGNOSTICS: &str = "tools.collect_diagnostics";
 pub const MENU_ID_WINDOW_TOGGLE_DETAILS: &str = "window.toggle.details";
 pub const MENU_ID_WINDOW_TOGGLE_INFO: &str = "window.toggle.info";
 pub const MENU_ID_WINDOW_ACCESSIBILITY_SETTINGS: &str = "window.accessibility.settings";
+pub const MENU_ID_HELP_CHECK_FOR_UPDATES: &str = "help.check_for_updates";
 pub const MENU_ID_HELP_ABOUT: &str = "help.about";
 
 const KNOWN_SOURCE_MENU_ID_PREFIX: &str = "known-source.";
@@ -102,6 +103,13 @@ pub fn build_app_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> 
         true,
         None::<&str>,
     )?;
+    let check_for_updates = MenuItem::with_id(
+        app,
+        MENU_ID_HELP_CHECK_FOR_UPDATES,
+        "Check for Updates...",
+        true,
+        None::<&str>,
+    )?;
     let about = MenuItem::with_id(app, MENU_ID_HELP_ABOUT, "About CMTrace Open", true, None::<&str>)?;
 
     let file_menu = Submenu::with_items(
@@ -125,7 +133,7 @@ pub fn build_app_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> 
             &accessibility_settings,
         ],
     )?;
-    let help_menu = Submenu::with_items(app, "Help", true, &[&about])?;
+    let help_menu = Submenu::with_items(app, "Help", true, &[&check_for_updates, &about])?;
 
     Menu::with_items(app, &[&file_menu, &edit_menu, &tools_menu, &window_menu, &help_menu])
 }
@@ -388,6 +396,14 @@ fn payload_for_menu_id(menu_id: &str) -> Option<AppMenuActionPayload> {
             menu_id: MENU_ID_WINDOW_TOGGLE_INFO.to_string(),
             action: "toggle_info_pane".to_string(),
             category: "window".to_string(),
+            trigger: "menu".to_string(),
+            source_id: None,
+        },
+        MENU_ID_HELP_CHECK_FOR_UPDATES => AppMenuActionPayload {
+            version: 1,
+            menu_id: MENU_ID_HELP_CHECK_FOR_UPDATES.to_string(),
+            action: "check_for_updates".to_string(),
+            category: "help".to_string(),
             trigger: "menu".to_string(),
             source_id: None,
         },

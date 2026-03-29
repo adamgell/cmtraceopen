@@ -196,7 +196,10 @@ jobs:
         run: npm ci
 
       - name: Build Windows MSI and standalone EXE
-        run: npm run app:build:release -- --target ${{ matrix.rust_target }} --bundles msi
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: npm run app:build:release -- --target ${{ matrix.rust_target }} --bundles msi,nsis
 
       - name: Stage Windows release artifacts
         id: stage_artifacts
@@ -204,6 +207,7 @@ jobs:
         run: |
           $releaseDir = Join-Path $PWD "src-tauri\target\${{ matrix.rust_target }}\release"
           $bundleMsiDir = Join-Path $releaseDir "bundle\msi"
+          $bundleNsisDir = Join-Path $releaseDir "bundle\nsis"
           $artifactDir = Join-Path $PWD "release-artifacts"
 
           New-Item -ItemType Directory -Force -Path $artifactDir | Out-Null
@@ -225,14 +229,24 @@ jobs:
             throw "Expected exactly one MSI in $bundleMsiDir. Found: $names"
           }
 
+          # Find NSIS setup installer for auto-updater
+          $nsisCandidates = Get-ChildItem -Path $bundleNsisDir -Filter *-setup.exe -File -Recurse
+          if ($nsisCandidates.Count -ne 1) {
+            $names = ($nsisCandidates | ForEach-Object { $_.FullName }) -join ", "
+            throw "Expected exactly one NSIS setup EXE in $bundleNsisDir. Found: $names"
+          }
+
           $stagedExe = Join-Path $artifactDir "CMTrace-Open_$($env:VERSION)_${{ matrix.artifact_suffix }}.exe"
           $stagedMsi = Join-Path $artifactDir "CMTrace-Open_$($env:VERSION)_${{ matrix.artifact_suffix }}.msi"
+          $stagedNsis = Join-Path $artifactDir "CMTrace-Open_$($env:VERSION)_${{ matrix.artifact_suffix }}-setup.exe"
 
           Copy-Item $appExeCandidates[0].FullName $stagedExe -Force
           Copy-Item $msiCandidates[0].FullName $stagedMsi -Force
+          Copy-Item $nsisCandidates[0].FullName $stagedNsis -Force
 
           "signed_exe_path=$stagedExe" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
           "signed_msi_path=$stagedMsi" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "signed_nsis_path=$stagedNsis" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
       - name: Sign standalone EXE
         uses: azure/trusted-signing-action@v0
@@ -264,6 +278,20 @@ jobs:
           timestamp-rfc3161: http://timestamp.acs.microsoft.com
           timestamp-digest: SHA256
 
+      - name: Generate updater signature for NSIS installer
+        shell: pwsh
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          SIGNED_NSIS_PATH: ${{ steps.stage_artifacts.outputs.signed_nsis_path }}
+        run: |
+          npx tauri signer sign "$env:SIGNED_NSIS_PATH"
+          $sigPath = "$env:SIGNED_NSIS_PATH.sig"
+          if (-not (Test-Path $sigPath)) {
+            throw "Updater signature file was not generated at $sigPath"
+          }
+          Write-Host "Generated updater signature: $sigPath"
+
       - name: Upload signed workflow artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -271,6 +299,7 @@ jobs:
           path: |
             ${{ steps.stage_artifacts.outputs.signed_exe_path }}
             ${{ steps.stage_artifacts.outputs.signed_msi_path }}
+            ${{ steps.stage_artifacts.outputs.signed_nsis_path }}
           if-no-files-found: error
 
       - name: Publish signed Windows assets to GitHub Release
@@ -279,5 +308,62 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SIGNED_EXE_PATH: ${{ steps.stage_artifacts.outputs.signed_exe_path }}
           SIGNED_MSI_PATH: ${{ steps.stage_artifacts.outputs.signed_msi_path }}
+          SIGNED_NSIS_PATH: ${{ steps.stage_artifacts.outputs.signed_nsis_path }}
         run: |
-          gh release upload $env:TAG_NAME $env:SIGNED_EXE_PATH $env:SIGNED_MSI_PATH --clobber
+          gh release upload $env:TAG_NAME $env:SIGNED_EXE_PATH $env:SIGNED_MSI_PATH $env:SIGNED_NSIS_PATH --clobber
+
+      - name: Update latest.json with Windows platform entry
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SIGNED_NSIS_PATH: ${{ steps.stage_artifacts.outputs.signed_nsis_path }}
+        run: |
+          $nsisFileName = Split-Path $env:SIGNED_NSIS_PATH -Leaf
+          $sigContent = Get-Content "$env:SIGNED_NSIS_PATH.sig" -Raw
+          $downloadUrl = "https://github.com/${{ github.repository }}/releases/download/$env:TAG_NAME/$nsisFileName"
+
+          # Map artifact suffix to Tauri platform key
+          $platformKey = if ("${{ matrix.artifact_suffix }}" -eq "x64") { "windows-x86_64" } else { "windows-aarch64" }
+
+          $platformEntry = @{
+            signature = $sigContent.Trim()
+            url       = $downloadUrl
+            version   = "v$env:VERSION"
+          }
+
+          # Try to download existing latest.json from the release (may have been uploaded by macOS/Linux workflow)
+          $latestJsonPath = Join-Path $PWD "latest.json"
+          $existing = $null
+
+          for ($attempt = 1; $attempt -le 6; $attempt++) {
+            try {
+              gh release download $env:TAG_NAME --pattern "latest.json" --dir $PWD --clobber 2>$null
+              if (Test-Path $latestJsonPath) {
+                $existing = Get-Content $latestJsonPath -Raw | ConvertFrom-Json
+                break
+              }
+            } catch { }
+            Start-Sleep -Seconds 10
+          }
+
+          if (-not $existing) {
+            # Create new latest.json
+            $existing = [PSCustomObject]@{
+              version   = "v$env:VERSION"
+              notes     = "CMTrace Open v$env:VERSION"
+              pub_date  = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+              platforms = @{}
+            }
+          }
+
+          # Ensure platforms is a hashtable we can add to
+          if ($existing.platforms -is [PSCustomObject]) {
+            $platformsHash = @{}
+            $existing.platforms.PSObject.Properties | ForEach-Object { $platformsHash[$_.Name] = $_.Value }
+            $existing.platforms = $platformsHash
+          }
+
+          $existing.platforms[$platformKey] = $platformEntry
+          $existing | ConvertTo-Json -Depth 10 | Set-Content $latestJsonPath -Encoding utf8
+
+          gh release upload $env:TAG_NAME $latestJsonPath --clobber

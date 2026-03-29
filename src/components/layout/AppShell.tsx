@@ -16,6 +16,7 @@ import { EvidenceBundleDialog } from "../dialogs/EvidenceBundleDialog";
 import { FileAssociationPromptDialog } from "../dialogs/FileAssociationPromptDialog";
 import { CollectDiagnosticsDialog } from "../dialogs/CollectDiagnosticsDialog";
 import { CollectionCompleteDialog } from "../dialogs/CollectionCompleteDialog";
+import { UpdateDialog } from "../dialogs/UpdateDialog";
 import { IntuneDashboard } from "../intune/IntuneDashboard";
 import { NewIntuneWorkspace } from "../intune/NewIntuneWorkspace";
 import { DsregcmdWorkspace } from "../dsregcmd/DsregcmdWorkspace";
@@ -36,6 +37,7 @@ import { useFileAssociation } from "../../hooks/use-file-association";
 import { useFileAssociationPrompt } from "../../hooks/use-file-association-prompt";
 import { useCollectionProgressListener } from "../../hooks/use-collection-progress-listener";
 import { useParseProgressListener } from "../../hooks/use-parse-progress-listener";
+import { useUpdateChecker } from "../../hooks/use-update-checker";
 
 function buildFilterRunSignature(entries: LogEntry[], clauses: FilterClause[]): string {
   const lastId = entries.length > 0 ? entries[entries.length - 1].id : -1;
@@ -88,9 +90,23 @@ export function AppShell() {
   const setCollectionResult = useUiStore((s) => s.setCollectionResult);
   const showCollectDiagnosticsDialog = useUiStore((s) => s.showCollectDiagnosticsDialog);
   const setShowCollectDiagnosticsDialog = useUiStore((s) => s.setShowCollectDiagnosticsDialog);
+  const showUpdateDialog = useUiStore((s) => s.showUpdateDialog);
+  const setShowUpdateDialog = useUiStore((s) => s.setShowUpdateDialog);
 
   useCollectionProgressListener();
   useParseProgressListener();
+
+  const {
+    updateInfo,
+    isChecking: isUpdateChecking,
+    isDownloading: isUpdateDownloading,
+    downloadProgress: updateDownloadProgress,
+    checkForUpdates,
+    downloadAndInstall,
+    openReleasePage,
+    skipVersion,
+    dismiss: dismissUpdate,
+  } = useUpdateChecker();
 
   const entries = useLogStore((s) => s.entries);
   const filterClauses = useFilterStore((s) => s.clauses);
@@ -503,6 +519,21 @@ export function AppShell() {
       <CollectionCompleteDialog
         result={collectionResult}
         onClose={() => setCollectionResult(null)}
+      />
+      <UpdateDialog
+        isOpen={showUpdateDialog}
+        onClose={() => {
+          dismissUpdate();
+          setShowUpdateDialog(false);
+        }}
+        updateInfo={updateInfo}
+        isChecking={isUpdateChecking}
+        isDownloading={isUpdateDownloading}
+        downloadProgress={updateDownloadProgress}
+        onCheckForUpdates={checkForUpdates}
+        onDownloadAndInstall={downloadAndInstall}
+        onOpenReleasePage={openReleasePage}
+        onSkipVersion={skipVersion}
       />
     </div>
   );
