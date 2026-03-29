@@ -1,20 +1,26 @@
-use once_cell::sync::Lazy;
 use regex::Regex;
 
 use super::severity::detect_severity_from_text;
 use crate::models::log_entry::{LogEntry, LogFormat, Severity};
+use std::sync::OnceLock;
 
-static GUID_FIELD_RE: Lazy<Regex> = Lazy::new(|| {
+fn guid_field_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
     Regex::new(r"^\{[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\}$")
         .unwrap()
-});
+})
+}
 
-static TIMESTAMP_RE: Lazy<Regex> = Lazy::new(|| {
+fn timestamp_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
     Regex::new(
         r"^(\d{4})[-/](\d{2})[-/](\d{2})\s+(\d{2}):(\d{2}):(\d{2})(?:(?::|\.)(\d{1,7}))?$",
     )
     .unwrap()
-});
+})
+}
 
 pub fn matches_reporting_events_record(line: &str) -> bool {
     let fields: Vec<&str> = line.split('\t').collect();
@@ -22,7 +28,7 @@ pub fn matches_reporting_events_record(line: &str) -> bool {
         return false;
     }
 
-    GUID_FIELD_RE.is_match(fields[0].trim()) && parse_timestamp(fields[1].trim()).is_some()
+    guid_field_re().is_match(fields[0].trim()) && parse_timestamp(fields[1].trim()).is_some()
 }
 
 pub fn parse_lines(lines: &[&str], file_path: &str) -> (Vec<LogEntry>, u32) {
@@ -58,7 +64,7 @@ fn parse_line(line: &str, file_path: &str) -> Option<LogEntry> {
     }
 
     let record_guid = normalize_field(fields[0])?;
-    if !GUID_FIELD_RE.is_match(record_guid) {
+    if !guid_field_re().is_match(record_guid) {
         return None;
     }
 
@@ -116,7 +122,7 @@ fn parse_line(line: &str, file_path: &str) -> Option<LogEntry> {
 }
 
 fn parse_timestamp(value: &str) -> Option<(i64, String)> {
-    let caps = TIMESTAMP_RE.captures(value)?;
+    let caps = timestamp_re().captures(value)?;
 
     let year: i32 = caps.get(1)?.as_str().parse().ok()?;
     let month: u32 = caps.get(2)?.as_str().parse().ok()?;

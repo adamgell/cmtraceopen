@@ -84,7 +84,7 @@ pub fn parse_mdatp_health_output(output: &str) -> MacosDefenderHealthStatus {
 // ---------------------------------------------------------------------------
 
 #[cfg(target_os = "macos")]
-pub fn inspect_defender_impl() -> Result<MacosDefenderResult, String> {
+pub fn inspect_defender_impl() -> Result<MacosDefenderResult, crate::error::AppError> {
     use std::process::Command;
 
     log::info!("Inspecting Microsoft Defender for macOS");
@@ -132,8 +132,8 @@ pub fn inspect_defender_impl() -> Result<MacosDefenderResult, String> {
 }
 
 #[cfg(not(target_os = "macos"))]
-pub fn inspect_defender_impl() -> Result<MacosDefenderResult, String> {
-    Err("macOS Diagnostics is only available on macOS.".to_string())
+pub fn inspect_defender_impl() -> Result<MacosDefenderResult, crate::error::AppError> {
+    Err(crate::error::AppError::PlatformUnsupported("macOS Diagnostics is only available on macOS.".to_string()))
 }
 
 // ---------------------------------------------------------------------------

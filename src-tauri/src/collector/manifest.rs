@@ -15,7 +15,7 @@ pub fn write_manifest(
     results: &[ArtifactResult],
     counts: &ArtifactCounts,
     duration_ms: u64,
-) -> Result<(), String> {
+) -> Result<(), crate::error::AppError> {
     let now = Utc::now();
     let hostname = hostname();
 
@@ -77,9 +77,9 @@ pub fn write_manifest(
 
     let manifest_path = bundle_root.join("manifest.json");
     let json_str = serde_json::to_string_pretty(&manifest)
-        .map_err(|e| format!("failed to serialize manifest: {e}"))?;
+        .map_err(|e| crate::error::AppError::Internal(format!("failed to serialize manifest: {e}")))?;
     fs::write(&manifest_path, json_str)
-        .map_err(|e| format!("failed to write manifest at '{}': {e}", manifest_path.display()))?;
+        .map_err(crate::error::AppError::Io)?;
 
     Ok(())
 }
@@ -90,7 +90,7 @@ pub fn write_notes(
     profile: &CollectionProfile,
     counts: &ArtifactCounts,
     duration_ms: u64,
-) -> Result<(), String> {
+) -> Result<(), crate::error::AppError> {
     let now = Utc::now();
     let hostname = hostname();
 
@@ -136,7 +136,7 @@ evidence/
 
     let notes_path = bundle_root.join("notes.md");
     fs::write(&notes_path, notes)
-        .map_err(|e| format!("failed to write notes at '{}': {e}", notes_path.display()))?;
+        .map_err(crate::error::AppError::Io)?;
 
     Ok(())
 }

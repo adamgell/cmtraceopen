@@ -8,18 +8,20 @@
 //! extracted from the CMTrace.exe binary (see REVERSE_ENGINEERING.md).
 
 use chrono::{FixedOffset, TimeZone};
-use once_cell::sync::Lazy;
 use regex::Regex;
 
 use super::severity::detect_severity_from_text;
 use crate::models::log_entry::{LogEntry, LogFormat, ParserSpecialization, Severity};
+use std::sync::OnceLock;
 
 /// Compiled regex matching a complete CCM log line.
 ///
 /// Based on the binary's scanf pattern:
 ///   <time="%02u:%02u:%02u.%03u%d" date="%02u-%02u-%04u"
 ///    component="%100[^"]" context="" type="%u" thread="%u" file="%100[^"]"
-static CCM_RE: Lazy<Regex> = Lazy::new(|| {
+fn ccm_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
     Regex::new(concat!(
         r#"<!\[LOG\[(?P<msg>[\s\S]*?)\]LOG\]!>"#,
         r#"<time="(?P<h>\d{1,2}):(?P<m>\d{1,2}):(?P<s>\d{1,2})\.(?P<ms>\d+)(?P<tz>[+-]?\d+)""#,
@@ -31,12 +33,13 @@ static CCM_RE: Lazy<Regex> = Lazy::new(|| {
         r#"(?:\s+file="(?P<file>[^"]*)")?"#,
     ))
     .expect("CCM regex must compile")
-});
+})
+}
 
 /// Parse a single CCM-format log line.
 /// Returns None if the line doesn't match the CCM format.
 fn parse_line(line: &str) -> Option<CcmParsed> {
-    let caps = CCM_RE.captures(line)?;
+    let caps = ccm_re().captures(line)?;
 
     let msg = caps.name("msg").map(|m| m.as_str().to_string())?;
     let h: u32 = caps.name("h")?.as_str().parse().ok()?;

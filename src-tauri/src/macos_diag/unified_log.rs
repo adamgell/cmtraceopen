@@ -162,14 +162,14 @@ pub fn query_unified_log_impl(
     preset_id: &str,
     time_range: Option<MacosUnifiedLogTimeRange>,
     result_cap: usize,
-) -> Result<MacosUnifiedLogResult, String> {
+) -> Result<MacosUnifiedLogResult, crate::error::AppError> {
     use std::process::Command;
 
     let presets = get_presets();
     let preset = presets
         .iter()
         .find(|p| p.id == preset_id)
-        .ok_or_else(|| format!("Unknown preset ID: '{}'", preset_id))?;
+        .ok_or_else(|| crate::error::AppError::InvalidInput(format!("Unknown preset ID: '{}'", preset_id)))?;
 
     log::info!(
         "Querying unified log with preset '{}', cap={}",
@@ -197,7 +197,7 @@ pub fn query_unified_log_impl(
 
     let output = cmd
         .output()
-        .map_err(|e| format!("Failed to run 'log show': {}", e))?;
+        .map_err(crate::error::AppError::Io)?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -223,8 +223,8 @@ pub fn query_unified_log_impl(
     _preset_id: &str,
     _time_range: Option<MacosUnifiedLogTimeRange>,
     _result_cap: usize,
-) -> Result<MacosUnifiedLogResult, String> {
-    Err("macOS Diagnostics is only available on macOS.".to_string())
+) -> Result<MacosUnifiedLogResult, crate::error::AppError> {
+    Err(crate::error::AppError::PlatformUnsupported("macOS Diagnostics is only available on macOS.".to_string()))
 }
 
 // ---------------------------------------------------------------------------

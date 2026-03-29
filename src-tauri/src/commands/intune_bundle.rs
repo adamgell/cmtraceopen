@@ -122,7 +122,7 @@ pub(crate) fn resolve_evidence_bundle_input(path: &Path) -> Result<Option<Resolv
         Ok(content) => match serde_json::from_str::<Value>(&content) {
             Ok(value) => value,
             Err(error) => {
-                eprintln!(
+                log::error!(
                     "event=intune_bundle_manifest_parse_failed path=\"{}\" error=\"{}\"",
                     manifest_path.display(),
                     error
@@ -131,7 +131,7 @@ pub(crate) fn resolve_evidence_bundle_input(path: &Path) -> Result<Option<Resolv
             }
         },
         Err(error) => {
-            eprintln!(
+            log::error!(
                 "event=intune_bundle_manifest_read_failed path=\"{}\" error=\"{}\"",
                 manifest_path.display(),
                 error
@@ -143,7 +143,7 @@ pub(crate) fn resolve_evidence_bundle_input(path: &Path) -> Result<Option<Resolv
     let evidence_bundle = build_evidence_bundle_metadata(path, &manifest);
     let source_paths = collect_bundle_log_paths(path, &manifest, &evidence_bundle)?;
 
-    eprintln!(
+    log::info!(
         "event=intune_bundle_resolved bundle_id=\"{}\" path=\"{}\" source_count={} available_primary_entry_points={}",
         evidence_bundle.bundle_id.as_deref().unwrap_or("unknown"),
         path.display(),

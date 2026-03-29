@@ -2,7 +2,7 @@ use crate::macos_diag::models::*;
 
 #[tauri::command]
 pub fn macos_scan_environment() -> Result<MacosDiagEnvironment, crate::error::AppError> {
-    crate::macos_diag::environment::scan_environment_impl().map_err(Into::into)
+    crate::macos_diag::environment::scan_environment_impl()
 }
 
 #[tauri::command]
@@ -12,27 +12,27 @@ pub fn macos_scan_intune_logs() -> Result<MacosIntuneLogScanResult, crate::error
 
 #[tauri::command]
 pub fn macos_list_profiles() -> Result<MacosProfilesResult, crate::error::AppError> {
-    crate::macos_diag::profiles::list_profiles_impl().map_err(Into::into)
+    crate::macos_diag::profiles::list_profiles_impl()
 }
 
 #[tauri::command]
 pub fn macos_inspect_defender() -> Result<MacosDefenderResult, crate::error::AppError> {
-    crate::macos_diag::defender::inspect_defender_impl().map_err(Into::into)
+    crate::macos_diag::defender::inspect_defender_impl()
 }
 
 #[tauri::command]
 pub fn macos_list_packages() -> Result<MacosPackagesResult, crate::error::AppError> {
-    crate::macos_diag::packages::list_packages_impl().map_err(Into::into)
+    crate::macos_diag::packages::list_packages_impl()
 }
 
 #[tauri::command]
 pub fn macos_get_package_info(package_id: String) -> Result<MacosPackageInfo, crate::error::AppError> {
-    crate::macos_diag::packages::get_package_info_impl(&package_id).map_err(Into::into)
+    crate::macos_diag::packages::get_package_info_impl(&package_id)
 }
 
 #[tauri::command]
 pub fn macos_get_package_files(package_id: String) -> Result<MacosPackageFiles, crate::error::AppError> {
-    crate::macos_diag::packages::get_package_files_impl(&package_id).map_err(Into::into)
+    crate::macos_diag::packages::get_package_files_impl(&package_id)
 }
 
 #[tauri::command]
@@ -48,7 +48,7 @@ pub fn macos_query_unified_log(
         &preset_id,
         time_range,
         capped,
-    ).map_err(Into::into)
+    )
 }
 
 #[tauri::command]

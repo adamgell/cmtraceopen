@@ -1,15 +1,18 @@
-use once_cell::sync::Lazy;
 use regex::Regex;
 use std::collections::HashMap;
 
 use super::codes::{ErrorCode, ERROR_CODES};
 use serde::{Deserialize, Serialize};
+use std::sync::OnceLock;
 
 /// Pre-built HashMap from error code values to their ErrorCode entries.
 /// Provides O(1) lookup instead of linear scan over the array.
-static CODE_MAP: Lazy<HashMap<u32, &'static ErrorCode>> = Lazy::new(|| {
+fn code_map() -> &'static HashMap<u32, &'static ErrorCode> {
+    static CELL: OnceLock<HashMap<u32, &'static ErrorCode>> = OnceLock::new();
+    CELL.get_or_init(|| {
     ERROR_CODES.iter().map(|ec| (ec.code, ec)).collect()
-});
+})
+}
 
 /// Look up an error code with HRESULT decomposition.
 /// Tries direct hit first. If miss and code is FACILITY_WIN32 (0x8007xxxx),
@@ -18,7 +21,7 @@ static CODE_MAP: Lazy<HashMap<u32, &'static ErrorCode>> = Lazy::new(|| {
 /// HRESULT form (0x80070000 | code).
 fn find_error_code(code: u32) -> Option<&'static ErrorCode> {
     // Direct table hit (O(1) via HashMap)
-    if let Some(ec) = CODE_MAP.get(&code) {
+    if let Some(ec) = code_map().get(&code) {
         return Some(ec);
     }
 
@@ -27,7 +30,7 @@ fn find_error_code(code: u32) -> Option<&'static ErrorCode> {
     // HRESULT wrapper in the table.
     if (code & 0xFFFF_0000) == 0x8007_0000 {
         let win32_code = code & 0x0000_FFFF;
-        if let Some(ec) = CODE_MAP.get(&win32_code) {
+        if let Some(ec) = code_map().get(&win32_code) {
             return Some(ec);
         }
     }
@@ -35,7 +38,7 @@ fn find_error_code(code: u32) -> Option<&'static ErrorCode> {
     // Reverse: if user typed a small Win32 code (e.g., 5), try its HRESULT form
     if code <= 0xFFFF {
         let hresult = 0x8007_0000 | code;
-        if let Some(ec) = CODE_MAP.get(&hresult) {
+        if let Some(ec) = code_map().get(&hresult) {
             return Some(ec);
         }
     }
@@ -54,8 +57,10 @@ pub struct ErrorCodeSpan {
     pub category: String,
 }
 
-static HEX_CODE_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"0[xX][0-9A-Fa-f]{8}").unwrap());
+fn hex_code_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| Regex::new(r"0[xX][0-9A-Fa-f]{8}").unwrap())
+}
 
 /// Scan a message string for recognized error codes and return their spans.
 /// Only returns spans for codes that exist in the error database.
@@ -67,7 +72,7 @@ pub fn detect_error_code_spans(message: &str) -> Vec<ErrorCodeSpan> {
         return Vec::new();
     }
 
-    HEX_CODE_RE
+    hex_code_re()
         .find_iter(message)
         .filter_map(|m| {
             // Skip matches followed by more hex digits (e.g., GUIDs, longer hex values)

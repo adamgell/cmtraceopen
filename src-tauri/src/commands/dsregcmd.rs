@@ -48,7 +48,7 @@ pub fn analyze_dsregcmd(
     input: String,
     bundle_path: Option<String>,
 ) -> Result<DsregcmdAnalysisResult, crate::error::AppError> {
-    eprintln!(
+    log::info!(
         "event=dsregcmd_analysis_start input_chars={} input_lines={}",
         input.len(),
         input.lines().count()
@@ -75,7 +75,7 @@ pub fn analyze_dsregcmd(
     extended.append(&mut rules::build_event_log_diagnostics(&result));
     result.diagnostics.append(&mut extended);
 
-    eprintln!(
+    log::info!(
         "event=dsregcmd_analysis_complete diagnostics_count={} join_type={:?}",
         result.diagnostics.len(),
         result.derived.join_type
@@ -153,7 +153,7 @@ pub fn load_dsregcmd_source(
 
 #[cfg(target_os = "windows")]
 fn capture_dsregcmd_impl() -> Result<DsregcmdCaptureResult, crate::error::AppError> {
-    eprintln!("event=dsregcmd_capture_start platform=windows");
+    log::info!("event=dsregcmd_capture_start platform=windows");
 
     cleanup_old_capture_bundles();
 
@@ -187,7 +187,7 @@ fn capture_dsregcmd_impl() -> Result<DsregcmdCaptureResult, crate::error::AppErr
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let capture_bundle = stage_live_capture_bundle(&stdout)?;
 
-    eprintln!(
+    log::info!(
         "event=dsregcmd_capture_complete platform=windows stdout_chars={} stdout_lines={} bundle_path={}",
         stdout.len(),
         stdout.lines().count(),
@@ -526,7 +526,7 @@ fn create_capture_bundle_root() -> Result<PathBuf, crate::error::AppError> {
 #[cfg(target_os = "windows")]
 fn export_live_registry_evidence(registry_root: &Path) {
     let Ok(reg_path) = resolve_system32_binary("reg.exe") else {
-        eprintln!(
+        log::warn!(
             "event=dsregcmd_registry_export_skipped reason=reg_not_found registry_root={}",
             registry_root.display()
         );
@@ -540,7 +540,7 @@ fn export_live_registry_evidence(registry_root: &Path) {
             .output()
         {
             Ok(output) if output.status.success() => {
-                eprintln!(
+                log::info!(
                     "event=dsregcmd_registry_export_complete key={} file={}",
                     export.key_path,
                     output_path.display()
@@ -548,7 +548,7 @@ fn export_live_registry_evidence(registry_root: &Path) {
             }
             Ok(output) => {
                 let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-                eprintln!(
+                log::error!(
                     "event=dsregcmd_registry_export_failed key={} file={} exit_code={} stderr={}",
                     export.key_path,
                     output_path.display(),
@@ -557,7 +557,7 @@ fn export_live_registry_evidence(registry_root: &Path) {
                 );
             }
             Err(error) => {
-                eprintln!(
+                log::error!(
                     "event=dsregcmd_registry_export_failed key={} file={} error={}",
                     export.key_path,
                     output_path.display(),
@@ -577,7 +577,7 @@ fn collect_enterprise_mgmt_task_guids() -> crate::dsregcmd::DsregcmdScheduledTas
     let schtasks_path = match resolve_system32_binary("schtasks.exe") {
         Ok(p) => p,
         Err(e) => {
-            eprintln!("event=dsregcmd_schtasks_skipped reason={e}");
+            log::warn!("event=dsregcmd_schtasks_skipped reason={e}");
             return evidence;
         }
     };
@@ -594,14 +594,14 @@ fn collect_enterprise_mgmt_task_guids() -> crate::dsregcmd::DsregcmdScheduledTas
     {
         Ok(o) => o,
         Err(e) => {
-            eprintln!("event=dsregcmd_schtasks_failed error={e}");
+            log::error!("event=dsregcmd_schtasks_failed error={e}");
             return evidence;
         }
     };
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        eprintln!(
+        log::error!(
             "event=dsregcmd_schtasks_failed exit_code={} stderr={}",
             output.status.code().unwrap_or_default(),
             stderr
@@ -627,7 +627,7 @@ fn collect_enterprise_mgmt_task_guids() -> crate::dsregcmd::DsregcmdScheduledTas
         }
     }
 
-    eprintln!(
+    log::info!(
         "event=dsregcmd_schtasks_complete guid_count={}",
         evidence.enterprise_mgmt_guids.len()
     );
@@ -730,7 +730,7 @@ fn verify_dsregcmd_signature(dsregcmd_path: &Path) -> Result<(), crate::error::A
     }
 
     if status as u32 == TRUST_E_NOSIGNATURE && verify_catalog_signature(dsregcmd_path)? {
-        eprintln!(
+        log::info!(
             "event=dsregcmd_signature_verification_fallback method=catalog status=valid path={}",
             dsregcmd_path.display()
         );

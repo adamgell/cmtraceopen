@@ -38,7 +38,7 @@ async fn collect_diagnostics_impl(
         } else {
             crate::error::AppError::Internal(format!("collection task failed to join: {e}"))
         }
-    })?.map_err(Into::into)
+    })?
 }
 
 #[cfg(not(target_os = "windows"))]

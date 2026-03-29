@@ -1,5 +1,4 @@
 use chrono::{DateTime, Local, LocalResult, NaiveDateTime, TimeZone, Utc};
-use once_cell::sync::Lazy;
 use regex::Regex;
 
 use crate::dsregcmd::models::{
@@ -7,6 +6,7 @@ use crate::dsregcmd::models::{
     DsregcmdDiagnosticPhase, DsregcmdFacts, DsregcmdJoinType,
 };
 use crate::intune::models::IntuneDiagnosticSeverity;
+use std::sync::OnceLock;
 
 pub(super) const NETWORK_ERROR_MARKERS: &[&str] = &[
     "ERROR_WINHTTP_TIMEOUT",
@@ -15,12 +15,15 @@ pub(super) const NETWORK_ERROR_MARKERS: &[&str] = &[
     "ERROR_WINHTTP_CONNECTION_ERROR",
 ];
 
-static CERTIFICATE_TIMESTAMP_RE: Lazy<Regex> = Lazy::new(|| {
+fn certificate_timestamp_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
     Regex::new(
         r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:\.\d+)?(?: UTC|Z)?|\d{1,2}/\d{1,2}/\d{4} \d{2}:\d{2}:\d{2}(?:\.\d+)?(?: UTC|Z)?",
     )
     .expect("valid certificate timestamp regex")
-});
+})
+}
 
 pub(super) fn derive_facts(facts: &DsregcmdFacts, raw_input: &str) -> DsregcmdDerived {
     let join_type = derive_join_type(facts);
@@ -345,7 +348,7 @@ pub(super) fn parse_dsregcmd_timestamp(value: &str) -> Option<DateTime<Utc>> {
 }
 
 fn parse_certificate_validity(value: &str) -> (Option<DateTime<Utc>>, Option<DateTime<Utc>>) {
-    let timestamps: Vec<DateTime<Utc>> = CERTIFICATE_TIMESTAMP_RE
+    let timestamps: Vec<DateTime<Utc>> = certificate_timestamp_re()
         .find_iter(value)
         .filter_map(|capture| parse_dsregcmd_timestamp(capture.as_str()))
         .collect();

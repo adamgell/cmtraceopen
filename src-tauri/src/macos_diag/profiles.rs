@@ -217,7 +217,7 @@ fn parse_system_profiler_plist(data: &[u8]) -> Vec<MacosMdmProfile> {
 // ---------------------------------------------------------------------------
 
 #[cfg(target_os = "macos")]
-pub fn list_profiles_impl() -> Result<MacosProfilesResult, String> {
+pub fn list_profiles_impl() -> Result<MacosProfilesResult, crate::error::AppError> {
     use std::process::Command;
 
     log::info!("Listing macOS MDM profiles via system_profiler");
@@ -283,8 +283,8 @@ pub fn list_profiles_impl() -> Result<MacosProfilesResult, String> {
 }
 
 #[cfg(not(target_os = "macos"))]
-pub fn list_profiles_impl() -> Result<MacosProfilesResult, String> {
-    Err("macOS Diagnostics is only available on macOS.".to_string())
+pub fn list_profiles_impl() -> Result<MacosProfilesResult, crate::error::AppError> {
+    Err(crate::error::AppError::PlatformUnsupported("macOS Diagnostics is only available on macOS.".to_string()))
 }
 
 // ---------------------------------------------------------------------------

@@ -4,7 +4,6 @@
 //! classifies each file's format and outcome, extracts exit codes and error context,
 //! and returns structured results for the frontend workspace.
 
-use once_cell::sync::Lazy;
 use rayon::prelude::*;
 use regex::Regex;
 use serde::Serialize;
@@ -14,6 +13,7 @@ use crate::error_db::lookup::lookup_error_code;
 use crate::models::log_entry::{LogEntry, ParserKind, Severity};
 use crate::parser;
 use crate::parser::burn;
+use std::sync::OnceLock;
 
 // ── Types ────────────────────────────────────────────────────────────────
 
@@ -86,57 +86,90 @@ pub struct DeploymentAnalysisResult {
 
 // ── Regex patterns ───────────────────────────────────────────────────────
 
-static MSI_MAIN_ENGINE_RE: Lazy<Regex> = Lazy::new(|| {
+fn msi_main_engine_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
     Regex::new(r"MainEngineThread is returning (\d+)").unwrap()
-});
+})
+}
 
-static MSI_RETURN_VALUE_3_RE: Lazy<Regex> = Lazy::new(|| {
+fn msi_return_value_3_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
     Regex::new(r"Return value 3\b").unwrap()
-});
+})
+}
 
-static PSADT_EXIT_CODE_RE: Lazy<Regex> = Lazy::new(|| {
+fn psadt_exit_code_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
     Regex::new(r"(?i)exit\s*code\s*[\[:\s]*(\d+)").unwrap()
-});
+})
+}
 
 /// Burn exit code: "Exit code: 0x0" or "Exit code: 0x80070005" (hex)
-static BURN_EXIT_CODE_RE: Lazy<Regex> = Lazy::new(|| {
+fn burn_exit_code_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
     Regex::new(r"(?i)exit\s*code:\s*0x([0-9A-Fa-f]+)").unwrap()
-});
+})
+}
 
 // MSI metadata: Property(S): ProductName = <value>
-static MSI_PRODUCT_NAME_RE: Lazy<Regex> = Lazy::new(|| {
+fn msi_product_name_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
     Regex::new(r"Property\(S\):\s*ProductName\s*=\s*(.+)").unwrap()
-});
+})
+}
 
-static MSI_PRODUCT_VERSION_RE: Lazy<Regex> = Lazy::new(|| {
+fn msi_product_version_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
     Regex::new(r"Property\(S\):\s*ProductVersion\s*=\s*(.+)").unwrap()
-});
+})
+}
 
 // PSADT: Open-ADTSession message contains [Vendor Name Version]
 // e.g., "Open-ADTSession [Contoso Foo App 1.2.3]" or in component field
-static PSADT_SESSION_INFO_RE: Lazy<Regex> = Lazy::new(|| {
+fn psadt_session_info_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
     Regex::new(r"\[([^\]]+)\]").unwrap()
-});
+})
+}
 
 // Burn: first i001 line e.g. "Burn v3.14.1.8722, Windows v10.0"
-static BURN_VERSION_RE: Lazy<Regex> = Lazy::new(|| {
+fn burn_version_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
     Regex::new(r"Burn v([\d.]+)").unwrap()
-});
+})
+}
 
 // PatchMyPC: "Starting UserNotification V2.1.100.317"
-static PATCHMYPC_VERSION_RE: Lazy<Regex> = Lazy::new(|| {
+fn patchmypc_version_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
     Regex::new(r"(?i)Starting\s+UserNotification\s+V([\d.]+)").unwrap()
-});
+})
+}
 
 // MSI command line: /i = install, /x = uninstall, /f = repair
-static MSI_CMDLINE_RE: Lazy<Regex> = Lazy::new(|| {
+fn msi_cmdline_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
     Regex::new(r"(?i)CommandLine:\s+(.*)").unwrap()
-});
+})
+}
 
 // PSADT deploy type: "installationType [Install]" or in the session message
-static PSADT_DEPLOY_TYPE_RE: Lazy<Regex> = Lazy::new(|| {
+fn psadt_deploy_type_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
     Regex::new(r"(?i)(?:deployment\s*type|installation\s*type|deploy\s*mode)\s*[:\s]*\[?\s*(Install|Uninstall|Repair)\b").unwrap()
-});
+})
+}
 
 // ── PSADT keywords ──────────────────────────────────────────────────────
 
@@ -205,12 +238,12 @@ fn extract_app_metadata(
             let mut version = None;
             for entry in entries.iter() {
                 if name.is_none() {
-                    if let Some(caps) = MSI_PRODUCT_NAME_RE.captures(&entry.message) {
+                    if let Some(caps) = msi_product_name_re().captures(&entry.message) {
                         name = Some(caps[1].trim().to_string());
                     }
                 }
                 if version.is_none() {
-                    if let Some(caps) = MSI_PRODUCT_VERSION_RE.captures(&entry.message) {
+                    if let Some(caps) = msi_product_version_re().captures(&entry.message) {
                         version = Some(caps[1].trim().to_string());
                     }
                 }
@@ -224,7 +257,7 @@ fn extract_app_metadata(
             // Look for Open-ADTSession in message text
             for entry in entries.iter() {
                 if entry.message.contains("Open-ADTSession") {
-                    if let Some(caps) = PSADT_SESSION_INFO_RE.captures(&entry.message) {
+                    if let Some(caps) = psadt_session_info_re().captures(&entry.message) {
                         let info = caps[1].trim().to_string();
                         return parse_psadt_app_info(&info);
                     }
@@ -240,7 +273,7 @@ fn extract_app_metadata(
                     .as_deref()
                     .is_some_and(|c| c.contains("Open-ADTSession"));
                 if is_open {
-                    if let Some(caps) = PSADT_SESSION_INFO_RE.captures(&entry.message) {
+                    if let Some(caps) = psadt_session_info_re().captures(&entry.message) {
                         let info = caps[1].trim().to_string();
                         return parse_psadt_app_info(&info);
                     }
@@ -256,7 +289,7 @@ fn extract_app_metadata(
                     .as_deref()
                     .is_some_and(|c| c == "i001");
                 if is_i001 {
-                    let version = BURN_VERSION_RE
+                    let version = burn_version_re()
                         .captures(&entry.message)
                         .map(|c| c[1].to_string());
                     // Use the full message as app name (it often has the product info)
@@ -268,7 +301,7 @@ fn extract_app_metadata(
         }
         DeploymentFormat::PatchMyPc => {
             for entry in entries.iter() {
-                if let Some(caps) = PATCHMYPC_VERSION_RE.captures(&entry.message) {
+                if let Some(caps) = patchmypc_version_re().captures(&entry.message) {
                     return (
                         Some("PatchMyPC UserNotification".to_string()),
                         Some(caps[1].to_string()),
@@ -304,7 +337,7 @@ fn extract_deploy_type(format: &DeploymentFormat, entries: &[LogEntry]) -> Optio
     match format {
         DeploymentFormat::MsiVerbose => {
             for entry in entries.iter() {
-                if let Some(caps) = MSI_CMDLINE_RE.captures(&entry.message) {
+                if let Some(caps) = msi_cmdline_re().captures(&entry.message) {
                     let cmd = caps[1].to_ascii_lowercase();
                     if cmd.contains("/x") || cmd.contains("remove=all") {
                         return Some("Uninstall".to_string());
@@ -325,7 +358,7 @@ fn extract_deploy_type(format: &DeploymentFormat, entries: &[LogEntry]) -> Optio
         | DeploymentFormat::PsadtLegacy => {
             for entry in entries.iter() {
                 let text = &entry.message;
-                if let Some(caps) = PSADT_DEPLOY_TYPE_RE.captures(text) {
+                if let Some(caps) = psadt_deploy_type_re().captures(text) {
                     let dt = caps[1].to_string();
                     // Capitalize first letter
                     let mut chars = dt.chars();
@@ -363,7 +396,7 @@ fn extract_exit_code(format: &DeploymentFormat, entries: &[LogEntry]) -> Option<
     match format {
         DeploymentFormat::MsiVerbose => {
             for entry in entries.iter().rev() {
-                if let Some(caps) = MSI_MAIN_ENGINE_RE.captures(&entry.message) {
+                if let Some(caps) = msi_main_engine_re().captures(&entry.message) {
                     if let Ok(code) = caps[1].parse::<i32>() {
                         return Some(code);
                     }
@@ -375,7 +408,7 @@ fn extract_exit_code(format: &DeploymentFormat, entries: &[LogEntry]) -> Option<
             // Search for Close-ADTSession with exit code
             for entry in entries.iter().rev() {
                 if entry.message.contains("Close-ADTSession") || entry.message.contains("ADTSession") {
-                    if let Some(caps) = PSADT_EXIT_CODE_RE.captures(&entry.message) {
+                    if let Some(caps) = psadt_exit_code_re().captures(&entry.message) {
                         if let Ok(code) = caps[1].parse::<i32>() {
                             return Some(code);
                         }
@@ -384,7 +417,7 @@ fn extract_exit_code(format: &DeploymentFormat, entries: &[LogEntry]) -> Option<
             }
             // Fallback: any exit code pattern
             for entry in entries.iter().rev() {
-                if let Some(caps) = PSADT_EXIT_CODE_RE.captures(&entry.message) {
+                if let Some(caps) = psadt_exit_code_re().captures(&entry.message) {
                     if let Ok(code) = caps[1].parse::<i32>() {
                         return Some(code);
                     }
@@ -400,7 +433,7 @@ fn extract_exit_code(format: &DeploymentFormat, entries: &[LogEntry]) -> Option<
                     .as_deref()
                     .is_some_and(|c| c.contains("Close-ADTSession"));
                 if is_close {
-                    if let Some(caps) = PSADT_EXIT_CODE_RE.captures(&entry.message) {
+                    if let Some(caps) = psadt_exit_code_re().captures(&entry.message) {
                         if let Ok(code) = caps[1].parse::<i32>() {
                             return Some(code);
                         }
@@ -408,7 +441,7 @@ fn extract_exit_code(format: &DeploymentFormat, entries: &[LogEntry]) -> Option<
                 }
             }
             for entry in entries.iter().rev() {
-                if let Some(caps) = PSADT_EXIT_CODE_RE.captures(&entry.message) {
+                if let Some(caps) = psadt_exit_code_re().captures(&entry.message) {
                     if let Ok(code) = caps[1].parse::<i32>() {
                         return Some(code);
                     }
@@ -419,7 +452,7 @@ fn extract_exit_code(format: &DeploymentFormat, entries: &[LogEntry]) -> Option<
         DeploymentFormat::Burn => {
             // Burn exit line: "Exit code: 0xN" (any severity, typically i007)
             for entry in entries.iter().rev() {
-                if let Some(caps) = BURN_EXIT_CODE_RE.captures(&entry.message) {
+                if let Some(caps) = burn_exit_code_re().captures(&entry.message) {
                     if let Ok(code) = u32::from_str_radix(&caps[1], 16) {
                         return Some(code as i32);
                     }
@@ -451,7 +484,7 @@ fn extract_error_lines(format: &DeploymentFormat, entries: &[LogEntry]) -> Vec<D
         DeploymentFormat::MsiVerbose => {
             // Find "Return value 3" lines with context
             for (i, entry) in entries.iter().enumerate() {
-                if MSI_RETURN_VALUE_3_RE.is_match(&entry.message) {
+                if msi_return_value_3_re().is_match(&entry.message) {
                     let start = i.saturating_sub(3);
                     for ctx in &entries[start..=i] {
                         lines.push(DeploymentErrorLine {
@@ -464,7 +497,7 @@ fn extract_error_lines(format: &DeploymentFormat, entries: &[LogEntry]) -> Vec<D
             }
             // Include MainEngineThread line
             for entry in entries.iter() {
-                if MSI_MAIN_ENGINE_RE.is_match(&entry.message) {
+                if msi_main_engine_re().is_match(&entry.message) {
                     lines.push(DeploymentErrorLine {
                         line_number: entry.line_number,
                         message: entry.message.clone(),

@@ -4,10 +4,10 @@ use std::path::{Path, PathBuf};
 
 use evtx::EvtxParser;
 #[cfg(target_os = "windows")]
-use once_cell::sync::Lazy;
-#[cfg(target_os = "windows")]
 use regex::Regex;
 use serde_json::Value;
+#[cfg(target_os = "windows")]
+use std::sync::OnceLock;
 
 #[cfg(target_os = "windows")]
 use crate::intune::eventlog_win32;
@@ -40,40 +40,54 @@ const LIVE_EVENT_CHANNELS: &[&str] = &[
 ];
 
 #[cfg(target_os = "windows")]
-static PROVIDER_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r#"<Provider[^>]*Name=['\"]([^'\"]+)['\"]"#)
-        .expect("provider regex must compile")
-});
+fn provider_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
+        Regex::new(r#"<Provider[^>]*Name=['\"]([^'\"]+)['\"]"#)
+            .expect("provider regex must compile")
+    })
+}
 #[cfg(target_os = "windows")]
-static CHANNEL_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"<Channel>(.*?)</Channel>").expect("channel regex must compile")
-});
+fn channel_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| Regex::new(r"<Channel>(.*?)</Channel>").expect("channel regex must compile"))
+}
 #[cfg(target_os = "windows")]
-static EVENT_ID_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"<EventID(?:\s[^>]*)?>(\d+)</EventID>").expect("event id regex must compile")
-});
+fn event_id_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| Regex::new(r"<EventID(?:\s[^>]*)?>(\d+)</EventID>").expect("event id regex must compile"))
+}
 #[cfg(target_os = "windows")]
-static LEVEL_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"<Level>(\d+)</Level>").expect("level regex must compile")
-});
+fn level_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| Regex::new(r"<Level>(\d+)</Level>").expect("level regex must compile"))
+}
 #[cfg(target_os = "windows")]
-static TIME_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r#"<TimeCreated[^>]*SystemTime=['\"]([^'\"]+)['\"]"#)
-        .expect("time regex must compile")
-});
+fn time_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
+        Regex::new(r#"<TimeCreated[^>]*SystemTime=['\"]([^'\"]+)['\"]"#)
+            .expect("time regex must compile")
+    })
+}
 #[cfg(target_os = "windows")]
-static COMPUTER_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"<Computer>(.*?)</Computer>").expect("computer regex must compile")
-});
+fn computer_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| Regex::new(r"<Computer>(.*?)</Computer>").expect("computer regex must compile"))
+}
 #[cfg(target_os = "windows")]
-static ACTIVITY_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r#"<Correlation[^>]*ActivityID=['\"]([^'\"]+)['\"]"#)
-        .expect("activity regex must compile")
-});
+fn activity_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
+        Regex::new(r#"<Correlation[^>]*ActivityID=['\"]([^'\"]+)['\"]"#)
+            .expect("activity regex must compile")
+    })
+}
 #[cfg(target_os = "windows")]
-static MESSAGE_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"(?s)<Message>(.*?)</Message>").expect("message regex must compile")
-});
+fn message_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| Regex::new(r"(?s)<Message>(.*?)</Message>").expect("message regex must compile"))
+}
 
 // ---------------------------------------------------------------------------
 // File discovery
@@ -132,7 +146,7 @@ pub fn parse_evtx_file(path: &Path, id_offset: u64) -> Result<Vec<EventLogEntry>
 
     for record_result in parser.records_json() {
         if entries.len() >= MAX_ENTRIES_PER_FILE {
-            eprintln!(
+            log::warn!(
                 "event=evtx_entry_cap_reached file=\"{}\" cap={}",
                 source_file, MAX_ENTRIES_PER_FILE
             );
@@ -142,7 +156,7 @@ pub fn parse_evtx_file(path: &Path, id_offset: u64) -> Result<Vec<EventLogEntry>
         let record = match record_result {
             Ok(r) => r,
             Err(e) => {
-                eprintln!(
+                log::warn!(
                     "event=evtx_record_skip file=\"{}\" error=\"{}\"",
                     source_file, e
                 );
@@ -310,7 +324,7 @@ pub fn parse_bundle_event_logs(
                 all_entries.extend(entries);
             }
             Err(e) => {
-                eprintln!(
+                log::error!(
                     "event=evtx_file_error file=\"{}\" error=\"{}\"",
                     evtx_path.display(),
                     e
@@ -374,7 +388,7 @@ pub fn parse_live_event_logs() -> Option<EventLogAnalysis> {
                     }
                 }
                 Err(error) => {
-                    eprintln!(
+                    log::error!(
                         "event=live_event_log_query_failed channel=\"{}\" error=\"{}\"",
                         channel, error
                     );
@@ -390,7 +404,7 @@ pub fn parse_live_event_logs() -> Option<EventLogAnalysis> {
                         ),
                         status: EventLogLiveQueryStatus::Failed,
                         entry_count: 0,
-                        error_message: Some(error),
+                        error_message: Some(error.to_string()),
                     });
                 }
             }
@@ -468,24 +482,24 @@ pub(crate) fn parse_live_event_record(
     id: u64,
     fallback_channel: &str,
 ) -> Option<EventLogEntry> {
-    let channel_raw = extract_regex_value(xml, &CHANNEL_RE)
+    let channel_raw = extract_regex_value(xml, &channel_re())
         .unwrap_or_else(|| fallback_channel.to_string());
     let channel = EventLogChannel::from_channel_string(&channel_raw);
-    let timestamp = extract_regex_value(xml, &TIME_RE)?;
+    let timestamp = extract_regex_value(xml, &time_re())?;
 
-    let provider = extract_regex_value(xml, &PROVIDER_RE).unwrap_or_default();
-    let event_id = extract_regex_value(xml, &EVENT_ID_RE)
+    let provider = extract_regex_value(xml, &provider_re()).unwrap_or_default();
+    let event_id = extract_regex_value(xml, &event_id_re())
         .and_then(|value| value.parse::<u32>().ok())
         .unwrap_or(0);
-    let level = extract_regex_value(xml, &LEVEL_RE)
+    let level = extract_regex_value(xml, &level_re())
         .and_then(|value| value.parse::<u8>().ok())
         .unwrap_or(0);
-    let computer = extract_regex_value(xml, &COMPUTER_RE);
-    let correlation_activity_id = extract_regex_value(xml, &ACTIVITY_RE);
+    let computer = extract_regex_value(xml, &computer_re());
+    let correlation_activity_id = extract_regex_value(xml, &activity_re());
     let message = rendered_message
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| {
-            extract_regex_value(xml, &MESSAGE_RE)
+            extract_regex_value(xml, &message_re())
                 .map(|value| decode_xml_text(&value))
                 .unwrap_or_default()
         });

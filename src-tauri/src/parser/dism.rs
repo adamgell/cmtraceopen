@@ -1,25 +1,33 @@
-use once_cell::sync::Lazy;
 use regex::Regex;
 
 use super::severity::detect_severity_from_text;
 use crate::models::log_entry::{LogEntry, LogFormat, Severity};
+use std::sync::OnceLock;
 
-static DISM_PREFIX_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2},").unwrap());
+fn dism_prefix_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| Regex::new(r"^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2},").unwrap())
+}
 
-static DISM_HEADER_RE: Lazy<Regex> = Lazy::new(|| {
+fn dism_header_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
     Regex::new(
         r"^(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2}):(\d{2}),\s+(Info|Warning|Error|Perf|Verbose|Debug)\s+([A-Za-z][A-Za-z0-9_.-]{1,31})\s+(.*)$",
     )
     .unwrap()
-});
+})
+}
 
-static DISM_RELAXED_HEADER_RE: Lazy<Regex> = Lazy::new(|| {
+fn dism_relaxed_header_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
     Regex::new(
         r"^(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2}):(\d{2}),\s+([A-Za-z][A-Za-z0-9_-]{1,31})\s+([A-Za-z][A-Za-z0-9_.-]{1,31})\s+(.*)$",
     )
     .unwrap()
-});
+})
+}
 
 struct PendingEntry {
     entry: LogEntry,
@@ -27,7 +35,7 @@ struct PendingEntry {
 }
 
 pub fn matches_dism_record(line: &str) -> bool {
-    let Some(caps) = DISM_HEADER_RE.captures(line) else {
+    let Some(caps) = dism_header_re().captures(line) else {
         return false;
     };
 
@@ -54,7 +62,7 @@ pub fn parse_lines(lines: &[&str], file_path: &str) -> (Vec<LogEntry>, u32) {
             continue;
         }
 
-        if DISM_PREFIX_RE.is_match(line) {
+        if dism_prefix_re().is_match(line) {
             flush_pending(&mut entries, &mut pending, &mut next_id);
             entries.push(fallback_entry(next_id, line_number, line, file_path));
             next_id += 1;
@@ -85,11 +93,11 @@ pub fn parse_lines(lines: &[&str], file_path: &str) -> (Vec<LogEntry>, u32) {
 }
 
 fn parse_header(line: &str, file_path: &str) -> Option<LogEntry> {
-    if let Some(caps) = DISM_HEADER_RE.captures(line) {
+    if let Some(caps) = dism_header_re().captures(line) {
         return build_entry_from_caps(&caps, file_path);
     }
 
-    let caps = DISM_RELAXED_HEADER_RE.captures(line)?;
+    let caps = dism_relaxed_header_re().captures(line)?;
     let component = caps.get(8)?.as_str().to_ascii_uppercase();
     if !component.starts_with("DISM") {
         return None;

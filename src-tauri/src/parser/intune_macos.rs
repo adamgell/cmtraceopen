@@ -6,14 +6,16 @@
 //! Example:
 //!   2026-03-23 12:51:11:888 | IntuneMDM-Daemon | I | 11054604 | SyncActivityTracer | Reporting results Context: network observer
 
-use once_cell::sync::Lazy;
 use regex::Regex;
 
 use crate::models::log_entry::{LogEntry, LogFormat, Severity};
+use std::sync::OnceLock;
 
 /// Regex matching the pipe-delimited macOS Intune log format.
 /// Groups: year, month, day, hour, minute, second, millis, process, severity, thread, subcomponent, message
-static INTUNE_MACOS_RE: Lazy<Regex> = Lazy::new(|| {
+fn intune_macos_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
     Regex::new(concat!(
         r"^(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2}):(\d{2}):(\d{3})",
         r"\s*\|\s*([^|]+?)\s*",   // process
@@ -23,11 +25,12 @@ static INTUNE_MACOS_RE: Lazy<Regex> = Lazy::new(|| {
         r"\|\s*(.*)",              // message (rest of line)
     ))
     .expect("Intune macOS regex must compile")
-});
+})
+}
 
 /// Check if a line matches the macOS Intune pipe-delimited format (used by detect.rs).
 pub fn matches_intune_macos(line: &str) -> bool {
-    INTUNE_MACOS_RE.is_match(line)
+    intune_macos_re().is_match(line)
 }
 
 fn severity_from_letter(letter: &str) -> Severity {
@@ -50,7 +53,7 @@ pub fn parse_lines(lines: &[&str], file_path: &str) -> (Vec<LogEntry>, u32) {
             continue;
         }
 
-        if let Some(caps) = INTUNE_MACOS_RE.captures(trimmed) {
+        if let Some(caps) = intune_macos_re().captures(trimmed) {
             let yr: i32 = caps.get(1).unwrap().as_str().parse().unwrap_or(2024);
             let mon: u32 = caps.get(2).unwrap().as_str().parse().unwrap_or(1);
             let day: u32 = caps.get(3).unwrap().as_str().parse().unwrap_or(1);

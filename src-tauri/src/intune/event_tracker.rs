@@ -1,220 +1,355 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
+use std::sync::OnceLock;
 
-use once_cell::sync::Lazy;
 use regex::Regex;
 
-use super::guid_registry::{self, GuidRegistry, GUID_RE};
+use super::guid_registry::{self, GuidRegistry, guid_re};
 use super::ime_parser::ImeLine;
 use super::models::{IntuneEvent, IntuneEventType, IntuneStatus};
 
-static WIN32_APP_RE: Lazy<Regex> = Lazy::new(|| {
+fn win32_app_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
     Regex::new(
         r#"(?i)\[Win32App\].*(?:processing|executing|installing|detected|not detected|evaluating)"#,
     )
     .unwrap()
-});
-static WIN32_RESULT_RE: Lazy<Regex> = Lazy::new(|| {
+})
+}
+fn win32_result_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
     Regex::new(r#"(?i)\[Win32App\].*(?:result|completed|success|failed|error)"#).unwrap()
-});
-static WIN32_GUID_RE: Lazy<Regex> = Lazy::new(|| {
+})
+}
+fn win32_guid_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
     Regex::new(r#"(?i)(?:app|application)\s+(?:id|with\s+id)[:\s]+([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})"#).unwrap()
-});
-static WINGET_RE: Lazy<Regex> = Lazy::new(|| {
+})
+}
+fn winget_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
     Regex::new(r#"(?i)WinGetApp.*(?:processing|installing|detected|evaluating)"#).unwrap()
-});
-static WINGET_TOKEN_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r#"(?i)(?:winget|microsoft\.winget)"#).unwrap());
-static APPWORKLOAD_DOWNLOAD_RE: Lazy<Regex> = Lazy::new(|| {
+})
+}
+fn winget_token_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| Regex::new(r#"(?i)(?:winget|microsoft\.winget)"#).unwrap())
+}
+fn appworkload_download_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
     Regex::new(
         r#"(?i)(?:download(?:ing|ed)?|delivery\s+optimization|content\s+download|bytes\s+downloaded|download\s+progress|download\s+session|content\s+retrieval)"#,
     )
     .unwrap()
-});
-static APPWORKLOAD_STAGING_RE: Lazy<Regex> = Lazy::new(|| {
+})
+}
+fn appworkload_staging_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
     Regex::new(
         r#"(?i)(?:staging\s+(?:file|content)|hash\s+validation|content\s+cached|cache\s+location|expanded\s+content|extract(?:ed|ing))"#,
     )
     .unwrap()
-});
-static APPWORKLOAD_HASH_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r#"(?i)(?:hash\s+validation|hash\s+mismatch|hash\s+check)"#).unwrap());
-static APPWORKLOAD_INSTALL_RE: Lazy<Regex> = Lazy::new(|| {
+})
+}
+fn appworkload_hash_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| Regex::new(r#"(?i)(?:hash\s+validation|hash\s+mismatch|hash\s+check)"#).unwrap())
+}
+fn appworkload_install_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
     Regex::new(
         r#"(?i)(?:install(?:ing|ation)?|execution|enforcement|installer|launching\s+install|handoff\s+to\s+install|processdetectionrules|detection\s+rule)"#,
     )
     .unwrap()
-});
-static APPWORKLOAD_RETRY_RE: Lazy<Regex> = Lazy::new(|| {
+})
+}
+fn appworkload_retry_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
     Regex::new(r#"(?i)(?:retry|retrying|reattempt|will\s+retry|attempt\s+\d+\s+of\s+\d+)"#).unwrap()
-});
-static APPWORKLOAD_STALL_RE: Lazy<Regex> = Lazy::new(|| {
+})
+}
+fn appworkload_stall_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
     Regex::new(
         r#"(?i)(?:stalled|not\s+progressing|no\s+progress|timed?\s*out|timeout|hung|retry\s+exhausted)"#,
     )
     .unwrap()
-});
-static APPWORKLOAD_QUEUE_RE: Lazy<Regex> = Lazy::new(|| {
+})
+}
+fn appworkload_queue_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
     Regex::new(
         r#"(?i)(?:queued|queueing|requesting\s+download|waiting\s+for\s+download|waiting\s+for\s+content|pending\s+download)"#,
     )
     .unwrap()
-});
-static APPWORKLOAD_FAILURE_RE: Lazy<Regex> = Lazy::new(|| {
+})
+}
+fn appworkload_failure_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
     Regex::new(
         r#"(?i)(?:download\s+failed|failed\s+to\s+download|hash\s+validation\s+failed|hash\s+mismatch|staging\s+failed|unable\s+to\s+download|content\s+not\s+found|cancelled|aborted|retry\s+exhausted)"#,
     )
     .unwrap()
-});
-static APPWORKLOAD_SUCCESS_RE: Lazy<Regex> = Lazy::new(|| {
+})
+}
+fn appworkload_success_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
     Regex::new(
         r#"(?i)(?:download\s+completed|download\s+succeeded|staging\s+completed|content\s+cached|hash\s+validation\s+succeeded|install\s+completed|completed\s+successfully)"#,
     )
     .unwrap()
-});
-static POLICY_EVAL_RE: Lazy<Regex> = Lazy::new(|| {
+})
+}
+fn policy_eval_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
     Regex::new(
         r#"(?i)(?:assignment\s+evaluation|targeted\s+intent|applicability\s*=|\bapplicable\b|not\s+applicable|requirement\s+rule|detection\s+rule|local\s+deadline|grs\s+expired|grs\s+not\s+expired|enforcement\s+classification|will\s+not\s+be\s+enforced)"#,
     )
     .unwrap()
-});
-static APP_ACTION_RE: Lazy<Regex> = Lazy::new(|| {
+})
+}
+fn app_action_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
     Regex::new(r#"(?i)(?:app\s+with\s+id:|application\s+action|managed\s+app)"#).unwrap()
-});
-static APPLICABILITY_RE: Lazy<Regex> = Lazy::new(|| {
+})
+}
+fn applicability_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
     Regex::new(r#"(?i)(?:applicability|applicable|not\s+applicable|requirement\s+rule|detection\s+rule|will\s+not\s+be\s+enforced)"#)
         .unwrap()
-});
-static APPLICABILITY_BLOCK_RE: Lazy<Regex> = Lazy::new(|| {
+})
+}
+fn applicability_block_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
     Regex::new(
         r#"(?i)(?:not\s+applicable|applicability\s*(?:=|:)\s*false|will\s+not\s+be\s+enforced|requirement\s+rule.*(?:not\s+satisfied|failed|false)|assignment.*(?:not\s+applicable|not\s+targeted)|enforcement\s+classification.*not\s+applicable)"#,
     )
     .unwrap()
-});
-static APPLICABILITY_SUCCESS_RE: Lazy<Regex> = Lazy::new(|| {
+})
+}
+fn applicability_success_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
     Regex::new(
         r#"(?i)(?:applicability\s*(?:=|:)\s*true|requirement\s+rule.*(?:passed|satisfied|true)|assignment\s+evaluation\s+completed|applicable\s*=\s*true)"#,
     )
     .unwrap()
-});
-static POLICY_PENDING_RE: Lazy<Regex> = Lazy::new(|| {
+})
+}
+fn policy_pending_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
     Regex::new(r#"(?i)(?:local\s+deadline|grs\s+not\s+expired|scheduled|queued|pending)"#).unwrap()
-});
-static SCRIPT_RE: Lazy<Regex> = Lazy::new(|| {
+})
+}
+fn script_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
     Regex::new(r#"(?i)(?:PowerShell\s+script|script\s+execution|running\s+script)"#).unwrap()
-});
-static SCRIPT_RESULT_RE: Lazy<Regex> = Lazy::new(|| {
+})
+}
+fn script_result_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
     Regex::new(r#"(?i)script.*(?:completed|exit\s+code|result|output|failed|success)"#).unwrap()
-});
-static AGENTEXECUTOR_SCRIPT_RE: Lazy<Regex> = Lazy::new(|| {
+})
+}
+fn agentexecutor_script_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
     Regex::new(
         r#"(?i)(?:powershell\s+script\s+is\s+successfully\s+executed|detection\s+script|remediation\s+script|exit\s+code|script\s+(?:completed|failed|timed?\s*out|execution)|stdout|stderr)"#,
     )
     .unwrap()
-});
-static DETECTION_SCRIPT_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r#"(?i)\b(?:pre-)?detection\s+script\b|\bpre-detect\b"#).unwrap());
-static REMEDIATION_SCRIPT_RE: Lazy<Regex> = Lazy::new(|| {
+})
+}
+fn detection_script_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| Regex::new(r#"(?i)\b(?:pre-)?detection\s+script\b|\bpre-detect\b"#).unwrap())
+}
+fn remediation_script_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
     Regex::new(r#"(?i)\b(?:post-)?remediation\s+script\b|\bpost-detect\b|\bremediation\b"#).unwrap()
-});
-static SCRIPT_FAILURE_RE: Lazy<Regex> = Lazy::new(|| {
+})
+}
+fn script_failure_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
     Regex::new(
         r#"(?i)(?:access\s+is\s+denied|unauthorized|permission\s+denied|term\s+'.+'\s+is\s+not\s+recognized|cannot\s+find\s+path|path\s+not\s+found|file\s+not\s+found|module\s+.*\s+not\s+found|parsererror|syntax\s+error|execution\s+policy|digitally\s+signed|failed\s+to\s+execute|exception|stderr)"#,
     )
     .unwrap()
-});
-static REMEDIATION_RE: Lazy<Regex> = Lazy::new(|| {
+})
+}
+fn remediation_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
     Regex::new(r#"(?i)(?:Remediation|HealthScript|proactive\s+remediation)"#).unwrap()
-});
-static HEALTHSCRIPT_RE: Lazy<Regex> = Lazy::new(|| {
+})
+}
+fn healthscript_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
     Regex::new(
         r#"(?i)(?:healthscript|health\s+script|detection\s+script|remediation\s+script|pre-detect|post-detect|schedule(?:d|ing)?|compliance\s+result)"#,
     )
     .unwrap()
-});
-static ESP_RE: Lazy<Regex> = Lazy::new(|| {
+})
+}
+fn esp_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
     Regex::new(r#"(?i)(?:ESP|EspBody|EnrollmentStatusPage|enrollment\s+status)"#).unwrap()
-});
-static SYNC_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r#"(?i)(?:sync\s+session|check-in|SyncSession)"#).unwrap());
+})
+}
+fn sync_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| Regex::new(r#"(?i)(?:sync\s+session|check-in|SyncSession)"#).unwrap())
+}
 // GUID_RE imported from guid_registry
-static ERROR_CODE_RE: Lazy<Regex> = Lazy::new(|| {
+fn error_code_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
     Regex::new(
         r#"(?i)(?:error\s*(?:code)?|exit\s*code(?:\s+of\s+the\s+script)?|hresult|hr|result|return\s*code)\s*(?:is|[=:])\s*(0x[0-9a-fA-F]+|-?\d+)"#,
     )
     .unwrap()
-});
-static EXIT_CODE_RE: Lazy<Regex> = Lazy::new(|| {
+})
+}
+fn exit_code_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
     Regex::new(r#"(?i)exit\s*code(?:\s+of\s+the\s+script)?\s*(?:is|[=:])\s*(-?\d+)"#).unwrap()
-});
-static PENDING_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r#"(?i)(?:pending|queued|waiting|scheduled|requesting)"#).unwrap());
-static TIMEOUT_RE: Lazy<Regex> = Lazy::new(|| {
+})
+}
+fn pending_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| Regex::new(r#"(?i)(?:pending|queued|waiting|scheduled|requesting)"#).unwrap())
+}
+fn timeout_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
     Regex::new(r#"(?i)(?:timed?\s*out|timeout|stalled|hung|not\s+progressing|no\s+progress)"#)
         .unwrap()
-});
-static COMPLIANCE_TRUE_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r#"(?i)compliance\s+result.*\bis\s+true\b"#).unwrap());
-static COMPLIANCE_FALSE_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r#"(?i)compliance\s+result.*\bis\s+false\b"#).unwrap());
-static CLIENT_HEALTH_RULE_SUMMARY_RE: Lazy<Regex> = Lazy::new(|| {
+})
+}
+fn compliance_true_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| Regex::new(r#"(?i)compliance\s+result.*\bis\s+true\b"#).unwrap())
+}
+fn compliance_false_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| Regex::new(r#"(?i)compliance\s+result.*\bis\s+false\b"#).unwrap())
+}
+fn client_health_rule_summary_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
     Regex::new(
         r#"(?i)summary:\s*rule\s+(.+?)\s+with\s+ID\s+[0-9a-f-]{36},\s*result\s*=\s*(pass|fail),\s*details\s*=\s*(.+)$"#,
     )
     .unwrap()
-});
-static CLIENT_HEALTH_HEARTBEAT_SUCCESS_RE: Lazy<Regex> = Lazy::new(|| {
+})
+}
+fn client_health_heartbeat_success_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
     Regex::new(r#"(?i)the client health report was sent successfully\. done\."#).unwrap()
-});
-static CLIENT_HEALTH_HEARTBEAT_FAILURE_RE: Lazy<Regex> = Lazy::new(|| {
+})
+}
+fn client_health_heartbeat_failure_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
     Regex::new(
         r#"(?i)(?:failed to send heartbeat report|exception occurred while sending heartbeat report|clienthealthruleengine\]\(sendheartbeatreport\).*(?:failed|unauthorized|exception)|found webexception in aggregateexception)"#,
     )
     .unwrap()
-});
-static CLIENT_CERT_LOCAL_MACHINE_COUNT_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r#"(?i)MDM certs found in LocalMachine count:\s*(\d+)"#).unwrap());
-static CLIENT_CERT_FAILURE_RE: Lazy<Regex> = Lazy::new(|| {
+})
+}
+fn client_cert_local_machine_count_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| Regex::new(r#"(?i)MDM certs found in LocalMachine count:\s*(\d+)"#).unwrap())
+}
+fn client_cert_failure_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
     Regex::new(
         r#"(?i)(?:certificate.*(?:invalid|error|fail)|private key|correct oid|expired|client cert check.*exception|exception.*certificate)"#,
     )
     .unwrap()
-});
-static DEVICE_HEALTH_APP_CRASH_RE: Lazy<Regex> = Lazy::new(|| {
+})
+}
+fn device_health_app_crash_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
     Regex::new(
         r#"(?is)received application event.*?<Data Name="AppName">([^<]+)</Data>.*?<Data Name="ExceptionCode">([^<]+)</Data>"#,
     )
     .unwrap()
-});
-static SENSOR_MEMORY_FAILURE_RE: Lazy<Regex> = Lazy::new(|| {
+})
+}
+fn sensor_memory_failure_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
     Regex::new(
         r#"(?i)(?:error getting physically installed system memory|GetPhysicallyInstalledSystemMemory failed)"#,
     )
     .unwrap()
-});
-static WIN32_APP_INVENTORY_FULL_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r#"(?i)\[Win32AppInventory\]\s*report type is 1\b"#).unwrap());
-static WIN32_APP_INVENTORY_NO_CHANGE_RE: Lazy<Regex> = Lazy::new(|| {
+})
+}
+fn win32_app_inventory_full_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| Regex::new(r#"(?i)\[Win32AppInventory\]\s*report type is 1\b"#).unwrap())
+}
+fn win32_app_inventory_no_change_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
     Regex::new(r#"(?i)no change detected in win32 app inventory delta update"#).unwrap()
-});
-static WIN32_APP_INVENTORY_DELTA_RE: Lazy<Regex> = Lazy::new(|| {
+})
+}
+fn win32_app_inventory_delta_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
     Regex::new(
         r#"(?i)computing delta inventory\.\.\.done\.\s*add count\s*=\s*(\d+),\s*modify count\s*=\s*(\d+),\s*delete count\s*=\s*(\d+)"#,
     )
     .unwrap()
-});
-static SUCCESS_RE: Lazy<Regex> = Lazy::new(|| {
+})
+}
+fn success_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
     Regex::new(
         r#"(?i)(?:success|succeeded|completed\s+successfully|installed|detected|compliant|validated|passed)"#,
     )
     .unwrap()
-});
-static FAILED_RE: Lazy<Regex> = Lazy::new(|| {
+})
+}
+fn failed_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
     Regex::new(
         r#"(?i)(?:fail|error|not\s+detected|not\s+installed|non-compliant|cancelled|aborted|exception)"#,
     )
     .unwrap()
-});
+})
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ImeSourceKind {
@@ -251,19 +386,19 @@ struct AppWorkloadMatchFlags {
 impl AppWorkloadMatchFlags {
     fn from_message(msg: &str) -> Self {
         Self {
-            winget_token: WINGET_TOKEN_RE.is_match(msg),
-            winget: WINGET_RE.is_match(msg),
-            download: APPWORKLOAD_DOWNLOAD_RE.is_match(msg),
-            staging: APPWORKLOAD_STAGING_RE.is_match(msg),
-            hash: APPWORKLOAD_HASH_RE.is_match(msg),
-            install: APPWORKLOAD_INSTALL_RE.is_match(msg),
-            retry: APPWORKLOAD_RETRY_RE.is_match(msg),
-            stall: APPWORKLOAD_STALL_RE.is_match(msg),
-            failure: APPWORKLOAD_FAILURE_RE.is_match(msg),
-            success: APPWORKLOAD_SUCCESS_RE.is_match(msg),
-            queue: APPWORKLOAD_QUEUE_RE.is_match(msg),
-            pending: PENDING_RE.is_match(msg),
-            timeout: TIMEOUT_RE.is_match(msg),
+            winget_token: winget_token_re().is_match(msg),
+            winget: winget_re().is_match(msg),
+            download: appworkload_download_re().is_match(msg),
+            staging: appworkload_staging_re().is_match(msg),
+            hash: appworkload_hash_re().is_match(msg),
+            install: appworkload_install_re().is_match(msg),
+            retry: appworkload_retry_re().is_match(msg),
+            stall: appworkload_stall_re().is_match(msg),
+            failure: appworkload_failure_re().is_match(msg),
+            success: appworkload_success_re().is_match(msg),
+            queue: appworkload_queue_re().is_match(msg),
+            pending: pending_re().is_match(msg),
+            timeout: timeout_re().is_match(msg),
         }
     }
 
@@ -497,25 +632,25 @@ fn detect_event_type(msg: &str, source_kind: ImeSourceKind) -> Option<IntuneEven
             if !is_appworkload_event_candidate(msg) {
                 return None;
             }
-            if WINGET_TOKEN_RE.is_match(msg) || WINGET_RE.is_match(msg) {
+            if winget_token_re().is_match(msg) || winget_re().is_match(msg) {
                 return Some(IntuneEventType::WinGetApp);
             }
-            if APPWORKLOAD_DOWNLOAD_RE.is_match(msg)
-                || APPWORKLOAD_STAGING_RE.is_match(msg)
-                || APPWORKLOAD_RETRY_RE.is_match(msg)
-                || APPWORKLOAD_STALL_RE.is_match(msg)
+            if appworkload_download_re().is_match(msg)
+                || appworkload_staging_re().is_match(msg)
+                || appworkload_retry_re().is_match(msg)
+                || appworkload_stall_re().is_match(msg)
             {
                 return Some(IntuneEventType::ContentDownload);
             }
-            if APPWORKLOAD_INSTALL_RE.is_match(msg) {
+            if appworkload_install_re().is_match(msg) {
                 return Some(IntuneEventType::Win32App);
             }
         }
         ImeSourceKind::AppActionProcessor => {
             if is_app_action_processor_event_candidate(msg)
-                && (POLICY_EVAL_RE.is_match(msg)
-                    || APP_ACTION_RE.is_match(msg)
-                    || APPLICABILITY_RE.is_match(msg))
+                && (policy_eval_re().is_match(msg)
+                    || app_action_re().is_match(msg)
+                    || applicability_re().is_match(msg))
             {
                 return Some(IntuneEventType::PolicyEvaluation);
             }
@@ -524,19 +659,19 @@ fn detect_event_type(msg: &str, source_kind: ImeSourceKind) -> Option<IntuneEven
             if !is_agent_executor_event_candidate(msg) {
                 return None;
             }
-            if REMEDIATION_SCRIPT_RE.is_match(msg) || REMEDIATION_RE.is_match(msg) {
+            if remediation_script_re().is_match(msg) || remediation_re().is_match(msg) {
                 return Some(IntuneEventType::Remediation);
             }
-            if AGENTEXECUTOR_SCRIPT_RE.is_match(msg)
-                || SCRIPT_RE.is_match(msg)
-                || SCRIPT_RESULT_RE.is_match(msg)
+            if agentexecutor_script_re().is_match(msg)
+                || script_re().is_match(msg)
+                || script_result_re().is_match(msg)
             {
                 return Some(IntuneEventType::PowerShellScript);
             }
         }
         ImeSourceKind::HealthScripts => {
             if is_healthscripts_event_candidate(msg)
-                && (HEALTHSCRIPT_RE.is_match(msg) || REMEDIATION_RE.is_match(msg))
+                && (healthscript_re().is_match(msg) || remediation_re().is_match(msg))
             {
                 return Some(IntuneEventType::Remediation);
             }
@@ -552,12 +687,12 @@ fn detect_event_type(msg: &str, source_kind: ImeSourceKind) -> Option<IntuneEven
             }
         }
         ImeSourceKind::DeviceHealthMonitoring => {
-            if DEVICE_HEALTH_APP_CRASH_RE.is_match(msg) {
+            if device_health_app_crash_re().is_match(msg) {
                 return Some(IntuneEventType::Other);
             }
         }
         ImeSourceKind::Sensor => {
-            if SENSOR_MEMORY_FAILURE_RE.is_match(msg) {
+            if sensor_memory_failure_re().is_match(msg) {
                 return Some(IntuneEventType::Other);
             }
         }
@@ -569,17 +704,17 @@ fn detect_event_type(msg: &str, source_kind: ImeSourceKind) -> Option<IntuneEven
         ImeSourceKind::PrimaryIme | ImeSourceKind::Other => {}
     }
 
-    if WIN32_APP_RE.is_match(msg) || WIN32_RESULT_RE.is_match(msg) {
+    if win32_app_re().is_match(msg) || win32_result_re().is_match(msg) {
         Some(IntuneEventType::Win32App)
-    } else if WINGET_RE.is_match(msg) {
+    } else if winget_re().is_match(msg) {
         Some(IntuneEventType::WinGetApp)
-    } else if SCRIPT_RE.is_match(msg) || SCRIPT_RESULT_RE.is_match(msg) {
+    } else if script_re().is_match(msg) || script_result_re().is_match(msg) {
         Some(IntuneEventType::PowerShellScript)
-    } else if REMEDIATION_RE.is_match(msg) {
+    } else if remediation_re().is_match(msg) {
         Some(IntuneEventType::Remediation)
-    } else if ESP_RE.is_match(msg) {
+    } else if esp_re().is_match(msg) {
         Some(IntuneEventType::Esp)
-    } else if SYNC_RE.is_match(msg) {
+    } else if sync_re().is_match(msg) {
         Some(IntuneEventType::SyncSession)
     } else {
         None
@@ -638,12 +773,12 @@ fn is_appworkload_event_candidate(msg: &str) -> bool {
         return false;
     }
 
-    APPWORKLOAD_DOWNLOAD_RE.is_match(msg)
-        || APPWORKLOAD_STAGING_RE.is_match(msg)
-        || APPWORKLOAD_INSTALL_RE.is_match(msg)
-        || APPWORKLOAD_RETRY_RE.is_match(msg)
-        || APPWORKLOAD_STALL_RE.is_match(msg)
-        || WINGET_TOKEN_RE.is_match(msg)
+    appworkload_download_re().is_match(msg)
+        || appworkload_staging_re().is_match(msg)
+        || appworkload_install_re().is_match(msg)
+        || appworkload_retry_re().is_match(msg)
+        || appworkload_stall_re().is_match(msg)
+        || winget_token_re().is_match(msg)
 }
 
 fn is_app_action_processor_event_candidate(msg: &str) -> bool {
@@ -703,8 +838,8 @@ fn is_healthscripts_event_candidate(msg: &str) -> bool {
 }
 
 fn is_client_health_event_candidate(msg: &str) -> bool {
-    CLIENT_HEALTH_HEARTBEAT_SUCCESS_RE.is_match(msg)
-        || CLIENT_HEALTH_HEARTBEAT_FAILURE_RE.is_match(msg)
+    client_health_heartbeat_success_re().is_match(msg)
+        || client_health_heartbeat_failure_re().is_match(msg)
         || matches!(
             parse_client_health_summary(msg),
             Some((_, IntuneStatus::Failed, _))
@@ -712,22 +847,22 @@ fn is_client_health_event_candidate(msg: &str) -> bool {
 }
 
 fn is_client_cert_check_event_candidate(msg: &str) -> bool {
-    parse_client_cert_local_machine_count(msg) == Some(0) || CLIENT_CERT_FAILURE_RE.is_match(msg)
+    parse_client_cert_local_machine_count(msg) == Some(0) || client_cert_failure_re().is_match(msg)
 }
 
 fn is_win32_app_inventory_event_candidate(msg: &str) -> bool {
-    WIN32_APP_INVENTORY_FULL_RE.is_match(msg)
-        || WIN32_APP_INVENTORY_NO_CHANGE_RE.is_match(msg)
+    win32_app_inventory_full_re().is_match(msg)
+        || win32_app_inventory_no_change_re().is_match(msg)
         || matches!(parse_win32_app_inventory_delta(msg), Some((add, modify, delete)) if add > 0 || modify > 0 || delete > 0)
 }
 
 fn extract_guid(msg: &str) -> Option<String> {
-    WIN32_GUID_RE
+    win32_guid_re()
         .captures(msg)
         .and_then(|cap| cap.get(1))
         .map(|value| value.as_str().to_string())
         .or_else(|| {
-            GUID_RE
+            guid_re()
                 .captures(msg)
                 .and_then(|cap| cap.get(1))
                 .map(|value| value.as_str().to_string())
@@ -735,20 +870,20 @@ fn extract_guid(msg: &str) -> Option<String> {
 }
 
 fn extract_error_code(msg: &str) -> Option<String> {
-    ERROR_CODE_RE
+    error_code_re()
         .captures(msg)
         .and_then(|cap| cap.get(1))
         .map(|value| value.as_str().to_string())
 }
 
 fn determine_status(msg: &str, source_kind: ImeSourceKind) -> IntuneStatus {
-    if COMPLIANCE_TRUE_RE.is_match(msg) {
+    if compliance_true_re().is_match(msg) {
         return IntuneStatus::Success;
     }
-    if COMPLIANCE_FALSE_RE.is_match(msg) {
+    if compliance_false_re().is_match(msg) {
         return IntuneStatus::Failed;
     }
-    if let Some(exit_code) = EXIT_CODE_RE
+    if let Some(exit_code) = exit_code_re()
         .captures(msg)
         .and_then(|cap| cap.get(1))
         .and_then(|value| value.as_str().parse::<i32>().ok())
@@ -762,37 +897,37 @@ fn determine_status(msg: &str, source_kind: ImeSourceKind) -> IntuneStatus {
 
     match source_kind {
         ImeSourceKind::AppWorkload => {
-            if APPWORKLOAD_STALL_RE.is_match(msg) || TIMEOUT_RE.is_match(msg) {
+            if appworkload_stall_re().is_match(msg) || timeout_re().is_match(msg) {
                 IntuneStatus::Timeout
-            } else if APPWORKLOAD_RETRY_RE.is_match(msg) || APPWORKLOAD_FAILURE_RE.is_match(msg) {
+            } else if appworkload_retry_re().is_match(msg) || appworkload_failure_re().is_match(msg) {
                 IntuneStatus::Failed
-            } else if APPWORKLOAD_SUCCESS_RE.is_match(msg) {
+            } else if appworkload_success_re().is_match(msg) {
                 IntuneStatus::Success
-            } else if APPWORKLOAD_QUEUE_RE.is_match(msg) || PENDING_RE.is_match(msg) {
+            } else if appworkload_queue_re().is_match(msg) || pending_re().is_match(msg) {
                 IntuneStatus::Pending
             } else {
                 IntuneStatus::InProgress
             }
         }
         ImeSourceKind::AppActionProcessor => {
-            if APPLICABILITY_BLOCK_RE.is_match(msg) {
+            if applicability_block_re().is_match(msg) {
                 IntuneStatus::Failed
-            } else if APPLICABILITY_SUCCESS_RE.is_match(msg) {
+            } else if applicability_success_re().is_match(msg) {
                 IntuneStatus::Success
-            } else if POLICY_PENDING_RE.is_match(msg) {
+            } else if policy_pending_re().is_match(msg) {
                 IntuneStatus::Pending
             } else {
                 IntuneStatus::InProgress
             }
         }
         ImeSourceKind::AgentExecutor | ImeSourceKind::HealthScripts => {
-            if TIMEOUT_RE.is_match(msg) {
+            if timeout_re().is_match(msg) {
                 IntuneStatus::Timeout
-            } else if SCRIPT_FAILURE_RE.is_match(msg) || FAILED_RE.is_match(msg) {
+            } else if script_failure_re().is_match(msg) || failed_re().is_match(msg) {
                 IntuneStatus::Failed
-            } else if SUCCESS_RE.is_match(msg) {
+            } else if success_re().is_match(msg) {
                 IntuneStatus::Success
-            } else if PENDING_RE.is_match(msg) {
+            } else if pending_re().is_match(msg) {
                 IntuneStatus::Pending
             } else {
                 IntuneStatus::InProgress
@@ -801,9 +936,9 @@ fn determine_status(msg: &str, source_kind: ImeSourceKind) -> IntuneStatus {
         ImeSourceKind::ClientHealth => {
             if let Some((_, status, _)) = parse_client_health_summary(msg) {
                 status
-            } else if CLIENT_HEALTH_HEARTBEAT_FAILURE_RE.is_match(msg) {
+            } else if client_health_heartbeat_failure_re().is_match(msg) {
                 IntuneStatus::Failed
-            } else if CLIENT_HEALTH_HEARTBEAT_SUCCESS_RE.is_match(msg) {
+            } else if client_health_heartbeat_success_re().is_match(msg) {
                 IntuneStatus::Success
             } else {
                 IntuneStatus::Unknown
@@ -811,7 +946,7 @@ fn determine_status(msg: &str, source_kind: ImeSourceKind) -> IntuneStatus {
         }
         ImeSourceKind::ClientCertCheck => {
             if parse_client_cert_local_machine_count(msg) == Some(0)
-                || CLIENT_CERT_FAILURE_RE.is_match(msg)
+                || client_cert_failure_re().is_match(msg)
             {
                 IntuneStatus::Failed
             } else {
@@ -821,13 +956,13 @@ fn determine_status(msg: &str, source_kind: ImeSourceKind) -> IntuneStatus {
         ImeSourceKind::DeviceHealthMonitoring | ImeSourceKind::Sensor => IntuneStatus::Failed,
         ImeSourceKind::Win32AppInventory => IntuneStatus::Success,
         ImeSourceKind::PrimaryIme | ImeSourceKind::Other => {
-            if TIMEOUT_RE.is_match(msg) {
+            if timeout_re().is_match(msg) {
                 IntuneStatus::Timeout
-            } else if FAILED_RE.is_match(msg) {
+            } else if failed_re().is_match(msg) {
                 IntuneStatus::Failed
-            } else if SUCCESS_RE.is_match(msg) {
+            } else if success_re().is_match(msg) {
                 IntuneStatus::Success
-            } else if PENDING_RE.is_match(msg) {
+            } else if pending_re().is_match(msg) {
                 IntuneStatus::Pending
             } else {
                 IntuneStatus::InProgress
@@ -876,17 +1011,17 @@ fn build_source_specific_name(
 
     match source_kind {
         ImeSourceKind::AppWorkload => {
-            let phase = if APPWORKLOAD_STALL_RE.is_match(msg) {
+            let phase = if appworkload_stall_re().is_match(msg) {
                 "Download Stall"
-            } else if APPWORKLOAD_RETRY_RE.is_match(msg) {
+            } else if appworkload_retry_re().is_match(msg) {
                 "Download Retry"
-            } else if APPWORKLOAD_HASH_RE.is_match(msg) {
+            } else if appworkload_hash_re().is_match(msg) {
                 "Hash Validation"
-            } else if APPWORKLOAD_STAGING_RE.is_match(msg) {
+            } else if appworkload_staging_re().is_match(msg) {
                 "Staging"
-            } else if APPWORKLOAD_INSTALL_RE.is_match(msg) {
+            } else if appworkload_install_re().is_match(msg) {
                 "Install"
-            } else if APPWORKLOAD_DOWNLOAD_RE.is_match(msg) {
+            } else if appworkload_download_re().is_match(msg) {
                 "Download"
             } else {
                 return None;
@@ -897,13 +1032,13 @@ fn build_source_specific_name(
             })
         }
         ImeSourceKind::AppActionProcessor => {
-            let area = if APPLICABILITY_BLOCK_RE.is_match(msg) || APPLICABILITY_RE.is_match(msg) {
+            let area = if applicability_block_re().is_match(msg) || applicability_re().is_match(msg) {
                 "Applicability"
             } else if contains_case_insensitive(msg, "requirement rule") {
                 "Requirement Rule"
             } else if contains_case_insensitive(msg, "detection rule") {
                 "Detection Rule"
-            } else if POLICY_EVAL_RE.is_match(msg) {
+            } else if policy_eval_re().is_match(msg) {
                 "Policy Evaluation"
             } else {
                 return None;
@@ -914,13 +1049,13 @@ fn build_source_specific_name(
             })
         }
         ImeSourceKind::AgentExecutor => {
-            let area = if REMEDIATION_SCRIPT_RE.is_match(msg)
+            let area = if remediation_script_re().is_match(msg)
                 || *event_type == IntuneEventType::Remediation
             {
                 "Remediation Script"
-            } else if DETECTION_SCRIPT_RE.is_match(msg) {
+            } else if detection_script_re().is_match(msg) {
                 "Detection Script"
-            } else if TIMEOUT_RE.is_match(msg) {
+            } else if timeout_re().is_match(msg) {
                 "Script Timeout"
             } else {
                 "PowerShell Script"
@@ -931,9 +1066,9 @@ fn build_source_specific_name(
             })
         }
         ImeSourceKind::HealthScripts => {
-            let area = if REMEDIATION_SCRIPT_RE.is_match(msg) {
+            let area = if remediation_script_re().is_match(msg) {
                 "Remediation"
-            } else if DETECTION_SCRIPT_RE.is_match(msg)
+            } else if detection_script_re().is_match(msg)
                 || contains_case_insensitive(msg, "compliance result")
             {
                 "Detection"
@@ -962,9 +1097,9 @@ fn build_source_specific_name(
                 };
                 return Some(format!("ClientHealth Rule {status_label}: {rule}{suffix}"));
             }
-            if CLIENT_HEALTH_HEARTBEAT_FAILURE_RE.is_match(msg) {
+            if client_health_heartbeat_failure_re().is_match(msg) {
                 Some("ClientHealth Heartbeat Failed".to_string())
-            } else if CLIENT_HEALTH_HEARTBEAT_SUCCESS_RE.is_match(msg) {
+            } else if client_health_heartbeat_success_re().is_match(msg) {
                 Some("ClientHealth Heartbeat Sent".to_string())
             } else {
                 None
@@ -973,7 +1108,7 @@ fn build_source_specific_name(
         ImeSourceKind::ClientCertCheck => {
             if parse_client_cert_local_machine_count(msg) == Some(0) {
                 Some("ClientCertCheck Missing MDM Certificate".to_string())
-            } else if CLIENT_CERT_FAILURE_RE.is_match(msg) {
+            } else if client_cert_failure_re().is_match(msg) {
                 Some("ClientCertCheck Validation Failure".to_string())
             } else {
                 None
@@ -988,16 +1123,16 @@ fn build_source_specific_name(
             })
         }
         ImeSourceKind::Sensor => {
-            if SENSOR_MEMORY_FAILURE_RE.is_match(msg) {
+            if sensor_memory_failure_re().is_match(msg) {
                 Some("Sensor Hardware Readiness Memory Failure".to_string())
             } else {
                 None
             }
         }
         ImeSourceKind::Win32AppInventory => {
-            if WIN32_APP_INVENTORY_FULL_RE.is_match(msg) {
+            if win32_app_inventory_full_re().is_match(msg) {
                 Some("Win32AppInventory Full Inventory".to_string())
-            } else if WIN32_APP_INVENTORY_NO_CHANGE_RE.is_match(msg) {
+            } else if win32_app_inventory_no_change_re().is_match(msg) {
                 Some("Win32AppInventory No Delta".to_string())
             } else if let Some((add, modify, delete)) = parse_win32_app_inventory_delta(msg) {
                 Some(format!(
@@ -1012,7 +1147,7 @@ fn build_source_specific_name(
 }
 
 fn parse_client_health_summary(msg: &str) -> Option<(String, IntuneStatus, String)> {
-    let captures = CLIENT_HEALTH_RULE_SUMMARY_RE.captures(msg)?;
+    let captures = client_health_rule_summary_re().captures(msg)?;
     let rule = captures.get(1)?.as_str().trim().to_string();
     let status = match captures.get(2)?.as_str().to_ascii_lowercase().as_str() {
         "pass" => IntuneStatus::Success,
@@ -1024,21 +1159,21 @@ fn parse_client_health_summary(msg: &str) -> Option<(String, IntuneStatus, Strin
 }
 
 fn parse_client_cert_local_machine_count(msg: &str) -> Option<u32> {
-    CLIENT_CERT_LOCAL_MACHINE_COUNT_RE
+    client_cert_local_machine_count_re()
         .captures(msg)
         .and_then(|cap| cap.get(1))
         .and_then(|value| value.as_str().parse::<u32>().ok())
 }
 
 fn parse_device_health_app_crash(msg: &str) -> Option<(String, String)> {
-    let captures = DEVICE_HEALTH_APP_CRASH_RE.captures(msg)?;
+    let captures = device_health_app_crash_re().captures(msg)?;
     let app_name = captures.get(1)?.as_str().trim().to_string();
     let exception_code = captures.get(2)?.as_str().trim().to_string();
     Some((app_name, exception_code))
 }
 
 fn parse_win32_app_inventory_delta(msg: &str) -> Option<(u32, u32, u32)> {
-    let captures = WIN32_APP_INVENTORY_DELTA_RE.captures(msg)?;
+    let captures = win32_app_inventory_delta_re().captures(msg)?;
     let add = captures.get(1)?.as_str().parse::<u32>().ok()?;
     let modify = captures.get(2)?.as_str().parse::<u32>().ok()?;
     let delete = captures.get(3)?.as_str().parse::<u32>().ok()?;

@@ -79,7 +79,7 @@ fn analyze_intune_logs_blocking(
     app: AppHandle,
 ) -> Result<IntuneAnalysisResult, String> {
     let analysis_started = Instant::now();
-    eprintln!("event=intune_analysis_start path=\"{}\"", path);
+    log::info!("event=intune_analysis_start path=\"{}\"", path);
     emit_analysis_progress(
         &app,
         &request_id,
@@ -95,7 +95,7 @@ fn analyze_intune_logs_blocking(
     let resolved_input = intune_bundle::resolve_intune_input(input_path)?;
     let source_paths = resolved_input.source_paths;
     let evidence_bundle = resolved_input.evidence_bundle;
-    eprintln!(
+    log::info!(
         "event=intune_analysis_sources_resolved path=\"{}\" source_count={}",
         path,
         source_paths.len()
@@ -204,14 +204,14 @@ fn analyze_intune_logs_blocking(
         for (i, dl) in all_downloads.iter().enumerate() {
             let _ = writeln!(diag_buffer, "  download[{}] content_id={} name=\"{}\" success={} size={}", i, dl.content_id, dl.name, dl.success, dl.size_bytes);
         }
-        eprintln!(
+        log::info!(
             "event=guid_enrichment_summary registry={} enriched_events={} missed_events={} enriched_downloads={} missed_downloads={} total_downloads={}",
             guid_registry.len(), enriched_events, missed_events, enriched_downloads, missed_downloads, all_downloads.len()
         );
         let diag_path = std::env::temp_dir().join("cmtrace-guid-diag.log");
         if let Ok(mut f) = fs::File::create(&diag_path) {
             let _ = f.write_all(diag_buffer.as_bytes());
-            eprintln!("event=guid_diag_written path=\"{}\"", diag_path.display());
+            log::info!("event=guid_diag_written path=\"{}\"", diag_path.display());
         }
     }
 
@@ -220,7 +220,7 @@ fn analyze_intune_logs_blocking(
     if all_downloads.is_empty() {
         all_downloads = synthesize_downloads_from_events(&all_events);
         if !all_downloads.is_empty() {
-            eprintln!(
+            log::info!(
                 "event=download_synthesized_from_events count={}",
                 all_downloads.len()
             );
@@ -301,7 +301,7 @@ fn analyze_intune_logs_blocking(
             &event_log_analysis,
         );
 
-        eprintln!(
+        log::info!(
             "event=intune_analysis_complete path=\"{}\" source_count={} event_count=0 download_count={} diagnostics_count={} evtx_entries={} elapsed_ms={}",
             path,
             source_files.len(),
@@ -379,7 +379,7 @@ fn analyze_intune_logs_blocking(
         })
         .sum();
 
-    eprintln!(
+    log::info!(
         "event=intune_analysis_complete path=\"{}\" source_count={} event_count={} download_count={} diagnostics_count={} evtx_entries={} payload_chars={} elapsed_ms={}",
         path,
         source_files.len(),
@@ -596,7 +596,7 @@ fn analyze_intune_source_file(
 ) -> Result<ProcessedIntuneFile, String> {
     let file_started = Instant::now();
     let source_file = source_path.to_string_lossy().to_string();
-    eprintln!("event=intune_analysis_file_start file=\"{}\"", source_file);
+    log::info!("event=intune_analysis_file_start file=\"{}\"", source_file);
     emit_analysis_progress(
         app,
         request_id,
@@ -630,13 +630,13 @@ fn analyze_intune_source_file(
         (Vec::new(), Vec::new(), None, 0usize)
     } else {
         file_guid_registry.ingest_lines(&lines);
-        eprintln!(
+        log::debug!(
             "event=guid_registry_file file=\"{}\" entries={}",
             source_file,
             file_guid_registry.len()
         );
         for (guid, entry) in file_guid_registry.iter() {
-            eprintln!("  guid={} name=\"{}\" source={:?}", guid, entry.name, entry.source);
+            log::debug!("  guid={} name=\"{}\" source={:?}", guid, entry.name, entry.source);
         }
         let file_events = event_tracker::extract_events(&lines, &source_file, &file_guid_registry);
         let file_downloads = download_stats::extract_downloads(&lines, &source_file, &file_guid_registry);
@@ -663,7 +663,7 @@ fn analyze_intune_source_file(
         is_explicit_rotated_segment: rotation.is_rotated_segment,
     };
 
-    eprintln!(
+    log::info!(
         "event=intune_analysis_file_complete file=\"{}\" line_count={} event_count={} download_count={} elapsed_ms={}",
         source_file,
         line_count,

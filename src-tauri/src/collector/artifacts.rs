@@ -71,8 +71,9 @@ pub fn export_registry_keys(items: &[RegistryCollectionItem], ctx: &CollectorCon
     let reg_path = match resolve_system32_binary("reg.exe") {
         Ok(p) => p,
         Err(e) => {
+            let msg = e.to_string();
             for item in items {
-                push_result(ctx, &item.id, "registry", ArtifactStatus::Failed, None, Some(e.clone()));
+                push_result(ctx, &item.id, "registry", ArtifactStatus::Failed, None, Some(msg.clone()));
                 ctx.completed.fetch_add(1, Ordering::Relaxed);
             }
             return;
@@ -308,13 +309,13 @@ fn push_result(ctx: &CollectorContext, id: &str, category: &str, status: Artifac
 }
 
 /// Resolve a binary from System32. Mirrors the pattern in `dsregcmd.rs`.
-fn resolve_system32_binary(file_name: &str) -> Result<PathBuf, String> {
+fn resolve_system32_binary(file_name: &str) -> Result<PathBuf, crate::error::AppError> {
     let Some(windir) = std::env::var_os("WINDIR") else {
-        return Err("WINDIR is not set; could not resolve the Windows system path.".to_string());
+        return Err(crate::error::AppError::PlatformUnsupported("WINDIR is not set; could not resolve the Windows system path.".to_string()));
     };
     let path = PathBuf::from(windir).join("System32").join(file_name);
     if !path.is_file() {
-        return Err(format!("Expected system binary not found at '{}'.", path.display()));
+        return Err(crate::error::AppError::Internal(format!("Expected system binary not found at '{}'.", path.display())));
     }
     Ok(path)
 }

@@ -530,7 +530,6 @@ dependencies = [
  "glob",
  "log",
  "notify",
- "once_cell",
  "plist",
  "rayon",
  "regex",

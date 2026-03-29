@@ -22,7 +22,7 @@ pub fn run_collection<R: Runtime>(
     output_root: Option<String>,
     enabled_families: Option<Vec<String>>,
     app: AppHandle<R>,
-) -> Result<CollectionResult, String> {
+) -> Result<CollectionResult, crate::error::AppError> {
     let start = Instant::now();
     let mut profile = CollectionProfile::embedded();
 
@@ -39,9 +39,7 @@ pub fn run_collection<R: Runtime>(
 
     // Create all subdirectories up front.
     for subdir in &["logs", "registry", "event-logs", "exports", "command-output"] {
-        fs::create_dir_all(evidence_root.join(subdir)).map_err(|e| {
-            format!("failed to create evidence subdirectory '{subdir}': {e}")
-        })?;
+        fs::create_dir_all(evidence_root.join(subdir)).map_err(crate::error::AppError::Io)?;
     }
 
     // Shared state for concurrent collection.
@@ -145,7 +143,7 @@ fn generate_bundle_id() -> String {
     format!("CMTRACE-{}-{}", now.format("%Y%m%d-%H%M%S"), hostname)
 }
 
-fn resolve_bundle_root(output_root: Option<&str>, bundle_id: &str) -> Result<PathBuf, String> {
+fn resolve_bundle_root(output_root: Option<&str>, bundle_id: &str) -> Result<PathBuf, crate::error::AppError> {
     let base = match output_root {
         Some(root) => PathBuf::from(root),
         None => {
@@ -161,9 +159,7 @@ fn resolve_bundle_root(output_root: Option<&str>, bundle_id: &str) -> Result<Pat
     };
 
     let bundle_root = base.join(bundle_id);
-    fs::create_dir_all(&bundle_root).map_err(|e| {
-        format!("failed to create bundle root at '{}': {e}", bundle_root.display())
-    })?;
+    fs::create_dir_all(&bundle_root).map_err(crate::error::AppError::Io)?;
 
     Ok(bundle_root)
 }

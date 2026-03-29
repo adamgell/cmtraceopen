@@ -178,7 +178,7 @@ pub(crate) fn collect_files_recursive(root: &Path) -> Vec<FolderEntry> {
         let read_dir = match fs::read_dir(&dir) {
             Ok(rd) => rd,
             Err(e) => {
-                eprintln!(
+                log::warn!(
                     "event=collect_files_recursive_skip reason=read_dir_error path=\"{}\" error=\"{e}\"",
                     dir.display()
                 );
@@ -190,7 +190,7 @@ pub(crate) fn collect_files_recursive(root: &Path) -> Vec<FolderEntry> {
             let entry = match entry_result {
                 Ok(v) => v,
                 Err(e) => {
-                    eprintln!(
+                    log::warn!(
                         "event=collect_files_recursive_skip reason=entry_error dir=\"{}\" error=\"{e}\"",
                         dir.display()
                     );
@@ -202,7 +202,7 @@ pub(crate) fn collect_files_recursive(root: &Path) -> Vec<FolderEntry> {
             let metadata = match entry.metadata() {
                 Ok(m) => m,
                 Err(e) => {
-                    eprintln!(
+                    log::warn!(
                         "event=collect_files_recursive_skip reason=metadata_error path=\"{}\" error=\"{e}\"",
                         entry_path.display()
                     );
@@ -219,7 +219,7 @@ pub(crate) fn collect_files_recursive(root: &Path) -> Vec<FolderEntry> {
             if let Some(ext) = entry_path.extension().and_then(|e| e.to_str()) {
                 if BINARY_EXTENSIONS.iter().any(|b| b.eq_ignore_ascii_case(ext)) {
                     skipped_binary += 1;
-                    eprintln!(
+                    log::debug!(
                         "event=collect_files_recursive_skip reason=binary_extension path=\"{}\"",
                         entry_path.display()
                     );
@@ -231,7 +231,7 @@ pub(crate) fn collect_files_recursive(root: &Path) -> Vec<FolderEntry> {
             let size = metadata.len();
             if size > BUNDLE_BATCH_MAX_FILE_SIZE {
                 skipped_large += 1;
-                eprintln!(
+                log::debug!(
                     "event=collect_files_recursive_skip reason=file_too_large path=\"{}\" size={size}",
                     entry_path.display()
                 );
@@ -248,7 +248,7 @@ pub(crate) fn collect_files_recursive(root: &Path) -> Vec<FolderEntry> {
         }
     }
 
-    eprintln!(
+    log::info!(
         "event=collect_files_recursive_done root=\"{}\" included={} skipped_binary={skipped_binary} skipped_large={skipped_large}",
         root.display(),
         out.len()

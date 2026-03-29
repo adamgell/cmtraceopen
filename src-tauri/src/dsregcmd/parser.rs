@@ -1,22 +1,25 @@
-use once_cell::sync::Lazy;
 use regex::Regex;
 
 use crate::dsregcmd::models::DsregcmdFacts;
+use std::sync::OnceLock;
 
-static FIELD_LINE_RE: Lazy<Regex> = Lazy::new(|| {
+fn field_line_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
     Regex::new(r"(?m)^\s*([^\r\n:=][^\r\n:=]*?)\s*[:=]\s*([^\r\n]*)\s*$")
         .expect("valid dsregcmd field regex")
-});
+})
+}
 
-pub fn parse_dsregcmd(input: &str) -> Result<DsregcmdFacts, String> {
+pub fn parse_dsregcmd(input: &str) -> Result<DsregcmdFacts, crate::error::AppError> {
     if input.trim().is_empty() {
-        return Err("dsregcmd input was empty".to_string());
+        return Err(crate::error::AppError::InvalidInput("dsregcmd input was empty".to_string()));
     }
 
     let mut facts = DsregcmdFacts::default();
     let mut recognized_fields = 0usize;
 
-    for captures in FIELD_LINE_RE.captures_iter(input) {
+    for captures in field_line_re().captures_iter(input) {
         let Some(raw_key) = captures.get(1) else {
             continue;
         };
@@ -33,7 +36,7 @@ pub fn parse_dsregcmd(input: &str) -> Result<DsregcmdFacts, String> {
     }
 
     if recognized_fields == 0 {
-        return Err("Input did not contain recognizable dsregcmd /status fields".to_string());
+        return Err(crate::error::AppError::InvalidInput("Input did not contain recognizable dsregcmd /status fields".to_string()));
     }
 
     Ok(facts)
@@ -323,7 +326,7 @@ mod tests {
     #[test]
     fn rejects_non_dsregcmd_input() {
         let error = parse_dsregcmd("totally unrelated text").expect_err("expected parse error");
-        assert!(error.contains("recognizable dsregcmd"));
+        assert!(error.to_string().contains("recognizable dsregcmd"));
     }
 
     #[test]

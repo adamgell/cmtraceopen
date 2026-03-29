@@ -1,9 +1,9 @@
 use crate::parser::ccm::naive_to_utc_millis;
-use once_cell::sync::Lazy;
 use regex::Regex;
 
 use super::severity::detect_severity_from_text;
 use crate::models::log_entry::{LogEntry, LogFormat};
+use std::sync::OnceLock;
 
 /// Controls whether slash-date fields are interpreted as MM/DD or DD/MM.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
@@ -20,30 +20,41 @@ pub enum DateOrder {
 // ---------------------------------------------------------------------------
 
 /// ISO 8601: 2024-01-15T14:30:00.123Z or 2024-01-15 14:30:00,456+05:30
-static ISO_RE: Lazy<Regex> = Lazy::new(|| {
+fn iso_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
     Regex::new(
         r"^(\d{4})-(\d{2})-(\d{2})[T ](\d{1,2}):(\d{2}):(\d{2})([.,]\d+)?(Z|[+-]\d{2}:?\d{2})?\s*(.*)"
     ).unwrap()
-});
+})
+}
 
 /// Slash-date: 01/15/2024 14:30:00.123 or 1/15/2024 2:30:00 PM
-static SLASH_DATE_RE: Lazy<Regex> = Lazy::new(|| {
+fn slash_date_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
     Regex::new(
         r"^(\d{1,2})/(\d{1,2})/(\d{4})\s+(\d{1,2}):(\d{2}):(\d{2})(\.\d+)?(\s*[AaPp][Mm])?\s+(.*)",
     )
     .unwrap()
-});
+})
+}
 
 /// Syslog: Jan 15 14:30:00 hostname ...
-static SYSLOG_RE: Lazy<Regex> = Lazy::new(|| {
+fn syslog_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
     Regex::new(
         r"^(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d{1,2})\s+(\d{2}):(\d{2}):(\d{2})\s+(.*)"
     ).unwrap()
-});
+})
+}
 
 /// Time-only: 14:30:00.123 message...
-static TIME_ONLY_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"^(\d{2}):(\d{2}):(\d{2})([.,]\d+)?\s+(.*)").unwrap());
+fn time_only_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| Regex::new(r"^(\d{2}):(\d{2}):(\d{2})([.,]\d+)?\s+(.*)").unwrap())
+}
 
 // ---------------------------------------------------------------------------
 // Public API — matches same pattern as ccm/simple/plain parsers
@@ -158,15 +169,15 @@ fn parse_line(line: &str, date_order: DateOrder) -> Option<LogEntry> {
 
 /// Check whether a line matches any supported timestamp pattern (used by detect.rs).
 pub fn matches_any_timestamp(line: &str) -> bool {
-    ISO_RE.is_match(line)
-        || SLASH_DATE_RE.is_match(line)
-        || SYSLOG_RE.is_match(line)
-        || TIME_ONLY_RE.is_match(line)
+    iso_re().is_match(line)
+        || slash_date_re().is_match(line)
+        || syslog_re().is_match(line)
+        || time_only_re().is_match(line)
 }
 
 /// Check whether a slash-date line has first field > 12, indicating day-first order.
 pub fn slash_date_first_field(line: &str) -> Option<u32> {
-    SLASH_DATE_RE
+    slash_date_re()
         .captures(line)
         .and_then(|caps| caps.get(1).and_then(|m| m.as_str().parse::<u32>().ok()))
 }
@@ -176,7 +187,7 @@ pub fn slash_date_first_field(line: &str) -> Option<u32> {
 // ---------------------------------------------------------------------------
 
 fn try_iso(line: &str) -> Option<LogEntry> {
-    let caps = ISO_RE.captures(line)?;
+    let caps = iso_re().captures(line)?;
 
     let yr: i32 = caps.get(1)?.as_str().parse().ok()?;
     let mon: u32 = caps.get(2)?.as_str().parse().ok()?;
@@ -229,7 +240,7 @@ fn try_iso(line: &str) -> Option<LogEntry> {
 }
 
 fn try_slash_date(line: &str, date_order: DateOrder) -> Option<LogEntry> {
-    let caps = SLASH_DATE_RE.captures(line)?;
+    let caps = slash_date_re().captures(line)?;
 
     let field1: u32 = caps.get(1)?.as_str().parse().ok()?;
     let field2: u32 = caps.get(2)?.as_str().parse().ok()?;
@@ -298,7 +309,7 @@ fn try_slash_date(line: &str, date_order: DateOrder) -> Option<LogEntry> {
 }
 
 fn try_syslog(line: &str) -> Option<LogEntry> {
-    let caps = SYSLOG_RE.captures(line)?;
+    let caps = syslog_re().captures(line)?;
 
     let month_str = caps.get(1)?.as_str();
     let day: u32 = caps.get(2)?.as_str().parse().ok()?;
@@ -354,7 +365,7 @@ fn try_syslog(line: &str) -> Option<LogEntry> {
 }
 
 fn try_time_only(line: &str) -> Option<LogEntry> {
-    let caps = TIME_ONLY_RE.captures(line)?;
+    let caps = time_only_re().captures(line)?;
 
     let h: u32 = caps.get(1)?.as_str().parse().ok()?;
     let m: u32 = caps.get(2)?.as_str().parse().ok()?;

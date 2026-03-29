@@ -67,7 +67,7 @@ pub struct KnownSourceMetadata {
 pub fn get_known_log_sources() -> Result<Vec<KnownSourceMetadata>, crate::error::AppError> {
     let sources = build_known_log_sources();
 
-    eprintln!("event=get_known_log_sources count={}", sources.len());
+    log::info!("event=get_known_log_sources count={}", sources.len());
 
     Ok(sources)
 }

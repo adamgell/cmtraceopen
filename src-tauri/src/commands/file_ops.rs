@@ -125,9 +125,9 @@ pub fn parse_files_batch(
     use rayon::prelude::*;
 
     let total = paths.len() as u32;
-    eprintln!("event=parse_files_batch_start file_count={total}");
+    log::info!("event=parse_files_batch_start file_count={total}");
     for (i, path) in paths.iter().enumerate() {
-        eprintln!("  batch_file[{i}] = \"{path}\"");
+        log::debug!("  batch_file[{i}] = \"{path}\"");
     }
 
     let batch_start = std::time::Instant::now();
@@ -147,7 +147,7 @@ pub fn parse_files_batch(
                 .map(|n| n.to_string_lossy().to_string())
                 .unwrap_or_default();
 
-            eprintln!(
+            log::info!(
                 "  event=parse_file_done [{done}/{total}] path=\"{path}\" entries={} lines={} size={} ms={file_ms}",
                 result.entries.len(),
                 result.total_lines,
@@ -173,7 +173,7 @@ pub fn parse_files_batch(
         .collect();
 
     let parse_ms = batch_start.elapsed().as_millis();
-    eprintln!(
+    log::info!(
         "event=parse_files_batch_parsed file_count={} ms={parse_ms}",
         results.len()
     );
@@ -197,7 +197,7 @@ pub fn parse_files_batch(
     }
 
     let total_ms = batch_start.elapsed().as_millis();
-    eprintln!(
+    log::info!(
         "event=parse_files_batch_complete file_count={} results={} total_ms={total_ms}",
         paths.len(),
         parse_results.len()
@@ -316,7 +316,7 @@ pub fn get_initial_file_paths(state: State<'_, AppState>) -> Result<Vec<String>,
 /// List top-level entries for a folder source.
 #[tauri::command]
 pub fn list_log_folder(path: String) -> Result<FolderListingResult, crate::error::AppError> {
-    eprintln!("event=list_log_folder_start path=\"{}\"", path);
+    log::info!("event=list_log_folder_start path=\"{}\"", path);
 
     let requested_path = PathBuf::from(&path);
 
@@ -343,7 +343,7 @@ pub fn list_log_folder(path: String) -> Result<FolderListingResult, crate::error
         let entry = match entry_result {
             Ok(value) => value,
             Err(error) => {
-                eprintln!(
+                log::warn!(
                     "event=list_log_folder_skip reason=read_dir_entry_error path=\"{}\" error=\"{}\"",
                     requested_path.display(),
                     error
@@ -356,7 +356,7 @@ pub fn list_log_folder(path: String) -> Result<FolderListingResult, crate::error
         let metadata = match entry.metadata() {
             Ok(value) => value,
             Err(error) => {
-                eprintln!(
+                log::warn!(
                     "event=list_log_folder_skip reason=metadata_error entry_path=\"{}\" error=\"{}\"",
                     entry_path.display(),
                     error
@@ -388,7 +388,7 @@ pub fn list_log_folder(path: String) -> Result<FolderListingResult, crate::error
         entries.sort_by(compare_folder_entries);
     }
 
-    eprintln!(
+    log::info!(
         "event=list_log_folder_complete path=\"{}\" entry_count={} is_bundle={}",
         requested_path.display(),
         entries.len(),

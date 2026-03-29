@@ -1,10 +1,10 @@
 use chrono::{FixedOffset, Local, LocalResult, TimeZone, Utc};
-use once_cell::sync::Lazy;
 use regex::Regex;
 
 use crate::models::log_entry::{LogEntry, LogFormat, Severity};
 use crate::parser::ccm::{build_timestamp, format_thread_display, severity_from_type_field};
 use crate::parser::severity::detect_severity_from_text;
+use std::sync::OnceLock;
 
 /// A parsed IME log line with extracted timestamp and message.
 #[derive(Debug, Clone)]
@@ -16,17 +16,23 @@ pub struct ImeLine {
     pub component: Option<String>,
 }
 
-static IME_RECORD_RE: Lazy<Regex> = Lazy::new(|| {
+fn ime_record_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
     Regex::new(r#"<!\[LOG\[(?P<msg>[\s\S]*?)\]LOG\]!><(?P<attrs>[^>]*)>"#)
         .expect("IME record regex must compile")
-});
+})
+}
 
 /// Regex for simple timestamped log lines (fallback format):
 /// YYYY-MM-DD HH:MM:SS.fff message
-static SIMPLE_TS_RE: Lazy<Regex> = Lazy::new(|| {
+fn simple_ts_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
     Regex::new(r#"^(?P<ts>\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}[\.\d]*)\s+(?P<msg>.+)$"#)
         .expect("IME fallback timestamp regex must compile")
-});
+})
+}
 
 #[derive(Debug, Clone)]
 struct ParsedImeRecord {
@@ -146,7 +152,7 @@ fn parse_ime_records(content: &str) -> ParsedImeChunk {
     let mut cursor = 0usize;
     let mut matched_any = false;
 
-    for caps in IME_RECORD_RE.captures_iter(content) {
+    for caps in ime_record_re().captures_iter(content) {
         let Some(full_match) = caps.get(0) else {
             continue;
         };
@@ -586,7 +592,7 @@ fn parse_fallback_lines(content: &str) -> ParsedImeChunk {
             continue;
         }
 
-        if let Some(caps) = SIMPLE_TS_RE.captures(trimmed) {
+        if let Some(caps) = simple_ts_re().captures(trimmed) {
             let timestamp = caps.name("ts").map(|value| value.as_str().to_string());
             let timestamp_utc = timestamp.as_deref().and_then(parse_fallback_timestamp_utc);
             let message = caps

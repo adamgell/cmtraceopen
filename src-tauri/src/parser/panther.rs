@@ -1,64 +1,94 @@
-use once_cell::sync::Lazy;
 use regex::Regex;
 
 use super::severity::detect_severity_from_text;
 use crate::models::log_entry::{LogEntry, LogFormat, Severity};
+use std::sync::OnceLock;
 
-static PANTHER_PREFIX_RE: Lazy<Regex> = Lazy::new(|| {
+fn panther_prefix_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
     Regex::new(r"^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2},").unwrap()
-});
+})
+}
 
 /// Matches a bracketed executable tag at the start of the message, e.g. `[SetupPlatform.exe]`.
-static EXE_TAG_RE: Lazy<Regex> = Lazy::new(|| {
+fn exe_tag_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
     Regex::new(r"^\[([^\]]+\.[Ee][Xx][Ee])\]\s*").unwrap()
-});
+})
+}
 
 /// Matches C++ class::method patterns, e.g. `CSetupManager::GetWuIdFromRegistry(13192):`.
-static CLASS_METHOD_RE: Lazy<Regex> = Lazy::new(|| {
+fn class_method_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
     Regex::new(r"^([A-Z][A-Za-z0-9_]*(?:::[A-Za-z_]\w*)+)(?:\(\d+\))?:\s*").unwrap()
-});
+})
+}
 
 /// Matches DISM-style thread IDs embedded in the message, e.g. `PID=1452 TID=776`.
-static TID_RE: Lazy<Regex> = Lazy::new(|| {
+fn tid_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
     Regex::new(r"TID=(\d+)").unwrap()
-});
+})
+}
 
 /// Matches a primary result/error/status code, e.g.:
 ///   `Result = 0x80070490`, `Error: 0x80070002`, `Status: 0xC000000F`
-static RESULT_CODE_RE: Lazy<Regex> = Lazy::new(|| {
+fn result_code_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
     Regex::new(r"(?:Result\s*=|Error:|Status:)\s*(0x[0-9A-Fa-f]+)").unwrap()
-});
+})
+}
 
 /// Matches a GetLastError annotation, e.g. `[gle=0x00000002]`.
-static GLE_RE: Lazy<Regex> = Lazy::new(|| {
+fn gle_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
     Regex::new(r"\[gle=(0x[0-9A-Fa-f]+)\]").unwrap()
-});
+})
+}
 
 /// Matches the current setup phase, e.g. `CurrentSetupPhase [SetupPhaseInstall]`.
-static SETUP_PHASE_RE: Lazy<Regex> = Lazy::new(|| {
+fn setup_phase_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
     Regex::new(r"CurrentSetupPhase\s+\[([A-Za-z0-9]+)\]").unwrap()
-});
+})
+}
 
 /// Matches an operation being executed or completed, e.g.:
 ///   `Executing operation: Apply Drivers`
 ///   `Operation completed successfully: Apply Drivers`
-static OPERATION_RE: Lazy<Regex> = Lazy::new(|| {
+fn operation_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
     Regex::new(r"(?:Executing operation|Operation completed successfully):\s*(.+)").unwrap()
-});
+})
+}
 
-static PANTHER_HEADER_RE: Lazy<Regex> = Lazy::new(|| {
+fn panther_header_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
     Regex::new(
         r"^(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2}):(\d{2}),\s+(Info|Warning|Error|Fatal Error|Perf)\s+(?:(\[0x[0-9A-Fa-f]+\])\s+)?(?:([A-Z][A-Z0-9_.-]{1,31})\s+)?(.*)$",
     )
     .unwrap()
-});
+})
+}
 
-static PANTHER_RELAXED_HEADER_RE: Lazy<Regex> = Lazy::new(|| {
+fn panther_relaxed_header_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
     Regex::new(
         r"^(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2}):(\d{2}),\s+([A-Za-z][A-Za-z0-9_-]{1,31})\s+(?:(\[0x[0-9A-Fa-f]+\])\s+)?(?:([A-Z][A-Z0-9_.-]{1,31})\s+)?(.*)$",
     )
     .unwrap()
-});
+})
+}
 
 struct PendingEntry {
     entry: LogEntry,
@@ -66,7 +96,7 @@ struct PendingEntry {
 }
 
 pub fn matches_panther_record(line: &str) -> bool {
-    PANTHER_HEADER_RE.is_match(line)
+    panther_header_re().is_match(line)
 }
 
 pub fn parse_lines(lines: &[&str], file_path: &str) -> (Vec<LogEntry>, u32) {
@@ -87,7 +117,7 @@ pub fn parse_lines(lines: &[&str], file_path: &str) -> (Vec<LogEntry>, u32) {
             continue;
         }
 
-        if PANTHER_PREFIX_RE.is_match(line) {
+        if panther_prefix_re().is_match(line) {
             flush_pending(&mut entries, &mut pending, &mut next_id);
             entries.push(fallback_entry(next_id, line_number, line, file_path));
             next_id += 1;
@@ -118,11 +148,11 @@ pub fn parse_lines(lines: &[&str], file_path: &str) -> (Vec<LogEntry>, u32) {
 }
 
 fn parse_header(line: &str, file_path: &str) -> Option<LogEntry> {
-    if let Some(caps) = PANTHER_HEADER_RE.captures(line) {
+    if let Some(caps) = panther_header_re().captures(line) {
         return build_entry_from_caps(&caps, file_path);
     }
 
-    let caps = PANTHER_RELAXED_HEADER_RE.captures(line)?;
+    let caps = panther_relaxed_header_re().captures(line)?;
     build_entry_from_caps(&caps, file_path)
 }
 
@@ -183,7 +213,7 @@ fn build_entry_from_caps(caps: &regex::Captures<'_>, file_path: &str) -> Option<
 /// Extract additional structured fields from the message text.
 fn post_process_entry(entry: &mut LogEntry) {
     // 1. Extract bracketed exe tag → source_file + component fallback
-    if let Some(caps) = EXE_TAG_RE.captures(&entry.message) {
+    if let Some(caps) = exe_tag_re().captures(&entry.message) {
         let exe_name = caps.get(1).unwrap().as_str().to_string();
         // Strip the tag from the message
         entry.message = entry.message[caps.get(0).unwrap().end()..].to_string();
@@ -196,14 +226,14 @@ fn post_process_entry(entry: &mut LogEntry) {
 
     // 2. Extract C++ Class::Method as source_file (keep in message for context)
     if entry.source_file.is_none() {
-        if let Some(caps) = CLASS_METHOD_RE.captures(&entry.message) {
+        if let Some(caps) = class_method_re().captures(&entry.message) {
             entry.source_file = Some(caps.get(1).unwrap().as_str().to_string());
         }
     }
 
     // 3. Extract DISM TID as thread
     if entry.thread.is_none() {
-        if let Some(caps) = TID_RE.captures(&entry.message) {
+        if let Some(caps) = tid_re().captures(&entry.message) {
             if let Ok(tid) = caps.get(1).unwrap().as_str().parse::<u32>() {
                 entry.thread = Some(tid);
                 entry.thread_display = Some(format!("{} (0x{:04X})", tid, tid));
@@ -212,22 +242,22 @@ fn post_process_entry(entry: &mut LogEntry) {
     }
 
     // 4. Extract primary result/error/status code
-    if let Some(caps) = RESULT_CODE_RE.captures(&entry.message) {
+    if let Some(caps) = result_code_re().captures(&entry.message) {
         entry.result_code = Some(caps.get(1).unwrap().as_str().to_uppercase());
     }
 
     // 5. Extract GetLastError code
-    if let Some(caps) = GLE_RE.captures(&entry.message) {
+    if let Some(caps) = gle_re().captures(&entry.message) {
         entry.gle_code = Some(caps.get(1).unwrap().as_str().to_uppercase());
     }
 
     // 6. Extract current setup phase
-    if let Some(caps) = SETUP_PHASE_RE.captures(&entry.message) {
+    if let Some(caps) = setup_phase_re().captures(&entry.message) {
         entry.setup_phase = Some(caps.get(1).unwrap().as_str().to_string());
     }
 
     // 7. Extract operation name from execution/completion lines
-    if let Some(caps) = OPERATION_RE.captures(&entry.message) {
+    if let Some(caps) = operation_re().captures(&entry.message) {
         entry.operation_name = Some(caps.get(1).unwrap().as_str().trim().to_string());
     }
 }
