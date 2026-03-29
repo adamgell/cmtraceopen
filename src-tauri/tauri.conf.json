@@ -26,8 +26,17 @@
       "csp": null
     }
   },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IENDMUNDN0EwOUVBOUQ3Q0YKUldUUDE2bWVvTWNjekFWTGVtaFZ6QVIwTEtYYXBIdWFXeWtDOTJkSi9lRnN2TFR3Z1J5SnhzVWkK",
+      "endpoints": [
+        "https://github.com/adamgell/cmtraceopen/releases/latest/download/latest.json"
+      ]
+    }
+  },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": true,
     "targets": "all",
     "icon": [
       "icons/32x32.png",

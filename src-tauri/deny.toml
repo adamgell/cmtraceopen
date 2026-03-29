@@ -1,5 +1,28 @@
 [advisories]
-ignore = []
+# These are all unmaintained-crate advisories from Tauri's transitive
+# dependency tree (GTK3 bindings, encoding, fxhash, proc-macro-error, etc.).
+# We cannot fix them — they require upstream Tauri/evtx migrations.
+ignore = [
+    "RUSTSEC-2021-0153", # encoding: unmaintained (via evtx crate)
+    "RUSTSEC-2024-0370", # proc-macro-error: unmaintained (via Tauri)
+    "RUSTSEC-2024-0384", # fxhash: unmaintained (transitive)
+    "RUSTSEC-2024-0411", # gtk: GTK3 unmaintained (Tauri Linux)
+    "RUSTSEC-2024-0412", # gdk: GTK3 unmaintained (Tauri Linux)
+    "RUSTSEC-2024-0413", # atk: GTK3 unmaintained (Tauri Linux)
+    "RUSTSEC-2024-0414", # gdk-pixbuf: GTK3 unmaintained (Tauri Linux)
+    "RUSTSEC-2024-0415", # gio: GTK3 unmaintained (Tauri Linux)
+    "RUSTSEC-2024-0416", # glib: GTK3 unmaintained (Tauri Linux)
+    "RUSTSEC-2024-0417", # pango: GTK3 unmaintained (Tauri Linux)
+    "RUSTSEC-2024-0418", # cairo-rs: GTK3 unmaintained (Tauri Linux)
+    "RUSTSEC-2024-0419", # gtk-sys etc: GTK3 unmaintained (Tauri Linux)
+    "RUSTSEC-2024-0420", # glib-sys etc: GTK3 unmaintained (Tauri Linux)
+    "RUSTSEC-2025-0057", # gtk-related (Tauri Linux)
+    "RUSTSEC-2025-0075", # gtk-related (Tauri Linux)
+    "RUSTSEC-2025-0080", # gtk-related (Tauri Linux)
+    "RUSTSEC-2025-0081", # gtk-related (Tauri Linux)
+    "RUSTSEC-2025-0098", # gtk-related (Tauri Linux)
+    "RUSTSEC-2025-0100", # gtk-related (Tauri Linux)
+]
 
 [licenses]
 allow = [
