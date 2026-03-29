@@ -43,7 +43,7 @@ export function useUpdateChecker() {
   const pendingUpdateRef = useRef<Update | null>(null);
 
   const checkForUpdates = useCallback(
-    async (silent: boolean): Promise<UpdateInfo | null> => {
+    async (): Promise<UpdateInfo | null> => {
       setIsChecking(true);
 
       try {
@@ -74,9 +74,7 @@ export function useUpdateChecker() {
           canAutoUpdate,
         };
 
-        if (!silent) {
-          setUpdateInfo(info);
-        }
+        setUpdateInfo(info);
         return info;
       } catch (err) {
         console.error("[update-checker] failed to check for updates", err);
@@ -86,9 +84,7 @@ export function useUpdateChecker() {
           canAutoUpdate: false,
           error: String(err),
         };
-        if (!silent) {
-          setUpdateInfo(info);
-        }
+        setUpdateInfo(info);
         return info;
       } finally {
         setIsChecking(false);
@@ -137,7 +133,10 @@ export function useUpdateChecker() {
   }, []);
 
   const openReleasePage = useCallback(() => {
-    window.open(GITHUB_RELEASES_URL, "_blank");
+    const newWindow = window.open(GITHUB_RELEASES_URL, "_blank", "noopener,noreferrer");
+    if (newWindow) {
+      newWindow.opener = null;
+    }
   }, []);
 
   const skipVersion = useCallback((version: string) => {
@@ -157,7 +156,7 @@ export function useUpdateChecker() {
     startupCheckDone.current = true;
 
     const timer = setTimeout(async () => {
-      const info = await checkForUpdates(true);
+      const info = await checkForUpdates();
       if (info?.available && info.newVersion) {
         const skipped = getSkippedVersion();
         if (skipped === info.newVersion) {

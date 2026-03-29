@@ -9,7 +9,7 @@ interface UpdateDialogProps {
   isChecking: boolean;
   isDownloading: boolean;
   downloadProgress: number;
-  onCheckForUpdates: (silent: boolean) => void;
+  onCheckForUpdates: () => Promise<UpdateInfo | null>;
   onDownloadAndInstall: () => void;
   onOpenReleasePage: () => void;
   onSkipVersion: (version: string) => void;
@@ -39,7 +39,7 @@ export function UpdateDialog({
   // Trigger check when dialog opens via menu (no existing updateInfo)
   useEffect(() => {
     if (isOpen && !updateInfo && !isChecking) {
-      onCheckForUpdates(false);
+      void onCheckForUpdates();
     }
   }, [isOpen, updateInfo, isChecking, onCheckForUpdates]);
 
