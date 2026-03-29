@@ -171,6 +171,7 @@ interface UiState {
   collectionProgress: CollectionProgressState | null;
   collectionResult: CollectionResult | null;
   showCollectDiagnosticsDialog: boolean;
+  showUpdateDialog: boolean;
 
   setActiveWorkspace: (workspace: WorkspaceId) => void;
   setCurrentPlatform: (platform: PlatformId) => void;
@@ -221,6 +222,7 @@ interface UiState {
   setCollectionProgress: (progress: CollectionProgressState | null) => void;
   setCollectionResult: (result: CollectionResult | null) => void;
   setShowCollectDiagnosticsDialog: (show: boolean) => void;
+  setShowUpdateDialog: (show: boolean) => void;
 }
 
 const DEFAULT_WORKSPACE: WorkspaceId = "log";
@@ -292,6 +294,7 @@ export const useUiStore = create<UiState>()(
       collectionProgress: null,
       collectionResult: null,
       showCollectDiagnosticsDialog: false,
+      showUpdateDialog: false,
 
       setCurrentPlatform: (platform) => set({ currentPlatform: platform }),
       setActiveWorkspace: (workspace) => {
@@ -402,7 +405,8 @@ export const useUiStore = create<UiState>()(
           !state.showAccessibilityDialog &&
           !state.showEvidenceBundleDialog &&
           !state.showFileAssociationPrompt &&
-          !state.showCollectDiagnosticsDialog
+          !state.showCollectDiagnosticsDialog &&
+          !state.showUpdateDialog
         ) {
           return;
         }
@@ -418,6 +422,7 @@ export const useUiStore = create<UiState>()(
           showEvidenceBundleDialog: false,
           showFileAssociationPrompt: false,
           showCollectDiagnosticsDialog: false,
+          showUpdateDialog: false,
         });
       },
 
@@ -510,6 +515,7 @@ export const useUiStore = create<UiState>()(
       setCollectionProgress: (progress) => set({ collectionProgress: progress }),
       setCollectionResult: (result) => set({ collectionResult: result }),
       setShowCollectDiagnosticsDialog: (show) => set({ showCollectDiagnosticsDialog: show }),
+      setShowUpdateDialog: (show) => set({ showUpdateDialog: show }),
     }),
     {
       name: "cmtraceopen-ui-preferences",

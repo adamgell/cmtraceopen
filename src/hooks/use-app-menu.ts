@@ -82,6 +82,9 @@ export function useAppMenu() {
           case "collect_diagnostics":
             useUiStore.getState().setShowCollectDiagnosticsDialog(true);
             return;
+          case "check_for_updates":
+            useUiStore.getState().setShowUpdateDialog(true);
+            return;
           case "open_known_source": {
             if (payload.source_id) {
               await openKnownSourceCatalogAction({
