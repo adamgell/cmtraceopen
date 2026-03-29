@@ -28,6 +28,14 @@ export async function initializeDateTimeFormatting(): Promise<void> {
   }
 }
 
+export async function refreshDateTimeFormatting(): Promise<void> {
+  try {
+    cachedPreferences = await getSystemDateTimePreferences();
+  } catch {
+    // Keep existing cached preferences on refresh failure
+  }
+}
+
 export function formatDisplayDateTime(value: DateLikeValue): string | null {
   const parsed = parseDisplayDateTime(value);
   if (!parsed) {
@@ -59,7 +67,7 @@ export function formatDisplayTime(value: DateLikeValue): string | null {
 }
 
 export function formatLogEntryTimestamp(entry: Pick<LogEntry, "timestamp" | "timestampDisplay">): string | null {
-  return formatDisplayDateTime(entry.timestamp ?? entry.timestampDisplay);
+  return formatDisplayDateTime(entry.timestampDisplay ?? entry.timestamp);
 }
 
 export function parseDisplayDateTime(value: DateLikeValue): Date | null {

@@ -5,7 +5,8 @@ import App from "./App";
 import { useAppMenu } from "./hooks/use-app-menu";
 import { getThemeById } from "./lib/themes";
 import { useUiStore } from "./stores/ui-store";
-import { initializeDateTimeFormatting } from "./lib/date-time-format";
+import { initializeDateTimeFormatting, refreshDateTimeFormatting } from "./lib/date-time-format";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 const RootWrapper = import.meta.env.DEV ? React.Fragment : React.StrictMode;
 
@@ -23,6 +24,18 @@ function AppRoot() {
   useEffect(() => {
     // Dismiss splash screen once the app has mounted
     dismissSplash();
+  }, []);
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    getCurrentWindow()
+      .onFocusChanged(({ payload: focused }) => {
+        if (focused) void refreshDateTimeFormatting();
+      })
+      .then((fn) => {
+        unlisten = fn;
+      });
+    return () => unlisten?.();
   }, []);
 
   return <App />;
