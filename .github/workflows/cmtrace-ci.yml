@@ -49,6 +49,10 @@ jobs:
         working-directory: src-tauri
         run: cargo test
 
+      - name: Rust check (lite)
+        working-directory: src-tauri
+        run: cargo check --no-default-features
+
       - name: Rust clippy
         working-directory: src-tauri
         run: cargo clippy -- -D warnings

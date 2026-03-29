@@ -21,7 +21,11 @@ import {
 } from "@fluentui/react-components";
 import { open } from "@tauri-apps/plugin-dialog";
 import { platform } from "@tauri-apps/plugin-os";
-import { analyzeIntuneLogs, inspectPathKind } from "../../lib/commands";
+import {
+  analyzeIntuneLogs,
+  getAvailableWorkspaces as getAvailableBackendWorkspaces,
+  inspectPathKind,
+} from "../../lib/commands";
 import {
   analyzeDsregcmdPath,
   analyzeDsregcmdSource,
@@ -763,6 +767,11 @@ export function Toolbar() {
   const activeView = useUiStore((s) => s.activeView);
   const setActiveView = useUiStore((s) => s.setActiveView);
   const currentPlatform = useUiStore((s) => s.currentPlatform);
+  const enabledWorkspaces = useUiStore((s) => s.enabledWorkspaces);
+  const availableWorkspaces = useMemo(
+    () => getAvailableWorkspaces(currentPlatform, enabledWorkspaces),
+    [currentPlatform, enabledWorkspaces]
+  );
 
   const {
     commandState,
@@ -782,18 +791,39 @@ export function Toolbar() {
       console.warn("[toolbar] failed to refresh known sources", { error });
     });
 
+    let disposed = false;
+
+    void getAvailableBackendWorkspaces()
+      .then((workspaces) => {
+        if (disposed) {
+          return;
+        }
+
+        const store = useUiStore.getState();
+        store.setEnabledWorkspaces(workspaces);
+      })
+      .catch((error) => {
+        console.warn("[toolbar] failed to load build workspace availability", {
+          error,
+        });
+      });
+
     try {
       const p = platform();
       const mapped: PlatformId = p === "macos" ? "macos" : p === "windows" ? "windows" : "linux";
       const store = useUiStore.getState();
       store.setCurrentPlatform(mapped);
-      const available = getAvailableWorkspaces(mapped);
+      const available = getAvailableWorkspaces(mapped, store.enabledWorkspaces);
       if (!available.includes(store.activeWorkspace)) {
         store.setActiveWorkspace("log");
       }
     } catch (error) {
       console.warn("[toolbar] failed to detect platform", { error });
     }
+
+    return () => {
+      disposed = true;
+    };
   }, []);
 
   const openLabels = useMemo(
@@ -938,33 +968,37 @@ export function Toolbar() {
         Info
       </Button>
 
-      <Divider vertical />
+      {availableWorkspaces.length > 1 && (
+        <>
+          <Divider vertical />
 
-      <label
-        style={{
-          fontSize: "11px",
-          color: tokens.colorNeutralForeground3,
-          whiteSpace: "nowrap",
-        }}
-      >
-        Workspace:
-      </label>
-      <Dropdown
-        value={WORKSPACE_LABELS[activeView]}
-        selectedOptions={[activeView]}
-        onOptionSelect={(_e, data) => {
-          if (data.optionValue) {
-            setActiveView(data.optionValue as WorkspaceId);
-          }
-        }}
-        size="small"
-        style={{ minWidth: "180px" }}
-        aria-label="Workspace"
-      >
-        {getAvailableWorkspaces(currentPlatform).map((wsId) => (
-          <Option key={wsId} value={wsId}>{WORKSPACE_LABELS[wsId]}</Option>
-        ))}
-      </Dropdown>
+          <label
+            style={{
+              fontSize: "11px",
+              color: tokens.colorNeutralForeground3,
+              whiteSpace: "nowrap",
+            }}
+          >
+            Workspace:
+          </label>
+          <Dropdown
+            value={WORKSPACE_LABELS[activeView]}
+            selectedOptions={[activeView]}
+            onOptionSelect={(_e, data) => {
+              if (data.optionValue) {
+                setActiveView(data.optionValue as WorkspaceId);
+              }
+            }}
+            size="small"
+            style={{ minWidth: "180px" }}
+            aria-label="Workspace"
+          >
+            {availableWorkspaces.map((wsId) => (
+              <Option key={wsId} value={wsId}>{WORKSPACE_LABELS[wsId]}</Option>
+            ))}
+          </Dropdown>
+        </>
+      )}
 
       <div style={{ flex: 1 }} />
 

@@ -1,0 +1,10 @@
+{
+  "productName": "CMTrace Open Lite",
+  "app": {
+    "windows": [
+      {
+        "title": "CMTrace Open Lite"
+      }
+    ]
+  }
+}

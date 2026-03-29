@@ -73,7 +73,7 @@ pub fn build_app_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> 
         true,
         None::<&str>,
     )?;
-    #[cfg(target_os = "windows")]
+    #[cfg(all(target_os = "windows", feature = "collector"))]
     let collect_diagnostics = MenuItem::with_id(
         app,
         MENU_ID_TOOLS_COLLECT_DIAGNOSTICS,
@@ -119,9 +119,9 @@ pub fn build_app_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> 
         &[&open_log_file, &open_log_folder, &known_sources, &quit],
     )?;
     let edit_menu = Submenu::with_items(app, "Edit", true, &[&find, &filter])?;
-    #[cfg(target_os = "windows")]
+    #[cfg(all(target_os = "windows", feature = "collector"))]
     let tools_menu = Submenu::with_items(app, "Tools", true, &[&error_lookup, &bundle_summary, &collect_diagnostics])?;
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(any(not(target_os = "windows"), not(feature = "collector")))]
     let tools_menu = Submenu::with_items(app, "Tools", true, &[&error_lookup, &bundle_summary])?;
     let window_menu = Submenu::with_items(
         app,

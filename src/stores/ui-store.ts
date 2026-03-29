@@ -11,6 +11,9 @@ import { DEFAULT_THEME_ID } from "../lib/themes";
 import { clearCachedTabSnapshot } from "./log-store";
 import type { ColumnId } from "../lib/column-config";
 import type { CollectionResult } from "../lib/commands";
+import type { WorkspaceId } from "../types/log";
+
+export type { WorkspaceId } from "../types/log";
 
 export interface ErrorLookupHistoryEntry {
   codeHex: string;
@@ -22,7 +25,6 @@ export interface ErrorLookupHistoryEntry {
 }
 
 export type IntuneWorkspaceId = "intune" | "new-intune";
-export type WorkspaceId = "log" | IntuneWorkspaceId | "dsregcmd" | "macos-diag" | "deployment";
 export type AppView = WorkspaceId;
 
 export type PlatformId = "windows" | "macos" | "linux";
@@ -45,8 +47,17 @@ const WORKSPACE_PLATFORM_MAP: Record<WorkspaceId, PlatformId[] | "all"> = {
   deployment: ["windows"],
 };
 
-export function getAvailableWorkspaces(platform: PlatformId): WorkspaceId[] {
+export function getAvailableWorkspaces(
+  platform: PlatformId,
+  enabledWorkspaces?: readonly WorkspaceId[] | null
+): WorkspaceId[] {
+  const enabled = enabledWorkspaces ? new Set(enabledWorkspaces) : null;
+
   return (Object.keys(WORKSPACE_PLATFORM_MAP) as WorkspaceId[]).filter((ws) => {
+    if (enabled && !enabled.has(ws)) {
+      return false;
+    }
+
     const platforms = WORKSPACE_PLATFORM_MAP[ws];
     return platforms === "all" || platforms.includes(platform);
   });
@@ -168,6 +179,7 @@ interface UiState {
     category: string;
   } | null;
   currentPlatform: PlatformId;
+  enabledWorkspaces: WorkspaceId[] | null;
   collectionProgress: CollectionProgressState | null;
   collectionResult: CollectionResult | null;
   showCollectDiagnosticsDialog: boolean;
@@ -175,6 +187,7 @@ interface UiState {
 
   setActiveWorkspace: (workspace: WorkspaceId) => void;
   setCurrentPlatform: (platform: PlatformId) => void;
+  setEnabledWorkspaces: (workspaces: WorkspaceId[] | null) => void;
   setActiveView: (view: AppView) => void;
   ensureWorkspaceVisible: (workspace: WorkspaceId, trigger: string) => void;
   ensureLogViewVisible: (trigger: string) => void;
@@ -291,14 +304,38 @@ export const useUiStore = create<UiState>()(
       errorLookupHistory: [],
       focusedErrorCode: null,
       currentPlatform: "windows" as PlatformId,
+      enabledWorkspaces: null,
       collectionProgress: null,
       collectionResult: null,
       showCollectDiagnosticsDialog: false,
       showUpdateDialog: false,
 
       setCurrentPlatform: (platform) => set({ currentPlatform: platform }),
+      setEnabledWorkspaces: (workspaces) => {
+        const nextWorkspaces =
+          workspaces && workspaces.length > 0
+            ? Array.from(new Set(workspaces))
+            : null;
+        const available = getAvailableWorkspaces(
+          get().currentPlatform,
+          nextWorkspaces
+        );
+        const nextState: Partial<UiState> = {
+          enabledWorkspaces: nextWorkspaces,
+        };
+
+        if (!available.includes(get().activeWorkspace)) {
+          nextState.activeWorkspace = DEFAULT_WORKSPACE;
+          nextState.activeView = DEFAULT_WORKSPACE;
+        }
+
+        set(nextState);
+      },
       setActiveWorkspace: (workspace) => {
-        const available = getAvailableWorkspaces(get().currentPlatform);
+        const available = getAvailableWorkspaces(
+          get().currentPlatform,
+          get().enabledWorkspaces
+        );
         if (!available.includes(workspace)) {
           console.warn(`Workspace "${workspace}" not available on ${get().currentPlatform}`);
           return;
@@ -324,7 +361,10 @@ export const useUiStore = create<UiState>()(
         get().setActiveWorkspace(view);
       },
       ensureWorkspaceVisible: (workspace, trigger) => {
-        const available = getAvailableWorkspaces(get().currentPlatform);
+        const available = getAvailableWorkspaces(
+          get().currentPlatform,
+          get().enabledWorkspaces
+        );
         if (!available.includes(workspace)) {
           console.warn(`Workspace "${workspace}" not available on ${get().currentPlatform}`);
           return;

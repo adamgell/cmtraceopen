@@ -20,6 +20,7 @@ fn synthetic_ccm_benchmark_fixture_parses_all_records() {
 }
 
 #[test]
+#[cfg(feature = "intune-diagnostics")]
 fn synthetic_intune_benchmark_fixture_matches_pipeline_counts() {
     let bench_file = common::build_intune_bench_file(1_024);
     let path = bench_file.path_string();

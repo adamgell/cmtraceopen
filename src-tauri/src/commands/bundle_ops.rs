@@ -5,12 +5,45 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::constants::DEFAULT_BUNDLE_PRIMARY_ENTRY_POINTS;
+#[cfg(feature = "dsregcmd")]
 use crate::dsregcmd::registry::{inspect_registry_snapshot_file, RegistrySnapshotSummary};
 use crate::intune::models::{EvidenceBundleArtifactCounts, EvidenceBundleMetadata};
 use crate::models::log_entry::{ParseQuality, ParserKind, ParserSelectionInfo, ParserSpecialization};
 use crate::parser;
 
 use super::file_ops::{normalize_path_string, metadata_modified_unix_ms, FolderEntry};
+
+#[cfg(not(feature = "dsregcmd"))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RegistrySnapshotValuePreview {
+    pub name: String,
+    pub value_type: String,
+    pub value: String,
+}
+
+#[cfg(not(feature = "dsregcmd"))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RegistrySnapshotKeyPreview {
+    pub path: String,
+    pub value_count: u32,
+    pub values: Vec<RegistrySnapshotValuePreview>,
+}
+
+#[cfg(not(feature = "dsregcmd"))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RegistrySnapshotSummary {
+    pub key_count: u32,
+    pub value_count: u32,
+    pub keys: Vec<RegistrySnapshotKeyPreview>,
+}
+
+#[cfg(not(feature = "dsregcmd"))]
+fn inspect_registry_snapshot_file(_path: &Path) -> Option<RegistrySnapshotSummary> {
+    None
+}
 
 // ── Types ───────────────────────────────────────────────────────────────
 
@@ -535,8 +568,17 @@ fn inspect_evidence_artifact_preview(
 
     match intake_kind {
         EvidenceArtifactIntakeKind::RegistrySnapshot => {
-            let registry_snapshot = inspect_registry_snapshot_file(path)
-                .ok_or_else(|| crate::error::AppError::Internal(format!("failed to inspect registry snapshot {}", path.display())))?;
+            let Some(registry_snapshot) = inspect_registry_snapshot_file(path) else {
+                return Ok(EvidenceArtifactPreview {
+                    path: normalize_path_string(path),
+                    intake_kind,
+                    summary:
+                        "Registry snapshot preview is not available in lite builds. Use a full build with the dsregcmd feature enabled."
+                            .to_string(),
+                    registry_snapshot: None,
+                    event_log_export: None,
+                });
+            };
             let summary = format!(
                 "Parsed {} registry key{} and {} value{} from this exported snapshot.",
                 registry_snapshot.key_count,
@@ -989,8 +1031,19 @@ mod tests {
         )
         .expect("inspect event artifact");
 
-        assert!(registry_preview.registry_snapshot.is_some());
-        assert!(registry_preview.summary.contains("registry key"));
+        #[cfg(feature = "dsregcmd")]
+        {
+            assert!(registry_preview.registry_snapshot.is_some());
+            assert!(registry_preview.summary.contains("registry key"));
+        }
+
+        #[cfg(not(feature = "dsregcmd"))]
+        {
+            assert!(registry_preview.registry_snapshot.is_none());
+            assert!(registry_preview
+                .summary
+                .contains("not available in lite builds"));
+        }
         assert!(event_preview.event_log_export.is_some());
         assert_eq!(
             event_preview

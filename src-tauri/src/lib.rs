@@ -1,11 +1,14 @@
 mod constants;
+#[cfg(feature = "collector")]
 pub mod collector;
 mod commands;
+#[cfg(feature = "dsregcmd")]
 pub mod dsregcmd;
 pub mod error;
-pub mod macos_diag;
 pub mod error_db;
 pub mod intune;
+#[cfg(feature = "macos-diag")]
+pub mod macos_diag;
 mod menu;
 mod models;
 pub mod parser;
@@ -55,6 +58,7 @@ pub fn run() {
             commands::file_association::get_file_association_prompt_status,
             commands::file_association::associate_log_files_with_app,
             commands::file_association::set_file_association_prompt_suppressed,
+            commands::app_config::get_available_workspaces,
             commands::file_ops::open_log_file,
             commands::file_ops::parse_files_batch,
             commands::file_ops::open_log_folder_aggregate,
@@ -74,22 +78,37 @@ pub fn run() {
             commands::filter::apply_filter,
             commands::error_lookup::lookup_error_code,
             commands::error_lookup::search_error_codes,
+            #[cfg(feature = "intune-diagnostics")]
             commands::intune::analyze_intune_logs,
+            #[cfg(feature = "deployment")]
             commands::deployment::analyze_deployment_folder,
             commands::fonts::list_system_fonts,
+            #[cfg(feature = "dsregcmd")]
             commands::dsregcmd::analyze_dsregcmd,
+            #[cfg(feature = "dsregcmd")]
             commands::dsregcmd::capture_dsregcmd,
+            #[cfg(feature = "dsregcmd")]
             commands::dsregcmd::load_dsregcmd_source,
+            #[cfg(feature = "macos-diag")]
             commands::macos_diag::macos_scan_environment,
+            #[cfg(feature = "macos-diag")]
             commands::macos_diag::macos_scan_intune_logs,
+            #[cfg(feature = "macos-diag")]
             commands::macos_diag::macos_list_profiles,
+            #[cfg(feature = "macos-diag")]
             commands::macos_diag::macos_inspect_defender,
+            #[cfg(feature = "macos-diag")]
             commands::macos_diag::macos_list_packages,
+            #[cfg(feature = "macos-diag")]
             commands::macos_diag::macos_get_package_info,
+            #[cfg(feature = "macos-diag")]
             commands::macos_diag::macos_get_package_files,
+            #[cfg(feature = "macos-diag")]
             commands::macos_diag::macos_query_unified_log,
+            #[cfg(feature = "macos-diag")]
             commands::macos_diag::macos_open_system_settings,
             commands::fonts::list_system_fonts,
+            #[cfg(feature = "collector")]
             commands::collector::collect_diagnostics,
         ])
         .run(tauri::generate_context!())

@@ -14,6 +14,15 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
+[features]
+default = ["full"]
+full = ["collector", "deployment", "dsregcmd", "intune-diagnostics", "macos-diag"]
+collector = []
+deployment = []
+dsregcmd = ["dep:ureq", "intune-diagnostics"]
+intune-diagnostics = ["dep:evtx"]
+macos-diag = ["dep:plist"]
+
 [dependencies]
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
@@ -33,16 +42,16 @@ notify = "7"
 tokio = { version = "1", features = ["fs", "io-util", "sync", "rt"] }
 rayon = "1.10"
 font-kit = "0.14"
-evtx = "0.8"
+evtx = { version = "0.8", optional = true }
 glob = "0.3"
 
 [target.'cfg(target_os = "macos")'.dependencies]
-plist = "1"
+plist = { version = "1", optional = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 winreg = "0.52"
 windows = { version = "0.58", features = ["Win32_Foundation", "Win32_System_EventLog", "Win32_Security"] }
-ureq = "2"
+ureq = { version = "2", optional = true }
 
 [dev-dependencies]
 criterion = "0.5"

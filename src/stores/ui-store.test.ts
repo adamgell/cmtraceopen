@@ -192,6 +192,11 @@ describe("getAvailableWorkspaces", () => {
     expect(workspaces).not.toContain("dsregcmd");
     expect(workspaces).not.toContain("macos-diag");
   });
+
+  it("filters workspaces to the backend-enabled set", () => {
+    const workspaces = getAvailableWorkspaces("windows", ["log"]);
+    expect(workspaces).toEqual(["log"]);
+  });
 });
 
 describe("isIntuneWorkspace", () => {

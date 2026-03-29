@@ -38,6 +38,13 @@ export type ParserSpecialization = "ime";
 export type LogSourceKind = "file" | "folder" | "known";
 export type KnownSourcePathKind = "file" | "folder";
 export type PlatformKind = "all" | "windows" | "macos" | "linux";
+export type WorkspaceId =
+  | "log"
+  | "intune"
+  | "new-intune"
+  | "dsregcmd"
+  | "macos-diag"
+  | "deployment";
 export type KnownSourceDefaultFileSelectionBehavior =
   | "none"
   | "preferFileName"

@@ -6,6 +6,7 @@ import type {
   LogFormat,
   LogSource,
   ParseResult,
+  WorkspaceId,
 } from "../types/log";
 import type { EvidenceArtifactPreview, EvidenceBundleDetails, EvidenceArtifactIntakeKind } from "../types/evidence";
 import type { RegistryParseResult } from "../types/registry";
@@ -227,6 +228,10 @@ export async function loadDsregcmdSource(
 
 export async function getInitialFilePaths(): Promise<string[]> {
   return invokeCommand<string[]>("get_initial_file_paths");
+}
+
+export async function getAvailableWorkspaces(): Promise<WorkspaceId[]> {
+  return invokeCommand<WorkspaceId[]>("get_available_workspaces");
 }
 
 export async function getFileAssociationPromptStatus(): Promise<FileAssociationPromptStatus> {
