@@ -9,25 +9,28 @@
 //!   [07A4:0CBC][2025-11-25T01:55:42]i001: Burn v3.14.1.8722, Windows v10.0
 //!   [07A4:0CBC][2025-11-25T01:55:42]e000: Error 0x80070005: Failed to ...
 
-use once_cell::sync::Lazy;
 use regex::Regex;
 
 use crate::models::log_entry::{LogEntry, LogFormat, Severity};
+use std::sync::OnceLock;
 
 /// Regex matching the WiX/Burn bootstrapper log format.
 /// Groups: pid(hex), tid(hex), timestamp(ISO), severity(letter), code(3digits), message
-static BURN_RE: Lazy<Regex> = Lazy::new(|| {
+fn burn_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
     Regex::new(concat!(
         r"^\[([0-9A-Fa-f]+):([0-9A-Fa-f]+)\]",       // [PID:TID]
         r"\[(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})\]", // [ISO timestamp]
         r"([iew])(\d{3}):\s*(.*)",                       // severity + code + message
     ))
     .expect("Burn regex must compile")
-});
+})
+}
 
 /// Check if a line matches the WiX/Burn format (used by detect.rs).
 pub fn matches_burn_record(line: &str) -> bool {
-    BURN_RE.is_match(line)
+    burn_re().is_match(line)
 }
 
 fn severity_from_letter(letter: &str) -> Severity {
@@ -50,7 +53,7 @@ pub fn parse_lines(lines: &[&str], file_path: &str) -> (Vec<LogEntry>, u32) {
             continue;
         }
 
-        if let Some(caps) = BURN_RE.captures(trimmed) {
+        if let Some(caps) = burn_re().captures(trimmed) {
             let pid_hex = caps.get(1).unwrap().as_str();
             let tid_hex = caps.get(2).unwrap().as_str();
             let ts_str = caps.get(3).unwrap().as_str();

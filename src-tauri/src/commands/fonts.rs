@@ -1,5 +1,5 @@
-use once_cell::sync::Lazy;
 use serde::Serialize;
+use std::sync::OnceLock;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -7,18 +7,21 @@ pub struct SystemFontList {
     pub families: Vec<String>,
 }
 
-static CACHED_FONTS: Lazy<SystemFontList> = Lazy::new(|| {
-    let source = font_kit::source::SystemSource::new();
-    let mut families = source.all_families().unwrap_or_default();
-    families.sort_unstable_by_key(|a| a.to_ascii_lowercase());
-    families.dedup();
-    families.retain(|name| !name.starts_with('.') && !name.starts_with('#') && !name.is_empty());
-    SystemFontList { families }
-});
+fn cached_fonts() -> &'static SystemFontList {
+    static CELL: OnceLock<SystemFontList> = OnceLock::new();
+    CELL.get_or_init(|| {
+        let source = font_kit::source::SystemSource::new();
+        let mut families = source.all_families().unwrap_or_default();
+        families.sort_unstable_by_key(|a| a.to_ascii_lowercase());
+        families.dedup();
+        families.retain(|name| !name.starts_with('.') && !name.starts_with('#') && !name.is_empty());
+        SystemFontList { families }
+    })
+}
 
 #[tauri::command]
 pub fn list_system_fonts() -> SystemFontList {
-    CACHED_FONTS.clone()
+    cached_fonts().clone()
 }
 
 #[cfg(test)]

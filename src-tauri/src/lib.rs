@@ -1,6 +1,8 @@
+mod constants;
 pub mod collector;
 mod commands;
 pub mod dsregcmd;
+pub mod error;
 pub mod macos_diag;
 pub mod error_db;
 pub mod intune;
@@ -54,13 +56,13 @@ pub fn run() {
             commands::file_ops::parse_files_batch,
             commands::file_ops::open_log_folder_aggregate,
             commands::file_ops::list_log_folder,
-            commands::file_ops::inspect_evidence_bundle,
-            commands::file_ops::inspect_evidence_artifact,
-            commands::file_ops::get_known_log_sources,
-            commands::file_ops::parse_registry_file,
             commands::file_ops::inspect_path_kind,
             commands::file_ops::write_text_output_file,
             commands::file_ops::get_initial_file_paths,
+            commands::bundle_ops::inspect_evidence_bundle,
+            commands::bundle_ops::inspect_evidence_artifact,
+            commands::known_sources::get_known_log_sources,
+            commands::registry_ops::parse_registry_file,
             commands::system_preferences::get_system_date_time_preferences,
             commands::parsing::start_tail,
             commands::parsing::stop_tail,

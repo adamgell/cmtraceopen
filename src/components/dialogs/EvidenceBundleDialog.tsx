@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { tokens } from "@fluentui/react-components";
 import { inspectEvidenceArtifact, inspectEvidenceBundle } from "../../lib/commands";
 import { useDsregcmdStore } from "../../stores/dsregcmd-store";
 import { useIntuneStore } from "../../stores/intune-store";
@@ -13,6 +14,33 @@ import type {
 } from "../../types/evidence";
 import type { ParseQuality } from "../../types/log";
 import type { WorkspaceId } from "../../stores/ui-store";
+
+const BUNDLE_COLORS = {
+  successBg: tokens.colorPaletteGreenBackground1,
+  warningBg: tokens.colorPaletteYellowBackground1,
+  errorBg: tokens.colorPaletteRedBackground1,
+  infoBg: tokens.colorPaletteBlueBorderActive,
+  neutralBg: tokens.colorNeutralBackground3,
+  successFg: tokens.colorPaletteGreenForeground1,
+  warningFg: tokens.colorPaletteMarigoldForeground2,
+  errorFg: tokens.colorPaletteRedForeground1,
+  infoFg: tokens.colorBrandForeground1,
+  neutralFg: tokens.colorNeutralForeground2,
+  textPrimary: tokens.colorNeutralForeground1,
+  textSecondary: tokens.colorNeutralForeground2,
+  textTertiary: tokens.colorNeutralForeground3,
+  textMuted: tokens.colorNeutralForeground4,
+  cardBg: tokens.colorNeutralCardBackground,
+  surfaceBg: tokens.colorNeutralBackground1,
+  subtleBg: tokens.colorNeutralBackground2,
+  borderDefault: tokens.colorNeutralStroke1,
+  borderSubtle: tokens.colorNeutralStroke2,
+  borderError: tokens.colorPaletteRedBorder2,
+  borderWarning: tokens.colorPaletteYellowBorder2,
+  borderInfo: tokens.colorPaletteBlueBackground2,
+  headerFg: tokens.colorNeutralForeground2,
+  accentFg: tokens.colorBrandForeground1,
+} as const;
 
 interface EvidenceBundleDialogProps {
   isOpen: boolean;
@@ -70,30 +98,30 @@ function formatCategoryLabel(category: string): string {
 function formatArtifactStatusTone(status: EvidenceArtifactRecord["status"]) {
   switch (status) {
     case "collected":
-      return { backgroundColor: "#dcfce7", color: "#166534" };
+      return { backgroundColor: BUNDLE_COLORS.successBg, color: BUNDLE_COLORS.successFg };
     case "missing":
-      return { backgroundColor: "#fef3c7", color: "#92400e" };
+      return { backgroundColor: BUNDLE_COLORS.warningBg, color: BUNDLE_COLORS.warningFg };
     case "failed":
-      return { backgroundColor: "#fee2e2", color: "#991b1b" };
+      return { backgroundColor: BUNDLE_COLORS.errorBg, color: BUNDLE_COLORS.errorFg };
     case "skipped":
-      return { backgroundColor: "#e0f2fe", color: "#0f766e" };
+      return { backgroundColor: BUNDLE_COLORS.infoBg, color: BUNDLE_COLORS.infoFg };
     default:
-      return { backgroundColor: "#e5e7eb", color: "#374151" };
+      return { backgroundColor: BUNDLE_COLORS.neutralBg, color: BUNDLE_COLORS.neutralFg };
   }
 }
 
 function formatIntakeStatusTone(status: EvidenceArtifactRecord["intake"]["status"]) {
   switch (status) {
     case "recognized":
-      return { backgroundColor: "#dbeafe", color: "#1d4ed8" };
+      return { backgroundColor: BUNDLE_COLORS.infoBg, color: BUNDLE_COLORS.accentFg };
     case "generic":
-      return { backgroundColor: "#fef3c7", color: "#92400e" };
+      return { backgroundColor: BUNDLE_COLORS.warningBg, color: BUNDLE_COLORS.warningFg };
     case "unsupported":
-      return { backgroundColor: "#fee2e2", color: "#991b1b" };
+      return { backgroundColor: BUNDLE_COLORS.errorBg, color: BUNDLE_COLORS.errorFg };
     case "missing":
-      return { backgroundColor: "#e5e7eb", color: "#374151" };
+      return { backgroundColor: BUNDLE_COLORS.neutralBg, color: BUNDLE_COLORS.neutralFg };
     default:
-      return { backgroundColor: "#e5e7eb", color: "#374151" };
+      return { backgroundColor: BUNDLE_COLORS.neutralBg, color: BUNDLE_COLORS.neutralFg };
   }
 }
 
@@ -331,8 +359,8 @@ function MetadataRow({ label, value }: { label: string; value: string }) {
         lineHeight: 1.45,
       }}
     >
-      <div style={{ color: "#4b5563", fontWeight: 600 }}>{label}</div>
-      <div style={{ color: "#111827", wordBreak: "break-word" }}>{value}</div>
+      <div style={{ color: BUNDLE_COLORS.headerFg, fontWeight: 600 }}>{label}</div>
+      <div style={{ color: BUNDLE_COLORS.textPrimary, wordBreak: "break-word" }}>{value}</div>
     </div>
   );
 }
@@ -340,7 +368,7 @@ function MetadataRow({ label, value }: { label: string; value: string }) {
 function PreviewPane({ content }: { content: string | null }) {
   if (!content) {
     return (
-      <div style={{ fontSize: "12px", color: "#64748b", lineHeight: 1.5 }}>
+      <div style={{ fontSize: "12px", color: BUNDLE_COLORS.textTertiary, lineHeight: 1.5 }}>
         No content was available for this file.
       </div>
     );
@@ -355,7 +383,7 @@ function PreviewPane({ content }: { content: string | null }) {
         fontSize: "12px",
         lineHeight: 1.55,
         fontFamily: "'Consolas', 'Cascadia Mono', 'Courier New', monospace",
-        color: "#111827",
+        color: BUNDLE_COLORS.textPrimary,
       }}
     >
       {content}
@@ -612,9 +640,9 @@ export function EvidenceBundleDialog({ isOpen, onClose }: EvidenceBundleDialogPr
           width: "min(860px, 100%)",
           maxHeight: "min(88vh, 920px)",
           overflow: "auto",
-          border: "1px solid #cbd5e1",
+          border: `1px solid ${BUNDLE_COLORS.borderSubtle}`,
           borderRadius: "8px",
-          backgroundColor: "#f8fafc",
+          backgroundColor: BUNDLE_COLORS.cardBg,
           boxShadow: "0 22px 48px rgba(15, 23, 42, 0.22)",
           fontFamily: "'Segoe UI', Tahoma, sans-serif",
         }}
@@ -622,17 +650,17 @@ export function EvidenceBundleDialog({ isOpen, onClose }: EvidenceBundleDialogPr
         <div
           style={{
             padding: "16px 18px 14px",
-            borderBottom: "1px solid #dbe3ee",
-            background: "linear-gradient(135deg, #eff6ff 0%, #f8fafc 55%, #fefce8 100%)",
+            borderBottom: `1px solid ${BUNDLE_COLORS.borderSubtle}`,
+            background: `linear-gradient(135deg, ${BUNDLE_COLORS.infoBg} 0%, ${BUNDLE_COLORS.cardBg} 55%, ${BUNDLE_COLORS.warningBg} 100%)`,
           }}
         >
-          <div style={{ fontSize: "11px", fontWeight: 700, color: "#1d4ed8", textTransform: "uppercase", letterSpacing: "0.06em" }}>
+          <div style={{ fontSize: "11px", fontWeight: 700, color: BUNDLE_COLORS.accentFg, textTransform: "uppercase", letterSpacing: "0.06em" }}>
             Evidence Bundle
           </div>
-          <div style={{ marginTop: "4px", fontSize: "18px", fontWeight: 700, color: "#0f172a" }}>
+          <div style={{ marginTop: "4px", fontSize: "18px", fontWeight: 700, color: BUNDLE_COLORS.textPrimary }}>
             {bundleMetadata.bundleLabel ?? bundleMetadata.bundleId ?? "Collected evidence summary"}
           </div>
-          <div style={{ marginTop: "6px", fontSize: "12px", color: "#475569", lineHeight: 1.5 }}>
+          <div style={{ marginTop: "6px", fontSize: "12px", color: BUNDLE_COLORS.textTertiary, lineHeight: 1.5 }}>
             {bundleMetadata.summary ?? "This folder was recognized as a CMTrace Open evidence bundle."}
           </div>
         </div>
@@ -650,11 +678,11 @@ export function EvidenceBundleDialog({ isOpen, onClose }: EvidenceBundleDialogPr
                 onClick={() => setActiveTab(tabId)}
                 aria-pressed={activeTab === tabId}
                 style={{
-                  border: "1px solid #cbd5e1",
+                  border: `1px solid ${BUNDLE_COLORS.borderSubtle}`,
                   borderRadius: "999px",
                   padding: "6px 10px",
-                  backgroundColor: activeTab === tabId ? "#dbeafe" : "#ffffff",
-                  color: activeTab === tabId ? "#1d4ed8" : "#334155",
+                  backgroundColor: activeTab === tabId ? BUNDLE_COLORS.infoBg : BUNDLE_COLORS.cardBg,
+                  color: activeTab === tabId ? BUNDLE_COLORS.accentFg : BUNDLE_COLORS.textSecondary,
                   fontSize: "12px",
                   fontWeight: activeTab === tabId ? 700 : 500,
                 }}
@@ -665,25 +693,25 @@ export function EvidenceBundleDialog({ isOpen, onClose }: EvidenceBundleDialogPr
           </div>
 
           {errorMessage && (
-            <div style={{ padding: "10px 12px", border: "1px solid #fecaca", borderRadius: "6px", backgroundColor: "#fef2f2", color: "#991b1b", fontSize: "12px" }}>
+            <div style={{ padding: "10px 12px", border: `1px solid ${BUNDLE_COLORS.borderError}`, borderRadius: "6px", backgroundColor: BUNDLE_COLORS.errorBg, color: BUNDLE_COLORS.errorFg, fontSize: "12px" }}>
               {errorMessage}
             </div>
           )}
 
           {artifactActionMessage && (
-            <div style={{ padding: "10px 12px", border: "1px solid #fed7aa", borderRadius: "6px", backgroundColor: "#fff7ed", color: "#9a3412", fontSize: "12px" }}>
+            <div style={{ padding: "10px 12px", border: `1px solid ${BUNDLE_COLORS.borderWarning}`, borderRadius: "6px", backgroundColor: BUNDLE_COLORS.warningBg, color: BUNDLE_COLORS.warningFg, fontSize: "12px" }}>
               {artifactActionMessage}
             </div>
           )}
 
           {isLoading && (
-            <div style={{ padding: "10px 12px", border: "1px solid #bfdbfe", borderRadius: "6px", backgroundColor: "#eff6ff", color: "#1d4ed8", fontSize: "12px" }}>
+            <div style={{ padding: "10px 12px", border: `1px solid ${BUNDLE_COLORS.borderInfo}`, borderRadius: "6px", backgroundColor: BUNDLE_COLORS.infoBg, color: BUNDLE_COLORS.accentFg, fontSize: "12px" }}>
               Loading evidence bundle details...
             </div>
           )}
 
           {requiredMissingEvidence.length > 0 && (
-            <div style={{ padding: "10px 12px", border: "1px solid #fecaca", borderRadius: "6px", backgroundColor: "#fef2f2", color: "#991b1b", fontSize: "12px", lineHeight: 1.5 }}>
+            <div style={{ padding: "10px 12px", border: `1px solid ${BUNDLE_COLORS.borderError}`, borderRadius: "6px", backgroundColor: BUNDLE_COLORS.errorBg, color: BUNDLE_COLORS.errorFg, fontSize: "12px", lineHeight: 1.5 }}>
               <div style={{ fontWeight: 700 }}>
                 {requiredMissingEvidence.length} required evidence item{requiredMissingEvidence.length === 1 ? " is" : "s are"} missing from this bundle.
               </div>
@@ -709,16 +737,16 @@ export function EvidenceBundleDialog({ isOpen, onClose }: EvidenceBundleDialogPr
                 }}
               >
                 {[
-                  ["Collected", String(bundleMetadata.artifactCounts?.collected ?? 0), "#dcfce7", "#166534"],
-                  ["Missing", String(bundleMetadata.artifactCounts?.missing ?? 0), "#fef3c7", "#92400e"],
-                  ["Failed", String(bundleMetadata.artifactCounts?.failed ?? 0), "#fee2e2", "#991b1b"],
-                  ["Skipped", String(bundleMetadata.artifactCounts?.skipped ?? 0), "#e0f2fe", "#0f766e"],
+                  ["Collected", String(bundleMetadata.artifactCounts?.collected ?? 0), BUNDLE_COLORS.successBg, BUNDLE_COLORS.successFg],
+                  ["Missing", String(bundleMetadata.artifactCounts?.missing ?? 0), BUNDLE_COLORS.warningBg, BUNDLE_COLORS.warningFg],
+                  ["Failed", String(bundleMetadata.artifactCounts?.failed ?? 0), BUNDLE_COLORS.errorBg, BUNDLE_COLORS.errorFg],
+                  ["Skipped", String(bundleMetadata.artifactCounts?.skipped ?? 0), BUNDLE_COLORS.infoBg, BUNDLE_COLORS.infoFg],
                 ].map(([label, value, backgroundColor, color]) => (
                   <div
                     key={label}
                     style={{
                       padding: "12px",
-                      border: "1px solid #dbe3ee",
+                      border: `1px solid ${BUNDLE_COLORS.borderSubtle}`,
                       borderRadius: "6px",
                       backgroundColor,
                     }}
@@ -726,7 +754,7 @@ export function EvidenceBundleDialog({ isOpen, onClose }: EvidenceBundleDialogPr
                     <div style={{ fontSize: "11px", fontWeight: 700, color, textTransform: "uppercase", letterSpacing: "0.04em" }}>
                       {label}
                     </div>
-                    <div style={{ marginTop: "4px", fontSize: "22px", fontWeight: 700, color: "#0f172a" }}>{value}</div>
+                    <div style={{ marginTop: "4px", fontSize: "22px", fontWeight: 700, color: BUNDLE_COLORS.textPrimary }}>{value}</div>
                   </div>
                 ))}
               </section>
@@ -734,14 +762,14 @@ export function EvidenceBundleDialog({ isOpen, onClose }: EvidenceBundleDialogPr
               <section
                 style={{
                   padding: "14px",
-                  border: "1px solid #dbe3ee",
+                  border: `1px solid ${BUNDLE_COLORS.borderSubtle}`,
                   borderRadius: "6px",
-                  backgroundColor: "#ffffff",
+                  backgroundColor: BUNDLE_COLORS.cardBg,
                   display: "grid",
                   gap: "10px",
                 }}
               >
-                <div style={{ fontSize: "13px", fontWeight: 700, color: "#111827" }}>Bundle metadata</div>
+                <div style={{ fontSize: "13px", fontWeight: 700, color: BUNDLE_COLORS.textPrimary }}>Bundle metadata</div>
                 <MetadataRow label="Bundle ID" value={bundleMetadata.bundleId ?? "Not reported"} />
                 <MetadataRow label="Case reference" value={bundleMetadata.caseReference ?? "Not reported"} />
                 <MetadataRow label="Device" value={bundleMetadata.deviceName ?? "Not reported"} />
@@ -757,14 +785,14 @@ export function EvidenceBundleDialog({ isOpen, onClose }: EvidenceBundleDialogPr
               <section
                 style={{
                   padding: "14px",
-                  border: "1px solid #dbe3ee",
+                  border: `1px solid ${BUNDLE_COLORS.borderSubtle}`,
                   borderRadius: "6px",
-                  backgroundColor: "#ffffff",
+                  backgroundColor: BUNDLE_COLORS.cardBg,
                   display: "grid",
                   gap: "10px",
                 }}
               >
-                <div style={{ fontSize: "13px", fontWeight: 700, color: "#111827" }}>Current intake view</div>
+                <div style={{ fontSize: "13px", fontWeight: 700, color: BUNDLE_COLORS.textPrimary }}>Current intake view</div>
                 <MetadataRow label="Manifest" value={bundleMetadata.manifestPath} />
                 <MetadataRow label="Notes" value={bundleMetadata.notesPath ?? "Not reported"} />
                 <MetadataRow label="Evidence root" value={bundleMetadata.evidenceRoot ?? "Not reported"} />
@@ -775,12 +803,12 @@ export function EvidenceBundleDialog({ isOpen, onClose }: EvidenceBundleDialogPr
               <section
                 style={{
                   padding: "14px",
-                  border: "1px solid #dbe3ee",
+                  border: `1px solid ${BUNDLE_COLORS.borderSubtle}`,
                   borderRadius: "6px",
-                  backgroundColor: "#ffffff",
+                  backgroundColor: BUNDLE_COLORS.cardBg,
                 }}
               >
-                <div style={{ fontSize: "13px", fontWeight: 700, color: "#111827" }}>Primary evidence entry points</div>
+                <div style={{ fontSize: "13px", fontWeight: 700, color: BUNDLE_COLORS.textPrimary }}>Primary evidence entry points</div>
                 <div style={{ marginTop: "10px", display: "grid", gap: "8px" }}>
                   {bundleMetadata.primaryEntryPoints.map((entryPath: string) => {
                     const isAvailable = availableEntryPoints.has(entryPath);
@@ -792,9 +820,9 @@ export function EvidenceBundleDialog({ isOpen, onClose }: EvidenceBundleDialogPr
                           alignItems: "center",
                           gap: "10px",
                           padding: "9px 10px",
-                          border: "1px solid #e2e8f0",
+                          border: `1px solid ${BUNDLE_COLORS.borderSubtle}`,
                           borderRadius: "6px",
-                          backgroundColor: isAvailable ? "#f0fdf4" : "#fff7ed",
+                          backgroundColor: isAvailable ? BUNDLE_COLORS.successBg : BUNDLE_COLORS.warningBg,
                         }}
                       >
                         <div
@@ -804,12 +832,12 @@ export function EvidenceBundleDialog({ isOpen, onClose }: EvidenceBundleDialogPr
                             fontWeight: 700,
                             textTransform: "uppercase",
                             letterSpacing: "0.04em",
-                            color: isAvailable ? "#166534" : "#9a3412",
+                            color: isAvailable ? BUNDLE_COLORS.successFg : BUNDLE_COLORS.warningFg,
                           }}
                         >
                           {isAvailable ? "Available" : "Missing"}
                         </div>
-                        <div style={{ fontSize: "12px", color: "#1f2937", wordBreak: "break-word" }}>
+                        <div style={{ fontSize: "12px", color: BUNDLE_COLORS.textSecondary, wordBreak: "break-word" }}>
                           {entryPath}
                         </div>
                       </div>
@@ -822,19 +850,19 @@ export function EvidenceBundleDialog({ isOpen, onClose }: EvidenceBundleDialogPr
                 <section
                   style={{
                     padding: "14px",
-                    border: "1px solid #dbe3ee",
+                    border: `1px solid ${BUNDLE_COLORS.borderSubtle}`,
                     borderRadius: "6px",
-                    backgroundColor: "#ffffff",
+                    backgroundColor: BUNDLE_COLORS.cardBg,
                     display: "grid",
                     gap: "8px",
                   }}
                 >
-                  <div style={{ fontSize: "13px", fontWeight: 700, color: "#111827" }}>Investigation guidance</div>
-                  {details.handoffSummary && <div style={{ fontSize: "12px", color: "#334155", lineHeight: 1.5 }}>{details.handoffSummary}</div>}
+                  <div style={{ fontSize: "13px", fontWeight: 700, color: BUNDLE_COLORS.textPrimary }}>Investigation guidance</div>
+                  {details.handoffSummary && <div style={{ fontSize: "12px", color: BUNDLE_COLORS.textSecondary, lineHeight: 1.5 }}>{details.handoffSummary}</div>}
                   {details.priorityQuestions.length > 0 && (
                     <div style={{ display: "grid", gap: "6px" }}>
                       {details.priorityQuestions.map((question) => (
-                        <div key={question} style={{ fontSize: "12px", color: "#1f2937" }}>
+                        <div key={question} style={{ fontSize: "12px", color: BUNDLE_COLORS.textSecondary }}>
                           {question}
                         </div>
                       ))}
@@ -843,7 +871,7 @@ export function EvidenceBundleDialog({ isOpen, onClose }: EvidenceBundleDialogPr
                   {details.observedGaps.length > 0 && (
                     <div style={{ display: "grid", gap: "6px", marginTop: "2px" }}>
                       {details.observedGaps.map((gap) => (
-                        <div key={gap} style={{ fontSize: "12px", color: "#92400e" }}>
+                        <div key={gap} style={{ fontSize: "12px", color: BUNDLE_COLORS.warningFg }}>
                           {gap}
                         </div>
                       ))}
@@ -859,18 +887,18 @@ export function EvidenceBundleDialog({ isOpen, onClose }: EvidenceBundleDialogPr
               <section
                 style={{
                   padding: "14px",
-                  border: "1px solid #dbe3ee",
+                  border: `1px solid ${BUNDLE_COLORS.borderSubtle}`,
                   borderRadius: "6px",
-                  backgroundColor: "#ffffff",
+                  backgroundColor: BUNDLE_COLORS.cardBg,
                 }}
               >
-                <div style={{ fontSize: "13px", fontWeight: 700, color: "#111827" }}>Artifact inventory</div>
+                <div style={{ fontSize: "13px", fontWeight: 700, color: BUNDLE_COLORS.textPrimary }}>Artifact inventory</div>
                 <div style={{ marginTop: "10px", display: "flex", gap: "8px", flexWrap: "wrap" }}>
                   {artifactCategoryCounts.length === 0 ? (
-                    <div style={{ fontSize: "12px", color: "#64748b" }}>No artifact records were found in the manifest.</div>
+                    <div style={{ fontSize: "12px", color: BUNDLE_COLORS.textTertiary }}>No artifact records were found in the manifest.</div>
                   ) : (
                     artifactCategoryCounts.map(([category, count]) => (
-                      <div key={category} style={{ padding: "6px 10px", border: "1px solid #e2e8f0", borderRadius: "999px", backgroundColor: "#f8fafc", fontSize: "12px", color: "#334155" }}>
+                      <div key={category} style={{ padding: "6px 10px", border: `1px solid ${BUNDLE_COLORS.borderSubtle}`, borderRadius: "999px", backgroundColor: BUNDLE_COLORS.cardBg, fontSize: "12px", color: BUNDLE_COLORS.textSecondary }}>
                         {formatCategoryLabel(category)}: {count}
                       </div>
                     ))
@@ -878,7 +906,7 @@ export function EvidenceBundleDialog({ isOpen, onClose }: EvidenceBundleDialogPr
                 </div>
                 <div style={{ marginTop: "10px", display: "flex", gap: "8px", flexWrap: "wrap" }}>
                   {intakeStatusCounts.length === 0 ? (
-                    <div style={{ fontSize: "12px", color: "#64748b" }}>No intake diagnostics are available yet.</div>
+                    <div style={{ fontSize: "12px", color: BUNDLE_COLORS.textTertiary }}>No intake diagnostics are available yet.</div>
                   ) : (
                     intakeStatusCounts.map(([status, count]) => {
                       const tone = formatIntakeStatusTone(status);
@@ -891,12 +919,12 @@ export function EvidenceBundleDialog({ isOpen, onClose }: EvidenceBundleDialogPr
                   )}
                 </div>
                 {recognizedFamilies.length > 0 && (
-                  <div style={{ marginTop: "10px", fontSize: "11px", color: "#475569" }}>
+                  <div style={{ marginTop: "10px", fontSize: "11px", color: BUNDLE_COLORS.textTertiary }}>
                     Recognized intake families: {recognizedFamilies.join(", ")}
                   </div>
                 )}
                 {noisyParsedArtifacts.length > 0 && (
-                  <div style={{ marginTop: "8px", fontSize: "11px", color: "#92400e" }}>
+                  <div style={{ marginTop: "8px", fontSize: "11px", color: BUNDLE_COLORS.warningFg }}>
                     Parser quality watchlist: {noisyParsedArtifacts.length} recognized log artifact{noisyParsedArtifacts.length === 1 ? "" : "s"} reported parse issues.
                   </div>
                 )}
@@ -905,16 +933,16 @@ export function EvidenceBundleDialog({ isOpen, onClose }: EvidenceBundleDialogPr
               <section
                 style={{
                   padding: "14px",
-                  border: "1px solid #dbe3ee",
+                  border: `1px solid ${BUNDLE_COLORS.borderSubtle}`,
                   borderRadius: "6px",
-                  backgroundColor: "#ffffff",
+                  backgroundColor: BUNDLE_COLORS.cardBg,
                   display: "grid",
                   gap: "8px",
                 }}
               >
-                <div style={{ fontSize: "13px", fontWeight: 700, color: "#111827" }}>Artifacts</div>
+                <div style={{ fontSize: "13px", fontWeight: 700, color: BUNDLE_COLORS.textPrimary }}>Artifacts</div>
                 {artifacts.length === 0 ? (
-                  <div style={{ fontSize: "12px", color: "#64748b" }}>No artifact detail was available.</div>
+                  <div style={{ fontSize: "12px", color: BUNDLE_COLORS.textTertiary }}>No artifact detail was available.</div>
                 ) : (
                   artifacts.map((artifact) => {
                     const tone = formatArtifactStatusTone(artifact.status);
@@ -938,20 +966,20 @@ export function EvidenceBundleDialog({ isOpen, onClose }: EvidenceBundleDialogPr
                         title={getArtifactActionLabel(artifact, navigation)}
                         style={{
                           border: isSelected
-                            ? "1px solid #2563eb"
+                            ? `1px solid ${BUNDLE_COLORS.accentFg}`
                             : canInteract
-                              ? "1px solid #bfdbfe"
-                              : "1px solid #e2e8f0",
+                              ? `1px solid ${BUNDLE_COLORS.borderInfo}`
+                              : `1px solid ${BUNDLE_COLORS.borderSubtle}`,
                           borderRadius: "6px",
                           padding: "10px",
                           display: "grid",
                           gap: "6px",
                           textAlign: "left",
                           backgroundColor: isSelected
-                            ? "#eff6ff"
+                            ? BUNDLE_COLORS.infoBg
                             : canInteract
-                              ? "#f8fbff"
-                              : "#f8fafc",
+                              ? BUNDLE_COLORS.subtleBg
+                              : BUNDLE_COLORS.cardBg,
                           cursor: canInteract ? "pointer" : "not-allowed",
                           opacity: canInteract ? 1 : 0.78,
                         }}
@@ -960,40 +988,40 @@ export function EvidenceBundleDialog({ isOpen, onClose }: EvidenceBundleDialogPr
                           <span style={{ padding: "3px 8px", borderRadius: "999px", backgroundColor: tone.backgroundColor, color: tone.color, fontSize: "11px", fontWeight: 700, textTransform: "uppercase" }}>
                             {artifact.status}
                           </span>
-                          <span style={{ fontSize: "11px", color: "#475569", textTransform: "uppercase", letterSpacing: "0.04em" }}>
+                          <span style={{ fontSize: "11px", color: BUNDLE_COLORS.textTertiary, textTransform: "uppercase", letterSpacing: "0.04em" }}>
                             {formatCategoryLabel(artifact.category)}
                           </span>
                           <span style={{ padding: "3px 8px", borderRadius: "999px", backgroundColor: intakeTone.backgroundColor, color: intakeTone.color, fontSize: "11px", fontWeight: 700 }}>
                             {formatIntakeStatusLabel(artifact.intake.status)}
                           </span>
-                          {artifact.family && <span style={{ fontSize: "12px", color: "#0f172a", fontWeight: 600 }}>{artifact.family}</span>}
+                          {artifact.family && <span style={{ fontSize: "12px", color: BUNDLE_COLORS.textPrimary, fontWeight: 600 }}>{artifact.family}</span>}
                         </div>
-                        <div style={{ fontSize: "12px", color: "#111827", wordBreak: "break-word", fontWeight: 600 }}>
+                        <div style={{ fontSize: "12px", color: BUNDLE_COLORS.textPrimary, wordBreak: "break-word", fontWeight: 600 }}>
                           {artifact.relativePath}
                         </div>
-                        <div style={{ fontSize: "11px", color: "#0f172a" }}>
+                        <div style={{ fontSize: "11px", color: BUNDLE_COLORS.textPrimary }}>
                           {artifact.intake.recognizedAs ?? "Unclassified artifact"}
                           {parseQualityLabel ? ` • ${parseQualityLabel}` : ""}
                         </div>
-                        <div style={{ fontSize: "11px", color: "#475569", wordBreak: "break-word" }}>
+                        <div style={{ fontSize: "11px", color: BUNDLE_COLORS.textTertiary, wordBreak: "break-word" }}>
                           {artifact.intake.summary}
                         </div>
                         {parseDiagnosticsSummary && (
-                          <div style={{ fontSize: "11px", color: artifact.intake.parseDiagnostics?.cleanParse ? "#166534" : "#92400e" }}>
+                          <div style={{ fontSize: "11px", color: artifact.intake.parseDiagnostics?.cleanParse ? BUNDLE_COLORS.successFg : BUNDLE_COLORS.warningFg }}>
                             {parseDiagnosticsSummary}
                           </div>
                         )}
-                        <div style={{ fontSize: "11px", color: canInteract ? "#1d4ed8" : "#64748b", fontWeight: canInteract ? 600 : 500 }}>
+                        <div style={{ fontSize: "11px", color: canInteract ? BUNDLE_COLORS.accentFg : BUNDLE_COLORS.textTertiary, fontWeight: canInteract ? 600 : 500 }}>
                           {getArtifactActionLabel(artifact, navigation)}
                         </div>
                         {artifact.intake.parserSelection && (
-                          <div style={{ fontSize: "11px", color: "#475569" }}>
+                          <div style={{ fontSize: "11px", color: BUNDLE_COLORS.textTertiary }}>
                             Parser: {artifact.intake.parserSelection.parser}
                             {artifact.intake.parserSelection.specialization ? ` (${artifact.intake.parserSelection.specialization})` : ""}
                           </div>
                         )}
-                        {artifact.originPath && <div style={{ fontSize: "11px", color: "#475569", wordBreak: "break-word" }}>Origin: {artifact.originPath}</div>}
-                        {artifact.notes && <div style={{ fontSize: "11px", color: "#475569", wordBreak: "break-word" }}>Notes: {artifact.notes}</div>}
+                        {artifact.originPath && <div style={{ fontSize: "11px", color: BUNDLE_COLORS.textTertiary, wordBreak: "break-word" }}>Origin: {artifact.originPath}</div>}
+                        {artifact.notes && <div style={{ fontSize: "11px", color: BUNDLE_COLORS.textTertiary, wordBreak: "break-word" }}>Notes: {artifact.notes}</div>}
                       </button>
                     );
                   })
@@ -1004,61 +1032,61 @@ export function EvidenceBundleDialog({ isOpen, onClose }: EvidenceBundleDialogPr
                 <section
                   style={{
                     padding: "14px",
-                    border: "1px solid #dbe3ee",
+                    border: `1px solid ${BUNDLE_COLORS.borderSubtle}`,
                     borderRadius: "6px",
-                    backgroundColor: "#ffffff",
+                    backgroundColor: BUNDLE_COLORS.cardBg,
                     display: "grid",
                     gap: "10px",
                   }}
                 >
-                  <div style={{ fontSize: "13px", fontWeight: 700, color: "#111827" }}>
+                  <div style={{ fontSize: "13px", fontWeight: 700, color: BUNDLE_COLORS.textPrimary }}>
                     Adjacent evidence preview
                   </div>
                   {selectedArtifact && (
                     <div style={{ display: "grid", gap: "4px" }}>
-                      <div style={{ fontSize: "12px", fontWeight: 600, color: "#0f172a", wordBreak: "break-word" }}>
+                      <div style={{ fontSize: "12px", fontWeight: 600, color: BUNDLE_COLORS.textPrimary, wordBreak: "break-word" }}>
                         {selectedArtifact.relativePath}
                       </div>
-                      <div style={{ fontSize: "11px", color: "#475569", wordBreak: "break-word" }}>
+                      <div style={{ fontSize: "11px", color: BUNDLE_COLORS.textTertiary, wordBreak: "break-word" }}>
                         {selectedArtifact.originPath ?? selectedArtifact.intake.recognizedAs ?? "Selected artifact"}
                       </div>
                     </div>
                   )}
                   {isArtifactPreviewLoading ? (
-                    <div style={{ fontSize: "12px", color: "#1d4ed8" }}>
+                    <div style={{ fontSize: "12px", color: BUNDLE_COLORS.accentFg }}>
                       Inspecting adjacent evidence...
                     </div>
                   ) : artifactPreview?.registrySnapshot ? (
                     <>
-                      <div style={{ fontSize: "12px", color: "#334155", lineHeight: 1.5 }}>
+                      <div style={{ fontSize: "12px", color: BUNDLE_COLORS.textSecondary, lineHeight: 1.5 }}>
                         {artifactPreview.summary}
                       </div>
                       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: "10px" }}>
-                        <div style={{ padding: "10px", borderRadius: "6px", border: "1px solid #dbeafe", backgroundColor: "#eff6ff" }}>
-                          <div style={{ fontSize: "11px", fontWeight: 700, color: "#1d4ed8", textTransform: "uppercase", letterSpacing: "0.04em" }}>Keys</div>
-                          <div style={{ marginTop: "4px", fontSize: "20px", fontWeight: 700, color: "#0f172a" }}>
+                        <div style={{ padding: "10px", borderRadius: "6px", border: `1px solid ${BUNDLE_COLORS.borderInfo}`, backgroundColor: BUNDLE_COLORS.infoBg }}>
+                          <div style={{ fontSize: "11px", fontWeight: 700, color: BUNDLE_COLORS.accentFg, textTransform: "uppercase", letterSpacing: "0.04em" }}>Keys</div>
+                          <div style={{ marginTop: "4px", fontSize: "20px", fontWeight: 700, color: BUNDLE_COLORS.textPrimary }}>
                             {artifactPreview.registrySnapshot.keyCount}
                           </div>
                         </div>
-                        <div style={{ padding: "10px", borderRadius: "6px", border: "1px solid #dbeafe", backgroundColor: "#eff6ff" }}>
-                          <div style={{ fontSize: "11px", fontWeight: 700, color: "#1d4ed8", textTransform: "uppercase", letterSpacing: "0.04em" }}>Values</div>
-                          <div style={{ marginTop: "4px", fontSize: "20px", fontWeight: 700, color: "#0f172a" }}>
+                        <div style={{ padding: "10px", borderRadius: "6px", border: `1px solid ${BUNDLE_COLORS.borderInfo}`, backgroundColor: BUNDLE_COLORS.infoBg }}>
+                          <div style={{ fontSize: "11px", fontWeight: 700, color: BUNDLE_COLORS.accentFg, textTransform: "uppercase", letterSpacing: "0.04em" }}>Values</div>
+                          <div style={{ marginTop: "4px", fontSize: "20px", fontWeight: 700, color: BUNDLE_COLORS.textPrimary }}>
                             {artifactPreview.registrySnapshot.valueCount}
                           </div>
                         </div>
                       </div>
                       <div style={{ display: "grid", gap: "8px" }}>
                         {artifactPreview.registrySnapshot.keys.map((keyPreview) => (
-                          <div key={keyPreview.path} style={{ border: "1px solid #e2e8f0", borderRadius: "6px", padding: "10px", backgroundColor: "#f8fafc", display: "grid", gap: "6px" }}>
-                            <div style={{ fontSize: "11px", color: "#475569", textTransform: "uppercase", letterSpacing: "0.04em" }}>
+                          <div key={keyPreview.path} style={{ border: `1px solid ${BUNDLE_COLORS.borderSubtle}`, borderRadius: "6px", padding: "10px", backgroundColor: BUNDLE_COLORS.cardBg, display: "grid", gap: "6px" }}>
+                            <div style={{ fontSize: "11px", color: BUNDLE_COLORS.textTertiary, textTransform: "uppercase", letterSpacing: "0.04em" }}>
                               {keyPreview.valueCount} value{keyPreview.valueCount === 1 ? "" : "s"}
                             </div>
-                            <div style={{ fontSize: "12px", fontWeight: 600, color: "#111827", wordBreak: "break-word" }}>
+                            <div style={{ fontSize: "12px", fontWeight: 600, color: BUNDLE_COLORS.textPrimary, wordBreak: "break-word" }}>
                               {keyPreview.path}
                             </div>
                             <div style={{ display: "grid", gap: "4px" }}>
                               {keyPreview.values.map((valuePreview) => (
-                                <div key={`${keyPreview.path}:${valuePreview.name}`} style={{ fontSize: "11px", color: "#334155", lineHeight: 1.45, wordBreak: "break-word" }}>
+                                <div key={`${keyPreview.path}:${valuePreview.name}`} style={{ fontSize: "11px", color: BUNDLE_COLORS.textSecondary, lineHeight: 1.45, wordBreak: "break-word" }}>
                                   <strong>{valuePreview.name}</strong> [{valuePreview.valueType}]: {valuePreview.value}
                                 </div>
                               ))}
@@ -1069,7 +1097,7 @@ export function EvidenceBundleDialog({ isOpen, onClose }: EvidenceBundleDialogPr
                     </>
                   ) : artifactPreview?.eventLogExport ? (
                     <div style={{ display: "grid", gap: "10px" }}>
-                      <div style={{ fontSize: "12px", color: "#334155", lineHeight: 1.5 }}>
+                      <div style={{ fontSize: "12px", color: BUNDLE_COLORS.textSecondary, lineHeight: 1.5 }}>
                         {artifactPreview.summary}
                       </div>
                       <MetadataRow
@@ -1094,7 +1122,7 @@ export function EvidenceBundleDialog({ isOpen, onClose }: EvidenceBundleDialogPr
                       />
                     </div>
                   ) : (
-                    <div style={{ fontSize: "12px", color: "#64748b" }}>
+                    <div style={{ fontSize: "12px", color: BUNDLE_COLORS.textTertiary }}>
                       Select a registry snapshot or curated event export to inspect it here.
                     </div>
                   )}
@@ -1104,24 +1132,24 @@ export function EvidenceBundleDialog({ isOpen, onClose }: EvidenceBundleDialogPr
               <section
                 style={{
                   padding: "14px",
-                  border: "1px solid #dbe3ee",
+                  border: `1px solid ${BUNDLE_COLORS.borderSubtle}`,
                   borderRadius: "6px",
-                  backgroundColor: "#ffffff",
+                  backgroundColor: BUNDLE_COLORS.cardBg,
                   display: "grid",
                   gap: "8px",
                 }}
               >
-                <div style={{ fontSize: "13px", fontWeight: 700, color: "#111827" }}>Expected evidence</div>
+                <div style={{ fontSize: "13px", fontWeight: 700, color: BUNDLE_COLORS.textPrimary }}>Expected evidence</div>
                 {expectedEvidence.length === 0 ? (
-                  <div style={{ fontSize: "12px", color: "#64748b" }}>No expected-evidence detail was recorded in the manifest.</div>
+                  <div style={{ fontSize: "12px", color: BUNDLE_COLORS.textTertiary }}>No expected-evidence detail was recorded in the manifest.</div>
                 ) : (
                   expectedEvidence.map((entry) => (
-                    <div key={`${entry.category}:${entry.relativePath}`} style={{ display: "grid", gap: "4px", padding: "9px 10px", border: "1px solid #e2e8f0", borderRadius: "6px", backgroundColor: entry.available ? "#f0fdf4" : entry.required ? "#fef2f2" : "#fff7ed" }}>
-                      <div style={{ fontSize: "11px", textTransform: "uppercase", letterSpacing: "0.04em", color: entry.available ? "#166534" : entry.required ? "#991b1b" : "#9a3412", fontWeight: 700 }}>
+                    <div key={`${entry.category}:${entry.relativePath}`} style={{ display: "grid", gap: "4px", padding: "9px 10px", border: `1px solid ${BUNDLE_COLORS.borderSubtle}`, borderRadius: "6px", backgroundColor: entry.available ? BUNDLE_COLORS.successBg : entry.required ? BUNDLE_COLORS.errorBg : BUNDLE_COLORS.warningBg }}>
+                      <div style={{ fontSize: "11px", textTransform: "uppercase", letterSpacing: "0.04em", color: entry.available ? BUNDLE_COLORS.successFg : entry.required ? BUNDLE_COLORS.errorFg : BUNDLE_COLORS.warningFg, fontWeight: 700 }}>
                         {entry.available ? "Available" : entry.required ? "Required gap" : "Optional gap"}
                       </div>
-                      <div style={{ fontSize: "12px", color: "#111827", fontWeight: 600 }}>{entry.relativePath}</div>
-                      {entry.reason && <div style={{ fontSize: "11px", color: "#475569" }}>{entry.reason}</div>}
+                      <div style={{ fontSize: "12px", color: BUNDLE_COLORS.textPrimary, fontWeight: 600 }}>{entry.relativePath}</div>
+                      {entry.reason && <div style={{ fontSize: "11px", color: BUNDLE_COLORS.textTertiary }}>{entry.reason}</div>}
                     </div>
                   ))
                 )}
@@ -1130,15 +1158,15 @@ export function EvidenceBundleDialog({ isOpen, onClose }: EvidenceBundleDialogPr
           )}
 
           {activeTab === "notes" && (
-            <section style={{ padding: "14px", border: "1px solid #dbe3ee", borderRadius: "6px", backgroundColor: "#ffffff" }}>
-              <div style={{ fontSize: "13px", fontWeight: 700, color: "#111827", marginBottom: "10px" }}>Notes preview</div>
+            <section style={{ padding: "14px", border: `1px solid ${BUNDLE_COLORS.borderSubtle}`, borderRadius: "6px", backgroundColor: BUNDLE_COLORS.cardBg }}>
+              <div style={{ fontSize: "13px", fontWeight: 700, color: BUNDLE_COLORS.textPrimary, marginBottom: "10px" }}>Notes preview</div>
               <PreviewPane content={details?.notesContent ?? null} />
             </section>
           )}
 
           {activeTab === "manifest" && (
-            <section style={{ padding: "14px", border: "1px solid #dbe3ee", borderRadius: "6px", backgroundColor: "#ffffff" }}>
-              <div style={{ fontSize: "13px", fontWeight: 700, color: "#111827", marginBottom: "10px" }}>Manifest preview</div>
+            <section style={{ padding: "14px", border: `1px solid ${BUNDLE_COLORS.borderSubtle}`, borderRadius: "6px", backgroundColor: BUNDLE_COLORS.cardBg }}>
+              <div style={{ fontSize: "13px", fontWeight: 700, color: BUNDLE_COLORS.textPrimary, marginBottom: "10px" }}>Manifest preview</div>
               <PreviewPane content={details?.manifestContent ?? null} />
             </section>
           )}
@@ -1148,14 +1176,14 @@ export function EvidenceBundleDialog({ isOpen, onClose }: EvidenceBundleDialogPr
           style={{
             padding: "14px 18px",
             borderTop: "1px solid #dbe3ee",
-            backgroundColor: "#ffffff",
+            backgroundColor: BUNDLE_COLORS.cardBg,
             display: "flex",
             justifyContent: "space-between",
             alignItems: "center",
             gap: "10px",
           }}
         >
-          <div style={{ fontSize: "11px", color: "#64748b" }}>
+          <div style={{ fontSize: "11px", color: BUNDLE_COLORS.textTertiary }}>
             Notes file: {getBaseName(bundleMetadata.notesPath)}
           </div>
           <button onClick={onClose}>Close</button>

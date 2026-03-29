@@ -67,7 +67,7 @@ pub fn collect_dsregcmd_event_logs() -> Option<EventLogAnalysis> {
                 });
             }
             Err(error) => {
-                eprintln!(
+                log::error!(
                     "event=dsregcmd_event_log_query_failed channel={} error={}",
                     channel_path, error
                 );
@@ -85,7 +85,7 @@ pub fn collect_dsregcmd_event_logs() -> Option<EventLogAnalysis> {
                     source_file: String::new(),
                     status: EventLogLiveQueryStatus::Failed,
                     entry_count: 0,
-                    error_message: Some(error),
+                    error_message: Some(error.to_string()),
                 });
             }
         }

@@ -2,8 +2,8 @@
 mod windows_impl {
     use std::collections::HashMap;
     use std::ffi::c_void;
+    use std::sync::OnceLock;
 
-    use once_cell::sync::Lazy;
     use regex::Regex;
     use windows::core::{Error, HSTRING, PCWSTR};
     use windows::Win32::System::EventLog::{
@@ -12,10 +12,13 @@ mod windows_impl {
         EvtRender, EvtRenderEventXml,
     };
 
-    static PROVIDER_RE: Lazy<Regex> = Lazy::new(|| {
-        Regex::new(r#"<Provider[^>]*Name=['\"]([^'\"]+)['\"]"#)
-            .expect("provider regex must compile")
-    });
+    fn provider_re() -> &'static Regex {
+        static CELL: OnceLock<Regex> = OnceLock::new();
+        CELL.get_or_init(|| {
+            Regex::new(r#"<Provider[^>]*Name=['\"]([^'\"]+)['\"]"#)
+                .expect("provider regex must compile")
+        })
+    }
 
     #[derive(Debug, Clone)]
     pub struct LiveEventRecord {
@@ -57,7 +60,7 @@ mod windows_impl {
     pub fn query_live_channel(
         channel: &str,
         entry_limit: usize,
-    ) -> Result<LiveChannelQueryResult, String> {
+    ) -> Result<LiveChannelQueryResult, crate::error::AppError> {
         let channel_string = HSTRING::from(channel);
         let query_string = HSTRING::from("*");
         let source_file = format!("live-event-log/{}.evtx", sanitize_channel_name(channel));
@@ -212,7 +215,7 @@ mod windows_impl {
     }
 
     fn extract_provider_name(xml: &str) -> Option<String> {
-        PROVIDER_RE
+        provider_re()
             .captures(xml)
             .and_then(|captures| captures.get(1).map(|value| value.as_str().to_string()))
     }
@@ -227,12 +230,12 @@ mod windows_impl {
             .collect()
     }
 
-    fn format_windows_error(error: Error) -> String {
+    fn format_windows_error(error: Error) -> crate::error::AppError {
         let message = error.message();
         if message.trim().is_empty() {
-            format!("Windows Event Log API error 0x{:08x}", error.code().0 as u32)
+            crate::error::AppError::Internal(format!("Windows Event Log API error 0x{:08x}", error.code().0 as u32))
         } else {
-            message.trim().to_string()
+            crate::error::AppError::Internal(message.trim().to_string())
         }
     }
 
@@ -276,6 +279,6 @@ pub struct LiveChannelQueryResult {
 pub fn query_live_channel(
     _channel: &str,
     _entry_limit: usize,
-) -> Result<LiveChannelQueryResult, String> {
-    Err("Live Windows Event Log queries are only supported on Windows".to_string())
+) -> Result<LiveChannelQueryResult, crate::error::AppError> {
+    Err(crate::error::AppError::PlatformUnsupported("Live Windows Event Log queries are only supported on Windows".to_string()))
 }

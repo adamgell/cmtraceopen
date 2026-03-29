@@ -1,8 +1,11 @@
 use super::models::{MacosPackageFiles, MacosPackageInfo, MacosPackagesResult};
-use once_cell::sync::Lazy;
 use regex::Regex;
+use std::sync::OnceLock;
 
-static PKG_ID_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^[a-zA-Z0-9._-]+$").unwrap());
+fn pkg_id_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| Regex::new(r"^[a-zA-Z0-9._-]+$").unwrap())
+}
 
 // ---------------------------------------------------------------------------
 // Parsing helpers (cross-platform, always compiled, fully testable)
@@ -91,14 +94,14 @@ pub fn parse_pkgutil_files(output: &str, package_id: &str) -> MacosPackageFiles 
 
 /// Validates that a package ID contains only safe characters before passing
 /// it to a shell command. Prevents command injection.
-pub fn validate_package_id(id: &str) -> Result<(), String> {
-    if PKG_ID_RE.is_match(id) {
+pub fn validate_package_id(id: &str) -> Result<(), crate::error::AppError> {
+    if pkg_id_re().is_match(id) {
         Ok(())
     } else {
-        Err(format!(
+        Err(crate::error::AppError::InvalidInput(format!(
             "Invalid package ID '{}': must contain only alphanumeric characters, dots, hyphens, and underscores",
             id
-        ))
+        )))
     }
 }
 
@@ -107,7 +110,7 @@ pub fn validate_package_id(id: &str) -> Result<(), String> {
 // ---------------------------------------------------------------------------
 
 #[cfg(target_os = "macos")]
-pub fn list_packages_impl() -> Result<MacosPackagesResult, String> {
+pub fn list_packages_impl() -> Result<MacosPackagesResult, crate::error::AppError> {
     use std::process::Command;
 
     log::info!("Listing installed packages via pkgutil");
@@ -115,11 +118,11 @@ pub fn list_packages_impl() -> Result<MacosPackagesResult, String> {
     let output = Command::new("pkgutil")
         .arg("--pkgs")
         .output()
-        .map_err(|e| format!("Failed to run pkgutil --pkgs: {}", e))?;
+        .map_err(crate::error::AppError::Io)?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("pkgutil --pkgs failed: {}", stderr));
+        return Err(crate::error::AppError::Internal(format!("pkgutil --pkgs failed: {}", stderr)));
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -171,7 +174,7 @@ pub fn list_packages_impl() -> Result<MacosPackagesResult, String> {
 }
 
 #[cfg(target_os = "macos")]
-pub fn get_package_info_impl(package_id: &str) -> Result<MacosPackageInfo, String> {
+pub fn get_package_info_impl(package_id: &str) -> Result<MacosPackageInfo, crate::error::AppError> {
     use std::process::Command;
 
     validate_package_id(package_id)?;
@@ -181,14 +184,14 @@ pub fn get_package_info_impl(package_id: &str) -> Result<MacosPackageInfo, Strin
     let output = Command::new("pkgutil")
         .args(["--pkg-info", package_id])
         .output()
-        .map_err(|e| format!("Failed to run pkgutil --pkg-info: {}", e))?;
+        .map_err(crate::error::AppError::Io)?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!(
+        return Err(crate::error::AppError::Internal(format!(
             "pkgutil --pkg-info {} failed: {}",
             package_id, stderr
-        ));
+        )));
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -196,7 +199,7 @@ pub fn get_package_info_impl(package_id: &str) -> Result<MacosPackageInfo, Strin
 }
 
 #[cfg(target_os = "macos")]
-pub fn get_package_files_impl(package_id: &str) -> Result<MacosPackageFiles, String> {
+pub fn get_package_files_impl(package_id: &str) -> Result<MacosPackageFiles, crate::error::AppError> {
     use std::process::Command;
 
     validate_package_id(package_id)?;
@@ -206,14 +209,14 @@ pub fn get_package_files_impl(package_id: &str) -> Result<MacosPackageFiles, Str
     let output = Command::new("pkgutil")
         .args(["--files", package_id])
         .output()
-        .map_err(|e| format!("Failed to run pkgutil --files: {}", e))?;
+        .map_err(crate::error::AppError::Io)?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!(
+        return Err(crate::error::AppError::Internal(format!(
             "pkgutil --files {} failed: {}",
             package_id, stderr
-        ));
+        )));
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -225,18 +228,18 @@ pub fn get_package_files_impl(package_id: &str) -> Result<MacosPackageFiles, Str
 // ---------------------------------------------------------------------------
 
 #[cfg(not(target_os = "macos"))]
-pub fn list_packages_impl() -> Result<MacosPackagesResult, String> {
-    Err("macOS Diagnostics is only available on macOS.".to_string())
+pub fn list_packages_impl() -> Result<MacosPackagesResult, crate::error::AppError> {
+    Err(crate::error::AppError::PlatformUnsupported("macOS Diagnostics is only available on macOS.".to_string()))
 }
 
 #[cfg(not(target_os = "macos"))]
-pub fn get_package_info_impl(_package_id: &str) -> Result<MacosPackageInfo, String> {
-    Err("macOS Diagnostics is only available on macOS.".to_string())
+pub fn get_package_info_impl(_package_id: &str) -> Result<MacosPackageInfo, crate::error::AppError> {
+    Err(crate::error::AppError::PlatformUnsupported("macOS Diagnostics is only available on macOS.".to_string()))
 }
 
 #[cfg(not(target_os = "macos"))]
-pub fn get_package_files_impl(_package_id: &str) -> Result<MacosPackageFiles, String> {
-    Err("macOS Diagnostics is only available on macOS.".to_string())
+pub fn get_package_files_impl(_package_id: &str) -> Result<MacosPackageFiles, crate::error::AppError> {
+    Err(crate::error::AppError::PlatformUnsupported("macOS Diagnostics is only available on macOS.".to_string()))
 }
 
 // ---------------------------------------------------------------------------

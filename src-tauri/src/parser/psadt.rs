@@ -10,25 +10,31 @@
 //!   4. severity   (Info, Warning, Error, Success)
 //!   5. message    (everything after `:: `)
 
-use once_cell::sync::Lazy;
 use regex::Regex;
 
 use super::severity::detect_severity_from_text;
 use crate::models::log_entry::{LogEntry, LogFormat, Severity};
+use std::sync::OnceLock;
 
 /// Full PSADT Legacy line regex.
-static PSADT_LINE_RE: Lazy<Regex> = Lazy::new(|| {
+fn psadt_line_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
     Regex::new(
         r"^\[(\d{4}-\d{2}-\d{2}\s\d{2}:\d{2}:\d{2}\.\d{3})\]\s\[([^\]]+)\]\s\[([^\]]+)\]\s\[(\w+)\]\s::\s(.*)$",
     )
     .expect("PSADT Legacy line regex must compile")
-});
+})
+}
 
 /// Lightweight prefix check for detection (avoids running the full regex).
-static PSADT_PREFIX_RE: Lazy<Regex> = Lazy::new(|| {
+fn psadt_prefix_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
     Regex::new(r"^\[\d{4}-\d{2}-\d{2}\s\d{2}:\d{2}:\d{2}\.\d{3}\]\s\[")
         .expect("PSADT prefix regex must compile")
-});
+})
+}
 
 /// Known PSADT section names.
 static KNOWN_SECTIONS: &[&str] = &[
@@ -58,7 +64,7 @@ fn map_severity(token: &str) -> Severity {
 
 /// Parse a single PSADT Legacy format line.
 fn parse_line(line: &str) -> Option<PsadtParsed> {
-    let caps = PSADT_LINE_RE.captures(line)?;
+    let caps = psadt_line_re().captures(line)?;
 
     let ts_str = caps.get(1)?.as_str();
     let section = caps.get(2)?.as_str();
@@ -189,7 +195,7 @@ pub fn matches_psadt_legacy_content(line: &str) -> u32 {
     let mut weight = 0u32;
 
     // Check for the bracketed timestamp prefix
-    if PSADT_PREFIX_RE.is_match(line) {
+    if psadt_prefix_re().is_match(line) {
         weight += 3;
 
         // Check for known section names

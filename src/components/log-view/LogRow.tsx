@@ -216,7 +216,9 @@ const detailCellStyle: React.CSSProperties = {
   borderLeft: `1px solid ${tokens.colorNeutralStroke1}`,
 };
 
-export function LogRow({
+import { memo } from "react";
+
+export const LogRow = memo(function LogRow({
   entry,
   rowDomId,
   isSelected,
@@ -332,4 +334,4 @@ export function LogRow({
       })}
     </div>
   );
-}
+});

@@ -1,0 +1,7 @@
+=== Verbose logging started: 3/15/2026  8:00:00  Build type: SHIP UNICODE 5.00.10011.00  Calling process: C:\Windows\system32\msiexec.exe ===
+MSI (s) (A8:14) [08:00:00:000]: Resetting cached policy values
+MSI (s) (A8:14) [08:00:00:100]: Machine policy value 'Debug' is 0
+Action start 8:00:01: InstallInitialize.
+Action ended 8:00:02: InstallInitialize. Return value 1.
+MSI (s) (A8:14) [08:00:03:000]: MainEngineThread is returning 0
+=== Verbose logging stopped: 3/15/2026  8:00:04 ===

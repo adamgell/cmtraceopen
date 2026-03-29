@@ -1,71 +1,108 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use once_cell::sync::Lazy;
 use regex::Regex;
 
 use super::guid_registry::{extract_app_id, extract_app_name, is_fallback_name, GuidRegistry};
 use super::ime_parser::ImeLine;
 use super::models::DownloadStat;
+use std::sync::OnceLock;
 
-static DOWNLOAD_RE: Lazy<Regex> = Lazy::new(|| {
+fn download_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
     Regex::new(
         r#"(?i)(?:(?-u:\b)download(?:ing|ed)?(?-u:\b)|content\s+download|delivery\s+optimization|bytes\s+downloaded|staging\s+(?:file|content)|hash\s+validation|content\s+cached|cache\s+location)"#,
     )
     .unwrap()
-});
-static DOWNLOAD_IGNORE_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r#"(?i)adding\s+new\s+state\s+transition\s*-\s*from:"#).unwrap());
-static SIZE_RE: Lazy<Regex> = Lazy::new(|| {
+})
+}
+fn download_ignore_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| Regex::new(r#"(?i)adding\s+new\s+state\s+transition\s*-\s*from:"#).unwrap())
+}
+fn size_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
     Regex::new(r#"(?i)(?:content\s+)?size[:\s]+([\d.]+)\s*(bytes|kb|mb|gb)"#).unwrap()
-});
-static SPEED_RE: Lazy<Regex> = Lazy::new(|| {
+})
+}
+fn speed_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
     Regex::new(r#"(?i)(?:speed|rate)[:\s]+([\d.]+)\s*(bytes?/s|kb/s|mb/s|bps|kbps|mbps)"#).unwrap()
-});
-static DO_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r#"(?i)(?:delivery\s+optimization|DO)[:\s]+([\d.]+)\s*%"#).unwrap());
-static CONTENT_ID_RE: Lazy<Regex> = Lazy::new(|| {
+})
+}
+fn do_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| Regex::new(r#"(?i)(?:delivery\s+optimization|DO)[:\s]+([\d.]+)\s*%"#).unwrap())
+}
+fn content_id_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
     Regex::new(r#"(?i)(?:content|app|application)\s*(?:id)?[:\s]+([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})"#).unwrap()
-});
-static DOWNLOAD_COMPLETE_RE: Lazy<Regex> = Lazy::new(|| {
+})
+}
+fn download_complete_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
     Regex::new(
         r#"(?i)(?:download\s+(?:completed|finished|succeeded|done)|content\s+cached|staging\s+completed|hash\s+validation\s+succeeded)"#,
     )
     .unwrap()
-});
-static DOWNLOAD_FAILED_RE: Lazy<Regex> = Lazy::new(|| {
+})
+}
+fn download_failed_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
     Regex::new(
         r#"(?i)(?:download\s+(?:failed|error)|failed\s+to\s+download|hash\s+validation\s+failed|hash\s+mismatch|staging\s+failed|content\s+not\s+found|unable\s+to\s+download|cancelled|aborted)"#,
     )
     .unwrap()
-});
-static DOWNLOAD_START_RE: Lazy<Regex> = Lazy::new(|| {
+})
+}
+fn download_start_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
     Regex::new(
         r#"(?i)(?:starting|beginning|queued|requesting|resuming).*(?:download|content\s+download)"#,
     )
     .unwrap()
-});
-static DOWNLOAD_PROGRESS_RE: Lazy<Regex> = Lazy::new(|| {
+})
+}
+fn download_progress_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
     Regex::new(
         r#"(?i)(?:bytes\s+downloaded|downloading|download\s+progress|delivery\s+optimization)"#,
     )
     .unwrap()
-});
-static DOWNLOAD_STALL_RE: Lazy<Regex> = Lazy::new(|| {
+})
+}
+fn download_stall_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
     Regex::new(
         r#"(?i)(?:stalled|not\s+progressing|no\s+progress|timed?\s*out|timeout|retry\s+exhausted)"#,
     )
     .unwrap()
-});
-static APPWORKLOAD_RETRY_RE: Lazy<Regex> = Lazy::new(|| {
+})
+}
+fn appworkload_retry_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
     Regex::new(r#"(?i)(?:(?-u:\b)retrying(?-u:\b)|(?-u:\b)reattempt(?:ing)?(?-u:\b)|will\s+retry|retry\s+exhausted|failed[^\r\n]{0,80}retry)"#).unwrap()
-});
-static DURATION_RE: Lazy<Regex> = Lazy::new(|| {
+})
+}
+fn duration_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
     Regex::new(
         r#"(?i)(?:duration|took|elapsed)[:\s]+([\d.]+)\s*(s(?:ec(?:ond)?s?)?|m(?:in(?:ute)?s?)?)"#,
     )
     .unwrap()
-});
+})
+}
 
 pub fn extract_downloads(
     lines: &[ImeLine],
@@ -207,19 +244,19 @@ struct DownloadLineAnalysis {
 
 impl DownloadLineAnalysis {
     fn from_message(msg: &str) -> Option<Self> {
-        if DOWNLOAD_IGNORE_RE.is_match(msg) || !DOWNLOAD_RE.is_match(msg) {
+        if download_ignore_re().is_match(msg) || !download_re().is_match(msg) {
             return None;
         }
 
-        let size_bytes = capture_number_and_unit(&SIZE_RE, msg)
+        let size_bytes = capture_number_and_unit(size_re(), msg)
             .map(|(value, unit)| convert_size_to_bytes(value, unit));
-        let speed_bps = capture_number_and_unit(&SPEED_RE, msg)
+        let speed_bps = capture_number_and_unit(speed_re(), msg)
             .map(|(value, unit)| convert_speed_to_bps(value, unit));
-        let do_percentage = DO_RE
+        let do_percentage = do_re()
             .captures(msg)
             .and_then(|captures| captures.get(1))
             .and_then(|capture| capture.as_str().parse::<f64>().ok());
-        let duration_secs = capture_number_and_unit(&DURATION_RE, msg).map(|(value, unit)| {
+        let duration_secs = capture_number_and_unit(duration_re(), msg).map(|(value, unit)| {
             if unit.starts_with('m') {
                 value * 60.0
             } else {
@@ -234,12 +271,12 @@ impl DownloadLineAnalysis {
             speed_bps,
             do_percentage,
             duration_secs,
-            is_retry: APPWORKLOAD_RETRY_RE.is_match(msg),
-            is_start: DOWNLOAD_START_RE.is_match(msg),
-            is_progress: DOWNLOAD_PROGRESS_RE.is_match(msg),
-            is_complete: DOWNLOAD_COMPLETE_RE.is_match(msg),
-            is_failed: DOWNLOAD_FAILED_RE.is_match(msg),
-            is_stall: DOWNLOAD_STALL_RE.is_match(msg),
+            is_retry: appworkload_retry_re().is_match(msg),
+            is_start: download_start_re().is_match(msg),
+            is_progress: download_progress_re().is_match(msg),
+            is_complete: download_complete_re().is_match(msg),
+            is_failed: download_failed_re().is_match(msg),
+            is_stall: download_stall_re().is_match(msg),
         })
     }
 }
@@ -306,7 +343,7 @@ fn extract_content_id(msg: &str) -> Option<String> {
     // Primary: shared extraction from guid_registry (handles AppId, Id, etc.)
     extract_app_id(msg).or_else(|| {
         // Fallback: download-specific broader pattern (e.g. "content id: <GUID>")
-        CONTENT_ID_RE
+        content_id_re()
             .captures(msg)
             .and_then(|captures| captures.get(1))
             .map(|value| value.as_str().to_string())
@@ -613,7 +650,7 @@ mod tests {
     fn escaped_json_fields_are_extracted_without_normalization() {
         let message = r#"Download completed successfully RequestPayload: {\"AppId\":\"a1b2c3d4-e5f6-7890-abcd-ef1234567890\",\"ApplicationName\":\"Contoso App\",\"SetUpFilePath\":\"C:\\Cache\\setup.exe\"}"#;
 
-        // extract_content_id delegates to guid_registry::extract_app_id + CONTENT_ID_RE fallback
+        // extract_content_id delegates to guid_registry::extract_app_id + content_id_re() fallback
         assert_eq!(
             extract_content_id(message).as_deref(),
             Some("a1b2c3d4-e5f6-7890-abcd-ef1234567890")

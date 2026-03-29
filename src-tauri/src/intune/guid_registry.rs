@@ -1,28 +1,38 @@
 use std::collections::HashMap;
 
-use once_cell::sync::Lazy;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
 use super::ime_parser::ImeLine;
+use std::sync::OnceLock;
 
 // ── Shared regexes (also used by download_stats.rs) ─────────────────────────
 
-pub(crate) static APP_ID_JSON_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r#"\"AppId\"\s*:\s*\"([0-9a-fA-F-]{36})\""#).unwrap());
-pub(crate) static APP_NAME_JSON_RE: Lazy<Regex> = Lazy::new(|| {
+pub(crate) fn app_id_json_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| Regex::new(r#"\"AppId\"\s*:\s*\"([0-9a-fA-F-]{36})\""#).unwrap())
+}
+pub(crate) fn app_name_json_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
     Regex::new(r#"(?i)\"(?:ApplicationName|Name)\"\s*:\s*\"([^\",\}]+)"#).unwrap()
-});
-pub(crate) static SETUP_FILE_JSON_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r#"\"SetUpFilePath\"\s*:\s*\"([^\"]+)\""#).unwrap());
+})
+}
+pub(crate) fn setup_file_json_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| Regex::new(r#"\"SetUpFilePath\"\s*:\s*\"([^\"]+)\""#).unwrap())
+}
 
 /// Generic GUID pattern for secondary extraction.
-pub(crate) static GUID_RE: Lazy<Regex> = Lazy::new(|| {
+pub(crate) fn guid_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
     Regex::new(
         r#"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})"#,
     )
     .unwrap()
-});
+})
+}
 
 // ── Shared helpers ───────────────────────────────────────────────────────────
 
@@ -220,7 +230,7 @@ fn extract_all_id_name_pairs(msg: &str) -> Vec<(String, String, GuidNameSource)>
 
         let mut pairs = Vec::new();
         for (id_val, name_val) in ids.into_iter().zip(names.into_iter()) {
-            if id_val.len() == 36 && GUID_RE.is_match(&id_val) {
+            if id_val.len() == 36 && guid_re().is_match(&id_val) {
                 pairs.push((id_val, name_val, GuidNameSource::NameField));
             }
         }
@@ -272,7 +282,7 @@ pub(crate) fn extract_app_id(msg: &str) -> Option<String> {
         return Some(value);
     }
     // Try regex for "AppId" specifically
-    APP_ID_JSON_RE
+    app_id_json_re()
         .captures(msg)
         .and_then(|c| c.get(1))
         .map(|m| m.as_str().to_string())
@@ -280,7 +290,7 @@ pub(crate) fn extract_app_id(msg: &str) -> Option<String> {
             // Only fall back to generic GUID if a name field is present
             // (avoids polluting registry with context-free GUIDs)
             if has_name_field(msg) {
-                GUID_RE
+                guid_re()
                     .captures(msg)
                     .and_then(|c| c.get(1))
                     .map(|m| m.as_str().to_string())
@@ -295,7 +305,7 @@ pub(crate) fn extract_app_id(msg: &str) -> Option<String> {
 /// is a very generic key — we only accept values that are 36-char UUIDs.
 fn extract_guid_from_id_field(msg: &str, prefix: &str, suffix: &str) -> Option<String> {
     let value = extract_json_field(msg, prefix, suffix)?;
-    if value.len() == 36 && GUID_RE.is_match(value) {
+    if value.len() == 36 && guid_re().is_match(value) {
         Some(value.to_string())
     } else {
         None
@@ -334,7 +344,7 @@ pub(crate) fn extract_app_name_with_source(msg: &str) -> Option<(String, GuidNam
     }
 
     // Regex fallback for ApplicationName/Name (handles edge cases)
-    if let Some(caps) = APP_NAME_JSON_RE.captures(msg) {
+    if let Some(caps) = app_name_json_re().captures(msg) {
         if let Some(m) = caps.get(1) {
             let name = m.as_str().to_string();
             let source = if msg.contains("ApplicationName") {
@@ -353,7 +363,7 @@ pub(crate) fn extract_app_name_with_source(msg: &str) -> Option<(String, GuidNam
     if let Some(value) = extract_json_field(msg, "\\\"SetUpFilePath\\\":\\\"", "\\\"") {
         return Some((setup_file_name(value), GuidNameSource::SetUpFilePath));
     }
-    SETUP_FILE_JSON_RE
+    setup_file_json_re()
         .captures(msg)
         .and_then(|c| c.get(1))
         .map(|m| (setup_file_name(m.as_str()), GuidNameSource::SetUpFilePath))

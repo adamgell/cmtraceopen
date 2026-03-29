@@ -25,42 +25,42 @@ struct FileAssociationPreferences {
     suppress_prompt: bool,
 }
 
-fn get_file_association_preferences_path(app: &AppHandle) -> Result<PathBuf, String> {
-    let mut path = app.path().app_config_dir().map_err(|e| e.to_string())?;
+fn get_file_association_preferences_path(app: &AppHandle) -> Result<PathBuf, crate::error::AppError> {
+    let mut path = app.path().app_config_dir().map_err(|e| crate::error::AppError::Internal(e.to_string()))?;
     path.push(FILE_ASSOCIATION_PROMPT_FILE_NAME);
     Ok(path)
 }
 
 fn read_file_association_preferences(
     app: &AppHandle,
-) -> Result<FileAssociationPreferences, String> {
+) -> Result<FileAssociationPreferences, crate::error::AppError> {
     let path = get_file_association_preferences_path(app)?;
 
     if !path.exists() {
         return Ok(FileAssociationPreferences::default());
     }
 
-    let content = fs::read_to_string(&path).map_err(|e| e.to_string())?;
-    serde_json::from_str(&content).map_err(|e| e.to_string())
+    let content = fs::read_to_string(&path).map_err(|e| crate::error::AppError::Internal(e.to_string()))?;
+    serde_json::from_str(&content).map_err(|e| crate::error::AppError::Internal(e.to_string()))
 }
 
 fn write_file_association_preferences(
     app: &AppHandle,
     preferences: &FileAssociationPreferences,
-) -> Result<(), String> {
+) -> Result<(), crate::error::AppError> {
     let path = get_file_association_preferences_path(app)?;
 
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        fs::create_dir_all(parent).map_err(|e| crate::error::AppError::Internal(e.to_string()))?;
     }
 
-    let content = serde_json::to_string_pretty(preferences).map_err(|e| e.to_string())?;
-    fs::write(path, content).map_err(|e| e.to_string())
+    let content = serde_json::to_string_pretty(preferences).map_err(|e| crate::error::AppError::Internal(e.to_string()))?;
+    fs::write(path, content).map_err(|e| crate::error::AppError::Internal(e.to_string()))
 }
 
 #[cfg(target_os = "windows")]
-fn get_expected_open_command() -> Result<String, String> {
-    let executable_path = std::env::current_exe().map_err(|e| e.to_string())?;
+fn get_expected_open_command() -> Result<String, crate::error::AppError> {
+    let executable_path = std::env::current_exe().map_err(|e| crate::error::AppError::Internal(e.to_string()))?;
 
     if let Some(launcher_path) = resolve_dev_launcher_path(&executable_path) {
         return Ok(format!(
@@ -115,14 +115,14 @@ fn normalize_registry_value(value: &str) -> String {
 }
 
 #[cfg(target_os = "windows")]
-fn is_app_associated_with_log_extensions() -> Result<bool, String> {
+fn is_app_associated_with_log_extensions() -> Result<bool, crate::error::AppError> {
     use winreg::enums::HKEY_CURRENT_USER;
     use winreg::RegKey;
 
     let expected_command = normalize_registry_value(&get_expected_open_command()?);
     let classes = RegKey::predef(HKEY_CURRENT_USER)
         .open_subkey("Software\\Classes")
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| crate::error::AppError::Internal(e.to_string()))?;
 
     for extension in [".log", ".lo_"] {
         let extension_key = match classes.open_subkey(extension) {
@@ -130,7 +130,7 @@ fn is_app_associated_with_log_extensions() -> Result<bool, String> {
             Err(_) => return Ok(false),
         };
 
-        let prog_id: String = extension_key.get_value("").map_err(|e| e.to_string())?;
+        let prog_id: String = extension_key.get_value("").map_err(|e| crate::error::AppError::Internal(e.to_string()))?;
 
         if prog_id != FILE_ASSOCIATION_PROG_ID {
             return Ok(false);
@@ -142,60 +142,60 @@ fn is_app_associated_with_log_extensions() -> Result<bool, String> {
             "{}\\shell\\open\\command",
             FILE_ASSOCIATION_PROG_ID
         ))
-        .map_err(|e| e.to_string())?;
-    let command_value: String = command_key.get_value("").map_err(|e| e.to_string())?;
+        .map_err(|e| crate::error::AppError::Internal(e.to_string()))?;
+    let command_value: String = command_key.get_value("").map_err(|e| crate::error::AppError::Internal(e.to_string()))?;
 
     Ok(normalize_registry_value(&command_value) == expected_command)
 }
 
 #[cfg(target_os = "windows")]
-fn associate_log_extensions_with_app() -> Result<(), String> {
+fn associate_log_extensions_with_app() -> Result<(), crate::error::AppError> {
     use winreg::enums::HKEY_CURRENT_USER;
     use winreg::RegKey;
 
     let classes = RegKey::predef(HKEY_CURRENT_USER)
         .create_subkey("Software\\Classes")
-        .map_err(|e| e.to_string())?
+        .map_err(|e| crate::error::AppError::Internal(e.to_string()))?
         .0;
 
-    let executable_path = std::env::current_exe().map_err(|e| e.to_string())?;
+    let executable_path = std::env::current_exe().map_err(|e| crate::error::AppError::Internal(e.to_string()))?;
     let executable_path_str = executable_path.to_string_lossy().to_string();
     let open_command = get_expected_open_command()?;
 
     let (prog_id_key, _) = classes
         .create_subkey(FILE_ASSOCIATION_PROG_ID)
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| crate::error::AppError::Internal(e.to_string()))?;
     prog_id_key
         .set_value("", &"CMTrace Open Log File")
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| crate::error::AppError::Internal(e.to_string()))?;
 
     let (default_icon_key, _) = prog_id_key
         .create_subkey("DefaultIcon")
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| crate::error::AppError::Internal(e.to_string()))?;
     default_icon_key
         .set_value("", &format!("\"{}\",0", executable_path_str))
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| crate::error::AppError::Internal(e.to_string()))?;
 
     let (command_key, _) = prog_id_key
         .create_subkey("shell\\open\\command")
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| crate::error::AppError::Internal(e.to_string()))?;
     command_key
         .set_value("", &open_command)
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| crate::error::AppError::Internal(e.to_string()))?;
 
     for extension in [".log", ".lo_"] {
         let (extension_key, _) = classes
             .create_subkey(extension)
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| crate::error::AppError::Internal(e.to_string()))?;
         extension_key
             .set_value("", &FILE_ASSOCIATION_PROG_ID)
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| crate::error::AppError::Internal(e.to_string()))?;
         extension_key
             .set_value("Content Type", &"text/plain")
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| crate::error::AppError::Internal(e.to_string()))?;
         extension_key
             .set_value("PerceivedType", &"text")
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| crate::error::AppError::Internal(e.to_string()))?;
     }
 
     Ok(())
@@ -204,7 +204,7 @@ fn associate_log_extensions_with_app() -> Result<(), String> {
 #[tauri::command]
 pub fn get_file_association_prompt_status(
     app: AppHandle,
-) -> Result<FileAssociationPromptStatus, String> {
+) -> Result<FileAssociationPromptStatus, crate::error::AppError> {
     let preferences = read_file_association_preferences(&app)?;
 
     #[cfg(target_os = "windows")]
@@ -230,7 +230,7 @@ pub fn get_file_association_prompt_status(
 }
 
 #[tauri::command]
-pub fn associate_log_files_with_app(app: AppHandle) -> Result<(), String> {
+pub fn associate_log_files_with_app(app: AppHandle) -> Result<(), crate::error::AppError> {
     #[cfg(target_os = "windows")]
     {
         associate_log_extensions_with_app()?;
@@ -246,7 +246,7 @@ pub fn associate_log_files_with_app(app: AppHandle) -> Result<(), String> {
     #[cfg(not(target_os = "windows"))]
     {
         let _ = app;
-        Err("File association is only supported on Windows.".to_string())
+        Err(crate::error::AppError::PlatformUnsupported("File association is only supported on Windows.".to_string()))
     }
 }
 
@@ -254,7 +254,7 @@ pub fn associate_log_files_with_app(app: AppHandle) -> Result<(), String> {
 pub fn set_file_association_prompt_suppressed(
     app: AppHandle,
     suppressed: bool,
-) -> Result<(), String> {
+) -> Result<(), crate::error::AppError> {
     write_file_association_preferences(
         &app,
         &FileAssociationPreferences {

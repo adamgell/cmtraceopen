@@ -11,71 +11,98 @@
 //! - Plain text fallback for unrecognized lines
 
 use chrono::{Datelike, NaiveDate, Timelike};
-use once_cell::sync::Lazy;
 use regex::Regex;
 
 use super::severity::detect_severity_from_text;
 use crate::models::log_entry::{LogEntry, LogFormat, Severity};
+use std::sync::OnceLock;
 
 // ---------------------------------------------------------------------------
 // Compiled regexes
 // ---------------------------------------------------------------------------
 
 /// Engine message: MSI (c) (8C:98) [07:42:28:452]: message text
-static ENGINE_RE: Lazy<Regex> = Lazy::new(|| {
+fn engine_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
     Regex::new(
         r"^MSI\s+\(([csaN])\)\s+\(([0-9A-Fa-f]+):([0-9A-Fa-f]+)\)\s+\[(\d{2}):(\d{2}):(\d{2}):(\d{3})\]:\s+(.*)$",
     )
     .expect("MSI engine regex must compile")
-});
+})
+}
 
 /// Header: === Verbose logging started: M/D/YYYY  H:MM:SS  Build type: ... ===
-static HEADER_RE: Lazy<Regex> = Lazy::new(|| {
+fn header_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
     Regex::new(
         r"^===\s+(?:Verbose\s+)?[Ll]ogging\s+started:\s+(\d{1,2}/\d{1,2}/\d{4})\s+(\d{1,2}:\d{2}:\d{2})\s+(.*)===\s*$",
     )
     .expect("MSI header regex must compile")
-});
+})
+}
 
 /// Footer: === Verbose logging stopped: ... ===
-static FOOTER_RE: Lazy<Regex> = Lazy::new(|| {
+fn footer_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
     Regex::new(r"^===\s+(?:Verbose\s+)?[Ll]ogging\s+stopped:\s+.*===\s*$")
         .expect("MSI footer regex must compile")
-});
+})
+}
 
 /// Action start: Action start 16:34:29: InstallFiles.
-static ACTION_START_RE: Lazy<Regex> = Lazy::new(|| {
+fn action_start_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
     Regex::new(r"^Action start (\d{1,2}):(\d{2}):(\d{2}):\s+(\w+)\.\s*$")
         .expect("MSI action start regex must compile")
-});
+})
+}
 
 /// Action ended: Action ended 16:34:29: InstallFiles. Return value 1.
-static ACTION_ENDED_RE: Lazy<Regex> = Lazy::new(|| {
+fn action_ended_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
     Regex::new(r"^Action ended (\d{1,2}):(\d{2}):(\d{2}):\s+(\w+)\.\s+Return value (\d+)\.\s*$")
         .expect("MSI action ended regex must compile")
-});
+})
+}
 
 /// Top-level action: Action 16:34:29: INSTALL.
-static ACTION_TOP_RE: Lazy<Regex> = Lazy::new(|| {
+fn action_top_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
     Regex::new(r"^Action (\d{1,2}):(\d{2}):(\d{2}):\s+(\w+)\.\s*$")
         .expect("MSI top-level action regex must compile")
-});
+})
+}
 
 /// Property dump: Property(C): ProductCode = {GUID}
-static PROPERTY_RE: Lazy<Regex> = Lazy::new(|| {
+fn property_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
     Regex::new(r"^Property\([CScs]\):\s+(.*)$").expect("MSI property regex must compile")
-});
+})
+}
 
 /// MainEngineThread return: MainEngineThread is returning 1603
-static MAIN_ENGINE_RETURN_RE: Lazy<Regex> = Lazy::new(|| {
+fn main_engine_return_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
     Regex::new(r"^MainEngineThread is returning (\d+)")
         .expect("MSI MainEngineThread regex must compile")
-});
+})
+}
 
 /// Note error code pattern: Note: 1: NNNN
-static NOTE_ERROR_RE: Lazy<Regex> = Lazy::new(|| {
+fn note_error_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
     Regex::new(r"Note:\s+1:\s+(\d+)").expect("MSI note error regex must compile")
-});
+})
+}
 
 // ---------------------------------------------------------------------------
 // Detection helper (used by detect.rs)
@@ -106,7 +133,7 @@ pub fn matches_msi_content(line: &str) -> u32 {
         return 2;
     }
 
-    if ACTION_START_RE.is_match(trimmed) || ACTION_ENDED_RE.is_match(trimmed) {
+    if action_start_re().is_match(trimmed) || action_ended_re().is_match(trimmed) {
         return 1;
     }
 
@@ -175,7 +202,7 @@ pub fn parse_lines(lines: &[&str], file_path: &str) -> (Vec<LogEntry>, u32) {
         let entry = parse_msi_line(line, file_path, &mut state, id_counter, (i + 1) as u32);
         let is_fallback = entry.component.is_none()
             && entry.timestamp.is_none()
-            && !FOOTER_RE.is_match(line.trim());
+            && !footer_re().is_match(line.trim());
 
         entries.push(entry);
 
@@ -203,12 +230,12 @@ fn parse_msi_line(
     let trimmed = line.trim_end();
 
     // 1. Header line
-    if let Some(caps) = HEADER_RE.captures(trimmed) {
+    if let Some(caps) = header_re().captures(trimmed) {
         return parse_header(caps, file_path, state, id, line_number, trimmed);
     }
 
     // 2. Footer line
-    if FOOTER_RE.is_match(trimmed) {
+    if footer_re().is_match(trimmed) {
         return make_entry(
             id,
             line_number,
@@ -224,27 +251,27 @@ fn parse_msi_line(
     }
 
     // 3. Engine message
-    if let Some(caps) = ENGINE_RE.captures(trimmed) {
+    if let Some(caps) = engine_re().captures(trimmed) {
         return parse_engine(caps, file_path, state, id, line_number);
     }
 
     // 4. Action ended (check before action start — "ended" is more specific)
-    if let Some(caps) = ACTION_ENDED_RE.captures(trimmed) {
+    if let Some(caps) = action_ended_re().captures(trimmed) {
         return parse_action_ended(caps, file_path, state, id, line_number, trimmed);
     }
 
     // 5. Action start
-    if let Some(caps) = ACTION_START_RE.captures(trimmed) {
+    if let Some(caps) = action_start_re().captures(trimmed) {
         return parse_action_start(caps, file_path, state, id, line_number, trimmed);
     }
 
     // 6. Top-level action
-    if let Some(caps) = ACTION_TOP_RE.captures(trimmed) {
+    if let Some(caps) = action_top_re().captures(trimmed) {
         return parse_action_top(caps, file_path, state, id, line_number, trimmed);
     }
 
     // 7. Property dump
-    if let Some(caps) = PROPERTY_RE.captures(trimmed) {
+    if let Some(caps) = property_re().captures(trimmed) {
         return make_entry(
             id,
             line_number,
@@ -260,7 +287,7 @@ fn parse_msi_line(
     }
 
     // 8. MainEngineThread return
-    if let Some(caps) = MAIN_ENGINE_RETURN_RE.captures(trimmed) {
+    if let Some(caps) = main_engine_return_re().captures(trimmed) {
         let code: u32 = caps
             .get(1)
             .and_then(|m| m.as_str().parse().ok())
@@ -514,14 +541,14 @@ fn parse_action_top(
 /// Priority: MainEngineThread return code > note error codes > keyword patterns > text fallback.
 fn determine_engine_severity(message: &str) -> Severity {
     // Check for MainEngineThread return code embedded in message
-    if let Some(caps) = MAIN_ENGINE_RETURN_RE.captures(message) {
+    if let Some(caps) = main_engine_return_re().captures(message) {
         if let Some(code) = caps.get(1).and_then(|m| m.as_str().parse::<u32>().ok()) {
             return severity_from_msi_exit_code(code);
         }
     }
 
     // Check for Note: 1: NNNN error codes
-    if let Some(caps) = NOTE_ERROR_RE.captures(message) {
+    if let Some(caps) = note_error_re().captures(message) {
         if let Some(code) = caps.get(1).and_then(|m| m.as_str().parse::<u32>().ok()) {
             // Common MSI note error codes that indicate real problems
             if matches!(code, 2318 | 2329 | 2331 | 2335 | 2337 | 2343 | 2345 | 2350 | 2351 | 2352 | 2355 | 2356 | 2357 | 2358 | 2359 | 2360 | 2361 | 2362 | 2371 | 2372 | 2373 | 2374 | 2375 | 2379 | 2380 | 2381 | 2382) {

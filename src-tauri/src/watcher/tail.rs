@@ -54,13 +54,13 @@ impl TailReader {
 
     /// Read new content from the file since last read, parse into entries.
     /// Returns new entries and updates internal byte_offset.
-    pub fn read_new_entries(&mut self) -> Result<Vec<LogEntry>, String> {
+    pub fn read_new_entries(&mut self) -> Result<Vec<LogEntry>, crate::error::AppError> {
         let mut file = std::fs::File::open(&self.path)
-            .map_err(|e| format!("Failed to open file for tailing: {}", e))?;
+            .map_err(crate::error::AppError::Io)?;
 
         let metadata = file
             .metadata()
-            .map_err(|e| format!("Failed to read metadata: {}", e))?;
+            .map_err(crate::error::AppError::Io)?;
 
         let file_size = metadata.len();
 
@@ -78,12 +78,12 @@ impl TailReader {
 
         // Seek to our byte offset
         file.seek(SeekFrom::Start(self.byte_offset))
-            .map_err(|e| format!("Failed to seek: {}", e))?;
+            .map_err(crate::error::AppError::Io)?;
 
         let bytes_to_read = file_size - self.byte_offset;
         let mut buffer = vec![0u8; bytes_to_read as usize];
         file.read_exact(&mut buffer)
-            .map_err(|e| format!("Failed to read new bytes: {}", e))?;
+            .map_err(crate::error::AppError::Io)?;
 
         // For UTF-16, handle partial code unit from previous read
         let decode_buffer = if let Some(prev_byte) = self.pending_byte.take() {
@@ -106,7 +106,7 @@ impl TailReader {
         let _ = leftover; // suppress unused warning
 
         let new_text = crate::parser::decode_bytes(to_decode, self.encoding)
-            .map_err(|e| format!("Failed to decode tailed bytes: {}", e))?;
+            .map_err(|e| crate::error::AppError::Internal(format!("Failed to decode tailed bytes: {}", e)))?;
 
         // Prepend any partial record fragment from the last read.
         let full_text = if self.pending_fragment.is_empty() {
@@ -245,7 +245,7 @@ pub fn start_tail_session<F>(
     next_id: u64,
     next_line: u32,
     on_new_entries: F,
-) -> Result<TailSession, String>
+) -> Result<TailSession, crate::error::AppError>
 where
     F: Fn(Vec<LogEntry>) + Send + 'static,
 {

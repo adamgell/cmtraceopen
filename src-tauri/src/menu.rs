@@ -4,7 +4,7 @@ use serde::Serialize;
 use tauri::menu::{Menu, MenuItem, Submenu};
 use tauri::{AppHandle, Emitter, Runtime};
 
-use crate::commands::file_ops::{build_known_log_sources, KnownSourceGroupingMetadata};
+use crate::commands::known_sources::{build_known_log_sources, KnownSourceGroupingMetadata};
 
 pub const MENU_EVENT_APP_ACTION: &str = "app-menu-action";
 
@@ -296,12 +296,12 @@ pub fn handle_menu_event<R: Runtime>(app: &AppHandle<R>, menu_id: &str) {
     }
 
     let Some(payload) = payload_for_menu_id(menu_id) else {
-        eprintln!("[menu] unrecognized menu_id: {menu_id}");
+        log::warn!("[menu] unrecognized menu_id: {menu_id}");
         return;
     };
 
     if let Err(error) = app.emit(MENU_EVENT_APP_ACTION, payload) {
-        eprintln!("failed to emit app menu action event: {error}");
+        log::error!("failed to emit app menu action event: {error}");
     }
 }
 

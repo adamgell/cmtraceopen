@@ -1,5 +1,7 @@
 pub mod connectivity;
+mod derive;
 pub mod event_logs;
+mod extended;
 pub mod models;
 pub mod parser;
 pub mod registry;
@@ -13,7 +15,7 @@ pub use models::{
     DsregcmdScheduledTaskEvidence, DsregcmdScpQueryResult, DsregcmdWhfbPolicyEvidence,
 };
 
-pub fn analyze_text(input: &str) -> Result<DsregcmdAnalysisResult, String> {
+pub fn analyze_text(input: &str) -> Result<DsregcmdAnalysisResult, crate::error::AppError> {
     let facts = parser::parse_dsregcmd(input)?;
     Ok(rules::analyze_facts(facts, input))
 }

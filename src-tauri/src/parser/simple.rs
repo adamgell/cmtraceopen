@@ -7,23 +7,26 @@
 //! searching for "error", "fail" (excluding "failover"), and "warn"
 //! in the message text, matching CMTrace's binary behavior.
 
-use once_cell::sync::Lazy;
 use regex::Regex;
 
 use super::ccm::{build_timestamp, format_thread_display};
 use super::severity::detect_severity_from_text;
 use crate::models::log_entry::{LogEntry, LogFormat, Severity};
+use std::sync::OnceLock;
 
 /// Combined regex for timestamp and thread portions in a single pass.
 /// Matches: <MM-dd-yyyy HH:mm:ss.fff±TTTTT><thread=N (0xNNNN)>
 /// The thread group is optional to handle lines without thread info.
-static META_RE: Lazy<Regex> = Lazy::new(|| {
+fn meta_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
     Regex::new(concat!(
         r#"<(\d{1,2})-(\d{1,2})-(\d{4})\s+(\d{1,2}):(\d{1,2}):(\d{1,2})\.(\d+)([+-]?\d+)>"#,
         r#"(?:<thread=(\d+)(?:\s*\(0x[0-9a-fA-F]+\))?>)?"#,
     ))
     .expect("Simple metadata regex must compile")
-});
+})
+}
 
 /// Parse a single simple-format log line.
 fn parse_line(line: &str) -> Option<SimpleParsed> {
@@ -38,7 +41,7 @@ fn parse_line(line: &str) -> Option<SimpleParsed> {
     let rest = &metadata[comp_end + 1..];
 
     // Single regex pass extracts both timestamp and thread
-    let caps = META_RE.captures(rest)?;
+    let caps = meta_re().captures(rest)?;
     let mon: u32 = caps.get(1)?.as_str().parse().ok()?;
     let day: u32 = caps.get(2)?.as_str().parse().ok()?;
     let yr: i32 = caps.get(3)?.as_str().parse().ok()?;

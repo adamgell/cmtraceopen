@@ -113,7 +113,7 @@ fn resolve_home(path: &str) -> String {
 // ---------------------------------------------------------------------------
 
 #[cfg(target_os = "macos")]
-pub fn scan_environment_impl() -> Result<MacosDiagEnvironment, String> {
+pub fn scan_environment_impl() -> Result<MacosDiagEnvironment, crate::error::AppError> {
     use std::process::Command;
 
     log::info!("Scanning macOS diagnostics environment");
@@ -122,7 +122,7 @@ pub fn scan_environment_impl() -> Result<MacosDiagEnvironment, String> {
     let (macos_version, macos_build) = {
         let output = Command::new("sw_vers")
             .output()
-            .map_err(|e| format!("Failed to run sw_vers: {}", e))?;
+            .map_err(crate::error::AppError::Io)?;
         let stdout = String::from_utf8_lossy(&output.stdout);
         parse_sw_vers_output(&stdout)
     };
@@ -210,8 +210,8 @@ pub fn scan_environment_impl() -> Result<MacosDiagEnvironment, String> {
 }
 
 #[cfg(not(target_os = "macos"))]
-pub fn scan_environment_impl() -> Result<MacosDiagEnvironment, String> {
-    Err("macOS Diagnostics is only available on macOS.".to_string())
+pub fn scan_environment_impl() -> Result<MacosDiagEnvironment, crate::error::AppError> {
+    Err(crate::error::AppError::PlatformUnsupported("macOS Diagnostics is only available on macOS.".to_string()))
 }
 
 // ---------------------------------------------------------------------------
