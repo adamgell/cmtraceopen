@@ -47,7 +47,7 @@ pub struct DsregcmdResolvedSource {
 pub fn analyze_dsregcmd(
     input: String,
     bundle_path: Option<String>,
-) -> Result<DsregcmdAnalysisResult, String> {
+) -> Result<DsregcmdAnalysisResult, crate::error::AppError> {
     eprintln!(
         "event=dsregcmd_analysis_start input_chars={} input_lines={}",
         input.len(),
@@ -139,7 +139,7 @@ fn load_scheduled_task_evidence_from_bundle(
 
 
 #[tauri::command]
-pub fn capture_dsregcmd() -> Result<DsregcmdCaptureResult, String> {
+pub fn capture_dsregcmd() -> Result<DsregcmdCaptureResult, crate::error::AppError> {
     capture_dsregcmd_impl()
 }
 
@@ -147,12 +147,12 @@ pub fn capture_dsregcmd() -> Result<DsregcmdCaptureResult, String> {
 pub fn load_dsregcmd_source(
     kind: DsregcmdPathSourceKind,
     path: String,
-) -> Result<DsregcmdResolvedSource, String> {
+) -> Result<DsregcmdResolvedSource, crate::error::AppError> {
     load_dsregcmd_source_impl(kind, Path::new(&path))
 }
 
 #[cfg(target_os = "windows")]
-fn capture_dsregcmd_impl() -> Result<DsregcmdCaptureResult, String> {
+fn capture_dsregcmd_impl() -> Result<DsregcmdCaptureResult, crate::error::AppError> {
     eprintln!("event=dsregcmd_capture_start platform=windows");
 
     cleanup_old_capture_bundles();
@@ -164,24 +164,24 @@ fn capture_dsregcmd_impl() -> Result<DsregcmdCaptureResult, String> {
         .arg("/status")
         .output()
         .map_err(|error| {
-            format!(
+            crate::error::AppError::Internal(format!(
                 "Failed to execute '{}' /status: {}",
                 dsregcmd_path.display(),
                 error
-            )
+            ))
         })?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
         let exit_code = output.status.code().unwrap_or_default();
-        return Err(if stderr.is_empty() {
+        return Err(crate::error::AppError::Internal(if stderr.is_empty() {
             format!("dsregcmd.exe /status failed with exit code {}", exit_code)
         } else {
             format!(
                 "dsregcmd.exe /status failed with exit code {}: {}",
                 exit_code, stderr
             )
-        });
+        }));
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
@@ -202,23 +202,23 @@ fn capture_dsregcmd_impl() -> Result<DsregcmdCaptureResult, String> {
 }
 
 #[cfg(not(target_os = "windows"))]
-fn capture_dsregcmd_impl() -> Result<DsregcmdCaptureResult, String> {
-    Err("dsregcmd capture is only supported on Windows.".to_string())
+fn capture_dsregcmd_impl() -> Result<DsregcmdCaptureResult, crate::error::AppError> {
+    Err(crate::error::AppError::PlatformUnsupported("dsregcmd capture is only supported on Windows.".to_string()))
 }
 
 #[cfg(target_os = "windows")]
 fn load_dsregcmd_source_impl(
     kind: DsregcmdPathSourceKind,
     path: &Path,
-) -> Result<DsregcmdResolvedSource, String> {
+) -> Result<DsregcmdResolvedSource, crate::error::AppError> {
     match kind {
         DsregcmdPathSourceKind::File => {
             let input = fs::read_to_string(path).map_err(|error| {
-                format!(
+                crate::error::AppError::Internal(format!(
                     "Failed to read the dsregcmd file '{}': {}",
                     path.display(),
                     error
-                )
+                ))
             })?;
             let bundle_path = resolve_bundle_root_from_file_path(path)
                 .map(|value| value.to_string_lossy().to_string());
@@ -232,11 +232,11 @@ fn load_dsregcmd_source_impl(
         DsregcmdPathSourceKind::Folder => {
             let (bundle_path, evidence_file_path) = resolve_folder_bundle_evidence(path)?;
             let input = fs::read_to_string(&evidence_file_path).map_err(|error| {
-                format!(
+                crate::error::AppError::Internal(format!(
                     "Failed to read the dsregcmd evidence file '{}': {}",
                     evidence_file_path.display(),
                     error
-                )
+                ))
             })?;
             Ok(DsregcmdResolvedSource {
                 input,
@@ -252,8 +252,8 @@ fn load_dsregcmd_source_impl(
 fn load_dsregcmd_source_impl(
     _kind: DsregcmdPathSourceKind,
     _path: &Path,
-) -> Result<DsregcmdResolvedSource, String> {
-    Err("dsregcmd source loading is only supported on Windows.".to_string())
+) -> Result<DsregcmdResolvedSource, crate::error::AppError> {
+    Err(crate::error::AppError::PlatformUnsupported("dsregcmd source loading is only supported on Windows.".to_string()))
 }
 
 #[cfg(target_os = "windows")]
@@ -332,32 +332,32 @@ const EVIDENCE_FOLDER_NAME: &str = "evidence";
 const COMMAND_OUTPUT_FOLDER_NAME: &str = "command-output";
 
 #[cfg(target_os = "windows")]
-fn stage_live_capture_bundle(stdout: &str) -> Result<LiveCaptureBundle, String> {
+fn stage_live_capture_bundle(stdout: &str) -> Result<LiveCaptureBundle, crate::error::AppError> {
     let bundle_path = create_capture_bundle_root()?;
     let evidence_command_output = bundle_path.join("evidence").join("command-output");
     let evidence_registry = bundle_path.join("evidence").join("registry");
     fs::create_dir_all(&evidence_command_output).map_err(|error| {
-        format!(
+        crate::error::AppError::Internal(format!(
             "Failed to create the live capture command-output folder '{}': {}",
             evidence_command_output.display(),
             error
-        )
+        ))
     })?;
     fs::create_dir_all(&evidence_registry).map_err(|error| {
-        format!(
+        crate::error::AppError::Internal(format!(
             "Failed to create the live capture registry folder '{}': {}",
             evidence_registry.display(),
             error
-        )
+        ))
     })?;
 
     let evidence_file_path = evidence_command_output.join("dsregcmd-status.txt");
     fs::write(&evidence_file_path, stdout).map_err(|error| {
-        format!(
+        crate::error::AppError::Internal(format!(
             "Failed to write the live dsregcmd capture to '{}': {}",
             evidence_file_path.display(),
             error
-        )
+        ))
     })?;
 
     let manifest_path = bundle_path.join("manifest.json");
@@ -366,11 +366,11 @@ fn stage_live_capture_bundle(stdout: &str) -> Result<LiveCaptureBundle, String> 
         "{\n  \"manifestPath\": \"manifest.json\",\n  \"source\": \"live-dsregcmd-capture\"\n}\n",
     )
     .map_err(|error| {
-        format!(
+        crate::error::AppError::Internal(format!(
             "Failed to write the live capture manifest '{}': {}",
             manifest_path.display(),
             error
-        )
+        ))
     })?;
 
     export_live_registry_evidence(&evidence_registry);
@@ -434,9 +434,9 @@ fn resolve_bundle_root_from_file_path(path: &Path) -> Option<PathBuf> {
 }
 
 #[cfg(target_os = "windows")]
-fn resolve_folder_bundle_evidence(folder_path: &Path) -> Result<(PathBuf, PathBuf), String> {
+fn resolve_folder_bundle_evidence(folder_path: &Path) -> Result<(PathBuf, PathBuf), crate::error::AppError> {
     let bundle_root = resolve_canonical_bundle_root_from_folder_path(folder_path).ok_or_else(|| {
-        "Selected folder is not a supported dsregcmd evidence bundle location. Choose the bundle root, the bundle's evidence folder, or the bundle's command-output folder.".to_string()
+        crate::error::AppError::InvalidInput("Selected folder is not a supported dsregcmd evidence bundle location. Choose the bundle root, the bundle's evidence folder, or the bundle's command-output folder.".to_string())
     })?;
 
     let evidence_file_path = DSREGCMD_EVIDENCE_RELATIVE_PATH
@@ -451,11 +451,11 @@ fn resolve_folder_bundle_evidence(folder_path: &Path) -> Result<(PathBuf, PathBu
         return Ok((bundle_root, top_level_path));
     }
 
-    Err(format!(
+    Err(crate::error::AppError::InvalidInput(format!(
         "Resolved bundle root does not contain dsregcmd evidence. Expected '{}' or '{}'.",
         DSREGCMD_EVIDENCE_RELATIVE_PATH.join("/"),
         DSREGCMD_TOP_LEVEL_FALLBACK_FILE
-    ))
+    )))
 }
 
 #[cfg(target_os = "windows")]
@@ -502,7 +502,7 @@ fn path_ends_with_directory(path: &Path, directory_name: &str) -> bool {
 }
 
 #[cfg(target_os = "windows")]
-fn create_capture_bundle_root() -> Result<PathBuf, String> {
+fn create_capture_bundle_root() -> Result<PathBuf, crate::error::AppError> {
     let temp_root = std::env::temp_dir();
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -514,11 +514,11 @@ fn create_capture_bundle_root() -> Result<PathBuf, String> {
         timestamp
     ));
     fs::create_dir_all(&bundle_path).map_err(|error| {
-        format!(
+        crate::error::AppError::Internal(format!(
             "Failed to create the live capture bundle root '{}': {}",
             bundle_path.display(),
             error
-        )
+        ))
     })?;
     Ok(bundle_path)
 }
@@ -668,24 +668,24 @@ fn cleanup_old_capture_bundles() {
 }
 
 #[cfg(target_os = "windows")]
-fn resolve_system32_binary(file_name: &str) -> Result<PathBuf, String> {
+fn resolve_system32_binary(file_name: &str) -> Result<PathBuf, crate::error::AppError> {
     let Some(windir) = std::env::var_os("WINDIR") else {
-        return Err("WINDIR is not set; could not resolve the Windows system path.".to_string());
+        return Err(crate::error::AppError::Internal("WINDIR is not set; could not resolve the Windows system path.".to_string()));
     };
 
     let path = PathBuf::from(windir).join("System32").join(file_name);
     if !path.is_file() {
-        return Err(format!(
+        return Err(crate::error::AppError::Internal(format!(
             "Expected Windows system binary was not found at '{}'.",
             path.display()
-        ));
+        )));
     }
 
     Ok(path)
 }
 
 #[cfg(target_os = "windows")]
-fn verify_dsregcmd_signature(dsregcmd_path: &Path) -> Result<(), String> {
+fn verify_dsregcmd_signature(dsregcmd_path: &Path) -> Result<(), crate::error::AppError> {
     let mut wide_path = dsregcmd_path
         .as_os_str()
         .encode_wide()
@@ -737,21 +737,21 @@ fn verify_dsregcmd_signature(dsregcmd_path: &Path) -> Result<(), String> {
         return Ok(());
     }
 
-    Err(format!(
+    Err(crate::error::AppError::Internal(format!(
         "Refusing to execute '{}': expected a valid Authenticode signature but WinVerifyTrust returned {}.",
         dsregcmd_path.display(),
         format_winverifytrust_status(status)
-    ))
+    )))
 }
 
 #[cfg(target_os = "windows")]
-fn verify_catalog_signature(dsregcmd_path: &Path) -> Result<bool, String> {
+fn verify_catalog_signature(dsregcmd_path: &Path) -> Result<bool, crate::error::AppError> {
     let file = File::open(dsregcmd_path).map_err(|error| {
-        format!(
+        crate::error::AppError::Internal(format!(
             "Failed to open '{}' for catalog signature verification: {}",
             dsregcmd_path.display(),
             error
-        )
+        ))
     })?;
     let file_handle = file.as_raw_handle() as isize;
 
@@ -760,11 +760,11 @@ fn verify_catalog_signature(dsregcmd_path: &Path) -> Result<bool, String> {
         CryptCATAdminAcquireContext(&mut cat_admin_handle, &DRIVER_ACTION_VERIFY, 0)
     };
     if acquired == 0 {
-        return Err(format!(
+        return Err(crate::error::AppError::Internal(format!(
             "Failed to acquire a catalog admin context for '{}': {}",
             dsregcmd_path.display(),
             std::io::Error::last_os_error()
-        ));
+        )));
     }
     let cat_admin = CatalogAdminHandle(cat_admin_handle);
 
@@ -773,11 +773,11 @@ fn verify_catalog_signature(dsregcmd_path: &Path) -> Result<bool, String> {
         CryptCATAdminCalcHashFromFileHandle(file_handle, &mut hash_len, null_mut(), 0)
     };
     if hash_size_status == 0 && hash_len == 0 {
-        return Err(format!(
+        return Err(crate::error::AppError::Internal(format!(
             "Failed to determine the catalog hash size for '{}': {}",
             dsregcmd_path.display(),
             std::io::Error::last_os_error()
-        ));
+        )));
     }
 
     let mut hash = vec![0u8; hash_len as usize];
@@ -785,11 +785,11 @@ fn verify_catalog_signature(dsregcmd_path: &Path) -> Result<bool, String> {
         CryptCATAdminCalcHashFromFileHandle(file_handle, &mut hash_len, hash.as_mut_ptr(), 0)
     };
     if hash_status == 0 {
-        return Err(format!(
+        return Err(crate::error::AppError::Internal(format!(
             "Failed to calculate the catalog hash for '{}': {}",
             dsregcmd_path.display(),
             std::io::Error::last_os_error()
-        ));
+        )));
     }
     hash.truncate(hash_len as usize);
 
@@ -819,11 +819,11 @@ fn verify_catalog_signature(dsregcmd_path: &Path) -> Result<bool, String> {
         CryptCATCatalogInfoFromContext(catalog.catalog_handle, &mut catalog_info, 0)
     };
     if catalog_info_status == 0 {
-        return Err(format!(
+        return Err(crate::error::AppError::Internal(format!(
             "Failed to read catalog metadata for '{}': {}",
             dsregcmd_path.display(),
             std::io::Error::last_os_error()
-        ));
+        )));
     }
 
     let member_tag = hex_encode_wide(&hash);
@@ -1076,6 +1076,6 @@ mod tests {
     #[test]
     fn capture_command_returns_clear_error_on_unsupported_platform() {
         let error = capture_dsregcmd().expect_err("expected unsupported platform error");
-        assert!(error.contains("only supported on Windows"));
+        assert!(error.to_string().contains("only supported on Windows"));
     }
 }

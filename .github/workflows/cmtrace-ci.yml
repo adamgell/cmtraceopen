@@ -53,6 +53,12 @@ jobs:
         working-directory: src-tauri
         run: cargo clippy -- -D warnings
 
+      - name: Supply chain audit
+        working-directory: src-tauri
+        run: |
+          cargo install --locked cargo-deny 2>/dev/null || true
+          cargo deny check
+
   frontend:
     name: TypeScript Check
     runs-on: ubuntu-latest
@@ -71,6 +77,9 @@ jobs:
 
       - name: TypeScript check
         run: npx tsc --noEmit
+
+      - name: Frontend tests
+        run: npm run test
 
   build:
     name: Build (${{ matrix.label }})

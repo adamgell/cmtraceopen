@@ -5,26 +5,19 @@ use std::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
 use std::time::UNIX_EPOCH;
 
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use tauri::{AppHandle, Emitter, State};
 
-use crate::dsregcmd::registry::{inspect_registry_snapshot_file, RegistrySnapshotSummary};
-use crate::intune::models::{EvidenceBundleArtifactCounts, EvidenceBundleMetadata};
+use crate::intune::models::EvidenceBundleMetadata;
 use crate::models::log_entry::{
-    AggregateParseResult, AggregateParsedFileResult, LogEntry, ParseQuality, ParseResult,
-    ParserKind, ParserSelectionInfo, ParserSpecialization,
+    AggregateParseResult, AggregateParsedFileResult, LogEntry, ParseResult,
 };
 use crate::parser;
 use crate::state::app_state::{AppState, OpenFile};
 
-const DEFAULT_BUNDLE_PRIMARY_ENTRY_POINTS: &[&str] = &[
-    "evidence/logs",
-    "evidence/registry",
-    "evidence/event-logs",
-    "evidence/exports",
-    "evidence/screenshots",
-    "evidence/command-output",
-];
+use super::bundle_ops::{collect_files_recursive, detect_evidence_bundle_metadata};
+use super::known_sources::KnownSourcePathKind;
+
+// ── Types ───────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -40,49 +33,6 @@ pub enum PathKind {
     File,
     Folder,
     Unknown,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum KnownSourcePathKind {
-    File,
-    Folder,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum PlatformKind {
-    All,
-    Windows,
-    Macos,
-    Linux,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum KnownSourceDefaultFileSelectionBehavior {
-    None,
-    PreferFileName,
-    PreferFileNameThenPattern,
-    PreferPattern,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct KnownSourceGroupingMetadata {
-    pub family_id: String,
-    pub family_label: String,
-    pub group_id: String,
-    pub group_label: String,
-    pub group_order: u32,
-    pub source_order: u32,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct KnownSourceDefaultFileIntent {
-    pub selection_behavior: KnownSourceDefaultFileSelectionBehavior,
-    pub preferred_file_names: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -124,145 +74,16 @@ pub struct FolderListingResult {
     pub bundle_metadata: Option<EvidenceBundleMetadata>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct EvidenceArtifactTimeCoverage {
-    pub start_utc: Option<String>,
-    pub end_utc: Option<String>,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub enum EvidenceArtifactIntakeKind {
-    Log,
-    RegistrySnapshot,
-    EventLogExport,
-    CommandOutput,
-    Screenshot,
-    Export,
-    Unknown,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub enum EvidenceArtifactIntakeStatus {
-    Recognized,
-    Generic,
-    Unsupported,
-    Missing,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct EvidenceArtifactIntake {
-    pub kind: EvidenceArtifactIntakeKind,
-    pub status: EvidenceArtifactIntakeStatus,
-    pub recognized_as: Option<String>,
-    pub summary: String,
-    pub parser_selection: Option<ParserSelectionInfo>,
-    pub parse_diagnostics: Option<EvidenceArtifactParseDiagnostics>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct EvidenceArtifactParseDiagnostics {
-    pub total_lines: u32,
-    pub entry_count: u32,
-    pub parse_errors: u32,
-    pub clean_parse: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct EvidenceArtifactRecord {
-    pub artifact_id: Option<String>,
-    pub category: String,
-    pub family: Option<String>,
-    pub relative_path: String,
-    pub absolute_path: Option<String>,
-    pub origin_path: Option<String>,
-    pub collected_utc: Option<String>,
-    pub status: String,
-    #[serde(default)]
-    pub parse_hints: Vec<String>,
-    pub notes: Option<String>,
-    pub time_coverage: Option<EvidenceArtifactTimeCoverage>,
-    pub sha256: Option<String>,
-    pub exists_on_disk: bool,
-    pub intake: EvidenceArtifactIntake,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct ExpectedEvidenceRecord {
-    pub category: String,
-    pub relative_path: String,
-    pub required: bool,
-    pub reason: Option<String>,
-    pub available: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct EvidenceBundleDetails {
-    pub bundle_root_path: String,
-    pub metadata: EvidenceBundleMetadata,
-    pub manifest_content: String,
-    pub notes_content: Option<String>,
-    #[serde(default)]
-    pub artifacts: Vec<EvidenceArtifactRecord>,
-    #[serde(default)]
-    pub expected_evidence: Vec<ExpectedEvidenceRecord>,
-    #[serde(default)]
-    pub observed_gaps: Vec<String>,
-    #[serde(default)]
-    pub priority_questions: Vec<String>,
-    pub handoff_summary: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct EvidenceEventLogExportPreview {
-    pub channel: Option<String>,
-    pub file_size_bytes: Option<u64>,
-    pub modified_unix_ms: Option<u64>,
-    pub export_format: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct EvidenceArtifactPreview {
-    pub path: String,
-    pub intake_kind: EvidenceArtifactIntakeKind,
-    pub summary: String,
-    pub registry_snapshot: Option<RegistrySnapshotSummary>,
-    pub event_log_export: Option<EvidenceEventLogExportPreview>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct KnownSourceMetadata {
-    pub id: String,
-    pub label: String,
-    pub description: String,
-    pub platform: PlatformKind,
-    pub source_kind: LogSourceKind,
-    pub source: LogSource,
-    pub file_patterns: Vec<String>,
-    #[serde(default)]
-    pub grouping: Option<KnownSourceGroupingMetadata>,
-    #[serde(default)]
-    pub default_file_intent: Option<KnownSourceDefaultFileIntent>,
-}
+// ── Tauri Commands ──────────────────────────────────────────────────────
 
 /// Open and parse a log file, auto-detecting its format.
 /// Stores the backend parser selection in AppState for tail reading.
 #[tauri::command]
-pub fn open_log_file(path: String, state: State<'_, AppState>) -> Result<ParseResult, String> {
+pub fn open_log_file(path: String, state: State<'_, AppState>) -> Result<ParseResult, crate::error::AppError> {
     let (result, parser_selection) = parser::parse_file(&path)?;
 
     // Store in AppState so tail parsing reuses the same backend parser selection.
-    let mut open_files = state.open_files.lock().map_err(|e| e.to_string())?;
+    let mut open_files = state.open_files.lock().map_err(|e| crate::error::AppError::State(e.to_string()))?;
     open_files.insert(
         PathBuf::from(&path),
         OpenFile {
@@ -300,7 +121,7 @@ pub fn parse_files_batch(
     paths: Vec<String>,
     state: State<'_, AppState>,
     app: AppHandle,
-) -> Result<Vec<ParseResult>, String> {
+) -> Result<Vec<ParseResult>, crate::error::AppError> {
     use rayon::prelude::*;
 
     let total = paths.len() as u32;
@@ -313,7 +134,7 @@ pub fn parse_files_batch(
     let completed = AtomicU32::new(0);
 
     // Parse all files in parallel on Rayon's thread pool (lock-free)
-    let results: Vec<Result<(ParseResult, crate::parser::ResolvedParser, String), String>> = paths
+    let results: Vec<Result<(ParseResult, crate::parser::ResolvedParser, String), crate::error::AppError>> = paths
         .par_iter()
         .map(|path| {
             let file_start = std::time::Instant::now();
@@ -359,7 +180,7 @@ pub fn parse_files_batch(
 
     // Collect successes and store parser state (requires lock, done sequentially)
     let mut parse_results = Vec::with_capacity(results.len());
-    let mut open_files = state.open_files.lock().map_err(|e| e.to_string())?;
+    let mut open_files = state.open_files.lock().map_err(|e| crate::error::AppError::State(e.to_string()))?;
 
     for item in results {
         let (result, parser_selection, path) = item?;
@@ -391,7 +212,7 @@ pub fn parse_files_batch(
 pub fn open_log_folder_aggregate(
     path: String,
     state: State<'_, AppState>,
-) -> Result<AggregateParseResult, String> {
+) -> Result<AggregateParseResult, crate::error::AppError> {
     let listing = list_log_folder(path.clone())?;
     let file_entries: Vec<&FolderEntry> = listing.entries.iter().filter(|entry| !entry.is_dir).collect();
 
@@ -433,7 +254,7 @@ pub fn open_log_folder_aggregate(
         entry.id = index as u64;
     }
 
-    let mut open_files = state.open_files.lock().map_err(|e| e.to_string())?;
+    let mut open_files = state.open_files.lock().map_err(|e| crate::error::AppError::State(e.to_string()))?;
     for (path_buf, parser_selection, byte_offset) in open_file_states {
         open_files.insert(
             path_buf.clone(),
@@ -456,7 +277,7 @@ pub fn open_log_folder_aggregate(
 }
 
 #[tauri::command]
-pub fn inspect_path_kind(path: String) -> Result<PathKind, String> {
+pub fn inspect_path_kind(path: String) -> Result<PathKind, crate::error::AppError> {
     let requested_path = PathBuf::from(&path);
 
     if !requested_path.exists() {
@@ -475,8 +296,8 @@ pub fn inspect_path_kind(path: String) -> Result<PathKind, String> {
 }
 
 #[tauri::command]
-pub fn write_text_output_file(path: String, contents: String) -> Result<(), String> {
-    fs::write(&path, contents).map_err(|error| format!("failed to write file {}: {}", path, error))
+pub fn write_text_output_file(path: String, contents: String) -> Result<(), crate::error::AppError> {
+    fs::write(&path, contents).map_err(crate::error::AppError::Io)
 }
 
 /// Returns file paths passed as CLI arguments at startup via OS file association.
@@ -486,787 +307,35 @@ pub fn write_text_output_file(path: String, contents: String) -> Result<(), Stri
 /// with the file paths as command-line arguments. This command retrieves those
 /// paths so the frontend can open them. Consumed on the first call.
 #[tauri::command]
-pub fn get_initial_file_paths(state: State<'_, AppState>) -> Result<Vec<String>, String> {
-    let mut guard = state.initial_file_paths.lock().map_err(|e| e.to_string())?;
+pub fn get_initial_file_paths(state: State<'_, AppState>) -> Result<Vec<String>, crate::error::AppError> {
+    let mut guard = state.initial_file_paths.lock().map_err(|e| crate::error::AppError::State(e.to_string()))?;
     let paths = std::mem::take(&mut *guard);
     Ok(paths)
 }
 
-fn normalize_path_string(path: &Path) -> String {
-    path.to_string_lossy().to_string()
-}
-
-fn metadata_modified_unix_ms(metadata: &fs::Metadata) -> Option<u64> {
-    let duration = metadata.modified().ok()?.duration_since(UNIX_EPOCH).ok()?;
-    u64::try_from(duration.as_millis()).ok()
-}
-
-fn compare_folder_entries(left: &FolderEntry, right: &FolderEntry) -> Ordering {
-    match (left.is_dir, right.is_dir) {
-        (true, false) => Ordering::Less,
-        (false, true) => Ordering::Greater,
-        _ => {
-            let left_lower = left.name.to_lowercase();
-            let right_lower = right.name.to_lowercase();
-
-            left_lower
-                .cmp(&right_lower)
-                .then_with(|| left.name.cmp(&right.name))
-                .then_with(|| left.path.cmp(&right.path))
-        }
-    }
-}
-
-fn compare_aggregate_entries(
-    left: &LogEntry,
-    right: &LogEntry,
-    file_order: &std::collections::HashMap<String, usize>,
-) -> Ordering {
-    match (left.timestamp, right.timestamp) {
-        (Some(left_ts), Some(right_ts)) if left_ts != right_ts => left_ts.cmp(&right_ts),
-        (Some(_), None) => Ordering::Less,
-        (None, Some(_)) => Ordering::Greater,
-        _ => file_order
-            .get(&left.file_path)
-            .copied()
-            .unwrap_or(usize::MAX)
-            .cmp(&file_order.get(&right.file_path).copied().unwrap_or(usize::MAX))
-            .then_with(|| left.line_number.cmp(&right.line_number))
-            .then_with(|| left.message.cmp(&right.message)),
-    }
-}
-
-/// File extensions that are binary / non-parseable as text logs.
-/// These are skipped during recursive bundle collection.
-const BINARY_EXTENSIONS: &[&str] = &[
-    "etl", "dat", "zip", "cab", "tmp", "dir", "que", "evtx",
-];
-
-/// Maximum file size (in bytes) to include in batch aggregate parsing.
-/// Files larger than this are still listed in the sidebar but excluded from
-/// the automatic batch load to avoid long stalls (e.g. 180 MB CBS logs).
-/// Users can still open them individually.
-const BUNDLE_BATCH_MAX_FILE_SIZE: u64 = 50 * 1024 * 1024; // 50 MB
-
-/// Recursively collects all **text-parseable files** under `root`, returning
-/// them as flat `FolderEntry` items (no directory entries).  Used when opening
-/// an evidence bundle so that every nested artifact is included in the listing.
-///
-/// Files with known binary extensions and files exceeding
-/// `BUNDLE_BATCH_MAX_FILE_SIZE` are excluded from the listing and logged as
-/// skipped.  They remain accessible from the sidebar for individual opening.
-fn collect_files_recursive(root: &Path) -> Vec<FolderEntry> {
-    let mut out = Vec::new();
-    let mut skipped_binary = 0u32;
-    let mut skipped_large = 0u32;
-    let mut stack: Vec<PathBuf> = vec![root.to_path_buf()];
-
-    while let Some(dir) = stack.pop() {
-        let read_dir = match fs::read_dir(&dir) {
-            Ok(rd) => rd,
-            Err(e) => {
-                eprintln!(
-                    "event=collect_files_recursive_skip reason=read_dir_error path=\"{}\" error=\"{e}\"",
-                    dir.display()
-                );
-                continue;
-            }
-        };
-
-        for entry_result in read_dir {
-            let entry = match entry_result {
-                Ok(v) => v,
-                Err(e) => {
-                    eprintln!(
-                        "event=collect_files_recursive_skip reason=entry_error dir=\"{}\" error=\"{e}\"",
-                        dir.display()
-                    );
-                    continue;
-                }
-            };
-
-            let entry_path = entry.path();
-            let metadata = match entry.metadata() {
-                Ok(m) => m,
-                Err(e) => {
-                    eprintln!(
-                        "event=collect_files_recursive_skip reason=metadata_error path=\"{}\" error=\"{e}\"",
-                        entry_path.display()
-                    );
-                    continue;
-                }
-            };
-
-            if metadata.is_dir() {
-                stack.push(entry_path);
-                continue;
-            }
-
-            // Skip known binary extensions
-            if let Some(ext) = entry_path.extension().and_then(|e| e.to_str()) {
-                if BINARY_EXTENSIONS.iter().any(|b| b.eq_ignore_ascii_case(ext)) {
-                    skipped_binary += 1;
-                    eprintln!(
-                        "event=collect_files_recursive_skip reason=binary_extension path=\"{}\"",
-                        entry_path.display()
-                    );
-                    continue;
-                }
-            }
-
-            // Skip files exceeding the size cap
-            let size = metadata.len();
-            if size > BUNDLE_BATCH_MAX_FILE_SIZE {
-                skipped_large += 1;
-                eprintln!(
-                    "event=collect_files_recursive_skip reason=file_too_large path=\"{}\" size={size}",
-                    entry_path.display()
-                );
-                continue;
-            }
-
-            out.push(FolderEntry {
-                name: entry.file_name().to_string_lossy().to_string(),
-                path: normalize_path_string(&entry_path),
-                is_dir: false,
-                size_bytes: Some(size),
-                modified_unix_ms: metadata_modified_unix_ms(&metadata),
-            });
-        }
-    }
-
-    eprintln!(
-        "event=collect_files_recursive_done root=\"{}\" included={} skipped_binary={skipped_binary} skipped_large={skipped_large}",
-        root.display(),
-        out.len()
-    );
-
-    out
-}
-
-fn detect_evidence_bundle_metadata(path: &Path) -> Option<EvidenceBundleMetadata> {
-    let manifest_path = path.join("manifest.json");
-    if !manifest_path.is_file() {
-        return None;
-    }
-
-    let manifest_content = fs::read_to_string(&manifest_path).ok()?;
-    let manifest = serde_json::from_str::<Value>(&manifest_content).ok()?;
-
-    let mut primary_entry_points = resolve_bundle_primary_entry_points(path, &manifest);
-    if primary_entry_points.is_empty() {
-        primary_entry_points = DEFAULT_BUNDLE_PRIMARY_ENTRY_POINTS
-            .iter()
-            .map(|relative| path.join(relative))
-            .collect();
-    }
-
-    Some(EvidenceBundleMetadata {
-        manifest_path: manifest_path.to_string_lossy().to_string(),
-        notes_path: resolve_bundle_hint_path(
-            path,
-            json_string_at(&manifest, &["intakeHints", "notesPath"]).as_deref(),
-        )
-        .or_else(|| {
-            let default_path = path.join("notes.md");
-            default_path.is_file().then_some(default_path)
-        })
-        .map(|value| value.to_string_lossy().to_string()),
-        evidence_root: resolve_bundle_hint_path(
-            path,
-            json_string_at(&manifest, &["intakeHints", "evidenceRoot"]).as_deref(),
-        )
-        .or_else(|| {
-            let default_path = path.join("evidence");
-            default_path.is_dir().then_some(default_path)
-        })
-        .map(|value| value.to_string_lossy().to_string()),
-        primary_entry_points: primary_entry_points
-            .iter()
-            .map(|entry| entry.to_string_lossy().to_string())
-            .collect(),
-        available_primary_entry_points: primary_entry_points
-            .iter()
-            .filter(|entry| entry.exists())
-            .map(|entry| entry.to_string_lossy().to_string())
-            .collect(),
-        bundle_id: json_string_at(&manifest, &["bundle", "bundleId"]),
-        bundle_label: json_string_at(&manifest, &["bundle", "bundleLabel"]),
-        created_utc: json_string_at(&manifest, &["bundle", "createdUtc"]),
-        case_reference: json_string_at(&manifest, &["bundle", "caseReference"]),
-        summary: json_string_at(&manifest, &["bundle", "summary"]),
-        collector_profile: json_string_at(&manifest, &["collection", "collectorProfile"]),
-        collector_version: json_string_at(&manifest, &["collection", "collectorVersion"]),
-        collected_utc: json_string_at(&manifest, &["collection", "collectedUtc"]),
-        device_name: json_string_at(&manifest, &["bundle", "device", "deviceName"]),
-        primary_user: json_string_at(&manifest, &["bundle", "device", "primaryUser"]),
-        platform: json_string_at(&manifest, &["bundle", "device", "platform"]),
-        os_version: json_string_at(&manifest, &["bundle", "device", "osVersion"]),
-        tenant: json_string_at(&manifest, &["bundle", "device", "tenant"]),
-        artifact_counts: Some(EvidenceBundleArtifactCounts {
-            collected: json_u64_at(
-                &manifest,
-                &["collection", "results", "artifactCounts", "collected"],
-            )?,
-            missing: json_u64_at(
-                &manifest,
-                &["collection", "results", "artifactCounts", "missing"],
-            )?,
-            failed: json_u64_at(
-                &manifest,
-                &["collection", "results", "artifactCounts", "failed"],
-            )?,
-            skipped: json_u64_at(
-                &manifest,
-                &["collection", "results", "artifactCounts", "skipped"],
-            )?,
-        }),
-    })
-}
-
-fn inspect_evidence_bundle_details(path: &Path) -> Result<EvidenceBundleDetails, String> {
-    if !path.exists() {
-        return Err(format!("bundle path does not exist: {}", path.display()));
-    }
-
-    if !path.is_dir() {
-        return Err(format!("bundle path is not a folder: {}", path.display()));
-    }
-
-    let manifest_path = path.join("manifest.json");
-    if !manifest_path.is_file() {
-        return Err(format!(
-            "manifest.json was not found under {}",
-            path.display()
-        ));
-    }
-
-    let manifest_content = fs::read_to_string(&manifest_path)
-        .map_err(|error| format!("failed to read {}: {}", manifest_path.display(), error))?;
-    let manifest = serde_json::from_str::<Value>(&manifest_content)
-        .map_err(|error| format!("failed to parse {}: {}", manifest_path.display(), error))?;
-    let metadata = detect_evidence_bundle_metadata(path)
-        .ok_or_else(|| format!("{} is not a recognized evidence bundle", path.display()))?;
-
-    let artifacts = json_value_at(&manifest, &["artifacts"])
-        .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(|item| parse_evidence_artifact_record(path, item))
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-
-    let expected_evidence = json_value_at(&manifest, &["expectedEvidence"])
-        .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(|item| parse_expected_evidence_record(path, &artifacts, item))
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-
-    let notes_content = metadata
-        .notes_path
-        .as_ref()
-        .and_then(|notes_path| fs::read_to_string(notes_path).ok());
-
-    Ok(EvidenceBundleDetails {
-        bundle_root_path: normalize_path_string(path),
-        metadata,
-        manifest_content,
-        notes_content,
-        artifacts,
-        expected_evidence,
-        observed_gaps: json_string_array_at(&manifest, &["analysis", "observedGaps"]),
-        priority_questions: json_string_array_at(&manifest, &["analysis", "priorityQuestions"]),
-        handoff_summary: json_string_at(&manifest, &["analysis", "handoffSummary"]),
-    })
-}
-
-fn parse_evidence_artifact_record(
-    bundle_root: &Path,
-    value: &Value,
-) -> Option<EvidenceArtifactRecord> {
-    let relative_path = json_string_at(value, &["relativePath"])?;
-    let absolute_path = resolve_bundle_hint_path(bundle_root, Some(relative_path.as_str()));
-    let exists_on_disk = absolute_path.as_ref().is_some_and(|path| path.exists());
-    let category = json_string_at(value, &["category"]).unwrap_or_else(|| "unknown".to_string());
-    let family = json_string_at(value, &["family"]);
-    let parse_hints = json_string_array_at(value, &["parseHints"]);
-    let intake = detect_artifact_intake(
-        &category,
-        family.as_deref(),
-        &relative_path,
-        absolute_path.as_deref(),
-        exists_on_disk,
-        &parse_hints,
-    );
-
-    Some(EvidenceArtifactRecord {
-        artifact_id: json_string_at(value, &["artifactId"]),
-        category,
-        family,
-        relative_path,
-        absolute_path: absolute_path.map(|value| value.to_string_lossy().to_string()),
-        origin_path: json_string_at(value, &["originPath"]),
-        collected_utc: json_string_at(value, &["collectedUtc"]),
-        status: json_string_at(value, &["status"])
-            .map(|value| value.to_ascii_lowercase())
-            .unwrap_or_else(|| "unknown".to_string()),
-        parse_hints,
-        notes: json_string_at(value, &["notes"]),
-        time_coverage: parse_artifact_time_coverage(value),
-        sha256: json_string_at(value, &["hashes", "sha256"]),
-        exists_on_disk,
-        intake,
-    })
-}
-
-fn detect_artifact_intake(
-    category: &str,
-    family: Option<&str>,
-    relative_path: &str,
-    absolute_path: Option<&Path>,
-    exists_on_disk: bool,
-    parse_hints: &[String],
-) -> EvidenceArtifactIntake {
-    if !exists_on_disk {
-        return EvidenceArtifactIntake {
-            kind: classify_artifact_intake_kind(category),
-            status: EvidenceArtifactIntakeStatus::Missing,
-            recognized_as: None,
-            summary: "Artifact is not available on disk in this bundle.".to_string(),
-            parser_selection: None,
-            parse_diagnostics: None,
-        };
-    }
-
-    match classify_artifact_intake_kind(category) {
-        EvidenceArtifactIntakeKind::Log => detect_log_artifact_intake(relative_path, absolute_path),
-        EvidenceArtifactIntakeKind::RegistrySnapshot => EvidenceArtifactIntake {
-            kind: EvidenceArtifactIntakeKind::RegistrySnapshot,
-            status: EvidenceArtifactIntakeStatus::Recognized,
-            recognized_as: Some("Registry snapshot".to_string()),
-            summary: "Captured as structured registry evidence for offline inspection.".to_string(),
-            parser_selection: None,
-            parse_diagnostics: None,
-        },
-        EvidenceArtifactIntakeKind::EventLogExport => EvidenceArtifactIntake {
-            kind: EvidenceArtifactIntakeKind::EventLogExport,
-            status: EvidenceArtifactIntakeStatus::Recognized,
-            recognized_as: Some("Curated event evidence".to_string()),
-            summary: "Captured as event-log evidence for correlation outside the log parser."
-                .to_string(),
-            parser_selection: None,
-            parse_diagnostics: None,
-        },
-        EvidenceArtifactIntakeKind::CommandOutput => {
-            detect_command_output_artifact_intake(relative_path, family, parse_hints)
-        }
-        EvidenceArtifactIntakeKind::Screenshot => EvidenceArtifactIntake {
-            kind: EvidenceArtifactIntakeKind::Screenshot,
-            status: EvidenceArtifactIntakeStatus::Recognized,
-            recognized_as: Some("Screenshot capture".to_string()),
-            summary: "Captured as visual supporting evidence.".to_string(),
-            parser_selection: None,
-            parse_diagnostics: None,
-        },
-        EvidenceArtifactIntakeKind::Export => EvidenceArtifactIntake {
-            kind: EvidenceArtifactIntakeKind::Export,
-            status: EvidenceArtifactIntakeStatus::Recognized,
-            recognized_as: Some("Exported evidence".to_string()),
-            summary: "Captured as exported supporting evidence.".to_string(),
-            parser_selection: None,
-            parse_diagnostics: None,
-        },
-        EvidenceArtifactIntakeKind::Unknown => EvidenceArtifactIntake {
-            kind: EvidenceArtifactIntakeKind::Unknown,
-            status: EvidenceArtifactIntakeStatus::Unsupported,
-            recognized_as: None,
-            summary: "Captured artifact category is not yet classified by the app.".to_string(),
-            parser_selection: None,
-            parse_diagnostics: None,
-        },
-    }
-}
-
-fn classify_artifact_intake_kind(category: &str) -> EvidenceArtifactIntakeKind {
-    match category.to_ascii_lowercase().as_str() {
-        "logs" => EvidenceArtifactIntakeKind::Log,
-        "registry" => EvidenceArtifactIntakeKind::RegistrySnapshot,
-        "event-log" | "event-logs" => EvidenceArtifactIntakeKind::EventLogExport,
-        "command-output" => EvidenceArtifactIntakeKind::CommandOutput,
-        "screenshots" => EvidenceArtifactIntakeKind::Screenshot,
-        "exports" => EvidenceArtifactIntakeKind::Export,
-        _ => EvidenceArtifactIntakeKind::Unknown,
-    }
-}
-
-fn inspect_evidence_artifact_preview(
-    path: &Path,
-    intake_kind: EvidenceArtifactIntakeKind,
-    origin_path: Option<String>,
-) -> Result<EvidenceArtifactPreview, String> {
-    if !path.exists() {
-        return Err(format!("artifact path does not exist: {}", path.display()));
-    }
-
-    if !path.is_file() {
-        return Err(format!("artifact path is not a file: {}", path.display()));
-    }
-
-    match intake_kind {
-        EvidenceArtifactIntakeKind::RegistrySnapshot => {
-            let registry_snapshot = inspect_registry_snapshot_file(path)
-                .ok_or_else(|| format!("failed to inspect registry snapshot {}", path.display()))?;
-            let summary = format!(
-                "Parsed {} registry key{} and {} value{} from this exported snapshot.",
-                registry_snapshot.key_count,
-                if registry_snapshot.key_count == 1 { "" } else { "s" },
-                registry_snapshot.value_count,
-                if registry_snapshot.value_count == 1 { "" } else { "s" }
-            );
-
-            Ok(EvidenceArtifactPreview {
-                path: normalize_path_string(path),
-                intake_kind,
-                summary,
-                registry_snapshot: Some(registry_snapshot),
-                event_log_export: None,
-            })
-        }
-        EvidenceArtifactIntakeKind::EventLogExport => {
-            let metadata = fs::metadata(path)
-                .map_err(|error| format!("failed to read {} metadata: {}", path.display(), error))?;
-            let export_format = path
-                .extension()
-                .and_then(|extension| extension.to_str())
-                .map(|extension| extension.to_ascii_lowercase())
-                .unwrap_or_else(|| "unknown".to_string());
-            let channel_summary = origin_path
-                .as_deref()
-                .map(|channel| format!("Captured from {}.", channel))
-                .unwrap_or_else(|| "Captured as a curated event-log export.".to_string());
-
-            Ok(EvidenceArtifactPreview {
-                path: normalize_path_string(path),
-                intake_kind,
-                summary: format!(
-                    "{} Review stays bundle-first here; full event extraction is a later Push 2 follow-on.",
-                    channel_summary
-                ),
-                registry_snapshot: None,
-                event_log_export: Some(EvidenceEventLogExportPreview {
-                    channel: origin_path,
-                    file_size_bytes: Some(metadata.len()),
-                    modified_unix_ms: metadata_modified_unix_ms(&metadata),
-                    export_format,
-                }),
-            })
-        }
-        _ => Err("artifact preview is currently supported for registry snapshots and event-log exports only".to_string()),
-    }
-}
-
-fn detect_log_artifact_intake(
-    relative_path: &str,
-    absolute_path: Option<&Path>,
-) -> EvidenceArtifactIntake {
-    let Some(absolute_path) = absolute_path else {
-        return EvidenceArtifactIntake {
-            kind: EvidenceArtifactIntakeKind::Log,
-            status: EvidenceArtifactIntakeStatus::Missing,
-            recognized_as: None,
-            summary: "Artifact is not available on disk in this bundle.".to_string(),
-            parser_selection: None,
-            parse_diagnostics: None,
-        };
-    };
-
-    if !is_text_like_artifact_path(absolute_path) {
-        return EvidenceArtifactIntake {
-            kind: EvidenceArtifactIntakeKind::Log,
-            status: EvidenceArtifactIntakeStatus::Unsupported,
-            recognized_as: Some("Non-text log artifact".to_string()),
-            summary:
-                "This log artifact is not a text log that the current parser pipeline can inspect."
-                    .to_string(),
-            parser_selection: None,
-            parse_diagnostics: None,
-        };
-    }
-
-    let content = match fs::read_to_string(absolute_path) {
-        Ok(content) => content,
-        Err(_) => {
-            return EvidenceArtifactIntake {
-                kind: EvidenceArtifactIntakeKind::Log,
-                status: EvidenceArtifactIntakeStatus::Unsupported,
-                recognized_as: Some("Unreadable text log".to_string()),
-                summary: "The artifact could not be read as UTF-8 text for intake classification."
-                    .to_string(),
-                parser_selection: None,
-                parse_diagnostics: None,
-            };
-        }
-    };
-
-    let resolved_parser = parser::detect::detect_parser(relative_path, &content);
-    let parsed_chunk =
-        parser::parse_content_with_selection(&content, relative_path, &resolved_parser);
-    let parser_selection = resolved_parser.to_info();
-    let recognized_as = Some(describe_parser_selection(&parser_selection));
-    let status = if parser_selection.parse_quality == ParseQuality::TextFallback {
-        EvidenceArtifactIntakeStatus::Generic
-    } else {
-        EvidenceArtifactIntakeStatus::Recognized
-    };
-    let entry_count = u32::try_from(parsed_chunk.entries.len()).unwrap_or(u32::MAX);
-    let parse_diagnostics = EvidenceArtifactParseDiagnostics {
-        total_lines: parsed_chunk.total_lines,
-        entry_count,
-        parse_errors: parsed_chunk.parse_errors,
-        clean_parse: parsed_chunk.parse_errors == 0,
-    };
-    let summary = if status == EvidenceArtifactIntakeStatus::Recognized {
-        if parse_diagnostics.clean_parse {
-            format!(
-                "Recognized as {} and parsed cleanly across {} line{}.",
-                recognized_as.as_deref().unwrap_or("a known log source"),
-                parse_diagnostics.total_lines,
-                if parse_diagnostics.total_lines == 1 {
-                    ""
-                } else {
-                    "s"
-                }
-            )
-        } else {
-            format!(
-                "Recognized as {} with {} parse issue{} across {} line{}.",
-                recognized_as.as_deref().unwrap_or("a known log source"),
-                parse_diagnostics.parse_errors,
-                if parse_diagnostics.parse_errors == 1 {
-                    ""
-                } else {
-                    "s"
-                },
-                parse_diagnostics.total_lines,
-                if parse_diagnostics.total_lines == 1 {
-                    ""
-                } else {
-                    "s"
-                }
-            )
-        }
-    } else {
-        "Read as text, but only generic text fallback was recognized for this artifact.".to_string()
-    };
-
-    EvidenceArtifactIntake {
-        kind: EvidenceArtifactIntakeKind::Log,
-        status,
-        recognized_as,
-        summary,
-        parser_selection: Some(parser_selection),
-        parse_diagnostics: Some(parse_diagnostics),
-    }
-}
-
-fn detect_command_output_artifact_intake(
-    relative_path: &str,
-    family: Option<&str>,
-    parse_hints: &[String],
-) -> EvidenceArtifactIntake {
-    let recognized_as =
-        if text_matches_any(relative_path, &["dsregcmd", "entra", "azuread", "join"])
-            || family.is_some_and(|value| {
-                text_matches_any(value, &["dsregcmd", "entra", "azuread", "join"])
-            })
-            || parse_hints
-                .iter()
-                .any(|value| text_matches_any(value, &["dsregcmd", "entra", "azuread", "join"]))
-        {
-            Some("dsregcmd command output".to_string())
-        } else {
-            family
-                .filter(|value| !value.trim().is_empty())
-                .map(|value| format!("{} command output", value.trim()))
-                .or_else(|| Some("Command output".to_string()))
-        };
-
-    EvidenceArtifactIntake {
-        kind: EvidenceArtifactIntakeKind::CommandOutput,
-        status: EvidenceArtifactIntakeStatus::Recognized,
-        recognized_as,
-        summary: "Captured as command-output evidence for read-only review.".to_string(),
-        parser_selection: None,
-        parse_diagnostics: None,
-    }
-}
-
-fn describe_parser_selection(parser_selection: &ParserSelectionInfo) -> String {
-    match parser_selection.specialization {
-        Some(ParserSpecialization::Ime) => "Intune IME log".to_string(),
-        None => match parser_selection.parser {
-            ParserKind::Ccm => "CCM-style log".to_string(),
-            ParserKind::Simple => "Simple format log".to_string(),
-            ParserKind::Timestamped => "Generic timestamped log".to_string(),
-            ParserKind::Plain => "Plain text log".to_string(),
-            ParserKind::Panther => "Windows Panther log".to_string(),
-            ParserKind::Cbs => "CBS servicing log".to_string(),
-            ParserKind::Dism => "DISM servicing log".to_string(),
-            ParserKind::ReportingEvents => "Windows Update reporting log".to_string(),
-            ParserKind::Msi => "MSI verbose log".to_string(),
-            ParserKind::PsadtLegacy => "PSADT Legacy format log".to_string(),
-            ParserKind::IntuneMacOs => "Intune macOS MDM log".to_string(),
-            ParserKind::Dhcp => "Windows DHCP Server log".to_string(),
-            ParserKind::Burn => "WiX/Burn bootstrapper log".to_string(),
-            ParserKind::Registry => "Windows Registry export".to_string(),
-        },
-    }
-}
-
-fn text_matches_any(value: &str, terms: &[&str]) -> bool {
-    let normalized = value.to_ascii_lowercase();
-    terms.iter().any(|term| normalized.contains(term))
-}
-
-fn is_text_like_artifact_path(path: &Path) -> bool {
-    matches!(
-        path.extension()
-            .and_then(|extension| extension.to_str())
-            .map(|extension| extension.to_ascii_lowercase()),
-        Some(extension) if extension == "log" || extension == "lo_" || extension == "txt"
-    )
-}
-
-fn parse_artifact_time_coverage(value: &Value) -> Option<EvidenceArtifactTimeCoverage> {
-    let time_coverage = json_value_at(value, &["timeCoverage"])?;
-    let start_utc = json_string_at(time_coverage, &["startUtc"]);
-    let end_utc = json_string_at(time_coverage, &["endUtc"]);
-
-    if start_utc.is_none() && end_utc.is_none() {
-        return None;
-    }
-
-    Some(EvidenceArtifactTimeCoverage { start_utc, end_utc })
-}
-
-fn parse_expected_evidence_record(
-    bundle_root: &Path,
-    artifacts: &[EvidenceArtifactRecord],
-    value: &Value,
-) -> Option<ExpectedEvidenceRecord> {
-    let category = json_string_at(value, &["category"])?;
-    let relative_path = json_string_at(value, &["relativePath"])?;
-    let candidate_path = resolve_bundle_hint_path(bundle_root, Some(relative_path.as_str()));
-    let available = artifacts
-        .iter()
-        .any(|artifact| artifact.relative_path == relative_path && artifact.status == "collected")
-        || candidate_path.as_ref().is_some_and(|path| path.exists());
-
-    Some(ExpectedEvidenceRecord {
-        category,
-        relative_path,
-        required: json_bool_at(value, &["required"]).unwrap_or(false),
-        reason: json_string_at(value, &["reason"]),
-        available,
-    })
-}
-
-fn resolve_bundle_primary_entry_points(bundle_root: &Path, manifest: &Value) -> Vec<PathBuf> {
-    let manifest_entry_points =
-        json_string_array_at(manifest, &["intakeHints", "primaryEntryPoints"]);
-    let entry_points = if manifest_entry_points.is_empty() {
-        DEFAULT_BUNDLE_PRIMARY_ENTRY_POINTS
-            .iter()
-            .map(|value| (*value).to_string())
-            .collect()
-    } else {
-        manifest_entry_points
-    };
-
-    entry_points
-        .iter()
-        .filter_map(|entry| resolve_bundle_hint_path(bundle_root, Some(entry.as_str())))
-        .collect()
-}
-
-fn resolve_bundle_hint_path(bundle_root: &Path, raw_path: Option<&str>) -> Option<PathBuf> {
-    let raw_path = raw_path?.trim();
-    if raw_path.is_empty() {
-        return None;
-    }
-
-    let path = PathBuf::from(raw_path);
-    if path.is_absolute() {
-        Some(path)
-    } else {
-        Some(bundle_root.join(path))
-    }
-}
-
-fn json_value_at<'a>(value: &'a Value, path: &[&str]) -> Option<&'a Value> {
-    let mut current = value;
-    for segment in path {
-        current = current.get(*segment)?;
-    }
-    Some(current)
-}
-
-fn json_string_at(value: &Value, path: &[&str]) -> Option<String> {
-    json_value_at(value, path)
-        .and_then(Value::as_str)
-        .map(|value| value.to_string())
-}
-
-fn json_u64_at(value: &Value, path: &[&str]) -> Option<u64> {
-    json_value_at(value, path).and_then(Value::as_u64)
-}
-
-fn json_bool_at(value: &Value, path: &[&str]) -> Option<bool> {
-    json_value_at(value, path).and_then(Value::as_bool)
-}
-
-fn json_string_array_at(value: &Value, path: &[&str]) -> Vec<String> {
-    json_value_at(value, path)
-        .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(Value::as_str)
-                .map(|value| value.to_string())
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
 /// List top-level entries for a folder source.
 #[tauri::command]
-pub fn list_log_folder(path: String) -> Result<FolderListingResult, String> {
+pub fn list_log_folder(path: String) -> Result<FolderListingResult, crate::error::AppError> {
     eprintln!("event=list_log_folder_start path=\"{}\"", path);
 
     let requested_path = PathBuf::from(&path);
 
     if !requested_path.exists() {
-        return Err(format!(
+        return Err(crate::error::AppError::InvalidInput(format!(
             "folder does not exist: {}",
             requested_path.display()
-        ));
+        )));
     }
 
     if !requested_path.is_dir() {
-        return Err(format!(
+        return Err(crate::error::AppError::InvalidInput(format!(
             "path is not a folder: {}",
             requested_path.display()
-        ));
+        )));
     }
 
     let read_dir = fs::read_dir(&requested_path)
-        .map_err(|e| format!("failed to read folder {}: {e}", requested_path.display()))?;
+        .map_err(crate::error::AppError::Io)?;
 
     let mut entries: Vec<FolderEntry> = Vec::new();
 
@@ -1336,617 +405,57 @@ pub fn list_log_folder(path: String) -> Result<FolderListingResult, String> {
     })
 }
 
-#[tauri::command]
-pub fn inspect_evidence_bundle(path: String) -> Result<EvidenceBundleDetails, String> {
-    inspect_evidence_bundle_details(Path::new(&path))
+// ── Shared helpers (pub(crate) for sibling command modules) ─────────────
+
+pub(crate) fn normalize_path_string(path: &Path) -> String {
+    path.to_string_lossy().to_string()
 }
 
-#[tauri::command]
-pub fn inspect_evidence_artifact(
-    path: String,
-    intake_kind: EvidenceArtifactIntakeKind,
-    origin_path: Option<String>,
-) -> Result<EvidenceArtifactPreview, String> {
-    inspect_evidence_artifact_preview(Path::new(&path), intake_kind, origin_path)
+pub(crate) fn metadata_modified_unix_ms(metadata: &fs::Metadata) -> Option<u64> {
+    let duration = metadata.modified().ok()?.duration_since(UNIX_EPOCH).ok()?;
+    u64::try_from(duration.as_millis()).ok()
 }
 
-#[cfg(target_os = "windows")]
-#[allow(clippy::too_many_arguments)]
-fn windows_known_source(
-    id: &str,
-    label: &str,
-    description: &str,
-    path_kind: KnownSourcePathKind,
-    default_path: &str,
-    file_patterns: &[&str],
-    grouping: KnownSourceGroupingMetadata,
-    default_file_intent: Option<KnownSourceDefaultFileIntent>,
-) -> KnownSourceMetadata {
-    let id_text = id.to_string();
+// ── Private helpers ─────────────────────────────────────────────────────
 
-    KnownSourceMetadata {
-        id: id_text.clone(),
-        label: label.to_string(),
-        description: description.to_string(),
-        platform: PlatformKind::Windows,
-        source_kind: LogSourceKind::Known,
-        source: LogSource::Known {
-            source_id: id_text,
-            default_path: default_path.to_string(),
-            path_kind,
-        },
-        file_patterns: file_patterns
-            .iter()
-            .map(|value| (*value).to_string())
-            .collect(),
-        grouping: Some(grouping),
-        default_file_intent,
+fn compare_folder_entries(left: &FolderEntry, right: &FolderEntry) -> Ordering {
+    match (left.is_dir, right.is_dir) {
+        (true, false) => Ordering::Less,
+        (false, true) => Ordering::Greater,
+        _ => {
+            let left_lower = left.name.to_lowercase();
+            let right_lower = right.name.to_lowercase();
+
+            left_lower
+                .cmp(&right_lower)
+                .then_with(|| left.name.cmp(&right.name))
+                .then_with(|| left.path.cmp(&right.path))
+        }
     }
 }
 
-#[cfg(target_os = "windows")]
-fn windows_known_log_sources() -> Vec<KnownSourceMetadata> {
-    vec![
-        windows_known_source(
-            "windows-intune-ime-logs",
-            "Intune IME Logs Folder",
-            "Known log source for Intune Management Extension (IME) app and script diagnostics.",
-            KnownSourcePathKind::Folder,
-            "C:\\ProgramData\\Microsoft\\IntuneManagementExtension\\Logs",
-            &[
-                "IntuneManagementExtension.log",
-                "AppWorkload.log",
-                "AppActionProcessor.log",
-                "AgentExecutor.log",
-                "HealthScripts.log",
-                "*.log",
-            ],
-            KnownSourceGroupingMetadata {
-                family_id: "windows-intune".to_string(),
-                family_label: "Windows Intune".to_string(),
-                group_id: "intune-ime".to_string(),
-                group_label: "Intune IME".to_string(),
-                group_order: 10,
-                source_order: 10,
-            },
-            Some(KnownSourceDefaultFileIntent {
-                selection_behavior:
-                    KnownSourceDefaultFileSelectionBehavior::PreferFileNameThenPattern,
-                preferred_file_names: vec![
-                    "IntuneManagementExtension.log".to_string(),
-                    "AppWorkload.log".to_string(),
-                    "AppActionProcessor.log".to_string(),
-                    "AgentExecutor.log".to_string(),
-                    "HealthScripts.log".to_string(),
-                ],
-            }),
-        ),
-        windows_known_source(
-            "windows-intune-ime-intunemanagementextension-log",
-            "Intune IME: IntuneManagementExtension.log",
-            "Primary IME log for check-ins, policy processing, and app orchestration.",
-            KnownSourcePathKind::File,
-            "C:\\ProgramData\\Microsoft\\IntuneManagementExtension\\Logs\\IntuneManagementExtension.log",
-            &["IntuneManagementExtension*.log"],
-            KnownSourceGroupingMetadata {
-                family_id: "windows-intune".to_string(),
-                family_label: "Windows Intune".to_string(),
-                group_id: "intune-ime".to_string(),
-                group_label: "Intune IME".to_string(),
-                group_order: 10,
-                source_order: 20,
-            },
-            None,
-        ),
-        windows_known_source(
-            "windows-intune-ime-appworkload-log",
-            "Intune IME: AppWorkload.log",
-            "Win32 and WinGet app download/staging/install diagnostics.",
-            KnownSourcePathKind::File,
-            "C:\\ProgramData\\Microsoft\\IntuneManagementExtension\\Logs\\AppWorkload.log",
-            &["AppWorkload*.log"],
-            KnownSourceGroupingMetadata {
-                family_id: "windows-intune".to_string(),
-                family_label: "Windows Intune".to_string(),
-                group_id: "intune-ime".to_string(),
-                group_label: "Intune IME".to_string(),
-                group_order: 10,
-                source_order: 30,
-            },
-            None,
-        ),
-        windows_known_source(
-            "windows-intune-ime-agentexecutor-log",
-            "Intune IME: AgentExecutor.log",
-            "Script execution and remediation output with exit code tracking.",
-            KnownSourcePathKind::File,
-            "C:\\ProgramData\\Microsoft\\IntuneManagementExtension\\Logs\\AgentExecutor.log",
-            &["AgentExecutor*.log"],
-            KnownSourceGroupingMetadata {
-                family_id: "windows-intune".to_string(),
-                family_label: "Windows Intune".to_string(),
-                group_id: "intune-ime".to_string(),
-                group_label: "Intune IME".to_string(),
-                group_order: 10,
-                source_order: 40,
-            },
-            None,
-        ),
-        windows_known_source(
-            "windows-dmclient-logs",
-            "DMClient Local Logs",
-            "MDM DMClient log folder used for local sync diagnostics.",
-            KnownSourcePathKind::Folder,
-            "C:\\Windows\\System32\\config\\systemprofile\\AppData\\Local\\mdm",
-            &["*.log"],
-            KnownSourceGroupingMetadata {
-                family_id: "windows-intune".to_string(),
-                family_label: "Windows Intune".to_string(),
-                group_id: "intune-mdm".to_string(),
-                group_label: "MDM and Enrollment".to_string(),
-                group_order: 20,
-                source_order: 10,
-            },
-            Some(KnownSourceDefaultFileIntent {
-                selection_behavior: KnownSourceDefaultFileSelectionBehavior::PreferPattern,
-                preferred_file_names: Vec::new(),
-            }),
-        ),
-        windows_known_source(
-            "windows-panther-setupact-log",
-            "setupact.log (Panther)",
-            "Primary Windows setup and Autopilot/OOBE action log.",
-            KnownSourcePathKind::File,
-            "C:\\Windows\\Panther\\setupact.log",
-            &["setupact.log"],
-            KnownSourceGroupingMetadata {
-                family_id: "windows-setup".to_string(),
-                family_label: "Windows Setup".to_string(),
-                group_id: "setup-panther".to_string(),
-                group_label: "Panther".to_string(),
-                group_order: 30,
-                source_order: 10,
-            },
-            None,
-        ),
-        windows_known_source(
-            "windows-panther-setuperr-log",
-            "setuperr.log (Panther)",
-            "Error-focused Windows setup and Autopilot/OOBE triage log.",
-            KnownSourcePathKind::File,
-            "C:\\Windows\\Panther\\setuperr.log",
-            &["setuperr.log"],
-            KnownSourceGroupingMetadata {
-                family_id: "windows-setup".to_string(),
-                family_label: "Windows Setup".to_string(),
-                group_id: "setup-panther".to_string(),
-                group_label: "Panther".to_string(),
-                group_order: 30,
-                source_order: 20,
-            },
-            None,
-        ),
-        windows_known_source(
-            "windows-cbs-log",
-            "CBS.log",
-            "Component-Based Servicing log for update and servicing failures.",
-            KnownSourcePathKind::File,
-            "C:\\Windows\\Logs\\CBS\\CBS.log",
-            &["CBS.log"],
-            KnownSourceGroupingMetadata {
-                family_id: "windows-servicing".to_string(),
-                family_label: "Windows Servicing".to_string(),
-                group_id: "servicing-core".to_string(),
-                group_label: "CBS and DISM".to_string(),
-                group_order: 40,
-                source_order: 10,
-            },
-            None,
-        ),
-        windows_known_source(
-            "windows-dism-log",
-            "DISM.log",
-            "Deployment Image Servicing and Management diagnostics log.",
-            KnownSourcePathKind::File,
-            "C:\\Windows\\Logs\\DISM\\dism.log",
-            &["dism.log"],
-            KnownSourceGroupingMetadata {
-                family_id: "windows-servicing".to_string(),
-                family_label: "Windows Servicing".to_string(),
-                group_id: "servicing-core".to_string(),
-                group_label: "CBS and DISM".to_string(),
-                group_order: 40,
-                source_order: 20,
-            },
-            None,
-        ),
-        windows_known_source(
-            "windows-reporting-events-log",
-            "ReportingEvents.log",
-            "Windows Update transaction history in tab-delimited text.",
-            KnownSourcePathKind::File,
-            "C:\\Windows\\SoftwareDistribution\\ReportingEvents.log",
-            &["ReportingEvents.log"],
-            KnownSourceGroupingMetadata {
-                family_id: "windows-servicing".to_string(),
-                family_label: "Windows Servicing".to_string(),
-                group_id: "servicing-update".to_string(),
-                group_label: "Windows Update".to_string(),
-                group_order: 40,
-                source_order: 30,
-            },
-            None,
-        ),
-        // ── Software Deployment ──────────────────────────────────────
-        windows_known_source(
-            "windows-deployment-logs-software",
-            "Software Logs Folder",
-            "Common deployment log output folder used by PSADT, SCCM, and custom installers.",
-            KnownSourcePathKind::Folder,
-            "C:\\Windows\\Logs\\Software",
-            &["*.log"],
-            KnownSourceGroupingMetadata {
-                family_id: "windows-deployment".to_string(),
-                family_label: "Software Deployment".to_string(),
-                group_id: "deployment-logs".to_string(),
-                group_label: "Deployment Logs".to_string(),
-                group_order: 50,
-                source_order: 10,
-            },
-            None,
-        ),
-        windows_known_source(
-            "windows-deployment-ccmcache",
-            "ccmcache Folder",
-            "ConfigMgr client cache folder where packages and scripts are staged.",
-            KnownSourcePathKind::Folder,
-            "C:\\Windows\\ccmcache",
-            &["*.log"],
-            KnownSourceGroupingMetadata {
-                family_id: "windows-deployment".to_string(),
-                family_label: "Software Deployment".to_string(),
-                group_id: "deployment-logs".to_string(),
-                group_label: "Deployment Logs".to_string(),
-                group_order: 50,
-                source_order: 20,
-            },
-            None,
-        ),
-        windows_known_source(
-            "windows-deployment-psadt",
-            "PSADT Logs Folder",
-            "Default PSAppDeployToolkit log output directory.",
-            KnownSourcePathKind::Folder,
-            "C:\\Windows\\Logs\\Software",
-            &["*_PSAppDeployToolkit*.log", "*Deploy-Application*.log", "*.log"],
-            KnownSourceGroupingMetadata {
-                family_id: "windows-deployment".to_string(),
-                family_label: "Software Deployment".to_string(),
-                group_id: "deployment-psadt".to_string(),
-                group_label: "PSADT".to_string(),
-                group_order: 50,
-                source_order: 30,
-            },
-            None,
-        ),
-        windows_known_source(
-            "windows-deployment-msi-log",
-            "MSI Verbose Log Folder",
-            "Default location for MSI verbose install logs (%TEMP%).",
-            KnownSourcePathKind::Folder,
-            "C:\\Windows\\Temp",
-            &["MSI*.LOG", "MSI*.log"],
-            KnownSourceGroupingMetadata {
-                family_id: "windows-deployment".to_string(),
-                family_label: "Software Deployment".to_string(),
-                group_id: "deployment-msi".to_string(),
-                group_label: "MSI Logs".to_string(),
-                group_order: 50,
-                source_order: 40,
-            },
-            None,
-        ),
-        // ── PatchMyPC ───────────────────────────────────────────────────
-        windows_known_source(
-            "windows-deployment-patchmypc-logs",
-            "PatchMyPC Logs Folder",
-            "PatchMyPC client and notification logs (CMTrace format).",
-            KnownSourcePathKind::Folder,
-            "C:\\ProgramData\\PatchMyPC\\Logs",
-            &["*.log"],
-            KnownSourceGroupingMetadata {
-                family_id: "windows-deployment".to_string(),
-                family_label: "Software Deployment".to_string(),
-                group_id: "deployment-patchmypc".to_string(),
-                group_label: "PatchMyPC".to_string(),
-                group_order: 50,
-                source_order: 50,
-            },
-            None,
-        ),
-        windows_known_source(
-            "windows-deployment-patchmypc-install-logs",
-            "PatchMyPC Install Logs",
-            "MSI verbose and WiX/Burn bootstrapper logs from PatchMyPC-managed installations.",
-            KnownSourcePathKind::Folder,
-            "C:\\ProgramData\\PatchMyPCInstallLogs",
-            &["*.log"],
-            KnownSourceGroupingMetadata {
-                family_id: "windows-deployment".to_string(),
-                family_label: "Software Deployment".to_string(),
-                group_id: "deployment-patchmypc".to_string(),
-                group_label: "PatchMyPC".to_string(),
-                group_order: 50,
-                source_order: 60,
-            },
-            None,
-        ),
-    ]
-}
-
-#[cfg(target_os = "macos")]
-#[allow(clippy::too_many_arguments)]
-fn macos_known_source(
-    id: &str,
-    label: &str,
-    description: &str,
-    path_kind: KnownSourcePathKind,
-    default_path: &str,
-    file_patterns: &[&str],
-    grouping: KnownSourceGroupingMetadata,
-    default_file_intent: Option<KnownSourceDefaultFileIntent>,
-) -> KnownSourceMetadata {
-    let id_text = id.to_string();
-
-    KnownSourceMetadata {
-        id: id_text.clone(),
-        label: label.to_string(),
-        description: description.to_string(),
-        platform: PlatformKind::Macos,
-        source_kind: LogSourceKind::Known,
-        source: LogSource::Known {
-            source_id: id_text,
-            default_path: default_path.to_string(),
-            path_kind,
-        },
-        file_patterns: file_patterns
-            .iter()
-            .map(|value| (*value).to_string())
-            .collect(),
-        grouping: Some(grouping),
-        default_file_intent,
+fn compare_aggregate_entries(
+    left: &LogEntry,
+    right: &LogEntry,
+    file_order: &std::collections::HashMap<String, usize>,
+) -> Ordering {
+    match (left.timestamp, right.timestamp) {
+        (Some(left_ts), Some(right_ts)) if left_ts != right_ts => left_ts.cmp(&right_ts),
+        (Some(_), None) => Ordering::Less,
+        (None, Some(_)) => Ordering::Greater,
+        _ => file_order
+            .get(&left.file_path)
+            .copied()
+            .unwrap_or(usize::MAX)
+            .cmp(&file_order.get(&right.file_path).copied().unwrap_or(usize::MAX))
+            .then_with(|| left.line_number.cmp(&right.line_number))
+            .then_with(|| left.message.cmp(&right.message)),
     }
-}
-
-#[cfg(target_os = "macos")]
-fn macos_known_log_sources() -> Vec<KnownSourceMetadata> {
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
-
-    vec![
-        // --- macOS Intune: System-level MDM daemon logs ---
-        macos_known_source(
-            "macos-intune-system-logs",
-            "Intune System Logs",
-            "System-level MDM daemon logs for PKG/DMG installs and root script execution.",
-            KnownSourcePathKind::Folder,
-            "/Library/Logs/Microsoft/Intune",
-            &["*.log"],
-            KnownSourceGroupingMetadata {
-                family_id: "macos-intune".to_string(),
-                family_label: "macOS Intune".to_string(),
-                group_id: "intune-logs".to_string(),
-                group_label: "Intune Logs".to_string(),
-                group_order: 10,
-                source_order: 10,
-            },
-            Some(KnownSourceDefaultFileIntent {
-                selection_behavior:
-                    KnownSourceDefaultFileSelectionBehavior::PreferFileNameThenPattern,
-                preferred_file_names: vec![
-                    "IntuneMDMDaemon.log".to_string(),
-                ],
-            }),
-        ),
-        // --- macOS Intune: User-level MDM agent logs ---
-        macos_known_source(
-            "macos-intune-user-logs",
-            "Intune User Agent Logs",
-            "User-level MDM agent logs for user-context scripts and policies.",
-            KnownSourcePathKind::Folder,
-            &format!("{}/Library/Logs/Microsoft/Intune", home),
-            &["*.log"],
-            KnownSourceGroupingMetadata {
-                family_id: "macos-intune".to_string(),
-                family_label: "macOS Intune".to_string(),
-                group_id: "intune-logs".to_string(),
-                group_label: "Intune Logs".to_string(),
-                group_order: 10,
-                source_order: 20,
-            },
-            None,
-        ),
-        // --- macOS Intune: Script execution logs ---
-        macos_known_source(
-            "macos-intune-scripts-logs",
-            "Intune Script Logs",
-            "Shell script execution logs from Intune script deployments.",
-            KnownSourcePathKind::Folder,
-            "/Library/Logs/Microsoft/IntuneScripts",
-            &["*.log"],
-            KnownSourceGroupingMetadata {
-                family_id: "macos-intune".to_string(),
-                family_label: "macOS Intune".to_string(),
-                group_id: "intune-logs".to_string(),
-                group_label: "Intune Logs".to_string(),
-                group_order: 10,
-                source_order: 30,
-            },
-            None,
-        ),
-        // --- Company Portal ---
-        macos_known_source(
-            "macos-company-portal-logs",
-            "Company Portal Logs",
-            "Company Portal app logs for enrollment, device info, and user registration.",
-            KnownSourcePathKind::Folder,
-            &format!("{}/Library/Logs/CompanyPortal", home),
-            &["*.log"],
-            KnownSourceGroupingMetadata {
-                family_id: "macos-intune".to_string(),
-                family_label: "macOS Intune".to_string(),
-                group_id: "intune-portal".to_string(),
-                group_label: "Company Portal".to_string(),
-                group_order: 20,
-                source_order: 10,
-            },
-            Some(KnownSourceDefaultFileIntent {
-                selection_behavior:
-                    KnownSourceDefaultFileSelectionBehavior::PreferFileNameThenPattern,
-                preferred_file_names: vec![
-                    "CompanyPortal.log".to_string(),
-                ],
-            }),
-        ),
-        // --- macOS install.log ---
-        macos_known_source(
-            "macos-install-log",
-            "install.log",
-            "macOS installer log — PKG installs from Intune and Software Update show up here.",
-            KnownSourcePathKind::File,
-            "/var/log/install.log",
-            &["install.log"],
-            KnownSourceGroupingMetadata {
-                family_id: "macos-system".to_string(),
-                family_label: "macOS System".to_string(),
-                group_id: "system-logs".to_string(),
-                group_label: "System Logs".to_string(),
-                group_order: 30,
-                source_order: 10,
-            },
-            None,
-        ),
-        // --- macOS system.log ---
-        macos_known_source(
-            "macos-system-log",
-            "system.log",
-            "macOS system log — MDM profile installs, daemon crashes, and system events.",
-            KnownSourcePathKind::File,
-            "/var/log/system.log",
-            &["system.log"],
-            KnownSourceGroupingMetadata {
-                family_id: "macos-system".to_string(),
-                family_label: "macOS System".to_string(),
-                group_id: "system-logs".to_string(),
-                group_label: "System Logs".to_string(),
-                group_order: 30,
-                source_order: 20,
-            },
-            None,
-        ),
-        // --- macOS wifi.log ---
-        macos_known_source(
-            "macos-wifi-log",
-            "Wi-Fi Log",
-            "macOS Wi-Fi diagnostic log",
-            KnownSourcePathKind::File,
-            "/var/log/wifi.log",
-            &["wifi.log"],
-            KnownSourceGroupingMetadata {
-                family_id: "macos-system".to_string(),
-                family_label: "macOS System".to_string(),
-                group_id: "system-logs".to_string(),
-                group_label: "System Logs".to_string(),
-                group_order: 30,
-                source_order: 30,
-            },
-            None,
-        ),
-        // --- macOS appfirewall.log ---
-        macos_known_source(
-            "macos-appfirewall-log",
-            "Application Firewall Log",
-            "macOS application firewall log",
-            KnownSourcePathKind::File,
-            "/var/log/appfirewall.log",
-            &["appfirewall.log"],
-            KnownSourceGroupingMetadata {
-                family_id: "macos-system".to_string(),
-                family_label: "macOS System".to_string(),
-                group_id: "system-logs".to_string(),
-                group_label: "System Logs".to_string(),
-                group_order: 30,
-                source_order: 40,
-            },
-            None,
-        ),
-        // --- Microsoft Defender logs ---
-        macos_known_source(
-            "macos-defender-logs",
-            "Defender Logs",
-            "Microsoft Defender for Endpoint install and error logs.",
-            KnownSourcePathKind::Folder,
-            "/Library/Logs/Microsoft/mdatp",
-            &["*.log"],
-            KnownSourceGroupingMetadata {
-                family_id: "macos-defender".to_string(),
-                family_label: "macOS Defender".to_string(),
-                group_id: "defender-logs".to_string(),
-                group_label: "Defender Logs".to_string(),
-                group_order: 40,
-                source_order: 10,
-            },
-            Some(KnownSourceDefaultFileIntent {
-                selection_behavior:
-                    KnownSourceDefaultFileSelectionBehavior::PreferFileNameThenPattern,
-                preferred_file_names: vec![
-                    "microsoft_defender_core_err.log".to_string(),
-                    "install.log".to_string(),
-                ],
-            }),
-        ),
-    ]
-}
-
-pub fn build_known_log_sources() -> Vec<KnownSourceMetadata> {
-    #[cfg(target_os = "windows")]
-    {
-        windows_known_log_sources()
-    }
-
-    #[cfg(target_os = "macos")]
-    {
-        macos_known_log_sources()
-    }
-
-    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-    {
-        Vec::new()
-    }
-}
-
-/// Return known platform log source metadata.
-#[tauri::command]
-pub fn parse_registry_file(path: String) -> Result<crate::parser::registry::RegistryParseResult, String> {
-    let content = parser::read_file_content(&path)?;
-    let file_size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
-    Ok(crate::parser::registry::parse_registry_content(&content, &path, file_size))
-}
-
-#[tauri::command]
-pub fn get_known_log_sources() -> Result<Vec<KnownSourceMetadata>, String> {
-    let sources = build_known_log_sources();
-
-    eprintln!("event=get_known_log_sources count={}", sources.len());
-
-    Ok(sources)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        inspect_evidence_artifact, inspect_evidence_bundle, list_log_folder,
-        EvidenceArtifactIntakeKind,
-    };
+    use super::list_log_folder;
     use std::fs;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -2014,140 +523,6 @@ mod tests {
             .all(
                 |path| !path.ends_with("evidence\\missing") && !path.ends_with("evidence/missing")
             ));
-
-        fs::remove_dir_all(&bundle_dir).expect("remove temp bundle dir");
-    }
-
-    #[test]
-    fn inspect_evidence_bundle_returns_inventory_and_notes_preview() {
-        let bundle_dir = create_temp_dir("file-ops-bundle-details");
-        fs::create_dir_all(bundle_dir.join("evidence").join("logs")).expect("create logs dir");
-        fs::create_dir_all(bundle_dir.join("evidence").join("registry"))
-            .expect("create registry dir");
-        fs::write(
-            bundle_dir.join("evidence").join("logs").join("IntuneManagementExtension.log"),
-            "<![LOG[[Win32App] Processing policy]LOG]!><time=\"11:48:12.2482476\" date=\"3-12-2025\" component=\"IntuneManagementExtension\" context=\"\" type=\"1\" thread=\"14\" file=\"\">",
-        )
-        .expect("write log");
-        fs::write(bundle_dir.join("notes.md"), "bundle notes").expect("write notes");
-        fs::write(bundle_dir.join("manifest.json"), sample_bundle_manifest())
-            .expect("write manifest");
-
-        let result = inspect_evidence_bundle(bundle_dir.to_string_lossy().to_string())
-            .expect("inspect bundle");
-        let log_artifact = result
-            .artifacts
-            .iter()
-            .find(|artifact| artifact.category == "logs")
-            .expect("log artifact");
-        let registry_artifact = result
-            .artifacts
-            .iter()
-            .find(|artifact| artifact.category == "registry")
-            .expect("registry artifact");
-
-        assert_eq!(
-            result.bundle_root_path,
-            bundle_dir.to_string_lossy().to_string()
-        );
-        assert_eq!(result.notes_content.as_deref(), Some("bundle notes"));
-        assert_eq!(result.artifacts.len(), 2);
-        assert!(result
-            .artifacts
-            .iter()
-            .any(|artifact| artifact.exists_on_disk));
-        assert_eq!(
-            log_artifact.intake.kind,
-            super::EvidenceArtifactIntakeKind::Log
-        );
-        assert_eq!(
-            log_artifact.intake.status,
-            super::EvidenceArtifactIntakeStatus::Recognized
-        );
-        assert_eq!(
-            log_artifact.intake.recognized_as.as_deref(),
-            Some("Intune IME log")
-        );
-        assert!(log_artifact.intake.parser_selection.is_some());
-        assert_eq!(
-            log_artifact
-                .intake
-                .parse_diagnostics
-                .as_ref()
-                .map(|diagnostics| diagnostics.parse_errors),
-            Some(0)
-        );
-        assert_eq!(
-            registry_artifact.intake.kind,
-            super::EvidenceArtifactIntakeKind::RegistrySnapshot
-        );
-        assert_eq!(
-            registry_artifact.intake.status,
-            super::EvidenceArtifactIntakeStatus::Missing
-        );
-        assert_eq!(result.expected_evidence.len(), 2);
-        assert!(result.expected_evidence.iter().any(|entry| entry.available));
-        assert!(result
-            .observed_gaps
-            .iter()
-            .any(|gap| gap.contains("registry")));
-        assert!(result
-            .priority_questions
-            .iter()
-            .any(|question| question.contains("policy")));
-
-        fs::remove_dir_all(&bundle_dir).expect("remove temp bundle dir");
-    }
-
-    #[test]
-    fn inspect_evidence_artifact_previews_registry_and_event_exports() {
-        let bundle_dir = create_temp_dir("file-ops-artifact-preview");
-        let registry_dir = bundle_dir.join("evidence").join("registry");
-        let event_dir = bundle_dir.join("evidence").join("event-logs");
-        fs::create_dir_all(&registry_dir).expect("create registry dir");
-        fs::create_dir_all(&event_dir).expect("create event dir");
-
-        let registry_path = registry_dir.join("policymanager-device.reg");
-        fs::write(
-            &registry_path,
-            r#"Windows Registry Editor Version 5.00
-
-[HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\PolicyManager\Current\Device\PassportForWork\Policies]
-"UsePassportForWork"=dword:00000001
-"TenantName"="Contoso"
-"#,
-        )
-        .expect("write registry export");
-
-        let event_path = event_dir.join("device-management-admin.evtx");
-        fs::write(&event_path, b"EVTX").expect("write event log export");
-
-        let registry_preview = inspect_evidence_artifact(
-            registry_path.to_string_lossy().to_string(),
-            EvidenceArtifactIntakeKind::RegistrySnapshot,
-            Some("HKLM\\SOFTWARE\\Microsoft\\PolicyManager".to_string()),
-        )
-        .expect("inspect registry artifact");
-        let event_preview = inspect_evidence_artifact(
-            event_path.to_string_lossy().to_string(),
-            EvidenceArtifactIntakeKind::EventLogExport,
-            Some(
-                "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin"
-                    .to_string(),
-            ),
-        )
-        .expect("inspect event artifact");
-
-        assert!(registry_preview.registry_snapshot.is_some());
-        assert!(registry_preview.summary.contains("registry key"));
-        assert!(event_preview.event_log_export.is_some());
-        assert_eq!(
-            event_preview
-                .event_log_export
-                .as_ref()
-                .and_then(|preview| preview.channel.as_deref()),
-            Some("Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin")
-        );
 
         fs::remove_dir_all(&bundle_dir).expect("remove temp bundle dir");
     }

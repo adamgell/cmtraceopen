@@ -15,7 +15,7 @@ pub async fn collect_diagnostics(
     output_root: Option<String>,
     enabled_families: Option<Vec<String>>,
     app: AppHandle,
-) -> Result<CollectionResult, String> {
+) -> Result<CollectionResult, crate::error::AppError> {
     collect_diagnostics_impl(request_id, output_root, enabled_families, app).await
 }
 
@@ -25,20 +25,20 @@ async fn collect_diagnostics_impl(
     output_root: Option<String>,
     enabled_families: Option<Vec<String>>,
     app: AppHandle,
-) -> Result<CollectionResult, String> {
+) -> Result<CollectionResult, crate::error::AppError> {
     tokio::task::spawn_blocking(move || {
         crate::collector::engine::run_collection(request_id, output_root, enabled_families, app)
     })
     .await
     .map_err(|e| {
         if e.is_panic() {
-            format!("collection task panicked: {e}")
+            crate::error::AppError::Internal(format!("collection task panicked: {e}"))
         } else if e.is_cancelled() {
-            "collection task was cancelled".to_string()
+            crate::error::AppError::Internal("collection task was cancelled".to_string())
         } else {
-            format!("collection task failed to join: {e}")
+            crate::error::AppError::Internal(format!("collection task failed to join: {e}"))
         }
-    })?
+    })?.map_err(Into::into)
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -47,6 +47,6 @@ async fn collect_diagnostics_impl(
     _output_root: Option<String>,
     _enabled_families: Option<Vec<String>>,
     _app: AppHandle,
-) -> Result<CollectionResult, String> {
-    Err("Diagnostics collection is only supported on Windows.".to_string())
+) -> Result<CollectionResult, crate::error::AppError> {
+    Err(crate::error::AppError::PlatformUnsupported("Diagnostics collection is only supported on Windows.".to_string()))
 }

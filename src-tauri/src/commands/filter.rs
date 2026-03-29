@@ -38,7 +38,7 @@ pub struct FilterClause {
 pub fn apply_filter(
     entries: Vec<LogEntry>,
     clauses: Vec<FilterClause>,
-) -> Result<Vec<u64>, String> {
+) -> Result<Vec<u64>, crate::error::AppError> {
     if clauses.is_empty() {
         // No filter — return all IDs
         return Ok(entries.iter().map(|e| e.id).collect());

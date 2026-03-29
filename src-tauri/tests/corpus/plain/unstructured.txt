@@ -1,0 +1,4 @@
+This is a plain text log file with no structured format.
+It should fall back to the plain text parser.
+Line 3 of unstructured content.
+Final line of the file.

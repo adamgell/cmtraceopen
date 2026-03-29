@@ -116,7 +116,7 @@ pub fn run_collection<R: Runtime>(
     let _ = progress_handle.join();
 
     // Aggregate results.
-    let all_results = results.lock().unwrap();
+    let all_results = results.lock().expect("collector results mutex poisoned");
     let counts = compute_counts(&all_results);
     let gaps = compute_gaps(&all_results);
     let duration_ms = start.elapsed().as_millis() as u64;

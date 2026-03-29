@@ -1,0 +1,4 @@
+<![LOG[Good timestamp]LOG]!><time="08:00:00.0000000" date="3-15-2026" component="CcmExec" context="" type="1" thread="100" file="">
+<![LOG[Bad time field]LOG]!><time="not-a-time" date="3-15-2026" component="CcmExec" context="" type="1" thread="100" file="">
+<![LOG[Bad date field]LOG]!><time="08:00:01.0000000" date="not-a-date" component="CcmExec" context="" type="1" thread="100" file="">
+<![LOG[Good after bad]LOG]!><time="08:00:03.0000000" date="3-15-2026" component="CcmExec" context="" type="1" thread="100" file="">

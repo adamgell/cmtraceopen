@@ -1,38 +1,38 @@
 use crate::macos_diag::models::*;
 
 #[tauri::command]
-pub fn macos_scan_environment() -> Result<MacosDiagEnvironment, String> {
-    crate::macos_diag::environment::scan_environment_impl()
+pub fn macos_scan_environment() -> Result<MacosDiagEnvironment, crate::error::AppError> {
+    crate::macos_diag::environment::scan_environment_impl().map_err(Into::into)
 }
 
 #[tauri::command]
-pub fn macos_scan_intune_logs() -> Result<MacosIntuneLogScanResult, String> {
+pub fn macos_scan_intune_logs() -> Result<MacosIntuneLogScanResult, crate::error::AppError> {
     macos_scan_intune_logs_impl()
 }
 
 #[tauri::command]
-pub fn macos_list_profiles() -> Result<MacosProfilesResult, String> {
-    crate::macos_diag::profiles::list_profiles_impl()
+pub fn macos_list_profiles() -> Result<MacosProfilesResult, crate::error::AppError> {
+    crate::macos_diag::profiles::list_profiles_impl().map_err(Into::into)
 }
 
 #[tauri::command]
-pub fn macos_inspect_defender() -> Result<MacosDefenderResult, String> {
-    crate::macos_diag::defender::inspect_defender_impl()
+pub fn macos_inspect_defender() -> Result<MacosDefenderResult, crate::error::AppError> {
+    crate::macos_diag::defender::inspect_defender_impl().map_err(Into::into)
 }
 
 #[tauri::command]
-pub fn macos_list_packages() -> Result<MacosPackagesResult, String> {
-    crate::macos_diag::packages::list_packages_impl()
+pub fn macos_list_packages() -> Result<MacosPackagesResult, crate::error::AppError> {
+    crate::macos_diag::packages::list_packages_impl().map_err(Into::into)
 }
 
 #[tauri::command]
-pub fn macos_get_package_info(package_id: String) -> Result<MacosPackageInfo, String> {
-    crate::macos_diag::packages::get_package_info_impl(&package_id)
+pub fn macos_get_package_info(package_id: String) -> Result<MacosPackageInfo, crate::error::AppError> {
+    crate::macos_diag::packages::get_package_info_impl(&package_id).map_err(Into::into)
 }
 
 #[tauri::command]
-pub fn macos_get_package_files(package_id: String) -> Result<MacosPackageFiles, String> {
-    crate::macos_diag::packages::get_package_files_impl(&package_id)
+pub fn macos_get_package_files(package_id: String) -> Result<MacosPackageFiles, crate::error::AppError> {
+    crate::macos_diag::packages::get_package_files_impl(&package_id).map_err(Into::into)
 }
 
 #[tauri::command]
@@ -40,7 +40,7 @@ pub fn macos_query_unified_log(
     preset_id: String,
     time_range: Option<MacosUnifiedLogTimeRange>,
     result_cap: Option<usize>,
-) -> Result<MacosUnifiedLogResult, String> {
+) -> Result<MacosUnifiedLogResult, crate::error::AppError> {
     // Clamp result_cap to a reasonable range to avoid excessive resource usage
     let capped = result_cap.unwrap_or(5000).clamp(1, 50_000);
 
@@ -48,22 +48,22 @@ pub fn macos_query_unified_log(
         &preset_id,
         time_range,
         capped,
-    )
+    ).map_err(Into::into)
 }
 
 #[tauri::command]
-pub fn macos_open_system_settings() -> Result<(), String> {
+pub fn macos_open_system_settings() -> Result<(), crate::error::AppError> {
     #[cfg(target_os = "macos")]
     {
         std::process::Command::new("open")
             .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles")
             .spawn()
-            .map_err(|e| format!("Failed to open System Settings: {}", e))?;
+            .map_err(|e| crate::error::AppError::Internal(format!("Failed to open System Settings: {}", e)))?;
         Ok(())
     }
     #[cfg(not(target_os = "macos"))]
     {
-        Err("Opening System Settings is only available on macOS.".to_string())
+        Err(crate::error::AppError::PlatformUnsupported("Opening System Settings is only available on macOS.".to_string()))
     }
 }
 
@@ -72,7 +72,7 @@ pub fn macos_open_system_settings() -> Result<(), String> {
 // ---------------------------------------------------------------------------
 
 #[cfg(target_os = "macos")]
-fn macos_scan_intune_logs_impl() -> Result<MacosIntuneLogScanResult, String> {
+fn macos_scan_intune_logs_impl() -> Result<MacosIntuneLogScanResult, crate::error::AppError> {
     use crate::macos_diag::environment::scan_log_directory;
 
     log::info!("Scanning Intune log directories on macOS");
@@ -114,6 +114,6 @@ fn macos_scan_intune_logs_impl() -> Result<MacosIntuneLogScanResult, String> {
 }
 
 #[cfg(not(target_os = "macos"))]
-fn macos_scan_intune_logs_impl() -> Result<MacosIntuneLogScanResult, String> {
-    Err("macOS Diagnostics is only available on macOS.".to_string())
+fn macos_scan_intune_logs_impl() -> Result<MacosIntuneLogScanResult, crate::error::AppError> {
+    Err(crate::error::AppError::PlatformUnsupported("macOS Diagnostics is only available on macOS.".to_string()))
 }

@@ -614,10 +614,10 @@ fn collect_log_files(dir: &Path, out: &mut Vec<String>) {
 #[tauri::command]
 pub fn analyze_deployment_folder(
     folder_path: String,
-) -> Result<DeploymentAnalysisResult, String> {
+) -> Result<DeploymentAnalysisResult, crate::error::AppError> {
     let dir = Path::new(&folder_path);
     if !dir.is_dir() {
-        return Err(format!("Not a directory: {}", folder_path));
+        return Err(crate::error::AppError::InvalidInput(format!("Not a directory: {}", folder_path)));
     }
 
     let mut log_files = Vec::new();

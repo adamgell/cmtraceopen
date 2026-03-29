@@ -4,7 +4,7 @@ use serde::Serialize;
 use tauri::menu::{Menu, MenuItem, Submenu};
 use tauri::{AppHandle, Emitter, Runtime};
 
-use crate::commands::file_ops::{build_known_log_sources, KnownSourceGroupingMetadata};
+use crate::commands::known_sources::{build_known_log_sources, KnownSourceGroupingMetadata};
 
 pub const MENU_EVENT_APP_ACTION: &str = "app-menu-action";
 

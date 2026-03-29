@@ -1,3 +1,4 @@
+pub mod bundle_ops;
 pub mod collector;
 pub mod deployment;
 pub mod dsregcmd;
@@ -7,6 +8,10 @@ pub mod file_ops;
 pub mod filter;
 pub mod fonts;
 pub mod intune;
+pub mod intune_bundle;
+pub mod intune_diagnostics;
+pub mod known_sources;
 pub mod macos_diag;
 pub mod parsing;
+pub mod registry_ops;
 pub mod system_preferences;

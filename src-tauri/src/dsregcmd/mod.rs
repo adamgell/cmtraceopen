@@ -1,5 +1,7 @@
 pub mod connectivity;
+mod derive;
 pub mod event_logs;
+mod extended;
 pub mod models;
 pub mod parser;
 pub mod registry;
