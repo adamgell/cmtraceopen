@@ -3,18 +3,32 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use evtx::EvtxParser;
+#[cfg(target_os = "windows")]
+use regex::Regex;
 use serde_json::Value;
+#[cfg(target_os = "windows")]
+use std::sync::OnceLock;
 
+#[cfg(target_os = "windows")]
+use crate::intune::eventlog_win32;
 use super::models::{
-    SysmonConfig, SysmonEvent, SysmonEventType, SysmonEventTypeCount, SysmonSeverity,
-    SysmonSummary,
+    RankedItem, SecuritySummary, SysmonConfig, SysmonDashboardData, SysmonEvent, SysmonEventType,
+    SysmonEventTypeCount, SysmonSeverity, SysmonSummary, TimeBucket,
 };
 
 /// Maximum entries to parse from a single EVTX file.
 const MAX_ENTRIES_PER_FILE: usize = 100_000;
 
+/// Maximum entries to pull from the live Windows Event Log.
+#[cfg(target_os = "windows")]
+const MAX_LIVE_ENTRIES: usize = 10_000;
+
 /// The Sysmon ETW provider name.
 const SYSMON_PROVIDER: &str = "Microsoft-Windows-Sysmon";
+
+/// The Sysmon Operational event log channel.
+#[cfg(target_os = "windows")]
+const SYSMON_CHANNEL: &str = "Microsoft-Windows-Sysmon/Operational";
 
 // ---------------------------------------------------------------------------
 // File discovery
@@ -394,6 +408,154 @@ pub fn extract_config(events: &[SysmonEvent], summary: &SysmonSummary) -> Sysmon
 }
 
 // ---------------------------------------------------------------------------
+// Dashboard aggregations
+// ---------------------------------------------------------------------------
+
+/// Builds pre-computed dashboard aggregations from parsed events.
+pub fn build_dashboard_data(events: &[SysmonEvent]) -> SysmonDashboardData {
+    use chrono::{DateTime, Utc};
+
+    const TOP_N: usize = 20;
+
+    let mut minute_buckets: HashMap<i64, u64> = HashMap::new();
+    let mut hourly_buckets: HashMap<i64, u64> = HashMap::new();
+    let mut daily_buckets: HashMap<i64, u64> = HashMap::new();
+
+    let mut process_counts: HashMap<String, u64> = HashMap::new();
+    let mut dest_counts: HashMap<String, u64> = HashMap::new();
+    let mut port_counts: HashMap<String, u64> = HashMap::new();
+    let mut dns_counts: HashMap<String, u64> = HashMap::new();
+    let mut file_counts: HashMap<String, u64> = HashMap::new();
+    let mut registry_counts: HashMap<String, u64> = HashMap::new();
+
+    let mut total_warnings: u64 = 0;
+    let mut total_errors: u64 = 0;
+    let mut security_type_counts: HashMap<String, u64> = HashMap::new();
+
+    for event in events {
+        if let Some(ms) = event.timestamp_ms {
+            let minute_key = (ms / 60_000) * 60_000;
+            let hourly_key = (ms / 3_600_000) * 3_600_000;
+            let daily_key = (ms / 86_400_000) * 86_400_000;
+            *minute_buckets.entry(minute_key).or_insert(0) += 1;
+            *hourly_buckets.entry(hourly_key).or_insert(0) += 1;
+            *daily_buckets.entry(daily_key).or_insert(0) += 1;
+        }
+
+        if let Some(ref image) = event.image {
+            if !image.is_empty() {
+                *process_counts.entry(image.clone()).or_insert(0) += 1;
+            }
+        }
+
+        if event.event_id == 3 {
+            let dest = event
+                .destination_hostname
+                .as_deref()
+                .filter(|s| !s.is_empty())
+                .or(event.destination_ip.as_deref().filter(|s| !s.is_empty()));
+            if let Some(d) = dest {
+                *dest_counts.entry(d.to_string()).or_insert(0) += 1;
+            }
+            if let Some(port) = event.destination_port {
+                *port_counts.entry(port.to_string()).or_insert(0) += 1;
+            }
+        }
+
+        if event.event_id == 22 {
+            if let Some(ref qname) = event.query_name {
+                if !qname.is_empty() {
+                    *dns_counts.entry(qname.clone()).or_insert(0) += 1;
+                }
+            }
+        }
+
+        if matches!(event.event_id, 2 | 11 | 15 | 23 | 24 | 26 | 27 | 28 | 29) {
+            if let Some(ref tf) = event.target_filename {
+                if !tf.is_empty() {
+                    *file_counts.entry(tf.clone()).or_insert(0) += 1;
+                }
+            }
+        }
+
+        if let 12..=14 = event.event_id {
+            if let Some(ref to) = event.target_object {
+                if !to.is_empty() {
+                    *registry_counts.entry(to.clone()).or_insert(0) += 1;
+                }
+            }
+        }
+
+        match event.severity {
+            SysmonSeverity::Warning => {
+                total_warnings += 1;
+                *security_type_counts
+                    .entry(event.event_type.display_name().to_string())
+                    .or_insert(0) += 1;
+            }
+            SysmonSeverity::Error => {
+                total_errors += 1;
+                *security_type_counts
+                    .entry(event.event_type.display_name().to_string())
+                    .or_insert(0) += 1;
+            }
+            SysmonSeverity::Info => {}
+        }
+    }
+
+    let buckets_to_vec = |map: HashMap<i64, u64>| -> Vec<TimeBucket> {
+        let mut vec: Vec<TimeBucket> = map
+            .into_iter()
+            .map(|(ms, count)| {
+                let ts = DateTime::<Utc>::from_timestamp_millis(ms)
+                    .map(|dt| dt.to_rfc3339())
+                    .unwrap_or_default();
+                TimeBucket {
+                    timestamp: ts,
+                    timestamp_ms: ms,
+                    count,
+                }
+            })
+            .collect();
+        vec.sort_by_key(|b| b.timestamp_ms);
+        vec
+    };
+
+    let top_n = |map: HashMap<String, u64>| -> Vec<RankedItem> {
+        let mut vec: Vec<RankedItem> = map
+            .into_iter()
+            .map(|(name, count)| RankedItem { name, count })
+            .collect();
+        vec.sort_by(|a, b| b.count.cmp(&a.count));
+        vec.truncate(TOP_N);
+        vec
+    };
+
+    let mut security_by_type: Vec<RankedItem> = security_type_counts
+        .into_iter()
+        .map(|(name, count)| RankedItem { name, count })
+        .collect();
+    security_by_type.sort_by(|a, b| b.count.cmp(&a.count));
+
+    SysmonDashboardData {
+        timeline_minute: buckets_to_vec(minute_buckets),
+        timeline_hourly: buckets_to_vec(hourly_buckets),
+        timeline_daily: buckets_to_vec(daily_buckets),
+        top_processes: top_n(process_counts),
+        top_destinations: top_n(dest_counts),
+        top_ports: top_n(port_counts),
+        top_dns_queries: top_n(dns_counts),
+        security_events: SecuritySummary {
+            total_warnings,
+            total_errors,
+            events_by_type: security_by_type,
+        },
+        top_target_files: top_n(file_counts),
+        top_registry_keys: top_n(registry_counts),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -573,6 +735,316 @@ fn build_generic_message(type_label: &str, event_data: &Value) -> String {
         }
     } else {
         format!("[{type_label}]")
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Live Windows Event Log support
+// ---------------------------------------------------------------------------
+
+#[cfg(target_os = "windows")]
+fn live_provider_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
+        Regex::new(r#"<Provider[^>]*Name=['\"]([^'\"]+)['\"]"#)
+            .expect("provider regex must compile")
+    })
+}
+#[cfg(target_os = "windows")]
+fn live_event_id_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
+        Regex::new(r"<EventID(?:\s[^>]*)?>(\d+)</EventID>")
+            .expect("event id regex must compile")
+    })
+}
+#[cfg(target_os = "windows")]
+fn live_time_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
+        Regex::new(r#"<TimeCreated[^>]*SystemTime=['\"]([^'\"]+)['\"]"#)
+            .expect("time regex must compile")
+    })
+}
+#[cfg(target_os = "windows")]
+fn live_computer_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
+        Regex::new(r"<Computer>(.*?)</Computer>").expect("computer regex must compile")
+    })
+}
+#[cfg(target_os = "windows")]
+fn live_record_id_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
+        Regex::new(r"<EventRecordID>(\d+)</EventRecordID>")
+            .expect("record id regex must compile")
+    })
+}
+
+#[cfg(target_os = "windows")]
+fn extract_xml_value(text: &str, regex: &Regex) -> Option<String> {
+    regex
+        .captures(text)
+        .and_then(|captures| captures.get(1).map(|value| value.as_str().to_string()))
+}
+
+/// Extract a named Data element value from Sysmon XML EventData.
+/// Pattern: `<Data Name="FieldName">value</Data>`
+#[cfg(target_os = "windows")]
+fn extract_event_data_field(xml: &str, field_name: &str) -> Option<String> {
+    // Build pattern: <Data Name="FieldName">...</Data>
+    let pattern = format!(
+        r#"<Data Name=['\"]{}['\"]>(.*?)</Data>"#,
+        regex::escape(field_name)
+    );
+    let re = Regex::new(&pattern).ok()?;
+    re.captures(xml)
+        .and_then(|captures| captures.get(1))
+        .map(|value| decode_xml_text(value.as_str()))
+        .filter(|value| !value.is_empty() && value != "-")
+}
+
+#[cfg(target_os = "windows")]
+fn decode_xml_text(value: &str) -> String {
+    value
+        .replace("&#13;", "\r")
+        .replace("&#10;", "\n")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&apos;", "'")
+        .replace("&amp;", "&")
+}
+
+/// Query the live Windows Event Log for Sysmon events.
+///
+/// Returns parsed `SysmonEvent` records from the
+/// `Microsoft-Windows-Sysmon/Operational` channel.
+#[cfg(target_os = "windows")]
+pub fn parse_sysmon_live_events() -> Result<Vec<SysmonEvent>, String> {
+    let result = eventlog_win32::query_live_channel(SYSMON_CHANNEL, MAX_LIVE_ENTRIES)
+        .map_err(|e| format!("Failed to query live Sysmon event log: {}", e))?;
+
+    let source_file = result.source_file;
+    let mut events = Vec::new();
+
+    for record in result.records {
+        let xml = &record.xml;
+
+        // Verify this is a Sysmon event
+        let provider = match extract_xml_value(xml, live_provider_re()) {
+            Some(p) if p == SYSMON_PROVIDER => p,
+            _ => continue,
+        };
+        let _ = provider;
+
+        let event_id = extract_xml_value(xml, live_event_id_re())
+            .and_then(|v| v.parse::<u32>().ok())
+            .unwrap_or(0);
+
+        let timestamp = match extract_xml_value(xml, live_time_re()) {
+            Some(ts) => ts,
+            None => continue,
+        };
+        let timestamp_ms = parse_timestamp_ms(&timestamp);
+
+        let computer = extract_xml_value(xml, live_computer_re())
+            .map(|v| decode_xml_text(&v));
+
+        let record_id = extract_xml_value(xml, live_record_id_re())
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(0);
+
+        let event_type = SysmonEventType::from_event_id(event_id);
+        let severity = derive_severity(event_id);
+
+        // Extract EventData fields from XML
+        let rule_name = extract_event_data_field(xml, "RuleName");
+        let utc_time = extract_event_data_field(xml, "UtcTime");
+        let process_guid = extract_event_data_field(xml, "ProcessGuid");
+        let process_id = extract_event_data_field(xml, "ProcessId")
+            .and_then(|v| v.parse().ok());
+        let image = extract_event_data_field(xml, "Image");
+        let command_line = extract_event_data_field(xml, "CommandLine");
+        let user = extract_event_data_field(xml, "User");
+        let hashes = extract_event_data_field(xml, "Hashes");
+        let parent_image = extract_event_data_field(xml, "ParentImage");
+        let parent_command_line = extract_event_data_field(xml, "ParentCommandLine");
+        let parent_process_id = extract_event_data_field(xml, "ParentProcessId")
+            .and_then(|v| v.parse().ok());
+        let target_filename = extract_event_data_field(xml, "TargetFilename");
+        let protocol = extract_event_data_field(xml, "Protocol");
+        let source_ip = extract_event_data_field(xml, "SourceIp");
+        let source_port = extract_event_data_field(xml, "SourcePort")
+            .and_then(|v| v.parse().ok());
+        let destination_ip = extract_event_data_field(xml, "DestinationIp");
+        let destination_port = extract_event_data_field(xml, "DestinationPort")
+            .and_then(|v| v.parse().ok());
+        let destination_hostname = extract_event_data_field(xml, "DestinationHostname");
+        let target_object = extract_event_data_field(xml, "TargetObject");
+        let details = extract_event_data_field(xml, "Details");
+        let query_name = extract_event_data_field(xml, "QueryName");
+        let query_results = extract_event_data_field(xml, "QueryResults");
+        let source_image = extract_event_data_field(xml, "SourceImage");
+        let target_image = extract_event_data_field(xml, "TargetImage");
+        let granted_access = extract_event_data_field(xml, "GrantedAccess");
+
+        // Build message from rendered message or from fields
+        let message = record
+            .rendered_message
+            .filter(|m| !m.trim().is_empty())
+            .unwrap_or_else(|| {
+                build_message_from_fields(
+                    event_id,
+                    &event_type,
+                    image.as_deref(),
+                    command_line.as_deref(),
+                    user.as_deref(),
+                    destination_ip.as_deref(),
+                    destination_port,
+                    protocol.as_deref(),
+                    target_filename.as_deref(),
+                    source_image.as_deref(),
+                    target_image.as_deref(),
+                    granted_access.as_deref(),
+                    query_name.as_deref(),
+                    query_results.as_deref(),
+                    target_object.as_deref(),
+                )
+            });
+
+        events.push(SysmonEvent {
+            id: events.len() as u64,
+            event_id,
+            event_type,
+            event_type_display: event_type.display_name().to_string(),
+            severity,
+            timestamp,
+            timestamp_ms,
+            computer,
+            record_id,
+            rule_name,
+            utc_time,
+            process_guid,
+            process_id,
+            image,
+            command_line,
+            user,
+            hashes,
+            parent_image,
+            parent_command_line,
+            parent_process_id,
+            target_filename,
+            protocol,
+            source_ip,
+            source_port,
+            destination_ip,
+            destination_port,
+            destination_hostname,
+            target_object,
+            details,
+            query_name,
+            query_results,
+            source_image,
+            target_image,
+            granted_access,
+            message,
+            source_file: source_file.clone(),
+        });
+    }
+
+    Ok(events)
+}
+
+/// Non-Windows stub for live event log queries.
+#[cfg(not(target_os = "windows"))]
+pub fn parse_sysmon_live_events() -> Result<Vec<SysmonEvent>, String> {
+    Err("Live Sysmon event log queries are only supported on Windows".to_string())
+}
+
+/// Build a human-readable message from extracted field values (for live events).
+#[cfg(target_os = "windows")]
+#[allow(clippy::too_many_arguments)]
+fn build_message_from_fields(
+    event_id: u32,
+    event_type: &SysmonEventType,
+    image: Option<&str>,
+    command_line: Option<&str>,
+    user: Option<&str>,
+    destination_ip: Option<&str>,
+    destination_port: Option<u16>,
+    protocol: Option<&str>,
+    target_filename: Option<&str>,
+    source_image: Option<&str>,
+    target_image: Option<&str>,
+    granted_access: Option<&str>,
+    query_name: Option<&str>,
+    query_results: Option<&str>,
+    target_object: Option<&str>,
+) -> String {
+    let type_label = event_type.display_name();
+
+    match event_id {
+        1 => {
+            let img = image.unwrap_or("?");
+            let usr = user.unwrap_or("");
+            match command_line {
+                Some(cmd) if !cmd.is_empty() => format!("{img} | {cmd} (User: {usr})"),
+                _ => format!("{img} (User: {usr})"),
+            }
+        }
+        3 => {
+            let img = image.unwrap_or("?");
+            let dst_ip = destination_ip.unwrap_or("?");
+            let dst_port = destination_port
+                .map(|p| p.to_string())
+                .unwrap_or_else(|| "?".to_string());
+            let proto = protocol.unwrap_or("?");
+            format!("{img} → {dst_ip}:{dst_port} ({proto})")
+        }
+        5 => {
+            let img = image.unwrap_or("?");
+            format!("{img} terminated")
+        }
+        10 => {
+            let src = source_image.unwrap_or("?");
+            let tgt = target_image.unwrap_or("?");
+            let access = granted_access.unwrap_or("?");
+            format!("{src} → {tgt} (Access: {access})")
+        }
+        11 => {
+            let img = image.unwrap_or("?");
+            let target = target_filename.unwrap_or("?");
+            format!("{img} created {target}")
+        }
+        12..=14 => {
+            let img = image.unwrap_or("?");
+            let target = target_object.unwrap_or("?");
+            format!("{img} | {target}")
+        }
+        22 => {
+            let img = image.unwrap_or("?");
+            let query = query_name.unwrap_or("?");
+            match query_results {
+                Some(results) if !results.is_empty() => {
+                    format!("{img} queried {query} → {results}")
+                }
+                _ => format!("{img} queried {query}"),
+            }
+        }
+        23 | 26 => {
+            let img = image.unwrap_or("?");
+            let target = target_filename.unwrap_or("?");
+            format!("{img} deleted {target}")
+        }
+        _ => {
+            if let Some(img) = image {
+                format!("[{type_label}] {img}")
+            } else {
+                format!("[{type_label}]")
+            }
+        }
     }
 }
 
