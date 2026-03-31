@@ -21,6 +21,8 @@ export function EventTimeline({ events }: EventTimelineProps) {
   const sourceFiles = useIntuneStore((s) => s.sourceFiles);
   const filterEventType = useIntuneStore((s) => s.filterEventType);
   const filterStatus = useIntuneStore((s) => s.filterStatus);
+  const sortField = useIntuneStore((s) => s.sortField);
+  const sortDirection = useIntuneStore((s) => s.sortDirection);
   const showSourceFileLabel = sourceFiles.length > 1 && timelineScope.filePath == null;
 
   const logListFontSize = useUiStore((s) => s.logListFontSize);
@@ -47,29 +49,74 @@ export function EventTimeline({ events }: EventTimelineProps) {
     });
   }, [events, filterEventType, filterStatus, timelineScope.filePath]);
 
+  const sortedEvents = useMemo(() => {
+    const statusRank: Record<string, number> = {
+      Failed: 0,
+      Timeout: 1,
+      InProgress: 2,
+      Pending: 3,
+      Success: 4,
+      Unknown: 5,
+    };
+
+    return [...filteredEvents].sort((a, b) => {
+      let cmp = 0;
+      switch (sortField) {
+        case "time": {
+          const aTime = a.startTimeEpoch;
+          const bTime = b.startTimeEpoch;
+          if (aTime == null && bTime == null) cmp = 0;
+          else if (aTime == null) cmp = 1;
+          else if (bTime == null) cmp = -1;
+          else cmp = aTime - bTime;
+          break;
+        }
+        case "name":
+          cmp = a.name.localeCompare(b.name);
+          break;
+        case "type":
+          cmp = a.eventType.localeCompare(b.eventType);
+          break;
+        case "status":
+          cmp = (statusRank[a.status] ?? 5) - (statusRank[b.status] ?? 5);
+          break;
+        case "duration": {
+          const aDur = a.durationSecs;
+          const bDur = b.durationSecs;
+          if (aDur == null && bDur == null) cmp = 0;
+          else if (aDur == null) cmp = 1;
+          else if (bDur == null) cmp = -1;
+          else cmp = aDur - bDur;
+          break;
+        }
+      }
+      return sortDirection === "asc" ? cmp : -cmp;
+    });
+  }, [filteredEvents, sortField, sortDirection]);
+
   useEffect(() => {
     if (selectedEventId == null) {
       return;
     }
 
-    const selectedStillVisible = filteredEvents.some((e) => e.id === selectedEventId);
+    const selectedStillVisible = sortedEvents.some((e) => e.id === selectedEventId);
     if (!selectedStillVisible) {
       selectEvent(null);
     }
-  }, [filteredEvents, selectEvent, selectedEventId]);
+  }, [sortedEvents, selectEvent, selectedEventId]);
 
   const parentRef = useRef<HTMLDivElement>(null);
   const selectedIndex = useMemo(
-    () => filteredEvents.findIndex((event) => event.id === selectedEventId),
-    [filteredEvents, selectedEventId]
+    () => sortedEvents.findIndex((event) => event.id === selectedEventId),
+    [sortedEvents, selectedEventId]
   );
 
   const virtualizer = useVirtualizer({
-    count: filteredEvents.length,
+    count: sortedEvents.length,
     getScrollElement: () => parentRef.current,
     estimateSize: (index) =>
-      filteredEvents[index]?.id === selectedEventId ? expandedRowEstimate : collapsedRowEstimate,
-    getItemKey: (index) => filteredEvents[index]?.id ?? index,
+      sortedEvents[index]?.id === selectedEventId ? expandedRowEstimate : collapsedRowEstimate,
+    getItemKey: (index) => sortedEvents[index]?.id ?? index,
     overscan: 10,
   });
 
@@ -94,7 +141,7 @@ export function EventTimeline({ events }: EventTimelineProps) {
     );
   }
 
-  if (filteredEvents.length === 0) {
+  if (sortedEvents.length === 0) {
     return (
       <div style={{ padding: "20px", color: tokens.colorNeutralForeground3, textAlign: "center", fontSize: `${fontSize}px`, fontFamily: LOG_UI_FONT_FAMILY }}>
         {timelineScope.filePath
@@ -109,7 +156,7 @@ export function EventTimeline({ events }: EventTimelineProps) {
     <div
       ref={parentRef}
       role="listbox"
-      aria-label={`Intune event timeline — ${filteredEvents.length} events`}
+      aria-label={`Intune event timeline — ${sortedEvents.length} events`}
       style={{
         overflowY: "auto",
         height: "100%",
@@ -135,7 +182,7 @@ export function EventTimeline({ events }: EventTimelineProps) {
           }}
         >
           {virtualRows.map((virtualRow) => {
-            const event = filteredEvents[virtualRow.index];
+            const event = sortedEvents[virtualRow.index];
             return (
               <EventTimelineRow
                 key={virtualRow.key}
