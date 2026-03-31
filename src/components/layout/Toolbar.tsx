@@ -252,6 +252,8 @@ export function useAppActions(): AppActionHandlers {
   const dsregcmdIsAnalyzing = useDsregcmdStore((s) => s.isAnalyzing);
   const dsregcmdSource = useDsregcmdStore((s) => s.sourceContext.source);
   const dsregcmdBundlePath = useDsregcmdStore((s) => s.sourceContext.bundlePath);
+  const sysmonIsAnalyzing = useSysmonStore((s) => s.isAnalyzing);
+  const sysmonSourcePath = useSysmonStore((s) => s.sourcePath);
   const beginSysmonAnalysis = useSysmonStore((s) => s.beginAnalysis);
   const setSysmonResults = useSysmonStore((s) => s.setResults);
   const failSysmonAnalysis = useSysmonStore((s) => s.failAnalysis);
@@ -288,7 +290,7 @@ export function useAppActions(): AppActionHandlers {
     () => resolveRefreshSource(activeSource, openFilePath),
     [activeSource, openFilePath]
   );
-  const isSourceCommandBusy = isLoading || intuneIsAnalyzing || dsregcmdIsAnalyzing;
+  const isSourceCommandBusy = isLoading || intuneIsAnalyzing || dsregcmdIsAnalyzing || sysmonIsAnalyzing;
 
   const commandState = useMemo<AppCommandState>(
     () => ({
@@ -304,7 +306,9 @@ export function useAppActions(): AppActionHandlers {
         !isSourceCommandBusy &&
         (activeWorkspace === "dsregcmd"
           ? dsregcmdSource !== null
-          : refreshSource !== null),
+          : activeWorkspace === "sysmon"
+            ? sysmonSourcePath !== null
+            : refreshSource !== null),
       canToggleDetailsPane: activeView === "log",
       canToggleInfoPane: activeView === "log",
       canShowEvidenceBundle:
@@ -318,7 +322,9 @@ export function useAppActions(): AppActionHandlers {
       hasActiveSource:
         activeWorkspace === "dsregcmd"
           ? dsregcmdSource !== null
-          : refreshSource !== null,
+          : activeWorkspace === "sysmon"
+            ? sysmonSourcePath !== null
+            : refreshSource !== null,
       isDetailsVisible: showDetails,
       isInfoPaneVisible: showInfoPane,
       activeFilterCount,
@@ -344,6 +350,7 @@ export function useAppActions(): AppActionHandlers {
       refreshSource,
       showDetails,
       showInfoPane,
+      sysmonSourcePath,
     ]
   );
 
@@ -743,6 +750,16 @@ export function useAppActions(): AppActionHandlers {
       return;
     }
 
+    if (activeWorkspace === "sysmon") {
+      if (sysmonSourcePath) {
+        await analyzeSysmonWorkspaceSource(
+          { kind: "file", path: sysmonSourcePath },
+          "app-actions.refresh"
+        );
+      }
+      return;
+    }
+
     if (!refreshSource) {
       return;
     }
@@ -761,9 +778,11 @@ export function useAppActions(): AppActionHandlers {
   }, [
     activeWorkspace,
     analyzeIntuneWorkspaceSource,
+    analyzeSysmonWorkspaceSource,
     commandState.canRefresh,
     refreshSource,
     selectedSourceFilePath,
+    sysmonSourcePath,
   ]);
 
   const toggleDetailsPane = useCallback(() => {
