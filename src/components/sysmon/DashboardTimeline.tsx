@@ -31,8 +31,28 @@ function fmtLabel(ts: string, granularity: Granularity): string {
   }
 }
 
+const MAX_BARS = 100;
+
+function downsampleBuckets(buckets: TimeBucket[]): TimeBucket[] {
+  if (buckets.length <= MAX_BARS) return buckets;
+  // Merge adjacent buckets to fit within MAX_BARS
+  const factor = Math.ceil(buckets.length / MAX_BARS);
+  const result: TimeBucket[] = [];
+  for (let i = 0; i < buckets.length; i += factor) {
+    const slice = buckets.slice(i, i + factor);
+    const merged: TimeBucket = {
+      timestamp: slice[0].timestamp,
+      timestampMs: slice[0].timestampMs,
+      count: slice.reduce((sum, b) => sum + b.count, 0),
+    };
+    result.push(merged);
+  }
+  return result;
+}
+
 function bucketsToChartData(buckets: TimeBucket[], granularity: Granularity) {
-  return buckets.map((b) => ({
+  const sampled = downsampleBuckets(buckets);
+  return sampled.map((b) => ({
     x: fmtLabel(b.timestamp, granularity),
     y: b.count,
     legend: fmtLabel(b.timestamp, granularity),
@@ -89,14 +109,16 @@ export function DashboardTimeline({ dashboard }: DashboardTimelineProps) {
           No timeline data available.
         </div>
       ) : (
-        <VerticalBarChart
-          data={data}
-          chartTitle="Event Timeline"
-          barWidth="auto"
-          useSingleColor
-          colors={[tokens.colorBrandBackground]}
-          height={220}
-        />
+        <div style={{ width: "100%", overflow: "hidden" }}>
+          <VerticalBarChart
+            data={data}
+            chartTitle="Event Timeline"
+            barWidth={Math.max(4, Math.min(16, Math.floor(800 / data.length)))}
+            useSingleColor
+            colors={[tokens.colorBrandBackground]}
+            height={220}
+          />
+        </div>
       )}
     </div>
   );
