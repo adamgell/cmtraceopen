@@ -4,6 +4,7 @@ import { useAppActions } from "../layout/Toolbar";
 import { SysmonEventTable } from "./SysmonEventTable";
 import { SysmonSummaryView } from "./SysmonSummaryView";
 import { SysmonConfigView } from "./SysmonConfigView";
+import { SysmonDashboardView } from "./SysmonDashboardView";
 
 export function SysmonWorkspace() {
   const isAnalyzing = useSysmonStore((s) => s.isAnalyzing);
@@ -91,6 +92,7 @@ export function SysmonWorkspace() {
           size="small"
           style={{ flex: 1 }}
         >
+          <Tab value="dashboard">Dashboard</Tab>
           <Tab value="events">Events ({events.length.toLocaleString()})</Tab>
           <Tab value="summary">Summary</Tab>
           <Tab value="config">Configuration</Tab>
@@ -111,6 +113,7 @@ export function SysmonWorkspace() {
       </div>
 
       <div style={{ flex: 1, overflow: "hidden" }}>
+        {activeTab === "dashboard" && <SysmonDashboardView />}
         {activeTab === "events" && <SysmonEventTable />}
         {activeTab === "summary" && <SysmonSummaryView />}
         {activeTab === "config" && <SysmonConfigView />}
