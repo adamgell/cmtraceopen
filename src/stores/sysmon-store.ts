@@ -2,13 +2,14 @@ import { create } from "zustand";
 import type {
   SysmonAnalysisResult,
   SysmonConfig,
+  SysmonDashboardData,
   SysmonEvent,
   SysmonEventType,
   SysmonSeverity,
   SysmonSummary,
 } from "../types/sysmon";
 
-export type SysmonWorkspaceTab = "events" | "summary" | "config";
+export type SysmonWorkspaceTab = "dashboard" | "events" | "summary" | "config";
 
 export interface SysmonAnalysisProgress {
   requestId: string;
@@ -22,6 +23,7 @@ interface SysmonState {
   events: SysmonEvent[];
   summary: SysmonSummary | null;
   config: SysmonConfig | null;
+  dashboard: SysmonDashboardData | null;
   sourcePath: string | null;
   isAnalyzing: boolean;
   analysisError: string | null;
@@ -53,6 +55,7 @@ export const useSysmonStore = create<SysmonState>((set) => ({
   events: [],
   summary: null,
   config: null,
+  dashboard: null,
   sourcePath: null,
   isAnalyzing: false,
   analysisError: null,
@@ -69,6 +72,7 @@ export const useSysmonStore = create<SysmonState>((set) => ({
       events: [],
       summary: null,
       config: null,
+      dashboard: null,
       sourcePath: path,
       isAnalyzing: true,
       analysisError: null,
@@ -85,10 +89,12 @@ export const useSysmonStore = create<SysmonState>((set) => ({
       events: result.events,
       summary: result.summary,
       config: result.config,
+      dashboard: result.dashboard,
       sourcePath: result.sourcePath,
       isAnalyzing: false,
       analysisError: null,
       progressMessage: null,
+      activeTab: "dashboard",
     }),
 
   failAnalysis: (error) =>
@@ -124,6 +130,7 @@ export const useSysmonStore = create<SysmonState>((set) => ({
       events: [],
       summary: null,
       config: null,
+      dashboard: null,
       sourcePath: null,
       isAnalyzing: false,
       analysisError: null,
