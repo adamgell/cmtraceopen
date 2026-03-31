@@ -113,9 +113,40 @@ export interface SysmonConfig {
   activeEventTypes: SysmonEventTypeCount[];
 }
 
+export interface TimeBucket {
+  timestamp: string;
+  timestampMs: number;
+  count: number;
+}
+
+export interface RankedItem {
+  name: string;
+  count: number;
+}
+
+export interface SecuritySummary {
+  totalWarnings: number;
+  totalErrors: number;
+  eventsByType: RankedItem[];
+}
+
+export interface SysmonDashboardData {
+  timelineMinute: TimeBucket[];
+  timelineHourly: TimeBucket[];
+  timelineDaily: TimeBucket[];
+  topProcesses: RankedItem[];
+  topDestinations: RankedItem[];
+  topPorts: RankedItem[];
+  topDnsQueries: RankedItem[];
+  securityEvents: SecuritySummary;
+  topTargetFiles: RankedItem[];
+  topRegistryKeys: RankedItem[];
+}
+
 export interface SysmonAnalysisResult {
   events: SysmonEvent[];
   summary: SysmonSummary;
   config: SysmonConfig;
+  dashboard: SysmonDashboardData;
   sourcePath: string;
 }
