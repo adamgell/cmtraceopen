@@ -51,17 +51,19 @@ export function SysmonDashboardView() {
         {/* Timeline spans full width */}
         <DashboardTimeline dashboard={dashboard} />
 
-        {/* Event type donut + security alerts side by side */}
-        <DashboardEventTypeChart summary={summary} />
-        <DashboardSecurityAlerts securityEvents={dashboard.securityEvents} />
-
-        {/* Top-N ranked lists */}
-        <DashboardTopList
-          title="Top Processes"
-          items={dashboard.topProcesses}
-          emptyMessage="No process data available."
-          color={tokens.colorBrandBackground}
-        />
+        {/* Donut + Security stacked left, Top Processes right */}
+        <div style={{ gridColumn: "1 / -1", display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px", alignItems: "start" }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+            <DashboardEventTypeChart summary={summary} />
+            <DashboardSecurityAlerts securityEvents={dashboard.securityEvents} />
+          </div>
+          <DashboardTopList
+            title="Top Processes"
+            items={dashboard.topProcesses}
+            emptyMessage="No process data available."
+            color={tokens.colorBrandBackground}
+          />
+        </div>
         {/* Network, DNS, Ports on same row */}
         <div style={{ gridColumn: "1 / -1", display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "16px" }}>
           <DashboardTopList
