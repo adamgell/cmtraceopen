@@ -285,6 +285,50 @@ pub struct SysmonConfig {
     pub active_event_types: Vec<SysmonEventTypeCount>,
 }
 
+/// A time-bucketed event count for timeline charts.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TimeBucket {
+    /// ISO 8601 timestamp for the bucket start.
+    pub timestamp: String,
+    /// Unix ms timestamp for the bucket start.
+    pub timestamp_ms: i64,
+    /// Number of events in this bucket.
+    pub count: u64,
+}
+
+/// A named item with a count, used for top-N rankings.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RankedItem {
+    pub name: String,
+    pub count: u64,
+}
+
+/// Aggregated security alert statistics.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SecuritySummary {
+    pub total_warnings: u64,
+    pub total_errors: u64,
+    pub events_by_type: Vec<RankedItem>,
+}
+
+/// Pre-computed dashboard aggregations.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SysmonDashboardData {
+    pub timeline_minute: Vec<TimeBucket>,
+    pub timeline_hourly: Vec<TimeBucket>,
+    pub timeline_daily: Vec<TimeBucket>,
+    pub top_processes: Vec<RankedItem>,
+    pub top_destinations: Vec<RankedItem>,
+    pub top_ports: Vec<RankedItem>,
+    pub top_dns_queries: Vec<RankedItem>,
+    pub security_events: SecuritySummary,
+    pub top_target_files: Vec<RankedItem>,
+    pub top_registry_keys: Vec<RankedItem>,
+}
+
 /// Top-level result returned from the Sysmon analysis command.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -295,6 +339,8 @@ pub struct SysmonAnalysisResult {
     pub summary: SysmonSummary,
     /// Extracted Sysmon configuration metadata.
     pub config: SysmonConfig,
+    /// Pre-computed dashboard aggregations.
+    pub dashboard: SysmonDashboardData,
     /// Source path that was analyzed.
     pub source_path: String,
 }
