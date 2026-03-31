@@ -1,4 +1,4 @@
-use app_lib::sysmon::evtx_parser::build_summary;
+use app_lib::sysmon::evtx_parser::{build_dashboard_data, build_summary};
 use app_lib::sysmon::models::{SysmonEvent, SysmonEventType, SysmonSeverity};
 
 fn make_event(id: u64, timestamp: &str, timestamp_ms: Option<i64>, event_id: u32) -> SysmonEvent {
@@ -119,4 +119,93 @@ fn build_summary_parse_errors_propagated() {
     let summary = build_summary(&[], vec!["a.evtx".to_string()], 42);
     assert_eq!(summary.parse_errors, 42);
     assert_eq!(summary.source_files.len(), 1);
+}
+
+#[test]
+fn dashboard_data_empty_events() {
+    let data = build_dashboard_data(&[]);
+    assert!(data.timeline_minute.is_empty());
+    assert!(data.timeline_hourly.is_empty());
+    assert!(data.timeline_daily.is_empty());
+    assert!(data.top_processes.is_empty());
+    assert!(data.top_destinations.is_empty());
+    assert!(data.top_ports.is_empty());
+    assert!(data.top_dns_queries.is_empty());
+    assert!(data.top_target_files.is_empty());
+    assert!(data.top_registry_keys.is_empty());
+    assert_eq!(data.security_events.total_warnings, 0);
+    assert_eq!(data.security_events.total_errors, 0);
+}
+
+#[test]
+fn dashboard_data_timeline_bucketing() {
+    let events = vec![
+        make_event(0, "2024-04-28T10:00:00Z", Some(1714298400000), 1),
+        make_event(1, "2024-04-28T10:00:30Z", Some(1714298430000), 1),
+        make_event(2, "2024-04-28T11:00:00Z", Some(1714302000000), 1),
+    ];
+    let data = build_dashboard_data(&events);
+    assert_eq!(data.timeline_minute.len(), 2);
+    assert_eq!(data.timeline_minute[0].count, 2);
+    assert_eq!(data.timeline_minute[1].count, 1);
+    assert_eq!(data.timeline_hourly.len(), 2);
+    assert_eq!(data.timeline_daily.len(), 1);
+    assert_eq!(data.timeline_daily[0].count, 3);
+}
+
+#[test]
+fn dashboard_data_top_processes() {
+    let mut e1 = make_event(0, "2024-04-28T10:00:00Z", Some(1714298400000), 1);
+    e1.image = Some("C:\\Windows\\svchost.exe".to_string());
+    let mut e2 = make_event(1, "2024-04-28T10:00:01Z", Some(1714298401000), 1);
+    e2.image = Some("C:\\Windows\\svchost.exe".to_string());
+    let mut e3 = make_event(2, "2024-04-28T10:00:02Z", Some(1714298402000), 1);
+    e3.image = Some("C:\\Windows\\explorer.exe".to_string());
+
+    let data = build_dashboard_data(&[e1, e2, e3]);
+    assert_eq!(data.top_processes.len(), 2);
+    assert_eq!(data.top_processes[0].name, "C:\\Windows\\svchost.exe");
+    assert_eq!(data.top_processes[0].count, 2);
+    assert_eq!(data.top_processes[1].name, "C:\\Windows\\explorer.exe");
+    assert_eq!(data.top_processes[1].count, 1);
+}
+
+#[test]
+fn dashboard_data_network_and_dns() {
+    let mut net1 = make_event(0, "2024-04-28T10:00:00Z", Some(1714298400000), 3);
+    net1.destination_ip = Some("10.0.0.1".to_string());
+    net1.destination_port = Some(443);
+    net1.destination_hostname = Some("example.com".to_string());
+
+    let mut net2 = make_event(1, "2024-04-28T10:00:01Z", Some(1714298401000), 3);
+    net2.destination_ip = Some("10.0.0.1".to_string());
+    net2.destination_port = Some(80);
+
+    let mut dns1 = make_event(2, "2024-04-28T10:00:02Z", Some(1714298402000), 22);
+    dns1.query_name = Some("google.com".to_string());
+
+    let mut dns2 = make_event(3, "2024-04-28T10:00:03Z", Some(1714298403000), 22);
+    dns2.query_name = Some("google.com".to_string());
+
+    let data = build_dashboard_data(&[net1, net2, dns1, dns2]);
+    assert_eq!(data.top_destinations.len(), 2);
+    assert_eq!(data.top_destinations[0].count, 1);
+    assert_eq!(data.top_ports.len(), 2);
+    assert_eq!(data.top_dns_queries.len(), 1);
+    assert_eq!(data.top_dns_queries[0].name, "google.com");
+    assert_eq!(data.top_dns_queries[0].count, 2);
+}
+
+#[test]
+fn dashboard_data_security_events() {
+    let mut e1 = make_event(0, "2024-04-28T10:00:00Z", Some(1714298400000), 8);
+    e1.severity = SysmonSeverity::Warning;
+    let mut e2 = make_event(1, "2024-04-28T10:00:01Z", Some(1714298401000), 255);
+    e2.severity = SysmonSeverity::Error;
+    let e3 = make_event(2, "2024-04-28T10:00:02Z", Some(1714298402000), 1);
+
+    let data = build_dashboard_data(&[e1, e2, e3]);
+    assert_eq!(data.security_events.total_warnings, 1);
+    assert_eq!(data.security_events.total_errors, 1);
+    assert_eq!(data.security_events.events_by_type.len(), 2);
 }
