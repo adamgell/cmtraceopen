@@ -443,7 +443,7 @@ export function useAppActions(): AppActionHandlers {
       useUiStore.getState().ensureWorkspaceVisible("sysmon", trigger);
       const sourcePath = getLogSourcePath(source);
       const requestId = `sysmon-${Date.now()}`;
-      beginSysmonAnalysis(sourcePath);
+      beginSysmonAnalysis(sourcePath, requestId);
 
       try {
         const result = await analyzeSysmonLogs(sourcePath, requestId);

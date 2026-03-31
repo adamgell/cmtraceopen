@@ -31,13 +31,13 @@ pub async fn analyze_sysmon_logs(
     request_id: String,
     app: AppHandle,
 ) -> Result<SysmonAnalysisResult, crate::error::AppError> {
-    Ok(async_runtime::spawn_blocking(move || {
+    async_runtime::spawn_blocking(move || {
         analyze_sysmon_blocking(path, request_id, app)
     })
     .await
     .map_err(|error| {
         crate::error::AppError::Internal(format!("Sysmon analysis task failed: {}", error))
-    })??)
+    })?
 }
 
 fn analyze_sysmon_blocking(
@@ -77,18 +77,14 @@ fn analyze_sysmon_blocking(
         ));
     }
 
-    // Filter to only Sysmon EVTX files (if directory, check provider)
+    // Filter to only Sysmon EVTX files (if directory, validate provider)
     let sysmon_files: Vec<_> = if source_path.is_file() {
         // Single file — trust the user
         evtx_files
     } else {
         evtx_files
             .into_iter()
-            .filter(|f| {
-                let name = f.file_name().unwrap_or_default().to_string_lossy().to_lowercase();
-                // Quick path-based check first
-                name.contains("sysmon") || evtx_parser::is_sysmon_evtx(f)
-            })
+            .filter(|f| evtx_parser::is_sysmon_evtx(f))
             .collect()
     };
 
@@ -172,11 +168,16 @@ fn analyze_sysmon_blocking(
         total_errors += errors;
     }
 
-    // Sort by timestamp, then by record_id for stable ordering
+    // Sort by timestamp_ms when available, falling back to timestamp and then record_id for stable ordering
     all_events.sort_by(|a, b| {
-        a.timestamp
-            .cmp(&b.timestamp)
-            .then_with(|| a.record_id.cmp(&b.record_id))
+        match (a.timestamp_ms, b.timestamp_ms) {
+            (Some(ta), Some(tb)) => ta
+                .cmp(&tb)
+                .then_with(|| a.record_id.cmp(&b.record_id)),
+            _ => a.timestamp
+                .cmp(&b.timestamp)
+                .then_with(|| a.record_id.cmp(&b.record_id)),
+        }
     });
 
     // Reassign sequential IDs after sorting

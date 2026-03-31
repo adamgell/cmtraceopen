@@ -20,7 +20,10 @@ const SYSMON_PROVIDER: &str = "Microsoft-Windows-Sysmon";
 // File discovery
 // ---------------------------------------------------------------------------
 
-/// Discovers Sysmon .evtx files in a directory (recursive one level).
+/// Discovers Sysmon .evtx files in a directory.
+/// Checks the root and the following common subdirectories:
+/// "evidence", "event-logs", "evidence/event-logs".
+/// Deduplicates results by sorting and deduplicating raw PathBufs.
 pub fn discover_sysmon_evtx_files(root: &Path) -> Vec<PathBuf> {
     let mut files = Vec::new();
 
@@ -67,15 +70,13 @@ pub fn is_sysmon_evtx(path: &Path) -> bool {
     };
 
     // Sample first 5 records to check provider
-    for record_result in parser.records_json().take(5) {
-        if let Ok(record) = record_result {
-            if let Ok(json) = serde_json::from_str::<Value>(&record.data) {
-                let provider = json["Event"]["System"]["Provider"]["#attributes"]["Name"]
-                    .as_str()
-                    .unwrap_or("");
-                if provider == SYSMON_PROVIDER {
-                    return true;
-                }
+    for record in parser.records_json().take(5).flatten() {
+        if let Ok(json) = serde_json::from_str::<Value>(&record.data) {
+            let provider = json["Event"]["System"]["Provider"]["#attributes"]["Name"]
+                .as_str()
+                .unwrap_or("");
+            if provider == SYSMON_PROVIDER {
+                return true;
             }
         }
     }
@@ -237,8 +238,10 @@ pub fn build_summary(
     let mut type_counts: HashMap<u32, u64> = HashMap::new();
     let mut unique_processes: HashSet<String> = HashSet::new();
     let mut unique_computers: HashSet<String> = HashSet::new();
-    let mut earliest: Option<&str> = None;
-    let mut latest: Option<&str> = None;
+    let mut earliest_ms: Option<i64> = None;
+    let mut latest_ms: Option<i64> = None;
+    let mut earliest_ts: Option<String> = None;
+    let mut latest_ts: Option<String> = None;
 
     for event in events {
         *type_counts.entry(event.event_id).or_insert(0) += 1;
@@ -254,12 +257,24 @@ pub fn build_summary(
         }
 
         if !event.timestamp.is_empty() {
-            let ts = event.timestamp.as_str();
-            if earliest.is_none() || ts < earliest.unwrap() {
-                earliest = Some(ts);
-            }
-            if latest.is_none() || ts > latest.unwrap() {
-                latest = Some(ts);
+            if let Some(ms) = event.timestamp_ms {
+                if earliest_ms.map_or(true, |existing| ms < existing) {
+                    earliest_ms = Some(ms);
+                    earliest_ts = Some(event.timestamp.clone());
+                }
+                if latest_ms.map_or(true, |existing| ms > existing) {
+                    latest_ms = Some(ms);
+                    latest_ts = Some(event.timestamp.clone());
+                }
+            } else if earliest_ms.is_none() {
+                // Fallback: record timestamp string when no ms is available
+                let ts = event.timestamp.as_str();
+                if earliest_ts.as_deref().map_or(true, |existing| ts < existing) {
+                    earliest_ts = Some(event.timestamp.clone());
+                }
+                if latest_ts.as_deref().map_or(true, |existing| ts > existing) {
+                    latest_ts = Some(event.timestamp.clone());
+                }
             }
         }
     }
@@ -283,8 +298,8 @@ pub fn build_summary(
         event_type_counts,
         unique_processes: unique_processes.len() as u64,
         unique_computers: unique_computers.len() as u64,
-        earliest_timestamp: earliest.map(|s| s.to_string()),
-        latest_timestamp: latest.map(|s| s.to_string()),
+        earliest_timestamp: earliest_ts,
+        latest_timestamp: latest_ts,
         source_files,
         parse_errors,
     }
@@ -299,7 +314,7 @@ pub fn extract_config(events: &[SysmonEvent], summary: &SysmonSummary) -> Sysmon
     let mut schema_version: Option<String> = None;
     let mut hash_algorithms: Option<String> = None;
     let mut last_config_change: Option<String> = None;
-    let mut configuration_xml: Option<String> = None;
+    let configuration_xml: Option<String> = None;
     let mut sysmon_version: Option<String> = None;
 
     // Look for ConfigChange events (ID 16) — they contain the config hash and sometimes XML
@@ -313,10 +328,11 @@ pub fn extract_config(events: &[SysmonEvent], summary: &SysmonSummary) -> Sysmon
                 {
                     last_config_change = Some(event.timestamp.clone());
                 }
-                // The message may contain config details
-                if configuration_xml.is_none() && !event.message.is_empty() {
-                    configuration_xml = Some(event.message.clone());
-                }
+                // NOTE: Do not populate configuration_xml from event.message.
+                // The Message field is a human-readable summary and does not reliably
+                // contain the raw configuration XML. If configuration XML display is
+                // needed, it should be extracted from the EventData "Configuration"
+                // field during parsing and exposed via SysmonEvent.
             }
             4 => {
                 // ServiceStateChange: may contain version
@@ -362,10 +378,12 @@ pub fn extract_config(events: &[SysmonEvent], summary: &SysmonSummary) -> Sysmon
         }
     }
 
+    let found = last_config_change.is_some() || hash_algorithms.is_some() || sysmon_version.is_some();
+
     SysmonConfig {
         schema_version,
         hash_algorithms,
-        found: !events.is_empty(),
+        found,
         last_config_change,
         configuration_xml,
         sysmon_version,
@@ -495,7 +513,7 @@ fn build_message(event_id: u32, event_type: &SysmonEventType, event_data: &Value
             let target = event_data["TargetFilename"].as_str().unwrap_or("?");
             format!("{image} created {target}")
         }
-        12 | 13 | 14 => {
+        12..=14 => {
             // Registry events
             let image = event_data["Image"].as_str().unwrap_or("?");
             let target = event_data["TargetObject"].as_str().unwrap_or("?");

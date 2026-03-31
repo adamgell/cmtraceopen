@@ -3,16 +3,12 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { tokens } from "@fluentui/react-components";
 import { LOG_MONOSPACE_FONT_FAMILY } from "../../lib/log-accessibility";
 import { useSysmonStore } from "../../stores/sysmon-store";
-import type { SysmonEvent, SysmonSeverity } from "../../types/sysmon";
+import { useUiStore } from "../../stores/ui-store";
+import { getThemeById } from "../../lib/themes";
+import type { SysmonEvent } from "../../types/sysmon";
 
 const ROW_HEIGHT = 28;
 const DETAIL_HEIGHT = 200;
-
-const SEVERITY_COLORS: Record<SysmonSeverity, string> = {
-  Info: tokens.colorBrandForeground1,
-  Warning: tokens.colorPaletteMarigoldForeground1,
-  Error: tokens.colorPaletteRedForeground1,
-};
 
 function formatTimestamp(ts: string): string {
   if (!ts) return "";
@@ -35,6 +31,8 @@ export function SysmonEventTable() {
   const setFilterSeverity = useSysmonStore((s) => s.setFilterSeverity);
   const setSearchQuery = useSysmonStore((s) => s.setSearchQuery);
   const summary = useSysmonStore((s) => s.summary);
+  const themeId = useUiStore((s) => s.themeId);
+  const severityPalette = useMemo(() => getThemeById(themeId).severityPalette, [themeId]);
 
   const filteredEvents = useMemo(() => {
     let result = events;
@@ -138,6 +136,7 @@ export function SysmonEventTable() {
         </label>
         <input
           type="text"
+          aria-label="Search events"
           placeholder="Search events..."
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
@@ -211,6 +210,7 @@ export function SysmonEventTable() {
                   event={event}
                   isSelected={isSelected}
                   onClick={() => selectEvent(isSelected ? null : event.id)}
+                  severityPalette={severityPalette}
                 />
                 {isSelected && <EventDetail event={event} />}
               </div>
@@ -226,14 +226,34 @@ function EventRow({
   event,
   isSelected,
   onClick,
+  severityPalette,
 }: {
   event: SysmonEvent;
   isSelected: boolean;
   onClick: () => void;
+  severityPalette: import("../../lib/constants").LogSeverityPalette;
 }) {
+  const severityColor =
+    event.severity === "Error"
+      ? severityPalette.error.text
+      : event.severity === "Warning"
+        ? severityPalette.warning.text
+        : severityPalette.info.text;
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      onClick();
+    }
+  };
+
   return (
     <div
+      role="button"
+      tabIndex={0}
+      aria-selected={isSelected}
       onClick={onClick}
+      onKeyDown={handleKeyDown}
       style={{
         display: "grid",
         gridTemplateColumns: "160px 140px 70px 1fr",
@@ -256,7 +276,7 @@ function EventRow({
       <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
         {event.eventTypeDisplay}
       </span>
-      <span style={{ color: SEVERITY_COLORS[event.severity] }}>
+      <span style={{ color: severityColor }}>
         {event.severity}
       </span>
       <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>

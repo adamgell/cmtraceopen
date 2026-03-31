@@ -26,6 +26,8 @@ interface SysmonState {
   isAnalyzing: boolean;
   analysisError: string | null;
   progressMessage: string | null;
+  /** requestId of the active analysis — used to discard stale progress events. */
+  currentRequestId: string | null;
 
   // Interaction state
   selectedEventId: number | null;
@@ -35,7 +37,7 @@ interface SysmonState {
   searchQuery: string;
 
   // Actions
-  beginAnalysis: (path: string) => void;
+  beginAnalysis: (path: string, requestId: string) => void;
   setResults: (result: SysmonAnalysisResult) => void;
   failAnalysis: (error: string) => void;
   updateProgress: (progress: SysmonAnalysisProgress) => void;
@@ -55,13 +57,14 @@ export const useSysmonStore = create<SysmonState>((set) => ({
   isAnalyzing: false,
   analysisError: null,
   progressMessage: null,
+  currentRequestId: null,
   selectedEventId: null,
   activeTab: "events",
   filterEventType: "All",
   filterSeverity: "All",
   searchQuery: "",
 
-  beginAnalysis: (path) =>
+  beginAnalysis: (path, requestId) =>
     set({
       events: [],
       summary: null,
@@ -70,6 +73,7 @@ export const useSysmonStore = create<SysmonState>((set) => ({
       isAnalyzing: true,
       analysisError: null,
       progressMessage: "Starting Sysmon analysis...",
+      currentRequestId: requestId,
       selectedEventId: null,
       filterEventType: "All",
       filterSeverity: "All",
@@ -95,8 +99,12 @@ export const useSysmonStore = create<SysmonState>((set) => ({
     }),
 
   updateProgress: (progress) =>
-    set({
-      progressMessage: progress.message,
+    set((state) => {
+      if (!state.isAnalyzing) return state;
+      if (state.currentRequestId !== null && state.currentRequestId !== progress.requestId) {
+        return state;
+      }
+      return { progressMessage: progress.message };
     }),
 
   selectEvent: (id) => set({ selectedEventId: id }),
@@ -120,6 +128,7 @@ export const useSysmonStore = create<SysmonState>((set) => ({
       isAnalyzing: false,
       analysisError: null,
       progressMessage: null,
+      currentRequestId: null,
       selectedEventId: null,
       activeTab: "events",
       filterEventType: "All",
