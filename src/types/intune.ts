@@ -33,6 +33,8 @@ export interface IntuneEvent {
   detail: string;
   sourceFile: string;
   lineNumber: number;
+  startTimeEpoch: number | null;
+  endTimeEpoch: number | null;
 }
 
 export interface DownloadStat {
@@ -44,6 +46,7 @@ export interface DownloadStat {
   durationSecs: number;
   success: boolean;
   timestamp: string | null;
+  timestampEpoch: number | null;
 }
 
 export interface IntuneTimestampBounds {
