@@ -266,8 +266,10 @@ pub fn build_summary(
                     latest_ms = Some(ms);
                     latest_ts = Some(event.timestamp.clone());
                 }
-            } else if earliest_ms.is_none() {
-                // Fallback: record timestamp string when no ms is available
+            } else {
+                // Fallback: use string comparison when no numeric ms is available
+                // for this event. String-only events can still update earliest/latest
+                // even when other events had numeric timestamps.
                 let ts = event.timestamp.as_str();
                 if earliest_ts.as_deref().map_or(true, |existing| ts < existing) {
                     earliest_ts = Some(event.timestamp.clone());

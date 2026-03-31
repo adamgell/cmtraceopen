@@ -47,7 +47,7 @@ const WORKSPACE_PLATFORM_MAP: Record<WorkspaceId, PlatformId[] | "all"> = {
   "macos-diag": ["macos"],
   deployment: ["windows"],
   "event-log": "all",
-  sysmon: "all",
+  sysmon: ["windows"],
 };
 
 export function getAvailableWorkspaces(

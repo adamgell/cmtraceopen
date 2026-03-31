@@ -12,6 +12,7 @@ import { loadLogSource, loadSelectedLogFile } from "../../lib/log-source";
 import { useFilterStore } from "../../stores/filter-store";
 import { useIntuneStore } from "../../stores/intune-store";
 import { useDsregcmdStore } from "../../stores/dsregcmd-store";
+import { useSysmonStore } from "../../stores/sysmon-store";
 import {
   getActiveSourceLabel,
   getActiveSourcePath,
@@ -784,6 +785,46 @@ function IntuneSidebar() {
   );
 }
 
+function SysmonSidebar() {
+  const summary = useSysmonStore((s) => s.summary);
+  const sourcePath = useSysmonStore((s) => s.sourcePath);
+  const isAnalyzing = useSysmonStore((s) => s.isAnalyzing);
+  const analysisError = useSysmonStore((s) => s.analysisError);
+  const progressMessage = useSysmonStore((s) => s.progressMessage);
+
+  const title = sourcePath ? getBaseName(sourcePath) : "Sysmon";
+  const subtitle = sourcePath ?? "Open a folder containing Sysmon EVTX files to begin.";
+
+  return (
+    <>
+      <SourceSummaryCard
+        badge="sysmon"
+        title={title}
+        subtitle={subtitle}
+        body={
+          <div style={{ fontSize: "inherit", color: tokens.colorNeutralForeground2, lineHeight: 1.5 }}>
+            {isAnalyzing && <div>{progressMessage ?? "Analyzing..."}</div>}
+            {analysisError && <div style={{ color: tokens.colorPaletteRedForeground2 }}>{analysisError}</div>}
+            {summary && (
+              <>
+                <div>Events: {summary.totalEvents.toLocaleString()}</div>
+                <div>Processes: {summary.uniqueProcesses.toLocaleString()}</div>
+                <div>Files: {summary.sourceFiles.length}</div>
+                {summary.parseErrors > 0 && (
+                  <div style={{ color: tokens.colorPaletteRedForeground2 }}>
+                    Parse errors: {summary.parseErrors}
+                  </div>
+                )}
+              </>
+            )}
+            {!isAnalyzing && !analysisError && !summary && <div>Ready</div>}
+          </div>
+        }
+      />
+    </>
+  );
+}
+
 function DsregcmdSidebar() {
   const result = useDsregcmdStore((s) => s.result);
   const sourceContext = useDsregcmdStore((s) => s.sourceContext);
@@ -986,11 +1027,13 @@ export function FileSidebar({ width = FILE_SIDEBAR_RECOMMENDED_WIDTH, activeView
           </button>
         </div>
       )}
-      {activeView === "log" || activeView === "deployment" || activeView === "macos-diag" || activeView === "sysmon"
+      {activeView === "log" || activeView === "deployment" || activeView === "macos-diag"
         ? <LogSidebar />
         : isIntuneWorkspace(activeView)
           ? <IntuneSidebar />
-          : <DsregcmdSidebar />}
+          : activeView === "sysmon"
+            ? <SysmonSidebar />
+            : <DsregcmdSidebar />}
       {(activeView === "log" || activeView === "deployment") && <SidebarFooter />}
     </aside>
   );

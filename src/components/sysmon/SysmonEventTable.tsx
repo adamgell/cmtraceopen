@@ -1,13 +1,12 @@
 import { useMemo, useRef } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { tokens } from "@fluentui/react-components";
-import { LOG_MONOSPACE_FONT_FAMILY } from "../../lib/log-accessibility";
+import { getLogListMetrics, LOG_MONOSPACE_FONT_FAMILY } from "../../lib/log-accessibility";
 import { useSysmonStore } from "../../stores/sysmon-store";
 import { useUiStore } from "../../stores/ui-store";
 import { getThemeById } from "../../lib/themes";
 import type { SysmonEvent } from "../../types/sysmon";
 
-const ROW_HEIGHT = 28;
 const DETAIL_HEIGHT = 200;
 
 function formatTimestamp(ts: string): string {
@@ -32,6 +31,8 @@ export function SysmonEventTable() {
   const setSearchQuery = useSysmonStore((s) => s.setSearchQuery);
   const summary = useSysmonStore((s) => s.summary);
   const themeId = useUiStore((s) => s.themeId);
+  const logListFontSize = useUiStore((s) => s.logListFontSize);
+  const metrics = useMemo(() => getLogListMetrics(logListFontSize), [logListFontSize]);
   const severityPalette = useMemo(() => getThemeById(themeId).severityPalette, [themeId]);
 
   const filteredEvents = useMemo(() => {
@@ -65,7 +66,7 @@ export function SysmonEventTable() {
     count: filteredEvents.length,
     getScrollElement: () => parentRef.current,
     estimateSize: (index) =>
-      filteredEvents[index]?.id === selectedEventId ? DETAIL_HEIGHT : ROW_HEIGHT,
+      filteredEvents[index]?.id === selectedEventId ? DETAIL_HEIGHT : metrics.rowHeight,
     overscan: 20,
   });
 
@@ -88,7 +89,7 @@ export function SysmonEventTable() {
           borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
           backgroundColor: tokens.colorNeutralBackground3,
           alignItems: "center",
-          fontSize: "12px",
+          fontSize: `${metrics.fontSize}px`,
           flexWrap: "wrap",
         }}
       >
@@ -98,7 +99,7 @@ export function SysmonEventTable() {
             value={filterEventType}
             onChange={(e) => setFilterEventType(e.target.value as typeof filterEventType)}
             style={{
-              fontSize: "12px",
+              fontSize: `${metrics.fontSize}px`,
               backgroundColor: tokens.colorNeutralBackground1,
               color: tokens.colorNeutralForeground1,
               border: `1px solid ${tokens.colorNeutralStroke1}`,
@@ -120,7 +121,7 @@ export function SysmonEventTable() {
             value={filterSeverity}
             onChange={(e) => setFilterSeverity(e.target.value as typeof filterSeverity)}
             style={{
-              fontSize: "12px",
+              fontSize: `${metrics.fontSize}px`,
               backgroundColor: tokens.colorNeutralBackground1,
               color: tokens.colorNeutralForeground1,
               border: `1px solid ${tokens.colorNeutralStroke1}`,
@@ -141,7 +142,7 @@ export function SysmonEventTable() {
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
           style={{
-            fontSize: "12px",
+            fontSize: `${metrics.fontSize}px`,
             backgroundColor: tokens.colorNeutralBackground1,
             color: tokens.colorNeutralForeground1,
             border: `1px solid ${tokens.colorNeutralStroke1}`,
@@ -163,7 +164,7 @@ export function SysmonEventTable() {
           display: "grid",
           gridTemplateColumns: "160px 140px 70px 1fr",
           padding: "4px 12px",
-          fontSize: "11px",
+          fontSize: `${metrics.headerFontSize}px`,
           fontWeight: 600,
           color: tokens.colorNeutralForeground3,
           borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
@@ -211,6 +212,8 @@ export function SysmonEventTable() {
                   isSelected={isSelected}
                   onClick={() => selectEvent(isSelected ? null : event.id)}
                   severityPalette={severityPalette}
+                  rowHeight={metrics.rowHeight}
+                  fontSize={metrics.fontSize}
                 />
                 {isSelected && <EventDetail event={event} />}
               </div>
@@ -227,11 +230,15 @@ function EventRow({
   isSelected,
   onClick,
   severityPalette,
+  rowHeight,
+  fontSize,
 }: {
   event: SysmonEvent;
   isSelected: boolean;
   onClick: () => void;
   severityPalette: import("../../lib/constants").LogSeverityPalette;
+  rowHeight: number;
+  fontSize: number;
 }) {
   const severityColor =
     event.severity === "Error"
@@ -258,11 +265,11 @@ function EventRow({
         display: "grid",
         gridTemplateColumns: "160px 140px 70px 1fr",
         padding: "4px 12px",
-        height: `${ROW_HEIGHT}px`,
+        height: `${rowHeight}px`,
         alignItems: "center",
         gap: "8px",
         cursor: "pointer",
-        fontSize: "12px",
+        fontSize: `${fontSize}px`,
         fontFamily: LOG_MONOSPACE_FONT_FAMILY,
         backgroundColor: isSelected
           ? tokens.colorNeutralBackground1Selected
@@ -329,8 +336,7 @@ function EventDetail({ event }: { event: SysmonEvent }) {
         backgroundColor: tokens.colorNeutralBackground1,
         borderBottom: `2px solid ${tokens.colorBrandStroke1}`,
         overflow: "auto",
-        maxHeight: `${DETAIL_HEIGHT - ROW_HEIGHT}px`,
-        fontSize: "12px",
+        maxHeight: `${DETAIL_HEIGHT}px`,
         fontFamily: LOG_MONOSPACE_FONT_FAMILY,
       }}
     >

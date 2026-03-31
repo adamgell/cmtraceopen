@@ -174,7 +174,9 @@ fn analyze_sysmon_blocking(
             (Some(ta), Some(tb)) => ta
                 .cmp(&tb)
                 .then_with(|| a.record_id.cmp(&b.record_id)),
-            _ => a.timestamp
+            (Some(_), None) => std::cmp::Ordering::Less,    // nulls last
+            (None, Some(_)) => std::cmp::Ordering::Greater,  // nulls last
+            (None, None) => a.timestamp
                 .cmp(&b.timestamp)
                 .then_with(|| a.record_id.cmp(&b.record_id)),
         }

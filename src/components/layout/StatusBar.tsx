@@ -377,7 +377,13 @@ export function StatusBar() {
         ? "Intune"
         : activeView === "new-intune"
           ? "New Intune"
-        : "dsregcmd";
+          : activeView === "sysmon"
+            ? "Sysmon Analysis"
+            : activeView === "deployment"
+              ? "Software Deployment"
+              : activeView === "macos-diag"
+                ? "macOS Diagnostics"
+                : "dsregcmd";
 
   return (
     <div
