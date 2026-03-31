@@ -320,6 +320,26 @@ fn windows_known_log_sources() -> Vec<KnownSourceMetadata> {
             },
             None,
         ),
+        windows_known_source(
+            "windows-iis-logs",
+            "IIS Logs",
+            "IIS W3C extended log folder (W3SVC*) under inetpub log files.",
+            KnownSourcePathKind::Folder,
+            "C:\\inetpub\\logs\\LogFiles",
+            &["u_ex*.log", "*.log"],
+            KnownSourceGroupingMetadata {
+                family_id: "windows-iis".to_string(),
+                family_label: "Windows IIS".to_string(),
+                group_id: "iis-w3c".to_string(),
+                group_label: "W3C Logs".to_string(),
+                group_order: 45,
+                source_order: 10,
+            },
+            Some(KnownSourceDefaultFileIntent {
+                selection_behavior: KnownSourceDefaultFileSelectionBehavior::PreferPattern,
+                preferred_file_names: Vec::new(),
+            }),
+        ),
         // ── Software Deployment ──────────────────────────────────────
         windows_known_source(
             "windows-deployment-logs-software",

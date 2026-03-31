@@ -13,7 +13,7 @@
 //! - Otherwise → Plain text
 
 use super::{
-    burn, cbs, dhcp, dism, intune_macos, msi, panther, psadt, reporting_events,
+    burn, cbs, dhcp, dism, iis_w3c, intune_macos, msi, panther, psadt, reporting_events,
     timestamped::{self, DateOrder},
 };
 use crate::models::log_entry::{
@@ -150,6 +150,18 @@ impl ResolvedParser {
         )
     }
 
+    pub fn iis_w3c() -> Self {
+        Self::new(
+            ParserKind::IisW3c,
+            ParserImplementation::IisW3c,
+            ParserProvenance::Dedicated,
+            ParseQuality::Structured,
+            RecordFraming::PhysicalLine,
+            DateOrder::default(),
+            None,
+        )
+    }
+
     pub fn reporting_events() -> Self {
         Self::new(
             ParserKind::ReportingEvents,
@@ -239,6 +251,7 @@ impl ResolvedParser {
             ParserImplementation::Ccm => LogFormat::Ccm,
             ParserImplementation::Simple => LogFormat::Simple,
             ParserImplementation::GenericTimestamped => LogFormat::Timestamped,
+            ParserImplementation::IisW3c => LogFormat::Timestamped,
             ParserImplementation::ReportingEvents => LogFormat::Timestamped,
             ParserImplementation::Msi => LogFormat::Timestamped,
             ParserImplementation::PsadtLegacy => LogFormat::Timestamped,
@@ -303,6 +316,18 @@ pub fn detect_parser(path: &str, content: &str) -> ResolvedParser {
         }
     }
 
+    if content
+        .lines()
+        .take(5)
+        .any(|line| {
+            line.trim_start()
+                .to_ascii_lowercase()
+                .starts_with("#software: microsoft internet information services")
+        })
+    {
+        return ResolvedParser::iis_w3c();
+    }
+
     let path_lower = path.to_ascii_lowercase();
     let panther_path_hint = path_lower.contains("panther")
         || path_lower.ends_with("setupact.log")
@@ -331,6 +356,9 @@ pub fn detect_parser(path: &str, content: &str) -> ResolvedParser {
     let dhcp_path_hint = path_lower.contains("dhcpsrvlog")
         || path_lower.contains("dhcpv6srvlog")
         || path_lower.contains("dhcp_logs");
+    let iis_w3c_path_hint = path_lower.contains("/inetpub/logs/")
+        || path_lower.contains("\\inetpub\\logs\\")
+        || path_lower.contains("w3svc");
 
     let intune_macos_path_hint = path_lower.contains("intunemdmdaemon")
         || path_lower.contains("/logs/microsoft/intune/");
@@ -345,6 +373,7 @@ pub fn detect_parser(path: &str, content: &str) -> ResolvedParser {
     let mut psadt_legacy_count = 0u32;
     let mut intune_macos_count = 0u32;
     let mut dhcp_count = 0u32;
+    let mut iis_w3c_count = 0u32;
     let mut burn_count = 0u32;
     let mut timestamp_count = 0;
     let mut has_day_first = false;
@@ -372,6 +401,9 @@ pub fn detect_parser(path: &str, content: &str) -> ResolvedParser {
             timestamp_count += 1;
         } else if dhcp::matches_dhcp_record(line.trim()) {
             dhcp_count += 1;
+        } else if iis_w3c::matches_iis_w3c_record(line.trim()) {
+            iis_w3c_count += 1;
+            timestamp_count += 1;
         } else if intune_macos::matches_intune_macos(line.trim()) {
             intune_macos_count += 1;
             timestamp_count += 1;
@@ -410,6 +442,8 @@ pub fn detect_parser(path: &str, content: &str) -> ResolvedParser {
         ResolvedParser::dism()
     } else if burn_count >= 2 {
         ResolvedParser::burn()
+    } else if (iis_w3c_path_hint && iis_w3c_count >= 1) || iis_w3c_count >= 3 {
+        ResolvedParser::iis_w3c()
     } else if (dhcp_path_hint && dhcp_count >= 1) || dhcp_count >= 3 {
         ResolvedParser::dhcp()
     } else if (intune_macos_path_hint && intune_macos_count >= 1) || intune_macos_count >= 2 {
@@ -481,6 +515,21 @@ Message two $$<Comp2><01-01-2024 08:00:01.000+000><thread=200>"#;
         let detected = detect_parser("sample.log", content);
         assert_eq!(detected.parser, ParserKind::Simple);
         assert_eq!(detected.compatibility_format(), LogFormat::Simple);
+    }
+
+    #[test]
+    fn test_detect_iis_w3c_from_header_signature() {
+        let content = r#"#Software: Microsoft Internet Information Services 10.0
+#Version: 1.0
+#Date: 2026-03-29 18:48:23
+#Fields: date time s-ip cs-method cs-uri-stem cs-uri-query s-port cs-username c-ip cs(User-Agent) sc-status sc-substatus sc-win32-status time-taken
+2026-03-29 18:48:23 10.0.0.5 GET /default.htm - 443 - 203.0.113.10 Mozilla/5.0 200 0 0 12"#;
+        let detected = detect_parser("C:/temp/u_ex260329.log", content);
+
+        assert_eq!(detected.parser, ParserKind::IisW3c);
+        assert_eq!(detected.implementation, ParserImplementation::IisW3c);
+        assert_eq!(detected.compatibility_format(), LogFormat::Timestamped);
+        assert_eq!(detected.provenance, ParserProvenance::Dedicated);
     }
 
     #[test]

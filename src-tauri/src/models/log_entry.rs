@@ -30,6 +30,7 @@ pub enum ParserKind {
     Simple,
     Timestamped,
     Plain,
+    IisW3c,
     Panther,
     Cbs,
     Dism,
@@ -49,6 +50,7 @@ pub enum ParserImplementation {
     Ccm,
     Simple,
     GenericTimestamped,
+    IisW3c,
     ReportingEvents,
     PlainText,
     Msi,
@@ -171,6 +173,42 @@ pub struct LogEntry {
     /// e.g. "Apply Drivers", "Mount WIM file", "Set Language Settings"
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub operation_name: Option<String>,
+    /// HTTP method (IIS W3C logs)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub http_method: Option<String>,
+    /// URI stem/path (IIS W3C logs)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uri_stem: Option<String>,
+    /// URI query string without the leading '?' (IIS W3C logs)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uri_query: Option<String>,
+    /// HTTP response status code (IIS W3C logs)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status_code: Option<u16>,
+    /// HTTP response sub-status code (IIS W3C logs)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sub_status: Option<u16>,
+    /// Request duration in milliseconds (IIS W3C logs)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time_taken_ms: Option<u64>,
+    /// Client/source IP address (IIS W3C logs)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_ip: Option<String>,
+    /// Server/listener IP address (IIS W3C logs)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server_ip: Option<String>,
+    /// HTTP user agent (IIS W3C logs)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_agent: Option<String>,
+    /// Server/listener port (IIS W3C logs)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server_port: Option<u16>,
+    /// Authenticated username (IIS W3C logs)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub username: Option<String>,
+    /// Win32 status code (IIS W3C logs)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub win32_status: Option<u32>,
 }
 
 /// Result of parsing a complete log file.

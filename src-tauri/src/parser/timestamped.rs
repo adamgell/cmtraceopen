@@ -149,6 +149,18 @@ pub fn parse_lines(lines: &[&str], file_path: &str, date_order: DateOrder) -> (V
                     gle_code: None,
                     setup_phase: None,
                     operation_name: None,
+                    http_method: None,
+                    uri_stem: None,
+                    uri_query: None,
+                    status_code: None,
+                    sub_status: None,
+                    time_taken_ms: None,
+                    client_ip: None,
+                    server_ip: None,
+                    user_agent: None,
+                    server_port: None,
+                    username: None,
+                    win32_status: None,
             });
             parse_errors += 1;
         }
@@ -236,6 +248,18 @@ fn try_iso(line: &str) -> Option<LogEntry> {
                     gle_code: None,
                     setup_phase: None,
                     operation_name: None,
+                    http_method: None,
+                    uri_stem: None,
+                    uri_query: None,
+                    status_code: None,
+                    sub_status: None,
+                    time_taken_ms: None,
+                    client_ip: None,
+                    server_ip: None,
+                    user_agent: None,
+                    server_port: None,
+                    username: None,
+                    win32_status: None,
     })
 }
 
@@ -305,6 +329,18 @@ fn try_slash_date(line: &str, date_order: DateOrder) -> Option<LogEntry> {
                     gle_code: None,
                     setup_phase: None,
                     operation_name: None,
+                    http_method: None,
+                    uri_stem: None,
+                    uri_query: None,
+                    status_code: None,
+                    sub_status: None,
+                    time_taken_ms: None,
+                    client_ip: None,
+                    server_ip: None,
+                    user_agent: None,
+                    server_port: None,
+                    username: None,
+                    win32_status: None,
     })
 }
 
@@ -361,6 +397,18 @@ fn try_syslog(line: &str) -> Option<LogEntry> {
                     gle_code: None,
                     setup_phase: None,
                     operation_name: None,
+                    http_method: None,
+                    uri_stem: None,
+                    uri_query: None,
+                    status_code: None,
+                    sub_status: None,
+                    time_taken_ms: None,
+                    client_ip: None,
+                    server_ip: None,
+                    user_agent: None,
+                    server_port: None,
+                    username: None,
+                    win32_status: None,
     })
 }
 
@@ -407,6 +455,18 @@ fn try_time_only(line: &str) -> Option<LogEntry> {
                     gle_code: None,
                     setup_phase: None,
                     operation_name: None,
+                    http_method: None,
+                    uri_stem: None,
+                    uri_query: None,
+                    status_code: None,
+                    sub_status: None,
+                    time_taken_ms: None,
+                    client_ip: None,
+                    server_ip: None,
+                    user_agent: None,
+                    server_port: None,
+                    username: None,
+                    win32_status: None,
     })
 }
 

@@ -11,8 +11,15 @@ export type ColumnId =
   | "sourceFile"
   | "filePath"
   | "ipAddress"
+  | "clientIp"
+  | "serverIp"
   | "hostName"
   | "macAddress"
+  | "httpMethod"
+  | "uri"
+  | "statusCode"
+  | "timeTakenMs"
+  | "userAgent"
   | "resultCode"
   | "gleCode"
   | "setupPhase"
@@ -126,6 +133,24 @@ export const ALL_COLUMNS: readonly ColumnDefinition[] = [
     accessor: (e) => e.ipAddress ?? null,
   },
   {
+    id: "clientIp",
+    label: "Client IP",
+    defaultWidth: 140,
+    minWidth: 80,
+    isFlex: false,
+    isDetail: true,
+    accessor: (e) => e.clientIp ?? null,
+  },
+  {
+    id: "serverIp",
+    label: "Server IP",
+    defaultWidth: 140,
+    minWidth: 80,
+    isFlex: false,
+    isDetail: true,
+    accessor: (e) => e.serverIp ?? null,
+  },
+  {
     id: "hostName",
     label: "Host Name",
     defaultWidth: 200,
@@ -142,6 +167,56 @@ export const ALL_COLUMNS: readonly ColumnDefinition[] = [
     isFlex: false,
     isDetail: true,
     accessor: (e) => e.macAddress ?? null,
+  },
+  {
+    id: "httpMethod",
+    label: "Method",
+    defaultWidth: 100,
+    minWidth: 70,
+    isFlex: false,
+    isDetail: true,
+    accessor: (e) => e.httpMethod ?? null,
+  },
+  {
+    id: "uri",
+    label: "URI",
+    defaultWidth: 280,
+    minWidth: 120,
+    isFlex: false,
+    isDetail: true,
+    accessor: (e) =>
+      e.uriStem
+        ? e.uriQuery
+          ? `${e.uriStem}?${e.uriQuery}`
+          : e.uriStem
+        : null,
+  },
+  {
+    id: "statusCode",
+    label: "Status",
+    defaultWidth: 90,
+    minWidth: 60,
+    isFlex: false,
+    isDetail: true,
+    accessor: (e) => e.statusCode ?? null,
+  },
+  {
+    id: "timeTakenMs",
+    label: "Time (ms)",
+    defaultWidth: 110,
+    minWidth: 70,
+    isFlex: false,
+    isDetail: true,
+    accessor: (e) => e.timeTakenMs ?? null,
+  },
+  {
+    id: "userAgent",
+    label: "User Agent",
+    defaultWidth: 260,
+    minWidth: 120,
+    isFlex: false,
+    isDetail: true,
+    accessor: (e) => e.userAgent ?? null,
   },
   {
     id: "resultCode",
@@ -194,6 +269,7 @@ export function getColumnDef(id: ColumnId): ColumnDefinition | undefined {
 const PARSER_COLUMN_MAP: Record<ParserKind, ColumnId[]> = {
   ccm: ["severity", "dateTime", "message", "component", "thread", "sourceFile"],
   simple: ["severity", "dateTime", "message", "component", "thread"],
+  iisW3c: ["severity", "dateTime", "message", "httpMethod", "uri", "statusCode", "clientIp", "timeTakenMs", "serverIp", "userAgent"],
   dism: ["severity", "dateTime", "message", "component"],
   panther: ["severity", "dateTime", "message", "component", "thread", "sourceFile", "resultCode", "gleCode", "setupPhase", "operationName"],
   cbs: ["severity", "dateTime", "message", "component"],
