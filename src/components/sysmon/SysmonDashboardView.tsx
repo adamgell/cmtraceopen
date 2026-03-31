@@ -86,12 +86,14 @@ export function SysmonDashboardView() {
           emptyMessage="No port data available."
           color={tokens.colorPalettePurpleBackground2}
         />
-        <DashboardTopList
-          title="Registry Activity"
-          items={dashboard.topRegistryKeys}
-          emptyMessage="No registry activity data available."
-          color={tokens.colorPaletteCranberryBackground2}
-        />
+        <div style={{ gridColumn: "1 / -1" }}>
+          <DashboardTopList
+            title="Registry Activity"
+            items={dashboard.topRegistryKeys}
+            emptyMessage="No registry activity data available."
+            color={tokens.colorPaletteCranberryBackground2}
+          />
+        </div>
       </div>
     </div>
   );
