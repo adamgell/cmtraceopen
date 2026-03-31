@@ -112,6 +112,20 @@ export interface KnownSourceMetadata {
   defaultFileIntent?: KnownSourceDefaultFileIntent;
 }
 
+export interface KnownSourceToolbarGroup {
+  id: string;
+  label: string;
+  sortOrder: number;
+  sources: KnownSourceMetadata[];
+}
+
+export interface KnownSourceToolbarFamily {
+  id: string;
+  label: string;
+  sortOrder: number;
+  groups: KnownSourceToolbarGroup[];
+}
+
 export interface ErrorCodeSpan {
   start: number;
   end: number;

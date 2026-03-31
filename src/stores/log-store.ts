@@ -4,6 +4,7 @@ import type {
   EvidenceBundleMetadata,
   FolderEntry,
   KnownSourceMetadata,
+  KnownSourceToolbarFamily,
   LogEntry,
   LogFormat,
   LogSource,
@@ -71,13 +72,6 @@ export interface SourceStatus {
   kind: SourceStatusKind;
   message: string;
   detail?: string;
-}
-
-export interface KnownSourceToolbarGroup {
-  id: string;
-  label: string;
-  sortOrder: number;
-  sources: KnownSourceMetadata[];
 }
 
 export interface StreamStateSnapshot {
@@ -423,57 +417,76 @@ function compareMergedLogEntries(
   return left.message.localeCompare(right.message);
 }
 
-function buildToolbarKnownSourceGroups(
+function buildToolbarKnownSourceFamilies(
   sources: KnownSourceMetadata[]
-): KnownSourceToolbarGroup[] {
-  const groups = new Map<string, KnownSourceToolbarGroup>();
+): KnownSourceToolbarFamily[] {
+  const families = new Map<string, KnownSourceToolbarFamily>();
 
   for (const source of sources) {
     const grouping = source.grouping;
+    const familyId = grouping?.familyId ?? UNGROUPED_TOOLBAR_GROUP_ID;
+    const familyLabel = grouping?.familyLabel ?? UNGROUPED_TOOLBAR_GROUP_LABEL;
     const groupId = grouping
       ? `${grouping.familyId}:${grouping.groupId}`
       : UNGROUPED_TOOLBAR_GROUP_ID;
-    const groupLabel = grouping
-      ? `${grouping.familyLabel} / ${grouping.groupLabel}`
-      : UNGROUPED_TOOLBAR_GROUP_LABEL;
+    const groupLabel = grouping?.groupLabel ?? UNGROUPED_TOOLBAR_GROUP_LABEL;
     const groupOrder = grouping?.groupOrder ?? LAST_SORT_ORDER;
+    const familySortOrder = grouping?.groupOrder ?? LAST_SORT_ORDER;
 
-    const existingGroup = groups.get(groupId);
-
-    if (existingGroup) {
-      existingGroup.sources.push(source);
-      continue;
+    let family = families.get(familyId);
+    if (!family) {
+      family = {
+        id: familyId,
+        label: familyLabel,
+        sortOrder: familySortOrder,
+        groups: [],
+      };
+      families.set(familyId, family);
     }
 
-    groups.set(groupId, {
-      id: groupId,
-      label: groupLabel,
-      sortOrder: groupOrder,
-      sources: [source],
-    });
+    if (familySortOrder < family.sortOrder) {
+      family.sortOrder = familySortOrder;
+    }
+
+    let group = family.groups.find((g) => g.id === groupId);
+    if (!group) {
+      group = {
+        id: groupId,
+        label: groupLabel,
+        sortOrder: groupOrder,
+        sources: [],
+      };
+      family.groups.push(group);
+    }
+
+    group.sources.push(source);
   }
 
-  return Array.from(groups.values())
-    .map((group) => ({
-      ...group,
-      sources: [...group.sources].sort((left, right) => {
-        const leftOrder = left.grouping?.sourceOrder ?? LAST_SORT_ORDER;
-        const rightOrder = right.grouping?.sourceOrder ?? LAST_SORT_ORDER;
-
-        if (leftOrder !== rightOrder) {
-          return leftOrder - rightOrder;
-        }
-
-        return left.label.localeCompare(right.label);
-      }),
+  return Array.from(families.values())
+    .map((family) => ({
+      ...family,
+      groups: family.groups
+        .map((group) => ({
+          ...group,
+          sources: [...group.sources].sort((a, b) => {
+            const aOrder = a.grouping?.sourceOrder ?? LAST_SORT_ORDER;
+            const bOrder = b.grouping?.sourceOrder ?? LAST_SORT_ORDER;
+            return aOrder !== bOrder
+              ? aOrder - bOrder
+              : a.label.localeCompare(b.label);
+          }),
+        }))
+        .sort((a, b) =>
+          a.sortOrder !== b.sortOrder
+            ? a.sortOrder - b.sortOrder
+            : a.label.localeCompare(b.label)
+        ),
     }))
-    .sort((left, right) => {
-      if (left.sortOrder !== right.sortOrder) {
-        return left.sortOrder - right.sortOrder;
-      }
-
-      return left.label.localeCompare(right.label);
-    });
+    .sort((a, b) =>
+      a.sortOrder !== b.sortOrder
+        ? a.sortOrder - b.sortOrder
+        : a.label.localeCompare(b.label)
+    );
 }
 
 interface LogState {
@@ -496,7 +509,7 @@ interface LogState {
   /** Known source metadata catalog for menu/sidebar usage. */
   knownSources: KnownSourceMetadata[];
   /** Toolbar-ready grouped known source catalog. */
-  knownSourceToolbarGroups: KnownSourceToolbarGroup[];
+  knownSourceToolbarFamilies: KnownSourceToolbarFamily[];
   /** Selected file inside the active source container. */
   selectedSourceFilePath: string | null;
   /** Included files when the active source is loaded as an aggregate folder stream. */
@@ -665,7 +678,7 @@ export const useLogStore = create<LogState>((set, get) => ({
   sourceEntries: [],
   bundleMetadata: null,
   knownSources: [],
-  knownSourceToolbarGroups: [],
+  knownSourceToolbarFamilies: [],
   selectedSourceFilePath: null,
   aggregateFiles: [],
   sourceStatus: {
@@ -753,7 +766,7 @@ export const useLogStore = create<LogState>((set, get) => ({
   setKnownSources: (sources) =>
     set({
       knownSources: sources,
-      knownSourceToolbarGroups: buildToolbarKnownSourceGroups(sources),
+      knownSourceToolbarFamilies: buildToolbarKnownSourceFamilies(sources),
     }),
   setSelectedSourceFilePath: (path) =>
     set({ selectedSourceFilePath: path, openFilePath: path }),
@@ -839,7 +852,7 @@ export const useLogStore = create<LogState>((set, get) => ({
       sourceEntries: [],
       bundleMetadata: null,
       knownSources: [],
-      knownSourceToolbarGroups: [],
+      knownSourceToolbarFamilies: [],
       selectedSourceFilePath: null,
       aggregateFiles: [],
       activeColumns: DEFAULT_COLUMNS,

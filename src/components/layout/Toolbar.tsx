@@ -10,8 +10,6 @@ import {
   Dropdown,
   Input,
   Menu,
-  MenuGroup,
-  MenuGroupHeader,
   MenuItem,
   MenuList,
   MenuPopover,
@@ -762,7 +760,7 @@ export function useAppActions(): AppActionHandlers {
 export function Toolbar() {
   const highlightText = useLogStore((s) => s.highlightText);
   const setHighlightText = useLogStore((s) => s.setHighlightText);
-  const knownSourceToolbarGroups = useLogStore((s) => s.knownSourceToolbarGroups);
+  const knownSourceToolbarFamilies = useLogStore((s) => s.knownSourceToolbarFamilies);
 
   const activeView = useUiStore((s) => s.activeView);
   const setActiveView = useUiStore((s) => s.setActiveView);
@@ -882,12 +880,12 @@ export function Toolbar() {
             size="small"
             disabled={
               !commandState.canOpenKnownSources ||
-              knownSourceToolbarGroups.length === 0
+              knownSourceToolbarFamilies.length === 0
             }
             title="Open a known log source"
           >
             {commandState.canOpenKnownSources
-              ? knownSourceToolbarGroups.length > 0
+              ? knownSourceToolbarFamilies.length > 0
                 ? isIntuneWorkspace(activeView)
                   ? "Open Known Intune Source..."
                   : "Open Known Log Source..."
@@ -897,24 +895,46 @@ export function Toolbar() {
         </MenuTrigger>
         <MenuPopover>
           <MenuList>
-            {knownSourceToolbarGroups.map((group) => (
-              <MenuGroup key={group.id}>
-                <MenuGroupHeader>{group.label}</MenuGroupHeader>
-                {group.sources.map((source) => (
-                  <MenuItem
-                    key={source.id}
-                    title={source.description}
-                    onClick={() =>
-                      void openKnownSourceCatalogAction({
-                        sourceId: source.id,
-                        trigger: "toolbar.known-source-select",
-                      }).catch((err) => console.error("Failed to open known source catalog action", err))
-                    }
-                  >
-                    {source.label}
-                  </MenuItem>
-                ))}
-              </MenuGroup>
+            {knownSourceToolbarFamilies.map((family) => (
+              <Menu key={family.id}>
+                <MenuTrigger disableButtonEnhancement>
+                  <MenuItem>{family.label}</MenuItem>
+                </MenuTrigger>
+                <MenuPopover>
+                  <MenuList>
+                    {family.groups.map((group) => (
+                      <Menu key={group.id}>
+                        <MenuTrigger disableButtonEnhancement>
+                          <MenuItem>{group.label}</MenuItem>
+                        </MenuTrigger>
+                        <MenuPopover>
+                          <MenuList>
+                            {group.sources.map((source) => (
+                              <MenuItem
+                                key={source.id}
+                                title={source.description}
+                                onClick={() =>
+                                  void openKnownSourceCatalogAction({
+                                    sourceId: source.id,
+                                    trigger: "toolbar.known-source-select",
+                                  }).catch((err) =>
+                                    console.error(
+                                      "Failed to open known source catalog action",
+                                      err
+                                    )
+                                  )
+                                }
+                              >
+                                {source.label}
+                              </MenuItem>
+                            ))}
+                          </MenuList>
+                        </MenuPopover>
+                      </Menu>
+                    ))}
+                  </MenuList>
+                </MenuPopover>
+              </Menu>
             ))}
           </MenuList>
         </MenuPopover>
