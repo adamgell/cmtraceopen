@@ -3,12 +3,19 @@ import { tokens } from "@fluentui/react-components";
 import { LOG_UI_FONT_FAMILY, LOG_MONOSPACE_FONT_FAMILY } from "../../lib/log-accessibility";
 import type { DownloadStat } from "../../types/intune";
 import { formatDisplayDateTime } from "../../lib/date-time-format";
+import { useIntuneStore } from "../../stores/intune-store";
+import type { DownloadSortField } from "../../stores/intune-store";
 
 interface DownloadStatsProps {
   downloads: DownloadStat[];
 }
 
 export function DownloadStats({ downloads }: DownloadStatsProps) {
+  const downloadSortField = useIntuneStore((s) => s.downloadSortField);
+  const downloadSortDirection = useIntuneStore((s) => s.downloadSortDirection);
+  const setDownloadSortField = useIntuneStore((s) => s.setDownloadSortField);
+  const toggleDownloadSortDirection = useIntuneStore((s) => s.toggleDownloadSortDirection);
+
   const aggregate = useMemo(() => {
     let success = 0;
     let failed = 0;
@@ -25,6 +32,50 @@ export function DownloadStats({ downloads }: DownloadStatsProps) {
 
     return { success, failed, totalBytes };
   }, [downloads]);
+
+  const sortedDownloads = useMemo(() => {
+    return [...downloads].sort((a, b) => {
+      let cmp = 0;
+      switch (downloadSortField) {
+        case "name":
+          cmp = a.name.localeCompare(b.name);
+          break;
+        case "size":
+          cmp = a.sizeBytes - b.sizeBytes;
+          break;
+        case "speed":
+          cmp = a.speedBps - b.speedBps;
+          break;
+        case "doPercentage":
+          cmp = a.doPercentage - b.doPercentage;
+          break;
+        case "duration":
+          cmp = a.durationSecs - b.durationSecs;
+          break;
+        case "timestamp": {
+          const aTime = a.timestampEpoch;
+          const bTime = b.timestampEpoch;
+          if (aTime == null && bTime == null) cmp = 0;
+          else if (aTime == null) cmp = 1;
+          else if (bTime == null) cmp = -1;
+          else cmp = aTime - bTime;
+          break;
+        }
+      }
+      return downloadSortDirection === "asc" ? cmp : -cmp;
+    });
+  }, [downloads, downloadSortField, downloadSortDirection]);
+
+  const sortIndicator = (field: DownloadSortField) =>
+    downloadSortField === field ? (downloadSortDirection === "asc" ? " ▲" : " ▼") : "";
+
+  const handleHeaderClick = (field: DownloadSortField) => {
+    if (downloadSortField === field) {
+      toggleDownloadSortDirection();
+    } else {
+      setDownloadSortField(field);
+    }
+  };
 
   if (downloads.length === 0) {
     return (
@@ -74,16 +125,16 @@ export function DownloadStats({ downloads }: DownloadStatsProps) {
               }}
             >
               <th style={thStyle}>Status</th>
-              <th style={thStyle}>Content</th>
-              <th style={{ ...thStyle, textAlign: "right", width: "80px" }}>Size</th>
-              <th style={{ ...thStyle, textAlign: "right", width: "90px" }}>Speed</th>
-              <th style={{ ...thStyle, width: "120px" }}>DO %</th>
-              <th style={{ ...thStyle, textAlign: "right", width: "70px" }}>Dur.</th>
-              <th style={{ ...thStyle, width: "130px" }}>Timestamp</th>
+              <th style={{ ...thStyle, cursor: "pointer" }} onClick={() => handleHeaderClick("name")}>Content{sortIndicator("name")}</th>
+              <th style={{ ...thStyle, textAlign: "right", width: "80px", cursor: "pointer" }} onClick={() => handleHeaderClick("size")}>Size{sortIndicator("size")}</th>
+              <th style={{ ...thStyle, textAlign: "right", width: "90px", cursor: "pointer" }} onClick={() => handleHeaderClick("speed")}>Speed{sortIndicator("speed")}</th>
+              <th style={{ ...thStyle, width: "120px", cursor: "pointer" }} onClick={() => handleHeaderClick("doPercentage")}>DO %{sortIndicator("doPercentage")}</th>
+              <th style={{ ...thStyle, textAlign: "right", width: "70px", cursor: "pointer" }} onClick={() => handleHeaderClick("duration")}>Dur.{sortIndicator("duration")}</th>
+              <th style={{ ...thStyle, width: "130px", cursor: "pointer" }} onClick={() => handleHeaderClick("timestamp")}>Timestamp{sortIndicator("timestamp")}</th>
             </tr>
           </thead>
           <tbody>
-            {downloads.map((dl, i) => (
+            {sortedDownloads.map((dl, i) => (
               <tr
                 key={`${dl.contentId}-${dl.timestamp ?? i}-${i}`}
                 style={{
