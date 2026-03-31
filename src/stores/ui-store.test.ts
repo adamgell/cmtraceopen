@@ -182,8 +182,8 @@ describe("getAvailableWorkspaces", () => {
   it("returns macos workspaces for macos", () => {
     const workspaces = getAvailableWorkspaces("macos");
     expect(workspaces).toContain("log");
-    expect(workspaces).toContain("sysmon");
     expect(workspaces).toContain("macos-diag");
+    expect(workspaces).not.toContain("sysmon");
     expect(workspaces).not.toContain("dsregcmd");
     expect(workspaces).not.toContain("deployment");
   });
@@ -191,7 +191,7 @@ describe("getAvailableWorkspaces", () => {
   it("returns linux workspaces for linux", () => {
     const workspaces = getAvailableWorkspaces("linux");
     expect(workspaces).toContain("log");
-    expect(workspaces).toContain("sysmon");
+    expect(workspaces).not.toContain("sysmon");
     expect(workspaces).not.toContain("dsregcmd");
     expect(workspaces).not.toContain("macos-diag");
   });
