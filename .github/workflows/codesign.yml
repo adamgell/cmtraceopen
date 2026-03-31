@@ -196,57 +196,26 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
-      # ── Build application binaries (compile only, no bundling yet) ──
-      - name: Build full edition EXE (compile only)
-        run: npx tauri build --target ${{ matrix.rust_target }} --no-bundle
-
-      - name: Build lite edition EXE (compile only)
-        run: npx tauri build --target ${{ matrix.rust_target }} --no-bundle --config src-tauri/tauri.lite.conf.json -- --no-default-features
-
-      # ── Sign application binaries BEFORE bundling ──
-      # This ensures the EXEs inside NSIS and MSI installers are signed,
-      # not just the outer installer packages. Fixes issue #74 where
-      # ASR rules block unsigned binaries after installation.
-      - name: Collect app binaries for code signing
-        id: collect_binaries
-        shell: pwsh
-        run: |
-          $releaseDir = Join-Path $PWD "src-tauri\target\${{ matrix.rust_target }}\release"
-          $signDir = Join-Path $PWD "sign-prebundle"
-          New-Item -ItemType Directory -Force -Path $signDir | Out-Null
-          Copy-Item (Join-Path $releaseDir "CMTrace Open.exe") $signDir -Force
-          Copy-Item (Join-Path $releaseDir "CMTrace Open Lite.exe") $signDir -Force
-          "sign_dir=$signDir" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
-
-      - name: Sign application binaries
-        uses: azure/trusted-signing-action@v0
-        with:
-          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
-          endpoint: ${{ secrets.SIGNING_ENDPOINT }}
-          trusted-signing-account-name: ${{ secrets.SIGNING_ACCOUNT_NAME }}
-          certificate-profile-name: ${{ secrets.SIGNING_PROFILE_NAME }}
-          files-folder: ${{ steps.collect_binaries.outputs.sign_dir }}
-          files-folder-filter: exe
-          file-digest: SHA256
-          timestamp-rfc3161: http://timestamp.acs.microsoft.com
-          timestamp-digest: SHA256
-
-      - name: Replace binaries with signed versions
-        shell: pwsh
-        run: |
-          $releaseDir = Join-Path $PWD "src-tauri\target\${{ matrix.rust_target }}\release"
-          $signDir = "${{ steps.collect_binaries.outputs.sign_dir }}"
-          Copy-Item (Join-Path $signDir "CMTrace Open.exe") $releaseDir -Force
-          Copy-Item (Join-Path $signDir "CMTrace Open Lite.exe") $releaseDir -Force
-
-      # ── Build NSIS installer (bundles the already-signed binary) ──
-      - name: Build NSIS installer
+      # ── Build full edition + NSIS installer ──
+      # Tauri patches the binary with bundle-type metadata during bundling,
+      # so the NSIS installer must be built in the same step as the binary.
+      - name: Build full edition (NSIS + standalone EXE)
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: npx tauri build --target ${{ matrix.rust_target }} --bundles nsis
+        run: npm run app:build:release -- --target ${{ matrix.rust_target }} --bundles nsis
+
+      # Save the full binary before lite build overwrites it
+      # (both builds produce cmtrace-open.exe in the same release dir)
+      - name: Save full edition binary
+        shell: pwsh
+        run: |
+          $releaseDir = Join-Path $PWD "src-tauri\target\${{ matrix.rust_target }}\release"
+          Copy-Item (Join-Path $releaseDir "cmtrace-open.exe") (Join-Path $PWD "full-edition.exe") -Force
+
+      # ── Build lite edition (no bundle, overwrites cmtrace-open.exe) ──
+      - name: Build lite edition (standalone EXE)
+        run: npx tauri build --target ${{ matrix.rust_target }} --no-bundle --config src-tauri/tauri.lite.conf.json -- --no-default-features
 
       # ── Stage all release artifacts ──
       - name: Stage release artifacts
@@ -259,54 +228,31 @@ jobs:
 
           New-Item -ItemType Directory -Force -Path $artifactDir | Out-Null
 
-          # Find the full edition EXE
-          $fullExeCandidates = Get-ChildItem -Path $releaseDir -Filter "CMTrace Open.exe" -File
-          if ($fullExeCandidates.Count -eq 0) {
-            $fullExeCandidates = Get-ChildItem -Path $releaseDir -Filter *.exe -File |
-              Where-Object {
-                $_.DirectoryName -eq $releaseDir -and
-                $_.Name -notmatch '(?i)(setup|updater|uninstall|nsis|lite)'
-              }
-          }
-          if ($fullExeCandidates.Count -lt 1) {
-            throw "Could not find full edition EXE in $releaseDir"
-          }
+          # Full EXE from saved copy (before lite build overwrote it)
+          $stagedFullExe = Join-Path $artifactDir "CMTrace-Open_$($env:VERSION)_${{ matrix.artifact_suffix }}.exe"
+          Copy-Item (Join-Path $PWD "full-edition.exe") $stagedFullExe -Force
 
-          # Find the lite edition EXE
-          $liteExeCandidates = Get-ChildItem -Path $releaseDir -Filter "CMTrace Open Lite.exe" -File
-          if ($liteExeCandidates.Count -eq 0) {
-            $liteExeCandidates = Get-ChildItem -Path $releaseDir -Filter *.exe -File |
-              Where-Object {
-                $_.DirectoryName -eq $releaseDir -and
-                $_.Name -match '(?i)lite'
-              }
-          }
-          if ($liteExeCandidates.Count -lt 1) {
-            throw "Could not find lite edition EXE in $releaseDir"
-          }
+          # Lite EXE from release dir (current cmtrace-open.exe is the lite build)
+          $stagedLiteExe = Join-Path $artifactDir "CMTrace-Open-Lite_$($env:VERSION)_${{ matrix.artifact_suffix }}.exe"
+          Copy-Item (Join-Path $releaseDir "cmtrace-open.exe") $stagedLiteExe -Force
 
-          # Find NSIS setup installer
+          # NSIS setup installer
           $nsisCandidates = Get-ChildItem -Path $bundleNsisDir -Filter *-setup.exe -File -Recurse
           if ($nsisCandidates.Count -ne 1) {
             $names = ($nsisCandidates | ForEach-Object { $_.FullName }) -join ", "
             throw "Expected exactly one NSIS setup EXE in $bundleNsisDir. Found: $names"
           }
-
-          # Stage with release naming
-          $stagedFullExe = Join-Path $artifactDir "CMTrace-Open_$($env:VERSION)_${{ matrix.artifact_suffix }}.exe"
-          $stagedLiteExe = Join-Path $artifactDir "CMTrace-Open-Lite_$($env:VERSION)_${{ matrix.artifact_suffix }}.exe"
           $stagedNsis = Join-Path $artifactDir "CMTrace-Open_$($env:VERSION)_${{ matrix.artifact_suffix }}-setup.exe"
-
-          Copy-Item $fullExeCandidates[0].FullName $stagedFullExe -Force
-          Copy-Item $liteExeCandidates[0].FullName $stagedLiteExe -Force
           Copy-Item $nsisCandidates[0].FullName $stagedNsis -Force
 
           "full_exe_path=$stagedFullExe" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
           "lite_exe_path=$stagedLiteExe" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
           "nsis_path=$stagedNsis" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
-      # ── Sign NSIS outer installer ──
-      - name: Sign NSIS installer
+      # ── Sign all EXEs (standalone full, lite, and NSIS outer installer) ──
+      # The signed standalone EXEs are also used by mpdev to build the MSI,
+      # so the binaries inside the MSI will carry valid signatures.
+      - name: Sign release EXEs
         uses: azure/trusted-signing-action@v0
         with:
           azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
