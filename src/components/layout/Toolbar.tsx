@@ -21,6 +21,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { platform } from "@tauri-apps/plugin-os";
 import {
   analyzeIntuneLogs,
+  analyzeSysmonLogs,
   getAvailableWorkspaces as getAvailableBackendWorkspaces,
   inspectPathKind,
 } from "../../lib/commands";
@@ -33,6 +34,7 @@ import { useLogStore } from "../../stores/log-store";
 import { useFilterStore } from "../../stores/filter-store";
 import { useIntuneStore } from "../../stores/intune-store";
 import { useDsregcmdStore } from "../../stores/dsregcmd-store";
+import { useSysmonStore } from "../../stores/sysmon-store";
 import { isIntuneWorkspace, getAvailableWorkspaces, type IntuneWorkspaceId, type WorkspaceId, type PlatformId, useUiStore } from "../../stores/ui-store";
 import { ThemePicker } from "./ThemePicker";
 import {
@@ -99,7 +101,13 @@ const WORKSPACE_LABELS: Record<WorkspaceId, string> = {
   "macos-diag": "macOS Diagnostics",
   deployment: "Software Deployment",
   "event-log": "Event Log Viewer",
+  sysmon: "Sysmon",
 };
+
+const SYSMON_FILE_DIALOG_FILTERS = [
+  { name: "EVTX Files", extensions: ["evtx"] },
+  { name: "All Files", extensions: ["*"] },
+];
 
 function getOpenFileDialogFilters(workspace: WorkspaceId) {
   if (isIntuneWorkspace(workspace)) {
@@ -108,6 +116,10 @@ function getOpenFileDialogFilters(workspace: WorkspaceId) {
 
   if (workspace === "dsregcmd") {
     return DSREGCMD_FILE_DIALOG_FILTERS;
+  }
+
+  if (workspace === "sysmon") {
+    return SYSMON_FILE_DIALOG_FILTERS;
   }
 
   return LOG_FILE_DIALOG_FILTERS;
@@ -127,6 +139,14 @@ function getOpenActionLabels(workspace: WorkspaceId) {
       file: "Open IME Log File",
       folder: "Open IME Or Evidence Folder",
       openPlaceholder: "Open Intune Source...",
+    };
+  }
+
+  if (workspace === "sysmon") {
+    return {
+      file: "Open EVTX File",
+      folder: "Open EVTX Folder",
+      openPlaceholder: "Open Sysmon Source...",
     };
   }
 
@@ -232,6 +252,9 @@ export function useAppActions(): AppActionHandlers {
   const dsregcmdIsAnalyzing = useDsregcmdStore((s) => s.isAnalyzing);
   const dsregcmdSource = useDsregcmdStore((s) => s.sourceContext.source);
   const dsregcmdBundlePath = useDsregcmdStore((s) => s.sourceContext.bundlePath);
+  const beginSysmonAnalysis = useSysmonStore((s) => s.beginAnalysis);
+  const setSysmonResults = useSysmonStore((s) => s.setResults);
+  const failSysmonAnalysis = useSysmonStore((s) => s.failAnalysis);
 
   const activeWorkspace = useUiStore((s) => s.activeWorkspace);
   const activeView = useUiStore((s) => s.activeView);
@@ -415,6 +438,30 @@ export function useAppActions(): AppActionHandlers {
     []
   );
 
+  const analyzeSysmonWorkspaceSource = useCallback(
+    async (source: LogSource, trigger: string) => {
+      useUiStore.getState().ensureWorkspaceVisible("sysmon", trigger);
+      const sourcePath = getLogSourcePath(source);
+      const requestId = `sysmon-${Date.now()}`;
+      beginSysmonAnalysis(sourcePath);
+
+      try {
+        const result = await analyzeSysmonLogs(sourcePath, requestId);
+        startTransition(() => {
+          setSysmonResults(result);
+        });
+      } catch (error) {
+        console.error("[app-actions] failed to analyze Sysmon source", {
+          source,
+          trigger,
+          error,
+        });
+        failSysmonAnalysis(error instanceof Error ? error.message : String(error));
+      }
+    },
+    [beginSysmonAnalysis, setSysmonResults, failSysmonAnalysis]
+  );
+
   const openSourceForWorkspace = useCallback(
     async (source: LogSource, trigger: string, workspace: WorkspaceId) => {
       if (isIntuneWorkspace(workspace)) {
@@ -424,6 +471,11 @@ export function useAppActions(): AppActionHandlers {
 
       if (workspace === "dsregcmd") {
         await analyzeDsregcmdWorkspaceSource(source, trigger);
+        return;
+      }
+
+      if (workspace === "sysmon") {
+        await analyzeSysmonWorkspaceSource(source, trigger);
         return;
       }
 
@@ -447,6 +499,7 @@ export function useAppActions(): AppActionHandlers {
     [
       analyzeDsregcmdWorkspaceSource,
       analyzeIntuneWorkspaceSource,
+      analyzeSysmonWorkspaceSource,
       loadLogWorkspaceSource,
     ]
   );

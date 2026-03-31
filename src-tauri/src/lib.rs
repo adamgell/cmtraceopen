@@ -14,6 +14,7 @@ pub mod macos_diag;
 mod menu;
 mod models;
 pub mod parser;
+pub mod sysmon;
 mod state;
 mod watcher;
 
@@ -118,6 +119,7 @@ pub fn run() {
             event_log::commands::evtx_enumerate_channels,
             #[cfg(feature = "event-log")]
             event_log::commands::evtx_query_channels,
+            commands::sysmon::analyze_sysmon_logs,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

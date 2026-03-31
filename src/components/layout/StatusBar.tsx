@@ -21,6 +21,7 @@ import {
 import { useIntuneStore } from "../../stores/intune-store";
 import { useDsregcmdStore } from "../../stores/dsregcmd-store";
 import { useDeploymentStore } from "../../stores/deployment-store";
+import { useSysmonStore } from "../../stores/sysmon-store";
 
 interface SeverityCounts {
   errors: number;
@@ -74,6 +75,11 @@ export function StatusBar() {
 
   const deploymentPhase = useDeploymentStore((s) => s.phase);
   const deploymentResult = useDeploymentStore((s) => s.result);
+
+  const sysmonIsAnalyzing = useSysmonStore((s) => s.isAnalyzing);
+  const sysmonSummary = useSysmonStore((s) => s.summary);
+  const sysmonError = useSysmonStore((s) => s.analysisError);
+  const sysmonSourcePath = useSysmonStore((s) => s.sourcePath);
 
   const filterClauseCount = useFilterStore((s) => s.clauses.length);
   const filteredIds = useFilterStore((s) => s.filteredIds);
@@ -276,6 +282,33 @@ export function StatusBar() {
         .join(" | ");
     } else {
       rightStatusText = intuneAnalysisState.message;
+    }
+  } else if (activeView === "sysmon") {
+    leftParts = [
+      "Sysmon",
+      sysmonIsAnalyzing
+        ? "Analyzing"
+        : sysmonError
+          ? "Analysis failed"
+          : sysmonSummary
+            ? `${sysmonSummary.totalEvents.toLocaleString()} events`
+            : "Ready",
+    ];
+    if (sysmonSourcePath) {
+      leftParts.push(`Source ${getBaseName(sysmonSourcePath)}`);
+    }
+    if (sysmonIsAnalyzing) {
+      rightStatusText = "Analyzing Sysmon EVTX files...";
+      rightTone = tokens.colorPaletteBlueForeground2;
+    } else if (sysmonError) {
+      rightStatusText = sysmonError;
+      rightTone = tokens.colorPaletteRedForeground2;
+    } else if (sysmonSummary) {
+      rightStatusText = [
+        `${sysmonSummary.totalEvents.toLocaleString()} events`,
+        `${sysmonSummary.uniqueProcesses.toLocaleString()} processes`,
+        `${sysmonSummary.sourceFiles.length} files`,
+      ].join(" | ");
     }
   } else if (activeView === "deployment") {
     leftParts = [

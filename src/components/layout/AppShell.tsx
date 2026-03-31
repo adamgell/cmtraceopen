@@ -24,6 +24,7 @@ import { DsregcmdWorkspace } from "../dsregcmd/DsregcmdWorkspace";
 import { MacosDiagWorkspace } from "../macos-diag/MacosDiagWorkspace";
 import { DeploymentWorkspace } from "../deployment/DeploymentWorkspace";
 import { EventLogWorkspace } from "../event-log-workspace/EventLogWorkspace";
+import { SysmonWorkspace } from "../sysmon/SysmonWorkspace";
 import { RegistryViewer } from "../registry-view/RegistryViewer";
 import type { FilterClause } from "../dialogs/FilterDialog";
 import type { LogEntry } from "../../types/log";
@@ -33,6 +34,7 @@ import { useFilterStore } from "../../stores/filter-store";
 import { switchToTab } from "../../lib/log-source";
 import { useFileWatcher } from "../../hooks/use-file-watcher";
 import { useIntuneAnalysisProgress } from "../../hooks/use-intune-analysis-progress";
+import { useSysmonAnalysisProgress } from "../../hooks/use-sysmon-analysis-progress";
 import { useKeyboard } from "../../hooks/use-keyboard";
 import { useDragDrop } from "../../hooks/use-drag-drop";
 import { useFileAssociation } from "../../hooks/use-file-association";
@@ -242,6 +244,7 @@ export function AppShell() {
 
   useFileWatcher();
   useIntuneAnalysisProgress();
+  useSysmonAnalysisProgress();
   useKeyboard();
   useDragDrop();
   // Handle file path passed via OS file association at startup
@@ -405,6 +408,14 @@ export function AppShell() {
       return (
         <div style={{ flex: 1, overflow: "hidden" }}>
           <MacosDiagWorkspace />
+        </div>
+      );
+    }
+
+    if (activeView === "sysmon") {
+      return (
+        <div style={{ flex: 1, overflow: "hidden" }}>
+          <SysmonWorkspace />
         </div>
       );
     }
