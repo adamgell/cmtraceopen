@@ -6,6 +6,7 @@ use regex::Regex;
 use super::guid_registry::{extract_app_id, extract_app_name, is_fallback_name, GuidRegistry};
 use super::ime_parser::ImeLine;
 use super::models::DownloadStat;
+use super::timeline::parse_timestamp;
 use std::sync::OnceLock;
 
 fn download_re() -> &'static Regex {
@@ -210,6 +211,7 @@ pub fn extract_downloads(
             } else {
                 raw_name
             };
+            let ts = partial.last_timestamp.or(partial.start_time);
             downloads.push(DownloadStat {
                 content_id: cid,
                 name,
@@ -218,8 +220,8 @@ pub fn extract_downloads(
                 do_percentage: partial.do_percentage.unwrap_or(0.0),
                 duration_secs: partial.duration_secs.unwrap_or(0.0),
                 success: false,
-                timestamp: partial.last_timestamp.or(partial.start_time),
-                timestamp_epoch: None,
+                timestamp_epoch: ts.as_deref().and_then(parse_timestamp).map(|dt| dt.and_utc().timestamp_millis()),
+                timestamp: ts,
             });
         }
     }
@@ -476,6 +478,11 @@ fn finalize_download(
         raw_name
     };
 
+    let ts = timestamp
+        .map(|value| value.to_string())
+        .or(partial.last_timestamp)
+        .or(partial.start_time);
+
     Some(DownloadStat {
         content_id: resolved_content_id,
         name,
@@ -484,11 +491,8 @@ fn finalize_download(
         do_percentage: partial.do_percentage.unwrap_or(0.0),
         duration_secs: partial.duration_secs.unwrap_or(0.0),
         success,
-        timestamp: timestamp
-            .map(|value| value.to_string())
-            .or(partial.last_timestamp)
-            .or(partial.start_time),
-        timestamp_epoch: None,
+        timestamp_epoch: ts.as_deref().and_then(parse_timestamp).map(|dt| dt.and_utc().timestamp_millis()),
+        timestamp: ts,
     })
 }
 
@@ -646,6 +650,30 @@ mod tests {
             "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
         );
         assert_eq!(downloads[0].name, "Contoso App");
+    }
+
+    #[test]
+    fn completed_download_has_timestamp_epoch() {
+        let lines = vec![
+            ImeLine {
+                line_number: 1,
+                timestamp: Some("01-15-2024 10:00:00.000".to_string()),
+                timestamp_utc: None,
+                message: "Starting content download for app id: a1b2c3d4-e5f6-7890-abcd-ef1234567890".to_string(),
+                component: None,
+            },
+            ImeLine {
+                line_number: 2,
+                timestamp: Some("01-15-2024 10:00:05.000".to_string()),
+                timestamp_utc: None,
+                message: "Download completed successfully. Content size: 5242880 bytes, speed: 1048576 Bps, Delivery Optimization: 75.5%".to_string(),
+                component: None,
+            },
+        ];
+
+        let downloads = extract_downloads(&lines, "C:/Logs/AppWorkload.log", &empty_registry());
+        assert_eq!(downloads.len(), 1);
+        assert!(downloads[0].timestamp_epoch.is_some(), "timestamp_epoch should be populated");
     }
 
     #[test]
