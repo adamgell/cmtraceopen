@@ -48,9 +48,21 @@ pub fn build_timeline(events: Vec<IntuneEvent>) -> Vec<IntuneEvent> {
             .then_with(|| a.event.name.cmp(&b.event.name))
     });
 
-    // Re-assign sequential IDs
+    // Re-assign sequential IDs and populate epoch timestamps
     for (i, entry) in timeline.iter_mut().enumerate() {
         entry.event.id = i as u64;
+        entry.event.start_time_epoch = entry
+            .event
+            .start_time
+            .as_deref()
+            .and_then(parse_timestamp)
+            .map(|dt| dt.and_utc().timestamp_millis());
+        entry.event.end_time_epoch = entry
+            .event
+            .end_time
+            .as_deref()
+            .and_then(parse_timestamp)
+            .map(|dt| dt.and_utc().timestamp_millis());
     }
 
     timeline.into_iter().map(|entry| entry.event).collect()
@@ -484,6 +496,52 @@ mod tests {
 
         let timeline = build_timeline(vec![event, rotated]);
         assert_eq!(timeline.len(), 1);
+    }
+
+    #[test]
+    fn build_timeline_populates_epoch_fields() {
+        let timeline = build_timeline(vec![
+            IntuneEvent {
+                id: 0,
+                event_type: IntuneEventType::Win32App,
+                name: "Test".to_string(),
+                guid: None,
+                status: IntuneStatus::Success,
+                start_time: Some("01-15-2024 10:30:00.000".to_string()),
+                end_time: Some("01-15-2024 10:35:00.000".to_string()),
+                duration_secs: Some(300.0),
+                error_code: None,
+                detail: "test".to_string(),
+                source_file: "a.log".to_string(),
+                line_number: 1,
+                start_time_epoch: None,
+                end_time_epoch: None,
+            },
+            IntuneEvent {
+                id: 1,
+                event_type: IntuneEventType::Win32App,
+                name: "NoTime".to_string(),
+                guid: None,
+                status: IntuneStatus::Pending,
+                start_time: None,
+                end_time: None,
+                duration_secs: None,
+                error_code: None,
+                detail: "no time".to_string(),
+                source_file: "b.log".to_string(),
+                line_number: 1,
+                start_time_epoch: None,
+                end_time_epoch: None,
+            },
+        ]);
+
+        let timed = &timeline[1]; // sorted after NoTime (which has None timestamp)
+        assert!(timed.start_time_epoch.is_some(), "start_time_epoch should be populated");
+        assert!(timed.end_time_epoch.is_some(), "end_time_epoch should be populated");
+
+        let untimed = &timeline[0]; // None timestamps sort first
+        assert!(untimed.start_time_epoch.is_none());
+        assert!(untimed.end_time_epoch.is_none());
     }
 
     #[test]
