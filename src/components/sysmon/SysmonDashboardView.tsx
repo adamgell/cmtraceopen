@@ -45,6 +45,7 @@ export function SysmonDashboardView() {
           display: "grid",
           gridTemplateColumns: "repeat(auto-fill, minmax(400px, 1fr))",
           gap: "16px",
+          alignItems: "start",
         }}
       >
         {/* Timeline spans full width */}

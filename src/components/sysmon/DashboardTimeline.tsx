@@ -116,7 +116,7 @@ export function DashboardTimeline({ dashboard }: DashboardTimelineProps) {
             barWidth={Math.max(4, Math.min(16, Math.floor(800 / data.length)))}
             useSingleColor
             colors={[tokens.colorBrandBackground]}
-            height={220}
+            height={180}
           />
         </div>
       )}

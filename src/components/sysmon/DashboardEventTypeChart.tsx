@@ -51,10 +51,10 @@ export function DashboardEventTypeChart({ summary }: DashboardEventTypeChartProp
       ) : (
         <DonutChart
           data={{ chartData }}
-          innerRadius={55}
+          innerRadius={40}
           valueInsideDonut={summary.totalEvents.toLocaleString()}
           hideLabels={false}
-          height={280}
+          height={200}
         />
       )}
     </div>
