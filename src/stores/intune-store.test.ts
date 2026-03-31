@@ -41,8 +41,8 @@ describe("intune-store", () => {
         detail: "Installed successfully",
         sourceFile: "intune.log",
         lineNumber: 100,
-        startTimeEpoch: 1743206400,
-        endTimeEpoch: 1743206700,
+        startTimeEpoch: 1743206400000,
+        endTimeEpoch: 1743206700000,
       };
 
       const summary = {

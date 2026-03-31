@@ -1,8 +1,9 @@
-import { useMemo } from "react";
+import { useMemo, useCallback } from "react";
 import { tokens } from "@fluentui/react-components";
 import { LOG_UI_FONT_FAMILY, LOG_MONOSPACE_FONT_FAMILY } from "../../lib/log-accessibility";
 import type { DownloadStat } from "../../types/intune";
 import { formatDisplayDateTime } from "../../lib/date-time-format";
+import { compareDownloads } from "../../lib/intune-sort";
 import { useIntuneStore } from "../../stores/intune-store";
 import type { DownloadSortField } from "../../stores/intune-store";
 
@@ -34,40 +35,9 @@ export function DownloadStats({ downloads }: DownloadStatsProps) {
   }, [downloads]);
 
   const sortedDownloads = useMemo(() => {
-    return [...downloads].sort((a, b) => {
-      switch (downloadSortField) {
-        case "name": {
-          const cmp = a.name.localeCompare(b.name);
-          return downloadSortDirection === "asc" ? cmp : -cmp;
-        }
-        case "size": {
-          const cmp = a.sizeBytes - b.sizeBytes;
-          return downloadSortDirection === "asc" ? cmp : -cmp;
-        }
-        case "speed": {
-          const cmp = a.speedBps - b.speedBps;
-          return downloadSortDirection === "asc" ? cmp : -cmp;
-        }
-        case "doPercentage": {
-          const cmp = a.doPercentage - b.doPercentage;
-          return downloadSortDirection === "asc" ? cmp : -cmp;
-        }
-        case "duration": {
-          const cmp = a.durationSecs - b.durationSecs;
-          return downloadSortDirection === "asc" ? cmp : -cmp;
-        }
-        case "timestamp": {
-          const aTime = a.timestampEpoch;
-          const bTime = b.timestampEpoch;
-          if (aTime == null && bTime != null) return 1;
-          if (aTime != null && bTime == null) return -1;
-          if (aTime == null && bTime == null) return 0;
-          return downloadSortDirection === "asc" ? aTime! - bTime! : bTime! - aTime!;
-        }
-        default:
-          return 0;
-      }
-    });
+    return [...downloads].sort((a, b) =>
+      compareDownloads(a, b, downloadSortField, downloadSortDirection)
+    );
   }, [downloads, downloadSortField, downloadSortDirection]);
 
   const sortIndicator = (field: DownloadSortField) =>
@@ -80,6 +50,24 @@ export function DownloadStats({ downloads }: DownloadStatsProps) {
       setDownloadSortField(field);
     }
   };
+
+  const handleHeaderKeyDown = useCallback(
+    (e: React.KeyboardEvent, field: DownloadSortField) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        handleHeaderClick(field);
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [downloadSortField],
+  );
+
+  const ariaSort = (field: DownloadSortField): "ascending" | "descending" | "none" =>
+    downloadSortField === field
+      ? downloadSortDirection === "asc"
+        ? "ascending"
+        : "descending"
+      : "none";
 
   if (downloads.length === 0) {
     return (
@@ -129,12 +117,12 @@ export function DownloadStats({ downloads }: DownloadStatsProps) {
               }}
             >
               <th style={thStyle}>Status</th>
-              <th style={{ ...thStyle, cursor: "pointer" }} onClick={() => handleHeaderClick("name")}>Content{sortIndicator("name")}</th>
-              <th style={{ ...thStyle, textAlign: "right", width: "80px", cursor: "pointer" }} onClick={() => handleHeaderClick("size")}>Size{sortIndicator("size")}</th>
-              <th style={{ ...thStyle, textAlign: "right", width: "90px", cursor: "pointer" }} onClick={() => handleHeaderClick("speed")}>Speed{sortIndicator("speed")}</th>
-              <th style={{ ...thStyle, width: "120px", cursor: "pointer" }} onClick={() => handleHeaderClick("doPercentage")}>DO %{sortIndicator("doPercentage")}</th>
-              <th style={{ ...thStyle, textAlign: "right", width: "70px", cursor: "pointer" }} onClick={() => handleHeaderClick("duration")}>Dur.{sortIndicator("duration")}</th>
-              <th style={{ ...thStyle, width: "130px", cursor: "pointer" }} onClick={() => handleHeaderClick("timestamp")}>Timestamp{sortIndicator("timestamp")}</th>
+              <th style={{ ...thStyle, cursor: "pointer" }} tabIndex={0} aria-sort={ariaSort("name")} onClick={() => handleHeaderClick("name")} onKeyDown={(e) => handleHeaderKeyDown(e, "name")}>Content{sortIndicator("name")}</th>
+              <th style={{ ...thStyle, textAlign: "right", width: "80px", cursor: "pointer" }} tabIndex={0} aria-sort={ariaSort("size")} onClick={() => handleHeaderClick("size")} onKeyDown={(e) => handleHeaderKeyDown(e, "size")}>Size{sortIndicator("size")}</th>
+              <th style={{ ...thStyle, textAlign: "right", width: "90px", cursor: "pointer" }} tabIndex={0} aria-sort={ariaSort("speed")} onClick={() => handleHeaderClick("speed")} onKeyDown={(e) => handleHeaderKeyDown(e, "speed")}>Speed{sortIndicator("speed")}</th>
+              <th style={{ ...thStyle, width: "120px", cursor: "pointer" }} tabIndex={0} aria-sort={ariaSort("doPercentage")} onClick={() => handleHeaderClick("doPercentage")} onKeyDown={(e) => handleHeaderKeyDown(e, "doPercentage")}>DO %{sortIndicator("doPercentage")}</th>
+              <th style={{ ...thStyle, textAlign: "right", width: "70px", cursor: "pointer" }} tabIndex={0} aria-sort={ariaSort("duration")} onClick={() => handleHeaderClick("duration")} onKeyDown={(e) => handleHeaderKeyDown(e, "duration")}>Dur.{sortIndicator("duration")}</th>
+              <th style={{ ...thStyle, width: "130px", cursor: "pointer" }} tabIndex={0} aria-sort={ariaSort("timestamp")} onClick={() => handleHeaderClick("timestamp")} onKeyDown={(e) => handleHeaderKeyDown(e, "timestamp")}>Timestamp{sortIndicator("timestamp")}</th>
             </tr>
           </thead>
           <tbody>

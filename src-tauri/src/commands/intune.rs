@@ -1019,6 +1019,11 @@ fn synthesize_downloads_from_events(events: &[IntuneEvent]) -> Vec<DownloadStat>
             .clone()
             .or_else(|| last.end_time.clone());
 
+        let timestamp_epoch = timestamp
+            .as_deref()
+            .and_then(timeline::parse_timestamp)
+            .map(|dt| dt.and_utc().timestamp_millis());
+
         downloads.push(DownloadStat {
             content_id: content_id.clone(),
             name,
@@ -1028,7 +1033,7 @@ fn synthesize_downloads_from_events(events: &[IntuneEvent]) -> Vec<DownloadStat>
             duration_secs: last.duration_secs.unwrap_or(0.0),
             success,
             timestamp,
-            timestamp_epoch: last.start_time_epoch.or(last.end_time_epoch),
+            timestamp_epoch,
         });
     }
 

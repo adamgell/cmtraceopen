@@ -7,17 +7,9 @@ import {
 } from "../../lib/log-accessibility";
 import { useUiStore } from "../../stores/ui-store";
 import type { IntuneEvent } from "../../types/intune";
+import { compareEvents } from "../../lib/intune-sort";
 import { useIntuneStore } from "../../stores/intune-store";
 import { EventTimelineRow, getFileName } from "./EventTimelineRow";
-
-const STATUS_RANK: Record<string, number> = {
-  Failed: 0,
-  Timeout: 1,
-  InProgress: 2,
-  Pending: 3,
-  Success: 4,
-  Unknown: 5,
-};
 
 interface EventTimelineProps {
   events: IntuneEvent[];
@@ -59,40 +51,9 @@ export function EventTimeline({ events }: EventTimelineProps) {
   }, [events, filterEventType, filterStatus, timelineScope.filePath]);
 
   const sortedEvents = useMemo(() => {
-    return [...filteredEvents].sort((a, b) => {
-      switch (sortField) {
-        case "time": {
-          const aTime = a.startTimeEpoch;
-          const bTime = b.startTimeEpoch;
-          if (aTime == null && bTime != null) return 1;
-          if (aTime != null && bTime == null) return -1;
-          if (aTime == null && bTime == null) return 0;
-          return sortDirection === "asc" ? aTime! - bTime! : bTime! - aTime!;
-        }
-        case "name": {
-          const cmp = a.name.localeCompare(b.name);
-          return sortDirection === "asc" ? cmp : -cmp;
-        }
-        case "type": {
-          const cmp = a.eventType.localeCompare(b.eventType);
-          return sortDirection === "asc" ? cmp : -cmp;
-        }
-        case "status": {
-          const cmp = (STATUS_RANK[a.status] ?? 5) - (STATUS_RANK[b.status] ?? 5);
-          return sortDirection === "asc" ? cmp : -cmp;
-        }
-        case "duration": {
-          const aDur = a.durationSecs;
-          const bDur = b.durationSecs;
-          if (aDur == null && bDur != null) return 1;
-          if (aDur != null && bDur == null) return -1;
-          if (aDur == null && bDur == null) return 0;
-          return sortDirection === "asc" ? aDur! - bDur! : bDur! - aDur!;
-        }
-        default:
-          return 0;
-      }
-    });
+    return [...filteredEvents].sort((a, b) =>
+      compareEvents(a, b, sortField, sortDirection)
+    );
   }, [filteredEvents, sortField, sortDirection]);
 
   useEffect(() => {
