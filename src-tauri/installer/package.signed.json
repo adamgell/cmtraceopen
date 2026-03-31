@@ -12,21 +12,21 @@
   "fileSystemEntries": [
     {
       "sourcePath": "%FULL_EXE_PATH%",
-      "targetPath": "$.installDir\\CMTraceOpen.exe"
+      "targetPath": "$.installDir\\cmtrace-open.exe"
     },
     {
       "sourcePath": "%LITE_EXE_PATH%",
-      "targetPath": "$.installDir\\CMTraceOpenLite.exe"
+      "targetPath": "$.installDir\\cmtrace-open-lite.exe"
     }
   ],
   "shortcuts": [
     {
-      "target": "$.installDir\\CMTraceOpen.exe",
+      "target": "$.installDir\\cmtrace-open.exe",
       "name": "CMTrace Open",
       "location": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs"
     },
     {
-      "target": "$.installDir\\CMTraceOpenLite.exe",
+      "target": "$.installDir\\cmtrace-open-lite.exe",
       "name": "CMTrace Open Lite",
       "location": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs"
     }
