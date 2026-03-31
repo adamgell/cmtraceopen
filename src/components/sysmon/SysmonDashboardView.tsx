@@ -74,12 +74,14 @@ export function SysmonDashboardView() {
           emptyMessage="No DNS query data available."
           color={tokens.colorPaletteGreenBackground2}
         />
-        <DashboardTopList
-          title="File Activity"
-          items={dashboard.topTargetFiles}
-          emptyMessage="No file activity data available."
-          color={tokens.colorPaletteMarigoldBackground2}
-        />
+        <div style={{ gridColumn: "1 / -1" }}>
+          <DashboardTopList
+            title="File Activity"
+            items={dashboard.topTargetFiles}
+            emptyMessage="No file activity data available."
+            color={tokens.colorPaletteMarigoldBackground2}
+          />
+        </div>
         <DashboardTopList
           title="Top Ports"
           items={dashboard.topPorts}
