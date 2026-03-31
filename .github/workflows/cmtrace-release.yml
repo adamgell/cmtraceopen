@@ -24,7 +24,7 @@ jobs:
             target: x86_64-unknown-linux-gnu
             label: Linux-x64
     runs-on: ${{ matrix.os }}
-    environment: ${{ matrix.os == 'macos-latest' && 'codesigning' || '' }}
+    environment: codesigning
     steps:
       - uses: actions/checkout@v4
 
