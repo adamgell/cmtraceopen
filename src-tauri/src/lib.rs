@@ -83,6 +83,7 @@ pub fn run() {
             #[cfg(feature = "deployment")]
             commands::deployment::analyze_deployment_folder,
             commands::fonts::list_system_fonts,
+            commands::reveal::reveal_in_file_manager,
             #[cfg(feature = "dsregcmd")]
             commands::dsregcmd::analyze_dsregcmd,
             #[cfg(feature = "dsregcmd")]

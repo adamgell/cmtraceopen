@@ -5,6 +5,7 @@ import {
   PredefinedMenuItem,
 } from "@tauri-apps/api/menu";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
+import { invoke } from "@tauri-apps/api/core";
 import { useFilterStore } from "../stores/filter-store";
 import { useLogStore } from "../stores/log-store";
 import { useUiStore } from "../stores/ui-store";
@@ -128,10 +129,10 @@ export function useContextMenu() {
       if (entry.sourceFile) {
         items.push(
           await MenuItem.new({
-            id: "copy-source-path",
-            text: `Copy Source Path`,
+            id: "open-source-file",
+            text: `Open Source File`,
             action: () => {
-              writeText(entry.sourceFile!);
+              invoke("reveal_in_file_manager", { path: entry.sourceFile! }).catch(console.error);
             },
           })
         );
