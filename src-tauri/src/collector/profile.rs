@@ -22,8 +22,7 @@ impl CollectionProfile {
     pub fn filter_by_families(&mut self, families: &[String]) {
         self.logs.retain(|item| families.contains(&item.family));
         self.registry.retain(|item| families.contains(&item.family));
-        self.event_logs
-            .retain(|item| families.contains(&item.family));
+        self.event_logs.retain(|item| families.contains(&item.family));
         self.exports.retain(|item| families.contains(&item.family));
         self.commands.retain(|item| families.contains(&item.family));
     }
@@ -63,36 +62,18 @@ mod tests {
 
         profile.filter_by_families(&["general".to_string(), "networking".to_string()]);
 
-        assert!(
-            profile.total_items() > 0,
-            "should have some items for general+networking"
-        );
-        assert!(
-            profile.total_items() < original_total,
-            "should be fewer items than full profile"
-        );
+        assert!(profile.total_items() > 0, "should have some items for general+networking");
+        assert!(profile.total_items() < original_total, "should be fewer items than full profile");
 
         // Verify every remaining item belongs to an allowed family.
         for item in &profile.logs {
-            assert!(
-                item.family == "general" || item.family == "networking",
-                "unexpected log family: {}",
-                item.family
-            );
+            assert!(item.family == "general" || item.family == "networking", "unexpected log family: {}", item.family);
         }
         for item in &profile.registry {
-            assert!(
-                item.family == "general" || item.family == "networking",
-                "unexpected registry family: {}",
-                item.family
-            );
+            assert!(item.family == "general" || item.family == "networking", "unexpected registry family: {}", item.family);
         }
         for item in &profile.commands {
-            assert!(
-                item.family == "general" || item.family == "networking",
-                "unexpected command family: {}",
-                item.family
-            );
+            assert!(item.family == "general" || item.family == "networking", "unexpected command family: {}", item.family);
         }
     }
 

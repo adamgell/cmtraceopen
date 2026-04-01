@@ -19,13 +19,13 @@ use std::sync::OnceLock;
 fn burn_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
-        Regex::new(concat!(
-            r"^\[([0-9A-Fa-f]+):([0-9A-Fa-f]+)\]",        // [PID:TID]
-            r"\[(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})\]", // [ISO timestamp]
-            r"([iew])(\d{3}):\s*(.*)",                    // severity + code + message
-        ))
-        .expect("Burn regex must compile")
-    })
+    Regex::new(concat!(
+        r"^\[([0-9A-Fa-f]+):([0-9A-Fa-f]+)\]",       // [PID:TID]
+        r"\[(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})\]", // [ISO timestamp]
+        r"([iew])(\d{3}):\s*(.*)",                       // severity + code + message
+    ))
+    .expect("Burn regex must compile")
+})
 }
 
 /// Check if a line matches the WiX/Burn format (used by detect.rs).
@@ -59,10 +59,7 @@ pub fn parse_lines(lines: &[&str], file_path: &str) -> (Vec<LogEntry>, u32) {
             let ts_str = caps.get(3).unwrap().as_str();
             let sev_letter = caps.get(4).unwrap().as_str();
             let msg_code = caps.get(5).unwrap().as_str();
-            let message = caps
-                .get(6)
-                .map(|m| m.as_str().to_string())
-                .unwrap_or_default();
+            let message = caps.get(6).map(|m| m.as_str().to_string()).unwrap_or_default();
 
             let pid = u32::from_str_radix(pid_hex, 16).unwrap_or(0);
             let tid = u32::from_str_radix(tid_hex, 16).unwrap_or(0);
@@ -182,7 +179,9 @@ mod tests {
 
     #[test]
     fn test_parse_error_line() {
-        let lines = vec!["[1234:5678][2025-11-25T01:55:42]e000: Error 0x80070005: Access denied"];
+        let lines = vec![
+            "[1234:5678][2025-11-25T01:55:42]e000: Error 0x80070005: Access denied",
+        ];
         let (entries, _) = parse_lines(&lines, "test.log");
         assert_eq!(entries[0].severity, Severity::Error);
         assert_eq!(entries[0].component.as_deref(), Some("e000"));
@@ -191,7 +190,9 @@ mod tests {
 
     #[test]
     fn test_parse_warning_line() {
-        let lines = vec!["[ABCD:EF01][2025-11-25T02:00:00]w000: Ignoring failure to set variable"];
+        let lines = vec![
+            "[ABCD:EF01][2025-11-25T02:00:00]w000: Ignoring failure to set variable",
+        ];
         let (entries, _) = parse_lines(&lines, "test.log");
         assert_eq!(entries[0].severity, Severity::Warning);
         assert_eq!(entries[0].component.as_deref(), Some("w000"));
@@ -210,7 +211,9 @@ mod tests {
 
     #[test]
     fn test_pid_tid_parsing() {
-        let lines = vec!["[07A4:0CBC][2025-11-25T01:55:42]i000: test"];
+        let lines = vec![
+            "[07A4:0CBC][2025-11-25T01:55:42]i000: test",
+        ];
         let (entries, _) = parse_lines(&lines, "test.log");
         assert_eq!(entries[0].thread, Some(0x07A4));
         assert_eq!(entries[0].thread_display.as_deref(), Some("07A4:0CBC"));

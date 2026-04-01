@@ -183,10 +183,7 @@ fn panther_mixed_fixture_preserves_fallback_segments() {
     assert_eq!(parsed.parse_errors, 1);
     assert_eq!(parsed.entries.len(), 4);
     assert_eq!(parsed.entries[0].message, "orphan preamble");
-    assert_eq!(
-        parsed.entries[1].message,
-        "Setup started\ncontinuation detail"
-    );
+    assert_eq!(parsed.entries[1].message, "Setup started\ncontinuation detail");
     assert_eq!(parsed.entries[2].message, "malformed header");
     assert_eq!(parsed.entries[2].component.as_deref(), Some("SP"));
     assert_eq!(parsed.entries[3].component.as_deref(), Some("SP"));
@@ -253,10 +250,7 @@ fn cbs_mixed_fixture_preserves_fallback_segments() {
     assert_eq!(parsed.parse_errors, 1);
     assert_eq!(parsed.entries.len(), 4);
     assert_eq!(parsed.entries[0].message, "orphan preamble");
-    assert_eq!(
-        parsed.entries[1].message,
-        "Exec: Processing package\nContinuation detail"
-    );
+    assert_eq!(parsed.entries[1].message, "Exec: Processing package\nContinuation detail");
     assert_eq!(parsed.entries[2].message, "malformed header");
     assert_eq!(parsed.entries[2].component.as_deref(), Some("CBS"));
     assert_eq!(parsed.entries[3].component.as_deref(), Some("CSI"));
@@ -357,10 +351,7 @@ fn reporting_events_clean_fixture_detects_and_parses_rows() {
     assert_eq!(parsed.total_lines, 2);
     assert_eq!(parsed.parse_errors, 0);
     assert_eq!(parsed.entries.len(), 2);
-    assert_eq!(
-        parsed.entries[0].component.as_deref(),
-        Some("Windows Update Agent")
-    );
+    assert_eq!(parsed.entries[0].component.as_deref(), Some("Windows Update Agent"));
     assert_eq!(
         parsed.entries[0].timestamp_display.as_deref(),
         Some("2024-01-15 08:00:00.123")
@@ -434,10 +425,7 @@ fn ime_multiline_fixture_detects_and_parses_logical_records() {
     assert_eq!(parsed.entries[0].line_number, 1);
     assert_eq!(parsed.entries[1].line_number, 2);
     assert_eq!(parsed.entries[0].format, "Ccm");
-    assert_eq!(
-        parsed.entries[1].component.as_deref(),
-        Some("HealthScripts")
-    );
+    assert_eq!(parsed.entries[1].component.as_deref(), Some("HealthScripts"));
     assert_eq!(
         parsed.entries[1].timestamp_display.as_deref(),
         Some("03-12-2026 11:16:42.332")
@@ -479,9 +467,7 @@ fn ime_sparse_fixture_preserves_truncated_tail_as_plain_entry() {
     assert_eq!(parsed.entries[1].line_number, 3);
     assert_eq!(parsed.entries[2].line_number, 4);
     assert_eq!(parsed.entries[2].format, "Plain");
-    assert!(parsed.entries[2]
-        .message
-        .contains("Set MdmDeviceCertificate"));
+    assert!(parsed.entries[2].message.contains("Set MdmDeviceCertificate"));
 }
 
 #[test]
@@ -570,9 +556,7 @@ fn ime_appworkload_temp_fixture_detects_and_parses_logical_records() {
     assert_eq!(parsed.entries[0].line_number, 1);
     assert_eq!(parsed.entries[1].line_number, 3);
     assert_eq!(parsed.entries[0].component.as_deref(), Some("AppWorkload"));
-    assert!(parsed.entries[0]
-        .message
-        .contains("ApplicationName\\\":\\\"Contoso App"));
+    assert!(parsed.entries[0].message.contains("ApplicationName\\\":\\\"Contoso App"));
     assert!(parsed.entries[1]
         .message
         .contains("Download completed successfully."));

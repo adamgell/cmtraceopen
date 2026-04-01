@@ -37,7 +37,8 @@ impl TempLogFixture {
     fn parse(&self) -> common::ParsedFixture {
         let file_size = fs::metadata(&self.path).expect("metadata").len();
         let path_str = self.path.to_string_lossy().to_string();
-        let (result, selection) = app_lib::parser::parse_file(&path_str).expect("should parse");
+        let (result, selection) =
+            app_lib::parser::parse_file(&path_str).expect("should parse");
 
         common::ParsedFixture {
             selection: snapshot(&selection),
@@ -104,10 +105,7 @@ fn ccm_clean_fixture_detects_and_parses() {
 fn ccm_malformed_truncated_recovers_gracefully() {
     let parsed = parse_fixture("ccm/malformed/truncated.log");
     // Should parse what it can and not panic
-    assert!(
-        parsed.entries.len() >= 2,
-        "should recover at least 2 entries"
-    );
+    assert!(parsed.entries.len() >= 2, "should recover at least 2 entries");
     assert_eq!(parsed.entries[0].message, "Complete record here");
     // The last entry should be the one after the truncated record
     let last = parsed.entries.last().unwrap();
@@ -118,10 +116,7 @@ fn ccm_malformed_truncated_recovers_gracefully() {
 fn ccm_malformed_broken_timestamp_still_parses() {
     let parsed = parse_fixture("ccm/malformed/broken_timestamp.log");
     // Should still parse all 4 lines even with bad timestamps
-    assert!(
-        parsed.entries.len() >= 2,
-        "should parse despite bad timestamps"
-    );
+    assert!(parsed.entries.len() >= 2, "should parse despite bad timestamps");
     // First and last entries should have valid data
     assert_eq!(parsed.entries[0].message, "Good timestamp");
     let last = parsed.entries.last().unwrap();
@@ -139,11 +134,7 @@ fn simple_clean_fixture_detects_and_parses() {
     assert_eq!(detected.implementation, "Simple");
 
     let parsed = parse_fixture("simple/clean/basic.log");
-    assert!(
-        parsed.entries.len() >= 1,
-        "should parse at least 1 entry, got {}",
-        parsed.entries.len()
-    );
+    assert!(parsed.entries.len() >= 1, "should parse at least 1 entry, got {}", parsed.entries.len());
     assert_eq!(parsed.entries[0].component.as_deref(), Some("CcmExec"));
 }
 
@@ -177,10 +168,7 @@ fn plain_text_fallback_for_unstructured_content() {
     let parsed = parse_fixture("plain/unstructured.txt");
     assert_eq!(parsed.entries.len(), 4);
     assert_eq!(parsed.parse_errors, 0);
-    assert_eq!(
-        parsed.entries[0].message,
-        "This is a plain text log file with no structured format."
-    );
+    assert_eq!(parsed.entries[0].message, "This is a plain text log file with no structured format.");
     assert_eq!(parsed.entries[3].message, "Final line of the file.");
 }
 

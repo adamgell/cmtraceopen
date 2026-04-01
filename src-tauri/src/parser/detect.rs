@@ -17,8 +17,8 @@ use super::{
     timestamped::{self, DateOrder},
 };
 use crate::models::log_entry::{
-    DateFieldOrder, LogFormat, ParseQuality, ParserImplementation, ParserKind, ParserProvenance,
-    ParserSelectionInfo, ParserSpecialization, RecordFraming,
+    DateFieldOrder, LogFormat, ParseQuality, ParserImplementation, ParserKind,
+    ParserProvenance, ParserSelectionInfo, ParserSpecialization, RecordFraming,
 };
 
 /// Backend-owned parser selection used for both initial parsing and tailing.
@@ -316,11 +316,15 @@ pub fn detect_parser(path: &str, content: &str) -> ResolvedParser {
         }
     }
 
-    if content.lines().take(5).any(|line| {
-        line.trim_start()
-            .to_ascii_lowercase()
-            .starts_with("#software: microsoft internet information services")
-    }) {
+    if content
+        .lines()
+        .take(5)
+        .any(|line| {
+            line.trim_start()
+                .to_ascii_lowercase()
+                .starts_with("#software: microsoft internet information services")
+        })
+    {
         return ResolvedParser::iis_w3c();
     }
 
@@ -356,8 +360,8 @@ pub fn detect_parser(path: &str, content: &str) -> ResolvedParser {
         || path_lower.contains("\\inetpub\\logs\\")
         || path_lower.contains("w3svc");
 
-    let intune_macos_path_hint =
-        path_lower.contains("intunemdmdaemon") || path_lower.contains("/logs/microsoft/intune/");
+    let intune_macos_path_hint = path_lower.contains("intunemdmdaemon")
+        || path_lower.contains("/logs/microsoft/intune/");
 
     let mut ccm_count = 0;
     let mut cbs_count = 0;
@@ -480,10 +484,7 @@ mod tests {
         let content = r#"<![LOG[Client Health evaluation starts.]LOG]!><time="23:00:10.6893636" date="11-12-2025" component="ClientHealth" context="" type="1" thread="1" file="">
 <![LOG[OnStart, public cloud env.]LOG]!><time="23:00:11.4573058" date="11-12-2025" component="ClientHealth" context="" type="1" thread="1" file="">"#;
 
-        let detected = detect_parser(
-            "C:/ProgramData/Microsoft/IntuneManagementExtension/Logs/ClientHealth.log",
-            content,
-        );
+        let detected = detect_parser("C:/ProgramData/Microsoft/IntuneManagementExtension/Logs/ClientHealth.log", content);
         let info = detected.to_info();
 
         assert_eq!(detected.parser, ParserKind::Ccm);
@@ -503,10 +504,7 @@ mod tests {
         );
 
         assert_eq!(detected.parser, ParserKind::Timestamped);
-        assert_eq!(
-            detected.implementation,
-            ParserImplementation::GenericTimestamped
-        );
+        assert_eq!(detected.implementation, ParserImplementation::GenericTimestamped);
         assert_eq!(detected.specialization, None);
     }
 
@@ -604,10 +602,7 @@ Message two $$<Comp2><01-01-2024 08:00:01.000+000><thread=200>"#;
         let info = detected.to_info();
 
         assert_eq!(detected.parser, ParserKind::Cbs);
-        assert_eq!(
-            detected.implementation,
-            ParserImplementation::GenericTimestamped
-        );
+        assert_eq!(detected.implementation, ParserImplementation::GenericTimestamped);
         assert_eq!(detected.provenance, ParserProvenance::Dedicated);
         assert_eq!(detected.record_framing, RecordFraming::LogicalRecord);
         assert_eq!(detected.compatibility_format(), LogFormat::Timestamped);
@@ -619,17 +614,11 @@ Message two $$<Comp2><01-01-2024 08:00:01.000+000><thread=200>"#;
         let content = "{11111111-1111-1111-1111-111111111111}\t2024-01-15 08:00:00:123\t1\tSoftware Update\t1\t{22222222-2222-2222-2222-222222222222}\t0x00000000\tWindows Update Agent\tSuccess\tInstallation\tInstallation Successful: KB5034123\n\
                         {33333333-3333-3333-3333-333333333333}\t2024-01-15 08:05:00:456\t2\tSoftware Update\t3\t{44444444-4444-4444-4444-444444444444}\t0x80240022\tWindows Update Agent\tFailure\tInstallation\tInstallation failed for KB5034441";
 
-        let detected = detect_parser(
-            "C:/Windows/SoftwareDistribution/ReportingEvents.log",
-            content,
-        );
+        let detected = detect_parser("C:/Windows/SoftwareDistribution/ReportingEvents.log", content);
         let info = detected.to_info();
 
         assert_eq!(detected.parser, ParserKind::ReportingEvents);
-        assert_eq!(
-            detected.implementation,
-            ParserImplementation::ReportingEvents
-        );
+        assert_eq!(detected.implementation, ParserImplementation::ReportingEvents);
         assert_eq!(detected.provenance, ParserProvenance::Dedicated);
         assert_eq!(detected.parse_quality, ParseQuality::Structured);
         assert_eq!(detected.record_framing, RecordFraming::PhysicalLine);
@@ -647,10 +636,7 @@ Message two $$<Comp2><01-01-2024 08:00:01.000+000><thread=200>"#;
         let detected = detect_parser("C:/Temp/update-history.txt", content);
 
         assert_eq!(detected.parser, ParserKind::ReportingEvents);
-        assert_eq!(
-            detected.implementation,
-            ParserImplementation::ReportingEvents
-        );
+        assert_eq!(detected.implementation, ParserImplementation::ReportingEvents);
         assert_eq!(detected.record_framing, RecordFraming::PhysicalLine);
     }
 
@@ -663,10 +649,7 @@ Message two $$<Comp2><01-01-2024 08:00:01.000+000><thread=200>"#;
         let info = detected.to_info();
 
         assert_eq!(detected.parser, ParserKind::Dism);
-        assert_eq!(
-            detected.implementation,
-            ParserImplementation::GenericTimestamped
-        );
+        assert_eq!(detected.implementation, ParserImplementation::GenericTimestamped);
         assert_eq!(detected.provenance, ParserProvenance::Dedicated);
         assert_eq!(detected.record_framing, RecordFraming::LogicalRecord);
         assert_eq!(detected.compatibility_format(), LogFormat::Timestamped);
@@ -709,10 +692,7 @@ Message two $$<Comp2><01-01-2024 08:00:01.000+000><thread=200>"#;
         let info = selection.to_info();
 
         assert_eq!(info.parser, ParserKind::Panther);
-        assert_eq!(
-            info.implementation,
-            ParserImplementation::GenericTimestamped
-        );
+        assert_eq!(info.implementation, ParserImplementation::GenericTimestamped);
         assert_eq!(info.provenance, ParserProvenance::Dedicated);
         assert_eq!(info.parse_quality, ParseQuality::SemiStructured);
         assert_eq!(info.record_framing, RecordFraming::LogicalRecord);

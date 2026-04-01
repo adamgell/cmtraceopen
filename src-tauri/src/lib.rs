@@ -1,7 +1,7 @@
+mod constants;
 #[cfg(feature = "collector")]
 pub mod collector;
 mod commands;
-mod constants;
 #[cfg(feature = "dsregcmd")]
 pub mod dsregcmd;
 pub mod error;
@@ -43,8 +43,7 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .setup(|app| {
             #[cfg(desktop)]
-            app.handle()
-                .plugin(tauri_plugin_updater::Builder::new().build())?;
+            app.handle().plugin(tauri_plugin_updater::Builder::new().build())?;
             let native_menu = menu::build_app_menu(app.handle())?;
             app.set_menu(native_menu)?;
 

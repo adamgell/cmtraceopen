@@ -38,13 +38,8 @@ pub struct AppMenuActionPayload {
 }
 
 pub fn build_app_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
-    let open_log_file = MenuItem::with_id(
-        app,
-        MENU_ID_FILE_OPEN_LOG_FILE,
-        "Open Log File...",
-        true,
-        None::<&str>,
-    )?;
+    let open_log_file =
+        MenuItem::with_id(app, MENU_ID_FILE_OPEN_LOG_FILE, "Open Log File...", true, None::<&str>)?;
     let open_log_folder = MenuItem::with_id(
         app,
         MENU_ID_FILE_OPEN_LOG_FOLDER,
@@ -56,7 +51,13 @@ pub fn build_app_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> 
     let known_sources = build_known_sources_submenu(app)?;
 
     let find = MenuItem::with_id(app, MENU_ID_EDIT_FIND, "Find...", true, Some("Ctrl+F"))?;
-    let filter = MenuItem::with_id(app, MENU_ID_EDIT_FILTER, "Filter...", true, Some("Ctrl+L"))?;
+    let filter = MenuItem::with_id(
+        app,
+        MENU_ID_EDIT_FILTER,
+        "Filter...",
+        true,
+        Some("Ctrl+L"),
+    )?;
 
     let error_lookup = MenuItem::with_id(
         app,
@@ -109,13 +110,7 @@ pub fn build_app_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> 
         true,
         None::<&str>,
     )?;
-    let about = MenuItem::with_id(
-        app,
-        MENU_ID_HELP_ABOUT,
-        "About CMTrace Open",
-        true,
-        None::<&str>,
-    )?;
+    let about = MenuItem::with_id(app, MENU_ID_HELP_ABOUT, "About CMTrace Open", true, None::<&str>)?;
 
     let file_menu = Submenu::with_items(
         app,
@@ -125,32 +120,22 @@ pub fn build_app_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> 
     )?;
     let edit_menu = Submenu::with_items(app, "Edit", true, &[&find, &filter])?;
     #[cfg(all(target_os = "windows", feature = "collector"))]
-    let tools_menu = Submenu::with_items(
-        app,
-        "Tools",
-        true,
-        &[&error_lookup, &bundle_summary, &collect_diagnostics],
-    )?;
+    let tools_menu = Submenu::with_items(app, "Tools", true, &[&error_lookup, &bundle_summary, &collect_diagnostics])?;
     #[cfg(any(not(target_os = "windows"), not(feature = "collector")))]
     let tools_menu = Submenu::with_items(app, "Tools", true, &[&error_lookup, &bundle_summary])?;
     let window_menu = Submenu::with_items(
         app,
         "Window",
         true,
-        &[&toggle_details, &toggle_info, &accessibility_settings],
+        &[
+            &toggle_details,
+            &toggle_info,
+            &accessibility_settings,
+        ],
     )?;
     let help_menu = Submenu::with_items(app, "Help", true, &[&check_for_updates, &about])?;
 
-    Menu::with_items(
-        app,
-        &[
-            &file_menu,
-            &edit_menu,
-            &tools_menu,
-            &window_menu,
-            &help_menu,
-        ],
-    )
+    Menu::with_items(app, &[&file_menu, &edit_menu, &tools_menu, &window_menu, &help_menu])
 }
 
 /// A source entry extracted from the catalog for menu building.
@@ -258,10 +243,8 @@ fn build_known_sources_submenu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<
             }
 
             let item_refs: Vec<&MenuItem<R>> = menu_items.iter().collect();
-            let items_as_refs: Vec<&dyn tauri::menu::IsMenuItem<R>> = item_refs
-                .iter()
-                .map(|item| *item as &dyn tauri::menu::IsMenuItem<R>)
-                .collect();
+            let items_as_refs: Vec<&dyn tauri::menu::IsMenuItem<R>> =
+                item_refs.iter().map(|item| *item as &dyn tauri::menu::IsMenuItem<R>).collect();
 
             group_submenus.push(Submenu::with_items(
                 app,
@@ -271,10 +254,8 @@ fn build_known_sources_submenu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<
             )?);
         }
 
-        let submenu_refs: Vec<&dyn tauri::menu::IsMenuItem<R>> = group_submenus
-            .iter()
-            .map(|s| s as &dyn tauri::menu::IsMenuItem<R>)
-            .collect();
+        let submenu_refs: Vec<&dyn tauri::menu::IsMenuItem<R>> =
+            group_submenus.iter().map(|s| s as &dyn tauri::menu::IsMenuItem<R>).collect();
 
         top_level_items.push(Submenu::with_items(
             app,
@@ -296,10 +277,8 @@ fn build_known_sources_submenu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<
         )?);
     }
 
-    let mut all_items: Vec<&dyn tauri::menu::IsMenuItem<R>> = top_level_items
-        .iter()
-        .map(|s| s as &dyn tauri::menu::IsMenuItem<R>)
-        .collect();
+    let mut all_items: Vec<&dyn tauri::menu::IsMenuItem<R>> =
+        top_level_items.iter().map(|s| s as &dyn tauri::menu::IsMenuItem<R>).collect();
     for item in &ungrouped_menu_items {
         all_items.push(item as &dyn tauri::menu::IsMenuItem<R>);
     }

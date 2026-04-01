@@ -6,16 +6,14 @@ use std::sync::OnceLock;
 fn field_line_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
-        Regex::new(r"(?m)^\s*([^\r\n:=][^\r\n:=]*?)\s*[:=]\s*([^\r\n]*)\s*$")
-            .expect("valid dsregcmd field regex")
-    })
+    Regex::new(r"(?m)^\s*([^\r\n:=][^\r\n:=]*?)\s*[:=]\s*([^\r\n]*)\s*$")
+        .expect("valid dsregcmd field regex")
+})
 }
 
 pub fn parse_dsregcmd(input: &str) -> Result<DsregcmdFacts, crate::error::AppError> {
     if input.trim().is_empty() {
-        return Err(crate::error::AppError::InvalidInput(
-            "dsregcmd input was empty".to_string(),
-        ));
+        return Err(crate::error::AppError::InvalidInput("dsregcmd input was empty".to_string()));
     }
 
     let mut facts = DsregcmdFacts::default();
@@ -38,9 +36,7 @@ pub fn parse_dsregcmd(input: &str) -> Result<DsregcmdFacts, crate::error::AppErr
     }
 
     if recognized_fields == 0 {
-        return Err(crate::error::AppError::InvalidInput(
-            "Input did not contain recognizable dsregcmd /status fields".to_string(),
-        ));
+        return Err(crate::error::AppError::InvalidInput("Input did not contain recognizable dsregcmd /status fields".to_string()));
     }
 
     Ok(facts)
@@ -324,10 +320,7 @@ mod tests {
             facts.post_join_diagnostics.key_sign_test.as_deref(),
             Some("PASSED")
         );
-        assert_eq!(
-            facts.post_join_diagnostics.aad_recovery_enabled,
-            Some(false)
-        );
+        assert_eq!(facts.post_join_diagnostics.aad_recovery_enabled, Some(false));
     }
 
     #[test]

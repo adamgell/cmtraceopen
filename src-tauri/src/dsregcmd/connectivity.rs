@@ -82,13 +82,8 @@ pub fn query_scp() -> DsregcmdScpQueryResult {
             for line in stdout.lines() {
                 let trimmed = line.trim();
                 if trimmed.starts_with("DC:") {
-                    result.domain_controller = Some(
-                        trimmed
-                            .trim_start_matches("DC:")
-                            .trim()
-                            .trim_start_matches("\\\\")
-                            .to_string(),
-                    );
+                    result.domain_controller =
+                        Some(trimmed.trim_start_matches("DC:").trim().trim_start_matches("\\\\").to_string());
                     break;
                 }
             }
@@ -99,11 +94,7 @@ pub fn query_scp() -> DsregcmdScpQueryResult {
             result.error = Some(format!(
                 "nltest /dsgetdc: failed (exit code {}): {}",
                 exit_code,
-                if stderr.is_empty() {
-                    "(no stderr)"
-                } else {
-                    &stderr
-                }
+                if stderr.is_empty() { "(no stderr)" } else { &stderr }
             ));
             return result;
         }
@@ -134,11 +125,7 @@ try {
     match ps_output {
         Ok(output) if output.status.success() => {
             let stdout = String::from_utf8_lossy(&output.stdout);
-            let lines: Vec<&str> = stdout
-                .lines()
-                .map(|l| l.trim())
-                .filter(|l| !l.is_empty())
-                .collect();
+            let lines: Vec<&str> = stdout.lines().map(|l| l.trim()).filter(|l| !l.is_empty()).collect();
 
             if lines.iter().any(|l| l.contains("SCP_NOT_FOUND")) {
                 result.error = Some("SCP object exists but has no keywords.".to_string());

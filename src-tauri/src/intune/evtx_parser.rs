@@ -12,9 +12,9 @@ use std::sync::OnceLock;
 #[cfg(target_os = "windows")]
 use crate::intune::eventlog_win32;
 use crate::intune::models::{
-    EventLogAnalysis, EventLogAnalysisSource, EventLogChannel, EventLogChannelSummary,
-    EventLogCorrelationKind, EventLogCorrelationLink, EventLogEntry, EventLogLiveQueryMetadata,
-    EventLogSeverity, EvidenceBundleMetadata, IntuneDiagnosticInsight, IntuneEvent,
+    EvidenceBundleMetadata, EventLogAnalysis, EventLogAnalysisSource, EventLogChannel,
+    EventLogChannelSummary, EventLogCorrelationKind, EventLogCorrelationLink, EventLogEntry,
+    EventLogLiveQueryMetadata, EventLogSeverity, IntuneDiagnosticInsight, IntuneEvent,
     IntuneEventType, IntuneStatus, IntuneTimestampBounds,
 };
 #[cfg(target_os = "windows")]
@@ -50,16 +50,12 @@ fn provider_re() -> &'static Regex {
 #[cfg(target_os = "windows")]
 fn channel_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
-    CELL.get_or_init(|| {
-        Regex::new(r"<Channel>(.*?)</Channel>").expect("channel regex must compile")
-    })
+    CELL.get_or_init(|| Regex::new(r"<Channel>(.*?)</Channel>").expect("channel regex must compile"))
 }
 #[cfg(target_os = "windows")]
 fn event_id_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
-    CELL.get_or_init(|| {
-        Regex::new(r"<EventID(?:\s[^>]*)?>(\d+)</EventID>").expect("event id regex must compile")
-    })
+    CELL.get_or_init(|| Regex::new(r"<EventID(?:\s[^>]*)?>(\d+)</EventID>").expect("event id regex must compile"))
 }
 #[cfg(target_os = "windows")]
 fn level_re() -> &'static Regex {
@@ -77,9 +73,7 @@ fn time_re() -> &'static Regex {
 #[cfg(target_os = "windows")]
 fn computer_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
-    CELL.get_or_init(|| {
-        Regex::new(r"<Computer>(.*?)</Computer>").expect("computer regex must compile")
-    })
+    CELL.get_or_init(|| Regex::new(r"<Computer>(.*?)</Computer>").expect("computer regex must compile"))
 }
 #[cfg(target_os = "windows")]
 fn activity_re() -> &'static Regex {
@@ -92,9 +86,7 @@ fn activity_re() -> &'static Regex {
 #[cfg(target_os = "windows")]
 fn message_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
-    CELL.get_or_init(|| {
-        Regex::new(r"(?s)<Message>(.*?)</Message>").expect("message regex must compile")
-    })
+    CELL.get_or_init(|| Regex::new(r"(?s)<Message>(.*?)</Message>").expect("message regex must compile"))
 }
 
 // ---------------------------------------------------------------------------
@@ -156,8 +148,7 @@ pub fn parse_evtx_file(path: &Path, id_offset: u64) -> Result<Vec<EventLogEntry>
         if entries.len() >= MAX_ENTRIES_PER_FILE {
             log::warn!(
                 "event=evtx_entry_cap_reached file=\"{}\" cap={}",
-                source_file,
-                MAX_ENTRIES_PER_FILE
+                source_file, MAX_ENTRIES_PER_FILE
             );
             break;
         }
@@ -167,8 +158,7 @@ pub fn parse_evtx_file(path: &Path, id_offset: u64) -> Result<Vec<EventLogEntry>
             Err(e) => {
                 log::warn!(
                     "event=evtx_record_skip file=\"{}\" error=\"{}\"",
-                    source_file,
-                    e
+                    source_file, e
                 );
                 continue;
             }
@@ -400,8 +390,7 @@ pub fn parse_live_event_logs() -> Option<EventLogAnalysis> {
                 Err(error) => {
                     log::error!(
                         "event=live_event_log_query_failed channel=\"{}\" error=\"{}\"",
-                        channel,
-                        error
+                        channel, error
                     );
 
                     let channel_enum = EventLogChannel::from_channel_string(channel);
@@ -455,12 +444,7 @@ pub(crate) fn build_event_log_analysis(
     let total_entry_count = all_entries.len() as u32;
     let error_entry_count = all_entries
         .iter()
-        .filter(|e| {
-            matches!(
-                e.severity,
-                EventLogSeverity::Error | EventLogSeverity::Critical
-            )
-        })
+        .filter(|e| matches!(e.severity, EventLogSeverity::Error | EventLogSeverity::Critical))
         .count() as u32;
     let warning_entry_count = all_entries
         .iter()
@@ -498,8 +482,8 @@ pub(crate) fn parse_live_event_record(
     id: u64,
     fallback_channel: &str,
 ) -> Option<EventLogEntry> {
-    let channel_raw =
-        extract_regex_value(xml, &channel_re()).unwrap_or_else(|| fallback_channel.to_string());
+    let channel_raw = extract_regex_value(xml, &channel_re())
+        .unwrap_or_else(|| fallback_channel.to_string());
     let channel = EventLogChannel::from_channel_string(&channel_raw);
     let timestamp = extract_regex_value(xml, &time_re())?;
 
@@ -1026,7 +1010,8 @@ pub fn build_corroboration_evidence(
         .map(|l| l.event_log_entry_id)
         .collect();
 
-    let entry_map: HashMap<u64, &EventLogEntry> = entries.iter().map(|e| (e.id, e)).collect();
+    let entry_map: HashMap<u64, &EventLogEntry> =
+        entries.iter().map(|e| (e.id, e)).collect();
 
     for entry_id in relevant_entry_ids.iter().take(3) {
         if let Some(entry) = entry_map.get(entry_id) {
@@ -1037,11 +1022,7 @@ pub fn build_corroboration_evidence(
             };
             evidence.push(format!(
                 "Windows Event Log: {} Event ID {} ({:?}) at {} \u{2014} {}",
-                entry.channel_display,
-                entry.event_id,
-                entry.severity,
-                entry.timestamp,
-                truncated_msg
+                entry.channel_display, entry.event_id, entry.severity, entry.timestamp, truncated_msg
             ));
         }
     }
@@ -1148,16 +1129,19 @@ mod tests {
     fn parse_live_event_record_extracts_rendered_xml_fields() {
         let xml = r#"<Event xmlns='http://schemas.microsoft.com/win/2004/08/events/event'><System><Provider Name='Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider'/><EventID>813</EventID><Level>2</Level><TimeCreated SystemTime='2026-03-12T16:01:23.456Z'/><Channel>Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin</Channel><Computer>CONTOSO-01</Computer><Correlation ActivityID='{123}'/></System><RenderingInfo Culture='en-US'><Message>Enrollment failed &amp; needs attention</Message></RenderingInfo></Event>"#;
 
-        let entry = parse_live_event_record(xml, "live-event-log/test.evtx", None, 7, "fallback")
-            .expect("live entry");
+        let entry = parse_live_event_record(
+            xml,
+            "live-event-log/test.evtx",
+            None,
+            7,
+            "fallback",
+        )
+        .expect("live entry");
 
         assert_eq!(entry.id, 7);
         assert_eq!(entry.event_id, 813);
         assert_eq!(entry.severity, EventLogSeverity::Error);
-        assert_eq!(
-            entry.provider,
-            "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider"
-        );
+        assert_eq!(entry.provider, "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider");
         assert_eq!(entry.timestamp, "2026-03-12T16:01:23.456Z");
         assert_eq!(entry.message, "Enrollment failed & needs attention");
     }

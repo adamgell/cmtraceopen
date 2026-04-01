@@ -128,7 +128,8 @@ fn deduplicate_events(events: Vec<IntuneEvent>) -> Vec<TimelineEvent> {
         let is_consumed_end = matches!(
             prepared_event.event.status,
             IntuneStatus::Success | IntuneStatus::Failed | IntuneStatus::Timeout
-        ) && paired_keys.contains(&key);
+        )
+            && paired_keys.contains(&key);
 
         if !is_consumed_end {
             result.push(prepared_event);
@@ -366,14 +367,8 @@ mod tests {
         ])
         .expect("timestamp bounds");
 
-        assert_eq!(
-            bounds.first_timestamp.as_deref(),
-            Some("01-01-2024 10:00:00.000")
-        );
-        assert_eq!(
-            bounds.last_timestamp.as_deref(),
-            Some("12-31-2024 10:00:00.000")
-        );
+        assert_eq!(bounds.first_timestamp.as_deref(), Some("01-01-2024 10:00:00.000"));
+        assert_eq!(bounds.last_timestamp.as_deref(), Some("12-31-2024 10:00:00.000"));
     }
 
     #[test]
@@ -413,10 +408,7 @@ mod tests {
             },
         ];
 
-        assert_eq!(
-            calculate_time_span(&events),
-            Some("8760h 0m 0s".to_string())
-        );
+        assert_eq!(calculate_time_span(&events), Some("8760h 0m 0s".to_string()));
     }
 
     #[test]
@@ -549,14 +541,8 @@ mod tests {
         ]);
 
         let timed = &timeline[1]; // sorted after NoTime (which has None timestamp)
-        assert!(
-            timed.start_time_epoch.is_some(),
-            "start_time_epoch should be populated"
-        );
-        assert!(
-            timed.end_time_epoch.is_some(),
-            "end_time_epoch should be populated"
-        );
+        assert!(timed.start_time_epoch.is_some(), "start_time_epoch should be populated");
+        assert!(timed.end_time_epoch.is_some(), "end_time_epoch should be populated");
 
         let untimed = &timeline[0]; // None timestamps sort first
         assert!(untimed.start_time_epoch.is_none());

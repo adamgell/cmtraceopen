@@ -30,14 +30,7 @@ pub fn collect_logs(items: &[LogCollectionItem], ctx: &CollectorContext) {
         let entries = match glob::glob(&pattern) {
             Ok(paths) => paths,
             Err(_) => {
-                push_result(
-                    ctx,
-                    &item.id,
-                    "logs",
-                    ArtifactStatus::Failed,
-                    None,
-                    Some(format!("invalid glob pattern: {pattern}")),
-                );
+                push_result(ctx, &item.id, "logs", ArtifactStatus::Failed, None, Some(format!("invalid glob pattern: {pattern}")));
                 ctx.completed.fetch_add(1, Ordering::Relaxed);
                 return;
             }
@@ -59,32 +52,11 @@ pub fn collect_logs(items: &[LogCollectionItem], ctx: &CollectorContext) {
         }
 
         if !any_match {
-            push_result(
-                ctx,
-                &item.id,
-                "logs",
-                ArtifactStatus::Missing,
-                None,
-                Some(format!("no files matched: {pattern}")),
-            );
+            push_result(ctx, &item.id, "logs", ArtifactStatus::Missing, None, Some(format!("no files matched: {pattern}")));
         } else if failed == 0 {
-            push_result(
-                ctx,
-                &item.id,
-                "logs",
-                ArtifactStatus::Collected,
-                Some(dest_dir.to_string_lossy().into_owned()),
-                Some(format!("{copied} file(s) copied")),
-            );
+            push_result(ctx, &item.id, "logs", ArtifactStatus::Collected, Some(dest_dir.to_string_lossy().into_owned()), Some(format!("{copied} file(s) copied")));
         } else {
-            push_result(
-                ctx,
-                &item.id,
-                "logs",
-                ArtifactStatus::Failed,
-                Some(dest_dir.to_string_lossy().into_owned()),
-                Some(format!("{copied} copied, {failed} failed")),
-            );
+            push_result(ctx, &item.id, "logs", ArtifactStatus::Failed, Some(dest_dir.to_string_lossy().into_owned()), Some(format!("{copied} copied, {failed} failed")));
         }
 
         ctx.completed.fetch_add(1, Ordering::Relaxed);
@@ -101,14 +73,7 @@ pub fn export_registry_keys(items: &[RegistryCollectionItem], ctx: &CollectorCon
         Err(e) => {
             let msg = e.to_string();
             for item in items {
-                push_result(
-                    ctx,
-                    &item.id,
-                    "registry",
-                    ArtifactStatus::Failed,
-                    None,
-                    Some(msg.clone()),
-                );
+                push_result(ctx, &item.id, "registry", ArtifactStatus::Failed, None, Some(msg.clone()));
                 ctx.completed.fetch_add(1, Ordering::Relaxed);
             }
             return;
@@ -125,47 +90,19 @@ pub fn export_registry_keys(items: &[RegistryCollectionItem], ctx: &CollectorCon
             .output()
         {
             Ok(output) if output.status.success() => {
-                push_result(
-                    ctx,
-                    &item.id,
-                    "registry",
-                    ArtifactStatus::Collected,
-                    Some(output_path.to_string_lossy().into_owned()),
-                    None,
-                );
+                push_result(ctx, &item.id, "registry", ArtifactStatus::Collected, Some(output_path.to_string_lossy().into_owned()), None);
             }
             Ok(output) => {
                 let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
                 // reg.exe returns exit code 1 when the key does not exist — treat as missing.
                 if stderr.contains("unable to find") || stderr.contains("ERROR:") {
-                    push_result(
-                        ctx,
-                        &item.id,
-                        "registry",
-                        ArtifactStatus::Missing,
-                        None,
-                        Some(stderr),
-                    );
+                    push_result(ctx, &item.id, "registry", ArtifactStatus::Missing, None, Some(stderr));
                 } else {
-                    push_result(
-                        ctx,
-                        &item.id,
-                        "registry",
-                        ArtifactStatus::Failed,
-                        None,
-                        Some(stderr),
-                    );
+                    push_result(ctx, &item.id, "registry", ArtifactStatus::Failed, None, Some(stderr));
                 }
             }
             Err(e) => {
-                push_result(
-                    ctx,
-                    &item.id,
-                    "registry",
-                    ArtifactStatus::Failed,
-                    None,
-                    Some(format!("spawn failed: {e}")),
-                );
+                push_result(ctx, &item.id, "registry", ArtifactStatus::Failed, None, Some(format!("spawn failed: {e}")));
             }
         }
         ctx.completed.fetch_add(1, Ordering::Relaxed);
@@ -185,14 +122,7 @@ pub fn copy_event_logs(items: &[EventLogCollectionItem], ctx: &CollectorContext)
         let entries = match glob::glob(&pattern) {
             Ok(paths) => paths,
             Err(_) => {
-                push_result(
-                    ctx,
-                    &item.id,
-                    "event-logs",
-                    ArtifactStatus::Failed,
-                    None,
-                    Some(format!("invalid glob pattern: {pattern}")),
-                );
+                push_result(ctx, &item.id, "event-logs", ArtifactStatus::Failed, None, Some(format!("invalid glob pattern: {pattern}")));
                 ctx.completed.fetch_add(1, Ordering::Relaxed);
                 return;
             }
@@ -214,34 +144,11 @@ pub fn copy_event_logs(items: &[EventLogCollectionItem], ctx: &CollectorContext)
         }
 
         if !any_match {
-            push_result(
-                ctx,
-                &item.id,
-                "event-logs",
-                ArtifactStatus::Missing,
-                None,
-                Some(format!("no files matched: {pattern}")),
-            );
+            push_result(ctx, &item.id, "event-logs", ArtifactStatus::Missing, None, Some(format!("no files matched: {pattern}")));
         } else if failed == 0 {
-            push_result(
-                ctx,
-                &item.id,
-                "event-logs",
-                ArtifactStatus::Collected,
-                Some(dest_dir.to_string_lossy().into_owned()),
-                Some(format!("{copied} file(s) copied")),
-            );
+            push_result(ctx, &item.id, "event-logs", ArtifactStatus::Collected, Some(dest_dir.to_string_lossy().into_owned()), Some(format!("{copied} file(s) copied")));
         } else {
-            push_result(
-                ctx,
-                &item.id,
-                "event-logs",
-                ArtifactStatus::Failed,
-                Some(dest_dir.to_string_lossy().into_owned()),
-                Some(format!(
-                    "{copied} copied, {failed} failed (may be locked by OS)"
-                )),
-            );
+            push_result(ctx, &item.id, "event-logs", ArtifactStatus::Failed, Some(dest_dir.to_string_lossy().into_owned()), Some(format!("{copied} copied, {failed} failed (may be locked by OS)")));
         }
 
         ctx.completed.fetch_add(1, Ordering::Relaxed);
@@ -263,14 +170,7 @@ pub fn copy_exports(items: &[FileExportItem], ctx: &CollectorContext) {
             let entries = match glob::glob(&source) {
                 Ok(paths) => paths,
                 Err(_) => {
-                    push_result(
-                        ctx,
-                        &item.id,
-                        "exports",
-                        ArtifactStatus::Failed,
-                        None,
-                        Some(format!("invalid glob: {source}")),
-                    );
+                    push_result(ctx, &item.id, "exports", ArtifactStatus::Failed, None, Some(format!("invalid glob: {source}")));
                     ctx.completed.fetch_add(1, Ordering::Relaxed);
                     return;
                 }
@@ -290,70 +190,25 @@ pub fn copy_exports(items: &[FileExportItem], ctx: &CollectorContext) {
                 }
             }
             if !any_match {
-                push_result(
-                    ctx,
-                    &item.id,
-                    "exports",
-                    ArtifactStatus::Missing,
-                    None,
-                    Some(format!("no files matched: {source}")),
-                );
+                push_result(ctx, &item.id, "exports", ArtifactStatus::Missing, None, Some(format!("no files matched: {source}")));
             } else if failed == 0 {
-                push_result(
-                    ctx,
-                    &item.id,
-                    "exports",
-                    ArtifactStatus::Collected,
-                    Some(dest_dir.to_string_lossy().into_owned()),
-                    Some(format!("{copied} file(s) copied")),
-                );
+                push_result(ctx, &item.id, "exports", ArtifactStatus::Collected, Some(dest_dir.to_string_lossy().into_owned()), Some(format!("{copied} file(s) copied")));
             } else {
-                push_result(
-                    ctx,
-                    &item.id,
-                    "exports",
-                    ArtifactStatus::Failed,
-                    Some(dest_dir.to_string_lossy().into_owned()),
-                    Some(format!("{copied} copied, {failed} failed")),
-                );
+                push_result(ctx, &item.id, "exports", ArtifactStatus::Failed, Some(dest_dir.to_string_lossy().into_owned()), Some(format!("{copied} copied, {failed} failed")));
             }
         } else {
             let source_path = Path::new(&source);
             if source_path.is_file() {
                 let dest_name = item.file_name.as_deref().unwrap_or_else(|| {
-                    source_path
-                        .file_name()
-                        .and_then(|n| n.to_str())
-                        .unwrap_or("unknown")
+                    source_path.file_name().and_then(|n| n.to_str()).unwrap_or("unknown")
                 });
                 let dest_path = dest_dir.join(dest_name);
                 match fs::copy(source_path, &dest_path) {
-                    Ok(_) => push_result(
-                        ctx,
-                        &item.id,
-                        "exports",
-                        ArtifactStatus::Collected,
-                        Some(dest_path.to_string_lossy().into_owned()),
-                        None,
-                    ),
-                    Err(e) => push_result(
-                        ctx,
-                        &item.id,
-                        "exports",
-                        ArtifactStatus::Failed,
-                        None,
-                        Some(format!("copy failed: {e}")),
-                    ),
+                    Ok(_) => push_result(ctx, &item.id, "exports", ArtifactStatus::Collected, Some(dest_path.to_string_lossy().into_owned()), None),
+                    Err(e) => push_result(ctx, &item.id, "exports", ArtifactStatus::Failed, None, Some(format!("copy failed: {e}"))),
                 }
             } else {
-                push_result(
-                    ctx,
-                    &item.id,
-                    "exports",
-                    ArtifactStatus::Missing,
-                    None,
-                    Some(format!("file not found: {source}")),
-                );
+                push_result(ctx, &item.id, "exports", ArtifactStatus::Missing, None, Some(format!("file not found: {source}")));
             }
         }
 
@@ -412,56 +267,21 @@ pub fn run_commands(items: &[CommandCollectionItem], ctx: &CollectorContext) {
                             };
 
                             match fs::write(&output_path, &combined) {
-                                Ok(_) => push_result(
-                                    ctx,
-                                    &item.id,
-                                    "commands",
-                                    ArtifactStatus::Collected,
-                                    Some(output_path.to_string_lossy().into_owned()),
-                                    None,
-                                ),
-                                Err(e) => push_result(
-                                    ctx,
-                                    &item.id,
-                                    "commands",
-                                    ArtifactStatus::Failed,
-                                    None,
-                                    Some(format!("write failed: {e}")),
-                                ),
+                                Ok(_) => push_result(ctx, &item.id, "commands", ArtifactStatus::Collected, Some(output_path.to_string_lossy().into_owned()), None),
+                                Err(e) => push_result(ctx, &item.id, "commands", ArtifactStatus::Failed, None, Some(format!("write failed: {e}"))),
                             }
                         }
                         Err(e) => {
-                            push_result(
-                                ctx,
-                                &item.id,
-                                "commands",
-                                ArtifactStatus::Failed,
-                                None,
-                                Some(format!("wait failed: {e}")),
-                            );
+                            push_result(ctx, &item.id, "commands", ArtifactStatus::Failed, None, Some(format!("wait failed: {e}")));
                         }
                     }
                 }
                 Err(e) => {
                     // Command not found is common for optional tools — record as missing.
                     if e.kind() == std::io::ErrorKind::NotFound {
-                        push_result(
-                            ctx,
-                            &item.id,
-                            "commands",
-                            ArtifactStatus::Missing,
-                            None,
-                            Some(format!("command not found: {}", item.command)),
-                        );
+                        push_result(ctx, &item.id, "commands", ArtifactStatus::Missing, None, Some(format!("command not found: {}", item.command)));
                     } else {
-                        push_result(
-                            ctx,
-                            &item.id,
-                            "commands",
-                            ArtifactStatus::Failed,
-                            None,
-                            Some(format!("spawn failed: {e}")),
-                        );
+                        push_result(ctx, &item.id, "commands", ArtifactStatus::Failed, None, Some(format!("spawn failed: {e}")));
                     }
                 }
             }
@@ -475,14 +295,7 @@ pub fn run_commands(items: &[CommandCollectionItem], ctx: &CollectorContext) {
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn push_result(
-    ctx: &CollectorContext,
-    id: &str,
-    category: &str,
-    status: ArtifactStatus,
-    file_path: Option<String>,
-    error: Option<String>,
-) {
+fn push_result(ctx: &CollectorContext, id: &str, category: &str, status: ArtifactStatus, file_path: Option<String>, error: Option<String>) {
     if let Ok(mut results) = ctx.results.lock() {
         results.push(ArtifactResult {
             id: id.to_string(),
@@ -498,16 +311,11 @@ fn push_result(
 /// Resolve a binary from System32. Mirrors the pattern in `dsregcmd.rs`.
 fn resolve_system32_binary(file_name: &str) -> Result<PathBuf, crate::error::AppError> {
     let Some(windir) = std::env::var_os("WINDIR") else {
-        return Err(crate::error::AppError::PlatformUnsupported(
-            "WINDIR is not set; could not resolve the Windows system path.".to_string(),
-        ));
+        return Err(crate::error::AppError::PlatformUnsupported("WINDIR is not set; could not resolve the Windows system path.".to_string()));
     };
     let path = PathBuf::from(windir).join("System32").join(file_name);
     if !path.is_file() {
-        return Err(crate::error::AppError::Internal(format!(
-            "Expected system binary not found at '{}'.",
-            path.display()
-        )));
+        return Err(crate::error::AppError::Internal(format!("Expected system binary not found at '{}'.", path.display())));
     }
     Ok(path)
 }

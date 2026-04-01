@@ -185,11 +185,7 @@ fn parse_dhcp_datetime(date: &str, time: &str) -> (Option<i64>, Option<String>) 
     let mon: u32 = date_parts[0].parse().unwrap_or(1);
     let day: u32 = date_parts[1].parse().unwrap_or(1);
     let yr_short: i32 = date_parts[2].parse().unwrap_or(0);
-    let yr = if yr_short < 100 {
-        2000 + yr_short
-    } else {
-        yr_short
-    };
+    let yr = if yr_short < 100 { 2000 + yr_short } else { yr_short };
 
     let h: u32 = time_parts[0].parse().unwrap_or(0);
     let m: u32 = time_parts[1].parse().unwrap_or(0);
@@ -226,7 +222,10 @@ mod tests {
             entries[0].host_name.as_deref(),
             Some("deco-XE75.home.gell.one")
         );
-        assert_eq!(entries[0].mac_address.as_deref(), Some("54:AF:97:F8:35:2B"));
+        assert_eq!(
+            entries[0].mac_address.as_deref(),
+            Some("54:AF:97:F8:35:2B")
+        );
     }
 
     #[test]
@@ -241,7 +240,9 @@ mod tests {
 
     #[test]
     fn test_parse_dhcp_pool_exhausted() {
-        let lines = vec!["14,03/23/26,10:00:00,Pool exhausted,,,,,0,6,,,,,,,,,0"];
+        let lines = vec![
+            "14,03/23/26,10:00:00,Pool exhausted,,,,,0,6,,,,,,,,,0",
+        ];
         let (entries, _) = parse_lines(&lines, "test.log");
         assert_eq!(entries[0].severity, Severity::Error);
         assert!(entries[0].ip_address.is_none());
@@ -268,7 +269,9 @@ mod tests {
             "11,03/23/26,18:31:38,Renew,192.168.2.116,test,AABB,,0,6,,,,,,,,,0"
         ));
         assert!(!matches_dhcp_record("Event ID  Meaning"));
-        assert!(!matches_dhcp_record("ID,Date,Time,Description,IP Address"));
+        assert!(!matches_dhcp_record(
+            "ID,Date,Time,Description,IP Address"
+        ));
         assert!(!matches_dhcp_record(""));
     }
 

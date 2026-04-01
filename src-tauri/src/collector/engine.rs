@@ -38,30 +38,16 @@ pub fn run_collection<R: Runtime>(
     let evidence_root = bundle_root.join("evidence");
 
     // Create all subdirectories up front.
-    for subdir in &[
-        "logs",
-        "registry",
-        "event-logs",
-        "exports",
-        "command-output",
-    ] {
+    for subdir in &["logs", "registry", "event-logs", "exports", "command-output"] {
         fs::create_dir_all(evidence_root.join(subdir)).map_err(crate::error::AppError::Io)?;
     }
 
     // Shared state for concurrent collection.
     let completed = Arc::new(AtomicUsize::new(0));
-    let results: Arc<Mutex<Vec<ArtifactResult>>> =
-        Arc::new(Mutex::new(Vec::with_capacity(total_items)));
+    let results: Arc<Mutex<Vec<ArtifactResult>>> = Arc::new(Mutex::new(Vec::with_capacity(total_items)));
 
     // Emit initial progress.
-    emit_progress(
-        &app,
-        &request_id,
-        0,
-        total_items,
-        "Starting collection...",
-        None,
-    );
+    emit_progress(&app, &request_id, 0, total_items, "Starting collection...", None);
 
     // Run all 5 categories concurrently.
     let ctx_logs = CollectorContext {
@@ -134,25 +120,11 @@ pub fn run_collection<R: Runtime>(
     let duration_ms = start.elapsed().as_millis() as u64;
 
     // Write manifest and notes.
-    manifest::write_manifest(
-        &bundle_root,
-        &bundle_id,
-        &profile,
-        &all_results,
-        &counts,
-        duration_ms,
-    )?;
+    manifest::write_manifest(&bundle_root, &bundle_id, &profile, &all_results, &counts, duration_ms)?;
     manifest::write_notes(&bundle_root, &profile, &counts, duration_ms)?;
 
     // Final progress event.
-    emit_progress(
-        &app,
-        &request_id,
-        total_items,
-        total_items,
-        "Collection complete.",
-        None,
-    );
+    emit_progress(&app, &request_id, total_items, total_items, "Collection complete.", None);
 
     Ok(CollectionResult {
         bundle_path: bundle_root.to_string_lossy().into_owned(),
@@ -171,10 +143,7 @@ fn generate_bundle_id() -> String {
     format!("CMTRACE-{}-{}", now.format("%Y%m%d-%H%M%S"), hostname)
 }
 
-fn resolve_bundle_root(
-    output_root: Option<&str>,
-    bundle_id: &str,
-) -> Result<PathBuf, crate::error::AppError> {
+fn resolve_bundle_root(output_root: Option<&str>, bundle_id: &str) -> Result<PathBuf, crate::error::AppError> {
     let base = match output_root {
         Some(root) => PathBuf::from(root),
         None => {
@@ -185,9 +154,7 @@ fn resolve_bundle_root(
                     // Fallback to temp directory on non-Windows or if ProgramData is unset.
                     std::env::temp_dir().to_string_lossy().into_owned()
                 });
-            PathBuf::from(program_data)
-                .join("CmtraceOpen")
-                .join("Evidence")
+            PathBuf::from(program_data).join("CmtraceOpen").join("Evidence")
         }
     };
 

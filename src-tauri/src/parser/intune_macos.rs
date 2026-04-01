@@ -16,16 +16,16 @@ use std::sync::OnceLock;
 fn intune_macos_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
-        Regex::new(concat!(
-            r"^(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2}):(\d{2}):(\d{3})",
-            r"\s*\|\s*([^|]+?)\s*", // process
-            r"\|\s*([A-Z])\s*",     // severity letter
-            r"\|\s*(\d+)\s*",       // thread ID
-            r"\|\s*([^|]+?)\s*",    // sub-component
-            r"\|\s*(.*)",           // message (rest of line)
-        ))
-        .expect("Intune macOS regex must compile")
-    })
+    Regex::new(concat!(
+        r"^(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2}):(\d{2}):(\d{3})",
+        r"\s*\|\s*([^|]+?)\s*",   // process
+        r"\|\s*([A-Z])\s*",       // severity letter
+        r"\|\s*(\d+)\s*",         // thread ID
+        r"\|\s*([^|]+?)\s*",      // sub-component
+        r"\|\s*(.*)",              // message (rest of line)
+    ))
+    .expect("Intune macOS regex must compile")
+})
 }
 
 /// Check if a line matches the macOS Intune pipe-delimited format (used by detect.rs).
@@ -99,25 +99,25 @@ pub fn parse_lines(lines: &[&str], file_path: &str) -> (Vec<LogEntry>, u32) {
                 file_path: file_path.to_string(),
                 timezone_offset: None,
                 error_code_spans: Vec::new(),
-                ip_address: None,
-                host_name: None,
-                mac_address: None,
-                result_code: None,
-                gle_code: None,
-                setup_phase: None,
-                operation_name: None,
-                http_method: None,
-                uri_stem: None,
-                uri_query: None,
-                status_code: None,
-                sub_status: None,
-                time_taken_ms: None,
-                client_ip: None,
-                server_ip: None,
-                user_agent: None,
-                server_port: None,
-                username: None,
-                win32_status: None,
+                    ip_address: None,
+                    host_name: None,
+                    mac_address: None,
+                    result_code: None,
+                    gle_code: None,
+                    setup_phase: None,
+                    operation_name: None,
+                    http_method: None,
+                    uri_stem: None,
+                    uri_query: None,
+                    status_code: None,
+                    sub_status: None,
+                    time_taken_ms: None,
+                    client_ip: None,
+                    server_ip: None,
+                    user_agent: None,
+                    server_port: None,
+                    username: None,
+                    win32_status: None,
             });
         } else {
             // Non-matching line (e.g., continuation/JSON dump) — plain text
@@ -136,25 +136,25 @@ pub fn parse_lines(lines: &[&str], file_path: &str) -> (Vec<LogEntry>, u32) {
                 file_path: file_path.to_string(),
                 timezone_offset: None,
                 error_code_spans: Vec::new(),
-                ip_address: None,
-                host_name: None,
-                mac_address: None,
-                result_code: None,
-                gle_code: None,
-                setup_phase: None,
-                operation_name: None,
-                http_method: None,
-                uri_stem: None,
-                uri_query: None,
-                status_code: None,
-                sub_status: None,
-                time_taken_ms: None,
-                client_ip: None,
-                server_ip: None,
-                user_agent: None,
-                server_port: None,
-                username: None,
-                win32_status: None,
+                    ip_address: None,
+                    host_name: None,
+                    mac_address: None,
+                    result_code: None,
+                    gle_code: None,
+                    setup_phase: None,
+                    operation_name: None,
+                    http_method: None,
+                    uri_stem: None,
+                    uri_query: None,
+                    status_code: None,
+                    sub_status: None,
+                    time_taken_ms: None,
+                    client_ip: None,
+                    server_ip: None,
+                    user_agent: None,
+                    server_port: None,
+                    username: None,
+                    win32_status: None,
             });
             parse_errors += 1;
         }

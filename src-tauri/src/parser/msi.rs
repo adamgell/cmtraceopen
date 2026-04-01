@@ -47,61 +47,61 @@ fn header_re() -> &'static Regex {
 fn footer_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
-        Regex::new(r"^===\s+(?:Verbose\s+)?[Ll]ogging\s+stopped:\s+.*===\s*$")
-            .expect("MSI footer regex must compile")
-    })
+    Regex::new(r"^===\s+(?:Verbose\s+)?[Ll]ogging\s+stopped:\s+.*===\s*$")
+        .expect("MSI footer regex must compile")
+})
 }
 
 /// Action start: Action start 16:34:29: InstallFiles.
 fn action_start_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
-        Regex::new(r"^Action start (\d{1,2}):(\d{2}):(\d{2}):\s+(\w+)\.\s*$")
-            .expect("MSI action start regex must compile")
-    })
+    Regex::new(r"^Action start (\d{1,2}):(\d{2}):(\d{2}):\s+(\w+)\.\s*$")
+        .expect("MSI action start regex must compile")
+})
 }
 
 /// Action ended: Action ended 16:34:29: InstallFiles. Return value 1.
 fn action_ended_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
-        Regex::new(r"^Action ended (\d{1,2}):(\d{2}):(\d{2}):\s+(\w+)\.\s+Return value (\d+)\.\s*$")
-            .expect("MSI action ended regex must compile")
-    })
+    Regex::new(r"^Action ended (\d{1,2}):(\d{2}):(\d{2}):\s+(\w+)\.\s+Return value (\d+)\.\s*$")
+        .expect("MSI action ended regex must compile")
+})
 }
 
 /// Top-level action: Action 16:34:29: INSTALL.
 fn action_top_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
-        Regex::new(r"^Action (\d{1,2}):(\d{2}):(\d{2}):\s+(\w+)\.\s*$")
-            .expect("MSI top-level action regex must compile")
-    })
+    Regex::new(r"^Action (\d{1,2}):(\d{2}):(\d{2}):\s+(\w+)\.\s*$")
+        .expect("MSI top-level action regex must compile")
+})
 }
 
 /// Property dump: Property(C): ProductCode = {GUID}
 fn property_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
-        Regex::new(r"^Property\([CScs]\):\s+(.*)$").expect("MSI property regex must compile")
-    })
+    Regex::new(r"^Property\([CScs]\):\s+(.*)$").expect("MSI property regex must compile")
+})
 }
 
 /// MainEngineThread return: MainEngineThread is returning 1603
 fn main_engine_return_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
-        Regex::new(r"^MainEngineThread is returning (\d+)")
-            .expect("MSI MainEngineThread regex must compile")
-    })
+    Regex::new(r"^MainEngineThread is returning (\d+)")
+        .expect("MSI MainEngineThread regex must compile")
+})
 }
 
 /// Note error code pattern: Note: 1: NNNN
 fn note_error_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
-        Regex::new(r"Note:\s+1:\s+(\d+)").expect("MSI note error regex must compile")
-    })
+    Regex::new(r"Note:\s+1:\s+(\d+)").expect("MSI note error regex must compile")
+})
 }
 
 // ---------------------------------------------------------------------------
@@ -386,22 +386,10 @@ fn parse_engine(
     let context_char = caps.get(1).map(|m| m.as_str()).unwrap_or("c");
     let pid_hex = caps.get(2).map(|m| m.as_str()).unwrap_or("0");
     let tid_hex = caps.get(3).map(|m| m.as_str()).unwrap_or("0");
-    let h: u32 = caps
-        .get(4)
-        .and_then(|m| m.as_str().parse().ok())
-        .unwrap_or(0);
-    let m: u32 = caps
-        .get(5)
-        .and_then(|m| m.as_str().parse().ok())
-        .unwrap_or(0);
-    let s: u32 = caps
-        .get(6)
-        .and_then(|m| m.as_str().parse().ok())
-        .unwrap_or(0);
-    let ms: u32 = caps
-        .get(7)
-        .and_then(|m| m.as_str().parse().ok())
-        .unwrap_or(0);
+    let h: u32 = caps.get(4).and_then(|m| m.as_str().parse().ok()).unwrap_or(0);
+    let m: u32 = caps.get(5).and_then(|m| m.as_str().parse().ok()).unwrap_or(0);
+    let s: u32 = caps.get(6).and_then(|m| m.as_str().parse().ok()).unwrap_or(0);
+    let ms: u32 = caps.get(7).and_then(|m| m.as_str().parse().ok()).unwrap_or(0);
     let message = caps.get(8).map(|m| m.as_str()).unwrap_or("").to_string();
 
     let component = match context_char {
@@ -448,18 +436,9 @@ fn parse_action_start(
     line_number: u32,
     raw: &str,
 ) -> LogEntry {
-    let h: u32 = caps
-        .get(1)
-        .and_then(|m| m.as_str().parse().ok())
-        .unwrap_or(0);
-    let m: u32 = caps
-        .get(2)
-        .and_then(|m| m.as_str().parse().ok())
-        .unwrap_or(0);
-    let s: u32 = caps
-        .get(3)
-        .and_then(|m| m.as_str().parse().ok())
-        .unwrap_or(0);
+    let h: u32 = caps.get(1).and_then(|m| m.as_str().parse().ok()).unwrap_or(0);
+    let m: u32 = caps.get(2).and_then(|m| m.as_str().parse().ok()).unwrap_or(0);
+    let s: u32 = caps.get(3).and_then(|m| m.as_str().parse().ok()).unwrap_or(0);
     let action = caps.get(4).map(|m| m.as_str()).unwrap_or("Unknown");
 
     let date = state.advance_time(h, m, s);
@@ -491,23 +470,11 @@ fn parse_action_ended(
     line_number: u32,
     raw: &str,
 ) -> LogEntry {
-    let h: u32 = caps
-        .get(1)
-        .and_then(|m| m.as_str().parse().ok())
-        .unwrap_or(0);
-    let m: u32 = caps
-        .get(2)
-        .and_then(|m| m.as_str().parse().ok())
-        .unwrap_or(0);
-    let s: u32 = caps
-        .get(3)
-        .and_then(|m| m.as_str().parse().ok())
-        .unwrap_or(0);
+    let h: u32 = caps.get(1).and_then(|m| m.as_str().parse().ok()).unwrap_or(0);
+    let m: u32 = caps.get(2).and_then(|m| m.as_str().parse().ok()).unwrap_or(0);
+    let s: u32 = caps.get(3).and_then(|m| m.as_str().parse().ok()).unwrap_or(0);
     let action = caps.get(4).map(|m| m.as_str()).unwrap_or("Unknown");
-    let return_val: u32 = caps
-        .get(5)
-        .and_then(|m| m.as_str().parse().ok())
-        .unwrap_or(0);
+    let return_val: u32 = caps.get(5).and_then(|m| m.as_str().parse().ok()).unwrap_or(0);
 
     let date = state.advance_time(h, m, s);
     let (timestamp, timestamp_display) = if let Some(d) = date {
@@ -540,18 +507,9 @@ fn parse_action_top(
     line_number: u32,
     raw: &str,
 ) -> LogEntry {
-    let h: u32 = caps
-        .get(1)
-        .and_then(|m| m.as_str().parse().ok())
-        .unwrap_or(0);
-    let m: u32 = caps
-        .get(2)
-        .and_then(|m| m.as_str().parse().ok())
-        .unwrap_or(0);
-    let s: u32 = caps
-        .get(3)
-        .and_then(|m| m.as_str().parse().ok())
-        .unwrap_or(0);
+    let h: u32 = caps.get(1).and_then(|m| m.as_str().parse().ok()).unwrap_or(0);
+    let m: u32 = caps.get(2).and_then(|m| m.as_str().parse().ok()).unwrap_or(0);
+    let s: u32 = caps.get(3).and_then(|m| m.as_str().parse().ok()).unwrap_or(0);
     let action = caps.get(4).map(|m| m.as_str()).unwrap_or("Unknown");
 
     let date = state.advance_time(h, m, s);
@@ -593,35 +551,7 @@ fn determine_engine_severity(message: &str) -> Severity {
     if let Some(caps) = note_error_re().captures(message) {
         if let Some(code) = caps.get(1).and_then(|m| m.as_str().parse::<u32>().ok()) {
             // Common MSI note error codes that indicate real problems
-            if matches!(
-                code,
-                2318 | 2329
-                    | 2331
-                    | 2335
-                    | 2337
-                    | 2343
-                    | 2345
-                    | 2350
-                    | 2351
-                    | 2352
-                    | 2355
-                    | 2356
-                    | 2357
-                    | 2358
-                    | 2359
-                    | 2360
-                    | 2361
-                    | 2362
-                    | 2371
-                    | 2372
-                    | 2373
-                    | 2374
-                    | 2375
-                    | 2379
-                    | 2380
-                    | 2381
-                    | 2382
-            ) {
+            if matches!(code, 2318 | 2329 | 2331 | 2335 | 2337 | 2343 | 2345 | 2350 | 2351 | 2352 | 2355 | 2356 | 2357 | 2358 | 2359 | 2360 | 2361 | 2362 | 2371 | 2372 | 2373 | 2374 | 2375 | 2379 | 2380 | 2381 | 2382) {
                 return Severity::Error;
             }
             // Most "Note: 1:" entries are informational in MSI logs
@@ -678,11 +608,11 @@ fn severity_from_msi_exit_code(code: u32) -> Severity {
 /// Map action "Return value" to severity.
 fn severity_from_action_return(code: u32) -> Severity {
     match code {
-        0 => Severity::Info,    // Failure (but many logs use 0 as success)
-        1 => Severity::Info,    // Success
-        2 => Severity::Warning, // User cancel
-        3 => Severity::Error,   // Fatal error
-        4 => Severity::Warning, // Suspend
+        0 => Severity::Info,     // Failure (but many logs use 0 as success)
+        1 => Severity::Info,     // Success
+        2 => Severity::Warning,  // User cancel
+        3 => Severity::Error,    // Fatal error
+        4 => Severity::Warning,  // Suspend
         _ => Severity::Info,
     }
 }
@@ -769,25 +699,25 @@ fn make_entry(
         file_path: file_path.to_string(),
         timezone_offset: None,
         error_code_spans: Vec::new(),
-        ip_address: None,
-        host_name: None,
-        mac_address: None,
-        result_code: None,
-        gle_code: None,
-        setup_phase: None,
-        operation_name: None,
-        http_method: None,
-        uri_stem: None,
-        uri_query: None,
-        status_code: None,
-        sub_status: None,
-        time_taken_ms: None,
-        client_ip: None,
-        server_ip: None,
-        user_agent: None,
-        server_port: None,
-        username: None,
-        win32_status: None,
+                    ip_address: None,
+                    host_name: None,
+                    mac_address: None,
+                    result_code: None,
+                    gle_code: None,
+                    setup_phase: None,
+                    operation_name: None,
+                    http_method: None,
+                    uri_stem: None,
+                    uri_query: None,
+                    status_code: None,
+                    sub_status: None,
+                    time_taken_ms: None,
+                    client_ip: None,
+                    server_ip: None,
+                    user_agent: None,
+                    server_port: None,
+                    username: None,
+                    win32_status: None,
     }
 }
 
@@ -835,7 +765,10 @@ mod tests {
 
     #[test]
     fn test_matches_main_engine_thread() {
-        assert_eq!(matches_msi_content("MainEngineThread is returning 0"), 2);
+        assert_eq!(
+            matches_msi_content("MainEngineThread is returning 0"),
+            2
+        );
     }
 
     #[test]
@@ -857,9 +790,7 @@ mod tests {
     #[test]
     fn test_matches_property() {
         assert_eq!(
-            matches_msi_content(
-                "Property(C): ProductCode = {C64CA371-0000-0000-0000-000000000000}"
-            ),
+            matches_msi_content("Property(C): ProductCode = {C64CA371-0000-0000-0000-000000000000}"),
             1
         );
     }

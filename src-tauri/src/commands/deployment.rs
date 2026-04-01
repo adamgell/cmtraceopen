@@ -88,59 +88,79 @@ pub struct DeploymentAnalysisResult {
 
 fn msi_main_engine_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
-    CELL.get_or_init(|| Regex::new(r"MainEngineThread is returning (\d+)").unwrap())
+    CELL.get_or_init(|| {
+    Regex::new(r"MainEngineThread is returning (\d+)").unwrap()
+})
 }
 
 fn msi_return_value_3_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
-    CELL.get_or_init(|| Regex::new(r"Return value 3\b").unwrap())
+    CELL.get_or_init(|| {
+    Regex::new(r"Return value 3\b").unwrap()
+})
 }
 
 fn psadt_exit_code_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
-    CELL.get_or_init(|| Regex::new(r"(?i)exit\s*code\s*[\[:\s]*(\d+)").unwrap())
+    CELL.get_or_init(|| {
+    Regex::new(r"(?i)exit\s*code\s*[\[:\s]*(\d+)").unwrap()
+})
 }
 
 /// Burn exit code: "Exit code: 0x0" or "Exit code: 0x80070005" (hex)
 fn burn_exit_code_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
-    CELL.get_or_init(|| Regex::new(r"(?i)exit\s*code:\s*0x([0-9A-Fa-f]+)").unwrap())
+    CELL.get_or_init(|| {
+    Regex::new(r"(?i)exit\s*code:\s*0x([0-9A-Fa-f]+)").unwrap()
+})
 }
 
 // MSI metadata: Property(S): ProductName = <value>
 fn msi_product_name_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
-    CELL.get_or_init(|| Regex::new(r"Property\(S\):\s*ProductName\s*=\s*(.+)").unwrap())
+    CELL.get_or_init(|| {
+    Regex::new(r"Property\(S\):\s*ProductName\s*=\s*(.+)").unwrap()
+})
 }
 
 fn msi_product_version_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
-    CELL.get_or_init(|| Regex::new(r"Property\(S\):\s*ProductVersion\s*=\s*(.+)").unwrap())
+    CELL.get_or_init(|| {
+    Regex::new(r"Property\(S\):\s*ProductVersion\s*=\s*(.+)").unwrap()
+})
 }
 
 // PSADT: Open-ADTSession message contains [Vendor Name Version]
 // e.g., "Open-ADTSession [Contoso Foo App 1.2.3]" or in component field
 fn psadt_session_info_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
-    CELL.get_or_init(|| Regex::new(r"\[([^\]]+)\]").unwrap())
+    CELL.get_or_init(|| {
+    Regex::new(r"\[([^\]]+)\]").unwrap()
+})
 }
 
 // Burn: first i001 line e.g. "Burn v3.14.1.8722, Windows v10.0"
 fn burn_version_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
-    CELL.get_or_init(|| Regex::new(r"Burn v([\d.]+)").unwrap())
+    CELL.get_or_init(|| {
+    Regex::new(r"Burn v([\d.]+)").unwrap()
+})
 }
 
 // PatchMyPC: "Starting UserNotification V2.1.100.317"
 fn patchmypc_version_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
-    CELL.get_or_init(|| Regex::new(r"(?i)Starting\s+UserNotification\s+V([\d.]+)").unwrap())
+    CELL.get_or_init(|| {
+    Regex::new(r"(?i)Starting\s+UserNotification\s+V([\d.]+)").unwrap()
+})
 }
 
 // MSI command line: /i = install, /x = uninstall, /f = repair
 fn msi_cmdline_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
-    CELL.get_or_init(|| Regex::new(r"(?i)CommandLine:\s+(.*)").unwrap())
+    CELL.get_or_init(|| {
+    Regex::new(r"(?i)CommandLine:\s+(.*)").unwrap()
+})
 }
 
 // PSADT deploy type: "installationType [Install]" or in the session message
@@ -264,7 +284,10 @@ fn extract_app_metadata(
         DeploymentFormat::Burn => {
             // First i001 message: "Burn v3.14.1.8722, Windows v10.0..."
             for entry in entries.iter() {
-                let is_i001 = entry.component.as_deref().is_some_and(|c| c == "i001");
+                let is_i001 = entry
+                    .component
+                    .as_deref()
+                    .is_some_and(|c| c == "i001");
                 if is_i001 {
                     let version = burn_version_re()
                         .captures(&entry.message)
@@ -301,10 +324,7 @@ fn parse_psadt_app_info(info: &str) -> (Option<String>, Option<String>) {
         let maybe_name = parts[1];
         // Check if last token looks like a version (starts with a digit)
         if maybe_version.starts_with(|c: char| c.is_ascii_digit()) {
-            return (
-                Some(maybe_name.to_string()),
-                Some(maybe_version.to_string()),
-            );
+            return (Some(maybe_name.to_string()), Some(maybe_version.to_string()));
         }
     }
     // Can't split — return the whole thing as the app name
@@ -343,9 +363,7 @@ fn extract_deploy_type(format: &DeploymentFormat, entries: &[LogEntry]) -> Optio
                     // Capitalize first letter
                     let mut chars = dt.chars();
                     let capitalized = match chars.next() {
-                        Some(c) => {
-                            c.to_uppercase().collect::<String>() + &chars.as_str().to_lowercase()
-                        }
+                        Some(c) => c.to_uppercase().collect::<String>() + &chars.as_str().to_lowercase(),
                         None => dt,
                     };
                     return Some(capitalized);
@@ -386,14 +404,10 @@ fn extract_exit_code(format: &DeploymentFormat, entries: &[LogEntry]) -> Option<
             }
             None
         }
-        DeploymentFormat::PsadtCmtrace
-        | DeploymentFormat::PsadtWrapper
-        | DeploymentFormat::PatchMyPc => {
+        DeploymentFormat::PsadtCmtrace | DeploymentFormat::PsadtWrapper | DeploymentFormat::PatchMyPc => {
             // Search for Close-ADTSession with exit code
             for entry in entries.iter().rev() {
-                if entry.message.contains("Close-ADTSession")
-                    || entry.message.contains("ADTSession")
-                {
+                if entry.message.contains("Close-ADTSession") || entry.message.contains("ADTSession") {
                     if let Some(caps) = psadt_exit_code_re().captures(&entry.message) {
                         if let Ok(code) = caps[1].parse::<i32>() {
                             return Some(code);
@@ -463,10 +477,7 @@ fn classify_outcome(exit_code: Option<i32>) -> DeploymentOutcome {
 
 // ── Error context extraction ────────────────────────────────────────────
 
-fn extract_error_lines(
-    format: &DeploymentFormat,
-    entries: &[LogEntry],
-) -> Vec<DeploymentErrorLine> {
+fn extract_error_lines(format: &DeploymentFormat, entries: &[LogEntry]) -> Vec<DeploymentErrorLine> {
     let mut lines = Vec::new();
 
     match format {
@@ -539,19 +550,14 @@ fn generate_error_summary(
 
     let prefix = match format {
         DeploymentFormat::MsiVerbose => "MSI",
-        DeploymentFormat::PsadtCmtrace
-        | DeploymentFormat::PsadtLegacy
-        | DeploymentFormat::PsadtWrapper => "PSADT",
+        DeploymentFormat::PsadtCmtrace | DeploymentFormat::PsadtLegacy | DeploymentFormat::PsadtWrapper => "PSADT",
         DeploymentFormat::Burn => "Burn",
         DeploymentFormat::PatchMyPc => "PatchMyPC",
         DeploymentFormat::Unknown => "Deployment",
     };
 
     if lookup.found {
-        Some(format!(
-            "{} exit code {}: {}",
-            prefix, code, lookup.description
-        ))
+        Some(format!("{} exit code {}: {}", prefix, code, lookup.description))
     } else {
         Some(format!("{} exit code {}", prefix, code))
     }
@@ -644,10 +650,7 @@ pub fn analyze_deployment_folder(
 ) -> Result<DeploymentAnalysisResult, crate::error::AppError> {
     let dir = Path::new(&folder_path);
     if !dir.is_dir() {
-        return Err(crate::error::AppError::InvalidInput(format!(
-            "Not a directory: {}",
-            folder_path
-        )));
+        return Err(crate::error::AppError::InvalidInput(format!("Not a directory: {}", folder_path)));
     }
 
     let mut log_files = Vec::new();
@@ -749,42 +752,21 @@ mod tests {
 
     #[test]
     fn test_outcome_success() {
-        assert!(matches!(
-            classify_outcome(Some(0)),
-            DeploymentOutcome::Success
-        ));
-        assert!(matches!(
-            classify_outcome(Some(3010)),
-            DeploymentOutcome::Success
-        ));
-        assert!(matches!(
-            classify_outcome(Some(1641)),
-            DeploymentOutcome::Success
-        ));
+        assert!(matches!(classify_outcome(Some(0)), DeploymentOutcome::Success));
+        assert!(matches!(classify_outcome(Some(3010)), DeploymentOutcome::Success));
+        assert!(matches!(classify_outcome(Some(1641)), DeploymentOutcome::Success));
     }
 
     #[test]
     fn test_outcome_deferred() {
-        assert!(matches!(
-            classify_outcome(Some(1602)),
-            DeploymentOutcome::Deferred
-        ));
-        assert!(matches!(
-            classify_outcome(Some(60012)),
-            DeploymentOutcome::Deferred
-        ));
+        assert!(matches!(classify_outcome(Some(1602)), DeploymentOutcome::Deferred));
+        assert!(matches!(classify_outcome(Some(60012)), DeploymentOutcome::Deferred));
     }
 
     #[test]
     fn test_outcome_failure() {
-        assert!(matches!(
-            classify_outcome(Some(1603)),
-            DeploymentOutcome::Failure
-        ));
-        assert!(matches!(
-            classify_outcome(Some(1)),
-            DeploymentOutcome::Failure
-        ));
+        assert!(matches!(classify_outcome(Some(1603)), DeploymentOutcome::Failure));
+        assert!(matches!(classify_outcome(Some(1)), DeploymentOutcome::Failure));
     }
 
     #[test]
@@ -794,57 +776,33 @@ mod tests {
 
     #[test]
     fn test_msi_exit_code() {
-        let entries = vec![make_entry(
-            "MainEngineThread is returning 1603",
-            Severity::Error,
-        )];
-        assert_eq!(
-            extract_exit_code(&DeploymentFormat::MsiVerbose, &entries),
-            Some(1603)
-        );
+        let entries = vec![make_entry("MainEngineThread is returning 1603", Severity::Error)];
+        assert_eq!(extract_exit_code(&DeploymentFormat::MsiVerbose, &entries), Some(1603));
     }
 
     #[test]
     fn test_psadt_exit_code() {
-        let entries = vec![make_entry(
-            "Close-ADTSession completed with exit code [0]",
-            Severity::Info,
-        )];
-        assert_eq!(
-            extract_exit_code(&DeploymentFormat::PsadtCmtrace, &entries),
-            Some(0)
-        );
+        let entries = vec![make_entry("Close-ADTSession completed with exit code [0]", Severity::Info)];
+        assert_eq!(extract_exit_code(&DeploymentFormat::PsadtCmtrace, &entries), Some(0));
     }
 
     #[test]
     fn test_format_msi_direct() {
         let entries = vec![make_entry("test", Severity::Info)];
-        assert!(matches!(
-            classify_format(ParserKind::Msi, &entries, "test.log"),
-            DeploymentFormat::MsiVerbose
-        ));
+        assert!(matches!(classify_format(ParserKind::Msi, &entries, "test.log"), DeploymentFormat::MsiVerbose));
     }
 
     #[test]
     fn test_format_burn_direct() {
         let entries = vec![make_entry("test", Severity::Info)];
-        assert!(matches!(
-            classify_format(ParserKind::Burn, &entries, "test.log"),
-            DeploymentFormat::Burn
-        ));
+        assert!(matches!(classify_format(ParserKind::Burn, &entries, "test.log"), DeploymentFormat::Burn));
     }
 
     #[test]
     fn test_format_burn_fallback_from_timestamped() {
         let entries = vec![
-            make_entry(
-                "[07A4:0CBC][2025-11-25T01:55:42]i001: Burn v3.14.1.8722, Windows v10.0",
-                Severity::Info,
-            ),
-            make_entry(
-                "[07A4:0CBC][2025-11-25T01:55:43]i000: Initializing",
-                Severity::Info,
-            ),
+            make_entry("[07A4:0CBC][2025-11-25T01:55:42]i001: Burn v3.14.1.8722, Windows v10.0", Severity::Info),
+            make_entry("[07A4:0CBC][2025-11-25T01:55:43]i000: Initializing", Severity::Info),
         ];
         assert!(matches!(
             classify_format(ParserKind::Timestamped, &entries, "setup.exe.log"),
@@ -855,14 +813,8 @@ mod tests {
     #[test]
     fn test_format_burn_fallback_from_plain() {
         let entries = vec![
-            make_entry(
-                "[1234:5678][2025-11-25T01:55:42]i001: Started bootstrapper",
-                Severity::Info,
-            ),
-            make_entry(
-                "[1234:5678][2025-11-25T01:55:43]e000: Error occurred",
-                Severity::Error,
-            ),
+            make_entry("[1234:5678][2025-11-25T01:55:42]i001: Started bootstrapper", Severity::Info),
+            make_entry("[1234:5678][2025-11-25T01:55:43]e000: Error occurred", Severity::Error),
         ];
         assert!(matches!(
             classify_format(ParserKind::Plain, &entries, "installer.exe.log"),
@@ -885,10 +837,7 @@ mod tests {
     #[test]
     fn test_format_ccm_with_psadt() {
         let entries = vec![make_entry("Open-ADTSession starting", Severity::Info)];
-        assert!(matches!(
-            classify_format(ParserKind::Ccm, &entries, "test.log"),
-            DeploymentFormat::PsadtCmtrace
-        ));
+        assert!(matches!(classify_format(ParserKind::Ccm, &entries, "test.log"), DeploymentFormat::PsadtCmtrace));
     }
 
     #[test]
@@ -902,23 +851,14 @@ mod tests {
 
     #[test]
     fn test_error_summary_with_known_code() {
-        let summary = generate_error_summary(
-            &DeploymentFormat::MsiVerbose,
-            Some(1603),
-            &DeploymentOutcome::Failure,
-        );
+        let summary = generate_error_summary(&DeploymentFormat::MsiVerbose, Some(1603), &DeploymentOutcome::Failure);
         assert!(summary.is_some());
         assert!(summary.unwrap().contains("1603"));
     }
 
     #[test]
     fn test_error_summary_success_none() {
-        assert!(generate_error_summary(
-            &DeploymentFormat::MsiVerbose,
-            Some(0),
-            &DeploymentOutcome::Success
-        )
-        .is_none());
+        assert!(generate_error_summary(&DeploymentFormat::MsiVerbose, Some(0), &DeploymentOutcome::Success).is_none());
     }
 
     #[test]
@@ -934,10 +874,9 @@ mod tests {
 
     #[test]
     fn test_psadt_app_metadata() {
-        let entries = vec![make_entry(
-            "Open-ADTSession [Contoso Foo App 1.2.3]",
-            Severity::Info,
-        )];
+        let entries = vec![
+            make_entry("Open-ADTSession [Contoso Foo App 1.2.3]", Severity::Info),
+        ];
         let (name, version) = extract_app_metadata(&DeploymentFormat::PsadtCmtrace, &entries);
         assert_eq!(name.as_deref(), Some("Contoso Foo App"));
         assert_eq!(version.as_deref(), Some("1.2.3"));
@@ -945,11 +884,9 @@ mod tests {
 
     #[test]
     fn test_burn_app_metadata() {
-        let entries = vec![make_entry_with_component(
-            "Burn v3.14.1.8722, Windows v10.0 (Build 26100)",
-            Severity::Info,
-            Some("i001"),
-        )];
+        let entries = vec![
+            make_entry_with_component("Burn v3.14.1.8722, Windows v10.0 (Build 26100)", Severity::Info, Some("i001")),
+        ];
         let (name, version) = extract_app_metadata(&DeploymentFormat::Burn, &entries);
         assert!(name.is_some());
         assert!(name.unwrap().contains("Burn v3.14.1.8722"));
@@ -958,10 +895,9 @@ mod tests {
 
     #[test]
     fn test_patchmypc_app_metadata() {
-        let entries = vec![make_entry(
-            "Starting UserNotification V2.1.100.317",
-            Severity::Info,
-        )];
+        let entries = vec![
+            make_entry("Starting UserNotification V2.1.100.317", Severity::Info),
+        ];
         let (name, version) = extract_app_metadata(&DeploymentFormat::PatchMyPc, &entries);
         assert_eq!(name.as_deref(), Some("PatchMyPC UserNotification"));
         assert_eq!(version.as_deref(), Some("2.1.100.317"));
@@ -976,7 +912,9 @@ mod tests {
 
     #[test]
     fn test_msi_deploy_type_install() {
-        let entries = vec![make_entry("CommandLine: /i setup.msi /qn", Severity::Info)];
+        let entries = vec![
+            make_entry("CommandLine: /i setup.msi /qn", Severity::Info),
+        ];
         assert_eq!(
             extract_deploy_type(&DeploymentFormat::MsiVerbose, &entries).as_deref(),
             Some("Install")
@@ -985,7 +923,9 @@ mod tests {
 
     #[test]
     fn test_msi_deploy_type_uninstall() {
-        let entries = vec![make_entry("CommandLine: /x {GUID} /qn", Severity::Info)];
+        let entries = vec![
+            make_entry("CommandLine: /x {GUID} /qn", Severity::Info),
+        ];
         assert_eq!(
             extract_deploy_type(&DeploymentFormat::MsiVerbose, &entries).as_deref(),
             Some("Uninstall")
@@ -994,7 +934,9 @@ mod tests {
 
     #[test]
     fn test_psadt_deploy_type() {
-        let entries = vec![make_entry("Deployment Type [Install]", Severity::Info)];
+        let entries = vec![
+            make_entry("Deployment Type [Install]", Severity::Info),
+        ];
         assert_eq!(
             extract_deploy_type(&DeploymentFormat::PsadtCmtrace, &entries).as_deref(),
             Some("Install")

@@ -8,12 +8,10 @@ use crate::constants::DEFAULT_BUNDLE_PRIMARY_ENTRY_POINTS;
 #[cfg(feature = "dsregcmd")]
 use crate::dsregcmd::registry::{inspect_registry_snapshot_file, RegistrySnapshotSummary};
 use crate::intune::models::{EvidenceBundleArtifactCounts, EvidenceBundleMetadata};
-use crate::models::log_entry::{
-    ParseQuality, ParserKind, ParserSelectionInfo, ParserSpecialization,
-};
+use crate::models::log_entry::{ParseQuality, ParserKind, ParserSelectionInfo, ParserSpecialization};
 use crate::parser;
 
-use super::file_ops::{metadata_modified_unix_ms, normalize_path_string, FolderEntry};
+use super::file_ops::{normalize_path_string, metadata_modified_unix_ms, FolderEntry};
 
 #[cfg(not(feature = "dsregcmd"))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -168,7 +166,9 @@ pub struct EvidenceArtifactPreview {
 
 /// File extensions that are binary / non-parseable as text logs.
 /// These are skipped during recursive bundle collection.
-const BINARY_EXTENSIONS: &[&str] = &["etl", "dat", "zip", "cab", "tmp", "dir", "que", "evtx"];
+const BINARY_EXTENSIONS: &[&str] = &[
+    "etl", "dat", "zip", "cab", "tmp", "dir", "que", "evtx",
+];
 
 /// Maximum file size (in bytes) to include in batch aggregate parsing.
 /// Files larger than this are still listed in the sidebar but excluded from
@@ -179,9 +179,7 @@ const BUNDLE_BATCH_MAX_FILE_SIZE: u64 = 50 * 1024 * 1024; // 50 MB
 // ── Tauri Commands ──────────────────────────────────────────────────────
 
 #[tauri::command]
-pub fn inspect_evidence_bundle(
-    path: String,
-) -> Result<EvidenceBundleDetails, crate::error::AppError> {
+pub fn inspect_evidence_bundle(path: String) -> Result<EvidenceBundleDetails, crate::error::AppError> {
     inspect_evidence_bundle_details(Path::new(&path))
 }
 
@@ -252,10 +250,7 @@ pub(crate) fn collect_files_recursive(root: &Path) -> Vec<FolderEntry> {
 
             // Skip known binary extensions
             if let Some(ext) = entry_path.extension().and_then(|e| e.to_str()) {
-                if BINARY_EXTENSIONS
-                    .iter()
-                    .any(|b| b.eq_ignore_ascii_case(ext))
-                {
+                if BINARY_EXTENSIONS.iter().any(|b| b.eq_ignore_ascii_case(ext)) {
                     skipped_binary += 1;
                     log::debug!(
                         "event=collect_files_recursive_skip reason=binary_extension path=\"{}\"",
@@ -377,21 +372,13 @@ pub(crate) fn detect_evidence_bundle_metadata(path: &Path) -> Option<EvidenceBun
 
 // ── Private helpers ─────────────────────────────────────────────────────
 
-fn inspect_evidence_bundle_details(
-    path: &Path,
-) -> Result<EvidenceBundleDetails, crate::error::AppError> {
+fn inspect_evidence_bundle_details(path: &Path) -> Result<EvidenceBundleDetails, crate::error::AppError> {
     if !path.exists() {
-        return Err(crate::error::AppError::InvalidInput(format!(
-            "bundle path does not exist: {}",
-            path.display()
-        )));
+        return Err(crate::error::AppError::InvalidInput(format!("bundle path does not exist: {}", path.display())));
     }
 
     if !path.is_dir() {
-        return Err(crate::error::AppError::InvalidInput(format!(
-            "bundle path is not a folder: {}",
-            path.display()
-        )));
+        return Err(crate::error::AppError::InvalidInput(format!("bundle path is not a folder: {}", path.display())));
     }
 
     let manifest_path = path.join("manifest.json");
@@ -402,21 +389,12 @@ fn inspect_evidence_bundle_details(
         )));
     }
 
-    let manifest_content =
-        fs::read_to_string(&manifest_path).map_err(crate::error::AppError::Io)?;
-    let manifest = serde_json::from_str::<Value>(&manifest_content).map_err(|error| {
-        crate::error::AppError::Internal(format!(
-            "failed to parse {}: {}",
-            manifest_path.display(),
-            error
-        ))
-    })?;
-    let metadata = detect_evidence_bundle_metadata(path).ok_or_else(|| {
-        crate::error::AppError::Internal(format!(
-            "{} is not a recognized evidence bundle",
-            path.display()
-        ))
-    })?;
+    let manifest_content = fs::read_to_string(&manifest_path)
+        .map_err(crate::error::AppError::Io)?;
+    let manifest = serde_json::from_str::<Value>(&manifest_content)
+        .map_err(|error| crate::error::AppError::Internal(format!("failed to parse {}: {}", manifest_path.display(), error)))?;
+    let metadata = detect_evidence_bundle_metadata(path)
+        .ok_or_else(|| crate::error::AppError::Internal(format!("{} is not a recognized evidence bundle", path.display())))?;
 
     let artifacts = json_value_at(&manifest, &["artifacts"])
         .and_then(Value::as_array)
@@ -581,17 +559,11 @@ fn inspect_evidence_artifact_preview(
     origin_path: Option<String>,
 ) -> Result<EvidenceArtifactPreview, crate::error::AppError> {
     if !path.exists() {
-        return Err(crate::error::AppError::InvalidInput(format!(
-            "artifact path does not exist: {}",
-            path.display()
-        )));
+        return Err(crate::error::AppError::InvalidInput(format!("artifact path does not exist: {}", path.display())));
     }
 
     if !path.is_file() {
-        return Err(crate::error::AppError::InvalidInput(format!(
-            "artifact path is not a file: {}",
-            path.display()
-        )));
+        return Err(crate::error::AppError::InvalidInput(format!("artifact path is not a file: {}", path.display())));
     }
 
     match intake_kind {
@@ -932,7 +904,10 @@ fn json_string_array_at(value: &Value, path: &[&str]) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{inspect_evidence_artifact, inspect_evidence_bundle, EvidenceArtifactIntakeKind};
+    use super::{
+        inspect_evidence_artifact, inspect_evidence_bundle,
+        EvidenceArtifactIntakeKind,
+    };
     use std::fs;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};

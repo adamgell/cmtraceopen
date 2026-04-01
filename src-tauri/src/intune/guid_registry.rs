@@ -15,8 +15,8 @@ pub(crate) fn app_id_json_re() -> &'static Regex {
 pub(crate) fn app_name_json_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
-        Regex::new(r#"(?i)\"(?:ApplicationName|Name)\"\s*:\s*\"([^\",\}]+)"#).unwrap()
-    })
+    Regex::new(r#"(?i)\"(?:ApplicationName|Name)\"\s*:\s*\"([^\",\}]+)"#).unwrap()
+})
 }
 pub(crate) fn setup_file_json_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
@@ -27,11 +27,11 @@ pub(crate) fn setup_file_json_re() -> &'static Regex {
 pub(crate) fn guid_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
-        Regex::new(
-            r#"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})"#,
-        )
-        .unwrap()
-    })
+    Regex::new(
+        r#"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})"#,
+    )
+    .unwrap()
+})
 }
 
 // ── Shared helpers ───────────────────────────────────────────────────────────
@@ -159,7 +159,8 @@ impl GuidRegistry {
     pub fn enrich_event_name(&self, current_name: &str, guid: &str) -> Option<String> {
         let resolved = self.resolve(guid)?;
         // Strip the trailing "(shortguid...)" suffix and replace with the resolved name
-        strip_short_guid_suffix(current_name).map(|prefix| format!("{prefix}{resolved}"))
+        strip_short_guid_suffix(current_name)
+            .map(|prefix| format!("{prefix}{resolved}"))
     }
 
     /// Number of entries in the registry.
@@ -393,8 +394,10 @@ fn strip_short_guid_suffix(name: &str) -> Option<String> {
         return None;
     }
     // Accept full GUID: hex + dashes, 36 chars
-    let is_full_guid =
-        inner.len() == 36 && inner.chars().all(|c| c.is_ascii_hexdigit() || c == '-');
+    let is_full_guid = inner.len() == 36
+        && inner
+            .chars()
+            .all(|c| c.is_ascii_hexdigit() || c == '-');
     // Accept legacy short format: hex chars followed by "..."
     let is_short_guid = inner.ends_with("...")
         && inner[..inner.len() - 3]
@@ -528,7 +531,10 @@ mod tests {
         );
 
         assert_eq!(
-            reg.resolve_fallback_name("Contoso App", "a1b2c3d4-e5f6-7890-abcd-ef1234567890"),
+            reg.resolve_fallback_name(
+                "Contoso App",
+                "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+            ),
             None
         );
     }
@@ -600,14 +606,8 @@ mod tests {
         reg.ingest_lines(&[line(
             r#"Get policies = [{\"Id\":\"00591936-3d7f-4c79-bd9e-550b09c2e8d9\",\"Name\":\"Update for RDM\",\"Version\":1},{\"Id\":\"bf98868f-45ed-49bd-b0b9-1e0b14b1dd9d\",\"Name\":\"7-Zip\",\"Version\":3}]"#,
         )]);
-        assert_eq!(
-            reg.resolve("00591936-3d7f-4c79-bd9e-550b09c2e8d9"),
-            Some("Update for RDM")
-        );
-        assert_eq!(
-            reg.resolve("bf98868f-45ed-49bd-b0b9-1e0b14b1dd9d"),
-            Some("7-Zip")
-        );
+        assert_eq!(reg.resolve("00591936-3d7f-4c79-bd9e-550b09c2e8d9"), Some("Update for RDM"));
+        assert_eq!(reg.resolve("bf98868f-45ed-49bd-b0b9-1e0b14b1dd9d"), Some("7-Zip"));
     }
 
     #[test]
@@ -706,9 +706,7 @@ mod tests {
     fn strip_guid_suffix_unit() {
         // Full GUID format
         assert_eq!(
-            strip_short_guid_suffix(
-                "AppWorkload Download Retry (00591936-aaaa-bbbb-cccc-ddddeeeeeeee)"
-            ),
+            strip_short_guid_suffix("AppWorkload Download Retry (00591936-aaaa-bbbb-cccc-ddddeeeeeeee)"),
             Some("AppWorkload Download Retry — ".to_string())
         );
         assert_eq!(
@@ -725,10 +723,7 @@ mod tests {
             Some("Win32 App — ".to_string())
         );
         // Non-matching
-        assert_eq!(
-            strip_short_guid_suffix("ClientHealth Heartbeat Failed"),
-            None
-        );
+        assert_eq!(strip_short_guid_suffix("ClientHealth Heartbeat Failed"), None);
         assert_eq!(strip_short_guid_suffix("Some Name (not-hex...)"), None);
         assert_eq!(strip_short_guid_suffix("Some Name (not a guid)"), None);
     }

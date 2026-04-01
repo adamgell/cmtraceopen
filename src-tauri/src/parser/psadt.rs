@@ -31,9 +31,9 @@ fn psadt_line_re() -> &'static Regex {
 fn psadt_prefix_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
-        Regex::new(r"^\[\d{4}-\d{2}-\d{2}\s\d{2}:\d{2}:\d{2}\.\d{3}\]\s\[")
-            .expect("PSADT prefix regex must compile")
-    })
+    Regex::new(r"^\[\d{4}-\d{2}-\d{2}\s\d{2}:\d{2}:\d{2}\.\d{3}\]\s\[")
+        .expect("PSADT prefix regex must compile")
+})
 }
 
 /// Known PSADT section names.
@@ -46,7 +46,11 @@ static KNOWN_SECTIONS: &[&str] = &[
 ];
 
 /// Known PSADT function names.
-static KNOWN_FUNCTIONS: &[&str] = &["Open-ADTSession", "Close-ADTSession", "Start-ADTMsiProcess"];
+static KNOWN_FUNCTIONS: &[&str] = &[
+    "Open-ADTSession",
+    "Close-ADTSession",
+    "Start-ADTMsiProcess",
+];
 
 /// Map the PSADT severity token to a `Severity` variant.
 fn map_severity(token: &str) -> Severity {
@@ -265,7 +269,10 @@ mod tests {
     fn test_parse_error_line() {
         let line = "[2024-12-24 14:44:13.700] [Install] [Start-ADTMsiProcess] [Error] :: MSI installation failed. [Exit code: 1603]";
         let parsed = parse_line(line).expect("should parse");
-        assert_eq!(parsed.message, "MSI installation failed. [Exit code: 1603]");
+        assert_eq!(
+            parsed.message,
+            "MSI installation failed. [Exit code: 1603]"
+        );
         assert_eq!(parsed.section, "Install");
         assert_eq!(parsed.source, "Start-ADTMsiProcess");
         assert_eq!(parsed.severity, Severity::Error);
@@ -324,11 +331,7 @@ mod tests {
 
     #[test]
     fn test_parse_lines_skips_empty() {
-        let lines = vec![
-            "",
-            "  ",
-            "[2024-12-24 14:44:13.658] [Install] [Func] [Info] :: msg",
-        ];
+        let lines = vec!["", "  ", "[2024-12-24 14:44:13.658] [Install] [Func] [Info] :: msg"];
         let (entries, errors) = parse_lines(&lines, "test.log");
         assert_eq!(entries.len(), 1);
         assert_eq!(errors, 0);
@@ -336,14 +339,16 @@ mod tests {
 
     #[test]
     fn test_parse_lines_file_path_propagated() {
-        let lines = vec!["[2024-12-24 14:44:13.658] [Install] [Func] [Info] :: msg"];
+        let lines =
+            vec!["[2024-12-24 14:44:13.658] [Install] [Func] [Info] :: msg"];
         let (entries, _) = parse_lines(&lines, "/path/to/deploy.log");
         assert_eq!(entries[0].file_path, "/path/to/deploy.log");
     }
 
     #[test]
     fn test_timestamp_to_millis() {
-        let line = "[2024-12-24 14:44:13.658] [Install] [Func] [Info] :: msg";
+        let line =
+            "[2024-12-24 14:44:13.658] [Install] [Func] [Info] :: msg";
         let parsed = parse_line(line).expect("should parse");
         // 2024-12-24 14:44:13.658 UTC → verify it's a reasonable millis value
         assert!(parsed.timestamp > 0);

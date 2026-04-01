@@ -7,21 +7,19 @@ use std::sync::OnceLock;
 fn guid_field_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
-        Regex::new(
-            r"^\{[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\}$",
-        )
+    Regex::new(r"^\{[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\}$")
         .unwrap()
-    })
+})
 }
 
 fn timestamp_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
-        Regex::new(
-            r"^(\d{4})[-/](\d{2})[-/](\d{2})\s+(\d{2}):(\d{2}):(\d{2})(?:(?::|\.)(\d{1,7}))?$",
-        )
-        .unwrap()
-    })
+    Regex::new(
+        r"^(\d{4})[-/](\d{2})[-/](\d{2})\s+(\d{2}):(\d{2}):(\d{2})(?:(?::|\.)(\d{1,7}))?$",
+    )
+    .unwrap()
+})
 }
 
 pub fn matches_reporting_events_record(line: &str) -> bool {
@@ -49,12 +47,7 @@ pub fn parse_lines(lines: &[&str], file_path: &str) -> (Vec<LogEntry>, u32) {
             entry.line_number = (index + 1) as u32;
             entries.push(entry);
         } else {
-            entries.push(fallback_entry(
-                next_id,
-                (index + 1) as u32,
-                trimmed_end,
-                file_path,
-            ));
+            entries.push(fallback_entry(next_id, (index + 1) as u32, trimmed_end, file_path));
             parse_errors += 1;
         }
 
@@ -118,25 +111,25 @@ fn parse_line(line: &str, file_path: &str) -> Option<LogEntry> {
         file_path: file_path.to_string(),
         timezone_offset: None,
         error_code_spans: Vec::new(),
-        ip_address: None,
-        host_name: None,
-        mac_address: None,
-        result_code: None,
-        gle_code: None,
-        setup_phase: None,
-        operation_name: None,
-        http_method: None,
-        uri_stem: None,
-        uri_query: None,
-        status_code: None,
-        sub_status: None,
-        time_taken_ms: None,
-        client_ip: None,
-        server_ip: None,
-        user_agent: None,
-        server_port: None,
-        username: None,
-        win32_status: None,
+                    ip_address: None,
+                    host_name: None,
+                    mac_address: None,
+                    result_code: None,
+                    gle_code: None,
+                    setup_phase: None,
+                    operation_name: None,
+                    http_method: None,
+                    uri_stem: None,
+                    uri_query: None,
+                    status_code: None,
+                    sub_status: None,
+                    time_taken_ms: None,
+                    client_ip: None,
+                    server_ip: None,
+                    user_agent: None,
+                    server_port: None,
+                    username: None,
+                    win32_status: None,
     })
 }
 
@@ -300,25 +293,25 @@ fn fallback_entry(id: u64, line_number: u32, line: &str, file_path: &str) -> Log
         file_path: file_path.to_string(),
         timezone_offset: None,
         error_code_spans: Vec::new(),
-        ip_address: None,
-        host_name: None,
-        mac_address: None,
-        result_code: None,
-        gle_code: None,
-        setup_phase: None,
-        operation_name: None,
-        http_method: None,
-        uri_stem: None,
-        uri_query: None,
-        status_code: None,
-        sub_status: None,
-        time_taken_ms: None,
-        client_ip: None,
-        server_ip: None,
-        user_agent: None,
-        server_port: None,
-        username: None,
-        win32_status: None,
+                    ip_address: None,
+                    host_name: None,
+                    mac_address: None,
+                    result_code: None,
+                    gle_code: None,
+                    setup_phase: None,
+                    operation_name: None,
+                    http_method: None,
+                    uri_stem: None,
+                    uri_query: None,
+                    status_code: None,
+                    sub_status: None,
+                    time_taken_ms: None,
+                    client_ip: None,
+                    server_ip: None,
+                    user_agent: None,
+                    server_port: None,
+                    username: None,
+                    win32_status: None,
     }
 }
 
@@ -341,21 +334,12 @@ mod tests {
             "{33333333-3333-3333-3333-333333333333}\t2024-01-15 08:05:00:456\t2\tSoftware Update\t3\t{44444444-4444-4444-4444-444444444444}\t0x80240022\tWindows Update Agent\tFailure\tInstallation\tInstallation failed for KB5034441",
         ];
 
-        let (entries, parse_errors) = parse_lines(
-            &lines,
-            "C:/Windows/SoftwareDistribution/ReportingEvents.log",
-        );
+        let (entries, parse_errors) = parse_lines(&lines, "C:/Windows/SoftwareDistribution/ReportingEvents.log");
 
         assert_eq!(parse_errors, 0);
         assert_eq!(entries.len(), 2);
-        assert_eq!(
-            entries[0].component.as_deref(),
-            Some("Windows Update Agent")
-        );
-        assert_eq!(
-            entries[0].timestamp_display.as_deref(),
-            Some("2024-01-15 08:00:00.123")
-        );
+        assert_eq!(entries[0].component.as_deref(), Some("Windows Update Agent"));
+        assert_eq!(entries[0].timestamp_display.as_deref(), Some("2024-01-15 08:00:00.123"));
         assert!(entries[0].message.contains("Success | Installation"));
         assert_eq!(entries[1].severity, Severity::Error);
         assert!(entries[1].message.contains("HRESULT 0x80240022"));
@@ -370,10 +354,7 @@ mod tests {
             "{55555555-5555-5555-5555-555555555555}\t2024-01-15 08:10:00:789\t3\tSoftware Update\t2\t{66666666-6666-6666-6666-666666666666}\t0x00000000\tWindows Update Agent\tWarning\tScan\tRetry required",
         ];
 
-        let (entries, parse_errors) = parse_lines(
-            &lines,
-            "C:/Windows/SoftwareDistribution/ReportingEvents.log",
-        );
+        let (entries, parse_errors) = parse_lines(&lines, "C:/Windows/SoftwareDistribution/ReportingEvents.log");
 
         assert_eq!(parse_errors, 2);
         assert_eq!(entries.len(), 4);

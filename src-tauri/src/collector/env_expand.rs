@@ -63,9 +63,7 @@ fn resolve_env_var(name: &str) -> Option<String> {
     // Common aliases: WINDIR and SystemRoot are interchangeable on Windows.
     match upper.as_str() {
         "SYSTEMROOT" => env::var("WINDIR").ok(),
-        "WINDIR" => env::var("SystemRoot")
-            .ok()
-            .or_else(|| env::var("SYSTEMROOT").ok()),
+        "WINDIR" => env::var("SystemRoot").ok().or_else(|| env::var("SYSTEMROOT").ok()),
         _ => None,
     }
 }

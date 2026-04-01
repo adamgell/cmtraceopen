@@ -11,8 +11,8 @@ use super::derive::{
 
 // Re-export public items that external callers depend on.
 pub use super::extended::{
-    apply_enrollment_cross_reference, build_active_diagnostics_rules, build_event_log_diagnostics,
-    build_extended_diagnostics,
+    apply_enrollment_cross_reference, build_active_diagnostics_rules,
+    build_event_log_diagnostics, build_extended_diagnostics,
 };
 
 pub fn analyze_facts(facts: DsregcmdFacts, raw_input: &str) -> DsregcmdAnalysisResult {
@@ -1305,9 +1305,7 @@ fn build_diagnostics(
         && facts.pre_join_tests.ad_configuration_test.is_some()
         && !is_failure(&facts.pre_join_tests.ad_connectivity_test)
         && !is_failure(&facts.pre_join_tests.ad_configuration_test)
-        && !diagnostics
-            .iter()
-            .any(|item| item.id == "entra-sync-pending")
+        && !diagnostics.iter().any(|item| item.id == "entra-sync-pending")
     {
         diagnostics.push(issue(
             "entra-sync-pending-inference",
@@ -1519,10 +1517,7 @@ mod tests {
             Some("ERROR_WINHTTP_TIMEOUT")
         );
         assert_eq!(analysis.derived.remote_session_system, Some(true));
-        assert_eq!(
-            analysis.derived.dominant_phase,
-            DsregcmdDiagnosticPhase::PostJoin
-        );
+        assert_eq!(analysis.derived.dominant_phase, DsregcmdDiagnosticPhase::PostJoin);
         assert_eq!(
             analysis.derived.capture_confidence,
             DsregcmdCaptureConfidence::Low
@@ -1629,16 +1624,16 @@ mod tests {
         let facts = parse_dsregcmd(sample).expect("parse ngc sample");
         let analysis = analyze_facts(facts, sample);
 
-        assert!(analysis
+        assert!(analysis.diagnostics.iter().any(|item| item.id == "ngc-will-provision"));
+        assert!(!analysis
             .diagnostics
             .iter()
-            .any(|item| item.id == "ngc-will-provision"));
-        assert!(!analysis.diagnostics.iter().any(|item| {
-            item.id == "ngc-not-set"
-                || item.id == "logon-cert-not-ready"
-                || item.id == "ngc-key-sign-failed"
-                || item.id == "ngc-recovery-enabled"
-        }));
+            .any(|item| {
+                item.id == "ngc-not-set"
+                    || item.id == "logon-cert-not-ready"
+                    || item.id == "ngc-key-sign-failed"
+                    || item.id == "ngc-recovery-enabled"
+            }));
     }
 
     #[test]
@@ -1685,10 +1680,7 @@ mod tests {
             assert!(ids.contains(&expected), "missing diagnostic: {expected}");
         }
 
-        assert_eq!(
-            analysis.derived.dominant_phase,
-            DsregcmdDiagnosticPhase::Discover
-        );
+        assert_eq!(analysis.derived.dominant_phase, DsregcmdDiagnosticPhase::Discover);
     }
 
     #[test]
@@ -1729,10 +1721,7 @@ mod tests {
         let facts = parse_dsregcmd(&sample).expect("parse high confidence sample");
         let analysis = analyze_facts(facts, &sample);
 
-        assert_eq!(
-            analysis.derived.capture_confidence,
-            DsregcmdCaptureConfidence::High
-        );
+        assert_eq!(analysis.derived.capture_confidence, DsregcmdCaptureConfidence::High);
     }
 
     #[test]
@@ -1750,10 +1739,7 @@ mod tests {
         let facts = parse_dsregcmd(sample).expect("parse low confidence sample");
         let analysis = analyze_facts(facts, sample);
 
-        assert_eq!(
-            analysis.derived.capture_confidence,
-            DsregcmdCaptureConfidence::Low
-        );
+        assert_eq!(analysis.derived.capture_confidence, DsregcmdCaptureConfidence::Low);
     }
 
     #[test]
@@ -1769,15 +1755,8 @@ mod tests {
         let analysis = analyze_facts(facts, sample);
         let ids: Vec<&str> = analysis.diagnostics.iter().map(|i| i.id.as_str()).collect();
 
-        assert!(
-            ids.contains(&"builtin-admin-cannot-join"),
-            "missing builtin-admin-cannot-join"
-        );
-        let rule = analysis
-            .diagnostics
-            .iter()
-            .find(|i| i.id == "builtin-admin-cannot-join")
-            .unwrap();
+        assert!(ids.contains(&"builtin-admin-cannot-join"), "missing builtin-admin-cannot-join");
+        let rule = analysis.diagnostics.iter().find(|i| i.id == "builtin-admin-cannot-join").unwrap();
         assert_eq!(rule.severity, IntuneDiagnosticSeverity::Error);
     }
 
@@ -1794,10 +1773,7 @@ mod tests {
         let analysis = analyze_facts(facts, sample);
         let ids: Vec<&str> = analysis.diagnostics.iter().map(|i| i.id.as_str()).collect();
 
-        assert!(
-            ids.contains(&"builtin-admin-cannot-join"),
-            "missing builtin-admin-cannot-join for SID -500"
-        );
+        assert!(ids.contains(&"builtin-admin-cannot-join"), "missing builtin-admin-cannot-join for SID -500");
     }
 
     #[test]
@@ -1813,10 +1789,7 @@ mod tests {
         let analysis = analyze_facts(facts, sample);
         let ids: Vec<&str> = analysis.diagnostics.iter().map(|i| i.id.as_str()).collect();
 
-        assert!(
-            !ids.contains(&"builtin-admin-cannot-join"),
-            "should not fire when already joined"
-        );
+        assert!(!ids.contains(&"builtin-admin-cannot-join"), "should not fire when already joined");
     }
 
     #[test]
@@ -1833,15 +1806,8 @@ mod tests {
         let analysis = analyze_facts(facts, sample);
         let ids: Vec<&str> = analysis.diagnostics.iter().map(|i| i.id.as_str()).collect();
 
-        assert!(
-            ids.contains(&"entra-sync-pending-inference"),
-            "missing entra-sync-pending-inference"
-        );
-        let rule = analysis
-            .diagnostics
-            .iter()
-            .find(|i| i.id == "entra-sync-pending-inference")
-            .unwrap();
+        assert!(ids.contains(&"entra-sync-pending-inference"), "missing entra-sync-pending-inference");
+        let rule = analysis.diagnostics.iter().find(|i| i.id == "entra-sync-pending-inference").unwrap();
         assert_eq!(rule.severity, IntuneDiagnosticSeverity::Warning);
     }
 
@@ -1859,10 +1825,7 @@ mod tests {
         let analysis = analyze_facts(facts, sample);
         let ids: Vec<&str> = analysis.diagnostics.iter().map(|i| i.id.as_str()).collect();
 
-        assert!(
-            !ids.contains(&"entra-sync-pending-inference"),
-            "should not fire when AD tests fail"
-        );
+        assert!(!ids.contains(&"entra-sync-pending-inference"), "should not fire when AD tests fail");
     }
 
     #[test]
@@ -1878,15 +1841,8 @@ mod tests {
         let analysis = analyze_facts(facts, sample);
         let ids: Vec<&str> = analysis.diagnostics.iter().map(|i| i.id.as_str()).collect();
 
-        assert!(
-            ids.contains(&"fallback-sync-join-active"),
-            "missing fallback-sync-join-active"
-        );
-        let rule = analysis
-            .diagnostics
-            .iter()
-            .find(|i| i.id == "fallback-sync-join-active")
-            .unwrap();
+        assert!(ids.contains(&"fallback-sync-join-active"), "missing fallback-sync-join-active");
+        let rule = analysis.diagnostics.iter().find(|i| i.id == "fallback-sync-join-active").unwrap();
         assert_eq!(rule.severity, IntuneDiagnosticSeverity::Info);
     }
 
@@ -1903,15 +1859,8 @@ mod tests {
         let analysis = analyze_facts(facts, sample);
         let ids: Vec<&str> = analysis.diagnostics.iter().map(|i| i.id.as_str()).collect();
 
-        assert!(
-            ids.contains(&"scp-verify-needed"),
-            "missing scp-verify-needed"
-        );
-        let rule = analysis
-            .diagnostics
-            .iter()
-            .find(|i| i.id == "scp-verify-needed")
-            .unwrap();
+        assert!(ids.contains(&"scp-verify-needed"), "missing scp-verify-needed");
+        let rule = analysis.diagnostics.iter().find(|i| i.id == "scp-verify-needed").unwrap();
         assert_eq!(rule.severity, IntuneDiagnosticSeverity::Warning);
     }
 
@@ -1928,10 +1877,7 @@ mod tests {
         let analysis = analyze_facts(facts, sample);
         let ids: Vec<&str> = analysis.diagnostics.iter().map(|i| i.id.as_str()).collect();
 
-        assert!(
-            !ids.contains(&"scp-verify-needed"),
-            "should not fire when not domain-joined"
-        );
+        assert!(!ids.contains(&"scp-verify-needed"), "should not fire when not domain-joined");
     }
 
     #[test]
@@ -1949,15 +1895,8 @@ mod tests {
         let analysis = analyze_facts(facts, sample);
         let ids: Vec<&str> = analysis.diagnostics.iter().map(|i| i.id.as_str()).collect();
 
-        assert!(
-            ids.contains(&"scp-tenant-mismatch-hint"),
-            "missing scp-tenant-mismatch-hint"
-        );
-        let rule = analysis
-            .diagnostics
-            .iter()
-            .find(|i| i.id == "scp-tenant-mismatch-hint")
-            .unwrap();
+        assert!(ids.contains(&"scp-tenant-mismatch-hint"), "missing scp-tenant-mismatch-hint");
+        let rule = analysis.diagnostics.iter().find(|i| i.id == "scp-tenant-mismatch-hint").unwrap();
         assert_eq!(rule.severity, IntuneDiagnosticSeverity::Warning);
     }
 
@@ -1975,18 +1914,16 @@ mod tests {
         let analysis = analyze_facts(facts, sample);
         let ids: Vec<&str> = analysis.diagnostics.iter().map(|i| i.id.as_str()).collect();
 
-        assert!(
-            !ids.contains(&"scp-tenant-mismatch-hint"),
-            "should not fire without tenant ID"
-        );
+        assert!(!ids.contains(&"scp-tenant-mismatch-hint"), "should not fire without tenant ID");
     }
 
     #[test]
     fn mdm_confirmed_via_registry_diagnostic_fires_when_cross_referenced() {
-        use super::{apply_enrollment_cross_reference, build_extended_diagnostics};
         use crate::dsregcmd::models::{
-            DsregcmdEnrollmentEntry, DsregcmdEnrollmentEvidence, DsregcmdScheduledTaskEvidence,
+            DsregcmdEnrollmentEntry, DsregcmdEnrollmentEvidence,
+            DsregcmdScheduledTaskEvidence,
         };
+        use super::{apply_enrollment_cross_reference, build_extended_diagnostics};
 
         let facts = parse_dsregcmd(NOT_JOINED_SAMPLE).expect("parse sample");
         let mut result = analyze_facts(facts, NOT_JOINED_SAMPLE);
@@ -2001,7 +1938,9 @@ mod tests {
             }],
         });
         result.scheduled_task_evidence = Some(DsregcmdScheduledTaskEvidence {
-            enterprise_mgmt_guids: vec!["{AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE}".to_string()],
+            enterprise_mgmt_guids: vec![
+                "{AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE}".to_string(),
+            ],
         });
 
         assert_eq!(result.derived.mdm_enrolled, None);
@@ -2010,19 +1949,18 @@ mod tests {
 
         let extended = build_extended_diagnostics(&result);
         assert!(
-            extended
-                .iter()
-                .any(|d| d.id == "mdm-confirmed-via-registry"),
+            extended.iter().any(|d| d.id == "mdm-confirmed-via-registry"),
             "should fire mdm-confirmed-via-registry diagnostic"
         );
     }
 
     #[test]
     fn mdm_not_confirmed_without_matching_scheduled_task() {
-        use super::apply_enrollment_cross_reference;
         use crate::dsregcmd::models::{
-            DsregcmdEnrollmentEntry, DsregcmdEnrollmentEvidence, DsregcmdScheduledTaskEvidence,
+            DsregcmdEnrollmentEntry, DsregcmdEnrollmentEvidence,
+            DsregcmdScheduledTaskEvidence,
         };
+        use super::apply_enrollment_cross_reference;
 
         let facts = parse_dsregcmd(NOT_JOINED_SAMPLE).expect("parse sample");
         let mut result = analyze_facts(facts, NOT_JOINED_SAMPLE);
@@ -2038,15 +1976,14 @@ mod tests {
             }],
         });
         result.scheduled_task_evidence = Some(DsregcmdScheduledTaskEvidence {
-            enterprise_mgmt_guids: vec!["{99999999-8888-7777-6666-555555555555}".to_string()],
+            enterprise_mgmt_guids: vec![
+                "{99999999-8888-7777-6666-555555555555}".to_string(),
+            ],
         });
 
         // Cross-reference should NOT upgrade because GUIDs don't match
         apply_enrollment_cross_reference(&mut result);
-        assert_eq!(
-            result.derived.mdm_enrolled, None,
-            "should stay None when GUIDs don't match"
-        );
+        assert_eq!(result.derived.mdm_enrolled, None, "should stay None when GUIDs don't match");
     }
 
     /// Regression: on a joined device with enrollment_count == 0 but cross-reference
@@ -2063,10 +2000,11 @@ mod tests {
 
     #[test]
     fn enrollment_missing_warning_suppressed_when_cross_reference_confirms_mdm() {
-        use super::{apply_enrollment_cross_reference, build_extended_diagnostics};
         use crate::dsregcmd::models::{
-            DsregcmdEnrollmentEntry, DsregcmdEnrollmentEvidence, DsregcmdScheduledTaskEvidence,
+            DsregcmdEnrollmentEntry, DsregcmdEnrollmentEvidence,
+            DsregcmdScheduledTaskEvidence,
         };
+        use super::{apply_enrollment_cross_reference, build_extended_diagnostics};
 
         let facts = parse_dsregcmd(JOINED_NO_MDM_URLS_SAMPLE).expect("parse sample");
         let mut result = analyze_facts(facts, JOINED_NO_MDM_URLS_SAMPLE);
@@ -2082,7 +2020,9 @@ mod tests {
             }],
         });
         result.scheduled_task_evidence = Some(DsregcmdScheduledTaskEvidence {
-            enterprise_mgmt_guids: vec!["{AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE}".to_string()],
+            enterprise_mgmt_guids: vec![
+                "{AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE}".to_string(),
+            ],
         });
 
         apply_enrollment_cross_reference(&mut result);
@@ -2092,17 +2032,13 @@ mod tests {
 
         // The cross-reference info diagnostic SHOULD fire
         assert!(
-            extended
-                .iter()
-                .any(|d| d.id == "mdm-confirmed-via-registry"),
+            extended.iter().any(|d| d.id == "mdm-confirmed-via-registry"),
             "should fire mdm-confirmed-via-registry diagnostic"
         );
 
         // The enrollment-missing warning should NOT fire — MDM was confirmed
         assert!(
-            !extended
-                .iter()
-                .any(|d| d.id == "enrollment-missing-on-joined"),
+            !extended.iter().any(|d| d.id == "enrollment-missing-on-joined"),
             "enrollment-missing-on-joined should be suppressed when cross-reference confirms MDM"
         );
     }

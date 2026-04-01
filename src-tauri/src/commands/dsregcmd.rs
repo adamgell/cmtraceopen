@@ -1,8 +1,9 @@
+use crate::dsregcmd::{analyze_text, registry, rules, DsregcmdAnalysisResult};
 #[cfg(target_os = "windows")]
 use crate::dsregcmd::connectivity;
-use crate::dsregcmd::{analyze_text, registry, rules, DsregcmdAnalysisResult};
 
 use serde::{Deserialize, Serialize};
+use std::path::Path;
 #[cfg(target_os = "windows")]
 use std::ffi::c_void;
 #[cfg(target_os = "windows")]
@@ -11,7 +12,6 @@ use std::fs::{self, File};
 use std::os::windows::ffi::OsStrExt;
 #[cfg(target_os = "windows")]
 use std::os::windows::io::AsRawHandle;
-use std::path::Path;
 #[cfg(target_os = "windows")]
 use std::path::PathBuf;
 #[cfg(target_os = "windows")]
@@ -137,6 +137,7 @@ fn load_scheduled_task_evidence_from_bundle(
         .and_then(|json| serde_json::from_str(&json).ok())
 }
 
+
 #[tauri::command]
 pub fn capture_dsregcmd() -> Result<DsregcmdCaptureResult, crate::error::AppError> {
     capture_dsregcmd_impl()
@@ -196,20 +197,13 @@ fn capture_dsregcmd_impl() -> Result<DsregcmdCaptureResult, crate::error::AppErr
     Ok(DsregcmdCaptureResult {
         input: stdout,
         bundle_path: Some(capture_bundle.bundle_path.to_string_lossy().to_string()),
-        evidence_file_path: Some(
-            capture_bundle
-                .evidence_file_path
-                .to_string_lossy()
-                .to_string(),
-        ),
+        evidence_file_path: Some(capture_bundle.evidence_file_path.to_string_lossy().to_string()),
     })
 }
 
 #[cfg(not(target_os = "windows"))]
 fn capture_dsregcmd_impl() -> Result<DsregcmdCaptureResult, crate::error::AppError> {
-    Err(crate::error::AppError::PlatformUnsupported(
-        "dsregcmd capture is only supported on Windows.".to_string(),
-    ))
+    Err(crate::error::AppError::PlatformUnsupported("dsregcmd capture is only supported on Windows.".to_string()))
 }
 
 #[cfg(target_os = "windows")]
@@ -259,9 +253,7 @@ fn load_dsregcmd_source_impl(
     _kind: DsregcmdPathSourceKind,
     _path: &Path,
 ) -> Result<DsregcmdResolvedSource, crate::error::AppError> {
-    Err(crate::error::AppError::PlatformUnsupported(
-        "dsregcmd source loading is only supported on Windows.".to_string(),
-    ))
+    Err(crate::error::AppError::PlatformUnsupported("dsregcmd source loading is only supported on Windows.".to_string()))
 }
 
 #[cfg(target_os = "windows")]
@@ -329,8 +321,7 @@ const LIVE_CAPTURE_REGISTRY_EXPORTS: &[RegistryExportSpec] = &[
 ];
 
 #[cfg(target_os = "windows")]
-const DSREGCMD_EVIDENCE_RELATIVE_PATH: [&str; 3] =
-    ["evidence", "command-output", "dsregcmd-status.txt"];
+const DSREGCMD_EVIDENCE_RELATIVE_PATH: [&str; 3] = ["evidence", "command-output", "dsregcmd-status.txt"];
 #[cfg(target_os = "windows")]
 const DSREGCMD_TOP_LEVEL_FALLBACK_FILE: &str = "dsregcmd-status.txt";
 #[cfg(target_os = "windows")]
@@ -443,9 +434,7 @@ fn resolve_bundle_root_from_file_path(path: &Path) -> Option<PathBuf> {
 }
 
 #[cfg(target_os = "windows")]
-fn resolve_folder_bundle_evidence(
-    folder_path: &Path,
-) -> Result<(PathBuf, PathBuf), crate::error::AppError> {
+fn resolve_folder_bundle_evidence(folder_path: &Path) -> Result<(PathBuf, PathBuf), crate::error::AppError> {
     let bundle_root = resolve_canonical_bundle_root_from_folder_path(folder_path).ok_or_else(|| {
         crate::error::AppError::InvalidInput("Selected folder is not a supported dsregcmd evidence bundle location. Choose the bundle root, the bundle's evidence folder, or the bundle's command-output folder.".to_string())
     })?;
@@ -547,12 +536,7 @@ fn export_live_registry_evidence(registry_root: &Path) {
     for export in LIVE_CAPTURE_REGISTRY_EXPORTS {
         let output_path = registry_root.join(export.file_name);
         match std::process::Command::new(&reg_path)
-            .args([
-                "export",
-                export.key_path,
-                &output_path.to_string_lossy(),
-                "/y",
-            ])
+            .args(["export", export.key_path, &output_path.to_string_lossy(), "/y"])
             .output()
         {
             Ok(output) if output.status.success() => {
@@ -626,10 +610,8 @@ fn collect_enterprise_mgmt_task_guids() -> crate::dsregcmd::DsregcmdScheduledTas
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let guid_re = Regex::new(
-        r"\{[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\}",
-    )
-    .expect("valid GUID regex");
+    let guid_re = Regex::new(r"\{[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\}")
+        .expect("valid GUID regex");
 
     let mut seen = std::collections::HashSet::new();
     for line in stdout.lines() {
@@ -688,9 +670,7 @@ fn cleanup_old_capture_bundles() {
 #[cfg(target_os = "windows")]
 fn resolve_system32_binary(file_name: &str) -> Result<PathBuf, crate::error::AppError> {
     let Some(windir) = std::env::var_os("WINDIR") else {
-        return Err(crate::error::AppError::Internal(
-            "WINDIR is not set; could not resolve the Windows system path.".to_string(),
-        ));
+        return Err(crate::error::AppError::Internal("WINDIR is not set; could not resolve the Windows system path.".to_string()));
     };
 
     let path = PathBuf::from(windir).join("System32").join(file_name);
@@ -776,8 +756,9 @@ fn verify_catalog_signature(dsregcmd_path: &Path) -> Result<bool, crate::error::
     let file_handle = file.as_raw_handle() as isize;
 
     let mut cat_admin_handle = 0isize;
-    let acquired =
-        unsafe { CryptCATAdminAcquireContext(&mut cat_admin_handle, &DRIVER_ACTION_VERIFY, 0) };
+    let acquired = unsafe {
+        CryptCATAdminAcquireContext(&mut cat_admin_handle, &DRIVER_ACTION_VERIFY, 0)
+    };
     if acquired == 0 {
         return Err(crate::error::AppError::Internal(format!(
             "Failed to acquire a catalog admin context for '{}': {}",
@@ -788,8 +769,9 @@ fn verify_catalog_signature(dsregcmd_path: &Path) -> Result<bool, crate::error::
     let cat_admin = CatalogAdminHandle(cat_admin_handle);
 
     let mut hash_len = 0u32;
-    let hash_size_status =
-        unsafe { CryptCATAdminCalcHashFromFileHandle(file_handle, &mut hash_len, null_mut(), 0) };
+    let hash_size_status = unsafe {
+        CryptCATAdminCalcHashFromFileHandle(file_handle, &mut hash_len, null_mut(), 0)
+    };
     if hash_size_status == 0 && hash_len == 0 {
         return Err(crate::error::AppError::Internal(format!(
             "Failed to determine the catalog hash size for '{}': {}",
@@ -833,8 +815,9 @@ fn verify_catalog_signature(dsregcmd_path: &Path) -> Result<bool, crate::error::
         cb_struct: std::mem::size_of::<CatalogInfo>() as u32,
         wsz_catalog_file: [0; 260],
     };
-    let catalog_info_status =
-        unsafe { CryptCATCatalogInfoFromContext(catalog.catalog_handle, &mut catalog_info, 0) };
+    let catalog_info_status = unsafe {
+        CryptCATCatalogInfoFromContext(catalog.catalog_handle, &mut catalog_info, 0)
+    };
     if catalog_info_status == 0 {
         return Err(crate::error::AppError::Internal(format!(
             "Failed to read catalog metadata for '{}': {}",
@@ -1052,8 +1035,7 @@ const DRIVER_ACTION_VERIFY: Guid = Guid {
 #[cfg(target_os = "windows")]
 #[link(name = "wintrust")]
 extern "system" {
-    fn WinVerifyTrust(hwnd: *mut c_void, pg_action_id: *const Guid, p_wvt_data: *mut c_void)
-        -> i32;
+    fn WinVerifyTrust(hwnd: *mut c_void, pg_action_id: *const Guid, p_wvt_data: *mut c_void) -> i32;
     fn CryptCATAdminAcquireContext(
         ph_cat_admin: *mut isize,
         pg_subsystem: *const Guid,

@@ -8,11 +8,11 @@ pub mod registry;
 pub mod rules;
 
 pub use models::{
-    DsregcmdActiveEvidence, DsregcmdAnalysisResult, DsregcmdConnectivityResult, DsregcmdDerived,
-    DsregcmdDiagnosticInsight, DsregcmdEnrollmentEntry, DsregcmdEnrollmentEvidence,
-    DsregcmdEvidenceSource, DsregcmdFacts, DsregcmdJoinType, DsregcmdOsVersionEvidence,
-    DsregcmdPolicyEvidenceValue, DsregcmdProxyEvidence, DsregcmdScheduledTaskEvidence,
-    DsregcmdScpQueryResult, DsregcmdWhfbPolicyEvidence,
+    DsregcmdActiveEvidence, DsregcmdAnalysisResult, DsregcmdConnectivityResult,
+    DsregcmdDerived, DsregcmdDiagnosticInsight, DsregcmdEnrollmentEntry,
+    DsregcmdEnrollmentEvidence, DsregcmdEvidenceSource, DsregcmdFacts, DsregcmdJoinType,
+    DsregcmdOsVersionEvidence, DsregcmdPolicyEvidenceValue, DsregcmdProxyEvidence,
+    DsregcmdScheduledTaskEvidence, DsregcmdScpQueryResult, DsregcmdWhfbPolicyEvidence,
 };
 
 pub fn analyze_text(input: &str) -> Result<DsregcmdAnalysisResult, crate::error::AppError> {

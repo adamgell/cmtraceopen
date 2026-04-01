@@ -79,17 +79,11 @@ pub struct FolderListingResult {
 /// Open and parse a log file, auto-detecting its format.
 /// Stores the backend parser selection in AppState for tail reading.
 #[tauri::command]
-pub fn open_log_file(
-    path: String,
-    state: State<'_, AppState>,
-) -> Result<ParseResult, crate::error::AppError> {
+pub fn open_log_file(path: String, state: State<'_, AppState>) -> Result<ParseResult, crate::error::AppError> {
     let (result, parser_selection) = parser::parse_file(&path)?;
 
     // Store in AppState so tail parsing reuses the same backend parser selection.
-    let mut open_files = state
-        .open_files
-        .lock()
-        .map_err(|e| crate::error::AppError::State(e.to_string()))?;
+    let mut open_files = state.open_files.lock().map_err(|e| crate::error::AppError::State(e.to_string()))?;
     open_files.insert(
         PathBuf::from(&path),
         OpenFile {
@@ -186,10 +180,7 @@ pub fn parse_files_batch(
 
     // Collect successes and store parser state (requires lock, done sequentially)
     let mut parse_results = Vec::with_capacity(results.len());
-    let mut open_files = state
-        .open_files
-        .lock()
-        .map_err(|e| crate::error::AppError::State(e.to_string()))?;
+    let mut open_files = state.open_files.lock().map_err(|e| crate::error::AppError::State(e.to_string()))?;
 
     for item in results {
         let (result, parser_selection, path) = item?;
@@ -223,11 +214,7 @@ pub fn open_log_folder_aggregate(
     state: State<'_, AppState>,
 ) -> Result<AggregateParseResult, crate::error::AppError> {
     let listing = list_log_folder(path.clone())?;
-    let file_entries: Vec<&FolderEntry> = listing
-        .entries
-        .iter()
-        .filter(|entry| !entry.is_dir)
-        .collect();
+    let file_entries: Vec<&FolderEntry> = listing.entries.iter().filter(|entry| !entry.is_dir).collect();
 
     let mut aggregate_entries: Vec<LogEntry> = Vec::new();
     let mut aggregate_files = Vec::with_capacity(file_entries.len());
@@ -267,10 +254,7 @@ pub fn open_log_folder_aggregate(
         entry.id = index as u64;
     }
 
-    let mut open_files = state
-        .open_files
-        .lock()
-        .map_err(|e| crate::error::AppError::State(e.to_string()))?;
+    let mut open_files = state.open_files.lock().map_err(|e| crate::error::AppError::State(e.to_string()))?;
     for (path_buf, parser_selection, byte_offset) in open_file_states {
         open_files.insert(
             path_buf.clone(),
@@ -312,10 +296,7 @@ pub fn inspect_path_kind(path: String) -> Result<PathKind, crate::error::AppErro
 }
 
 #[tauri::command]
-pub fn write_text_output_file(
-    path: String,
-    contents: String,
-) -> Result<(), crate::error::AppError> {
+pub fn write_text_output_file(path: String, contents: String) -> Result<(), crate::error::AppError> {
     fs::write(&path, contents).map_err(crate::error::AppError::Io)
 }
 
@@ -326,13 +307,8 @@ pub fn write_text_output_file(
 /// with the file paths as command-line arguments. This command retrieves those
 /// paths so the frontend can open them. Consumed on the first call.
 #[tauri::command]
-pub fn get_initial_file_paths(
-    state: State<'_, AppState>,
-) -> Result<Vec<String>, crate::error::AppError> {
-    let mut guard = state
-        .initial_file_paths
-        .lock()
-        .map_err(|e| crate::error::AppError::State(e.to_string()))?;
+pub fn get_initial_file_paths(state: State<'_, AppState>) -> Result<Vec<String>, crate::error::AppError> {
+    let mut guard = state.initial_file_paths.lock().map_err(|e| crate::error::AppError::State(e.to_string()))?;
     let paths = std::mem::take(&mut *guard);
     Ok(paths)
 }
@@ -358,7 +334,8 @@ pub fn list_log_folder(path: String) -> Result<FolderListingResult, crate::error
         )));
     }
 
-    let read_dir = fs::read_dir(&requested_path).map_err(crate::error::AppError::Io)?;
+    let read_dir = fs::read_dir(&requested_path)
+        .map_err(crate::error::AppError::Io)?;
 
     let mut entries: Vec<FolderEntry> = Vec::new();
 
@@ -470,12 +447,7 @@ fn compare_aggregate_entries(
             .get(&left.file_path)
             .copied()
             .unwrap_or(usize::MAX)
-            .cmp(
-                &file_order
-                    .get(&right.file_path)
-                    .copied()
-                    .unwrap_or(usize::MAX),
-            )
+            .cmp(&file_order.get(&right.file_path).copied().unwrap_or(usize::MAX))
             .then_with(|| left.line_number.cmp(&right.line_number))
             .then_with(|| left.message.cmp(&right.message)),
     }

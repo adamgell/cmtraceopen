@@ -7,9 +7,9 @@ mod windows_impl {
     use regex::Regex;
     use windows::core::{Error, HSTRING, PCWSTR};
     use windows::Win32::System::EventLog::{
-        EvtClose, EvtFormatMessage, EvtFormatMessageEvent, EvtNext, EvtOpenPublisherMetadata,
-        EvtQuery, EvtQueryChannelPath, EvtQueryReverseDirection, EvtRender, EvtRenderEventXml,
-        EVT_HANDLE,
+        EVT_HANDLE, EvtClose, EvtFormatMessage, EvtFormatMessageEvent, EvtNext,
+        EvtOpenPublisherMetadata, EvtQuery, EvtQueryChannelPath, EvtQueryReverseDirection,
+        EvtRender, EvtRenderEventXml,
     };
 
     fn provider_re() -> &'static Regex {
@@ -106,9 +106,13 @@ mod windows_impl {
                 let xml = render_event_xml(event_handle.raw()).map_err(format_windows_error)?;
                 let provider_name = extract_provider_name(&xml);
                 let rendered_message = provider_name.as_deref().and_then(|provider| {
-                    format_event_message(event_handle.raw(), provider, &mut publisher_metadata)
-                        .ok()
-                        .flatten()
+                    format_event_message(
+                        event_handle.raw(),
+                        provider,
+                        &mut publisher_metadata,
+                    )
+                    .ok()
+                    .flatten()
                 });
 
                 records.push(LiveEventRecord {
@@ -144,13 +148,13 @@ mod windows_impl {
                 )
             } {
                 Ok(()) => {
-                    let utf16_len =
-                        (buffer_used as usize / std::mem::size_of::<u16>()).saturating_sub(1);
+                    let utf16_len = (buffer_used as usize / std::mem::size_of::<u16>())
+                        .saturating_sub(1);
                     return Ok(String::from_utf16_lossy(&buffer[..utf16_len]));
                 }
                 Err(error) if is_insufficient_buffer(&error) => {
-                    let next_len =
-                        (buffer_used as usize / std::mem::size_of::<u16>()).max(buffer.len() * 2);
+                    let next_len = (buffer_used as usize / std::mem::size_of::<u16>())
+                        .max(buffer.len() * 2);
                     buffer.resize(next_len, 0);
                 }
                 Err(error) => return Err(error),
@@ -229,10 +233,7 @@ mod windows_impl {
     fn format_windows_error(error: Error) -> crate::error::AppError {
         let message = error.message();
         if message.trim().is_empty() {
-            crate::error::AppError::Internal(format!(
-                "Windows Event Log API error 0x{:08x}",
-                error.code().0 as u32
-            ))
+            crate::error::AppError::Internal(format!("Windows Event Log API error 0x{:08x}", error.code().0 as u32))
         } else {
             crate::error::AppError::Internal(message.trim().to_string())
         }
@@ -279,7 +280,5 @@ pub fn query_live_channel(
     _channel: &str,
     _entry_limit: usize,
 ) -> Result<LiveChannelQueryResult, crate::error::AppError> {
-    Err(crate::error::AppError::PlatformUnsupported(
-        "Live Windows Event Log queries are only supported on Windows".to_string(),
-    ))
+    Err(crate::error::AppError::PlatformUnsupported("Live Windows Event Log queries are only supported on Windows".to_string()))
 }
