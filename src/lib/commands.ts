@@ -192,11 +192,13 @@ export async function analyzeIntuneLogs(
 
 export async function analyzeSysmonLogs(
   path: string,
-  requestId: string
+  requestId: string,
+  options?: { includeLiveEventLogs?: boolean }
 ): Promise<SysmonAnalysisResult> {
   return invokeCommand<SysmonAnalysisResult>("analyze_sysmon_logs", {
     path,
     requestId,
+    includeLiveEventLogs: options?.includeLiveEventLogs ?? false,
   });
 }
 

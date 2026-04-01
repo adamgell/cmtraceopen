@@ -92,6 +92,7 @@ const DSREGCMD_FILE_DIALOG_FILTERS = [
 ];
 
 const LIVE_INTUNE_SOURCE_ID = "windows-intune-ime-logs";
+const LIVE_SYSMON_SOURCE_ID = "windows-sysmon-live-events";
 
 const WORKSPACE_LABELS: Record<WorkspaceId, string> = {
   log: "Log Explorer",
@@ -179,6 +180,10 @@ function shouldSyncSourceBeforeIntuneAnalysis(source: LogSource): boolean {
 
 function shouldIncludeLiveEventLogs(source: LogSource): boolean {
   return source.kind === "known" && source.sourceId === LIVE_INTUNE_SOURCE_ID;
+}
+
+function shouldIncludeSysmonLiveEventLogs(source: LogSource): boolean {
+  return source.kind === "known" && source.sourceId === LIVE_SYSMON_SOURCE_ID;
 }
 
 export interface OpenKnownSourceCatalogAction
@@ -453,7 +458,9 @@ export function useAppActions(): AppActionHandlers {
       beginSysmonAnalysis(sourcePath, requestId);
 
       try {
-        const result = await analyzeSysmonLogs(sourcePath, requestId);
+        const result = await analyzeSysmonLogs(sourcePath, requestId, {
+          includeLiveEventLogs: shouldIncludeSysmonLiveEventLogs(source),
+        });
         startTransition(() => {
           setSysmonResults(result);
         });
@@ -752,8 +759,11 @@ export function useAppActions(): AppActionHandlers {
 
     if (activeWorkspace === "sysmon") {
       if (sysmonSourcePath) {
+        const isLiveSource = sysmonSourcePath === "live-event-log";
         await analyzeSysmonWorkspaceSource(
-          { kind: "file", path: sysmonSourcePath },
+          isLiveSource
+            ? { kind: "known", sourceId: LIVE_SYSMON_SOURCE_ID, defaultPath: sysmonSourcePath, pathKind: "folder" }
+            : { kind: "file", path: sysmonSourcePath },
           "app-actions.refresh"
         );
       }
