@@ -201,6 +201,7 @@ interface UiState {
   defaultShowInfoPane: boolean;
   confirmTabClose: boolean;
   showUpdateDialog: boolean;
+  recentSessions: string[];
 
   setActiveWorkspace: (workspace: WorkspaceId) => void;
   setCurrentPlatform: (platform: PlatformId) => void;
@@ -260,6 +261,8 @@ interface UiState {
   setCollectionResult: (result: CollectionResult | null) => void;
   setShowCollectDiagnosticsDialog: (show: boolean) => void;
   setShowUpdateDialog: (show: boolean) => void;
+  addRecentSession: (path: string) => void;
+  clearRecentSessions: () => void;
 }
 
 const DEFAULT_WORKSPACE: WorkspaceId = "log";
@@ -339,6 +342,7 @@ export const useUiStore = create<UiState>()(
       collectionResult: null,
       showCollectDiagnosticsDialog: false,
       showUpdateDialog: false,
+      recentSessions: [],
 
       setCurrentPlatform: (platform) => set({ currentPlatform: platform }),
       setEnabledWorkspaces: (workspaces) => {
@@ -602,6 +606,12 @@ export const useUiStore = create<UiState>()(
       setCollectionResult: (result) => set({ collectionResult: result }),
       setShowCollectDiagnosticsDialog: (show) => set({ showCollectDiagnosticsDialog: show }),
       setShowUpdateDialog: (show) => set({ showUpdateDialog: show }),
+      addRecentSession: (path) =>
+        set((state) => {
+          const filtered = state.recentSessions.filter((p) => p !== path);
+          return { recentSessions: [path, ...filtered].slice(0, 5) };
+        }),
+      clearRecentSessions: () => set({ recentSessions: [] }),
     }),
     {
       name: "cmtraceopen-ui-preferences",
