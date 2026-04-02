@@ -98,6 +98,7 @@ const WORKSPACE_LABELS: Record<WorkspaceId, string> = {
   dsregcmd: "dsregcmd",
   "macos-diag": "macOS Diagnostics",
   deployment: "Software Deployment",
+  "event-log": "Event Log Viewer",
 };
 
 function getOpenFileDialogFilters(workspace: WorkspaceId) {

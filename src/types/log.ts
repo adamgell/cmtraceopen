@@ -46,7 +46,8 @@ export type WorkspaceId =
   | "new-intune"
   | "dsregcmd"
   | "macos-diag"
-  | "deployment";
+  | "deployment"
+  | "event-log";
 export type KnownSourceDefaultFileSelectionBehavior =
   | "none"
   | "preferFileName"

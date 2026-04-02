@@ -46,6 +46,7 @@ const WORKSPACE_PLATFORM_MAP: Record<WorkspaceId, PlatformId[] | "all"> = {
   dsregcmd: ["windows"],
   "macos-diag": ["macos"],
   deployment: ["windows"],
+  "event-log": "all",
 };
 
 export function getAvailableWorkspaces(
@@ -140,6 +141,14 @@ export function getUiChromeStatus(
       viewLabel: "Software Deployment workspace",
       detailsLabel: "Details hidden in Software Deployment workspace",
       infoLabel: "Info hidden in Software Deployment workspace",
+    };
+  }
+
+  if (activeView === "event-log") {
+    return {
+      viewLabel: "Event Log Viewer workspace",
+      detailsLabel: "Details hidden in Event Log Viewer workspace",
+      infoLabel: "Info hidden in Event Log Viewer workspace",
     };
   }
 
