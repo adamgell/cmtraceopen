@@ -68,6 +68,7 @@ pub fn run() {
             commands::file_ops::inspect_path_kind,
             commands::file_ops::write_text_output_file,
             commands::file_ops::get_initial_file_paths,
+            commands::file_ops::compute_file_hash,
             commands::bundle_ops::inspect_evidence_bundle,
             commands::bundle_ops::inspect_evidence_artifact,
             commands::known_sources::get_known_log_sources,
