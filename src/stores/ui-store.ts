@@ -173,6 +173,7 @@ interface UiState {
   showEvidenceBundleDialog: boolean;
   showGuidRegistryDialog: boolean;
   showMergeTabsDialog: boolean;
+  showDiffConfigDialog: boolean;
   showFileAssociationPrompt: boolean;
   logListFontSize: number;
   logDetailsFontSize: number;
@@ -220,6 +221,7 @@ interface UiState {
   setShowEvidenceBundleDialog: (show: boolean) => void;
   setShowGuidRegistryDialog: (show: boolean) => void;
   setShowMergeTabsDialog: (show: boolean) => void;
+  setShowDiffConfigDialog: (show: boolean) => void;
   setShowFileAssociationPrompt: (show: boolean) => void;
   setLogListFontSize: (fontSize: number) => void;
   increaseLogListFontSize: () => void;
@@ -320,6 +322,7 @@ export const useUiStore = create<UiState>()(
       showEvidenceBundleDialog: false,
       showGuidRegistryDialog: false,
       showMergeTabsDialog: false,
+      showDiffConfigDialog: false,
       showFileAssociationPrompt: false,
       logListFontSize: DEFAULT_LOG_LIST_FONT_SIZE,
       logDetailsFontSize: DEFAULT_LOG_DETAILS_FONT_SIZE,
@@ -435,6 +438,7 @@ export const useUiStore = create<UiState>()(
       setShowEvidenceBundleDialog: (show) => set({ showEvidenceBundleDialog: show }),
       setShowGuidRegistryDialog: (show) => set({ showGuidRegistryDialog: show }),
       setShowMergeTabsDialog: (show) => set({ showMergeTabsDialog: show }),
+      setShowDiffConfigDialog: (show) => set({ showDiffConfigDialog: show }),
       setShowFileAssociationPrompt: (show) => set({ showFileAssociationPrompt: show }),
       setLogListFontSize: (fontSize) =>
         set({ logListFontSize: clampLogListFontSize(fontSize) }),
