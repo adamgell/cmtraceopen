@@ -26,8 +26,15 @@ import {
   filterByVisibility,
   findCorrelatedEntries,
 } from "../lib/merge-entries";
+import {
+  type DiffState,
+  type DiffSource,
+  classifyEntries,
+  filterByTimeRange,
+} from "../lib/diff-entries";
 
 export type { MergedTabState, CorrelatedEntry };
+export type { DiffState, DiffSource };
 
 /**
  * Snapshot of parsed file state — cached in memory so tab switches
@@ -100,7 +107,7 @@ export interface ParserSelectionDisplay {
   dateOrderLabel: string | null;
 }
 
-export type SourceOpenMode = "single-file" | "aggregate-folder" | "merged" | null;
+export type SourceOpenMode = "single-file" | "aggregate-folder" | "merged" | "diff" | null;
 
 
 const UNGROUPED_TOOLBAR_GROUP_ID = "ungrouped";
@@ -554,6 +561,7 @@ interface LogState {
   correlationWindowMs: number;
   autoCorrelate: boolean;
   correlatedEntries: CorrelatedEntry[];
+  diffState: DiffState | null;
   /** Pending scroll target set by deployment workspace — consumed by LogListView after load. */
   pendingScrollTarget: { filePath: string; lineNumber: number } | null;
 
@@ -605,6 +613,9 @@ interface LogState {
   setCorrelationWindowMs: (ms: number) => void;
   setAutoCorrelate: (enabled: boolean) => void;
   updateCorrelation: () => void;
+  createDiff: (sourceA: DiffSource, sourceB: DiffSource) => void;
+  closeDiff: () => void;
+  setDiffDisplayMode: (mode: "side-by-side" | "unified") => void;
 }
 
 /** Debounced version of recomputeAndSetMatches for keystroke-driven updates. */
@@ -729,6 +740,7 @@ export const useLogStore = create<LogState>((set, get) => ({
   correlationWindowMs: 1000,
   autoCorrelate: true,
   correlatedEntries: [],
+  diffState: null,
   pendingScrollTarget: null,
 
   hasActiveSource: () => {
@@ -872,6 +884,7 @@ export const useLogStore = create<LogState>((set, get) => ({
       guidNameMap: {},
       mergedTabState: null,
       correlatedEntries: [],
+      diffState: null,
       findMatchIds: [],
       findCurrentIndex: -1,
       findRegexError: null,
@@ -903,6 +916,7 @@ export const useLogStore = create<LogState>((set, get) => ({
       guidNameMap: {},
       mergedTabState: null,
       correlatedEntries: [],
+      diffState: null,
       findMatchIds: [],
       findCurrentIndex: -1,
       findRegexError: null,
@@ -1035,5 +1049,59 @@ export const useLogStore = create<LogState>((set, get) => ({
       state.mergedTabState.colorAssignments
     );
     useLogStore.setState({ correlatedEntries: correlated });
+  },
+
+  createDiff: (sourceA, sourceB) => {
+    // Get entries from cache
+    const snapshotA = getCachedTabSnapshot(sourceA.filePath);
+    const snapshotB = getCachedTabSnapshot(sourceB.filePath);
+    if (!snapshotA || !snapshotB) return;
+
+    let entriesA = snapshotA.entries;
+    let entriesB = snapshotB.entries;
+
+    // Apply time range filter if specified
+    if (sourceA.startTime != null && sourceA.endTime != null) {
+      entriesA = filterByTimeRange(entriesA, sourceA.startTime, sourceA.endTime);
+    }
+    if (sourceB.startTime != null && sourceB.endTime != null) {
+      entriesB = filterByTimeRange(entriesB, sourceB.startTime, sourceB.endTime);
+    }
+
+    const { commonKeys, onlyAKeys, onlyBKeys, entryClassification, stats } =
+      classifyEntries(entriesA, entriesB);
+
+    set({
+      diffState: {
+        mode: sourceA.filePath === sourceB.filePath ? "time-range" : "two-file",
+        sourceA,
+        sourceB,
+        displayMode: "side-by-side",
+        entriesA,
+        entriesB,
+        commonKeys,
+        onlyAKeys,
+        onlyBKeys,
+        entryClassification,
+        stats,
+      },
+      sourceOpenMode: "diff" as SourceOpenMode,
+      selectedId: null,
+    });
+  },
+
+  closeDiff: () => {
+    set({
+      diffState: null,
+      sourceOpenMode: null,
+      selectedId: null,
+    });
+  },
+
+  setDiffDisplayMode: (mode) => {
+    set((state) => {
+      if (!state.diffState) return {};
+      return { diffState: { ...state.diffState, displayMode: mode } };
+    });
   },
 }));
