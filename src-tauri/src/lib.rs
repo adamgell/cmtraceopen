@@ -20,8 +20,9 @@ mod state;
 mod watcher;
 
 use state::app_state::AppState;
-use tauri::Manager;
 
+#[cfg(target_os = "windows")]
+use tauri::Manager;
 #[cfg(target_os = "windows")]
 use graph_api::GraphAuthState;
 

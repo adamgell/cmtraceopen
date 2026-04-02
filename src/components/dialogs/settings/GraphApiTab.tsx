@@ -9,10 +9,7 @@ import {
   type GraphAuthStatus,
 } from "../../../lib/commands";
 import { useIntuneStore } from "../../../stores/intune-store";
-<<<<<<< HEAD
 import { buildGraphRegistryEntries } from "../../../lib/graph-registry";
-=======
->>>>>>> d065202 (feat: add Microsoft Graph API integration for GUID resolution)
 
 export function GraphApiTab() {
   const graphApiEnabled = useUiStore((state) => state.graphApiEnabled);
@@ -90,15 +87,7 @@ export function GraphApiTab() {
       setCachedAppCount(apps.length);
 
       if (apps.length > 0) {
-<<<<<<< HEAD
         useIntuneStore.getState().mergeGuidRegistry(buildGraphRegistryEntries(apps));
-=======
-        const entries: Record<string, { name: string; source: "GraphApi" }> = {};
-        for (const app of apps) {
-          entries[app.id] = { name: app.displayName, source: "GraphApi" };
-        }
-        useIntuneStore.getState().mergeGuidRegistry(entries);
->>>>>>> d065202 (feat: add Microsoft Graph API integration for GUID resolution)
       }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);

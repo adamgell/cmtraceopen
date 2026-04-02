@@ -9,6 +9,8 @@ use std::time::Instant;
 use rayon::prelude::*;
 use serde::Serialize;
 use tauri::{async_runtime, AppHandle, Emitter};
+#[cfg(target_os = "windows")]
+use tauri::Manager;
 
 use crate::intune::download_stats;
 use crate::intune::event_tracker;
@@ -66,19 +68,21 @@ pub async fn analyze_intune_logs(
     include_live_event_logs: bool,
     graph_api_enabled: bool,
     app: AppHandle,
-    #[cfg(target_os = "windows")] graph_state: tauri::State<'_, crate::graph_api::GraphAuthState>,
 ) -> Result<IntuneAnalysisResult, crate::error::AppError> {
     // Attempt Graph API enrichment before spawning the blocking task.
     // We capture the resolved map here (on the async side) so the blocking
     // task doesn't need Send-unfriendly state references.
     #[cfg(target_os = "windows")]
     let graph_resolved = if graph_api_enabled {
+        let graph_state = app.state::<crate::graph_api::GraphAuthState>();
         try_graph_prefetch(&graph_state)
     } else {
         None
     };
     #[cfg(not(target_os = "windows"))]
     let graph_resolved: Option<std::collections::HashMap<String, String>> = None;
+    #[cfg(not(target_os = "windows"))]
+    let _ = graph_api_enabled;
 
     Ok(async_runtime::spawn_blocking(move || {
         analyze_intune_logs_blocking(path, request_id, include_live_event_logs, graph_resolved, app)

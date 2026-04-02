@@ -252,7 +252,7 @@ function GuidRow({ entry, showType }: { entry: RowEntry; showType: boolean }) {
       tabIndex={0}
       role="button"
       title="Click to copy GUID"
-      aria-label={`Copy GUID ${guid}`}
+      aria-label={`Copy GUID ${entry.guid}`}
     >
       <td style={{ ...tdStyle, fontWeight: 500, color: tokens.colorNeutralForeground1 }}>
         {entry.name}
