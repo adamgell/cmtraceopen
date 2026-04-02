@@ -24,7 +24,8 @@ export async function saveSession(): Promise<string | null> {
 
   // Build tab entries with file hashes
   const tabs: SessionTab[] = [];
-  for (const tab of openTabs) {
+  for (let i = 0; i < openTabs.length; i++) {
+    const tab = openTabs[i];
     let hash = "";
     let size = 0;
     try {
@@ -40,7 +41,7 @@ export async function saveSession(): Promise<string | null> {
       filePath: tab.filePath,
       fileHash: hash,
       fileSize: size,
-      selectedId: logState.selectedId,
+      selectedId: i === uiState.activeTabIndex ? logState.selectedId : null,
       scrollPosition: null,
       activeColumns: snapshot?.activeColumns ?? [],
     });

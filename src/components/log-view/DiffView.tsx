@@ -60,7 +60,22 @@ function SideBySideView({
 }) {
   const parentRefA = useRef<HTMLDivElement>(null);
   const parentRefB = useRef<HTMLDivElement>(null);
+  const isSyncingRef = useRef(false);
   const rowHeight = metrics.rowHeight;
+
+  const handleScrollA = () => {
+    if (isSyncingRef.current || !parentRefA.current || !parentRefB.current) return;
+    isSyncingRef.current = true;
+    parentRefB.current.scrollTop = parentRefA.current.scrollTop;
+    requestAnimationFrame(() => { isSyncingRef.current = false; });
+  };
+
+  const handleScrollB = () => {
+    if (isSyncingRef.current || !parentRefA.current || !parentRefB.current) return;
+    isSyncingRef.current = true;
+    parentRefA.current.scrollTop = parentRefB.current.scrollTop;
+    requestAnimationFrame(() => { isSyncingRef.current = false; });
+  };
 
   const virtualizerA = useVirtualizer({
     count: diffState.entriesA.length,
@@ -82,7 +97,7 @@ function SideBySideView({
         <div style={{ padding: "4px 8px", fontSize: "11px", fontWeight: 600, backgroundColor: tokens.colorNeutralBackground3, borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, color: tokens.colorPaletteGreenForeground1 }}>
           A: {diffFileBaseName(diffState.sourceA.filePath)} ({diffState.entriesA.length})
         </div>
-        <div ref={parentRefA} style={{ flex: 1, overflowY: "auto" }}>
+        <div ref={parentRefA} onScroll={handleScrollA} style={{ flex: 1, overflowY: "auto" }}>
           <div style={{ height: `${virtualizerA.getTotalSize()}px`, position: "relative" }}>
             {virtualizerA.getVirtualItems().map((row) => {
               const entry = diffState.entriesA[row.index];
@@ -106,7 +121,7 @@ function SideBySideView({
         <div style={{ padding: "4px 8px", fontSize: "11px", fontWeight: 600, backgroundColor: tokens.colorNeutralBackground3, borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, color: tokens.colorPaletteRedForeground1 }}>
           B: {diffFileBaseName(diffState.sourceB.filePath)} ({diffState.entriesB.length})
         </div>
-        <div ref={parentRefB} style={{ flex: 1, overflowY: "auto" }}>
+        <div ref={parentRefB} onScroll={handleScrollB} style={{ flex: 1, overflowY: "auto" }}>
           <div style={{ height: `${virtualizerB.getTotalSize()}px`, position: "relative" }}>
             {virtualizerB.getVirtualItems().map((row) => {
               const entry = diffState.entriesB[row.index];

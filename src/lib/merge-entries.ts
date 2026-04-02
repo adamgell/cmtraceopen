@@ -90,18 +90,30 @@ export function findCorrelatedEntries(
   const targetTs = targetEntry.timestamp;
   const results: CorrelatedEntry[] = [];
 
-  for (const entry of entries) {
-    if (entry.filePath === targetEntry.filePath) continue;
-    if (entry.timestamp == null) continue;
+  // Binary search for window start
+  const windowStart = targetTs - windowMs;
+  const windowEnd = targetTs + windowMs;
+  let lo = 0;
+  let hi = entries.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if ((entries[mid].timestamp ?? 0) < windowStart) lo = mid + 1;
+    else hi = mid;
+  }
 
-    const delta = entry.timestamp - targetTs;
-    if (Math.abs(delta) <= windowMs) {
-      results.push({
-        entry,
-        deltaMs: delta,
-        fileColor: colorAssignments[entry.filePath] ?? "#888",
-      });
-    }
+  // Scan from window start to window end
+  for (let i = lo; i < entries.length; i++) {
+    const entry = entries[i];
+    if (entry.timestamp == null) continue;
+    if (entry.timestamp > windowEnd) break;
+    if (entry.filePath === targetEntry.filePath) continue;
+    if (entry.id === targetEntry.id) continue;
+
+    results.push({
+      entry,
+      deltaMs: entry.timestamp - targetTs,
+      fileColor: colorAssignments[entry.filePath] ?? "#888",
+    });
   }
 
   results.sort((a, b) => Math.abs(a.deltaMs) - Math.abs(b.deltaMs));

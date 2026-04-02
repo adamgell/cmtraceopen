@@ -19,7 +19,7 @@ export function MergeLegendBar() {
   const setAllFileVisibility = useLogStore((s) => s.setAllFileVisibility);
   const setCorrelationWindowMs = useLogStore((s) => s.setCorrelationWindowMs);
   const setAutoCorrelate = useLogStore((s) => s.setAutoCorrelate);
-  const entries = useLogStore((s) => s.entries);
+  const visibleEntryCount = useLogStore((s) => s.entries.length);
 
   if (!mergedTabState) return null;
 
@@ -159,7 +159,7 @@ export function MergeLegendBar() {
       </button>
 
       <div style={{ marginLeft: "auto", color: tokens.colorNeutralForeground3, flexShrink: 0 }}>
-        {entries.length} merged
+        {visibleEntryCount} merged
       </div>
     </div>
   );

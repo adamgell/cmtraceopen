@@ -23,7 +23,13 @@ export async function openSessionDialog(): Promise<string | null> {
 
 export async function restoreSession(sessionPath: string): Promise<string | null> {
   const content = await readTextFile(sessionPath);
-  const data = JSON.parse(content);
+  let data: unknown;
+  try {
+    data = JSON.parse(content);
+  } catch {
+    console.error("[session] invalid JSON in session file", { sessionPath });
+    return null;
+  }
   const session = validateSession(data);
 
   if (!session) {
@@ -98,7 +104,14 @@ export async function restoreSession(sessionPath: string): Promise<string | null
   // Add to recent sessions
   uiStore.addRecentSession(sessionPath);
 
-  // Return the list of file paths to open — the caller handles parsing
-  // via the existing file open flow
-  return validTabs.map((t) => t.filePath).join("\n");
+  // Parse the valid files using the existing file-loading flow
+  const filePaths = validTabs.map((t) => t.filePath);
+  try {
+    const { loadFilesAsLogSource } = await import("./log-source");
+    await loadFilesAsLogSource(filePaths);
+  } catch (error) {
+    console.error("[session] failed to parse files during restore", error);
+  }
+
+  return sessionPath;
 }

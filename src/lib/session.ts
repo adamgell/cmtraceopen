@@ -76,6 +76,13 @@ export function validateSession(data: unknown): SessionFile | null {
   if (typeof obj.version !== "number") return null;
   if (obj.version > CURRENT_VERSION) return null;
   if (!Array.isArray(obj.tabs)) return null;
+  // Validate each tab has required fields
+  for (const tab of obj.tabs) {
+    if (typeof tab !== "object" || tab === null) return null;
+    const t = tab as Record<string, unknown>;
+    if (typeof t.filePath !== "string") return null;
+  }
+  if (typeof obj.workspace !== "string") return null;
   return obj as unknown as SessionFile;
 }
 
