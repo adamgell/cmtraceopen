@@ -4,6 +4,31 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **Settings dialog** (replaces Accessibility dialog): Full settings UI with tabs for Appearance (themes, font size), Columns (visibility, ordering), Behavior (confirm tab close), Updates (auto-update toggle), and File Associations (Windows-only). Accessible via `Ctrl+,` or Window menu.
+- **Context menu**: Right-click any log row for Copy Line, Copy Message, Jump to Line, Quick Filter by severity/component, Reveal in File Manager, and Error Lookup. Uses native Tauri menu popup for OS-native feel.
+- **Event Log workspace** (Windows, feature-gated): Parse `.evtx` files and query live Windows Event Log channels. Supports file-based EVTX parsing with channel grouping, severity filtering, and correlation linking. Frontend workspace with channel sidebar, severity badges, and detail pane.
+- **AppWorkload enrichment**: Parse "Get policies" JSON payloads in the log viewer to build GUID-to-app-name mappings. InfoPane shows resolved app names when log messages contain GUIDs, structured policy metadata cards, and decoded base64 PowerShell detection scripts via a lightweight syntax-highlighted code viewer.
+- **Activity view**: New "Activity" toggle in the Intune timeline tab groups events by app into collapsible cards. Each card shows worst status, event count, duration, and event type badges. Expanded rows display parsed structured fields (intent, detection, applicability, reboot, GRS expired, enforcement) as colored tags with inline GUID resolution and word-wrapped detail messages.
+- **GUID Registry dialog**: New Tools menu item showing a searchable table of all GUID-to-app-name mappings from the Intune analysis, with source confidence ranking (ApplicationName > Name > SetUpFilePath) and click-to-copy.
+- **SideCarScriptDetectionManager events**: Extract PowerShell script detection lifecycle events (start, complete, exit code, process ID) as standalone PowerShellScript events in the Intune timeline.
+- **Resizable InfoPane**: Drag handle between the log list and detail pane allows resizing (min 80px, max 70% viewport).
+- **Jump to Line**: Context menu action to jump to a specific line number in the log.
+- **Reveal in File Manager**: Context menu action to open the source file's location in Finder/Explorer.
+- **Quick Filter**: Context menu action to instantly filter by the selected row's severity or component.
+
+### Fixed
+
+- **Rotated AppWorkload parsing**: Rotated AppWorkload files (e.g., `AppWorkload-20260401-160729.log`) now correctly parse as LogicalRecord framing instead of falling back to PhysicalLine. Changed IME filename detection from exact match to prefix match.
+- **GUID extraction priority**: App GUID extraction now prefers "for app <GUID>" patterns over generic first-GUID matching, preventing user GUIDs from being used as app identifiers in StatusReport lines.
+- **Tab close cleanup**: Closing the last tab now properly clears log content, filters, and UI state.
+- **Button types**: Added explicit `type="button"` to prevent unintended form submissions.
+
+### Changed
+
+- **Columns determined by parser**: Active columns are now derived from the detected parser format, not user toggles. Removed `hiddenColumns` from UI state.
+
 ## [1.0.3] - 2026-03-31
 
 ### Added
