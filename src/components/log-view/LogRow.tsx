@@ -20,6 +20,9 @@ interface LogRowProps {
   onClick: (id: number) => void;
   onContextMenu: (entry: LogEntry, event: React.MouseEvent) => void;
   onErrorCodeClick?: (span: ErrorCodeSpan) => void;
+  mergeFileColor?: string | null;
+  isCorrelated?: boolean;
+  correlationColor?: string | null;
 }
 
 /** Subtle tint for find-match rows (not the active selection). */
@@ -234,6 +237,9 @@ export const LogRow = memo(function LogRow({
   onClick,
   onContextMenu,
   onErrorCodeClick,
+  mergeFileColor,
+  isCorrelated,
+  correlationColor,
 }: LogRowProps) {
   const style = getRowStyle(entry, isSelected, isFindMatch, severityPalette);
 
@@ -255,7 +261,12 @@ export const LogRow = memo(function LogRow({
         lineHeight: `${rowLineHeight}px`,
         whiteSpace: "nowrap",
         transition: "filter 80ms linear",
-        boxShadow: `inset 3px 0 0 ${isSelected ? tokens.colorNeutralForegroundOnBrand : "transparent"}`,
+        boxShadow: mergeFileColor
+          ? `inset 3px 0 0 ${mergeFileColor}`
+          : `inset 3px 0 0 ${isSelected ? tokens.colorNeutralForegroundOnBrand : "transparent"}`,
+        ...(isCorrelated && correlationColor && !isSelected ? {
+          backgroundImage: `linear-gradient(${correlationColor}30, ${correlationColor}30)`,
+        } : {}),
       }}
       onClick={() => onClick(entry.id)}
       onContextMenu={(e) => onContextMenu(entry, e)}
