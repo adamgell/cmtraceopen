@@ -7,6 +7,8 @@ import { getThemeById } from "./lib/themes";
 import { useUiStore } from "./stores/ui-store";
 import { initializeDateTimeFormatting, refreshDateTimeFormatting } from "./lib/date-time-format";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+// Register Graph API auto-connect (runs after persist hydration)
+import "./hooks/use-graph-api-startup";
 
 const RootWrapper = import.meta.env.DEV ? React.Fragment : React.StrictMode;
 

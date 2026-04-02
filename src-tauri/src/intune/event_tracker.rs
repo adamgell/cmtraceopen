@@ -1002,13 +1002,27 @@ fn extract_guid(msg: &str) -> Option<String> {
                 .and_then(|cap| cap.get(1))
                 .map(|value| value.as_str().to_string())
         })
-        // 3. Generic first GUID fallback
+        // 3. PolicyId from JSON payloads (HealthScripts, script results)
+        .or_else(|| extract_policy_id(msg))
+        // 4. Generic first GUID fallback
         .or_else(|| {
             guid_re()
                 .captures(msg)
                 .and_then(|cap| cap.get(1))
                 .map(|value| value.as_str().to_string())
         })
+}
+
+/// Extract PolicyId from JSON payloads in HealthScripts/script result messages.
+/// Handles lines like: `"PolicyId":"79880037-a3c4-489a-a7e6-a6a705b52b78"`
+fn extract_policy_id(msg: &str) -> Option<String> {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    let re = RE.get_or_init(|| {
+        Regex::new(r#"(?i)"PolicyId"\s*:\s*\\?"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\\?""#).unwrap()
+    });
+    re.captures(msg)
+        .and_then(|cap| cap.get(1))
+        .map(|m| m.as_str().to_string())
 }
 
 fn extract_error_code(msg: &str) -> Option<String> {

@@ -62,6 +62,8 @@ export function StatusBar() {
   const openTabs = useUiStore((s) => s.openTabs);
   const activeTabIndex = useUiStore((s) => s.activeTabIndex);
 
+  const graphApiStatus = useUiStore((s) => s.graphApiStatus);
+
   const intuneAnalysisState = useIntuneStore((s) => s.analysisState);
   const intuneSummary = useIntuneStore((s) => s.summary);
   const intuneSourceContext = useIntuneStore((s) => s.sourceContext);
@@ -381,19 +383,58 @@ export function StatusBar() {
           {leftStatusText}
         </span>
       </div>
-      <span
-        title={rightStatusText}
-        style={{
-          minWidth: 0,
-          overflow: "hidden",
-          textOverflow: "ellipsis",
-          whiteSpace: "nowrap",
-          color: rightTone,
-          fontWeight: 500,
-        }}
-      >
-        {rightStatusText}
-      </span>
+      <div style={{ display: "flex", alignItems: "center", gap: "10px", flexShrink: 0 }}>
+        {graphApiStatus !== "idle" && (
+          <span
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "4px",
+              fontSize: "11px",
+              color: graphApiStatus === "connected"
+                ? tokens.colorPaletteGreenForeground1
+                : graphApiStatus === "connecting"
+                  ? tokens.colorNeutralForeground3
+                  : tokens.colorPaletteRedForeground1,
+            }}
+            title={
+              graphApiStatus === "connected"
+                ? "Graph API connected — GUID resolution active"
+                : graphApiStatus === "connecting"
+                  ? "Connecting to Graph API..."
+                  : "Graph API connection failed"
+            }
+          >
+            <span
+              style={{
+                width: "6px",
+                height: "6px",
+                borderRadius: "50%",
+                backgroundColor: "currentColor",
+                display: "inline-block",
+              }}
+            />
+            {graphApiStatus === "connecting"
+              ? "Graph API: Connecting..."
+              : graphApiStatus === "connected"
+                ? "Graph API: Connected"
+                : "Graph API: Error"}
+          </span>
+        )}
+        <span
+          title={rightStatusText}
+          style={{
+            minWidth: 0,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+            color: rightTone,
+            fontWeight: 500,
+          }}
+        >
+          {rightStatusText}
+        </span>
+      </div>
     </div>
   );
 }

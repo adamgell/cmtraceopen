@@ -202,7 +202,12 @@ interface UiState {
   defaultShowInfoPane: boolean;
   confirmTabClose: boolean;
   showUpdateDialog: boolean;
+<<<<<<< Updated upstream
   recentSessions: string[];
+=======
+  graphApiEnabled: boolean;
+  graphApiStatus: "idle" | "connecting" | "connected" | "error";
+>>>>>>> Stashed changes
 
   setActiveWorkspace: (workspace: WorkspaceId) => void;
   setCurrentPlatform: (platform: PlatformId) => void;
@@ -263,8 +268,13 @@ interface UiState {
   setCollectionResult: (result: CollectionResult | null) => void;
   setShowCollectDiagnosticsDialog: (show: boolean) => void;
   setShowUpdateDialog: (show: boolean) => void;
+<<<<<<< Updated upstream
   addRecentSession: (path: string) => void;
   clearRecentSessions: () => void;
+=======
+  setGraphApiEnabled: (enabled: boolean) => void;
+  setGraphApiStatus: (status: "idle" | "connecting" | "connected" | "error") => void;
+>>>>>>> Stashed changes
 }
 
 const DEFAULT_WORKSPACE: WorkspaceId = "log";
@@ -345,7 +355,12 @@ export const useUiStore = create<UiState>()(
       collectionResult: null,
       showCollectDiagnosticsDialog: false,
       showUpdateDialog: false,
+<<<<<<< Updated upstream
       recentSessions: [],
+=======
+      graphApiEnabled: false,
+      graphApiStatus: "idle",
+>>>>>>> Stashed changes
 
       setCurrentPlatform: (platform) => set({ currentPlatform: platform }),
       setEnabledWorkspaces: (workspaces) => {
@@ -616,12 +631,17 @@ export const useUiStore = create<UiState>()(
       setCollectionResult: (result) => set({ collectionResult: result }),
       setShowCollectDiagnosticsDialog: (show) => set({ showCollectDiagnosticsDialog: show }),
       setShowUpdateDialog: (show) => set({ showUpdateDialog: show }),
+<<<<<<< Updated upstream
       addRecentSession: (path) =>
         set((state) => {
           const filtered = state.recentSessions.filter((p) => p !== path);
           return { recentSessions: [path, ...filtered].slice(0, 5) };
         }),
       clearRecentSessions: () => set({ recentSessions: [] }),
+=======
+      setGraphApiEnabled: (enabled) => set({ graphApiEnabled: enabled }),
+      setGraphApiStatus: (status) => set({ graphApiStatus: status }),
+>>>>>>> Stashed changes
     }),
     {
       name: "cmtraceopen-ui-preferences",

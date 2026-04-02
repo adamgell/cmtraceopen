@@ -268,9 +268,13 @@ export interface IntuneAnalysisState {
 
 export type GuidNameSource = "SetUpFilePath" | "NameField" | "ApplicationName";
 
+export type GuidCategory = "app" | "script" | "remediation" | "unknown";
+
 export interface GuidRegistryEntry {
   name: string;
   source: GuidNameSource;
+  category?: GuidCategory;
+  publisher?: string;
 }
 
 export interface IntuneAnalysisResult {
