@@ -19,7 +19,8 @@ pub fn parse_evtx_files(paths: &[String]) -> Result<EvtxParseResult, String> {
     for path_str in paths {
         let path = Path::new(path_str);
         match parse_single_file(path) {
-            Ok(records) => {
+            Ok((records, file_parse_errors)) => {
+                parse_errors += file_parse_errors;
                 let source_label = path
                     .file_name()
                     .map(|f| f.to_string_lossy().to_string())
@@ -80,8 +81,8 @@ pub fn parse_evtx_files(paths: &[String]) -> Result<EvtxParseResult, String> {
     })
 }
 
-/// Parse a single .evtx file into a Vec of EvtxRecord.
-fn parse_single_file(path: &Path) -> Result<Vec<EvtxRecord>, String> {
+/// Parse a single .evtx file into a Vec of EvtxRecord and a count of per-record parse errors.
+fn parse_single_file(path: &Path) -> Result<(Vec<EvtxRecord>, u32), String> {
     let mut parser = EvtxParser::from_path(path)
         .map_err(|e| format!("Failed to open EVTX file {}: {}", path.display(), e))?;
 
@@ -91,6 +92,7 @@ fn parse_single_file(path: &Path) -> Result<Vec<EvtxRecord>, String> {
         .unwrap_or_default();
 
     let mut records = Vec::new();
+    let mut parse_errors = 0u32;
 
     for record_result in parser.records_json_value() {
         if records.len() >= MAX_ENTRIES_PER_FILE {
@@ -110,6 +112,7 @@ fn parse_single_file(path: &Path) -> Result<Vec<EvtxRecord>, String> {
                     path.display(),
                     e
                 );
+                parse_errors += 1;
                 continue;
             }
         };
@@ -120,12 +123,12 @@ fn parse_single_file(path: &Path) -> Result<Vec<EvtxRecord>, String> {
 
         let provider = system["Provider"]["#attributes"]["Name"]
             .as_str()
-            .unwrap_or("")
+            .unwrap_or("Unknown")
             .to_string();
 
         let channel = system["Channel"]
             .as_str()
-            .unwrap_or("")
+            .unwrap_or("Unknown")
             .to_string();
 
         let event_id = extract_event_id(system);
@@ -135,7 +138,7 @@ fn parse_single_file(path: &Path) -> Result<Vec<EvtxRecord>, String> {
 
         let computer = system["Computer"]
             .as_str()
-            .unwrap_or("")
+            .unwrap_or("Unknown")
             .to_string();
 
         let timestamp_str = system["TimeCreated"]["#attributes"]["SystemTime"]
@@ -172,7 +175,7 @@ fn parse_single_file(path: &Path) -> Result<Vec<EvtxRecord>, String> {
         });
     }
 
-    Ok(records)
+    Ok((records, parse_errors))
 }
 
 /// Extract EventID which can appear as `{"#text": N}` or just `N`.

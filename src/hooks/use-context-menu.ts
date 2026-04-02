@@ -47,14 +47,14 @@ export function useContextMenu() {
           id: "copy-line",
           text: "Copy Line",
           action: () => {
-            writeText(formatLine(entry));
+            writeText(formatLine(entry)).catch(console.error);
           },
         }),
         await MenuItem.new({
           id: "copy-message",
           text: "Copy Message",
           action: () => {
-            writeText(entry.message);
+            writeText(entry.message).catch(console.error);
           },
         }),
       ];
@@ -65,7 +65,7 @@ export function useContextMenu() {
             id: "copy-timestamp",
             text: "Copy Timestamp",
             action: () => {
-              writeText(entry.timestampDisplay!);
+              writeText(entry.timestampDisplay!).catch(console.error);
             },
           })
         );

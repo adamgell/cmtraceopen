@@ -7,7 +7,7 @@ use super::models::{EvtxChannelInfo, EvtxRecord};
 pub fn enumerate_channels() -> Result<Vec<EvtxChannelInfo>, String> {
     // Implementation uses wevtapi.dll — Windows only
     // EvtOpenChannelEnum, EvtNextChannelPath
-    Err("Live event log queries require Windows".to_string())
+    Err("Live event log queries are not yet implemented".to_string())
 }
 
 /// Query a specific Windows Event Log channel for recent events.
@@ -18,5 +18,5 @@ pub fn query_channel(
     _channel: &str,
     _max_events: Option<u64>,
 ) -> Result<Vec<EvtxRecord>, String> {
-    Err("Live event log queries require Windows".to_string())
+    Err("Live event log queries are not yet implemented".to_string())
 }

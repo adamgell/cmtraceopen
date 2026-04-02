@@ -67,6 +67,21 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
 
   if (!isOpen) return null;
 
+  const handleTabKeyDown = (e: React.KeyboardEvent) => {
+    const tabIds = visibleTabs.map((t) => t.id);
+    const currentIndex = tabIds.indexOf(activeTab);
+    let newIndex = currentIndex;
+
+    if (e.key === "ArrowRight") newIndex = (currentIndex + 1) % tabIds.length;
+    else if (e.key === "ArrowLeft") newIndex = (currentIndex - 1 + tabIds.length) % tabIds.length;
+    else if (e.key === "Home") newIndex = 0;
+    else if (e.key === "End") newIndex = tabIds.length - 1;
+    else return;
+
+    e.preventDefault();
+    setActiveTab(tabIds[newIndex]);
+  };
+
   const renderTabContent = () => {
     switch (activeTab) {
       case "appearance":
@@ -182,6 +197,7 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
         {/* Tab bar */}
         <div
           role="tablist"
+          onKeyDown={handleTabKeyDown}
           style={{
             display: "flex",
             gap: "0",
