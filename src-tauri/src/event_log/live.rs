@@ -1,4 +1,4 @@
-use super::models::{ChannelSourceType, EvtxChannelInfo, EvtxRecord};
+use super::models::{EvtxChannelInfo, EvtxRecord};
 
 /// Enumerate available Windows Event Log channels.
 ///
