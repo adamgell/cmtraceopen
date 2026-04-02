@@ -59,6 +59,11 @@ export function mergeEntries(
     return a.lineNumber - b.lineNumber;
   });
 
+  // Reassign IDs to be globally unique across merged files
+  for (let i = 0; i < allTimestamped.length; i++) {
+    allTimestamped[i] = { ...allTimestamped[i], id: i };
+  }
+
   return allTimestamped;
 }
 

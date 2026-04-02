@@ -17,6 +17,7 @@ export function TabStrip() {
   const sourceOpenMode = useLogStore((s) => s.sourceOpenMode);
   const mergedTabState = useLogStore((s) => s.mergedTabState);
   const closeMergedTab = useLogStore((s) => s.closeMergedTab);
+  const closeDiff = useLogStore((s) => s.closeDiff);
 
   const [hoveredTabIndex, setHoveredTabIndex] = useState<number | null>(null);
   const [overflowOpen, setOverflowOpen] = useState(false);
@@ -145,9 +146,13 @@ export function TabStrip() {
         closeMergedTab();
         return;
       }
+      if (sourceOpenMode === "diff" && index === activeTabIndex) {
+        closeDiff();
+        return;
+      }
       closeTab(index);
     },
-    [closeTab, sourceOpenMode, activeTabIndex, closeMergedTab]
+    [closeTab, sourceOpenMode, activeTabIndex, closeMergedTab, closeDiff]
   );
 
   if (openTabs.length === 0) {

@@ -39,6 +39,7 @@ export function LogListView() {
   const findMatchIds = useLogStore((s) => s.findMatchIds);
   const showDetails = useUiStore((s) => s.showDetails);
 
+  const sourceOpenMode = useLogStore((s) => s.sourceOpenMode);
   const mergedTabState = useLogStore((s) => s.mergedTabState);
   const correlatedEntries = useLogStore((s) => s.correlatedEntries);
 
@@ -342,7 +343,7 @@ export function LogListView() {
         ))}
       </div>
 
-      {mergedTabState && <MergeLegendBar />}
+      {sourceOpenMode === "merged" && mergedTabState && <MergeLegendBar />}
 
       <div
         ref={parentRef}
@@ -399,9 +400,9 @@ export function LogListView() {
                   onClick={(id) => { if (id !== selectedId) { suppressScrollRef.current = true; } selectEntry(id); }}
                   onContextMenu={showContextMenu}
                   onErrorCodeClick={handleErrorCodeClick}
-                  mergeFileColor={mergedTabState?.colorAssignments[entry.filePath] ?? null}
-                  isCorrelated={correlatedIdSet.has(entry.id)}
-                  correlationColor={mergedTabState?.colorAssignments[entry.filePath] ?? null}
+                  mergeFileColor={sourceOpenMode === "merged" ? mergedTabState?.colorAssignments[entry.filePath] ?? null : null}
+                  isCorrelated={sourceOpenMode === "merged" && correlatedIdSet.has(entry.id)}
+                  correlationColor={sourceOpenMode === "merged" ? mergedTabState?.colorAssignments[entry.filePath] ?? null : null}
                 />
               </div>
             );

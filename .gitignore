@@ -24,3 +24,6 @@ Thumbs.db
 
 #logcollection
 loginventory/
+
+# Claude Code local settings
+.claude/settings.local.json

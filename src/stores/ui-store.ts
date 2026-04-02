@@ -645,6 +645,7 @@ export const useUiStore = create<UiState>()(
         defaultShowInfoPane: state.defaultShowInfoPane,
         confirmTabClose: state.confirmTabClose,
         graphApiEnabled: state.graphApiEnabled,
+        recentSessions: state.recentSessions,
       }),
       merge: (persistedState, currentState) => {
         const raw = persistedState as Partial<UiState> & {

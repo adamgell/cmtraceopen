@@ -1023,9 +1023,15 @@ export const useLogStore = create<LogState>((set, get) => ({
     recomputeAndSetMatches();
   },
 
-  setCorrelationWindowMs: (ms) => set({ correlationWindowMs: ms }),
+  setCorrelationWindowMs: (ms) => {
+    set({ correlationWindowMs: ms });
+    setTimeout(() => useLogStore.getState().updateCorrelation(), 0);
+  },
 
-  setAutoCorrelate: (enabled) => set({ autoCorrelate: enabled }),
+  setAutoCorrelate: (enabled) => {
+    set({ autoCorrelate: enabled });
+    setTimeout(() => useLogStore.getState().updateCorrelation(), 0);
+  },
 
   updateCorrelation: () => {
     const state = useLogStore.getState();
@@ -1067,6 +1073,11 @@ export const useLogStore = create<LogState>((set, get) => ({
     if (sourceB.startTime != null && sourceB.endTime != null) {
       entriesB = filterByTimeRange(entriesB, sourceB.startTime, sourceB.endTime);
     }
+
+    // Reassign IDs to avoid collisions between files
+    let nextId = 0;
+    entriesA = entriesA.map((e) => ({ ...e, id: nextId++ }));
+    entriesB = entriesB.map((e) => ({ ...e, id: nextId++ }));
 
     const { commonKeys, onlyAKeys, onlyBKeys, entryClassification, stats } =
       classifyEntries(entriesA, entriesB);

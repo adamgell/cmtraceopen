@@ -92,15 +92,6 @@ export async function restoreSession(sessionPath: string): Promise<string | null
     uiStore.setActiveWorkspace(session.workspace as Parameters<typeof uiStore.setActiveWorkspace>[0]);
   }
 
-  // Restore filters
-  const logStore = useLogStore.getState();
-  if (session.filters) {
-    logStore.setHighlightText(session.filters.highlightText || "");
-    logStore.setFindQuery(session.filters.findQuery || "");
-    logStore.setFindCaseSensitive(session.filters.findCaseSensitive ?? false);
-    logStore.setFindUseRegex(session.filters.findUseRegex ?? false);
-  }
-
   // Add to recent sessions
   uiStore.addRecentSession(sessionPath);
 
@@ -111,6 +102,18 @@ export async function restoreSession(sessionPath: string): Promise<string | null
     await loadFilesAsLogSource(filePaths);
   } catch (error) {
     console.error("[session] failed to parse files during restore", error);
+    // Even if loading fails, return the session path so the caller knows we attempted it
+    console.warn("[session] partial restore: files could not be loaded, but session metadata was applied", { filePaths });
+  }
+
+  // Restore filters AFTER files are loaded so find/highlight operate on the loaded entries
+  // NOTE: Full session restore (scroll positions, per-tab selected lines) is not yet implemented.
+  const logStore = useLogStore.getState();
+  if (session.filters) {
+    logStore.setHighlightText(session.filters.highlightText || "");
+    logStore.setFindQuery(session.filters.findQuery || "");
+    logStore.setFindCaseSensitive(session.filters.findCaseSensitive ?? false);
+    logStore.setFindUseRegex(session.filters.findUseRegex ?? false);
   }
 
   return sessionPath;
