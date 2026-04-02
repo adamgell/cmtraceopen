@@ -16,9 +16,6 @@ use super::models::{
     SysmonEventTypeCount, SysmonSeverity, SysmonSummary, TimeBucket,
 };
 
-/// Maximum entries to parse from a single EVTX file.
-const MAX_ENTRIES_PER_FILE: usize = 100_000;
-
 /// Maximum entries to pull from the live Windows Event Log.
 #[cfg(target_os = "windows")]
 const MAX_LIVE_ENTRIES: usize = 10_000;
@@ -111,15 +108,6 @@ pub fn parse_sysmon_evtx(path: &Path, id_offset: u64) -> Result<Vec<SysmonEvent>
     let mut current_id = id_offset;
 
     for record_result in parser.records_json() {
-        if events.len() >= MAX_ENTRIES_PER_FILE {
-            log::warn!(
-                "event=sysmon_entry_cap file=\"{}\" cap={}",
-                source_file,
-                MAX_ENTRIES_PER_FILE
-            );
-            break;
-        }
-
         let record = match record_result {
             Ok(r) => r,
             Err(e) => {
@@ -417,20 +405,22 @@ pub fn build_dashboard_data(events: &[SysmonEvent]) -> SysmonDashboardData {
 
     const TOP_N: usize = 20;
 
-    let mut minute_buckets: HashMap<i64, u64> = HashMap::new();
-    let mut hourly_buckets: HashMap<i64, u64> = HashMap::new();
-    let mut daily_buckets: HashMap<i64, u64> = HashMap::new();
+    let estimated_unique = (events.len() / 10).max(64);
 
-    let mut process_counts: HashMap<String, u64> = HashMap::new();
-    let mut dest_counts: HashMap<String, u64> = HashMap::new();
-    let mut port_counts: HashMap<String, u64> = HashMap::new();
-    let mut dns_counts: HashMap<String, u64> = HashMap::new();
-    let mut file_counts: HashMap<String, u64> = HashMap::new();
-    let mut registry_counts: HashMap<String, u64> = HashMap::new();
+    let mut minute_buckets: HashMap<i64, u64> = HashMap::with_capacity(estimated_unique);
+    let mut hourly_buckets: HashMap<i64, u64> = HashMap::with_capacity(estimated_unique);
+    let mut daily_buckets: HashMap<i64, u64> = HashMap::with_capacity(estimated_unique);
+
+    let mut process_counts: HashMap<String, u64> = HashMap::with_capacity(estimated_unique);
+    let mut dest_counts: HashMap<String, u64> = HashMap::with_capacity(estimated_unique);
+    let mut port_counts: HashMap<String, u64> = HashMap::with_capacity(estimated_unique);
+    let mut dns_counts: HashMap<String, u64> = HashMap::with_capacity(estimated_unique);
+    let mut file_counts: HashMap<String, u64> = HashMap::with_capacity(estimated_unique);
+    let mut registry_counts: HashMap<String, u64> = HashMap::with_capacity(estimated_unique);
 
     let mut total_warnings: u64 = 0;
     let mut total_errors: u64 = 0;
-    let mut security_type_counts: HashMap<String, u64> = HashMap::new();
+    let mut security_type_counts: HashMap<String, u64> = HashMap::with_capacity(estimated_unique);
 
     for event in events {
         if let Some(ms) = event.timestamp_ms {
@@ -521,6 +511,43 @@ pub fn build_dashboard_data(events: &[SysmonEvent]) -> SysmonDashboardData {
         vec
     };
 
+    // Auto-aggregate timeline_minute based on time span to cap at ~1500 buckets.
+    // Under 2h -> minute, 2-24h -> 5-min, 1-7d -> hourly, >7d -> daily.
+    let auto_timeline = {
+        let min_ms = minute_buckets.keys().copied().min();
+        let max_ms = minute_buckets.keys().copied().max();
+        match (min_ms, max_ms) {
+            (Some(lo), Some(hi)) => {
+                let span_ms = hi - lo;
+                let two_hours = 2 * 3_600_000_i64;
+                let twenty_four_hours = 24 * 3_600_000_i64;
+                let seven_days = 7 * 86_400_000_i64;
+
+                if span_ms < two_hours {
+                    buckets_to_vec(minute_buckets)
+                } else if span_ms < twenty_four_hours {
+                    // Re-bucket into 5-minute intervals
+                    let five_min_ms = 5 * 60_000_i64;
+                    let mut rebucketed: HashMap<i64, u64> =
+                        HashMap::with_capacity(minute_buckets.len() / 5 + 1);
+                    for (ms, count) in minute_buckets {
+                        let key = (ms / five_min_ms) * five_min_ms;
+                        *rebucketed.entry(key).or_insert(0) += count;
+                    }
+                    buckets_to_vec(rebucketed)
+                } else if span_ms < seven_days {
+                    buckets_to_vec(hourly_buckets.clone())
+                } else {
+                    buckets_to_vec(daily_buckets.clone())
+                }
+            }
+            _ => Vec::new(),
+        }
+    };
+
+    let timeline_hourly_vec = buckets_to_vec(hourly_buckets);
+    let timeline_daily_vec = buckets_to_vec(daily_buckets);
+
     let top_n = |map: HashMap<String, u64>| -> Vec<RankedItem> {
         let mut vec: Vec<RankedItem> = map
             .into_iter()
@@ -538,9 +565,9 @@ pub fn build_dashboard_data(events: &[SysmonEvent]) -> SysmonDashboardData {
     security_by_type.sort_by(|a, b| b.count.cmp(&a.count));
 
     SysmonDashboardData {
-        timeline_minute: buckets_to_vec(minute_buckets),
-        timeline_hourly: buckets_to_vec(hourly_buckets),
-        timeline_daily: buckets_to_vec(daily_buckets),
+        timeline_minute: auto_timeline,
+        timeline_hourly: timeline_hourly_vec,
+        timeline_daily: timeline_daily_vec,
         top_processes: top_n(process_counts),
         top_destinations: top_n(dest_counts),
         top_ports: top_n(port_counts),
@@ -895,23 +922,23 @@ pub fn parse_sysmon_live_events() -> Result<Vec<SysmonEvent>, String> {
             .rendered_message
             .filter(|m| !m.trim().is_empty())
             .unwrap_or_else(|| {
-                build_message_from_fields(
+                build_message_from_fields(&MessageFields {
                     event_id,
-                    &event_type,
-                    image.as_deref(),
-                    command_line.as_deref(),
-                    user.as_deref(),
-                    destination_ip.as_deref(),
+                    event_type: &event_type,
+                    image: image.as_deref(),
+                    command_line: command_line.as_deref(),
+                    user: user.as_deref(),
+                    destination_ip: destination_ip.as_deref(),
                     destination_port,
-                    protocol.as_deref(),
-                    target_filename.as_deref(),
-                    source_image.as_deref(),
-                    target_image.as_deref(),
-                    granted_access.as_deref(),
-                    query_name.as_deref(),
-                    query_results.as_deref(),
-                    target_object.as_deref(),
-                )
+                    protocol: protocol.as_deref(),
+                    target_filename: target_filename.as_deref(),
+                    source_image: source_image.as_deref(),
+                    target_image: target_image.as_deref(),
+                    granted_access: granted_access.as_deref(),
+                    query_name: query_name.as_deref(),
+                    query_results: query_results.as_deref(),
+                    target_object: target_object.as_deref(),
+                })
             });
 
         events.push(SysmonEvent {
@@ -963,70 +990,75 @@ pub fn parse_sysmon_live_events() -> Result<Vec<SysmonEvent>, String> {
     Err("Live Sysmon event log queries are only supported on Windows".to_string())
 }
 
+/// Holds the fields needed to build a human-readable message for live events.
+#[cfg(target_os = "windows")]
+struct MessageFields<'a> {
+    event_id: u32,
+    event_type: &'a SysmonEventType,
+    image: Option<&'a str>,
+    command_line: Option<&'a str>,
+    user: Option<&'a str>,
+    destination_ip: Option<&'a str>,
+    destination_port: Option<u16>,
+    protocol: Option<&'a str>,
+    target_filename: Option<&'a str>,
+    source_image: Option<&'a str>,
+    target_image: Option<&'a str>,
+    granted_access: Option<&'a str>,
+    query_name: Option<&'a str>,
+    query_results: Option<&'a str>,
+    target_object: Option<&'a str>,
+}
+
 /// Build a human-readable message from extracted field values (for live events).
 #[cfg(target_os = "windows")]
-#[allow(clippy::too_many_arguments)]
-fn build_message_from_fields(
-    event_id: u32,
-    event_type: &SysmonEventType,
-    image: Option<&str>,
-    command_line: Option<&str>,
-    user: Option<&str>,
-    destination_ip: Option<&str>,
-    destination_port: Option<u16>,
-    protocol: Option<&str>,
-    target_filename: Option<&str>,
-    source_image: Option<&str>,
-    target_image: Option<&str>,
-    granted_access: Option<&str>,
-    query_name: Option<&str>,
-    query_results: Option<&str>,
-    target_object: Option<&str>,
-) -> String {
-    let type_label = event_type.display_name();
+fn build_message_from_fields(fields: &MessageFields<'_>) -> String {
+    let type_label = fields.event_type.display_name();
+    let event_id = fields.event_id;
 
     match event_id {
         1 => {
-            let img = image.unwrap_or("?");
-            let usr = user.unwrap_or("");
-            match command_line {
+            let img = fields.image.unwrap_or("?");
+            let usr = fields.user.unwrap_or("");
+            match fields.command_line {
                 Some(cmd) if !cmd.is_empty() => format!("{img} | {cmd} (User: {usr})"),
                 _ => format!("{img} (User: {usr})"),
             }
         }
         3 => {
-            let img = image.unwrap_or("?");
-            let dst_ip = destination_ip.unwrap_or("?");
-            let dst_port = destination_port
+            let img = fields.image.unwrap_or("?");
+            let dst_ip = fields.destination_ip.unwrap_or("?");
+            let dst_port = fields
+                .destination_port
                 .map(|p| p.to_string())
                 .unwrap_or_else(|| "?".to_string());
-            let proto = protocol.unwrap_or("?");
+            let proto = fields.protocol.unwrap_or("?");
             format!("{img} → {dst_ip}:{dst_port} ({proto})")
         }
         5 => {
-            let img = image.unwrap_or("?");
+            let img = fields.image.unwrap_or("?");
             format!("{img} terminated")
         }
         10 => {
-            let src = source_image.unwrap_or("?");
-            let tgt = target_image.unwrap_or("?");
-            let access = granted_access.unwrap_or("?");
+            let src = fields.source_image.unwrap_or("?");
+            let tgt = fields.target_image.unwrap_or("?");
+            let access = fields.granted_access.unwrap_or("?");
             format!("{src} → {tgt} (Access: {access})")
         }
         11 => {
-            let img = image.unwrap_or("?");
-            let target = target_filename.unwrap_or("?");
+            let img = fields.image.unwrap_or("?");
+            let target = fields.target_filename.unwrap_or("?");
             format!("{img} created {target}")
         }
         12..=14 => {
-            let img = image.unwrap_or("?");
-            let target = target_object.unwrap_or("?");
+            let img = fields.image.unwrap_or("?");
+            let target = fields.target_object.unwrap_or("?");
             format!("{img} | {target}")
         }
         22 => {
-            let img = image.unwrap_or("?");
-            let query = query_name.unwrap_or("?");
-            match query_results {
+            let img = fields.image.unwrap_or("?");
+            let query = fields.query_name.unwrap_or("?");
+            match fields.query_results {
                 Some(results) if !results.is_empty() => {
                     format!("{img} queried {query} → {results}")
                 }
@@ -1034,12 +1066,12 @@ fn build_message_from_fields(
             }
         }
         23 | 26 => {
-            let img = image.unwrap_or("?");
-            let target = target_filename.unwrap_or("?");
+            let img = fields.image.unwrap_or("?");
+            let target = fields.target_filename.unwrap_or("?");
             format!("{img} deleted {target}")
         }
         _ => {
-            if let Some(img) = image {
+            if let Some(img) = fields.image {
                 format!("[{type_label}] {img}")
             } else {
                 format!("[{type_label}]")

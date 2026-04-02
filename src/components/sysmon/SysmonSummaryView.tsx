@@ -18,39 +18,6 @@ export function SysmonSummaryView() {
         Sysmon Analysis Summary
       </h3>
 
-      {/* Key metrics */}
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))",
-          gap: "12px",
-          marginBottom: "24px",
-        }}
-      >
-        <MetricCard label="Total Events" value={summary.totalEvents.toLocaleString()} />
-        <MetricCard label="Unique Processes" value={summary.uniqueProcesses.toLocaleString()} />
-        <MetricCard label="Unique Computers" value={summary.uniqueComputers.toLocaleString()} />
-        <MetricCard label="Source Files" value={summary.sourceFiles.length.toString()} />
-        {summary.parseErrors > 0 && (
-          <MetricCard
-            label="Parse Errors"
-            value={summary.parseErrors.toLocaleString()}
-            color={tokens.colorPaletteRedForeground1}
-          />
-        )}
-      </div>
-
-      {/* Time range */}
-      {(summary.earliestTimestamp || summary.latestTimestamp) && (
-        <div style={{ marginBottom: "24px" }}>
-          <h4 style={{ margin: "0 0 8px 0", fontSize: "13px", fontWeight: 600 }}>Time Range</h4>
-          <div style={{ fontSize: "12px", color: tokens.colorNeutralForeground2 }}>
-            {summary.earliestTimestamp && <div>Earliest: {summary.earliestTimestamp}</div>}
-            {summary.latestTimestamp && <div>Latest: {summary.latestTimestamp}</div>}
-          </div>
-        </div>
-      )}
-
       {/* Event type breakdown */}
       <div style={{ marginBottom: "24px" }}>
         <h4 style={{ margin: "0 0 8px 0", fontSize: "13px", fontWeight: 600 }}>
@@ -103,46 +70,6 @@ export function SysmonSummaryView() {
           </ul>
         </div>
       )}
-    </div>
-  );
-}
-
-function MetricCard({
-  label,
-  value,
-  color,
-}: {
-  label: string;
-  value: string;
-  color?: string;
-}) {
-  return (
-    <div
-      style={{
-        padding: "12px 16px",
-        backgroundColor: tokens.colorNeutralBackground3,
-        borderRadius: "6px",
-        border: `1px solid ${tokens.colorNeutralStroke2}`,
-      }}
-    >
-      <div
-        style={{
-          fontSize: "11px",
-          color: tokens.colorNeutralForeground3,
-          marginBottom: "4px",
-        }}
-      >
-        {label}
-      </div>
-      <div
-        style={{
-          fontSize: "20px",
-          fontWeight: 600,
-          color: color || tokens.colorNeutralForeground1,
-        }}
-      >
-        {value}
-      </div>
     </div>
   );
 }

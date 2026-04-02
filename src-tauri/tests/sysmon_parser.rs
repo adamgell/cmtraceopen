@@ -1,4 +1,4 @@
-use app_lib::sysmon::evtx_parser::{build_dashboard_data, build_summary};
+use app_lib::sysmon::evtx_parser::{build_dashboard_data, build_summary, extract_config};
 use app_lib::sysmon::models::{SysmonEvent, SysmonEventType, SysmonSeverity};
 
 fn make_event(id: u64, timestamp: &str, timestamp_ms: Option<i64>, event_id: u32) -> SysmonEvent {
@@ -208,4 +208,59 @@ fn dashboard_data_security_events() {
     assert_eq!(data.security_events.total_warnings, 1);
     assert_eq!(data.security_events.total_errors, 1);
     assert_eq!(data.security_events.events_by_type.len(), 2);
+}
+
+#[test]
+fn extract_config_empty_events_returns_default() {
+    let summary = build_summary(&[], vec![], 0);
+    let config = extract_config(&[], &summary);
+    assert!(!config.found);
+    assert!(config.schema_version.is_none());
+    assert!(config.hash_algorithms.is_none());
+    assert!(config.last_config_change.is_none());
+    assert!(config.sysmon_version.is_none());
+    assert!(config.configuration_xml.is_none());
+    assert!(config.active_event_types.is_empty());
+}
+
+#[test]
+fn extract_config_with_service_state_change() {
+    let mut e1 = make_event(0, "2024-04-28T10:00:00Z", Some(1714298400000), 4);
+    e1.details = Some("Sysmon version 15.0".to_string());
+
+    let events = vec![e1];
+    let summary = build_summary(&events, vec![], 0);
+    let config = extract_config(&events, &summary);
+
+    assert!(config.found);
+    assert_eq!(config.sysmon_version.as_deref(), Some("Sysmon version 15.0"));
+}
+
+#[test]
+fn extract_config_hash_algorithm_inference() {
+    let mut e1 = make_event(0, "2024-04-28T10:00:00Z", Some(1714298400000), 1);
+    e1.hashes = Some("SHA256=abc123,MD5=def456".to_string());
+
+    let events = vec![e1];
+    let summary = build_summary(&events, vec![], 0);
+    let config = extract_config(&events, &summary);
+
+    assert!(config.found);
+    assert_eq!(config.hash_algorithms.as_deref(), Some("SHA256,MD5"));
+}
+
+#[test]
+fn extract_config_config_change_tracks_timestamp() {
+    let e1 = make_event(0, "2024-04-28T10:00:00Z", Some(1714298400000), 16);
+    let e2 = make_event(1, "2024-04-28T12:00:00Z", Some(1714305600000), 16);
+
+    let events = vec![e1, e2];
+    let summary = build_summary(&events, vec![], 0);
+    let config = extract_config(&events, &summary);
+
+    assert!(config.found);
+    assert_eq!(
+        config.last_config_change.as_deref(),
+        Some("2024-04-28T12:00:00Z")
+    );
 }

@@ -6,30 +6,23 @@ interface DashboardEventTypeChartProps {
   summary: SysmonSummary;
 }
 
-// A palette of distinct colors for event types
-const COLOR_PALETTE = [
-  "#0078d4",
-  "#107c10",
-  "#ff8c00",
-  "#d13438",
-  "#881798",
-  "#00b7c3",
-  "#498205",
-  "#c239b3",
-  "#ff4343",
-  "#0099bc",
-  "#7a7574",
-  "#4f6bed",
-  "#038387",
-  "#da3b01",
-  "#8e562e",
+// Theme-aware palette using Fluent UI tokens for chart colors
+const CHART_COLORS = [
+  tokens.colorPaletteBlueForeground2,
+  tokens.colorPaletteRedForeground1,
+  tokens.colorPaletteGreenForeground1,
+  tokens.colorPalettePurpleForeground2,
+  tokens.colorPaletteMarigoldForeground1,
+  tokens.colorPaletteTealForeground2,
+  tokens.colorPalettePinkForeground2,
+  tokens.colorPaletteBerryForeground1,
 ];
 
 export function DashboardEventTypeChart({ summary }: DashboardEventTypeChartProps) {
   const chartData = summary.eventTypeCounts.map((etc, i) => ({
     legend: etc.displayName,
     data: etc.count,
-    color: COLOR_PALETTE[i % COLOR_PALETTE.length],
+    color: CHART_COLORS[i % CHART_COLORS.length],
   }));
 
   return (
