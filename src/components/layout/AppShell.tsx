@@ -156,6 +156,11 @@ export function AppShell() {
     return () => {
       window.removeEventListener("mousemove", onMouseMove);
       window.removeEventListener("mouseup", onMouseUp);
+      if (infoPaneResizeRef.current) {
+        infoPaneResizeRef.current = null;
+        document.body.style.cursor = "";
+        document.body.style.userSelect = "";
+      }
     };
   }, [setInfoPaneHeight]);
 

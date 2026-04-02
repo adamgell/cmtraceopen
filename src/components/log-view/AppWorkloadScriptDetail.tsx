@@ -33,7 +33,12 @@ type ParsedDetail =
 
 function decodeBase64(encoded: string): string | null {
   try {
-    return atob(encoded);
+    const binaryStr = atob(encoded);
+    const bytes = new Uint8Array(binaryStr.length);
+    for (let i = 0; i < binaryStr.length; i++) {
+      bytes[i] = binaryStr.charCodeAt(i);
+    }
+    return new TextDecoder("utf-8").decode(bytes);
   } catch {
     return null;
   }
@@ -80,8 +85,10 @@ function parseGetPolicies(message: string): PolicyEntry[] | null {
 
   return arr.map((item: unknown) => {
     const obj = item as Record<string, unknown>;
+    const rawId = obj.Id;
+    if (typeof rawId !== "string" || rawId.length === 0) return null;
     const entry: PolicyEntry = {
-      id: String(obj.Id ?? ""),
+      id: String(rawId),
       name: String(obj.Name ?? "Unknown"),
       intent: typeof obj.Intent === "number" ? obj.Intent : undefined,
       targetType: typeof obj.TargetType === "number" ? obj.TargetType : undefined,
@@ -120,7 +127,7 @@ function parseGetPolicies(message: string): PolicyEntry[] | null {
     }
 
     return entry;
-  });
+  }).filter((entry): entry is PolicyEntry => entry !== null);
 }
 
 function parseSideCarDetail(message: string): SideCarDetail | null {

@@ -485,6 +485,9 @@ export const useUiStore = create<UiState>()(
           !state.showAboutDialog &&
           !state.showSettingsDialog &&
           !state.showEvidenceBundleDialog &&
+          !state.showGuidRegistryDialog &&
+          !state.showMergeTabsDialog &&
+          !state.showDiffConfigDialog &&
           !state.showFileAssociationPrompt &&
           !state.showCollectDiagnosticsDialog &&
           !state.showUpdateDialog
@@ -501,6 +504,9 @@ export const useUiStore = create<UiState>()(
           showAboutDialog: false,
           showSettingsDialog: false,
           showEvidenceBundleDialog: false,
+          showGuidRegistryDialog: false,
+          showMergeTabsDialog: false,
+          showDiffConfigDialog: false,
           showFileAssociationPrompt: false,
           showCollectDiagnosticsDialog: false,
           showUpdateDialog: false,

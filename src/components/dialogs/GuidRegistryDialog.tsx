@@ -154,7 +154,11 @@ function GuidRow({ guid, entry }: { guid: string; entry: GuidRegistryEntry }) {
     <tr
       style={{ cursor: "pointer" }}
       onClick={handleCopyGuid}
+      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); handleCopyGuid(); } }}
+      tabIndex={0}
+      role="button"
       title="Click to copy GUID"
+      aria-label={`Copy GUID ${guid}`}
     >
       <td style={{ ...tdStyle, fontWeight: 500, color: tokens.colorNeutralForeground1 }}>
         {entry.name}

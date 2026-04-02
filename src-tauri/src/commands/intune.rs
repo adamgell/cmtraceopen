@@ -158,7 +158,9 @@ fn analyze_intune_logs_blocking(
         all_events.extend(processed_file.events);
         all_downloads.extend(processed_file.downloads);
         coverage.push(processed_file.coverage);
-        all_policy_metadata.extend(processed_file.policy_metadata);
+        all_policy_metadata.extend(
+            processed_file.policy_metadata.into_iter().map(|(k, v)| (k.to_lowercase(), v))
+        );
     }
 
     // Enrich event and download names using the global GUID registry
@@ -210,7 +212,7 @@ fn analyze_intune_logs_blocking(
                     .as_deref()
                     .or(event.guid.as_deref());
                 if let Some(guid) = lookup_guid {
-                    if let Some(policy) = all_policy_metadata.get(guid) {
+                    if let Some(policy) = all_policy_metadata.get(&guid.to_lowercase()) {
                         // Find the first script-type detection rule with a body
                         if let Some(rule) = policy
                             .detection_rules
