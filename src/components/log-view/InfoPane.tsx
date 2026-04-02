@@ -13,6 +13,7 @@ import {
 import { getCategoryColor } from "../../lib/error-categories";
 import { resolveGuidsInMessage } from "../../lib/guid-name-map";
 import { AppWorkloadScriptDetail } from "./AppWorkloadScriptDetail";
+import { fileBaseName } from "../../lib/merge-entries";
 
 export function InfoPane() {
   const entries = useLogStore((state) => state.entries);
@@ -26,6 +27,9 @@ export function InfoPane() {
   );
 
   const guidNameMap = useLogStore((state) => state.guidNameMap);
+  const mergedTabState = useLogStore((state) => state.mergedTabState);
+  const correlatedEntries = useLogStore((state) => state.correlatedEntries);
+  const selectEntry = useLogStore((state) => state.selectEntry);
 
   const parserDisplay = getParserSelectionDisplay(parserSelection);
   const detailLineHeight = getLogDetailsLineHeight(logDetailsFontSize);
@@ -219,6 +223,74 @@ export function InfoPane() {
         );
       })()}
       <AppWorkloadScriptDetail message={selectedEntry.message} />
+      {mergedTabState && correlatedEntries.length > 0 && (
+        <div
+          style={{
+            marginBottom: "8px",
+            padding: "6px 8px",
+            backgroundColor: tokens.colorNeutralBackground3,
+            border: `1px solid ${tokens.colorNeutralStroke2}`,
+            borderRadius: "4px",
+            fontSize: `${Math.max(logDetailsFontSize - 1, 11)}px`,
+          }}
+        >
+          <div style={{
+            fontWeight: 600,
+            color: tokens.colorNeutralForeground2,
+            marginBottom: "4px",
+          }}>
+            Correlated Entries ({correlatedEntries.length})
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
+            {correlatedEntries.slice(0, 20).map((corr) => (
+              <div
+                key={corr.entry.id}
+                onClick={() => selectEntry(corr.entry.id)}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "6px",
+                  padding: "2px 4px",
+                  borderRadius: "3px",
+                  cursor: "pointer",
+                  borderLeft: `3px solid ${corr.fileColor}`,
+                }}
+              >
+                <span style={{
+                  fontFamily: LOG_MONOSPACE_FONT_FAMILY,
+                  color: tokens.colorNeutralForeground3,
+                  width: "60px",
+                  flexShrink: 0,
+                }}>
+                  {corr.deltaMs >= 0 ? "+" : ""}{corr.deltaMs}ms
+                </span>
+                <span style={{
+                  color: tokens.colorNeutralForeground3,
+                  flexShrink: 0,
+                }}>
+                  {fileBaseName(corr.entry.filePath)}
+                </span>
+                <span style={{
+                  color: tokens.colorNeutralForeground2,
+                  fontFamily: LOG_MONOSPACE_FONT_FAMILY,
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                  flex: 1,
+                  minWidth: 0,
+                }}>
+                  {corr.entry.message.slice(0, 100)}
+                </span>
+              </div>
+            ))}
+            {correlatedEntries.length > 20 && (
+              <div style={{ color: tokens.colorNeutralForeground3, fontSize: "10px" }}>
+                +{correlatedEntries.length - 20} more
+              </div>
+            )}
+          </div>
+        </div>
+      )}
       <div
         style={{
           whiteSpace: "pre-wrap",
