@@ -17,6 +17,17 @@ import {
 } from "../lib/column-config";
 import { formatLogEntryTimestamp } from "../lib/date-time-format";
 import { buildGuidNameMap, mergeGuidNameMap } from "../lib/guid-name-map";
+import {
+  type MergedTabState,
+  type CorrelatedEntry,
+  assignFileColors,
+  buildMergeCacheKey,
+  mergeEntries,
+  filterByVisibility,
+  findCorrelatedEntries,
+} from "../lib/merge-entries";
+
+export type { MergedTabState, CorrelatedEntry };
 
 /**
  * Snapshot of parsed file state — cached in memory so tab switches
@@ -89,7 +100,7 @@ export interface ParserSelectionDisplay {
   dateOrderLabel: string | null;
 }
 
-export type SourceOpenMode = "single-file" | "aggregate-folder" | null;
+export type SourceOpenMode = "single-file" | "aggregate-folder" | "merged" | null;
 
 
 const UNGROUPED_TOOLBAR_GROUP_ID = "ungrouped";
@@ -539,6 +550,10 @@ interface LogState {
   folderLoadCompletedFiles: number | null;
   /** GUID→app name map built from "Get policies" log entries. */
   guidNameMap: Record<string, string>;
+  mergedTabState: MergedTabState | null;
+  correlationWindowMs: number;
+  autoCorrelate: boolean;
+  correlatedEntries: CorrelatedEntry[];
   /** Pending scroll target set by deployment workspace — consumed by LogListView after load. */
   pendingScrollTarget: { filePath: string; lineNumber: number } | null;
 
@@ -583,6 +598,13 @@ interface LogState {
     currentFile: string;
   } | null) => void;
   setPendingScrollTarget: (target: { filePath: string; lineNumber: number } | null) => void;
+  createMergedTab: (sourceFilePaths: string[]) => void;
+  closeMergedTab: () => void;
+  setFileVisibility: (filePath: string, visible: boolean) => void;
+  setAllFileVisibility: (visible: boolean) => void;
+  setCorrelationWindowMs: (ms: number) => void;
+  setAutoCorrelate: (enabled: boolean) => void;
+  updateCorrelation: () => void;
 }
 
 /** Debounced version of recomputeAndSetMatches for keystroke-driven updates. */
@@ -703,6 +725,10 @@ export const useLogStore = create<LogState>((set, get) => ({
   folderLoadCompletedFiles: null,
   activeColumns: DEFAULT_COLUMNS,
   guidNameMap: {},
+  mergedTabState: null,
+  correlationWindowMs: 1000,
+  autoCorrelate: true,
+  correlatedEntries: [],
   pendingScrollTarget: null,
 
   hasActiveSource: () => {
@@ -757,7 +783,10 @@ export const useLogStore = create<LogState>((set, get) => ({
     });
     recomputeAndSetMatches();
   },
-  selectEntry: (id) => set({ selectedId: id }),
+  selectEntry: (id) => {
+    set({ selectedId: id });
+    setTimeout(() => useLogStore.getState().updateCorrelation(), 0);
+  },
   togglePause: () => set((state) => ({ isPaused: !state.isPaused })),
   setLoading: (loading) => set({ isLoading: loading }),
   setFormatDetected: (format) => set({ formatDetected: format }),
@@ -841,6 +870,8 @@ export const useLogStore = create<LogState>((set, get) => ({
       activeColumns: DEFAULT_COLUMNS,
       byteOffset: 0,
       guidNameMap: {},
+      mergedTabState: null,
+      correlatedEntries: [],
       findMatchIds: [],
       findCurrentIndex: -1,
       findRegexError: null,
@@ -870,6 +901,8 @@ export const useLogStore = create<LogState>((set, get) => ({
       },
       byteOffset: 0,
       guidNameMap: {},
+      mergedTabState: null,
+      correlatedEntries: [],
       findMatchIds: [],
       findCurrentIndex: -1,
       findRegexError: null,
@@ -892,4 +925,115 @@ export const useLogStore = create<LogState>((set, get) => ({
           }
     ),
   setPendingScrollTarget: (target) => set({ pendingScrollTarget: target }),
+
+  createMergedTab: (sourceFilePaths) => {
+    const entriesByFile: Record<string, LogEntry[]> = {};
+    const entryCounts: Record<string, number> = {};
+
+    for (const fp of sourceFilePaths) {
+      const snapshot = getCachedTabSnapshot(fp);
+      if (snapshot) {
+        entriesByFile[fp] = snapshot.entries;
+        entryCounts[fp] = snapshot.entries.length;
+      }
+    }
+
+    const validPaths = Object.keys(entriesByFile);
+    if (validPaths.length < 2) return;
+
+    const colorAssignments = assignFileColors(validPaths);
+    const fileVisibility: Record<string, boolean> = {};
+    for (const fp of validPaths) {
+      fileVisibility[fp] = true;
+    }
+
+    const merged = mergeEntries(entriesByFile);
+    const cacheKey = buildMergeCacheKey(validPaths, entryCounts);
+
+    set({
+      mergedTabState: {
+        sourceFilePaths: validPaths,
+        colorAssignments,
+        fileVisibility,
+        mergedEntries: merged,
+        cacheKey,
+      },
+      entries: filterByVisibility(merged, fileVisibility),
+      sourceOpenMode: "merged" as SourceOpenMode,
+      selectedId: null,
+      correlatedEntries: [],
+    });
+  },
+
+  closeMergedTab: () => {
+    set({
+      mergedTabState: null,
+      entries: [],
+      sourceOpenMode: null,
+      selectedId: null,
+      correlatedEntries: [],
+    });
+  },
+
+  setFileVisibility: (filePath, visible) => {
+    set((state) => {
+      if (!state.mergedTabState) return {};
+      const fileVisibility = {
+        ...state.mergedTabState.fileVisibility,
+        [filePath]: visible,
+      };
+      return {
+        mergedTabState: { ...state.mergedTabState, fileVisibility },
+        entries: filterByVisibility(state.mergedTabState.mergedEntries, fileVisibility),
+        selectedId: null,
+        correlatedEntries: [],
+      };
+    });
+    recomputeAndSetMatches();
+  },
+
+  setAllFileVisibility: (visible) => {
+    set((state) => {
+      if (!state.mergedTabState) return {};
+      const fileVisibility: Record<string, boolean> = {};
+      for (const fp of state.mergedTabState.sourceFilePaths) {
+        fileVisibility[fp] = visible;
+      }
+      return {
+        mergedTabState: { ...state.mergedTabState, fileVisibility },
+        entries: visible ? state.mergedTabState.mergedEntries : [],
+        selectedId: null,
+        correlatedEntries: [],
+      };
+    });
+    recomputeAndSetMatches();
+  },
+
+  setCorrelationWindowMs: (ms) => set({ correlationWindowMs: ms }),
+
+  setAutoCorrelate: (enabled) => set({ autoCorrelate: enabled }),
+
+  updateCorrelation: () => {
+    const state = useLogStore.getState();
+    if (!state.mergedTabState || !state.autoCorrelate || state.selectedId == null) {
+      if (state.correlatedEntries.length > 0) {
+        useLogStore.setState({ correlatedEntries: [] });
+      }
+      return;
+    }
+
+    const selectedEntry = state.entries.find((e) => e.id === state.selectedId);
+    if (!selectedEntry) {
+      useLogStore.setState({ correlatedEntries: [] });
+      return;
+    }
+
+    const correlated = findCorrelatedEntries(
+      state.mergedTabState.mergedEntries,
+      selectedEntry,
+      state.correlationWindowMs,
+      state.mergedTabState.colorAssignments
+    );
+    useLogStore.setState({ correlatedEntries: correlated });
+  },
 }));
