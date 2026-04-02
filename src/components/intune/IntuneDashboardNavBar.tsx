@@ -9,7 +9,7 @@ import type {
   IntuneSummary,
   IntuneTimeWindowPreset,
 } from "../../types/intune";
-import type { IntuneSortField } from "../../stores/intune-store";
+import type { IntuneSortField, IntuneTimelineViewMode } from "../../stores/intune-store";
 import { selectStyle, getFileName } from "./intune-dashboard-utils";
 
 type TabId = "timeline" | "downloads" | "summary";
@@ -45,6 +45,8 @@ export function IntuneDashboardNavBar({
   const filterStatus = useIntuneStore((s) => s.filterStatus);
   const setFilterEventType = useIntuneStore((s) => s.setFilterEventType);
   const setFilterStatus = useIntuneStore((s) => s.setFilterStatus);
+  const timelineViewMode = useIntuneStore((s) => s.timelineViewMode);
+  const setTimelineViewMode = useIntuneStore((s) => s.setTimelineViewMode);
   const sortField = useIntuneStore((s) => s.sortField);
   const sortDirection = useIntuneStore((s) => s.sortDirection);
   const setSortField = useIntuneStore((s) => s.setSortField);
@@ -220,6 +222,14 @@ export function IntuneDashboardNavBar({
             {filteredEventCount}/{filteredEventsByTime.length}
           </span>
           <div style={{ width: "1px", height: "16px", backgroundColor: tokens.colorNeutralStroke2, margin: "0 2px" }} />
+          <ViewModeToggle
+            mode={timelineViewMode}
+            onChange={setTimelineViewMode}
+            disabled={isAnalyzing}
+          />
+          {timelineViewMode === "list" && (
+            <>
+          <div style={{ width: "1px", height: "16px", backgroundColor: tokens.colorNeutralStroke2, margin: "0 2px" }} />
           <span style={{ fontSize: "10px", color: tokens.colorNeutralForeground3, fontWeight: 600, textTransform: "uppercase" }}>Sort:</span>
           <select
             value={sortField}
@@ -251,6 +261,8 @@ export function IntuneDashboardNavBar({
           >
             {sortDirection === "asc" ? "▲" : "▼"}
           </button>
+            </>
+          )}
           {timelineScope.filePath && (
             <>
               <div style={{ width: "1px", height: "16px", backgroundColor: tokens.colorNeutralStroke2, margin: "0 2px" }} />
@@ -350,6 +362,48 @@ function StrongBadge({ label, value, color }: { label: string; value: number | s
     <div style={{ display: "flex", alignItems: "baseline", gap: "4px" }}>
       <span style={{ color: tokens.colorNeutralForeground3, fontSize: "10px", fontWeight: 600, textTransform: "uppercase" }}>{label}</span>
       <span style={{ color: color || tokens.colorNeutralForeground1, fontSize: "12px", fontWeight: 700 }}>{value}</span>
+    </div>
+  );
+}
+
+function ViewModeToggle({
+  mode,
+  onChange,
+  disabled,
+}: {
+  mode: IntuneTimelineViewMode;
+  onChange: (mode: IntuneTimelineViewMode) => void;
+  disabled: boolean;
+}) {
+  const buttonStyle = (active: boolean): React.CSSProperties => ({
+    fontSize: "10px",
+    padding: "2px 8px",
+    border: `1px solid ${active ? tokens.colorBrandStroke1 : tokens.colorNeutralStroke2}`,
+    backgroundColor: active ? tokens.colorBrandBackground2 : tokens.colorNeutralCardBackground,
+    color: active ? tokens.colorBrandForeground1 : tokens.colorNeutralForeground3,
+    fontWeight: active ? 700 : 500,
+    cursor: disabled ? "not-allowed" : "pointer",
+    lineHeight: "18px",
+  });
+
+  return (
+    <div style={{ display: "flex", alignItems: "center" }}>
+      <button
+        type="button"
+        onClick={() => onChange("list")}
+        disabled={disabled}
+        style={{ ...buttonStyle(mode === "list"), borderRadius: "3px 0 0 3px", borderRight: "none" }}
+      >
+        List
+      </button>
+      <button
+        type="button"
+        onClick={() => onChange("gantt")}
+        disabled={disabled}
+        style={{ ...buttonStyle(mode === "gantt"), borderRadius: "0 3px 3px 0" }}
+      >
+        Activity
+      </button>
     </div>
   );
 }

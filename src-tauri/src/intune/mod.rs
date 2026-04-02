@@ -6,6 +6,8 @@ pub mod download_stats;
 #[cfg(feature = "intune-diagnostics")]
 pub mod event_tracker;
 #[cfg(feature = "intune-diagnostics")]
+pub mod policy_parser;
+#[cfg(feature = "intune-diagnostics")]
 pub mod eventlog_win32;
 #[cfg(feature = "intune-diagnostics")]
 pub mod evtx_parser;

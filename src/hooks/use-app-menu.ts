@@ -79,6 +79,9 @@ export function useAppMenu() {
           case "show_settings":
             showSettingsDialog();
             return;
+          case "show_guid_registry":
+            useUiStore.getState().setShowGuidRegistryDialog(true);
+            return;
           case "collect_diagnostics":
             useUiStore.getState().setShowCollectDiagnosticsDialog(true);
             return;

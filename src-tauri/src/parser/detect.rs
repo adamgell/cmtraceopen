@@ -341,17 +341,20 @@ pub fn detect_parser(path: &str, content: &str) -> ResolvedParser {
     let reporting_events_path_hint = path_lower.ends_with("reportingevents.log")
         || path_lower.contains("/softwaredistribution/reportingevents.log")
         || path_lower.contains("\\softwaredistribution\\reportingevents.log");
-    let ime_path_hint = matches!(
-        path_lower.rsplit(['/', '\\']).next(),
-        Some(
-            "agentexecutor.log"
-                | "appactionprocessor.log"
-                | "appworkload.log"
-                | "clienthealth.log"
-                | "healthscripts.log"
-                | "intunemanagementextension.log"
-        )
-    );
+    let ime_file_name = path_lower
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or("");
+    let ime_path_hint = [
+        "agentexecutor",
+        "appactionprocessor",
+        "appworkload",
+        "clienthealth",
+        "healthscripts",
+        "intunemanagementextension",
+    ]
+    .iter()
+    .any(|prefix| ime_file_name.starts_with(prefix));
 
     let dhcp_path_hint = path_lower.contains("dhcpsrvlog")
         || path_lower.contains("dhcpv6srvlog")

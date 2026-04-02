@@ -35,6 +35,33 @@ export interface IntuneEvent {
   lineNumber: number;
   startTimeEpoch: number | null;
   endTimeEpoch: number | null;
+  scriptBody?: string | null;
+  parentAppGuid?: string | null;
+}
+
+export interface DetectionRuleMetadata {
+  detectionType: number;
+  scriptBody?: string | null;
+  enforceSignatureCheck?: boolean | null;
+  runAs32Bit?: boolean | null;
+}
+
+export interface ReturnCodeEntry {
+  returnCode: number;
+  type: number;
+}
+
+export interface AppPolicyMetadata {
+  id: string;
+  name: string;
+  intent?: number | null;
+  targetType?: number | null;
+  installCommandLine?: string | null;
+  uninstallCommandLine?: string | null;
+  detectionRules: DetectionRuleMetadata[];
+  returnCodes: ReturnCodeEntry[];
+  requirementRules?: string | null;
+  installBehavior?: number | null;
 }
 
 export interface DownloadStat {
@@ -259,6 +286,7 @@ export interface IntuneAnalysisResult {
   evidenceBundle?: EvidenceBundleMetadata | null;
   eventLogAnalysis?: EventLogAnalysis | null;
   guidRegistry: Record<string, GuidRegistryEntry>;
+  policyMetadata?: Record<string, AppPolicyMetadata>;
 }
 
 export interface IntuneResultMetadata {
@@ -267,4 +295,6 @@ export interface IntuneResultMetadata {
   repeatedFailures: IntuneRepeatedFailureGroup[];
   evidenceBundle?: EvidenceBundleMetadata | null;
   eventLogAnalysis?: EventLogAnalysis | null;
+  policyMetadata?: Record<string, AppPolicyMetadata>;
+  guidRegistry?: Record<string, GuidRegistryEntry>;
 }

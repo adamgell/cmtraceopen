@@ -29,6 +29,13 @@ fn win32_guid_re() -> &'static Regex {
     Regex::new(r#"(?i)(?:app|application)\s+(?:id|with\s+id)[:\s]+([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})"#).unwrap()
 })
 }
+/// Matches "for app <GUID>" — common in StatusReport lines where a user GUID precedes the app GUID.
+fn for_app_guid_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
+    Regex::new(r#"(?i)for\s+app\s+([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})"#).unwrap()
+})
+}
 fn winget_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
@@ -110,6 +117,39 @@ fn appworkload_success_re() -> &'static Regex {
         r#"(?i)(?:download\s+completed|download\s+succeeded|staging\s+completed|content\s+cached|hash\s+validation\s+succeeded|install\s+completed|completed\s+successfully)"#,
     )
     .unwrap()
+})
+}
+fn sidecar_script_start_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
+    Regex::new(
+        r#"(?i)start\s+detectionmanager\s+sidecarscriptdetectionmanager"#,
+    )
+    .unwrap()
+})
+}
+fn sidecar_script_complete_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
+    Regex::new(
+        r#"(?i)completed\s+detectionmanager\s+sidecarscriptdetectionmanager"#,
+    )
+    .unwrap()
+})
+}
+fn sidecar_script_mid_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
+    Regex::new(
+        r#"(?i)sidecarscriptdetectionmanager\s+(?:launch|process\s+id|powershell\s+exitcode|powershell\s+execution|create\s+proxy|execution\s+is\s+done|create\s+files)"#,
+    )
+    .unwrap()
+})
+}
+fn sidecar_exitcode_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
+    Regex::new(r#"(?i)powershell\s+exitcode:\s*(\d+)"#).unwrap()
 })
 }
 fn policy_eval_re() -> &'static Regex {
@@ -381,6 +421,9 @@ struct AppWorkloadMatchFlags {
     queue: bool,
     pending: bool,
     timeout: bool,
+    sidecar_script_start: bool,
+    sidecar_script_complete: bool,
+    sidecar_script_mid: bool,
 }
 
 impl AppWorkloadMatchFlags {
@@ -399,6 +442,9 @@ impl AppWorkloadMatchFlags {
             queue: appworkload_queue_re().is_match(msg),
             pending: pending_re().is_match(msg),
             timeout: timeout_re().is_match(msg),
+            sidecar_script_start: sidecar_script_start_re().is_match(msg),
+            sidecar_script_complete: sidecar_script_complete_re().is_match(msg),
+            sidecar_script_mid: sidecar_script_mid_re().is_match(msg),
         }
     }
 
@@ -410,6 +456,9 @@ impl AppWorkloadMatchFlags {
             || self.stall
             || self.winget_token
             || self.winget
+            || self.sidecar_script_start
+            || self.sidecar_script_complete
+            || self.sidecar_script_mid
     }
 }
 
@@ -469,6 +518,8 @@ pub fn extract_events(
             line_number: line.line_number,
             start_time_epoch: None,
             end_time_epoch: None,
+            script_body: None,
+            parent_app_guid: None,
         });
         next_id += 1;
     }
@@ -494,6 +545,7 @@ fn extract_appworkload_event(
             "writeabletostorage",
             "cangenerate",
             "isappreportable",
+            "get policies",
         ],
     ) {
         return None;
@@ -504,8 +556,15 @@ fn extract_appworkload_event(
         return None;
     }
 
+    // Determine event type from flags
+    let is_sidecar = flags.sidecar_script_start
+        || flags.sidecar_script_complete
+        || flags.sidecar_script_mid;
+
     let event_type = if flags.winget_token || flags.winget {
         IntuneEventType::WinGetApp
+    } else if is_sidecar {
+        IntuneEventType::PowerShellScript
     } else if flags.download || flags.staging || flags.retry || flags.stall {
         IntuneEventType::ContentDownload
     } else if flags.install {
@@ -516,6 +575,54 @@ fn extract_appworkload_event(
 
     // Try primary extract_guid, fall back to guid_registry::extract_app_id
     let guid = extract_guid(msg).or_else(|| guid_registry::extract_app_id(msg));
+
+    if is_sidecar {
+        let status = determine_sidecar_script_status(msg, flags);
+        let error_code = sidecar_exitcode_re()
+            .captures(msg)
+            .and_then(|cap| cap.get(1))
+            .map(|m| m.as_str().to_string());
+        let short = guid
+            .as_deref()
+            .map(|g| &g[..8.min(g.len())])
+            .unwrap_or("unknown");
+        let phase = if flags.sidecar_script_complete {
+            "Complete"
+        } else if flags.sidecar_script_start {
+            "Start"
+        } else {
+            "Running"
+        };
+        let raw_name = format!("Script Detection {phase} ({short})");
+
+        let name = match guid.as_deref() {
+            Some(g) => registry.enrich_event_name(&raw_name, g).unwrap_or(raw_name),
+            None => raw_name,
+        };
+
+        return Some(IntuneEvent {
+            id: next_id,
+            event_type,
+            name,
+            guid: guid.clone(),
+            status,
+            start_time: line
+                .timestamp_utc
+                .clone()
+                .or_else(|| line.timestamp.clone()),
+            end_time: None,
+            duration_secs: None,
+            error_code,
+            detail: build_detail(msg),
+            source_file: source_file.to_string(),
+            line_number: line.line_number,
+            start_time_epoch: None,
+            end_time_epoch: None,
+            script_body: None,
+            parent_app_guid: guid,
+        });
+    }
+
     let status = determine_appworkload_status(msg, flags);
     let raw_name = build_appworkload_name(&event_type, &guid, msg, flags);
 
@@ -543,6 +650,8 @@ fn extract_appworkload_event(
         line_number: line.line_number,
         start_time_epoch: None,
         end_time_epoch: None,
+        script_body: None,
+        parent_app_guid: None,
     })
 }
 
@@ -558,6 +667,26 @@ fn determine_appworkload_status(msg: &str, flags: AppWorkloadMatchFlags) -> Intu
     } else {
         IntuneStatus::InProgress
     }
+}
+
+fn determine_sidecar_script_status(msg: &str, flags: AppWorkloadMatchFlags) -> IntuneStatus {
+    if flags.sidecar_script_start {
+        return IntuneStatus::InProgress;
+    }
+    if flags.sidecar_script_complete {
+        // Detection complete — both detected and not-detected are successful detection runs.
+        return IntuneStatus::Success;
+    }
+    // Mid-event: check exit code
+    if let Some(cap) = sidecar_exitcode_re().captures(msg) {
+        let code = cap.get(1).map_or("", |m| m.as_str());
+        return if code == "0" {
+            IntuneStatus::Success
+        } else {
+            IntuneStatus::Failed
+        };
+    }
+    IntuneStatus::InProgress
 }
 
 fn build_appworkload_name(
@@ -861,10 +990,19 @@ fn is_win32_app_inventory_event_candidate(msg: &str) -> bool {
 }
 
 fn extract_guid(msg: &str) -> Option<String> {
+    // 1. Specific "app id" / "application with id" pattern
     win32_guid_re()
         .captures(msg)
         .and_then(|cap| cap.get(1))
         .map(|value| value.as_str().to_string())
+        // 2. "for app <GUID>" — avoids grabbing a user GUID that precedes the app GUID
+        .or_else(|| {
+            for_app_guid_re()
+                .captures(msg)
+                .and_then(|cap| cap.get(1))
+                .map(|value| value.as_str().to_string())
+        })
+        // 3. Generic first GUID fallback
         .or_else(|| {
             guid_re()
                 .captures(msg)

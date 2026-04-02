@@ -16,10 +16,11 @@ use crate::intune::evtx_parser;
 use crate::intune::guid_registry::GuidRegistry;
 use crate::intune::ime_parser;
 use crate::intune::models::{
-    DownloadStat, EventLogAnalysis, EvidenceBundleMetadata, IntuneAnalysisResult,
-    IntuneDiagnosticsFileCoverage, IntuneDominantSource, IntuneEvent, IntuneEventType,
-    IntuneStatus, IntuneSummary, IntuneTimestampBounds,
+    AppPolicyMetadata, DownloadStat, EventLogAnalysis, EvidenceBundleMetadata,
+    IntuneAnalysisResult, IntuneDiagnosticsFileCoverage, IntuneDominantSource, IntuneEvent,
+    IntuneEventType, IntuneStatus, IntuneSummary, IntuneTimestampBounds,
 };
+use crate::intune::policy_parser;
 use crate::intune::timeline;
 
 use super::intune_bundle;
@@ -151,11 +152,13 @@ fn analyze_intune_logs_blocking(
     let mut all_events = Vec::new();
     let mut all_downloads = Vec::new();
     let mut coverage = Vec::new();
+    let mut all_policy_metadata: HashMap<String, AppPolicyMetadata> = HashMap::new();
 
     for processed_file in processed_files {
         all_events.extend(processed_file.events);
         all_downloads.extend(processed_file.downloads);
         coverage.push(processed_file.coverage);
+        all_policy_metadata.extend(processed_file.policy_metadata);
     }
 
     // Enrich event and download names using the global GUID registry
@@ -194,6 +197,30 @@ fn analyze_intune_logs_blocking(
             } else if dl.name.starts_with("Download (") || dl.name.starts_with("Download:") {
                 let _ = writeln!(diag_buffer, "event=guid_enrich_miss_download name=\"{}\" guid={} registry_has={}", dl.name, dl.content_id, guid_registry.resolve(&dl.content_id).unwrap_or("NOT_FOUND"));
                 missed_downloads += 1;
+            }
+        }
+    }
+
+    // Attach decoded script bodies to PowerShellScript events from policy metadata
+    if !all_policy_metadata.is_empty() {
+        for event in &mut all_events {
+            if event.event_type == IntuneEventType::PowerShellScript {
+                let lookup_guid = event
+                    .parent_app_guid
+                    .as_deref()
+                    .or(event.guid.as_deref());
+                if let Some(guid) = lookup_guid {
+                    if let Some(policy) = all_policy_metadata.get(guid) {
+                        // Find the first script-type detection rule with a body
+                        if let Some(rule) = policy
+                            .detection_rules
+                            .iter()
+                            .find(|r| r.detection_type == 3 && r.script_body.is_some())
+                        {
+                            event.script_body = rule.script_body.clone();
+                        }
+                    }
+                }
             }
         }
     }
@@ -324,6 +351,7 @@ fn analyze_intune_logs_blocking(
             evidence_bundle,
             event_log_analysis,
             guid_registry: guid_registry_map,
+            policy_metadata: HashMap::new(),
         });
     }
 
@@ -404,6 +432,7 @@ fn analyze_intune_logs_blocking(
         evidence_bundle,
         event_log_analysis,
         guid_registry: guid_registry_map,
+        policy_metadata: all_policy_metadata,
     })
 }
 
@@ -514,6 +543,7 @@ struct ProcessedIntuneFile {
     downloads: Vec<DownloadStat>,
     coverage: CoverageAccumulator,
     guid_registry: GuidRegistry,
+    policy_metadata: HashMap<String, AppPolicyMetadata>,
 }
 
 #[derive(Debug, Clone)]
@@ -621,6 +651,8 @@ fn analyze_intune_source_file(
 
     let mut file_guid_registry = GuidRegistry::new();
 
+    let mut file_policies: HashMap<String, AppPolicyMetadata> = HashMap::new();
+    #[allow(clippy::type_complexity)]
     let (file_events, file_downloads, file_timestamp_bounds, line_count): (
         Vec<IntuneEvent>,
         Vec<DownloadStat>,
@@ -640,6 +672,7 @@ fn analyze_intune_source_file(
         }
         let file_events = event_tracker::extract_events(&lines, &source_file, &file_guid_registry);
         let file_downloads = download_stats::extract_downloads(&lines, &source_file, &file_guid_registry);
+        file_policies = policy_parser::extract_policy_metadata(&lines);
         let file_timestamp_bounds = build_timestamp_bounds(&file_events, &file_downloads);
 
         (
@@ -695,6 +728,7 @@ fn analyze_intune_source_file(
         downloads: file_downloads,
         coverage,
         guid_registry: file_guid_registry,
+        policy_metadata: file_policies,
     })
 }
 
@@ -1427,6 +1461,8 @@ mod tests {
                 line_number: 12,
                 start_time_epoch: None,
                 end_time_epoch: None,
+                script_body: None,
+                parent_app_guid: None,
             },
             IntuneEvent {
                 id: 2,
@@ -1443,6 +1479,8 @@ mod tests {
                 line_number: 18,
                 start_time_epoch: None,
                 end_time_epoch: None,
+                script_body: None,
+                parent_app_guid: None,
             },
             IntuneEvent {
                 id: 3,
@@ -1459,6 +1497,8 @@ mod tests {
                 line_number: 22,
                 start_time_epoch: None,
                 end_time_epoch: None,
+                script_body: None,
+                parent_app_guid: None,
             },
             IntuneEvent {
                 id: 4,
@@ -1475,6 +1515,8 @@ mod tests {
                 line_number: 28,
                 start_time_epoch: None,
                 end_time_epoch: None,
+                script_body: None,
+                parent_app_guid: None,
             },
         ];
         let downloads = vec![DownloadStat {
@@ -1563,6 +1605,8 @@ mod tests {
                 line_number: 12,
                 start_time_epoch: None,
                 end_time_epoch: None,
+                script_body: None,
+                parent_app_guid: None,
             },
             IntuneEvent {
                 id: 2,
@@ -1579,6 +1623,8 @@ mod tests {
                 line_number: 18,
                 start_time_epoch: None,
                 end_time_epoch: None,
+                script_body: None,
+                parent_app_guid: None,
             },
         ];
 
@@ -1636,6 +1682,8 @@ mod tests {
             line_number: 8,
             start_time_epoch: None,
             end_time_epoch: None,
+            script_body: None,
+            parent_app_guid: None,
         }];
         let downloads = vec![DownloadStat {
             content_id: "content-1".to_string(),
@@ -1706,6 +1754,8 @@ mod tests {
                         line_number: 12,
                         start_time_epoch: None,
                         end_time_epoch: None,
+                        script_body: None,
+                        parent_app_guid: None,
                     }],
                     &[],
                 ),
@@ -1732,6 +1782,8 @@ mod tests {
                 line_number: 12,
                 start_time_epoch: None,
                 end_time_epoch: None,
+                script_body: None,
+                parent_app_guid: None,
             },
             IntuneEvent {
                 id: 2,
@@ -1748,6 +1800,8 @@ mod tests {
                 line_number: 20,
                 start_time_epoch: None,
                 end_time_epoch: None,
+                script_body: None,
+                parent_app_guid: None,
             },
         ];
 
@@ -1776,6 +1830,8 @@ mod tests {
             line_number: 15,
             start_time_epoch: None,
             end_time_epoch: None,
+            script_body: None,
+            parent_app_guid: None,
         }];
 
         let summary = build_summary(&events, &[]);
@@ -1804,6 +1860,8 @@ mod tests {
                 line_number: 10,
                 start_time_epoch: None,
                 end_time_epoch: None,
+                script_body: None,
+                parent_app_guid: None,
             },
             IntuneEvent {
                 id: 2,
@@ -1820,6 +1878,8 @@ mod tests {
                 line_number: 18,
                 start_time_epoch: None,
                 end_time_epoch: None,
+                script_body: None,
+                parent_app_guid: None,
             },
             IntuneEvent {
                 id: 3,
@@ -1836,6 +1896,8 @@ mod tests {
                 line_number: 4,
                 start_time_epoch: None,
                 end_time_epoch: None,
+                script_body: None,
+                parent_app_guid: None,
             },
         ];
 
@@ -1864,6 +1926,8 @@ mod tests {
                 line_number: 8,
                 start_time_epoch: None,
                 end_time_epoch: None,
+                script_body: None,
+                parent_app_guid: None,
             },
             IntuneEvent {
                 id: 2,
@@ -1880,6 +1944,8 @@ mod tests {
                 line_number: 12,
                 start_time_epoch: None,
                 end_time_epoch: None,
+                script_body: None,
+                parent_app_guid: None,
             },
         ];
         let downloads = vec![DownloadStat {

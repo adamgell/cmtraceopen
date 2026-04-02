@@ -8,6 +8,7 @@ import type {
   EventLogSeverity,
 } from "../types/event-log";
 import type {
+  AppPolicyMetadata,
   DownloadStat,
   IntuneAnalysisProgressEvent,
   IntuneAnalysisSourceKind,
@@ -30,6 +31,7 @@ import type {
 } from "../types/intune";
 
 export type IntuneWorkspaceTab = "timeline" | "downloads" | "summary";
+export type IntuneTimelineViewMode = "list" | "gantt";
 export type IntuneSortField = "time" | "name" | "type" | "status" | "duration";
 export type DownloadSortField = "name" | "size" | "speed" | "doPercentage" | "duration" | "timestamp";
 export type SortDirection = "asc" | "desc";
@@ -168,6 +170,8 @@ interface IntuneState {
   repeatedFailures: IntuneRepeatedFailureGroup[];
   evidenceBundle: EvidenceBundleMetadata | null;
   eventLogAnalysis: EventLogAnalysis | null;
+  policyMetadata: Record<string, AppPolicyMetadata>;
+  guidRegistry: Record<string, import("../types/intune").GuidRegistryEntry>;
   sourceFile: string | null;
   sourceFiles: string[];
   sourceContext: IntuneSourceContext;
@@ -183,6 +187,7 @@ interface IntuneState {
   eventLogFilterChannel: EventLogChannel | "All";
   eventLogFilterSeverity: EventLogSeverity | "All";
   activeTab: IntuneWorkspaceTab;
+  timelineViewMode: IntuneTimelineViewMode;
   sortField: IntuneSortField;
   sortDirection: SortDirection;
   downloadSortField: DownloadSortField;
@@ -215,6 +220,7 @@ interface IntuneState {
   setEventLogFilterSeverity: (severity: EventLogSeverity | "All") => void;
   selectEventLogEntry: (id: number | null) => void;
   setActiveTab: (tab: IntuneWorkspaceTab) => void;
+  setTimelineViewMode: (mode: IntuneTimelineViewMode) => void;
   setSortField: (field: IntuneSortField) => void;
   toggleSortDirection: () => void;
   setDownloadSortField: (field: DownloadSortField) => void;
@@ -231,6 +237,7 @@ const defaultInteractionState = {
   eventLogFilterChannel: "All" as EventLogChannel | "All",
   eventLogFilterSeverity: "All" as EventLogSeverity | "All",
   activeTab: "timeline" as const,
+  timelineViewMode: "list" as IntuneTimelineViewMode,
   sortField: "time" as IntuneSortField,
   sortDirection: "asc" as SortDirection,
   downloadSortField: "timestamp" as DownloadSortField,
@@ -247,6 +254,8 @@ export const useIntuneStore = create<IntuneState>((set) => ({
   repeatedFailures: [],
   evidenceBundle: null,
   eventLogAnalysis: null,
+  policyMetadata: {},
+  guidRegistry: {},
   sourceFile: null,
   sourceFiles: [],
   sourceContext: emptySourceContext,
@@ -268,6 +277,8 @@ export const useIntuneStore = create<IntuneState>((set) => ({
       repeatedFailures: [],
       evidenceBundle: null,
       eventLogAnalysis: null,
+      policyMetadata: {},
+      guidRegistry: {},
       sourceFile: null,
       sourceFiles: [],
       sourceContext: emptySourceContext,
@@ -342,6 +353,8 @@ export const useIntuneStore = create<IntuneState>((set) => ({
         repeatedFailures: resultMetadata.repeatedFailures,
         evidenceBundle: metadata?.evidenceBundle ?? null,
         eventLogAnalysis: metadata?.eventLogAnalysis ?? null,
+        policyMetadata: metadata?.policyMetadata ?? {},
+        guidRegistry: metadata?.guidRegistry ?? {},
         sourceFile,
         sourceFiles,
         sourceContext,
@@ -445,6 +458,7 @@ export const useIntuneStore = create<IntuneState>((set) => ({
   setEventLogFilterSeverity: (severity) => set({ eventLogFilterSeverity: severity }),
   selectEventLogEntry: (id) => set({ selectedEventLogEntryId: id }),
   setActiveTab: (tab) => set({ activeTab: tab }),
+  setTimelineViewMode: (mode) => set({ timelineViewMode: mode }),
   setSortField: (field) => set({ sortField: field }),
   toggleSortDirection: () =>
     set((state) => ({ sortDirection: state.sortDirection === "asc" ? "desc" : "asc" })),
@@ -463,6 +477,8 @@ export const useIntuneStore = create<IntuneState>((set) => ({
       repeatedFailures: [],
       evidenceBundle: null,
       eventLogAnalysis: null,
+      policyMetadata: {},
+      guidRegistry: {},
       sourceFile: null,
       sourceFiles: [],
       sourceContext: emptySourceContext,

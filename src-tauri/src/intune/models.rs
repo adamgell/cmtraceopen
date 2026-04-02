@@ -150,6 +150,53 @@ pub struct IntuneEvent {
     pub start_time_epoch: Option<i64>,
     /// End time as milliseconds since Unix epoch (pre-computed for fast frontend sorting)
     pub end_time_epoch: Option<i64>,
+    /// Decoded PowerShell script body (for script detection events)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub script_body: Option<String>,
+    /// GUID of the parent Win32App this script detection belongs to
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_app_guid: Option<String>,
+}
+
+/// Metadata for an app policy extracted from "Get policies" JSON payloads.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppPolicyMetadata {
+    pub id: String,
+    pub name: String,
+    pub intent: Option<i32>,
+    pub target_type: Option<i32>,
+    pub install_command_line: Option<String>,
+    pub uninstall_command_line: Option<String>,
+    pub detection_rules: Vec<DetectionRuleMetadata>,
+    pub return_codes: Vec<ReturnCodeEntry>,
+    pub requirement_rules: Option<String>,
+    pub install_behavior: Option<i32>,
+}
+
+/// A single detection rule from app policy metadata.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DetectionRuleMetadata {
+    /// 0=Registry, 1=MSI, 2=File, 3=Script
+    pub detection_type: i32,
+    /// Base64-decoded PowerShell script (type 3 only)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub script_body: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enforce_signature_check: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub run_as_32_bit: Option<bool>,
+}
+
+/// A return code mapping from app policy metadata.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReturnCodeEntry {
+    pub return_code: i32,
+    /// 0=Failed, 1=Success, 2=SoftReboot, 3=HardReboot, 4=Retry
+    #[serde(rename = "type")]
+    pub code_type: i32,
 }
 
 /// Download statistics for a content download event.
@@ -536,6 +583,9 @@ pub struct IntuneAnalysisResult {
     /// Global GUID→app-name registry for frontend display (tooltips, lookup panel).
     #[serde(default)]
     pub guid_registry: HashMap<String, GuidRegistryEntry>,
+    /// Per-app policy metadata extracted from "Get policies" JSON payloads.
+    #[serde(default)]
+    pub policy_metadata: HashMap<String, AppPolicyMetadata>,
 }
 
 impl Serialize for IntuneAnalysisResult {
@@ -543,7 +593,7 @@ impl Serialize for IntuneAnalysisResult {
     where
         S: Serializer,
     {
-        let mut state = serializer.serialize_struct("IntuneAnalysisResult", 12)?;
+        let mut state = serializer.serialize_struct("IntuneAnalysisResult", 13)?;
         state.serialize_field("events", &self.events)?;
         state.serialize_field("downloads", &self.downloads)?;
         state.serialize_field("summary", &self.summary)?;
@@ -556,6 +606,7 @@ impl Serialize for IntuneAnalysisResult {
         state.serialize_field("evidenceBundle", &self.evidence_bundle)?;
         state.serialize_field("eventLogAnalysis", &self.event_log_analysis)?;
         state.serialize_field("guidRegistry", &self.guid_registry)?;
+        state.serialize_field("policyMetadata", &self.policy_metadata)?;
         state.end()
     }
 }
@@ -620,6 +671,7 @@ mod tests {
             repeated_failures: Vec::new(),
             event_log_analysis: None,
             guid_registry: HashMap::new(),
+            policy_metadata: HashMap::new(),
             evidence_bundle: Some(EvidenceBundleMetadata {
                 manifest_path: "bundle-root/manifest.json".to_string(),
                 notes_path: Some("bundle-root/notes.md".to_string()),

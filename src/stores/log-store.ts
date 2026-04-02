@@ -16,6 +16,7 @@ import {
   getColumnDef,
 } from "../lib/column-config";
 import { formatLogEntryTimestamp } from "../lib/date-time-format";
+import { buildGuidNameMap, mergeGuidNameMap } from "../lib/guid-name-map";
 
 /**
  * Snapshot of parsed file state — cached in memory so tab switches
@@ -536,6 +537,8 @@ interface LogState {
   folderLoadTotalFiles: number | null;
   /** Number of files completed so far. */
   folderLoadCompletedFiles: number | null;
+  /** GUID→app name map built from "Get policies" log entries. */
+  guidNameMap: Record<string, string>;
   /** Pending scroll target set by deployment workspace — consumed by LogListView after load. */
   pendingScrollTarget: { filePath: string; lineNumber: number } | null;
 
@@ -699,6 +702,7 @@ export const useLogStore = create<LogState>((set, get) => ({
   folderLoadTotalFiles: null,
   folderLoadCompletedFiles: null,
   activeColumns: DEFAULT_COLUMNS,
+  guidNameMap: {},
   pendingScrollTarget: null,
 
   hasActiveSource: () => {
@@ -713,6 +717,7 @@ export const useLogStore = create<LogState>((set, get) => ({
   setEntries: (entries) => {
     set((state) => ({
       entries,
+      guidNameMap: buildGuidNameMap(entries),
       selectedId:
         state.selectedId !== null && !entries.some((entry) => entry.id === state.selectedId)
           ? null
@@ -724,6 +729,7 @@ export const useLogStore = create<LogState>((set, get) => ({
     set((state) => ({
       entries: [...state.entries, ...newEntries],
       totalLines: state.totalLines + newEntries.length,
+      guidNameMap: mergeGuidNameMap(state.guidNameMap, newEntries),
     }));
     recomputeAndSetMatches();
   },
@@ -746,6 +752,7 @@ export const useLogStore = create<LogState>((set, get) => ({
       return {
         entries,
         totalLines: state.totalLines + entriesWithIds.length,
+        guidNameMap: mergeGuidNameMap(state.guidNameMap, newEntries),
       };
     });
     recomputeAndSetMatches();
@@ -833,6 +840,7 @@ export const useLogStore = create<LogState>((set, get) => ({
       aggregateFiles: [],
       activeColumns: DEFAULT_COLUMNS,
       byteOffset: 0,
+      guidNameMap: {},
       findMatchIds: [],
       findCurrentIndex: -1,
       findRegexError: null,
@@ -861,6 +869,7 @@ export const useLogStore = create<LogState>((set, get) => ({
         message: "Ready",
       },
       byteOffset: 0,
+      guidNameMap: {},
       findMatchIds: [],
       findCurrentIndex: -1,
       findRegexError: null,

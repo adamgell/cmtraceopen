@@ -5,6 +5,7 @@ import {
   LOG_MONOSPACE_FONT_FAMILY,
 } from "../../lib/log-accessibility";
 import type { IntuneEvent, IntuneStatus, IntuneEventType } from "../../types/intune";
+import { ScriptCodeViewer } from "./ScriptCodeViewer";
 
 export const STATUS_COLORS: Record<IntuneStatus, string> = {
   Success: tokens.colorPaletteGreenForeground1,
@@ -230,6 +231,9 @@ export const EventTimelineRow = memo(
               >
                 {event.detail}
               </div>
+              {event.scriptBody && (
+                <ScriptCodeViewer script={event.scriptBody} maxHeight={250} />
+              )}
             </div>
 
             <div style={{ display: "flex", flexDirection: "column", gap: "6px", width: "200px", flexShrink: 0, fontSize: `${monoFontSize}px` }}>

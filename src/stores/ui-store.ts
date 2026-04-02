@@ -171,6 +171,7 @@ interface UiState {
   showAboutDialog: boolean;
   showSettingsDialog: boolean;
   showEvidenceBundleDialog: boolean;
+  showGuidRegistryDialog: boolean;
   showFileAssociationPrompt: boolean;
   logListFontSize: number;
   logDetailsFontSize: number;
@@ -215,6 +216,7 @@ interface UiState {
   setShowAboutDialog: (show: boolean) => void;
   setShowSettingsDialog: (show: boolean) => void;
   setShowEvidenceBundleDialog: (show: boolean) => void;
+  setShowGuidRegistryDialog: (show: boolean) => void;
   setShowFileAssociationPrompt: (show: boolean) => void;
   setLogListFontSize: (fontSize: number) => void;
   increaseLogListFontSize: () => void;
@@ -311,6 +313,7 @@ export const useUiStore = create<UiState>()(
       showAboutDialog: false,
       showSettingsDialog: false,
       showEvidenceBundleDialog: false,
+      showGuidRegistryDialog: false,
       showFileAssociationPrompt: false,
       logListFontSize: DEFAULT_LOG_LIST_FONT_SIZE,
       logDetailsFontSize: DEFAULT_LOG_DETAILS_FONT_SIZE,
@@ -423,6 +426,7 @@ export const useUiStore = create<UiState>()(
       setShowAboutDialog: (show) => set({ showAboutDialog: show }),
       setShowSettingsDialog: (show) => set({ showSettingsDialog: show }),
       setShowEvidenceBundleDialog: (show) => set({ showEvidenceBundleDialog: show }),
+      setShowGuidRegistryDialog: (show) => set({ showGuidRegistryDialog: show }),
       setShowFileAssociationPrompt: (show) => set({ showFileAssociationPrompt: show }),
       setLogListFontSize: (fontSize) =>
         set({ logListFontSize: clampLogListFontSize(fontSize) }),

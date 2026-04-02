@@ -10,6 +10,7 @@ import type { IntuneEvent } from "../../types/intune";
 import { compareEvents } from "../../lib/intune-sort";
 import { useIntuneStore } from "../../stores/intune-store";
 import { EventTimelineRow, getFileName } from "./EventTimelineRow";
+import { EventActivityView } from "./EventActivityView";
 
 interface EventTimelineProps {
   events: IntuneEvent[];
@@ -24,6 +25,7 @@ export function EventTimeline({ events }: EventTimelineProps) {
   const filterStatus = useIntuneStore((s) => s.filterStatus);
   const sortField = useIntuneStore((s) => s.sortField);
   const sortDirection = useIntuneStore((s) => s.sortDirection);
+  const timelineViewMode = useIntuneStore((s) => s.timelineViewMode);
   const showSourceFileLabel = sourceFiles.length > 1 && timelineScope.filePath == null;
 
   const logListFontSize = useUiStore((s) => s.logListFontSize);
@@ -112,6 +114,10 @@ export function EventTimeline({ events }: EventTimelineProps) {
           : "No events match the current filters."}
       </div>
     );
+  }
+
+  if (timelineViewMode === "gantt") {
+    return <EventActivityView events={filteredEvents} />;
   }
 
   return (

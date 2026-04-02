@@ -11,6 +11,8 @@ import {
   LOG_MONOSPACE_FONT_FAMILY,
 } from "../../lib/log-accessibility";
 import { getCategoryColor } from "../../lib/error-categories";
+import { resolveGuidsInMessage } from "../../lib/guid-name-map";
+import { AppWorkloadScriptDetail } from "./AppWorkloadScriptDetail";
 
 export function InfoPane() {
   const entries = useLogStore((state) => state.entries);
@@ -22,6 +24,8 @@ export function InfoPane() {
   const setShowErrorLookupDialog = useUiStore(
     (state) => state.setShowErrorLookupDialog
   );
+
+  const guidNameMap = useLogStore((state) => state.guidNameMap);
 
   const parserDisplay = getParserSelectionDisplay(parserSelection);
   const detailLineHeight = getLogDetailsLineHeight(logDetailsFontSize);
@@ -179,6 +183,42 @@ export function InfoPane() {
             .join(" | ")}
         </div>
       )}
+      {(() => {
+        const resolved = resolveGuidsInMessage(selectedEntry.message, guidNameMap);
+        if (resolved.length === 0) return null;
+        return (
+          <div
+            style={{
+              marginBottom: "8px",
+              padding: "4px 8px",
+              backgroundColor: tokens.colorNeutralBackground3,
+              border: `1px solid ${tokens.colorNeutralStroke2}`,
+              borderRadius: "4px",
+              fontSize: `${Math.max(logDetailsFontSize - 1, 11)}px`,
+              display: "flex",
+              flexDirection: "column",
+              gap: "2px",
+            }}
+          >
+            {resolved.map(({ guid, name }) => (
+              <div key={guid}>
+                <span style={{ color: tokens.colorNeutralForeground3 }}>
+                  {guid.slice(0, 8)}…{" "}
+                </span>
+                <span
+                  style={{
+                    color: tokens.colorBrandForeground1,
+                    fontWeight: 600,
+                  }}
+                >
+                  {name}
+                </span>
+              </div>
+            ))}
+          </div>
+        );
+      })()}
+      <AppWorkloadScriptDetail message={selectedEntry.message} />
       <div
         style={{
           whiteSpace: "pre-wrap",

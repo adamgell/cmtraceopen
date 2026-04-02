@@ -385,6 +385,8 @@ export function useAppActions(): AppActionHandlers {
               repeatedFailures: result.repeatedFailures,
               evidenceBundle: result.evidenceBundle ?? null,
               eventLogAnalysis: result.eventLogAnalysis ?? null,
+              policyMetadata: result.policyMetadata ?? undefined,
+              guidRegistry: result.guidRegistry,
             }
           );
         });

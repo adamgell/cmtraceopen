@@ -10,6 +10,7 @@ import { InfoPane } from "../log-view/InfoPane";
 import { FindBar } from "./FindBar";
 import { FilterDialog } from "../dialogs/FilterDialog";
 import { ErrorLookupDialog } from "../dialogs/ErrorLookupDialog";
+import { GuidRegistryDialog } from "../dialogs/GuidRegistryDialog";
 import { AboutDialog } from "../dialogs/AboutDialog";
 import { SettingsDialog } from "../dialogs/SettingsDialog";
 import { EvidenceBundleDialog } from "../dialogs/EvidenceBundleDialog";
@@ -56,6 +57,7 @@ export function AppShell() {
   const toggleSidebar = useUiStore((s) => s.toggleSidebar);
   const showInfoPane = useUiStore((s) => s.showInfoPane);
   const infoPaneHeight = useUiStore((s) => s.infoPaneHeight);
+  const setInfoPaneHeight = useUiStore((s) => s.setInfoPaneHeight);
   const showFindBar = useUiStore((s) => s.showFindBar);
   const showFilterDialog = useUiStore((s) => s.showFilterDialog);
   const showErrorLookupDialog = useUiStore((s) => s.showErrorLookupDialog);
@@ -80,6 +82,12 @@ export function AppShell() {
   );
   const setShowEvidenceBundleDialog = useUiStore(
     (s) => s.setShowEvidenceBundleDialog
+  );
+  const showGuidRegistryDialog = useUiStore(
+    (s) => s.showGuidRegistryDialog
+  );
+  const setShowGuidRegistryDialog = useUiStore(
+    (s) => s.setShowGuidRegistryDialog
   );
   const setShowFileAssociationPrompt = useUiStore(
     (s) => s.setShowFileAssociationPrompt
@@ -115,6 +123,31 @@ export function AppShell() {
   const setFilteredIds = useFilterStore((s) => s.setFilteredIds);
   const setIsFiltering = useFilterStore((s) => s.setIsFiltering);
   const setFilterError = useFilterStore((s) => s.setFilterError);
+
+  const infoPaneResizeRef = useRef<{ startY: number; startHeight: number } | null>(null);
+
+  useEffect(() => {
+    const onMouseMove = (e: MouseEvent) => {
+      if (!infoPaneResizeRef.current) return;
+      const { startY, startHeight } = infoPaneResizeRef.current;
+      const delta = startY - e.clientY;
+      const newHeight = Math.max(80, Math.min(startHeight + delta, window.innerHeight * 0.7));
+      setInfoPaneHeight(newHeight);
+    };
+    const onMouseUp = () => {
+      if (infoPaneResizeRef.current) {
+        infoPaneResizeRef.current = null;
+        document.body.style.cursor = "";
+        document.body.style.userSelect = "";
+      }
+    };
+    window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("mouseup", onMouseUp);
+    return () => {
+      window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("mouseup", onMouseUp);
+    };
+  }, [setInfoPaneHeight]);
 
   const filterRequestIdRef = useRef(0);
   const inFlightSignatureRef = useRef<string | null>(null);
@@ -319,15 +352,34 @@ export function AppShell() {
           </div>
 
           {showInfoPane && (
-            <div
-              style={{
-                height: `${infoPaneHeight}px`,
-                flexShrink: 0,
-                overflow: "hidden",
-              }}
-            >
-              <InfoPane />
-            </div>
+            <>
+              <div
+                role="separator"
+                aria-orientation="horizontal"
+                aria-label="Resize detail pane"
+                style={{
+                  height: "4px",
+                  flexShrink: 0,
+                  cursor: "row-resize",
+                  backgroundColor: tokens.colorNeutralStroke2,
+                }}
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  infoPaneResizeRef.current = { startY: e.clientY, startHeight: infoPaneHeight };
+                  document.body.style.cursor = "row-resize";
+                  document.body.style.userSelect = "none";
+                }}
+              />
+              <div
+                style={{
+                  height: `${infoPaneHeight}px`,
+                  flexShrink: 0,
+                  overflow: "hidden",
+                }}
+              >
+                <InfoPane />
+              </div>
+            </>
           )}
         </>
       );
@@ -512,6 +564,10 @@ export function AppShell() {
       <SettingsDialog
         isOpen={showSettingsDialog}
         onClose={() => setShowSettingsDialog(false)}
+      />
+      <GuidRegistryDialog
+        isOpen={showGuidRegistryDialog}
+        onClose={() => setShowGuidRegistryDialog(false)}
       />
       <EvidenceBundleDialog
         isOpen={showEvidenceBundleDialog}
