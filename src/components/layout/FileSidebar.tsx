@@ -330,6 +330,7 @@ function LogSidebar() {
   const isLoading = useLogStore((s) => s.isLoading);
   const knownSources = useLogStore((s) => s.knownSources);
   const sourceStatus = useLogStore((s) => s.sourceStatus);
+  const createMergedTab = useLogStore((s) => s.createMergedTab);
   const clearFilter = useFilterStore((s) => s.clearFilter);
 
   const [pendingPath, setPendingPath] = useState<string | null>(null);
@@ -554,6 +555,31 @@ function LogSidebar() {
                     : "Select a file to begin viewing log entries."
               }
             />
+            {files.length >= 2 && (
+              <div style={{ padding: "8px 10px 0" }}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const filePaths = files.map((e) => e.path);
+                    createMergedTab(filePaths);
+                  }}
+                  style={{
+                    width: "100%",
+                    padding: "6px 8px",
+                    marginBottom: "8px",
+                    fontSize: "11px",
+                    border: `1px solid ${tokens.colorNeutralStroke2}`,
+                    borderRadius: "4px",
+                    backgroundColor: tokens.colorNeutralBackground1,
+                    color: tokens.colorNeutralForeground1,
+                    cursor: "pointer",
+                    fontWeight: 500,
+                  }}
+                >
+                  Merge into Timeline
+                </button>
+              </div>
+            )}
             {files.length === 0 ? (
               <EmptyState title="No files available" body="This source only returned folders." />
             ) : (
