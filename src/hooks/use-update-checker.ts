@@ -155,6 +155,12 @@ export function useUpdateChecker() {
     if (startupCheckDone.current) return;
     startupCheckDone.current = true;
 
+    const autoUpdateEnabled = useUiStore.getState().autoUpdateEnabled;
+    if (!autoUpdateEnabled) {
+      console.info("[update-checker] auto-update disabled, skipping startup check");
+      return;
+    }
+
     const timer = setTimeout(async () => {
       const info = await checkForUpdates();
       if (info?.available && info.newVersion) {
