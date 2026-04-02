@@ -17,6 +17,9 @@ All notable changes to this project will be documented in this file.
 - **Jump to Line**: Context menu action to jump to a specific line number in the log.
 - **Reveal in File Manager**: Context menu action to open the source file's location in Finder/Explorer.
 - **Quick Filter**: Context menu action to instantly filter by the selected row's severity or component.
+- **Multi-file unified timeline**: Merge entries from multiple open log files into a single time-sorted view. Two entry points: "Merge Tabs..." button in the toolbar and "Merge into Timeline" button in the folder sidebar. Color-coded left borders distinguish source files. A legend bar provides per-file toggle visibility, correlation time window, and auto-correlate controls. Cross-file timestamp correlation highlights entries from other files within a configurable time window and shows them in the InfoPane with delta timestamps.
+- **Session save/restore**: Save the current workspace state (open files, scroll positions, filters, merged tabs, workspace context) to a `.cmtrace` JSON file via File > Save Session (Ctrl+Shift+S). Restore via File > Open Session or Recent Sessions submenu. Files are integrity-checked with SHA-256 hashes — warns if files have changed or are missing since the session was saved. New `compute_file_hash` Rust backend command.
+- **Log diff**: Compare two open log files side-by-side or in unified inline view. Fuzzy pattern matching normalizes GUIDs, timestamps, and long numbers so "same event, different instance" lines are recognized as matches. Stats bar shows common patterns vs. lines unique to each file. "Diff Tabs..." button in the toolbar opens a config dialog for source selection.
 
 ### Fixed
 

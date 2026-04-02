@@ -6,6 +6,7 @@ import { TabStrip } from "./TabStrip";
 import { StatusBar } from "./StatusBar";
 import { FileSidebar, FILE_SIDEBAR_RECOMMENDED_WIDTH } from "./FileSidebar";
 import { LogListView } from "../log-view/LogListView";
+import { DiffView } from "../log-view/DiffView";
 import { InfoPane } from "../log-view/InfoPane";
 import { FindBar } from "./FindBar";
 import { FilterDialog } from "../dialogs/FilterDialog";
@@ -19,6 +20,7 @@ import { CollectDiagnosticsDialog } from "../dialogs/CollectDiagnosticsDialog";
 import { CollectionCompleteDialog } from "../dialogs/CollectionCompleteDialog";
 import { UpdateDialog } from "../dialogs/UpdateDialog";
 import { MergeTabsDialog } from "../dialogs/MergeTabsDialog";
+import { DiffConfigDialog } from "../dialogs/DiffConfigDialog";
 import { IntuneDashboard } from "../intune/IntuneDashboard";
 import { NewIntuneWorkspace } from "../intune/NewIntuneWorkspace";
 import { DsregcmdWorkspace } from "../dsregcmd/DsregcmdWorkspace";
@@ -105,6 +107,10 @@ export function AppShell() {
   const showMergeTabsDialog = useUiStore((s) => s.showMergeTabsDialog);
   const setShowMergeTabsDialog = useUiStore((s) => s.setShowMergeTabsDialog);
   const createMergedTab = useLogStore((s) => s.createMergedTab);
+  const showDiffConfigDialog = useUiStore((s) => s.showDiffConfigDialog);
+  const setShowDiffConfigDialog = useUiStore((s) => s.setShowDiffConfigDialog);
+  const createDiff = useLogStore((s) => s.createDiff);
+  const sourceOpenMode = useLogStore((s) => s.sourceOpenMode);
 
   useCollectionProgressListener();
   useParseProgressListener();
@@ -304,7 +310,7 @@ export function AppShell() {
               position: "relative",
             }}
           >
-            <LogListView />
+            {sourceOpenMode === "diff" ? <DiffView /> : <LogListView />}
 
             {/* Folder loading overlay with progress bar */}
             {folderLoadProgress !== null && (
@@ -593,6 +599,11 @@ export function AppShell() {
         isOpen={showMergeTabsDialog}
         onClose={() => setShowMergeTabsDialog(false)}
         onMerge={(filePaths) => createMergedTab(filePaths)}
+      />
+      <DiffConfigDialog
+        isOpen={showDiffConfigDialog}
+        onClose={() => setShowDiffConfigDialog(false)}
+        onCompare={(sourceA, sourceB) => createDiff(sourceA, sourceB)}
       />
       <UpdateDialog
         isOpen={showUpdateDialog}
