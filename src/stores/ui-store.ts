@@ -8,7 +8,8 @@ import {
 } from "../lib/log-accessibility";
 import type { ThemeId } from "../lib/themes/types";
 import { DEFAULT_THEME_ID } from "../lib/themes";
-import { clearCachedTabSnapshot } from "./log-store";
+import { clearCachedTabSnapshot, useLogStore } from "./log-store";
+import { useFilterStore } from "./filter-store";
 import type { ColumnId } from "../lib/column-config";
 import type { CollectionResult } from "../lib/commands";
 import type { WorkspaceId } from "../types/log";
@@ -45,6 +46,7 @@ const WORKSPACE_PLATFORM_MAP: Record<WorkspaceId, PlatformId[] | "all"> = {
   dsregcmd: ["windows"],
   "macos-diag": ["macos"],
   deployment: ["windows"],
+  "event-log": "all",
 };
 
 export function getAvailableWorkspaces(
@@ -142,6 +144,14 @@ export function getUiChromeStatus(
     };
   }
 
+  if (activeView === "event-log") {
+    return {
+      viewLabel: "Event Log Viewer workspace",
+      detailsLabel: "Details hidden in Event Log Viewer workspace",
+      infoLabel: "Info hidden in Event Log Viewer workspace",
+    };
+  }
+
   return {
     viewLabel: "Log view",
     detailsLabel: showDetails ? "Details on" : "Details off",
@@ -159,7 +169,7 @@ interface UiState {
   showFilterDialog: boolean;
   showErrorLookupDialog: boolean;
   showAboutDialog: boolean;
-  showAccessibilityDialog: boolean;
+  showSettingsDialog: boolean;
   showEvidenceBundleDialog: boolean;
   showFileAssociationPrompt: boolean;
   logListFontSize: number;
@@ -178,11 +188,16 @@ interface UiState {
     description: string;
     category: string;
   } | null;
+  /** Error code string to pre-populate in the Error Lookup dialog on next open. Consumed and cleared by the dialog. */
+  lookupErrorCode: string | null;
   currentPlatform: PlatformId;
   enabledWorkspaces: WorkspaceId[] | null;
   collectionProgress: CollectionProgressState | null;
   collectionResult: CollectionResult | null;
   showCollectDiagnosticsDialog: boolean;
+  autoUpdateEnabled: boolean;
+  defaultShowInfoPane: boolean;
+  confirmTabClose: boolean;
   showUpdateDialog: boolean;
 
   setActiveWorkspace: (workspace: WorkspaceId) => void;
@@ -198,7 +213,7 @@ interface UiState {
   setShowFilterDialog: (show: boolean) => void;
   setShowErrorLookupDialog: (show: boolean) => void;
   setShowAboutDialog: (show: boolean) => void;
-  setShowAccessibilityDialog: (show: boolean) => void;
+  setShowSettingsDialog: (show: boolean) => void;
   setShowEvidenceBundleDialog: (show: boolean) => void;
   setShowFileAssociationPrompt: (show: boolean) => void;
   setLogListFontSize: (fontSize: number) => void;
@@ -219,9 +234,14 @@ interface UiState {
       category: string;
     } | null
   ) => void;
+  /** Pre-populate the Error Lookup dialog with a code string, then clear it after consumption. */
+  setLookupErrorCode: (code: string | null) => void;
   addErrorLookupHistoryEntry: (entry: ErrorLookupHistoryEntry) => void;
   clearErrorLookupHistory: () => void;
   closeTransientDialogs: (trigger: string) => void;
+  setAutoUpdateEnabled: (enabled: boolean) => void;
+  setDefaultShowInfoPane: (show: boolean) => void;
+  setConfirmTabClose: (confirm: boolean) => void;
   setColumnWidth: (columnId: string, width: number) => void;
   resetColumnWidths: () => void;
   setColumnOrder: (order: ColumnId[]) => void;
@@ -289,7 +309,7 @@ export const useUiStore = create<UiState>()(
       showFilterDialog: false,
       showErrorLookupDialog: false,
       showAboutDialog: false,
-      showAccessibilityDialog: false,
+      showSettingsDialog: false,
       showEvidenceBundleDialog: false,
       showFileAssociationPrompt: false,
       logListFontSize: DEFAULT_LOG_LIST_FONT_SIZE,
@@ -303,8 +323,12 @@ export const useUiStore = create<UiState>()(
       activeTabIndex: -1,
       errorLookupHistory: [],
       focusedErrorCode: null,
+      lookupErrorCode: null,
       currentPlatform: "windows" as PlatformId,
       enabledWorkspaces: null,
+      autoUpdateEnabled: true,
+      defaultShowInfoPane: true,
+      confirmTabClose: false,
       collectionProgress: null,
       collectionResult: null,
       showCollectDiagnosticsDialog: false,
@@ -397,7 +421,7 @@ export const useUiStore = create<UiState>()(
       setShowFilterDialog: (show) => set({ showFilterDialog: show }),
       setShowErrorLookupDialog: (show) => set({ showErrorLookupDialog: show }),
       setShowAboutDialog: (show) => set({ showAboutDialog: show }),
-      setShowAccessibilityDialog: (show) => set({ showAccessibilityDialog: show }),
+      setShowSettingsDialog: (show) => set({ showSettingsDialog: show }),
       setShowEvidenceBundleDialog: (show) => set({ showEvidenceBundleDialog: show }),
       setShowFileAssociationPrompt: (show) => set({ showFileAssociationPrompt: show }),
       setLogListFontSize: (fontSize) =>
@@ -426,6 +450,7 @@ export const useUiStore = create<UiState>()(
           themeId: DEFAULT_THEME_ID,
         }),
       setFocusedErrorCode: (code) => set({ focusedErrorCode: code }),
+      setLookupErrorCode: (code) => set({ lookupErrorCode: code }),
       addErrorLookupHistoryEntry: (entry) =>
         set((state) => ({
           errorLookupHistory: [
@@ -442,7 +467,7 @@ export const useUiStore = create<UiState>()(
           !state.showFilterDialog &&
           !state.showErrorLookupDialog &&
           !state.showAboutDialog &&
-          !state.showAccessibilityDialog &&
+          !state.showSettingsDialog &&
           !state.showEvidenceBundleDialog &&
           !state.showFileAssociationPrompt &&
           !state.showCollectDiagnosticsDialog &&
@@ -458,7 +483,7 @@ export const useUiStore = create<UiState>()(
           showFilterDialog: false,
           showErrorLookupDialog: false,
           showAboutDialog: false,
-          showAccessibilityDialog: false,
+          showSettingsDialog: false,
           showEvidenceBundleDialog: false,
           showFileAssociationPrompt: false,
           showCollectDiagnosticsDialog: false,
@@ -466,6 +491,9 @@ export const useUiStore = create<UiState>()(
         });
       },
 
+      setAutoUpdateEnabled: (enabled) => set({ autoUpdateEnabled: enabled }),
+      setDefaultShowInfoPane: (show) => set({ defaultShowInfoPane: show }),
+      setConfirmTabClose: (confirm) => set({ confirmTabClose: confirm }),
       setColumnWidth: (columnId, width) =>
         set((state) => ({
           columnWidths: { ...state.columnWidths, [columnId]: width },
@@ -510,6 +538,7 @@ export const useUiStore = create<UiState>()(
         set({
           openTabs: [...openTabs, newTab],
           activeTabIndex: openTabs.length,
+          showInfoPane: get().defaultShowInfoPane,
         });
       },
 
@@ -519,12 +548,21 @@ export const useUiStore = create<UiState>()(
           console.warn("[ui-store] closeTab: invalid index", { index, tabCount: openTabs.length });
           return;
         }
+        if (get().confirmTabClose) {
+          const tab = openTabs[index];
+          const fileName = tab.filePath.split(/[/\\]/).pop() ?? tab.filePath;
+          const confirmed = window.confirm(`Close "${fileName}"?`);
+          if (!confirmed) return;
+        }
         // Evict parsed entry cache for the closed tab
         clearCachedTabSnapshot(openTabs[index].filePath);
         const newTabs = openTabs.filter((_, i) => i !== index);
         let newActive = activeTabIndex;
         if (newTabs.length === 0) {
           newActive = -1;
+          // Clear stale log content and filters when all tabs are closed
+          useLogStore.getState().clearActiveFile();
+          useFilterStore.getState().clearFilter();
         } else if (index === activeTabIndex) {
           newActive = index > 0 ? index - 1 : 0;
         } else if (index < activeTabIndex) {
@@ -567,6 +605,9 @@ export const useUiStore = create<UiState>()(
         columnWidths: state.columnWidths,
         columnOrder: state.columnOrder,
         sidebarCollapsed: state.sidebarCollapsed,
+        autoUpdateEnabled: state.autoUpdateEnabled,
+        defaultShowInfoPane: state.defaultShowInfoPane,
+        confirmTabClose: state.confirmTabClose,
       }),
       merge: (persistedState, currentState) => {
         const raw = persistedState as Partial<UiState> & {

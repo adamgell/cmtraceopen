@@ -41,7 +41,7 @@ const OPS: { label: string; value: FilterOp }[] = [
   { label: "is after", value: "After" },
 ];
 
-function emptyClause(): FilterClause {
+export function emptyClause(): FilterClause {
   return { field: "Message", op: "Contains", value: "" };
 }
 

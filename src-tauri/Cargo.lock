@@ -520,7 +520,7 @@ dependencies = [
 
 [[package]]
 name = "cmtrace-open"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "chrono",
  "criterion",

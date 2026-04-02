@@ -24,7 +24,7 @@ export function useAppMenu() {
     showErrorLookupDialog,
     showEvidenceBundleDialog,
     showAboutDialog,
-    showAccessibilityDialog,
+    showSettingsDialog,
     togglePauseResume,
     refreshActiveSource,
     toggleDetailsPane,
@@ -76,8 +76,8 @@ export function useAppMenu() {
           case "show_about":
             showAboutDialog();
             return;
-          case "show_accessibility_settings":
-            showAccessibilityDialog();
+          case "show_settings":
+            showSettingsDialog();
             return;
           case "collect_diagnostics":
             useUiStore.getState().setShowCollectDiagnosticsDialog(true);
@@ -130,7 +130,7 @@ export function useAppMenu() {
     openSourceFileDialog,
     openSourceFolderDialog,
     refreshActiveSource,
-    showAccessibilityDialog,
+    showSettingsDialog,
     showAboutDialog,
     showErrorLookupDialog,
     showEvidenceBundleDialog,

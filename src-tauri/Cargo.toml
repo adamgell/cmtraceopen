@@ -16,7 +16,8 @@ tauri-build = { version = "2", features = [] }
 
 [features]
 default = ["full"]
-full = ["collector", "deployment", "dsregcmd", "intune-diagnostics", "macos-diag"]
+full = ["collector", "deployment", "dsregcmd", "event-log", "intune-diagnostics", "macos-diag"]
+event-log = ["dep:evtx"]
 collector = []
 deployment = []
 dsregcmd = ["dep:ureq", "intune-diagnostics"]

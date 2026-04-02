@@ -18,6 +18,7 @@ interface LogRowProps {
   highlightText: string;
   highlightCaseSensitive: boolean;
   onClick: (id: number) => void;
+  onContextMenu: (entry: LogEntry, event: React.MouseEvent) => void;
   onErrorCodeClick?: (span: ErrorCodeSpan) => void;
 }
 
@@ -231,6 +232,7 @@ export const LogRow = memo(function LogRow({
   highlightText,
   highlightCaseSensitive,
   onClick,
+  onContextMenu,
   onErrorCodeClick,
 }: LogRowProps) {
   const style = getRowStyle(entry, isSelected, isFindMatch, severityPalette);
@@ -256,6 +258,7 @@ export const LogRow = memo(function LogRow({
         boxShadow: `inset 3px 0 0 ${isSelected ? tokens.colorNeutralForegroundOnBrand : "transparent"}`,
       }}
       onClick={() => onClick(entry.id)}
+      onContextMenu={(e) => onContextMenu(entry, e)}
     >
       {visibleColumns.map((col) => {
         // Severity column: colored dot indicator

@@ -19,5 +19,9 @@ pub fn get_available_workspaces() -> Vec<&'static str> {
         workspaces.push("deployment");
     }
 
+    if cfg!(feature = "event-log") {
+        workspaces.push("event-log");
+    }
+
     workspaces
 }

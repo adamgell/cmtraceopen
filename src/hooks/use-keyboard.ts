@@ -111,8 +111,8 @@ export function useKeyboard() {
     (state) => state.showErrorLookupDialog
   );
   const showAboutDialogOpen = useUiStore((state) => state.showAboutDialog);
-  const showAccessibilityDialogOpen = useUiStore(
-    (state) => state.showAccessibilityDialog
+  const showSettingsDialogOpen = useUiStore(
+    (state) => state.showSettingsDialog
   );
   const showEvidenceBundleDialogOpen = useUiStore(
     (state) => state.showEvidenceBundleDialog
@@ -143,7 +143,7 @@ export function useKeyboard() {
         showFilterDialogOpen ||
         showErrorLookupDialogOpen ||
         showAboutDialogOpen ||
-        showAccessibilityDialogOpen ||
+        showSettingsDialogOpen ||
         showEvidenceBundleDialogOpen ||
         showFileAssociationPromptOpen;
 
@@ -301,7 +301,7 @@ export function useKeyboard() {
     refreshActiveSource,
     resetLogListTextSize,
     showEvidenceBundleDialogOpen,
-    showAccessibilityDialogOpen,
+    showSettingsDialogOpen,
     showAboutDialogOpen,
     showErrorLookupDialog,
     showErrorLookupDialogOpen,

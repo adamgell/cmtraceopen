@@ -98,6 +98,7 @@ const WORKSPACE_LABELS: Record<WorkspaceId, string> = {
   dsregcmd: "dsregcmd",
   "macos-diag": "macOS Diagnostics",
   deployment: "Software Deployment",
+  "event-log": "Event Log Viewer",
 };
 
 function getOpenFileDialogFilters(workspace: WorkspaceId) {
@@ -202,7 +203,7 @@ export interface AppActionHandlers {
   showFilterDialog: () => void;
   showErrorLookupDialog: () => void;
   showAboutDialog: () => void;
-  showAccessibilityDialog: () => void;
+  showSettingsDialog: () => void;
   showEvidenceBundleDialog: () => void;
   increaseLogListTextSize: () => void;
   decreaseLogListTextSize: () => void;
@@ -242,8 +243,8 @@ export function useAppActions(): AppActionHandlers {
     (s) => s.setShowErrorLookupDialog
   );
   const setShowAboutDialog = useUiStore((s) => s.setShowAboutDialog);
-  const setShowAccessibilityDialog = useUiStore(
-    (s) => s.setShowAccessibilityDialog
+  const setShowSettingsDialog = useUiStore(
+    (s) => s.setShowSettingsDialog
   );
   const setShowEvidenceBundleDialog = useUiStore(
     (s) => s.setShowEvidenceBundleDialog
@@ -632,9 +633,9 @@ export function useAppActions(): AppActionHandlers {
     setShowAboutDialog(true);
   }, [setShowAboutDialog]);
 
-  const showAccessibilityDialog = useCallback(() => {
-    setShowAccessibilityDialog(true);
-  }, [setShowAccessibilityDialog]);
+  const showSettingsDialog = useCallback(() => {
+    setShowSettingsDialog(true);
+  }, [setShowSettingsDialog]);
 
   const showEvidenceBundleDialog = useCallback(() => {
     const canShowForView =
@@ -744,7 +745,7 @@ export function useAppActions(): AppActionHandlers {
     showFilterDialog,
     showErrorLookupDialog,
     showAboutDialog,
-    showAccessibilityDialog,
+    showSettingsDialog,
     showEvidenceBundleDialog,
     increaseLogListTextSize,
     decreaseLogListTextSize,

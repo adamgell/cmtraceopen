@@ -57,6 +57,8 @@ export function ErrorLookupDialog({ isOpen, onClose }: ErrorLookupDialogProps) {
 
   const history = useUiStore((s) => s.errorLookupHistory);
   const addHistoryEntry = useUiStore((s) => s.addErrorLookupHistoryEntry);
+  const lookupErrorCode = useUiStore((s) => s.lookupErrorCode);
+  const setLookupErrorCode = useUiStore((s) => s.setLookupErrorCode);
 
   const doSearch = useCallback(
     async (q: string) => {
@@ -132,11 +134,17 @@ export function ErrorLookupDialog({ isOpen, onClose }: ErrorLookupDialogProps) {
     };
   }, [query, isOpen, doSearch]);
 
-  // Focus input on open, reset state on close
+  // Focus input on open, reset state on close; consume pre-populated error code
   useEffect(() => {
-    if (isOpen && inputRef.current) {
-      inputRef.current.focus();
-      inputRef.current.select();
+    if (isOpen) {
+      if (lookupErrorCode) {
+        setQuery(lookupErrorCode);
+        setLookupErrorCode(null);
+      }
+      if (inputRef.current) {
+        inputRef.current.focus();
+        inputRef.current.select();
+      }
     }
 
     if (!isOpen) {
@@ -145,7 +153,7 @@ export function ErrorLookupDialog({ isOpen, onClose }: ErrorLookupDialogProps) {
       setIsSearching(false);
       setSearchError(null);
     }
-  }, [isOpen]);
+  }, [isOpen, lookupErrorCode, setLookupErrorCode]);
 
   const handleCopy = async (r: ErrorSearchResult | ErrorLookupHistoryEntry) => {
     const text = `${r.codeHex} - ${r.description}`;

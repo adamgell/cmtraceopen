@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { FilterClause } from "../components/dialogs/FilterDialog";
+import type { FilterClause, FilterField, FilterOp } from "../components/dialogs/FilterDialog";
 import { useLogStore } from "./log-store";
 
 export interface FilterStatusSnapshot {
@@ -86,6 +86,7 @@ interface FilterState {
   filterError: string | null;
 
   hasActiveFilter: () => boolean;
+  addQuickFilter: (field: FilterField, value: string, op: FilterOp) => void;
   setClauses: (clauses: FilterClause[]) => void;
   setFilteredIds: (ids: Set<number> | null) => void;
   setIsFiltering: (filtering: boolean) => void;
@@ -100,6 +101,8 @@ export const useFilterStore = create<FilterState>((set, get) => ({
   filterError: null,
 
   hasActiveFilter: () => get().clauses.length > 0,
+  addQuickFilter: (field, value, op) =>
+    set((state) => ({ clauses: [...state.clauses, { field, value, op }] })),
   setClauses: (clauses) => set({ clauses }),
   setFilteredIds: (ids) => {
     set({ filteredIds: ids });

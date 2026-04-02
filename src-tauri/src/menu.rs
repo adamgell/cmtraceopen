@@ -21,7 +21,7 @@ pub const MENU_ID_TOOLS_COLLECT_DIAGNOSTICS: &str = "tools.collect_diagnostics";
 
 pub const MENU_ID_WINDOW_TOGGLE_DETAILS: &str = "window.toggle.details";
 pub const MENU_ID_WINDOW_TOGGLE_INFO: &str = "window.toggle.info";
-pub const MENU_ID_WINDOW_ACCESSIBILITY_SETTINGS: &str = "window.accessibility.settings";
+pub const MENU_ID_WINDOW_SETTINGS: &str = "window.settings";
 pub const MENU_ID_HELP_CHECK_FOR_UPDATES: &str = "help.check_for_updates";
 pub const MENU_ID_HELP_ABOUT: &str = "help.about";
 
@@ -96,12 +96,12 @@ pub fn build_app_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> 
         true,
         None::<&str>,
     )?;
-    let accessibility_settings = MenuItem::with_id(
+    let settings = MenuItem::with_id(
         app,
-        MENU_ID_WINDOW_ACCESSIBILITY_SETTINGS,
-        "Accessibility Settings...",
+        MENU_ID_WINDOW_SETTINGS,
+        "Settings...",
         true,
-        None::<&str>,
+        Some("CmdOrCtrl+,"),
     )?;
     let check_for_updates = MenuItem::with_id(
         app,
@@ -130,7 +130,7 @@ pub fn build_app_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> 
         &[
             &toggle_details,
             &toggle_info,
-            &accessibility_settings,
+            &settings,
         ],
     )?;
     let help_menu = Submenu::with_items(app, "Help", true, &[&check_for_updates, &about])?;
@@ -415,10 +415,10 @@ fn payload_for_menu_id(menu_id: &str) -> Option<AppMenuActionPayload> {
             trigger: "menu".to_string(),
             source_id: None,
         },
-        MENU_ID_WINDOW_ACCESSIBILITY_SETTINGS => AppMenuActionPayload {
+        MENU_ID_WINDOW_SETTINGS => AppMenuActionPayload {
             version: 1,
-            menu_id: MENU_ID_WINDOW_ACCESSIBILITY_SETTINGS.to_string(),
-            action: "show_accessibility_settings".to_string(),
+            menu_id: MENU_ID_WINDOW_SETTINGS.to_string(),
+            action: "show_settings".to_string(),
             category: "window".to_string(),
             trigger: "menu".to_string(),
             source_id: None,
