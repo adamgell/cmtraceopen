@@ -20,6 +20,7 @@ const SOURCE_LABELS: Record<string, { label: string; color: string }> = {
   ApplicationName: { label: "AppName", color: tokens.colorPaletteGreenForeground1 },
   NameField: { label: "Name", color: tokens.colorBrandForeground1 },
   SetUpFilePath: { label: "FilePath", color: tokens.colorNeutralForeground3 },
+  GraphApi: { label: "Graph API", color: tokens.colorPalettePurpleForeground2 },
 };
 
 type TabId = "all" | "apps" | "scripts" | "remediations";

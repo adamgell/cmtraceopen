@@ -64,19 +64,60 @@ pub async fn analyze_intune_logs(
     path: String,
     request_id: String,
     include_live_event_logs: bool,
+    graph_api_enabled: bool,
     app: AppHandle,
+    #[cfg(target_os = "windows")] graph_state: tauri::State<'_, crate::graph_api::GraphAuthState>,
 ) -> Result<IntuneAnalysisResult, crate::error::AppError> {
+    // Attempt Graph API enrichment before spawning the blocking task.
+    // We capture the resolved map here (on the async side) so the blocking
+    // task doesn't need Send-unfriendly state references.
+    #[cfg(target_os = "windows")]
+    let graph_resolved = if graph_api_enabled {
+        try_graph_prefetch(&graph_state)
+    } else {
+        None
+    };
+    #[cfg(not(target_os = "windows"))]
+    let graph_resolved: Option<std::collections::HashMap<String, String>> = None;
+
     Ok(async_runtime::spawn_blocking(move || {
-        analyze_intune_logs_blocking(path, request_id, include_live_event_logs, app)
+        analyze_intune_logs_blocking(path, request_id, include_live_event_logs, graph_resolved, app)
     })
     .await
     .map_err(|error| crate::error::AppError::Internal(format!("Intune analysis task failed: {}", error)))??)
+}
+
+/// Pre-fetch all Intune apps from Graph API and return a guid→name map.
+/// Returns None if auth isn't active or the call fails (non-blocking fallback).
+#[cfg(target_os = "windows")]
+fn try_graph_prefetch(
+    state: &crate::graph_api::GraphAuthState,
+) -> Option<HashMap<String, String>> {
+    match crate::graph_api::fetch_all_apps(state) {
+        Ok(apps) => {
+            let map: HashMap<String, String> = apps
+                .into_iter()
+                .map(|a| (a.id, a.display_name))
+                .collect();
+            if map.is_empty() {
+                None
+            } else {
+                log::info!("event=graph_api_prefetch apps={}", map.len());
+                Some(map)
+            }
+        }
+        Err(e) => {
+            log::warn!("event=graph_api_prefetch_failed error=\"{e}\"");
+            None
+        }
+    }
 }
 
 fn analyze_intune_logs_blocking(
     path: String,
     request_id: String,
     include_live_event_logs: bool,
+    graph_resolved: Option<HashMap<String, String>>,
     app: AppHandle,
 ) -> Result<IntuneAnalysisResult, String> {
     let analysis_started = Instant::now();
@@ -147,6 +188,26 @@ fn analyze_intune_logs_blocking(
     for processed_file in &processed_files {
         guid_registry.merge(&processed_file.guid_registry);
     }
+    // Enrich the GUID registry with Graph API data (highest confidence source).
+    // This fills in any GUIDs that weren't resolved from log lines.
+    if let Some(ref graph_map) = graph_resolved {
+        let mut graph_enriched = 0u32;
+        for (guid, name) in graph_map {
+            let normalized = guid.to_lowercase();
+            guid_registry.insert(
+                normalized,
+                name.clone(),
+                crate::intune::guid_registry::GuidNameSource::GraphApi,
+            );
+            graph_enriched += 1;
+        }
+        log::info!(
+            "event=graph_api_enrichment entries_added={} total_registry={}",
+            graph_enriched,
+            guid_registry.len()
+        );
+    }
+
     let guid_registry_map = guid_registry.to_serializable();
 
     let mut all_events = Vec::new();

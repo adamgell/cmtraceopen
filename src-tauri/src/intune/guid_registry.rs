@@ -64,8 +64,10 @@ pub enum GuidNameSource {
     SetUpFilePath = 0,
     /// `"Name"` JSON field
     NameField = 1,
-    /// `"ApplicationName"` JSON field — highest confidence
+    /// `"ApplicationName"` JSON field
     ApplicationName = 2,
+    /// Microsoft Graph API — highest confidence (canonical display name)
+    GraphApi = 3,
 }
 
 /// A resolved identity for a GUID observed in IME logs.
@@ -171,6 +173,19 @@ impl GuidRegistry {
     /// Returns `true` if the registry contains no entries.
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
+    }
+
+    /// Insert a GUID→name entry from an external source (e.g. Graph API).
+    pub fn insert(&mut self, guid: String, name: String, source: GuidNameSource) {
+        self.insert_if_dominated(guid, name, source);
+    }
+
+    /// Collect all GUIDs that have no resolved name.
+    pub fn unresolved_guids_from<'a>(&self, guids: impl Iterator<Item = &'a str>) -> Vec<String> {
+        guids
+            .filter(|g| !self.entries.contains_key(*g))
+            .map(|g| g.to_string())
+            .collect()
     }
 
     /// Iterate over all `(guid, entry)` pairs in the registry.

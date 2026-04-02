@@ -218,6 +218,7 @@ interface IntuneState {
   setFilterStatus: (status: IntuneStatus | "All") => void;
   setEventLogFilterChannel: (channel: EventLogChannel | "All") => void;
   setEventLogFilterSeverity: (severity: EventLogSeverity | "All") => void;
+  mergeGuidRegistry: (entries: Record<string, import("../types/intune").GuidRegistryEntry>) => void;
   selectEventLogEntry: (id: number | null) => void;
   setActiveTab: (tab: IntuneWorkspaceTab) => void;
   setTimelineViewMode: (mode: IntuneTimelineViewMode) => void;
@@ -456,6 +457,9 @@ export const useIntuneStore = create<IntuneState>((set) => ({
   setFilterStatus: (status) => set({ filterStatus: status }),
   setEventLogFilterChannel: (channel) => set({ eventLogFilterChannel: channel }),
   setEventLogFilterSeverity: (severity) => set({ eventLogFilterSeverity: severity }),
+  mergeGuidRegistry: (entries) => set((state) => ({
+    guidRegistry: { ...state.guidRegistry, ...entries },
+  })),
   selectEventLogEntry: (id) => set({ selectedEventLogEntryId: id }),
   setActiveTab: (tab) => set({ activeTab: tab }),
   setTimelineViewMode: (mode) => set({ timelineViewMode: mode }),

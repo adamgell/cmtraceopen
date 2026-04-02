@@ -369,6 +369,7 @@ export function useAppActions(): AppActionHandlers {
 
         const result = await analyzeIntuneLogs(getLogSourcePath(source), requestId, {
           includeLiveEventLogs: shouldIncludeLiveEventLogs(source),
+          graphApiEnabled: useUiStore.getState().graphApiEnabled,
         });
 
         startTransition(() => {

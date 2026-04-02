@@ -20,7 +20,7 @@ full = ["collector", "deployment", "dsregcmd", "event-log", "intune-diagnostics"
 event-log = ["dep:evtx"]
 collector = []
 deployment = []
-dsregcmd = ["dep:ureq", "intune-diagnostics"]
+dsregcmd = ["intune-diagnostics"]
 intune-diagnostics = ["dep:evtx"]
 macos-diag = ["dep:plist"]
 
@@ -53,8 +53,17 @@ plist = { version = "1", optional = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 winreg = "0.52"
-windows = { version = "0.58", features = ["Win32_Foundation", "Win32_System_EventLog", "Win32_Security"] }
-ureq = { version = "2", optional = true }
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_System_EventLog",
+    "Win32_Security",
+    "Security_Authentication_Web_Core",
+    "Security_Credentials",
+    "Foundation",
+    "Foundation_Collections",
+    "Win32_System_WinRT",
+] }
+ureq = "2"
 
 [dev-dependencies]
 criterion = "0.5"

@@ -6,8 +6,9 @@ import { ColumnsTab } from "./settings/ColumnsTab";
 import { BehaviorTab } from "./settings/BehaviorTab";
 import { UpdatesTab } from "./settings/UpdatesTab";
 import { FileAssociationsTab } from "./settings/FileAssociationsTab";
+import { GraphApiTab } from "./settings/GraphApiTab";
 
-type SettingsTabId = "appearance" | "columns" | "behavior" | "updates" | "file-associations";
+type SettingsTabId = "appearance" | "columns" | "behavior" | "updates" | "file-associations" | "graph-api";
 
 interface TabDef {
   id: SettingsTabId;
@@ -21,6 +22,7 @@ const TABS: TabDef[] = [
   { id: "behavior", label: "Behavior" },
   { id: "updates", label: "Updates" },
   { id: "file-associations", label: "File Associations", windowsOnly: true },
+  { id: "graph-api", label: "Graph API", windowsOnly: true },
 ];
 
 interface SettingsDialogProps {
@@ -94,6 +96,8 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
         return <UpdatesTab />;
       case "file-associations":
         return <FileAssociationsTab />;
+      case "graph-api":
+        return <GraphApiTab />;
     }
   };
 

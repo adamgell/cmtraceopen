@@ -6,6 +6,8 @@ mod commands;
 pub mod dsregcmd;
 pub mod error;
 pub mod error_db;
+#[cfg(target_os = "windows")]
+pub mod graph_api;
 pub mod intune;
 #[cfg(feature = "event-log")]
 pub mod event_log;
@@ -18,6 +20,10 @@ mod state;
 mod watcher;
 
 use state::app_state::AppState;
+use tauri::Manager;
+
+#[cfg(target_os = "windows")]
+use graph_api::GraphAuthState;
 
 /// Returns all non-flag CLI arguments as potential file paths.
 ///
@@ -52,6 +58,9 @@ pub fn run() {
             app.on_menu_event(|app_handle, event| {
                 menu::handle_menu_event(app_handle, event.id().as_ref());
             });
+
+            #[cfg(target_os = "windows")]
+            app.manage(GraphAuthState::new());
 
             Ok(())
         })
@@ -119,6 +128,16 @@ pub fn run() {
             event_log::commands::evtx_enumerate_channels,
             #[cfg(feature = "event-log")]
             event_log::commands::evtx_query_channels,
+            #[cfg(target_os = "windows")]
+            commands::graph_api::graph_authenticate,
+            #[cfg(target_os = "windows")]
+            commands::graph_api::graph_get_auth_status,
+            #[cfg(target_os = "windows")]
+            commands::graph_api::graph_sign_out,
+            #[cfg(target_os = "windows")]
+            commands::graph_api::graph_resolve_guids,
+            #[cfg(target_os = "windows")]
+            commands::graph_api::graph_fetch_all_apps,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

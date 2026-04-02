@@ -202,12 +202,16 @@ interface UiState {
   defaultShowInfoPane: boolean;
   confirmTabClose: boolean;
   showUpdateDialog: boolean;
+<<<<<<< HEAD
 <<<<<<< Updated upstream
   recentSessions: string[];
 =======
   graphApiEnabled: boolean;
   graphApiStatus: "idle" | "connecting" | "connected" | "error";
 >>>>>>> Stashed changes
+=======
+  graphApiEnabled: boolean;
+>>>>>>> d065202 (feat: add Microsoft Graph API integration for GUID resolution)
 
   setActiveWorkspace: (workspace: WorkspaceId) => void;
   setCurrentPlatform: (platform: PlatformId) => void;
@@ -268,6 +272,7 @@ interface UiState {
   setCollectionResult: (result: CollectionResult | null) => void;
   setShowCollectDiagnosticsDialog: (show: boolean) => void;
   setShowUpdateDialog: (show: boolean) => void;
+<<<<<<< HEAD
 <<<<<<< Updated upstream
   addRecentSession: (path: string) => void;
   clearRecentSessions: () => void;
@@ -275,6 +280,9 @@ interface UiState {
   setGraphApiEnabled: (enabled: boolean) => void;
   setGraphApiStatus: (status: "idle" | "connecting" | "connected" | "error") => void;
 >>>>>>> Stashed changes
+=======
+  setGraphApiEnabled: (enabled: boolean) => void;
+>>>>>>> d065202 (feat: add Microsoft Graph API integration for GUID resolution)
 }
 
 const DEFAULT_WORKSPACE: WorkspaceId = "log";
@@ -355,12 +363,16 @@ export const useUiStore = create<UiState>()(
       collectionResult: null,
       showCollectDiagnosticsDialog: false,
       showUpdateDialog: false,
+<<<<<<< HEAD
 <<<<<<< Updated upstream
       recentSessions: [],
 =======
       graphApiEnabled: false,
       graphApiStatus: "idle",
 >>>>>>> Stashed changes
+=======
+      graphApiEnabled: false,
+>>>>>>> d065202 (feat: add Microsoft Graph API integration for GUID resolution)
 
       setCurrentPlatform: (platform) => set({ currentPlatform: platform }),
       setEnabledWorkspaces: (workspaces) => {
@@ -631,6 +643,7 @@ export const useUiStore = create<UiState>()(
       setCollectionResult: (result) => set({ collectionResult: result }),
       setShowCollectDiagnosticsDialog: (show) => set({ showCollectDiagnosticsDialog: show }),
       setShowUpdateDialog: (show) => set({ showUpdateDialog: show }),
+<<<<<<< HEAD
 <<<<<<< Updated upstream
       addRecentSession: (path) =>
         set((state) => {
@@ -642,6 +655,9 @@ export const useUiStore = create<UiState>()(
       setGraphApiEnabled: (enabled) => set({ graphApiEnabled: enabled }),
       setGraphApiStatus: (status) => set({ graphApiStatus: status }),
 >>>>>>> Stashed changes
+=======
+      setGraphApiEnabled: (enabled) => set({ graphApiEnabled: enabled }),
+>>>>>>> d065202 (feat: add Microsoft Graph API integration for GUID resolution)
     }),
     {
       name: "cmtraceopen-ui-preferences",
@@ -656,6 +672,7 @@ export const useUiStore = create<UiState>()(
         autoUpdateEnabled: state.autoUpdateEnabled,
         defaultShowInfoPane: state.defaultShowInfoPane,
         confirmTabClose: state.confirmTabClose,
+        graphApiEnabled: state.graphApiEnabled,
       }),
       merge: (persistedState, currentState) => {
         const raw = persistedState as Partial<UiState> & {

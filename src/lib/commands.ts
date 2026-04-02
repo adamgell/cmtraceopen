@@ -180,12 +180,13 @@ export async function resumeTail(path: string): Promise<void> {
 export async function analyzeIntuneLogs(
   path: string,
   requestId: string,
-  options?: AnalyzeIntuneLogsOptions
+  options?: AnalyzeIntuneLogsOptions & { graphApiEnabled?: boolean }
 ): Promise<IntuneAnalysisResult> {
   return invokeCommand<IntuneAnalysisResult>("analyze_intune_logs", {
     path,
     requestId,
     includeLiveEventLogs: options?.includeLiveEventLogs ?? false,
+    graphApiEnabled: options?.graphApiEnabled ?? false,
   });
 }
 
@@ -281,6 +282,48 @@ export async function collectDiagnostics(
     outputRoot: outputRoot ?? null,
     enabledFamilies: enabledFamilies ?? null,
   });
+}
+
+// --- Graph API (Windows only, opt-in) ---
+
+export interface GraphAuthStatus {
+  isAuthenticated: boolean;
+  userPrincipalName: string | null;
+  tenantId: string | null;
+  error: string | null;
+}
+
+export interface GraphAppInfo {
+  id: string;
+  displayName: string;
+  publisher: string | null;
+  odataType: string | null;
+}
+
+export interface GraphResolutionResult {
+  resolved: Record<string, GraphAppInfo>;
+  notFound: string[];
+  errors: string[];
+}
+
+export async function graphAuthenticate(): Promise<GraphAuthStatus> {
+  return invokeCommand<GraphAuthStatus>("graph_authenticate");
+}
+
+export async function graphGetAuthStatus(): Promise<GraphAuthStatus> {
+  return invokeCommand<GraphAuthStatus>("graph_get_auth_status");
+}
+
+export async function graphSignOut(): Promise<void> {
+  return invokeCommand<void>("graph_sign_out");
+}
+
+export async function graphResolveGuids(guids: string[]): Promise<GraphResolutionResult> {
+  return invokeCommand<GraphResolutionResult>("graph_resolve_guids", { guids });
+}
+
+export async function graphFetchAllApps(): Promise<GraphAppInfo[]> {
+  return invokeCommand<GraphAppInfo[]>("graph_fetch_all_apps");
 }
 
 // --- macOS Diagnostics ---
