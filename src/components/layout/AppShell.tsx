@@ -18,6 +18,7 @@ import { FileAssociationPromptDialog } from "../dialogs/FileAssociationPromptDia
 import { CollectDiagnosticsDialog } from "../dialogs/CollectDiagnosticsDialog";
 import { CollectionCompleteDialog } from "../dialogs/CollectionCompleteDialog";
 import { UpdateDialog } from "../dialogs/UpdateDialog";
+import { MergeTabsDialog } from "../dialogs/MergeTabsDialog";
 import { IntuneDashboard } from "../intune/IntuneDashboard";
 import { NewIntuneWorkspace } from "../intune/NewIntuneWorkspace";
 import { DsregcmdWorkspace } from "../dsregcmd/DsregcmdWorkspace";
@@ -101,6 +102,9 @@ export function AppShell() {
   const setShowCollectDiagnosticsDialog = useUiStore((s) => s.setShowCollectDiagnosticsDialog);
   const showUpdateDialog = useUiStore((s) => s.showUpdateDialog);
   const setShowUpdateDialog = useUiStore((s) => s.setShowUpdateDialog);
+  const showMergeTabsDialog = useUiStore((s) => s.showMergeTabsDialog);
+  const setShowMergeTabsDialog = useUiStore((s) => s.setShowMergeTabsDialog);
+  const createMergedTab = useLogStore((s) => s.createMergedTab);
 
   useCollectionProgressListener();
   useParseProgressListener();
@@ -584,6 +588,11 @@ export function AppShell() {
       <CollectionCompleteDialog
         result={collectionResult}
         onClose={() => setCollectionResult(null)}
+      />
+      <MergeTabsDialog
+        isOpen={showMergeTabsDialog}
+        onClose={() => setShowMergeTabsDialog(false)}
+        onMerge={(filePaths) => createMergedTab(filePaths)}
       />
       <UpdateDialog
         isOpen={showUpdateDialog}
