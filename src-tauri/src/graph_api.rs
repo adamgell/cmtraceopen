@@ -475,7 +475,6 @@ fn fetch_paginated(
         if let Some(value) = body.get("value").and_then(|v| v.as_array()) {
             for item in value {
                 if let Some(mut app) = parse_app_json(item) {
-                    // Apply default type if the item doesn't have one
                     if app.odata_type.is_none() {
                         app.odata_type = default_type.map(String::from);
                     }
