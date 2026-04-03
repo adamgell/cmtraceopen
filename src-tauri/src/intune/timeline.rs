@@ -606,6 +606,8 @@ mod tests {
                 line_number: 2,
                 start_time_epoch: None,
                 end_time_epoch: None,
+                script_body: None,
+                parent_app_guid: None,
             },
             IntuneEvent {
                 id: 1,
@@ -622,6 +624,8 @@ mod tests {
                 line_number: 1,
                 start_time_epoch: None,
                 end_time_epoch: None,
+                script_body: None,
+                parent_app_guid: None,
             },
         ]);
 
