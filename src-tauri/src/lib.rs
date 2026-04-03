@@ -66,9 +66,12 @@ pub fn run() {
             app.manage(GraphAuthState::new());
 
             // Auto-open DevTools in debug builds
-            #[cfg(debug_assertions)]
-            if let Some(window) = app.get_webview_window("main") {
-                window.open_devtools();
+            #[cfg(all(debug_assertions, desktop))]
+            {
+                use tauri::Manager as _;
+                if let Some(window) = app.get_webview_window("main") {
+                    window.open_devtools();
+                }
             }
 
             Ok(())

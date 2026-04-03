@@ -1,9 +1,13 @@
+#[cfg(target_os = "windows")]
 use serde::Serialize;
-use tauri::{AppHandle, Emitter};
+use tauri::AppHandle;
+#[cfg(target_os = "windows")]
+use tauri::Emitter;
 
 use super::models::{EvtxChannelInfo, EvtxParseResult};
 use super::parser;
 
+#[cfg(target_os = "windows")]
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct EvtxQueryProgress {
