@@ -626,7 +626,7 @@ fn extract_appworkload_event(
             end_time: None,
             duration_secs: None,
             error_code,
-            detail: build_detail(msg),
+            detail: msg.to_string(),
             source_file: source_file.to_string(),
             line_number: line.line_number,
             start_time_epoch: None,
