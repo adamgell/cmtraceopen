@@ -16,7 +16,8 @@ tauri-build = { version = "2", features = [] }
 
 [features]
 default = ["full"]
-full = ["collector", "deployment", "dsregcmd", "event-log", "intune-diagnostics", "macos-diag"]
+full = ["collector", "deployment", "dsregcmd", "event-log", "intune-diagnostics", "macos-diag", "sysmon"]
+sysmon = ["dep:evtx"]
 event-log = ["dep:evtx"]
 collector = []
 deployment = []
@@ -69,6 +70,10 @@ ureq = "2"
 criterion = "0.5"
 tempfile = "3"
 plist = "1"
+
+[[test]]
+name = "sysmon_parser"
+required-features = ["sysmon"]
 
 [[bench]]
 name = "intune_pipeline"

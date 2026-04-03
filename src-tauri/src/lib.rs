@@ -16,6 +16,7 @@ pub mod macos_diag;
 mod menu;
 mod models;
 pub mod parser;
+#[cfg(feature = "sysmon")]
 pub mod sysmon;
 mod state;
 mod watcher;
@@ -140,6 +141,7 @@ pub fn run() {
             commands::graph_api::graph_resolve_guids,
             #[cfg(target_os = "windows")]
             commands::graph_api::graph_fetch_all_apps,
+            #[cfg(feature = "sysmon")]
             commands::sysmon::analyze_sysmon_logs,
         ])
         .run(tauri::generate_context!())
