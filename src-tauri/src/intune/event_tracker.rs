@@ -4,24 +4,24 @@ use std::sync::OnceLock;
 
 use regex::Regex;
 
-use super::guid_registry::{self, GuidRegistry, guid_re};
+use super::guid_registry::{self, guid_re, GuidRegistry};
 use super::ime_parser::ImeLine;
 use super::models::{IntuneEvent, IntuneEventType, IntuneStatus};
 
 fn win32_app_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
-    Regex::new(
+        Regex::new(
         r#"(?i)\[Win32App\].*(?:processing|executing|installing|detected|not detected|evaluating)"#,
     )
     .unwrap()
-})
+    })
 }
 fn win32_result_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
-    Regex::new(r#"(?i)\[Win32App\].*(?:result|completed|success|failed|error)"#).unwrap()
-})
+        Regex::new(r#"(?i)\[Win32App\].*(?:result|completed|success|failed|error)"#).unwrap()
+    })
 }
 fn win32_guid_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
@@ -39,8 +39,8 @@ fn for_app_guid_re() -> &'static Regex {
 fn winget_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
-    Regex::new(r#"(?i)WinGetApp.*(?:processing|installing|detected|evaluating)"#).unwrap()
-})
+        Regex::new(r#"(?i)WinGetApp.*(?:processing|installing|detected|evaluating)"#).unwrap()
+    })
 }
 fn winget_token_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
@@ -66,7 +66,9 @@ fn appworkload_staging_re() -> &'static Regex {
 }
 fn appworkload_hash_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
-    CELL.get_or_init(|| Regex::new(r#"(?i)(?:hash\s+validation|hash\s+mismatch|hash\s+check)"#).unwrap())
+    CELL.get_or_init(|| {
+        Regex::new(r#"(?i)(?:hash\s+validation|hash\s+mismatch|hash\s+check)"#).unwrap()
+    })
 }
 fn appworkload_install_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
@@ -80,8 +82,9 @@ fn appworkload_install_re() -> &'static Regex {
 fn appworkload_retry_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
-    Regex::new(r#"(?i)(?:retry|retrying|reattempt|will\s+retry|attempt\s+\d+\s+of\s+\d+)"#).unwrap()
-})
+        Regex::new(r#"(?i)(?:retry|retrying|reattempt|will\s+retry|attempt\s+\d+\s+of\s+\d+)"#)
+            .unwrap()
+    })
 }
 fn appworkload_stall_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
@@ -164,8 +167,8 @@ fn policy_eval_re() -> &'static Regex {
 fn app_action_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
-    Regex::new(r#"(?i)(?:app\s+with\s+id:|application\s+action|managed\s+app)"#).unwrap()
-})
+        Regex::new(r#"(?i)(?:app\s+with\s+id:|application\s+action|managed\s+app)"#).unwrap()
+    })
 }
 fn applicability_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
@@ -195,20 +198,21 @@ fn applicability_success_re() -> &'static Regex {
 fn policy_pending_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
-    Regex::new(r#"(?i)(?:local\s+deadline|grs\s+not\s+expired|scheduled|queued|pending)"#).unwrap()
-})
+        Regex::new(r#"(?i)(?:local\s+deadline|grs\s+not\s+expired|scheduled|queued|pending)"#)
+            .unwrap()
+    })
 }
 fn script_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
-    Regex::new(r#"(?i)(?:PowerShell\s+script|script\s+execution|running\s+script)"#).unwrap()
-})
+        Regex::new(r#"(?i)(?:PowerShell\s+script|script\s+execution|running\s+script)"#).unwrap()
+    })
 }
 fn script_result_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
-    Regex::new(r#"(?i)script.*(?:completed|exit\s+code|result|output|failed|success)"#).unwrap()
-})
+        Regex::new(r#"(?i)script.*(?:completed|exit\s+code|result|output|failed|success)"#).unwrap()
+    })
 }
 fn agentexecutor_script_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
@@ -221,13 +225,16 @@ fn agentexecutor_script_re() -> &'static Regex {
 }
 fn detection_script_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
-    CELL.get_or_init(|| Regex::new(r#"(?i)\b(?:pre-)?detection\s+script\b|\bpre-detect\b"#).unwrap())
+    CELL.get_or_init(|| {
+        Regex::new(r#"(?i)\b(?:pre-)?detection\s+script\b|\bpre-detect\b"#).unwrap()
+    })
 }
 fn remediation_script_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
-    Regex::new(r#"(?i)\b(?:post-)?remediation\s+script\b|\bpost-detect\b|\bremediation\b"#).unwrap()
-})
+        Regex::new(r#"(?i)\b(?:post-)?remediation\s+script\b|\bpost-detect\b|\bremediation\b"#)
+            .unwrap()
+    })
 }
 fn script_failure_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
@@ -241,8 +248,8 @@ fn script_failure_re() -> &'static Regex {
 fn remediation_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
-    Regex::new(r#"(?i)(?:Remediation|HealthScript|proactive\s+remediation)"#).unwrap()
-})
+        Regex::new(r#"(?i)(?:Remediation|HealthScript|proactive\s+remediation)"#).unwrap()
+    })
 }
 fn healthscript_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
@@ -256,8 +263,8 @@ fn healthscript_re() -> &'static Regex {
 fn esp_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
-    Regex::new(r#"(?i)(?:ESP|EspBody|EnrollmentStatusPage|enrollment\s+status)"#).unwrap()
-})
+        Regex::new(r#"(?i)(?:ESP|EspBody|EnrollmentStatusPage|enrollment\s+status)"#).unwrap()
+    })
 }
 fn sync_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
@@ -276,19 +283,21 @@ fn error_code_re() -> &'static Regex {
 fn exit_code_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
-    Regex::new(r#"(?i)exit\s*code(?:\s+of\s+the\s+script)?\s*(?:is|[=:])\s*(-?\d+)"#).unwrap()
-})
+        Regex::new(r#"(?i)exit\s*code(?:\s+of\s+the\s+script)?\s*(?:is|[=:])\s*(-?\d+)"#).unwrap()
+    })
 }
 fn pending_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
-    CELL.get_or_init(|| Regex::new(r#"(?i)(?:pending|queued|waiting|scheduled|requesting)"#).unwrap())
+    CELL.get_or_init(|| {
+        Regex::new(r#"(?i)(?:pending|queued|waiting|scheduled|requesting)"#).unwrap()
+    })
 }
 fn timeout_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
-    Regex::new(r#"(?i)(?:timed?\s*out|timeout|stalled|hung|not\s+progressing|no\s+progress)"#)
-        .unwrap()
-})
+        Regex::new(r#"(?i)(?:timed?\s*out|timeout|stalled|hung|not\s+progressing|no\s+progress)"#)
+            .unwrap()
+    })
 }
 fn compliance_true_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
@@ -310,8 +319,8 @@ fn client_health_rule_summary_re() -> &'static Regex {
 fn client_health_heartbeat_success_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
-    Regex::new(r#"(?i)the client health report was sent successfully\. done\."#).unwrap()
-})
+        Regex::new(r#"(?i)the client health report was sent successfully\. done\."#).unwrap()
+    })
 }
 fn client_health_heartbeat_failure_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
@@ -324,7 +333,9 @@ fn client_health_heartbeat_failure_re() -> &'static Regex {
 }
 fn client_cert_local_machine_count_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
-    CELL.get_or_init(|| Regex::new(r#"(?i)MDM certs found in LocalMachine count:\s*(\d+)"#).unwrap())
+    CELL.get_or_init(|| {
+        Regex::new(r#"(?i)MDM certs found in LocalMachine count:\s*(\d+)"#).unwrap()
+    })
 }
 fn client_cert_failure_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
@@ -360,8 +371,8 @@ fn win32_app_inventory_full_re() -> &'static Regex {
 fn win32_app_inventory_no_change_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
-    Regex::new(r#"(?i)no change detected in win32 app inventory delta update"#).unwrap()
-})
+        Regex::new(r#"(?i)no change detected in win32 app inventory delta update"#).unwrap()
+    })
 }
 fn win32_app_inventory_delta_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
@@ -471,10 +482,10 @@ pub fn extract_events(
     let mut next_id = 0u64;
     let source_kind = classify_source_kind(source_file);
 
-    for line in lines {
+    for (index, line) in lines.iter().enumerate() {
         if source_kind == ImeSourceKind::AppWorkload {
             if let Some(event) =
-                extract_appworkload_event(line, source_file, next_id, registry)
+                extract_appworkload_event(lines, index, line, source_file, next_id, registry)
             {
                 events.push(event);
                 next_id += 1;
@@ -487,8 +498,8 @@ pub fn extract_events(
         };
 
         // Try primary extract_guid, fall back to guid_registry::extract_app_id
-        let guid = extract_guid(&line.message)
-            .or_else(|| guid_registry::extract_app_id(&line.message));
+        let guid =
+            extract_guid(&line.message).or_else(|| guid_registry::extract_app_id(&line.message));
         let status = determine_status(&line.message, source_kind);
         let raw_name = build_event_name(&event_type, &guid, &line.message, source_kind);
 
@@ -529,6 +540,8 @@ pub fn extract_events(
 }
 
 fn extract_appworkload_event(
+    lines: &[ImeLine],
+    index: usize,
     line: &ImeLine,
     source_file: &str,
     next_id: u64,
@@ -631,6 +644,7 @@ fn extract_appworkload_event(
         Some(g) => registry.enrich_event_name(&raw_name, g).unwrap_or(raw_name),
         None => raw_name,
     };
+    let detail = build_appworkload_detail(lines, index, guid.as_deref(), msg, status);
 
     Some(IntuneEvent {
         id: next_id,
@@ -645,7 +659,7 @@ fn extract_appworkload_event(
         end_time: None,
         duration_secs: None,
         error_code: extract_error_code(msg),
-        detail: build_detail(msg),
+        detail,
         source_file: source_file.to_string(),
         line_number: line.line_number,
         start_time_epoch: None,
@@ -724,8 +738,152 @@ fn build_appworkload_name(
     }
 }
 
-fn build_detail(msg: &str) -> String {
-    msg.to_string()
+// When AppWorkload failures do not have clean subgraph markers nearby, fall back to a
+// compact local window so the row still shows useful surrounding evidence.
+const APPWORKLOAD_CONTEXT_RADIUS: usize = 10;
+// Search a wider neighborhood for same-GUID lines because AppWorkload often emits
+// reporting state or policy payload records well before the failure line itself.
+const APPWORKLOAD_CONTEXT_LOOKAROUND: usize = 120;
+// Cap the rendered context bundle so failed rows stay readable and the copied payload
+// remains shareable without dragging in the entire file.
+const APPWORKLOAD_CONTEXT_MAX_LINES: usize = 48;
+
+fn build_appworkload_detail(
+    lines: &[ImeLine],
+    index: usize,
+    guid: Option<&str>,
+    msg: &str,
+    status: IntuneStatus,
+) -> String {
+    if !matches!(status, IntuneStatus::Failed | IntuneStatus::Timeout) {
+        return msg.to_string();
+    }
+
+    let context = collect_appworkload_context(lines, index, guid);
+    if context.is_empty() {
+        return msg.to_string();
+    }
+
+    format!("{msg}\n\nAppWorkload context:\n{}", context.join("\n"))
+}
+
+fn collect_appworkload_context(lines: &[ImeLine], index: usize, guid: Option<&str>) -> Vec<String> {
+    if lines.is_empty() || index >= lines.len() {
+        return Vec::new();
+    }
+
+    let (block_start, block_end) = find_appworkload_subgraph_bounds(lines, index);
+    let mut selected = HashSet::new();
+    for selected_index in block_start..=block_end {
+        selected.insert(selected_index);
+    }
+
+    if let Some(guid) = guid {
+        let lookaround_start = index.saturating_sub(APPWORKLOAD_CONTEXT_LOOKAROUND);
+        let lookaround_end =
+            (index + APPWORKLOAD_CONTEXT_LOOKAROUND).min(lines.len().saturating_sub(1));
+        for selected_index in lookaround_start..=lookaround_end {
+            if contains_ascii_case_insensitive(&lines[selected_index].message, guid) {
+                selected.insert(selected_index);
+            }
+        }
+    }
+
+    if selected.is_empty() {
+        let fallback_start = index.saturating_sub(APPWORKLOAD_CONTEXT_RADIUS);
+        let fallback_end = (index + APPWORKLOAD_CONTEXT_RADIUS).min(lines.len().saturating_sub(1));
+        for selected_index in fallback_start..=fallback_end {
+            selected.insert(selected_index);
+        }
+    }
+
+    let mut indices = selected.into_iter().collect::<Vec<_>>();
+    indices.sort_unstable();
+
+    if indices.len() > APPWORKLOAD_CONTEXT_MAX_LINES {
+        // Keep the lines closest to the failure first so trimmed bundles preserve the
+        // immediate error context before more distant same-GUID references. For equally
+        // distant lines, the lower line number wins so the final output stays chronological.
+        indices.sort_by_key(|selected_index| (selected_index.abs_diff(index), *selected_index));
+        indices.truncate(APPWORKLOAD_CONTEXT_MAX_LINES);
+        indices.sort_unstable();
+    }
+
+    let mut formatted = Vec::with_capacity(indices.len());
+    let mut previous_index = None;
+    for selected_index in indices {
+        if let Some(previous_index_value) = previous_index {
+            if selected_index > previous_index_value + 1 {
+                formatted.push(format!(
+                    "… {} line(s) omitted …",
+                    selected_index - previous_index_value - 1
+                ));
+            }
+        }
+        formatted.push(format_appworkload_context_line(
+            &lines[selected_index],
+            selected_index == index,
+        ));
+        previous_index = Some(selected_index);
+    }
+
+    formatted
+}
+
+fn find_appworkload_subgraph_bounds(lines: &[ImeLine], index: usize) -> (usize, usize) {
+    if lines.is_empty() {
+        return (0, 0);
+    }
+
+    let safe_index = index.min(lines.len() - 1);
+    let mut start = safe_index;
+    while start > 0 {
+        let candidate = start - 1;
+        let message = lines[candidate].message.as_str();
+        if is_appworkload_subgraph_end(message) {
+            break;
+        }
+        start = candidate;
+        if is_appworkload_subgraph_start(message) {
+            break;
+        }
+    }
+
+    let mut end = safe_index;
+    while end + 1 < lines.len() {
+        let candidate = end + 1;
+        let message = lines[candidate].message.as_str();
+        if is_appworkload_subgraph_start(message) {
+            break;
+        }
+        end = candidate;
+        if is_appworkload_subgraph_end(message) {
+            break;
+        }
+    }
+
+    (start, end)
+}
+
+fn is_appworkload_subgraph_start(msg: &str) -> bool {
+    contains_ascii_case_insensitive(msg, "processing subgraph with app ids:")
+}
+
+fn is_appworkload_subgraph_end(msg: &str) -> bool {
+    contains_ascii_case_insensitive(msg, "done processing subgraph")
+}
+
+fn format_appworkload_context_line(line: &ImeLine, is_selected: bool) -> String {
+    let marker = if is_selected { ">" } else { " " };
+    let timestamp = line
+        .timestamp_utc
+        .as_deref()
+        .or(line.timestamp.as_deref())
+        .unwrap_or("No timestamp");
+    format!(
+        "{marker} L{} {timestamp} {}",
+        line.line_number, line.message
+    )
 }
 
 fn classify_source_kind(source_file: &str) -> ImeSourceKind {
@@ -1055,7 +1213,8 @@ fn determine_status(msg: &str, source_kind: ImeSourceKind) -> IntuneStatus {
         ImeSourceKind::AppWorkload => {
             if appworkload_stall_re().is_match(msg) || timeout_re().is_match(msg) {
                 IntuneStatus::Timeout
-            } else if appworkload_retry_re().is_match(msg) || appworkload_failure_re().is_match(msg) {
+            } else if appworkload_retry_re().is_match(msg) || appworkload_failure_re().is_match(msg)
+            {
                 IntuneStatus::Failed
             } else if appworkload_success_re().is_match(msg) {
                 IntuneStatus::Success
@@ -1188,7 +1347,8 @@ fn build_source_specific_name(
             })
         }
         ImeSourceKind::AppActionProcessor => {
-            let area = if applicability_block_re().is_match(msg) || applicability_re().is_match(msg) {
+            let area = if applicability_block_re().is_match(msg) || applicability_re().is_match(msg)
+            {
                 "Applicability"
             } else if contains_case_insensitive(msg, "requirement rule") {
                 "Requirement Rule"
@@ -1821,5 +1981,58 @@ mod tests {
             Some("a1b2c3d4-e5f6-7890-abcd-ef1234567890")
         );
         assert_eq!(events[0].duration_secs, Some(5.0));
+    }
+
+    #[test]
+    fn appworkload_failed_events_include_guid_context() {
+        let events = extract_events(
+            &[
+                line(
+                    "[Win32App][ReportingManager] App with id: a1b2c3d4-e5f6-7890-abcd-ef1234567890 has been loaded.",
+                    "01-15-2024 10:00:00.000",
+                    10,
+                ),
+                line(
+                    "[Win32App][V3Processor] Processing subgraph with app ids: a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+                    "01-15-2024 10:00:01.000",
+                    11,
+                ),
+                line(
+                    "Download failed for app id: a1b2c3d4-e5f6-7890-abcd-ef1234567890 with error code = 0x87D30067",
+                    "01-15-2024 10:00:02.000",
+                    12,
+                ),
+                line(
+                    "[Win32App][V3Processor] Done processing subgraph.",
+                    "01-15-2024 10:00:03.000",
+                    13,
+                ),
+            ],
+            "C:/Logs/AppWorkload.log",
+            &empty_registry(),
+        );
+
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].status, IntuneStatus::Failed);
+        assert!(events[0].detail.contains("AppWorkload context:"));
+        assert!(events[0].detail.contains("L10 01-15-2024 10:00:00.000"));
+        assert!(events[0].detail.contains("L11 01-15-2024 10:00:01.000"));
+        assert!(events[0].detail.contains("> L12 01-15-2024 10:00:02.000"));
+        assert!(events[0].detail.contains("L13 01-15-2024 10:00:03.000"));
+    }
+
+    #[test]
+    fn appworkload_success_events_keep_single_line_detail() {
+        let message =
+            "Download completed successfully for app id: a1b2c3d4-e5f6-7890-abcd-ef1234567890";
+        let events = extract_events(
+            &[line(message, "01-15-2024 10:00:05.000", 20)],
+            "C:/Logs/AppWorkload.log",
+            &empty_registry(),
+        );
+
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].status, IntuneStatus::Success);
+        assert_eq!(events[0].detail, message);
     }
 }

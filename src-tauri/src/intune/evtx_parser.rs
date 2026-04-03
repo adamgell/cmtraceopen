@@ -482,24 +482,24 @@ pub(crate) fn parse_live_event_record(
     id: u64,
     fallback_channel: &str,
 ) -> Option<EventLogEntry> {
-    let channel_raw = extract_regex_value(xml, &channel_re())
+    let channel_raw = extract_regex_value(xml, channel_re())
         .unwrap_or_else(|| fallback_channel.to_string());
     let channel = EventLogChannel::from_channel_string(&channel_raw);
-    let timestamp = extract_regex_value(xml, &time_re())?;
+    let timestamp = extract_regex_value(xml, time_re())?;
 
-    let provider = extract_regex_value(xml, &provider_re()).unwrap_or_default();
-    let event_id = extract_regex_value(xml, &event_id_re())
+    let provider = extract_regex_value(xml, provider_re()).unwrap_or_default();
+    let event_id = extract_regex_value(xml, event_id_re())
         .and_then(|value| value.parse::<u32>().ok())
         .unwrap_or(0);
-    let level = extract_regex_value(xml, &level_re())
+    let level = extract_regex_value(xml, level_re())
         .and_then(|value| value.parse::<u8>().ok())
         .unwrap_or(0);
-    let computer = extract_regex_value(xml, &computer_re());
-    let correlation_activity_id = extract_regex_value(xml, &activity_re());
+    let computer = extract_regex_value(xml, computer_re());
+    let correlation_activity_id = extract_regex_value(xml, activity_re());
     let message = rendered_message
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| {
-            extract_regex_value(xml, &message_re())
+            extract_regex_value(xml, message_re())
                 .map(|value| decode_xml_text(&value))
                 .unwrap_or_default()
         });

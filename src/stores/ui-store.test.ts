@@ -175,6 +175,7 @@ describe("getAvailableWorkspaces", () => {
     expect(workspaces).toContain("intune");
     expect(workspaces).toContain("dsregcmd");
     expect(workspaces).toContain("deployment");
+    expect(workspaces).toContain("sysmon");
     expect(workspaces).not.toContain("macos-diag");
   });
 
@@ -182,6 +183,7 @@ describe("getAvailableWorkspaces", () => {
     const workspaces = getAvailableWorkspaces("macos");
     expect(workspaces).toContain("log");
     expect(workspaces).toContain("macos-diag");
+    expect(workspaces).not.toContain("sysmon");
     expect(workspaces).not.toContain("dsregcmd");
     expect(workspaces).not.toContain("deployment");
   });
@@ -189,6 +191,7 @@ describe("getAvailableWorkspaces", () => {
   it("returns linux workspaces for linux", () => {
     const workspaces = getAvailableWorkspaces("linux");
     expect(workspaces).toContain("log");
+    expect(workspaces).not.toContain("sysmon");
     expect(workspaces).not.toContain("dsregcmd");
     expect(workspaces).not.toContain("macos-diag");
   });

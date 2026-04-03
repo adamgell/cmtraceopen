@@ -4,7 +4,7 @@
   "outputDirectory": "release-artifacts",
   "outputFileName": "CMTrace-Open_$.version_$.arch",
   "packageName": "CMTrace Open",
-  "publisher": "CN=Adam Gell",
+  "publisher": "Adam Gell",
   "version": "1.0.0",
   "platform": "x64",
   "installDir": "%ProgramFiles%\\CMTrace Open",

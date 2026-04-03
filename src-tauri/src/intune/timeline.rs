@@ -194,7 +194,11 @@ pub fn parse_timestamp(value: &str) -> Option<NaiveDateTime> {
         }
     }
 
-    None
+    // RFC 3339 / ISO 8601 with timezone (e.g. "2024-01-15T10:30:00.000Z")
+    // IME parser produces timestamp_utc in this format via to_rfc3339_opts().
+    chrono::DateTime::parse_from_rfc3339(value)
+        .map(|dt| dt.naive_utc())
+        .ok()
 }
 
 pub fn calculate_timestamp_bounds(events: &[IntuneEvent]) -> Option<IntuneTimestampBounds> {
@@ -303,6 +307,7 @@ fn format_duration(total_secs: f64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::Timelike;
 
     #[test]
     fn test_format_duration() {
@@ -562,6 +567,71 @@ mod tests {
         let untimed = &timeline[0]; // None timestamps sort first
         assert!(untimed.start_time_epoch.is_none());
         assert!(untimed.end_time_epoch.is_none());
+    }
+
+    #[test]
+    fn parse_timestamp_handles_rfc3339() {
+        let result = parse_timestamp("2024-01-15T10:30:00.000Z");
+        assert!(result.is_some());
+        let dt = result.unwrap();
+        assert_eq!(dt.hour(), 10);
+        assert_eq!(dt.minute(), 30);
+    }
+
+    #[test]
+    fn parse_timestamp_handles_rfc3339_with_offset() {
+        let result = parse_timestamp("2024-01-15T10:30:00.000+05:00");
+        assert!(result.is_some());
+        let dt = result.unwrap();
+        // naive_utc converts to UTC: 10:30 +05:00 = 05:30 UTC
+        assert_eq!(dt.hour(), 5);
+        assert_eq!(dt.minute(), 30);
+    }
+
+    #[test]
+    fn build_timeline_sorts_rfc3339_timestamps_across_files() {
+        let timeline = build_timeline(vec![
+            IntuneEvent {
+                id: 0,
+                event_type: IntuneEventType::Win32App,
+                name: "Later".to_string(),
+                guid: None,
+                status: IntuneStatus::InProgress,
+                start_time: Some("2024-12-31T10:00:00.000Z".to_string()),
+                end_time: None,
+                duration_secs: None,
+                error_code: None,
+                detail: "later".to_string(),
+                source_file: "b.log".to_string(),
+                line_number: 2,
+                start_time_epoch: None,
+                end_time_epoch: None,
+            },
+            IntuneEvent {
+                id: 1,
+                event_type: IntuneEventType::Win32App,
+                name: "Earlier".to_string(),
+                guid: None,
+                status: IntuneStatus::InProgress,
+                start_time: Some("2024-01-01T10:00:00.000Z".to_string()),
+                end_time: None,
+                duration_secs: None,
+                error_code: None,
+                detail: "earlier".to_string(),
+                source_file: "a.log".to_string(),
+                line_number: 1,
+                start_time_epoch: None,
+                end_time_epoch: None,
+            },
+        ]);
+
+        // Events should be interleaved by time, not grouped by file
+        assert_eq!(timeline[0].name, "Earlier");
+        assert_eq!(timeline[0].source_file, "a.log");
+        assert_eq!(timeline[1].name, "Later");
+        assert_eq!(timeline[1].source_file, "b.log");
+        assert!(timeline[0].start_time_epoch.is_some());
+        assert!(timeline[1].start_time_epoch.is_some());
     }
 
     #[test]

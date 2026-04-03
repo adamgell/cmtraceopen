@@ -69,6 +69,7 @@ Communication is through Tauri's `invoke()` (frontend→backend) and `emit()` (b
 | `models/` | Shared types: `LogEntry`, `ParseResult`, `FilterCriteria` |
 | `state/` | `AppState` (Mutex-wrapped) — tracks open files, tail sessions |
 | `watcher/` | File watching and real-time tailing via `notify` crate |
+| `sysmon/` | Sysmon event log analysis: EVTX parsing, event models |
 | `menu.rs` | Native application menu |
 
 ### Frontend Module Map (`src/`)
@@ -80,7 +81,8 @@ Communication is through Tauri's `invoke()` (frontend→backend) and `emit()` (b
 | `components/dialogs/` | Modal dialogs (find, filter, error lookup) |
 | `components/intune/` | Intune analysis workspace |
 | `components/dsregcmd/` | DSRegCmd troubleshooting workspace |
-| `stores/` | 5 Zustand stores: log, filter, intune, dsregcmd, ui |
+| `components/sysmon/` | Sysmon event log analysis workspace |
+| `stores/` | 6 Zustand stores: log, filter, intune, dsregcmd, sysmon, ui |
 | `hooks/` | Custom hooks for drag-drop, menus, file association |
 | `types/` | TypeScript type definitions |
 
@@ -102,6 +104,7 @@ Format detection (`detect.rs`) samples the first lines of a file to auto-select 
 - **Encoding fallback**: UTF-8 → Windows-1252 (via `encoding_rs`)
 - **Parallelism**: Rayon for batch log line processing, Tokio for async file I/O
 - **Windows-specific code** is gated with `#[cfg(target_os = "windows")]` and the `windows`/`winreg` crates
+- **Windows-only workspaces** (Sysmon, parts of Intune) need platform gating in Rust commands and conditional handling in frontend tests
 
 ## Testing
 
@@ -116,3 +119,27 @@ Format detection (`detect.rs`) samples the first lines of a file to auto-select 
 - Rust 1.77.2+ (MSVC toolchain on Windows)
 - Windows: Visual Studio Build Tools with C++ workload + Windows SDK + WebView2 Runtime
 - Automated Windows setup: `powershell -ExecutionPolicy Bypass -File .\scripts\Install-CMTraceOpenBuildPrereqs.ps1`
+
+## Agent Directives: Mechanical Overrides
+
+### Pre-Work
+
+1. **Step 0 Rule**: Before ANY structural refactor on a file >300 LOC, first remove all dead props, unused exports, unused imports, and debug logs. Commit this cleanup separately before starting the real work.
+2. **Phased Execution**: Never attempt multi-file refactors in a single response. Break work into explicit phases. Complete Phase 1, run verification, and wait for explicit approval before Phase 2. Each phase must touch no more than 5 files.
+
+### Code Quality
+
+3. **Senior Dev Override**: If architecture is flawed, state is duplicated, or patterns are inconsistent — propose and implement structural fixes. Ask: "What would a senior, experienced, perfectionist dev reject in code review?" Fix all of it.
+4. **Forced Verification**: You are FORBIDDEN from reporting a task as complete until you have run `npx tsc --noEmit` (and `npx eslint . --quiet` if configured) and fixed ALL resulting errors.
+
+### Context Management
+
+5. **Sub-Agent Swarming**: For tasks touching >5 independent files, launch parallel sub-agents (5–8 files per agent). Sequential processing of large tasks guarantees context decay.
+6. **Context Decay Awareness**: After 10+ messages in a conversation, re-read any file before editing it. Do not trust memory of file contents — auto-compaction may have silently destroyed that context.
+7. **File Read Budget**: Each file read is capped at 2,000 lines. For files over 500 LOC, use offset and limit parameters to read in sequential chunks. Never assume you have seen a complete file from a single read.
+8. **Tool Result Blindness**: Tool results over 50,000 characters are silently truncated. If any search or command returns suspiciously few results, re-run with narrower scope. State when you suspect truncation occurred.
+
+### Edit Safety
+
+9. **Edit Integrity**: Before EVERY file edit, re-read the file. After editing, read it again to confirm the change applied correctly. Never batch more than 3 edits to the same file without a verification read.
+10. **No Semantic Search**: When renaming or changing any function/type/variable, search separately for: direct calls, type-level references, string literals containing the name, dynamic imports/require() calls, re-exports/barrel file entries, and test files/mocks.

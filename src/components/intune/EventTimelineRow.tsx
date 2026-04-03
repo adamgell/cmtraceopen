@@ -1,5 +1,7 @@
 import { memo, forwardRef } from "react";
-import { tokens } from "@fluentui/react-components";
+import { Button, Tooltip, tokens } from "@fluentui/react-components";
+import { CopyRegular } from "@fluentui/react-icons";
+import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { formatDisplayDateTime } from "../../lib/date-time-format";
 import {
   LOG_MONOSPACE_FONT_FAMILY,
@@ -49,6 +51,26 @@ function formatSourceLabel(sourceFile: string, lineNumber: number): string {
   return `${getFileName(sourceFile)}:${lineNumber}`;
 }
 
+function buildClipboardText(event: IntuneEvent): string {
+  const details = [
+    `Event: ${event.name}`,
+    `Type: ${event.eventType}`,
+    `Status: ${event.status}`,
+    event.startTime
+      ? `Start: ${formatDisplayDateTime(event.startTime) ?? event.startTime}`
+      : null,
+    event.endTime
+      ? `End: ${formatDisplayDateTime(event.endTime) ?? event.endTime}`
+      : null,
+    event.errorCode ? `Error: ${event.errorCode}` : null,
+    `Source: ${formatSourceLabel(event.sourceFile, event.lineNumber)}`,
+    "",
+    event.detail,
+  ];
+
+  return details.filter((line): line is string => line !== null).join("\n");
+}
+
 export interface EventTimelineRowProps {
   event: IntuneEvent;
   dataIndex: number;
@@ -78,6 +100,19 @@ export const EventTimelineRow = memo(
     },
     ref
   ) {
+    const copyLabel =
+      event.status === "Failed" || event.status === "Timeout"
+        ? "Copy error + context"
+        : "Copy details";
+
+    const handleCopy = async () => {
+      try {
+        await writeText(buildClipboardText(event));
+      } catch (err) {
+        console.warn("Clipboard write failed:", err);
+      }
+    };
+
     return (
       <div
         data-index={dataIndex}
@@ -215,12 +250,52 @@ export const EventTimelineRow = memo(
             <div style={{ flex: 1 }}>
               <div
                 style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  gap: "8px",
+                  marginBottom: "6px",
+                }}
+              >
+                <div
+                  style={{
+                    fontSize: `${smallFontSize}px`,
+                    fontWeight: 700,
+                    color: tokens.colorNeutralForeground3,
+                    textTransform: "uppercase",
+                    letterSpacing: "0.04em",
+                  }}
+                >
+                  {event.status === "Failed" || event.status === "Timeout"
+                    ? "Failure context"
+                    : "Details"}
+                </div>
+                <Tooltip content={copyLabel} relationship="label">
+                  <Button
+                    size="small"
+                    appearance="subtle"
+                    icon={<CopyRegular />}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void handleCopy();
+                    }}
+                  >
+                    {copyLabel}
+                  </Button>
+                </Tooltip>
+              </div>
+              <div
+                style={{
                   fontSize: `${monoFontSize}px`,
                   color: tokens.colorNeutralForeground1,
                   fontFamily: LOG_MONOSPACE_FONT_FAMILY,
                   whiteSpace: "pre-wrap",
                   wordBreak: "break-all",
-                  maxHeight: "120px",
+                  overflowWrap: "anywhere",
+                  maxHeight:
+                    event.status === "Failed" || event.status === "Timeout"
+                      ? "320px"
+                      : "120px",
                   overflow: "auto",
                   backgroundColor: tokens.colorNeutralBackground1,
                   border: `1px solid ${tokens.colorNeutralStroke1}`,

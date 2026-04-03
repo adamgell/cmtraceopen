@@ -47,6 +47,7 @@ const WORKSPACE_PLATFORM_MAP: Record<WorkspaceId, PlatformId[] | "all"> = {
   "macos-diag": ["macos"],
   deployment: ["windows"],
   "event-log": "all",
+  sysmon: ["windows"],
 };
 
 export function getAvailableWorkspaces(
@@ -117,6 +118,14 @@ export function getUiChromeStatus(
       viewLabel: "Intune workspace",
       detailsLabel: "Details hidden in Intune workspace",
       infoLabel: "Info hidden in Intune workspace",
+    };
+  }
+
+  if (activeView === "sysmon") {
+    return {
+      viewLabel: "Sysmon workspace",
+      detailsLabel: "Details hidden in Sysmon workspace",
+      infoLabel: "Info hidden in Sysmon workspace",
     };
   }
 
