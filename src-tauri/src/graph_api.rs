@@ -389,17 +389,12 @@ pub fn resolve_guids(
     })
 }
 
-<<<<<<< HEAD
 /// Fetch all Intune apps, scripts, and remediations for pre-populating the cache.
-=======
-/// Fetch all Intune apps at once (for pre-populating the cache).
->>>>>>> d065202 (feat: add Microsoft Graph API integration for GUID resolution)
 pub fn fetch_all_apps(state: &GraphAuthState) -> Result<Vec<GraphAppInfo>, AppError> {
     let token = state
         .get_valid_token()
         .ok_or_else(|| AppError::Internal("Not authenticated. Please sign in first.".into()))?;
 
-<<<<<<< HEAD
     let mut all: Vec<GraphAppInfo> = Vec::new();
 
     // Win32/LOB/Store apps
@@ -458,32 +453,17 @@ fn fetch_paginated(
     let agent = make_agent();
     let mut items: Vec<GraphAppInfo> = Vec::new();
     let mut next_url: Option<String> = Some(initial_url.to_string());
-=======
-    let mut all_apps: Vec<GraphAppInfo> = Vec::new();
-    let mut next_url: Option<String> = Some(format!(
-        "{GRAPH_BETA_BASE}/deviceAppManagement/mobileApps?$select=id,displayName,publisher"
-    ));
-
-    let agent = make_agent();
->>>>>>> d065202 (feat: add Microsoft Graph API integration for GUID resolution)
 
     while let Some(url) = next_url.take() {
         let response = agent
             .get(&url)
-<<<<<<< HEAD
             .set("Authorization", &format!("Bearer {token}"))
-=======
-            .set("Authorization", &format!("Bearer {}", token.token))
->>>>>>> d065202 (feat: add Microsoft Graph API integration for GUID resolution)
             .set("ConsistencyLevel", "eventual")
             .call()
             .map_err(|e| {
                 if let ureq::Error::Status(code, resp) = e {
                     let body = resp.into_string().unwrap_or_default();
-<<<<<<< HEAD
                     log::warn!("Graph API HTTP {code} for {url}: {body}");
-=======
->>>>>>> d065202 (feat: add Microsoft Graph API integration for GUID resolution)
                     AppError::Internal(format!("Graph API HTTP {code}: {body}"))
                 } else {
                     AppError::Internal(format!("Graph API request failed: {e}"))
@@ -494,17 +474,12 @@ fn fetch_paginated(
 
         if let Some(value) = body.get("value").and_then(|v| v.as_array()) {
             for item in value {
-<<<<<<< HEAD
                 if let Some(mut app) = parse_app_json(item) {
                     // Apply default type if the item doesn't have one
                     if app.odata_type.is_none() {
                         app.odata_type = default_type.map(String::from);
                     }
                     items.push(app);
-=======
-                if let Some(app) = parse_app_json(item) {
-                    all_apps.push(app);
->>>>>>> d065202 (feat: add Microsoft Graph API integration for GUID resolution)
                 }
             }
         }
@@ -515,17 +490,7 @@ fn fetch_paginated(
             .map(String::from);
     }
 
-<<<<<<< HEAD
     Ok(items)
-=======
-    let cache_map: HashMap<String, GraphAppInfo> = all_apps
-        .iter()
-        .map(|a| (a.id.clone(), a.clone()))
-        .collect();
-    state.cache_apps(&cache_map);
-
-    Ok(all_apps)
->>>>>>> d065202 (feat: add Microsoft Graph API integration for GUID resolution)
 }
 
 // ── Internal helpers ────────────────────────────────────────────────────────
