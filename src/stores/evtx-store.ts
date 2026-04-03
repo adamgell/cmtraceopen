@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import type {
   EvtxRecord,
   EvtxChannelInfo,
@@ -18,6 +19,10 @@ interface EvtxState {
   channels: EvtxChannelInfo[];
   sourceMode: EvtxSourceMode;
   isLoading: boolean;
+  loadingChannel: string | null;
+  loadingProgress: number | null;
+  loadStartTime: number | null;
+  loadElapsedMs: number | null;
   loadError: string | null;
   selectedChannels: Set<string>;
   loadedChannels: Set<string>;
@@ -32,6 +37,7 @@ interface EvtxState {
   enumerateChannels: () => Promise<void>;
   queryChannels: (channels: string[], maxEvents?: number) => Promise<void>;
   loadSelectedChannels: () => Promise<void>;
+  refreshLoadedChannels: () => Promise<void>;
   setSelectedChannels: (channels: Set<string>) => void;
   toggleChannel: (channel: string) => void;
   selectAllChannels: () => void;
@@ -67,6 +73,10 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
   channels: [],
   sourceMode: null,
   isLoading: false,
+  loadingChannel: null,
+  loadingProgress: null,
+  loadStartTime: null,
+  loadElapsedMs: null,
   loadError: null,
   selectedChannels: new Set<string>(),
   loadedChannels: new Set<string>(),
@@ -103,58 +113,69 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
       let updatedChannels = channels;
       let loadError: string | null = null;
 
-      // Show channels immediately, then load events progressively
+      // Show channels immediately, then load events in parallel
       const selectedNames = new Set(availableCore);
+      const startTime = performance.now();
       set({
         channels: updatedChannels,
         sourceMode: "live",
         isLoading: true,
         loadError: null,
+        loadStartTime: startTime,
+        loadElapsedMs: null,
         selectedChannels: selectedNames,
         loadedChannels: new Set<string>(),
         records: [],
         selectedRecordId: null,
       });
 
-      // Query core channels one at a time, updating the UI after each
-      for (const ch of availableCore) {
+      // Query all core channels in parallel (bypass queryChannels to avoid isLoading conflicts)
+      const mergeResult = (ch: string, result: EvtxParseResult) => {
+        console.log(`[evtx] ${ch}: got ${result.records.length} records, ${result.parseErrors} errors`, result.errorMessages);
+        const state = get();
+        const merged = [...state.records, ...result.records];
+        merged.sort((a, b) => a.timestampEpoch - b.timestampEpoch);
+        for (let i = 0; i < merged.length; i++) merged[i].id = i;
+
+        const countMap = new Map(result.channels.map((c) => [c.name, c.eventCount]));
+        const newChannels = state.channels.map((c) => ({
+          ...c,
+          eventCount: countMap.get(c.name) ?? c.eventCount,
+        }));
+        const newLoaded = new Set(state.loadedChannels);
+        newLoaded.add(ch);
+
+        set({
+          records: merged,
+          channels: newChannels,
+          loadedChannels: newLoaded,
+          loadElapsedMs: performance.now() - startTime,
+        });
+      };
+
+      const promises = availableCore.map(async (ch) => {
         try {
           const result = await invoke<EvtxParseResult>("evtx_query_channels", {
             channels: [ch],
-            maxEvents: 1000,
+            maxEvents: null,
           });
-
-          console.log(`[evtx] ${ch}: got ${result.records.length} records, ${result.parseErrors} errors`, result.errorMessages);
-
-          // Merge into current state
-          const state = get();
-          const merged = [...state.records, ...result.records];
-          merged.sort((a, b) => a.timestampEpoch - b.timestampEpoch);
-          for (let i = 0; i < merged.length; i++) merged[i].id = i;
-
-          const countMap = new Map(result.channels.map((c) => [c.name, c.eventCount]));
-          const newChannels = state.channels.map((c) => ({
-            ...c,
-            eventCount: countMap.get(c.name) ?? c.eventCount,
-          }));
-          const newLoaded = new Set(state.loadedChannels);
-          newLoaded.add(ch);
-
-          set({
-            records: merged,
-            channels: newChannels,
-            loadedChannels: newLoaded,
-          });
+          mergeResult(ch, result);
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e);
           console.warn(`[evtx] Failed to query ${ch}: ${msg}`);
-          if (!loadError) {
-            loadError = `${ch}: ${msg}`;
-          }
+          if (!loadError) loadError = `${ch}: ${msg}`;
         }
-      }
+      });
 
-      set({ isLoading: false, loadError });
+      await Promise.all(promises);
+
+      set({
+        isLoading: false,
+        loadingChannel: null,
+        loadingProgress: null,
+        loadElapsedMs: performance.now() - startTime,
+        loadError,
+      });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       set({ isLoading: false, loadError: message });
@@ -205,12 +226,65 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
 
   loadSelectedChannels: async () => {
     const state = get();
-    // Find selected channels that haven't been loaded yet
     const unloaded = [...state.selectedChannels].filter(
       (ch) => !state.loadedChannels.has(ch)
     );
     if (unloaded.length === 0) return;
-    await get().queryChannels(unloaded, 1000);
+    await get().queryChannels(unloaded);
+  },
+
+  refreshLoadedChannels: async () => {
+    const state = get();
+    const loaded = [...state.loadedChannels];
+    if (loaded.length === 0) return;
+    const startTime = performance.now();
+    set({
+      records: [],
+      loadedChannels: new Set<string>(),
+      selectedRecordId: null,
+      isLoading: true,
+      loadStartTime: startTime,
+      loadElapsedMs: null,
+    });
+
+    const promises = loaded.map(async (ch) => {
+      try {
+        const result = await invoke<EvtxParseResult>("evtx_query_channels", {
+          channels: [ch],
+          maxEvents: null,
+        });
+
+        const s = get();
+        const merged = [...s.records, ...result.records];
+        merged.sort((a, b) => a.timestampEpoch - b.timestampEpoch);
+        for (let i = 0; i < merged.length; i++) merged[i].id = i;
+
+        const countMap = new Map(result.channels.map((c) => [c.name, c.eventCount]));
+        const newChannels = s.channels.map((c) => ({
+          ...c,
+          eventCount: countMap.get(c.name) ?? c.eventCount,
+        }));
+        const newLoaded = new Set(s.loadedChannels);
+        newLoaded.add(ch);
+
+        set({
+          records: merged,
+          channels: newChannels,
+          loadedChannels: newLoaded,
+          loadElapsedMs: performance.now() - startTime,
+        });
+      } catch (e) {
+        console.warn(`[evtx] Refresh failed for ${ch}:`, e);
+      }
+    });
+
+    await Promise.all(promises);
+    set({
+      isLoading: false,
+      loadingChannel: null,
+      loadingProgress: null,
+      loadElapsedMs: performance.now() - startTime,
+    });
   },
 
   setSelectedChannels: (channels) => set({ selectedChannels: channels }),
@@ -263,6 +337,10 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
       loadError: null,
       selectedChannels: new Set<string>(),
       loadedChannels: new Set<string>(),
+      loadingChannel: null,
+      loadingProgress: null,
+      loadStartTime: null,
+      loadElapsedMs: null,
       filterLevels: new Set<EvtxLevel>(ALL_LEVELS),
       filterEventIds: "",
       filterSearch: "",
@@ -271,3 +349,11 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
       selectedRecordId: null,
     }),
 }));
+
+// Listen for progress events from the Rust backend
+listen<{ channel: string; fetched: number }>("evtx-query-progress", (event) => {
+  useEvtxStore.setState({
+    loadingChannel: event.payload.channel,
+    loadingProgress: event.payload.fetched,
+  });
+});

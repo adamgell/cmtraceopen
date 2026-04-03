@@ -82,9 +82,7 @@ export function EventLogWorkspace() {
       }}
     >
       {isLoading && (
-        <ProgressBar
-          style={{ width: "100%", flexShrink: 0 }}
-        />
+        <ProgressBar style={{ width: "100%", flexShrink: 0 }} />
       )}
       <EvtxFilterBar />
 

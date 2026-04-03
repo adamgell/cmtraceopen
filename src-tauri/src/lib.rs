@@ -65,6 +65,12 @@ pub fn run() {
             #[cfg(target_os = "windows")]
             app.manage(GraphAuthState::new());
 
+            // Auto-open DevTools in debug builds
+            #[cfg(debug_assertions)]
+            if let Some(window) = app.get_webview_window("main") {
+                window.open_devtools();
+            }
+
             Ok(())
         })
         .manage(AppState::new(initial_file_paths))

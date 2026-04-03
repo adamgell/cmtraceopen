@@ -115,7 +115,17 @@ pub fn query_channel(
     channel: &str,
     max_events: Option<u64>,
 ) -> Result<Vec<EvtxRecord>, String> {
-    let limit = max_events.unwrap_or(1000) as usize;
+    query_channel_with_progress(channel, max_events, |_, _| {})
+}
+
+/// Query with a progress callback: `on_progress(fetched_so_far, total_estimate)`.
+#[cfg(target_os = "windows")]
+pub fn query_channel_with_progress(
+    channel: &str,
+    max_events: Option<u64>,
+    on_progress: impl Fn(usize, Option<usize>),
+) -> Result<Vec<EvtxRecord>, String> {
+    let limit = max_events.map(|n| n as usize).unwrap_or(usize::MAX);
     let channel_hstring = HSTRING::from(channel);
     let query_string = HSTRING::from("*");
 
@@ -140,8 +150,13 @@ pub fn query_channel(
 
         match unsafe { EvtNext(query_handle.raw(), &mut raw_handles, 0, 0, &mut returned) } {
             Ok(()) => {}
-            Err(e) if is_no_more_items(&e) => break,
-            Err(e) => return Err(format_error("EvtNext", &e)),
+            Err(e) => {
+                if !is_no_more_items(&e) {
+                    eprintln!("[evtx] EvtNext error: code=0x{:08x} w32={} msg=\"{}\"",
+                        e.code().0 as u32, win32_code(&e), e.message());
+                }
+                break;
+            }
         }
 
         if returned == 0 {
@@ -171,6 +186,10 @@ pub fn query_channel(
             if let Some(record) = parse_xml_to_record(&xml, channel, rendered_message.as_deref())
             {
                 records.push(record);
+                // Report progress every 100 records
+                if records.len() % 100 == 0 {
+                    on_progress(records.len(), None);
+                }
             } else if records.is_empty() {
                 // Log the first unparseable XML so we can debug the format
                 log::warn!("event=evtx_parse_failed channel=\"{channel}\" xml_prefix=\"{}\"",
@@ -187,6 +206,15 @@ pub fn query_channel(
 
 #[cfg(not(target_os = "windows"))]
 pub fn enumerate_channels() -> Result<Vec<EvtxChannelInfo>, String> {
+    Err("Live event log queries are only available on Windows.".to_string())
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn query_channel_with_progress(
+    _channel: &str,
+    _max_events: Option<u64>,
+    _on_progress: impl Fn(usize, Option<usize>),
+) -> Result<Vec<EvtxRecord>, String> {
     Err("Live event log queries are only available on Windows.".to_string())
 }
 
@@ -223,16 +251,13 @@ fn render_event_xml(event_handle: EVT_HANDLE) -> Result<String, Error> {
                     (buffer_used as usize / std::mem::size_of::<u16>()).saturating_sub(1);
                 return Ok(String::from_utf16_lossy(&buffer[..utf16_len]));
             }
+            Err(e) if is_insufficient_buffer(&e) => {
+                let next_len =
+                    (buffer_used as usize / std::mem::size_of::<u16>()).max(buffer.len() * 2);
+                buffer.resize(next_len, 0);
+            }
             Err(e) => {
-                let code = e.code().0 as u32;
-                if code == 122 || code == 234 || code == 0x8007007A || code == 0x800700EA {
-                    // Insufficient buffer or more data — resize and retry
-                    let next_len =
-                        (buffer_used as usize / std::mem::size_of::<u16>()).max(buffer.len() * 2);
-                    buffer.resize(next_len, 0);
-                } else {
-                    return Err(e);
-                }
+                return Err(e);
             }
         }
     }
@@ -443,29 +468,30 @@ fn format_error(context: &str, error: &Error) -> String {
     }
 }
 
+/// Extract the Win32 error code from an HRESULT or raw error code.
 #[cfg(target_os = "windows")]
-fn is_insufficient_buffer(error: &Error) -> bool {
-    error.code().0 as u32 == 122
+fn win32_code(error: &Error) -> u32 {
+    (error.code().0 & 0xFFFF) as u32
 }
 
 #[cfg(target_os = "windows")]
-fn is_more_data(error: &Error) -> bool {
-    error.code().0 as u32 == 234
+fn is_insufficient_buffer(error: &Error) -> bool {
+    win32_code(error) == 122
 }
 
 #[cfg(target_os = "windows")]
 fn is_no_more_items(error: &Error) -> bool {
-    error.code().0 as u32 == 259
+    win32_code(error) == 259
 }
 
 #[cfg(target_os = "windows")]
 fn is_not_found(error: &Error) -> bool {
-    error.code().0 as u32 == 1168
+    win32_code(error) == 1168
 }
 
 #[cfg(target_os = "windows")]
 fn is_message_not_found(error: &Error) -> bool {
-    error.code().0 as u32 == 15027
+    win32_code(error) == 15027
 }
 
 #[cfg(test)]

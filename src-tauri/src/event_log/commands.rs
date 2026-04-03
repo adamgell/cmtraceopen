@@ -1,5 +1,15 @@
+use serde::Serialize;
+use tauri::{AppHandle, Emitter};
+
 use super::models::{EvtxChannelInfo, EvtxParseResult};
 use super::parser;
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EvtxQueryProgress {
+    channel: String,
+    fetched: usize,
+}
 
 #[tauri::command]
 pub async fn evtx_parse_files(paths: Vec<String>) -> Result<EvtxParseResult, String> {
@@ -26,6 +36,7 @@ pub async fn evtx_enumerate_channels() -> Result<Vec<EvtxChannelInfo>, String> {
 pub async fn evtx_query_channels(
     channels: Vec<String>,
     max_events: Option<u64>,
+    app: AppHandle,
 ) -> Result<EvtxParseResult, String> {
     #[cfg(target_os = "windows")]
     {
@@ -36,7 +47,14 @@ pub async fn evtx_query_channels(
             let mut error_messages = Vec::new();
 
             for channel in &channels {
-                match super::live::query_channel(channel, max_events) {
+                let app_ref = &app;
+                let ch_name = channel.clone();
+                match super::live::query_channel_with_progress(channel, max_events, |fetched, _| {
+                    let _ = app_ref.emit("evtx-query-progress", EvtxQueryProgress {
+                        channel: ch_name.clone(),
+                        fetched,
+                    });
+                }) {
                     Ok(records) => {
                         channel_infos.push(super::models::EvtxChannelInfo {
                             name: channel.clone(),
@@ -79,7 +97,7 @@ pub async fn evtx_query_channels(
     }
     #[cfg(not(target_os = "windows"))]
     {
-        let _ = (channels, max_events);
+        let _ = (channels, max_events, app);
         Ok(EvtxParseResult {
             records: Vec::new(),
             channels: Vec::new(),
