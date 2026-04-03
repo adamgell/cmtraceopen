@@ -782,8 +782,13 @@ fn collect_appworkload_context(lines: &[ImeLine], index: usize, guid: Option<&st
         let lookaround_start = index.saturating_sub(APPWORKLOAD_CONTEXT_LOOKAROUND);
         let lookaround_end =
             (index + APPWORKLOAD_CONTEXT_LOOKAROUND).min(lines.len().saturating_sub(1));
-        for selected_index in lookaround_start..=lookaround_end {
-            if contains_ascii_case_insensitive(&lines[selected_index].message, guid) {
+        for (selected_index, candidate_line) in lines
+            .iter()
+            .enumerate()
+            .take(lookaround_end + 1)
+            .skip(lookaround_start)
+        {
+            if contains_ascii_case_insensitive(&candidate_line.message, guid) {
                 selected.insert(selected_index);
             }
         }
