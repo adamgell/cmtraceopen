@@ -32,4 +32,5 @@ export interface EvtxParseResult {
   channels: EvtxChannelInfo[];
   totalRecords: number;
   parseErrors: number;
+  errorMessages: string[];
 }

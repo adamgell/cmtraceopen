@@ -33,6 +33,7 @@ pub async fn evtx_query_channels(
             let mut all_records = Vec::new();
             let mut channel_infos = Vec::new();
             let mut parse_errors = 0u32;
+            let mut error_messages = Vec::new();
 
             for channel in &channels {
                 match super::live::query_channel(channel, max_events) {
@@ -46,6 +47,13 @@ pub async fn evtx_query_channels(
                     }
                     Err(e) => {
                         log::warn!("event=evtx_channel_query_error channel=\"{}\" error=\"{}\"", channel, e);
+                        error_messages.push(format!("{}: {}", channel, e));
+                        // Still include channel in results with 0 events so frontend knows it was attempted
+                        channel_infos.push(super::models::EvtxChannelInfo {
+                            name: channel.clone(),
+                            event_count: 0,
+                            source_type: super::models::ChannelSourceType::Live,
+                        });
                         parse_errors += 1;
                     }
                 }
@@ -63,6 +71,7 @@ pub async fn evtx_query_channels(
                 channels: channel_infos,
                 total_records,
                 parse_errors,
+                error_messages,
             })
         })
         .await
@@ -76,6 +85,7 @@ pub async fn evtx_query_channels(
             channels: Vec::new(),
             total_records: 0,
             parse_errors: 0,
+            error_messages: vec![],
         })
     }
 }

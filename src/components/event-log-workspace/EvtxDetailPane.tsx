@@ -105,8 +105,10 @@ export function EvtxDetailPane() {
             padding: "8px",
             borderRadius: "4px",
             color: tokens.colorNeutralForeground1,
-            maxHeight: "120px",
+            minHeight: "60px",
+            maxHeight: "200px",
             overflow: "auto",
+            flexShrink: 0,
           }}
         >
           {record.message}

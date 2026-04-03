@@ -20,6 +20,7 @@ interface EvtxState {
   isLoading: boolean;
   loadError: string | null;
   selectedChannels: Set<string>;
+  loadedChannels: Set<string>;
   filterLevels: Set<EvtxLevel>;
   filterEventIds: string;
   filterSearch: string;
@@ -30,6 +31,7 @@ interface EvtxState {
   parseFiles: (paths: string[]) => Promise<void>;
   enumerateChannels: () => Promise<void>;
   queryChannels: (channels: string[], maxEvents?: number) => Promise<void>;
+  loadSelectedChannels: () => Promise<void>;
   setSelectedChannels: (channels: Set<string>) => void;
   toggleChannel: (channel: string) => void;
   selectAllChannels: () => void;
@@ -67,6 +69,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
   isLoading: false,
   loadError: null,
   selectedChannels: new Set<string>(),
+  loadedChannels: new Set<string>(),
   filterLevels: new Set<EvtxLevel>(ALL_LEVELS),
   filterEventIds: "",
   filterSearch: "",
@@ -88,17 +91,70 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
   enumerateChannels: async () => {
     set({ isLoading: true, loadError: null });
     try {
+      // Step 1: Enumerate all channels
       const channels = await invoke<EvtxChannelInfo[]>("evtx_enumerate_channels");
-      const channelNames = new Set(channels.map((c) => c.name));
+
+      // Step 2: Auto-query the core Windows Logs channels immediately
+      const coreChannels = ["Application", "System", "Security", "Setup"];
+      const availableCore = coreChannels.filter((c) =>
+        channels.some((ch) => ch.name === c)
+      );
+
+      let updatedChannels = channels;
+      let loadError: string | null = null;
+
+      // Show channels immediately, then load events progressively
+      const selectedNames = new Set(availableCore);
       set({
-        channels,
+        channels: updatedChannels,
         sourceMode: "live",
-        isLoading: false,
+        isLoading: true,
         loadError: null,
-        selectedChannels: channelNames,
+        selectedChannels: selectedNames,
+        loadedChannels: new Set<string>(),
         records: [],
         selectedRecordId: null,
       });
+
+      // Query core channels one at a time, updating the UI after each
+      for (const ch of availableCore) {
+        try {
+          const result = await invoke<EvtxParseResult>("evtx_query_channels", {
+            channels: [ch],
+            maxEvents: 1000,
+          });
+
+          console.log(`[evtx] ${ch}: got ${result.records.length} records, ${result.parseErrors} errors`, result.errorMessages);
+
+          // Merge into current state
+          const state = get();
+          const merged = [...state.records, ...result.records];
+          merged.sort((a, b) => a.timestampEpoch - b.timestampEpoch);
+          for (let i = 0; i < merged.length; i++) merged[i].id = i;
+
+          const countMap = new Map(result.channels.map((c) => [c.name, c.eventCount]));
+          const newChannels = state.channels.map((c) => ({
+            ...c,
+            eventCount: countMap.get(c.name) ?? c.eventCount,
+          }));
+          const newLoaded = new Set(state.loadedChannels);
+          newLoaded.add(ch);
+
+          set({
+            records: merged,
+            channels: newChannels,
+            loadedChannels: newLoaded,
+          });
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          console.warn(`[evtx] Failed to query ${ch}: ${msg}`);
+          if (!loadError) {
+            loadError = `${ch}: ${msg}`;
+          }
+        }
+      }
+
+      set({ isLoading: false, loadError });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       set({ isLoading: false, loadError: message });
@@ -112,11 +168,49 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
         channels,
         maxEvents: maxEvents ?? null,
       });
-      set(applyParseResult(result, "live"));
+
+      // Merge new records with existing ones (for incremental channel loading)
+      const state = get();
+      const existingChannelNames = new Set(state.records.map((r) => r.channel));
+      // Only add records from channels we don't already have
+      const newRecords = result.records.filter((r) => !existingChannelNames.has(r.channel));
+      const merged = [...state.records, ...newRecords];
+      merged.sort((a, b) => a.timestampEpoch - b.timestampEpoch);
+      // Reassign IDs
+      for (let i = 0; i < merged.length; i++) merged[i].id = i;
+
+      // Update channel event counts
+      const countMap = new Map(result.channels.map((c) => [c.name, c.eventCount]));
+      const updatedChannels = state.channels.map((c) => ({
+        ...c,
+        eventCount: countMap.get(c.name) ?? c.eventCount,
+      }));
+
+      const newLoaded = new Set(state.loadedChannels);
+      for (const ch of channels) newLoaded.add(ch);
+
+      set({
+        records: merged,
+        channels: updatedChannels,
+        loadedChannels: newLoaded,
+        isLoading: false,
+        loadError: null,
+        selectedRecordId: null,
+      });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       set({ isLoading: false, loadError: message });
     }
+  },
+
+  loadSelectedChannels: async () => {
+    const state = get();
+    // Find selected channels that haven't been loaded yet
+    const unloaded = [...state.selectedChannels].filter(
+      (ch) => !state.loadedChannels.has(ch)
+    );
+    if (unloaded.length === 0) return;
+    await get().queryChannels(unloaded, 1000);
   },
 
   setSelectedChannels: (channels) => set({ selectedChannels: channels }),
@@ -168,6 +262,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
       isLoading: false,
       loadError: null,
       selectedChannels: new Set<string>(),
+      loadedChannels: new Set<string>(),
       filterLevels: new Set<EvtxLevel>(ALL_LEVELS),
       filterEventIds: "",
       filterSearch: "",

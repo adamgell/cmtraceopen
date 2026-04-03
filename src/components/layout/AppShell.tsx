@@ -451,11 +451,15 @@ export function AppShell() {
       );
     }
 
-    return (
-      <div style={{ flex: 1, overflow: "hidden" }}>
-        <DsregcmdWorkspace />
-      </div>
-    );
+    if (activeView === "dsregcmd") {
+      return (
+        <div style={{ flex: 1, overflow: "hidden" }}>
+          <DsregcmdWorkspace />
+        </div>
+      );
+    }
+
+    return null;
   };
 
   return (
@@ -482,46 +486,48 @@ export function AppShell() {
           backgroundColor: tokens.colorNeutralBackground2,
         }}
       >
-        {sidebarCollapsed ? (
-          <div
-            style={{
-              width: 36,
-              minWidth: 36,
-              display: "flex",
-              flexDirection: "column",
-              alignItems: "center",
-              borderRight: `1px solid ${tokens.colorNeutralStroke2}`,
-              backgroundColor: tokens.colorNeutralBackground2,
-              paddingTop: 8,
-            }}
-          >
-            <button
-              onClick={toggleSidebar}
-              title="Expand sidebar (Ctrl+B)"
-              aria-label="Expand sidebar"
+        {activeView !== "event-log" && (
+          sidebarCollapsed ? (
+            <div
               style={{
-                background: "none",
-                border: "none",
-                cursor: "pointer",
-                padding: 6,
-                borderRadius: 4,
-                color: tokens.colorNeutralForeground2,
+                width: 36,
+                minWidth: 36,
                 display: "flex",
+                flexDirection: "column",
                 alignItems: "center",
-                justifyContent: "center",
+                borderRight: `1px solid ${tokens.colorNeutralStroke2}`,
+                backgroundColor: tokens.colorNeutralBackground2,
+                paddingTop: 8,
               }}
             >
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
-                <path d="M6 3l5 5-5 5V3z" />
-              </svg>
-            </button>
-          </div>
-        ) : (
-          <FileSidebar
-            width={FILE_SIDEBAR_RECOMMENDED_WIDTH}
-            activeView={activeView}
-            onCollapse={toggleSidebar}
-          />
+              <button
+                onClick={toggleSidebar}
+                title="Expand sidebar (Ctrl+B)"
+                aria-label="Expand sidebar"
+                style={{
+                  background: "none",
+                  border: "none",
+                  cursor: "pointer",
+                  padding: 6,
+                  borderRadius: 4,
+                  color: tokens.colorNeutralForeground2,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                }}
+              >
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                  <path d="M6 3l5 5-5 5V3z" />
+                </svg>
+              </button>
+            </div>
+          ) : (
+            <FileSidebar
+              width={FILE_SIDEBAR_RECOMMENDED_WIDTH}
+              activeView={activeView}
+              onCollapse={toggleSidebar}
+            />
+          )
         )}
 
         <div

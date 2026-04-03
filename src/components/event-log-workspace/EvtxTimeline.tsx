@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { tokens } from "@fluentui/react-components";
 import {
@@ -128,6 +128,37 @@ export function EvtxTimeline() {
   const monoFontSize = Math.max(10, fontSize - 1);
   const lineHeight = `${metrics.rowLineHeight}px`;
 
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      if (e.key !== "ArrowUp" && e.key !== "ArrowDown" && e.key !== "Home" && e.key !== "End") return;
+      e.preventDefault();
+      e.stopPropagation();
+
+      const currentIndex = selectedRecordId != null
+        ? sortedRecords.findIndex((r) => r.id === selectedRecordId)
+        : -1;
+
+      let nextIndex: number;
+      if (e.key === "ArrowDown") {
+        nextIndex = currentIndex < sortedRecords.length - 1 ? currentIndex + 1 : currentIndex;
+      } else if (e.key === "ArrowUp") {
+        nextIndex = currentIndex > 0 ? currentIndex - 1 : 0;
+      } else if (e.key === "Home") {
+        nextIndex = 0;
+      } else {
+        nextIndex = sortedRecords.length - 1;
+      }
+
+      if (nextIndex >= 0 && nextIndex < sortedRecords.length) {
+        setSelectedRecordId(sortedRecords[nextIndex].id);
+        virtualizer.scrollToIndex(nextIndex, { align: "auto" });
+        // Keep focus on the container so subsequent arrow keys work
+        parentRef.current?.focus();
+      }
+    },
+    [selectedRecordId, sortedRecords, setSelectedRecordId, virtualizer]
+  );
+
   if (records.length === 0) {
     return (
       <div
@@ -164,6 +195,8 @@ export function EvtxTimeline() {
     <div
       ref={parentRef}
       role="listbox"
+      tabIndex={0}
+      onKeyDown={handleKeyDown}
       aria-label={`Event log timeline - ${sortedRecords.length} records`}
       style={{
         overflowY: "auto",
@@ -171,6 +204,7 @@ export function EvtxTimeline() {
         padding: "0",
         backgroundColor: tokens.colorNeutralBackground1,
         fontFamily: LOG_UI_FONT_FAMILY,
+        outline: "none",
       }}
     >
       <div

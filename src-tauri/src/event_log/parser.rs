@@ -78,6 +78,7 @@ pub fn parse_evtx_files(paths: &[String]) -> Result<EvtxParseResult, String> {
         channels,
         total_records,
         parse_errors,
+        error_messages: vec![],
     })
 }
 

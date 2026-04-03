@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { Badge, tokens } from "@fluentui/react-components";
+import { Badge, Spinner, tokens } from "@fluentui/react-components";
 import { LOG_UI_FONT_FAMILY } from "../../lib/log-accessibility";
 import {
   getActiveSourceLabel,
@@ -22,6 +22,7 @@ import { useIntuneStore } from "../../stores/intune-store";
 import { useDsregcmdStore } from "../../stores/dsregcmd-store";
 import { useDeploymentStore } from "../../stores/deployment-store";
 import { useSysmonStore } from "../../stores/sysmon-store";
+import { useEvtxStore } from "../../stores/evtx-store";
 
 interface SeverityCounts {
   errors: number;
@@ -82,6 +83,12 @@ export function StatusBar() {
   const sysmonSummary = useSysmonStore((s) => s.summary);
   const sysmonError = useSysmonStore((s) => s.analysisError);
   const sysmonSourcePath = useSysmonStore((s) => s.sourcePath);
+
+  const evtxRecordCount = useEvtxStore((s) => s.records.length);
+  const evtxSourceMode = useEvtxStore((s) => s.sourceMode);
+  const evtxIsLoading = useEvtxStore((s) => s.isLoading);
+  const evtxLoadedChannelCount = useEvtxStore((s) => s.loadedChannels.size);
+  const evtxLoadElapsedMs = useEvtxStore((s) => s.loadElapsedMs);
 
   const filterClauseCount = useFilterStore((s) => s.clauses.length);
   const filteredIds = useFilterStore((s) => s.filteredIds);
@@ -332,6 +339,29 @@ export function StatusBar() {
         deploymentResult.deferred > 0 ? `${deploymentResult.deferred} deferred` : null,
       ].filter(Boolean).join(" | ");
     }
+  } else if (activeView === "event-log") {
+    leftParts = [
+      "Event Log",
+      evtxIsLoading
+        ? "Loading..."
+        : evtxSourceMode === "live"
+          ? `${evtxLoadedChannelCount} channel${evtxLoadedChannelCount !== 1 ? "s" : ""} loaded`
+          : evtxSourceMode === "files"
+            ? "File mode"
+            : "Ready",
+    ];
+
+    if (evtxIsLoading) {
+      rightStatusText = evtxRecordCount > 0
+        ? `${evtxRecordCount.toLocaleString()} events loaded...`
+        : "Querying event logs...";
+      rightTone = tokens.colorPaletteBlueForeground2;
+    } else if (evtxRecordCount > 0) {
+      const timeStr = evtxLoadElapsedMs != null
+        ? ` in ${(evtxLoadElapsedMs / 1000).toFixed(1)}s`
+        : "";
+      rightStatusText = `${evtxRecordCount.toLocaleString()} events${timeStr}`;
+    }
   } else {
     const diagnostics = dsregcmdResult?.diagnostics ?? [];
     const errorCount = diagnostics.filter((item) => item.severity === "Error").length;
@@ -381,11 +411,15 @@ export function StatusBar() {
           ? "New Intune"
           : activeView === "sysmon"
             ? "Sysmon Analysis"
-            : activeView === "deployment"
-              ? "Software Deployment"
-              : activeView === "macos-diag"
-                ? "macOS Diagnostics"
-                : "dsregcmd";
+            : activeView === "event-log"
+              ? "Event Log"
+              : activeView === "deployment"
+                ? "Software Deployment"
+                : activeView === "macos-diag"
+                  ? "macOS Diagnostics"
+                  : activeView === "dsregcmd"
+                    ? "dsregcmd"
+                    : activeView;
 
   return (
     <div
@@ -459,6 +493,9 @@ export function StatusBar() {
                 ? "Graph API: Connected"
                 : "Graph API: Error"}
           </span>
+        )}
+        {activeView === "event-log" && evtxIsLoading && (
+          <Spinner size="tiny" />
         )}
         <span
           title={rightStatusText}
