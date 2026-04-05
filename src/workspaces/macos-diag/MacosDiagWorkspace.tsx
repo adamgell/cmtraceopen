@@ -5,7 +5,7 @@ import {
   Spinner,
   tokens,
 } from "@fluentui/react-components";
-import { useMacosDiagStore } from "../../stores/macos-diag-store";
+import { useMacosDiagStore } from "./macos-diag-store";
 import { macosScanEnvironment } from "../../lib/commands";
 import { MacosDiagEnvironmentBanner } from "./MacosDiagEnvironmentBanner";
 import { MacosDiagTabStrip } from "./MacosDiagTabStrip";

@@ -9,7 +9,7 @@ import type {
   MacosPackageInfo,
   MacosPackageFiles,
   MacosUnifiedLogResult,
-} from "../types/macos-diag";
+} from "./types";
 
 export type EnvironmentPhase = "idle" | "scanning" | "ready" | "error";
 

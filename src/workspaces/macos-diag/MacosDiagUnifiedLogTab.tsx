@@ -8,7 +8,7 @@ import {
   tokens,
 } from "@fluentui/react-components";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { useMacosDiagStore } from "../../stores/macos-diag-store";
+import { useMacosDiagStore } from "./macos-diag-store";
 import { useUiStore } from "../../stores/ui-store";
 import { macosQueryUnifiedLog } from "../../lib/commands";
 import { getLogListMetrics } from "../../lib/log-accessibility";

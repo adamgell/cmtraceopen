@@ -7,7 +7,7 @@ import {
   Spinner,
   tokens,
 } from "@fluentui/react-components";
-import { useMacosDiagStore } from "../../stores/macos-diag-store";
+import { useMacosDiagStore } from "./macos-diag-store";
 import { useUiStore } from "../../stores/ui-store";
 import {
   macosListPackages,

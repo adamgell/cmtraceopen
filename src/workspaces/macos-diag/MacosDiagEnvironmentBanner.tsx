@@ -4,7 +4,7 @@ import {
   shorthands,
   tokens,
 } from "@fluentui/react-components";
-import type { MacosDiagEnvironment } from "../../types/macos-diag";
+import type { MacosDiagEnvironment } from "./types";
 
 const useStyles = makeStyles({
   banner: {

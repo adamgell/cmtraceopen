@@ -1,0 +1,7 @@
+{
+  "enabledPlugins": {
+    "github@claude-plugins-official": true,
+    "typescript-lsp@claude-plugins-official": true,
+    "microsoft-docs@claude-plugins-official": true
+  }
+}

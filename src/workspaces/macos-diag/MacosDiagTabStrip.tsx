@@ -3,8 +3,8 @@ import {
   shorthands,
   tokens,
 } from "@fluentui/react-components";
-import { useMacosDiagStore } from "../../stores/macos-diag-store";
-import type { MacosDiagTabId } from "../../types/macos-diag";
+import { useMacosDiagStore } from "./macos-diag-store";
+import type { MacosDiagTabId } from "./types";
 
 const useStyles = makeStyles({
   strip: {

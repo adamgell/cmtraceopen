@@ -7,12 +7,12 @@ import {
   Spinner,
   tokens,
 } from "@fluentui/react-components";
-import { useMacosDiagStore } from "../../stores/macos-diag-store";
+import { useMacosDiagStore } from "./macos-diag-store";
 import { useUiStore } from "../../stores/ui-store";
 import { useLogStore } from "../../stores/log-store";
 import { macosInspectDefender, openLogFile } from "../../lib/commands";
 import { getLogListMetrics } from "../../lib/log-accessibility";
-import type { MacosLogFileEntry } from "../../types/macos-diag";
+import type { MacosLogFileEntry } from "./types";
 
 const useStyles = makeStyles({
   healthCard: {
