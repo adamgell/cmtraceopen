@@ -1,8 +1,11 @@
 // src/workspaces/registry.ts
 import type { PlatformKind, WorkspaceId } from "../types/log";
 import type { WorkspaceDefinition } from "./types";
+import { sysmonWorkspace } from "./sysmon";
 
-const ALL_WORKSPACES: WorkspaceDefinition[] = [];
+const ALL_WORKSPACES: WorkspaceDefinition[] = [
+  sysmonWorkspace,
+];
 
 export const workspaceRegistry = new Map<WorkspaceId, WorkspaceDefinition>(
   ALL_WORKSPACES.map((ws) => [ws.id, ws]),
