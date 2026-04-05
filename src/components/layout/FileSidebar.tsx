@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState, Suspense, type ReactNode } from "react";
 import {
   Badge,
   Button,
@@ -12,7 +12,7 @@ import { loadLogSource, loadSelectedLogFile } from "../../lib/log-source";
 import { useFilterStore } from "../../stores/filter-store";
 import { useIntuneStore } from "../../stores/intune-store";
 import { useDsregcmdStore } from "../../stores/dsregcmd-store";
-import { SysmonSidebar } from "../../workspaces/sysmon/SysmonSidebar";
+import { getWorkspace } from "../../workspaces/registry";
 import {
   getActiveSourceLabel,
   getActiveSourcePath,
@@ -22,7 +22,7 @@ import {
   useLogStore,
 } from "../../stores/log-store";
 import type { FolderEntry, LogSource } from "../../types/log";
-import { isIntuneWorkspace, useUiStore, type WorkspaceId } from "../../stores/ui-store";
+import { useUiStore, type WorkspaceId } from "../../stores/ui-store";
 import { useAppActions } from "./Toolbar";
 
 export const FILE_SIDEBAR_RECOMMENDED_WIDTH = 280;
@@ -1017,14 +1017,18 @@ export function FileSidebar({ width = FILE_SIDEBAR_RECOMMENDED_WIDTH, activeView
           </button>
         </div>
       )}
-      {activeView === "log" || activeView === "deployment" || activeView === "macos-diag"
-        ? <LogSidebar />
-        : isIntuneWorkspace(activeView)
-          ? <IntuneSidebar />
-          : activeView === "sysmon"
-            ? <SysmonSidebar />
-            : <DsregcmdSidebar />}
-      {(activeView === "log" || activeView === "deployment") && <SidebarFooter />}
+      {(() => {
+        const workspace = getWorkspace(activeView);
+        const SidebarComponent = workspace.sidebar;
+        return SidebarComponent ? (
+          <Suspense fallback={null}>
+            <SidebarComponent />
+          </Suspense>
+        ) : (
+          <LogSidebar />
+        );
+      })()}
+      {getWorkspace(activeView).capabilities?.footerBar && <SidebarFooter />}
     </aside>
   );
 }
