@@ -28,6 +28,8 @@ export interface WorkspaceDefinition {
   id: WorkspaceId;
   /** Human-readable label shown in toolbar dropdown. */
   label: string;
+  /** Override for the status bar view label. Defaults to `${label} workspace`. */
+  statusLabel?: string;
   /** Platforms this workspace is available on. "all" means no restriction. */
   platforms: PlatformKind[] | "all";
   /** Lazy-loaded main workspace component. */

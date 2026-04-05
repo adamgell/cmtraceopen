@@ -5,6 +5,7 @@ import type { WorkspaceDefinition } from "../types";
 export const logWorkspace: WorkspaceDefinition = {
   id: "log",
   label: "Log Explorer",
+  statusLabel: "Log view",
   platforms: "all",
   component: lazy(() =>
     import("../../components/log-view/LogListView").then((m) => ({

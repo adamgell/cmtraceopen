@@ -13,7 +13,7 @@ import { useFilterStore } from "./filter-store";
 import type { ColumnId } from "../lib/column-config";
 import type { CollectionResult } from "../lib/commands";
 import type { WorkspaceId } from "../types/log";
-import { getAvailableWorkspaces as getRegistryWorkspaces } from "../workspaces/registry";
+import { getAvailableWorkspaces as getRegistryWorkspaces, getWorkspace } from "../workspaces/registry";
 
 export type { WorkspaceId } from "../types/log";
 
@@ -85,66 +85,21 @@ export function getUiChromeStatus(
   showDetails: boolean,
   showInfoPane: boolean
 ): UiChromeStatus {
-  if (activeView === "new-intune") {
-    return {
-      viewLabel: "New Intune Workspace",
-      detailsLabel: "Details hidden in New Intune Workspace",
-      infoLabel: "Info hidden in New Intune Workspace",
-    };
-  }
+  const workspace = getWorkspace(activeView as WorkspaceId);
+  const viewLabel = workspace.statusLabel ?? `${workspace.label} workspace`;
 
-  if (activeView === "intune") {
+  if (workspace.capabilities?.detailsPane) {
     return {
-      viewLabel: "Intune workspace",
-      detailsLabel: "Details hidden in Intune workspace",
-      infoLabel: "Info hidden in Intune workspace",
-    };
-  }
-
-  if (activeView === "sysmon") {
-    return {
-      viewLabel: "Sysmon workspace",
-      detailsLabel: "Details hidden in Sysmon workspace",
-      infoLabel: "Info hidden in Sysmon workspace",
-    };
-  }
-
-  if (activeView === "dsregcmd") {
-    return {
-      viewLabel: "dsregcmd workspace",
-      detailsLabel: "Details hidden in dsregcmd workspace",
-      infoLabel: "Info hidden in dsregcmd workspace",
-    };
-  }
-
-  if (activeView === "macos-diag") {
-    return {
-      viewLabel: "macOS Diagnostics workspace",
-      detailsLabel: "Details hidden in macOS Diagnostics workspace",
-      infoLabel: "Info hidden in macOS Diagnostics workspace",
-    };
-  }
-
-  if (activeView === "deployment") {
-    return {
-      viewLabel: "Software Deployment workspace",
-      detailsLabel: "Details hidden in Software Deployment workspace",
-      infoLabel: "Info hidden in Software Deployment workspace",
-    };
-  }
-
-  if (activeView === "event-log") {
-    return {
-      viewLabel: "Event Log Viewer workspace",
-      detailsLabel: "Details hidden in Event Log Viewer workspace",
-      infoLabel: "Info hidden in Event Log Viewer workspace",
+      viewLabel,
+      detailsLabel: showDetails ? "Details on" : "Details off",
+      infoLabel: showInfoPane ? "Info on" : "Info off",
     };
   }
 
   return {
-    viewLabel: "Log view",
-    detailsLabel: showDetails ? "Details on" : "Details off",
-    infoLabel: showInfoPane ? "Info on" : "Info off",
+    viewLabel,
+    detailsLabel: `Details hidden in ${viewLabel}`,
+    infoLabel: `Info hidden in ${viewLabel}`,
   };
 }
 

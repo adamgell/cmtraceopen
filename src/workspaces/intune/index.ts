@@ -5,6 +5,7 @@ import type { WorkspaceDefinition } from "../types";
 export const intuneWorkspace: WorkspaceDefinition = {
   id: "intune",
   label: "Intune Diagnostics",
+  statusLabel: "Intune workspace",
   platforms: "all",
   component: lazy(() =>
     import("./IntuneDashboard").then((m) => ({
