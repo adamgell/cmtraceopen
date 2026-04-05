@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, Suspense } from "react";
 import { tokens, ProgressBar, Spinner } from "@fluentui/react-components";
 import { invoke } from "@tauri-apps/api/core";
 import { Toolbar } from "./Toolbar";
@@ -21,13 +21,7 @@ import { CollectionCompleteDialog } from "../dialogs/CollectionCompleteDialog";
 import { UpdateDialog } from "../dialogs/UpdateDialog";
 import { MergeTabsDialog } from "../dialogs/MergeTabsDialog";
 import { DiffConfigDialog } from "../dialogs/DiffConfigDialog";
-import { IntuneDashboard } from "../intune/IntuneDashboard";
-import { NewIntuneWorkspace } from "../intune/NewIntuneWorkspace";
-import { DsregcmdWorkspace } from "../dsregcmd/DsregcmdWorkspace";
-import { MacosDiagWorkspace } from "../macos-diag/MacosDiagWorkspace";
-import { DeploymentWorkspace } from "../deployment/DeploymentWorkspace";
-import { EventLogWorkspace } from "../event-log-workspace/EventLogWorkspace";
-import { SysmonWorkspace } from "../../workspaces/sysmon/SysmonWorkspace";
+import { getWorkspace } from "../../workspaces/registry";
 import { RegistryViewer } from "../registry-view/RegistryViewer";
 import type { FilterClause } from "../dialogs/FilterDialog";
 import type { LogEntry } from "../../types/log";
@@ -403,63 +397,16 @@ export function AppShell() {
       );
     }
 
-    if (activeView === "intune") {
-      return (
-        <div style={{ flex: 1, overflow: "hidden" }}>
-          <IntuneDashboard />
-        </div>
-      );
-    }
-
-    if (activeView === "new-intune") {
-      return (
-        <div style={{ flex: 1, overflow: "hidden" }}>
-          <NewIntuneWorkspace />
-        </div>
-      );
-    }
-
-    if (activeView === "macos-diag") {
-      return (
-        <div style={{ flex: 1, overflow: "hidden" }}>
-          <MacosDiagWorkspace />
-        </div>
-      );
-    }
-
-    if (activeView === "sysmon") {
-      return (
-        <div style={{ flex: 1, overflow: "hidden" }}>
-          <SysmonWorkspace />
-        </div>
-      );
-    }
-
-    if (activeView === "deployment") {
-      return (
-        <div style={{ flex: 1, overflow: "hidden" }}>
-          <DeploymentWorkspace />
-        </div>
-      );
-    }
-
-    if (activeView === "event-log") {
-      return (
-        <div style={{ flex: 1, overflow: "hidden", display: "flex" }}>
-          <EventLogWorkspace />
-        </div>
-      );
-    }
-
-    if (activeView === "dsregcmd") {
-      return (
-        <div style={{ flex: 1, overflow: "hidden" }}>
-          <DsregcmdWorkspace />
-        </div>
-      );
-    }
-
-    return null;
+    // All other workspaces: registry lookup with lazy loading
+    const workspace = getWorkspace(activeView);
+    const WorkspaceComponent = workspace.component;
+    return (
+      <div style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column" }}>
+        <Suspense fallback={null}>
+          <WorkspaceComponent />
+        </Suspense>
+      </div>
+    );
   };
 
   return (
@@ -473,8 +420,8 @@ export function AppShell() {
       }}
     >
       <Toolbar />
-      {activeView === "log" && <TabStrip />}
-      {showFindBar && activeView === "log" && (
+      {getWorkspace(activeView).capabilities?.tabStrip && <TabStrip />}
+      {showFindBar && getWorkspace(activeView).capabilities?.findBar && (
         <FindBar onClose={() => setShowFindBar(false)} />
       )}
 
