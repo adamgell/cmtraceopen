@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { tokens, Dropdown, Option } from "@fluentui/react-components";
 import { VerticalBarChart } from "@fluentui/react-charts";
-import type { SysmonDashboardData, TimeBucket } from "../../workspaces/sysmon/types";
+import type { SysmonDashboardData, TimeBucket } from "./types";
 
 interface DashboardTimelineProps {
   dashboard: SysmonDashboardData;

@@ -1,6 +1,6 @@
 import { tokens, Button, Spinner, Tab, TabList } from "@fluentui/react-components";
-import { useSysmonStore, type SysmonWorkspaceTab } from "../../workspaces/sysmon/sysmon-store";
-import { useAppActions } from "../layout/Toolbar";
+import { useSysmonStore, type SysmonWorkspaceTab } from "./sysmon-store";
+import { useAppActions } from "../../components/layout/Toolbar";
 import { SysmonEventTable } from "./SysmonEventTable";
 import { SysmonSummaryView } from "./SysmonSummaryView";
 import { SysmonConfigView } from "./SysmonConfigView";

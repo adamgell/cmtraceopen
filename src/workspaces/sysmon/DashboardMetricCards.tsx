@@ -1,5 +1,5 @@
 import { tokens } from "@fluentui/react-components";
-import type { SysmonSummary } from "../../workspaces/sysmon/types";
+import type { SysmonSummary } from "./types";
 
 interface DashboardMetricCardsProps {
   summary: SysmonSummary;

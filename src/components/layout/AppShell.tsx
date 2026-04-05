@@ -27,7 +27,7 @@ import { DsregcmdWorkspace } from "../dsregcmd/DsregcmdWorkspace";
 import { MacosDiagWorkspace } from "../macos-diag/MacosDiagWorkspace";
 import { DeploymentWorkspace } from "../deployment/DeploymentWorkspace";
 import { EventLogWorkspace } from "../event-log-workspace/EventLogWorkspace";
-import { SysmonWorkspace } from "../sysmon/SysmonWorkspace";
+import { SysmonWorkspace } from "../../workspaces/sysmon/SysmonWorkspace";
 import { RegistryViewer } from "../registry-view/RegistryViewer";
 import type { FilterClause } from "../dialogs/FilterDialog";
 import type { LogEntry } from "../../types/log";

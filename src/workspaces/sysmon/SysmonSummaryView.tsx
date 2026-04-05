@@ -1,5 +1,5 @@
 import { tokens } from "@fluentui/react-components";
-import { useSysmonStore } from "../../workspaces/sysmon/sysmon-store";
+import { useSysmonStore } from "./sysmon-store";
 
 export function SysmonSummaryView() {
   const summary = useSysmonStore((s) => s.summary);
