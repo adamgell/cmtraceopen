@@ -280,7 +280,7 @@ export interface DsregcmdAnalysisResult {
   enrollmentEvidence: DsregcmdEnrollmentEvidence | null;
   activeEvidence: DsregcmdActiveEvidence | null;
   scheduledTaskEvidence: DsregcmdScheduledTaskEvidence | null;
-  eventLogAnalysis: import("./event-log").EventLogAnalysis | null;
+  eventLogAnalysis: import("../../types/event-log").EventLogAnalysis | null;
 }
 
 export interface DsregcmdCaptureResult {

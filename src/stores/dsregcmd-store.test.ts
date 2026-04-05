@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { useDsregcmdStore } from "./dsregcmd-store";
+import { useDsregcmdStore } from "../workspaces/dsregcmd/dsregcmd-store";
 
 describe("dsregcmd-store", () => {
   beforeEach(() => {

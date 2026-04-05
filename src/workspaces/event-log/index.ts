@@ -12,7 +12,7 @@ export const eventLogWorkspace: WorkspaceDefinition = {
     )
   ),
   sidebar: lazy(() =>
-    import("../../components/layout/FileSidebar").then((m) => ({
+    import("../dsregcmd/DsregcmdSidebar").then((m) => ({
       default: m.DsregcmdSidebar,
     }))
   ),

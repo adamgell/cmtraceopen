@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { tokens } from "@fluentui/react-components";
 import { inspectEvidenceArtifact, inspectEvidenceBundle } from "../../lib/commands";
-import { useDsregcmdStore } from "../../stores/dsregcmd-store";
+import { useDsregcmdStore } from "../../workspaces/dsregcmd/dsregcmd-store";
 import { useIntuneStore } from "../../stores/intune-store";
 import { useLogStore } from "../../stores/log-store";
 import { isIntuneWorkspace, useUiStore } from "../../stores/ui-store";

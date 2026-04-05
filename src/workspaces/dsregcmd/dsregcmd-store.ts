@@ -4,8 +4,8 @@ import type {
   DsregcmdAnalysisState,
   DsregcmdSourceContext,
   DsregcmdSourceDescriptor,
-} from "../types/dsregcmd";
-import type { EventLogChannel, EventLogSeverity } from "../types/event-log";
+} from "./types";
+import type { EventLogChannel, EventLogSeverity } from "../../types/event-log";
 
 const emptySourceContext: DsregcmdSourceContext = {
   source: null,

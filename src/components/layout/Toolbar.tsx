@@ -33,7 +33,7 @@ import {
 import { useLogStore } from "../../stores/log-store";
 import { useFilterStore } from "../../stores/filter-store";
 import { useIntuneStore } from "../../stores/intune-store";
-import { useDsregcmdStore } from "../../stores/dsregcmd-store";
+import { useDsregcmdStore } from "../../workspaces/dsregcmd/dsregcmd-store";
 import { useSysmonStore } from "../../workspaces/sysmon/sysmon-store";
 import { isIntuneWorkspace, getAvailableWorkspaces, type IntuneWorkspaceId, type WorkspaceId, type PlatformId, useUiStore } from "../../stores/ui-store";
 import { getWorkspace } from "../../workspaces/registry";

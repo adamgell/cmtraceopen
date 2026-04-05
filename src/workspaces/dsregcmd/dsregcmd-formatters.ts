@@ -9,7 +9,7 @@ import type {
   DsregcmdPolicyEvidenceValue,
   DsregcmdSeverity,
   DsregcmdSourceContext,
-} from "../../types/dsregcmd";
+} from "./types";
 import { tokens } from "@fluentui/react-components";
 import {
   buildDiagnosticsGroup,

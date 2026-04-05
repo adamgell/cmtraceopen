@@ -2,7 +2,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { useMemo, useRef, useCallback } from "react";
 import { tokens } from "@fluentui/react-components";
 import { LOG_MONOSPACE_FONT_FAMILY } from "../../lib/log-accessibility";
-import { useDsregcmdStore } from "../../stores/dsregcmd-store";
+import { useDsregcmdStore } from "./dsregcmd-store";
 import type { EventLogAnalysis, EventLogEntry, EventLogChannel, EventLogSeverity } from "../../types/event-log";
 
 const COLLAPSED_ROW_ESTIMATE = 28;

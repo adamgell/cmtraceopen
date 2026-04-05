@@ -3,9 +3,9 @@ import type {
   DsregcmdAnalysisResult,
   DsregcmdSourceContext,
   DsregcmdSourceDescriptor,
-} from "../types/dsregcmd";
+} from "../workspaces/dsregcmd/types";
 import { analyzeDsregcmd, captureDsregcmd, loadDsregcmdSource } from "./commands";
-import { useDsregcmdStore } from "../stores/dsregcmd-store";
+import { useDsregcmdStore } from "../workspaces/dsregcmd/dsregcmd-store";
 
 function getBaseName(path: string | null): string {
   if (!path) {

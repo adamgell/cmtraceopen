@@ -6,7 +6,7 @@
 import type {
   DsregcmdAnalysisResult,
   DsregcmdSourceContext,
-} from "../../types/dsregcmd";
+} from "./types";
 import {
   type DisplayConfidenceAssessment,
   type DisplayPhaseAssessment,

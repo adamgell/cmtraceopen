@@ -7,12 +7,12 @@ export const dsregcmdWorkspace: WorkspaceDefinition = {
   label: "dsregcmd",
   platforms: ["windows"],
   component: lazy(() =>
-    import("../../components/dsregcmd/DsregcmdWorkspace").then((m) => ({
+    import("./DsregcmdWorkspace").then((m) => ({
       default: m.DsregcmdWorkspace,
     }))
   ),
   sidebar: lazy(() =>
-    import("../../components/layout/FileSidebar").then((m) => ({
+    import("./DsregcmdSidebar").then((m) => ({
       default: m.DsregcmdSidebar,
     }))
   ),

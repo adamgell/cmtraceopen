@@ -19,7 +19,7 @@ import {
   useUiStore,
 } from "../../stores/ui-store";
 import { useIntuneStore } from "../../stores/intune-store";
-import { useDsregcmdStore } from "../../stores/dsregcmd-store";
+import { useDsregcmdStore } from "../../workspaces/dsregcmd/dsregcmd-store";
 import { useDeploymentStore } from "../../stores/deployment-store";
 import { useSysmonStore } from "../../workspaces/sysmon/sysmon-store";
 import { useEvtxStore } from "../../stores/evtx-store";

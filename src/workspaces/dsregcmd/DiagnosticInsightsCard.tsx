@@ -1,5 +1,5 @@
 import { Badge, tokens } from "@fluentui/react-components";
-import type { DsregcmdDiagnosticInsight } from "../../types/dsregcmd";
+import type { DsregcmdDiagnosticInsight } from "./types";
 import { getSeverityColor } from "./dsregcmd-formatters";
 
 export function IssueCard({ issue }: { issue: DsregcmdDiagnosticInsight }) {

@@ -16,7 +16,7 @@ import type {
   DsregcmdAnalysisResult,
   DsregcmdCaptureResult,
   DsregcmdResolvedSource,
-} from "../types/dsregcmd";
+} from "../workspaces/dsregcmd/types";
 
 export interface FileAssociationPromptStatus {
   supported: boolean;

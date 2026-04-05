@@ -8,9 +8,9 @@ import { Button, Textarea, tokens } from "@fluentui/react-components";
 import { LOG_MONOSPACE_FONT_FAMILY } from "../../lib/log-accessibility";
 import { save } from "@tauri-apps/plugin-dialog";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
-import { useDsregcmdStore } from "../../stores/dsregcmd-store";
+import { useDsregcmdStore } from "./dsregcmd-store";
 import { DsregcmdEventLogSurface } from "./DsregcmdEventLogSurface";
-import { useAppActions } from "../layout/Toolbar";
+import { useAppActions } from "../../components/layout/Toolbar";
 import { writeTextOutputFile } from "../../lib/commands";
 import {
   formatBool,
