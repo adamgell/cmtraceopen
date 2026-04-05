@@ -389,28 +389,81 @@ pub fn resolve_guids(
     })
 }
 
-/// Fetch all Intune apps at once (for pre-populating the cache).
+/// Fetch all Intune apps, scripts, and remediations for pre-populating the cache.
 pub fn fetch_all_apps(state: &GraphAuthState) -> Result<Vec<GraphAppInfo>, AppError> {
     let token = state
         .get_valid_token()
         .ok_or_else(|| AppError::Internal("Not authenticated. Please sign in first.".into()))?;
 
-    let mut all_apps: Vec<GraphAppInfo> = Vec::new();
-    let mut next_url: Option<String> = Some(format!(
-        "{GRAPH_BETA_BASE}/deviceAppManagement/mobileApps?$select=id,displayName,publisher"
-    ));
+    let mut all: Vec<GraphAppInfo> = Vec::new();
 
+    // Win32/LOB/Store apps
+    all.extend(fetch_paginated(
+        &token.token,
+        &format!("{GRAPH_BETA_BASE}/deviceAppManagement/mobileApps?$select=id,displayName,publisher"),
+        None,
+    )?);
+
+    // Proactive Remediations (Health Scripts)
+    match fetch_paginated(
+        &token.token,
+        &format!("{GRAPH_BETA_BASE}/deviceManagement/deviceHealthScripts?$select=id,displayName,publisher"),
+        Some("#microsoft.graph.deviceHealthScript"),
+    ) {
+        Ok(items) => all.extend(items),
+        Err(e) => log::warn!("event=graph_skip_health_scripts error=\"{e}\""),
+    }
+
+    // Platform scripts (PowerShell scripts deployed via Intune)
+    match fetch_paginated(
+        &token.token,
+        &format!("{GRAPH_BETA_BASE}/deviceManagement/deviceManagementScripts?$select=id,displayName"),
+        Some("#microsoft.graph.deviceManagementScript"),
+    ) {
+        Ok(items) => all.extend(items),
+        Err(e) => log::warn!("event=graph_skip_device_scripts error=\"{e}\""),
+    }
+
+    // Shell scripts (macOS)
+    match fetch_paginated(
+        &token.token,
+        &format!("{GRAPH_BETA_BASE}/deviceManagement/deviceShellScripts?$select=id,displayName"),
+        Some("#microsoft.graph.deviceShellScript"),
+    ) {
+        Ok(items) => all.extend(items),
+        Err(e) => log::warn!("event=graph_skip_shell_scripts error=\"{e}\""),
+    }
+
+    let cache_map: HashMap<String, GraphAppInfo> = all
+        .iter()
+        .map(|a| (a.id.clone(), a.clone()))
+        .collect();
+    state.cache_apps(&cache_map);
+
+    Ok(all)
+}
+
+/// Fetch all items from a paginated Graph API endpoint.
+/// `default_type` is used when the response items don't include `@odata.type`.
+fn fetch_paginated(
+    token: &str,
+    initial_url: &str,
+    default_type: Option<&str>,
+) -> Result<Vec<GraphAppInfo>, AppError> {
     let agent = make_agent();
+    let mut items: Vec<GraphAppInfo> = Vec::new();
+    let mut next_url: Option<String> = Some(initial_url.to_string());
 
     while let Some(url) = next_url.take() {
         let response = agent
             .get(&url)
-            .set("Authorization", &format!("Bearer {}", token.token))
+            .set("Authorization", &format!("Bearer {token}"))
             .set("ConsistencyLevel", "eventual")
             .call()
             .map_err(|e| {
                 if let ureq::Error::Status(code, resp) = e {
                     let body = resp.into_string().unwrap_or_default();
+                    log::warn!("Graph API HTTP {code} for {url}: {body}");
                     AppError::Internal(format!("Graph API HTTP {code}: {body}"))
                 } else {
                     AppError::Internal(format!("Graph API request failed: {e}"))
@@ -421,8 +474,11 @@ pub fn fetch_all_apps(state: &GraphAuthState) -> Result<Vec<GraphAppInfo>, AppEr
 
         if let Some(value) = body.get("value").and_then(|v| v.as_array()) {
             for item in value {
-                if let Some(app) = parse_app_json(item) {
-                    all_apps.push(app);
+                if let Some(mut app) = parse_app_json(item) {
+                    if app.odata_type.is_none() {
+                        app.odata_type = default_type.map(String::from);
+                    }
+                    items.push(app);
                 }
             }
         }
@@ -433,13 +489,7 @@ pub fn fetch_all_apps(state: &GraphAuthState) -> Result<Vec<GraphAppInfo>, AppEr
             .map(String::from);
     }
 
-    let cache_map: HashMap<String, GraphAppInfo> = all_apps
-        .iter()
-        .map(|a| (a.id.clone(), a.clone()))
-        .collect();
-    state.cache_apps(&cache_map);
-
-    Ok(all_apps)
+    Ok(items)
 }
 
 // ── Internal helpers ────────────────────────────────────────────────────────

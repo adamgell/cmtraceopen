@@ -6,6 +6,7 @@ import { TabStrip } from "./TabStrip";
 import { StatusBar } from "./StatusBar";
 import { FileSidebar, FILE_SIDEBAR_RECOMMENDED_WIDTH } from "./FileSidebar";
 import { LogListView } from "../log-view/LogListView";
+import { DiffView } from "../log-view/DiffView";
 import { InfoPane } from "../log-view/InfoPane";
 import { FindBar } from "./FindBar";
 import { FilterDialog } from "../dialogs/FilterDialog";
@@ -18,12 +19,15 @@ import { FileAssociationPromptDialog } from "../dialogs/FileAssociationPromptDia
 import { CollectDiagnosticsDialog } from "../dialogs/CollectDiagnosticsDialog";
 import { CollectionCompleteDialog } from "../dialogs/CollectionCompleteDialog";
 import { UpdateDialog } from "../dialogs/UpdateDialog";
+import { MergeTabsDialog } from "../dialogs/MergeTabsDialog";
+import { DiffConfigDialog } from "../dialogs/DiffConfigDialog";
 import { IntuneDashboard } from "../intune/IntuneDashboard";
 import { NewIntuneWorkspace } from "../intune/NewIntuneWorkspace";
 import { DsregcmdWorkspace } from "../dsregcmd/DsregcmdWorkspace";
 import { MacosDiagWorkspace } from "../macos-diag/MacosDiagWorkspace";
 import { DeploymentWorkspace } from "../deployment/DeploymentWorkspace";
 import { EventLogWorkspace } from "../event-log-workspace/EventLogWorkspace";
+import { SysmonWorkspace } from "../sysmon/SysmonWorkspace";
 import { RegistryViewer } from "../registry-view/RegistryViewer";
 import type { FilterClause } from "../dialogs/FilterDialog";
 import type { LogEntry } from "../../types/log";
@@ -33,6 +37,7 @@ import { useFilterStore } from "../../stores/filter-store";
 import { switchToTab } from "../../lib/log-source";
 import { useFileWatcher } from "../../hooks/use-file-watcher";
 import { useIntuneAnalysisProgress } from "../../hooks/use-intune-analysis-progress";
+import { useSysmonAnalysisProgress } from "../../hooks/use-sysmon-analysis-progress";
 import { useKeyboard } from "../../hooks/use-keyboard";
 import { useDragDrop } from "../../hooks/use-drag-drop";
 import { useFileAssociation } from "../../hooks/use-file-association";
@@ -101,6 +106,13 @@ export function AppShell() {
   const setShowCollectDiagnosticsDialog = useUiStore((s) => s.setShowCollectDiagnosticsDialog);
   const showUpdateDialog = useUiStore((s) => s.showUpdateDialog);
   const setShowUpdateDialog = useUiStore((s) => s.setShowUpdateDialog);
+  const showMergeTabsDialog = useUiStore((s) => s.showMergeTabsDialog);
+  const setShowMergeTabsDialog = useUiStore((s) => s.setShowMergeTabsDialog);
+  const createMergedTab = useLogStore((s) => s.createMergedTab);
+  const showDiffConfigDialog = useUiStore((s) => s.showDiffConfigDialog);
+  const setShowDiffConfigDialog = useUiStore((s) => s.setShowDiffConfigDialog);
+  const createDiff = useLogStore((s) => s.createDiff);
+  const sourceOpenMode = useLogStore((s) => s.sourceOpenMode);
 
   useCollectionProgressListener();
   useParseProgressListener();
@@ -146,6 +158,11 @@ export function AppShell() {
     return () => {
       window.removeEventListener("mousemove", onMouseMove);
       window.removeEventListener("mouseup", onMouseUp);
+      if (infoPaneResizeRef.current) {
+        infoPaneResizeRef.current = null;
+        document.body.style.cursor = "";
+        document.body.style.userSelect = "";
+      }
     };
   }, [setInfoPaneHeight]);
 
@@ -242,6 +259,7 @@ export function AppShell() {
 
   useFileWatcher();
   useIntuneAnalysisProgress();
+  useSysmonAnalysisProgress();
   useKeyboard();
   useDragDrop();
   // Handle file path passed via OS file association at startup
@@ -300,7 +318,7 @@ export function AppShell() {
               position: "relative",
             }}
           >
-            <LogListView />
+            {sourceOpenMode === "diff" ? <DiffView /> : <LogListView />}
 
             {/* Folder loading overlay with progress bar */}
             {folderLoadProgress !== null && (
@@ -409,6 +427,14 @@ export function AppShell() {
       );
     }
 
+    if (activeView === "sysmon") {
+      return (
+        <div style={{ flex: 1, overflow: "hidden" }}>
+          <SysmonWorkspace />
+        </div>
+      );
+    }
+
     if (activeView === "deployment") {
       return (
         <div style={{ flex: 1, overflow: "hidden" }}>
@@ -425,11 +451,15 @@ export function AppShell() {
       );
     }
 
-    return (
-      <div style={{ flex: 1, overflow: "hidden" }}>
-        <DsregcmdWorkspace />
-      </div>
-    );
+    if (activeView === "dsregcmd") {
+      return (
+        <div style={{ flex: 1, overflow: "hidden" }}>
+          <DsregcmdWorkspace />
+        </div>
+      );
+    }
+
+    return null;
   };
 
   return (
@@ -456,46 +486,48 @@ export function AppShell() {
           backgroundColor: tokens.colorNeutralBackground2,
         }}
       >
-        {sidebarCollapsed ? (
-          <div
-            style={{
-              width: 36,
-              minWidth: 36,
-              display: "flex",
-              flexDirection: "column",
-              alignItems: "center",
-              borderRight: `1px solid ${tokens.colorNeutralStroke2}`,
-              backgroundColor: tokens.colorNeutralBackground2,
-              paddingTop: 8,
-            }}
-          >
-            <button
-              onClick={toggleSidebar}
-              title="Expand sidebar (Ctrl+B)"
-              aria-label="Expand sidebar"
+        {activeView !== "event-log" && (
+          sidebarCollapsed ? (
+            <div
               style={{
-                background: "none",
-                border: "none",
-                cursor: "pointer",
-                padding: 6,
-                borderRadius: 4,
-                color: tokens.colorNeutralForeground2,
+                width: 36,
+                minWidth: 36,
                 display: "flex",
+                flexDirection: "column",
                 alignItems: "center",
-                justifyContent: "center",
+                borderRight: `1px solid ${tokens.colorNeutralStroke2}`,
+                backgroundColor: tokens.colorNeutralBackground2,
+                paddingTop: 8,
               }}
             >
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
-                <path d="M6 3l5 5-5 5V3z" />
-              </svg>
-            </button>
-          </div>
-        ) : (
-          <FileSidebar
-            width={FILE_SIDEBAR_RECOMMENDED_WIDTH}
-            activeView={activeView}
-            onCollapse={toggleSidebar}
-          />
+              <button
+                onClick={toggleSidebar}
+                title="Expand sidebar (Ctrl+B)"
+                aria-label="Expand sidebar"
+                style={{
+                  background: "none",
+                  border: "none",
+                  cursor: "pointer",
+                  padding: 6,
+                  borderRadius: 4,
+                  color: tokens.colorNeutralForeground2,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                }}
+              >
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                  <path d="M6 3l5 5-5 5V3z" />
+                </svg>
+              </button>
+            </div>
+          ) : (
+            <FileSidebar
+              width={FILE_SIDEBAR_RECOMMENDED_WIDTH}
+              activeView={activeView}
+              onCollapse={toggleSidebar}
+            />
+          )
         )}
 
         <div
@@ -584,6 +616,16 @@ export function AppShell() {
       <CollectionCompleteDialog
         result={collectionResult}
         onClose={() => setCollectionResult(null)}
+      />
+      <MergeTabsDialog
+        isOpen={showMergeTabsDialog}
+        onClose={() => setShowMergeTabsDialog(false)}
+        onMerge={(filePaths) => createMergedTab(filePaths)}
+      />
+      <DiffConfigDialog
+        isOpen={showDiffConfigDialog}
+        onClose={() => setShowDiffConfigDialog(false)}
+        onCompare={(sourceA, sourceB) => createDiff(sourceA, sourceB)}
       />
       <UpdateDialog
         isOpen={showUpdateDialog}

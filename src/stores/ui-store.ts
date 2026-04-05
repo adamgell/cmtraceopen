@@ -47,6 +47,7 @@ const WORKSPACE_PLATFORM_MAP: Record<WorkspaceId, PlatformId[] | "all"> = {
   "macos-diag": ["macos"],
   deployment: ["windows"],
   "event-log": "all",
+  sysmon: ["windows"],
 };
 
 export function getAvailableWorkspaces(
@@ -120,6 +121,14 @@ export function getUiChromeStatus(
     };
   }
 
+  if (activeView === "sysmon") {
+    return {
+      viewLabel: "Sysmon workspace",
+      detailsLabel: "Details hidden in Sysmon workspace",
+      infoLabel: "Info hidden in Sysmon workspace",
+    };
+  }
+
   if (activeView === "dsregcmd") {
     return {
       viewLabel: "dsregcmd workspace",
@@ -172,6 +181,8 @@ interface UiState {
   showSettingsDialog: boolean;
   showEvidenceBundleDialog: boolean;
   showGuidRegistryDialog: boolean;
+  showMergeTabsDialog: boolean;
+  showDiffConfigDialog: boolean;
   showFileAssociationPrompt: boolean;
   logListFontSize: number;
   logDetailsFontSize: number;
@@ -200,7 +211,9 @@ interface UiState {
   defaultShowInfoPane: boolean;
   confirmTabClose: boolean;
   showUpdateDialog: boolean;
+  recentSessions: string[];
   graphApiEnabled: boolean;
+  graphApiStatus: "idle" | "connecting" | "connected" | "error";
 
   setActiveWorkspace: (workspace: WorkspaceId) => void;
   setCurrentPlatform: (platform: PlatformId) => void;
@@ -218,6 +231,8 @@ interface UiState {
   setShowSettingsDialog: (show: boolean) => void;
   setShowEvidenceBundleDialog: (show: boolean) => void;
   setShowGuidRegistryDialog: (show: boolean) => void;
+  setShowMergeTabsDialog: (show: boolean) => void;
+  setShowDiffConfigDialog: (show: boolean) => void;
   setShowFileAssociationPrompt: (show: boolean) => void;
   setLogListFontSize: (fontSize: number) => void;
   increaseLogListFontSize: () => void;
@@ -259,7 +274,10 @@ interface UiState {
   setCollectionResult: (result: CollectionResult | null) => void;
   setShowCollectDiagnosticsDialog: (show: boolean) => void;
   setShowUpdateDialog: (show: boolean) => void;
+  addRecentSession: (path: string) => void;
+  clearRecentSessions: () => void;
   setGraphApiEnabled: (enabled: boolean) => void;
+  setGraphApiStatus: (status: "idle" | "connecting" | "connected" | "error") => void;
 }
 
 const DEFAULT_WORKSPACE: WorkspaceId = "log";
@@ -316,6 +334,8 @@ export const useUiStore = create<UiState>()(
       showSettingsDialog: false,
       showEvidenceBundleDialog: false,
       showGuidRegistryDialog: false,
+      showMergeTabsDialog: false,
+      showDiffConfigDialog: false,
       showFileAssociationPrompt: false,
       logListFontSize: DEFAULT_LOG_LIST_FONT_SIZE,
       logDetailsFontSize: DEFAULT_LOG_DETAILS_FONT_SIZE,
@@ -338,7 +358,9 @@ export const useUiStore = create<UiState>()(
       collectionResult: null,
       showCollectDiagnosticsDialog: false,
       showUpdateDialog: false,
+      recentSessions: [],
       graphApiEnabled: false,
+      graphApiStatus: "idle",
 
       setCurrentPlatform: (platform) => set({ currentPlatform: platform }),
       setEnabledWorkspaces: (workspaces) => {
@@ -430,6 +452,8 @@ export const useUiStore = create<UiState>()(
       setShowSettingsDialog: (show) => set({ showSettingsDialog: show }),
       setShowEvidenceBundleDialog: (show) => set({ showEvidenceBundleDialog: show }),
       setShowGuidRegistryDialog: (show) => set({ showGuidRegistryDialog: show }),
+      setShowMergeTabsDialog: (show) => set({ showMergeTabsDialog: show }),
+      setShowDiffConfigDialog: (show) => set({ showDiffConfigDialog: show }),
       setShowFileAssociationPrompt: (show) => set({ showFileAssociationPrompt: show }),
       setLogListFontSize: (fontSize) =>
         set({ logListFontSize: clampLogListFontSize(fontSize) }),
@@ -476,6 +500,9 @@ export const useUiStore = create<UiState>()(
           !state.showAboutDialog &&
           !state.showSettingsDialog &&
           !state.showEvidenceBundleDialog &&
+          !state.showGuidRegistryDialog &&
+          !state.showMergeTabsDialog &&
+          !state.showDiffConfigDialog &&
           !state.showFileAssociationPrompt &&
           !state.showCollectDiagnosticsDialog &&
           !state.showUpdateDialog
@@ -492,6 +519,9 @@ export const useUiStore = create<UiState>()(
           showAboutDialog: false,
           showSettingsDialog: false,
           showEvidenceBundleDialog: false,
+          showGuidRegistryDialog: false,
+          showMergeTabsDialog: false,
+          showDiffConfigDialog: false,
           showFileAssociationPrompt: false,
           showCollectDiagnosticsDialog: false,
           showUpdateDialog: false,
@@ -601,7 +631,14 @@ export const useUiStore = create<UiState>()(
       setCollectionResult: (result) => set({ collectionResult: result }),
       setShowCollectDiagnosticsDialog: (show) => set({ showCollectDiagnosticsDialog: show }),
       setShowUpdateDialog: (show) => set({ showUpdateDialog: show }),
+      addRecentSession: (path) =>
+        set((state) => {
+          const filtered = state.recentSessions.filter((p) => p !== path);
+          return { recentSessions: [path, ...filtered].slice(0, 5) };
+        }),
+      clearRecentSessions: () => set({ recentSessions: [] }),
       setGraphApiEnabled: (enabled) => set({ graphApiEnabled: enabled }),
+      setGraphApiStatus: (status) => set({ graphApiStatus: status }),
     }),
     {
       name: "cmtraceopen-ui-preferences",
@@ -617,6 +654,7 @@ export const useUiStore = create<UiState>()(
         defaultShowInfoPane: state.defaultShowInfoPane,
         confirmTabClose: state.confirmTabClose,
         graphApiEnabled: state.graphApiEnabled,
+        recentSessions: state.recentSessions,
       }),
       merge: (persistedState, currentState) => {
         const raw = persistedState as Partial<UiState> & {

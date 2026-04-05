@@ -12,6 +12,7 @@ import { useLogStore } from "../../stores/log-store";
 import { useUiStore } from "../../stores/ui-store";
 import { useFilterStore } from "../../stores/filter-store";
 import { LogRow } from "./LogRow";
+import { MergeLegendBar } from "./MergeLegendBar";
 import type { ErrorCodeSpan } from "../../types/log";
 import { useContextMenu } from "../../hooks/use-context-menu";
 import {
@@ -38,6 +39,10 @@ export function LogListView() {
   const findMatchIds = useLogStore((s) => s.findMatchIds);
   const showDetails = useUiStore((s) => s.showDetails);
 
+  const sourceOpenMode = useLogStore((s) => s.sourceOpenMode);
+  const mergedTabState = useLogStore((s) => s.mergedTabState);
+  const correlatedEntries = useLogStore((s) => s.correlatedEntries);
+
   const logListFontSize = useUiStore((s) => s.logListFontSize);
   const themeId = useUiStore((s) => s.themeId);
   const severityPalette = useMemo(
@@ -58,6 +63,11 @@ export function LogListView() {
   const findMatchSet = useMemo(
     () => new Set(findMatchIds),
     [findMatchIds]
+  );
+
+  const correlatedIdSet = useMemo(
+    () => new Set(correlatedEntries.map((c) => c.entry.id)),
+    [correlatedEntries]
   );
 
   const displayEntries = useMemo(() => {
@@ -333,6 +343,8 @@ export function LogListView() {
         ))}
       </div>
 
+      {sourceOpenMode === "merged" && mergedTabState && <MergeLegendBar />}
+
       <div
         ref={parentRef}
         data-log-list="true"
@@ -388,6 +400,9 @@ export function LogListView() {
                   onClick={(id) => { if (id !== selectedId) { suppressScrollRef.current = true; } selectEntry(id); }}
                   onContextMenu={showContextMenu}
                   onErrorCodeClick={handleErrorCodeClick}
+                  mergeFileColor={sourceOpenMode === "merged" ? mergedTabState?.colorAssignments[entry.filePath] ?? null : null}
+                  isCorrelated={sourceOpenMode === "merged" && correlatedIdSet.has(entry.id)}
+                  correlationColor={sourceOpenMode === "merged" ? mergedTabState?.colorAssignments[entry.filePath] ?? null : null}
                 />
               </div>
             );

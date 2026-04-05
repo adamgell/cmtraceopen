@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { Badge, tokens } from "@fluentui/react-components";
+import { Badge, Spinner, tokens } from "@fluentui/react-components";
 import { LOG_UI_FONT_FAMILY } from "../../lib/log-accessibility";
 import {
   getActiveSourceLabel,
@@ -21,6 +21,8 @@ import {
 import { useIntuneStore } from "../../stores/intune-store";
 import { useDsregcmdStore } from "../../stores/dsregcmd-store";
 import { useDeploymentStore } from "../../stores/deployment-store";
+import { useSysmonStore } from "../../stores/sysmon-store";
+import { useEvtxStore } from "../../stores/evtx-store";
 
 interface SeverityCounts {
   errors: number;
@@ -62,6 +64,8 @@ export function StatusBar() {
   const openTabs = useUiStore((s) => s.openTabs);
   const activeTabIndex = useUiStore((s) => s.activeTabIndex);
 
+  const graphApiStatus = useUiStore((s) => s.graphApiStatus);
+
   const intuneAnalysisState = useIntuneStore((s) => s.analysisState);
   const intuneSummary = useIntuneStore((s) => s.summary);
   const intuneSourceContext = useIntuneStore((s) => s.sourceContext);
@@ -74,6 +78,17 @@ export function StatusBar() {
 
   const deploymentPhase = useDeploymentStore((s) => s.phase);
   const deploymentResult = useDeploymentStore((s) => s.result);
+
+  const sysmonIsAnalyzing = useSysmonStore((s) => s.isAnalyzing);
+  const sysmonSummary = useSysmonStore((s) => s.summary);
+  const sysmonError = useSysmonStore((s) => s.analysisError);
+  const sysmonSourcePath = useSysmonStore((s) => s.sourcePath);
+
+  const evtxRecordCount = useEvtxStore((s) => s.records.length);
+  const evtxSourceMode = useEvtxStore((s) => s.sourceMode);
+  const evtxIsLoading = useEvtxStore((s) => s.isLoading);
+  const evtxLoadedChannelCount = useEvtxStore((s) => s.loadedChannels.size);
+  const evtxLoadElapsedMs = useEvtxStore((s) => s.loadElapsedMs);
 
   const filterClauseCount = useFilterStore((s) => s.clauses.length);
   const filteredIds = useFilterStore((s) => s.filteredIds);
@@ -277,6 +292,33 @@ export function StatusBar() {
     } else {
       rightStatusText = intuneAnalysisState.message;
     }
+  } else if (activeView === "sysmon") {
+    leftParts = [
+      "Sysmon",
+      sysmonIsAnalyzing
+        ? "Analyzing"
+        : sysmonError
+          ? "Analysis failed"
+          : sysmonSummary
+            ? `${sysmonSummary.totalEvents.toLocaleString()} events`
+            : "Ready",
+    ];
+    if (sysmonSourcePath) {
+      leftParts.push(`Source ${getBaseName(sysmonSourcePath)}`);
+    }
+    if (sysmonIsAnalyzing) {
+      rightStatusText = "Analyzing Sysmon EVTX files...";
+      rightTone = tokens.colorPaletteBlueForeground2;
+    } else if (sysmonError) {
+      rightStatusText = sysmonError;
+      rightTone = tokens.colorPaletteRedForeground2;
+    } else if (sysmonSummary) {
+      rightStatusText = [
+        `${sysmonSummary.totalEvents.toLocaleString()} events`,
+        `${sysmonSummary.uniqueProcesses.toLocaleString()} processes`,
+        `${sysmonSummary.sourceFiles.length} files`,
+      ].join(" | ");
+    }
   } else if (activeView === "deployment") {
     leftParts = [
       "Software Deployment",
@@ -296,6 +338,29 @@ export function StatusBar() {
         `${deploymentResult.failed} failed`,
         deploymentResult.deferred > 0 ? `${deploymentResult.deferred} deferred` : null,
       ].filter(Boolean).join(" | ");
+    }
+  } else if (activeView === "event-log") {
+    leftParts = [
+      "Event Log",
+      evtxIsLoading
+        ? "Loading..."
+        : evtxSourceMode === "live"
+          ? `${evtxLoadedChannelCount} channel${evtxLoadedChannelCount !== 1 ? "s" : ""} loaded`
+          : evtxSourceMode === "files"
+            ? "File mode"
+            : "Ready",
+    ];
+
+    if (evtxIsLoading) {
+      rightStatusText = evtxRecordCount > 0
+        ? `${evtxRecordCount.toLocaleString()} events loaded...`
+        : "Querying event logs...";
+      rightTone = tokens.colorPaletteBlueForeground2;
+    } else if (evtxRecordCount > 0) {
+      const timeStr = evtxLoadElapsedMs != null
+        ? ` in ${(evtxLoadElapsedMs / 1000).toFixed(1)}s`
+        : "";
+      rightStatusText = `${evtxRecordCount.toLocaleString()} events${timeStr}`;
     }
   } else {
     const diagnostics = dsregcmdResult?.diagnostics ?? [];
@@ -344,7 +409,17 @@ export function StatusBar() {
         ? "Intune"
         : activeView === "new-intune"
           ? "New Intune"
-        : "dsregcmd";
+          : activeView === "sysmon"
+            ? "Sysmon Analysis"
+            : activeView === "event-log"
+              ? "Event Log"
+              : activeView === "deployment"
+                ? "Software Deployment"
+                : activeView === "macos-diag"
+                  ? "macOS Diagnostics"
+                  : activeView === "dsregcmd"
+                    ? "dsregcmd"
+                    : activeView;
 
   return (
     <div
@@ -381,19 +456,61 @@ export function StatusBar() {
           {leftStatusText}
         </span>
       </div>
-      <span
-        title={rightStatusText}
-        style={{
-          minWidth: 0,
-          overflow: "hidden",
-          textOverflow: "ellipsis",
-          whiteSpace: "nowrap",
-          color: rightTone,
-          fontWeight: 500,
-        }}
-      >
-        {rightStatusText}
-      </span>
+      <div style={{ display: "flex", alignItems: "center", gap: "10px", flexShrink: 0 }}>
+        {graphApiStatus !== "idle" && (
+          <span
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "4px",
+              fontSize: "11px",
+              color: graphApiStatus === "connected"
+                ? tokens.colorPaletteGreenForeground1
+                : graphApiStatus === "connecting"
+                  ? tokens.colorNeutralForeground3
+                  : tokens.colorPaletteRedForeground1,
+            }}
+            title={
+              graphApiStatus === "connected"
+                ? "Graph API connected — GUID resolution active"
+                : graphApiStatus === "connecting"
+                  ? "Connecting to Graph API..."
+                  : "Graph API connection failed"
+            }
+          >
+            <span
+              style={{
+                width: "6px",
+                height: "6px",
+                borderRadius: "50%",
+                backgroundColor: "currentColor",
+                display: "inline-block",
+              }}
+            />
+            {graphApiStatus === "connecting"
+              ? "Graph API: Connecting..."
+              : graphApiStatus === "connected"
+                ? "Graph API: Connected"
+                : "Graph API: Error"}
+          </span>
+        )}
+        {activeView === "event-log" && evtxIsLoading && (
+          <Spinner size="tiny" />
+        )}
+        <span
+          title={rightStatusText}
+          style={{
+            minWidth: 0,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+            color: rightTone,
+            fontWeight: 500,
+          }}
+        >
+          {rightStatusText}
+        </span>
+      </div>
     </div>
   );
 }

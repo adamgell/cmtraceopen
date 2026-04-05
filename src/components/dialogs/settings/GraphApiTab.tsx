@@ -9,6 +9,7 @@ import {
   type GraphAuthStatus,
 } from "../../../lib/commands";
 import { useIntuneStore } from "../../../stores/intune-store";
+import { buildGraphRegistryEntries } from "../../../lib/graph-registry";
 
 export function GraphApiTab() {
   const graphApiEnabled = useUiStore((state) => state.graphApiEnabled);
@@ -86,11 +87,7 @@ export function GraphApiTab() {
       setCachedAppCount(apps.length);
 
       if (apps.length > 0) {
-        const entries: Record<string, { name: string; source: "GraphApi" }> = {};
-        for (const app of apps) {
-          entries[app.id] = { name: app.displayName, source: "GraphApi" };
-        }
-        useIntuneStore.getState().mergeGuidRegistry(entries);
+        useIntuneStore.getState().mergeGuidRegistry(buildGraphRegistryEntries(apps));
       }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);

@@ -133,7 +133,9 @@ mod windows_impl {
     fn render_event_xml(event_handle: EVT_HANDLE) -> Result<String, Error> {
         let mut buffer_used = 0u32;
         let mut property_count = 0u32;
-        let mut buffer = vec![0u16; 4096];
+        // 16 KB initial buffer — Sysmon events with long command lines and
+        // hashes can easily exceed the previous 4 KB default.
+        let mut buffer = vec![0u16; 8192];
 
         loop {
             match unsafe {
@@ -239,20 +241,33 @@ mod windows_impl {
         }
     }
 
+    /// Check if an error matches a Win32 error code.
+    /// Handles both raw Win32 codes and HRESULT-wrapped forms
+    /// (the Windows crate may return either depending on the API).
+    fn is_win32_error(error: &Error, win32_code: u32) -> bool {
+        let raw = error.code().0 as u32;
+        // Direct Win32 code comparison
+        if raw == win32_code {
+            return true;
+        }
+        // HRESULT_FROM_WIN32: 0x80070000 | win32_code
+        raw == (0x8007_0000 | win32_code)
+    }
+
     fn is_insufficient_buffer(error: &Error) -> bool {
-        error.code().0 as u32 == 122
+        is_win32_error(error, 122) // ERROR_INSUFFICIENT_BUFFER
     }
 
     fn is_no_more_items(error: &Error) -> bool {
-        error.code().0 as u32 == 259
+        is_win32_error(error, 259) // ERROR_NO_MORE_ITEMS
     }
 
     fn is_not_found(error: &Error) -> bool {
-        error.code().0 as u32 == 1168
+        is_win32_error(error, 1168) // ERROR_NOT_FOUND
     }
 
     fn is_message_not_found(error: &Error) -> bool {
-        error.code().0 as u32 == 15027
+        is_win32_error(error, 15027) // ERROR_EVT_MESSAGE_NOT_FOUND
     }
 }
 

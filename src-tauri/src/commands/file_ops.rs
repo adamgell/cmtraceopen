@@ -434,6 +434,38 @@ fn compare_folder_entries(left: &FolderEntry, right: &FolderEntry) -> Ordering {
     }
 }
 
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileHashResult {
+    pub hash: String,
+    pub size_bytes: u64,
+}
+
+#[tauri::command]
+pub fn compute_file_hash(path: String) -> Result<FileHashResult, crate::error::AppError> {
+    use sha2::{Sha256, Digest};
+    use std::io::Read;
+
+    let mut file = std::fs::File::open(&path)
+        .map_err(crate::error::AppError::Io)?;
+
+    let metadata = file.metadata()
+        .map_err(crate::error::AppError::Io)?;
+    let size_bytes = metadata.len();
+
+    let mut hasher = Sha256::new();
+    let mut buffer = [0u8; 8192];
+    loop {
+        let bytes_read = file.read(&mut buffer)
+            .map_err(crate::error::AppError::Io)?;
+        if bytes_read == 0 { break; }
+        hasher.update(&buffer[..bytes_read]);
+    }
+
+    let hash = format!("sha256:{:x}", hasher.finalize());
+    Ok(FileHashResult { hash, size_bytes })
+}
+
 fn compare_aggregate_entries(
     left: &LogEntry,
     right: &LogEntry,

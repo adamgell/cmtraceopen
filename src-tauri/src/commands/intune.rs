@@ -9,6 +9,8 @@ use std::time::Instant;
 use rayon::prelude::*;
 use serde::Serialize;
 use tauri::{async_runtime, AppHandle, Emitter};
+#[cfg(target_os = "windows")]
+use tauri::Manager;
 
 use crate::intune::download_stats;
 use crate::intune::event_tracker;
@@ -73,12 +75,15 @@ pub async fn analyze_intune_logs(
     // task doesn't need Send-unfriendly state references.
     #[cfg(target_os = "windows")]
     let graph_resolved = if graph_api_enabled {
+        let graph_state = app.state::<crate::graph_api::GraphAuthState>();
         try_graph_prefetch(&graph_state)
     } else {
         None
     };
     #[cfg(not(target_os = "windows"))]
     let graph_resolved: Option<std::collections::HashMap<String, String>> = None;
+    #[cfg(not(target_os = "windows"))]
+    let _ = graph_api_enabled;
 
     Ok(async_runtime::spawn_blocking(move || {
         analyze_intune_logs_blocking(path, request_id, include_live_event_logs, graph_resolved, app)
@@ -219,7 +224,9 @@ fn analyze_intune_logs_blocking(
         all_events.extend(processed_file.events);
         all_downloads.extend(processed_file.downloads);
         coverage.push(processed_file.coverage);
-        all_policy_metadata.extend(processed_file.policy_metadata);
+        all_policy_metadata.extend(
+            processed_file.policy_metadata.into_iter().map(|(k, v)| (k.to_lowercase(), v))
+        );
     }
 
     // Enrich event and download names using the global GUID registry
@@ -271,7 +278,7 @@ fn analyze_intune_logs_blocking(
                     .as_deref()
                     .or(event.guid.as_deref());
                 if let Some(guid) = lookup_guid {
-                    if let Some(policy) = all_policy_metadata.get(guid) {
+                    if let Some(policy) = all_policy_metadata.get(&guid.to_lowercase()) {
                         // Find the first script-type detection rule with a body
                         if let Some(rule) = policy
                             .detection_rules

@@ -505,6 +505,24 @@ fn windows_known_log_sources() -> Vec<KnownSourceMetadata> {
             },
             None,
         ),
+        // --- Sysmon live event log ---
+        windows_known_source(
+            "windows-sysmon-live-events",
+            "Sysmon Live Event Log",
+            "Query the live Microsoft-Windows-Sysmon/Operational event log channel for real-time Sysmon events.",
+            KnownSourcePathKind::Folder,
+            "live-event-log",
+            &[],
+            KnownSourceGroupingMetadata {
+                family_id: "windows-sysmon".to_string(),
+                family_label: "Windows Sysmon".to_string(),
+                group_id: "sysmon-events".to_string(),
+                group_label: "Sysmon Events".to_string(),
+                group_order: 60,
+                source_order: 10,
+            },
+            None,
+        ),
     ]
 }
 

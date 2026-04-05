@@ -157,7 +157,7 @@ while [ "$#" -gt 0 ]; do
   shift
 done
 
-script_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+script_root="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 app_root="$(cd "${script_root}/.." && pwd)"
 node_modules_path="${app_root}/node_modules"
 

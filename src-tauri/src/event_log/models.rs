@@ -68,4 +68,5 @@ pub struct EvtxParseResult {
     pub channels: Vec<EvtxChannelInfo>,
     pub total_records: u64,
     pub parse_errors: u32,
+    pub error_messages: Vec<String>,
 }

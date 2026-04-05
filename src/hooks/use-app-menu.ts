@@ -88,6 +88,16 @@ export function useAppMenu() {
           case "check_for_updates":
             useUiStore.getState().setShowUpdateDialog(true);
             return;
+          case "save_session": {
+            const { saveSession } = await import("../lib/session-save");
+            await saveSession();
+            return;
+          }
+          case "open_session": {
+            const { openSessionDialog } = await import("../lib/session-restore");
+            await openSessionDialog();
+            return;
+          }
           case "open_known_source": {
             if (payload.source_id) {
               await openKnownSourceCatalogAction({

@@ -16,12 +16,19 @@ pub mod macos_diag;
 mod menu;
 mod models;
 pub mod parser;
+#[cfg(feature = "sysmon")]
+pub mod sysmon;
 mod state;
 mod watcher;
 
 use state::app_state::AppState;
 use tauri::Manager;
 
+#[cfg(target_os = "windows")]
+use graph_api::GraphAuthState;
+
+#[cfg(target_os = "windows")]
+use tauri::Manager;
 #[cfg(target_os = "windows")]
 use graph_api::GraphAuthState;
 
@@ -62,6 +69,16 @@ pub fn run() {
             #[cfg(target_os = "windows")]
             app.manage(GraphAuthState::new());
 
+            // Auto-open DevTools in debug builds
+            #[cfg(all(debug_assertions, desktop))]
+            {
+                use tauri::Manager as _;
+                if let Some(window) = app.get_webview_window("main") {
+                    window.open_devtools();
+                }
+            }
+
+
             Ok(())
         })
         .manage(AppState::new(initial_file_paths))
@@ -77,6 +94,7 @@ pub fn run() {
             commands::file_ops::inspect_path_kind,
             commands::file_ops::write_text_output_file,
             commands::file_ops::get_initial_file_paths,
+            commands::file_ops::compute_file_hash,
             commands::bundle_ops::inspect_evidence_bundle,
             commands::bundle_ops::inspect_evidence_artifact,
             commands::known_sources::get_known_log_sources,
@@ -137,6 +155,8 @@ pub fn run() {
             commands::graph_api::graph_resolve_guids,
             #[cfg(target_os = "windows")]
             commands::graph_api::graph_fetch_all_apps,
+            #[cfg(feature = "sysmon")]
+            commands::sysmon::analyze_sysmon_logs,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

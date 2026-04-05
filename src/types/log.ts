@@ -47,7 +47,8 @@ export type WorkspaceId =
   | "dsregcmd"
   | "macos-diag"
   | "deployment"
-  | "event-log";
+  | "event-log"
+  | "sysmon";
 export type KnownSourceDefaultFileSelectionBehavior =
   | "none"
   | "preferFileName"

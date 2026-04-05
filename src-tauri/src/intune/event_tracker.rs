@@ -782,9 +782,9 @@ fn collect_appworkload_context(lines: &[ImeLine], index: usize, guid: Option<&st
         let lookaround_start = index.saturating_sub(APPWORKLOAD_CONTEXT_LOOKAROUND);
         let lookaround_end =
             (index + APPWORKLOAD_CONTEXT_LOOKAROUND).min(lines.len().saturating_sub(1));
-        for selected_index in lookaround_start..=lookaround_end {
-            if contains_ascii_case_insensitive(&lines[selected_index].message, guid) {
-                selected.insert(selected_index);
+        for (i, line) in lines[lookaround_start..=lookaround_end].iter().enumerate() {
+            if contains_ascii_case_insensitive(&line.message, guid) {
+                selected.insert(lookaround_start + i);
             }
         }
     }
@@ -1160,13 +1160,27 @@ fn extract_guid(msg: &str) -> Option<String> {
                 .and_then(|cap| cap.get(1))
                 .map(|value| value.as_str().to_string())
         })
-        // 3. Generic first GUID fallback
+        // 3. PolicyId from JSON payloads (HealthScripts, script results)
+        .or_else(|| extract_policy_id(msg))
+        // 4. Generic first GUID fallback
         .or_else(|| {
             guid_re()
                 .captures(msg)
                 .and_then(|cap| cap.get(1))
                 .map(|value| value.as_str().to_string())
         })
+}
+
+/// Extract PolicyId from JSON payloads in HealthScripts/script result messages.
+/// Handles lines like: `"PolicyId":"79880037-a3c4-489a-a7e6-a6a705b52b78"`
+fn extract_policy_id(msg: &str) -> Option<String> {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    let re = RE.get_or_init(|| {
+        Regex::new(r#"(?i)"PolicyId"\s*:\s*\\?"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\\?""#).unwrap()
+    });
+    re.captures(msg)
+        .and_then(|cap| cap.get(1))
+        .map(|m| m.as_str().to_string())
 }
 
 fn extract_error_code(msg: &str) -> Option<String> {

@@ -1,5 +1,6 @@
 import { type CSSProperties, type KeyboardEvent, type MouseEvent as ReactMouseEvent, useCallback, useEffect, useRef, useState } from "react";
 import { tokens } from "@fluentui/react-components";
+import { useLogStore } from "../../stores/log-store";
 import { useUiStore } from "../../stores/ui-store";
 
 /** Minimum width a tab can shrink to before being pushed to overflow */
@@ -12,6 +13,11 @@ export function TabStrip() {
   const activeTabIndex = useUiStore((s) => s.activeTabIndex);
   const switchTab = useUiStore((s) => s.switchTab);
   const closeTab = useUiStore((s) => s.closeTab);
+
+  const sourceOpenMode = useLogStore((s) => s.sourceOpenMode);
+  const mergedTabState = useLogStore((s) => s.mergedTabState);
+  const closeMergedTab = useLogStore((s) => s.closeMergedTab);
+  const closeDiff = useLogStore((s) => s.closeDiff);
 
   const [hoveredTabIndex, setHoveredTabIndex] = useState<number | null>(null);
   const [overflowOpen, setOverflowOpen] = useState(false);
@@ -78,9 +84,13 @@ export function TabStrip() {
   const handleCloseTab = useCallback(
     (e: ReactMouseEvent, index: number) => {
       e.stopPropagation();
+      if (sourceOpenMode === "merged" && index === activeTabIndex) {
+        closeMergedTab();
+        return;
+      }
       closeTab(index);
     },
-    [closeTab]
+    [closeTab, sourceOpenMode, activeTabIndex, closeMergedTab]
   );
 
   const handleToggleOverflow = useCallback(
@@ -132,9 +142,17 @@ export function TabStrip() {
   const handleOverflowClose = useCallback(
     (e: ReactMouseEvent, index: number) => {
       e.stopPropagation();
+      if (sourceOpenMode === "merged" && index === activeTabIndex) {
+        closeMergedTab();
+        return;
+      }
+      if (sourceOpenMode === "diff" && index === activeTabIndex) {
+        closeDiff();
+        return;
+      }
       closeTab(index);
     },
-    [closeTab]
+    [closeTab, sourceOpenMode, activeTabIndex, closeMergedTab, closeDiff]
   );
 
   if (openTabs.length === 0) {
@@ -174,7 +192,15 @@ export function TabStrip() {
               onMouseEnter={() => setHoveredTabIndex(index)}
               onMouseLeave={() => setHoveredTabIndex(null)}
             >
-              <span style={tabLabelStyle}>{tab.fileName}</span>
+              <span style={tabLabelStyle}>
+                {sourceOpenMode === "merged" && index === activeTabIndex && mergedTabState ? (
+                  <span title={mergedTabState.sourceFilePaths.join("\n")}>
+                    Merged ({mergedTabState.sourceFilePaths.length} files)
+                  </span>
+                ) : (
+                  tab.fileName
+                )}
+              </span>
               <button
                 aria-label={`Close ${tab.fileName}`}
                 style={{

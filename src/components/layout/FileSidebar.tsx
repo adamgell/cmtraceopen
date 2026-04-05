@@ -12,6 +12,7 @@ import { loadLogSource, loadSelectedLogFile } from "../../lib/log-source";
 import { useFilterStore } from "../../stores/filter-store";
 import { useIntuneStore } from "../../stores/intune-store";
 import { useDsregcmdStore } from "../../stores/dsregcmd-store";
+import { useSysmonStore } from "../../stores/sysmon-store";
 import {
   getActiveSourceLabel,
   getActiveSourcePath,
@@ -330,6 +331,7 @@ function LogSidebar() {
   const isLoading = useLogStore((s) => s.isLoading);
   const knownSources = useLogStore((s) => s.knownSources);
   const sourceStatus = useLogStore((s) => s.sourceStatus);
+  const createMergedTab = useLogStore((s) => s.createMergedTab);
   const clearFilter = useFilterStore((s) => s.clearFilter);
 
   const [pendingPath, setPendingPath] = useState<string | null>(null);
@@ -554,6 +556,31 @@ function LogSidebar() {
                     : "Select a file to begin viewing log entries."
               }
             />
+            {files.length >= 2 && (
+              <div style={{ padding: "8px 10px 0" }}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const filePaths = files.map((e) => e.path);
+                    createMergedTab(filePaths);
+                  }}
+                  style={{
+                    width: "100%",
+                    padding: "6px 8px",
+                    marginBottom: "8px",
+                    fontSize: "11px",
+                    border: `1px solid ${tokens.colorNeutralStroke2}`,
+                    borderRadius: "4px",
+                    backgroundColor: tokens.colorNeutralBackground1,
+                    color: tokens.colorNeutralForeground1,
+                    cursor: "pointer",
+                    fontWeight: 500,
+                  }}
+                >
+                  Merge into Timeline
+                </button>
+              </div>
+            )}
             {files.length === 0 ? (
               <EmptyState title="No files available" body="This source only returned folders." />
             ) : (
@@ -784,6 +811,46 @@ function IntuneSidebar() {
   );
 }
 
+function SysmonSidebar() {
+  const summary = useSysmonStore((s) => s.summary);
+  const sourcePath = useSysmonStore((s) => s.sourcePath);
+  const isAnalyzing = useSysmonStore((s) => s.isAnalyzing);
+  const analysisError = useSysmonStore((s) => s.analysisError);
+  const progressMessage = useSysmonStore((s) => s.progressMessage);
+
+  const title = sourcePath ? getBaseName(sourcePath) : "Sysmon";
+  const subtitle = sourcePath ?? "Open a folder containing Sysmon EVTX files to begin.";
+
+  return (
+    <>
+      <SourceSummaryCard
+        badge="sysmon"
+        title={title}
+        subtitle={subtitle}
+        body={
+          <div style={{ fontSize: "inherit", color: tokens.colorNeutralForeground2, lineHeight: 1.5 }}>
+            {isAnalyzing && <div>{progressMessage ?? "Analyzing..."}</div>}
+            {analysisError && <div style={{ color: tokens.colorPaletteRedForeground2 }}>{analysisError}</div>}
+            {summary && (
+              <>
+                <div>Events: {summary.totalEvents.toLocaleString()}</div>
+                <div>Processes: {summary.uniqueProcesses.toLocaleString()}</div>
+                <div>Files: {summary.sourceFiles.length}</div>
+                {summary.parseErrors > 0 && (
+                  <div style={{ color: tokens.colorPaletteRedForeground2 }}>
+                    Parse errors: {summary.parseErrors}
+                  </div>
+                )}
+              </>
+            )}
+            {!isAnalyzing && !analysisError && !summary && <div>Ready</div>}
+          </div>
+        }
+      />
+    </>
+  );
+}
+
 function DsregcmdSidebar() {
   const result = useDsregcmdStore((s) => s.result);
   const sourceContext = useDsregcmdStore((s) => s.sourceContext);
@@ -990,7 +1057,9 @@ export function FileSidebar({ width = FILE_SIDEBAR_RECOMMENDED_WIDTH, activeView
         ? <LogSidebar />
         : isIntuneWorkspace(activeView)
           ? <IntuneSidebar />
-          : <DsregcmdSidebar />}
+          : activeView === "sysmon"
+            ? <SysmonSidebar />
+            : <DsregcmdSidebar />}
       {(activeView === "log" || activeView === "deployment") && <SidebarFooter />}
     </aside>
   );

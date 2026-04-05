@@ -21,6 +21,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { platform } from "@tauri-apps/plugin-os";
 import {
   analyzeIntuneLogs,
+  analyzeSysmonLogs,
   getAvailableWorkspaces as getAvailableBackendWorkspaces,
   inspectPathKind,
 } from "../../lib/commands";
@@ -33,6 +34,7 @@ import { useLogStore } from "../../stores/log-store";
 import { useFilterStore } from "../../stores/filter-store";
 import { useIntuneStore } from "../../stores/intune-store";
 import { useDsregcmdStore } from "../../stores/dsregcmd-store";
+import { useSysmonStore } from "../../stores/sysmon-store";
 import { isIntuneWorkspace, getAvailableWorkspaces, type IntuneWorkspaceId, type WorkspaceId, type PlatformId, useUiStore } from "../../stores/ui-store";
 import { ThemePicker } from "./ThemePicker";
 import {
@@ -90,6 +92,7 @@ const DSREGCMD_FILE_DIALOG_FILTERS = [
 ];
 
 const LIVE_INTUNE_SOURCE_ID = "windows-intune-ime-logs";
+const LIVE_SYSMON_SOURCE_ID = "windows-sysmon-live-events";
 
 const WORKSPACE_LABELS: Record<WorkspaceId, string> = {
   log: "Log Explorer",
@@ -99,7 +102,13 @@ const WORKSPACE_LABELS: Record<WorkspaceId, string> = {
   "macos-diag": "macOS Diagnostics",
   deployment: "Software Deployment",
   "event-log": "Event Log Viewer",
+  sysmon: "Sysmon",
 };
+
+const SYSMON_FILE_DIALOG_FILTERS = [
+  { name: "EVTX Files", extensions: ["evtx"] },
+  { name: "All Files", extensions: ["*"] },
+];
 
 function getOpenFileDialogFilters(workspace: WorkspaceId) {
   if (isIntuneWorkspace(workspace)) {
@@ -108,6 +117,10 @@ function getOpenFileDialogFilters(workspace: WorkspaceId) {
 
   if (workspace === "dsregcmd") {
     return DSREGCMD_FILE_DIALOG_FILTERS;
+  }
+
+  if (workspace === "sysmon") {
+    return SYSMON_FILE_DIALOG_FILTERS;
   }
 
   return LOG_FILE_DIALOG_FILTERS;
@@ -127,6 +140,14 @@ function getOpenActionLabels(workspace: WorkspaceId) {
       file: "Open IME Log File",
       folder: "Open IME Or Evidence Folder",
       openPlaceholder: "Open Intune Source...",
+    };
+  }
+
+  if (workspace === "sysmon") {
+    return {
+      file: "Open EVTX File",
+      folder: "Open EVTX Folder",
+      openPlaceholder: "Open Sysmon Source...",
     };
   }
 
@@ -159,6 +180,10 @@ function shouldSyncSourceBeforeIntuneAnalysis(source: LogSource): boolean {
 
 function shouldIncludeLiveEventLogs(source: LogSource): boolean {
   return source.kind === "known" && source.sourceId === LIVE_INTUNE_SOURCE_ID;
+}
+
+function shouldIncludeSysmonLiveEventLogs(source: LogSource): boolean {
+  return source.kind === "known" && source.sourceId === LIVE_SYSMON_SOURCE_ID;
 }
 
 export interface OpenKnownSourceCatalogAction
@@ -232,6 +257,11 @@ export function useAppActions(): AppActionHandlers {
   const dsregcmdIsAnalyzing = useDsregcmdStore((s) => s.isAnalyzing);
   const dsregcmdSource = useDsregcmdStore((s) => s.sourceContext.source);
   const dsregcmdBundlePath = useDsregcmdStore((s) => s.sourceContext.bundlePath);
+  const sysmonIsAnalyzing = useSysmonStore((s) => s.isAnalyzing);
+  const sysmonSourcePath = useSysmonStore((s) => s.sourcePath);
+  const beginSysmonAnalysis = useSysmonStore((s) => s.beginAnalysis);
+  const setSysmonResults = useSysmonStore((s) => s.setResults);
+  const failSysmonAnalysis = useSysmonStore((s) => s.failAnalysis);
 
   const activeWorkspace = useUiStore((s) => s.activeWorkspace);
   const activeView = useUiStore((s) => s.activeView);
@@ -265,7 +295,7 @@ export function useAppActions(): AppActionHandlers {
     () => resolveRefreshSource(activeSource, openFilePath),
     [activeSource, openFilePath]
   );
-  const isSourceCommandBusy = isLoading || intuneIsAnalyzing || dsregcmdIsAnalyzing;
+  const isSourceCommandBusy = isLoading || intuneIsAnalyzing || dsregcmdIsAnalyzing || sysmonIsAnalyzing;
 
   const commandState = useMemo<AppCommandState>(
     () => ({
@@ -281,7 +311,9 @@ export function useAppActions(): AppActionHandlers {
         !isSourceCommandBusy &&
         (activeWorkspace === "dsregcmd"
           ? dsregcmdSource !== null
-          : refreshSource !== null),
+          : activeWorkspace === "sysmon"
+            ? sysmonSourcePath !== null
+            : refreshSource !== null),
       canToggleDetailsPane: activeView === "log",
       canToggleInfoPane: activeView === "log",
       canShowEvidenceBundle:
@@ -295,7 +327,9 @@ export function useAppActions(): AppActionHandlers {
       hasActiveSource:
         activeWorkspace === "dsregcmd"
           ? dsregcmdSource !== null
-          : refreshSource !== null,
+          : activeWorkspace === "sysmon"
+            ? sysmonSourcePath !== null
+            : refreshSource !== null,
       isDetailsVisible: showDetails,
       isInfoPaneVisible: showInfoPane,
       activeFilterCount,
@@ -321,6 +355,7 @@ export function useAppActions(): AppActionHandlers {
       refreshSource,
       showDetails,
       showInfoPane,
+      sysmonSourcePath,
     ]
   );
 
@@ -416,6 +451,32 @@ export function useAppActions(): AppActionHandlers {
     []
   );
 
+  const analyzeSysmonWorkspaceSource = useCallback(
+    async (source: LogSource, trigger: string) => {
+      useUiStore.getState().ensureWorkspaceVisible("sysmon", trigger);
+      const sourcePath = getLogSourcePath(source);
+      const requestId = `sysmon-${Date.now()}`;
+      beginSysmonAnalysis(sourcePath, requestId);
+
+      try {
+        const result = await analyzeSysmonLogs(sourcePath, requestId, {
+          includeLiveEventLogs: shouldIncludeSysmonLiveEventLogs(source),
+        });
+        startTransition(() => {
+          setSysmonResults(result);
+        });
+      } catch (error) {
+        console.error("[app-actions] failed to analyze Sysmon source", {
+          source,
+          trigger,
+          error,
+        });
+        failSysmonAnalysis(error instanceof Error ? error.message : String(error));
+      }
+    },
+    [beginSysmonAnalysis, setSysmonResults, failSysmonAnalysis]
+  );
+
   const openSourceForWorkspace = useCallback(
     async (source: LogSource, trigger: string, workspace: WorkspaceId) => {
       if (isIntuneWorkspace(workspace)) {
@@ -425,6 +486,11 @@ export function useAppActions(): AppActionHandlers {
 
       if (workspace === "dsregcmd") {
         await analyzeDsregcmdWorkspaceSource(source, trigger);
+        return;
+      }
+
+      if (workspace === "sysmon") {
+        await analyzeSysmonWorkspaceSource(source, trigger);
         return;
       }
 
@@ -448,6 +514,7 @@ export function useAppActions(): AppActionHandlers {
     [
       analyzeDsregcmdWorkspaceSource,
       analyzeIntuneWorkspaceSource,
+      analyzeSysmonWorkspaceSource,
       loadLogWorkspaceSource,
     ]
   );
@@ -691,6 +758,19 @@ export function useAppActions(): AppActionHandlers {
       return;
     }
 
+    if (activeWorkspace === "sysmon") {
+      if (sysmonSourcePath) {
+        const isLiveSource = sysmonSourcePath === "live-event-log";
+        await analyzeSysmonWorkspaceSource(
+          isLiveSource
+            ? { kind: "known", sourceId: LIVE_SYSMON_SOURCE_ID, defaultPath: sysmonSourcePath, pathKind: "folder" }
+            : { kind: "file", path: sysmonSourcePath },
+          "app-actions.refresh"
+        );
+      }
+      return;
+    }
+
     if (!refreshSource) {
       return;
     }
@@ -709,9 +789,11 @@ export function useAppActions(): AppActionHandlers {
   }, [
     activeWorkspace,
     analyzeIntuneWorkspaceSource,
+    analyzeSysmonWorkspaceSource,
     commandState.canRefresh,
     refreshSource,
     selectedSourceFilePath,
+    sysmonSourcePath,
   ]);
 
   const toggleDetailsPane = useCallback(() => {
@@ -769,11 +851,17 @@ export function Toolbar() {
   const activeView = useUiStore((s) => s.activeView);
   const setActiveView = useUiStore((s) => s.setActiveView);
   const currentPlatform = useUiStore((s) => s.currentPlatform);
+  const activeWorkspace = useUiStore((s) => s.activeWorkspace);
+  const openTabs = useUiStore((s) => s.openTabs);
+  const setShowMergeTabsDialog = useUiStore((s) => s.setShowMergeTabsDialog);
+  const setShowDiffConfigDialog = useUiStore((s) => s.setShowDiffConfigDialog);
   const enabledWorkspaces = useUiStore((s) => s.enabledWorkspaces);
   const availableWorkspaces = useMemo(
     () => getAvailableWorkspaces(currentPlatform, enabledWorkspaces),
     [currentPlatform, enabledWorkspaces]
   );
+
+  const canMergeTabs = activeWorkspace === "log" && openTabs.length >= 2;
 
   const {
     commandState,
@@ -957,6 +1045,43 @@ export function Toolbar() {
           minWidth: "120px",
         }}
       />
+
+      {canMergeTabs && (
+        <button
+          type="button"
+          onClick={() => setShowMergeTabsDialog(true)}
+          title="Merge open tabs into a unified timeline"
+          style={{
+            fontSize: "12px",
+            padding: "4px 10px",
+            border: `1px solid ${tokens.colorNeutralStroke2}`,
+            borderRadius: "4px",
+            backgroundColor: tokens.colorNeutralBackground1,
+            color: tokens.colorNeutralForeground1,
+            cursor: "pointer",
+          }}
+        >
+          Merge Tabs...
+        </button>
+      )}
+      {canMergeTabs && (
+        <button
+          type="button"
+          onClick={() => setShowDiffConfigDialog(true)}
+          title="Compare two open tabs"
+          style={{
+            fontSize: "12px",
+            padding: "4px 10px",
+            border: `1px solid ${tokens.colorNeutralStroke2}`,
+            borderRadius: "4px",
+            backgroundColor: tokens.colorNeutralBackground1,
+            color: tokens.colorNeutralForeground1,
+            cursor: "pointer",
+          }}
+        >
+          Diff Tabs...
+        </button>
+      )}
 
       <Divider vertical />
 

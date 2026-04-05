@@ -67,7 +67,7 @@ function extractAppNameFromDetail(
       if (name.length === 0) continue;
       // If it's a GUID, try to resolve it via the registry
       if (GUID_PATTERN.test(name)) {
-        const entry = registry?.[name.toLowerCase()];
+        const entry = registry?.[name.toLowerCase()] ?? registry?.[name];
         if (entry) return entry.name;
         continue;
       }

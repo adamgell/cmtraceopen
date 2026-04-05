@@ -25,4 +25,6 @@ pub mod macos_diag;
 pub mod parsing;
 pub mod registry_ops;
 pub mod reveal;
+#[cfg(feature = "sysmon")]
+pub mod sysmon;
 pub mod system_preferences;
