@@ -321,7 +321,7 @@ function SourceSummaryCard({
   );
 }
 
-function LogSidebar() {
+export function LogSidebar() {
   const activeSource = useLogStore((s) => s.activeSource);
   const sourceEntries = useLogStore((s) => s.sourceEntries);
   const bundleMetadata = useLogStore((s) => s.bundleMetadata);
@@ -615,7 +615,7 @@ function LogSidebar() {
   );
 }
 
-function IntuneSidebar() {
+export function IntuneSidebar() {
   const activeView = useUiStore((s) => s.activeView);
   const intuneAnalysisState = useIntuneStore((s) => s.analysisState);
   const intuneIsAnalyzing = useIntuneStore((s) => s.isAnalyzing);
@@ -815,7 +815,7 @@ function IntuneSidebar() {
 }
 
 
-function DsregcmdSidebar() {
+export function DsregcmdSidebar() {
   const result = useDsregcmdStore((s) => s.result);
   const sourceContext = useDsregcmdStore((s) => s.sourceContext);
   const analysisState = useDsregcmdStore((s) => s.analysisState);

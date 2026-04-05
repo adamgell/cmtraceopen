@@ -1,9 +1,23 @@
 // src/workspaces/registry.ts
 import type { PlatformKind, WorkspaceId } from "../types/log";
 import type { WorkspaceDefinition } from "./types";
+import { logWorkspace } from "./log";
+import { intuneWorkspace } from "./intune";
+import { newIntuneWorkspace } from "./new-intune";
+import { dsregcmdWorkspace } from "./dsregcmd";
+import { macosDiagWorkspace } from "./macos-diag";
+import { deploymentWorkspace } from "./deployment";
+import { eventLogWorkspace } from "./event-log";
 import { sysmonWorkspace } from "./sysmon";
 
 const ALL_WORKSPACES: WorkspaceDefinition[] = [
+  logWorkspace,
+  intuneWorkspace,
+  newIntuneWorkspace,
+  dsregcmdWorkspace,
+  macosDiagWorkspace,
+  deploymentWorkspace,
+  eventLogWorkspace,
   sysmonWorkspace,
 ];
 
