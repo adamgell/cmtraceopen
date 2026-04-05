@@ -6,7 +6,7 @@ import type {
   EvtxChannelInfo,
   EvtxLevel,
   EvtxParseResult,
-} from "../types/event-log-workspace";
+} from "./types";
 
 export type EvtxSourceMode = "files" | "live" | null;
 export type EvtxSortField = "time" | "eventId" | "level" | "provider" | "channel";

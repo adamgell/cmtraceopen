@@ -1,6 +1,6 @@
 import { useRef, useState, useEffect } from "react";
 import { ProgressBar, Spinner, tokens } from "@fluentui/react-components";
-import { useEvtxStore } from "../../stores/evtx-store";
+import { useEvtxStore } from "./evtx-store";
 import { SourcePicker } from "./SourcePicker";
 import { ChannelPicker } from "./ChannelPicker";
 import { EvtxFilterBar } from "./EvtxFilterBar";

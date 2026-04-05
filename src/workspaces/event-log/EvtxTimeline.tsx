@@ -6,8 +6,8 @@ import {
   getLogListMetrics,
 } from "../../lib/log-accessibility";
 import { useUiStore } from "../../stores/ui-store";
-import { useEvtxStore, type EvtxSortField } from "../../stores/evtx-store";
-import type { EvtxRecord, EvtxLevel } from "../../types/event-log-workspace";
+import { useEvtxStore, type EvtxSortField } from "./evtx-store";
+import type { EvtxRecord, EvtxLevel } from "./types";
 import { EvtxTimelineRow } from "./EvtxTimelineRow";
 
 const LEVEL_ORDER: Record<EvtxLevel, number> = {

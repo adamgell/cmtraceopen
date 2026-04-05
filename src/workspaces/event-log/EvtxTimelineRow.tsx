@@ -3,7 +3,7 @@ import { tokens } from "@fluentui/react-components";
 import {
   LOG_MONOSPACE_FONT_FAMILY,
 } from "../../lib/log-accessibility";
-import type { EvtxRecord, EvtxLevel } from "../../types/event-log-workspace";
+import type { EvtxRecord, EvtxLevel } from "./types";
 
 const LEVEL_COLORS: Record<EvtxLevel, string> = {
   Critical: tokens.colorPaletteRedForeground1,

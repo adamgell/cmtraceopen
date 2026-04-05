@@ -7,7 +7,7 @@ export const eventLogWorkspace: WorkspaceDefinition = {
   label: "Event Log Viewer",
   platforms: "all",
   component: lazy(() =>
-    import("../../components/event-log-workspace/EventLogWorkspace").then(
+    import("./EventLogWorkspace").then(
       (m) => ({ default: m.EventLogWorkspace })
     )
   ),

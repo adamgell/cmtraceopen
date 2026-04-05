@@ -3,8 +3,8 @@ import { Button, Dropdown, Input, Option, tokens } from "@fluentui/react-compone
 import {
   useEvtxStore,
   type EvtxSortField,
-} from "../../stores/evtx-store";
-import type { EvtxLevel } from "../../types/event-log-workspace";
+} from "./evtx-store";
+import type { EvtxLevel } from "./types";
 
 const LEVELS: EvtxLevel[] = ["Critical", "Error", "Warning", "Information", "Verbose"];
 

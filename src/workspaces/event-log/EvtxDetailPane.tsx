@@ -6,7 +6,7 @@ import {
   getLogListMetrics,
 } from "../../lib/log-accessibility";
 import { useUiStore } from "../../stores/ui-store";
-import { useEvtxStore } from "../../stores/evtx-store";
+import { useEvtxStore } from "./evtx-store";
 
 export function EvtxDetailPane() {
   const records = useEvtxStore((s) => s.records);

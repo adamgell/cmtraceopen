@@ -1,7 +1,7 @@
 import { memo, useMemo, useRef, useState, useEffect, useCallback } from "react";
 import { Button, Input, tokens } from "@fluentui/react-components";
-import { useEvtxStore } from "../../stores/evtx-store";
-import type { EvtxChannelInfo } from "../../types/event-log-workspace";
+import { useEvtxStore } from "./evtx-store";
+import type { EvtxChannelInfo } from "./types";
 
 // ── Tree data structure ─────────────────────────────────────────────────────
 

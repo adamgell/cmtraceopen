@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Button, Spinner, tokens } from "@fluentui/react-components";
 import { open } from "@tauri-apps/plugin-dialog";
-import { useEvtxStore } from "../../stores/evtx-store";
+import { useEvtxStore } from "./evtx-store";
 import { useUiStore } from "../../stores/ui-store";
 
 const EVTX_FILE_DIALOG_FILTERS = [
