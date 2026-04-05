@@ -76,14 +76,70 @@ export function validateSession(data: unknown): SessionFile | null {
   if (typeof obj.version !== "number") return null;
   if (obj.version > CURRENT_VERSION) return null;
   if (!Array.isArray(obj.tabs)) return null;
-  // Validate each tab has required fields
+  if (typeof obj.workspace !== "string") return null;
+
+  // Validate and sanitize each tab
+  const tabs: SessionTab[] = [];
   for (const tab of obj.tabs) {
     if (typeof tab !== "object" || tab === null) return null;
     const t = tab as Record<string, unknown>;
     if (typeof t.filePath !== "string") return null;
+    tabs.push({
+      filePath: t.filePath,
+      fileHash: typeof t.fileHash === "string" ? t.fileHash : "",
+      fileSize: typeof t.fileSize === "number" ? t.fileSize : 0,
+      selectedId: typeof t.selectedId === "number" ? t.selectedId : null,
+      scrollPosition: typeof t.scrollPosition === "number" ? t.scrollPosition : null,
+      activeColumns: Array.isArray(t.activeColumns) ? t.activeColumns.filter((c): c is string => typeof c === "string") : [],
+    });
   }
-  if (typeof obj.workspace !== "string") return null;
-  return obj as unknown as SessionFile;
+
+  const defaults = createEmptySession();
+
+  // Sanitize filters
+  const rawFilters = typeof obj.filters === "object" && obj.filters !== null
+    ? obj.filters as Record<string, unknown>
+    : {};
+  const filters: SessionFilters = {
+    clauses: Array.isArray(rawFilters.clauses) ? rawFilters.clauses : [],
+    findQuery: typeof rawFilters.findQuery === "string" ? rawFilters.findQuery : "",
+    findCaseSensitive: typeof rawFilters.findCaseSensitive === "boolean" ? rawFilters.findCaseSensitive : false,
+    findUseRegex: typeof rawFilters.findUseRegex === "boolean" ? rawFilters.findUseRegex : false,
+    highlightText: typeof rawFilters.highlightText === "string" ? rawFilters.highlightText : "",
+  };
+
+  // Sanitize merged tab state
+  let mergedTabState: SessionMergedState | null = null;
+  if (typeof obj.mergedTabState === "object" && obj.mergedTabState !== null) {
+    const m = obj.mergedTabState as Record<string, unknown>;
+    if (Array.isArray(m.sourceFilePaths)) {
+      mergedTabState = {
+        sourceFilePaths: m.sourceFilePaths.filter((p): p is string => typeof p === "string"),
+        fileVisibility: typeof m.fileVisibility === "object" && m.fileVisibility !== null
+          ? m.fileVisibility as Record<string, boolean>
+          : {},
+        correlationWindowMs: typeof m.correlationWindowMs === "number" ? m.correlationWindowMs : 1000,
+        autoCorrelate: typeof m.autoCorrelate === "boolean" ? m.autoCorrelate : false,
+      };
+    }
+  }
+
+  const activeTabIndex = typeof obj.activeTabIndex === "number"
+    ? Math.max(0, Math.min(obj.activeTabIndex, tabs.length - 1))
+    : 0;
+
+  return {
+    version: obj.version,
+    savedAt: typeof obj.savedAt === "string" ? obj.savedAt : defaults.savedAt,
+    workspace: obj.workspace,
+    tabs,
+    activeTabIndex,
+    mergedTabState,
+    filters,
+    workspaceState: typeof obj.workspaceState === "object" && obj.workspaceState !== null
+      ? obj.workspaceState as SessionWorkspaceState
+      : defaults.workspaceState,
+  };
 }
 
 export interface FileChangeWarning {

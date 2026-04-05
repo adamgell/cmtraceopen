@@ -95,19 +95,43 @@ export async function restoreSession(sessionPath: string): Promise<string | null
   // Add to recent sessions
   uiStore.addRecentSession(sessionPath);
 
-  // Parse the valid files using the existing file-loading flow
+  // Load each file individually to create proper per-file tabs
   const filePaths = validTabs.map((t) => t.filePath);
   try {
-    const { loadFilesAsLogSource } = await import("./log-source");
-    await loadFilesAsLogSource(filePaths);
+    const { loadPathAsLogSource } = await import("./log-source");
+    for (const tab of validTabs) {
+      try {
+        await loadPathAsLogSource(tab.filePath, { fallbackToFolder: false });
+      } catch (error) {
+        console.warn("[session] failed to load file during restore", { filePath: tab.filePath, error });
+      }
+    }
   } catch (error) {
-    console.error("[session] failed to parse files during restore", error);
-    // Even if loading fails, return the session path so the caller knows we attempted it
-    console.warn("[session] partial restore: files could not be loaded, but session metadata was applied", { filePaths });
+    console.error("[session] failed to import log-source during restore", error);
+    // Fallback: try the aggregate load path
+    try {
+      const { loadFilesAsLogSource } = await import("./log-source");
+      await loadFilesAsLogSource(filePaths);
+    } catch (fallbackError) {
+      console.error("[session] fallback aggregate load also failed", fallbackError);
+    }
+  }
+
+  // Restore active tab index after all tabs are opened
+  const activeIndex = Math.min(session.activeTabIndex, validTabs.length - 1);
+  if (activeIndex >= 0) {
+    uiStore.switchTab(activeIndex);
+  }
+
+  // Restore per-tab scroll positions and selected lines
+  for (let i = 0; i < validTabs.length; i++) {
+    const tab = validTabs[i];
+    if (tab.scrollPosition != null || tab.selectedId != null) {
+      uiStore.saveTabScrollState(i, tab.scrollPosition ?? 0, tab.selectedId ?? null);
+    }
   }
 
   // Restore filters AFTER files are loaded so find/highlight operate on the loaded entries
-  // NOTE: Full session restore (scroll positions, per-tab selected lines) is not yet implemented.
   const logStore = useLogStore.getState();
   if (session.filters) {
     logStore.setHighlightText(session.filters.highlightText || "");

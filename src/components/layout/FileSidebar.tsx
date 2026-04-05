@@ -17,6 +17,7 @@ import {
   getActiveSourceLabel,
   getActiveSourcePath,
   getBaseName,
+  getCachedTabSnapshot,
   getSourceFailureReason,
   useLogStore,
 } from "../../stores/log-store";
@@ -561,8 +562,10 @@ function LogSidebar() {
                 <button
                   type="button"
                   onClick={() => {
-                    const filePaths = files.map((e) => e.path);
-                    createMergedTab(filePaths);
+                    const filePaths = files
+                      .filter((e) => !e.isDir && getCachedTabSnapshot(e.path))
+                      .map((e) => e.path);
+                    if (filePaths.length >= 2) createMergedTab(filePaths);
                   }}
                   style={{
                     width: "100%",

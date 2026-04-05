@@ -26,14 +26,18 @@ export function DiffConfigDialog({ isOpen, onClose, onCompare }: DiffConfigDialo
   const [fileB, setFileB] = useState<string>("");
 
   const tabOptions = useMemo(() => {
-    return openTabs.map((tab) => {
-      const snapshot = getCachedTabSnapshot(tab.filePath);
-      const count = snapshot?.entries.length ?? 0;
-      return { filePath: tab.filePath, fileName: tab.fileName, entryCount: count };
-    });
+    return openTabs
+      .filter((tab) => tab.fileKind === "log")
+      .map((tab) => {
+        const snapshot = getCachedTabSnapshot(tab.filePath);
+        const count = snapshot?.entries.length ?? 0;
+        return { filePath: tab.filePath, fileName: tab.fileName, entryCount: count };
+      });
   }, [openTabs]);
 
-  const canCompare = fileA !== "" && fileB !== "" && fileA !== fileB;
+  const hasFileA = tabOptions.some((option) => option.filePath === fileA);
+  const hasFileB = tabOptions.some((option) => option.filePath === fileB);
+  const canCompare = fileA !== "" && fileB !== "" && fileA !== fileB && hasFileA && hasFileB;
 
   const handleCompare = () => {
     if (!canCompare) return;
