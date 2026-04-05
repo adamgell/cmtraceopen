@@ -1,5 +1,5 @@
 import { tokens, Badge } from "@fluentui/react-components";
-import type { SecuritySummary } from "../../types/sysmon";
+import type { SecuritySummary } from "../../workspaces/sysmon/types";
 
 interface DashboardSecurityAlertsProps {
   securityEvents: SecuritySummary;

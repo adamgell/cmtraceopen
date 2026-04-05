@@ -7,7 +7,7 @@ import type {
   SysmonEventType,
   SysmonSeverity,
   SysmonSummary,
-} from "../types/sysmon";
+} from "../workspaces/sysmon/types";
 
 export type SysmonWorkspaceTab = "dashboard" | "events" | "summary" | "config";
 

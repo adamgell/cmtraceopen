@@ -5,7 +5,7 @@ import { getLogListMetrics, LOG_MONOSPACE_FONT_FAMILY } from "../../lib/log-acce
 import { useSysmonStore } from "../../stores/sysmon-store";
 import { useUiStore } from "../../stores/ui-store";
 import { getThemeById } from "../../lib/themes";
-import type { SysmonEvent } from "../../types/sysmon";
+import type { SysmonEvent } from "../../workspaces/sysmon/types";
 
 const DETAIL_HEIGHT = 200;
 

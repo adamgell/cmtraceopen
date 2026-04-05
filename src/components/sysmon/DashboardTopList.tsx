@@ -1,6 +1,6 @@
 import { tokens } from "@fluentui/react-components";
 import { HorizontalBarChart } from "@fluentui/react-charts";
-import type { RankedItem } from "../../types/sysmon";
+import type { RankedItem } from "../../workspaces/sysmon/types";
 
 interface DashboardTopListProps {
   title: string;

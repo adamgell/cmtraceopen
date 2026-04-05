@@ -11,7 +11,7 @@ import type {
 import type { EvidenceArtifactPreview, EvidenceBundleDetails, EvidenceArtifactIntakeKind } from "../types/evidence";
 import type { RegistryParseResult } from "../types/registry";
 import type { IntuneAnalysisResult } from "../types/intune";
-import type { SysmonAnalysisResult } from "../types/sysmon";
+import type { SysmonAnalysisResult } from "../workspaces/sysmon/types";
 import type {
   DsregcmdAnalysisResult,
   DsregcmdCaptureResult,
