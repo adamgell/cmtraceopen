@@ -13,6 +13,7 @@ import { useFilterStore } from "./filter-store";
 import type { ColumnId } from "../lib/column-config";
 import type { CollectionResult } from "../lib/commands";
 import type { WorkspaceId } from "../types/log";
+import { getAvailableWorkspaces as getRegistryWorkspaces } from "../workspaces/registry";
 
 export type { WorkspaceId } from "../types/log";
 
@@ -38,32 +39,11 @@ export interface CollectionProgressState {
   totalItems: number;
 }
 
-/** Which workspaces are available on each platform. */
-const WORKSPACE_PLATFORM_MAP: Record<WorkspaceId, PlatformId[] | "all"> = {
-  log: "all",
-  intune: "all",
-  "new-intune": "all",
-  dsregcmd: ["windows"],
-  "macos-diag": ["macos"],
-  deployment: ["windows"],
-  "event-log": "all",
-  sysmon: ["windows"],
-};
-
 export function getAvailableWorkspaces(
   platform: PlatformId,
-  enabledWorkspaces?: readonly WorkspaceId[] | null
+  enabledWorkspaces?: readonly WorkspaceId[] | null,
 ): WorkspaceId[] {
-  const enabled = enabledWorkspaces ? new Set(enabledWorkspaces) : null;
-
-  return (Object.keys(WORKSPACE_PLATFORM_MAP) as WorkspaceId[]).filter((ws) => {
-    if (enabled && !enabled.has(ws)) {
-      return false;
-    }
-
-    const platforms = WORKSPACE_PLATFORM_MAP[ws];
-    return platforms === "all" || platforms.includes(platform);
-  });
+  return getRegistryWorkspaces(platform, enabledWorkspaces).map((ws) => ws.id);
 }
 
 /** Source context for a tab — enough to restore sidebar and skip redundant folder re-parsing. */
