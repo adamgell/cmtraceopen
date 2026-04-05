@@ -7,7 +7,7 @@ export const deploymentWorkspace: WorkspaceDefinition = {
   label: "Software Deployment",
   platforms: ["windows"],
   component: lazy(() =>
-    import("../../components/deployment/DeploymentWorkspace").then((m) => ({
+    import("./DeploymentWorkspace").then((m) => ({
       default: m.DeploymentWorkspace,
     }))
   ),

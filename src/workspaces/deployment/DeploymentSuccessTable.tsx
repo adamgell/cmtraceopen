@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { tokens } from "@fluentui/react-components";
 import { LOG_MONOSPACE_FONT_FAMILY } from "../../lib/log-accessibility";
-import type { DeploymentLogFile } from "../../stores/deployment-store";
+import type { DeploymentLogFile } from "./deployment-store";
 
 function displayName(file: DeploymentLogFile): string {
   return file.appName ?? file.fileName;

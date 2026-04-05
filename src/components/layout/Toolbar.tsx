@@ -423,7 +423,7 @@ export function useAppActions(): AppActionHandlers {
               ? source.defaultPath
               : null;
         if (folderPath) {
-          const { useDeploymentStore } = await import("../../stores/deployment-store");
+          const { useDeploymentStore } = await import("../../workspaces/deployment/deployment-store");
           await useDeploymentStore.getState().analyzeFolder(folderPath);
           return;
         }
@@ -458,7 +458,7 @@ export function useAppActions(): AppActionHandlers {
       }
 
       if (activeWorkspace === "deployment") {
-        const { useDeploymentStore } = await import("../../stores/deployment-store");
+        const { useDeploymentStore } = await import("../../workspaces/deployment/deployment-store");
         await useDeploymentStore.getState().analyzeFolder(path);
         return;
       }

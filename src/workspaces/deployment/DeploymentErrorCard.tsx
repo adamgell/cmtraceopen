@@ -3,7 +3,7 @@ import { LOG_MONOSPACE_FONT_FAMILY } from "../../lib/log-accessibility";
 import {
   useDeploymentStore,
   type DeploymentLogFile,
-} from "../../stores/deployment-store";
+} from "./deployment-store";
 import { useLogStore } from "../../stores/log-store";
 import { useUiStore } from "../../stores/ui-store";
 import { loadPathAsLogSource } from "../../lib/log-source";

@@ -3,7 +3,7 @@ import { tokens, Spinner, Button } from "@fluentui/react-components";
 import {
   useDeploymentStore,
   type DeploymentLogFile,
-} from "../../stores/deployment-store";
+} from "./deployment-store";
 import { useLogStore } from "../../stores/log-store";
 import { DeploymentErrorCard } from "./DeploymentErrorCard";
 import { DeploymentSuccessTable } from "./DeploymentSuccessTable";
