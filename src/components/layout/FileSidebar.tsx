@@ -1,12 +1,11 @@
-import { useCallback, useEffect, useMemo, useState, Suspense, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState, Suspense } from "react";
 import {
   Badge,
   Button,
-  Caption1,
-  Subtitle2,
   tokens,
 } from "@fluentui/react-components";
 import { formatDisplayDateTime } from "../../lib/date-time-format";
+import { getBaseName } from "../../lib/file-paths";
 import { getLogListMetrics, LOG_UI_FONT_FAMILY } from "../../lib/log-accessibility";
 import { loadLogSource, loadSelectedLogFile } from "../../lib/log-source";
 import { useFilterStore } from "../../stores/filter-store";
@@ -14,7 +13,6 @@ import { getWorkspace } from "../../workspaces/registry";
 import {
   getActiveSourceLabel,
   getActiveSourcePath,
-  getBaseName,
   getCachedTabSnapshot,
   getSourceFailureReason,
   useLogStore,
@@ -22,6 +20,13 @@ import {
 import type { FolderEntry, LogSource } from "../../types/log";
 import { useUiStore, type WorkspaceId } from "../../stores/ui-store";
 import { useAppActions } from "./Toolbar";
+import {
+  EmptyState,
+  SectionHeader,
+  SidebarActionButton,
+  SourceStatusNotice,
+  SourceSummaryCard,
+} from "../common/sidebar-primitives";
 
 export const FILE_SIDEBAR_RECOMMENDED_WIDTH = 280;
 
@@ -70,116 +75,6 @@ function formatModified(unixMs: number | null): string {
   }
 
   return formatDisplayDateTime(unixMs) ?? "Modified time unavailable";
-}
-
-function SectionHeader({ title, caption }: { title: string; caption?: string }) {
-  return (
-    <div
-      style={{
-        padding: "10px 12px 8px",
-        borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
-        backgroundColor: tokens.colorNeutralBackground2,
-      }}
-    >
-      <Caption1
-        style={{
-          fontWeight: 600,
-          color: tokens.colorNeutralForeground3,
-          textTransform: "uppercase",
-          letterSpacing: "0.04em",
-        }}
-      >
-        {title}
-      </Caption1>
-      {caption && (
-        <Caption1
-          style={{
-            display: "block",
-            marginTop: "2px",
-            color: tokens.colorNeutralForeground3,
-          }}
-        >
-          {caption}
-        </Caption1>
-      )}
-    </div>
-  );
-}
-
-function EmptyState({ title, body }: { title: string; body: string }) {
-  return (
-    <div
-      style={{
-        padding: "18px 14px",
-        color: tokens.colorNeutralForeground3,
-        fontSize: "inherit",
-        lineHeight: 1.5,
-      }}
-    >
-      <Subtitle2 style={{ color: tokens.colorNeutralForeground1, marginBottom: "4px" }}>{title}</Subtitle2>
-      <div>{body}</div>
-    </div>
-  );
-}
-
-function SidebarActionButton({
-  label,
-  disabled,
-  onClick,
-}: {
-  label: string;
-  disabled: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <Button
-      disabled={disabled}
-      onClick={onClick}
-      size="small"
-      appearance="secondary"
-      style={{
-        justifyContent: "flex-start",
-        minWidth: 0,
-        flex: 1,
-      }}
-    >
-      {label}
-    </Button>
-  );
-}
-
-function SourceStatusNotice({
-  kind,
-  message,
-  detail,
-}: {
-  kind: string;
-  message: string;
-  detail?: string;
-}) {
-  const colors =
-    kind === "missing" || kind === "error"
-      ? { border: tokens.colorPaletteRedBorder2, background: tokens.colorPaletteRedBackground1, text: tokens.colorPaletteRedForeground2 }
-      : kind === "empty" || kind === "awaiting-file-selection"
-        ? { border: tokens.colorPaletteYellowBorder2, background: tokens.colorPaletteYellowBackground1, text: tokens.colorPaletteMarigoldForeground2 }
-        : { border: tokens.colorPaletteBlueBorderActive, background: tokens.colorPaletteBlueBackground2, text: tokens.colorPaletteBlueForeground2 };
-
-  return (
-    <div
-      role="status"
-      style={{
-        padding: "9px 12px",
-        borderBottom: `1px solid ${colors.border}`,
-        backgroundColor: colors.background,
-        color: colors.text,
-        fontSize: "inherit",
-        lineHeight: 1.4,
-      }}
-    >
-      <div style={{ fontWeight: 600 }}>{message}</div>
-      {detail && <div style={{ marginTop: "2px", opacity: 0.9 }}>{detail}</div>}
-    </div>
-  );
 }
 
 function FileRow({
@@ -252,70 +147,6 @@ function FileRow({
         {formatBytes(entry.sizeBytes)} • {formatModified(entry.modifiedUnixMs)}
       </div>
     </button>
-  );
-}
-
-function SourceSummaryCard({
-  badge,
-  title,
-  subtitle,
-  body,
-}: {
-  badge: string;
-  title: string;
-  subtitle: string;
-  body: ReactNode;
-}) {
-  return (
-    <div
-      style={{
-        padding: "12px",
-        borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
-        backgroundColor: tokens.colorNeutralBackground2,
-      }}
-    >
-      <Badge
-        appearance="outline"
-        color="brand"
-        style={{
-          fontWeight: 700,
-          textTransform: "uppercase",
-          letterSpacing: "0.05em",
-        }}
-      >
-        {badge}
-      </Badge>
-      <Subtitle2
-        title={title}
-        style={{
-          display: "block",
-          marginTop: "8px",
-          color: tokens.colorNeutralForeground1,
-          fontSize: "inherit",
-          fontWeight: 600,
-          overflow: "hidden",
-          textOverflow: "ellipsis",
-          whiteSpace: "nowrap",
-        }}
-      >
-        {title}
-      </Subtitle2>
-      <Caption1
-        title={subtitle}
-        style={{
-          display: "block",
-          marginTop: "4px",
-          color: tokens.colorNeutralForeground3,
-          fontSize: "0.85em",
-          overflow: "hidden",
-          textOverflow: "ellipsis",
-          whiteSpace: "nowrap",
-        }}
-      >
-        {subtitle}
-      </Caption1>
-      <div style={{ marginTop: "10px" }}>{body}</div>
-    </div>
   );
 }
 

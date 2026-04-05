@@ -9,6 +9,7 @@ import {
 } from "./commands";
 import { useLogStore, setCachedTabSnapshot, getCachedTabSnapshot } from "../stores/log-store";
 import { getColumnsForParser, getColumnsForAggregate } from "./column-config";
+import { getBaseName } from "./file-paths";
 import { useUiStore, type TabSourceContext } from "../stores/ui-store";
 import { useFilterStore } from "../stores/filter-store";
 import type {
@@ -60,13 +61,6 @@ export interface KnownSourceCatalogActionIds {
   menuId?: string | null;
 }
 
-function getBaseName(path: string | null): string {
-  if (!path) {
-    return "";
-  }
-
-  return path.split(/[\\/]/).pop() ?? path;
-}
 
 function classifySourceError(error: unknown): { kind: "missing" | "error"; message: string } {
   const message = error instanceof Error ? error.message : String(error);

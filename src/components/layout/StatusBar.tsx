@@ -1,9 +1,9 @@
 import { useMemo } from "react";
 import { Badge, Spinner, tokens } from "@fluentui/react-components";
 import { LOG_UI_FONT_FAMILY } from "../../lib/log-accessibility";
+import { getBaseName } from "../../lib/file-paths";
 import {
   getActiveSourceLabel,
-  getBaseName,
   getParserSelectionDisplay,
   getSourceFailureReason,
   getStreamStateSnapshot,

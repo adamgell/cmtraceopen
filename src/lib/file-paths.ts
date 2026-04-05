@@ -26,7 +26,7 @@
  * getBaseName("/var/log/install.log")
  * // => "install.log"
  */
-export function getBaseName(path: string | null): string {
+export function getBaseName(path: string | null | undefined): string {
   if (!path) {
     return "";
   }

@@ -5,15 +5,8 @@ import type {
   DsregcmdSourceDescriptor,
 } from "../workspaces/dsregcmd/types";
 import { analyzeDsregcmd, captureDsregcmd, loadDsregcmdSource } from "./commands";
+import { getBaseName } from "./file-paths";
 import { useDsregcmdStore } from "../workspaces/dsregcmd/dsregcmd-store";
-
-function getBaseName(path: string | null): string {
-  if (!path) {
-    return "";
-  }
-
-  return path.split(/[\\/]/).pop() ?? path;
-}
 
 function buildSourceContext(
   source: DsregcmdSourceDescriptor,

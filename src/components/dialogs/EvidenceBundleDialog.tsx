@@ -6,6 +6,7 @@ import { useIntuneStore } from "../../workspaces/intune/intune-store";
 import { useLogStore } from "../../stores/log-store";
 import { isIntuneWorkspace, useUiStore } from "../../stores/ui-store";
 import { formatDisplayDateTime } from "../../lib/date-time-format";
+import { getBaseName, getDirectoryName } from "../../lib/file-paths";
 import { useAppActions } from "../layout/Toolbar";
 import type {
   EvidenceArtifactRecord,
@@ -57,27 +58,6 @@ interface ArtifactNavigationState {
 
 const TEXT_LIKE_EXTENSIONS = new Set([".log", ".lo_", ".txt"]);
 
-function getBaseName(path: string | null): string {
-  if (!path) {
-    return "";
-  }
-
-  return path.split(/[\\/]/).pop() ?? path;
-}
-
-function getDirectoryName(path: string | null): string | null {
-  if (!path) {
-    return null;
-  }
-
-  const normalized = path.replace(/\\/g, "/");
-  const lastSeparator = normalized.lastIndexOf("/");
-  if (lastSeparator <= 0) {
-    return null;
-  }
-
-  return path.slice(0, lastSeparator);
-}
 
 function formatUtcDateTime(value: string | null): string {
   if (!value) {

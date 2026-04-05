@@ -16,6 +16,7 @@ import {
   getColumnDef,
 } from "../lib/column-config";
 import { formatLogEntryTimestamp } from "../lib/date-time-format";
+import { getBaseName } from "../lib/file-paths";
 import { buildGuidNameMap, mergeGuidNameMap } from "../lib/guid-name-map";
 import {
   type MergedTabState,
@@ -187,14 +188,6 @@ function computeFindMatches(
     }
   }
   return matchIds;
-}
-
-export function getBaseName(path: string | null): string {
-  if (!path) {
-    return "";
-  }
-
-  return path.split(/[\\/]/).pop() ?? path;
 }
 
 export function hasSourceContext(
