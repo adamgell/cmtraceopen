@@ -1,8 +1,8 @@
 import { useMemo } from "react";
 import { tokens } from "@fluentui/react-components";
 import { LOG_UI_FONT_FAMILY } from "../../lib/log-accessibility";
-import { useIntuneStore } from "../../stores/intune-store";
-import { useAppActions } from "../layout/Toolbar";
+import { useIntuneStore } from "./intune-store";
+import { useAppActions } from "../../components/layout/Toolbar";
 import { buildSourceFamilySummary } from "./intune-dashboard-utils";
 
 export function IntuneDashboardHeader() {

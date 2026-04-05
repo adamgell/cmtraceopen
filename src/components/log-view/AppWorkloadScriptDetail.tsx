@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import { tokens } from "@fluentui/react-components";
 import { LOG_MONOSPACE_FONT_FAMILY } from "../../lib/log-accessibility";
-import { ScriptCodeViewer } from "../intune/ScriptCodeViewer";
+import { ScriptCodeViewer } from "../../workspaces/intune/ScriptCodeViewer";
 
 interface PolicyEntry {
   id: string;

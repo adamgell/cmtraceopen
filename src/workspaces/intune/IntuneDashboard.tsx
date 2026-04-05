@@ -1,6 +1,6 @@
 import { useEffect, useMemo } from "react";
 import { tokens } from "@fluentui/react-components";
-import { useIntuneStore } from "../../stores/intune-store";
+import { useIntuneStore } from "./intune-store";
 import { EventTimeline } from "./EventTimeline";
 import { DownloadStats } from "./DownloadStats";
 import { SummaryView } from "./SummaryView";

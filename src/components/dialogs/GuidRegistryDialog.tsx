@@ -13,8 +13,8 @@ import {
 import { SearchRegular } from "@fluentui/react-icons";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { LOG_MONOSPACE_FONT_FAMILY } from "../../lib/log-accessibility";
-import { useIntuneStore } from "../../stores/intune-store";
-import type { GuidCategory, GuidRegistryEntry } from "../../types/intune";
+import { useIntuneStore } from "../../workspaces/intune/intune-store";
+import type { GuidCategory, GuidRegistryEntry } from "../../workspaces/intune/types";
 
 const SOURCE_LABELS: Record<string, { label: string; color: string }> = {
   ApplicationName: { label: "AppName", color: tokens.colorPaletteGreenForeground1 },

@@ -1,5 +1,5 @@
 import type { GraphAppInfo } from "./commands";
-import type { GuidCategory, GuidRegistryEntry } from "../types/intune";
+import type { GuidCategory, GuidRegistryEntry } from "../workspaces/intune/types";
 
 function categorizeOdataType(odataType: string | null): GuidCategory {
   if (!odataType) return "unknown";

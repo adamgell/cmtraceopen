@@ -7,12 +7,12 @@ export const newIntuneWorkspace: WorkspaceDefinition = {
   label: "New Intune Workspace",
   platforms: "all",
   component: lazy(() =>
-    import("../../components/intune/NewIntuneWorkspace").then((m) => ({
+    import("../intune/NewIntuneWorkspace").then((m) => ({
       default: m.NewIntuneWorkspace,
     }))
   ),
   sidebar: lazy(() =>
-    import("../../components/layout/FileSidebar").then((m) => ({
+    import("../intune/IntuneSidebar").then((m) => ({
       default: m.IntuneSidebar,
     }))
   ),

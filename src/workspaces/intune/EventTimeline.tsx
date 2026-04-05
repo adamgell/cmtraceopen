@@ -6,9 +6,9 @@ import {
   getLogListMetrics,
 } from "../../lib/log-accessibility";
 import { useUiStore } from "../../stores/ui-store";
-import type { IntuneEvent } from "../../types/intune";
+import type { IntuneEvent } from "./types";
 import { compareEvents } from "../../lib/intune-sort";
-import { useIntuneStore } from "../../stores/intune-store";
+import { useIntuneStore } from "./intune-store";
 import { EventTimelineRow, getFileName } from "./EventTimelineRow";
 import { EventActivityView } from "./EventActivityView";
 

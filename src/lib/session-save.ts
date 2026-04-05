@@ -4,7 +4,7 @@ import { writeTextFile } from "@tauri-apps/plugin-fs";
 import { useLogStore, getCachedTabSnapshot } from "../stores/log-store";
 import { useUiStore } from "../stores/ui-store";
 import { useFilterStore } from "../stores/filter-store";
-import { useIntuneStore } from "../stores/intune-store";
+import { useIntuneStore } from "../workspaces/intune/intune-store";
 import type { SessionFile, SessionTab } from "./session";
 
 interface FileHashResult {

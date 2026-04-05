@@ -1,12 +1,12 @@
 import { create } from "zustand";
-import { parseDisplayDateTimeValue } from "../lib/date-time-format";
-import type { EvidenceBundleMetadata } from "../types/evidence";
+import { parseDisplayDateTimeValue } from "../../lib/date-time-format";
+import type { EvidenceBundleMetadata } from "../../types/evidence";
 import type {
   EventLogAnalysis,
   EventLogChannel,
   EventLogCorrelationLink,
   EventLogSeverity,
-} from "../types/event-log";
+} from "../../types/event-log";
 import type {
   AppPolicyMetadata,
   DownloadStat,
@@ -28,7 +28,7 @@ import type {
   IntuneTimeWindowPreset,
   IntuneTimelineScope,
   IntuneTimestampBounds,
-} from "../types/intune";
+} from "./types";
 
 export type IntuneWorkspaceTab = "timeline" | "downloads" | "summary";
 export type IntuneTimelineViewMode = "list" | "activity";
@@ -171,7 +171,7 @@ interface IntuneState {
   evidenceBundle: EvidenceBundleMetadata | null;
   eventLogAnalysis: EventLogAnalysis | null;
   policyMetadata: Record<string, AppPolicyMetadata>;
-  guidRegistry: Record<string, import("../types/intune").GuidRegistryEntry>;
+  guidRegistry: Record<string, import("./types").GuidRegistryEntry>;
   sourceFile: string | null;
   sourceFiles: string[];
   sourceContext: IntuneSourceContext;
@@ -218,7 +218,7 @@ interface IntuneState {
   setFilterStatus: (status: IntuneStatus | "All") => void;
   setEventLogFilterChannel: (channel: EventLogChannel | "All") => void;
   setEventLogFilterSeverity: (severity: EventLogSeverity | "All") => void;
-  mergeGuidRegistry: (entries: Record<string, import("../types/intune").GuidRegistryEntry>) => void;
+  mergeGuidRegistry: (entries: Record<string, import("./types").GuidRegistryEntry>) => void;
   selectEventLogEntry: (id: number | null) => void;
   setActiveTab: (tab: IntuneWorkspaceTab) => void;
   setTimelineViewMode: (mode: IntuneTimelineViewMode) => void;

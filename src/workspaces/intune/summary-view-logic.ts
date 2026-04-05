@@ -9,7 +9,7 @@ import type {
   IntuneRemediationPriority,
   IntuneStatus,
   IntuneSummary,
-} from "../../types/intune";
+} from "./types";
 import {
   formatEventShare,
   getFileName,

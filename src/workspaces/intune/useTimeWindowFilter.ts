@@ -1,13 +1,13 @@
 import { useMemo } from "react";
 import { parseDisplayDateTimeValue } from "../../lib/date-time-format";
-import { useIntuneStore } from "../../stores/intune-store";
+import { useIntuneStore } from "./intune-store";
 import type {
   DownloadStat,
   IntuneEvent,
   IntuneEventType,
   IntuneSummary,
   IntuneTimeWindowPreset,
-} from "../../types/intune";
+} from "./types";
 
 export function useTimeWindowFilter() {
   const events = useIntuneStore((s) => s.events);

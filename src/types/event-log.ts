@@ -1,4 +1,4 @@
-import type { IntuneTimestampBounds } from "./intune";
+import type { IntuneTimestampBounds } from "../workspaces/intune/types";
 
 export type EventLogSeverity =
   | "Critical"

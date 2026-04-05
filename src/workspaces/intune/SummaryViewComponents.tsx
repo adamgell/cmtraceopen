@@ -6,7 +6,7 @@ import type {
   IntuneLogSourceKind,
   IntuneRepeatedFailureGroup,
   IntuneSourceFamilySummary,
-} from "../../types/intune";
+} from "./types";
 import {
   formatSourceFamilyDetail,
   formatTimestampBounds,

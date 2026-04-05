@@ -1,11 +1,11 @@
 import { useMemo, useCallback } from "react";
 import { tokens } from "@fluentui/react-components";
 import { LOG_UI_FONT_FAMILY, LOG_MONOSPACE_FONT_FAMILY } from "../../lib/log-accessibility";
-import type { DownloadStat } from "../../types/intune";
+import type { DownloadStat } from "./types";
 import { formatDisplayDateTime } from "../../lib/date-time-format";
 import { compareDownloads } from "../../lib/intune-sort";
-import { useIntuneStore } from "../../stores/intune-store";
-import type { DownloadSortField } from "../../stores/intune-store";
+import { useIntuneStore } from "./intune-store";
+import type { DownloadSortField } from "./intune-store";
 
 interface DownloadStatsProps {
   downloads: DownloadStat[];

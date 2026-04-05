@@ -1,6 +1,6 @@
-import type { IntuneEvent, DownloadStat } from "../types/intune";
-import { STATUS_RANK } from "../types/intune";
-import type { IntuneSortField, DownloadSortField } from "../stores/intune-store";
+import type { IntuneEvent, DownloadStat } from "../workspaces/intune/types";
+import { STATUS_RANK } from "../workspaces/intune/types";
+import type { IntuneSortField, DownloadSortField } from "../workspaces/intune/intune-store";
 
 export type SortDirection = "asc" | "desc";
 

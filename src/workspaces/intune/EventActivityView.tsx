@@ -8,8 +8,8 @@ import {
 } from "../../lib/log-accessibility";
 import { formatDisplayDateTime } from "../../lib/date-time-format";
 import { useUiStore } from "../../stores/ui-store";
-import { useIntuneStore } from "../../stores/intune-store";
-import type { IntuneEvent, IntuneStatus, IntuneEventType, GuidRegistryEntry } from "../../types/intune";
+import { useIntuneStore } from "./intune-store";
+import type { IntuneEvent, IntuneStatus, IntuneEventType, GuidRegistryEntry } from "./types";
 import { STATUS_COLORS, EVENT_TYPE_LABELS, formatDuration } from "./EventTimelineRow";
 
 /** A group of events sharing the same app identity. */

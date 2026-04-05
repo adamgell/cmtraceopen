@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { EventTimelineRow } from "./EventTimelineRow";
-import type { IntuneEvent } from "../../types/intune";
+import type { IntuneEvent } from "./types";
 
 describe("EventTimelineRow", () => {
   beforeEach(() => {

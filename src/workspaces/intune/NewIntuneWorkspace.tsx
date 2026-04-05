@@ -13,9 +13,9 @@ import {
   tokens,
 } from "@fluentui/react-components";
 import { getLogListMetrics } from "../../lib/log-accessibility";
-import { useIntuneStore } from "../../stores/intune-store";
+import { useIntuneStore } from "./intune-store";
 import { useUiStore } from "../../stores/ui-store";
-import { useAppActions } from "../layout/Toolbar";
+import { useAppActions } from "../../components/layout/Toolbar";
 import { EventLogSurface } from "./EventLogSurface";
 import { InvestigationPanel } from "./InvestigationPanel";
 import { OverviewSurface } from "./OverviewSurface";
@@ -27,7 +27,7 @@ import type {
   IntuneRepeatedFailureGroup,
   IntuneRemediationPriority,
   IntuneStatus,
-} from "../../types/intune";
+} from "./types";
 
 type NewIntuneSurface = "overview" | "timeline" | "downloads" | "event-logs";
 

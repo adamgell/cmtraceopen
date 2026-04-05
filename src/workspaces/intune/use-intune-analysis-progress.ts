@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { useIntuneStore } from "../stores/intune-store";
-import type { IntuneAnalysisProgressEvent } from "../types/intune";
+import { useIntuneStore } from "./intune-store";
+import type { IntuneAnalysisProgressEvent } from "./types";
 
 const INTUNE_ANALYSIS_PROGRESS_EVENT = "intune-analysis-progress";
 

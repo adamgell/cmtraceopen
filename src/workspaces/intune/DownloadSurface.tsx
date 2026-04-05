@@ -8,7 +8,7 @@ import {
   shorthands,
   tokens,
 } from "@fluentui/react-components";
-import type { DownloadStat } from "../../types/intune";
+import type { DownloadStat } from "./types";
 import { formatDisplayDateTime } from "../../lib/date-time-format";
 import {
   LOG_UI_FONT_FAMILY,

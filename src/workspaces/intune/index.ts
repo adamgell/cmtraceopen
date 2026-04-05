@@ -7,12 +7,12 @@ export const intuneWorkspace: WorkspaceDefinition = {
   label: "Intune Diagnostics",
   platforms: "all",
   component: lazy(() =>
-    import("../../components/intune/IntuneDashboard").then((m) => ({
+    import("./IntuneDashboard").then((m) => ({
       default: m.IntuneDashboard,
     }))
   ),
   sidebar: lazy(() =>
-    import("../../components/layout/FileSidebar").then((m) => ({
+    import("./IntuneSidebar").then((m) => ({
       default: m.IntuneSidebar,
     }))
   ),

@@ -1,13 +1,13 @@
 import { useMemo, useRef, useState } from "react";
 import { tokens } from "@fluentui/react-components";
 import { LOG_UI_FONT_FAMILY, LOG_MONOSPACE_FONT_FAMILY } from "../../lib/log-accessibility";
-import { useIntuneStore } from "../../stores/intune-store";
+import { useIntuneStore } from "./intune-store";
 import type {
   IntuneDiagnosticInsight,
   IntuneEvent,
   IntuneTimeWindowPreset,
   IntuneSummary,
-} from "../../types/intune";
+} from "./types";
 import {
   buildDominantSourceLabel,
   buildSourceFamilySummary,

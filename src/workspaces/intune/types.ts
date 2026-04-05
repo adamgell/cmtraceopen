@@ -1,5 +1,5 @@
-import type { EvidenceBundleMetadata } from "./evidence";
-import type { EventLogAnalysis } from "./event-log";
+import type { EvidenceBundleMetadata } from "../../types/evidence";
+import type { EventLogAnalysis } from "../../types/event-log";
 
 export type IntuneEventType =
   | "Win32App"

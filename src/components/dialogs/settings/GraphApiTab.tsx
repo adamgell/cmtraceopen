@@ -8,7 +8,7 @@ import {
   graphFetchAllApps,
   type GraphAuthStatus,
 } from "../../../lib/commands";
-import { useIntuneStore } from "../../../stores/intune-store";
+import { useIntuneStore } from "../../../workspaces/intune/intune-store";
 import { buildGraphRegistryEntries } from "../../../lib/graph-registry";
 
 export function GraphApiTab() {

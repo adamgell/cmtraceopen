@@ -6,7 +6,7 @@ import { formatDisplayDateTime } from "../../lib/date-time-format";
 import {
   LOG_MONOSPACE_FONT_FAMILY,
 } from "../../lib/log-accessibility";
-import type { IntuneEvent, IntuneStatus, IntuneEventType } from "../../types/intune";
+import type { IntuneEvent, IntuneStatus, IntuneEventType } from "./types";
 import { ScriptCodeViewer } from "./ScriptCodeViewer";
 
 export const STATUS_COLORS: Record<IntuneStatus, string> = {

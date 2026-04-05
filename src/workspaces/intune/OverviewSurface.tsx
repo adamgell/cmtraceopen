@@ -13,7 +13,7 @@ import {
 } from "@fluentui/react-components";
 import { formatDisplayDateTime } from "../../lib/date-time-format";
 import { getLogListMetrics } from "../../lib/log-accessibility";
-import { getEventLogEntryIdsForDiagnostic } from "../../stores/intune-store";
+import { getEventLogEntryIdsForDiagnostic } from "./intune-store";
 import { useUiStore } from "../../stores/ui-store";
 import type {
   EventLogAnalysis,
@@ -25,7 +25,7 @@ import type {
   IntuneEventType,
   IntuneRepeatedFailureGroup,
   IntuneRemediationPriority,
-} from "../../types/intune";
+} from "./types";
 
 /** Inline style that forces Fluent typography components to inherit font size. */
 const inheritFontSize: React.CSSProperties = { fontSize: "inherit" };

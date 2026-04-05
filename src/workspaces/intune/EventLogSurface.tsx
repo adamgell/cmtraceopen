@@ -12,7 +12,7 @@ import type {
 import {
   useIntuneStore,
   getCorrelationLinksForEntry,
-} from "../../stores/intune-store";
+} from "./intune-store";
 
 const COLLAPSED_ROW_ESTIMATE = 28;
 const EXPANDED_ROW_ESTIMATE = 200;

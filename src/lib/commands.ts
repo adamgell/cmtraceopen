@@ -10,7 +10,7 @@ import type {
 } from "../types/log";
 import type { EvidenceArtifactPreview, EvidenceBundleDetails, EvidenceArtifactIntakeKind } from "../types/evidence";
 import type { RegistryParseResult } from "../types/registry";
-import type { IntuneAnalysisResult } from "../types/intune";
+import type { IntuneAnalysisResult } from "../workspaces/intune/types";
 import type { SysmonAnalysisResult } from "../workspaces/sysmon/types";
 import type {
   DsregcmdAnalysisResult,

@@ -9,7 +9,7 @@ import {
 } from "@fluentui/react-components";
 import { DownloadSurface } from "./DownloadSurface";
 import { EventTimeline } from "./EventTimeline";
-import type { DownloadStat, IntuneEvent, IntuneEventType, IntuneStatus } from "../../types/intune";
+import type { DownloadStat, IntuneEvent, IntuneEventType, IntuneStatus } from "./types";
 
 /** Inline style that forces Fluent typography components to inherit font size. */
 const inheritFontSize: React.CSSProperties = { fontSize: "inherit" };

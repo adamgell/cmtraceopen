@@ -30,7 +30,7 @@ import { useLogStore } from "../../stores/log-store";
 import { useFilterStore } from "../../stores/filter-store";
 import { switchToTab } from "../../lib/log-source";
 import { useFileWatcher } from "../../hooks/use-file-watcher";
-import { useIntuneAnalysisProgress } from "../../hooks/use-intune-analysis-progress";
+import { useIntuneAnalysisProgress } from "../../workspaces/intune/use-intune-analysis-progress";
 import { useSysmonAnalysisProgress } from "../../workspaces/sysmon/use-sysmon-analysis-progress";
 import { useKeyboard } from "../../hooks/use-keyboard";
 import { useDragDrop } from "../../hooks/use-drag-drop";

@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { tokens } from "@fluentui/react-components";
-import { useIntuneStore } from "../../stores/intune-store";
+import { useIntuneStore } from "./intune-store";
 import type {
   DownloadStat,
   IntuneEvent,
@@ -8,8 +8,8 @@ import type {
   IntuneStatus,
   IntuneSummary,
   IntuneTimeWindowPreset,
-} from "../../types/intune";
-import type { IntuneSortField, IntuneTimelineViewMode } from "../../stores/intune-store";
+} from "./types";
+import type { IntuneSortField, IntuneTimelineViewMode } from "./intune-store";
 import { selectStyle, getFileName } from "./intune-dashboard-utils";
 
 type TabId = "timeline" | "downloads" | "summary";

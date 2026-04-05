@@ -9,7 +9,7 @@ import type {
   IntuneRemediationPriority,
   IntuneSourceFamilySummary,
   IntuneTimestampBounds,
-} from "../../types/intune";
+} from "./types";
 
 export function getFileName(path: string): string {
   const normalized = path.replace(/\\/g, "/");
@@ -346,7 +346,7 @@ export function formatSourceFamilyDetail(family: IntuneSourceFamilySummary): str
 }
 
 export function buildDominantSourceLabel(
-  dominantSource: NonNullable<import("../../types/intune").IntuneDiagnosticsCoverage["dominantSource"]>
+  dominantSource: NonNullable<import("./types").IntuneDiagnosticsCoverage["dominantSource"]>
 ): string {
   const share = dominantSource.eventShare != null ? ` (${formatEventShare(dominantSource.eventShare)})` : "";
   return `${getFileName(dominantSource.filePath)}${share}`;

@@ -1,5 +1,5 @@
 import { useUiStore } from "../stores/ui-store";
-import { useIntuneStore } from "../stores/intune-store";
+import { useIntuneStore } from "../workspaces/intune/intune-store";
 import { buildGraphRegistryEntries } from "../lib/graph-registry";
 import {
   graphAuthenticate,
