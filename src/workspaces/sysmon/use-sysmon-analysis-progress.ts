@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { useSysmonStore, type SysmonAnalysisProgress } from "../workspaces/sysmon/sysmon-store";
+import { useSysmonStore, type SysmonAnalysisProgress } from "./sysmon-store";
 
 const SYSMON_ANALYSIS_PROGRESS_EVENT = "sysmon-analysis-progress";
 
