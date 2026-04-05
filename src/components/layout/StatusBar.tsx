@@ -22,7 +22,7 @@ import { useIntuneStore } from "../../workspaces/intune/intune-store";
 import { useDsregcmdStore } from "../../workspaces/dsregcmd/dsregcmd-store";
 import { useDeploymentStore } from "../../workspaces/deployment/deployment-store";
 import { useSysmonStore } from "../../workspaces/sysmon/sysmon-store";
-import { useEvtxStore } from "../../stores/evtx-store";
+import { useEvtxStore } from "../../workspaces/event-log/evtx-store";
 
 interface SeverityCounts {
   errors: number;
