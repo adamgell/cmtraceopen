@@ -1,6 +1,7 @@
 // src/workspaces/new-intune/index.ts
 import { lazy } from "react";
 import type { WorkspaceDefinition } from "../types";
+import { createIntuneOnOpenSource } from "../intune";
 
 export const newIntuneWorkspace: WorkspaceDefinition = {
   id: "new-intune",
@@ -26,4 +27,5 @@ export const newIntuneWorkspace: WorkspaceDefinition = {
     folder: "Open IME Or Evidence Folder",
     placeholder: "Open Intune Source...",
   },
+  onOpenSource: createIntuneOnOpenSource("new-intune"),
 };

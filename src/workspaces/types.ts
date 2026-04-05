@@ -21,6 +21,10 @@ export interface WorkspaceCapabilities {
   footerBar?: boolean;
   multiFileDrop?: boolean;
   fontSizing?: boolean;
+  /** Whether the toolbar's known-source presets menu is available. Defaults to true if omitted. */
+  knownSources?: boolean;
+  /** Whether pause/resume tailing is supported. Only the log workspace has this. */
+  tailing?: boolean;
 }
 
 export interface WorkspaceDefinition {

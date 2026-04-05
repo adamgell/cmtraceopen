@@ -16,6 +16,9 @@ export const dsregcmdWorkspace: WorkspaceDefinition = {
       default: m.DsregcmdSidebar,
     }))
   ),
+  capabilities: {
+    knownSources: false,
+  },
   fileFilters: [
     { name: "Text Files", extensions: ["txt"] },
     { name: "Log Files", extensions: ["log"] },
@@ -25,5 +28,19 @@ export const dsregcmdWorkspace: WorkspaceDefinition = {
     file: "Open Text File",
     folder: "Open Evidence Folder",
     placeholder: "Open dsregcmd Source...",
+  },
+  onOpenSource: async (source, trigger) => {
+    const [{ useUiStore }, { analyzeDsregcmdSource }] = await Promise.all([
+      import("../../stores/ui-store"),
+      import("../../lib/dsregcmd-source"),
+    ]);
+
+    useUiStore.getState().ensureWorkspaceVisible("dsregcmd", trigger);
+
+    if (source.kind === "known") {
+      throw new Error("Known log presets are not supported in the dsregcmd workspace.");
+    }
+
+    await analyzeDsregcmdSource(source);
   },
 };

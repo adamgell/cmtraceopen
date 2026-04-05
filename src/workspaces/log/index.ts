@@ -25,6 +25,8 @@ export const logWorkspace: WorkspaceDefinition = {
     footerBar: true,
     multiFileDrop: true,
     fontSizing: true,
+    tailing: true,
+    knownSources: true,
   },
   fileFilters: [
     { name: "Log Files", extensions: ["log"] },

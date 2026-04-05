@@ -30,4 +30,16 @@ export const deploymentWorkspace: WorkspaceDefinition = {
     folder: "Open Folder",
     placeholder: "Open...",
   },
+  onOpenSource: async (source, _trigger) => {
+    const folderPath =
+      source.kind === "folder"
+        ? source.path
+        : source.kind === "known"
+          ? source.defaultPath
+          : null;
+    if (folderPath) {
+      const { useDeploymentStore } = await import("./deployment-store");
+      await useDeploymentStore.getState().analyzeFolder(folderPath);
+    }
+  },
 };
