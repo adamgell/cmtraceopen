@@ -7,7 +7,7 @@ export const macosDiagWorkspace: WorkspaceDefinition = {
   label: "macOS Diagnostics",
   platforms: ["macos"],
   component: lazy(() =>
-    import("../../components/macos-diag/MacosDiagWorkspace").then((m) => ({
+    import("./MacosDiagWorkspace").then((m) => ({
       default: m.MacosDiagWorkspace,
     }))
   ),

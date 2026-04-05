@@ -350,7 +350,7 @@ import type {
   MacosPackageInfo,
   MacosPackageFiles,
   MacosUnifiedLogResult,
-} from "../types/macos-diag";
+} from "../workspaces/macos-diag/types";
 
 export async function macosScanEnvironment(): Promise<MacosDiagEnvironment> {
   return invokeCommand<MacosDiagEnvironment>("macos_scan_environment");

@@ -1,4 +1,4 @@
-import type { MacosMdmProfile } from "../types/macos-diag";
+import type { MacosMdmProfile } from "../workspaces/macos-diag/types";
 
 // ---------------------------------------------------------------------------
 // Payload type knowledge base
