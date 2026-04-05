@@ -36,6 +36,7 @@ import { useIntuneStore } from "../../stores/intune-store";
 import { useDsregcmdStore } from "../../stores/dsregcmd-store";
 import { useSysmonStore } from "../../workspaces/sysmon/sysmon-store";
 import { isIntuneWorkspace, getAvailableWorkspaces, type IntuneWorkspaceId, type WorkspaceId, type PlatformId, useUiStore } from "../../stores/ui-store";
+import { getWorkspace } from "../../workspaces/registry";
 import { ThemePicker } from "./ThemePicker";
 import {
   getLogSourcePath,
@@ -73,90 +74,9 @@ function resolveRefreshSource(
   return null;
 }
 
-const LOG_FILE_DIALOG_FILTERS = [
-  { name: "Log Files", extensions: ["log"] },
-  { name: "Old Log Files", extensions: ["lo_"] },
-  { name: "Registry Files", extensions: ["reg"] },
-  { name: "All Files", extensions: ["*"] },
-];
-
-const INTUNE_FILE_DIALOG_FILTERS = [
-  { name: "Intune IME Logs", extensions: ["log"] },
-  { name: "All Files", extensions: ["*"] },
-];
-
-const DSREGCMD_FILE_DIALOG_FILTERS = [
-  { name: "Text Files", extensions: ["txt"] },
-  { name: "Log Files", extensions: ["log"] },
-  { name: "All Files", extensions: ["*"] },
-];
-
 const LIVE_INTUNE_SOURCE_ID = "windows-intune-ime-logs";
 const LIVE_SYSMON_SOURCE_ID = "windows-sysmon-live-events";
 
-const WORKSPACE_LABELS: Record<WorkspaceId, string> = {
-  log: "Log Explorer",
-  intune: "Intune Diagnostics",
-  "new-intune": "New Intune Workspace",
-  dsregcmd: "dsregcmd",
-  "macos-diag": "macOS Diagnostics",
-  deployment: "Software Deployment",
-  "event-log": "Event Log Viewer",
-  sysmon: "Sysmon",
-};
-
-const SYSMON_FILE_DIALOG_FILTERS = [
-  { name: "EVTX Files", extensions: ["evtx"] },
-  { name: "All Files", extensions: ["*"] },
-];
-
-function getOpenFileDialogFilters(workspace: WorkspaceId) {
-  if (isIntuneWorkspace(workspace)) {
-    return INTUNE_FILE_DIALOG_FILTERS;
-  }
-
-  if (workspace === "dsregcmd") {
-    return DSREGCMD_FILE_DIALOG_FILTERS;
-  }
-
-  if (workspace === "sysmon") {
-    return SYSMON_FILE_DIALOG_FILTERS;
-  }
-
-  return LOG_FILE_DIALOG_FILTERS;
-}
-
-function getOpenActionLabels(workspace: WorkspaceId) {
-  if (workspace === "dsregcmd") {
-    return {
-      file: "Open Text File",
-      folder: "Open Evidence Folder",
-      openPlaceholder: "Open dsregcmd Source...",
-    };
-  }
-
-  if (isIntuneWorkspace(workspace)) {
-    return {
-      file: "Open IME Log File",
-      folder: "Open IME Or Evidence Folder",
-      openPlaceholder: "Open Intune Source...",
-    };
-  }
-
-  if (workspace === "sysmon") {
-    return {
-      file: "Open EVTX File",
-      folder: "Open EVTX Folder",
-      openPlaceholder: "Open Sysmon Source...",
-    };
-  }
-
-  return {
-    file: "Open File",
-    folder: "Open Folder",
-    openPlaceholder: "Open...",
-  };
-}
 
 async function inferPathKind(path: string): Promise<"file" | "folder" | "unknown"> {
   try {
@@ -593,9 +513,15 @@ export function useAppActions(): AppActionHandlers {
 
     const isLogWorkspace = activeWorkspace === "log";
 
+    const activeWorkspaceDefinition = getWorkspace(activeWorkspace);
+    const fileDialogFilters = activeWorkspaceDefinition.fileFilters ?? [
+      { name: "Log Files", extensions: ["log", "txt", "csv", "json", "xml", "evtx"] },
+      { name: "All Files", extensions: ["*"] },
+    ];
+
     const selected = await open({
       multiple: isLogWorkspace,
-      filters: getOpenFileDialogFilters(activeWorkspace),
+      filters: fileDialogFilters,
     });
 
     if (!selected) return;
@@ -916,10 +842,14 @@ export function Toolbar() {
     };
   }, []);
 
-  const openLabels = useMemo(
-    () => getOpenActionLabels(activeView),
-    [activeView]
-  );
+  const openLabels = useMemo(() => {
+    const ws = getWorkspace(activeView);
+    return ws.actionLabels ?? {
+      file: "Open File",
+      folder: "Open Folder",
+      placeholder: "Open...",
+    };
+  }, [activeView]);
 
 
   return (
@@ -940,9 +870,9 @@ export function Toolbar() {
           <Button
             size="small"
             disabled={!commandState.canOpenSources}
-            title={openLabels.openPlaceholder}
+            title={openLabels.placeholder}
           >
-            {openLabels.openPlaceholder}
+            {openLabels.placeholder}
           </Button>
         </MenuTrigger>
         <MenuPopover>
@@ -1131,7 +1061,7 @@ export function Toolbar() {
             Workspace:
           </label>
           <Dropdown
-            value={WORKSPACE_LABELS[activeView]}
+            value={getWorkspace(activeView).label}
             selectedOptions={[activeView]}
             onOptionSelect={(_e, data) => {
               if (data.optionValue) {
@@ -1143,7 +1073,7 @@ export function Toolbar() {
             aria-label="Workspace"
           >
             {availableWorkspaces.map((wsId) => (
-              <Option key={wsId} value={wsId}>{WORKSPACE_LABELS[wsId]}</Option>
+              <Option key={wsId} value={wsId}>{getWorkspace(wsId).label}</Option>
             ))}
           </Dropdown>
         </>
