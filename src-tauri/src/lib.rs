@@ -27,10 +27,6 @@ use tauri::Manager;
 #[cfg(target_os = "windows")]
 use graph_api::GraphAuthState;
 
-#[cfg(target_os = "windows")]
-use tauri::Manager;
-#[cfg(target_os = "windows")]
-use graph_api::GraphAuthState;
 
 /// Returns all non-flag CLI arguments as potential file paths.
 ///

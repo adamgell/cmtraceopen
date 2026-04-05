@@ -22,7 +22,14 @@ export async function openSessionDialog(): Promise<string | null> {
 }
 
 export async function restoreSession(sessionPath: string): Promise<string | null> {
-  const content = await readTextFile(sessionPath);
+  let content: string;
+  try {
+    content = await readTextFile(sessionPath);
+  } catch (error) {
+    console.error("[session] failed to read session file", { sessionPath, error });
+    return null;
+  }
+
   let data: unknown;
   try {
     data = JSON.parse(content);
@@ -37,7 +44,7 @@ export async function restoreSession(sessionPath: string): Promise<string | null
     return null;
   }
 
-  // Check file integrity
+  // Check file integrity for sessions that have tabs
   const warnings: FileChangeWarning[] = [];
   const validTabs: typeof session.tabs = [];
 
@@ -78,11 +85,6 @@ export async function restoreSession(sessionPath: string): Promise<string | null
     console.warn("[session] file integrity warnings:", parts.join("; "), warnings);
   }
 
-  if (validTabs.length === 0) {
-    console.error("[session] no valid files to restore");
-    return null;
-  }
-
   // Clear current state
   useLogStore.getState().clear();
 
@@ -95,19 +97,19 @@ export async function restoreSession(sessionPath: string): Promise<string | null
   // Add to recent sessions
   uiStore.addRecentSession(sessionPath);
 
-  // Parse the valid files using the existing file-loading flow
-  const filePaths = validTabs.map((t) => t.filePath);
-  try {
-    const { loadFilesAsLogSource } = await import("./log-source");
-    await loadFilesAsLogSource(filePaths);
-  } catch (error) {
-    console.error("[session] failed to parse files during restore", error);
-    // Even if loading fails, return the session path so the caller knows we attempted it
-    console.warn("[session] partial restore: files could not be loaded, but session metadata was applied", { filePaths });
+  // Load valid files if any exist
+  if (validTabs.length > 0) {
+    const filePaths = validTabs.map((t) => t.filePath);
+    try {
+      const { loadFilesAsLogSource } = await import("./log-source");
+      await loadFilesAsLogSource(filePaths);
+    } catch (error) {
+      console.error("[session] failed to parse files during restore", error);
+      console.warn("[session] partial restore: files could not be loaded, but session metadata was applied", { filePaths });
+    }
   }
 
   // Restore filters AFTER files are loaded so find/highlight operate on the loaded entries
-  // NOTE: Full session restore (scroll positions, per-tab selected lines) is not yet implemented.
   const logStore = useLogStore.getState();
   if (session.filters) {
     logStore.setHighlightText(session.filters.highlightText || "");

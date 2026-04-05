@@ -68,7 +68,7 @@ pub async fn analyze_intune_logs(
     include_live_event_logs: bool,
     graph_api_enabled: bool,
     app: AppHandle,
-    #[cfg(target_os = "windows")] graph_state: tauri::State<'_, crate::graph_api::GraphAuthState>,
+    #[cfg(target_os = "windows")] _graph_state: tauri::State<'_, crate::graph_api::GraphAuthState>,
 ) -> Result<IntuneAnalysisResult, crate::error::AppError> {
     // Attempt Graph API enrichment before spawning the blocking task.
     // We capture the resolved map here (on the async side) so the blocking

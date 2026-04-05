@@ -18,9 +18,6 @@ export async function saveSession(): Promise<string | null> {
   const filterState = useFilterStore.getState();
 
   const openTabs = uiState.openTabs;
-  if (openTabs.length === 0 && uiState.activeWorkspace === "log") {
-    return null;
-  }
 
   // Build tab entries with file hashes
   const tabs: SessionTab[] = [];
