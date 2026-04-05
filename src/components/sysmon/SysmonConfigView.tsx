@@ -1,5 +1,5 @@
 import { tokens } from "@fluentui/react-components";
-import { useSysmonStore } from "../../stores/sysmon-store";
+import { useSysmonStore } from "../../workspaces/sysmon/sysmon-store";
 import { LOG_MONOSPACE_FONT_FAMILY } from "../../lib/log-accessibility";
 
 export function SysmonConfigView() {

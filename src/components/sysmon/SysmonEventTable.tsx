@@ -2,7 +2,7 @@ import { useMemo, useRef } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { tokens } from "@fluentui/react-components";
 import { getLogListMetrics, LOG_MONOSPACE_FONT_FAMILY } from "../../lib/log-accessibility";
-import { useSysmonStore } from "../../stores/sysmon-store";
+import { useSysmonStore } from "../../workspaces/sysmon/sysmon-store";
 import { useUiStore } from "../../stores/ui-store";
 import { getThemeById } from "../../lib/themes";
 import type { SysmonEvent } from "../../workspaces/sysmon/types";

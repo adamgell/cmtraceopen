@@ -1,5 +1,5 @@
 import { tokens } from "@fluentui/react-components";
-import { useSysmonStore } from "../../stores/sysmon-store";
+import { useSysmonStore } from "../../workspaces/sysmon/sysmon-store";
 import { DashboardMetricCards } from "./DashboardMetricCards";
 import { DashboardTimeline } from "./DashboardTimeline";
 import { DashboardEventTypeChart } from "./DashboardEventTypeChart";

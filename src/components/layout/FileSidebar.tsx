@@ -12,7 +12,7 @@ import { loadLogSource, loadSelectedLogFile } from "../../lib/log-source";
 import { useFilterStore } from "../../stores/filter-store";
 import { useIntuneStore } from "../../stores/intune-store";
 import { useDsregcmdStore } from "../../stores/dsregcmd-store";
-import { useSysmonStore } from "../../stores/sysmon-store";
+import { useSysmonStore } from "../../workspaces/sysmon/sysmon-store";
 import {
   getActiveSourceLabel,
   getActiveSourcePath,

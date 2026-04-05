@@ -21,7 +21,7 @@ import {
 import { useIntuneStore } from "../../stores/intune-store";
 import { useDsregcmdStore } from "../../stores/dsregcmd-store";
 import { useDeploymentStore } from "../../stores/deployment-store";
-import { useSysmonStore } from "../../stores/sysmon-store";
+import { useSysmonStore } from "../../workspaces/sysmon/sysmon-store";
 import { useEvtxStore } from "../../stores/evtx-store";
 
 interface SeverityCounts {
