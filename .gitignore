@@ -18,6 +18,9 @@ src-tauri/target-test
 .DS_Store
 Thumbs.db
 
+# Brainstorming artifacts
+.superpowers/
+
 # Env
 .env
 .env.local
