@@ -15,17 +15,20 @@ import { LogRow } from "./LogRow";
 import { MergeLegendBar } from "./MergeLegendBar";
 import type { ErrorCodeSpan } from "../../types/log";
 import { useContextMenu } from "../../hooks/use-context-menu";
+import { ArrowBidirectionalLeftRightRegular } from "@fluentui/react-icons";
 import {
   applyColumnOrder,
   getVisibleColumns,
   buildGridTemplateColumns,
   getColumnDef,
+  calcAutoFitWidth,
   type ColumnId,
   type ColumnDefinition,
 } from "../../lib/column-config";
 import { getThemeById } from "../../lib/themes";
 import {
   getLogListMetrics,
+  getCanvasFont,
   LOG_UI_FONT_FAMILY,
 } from "../../lib/log-accessibility";
 
@@ -291,6 +294,29 @@ export function LogListView() {
 
   const onDragEnd = useCallback(() => setDragState(null), []);
 
+  // ── Auto-fit column width ────────────────────────────────────────────────
+  const handleHeaderDoubleClick = useCallback(
+    (colId: ColumnId) => {
+      const def = getColumnDef(colId);
+      if (!def) return;
+      // Use a rendered row element so the font-family is fully resolved (no CSS variables)
+      const rowEl = parentRef.current?.querySelector<HTMLElement>(".log-row") ?? null;
+      const contentFont = getCanvasFont(logListFontSize, false, rowEl);
+      const headerFont = getCanvasFont(listMetrics.headerFontSize, true, rowEl);
+      setColumnWidth(colId, calcAutoFitWidth(def, displayEntries, contentFont, headerFont));
+    },
+    [displayEntries, logListFontSize, listMetrics, setColumnWidth]
+  );
+
+  const handleFitAllColumns = useCallback(() => {
+    const rowEl = parentRef.current?.querySelector<HTMLElement>(".log-row") ?? null;
+    const contentFont = getCanvasFont(logListFontSize, false, rowEl);
+    const headerFont = getCanvasFont(listMetrics.headerFontSize, true, rowEl);
+    for (const col of visibleColumns) {
+      setColumnWidth(col.id, calcAutoFitWidth(col, displayEntries, contentFont, headerFont));
+    }
+  }, [visibleColumns, displayEntries, logListFontSize, listMetrics, setColumnWidth]);
+
   const activeRowDomId =
     selectedEntryIndex >= 0
       ? `log-list-row-${displayEntries[selectedEntryIndex].id}`
@@ -339,6 +365,8 @@ export function LogListView() {
             onDragOver={onDragOver}
             onDrop={onDrop}
             onDragEnd={onDragEnd}
+            onDoubleClick={handleHeaderDoubleClick}
+            onFitAll={col.id === "severity" ? handleFitAllColumns : undefined}
           />
         ))}
       </div>
@@ -426,6 +454,8 @@ interface HeaderCellProps {
   onDragOver: (index: number, e: React.DragEvent) => void;
   onDrop: (e: React.DragEvent) => void;
   onDragEnd: () => void;
+  onDoubleClick: (colId: ColumnId) => void;
+  onFitAll?: () => void;
 }
 
 function HeaderCell({
@@ -439,8 +469,11 @@ function HeaderCell({
   onDragOver,
   onDrop,
   onDragEnd,
+  onDoubleClick,
+  onFitAll,
 }: HeaderCellProps) {
   const [resizeHover, setResizeHover] = useState(false);
+  const [fitAllHover, setFitAllHover] = useState(false);
 
   return (
     <div
@@ -449,6 +482,7 @@ function HeaderCell({
       onDragOver={(e) => onDragOver(index, e)}
       onDrop={onDrop}
       onDragEnd={onDragEnd}
+      onDoubleClick={(e) => { e.preventDefault(); onDoubleClick(col.id); }}
       style={{
         position: "relative",
         ...(col.isFlex ? { minWidth: 0 } : {}),
@@ -468,7 +502,28 @@ function HeaderCell({
             : {}),
       }}
     >
-      {col.label}
+      {onFitAll ? (
+        /* Fit-all-columns button lives in the severity column header (no label, always first) */
+        <div
+          title="Auto-fit all columns to content width"
+          onClick={(e) => { e.stopPropagation(); onFitAll(); }}
+          onMouseEnter={() => setFitAllHover(true)}
+          onMouseLeave={() => setFitAllHover(false)}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            width: "100%",
+            height: "100%",
+            cursor: "pointer",
+            color: fitAllHover ? tokens.colorBrandForeground1 : tokens.colorNeutralForeground2,
+          }}
+        >
+          <ArrowBidirectionalLeftRightRegular style={{ fontSize: 12 }} />
+        </div>
+      ) : (
+        col.label
+      )}
 
       {/* Resize handle in upper-right corner */}
       {(

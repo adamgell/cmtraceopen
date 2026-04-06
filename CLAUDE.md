@@ -25,15 +25,27 @@ npm run app:build:exe-only      # Executable only, no bundler
 
 # Frontend only
 npm run frontend:build          # tsc + vite build
+
+# Frontend tests (Vitest)
+npm run test                    # Run once
+npm run test:watch              # Watch mode
+npm run test:coverage           # With coverage
+
+# Lite build (no default features)
+npm run app:build:lite
 ```
 
 ### Rust Commands (run from `src-tauri/`)
 
 ```bash
-cargo check                     # Type check
-cargo test                      # Run all tests
-cargo clippy -- -D warnings     # Lint (CI enforces zero warnings)
-cargo bench                     # Criterion benchmarks (intune_pipeline)
+cargo check                              # Type check
+cargo check --no-default-features       # Check lite build
+cargo test                               # Run all tests
+cargo test --no-default-features        # Test lite build
+cargo clippy -- -D warnings              # Lint (CI enforces zero warnings)
+cargo clippy --no-default-features -- -D warnings
+cargo bench                              # Criterion benchmarks (intune_pipeline)
+cargo deny check                         # Supply chain audit (CI enforced)
 ```
 
 ### TypeScript Check
@@ -70,6 +82,7 @@ Communication is through Tauri's `invoke()` (frontend→backend) and `emit()` (b
 | `state/` | `AppState` (Mutex-wrapped) — tracks open files, tail sessions |
 | `watcher/` | File watching and real-time tailing via `notify` crate |
 | `sysmon/` | Sysmon event log analysis: EVTX parsing, event models |
+| `event_log/` | Windows event log reading via EVTX parsing |
 | `menu.rs` | Native application menu |
 
 ### Frontend Module Map (`src/`)
@@ -82,7 +95,8 @@ Communication is through Tauri's `invoke()` (frontend→backend) and `emit()` (b
 | `components/intune/` | Intune analysis workspace |
 | `components/dsregcmd/` | DSRegCmd troubleshooting workspace |
 | `components/sysmon/` | Sysmon event log analysis workspace |
-| `stores/` | 6 Zustand stores: log, filter, intune, dsregcmd, sysmon, ui |
+| `components/event-log-workspace/` | Event log viewer workspace |
+| `stores/` | Zustand stores: log, filter, intune, dsregcmd, sysmon, ui, deployment |
 | `hooks/` | Custom hooks for drag-drop, menus, file association |
 | `types/` | TypeScript type definitions |
 

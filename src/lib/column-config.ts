@@ -315,6 +315,80 @@ export function getColumnsForAggregate(parsers: ParserKind[]): ColumnId[] {
  * Filters the user order to only include columns that are active (parser-relevant).
  * Any active columns not in the user order are appended at the end.
  */
+// ── Auto-fit measurement ─────────────────────────────────────────────────────
+
+/** Singleton canvas context for measuring text width without DOM layout. */
+let _measureCtx: CanvasRenderingContext2D | null = null;
+function getMeasureCtx(): CanvasRenderingContext2D | null {
+  if (!_measureCtx) {
+    const canvas = document.createElement("canvas");
+    _measureCtx = canvas.getContext("2d");
+  }
+  return _measureCtx;
+}
+
+export function measureTextWidth(text: string, font: string): number {
+  const ctx = getMeasureCtx();
+  if (!ctx) return text.length * 8;
+  ctx.font = font;
+  return ctx.measureText(text).width;
+}
+
+const CELL_PAD = 10;   // 4px left + 4px right cell padding + 2px buffer
+const HEADER_PAD = 24; // extra room for the resize grip
+
+/**
+ * Calculate the auto-fit width for a column given the current display entries.
+ * - severity: returns defaultWidth (renders a colored dot, not text)
+ * - dateTime: uses a fixed representative timestamp string (view layer formats it)
+ * - all others: two-pass approach —
+ *     Pass 1 (O(n), no canvas): find the max string length across ALL entries
+ *     Pass 2 (O(k), canvas): measure only strings within 90% of the max length
+ *   This ensures the widest entry is always found regardless of how large the log is,
+ *   while keeping canvas calls to a minimum.
+ */
+export function calcAutoFitWidth(
+  col: ColumnDefinition,
+  entries: readonly LogEntry[],
+  contentFont: string,
+  headerFont: string
+): number {
+  if (col.id === "severity") return col.defaultWidth;
+
+  if (col.id === "dateTime") {
+    const sample = "2024-01-01 00:00:00.000";
+    return Math.ceil(Math.max(measureTextWidth(sample, contentFont) + CELL_PAD, col.minWidth));
+  }
+
+  const headerW = measureTextWidth(col.label, headerFont) + HEADER_PAD;
+
+  // Pass 1: find the longest string length (cheap — no canvas)
+  let maxLen = 0;
+  for (const entry of entries) {
+    const val = col.accessor(entry);
+    if (val == null) continue;
+    const len = String(val).length;
+    if (len > maxLen) maxLen = len;
+  }
+
+  // No data found — use defaultWidth so we never shrink an empty column below its designed size
+  if (maxLen === 0) return Math.ceil(Math.max(headerW, col.defaultWidth));
+
+  // Pass 2: canvas-measure only strings ≥ 90% of max length
+  const threshold = maxLen * 0.9;
+  let maxContent = 0;
+  for (const entry of entries) {
+    const val = col.accessor(entry);
+    if (val == null) continue;
+    const text = String(val);
+    if (text.length < threshold) continue;
+    const w = measureTextWidth(text, contentFont);
+    if (w > maxContent) maxContent = w;
+  }
+
+  return Math.ceil(Math.max(headerW, maxContent + CELL_PAD, col.minWidth));
+}
+
 export function applyColumnOrder(
   activeColumns: ColumnId[],
   userOrder: ColumnId[] | null
