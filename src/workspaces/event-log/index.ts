@@ -11,20 +11,13 @@ export const eventLogWorkspace: WorkspaceDefinition = {
       (m) => ({ default: m.EventLogWorkspace })
     )
   ),
-  sidebar: lazy(() =>
-    import("../dsregcmd/DsregcmdSidebar").then((m) => ({
-      default: m.DsregcmdSidebar,
-    }))
-  ),
   fileFilters: [
-    { name: "Log Files", extensions: ["log"] },
-    { name: "Old Log Files", extensions: ["lo_"] },
-    { name: "Registry Files", extensions: ["reg"] },
+    { name: "EVTX Files", extensions: ["evtx"] },
     { name: "All Files", extensions: ["*"] },
   ],
   actionLabels: {
-    file: "Open File",
-    folder: "Open Folder",
-    placeholder: "Open...",
+    file: "Open EVTX File",
+    folder: "Open EVTX Folder",
+    placeholder: "Open Event Log Source...",
   },
 };

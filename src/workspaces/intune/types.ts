@@ -1,5 +1,8 @@
 import type { EvidenceBundleMetadata } from "../../types/evidence";
-import type { EventLogAnalysis } from "../../types/event-log";
+import type { EventLogAnalysis, IntuneTimestampBounds } from "../../types/event-log";
+
+// Re-export so existing consumers don't break
+export type { IntuneTimestampBounds } from "../../types/event-log";
 
 export type IntuneEventType =
   | "Win32App"
@@ -85,11 +88,6 @@ export const STATUS_RANK: Record<string, number> = {
   Success: 4,
   Unknown: 5,
 };
-
-export interface IntuneTimestampBounds {
-  firstTimestamp: string | null;
-  lastTimestamp: string | null;
-}
 
 export interface IntuneDiagnosticsFileCoverage {
   filePath: string;

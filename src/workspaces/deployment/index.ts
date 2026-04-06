@@ -31,12 +31,16 @@ export const deploymentWorkspace: WorkspaceDefinition = {
     placeholder: "Open...",
   },
   onOpenSource: async (source, _trigger) => {
-    const folderPath =
-      source.kind === "folder"
-        ? source.path
-        : source.kind === "known"
-          ? source.defaultPath
-          : null;
+    let folderPath: string | null = null;
+    if (source.kind === "folder") {
+      folderPath = source.path;
+    } else if (source.kind === "known") {
+      folderPath = source.defaultPath;
+    } else if (source.kind === "file") {
+      // Analyze the parent directory of the selected file
+      const lastSep = Math.max(source.path.lastIndexOf("/"), source.path.lastIndexOf("\\"));
+      folderPath = lastSep > 0 ? source.path.substring(0, lastSep) : null;
+    }
     if (folderPath) {
       const { useDeploymentStore } = await import("./deployment-store");
       await useDeploymentStore.getState().analyzeFolder(folderPath);
