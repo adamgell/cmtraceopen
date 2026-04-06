@@ -131,7 +131,7 @@ export function validateSession(data: unknown): SessionFile | null {
   return {
     version: obj.version,
     savedAt: typeof obj.savedAt === "string" ? obj.savedAt : defaults.savedAt,
-    workspace: obj.workspace,
+    workspace: obj.workspace as string,
     tabs,
     activeTabIndex,
     mergedTabState,

@@ -1,10 +1,19 @@
+import { useState } from "react";
 import { tokens, Button, Spinner, Tab, TabList } from "@fluentui/react-components";
+import { open } from "@tauri-apps/plugin-dialog";
 import { useSysmonStore, type SysmonWorkspaceTab } from "./sysmon-store";
+import { useUiStore } from "../../stores/ui-store";
+import { analyzeSysmonLogs } from "../../lib/commands";
 import { useAppActions } from "../../components/layout/Toolbar";
 import { SysmonEventTable } from "./SysmonEventTable";
 import { SysmonSummaryView } from "./SysmonSummaryView";
 import { SysmonConfigView } from "./SysmonConfigView";
 import { SysmonDashboardView } from "./SysmonDashboardView";
+
+const EVTX_FILE_DIALOG_FILTERS = [
+  { name: "Event Log Files", extensions: ["evtx"] },
+  { name: "All Files", extensions: ["*"] },
+];
 
 export function SysmonWorkspace() {
   const isAnalyzing = useSysmonStore((s) => s.isAnalyzing);
@@ -14,7 +23,55 @@ export function SysmonWorkspace() {
   const activeTab = useSysmonStore((s) => s.activeTab);
   const setActiveTab = useSysmonStore((s) => s.setActiveTab);
   const sourcePath = useSysmonStore((s) => s.sourcePath);
+  const beginAnalysis = useSysmonStore((s) => s.beginAnalysis);
+  const setResults = useSysmonStore((s) => s.setResults);
+  const failAnalysis = useSysmonStore((s) => s.failAnalysis);
+  const currentPlatform = useUiStore((s) => s.currentPlatform);
   const { commandState, refreshActiveSource } = useAppActions();
+  const [localError, setLocalError] = useState<string | null>(null);
+
+  const isWindows = currentPlatform === "windows";
+
+  const runAnalysis = async (path: string, includeLive: boolean) => {
+    setLocalError(null);
+    const requestId = `sysmon-${Date.now()}`;
+    beginAnalysis(path, requestId);
+    try {
+      const result = await analyzeSysmonLogs(path, requestId, {
+        includeLiveEventLogs: includeLive,
+      });
+      setResults(result);
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      failAnalysis(msg);
+    }
+  };
+
+  const handleOpenFiles = async () => {
+    setLocalError(null);
+    try {
+      const selected = await open({
+        multiple: false,
+        filters: EVTX_FILE_DIALOG_FILTERS,
+      });
+      if (!selected) return;
+      const path = Array.isArray(selected) ? selected[0] : selected;
+      await runAnalysis(path, false);
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      setLocalError(msg);
+    }
+  };
+
+  const handleThisComputer = async () => {
+    setLocalError(null);
+    try {
+      await runAnalysis("live-event-log", true);
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      setLocalError(msg);
+    }
+  };
 
   if (isAnalyzing) {
     return (
@@ -58,19 +115,59 @@ export function SysmonWorkspace() {
     return (
       <div
         style={{
+          flex: 1,
           display: "flex",
           flexDirection: "column",
           alignItems: "center",
           justifyContent: "center",
-          height: "100%",
-          gap: "8px",
-          color: tokens.colorNeutralForeground3,
+          gap: "24px",
+          padding: "40px",
         }}
       >
-        <span style={{ fontSize: "14px", fontWeight: 600 }}>Sysmon Log Viewer</span>
-        <span style={{ fontSize: "12px" }}>
-          Open a Sysmon .evtx file or folder to analyze events.
-        </span>
+        <div
+          style={{
+            fontSize: "18px",
+            fontWeight: 600,
+            color: tokens.colorNeutralForeground1,
+          }}
+        >
+          Sysmon Log Viewer
+        </div>
+        <div
+          style={{
+            fontSize: "13px",
+            color: tokens.colorNeutralForeground3,
+            textAlign: "center",
+            maxWidth: "400px",
+          }}
+        >
+          Open a Sysmon .evtx file to analyze events, or query the live
+          Sysmon event log on this computer.
+        </div>
+
+        <div style={{ display: "flex", gap: "16px" }}>
+          <Button appearance="primary" onClick={() => void handleOpenFiles()}>
+            Open .evtx Files
+          </Button>
+          {isWindows && (
+            <Button appearance="secondary" onClick={() => void handleThisComputer()}>
+              This Computer
+            </Button>
+          )}
+        </div>
+
+        {(localError || analysisError) && (
+          <div
+            style={{
+              fontSize: "12px",
+              color: tokens.colorPaletteRedForeground1,
+              maxWidth: "500px",
+              textAlign: "center",
+            }}
+          >
+            {localError || analysisError}
+          </div>
+        )}
       </div>
     );
   }

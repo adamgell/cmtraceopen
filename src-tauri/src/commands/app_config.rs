@@ -23,5 +23,9 @@ pub fn get_available_workspaces() -> Vec<&'static str> {
         workspaces.push("event-log");
     }
 
+    if cfg!(feature = "sysmon") {
+        workspaces.push("sysmon");
+    }
+
     workspaces
 }

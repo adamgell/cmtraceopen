@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased] — PR #82
+## [1.1.0] - 2026-04-05
 
 ### Added
 
@@ -18,14 +18,14 @@ All notable changes to this project will be documented in this file.
 - **Jump to Line**: Context menu action to jump to a specific line number in the log.
 - **Reveal in File Manager**: Context menu action to open the source file's location in Finder/Explorer.
 - **Quick Filter**: Context menu action to instantly filter by the selected row's severity or component.
-- **Multi-file unified timeline** (PR #81): Merge entries from multiple open log files into a single time-sorted view. Two entry points: "Merge Tabs..." button in the toolbar and "Merge into Timeline" button in the folder sidebar. Color-coded left borders distinguish source files. A legend bar provides per-file toggle visibility, correlation time window, and auto-correlate controls. Cross-file timestamp correlation highlights entries from other files within a configurable time window and shows them in the InfoPane with delta timestamps.
+- **Multi-file unified timeline**: Merge entries from multiple open log files into a single time-sorted view. Two entry points: "Merge Tabs..." button in the toolbar and "Merge into Timeline" button in the folder sidebar. Color-coded left borders distinguish source files. A legend bar provides per-file toggle visibility, correlation time window, and auto-correlate controls. Cross-file timestamp correlation highlights entries from other files within a configurable time window and shows them in the InfoPane with delta timestamps.
 - **Session save/restore**: Save the current workspace state (open files, scroll positions, filters, merged tabs, workspace context) to a `.cmtrace` JSON file via File > Save Session (Ctrl+Shift+S). Restore via File > Open Session or Recent Sessions submenu. Files are integrity-checked with SHA-256 hashes — warns if files have changed or are missing since the session was saved. New `compute_file_hash` Rust backend command.
 - **Log diff**: Compare two open log files side-by-side or in unified inline view. Fuzzy pattern matching normalizes GUIDs, timestamps, and long numbers so "same event, different instance" lines are recognized as matches. Stats bar shows common patterns vs. lines unique to each file. "Diff Tabs..." button in the toolbar opens a config dialog for source selection.
 - **Sysmon EVTX workspace** (PR #72): Full Sysmon analysis workspace for Windows `.evtx` event log files.
   - **Rust backend** (`src-tauri/src/sysmon/`): EVTX parser that reads all events (no cap) and classifies them into 23 Sysmon event types — process creation (ID 1), network connections (ID 3), file operations (IDs 11, 15, 23), registry activity (IDs 12, 13, 14), DNS queries (ID 22), image loads (ID 7), driver loads (ID 6), WMI activity (IDs 19, 20, 21), and more. Extracts structured fields (process names, hashes, parent processes, network destinations, registry keys) from XML event data. Produces dashboard aggregations: timeline bucketing with auto-scaling resolution (minute/5-minute/hourly/daily based on time span), top-N ranked lists (processes, network destinations, DNS queries, registry keys), event type distribution, and security alert classification (high-severity events like process injection, credential access, driver loads). Config extraction from event IDs 4/16 with hash algorithm inference. Pre-allocated HashMaps for 100K+ event performance. 14 backend tests covering summary generation, timeline bucketing, top-N ranking, config extraction, and security classification.
   - **Frontend** (`src/components/sysmon/`): Four-tab workspace — Dashboard (metric cards, event type donut chart, timeline histogram, security alerts, top process/network/DNS/registry lists), Events (searchable table with severity filtering and TanStack Virtual scrolling), Summary (file metadata), Config (Sysmon configuration XML viewer). Theme-aware chart colors via Fluent UI tokens. Zustand store with analysis progress events matching the Intune workspace pattern.
-  - **Integration**: Registered as "sysmon" workspace with known source for `Microsoft-Windows-Sysmon%4Operational.evtx`. Toolbar workspace switcher, progress listener hook, `analyze_sysmon_logs` Tauri IPC command.
-- **Intune failed app context** (PR #79): Expanded failed AppWorkload context export with polished output for troubleshooting failed app deployments.
+  - **Integration**: Registered as "sysmon" workspace with in-workspace source picker — "Open .evtx Files" button and "This Computer" button (Windows) to query the live Sysmon event log. Toolbar workspace switcher, progress listener hook, `analyze_sysmon_logs` Tauri IPC command.
+- **Intune failed app context**: Expanded failed AppWorkload context export with polished output for troubleshooting failed app deployments.
 
 ### Fixed
 
@@ -38,6 +38,10 @@ All notable changes to this project will be documented in this file.
 - **Button types**: Added explicit `type="button"` to prevent unintended form submissions.
 - **Sysmon feature gating**: Sysmon module properly gated behind `sysmon` feature flag to prevent compilation on non-Windows targets without the feature enabled. Fixed clippy warnings in sysmon module.
 - **Graph API merge conflicts**: Resolved integration conflicts between Graph API GUID resolution and existing Intune pipeline code.
+- **Session save silent failure**: Save Session no longer silently does nothing when no tabs are open — the save dialog always appears so workspace state and filters can still be saved.
+- **Session restore with missing files**: Restore no longer bails entirely when saved files are missing — workspace state, filters, and available files are still restored.
+- **Sysmon workspace not visible**: The Sysmon workspace was missing from `get_available_workspaces()` and never appeared in the workspace switcher. Added the `sysmon` feature gate.
+- **Duplicate imports after merge**: Removed duplicate `use tauri::Manager` and `use graph_api::GraphAuthState` imports in `lib.rs`.
 
 ### Changed
 

@@ -22,7 +22,14 @@ export async function openSessionDialog(): Promise<string | null> {
 }
 
 export async function restoreSession(sessionPath: string): Promise<string | null> {
-  const content = await readTextFile(sessionPath);
+  let content: string;
+  try {
+    content = await readTextFile(sessionPath);
+  } catch (error) {
+    console.error("[session] failed to read session file", { sessionPath, error });
+    return null;
+  }
+
   let data: unknown;
   try {
     data = JSON.parse(content);
@@ -37,7 +44,7 @@ export async function restoreSession(sessionPath: string): Promise<string | null
     return null;
   }
 
-  // Check file integrity
+  // Check file integrity for sessions that have tabs
   const warnings: FileChangeWarning[] = [];
   const validTabs: typeof session.tabs = [];
 
