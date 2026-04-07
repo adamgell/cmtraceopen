@@ -67,7 +67,7 @@ windows = { version = "0.58", features = [
 ureq = "2"
 
 [dev-dependencies]
-criterion = "0.5"
+criterion = "0.8"
 tempfile = "3"
 plist = "1"
 
