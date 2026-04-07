@@ -27,5 +27,9 @@ pub fn get_available_workspaces() -> Vec<&'static str> {
         workspaces.push("sysmon");
     }
 
+    if cfg!(feature = "secureboot") {
+        workspaces.push("secureboot");
+    }
+
     workspaces
 }
