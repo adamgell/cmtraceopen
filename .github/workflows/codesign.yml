@@ -13,24 +13,25 @@ on:
         required: true
         type: string
 
-permissions:
-  contents: write
+permissions: {}
 
 jobs:
   prepare-windows-release:
     name: Prepare Windows Release
     runs-on: windows-latest
+    permissions:
+      contents: write
     outputs:
       version: ${{ steps.resolve_version.outputs.version }}
       tag_name: ${{ steps.resolve_version.outputs.tag_name }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           fetch-depth: 0
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "20"
           cache: npm
@@ -160,6 +161,10 @@ jobs:
     name: Signed Windows Release (${{ matrix.label }})
     needs: prepare-windows-release
     runs-on: windows-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
     environment: codesigning
     strategy:
       fail-fast: false
@@ -177,19 +182,19 @@ jobs:
       TAG_NAME: ${{ needs.prepare-windows-release.outputs.tag_name }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           fetch-depth: 0
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "20"
           cache: npm
           cache-dependency-path: package-lock.json
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
         with:
           targets: ${{ matrix.rust_target }}
 
@@ -253,7 +258,7 @@ jobs:
       # The signed standalone EXEs are also used by mpdev to build the MSI,
       # so the binaries inside the MSI will carry valid signatures.
       - name: Sign release EXEs
-        uses: azure/trusted-signing-action@v0
+        uses: azure/trusted-signing-action@1d365fec12862c4aa68fcac418143d73f0cea293 # v0.5.11
         with:
           azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
@@ -266,6 +271,12 @@ jobs:
           file-digest: SHA256
           timestamp-rfc3161: http://timestamp.acs.microsoft.com
           timestamp-digest: SHA256
+
+      - name: Attest signed EXEs
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
+        with:
+          subject-path: |
+            release-artifacts/*.exe
 
       # ── Build MSI via Master Packager Dev (bundles signed full + lite EXEs) ──
       - name: Install Master Packager Dev
@@ -305,6 +316,12 @@ jobs:
           }
           "msi_path=$msiPath" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
+      - name: Attest MSI
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
+        with:
+          subject-path: |
+            ${{ steps.verify_msi.outputs.msi_path }}
+
       # ── Generate updater signature for NSIS installer ──
       - name: Generate updater signature for NSIS installer
         shell: pwsh
@@ -322,7 +339,7 @@ jobs:
 
       # ── Upload artifacts ──
       - name: Upload signed workflow artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: cmtrace-open-windows-signed-${{ matrix.artifact_suffix }}-${{ env.VERSION }}
           path: |
