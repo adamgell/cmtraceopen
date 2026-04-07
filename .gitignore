@@ -18,8 +18,14 @@ src-tauri/target-test
 .DS_Store
 Thumbs.db
 
+# Internal docs (specs, plans, mockups)
+docs/
+
 # Brainstorming artifacts
 .superpowers/
+
+# Test logs
+Logs/
 
 # Env
 .env
