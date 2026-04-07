@@ -377,9 +377,11 @@ fn rule_error_code_present(state: &SecureBootScanState, out: &mut Vec<Diagnostic
                 &format!(
                     "The UEFI CA 2023 update process returned error 0x{code:08X}.",
                 ),
-                "Look up 0x{code:08X} in the Windows error code database. \
-                 Common causes include missing payload files, insufficient \
-                 permissions, or a firmware incompatibility.",
+                &format!(
+                    "Look up 0x{code:08X} in the Windows error code database. \
+                     Common causes include missing payload files, insufficient \
+                     permissions, or a firmware incompatibility.",
+                ),
             ));
         }
     }

@@ -39,7 +39,7 @@ pub fn analyze(path: Option<&str>) -> Result<SecureBootAnalysisResult, crate::er
         })
     } else {
         // --- Live-scan path ---------------------------------------------------
-        let scan_state = scanner::scan_device().unwrap_or_default();
+        let scan_state = scanner::scan_device()?;
 
         // Try auto-discover the default log location.
         let auto_log_path = {

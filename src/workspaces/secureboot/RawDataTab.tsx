@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Button, tokens } from "@fluentui/react-components";
+import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 
 export interface RawDataTabProps {
   rawDump: string | null;
@@ -27,7 +28,7 @@ export function RawDataTab({ rawDump }: RawDataTabProps) {
   }
 
   const handleCopy = () => {
-    navigator.clipboard.writeText(rawDump).then(
+    writeText(rawDump).then(
       () => {
         setCopyStatus("copied");
         window.setTimeout(() => setCopyStatus("idle"), 2500);

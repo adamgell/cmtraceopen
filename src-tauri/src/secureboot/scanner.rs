@@ -54,7 +54,7 @@ fn read_registry(state: &mut SecureBootScanState) {
     // --- HKLM\SYSTEM\CurrentControlSet\Control\Secureboot ----------------------
     let secureboot_key_path = r"SYSTEM\CurrentControlSet\Control\Secureboot";
     if let Ok(key) = hklm.open_subkey_with_flags(secureboot_key_path, KEY_READ) {
-        state.managed_opt_in = key.get_value::<u32, _>("ManagedOptIn").ok();
+        state.managed_opt_in = key.get_value::<u32, _>("MicrosoftUpdateManagedOptIn").ok();
         state.available_updates = key.get_value::<u32, _>("AvailableUpdates").ok();
         state.uefi_ca2023_status = key.get_value::<u32, _>("UEFICA2023Status").ok();
         state.uefi_ca2023_error = key.get_value::<u32, _>("UEFICA2023Error").ok();
@@ -63,17 +63,28 @@ fn read_registry(state: &mut SecureBootScanState) {
     // --- HKLM\...\SecureBoot\Servicing ------------------------------------------
     let servicing_key_path = r"SYSTEM\CurrentControlSet\Control\SecureBoot\Servicing";
     if let Ok(key) = hklm.open_subkey_with_flags(servicing_key_path, KEY_READ) {
-        state.uefi_ca2023_capable = key.get_value::<u32, _>("UEFICA2023Capable").ok();
+        state.uefi_ca2023_capable = key
+            .get_value::<u32, _>("WindowsUEFICA2023Capable")
+            .ok();
     }
 
     // --- HKLM\...\SecureBoot\Servicing\DeviceAttributes -------------------------
     let device_attr_path =
         r"SYSTEM\CurrentControlSet\Control\SecureBoot\Servicing\DeviceAttributes";
     if let Ok(key) = hklm.open_subkey_with_flags(device_attr_path, KEY_READ) {
-        state.oem_manufacturer = key.get_value::<String, _>("OEMManufacturer").ok();
-        state.oem_model = key.get_value::<String, _>("OEMModel").ok();
+        state.oem_manufacturer = key
+            .get_value::<String, _>("OEMManufacturerName")
+            .ok()
+            .or_else(|| key.get_value::<String, _>("OEMManufacturer").ok());
+        state.oem_model = key
+            .get_value::<String, _>("OEMModelNumber")
+            .ok()
+            .or_else(|| key.get_value::<String, _>("OEMModel").ok());
         state.firmware_version = key.get_value::<String, _>("FirmwareVersion").ok();
-        state.firmware_date = key.get_value::<String, _>("FirmwareDate").ok();
+        state.firmware_date = key
+            .get_value::<String, _>("FirmwareReleaseDate")
+            .ok()
+            .or_else(|| key.get_value::<String, _>("FirmwareDate").ok());
     }
 
     // --- HKLM\SOFTWARE\Policies\Microsoft\Windows\DataCollection ---------------

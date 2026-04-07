@@ -135,13 +135,13 @@ function fmtStr(value: string | null): { text: string; status: RowStatus } {
 const LOG_IMPORT_ONLY = { text: "Log import only", status: "muted" as RowStatus };
 
 function buildGroups(scanState: SecureBootScanState, dataSource: DataSource): FactGroup[] {
-  const isLiveOnly = dataSource === "logImport";
+  const isLogImportOnly = dataSource === "logImport";
 
   function liveOrImport<T>(
     liveValue: T,
     liveToFact: (v: T) => { text: string; status: RowStatus },
   ): { text: string; status: RowStatus } {
-    if (isLiveOnly) return LOG_IMPORT_ONLY;
+    if (isLogImportOnly) return LOG_IMPORT_ONLY;
     return liveToFact(liveValue);
   }
 
