@@ -258,7 +258,7 @@ jobs:
       # The signed standalone EXEs are also used by mpdev to build the MSI,
       # so the binaries inside the MSI will carry valid signatures.
       - name: Sign release EXEs
-        uses: azure/trusted-signing-action@1d365fec12862c4aa68fcac418143d73f0cea293 # v0.5.11
+        uses: azure/trusted-signing-action@b443cf8ea4124818d2ea9f043cba29fc3ec47b16 # v1.2.0
         with:
           azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
