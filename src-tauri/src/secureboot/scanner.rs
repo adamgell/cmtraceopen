@@ -254,9 +254,7 @@ fn run_powershell_checks(state: &mut SecureBootScanState) {
 
     // Scheduled task
     let task_name = r#"Microsoft\Windows\PI\Secure-Boot-Update"#;
-    let ps_task = format!(
-        r#"Get-ScheduledTaskInfo -TaskPath '\Microsoft\Windows\PI\' -TaskName 'Secure-Boot-Update' -ErrorAction SilentlyContinue | Select-Object LastRunTime,LastTaskResult | ConvertTo-Json -Compress"#
-    );
+    let ps_task = r#"Get-ScheduledTaskInfo -TaskPath '\Microsoft\Windows\PI\' -TaskName 'Secure-Boot-Update' -ErrorAction SilentlyContinue | Select-Object LastRunTime,LastTaskResult | ConvertTo-Json -Compress"#.to_string();
     if let Some(json) = run_powershell(&ps_task) {
         // Any result means the task exists
         state.scheduled_task_exists = Some(true);

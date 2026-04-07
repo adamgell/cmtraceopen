@@ -33,11 +33,11 @@ fn run_script(script_content: &str) -> Result<ScriptExecutionResult, AppError> {
     let mut temp_file = tempfile::Builder::new()
         .suffix(".ps1")
         .tempfile()
-        .map_err(|e| AppError::Io(e.into()))?;
+        .map_err(|e: std::io::Error| AppError::Io(e))?;
 
     temp_file
         .write_all(script_content.as_bytes())
-        .map_err(|e| AppError::Io(e))?;
+        .map_err(AppError::Io)?;
 
     // Persist the path so we can pass it to powershell.exe, then delete afterwards.
     let temp_path = temp_file
