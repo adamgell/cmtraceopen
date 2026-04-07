@@ -232,6 +232,20 @@
             "sourcePattern": "%ProgramData%\\Microsoft\\Microsoft Antimalware\\Support\\*.cab",
             "destinationFolder": "logs/antimalware",
             "notes": "Microsoft Antimalware support cabs."
+        },
+        {
+            "id": "secureboot-log",
+            "family": "secureboot",
+            "sourcePattern": "%ProgramData%\\Microsoft\\IntuneManagementExtension\\Logs\\SecureBootCertificateUpdate.log",
+            "destinationFolder": "logs/secureboot",
+            "notes": "Secure Boot certificate update remediation log."
+        },
+        {
+            "id": "secureboot-log-old",
+            "family": "secureboot",
+            "sourcePattern": "%ProgramData%\\Microsoft\\IntuneManagementExtension\\Logs\\SecureBootCertificateUpdate.log.old",
+            "destinationFolder": "logs/secureboot",
+            "notes": "Rotated Secure Boot log backup."
         }
     ],
     "registry": [
@@ -675,6 +689,20 @@
             "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\StorageSense",
             "fileName": "REG_SW_CV_StorageSense.reg",
             "notes": "Storage Sense configuration."
+        },
+        {
+            "id": "secureboot-registry",
+            "family": "secureboot",
+            "path": "HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Secureboot",
+            "fileName": "secureboot-config.reg",
+            "notes": "Secure Boot configuration and opt-in state."
+        },
+        {
+            "id": "secureboot-servicing",
+            "family": "secureboot",
+            "path": "HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\SecureBoot\\Servicing",
+            "fileName": "secureboot-servicing.reg",
+            "notes": "Certificate deployment status (CA2023Capable, UEFICA2023Status)."
         }
     ],
     "eventLogs": [
@@ -1293,6 +1321,24 @@
             "fileName": "basic-system-info.txt",
             "timeoutSecs": 30,
             "notes": "Basic system information (OS, hardware, BIOS)."
+        },
+        {
+            "id": "secureboot-task-status",
+            "family": "secureboot",
+            "command": "powershell.exe",
+            "arguments": ["-NoProfile", "-Command", "Get-ScheduledTaskInfo '\\Microsoft\\Windows\\PI\\Secure-Boot-Update' -ErrorAction SilentlyContinue | Format-List *"],
+            "fileName": "secureboot-task-status.txt",
+            "timeoutSecs": 15,
+            "notes": "Secure-Boot-Update scheduled task state."
+        },
+        {
+            "id": "secureboot-bitlocker",
+            "family": "secureboot",
+            "command": "powershell.exe",
+            "arguments": ["-NoProfile", "-Command", "Get-BitLockerVolume -MountPoint $env:SystemDrive -ErrorAction SilentlyContinue | Format-List *"],
+            "fileName": "secureboot-bitlocker.txt",
+            "timeoutSecs": 15,
+            "notes": "BitLocker status for Secure Boot cert transition impact."
         }
     ]
 }
