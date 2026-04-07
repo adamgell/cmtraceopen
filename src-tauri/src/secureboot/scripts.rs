@@ -29,40 +29,99 @@ pub fn run_remediation() -> Result<ScriptExecutionResult, AppError> {
 fn run_script(script_content: &str) -> Result<ScriptExecutionResult, AppError> {
     use std::io::Write as _;
 
-    // Write script to a temporary file.
-    let mut temp_file = tempfile::Builder::new()
+    // Write the actual script to a temporary .ps1 file.
+    let mut script_file = tempfile::Builder::new()
         .suffix(".ps1")
         .tempfile()
         .map_err(|e: std::io::Error| AppError::Io(e))?;
 
-    temp_file
+    script_file
         .write_all(script_content.as_bytes())
         .map_err(AppError::Io)?;
 
-    // Persist the path so we can pass it to powershell.exe, then delete afterwards.
-    let temp_path = temp_file
+    let script_path = script_file.into_temp_path();
+    let script_path_str = script_path.to_string_lossy().to_string();
+
+    // Temp files for capturing output from the elevated process.
+    // Start-Process -Verb RunAs cannot use -RedirectStandardOutput, so the
+    // elevated child writes to these files itself via a wrapper script.
+    let stdout_path = tempfile::Builder::new()
+        .suffix(".stdout")
+        .tempfile()
+        .map_err(AppError::Io)?
+        .into_temp_path();
+    let stderr_path = tempfile::Builder::new()
+        .suffix(".stderr")
+        .tempfile()
+        .map_err(AppError::Io)?
+        .into_temp_path();
+    let exitcode_path = tempfile::Builder::new()
+        .suffix(".exitcode")
+        .tempfile()
+        .map_err(AppError::Io)?
         .into_temp_path();
 
-    let path_str = temp_path.to_string_lossy().to_string();
+    let stdout_str = stdout_path.to_string_lossy().to_string();
+    let stderr_str = stderr_path.to_string_lossy().to_string();
+    let exitcode_str = exitcode_path.to_string_lossy().to_string();
 
-    let output = std::process::Command::new("powershell.exe")
+    // Write a small wrapper script that the elevated process will execute.
+    // It runs the real script, redirects all streams (including Write-Host
+    // via *>&1) to the stdout capture file, and writes the exit code.
+    let wrapper_content = format!(
+        "& '{script_path_str}' *> '{stdout_str}' 2> '{stderr_str}'\r\n\
+         $LASTEXITCODE | Out-File -FilePath '{exitcode_str}' -Encoding ascii -NoNewline\r\n",
+    );
+
+    let mut wrapper_file = tempfile::Builder::new()
+        .suffix("_wrapper.ps1")
+        .tempfile()
+        .map_err(AppError::Io)?;
+
+    wrapper_file
+        .write_all(wrapper_content.as_bytes())
+        .map_err(AppError::Io)?;
+
+    let wrapper_path = wrapper_file.into_temp_path();
+    let wrapper_path_str = wrapper_path.to_string_lossy().to_string();
+
+    // Launch the wrapper elevated via Start-Process -Verb RunAs.
+    // This triggers the UAC prompt. The outer (non-elevated) PowerShell
+    // blocks on -Wait until the elevated process exits.
+    let _output = std::process::Command::new("powershell.exe")
         .args([
             "-NoProfile",
             "-ExecutionPolicy",
             "Bypass",
-            "-File",
-            &path_str,
+            "-Command",
+            &format!(
+                "Start-Process -FilePath 'powershell.exe' \
+                 -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File','{wrapper_path_str}' \
+                 -Verb RunAs -WindowStyle Hidden -Wait"
+            ),
         ])
         .output()
         .map_err(AppError::Io)?;
 
-    // temp_path drops here, deleting the file.
-    drop(temp_path);
+    // Read captured output from the temp files.
+    let stdout_content = std::fs::read_to_string(&*stdout_path).unwrap_or_default();
+    let stderr_content = std::fs::read_to_string(&*stderr_path).unwrap_or_default();
+    let exit_code = std::fs::read_to_string(&*exitcode_path)
+        .ok()
+        .and_then(|s| s.trim().parse::<i32>().ok())
+        .unwrap_or(-1);
+
+    // Temp paths are cleaned up on drop.
+    drop(script_path);
+    drop(stdout_path);
+    drop(stderr_path);
+    drop(exitcode_path);
+    drop(wrapper_path);
 
     Ok(ScriptExecutionResult {
-        exit_code: output.status.code().unwrap_or(-1),
-        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
-        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        exit_code,
+        stdout: stdout_content,
+        stderr: stderr_content,
     })
 }
 
