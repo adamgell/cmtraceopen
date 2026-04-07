@@ -462,7 +462,9 @@ pub fn compute_file_hash(path: String) -> Result<FileHashResult, crate::error::A
         hasher.update(&buffer[..bytes_read]);
     }
 
-    let hash = format!("sha256:{:x}", hasher.finalize());
+    let digest = hasher.finalize();
+    let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
+    let hash = format!("sha256:{hex}");
     Ok(FileHashResult { hash, size_bytes })
 }
 
