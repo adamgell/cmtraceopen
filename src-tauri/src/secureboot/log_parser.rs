@@ -1,4 +1,4 @@
-use std::sync::LazyLock;
+use std::sync::OnceLock;
 
 use chrono::{NaiveDateTime, TimeZone, Utc};
 use regex::Regex;
@@ -8,28 +8,33 @@ use super::models::{
 };
 
 // ---------------------------------------------------------------------------
-// Compiled regexes
+// Compiled regexes (OnceLock pattern matching codebase convention)
 // ---------------------------------------------------------------------------
 
-/// Matches a complete log line:
-/// `2026-03-01 08:14:22 [DETECT] [INFO] some message`
-static LOG_LINE_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(
-        r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) \[(DETECT|REMEDIATE|SYSTEM)\] \[(INFO|WARNING|ERROR|SUCCESS)\] (.+)$",
-    )
-    .expect("LOG_LINE_RE is valid")
-});
+fn log_line_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
+        Regex::new(
+            r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) \[(DETECT|REMEDIATE|SYSTEM)\] \[(INFO|WARNING|ERROR|SUCCESS)\] (.+)$",
+        )
+        .expect("valid log line regex")
+    })
+}
 
-/// Extracts the numeric stage from "NON-COMPLIANT - Stage N" or "COMPLIANT - Stage 5".
-static STAGE_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?:NON-COMPLIANT|COMPLIANT)\s*-\s*Stage\s+(\d)")
-        .expect("STAGE_RE is valid")
-});
+fn stage_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
+        Regex::new(r"(?:NON-COMPLIANT|COMPLIANT)\s*-\s*Stage\s+(\d)")
+            .expect("valid stage regex")
+    })
+}
 
-/// Extracts the first hex error code from a message, e.g. `0x80070002`.
-static ERROR_CODE_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"0x[0-9A-Fa-f]{4,8}").expect("ERROR_CODE_RE is valid")
-});
+fn error_code_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
+        Regex::new(r"0x[0-9A-Fa-f]{4,8}").expect("valid error code regex")
+    })
+}
 
 // ---------------------------------------------------------------------------
 // Internal helpers
@@ -82,7 +87,7 @@ fn classify_event(message: &str) -> TimelineEventType {
 }
 
 fn extract_stage(message: &str) -> Option<SecureBootStage> {
-    let cap = STAGE_RE.captures(message)?;
+    let cap = stage_re().captures(message)?;
     match cap[1].parse::<u8>().ok()? {
         0 => Some(SecureBootStage::Stage0),
         1 => Some(SecureBootStage::Stage1),
@@ -95,7 +100,7 @@ fn extract_stage(message: &str) -> Option<SecureBootStage> {
 }
 
 fn extract_error_code(message: &str) -> Option<String> {
-    ERROR_CODE_RE
+    error_code_re()
         .find(message)
         .map(|m| m.as_str().to_owned())
 }
@@ -103,7 +108,7 @@ fn extract_error_code(message: &str) -> Option<String> {
 /// Parse a single log line into a `TimelineEntry`, returning `None` if the
 /// line does not match the expected format.
 fn parse_line(line: &str) -> Option<TimelineEntry> {
-    let caps = LOG_LINE_RE.captures(line.trim())?;
+    let caps = log_line_re().captures(line.trim())?;
 
     let timestamp_str = &caps[1];
     let source_str = &caps[2];

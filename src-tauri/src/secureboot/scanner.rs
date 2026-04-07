@@ -1,8 +1,8 @@
-/// Windows device scanner for Secure Boot certificate state.
-///
-/// On non-Windows platforms this module provides only a stub that returns
-/// `AppError::PlatformUnsupported`. The real implementation compiles only on
-/// `target_os = "windows"`.
+//! Windows device scanner for Secure Boot certificate state.
+//!
+//! On non-Windows platforms this module provides only a stub that returns
+//! `AppError::PlatformUnsupported`. The real implementation compiles only on
+//! `target_os = "windows"`.
 
 use super::models::SecureBootScanState;
 
