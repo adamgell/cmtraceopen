@@ -45,6 +45,29 @@ export function getLogListMetrics(fontSize: number): LogListMetrics {
   };
 }
 
+/**
+ * Returns a canvas-compatible font string.
+ * Prefers reading the resolved font-family from a real DOM element (most accurate),
+ * falling back to resolving the CSS custom property, then a hardcoded fallback.
+ * canvas.measureText() cannot handle var(--...) syntax.
+ */
+export function getCanvasFont(
+  size: number,
+  bold = false,
+  sourceElement?: Element | null
+): string {
+  let family: string;
+  if (sourceElement) {
+    family = getComputedStyle(sourceElement).fontFamily;
+  } else {
+    family =
+      getComputedStyle(document.documentElement)
+        .getPropertyValue("--cmtrace-font-family-ui")
+        .trim() || "'Segoe UI', Tahoma, sans-serif";
+  }
+  return `${bold ? "bold " : ""}${size}px ${family}`;
+}
+
 export function getLogDetailsLineHeight(fontSize: number): number {
   const clampedFontSize = clampLogDetailsFontSize(fontSize);
   return Math.max(20, Math.round(clampedFontSize * 1.6));
