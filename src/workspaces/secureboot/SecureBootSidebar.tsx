@@ -35,9 +35,6 @@ export function SecureBootSidebar() {
         : "Live scan + log import"
     : "No source loaded";
 
-  const isNonCompliant =
-    result !== null && result.stage !== "stage5";
-
   const diagnostics = result?.diagnostics ?? [];
   const errorCount = diagnostics.filter((d) => d.severity === "error").length;
   const warnCount = diagnostics.filter((d) => d.severity === "warning").length;
@@ -103,7 +100,7 @@ export function SecureBootSidebar() {
           />
           <SidebarActionButton
             label="Run Remediation"
-            disabled={isBusy || !isNonCompliant}
+            disabled={isBusy}
             onClick={handleRunRemediation}
           />
           <SidebarActionButton
