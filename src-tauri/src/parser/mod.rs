@@ -12,6 +12,7 @@ pub mod plain;
 pub mod psadt;
 pub mod registry;
 pub mod reporting_events;
+pub mod secureboot_log;
 pub mod severity;
 pub mod simple;
 pub mod timestamped;
@@ -99,6 +100,9 @@ pub fn parse_lines_with_selection(
         }
         crate::models::log_entry::ParserImplementation::Burn => {
             burn::parse_lines(lines, file_path)
+        }
+        crate::models::log_entry::ParserImplementation::SecureBootLog => {
+            secureboot_log::parse_lines(lines, file_path)
         }
         crate::models::log_entry::ParserImplementation::Registry => {
             // Registry files are parsed via a dedicated IPC command, not the log pipeline.

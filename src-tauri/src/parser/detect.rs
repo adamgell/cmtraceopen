@@ -14,6 +14,7 @@
 
 use super::{
     burn, cbs, dhcp, dism, iis_w3c, intune_macos, msi, panther, psadt, reporting_events,
+    secureboot_log,
     timestamped::{self, DateOrder},
 };
 use crate::models::log_entry::{
@@ -234,6 +235,18 @@ impl ResolvedParser {
         )
     }
 
+    pub fn secureboot_log() -> Self {
+        Self::new(
+            ParserKind::SecureBootLog,
+            ParserImplementation::SecureBootLog,
+            ParserProvenance::Dedicated,
+            ParseQuality::Structured,
+            RecordFraming::PhysicalLine,
+            DateOrder::default(),
+            None,
+        )
+    }
+
     pub fn psadt_legacy() -> Self {
         Self::new(
             ParserKind::PsadtLegacy,
@@ -258,6 +271,7 @@ impl ResolvedParser {
             ParserImplementation::IntuneMacOs => LogFormat::Timestamped,
             ParserImplementation::Dhcp => LogFormat::Timestamped,
             ParserImplementation::Burn => LogFormat::Timestamped,
+            ParserImplementation::SecureBootLog => LogFormat::Timestamped,
             ParserImplementation::PlainText => LogFormat::Plain,
             ParserImplementation::Registry => LogFormat::Plain,
         }
@@ -363,6 +377,8 @@ pub fn detect_parser(path: &str, content: &str) -> ResolvedParser {
         || path_lower.contains("\\inetpub\\logs\\")
         || path_lower.contains("w3svc");
 
+    let secureboot_log_path_hint = path_lower.contains("securebootcertificateupdate");
+
     let intune_macos_path_hint = path_lower.contains("intunemdmdaemon")
         || path_lower.contains("/logs/microsoft/intune/");
 
@@ -378,6 +394,7 @@ pub fn detect_parser(path: &str, content: &str) -> ResolvedParser {
     let mut dhcp_count = 0u32;
     let mut iis_w3c_count = 0u32;
     let mut burn_count = 0u32;
+    let mut secureboot_log_count = 0u32;
     let mut timestamp_count = 0;
     let mut has_day_first = false;
 
@@ -402,6 +419,9 @@ pub fn detect_parser(path: &str, content: &str) -> ResolvedParser {
         } else if burn::matches_burn_record(line.trim()) {
             burn_count += 1;
             timestamp_count += 1;
+        } else if secureboot_log::matches_secureboot_log_record(line.trim()) {
+            secureboot_log_count += 1;
+            timestamp_count += 1;
         } else if dhcp::matches_dhcp_record(line.trim()) {
             dhcp_count += 1;
         } else if iis_w3c::matches_iis_w3c_record(line.trim()) {
@@ -425,7 +445,9 @@ pub fn detect_parser(path: &str, content: &str) -> ResolvedParser {
         }
     }
 
-    if ime_path_hint && ccm_count > 0 {
+    if (secureboot_log_path_hint && secureboot_log_count >= 1) || secureboot_log_count >= 2 {
+        ResolvedParser::secureboot_log()
+    } else if ime_path_hint && ccm_count > 0 {
         ResolvedParser::ime()
     } else if ccm_count > 0 && ccm_count >= simple_count {
         ResolvedParser::ccm()

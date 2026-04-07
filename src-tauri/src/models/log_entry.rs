@@ -41,6 +41,7 @@ pub enum ParserKind {
     Dhcp,
     Burn,
     Registry,
+    SecureBootLog,
 }
 
 /// Concrete parser implementation currently used by the backend.
@@ -59,6 +60,7 @@ pub enum ParserImplementation {
     Dhcp,
     Burn,
     Registry,
+    SecureBootLog,
 }
 
 /// How the backend arrived at the parser selection.
