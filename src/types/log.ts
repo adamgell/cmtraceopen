@@ -17,6 +17,7 @@ export type ParserKind =
   | "intuneMacOs"
   | "dhcp"
   | "burn"
+  | "patchMyPcDetection"
   | "registry";
 export type ParserImplementation =
   | "ccm"
@@ -30,6 +31,7 @@ export type ParserImplementation =
   | "intuneMacOs"
   | "dhcp"
   | "burn"
+  | "patchMyPcDetection"
   | "registry";
 export type ParserProvenance = "dedicated" | "heuristic" | "fallback";
 export type ParseQuality = "structured" | "semiStructured" | "textFallback";

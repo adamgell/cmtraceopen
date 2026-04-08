@@ -281,6 +281,7 @@ const PARSER_COLUMN_MAP: Record<ParserKind, ColumnId[]> = {
   intuneMacOs: ["severity", "dateTime", "message", "component", "thread", "sourceFile"],
   dhcp: ["severity", "dateTime", "message", "ipAddress", "hostName", "macAddress"],
   burn: ["severity", "dateTime", "message", "component", "thread"],
+  patchMyPcDetection: ["severity", "dateTime", "message", "component", "hostName", "operationName"],
   registry: ["message"],
 };
 
