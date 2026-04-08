@@ -23,19 +23,19 @@
   "license": "MIT",
   "type": "module",
   "dependencies": {
-    "@fluentui/react-charts": "^9.3.16",
-    "@fluentui/react-components": "^9.73.3",
-    "@tanstack/react-virtual": "^3.13.21",
+    "@fluentui/react-charts": "^9.3.17",
+    "@fluentui/react-components": "^9.73.7",
+    "@tanstack/react-virtual": "^3.13.23",
     "@tauri-apps/api": "^2.10.1",
     "@tauri-apps/plugin-clipboard-manager": "^2.3.2",
     "@tauri-apps/plugin-dialog": "^2.7.0",
     "@tauri-apps/plugin-fs": "^2.5.0",
     "@tauri-apps/plugin-os": "^2.3.2",
     "@tauri-apps/plugin-process": "^2.0.0",
-    "@tauri-apps/plugin-updater": "^2.0.0",
+    "@tauri-apps/plugin-updater": "^2.10.1",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
-    "zustand": "^5.0.11"
+    "zustand": "^5.0.12"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.10.1",
