@@ -13,6 +13,7 @@ pub mod plain;
 pub mod psadt;
 pub mod registry;
 pub mod reporting_events;
+pub mod secureboot_log;
 pub mod severity;
 pub mod simple;
 pub mod timestamped;

@@ -50,6 +50,7 @@ export type WorkspaceId =
   | "macos-diag"
   | "deployment"
   | "event-log"
+  | "secureboot"
   | "sysmon";
 export type KnownSourceDefaultFileSelectionBehavior =
   | "none"

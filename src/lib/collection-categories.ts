@@ -28,7 +28,7 @@ export const COLLECTION_CATEGORIES: CategoryDefinition[] = [
   {
     id: "security",
     label: "Security & Certificates",
-    families: ["security", "certificates", "bitlocker", "antimalware"],
+    families: ["security", "certificates", "bitlocker", "antimalware", "secureboot"],
   },
   {
     id: "windows-update",

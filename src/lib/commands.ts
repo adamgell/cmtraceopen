@@ -396,3 +396,30 @@ export async function macosQueryUnifiedLog(
     resultCap,
   });
 }
+
+// --- Secure Boot ---
+
+import type { SecureBootAnalysisResult } from "../workspaces/secureboot/types";
+
+export async function analyzeSecureBoot(
+  path?: string | null
+): Promise<SecureBootAnalysisResult> {
+  return invokeCommand<SecureBootAnalysisResult>("analyze_secureboot", {
+    path: path ?? null,
+  });
+}
+
+export async function rescanSecureBoot(): Promise<SecureBootAnalysisResult> {
+  return invokeCommand<SecureBootAnalysisResult>("rescan_secureboot", {});
+}
+
+export async function runSecureBootDetection(): Promise<SecureBootAnalysisResult> {
+  return invokeCommand<SecureBootAnalysisResult>("run_secureboot_detection", {});
+}
+
+export async function runSecureBootRemediation(): Promise<SecureBootAnalysisResult> {
+  return invokeCommand<SecureBootAnalysisResult>(
+    "run_secureboot_remediation",
+    {}
+  );
+}

@@ -16,6 +16,8 @@ pub mod macos_diag;
 mod menu;
 mod models;
 pub mod parser;
+#[cfg(feature = "secureboot")]
+pub mod secureboot;
 #[cfg(feature = "sysmon")]
 pub mod sysmon;
 mod state;
@@ -150,6 +152,14 @@ pub fn run() {
             commands::graph_api::graph_resolve_guids,
             #[cfg(target_os = "windows")]
             commands::graph_api::graph_fetch_all_apps,
+            #[cfg(feature = "secureboot")]
+            commands::secureboot::analyze_secureboot,
+            #[cfg(feature = "secureboot")]
+            commands::secureboot::rescan_secureboot,
+            #[cfg(feature = "secureboot")]
+            commands::secureboot::run_secureboot_detection,
+            #[cfg(feature = "secureboot")]
+            commands::secureboot::run_secureboot_remediation,
             #[cfg(feature = "sysmon")]
             commands::sysmon::analyze_sysmon_logs,
         ])

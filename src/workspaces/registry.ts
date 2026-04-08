@@ -9,6 +9,7 @@ import { macosDiagWorkspace } from "./macos-diag";
 import { deploymentWorkspace } from "./deployment";
 import { eventLogWorkspace } from "./event-log";
 import { sysmonWorkspace } from "./sysmon";
+import { securebootWorkspace } from "./secureboot";
 
 const ALL_WORKSPACES: WorkspaceDefinition[] = [
   logWorkspace,
@@ -19,6 +20,7 @@ const ALL_WORKSPACES: WorkspaceDefinition[] = [
   deploymentWorkspace,
   eventLogWorkspace,
   sysmonWorkspace,
+  securebootWorkspace,
 ];
 
 export const workspaceRegistry = new Map<WorkspaceId, WorkspaceDefinition>(

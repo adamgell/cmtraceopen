@@ -42,6 +42,7 @@ pub enum ParserKind {
     Burn,
     PatchMyPcDetection,
     Registry,
+    SecureBootLog,
 }
 
 /// Concrete parser implementation currently used by the backend.
@@ -61,6 +62,7 @@ pub enum ParserImplementation {
     Burn,
     PatchMyPcDetection,
     Registry,
+    SecureBootLog,
 }
 
 /// How the backend arrived at the parser selection.

@@ -23,6 +23,7 @@ import { useDsregcmdStore } from "../../workspaces/dsregcmd/dsregcmd-store";
 import { useDeploymentStore } from "../../workspaces/deployment/deployment-store";
 import { useSysmonStore } from "../../workspaces/sysmon/sysmon-store";
 import { useEvtxStore } from "../../workspaces/event-log/evtx-store";
+import { useSecureBootStore } from "../../workspaces/secureboot/secureboot-store";
 
 interface SeverityCounts {
   errors: number;
@@ -89,6 +90,10 @@ export function StatusBar() {
   const evtxIsLoading = useEvtxStore((s) => s.isLoading);
   const evtxLoadedChannelCount = useEvtxStore((s) => s.loadedChannels.size);
   const evtxLoadElapsedMs = useEvtxStore((s) => s.loadElapsedMs);
+
+  const securebootAnalysisState = useSecureBootStore((s) => s.analysisState);
+  const securebootResult = useSecureBootStore((s) => s.result);
+  const securebootIsAnalyzing = useSecureBootStore((s) => s.isAnalyzing);
 
   const filterClauseCount = useFilterStore((s) => s.clauses.length);
   const filteredIds = useFilterStore((s) => s.filteredIds);
@@ -362,6 +367,41 @@ export function StatusBar() {
         : "";
       rightStatusText = `${evtxRecordCount.toLocaleString()} events${timeStr}`;
     }
+  } else if (activeView === "secureboot") {
+    const sbDiagnostics = securebootResult?.diagnostics ?? [];
+    const sbErrors = sbDiagnostics.filter((d) => d.severity === "error").length;
+    const sbWarnings = sbDiagnostics.filter((d) => d.severity === "warning").length;
+
+    leftParts = [
+      "Secure Boot",
+      securebootIsAnalyzing
+        ? "Analyzing"
+        : securebootResult
+          ? `Stage ${securebootResult.stage}`
+          : "No analysis",
+    ];
+
+    if (securebootResult?.scanState.deviceName) {
+      leftParts.push(securebootResult.scanState.deviceName);
+    }
+
+    if (securebootAnalysisState.phase === "analyzing") {
+      rightStatusText = securebootAnalysisState.detail ?? securebootAnalysisState.message;
+      rightTone = tokens.colorPaletteBlueForeground2;
+    } else if (securebootAnalysisState.phase === "error") {
+      rightStatusText = [securebootAnalysisState.message, securebootAnalysisState.detail]
+        .filter((part): part is string => Boolean(part))
+        .join(" | ");
+      rightTone = tokens.colorPaletteRedForeground2;
+    } else if (securebootResult) {
+      rightStatusText = [
+        `${sbDiagnostics.length} diagnostics`,
+        `${sbErrors} errors`,
+        `${sbWarnings} warnings`,
+      ].join(" | ");
+    } else {
+      rightStatusText = securebootAnalysisState.message;
+    }
   } else {
     const diagnostics = dsregcmdResult?.diagnostics ?? [];
     const errorCount = diagnostics.filter((item) => item.severity === "Error").length;
@@ -417,6 +457,8 @@ export function StatusBar() {
                 ? "Software Deployment"
                 : activeView === "macos-diag"
                   ? "macOS Diagnostics"
+                  : activeView === "secureboot"
+                  ? "Secure Boot"
                   : activeView === "dsregcmd"
                     ? "dsregcmd"
                     : activeView;
