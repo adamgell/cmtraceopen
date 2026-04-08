@@ -86,7 +86,9 @@ export function useQuickStats(): QuickStats {
       // Collect all error code spans (not just from Error severity)
       if (entry.errorCodeSpans && entry.errorCodeSpans.length > 0) {
         for (const span of entry.errorCodeSpans) {
-          const hex = span.codeHex.toUpperCase();
+          const hex = span.codeHex.startsWith("0x")
+            ? "0x" + span.codeHex.slice(2).toUpperCase()
+            : span.codeHex.toUpperCase();
           const existing = codeMap.get(hex);
           if (existing) {
             existing.count++;

@@ -1,4 +1,4 @@
-import { memo, useEffect, useState } from "react";
+import { memo, useCallback, useEffect, useState } from "react";
 import { Badge, Text, tokens } from "@fluentui/react-components";
 import { ChevronDownRegular, ChevronUpRegular } from "@fluentui/react-icons";
 import { useQuickStats } from "../../hooks/use-quick-stats";
@@ -24,27 +24,37 @@ export const QuickStatsPanel = memo(function QuickStatsPanel({
   const setShowErrorLookupDialog = useUiStore((s) => s.setShowErrorLookupDialog);
   const setLookupErrorCode = useUiStore((s) => s.setLookupErrorCode);
 
-  const handleToggle = () => {
+  const handleToggle = useCallback(() => {
     const newExpanded = !isExpanded;
     if (onToggle) {
       onToggle(newExpanded);
     } else {
       setInternalExpanded(newExpanded);
     }
-  };
+  }, [isExpanded, onToggle]);
 
   const handleErrorCodeClick = (hex: string) => {
     setLookupErrorCode(hex);
     setShowErrorLookupDialog(true);
   };
 
+  const handleRowKeyDown = (e: React.KeyboardEvent, hex: string) => {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      handleErrorCodeClick(hex);
+    }
+  };
+
   // Auto-collapse when no log is open
   useEffect(() => {
     if (stats.isEmpty && isExpanded) {
-      handleToggle();
+      if (onToggle) {
+        onToggle(false);
+      } else {
+        setInternalExpanded(false);
+      }
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [stats.isEmpty]);
+  }, [stats.isEmpty, isExpanded, onToggle]);
 
   if (stats.isEmpty) {
     return null;
@@ -58,7 +68,10 @@ export const QuickStatsPanel = memo(function QuickStatsPanel({
       }}
     >
       {/* Header bar with collapse toggle */}
-      <div
+      <button
+        type="button"
+        aria-expanded={isExpanded}
+        onClick={handleToggle}
         style={{
           display: "flex",
           alignItems: "center",
@@ -66,8 +79,13 @@ export const QuickStatsPanel = memo(function QuickStatsPanel({
           padding: "8px 16px",
           cursor: "pointer",
           userSelect: "none",
+          width: "100%",
+          border: "none",
+          background: "transparent",
+          color: "inherit",
+          font: "inherit",
+          textAlign: "left",
         }}
-        onClick={handleToggle}
       >
         {isExpanded ? (
           <ChevronUpRegular
@@ -87,7 +105,7 @@ export const QuickStatsPanel = memo(function QuickStatsPanel({
             ? ` (${stats.filteredLineCount.toLocaleString()} filtered)`
             : ""}
         </Text>
-      </div>
+      </button>
 
       {/* Expanded content */}
       {isExpanded && (
@@ -180,7 +198,10 @@ export const QuickStatsPanel = memo(function QuickStatsPanel({
                     {stats.errorCodes.map((err) => (
                       <tr
                         key={err.hex}
+                        role="button"
+                        tabIndex={0}
                         onClick={() => handleErrorCodeClick(err.hex)}
+                        onKeyDown={(e) => handleRowKeyDown(e, err.hex)}
                         style={{
                           cursor: "pointer",
                           borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
@@ -244,7 +265,7 @@ export const QuickStatsPanel = memo(function QuickStatsPanel({
           )}
 
           {/* Time range */}
-          {stats.earliestTimestamp && stats.latestTimestamp && (
+          {stats.earliestTimestamp != null && stats.latestTimestamp != null && (
             <Text size={200} style={{ color: tokens.colorNeutralForeground3 }}>
               Time Range: {new Date(stats.earliestTimestamp).toLocaleString()} — {new Date(stats.latestTimestamp).toLocaleString()}
             </Text>

@@ -163,6 +163,7 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
           borderRadius: "4px",
           padding: "16px",
           width: "640px",
+          maxWidth: "calc(100vw - 32px)",
           height: "min(580px, 90vh)",
           display: "flex",
           flexDirection: "column",
