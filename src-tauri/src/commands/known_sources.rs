@@ -505,6 +505,23 @@ fn windows_known_log_sources() -> Vec<KnownSourceMetadata> {
             },
             None,
         ),
+        windows_known_source(
+            "windows-deployment-patchmypc-intune-logs",
+            "PatchMyPC Intune Logs",
+            "PatchMyPC ScriptRunner and software detection/requirement script logs.",
+            KnownSourcePathKind::Folder,
+            "C:\\ProgramData\\PatchMyPCIntuneLogs",
+            &["*.log"],
+            KnownSourceGroupingMetadata {
+                family_id: "windows-deployment".to_string(),
+                family_label: "Software Deployment".to_string(),
+                group_id: "deployment-patchmypc".to_string(),
+                group_label: "PatchMyPC".to_string(),
+                group_order: 30,
+                source_order: 70,
+            },
+            None,
+        ),
     ]
 }
 

@@ -37,12 +37,14 @@ import { getWorkspace } from "../../workspaces/registry";
 import { ThemePicker } from "./ThemePicker";
 import {
   getKnownSourceMetadataById,
+  loadFilesAsLogSource,
   loadLogSource,
   loadPathAsLogSource,
   refreshKnownLogSources,
   resolveKnownSourceIdFromCatalogAction,
   type KnownSourceCatalogActionIds,
 } from "../../lib/log-source";
+import { listLogFolder } from "../../lib/commands";
 import type { LogSource } from "../../types/log";
 
 function normalizeDialogSelection(
@@ -627,6 +629,47 @@ export function Toolbar() {
 
   const canMergeTabs = activeWorkspace === "log" && openTabs.length >= 2;
 
+  const openAllKnownSourcesInFamily = useCallback(
+    async (familyId: string) => {
+      const families = useLogStore.getState().knownSourceToolbarFamilies;
+      const family = families.find((f) => f.id === familyId);
+      if (!family) return;
+
+      const folderPaths: string[] = [];
+      for (const group of family.groups) {
+        for (const source of group.sources) {
+          if (source.sourceKind === "folder" && source.source.kind === "known") {
+            folderPaths.push(source.source.defaultPath);
+          }
+        }
+      }
+
+      if (folderPaths.length === 0) return;
+
+      useUiStore.getState().ensureLogViewVisible("toolbar.open-all-family");
+      useFilterStore.getState().clearFilter();
+
+      const allFilePaths: string[] = [];
+      for (const folderPath of folderPaths) {
+        try {
+          const listing = await listLogFolder(folderPath);
+          for (const entry of listing.entries) {
+            if (!entry.isDir) {
+              allFilePaths.push(entry.path);
+            }
+          }
+        } catch {
+          console.warn("[toolbar] skipping unavailable folder", folderPath);
+        }
+      }
+
+      if (allFilePaths.length === 0) return;
+
+      await loadFilesAsLogSource(allFilePaths);
+    },
+    []
+  );
+
   const {
     commandState,
     openSourceFileDialog,
@@ -762,6 +805,17 @@ export function Toolbar() {
                 </MenuTrigger>
                 <MenuPopover>
                   <MenuList>
+                    <MenuItem
+                      onClick={() =>
+                        void openAllKnownSourcesInFamily(family.id).catch((err) =>
+                          console.error("Failed to open all sources in family", err)
+                        )
+                      }
+                      style={{ fontWeight: 500 }}
+                    >
+                      Open All {family.label}
+                    </MenuItem>
+                    <Divider />
                     {family.groups.map((group) => (
                       <Menu key={group.id}>
                         <MenuTrigger disableButtonEnhancement>

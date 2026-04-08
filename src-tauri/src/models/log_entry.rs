@@ -40,6 +40,7 @@ pub enum ParserKind {
     IntuneMacOs,
     Dhcp,
     Burn,
+    PatchMyPcDetection,
     Registry,
 }
 
@@ -58,6 +59,7 @@ pub enum ParserImplementation {
     IntuneMacOs,
     Dhcp,
     Burn,
+    PatchMyPcDetection,
     Registry,
 }
 

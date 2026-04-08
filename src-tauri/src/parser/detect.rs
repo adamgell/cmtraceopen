@@ -13,7 +13,8 @@
 //! - Otherwise → Plain text
 
 use super::{
-    burn, cbs, dhcp, dism, iis_w3c, intune_macos, msi, panther, psadt, reporting_events,
+    burn, cbs, dhcp, dism, iis_w3c, intune_macos, msi, panther, patchmypc_detection, psadt,
+    reporting_events,
     timestamped::{self, DateOrder},
 };
 use crate::models::log_entry::{
@@ -198,6 +199,18 @@ impl ResolvedParser {
         )
     }
 
+    pub fn patchmypc_detection() -> Self {
+        Self::new(
+            ParserKind::PatchMyPcDetection,
+            ParserImplementation::PatchMyPcDetection,
+            ParserProvenance::Dedicated,
+            ParseQuality::Structured,
+            RecordFraming::PhysicalLine,
+            DateOrder::MonthFirst,
+            None,
+        )
+    }
+
     pub fn dhcp() -> Self {
         Self::new(
             ParserKind::Dhcp,
@@ -258,6 +271,7 @@ impl ResolvedParser {
             ParserImplementation::IntuneMacOs => LogFormat::Timestamped,
             ParserImplementation::Dhcp => LogFormat::Timestamped,
             ParserImplementation::Burn => LogFormat::Timestamped,
+            ParserImplementation::PatchMyPcDetection => LogFormat::Timestamped,
             ParserImplementation::PlainText => LogFormat::Plain,
             ParserImplementation::Registry => LogFormat::Plain,
         }
@@ -378,6 +392,7 @@ pub fn detect_parser(path: &str, content: &str) -> ResolvedParser {
     let mut dhcp_count = 0u32;
     let mut iis_w3c_count = 0u32;
     let mut burn_count = 0u32;
+    let mut patchmypc_detection_count = 0u32;
     let mut timestamp_count = 0;
     let mut has_day_first = false;
 
@@ -399,6 +414,9 @@ pub fn detect_parser(path: &str, content: &str) -> ResolvedParser {
             timestamp_count += 1;
         } else if panther::matches_panther_record(line.trim()) {
             panther_count += 1;
+        } else if patchmypc_detection::matches_patchmypc_detection_record(line.trim()) {
+            patchmypc_detection_count += 1;
+            timestamp_count += 1;
         } else if burn::matches_burn_record(line.trim()) {
             burn_count += 1;
             timestamp_count += 1;
@@ -443,6 +461,8 @@ pub fn detect_parser(path: &str, content: &str) -> ResolvedParser {
         ResolvedParser::reporting_events()
     } else if dism_count >= 2 {
         ResolvedParser::dism()
+    } else if patchmypc_detection_count >= 2 {
+        ResolvedParser::patchmypc_detection()
     } else if burn_count >= 2 {
         ResolvedParser::burn()
     } else if (iis_w3c_path_hint && iis_w3c_count >= 1) || iis_w3c_count >= 3 {

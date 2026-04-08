@@ -782,6 +782,7 @@ fn describe_parser_selection(parser_selection: &ParserSelectionInfo) -> String {
             ParserKind::IntuneMacOs => "Intune macOS MDM log".to_string(),
             ParserKind::Dhcp => "Windows DHCP Server log".to_string(),
             ParserKind::Burn => "WiX/Burn bootstrapper log".to_string(),
+            ParserKind::PatchMyPcDetection => "PatchMyPC detection script log".to_string(),
             ParserKind::Registry => "Windows Registry export".to_string(),
         },
     }

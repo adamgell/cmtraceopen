@@ -8,6 +8,7 @@ pub mod dism;
 pub mod iis_w3c;
 pub mod intune_macos;
 pub mod msi;
+pub mod patchmypc_detection;
 pub mod plain;
 pub mod psadt;
 pub mod registry;
@@ -99,6 +100,9 @@ pub fn parse_lines_with_selection(
         }
         crate::models::log_entry::ParserImplementation::Burn => {
             burn::parse_lines(lines, file_path)
+        }
+        crate::models::log_entry::ParserImplementation::PatchMyPcDetection => {
+            patchmypc_detection::parse_lines(lines, file_path)
         }
         crate::models::log_entry::ParserImplementation::Registry => {
             // Registry files are parsed via a dedicated IPC command, not the log pipeline.
