@@ -162,10 +162,10 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
           border: `1px solid ${tokens.colorNeutralStroke1}`,
           borderRadius: "4px",
           padding: "16px",
-          minWidth: "580px",
-          maxWidth: "700px",
-          maxHeight: "90vh",
-          overflowY: "auto",
+          width: "640px",
+          height: "min(580px, 90vh)",
+          display: "flex",
+          flexDirection: "column",
           boxShadow: "0 4px 12px rgba(0,0,0,0.3)",
           color: tokens.colorNeutralForeground1,
         }}
@@ -240,7 +240,7 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
         </div>
 
         {/* Tab content */}
-        <div role="tabpanel">{renderTabContent()}</div>
+        <div role="tabpanel" style={{ flex: 1, overflowY: "auto" }}>{renderTabContent()}</div>
       </div>
     </div>
   );

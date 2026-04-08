@@ -39,6 +39,7 @@ import { useFileAssociationPrompt } from "../../hooks/use-file-association-promp
 import { useCollectionProgressListener } from "../../hooks/use-collection-progress-listener";
 import { useParseProgressListener } from "../../hooks/use-parse-progress-listener";
 import { useUpdateChecker } from "../../hooks/use-update-checker";
+import { QuickStatsPanel } from "../panels/QuickStatsPanel";
 
 function buildFilterRunSignature(entries: LogEntry[], clauses: FilterClause[]): string {
   const lastId = entries.length > 0 ? entries[entries.length - 1].id : -1;
@@ -305,6 +306,7 @@ export function AppShell() {
 
       return (
         <>
+          <QuickStatsPanel />
           <div
             style={{
               flex: 1,
