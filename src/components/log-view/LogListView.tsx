@@ -58,6 +58,7 @@ export function LogListView() {
   const columnWidths = useUiStore((s) => s.columnWidths);
   const columnOrder = useUiStore((s) => s.columnOrder);
   const setColumnWidth = useUiStore((s) => s.setColumnWidth);
+  const setColumnWidths = useUiStore((s) => s.setColumnWidths);
   const setColumnOrder = useUiStore((s) => s.setColumnOrder);
 
   const [hasKeyboardFocus, setHasKeyboardFocus] = useState(false);
@@ -312,10 +313,12 @@ export function LogListView() {
     const rowEl = parentRef.current?.querySelector<HTMLElement>(".log-row") ?? null;
     const contentFont = getCanvasFont(logListFontSize, false, rowEl);
     const headerFont = getCanvasFont(listMetrics.headerFontSize, true, rowEl);
+    const updates: Record<string, number> = {};
     for (const col of visibleColumns) {
-      setColumnWidth(col.id, calcAutoFitWidth(col, displayEntries, contentFont, headerFont));
+      updates[col.id] = calcAutoFitWidth(col, displayEntries, contentFont, headerFont);
     }
-  }, [visibleColumns, displayEntries, logListFontSize, listMetrics, setColumnWidth]);
+    setColumnWidths(updates);
+  }, [visibleColumns, displayEntries, logListFontSize, listMetrics, setColumnWidths]);
 
   const activeRowDomId =
     selectedEntryIndex >= 0
@@ -482,7 +485,6 @@ function HeaderCell({
       onDragOver={(e) => onDragOver(index, e)}
       onDrop={onDrop}
       onDragEnd={onDragEnd}
-      onDoubleClick={(e) => { e.preventDefault(); onDoubleClick(col.id); }}
       style={{
         position: "relative",
         ...(col.isFlex ? { minWidth: 0 } : {}),
@@ -505,8 +507,12 @@ function HeaderCell({
       {onFitAll ? (
         /* Fit-all-columns button lives in the severity column header (no label, always first) */
         <div
+          role="button"
+          aria-label="Auto-fit all columns to content width"
           title="Auto-fit all columns to content width"
           onClick={(e) => { e.stopPropagation(); onFitAll(); }}
+          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onFitAll(); } }}
+          tabIndex={0}
           onMouseEnter={() => setFitAllHover(true)}
           onMouseLeave={() => setFitAllHover(false)}
           style={{
@@ -529,6 +535,7 @@ function HeaderCell({
       {(
         <div
           onMouseDown={(e) => onResizeStart(col.id, e)}
+          onDoubleClick={(e) => { e.preventDefault(); e.stopPropagation(); onDoubleClick(col.id); }}
           onMouseEnter={() => setResizeHover(true)}
           onMouseLeave={() => setResizeHover(false)}
           style={{

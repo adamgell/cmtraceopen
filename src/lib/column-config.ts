@@ -337,6 +337,8 @@ export function measureTextWidth(text: string, font: string): number {
 
 const CELL_PAD = 10;   // 4px left + 4px right cell padding + 2px buffer
 const HEADER_PAD = 24; // extra room for the resize grip
+/** Hard cap to prevent absurdly wide columns (e.g., 2000-char log messages). */
+const MAX_AUTOFIT_WIDTH = 1200;
 
 /**
  * Calculate the auto-fit width for a column given the current display entries.
@@ -357,6 +359,8 @@ export function calcAutoFitWidth(
   if (col.id === "severity") return col.defaultWidth;
 
   if (col.id === "dateTime") {
+    // Representative sample matching the widest output of formatLogEntryTimestamp().
+    // Update this if the display format changes (see src/lib/date-time-format.ts).
     const sample = "2024-01-01 00:00:00.000";
     return Math.ceil(Math.max(measureTextWidth(sample, contentFont) + CELL_PAD, col.minWidth));
   }
@@ -387,7 +391,10 @@ export function calcAutoFitWidth(
     if (w > maxContent) maxContent = w;
   }
 
-  return Math.ceil(Math.max(headerW, maxContent + CELL_PAD, col.minWidth));
+  return Math.min(
+    MAX_AUTOFIT_WIDTH,
+    Math.ceil(Math.max(headerW, maxContent + CELL_PAD, col.minWidth)),
+  );
 }
 
 export function applyColumnOrder(

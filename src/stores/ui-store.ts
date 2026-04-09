@@ -196,6 +196,7 @@ interface UiState {
   setDefaultShowInfoPane: (show: boolean) => void;
   setConfirmTabClose: (confirm: boolean) => void;
   setColumnWidth: (columnId: string, width: number) => void;
+  setColumnWidths: (updates: Record<string, number>) => void;
   resetColumnWidths: () => void;
   setColumnOrder: (order: ColumnId[]) => void;
   resetColumnOrder: () => void;
@@ -469,6 +470,10 @@ export const useUiStore = create<UiState>()(
       setColumnWidth: (columnId, width) =>
         set((state) => ({
           columnWidths: { ...state.columnWidths, [columnId]: width },
+        })),
+      setColumnWidths: (updates) =>
+        set((state) => ({
+          columnWidths: { ...state.columnWidths, ...updates },
         })),
       resetColumnWidths: () => set({ columnWidths: {} }),
       setColumnOrder: (order) => set({ columnOrder: order }),
