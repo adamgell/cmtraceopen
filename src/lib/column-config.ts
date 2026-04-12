@@ -23,7 +23,16 @@ export type ColumnId =
   | "resultCode"
   | "gleCode"
   | "setupPhase"
-  | "operationName";
+  | "operationName"
+  | "queryName"
+  | "queryType"
+  | "responseCode"
+  | "dnsDirection"
+  | "dnsProtocol"
+  | "sourceIp"
+  | "dnsFlags"
+  | "dnsEventId"
+  | "zoneName";
 
 /** Static definition for a column — label, width, and how to read data from a LogEntry. */
 export interface ColumnDefinition {
@@ -254,6 +263,87 @@ export const ALL_COLUMNS: readonly ColumnDefinition[] = [
     isDetail: true,
     accessor: (e) => e.operationName ?? null,
   },
+  {
+    id: "queryName",
+    label: "Query Name",
+    defaultWidth: 240,
+    minWidth: 100,
+    isFlex: false,
+    isDetail: true,
+    accessor: (e) => e.queryName ?? null,
+  },
+  {
+    id: "queryType",
+    label: "Type",
+    defaultWidth: 70,
+    minWidth: 50,
+    isFlex: false,
+    isDetail: true,
+    accessor: (e) => e.queryType ?? null,
+  },
+  {
+    id: "responseCode",
+    label: "RCODE",
+    defaultWidth: 110,
+    minWidth: 70,
+    isFlex: false,
+    isDetail: true,
+    accessor: (e) => e.responseCode ?? null,
+  },
+  {
+    id: "dnsDirection",
+    label: "Dir",
+    defaultWidth: 50,
+    minWidth: 40,
+    isFlex: false,
+    isDetail: true,
+    accessor: (e) => e.dnsDirection ?? null,
+  },
+  {
+    id: "dnsProtocol",
+    label: "Proto",
+    defaultWidth: 60,
+    minWidth: 45,
+    isFlex: false,
+    isDetail: true,
+    accessor: (e) => e.dnsProtocol ?? null,
+  },
+  {
+    id: "sourceIp",
+    label: "Source IP",
+    defaultWidth: 160,
+    minWidth: 80,
+    isFlex: false,
+    isDetail: true,
+    accessor: (e) => e.sourceIp ?? null,
+  },
+  {
+    id: "dnsFlags",
+    label: "Flags",
+    defaultWidth: 80,
+    minWidth: 60,
+    isFlex: false,
+    isDetail: true,
+    accessor: (e) => e.dnsFlags ?? null,
+  },
+  {
+    id: "dnsEventId",
+    label: "Event ID",
+    defaultWidth: 80,
+    minWidth: 60,
+    isFlex: false,
+    isDetail: true,
+    accessor: (e) => e.dnsEventId ?? null,
+  },
+  {
+    id: "zoneName",
+    label: "Zone",
+    defaultWidth: 180,
+    minWidth: 80,
+    isFlex: false,
+    isDetail: true,
+    accessor: (e) => e.zoneName ?? null,
+  },
 ];
 
 /** Lookup from ColumnId to its definition for O(1) access. */
@@ -282,8 +372,8 @@ const PARSER_COLUMN_MAP: Record<ParserKind, ColumnId[]> = {
   dhcp: ["severity", "dateTime", "message", "ipAddress", "hostName", "macAddress"],
   burn: ["severity", "dateTime", "message", "component", "thread"],
   registry: ["message"],
-  dnsDebug: ["severity", "dateTime", "message"],
-  dnsAudit: ["severity", "dateTime", "message"],
+  dnsDebug: ["severity", "dateTime", "dnsDirection", "dnsProtocol", "queryName", "queryType", "responseCode", "sourceIp", "dnsFlags", "message"],
+  dnsAudit: ["severity", "dateTime", "dnsEventId", "queryName", "queryType", "responseCode", "zoneName", "sourceIp", "message"],
 };
 
 /** Default columns used before any file is loaded. */
