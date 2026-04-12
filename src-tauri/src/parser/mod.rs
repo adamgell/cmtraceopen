@@ -5,6 +5,8 @@ pub mod ccm;
 pub mod detect;
 pub mod dhcp;
 pub mod dism;
+#[cfg(feature = "event-log")]
+pub mod dns_audit;
 pub mod dns_debug;
 pub mod dns_types;
 pub mod iis_w3c;
