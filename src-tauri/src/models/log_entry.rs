@@ -20,6 +20,10 @@ pub enum LogFormat {
     Plain,
     /// Generic timestamped format (ISO 8601, slash-dates, syslog, time-only)
     Timestamped,
+    /// Windows DNS Server debug log (dns.log)
+    DnsDebug,
+    /// Windows DNS Server analytical/audit EVTX log
+    DnsAudit,
 }
 
 /// High-level parser selection resolved by the backend.
@@ -43,6 +47,8 @@ pub enum ParserKind {
     PatchMyPcDetection,
     Registry,
     SecureBootLog,
+    DnsDebug,
+    DnsAudit,
 }
 
 /// Concrete parser implementation currently used by the backend.
@@ -63,6 +69,8 @@ pub enum ParserImplementation {
     PatchMyPcDetection,
     Registry,
     SecureBootLog,
+    DnsDebug,
+    DnsAudit,
 }
 
 /// How the backend arrived at the parser selection.
@@ -213,6 +221,33 @@ pub struct LogEntry {
     /// Win32 status code (IIS W3C logs)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub win32_status: Option<u32>,
+    /// DNS query name, decoded from wire-format (DNS logs)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub query_name: Option<String>,
+    /// DNS query type name: A, AAAA, SRV, etc. (DNS logs)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub query_type: Option<String>,
+    /// DNS response code: NOERROR, NXDOMAIN, etc. (DNS logs)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub response_code: Option<String>,
+    /// Packet direction: Snd or Rcv (DNS debug log)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dns_direction: Option<String>,
+    /// Transport protocol: UDP or TCP (DNS debug log)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dns_protocol: Option<String>,
+    /// Remote IP address, optionally with port (DNS logs)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_ip: Option<String>,
+    /// DNS header flags as hex string (DNS debug log)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dns_flags: Option<String>,
+    /// DNS event ID for EVTX-sourced entries (DNS audit)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dns_event_id: Option<u32>,
+    /// DNS zone name (DNS audit)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zone_name: Option<String>,
 }
 
 /// Result of parsing a complete log file.

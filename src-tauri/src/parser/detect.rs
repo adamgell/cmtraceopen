@@ -287,6 +287,8 @@ impl ResolvedParser {
             ParserImplementation::PlainText => LogFormat::Plain,
             ParserImplementation::Registry => LogFormat::Plain,
             ParserImplementation::SecureBootLog => LogFormat::Timestamped,
+            ParserImplementation::DnsDebug => LogFormat::DnsDebug,
+            ParserImplementation::DnsAudit => LogFormat::DnsAudit,
         }
     }
 
