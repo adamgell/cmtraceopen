@@ -5,6 +5,7 @@ pub mod ccm;
 pub mod detect;
 pub mod dhcp;
 pub mod dism;
+pub mod dns_debug;
 pub mod dns_types;
 pub mod iis_w3c;
 pub mod intune_macos;
