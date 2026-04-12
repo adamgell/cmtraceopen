@@ -1,0 +1,33 @@
+DNS Server log file creation at 4/11/2026 3:29:17 PM
+
+Message logging key (for packets - other items use a subset of these fields):
+	Field #  Information         Values
+	-------  -----------         ------
+	   1     Date
+	   2     Time
+	   3     Thread ID
+	   4     Context
+	   5     Internal packet identifier
+	   6     UDP/TCP indicator
+	   7     Send/Receive indicator
+	   8     Remote IP
+	   9     Xid (hex)
+	  10     Query/Response      R = Response
+	                             blank = Query
+	  11     Opcode              Q = Standard Query
+	                             N = Notify
+	                             U = Update
+	                             ? = Unknown
+	  12     [ Flags (hex)
+	  13     Flags (char codes)  A = Authoritative Answer
+	                             T = Truncated Response
+	                             D = Recursion Desired
+	                             R = Recursion Available
+	  14     ResponseCode ]
+	  15     Question Type
+	  16     Question Name
+
+4/11/2026 3:29:17 PM 0294 PACKET  000002DAEC36D650 UDP Rcv 127.0.0.1       d07e   Q [0001   D   NOERROR] SOA    (4)home(4)gell(3)one(0)
+4/11/2026 3:29:17 PM 0294 PACKET  000002DAEC36D650 UDP Snd 127.0.0.1       d07e R Q [8085 A DR  NOERROR] SOA    (4)home(4)gell(3)one(0)
+4/11/2026 3:29:17 PM 0294 PACKET  000002DAEC370110 UDP Rcv 127.0.0.1       6ec3   Q [0001   D   NOERROR] NS     (4)home(4)gell(3)one(0)
+4/11/2026 3:29:17 PM 0294 PACKET  000002DAEC370110 UDP Snd 127.0.0.1       6ec3 R Q [8085 A DR  NOERROR] NS     (4)home(4)gell(3)one(0)

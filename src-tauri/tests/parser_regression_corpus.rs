@@ -561,3 +561,47 @@ fn ime_appworkload_temp_fixture_detects_and_parses_logical_records() {
         .message
         .contains("Download completed successfully."));
 }
+
+#[test]
+fn test_dns_debug_basic_fixture_detection() {
+    let fixture = TempLogFixture::new(
+        "DNSServer_debug.log",
+        &std::fs::read_to_string(
+            concat!(env!("CARGO_MANIFEST_DIR"), "/tests/corpus/dns_debug/clean/basic.log")
+        ).expect("read fixture"),
+    );
+    let snapshot = fixture.detect();
+    assert_eq!(snapshot.parser, "DnsDebug");
+    assert_eq!(snapshot.record_framing, "LogicalRecord");
+}
+
+#[test]
+fn test_dns_debug_basic_fixture_parse() {
+    let fixture = TempLogFixture::new(
+        "DNSServer_debug.log",
+        &std::fs::read_to_string(
+            concat!(env!("CARGO_MANIFEST_DIR"), "/tests/corpus/dns_debug/clean/basic.log")
+        ).expect("read fixture"),
+    );
+    let parsed = fixture.parse();
+    assert_eq!(parsed.selection.parser, "DnsDebug");
+    assert_eq!(parsed.parse_errors, 0);
+    assert_eq!(parsed.entries.len(), 4);
+    assert_eq!(parsed.entries[0].severity, "Info");
+}
+
+#[test]
+fn test_dns_debug_rcodes_fixture_severity() {
+    let fixture = TempLogFixture::new(
+        "dns.log",
+        &std::fs::read_to_string(
+            concat!(env!("CARGO_MANIFEST_DIR"), "/tests/corpus/dns_debug/mixed/rcodes.log")
+        ).expect("read fixture"),
+    );
+    let parsed = fixture.parse();
+    assert_eq!(parsed.entries.len(), 4);
+    assert_eq!(parsed.entries[0].severity, "Info");     // NOERROR query
+    assert_eq!(parsed.entries[1].severity, "Info");     // NOERROR response
+    assert_eq!(parsed.entries[2].severity, "Warning");  // NXDOMAIN
+    assert_eq!(parsed.entries[3].severity, "Error");    // SERVFAIL
+}
