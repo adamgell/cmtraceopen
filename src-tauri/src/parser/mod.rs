@@ -106,10 +106,12 @@ pub fn parse_lines_with_selection(
             // Registry files are parsed via a dedicated IPC command, not the log pipeline.
             (vec![], 0)
         }
-        crate::models::log_entry::ParserImplementation::DnsDebug
-        | crate::models::log_entry::ParserImplementation::DnsAudit => {
-            // DNS parsers are not yet implemented; fall back to plain text.
-            plain::parse_lines(lines, file_path)
+        crate::models::log_entry::ParserImplementation::DnsDebug => {
+            dns_debug::parse_lines(lines, file_path, selection.date_order)
+        }
+        crate::models::log_entry::ParserImplementation::DnsAudit => {
+            // EVTX files are parsed via the binary path in parse_file(), not the line-based pipeline.
+            (vec![], 0)
         }
         crate::models::log_entry::ParserImplementation::GenericTimestamped => match selection.parser {
             crate::models::log_entry::ParserKind::Cbs => cbs::parse_lines(lines, file_path),
@@ -429,5 +431,21 @@ mod tests {
         assert_eq!(parsed.entries.len(), 1);
         assert!(!parsed.entries[0].error_code_spans.is_empty());
         assert_eq!(parsed.entries[0].error_code_spans[0].code_hex, "0x80070005");
+    }
+
+    #[test]
+    fn test_parse_lines_with_dns_debug_selection() {
+        let selection = ResolvedParser::dns_debug(DateOrder::MonthFirst);
+        let lines = [
+            "4/11/2026 3:29:17 PM 0294 PACKET  000002DAEC36D650 UDP Rcv 127.0.0.1       d07e   Q [0001   D   NOERROR] SOA    (4)home(4)gell(3)one(0)",
+            "4/11/2026 3:29:17 PM 0294 PACKET  000002DAEC36D650 UDP Snd 127.0.0.1       d07e R Q [8085 A DR  NOERROR] SOA    (4)home(4)gell(3)one(0)",
+        ];
+
+        let (entries, parse_errors) = parse_lines_with_selection(&lines, "dns.log", &selection);
+
+        assert_eq!(parse_errors, 0);
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].query_name.as_deref(), Some("home.gell.one"));
+        assert_eq!(entries[0].format, crate::models::log_entry::LogFormat::DnsDebug);
     }
 }
