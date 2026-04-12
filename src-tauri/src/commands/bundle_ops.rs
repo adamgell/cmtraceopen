@@ -783,6 +783,8 @@ fn describe_parser_selection(parser_selection: &ParserSelectionInfo) -> String {
             ParserKind::Dhcp => "Windows DHCP Server log".to_string(),
             ParserKind::Burn => "WiX/Burn bootstrapper log".to_string(),
             ParserKind::Registry => "Windows Registry export".to_string(),
+            ParserKind::DnsDebug => "Windows DNS Server debug log".to_string(),
+            ParserKind::DnsAudit => "Windows DNS Server audit log".to_string(),
         },
     }
 }

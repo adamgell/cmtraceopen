@@ -260,6 +260,8 @@ impl ResolvedParser {
             ParserImplementation::Burn => LogFormat::Timestamped,
             ParserImplementation::PlainText => LogFormat::Plain,
             ParserImplementation::Registry => LogFormat::Plain,
+            ParserImplementation::DnsDebug => LogFormat::DnsDebug,
+            ParserImplementation::DnsAudit => LogFormat::DnsAudit,
         }
     }
 

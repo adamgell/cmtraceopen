@@ -161,6 +161,15 @@ pub fn parse_lines(lines: &[&str], file_path: &str, date_order: DateOrder) -> (V
                     server_port: None,
                     username: None,
                     win32_status: None,
+                    query_name: None,
+                    query_type: None,
+                    response_code: None,
+                    dns_direction: None,
+                    dns_protocol: None,
+                    source_ip: None,
+                    dns_flags: None,
+                    dns_event_id: None,
+                    zone_name: None,
             });
             parse_errors += 1;
         }
@@ -260,6 +269,15 @@ fn try_iso(line: &str) -> Option<LogEntry> {
                     server_port: None,
                     username: None,
                     win32_status: None,
+                    query_name: None,
+                    query_type: None,
+                    response_code: None,
+                    dns_direction: None,
+                    dns_protocol: None,
+                    source_ip: None,
+                    dns_flags: None,
+                    dns_event_id: None,
+                    zone_name: None,
     })
 }
 
@@ -341,6 +359,15 @@ fn try_slash_date(line: &str, date_order: DateOrder) -> Option<LogEntry> {
                     server_port: None,
                     username: None,
                     win32_status: None,
+                    query_name: None,
+                    query_type: None,
+                    response_code: None,
+                    dns_direction: None,
+                    dns_protocol: None,
+                    source_ip: None,
+                    dns_flags: None,
+                    dns_event_id: None,
+                    zone_name: None,
     })
 }
 
@@ -409,6 +436,15 @@ fn try_syslog(line: &str) -> Option<LogEntry> {
                     server_port: None,
                     username: None,
                     win32_status: None,
+                    query_name: None,
+                    query_type: None,
+                    response_code: None,
+                    dns_direction: None,
+                    dns_protocol: None,
+                    source_ip: None,
+                    dns_flags: None,
+                    dns_event_id: None,
+                    zone_name: None,
     })
 }
 
@@ -467,6 +503,15 @@ fn try_time_only(line: &str) -> Option<LogEntry> {
                     server_port: None,
                     username: None,
                     win32_status: None,
+                    query_name: None,
+                    query_type: None,
+                    response_code: None,
+                    dns_direction: None,
+                    dns_protocol: None,
+                    source_ip: None,
+                    dns_flags: None,
+                    dns_event_id: None,
+                    zone_name: None,
     })
 }
 

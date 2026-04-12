@@ -51,6 +51,15 @@ pub fn parse_lines(lines: &[&str], file_path: &str) -> (Vec<LogEntry>, u32) {
                     server_port: None,
                     username: None,
                     win32_status: None,
+                    query_name: None,
+                    query_type: None,
+                    response_code: None,
+                    dns_direction: None,
+                    dns_protocol: None,
+                    source_ip: None,
+                    dns_flags: None,
+                    dns_event_id: None,
+                    zone_name: None,
         });
     }
 

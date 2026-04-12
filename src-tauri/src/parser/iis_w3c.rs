@@ -122,6 +122,15 @@ fn malformed_entry(id: u64, line_number: u32, line: &str, file_path: &str) -> Lo
         server_port: None,
         username: None,
         win32_status: None,
+                    query_name: None,
+                    query_type: None,
+                    response_code: None,
+                    dns_direction: None,
+                    dns_protocol: None,
+                    source_ip: None,
+                    dns_flags: None,
+                    dns_event_id: None,
+                    zone_name: None,
     }
 }
 
@@ -240,6 +249,15 @@ pub fn parse_lines(lines: &[&str], file_path: &str) -> (Vec<LogEntry>, u32) {
             server_port,
             username,
             win32_status,
+            query_name: None,
+            query_type: None,
+            response_code: None,
+            dns_direction: None,
+            dns_protocol: None,
+            source_ip: None,
+            dns_flags: None,
+            dns_event_id: None,
+            zone_name: None,
         });
         id += 1;
     }

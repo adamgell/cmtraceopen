@@ -215,6 +215,15 @@ fn build_entry_from_caps(caps: &regex::Captures<'_>, file_path: &str) -> Option<
         server_port: None,
         username: None,
         win32_status: None,
+                    query_name: None,
+                    query_type: None,
+                    response_code: None,
+                    dns_direction: None,
+                    dns_protocol: None,
+                    source_ip: None,
+                    dns_flags: None,
+                    dns_event_id: None,
+                    zone_name: None,
     };
 
     post_process_entry(&mut entry);
@@ -327,6 +336,15 @@ fn fallback_entry(id: u64, line_number: u32, line: &str, file_path: &str) -> Log
         server_port: None,
         username: None,
         win32_status: None,
+                    query_name: None,
+                    query_type: None,
+                    response_code: None,
+                    dns_direction: None,
+                    dns_protocol: None,
+                    source_ip: None,
+                    dns_flags: None,
+                    dns_event_id: None,
+                    zone_name: None,
     }
 }
 

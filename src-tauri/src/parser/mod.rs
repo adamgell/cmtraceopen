@@ -104,6 +104,11 @@ pub fn parse_lines_with_selection(
             // Registry files are parsed via a dedicated IPC command, not the log pipeline.
             (vec![], 0)
         }
+        crate::models::log_entry::ParserImplementation::DnsDebug
+        | crate::models::log_entry::ParserImplementation::DnsAudit => {
+            // DNS parsers are not yet implemented; fall back to plain text.
+            plain::parse_lines(lines, file_path)
+        }
         crate::models::log_entry::ParserImplementation::GenericTimestamped => match selection.parser {
             crate::models::log_entry::ParserKind::Cbs => cbs::parse_lines(lines, file_path),
             crate::models::log_entry::ParserKind::Dism => dism::parse_lines(lines, file_path),
