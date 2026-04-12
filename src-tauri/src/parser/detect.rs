@@ -13,7 +13,8 @@
 //! - Otherwise → Plain text
 
 use super::{
-    burn, cbs, dhcp, dism, iis_w3c, intune_macos, msi, panther, psadt, reporting_events,
+    burn, cbs, dhcp, dism, dns_debug, iis_w3c, intune_macos, msi, panther, psadt,
+    reporting_events,
     timestamped::{self, DateOrder},
 };
 use crate::models::log_entry::{
@@ -246,6 +247,18 @@ impl ResolvedParser {
         )
     }
 
+    pub fn dns_debug(date_order: DateOrder) -> Self {
+        Self::new(
+            ParserKind::DnsDebug,
+            ParserImplementation::DnsDebug,
+            ParserProvenance::Dedicated,
+            ParseQuality::Structured,
+            RecordFraming::LogicalRecord,
+            date_order,
+            None,
+        )
+    }
+
     pub fn compatibility_format(&self) -> LogFormat {
         match self.implementation {
             ParserImplementation::Ccm => LogFormat::Ccm,
@@ -299,12 +312,6 @@ pub fn detect_parser(path: &str, content: &str) -> ResolvedParser {
         }
     }
 
-    let sample_lines: Vec<&str> = content
-        .lines()
-        .filter(|l| !l.trim().is_empty())
-        .take(20)
-        .collect();
-
     // Early detection: DHCP logs have a ~35-line header before any CSV data.
     // The first 20 non-empty lines are all header text, so content-based matching
     // won't find data rows. Detect via header signature or path hint + header.
@@ -330,7 +337,23 @@ pub fn detect_parser(path: &str, content: &str) -> ResolvedParser {
         return ResolvedParser::iis_w3c();
     }
 
+    // Path hints must be computed before sample_lines so the sample limit can depend on them.
     let path_lower = path.to_ascii_lowercase();
+
+    let dns_debug_path_hint = path_lower.contains("dns")
+        || path_lower.ends_with("dns.log")
+        || path_lower.contains("\\dns\\")
+        || path_lower.contains("/dns/");
+
+    // DNS debug logs have a ~29-line header before any PACKET records.
+    // Extend the sample window when DNS path hints are present.
+    let sample_limit = if dns_debug_path_hint { 50 } else { 20 };
+    let sample_lines: Vec<&str> = content
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .take(sample_limit)
+        .collect();
+
     let panther_path_hint = path_lower.contains("panther")
         || path_lower.ends_with("setupact.log")
         || path_lower.ends_with("setuperr.log");
@@ -380,6 +403,7 @@ pub fn detect_parser(path: &str, content: &str) -> ResolvedParser {
     let mut dhcp_count = 0u32;
     let mut iis_w3c_count = 0u32;
     let mut burn_count = 0u32;
+    let mut dns_debug_count = 0u32;
     let mut timestamp_count = 0;
     let mut has_day_first = false;
 
@@ -406,6 +430,9 @@ pub fn detect_parser(path: &str, content: &str) -> ResolvedParser {
             timestamp_count += 1;
         } else if dhcp::matches_dhcp_record(line.trim()) {
             dhcp_count += 1;
+        } else if dns_debug::matches_dns_debug_record(line.trim()) {
+            dns_debug_count += 1;
+            timestamp_count += 1;
         } else if iis_w3c::matches_iis_w3c_record(line.trim()) {
             iis_w3c_count += 1;
             timestamp_count += 1;
@@ -451,6 +478,13 @@ pub fn detect_parser(path: &str, content: &str) -> ResolvedParser {
         ResolvedParser::iis_w3c()
     } else if (dhcp_path_hint && dhcp_count >= 1) || dhcp_count >= 3 {
         ResolvedParser::dhcp()
+    } else if (dns_debug_path_hint && dns_debug_count >= 1) || dns_debug_count >= 2 {
+        let dns_date_order = if has_day_first {
+            DateOrder::DayFirst
+        } else {
+            DateOrder::MonthFirst
+        };
+        ResolvedParser::dns_debug(dns_date_order)
     } else if (intune_macos_path_hint && intune_macos_count >= 1) || intune_macos_count >= 2 {
         ResolvedParser::intune_macos()
     } else if msi_count >= 2 {
@@ -704,5 +738,54 @@ Message two $$<Comp2><01-01-2024 08:00:01.000+000><thread=200>"#;
         assert_eq!(info.date_order, None);
         assert_eq!(info.specialization, None);
         assert_eq!(selection.compatibility_format(), LogFormat::Timestamped);
+    }
+
+    #[test]
+    fn test_detect_dns_debug_from_path_and_content() {
+        // Use the full 29-line header + one PACKET line
+        let content = "DNS Server log file creation at 4/11/2026 3:29:17 PM\n\
+            \n\
+            Message logging key (for packets):\n\
+            \tField #  Information         Values\n\
+            \t-------  -----------         ------\n\
+            \t   1     Date\n\
+            \t   2     Time\n\
+            \t   3     Thread ID\n\
+            \t   4     Context\n\
+            \t   5     Internal packet identifier\n\
+            \t   6     UDP/TCP indicator\n\
+            \t   7     Send/Receive indicator\n\
+            \t   8     Remote IP\n\
+            \t   9     Xid (hex)\n\
+            \t  10     Query/Response      R = Response\n\
+            \t                             blank = Query\n\
+            \t  11     Opcode              Q = Standard Query\n\
+            \t                             N = Notify\n\
+            \t                             U = Update\n\
+            \t                             ? = Unknown\n\
+            \t  12     [ Flags (hex)\n\
+            \t  13     Flags (char codes)  A = Authoritative Answer\n\
+            \t                             T = Truncated Response\n\
+            \t                             D = Recursion Desired\n\
+            \t                             R = Recursion Available\n\
+            \t  14     ResponseCode ]\n\
+            \t  15     Question Type\n\
+            \t  16     Question Name\n\
+            \n\
+            4/11/2026 3:29:17 PM 0294 PACKET  000002DAEC36D650 UDP Rcv 127.0.0.1       d07e   Q [0001   D   NOERROR] SOA    (4)home(4)gell(3)one(0)\n";
+
+        let detected = detect_parser("C:/Logs/DNSServer/DNSServer_debug.log", content);
+        assert_eq!(detected.parser, ParserKind::DnsDebug);
+        assert_eq!(detected.implementation, ParserImplementation::DnsDebug);
+        assert_eq!(detected.record_framing, RecordFraming::LogicalRecord);
+        assert_eq!(detected.parse_quality, ParseQuality::Structured);
+    }
+
+    #[test]
+    fn test_generic_timestamped_with_dns_in_path_does_not_false_positive() {
+        let content = "2026-04-11 15:29:17 DNS resolution started\n\
+                        2026-04-11 15:29:18 DNS resolution complete";
+        let detected = detect_parser("C:/logs/dns-resolver/app.log", content);
+        assert_eq!(detected.parser, ParserKind::Timestamped);
     }
 }
