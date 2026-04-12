@@ -259,6 +259,18 @@ impl ResolvedParser {
         )
     }
 
+    pub fn dns_audit() -> Self {
+        Self::new(
+            ParserKind::DnsAudit,
+            ParserImplementation::DnsAudit,
+            ParserProvenance::Dedicated,
+            ParseQuality::Structured,
+            RecordFraming::PhysicalLine,
+            DateOrder::default(),
+            None,
+        )
+    }
+
     pub fn compatibility_format(&self) -> LogFormat {
         match self.implementation {
             ParserImplementation::Ccm => LogFormat::Ccm,

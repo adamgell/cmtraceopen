@@ -46,6 +46,43 @@ pub struct ParsedChunk {
 /// Returns the parse result and the backend-owned parser selection used for it.
 pub fn parse_file(path: &str) -> Result<(ParseResult, ResolvedParser), String> {
     let path_obj = Path::new(path);
+
+    // Binary file detection by extension — intercept before text decoding
+    if let Some(ext) = path_obj.extension().and_then(|e| e.to_str()) {
+        let ext_lower = ext.to_ascii_lowercase();
+
+        if ext_lower == "etl" {
+            #[cfg(target_os = "windows")]
+            return Err(
+                "ETL analytical logs are not yet supported. Convert to XML with: \
+                 tracerpt \"<file>\" -of XML -o output.xml — then open the XML file."
+                    .to_string(),
+            );
+            #[cfg(not(target_os = "windows"))]
+            return Err(
+                "ETL files contain binary Windows event traces that require the Windows \
+                 tracerpt tool to convert. Export to XML on a Windows machine first, \
+                 then open the XML file here."
+                    .to_string(),
+            );
+        }
+
+        #[cfg(feature = "event-log")]
+        if ext_lower == "evtx" {
+            if dns_audit::is_dns_evtx(path_obj) {
+                let result = dns_audit::parse_evtx(path)?;
+                let selection = ResolvedParser::dns_audit();
+                return Ok((result, selection));
+            }
+            // Not a DNS EVTX — fall through to let other handlers deal with it.
+            return Err(
+                "This EVTX file does not contain DNS audit events. \
+                 Try opening it in the Sysmon workspace instead."
+                    .to_string(),
+            );
+        }
+    }
+
     let content = read_file_content(path)?;
     let file_size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
 
