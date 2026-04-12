@@ -282,6 +282,8 @@ const PARSER_COLUMN_MAP: Record<ParserKind, ColumnId[]> = {
   dhcp: ["severity", "dateTime", "message", "ipAddress", "hostName", "macAddress"],
   burn: ["severity", "dateTime", "message", "component", "thread"],
   registry: ["message"],
+  dnsDebug: ["severity", "dateTime", "message"],
+  dnsAudit: ["severity", "dateTime", "message"],
 };
 
 /** Default columns used before any file is loaded. */

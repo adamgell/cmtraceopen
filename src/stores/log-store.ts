@@ -297,6 +297,10 @@ function getParserLabel(parser: ParserSelectionInfo["parser"]): string {
       return "WiX/Burn";
     case "registry":
       return "Registry";
+    case "dnsDebug":
+      return "DNS Debug Log";
+    case "dnsAudit":
+      return "DNS Audit (EVTX)";
   }
 }
 
@@ -328,6 +332,10 @@ function getImplementationLabel(
       return "WiX/Burn bootstrapper parser";
     case "registry":
       return "Windows Registry export parser";
+    case "dnsDebug":
+      return "DNS debug log parser";
+    case "dnsAudit":
+      return "DNS audit EVTX parser";
   }
 }
 
