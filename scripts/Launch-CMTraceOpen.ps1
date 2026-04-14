@@ -73,6 +73,16 @@ function Resolve-VsWherePath {
     throw 'Could not find vswhere.exe. Install Visual Studio Installer or add vswhere.exe to PATH.'
 }
 
+function Get-HostArchitecture {
+    $arch = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture
+    switch ($arch) {
+        'Arm64' { return 'arm64' }
+        'X64'   { return 'amd64' }
+        'X86'   { return 'x86' }
+        default { return 'amd64' }
+    }
+}
+
 function Enable-VsDeveloperPowerShell {
     $vsWherePath = Resolve-VsWherePath
     $vsInstallPath = & $vsWherePath -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
@@ -86,8 +96,11 @@ function Enable-VsDeveloperPowerShell {
         throw "Could not find Microsoft.VisualStudio.DevShell.dll at '$devShellModule'."
     }
 
+    $hostArch = Get-HostArchitecture
+    Write-Step "Detected host architecture: $hostArch"
+
     Import-Module $devShellModule
-    Enter-VsDevShell -VsInstallPath $vsInstallPath -SkipAutomaticLocation | Out-Null
+    Enter-VsDevShell -VsInstallPath $vsInstallPath -SkipAutomaticLocation -Arch $hostArch -HostArch $hostArch | Out-Null
 
     return $vsInstallPath
 }
