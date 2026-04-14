@@ -28,7 +28,7 @@ pub fn test_endpoint_connectivity() -> Vec<DsregcmdConnectivityResult> {
             .build()
             .new_agent();
 
-        match agent.head(endpoint).call() {
+        match agent.head(*endpoint).call() {
             Ok(response) => {
                 let latency = start.elapsed().as_millis() as u64;
                 results.push(DsregcmdConnectivityResult {
