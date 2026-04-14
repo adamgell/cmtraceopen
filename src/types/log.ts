@@ -1,7 +1,8 @@
 import type { EvidenceBundleMetadata } from "./evidence";
 
 export type Severity = "Info" | "Warning" | "Error";
-export type LogFormat = "Ccm" | "Simple" | "Plain" | "Timestamped" | "DnsDebug" | "DnsAudit";
+export type LogFormat = "Ccm" | "Simple" | "Plain" | "Timestamped" | "DnsDebug" | "DnsAudit" | "CmtLog";
+export type EntryKind = "Log" | "Section" | "Iteration" | "Header";
 export type ParserKind =
   | "ccm"
   | "simple"
@@ -21,7 +22,8 @@ export type ParserKind =
   | "registry"
   | "secureBootLog"
   | "dnsDebug"
-  | "dnsAudit";
+  | "dnsAudit"
+  | "cmtLog";
 export type ParserImplementation =
   | "ccm"
   | "simple"
@@ -38,7 +40,8 @@ export type ParserImplementation =
   | "registry"
   | "secureBootLog"
   | "dnsDebug"
-  | "dnsAudit";
+  | "dnsAudit"
+  | "cmtLog";
 export type ParserProvenance = "dedicated" | "heuristic" | "fallback";
 export type ParseQuality = "structured" | "semiStructured" | "textFallback";
 export type RecordFraming = "physicalLine" | "logicalRecord";
@@ -189,6 +192,12 @@ export interface LogEntry {
   dnsFlags?: string | null;
   dnsEventId?: number | null;
   zoneName?: string | null;
+  entryKind?: EntryKind;
+  whatif?: boolean;
+  sectionName?: string;
+  sectionColor?: string;
+  iteration?: string;
+  tags?: string[];
 }
 
 export interface ParserSelectionInfo {

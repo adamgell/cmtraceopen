@@ -376,6 +376,7 @@ const PARSER_COLUMN_MAP: Record<ParserKind, ColumnId[]> = {
   secureBootLog: ["severity", "dateTime", "message", "component"],
   dnsDebug: ["severity", "dateTime", "dnsDirection", "dnsProtocol", "queryName", "queryType", "responseCode", "sourceIp", "dnsFlags", "message"],
   dnsAudit: ["severity", "dateTime", "dnsEventId", "queryName", "queryType", "responseCode", "zoneName", "sourceIp", "message"],
+  cmtLog: ["severity", "dateTime", "message", "component"],
 };
 
 /** Default columns used before any file is loaded. */
