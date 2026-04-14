@@ -21,43 +21,33 @@ pub fn test_endpoint_connectivity() -> Vec<DsregcmdConnectivityResult> {
         let start = std::time::Instant::now();
         let timestamp = chrono::Utc::now().to_rfc3339();
 
-        let agent = ureq::AgentBuilder::new()
-            .timeout_connect(std::time::Duration::from_secs(ENDPOINT_TIMEOUT_SECS))
-            .timeout_read(std::time::Duration::from_secs(ENDPOINT_TIMEOUT_SECS))
-            .build();
+        let agent = ureq::Agent::config_builder()
+            .timeout_connect(Some(std::time::Duration::from_secs(ENDPOINT_TIMEOUT_SECS)))
+            .timeout_recv_response(Some(std::time::Duration::from_secs(ENDPOINT_TIMEOUT_SECS)))
+            .http_status_as_error(false)
+            .build()
+            .new_agent();
 
-        match agent.head(endpoint).call() {
+        match agent.head(*endpoint).call() {
             Ok(response) => {
                 let latency = start.elapsed().as_millis() as u64;
                 results.push(DsregcmdConnectivityResult {
                     endpoint: endpoint.to_string(),
                     reachable: true,
-                    status_code: Some(response.status()),
+                    status_code: Some(response.status().as_u16()),
                     latency_ms: Some(latency),
                     error_message: None,
                     timestamp,
                 });
             }
-            Err(ureq::Error::Status(code, _response)) => {
-                let latency = start.elapsed().as_millis() as u64;
-                // Non-2xx status but endpoint was reachable
-                results.push(DsregcmdConnectivityResult {
-                    endpoint: endpoint.to_string(),
-                    reachable: true,
-                    status_code: Some(code),
-                    latency_ms: Some(latency),
-                    error_message: None,
-                    timestamp,
-                });
-            }
-            Err(ureq::Error::Transport(transport)) => {
+            Err(e) => {
                 let latency = start.elapsed().as_millis() as u64;
                 results.push(DsregcmdConnectivityResult {
                     endpoint: endpoint.to_string(),
                     reachable: false,
                     status_code: None,
                     latency_ms: Some(latency),
-                    error_message: Some(transport.to_string()),
+                    error_message: Some(e.to_string()),
                     timestamp,
                 });
             }
