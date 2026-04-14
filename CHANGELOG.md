@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Added
+
+- **Auto-fit column widths** (PR #114, original PR #108 by @gepardjaro): Double-click a column resize handle to auto-fit that column to its widest content. Click the ↔ icon in the severity column header to auto-fit all visible columns at once. Uses a two-pass measurement algorithm (string length scan then canvas measurement of top candidates) for efficient sizing on large logs. Message column is excluded from auto-fit to prevent long content from pushing everything off-screen. Results are capped at 1200px and persist to preferences.
+
 ## [1.1.0] - 2026-04-05
 
 ### Added

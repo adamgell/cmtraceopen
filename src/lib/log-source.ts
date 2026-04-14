@@ -179,6 +179,7 @@ async function applyParseResultToStore(
   state.setByteOffset(result.byteOffset);
   const columns = getColumnsForParser(result.parserSelection.parser);
   state.setActiveColumns(columns);
+  useUiStore.getState().resetColumnWidths();
   state.selectEntry(null);
   state.setSourceStatus({
     kind: "loaded",
@@ -350,6 +351,7 @@ async function loadFolderProgressive(
     allResults.map((r) => r.parserSelection.parser)
   );
   state.setActiveColumns(aggregateColumns);
+  useUiStore.getState().resetColumnWidths();
   state.selectEntry(null);
   state.setFolderLoadProgress(null);
   state.setSourceStatus({
@@ -664,6 +666,7 @@ export async function switchToTab(
     logState.setTotalLines(cached.totalLines);
     logState.setByteOffset(cached.byteOffset);
     logState.setActiveColumns(cached.activeColumns);
+    useUiStore.getState().resetColumnWidths();
     logState.setAggregateFiles([]);
     logState.selectEntry(null);
     logState.setSourceStatus({
@@ -824,6 +827,7 @@ export async function loadFilesAsLogSource(paths: string[]): Promise<void> {
       results.map((r) => r.parserSelection.parser)
     );
     state.setActiveColumns(aggregateColumns);
+    useUiStore.getState().resetColumnWidths();
     state.selectEntry(null);
     state.setFolderLoadProgress(null);
 
