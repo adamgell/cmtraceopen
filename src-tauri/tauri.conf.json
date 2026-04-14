@@ -62,6 +62,13 @@
         ],
         "mimeType": "text/plain",
         "description": "Old Log File"
+      },
+      {
+        "ext": [
+          "cmtlog"
+        ],
+        "mimeType": "text/plain",
+        "description": "CMTrace Open Log File"
       }
     ],
     "windows": {
