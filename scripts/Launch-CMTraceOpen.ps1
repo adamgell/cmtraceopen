@@ -73,16 +73,6 @@ function Resolve-VsWherePath {
     throw 'Could not find vswhere.exe. Install Visual Studio Installer or add vswhere.exe to PATH.'
 }
 
-function Get-HostArchitecture {
-    $arch = $env:PROCESSOR_ARCHITECTURE
-    switch ($arch) {
-        'ARM64' { return 'arm64' }
-        'AMD64' { return 'amd64' }
-        'x86'   { return 'x86' }
-        default { return 'amd64' }
-    }
-}
-
 function Enable-VsDeveloperPowerShell {
     $vsWherePath = Resolve-VsWherePath
     $vsInstallPath = & $vsWherePath -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
@@ -96,13 +86,11 @@ function Enable-VsDeveloperPowerShell {
         throw "Could not find Microsoft.VisualStudio.DevShell.dll at '$devShellModule'."
     }
 
-    $targetArch = Get-HostArchitecture
-    # -HostArch only accepts x86, amd64, or Default — use amd64 for ARM64 hosts
-    $hostToolArch = if ($targetArch -eq 'arm64') { 'amd64' } else { $targetArch }
-    Write-Step "Target architecture: $targetArch (host tools: $hostToolArch)"
-
     Import-Module $devShellModule
-    Enter-VsDevShell -VsInstallPath $vsInstallPath -SkipAutomaticLocation -Arch $targetArch -HostArch $hostToolArch | Out-Null
+    # Use amd64 tools explicitly — works on both x64 (native) and ARM64
+    # (via emulation). The default without -Arch is x86 which causes
+    # linker architecture mismatches with Rust's target.
+    Enter-VsDevShell -VsInstallPath $vsInstallPath -SkipAutomaticLocation -Arch amd64 -HostArch amd64 | Out-Null
 
     return $vsInstallPath
 }
