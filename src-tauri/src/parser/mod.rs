@@ -1,5 +1,6 @@
 pub mod burn;
 pub mod cbs;
+pub mod cmtlog;
 pub mod panther;
 pub mod ccm;
 pub mod detect;
@@ -170,8 +171,7 @@ pub fn parse_lines_with_selection(
             (vec![], 0)
         }
         crate::models::log_entry::ParserImplementation::CmtLog => {
-            // CmtLog parser is not yet implemented; placeholder for Task 2.
-            (vec![], 0)
+            cmtlog::parse_lines(lines, file_path)
         }
         crate::models::log_entry::ParserImplementation::GenericTimestamped => match selection.parser {
             crate::models::log_entry::ParserKind::Cbs => cbs::parse_lines(lines, file_path),
