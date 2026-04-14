@@ -74,11 +74,11 @@ function Resolve-VsWherePath {
 }
 
 function Get-HostArchitecture {
-    $arch = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture
+    $arch = $env:PROCESSOR_ARCHITECTURE
     switch ($arch) {
-        'Arm64' { return 'arm64' }
-        'X64'   { return 'amd64' }
-        'X86'   { return 'x86' }
+        'ARM64' { return 'arm64' }
+        'AMD64' { return 'amd64' }
+        'x86'   { return 'x86' }
         default { return 'amd64' }
     }
 }
