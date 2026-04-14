@@ -20,13 +20,13 @@ $ErrorActionPreference = 'Stop'
 $script:CmtLogFilePath = $null
 
 # UTF-8 without BOM encoder - PS 5.1's -Encoding UTF8 adds a BOM on every
-# Add-Content/Out-File call, corrupting log lines for parsers that don't
-# expect embedded BOMs. Use this for all file writes.
+# Add-Content call, corrupting log lines for parsers that don't expect
+# embedded BOMs.
 $script:Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 
 #region Private helpers
 
-function Append-CmtLogLine {
+function Add-CmtLogLine {
     <#
     .SYNOPSIS
         Appends a line to a file using UTF-8 without BOM.
@@ -70,7 +70,8 @@ function Get-CmtLogTimestamp {
 
     # CMTrace time format: HH:mm:ss.fff+bias  (bias is positive = west of UTC,
     # matching the historical CMTrace convention)
-    $timeStr = '{0:HH:mm:ss.fff}+{1:000}' -f $now, $bias
+    # Use positive/negative/zero format sections so the sign is always correct
+    $timeStr = '{0:HH:mm:ss.fff}{1:+000;-000;+000}' -f $now, $bias
     $dateStr = '{0:MM-dd-yyyy}' -f $now
 
     return @{
@@ -130,7 +131,7 @@ function Get-CmtLogMode {
         $callerWhatIf = $false
     }
 
-    return ($callerWhatIf ? 'WhatIf' : 'Normal')
+    if ($callerWhatIf) { return 'WhatIf' } else { return 'Normal' }
 }
 
 function Get-PsVersionString {
@@ -197,6 +198,10 @@ function Start-CmtLog {
         Directory in which to create the log file.
         Defaults to $env:ProgramData\CMTraceOpen\Logs.
 
+    .PARAMETER FileName
+        Exact file name (not path) for the log file, e.g. 'MyScript.cmtlog'.
+        When provided, the timestamp suffix is omitted.
+
     .PARAMETER Mode
         Execution mode to embed in the header ("Normal" or "WhatIf").
         Auto-detected from $WhatIfPreference when omitted.
@@ -221,6 +226,9 @@ function Start-CmtLog {
         [string]$OutputPath = '',
 
         [Parameter()]
+        [string]$FileName = '',
+
+        [Parameter()]
         [ValidateSet('Normal', 'WhatIf')]
         [string]$Mode = ''
     )
@@ -235,12 +243,17 @@ function Start-CmtLog {
         $null = New-Item -ItemType Directory -Path $OutputPath -Force
     }
 
-    # Build safe file name: {ScriptName}_{yyyyMMdd-HHmmss}.cmtlog
-    # Strip any path separators or characters unsafe for file names
-    $safeName = [System.IO.Path]::GetFileNameWithoutExtension($ScriptName) -replace '[\\/:*?"<>|]', '_'
-    $timestamp = [datetime]::Now.ToString('yyyyMMdd-HHmmss')
-    $fileName  = '{0}_{1}.cmtlog' -f $safeName, $timestamp
-    $filePath  = Join-Path $OutputPath $fileName
+    # Build safe file name: {ScriptName}_{yyyyMMdd-HHmmss}.cmtlog or use -FileName
+    if (-not [string]::IsNullOrWhiteSpace($FileName)) {
+        $fileName = $FileName
+    }
+    else {
+        # Strip any path separators or characters unsafe for file names
+        $safeName = [System.IO.Path]::GetFileNameWithoutExtension($ScriptName) -replace '[\\/:*?"<>|]', '_'
+        $timestamp = [datetime]::Now.ToString('yyyyMMdd-HHmmss')
+        $fileName = '{0}_{1}.cmtlog' -f $safeName, $timestamp
+    }
+    $filePath = Join-Path $OutputPath $fileName
 
     # Resolve mode
     if ([string]::IsNullOrWhiteSpace($Mode)) {
@@ -282,7 +295,7 @@ function Write-LogHeader {
     .EXAMPLE
         Write-LogHeader -ScriptName 'Deploy-App.ps1' -Version '3.0.0'
     #>
-    [CmdletBinding(SupportsShouldProcess)]
+    [CmdletBinding()]
     param(
         [Parameter(Mandatory)]
         [ValidateNotNullOrEmpty()]
@@ -306,14 +319,14 @@ function Write-LogHeader {
         $Mode = if ($WhatIfPreference) { 'WhatIf' } else { 'Normal' }
     }
 
-    $ts     = Get-CmtLogTimestamp
-    $runId  = New-CmtLogRunId
-    $psVer  = Get-PsVersionString
+    $ts = Get-CmtLogTimestamp
+    $runId = New-CmtLogRunId
+    $psVer = Get-PsVersionString
 
     $line = '<![LOG[Script started: {0} v{1}]LOG]!><time="{2}" date="{3}" component="__HEADER__" context="" type="1" thread="0" file="" script="{0}" version="{1}" runid="{4}" mode="{5}" ps_version="{6}">' -f `
         $ScriptName, $Version, $ts.Time, $ts.Date, $runId, $Mode, $psVer
 
-    Append-CmtLogLine -Path $resolvedFile -Line $line
+    Add-CmtLogLine -Path $resolvedFile -Line $line
 }
 
 function Write-LogEntry {
@@ -352,7 +365,7 @@ function Write-LogEntry {
     .EXAMPLE
         Write-LogEntry -Value 'Policy file found' -Severity '1' -Section 'detection' -Tag 'phase:scan','result:ok'
     #>
-    [CmdletBinding(SupportsShouldProcess)]
+    [CmdletBinding()]
     param(
         [Parameter(Mandatory)]
         [ValidateNotNullOrEmpty()]
@@ -382,9 +395,9 @@ function Write-LogEntry {
     )
 
     $resolvedFile = Resolve-CmtLogFile -FileName $FileName
-    $ts           = Get-CmtLogTimestamp
-    $context      = Get-CmtLogContext
-    $thread       = $PID
+    $ts = Get-CmtLogTimestamp
+    $context = Get-CmtLogContext
+    $thread = $PID
 
     # Build base line (no closing > yet)
     $base = '<![LOG[{0}]LOG]!><time="{1}" date="{2}" component="{3}" context="{4}" type="{5}" thread="{6}" file=""' -f `
@@ -415,7 +428,7 @@ function Write-LogEntry {
     $null = $extended.Append('>')
     $line = $extended.ToString()
 
-    Append-CmtLogLine -Path $resolvedFile -Line $line
+    Add-CmtLogLine -Path $resolvedFile -Line $line
 }
 
 function Write-LogSection {
@@ -440,7 +453,7 @@ function Write-LogSection {
     .EXAMPLE
         Write-LogSection -Name 'Detection Phase' -Color '#5b9aff'
     #>
-    [CmdletBinding(SupportsShouldProcess)]
+    [CmdletBinding()]
     param(
         [Parameter(Mandatory)]
         [ValidateNotNullOrEmpty()]
@@ -454,7 +467,7 @@ function Write-LogSection {
     )
 
     $resolvedFile = Resolve-CmtLogFile -FileName $FileName
-    $ts           = Get-CmtLogTimestamp
+    $ts = Get-CmtLogTimestamp
 
     $base = '<![LOG[{0}]LOG]!><time="{1}" date="{2}" component="__SECTION__" context="" type="1" thread="0" file=""' -f `
         $Name, $ts.Time, $ts.Date
@@ -466,7 +479,7 @@ function Write-LogSection {
         $line = '{0}>' -f $base
     }
 
-    Append-CmtLogLine -Path $resolvedFile -Line $line
+    Add-CmtLogLine -Path $resolvedFile -Line $line
 }
 
 function Write-LogIteration {
@@ -496,7 +509,7 @@ function Write-LogIteration {
     .EXAMPLE
         Write-LogIteration -Name 'WDAC policies' -Current 1 -Total 3 -Color '#a78bfa'
     #>
-    [CmdletBinding(SupportsShouldProcess)]
+    [CmdletBinding()]
     param(
         [Parameter(Mandatory)]
         [ValidateNotNullOrEmpty()]
@@ -517,8 +530,8 @@ function Write-LogIteration {
         [string]$FileName = ''
     )
 
-    $resolvedFile  = Resolve-CmtLogFile -FileName $FileName
-    $ts            = Get-CmtLogTimestamp
+    $resolvedFile = Resolve-CmtLogFile -FileName $FileName
+    $ts = Get-CmtLogTimestamp
     $iterationFrac = '{0}/{1}' -f $Current, $Total
 
     $base = '<![LOG[Loop Iteration {0} - {1}]LOG]!><time="{2}" date="{3}" component="__ITERATION__" context="" type="1" thread="0" file="" iteration="{0}"' -f `
@@ -531,7 +544,7 @@ function Write-LogIteration {
         $line = '{0}>' -f $base
     }
 
-    Append-CmtLogLine -Path $resolvedFile -Line $line
+    Add-CmtLogLine -Path $resolvedFile -Line $line
 }
 
 #endregion
