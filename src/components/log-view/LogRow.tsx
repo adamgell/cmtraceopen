@@ -10,6 +10,7 @@ interface LogRowProps {
   entry: LogEntry;
   rowDomId: string;
   isSelected: boolean;
+  isMultiSelected?: boolean;
   isFindMatch: boolean;
   visibleColumns: ColumnDefinition[];
   gridTemplateColumns: string;
@@ -18,7 +19,7 @@ interface LogRowProps {
   severityPalette: LogSeverityPalette;
   highlightText: string;
   highlightCaseSensitive: boolean;
-  onClick: (id: number) => void;
+  onClick: (id: number, event: React.MouseEvent) => void;
   onContextMenu: (entry: LogEntry, event: React.MouseEvent) => void;
   onErrorCodeClick?: (span: ErrorCodeSpan) => void;
   mergeFileColor?: string | null;
@@ -232,6 +233,7 @@ export const LogRow = memo(function LogRow({
   entry,
   rowDomId,
   isSelected,
+  isMultiSelected,
   isFindMatch,
   visibleColumns,
   gridTemplateColumns,
@@ -291,6 +293,9 @@ export const LogRow = memo(function LogRow({
     backgroundOverlays.push(`linear-gradient(${correlationColor}30, ${correlationColor}30)`);
   }
 
+  // Multi-select visual: subtle blue background when no marker tint is present
+  const showMultiSelectHighlight = isMultiSelected && !isSelected && !marker;
+
   return (
     <div
       id={rowDomId}
@@ -316,8 +321,24 @@ export const LogRow = memo(function LogRow({
           ? { backgroundImage: backgroundOverlays.join(", ") }
           : {}),
         ...(entry.whatif ? { opacity: 0.6 } : {}),
+        ...(showMultiSelectHighlight
+          ? {
+              outline: "1px solid rgba(59, 130, 246, 0.5)",
+              outlineOffset: -1,
+              backgroundImage: [
+                ...backgroundOverlays,
+                "linear-gradient(rgba(59, 130, 246, 0.08), rgba(59, 130, 246, 0.08))",
+              ].join(", "),
+            }
+          : {}),
+        ...(isMultiSelected && !isSelected && marker
+          ? {
+              outline: "1px solid rgba(59, 130, 246, 0.5)",
+              outlineOffset: -1,
+            }
+          : {}),
       }}
-      onClick={() => onClick(entry.id)}
+      onClick={(e) => onClick(entry.id, e)}
       onContextMenu={(e) => onContextMenu(entry, e)}
     >
       {/* Marker gutter */}

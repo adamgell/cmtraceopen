@@ -17,6 +17,7 @@ import { MergeLegendBar } from "./MergeLegendBar";
 import type { ErrorCodeSpan } from "../../types/log";
 import type { Marker } from "../../types/markers";
 import { useMarkerStore } from "../../stores/marker-store";
+import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { useContextMenu } from "../../hooks/use-context-menu";
 import { ArrowBidirectionalLeftRightRegular } from "@fluentui/react-icons";
 import {
@@ -234,6 +235,85 @@ export function LogListView() {
     },
     [activeFilePath, setMarkerCategory]
   );
+
+  // ── Multi-select state ─────────────────────────────────────────────
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const lastClickedIdRef = useRef<number | null>(null);
+
+  const handleRowClick = useCallback(
+    (id: number, event: React.MouseEvent) => {
+      const isMeta = event.metaKey || event.ctrlKey;
+      const isShift = event.shiftKey;
+
+      if (isMeta) {
+        // Ctrl/Cmd+Click: toggle additive
+        setSelectedIds((prev) => {
+          const next = new Set(prev);
+          if (next.has(id)) {
+            next.delete(id);
+          } else {
+            next.add(id);
+          }
+          return next;
+        });
+        lastClickedIdRef.current = id;
+      } else if (isShift && lastClickedIdRef.current !== null) {
+        // Shift+Click: range select
+        const lastIdx = displayEntries.findIndex(
+          (e) => e.id === lastClickedIdRef.current
+        );
+        const currentIdx = displayEntries.findIndex((e) => e.id === id);
+        if (lastIdx >= 0 && currentIdx >= 0) {
+          const start = Math.min(lastIdx, currentIdx);
+          const end = Math.max(lastIdx, currentIdx);
+          const rangeIds = new Set<number>();
+          for (let i = start; i <= end; i++) {
+            rangeIds.add(displayEntries[i].id);
+          }
+          setSelectedIds(rangeIds);
+        }
+      } else {
+        // Plain click: single select (clear others)
+        setSelectedIds(new Set([id]));
+        lastClickedIdRef.current = id;
+      }
+
+      // Always update the details pane via the store's single-selection
+      if (id !== selectedId) {
+        suppressScrollRef.current = true;
+      }
+      selectEntry(id);
+    },
+    [displayEntries, selectedId, selectEntry]
+  );
+
+  const handleCopySelected = useCallback(() => {
+    if (selectedIds.size === 0) return;
+    // Preserve display order
+    const messages = displayEntries
+      .filter((e) => selectedIds.has(e.id))
+      .map((e) => e.message);
+    writeText(messages.join("\n")).catch(console.error);
+  }, [selectedIds, displayEntries]);
+
+  const handleCopyByCategory = useCallback(
+    (categoryId: string) => {
+      const markerMap = fileMarkers;
+      const messages = displayEntries
+        .filter((e) => {
+          const m = markerMap.get(e.id);
+          return m && m.category === categoryId;
+        })
+        .map((e) => e.message);
+      if (messages.length > 0) {
+        writeText(messages.join("\n")).catch(console.error);
+      }
+    },
+    [displayEntries, fileMarkers]
+  );
+
+  // Keep selectedIds unused variable from being stale; suppress ESLint warning
+  void handleCopyByCategory;
 
   const { showContextMenu } = useContextMenu();
 
@@ -519,12 +599,23 @@ export function LogListView() {
         onBlur={() => setHasKeyboardFocus(false)}
         onMouseDown={() => parentRef.current?.focus()}
         onKeyDown={(e) => {
+          const mod = e.ctrlKey || e.metaKey;
           // Ctrl+M / Cmd+M: toggle marker on selected row
-          if ((e.ctrlKey || e.metaKey) && e.key === "m") {
+          if (mod && e.key === "m") {
             e.preventDefault();
             if (selectedId !== null) {
               handleToggleMarker(selectedId);
             }
+          }
+          // Ctrl+A / Cmd+A: select all visible entries
+          if (mod && e.key === "a") {
+            e.preventDefault();
+            setSelectedIds(new Set(displayEntries.map((entry) => entry.id)));
+          }
+          // Ctrl+C / Cmd+C: copy selected entries
+          if (mod && e.key === "c") {
+            e.preventDefault();
+            handleCopySelected();
           }
         }}
         style={{
@@ -581,6 +672,7 @@ export function LogListView() {
                     entry={entry}
                     rowDomId={`log-list-row-${entry.id}`}
                     isSelected={entry.id === selectedId}
+                    isMultiSelected={selectedIds.has(entry.id)}
                     isFindMatch={findMatchSet.has(entry.id)}
                     visibleColumns={visibleColumns}
                     gridTemplateColumns={gridTemplateColumns}
@@ -589,7 +681,7 @@ export function LogListView() {
                     severityPalette={severityPalette}
                     highlightText={highlightText}
                     highlightCaseSensitive={highlightCaseSensitive}
-                    onClick={(id) => { if (id !== selectedId) { suppressScrollRef.current = true; } selectEntry(id); }}
+                    onClick={handleRowClick}
                     onContextMenu={showContextMenu}
                     onErrorCodeClick={handleErrorCodeClick}
                     mergeFileColor={sourceOpenMode === "merged" ? mergedTabState?.colorAssignments[entry.filePath] ?? null : null}
