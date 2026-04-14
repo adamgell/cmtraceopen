@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    CmtLog PowerShell module — write .cmtlog files from scripts.
+    CmtLog PowerShell module - write .cmtlog files from scripts.
 
 .DESCRIPTION
     Provides functions to create and write files in the CMTrace Open .cmtlog
@@ -19,7 +19,27 @@ $ErrorActionPreference = 'Stop'
 # Module-scoped default file path set by Start-CmtLog
 $script:CmtLogFilePath = $null
 
+# UTF-8 without BOM encoder - PS 5.1's -Encoding UTF8 adds a BOM on every
+# Add-Content/Out-File call, corrupting log lines for parsers that don't
+# expect embedded BOMs. Use this for all file writes.
+$script:Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+
 #region Private helpers
+
+function Append-CmtLogLine {
+    <#
+    .SYNOPSIS
+        Appends a line to a file using UTF-8 without BOM.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string]$Path,
+        [Parameter(Mandatory)]
+        [string]$Line
+    )
+    [System.IO.File]::AppendAllText($Path, $Line + [Environment]::NewLine, $script:Utf8NoBom)
+}
 
 function Get-CmtLogTimestamp {
     <#
@@ -44,7 +64,7 @@ function Get-CmtLogTimestamp {
         }
     }
     catch {
-        # Fall back to zero bias — non-critical
+        # Fall back to zero bias - non-critical
         $bias = 0
     }
 
@@ -182,7 +202,7 @@ function Start-CmtLog {
         Auto-detected from $WhatIfPreference when omitted.
 
     .OUTPUTS
-        String — full path to the created .cmtlog file.
+        String - full path to the created .cmtlog file.
 
     .EXAMPLE
         $log = Start-CmtLog -ScriptName 'Detect-WDAC.ps1' -Version '2.1.0'
@@ -293,7 +313,7 @@ function Write-LogHeader {
     $line = '<![LOG[Script started: {0} v{1}]LOG]!><time="{2}" date="{3}" component="__HEADER__" context="" type="1" thread="0" file="" script="{0}" version="{1}" runid="{4}" mode="{5}" ps_version="{6}">' -f `
         $ScriptName, $Version, $ts.Time, $ts.Date, $runId, $Mode, $psVer
 
-    Add-Content -LiteralPath $resolvedFile -Value $line -Encoding UTF8
+    Append-CmtLogLine -Path $resolvedFile -Line $line
 }
 
 function Write-LogEntry {
@@ -395,7 +415,7 @@ function Write-LogEntry {
     $null = $extended.Append('>')
     $line = $extended.ToString()
 
-    Add-Content -LiteralPath $resolvedFile -Value $line -Encoding UTF8
+    Append-CmtLogLine -Path $resolvedFile -Line $line
 }
 
 function Write-LogSection {
@@ -446,7 +466,7 @@ function Write-LogSection {
         $line = '{0}>' -f $base
     }
 
-    Add-Content -LiteralPath $resolvedFile -Value $line -Encoding UTF8
+    Append-CmtLogLine -Path $resolvedFile -Line $line
 }
 
 function Write-LogIteration {
@@ -511,7 +531,7 @@ function Write-LogIteration {
         $line = '{0}>' -f $base
     }
 
-    Add-Content -LiteralPath $resolvedFile -Value $line -Encoding UTF8
+    Append-CmtLogLine -Path $resolvedFile -Line $line
 }
 
 #endregion
