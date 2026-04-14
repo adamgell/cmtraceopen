@@ -237,9 +237,10 @@ mod wam {
 const GRAPH_BETA_BASE: &str = "https://graph.microsoft.com/beta";
 
 /// Helper: parse a ureq response body as JSON.
-fn read_json(response: ureq::Response) -> Result<serde_json::Value, AppError> {
+fn read_json(response: ureq::http::Response<ureq::Body>) -> Result<serde_json::Value, AppError> {
     let body = response
-        .into_string()
+        .into_body()
+        .read_to_string()
         .map_err(|e| AppError::Internal(format!("Failed to read response body: {e}")))?;
     serde_json::from_str(&body)
         .map_err(|e| AppError::Internal(format!("Failed to parse JSON: {e}")))
@@ -258,10 +259,11 @@ fn parse_app_json(item: &serde_json::Value) -> Option<GraphAppInfo> {
 }
 
 fn make_agent() -> ureq::Agent {
-    ureq::AgentBuilder::new()
-        .timeout_read(std::time::Duration::from_secs(30))
-        .timeout_write(std::time::Duration::from_secs(10))
+    ureq::Agent::config_builder()
+        .timeout_recv_body(Some(std::time::Duration::from_secs(30)))
+        .timeout_send_body(Some(std::time::Duration::from_secs(10)))
         .build()
+        .new_agent()
 }
 
 /// Authenticate with Graph API via WAM. Returns current auth status.
@@ -457,14 +459,13 @@ fn fetch_paginated(
     while let Some(url) = next_url.take() {
         let response = agent
             .get(&url)
-            .set("Authorization", &format!("Bearer {token}"))
-            .set("ConsistencyLevel", "eventual")
+            .header("Authorization", &format!("Bearer {token}"))
+            .header("ConsistencyLevel", "eventual")
             .call()
             .map_err(|e| {
-                if let ureq::Error::Status(code, resp) = e {
-                    let body = resp.into_string().unwrap_or_default();
-                    log::warn!("Graph API HTTP {code} for {url}: {body}");
-                    AppError::Internal(format!("Graph API HTTP {code}: {body}"))
+                if let ureq::Error::StatusCode(code) = &e {
+                    log::warn!("Graph API HTTP {code} for {url}: {e}");
+                    AppError::Internal(format!("Graph API HTTP {code}: {e}"))
                 } else {
                     AppError::Internal(format!("Graph API request failed: {e}"))
                 }
@@ -517,9 +518,9 @@ fn fetch_apps_batch(
     let agent = make_agent();
     let response = agent
         .post(&format!("{GRAPH_BETA_BASE}/$batch"))
-        .set("Authorization", &format!("Bearer {token}"))
-        .set("Content-Type", "application/json")
-        .send_string(&body_str)
+        .header("Authorization", &format!("Bearer {token}"))
+        .content_type("application/json")
+        .send(&body_str)
         .map_err(|e| AppError::Internal(format!("Graph batch request failed: {e}")))?;
 
     let body = read_json(response)?;
@@ -570,14 +571,14 @@ fn fetch_single_app(token: &str, guid: &str) -> Result<Option<GraphAppInfo>, App
 
     match agent
         .get(&url)
-        .set("Authorization", &format!("Bearer {token}"))
+        .header("Authorization", &format!("Bearer {token}"))
         .call()
     {
         Ok(response) => {
             let body = read_json(response)?;
             Ok(parse_app_json(&body))
         }
-        Err(ureq::Error::Status(404, _)) => Ok(None),
+        Err(ureq::Error::StatusCode(404)) => Ok(None),
         Err(e) => Err(AppError::Internal(format!("Graph request failed: {e}"))),
     }
 }
