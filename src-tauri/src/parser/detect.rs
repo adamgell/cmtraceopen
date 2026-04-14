@@ -14,7 +14,7 @@
 
 use super::{
     burn, cbs, dhcp, dism, iis_w3c, intune_macos, msi, panther, patchmypc_detection, psadt,
-    reporting_events,
+    reporting_events, secureboot_log,
     timestamped::{self, DateOrder},
 };
 use crate::models::log_entry::{
@@ -286,6 +286,7 @@ impl ResolvedParser {
             ParserImplementation::PatchMyPcDetection => LogFormat::Timestamped,
             ParserImplementation::PlainText => LogFormat::Plain,
             ParserImplementation::Registry => LogFormat::Plain,
+            ParserImplementation::SecureBootLog => LogFormat::Timestamped,
         }
     }
 
@@ -407,6 +408,7 @@ pub fn detect_parser(path: &str, content: &str) -> ResolvedParser {
     let mut iis_w3c_count = 0u32;
     let mut burn_count = 0u32;
     let mut patchmypc_detection_count = 0u32;
+    let mut secureboot_log_count = 0u32;
     let mut timestamp_count = 0;
     let mut has_day_first = false;
 
