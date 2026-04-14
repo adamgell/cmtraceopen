@@ -42,7 +42,17 @@ All notable changes to this project will be documented in this file.
 
 ### Security
 
-- **GitHub Actions hardening** (#87): Pinned all action versions to full SHA hashes, added explicit workflow permissions, and scoped secrets to release environment.
+- **GitHub Actions hardening** (#87): Comprehensive security hardening for Patch My PC distribution readiness:
+  - Pinned all GitHub Action versions to full commit SHAs across CI, release, and codesign workflows to prevent supply chain attacks via tag mutation.
+  - Added explicit `permissions` blocks to all workflows following least-privilege principle (`contents: read`, `actions: read`).
+  - Scoped `WINGET_PAT` secret to the release environment only.
+  - Added `SECURITY.md` vulnerability disclosure policy.
+  - Added `CODEOWNERS` for automatic PR review requests.
+  - Configured Dependabot for npm, Cargo, and GitHub Actions with grouped updates.
+- **Build provenance attestations**: Release and codesign workflows generate SLSA provenance attestations via `actions/attest-build-provenance` (upgraded to v4.1.0) for all release artifacts.
+- **SBOM generation**: Release workflow generates CycloneDX SBOMs for the Rust dependency tree via `cargo-cyclonedx` (pinned to v0.5.9 for deterministic output).
+- **Azure trusted signing**: Upgraded `azure/trusted-signing-action` from 0.5.11 to 1.2.0 for Windows code signing.
+- **Cargo security audit**: CI workflow runs `cargo audit` to check for known vulnerabilities in Rust dependencies.
 
 ## [1.1.0] - 2026-04-05
 
