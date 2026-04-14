@@ -197,7 +197,7 @@ function Install-WingetPackage {
         }
 
         if ($ec -eq -1978335189 -or $ec -eq -1978335135) {
-            Write-Step "Skipping $PackageId — already installed (detected by winget installer)."
+            Write-Step "Skipping $PackageId - already installed (detected by winget installer)."
         }
 
         # Invalidate the cache so subsequent checks see the newly installed package.
@@ -298,7 +298,7 @@ function Install-VisualStudioTools {
     $components = @($workload, $vcComponent, $sdk)
     if ($isArm64) {
         $components += $vcArm64Component
-        Write-Step 'ARM64 host detected — will include ARM64 C++ build tools.'
+        Write-Step 'ARM64 host detected - will include ARM64 C++ build tools.'
     }
 
     $overrideParts = @('--passive') + ($components | ForEach-Object { "--add $_" }) + @('--includeRecommended')
