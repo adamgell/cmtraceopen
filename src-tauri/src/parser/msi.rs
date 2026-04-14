@@ -727,6 +727,12 @@ fn make_entry(
                     dns_flags: None,
                     dns_event_id: None,
                     zone_name: None,
+                    entry_kind: None,
+                    whatif: None,
+                    section_name: None,
+                    section_color: None,
+                    iteration: None,
+                    tags: None,
     }
 }
 

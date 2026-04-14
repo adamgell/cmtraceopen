@@ -305,6 +305,8 @@ function getParserLabel(parser: ParserSelectionInfo["parser"]): string {
       return "DNS Debug Log";
     case "dnsAudit":
       return "DNS Audit (EVTX)";
+    case "cmtLog":
+      return "CmtLog";
   }
 }
 
@@ -344,6 +346,8 @@ function getImplementationLabel(
       return "DNS debug log parser";
     case "dnsAudit":
       return "DNS audit EVTX parser";
+    case "cmtLog":
+      return "CmtLog parser";
   }
 }
 

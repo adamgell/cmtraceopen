@@ -29,7 +29,7 @@ export const logWorkspace: WorkspaceDefinition = {
     knownSources: true,
   },
   fileFilters: [
-    { name: "Log Files", extensions: ["log"] },
+    { name: "Log Files", extensions: ["log", "cmtlog"] },
     { name: "Old Log Files", extensions: ["lo_"] },
     { name: "Registry Files", extensions: ["reg"] },
     { name: "All Files", extensions: ["*"] },

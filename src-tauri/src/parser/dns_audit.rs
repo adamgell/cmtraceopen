@@ -147,6 +147,12 @@ pub fn parse_evtx(path: &str) -> Result<ParseResult, String> {
             dns_flags: None,
             dns_event_id: Some(event_id),
             zone_name,
+            entry_kind: None,
+            whatif: None,
+            section_name: None,
+            section_color: None,
+            iteration: None,
+            tags: None,
         });
 
         id += 1;

@@ -75,6 +75,8 @@ function reconcileSelectionWithFilter(ids: Set<number> | null): void {
   logState.selectEntry(null);
 }
 
+export type WhatIfFilter = "all" | "whatif-only" | "real-only";
+
 interface FilterState {
   /** Active filter clauses */
   clauses: FilterClause[];
@@ -84,6 +86,8 @@ interface FilterState {
   isFiltering: boolean;
   /** Most recent filter application error */
   filterError: string | null;
+  /** WhatIf display filter */
+  whatIfFilter: WhatIfFilter;
 
   hasActiveFilter: () => boolean;
   addQuickFilter: (field: FilterField, value: string, op: FilterOp) => void;
@@ -91,6 +95,7 @@ interface FilterState {
   setFilteredIds: (ids: Set<number> | null) => void;
   setIsFiltering: (filtering: boolean) => void;
   setFilterError: (error: string | null) => void;
+  setWhatIfFilter: (filter: WhatIfFilter) => void;
   clearFilter: () => void;
 }
 
@@ -99,6 +104,7 @@ export const useFilterStore = create<FilterState>((set, get) => ({
   filteredIds: null,
   isFiltering: false,
   filterError: null,
+  whatIfFilter: "all",
 
   hasActiveFilter: () => get().clauses.length > 0,
   addQuickFilter: (field, value, op) =>
@@ -110,11 +116,13 @@ export const useFilterStore = create<FilterState>((set, get) => ({
   },
   setIsFiltering: (filtering) => set({ isFiltering: filtering }),
   setFilterError: (error) => set({ filterError: error }),
+  setWhatIfFilter: (filter) => set({ whatIfFilter: filter }),
   clearFilter: () =>
     set({
       clauses: [],
       filteredIds: null,
       isFiltering: false,
       filterError: null,
+      whatIfFilter: "all",
     }),
 }));

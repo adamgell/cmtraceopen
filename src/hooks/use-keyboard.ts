@@ -244,6 +244,13 @@ export function useKeyboard() {
       }
 
       if (ctrl && event.key.toLowerCase() === "c" && !isInput) {
+        // When the log list is focused, let LogListView's onKeyDown handle
+        // Ctrl+C so multi-select copy works. This global handler only fires
+        // as a fallback when the log list is NOT focused.
+        if (isLogListFocused()) {
+          return;
+        }
+
         event.preventDefault();
         const state = useLogStore.getState();
 

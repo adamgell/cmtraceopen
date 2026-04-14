@@ -131,6 +131,12 @@ fn malformed_entry(id: u64, line_number: u32, line: &str, file_path: &str) -> Lo
                     dns_flags: None,
                     dns_event_id: None,
                     zone_name: None,
+        entry_kind: None,
+        whatif: None,
+        section_name: None,
+        section_color: None,
+        iteration: None,
+        tags: None,
     }
 }
 
@@ -258,6 +264,12 @@ pub fn parse_lines(lines: &[&str], file_path: &str) -> (Vec<LogEntry>, u32) {
             dns_flags: None,
             dns_event_id: None,
             zone_name: None,
+            entry_kind: None,
+            whatif: None,
+            section_name: None,
+            section_color: None,
+            iteration: None,
+            tags: None,
         });
         id += 1;
     }

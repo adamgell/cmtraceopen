@@ -87,7 +87,17 @@ function Enable-VsDeveloperPowerShell {
     }
 
     Import-Module $devShellModule
-    Enter-VsDevShell -VsInstallPath $vsInstallPath -SkipAutomaticLocation | Out-Null
+    # Default -Arch is x86 which causes linker mismatches with Rust targets.
+    # On ARM64 hosts with ARM64 tools installed, use native arm64 compilation.
+    # Otherwise use amd64 which works on x64 (native) and ARM64 (emulated).
+    $arch = 'amd64'
+    if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') {
+        $arm64Libs = Join-Path $vsInstallPath 'VC\Tools\MSVC\*\lib\arm64'
+        if (Test-Path $arm64Libs) {
+            $arch = 'arm64'
+        }
+    }
+    Enter-VsDevShell -VsInstallPath $vsInstallPath -SkipAutomaticLocation -Arch $arch -HostArch amd64 | Out-Null
 
     return $vsInstallPath
 }
@@ -171,6 +181,9 @@ $nodeModulesPath = Join-Path $appRoot 'node_modules'
 
 Write-Step 'Ensuring Rust toolchain is available on PATH'
 Add-RustToolchainToPath
+
+# ring crate needs clang on ARM64 - add LLVM to PATH if installed
+Add-PathEntryIfExists -PathEntry 'C:\Program Files\LLVM\bin'
 
 Write-Step 'Entering Visual Studio Developer PowerShell'
 $vsInstallPath = Enable-VsDeveloperPowerShell

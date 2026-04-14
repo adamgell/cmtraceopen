@@ -12,8 +12,13 @@ import { useLogStore } from "../../stores/log-store";
 import { useUiStore } from "../../stores/ui-store";
 import { useFilterStore } from "../../stores/filter-store";
 import { LogRow } from "./LogRow";
+import { SectionDividerRow } from "./SectionDividerRow";
 import { MergeLegendBar } from "./MergeLegendBar";
 import type { ErrorCodeSpan } from "../../types/log";
+import type { Marker } from "../../types/markers";
+import { useMarkerStore } from "../../stores/marker-store";
+import { writeText } from "@tauri-apps/plugin-clipboard-manager";
+import { formatLogEntryTimestamp } from "../../lib/date-time-format";
 import { useContextMenu } from "../../hooks/use-context-menu";
 import { ArrowBidirectionalLeftRightRegular } from "@fluentui/react-icons";
 import {
@@ -51,6 +56,7 @@ export function LogListView() {
   const sourceOpenMode = useLogStore((s) => s.sourceOpenMode);
   const mergedTabState = useLogStore((s) => s.mergedTabState);
   const correlatedEntries = useLogStore((s) => s.correlatedEntries);
+  const openFilePath = useLogStore((s) => s.openFilePath);
 
   const logListFontSize = useUiStore((s) => s.logListFontSize);
   const themeId = useUiStore((s) => s.themeId);
@@ -160,6 +166,182 @@ export function LogListView() {
     [logListFontSize]
   );
 
+  // ── Section color auto-assignment ────────────────────────────────────
+  const SECTION_PALETTE = useMemo(() => [
+    "#3b82f6", "#a78bfa", "#f59e0b", "#10b981",
+    "#ef4444", "#ec4899", "#06b6d4", "#84cc16",
+  ], []);
+
+  const sectionColorMap = useMemo(() => {
+    const map = new Map<string, string>();
+    let paletteIndex = 0;
+    for (const entry of displayEntries) {
+      if (
+        (entry.entryKind === "Section" || entry.entryKind === "Iteration") &&
+        entry.sectionName &&
+        !map.has(entry.sectionName)
+      ) {
+        const color = entry.sectionColor ?? SECTION_PALETTE[paletteIndex % SECTION_PALETTE.length];
+        map.set(entry.sectionName, color);
+        if (!entry.sectionColor) paletteIndex++;
+      }
+    }
+    return map;
+  }, [displayEntries, SECTION_PALETTE]);
+
+  // ── Marker store wiring ───────────────────────────────────────────────
+  const isMerged = sourceOpenMode === "merged";
+  const markersByFile = useMarkerStore((s) => s.markersByFile);
+  const loadMarkers = useMarkerStore((s) => s.loadMarkers);
+  const saveMarkers = useMarkerStore((s) => s.saveMarkers);
+  const toggleMarker = useMarkerStore((s) => s.toggleMarker);
+  const setMarkerCategory = useMarkerStore((s) => s.setMarkerCategory);
+  const markerCategories = useMarkerStore((s) => s.categories);
+
+  // Use openFilePath if set, otherwise derive from the first entry's filePath
+  const activeFilePath = openFilePath ?? (entries.length > 0 ? entries[0].filePath : "");
+  const fileMarkers: Map<number, Marker> = useMemo(
+    () => isMerged ? new Map() : (markersByFile.get(activeFilePath) ?? new Map()),
+    [markersByFile, activeFilePath, isMerged]
+  );
+
+  // Load markers when tab changes (skip in merged mode)
+  useEffect(() => {
+    if (isMerged) return;
+    if (activeFilePath) {
+      loadMarkers(activeFilePath);
+    }
+  }, [activeFilePath, loadMarkers, isMerged]);
+
+  // Auto-save markers on changes with 1-second debounce.
+  // markersDirtyRef prevents save from firing after loadMarkers hydrates state.
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const markersDirtyRef = useRef(false);
+  useEffect(() => {
+    if (isMerged) return;
+    if (!activeFilePath) return;
+    if (!markersDirtyRef.current) return;
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(() => {
+      saveMarkers(activeFilePath);
+      markersDirtyRef.current = false;
+    }, 1000);
+    return () => {
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    };
+  }, [fileMarkers, activeFilePath, saveMarkers, isMerged]);
+
+  const handleToggleMarker = useCallback(
+    (lineId: number) => {
+      if (isMerged) return;
+      if (activeFilePath) {
+        markersDirtyRef.current = true;
+        toggleMarker(activeFilePath, lineId);
+      }
+    },
+    [activeFilePath, toggleMarker, isMerged]
+  );
+
+  const handleSetMarkerCategory = useCallback(
+    (lineId: number, category: string) => {
+      if (isMerged) return;
+      if (activeFilePath) {
+        markersDirtyRef.current = true;
+        setMarkerCategory(activeFilePath, lineId, category);
+      }
+    },
+    [activeFilePath, setMarkerCategory, isMerged]
+  );
+
+  // ── Multi-select state ─────────────────────────────────────────────
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const lastClickedIdRef = useRef<number | null>(null);
+  /** Tracks whether the last selection change came from a mouse interaction. */
+  const mouseSelectRef = useRef(false);
+
+  // Sync selectedIds when selectedId changes from keyboard navigation
+  useEffect(() => {
+    if (mouseSelectRef.current) {
+      mouseSelectRef.current = false;
+      return;
+    }
+    if (selectedId !== null) {
+      setSelectedIds(new Set([selectedId]));
+    }
+  }, [selectedId]);
+
+  const handleRowClick = useCallback(
+    (id: number, event: React.MouseEvent) => {
+      const isMeta = event.metaKey || event.ctrlKey;
+      const isShift = event.shiftKey;
+
+      if (isMeta) {
+        // Ctrl/Cmd+Click: toggle additive
+        setSelectedIds((prev) => {
+          const next = new Set(prev);
+          if (next.has(id)) {
+            next.delete(id);
+          } else {
+            next.add(id);
+          }
+          return next;
+        });
+        lastClickedIdRef.current = id;
+      } else if (isShift && lastClickedIdRef.current !== null) {
+        // Shift+Click: range select
+        const lastIdx = displayEntries.findIndex(
+          (e) => e.id === lastClickedIdRef.current
+        );
+        const currentIdx = displayEntries.findIndex((e) => e.id === id);
+        if (lastIdx >= 0 && currentIdx >= 0) {
+          const start = Math.min(lastIdx, currentIdx);
+          const end = Math.max(lastIdx, currentIdx);
+          const rangeIds = new Set<number>();
+          for (let i = start; i <= end; i++) {
+            rangeIds.add(displayEntries[i].id);
+          }
+          setSelectedIds(rangeIds);
+        }
+      } else {
+        // Plain click: single select (clear others)
+        setSelectedIds(new Set([id]));
+        lastClickedIdRef.current = id;
+      }
+
+      // Mark as mouse-driven so the selectedId sync effect skips
+      mouseSelectRef.current = true;
+
+      // Always update the details pane via the store's single-selection
+      if (id !== selectedId) {
+        suppressScrollRef.current = true;
+      }
+      selectEntry(id);
+    },
+    [displayEntries, selectedId, selectEntry]
+  );
+
+  const handleCopySelected = useCallback(() => {
+    if (selectedIds.size === 0) return;
+    const selected = displayEntries.filter((e) => selectedIds.has(e.id));
+    if (selected.length === 0) return;
+
+    let text: string;
+    if (selected.length === 1) {
+      // Single entry: tab-separated format matching legacy Ctrl+C behavior
+      const entry = selected[0];
+      text = [
+        entry.message,
+        entry.component ?? "",
+        formatLogEntryTimestamp(entry) ?? "",
+        entry.threadDisplay ?? "",
+      ].join("\t");
+    } else {
+      // Multi-select: plain messages, one per line
+      text = selected.map((e) => e.message).join("\n");
+    }
+    writeText(text).catch(console.error);
+  }, [selectedIds, displayEntries]);
+
   const { showContextMenu } = useContextMenu();
 
   const handleErrorCodeClick = useCallback((span: ErrorCodeSpan) => {
@@ -223,7 +405,6 @@ export function LogListView() {
 
   // ── Consume pending scroll target from deployment workspace ────────
   const pendingScrollTarget = useLogStore((s) => s.pendingScrollTarget);
-  const openFilePath = useLogStore((s) => s.openFilePath);
 
   useEffect(() => {
     if (!pendingScrollTarget) return;
@@ -390,7 +571,7 @@ export function LogListView() {
       <div
         style={{
           display: "grid",
-          gridTemplateColumns,
+          gridTemplateColumns: `20px ${gridTemplateColumns}`,
           backgroundColor: tokens.colorNeutralBackground4,
           borderBottom: `2px solid ${tokens.colorNeutralStroke2}`,
           fontSize: `${listMetrics.headerFontSize}px`,
@@ -403,6 +584,8 @@ export function LogListView() {
           paddingRight: `${scrollbarWidth}px`,
         }}
       >
+        {/* Gutter header spacer */}
+        <div style={{ width: 20 }} />
         {visibleColumns.map((col, i) => (
           <HeaderCell
             key={col.id}
@@ -442,6 +625,26 @@ export function LogListView() {
         onFocus={() => setHasKeyboardFocus(true)}
         onBlur={() => setHasKeyboardFocus(false)}
         onMouseDown={() => parentRef.current?.focus()}
+        onKeyDown={(e) => {
+          const mod = e.ctrlKey || e.metaKey;
+          // Ctrl+M / Cmd+M: toggle marker on selected row
+          if (mod && e.key === "m") {
+            e.preventDefault();
+            if (selectedId !== null) {
+              handleToggleMarker(selectedId);
+            }
+          }
+          // Ctrl+A / Cmd+A: select all visible entries
+          if (mod && e.key === "a") {
+            e.preventDefault();
+            setSelectedIds(new Set(displayEntries.map((entry) => entry.id)));
+          }
+          // Ctrl+C / Cmd+C: copy selected entries
+          if (mod && e.key === "c") {
+            e.preventDefault();
+            handleCopySelected();
+          }
+        }}
         style={{
           flex: 1,
           overflow: "auto",
@@ -459,6 +662,14 @@ export function LogListView() {
         >
           {virtualizer.getVirtualItems().map((virtualRow) => {
             const entry = displayEntries[virtualRow.index];
+            const isSectionDivider =
+              entry.entryKind === "Section" || entry.entryKind === "Iteration";
+
+            // Resolve section band color for regular rows
+            const sectionBandColor = !isSectionDivider && entry.sectionName
+              ? (entry.sectionColor ?? sectionColorMap.get(entry.sectionName) ?? null)
+              : null;
+
             return (
               <div
                 key={entry.id}
@@ -471,25 +682,45 @@ export function LogListView() {
                   transform: `translateY(${virtualRow.start}px)`,
                 }}
               >
-                <LogRow
-                  entry={entry}
-                  rowDomId={`log-list-row-${entry.id}`}
-                  isSelected={entry.id === selectedId}
-                  isFindMatch={findMatchSet.has(entry.id)}
-                  visibleColumns={visibleColumns}
-                  gridTemplateColumns={gridTemplateColumns}
-                  listFontSize={listMetrics.fontSize}
-                  rowLineHeight={listMetrics.rowLineHeight}
-                  severityPalette={severityPalette}
-                  highlightText={highlightText}
-                  highlightCaseSensitive={highlightCaseSensitive}
-                  onClick={(id) => { if (id !== selectedId) { suppressScrollRef.current = true; } selectEntry(id); }}
-                  onContextMenu={showContextMenu}
-                  onErrorCodeClick={handleErrorCodeClick}
-                  mergeFileColor={sourceOpenMode === "merged" ? mergedTabState?.colorAssignments[entry.filePath] ?? null : null}
-                  isCorrelated={sourceOpenMode === "merged" && correlatedIdSet.has(entry.id)}
-                  correlationColor={sourceOpenMode === "merged" ? mergedTabState?.colorAssignments[entry.filePath] ?? null : null}
-                />
+                {isSectionDivider ? (
+                  <SectionDividerRow
+                    entry={entry}
+                    resolvedColor={
+                      entry.sectionColor ??
+                      sectionColorMap.get(entry.sectionName ?? entry.message) ??
+                      "#3b82f6"
+                    }
+                    listFontSize={listMetrics.fontSize}
+                    rowLineHeight={listMetrics.rowLineHeight}
+                    onClick={(id) => { if (id !== selectedId) { suppressScrollRef.current = true; } selectEntry(id); }}
+                  />
+                ) : (
+                  <LogRow
+                    entry={entry}
+                    rowDomId={`log-list-row-${entry.id}`}
+                    isSelected={entry.id === selectedId}
+                    isMultiSelected={selectedIds.has(entry.id)}
+                    isFindMatch={findMatchSet.has(entry.id)}
+                    visibleColumns={visibleColumns}
+                    gridTemplateColumns={gridTemplateColumns}
+                    listFontSize={listMetrics.fontSize}
+                    rowLineHeight={listMetrics.rowLineHeight}
+                    severityPalette={severityPalette}
+                    highlightText={highlightText}
+                    highlightCaseSensitive={highlightCaseSensitive}
+                    onClick={handleRowClick}
+                    onContextMenu={showContextMenu}
+                    onErrorCodeClick={handleErrorCodeClick}
+                    mergeFileColor={sourceOpenMode === "merged" ? mergedTabState?.colorAssignments[entry.filePath] ?? null : null}
+                    isCorrelated={sourceOpenMode === "merged" && correlatedIdSet.has(entry.id)}
+                    correlationColor={sourceOpenMode === "merged" ? mergedTabState?.colorAssignments[entry.filePath] ?? null : null}
+                    sectionBandColor={sectionBandColor}
+                    marker={isMerged ? null : (fileMarkers.get(entry.id) ?? null)}
+                    onToggleMarker={handleToggleMarker}
+                    onSetMarkerCategory={handleSetMarkerCategory}
+                    markerCategories={isMerged ? [] : markerCategories}
+                  />
+                )}
               </div>
             );
           })}

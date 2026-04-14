@@ -16,7 +16,7 @@
 //! - Otherwise → Plain text
 
 use super::{
-    burn, cbs, dhcp, dism, dns_debug, iis_w3c, intune_macos, msi, panther,
+    burn, cbs, cmtlog, dhcp, dism, dns_debug, iis_w3c, intune_macos, msi, panther,
     patchmypc_detection, psadt, reporting_events, secureboot_log,
     timestamped::{self, DateOrder},
 };
@@ -262,6 +262,30 @@ impl ResolvedParser {
         )
     }
 
+    pub fn cmtlog() -> Self {
+        Self::new(
+            ParserKind::CmtLog,
+            ParserImplementation::CmtLog,
+            ParserProvenance::Dedicated,
+            ParseQuality::Structured,
+            RecordFraming::PhysicalLine,
+            DateOrder::MonthFirst,
+            None,
+        )
+    }
+
+    pub fn cmtlog_heuristic() -> Self {
+        Self::new(
+            ParserKind::CmtLog,
+            ParserImplementation::CmtLog,
+            ParserProvenance::Heuristic,
+            ParseQuality::Structured,
+            RecordFraming::PhysicalLine,
+            DateOrder::MonthFirst,
+            None,
+        )
+    }
+
     pub fn psadt_legacy() -> Self {
         Self::new(
             ParserKind::PsadtLegacy,
@@ -316,6 +340,7 @@ impl ResolvedParser {
             ParserImplementation::SecureBootLog => LogFormat::Timestamped,
             ParserImplementation::DnsDebug => LogFormat::DnsDebug,
             ParserImplementation::DnsAudit => LogFormat::DnsAudit,
+            ParserImplementation::CmtLog => LogFormat::CmtLog,
         }
     }
 
@@ -380,6 +405,11 @@ pub fn detect_parser(path: &str, content: &str) -> ResolvedParser {
 
     // Path hints must be computed before sample_lines so the sample limit can depend on them.
     let path_lower = path.to_ascii_lowercase();
+
+    // .cmtlog extension — unambiguous dedicated format, return immediately.
+    if path_lower.ends_with(".cmtlog") {
+        return ResolvedParser::cmtlog();
+    }
 
     let dns_debug_path_hint = path_lower.contains("dns")
         || path_lower.ends_with("dns.log")
@@ -449,15 +479,22 @@ pub fn detect_parser(path: &str, content: &str) -> ResolvedParser {
     let mut patchmypc_detection_count = 0u32;
     let mut secureboot_log_count = 0u32;
     let mut dns_debug_count = 0u32;
+    let mut cmtlog_count = 0u32;
     let mut timestamp_count = 0;
     let mut has_day_first = false;
 
     for line in &sample_lines {
         if line.contains("<![LOG[") && line.contains("]LOG]!>") {
             ccm_count += 1;
+            if cmtlog::matches_cmtlog_record(line) {
+                cmtlog_count += 1;
+            }
         } else if line.contains(" type=\"") && line.contains("component=\"") {
             // Fallback CCM detection from the binary's ` type="` check
             ccm_count += 1;
+            if cmtlog::matches_cmtlog_record(line) {
+                cmtlog_count += 1;
+            }
         } else if line.contains("$$<") {
             simple_count += 1;
         } else if reporting_events::matches_reporting_events_record(line.trim()) {
@@ -505,7 +542,10 @@ pub fn detect_parser(path: &str, content: &str) -> ResolvedParser {
         }
     }
 
-    if (secureboot_log_path_hint && secureboot_log_count >= 1) || secureboot_log_count >= 2 {
+    if cmtlog_count >= 1 && ccm_count > 0 {
+        // CmtLog markers found alongside CCM lines — prefer CmtLog with Heuristic provenance.
+        ResolvedParser::cmtlog_heuristic()
+    } else if (secureboot_log_path_hint && secureboot_log_count >= 1) || secureboot_log_count >= 2 {
         ResolvedParser::secureboot_log()
     } else if ime_path_hint && ccm_count > 0 {
         ResolvedParser::ime()

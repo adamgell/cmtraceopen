@@ -109,6 +109,9 @@ pub fn run() {
             #[cfg(feature = "deployment")]
             commands::deployment::analyze_deployment_folder,
             commands::fonts::list_system_fonts,
+            commands::markers::load_markers,
+            commands::markers::save_markers,
+            commands::markers::delete_markers,
             commands::reveal::reveal_in_file_manager,
             #[cfg(feature = "dsregcmd")]
             commands::dsregcmd::analyze_dsregcmd,

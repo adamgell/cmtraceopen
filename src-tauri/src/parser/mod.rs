@@ -1,5 +1,6 @@
 pub mod burn;
 pub mod cbs;
+pub mod cmtlog;
 pub mod panther;
 pub mod ccm;
 pub mod detect;
@@ -166,7 +167,11 @@ pub fn parse_lines_with_selection(
         }
         crate::models::log_entry::ParserImplementation::DnsAudit => {
             // EVTX files are parsed via the binary path in parse_file(), not the line-based pipeline.
+            // SecureBootLog has its own dedicated IPC command; not routed through this pipeline.
             (vec![], 0)
+        }
+        crate::models::log_entry::ParserImplementation::CmtLog => {
+            cmtlog::parse_lines(lines, file_path)
         }
         crate::models::log_entry::ParserImplementation::GenericTimestamped => match selection.parser {
             crate::models::log_entry::ParserKind::Cbs => cbs::parse_lines(lines, file_path),

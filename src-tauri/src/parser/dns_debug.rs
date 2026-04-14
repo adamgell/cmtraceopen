@@ -234,6 +234,12 @@ fn parse_packet_line(line: &str, file_path: &str, date_order: DateOrder) -> Opti
         dns_flags: Some(format!("0x{}", flags_hex)),
         dns_event_id: None,
         zone_name: None,
+        entry_kind: None,
+        whatif: None,
+        section_name: None,
+        section_color: None,
+        iteration: None,
+        tags: None,
     })
 }
 

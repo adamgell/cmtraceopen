@@ -20,6 +20,7 @@ pub mod app_config;
 #[cfg(target_os = "windows")]
 pub mod graph_api;
 pub mod known_sources;
+pub mod markers;
 #[cfg(feature = "macos-diag")]
 pub mod macos_diag;
 pub mod parsing;

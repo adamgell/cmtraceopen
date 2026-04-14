@@ -170,6 +170,12 @@ pub fn parse_lines(lines: &[&str], file_path: &str, date_order: DateOrder) -> (V
                     dns_flags: None,
                     dns_event_id: None,
                     zone_name: None,
+                    entry_kind: None,
+                    whatif: None,
+                    section_name: None,
+                    section_color: None,
+                    iteration: None,
+                    tags: None,
             });
             parse_errors += 1;
         }
@@ -278,6 +284,12 @@ fn try_iso(line: &str) -> Option<LogEntry> {
                     dns_flags: None,
                     dns_event_id: None,
                     zone_name: None,
+                    entry_kind: None,
+                    whatif: None,
+                    section_name: None,
+                    section_color: None,
+                    iteration: None,
+                    tags: None,
     })
 }
 
@@ -368,6 +380,12 @@ fn try_slash_date(line: &str, date_order: DateOrder) -> Option<LogEntry> {
                     dns_flags: None,
                     dns_event_id: None,
                     zone_name: None,
+                    entry_kind: None,
+                    whatif: None,
+                    section_name: None,
+                    section_color: None,
+                    iteration: None,
+                    tags: None,
     })
 }
 
@@ -445,6 +463,12 @@ fn try_syslog(line: &str) -> Option<LogEntry> {
                     dns_flags: None,
                     dns_event_id: None,
                     zone_name: None,
+                    entry_kind: None,
+                    whatif: None,
+                    section_name: None,
+                    section_color: None,
+                    iteration: None,
+                    tags: None,
     })
 }
 
@@ -512,6 +536,12 @@ fn try_time_only(line: &str) -> Option<LogEntry> {
                     dns_flags: None,
                     dns_event_id: None,
                     zone_name: None,
+                    entry_kind: None,
+                    whatif: None,
+                    section_name: None,
+                    section_color: None,
+                    iteration: None,
+                    tags: None,
     })
 }
 

@@ -9,6 +9,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { useFilterStore } from "../stores/filter-store";
 import { useLogStore } from "../stores/log-store";
 import { useUiStore } from "../stores/ui-store";
+import { useMarkerStore } from "../stores/marker-store";
 import type { LogEntry } from "../types/log";
 
 function truncate(text: string, max: number): string {
@@ -41,6 +42,12 @@ export function useContextMenu() {
 
       const errorCode = findErrorCode(entry);
       const messagePreview = truncate(entry.message, 40);
+
+      // Marker state — use entry.filePath as the canonical key
+      const markerState = useMarkerStore.getState();
+      const entryFilePath = entry.filePath;
+      const fileMarkers = markerState.markersByFile.get(entryFilePath);
+      const existingMarker = fileMarkers?.get(entry.id);
 
       const items: (MenuItem | PredefinedMenuItem)[] = [
         await MenuItem.new({
@@ -113,6 +120,67 @@ export function useContextMenu() {
       );
 
       items.push(await PredefinedMenuItem.new({ item: "Separator" }));
+
+      // ── Marker actions ──
+      // Always show marker items — actions use entry.filePath directly.
+      {
+        const categories = markerState.categories;
+        if (existingMarker) {
+          // Show current category and option to remove
+          const currentCat = categories.find((c) => c.id === existingMarker.category);
+          items.push(
+            await MenuItem.new({
+              id: "marker-remove",
+              text: `Remove Marker (${currentCat?.label ?? existingMarker.category})`,
+              action: () => {
+                const fp = entry.filePath;
+                if (!fp) return;
+                useMarkerStore.getState().toggleMarker(fp, entry.id);
+                useMarkerStore.getState().saveMarkers(fp);
+              },
+            })
+          );
+          // Show category options to change
+          for (const cat of categories) {
+            if (cat.id === existingMarker.category) continue;
+            const catId = cat.id;
+            items.push(
+              await MenuItem.new({
+                id: `marker-set-${catId}`,
+                text: `Change to ${cat.label}`,
+                action: () => {
+                  const fp = entry.filePath;
+                  if (!fp) return;
+                  useMarkerStore.getState().setMarkerCategory(fp, entry.id, catId);
+                  useMarkerStore.getState().saveMarkers(fp);
+                },
+              })
+            );
+          }
+        } else {
+          // Show options to mark with each category
+          for (const cat of categories) {
+            // Capture cat.id in a local const so the closure gets the right value
+            const catId = cat.id;
+            items.push(
+              await MenuItem.new({
+                id: `marker-add-${catId}`,
+                text: `Mark as ${cat.label}`,
+                action: () => {
+                  const fp = entry.filePath;
+                  if (!fp) return;
+                  const store = useMarkerStore.getState();
+                  store.setActiveCategory(catId);
+                  store.toggleMarker(fp, entry.id);
+                  store.saveMarkers(fp);
+                },
+              })
+            );
+          }
+        }
+
+        items.push(await PredefinedMenuItem.new({ item: "Separator" }));
+      }
 
       if (errorCode) {
         items.push(

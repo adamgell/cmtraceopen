@@ -9,6 +9,17 @@ pub enum Severity {
     Error,
 }
 
+/// Distinguishes the role of a CmtLog entry: regular log line, section divider, loop
+/// iteration marker, or file header.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub enum EntryKind {
+    #[default]
+    Log,
+    Section,
+    Iteration,
+    Header,
+}
+
 /// Which log format was detected/used to parse this entry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LogFormat {
@@ -24,6 +35,8 @@ pub enum LogFormat {
     DnsDebug,
     /// Windows DNS Server analytical/audit EVTX log
     DnsAudit,
+    /// CCM-style text lines with extended attributes (.cmtlog)
+    CmtLog,
 }
 
 /// High-level parser selection resolved by the backend.
@@ -49,6 +62,7 @@ pub enum ParserKind {
     SecureBootLog,
     DnsDebug,
     DnsAudit,
+    CmtLog,
 }
 
 /// Concrete parser implementation currently used by the backend.
@@ -71,6 +85,7 @@ pub enum ParserImplementation {
     SecureBootLog,
     DnsDebug,
     DnsAudit,
+    CmtLog,
 }
 
 /// How the backend arrived at the parser selection.
@@ -248,6 +263,25 @@ pub struct LogEntry {
     /// DNS zone name (DNS audit)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub zone_name: Option<String>,
+    // CmtLog extended fields
+    /// Entry role — distinguishes sections, iterations, and headers from normal log lines
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub entry_kind: Option<EntryKind>,
+    /// WhatIf/simulation flag (CmtLog)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub whatif: Option<bool>,
+    /// Section label for Section entries (CmtLog)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub section_name: Option<String>,
+    /// Optional color hint associated with a section (CmtLog)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub section_color: Option<String>,
+    /// Iteration identifier for Iteration entries (CmtLog)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub iteration: Option<String>,
+    /// Arbitrary tag list attached to a log entry (CmtLog)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tags: Option<Vec<String>>,
 }
 
 /// Result of parsing a complete log file.

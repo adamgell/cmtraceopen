@@ -113,6 +113,12 @@ pub fn parse_lines(lines: &[&str], file_path: &str) -> (Vec<LogEntry>, u32) {
                 dns_flags: None,
                 dns_event_id: None,
                 zone_name: None,
+                entry_kind: None,
+                whatif: None,
+                section_name: None,
+                section_color: None,
+                iteration: None,
+                tags: None,
             });
         } else {
             // Non-matching line — plain text fallback
@@ -159,6 +165,12 @@ pub fn parse_lines(lines: &[&str], file_path: &str) -> (Vec<LogEntry>, u32) {
                 dns_flags: None,
                 dns_event_id: None,
                 zone_name: None,
+                entry_kind: None,
+                whatif: None,
+                section_name: None,
+                section_color: None,
+                iteration: None,
+                tags: None,
             });
             parse_errors += 1;
         }
