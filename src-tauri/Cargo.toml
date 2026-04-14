@@ -66,6 +66,7 @@ windows = { version = "0.61", features = [
     "Foundation_Collections",
     "Win32_System_WinRT",
 ] }
+windows-future = "0.2"
 ureq = "2"
 
 [dev-dependencies]

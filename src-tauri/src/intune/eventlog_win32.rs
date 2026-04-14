@@ -172,7 +172,7 @@ mod windows_impl {
         if !cache.contains_key(provider_name) {
             let provider = HSTRING::from(provider_name);
             let metadata = unsafe {
-                EvtOpenPublisherMetadata(EVT_HANDLE::default(), &provider, PCWSTR::null(), 0, 0)
+                EvtOpenPublisherMetadata(None, &provider, PCWSTR::null(), 0, 0)
             }
             .ok()
             .map(OwnedEvtHandle::new);
@@ -189,8 +189,8 @@ mod windows_impl {
         loop {
             match unsafe {
                 EvtFormatMessage(
-                    metadata.raw(),
-                    event_handle,
+                    Some(metadata.raw()),
+                    Some(event_handle),
                     0,
                     None,
                     EvtFormatMessageEvent.0,

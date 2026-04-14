@@ -104,13 +104,13 @@ mod wam {
     use super::*;
 
     use windows::core::{factory, HSTRING};
-    use windows::Foundation::IAsyncOperation;
     use windows::Security::Authentication::Web::Core::{
         WebAuthenticationCoreManager, WebTokenRequest, WebTokenRequestResult,
         WebTokenRequestStatus,
     };
     use windows::Win32::Foundation::HWND;
     use windows::Win32::System::WinRT::IWebAuthenticationCoreManagerInterop;
+    use windows_future::IAsyncOperation;
 
     /// Acquire a token via WAM using the Win32 interop path.
     ///

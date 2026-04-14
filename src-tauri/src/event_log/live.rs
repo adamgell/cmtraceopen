@@ -272,7 +272,7 @@ fn format_event_message(
     if !cache.contains_key(provider_name) {
         let provider = HSTRING::from(provider_name);
         let metadata =
-            unsafe { EvtOpenPublisherMetadata(EVT_HANDLE::default(), &provider, PCWSTR::null(), 0, 0) }
+            unsafe { EvtOpenPublisherMetadata(None, &provider, PCWSTR::null(), 0, 0) }
                 .ok()
                 .map(OwnedEvtHandle::new);
         cache.insert(provider_name.to_string(), metadata);
@@ -288,8 +288,8 @@ fn format_event_message(
     loop {
         match unsafe {
             EvtFormatMessage(
-                metadata.raw(),
-                event_handle,
+                Some(metadata.raw()),
+                Some(event_handle),
                 0,
                 None,
                 EvtFormatMessageEvent.0,

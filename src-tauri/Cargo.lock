@@ -545,6 +545,7 @@ dependencies = [
  "tokio",
  "ureq",
  "windows",
+ "windows-future",
  "winreg",
 ]
 
