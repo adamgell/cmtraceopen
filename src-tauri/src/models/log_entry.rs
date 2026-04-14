@@ -11,18 +11,13 @@ pub enum Severity {
 
 /// Distinguishes the role of a CmtLog entry: regular log line, section divider, loop
 /// iteration marker, or file header.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub enum EntryKind {
+    #[default]
     Log,
     Section,
     Iteration,
     Header,
-}
-
-impl Default for EntryKind {
-    fn default() -> Self {
-        EntryKind::Log
-    }
 }
 
 /// Which log format was detected/used to parse this entry.
