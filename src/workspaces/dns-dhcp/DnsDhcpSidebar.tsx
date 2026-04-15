@@ -30,7 +30,7 @@ export function DnsDhcpSidebar() {
       : "Open DNS or DHCP logs to begin.";
 
   return (
-    <>
+    <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
       <SourceSummaryCard
         badge="dns-dhcp"
         title="DNS / DHCP"
@@ -63,56 +63,58 @@ export function DnsDhcpSidebar() {
       />
 
       {sources.length > 0 && (
-        <>
+        <div style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column" }}>
           <SectionHeader title="Sources" />
-          {sources.map((source) => (
-            <div
-              key={source.path}
-              style={{
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-                padding: "8px 12px",
-                borderBottom: `1px solid ${tokens.colorNeutralStroke3}`,
-                gap: "8px",
-              }}
-            >
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div
-                  style={{
-                    fontSize: "12px",
-                    fontWeight: 600,
-                    color: source.enabled
-                      ? tokens.colorNeutralForeground1
-                      : tokens.colorNeutralForeground4,
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                    whiteSpace: "nowrap",
-                  }}
-                  title={source.path}
-                >
-                  {source.fileName}
+          <div style={{ flex: 1, overflowY: "auto" }}>
+            {sources.map((source) => (
+              <div
+                key={source.path}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  padding: "8px 12px",
+                  borderBottom: `1px solid ${tokens.colorNeutralStroke3}`,
+                  gap: "8px",
+                }}
+              >
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div
+                    style={{
+                      fontSize: "12px",
+                      fontWeight: 600,
+                      color: source.enabled
+                        ? tokens.colorNeutralForeground1
+                        : tokens.colorNeutralForeground4,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }}
+                    title={source.path}
+                  >
+                    {source.fileName}
+                  </div>
+                  <div
+                    style={{
+                      fontSize: "11px",
+                      color: tokens.colorNeutralForeground3,
+                      marginTop: "2px",
+                    }}
+                  >
+                    {formatBadgeText(source.format)} &middot;{" "}
+                    {source.entryCount.toLocaleString()} entries
+                  </div>
                 </div>
-                <div
-                  style={{
-                    fontSize: "11px",
-                    color: tokens.colorNeutralForeground3,
-                    marginTop: "2px",
-                  }}
-                >
-                  {formatBadgeText(source.format)} &middot;{" "}
-                  {source.entryCount.toLocaleString()} entries
-                </div>
+                <Switch
+                  checked={source.enabled}
+                  onChange={() => toggleSource(source.path)}
+                  style={{ flexShrink: 0 }}
+                />
               </div>
-              <Switch
-                checked={source.enabled}
-                onChange={() => toggleSource(source.path)}
-                style={{ flexShrink: 0 }}
-              />
-            </div>
-          ))}
-        </>
+            ))}
+          </div>
+        </div>
       )}
-    </>
+    </div>
   );
 }

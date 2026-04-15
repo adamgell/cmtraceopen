@@ -22,4 +22,6 @@ export interface Device {
 
   dhcpEntries: LogEntry[];
   dnsEntries: LogEntry[];
+  /** All entries for this device (dns + dhcp + audit), sorted by timestamp. */
+  allEntries: LogEntry[];
 }

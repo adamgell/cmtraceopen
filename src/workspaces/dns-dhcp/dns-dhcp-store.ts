@@ -92,6 +92,10 @@ function buildDevices(entries: LogEntry[]): Device[] {
     if (!isFinite(firstSeen)) firstSeen = 0;
     if (!isFinite(lastSeen)) lastSeen = 0;
 
+    // Merge and sort all entries by timestamp for the detail view
+    const allForDevice = [...dnsEntries, ...dhcpEntries];
+    allForDevice.sort((a, b) => (a.timestamp ?? 0) - (b.timestamp ?? 0));
+
     devices.push({
       ip,
       hostname,
@@ -104,6 +108,7 @@ function buildDevices(entries: LogEntry[]): Device[] {
       lastSeen,
       dnsEntries,
       dhcpEntries,
+      allEntries: allForDevice,
     });
   }
 
@@ -129,6 +134,7 @@ interface DnsDhcpState {
   loadError: string | null;
 
   addSource: (path: string, fileName: string, format: LogFormat, entries: LogEntry[]) => void;
+  batchAddSources: (batch: Array<{ path: string; fileName: string; format: LogFormat; entries: LogEntry[] }>) => void;
   toggleSource: (path: string) => void;
   removeSource: (path: string) => void;
   selectDevice: (ip: string | null) => void;
@@ -194,6 +200,44 @@ export const useDnsDhcpStore = create<DnsDhcpState>((set, get) => ({
       allEntries: newAllEntries,
       devices: newDevices,
       selectedDeviceIp,
+    });
+  },
+
+  batchAddSources: (batch) => {
+    const state = get();
+    const existingPaths = new Set(state.sources.map((s) => s.path));
+
+    const newSources = [...state.sources];
+    const newEntries = [...state.allEntries];
+
+    for (const item of batch) {
+      if (existingPaths.has(item.path)) continue;
+      existingPaths.add(item.path);
+      newSources.push({
+        path: item.path,
+        fileName: item.fileName,
+        format: item.format,
+        entryCount: item.entries.length,
+        enabled: true,
+      });
+      newEntries.push(...item.entries);
+    }
+
+    if (newSources.length === state.sources.length) return; // nothing new
+
+    const newDevices = rebuildDevices(newSources, newEntries);
+    let selectedDeviceIp = state.selectedDeviceIp;
+    if (selectedDeviceIp === null && newDevices.length > 0) {
+      selectedDeviceIp = newDevices[0].ip;
+    }
+
+    set({
+      sources: newSources,
+      allEntries: newEntries,
+      devices: newDevices,
+      selectedDeviceIp,
+      isLoading: false,
+      loadError: null,
     });
   },
 

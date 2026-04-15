@@ -57,7 +57,7 @@ export function DeviceQueryTable({ device }: { device: Device }) {
   const parentRef = useRef<HTMLDivElement>(null);
 
   const filteredEntries = useMemo(() => {
-    let entries: LogEntry[] = device.dnsEntries;
+    let entries: LogEntry[] = device.allEntries;
 
     if (rcodeFilter !== "All") {
       entries = entries.filter((e) => {
@@ -77,7 +77,7 @@ export function DeviceQueryTable({ device }: { device: Device }) {
     }
 
     return entries;
-  }, [device.dnsEntries, rcodeFilter, qtypeFilter]);
+  }, [device.allEntries, rcodeFilter, qtypeFilter]);
 
   const virtualizer = useVirtualizer({
     count: filteredEntries.length,
@@ -223,9 +223,9 @@ export function DeviceQueryTable({ device }: { device: Device }) {
                     textOverflow: "ellipsis",
                     whiteSpace: "nowrap",
                   }}
-                  title={entry.queryName ?? undefined}
+                  title={entry.queryName ?? entry.message ?? undefined}
                 >
-                  {entry.queryName ?? "--"}
+                  {entry.queryName ?? entry.message ?? "--"}
                 </div>
                 <div
                   style={{

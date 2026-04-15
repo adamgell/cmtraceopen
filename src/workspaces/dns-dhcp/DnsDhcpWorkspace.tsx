@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, startTransition } from "react";
 import { Button, Spinner, ProgressBar, tokens } from "@fluentui/react-components";
 import { open, confirm } from "@tauri-apps/plugin-dialog";
 import { listen } from "@tauri-apps/api/event";
@@ -41,6 +41,7 @@ export function DnsDhcpWorkspace() {
   const isLoading = useDnsDhcpStore((s) => s.isLoading);
   const loadError = useDnsDhcpStore((s) => s.loadError);
   const addSource = useDnsDhcpStore((s) => s.addSource);
+  const batchAddSources = useDnsDhcpStore((s) => s.batchAddSources);
   const setLoading = useDnsDhcpStore((s) => s.setLoading);
   const setLoadError = useDnsDhcpStore((s) => s.setLoadError);
   const [localError, setLocalError] = useState<string | null>(null);
@@ -82,29 +83,31 @@ export function DnsDhcpWorkspace() {
       const result = await collectDnsDhcpFromDomain(requestId);
       setCollectionResult(result);
 
-      // Auto-load collected files into the workspace
+      // Parse all collected files, then load into workspace in one batch
       if (result.bundlePath) {
+        const batch: Array<{ path: string; fileName: string; format: import("../../types/log").LogFormat; entries: import("../../types/log").LogEntry[] }> = [];
+
         for (const server of result.servers) {
           if (server.status !== "collected" || server.filesCollected === 0) continue;
           const serverDir = `${result.bundlePath}\\${server.server}`;
 
-          // Try loading DNS debug log
+          // DNS debug log
           try {
             const dnsPath = `${serverDir}\\dns-debug.log`;
             const r = await openLogFile(dnsPath);
-            addSource(dnsPath, `${server.server}/dns-debug.log`, r.formatDetected, r.entries);
+            batch.push({ path: dnsPath, fileName: `${server.server}/dns-debug.log`, format: r.formatDetected, entries: r.entries });
           } catch { /* file may not exist */ }
 
-          // Try loading DNS audit EVTX
+          // DNS audit EVTX
           for (const evtxName of ["Microsoft-Windows-DNSServer%4Audit.evtx", "DNS Server.evtx"]) {
             try {
               const evtxPath = `${serverDir}\\${evtxName}`;
               const r = await openLogFile(evtxPath);
-              addSource(evtxPath, `${server.server}/${evtxName}`, r.formatDetected, r.entries);
+              batch.push({ path: evtxPath, fileName: `${server.server}/${evtxName}`, format: r.formatDetected, entries: r.entries });
             } catch { /* file may not exist */ }
           }
 
-          // Try loading DHCP logs
+          // DHCP logs
           try {
             const dhcpDir = `${serverDir}\\dhcp`;
             const listing = await listLogFolder(dhcpDir);
@@ -112,11 +115,18 @@ export function DnsDhcpWorkspace() {
               if (!entry.isDir && entry.name.toLowerCase().endsWith(".log")) {
                 try {
                   const r = await openLogFile(entry.path);
-                  addSource(entry.path, `${server.server}/dhcp/${entry.name}`, r.formatDetected, r.entries);
+                  batch.push({ path: entry.path, fileName: `${server.server}/dhcp/${entry.name}`, format: r.formatDetected, entries: r.entries });
                 } catch { /* skip unparseable */ }
               }
             }
           } catch { /* dhcp dir may not exist */ }
+        }
+
+        // Single batch update — devices rebuild only once
+        if (batch.length > 0) {
+          startTransition(() => {
+            batchAddSources(batch);
+          });
         }
       }
     } catch (err) {
