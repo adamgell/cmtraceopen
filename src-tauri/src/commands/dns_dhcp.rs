@@ -48,14 +48,14 @@ pub fn enable_dns_debug_logging() -> Result<String, String> {
 
 #[cfg(target_os = "windows")]
 fn check_dns_logging_status_windows() -> DnsLoggingStatus {
-    // Check DNS Server service
+    // Check DNS Server service via sc.exe (read-only)
     let dns_installed = std::process::Command::new("sc.exe")
         .args(["query", "DNS"])
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false);
 
-    // Check DHCP Server service
+    // Check DHCP Server service via sc.exe (read-only)
     let dhcp_installed = std::process::Command::new("sc.exe")
         .args(["query", "DHCPServer"])
         .output()
@@ -71,41 +71,66 @@ fn check_dns_logging_status_windows() -> DnsLoggingStatus {
         };
     }
 
-    // Query DNS debug logging config via PowerShell
-    let output = std::process::Command::new("powershell.exe")
+    // Read DNS logging config from the registry (read-only, no PowerShell cmdlets).
+    // HKLM\SYSTEM\CurrentControlSet\Services\DNS\Parameters
+    //   LogLevel (DWORD) — nonzero means debug logging is enabled
+    //   LogFilePath (REG_SZ) — path to the debug log file
+    let output = std::process::Command::new("reg.exe")
         .args([
-            "-NoProfile",
-            "-Command",
-            "try { $d = Get-DnsServerDiagnostics; $s = (Get-DnsServer).ServerSetting; \
-             Write-Output \"EnableLoggingToFile=$($d.EnableLoggingToFile)\"; \
-             Write-Output \"LogFilePath=$($s.LogFilePath)\" } \
-             catch { Write-Output 'ERROR' }",
+            "query",
+            r"HKLM\SYSTEM\CurrentControlSet\Services\DNS\Parameters",
+            "/v", "LogLevel",
         ])
         .output();
 
-    match output {
-        Ok(o) => {
+    let debug_enabled = match &output {
+        Ok(o) if o.status.success() => {
             let stdout = String::from_utf8_lossy(&o.stdout);
-            let debug_enabled = stdout.contains("EnableLoggingToFile=True");
-            let log_path = stdout
+            // Output format: "    LogLevel    REG_DWORD    0x0000ffff"
+            // Any nonzero value means logging is enabled
+            stdout
                 .lines()
-                .find(|l| l.starts_with("LogFilePath="))
-                .map(|l| l.trim_start_matches("LogFilePath=").trim().to_string())
-                .filter(|p| !p.is_empty());
-
-            DnsLoggingStatus {
-                dns_server_installed: true,
-                debug_logging_enabled: debug_enabled,
-                log_file_path: log_path,
-                dhcp_server_installed: dhcp_installed,
-            }
+                .find(|l| l.contains("LogLevel"))
+                .and_then(|l| {
+                    l.split_whitespace()
+                        .last()
+                        .and_then(|v| u64::from_str_radix(v.trim_start_matches("0x"), 16).ok())
+                })
+                .map(|v| v != 0)
+                .unwrap_or(false)
         }
-        Err(_) => DnsLoggingStatus {
-            dns_server_installed: true,
-            debug_logging_enabled: false,
-            log_file_path: None,
-            dhcp_server_installed: dhcp_installed,
-        },
+        _ => false,
+    };
+
+    let log_path_output = std::process::Command::new("reg.exe")
+        .args([
+            "query",
+            r"HKLM\SYSTEM\CurrentControlSet\Services\DNS\Parameters",
+            "/v", "LogFilePath",
+        ])
+        .output();
+
+    let log_path = match &log_path_output {
+        Ok(o) if o.status.success() => {
+            let stdout = String::from_utf8_lossy(&o.stdout);
+            stdout
+                .lines()
+                .find(|l| l.contains("LogFilePath"))
+                .and_then(|l| {
+                    // "    LogFilePath    REG_SZ    C:\Logs\dns.log"
+                    let parts: Vec<&str> = l.splitn(4, "    ").collect();
+                    parts.last().map(|s| s.trim().to_string())
+                })
+                .filter(|p| !p.is_empty())
+        }
+        _ => None,
+    };
+
+    DnsLoggingStatus {
+        dns_server_installed: true,
+        debug_logging_enabled: debug_enabled,
+        log_file_path: log_path,
+        dhcp_server_installed: dhcp_installed,
     }
 }
 
