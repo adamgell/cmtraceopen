@@ -21,7 +21,11 @@ jobs:
       - name: Install komac
         shell: pwsh
         run: |
-          Invoke-WebRequest -Uri "https://github.com/russellbanks/Komac/releases/latest/download/komac-setup-2.10.0-x86_64.exe" -OutFile komac-setup.exe
+          $release = Invoke-RestMethod -Uri "https://api.github.com/repos/russellbanks/Komac/releases/latest"
+          $asset = $release.assets | Where-Object { $_.name -like "komac-setup-*x86_64*.exe" } | Select-Object -First 1
+          if (-not $asset) { throw "Could not find Komac setup exe in latest release" }
+          Write-Host "Downloading $($asset.name) from $($release.tag_name)"
+          Invoke-WebRequest -Uri $asset.browser_download_url -OutFile komac-setup.exe
           Start-Process -FilePath .\komac-setup.exe -ArgumentList "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART" -Wait
           $env:PATH = "C:\Users\runneradmin\AppData\Local\Programs\Komac;$env:PATH"
           "C:\Users\runneradmin\AppData\Local\Programs\Komac" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
