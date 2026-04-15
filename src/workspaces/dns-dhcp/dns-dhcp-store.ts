@@ -161,8 +161,8 @@ export const useDnsDhcpStore = create<DnsDhcpState>((set, get) => ({
   devices: [],
   selectedDeviceIp: null,
   searchQuery: "",
-  rcodeFilter: "",
-  qtypeFilter: "",
+  rcodeFilter: "All",
+  qtypeFilter: "All",
   isLoading: false,
   loadError: null,
 
