@@ -37,6 +37,7 @@ import { getWorkspace } from "../../workspaces/registry";
 import { ThemePicker } from "./ThemePicker";
 import {
   getKnownSourceMetadataById,
+  loadFilesAsLogSource,
   loadLogSource,
   loadPathAsLogSource,
   refreshKnownLogSources,
@@ -377,7 +378,6 @@ export function useAppActions(): AppActionHandlers {
         activeWorkspace
       );
     } else {
-      const { loadFilesAsLogSource } = await import("../../lib/log-source");
       await loadFilesAsLogSource(paths);
     }
   }, [activeWorkspace, commandState.canOpenSources, openSourceForWorkspace]);
