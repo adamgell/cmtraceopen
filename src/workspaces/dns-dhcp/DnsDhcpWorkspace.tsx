@@ -11,6 +11,10 @@ const KNOWN_DNS_PATHS = [
   "C:\\WINDOWS\\System32\\dns\\dns.log",
   "C:\\Windows\\System32\\dns\\dns.log",
 ];
+const KNOWN_DNS_EVTX_PATHS = [
+  "C:\\Windows\\System32\\winevt\\Logs\\Microsoft-Windows-DNSServer%4Audit.evtx",
+  "C:\\Windows\\System32\\winevt\\Logs\\DNS Server.evtx",
+];
 const KNOWN_DHCP_DIRS = [
   "C:\\Windows\\System32\\dhcp",
   "C:\\WINDOWS\\system32\\dhcp",
@@ -44,6 +48,18 @@ export function DnsDhcpWorkspace() {
         if (kind === "file") {
           discovered.push(dnsPath);
           break; // Only need one — they're the same file with different casing
+        }
+      } catch {
+        // Path doesn't exist, continue
+      }
+    }
+
+    // Check DNS audit EVTX paths
+    for (const evtxPath of KNOWN_DNS_EVTX_PATHS) {
+      try {
+        const kind = await inspectPathKind(evtxPath);
+        if (kind === "file") {
+          discovered.push(evtxPath);
         }
       } catch {
         // Path doesn't exist, continue
