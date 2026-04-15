@@ -27,5 +27,8 @@ pub fn get_available_workspaces() -> Vec<&'static str> {
         workspaces.push("sysmon");
     }
 
+    // DNS/DHCP workspace uses existing parsers — no feature gate needed
+    workspaces.push("dns-dhcp");
+
     workspaces
 }
