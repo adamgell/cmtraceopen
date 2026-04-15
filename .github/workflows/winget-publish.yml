@@ -49,7 +49,7 @@ jobs:
       - name: Submit to winget-pkgs
         shell: pwsh
         env:
-          KOMAC_TOKEN: ${{ secrets.WINGET_PAT }}
+          GITHUB_TOKEN: ${{ secrets.WINGET_PAT }}
         run: |
           komac update AdamGell.CMTraceOpen `
             --version ${{ steps.release.outputs.version }} `
