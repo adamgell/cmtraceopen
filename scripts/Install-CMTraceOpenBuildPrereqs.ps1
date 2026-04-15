@@ -1,4 +1,4 @@
-[CmdletBinding(SupportsShouldProcess = $true)]
+﻿[CmdletBinding(SupportsShouldProcess = $true)]
 param(
     [ValidateSet('BuildTools', 'Community')]
     [string]$VisualStudioSku = 'BuildTools',
@@ -41,6 +41,12 @@ function Refresh-SessionPath {
     $cargoBin = Join-Path $env:USERPROFILE '.cargo\bin'
     if ((Test-Path $cargoBin) -and ($env:Path -notlike "*$cargoBin*")) {
         $env:Path = "$cargoBin;$env:Path"
+    }
+
+    # LLVM/clang is required by the ring crate on ARM64 Windows.
+    $llvmBin = Join-Path $env:ProgramFiles 'LLVM\bin'
+    if ((Test-Path $llvmBin) -and ($env:Path -notlike "*$llvmBin*")) {
+        $env:Path = "$llvmBin;$env:Path"
     }
 }
 
@@ -197,7 +203,7 @@ function Install-WingetPackage {
         }
 
         if ($ec -eq -1978335189 -or $ec -eq -1978335135) {
-            Write-Step "Skipping $PackageId — already installed (detected by winget installer)."
+            Write-Step "Skipping $PackageId - already installed (detected by winget installer)."
         }
 
         # Invalidate the cache so subsequent checks see the newly installed package.
@@ -461,6 +467,7 @@ Install-WingetPackage -PackageId 'OpenJS.NodeJS.LTS'
 Install-VisualStudioTools -Sku $VisualStudioSku
 Install-WingetPackage -PackageId 'Microsoft.EdgeWebView2Runtime'
 Install-WingetPackage -PackageId 'Rustlang.Rustup'
+Install-WingetPackage -PackageId 'LLVM.LLVM'
 
 if ($EnableVbScript) {
     Enable-VbScriptFeature

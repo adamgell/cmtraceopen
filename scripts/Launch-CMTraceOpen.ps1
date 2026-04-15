@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [ValidateSet('Dev', 'Build', 'BuildExeOnly', 'BuildAndRun')]
     [string]$Mode = 'Dev',
@@ -108,6 +108,11 @@ function Invoke-CheckedCommand {
     }
 }
 
+$script:BuildTargets = @(
+    'aarch64-pc-windows-msvc',
+    'x86_64-pc-windows-msvc'
+)
+
 function Get-ModeConfiguration {
     param(
         [Parameter(Mandatory = $true)]
@@ -120,25 +125,46 @@ function Get-ModeConfiguration {
             return @{
                 NpmScript             = 'app:dev'
                 RequiresBuiltArtifact = $false
+                MultiTarget           = $false
             }
         }
         'Build' {
             return @{
                 NpmScript             = 'app:build:release'
                 RequiresBuiltArtifact = $false
+                MultiTarget           = $false
             }
         }
         'BuildExeOnly' {
             return @{
                 NpmScript             = 'app:build:exe-only'
                 RequiresBuiltArtifact = $false
+                MultiTarget           = $true
             }
         }
         'BuildAndRun' {
             return @{
                 NpmScript             = 'app:build:release'
                 RequiresBuiltArtifact = $true
+                MultiTarget           = $false
             }
+        }
+    }
+}
+
+function Install-RustTargets {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string[]]$Targets
+    )
+
+    $installed = @(rustup.exe target list --installed)
+    foreach ($target in $Targets) {
+        if ($installed -contains $target) {
+            Write-Step "Rust target '$target' is already installed."
+        }
+        else {
+            Invoke-CheckedCommand -Command 'rustup.exe' -Arguments @('target', 'add', $target)
         }
     }
 }
@@ -169,8 +195,9 @@ $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $appRoot = Split-Path -Parent $scriptRoot
 $nodeModulesPath = Join-Path $appRoot 'node_modules'
 
-Write-Step 'Ensuring Rust toolchain is available on PATH'
+Write-Step 'Ensuring Rust toolchain and LLVM are available on PATH'
 Add-RustToolchainToPath
+Add-PathEntryIfExists -PathEntry (Join-Path $env:ProgramFiles 'LLVM\bin')
 
 Write-Step 'Entering Visual Studio Developer PowerShell'
 $vsInstallPath = Enable-VsDeveloperPowerShell
@@ -190,14 +217,28 @@ else {
 
 $modeConfiguration = Get-ModeConfiguration -Mode $Mode
 
-$npmArguments = @('run', $modeConfiguration.NpmScript)
-if ($OpenPath) {
-    $npmArguments += '--'
-    $npmArguments += '--'
-    $npmArguments += $OpenPath
-}
+if ($modeConfiguration.MultiTarget) {
+    Install-RustTargets -Targets $script:BuildTargets
 
-Invoke-CheckedCommand -Command 'npm.cmd' -Arguments $npmArguments
+    foreach ($target in $script:BuildTargets) {
+        Write-Step "Building for target: $target"
+        $npmArguments = @('run', $modeConfiguration.NpmScript, '--', '--target', $target)
+        if ($OpenPath) {
+            $npmArguments += '--'
+            $npmArguments += $OpenPath
+        }
+        Invoke-CheckedCommand -Command 'npm.cmd' -Arguments $npmArguments
+    }
+}
+else {
+    $npmArguments = @('run', $modeConfiguration.NpmScript)
+    if ($OpenPath) {
+        $npmArguments += '--'
+        $npmArguments += '--'
+        $npmArguments += $OpenPath
+    }
+    Invoke-CheckedCommand -Command 'npm.cmd' -Arguments $npmArguments
+}
 
 if ($modeConfiguration.RequiresBuiltArtifact) {
     $builtExecutable = Resolve-BuiltArtifactPath -AppRoot $appRoot
