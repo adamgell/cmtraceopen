@@ -64,6 +64,59 @@ export function DnsDhcpWorkspace() {
     return () => { void unlisten.then((fn) => fn()); };
   }, [collectionRequestId]);
 
+  const handleLoadCollectionBundle = async (bundlePath: string) => {
+    setLoading(true);
+    setLocalError(null);
+
+    try {
+      const listing = await listLogFolder(bundlePath);
+      const batch: Array<{ path: string; fileName: string; format: import("../../types/log").LogFormat; entries: import("../../types/log").LogEntry[] }> = [];
+
+      // Each subdirectory is a server
+      for (const serverEntry of listing.entries) {
+        if (!serverEntry.isDir) continue;
+        const serverName = serverEntry.name;
+        const serverListing = await listLogFolder(serverEntry.path);
+
+        for (const file of serverListing.entries) {
+          if (file.isDir) {
+            // Scan subdirs (e.g. dhcp/)
+            const subListing = await listLogFolder(file.path);
+            for (const subFile of subListing.entries) {
+              if (subFile.isDir) continue;
+              if (!subFile.name.toLowerCase().endsWith(".log")) continue;
+              try {
+                const r = await openLogFile(subFile.path);
+                batch.push({ path: subFile.path, fileName: `${serverName}/${file.name}/${subFile.name}`, format: r.formatDetected, entries: r.entries });
+              } catch { /* skip */ }
+            }
+          } else {
+            // Direct files (dns-debug.log, *.evtx)
+            const lower = file.name.toLowerCase();
+            if (lower.endsWith(".log") || lower.endsWith(".evtx")) {
+              try {
+                const r = await openLogFile(file.path);
+                batch.push({ path: file.path, fileName: `${serverName}/${file.name}`, format: r.formatDetected, entries: r.entries });
+              } catch { /* skip */ }
+            }
+          }
+        }
+      }
+
+      if (batch.length > 0) {
+        startTransition(() => {
+          batchAddSources(batch);
+        });
+      } else {
+        setLocalError("No parseable DNS or DHCP logs found in the collection folder.");
+      }
+    } catch (err) {
+      setLocalError(err instanceof Error ? err.message : String(err));
+    }
+
+    setLoading(false);
+  };
+
   const handleCollectFromDomain = async () => {
     const ok = await confirm(
       "This will discover all domain controllers and collect DNS/DHCP logs from each via admin shares (C$). Continue?",
@@ -379,22 +432,35 @@ export function DnsDhcpWorkspace() {
             {collectionResult.servers.map((s) => (
               <div key={s.server} style={{ marginTop: 4 }}>
                 <span style={{
-                  color: s.status === "collected"
+                  color: s.status === "collected" && s.errors.length === 0
                     ? tokens.colorPaletteGreenForeground1
-                    : tokens.colorPaletteRedForeground2,
+                    : s.status === "unreachable"
+                      ? tokens.colorPaletteRedForeground2
+                      : tokens.colorPaletteYellowForeground2,
                 }}>
-                  {s.status === "collected" ? "\u2713" : "\u2717"}
+                  {s.status === "collected" && s.errors.length === 0 ? "\u2713" : s.status === "unreachable" ? "\u2717" : "\u26A0"}
                 </span>
                 {" "}{s.server}: {s.filesCollected} files
                 {s.errors.length > 0 && (
-                  <span style={{ color: tokens.colorPaletteYellowForeground2, fontSize: 12 }}>
-                    {" "}({s.errors.length} error{s.errors.length !== 1 ? "s" : ""})
-                  </span>
+                  <div style={{ marginLeft: 20, fontSize: 12, color: tokens.colorPaletteRedForeground2 }}>
+                    {s.errors.map((err, idx) => (
+                      <div key={idx}>{err}</div>
+                    ))}
+                  </div>
                 )}
               </div>
             ))}
             <div style={{ fontSize: 12, marginTop: 8, color: tokens.colorNeutralForeground3 }}>
               {collectionResult.bundlePath}
+            </div>
+            <div style={{ marginTop: 12, display: "flex", gap: 8 }}>
+              <Button
+                size="small"
+                appearance="primary"
+                onClick={() => void handleLoadCollectionBundle(collectionResult.bundlePath)}
+              >
+                Open Collected Logs
+              </Button>
             </div>
           </div>
         )}
