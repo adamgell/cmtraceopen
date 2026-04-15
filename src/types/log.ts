@@ -52,7 +52,8 @@ export type WorkspaceId =
   | "macos-diag"
   | "deployment"
   | "event-log"
-  | "sysmon";
+  | "sysmon"
+  | "dns-dhcp";
 export type KnownSourceDefaultFileSelectionBehavior =
   | "none"
   | "preferFileName"
