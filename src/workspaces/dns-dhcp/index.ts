@@ -1,6 +1,9 @@
 // src/workspaces/dns-dhcp/index.ts
 import { startTransition, lazy } from "react";
 import type { WorkspaceDefinition } from "../types";
+import { useUiStore } from "../../stores/ui-store";
+import { getLogSourcePath } from "../../lib/log-source";
+import { openLogFile } from "../../lib/commands";
 
 export const dnsDhcpWorkspace: WorkspaceDefinition = {
   id: "dns-dhcp",
@@ -27,13 +30,7 @@ export const dnsDhcpWorkspace: WorkspaceDefinition = {
     placeholder: "Open DNS or DHCP logs...",
   },
   onOpenSource: async (source, trigger) => {
-    const [{ useUiStore }, { getLogSourcePath }, { openLogFile }, { useDnsDhcpStore }] =
-      await Promise.all([
-        import("../../stores/ui-store"),
-        import("../../lib/log-source"),
-        import("../../lib/commands"),
-        import("./dns-dhcp-store"),
-      ]);
+    const { useDnsDhcpStore } = await import("./dns-dhcp-store");
 
     useUiStore.getState().ensureWorkspaceVisible("dns-dhcp", trigger);
 
@@ -72,10 +69,7 @@ export const dnsDhcpWorkspace: WorkspaceDefinition = {
     }
   },
   onOpenPath: async (path) => {
-    const [{ openLogFile }, { useDnsDhcpStore }] = await Promise.all([
-      import("../../lib/commands"),
-      import("./dns-dhcp-store"),
-    ]);
+    const { useDnsDhcpStore } = await import("./dns-dhcp-store");
 
     const fileName = path.split(/[\\/]/).pop() ?? path;
 
