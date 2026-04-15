@@ -248,6 +248,21 @@ export async function getAvailableWorkspaces(): Promise<WorkspaceId[]> {
   return invokeCommand<WorkspaceId[]>("get_available_workspaces");
 }
 
+export interface DnsLoggingStatus {
+  dnsServerInstalled: boolean;
+  debugLoggingEnabled: boolean;
+  logFilePath: string | null;
+  dhcpServerInstalled: boolean;
+}
+
+export async function checkDnsLoggingStatus(): Promise<DnsLoggingStatus> {
+  return invokeCommand<DnsLoggingStatus>("check_dns_logging_status");
+}
+
+export async function enableDnsDebugLogging(): Promise<string> {
+  return invokeCommand<string>("enable_dns_debug_logging");
+}
+
 export async function getFileAssociationPromptStatus(): Promise<FileAssociationPromptStatus> {
   return invokeCommand<FileAssociationPromptStatus>("get_file_association_prompt_status");
 }

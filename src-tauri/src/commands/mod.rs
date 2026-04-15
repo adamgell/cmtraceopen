@@ -17,6 +17,7 @@ pub mod intune_bundle;
 #[cfg(feature = "intune-diagnostics")]
 pub mod intune_diagnostics;
 pub mod app_config;
+pub mod dns_dhcp;
 #[cfg(target_os = "windows")]
 pub mod graph_api;
 pub mod known_sources;
