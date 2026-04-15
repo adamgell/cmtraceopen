@@ -1,6 +1,7 @@
-import { useState } from "react";
-import { Button, Spinner, tokens } from "@fluentui/react-components";
-import { open } from "@tauri-apps/plugin-dialog";
+import { useState, useEffect } from "react";
+import { Button, Spinner, ProgressBar, tokens } from "@fluentui/react-components";
+import { open, confirm } from "@tauri-apps/plugin-dialog";
+import { listen } from "@tauri-apps/api/event";
 import { useDnsDhcpStore } from "./dns-dhcp-store";
 import {
   openLogFile,
@@ -8,7 +9,10 @@ import {
   listLogFolder,
   checkDnsLoggingStatus,
   enableDnsDebugLogging,
+  collectDnsDhcpFromDomain,
   type DnsLoggingStatus,
+  type DnsDhcpCollectionProgress,
+  type DnsDhcpCollectionResult,
 } from "../../lib/commands";
 import { DeviceList } from "./DeviceList";
 import { DeviceDetail } from "./DeviceDetail";
@@ -43,6 +47,85 @@ export function DnsDhcpWorkspace() {
   const [loggingStatus, setLoggingStatus] = useState<DnsLoggingStatus | null>(null);
   const [enabling, setEnabling] = useState(false);
   const [enableResult, setEnableResult] = useState<string | null>(null);
+  const [collecting, setCollecting] = useState(false);
+  const [collectionProgress, setCollectionProgress] = useState<DnsDhcpCollectionProgress | null>(null);
+  const [collectionResult, setCollectionResult] = useState<DnsDhcpCollectionResult | null>(null);
+  const [collectionRequestId, setCollectionRequestId] = useState<string | null>(null);
+
+  // Listen for collection progress events
+  useEffect(() => {
+    if (!collectionRequestId) return;
+    const unlisten = listen<DnsDhcpCollectionProgress>("dns-dhcp-collection-progress", (event) => {
+      if (event.payload.requestId === collectionRequestId) {
+        setCollectionProgress(event.payload);
+      }
+    });
+    return () => { void unlisten.then((fn) => fn()); };
+  }, [collectionRequestId]);
+
+  const handleCollectFromDomain = async () => {
+    const ok = await confirm(
+      "This will discover all domain controllers and collect DNS/DHCP logs from each via admin shares (C$). Continue?",
+      { title: "Collect DNS/DHCP Logs from Domain", kind: "info" }
+    );
+    if (!ok) return;
+
+    setCollecting(true);
+    setCollectionProgress(null);
+    setCollectionResult(null);
+    setLocalError(null);
+
+    const requestId = `dns-dhcp-collect-${Date.now()}`;
+    setCollectionRequestId(requestId);
+
+    try {
+      const result = await collectDnsDhcpFromDomain(requestId);
+      setCollectionResult(result);
+
+      // Auto-load collected files into the workspace
+      if (result.bundlePath) {
+        for (const server of result.servers) {
+          if (server.status !== "collected" || server.filesCollected === 0) continue;
+          const serverDir = `${result.bundlePath}\\${server.server}`;
+
+          // Try loading DNS debug log
+          try {
+            const dnsPath = `${serverDir}\\dns-debug.log`;
+            const r = await openLogFile(dnsPath);
+            addSource(dnsPath, `${server.server}/dns-debug.log`, r.formatDetected, r.entries);
+          } catch { /* file may not exist */ }
+
+          // Try loading DNS audit EVTX
+          for (const evtxName of ["Microsoft-Windows-DNSServer%4Audit.evtx", "DNS Server.evtx"]) {
+            try {
+              const evtxPath = `${serverDir}\\${evtxName}`;
+              const r = await openLogFile(evtxPath);
+              addSource(evtxPath, `${server.server}/${evtxName}`, r.formatDetected, r.entries);
+            } catch { /* file may not exist */ }
+          }
+
+          // Try loading DHCP logs
+          try {
+            const dhcpDir = `${serverDir}\\dhcp`;
+            const listing = await listLogFolder(dhcpDir);
+            for (const entry of listing.entries) {
+              if (!entry.isDir && entry.name.toLowerCase().endsWith(".log")) {
+                try {
+                  const r = await openLogFile(entry.path);
+                  addSource(entry.path, `${server.server}/dhcp/${entry.name}`, r.formatDetected, r.entries);
+                } catch { /* skip unparseable */ }
+              }
+            }
+          } catch { /* dhcp dir may not exist */ }
+        }
+      }
+    } catch (err) {
+      setLocalError(err instanceof Error ? err.message : String(err));
+    }
+
+    setCollecting(false);
+    setCollectionRequestId(null);
+  };
 
   const handleScanServer = async () => {
     setLocalError(null);
@@ -238,13 +321,73 @@ export function DnsDhcpWorkspace() {
         </div>
 
         <div style={{ display: "flex", gap: 12 }}>
-          <Button appearance="primary" onClick={() => void handleScanServer()}>
-            Scan Server Logs
+          <Button appearance="primary" onClick={() => void handleScanServer()} disabled={collecting}>
+            Scan This Server
           </Button>
-          <Button appearance="secondary" onClick={() => void handleOpenFiles()}>
+          <Button appearance="primary" onClick={() => void handleCollectFromDomain()} disabled={collecting}>
+            Collect from Domain
+          </Button>
+          <Button appearance="secondary" onClick={() => void handleOpenFiles()} disabled={collecting}>
             Open Files
           </Button>
         </div>
+
+        {/* Collection progress */}
+        {collecting && collectionProgress && (
+          <div style={{
+            maxWidth: 500, width: "100%", padding: "12px 16px",
+            background: tokens.colorNeutralBackground3,
+            borderRadius: 6, fontSize: 13,
+          }}>
+            <div style={{ marginBottom: 8, color: tokens.colorNeutralForeground1 }}>
+              {collectionProgress.message}
+            </div>
+            <ProgressBar
+              value={collectionProgress.completedServers / Math.max(collectionProgress.totalServers, 1)}
+              thickness="medium"
+            />
+            <div style={{ marginTop: 4, fontSize: 12, color: tokens.colorNeutralForeground3 }}>
+              {collectionProgress.completedServers} / {collectionProgress.totalServers} servers
+            </div>
+          </div>
+        )}
+
+        {/* Collection result */}
+        {collectionResult && !collecting && (
+          <div style={{
+            maxWidth: 500, width: "100%", padding: "12px 16px",
+            background: tokens.colorNeutralBackground3,
+            borderRadius: 6, fontSize: 13, lineHeight: 1.6,
+            color: tokens.colorNeutralForeground2,
+          }}>
+            <div style={{ fontWeight: 600, marginBottom: 8, color: tokens.colorNeutralForeground1 }}>
+              Collection Complete
+            </div>
+            <div>Files collected: {collectionResult.totalFiles}</div>
+            <div>Size: {(collectionResult.totalBytes / 1024 / 1024).toFixed(1)} MB</div>
+            <div>Duration: {(collectionResult.durationMs / 1000).toFixed(1)}s</div>
+            {collectionResult.servers.map((s) => (
+              <div key={s.server} style={{ marginTop: 4 }}>
+                <span style={{
+                  color: s.status === "collected"
+                    ? tokens.colorPaletteGreenForeground1
+                    : tokens.colorPaletteRedForeground2,
+                }}>
+                  {s.status === "collected" ? "\u2713" : "\u2717"}
+                </span>
+                {" "}{s.server}: {s.filesCollected} files
+                {s.errors.length > 0 && (
+                  <span style={{ color: tokens.colorPaletteYellowForeground2, fontSize: 12 }}>
+                    {" "}({s.errors.length} error{s.errors.length !== 1 ? "s" : ""})
+                  </span>
+                )}
+              </div>
+            ))}
+            <div style={{ fontSize: 12, marginTop: 8, color: tokens.colorNeutralForeground3 }}>
+              {collectionResult.bundlePath}
+            </div>
+          </div>
+        )}
 
         {/* Server logging status panel */}
         {loggingStatus && (

@@ -84,6 +84,7 @@ pub fn run() {
             commands::app_config::get_available_workspaces,
             commands::dns_dhcp::check_dns_logging_status,
             commands::dns_dhcp::enable_dns_debug_logging,
+            commands::dns_dhcp::collect_dns_dhcp_from_domain,
             commands::file_ops::open_log_file,
             commands::file_ops::parse_files_batch,
             commands::file_ops::open_log_folder_aggregate,
