@@ -7,6 +7,7 @@ import { StatusBar } from "./StatusBar";
 import { FileSidebar, FILE_SIDEBAR_RECOMMENDED_WIDTH } from "./FileSidebar";
 import { LogListView } from "../log-view/LogListView";
 import { DiffView } from "../log-view/DiffView";
+import { DnsWorkspaceBanner } from "../log-view/DnsWorkspaceBanner";
 import { InfoPane } from "../log-view/InfoPane";
 import { FindBar } from "./FindBar";
 import { FilterDialog } from "../dialogs/FilterDialog";
@@ -305,6 +306,7 @@ export function AppShell() {
 
       return (
         <>
+          <DnsWorkspaceBanner />
           <div
             style={{
               flex: 1,
