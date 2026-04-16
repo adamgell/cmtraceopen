@@ -319,7 +319,7 @@ fn collect_dns_dhcp_blocking(
             format!("{}\\dns\\DNSServer_debug.log", unc_base),
         ];
         for dns_path in &dns_paths {
-            if let Ok(meta) = fs::metadata(dns_path) {
+            if fs::metadata(dns_path).is_ok() {
                 let dest = server_dir.join("dns-debug.log");
                 match fs::copy(dns_path, &dest) {
                     Ok(bytes) => {
