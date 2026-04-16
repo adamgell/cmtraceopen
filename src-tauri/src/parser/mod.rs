@@ -74,10 +74,11 @@ pub fn parse_file(path: &str) -> Result<(ParseResult, ResolvedParser), String> {
                 let selection = ResolvedParser::dns_audit();
                 return Ok((result, selection));
             }
-            // Not a DNS EVTX — fall through to let other handlers deal with it.
+            // This parser path only handles DNS audit EVTX files; reject other EVTX
+            // files here with guidance to use a more general Event Log workflow.
             return Err(
                 "This EVTX file does not contain DNS audit events. \
-                 Try opening it in the Sysmon workspace instead."
+                 Open it in the Event Log workspace or Sysmon workspace instead."
                     .to_string(),
             );
         }

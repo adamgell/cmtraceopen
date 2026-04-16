@@ -9,7 +9,11 @@ import type { Device, SourceFile } from "./types";
 /** Strip a trailing port from an IP string (e.g. "192.168.2.9:54159" → "192.168.2.9").
  * Only strips when everything after the last colon is purely decimal digits,
  * so IPv6 addresses like "::1" are not mangled. */
+/** Strip a trailing port from an IPv4:port string (e.g. "192.168.2.9:54159" -> "192.168.2.9").
+ * Only strips when the address contains a dot (IPv4) and the suffix after the last colon
+ * is all digits. IPv6 addresses like "::1" or "fe80::1234" are left untouched. */
 function stripPort(ip: string): string {
+  if (!ip.includes(".")) return ip; // IPv6 or simple hostname — no stripping
   const lastColon = ip.lastIndexOf(":");
   if (lastColon === -1) return ip;
   const after = ip.slice(lastColon + 1);
@@ -289,8 +293,8 @@ export const useDnsDhcpStore = create<DnsDhcpState>((set, get) => ({
       devices: [],
       selectedDeviceIp: null,
       searchQuery: "",
-      rcodeFilter: "",
-      qtypeFilter: "",
+      rcodeFilter: "All",
+      qtypeFilter: "All",
       isLoading: false,
       loadError: null,
     }),
