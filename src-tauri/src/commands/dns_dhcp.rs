@@ -232,6 +232,17 @@ pub async fn collect_dns_dhcp_from_domain(
 }
 
 #[cfg(target_os = "windows")]
+fn is_local_server(server: &str) -> bool {
+    if let Ok(hostname) = std::env::var("COMPUTERNAME") {
+        // Compare the server name (which may be FQDN) against local hostname
+        let server_short = server.split('.').next().unwrap_or(server);
+        hostname.eq_ignore_ascii_case(server_short)
+    } else {
+        false
+    }
+}
+
+#[cfg(target_os = "windows")]
 fn collect_dns_dhcp_blocking(
     request_id: String,
     output_root: Option<String>,
@@ -324,26 +335,60 @@ fn collect_dns_dhcp_blocking(
             }
         }
 
-        // Collect DNS audit EVTX
-        let evtx_paths = [
-            format!("{}\\winevt\\Logs\\Microsoft-Windows-DNSServer%4Audit.evtx", unc_base),
-            format!("{}\\winevt\\Logs\\DNS Server.evtx", unc_base),
-        ];
-        for evtx_path in &evtx_paths {
-            if Path::new(evtx_path).exists() {
-                let file_name = Path::new(evtx_path)
-                    .file_name()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .to_string();
-                let dest = server_dir.join(&file_name);
-                match fs::copy(evtx_path, &dest) {
-                    Ok(bytes) => {
+        // Collect DNS audit EVTX via wevtutil (handles locked files)
+        let is_local = is_local_server(server);
+        let evtx_dest = server_dir.join("dns-audit.evtx");
+
+        if is_local {
+            // Local server: use wevtutil epl to export the live event log
+            let wevtutil_result = std::process::Command::new("wevtutil.exe")
+                .args([
+                    "epl",
+                    "Microsoft-Windows-DNSServer/Audit",
+                    &evtx_dest.to_string_lossy(),
+                    "/ow:true",
+                ])
+                .output();
+
+            match wevtutil_result {
+                Ok(o) if o.status.success() => {
+                    if let Ok(meta) = fs::metadata(&evtx_dest) {
                         result.files_collected += 1;
-                        result.bytes_copied += bytes;
+                        result.bytes_copied += meta.len();
                     }
-                    Err(e) => {
-                        result.errors.push(format!("Failed to copy {}: {e}", file_name));
+                }
+                Ok(o) => {
+                    let stderr = String::from_utf8_lossy(&o.stderr);
+                    let msg = stderr.trim();
+                    if !msg.is_empty() {
+                        result.errors.push(format!("wevtutil export DNS audit: {msg}"));
+                    }
+                }
+                Err(e) => {
+                    result.errors.push(format!("Failed to run wevtutil for DNS audit: {e}"));
+                }
+            }
+        } else {
+            // Remote server: try UNC copy (may fail if file is locked)
+            let evtx_paths = [
+                format!("{}\\winevt\\Logs\\Microsoft-Windows-DNSServer%4Audit.evtx", unc_base),
+                format!("{}\\winevt\\Logs\\DNS Server.evtx", unc_base),
+            ];
+            for evtx_path in &evtx_paths {
+                if Path::new(evtx_path).exists() {
+                    match fs::copy(evtx_path, &evtx_dest) {
+                        Ok(bytes) => {
+                            result.files_collected += 1;
+                            result.bytes_copied += bytes;
+                            break;
+                        }
+                        Err(e) => {
+                            let file_name = Path::new(evtx_path)
+                                .file_name()
+                                .unwrap_or_default()
+                                .to_string_lossy();
+                            result.errors.push(format!("Failed to copy {file_name}: {e}"));
+                        }
                     }
                 }
             }
