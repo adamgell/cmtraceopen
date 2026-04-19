@@ -158,6 +158,47 @@ pub struct IntuneEvent {
     pub parent_app_guid: Option<String>,
 }
 
+impl IntuneEvent {
+    /// Is this event in a failed state?
+    pub fn status_is_failed(&self) -> bool {
+        matches!(self.status, IntuneStatus::Failed)
+    }
+
+    /// Start time as epoch milliseconds, if known.
+    pub fn start_time_epoch_ms(&self) -> Option<i64> {
+        self.start_time_epoch
+    }
+
+    /// GUID anchoring this event (app/policy ID), if known.
+    pub fn anchor_guid(&self) -> Option<&str> {
+        self.guid.as_deref()
+    }
+
+    /// Human-readable display label (app/script name).
+    pub fn display_name(&self) -> Option<&str> {
+        if self.name.is_empty() {
+            None
+        } else {
+            Some(self.name.as_str())
+        }
+    }
+
+    /// Short label describing the kind of Intune operation this event represents.
+    pub fn event_kind_label(&self) -> Option<&str> {
+        Some(match self.event_type {
+            IntuneEventType::Win32App => "App Install",
+            IntuneEventType::WinGetApp => "WinGet Install",
+            IntuneEventType::PowerShellScript => "Script",
+            IntuneEventType::Remediation => "Remediation",
+            IntuneEventType::Esp => "ESP",
+            IntuneEventType::SyncSession => "Sync",
+            IntuneEventType::PolicyEvaluation => "Policy",
+            IntuneEventType::ContentDownload => "Download",
+            IntuneEventType::Other => "Operation",
+        })
+    }
+}
+
 /// Metadata for an app policy extracted from "Get policies" JSON payloads.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
