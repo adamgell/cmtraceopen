@@ -10,6 +10,7 @@ import { deploymentWorkspace } from "./deployment";
 import { eventLogWorkspace } from "./event-log";
 import { sysmonWorkspace } from "./sysmon";
 import { securebootWorkspace } from "./secureboot";
+import { timelineWorkspace } from "./timeline";
 
 const ALL_WORKSPACES: WorkspaceDefinition[] = [
   logWorkspace,
@@ -21,6 +22,7 @@ const ALL_WORKSPACES: WorkspaceDefinition[] = [
   eventLogWorkspace,
   sysmonWorkspace,
   securebootWorkspace,
+  timelineWorkspace,
 ];
 
 export const workspaceRegistry = new Map<WorkspaceId, WorkspaceDefinition>(

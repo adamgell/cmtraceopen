@@ -60,7 +60,8 @@ export type WorkspaceId =
   | "deployment"
   | "event-log"
   | "secureboot"
-  | "sysmon";
+  | "sysmon"
+  | "timeline";
 export type KnownSourceDefaultFileSelectionBehavior =
   | "none"
   | "preferFileName"
