@@ -1,5 +1,6 @@
 // src-tauri/src/timeline/models.rs
 
+#[derive(Clone, Debug)]
 pub struct EntryIndex {
     pub timestamp_ms: i64,
     pub severity: crate::models::log_entry::Severity,
@@ -21,6 +22,7 @@ pub enum SignalKind {
     ImeFailed,
 }
 
+#[derive(Clone, Debug)]
 pub struct Signal {
     pub source_idx: u16,
     pub entry_ref: u32,
