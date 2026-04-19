@@ -98,9 +98,10 @@ function navigateSelection(key: string): boolean {
  *   Shift+F3→ Find Previous
  *   Ctrl+U  → Pause/Resume
  *   Ctrl+H  → Toggle Details
- *   Ctrl+L  → Filter
+ *   Ctrl+L  → Error Lookup (matches legacy CMTrace)
+ *   Ctrl+Shift+L → Filter
  *   Ctrl+C  → Copy (tab-separated selected entry)
- *   Ctrl+E  → Error Lookup
+ *   Ctrl+E  → Error Lookup (alias)
  *   F5      → Refresh
  */
 export function useKeyboard() {
@@ -214,7 +215,11 @@ export function useKeyboard() {
 
       if (ctrl && event.key.toLowerCase() === "l") {
         event.preventDefault();
-        showFilterDialog();
+        if (event.shiftKey) {
+          showFilterDialog();
+        } else {
+          showErrorLookupDialog();
+        }
         return;
       }
 

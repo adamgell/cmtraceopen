@@ -67,13 +67,13 @@ pub fn build_app_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> 
     let quit = MenuItem::with_id(app, MENU_ID_FILE_QUIT, "Exit", true, None::<&str>)?;
     let known_sources = build_known_sources_submenu(app)?;
 
-    let find = MenuItem::with_id(app, MENU_ID_EDIT_FIND, "Find...", true, Some("Ctrl+F"))?;
+    let find = MenuItem::with_id(app, MENU_ID_EDIT_FIND, "Find...", true, Some("CmdOrCtrl+F"))?;
     let filter = MenuItem::with_id(
         app,
         MENU_ID_EDIT_FILTER,
         "Filter...",
         true,
-        Some("Ctrl+L"),
+        Some("CmdOrCtrl+Shift+L"),
     )?;
 
     let error_lookup = MenuItem::with_id(
@@ -81,7 +81,7 @@ pub fn build_app_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> 
         MENU_ID_TOOLS_ERROR_LOOKUP,
         "Lookup Error Code...",
         true,
-        None::<&str>,
+        Some("CmdOrCtrl+L"),
     )?;
     let bundle_summary = MenuItem::with_id(
         app,
