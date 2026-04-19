@@ -1,0 +1,5 @@
+<![LOG[Win32App discovery starting]LOG]!><time="09:42:01.103+000" date="04-19-2026" component="AgentExecutor" context="" type="1" thread="100" file="agent.cs:10">
+<![LOG[Downloading content for app {AB12CD34-56EF-7890-ABCD-EF0123456789}]LOG]!><time="09:42:01.402+000" date="04-19-2026" component="AgentExecutor" context="" type="1" thread="100" file="agent.cs:12">
+<![LOG[Content hash verify for {AB12CD34-56EF-7890-ABCD-EF0123456789}]LOG]!><time="09:42:03.118+000" date="04-19-2026" component="AgentExecutor" context="" type="1" thread="100" file="agent.cs:14">
+<![LOG[Detection script returned 0x87D1041C for {AB12CD34-56EF-7890-ABCD-EF0123456789}]LOG]!><time="09:42:05.770+000" date="04-19-2026" component="AgentExecutor" context="" type="3" thread="100" file="agent.cs:18">
+<![LOG[Install failed for app {AB12CD34-56EF-7890-ABCD-EF0123456789}]LOG]!><time="09:42:05.812+000" date="04-19-2026" component="AgentExecutor" context="" type="3" thread="100" file="agent.cs:19">
