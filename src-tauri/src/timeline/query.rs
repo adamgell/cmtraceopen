@@ -135,6 +135,67 @@ pub fn query_timeline_entries(
     out
 }
 
+pub fn query_lane_buckets(
+    timeline: &Timeline,
+    bucket_count: u32,
+    range_ms: Option<(i64, i64)>,
+) -> Vec<LaneBucket> {
+    let (lo, hi) = range_ms.unwrap_or(timeline.bundle.time_range_ms);
+    let span = (hi - lo).max(1);
+    let bucket_count = bucket_count.max(1) as i64;
+    let step = ((span as f64) / (bucket_count as f64)).ceil() as i64;
+
+    let mut out: Vec<LaneBucket> = Vec::new();
+
+    for src in timeline.bundle.sources.iter() {
+        let mut buckets: Vec<(u32, u32, u32)> = vec![(0, 0, 0); bucket_count as usize];
+        if let Some(idx_vec) = timeline.indexes.get(&src.idx) {
+            for ei in idx_vec {
+                if ei.timestamp_ms < lo || ei.timestamp_ms > hi {
+                    continue;
+                }
+                let bi = (((ei.timestamp_ms - lo) / step).min(bucket_count - 1)) as usize;
+                buckets[bi].0 += 1;
+                match ei.severity {
+                    crate::models::log_entry::Severity::Error => buckets[bi].1 += 1,
+                    crate::models::log_entry::Severity::Warning => buckets[bi].2 += 1,
+                    _ => {}
+                }
+            }
+        }
+        if let Some(evs) = timeline.ime_events.get(&src.idx) {
+            for ev in evs {
+                if let Some(ts) = ev.start_time_epoch_ms() {
+                    if ts < lo || ts > hi {
+                        continue;
+                    }
+                    let bi = (((ts - lo) / step).min(bucket_count - 1)) as usize;
+                    buckets[bi].0 += 1;
+                    if ev.status_is_failed() {
+                        buckets[bi].1 += 1;
+                    }
+                }
+            }
+        }
+        for (i, (total, errs, warns)) in buckets.into_iter().enumerate() {
+            if total == 0 {
+                continue;
+            }
+            let start = lo + step * (i as i64);
+            let end = (start + step).min(hi);
+            out.push(LaneBucket {
+                source_idx: src.idx,
+                ts_start_ms: start,
+                ts_end_ms: end,
+                total_count: total,
+                error_count: errs,
+                warn_count: warns,
+            });
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests_mat {
     use super::*;
@@ -162,5 +223,95 @@ mod tests_mat {
         let raw = read_entry_raw(&p, 4).unwrap();
         let s = String::from_utf8_lossy(&raw);
         assert!(s.starts_with("defg"));
+    }
+}
+
+#[cfg(test)]
+mod tests_buckets {
+    use super::*;
+    use crate::models::log_entry::{ParserKind, Severity};
+
+    fn mk_source(idx: u16) -> TimelineSourceMeta {
+        TimelineSourceMeta {
+            idx,
+            kind: TimelineSourceKind::LogFile {
+                parser_kind: ParserKind::Plain,
+            },
+            path: format!("/tmp/src{idx}.log"),
+            display_name: format!("src{idx}"),
+            color: "#000".into(),
+            entry_count: 0,
+        }
+    }
+
+    fn mk_ei(ts: i64, sev: Severity, src: u16, line: u32) -> EntryIndex {
+        EntryIndex {
+            timestamp_ms: ts,
+            severity: sev,
+            source_idx: src,
+            byte_offset: 0,
+            line_number: line,
+            signal_flags: 0,
+        }
+    }
+
+    #[test]
+    fn buckets_cover_full_range_and_counts_match() {
+        let mut indexes = HashMap::new();
+        indexes.insert(
+            0u16,
+            vec![
+                mk_ei(100, Severity::Info, 0, 1),
+                mk_ei(500, Severity::Error, 0, 2),
+                mk_ei(900, Severity::Info, 0, 3),
+            ],
+        );
+        let tl = Timeline {
+            bundle: TimelineBundle {
+                id: "t".into(),
+                sources: vec![mk_source(0)],
+                time_range_ms: (100, 900),
+                total_entries: 3,
+                incidents: vec![],
+                denied_guids: vec![],
+                errors: vec![],
+                tunables: Default::default(),
+            },
+            indexes,
+            ime_events: HashMap::new(),
+            raw_signals: vec![],
+        };
+
+        let buckets = query_lane_buckets(&tl, 10, None);
+        let total: u32 = buckets.iter().map(|b| b.total_count).sum();
+        let errors: u32 = buckets.iter().map(|b| b.error_count).sum();
+        assert_eq!(total, 3);
+        assert_eq!(errors, 1);
+        // All buckets should belong to source 0.
+        assert!(buckets.iter().all(|b| b.source_idx == 0));
+    }
+
+    #[test]
+    fn empty_buckets_are_omitted() {
+        let mut indexes = HashMap::new();
+        indexes.insert(0u16, Vec::<EntryIndex>::new());
+        let tl = Timeline {
+            bundle: TimelineBundle {
+                id: "t".into(),
+                sources: vec![mk_source(0)],
+                time_range_ms: (0, 1000),
+                total_entries: 0,
+                incidents: vec![],
+                denied_guids: vec![],
+                errors: vec![],
+                tunables: Default::default(),
+            },
+            indexes,
+            ime_events: HashMap::new(),
+            raw_signals: vec![],
+        };
+
+        let buckets = query_lane_buckets(&tl, 10, None);
+        assert!(buckets.is_empty());
     }
 }
