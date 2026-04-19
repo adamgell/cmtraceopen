@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::intune::models::IntuneEvent;
 use crate::models::log_entry::Severity;
@@ -96,6 +96,113 @@ pub fn cluster_signals(
         }
     }
     out
+}
+
+pub struct QualifyInputs<'a> {
+    pub clusters: &'a [Cluster],
+    pub ime_events: &'a HashMap<u16, Vec<IntuneEvent>>,
+    pub materialize_msg: &'a dyn Fn(u16, u32) -> Option<String>,
+    pub denied_guids: &'a HashSet<String>,
+    pub min_source_count: u8,
+}
+
+pub fn qualify(inp: QualifyInputs<'_>) -> Vec<Incident> {
+    let mut out: Vec<Incident> = Vec::new();
+    let mut next_id: u32 = 1;
+
+    for c in inp.clusters {
+        let mut sources: HashSet<u16> = HashSet::new();
+        for s in &c.signals {
+            sources.insert(s.source_idx);
+        }
+        if (sources.len() as u8) < inp.min_source_count {
+            continue;
+        }
+
+        let anchor_sig = c.signals.iter().find(|s| s.kind == SignalKind::ImeFailed);
+        let (anchor_event_ref, anchor_guid) = match anchor_sig {
+            Some(a) => {
+                let ev = inp
+                    .ime_events
+                    .get(&a.source_idx)
+                    .and_then(|v| v.get(a.entry_ref as usize));
+                let g = ev
+                    .and_then(|e| e.anchor_guid())
+                    .and_then(crate::timeline::correlation::normalize_guid);
+                (
+                    Some((a.source_idx, a.entry_ref)),
+                    g.filter(|g| !inp.denied_guids.contains(g)),
+                )
+            }
+            None => (None, None),
+        };
+
+        let mut guid_match_count: u32 = 0;
+        let mut stamped_signals: Vec<Signal> = c.signals.clone();
+        if let Some(g) = &anchor_guid {
+            for s in stamped_signals.iter_mut() {
+                if Some(s.source_idx) == anchor_sig.map(|a| a.source_idx)
+                    && Some(s.entry_ref) == anchor_sig.map(|a| a.entry_ref)
+                {
+                    continue;
+                }
+                if let Some(msg) = (inp.materialize_msg)(s.source_idx, s.entry_ref) {
+                    let guids = crate::timeline::correlation::extract_guids(&msg);
+                    if guids.iter().any(|gm| gm == g) {
+                        s.correlation_id = Some(g.clone());
+                        guid_match_count += 1;
+                    }
+                }
+            }
+        }
+
+        let source_count = sources.len() as u8;
+        let confidence = score(source_count, stamped_signals.len() as u32, guid_match_count);
+        let summary = summarize(&stamped_signals, anchor_event_ref, inp.ime_events);
+
+        out.push(Incident {
+            id: next_id,
+            ts_start_ms: c.ts_start_ms,
+            ts_end_ms: c.ts_end_ms,
+            signal_count: stamped_signals.len() as u32,
+            source_count,
+            confidence,
+            anchor_event_ref,
+            anchor_guid,
+            summary,
+        });
+        next_id += 1;
+    }
+    out
+}
+
+fn score(source_count: u8, signal_count: u32, guid_match: u32) -> f32 {
+    let base: f32 = match source_count {
+        0..=1 => 0.0,
+        2 => 0.5,
+        3 => 0.75,
+        _ => 0.85,
+    };
+    let guid_boost = (guid_match.min(3) as f32) * 0.08;
+    let density_boost = ((signal_count.saturating_sub(3) as f32).min(10.0)) * 0.01;
+    (base + guid_boost + density_boost).min(1.0)
+}
+
+fn summarize(
+    signals: &[Signal],
+    anchor_ref: Option<(u16, u32)>,
+    ime_events: &HashMap<u16, Vec<IntuneEvent>>,
+) -> String {
+    if let Some((sidx, eref)) = anchor_ref {
+        if let Some(ev) = ime_events.get(&sidx).and_then(|v| v.get(eref as usize)) {
+            let name = ev.display_name().unwrap_or("(unknown)");
+            let kind = ev.event_kind_label().unwrap_or("Operation");
+            return format!("{} failed: {}", kind, name);
+        }
+    }
+    let errs = signals.len();
+    let srcs: HashSet<u16> = signals.iter().map(|s| s.source_idx).collect();
+    format!("{} signals across {} sources", errs, srcs.len())
 }
 
 #[cfg(test)]
@@ -226,5 +333,68 @@ mod tests_cluster {
         // Ensure the total number of signals is preserved.
         let total: usize = clusters.iter().map(|c| c.signals.len()).sum();
         assert_eq!(total, 3);
+    }
+}
+
+#[cfg(test)]
+mod tests_qualify {
+    use super::*;
+
+    fn sig(ts: i64, src: u16, entry_ref: u32, kind: SignalKind) -> Signal {
+        Signal {
+            source_idx: src,
+            entry_ref,
+            ts_ms: ts,
+            kind,
+            correlation_id: None,
+        }
+    }
+
+    fn noop_materialize(_s: u16, _r: u32) -> Option<String> {
+        None
+    }
+
+    #[test]
+    fn single_source_cluster_discarded() {
+        let cluster = Cluster {
+            ts_start_ms: 0,
+            ts_end_ms: 1_000,
+            signals: vec![
+                sig(0, 0, 1, SignalKind::ErrorSeverity),
+                sig(1_000, 0, 2, SignalKind::ErrorSeverity),
+            ],
+        };
+        let clusters = vec![cluster];
+        let incidents = qualify(QualifyInputs {
+            clusters: &clusters,
+            ime_events: &HashMap::new(),
+            materialize_msg: &noop_materialize,
+            denied_guids: &HashSet::new(),
+            min_source_count: 2,
+        });
+        assert!(incidents.is_empty());
+    }
+
+    #[test]
+    fn two_source_cluster_emits_incident() {
+        let cluster = Cluster {
+            ts_start_ms: 0,
+            ts_end_ms: 1_000,
+            signals: vec![
+                sig(0, 0, 1, SignalKind::ErrorSeverity),
+                sig(1_000, 1, 1, SignalKind::ErrorSeverity),
+            ],
+        };
+        let clusters = vec![cluster];
+        let incidents = qualify(QualifyInputs {
+            clusters: &clusters,
+            ime_events: &HashMap::new(),
+            materialize_msg: &noop_materialize,
+            denied_guids: &HashSet::new(),
+            min_source_count: 2,
+        });
+        assert_eq!(incidents.len(), 1);
+        assert_eq!(incidents[0].source_count, 2);
+        assert!((incidents[0].confidence - 0.5).abs() < 1e-4);
     }
 }
