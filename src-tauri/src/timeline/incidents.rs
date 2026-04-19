@@ -62,6 +62,42 @@ pub fn emit_signals(
     out
 }
 
+/// A raw cluster of signals. Not yet qualified/scored.
+#[derive(Debug, Clone)]
+pub struct Cluster {
+    pub signals: Vec<Signal>,
+    pub ts_start_ms: i64,
+    pub ts_end_ms: i64,
+}
+
+/// Cluster signals using a sliding window. Signals must be sorted by ts_ms.
+/// A new signal is added to the current cluster iff its ts_ms is within
+/// `window_ms` of the cluster's current end time AND its ts_ms - ts_start <= max_span_ms.
+pub fn cluster_signals(
+    signals: &[Signal],
+    window_ms: i64,
+    max_span_ms: i64,
+) -> Vec<Cluster> {
+    let mut out: Vec<Cluster> = Vec::new();
+    for s in signals {
+        match out.last_mut() {
+            Some(cur)
+                if s.ts_ms - cur.ts_end_ms <= window_ms
+                    && s.ts_ms - cur.ts_start_ms <= max_span_ms =>
+            {
+                cur.ts_end_ms = s.ts_ms;
+                cur.signals.push(s.clone());
+            }
+            _ => out.push(Cluster {
+                ts_start_ms: s.ts_ms,
+                ts_end_ms: s.ts_ms,
+                signals: vec![s.clone()],
+            }),
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests_emit {
     use super::*;
@@ -124,5 +160,71 @@ mod tests_emit {
         let sigs = emit_signals(&idx, &HashMap::new(), &[SignalKind::ErrorSeverity]);
         let ts: Vec<i64> = sigs.iter().map(|s| s.ts_ms).collect();
         assert_eq!(ts, vec![100, 200, 300]);
+    }
+}
+
+#[cfg(test)]
+mod tests_cluster {
+    use super::*;
+
+    fn sig(ts: i64, src: u16, entry_ref: u32) -> Signal {
+        Signal {
+            source_idx: src,
+            entry_ref,
+            ts_ms: ts,
+            kind: SignalKind::ErrorSeverity,
+            correlation_id: None,
+        }
+    }
+
+    #[test]
+    fn singleton_cluster() {
+        let sigs = vec![sig(100, 0, 1)];
+        let clusters = cluster_signals(&sigs, 5_000, 60_000);
+        assert_eq!(clusters.len(), 1);
+        assert_eq!(clusters[0].signals.len(), 1);
+        assert_eq!(clusters[0].ts_start_ms, 100);
+        assert_eq!(clusters[0].ts_end_ms, 100);
+    }
+
+    #[test]
+    fn window_coalesce() {
+        let sigs = vec![sig(100, 0, 1), sig(2_000, 1, 1), sig(4_000, 0, 2)];
+        let clusters = cluster_signals(&sigs, 5_000, 60_000);
+        assert_eq!(clusters.len(), 1);
+        assert_eq!(clusters[0].signals.len(), 3);
+        assert_eq!(clusters[0].ts_start_ms, 100);
+        assert_eq!(clusters[0].ts_end_ms, 4_000);
+    }
+
+    #[test]
+    fn gap_beyond_window_splits() {
+        let sigs = vec![sig(100, 0, 1), sig(10_000, 1, 1)];
+        let clusters = cluster_signals(&sigs, 5_000, 60_000);
+        assert_eq!(clusters.len(), 2);
+        assert_eq!(clusters[0].signals.len(), 1);
+        assert_eq!(clusters[1].signals.len(), 1);
+    }
+
+    #[test]
+    fn transitive_merge_via_sliding_end() {
+        // Each signal is within window of the previous end, but the first and
+        // last are > window apart. Sliding should still merge them.
+        let sigs = vec![sig(0, 0, 1), sig(4_000, 1, 1), sig(8_000, 0, 2)];
+        let clusters = cluster_signals(&sigs, 5_000, 60_000);
+        assert_eq!(clusters.len(), 1);
+        assert_eq!(clusters[0].signals.len(), 3);
+    }
+
+    #[test]
+    fn max_span_cap_cuts_cluster() {
+        // Signals continuously within window_ms, but the span from first to
+        // next would exceed max_span_ms, so we must split.
+        let sigs = vec![sig(0, 0, 1), sig(4_000, 1, 1), sig(8_000, 0, 2)];
+        let clusters = cluster_signals(&sigs, 5_000, 5_000);
+        assert!(clusters.len() >= 2);
+        // Ensure the total number of signals is preserved.
+        let total: usize = clusters.iter().map(|c| c.signals.len()).sum();
+        assert_eq!(total, 3);
     }
 }
