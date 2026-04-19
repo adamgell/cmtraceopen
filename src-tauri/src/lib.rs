@@ -73,6 +73,11 @@ pub fn run() {
             #[cfg(target_os = "windows")]
             app.manage(GraphAuthState::new());
 
+            {
+                use tauri::Manager as _;
+                app.manage(commands::timeline::TimelineRuntimeMap::new());
+            }
+
             // Auto-open DevTools in debug builds
             #[cfg(all(debug_assertions, desktop))]
             {
@@ -176,6 +181,12 @@ pub fn run() {
             commands::secureboot::run_secureboot_remediation,
             #[cfg(feature = "sysmon")]
             commands::sysmon::analyze_sysmon_logs,
+            commands::timeline::build_timeline_cmd,
+            commands::timeline::close_timeline_cmd,
+            commands::timeline::query_incident_details_cmd,
+            commands::timeline::query_lane_buckets_cmd,
+            commands::timeline::query_timeline_entries_cmd,
+            commands::timeline::update_timeline_tunables_cmd,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

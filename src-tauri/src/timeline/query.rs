@@ -112,7 +112,7 @@ pub fn query_timeline_entries(
             if let Some(ev) = ev {
                 out.push(TimelineEntry::ImeEvent {
                     source_idx: *src,
-                    event: ev,
+                    event: Box::new(ev),
                 });
             }
         } else {
@@ -126,7 +126,7 @@ pub fn query_timeline_entries(
                 if let Some(entry) = materialize_log_entry(&rt.path, &rt.parser, ei) {
                     out.push(TimelineEntry::Log {
                         source_idx: *src,
-                        entry,
+                        entry: Box::new(entry),
                     });
                 }
             }

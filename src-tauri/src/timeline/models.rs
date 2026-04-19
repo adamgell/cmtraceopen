@@ -4,6 +4,11 @@
 pub struct EntryIndex {
     pub timestamp_ms: i64,
     pub severity: crate::models::log_entry::Severity,
+    /// Kept for symmetry with the outer map keying; not read directly (the
+    /// index is already looked up by source_idx elsewhere). Retained so
+    /// downstream materializers that pass an EntryIndex alone still know
+    /// which source they came from.
+    #[allow(dead_code)]
     pub source_idx: u16,
     pub byte_offset: u64,
     pub line_number: u32,
@@ -11,7 +16,10 @@ pub struct EntryIndex {
 }
 
 pub const SIGNAL_FLAG_HAS_ERROR_CODE: u8 = 0b0000_0001;
+// Reserved for future phases that stamp IME event flags directly on EntryIndex.
+#[allow(dead_code)]
 pub const SIGNAL_FLAG_IS_IME_FAILED: u8 = 0b0000_0010;
+#[allow(dead_code)]
 pub const SIGNAL_FLAG_IS_IME_EVENT: u8 = 0b0000_0100;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -126,12 +134,12 @@ pub enum TimelineEntry {
     #[serde(rename = "log", rename_all = "camelCase")]
     Log {
         source_idx: u16,
-        entry: crate::models::log_entry::LogEntry,
+        entry: Box<crate::models::log_entry::LogEntry>,
     },
     #[serde(rename = "imeEvent", rename_all = "camelCase")]
     ImeEvent {
         source_idx: u16,
-        event: crate::intune::models::IntuneEvent,
+        event: Box<crate::intune::models::IntuneEvent>,
     },
 }
 
@@ -144,6 +152,9 @@ pub enum TimelineError {
     TooLarge { estimated: u64, limit: u64 },
     #[error("no sources")]
     NoSources,
+    /// Reserved for a future phase that surfaces per-source read errors as
+    /// distinct variants rather than embedding them in `errors` on the bundle.
+    #[allow(dead_code)]
     #[error("source read error: {path}: {message}")]
     SourceRead { path: String, message: String },
     #[error("internal: {message}")]
@@ -184,7 +195,7 @@ mod tests {
         // LogEntry does not derive Default, so spell every field out explicitly.
         let e = TimelineEntry::Log {
             source_idx: 3,
-            entry: LogEntry {
+            entry: Box::new(LogEntry {
                 id: 1,
                 line_number: 1,
                 message: "x".into(),
@@ -233,7 +244,7 @@ mod tests {
                 section_color: None,
                 iteration: None,
                 tags: None,
-            },
+            }),
         };
         let json = serde_json::to_string(&e).unwrap();
         assert!(json.contains("\"kind\":\"log\""));
