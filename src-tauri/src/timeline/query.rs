@@ -196,6 +196,113 @@ pub fn query_lane_buckets(
     out
 }
 
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IncidentSignalDetail {
+    pub source_idx: u16,
+    pub source_name: String,
+    pub ts_ms: i64,
+    pub kind: SignalKind,
+    pub correlation_id: Option<String>,
+    pub line_number: u32,
+    pub preview: String,
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IncidentDetail {
+    pub incident: Incident,
+    pub signals: Vec<IncidentSignalDetail>,
+    pub per_source_signal_counts: std::collections::HashMap<String, u32>,
+}
+
+pub fn query_incident_details(
+    ctx: &QueryContext<'_>,
+    incident_id: u32,
+) -> Option<IncidentDetail> {
+    let incident = ctx
+        .timeline
+        .bundle
+        .incidents
+        .iter()
+        .find(|i| i.id == incident_id)?
+        .clone();
+
+    let (lo, hi) = (incident.ts_start_ms, incident.ts_end_ms);
+    let mut sigs: Vec<IncidentSignalDetail> = Vec::new();
+    let mut counts: std::collections::HashMap<String, u32> = Default::default();
+
+    for s in &ctx.timeline.raw_signals {
+        if s.ts_ms < lo || s.ts_ms > hi {
+            continue;
+        }
+        if !ctx
+            .timeline
+            .bundle
+            .tunables
+            .enabled_signal_kinds
+            .contains(&s.kind)
+        {
+            continue;
+        }
+
+        let name = ctx
+            .timeline
+            .bundle
+            .sources
+            .iter()
+            .find(|m| m.idx == s.source_idx)
+            .map(|m| m.display_name.clone())
+            .unwrap_or_else(|| format!("src{}", s.source_idx));
+        *counts.entry(name.clone()).or_insert(0) += 1;
+
+        let (line_number, preview) = match ctx.runtimes.get(&s.source_idx) {
+            Some(rt) => {
+                let ei = ctx
+                    .timeline
+                    .indexes
+                    .get(&s.source_idx)
+                    .and_then(|v| v.get(s.entry_ref as usize));
+                if let Some(ei) = ei {
+                    let msg = materialize_msg(&rt.path, &rt.parser, ei).unwrap_or_default();
+                    (ei.line_number, truncate(&msg, 200))
+                } else {
+                    (0, String::new())
+                }
+            }
+            None => {
+                let evs = ctx.timeline.ime_events.get(&s.source_idx);
+                let ev = evs.and_then(|v| v.get(s.entry_ref as usize));
+                let preview = ev.map(|e| format!("{:?}", e)).unwrap_or_default();
+                (0, truncate(&preview, 200))
+            }
+        };
+        sigs.push(IncidentSignalDetail {
+            source_idx: s.source_idx,
+            source_name: name,
+            ts_ms: s.ts_ms,
+            kind: s.kind,
+            correlation_id: s.correlation_id.clone(),
+            line_number,
+            preview,
+        });
+    }
+
+    Some(IncidentDetail {
+        incident,
+        signals: sigs,
+        per_source_signal_counts: counts,
+    })
+}
+
+fn truncate(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        s.to_string()
+    } else {
+        s.chars().take(max).collect::<String>() + "…"
+    }
+}
+
 #[cfg(test)]
 mod tests_mat {
     use super::*;
