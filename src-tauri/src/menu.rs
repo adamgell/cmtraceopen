@@ -10,6 +10,8 @@ pub const MENU_EVENT_APP_ACTION: &str = "app-menu-action";
 
 pub const MENU_ID_FILE_OPEN_LOG_FILE: &str = "file.open_log_file";
 pub const MENU_ID_FILE_OPEN_LOG_FOLDER: &str = "file.open_log_folder";
+pub const MENU_ID_FILE_NEW_TIMELINE_FROM_FOLDER: &str = "file.new_timeline_from_folder";
+pub const MENU_ID_FILE_NEW_EMPTY_TIMELINE: &str = "file.new_empty_timeline";
 pub const MENU_ID_FILE_SAVE_SESSION: &str = "file.save_session";
 pub const MENU_ID_FILE_OPEN_SESSION: &str = "file.open_session";
 pub const MENU_ID_FILE_QUIT: &str = "file.quit";
@@ -47,6 +49,20 @@ pub fn build_app_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> 
         app,
         MENU_ID_FILE_OPEN_LOG_FOLDER,
         "Open Log Folder...",
+        true,
+        None::<&str>,
+    )?;
+    let new_timeline_from_folder = MenuItem::with_id(
+        app,
+        MENU_ID_FILE_NEW_TIMELINE_FROM_FOLDER,
+        "New Timeline from Folder...",
+        true,
+        None::<&str>,
+    )?;
+    let new_empty_timeline = MenuItem::with_id(
+        app,
+        MENU_ID_FILE_NEW_EMPTY_TIMELINE,
+        "New Empty Timeline",
         true,
         None::<&str>,
     )?;
@@ -140,7 +156,16 @@ pub fn build_app_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> 
         app,
         "File",
         true,
-        &[&open_log_file, &open_log_folder, &save_session, &open_session, &known_sources, &quit],
+        &[
+            &open_log_file,
+            &open_log_folder,
+            &new_timeline_from_folder,
+            &new_empty_timeline,
+            &save_session,
+            &open_session,
+            &known_sources,
+            &quit,
+        ],
     )?;
     let edit_menu = Submenu::with_items(app, "Edit", true, &[&find, &filter])?;
     #[cfg(all(target_os = "windows", feature = "collector"))]
@@ -363,6 +388,22 @@ fn payload_for_menu_id(menu_id: &str) -> Option<AppMenuActionPayload> {
             version: 1,
             menu_id: MENU_ID_FILE_OPEN_LOG_FOLDER.to_string(),
             action: "open_log_folder_dialog".to_string(),
+            category: "file".to_string(),
+            trigger: "menu".to_string(),
+            source_id: None,
+        },
+        MENU_ID_FILE_NEW_TIMELINE_FROM_FOLDER => AppMenuActionPayload {
+            version: 1,
+            menu_id: MENU_ID_FILE_NEW_TIMELINE_FROM_FOLDER.to_string(),
+            action: "timeline_new_from_folder".to_string(),
+            category: "file".to_string(),
+            trigger: "menu".to_string(),
+            source_id: None,
+        },
+        MENU_ID_FILE_NEW_EMPTY_TIMELINE => AppMenuActionPayload {
+            version: 1,
+            menu_id: MENU_ID_FILE_NEW_EMPTY_TIMELINE.to_string(),
+            action: "timeline_new_empty".to_string(),
             category: "file".to_string(),
             trigger: "menu".to_string(),
             source_id: None,
