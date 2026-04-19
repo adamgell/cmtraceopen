@@ -4,6 +4,7 @@ use std::sync::Mutex;
 
 use crate::models::log_entry::LogEntry;
 use crate::parser::ResolvedParser;
+use crate::timeline::store::Timeline;
 use crate::watcher::tail::TailSession;
 
 #[allow(dead_code)]
@@ -24,6 +25,8 @@ pub struct AppState {
     /// File paths passed as CLI arguments at startup via OS file association.
     /// Consumed (cleared) on first retrieval so they are only processed once.
     pub initial_file_paths: Mutex<Vec<String>>,
+    /// Active unified multi-file timelines keyed by timeline id.
+    pub timelines: Mutex<HashMap<String, Timeline>>,
 }
 
 impl AppState {
@@ -32,6 +35,7 @@ impl AppState {
             open_files: Mutex::new(HashMap::new()),
             tail_sessions: Mutex::new(HashMap::new()),
             initial_file_paths: Mutex::new(initial_file_paths),
+            timelines: Mutex::new(HashMap::new()),
         }
     }
 }
