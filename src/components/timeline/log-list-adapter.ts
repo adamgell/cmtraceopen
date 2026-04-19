@@ -17,7 +17,12 @@ export const timelineLogListDataSource: LogListDataSource = {
       () =>
         entries
           .filter((e): e is Extract<typeof e, { kind: "log" }> => e.kind === "log")
-          .map((e) => e.entry),
+          .map((e) => ({
+            ...e.entry,
+            // Backend's single-line materializer reuses id=0 for every entry;
+            // synthesize a stable cross-source unique id so React keys work.
+            id: e.sourceIdx * 10_000_000 + e.entry.lineNumber,
+          })),
       [entries],
     );
   },
