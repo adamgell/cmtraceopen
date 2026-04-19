@@ -40,3 +40,6 @@ loginventory/
 .claude/settings.local.json
 .claude/worktrees/
 .claude-dev-shell.ps1
+
+# Git worktrees (isolated implementation branches)
+.worktrees/
