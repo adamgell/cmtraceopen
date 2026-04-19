@@ -517,6 +517,7 @@ dependencies = [
 name = "cmtrace-open"
 version = "1.2.0"
 dependencies = [
+ "anyhow",
  "base64 0.22.1",
  "chrono",
  "criterion",
@@ -544,6 +545,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "ureq",
+ "uuid",
  "windows",
  "windows-future",
  "winreg",

@@ -57,6 +57,8 @@ evtx = { version = "0.11", optional = true }
 glob = "0.3"
 sha2 = "0.10"
 tempfile = { version = "3", optional = true }
+uuid = { version = "1", features = ["v4"] }
+anyhow = "1"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 plist = { version = "1", optional = true }
