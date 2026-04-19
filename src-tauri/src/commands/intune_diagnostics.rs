@@ -923,7 +923,7 @@ fn top_failed_download_labels(downloads: &[DownloadStat], limit: usize) -> Vec<S
     }
 
     let mut sorted_counts: Vec<(String, usize)> = label_counts.into_iter().collect();
-    sorted_counts.sort_by(|a, b| b.1.cmp(&a.1));
+    sorted_counts.sort_by_key(|b| std::cmp::Reverse(b.1));
 
     sorted_counts
         .into_iter()
@@ -1371,7 +1371,7 @@ fn top_event_detail_matches(events: &[&IntuneEvent], limit: usize) -> Vec<String
     }
 
     let mut sorted_counts: Vec<(String, usize)> = evidence_counts.into_iter().collect();
-    sorted_counts.sort_by(|a, b| b.1.cmp(&a.1));
+    sorted_counts.sort_by_key(|b| std::cmp::Reverse(b.1));
 
     sorted_counts
         .into_iter()
@@ -1601,7 +1601,7 @@ fn top_event_labels(events: &[&IntuneEvent], limit: usize) -> Vec<String> {
     }
 
     let mut sorted_counts: Vec<(String, usize)> = label_counts.into_iter().collect();
-    sorted_counts.sort_by(|a, b| b.1.cmp(&a.1));
+    sorted_counts.sort_by_key(|b| std::cmp::Reverse(b.1));
 
     sorted_counts
         .into_iter()

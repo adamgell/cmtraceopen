@@ -295,7 +295,7 @@ pub fn build_summary(
             }
         })
         .collect();
-    event_type_counts.sort_by(|a, b| b.count.cmp(&a.count));
+    event_type_counts.sort_by_key(|b| std::cmp::Reverse(b.count));
 
     SysmonSummary {
         total_events: events.len() as u64,
@@ -325,31 +325,27 @@ pub fn extract_config(events: &[SysmonEvent], summary: &SysmonSummary) -> Sysmon
     // Look for ServiceStateChange events (ID 4) — they contain version info
     for event in events {
         match event.event_id {
-            16 => {
+            16 if last_config_change.is_none()
+                || event.timestamp.as_str() > last_config_change.as_deref().unwrap_or("") =>
+            {
                 // ConfigChange: contains Configuration, ConfigurationFileHash
-                if last_config_change.is_none()
-                    || event.timestamp.as_str() > last_config_change.as_deref().unwrap_or("")
-                {
-                    last_config_change = Some(event.timestamp.clone());
-                }
+                last_config_change = Some(event.timestamp.clone());
                 // NOTE: Do not populate configuration_xml from event.message.
                 // The Message field is a human-readable summary and does not reliably
                 // contain the raw configuration XML. If configuration XML display is
                 // needed, it should be extracted from the EventData "Configuration"
                 // field during parsing and exposed via SysmonEvent.
             }
-            4 => {
+            4 if sysmon_version.is_none() => {
                 // ServiceStateChange: may contain version
-                if sysmon_version.is_none() {
-                    if let Some(ref msg) = event.details {
-                        if msg.contains("version") || msg.contains("Version") {
-                            sysmon_version = Some(msg.clone());
-                        }
+                if let Some(ref msg) = event.details {
+                    if msg.contains("version") || msg.contains("Version") {
+                        sysmon_version = Some(msg.clone());
                     }
-                    // Also check the message field
-                    if sysmon_version.is_none() && event.message.contains("version") {
-                        sysmon_version = Some(event.message.clone());
-                    }
+                }
+                // Also check the message field
+                if sysmon_version.is_none() && event.message.contains("version") {
+                    sysmon_version = Some(event.message.clone());
                 }
             }
             _ => {}
@@ -553,7 +549,7 @@ pub fn build_dashboard_data(events: &[SysmonEvent]) -> SysmonDashboardData {
             .into_iter()
             .map(|(name, count)| RankedItem { name, count })
             .collect();
-        vec.sort_by(|a, b| b.count.cmp(&a.count));
+        vec.sort_by_key(|b| std::cmp::Reverse(b.count));
         vec.truncate(TOP_N);
         vec
     };
@@ -562,7 +558,7 @@ pub fn build_dashboard_data(events: &[SysmonEvent]) -> SysmonDashboardData {
         .into_iter()
         .map(|(name, count)| RankedItem { name, count })
         .collect();
-    security_by_type.sort_by(|a, b| b.count.cmp(&a.count));
+    security_by_type.sort_by_key(|b| std::cmp::Reverse(b.count));
 
     SysmonDashboardData {
         timeline_minute: auto_timeline,
