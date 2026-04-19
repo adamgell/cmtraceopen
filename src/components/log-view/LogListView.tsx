@@ -42,15 +42,32 @@ import {
   getCanvasFont,
   LOG_UI_FONT_FAMILY,
 } from "../../lib/log-accessibility";
+import type { LogListDataSource } from "./log-list-data-source";
 
-export function LogListView() {
-  const entries = useLogStore((s) => s.entries);
-  const selectedId = useLogStore((s) => s.selectedId);
-  const selectEntry = useLogStore((s) => s.selectEntry);
-  const highlightText = useLogStore((s) => s.highlightText);
-  const highlightCaseSensitive = useLogStore((s) => s.highlightCaseSensitive);
-  const isPaused = useLogStore((s) => s.isPaused);
-  const findMatchIds = useLogStore((s) => s.findMatchIds);
+const defaultLogStoreDataSource: LogListDataSource = {
+  useEntries: () => useLogStore((s) => s.entries),
+  useSelectedId: () => useLogStore((s) => s.selectedId),
+  useHighlightText: () => useLogStore((s) => s.highlightText),
+  useHighlightCaseSensitive: () => useLogStore((s) => s.highlightCaseSensitive),
+  useIsPaused: () => useLogStore((s) => s.isPaused),
+  useFindMatchIds: () => {
+    const arr = useLogStore((s) => s.findMatchIds);
+    return useMemo(() => new Set(arr), [arr]);
+  },
+  selectEntry: (id) => useLogStore.getState().selectEntry(id),
+};
+
+export function LogListView({ dataSource }: { dataSource?: LogListDataSource } = {}) {
+  const ds = dataSource ?? defaultLogStoreDataSource;
+  const entries = ds.useEntries();
+  const selectedId = ds.useSelectedId();
+  const highlightText = ds.useHighlightText();
+  const highlightCaseSensitive = ds.useHighlightCaseSensitive();
+  const isPaused = ds.useIsPaused();
+  const findMatchIds = ds.useFindMatchIds();
+  const externalFilterRange = ds.useExternalFilterRange?.() ?? null;
+  const highlightedRange = ds.useHighlightedRange?.() ?? null;
+  const selectEntry = ds.selectEntry;
   const showDetails = useUiStore((s) => s.showDetails);
 
   const sourceOpenMode = useLogStore((s) => s.sourceOpenMode);
@@ -92,7 +109,7 @@ export function LogListView() {
   }, []);
 
   const findMatchSet = useMemo(
-    () => new Set(findMatchIds),
+    () => findMatchIds ?? new Set<number>(),
     [findMatchIds]
   );
 
@@ -103,8 +120,14 @@ export function LogListView() {
 
   const displayEntries = useMemo(() => {
     let result = entries;
+    if (externalFilterRange) {
+      const [lo, hi] = externalFilterRange;
+      result = result.filter(
+        (e) => e.timestamp != null && e.timestamp >= lo && e.timestamp <= hi,
+      );
+    }
     if (filteredIds) {
-      result = entries.filter((entry) => filteredIds.has(entry.id));
+      result = result.filter((entry) => filteredIds.has(entry.id));
     }
     if (sortColumn) {
       const col = getColumnDef(sortColumn);
@@ -133,7 +156,7 @@ export function LogListView() {
       return sorted;
     }
     return result;
-  }, [entries, filteredIds, sortColumn, sortDir]);
+  }, [entries, externalFilterRange, filteredIds, sortColumn, sortDir]);
 
   const selectedEntryIndex = useMemo(
     () => displayEntries.findIndex((entry) => entry.id === selectedId),
@@ -670,9 +693,16 @@ export function LogListView() {
               ? (entry.sectionColor ?? sectionColorMap.get(entry.sectionName) ?? null)
               : null;
 
+            const isInHighlightedRange =
+              highlightedRange != null &&
+              entry.timestamp != null &&
+              entry.timestamp >= highlightedRange[0] &&
+              entry.timestamp <= highlightedRange[1];
+
             return (
               <div
                 key={entry.id}
+                data-highlighted={isInHighlightedRange ? "true" : undefined}
                 style={{
                   position: "absolute",
                   top: 0,
@@ -680,6 +710,9 @@ export function LogListView() {
                   width: "100%",
                   height: `${virtualRow.size}px`,
                   transform: `translateY(${virtualRow.start}px)`,
+                  boxShadow: isInHighlightedRange
+                    ? `inset 3px 0 0 ${tokens.colorBrandStroke1}`
+                    : undefined,
                 }}
               >
                 {isSectionDivider ? (
