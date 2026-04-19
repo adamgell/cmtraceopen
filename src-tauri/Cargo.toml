@@ -1,3 +1,10 @@
+# Detach this package from any accidental parent workspace. Inside a git
+# worktree the parent checkout may contain an untracked root `Cargo.toml`
+# that would otherwise capture this crate — `cargo` walks up the directory
+# tree looking for a `[workspace]` until it finds one. An empty workspace
+# table here stops that walk and keeps the worktree self-contained.
+[workspace]
+
 [package]
 name = "cmtrace-open"
 version = "1.2.0"
