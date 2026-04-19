@@ -7,7 +7,7 @@ const bundle: TimelineBundle = {
   sources: [
     {
       idx: 0,
-      kind: { logFile: { parser_kind: "ccm" } },
+      kind: { logFile: { parserKind: "ccm" } },
       path: "/a.log",
       displayName: "a",
       color: "#111",
@@ -15,7 +15,7 @@ const bundle: TimelineBundle = {
     },
     {
       idx: 1,
-      kind: { logFile: { parser_kind: "ccm" } },
+      kind: { logFile: { parserKind: "ccm" } },
       path: "/b.log",
       displayName: "b",
       color: "#222",

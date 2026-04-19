@@ -56,6 +56,7 @@ pub struct Incident {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum TimelineSourceKind {
+    #[serde(rename_all = "camelCase")]
     LogFile {
         parser_kind: crate::models::log_entry::ParserKind,
     },
