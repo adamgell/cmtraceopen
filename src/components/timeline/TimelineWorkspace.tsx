@@ -9,6 +9,7 @@ import { TimelineRuler } from "./TimelineRuler";
 import { BrushOverlay } from "./BrushOverlay";
 import { LogListView } from "../log-view/LogListView";
 import { timelineLogListDataSource } from "./log-list-adapter";
+import { buildTimelineFromSources } from "./hooks/useTimelineBundle";
 
 const LANE_HEIGHT = 22;
 
@@ -38,10 +39,50 @@ export function TimelineWorkspace() {
     Math.max(100, Math.min(800, Math.floor(laneWidth))),
   );
 
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "copy";
+  };
+
+  const handleDrop = async (e: React.DragEvent) => {
+    e.preventDefault();
+    const files = Array.from(e.dataTransfer.files);
+    const paths = files
+      .map((f) => (f as File & { path?: string }).path)
+      .filter((p): p is string => typeof p === "string" && p.length > 0);
+    if (paths.length === 0) return;
+    const existing =
+      useTimelineStore.getState().bundle?.sources.map((s) => s.path) ?? [];
+    const merged = Array.from(new Set([...existing, ...paths])).map(
+      (path) => ({ path }),
+    );
+    try {
+      await buildTimelineFromSources(merged);
+    } catch (err) {
+      console.error("[timeline] failed to add sources to timeline", err);
+    }
+  };
+
   if (!bundle) {
     return (
-      <div style={{ padding: 40, textAlign: "center", color: "#6b7280" }}>
-        Timeline is empty. Open a folder via File → New Timeline from Folder…
+      <div
+        onDrop={handleDrop}
+        onDragOver={handleDragOver}
+        style={{
+          padding: 40,
+          textAlign: "center",
+          color: "#6b7280",
+          border: "2px dashed #d1d5db",
+          margin: 40,
+          borderRadius: 8,
+        }}
+      >
+        <div style={{ fontSize: 14, marginBottom: 6 }}>
+          Drop log files here
+        </div>
+        <div style={{ fontSize: 11 }}>
+          Or use File → New Timeline from Folder…
+        </div>
       </div>
     );
   }
@@ -55,6 +96,8 @@ export function TimelineWorkspace() {
 
   return (
     <div
+      onDrop={handleDrop}
+      onDragOver={handleDragOver}
       style={{
         display: "grid",
         gridTemplateColumns: "1fr 340px",

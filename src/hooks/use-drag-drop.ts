@@ -26,10 +26,26 @@ export function useDragDrop() {
       }
 
       try {
+        const activeWorkspace = useUiStore.getState().activeWorkspace;
+
+        if (activeWorkspace === "timeline") {
+          const { useTimelineStore } = await import("../stores/timeline-store");
+          const { buildTimelineFromSources } = await import(
+            "../components/timeline/hooks/useTimelineBundle"
+          );
+          const existing =
+            useTimelineStore.getState().bundle?.sources.map((s) => s.path) ?? [];
+          const merged = Array.from(new Set([...existing, ...paths])).map(
+            (path) => ({ path }),
+          );
+          if (merged.length === 0) return;
+          await buildTimelineFromSources(merged);
+          return;
+        }
+
         if (paths.length === 1) {
           await openPathForActiveWorkspace(paths[0]);
         } else {
-          const activeWorkspace = useUiStore.getState().activeWorkspace;
           if (activeWorkspace === "log") {
             await loadFilesAsLogSource(paths);
           } else {
