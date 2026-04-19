@@ -6,16 +6,12 @@ export type SignalKind = "errorSeverity" | "knownErrorCode" | "imeFailed";
 /**
  * Mirrors Rust `TimelineSourceKind` in `src-tauri/src/timeline/models.rs`.
  *
- * The enum uses the default (externally-tagged) serde representation with
- * `#[serde(rename_all = "camelCase")]` on the enum itself. That renames the
- * variant names (`logFile`, `intuneEvents`) but — crucially — does NOT
- * cascade into the fields of struct-like variants. As a result, the inner
- * field of `LogFile` serializes as `parser_kind`, not `parserKind`.
- *
- * Verified empirically by serializing both variants to JSON.
+ * The enum uses the default (externally-tagged) serde representation; the
+ * variant names are renamed to camelCase and `LogFile` carries an inner
+ * `#[serde(rename_all = "camelCase")]` so its field also camelCases.
  */
 export type TimelineSourceKind =
-  | { logFile: { parser_kind: ParserKind } }
+  | { logFile: { parserKind: ParserKind } }
   | "intuneEvents";
 
 export interface TimelineSourceMeta {
