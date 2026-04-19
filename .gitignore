@@ -36,3 +36,6 @@ loginventory/
 
 # Claude Code local settings
 .claude/settings.local.json
+
+# Git worktrees (isolated implementation branches)
+.worktrees/
