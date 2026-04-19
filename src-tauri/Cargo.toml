@@ -91,3 +91,7 @@ required-features = ["sysmon"]
 name = "intune_pipeline"
 harness = false
 required-features = ["intune-diagnostics"]
+
+[[bench]]
+name = "timeline"
+harness = false

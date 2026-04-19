@@ -1,5 +1,11 @@
 // src-tauri/src/timeline/models.rs
 
+/// Re-exports of inner model types the `timeline` public API touches.
+/// Kept here so external consumers (integration tests, benches) can build
+/// indexes and source metadata without depending on the crate-private
+/// `models` module path.
+pub use crate::models::log_entry::{ParserKind, Severity};
+
 #[derive(Clone, Debug)]
 pub struct EntryIndex {
     pub timestamp_ms: i64,
