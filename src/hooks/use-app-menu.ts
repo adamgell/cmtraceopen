@@ -109,6 +109,48 @@ export function useAppMenu() {
             }
             return;
           }
+          case "timeline_new_from_folder": {
+            const { open: openDialog } = await import("@tauri-apps/plugin-dialog");
+            const folder = await openDialog({ directory: true });
+            if (!folder || Array.isArray(folder)) return;
+            const folderPath = folder as string;
+            try {
+              const { listLogFolder } = await import("../lib/commands");
+              const listing = await listLogFolder(folderPath);
+              const childPaths = listing.entries
+                .filter((entry) => !entry.isDir)
+                .map((entry) => entry.path);
+              const sources: { path: string }[] = childPaths.map((path) => ({ path }));
+              // If the folder contains IME logs, add the folder itself as a source
+              // so the backend can detect and apply IME-specialised parsing.
+              const hasIme = childPaths.some((p) => {
+                const lower = p.toLowerCase();
+                return (
+                  lower.endsWith("agentexecutor.log") ||
+                  lower.endsWith("intunemanagementextension.log")
+                );
+              });
+              if (hasIme) sources.push({ path: folderPath });
+              if (sources.length === 0) return;
+              const { buildTimelineFromSources } = await import(
+                "../components/timeline/hooks/useTimelineBundle"
+              );
+              await buildTimelineFromSources(sources);
+              useUiStore.getState().ensureWorkspaceVisible("timeline", "native-menu.timeline-new-from-folder");
+            } catch (error) {
+              console.error("[app-menu] failed to build timeline from folder", {
+                folderPath,
+                error,
+              });
+            }
+            return;
+          }
+          case "timeline_new_empty": {
+            const { useTimelineStore } = await import("../stores/timeline-store");
+            useTimelineStore.getState().setBundle(null);
+            useUiStore.getState().ensureWorkspaceVisible("timeline", "native-menu.timeline-new-empty");
+            return;
+          }
           default:
             console.warn("[app-menu] unhandled native menu action", { payload });
         }
