@@ -363,6 +363,32 @@ impl ResolvedParser {
             specialization: self.specialization,
         }
     }
+
+    /// Parse a single line of text using this resolved parser, overriding the
+    /// resulting entry's `line_number` with the provided value.
+    ///
+    /// This is a thin wrapper over `parse_lines_with_selection` intended for
+    /// on-demand materialization (e.g. the unified timeline) where we already
+    /// know the parser and the original line number, and just need to rebuild
+    /// a single `LogEntry` from the raw text.
+    pub fn parse_one_line(
+        &self,
+        text: &str,
+        line_number: u32,
+    ) -> Result<crate::models::log_entry::LogEntry, String> {
+        // Trim a single trailing newline (the raw-entry reader keeps the newline).
+        let trimmed = text.strip_suffix('\n').unwrap_or(text);
+        let trimmed = trimmed.strip_suffix('\r').unwrap_or(trimmed);
+        let lines = [trimmed];
+        let (mut entries, _parse_errors) =
+            super::parse_lines_with_selection(&lines, "", self);
+        let mut entry = entries
+            .drain(..)
+            .next()
+            .ok_or_else(|| "parser produced no entries".to_string())?;
+        entry.line_number = line_number;
+        Ok(entry)
+    }
 }
 
 /// Detect the parser selection from file content.
