@@ -205,6 +205,56 @@ fn summarize(
     format!("{} signals across {} sources", errs, srcs.len())
 }
 
+/// Full detection pipeline.
+pub fn detect_incidents(
+    indexes: &HashMap<u16, Vec<EntryIndex>>,
+    ime_events: &HashMap<u16, Vec<IntuneEvent>>,
+    tunables: &TimelineTunables,
+    denied_guids: &HashSet<String>,
+    materialize_msg: &dyn Fn(u16, u32) -> Option<String>,
+) -> (Vec<Signal>, Vec<Incident>) {
+    let signals = emit_signals(indexes, ime_events, &tunables.enabled_signal_kinds);
+    let clusters = cluster_signals(
+        &signals,
+        tunables.overlap_window_ms,
+        tunables.max_incident_span_ms,
+    );
+    let incidents = qualify(QualifyInputs {
+        clusters: &clusters,
+        ime_events,
+        materialize_msg,
+        denied_guids,
+        min_source_count: tunables.min_source_count,
+    });
+    (signals, incidents)
+}
+
+pub fn redetect_from_signals(
+    signals: &[Signal],
+    ime_events: &HashMap<u16, Vec<IntuneEvent>>,
+    tunables: &TimelineTunables,
+    denied_guids: &HashSet<String>,
+    materialize_msg: &dyn Fn(u16, u32) -> Option<String>,
+) -> Vec<Incident> {
+    let filtered: Vec<Signal> = signals
+        .iter()
+        .filter(|s| tunables.enabled_signal_kinds.contains(&s.kind))
+        .cloned()
+        .collect();
+    let clusters = cluster_signals(
+        &filtered,
+        tunables.overlap_window_ms,
+        tunables.max_incident_span_ms,
+    );
+    qualify(QualifyInputs {
+        clusters: &clusters,
+        ime_events,
+        materialize_msg,
+        denied_guids,
+        min_source_count: tunables.min_source_count,
+    })
+}
+
 #[cfg(test)]
 mod tests_emit {
     use super::*;
@@ -396,5 +446,87 @@ mod tests_qualify {
         assert_eq!(incidents.len(), 1);
         assert_eq!(incidents[0].source_count, 2);
         assert!((incidents[0].confidence - 0.5).abs() < 1e-4);
+    }
+}
+
+#[cfg(test)]
+mod tests_detect {
+    use super::*;
+
+    fn ei(ts: i64, sev: Severity, flags: u8, src: u16, line: u32) -> EntryIndex {
+        EntryIndex {
+            timestamp_ms: ts,
+            severity: sev,
+            source_idx: src,
+            byte_offset: 0,
+            line_number: line,
+            signal_flags: flags,
+        }
+    }
+
+    fn noop_materialize(_s: u16, _r: u32) -> Option<String> {
+        None
+    }
+
+    #[test]
+    fn two_sources_one_incident_no_anchor() {
+        let mut indexes: HashMap<u16, Vec<EntryIndex>> = HashMap::new();
+        indexes.insert(0, vec![ei(1_000, Severity::Error, 0, 0, 1)]);
+        indexes.insert(1, vec![ei(2_000, Severity::Error, 0, 1, 1)]);
+
+        let t = TimelineTunables::default();
+        let denied: HashSet<String> = HashSet::new();
+
+        let (signals, incidents) = detect_incidents(
+            &indexes,
+            &HashMap::new(),
+            &t,
+            &denied,
+            &noop_materialize,
+        );
+
+        assert_eq!(signals.len(), 2);
+        assert_eq!(incidents.len(), 1);
+        assert_eq!(incidents[0].source_count, 2);
+        assert!(incidents[0].anchor_event_ref.is_none());
+        assert!(incidents[0].anchor_guid.is_none());
+    }
+
+    #[test]
+    fn narrower_window_splits_into_two_incidents() {
+        let mut indexes: HashMap<u16, Vec<EntryIndex>> = HashMap::new();
+        indexes.insert(
+            0,
+            vec![
+                ei(0, Severity::Error, 0, 0, 1),
+                ei(10_000, Severity::Error, 0, 0, 2),
+            ],
+        );
+        indexes.insert(
+            1,
+            vec![
+                ei(500, Severity::Error, 0, 1, 1),
+                ei(10_500, Severity::Error, 0, 1, 2),
+            ],
+        );
+
+        let mut t = TimelineTunables::default();
+        t.overlap_window_ms = 1_000;
+        let denied: HashSet<String> = HashSet::new();
+
+        let (_signals, incidents) = detect_incidents(
+            &indexes,
+            &HashMap::new(),
+            &t,
+            &denied,
+            &noop_materialize,
+        );
+
+        assert_eq!(
+            incidents.len(),
+            2,
+            "expected two incidents, got {:?}",
+            incidents
+        );
     }
 }
