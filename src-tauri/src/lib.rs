@@ -23,6 +23,7 @@ pub mod secureboot;
 #[cfg(feature = "sysmon")]
 pub mod sysmon;
 mod state;
+mod timeline;
 mod watcher;
 
 use state::app_state::AppState;
