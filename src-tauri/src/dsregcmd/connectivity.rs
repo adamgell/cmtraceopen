@@ -62,7 +62,7 @@ pub fn query_scp() -> DsregcmdScpQueryResult {
     let mut result = DsregcmdScpQueryResult::default();
 
     // Try to find a domain controller via nltest
-    let dc_output = std::process::Command::new("nltest")
+    let dc_output = crate::process_util::hidden_command("nltest")
         .arg("/dsgetdc:")
         .output();
 
@@ -108,7 +108,7 @@ try {
 }
 "#;
 
-    let ps_output = std::process::Command::new("powershell")
+    let ps_output = crate::process_util::hidden_command("powershell")
         .args(["-NoProfile", "-NonInteractive", "-Command", ps_script])
         .output();
 

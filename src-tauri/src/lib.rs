@@ -18,6 +18,7 @@ pub mod macos_diag;
 mod menu;
 mod models;
 pub mod parser;
+pub mod process_util;
 #[cfg(feature = "secureboot")]
 pub mod secureboot;
 #[cfg(feature = "sysmon")]

@@ -1,6 +1,5 @@
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -85,7 +84,7 @@ pub fn export_registry_keys(items: &[RegistryCollectionItem], ctx: &CollectorCon
 
     items.par_iter().for_each(|item| {
         let output_path = dest_dir.join(&item.file_name);
-        match Command::new(&reg_path)
+        match crate::process_util::hidden_command(&reg_path)
             .args(["export", &item.path, &output_path.to_string_lossy(), "/y"])
             .output()
         {
@@ -243,7 +242,7 @@ pub fn run_commands(items: &[CommandCollectionItem], ctx: &CollectorContext) {
                 args.push(zip_path.to_string_lossy().into_owned());
             }
 
-            let spawn_result = Command::new(&item.command)
+            let spawn_result = crate::process_util::hidden_command(&item.command)
                 .args(&args)
                 .stdout(std::process::Stdio::piped())
                 .stderr(std::process::Stdio::piped())

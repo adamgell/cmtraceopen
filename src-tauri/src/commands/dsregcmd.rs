@@ -160,7 +160,7 @@ fn capture_dsregcmd_impl() -> Result<DsregcmdCaptureResult, crate::error::AppErr
     let dsregcmd_path = resolve_system32_binary("dsregcmd.exe")?;
     verify_dsregcmd_signature(&dsregcmd_path)?;
 
-    let output = std::process::Command::new(&dsregcmd_path)
+    let output = crate::process_util::hidden_command(&dsregcmd_path)
         .arg("/status")
         .output()
         .map_err(|error| {
@@ -535,7 +535,7 @@ fn export_live_registry_evidence(registry_root: &Path) {
 
     for export in LIVE_CAPTURE_REGISTRY_EXPORTS {
         let output_path = registry_root.join(export.file_name);
-        match std::process::Command::new(&reg_path)
+        match crate::process_util::hidden_command(&reg_path)
             .args(["export", export.key_path, &output_path.to_string_lossy(), "/y"])
             .output()
         {
@@ -582,7 +582,7 @@ fn collect_enterprise_mgmt_task_guids() -> crate::dsregcmd::DsregcmdScheduledTas
         }
     };
 
-    let output = match std::process::Command::new(&schtasks_path)
+    let output = match crate::process_util::hidden_command(&schtasks_path)
         .args([
             "/query",
             "/TN",
