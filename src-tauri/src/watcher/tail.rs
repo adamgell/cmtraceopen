@@ -295,14 +295,13 @@ where
                 Ok(Ok(event)) => {
                     // Only react to modify/create events for our file
                     match event.kind {
-                        EventKind::Modify(_) | EventKind::Create(_) => {
+                        EventKind::Modify(_) | EventKind::Create(_)
                             if event.paths.iter().any(|p| p == &watch_path)
-                                && !paused_clone.load(Ordering::Relaxed)
-                            {
-                                if let Ok(entries) = tail_reader.read_new_entries() {
-                                    if !entries.is_empty() {
-                                        on_new_entries(entries);
-                                    }
+                                && !paused_clone.load(Ordering::Relaxed) =>
+                        {
+                            if let Ok(entries) = tail_reader.read_new_entries() {
+                                if !entries.is_empty() {
+                                    on_new_entries(entries);
                                 }
                             }
                         }

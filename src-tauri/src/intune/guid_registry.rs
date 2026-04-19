@@ -244,7 +244,7 @@ fn extract_all_id_name_pairs(msg: &str) -> Vec<(String, String, GuidNameSource)>
         }
 
         let mut pairs = Vec::new();
-        for (id_val, name_val) in ids.into_iter().zip(names.into_iter()) {
+        for (id_val, name_val) in ids.into_iter().zip(names) {
             if id_val.len() == 36 && guid_re().is_match(&id_val) {
                 pairs.push((id_val, name_val, GuidNameSource::NameField));
             }
