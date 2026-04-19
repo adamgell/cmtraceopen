@@ -1,0 +1,6 @@
+[workspace]
+members = [
+    "src-tauri",
+    "cmtrace-wasm",
+]
+resolver = "2"

@@ -7,6 +7,7 @@ import { getThemeById } from "./lib/themes";
 import { useUiStore } from "./stores/ui-store";
 import { initializeDateTimeFormatting, refreshDateTimeFormatting } from "./lib/date-time-format";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { isTauri } from "./lib/runtime";
 // Register Graph API auto-connect (runs after persist hydration)
 import "./hooks/use-graph-api-startup";
 
@@ -29,6 +30,7 @@ function AppRoot() {
   }, []);
 
   useEffect(() => {
+    if (!isTauri) return;
     let unlisten: (() => void) | undefined;
     getCurrentWindow()
       .onFocusChanged(({ payload: focused }) => {

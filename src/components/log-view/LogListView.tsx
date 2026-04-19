@@ -17,7 +17,7 @@ import { MergeLegendBar } from "./MergeLegendBar";
 import type { ErrorCodeSpan } from "../../types/log";
 import type { Marker } from "../../types/markers";
 import { useMarkerStore } from "../../stores/marker-store";
-import { writeText } from "@tauri-apps/plugin-clipboard-manager";
+import { writeText } from "../../lib/clipboard";
 import { formatLogEntryTimestamp } from "../../lib/date-time-format";
 import { useContextMenu } from "../../hooks/use-context-menu";
 import { ArrowBidirectionalLeftRightRegular } from "@fluentui/react-icons";

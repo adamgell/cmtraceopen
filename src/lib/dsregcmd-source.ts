@@ -1,4 +1,4 @@
-import { readText } from "@tauri-apps/plugin-clipboard-manager";
+import { readText } from "./clipboard";
 import type {
   DsregcmdAnalysisResult,
   DsregcmdSourceContext,

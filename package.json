@@ -21,7 +21,11 @@
     "test:coverage": "vitest run --coverage",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
-    "test:e2e:debug": "playwright test --debug"
+    "test:e2e:debug": "playwright test --debug",
+    "web:build:wasm": "wasm-pack build cmtrace-wasm --target web --out-dir ../src/wasm",
+    "web:dev": "npm run web:build:wasm && vite",
+    "web:build": "npm run web:build:wasm && tsc && CMTRACE_WEB=1 vite build",
+    "web:preview": "CMTRACE_WEB=1 vite preview --outDir dist-web"
   },
   "license": "MIT",
   "type": "module",

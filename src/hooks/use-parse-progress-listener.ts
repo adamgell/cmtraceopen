@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { useLogStore } from "../stores/log-store";
+import { isTauri } from "../lib/runtime";
 
 const PARSE_PROGRESS_EVENT = "parse-progress";
 
@@ -32,6 +33,7 @@ export function useParseProgressListener() {
   const prevBatchCompletedRef = useRef(0);
 
   useEffect(() => {
+    if (!isTauri) return;
     const unlisten = listen<ParseProgressPayload>(
       PARSE_PROGRESS_EVENT,
       (event) => {

@@ -27,6 +27,7 @@ import {
   analyzeDsregcmdSource,
   refreshCurrentDsregcmdSource,
 } from "../../lib/dsregcmd-source";
+import { isTauri } from "../../lib/runtime";
 import { useLogStore } from "../../stores/log-store";
 import { useFilterStore } from "../../stores/filter-store";
 import { useIntuneStore } from "../../workspaces/intune/intune-store";
@@ -368,6 +369,30 @@ export function useAppActions(): AppActionHandlers {
 
     const isLogWorkspace = activeWorkspace === "log";
 
+    // Browser/WASM mode: use a native <input type="file"> element.
+    // Must be appended to DOM before .click() — detached inputs are ignored in Safari.
+    if (!isTauri) {
+      const input = document.createElement("input");
+      input.type = "file";
+      input.multiple = isLogWorkspace;
+      input.accept = ".log,.txt,.csv,.json,.xml,.evtx,*";
+      input.style.display = "none";
+      document.body.appendChild(input);
+      input.onchange = async () => {
+        document.body.removeChild(input);
+        const files = Array.from(input.files ?? []);
+        if (files.length === 0) return;
+        try {
+          const { loadFileBytesAsLogSource } = await import("../../lib/log-source");
+          await loadFileBytesAsLogSource(files);
+        } catch (err) {
+          console.error("[toolbar] failed to load file", err);
+        }
+      };
+      input.click();
+      return;
+    }
+
     const activeWorkspaceDefinition = getWorkspace(activeWorkspace);
     const fileDialogFilters = activeWorkspaceDefinition.fileFilters ?? [
       { name: "Log Files", extensions: ["log", "txt", "csv", "json", "xml", "evtx"] },
@@ -399,6 +424,11 @@ export function useAppActions(): AppActionHandlers {
 
   const openSourceFolderDialog = useCallback(async () => {
     if (!commandState.canOpenSources) {
+      return;
+    }
+
+    // Folder browsing is not available in browser/WASM mode
+    if (!isTauri) {
       return;
     }
 
@@ -700,6 +730,8 @@ export function Toolbar() {
 
 
   useEffect(() => {
+    if (!isTauri) return; // Backend workspace checks and platform detection require Tauri
+
     refreshKnownLogSources().catch((error) => {
       console.warn("[toolbar] failed to refresh known sources", { error });
     });
@@ -777,7 +809,10 @@ export function Toolbar() {
             <MenuItem onClick={() => void openSourceFileDialog().catch((err) => console.error("Failed to open file dialog", err))}>
               {openLabels.file}
             </MenuItem>
-            <MenuItem onClick={() => void openSourceFolderDialog().catch((err) => console.error("Failed to open folder dialog", err))}>
+            <MenuItem onClick={() => void openSourceFolderDialog().catch((err) => console.error("Failed to open folder dialog", err))}
+              disabled={!isTauri}
+              title={!isTauri ? "Folder browsing requires the desktop app" : undefined}
+            >
               {openLabels.folder}
             </MenuItem>
             {activeView === "dsregcmd" && (

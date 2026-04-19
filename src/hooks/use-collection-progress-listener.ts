@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { useUiStore, type CollectionProgressState } from "../stores/ui-store";
+import { isTauri } from "../lib/runtime";
 
 const COLLECTION_PROGRESS_EVENT = "collection-progress";
 
@@ -16,6 +17,7 @@ export function useCollectionProgressListener() {
   const setCollectionProgress = useUiStore((s) => s.setCollectionProgress);
 
   useEffect(() => {
+    if (!isTauri) return;
     const unlisten = listen<CollectionProgressPayload>(
       COLLECTION_PROGRESS_EVENT,
       (event) => {

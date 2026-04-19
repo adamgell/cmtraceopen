@@ -11,7 +11,7 @@ import {
   tokens,
 } from "@fluentui/react-components";
 import { SearchRegular } from "@fluentui/react-icons";
-import { writeText } from "@tauri-apps/plugin-clipboard-manager";
+import { writeText } from "../../lib/clipboard";
 import { LOG_MONOSPACE_FONT_FAMILY } from "../../lib/log-accessibility";
 import { useIntuneStore } from "../../workspaces/intune/intune-store";
 import type { GuidCategory, GuidRegistryEntry } from "../../workspaces/intune/types";

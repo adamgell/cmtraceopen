@@ -14,13 +14,15 @@ import {
 } from "@fluentui/react-components";
 import { CopyRegular, SearchRegular } from "@fluentui/react-icons";
 import { invoke } from "@tauri-apps/api/core";
-import { writeText } from "@tauri-apps/plugin-clipboard-manager";
+import { writeText } from "../../lib/clipboard";
 import {
   useUiStore,
   type ErrorLookupHistoryEntry,
 } from "../../stores/ui-store";
 import { LOG_MONOSPACE_FONT_FAMILY } from "../../lib/log-accessibility";
 import { getCategoryColor } from "../../lib/error-categories";
+import { isTauri } from "../../lib/runtime";
+import { searchErrorCodesWasm } from "../../lib/wasm-bridge";
 
 interface ErrorSearchResult {
   codeHex: string;
@@ -72,9 +74,9 @@ export function ErrorLookupDialog({ isOpen, onClose }: ErrorLookupDialogProps) {
       setIsSearching(true);
       setSearchError(null);
       try {
-        const res = await invoke<ErrorSearchResult[]>("search_error_codes", {
-          query: q,
-        });
+        const res = isTauri
+          ? await invoke<ErrorSearchResult[]>("search_error_codes", { query: q })
+          : (await searchErrorCodesWasm(q)) as ErrorSearchResult[];
         if (reqId !== requestIdRef.current) return;
         setResults(res);
 

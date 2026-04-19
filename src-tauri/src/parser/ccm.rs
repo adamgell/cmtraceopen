@@ -136,7 +136,10 @@ pub fn parse_content(
     specialization: Option<ParserSpecialization>,
 ) -> (Vec<LogEntry>, u32) {
     match specialization {
+        #[cfg(not(target_arch = "wasm32"))]
         Some(ParserSpecialization::Ime) => crate::intune::ime_parser::parse_ime_entries(content, file_path),
+        #[cfg(target_arch = "wasm32")]
+        Some(ParserSpecialization::Ime) => parse_content_multiline(content, file_path),
         None => parse_content_multiline(content, file_path),
     }
 }

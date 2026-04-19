@@ -29,6 +29,7 @@ pub enum AppError {
     Internal(String),
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl From<AppError> for tauri::ipc::InvokeError {
     fn from(err: AppError) -> Self {
         tauri::ipc::InvokeError::from(err.to_string())

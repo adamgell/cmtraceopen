@@ -40,6 +40,49 @@ import { useCollectionProgressListener } from "../../hooks/use-collection-progre
 import { useParseProgressListener } from "../../hooks/use-parse-progress-listener";
 import { useUpdateChecker } from "../../hooks/use-update-checker";
 import { QuickStatsPanel } from "../panels/QuickStatsPanel";
+import { isTauri } from "../../lib/runtime";
+
+/** JS fallback for `apply_filter` used in WASM/browser mode. */
+function applyFilterJs(entries: LogEntry[], clauses: FilterClause[]): number[] {
+  const ids: number[] = [];
+  for (const entry of entries) {
+    const match = clauses.every((clause) => {
+      let fieldValue: string;
+      switch (clause.field) {
+        case "Message":
+          fieldValue = entry.message ?? "";
+          break;
+        case "Component":
+          fieldValue = entry.component ?? "";
+          break;
+        case "Thread":
+          fieldValue = entry.thread != null ? String(entry.thread) : "";
+          break;
+        case "Timestamp":
+          fieldValue = entry.timestamp != null ? String(entry.timestamp) : "";
+          break;
+        case "Severity":
+          fieldValue = entry.severity ?? "";
+          break;
+        default:
+          fieldValue = "";
+      }
+      const needle = clause.value.toLowerCase();
+      const haystack = fieldValue.toLowerCase();
+      switch (clause.op) {
+        case "Contains": return haystack.includes(needle);
+        case "NotContains": return !haystack.includes(needle);
+        case "Equals": return haystack === needle;
+        case "NotEquals": return haystack !== needle;
+        case "Before": return entry.timestamp != null && entry.timestamp < Number(clause.value);
+        case "After": return entry.timestamp != null && entry.timestamp > Number(clause.value);
+        default: return true;
+      }
+    });
+    if (match) ids.push(entry.id);
+  }
+  return ids;
+}
 
 function buildFilterRunSignature(entries: LogEntry[], clauses: FilterClause[]): string {
   const lastId = entries.length > 0 ? entries[entries.length - 1].id : -1;
@@ -193,10 +236,9 @@ export function AppShell() {
       setIsFiltering(true);
 
       try {
-        const ids = await invoke<number[]>("apply_filter", {
-          entries: entriesSnapshot,
-          clauses,
-        });
+        const ids = isTauri
+          ? await invoke<number[]>("apply_filter", { entries: entriesSnapshot, clauses })
+          : applyFilterJs(entriesSnapshot, clauses);
 
         if (filterRequestIdRef.current !== requestId) {
           return;

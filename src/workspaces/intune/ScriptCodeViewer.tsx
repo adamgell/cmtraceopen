@@ -1,6 +1,6 @@
 import { memo, useCallback, useState } from "react";
 import { tokens } from "@fluentui/react-components";
-import { writeText } from "@tauri-apps/plugin-clipboard-manager";
+import { writeText } from "../../lib/clipboard";
 import { LOG_MONOSPACE_FONT_FAMILY } from "../../lib/log-accessibility";
 
 interface ScriptCodeViewerProps {
@@ -214,14 +214,7 @@ export const ScriptCodeViewer = memo(function ScriptCodeViewer({
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch {
-      // Fallback to navigator API
-      try {
-        await navigator.clipboard.writeText(script);
-        setCopied(true);
-        setTimeout(() => setCopied(false), 2000);
-      } catch {
-        // Ignore clipboard errors
-      }
+      // Ignore clipboard errors
     }
   }, [script]);
 

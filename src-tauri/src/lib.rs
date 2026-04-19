@@ -1,35 +1,41 @@
 mod constants;
-#[cfg(feature = "collector")]
+#[cfg(all(feature = "collector", not(target_arch = "wasm32")))]
 pub mod collector;
+#[cfg(not(target_arch = "wasm32"))]
 mod commands;
-#[cfg(debug_assertions)]
+#[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
 mod ipc_bridge;
-#[cfg(feature = "dsregcmd")]
+#[cfg(all(feature = "dsregcmd", not(target_arch = "wasm32")))]
 pub mod dsregcmd;
 pub mod error;
 pub mod error_db;
-#[cfg(target_os = "windows")]
+#[cfg(all(target_os = "windows", not(target_arch = "wasm32")))]
 pub mod graph_api;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod intune;
-#[cfg(feature = "event-log")]
+#[cfg(all(feature = "event-log", not(target_arch = "wasm32")))]
 pub mod event_log;
-#[cfg(feature = "macos-diag")]
+#[cfg(all(feature = "macos-diag", not(target_arch = "wasm32")))]
 pub mod macos_diag;
+#[cfg(not(target_arch = "wasm32"))]
 mod menu;
-mod models;
+pub mod models;
 pub mod parser;
-#[cfg(feature = "secureboot")]
+#[cfg(all(feature = "secureboot", not(target_arch = "wasm32")))]
 pub mod secureboot;
-#[cfg(feature = "sysmon")]
+#[cfg(all(feature = "sysmon", not(target_arch = "wasm32")))]
 pub mod sysmon;
+#[cfg(not(target_arch = "wasm32"))]
 mod state;
+#[cfg(not(target_arch = "wasm32"))]
 mod watcher;
 
+#[cfg(not(target_arch = "wasm32"))]
 use state::app_state::AppState;
 
-#[cfg(target_os = "windows")]
+#[cfg(all(target_os = "windows", not(target_arch = "wasm32")))]
 use tauri::Manager;
-#[cfg(target_os = "windows")]
+#[cfg(all(target_os = "windows", not(target_arch = "wasm32")))]
 use graph_api::GraphAuthState;
 
 /// Returns all non-flag CLI arguments as potential file paths.
@@ -39,6 +45,7 @@ use graph_api::GraphAuthState;
 /// Multiple files can be passed (e.g. `cmtraceopen file1.log file2.log`).
 /// Flags (arguments starting with `-`) are skipped so that internal Tauri or
 /// platform arguments do not get misidentified as file paths.
+#[cfg(not(target_arch = "wasm32"))]
 fn get_initial_file_paths_from_args() -> Vec<String> {
     std::env::args()
         .skip(1)
@@ -46,6 +53,7 @@ fn get_initial_file_paths_from_args() -> Vec<String> {
         .collect()
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let initial_file_paths = get_initial_file_paths_from_args();

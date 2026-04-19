@@ -1043,3 +1043,106 @@ async function recoverOrLoadSelectedFolderFile(
     return recoverFromSelectedFileLoadFailure(source, entries, requestedFilePath, error);
   }
 }
+
+/**
+ * Browser-only (WASM mode): load one or more browser `File` objects by reading
+ * their bytes and parsing them entirely in WebAssembly.
+ *
+ * Single file → single-file log view.
+ * Multiple files → aggregate log view (same layout as multi-file desktop open).
+ */
+export async function loadFileBytesAsLogSource(files: File[]): Promise<void> {
+  if (files.length === 0) return;
+
+  const { openLogFileBytes } = await import("./commands");
+  const state = useLogStore.getState();
+
+  state.setLoading(true);
+  state.setSourceStatus({
+    kind: "loading",
+    message: files.length === 1 ? `Loading ${files[0].name}...` : `Parsing ${files.length} files...`,
+  });
+
+  try {
+    if (files.length === 1) {
+      const file = files[0];
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      const result = await openLogFileBytes(bytes, file.name);
+      const source: LogSource = { kind: "file", path: file.name };
+      state.setSourceEntries([]);
+      state.setBundleMetadata(null);
+      await applyParseResultToStore(source, result.filePath, result);
+      return;
+    }
+
+    // Multi-file: parse each sequentially in WASM (no Rayon thread pool)
+    useFilterStore.getState().clearFilter();
+    state.setFolderLoadProgress({ current: 0, total: files.length, currentFile: "" });
+
+    const results: ParseResult[] = [];
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      state.setFolderLoadProgress({ current: i + 1, total: files.length, currentFile: file.name });
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      const result = await openLogFileBytes(bytes, file.name);
+      results.push(result);
+
+      const fileColumns = getColumnsForParser(result.parserSelection.parser);
+      setCachedTabSnapshot(result.filePath, {
+        entries: result.entries,
+        formatDetected: result.formatDetected,
+        parserSelection: result.parserSelection,
+        totalLines: result.totalLines,
+        byteOffset: result.byteOffset,
+        selectedSourceFilePath: result.filePath,
+        sourceOpenMode: "single-file",
+        activeColumns: fileColumns,
+      });
+    }
+
+    const aggregateFiles: import("../types/log").AggregateParsedFileResult[] = [];
+    let totalLines = 0;
+    const allEntries: import("../types/log").LogEntry[] = [];
+
+    for (const result of results) {
+      totalLines += result.totalLines;
+      for (const e of result.entries) allEntries.push(e);
+      aggregateFiles.push({
+        filePath: result.filePath,
+        totalLines: result.totalLines,
+        parseErrors: result.parseErrors,
+        fileSize: result.fileSize,
+        byteOffset: result.byteOffset,
+      });
+    }
+
+    allEntries.sort((a, b) => {
+      const ta = a.timestamp ?? 0;
+      const tb = b.timestamp ?? 0;
+      return ta - tb || a.lineNumber - b.lineNumber;
+    });
+
+    const columns = getColumnsForAggregate(results.map((r) => r.parserSelection.parser));
+    const firstFile = files[0].name;
+
+    state.setActiveSource({ kind: "folder", path: firstFile });
+    state.setSelectedSourceFilePath(firstFile);
+    state.setSourceOpenMode("aggregate-folder");
+    state.setAggregateFiles(aggregateFiles);
+    state.setEntries(allEntries);
+    state.setFormatDetected(results[0].formatDetected);
+    state.setParserSelection(results[0].parserSelection);
+    state.setTotalLines(totalLines);
+    state.setByteOffset(0);
+    state.setActiveColumns(columns);
+    state.setFolderLoadProgress(null);
+    state.selectEntry(null);
+    state.setSourceStatus({
+      kind: "loaded",
+      message: `Loaded ${files.length} files (${totalLines} lines).`,
+    });
+    useUiStore.getState().resetColumnWidths();
+  } finally {
+    state.setLoading(false);
+  }
+}

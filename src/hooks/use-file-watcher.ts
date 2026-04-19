@@ -3,6 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { useLogStore } from "../stores/log-store";
 import { startTail, stopTail, pauseTail, resumeTail } from "../lib/commands";
 import type { TailPayload } from "../types/log";
+import { isTauri } from "../lib/runtime";
 
 /**
  * Hook that manages the file-tail lifecycle:
@@ -10,6 +11,8 @@ import type { TailPayload } from "../types/log";
  * - Appends new entries as they arrive via Tauri events
  * - Handles pause/resume
  * - Cleans up on unmount or file change
+ *
+ * No-op in WASM/browser mode (live tailing requires OS filesystem access).
  */
 export function useFileWatcher() {
   const openFilePath = useLogStore((s) => s.openFilePath);
@@ -23,6 +26,7 @@ export function useFileWatcher() {
 
   // Start/stop tailing when file changes
   useEffect(() => {
+    if (!isTauri) return; // Live tailing not available in browser/WASM mode
     if (sourceOpenMode === "aggregate-folder") {
       if (aggregateFiles.length === 0) {
         return;
@@ -100,6 +104,7 @@ export function useFileWatcher() {
 
   // Listen for new tail entries from the Rust backend
   useEffect(() => {
+    if (!isTauri) return;
     const unlisten = listen<TailPayload>("tail-new-entries", (event) => {
       const { entries: newEntries, filePath, parserSelection } = event.payload;
       const state = useLogStore.getState();

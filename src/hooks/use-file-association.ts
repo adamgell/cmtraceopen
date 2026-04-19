@@ -3,6 +3,7 @@ import { getInitialFilePaths } from "../lib/commands";
 import { loadPathAsLogSource, loadFilesAsLogSource } from "../lib/log-source";
 import { useFilterStore } from "../stores/filter-store";
 import { useUiStore } from "../stores/ui-store";
+import { isTauri } from "../lib/runtime";
 
 /**
  * Hook that handles file paths passed via OS file association at app startup.
@@ -12,11 +13,14 @@ import { useUiStore } from "../stores/ui-store";
  * with the file paths as CLI arguments. This hook retrieves those paths on
  * mount and routes them through the appropriate loading flow — single-file
  * for one path, aggregate merge for multiple.
+ *
+ * No-op in WASM/browser mode (no OS file association in the browser).
  */
 export function useFileAssociation() {
   const clearFilter = useFilterStore((s) => s.clearFilter);
 
   useEffect(() => {
+    if (!isTauri) return; // OS file association not available in browser mode
     getInitialFilePaths()
       .then(async (paths) => {
         if (paths.length === 0) {

@@ -100,6 +100,63 @@ export const TAURI_SHIM_SCRIPT = `
     if (cb) cb(data);
   }
 
+  // plugin:dialog|open — show a real browser <input type="file"> picker.
+  // Returns an array of absolute-looking paths. In a browser we only get File
+  // objects (name + content), not OS paths. We write each file to the IPC bridge
+  // (/upload) so the Rust side can persist them to a temp dir and return real paths.
+  function handleDialogOpen(args) {
+    const opts = (args && args.options) || {};
+    return new Promise((resolve) => {
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.multiple = !!opts.multiple;
+      if (opts.directory) input.setAttribute('webkitdirectory', '');
+      // Build accept string from filters
+      if (opts.filters && opts.filters.length) {
+        const exts = opts.filters.flatMap(f => f.extensions || []);
+        if (exts.length && !exts.includes('*')) {
+          input.accept = exts.map(e => '.' + e).join(',');
+        }
+      }
+      input.style.display = 'none';
+      document.body.appendChild(input);
+
+      input.onchange = async () => {
+        const files = Array.from(input.files || []);
+        document.body.removeChild(input);
+        if (!files.length) { resolve(null); return; }
+
+        // If bridge is up: upload files so Rust can write them to a temp dir
+        // and give us real absolute paths for parsing.
+        if (bridgeUrl) {
+          try {
+            const fd = new FormData();
+            files.forEach(f => fd.append('files', f, f.name));
+            const res = await fetch(bridgeUrl + '/upload', { method: 'POST', body: fd });
+            const data = await res.json();
+            if (data.paths && data.paths.length) {
+              resolve(opts.multiple ? data.paths : data.paths[0]);
+              return;
+            }
+          } catch (e) {
+            console.warn('[tauri-shim] upload failed:', e.message);
+          }
+        }
+
+        // Fallback: return blob URLs (no real parsing, but UI won't hang)
+        const urls = files.map(f => URL.createObjectURL(f));
+        resolve(opts.multiple ? urls : urls[0]);
+      };
+
+      input.oncancel = () => {
+        document.body.removeChild(input);
+        resolve(null);
+      };
+
+      input.click();
+    });
+  }
+
   // Handle plugin:event|* commands used by listen()/emit()/unlisten()
   function handleEventPlugin(cmd, args) {
     switch (cmd) {
@@ -132,6 +189,8 @@ export const TAURI_SHIM_SCRIPT = `
     ipc: function () { /* no-op transport */ },
     invoke: async function (cmd, args) {
       if (cmd.startsWith('plugin:event|')) return handleEventPlugin(cmd, args);
+      if (cmd === 'plugin:dialog|open') return handleDialogOpen(args);
+      if (cmd === 'plugin:dialog|save' || cmd === 'plugin:dialog|message' || cmd === 'plugin:dialog|ask' || cmd === 'plugin:dialog|confirm') return Promise.resolve(null);
 
       // 1. Per-test overrides take highest precedence
       const override = window.__e2e_ipc_overrides__[cmd];

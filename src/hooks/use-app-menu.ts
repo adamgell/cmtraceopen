@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { useAppActions } from "../components/layout/Toolbar";
 import { useUiStore } from "../stores/ui-store";
+import { isTauri } from "../lib/runtime";
 
 const MENU_EVENT_APP_ACTION = "app-menu-action";
 
@@ -32,6 +33,7 @@ export function useAppMenu() {
   } = useAppActions();
 
   useEffect(() => {
+    if (!isTauri) return;
     let disposed = false;
 
     const handleAction = async (payload: AppMenuActionPayload) => {

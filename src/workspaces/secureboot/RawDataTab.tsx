@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Button, tokens } from "@fluentui/react-components";
-import { writeText } from "@tauri-apps/plugin-clipboard-manager";
+import { writeText } from "../../lib/clipboard";
 
 export interface RawDataTabProps {
   rawDump: string | null;

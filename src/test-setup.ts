@@ -17,6 +17,10 @@ const storageMock: Storage = {
 Object.defineProperty(globalThis, "localStorage", { value: storageMock, writable: true });
 Object.defineProperty(window, "localStorage", { value: storageMock, writable: true });
 
+// Simulate Tauri desktop environment so that runtime.ts picks up isTauri=true
+// and clipboard.ts delegates to the @tauri-apps/plugin-clipboard-manager mock.
+Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {}, configurable: true });
+
 // Mock Tauri IPC bridge
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),

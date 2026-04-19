@@ -350,10 +350,13 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
     }),
 }));
 
-// Listen for progress events from the Rust backend
-listen<{ channel: string; fetched: number }>("evtx-query-progress", (event) => {
-  useEvtxStore.setState({
-    loadingChannel: event.payload.channel,
-    loadingProgress: event.payload.fetched,
+// Listen for progress events from the Rust backend (Tauri only)
+import { isTauri } from "../../lib/runtime";
+if (isTauri) {
+  listen<{ channel: string; fetched: number }>("evtx-query-progress", (event) => {
+    useEvtxStore.setState({
+      loadingChannel: event.payload.channel,
+      loadingProgress: event.payload.fetched,
+    });
   });
-});
+}

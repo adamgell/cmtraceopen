@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { useSysmonStore, type SysmonAnalysisProgress } from "./sysmon-store";
+import { isTauri } from "../../lib/runtime";
 
 const SYSMON_ANALYSIS_PROGRESS_EVENT = "sysmon-analysis-progress";
 
@@ -8,6 +9,7 @@ export function useSysmonAnalysisProgress() {
   const updateProgress = useSysmonStore((s) => s.updateProgress);
 
   useEffect(() => {
+    if (!isTauri) return;
     const unlisten = listen<SysmonAnalysisProgress>(
       SYSMON_ANALYSIS_PROGRESS_EVENT,
       (event) => {

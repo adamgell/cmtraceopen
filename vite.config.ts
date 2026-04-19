@@ -2,6 +2,7 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
 const host = process.env.TAURI_DEV_HOST;
+const isWebBuild = process.env.CMTRACE_WEB === "1";
 
 export default defineConfig(async () => ({
   plugins: [react()],
@@ -21,4 +22,11 @@ export default defineConfig(async () => ({
       ignored: ["**/src-tauri/**"],
     },
   },
+  ...(isWebBuild && {
+    build: {
+      outDir: "dist-web",
+      emptyOutDir: true,
+      target: "esnext",
+    },
+  }),
 }));

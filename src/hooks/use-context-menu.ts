@@ -4,7 +4,7 @@ import {
   MenuItem,
   PredefinedMenuItem,
 } from "@tauri-apps/api/menu";
-import { writeText } from "@tauri-apps/plugin-clipboard-manager";
+import { writeText } from "../lib/clipboard";
 import { invoke } from "@tauri-apps/api/core";
 import { useFilterStore } from "../stores/filter-store";
 import { useLogStore } from "../stores/log-store";

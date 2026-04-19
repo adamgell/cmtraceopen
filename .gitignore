@@ -39,3 +39,11 @@ loginventory/
 
 # Git worktrees (isolated implementation branches)
 .worktrees/
+target/
+
+# WASM / web build artifacts
+src/wasm/
+dist-web/
+
+# Playwright MCP debug artifacts
+.playwright-mcp/

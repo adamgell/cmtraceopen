@@ -4,6 +4,7 @@ import { relaunch } from "@tauri-apps/plugin-process";
 import { getVersion } from "@tauri-apps/api/app";
 import { platform } from "@tauri-apps/plugin-os";
 import { useUiStore } from "../stores/ui-store";
+import { isTauri } from "../lib/runtime";
 
 const SKIPPED_VERSION_KEY = "cmtraceopen-skipped-update-version";
 const GITHUB_RELEASES_URL = "https://github.com/adamgell/cmtraceopen/releases/latest";
@@ -152,6 +153,7 @@ export function useUpdateChecker() {
 
   // Startup check — silent, non-blocking, once
   useEffect(() => {
+    if (!isTauri) return; // Update checking not available in browser/WASM mode
     if (startupCheckDone.current) return;
     startupCheckDone.current = true;
 

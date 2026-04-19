@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { writeText } from "@tauri-apps/plugin-clipboard-manager";
+import { writeText } from "../lib/clipboard";
 import { useLogStore } from "../stores/log-store";
 import { useUiStore } from "../stores/ui-store";
 import { useFilterStore } from "../stores/filter-store";

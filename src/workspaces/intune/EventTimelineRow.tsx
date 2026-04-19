@@ -1,7 +1,7 @@
 import { memo, forwardRef } from "react";
 import { Button, Tooltip, tokens } from "@fluentui/react-components";
 import { CopyRegular } from "@fluentui/react-icons";
-import { writeText } from "@tauri-apps/plugin-clipboard-manager";
+import { writeText } from "../../lib/clipboard";
 import { formatDisplayDateTime } from "../../lib/date-time-format";
 import {
   LOG_MONOSPACE_FONT_FAMILY,

@@ -17,6 +17,8 @@ import type {
   DsregcmdCaptureResult,
   DsregcmdResolvedSource,
 } from "../workspaces/dsregcmd/types";
+import { isTauri } from "./runtime";
+import { parseBytesWasm } from "./wasm-bridge";
 
 export interface FileAssociationPromptStatus {
   supported: boolean;
@@ -68,9 +70,25 @@ export async function openLogFile(path: string): Promise<ParseResult> {
   return invokeCommand<ParseResult>("open_log_file", { path });
 }
 
+/**
+ * Parse a file given its raw bytes — used in WASM/browser mode where the
+ * frontend has a `File` object but no OS file path.
+ */
+export async function openLogFileBytes(bytes: Uint8Array, filename: string): Promise<ParseResult> {
+  return parseBytesWasm(bytes, filename);
+}
+
 /** Parse multiple files in parallel on the Rust side (Rayon thread pool).
- *  Returns all results in a single IPC response — eliminates N-1 round-trips. */
+ *  Returns all results in a single IPC response — eliminates N-1 round-trips.
+ *  In WASM mode, falls back to sequential WASM parsing (paths are ignored;
+ *  use openLogFileBytes directly for browser file objects). */
 export async function parseFilesBatch(paths: string[]): Promise<ParseResult[]> {
+  if (!isTauri) {
+    // In WASM mode paths are meaningless — callers should use openLogFileBytes.
+    // Return empty to avoid throwing; callers loading from File objects won't
+    // reach this path (Toolbar calls openLogFileBytes directly).
+    return [];
+  }
   return invokeCommand<ParseResult[]>("parse_files_batch", { paths });
 }
 
@@ -249,6 +267,7 @@ export async function getAvailableWorkspaces(): Promise<WorkspaceId[]> {
 }
 
 export async function getFileAssociationPromptStatus(): Promise<FileAssociationPromptStatus> {
+  if (!isTauri) return { supported: false, shouldPrompt: false, isAssociated: false };
   return invokeCommand<FileAssociationPromptStatus>("get_file_association_prompt_status");
 }
 
@@ -263,6 +282,7 @@ export async function setFileAssociationPromptSuppressed(
 }
 
 export async function getSystemDateTimePreferences(): Promise<SystemDateTimePreferences> {
+  if (!isTauri) return { datePattern: "M/d/yyyy", timePattern: "h:mm:ss a", amDesignator: "AM", pmDesignator: "PM" };
   return invokeCommand<SystemDateTimePreferences>("get_system_date_time_preferences");
 }
 
