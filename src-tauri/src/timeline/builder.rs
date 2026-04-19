@@ -312,6 +312,7 @@ fn parse_to_index(
 /// Walk an IME-logs folder and extract Intune events by running the same
 /// pipeline the `analyze_intune_logs` command uses: ime_parser → GuidRegistry
 /// ingest → event_tracker::extract_events → timeline::build_timeline.
+#[cfg(feature = "intune-diagnostics")]
 fn extract_ime_events(
     folder: &std::path::Path,
 ) -> Result<Vec<crate::intune::models::IntuneEvent>, anyhow::Error> {
@@ -361,6 +362,19 @@ fn extract_ime_events(
     Ok(crate::intune::timeline::build_timeline(all_events))
 }
 
+/// When built without the `intune-diagnostics` feature, IME event extraction
+/// is unavailable. The timeline builder surfaces the per-source failure as a
+/// `SourceError`, matching the pattern used for individual file read errors.
+#[cfg(not(feature = "intune-diagnostics"))]
+fn extract_ime_events(
+    _folder: &std::path::Path,
+) -> Result<Vec<crate::intune::models::IntuneEvent>, anyhow::Error> {
+    Err(anyhow::anyhow!(
+        "IME event extraction requires the `intune-diagnostics` feature"
+    ))
+}
+
+#[cfg(feature = "intune-diagnostics")]
 const IME_LOG_HINTS: &[&str] = &[
     "intunemanagementextension",
     "appworkload",

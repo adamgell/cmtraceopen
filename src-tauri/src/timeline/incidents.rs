@@ -510,8 +510,10 @@ mod tests_detect {
             ],
         );
 
-        let mut t = TimelineTunables::default();
-        t.overlap_window_ms = 1_000;
+        let t = TimelineTunables {
+            overlap_window_ms: 1_000,
+            ..TimelineTunables::default()
+        };
         let denied: HashSet<String> = HashSet::new();
 
         let (_signals, incidents) = detect_incidents(
