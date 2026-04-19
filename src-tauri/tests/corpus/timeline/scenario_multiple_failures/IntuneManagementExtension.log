@@ -1,0 +1,4 @@
+<![LOG[Policy check {AA11AA11-AA11-AA11-AA11-AA11AA11AA11}]LOG]!><time="09:00:01.000+000" date="04-19-2026" component="IntuneMgmt" context="" type="1" thread="50" file="i.cs:1">
+<![LOG[Assignment error 0x80004005 for {AA11AA11-AA11-AA11-AA11-AA11AA11AA11}]LOG]!><time="09:00:02.200+000" date="04-19-2026" component="IntuneMgmt" context="" type="3" thread="50" file="i.cs:3">
+<![LOG[Policy check {BB22BB22-BB22-BB22-BB22-BB22BB22BB22}]LOG]!><time="09:15:01.500+000" date="04-19-2026" component="IntuneMgmt" context="" type="1" thread="50" file="i.cs:5">
+<![LOG[Assignment error 0x80070005 for {BB22BB22-BB22-BB22-BB22-BB22BB22BB22}]LOG]!><time="09:15:03.500+000" date="04-19-2026" component="IntuneMgmt" context="" type="3" thread="50" file="i.cs:7">

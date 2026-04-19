@@ -1,0 +1,4 @@
+<![LOG[Net bring-up]LOG]!><time="10:00:00.050+000" date="04-19-2026" component="Net" context="" type="1" thread="2" file="n.cs:1">
+<![LOG[Interface eth0 up]LOG]!><time="10:00:01.800+000" date="04-19-2026" component="Net" context="" type="1" thread="2" file="n.cs:3">
+<![LOG[Socket create failed EADDRNOTAVAIL]LOG]!><time="10:00:02.300+000" date="04-19-2026" component="Net" context="" type="3" thread="2" file="n.cs:5">
+<![LOG[Handshake aborted]LOG]!><time="10:00:03.050+000" date="04-19-2026" component="Net" context="" type="3" thread="2" file="n.cs:7">
