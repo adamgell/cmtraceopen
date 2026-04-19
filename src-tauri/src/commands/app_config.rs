@@ -31,5 +31,7 @@ pub fn get_available_workspaces() -> Vec<&'static str> {
         workspaces.push("secureboot");
     }
 
+    workspaces.push("timeline");
+
     workspaces
 }
