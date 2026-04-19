@@ -1,0 +1,4 @@
+<![LOG[App Install starting {AA11AA11-AA11-AA11-AA11-AA11AA11AA11}]LOG]!><time="09:00:00.000+000" date="04-19-2026" component="AgentExecutor" context="" type="1" thread="100" file="a.cs:1">
+<![LOG[Install failed {AA11AA11-AA11-AA11-AA11-AA11AA11AA11}]LOG]!><time="09:00:02.500+000" date="04-19-2026" component="AgentExecutor" context="" type="3" thread="100" file="a.cs:3">
+<![LOG[App Install starting {BB22BB22-BB22-BB22-BB22-BB22BB22BB22}]LOG]!><time="09:15:00.000+000" date="04-19-2026" component="AgentExecutor" context="" type="1" thread="100" file="a.cs:5">
+<![LOG[Install failed {BB22BB22-BB22-BB22-BB22-BB22BB22BB22}]LOG]!><time="09:15:04.000+000" date="04-19-2026" component="AgentExecutor" context="" type="3" thread="100" file="a.cs:7">

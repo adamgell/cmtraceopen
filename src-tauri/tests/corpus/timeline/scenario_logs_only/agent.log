@@ -1,0 +1,4 @@
+<![LOG[Worker start]LOG]!><time="10:00:00.000+000" date="04-19-2026" component="Worker" context="" type="1" thread="1" file="w.cs:1">
+<![LOG[Queue job 123]LOG]!><time="10:00:01.500+000" date="04-19-2026" component="Worker" context="" type="1" thread="1" file="w.cs:2">
+<![LOG[Connection refused on port 443]LOG]!><time="10:00:02.100+000" date="04-19-2026" component="Worker" context="" type="3" thread="1" file="w.cs:4">
+<![LOG[Retry exhausted after 5 attempts]LOG]!><time="10:00:02.900+000" date="04-19-2026" component="Worker" context="" type="3" thread="1" file="w.cs:5">
