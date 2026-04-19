@@ -50,14 +50,14 @@ pub fn enable_dns_debug_logging() -> Result<String, String> {
 #[cfg(target_os = "windows")]
 fn check_dns_logging_status_windows() -> DnsLoggingStatus {
     // Check DNS Server service via sc.exe (read-only)
-    let dns_installed = std::process::Command::new("sc.exe")
+    let dns_installed = crate::process_util::hidden_command("sc.exe")
         .args(["query", "DNS"])
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false);
 
     // Check DHCP Server service via sc.exe (read-only)
-    let dhcp_installed = std::process::Command::new("sc.exe")
+    let dhcp_installed = crate::process_util::hidden_command("sc.exe")
         .args(["query", "DHCPServer"])
         .output()
         .map(|o| o.status.success())
@@ -76,7 +76,7 @@ fn check_dns_logging_status_windows() -> DnsLoggingStatus {
     // HKLM\SYSTEM\CurrentControlSet\Services\DNS\Parameters
     //   LogLevel (DWORD) — nonzero means debug logging is enabled
     //   LogFilePath (REG_SZ) — path to the debug log file
-    let output = std::process::Command::new("reg.exe")
+    let output = crate::process_util::hidden_command("reg.exe")
         .args([
             "query",
             r"HKLM\SYSTEM\CurrentControlSet\Services\DNS\Parameters",
@@ -103,7 +103,7 @@ fn check_dns_logging_status_windows() -> DnsLoggingStatus {
         _ => false,
     };
 
-    let log_path_output = std::process::Command::new("reg.exe")
+    let log_path_output = crate::process_util::hidden_command("reg.exe")
         .args([
             "query",
             r"HKLM\SYSTEM\CurrentControlSet\Services\DNS\Parameters",
@@ -137,7 +137,7 @@ fn check_dns_logging_status_windows() -> DnsLoggingStatus {
 
 #[cfg(target_os = "windows")]
 fn enable_dns_debug_logging_windows() -> Result<String, String> {
-    let output = std::process::Command::new("powershell.exe")
+    let output = crate::process_util::hidden_command("powershell.exe")
         .args([
             "-NoProfile",
             "-Command",
@@ -341,7 +341,7 @@ fn collect_dns_dhcp_blocking(
 
         if is_local {
             // Local server: use wevtutil epl to export the live event log
-            let wevtutil_result = std::process::Command::new("wevtutil.exe")
+            let wevtutil_result = crate::process_util::hidden_command("wevtutil.exe")
                 .args([
                     "epl",
                     "Microsoft-Windows-DNSServer/Audit",
@@ -453,7 +453,7 @@ fn collect_dns_dhcp_blocking(
 #[cfg(target_os = "windows")]
 fn discover_domain_controllers() -> Result<Vec<String>, crate::error::AppError> {
     // Use PowerShell to query AD for domain controllers
-    let output = std::process::Command::new("powershell.exe")
+    let output = crate::process_util::hidden_command("powershell.exe")
         .args([
             "-NoProfile",
             "-Command",

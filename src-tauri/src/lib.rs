@@ -16,6 +16,7 @@ pub mod macos_diag;
 mod menu;
 mod models;
 pub mod parser;
+pub mod process_util;
 #[cfg(feature = "sysmon")]
 pub mod sysmon;
 mod state;
