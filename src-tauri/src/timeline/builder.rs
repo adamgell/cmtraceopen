@@ -1,5 +1,9 @@
 use std::path::{Path, PathBuf};
 
+/// Result of scanning a folder for timeline-eligible sources. Used by the
+/// frontend ingestion layer (and future command wrappers) to decide which
+/// paths to pass into `build_timeline` as log files vs. IME folders.
+#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ClassifiedSource {
     LogFile(PathBuf),
@@ -9,6 +13,7 @@ pub enum ClassifiedSource {
 /// Walk the given root (one level deep) and classify what we find.
 /// Produces log files for every recognized log path plus at most one
 /// IME-events source per IME folder detected.
+#[allow(dead_code)]
 pub fn classify_folder(root: &Path) -> Vec<ClassifiedSource> {
     let mut out: Vec<ClassifiedSource> = Vec::new();
     if !root.is_dir() {

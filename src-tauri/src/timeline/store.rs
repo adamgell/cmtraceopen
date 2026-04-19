@@ -12,6 +12,9 @@ pub struct Timeline {
 }
 
 impl Timeline {
+    /// Fresh recount across indexes + IME events. `bundle.total_entries` is
+    /// the canonical value; this helper is retained for tests/diagnostics.
+    #[allow(dead_code)]
     pub fn total_entries(&self) -> u64 {
         self.indexes.values().map(|v| v.len() as u64).sum::<u64>()
             + self.ime_events.values().map(|v| v.len() as u64).sum::<u64>()

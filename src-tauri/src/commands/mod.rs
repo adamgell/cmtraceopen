@@ -31,3 +31,4 @@ pub mod secureboot;
 #[cfg(feature = "sysmon")]
 pub mod sysmon;
 pub mod system_preferences;
+pub mod timeline;
