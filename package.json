@@ -1,6 +1,6 @@
 {
   "name": "cmtrace-open",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "private": true,
   "description": "Open-source CMTrace log viewer with built-in Intune diagnostics",
   "scripts": {
