@@ -2,6 +2,27 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.1] - 2026-04-20
+
+### Added
+
+- **Context menu filter from selection** (#53): Right-clicking a log row with text selected now offers Include/Exclude filter items scoped to the selected substring (in addition to the existing full-message Include/Exclude), mirroring ProcMon's "exclude all events with this value" workflow.
+- **WDAC Managed Installer examples**: New PowerShell examples under `scripts/powershell/CmtLog/examples/` for detecting, remediating, and restoring WDAC Managed Installer configurations (CIP files, SiPolicy, AppLocker MI rules, registry cleanup, CiTool integration), plus a sample `.cmtlog` output.
+
+### Fixed
+
+- **Hidden console windows for background spawns on Windows** (#138): Background diagnostics no longer flash visible `powershell.exe`/`cmd.exe`/`reg.exe` windows (sometimes 40+ during a collection run). A new `process_util::hidden_command` helper applies `CREATE_NO_WINDOW` to DNS/DHCP probes, `dsregcmd /status`, registry exports, `schtasks`, `nltest`, AD lookups, and the collector's `reg.exe` export. Reveal-in-Explorer launchers remain intentionally visible.
+- **File association status reflects reality** (#113): The Settings → File Associations tab now queries the current `.log` handler on mount (and after associating), switching to a "currently registered" view with a re-register option when CMTrace Open is the active handler, instead of always rendering the "Associate" button.
+- **Folder open skips inaccessible files** (#136): `parse_files_batch` and `open_log_folder_aggregate` no longer abort the entire load on the first per-file error (e.g. a permission-denied file); the failure is logged and the rest of the folder still opens.
+- **Ctrl+L mapped to Error Lookup** (#137): Restores legacy CMTrace muscle memory — Ctrl+L opens Error Lookup, Filter moves to Ctrl+Shift+L. Ctrl+E remains an Error Lookup alias.
+- **Clippy warnings blocking CI** (#140): Resolved `unnecessary_sort_by`, `collapsible_match`, and related lints to keep `cargo clippy -- -D warnings` green.
+
+### Changed
+
+- **CI build matrix**: Dropped macOS and Linux from the CI Tauri build matrix — the project targets Windows as its primary platform.
+- **Komac v2 winget publishing**: Release workflow now uses the portable Komac binary with dynamic latest-release lookup and `GITHUB_TOKEN` env var, fixing installer resolution failures in automated winget submissions.
+- **Playwright E2E scaffolding**: Added Playwright test configuration, Vite-served test harness, and a Rust IPC bridge so end-to-end tests can drive the app against the real backend.
+
 ## [1.2.0] - 2026-04-14
 
 ### Added
