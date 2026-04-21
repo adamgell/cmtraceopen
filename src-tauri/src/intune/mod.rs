@@ -1,5 +1,5 @@
 pub mod guid_registry;
-pub mod ime_parser;
+pub use cmtraceopen_parser::intune::ime_parser;
 pub mod models;
 #[cfg(feature = "intune-diagnostics")]
 pub mod download_stats;
