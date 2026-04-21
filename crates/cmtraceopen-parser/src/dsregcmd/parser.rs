@@ -11,9 +11,9 @@ fn field_line_re() -> &'static Regex {
 })
 }
 
-pub fn parse_dsregcmd(input: &str) -> Result<DsregcmdFacts, crate::error::AppError> {
+pub fn parse_dsregcmd(input: &str) -> Result<DsregcmdFacts, String> {
     if input.trim().is_empty() {
-        return Err(crate::error::AppError::InvalidInput("dsregcmd input was empty".to_string()));
+        return Err("dsregcmd input was empty".to_string());
     }
 
     let mut facts = DsregcmdFacts::default();
@@ -36,7 +36,7 @@ pub fn parse_dsregcmd(input: &str) -> Result<DsregcmdFacts, crate::error::AppErr
     }
 
     if recognized_fields == 0 {
-        return Err(crate::error::AppError::InvalidInput("Input did not contain recognizable dsregcmd /status fields".to_string()));
+        return Err("Input did not contain recognizable dsregcmd /status fields".to_string());
     }
 
     Ok(facts)
