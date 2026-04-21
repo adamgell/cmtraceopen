@@ -76,7 +76,10 @@ const LIVE_SYSMON_SOURCE_ID = "windows-sysmon-live-events";
 
 /** Check if a filename matches any glob pattern.
  *  Supports: `*` (match all), `*.ext`, `prefix*`, `prefix*.ext`, `*middle*`, exact names.
- *  Segments between `*` are matched in order (left-to-right substring matching). */
+ *  Segments between `*` are matched in order (left-to-right substring matching).
+ *
+ *  An empty `patterns` array is treated as "no filter" and returns `true` for
+ *  any filename, meaning the source imposes no file-name restriction. */
 function matchesAnyPattern(name: string, patterns: string[]): boolean {
   if (patterns.length === 0) return true;
   const lower = name.toLowerCase();
