@@ -1,0 +1,57 @@
+# Keep the Docker build context tight. The api-server image needs the Cargo
+# workspace manifest + the Rust sources under crates/ and src-tauri/. It does
+# NOT need the React frontend, node_modules, or any build output.
+
+# Build artifacts
+/target
+/src-tauri/target
+/src-tauri/target-tests
+/src-tauri/gen/schemas
+/pkg
+/dist
+**/node_modules
+
+# React frontend — part of the Tauri desktop build, not the api server
+/src
+/e2e
+/public
+/theme
+/test-results
+/playwright-report
+/index.html
+/package.json
+/package-lock.json
+/vite.config.ts
+/vitest.config.ts
+/tsconfig.json
+/skills-lock.json
+
+# VCS + editor + OS
+/.git
+/.github
+/.vscode
+/.idea
+**/.DS_Store
+Thumbs.db
+*.log
+
+# Local dev convenience files
+/.claude
+/.claude-dev-shell.ps1
+/.env
+/.env.local
+
+# Root-level docs — not needed in the image
+/CHANGELOG.md
+/CONTRIBUTING.md
+/DISCLAIMER.md
+/LICENSE
+/README.md
+/SECURITY.md
+/docs
+/references
+/logs
+/loginventory
+
+# The cmtraceopen-web sibling repo is at ../cmtraceopen-web — not part of this
+# build context anyway, but listed for clarity.

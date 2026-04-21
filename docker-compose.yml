@@ -1,0 +1,58 @@
+# CMTrace Open — local development stack.
+#
+# Bring up the API server + Postgres with:
+#
+#   docker compose up --build
+#
+# Targets Colima on Apple Silicon (native linux/arm64) and Docker Desktop on
+# Linux / x86_64 equally — no platform overrides needed.
+#
+# Postgres is wired in now even though the api-server doesn't persist anything
+# yet; that way CMTRACE_DATABASE_URL is already connected when storage lands
+# in a follow-up.
+
+name: cmtraceopen-dev
+
+services:
+  api-server:
+    build:
+      context: .
+      dockerfile: crates/api-server/Dockerfile
+    image: cmtraceopen-api:dev
+    ports:
+      - "8080:8080"
+    environment:
+      CMTRACE_LISTEN_ADDR: 0.0.0.0:8080
+      RUST_LOG: ${RUST_LOG:-api_server=info,tower_http=info,axum=info,warn}
+      # Placeholder — api-server ignores this today. Wired up when the
+      # metadata store lands in a follow-up commit.
+      CMTRACE_DATABASE_URL: postgres://cmtrace:cmtrace@postgres:5432/cmtrace
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # No container-level healthcheck: distroless/cc has no shell and no
+    # curl/wget, so the usual `test: CMD-SHELL ...` patterns don't apply.
+    # Kubernetes/deploy-side liveness + readiness probes will hit /healthz
+    # and /readyz directly when the server is deployed for real.
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: cmtrace
+      POSTGRES_PASSWORD: cmtrace
+      POSTGRES_DB: cmtrace
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    ports:
+      # Exposed to host for ad-hoc psql / GUI clients. Remove in prod.
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cmtrace -d cmtrace"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  pg-data:

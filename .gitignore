@@ -32,6 +32,7 @@ Logs/
 # Env
 .env
 .env.local
+!.env.example
 
 #logcollection
 loginventory/
