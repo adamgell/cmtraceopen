@@ -74,16 +74,44 @@ function resolveRefreshSource(
 
 const LIVE_SYSMON_SOURCE_ID = "windows-sysmon-live-events";
 
-/** Check if a filename matches any glob pattern (supports *.ext wildcards). */
+/** Check if a filename matches any glob pattern.
+ *  Supports: `*` (match all), `*.ext`, `prefix*`, `prefix*.ext`, `*middle*`, exact names.
+ *  Segments between `*` are matched in order (left-to-right substring matching). */
 function matchesAnyPattern(name: string, patterns: string[]): boolean {
   if (patterns.length === 0) return true;
   const lower = name.toLowerCase();
   return patterns.some((p) => {
     if (p === "*") return true;
-    if (p.startsWith("*.")) {
-      return lower.endsWith(p.slice(1).toLowerCase());
+    const lowerP = p.toLowerCase();
+    // Fast path: no wildcard → exact match
+    if (!lowerP.includes("*")) return lower === lowerP;
+    // Split on `*` and verify each segment appears in order
+    const segments = lowerP.split("*");
+    let pos = 0;
+    for (let i = 0; i < segments.length; i++) {
+      const seg = segments[i];
+      if (seg === "") {
+        // Empty segments arise from leading `*`, trailing `*`, or consecutive `**`.
+        // They carry no content to match, so skip them.
+        continue;
+      }
+      if (i === 0) {
+        // First segment (no leading `*`) must appear at the start
+        if (!lower.startsWith(seg)) return false;
+        pos = seg.length;
+      } else if (i === segments.length - 1) {
+        // Last segment (no trailing `*`) must appear at the end
+        if (!lower.endsWith(seg)) return false;
+        // Ensure the last segment doesn't overlap with already-matched content
+        if (lower.length - seg.length < pos) return false;
+      } else {
+        // Middle segments — find next occurrence at or after `pos`
+        const idx = lower.indexOf(seg, pos);
+        if (idx === -1) return false;
+        pos = idx + seg.length;
+      }
     }
-    return lower === p.toLowerCase();
+    return true;
   });
 }
 
@@ -648,25 +676,31 @@ export function Toolbar() {
       const family = families.find((f) => f.id === familyId);
       if (!family) return;
 
-      const folderSources: Array<{ path: string; patterns: string[] }> = [];
+      const folderSources: Array<{ folderPath: string; patterns: string[] }> = [];
+      const directFilePaths = new Set<string>();
+
       for (const group of family.groups) {
         for (const source of group.sources) {
-          if (source.source.kind === "known" && source.source.pathKind === "folder") {
-            folderSources.push({
-              path: source.source.defaultPath,
-              patterns: source.filePatterns ?? [],
-            });
+          if (source.source.kind === "known") {
+            if (source.source.pathKind === "folder") {
+              folderSources.push({
+                folderPath: source.source.defaultPath,
+                patterns: source.filePatterns ?? [],
+              });
+            } else if (source.source.pathKind === "file") {
+              directFilePaths.add(source.source.defaultPath);
+            }
           }
         }
       }
 
-      if (folderSources.length === 0) return;
+      if (folderSources.length === 0 && directFilePaths.size === 0) return;
 
       useUiStore.getState().ensureLogViewVisible("toolbar.open-all-family");
       useFilterStore.getState().clearFilter();
 
-      const allFilePaths = new Set<string>();
-      for (const { path: folderPath, patterns } of folderSources) {
+      const allFilePaths = new Set<string>(directFilePaths);
+      for (const { folderPath, patterns } of folderSources) {
         try {
           const listing = await listLogFolder(folderPath);
           for (const entry of listing.entries) {
@@ -693,11 +727,15 @@ export function Toolbar() {
     openKnownSourceCatalogAction,
     pasteDsregcmdSource,
     captureDsregcmdSource,
+    showFilterDialog,
     showErrorLookupDialog,
     toggleDetailsPane,
     toggleInfoPane,
   } = useAppActions();
 
+  const clearFilter = useCallback(() => {
+    useFilterStore.getState().clearFilter();
+  }, []);
 
   useEffect(() => {
     refreshKnownLogSources().catch((error) => {
@@ -922,6 +960,23 @@ export function Toolbar() {
       )}
 
       <Divider vertical />
+
+      <Button
+        onClick={commandState.activeFilterCount > 0 ? clearFilter : showFilterDialog}
+        title={
+          commandState.activeFilterCount > 0
+            ? `Clear active filter (${commandState.activeFilterCount} clause${commandState.activeFilterCount === 1 ? "" : "s"}) — click to remove`
+            : "Filter... (Ctrl+Shift+L)"
+        }
+        disabled={commandState.activeFilterCount === 0 && !commandState.canFilter}
+        aria-pressed={commandState.activeFilterCount > 0}
+        size="small"
+        appearance={commandState.activeFilterCount > 0 ? "primary" : "secondary"}
+      >
+        {commandState.activeFilterCount > 0
+          ? `Filter (${commandState.activeFilterCount})`
+          : "Filter..."}
+      </Button>
 
       <Button
         onClick={showErrorLookupDialog}
