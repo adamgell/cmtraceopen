@@ -25,7 +25,7 @@ use crate::models::log_entry::{LogEntry, ParseResult};
 use std::path::Path;
 
 /// Post-process parsed entries to detect error code spans in messages.
-fn annotate_error_code_spans(entries: &mut [LogEntry]) {
+pub fn annotate_error_code_spans(entries: &mut [LogEntry]) {
     for entry in entries.iter_mut() {
         let spans = crate::error_db::lookup::detect_error_code_spans(&entry.message);
         if !spans.is_empty() {
