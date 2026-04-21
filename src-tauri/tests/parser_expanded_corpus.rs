@@ -157,7 +157,7 @@ fn simple_clean_fixture_detects_and_parses() {
     assert_eq!(detected.implementation, "Simple");
 
     let parsed = parse_fixture("simple/clean/basic.log");
-    assert!(parsed.entries.len() >= 1, "should parse at least 1 entry, got {}", parsed.entries.len());
+    assert!(!parsed.entries.is_empty(), "should parse at least 1 entry, got {}", parsed.entries.len());
     assert_eq!(parsed.entries[0].component.as_deref(), Some("CcmExec"));
 }
 

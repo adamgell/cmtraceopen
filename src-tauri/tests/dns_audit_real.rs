@@ -29,7 +29,7 @@ fn test_real_dns_audit_evtx() {
 
     assert_eq!(format!("{:?}", selection.parser), "DnsAudit");
     assert_eq!(format!("{:?}", result.format_detected), "DnsAudit");
-    assert!(result.entries.len() > 0, "Should have parsed entries, got 0");
+    assert!(!result.entries.is_empty(), "Should have parsed entries, got 0");
     assert_eq!(result.parse_errors, 0, "Should have zero parse errors");
 
     // Collect event IDs
