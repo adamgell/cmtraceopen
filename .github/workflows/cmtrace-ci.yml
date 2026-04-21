@@ -40,8 +40,10 @@ jobs:
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
-            src-tauri/target/
-          key: ${{ runner.os }}-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
+            target/
+          # Cargo.lock moved to the workspace root when src-tauri became a
+          # member of the cmtraceopen Cargo workspace; cache key follows.
+          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-
 
       - name: Rust check
@@ -78,7 +80,9 @@ jobs:
         run: cargo deny check
 
       - name: Security vulnerability audit
-        working-directory: src-tauri
+        # cargo-audit reads Cargo.lock from the current directory (no
+        # workspace walk); run from the repo root where the lockfile now
+        # lives. Covers the full workspace: src-tauri + cmtraceopen-parser.
         run: cargo audit
 
   frontend:
