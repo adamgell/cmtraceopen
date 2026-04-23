@@ -19,6 +19,70 @@ pub fn matches_iis_w3c_record(line: &str) -> bool {
     }
 }
 
+/// Check if a line is an IIS-specific W3C Extended-format header directive.
+///
+/// Real IIS W3C logs open with a header block; this predicate recognises the
+/// IIS-specific directives so the classifier can require an authoritative
+/// signal before dispatching to the IIS parser. Generic `#Version: 1.0` is
+/// deliberately excluded — many tools emit it, and on its own it cannot
+/// disambiguate IIS from, e.g., other W3C-flavoured logs.
+///
+/// We accept:
+/// - `#Software: Microsoft Internet Information Services ...`
+/// - `#Fields: ...` whose column list carries an IIS Extended-format
+///   fingerprint (minimally `date time s-ip cs-method` or
+///   `date time s-sitename s-computername`, or any header whose first three
+///   listed columns are `date time s-*|cs-*`).
+///
+/// Being conservative here is fine: a false-negative on an exotic header
+/// shape is recoverable (path hint or direct `#Software:` line will still
+/// classify correctly), while a false-positive on installer logs is exactly
+/// the bug we are fixing.
+pub fn looks_like_iis_w3c_header(line: &str) -> bool {
+    let trimmed = line.trim();
+    if !trimmed.starts_with('#') {
+        return false;
+    }
+
+    let lower = trimmed.to_ascii_lowercase();
+    if lower.starts_with("#software: microsoft internet information services") {
+        return true;
+    }
+
+    if let Some(rest) = trimmed.strip_prefix("#Fields:") {
+        return fields_header_is_iis_like(rest);
+    }
+
+    false
+}
+
+fn fields_header_is_iis_like(fields: &str) -> bool {
+    let tokens: Vec<&str> = fields.split_whitespace().collect();
+    if tokens.len() < 3 {
+        return false;
+    }
+
+    // Must lead with `date time`, the W3C Extended-format convention IIS uses.
+    if !tokens[0].eq_ignore_ascii_case("date") || !tokens[1].eq_ignore_ascii_case("time") {
+        return false;
+    }
+
+    // After `date time`, look for any IIS-specific column prefix.
+    // `s-ip`, `cs-method`, `s-sitename`, `s-computername`, `cs-uri-stem`, etc.
+    // all start with `s-` or `cs(`/`cs-` — generic W3C-ish "date time something"
+    // logs from non-IIS sources will not carry these prefixes.
+    tokens[2..].iter().any(|token| {
+        let lowered = token.to_ascii_lowercase();
+        lowered.starts_with("s-")
+            || lowered.starts_with("cs-")
+            || lowered.starts_with("cs(")
+            || lowered.starts_with("sc-")
+            || lowered.starts_with("sc(")
+            || lowered == "c-ip"
+            || lowered == "s-ip"
+    })
+}
+
 fn is_w3c_date(value: &str) -> bool {
     value.len() == 10
         && value.as_bytes().get(4) == Some(&b'-')
@@ -290,6 +354,40 @@ mod tests {
             "#Software: Microsoft Internet Information Services 10.0"
         ));
         assert!(!matches_iis_w3c_record("not a log line"));
+    }
+
+    #[test]
+    fn test_looks_like_iis_w3c_header_accepts_software_directive() {
+        assert!(looks_like_iis_w3c_header(
+            "#Software: Microsoft Internet Information Services 10.0"
+        ));
+        assert!(looks_like_iis_w3c_header(
+            "   #Software: Microsoft Internet Information Services 7.5"
+        ));
+    }
+
+    #[test]
+    fn test_looks_like_iis_w3c_header_accepts_iis_fields_directive() {
+        assert!(looks_like_iis_w3c_header(
+            "#Fields: date time s-ip cs-method cs-uri-stem cs-uri-query s-port cs-username c-ip cs(User-Agent) sc-status sc-substatus sc-win32-status time-taken"
+        ));
+        assert!(looks_like_iis_w3c_header(
+            "#Fields: date time s-sitename s-computername s-ip cs-method cs-uri-stem"
+        ));
+    }
+
+    #[test]
+    fn test_looks_like_iis_w3c_header_rejects_generic_version_and_data() {
+        // `#Version: 1.0` on its own is too generic to trust.
+        assert!(!looks_like_iis_w3c_header("#Version: 1.0"));
+        // Data rows are not headers.
+        assert!(!looks_like_iis_w3c_header(
+            "2026-03-29 18:48:23 10.0.0.5 GET /default.htm - 443 - 203.0.113.10 Mozilla/5.0 200 0 0 12"
+        ));
+        // Non-IIS fields (e.g. `#Fields: date time level msg`) should not match.
+        assert!(!looks_like_iis_w3c_header(
+            "#Fields: date time level msg"
+        ));
     }
 
     #[test]

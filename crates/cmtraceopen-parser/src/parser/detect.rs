@@ -475,6 +475,7 @@ pub fn detect_parser(path: &str, content: &str) -> ResolvedParser {
     let mut intune_macos_count = 0u32;
     let mut dhcp_count = 0u32;
     let mut iis_w3c_count = 0u32;
+    let mut iis_w3c_header_count = 0u32;
     let mut burn_count = 0u32;
     let mut patchmypc_detection_count = 0u32;
     let mut secureboot_log_count = 0u32;
@@ -531,6 +532,9 @@ pub fn detect_parser(path: &str, content: &str) -> ResolvedParser {
             msi_count += msi::matches_msi_content(line.trim());
             psadt_legacy_count += psadt::matches_psadt_legacy_content(line.trim());
         }
+        if iis_w3c::looks_like_iis_w3c_header(line.trim()) {
+            iis_w3c_header_count += 1;
+        }
         if timestamped::matches_any_timestamp(line.trim()) {
             timestamp_count += 1;
             // Check for EU-style dates (first field > 12 → must be day)
@@ -569,7 +573,19 @@ pub fn detect_parser(path: &str, content: &str) -> ResolvedParser {
         ResolvedParser::patchmypc_detection()
     } else if burn_count >= 2 {
         ResolvedParser::burn()
-    } else if (iis_w3c_path_hint && iis_w3c_count >= 1) || iis_w3c_count >= 3 {
+    } else if iis_w3c_header_count >= 1
+        || (iis_w3c_path_hint && iis_w3c_count >= 1)
+    {
+        // IIS W3C classification requires an authoritative signal:
+        // either an IIS-specific header directive (`#Software: Microsoft
+        // Internet Information Services` or a `#Fields:` list carrying an
+        // IIS Extended-format fingerprint), or a trusted IIS log-path hint
+        // plus at least one timestamped data row. The previous
+        // `|| iis_w3c_count >= 3` fallback is dropped: three lines whose
+        // first two tokens are `YYYY-MM-DD HH:MM:SS` is trivial to hit in
+        // timestamped installer logs (SAS deployment wizard, FleetDeck
+        // remediation, etc.) and caused those files to be misclassified
+        // as IIS W3C with a 0.5 parse-error ratio.
         ResolvedParser::iis_w3c()
     } else if (dhcp_path_hint && dhcp_count >= 1) || dhcp_count >= 3 {
         ResolvedParser::dhcp()
@@ -882,5 +898,57 @@ Message two $$<Comp2><01-01-2024 08:00:01.000+000><thread=200>"#;
                         2026-04-11 15:29:18 DNS resolution complete";
         let detected = detect_parser("C:/logs/dns-resolver/app.log", content);
         assert_eq!(detected.parser, ParserKind::Timestamped);
+    }
+
+    #[test]
+    fn test_detect_sas_deployment_wizard_is_not_iis_w3c() {
+        // SAS Deployment Wizard installer log: leads with `YYYY-MM-DD HH:MM:SS`
+        // but no IIS header. Previously misclassified as IisW3c because the
+        // classifier fell through to `iis_w3c_count >= 3`.
+        let content = "2026-04-22 16:49:45,123 INFO  [main] Starting step Validate prerequisites\n\
+            2026-04-22 16:49:45,456 INFO  [main] Checking Java runtime environment\n\
+            2026-04-22 16:49:46,012 INFO  [main] Java 11.0.19 detected at C:/Program Files/Java\n\
+            2026-04-22 16:49:46,789 INFO  [main] Applying license key\n\
+            2026-04-22 16:49:47,234 WARN  [main] SASHOME already exists, contents will be preserved\n\
+            2026-04-22 16:49:47,987 INFO  [main] Launching SASDeploymentWizard extractor\n\
+            2026-04-22 16:49:48,456 INFO  [main] Step Validate prerequisites complete";
+        let detected = detect_parser(
+            "C:/logs/sdw_SASDeploymentWizard_IT_install.log",
+            content,
+        );
+        assert_ne!(detected.parser, ParserKind::IisW3c);
+        assert_ne!(detected.implementation, ParserImplementation::IisW3c);
+    }
+
+    #[test]
+    fn test_detect_fleetdeck_remediation_is_not_iis_w3c() {
+        // FleetDeck remediation output: timestamped lines, no IIS header.
+        // Previously misclassified as IisW3c.
+        let content = "2026-04-22 09:15:01 Remediation run started (host: WKS-42)\n\
+            2026-04-22 09:15:01 Checking policy FleetDeck.BaselineCompliance\n\
+            2026-04-22 09:15:02 Policy evaluation complete: drift detected\n\
+            2026-04-22 09:15:02 Applying remediation step: reset Windows Defender signatures\n\
+            2026-04-22 09:15:05 Step succeeded (exit code 0)\n\
+            2026-04-22 09:15:05 Applying remediation step: restart BITS service\n\
+            2026-04-22 09:15:07 Step succeeded (exit code 0)\n\
+            2026-04-22 09:15:07 Remediation run complete";
+        let detected = detect_parser("C:/logs/FleetDeck_Remediation.log", content);
+        assert_ne!(detected.parser, ParserKind::IisW3c);
+        assert_ne!(detected.implementation, ParserImplementation::IisW3c);
+    }
+
+    #[test]
+    fn test_detect_iis_w3c_from_path_hint_without_header_preamble() {
+        // Balanced rule: trusted IIS log path + at least one data row classifies
+        // as IisW3c even without the `#Software:` / `#Fields:` preamble (e.g.
+        // when the log has been rotated or truncated and only body remains).
+        let content = "2026-03-29 18:48:23 10.0.0.5 GET /default.htm - 443 - 203.0.113.10 Mozilla/5.0 200 0 0 12\n\
+            2026-03-29 18:48:24 10.0.0.5 POST /api/devices id=42 443 - 203.0.113.11 curl/8.7.1 404 7 2 35";
+        let detected = detect_parser(
+            "C:/inetpub/logs/LogFiles/W3SVC1/u_ex260329.log",
+            content,
+        );
+        assert_eq!(detected.parser, ParserKind::IisW3c);
+        assert_eq!(detected.implementation, ParserImplementation::IisW3c);
     }
 }
