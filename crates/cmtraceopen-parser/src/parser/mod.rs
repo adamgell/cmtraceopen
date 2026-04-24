@@ -20,6 +20,7 @@ pub mod secureboot_log;
 pub mod severity;
 pub mod simple;
 pub mod timestamped;
+pub mod tracing_json;
 
 use crate::models::log_entry::{LogEntry, ParseResult};
 use std::path::Path;
@@ -132,6 +133,9 @@ pub fn parse_lines_with_selection(
         }
         crate::models::log_entry::ParserImplementation::CmtLog => {
             cmtlog::parse_lines(lines, file_path)
+        }
+        crate::models::log_entry::ParserImplementation::TracingJson => {
+            tracing_json::parse_lines(lines, file_path)
         }
         crate::models::log_entry::ParserImplementation::GenericTimestamped => match selection.parser {
             crate::models::log_entry::ParserKind::Cbs => cbs::parse_lines(lines, file_path),

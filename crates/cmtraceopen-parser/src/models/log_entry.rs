@@ -63,6 +63,10 @@ pub enum ParserKind {
     DnsDebug,
     DnsAudit,
     CmtLog,
+    /// CMTraceOpen Agent's `tracing_subscriber::fmt::layer().json()` output,
+    /// shipped inside every evidence bundle under `agent/agent-<DATE>.log`
+    /// since agent v0.1.4.
+    TracingJson,
 }
 
 /// Concrete parser implementation currently used by the backend.
@@ -86,6 +90,7 @@ pub enum ParserImplementation {
     DnsDebug,
     DnsAudit,
     CmtLog,
+    TracingJson,
 }
 
 /// How the backend arrived at the parser selection.

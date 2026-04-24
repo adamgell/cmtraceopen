@@ -19,6 +19,7 @@ use super::{
     burn, cbs, cmtlog, dhcp, dism, dns_debug, iis_w3c, intune_macos, msi, panther,
     patchmypc_detection, psadt, reporting_events, secureboot_log,
     timestamped::{self, DateOrder},
+    tracing_json,
 };
 use crate::models::log_entry::{
     DateFieldOrder, LogFormat, ParseQuality, ParserImplementation, ParserKind,
@@ -322,6 +323,36 @@ impl ResolvedParser {
         )
     }
 
+    /// Parser for CMTraceOpen Agent's `tracing_subscriber` JSON-layer logs
+    /// (one JSON object per line), shipped in evidence bundles under
+    /// `agent/agent-<DATE>.log` since agent v0.1.4.
+    pub fn tracing_json() -> Self {
+        Self::new(
+            ParserKind::TracingJson,
+            ParserImplementation::TracingJson,
+            ParserProvenance::Dedicated,
+            ParseQuality::Structured,
+            RecordFraming::PhysicalLine,
+            DateOrder::default(),
+            None,
+        )
+    }
+
+    /// Heuristic variant — used when classification wins on content alone
+    /// (no agent/agent-*.log path hint, e.g. an operator extracted the log
+    /// and opened it locally).
+    pub fn tracing_json_heuristic() -> Self {
+        Self::new(
+            ParserKind::TracingJson,
+            ParserImplementation::TracingJson,
+            ParserProvenance::Heuristic,
+            ParseQuality::Structured,
+            RecordFraming::PhysicalLine,
+            DateOrder::default(),
+            None,
+        )
+    }
+
     pub fn compatibility_format(&self) -> LogFormat {
         match self.implementation {
             ParserImplementation::Ccm => LogFormat::Ccm,
@@ -341,6 +372,11 @@ impl ResolvedParser {
             ParserImplementation::DnsDebug => LogFormat::DnsDebug,
             ParserImplementation::DnsAudit => LogFormat::DnsAudit,
             ParserImplementation::CmtLog => LogFormat::CmtLog,
+            // Tracing-JSON maps to Timestamped for downstream consumers (the
+            // WASM viewer only needs "there's a timestamp column"); the
+            // stored `ParserKind::TracingJson` still carries the precise
+            // identity.
+            ParserImplementation::TracingJson => LogFormat::Timestamped,
         }
     }
 
@@ -405,6 +441,53 @@ pub fn detect_parser(path: &str, content: &str) -> ResolvedParser {
 
     // Path hints must be computed before sample_lines so the sample limit can depend on them.
     let path_lower = path.to_ascii_lowercase();
+
+    // CMTraceOpen Agent tracing-JSON logs.
+    //
+    // Evidence bundles ship `agent/agent-<DATE>.log` — one JSON object per
+    // line from `tracing_subscriber::fmt::layer().json()`. We detect via
+    // two paths:
+    //   (a) Strong path hint — filename starts with `agent/agent` and ends
+    //       `.log`, AND at least one of the first few lines passes the
+    //       structural sniff. This is the common bundle case.
+    //   (b) Content-only — 3+ of the first 10 non-empty lines all pass the
+    //       structural sniff. Handles operators extracting the log and
+    //       opening it without preserving the bundle path.
+    //
+    // This hook sits above the timestamped / CCM fallbacks because
+    // tracing-JSON lines contain `"timestamp":"..."` substrings that would
+    // otherwise trip generic timestamp classification.
+    {
+        let agent_path_hint = {
+            // Match both `agent/agent-*.log` (unix) and `agent\agent-*.log`
+            // (windows-style) as they appear after normalizing drive slashes.
+            let hinted = path_lower.contains("agent/agent") || path_lower.contains("agent\\agent");
+            hinted && path_lower.ends_with(".log")
+        };
+
+        let mut head_matches = 0usize;
+        let mut head_seen = 0usize;
+        for line in content.lines() {
+            let t = line.trim();
+            if t.is_empty() {
+                continue;
+            }
+            head_seen += 1;
+            if tracing_json::matches_tracing_json_record(t) {
+                head_matches += 1;
+            }
+            if head_seen >= 10 {
+                break;
+            }
+        }
+
+        if agent_path_hint && head_matches >= 1 {
+            return ResolvedParser::tracing_json();
+        }
+        if head_matches >= 3 {
+            return ResolvedParser::tracing_json_heuristic();
+        }
+    }
 
     // .cmtlog extension — unambiguous dedicated format, return immediately.
     if path_lower.ends_with(".cmtlog") {
@@ -935,6 +1018,46 @@ Message two $$<Comp2><01-01-2024 08:00:01.000+000><thread=200>"#;
         let detected = detect_parser("C:/logs/FleetDeck_Remediation.log", content);
         assert_ne!(detected.parser, ParserKind::IisW3c);
         assert_ne!(detected.implementation, ParserImplementation::IisW3c);
+    }
+
+    #[test]
+    fn test_detect_tracing_json_from_bundle_path_with_content() {
+        let content = "{\"timestamp\":\"2026-04-23T19:47:55.076231Z\",\"level\":\"INFO\",\"fields\":{\"message\":\"service_main starting\"},\"target\":\"cmtraceopen_agent::service\"}\n\
+            {\"timestamp\":\"2026-04-23T19:47:55.178414Z\",\"level\":\"WARN\",\"fields\":{\"message\":\"unexpected config shape\",\"detail\":\"missing field\"},\"target\":\"cmtraceopen_agent::config\"}";
+
+        let detected = detect_parser("agent/agent-2026-04-23.log", content);
+        assert_eq!(detected.parser, ParserKind::TracingJson);
+        assert_eq!(detected.implementation, ParserImplementation::TracingJson);
+        assert_eq!(detected.provenance, ParserProvenance::Dedicated);
+        assert_eq!(detected.compatibility_format(), LogFormat::Timestamped);
+    }
+
+    #[test]
+    fn test_detect_agent_log_with_plain_text_is_not_tracing_json() {
+        // Filename matches the agent/agent-*.log hint but content is plain
+        // text → must NOT classify as tracing_json (the path hint requires
+        // at least one structural match in the head).
+        let content = "Just some plain text that happens to live at agent/agent-*.log\n\
+                        Another plain line\n\
+                        More plain text";
+        let detected = detect_parser("agent/agent-2026-04-23.log", content);
+        assert_ne!(detected.parser, ParserKind::TracingJson);
+        assert_ne!(detected.implementation, ParserImplementation::TracingJson);
+    }
+
+    #[test]
+    fn test_detect_tracing_json_from_content_only_threshold() {
+        // Unrelated path, but 3+ of the first 10 non-empty lines match the
+        // tracing-JSON fingerprint → classify via the content-only rule
+        // with Heuristic provenance.
+        let content = "{\"timestamp\":\"2026-04-23T19:47:55.076231Z\",\"level\":\"INFO\",\"fields\":{\"message\":\"one\"},\"target\":\"x::a\"}\n\
+            {\"timestamp\":\"2026-04-23T19:47:55.178414Z\",\"level\":\"WARN\",\"fields\":{\"message\":\"two\"},\"target\":\"x::b\"}\n\
+            {\"timestamp\":\"2026-04-23T19:47:55.948850Z\",\"level\":\"ERROR\",\"fields\":{\"message\":\"three\"},\"target\":\"x::c\"}";
+
+        let detected = detect_parser("unrelated/foo.log", content);
+        assert_eq!(detected.parser, ParserKind::TracingJson);
+        assert_eq!(detected.implementation, ParserImplementation::TracingJson);
+        assert_eq!(detected.provenance, ParserProvenance::Heuristic);
     }
 
     #[test]
