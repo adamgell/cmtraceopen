@@ -209,10 +209,19 @@ export function StatusBar() {
       leftParts.push(elapsedText);
     }
 
+    const totalCount = entries.length;
+    const isFilterActive = filteredIds !== null && filteredCount !== totalCount;
+
     const positionText =
       selectedPosition !== null
-        ? `Entry ${selectedPosition} of ${filteredCount}`
+        ? isFilterActive
+          ? `Entry ${selectedPosition.toLocaleString()} of ${filteredCount.toLocaleString()} (${totalCount.toLocaleString()} total)`
+          : `Entry ${selectedPosition.toLocaleString()} of ${filteredCount.toLocaleString()}`
         : null;
+
+    const entriesCountText = isFilterActive
+      ? `${filteredCount.toLocaleString()} of ${totalCount.toLocaleString()} entries`
+      : `${filteredCount.toLocaleString()} entries`;
 
     const severityText =
       filteredCount > 0 ? formatSeverityCounts(severityCounts) : null;
@@ -228,7 +237,7 @@ export function StatusBar() {
       folderLoadStatusText
         ?? (entries.length > 0
         ? [
-            positionText ?? `${filteredCount} entries`,
+            positionText ?? entriesCountText,
             `${totalLines} lines`,
             sourceOpenMode === "aggregate-folder"
               ? `${aggregateFiles.length} files`
@@ -548,6 +557,7 @@ export function StatusBar() {
             whiteSpace: "nowrap",
             color: rightTone,
             fontWeight: 500,
+            fontVariantNumeric: "tabular-nums",
           }}
         >
           {rightStatusText}
