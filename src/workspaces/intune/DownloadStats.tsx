@@ -113,7 +113,7 @@ export function DownloadStats({ downloads }: DownloadStatsProps) {
               style={{
                 backgroundColor: tokens.colorNeutralBackground2,
                 borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
-                boxShadow: "0 1px 2px rgba(0,0,0,0.02)",
+                boxShadow: tokens.shadow2,
               }}
             >
               <th style={thStyle}>Status</th>
@@ -163,7 +163,7 @@ export function DownloadStats({ downloads }: DownloadStatsProps) {
                           flex: 1,
                           height: "6px",
                           backgroundColor: tokens.colorNeutralBackground3,
-                          borderRadius: "3px",
+                          borderRadius: "4px",
                           overflow: "hidden",
                         }}
                       >
@@ -172,7 +172,7 @@ export function DownloadStats({ downloads }: DownloadStatsProps) {
                             width: `${Math.min(dl.doPercentage, 100)}%`,
                             height: "100%",
                             backgroundColor: dl.doPercentage > 50 ? tokens.colorPaletteGreenForeground1 : tokens.colorBrandForeground1,
-                            borderRadius: "3px",
+                            borderRadius: "4px",
                           }}
                         />
                       </div>

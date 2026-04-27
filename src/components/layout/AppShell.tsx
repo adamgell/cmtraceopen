@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, Suspense } from "react";
 import { tokens, ProgressBar, Spinner } from "@fluentui/react-components";
+import { ChevronRightRegular } from "@fluentui/react-icons";
 import { invoke } from "@tauri-apps/api/core";
 import { Toolbar } from "./Toolbar";
 import { TabStrip } from "./TabStrip";
@@ -467,9 +468,7 @@ export function AppShell() {
                   justifyContent: "center",
                 }}
               >
-                <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
-                  <path d="M6 3l5 5-5 5V3z" />
-                </svg>
+                <ChevronRightRegular style={{ fontSize: 16 }} />
               </button>
             </div>
           ) : (

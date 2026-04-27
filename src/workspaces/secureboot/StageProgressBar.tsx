@@ -23,7 +23,7 @@ export function StageProgressBar({ currentStage }: StageProgressBarProps) {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-      <div style={{ display: "flex", gap: "3px", alignItems: "stretch" }}>
+      <div style={{ display: "flex", gap: "4px", alignItems: "stretch" }}>
         {SEGMENTS.map(({ stage, label }, index) => {
           const segIndex = stageIndex(stage);
           const isFilled = segIndex <= current;

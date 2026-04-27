@@ -18,7 +18,7 @@ export function FactsTable({
       style={{
         border: `1px solid ${tokens.colorNeutralStroke2}`,
         backgroundColor: tokens.colorNeutralCardBackground,
-        borderRadius: "10px",
+        borderRadius: "8px",
         overflow: "hidden",
       }}
     >
@@ -56,7 +56,7 @@ export function FactsTable({
                   display: "grid",
                   gridTemplateColumns: "170px minmax(0, 1fr)",
                   gap: "8px",
-                  padding: "9px 12px",
+                  padding: "8px 12px",
                   borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
                   alignItems: "start",
                 }}

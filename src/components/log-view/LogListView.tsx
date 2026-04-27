@@ -870,7 +870,7 @@ function HeaderCell({
                 justifyContent: "center",
                 padding: "1px 2px",
                 border: `1px solid ${isSorted ? tokens.colorBrandStroke1 : tokens.colorNeutralStroke1}`,
-                borderRadius: "3px",
+                borderRadius: "4px",
                 background: isSorted ? tokens.colorBrandBackground2 : tokens.colorNeutralBackground3,
                 cursor: "pointer",
                 color: isSorted ? tokens.colorBrandForeground1 : tokens.colorNeutralForeground2,
@@ -914,7 +914,7 @@ function HeaderCell({
             style={{
               width: 4,
               height: 10,
-              borderRadius: 1,
+              borderRadius: 2,
               backgroundColor: resizeHover
                 ? tokens.colorBrandStroke1
                 : tokens.colorNeutralStroke2,

@@ -320,13 +320,13 @@ export function DsregcmdWorkspace() {
               appearance="secondary"
               onClick={() => void openSourceFileDialog()}
             >
-              Open Text File
+              Open text file...
             </Button>
             <Button
               appearance="secondary"
               onClick={() => void openSourceFolderDialog()}
             >
-              Open Evidence Folder
+              Open evidence folder...
             </Button>
           </div>
         </div>
@@ -621,7 +621,7 @@ export function DsregcmdWorkspace() {
               <ul
                 style={{
                   marginTop: "8px",
-                  paddingLeft: "18px",
+                  paddingLeft: "20px",
                   color: tokens.colorNeutralForeground2,
                   lineHeight: 1.6,
                 }}
@@ -692,8 +692,8 @@ export function DsregcmdWorkspace() {
               onClick={() => setShowNotReported((value) => !value)}
             >
               {showNotReported
-                ? "Hide Not Reported Fields"
-                : "Show Not Reported Fields"}
+                ? "Hide not reported fields"
+                : "Show not reported fields"}
             </Button>
           </div>
           <div
@@ -754,7 +754,7 @@ export function DsregcmdWorkspace() {
                         style={{
                           width: "10px",
                           height: "10px",
-                          borderRadius: "999px",
+                          borderRadius: tokens.borderRadiusCircular,
                           backgroundColor: palette.dot,
                           marginTop: "8px",
                         }}
@@ -979,31 +979,31 @@ export function DsregcmdWorkspace() {
               appearance="secondary"
               onClick={() => void handleCopyStatus()}
             >
-              Copy Status Text
+              Copy status text
             </Button>
             <Button
               appearance="secondary"
               onClick={() => void handleCopySummary()}
             >
-              Copy Summary
+              Copy summary
             </Button>
             <Button
               appearance="secondary"
               onClick={() => void handleSaveExport("json")}
             >
-              Save JSON
+              Save JSON...
             </Button>
             <Button
               appearance="secondary"
               onClick={() => void handleSaveExport("summary")}
             >
-              Save Summary
+              Save summary...
             </Button>
             <Button
               appearance={showRawInput ? "primary" : "secondary"}
               onClick={() => setShowRawInput((value) => !value)}
             >
-              {showRawInput ? "Hide Raw Input" : "Show Raw Input"}
+              {showRawInput ? "Hide raw input" : "Show raw input"}
             </Button>
           </div>
           {exportStatus && (

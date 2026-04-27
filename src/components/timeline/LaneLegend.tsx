@@ -1,3 +1,4 @@
+import { tokens } from "@fluentui/react-components";
 import { useTimelineStore } from "../../stores/timeline-store";
 
 export function LaneLegend() {
@@ -36,10 +37,10 @@ export function LaneLegend() {
               gap: 6,
               alignItems: "center",
               padding: "2px 8px",
-              borderRadius: 999,
-              border: `1px solid ${isSolo ? src.color : "#d1d5db"}`,
-              background: muted ? "#f3f4f6" : "white",
-              color: muted ? "#9ca3af" : "#111",
+              borderRadius: tokens.borderRadiusCircular,
+              border: `1px solid ${isSolo ? src.color : tokens.colorNeutralStroke1}`,
+              background: muted ? tokens.colorNeutralBackground3 : tokens.colorNeutralBackground1,
+              color: muted ? tokens.colorNeutralForeground4 : tokens.colorNeutralForeground1,
               opacity: muted ? 0.6 : 1,
               fontSize: 12,
               cursor: "pointer",
@@ -54,7 +55,7 @@ export function LaneLegend() {
               }}
             />
             {src.displayName}
-            <span style={{ color: "#9ca3af" }}>{src.entryCount}</span>
+            <span style={{ color: tokens.colorNeutralForeground4 }}>{src.entryCount}</span>
           </button>
         );
       })}

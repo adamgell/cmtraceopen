@@ -412,7 +412,7 @@ function SortableTh({
             justifyContent: "center",
             padding: "1px 2px",
             border: `1px solid ${isActive ? tokens.colorNeutralStroke1 : tokens.colorNeutralStroke2}`,
-            borderRadius: "3px",
+            borderRadius: "4px",
             background: isActive ? tokens.colorNeutralBackground1 : "transparent",
             cursor: "pointer",
             color: isActive ? tokens.colorNeutralForeground1 : tokens.colorNeutralForeground3,
@@ -430,5 +430,5 @@ function SortableTh({
 }
 
 const tdStyle: React.CSSProperties = {
-  padding: "5px 10px",
+  padding: "4px 10px",
 };

@@ -23,9 +23,9 @@ export const newIntuneWorkspace: WorkspaceDefinition = {
     { name: "All Files", extensions: ["*"] },
   ],
   actionLabels: {
-    file: "Open IME Log File",
-    folder: "Open IME Or Evidence Folder",
-    placeholder: "Open Intune Source...",
+    file: "Open IME log file...",
+    folder: "Open IME or evidence folder...",
+    placeholder: "Open Intune source...",
   },
   onOpenSource: createIntuneOnOpenSource("new-intune"),
 };

@@ -1,5 +1,6 @@
 import { useMemo, useState, useCallback, useRef, useEffect } from "react";
 import { tokens } from "@fluentui/react-components";
+import { ChevronRightRegular } from "@fluentui/react-icons";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   LOG_UI_FONT_FAMILY,
@@ -418,7 +419,7 @@ function ActivityGroupHeader({
           transform: isExpanded ? "rotate(90deg)" : "rotate(0deg)",
         }}
       >
-        ▶
+        <ChevronRightRegular />
       </span>
 
       {/* App name */}
@@ -442,7 +443,7 @@ function ActivityGroupHeader({
         style={{
           fontSize: `${Math.max(fontSize - 2, 9)}px`,
           padding: "2px 6px",
-          borderRadius: "3px",
+          borderRadius: "4px",
           backgroundColor: tokens.colorNeutralBackground4,
           color: tokens.colorNeutralForeground2,
           fontWeight: 700,
@@ -700,7 +701,7 @@ function ActivityEventRow({
               fontSize: `${smallFont}px`,
               fontWeight: 700,
               padding: "1px 6px",
-              borderRadius: "3px",
+              borderRadius: "4px",
               backgroundColor: tokens.colorPaletteRedBackground2,
               color: tokens.colorPaletteRedForeground1,
               fontFamily: LOG_MONOSPACE_FONT_FAMILY,
@@ -732,7 +733,7 @@ function ActivityEventRow({
                   fontSize: `${smallFont}px`,
                   fontWeight: 600,
                   padding: "1px 6px",
-                  borderRadius: "3px",
+                  borderRadius: "4px",
                   backgroundColor: colors.bg,
                   color: colors.fg,
                 }}

@@ -25,8 +25,8 @@ export const dnsDhcpWorkspace: WorkspaceDefinition = {
     { name: "All Files", extensions: ["*"] },
   ],
   actionLabels: {
-    file: "Open DNS/DHCP File",
-    folder: "Open Log Folder",
+    file: "Open DNS/DHCP file...",
+    folder: "Open log folder...",
     placeholder: "Open DNS or DHCP logs...",
   },
   onOpenSource: async (source, trigger) => {

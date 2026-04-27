@@ -20,7 +20,6 @@ const useStyles = makeStyles({
     ...shorthands.borderRadius(tokens.borderRadiusXLarge),
     ...shorthands.padding("16px"),
     marginBottom: "16px",
-    boxShadow: tokens.shadow2,
     display: "flex",
     gap: "24px",
     alignItems: "center",
@@ -77,13 +76,12 @@ const useStyles = makeStyles({
     ...shorthands.border("1px", "solid", tokens.colorNeutralStroke1),
     ...shorthands.borderRadius(tokens.borderRadiusXLarge),
     overflow: "hidden",
-    boxShadow: tokens.shadow2,
   },
   profileCardHeader: {
     display: "flex",
     justifyContent: "space-between",
     alignItems: "center",
-    ...shorthands.padding("12px", "14px"),
+    ...shorthands.padding("12px", "16px"),
     cursor: "pointer",
     transitionProperty: "background",
     transitionDuration: "0.15s",
@@ -116,8 +114,8 @@ const useStyles = makeStyles({
   managedBadge: {
     fontSize: "10px",
     fontWeight: 600,
-    ...shorthands.padding("2px", "7px"),
-    ...shorthands.borderRadius("100px"),
+    ...shorthands.padding("2px", "8px"),
+    ...shorthands.borderRadius(tokens.borderRadiusCircular),
     textTransform: "uppercase" as const,
     letterSpacing: "0.3px",
     backgroundColor: tokens.colorPaletteBlueBackground2,
@@ -137,7 +135,7 @@ const useStyles = makeStyles({
     transform: "rotate(180deg)",
   },
   profileCardBody: {
-    ...shorthands.padding("0px", "14px", "14px"),
+    ...shorthands.padding("0px", "12px", "12px"),
     borderTop: `1px solid ${tokens.colorNeutralStroke1}`,
   },
   payloadList: {
@@ -230,8 +228,8 @@ const useStyles = makeStyles({
   verifiedBadge: {
     fontSize: "10px",
     fontWeight: 600,
-    ...shorthands.padding("2px", "7px"),
-    ...shorthands.borderRadius("100px"),
+    ...shorthands.padding("2px", "8px"),
+    ...shorthands.borderRadius(tokens.borderRadiusCircular),
     textTransform: "uppercase" as const,
     letterSpacing: "0.3px",
     backgroundColor: tokens.colorPaletteGreenBackground1,
@@ -240,8 +238,8 @@ const useStyles = makeStyles({
   sourceBadge: {
     fontSize: "10px",
     fontWeight: 600,
-    ...shorthands.padding("2px", "7px"),
-    ...shorthands.borderRadius("100px"),
+    ...shorthands.padding("2px", "8px"),
+    ...shorthands.borderRadius(tokens.borderRadiusCircular),
     textTransform: "uppercase" as const,
     letterSpacing: "0.3px",
     backgroundColor: tokens.colorPaletteBlueBackground2,
@@ -440,7 +438,7 @@ export function MacosDiagProfilesTab() {
         </div>
         <div className={styles.sectionActions}>
           <Button size="small" appearance="subtle" onClick={copyAll}>
-            {copied ? "Copied!" : "Copy All"}
+            {copied ? "Copied" : "Copy all"}
           </Button>
           <Button size="small" appearance="subtle" onClick={fetch}>
             Refresh

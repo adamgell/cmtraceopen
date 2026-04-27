@@ -111,7 +111,7 @@ export function GraphApiTab() {
         style={{
           fontSize: "12px",
           color: tokens.colorNeutralForeground3,
-          marginBottom: "14px",
+          marginBottom: "16px",
           lineHeight: 1.5,
         }}
       >
@@ -123,7 +123,7 @@ export function GraphApiTab() {
       <div
         style={{
           padding: "10px 12px",
-          marginBottom: "14px",
+          marginBottom: "16px",
           borderRadius: "4px",
           backgroundColor: tokens.colorPaletteYellowBackground1,
           border: `1px solid ${tokens.colorPaletteYellowBorder1}`,
@@ -228,12 +228,12 @@ export function GraphApiTab() {
                 type="button"
                 onClick={confirmEnable}
                 style={{
-                  padding: "4px 14px",
+                  padding: "4px 12px",
                   fontSize: "12px",
                   border: `1px solid ${tokens.colorBrandStroke1}`,
                   backgroundColor: tokens.colorBrandBackground,
                   color: tokens.colorNeutralForegroundOnBrand,
-                  borderRadius: "3px",
+                  borderRadius: "4px",
                   cursor: "pointer",
                 }}
               >
@@ -243,12 +243,12 @@ export function GraphApiTab() {
                 type="button"
                 onClick={() => setShowConfirmEnable(false)}
                 style={{
-                  padding: "4px 14px",
+                  padding: "4px 12px",
                   fontSize: "12px",
                   border: `1px solid ${tokens.colorNeutralStroke1}`,
                   backgroundColor: "transparent",
                   color: tokens.colorNeutralForeground1,
-                  borderRadius: "3px",
+                  borderRadius: "4px",
                   cursor: "pointer",
                 }}
               >
@@ -334,12 +334,12 @@ export function GraphApiTab() {
                     onClick={handlePrePopulateCache}
                     disabled={cacheLoading}
                     style={{
-                      padding: "4px 14px",
+                      padding: "4px 12px",
                       fontSize: "12px",
                       border: `1px solid ${tokens.colorBrandStroke1}`,
                       backgroundColor: tokens.colorBrandBackground,
                       color: tokens.colorNeutralForegroundOnBrand,
-                      borderRadius: "3px",
+                      borderRadius: "4px",
                       cursor: cacheLoading ? "wait" : "pointer",
                       opacity: cacheLoading ? 0.7 : 1,
                     }}
@@ -357,7 +357,7 @@ export function GraphApiTab() {
                       border: `1px solid ${tokens.colorNeutralStroke1}`,
                       backgroundColor: "transparent",
                       color: tokens.colorNeutralForeground2,
-                      borderRadius: "3px",
+                      borderRadius: "4px",
                       cursor: "pointer",
                     }}
                   >
@@ -427,12 +427,12 @@ export function GraphApiTab() {
                   onClick={handleSignIn}
                   disabled={loading}
                   style={{
-                    padding: "4px 14px",
+                    padding: "4px 12px",
                     fontSize: "12px",
                     border: `1px solid ${tokens.colorBrandStroke1}`,
                     backgroundColor: tokens.colorBrandBackground,
                     color: tokens.colorNeutralForegroundOnBrand,
-                    borderRadius: "3px",
+                    borderRadius: "4px",
                     cursor: loading ? "wait" : "pointer",
                     opacity: loading ? 0.7 : 1,
                   }}

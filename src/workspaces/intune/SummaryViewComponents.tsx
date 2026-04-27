@@ -34,8 +34,8 @@ export function DiagnosticMetaBadge({ label, tone }: { label: string; tone: stri
         border: `1px solid color-mix(in srgb, ${tone} 20%, transparent)`,
         backgroundColor: `color-mix(in srgb, ${tone} 7%, transparent)`,
         fontWeight: 700,
-        borderRadius: "999px",
-        padding: "3px 8px",
+        borderRadius: tokens.borderRadiusCircular,
+        padding: "4px 8px",
       }}
     >
       {label}
@@ -67,8 +67,8 @@ export function DiagnosticChipRow({
             key={`${label}-${item}`}
             style={{
               fontSize: "10px",
-              borderRadius: "999px",
-              padding: "3px 8px",
+              borderRadius: tokens.borderRadiusCircular,
+              padding: "4px 8px",
               color: itemTone,
               backgroundColor: background,
               border: `1px solid ${border}`,
@@ -115,7 +115,7 @@ export function ConclusionButton({
         style={{
           width: "8px",
           height: "8px",
-          borderRadius: "999px",
+          borderRadius: tokens.borderRadiusCircular,
           backgroundColor: tone.accent,
           flexShrink: 0,
         }}
@@ -152,7 +152,7 @@ export function SectionCard({
         border: `1px solid ${tokens.colorNeutralStroke2}`,
         borderRadius: "8px",
         backgroundColor: tokens.colorNeutralCardBackground,
-        padding: "12px 14px",
+        padding: "12px 12px",
       }}
     >
       <div style={{ marginBottom: "10px" }}>
@@ -179,8 +179,8 @@ export function CompactFact({
         display: "inline-flex",
         alignItems: "baseline",
         gap: "6px",
-        padding: "5px 8px",
-        borderRadius: "999px",
+        padding: "4px 8px",
+        borderRadius: tokens.borderRadiusCircular,
         border: `1px solid ${tokens.colorNeutralStroke2}`,
         backgroundColor: tokens.colorNeutralBackground2,
       }}
@@ -203,7 +203,7 @@ export function SourceFamilyBadge({ family }: { family: IntuneSourceFamilySummar
         alignItems: "center",
         gap: "6px",
         padding: "4px 8px",
-        borderRadius: "999px",
+        borderRadius: tokens.borderRadiusCircular,
         border: `1px solid ${tone.border}`,
         backgroundColor: tone.background,
         color: tone.label,
@@ -225,7 +225,7 @@ function SourceKindBadge({ kind }: { kind: IntuneLogSourceKind }) {
       style={{
         fontSize: "10px",
         padding: "2px 6px",
-        borderRadius: "999px",
+        borderRadius: tokens.borderRadiusCircular,
         border: `1px solid ${tone.border}`,
         backgroundColor: tone.background,
         color: tone.label,
@@ -277,7 +277,7 @@ export function CoverageRow({ file }: { file: IntuneDiagnosticsFileCoverage }) {
               style={{
                 fontSize: "10px",
                 padding: "2px 6px",
-                borderRadius: "999px",
+                borderRadius: tokens.borderRadiusCircular,
                 backgroundColor: file.isRotatedSegment ? tokens.colorPaletteYellowBackground1 : tokens.colorPaletteBlueBackground2,
                 color: file.isRotatedSegment ? tokens.colorPaletteMarigoldForeground2 : tokens.colorPaletteTealForeground2,
                 fontWeight: 700,
@@ -309,7 +309,7 @@ function RowStat({
       style={{
         fontSize: "10px",
         padding: "2px 6px",
-        borderRadius: "999px",
+        borderRadius: tokens.borderRadiusCircular,
         backgroundColor: tokens.colorPaletteBlueBackground2,
         color,
         fontWeight: 700,
@@ -329,7 +329,7 @@ export function ConfidenceBadge({ confidence }: { confidence: IntuneDiagnosticsC
         alignItems: "center",
         gap: "8px",
         padding: "6px 10px",
-        borderRadius: "999px",
+        borderRadius: tokens.borderRadiusCircular,
         border: `1px solid ${tone.border}`,
         backgroundColor: tone.background,
       }}
@@ -412,7 +412,7 @@ export function DiagnosticCard({
         borderLeft: `4px solid ${accent.accent}`,
         borderRadius: "6px",
         backgroundColor: accent.background,
-        padding: "12px 14px",
+        padding: "12px 12px",
       }}
     >
       <div
@@ -500,7 +500,7 @@ export function DiagnosticCard({
           >
             Evidence
           </div>
-          <ul style={{ margin: 0, paddingLeft: "18px", color: tokens.colorNeutralForeground1 }}>
+          <ul style={{ margin: 0, paddingLeft: "20px", color: tokens.colorNeutralForeground1 }}>
             {diagnostic.evidence.map((item) => (
               <li key={item} style={{ marginBottom: "2px" }}>
                 {item}
@@ -521,7 +521,7 @@ export function DiagnosticCard({
           >
             Next Checks
           </div>
-          <ul style={{ margin: 0, paddingLeft: "18px", color: tokens.colorNeutralForeground1 }}>
+          <ul style={{ margin: 0, paddingLeft: "20px", color: tokens.colorNeutralForeground1 }}>
             {diagnostic.nextChecks.map((item) => (
               <li key={item} style={{ marginBottom: "2px" }}>
                 {item}
@@ -543,7 +543,7 @@ export function DiagnosticCard({
             >
               Suggested Fixes
             </div>
-            <ul style={{ margin: 0, paddingLeft: "18px", color: tokens.colorNeutralForeground1 }}>
+            <ul style={{ margin: 0, paddingLeft: "20px", color: tokens.colorNeutralForeground1 }}>
               {diagnostic.suggestedFixes.map((item) => (
                 <li key={item} style={{ marginBottom: "2px" }}>
                   {item}

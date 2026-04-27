@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { tokens } from "@fluentui/react-components";
+import { DismissRegular } from "@fluentui/react-icons";
 import { useFilterStore } from "../../stores/filter-store";
 
 export type FilterOp =
@@ -174,7 +175,7 @@ export function FilterDialog({
           borderRadius: "4px",
           padding: "12px",
           minWidth: "520px",
-          boxShadow: "0 4px 12px rgba(0,0,0,0.3)",
+          boxShadow: tokens.shadow16,
         }}
       >
         <div
@@ -259,6 +260,7 @@ export function FilterDialog({
               <button
                 onClick={() => removeClause(index)}
                 disabled={isFiltering}
+                aria-label="Remove clause"
                 style={{
                   fontSize: "11px",
                   padding: "1px 4px",
@@ -270,7 +272,7 @@ export function FilterDialog({
                 }}
                 title="Remove clause"
               >
-                ✕
+                <DismissRegular />
               </button>
             )}
           </div>

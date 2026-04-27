@@ -66,7 +66,7 @@ export function UpdateDialog({
     padding: "16px",
     minWidth: "420px",
     maxWidth: "520px",
-    boxShadow: "0 4px 12px rgba(0,0,0,0.3)",
+    boxShadow: tokens.shadow16,
   };
 
   const buttonStyle: React.CSSProperties = {
@@ -119,7 +119,7 @@ export function UpdateDialog({
             style={{
               height: "6px",
               backgroundColor: tokens.colorNeutralBackground5,
-              borderRadius: "3px",
+              borderRadius: "4px",
               overflow: "hidden",
               marginBottom: "8px",
             }}
@@ -129,7 +129,7 @@ export function UpdateDialog({
                 width: `${percent}%`,
                 height: "100%",
                 backgroundColor: tokens.colorBrandBackground,
-                borderRadius: "3px",
+                borderRadius: "4px",
                 transition: "width 0.3s ease",
               }}
             />
@@ -196,11 +196,11 @@ export function UpdateDialog({
               <button onClick={onClose} style={buttonStyle}>Later</button>
               {updateInfo.canAutoUpdate && !updateInfo.error ? (
                 <button onClick={onDownloadAndInstall} style={primaryButtonStyle}>
-                  Download &amp; Install
+                  Download &amp; install
                 </button>
               ) : (
                 <button onClick={onOpenReleasePage} style={primaryButtonStyle}>
-                  Download from GitHub
+                  Download from GitHub...
                 </button>
               )}
             </div>

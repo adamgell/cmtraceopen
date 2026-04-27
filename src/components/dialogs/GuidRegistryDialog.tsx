@@ -111,7 +111,7 @@ export function GuidRegistryDialog({ isOpen, onClose }: GuidRegistryDialogProps)
                     key={tab.id}
                     onClick={() => setActiveTab(tab.id)}
                     style={{
-                      padding: "6px 14px",
+                      padding: "6px 12px",
                       fontSize: "12px",
                       border: "none",
                       borderBottom:

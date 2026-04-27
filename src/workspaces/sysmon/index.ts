@@ -27,9 +27,9 @@ export const sysmonWorkspace: WorkspaceDefinition = {
     { name: "All Files", extensions: ["*"] },
   ],
   actionLabels: {
-    file: "Open EVTX File",
-    folder: "Open EVTX Folder",
-    placeholder: "Open Sysmon Source...",
+    file: "Open EVTX file...",
+    folder: "Open EVTX folder...",
+    placeholder: "Open Sysmon source...",
   },
   onOpenSource: async (source, trigger) => {
     const { useSysmonStore } = await import("./sysmon-store");

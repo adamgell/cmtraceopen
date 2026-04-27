@@ -29,7 +29,7 @@ function TabButton({ label, count, isActive, onClick }: TabButtonProps) {
       type="button"
       onClick={onClick}
       style={{
-        padding: "8px 14px",
+        padding: "8px 12px",
         border: "none",
         borderBottom: isActive
           ? `2px solid ${tokens.colorBrandForeground1}`

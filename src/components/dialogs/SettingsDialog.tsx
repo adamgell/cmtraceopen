@@ -167,7 +167,7 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
           height: "min(580px, 90vh)",
           display: "flex",
           flexDirection: "column",
-          boxShadow: "0 4px 12px rgba(0,0,0,0.3)",
+          boxShadow: tokens.shadow16,
           color: tokens.colorNeutralForeground1,
         }}
       >
@@ -207,7 +207,7 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
             display: "flex",
             gap: "0",
             borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
-            marginBottom: "14px",
+            marginBottom: "16px",
           }}
         >
           {visibleTabs.map((tab) => (
@@ -218,7 +218,7 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
               aria-selected={activeTab === tab.id}
               onClick={() => setActiveTab(tab.id)}
               style={{
-                padding: "6px 14px",
+                padding: "6px 12px",
                 fontSize: "12px",
                 border: "none",
                 borderBottom:

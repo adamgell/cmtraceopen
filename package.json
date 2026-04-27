@@ -28,6 +28,7 @@
   "dependencies": {
     "@fluentui/react-charts": "^9.3.17",
     "@fluentui/react-components": "^9.73.7",
+    "@fluentui/react-icons": "^2.0.321",
     "@tanstack/react-virtual": "^3.13.24",
     "@tauri-apps/api": "^2.10.1",
     "@tauri-apps/plugin-clipboard-manager": "^2.3.2",

@@ -92,7 +92,7 @@ export function InfoPane() {
           setFocusedErrorCode(null);
         }}
       >
-        Open Lookup
+        Open lookup
       </Button>
       <Button
         size="small"
@@ -251,7 +251,7 @@ export function InfoPane() {
                   alignItems: "center",
                   gap: "6px",
                   padding: "2px 4px",
-                  borderRadius: "3px",
+                  borderRadius: "4px",
                   cursor: "pointer",
                   borderLeft: `3px solid ${corr.fileColor}`,
                 }}

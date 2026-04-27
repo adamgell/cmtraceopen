@@ -74,11 +74,10 @@ const useStyles = makeStyles({
     marginBottom: "16px",
   },
   statCard: {
-    ...shorthands.padding("14px", "16px"),
+    ...shorthands.padding("12px", "16px"),
     backgroundColor: tokens.colorNeutralBackground1,
     ...shorthands.border("1px", "solid", tokens.colorNeutralStroke1),
     ...shorthands.borderRadius(tokens.borderRadiusXLarge),
-    boxShadow: tokens.shadow2,
   },
   statLabel: {
     fontSize: "11px",
@@ -104,13 +103,12 @@ const useStyles = makeStyles({
     ...shorthands.border("1px", "solid", tokens.colorNeutralStroke1),
     ...shorthands.borderRadius(tokens.borderRadiusXLarge),
     overflow: "hidden",
-    boxShadow: tokens.shadow2,
   },
   tableHeader: {
     display: "flex",
     justifyContent: "space-between",
     alignItems: "center",
-    ...shorthands.padding("10px", "14px"),
+    ...shorthands.padding("10px", "12px"),
     borderBottom: `1px solid ${tokens.colorNeutralStroke1}`,
     backgroundColor: tokens.colorNeutralBackground3,
   },
@@ -125,7 +123,7 @@ const useStyles = makeStyles({
   },
   th: {
     textAlign: "left" as const,
-    ...shorthands.padding("8px", "14px"),
+    ...shorthands.padding("8px", "12px"),
     fontSize: "10.5px",
     fontWeight: 600,
     color: tokens.colorNeutralForeground3,
@@ -135,7 +133,7 @@ const useStyles = makeStyles({
     backgroundColor: tokens.colorNeutralBackground3,
   },
   td: {
-    ...shorthands.padding("9px", "14px"),
+    ...shorthands.padding("8px", "16px"),
     fontSize: "12.5px",
     borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
     color: tokens.colorNeutralForeground1,
@@ -153,7 +151,6 @@ const useStyles = makeStyles({
     ...shorthands.borderRadius(tokens.borderRadiusXLarge),
     ...shorthands.padding("16px"),
     marginTop: "12px",
-    boxShadow: tokens.shadow2,
   },
   pkgDetailHeader: {
     display: "flex",
@@ -169,7 +166,7 @@ const useStyles = makeStyles({
     display: "grid",
     gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
     gap: "10px",
-    marginBottom: "14px",
+    marginBottom: "16px",
   },
   pkgDetailItem: {
     ...shorthands.padding("6px", "10px"),

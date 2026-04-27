@@ -38,7 +38,7 @@ const useStyles = makeStyles({
     flexShrink: 0,
   },
   factCard: {
-    ...shorthands.padding("10px", "14px"),
+    ...shorthands.padding("10px", "12px"),
     ...shorthands.borderRadius(tokens.borderRadiusMedium),
     ...shorthands.border("1px", "solid", tokens.colorNeutralStroke1),
     backgroundColor: tokens.colorNeutralBackground1,
@@ -78,7 +78,7 @@ const useStyles = makeStyles({
     flex: 1,
     height: "6px",
     backgroundColor: tokens.colorNeutralBackground4,
-    ...shorthands.borderRadius("3px"),
+    ...shorthands.borderRadius("4px"),
     overflowX: "hidden",
   },
 });
@@ -322,7 +322,7 @@ export function DownloadSurface({ downloads }: DownloadSurfaceProps) {
                               dl.doPercentage > 50
                                 ? tokens.colorPaletteGreenBackground3
                                 : tokens.colorBrandBackground,
-                            borderRadius: "3px",
+                            borderRadius: "4px",
                           }}
                         />
                       </div>

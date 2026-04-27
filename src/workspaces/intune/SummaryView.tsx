@@ -228,7 +228,7 @@ export function SummaryView({
                 title={file}
                 style={{
                   padding: "2px 8px",
-                  borderRadius: "999px",
+                  borderRadius: tokens.borderRadiusCircular,
                   backgroundColor: tokens.colorPaletteBlueBackground2,
                   border: `1px solid ${tokens.colorPaletteBlueBorderActive}`,
                   color: tokens.colorPaletteBlueForeground2,
@@ -394,7 +394,7 @@ export function SummaryView({
                       style={{
                         fontSize: "10px",
                         padding: "4px 8px",
-                        borderRadius: "999px",
+                        borderRadius: tokens.borderRadiusCircular,
                         border: `1px solid ${tokens.colorNeutralStroke2}`,
                         backgroundColor: tokens.colorNeutralBackground2,
                         color: tokens.colorNeutralForeground3,
@@ -458,7 +458,7 @@ export function SummaryView({
 
             {diagnosticsConfidence.reasons.length > 0 ? (
               <>
-                <ul style={{ margin: 0, paddingLeft: "18px", color: tokens.colorNeutralForeground1 }}>
+                <ul style={{ margin: 0, paddingLeft: "20px", color: tokens.colorNeutralForeground1 }}>
                   {visibleConfidenceReasons.map((reason) => (
                     <li key={reason} style={{ marginBottom: "4px", lineHeight: 1.35 }}>
                       {reason}
@@ -550,7 +550,7 @@ export function SummaryView({
                         style={{
                           width: "22px",
                           height: "22px",
-                          borderRadius: "999px",
+                          borderRadius: tokens.borderRadiusCircular,
                           backgroundColor: tokens.colorPaletteBlueBackground2,
                           color: tokens.colorPaletteBlueForeground2,
                           display: "inline-flex",

@@ -260,7 +260,11 @@ export function CollectDiagnosticsDialog({ isOpen, onClose }: CollectDiagnostics
                 <div key={cat.id} style={{ marginBottom: "2px" }}>
                   <div style={{ display: "flex", alignItems: "center", gap: "6px", padding: "4px", cursor: "pointer" }}>
                     <span
+                      role="button"
+                      tabIndex={0}
+                      aria-label={`${isExpanded ? "Collapse" : "Expand"} ${cat.label}`}
                       onClick={() => handleExpandToggle(cat.id)}
+                      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); handleExpandToggle(cat.id); } }}
                       style={{ color: tokens.colorNeutralForeground3, fontSize: "11px", width: "12px", textAlign: "center", userSelect: "none" }}
                     >
                       {isExpanded ? "\u25BC" : "\u25B6"}

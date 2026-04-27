@@ -253,7 +253,7 @@ export const ScriptCodeViewer = memo(function ScriptCodeViewer({
           padding: "2px 8px",
           fontSize: "11px",
           border: `1px solid ${tokens.colorNeutralStroke1}`,
-          borderRadius: "3px",
+          borderRadius: "4px",
           backgroundColor: copied
             ? tokens.colorPaletteGreenBackground2
             : tokens.colorNeutralBackground1,

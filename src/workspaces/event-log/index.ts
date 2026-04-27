@@ -16,8 +16,8 @@ export const eventLogWorkspace: WorkspaceDefinition = {
     { name: "All Files", extensions: ["*"] },
   ],
   actionLabels: {
-    file: "Open EVTX File",
-    folder: "Open EVTX Folder",
-    placeholder: "Open Event Log Source...",
+    file: "Open EVTX file...",
+    folder: "Open EVTX folder...",
+    placeholder: "Open event log source...",
   },
 };

@@ -4,6 +4,7 @@ import {
   Button,
   tokens,
 } from "@fluentui/react-components";
+import { ChevronLeftRegular } from "@fluentui/react-icons";
 import { formatDisplayDateTime } from "../../lib/date-time-format";
 import { getBaseName } from "../../lib/file-paths";
 import { getLogListMetrics, LOG_UI_FONT_FAMILY } from "../../lib/log-accessibility";
@@ -136,7 +137,7 @@ function FileRow({
       </div>
       <div
         style={{
-          marginTop: "3px",
+          marginTop: "4px",
           fontSize: "inherit",
           color: tokens.colorNeutralForeground3,
           overflow: "hidden",
@@ -325,12 +326,12 @@ export function LogSidebar() {
       )}
 
       {refreshErrorMessage && (
-        <div role="alert" style={{ padding: "9px 12px", borderBottom: `1px solid ${tokens.colorPaletteRedBorder2}`, backgroundColor: tokens.colorPaletteRedBackground1, color: tokens.colorPaletteRedForeground2, fontSize: "inherit" }}>
+        <div role="alert" style={{ padding: "8px 12px", borderBottom: `1px solid ${tokens.colorPaletteRedBorder2}`, backgroundColor: tokens.colorPaletteRedBackground1, color: tokens.colorPaletteRedForeground2, fontSize: "inherit" }}>
           {refreshErrorMessage}
         </div>
       )}
       {errorMessage && (
-        <div role="alert" style={{ padding: "9px 12px", borderBottom: `1px solid ${tokens.colorPaletteRedBorder2}`, backgroundColor: tokens.colorPaletteRedBackground1, color: tokens.colorPaletteRedForeground2, fontSize: "inherit" }}>
+        <div role="alert" style={{ padding: "8px 12px", borderBottom: `1px solid ${tokens.colorPaletteRedBorder2}`, backgroundColor: tokens.colorPaletteRedBackground1, color: tokens.colorPaletteRedForeground2, fontSize: "inherit" }}>
           {errorMessage}
         </div>
       )}
@@ -390,6 +391,7 @@ export function LogSidebar() {
               <div style={{ padding: "8px 10px 0" }}>
                 <button
                   type="button"
+                  aria-label="Merge loaded files"
                   onClick={() => {
                     const filePaths = files
                       .filter((e) => !e.isDir && getCachedTabSnapshot(e.path))
@@ -472,7 +474,7 @@ function SidebarFooter() {
         padding: "6px 8px",
         borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
         display: "flex",
-        gap: "5px",
+        gap: "4px",
         alignItems: "center",
         flexShrink: 0,
       }}
@@ -482,7 +484,7 @@ function SidebarFooter() {
         appearance="subtle"
         disabled={!commandState.canPauseResume}
         onClick={togglePauseResume}
-        style={{ fontSize: "10px", padding: "3px 8px", minWidth: 0 }}
+        style={{ fontSize: "10px", padding: "4px 8px", minWidth: 0 }}
       >
         {isPaused ? "Resume" : "Pause"}
       </Button>
@@ -491,7 +493,7 @@ function SidebarFooter() {
         appearance="subtle"
         disabled={!commandState.canRefresh}
         onClick={() => { refreshActiveSource().catch((err) => console.error("[sidebar-footer] refresh failed", err)); }}
-        style={{ fontSize: "10px", padding: "3px 8px", minWidth: 0 }}
+        style={{ fontSize: "10px", padding: "4px 8px", minWidth: 0 }}
       >
         Refresh
       </Button>
@@ -501,7 +503,7 @@ function SidebarFooter() {
             marginLeft: "auto",
             fontSize: "9px",
             padding: "2px 6px",
-            borderRadius: "10px",
+            borderRadius: "8px",
             backgroundColor: statusBg,
             color: statusFg,
             fontWeight: 600,
@@ -554,9 +556,7 @@ export function FileSidebar({ width = FILE_SIDEBAR_RECOMMENDED_WIDTH, activeView
               justifyContent: "center",
             }}
           >
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
-              <path d="M10 3L5 8l5 5V3z" />
-            </svg>
+            <ChevronLeftRegular style={{ fontSize: 16 }} />
           </button>
         </div>
       )}

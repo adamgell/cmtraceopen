@@ -11,7 +11,7 @@ const useStyles = makeStyles({
     display: "flex",
     alignItems: "center",
     gap: "16px",
-    ...shorthands.padding("14px", "20px"),
+    ...shorthands.padding("12px", "20px"),
     backgroundImage:
       "none",
     backgroundColor: tokens.colorNeutralBackground2,
@@ -42,9 +42,9 @@ const useStyles = makeStyles({
   pillGranted: {
     display: "inline-flex",
     alignItems: "center",
-    gap: "5px",
+    gap: "4px",
     ...shorthands.padding("4px", "10px"),
-    ...shorthands.borderRadius("100px"),
+    ...shorthands.borderRadius(tokens.borderRadiusCircular),
     fontSize: "11px",
     fontWeight: 600,
     backgroundColor: tokens.colorPaletteGreenBackground1,
@@ -54,9 +54,9 @@ const useStyles = makeStyles({
   pillAvailable: {
     display: "inline-flex",
     alignItems: "center",
-    gap: "5px",
+    gap: "4px",
     ...shorthands.padding("4px", "10px"),
-    ...shorthands.borderRadius("100px"),
+    ...shorthands.borderRadius(tokens.borderRadiusCircular),
     fontSize: "11px",
     fontWeight: 600,
     backgroundColor: tokens.colorPaletteBlueBackground2,
@@ -66,9 +66,9 @@ const useStyles = makeStyles({
   pillMissing: {
     display: "inline-flex",
     alignItems: "center",
-    gap: "5px",
+    gap: "4px",
     ...shorthands.padding("4px", "10px"),
-    ...shorthands.borderRadius("100px"),
+    ...shorthands.borderRadius(tokens.borderRadiusCircular),
     fontSize: "11px",
     fontWeight: 600,
     backgroundColor: tokens.colorNeutralBackground3,
@@ -166,7 +166,7 @@ export function MacosDiagEnvironmentBanner({ environment, onRefresh }: Props) {
         )}
 
         <Button size="small" appearance="subtle" onClick={onRefresh}>
-          Refresh All
+          Refresh all
         </Button>
       </div>
     </div>

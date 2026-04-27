@@ -16,7 +16,7 @@ export const securebootWorkspace: WorkspaceDefinition = {
     { name: "Secure Boot Logs", extensions: ["log"] },
     { name: "All Files", extensions: ["*"] },
   ],
-  actionLabels: { file: "Open Log File", placeholder: "Analyze Secure Boot..." },
+  actionLabels: { file: "Open log file...", placeholder: "Analyze Secure Boot..." },
   onOpenSource: async (source, trigger) => {
     // Dynamic imports to avoid circular deps
     const [{ useUiStore }, { analyzeSecureBoot }, { useSecureBootStore }] =

@@ -62,7 +62,7 @@ export function AppearanceTab() {
 
   return (
     <div>
-      <section style={{ marginBottom: "14px" }}>
+      <section style={{ marginBottom: "16px" }}>
         <div style={{ fontSize: "13px", fontWeight: 700, marginBottom: "6px" }}>
           Theme
         </div>
@@ -92,11 +92,11 @@ export function AppearanceTab() {
         </select>
       </section>
 
-      <div style={{ fontSize: "12px", color: tokens.colorNeutralForeground3, marginBottom: "14px", lineHeight: 1.5 }}>
+      <div style={{ fontSize: "12px", color: tokens.colorNeutralForeground3, marginBottom: "16px", lineHeight: 1.5 }}>
         Adjust log-reading text sizes independently and choose whether severity rows use classic CMTrace colors or a more accessible palette.
       </div>
 
-      <section style={{ marginBottom: "14px" }}>
+      <section style={{ marginBottom: "16px" }}>
         <div style={{ fontSize: "13px", fontWeight: 700, marginBottom: "6px" }}>
           Application text size
         </div>
@@ -122,7 +122,7 @@ export function AppearanceTab() {
         </div>
       </section>
 
-      <section style={{ marginBottom: "14px" }}>
+      <section style={{ marginBottom: "16px" }}>
         <div style={{ fontSize: "13px", fontWeight: 700, marginBottom: "6px" }}>
           Details pane text size
         </div>
@@ -141,7 +141,7 @@ export function AppearanceTab() {
         </div>
       </section>
 
-      <section style={{ marginBottom: "14px" }}>
+      <section style={{ marginBottom: "16px" }}>
         <div style={{ fontSize: "13px", fontWeight: 700, marginBottom: "6px" }}>
           Font family
         </div>
@@ -268,7 +268,7 @@ export function AppearanceTab() {
         )}
       </section>
 
-      <section style={{ marginBottom: "14px" }}>
+      <section style={{ marginBottom: "16px" }}>
         <div style={{ fontSize: "13px", fontWeight: 700, marginBottom: "8px" }}>
           Severity colors
         </div>
@@ -283,7 +283,7 @@ export function AppearanceTab() {
           border: `1px solid ${tokens.colorNeutralStroke2}`,
           borderRadius: "4px",
           padding: "10px",
-          marginBottom: "14px",
+          marginBottom: "16px",
         }}
       >
         <div style={{ fontSize: "12px", fontWeight: 700, marginBottom: "8px" }}>Preview</div>

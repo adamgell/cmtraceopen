@@ -12,7 +12,7 @@ export function ColumnsTab() {
 
   return (
     <div>
-      <div style={{ fontSize: "12px", color: tokens.colorNeutralForeground3, marginBottom: "14px", lineHeight: 1.5 }}>
+      <div style={{ fontSize: "12px", color: tokens.colorNeutralForeground3, marginBottom: "16px", lineHeight: 1.5 }}>
         Columns are automatically determined by the log file format. You can reorder columns by dragging column headers in the log view, and resize them by dragging column borders.
       </div>
 

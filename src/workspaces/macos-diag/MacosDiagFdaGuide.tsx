@@ -22,7 +22,7 @@ const useStyles = makeStyles({
     height: "72px",
     backgroundColor: tokens.colorPaletteYellowBackground1,
     ...shorthands.border("2px", "solid", tokens.colorPaletteYellowBorder2),
-    ...shorthands.borderRadius("20px"),
+    ...shorthands.borderRadius("8px"),
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
@@ -52,7 +52,7 @@ const useStyles = makeStyles({
     display: "flex",
     gap: "12px",
     alignItems: "flex-start",
-    marginBottom: "14px",
+    marginBottom: "16px",
   },
   stepNum: {
     width: "24px",
@@ -77,8 +77,8 @@ const useStyles = makeStyles({
     fontFamily: tokens.fontFamilyMonospace,
     fontSize: "11.5px",
     backgroundColor: tokens.colorNeutralBackground3,
-    ...shorthands.padding("1px", "5px"),
-    ...shorthands.borderRadius("3px"),
+    ...shorthands.padding("2px", "6px"),
+    ...shorthands.borderRadius("4px"),
     color: tokens.colorBrandForeground1,
   },
   actions: {
@@ -150,10 +150,10 @@ export function MacosDiagFdaGuide({ onRecheck }: Props) {
 
       <div className={styles.actions}>
         <Button appearance="primary" size="large" onClick={onRecheck}>
-          Re-check FDA Status
+          Re-check FDA status
         </Button>
         <Button appearance="secondary" size="large" onClick={handleOpenSettings}>
-          Open System Settings
+          Open System Settings...
         </Button>
       </div>
     </div>

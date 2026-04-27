@@ -21,6 +21,6 @@ export const timelineWorkspace: WorkspaceDefinition = {
     { name: "All Files", extensions: ["*"] },
   ],
   actionLabels: {
-    placeholder: "Open Timeline Source...",
+    placeholder: "Open timeline source...",
   },
 };

@@ -51,7 +51,7 @@ const useStyles = makeStyles({
     fontSize: "10px",
     fontWeight: 600,
     ...shorthands.padding("1px", "6px"),
-    ...shorthands.borderRadius("100px"),
+    ...shorthands.borderRadius(tokens.borderRadiusCircular),
     backgroundColor: tokens.colorNeutralBackground3,
     color: tokens.colorNeutralForeground3,
   },

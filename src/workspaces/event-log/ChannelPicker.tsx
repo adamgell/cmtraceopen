@@ -181,7 +181,7 @@ export function ChannelPicker() {
             borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
             display: "flex",
             flexDirection: "column",
-            gap: "5px",
+            gap: "4px",
             flexShrink: 0,
           }}
         >
@@ -194,10 +194,10 @@ export function ChannelPicker() {
           />
           <div style={{ display: "flex", gap: "4px" }}>
             <Button size="small" appearance="subtle" onClick={selectAllChannels}>
-              Select All
+              Select all
             </Button>
             <Button size="small" appearance="subtle" onClick={deselectAllChannels}>
-              Deselect All
+              Deselect all
             </Button>
           </div>
           {sourceMode === "live" && (

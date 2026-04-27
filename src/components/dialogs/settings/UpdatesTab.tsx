@@ -43,7 +43,7 @@ export function UpdatesTab() {
 
   return (
     <div>
-      <div style={{ fontSize: "12px", color: tokens.colorNeutralForeground3, marginBottom: "14px", lineHeight: 1.5 }}>
+      <div style={{ fontSize: "12px", color: tokens.colorNeutralForeground3, marginBottom: "16px", lineHeight: 1.5 }}>
         Control automatic update checking and view version information.
       </div>
 
@@ -104,7 +104,7 @@ export function UpdatesTab() {
               type="button"
               onClick={handleClearSkipped}
               style={{
-                padding: "3px 10px",
+                padding: "4px 10px",
                 fontSize: "11px",
                 border: `1px solid ${tokens.colorNeutralStroke1}`,
                 borderRadius: "4px",

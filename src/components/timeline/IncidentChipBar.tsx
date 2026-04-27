@@ -1,3 +1,4 @@
+import { tokens } from "@fluentui/react-components";
 import { useTimelineStore } from "../../stores/timeline-store";
 
 export function IncidentChipBar() {
@@ -8,7 +9,7 @@ export function IncidentChipBar() {
   if (!bundle) return null;
   if (bundle.incidents.length === 0) {
     return (
-      <div style={{ padding: "6px 10px", fontSize: 11, color: "#6b7280" }}>
+      <div style={{ padding: "6px 10px", fontSize: 11, color: tokens.colorNeutralForeground3 }}>
         No incidents detected — adjust signal settings in the gear menu.
       </div>
     );
@@ -27,10 +28,10 @@ export function IncidentChipBar() {
         const isSel = inc.id === selectedIncidentId;
         const color =
           inc.confidence >= 0.8
-            ? "#dc2626"
+            ? tokens.colorPaletteRedForeground1
             : inc.confidence >= 0.6
-              ? "#b45309"
-              : "#6b7280";
+              ? tokens.colorPaletteYellowForeground2
+              : tokens.colorNeutralForeground3;
         return (
           <button
             key={inc.id}
@@ -39,10 +40,12 @@ export function IncidentChipBar() {
               display: "inline-flex",
               gap: 6,
               alignItems: "center",
-              padding: "3px 10px",
-              borderRadius: 999,
-              border: `1px solid ${isSel ? color : "#e5e7eb"}`,
-              background: isSel ? `${color}10` : "white",
+              padding: "4px 10px",
+              borderRadius: tokens.borderRadiusCircular,
+              border: `1px solid ${isSel ? color : tokens.colorNeutralStroke2}`,
+              background: isSel
+                ? `color-mix(in srgb, ${color} 10%, transparent)`
+                : tokens.colorNeutralBackground1,
               fontSize: 11,
               whiteSpace: "nowrap",
               cursor: "pointer",
@@ -52,7 +55,7 @@ export function IncidentChipBar() {
               style={{
                 width: 8,
                 height: 8,
-                borderRadius: 999,
+                borderRadius: tokens.borderRadiusCircular,
                 background: color,
               }}
             />

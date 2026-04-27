@@ -22,11 +22,10 @@ const useStyles = makeStyles({
     marginBottom: "16px",
   },
   statCard: {
-    ...shorthands.padding("14px", "16px"),
+    ...shorthands.padding("12px", "16px"),
     backgroundColor: tokens.colorNeutralBackground1,
     ...shorthands.border("1px", "solid", tokens.colorNeutralStroke1),
     ...shorthands.borderRadius(tokens.borderRadiusXLarge),
-    boxShadow: tokens.shadow2,
   },
   statLabel: {
     fontSize: "11px",
@@ -52,13 +51,12 @@ const useStyles = makeStyles({
     ...shorthands.border("1px", "solid", tokens.colorNeutralStroke1),
     ...shorthands.borderRadius(tokens.borderRadiusXLarge),
     overflow: "hidden",
-    boxShadow: tokens.shadow2,
   },
   tableHeader: {
     display: "flex",
     justifyContent: "space-between",
     alignItems: "center",
-    ...shorthands.padding("10px", "14px"),
+    ...shorthands.padding("10px", "12px"),
     borderBottom: `1px solid ${tokens.colorNeutralStroke1}`,
     backgroundColor: tokens.colorNeutralBackground3,
   },
@@ -73,7 +71,7 @@ const useStyles = makeStyles({
   },
   th: {
     textAlign: "left" as const,
-    ...shorthands.padding("8px", "14px"),
+    ...shorthands.padding("8px", "12px"),
     fontSize: "10.5px",
     fontWeight: 600,
     color: tokens.colorNeutralForeground3,
@@ -83,7 +81,7 @@ const useStyles = makeStyles({
     backgroundColor: tokens.colorNeutralBackground3,
   },
   td: {
-    ...shorthands.padding("9px", "14px"),
+    ...shorthands.padding("8px", "16px"),
     fontSize: "12.5px",
     borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
     color: tokens.colorNeutralForeground1,
@@ -95,8 +93,8 @@ const useStyles = makeStyles({
   sourceBadgeSystem: {
     fontSize: "10px",
     fontWeight: 600,
-    ...shorthands.padding("2px", "7px"),
-    ...shorthands.borderRadius("100px"),
+    ...shorthands.padding("2px", "8px"),
+    ...shorthands.borderRadius(tokens.borderRadiusCircular),
     textTransform: "uppercase" as const,
     letterSpacing: "0.3px",
     backgroundColor: tokens.colorPaletteBlueBackground2,
@@ -105,8 +103,8 @@ const useStyles = makeStyles({
   sourceBadgeUser: {
     fontSize: "10px",
     fontWeight: 600,
-    ...shorthands.padding("2px", "7px"),
-    ...shorthands.borderRadius("100px"),
+    ...shorthands.padding("2px", "8px"),
+    ...shorthands.borderRadius(tokens.borderRadiusCircular),
     textTransform: "uppercase" as const,
     letterSpacing: "0.3px",
     backgroundColor: tokens.colorPalettePurpleBackground2,
@@ -326,7 +324,7 @@ export function MacosDiagIntuneLogsTab() {
                       appearance="primary"
                       onClick={() => handleOpenInLogViewer(file)}
                     >
-                      Open in Log Viewer
+                      Open in log viewer
                     </Button>
                   </td>
                 </tr>

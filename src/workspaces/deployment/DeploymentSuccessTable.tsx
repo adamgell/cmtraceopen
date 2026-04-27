@@ -179,7 +179,7 @@ export function DeploymentSuccessTable({
               key={col.key}
               title={col.key === "application" ? file.fileName : undefined}
               style={{
-                padding: "5px 10px",
+                padding: "4px 10px",
                 overflow: "hidden",
                 textOverflow: "ellipsis",
                 whiteSpace: "nowrap",
@@ -255,7 +255,7 @@ function ResizableHeader({
           style={{
             width: 4,
             height: 10,
-            borderRadius: 1,
+            borderRadius: 2,
             backgroundColor: hover
               ? tokens.colorBrandStroke1
               : tokens.colorNeutralStroke2,

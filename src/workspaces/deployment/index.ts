@@ -26,8 +26,8 @@ export const deploymentWorkspace: WorkspaceDefinition = {
     { name: "All Files", extensions: ["*"] },
   ],
   actionLabels: {
-    file: "Open File",
-    folder: "Open Folder",
+    file: "Open file...",
+    folder: "Open folder...",
     placeholder: "Open...",
   },
   onOpenSource: async (source, _trigger) => {
