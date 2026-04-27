@@ -1,0 +1,10 @@
+2024-01-15 08:00:00, Info                  CBS    Loaded Servicing Stack v10.0.19041.3636 with Core: C:\Windows\winsxs\amd64_microsoft-windows-servicingstack_31bf3856ad364e35_10.0.19041.3636_none_24bcda3e7bad3a5c\cbscore.dll
+2024-01-15 08:00:01, Info                  CBS    Exec: Processing started. Session: 30546354_3536635320
+2024-01-15 08:00:02, Info                  DISM   DISM Provider Store: PID=4652 TID=7080 Getting Provider DISMLogger - CDISMProviderStore::GetProvider
+2024-01-15 08:00:03, Info                  DISM   DISM Provider Store: PID=4652 TID=7080 Provider has previously been initialized.  Returning the existing instance. - CDISMProviderStore::Internal_GetProvider
+2024-01-15 08:00:04, Info                  CSI    @0x814 (F) CSI Transaction commit
+  Component: amd64_microsoft-windows-servicingstack
+2024-01-15 08:00:06, Warning               DPX    DPX detected pending reboot from a previous servicing operation
+2024-01-15 08:00:07, Info                  CMIV   Validating component manifest integrity
+2024-01-15 08:00:08, Info                  CBS    Exec: Package: KB5034123, current state: Staged, target state: Installed
+2024-01-15 08:00:09, Error                 WCP    WCP transaction rollback initiated

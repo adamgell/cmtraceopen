@@ -93,24 +93,21 @@ pub fn parse_lines(lines: &[&str], file_path: &str) -> (Vec<LogEntry>, u32) {
 }
 
 fn parse_header(line: &str, file_path: &str) -> Option<LogEntry> {
+    // The strict regex matches known severity keywords — accept any component.
+    // DISM logs frequently contain CBS/CSI/DPX/WCP entries alongside DISM ones;
+    // once a file is detected as DISM, every well-formed line should parse.
     if let Some(caps) = dism_header_re().captures(line) {
         return build_entry_from_caps(&caps, file_path);
     }
 
+    // Relaxed regex: non-standard severity token.  Accept any component so
+    // that mixed DISM/CBS logs parse fully.
     let caps = dism_relaxed_header_re().captures(line)?;
-    let component = caps.get(8)?.as_str().to_ascii_uppercase();
-    if !component.starts_with("DISM") {
-        return None;
-    }
-
     build_entry_from_caps(&caps, file_path)
 }
 
 fn build_entry_from_caps(caps: &regex::Captures<'_>, file_path: &str) -> Option<LogEntry> {
     let component = caps.get(8)?.as_str().to_string();
-    if !component.to_ascii_uppercase().starts_with("DISM") {
-        return None;
-    }
 
     let year: i32 = caps.get(1)?.as_str().parse().ok()?;
     let month: u32 = caps.get(2)?.as_str().parse().ok()?;
@@ -317,5 +314,52 @@ mod tests {
         assert_eq!(entries[2].component.as_deref(), Some("DISM"));
         assert_eq!(entries[3].severity, Severity::Error);
         assert_eq!(entries[3].component.as_deref(), Some("DISM"));
+    }
+
+    #[test]
+    fn test_parse_lines_accepts_cbs_components_in_dism_log() {
+        // Real DISM logs contain CBS/CSI/DPX/WCP entries alongside DISM lines.
+        // The parser must accept them all (#154).
+        let lines = [
+            "2024-01-15 08:00:00, Info                  DISM   DISM Provider Store: PID=100 TID=200 loaded provider",
+            "2024-01-15 08:00:01, Info                  CBS    Exec: Processing package",
+            "2024-01-15 08:00:02, Warning               CSI    [SR] Cannot repair file",
+            "2024-01-15 08:00:03, Info                  DPX    DPX scheduled restart",
+            "2024-01-15 08:00:04, Error                 WCP    WCP transaction commit failed",
+        ];
+
+        let (entries, parse_errors) = parse_lines(&lines, "C:/Windows/Logs/DISM/dism.log");
+
+        assert_eq!(parse_errors, 0);
+        assert_eq!(entries.len(), 5);
+        assert_eq!(entries[0].component.as_deref(), Some("DISM"));
+        assert_eq!(entries[1].component.as_deref(), Some("CBS"));
+        assert_eq!(entries[2].component.as_deref(), Some("CSI"));
+        assert_eq!(entries[2].severity, Severity::Warning);
+        assert_eq!(entries[3].component.as_deref(), Some("DPX"));
+        assert_eq!(entries[4].component.as_deref(), Some("WCP"));
+        assert_eq!(entries[4].severity, Severity::Error);
+    }
+
+    #[test]
+    fn test_parse_lines_mixed_dism_cbs_with_continuations() {
+        // Verify multi-line records work across component boundaries.
+        let lines = [
+            "2024-01-15 08:00:00, Info                  CBS    Exec: Started servicing",
+            "  Package: KB5034123",
+            "  State: Staged",
+            "2024-01-15 08:00:01, Info                  DISM   DISM Package Manager: Finalizing",
+        ];
+
+        let (entries, parse_errors) = parse_lines(&lines, "C:/Windows/Logs/DISM/dism.log");
+
+        assert_eq!(parse_errors, 0);
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].component.as_deref(), Some("CBS"));
+        assert_eq!(
+            entries[0].message,
+            "Exec: Started servicing\n  Package: KB5034123\n  State: Staged"
+        );
+        assert_eq!(entries[1].component.as_deref(), Some("DISM"));
     }
 }

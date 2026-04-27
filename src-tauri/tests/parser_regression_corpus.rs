@@ -327,6 +327,93 @@ fn dism_mixed_fixture_preserves_fallback_segments() {
 }
 
 #[test]
+fn cbs_mixed_components_fixture_parses_dism_and_other_components() {
+    let detected = detect_fixture("cbs/mixed_components/CBS.log");
+    assert_selection(
+        &detected,
+        "Cbs",
+        "GenericTimestamped",
+        "Dedicated",
+        "SemiStructured",
+        "LogicalRecord",
+    );
+
+    let parsed = parse_fixture("cbs/mixed_components/CBS.log");
+    assert_parsed_selection(
+        &parsed,
+        "Cbs",
+        "GenericTimestamped",
+        "Dedicated",
+        "SemiStructured",
+        "LogicalRecord",
+        "Timestamped",
+    );
+    assert_eq!(parsed.total_lines, 10);
+    assert_eq!(parsed.parse_errors, 0, "all lines should parse as structured entries");
+    // 9 header lines, 1 continuation => 9 entries
+    assert_eq!(parsed.entries.len(), 9, "CSI multi-line record merges continuation into 1 entry");
+    // CBS lines
+    assert_eq!(parsed.entries[0].component.as_deref(), Some("CBS"));
+    assert_eq!(parsed.entries[1].component.as_deref(), Some("CBS"));
+    // DISM lines interleaved in CBS log
+    assert_eq!(parsed.entries[2].component.as_deref(), Some("DISM"));
+    assert_eq!(parsed.entries[3].component.as_deref(), Some("DISM"));
+    // CSI multi-line entry (line 5 + continuation at line 6)
+    assert_eq!(parsed.entries[4].component.as_deref(), Some("CSI"));
+    assert!(parsed.entries[4].message.contains("Component: amd64_microsoft-windows-servicingstack"));
+    // DPX, CMIV components
+    assert_eq!(parsed.entries[5].component.as_deref(), Some("DPX"));
+    assert_eq!(parsed.entries[5].severity, "Warning");
+    assert_eq!(parsed.entries[6].component.as_deref(), Some("CMIV"));
+    // CBS again, then WCP error
+    assert_eq!(parsed.entries[7].component.as_deref(), Some("CBS"));
+    assert_eq!(parsed.entries[8].component.as_deref(), Some("WCP"));
+    assert_eq!(parsed.entries[8].severity, "Error");
+}
+
+#[test]
+fn dism_mixed_components_fixture_parses_cbs_and_other_components() {
+    let detected = detect_fixture("dism/mixed_components/dism.log");
+    assert_selection(
+        &detected,
+        "Dism",
+        "GenericTimestamped",
+        "Dedicated",
+        "SemiStructured",
+        "LogicalRecord",
+    );
+
+    let parsed = parse_fixture("dism/mixed_components/dism.log");
+    assert_parsed_selection(
+        &parsed,
+        "Dism",
+        "GenericTimestamped",
+        "Dedicated",
+        "SemiStructured",
+        "LogicalRecord",
+        "Timestamped",
+    );
+    assert_eq!(parsed.total_lines, 8);
+    assert_eq!(parsed.parse_errors, 0, "all lines should parse as structured entries");
+    // DISM lines
+    assert_eq!(parsed.entries[0].component.as_deref(), Some("DISM"));
+    assert_eq!(parsed.entries[1].component.as_deref(), Some("DISM"));
+    // CBS lines interleaved in DISM log
+    assert_eq!(parsed.entries[2].component.as_deref(), Some("CBS"));
+    assert_eq!(parsed.entries[3].component.as_deref(), Some("CBS"));
+    // CSI warning
+    assert_eq!(parsed.entries[4].component.as_deref(), Some("CSI"));
+    assert_eq!(parsed.entries[4].severity, "Warning");
+    // DPX with continuation
+    assert_eq!(parsed.entries[5].component.as_deref(), Some("DPX"));
+    assert!(parsed.entries[5].message.contains("Restart reason:"));
+    // DISM error
+    let last = parsed.entries.last().unwrap();
+    assert_eq!(last.component.as_deref(), Some("DISM"));
+    assert_eq!(last.severity, "Error");
+}
+
+#[test]
 fn reporting_events_clean_fixture_detects_and_parses_rows() {
     let detected = detect_fixture("reporting_events/clean/ReportingEvents.log");
     assert_selection(
