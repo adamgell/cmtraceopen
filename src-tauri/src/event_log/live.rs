@@ -5,6 +5,7 @@ use std::sync::OnceLock;
 use regex::Regex;
 
 use super::models::{ChannelSourceType, EvtxChannelInfo, EvtxField, EvtxLevel, EvtxRecord};
+use super::sanitize_control_chars;
 
 #[cfg(target_os = "windows")]
 use windows::core::{Error, HSTRING, PCWSTR};
@@ -339,9 +340,10 @@ fn parse_xml_to_record(
 
     let event_data = extract_xml_event_data(xml);
 
-    // Use rendered message if available, otherwise build summary from EventData
+    // Use rendered message if available, otherwise build summary from EventData.
+    // Sanitize to strip control characters that would show as unexpected glyphs.
     let message = rendered_message
-        .map(|s| s.to_string())
+        .map(|s| sanitize_control_chars(s))
         .unwrap_or_else(|| build_event_data_summary(&event_data));
 
     Some(EvtxRecord {
@@ -410,6 +412,9 @@ fn extract_xml_text(xml: &str, tag: &str) -> Option<String> {
 }
 
 /// Extract `<Data Name='key'>value</Data>` pairs from EventData section.
+///
+/// All values are sanitized to strip control characters (e.g. `\r`, `\0`) that
+/// would render as unexpected glyphs in the UI.
 fn extract_xml_event_data(xml: &str) -> Vec<EvtxField> {
     fn data_name_re() -> &'static Regex {
         static CELL: OnceLock<Regex> = OnceLock::new();
@@ -422,7 +427,7 @@ fn extract_xml_event_data(xml: &str) -> Vec<EvtxField> {
         .captures_iter(xml)
         .map(|cap| EvtxField {
             name: cap[1].to_string(),
-            value: cap[2].to_string(),
+            value: sanitize_control_chars(&cap[2]),
         })
         .collect()
 }

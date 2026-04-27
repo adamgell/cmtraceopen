@@ -15,6 +15,7 @@ use super::models::{
     RankedItem, SecuritySummary, SysmonConfig, SysmonDashboardData, SysmonEvent, SysmonEventType,
     SysmonEventTypeCount, SysmonSeverity, SysmonSummary, TimeBucket,
 };
+use super::sanitize_control_chars;
 
 /// Maximum entries to pull from the live Windows Event Log.
 #[cfg(target_os = "windows")]
@@ -180,7 +181,7 @@ pub fn parse_sysmon_evtx(path: &Path, id_offset: u64) -> Result<Vec<SysmonEvent>
         let target_image = get_data_str(event_data, "TargetImage");
         let granted_access = get_data_str(event_data, "GrantedAccess");
 
-        let message = build_message(event_id, &event_type, event_data);
+        let message = sanitize_control_chars(&build_message(event_id, &event_type, event_data));
 
         events.push(SysmonEvent {
             id: current_id,
@@ -617,11 +618,14 @@ fn parse_timestamp_ms(ts: &str) -> Option<i64> {
 }
 
 fn get_data_str(event_data: &Value, key: &str) -> Option<String> {
-    match &event_data[key] {
-        Value::String(s) if !s.is_empty() && s != "-" => Some(s.clone()),
-        Value::Number(n) => Some(n.to_string()),
-        _ => None,
-    }
+    let raw = match &event_data[key] {
+        Value::String(s) if !s.is_empty() && s != "-" => s.clone(),
+        Value::Number(n) => return Some(n.to_string()),
+        _ => return None,
+    };
+    // Strip control characters (e.g. \r, \0) that render as unexpected glyphs.
+    let sanitized = sanitize_control_chars(&raw);
+    if sanitized.is_empty() { None } else { Some(sanitized) }
 }
 
 fn get_data_u32(event_data: &Value, key: &str) -> Option<u32> {
@@ -815,6 +819,9 @@ fn extract_xml_value(text: &str, regex: &Regex) -> Option<String> {
 
 /// Extract a named Data element value from Sysmon XML EventData.
 /// Pattern: `<Data Name="FieldName">value</Data>`
+///
+/// The result is sanitized to strip control characters (e.g. `\r`, `\0`) that
+/// would render as unexpected glyphs in the UI.
 #[cfg(target_os = "windows")]
 fn extract_event_data_field(xml: &str, field_name: &str) -> Option<String> {
     // Build pattern: <Data Name="FieldName">...</Data>
@@ -825,7 +832,7 @@ fn extract_event_data_field(xml: &str, field_name: &str) -> Option<String> {
     let re = Regex::new(&pattern).ok()?;
     re.captures(xml)
         .and_then(|captures| captures.get(1))
-        .map(|value| decode_xml_text(value.as_str()))
+        .map(|value| sanitize_control_chars(&decode_xml_text(value.as_str())))
         .filter(|value| !value.is_empty() && value != "-")
 }
 
@@ -914,29 +921,32 @@ pub fn parse_sysmon_live_events() -> Result<Vec<SysmonEvent>, String> {
         let target_image = extract_event_data_field(xml, "TargetImage");
         let granted_access = extract_event_data_field(xml, "GrantedAccess");
 
-        // Build message from rendered message or from fields
-        let message = record
-            .rendered_message
-            .filter(|m| !m.trim().is_empty())
-            .unwrap_or_else(|| {
-                build_message_from_fields(&MessageFields {
-                    event_id,
-                    event_type: &event_type,
-                    image: image.as_deref(),
-                    command_line: command_line.as_deref(),
-                    user: user.as_deref(),
-                    destination_ip: destination_ip.as_deref(),
-                    destination_port,
-                    protocol: protocol.as_deref(),
-                    target_filename: target_filename.as_deref(),
-                    source_image: source_image.as_deref(),
-                    target_image: target_image.as_deref(),
-                    granted_access: granted_access.as_deref(),
-                    query_name: query_name.as_deref(),
-                    query_results: query_results.as_deref(),
-                    target_object: target_object.as_deref(),
-                })
-            });
+        // Build message from rendered message or from fields.
+        // Sanitize to strip control characters that would show as unexpected glyphs.
+        let message = sanitize_control_chars(
+            &record
+                .rendered_message
+                .filter(|m| !m.trim().is_empty())
+                .unwrap_or_else(|| {
+                    build_message_from_fields(&MessageFields {
+                        event_id,
+                        event_type: &event_type,
+                        image: image.as_deref(),
+                        command_line: command_line.as_deref(),
+                        user: user.as_deref(),
+                        destination_ip: destination_ip.as_deref(),
+                        destination_port,
+                        protocol: protocol.as_deref(),
+                        target_filename: target_filename.as_deref(),
+                        source_image: source_image.as_deref(),
+                        target_image: target_image.as_deref(),
+                        granted_access: granted_access.as_deref(),
+                        query_name: query_name.as_deref(),
+                        query_results: query_results.as_deref(),
+                        target_object: target_object.as_deref(),
+                    })
+                }),
+        );
 
         events.push(SysmonEvent {
             id: events.len() as u64,

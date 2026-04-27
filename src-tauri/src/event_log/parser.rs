@@ -6,6 +6,7 @@ use serde_json::Value;
 use super::models::{
     ChannelSourceType, EvtxChannelInfo, EvtxField, EvtxLevel, EvtxParseResult, EvtxRecord,
 };
+use super::sanitize_control_chars;
 
 /// Maximum entries to parse from a single .evtx file to prevent memory issues.
 const MAX_ENTRIES_PER_FILE: usize = 100_000;
@@ -194,6 +195,9 @@ fn extract_event_id(system: &Value) -> u32 {
 }
 
 /// Extract EventData fields as key-value pairs.
+///
+/// All values are sanitized to strip control characters (e.g. `\r`, `\0`) that
+/// would render as unexpected glyphs in the UI.
 fn extract_event_data(event_data: &Value) -> Vec<EvtxField> {
     let mut fields = Vec::new();
 
@@ -203,9 +207,9 @@ fn extract_event_data(event_data: &Value) -> Vec<EvtxField> {
                 continue;
             }
             let val_str = match value {
-                Value::String(s) => s.clone(),
+                Value::String(s) => sanitize_control_chars(s),
                 Value::Null => continue,
-                other => other.to_string(),
+                other => sanitize_control_chars(&other.to_string()),
             };
             if !val_str.is_empty() {
                 fields.push(EvtxField {
