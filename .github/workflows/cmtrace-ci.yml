@@ -170,12 +170,15 @@ jobs:
         run: npm ci
 
       - name: Disable updater signing for CI builds
-        if: runner.os == 'Windows'
-        shell: pwsh
+        shell: bash
         run: |
-          $conf = Get-Content 'src-tauri/tauri.conf.json' -Raw | ConvertFrom-Json
-          if ($conf.bundle) { $conf.bundle.createUpdaterArtifacts = $false }
-          $conf | ConvertTo-Json -Depth 20 | Set-Content 'src-tauri/tauri.conf.json'
+          node -e "
+            const fs = require('fs');
+            const p = 'src-tauri/tauri.conf.json';
+            const c = JSON.parse(fs.readFileSync(p, 'utf8'));
+            if (c.bundle) c.bundle.createUpdaterArtifacts = false;
+            fs.writeFileSync(p, JSON.stringify(c, null, 2) + '\n');
+          "
 
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0.6.2
