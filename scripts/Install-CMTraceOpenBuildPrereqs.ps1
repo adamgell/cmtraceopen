@@ -1,4 +1,4 @@
-[CmdletBinding(SupportsShouldProcess = $true)]
+﻿[CmdletBinding(SupportsShouldProcess = $true)]
 param(
     [ValidateSet('BuildTools', 'Community')]
     [string]$VisualStudioSku = 'BuildTools',
@@ -41,6 +41,12 @@ function Refresh-SessionPath {
     $cargoBin = Join-Path $env:USERPROFILE '.cargo\bin'
     if ((Test-Path $cargoBin) -and ($env:Path -notlike "*$cargoBin*")) {
         $env:Path = "$cargoBin;$env:Path"
+    }
+
+    # LLVM/clang is required by the ring crate on ARM64 Windows.
+    $llvmBin = Join-Path $env:ProgramFiles 'LLVM\bin'
+    if ((Test-Path $llvmBin) -and ($env:Path -notlike "*$llvmBin*")) {
+        $env:Path = "$llvmBin;$env:Path"
     }
 }
 
@@ -484,6 +490,7 @@ Install-WingetPackage -PackageId 'OpenJS.NodeJS.LTS'
 Install-VisualStudioTools -Sku $VisualStudioSku
 Install-WingetPackage -PackageId 'Microsoft.EdgeWebView2Runtime'
 Install-WingetPackage -PackageId 'Rustlang.Rustup'
+Install-WingetPackage -PackageId 'LLVM.LLVM'
 
 # The ring crate requires clang for ARM64 assembly compilation.
 if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') {

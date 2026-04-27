@@ -32,6 +32,7 @@ pub fn get_available_workspaces() -> Vec<&'static str> {
     }
 
     workspaces.push("timeline");
+    workspaces.push("dns-dhcp");
 
     workspaces
 }

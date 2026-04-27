@@ -61,7 +61,8 @@ export type WorkspaceId =
   | "event-log"
   | "secureboot"
   | "sysmon"
-  | "timeline";
+  | "timeline"
+  | "dns-dhcp";
 export type KnownSourceDefaultFileSelectionBehavior =
   | "none"
   | "preferFileName"

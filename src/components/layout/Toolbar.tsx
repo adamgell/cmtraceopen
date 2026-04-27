@@ -380,7 +380,6 @@ export function useAppActions(): AppActionHandlers {
         activeWorkspace
       );
     } else {
-      const { loadFilesAsLogSource } = await import("../../lib/log-source");
       await loadFilesAsLogSource(paths);
     }
   }, [activeWorkspace, commandState.canOpenSources, openSourceForWorkspace]);

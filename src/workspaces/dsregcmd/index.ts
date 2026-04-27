@@ -1,6 +1,7 @@
 // src/workspaces/dsregcmd/index.ts
 import { lazy } from "react";
 import type { WorkspaceDefinition } from "../types";
+import { useUiStore } from "../../stores/ui-store";
 
 export const dsregcmdWorkspace: WorkspaceDefinition = {
   id: "dsregcmd",
@@ -30,10 +31,7 @@ export const dsregcmdWorkspace: WorkspaceDefinition = {
     placeholder: "Open dsregcmd Source...",
   },
   onOpenSource: async (source, trigger) => {
-    const [{ useUiStore }, { analyzeDsregcmdSource }] = await Promise.all([
-      import("../../stores/ui-store"),
-      import("../../lib/dsregcmd-source"),
-    ]);
+    const { analyzeDsregcmdSource } = await import("../../lib/dsregcmd-source");
 
     useUiStore.getState().ensureWorkspaceVisible("dsregcmd", trigger);
 

@@ -1,6 +1,9 @@
 // src/workspaces/sysmon/index.ts
 import { startTransition, lazy } from "react";
 import type { WorkspaceDefinition } from "../types";
+import { useUiStore } from "../../stores/ui-store";
+import { getLogSourcePath } from "../../lib/log-source";
+import { analyzeSysmonLogs } from "../../lib/commands";
 
 const LIVE_SYSMON_SOURCE_ID = "windows-sysmon-live-events";
 
@@ -29,13 +32,7 @@ export const sysmonWorkspace: WorkspaceDefinition = {
     placeholder: "Open Sysmon Source...",
   },
   onOpenSource: async (source, trigger) => {
-    const [{ useUiStore }, { getLogSourcePath }, { analyzeSysmonLogs }, { useSysmonStore }] =
-      await Promise.all([
-        import("../../stores/ui-store"),
-        import("../../lib/log-source"),
-        import("../../lib/commands"),
-        import("./sysmon-store"),
-      ]);
+    const { useSysmonStore } = await import("./sysmon-store");
 
     useUiStore.getState().ensureWorkspaceVisible("sysmon", trigger);
     const sourcePath = getLogSourcePath(source);

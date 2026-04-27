@@ -3,6 +3,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { readTextFile } from "@tauri-apps/plugin-fs";
 import { useLogStore } from "../stores/log-store";
 import { useUiStore } from "../stores/ui-store";
+import { loadPathAsLogSource, loadFilesAsLogSource } from "./log-source";
 import { validateSession, type FileChangeWarning } from "./session";
 
 interface FileHashResult {
@@ -105,7 +106,6 @@ export async function restoreSession(sessionPath: string): Promise<string | null
   // Load each file individually to create proper per-file tabs
   const filePaths = validTabs.map((t) => t.filePath);
   try {
-    const { loadPathAsLogSource } = await import("./log-source");
     for (const tab of validTabs) {
       try {
         await loadPathAsLogSource(tab.filePath, { fallbackToFolder: false });
@@ -117,7 +117,6 @@ export async function restoreSession(sessionPath: string): Promise<string | null
     console.error("[session] failed to import log-source during restore", error);
     // Fallback: try the aggregate load path
     try {
-      const { loadFilesAsLogSource } = await import("./log-source");
       await loadFilesAsLogSource(filePaths);
     } catch (fallbackError) {
       console.error("[session] fallback aggregate load also failed", fallbackError);

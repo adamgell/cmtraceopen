@@ -1,7 +1,9 @@
 // src/workspaces/intune/index.ts
 import { startTransition, lazy } from "react";
 import type { WorkspaceDefinition } from "../types";
-import type { IntuneWorkspaceId } from "../../stores/ui-store";
+import { useUiStore, type IntuneWorkspaceId } from "../../stores/ui-store";
+import { getLogSourcePath, loadLogSource } from "../../lib/log-source";
+import { analyzeIntuneLogs } from "../../lib/commands";
 import type { LogSource } from "../../types/log";
 
 const LIVE_INTUNE_SOURCE_ID = "windows-intune-ime-logs";
@@ -29,17 +31,7 @@ export function createIntuneOnOpenSource(
   workspaceId: IntuneWorkspaceId,
 ): WorkspaceDefinition["onOpenSource"] {
   return async (source, trigger) => {
-    const [
-      { useUiStore },
-      { getLogSourcePath, loadLogSource },
-      { analyzeIntuneLogs },
-      { useIntuneStore },
-    ] = await Promise.all([
-      import("../../stores/ui-store"),
-      import("../../lib/log-source"),
-      import("../../lib/commands"),
-      import("./intune-store"),
-    ]);
+    const { useIntuneStore } = await import("./intune-store");
 
     useUiStore.getState().ensureWorkspaceVisible(workspaceId, trigger);
     const requestId = createIntuneAnalysisRequestId();
