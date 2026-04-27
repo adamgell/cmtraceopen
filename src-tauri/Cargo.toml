@@ -57,7 +57,7 @@ plist = { version = "1", optional = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 winreg = "0.56"
-windows = { version = "0.61", features = [
+windows = { version = "0.62", features = [
     "Win32_Foundation",
     "Win32_System_EventLog",
     "Win32_Security",
