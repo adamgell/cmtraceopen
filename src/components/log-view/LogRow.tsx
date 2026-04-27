@@ -381,7 +381,7 @@ export const LogRow = memo(function LogRow({
             backgroundColor: tokens.colorNeutralBackground1,
             border: `1px solid ${tokens.colorNeutralStroke1}`,
             borderRadius: 4,
-            boxShadow: "0 4px 12px rgba(0,0,0,0.2)",
+            boxShadow: tokens.shadow8,
             padding: "4px 0",
             minWidth: 140,
           }}

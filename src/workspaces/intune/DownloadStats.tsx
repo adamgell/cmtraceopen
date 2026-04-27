@@ -113,7 +113,7 @@ export function DownloadStats({ downloads }: DownloadStatsProps) {
               style={{
                 backgroundColor: tokens.colorNeutralBackground2,
                 borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
-                boxShadow: "0 1px 2px rgba(0,0,0,0.02)",
+                boxShadow: tokens.shadow2,
               }}
             >
               <th style={thStyle}>Status</th>

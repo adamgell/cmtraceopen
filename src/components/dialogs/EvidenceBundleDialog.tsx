@@ -623,7 +623,7 @@ export function EvidenceBundleDialog({ isOpen, onClose }: EvidenceBundleDialogPr
           border: `1px solid ${BUNDLE_COLORS.borderSubtle}`,
           borderRadius: "8px",
           backgroundColor: BUNDLE_COLORS.cardBg,
-          boxShadow: "0 22px 48px rgba(15, 23, 42, 0.22)",
+          boxShadow: tokens.shadow16,
           fontFamily: "'Segoe UI', Tahoma, sans-serif",
         }}
       >

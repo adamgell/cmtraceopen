@@ -175,7 +175,7 @@ export function FilterDialog({
           borderRadius: "4px",
           padding: "12px",
           minWidth: "520px",
-          boxShadow: "0 4px 12px rgba(0,0,0,0.3)",
+          boxShadow: tokens.shadow16,
         }}
       >
         <div

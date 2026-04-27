@@ -167,7 +167,7 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
           height: "min(580px, 90vh)",
           display: "flex",
           flexDirection: "column",
-          boxShadow: "0 4px 12px rgba(0,0,0,0.3)",
+          boxShadow: tokens.shadow16,
           color: tokens.colorNeutralForeground1,
         }}
       >
