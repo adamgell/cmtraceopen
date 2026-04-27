@@ -94,12 +94,12 @@ export function SecureBootSidebar() {
           }}
         >
           <SidebarActionButton
-            label="Run Detection"
+            label="Run detection"
             disabled={isBusy}
             onClick={handleRunDetection}
           />
           <SidebarActionButton
-            label="Run Remediation"
+            label="Run remediation"
             disabled={isBusy}
             onClick={handleRunRemediation}
           />

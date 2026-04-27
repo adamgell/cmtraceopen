@@ -438,7 +438,7 @@ export function MacosDiagProfilesTab() {
         </div>
         <div className={styles.sectionActions}>
           <Button size="small" appearance="subtle" onClick={copyAll}>
-            {copied ? "Copied" : "Copy All"}
+            {copied ? "Copied" : "Copy all"}
           </Button>
           <Button size="small" appearance="subtle" onClick={fetch}>
             Refresh

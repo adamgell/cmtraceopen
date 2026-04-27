@@ -147,11 +147,11 @@ export function SysmonWorkspace() {
 
         <div style={{ display: "flex", gap: "16px" }}>
           <Button appearance="primary" onClick={() => void handleOpenFiles()}>
-            Open .evtx Files
+            Open .evtx files...
           </Button>
           {isWindows && (
             <Button appearance="secondary" onClick={() => void handleThisComputer()}>
-              This Computer
+              This computer
             </Button>
           )}
         </div>

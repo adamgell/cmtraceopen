@@ -92,7 +92,7 @@ export function InfoPane() {
           setFocusedErrorCode(null);
         }}
       >
-        Open Lookup
+        Open lookup
       </Button>
       <Button
         size="small"

@@ -324,7 +324,7 @@ export function MacosDiagIntuneLogsTab() {
                       appearance="primary"
                       onClick={() => handleOpenInLogViewer(file)}
                     >
-                      Open in Log Viewer
+                      Open in log viewer
                     </Button>
                   </td>
                 </tr>

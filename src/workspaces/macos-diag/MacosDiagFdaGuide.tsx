@@ -150,10 +150,10 @@ export function MacosDiagFdaGuide({ onRecheck }: Props) {
 
       <div className={styles.actions}>
         <Button appearance="primary" size="large" onClick={onRecheck}>
-          Re-check FDA Status
+          Re-check FDA status
         </Button>
         <Button appearance="secondary" size="large" onClick={handleOpenSettings}>
-          Open System Settings
+          Open System Settings...
         </Button>
       </div>
     </div>

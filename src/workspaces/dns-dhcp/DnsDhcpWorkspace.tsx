@@ -385,13 +385,13 @@ export function DnsDhcpWorkspace() {
 
         <div style={{ display: "flex", gap: 12 }}>
           <Button appearance="primary" onClick={() => void handleScanServer()} disabled={collecting}>
-            Scan This Server
+            Scan this server
           </Button>
           <Button appearance="primary" onClick={() => void handleCollectFromDomain()} disabled={collecting}>
-            Collect from Domain
+            Collect from domain
           </Button>
           <Button appearance="secondary" onClick={() => void handleOpenFiles()} disabled={collecting}>
-            Open Files
+            Open files...
           </Button>
         </div>
 
@@ -459,7 +459,7 @@ export function DnsDhcpWorkspace() {
                 appearance="primary"
                 onClick={() => void handleLoadCollectionBundle(collectionResult.bundlePath)}
               >
-                Open Collected Logs
+                Open collected logs
               </Button>
             </div>
           </div>
@@ -496,7 +496,7 @@ export function DnsDhcpWorkspace() {
                       onClick={() => void handleEnableDnsLogging()}
                       disabled={enabling}
                     >
-                      {enabling ? "Enabling..." : "Enable DNS Debug Logging"}
+                      {enabling ? "Enabling..." : "Enable DNS debug logging"}
                     </Button>
                   </div>
                 )}

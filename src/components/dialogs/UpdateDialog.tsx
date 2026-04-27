@@ -196,11 +196,11 @@ export function UpdateDialog({
               <button onClick={onClose} style={buttonStyle}>Later</button>
               {updateInfo.canAutoUpdate && !updateInfo.error ? (
                 <button onClick={onDownloadAndInstall} style={primaryButtonStyle}>
-                  Download &amp; Install
+                  Download &amp; install
                 </button>
               ) : (
                 <button onClick={onOpenReleasePage} style={primaryButtonStyle}>
-                  Download from GitHub
+                  Download from GitHub...
                 </button>
               )}
             </div>

@@ -61,7 +61,7 @@ export function DiffHeader() {
             borderRight: "none",
           }}
         >
-          Side-by-Side
+          Side-by-side
         </button>
         <button
           type="button"
@@ -96,7 +96,7 @@ export function DiffHeader() {
           cursor: "pointer",
         }}
       >
-        Close Diff
+        Close diff
       </button>
     </div>
   );

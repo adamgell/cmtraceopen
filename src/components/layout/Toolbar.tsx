@@ -755,8 +755,8 @@ export function Toolbar() {
   const openLabels = useMemo(() => {
     const ws = getWorkspace(activeView);
     return ws.actionLabels ?? {
-      file: "Open File",
-      folder: "Open Folder",
+      file: "Open file...",
+      folder: "Open folder...",
       placeholder: "Open...",
     };
   }, [activeView]);
@@ -796,10 +796,10 @@ export function Toolbar() {
             {activeView === "dsregcmd" && (
               <>
                 <MenuItem onClick={() => void pasteDsregcmdSource().catch((err) => console.error("Failed to paste dsregcmd source", err))}>
-                  Paste Clipboard
+                  Paste clipboard
                 </MenuItem>
                 <MenuItem onClick={() => void captureDsregcmdSource().catch((err) => console.error("Failed to capture dsregcmd source", err))}>
-                  Capture Live Output
+                  Capture live output
                 </MenuItem>
               </>
             )}
@@ -819,10 +819,10 @@ export function Toolbar() {
             {commandState.canOpenKnownSources
               ? knownSourceToolbarFamilies.length > 0
                 ? isIntuneWorkspace(activeView)
-                  ? "Open Known Intune Source..."
-                  : "Open Known Log Source..."
-                : "No Known Log Sources"
-              : "Known Sources Unavailable"}
+                  ? "Open known Intune source..."
+                  : "Open known log source..."
+                : "No known log sources"
+              : "Known sources unavailable"}
           </Button>
         </MenuTrigger>
         <MenuPopover>
@@ -842,7 +842,7 @@ export function Toolbar() {
                       }
                       style={{ fontWeight: 500 }}
                     >
-                      Open All {family.label}
+                      Open all {family.label}
                     </MenuItem>
                     <Divider />
                     {family.groups.map((group) => (
@@ -912,7 +912,7 @@ export function Toolbar() {
             cursor: "pointer",
           }}
         >
-          Merge Tabs...
+          Merge tabs...
         </button>
       )}
       {canMergeTabs && (
@@ -930,7 +930,7 @@ export function Toolbar() {
             cursor: "pointer",
           }}
         >
-          Diff Tabs...
+          Diff tabs...
         </button>
       )}
 
@@ -955,18 +955,18 @@ export function Toolbar() {
 
       <Button
         onClick={showErrorLookupDialog}
-        title="Error Lookup (Ctrl+E)"
+        title="Error lookup (Ctrl+E)"
         size="small"
         appearance="secondary"
       >
-        Error Lookup
+        Error lookup
       </Button>
 
       <Divider vertical />
 
       <Button
         onClick={toggleDetailsPane}
-        title="Show / Hide Details (Ctrl+H)"
+        title="Show / hide details (Ctrl+H)"
         disabled={!commandState.canToggleDetailsPane}
         aria-pressed={commandState.isDetailsVisible}
         size="small"
@@ -976,7 +976,7 @@ export function Toolbar() {
       </Button>
       <Button
         onClick={toggleInfoPane}
-        title="Toggle Info Pane"
+        title="Toggle info pane"
         disabled={!commandState.canToggleInfoPane}
         aria-pressed={commandState.isInfoPaneVisible}
         size="small"

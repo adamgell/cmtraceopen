@@ -296,21 +296,21 @@ export function NewIntuneWorkspace() {
                 onClick={startLiveAnalysis}
                 disabled={!commandState.canOpenKnownSources}
               >
-                Analyze Live Logs + Event Logs
+                Analyze live logs + event logs
               </Button>
               <Button
                 appearance="secondary"
                 onClick={() => void openSourceFileDialog()}
                 disabled={!commandState.canOpenSources}
               >
-                Open IME Log File
+                Open IME log file...
               </Button>
               <Button
                 appearance="secondary"
                 onClick={() => void openSourceFolderDialog()}
                 disabled={!commandState.canOpenSources}
               >
-                Open IME Or Evidence Folder
+                Open IME or evidence folder...
               </Button>
             </div>
           </Card>
@@ -363,7 +363,7 @@ export function NewIntuneWorkspace() {
               onClick={() => void refreshActiveSource()}
               disabled={!commandState.canRefresh}
             >
-              Refresh Analysis
+              Refresh analysis
             </Button>
           </div>
         </div>
@@ -407,7 +407,7 @@ export function NewIntuneWorkspace() {
             role="tab"
             aria-selected={surface === "timeline"}
           >
-            Event Evidence
+            Event evidence
           </Button>
           <Button
             appearance={surface === "downloads" ? "primary" : "secondary"}
@@ -416,7 +416,7 @@ export function NewIntuneWorkspace() {
             role="tab"
             aria-selected={surface === "downloads"}
           >
-            Download Evidence
+            Download evidence
           </Button>
           <Button
             appearance={surface === "event-logs" ? "primary" : "secondary"}
@@ -425,7 +425,7 @@ export function NewIntuneWorkspace() {
             role="tab"
             aria-selected={surface === "event-logs"}
           >
-            Event Log Evidence
+            Event log evidence
             {eventLogAnalysis && eventLogAnalysis.errorEntryCount > 0 && (
               <Badge
                 appearance="filled"
@@ -437,7 +437,7 @@ export function NewIntuneWorkspace() {
             )}
           </Button>
           <Button appearance="secondary" onClick={resetInvestigation}>
-            Reset Investigation
+            Reset investigation
           </Button>
         </div>
 

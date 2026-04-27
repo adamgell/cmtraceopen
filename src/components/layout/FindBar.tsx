@@ -120,7 +120,7 @@ export function FindBar({ onClose }: FindBarProps) {
         }
       />
 
-      <Tooltip content="Match Case" relationship="label">
+      <Tooltip content="Match case" relationship="label">
         <Button
           appearance="subtle"
           size="small"
@@ -133,7 +133,7 @@ export function FindBar({ onClose }: FindBarProps) {
         </Button>
       </Tooltip>
 
-      <Tooltip content="Use Regular Expression" relationship="label">
+      <Tooltip content="Use regular expression" relationship="label">
         <Button
           appearance="subtle"
           size="small"
@@ -148,7 +148,7 @@ export function FindBar({ onClose }: FindBarProps) {
 
       <div style={{ width: 1, height: 20, backgroundColor: tokens.colorNeutralStroke2 }} />
 
-      <Tooltip content="Previous Match (Shift+Enter)" relationship="label">
+      <Tooltip content="Previous match (Shift+Enter)" relationship="label">
         <Button
           appearance="subtle"
           size="small"
@@ -160,7 +160,7 @@ export function FindBar({ onClose }: FindBarProps) {
         />
       </Tooltip>
 
-      <Tooltip content="Next Match (Enter)" relationship="label">
+      <Tooltip content="Next match (Enter)" relationship="label">
         <Button
           appearance="subtle"
           size="small"

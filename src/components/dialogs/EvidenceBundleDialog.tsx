@@ -300,7 +300,7 @@ function getArtifactNavigationState(
           : "Open this artifact in the Intune workspace.",
       actionLabel:
         activeView === "new-intune"
-          ? "Open in New Intune Workspace"
+          ? "Open in new Intune workspace"
           : "Open in Intune workspace",
     };
   }

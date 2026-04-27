@@ -26,9 +26,9 @@ export const dsregcmdWorkspace: WorkspaceDefinition = {
     { name: "All Files", extensions: ["*"] },
   ],
   actionLabels: {
-    file: "Open Text File",
-    folder: "Open Evidence Folder",
-    placeholder: "Open dsregcmd Source...",
+    file: "Open text file...",
+    folder: "Open evidence folder...",
+    placeholder: "Open dsregcmd source...",
   },
   onOpenSource: async (source, trigger) => {
     const { analyzeDsregcmdSource } = await import("../../lib/dsregcmd-source");

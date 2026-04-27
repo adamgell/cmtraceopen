@@ -166,7 +166,7 @@ export function MacosDiagEnvironmentBanner({ environment, onRefresh }: Props) {
         )}
 
         <Button size="small" appearance="subtle" onClick={onRefresh}>
-          Refresh All
+          Refresh all
         </Button>
       </div>
     </div>

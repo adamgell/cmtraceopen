@@ -55,7 +55,7 @@ export function DnsWorkspaceBanner() {
         This looks like a {label}. Open in the DNS/DHCP workspace for device correlation and query analysis?
       </span>
       <Button size="small" appearance="primary" onClick={handleOpenInWorkspace}>
-        Open in Workspace
+        Open in workspace
       </Button>
       <Button
         size="small"
