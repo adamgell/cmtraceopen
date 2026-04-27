@@ -21,6 +21,7 @@ import { platform } from "@tauri-apps/plugin-os";
 import {
   getAvailableWorkspaces as getAvailableBackendWorkspaces,
   inspectPathKind,
+  listLogFolder,
 } from "../../lib/commands";
 import {
   analyzeDsregcmdPath,
@@ -44,7 +45,7 @@ import {
   resolveKnownSourceIdFromCatalogAction,
   type KnownSourceCatalogActionIds,
 } from "../../lib/log-source";
-import { listLogFolder } from "../../lib/commands";
+import { matchesAnyPattern } from "../../lib/glob";
 import type { LogSource } from "../../types/log";
 
 function normalizeDialogSelection(
@@ -73,19 +74,6 @@ function resolveRefreshSource(
 }
 
 const LIVE_SYSMON_SOURCE_ID = "windows-sysmon-live-events";
-
-/** Check if a filename matches any glob pattern (supports *.ext wildcards). */
-function matchesAnyPattern(name: string, patterns: string[]): boolean {
-  if (patterns.length === 0) return true;
-  const lower = name.toLowerCase();
-  return patterns.some((p) => {
-    if (p === "*") return true;
-    if (p.startsWith("*.")) {
-      return lower.endsWith(p.slice(1).toLowerCase());
-    }
-    return lower === p.toLowerCase();
-  });
-}
 
 async function inferPathKind(path: string): Promise<"file" | "folder" | "unknown"> {
   try {
@@ -648,25 +636,46 @@ export function Toolbar() {
       const family = families.find((f) => f.id === familyId);
       if (!family) return;
 
-      const folderSources: Array<{ path: string; patterns: string[] }> = [];
+      const folderSources: Array<{ folderPath: string; patterns: string[] }> = [];
+      const directFilePaths = new Set<string>();
+
       for (const group of family.groups) {
         for (const source of group.sources) {
-          if (source.source.kind === "known" && source.source.pathKind === "folder") {
-            folderSources.push({
-              path: source.source.defaultPath,
-              patterns: source.filePatterns ?? [],
-            });
+          if (source.source.kind === "known") {
+            if (source.source.pathKind === "folder") {
+              folderSources.push({
+                folderPath: source.source.defaultPath,
+                patterns: source.filePatterns ?? [],
+              });
+            } else if (source.source.pathKind === "file") {
+              directFilePaths.add(source.source.defaultPath);
+            }
           }
         }
       }
 
-      if (folderSources.length === 0) return;
+      if (folderSources.length === 0 && directFilePaths.size === 0) return;
 
       useUiStore.getState().ensureLogViewVisible("toolbar.open-all-family");
       useFilterStore.getState().clearFilter();
 
-      const allFilePaths = new Set<string>();
-      for (const { path: folderPath, patterns } of folderSources) {
+      // Verify direct file paths actually exist on disk before including them
+      const verifiedFilePaths = new Set<string>();
+      await Promise.all(
+        [...directFilePaths].map(async (filePath) => {
+          try {
+            const kind = await inspectPathKind(filePath);
+            if (kind === "file") {
+              verifiedFilePaths.add(filePath);
+            }
+          } catch {
+            // Path doesn't exist or isn't accessible — skip silently
+          }
+        }),
+      );
+
+      const allFilePaths = new Set<string>(verifiedFilePaths);
+      for (const { folderPath, patterns } of folderSources) {
         try {
           const listing = await listLogFolder(folderPath);
           for (const entry of listing.entries) {
@@ -693,10 +702,15 @@ export function Toolbar() {
     openKnownSourceCatalogAction,
     pasteDsregcmdSource,
     captureDsregcmdSource,
+    showFilterDialog,
     showErrorLookupDialog,
     toggleDetailsPane,
     toggleInfoPane,
   } = useAppActions();
+
+  const clearFilter = useCallback(() => {
+    useFilterStore.getState().clearFilter();
+  }, []);
 
 
   useEffect(() => {
@@ -922,6 +936,23 @@ export function Toolbar() {
       )}
 
       <Divider vertical />
+
+      <Button
+        onClick={commandState.activeFilterCount > 0 ? clearFilter : showFilterDialog}
+        title={
+          commandState.activeFilterCount > 0
+            ? `Clear active filter (${commandState.activeFilterCount} clause${commandState.activeFilterCount === 1 ? "" : "s"}) — click to remove`
+            : "Filter... (Ctrl+Shift+L)"
+        }
+        disabled={commandState.activeFilterCount === 0 && !commandState.canFilter}
+        aria-pressed={commandState.activeFilterCount > 0}
+        size="small"
+        appearance={commandState.activeFilterCount > 0 ? "primary" : "secondary"}
+      >
+        {commandState.activeFilterCount > 0
+          ? `Filter (${commandState.activeFilterCount})`
+          : "Filter..."}
+      </Button>
 
       <Button
         onClick={showErrorLookupDialog}
