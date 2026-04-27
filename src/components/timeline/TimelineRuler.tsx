@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import { tokens } from "@fluentui/react-components";
 
 interface Props {
   timeRangeMs: [number, number];
@@ -21,8 +22,13 @@ export function TimelineRuler({ timeRangeMs, width }: Props) {
     <svg width={width} height={20} role="presentation">
       {ticks.map((t, i) => (
         <g key={i} transform={`translate(${t.x},0)`}>
-          <line y2={6} stroke="#6b7280" />
-          <text y={18} fontSize={10} fill="#6b7280" textAnchor="middle">
+          <line y2={6} style={{ stroke: tokens.colorNeutralForeground3 }} />
+          <text
+            y={18}
+            fontSize={10}
+            style={{ fill: tokens.colorNeutralForeground3 }}
+            textAnchor="middle"
+          >
             {t.label}
           </text>
         </g>

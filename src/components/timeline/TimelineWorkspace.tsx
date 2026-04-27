@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { tokens } from "@fluentui/react-components";
 import { useTimelineStore } from "../../stores/timeline-store";
 import { useLaneBuckets } from "./hooks/useLaneBuckets";
 import { SwimLaneCanvas } from "./SwimLaneCanvas";
@@ -71,8 +72,8 @@ export function TimelineWorkspace() {
         style={{
           padding: 40,
           textAlign: "center",
-          color: "#6b7280",
-          border: "2px dashed #d1d5db",
+          color: tokens.colorNeutralForeground3,
+          border: `2px dashed ${tokens.colorNeutralStroke1}`,
           margin: 40,
           borderRadius: 8,
         }}
@@ -113,8 +114,8 @@ export function TimelineWorkspace() {
         ref={laneBoxRef}
         style={{
           position: "relative",
-          borderTop: "1px solid #e5e7eb",
-          borderBottom: "1px solid #e5e7eb",
+          borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
+          borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
           padding: "0 0 2px 0",
         }}
       >
@@ -145,8 +146,8 @@ export function TimelineWorkspace() {
               right: 8,
               top: 2,
               fontSize: 10,
-              color: "#6b7280",
-              background: "#fff",
+              color: tokens.colorNeutralForeground3,
+              background: tokens.colorNeutralBackground1,
               padding: "1px 4px",
               pointerEvents: "none",
             }}

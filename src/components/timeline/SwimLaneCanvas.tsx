@@ -1,5 +1,14 @@
 import { useEffect, useRef } from "react";
+import { tokens } from "@fluentui/react-components";
 import type { LaneBucket, TimelineSourceMeta } from "../../types/timeline";
+
+/** Resolve a Fluent token (CSS custom-property string) to its computed value. */
+function resolveToken(el: HTMLElement, token: string): string {
+  // tokens.* values are `var(--xxx)` strings — extract the custom-property name.
+  const match = token.match(/var\(([^)]+)\)/);
+  if (!match) return token;
+  return getComputedStyle(el).getPropertyValue(match[1]).trim() || token;
+}
 
 interface Props {
   sources: TimelineSourceMeta[];
@@ -48,9 +57,13 @@ export function SwimLaneCanvas(props: Props) {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, width, height);
 
+    const laneBg = resolveToken(cv, tokens.colorNeutralBackground2);
+    const errorFill = resolveToken(cv, tokens.colorPaletteRedForeground1);
+    const warnFill = resolveToken(cv, tokens.colorPaletteYellowForeground1);
+
     visible.forEach((src, laneIdx) => {
       const y = laneIdx * laneHeight;
-      ctx.fillStyle = "#f9fafb";
+      ctx.fillStyle = laneBg;
       ctx.fillRect(0, y, width, laneHeight - 2);
 
       const laneBuckets = buckets.filter((b) => b.sourceIdx === src.idx);
@@ -58,8 +71,8 @@ export function SwimLaneCanvas(props: Props) {
         const x = ((b.tsStartMs - lo) / span) * width;
         const w = Math.max(1, ((b.tsEndMs - b.tsStartMs) / span) * width);
         let fill = src.color;
-        if (b.errorCount > 0) fill = "#dc2626";
-        else if (b.warnCount > 0) fill = "#f59e0b";
+        if (b.errorCount > 0) fill = errorFill;
+        else if (b.warnCount > 0) fill = warnFill;
         const density = Math.min(1, b.totalCount / 20);
         ctx.globalAlpha = 0.35 + 0.6 * density;
         ctx.fillStyle = fill;

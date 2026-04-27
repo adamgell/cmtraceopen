@@ -1,4 +1,5 @@
 import { useRef, useState } from "react";
+import { tokens } from "@fluentui/react-components";
 import { useTimelineStore } from "../../stores/timeline-store";
 
 interface Props {
@@ -89,9 +90,9 @@ export function BrushOverlay({ timeRangeMs, width, height }: Props) {
             width: selection.w,
             top: 0,
             bottom: 0,
-            background: "rgba(37,99,235,.10)",
-            borderLeft: "1px dashed #2563eb",
-            borderRight: "1px dashed #2563eb",
+            background: `color-mix(in srgb, ${tokens.colorBrandForeground1} 10%, transparent)`,
+            borderLeft: `1px dashed ${tokens.colorBrandForeground1}`,
+            borderRight: `1px dashed ${tokens.colorBrandForeground1}`,
             pointerEvents: "none",
           }}
         />

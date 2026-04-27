@@ -1,3 +1,4 @@
+import { tokens } from "@fluentui/react-components";
 import { useIncidentDetail } from "./hooks/useIncidentDetail";
 import { useTimelineStore } from "../../stores/timeline-store";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
@@ -14,7 +15,7 @@ export function IncidentDetailPanel() {
     <aside
       style={{
         width: 340,
-        borderLeft: "1px solid #e5e7eb",
+        borderLeft: `1px solid ${tokens.colorNeutralStroke2}`,
         overflowY: "auto",
         padding: 12,
         fontSize: 12,
@@ -35,7 +36,7 @@ export function IncidentDetailPanel() {
       <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>
         {i.summary}
       </div>
-      <div style={{ color: "#6b7280", marginBottom: 10 }}>
+      <div style={{ color: tokens.colorNeutralForeground3, marginBottom: 10 }}>
         {new Date(i.tsStartMs).toLocaleTimeString()}–
         {new Date(i.tsEndMs).toLocaleTimeString()} · confidence{" "}
         {Math.round(i.confidence * 100)}%
@@ -45,7 +46,7 @@ export function IncidentDetailPanel() {
         <div
           style={{
             fontSize: 10,
-            color: "#6b7280",
+            color: tokens.colorNeutralForeground3,
             textTransform: "uppercase",
           }}
         >
@@ -67,7 +68,7 @@ export function IncidentDetailPanel() {
           <div
             style={{
               fontSize: 10,
-              color: "#6b7280",
+              color: tokens.colorNeutralForeground3,
               textTransform: "uppercase",
             }}
           >
@@ -76,7 +77,7 @@ export function IncidentDetailPanel() {
           <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
             <code
               style={{
-                background: "#f3f4f6",
+                background: tokens.colorNeutralBackground3,
                 padding: "1px 4px",
                 borderRadius: 2,
               }}
@@ -98,7 +99,7 @@ export function IncidentDetailPanel() {
         <div
           style={{
             fontSize: 10,
-            color: "#6b7280",
+            color: tokens.colorNeutralForeground3,
             textTransform: "uppercase",
           }}
         >
@@ -107,9 +108,9 @@ export function IncidentDetailPanel() {
         {detail.signals.map((s, idx) => (
           <div
             key={idx}
-            style={{ padding: "4px 0", borderBottom: "1px solid #f3f4f6" }}
+            style={{ padding: "4px 0", borderBottom: `1px solid ${tokens.colorNeutralBackground3}` }}
           >
-            <div style={{ fontSize: 10, color: "#9ca3af" }}>
+            <div style={{ fontSize: 10, color: tokens.colorNeutralForeground4 }}>
               {new Date(s.tsMs).toLocaleTimeString()} · {s.sourceName} ·{" "}
               {s.kind}
               {s.correlationId && " · (correlated)"}
