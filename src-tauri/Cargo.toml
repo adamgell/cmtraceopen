@@ -7,7 +7,7 @@
 
 [package]
 name = "cmtrace-open"
-version = "1.2.1"
+version = "1.3.0"
 description = "Open-source CMTrace log viewer with Intune diagnostics"
 authors = ["Adam Gell"]
 license = "MIT"

@@ -2,6 +2,36 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.3.0] - 2026-04-27
+
+### Added
+
+- **Unified multi-file timeline workspace**: New workspace merges entries from multiple log files into a single time-sorted view with overlap-based incident detection for correlating events across sources.
+- **DNS/DHCP cross-origin workspace**: Dedicated workspace combining DNS debug log parser, DNS audit EVTX parser, and DHCP server log analysis with server management capabilities.
+- **Cross-platform CI restored**: macOS, Linux, and Windows builds re-enabled in the CI matrix, ensuring all three platforms are tested on every PR.
+- **Filter toggle button**: Quick toggle to enable/disable active filters without clearing them.
+- **"Open All" for known log source families**: One-click action to open all log files in a known source family (e.g., all DNS logs).
+- **Search/filter result count in status bar**: Live count of matching entries displayed in the status bar when search or filter is active.
+
+### Fixed
+
+- **CBS/DISM parser accepts all components** (#154): Parser no longer rejects log entries from unlisted components, fixing missed entries in CBS and DISM logs.
+- **Event Viewer strips control characters** (#159): Control characters in EVTX event data are now stripped before display, preventing garbled output.
+- **Filter toggle UX and "Open All" for known sources** (#152): Filter toggle behaves correctly across workspace switches; "Open All" properly resolves file paths for known log source families.
+
+### Changed
+
+- **Design system polish**: Token drift fixes, emoji icons replaced with Fluent UI icons, ARIA accessibility improvements, `box-shadow` migrated to design tokens, timeline theming aligned with the design system, buttons normalized to sentence case, and border-radius/spacing standardized across all components.
+
+### Dependencies
+
+- `windows` 0.61 to 0.62, `windows-future` 0.2 to 0.3
+- `winreg` 0.55 to 0.56
+- `@tanstack/react-virtual` 3.13.23 to 3.13.24
+- `actions/setup-node` 6.3.0 to 6.4.0
+- `taiki-e/install-action` 2.75.10 to 2.75.18
+- Dev deps: `typescript` 6.0.2 to 6.0.3, `vite` 8.0.8 to 8.0.9
+
 ## [1.2.1] - 2026-04-20
 
 ### Added
