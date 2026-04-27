@@ -1,0 +1,3 @@
+[workspace]
+members = ["src-tauri", "crates/cmtraceopen-parser"]
+resolver = "2"

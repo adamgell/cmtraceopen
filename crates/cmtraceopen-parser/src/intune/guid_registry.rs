@@ -336,7 +336,6 @@ fn has_name_field(msg: &str) -> bool {
 }
 
 /// Extract a display name, discarding the confidence source.
-#[cfg_attr(not(feature = "intune-diagnostics"), allow(dead_code))]
 pub(crate) fn extract_app_name(msg: &str) -> Option<String> {
     extract_app_name_with_source(msg).map(|(name, _)| name)
 }

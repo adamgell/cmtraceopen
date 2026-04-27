@@ -428,7 +428,7 @@ mod tests {
 
     #[test]
     fn test_parse_basic_query_response_pair() {
-        let lines = vec![
+        let lines = [
             "4/11/2026 3:29:17 PM 0294 PACKET  000002DAEC36D650 UDP Rcv 127.0.0.1       d07e   Q [0001   D   NOERROR] SOA    (4)home(4)gell(3)one(0)",
             "4/11/2026 3:29:17 PM 0294 PACKET  000002DAEC36D650 UDP Snd 127.0.0.1       d07e R Q [8085 A DR  NOERROR] SOA    (4)home(4)gell(3)one(0)",
         ];
@@ -460,7 +460,7 @@ mod tests {
 
     #[test]
     fn test_parse_with_detail_section_extracts_port() {
-        let lines = vec![
+        let lines = [
             "4/11/2026 3:29:17 PM 0294 PACKET  000002DAEC36D650 UDP Rcv 127.0.0.1       d07e   Q [0001   D   NOERROR] SOA    (4)home(4)gell(3)one(0)",
             "UDP question info at 000002DAEC36D650",
             "  Socket = 884",
@@ -477,7 +477,7 @@ mod tests {
 
     #[test]
     fn test_parse_severity_mapping() {
-        let lines = vec![
+        let lines = [
             "4/11/2026 8:34:00 PM 0294 PACKET  000002DAEF3AFDC0 UDP Snd 127.0.0.1       3c8a R Q [8385 A DR NXDOMAIN] A      (4)HOME(4)home(4)gell(3)one(0)",
             "4/11/2026 3:29:17 PM 0294 PACKET  000002DAEC3680D0 UDP Snd 192.168.2.9     7822 R U [02a8      SERVFAIL] SOA    (4)home(4)gell(3)one(0)",
         ];
@@ -490,7 +490,7 @@ mod tests {
 
     #[test]
     fn test_parse_skips_header() {
-        let lines = vec![
+        let lines = [
             "DNS Server log file creation at 4/11/2026 3:29:00 PM",
             "Log file wrap:",
             "Message logging key (for packets - other items use a subset):",
@@ -507,7 +507,7 @@ mod tests {
 
     #[test]
     fn test_parse_thread_display() {
-        let lines = vec![
+        let lines = [
             "4/11/2026 3:29:17 PM 0294 PACKET  000002DAEC36D650 UDP Rcv 127.0.0.1       d07e   Q [0001   D   NOERROR] SOA    (4)home(4)gell(3)one(0)",
         ];
         let line_refs: Vec<&str> = lines.iter().map(|s| s.as_ref()).collect();
@@ -522,7 +522,7 @@ mod tests {
 
     #[test]
     fn test_parse_us_timestamp() {
-        let lines = vec![
+        let lines = [
             "4/11/2026 3:29:17 PM 0294 PACKET  000002DAEC36D650 UDP Rcv 127.0.0.1       d07e   Q [0001   D   NOERROR] SOA    (4)home(4)gell(3)one(0)",
         ];
         let line_refs: Vec<&str> = lines.iter().map(|s| s.as_ref()).collect();
@@ -536,7 +536,7 @@ mod tests {
 
     #[test]
     fn test_parse_dynamic_update_opcode() {
-        let lines = vec![
+        let lines = [
             "4/11/2026 3:29:17 PM 0294 PACKET  000002DAEC3680D0 UDP Rcv 192.168.2.9     7822   U [0028       NOERROR] SOA    (4)home(4)gell(3)one(0)",
         ];
         let line_refs: Vec<&str> = lines.iter().map(|s| s.as_ref()).collect();
@@ -550,7 +550,7 @@ mod tests {
 
     #[test]
     fn test_parse_root_query() {
-        let lines = vec![
+        let lines = [
             "4/11/2026 8:33:19 PM 0294 PACKET  000002DAECB28D10 UDP Snd 192.168.2.9     131a R Q [8081   DR  NOERROR] NS     (0)",
         ];
         let line_refs: Vec<&str> = lines.iter().map(|s| s.as_ref()).collect();

@@ -5,7 +5,7 @@ mod constants;
 #[cfg(feature = "dsregcmd")]
 pub mod dsregcmd;
 pub mod error;
-pub mod error_db;
+pub use cmtraceopen_parser::error_db;
 #[cfg(feature = "event-log")]
 pub mod event_log;
 #[cfg(target_os = "windows")]
@@ -16,7 +16,7 @@ mod ipc_bridge;
 #[cfg(feature = "macos-diag")]
 pub mod macos_diag;
 mod menu;
-mod models;
+pub use cmtraceopen_parser::models;
 pub mod parser;
 pub mod process_util;
 #[cfg(feature = "secureboot")]

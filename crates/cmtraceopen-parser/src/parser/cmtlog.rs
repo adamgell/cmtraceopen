@@ -387,7 +387,7 @@ mod tests {
 
     #[test]
     fn test_severity_mapping() {
-        let lines = vec![
+        let lines = [
             r#"<![LOG[Policy validation failed]LOG]!><time="10:32:01.456+000" date="04-13-2026" component="Detect-WDAC" context="" type="3" thread="1234" file="">"#.to_string(),
         ];
         let line_refs: Vec<&str> = lines.iter().map(|s| s.as_str()).collect();
