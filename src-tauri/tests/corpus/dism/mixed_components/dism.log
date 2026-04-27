@@ -1,0 +1,8 @@
+2024-01-15 08:00:00, Info                  DISM   DISM Provider Store: PID=4652 TID=7080 Initializing provider - CDISMProviderStore::Internal_LoadProvider
+2024-01-15 08:00:01, Info                  DISM   DISM Package Manager: PID=4652 TID=7080 Processing package operation
+2024-01-15 08:00:02, Info                  CBS    Loaded Servicing Stack v10.0.19041.3636
+2024-01-15 08:00:03, Info                  CBS    Exec: Servicing session 30546354
+2024-01-15 08:00:04, Warning               CSI    [SR] Cannot repair member file [l:24{12}]"comctl32.dll"
+2024-01-15 08:00:05, Info                  DPX    DPX scheduled restart after servicing
+  Restart reason: Component store corruption repaired
+2024-01-15 08:00:07, Error                 DISM   DISM Package Manager: PID=4652 TID=7080 Failed finalizing changes. Error: 0x800f0922
