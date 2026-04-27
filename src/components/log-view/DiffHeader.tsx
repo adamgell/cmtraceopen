@@ -44,7 +44,7 @@ export function DiffHeader() {
 
       <div style={{ width: "1px", height: "16px", backgroundColor: tokens.colorNeutralStroke2 }} />
 
-      <div style={{ display: "flex" }} role="radiogroup" aria-label="Diff display mode">
+      <div style={{ display: "flex" }} role="group" aria-label="Diff display mode">
         <button
           type="button"
           aria-pressed={displayMode === "side-by-side"}

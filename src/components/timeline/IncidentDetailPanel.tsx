@@ -108,7 +108,7 @@ export function IncidentDetailPanel() {
         {detail.signals.map((s, idx) => (
           <div
             key={idx}
-            style={{ padding: "4px 0", borderBottom: `1px solid ${tokens.colorNeutralBackground3}` }}
+            style={{ padding: "4px 0", borderBottom: `1px solid ${tokens.colorNeutralStroke2}` }}
           >
             <div style={{ fontSize: 10, color: tokens.colorNeutralForeground4 }}>
               {new Date(s.tsMs).toLocaleTimeString()} · {s.sourceName} ·{" "}
