@@ -104,7 +104,7 @@ mod wam {
     use super::*;
 
     use windows::core::{factory, HSTRING};
-    use windows_future::IAsyncOperation;
+    use windows_future::{Async, IAsyncOperation};
     use windows::Security::Authentication::Web::Core::{
         WebAuthenticationCoreManager, WebTokenRequest, WebTokenRequestResult,
         WebTokenRequestStatus,
@@ -127,7 +127,7 @@ mod wam {
             &authority,
         )
         .map_err(|e| AppError::Internal(format!("WAM provider lookup failed: {e}")))?
-        .get()
+        .join()
         .map_err(|e| AppError::Internal(format!("WAM provider await failed: {e}")))?;
 
         // WAM v1 resource model: pass empty scope, set resource via properties
@@ -152,7 +152,7 @@ mod wam {
         .map_err(|e| AppError::Internal(format!("WAM token request failed: {e}")))?;
 
         let result = operation
-            .get()
+            .join()
             .map_err(|e| AppError::Internal(format!("WAM token await failed: {e}")))?;
 
         let status = result
