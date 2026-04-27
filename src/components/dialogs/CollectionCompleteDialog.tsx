@@ -1,8 +1,10 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useMemo } from "react";
 import { tokens } from "@fluentui/react-components";
 import { CheckmarkRegular, DismissRegular } from "@fluentui/react-icons";
 import type { CollectionResult } from "../../lib/commands";
 import { loadPathAsLogSource } from "../../lib/log-source";
+import { useUiStore } from "../../stores/ui-store";
+import { getThemeById } from "../../lib/themes";
 
 interface CollectionCompleteDialogProps {
   result: CollectionResult | null;
@@ -11,6 +13,11 @@ interface CollectionCompleteDialogProps {
 
 export function CollectionCompleteDialog({ result, onClose }: CollectionCompleteDialogProps) {
   const [showGaps, setShowGaps] = useState(false);
+  const themeId = useUiStore((s) => s.themeId);
+  const statusPalette = useMemo(
+    () => getThemeById(themeId).severityPalette.status,
+    [themeId]
+  );
 
   const handleOpenBundle = useCallback(async () => {
     if (result?.bundlePath) {
@@ -73,9 +80,9 @@ export function CollectionCompleteDialog({ result, onClose }: CollectionComplete
         {/* Stat Cards */}
         {!isError && (
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "12px", marginBottom: "16px" }}>
-            <StatCard label="Collected" value={artifactCounts.collected} color="#4ade80" bgColor="rgba(74, 222, 128, 0.1)" />
-            <StatCard label="Missing" value={artifactCounts.missing} color="#facc15" bgColor="rgba(250, 204, 21, 0.1)" />
-            <StatCard label="Failed" value={artifactCounts.failed} color="#f87171" bgColor="rgba(248, 113, 113, 0.1)" />
+            <StatCard label="Collected" value={artifactCounts.collected} color={statusPalette.success.foreground} bgColor={statusPalette.success.background} />
+            <StatCard label="Missing" value={artifactCounts.missing} color={statusPalette.warning.foreground} bgColor={statusPalette.warning.background} />
+            <StatCard label="Failed" value={artifactCounts.failed} color={statusPalette.error.foreground} bgColor={statusPalette.error.background} />
           </div>
         )}
 
@@ -84,8 +91,8 @@ export function CollectionCompleteDialog({ result, onClose }: CollectionComplete
           <div style={{
             padding: "12px",
             borderRadius: "6px",
-            backgroundColor: "rgba(248, 113, 113, 0.1)",
-            color: "#f87171",
+            backgroundColor: statusPalette.error.background,
+            color: statusPalette.error.foreground,
             fontSize: "13px",
             marginBottom: "16px",
             wordBreak: "break-word",

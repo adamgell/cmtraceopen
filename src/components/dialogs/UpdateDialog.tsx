@@ -172,7 +172,7 @@ export function UpdateDialog({
           )}
 
           {updateInfo.error && (
-            <div style={{ fontSize: "11px", color: "#d13438", marginBottom: "10px" }}>
+            <div style={{ fontSize: "11px", color: tokens.colorPaletteRedForeground1, marginBottom: "10px" }}>
               Auto-update failed: {updateInfo.error}
             </div>
           )}
@@ -216,7 +216,7 @@ export function UpdateDialog({
           Check for Updates
         </div>
         {updateInfo?.error ? (
-          <div style={{ fontSize: "12px", marginBottom: "16px", color: "#d13438" }}>
+          <div style={{ fontSize: "12px", marginBottom: "16px", color: tokens.colorPaletteRedForeground1 }}>
             Unable to check for updates: {updateInfo.error}
           </div>
         ) : (

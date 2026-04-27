@@ -502,8 +502,8 @@ export const LogRow = memo(function LogRow({
                     lineHeight: "12px",
                     padding: "0 4px",
                     borderRadius: 4,
-                    backgroundColor: "#9333ea33",
-                    color: "#9333ea",
+                    backgroundColor: severityPalette.whatifOverlay,
+                    color: severityPalette.whatifText,
                     whiteSpace: "nowrap",
                     flexShrink: 0,
                   }}

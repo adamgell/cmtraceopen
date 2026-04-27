@@ -27,6 +27,8 @@ import {
   filterByVisibility,
   findCorrelatedEntries,
 } from "../lib/merge-entries";
+import { getThemeById } from "../lib/themes";
+import { useUiStore } from "./ui-store";
 import {
   type DiffState,
   type DiffSource,
@@ -968,7 +970,9 @@ export const useLogStore = create<LogState>((set, get) => ({
     const validPaths = Object.keys(entriesByFile);
     if (validPaths.length < 2) return;
 
-    const colorAssignments = assignFileColors(validPaths);
+    const themeId = useUiStore.getState().themeId;
+    const mergeColors = getThemeById(themeId).severityPalette.mergeColors;
+    const colorAssignments = assignFileColors(validPaths, mergeColors);
     const fileVisibility: Record<string, boolean> = {};
     for (const fp of validPaths) {
       fileVisibility[fp] = true;

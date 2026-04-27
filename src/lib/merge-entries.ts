@@ -1,9 +1,9 @@
 import type { LogEntry } from "../types/log";
+import { themeSeverityPalettes } from "./themes/palettes";
 
-export const MERGE_FILE_COLORS = [
-  "#2563eb", "#dc2626", "#16a34a", "#9333ea",
-  "#ea580c", "#0891b2", "#c026d3", "#854d0e",
-];
+/** Default merge palette (light theme). Consumers should prefer the per-theme
+ *  `severityPalette.mergeColors` when a theme context is available. */
+export const MERGE_FILE_COLORS = themeSeverityPalettes.light.mergeColors;
 
 export interface MergedTabState {
   sourceFilePaths: string[];
@@ -20,11 +20,12 @@ export interface CorrelatedEntry {
 }
 
 export function assignFileColors(
-  filePaths: string[]
+  filePaths: string[],
+  palette: readonly string[] = MERGE_FILE_COLORS
 ): Record<string, string> {
   const assignments: Record<string, string> = {};
   for (let i = 0; i < filePaths.length; i++) {
-    assignments[filePaths[i]] = MERGE_FILE_COLORS[i % MERGE_FILE_COLORS.length];
+    assignments[filePaths[i]] = palette[i % palette.length];
   }
   return assignments;
 }

@@ -189,13 +189,9 @@ export function LogListView({ dataSource }: { dataSource?: LogListDataSource } =
     [logListFontSize]
   );
 
-  // ── Section color auto-assignment ────────────────────────────────────
-  const SECTION_PALETTE = useMemo(() => [
-    "#3b82f6", "#a78bfa", "#f59e0b", "#10b981",
-    "#ef4444", "#ec4899", "#06b6d4", "#84cc16",
-  ], []);
-
+  // ── Section color auto-assignment (uses theme merge palette) ─────────
   const sectionColorMap = useMemo(() => {
+    const palette = severityPalette.mergeColors;
     const map = new Map<string, string>();
     let paletteIndex = 0;
     for (const entry of displayEntries) {
@@ -204,13 +200,13 @@ export function LogListView({ dataSource }: { dataSource?: LogListDataSource } =
         entry.sectionName &&
         !map.has(entry.sectionName)
       ) {
-        const color = entry.sectionColor ?? SECTION_PALETTE[paletteIndex % SECTION_PALETTE.length];
+        const color = entry.sectionColor ?? palette[paletteIndex % palette.length];
         map.set(entry.sectionName, color);
         if (!entry.sectionColor) paletteIndex++;
       }
     }
     return map;
-  }, [displayEntries, SECTION_PALETTE]);
+  }, [displayEntries, severityPalette.mergeColors]);
 
   // ── Marker store wiring ───────────────────────────────────────────────
   const isMerged = sourceOpenMode === "merged";
