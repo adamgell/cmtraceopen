@@ -179,7 +179,7 @@ export function DeploymentSuccessTable({
               key={col.key}
               title={col.key === "application" ? file.fileName : undefined}
               style={{
-                padding: "5px 10px",
+                padding: "4px 10px",
                 overflow: "hidden",
                 textOverflow: "ellipsis",
                 whiteSpace: "nowrap",

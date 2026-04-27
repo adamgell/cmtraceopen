@@ -191,7 +191,7 @@ export function EventLogSurface({
           }}
           style={{
             fontSize: 12,
-            padding: "3px 6px",
+            padding: "4px 6px",
             borderRadius: 4,
             border: `1px solid ${tokens.colorNeutralStroke2}`,
             background: tokens.colorNeutralCardBackground,
@@ -212,7 +212,7 @@ export function EventLogSurface({
           }
           style={{
             fontSize: 12,
-            padding: "3px 6px",
+            padding: "4px 6px",
             borderRadius: 4,
             border: `1px solid ${tokens.colorNeutralStroke2}`,
             background: tokens.colorNeutralCardBackground,
@@ -560,7 +560,7 @@ function CorrelationLinkRow({
         <span
           style={{
             fontSize: 9,
-            padding: "1px 3px",
+            padding: "2px 4px",
             borderRadius: 2,
             background: tokens.colorNeutralBackground3,
             color: tokens.colorNeutralForeground3,
@@ -610,7 +610,7 @@ function CorrelationLinkRow({
         <span
           style={{
             fontSize: 9,
-            padding: "1px 3px",
+            padding: "2px 4px",
             borderRadius: 2,
             background: tokens.colorNeutralBackground3,
             color: tokens.colorNeutralForeground3,

@@ -181,7 +181,7 @@ export function ChannelPicker() {
             borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
             display: "flex",
             flexDirection: "column",
-            gap: "5px",
+            gap: "4px",
             flexShrink: 0,
           }}
         >

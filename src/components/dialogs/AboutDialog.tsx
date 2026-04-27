@@ -125,7 +125,7 @@ export function AboutDialog({ isOpen, onClose }: AboutDialogProps) {
           </div>
         </div>
 
-        <div style={{ fontSize: "11px", color: tokens.colorNeutralForeground3, marginBottom: "14px" }}>
+        <div style={{ fontSize: "11px", color: tokens.colorNeutralForeground3, marginBottom: "16px" }}>
           Project repository: github.com/adamgell/homelab-code
         </div>
 

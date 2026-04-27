@@ -40,7 +40,7 @@ const useStyles = makeStyles({
   controlGroup: {
     display: "flex",
     flexDirection: "column",
-    gap: "3px",
+    gap: "4px",
   },
   controlLabel: {
     fontSize: "10px",
@@ -52,7 +52,7 @@ const useStyles = makeStyles({
   select: {
     fontFamily: tokens.fontFamilyBase,
     fontSize: "12px",
-    ...shorthands.padding("5px", "10px"),
+    ...shorthands.padding("4px", "10px"),
     ...shorthands.border("1px", "solid", tokens.colorNeutralStroke1),
     ...shorthands.borderRadius(tokens.borderRadiusSmall),
     backgroundColor: tokens.colorNeutralBackground1,
@@ -69,7 +69,7 @@ const useStyles = makeStyles({
   input: {
     fontFamily: tokens.fontFamilyBase,
     fontSize: "12px",
-    ...shorthands.padding("5px", "10px"),
+    ...shorthands.padding("4px", "10px"),
     ...shorthands.border("1px", "solid", tokens.colorNeutralStroke1),
     ...shorthands.borderRadius(tokens.borderRadiusSmall),
     backgroundColor: tokens.colorNeutralBackground1,
@@ -108,7 +108,7 @@ const useStyles = makeStyles({
     display: "flex",
     justifyContent: "space-between",
     alignItems: "center",
-    ...shorthands.padding("10px", "14px"),
+    ...shorthands.padding("10px", "12px"),
     borderBottom: `1px solid ${tokens.colorNeutralStroke1}`,
     backgroundColor: tokens.colorNeutralBackground3,
     flexShrink: 0,
@@ -125,7 +125,7 @@ const useStyles = makeStyles({
     flexShrink: 0,
   },
   headerCell: {
-    ...shorthands.padding("8px", "14px"),
+    ...shorthands.padding("8px", "12px"),
     fontSize: "10.5px",
     fontWeight: 600,
     color: tokens.colorNeutralForeground3,
@@ -171,7 +171,7 @@ const useStyles = makeStyles({
     },
   },
   cell: {
-    ...shorthands.padding("6px", "14px"),
+    ...shorthands.padding("6px", "12px"),
     fontSize: "12px",
     color: tokens.colorNeutralForeground1,
     flexShrink: 0,
@@ -197,7 +197,7 @@ const useStyles = makeStyles({
   levelDefault: {
     fontSize: "10px",
     fontWeight: 600,
-    ...shorthands.padding("2px", "7px"),
+    ...shorthands.padding("2px", "8px"),
     ...shorthands.borderRadius(tokens.borderRadiusCircular),
     textTransform: "uppercase" as const,
     letterSpacing: "0.3px",
@@ -207,7 +207,7 @@ const useStyles = makeStyles({
   levelInfo: {
     fontSize: "10px",
     fontWeight: 600,
-    ...shorthands.padding("2px", "7px"),
+    ...shorthands.padding("2px", "8px"),
     ...shorthands.borderRadius(tokens.borderRadiusCircular),
     textTransform: "uppercase" as const,
     letterSpacing: "0.3px",
@@ -217,7 +217,7 @@ const useStyles = makeStyles({
   levelWarning: {
     fontSize: "10px",
     fontWeight: 600,
-    ...shorthands.padding("2px", "7px"),
+    ...shorthands.padding("2px", "8px"),
     ...shorthands.borderRadius(tokens.borderRadiusCircular),
     textTransform: "uppercase" as const,
     letterSpacing: "0.3px",
@@ -227,7 +227,7 @@ const useStyles = makeStyles({
   levelError: {
     fontSize: "10px",
     fontWeight: 600,
-    ...shorthands.padding("2px", "7px"),
+    ...shorthands.padding("2px", "8px"),
     ...shorthands.borderRadius(tokens.borderRadiusCircular),
     textTransform: "uppercase" as const,
     letterSpacing: "0.3px",
@@ -237,7 +237,7 @@ const useStyles = makeStyles({
   levelFault: {
     fontSize: "10px",
     fontWeight: 600,
-    ...shorthands.padding("2px", "7px"),
+    ...shorthands.padding("2px", "8px"),
     ...shorthands.borderRadius(tokens.borderRadiusCircular),
     textTransform: "uppercase" as const,
     letterSpacing: "0.3px",
@@ -426,7 +426,7 @@ export function MacosDiagUnifiedLogTab() {
           />
         </div>
 
-        <label style={{ display: "flex", alignItems: "center", gap: "5px", alignSelf: "flex-end", fontSize: "11px", color: tokens.colorNeutralForeground3, cursor: "pointer" }}>
+        <label style={{ display: "flex", alignItems: "center", gap: "4px", alignSelf: "flex-end", fontSize: "11px", color: tokens.colorNeutralForeground3, cursor: "pointer" }}>
           <input
             type="checkbox"
             checked={hideNoise}

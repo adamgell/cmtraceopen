@@ -88,7 +88,7 @@ export function DsregcmdSidebar() {
                 <div key={item.id} style={{ padding: "8px 10px", borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, backgroundColor: item.severity === 'Error' ? tokens.colorPaletteRedBackground1 : item.severity === 'Warning' ? tokens.colorPaletteYellowBackground1 : tokens.colorPaletteBlueBackground2 }}>
                   <div style={{ fontSize: "inherit", textTransform: "uppercase", fontWeight: 700, color: item.severity === 'Error' ? tokens.colorPaletteRedForeground2 : item.severity === 'Warning' ? tokens.colorPaletteMarigoldForeground2 : tokens.colorPaletteBlueForeground2 }}>{item.severity}</div>
                   <div style={{ marginTop: "4px", fontSize: "inherit", fontWeight: 600, color: tokens.colorNeutralForeground1 }}>{item.title}</div>
-                  <div style={{ marginTop: "3px", fontSize: "inherit", color: tokens.colorNeutralForeground2, lineHeight: 1.45 }}>{item.summary}</div>
+                  <div style={{ marginTop: "4px", fontSize: "inherit", color: tokens.colorNeutralForeground2, lineHeight: 1.45 }}>{item.summary}</div>
                 </div>
               ))
             )}

@@ -11,7 +11,7 @@ const useStyles = makeStyles({
     display: "flex",
     alignItems: "center",
     gap: "16px",
-    ...shorthands.padding("14px", "20px"),
+    ...shorthands.padding("12px", "20px"),
     backgroundImage:
       "none",
     backgroundColor: tokens.colorNeutralBackground2,
@@ -42,7 +42,7 @@ const useStyles = makeStyles({
   pillGranted: {
     display: "inline-flex",
     alignItems: "center",
-    gap: "5px",
+    gap: "4px",
     ...shorthands.padding("4px", "10px"),
     ...shorthands.borderRadius(tokens.borderRadiusCircular),
     fontSize: "11px",
@@ -54,7 +54,7 @@ const useStyles = makeStyles({
   pillAvailable: {
     display: "inline-flex",
     alignItems: "center",
-    gap: "5px",
+    gap: "4px",
     ...shorthands.padding("4px", "10px"),
     ...shorthands.borderRadius(tokens.borderRadiusCircular),
     fontSize: "11px",
@@ -66,7 +66,7 @@ const useStyles = makeStyles({
   pillMissing: {
     display: "inline-flex",
     alignItems: "center",
-    gap: "5px",
+    gap: "4px",
     ...shorthands.padding("4px", "10px"),
     ...shorthands.borderRadius(tokens.borderRadiusCircular),
     fontSize: "11px",

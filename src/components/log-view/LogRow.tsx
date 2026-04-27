@@ -500,7 +500,7 @@ export const LogRow = memo(function LogRow({
                     fontSize: 9,
                     fontWeight: 600,
                     lineHeight: "12px",
-                    padding: "0 3px",
+                    padding: "0 4px",
                     borderRadius: 4,
                     backgroundColor: "#9333ea33",
                     color: "#9333ea",

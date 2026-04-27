@@ -35,7 +35,7 @@ export function DiagnosticMetaBadge({ label, tone }: { label: string; tone: stri
         backgroundColor: `color-mix(in srgb, ${tone} 7%, transparent)`,
         fontWeight: 700,
         borderRadius: tokens.borderRadiusCircular,
-        padding: "3px 8px",
+        padding: "4px 8px",
       }}
     >
       {label}
@@ -68,7 +68,7 @@ export function DiagnosticChipRow({
             style={{
               fontSize: "10px",
               borderRadius: tokens.borderRadiusCircular,
-              padding: "3px 8px",
+              padding: "4px 8px",
               color: itemTone,
               backgroundColor: background,
               border: `1px solid ${border}`,
@@ -152,7 +152,7 @@ export function SectionCard({
         border: `1px solid ${tokens.colorNeutralStroke2}`,
         borderRadius: "8px",
         backgroundColor: tokens.colorNeutralCardBackground,
-        padding: "12px 14px",
+        padding: "12px 12px",
       }}
     >
       <div style={{ marginBottom: "10px" }}>
@@ -179,7 +179,7 @@ export function CompactFact({
         display: "inline-flex",
         alignItems: "baseline",
         gap: "6px",
-        padding: "5px 8px",
+        padding: "4px 8px",
         borderRadius: tokens.borderRadiusCircular,
         border: `1px solid ${tokens.colorNeutralStroke2}`,
         backgroundColor: tokens.colorNeutralBackground2,
@@ -412,7 +412,7 @@ export function DiagnosticCard({
         borderLeft: `4px solid ${accent.accent}`,
         borderRadius: "6px",
         backgroundColor: accent.background,
-        padding: "12px 14px",
+        padding: "12px 12px",
       }}
     >
       <div
@@ -500,7 +500,7 @@ export function DiagnosticCard({
           >
             Evidence
           </div>
-          <ul style={{ margin: 0, paddingLeft: "18px", color: tokens.colorNeutralForeground1 }}>
+          <ul style={{ margin: 0, paddingLeft: "20px", color: tokens.colorNeutralForeground1 }}>
             {diagnostic.evidence.map((item) => (
               <li key={item} style={{ marginBottom: "2px" }}>
                 {item}
@@ -521,7 +521,7 @@ export function DiagnosticCard({
           >
             Next Checks
           </div>
-          <ul style={{ margin: 0, paddingLeft: "18px", color: tokens.colorNeutralForeground1 }}>
+          <ul style={{ margin: 0, paddingLeft: "20px", color: tokens.colorNeutralForeground1 }}>
             {diagnostic.nextChecks.map((item) => (
               <li key={item} style={{ marginBottom: "2px" }}>
                 {item}
@@ -543,7 +543,7 @@ export function DiagnosticCard({
             >
               Suggested Fixes
             </div>
-            <ul style={{ margin: 0, paddingLeft: "18px", color: tokens.colorNeutralForeground1 }}>
+            <ul style={{ margin: 0, paddingLeft: "20px", color: tokens.colorNeutralForeground1 }}>
               {diagnostic.suggestedFixes.map((item) => (
                 <li key={item} style={{ marginBottom: "2px" }}>
                   {item}

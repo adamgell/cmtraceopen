@@ -38,7 +38,7 @@ const useStyles = makeStyles({
     flexShrink: 0,
   },
   factCard: {
-    ...shorthands.padding("10px", "14px"),
+    ...shorthands.padding("10px", "12px"),
     ...shorthands.borderRadius(tokens.borderRadiusMedium),
     ...shorthands.border("1px", "solid", tokens.colorNeutralStroke1),
     backgroundColor: tokens.colorNeutralBackground1,

@@ -40,8 +40,8 @@ export function IncidentChipBar() {
               display: "inline-flex",
               gap: 6,
               alignItems: "center",
-              padding: "3px 10px",
-              borderRadius: 999,
+              padding: "4px 10px",
+              borderRadius: tokens.borderRadiusCircular,
               border: `1px solid ${isSel ? color : tokens.colorNeutralStroke2}`,
               background: isSel
                 ? `color-mix(in srgb, ${color} 10%, transparent)`
@@ -55,7 +55,7 @@ export function IncidentChipBar() {
               style={{
                 width: 8,
                 height: 8,
-                borderRadius: 999,
+                borderRadius: tokens.borderRadiusCircular,
                 background: color,
               }}
             />

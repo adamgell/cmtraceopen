@@ -28,7 +28,7 @@ const useStyles = makeStyles({
   tabContent: {
     flex: 1,
     overflow: "auto",
-    padding: "18px 20px 20px",
+    padding: "16px 20px 20px",
     backgroundColor: tokens.colorNeutralBackground2,
   },
   centered: {

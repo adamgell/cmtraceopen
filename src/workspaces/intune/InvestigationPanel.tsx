@@ -34,7 +34,7 @@ const useInvestigationStyles = makeStyles({
     gap: "12px",
     alignItems: "center",
     flexWrap: "wrap",
-    ...shorthands.padding("12px", "14px"),
+    ...shorthands.padding("12px", "16px"),
     borderBottom: `1px solid ${tokens.colorNeutralStroke1}`,
     backgroundColor: tokens.colorNeutralBackground1,
   },

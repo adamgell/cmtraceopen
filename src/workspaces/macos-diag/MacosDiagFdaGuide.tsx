@@ -52,7 +52,7 @@ const useStyles = makeStyles({
     display: "flex",
     gap: "12px",
     alignItems: "flex-start",
-    marginBottom: "14px",
+    marginBottom: "16px",
   },
   stepNum: {
     width: "24px",
@@ -77,7 +77,7 @@ const useStyles = makeStyles({
     fontFamily: tokens.fontFamilyMonospace,
     fontSize: "11.5px",
     backgroundColor: tokens.colorNeutralBackground3,
-    ...shorthands.padding("1px", "5px"),
+    ...shorthands.padding("2px", "6px"),
     ...shorthands.borderRadius("4px"),
     color: tokens.colorBrandForeground1,
   },

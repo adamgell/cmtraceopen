@@ -629,7 +629,7 @@ export function EvidenceBundleDialog({ isOpen, onClose }: EvidenceBundleDialogPr
       >
         <div
           style={{
-            padding: "16px 18px 14px",
+            padding: "16px 16px 12px",
             borderBottom: `1px solid ${BUNDLE_COLORS.borderSubtle}`,
             background: `linear-gradient(135deg, ${BUNDLE_COLORS.infoBg} 0%, ${BUNDLE_COLORS.cardBg} 55%, ${BUNDLE_COLORS.warningBg} 100%)`,
           }}
@@ -645,7 +645,7 @@ export function EvidenceBundleDialog({ isOpen, onClose }: EvidenceBundleDialogPr
           </div>
         </div>
 
-        <div style={{ padding: "18px", display: "grid", gap: "16px" }}>
+        <div style={{ padding: "16px", display: "grid", gap: "16px" }}>
           <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
             {([
               ["summary", "Summary"],
@@ -741,7 +741,7 @@ export function EvidenceBundleDialog({ isOpen, onClose }: EvidenceBundleDialogPr
 
               <section
                 style={{
-                  padding: "14px",
+                  padding: "12px",
                   border: `1px solid ${BUNDLE_COLORS.borderSubtle}`,
                   borderRadius: "6px",
                   backgroundColor: BUNDLE_COLORS.cardBg,
@@ -764,7 +764,7 @@ export function EvidenceBundleDialog({ isOpen, onClose }: EvidenceBundleDialogPr
 
               <section
                 style={{
-                  padding: "14px",
+                  padding: "12px",
                   border: `1px solid ${BUNDLE_COLORS.borderSubtle}`,
                   borderRadius: "6px",
                   backgroundColor: BUNDLE_COLORS.cardBg,
@@ -782,7 +782,7 @@ export function EvidenceBundleDialog({ isOpen, onClose }: EvidenceBundleDialogPr
 
               <section
                 style={{
-                  padding: "14px",
+                  padding: "12px",
                   border: `1px solid ${BUNDLE_COLORS.borderSubtle}`,
                   borderRadius: "6px",
                   backgroundColor: BUNDLE_COLORS.cardBg,
@@ -799,7 +799,7 @@ export function EvidenceBundleDialog({ isOpen, onClose }: EvidenceBundleDialogPr
                           display: "flex",
                           alignItems: "center",
                           gap: "10px",
-                          padding: "9px 10px",
+                          padding: "8px 10px",
                           border: `1px solid ${BUNDLE_COLORS.borderSubtle}`,
                           borderRadius: "6px",
                           backgroundColor: isAvailable ? BUNDLE_COLORS.successBg : BUNDLE_COLORS.warningBg,
@@ -829,7 +829,7 @@ export function EvidenceBundleDialog({ isOpen, onClose }: EvidenceBundleDialogPr
               {details && (
                 <section
                   style={{
-                    padding: "14px",
+                    padding: "12px",
                     border: `1px solid ${BUNDLE_COLORS.borderSubtle}`,
                     borderRadius: "6px",
                     backgroundColor: BUNDLE_COLORS.cardBg,
@@ -866,7 +866,7 @@ export function EvidenceBundleDialog({ isOpen, onClose }: EvidenceBundleDialogPr
             <>
               <section
                 style={{
-                  padding: "14px",
+                  padding: "12px",
                   border: `1px solid ${BUNDLE_COLORS.borderSubtle}`,
                   borderRadius: "6px",
                   backgroundColor: BUNDLE_COLORS.cardBg,
@@ -912,7 +912,7 @@ export function EvidenceBundleDialog({ isOpen, onClose }: EvidenceBundleDialogPr
 
               <section
                 style={{
-                  padding: "14px",
+                  padding: "12px",
                   border: `1px solid ${BUNDLE_COLORS.borderSubtle}`,
                   borderRadius: "6px",
                   backgroundColor: BUNDLE_COLORS.cardBg,
@@ -965,13 +965,13 @@ export function EvidenceBundleDialog({ isOpen, onClose }: EvidenceBundleDialogPr
                         }}
                       >
                         <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
-                          <span style={{ padding: "3px 8px", borderRadius: tokens.borderRadiusCircular, backgroundColor: tone.backgroundColor, color: tone.color, fontSize: "11px", fontWeight: 700, textTransform: "uppercase" }}>
+                          <span style={{ padding: "4px 8px", borderRadius: tokens.borderRadiusCircular, backgroundColor: tone.backgroundColor, color: tone.color, fontSize: "11px", fontWeight: 700, textTransform: "uppercase" }}>
                             {artifact.status}
                           </span>
                           <span style={{ fontSize: "11px", color: BUNDLE_COLORS.textTertiary, textTransform: "uppercase", letterSpacing: "0.04em" }}>
                             {formatCategoryLabel(artifact.category)}
                           </span>
-                          <span style={{ padding: "3px 8px", borderRadius: tokens.borderRadiusCircular, backgroundColor: intakeTone.backgroundColor, color: intakeTone.color, fontSize: "11px", fontWeight: 700 }}>
+                          <span style={{ padding: "4px 8px", borderRadius: tokens.borderRadiusCircular, backgroundColor: intakeTone.backgroundColor, color: intakeTone.color, fontSize: "11px", fontWeight: 700 }}>
                             {formatIntakeStatusLabel(artifact.intake.status)}
                           </span>
                           {artifact.family && <span style={{ fontSize: "12px", color: BUNDLE_COLORS.textPrimary, fontWeight: 600 }}>{artifact.family}</span>}
@@ -1011,7 +1011,7 @@ export function EvidenceBundleDialog({ isOpen, onClose }: EvidenceBundleDialogPr
               {(selectedArtifact || isArtifactPreviewLoading) && (
                 <section
                   style={{
-                    padding: "14px",
+                    padding: "12px",
                     border: `1px solid ${BUNDLE_COLORS.borderSubtle}`,
                     borderRadius: "6px",
                     backgroundColor: BUNDLE_COLORS.cardBg,
@@ -1111,7 +1111,7 @@ export function EvidenceBundleDialog({ isOpen, onClose }: EvidenceBundleDialogPr
 
               <section
                 style={{
-                  padding: "14px",
+                  padding: "12px",
                   border: `1px solid ${BUNDLE_COLORS.borderSubtle}`,
                   borderRadius: "6px",
                   backgroundColor: BUNDLE_COLORS.cardBg,
@@ -1124,7 +1124,7 @@ export function EvidenceBundleDialog({ isOpen, onClose }: EvidenceBundleDialogPr
                   <div style={{ fontSize: "12px", color: BUNDLE_COLORS.textTertiary }}>No expected-evidence detail was recorded in the manifest.</div>
                 ) : (
                   expectedEvidence.map((entry) => (
-                    <div key={`${entry.category}:${entry.relativePath}`} style={{ display: "grid", gap: "4px", padding: "9px 10px", border: `1px solid ${BUNDLE_COLORS.borderSubtle}`, borderRadius: "6px", backgroundColor: entry.available ? BUNDLE_COLORS.successBg : entry.required ? BUNDLE_COLORS.errorBg : BUNDLE_COLORS.warningBg }}>
+                    <div key={`${entry.category}:${entry.relativePath}`} style={{ display: "grid", gap: "4px", padding: "8px 10px", border: `1px solid ${BUNDLE_COLORS.borderSubtle}`, borderRadius: "6px", backgroundColor: entry.available ? BUNDLE_COLORS.successBg : entry.required ? BUNDLE_COLORS.errorBg : BUNDLE_COLORS.warningBg }}>
                       <div style={{ fontSize: "11px", textTransform: "uppercase", letterSpacing: "0.04em", color: entry.available ? BUNDLE_COLORS.successFg : entry.required ? BUNDLE_COLORS.errorFg : BUNDLE_COLORS.warningFg, fontWeight: 700 }}>
                         {entry.available ? "Available" : entry.required ? "Required gap" : "Optional gap"}
                       </div>
@@ -1138,14 +1138,14 @@ export function EvidenceBundleDialog({ isOpen, onClose }: EvidenceBundleDialogPr
           )}
 
           {activeTab === "notes" && (
-            <section style={{ padding: "14px", border: `1px solid ${BUNDLE_COLORS.borderSubtle}`, borderRadius: "6px", backgroundColor: BUNDLE_COLORS.cardBg }}>
+            <section style={{ padding: "12px", border: `1px solid ${BUNDLE_COLORS.borderSubtle}`, borderRadius: "6px", backgroundColor: BUNDLE_COLORS.cardBg }}>
               <div style={{ fontSize: "13px", fontWeight: 700, color: BUNDLE_COLORS.textPrimary, marginBottom: "10px" }}>Notes preview</div>
               <PreviewPane content={details?.notesContent ?? null} />
             </section>
           )}
 
           {activeTab === "manifest" && (
-            <section style={{ padding: "14px", border: `1px solid ${BUNDLE_COLORS.borderSubtle}`, borderRadius: "6px", backgroundColor: BUNDLE_COLORS.cardBg }}>
+            <section style={{ padding: "12px", border: `1px solid ${BUNDLE_COLORS.borderSubtle}`, borderRadius: "6px", backgroundColor: BUNDLE_COLORS.cardBg }}>
               <div style={{ fontSize: "13px", fontWeight: 700, color: BUNDLE_COLORS.textPrimary, marginBottom: "10px" }}>Manifest preview</div>
               <PreviewPane content={details?.manifestContent ?? null} />
             </section>
@@ -1154,7 +1154,7 @@ export function EvidenceBundleDialog({ isOpen, onClose }: EvidenceBundleDialogPr
 
         <div
           style={{
-            padding: "14px 18px",
+            padding: "12px 16px",
             borderTop: "1px solid #dbe3ee",
             backgroundColor: BUNDLE_COLORS.cardBg,
             display: "flex",

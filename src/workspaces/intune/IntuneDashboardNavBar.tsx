@@ -278,7 +278,7 @@ export function IntuneDashboardNavBar({
                   backgroundColor: tokens.colorPaletteYellowBackground1,
                   border: `1px solid ${tokens.colorPaletteYellowBorder2}`,
                   borderRadius: tokens.borderRadiusCircular,
-                  padding: "3px 8px",
+                  padding: "4px 8px",
                   fontWeight: 600,
                 }}
               >

@@ -621,7 +621,7 @@ export function DsregcmdWorkspace() {
               <ul
                 style={{
                   marginTop: "8px",
-                  paddingLeft: "18px",
+                  paddingLeft: "20px",
                   color: tokens.colorNeutralForeground2,
                   lineHeight: 1.6,
                 }}

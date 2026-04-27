@@ -9,7 +9,7 @@ export function BehaviorTab() {
 
   return (
     <div>
-      <div style={{ fontSize: "12px", color: tokens.colorNeutralForeground3, marginBottom: "14px", lineHeight: 1.5 }}>
+      <div style={{ fontSize: "12px", color: tokens.colorNeutralForeground3, marginBottom: "16px", lineHeight: 1.5 }}>
         Configure default behaviors for the application.
       </div>
 

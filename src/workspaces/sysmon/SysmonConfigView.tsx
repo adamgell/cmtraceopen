@@ -77,7 +77,7 @@ export function SysmonConfigView() {
                 <span
                   key={et.eventId}
                   style={{
-                    padding: "3px 10px",
+                    padding: "4px 10px",
                     backgroundColor: tokens.colorNeutralBackground3,
                     border: `1px solid ${tokens.colorNeutralStroke2}`,
                     borderRadius: "8px",

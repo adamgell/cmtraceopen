@@ -86,7 +86,7 @@ export function SectionFrame({
         flexShrink: 0,
       }}
     >
-      <div style={{ padding: "12px 14px", backgroundColor: tokens.colorNeutralBackground3 }}>
+      <div style={{ padding: "12px 12px", backgroundColor: tokens.colorNeutralBackground3 }}>
         <div style={{ fontSize: "14px", fontWeight: 700, color: tokens.colorNeutralForeground1 }}>
           {title}
         </div>
@@ -95,7 +95,7 @@ export function SectionFrame({
         </div>
       </div>
       <div style={{ borderTop: `1px solid ${tokens.colorNeutralStroke2}` }} />
-      <div style={{ padding: "14px" }}>{children}</div>
+      <div style={{ padding: "12px" }}>{children}</div>
     </section>
   );
 }
@@ -104,7 +104,7 @@ export function EmptyWorkspace({ title, body }: { title: string; body: string })
   return (
     <div
       style={{
-        margin: "18px",
+        margin: "20px",
         border: `1px dashed ${tokens.colorNeutralStroke2}`,
         backgroundColor: tokens.colorNeutralBackground3,
         padding: "24px",
@@ -183,7 +183,7 @@ export function TabButton({
       type="button"
       onClick={onClick}
       style={{
-        padding: "8px 14px",
+        padding: "8px 12px",
         fontSize: 13,
         fontWeight: isActive ? 600 : 400,
         color: isActive ? tokens.colorBrandForeground1 : tokens.colorNeutralForeground3,

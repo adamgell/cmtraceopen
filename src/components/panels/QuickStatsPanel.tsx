@@ -430,5 +430,5 @@ function SortableTh({
 }
 
 const tdStyle: React.CSSProperties = {
-  padding: "5px 10px",
+  padding: "4px 10px",
 };

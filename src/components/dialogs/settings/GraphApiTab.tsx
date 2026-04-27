@@ -111,7 +111,7 @@ export function GraphApiTab() {
         style={{
           fontSize: "12px",
           color: tokens.colorNeutralForeground3,
-          marginBottom: "14px",
+          marginBottom: "16px",
           lineHeight: 1.5,
         }}
       >
@@ -123,7 +123,7 @@ export function GraphApiTab() {
       <div
         style={{
           padding: "10px 12px",
-          marginBottom: "14px",
+          marginBottom: "16px",
           borderRadius: "4px",
           backgroundColor: tokens.colorPaletteYellowBackground1,
           border: `1px solid ${tokens.colorPaletteYellowBorder1}`,
@@ -228,7 +228,7 @@ export function GraphApiTab() {
                 type="button"
                 onClick={confirmEnable}
                 style={{
-                  padding: "4px 14px",
+                  padding: "4px 12px",
                   fontSize: "12px",
                   border: `1px solid ${tokens.colorBrandStroke1}`,
                   backgroundColor: tokens.colorBrandBackground,
@@ -243,7 +243,7 @@ export function GraphApiTab() {
                 type="button"
                 onClick={() => setShowConfirmEnable(false)}
                 style={{
-                  padding: "4px 14px",
+                  padding: "4px 12px",
                   fontSize: "12px",
                   border: `1px solid ${tokens.colorNeutralStroke1}`,
                   backgroundColor: "transparent",
@@ -334,7 +334,7 @@ export function GraphApiTab() {
                     onClick={handlePrePopulateCache}
                     disabled={cacheLoading}
                     style={{
-                      padding: "4px 14px",
+                      padding: "4px 12px",
                       fontSize: "12px",
                       border: `1px solid ${tokens.colorBrandStroke1}`,
                       backgroundColor: tokens.colorBrandBackground,
@@ -427,7 +427,7 @@ export function GraphApiTab() {
                   onClick={handleSignIn}
                   disabled={loading}
                   style={{
-                    padding: "4px 14px",
+                    padding: "4px 12px",
                     fontSize: "12px",
                     border: `1px solid ${tokens.colorBrandStroke1}`,
                     backgroundColor: tokens.colorBrandBackground,

@@ -156,7 +156,7 @@ export function TimelineTab({ timeline }: TimelineTabProps) {
           gridTemplateColumns: "180px 80px minmax(0, 1fr)",
           gap: "8px",
           padding: "6px 10px",
-          paddingLeft: "13px",
+          paddingLeft: "12px",
           backgroundColor: tokens.colorNeutralBackground3,
           borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
           fontSize: "11px",

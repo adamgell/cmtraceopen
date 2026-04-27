@@ -222,7 +222,7 @@ function PolicyCard({ policy }: { policy: PolicyEntry }) {
       <div style={{ fontWeight: 600, marginBottom: "6px", color: tokens.colorNeutralForeground1 }}>
         {policy.name}
       </div>
-      <div style={{ fontSize: "12px", display: "flex", flexDirection: "column", gap: "3px" }}>
+      <div style={{ fontSize: "12px", display: "flex", flexDirection: "column", gap: "4px" }}>
         <div>
           <span style={labelStyle}>ID:</span>
           <span style={valueStyle}>{policy.id}</span>

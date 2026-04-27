@@ -75,7 +75,7 @@ export function IssueCard({ issue }: { issue: DsregcmdDiagnosticInsight }) {
           <ul
             style={{
               marginTop: "6px",
-              paddingLeft: "18px",
+              paddingLeft: "20px",
               color: tokens.colorNeutralForeground2,
               lineHeight: 1.5,
             }}
@@ -95,7 +95,7 @@ export function IssueCard({ issue }: { issue: DsregcmdDiagnosticInsight }) {
           <ul
             style={{
               marginTop: "6px",
-              paddingLeft: "18px",
+              paddingLeft: "20px",
               color: tokens.colorNeutralForeground2,
               lineHeight: 1.5,
             }}
@@ -115,7 +115,7 @@ export function IssueCard({ issue }: { issue: DsregcmdDiagnosticInsight }) {
           <ul
             style={{
               marginTop: "6px",
-              paddingLeft: "18px",
+              paddingLeft: "20px",
               color: tokens.colorNeutralForeground2,
               lineHeight: 1.5,
             }}

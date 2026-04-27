@@ -40,7 +40,7 @@ const useStyles = makeStyles({
     backgroundColor: tokens.colorNeutralBackground2,
   },
   hero: {
-    ...shorthands.padding("18px", "20px", "16px"),
+    ...shorthands.padding("16px", "20px", "16px"),
     borderBottom: `1px solid ${tokens.colorNeutralStroke1}`,
     backgroundColor: tokens.colorNeutralBackground1,
     backdropFilter: "blur(10px)",
@@ -107,7 +107,7 @@ const useStyles = makeStyles({
     flex: 1,
     minHeight: 0,
     overflow: "auto",
-    ...shorthands.padding("18px", "20px", "20px"),
+    ...shorthands.padding("16px", "20px", "20px"),
   },
   investigationBody: {
     flex: 1,

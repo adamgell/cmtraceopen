@@ -34,12 +34,12 @@ const useOverviewStyles = makeStyles({
   overviewGrid: {
     display: "grid",
     gridTemplateColumns: "minmax(0, 1.6fr) minmax(320px, 1fr)",
-    gap: "14px",
+    gap: "12px",
     alignItems: "start",
   },
   column: {
     display: "grid",
-    gap: "14px",
+    gap: "12px",
     minWidth: 0,
   },
   metricsGrid: {
@@ -84,7 +84,7 @@ const useOverviewStyles = makeStyles({
   issueCard: {
     display: "grid",
     gap: "10px",
-    ...shorthands.padding("14px"),
+    ...shorthands.padding("12px"),
     ...shorthands.borderRadius(tokens.borderRadiusLarge),
     backgroundColor: tokens.colorNeutralBackground1,
     borderLeftWidth: "4px",

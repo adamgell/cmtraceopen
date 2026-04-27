@@ -37,7 +37,7 @@ export function LaneLegend() {
               gap: 6,
               alignItems: "center",
               padding: "2px 8px",
-              borderRadius: 999,
+              borderRadius: tokens.borderRadiusCircular,
               border: `1px solid ${isSolo ? src.color : tokens.colorNeutralStroke1}`,
               background: muted ? tokens.colorNeutralBackground3 : tokens.colorNeutralBackground1,
               color: muted ? tokens.colorNeutralForeground4 : tokens.colorNeutralForeground1,

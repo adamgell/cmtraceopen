@@ -458,7 +458,7 @@ export function SummaryView({
 
             {diagnosticsConfidence.reasons.length > 0 ? (
               <>
-                <ul style={{ margin: 0, paddingLeft: "18px", color: tokens.colorNeutralForeground1 }}>
+                <ul style={{ margin: 0, paddingLeft: "20px", color: tokens.colorNeutralForeground1 }}>
                   {visibleConfidenceReasons.map((reason) => (
                     <li key={reason} style={{ marginBottom: "4px", lineHeight: 1.35 }}>
                       {reason}

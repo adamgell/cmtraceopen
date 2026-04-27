@@ -107,7 +107,7 @@ export function SourceStatusNotice({
     <div
       role="status"
       style={{
-        padding: "9px 12px",
+        padding: "8px 12px",
         borderBottom: `1px solid ${colors.border}`,
         backgroundColor: colors.background,
         color: colors.text,
@@ -167,7 +167,7 @@ export function EmptyState({ title, body }: { title: string; body: string }) {
   return (
     <div
       style={{
-        padding: "18px 14px",
+        padding: "16px 12px",
         color: tokens.colorNeutralForeground3,
         fontSize: "inherit",
         lineHeight: 1.5,
