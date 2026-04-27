@@ -391,6 +391,7 @@ export function LogSidebar() {
               <div style={{ padding: "8px 10px 0" }}>
                 <button
                   type="button"
+                  aria-label="Merge loaded files"
                   onClick={() => {
                     const filePaths = files
                       .filter((e) => !e.isDir && getCachedTabSnapshot(e.path))

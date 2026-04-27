@@ -260,6 +260,7 @@ export function FilterDialog({
               <button
                 onClick={() => removeClause(index)}
                 disabled={isFiltering}
+                aria-label="Remove clause"
                 style={{
                   fontSize: "11px",
                   padding: "1px 4px",

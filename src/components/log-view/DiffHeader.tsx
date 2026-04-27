@@ -44,9 +44,10 @@ export function DiffHeader() {
 
       <div style={{ width: "1px", height: "16px", backgroundColor: tokens.colorNeutralStroke2 }} />
 
-      <div style={{ display: "flex" }}>
+      <div style={{ display: "flex" }} role="radiogroup" aria-label="Diff display mode">
         <button
           type="button"
+          aria-pressed={displayMode === "side-by-side"}
           onClick={() => setDiffDisplayMode("side-by-side")}
           style={{
             fontSize: "10px",
@@ -64,6 +65,7 @@ export function DiffHeader() {
         </button>
         <button
           type="button"
+          aria-pressed={displayMode === "unified"}
           onClick={() => setDiffDisplayMode("unified")}
           style={{
             fontSize: "10px",
