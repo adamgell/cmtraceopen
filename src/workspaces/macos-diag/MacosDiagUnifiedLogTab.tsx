@@ -101,7 +101,6 @@ const useStyles = makeStyles({
     ...shorthands.border("1px", "solid", tokens.colorNeutralStroke1),
     ...shorthands.borderRadius(tokens.borderRadiusXLarge),
     overflow: "hidden",
-    boxShadow: tokens.shadow2,
     display: "flex",
     flexDirection: "column",
   },

@@ -20,7 +20,6 @@ const useStyles = makeStyles({
     ...shorthands.borderRadius(tokens.borderRadiusXLarge),
     ...shorthands.padding("16px"),
     marginBottom: "16px",
-    boxShadow: tokens.shadow2,
     display: "flex",
     gap: "24px",
     alignItems: "center",
@@ -77,7 +76,6 @@ const useStyles = makeStyles({
     ...shorthands.border("1px", "solid", tokens.colorNeutralStroke1),
     ...shorthands.borderRadius(tokens.borderRadiusXLarge),
     overflow: "hidden",
-    boxShadow: tokens.shadow2,
   },
   profileCardHeader: {
     display: "flex",
