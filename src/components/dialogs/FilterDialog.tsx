@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { tokens } from "@fluentui/react-components";
+import { DismissRegular } from "@fluentui/react-icons";
 import { useFilterStore } from "../../stores/filter-store";
 
 export type FilterOp =
@@ -270,7 +271,7 @@ export function FilterDialog({
                 }}
                 title="Remove clause"
               >
-                ✕
+                <DismissRegular />
               </button>
             )}
           </div>

@@ -4,6 +4,7 @@ import {
   Button,
   tokens,
 } from "@fluentui/react-components";
+import { ChevronLeftRegular } from "@fluentui/react-icons";
 import { formatDisplayDateTime } from "../../lib/date-time-format";
 import { getBaseName } from "../../lib/file-paths";
 import { getLogListMetrics, LOG_UI_FONT_FAMILY } from "../../lib/log-accessibility";
@@ -554,9 +555,7 @@ export function FileSidebar({ width = FILE_SIDEBAR_RECOMMENDED_WIDTH, activeView
               justifyContent: "center",
             }}
           >
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
-              <path d="M10 3L5 8l5 5V3z" />
-            </svg>
+            <ChevronLeftRegular style={{ fontSize: 16 }} />
           </button>
         </div>
       )}

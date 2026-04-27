@@ -1,5 +1,6 @@
 import { type CSSProperties, type KeyboardEvent, type MouseEvent as ReactMouseEvent, useCallback, useEffect, useRef, useState } from "react";
 import { tokens } from "@fluentui/react-components";
+import { ChevronDownRegular, DismissRegular } from "@fluentui/react-icons";
 import { useLogStore } from "../../stores/log-store";
 import { useUiStore } from "../../stores/ui-store";
 
@@ -209,7 +210,7 @@ export function TabStrip() {
                 }}
                 onClick={(e) => handleCloseTab(e, index)}
               >
-                ×
+                <DismissRegular style={{ fontSize: 12 }} />
               </button>
             </div>
           );
@@ -226,9 +227,7 @@ export function TabStrip() {
             title={`${overflowTabs.length} more tabs`}
             onClick={handleToggleOverflow}
           >
-            <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor">
-              <path d="M2.5 4.5L6 8L9.5 4.5" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round" strokeLinejoin="round" />
-            </svg>
+            <ChevronDownRegular style={{ fontSize: 12 }} />
           </button>
           {overflowOpen && (
             <div role="listbox" style={overflowDropdownStyle}>
@@ -263,7 +262,7 @@ export function TabStrip() {
                       style={overflowItemCloseStyle}
                       onClick={(e) => handleOverflowClose(e, realIndex)}
                     >
-                      ×
+                      <DismissRegular style={{ fontSize: 12 }} />
                     </button>
                   </div>
                 );

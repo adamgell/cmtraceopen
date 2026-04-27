@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { tokens } from "@fluentui/react-components";
+import {
+  ChevronDownRegular,
+  ChevronRightRegular,
+  FolderOpenRegular,
+  FolderRegular,
+} from "@fluentui/react-icons";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useRegistryStore } from "../../stores/registry-store";
 import { flattenVisibleTree } from "../../lib/registry-utils";
@@ -151,7 +157,7 @@ export function KeyTree() {
                   if (hasChildren) toggleExpanded(row.node.fullPath);
                 }}
               >
-                {hasChildren ? (isExpanded ? "▼" : "▶") : ""}
+                {hasChildren ? (isExpanded ? <ChevronDownRegular /> : <ChevronRightRegular />) : ""}
               </span>
               {/* Folder icon */}
               <span
@@ -165,7 +171,7 @@ export function KeyTree() {
                   marginRight: "4px",
                 }}
               >
-                {isExpanded && hasChildren ? "📂" : "📁"}
+                {isExpanded && hasChildren ? <FolderOpenRegular /> : <FolderRegular />}
               </span>
               {/* Node name */}
               <span

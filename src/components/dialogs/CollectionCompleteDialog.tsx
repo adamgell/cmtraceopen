@@ -1,5 +1,6 @@
 import { useState, useCallback } from "react";
 import { tokens } from "@fluentui/react-components";
+import { CheckmarkRegular, DismissRegular } from "@fluentui/react-icons";
 import type { CollectionResult } from "../../lib/commands";
 import { loadPathAsLogSource } from "../../lib/log-source";
 
@@ -57,7 +58,7 @@ export function CollectionCompleteDialog({ result, onClose }: CollectionComplete
         {/* Header */}
         <div style={{ textAlign: "center", marginBottom: "20px" }}>
           <div style={{ fontSize: "24px", marginBottom: "4px" }}>
-            {isError ? "✕" : "✓"}
+            {isError ? <DismissRegular /> : <CheckmarkRegular />}
           </div>
           <div style={{ fontSize: "16px", fontWeight: 600, color: tokens.colorNeutralForeground1 }}>
             {isError ? "Collection Failed" : "Collection Complete"}

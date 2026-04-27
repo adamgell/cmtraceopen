@@ -1,5 +1,6 @@
 import { useMemo, useState, useCallback, useRef, useEffect } from "react";
 import { tokens } from "@fluentui/react-components";
+import { ChevronRightRegular } from "@fluentui/react-icons";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   LOG_UI_FONT_FAMILY,
@@ -418,7 +419,7 @@ function ActivityGroupHeader({
           transform: isExpanded ? "rotate(90deg)" : "rotate(0deg)",
         }}
       >
-        ▶
+        <ChevronRightRegular />
       </span>
 
       {/* App name */}
