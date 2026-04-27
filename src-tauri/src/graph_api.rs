@@ -104,7 +104,7 @@ mod wam {
     use super::*;
 
     use windows::core::{factory, HSTRING};
-    use windows_future::{Async, IAsyncOperation};
+    use windows_future::IAsyncOperation;
     use windows::Security::Authentication::Web::Core::{
         WebAuthenticationCoreManager, WebTokenRequest, WebTokenRequestResult,
         WebTokenRequestStatus,
