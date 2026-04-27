@@ -659,7 +659,7 @@ export function EvidenceBundleDialog({ isOpen, onClose }: EvidenceBundleDialogPr
                 aria-pressed={activeTab === tabId}
                 style={{
                   border: `1px solid ${BUNDLE_COLORS.borderSubtle}`,
-                  borderRadius: "999px",
+                  borderRadius: tokens.borderRadiusCircular,
                   padding: "6px 10px",
                   backgroundColor: activeTab === tabId ? BUNDLE_COLORS.infoBg : BUNDLE_COLORS.cardBg,
                   color: activeTab === tabId ? BUNDLE_COLORS.accentFg : BUNDLE_COLORS.textSecondary,
@@ -878,7 +878,7 @@ export function EvidenceBundleDialog({ isOpen, onClose }: EvidenceBundleDialogPr
                     <div style={{ fontSize: "12px", color: BUNDLE_COLORS.textTertiary }}>No artifact records were found in the manifest.</div>
                   ) : (
                     artifactCategoryCounts.map(([category, count]) => (
-                      <div key={category} style={{ padding: "6px 10px", border: `1px solid ${BUNDLE_COLORS.borderSubtle}`, borderRadius: "999px", backgroundColor: BUNDLE_COLORS.cardBg, fontSize: "12px", color: BUNDLE_COLORS.textSecondary }}>
+                      <div key={category} style={{ padding: "6px 10px", border: `1px solid ${BUNDLE_COLORS.borderSubtle}`, borderRadius: tokens.borderRadiusCircular, backgroundColor: BUNDLE_COLORS.cardBg, fontSize: "12px", color: BUNDLE_COLORS.textSecondary }}>
                         {formatCategoryLabel(category)}: {count}
                       </div>
                     ))
@@ -891,7 +891,7 @@ export function EvidenceBundleDialog({ isOpen, onClose }: EvidenceBundleDialogPr
                     intakeStatusCounts.map(([status, count]) => {
                       const tone = formatIntakeStatusTone(status);
                       return (
-                        <div key={status} style={{ padding: "6px 10px", borderRadius: "999px", backgroundColor: tone.backgroundColor, color: tone.color, fontSize: "12px", fontWeight: 700 }}>
+                        <div key={status} style={{ padding: "6px 10px", borderRadius: tokens.borderRadiusCircular, backgroundColor: tone.backgroundColor, color: tone.color, fontSize: "12px", fontWeight: 700 }}>
                           {formatIntakeStatusLabel(status)}: {count}
                         </div>
                       );
@@ -965,13 +965,13 @@ export function EvidenceBundleDialog({ isOpen, onClose }: EvidenceBundleDialogPr
                         }}
                       >
                         <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
-                          <span style={{ padding: "3px 8px", borderRadius: "999px", backgroundColor: tone.backgroundColor, color: tone.color, fontSize: "11px", fontWeight: 700, textTransform: "uppercase" }}>
+                          <span style={{ padding: "3px 8px", borderRadius: tokens.borderRadiusCircular, backgroundColor: tone.backgroundColor, color: tone.color, fontSize: "11px", fontWeight: 700, textTransform: "uppercase" }}>
                             {artifact.status}
                           </span>
                           <span style={{ fontSize: "11px", color: BUNDLE_COLORS.textTertiary, textTransform: "uppercase", letterSpacing: "0.04em" }}>
                             {formatCategoryLabel(artifact.category)}
                           </span>
-                          <span style={{ padding: "3px 8px", borderRadius: "999px", backgroundColor: intakeTone.backgroundColor, color: intakeTone.color, fontSize: "11px", fontWeight: 700 }}>
+                          <span style={{ padding: "3px 8px", borderRadius: tokens.borderRadiusCircular, backgroundColor: intakeTone.backgroundColor, color: intakeTone.color, fontSize: "11px", fontWeight: 700 }}>
                             {formatIntakeStatusLabel(artifact.intake.status)}
                           </span>
                           {artifact.family && <span style={{ fontSize: "12px", color: BUNDLE_COLORS.textPrimary, fontWeight: 600 }}>{artifact.family}</span>}

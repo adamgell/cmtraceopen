@@ -119,7 +119,7 @@ export function UpdateDialog({
             style={{
               height: "6px",
               backgroundColor: tokens.colorNeutralBackground5,
-              borderRadius: "3px",
+              borderRadius: "4px",
               overflow: "hidden",
               marginBottom: "8px",
             }}
@@ -129,7 +129,7 @@ export function UpdateDialog({
                 width: `${percent}%`,
                 height: "100%",
                 backgroundColor: tokens.colorBrandBackground,
-                borderRadius: "3px",
+                borderRadius: "4px",
                 transition: "width 0.3s ease",
               }}
             />

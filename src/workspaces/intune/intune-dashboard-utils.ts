@@ -369,7 +369,7 @@ export function remediationPriorityRank(priority: IntuneRemediationPriority): nu
 export const selectStyle: React.CSSProperties = {
   fontSize: "11px",
   padding: "2px 6px",
-  borderRadius: "3px",
+  borderRadius: "4px",
   border: `1px solid ${tokens.colorNeutralStroke2}`,
   backgroundColor: tokens.colorNeutralCardBackground,
 };

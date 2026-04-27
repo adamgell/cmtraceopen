@@ -255,7 +255,7 @@ function ResizableHeader({
           style={{
             width: 4,
             height: 10,
-            borderRadius: 1,
+            borderRadius: 2,
             backgroundColor: hover
               ? tokens.colorBrandStroke1
               : tokens.colorNeutralStroke2,

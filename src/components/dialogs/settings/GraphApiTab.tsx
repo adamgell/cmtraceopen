@@ -233,7 +233,7 @@ export function GraphApiTab() {
                   border: `1px solid ${tokens.colorBrandStroke1}`,
                   backgroundColor: tokens.colorBrandBackground,
                   color: tokens.colorNeutralForegroundOnBrand,
-                  borderRadius: "3px",
+                  borderRadius: "4px",
                   cursor: "pointer",
                 }}
               >
@@ -248,7 +248,7 @@ export function GraphApiTab() {
                   border: `1px solid ${tokens.colorNeutralStroke1}`,
                   backgroundColor: "transparent",
                   color: tokens.colorNeutralForeground1,
-                  borderRadius: "3px",
+                  borderRadius: "4px",
                   cursor: "pointer",
                 }}
               >
@@ -339,7 +339,7 @@ export function GraphApiTab() {
                       border: `1px solid ${tokens.colorBrandStroke1}`,
                       backgroundColor: tokens.colorBrandBackground,
                       color: tokens.colorNeutralForegroundOnBrand,
-                      borderRadius: "3px",
+                      borderRadius: "4px",
                       cursor: cacheLoading ? "wait" : "pointer",
                       opacity: cacheLoading ? 0.7 : 1,
                     }}
@@ -357,7 +357,7 @@ export function GraphApiTab() {
                       border: `1px solid ${tokens.colorNeutralStroke1}`,
                       backgroundColor: "transparent",
                       color: tokens.colorNeutralForeground2,
-                      borderRadius: "3px",
+                      borderRadius: "4px",
                       cursor: "pointer",
                     }}
                   >
@@ -432,7 +432,7 @@ export function GraphApiTab() {
                     border: `1px solid ${tokens.colorBrandStroke1}`,
                     backgroundColor: tokens.colorBrandBackground,
                     color: tokens.colorNeutralForegroundOnBrand,
-                    borderRadius: "3px",
+                    borderRadius: "4px",
                     cursor: loading ? "wait" : "pointer",
                     opacity: loading ? 0.7 : 1,
                   }}

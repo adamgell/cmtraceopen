@@ -22,7 +22,7 @@ const useStyles = makeStyles({
     height: "72px",
     backgroundColor: tokens.colorPaletteYellowBackground1,
     ...shorthands.border("2px", "solid", tokens.colorPaletteYellowBorder2),
-    ...shorthands.borderRadius("20px"),
+    ...shorthands.borderRadius("8px"),
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
@@ -78,7 +78,7 @@ const useStyles = makeStyles({
     fontSize: "11.5px",
     backgroundColor: tokens.colorNeutralBackground3,
     ...shorthands.padding("1px", "5px"),
-    ...shorthands.borderRadius("3px"),
+    ...shorthands.borderRadius("4px"),
     color: tokens.colorBrandForeground1,
   },
   actions: {

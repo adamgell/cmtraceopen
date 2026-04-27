@@ -73,7 +73,7 @@ export function DeploymentErrorCard({
               <span
                 style={{
                   padding: "1px 6px",
-                  borderRadius: "3px",
+                  borderRadius: "4px",
                   backgroundColor: tokens.colorNeutralBackground3,
                   fontSize: "11px",
                   fontWeight: 600,
@@ -128,7 +128,7 @@ export function DeploymentErrorCard({
             marginTop: "8px",
             padding: "8px",
             backgroundColor: tokens.colorNeutralBackground3,
-            borderRadius: "3px",
+            borderRadius: "4px",
             fontSize: "12px",
             fontFamily: LOG_MONOSPACE_FONT_FAMILY,
             maxHeight: "200px",

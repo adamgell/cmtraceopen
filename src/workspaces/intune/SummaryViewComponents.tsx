@@ -34,7 +34,7 @@ export function DiagnosticMetaBadge({ label, tone }: { label: string; tone: stri
         border: `1px solid color-mix(in srgb, ${tone} 20%, transparent)`,
         backgroundColor: `color-mix(in srgb, ${tone} 7%, transparent)`,
         fontWeight: 700,
-        borderRadius: "999px",
+        borderRadius: tokens.borderRadiusCircular,
         padding: "3px 8px",
       }}
     >
@@ -67,7 +67,7 @@ export function DiagnosticChipRow({
             key={`${label}-${item}`}
             style={{
               fontSize: "10px",
-              borderRadius: "999px",
+              borderRadius: tokens.borderRadiusCircular,
               padding: "3px 8px",
               color: itemTone,
               backgroundColor: background,
@@ -115,7 +115,7 @@ export function ConclusionButton({
         style={{
           width: "8px",
           height: "8px",
-          borderRadius: "999px",
+          borderRadius: tokens.borderRadiusCircular,
           backgroundColor: tone.accent,
           flexShrink: 0,
         }}
@@ -180,7 +180,7 @@ export function CompactFact({
         alignItems: "baseline",
         gap: "6px",
         padding: "5px 8px",
-        borderRadius: "999px",
+        borderRadius: tokens.borderRadiusCircular,
         border: `1px solid ${tokens.colorNeutralStroke2}`,
         backgroundColor: tokens.colorNeutralBackground2,
       }}
@@ -203,7 +203,7 @@ export function SourceFamilyBadge({ family }: { family: IntuneSourceFamilySummar
         alignItems: "center",
         gap: "6px",
         padding: "4px 8px",
-        borderRadius: "999px",
+        borderRadius: tokens.borderRadiusCircular,
         border: `1px solid ${tone.border}`,
         backgroundColor: tone.background,
         color: tone.label,
@@ -225,7 +225,7 @@ function SourceKindBadge({ kind }: { kind: IntuneLogSourceKind }) {
       style={{
         fontSize: "10px",
         padding: "2px 6px",
-        borderRadius: "999px",
+        borderRadius: tokens.borderRadiusCircular,
         border: `1px solid ${tone.border}`,
         backgroundColor: tone.background,
         color: tone.label,
@@ -277,7 +277,7 @@ export function CoverageRow({ file }: { file: IntuneDiagnosticsFileCoverage }) {
               style={{
                 fontSize: "10px",
                 padding: "2px 6px",
-                borderRadius: "999px",
+                borderRadius: tokens.borderRadiusCircular,
                 backgroundColor: file.isRotatedSegment ? tokens.colorPaletteYellowBackground1 : tokens.colorPaletteBlueBackground2,
                 color: file.isRotatedSegment ? tokens.colorPaletteMarigoldForeground2 : tokens.colorPaletteTealForeground2,
                 fontWeight: 700,
@@ -309,7 +309,7 @@ function RowStat({
       style={{
         fontSize: "10px",
         padding: "2px 6px",
-        borderRadius: "999px",
+        borderRadius: tokens.borderRadiusCircular,
         backgroundColor: tokens.colorPaletteBlueBackground2,
         color,
         fontWeight: 700,
@@ -329,7 +329,7 @@ export function ConfidenceBadge({ confidence }: { confidence: IntuneDiagnosticsC
         alignItems: "center",
         gap: "8px",
         padding: "6px 10px",
-        borderRadius: "999px",
+        borderRadius: tokens.borderRadiusCircular,
         border: `1px solid ${tone.border}`,
         backgroundColor: tone.background,
       }}

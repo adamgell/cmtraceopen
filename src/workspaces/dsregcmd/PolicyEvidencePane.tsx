@@ -29,7 +29,7 @@ export function StatCard({
         backgroundColor: colors.background,
         padding: "12px",
         minWidth: 0,
-        borderRadius: "10px",
+        borderRadius: "8px",
       }}
     >
       <div
@@ -81,7 +81,7 @@ export function SectionFrame({
       style={{
         border: `1px solid ${tokens.colorNeutralStroke2}`,
         backgroundColor: tokens.colorNeutralCardBackground,
-        borderRadius: "10px",
+        borderRadius: "8px",
         overflow: "hidden",
         flexShrink: 0,
       }}
@@ -109,7 +109,7 @@ export function EmptyWorkspace({ title, body }: { title: string; body: string })
         backgroundColor: tokens.colorNeutralBackground3,
         padding: "24px",
         color: tokens.colorNeutralForeground2,
-        borderRadius: "12px",
+        borderRadius: "8px",
       }}
     >
       <div style={{ fontSize: "18px", fontWeight: 700, color: tokens.colorNeutralForeground1 }}>
@@ -147,7 +147,7 @@ export function FlowBox({
         border: `1px solid ${palette.border}`,
         backgroundColor: palette.background,
         padding: "12px",
-        borderRadius: "10px",
+        borderRadius: "8px",
       }}
     >
       <div style={{ fontSize: "12px", fontWeight: 700, color: palette.text }}>
@@ -203,7 +203,7 @@ export function TabButton({
           style={{
             fontSize: 11,
             padding: "1px 6px",
-            borderRadius: 10,
+            borderRadius: 8,
             background: isActive ? tokens.colorPaletteBlueBackground2 : tokens.colorNeutralBackground3,
             color: isActive ? tokens.colorPaletteBlueForeground2 : tokens.colorNeutralForeground3,
           }}

@@ -18,7 +18,7 @@ export function FactsTable({
       style={{
         border: `1px solid ${tokens.colorNeutralStroke2}`,
         backgroundColor: tokens.colorNeutralCardBackground,
-        borderRadius: "10px",
+        borderRadius: "8px",
         overflow: "hidden",
       }}
     >

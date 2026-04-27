@@ -210,7 +210,7 @@ export function IntuneDashboardNavBar({
               fontSize: "10px",
               padding: "2px 6px",
               border: `1px solid ${tokens.colorNeutralStroke2}`,
-              borderRadius: "3px",
+              borderRadius: "4px",
               backgroundColor: hasActiveFilters ? tokens.colorNeutralCardBackground : tokens.colorNeutralBackground3,
               color: hasActiveFilters ? tokens.colorNeutralForeground1 : tokens.colorNeutralForeground4,
               cursor: hasActiveFilters && !isAnalyzing ? "pointer" : "not-allowed",
@@ -252,7 +252,7 @@ export function IntuneDashboardNavBar({
               fontSize: "12px",
               padding: "2px 6px",
               border: `1px solid ${tokens.colorNeutralStroke2}`,
-              borderRadius: "3px",
+              borderRadius: "4px",
               backgroundColor: tokens.colorNeutralCardBackground,
               color: tokens.colorNeutralForeground1,
               cursor: isAnalyzing ? "not-allowed" : "pointer",
@@ -277,7 +277,7 @@ export function IntuneDashboardNavBar({
                   color: tokens.colorPaletteMarigoldForeground2,
                   backgroundColor: tokens.colorPaletteYellowBackground1,
                   border: `1px solid ${tokens.colorPaletteYellowBorder2}`,
-                  borderRadius: "999px",
+                  borderRadius: tokens.borderRadiusCircular,
                   padding: "3px 8px",
                   fontWeight: 600,
                 }}
@@ -292,7 +292,7 @@ export function IntuneDashboardNavBar({
                   fontSize: "10px",
                   padding: "2px 6px",
                   border: `1px solid ${tokens.colorNeutralStroke2}`,
-                  borderRadius: "3px",
+                  borderRadius: "4px",
                   backgroundColor: tokens.colorNeutralCardBackground,
                   color: tokens.colorNeutralForeground1,
                   cursor: isAnalyzing ? "not-allowed" : "pointer",
@@ -348,7 +348,7 @@ function CanvasTabButton({
         backgroundColor: active ? tokens.colorPaletteBlueBackground2 : tokens.colorNeutralBackground3,
         color: active ? tokens.colorPaletteBlueForeground2 : tokens.colorNeutralForeground3,
         padding: "2px 6px",
-        borderRadius: "99px",
+        borderRadius: tokens.borderRadiusCircular,
         fontWeight: 700,
       }}>
         {count}
@@ -392,7 +392,7 @@ function ViewModeToggle({
         type="button"
         onClick={() => onChange("list")}
         disabled={disabled}
-        style={{ ...buttonStyle(mode === "list"), borderRadius: "3px 0 0 3px", borderRight: "none" }}
+        style={{ ...buttonStyle(mode === "list"), borderRadius: "4px 0 0 4px", borderRight: "none" }}
       >
         List
       </button>
@@ -400,7 +400,7 @@ function ViewModeToggle({
         type="button"
         onClick={() => onChange("activity")}
         disabled={disabled}
-        style={{ ...buttonStyle(mode === "activity"), borderRadius: "0 3px 3px 0" }}
+        style={{ ...buttonStyle(mode === "activity"), borderRadius: "0 4px 4px 0" }}
       >
         Activity
       </button>

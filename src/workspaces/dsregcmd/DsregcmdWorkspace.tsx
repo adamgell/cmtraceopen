@@ -754,7 +754,7 @@ export function DsregcmdWorkspace() {
                         style={{
                           width: "10px",
                           height: "10px",
-                          borderRadius: "999px",
+                          borderRadius: tokens.borderRadiusCircular,
                           backgroundColor: palette.dot,
                           marginTop: "8px",
                         }}

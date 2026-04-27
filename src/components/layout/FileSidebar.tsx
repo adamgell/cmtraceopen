@@ -503,7 +503,7 @@ function SidebarFooter() {
             marginLeft: "auto",
             fontSize: "9px",
             padding: "2px 6px",
-            borderRadius: "10px",
+            borderRadius: "8px",
             backgroundColor: statusBg,
             color: statusFg,
             fontWeight: 600,

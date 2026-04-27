@@ -57,7 +57,7 @@ export function DiffHeader() {
             color: displayMode === "side-by-side" ? tokens.colorBrandForeground1 : tokens.colorNeutralForeground3,
             fontWeight: displayMode === "side-by-side" ? 700 : 500,
             cursor: "pointer",
-            borderRadius: "3px 0 0 3px",
+            borderRadius: "4px 0 0 4px",
             borderRight: "none",
           }}
         >
@@ -75,7 +75,7 @@ export function DiffHeader() {
             color: displayMode === "unified" ? tokens.colorBrandForeground1 : tokens.colorNeutralForeground3,
             fontWeight: displayMode === "unified" ? 700 : 500,
             cursor: "pointer",
-            borderRadius: "0 3px 3px 0",
+            borderRadius: "0 4px 4px 0",
           }}
         >
           Unified
@@ -90,7 +90,7 @@ export function DiffHeader() {
           fontSize: "10px",
           padding: "2px 8px",
           border: `1px solid ${tokens.colorNeutralStroke2}`,
-          borderRadius: "3px",
+          borderRadius: "4px",
           backgroundColor: tokens.colorNeutralBackground1,
           color: tokens.colorNeutralForeground1,
           cursor: "pointer",

@@ -80,7 +80,7 @@ function TimelineRow({ entry }: { entry: TimelineEntry }) {
         style={{
           display: "inline-block",
           padding: "1px 5px",
-          borderRadius: "3px",
+          borderRadius: "4px",
           fontSize: "10px",
           fontWeight: 700,
           textTransform: "uppercase",

@@ -11,7 +11,7 @@ export function IssueCard({ issue }: { issue: DsregcmdDiagnosticInsight }) {
         border: `1px solid ${colors.border}`,
         backgroundColor: colors.background,
         padding: "12px",
-        borderRadius: "10px",
+        borderRadius: "8px",
       }}
     >
       <div

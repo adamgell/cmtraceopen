@@ -103,7 +103,7 @@ export function SysmonEventTable() {
               backgroundColor: tokens.colorNeutralBackground1,
               color: tokens.colorNeutralForeground1,
               border: `1px solid ${tokens.colorNeutralStroke1}`,
-              borderRadius: "3px",
+              borderRadius: "4px",
               padding: "2px 4px",
             }}
           >
@@ -125,7 +125,7 @@ export function SysmonEventTable() {
               backgroundColor: tokens.colorNeutralBackground1,
               color: tokens.colorNeutralForeground1,
               border: `1px solid ${tokens.colorNeutralStroke1}`,
-              borderRadius: "3px",
+              borderRadius: "4px",
               padding: "2px 4px",
             }}
           >
@@ -146,7 +146,7 @@ export function SysmonEventTable() {
             backgroundColor: tokens.colorNeutralBackground1,
             color: tokens.colorNeutralForeground1,
             border: `1px solid ${tokens.colorNeutralStroke1}`,
-            borderRadius: "3px",
+            borderRadius: "4px",
             padding: "2px 8px",
             minWidth: "200px",
             flex: 1,
