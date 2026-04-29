@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { readTextFile } from "@tauri-apps/plugin-fs";
-import { useLogStore } from "../stores/log-store";
+import { clearAllTabSnapshots, useLogStore } from "../stores/log-store";
 import { useUiStore } from "../stores/ui-store";
 import { loadPathAsLogSource, loadFilesAsLogSource } from "./log-source";
 import { validateSession, type FileChangeWarning } from "./session";
@@ -93,6 +93,11 @@ export async function restoreSession(sessionPath: string): Promise<string | null
 
   // Clear current state
   useLogStore.getState().clear();
+  clearAllTabSnapshots();
+  useUiStore.setState({
+    openTabs: [],
+    activeTabIndex: -1,
+  });
 
   // Set workspace
   const uiStore = useUiStore.getState();
