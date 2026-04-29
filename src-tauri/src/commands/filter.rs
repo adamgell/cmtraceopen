@@ -1,4 +1,5 @@
 use crate::models::log_entry::LogEntry;
+use chrono::{DateTime, NaiveDate, NaiveDateTime};
 use serde::{Deserialize, Serialize};
 
 /// The types of filter clause operations.
@@ -45,17 +46,28 @@ pub fn apply_filter(
         return Ok(entries.iter().map(|e| e.id).collect());
     }
 
-    let matching_ids: Vec<u64> = entries
-        .iter()
-        .filter(|entry| clauses.iter().all(|clause| matches_clause(entry, clause)))
-        .map(|entry| entry.id)
-        .collect();
+    let mut matching_ids = Vec::new();
+
+    for entry in &entries {
+        let mut matches_all = true;
+
+        for clause in &clauses {
+            if !matches_clause(entry, clause)? {
+                matches_all = false;
+                break;
+            }
+        }
+
+        if matches_all {
+            matching_ids.push(entry.id);
+        }
+    }
 
     Ok(matching_ids)
 }
 
-fn matches_clause(entry: &LogEntry, clause: &FilterClause) -> bool {
-    match clause.field {
+fn matches_clause(entry: &LogEntry, clause: &FilterClause) -> Result<bool, crate::error::AppError> {
+    let matches = match clause.field {
         FilterField::Message => match_string(&entry.message, &clause.op, &clause.value),
         FilterField::Component => {
             let comp = entry.component.as_deref().unwrap_or("");
@@ -67,7 +79,7 @@ fn matches_clause(entry: &LogEntry, clause: &FilterClause) -> bool {
         }
         FilterField::Timestamp => {
             let ts = entry.timestamp.unwrap_or(0);
-            match_timestamp(ts, &clause.op, &clause.value)
+            return match_timestamp(ts, &clause.op, &clause.value);
         }
         FilterField::Severity => {
             let sev_str = match &entry.severity {
@@ -77,7 +89,9 @@ fn matches_clause(entry: &LogEntry, clause: &FilterClause) -> bool {
             };
             match_string(sev_str, &clause.op, &clause.value)
         }
-    }
+    };
+
+    Ok(matches)
 }
 
 fn match_string(haystack: &str, op: &FilterOp, needle: &str) -> bool {
@@ -94,18 +108,107 @@ fn match_string(haystack: &str, op: &FilterOp, needle: &str) -> bool {
     }
 }
 
-fn match_timestamp(ts: i64, op: &FilterOp, value: &str) -> bool {
-    // Parse value as millisecond timestamp
-    let target: i64 = match value.parse() {
-        Ok(v) => v,
-        Err(_) => return true, // If can't parse, don't filter
-    };
+fn match_timestamp(ts: i64, op: &FilterOp, value: &str) -> Result<bool, crate::error::AppError> {
+    if matches!(op, FilterOp::Contains | FilterOp::NotContains) {
+        return Ok(true);
+    }
 
-    match op {
+    let target = parse_filter_timestamp_millis(value)?;
+
+    Ok(match op {
         FilterOp::Before => ts < target,
         FilterOp::After => ts > target,
         FilterOp::Equals => ts == target,
         FilterOp::NotEquals => ts != target,
         FilterOp::Contains | FilterOp::NotContains => true,
+    })
+}
+
+fn parse_filter_timestamp_millis(value: &str) -> Result<i64, crate::error::AppError> {
+    let trimmed = value.trim();
+
+    if trimmed.is_empty() {
+        return Err(invalid_timestamp_filter_value(value));
+    }
+
+    if let Ok(epoch_millis) = trimmed.parse::<i64>() {
+        return Ok(epoch_millis);
+    }
+
+    if let Ok(parsed) = DateTime::parse_from_rfc3339(trimmed) {
+        return Ok(parsed.timestamp_millis());
+    }
+
+    for format in [
+        "%Y-%m-%dT%H:%M:%S%.f",
+        "%Y-%m-%d %H:%M:%S%.f",
+        "%m/%d/%Y %H:%M:%S%.f",
+        "%m/%d/%Y %I:%M:%S %p",
+    ] {
+        if let Ok(parsed) = NaiveDateTime::parse_from_str(trimmed, format) {
+            return Ok(parsed.and_utc().timestamp_millis());
+        }
+    }
+
+    for format in ["%Y-%m-%d", "%m/%d/%Y"] {
+        if let Ok(parsed) = NaiveDate::parse_from_str(trimmed, format) {
+            let start_of_day = parsed
+                .and_hms_opt(0, 0, 0)
+                .ok_or_else(|| invalid_timestamp_filter_value(value))?;
+            return Ok(start_of_day.and_utc().timestamp_millis());
+        }
+    }
+
+    Err(invalid_timestamp_filter_value(value))
+}
+
+fn invalid_timestamp_filter_value(value: &str) -> crate::error::AppError {
+    crate::error::AppError::InvalidInput(format!(
+        "Invalid timestamp filter value '{value}'. Use epoch milliseconds, YYYY-MM-DD, MM/DD/YYYY, or an ISO-8601 date/time."
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn timestamp_filter_accepts_plain_iso_date() {
+        let parsed = parse_filter_timestamp_millis("2026-04-01").expect("date should parse");
+        let expected = NaiveDate::from_ymd_opt(2026, 4, 1)
+            .expect("valid date")
+            .and_hms_opt(0, 0, 0)
+            .expect("valid time")
+            .and_utc()
+            .timestamp_millis();
+
+        assert_eq!(parsed, expected);
+    }
+
+    #[test]
+    fn timestamp_filter_accepts_rfc3339_datetime() {
+        let parsed =
+            parse_filter_timestamp_millis("2026-04-01T12:30:00Z").expect("datetime should parse");
+        let expected = DateTime::parse_from_rfc3339("2026-04-01T12:30:00Z")
+            .expect("valid datetime")
+            .timestamp_millis();
+
+        assert_eq!(parsed, expected);
+    }
+
+    #[test]
+    fn timestamp_filter_rejects_invalid_values() {
+        let error = match_timestamp(0, &FilterOp::Before, "yesterday")
+            .expect_err("invalid value should fail");
+
+        assert!(error.to_string().contains("Invalid timestamp filter value"));
+    }
+
+    #[test]
+    fn timestamp_before_uses_parsed_date() {
+        let target = parse_filter_timestamp_millis("2026-04-01").expect("date should parse");
+
+        assert!(match_timestamp(target - 1, &FilterOp::Before, "2026-04-01").unwrap());
+        assert!(!match_timestamp(target, &FilterOp::Before, "2026-04-01").unwrap());
     }
 }
