@@ -43,14 +43,18 @@ import { useParseProgressListener } from "../../hooks/use-parse-progress-listene
 import { useUpdateChecker } from "../../hooks/use-update-checker";
 import { QuickStatsPanel } from "../panels/QuickStatsPanel";
 
-function buildFilterRunSignature(entries: LogEntry[], clauses: FilterClause[]): string {
+function buildFilterRunSignature(
+  entries: LogEntry[],
+  clauses: FilterClause[],
+  entriesRevision: number
+): string {
   const lastId = entries.length > 0 ? entries[entries.length - 1].id : -1;
   const lastLineNumber = entries.length > 0 ? entries[entries.length - 1].lineNumber : -1;
   const clauseSignature = clauses
     .map((clause) => `${clause.field}:${clause.op}:${clause.value}`)
     .join("|");
 
-  return `${clauseSignature}:${entries.length}:${lastId}:${lastLineNumber}`;
+  return `${clauseSignature}:${entriesRevision}:${entries.length}:${lastId}:${lastLineNumber}`;
 }
 
 export function AppShell() {
@@ -166,6 +170,21 @@ export function AppShell() {
   const filterRequestIdRef = useRef(0);
   const inFlightSignatureRef = useRef<string | null>(null);
   const lastAppliedSignatureRef = useRef<string | null>(null);
+  const entriesRevisionRef = useRef<{ entries: LogEntry[] | null; revision: number }>({
+    entries: null,
+    revision: 0,
+  });
+
+  const getEntriesRevision = useCallback((entriesSnapshot: LogEntry[]) => {
+    if (entriesRevisionRef.current.entries !== entriesSnapshot) {
+      entriesRevisionRef.current = {
+        entries: entriesSnapshot,
+        revision: entriesRevisionRef.current.revision + 1,
+      };
+    }
+
+    return entriesRevisionRef.current.revision;
+  }, []);
 
   const runFilter = useCallback(
     async (clauses: FilterClause[], entriesSnapshot: LogEntry[], trigger: string) => {
@@ -178,7 +197,11 @@ export function AppShell() {
         return;
       }
 
-      const signature = buildFilterRunSignature(entriesSnapshot, clauses);
+      const signature = buildFilterRunSignature(
+        entriesSnapshot,
+        clauses,
+        getEntriesRevision(entriesSnapshot)
+      );
 
       if (
         signature === inFlightSignatureRef.current ||
@@ -237,7 +260,7 @@ export function AppShell() {
         }
       }
     },
-    [setFilterError, setFilteredIds, setIsFiltering]
+    [getEntriesRevision, setFilterError, setFilteredIds, setIsFiltering]
   );
 
   useEffect(() => {
