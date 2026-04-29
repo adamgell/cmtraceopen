@@ -28,8 +28,21 @@ interface ParseProgressPayload {
  * null → non-null).
  */
 export function useParseProgressListener() {
+  const folderLoadProgress = useLogStore((state) => state.folderLoadProgress);
   const globalCompletedRef = useRef(0);
   const prevBatchCompletedRef = useRef(0);
+  const wasLoadingRef = useRef(false);
+
+  useEffect(() => {
+    const isLoading = folderLoadProgress !== null;
+
+    if (isLoading && !wasLoadingRef.current) {
+      globalCompletedRef.current = 0;
+      prevBatchCompletedRef.current = 0;
+    }
+
+    wasLoadingRef.current = isLoading;
+  }, [folderLoadProgress]);
 
   useEffect(() => {
     const unlisten = listen<ParseProgressPayload>(
