@@ -3,7 +3,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::macos_diag::models::{FdaStatus, MacosLogFileEntry, MacosMdmProfile};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+// NOTE: Several types in this module embed structs from `macos_diag::models`
+// (FdaStatus, MacosLogFileEntry, MacosMdmProfile) that are `Serialize`-only.
+// Those types are command-return-only — they never round-trip through IPC,
+// so we deliberately do not derive `Deserialize` on the structs that hold them.
+
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct JamfEnvironment {
     pub jamf_installed: bool,
@@ -97,7 +102,7 @@ pub struct JamfPolicyLogResult {
     pub source_path: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct JamfLogScanResult {
     pub files: Vec<MacosLogFileEntry>,
@@ -105,7 +110,7 @@ pub struct JamfLogScanResult {
     pub total_size_bytes: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct JamfProfilesResult {
     pub profiles: Vec<MacosMdmProfile>,

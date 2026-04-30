@@ -16,6 +16,8 @@ pub mod intune;
 mod ipc_bridge;
 #[cfg(feature = "macos-diag")]
 pub mod macos_diag;
+#[cfg(feature = "macos-diag")]
+pub mod jamf;
 mod menu;
 pub use cmtraceopen_parser::models;
 pub mod parser;
@@ -284,6 +286,18 @@ pub fn run() {
             commands::macos_diag::macos_query_unified_log,
             #[cfg(feature = "macos-diag")]
             commands::macos_diag::macos_open_system_settings,
+            #[cfg(feature = "macos-diag")]
+            commands::jamf::jamf_collect_environment,
+            #[cfg(feature = "macos-diag")]
+            commands::jamf::jamf_parse_policy_log,
+            #[cfg(feature = "macos-diag")]
+            commands::jamf::jamf_parse_self_service_log,
+            #[cfg(feature = "macos-diag")]
+            commands::jamf::jamf_parse_connect_log,
+            #[cfg(feature = "macos-diag")]
+            commands::jamf::jamf_scan_logs,
+            #[cfg(feature = "macos-diag")]
+            commands::jamf::jamf_filter_profiles,
             #[cfg(feature = "collector")]
             commands::collector::collect_diagnostics,
             #[cfg(feature = "event-log")]
