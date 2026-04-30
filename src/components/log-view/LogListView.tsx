@@ -15,7 +15,6 @@ import { LogRow } from "./LogRow";
 import { SectionDividerRow } from "./SectionDividerRow";
 import { MergeLegendBar } from "./MergeLegendBar";
 import type { ErrorCodeSpan } from "../../types/log";
-import type { Marker } from "../../types/markers";
 import { useMarkerStore } from "../../stores/marker-store";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { formatLogEntryTimestamp } from "../../lib/date-time-format";
@@ -209,6 +208,11 @@ export function LogListView({ dataSource }: { dataSource?: LogListDataSource } =
   }, [displayEntries, severityPalette.mergeColors]);
 
   // ── Marker store wiring ───────────────────────────────────────────────
+  // Markers are scoped per source file (entry.filePath), not per tab. In
+  // single-file mode every entry shares one filePath; in aggregate-folder
+  // mode each row may belong to a different file. Reading and writing
+  // both go through entry.filePath so the two stay in sync regardless of
+  // how the tab was opened.
   const isMerged = sourceOpenMode === "merged";
   const markersByFile = useMarkerStore((s) => s.markersByFile);
   const loadMarkers = useMarkerStore((s) => s.loadMarkers);
@@ -217,59 +221,70 @@ export function LogListView({ dataSource }: { dataSource?: LogListDataSource } =
   const setMarkerCategory = useMarkerStore((s) => s.setMarkerCategory);
   const markerCategories = useMarkerStore((s) => s.categories);
 
-  // Use openFilePath if set, otherwise derive from the first entry's filePath
-  const activeFilePath = openFilePath ?? (entries.length > 0 ? entries[0].filePath : "");
-  const fileMarkers: Map<number, Marker> = useMemo(
-    () => isMerged ? new Map() : (markersByFile.get(activeFilePath) ?? new Map()),
-    [markersByFile, activeFilePath, isMerged]
-  );
-
-  // Load markers when tab changes (skip in merged mode)
-  useEffect(() => {
-    if (isMerged) return;
-    if (activeFilePath) {
-      loadMarkers(activeFilePath);
+  // Unique source-file paths referenced by the displayed entries. Recomputes
+  // only when the entry set or its file membership changes, so the load
+  // effect below doesn't re-fire on unrelated state churn.
+  const markerFilePaths = useMemo(() => {
+    if (isMerged) return [] as string[];
+    const set = new Set<string>();
+    for (const e of displayEntries) {
+      if (e.filePath) set.add(e.filePath);
     }
-  }, [activeFilePath, loadMarkers, isMerged]);
+    return Array.from(set);
+  }, [displayEntries, isMerged]);
+  // Stable JSON key so loadMarkers fires on set membership change, not on
+  // every new array reference.
+  const markerFilePathsKey = markerFilePaths.join(" ");
 
-  // Auto-save markers on changes with 1-second debounce.
-  // markersDirtyRef prevents save from firing after loadMarkers hydrates state.
-  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const markersDirtyRef = useRef(false);
   useEffect(() => {
     if (isMerged) return;
-    if (!activeFilePath) return;
-    if (!markersDirtyRef.current) return;
+    for (const fp of markerFilePaths) {
+      loadMarkers(fp);
+    }
+    // markerFilePaths is captured by markerFilePathsKey
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [markerFilePathsKey, loadMarkers, isMerged]);
+
+  // Per-file dirty set; debounced flush saves all dirty files at once. A
+  // single timer is fine because saveMarkers calls are independent.
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const dirtyFilesRef = useRef<Set<string>>(new Set());
+
+  const scheduleMarkerSave = useCallback(() => {
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     saveTimerRef.current = setTimeout(() => {
-      saveMarkers(activeFilePath);
-      markersDirtyRef.current = false;
+      const dirty = Array.from(dirtyFilesRef.current);
+      dirtyFilesRef.current.clear();
+      for (const fp of dirty) {
+        saveMarkers(fp);
+      }
     }, 1000);
+  }, [saveMarkers]);
+
+  useEffect(() => {
     return () => {
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     };
-  }, [fileMarkers, activeFilePath, saveMarkers, isMerged]);
+  }, []);
 
   const handleToggleMarker = useCallback(
-    (lineId: number) => {
-      if (isMerged) return;
-      if (activeFilePath) {
-        markersDirtyRef.current = true;
-        toggleMarker(activeFilePath, lineId);
-      }
+    (filePath: string, lineId: number) => {
+      if (isMerged || !filePath) return;
+      dirtyFilesRef.current.add(filePath);
+      toggleMarker(filePath, lineId);
+      scheduleMarkerSave();
     },
-    [activeFilePath, toggleMarker, isMerged]
+    [toggleMarker, isMerged, scheduleMarkerSave]
   );
 
   const handleSetMarkerCategory = useCallback(
-    (lineId: number, category: string) => {
-      if (isMerged) return;
-      if (activeFilePath) {
-        markersDirtyRef.current = true;
-        setMarkerCategory(activeFilePath, lineId, category);
-      }
+    (filePath: string, lineId: number, category: string) => {
+      if (isMerged || !filePath) return;
+      dirtyFilesRef.current.add(filePath);
+      setMarkerCategory(filePath, lineId, category);
+      scheduleMarkerSave();
     },
-    [activeFilePath, setMarkerCategory, isMerged]
+    [setMarkerCategory, isMerged, scheduleMarkerSave]
   );
 
   // ── Multi-select state ─────────────────────────────────────────────
@@ -650,7 +665,10 @@ export function LogListView({ dataSource }: { dataSource?: LogListDataSource } =
           if (mod && e.key === "m") {
             e.preventDefault();
             if (selectedId !== null) {
-              handleToggleMarker(selectedId);
+              const target = displayEntries.find((entry) => entry.id === selectedId);
+              if (target?.filePath) {
+                handleToggleMarker(target.filePath, selectedId);
+              }
             }
           }
           // Ctrl+A / Cmd+A: select all visible entries
@@ -744,7 +762,11 @@ export function LogListView({ dataSource }: { dataSource?: LogListDataSource } =
                     isCorrelated={sourceOpenMode === "merged" && correlatedIdSet.has(entry.id)}
                     correlationColor={sourceOpenMode === "merged" ? mergedTabState?.colorAssignments[entry.filePath] ?? null : null}
                     sectionBandColor={sectionBandColor}
-                    marker={isMerged ? null : (fileMarkers.get(entry.id) ?? null)}
+                    marker={
+                      isMerged
+                        ? null
+                        : (markersByFile.get(entry.filePath)?.get(entry.id) ?? null)
+                    }
                     onToggleMarker={handleToggleMarker}
                     onSetMarkerCategory={handleSetMarkerCategory}
                     markerCategories={isMerged ? [] : markerCategories}
