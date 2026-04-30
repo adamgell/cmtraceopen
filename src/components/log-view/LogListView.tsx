@@ -561,8 +561,9 @@ export function LogListView({ dataSource }: { dataSource?: LogListDataSource } =
   const onDragEnd = useCallback(() => setDragState(null), []);
 
   // ── Auto-fit column width ────────────────────────────────────────────────
-  // Message column is sized via 98th-percentile of entry length inside
-  // calcAutoFitWidth, so callers no longer need to skip it.
+  // calcAutoFitWidth handles every column, including message (capped at
+  // MAX_AUTOFIT_WIDTH for outlier protection). Triggered by double-click
+  // on the column header or the Fit-all button in the severity column.
   const handleHeaderDoubleClick = useCallback(
     (colId: ColumnId) => {
       const def = getColumnDef(colId);
@@ -829,6 +830,15 @@ function HeaderCell({
       onDragOver={(e) => onDragOver(index, e)}
       onDrop={onDrop}
       onDragEnd={onDragEnd}
+      onDoubleClick={(e) => {
+        // Auto-fit on double-click anywhere on the header. The 10px resize
+        // handle on the right edge is too small a target for users to find;
+        // letting the whole header trigger fit is far more discoverable.
+        e.preventDefault();
+        e.stopPropagation();
+        onDoubleClick(col.id);
+      }}
+      title="Double-click to auto-fit this column"
       style={{
         position: "relative",
         ...(col.isFlex ? { minWidth: 0 } : {}),
