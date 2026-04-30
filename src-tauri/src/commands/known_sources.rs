@@ -741,5 +741,143 @@ fn macos_known_log_sources() -> Vec<KnownSourceMetadata> {
                 ],
             }),
         ),
+        // ── JAMF Pro: main jamf binary log ───────────────────────────────
+        macos_known_source(
+            "macos-jamf-log",
+            "JAMF Log",
+            "Main jamf binary log — policy executions, recurring check-ins, recon, errors.",
+            KnownSourcePathKind::File,
+            "/var/log/jamf.log",
+            &["jamf.log"],
+            KnownSourceGroupingMetadata {
+                family_id: "macos-jamf".to_string(),
+                family_label: "macOS JAMF".to_string(),
+                group_id: "jamf-core".to_string(),
+                group_label: "JAMF Core".to_string(),
+                group_order: 50,
+                source_order: 10,
+            },
+            Some(KnownSourceDefaultFileIntent {
+                selection_behavior:
+                    KnownSourceDefaultFileSelectionBehavior::PreferFileNameThenPattern,
+                preferred_file_names: vec!["jamf.log".to_string()],
+            }),
+        ),
+        // ── JAMF Pro: app-support logs ───────────────────────────────────
+        macos_known_source(
+            "macos-jamf-app-support-logs",
+            "JAMF App Support Logs",
+            "Per-policy and helper logs from the JAMF binary.",
+            KnownSourcePathKind::Folder,
+            "/Library/Application Support/JAMF/Logs",
+            &["*.log"],
+            KnownSourceGroupingMetadata {
+                family_id: "macos-jamf".to_string(),
+                family_label: "macOS JAMF".to_string(),
+                group_id: "jamf-core".to_string(),
+                group_label: "JAMF Core".to_string(),
+                group_order: 50,
+                source_order: 20,
+            },
+            None,
+        ),
+        // ── JAMF Pro: receipts ───────────────────────────────────────────
+        macos_known_source(
+            "macos-jamf-receipts",
+            "JAMF Receipts",
+            "Package receipts deployed by JAMF policies.",
+            KnownSourcePathKind::Folder,
+            "/Library/Application Support/JAMF/Receipts",
+            &["*.pkg", "*.plist"],
+            KnownSourceGroupingMetadata {
+                family_id: "macos-jamf".to_string(),
+                family_label: "macOS JAMF".to_string(),
+                group_id: "jamf-core".to_string(),
+                group_label: "JAMF Core".to_string(),
+                group_order: 50,
+                source_order: 30,
+            },
+            None,
+        ),
+        // ── JAMF Pro: Self Service log (file) ────────────────────────────
+        macos_known_source(
+            "macos-jamf-self-service-log",
+            "Self Service Log",
+            "Self Service app usage log.",
+            KnownSourcePathKind::File,
+            &format!("{}/Library/Logs/JAMF/selfservice.log", home),
+            &["selfservice.log"],
+            KnownSourceGroupingMetadata {
+                family_id: "macos-jamf".to_string(),
+                family_label: "macOS JAMF".to_string(),
+                group_id: "jamf-self-service".to_string(),
+                group_label: "Self Service".to_string(),
+                group_order: 60,
+                source_order: 10,
+            },
+            Some(KnownSourceDefaultFileIntent {
+                selection_behavior:
+                    KnownSourceDefaultFileSelectionBehavior::PreferFileNameThenPattern,
+                preferred_file_names: vec!["selfservice.log".to_string()],
+            }),
+        ),
+        // ── JAMF Pro: JAMF user log directory (folder) ───────────────────
+        macos_known_source(
+            "macos-jamf-user-logs",
+            "JAMF User Logs",
+            "Per-user JAMF logs directory (Self Service, JAMF Connect, debug).",
+            KnownSourcePathKind::Folder,
+            &format!("{}/Library/Logs/JAMF", home),
+            &["*.log"],
+            KnownSourceGroupingMetadata {
+                family_id: "macos-jamf".to_string(),
+                family_label: "macOS JAMF".to_string(),
+                group_id: "jamf-self-service".to_string(),
+                group_label: "Self Service".to_string(),
+                group_order: 60,
+                source_order: 20,
+            },
+            None,
+        ),
+        // ── JAMF Connect: system log ─────────────────────────────────────
+        macos_known_source(
+            "macos-jamf-connect-log",
+            "JAMF Connect Log",
+            "JAMF Connect daemon log — IdP login, password sync, errors.",
+            KnownSourcePathKind::File,
+            "/Library/Logs/JAMFConnect.log",
+            &["JAMFConnect.log"],
+            KnownSourceGroupingMetadata {
+                family_id: "macos-jamf-connect".to_string(),
+                family_label: "macOS JAMF Connect".to_string(),
+                group_id: "jamf-connect-logs".to_string(),
+                group_label: "JAMF Connect Logs".to_string(),
+                group_order: 70,
+                source_order: 10,
+            },
+            Some(KnownSourceDefaultFileIntent {
+                selection_behavior:
+                    KnownSourceDefaultFileSelectionBehavior::PreferFileNameThenPattern,
+                preferred_file_names: vec!["JAMFConnect.log".to_string()],
+            }),
+        ),
+        // ── JAMF Connect: user logs ──────────────────────────────────────
+        macos_known_source(
+            "macos-jamf-connect-user-logs",
+            "JAMF Connect User Logs",
+            "Per-user JAMF Connect logs (varies by version).",
+            KnownSourcePathKind::Folder,
+            &format!("{}/Library/Logs/JAMF/JAMF Connect", home),
+            &["*.log"],
+            KnownSourceGroupingMetadata {
+                family_id: "macos-jamf-connect".to_string(),
+                family_label: "macOS JAMF Connect".to_string(),
+                group_id: "jamf-connect-logs".to_string(),
+                group_label: "JAMF Connect Logs".to_string(),
+                group_order: 70,
+                source_order: 20,
+            },
+            None,
+        ),
     ]
 }
