@@ -29,21 +29,22 @@ interface ParseProgressPayload {
  * from a previous load can never bleed into the next one.
  */
 export function useParseProgressListener() {
-  const folderLoadProgress = useLogStore((state) => state.folderLoadProgress);
+  // Subscribe to a derived boolean so this hook re-renders only on the
+  // null ↔ non-null transition instead of on every progress tick during
+  // a large folder load.
+  const isFolderLoading = useLogStore((state) => state.folderLoadProgress !== null);
   const globalCompletedRef = useRef(0);
   const prevBatchCompletedRef = useRef(0);
   const wasLoadingRef = useRef(false);
 
   useEffect(() => {
-    const isLoading = folderLoadProgress !== null;
-
-    if (isLoading && !wasLoadingRef.current) {
+    if (isFolderLoading && !wasLoadingRef.current) {
       globalCompletedRef.current = 0;
       prevBatchCompletedRef.current = 0;
     }
 
-    wasLoadingRef.current = isLoading;
-  }, [folderLoadProgress]);
+    wasLoadingRef.current = isFolderLoading;
+  }, [isFolderLoading]);
 
   useEffect(() => {
     const unlisten = listen<ParseProgressPayload>(

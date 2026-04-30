@@ -38,47 +38,23 @@ import {
 
 export type { MergedTabState, CorrelatedEntry };
 export type { DiffState, DiffSource };
-
-/**
- * Snapshot of parsed file state — cached in memory so tab switches
- * can restore instantly without re-reading / re-parsing the file.
- */
-export interface TabEntrySnapshot {
-  entries: LogEntry[];
-  formatDetected: LogFormat | null;
-  parserSelection: ParserSelectionInfo | null;
-  totalLines: number;
-  byteOffset: number;
-  selectedSourceFilePath: string | null;
-  sourceOpenMode: SourceOpenMode;
-  activeColumns: ColumnId[];
-}
-
-/** Module-level cache: filePath → parsed snapshot. Lives outside Zustand to avoid triggering re-renders. */
-const tabEntryCache = new Map<string, TabEntrySnapshot>();
-
-const TAB_CACHE_MAX_SIZE = 30;
-
-export function getCachedTabSnapshot(filePath: string): TabEntrySnapshot | undefined {
-  return tabEntryCache.get(filePath);
-}
-
-export function setCachedTabSnapshot(filePath: string, snapshot: TabEntrySnapshot): void {
-  // Evict oldest if at capacity
-  if (tabEntryCache.size >= TAB_CACHE_MAX_SIZE && !tabEntryCache.has(filePath)) {
-    const oldestKey = tabEntryCache.keys().next().value;
-    if (oldestKey) tabEntryCache.delete(oldestKey);
-  }
-  tabEntryCache.set(filePath, snapshot);
-}
-
-export function clearCachedTabSnapshot(filePath: string): void {
-  tabEntryCache.delete(filePath);
-}
-
-export function clearAllTabSnapshots(): void {
-  tabEntryCache.clear();
-}
+// The tab-snapshot cache lives in `lib/tab-snapshot-cache` so ui-store
+// can import its helpers without going through log-store. Re-exported
+// here for backward compat with existing call sites.
+import {
+  getCachedTabSnapshot,
+  setCachedTabSnapshot,
+  clearCachedTabSnapshot,
+  clearAllTabSnapshots,
+} from "../lib/tab-snapshot-cache";
+import type { SourceOpenMode } from "../lib/tab-snapshot-cache";
+export type { TabEntrySnapshot, SourceOpenMode } from "../lib/tab-snapshot-cache";
+export {
+  getCachedTabSnapshot,
+  setCachedTabSnapshot,
+  clearCachedTabSnapshot,
+  clearAllTabSnapshots,
+};
 
 export type SourceStatusKind =
   | "idle"
@@ -109,9 +85,6 @@ export interface ParserSelectionDisplay {
   framingLabel: string;
   dateOrderLabel: string | null;
 }
-
-export type SourceOpenMode = "single-file" | "aggregate-folder" | "merged" | "diff" | null;
-
 
 const UNGROUPED_TOOLBAR_GROUP_ID = "ungrouped";
 const UNGROUPED_TOOLBAR_GROUP_LABEL = "Other Sources";
