@@ -6,8 +6,13 @@ pub const JAMF_APP_SUPPORT: &str = "/Library/Application Support/JAMF";
 pub const JAMF_RECEIPTS: &str = "/Library/Application Support/JAMF/Receipts";
 pub const JAMF_PLIST: &str = "/Library/Preferences/com.jamfsoftware.jamf.plist";
 pub const JAMF_CONNECT_APP: &str = "/Applications/JAMF Connect.app";
+pub const JAMF_CONNECT_PLIST: &str = "/Library/Preferences/com.jamf.connect.plist";
 pub const JAMF_CONNECT_LOG_SYSTEM: &str = "/Library/Logs/JAMFConnect.log";
 pub const SELF_SERVICE_APP: &str = "/Applications/Self Service.app";
+
+pub fn jamf_connect_info_plist() -> PathBuf {
+    PathBuf::from(JAMF_CONNECT_APP).join("Contents/Info.plist")
+}
 
 pub fn jamf_app_logs_dir() -> PathBuf {
     PathBuf::from("/Library/Application Support/JAMF/Logs")

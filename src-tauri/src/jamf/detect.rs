@@ -7,6 +7,8 @@ use crate::jamf::models::{JamfDirectoryStatus, JamfEnvironment};
 use crate::jamf::paths;
 use crate::macos_diag::models::FdaStatus;
 
+// TODO(jamf-detect): enforce in read_jamf_version once we wrap Command in a timeout.
+#[allow(dead_code)]
 const JAMF_VERSION_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub fn collect_environment_impl() -> Result<JamfEnvironment, AppError> {
@@ -92,9 +94,10 @@ fn read_jss_url() -> Option<String> {
 }
 
 fn read_jamf_connect_version() -> Option<String> {
-    let plist = "/Applications/JAMF Connect.app/Contents/Info.plist";
+    let plist_buf = paths::jamf_connect_info_plist();
+    let plist = plist_buf.to_string_lossy();
     let output = Command::new("/usr/libexec/PlistBuddy")
-        .args(["-c", "Print :CFBundleShortVersionString", plist])
+        .args(["-c", "Print :CFBundleShortVersionString", plist.as_ref()])
         .output()
         .ok()?;
     if !output.status.success() {
@@ -106,7 +109,7 @@ fn read_jamf_connect_version() -> Option<String> {
 
 fn read_jamf_connect_idp() -> Option<String> {
     let output = Command::new("/usr/libexec/PlistBuddy")
-        .args(["-c", "Print :OIDCProvider", "/Library/Preferences/com.jamf.connect.plist"])
+        .args(["-c", "Print :OIDCProvider", paths::JAMF_CONNECT_PLIST])
         .output()
         .ok()?;
     if !output.status.success() {
@@ -133,10 +136,4 @@ fn build_summary(
     };
     let log = if dirs.jamf_log { "" } else { " · jamf.log missing" };
     format!("JAMF binary detected ({v}){connect}{log}")
-}
-
-// Suppress unused warning until JAMF_VERSION_TIMEOUT is used in a future iteration.
-#[allow(dead_code)]
-fn _timeout_marker() -> Duration {
-    JAMF_VERSION_TIMEOUT
 }
