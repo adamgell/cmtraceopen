@@ -23,8 +23,20 @@ pub fn jamf_parse_policy_log(path: Option<String>) -> Result<JamfPolicyLogResult
 }
 
 #[tauri::command]
-pub fn jamf_parse_self_service_log(path: String) -> Result<Vec<JamfSelfServiceEvent>, AppError> {
-    crate::jamf::self_service::parse_self_service_log_impl(&PathBuf::from(path))
+pub fn jamf_parse_self_service_log(
+    path: Option<String>,
+) -> Result<Vec<JamfSelfServiceEvent>, AppError> {
+    let p = path
+        .filter(|s| !s.is_empty())
+        .map(|s| {
+            if let Some(rest) = s.strip_prefix("~/") {
+                paths::home_dir().join(rest)
+            } else {
+                PathBuf::from(s)
+            }
+        })
+        .unwrap_or_else(paths::self_service_log_file);
+    crate::jamf::self_service::parse_self_service_log_impl(&p)
 }
 
 #[tauri::command]
