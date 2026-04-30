@@ -5,8 +5,9 @@ import { Button, Caption1, Subtitle2 } from "@fluentui/react-components";
 import { useJamfStore } from "./jamf-store";
 import type { JamfSelfServiceEvent } from "./types";
 
-// Verified-real path on JAMF Pro 11 hosts: ~/Library/Logs/JAMF/selfservice.log
-const DEFAULT_SELF_SERVICE_LOG = "~/Library/Logs/JAMF/selfservice.log";
+// Display label only — the backend command resolves the canonical path
+// (~/Library/Logs/JAMF/selfservice.log) via paths::self_service_log_file().
+const DEFAULT_SELF_SERVICE_LOG_LABEL = "~/Library/Logs/JAMF/selfservice.log";
 
 export function MacosJamfSelfServiceTab() {
   const slice = useJamfStore((s) => s.selfService);
@@ -18,7 +19,7 @@ export function MacosJamfSelfServiceTab() {
     begin("selfService");
     try {
       const events = await invoke<JamfSelfServiceEvent[]>("jamf_parse_self_service_log", {
-        path: DEFAULT_SELF_SERVICE_LOG,
+        path: null,
       });
       finish("selfService", events);
     } catch (e) {
@@ -43,7 +44,7 @@ export function MacosJamfSelfServiceTab() {
   return (
     <div>
       <Subtitle2>Self Service usage</Subtitle2>
-      <Caption1>{events.length} event(s) - {DEFAULT_SELF_SERVICE_LOG}</Caption1>
+      <Caption1>{events.length} event(s) - {DEFAULT_SELF_SERVICE_LOG_LABEL}</Caption1>
       <Button onClick={reload} style={{ marginLeft: 12 }}>Reload</Button>
       <table style={{ width: "100%", marginTop: 12 }}>
         <thead><tr><th align="left">Time</th><th align="left">Action</th><th align="left">Item</th><th align="left">Result</th></tr></thead>
