@@ -36,6 +36,8 @@ pub struct FilterClause {
 
 /// Apply filter clauses to a list of entries.
 /// Returns the IDs of entries that match ALL clauses (AND logic).
+/// Returns `Err(AppError::InvalidInput)` if a timestamp clause has an
+/// unparseable value so the caller can surface it to the user.
 #[tauri::command]
 pub fn apply_filter(
     entries: Vec<LogEntry>,
@@ -79,7 +81,7 @@ fn matches_clause(entry: &LogEntry, clause: &FilterClause) -> Result<bool, crate
         }
         FilterField::Timestamp => {
             let ts = entry.timestamp.unwrap_or(0);
-            return match_timestamp(ts, &clause.op, &clause.value);
+            match_timestamp(ts, &clause.op, &clause.value)?
         }
         FilterField::Severity => {
             let sev_str = match &entry.severity {
@@ -109,19 +111,15 @@ fn match_string(haystack: &str, op: &FilterOp, needle: &str) -> bool {
 }
 
 fn match_timestamp(ts: i64, op: &FilterOp, value: &str) -> Result<bool, crate::error::AppError> {
-    if matches!(op, FilterOp::Contains | FilterOp::NotContains) {
-        return Ok(true);
+    match op {
+        // Substring ops aren't meaningful for timestamps; treat as a no-op match
+        // so they don't filter anything out and don't require a parseable value.
+        FilterOp::Contains | FilterOp::NotContains => Ok(true),
+        FilterOp::Before => Ok(ts < parse_filter_timestamp_millis(value)?),
+        FilterOp::After => Ok(ts > parse_filter_timestamp_millis(value)?),
+        FilterOp::Equals => Ok(ts == parse_filter_timestamp_millis(value)?),
+        FilterOp::NotEquals => Ok(ts != parse_filter_timestamp_millis(value)?),
     }
-
-    let target = parse_filter_timestamp_millis(value)?;
-
-    Ok(match op {
-        FilterOp::Before => ts < target,
-        FilterOp::After => ts > target,
-        FilterOp::Equals => ts == target,
-        FilterOp::NotEquals => ts != target,
-        FilterOp::Contains | FilterOp::NotContains => true,
-    })
 }
 
 fn parse_filter_timestamp_millis(value: &str) -> Result<i64, crate::error::AppError> {
@@ -139,10 +137,16 @@ fn parse_filter_timestamp_millis(value: &str) -> Result<i64, crate::error::AppEr
         return Ok(parsed.timestamp_millis());
     }
 
+    // chrono's `%.f` requires a leading dot, so list whole-second variants
+    // separately. Order: most-specific first so a millisecond input doesn't
+    // get truncated by an earlier whole-second match.
     for format in [
         "%Y-%m-%dT%H:%M:%S%.f",
+        "%Y-%m-%dT%H:%M:%S",
         "%Y-%m-%d %H:%M:%S%.f",
+        "%Y-%m-%d %H:%M:%S",
         "%m/%d/%Y %H:%M:%S%.f",
+        "%m/%d/%Y %H:%M:%S",
         "%m/%d/%Y %I:%M:%S %p",
     ] {
         if let Ok(parsed) = NaiveDateTime::parse_from_str(trimmed, format) {
@@ -194,6 +198,26 @@ mod tests {
             .timestamp_millis();
 
         assert_eq!(parsed, expected);
+    }
+
+    #[test]
+    fn timestamp_filter_accepts_whole_second_datetimes() {
+        let expected = NaiveDate::from_ymd_opt(2026, 4, 1)
+            .expect("valid date")
+            .and_hms_opt(12, 30, 0)
+            .expect("valid time")
+            .and_utc()
+            .timestamp_millis();
+
+        for input in [
+            "2026-04-01 12:30:00",
+            "2026-04-01T12:30:00",
+            "04/01/2026 12:30:00",
+        ] {
+            let parsed = parse_filter_timestamp_millis(input)
+                .unwrap_or_else(|e| panic!("'{input}' should parse: {e}"));
+            assert_eq!(parsed, expected, "input={input}");
+        }
     }
 
     #[test]

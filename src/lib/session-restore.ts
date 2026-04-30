@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { readTextFile } from "@tauri-apps/plugin-fs";
-import { clearAllTabSnapshots, useLogStore } from "../stores/log-store";
+import { useLogStore } from "../stores/log-store";
 import { useUiStore } from "../stores/ui-store";
 import { loadPathAsLogSource, loadFilesAsLogSource } from "./log-source";
 import { validateSession, type FileChangeWarning } from "./session";
@@ -93,11 +93,7 @@ export async function restoreSession(sessionPath: string): Promise<string | null
 
   // Clear current state
   useLogStore.getState().clear();
-  clearAllTabSnapshots();
-  useUiStore.setState({
-    openTabs: [],
-    activeTabIndex: -1,
-  });
+  useUiStore.getState().clearTabs();
 
   // Set workspace
   const uiStore = useUiStore.getState();
@@ -108,23 +104,26 @@ export async function restoreSession(sessionPath: string): Promise<string | null
   // Add to recent sessions
   uiStore.addRecentSession(sessionPath);
 
-  // Load each file individually to create proper per-file tabs
+  // Load each file individually to create proper per-file tabs.
+  // If every file fails, fall back to the aggregate load path so the user
+  // isn't left with empty tabs after the pre-clear above.
   const filePaths = validTabs.map((t) => t.filePath);
-  try {
-    for (const tab of validTabs) {
-      try {
-        await loadPathAsLogSource(tab.filePath, { fallbackToFolder: false });
-      } catch (error) {
-        console.warn("[session] failed to load file during restore", { filePath: tab.filePath, error });
-      }
+  let loadedAny = false;
+  for (const tab of validTabs) {
+    try {
+      await loadPathAsLogSource(tab.filePath, { fallbackToFolder: false });
+      loadedAny = true;
+    } catch (error) {
+      console.warn("[session] failed to load file during restore", { filePath: tab.filePath, error });
     }
-  } catch (error) {
-    console.error("[session] failed to import log-source during restore", error);
-    // Fallback: try the aggregate load path
+  }
+
+  if (!loadedAny && filePaths.length > 0) {
     try {
       await loadFilesAsLogSource(filePaths);
+      loadedAny = true;
     } catch (fallbackError) {
-      console.error("[session] fallback aggregate load also failed", fallbackError);
+      console.error("[session] aggregate fallback load failed", fallbackError);
     }
   }
 
