@@ -7,6 +7,7 @@ import { MacosJamfEnvironmentBanner } from "./MacosJamfEnvironmentBanner";
 import { MacosJamfOverviewTab } from "./MacosJamfOverviewTab";
 import { MacosJamfLogsTab } from "./MacosJamfLogsTab";
 import { MacosJamfPoliciesTab } from "./MacosJamfPoliciesTab";
+import { MacosJamfProfilesTab } from "./MacosJamfProfilesTab";
 import type { JamfEnvironment } from "./types";
 
 const Placeholder = ({ label }: { label: string }) => (
@@ -45,7 +46,7 @@ export function MacosJamfWorkspace() {
       case "policies":
         return <MacosJamfPoliciesTab />;
       case "profiles":
-        return <Placeholder label="Profiles" />;
+        return <MacosJamfProfilesTab />;
       case "self-service":
         return <Placeholder label="Self Service" />;
       case "connect":
