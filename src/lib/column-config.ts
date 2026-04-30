@@ -438,6 +438,11 @@ const MAX_AUTOFIT_WIDTH = 1200;
  * Calculate the auto-fit width for a column given the current display entries.
  * - severity: returns defaultWidth (renders a colored dot, not text)
  * - dateTime: uses a fixed representative timestamp string (view layer formats it)
+ * - message: sized to the 98th-percentile entry length so a single
+ *   stack-trace / JSON-blob outlier doesn't blow the column out to the
+ *   MAX_AUTOFIT_WIDTH cap; still capped at MAX_AUTOFIT_WIDTH overall.
+ *   Percentile-based sizing gives sensible widths on logs whose only
+ *   meaningful content is the message column (e.g. macOS install.log).
  * - all others: two-pass approach —
  *     Pass 1 (O(n), no canvas): find the max string length across ALL entries
  *     Pass 2 (O(k), canvas): measure only strings within 90% of the max length
@@ -452,10 +457,6 @@ export function calcAutoFitWidth(
 ): number {
   if (col.id === "severity") return col.defaultWidth;
 
-  // The message column contains arbitrarily long content (JSON blobs, stack traces, etc.).
-  // Auto-fitting it just pushes everything off-screen — keep its current/default width.
-  if (col.id === "message") return col.defaultWidth;
-
   if (col.id === "dateTime") {
     // Representative sample matching the widest output of formatLogEntryTimestamp().
     // Update this if the display format changes (see src/lib/date-time-format.ts).
@@ -464,6 +465,10 @@ export function calcAutoFitWidth(
   }
 
   const headerW = measureTextWidth(col.label, headerFont) + HEADER_PAD;
+
+  if (col.id === "message") {
+    return calcMessagePercentileWidth(entries, contentFont, headerW, col);
+  }
 
   // Pass 1: find the longest string length (cheap — no canvas)
   let maxLen = 0;
@@ -485,6 +490,48 @@ export function calcAutoFitWidth(
     if (val == null) continue;
     const text = String(val);
     if (text.length < threshold) continue;
+    const w = measureTextWidth(text, contentFont);
+    if (w > maxContent) maxContent = w;
+  }
+
+  return Math.min(
+    MAX_AUTOFIT_WIDTH,
+    Math.ceil(Math.max(headerW, maxContent + CELL_PAD, col.minWidth)),
+  );
+}
+
+const MESSAGE_AUTOFIT_PERCENTILE = 0.98;
+
+/**
+ * Size the message column to the 98th-percentile entry length. Pass 1
+ * collects lengths; pass 2 canvas-measures every entry whose length
+ * lands in the top 2% of the distribution and returns the widest among
+ * them. Outliers above the percentile are ignored.
+ */
+function calcMessagePercentileWidth(
+  entries: readonly LogEntry[],
+  contentFont: string,
+  headerW: number,
+  col: ColumnDefinition,
+): number {
+  const lengths: number[] = [];
+  for (const entry of entries) {
+    if (entry.message) lengths.push(entry.message.length);
+  }
+  if (lengths.length === 0) return Math.ceil(Math.max(headerW, col.defaultWidth));
+
+  lengths.sort((a, b) => a - b);
+  const targetLen = lengths[Math.floor(MESSAGE_AUTOFIT_PERCENTILE * (lengths.length - 1))];
+
+  // Measure entries near the percentile target. Lower bound at 95% of
+  // target so canvas-measure cost stays bounded; upper bound at the
+  // target itself so a 5000-char outlier doesn't widen the column.
+  const lowerThreshold = targetLen * 0.95;
+  let maxContent = 0;
+  for (const entry of entries) {
+    const text = entry.message;
+    if (!text) continue;
+    if (text.length < lowerThreshold || text.length > targetLen) continue;
     const w = measureTextWidth(text, contentFont);
     if (w > maxContent) maxContent = w;
   }

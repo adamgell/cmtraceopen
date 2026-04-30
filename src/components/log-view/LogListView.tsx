@@ -561,9 +561,10 @@ export function LogListView({ dataSource }: { dataSource?: LogListDataSource } =
   const onDragEnd = useCallback(() => setDragState(null), []);
 
   // ── Auto-fit column width ────────────────────────────────────────────────
+  // Message column is sized via 98th-percentile of entry length inside
+  // calcAutoFitWidth, so callers no longer need to skip it.
   const handleHeaderDoubleClick = useCallback(
     (colId: ColumnId) => {
-      if (colId === "message") return;
       const def = getColumnDef(colId);
       if (!def) return;
       // Use a rendered row element so the font-family is fully resolved (no CSS variables)
@@ -581,7 +582,6 @@ export function LogListView({ dataSource }: { dataSource?: LogListDataSource } =
     const headerFont = getCanvasFont(listMetrics.headerFontSize, true, rowEl);
     const updates: Record<string, number> = {};
     for (const col of visibleColumns) {
-      if (col.id === "message") continue;
       updates[col.id] = calcAutoFitWidth(col, displayEntries, contentFont, headerFont);
     }
     setColumnWidths(updates);
