@@ -8,13 +8,9 @@ import { MacosJamfOverviewTab } from "./MacosJamfOverviewTab";
 import { MacosJamfLogsTab } from "./MacosJamfLogsTab";
 import { MacosJamfPoliciesTab } from "./MacosJamfPoliciesTab";
 import { MacosJamfProfilesTab } from "./MacosJamfProfilesTab";
+import { MacosJamfSelfServiceTab } from "./MacosJamfSelfServiceTab";
+import { MacosJamfConnectTab } from "./MacosJamfConnectTab";
 import type { JamfEnvironment } from "./types";
-
-const Placeholder = ({ label }: { label: string }) => (
-  <div style={{ padding: 24, color: "var(--colorNeutralForeground3)" }}>
-    {label} tab - implemented in a later phase.
-  </div>
-);
 
 export function MacosJamfWorkspace() {
   const activeTab = useJamfStore((s) => s.activeTab);
@@ -48,9 +44,9 @@ export function MacosJamfWorkspace() {
       case "profiles":
         return <MacosJamfProfilesTab />;
       case "self-service":
-        return <Placeholder label="Self Service" />;
+        return <MacosJamfSelfServiceTab />;
       case "connect":
-        return <Placeholder label="JAMF Connect" />;
+        return <MacosJamfConnectTab />;
     }
   })();
 
