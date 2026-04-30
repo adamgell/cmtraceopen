@@ -1,6 +1,6 @@
 #[cfg(feature = "collector")]
 pub mod collector;
-mod commands;
+pub mod commands;
 mod constants;
 #[cfg(feature = "dsregcmd")]
 pub mod dsregcmd;
