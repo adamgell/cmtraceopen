@@ -57,6 +57,7 @@ export type WorkspaceId =
   | "new-intune"
   | "dsregcmd"
   | "macos-diag"
+  | "macos-jamf"
   | "deployment"
   | "event-log"
   | "esp-diagnostics"
