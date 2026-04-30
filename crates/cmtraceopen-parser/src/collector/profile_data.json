@@ -253,6 +253,41 @@
             "sourcePattern": "%ProgramData%\\Microsoft\\IntuneManagementExtension\\Logs\\SecureBootCertificateUpdate.log.old",
             "destinationFolder": "logs/secureboot",
             "notes": "Rotated Secure Boot log backup."
+        },
+        {
+            "id": "macos-jamf-log",
+            "family": "macos-jamf",
+            "sourcePattern": "/var/log/jamf.log",
+            "destinationFolder": "logs/macos-jamf",
+            "notes": "JAMF binary log."
+        },
+        {
+            "id": "macos-jamf-app-support-logs",
+            "family": "macos-jamf",
+            "sourcePattern": "/Library/Application Support/JAMF/Logs/*.log",
+            "destinationFolder": "logs/macos-jamf",
+            "notes": "JAMF app-support per-policy logs."
+        },
+        {
+            "id": "macos-jamf-user-logs",
+            "family": "macos-jamf",
+            "sourcePattern": "${HOME}/Library/Logs/JAMF/*.log",
+            "destinationFolder": "logs/macos-jamf-user",
+            "notes": "Per-user JAMF logs (Self Service, debug)."
+        },
+        {
+            "id": "macos-jamf-connect-log",
+            "family": "macos-jamf",
+            "sourcePattern": "/Library/Logs/JAMFConnect.log",
+            "destinationFolder": "logs/macos-jamf-connect",
+            "notes": "JAMF Connect daemon log."
+        },
+        {
+            "id": "macos-jamf-connect-user-logs",
+            "family": "macos-jamf",
+            "sourcePattern": "${HOME}/Library/Logs/JAMF/JAMF Connect/*.log",
+            "destinationFolder": "logs/macos-jamf-connect",
+            "notes": "Per-user JAMF Connect logs."
         }
     ],
     "registry": [
@@ -1370,6 +1405,24 @@
             "fileName": "secureboot-bitlocker.txt",
             "timeoutSecs": 15,
             "notes": "BitLocker status for Secure Boot cert transition impact."
+        },
+        {
+            "id": "macos-jamf-version",
+            "family": "macos-jamf",
+            "command": "/usr/local/bin/jamf",
+            "arguments": ["version"],
+            "fileName": "command-output/jamf-version.txt",
+            "timeoutSecs": 10,
+            "notes": "JAMF binary version (no privilege required)."
+        },
+        {
+            "id": "macos-jamf-check-jss",
+            "family": "macos-jamf",
+            "command": "/usr/local/bin/jamf",
+            "arguments": ["checkJSSConnection"],
+            "fileName": "command-output/jamf-checkjss.txt",
+            "timeoutSecs": 10,
+            "notes": "Test JSS connectivity (no privilege required)."
         }
     ]
 }
