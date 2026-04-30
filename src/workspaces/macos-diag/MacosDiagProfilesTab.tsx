@@ -138,19 +138,6 @@ const useStyles = makeStyles({
     ...shorthands.padding("0px", "12px", "12px"),
     borderTop: `1px solid ${tokens.colorNeutralStroke1}`,
   },
-  payloadList: {
-    marginTop: "10px",
-  },
-  payloadItem: {
-    display: "flex",
-    justifyContent: "space-between",
-    alignItems: "center",
-    ...shorthands.padding("6px", "10px"),
-    marginBottom: "4px",
-    backgroundColor: tokens.colorNeutralBackground3,
-    ...shorthands.borderRadius(tokens.borderRadiusSmall),
-    fontSize: "12px",
-  },
   payloadType: {
     fontFamily: tokens.fontFamilyMonospace,
     fontSize: "10.5px",
