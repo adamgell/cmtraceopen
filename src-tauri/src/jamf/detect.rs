@@ -14,6 +14,24 @@ const JAMF_VERSION_TIMEOUT: Duration = Duration::from_secs(5);
 pub fn collect_environment_impl() -> Result<JamfEnvironment, AppError> {
     let jamf_installed = Path::new(paths::JAMF_BINARY).is_file();
     let directories = scan_directories();
+    let last_check_in = if directories.jamf_log {
+        crate::jamf::policy_log::parse_policy_log_impl(Path::new(paths::JAMF_LOG))
+            .ok()
+            .and_then(|r| {
+                r.events
+                    .iter()
+                    .filter(|e| {
+                        matches!(
+                            e.trigger,
+                            crate::jamf::models::JamfPolicyTrigger::RecurringCheckIn
+                        )
+                    })
+                    .map(|e| e.timestamp)
+                    .max()
+            })
+    } else {
+        None
+    };
     let jamf_version = if jamf_installed {
         read_jamf_version()
     } else {
@@ -43,7 +61,7 @@ pub fn collect_environment_impl() -> Result<JamfEnvironment, AppError> {
         jamf_installed,
         jamf_version,
         jss_url,
-        last_check_in: None, // Filled in Phase 3 by reading the policy log.
+        last_check_in,
         mdm_profile_present: false, // Filled in Task 1.5 wiring.
         mdm_organization: None,
         jamf_connect_installed,
