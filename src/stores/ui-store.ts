@@ -8,7 +8,8 @@ import {
 } from "../lib/log-accessibility";
 import type { ThemeId } from "../lib/themes/types";
 import { DEFAULT_THEME_ID } from "../lib/themes";
-import { clearCachedTabSnapshot, useLogStore } from "./log-store";
+import { useLogStore } from "./log-store";
+import { clearAllTabSnapshots, clearCachedTabSnapshot } from "../lib/tab-snapshot-cache";
 import { useFilterStore } from "./filter-store";
 import type { ColumnId } from "../lib/column-config";
 import type { CollectionResult } from "../lib/commands";
@@ -204,6 +205,7 @@ interface UiState {
   resetColumns: () => void;
   openTab: (filePath: string, fileName: string, sourceContext?: TabSourceContext | null, fileKind?: TabFileKind) => void;
   closeTab: (index: number) => void;
+  clearTabs: () => void;
   switchTab: (index: number) => void;
   saveTabScrollState: (index: number, scrollPosition: number, selectedLineId: number | null) => void;
   setCollectionProgress: (progress: CollectionProgressState | null) => void;
@@ -555,6 +557,16 @@ export const useUiStore = create<UiState>()(
           return;
         }
         set({ activeTabIndex: index });
+      },
+
+      clearTabs: () => {
+        // Mirror closeTab's last-tab path: when no tabs remain, the active
+        // log content and filter must go too, otherwise callers can leave
+        // the app showing stale entries with no tab to attribute them to.
+        clearAllTabSnapshots();
+        useLogStore.getState().clearActiveFile();
+        useFilterStore.getState().clearFilter();
+        set({ openTabs: [], activeTabIndex: -1 });
       },
 
       saveTabScrollState: (index, scrollPosition, selectedLineId) => {

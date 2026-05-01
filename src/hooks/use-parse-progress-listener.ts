@@ -23,13 +23,28 @@ interface ParseProgressPayload {
  * per-file progress instead of only updating between batches.
  *
  * The Rust side emits per-batch counters, but the UI needs a global
- * count across all batches.  We maintain a running offset that resets
- * when a new folder load begins (folderLoadProgress transitions from
- * null → non-null).
+ * count across all batches.  We maintain a running offset that is
+ * reset by an effect each time a new folder load begins
+ * (folderLoadProgress transitions from null → non-null), so progress
+ * from a previous load can never bleed into the next one.
  */
 export function useParseProgressListener() {
+  // Subscribe to a derived boolean so this hook re-renders only on the
+  // null ↔ non-null transition instead of on every progress tick during
+  // a large folder load.
+  const isFolderLoading = useLogStore((state) => state.folderLoadProgress !== null);
   const globalCompletedRef = useRef(0);
   const prevBatchCompletedRef = useRef(0);
+  const wasLoadingRef = useRef(false);
+
+  useEffect(() => {
+    if (isFolderLoading && !wasLoadingRef.current) {
+      globalCompletedRef.current = 0;
+      prevBatchCompletedRef.current = 0;
+    }
+
+    wasLoadingRef.current = isFolderLoading;
+  }, [isFolderLoading]);
 
   useEffect(() => {
     const unlisten = listen<ParseProgressPayload>(
@@ -38,11 +53,10 @@ export function useParseProgressListener() {
         const p = event.payload;
         const state = useLogStore.getState();
 
-        // Only update if a folder load is currently in progress.
+        // Only update if a folder load is currently in progress. The reset
+        // for the next load is handled by the effect above on the
+        // null → non-null transition.
         if (state.folderLoadProgress === null) {
-          // Reset counters for the next load
-          globalCompletedRef.current = 0;
-          prevBatchCompletedRef.current = 0;
           return;
         }
 

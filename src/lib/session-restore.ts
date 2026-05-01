@@ -93,6 +93,7 @@ export async function restoreSession(sessionPath: string): Promise<string | null
 
   // Clear current state
   useLogStore.getState().clear();
+  useUiStore.getState().clearTabs();
 
   // Set workspace
   const uiStore = useUiStore.getState();
@@ -103,37 +104,52 @@ export async function restoreSession(sessionPath: string): Promise<string | null
   // Add to recent sessions
   uiStore.addRecentSession(sessionPath);
 
-  // Load each file individually to create proper per-file tabs
+  // Load each file individually to create proper per-file tabs.
+  // If every file fails, fall back to the aggregate load path so the user
+  // isn't left with empty tabs after the pre-clear above.
+  // Track which paths actually opened so the index/scroll restore below
+  // targets the right tab even when some files failed to load.
   const filePaths = validTabs.map((t) => t.filePath);
-  try {
-    for (const tab of validTabs) {
-      try {
-        await loadPathAsLogSource(tab.filePath, { fallbackToFolder: false });
-      } catch (error) {
-        console.warn("[session] failed to load file during restore", { filePath: tab.filePath, error });
-      }
+  const loadedTabsByPath = new Map<string, (typeof validTabs)[number]>();
+  for (const tab of validTabs) {
+    try {
+      await loadPathAsLogSource(tab.filePath, { fallbackToFolder: false });
+      loadedTabsByPath.set(tab.filePath, tab);
+    } catch (error) {
+      console.warn("[session] failed to load file during restore", { filePath: tab.filePath, error });
     }
-  } catch (error) {
-    console.error("[session] failed to import log-source during restore", error);
-    // Fallback: try the aggregate load path
+  }
+
+  if (loadedTabsByPath.size === 0 && filePaths.length > 0) {
     try {
       await loadFilesAsLogSource(filePaths);
+      // Aggregate load opens one tab per file in the same order.
+      for (const tab of validTabs) loadedTabsByPath.set(tab.filePath, tab);
     } catch (fallbackError) {
-      console.error("[session] fallback aggregate load also failed", fallbackError);
+      console.error("[session] aggregate fallback load failed", fallbackError);
     }
   }
 
-  // Restore active tab index after all tabs are opened
-  const activeIndex = Math.min(session.activeTabIndex, validTabs.length - 1);
-  if (activeIndex >= 0) {
-    uiStore.switchTab(activeIndex);
+  // Restore index / scroll using the actual openTabs list; openTab in
+  // ui-store may dedupe, reorder, or skip based on existing state, so
+  // session indices aren't trustworthy after partial failures.
+  const openTabs = useUiStore.getState().openTabs;
+  const activeSessionTab = validTabs[session.activeTabIndex];
+  if (activeSessionTab) {
+    const liveIndex = openTabs.findIndex((t) => t.filePath === activeSessionTab.filePath);
+    if (liveIndex >= 0) {
+      uiStore.switchTab(liveIndex);
+    }
   }
 
-  // Restore per-tab scroll positions and selected lines
-  for (let i = 0; i < validTabs.length; i++) {
-    const tab = validTabs[i];
-    if (tab.scrollPosition != null || tab.selectedId != null) {
-      uiStore.saveTabScrollState(i, tab.scrollPosition ?? 0, tab.selectedId ?? null);
+  for (const [filePath, savedTab] of loadedTabsByPath) {
+    const liveIndex = openTabs.findIndex((t) => t.filePath === filePath);
+    if (liveIndex >= 0 && (savedTab.scrollPosition != null || savedTab.selectedId != null)) {
+      uiStore.saveTabScrollState(
+        liveIndex,
+        savedTab.scrollPosition ?? 0,
+        savedTab.selectedId ?? null,
+      );
     }
   }
 

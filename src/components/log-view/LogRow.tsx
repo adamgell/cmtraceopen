@@ -27,8 +27,10 @@ interface LogRowProps {
   correlationColor?: string | null;
   sectionBandColor?: string | null;
   marker?: Marker | null;
-  onToggleMarker?: (lineId: number) => void;
-  onSetMarkerCategory?: (lineId: number, category: string) => void;
+  /** Receives the entry's filePath so callers can scope markers to the
+   * correct file in aggregate-folder mode. */
+  onToggleMarker?: (filePath: string, lineId: number) => void;
+  onSetMarkerCategory?: (filePath: string, lineId: number, category: string) => void;
   markerCategories?: MarkerCategory[];
 }
 
@@ -353,7 +355,7 @@ export const LogRow = memo(function LogRow({
         }}
         onClick={(e) => {
           e.stopPropagation();
-          onToggleMarker?.(entry.id);
+          onToggleMarker?.(entry.filePath, entry.id);
         }}
         onContextMenu={handleGutterContextMenu}
       >
@@ -410,9 +412,9 @@ export const LogRow = memo(function LogRow({
                 e.stopPropagation();
                 if (!marker) {
                   // First toggle it on, then set category
-                  onToggleMarker?.(entry.id);
+                  onToggleMarker?.(entry.filePath, entry.id);
                 }
-                onSetMarkerCategory?.(entry.id, cat.id);
+                onSetMarkerCategory?.(entry.filePath, entry.id, cat.id);
                 closeGutterMenu();
               }}
             >
@@ -454,7 +456,7 @@ export const LogRow = memo(function LogRow({
                 }}
                 onClick={(e) => {
                   e.stopPropagation();
-                  onToggleMarker?.(entry.id);
+                  onToggleMarker?.(entry.filePath, entry.id);
                   closeGutterMenu();
                 }}
               >

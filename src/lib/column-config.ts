@@ -438,11 +438,12 @@ const MAX_AUTOFIT_WIDTH = 1200;
  * Calculate the auto-fit width for a column given the current display entries.
  * - severity: returns defaultWidth (renders a colored dot, not text)
  * - dateTime: uses a fixed representative timestamp string (view layer formats it)
- * - all others: two-pass approach —
+ * - all others (including message): two-pass approach —
  *     Pass 1 (O(n), no canvas): find the max string length across ALL entries
  *     Pass 2 (O(k), canvas): measure only strings within 90% of the max length
- *   This ensures the widest entry is always found regardless of how large the log is,
- *   while keeping canvas calls to a minimum.
+ *   The widest entry's pixel width sets the column, then `MAX_AUTOFIT_WIDTH`
+ *   caps the result so a single stack-trace / JSON-blob outlier can grow
+ *   the column at most to that cap (1200px), not arbitrarily wide.
  */
 export function calcAutoFitWidth(
   col: ColumnDefinition,
@@ -451,10 +452,6 @@ export function calcAutoFitWidth(
   headerFont: string
 ): number {
   if (col.id === "severity") return col.defaultWidth;
-
-  // The message column contains arbitrarily long content (JSON blobs, stack traces, etc.).
-  // Auto-fitting it just pushes everything off-screen — keep its current/default width.
-  if (col.id === "message") return col.defaultWidth;
 
   if (col.id === "dateTime") {
     // Representative sample matching the widest output of formatLogEntryTimestamp().

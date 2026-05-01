@@ -6,7 +6,7 @@ use std::sync::Arc;
 use notify::{Config, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 
 use crate::models::log_entry::{LogEntry, ParserSpecialization, RecordFraming};
-use crate::parser::{self, ResolvedParser, FileEncoding};
+use crate::parser::{self, FileEncoding, ResolvedParser};
 
 const IME_RECORD_START: &str = "<![LOG[";
 const IME_RECORD_ATTRS_START: &str = "]LOG]!><";
@@ -55,12 +55,9 @@ impl TailReader {
     /// Read new content from the file since last read, parse into entries.
     /// Returns new entries and updates internal byte_offset.
     pub fn read_new_entries(&mut self) -> Result<Vec<LogEntry>, crate::error::AppError> {
-        let mut file = std::fs::File::open(&self.path)
-            .map_err(crate::error::AppError::Io)?;
+        let mut file = std::fs::File::open(&self.path).map_err(crate::error::AppError::Io)?;
 
-        let metadata = file
-            .metadata()
-            .map_err(crate::error::AppError::Io)?;
+        let metadata = file.metadata().map_err(crate::error::AppError::Io)?;
 
         let file_size = metadata.len();
 
@@ -105,8 +102,9 @@ impl TailReader {
         };
         let _ = leftover; // suppress unused warning
 
-        let new_text = crate::parser::decode_bytes(to_decode, self.encoding)
-            .map_err(|e| crate::error::AppError::Internal(format!("Failed to decode tailed bytes: {}", e)))?;
+        let new_text = crate::parser::decode_bytes(to_decode, self.encoding).map_err(|e| {
+            crate::error::AppError::Internal(format!("Failed to decode tailed bytes: {}", e))
+        })?;
 
         // Prepend any partial record fragment from the last read.
         let full_text = if self.pending_fragment.is_empty() {
@@ -140,7 +138,8 @@ impl TailReader {
 
         // Parse the new complete records through the same dispatch path as initial parsing.
         let path_str = self.path.to_string_lossy().to_string();
-        let (mut entries, _) = parser::parse_lines_with_selection(&lines, &path_str, &self.parser_selection);
+        let (mut entries, _) =
+            parser::parse_lines_with_selection(&lines, &path_str, &self.parser_selection);
 
         // Update IDs and line numbers to be sequential from where we left off
         for entry in &mut entries {
@@ -150,8 +149,9 @@ impl TailReader {
             self.next_line += 1;
         }
 
-        // Update byte offset (subtract the pending fragment bytes we kept).
-        self.byte_offset = file_size - self.pending_fragment.len() as u64;
+        // We already keep incomplete text in pending_fragment. Advance to the
+        // actual file size so the same bytes are not read and prepended again.
+        self.byte_offset = file_size;
 
         Ok(entries)
     }
@@ -257,7 +257,8 @@ where
     let watch_path = path.clone();
 
     std::thread::spawn(move || {
-        let mut tail_reader = TailReader::new(path, byte_offset, parser_selection, next_id, next_line);
+        let mut tail_reader =
+            TailReader::new(path, byte_offset, parser_selection, next_id, next_line);
 
         // Create a channel for notify events
         let (tx, rx) = std::sync::mpsc::channel();
@@ -405,9 +406,7 @@ mod tests {
         let initial = "15/01/2024 08:00:00 Initial entry\n";
         fs::write(&path, initial).expect("should write initial file");
 
-        let byte_offset = fs::metadata(&path)
-            .expect("metadata should exist")
-            .len();
+        let byte_offset = fs::metadata(&path).expect("metadata should exist").len();
 
         let selection = ResolvedParser::generic_timestamped(DateOrder::DayFirst);
         let mut reader = TailReader::new(path.clone(), byte_offset, selection, 1, 2);
@@ -429,6 +428,50 @@ mod tests {
             entries[0].timestamp_display.as_deref(),
             Some("2024-01-16 09:30:00.000")
         );
+
+        fs::remove_file(path).expect("should clean up temp file");
+    }
+
+    #[test]
+    fn test_tail_reader_does_not_duplicate_buffered_partial_line() {
+        let path = unique_test_path("tail-reader-partial-line");
+        fs::write(&path, "initial\n").expect("should write initial file");
+
+        let byte_offset = fs::metadata(&path).expect("metadata should exist").len();
+
+        let mut reader = TailReader::new(
+            path.clone(),
+            byte_offset,
+            ResolvedParser::plain_text(),
+            1,
+            2,
+        );
+
+        let mut file = OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .expect("should reopen temp file");
+        write!(file, "complete\npartial").expect("should append complete and partial lines");
+        drop(file);
+
+        let first_entries = reader
+            .read_new_entries()
+            .expect("first tail read should succeed");
+        assert_eq!(first_entries.len(), 1);
+        assert_eq!(first_entries[0].message, "complete");
+
+        let mut file = OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .expect("should reopen temp file");
+        writeln!(file, " done").expect("should complete buffered partial line");
+        drop(file);
+
+        let second_entries = reader
+            .read_new_entries()
+            .expect("second tail read should succeed");
+        assert_eq!(second_entries.len(), 1);
+        assert_eq!(second_entries[0].message, "partial done");
 
         fs::remove_file(path).expect("should clean up temp file");
     }
@@ -498,10 +541,16 @@ mod tests {
             drop(file);
 
             let tail_entries = reader.read_new_entries().expect("tail read should succeed");
-            let (full_result, _) = parser::parse_file(&path_str).expect("full fixture should parse");
+            let (full_result, _) =
+                parser::parse_file(&path_str).expect("full fixture should parse");
             let expected_entries = &full_result.entries[initial_result.entries.len()..];
 
-            assert_eq!(tail_entries.len(), expected_entries.len(), "case={}", case.name);
+            assert_eq!(
+                tail_entries.len(),
+                expected_entries.len(),
+                "case={}",
+                case.name
+            );
 
             for (actual, expected) in tail_entries.iter().zip(expected_entries.iter()) {
                 assert_entries_match(actual, expected);
