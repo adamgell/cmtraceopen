@@ -31,9 +31,13 @@
 # build time without touching the file on disk.
 #
 # Usage:
-#   ./scripts/build-mac-signed.sh                # release build
-#   ./scripts/build-mac-signed.sh --debug        # debug build
-#   ./scripts/build-mac-signed.sh --no-bundle    # exe only, skip DMG
+#   ./scripts/build-mac-signed.sh                # release: signed .app + DMG
+#   ./scripts/build-mac-signed.sh --debug        # debug: signed .app + DMG
+#
+# Note: --no-bundle is intentionally NOT supported. On macOS the signing
+# happens at the .app bundle level (the bundled Mach-O is signed, then the
+# .app envelope is signed). A bare unbundled binary isn't a normal macOS
+# distribution shape, so there's no signed "exe-only" mode.
 
 set -euo pipefail
 
