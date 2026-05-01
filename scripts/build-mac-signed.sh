@@ -46,6 +46,16 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 cd "${REPO_ROOT}"
 
+# ── Auto-load .env.local if present ────────────────────────────────────────
+# Convention: developers copy .env.example → .env.local (gitignored) and
+# fill in their signing/notarization credentials there. We source it before
+# validating env vars below so they take effect for this build.
+if [[ -f "${REPO_ROOT}/.env.local" ]]; then
+    # shellcheck disable=SC1091
+    set -a; source "${REPO_ROOT}/.env.local"; set +a
+    echo "info: loaded credentials from ${REPO_ROOT}/.env.local"
+fi
+
 # ── Validate signing identity ──────────────────────────────────────────────
 if [[ -z "${APPLE_SIGNING_IDENTITY:-}" ]]; then
     cat >&2 <<'EOF'
