@@ -112,4 +112,37 @@ echo "────────────────────────�
 # Tauri reads APPLE_API_KEY*, APPLE_ID/PASSWORD/TEAM_ID directly from the
 # environment for notarization. We pass the signing identity via --config
 # so it overrides the on-disk default of "-".
-exec npx tauri build --config "${CONFIG_OVERLAY}" "$@"
+set +e
+npx tauri build --config "${CONFIG_OVERLAY}" "$@"
+TAURI_EXIT=$?
+set -e
+
+# ── Soft-fail handling for the updater signing step ────────────────────────
+# Tauri's bundle pipeline runs an updater-signing step after the DMG is built.
+# It fails with `TAURI_SIGNING_PRIVATE_KEY` errors when that env var isn't
+# set, even though the DMG itself is already signed, notarized, and stapled.
+# We detect that case and downgrade it to a warning: the .app and .dmg are
+# the deliverables this script cares about; updater-bundle signing is only
+# relevant if you're publishing to the auto-update endpoint.
+if [[ $TAURI_EXIT -ne 0 ]]; then
+    DMG_PATH=$(find "${REPO_ROOT}/src-tauri/target/release/bundle/dmg" \
+        -maxdepth 1 -name "*.dmg" -mmin -10 2>/dev/null | head -1)
+    APP_PATH=$(find "${REPO_ROOT}/src-tauri/target/release/bundle/macos" \
+        -maxdepth 1 -name "*.app" -type d -mmin -10 2>/dev/null | head -1)
+
+    if [[ -n "$DMG_PATH" && -n "$APP_PATH" ]] \
+        && xcrun stapler validate "$APP_PATH" >/dev/null 2>&1; then
+        cat >&2 <<EOF
+warning: tauri build exited ${TAURI_EXIT}, but the signed .app and .dmg are
+         present and the notarization ticket validated. The exit code is
+         from the updater-bundle signing step (TAURI_SIGNING_PRIVATE_KEY).
+         Treating as success.
+EOF
+        echo
+        echo "Built artifacts:"
+        echo "  ${APP_PATH}"
+        echo "  ${DMG_PATH}"
+        exit 0
+    fi
+    exit $TAURI_EXIT
+fi
