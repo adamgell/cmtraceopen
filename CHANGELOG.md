@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [1.3.0] - 2026-04-27
+## [1.3.0] - 2026-05-03
 
 ### Added
 
@@ -19,6 +19,12 @@ All notable changes to this project will be documented in this file.
 - **CBS/DISM parser accepts all components** (#154, #165): Removed overly restrictive component allowlists from `parse_header()`. CBS previously only accepted `CBS|CSI|TI|SR|SFC|RIBS|OC|POQ|SQM|DWLD`; DISM only accepted components starting with `DISM`. Entries from other components (DPX, WCP, CMIV, etc.) fell through to plain text. Detection logic still uses allowlists for format auto-detection, but once identified, all well-formed lines parse as structured entries. 4 new unit tests, 2 corpus fixtures, 2 regression tests.
 - **Event Viewer strips control characters** (#159, #166): Added `sanitize_control_chars()` utility that strips C0 control characters (U+0000–U+001F) and DEL (U+007F), preserving `\t` and `\n`. Applied at all EVTX parsing paths: file-based, live queries, and Sysmon. 8 new unit tests.
 - **Filter toggle UX** (#152, #168): Re-clicking the filter button now clears the active filter instead of silently doing nothing.
+- **Tail partial record duplication** (#180): Tailing no longer duplicates partial records when an incomplete trailing line is completed by a later file change.
+- **Date/time filters** (#180): Date filters now accept whole-second ISO and US datetime inputs, interpret timezone-less values in the user's local timezone, validate invalid values up front, and compile filter clauses once per apply instead of reparsing per row.
+- **Session restore** (#180): Restoring sessions now clears stale tabs and filters through a store action, handles partial file-load failures without losing successfully opened tabs, and restores active-tab and scroll state only for tabs that actually loaded.
+- **Folder parse progress** (#180): Folder load progress counters reset cleanly for each new load, and the progress listener subscribes to the loading state instead of every progress tick to avoid unnecessary re-renders.
+- **Aggregate-folder markers** (#180): Row markers now read and write by each entry's own `filePath`, so marker actions work correctly when an aggregate view contains entries from multiple files.
+- **Column auto-fit** (#180): Double-clicking anywhere in a column header now auto-fits that column, and the message column participates in fit-all with the existing maximum-width cap.
 
 ### Changed
 
@@ -44,6 +50,9 @@ All notable changes to this project will be documented in this file.
 - `windows` 0.61 → 0.62, `windows-future` 0.2 → 0.3 (coordinated upgrade; `.get()` → `.join()` API migration in `graph_api.rs`)
 - `winreg` 0.55 → 0.56
 - `@fluentui/react-icons` added as direct dependency (`^2.0.321`)
+- `@fluentui/react-charts` 9.3.17 → 9.3.18
+- `@fluentui/react-components` 9.73.7 → 9.73.8
+- `@fluentui/react-icons` 2.0.321 → 2.0.325
 - `@tanstack/react-virtual` 3.13.23 → 3.13.24
 - `actions/setup-node` 6.3.0 → 6.4.0
 - `taiki-e/install-action` 2.75.10 → 2.75.18
