@@ -53,6 +53,7 @@ All notable changes to this project will be documented in this file.
 - `@fluentui/react-charts` 9.3.17 → 9.3.18
 - `@fluentui/react-components` 9.73.7 → 9.73.8
 - `@fluentui/react-icons` 2.0.321 → 2.0.325
+- `@tauri-apps/api` and `@tauri-apps/cli` 2.10.1 → 2.11.0 to align with Rust `tauri` 2.11.0
 - `@tanstack/react-virtual` 3.13.23 → 3.13.24
 - `actions/setup-node` 6.3.0 → 6.4.0
 - `taiki-e/install-action` 2.75.10 → 2.75.18

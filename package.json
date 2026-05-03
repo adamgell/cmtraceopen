@@ -30,7 +30,7 @@
     "@fluentui/react-components": "^9.73.8",
     "@fluentui/react-icons": "^2.0.325",
     "@tanstack/react-virtual": "^3.13.24",
-    "@tauri-apps/api": "^2.10.1",
+    "@tauri-apps/api": "^2.11.0",
     "@tauri-apps/plugin-clipboard-manager": "^2.3.2",
     "@tauri-apps/plugin-dialog": "^2.7.0",
     "@tauri-apps/plugin-fs": "^2.5.0",
@@ -43,7 +43,7 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.59.1",
-    "@tauri-apps/cli": "^2.10.1",
+    "@tauri-apps/cli": "^2.11.0",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
     "@types/react": "^19.2.14",
