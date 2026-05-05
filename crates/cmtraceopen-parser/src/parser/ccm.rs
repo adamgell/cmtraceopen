@@ -28,8 +28,8 @@ fn ccm_re() -> &'static Regex {
         r#"\s+date="(?P<mon>\d{1,2})-(?P<day>\d{1,2})-(?P<yr>\d{4})""#,
         r#"\s+component="(?P<comp>[^"]*)""#,
         r#"\s+context="[^"]*""#,
-        r#"\s+type="(?P<typ>\d)""#,
-        r#"\s+thread="(?P<thr>\d+)""#,
+        r#"\s+type="(?P<typ>\d)?""#,
+        r#"\s+thread="(?P<thr>\d+)?""#,
         r#"(?:\s+file="(?P<file>[^"]*)")?>"#,
     ))
     .expect("CCM regex must compile")
@@ -274,8 +274,14 @@ fn parse_captures(caps: &regex::Captures<'_>) -> Option<CcmParsed> {
     let day: u32 = caps.name("day")?.as_str().parse().ok()?;
     let yr: i32 = caps.name("yr")?.as_str().parse().ok()?;
     let comp = caps.name("comp").map(|m| m.as_str().to_string());
-    let typ: u32 = caps.name("typ")?.as_str().parse().ok()?;
-    let thr: u32 = caps.name("thr")?.as_str().parse().ok()?;
+    let typ: u32 = caps
+        .name("typ")
+        .and_then(|m| m.as_str().parse().ok())
+        .unwrap_or(0);
+    let thr: u32 = caps
+        .name("thr")
+        .and_then(|m| m.as_str().parse().ok())
+        .unwrap_or(0);
     let file = caps.name("file").map(|m| m.as_str().to_string());
 
     let severity = severity_from_type_field(Some(typ), &msg);
@@ -600,6 +606,21 @@ mod tests {
         let line = r#"<![LOG[Retrying request]LOG]!><time="10:00:00.000+000" date="01-01-2024" component="Test" context="" type="2" thread="100" file="">"#;
         let parsed = parse_line(line).expect("should parse");
         assert_eq!(parsed.severity, Severity::Warning);
+    }
+
+    #[test]
+    fn test_parse_ccm_empty_type_and_thread_default_to_zero() {
+        let line = r#"<![LOG[Performing Install steps...]LOG]!><time="10:28:53.264+000" date="04-05-2026" component="install_config.ps1:103" context="" type="" thread="" file="test.ps1">"#;
+
+        let (entries, parse_errors) = parse_lines(&[line], "example.log");
+
+        assert_eq!(parse_errors, 0);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].format, LogFormat::Ccm);
+        assert_eq!(entries[0].severity, Severity::Info);
+        assert_eq!(entries[0].thread, Some(0));
+        assert_eq!(entries[0].thread_display.as_deref(), Some("0 (0x0000)"));
+        assert_eq!(entries[0].source_file.as_deref(), Some("test.ps1"));
     }
 
     #[test]
