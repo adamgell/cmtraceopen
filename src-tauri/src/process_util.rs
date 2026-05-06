@@ -36,9 +36,8 @@ mod tests {
     #[test]
     fn hidden_command_builds_requested_program() {
         let cmd = hidden_command("powershell.exe");
-        let debug = format!("{cmd:?}");
 
-        assert!(debug.contains("powershell.exe"));
+        assert_eq!(cmd.get_program(), "powershell.exe");
     }
 
     #[cfg(target_os = "windows")]
