@@ -342,7 +342,7 @@ fn run_powershell_checks(state: &mut SecureBootScanState) {
 /// return its stdout trimmed, or `None` on failure / empty output.
 #[cfg(target_os = "windows")]
 fn run_powershell(command: &str) -> Option<String> {
-    let output = std::process::Command::new("powershell.exe")
+    let output = crate::process_util::hidden_command("powershell.exe")
         .args([
             "-NoProfile",
             "-NonInteractive",
