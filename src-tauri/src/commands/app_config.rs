@@ -1,12 +1,10 @@
 use serde::Serialize;
 
 const DISABLE_UPDATE_CHECKS_ENV: &str = "CMTRACEOPEN_DISABLE_UPDATE_CHECKS";
-const STARTUP_UPDATE_CHECKS_ENABLED_BY_DEFAULT: bool = false;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdatePolicy {
-    pub startup_update_checks_enabled_by_default: bool,
     pub update_checks_disabled_by_policy: bool,
 }
 
@@ -53,7 +51,6 @@ fn update_checks_disabled_by_registry() -> bool {
 #[tauri::command]
 pub fn get_update_policy() -> UpdatePolicy {
     UpdatePolicy {
-        startup_update_checks_enabled_by_default: STARTUP_UPDATE_CHECKS_ENABLED_BY_DEFAULT,
         update_checks_disabled_by_policy: update_checks_disabled_by_environment()
             || update_checks_disabled_by_registry(),
     }

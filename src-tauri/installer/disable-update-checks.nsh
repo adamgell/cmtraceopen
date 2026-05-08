@@ -12,5 +12,4 @@ done:
 !macroend
 
 !macro NSIS_HOOK_POSTUNINSTALL
-  DeleteRegValue SHCTX "Software\CMTrace Open" "DisableUpdateChecks"
 !macroend

@@ -48,12 +48,32 @@ export function useUpdateChecker() {
       setIsChecking(true);
 
       try {
+        let updateChecksDisabledByPolicy = false;
+        try {
+          const policy = await getUpdatePolicy();
+          updateChecksDisabledByPolicy = policy.updateChecksDisabledByPolicy;
+        } catch (error) {
+          console.warn("[update-checker] failed to read update policy", error);
+        }
+
         const [currentVersion, currentPlatform] = await Promise.all([
           getVersion(),
           platform(),
         ]);
 
         const canAutoUpdate = currentPlatform !== "linux";
+
+        if (updateChecksDisabledByPolicy) {
+          const info: UpdateInfo = {
+            available: false,
+            currentVersion,
+            canAutoUpdate,
+            error: "Update checks are disabled by policy.",
+          };
+          setUpdateInfo(info);
+          return info;
+        }
+
         const update = await check();
 
         if (update) {
@@ -164,17 +184,6 @@ export function useUpdateChecker() {
       if (!autoUpdateEnabled) {
         console.info("[update-checker] startup update checks disabled, skipping startup check");
         return;
-      }
-
-      try {
-        const policy = await getUpdatePolicy();
-        if (cancelled) return;
-        if (policy.updateChecksDisabledByPolicy) {
-          console.info("[update-checker] update checks disabled by policy, skipping startup check");
-          return;
-        }
-      } catch (error) {
-        console.warn("[update-checker] failed to read update policy", error);
       }
 
       if (cancelled) return;

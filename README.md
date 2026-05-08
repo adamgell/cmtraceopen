@@ -11,13 +11,13 @@ Download the latest release for your platform and run it. That's it — single f
 
 | Platform | Download |
 |----------|----------|
-| Windows (x64) | [.msi installer](https://github.com/adamgell/CMTraceOpen/releases/latest) |
+| Windows (x64) | [.msi + NSIS .exe installers](https://github.com/adamgell/CMTraceOpen/releases/latest) |
 | macOS (Apple Silicon) | [.dmg](https://github.com/adamgell/CMTraceOpen/releases/latest) |
 | Linux (x64) | [.deb / .AppImage](https://github.com/adamgell/CMTraceOpen/releases/latest) |
 
 All releases are signed. The Windows executable is code-signed and the macOS app is notarized.
 
-Startup update checks are disabled by default. Users can opt in from Settings > Updates, or deploy the Windows NSIS installer with `/DisableUpdateChecks` to force-disable startup update checks for that install context:
+Startup update checks are disabled by default. Users can opt in from Settings > Updates, or deploy the Windows NSIS `.exe` installer with `/DisableUpdateChecks` to force-disable startup update checks for that install context:
 
 ```powershell
 CMTrace-Open_*_x64-setup.exe /S /DisableUpdateChecks
@@ -67,7 +67,7 @@ See the [DSRegCmd troubleshooting guide](DSREGCMD_TROUBLESHOOTING.md) for a deta
 ## Quick Start
 
 1. **Download** the release for your platform from the [Releases page](https://github.com/adamgell/CMTraceOpen/releases/latest)
-2. **Run** the executable — no install required (or use the MSI on Windows)
+2. **Run** the executable — no install required (or use the Windows MSI/NSIS installer)
 3. **Open a log** — drag and drop a file, use File > Open, or use a source preset
 4. **Explore** — use Find (Ctrl+F), Filter, or switch to the Intune/DSRegCmd workspace
 

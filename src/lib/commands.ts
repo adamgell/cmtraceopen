@@ -36,7 +36,6 @@ export interface AnalyzeIntuneLogsOptions {
 }
 
 export interface UpdatePolicy {
-  startupUpdateChecksEnabledByDefault: boolean;
   updateChecksDisabledByPolicy: boolean;
 }
 
