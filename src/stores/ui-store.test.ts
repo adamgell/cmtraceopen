@@ -17,6 +17,10 @@ describe("ui-store", () => {
       expect(useUiStore.getState().activeView).toBe("log");
     });
 
+    it("disables startup update checks by default", () => {
+      expect(useUiStore.getInitialState().autoUpdateEnabled).toBe(false);
+    });
+
     it("switches workspace", () => {
       useUiStore.getState().setActiveView("intune");
       expect(useUiStore.getState().activeView).toBe("intune");

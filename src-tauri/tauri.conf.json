@@ -73,7 +73,8 @@
     "windows": {
       "nsis": {
         "installMode": "both",
-        "displayLanguageSelector": false
+        "displayLanguageSelector": false,
+        "installerHooks": "installer/disable-update-checks.nsh"
       },
       "wix": {}
     },

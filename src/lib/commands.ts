@@ -35,6 +35,11 @@ export interface AnalyzeIntuneLogsOptions {
   includeLiveEventLogs?: boolean;
 }
 
+export interface UpdatePolicy {
+  startupUpdateChecksEnabledByDefault: boolean;
+  updateChecksDisabledByPolicy: boolean;
+}
+
 function getInvokeErrorMessage(error: unknown): string {
   if (error instanceof Error) {
     return error.message;
@@ -246,6 +251,10 @@ export async function getInitialFilePaths(): Promise<string[]> {
 
 export async function getAvailableWorkspaces(): Promise<WorkspaceId[]> {
   return invokeCommand<WorkspaceId[]>("get_available_workspaces");
+}
+
+export async function getUpdatePolicy(): Promise<UpdatePolicy> {
+  return invokeCommand<UpdatePolicy>("get_update_policy");
 }
 
 export interface DnsLoggingStatus {

@@ -289,7 +289,7 @@ export const useUiStore = create<UiState>()(
       lookupErrorCode: null,
       currentPlatform: "windows" as PlatformId,
       enabledWorkspaces: null,
-      autoUpdateEnabled: true,
+      autoUpdateEnabled: false,
       defaultShowInfoPane: true,
       confirmTabClose: false,
       collectionProgress: null,
