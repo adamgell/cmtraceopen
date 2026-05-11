@@ -17,13 +17,14 @@ Download the latest release for your platform and run it. That's it — single f
 
 All releases are signed. The Windows executable is code-signed and the macOS app is notarized.
 
-Startup update checks are disabled by default. Users can opt in from Settings > Updates, or deploy the Windows NSIS `.exe` installer with `/DisableUpdateChecks` to force-disable startup update checks for that install context:
+Startup update checks are disabled by default. Users can opt in from Settings > Updates. Managed Windows deployments can force-disable all app update checks with either installer:
 
 ```powershell
 CMTrace-Open_*_x64-setup.exe /S /DisableUpdateChecks
+msiexec /i CMTrace-Open_<version>_x64.msi /qn DISABLEUPDATECHECKS=1
 ```
 
-This writes `DisableUpdateChecks=1` under `Software\CMTrace Open` in the install registry hive, so existing user preferences cannot re-enable startup checks on managed devices.
+The MSI option writes `HKLM\Software\CMTrace Open\DisableUpdateChecks=1` and survives uninstall or upgrade until an administrator removes it. The NSIS switch writes the same value under the selected install registry hive. Existing user preferences cannot re-enable update checks on managed devices while this policy is present.
 
 > **Note:** You do **not** need Node.js, Rust, or any development tools to run CMTrace Open. Just download and run.
 
