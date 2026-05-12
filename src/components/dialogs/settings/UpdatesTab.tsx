@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { tokens } from "@fluentui/react-components";
 import { getVersion } from "@tauri-apps/api/app";
 import { useUiStore } from "../../../stores/ui-store";
+import { getUpdatePolicy } from "../../../lib/commands";
 
 const SKIPPED_VERSION_KEY = "cmtraceopen-skipped-update-version";
 
@@ -27,13 +28,34 @@ export function UpdatesTab() {
 
   const [appVersion, setAppVersion] = useState<string>("...");
   const [skippedVersion, setSkippedVersion] = useState<string | null>(null);
+  const [updateChecksDisabledByPolicy, setUpdateChecksDisabledByPolicy] = useState(false);
 
   useEffect(() => {
+    let cancelled = false;
+
     getVersion()
-      .then(setAppVersion)
-      .catch(() => setAppVersion("unknown"));
+      .then((version) => {
+        if (!cancelled) setAppVersion(version);
+      })
+      .catch(() => {
+        if (!cancelled) setAppVersion("unknown");
+      });
+
+    getUpdatePolicy()
+      .then((policy) => {
+        if (!cancelled) {
+          setUpdateChecksDisabledByPolicy(policy.updateChecksDisabledByPolicy);
+        }
+      })
+      .catch((error) => {
+        console.warn("[updates-settings] failed to read update policy", error);
+      });
 
     setSkippedVersion(getSkippedVersion());
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const handleClearSkipped = () => {
@@ -71,15 +93,22 @@ export function UpdatesTab() {
           }}
         >
           <input
+            aria-label="Check for updates on startup"
             type="checkbox"
             checked={autoUpdateEnabled}
+            disabled={updateChecksDisabledByPolicy}
             onChange={(e) => setAutoUpdateEnabled(e.target.checked)}
-            style={{ marginTop: "2px", cursor: "pointer" }}
+            style={{
+              marginTop: "2px",
+              cursor: updateChecksDisabledByPolicy ? "not-allowed" : "pointer",
+            }}
           />
           <div>
             <div style={{ fontWeight: 600 }}>Check for updates on startup</div>
             <div style={{ fontSize: "11px", color: tokens.colorNeutralForeground3, marginTop: "2px" }}>
-              When enabled, CMTrace Open checks for new versions a few seconds after launch.
+              {updateChecksDisabledByPolicy
+                ? "Update checks are disabled by managed policy on this device."
+                : "When enabled, CMTrace Open checks for new versions a few seconds after launch."}
             </div>
           </div>
         </label>

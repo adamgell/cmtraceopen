@@ -33,6 +33,22 @@
   ],
   "msi": {
     "upgradeCode": "{E8F1A3B7-5C2D-4F6E-9A8B-1D3E5F7A9C2B}",
+    "properties": [
+      {
+        "name": "DISABLEUPDATECHECKS",
+        "value": "0"
+      }
+    ],
+    "customActions": {
+      "powershell": [
+        {
+          "filePath": "src-tauri\\installer\\set-disable-update-checks-policy.ps1",
+          "condition": "DISABLEUPDATECHECKS=\"1\" AND REMOVE<>\"ALL\"",
+          "sequence": "EndOfExecution",
+          "continueOnError": false
+        }
+      ]
+    },
     "installDialog": {
       "packageDescription": "Open-source CMTrace log viewer with built-in Intune diagnostics. Includes both the full and lite editions.",
       "publisherUrl": "https://github.com/adamgell/cmtraceopen"

@@ -11,11 +11,20 @@ Download the latest release for your platform and run it. That's it — single f
 
 | Platform | Download |
 |----------|----------|
-| Windows (x64) | [.msi installer](https://github.com/adamgell/CMTraceOpen/releases/latest) |
+| Windows (x64) | [.msi + NSIS .exe installers](https://github.com/adamgell/CMTraceOpen/releases/latest) |
 | macOS (Apple Silicon) | [.dmg](https://github.com/adamgell/CMTraceOpen/releases/latest) |
 | Linux (x64) | [.deb / .AppImage](https://github.com/adamgell/CMTraceOpen/releases/latest) |
 
 All releases are signed. The Windows executable is code-signed and the macOS app is notarized.
+
+Startup update checks are disabled by default. Users can opt in from Settings > Updates. Managed Windows deployments can force-disable all app update checks with either installer:
+
+```powershell
+CMTrace-Open_*_x64-setup.exe /S /DisableUpdateChecks
+msiexec /i CMTrace-Open_<version>_x64.msi /qn DISABLEUPDATECHECKS=1
+```
+
+The MSI option writes `HKLM\Software\CMTrace Open\DisableUpdateChecks=1` and survives uninstall or upgrade until an administrator removes it. The NSIS switch writes the same value under the selected install registry hive. Existing user preferences cannot re-enable update checks on managed devices while this policy is present.
 
 > **Note:** You do **not** need Node.js, Rust, or any development tools to run CMTrace Open. Just download and run.
 
@@ -59,7 +68,7 @@ See the [DSRegCmd troubleshooting guide](DSREGCMD_TROUBLESHOOTING.md) for a deta
 ## Quick Start
 
 1. **Download** the release for your platform from the [Releases page](https://github.com/adamgell/CMTraceOpen/releases/latest)
-2. **Run** the executable — no install required (or use the MSI on Windows)
+2. **Run** the executable — no install required (or use the Windows MSI/NSIS installer)
 3. **Open a log** — drag and drop a file, use File > Open, or use a source preset
 4. **Explore** — use Find (Ctrl+F), Filter, or switch to the Intune/DSRegCmd workspace
 

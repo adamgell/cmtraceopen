@@ -4,6 +4,7 @@ import { relaunch } from "@tauri-apps/plugin-process";
 import { getVersion } from "@tauri-apps/api/app";
 import { platform } from "@tauri-apps/plugin-os";
 import { useUiStore } from "../stores/ui-store";
+import { getUpdatePolicy } from "../lib/commands";
 
 const SKIPPED_VERSION_KEY = "cmtraceopen-skipped-update-version";
 const GITHUB_RELEASES_URL = "https://github.com/adamgell/cmtraceopen/releases/latest";
@@ -47,12 +48,32 @@ export function useUpdateChecker() {
       setIsChecking(true);
 
       try {
+        let updateChecksDisabledByPolicy = false;
+        try {
+          const policy = await getUpdatePolicy();
+          updateChecksDisabledByPolicy = policy.updateChecksDisabledByPolicy;
+        } catch (error) {
+          console.warn("[update-checker] failed to read update policy", error);
+        }
+
         const [currentVersion, currentPlatform] = await Promise.all([
           getVersion(),
           platform(),
         ]);
 
         const canAutoUpdate = currentPlatform !== "linux";
+
+        if (updateChecksDisabledByPolicy) {
+          const info: UpdateInfo = {
+            available: false,
+            currentVersion,
+            canAutoUpdate,
+            error: "Update checks are disabled by policy.",
+          };
+          setUpdateInfo(info);
+          return info;
+        }
+
         const update = await check();
 
         if (update) {
@@ -155,25 +176,42 @@ export function useUpdateChecker() {
     if (startupCheckDone.current) return;
     startupCheckDone.current = true;
 
-    const autoUpdateEnabled = useUiStore.getState().autoUpdateEnabled;
-    if (!autoUpdateEnabled) {
-      console.info("[update-checker] auto-update disabled, skipping startup check");
-      return;
-    }
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
 
-    const timer = setTimeout(async () => {
-      const info = await checkForUpdates();
-      if (info?.available && info.newVersion) {
-        const skipped = getSkippedVersion();
-        if (skipped === info.newVersion) {
-          console.info("[update-checker] skipping version", info.newVersion);
-          return;
-        }
-        useUiStore.getState().setShowUpdateDialog(true);
+    const scheduleStartupCheck = async () => {
+      const autoUpdateEnabled = useUiStore.getState().autoUpdateEnabled;
+      if (!autoUpdateEnabled) {
+        console.info("[update-checker] startup update checks disabled, skipping startup check");
+        return;
       }
-    }, STARTUP_CHECK_DELAY_MS);
 
-    return () => clearTimeout(timer);
+      if (cancelled) return;
+      timer = setTimeout(async () => {
+        try {
+          const info = await checkForUpdates();
+          if (info?.available && info.newVersion) {
+            const skipped = getSkippedVersion();
+            if (skipped === info.newVersion) {
+              console.info("[update-checker] skipping version", info.newVersion);
+              return;
+            }
+            useUiStore.getState().setShowUpdateDialog(true);
+          }
+        } catch (error) {
+          console.error("[update-checker] startup check failed", error);
+        }
+      }, STARTUP_CHECK_DELAY_MS);
+    };
+
+    void scheduleStartupCheck();
+
+    return () => {
+      cancelled = true;
+      if (timer) {
+        clearTimeout(timer);
+      }
+    };
   }, [checkForUpdates]);
 
   return {
