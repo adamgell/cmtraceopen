@@ -40,9 +40,17 @@ describe("findAdjacentSeverityEntryId", () => {
     expect(findAdjacentSeverityEntryId(entries, 4, "Error", "next")).toBe(2);
   });
 
+  it("wraps when navigating before the first matching severity", () => {
+    expect(findAdjacentSeverityEntryId(entries, 2, "Error", "previous")).toBe(4);
+  });
+
   it("starts at the first or last matching severity when no entry is selected", () => {
     expect(findAdjacentSeverityEntryId(entries, null, "Error", "next")).toBe(2);
     expect(findAdjacentSeverityEntryId(entries, null, "Error", "previous")).toBe(4);
+  });
+
+  it("returns null when entries are empty", () => {
+    expect(findAdjacentSeverityEntryId([], null, "Error", "next")).toBeNull();
   });
 
   it("returns null when the severity is not present", () => {
