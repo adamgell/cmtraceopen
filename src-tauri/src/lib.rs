@@ -1,5 +1,6 @@
 #[cfg(feature = "collector")]
 pub mod collector;
+mod app_logging;
 mod commands;
 mod constants;
 #[cfg(feature = "dsregcmd")]
@@ -59,6 +60,10 @@ pub fn run() {
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_process::init())
         .setup(|app| {
+            if let Err(error) = app_logging::init(app) {
+                eprintln!("failed to initialize CMTrace Open file logging: {error}");
+            }
+
             #[cfg(desktop)]
             app.handle()
                 .plugin(tauri_plugin_updater::Builder::new().build())?;
