@@ -21,14 +21,18 @@ impl Log for FileLogger {
         }
 
         if let Ok(mut file) = self.file.lock() {
-            let _ = writeln!(
+            if let Err(error) = writeln!(
                 file,
                 "{} {:<5} {} - {}",
                 Local::now().format("%Y-%m-%dT%H:%M:%S%.3f%:z"),
                 record.level(),
                 record.target(),
                 record.args()
-            );
+            ) {
+                eprintln!("failed to write CMTrace Open log entry: {error}");
+            }
+        } else {
+            eprintln!("failed to lock CMTrace Open log file");
         }
     }
 

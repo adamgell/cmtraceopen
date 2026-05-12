@@ -265,6 +265,7 @@ async function loadFolderProgressive(
   const aggregateFiles: import("../types/log").AggregateParsedFileResult[] = [];
   const parserKinds: ParserKind[] = [];
   let totalLines = 0;
+  let nextEntryId = 0;
 
   const totalBatches = Math.ceil(paths.length / BATCH_SIZE);
   console.info(`[log-source] starting batched parse: ${totalFiles} files in ${totalBatches} batches of ${BATCH_SIZE}`);
@@ -298,7 +299,8 @@ async function loadFolderProgressive(
       });
 
       for (let j = 0; j < result.entries.length; j++) {
-        allEntries.push({ ...result.entries[j], id: allEntries.length });
+        allEntries.push({ ...result.entries[j], id: nextEntryId });
+        nextEntryId++;
       }
     }
   }
