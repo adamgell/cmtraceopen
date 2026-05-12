@@ -188,14 +188,18 @@ export function useUpdateChecker() {
 
       if (cancelled) return;
       timer = setTimeout(async () => {
-        const info = await checkForUpdates();
-        if (info?.available && info.newVersion) {
-          const skipped = getSkippedVersion();
-          if (skipped === info.newVersion) {
-            console.info("[update-checker] skipping version", info.newVersion);
-            return;
+        try {
+          const info = await checkForUpdates();
+          if (info?.available && info.newVersion) {
+            const skipped = getSkippedVersion();
+            if (skipped === info.newVersion) {
+              console.info("[update-checker] skipping version", info.newVersion);
+              return;
+            }
+            useUiStore.getState().setShowUpdateDialog(true);
           }
-          useUiStore.getState().setShowUpdateDialog(true);
+        } catch (error) {
+          console.error("[update-checker] startup check failed", error);
         }
       }, STARTUP_CHECK_DELAY_MS);
     };

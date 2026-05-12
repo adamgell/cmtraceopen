@@ -43,7 +43,7 @@
       "powershell": [
         {
           "filePath": "src-tauri\\installer\\set-disable-update-checks-policy.ps1",
-          "condition": "DISABLEUPDATECHECKS=\"1\" AND NOT REMOVE~=\"ALL\"",
+          "condition": "DISABLEUPDATECHECKS=\"1\" AND REMOVE<>\"ALL\"",
           "sequence": "EndOfExecution",
           "continueOnError": false
         }
