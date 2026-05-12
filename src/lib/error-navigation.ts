@@ -10,16 +10,18 @@ export function findAdjacentSeverityEntryId(
 ): number | null {
   if (entries.length === 0) return null;
 
-  const step = direction === "next" ? 1 : -1;
-  const fallbackIndex = direction === "next" ? -1 : entries.length;
+  const indexIncrement = direction === "next" ? 1 : -1;
+  const startIndexWhenUnselected = direction === "next" ? -1 : entries.length;
   const selectedIndex =
     selectedId === null
-      ? fallbackIndex
+      ? startIndexWhenUnselected
       : entries.findIndex((entry) => entry.id === selectedId);
-  const startIndex = selectedIndex >= 0 ? selectedIndex : fallbackIndex;
+  const startIndex =
+    selectedIndex >= 0 ? selectedIndex : startIndexWhenUnselected;
 
   for (let offset = 1; offset <= entries.length; offset++) {
-    const index = (startIndex + step * offset + entries.length) % entries.length;
+    const index =
+      (startIndex + indexIncrement * offset + entries.length) % entries.length;
     if (entries[index].severity === severity) {
       return entries[index].id;
     }

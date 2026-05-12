@@ -664,9 +664,11 @@ export function LogListView({ dataSource }: { dataSource?: LogListDataSource } =
                   : tokens.colorNeutralForegroundDisabled,
             }}
           />
-          {visibleErrorCount === 1
-            ? "1 error"
-            : `${visibleErrorCount} errors`}
+          <span aria-live="polite">
+            {visibleErrorCount === 1
+              ? "1 error"
+              : `${visibleErrorCount} errors`}
+          </span>
         </span>
         <Button
           appearance="subtle"
