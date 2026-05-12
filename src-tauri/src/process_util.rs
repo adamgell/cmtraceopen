@@ -28,3 +28,21 @@ pub fn apply_hidden_window(cmd: &mut Command) {
 
 #[cfg(not(target_os = "windows"))]
 pub fn apply_hidden_window(_cmd: &mut Command) {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hidden_command_builds_requested_program() {
+        let cmd = hidden_command("powershell.exe");
+
+        assert_eq!(cmd.get_program(), "powershell.exe");
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn hidden_window_flag_matches_win32_create_no_window() {
+        assert_eq!(CREATE_NO_WINDOW, 0x0800_0000);
+    }
+}
