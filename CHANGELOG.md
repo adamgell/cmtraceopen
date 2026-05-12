@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.3.2] - 2026-05-11
+
+### Added
+
+- **Managed update-check controls** (#187): Startup update checks are now disabled by default and can be enabled from Settings > Updates. Managed Windows deployments can force-disable all app update checks with either supported installer:
+  - NSIS: `CMTrace-Open_*_x64-setup.exe /S /DisableUpdateChecks`
+  - MSI: `msiexec /i CMTrace-Open_<version>_x64.msi /qn DISABLEUPDATECHECKS=1`
+
+### Fixed
+
+- **Secure Boot scan console flash** (#185): Secure Boot PowerShell checks now run through the hidden-process helper so the scan no longer flashes a console window.
+
 ## [1.3.1] - 2026-05-06
 
 ### Fixed
