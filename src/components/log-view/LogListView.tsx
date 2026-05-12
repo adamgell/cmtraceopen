@@ -6,7 +6,7 @@ import {
   useState,
   useLayoutEffect,
 } from "react";
-import { tokens } from "@fluentui/react-components";
+import { Button, tokens } from "@fluentui/react-components";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useLogStore } from "../../stores/log-store";
 import { useUiStore } from "../../stores/ui-store";
@@ -19,7 +19,11 @@ import { useMarkerStore } from "../../stores/marker-store";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { formatLogEntryTimestamp } from "../../lib/date-time-format";
 import { useContextMenu } from "../../hooks/use-context-menu";
-import { ArrowBidirectionalLeftRightRegular } from "@fluentui/react-icons";
+import {
+  ArrowBidirectionalLeftRightRegular,
+  ArrowDownRegular,
+  ArrowUpRegular,
+} from "@fluentui/react-icons";
 import {
   applyColumnOrder,
   getVisibleColumns,
@@ -42,6 +46,7 @@ import {
   LOG_UI_FONT_FAMILY,
 } from "../../lib/log-accessibility";
 import type { LogListDataSource } from "./log-list-data-source";
+import { findAdjacentSeverityEntryId } from "../../lib/error-navigation";
 
 const defaultLogStoreDataSource: LogListDataSource = {
   useEntries: () => useLogStore((s) => s.entries),
@@ -588,6 +593,27 @@ export function LogListView({ dataSource }: { dataSource?: LogListDataSource } =
     setColumnWidths(updates);
   }, [visibleColumns, displayEntries, logListFontSize, listMetrics, setColumnWidths]);
 
+  const visibleErrorCount = useMemo(
+    () => displayEntries.filter((entry) => entry.severity === "Error").length,
+    [displayEntries]
+  );
+
+  const handleErrorNavigation = useCallback(
+    (direction: "previous" | "next") => {
+      const targetId = findAdjacentSeverityEntryId(
+        displayEntries,
+        selectedId,
+        "Error",
+        direction
+      );
+      if (targetId !== null) {
+        selectEntry(targetId);
+        parentRef.current?.focus();
+      }
+    },
+    [displayEntries, selectedId, selectEntry]
+  );
+
   const activeRowDomId =
     selectedEntryIndex >= 0
       ? `log-list-row-${displayEntries[selectedEntryIndex].id}`
@@ -602,6 +628,66 @@ export function LogListView({ dataSource }: { dataSource?: LogListDataSource } =
         overflow: "hidden",
       }}
     >
+      <div
+        aria-label="Error navigation"
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "flex-end",
+          gap: 6,
+          padding: "4px 8px",
+          backgroundColor: tokens.colorNeutralBackground2,
+          borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
+          flexShrink: 0,
+          fontFamily: LOG_UI_FONT_FAMILY,
+          fontSize: 12,
+        }}
+      >
+        <span
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 6,
+            color: tokens.colorNeutralForeground2,
+            marginRight: 2,
+          }}
+        >
+          <span
+            aria-hidden="true"
+            style={{
+              width: 8,
+              height: 8,
+              borderRadius: "50%",
+              backgroundColor:
+                visibleErrorCount > 0
+                  ? tokens.colorPaletteRedForeground1
+                  : tokens.colorNeutralForegroundDisabled,
+            }}
+          />
+          {visibleErrorCount === 1
+            ? "1 error"
+            : `${visibleErrorCount} errors`}
+        </span>
+        <Button
+          appearance="subtle"
+          size="small"
+          icon={<ArrowUpRegular />}
+          disabled={visibleErrorCount === 0}
+          onClick={() => handleErrorNavigation("previous")}
+        >
+          Previous error
+        </Button>
+        <Button
+          appearance="subtle"
+          size="small"
+          icon={<ArrowDownRegular />}
+          disabled={visibleErrorCount === 0}
+          onClick={() => handleErrorNavigation("next")}
+        >
+          Next error
+        </Button>
+      </div>
+
       {/* Column header with resize handles and drag-to-reorder */}
       <div
         style={{
