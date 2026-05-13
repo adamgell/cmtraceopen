@@ -368,9 +368,9 @@ jobs:
           dmg_path="$(sed -n '1p' "$dmgs_file")"
           staged_dmg="$artifact_dir/${ASSET_PREFIX}_macOS-arm64.dmg"
 
+          hdiutil verify "$dmg_path"
           codesign --verify --deep --strict --verbose=2 "$app_path"
           xcrun stapler validate "$app_path"
-          xcrun stapler validate "$dmg_path"
           spctl -a -vvv -t install "$app_path"
 
           cp "$dmg_path" "$staged_dmg"
@@ -449,7 +449,7 @@ jobs:
 
           ### Artifacts
           - Windows x64 and arm64: signed MSI, signed NSIS setup EXE, signed full standalone EXE, signed Lite standalone EXE
-          - macOS arm64: signed and notarized DMG
+          - macOS arm64: DMG containing a signed and notarized app
           EOF
 
           if gh release view "$TAG_NAME" >/dev/null 2>&1; then
