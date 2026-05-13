@@ -346,22 +346,26 @@ jobs:
           artifact_dir="$PWD/nightly-artifacts"
           mkdir -p "$artifact_dir"
 
-          mapfile -t apps < <(find "$bundle_root/macos" -maxdepth 1 -type d -name "*.app" -print)
-          if [ "${#apps[@]}" -ne 1 ]; then
-            printf 'Expected exactly one .app bundle under %s/macos, found %s\n' "$bundle_root" "${#apps[@]}" >&2
-            printf '%s\n' "${apps[@]}" >&2
+          apps_file="$(mktemp)"
+          find "$bundle_root/macos" -maxdepth 1 -type d -name "*.app" -print > "$apps_file"
+          app_count="$(wc -l < "$apps_file" | tr -d ' ')"
+          if [ "$app_count" -ne 1 ]; then
+            printf 'Expected exactly one .app bundle under %s/macos, found %s\n' "$bundle_root" "$app_count" >&2
+            cat "$apps_file" >&2
             exit 1
           fi
 
-          mapfile -t dmgs < <(find "$bundle_root/dmg" -type f -name "*.dmg" -print)
-          if [ "${#dmgs[@]}" -ne 1 ]; then
-            printf 'Expected exactly one DMG under %s/dmg, found %s\n' "$bundle_root" "${#dmgs[@]}" >&2
-            printf '%s\n' "${dmgs[@]}" >&2
+          dmgs_file="$(mktemp)"
+          find "$bundle_root/dmg" -type f -name "*.dmg" -print > "$dmgs_file"
+          dmg_count="$(wc -l < "$dmgs_file" | tr -d ' ')"
+          if [ "$dmg_count" -ne 1 ]; then
+            printf 'Expected exactly one DMG under %s/dmg, found %s\n' "$bundle_root" "$dmg_count" >&2
+            cat "$dmgs_file" >&2
             exit 1
           fi
 
-          app_path="${apps[0]}"
-          dmg_path="${dmgs[0]}"
+          app_path="$(sed -n '1p' "$apps_file")"
+          dmg_path="$(sed -n '1p' "$dmgs_file")"
           staged_dmg="$artifact_dir/${ASSET_PREFIX}_macOS-arm64.dmg"
 
           codesign --verify --deep --strict --verbose=2 "$app_path"
