@@ -213,7 +213,7 @@ jobs:
         id: verify_msi
         shell: pwsh
         run: |
-          $msiPath = Join-Path $PWD "nightly-artifacts\$($env:ASSET_PREFIX)_${{ matrix.artifact_suffix }}.msi"
+          $msiPath = Join-Path $PWD "release-artifacts\$($env:ASSET_PREFIX)_${{ matrix.artifact_suffix }}.msi"
           if (-not (Test-Path $msiPath)) {
             throw "Expected MSI not found at $msiPath"
           }
