@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { getIdentifier, getName, getTauriVersion, getVersion } from "@tauri-apps/api/app";
 import { tokens } from "@fluentui/react-components";
+import { getUpdateChannel, getUpdateChannelLabel } from "../../lib/update-channel";
 
 interface AboutDialogProps {
   isOpen: boolean;
@@ -12,6 +13,8 @@ export function AboutDialog({ isOpen, onClose }: AboutDialogProps) {
   const [appVersion, setAppVersion] = useState("0.2.0");
   const [tauriVersion, setTauriVersion] = useState("-");
   const [identifier, setIdentifier] = useState("com.cmtrace.open");
+  const updateChannel = getUpdateChannel(appVersion);
+  const updateChannelLabel = getUpdateChannelLabel(updateChannel);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -95,8 +98,43 @@ export function AboutDialog({ isOpen, onClose }: AboutDialogProps) {
         >
           {appName}
         </div>
-        <div style={{ fontSize: "12px", color: tokens.colorNeutralForeground3, marginBottom: "10px" }}>
-          Version {appVersion}
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "8px",
+            flexWrap: "wrap",
+            fontSize: "12px",
+            color: tokens.colorNeutralForeground3,
+            marginBottom: "10px",
+          }}
+        >
+          <span>Version {appVersion}</span>
+          <span
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              padding: "1px 7px",
+              border: `1px solid ${
+                updateChannel === "nightly"
+                  ? tokens.colorPaletteYellowBorderActive
+                  : tokens.colorNeutralStroke1
+              }`,
+              borderRadius: "999px",
+              background:
+                updateChannel === "nightly"
+                  ? tokens.colorPaletteYellowBackground2
+                  : tokens.colorNeutralBackground3,
+              color:
+                updateChannel === "nightly"
+                  ? tokens.colorPaletteYellowForeground2
+                  : tokens.colorNeutralForeground2,
+              fontSize: "11px",
+              fontWeight: 700,
+            }}
+          >
+            {updateChannelLabel}
+          </span>
         </div>
 
         <div style={{ fontSize: "12px", marginBottom: "10px", lineHeight: 1.5 }}>
@@ -126,7 +164,7 @@ export function AboutDialog({ isOpen, onClose }: AboutDialogProps) {
         </div>
 
         <div style={{ fontSize: "11px", color: tokens.colorNeutralForeground3, marginBottom: "16px" }}>
-          Project repository: github.com/adamgell/homelab-code
+          Project repository: github.com/adamgell/cmtraceopen
         </div>
 
         <div style={{ display: "flex", justifyContent: "flex-end" }}>

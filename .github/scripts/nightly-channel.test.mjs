@@ -8,6 +8,7 @@ import {
   NIGHTLY_UPDATER_ENDPOINT,
   applyNightlyChannel,
   buildNightlyManifest,
+  deriveNightlyMsiVersion,
   isMainModule,
 } from "./nightly-channel.mjs";
 
@@ -65,7 +66,19 @@ async function withTempRepo(testFn) {
       JSON.stringify(
         {
           packageName: "CMTrace Open",
+          installDir: "%ProgramFiles%\\CMTrace Open",
+          fileSystemEntries: [
+            {
+              sourcePath: "%FULL_EXE_PATH%",
+              targetPath: "$.installDir\\cmtrace-open.exe",
+            },
+            {
+              sourcePath: "%LITE_EXE_PATH%",
+              targetPath: "$.installDir\\cmtrace-open-lite.exe",
+            },
+          ],
           msi: {
+            upgradeCode: "{E8F1A3B7-5C2D-4F6E-9A8B-1D3E5F7A9C2B}",
             installDialog: {
               packageDescription:
                 "Open-source CMTrace log viewer with built-in Intune diagnostics.",
@@ -138,13 +151,19 @@ describe("nightly channel workflow helpers", () => {
 
       assert.equal(packageJson.version, "1.3.2-nightly.20260514.42.gabc123def456");
       assert.equal(tauriConfig.productName, "CMTrace Open Nightly");
+      assert.equal(tauriConfig.mainBinaryName, "cmtrace-open-nightly");
       assert.equal(tauriConfig.version, "1.3.2-nightly.20260514.42.gabc123def456");
+      assert.equal(tauriConfig.identifier, "com.cmtrace.open.nightly");
       assert.equal(tauriConfig.app.windows[0].title, "CMTrace Open Nightly");
       assert.deepEqual(tauriConfig.plugins.updater.endpoints, [NIGHTLY_UPDATER_ENDPOINT]);
-      assert.equal(liteTauriConfig.productName, "CMTrace Open Nightly Lite");
-      assert.equal(liteTauriConfig.app.windows[0].title, "CMTrace Open Nightly Lite");
+      assert.equal(liteTauriConfig.productName, "CMTrace Open Lite Nightly");
+      assert.equal(liteTauriConfig.mainBinaryName, "cmtrace-open-lite-nightly");
+      assert.equal(liteTauriConfig.identifier, "com.cmtrace.open.nightly");
+      assert.equal(liteTauriConfig.app.windows[0].title, "CMTrace Open Lite Nightly");
       assert.equal(installerPackage.packageName, "CMTrace Open Nightly");
+      assert.equal(installerPackage.installDir, "%ProgramFiles%\\CMTrace Open Nightly");
       assert.equal(installerPackage.msi.packageName, "CMTrace Open Nightly");
+      assert.equal(installerPackage.msi.upgradeCode, "{7B16F0D6-2B7B-4D4B-9F71-4F1A9F64C0E3}");
       assert.match(
         installerPackage.msi.installDialog.packageDescription,
         /Nightly signed build 1\.3\.2-nightly\.20260514\.42\.gabc123def456/
@@ -154,9 +173,31 @@ describe("nightly channel workflow helpers", () => {
         /nightly channel/
       );
       assert.equal(installerPackage.shortcuts[0].name, "CMTrace Open Nightly");
-      assert.equal(installerPackage.shortcuts[1].name, "CMTrace Open Nightly Lite");
+      assert.equal(installerPackage.shortcuts[0].target, "$.installDir\\cmtrace-open-nightly.exe");
+      assert.equal(installerPackage.shortcuts[1].name, "CMTrace Open Lite Nightly");
+      assert.equal(
+        installerPackage.shortcuts[1].target,
+        "$.installDir\\cmtrace-open-lite-nightly.exe"
+      );
+      assert.equal(
+        installerPackage.fileSystemEntries[0].targetPath,
+        "$.installDir\\cmtrace-open-nightly.exe"
+      );
+      assert.equal(
+        installerPackage.fileSystemEntries[1].targetPath,
+        "$.installDir\\cmtrace-open-lite-nightly.exe"
+      );
       assert.match(cargoToml, /version = "1\.3\.2-nightly\.20260514\.42\.gabc123def456"/);
     });
+  });
+
+  it("derives an increasing MSI ProductVersion for nightly major upgrades", () => {
+    assert.equal(deriveNightlyMsiVersion("1.3.2", "42"), "1.3.44");
+    assert.equal(deriveNightlyMsiVersion("1.3.2", "1"), "1.3.3");
+    assert.throws(
+      () => deriveNightlyMsiVersion("1.3.2", "70000"),
+      /MSI nightly build number must be between/
+    );
   });
 
   it("builds a Tauri updater manifest for nightly assets", async () => {

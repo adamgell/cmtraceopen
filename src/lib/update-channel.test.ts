@@ -10,7 +10,7 @@ describe("update channel metadata", () => {
     expect(getUpdateChannel("1.3.2-nightly.20260514.42.gabc123def456")).toBe("nightly");
   });
 
-  it("treats regular versions as the stable channel", () => {
+  it("treats regular versions as the main channel", () => {
     expect(getUpdateChannel("1.3.2")).toBe("stable");
   });
 
@@ -21,7 +21,7 @@ describe("update channel metadata", () => {
   });
 
   it("uses human-readable channel labels", () => {
-    expect(getUpdateChannelLabel("stable")).toBe("Stable channel");
+    expect(getUpdateChannelLabel("stable")).toBe("Main channel");
     expect(getUpdateChannelLabel("nightly")).toBe("Nightly channel");
   });
 });

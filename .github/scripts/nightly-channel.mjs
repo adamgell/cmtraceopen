@@ -11,8 +11,28 @@ const DEFAULT_LITE_TAURI_CONFIG_PATH = "src-tauri/tauri.lite.conf.json";
 const DEFAULT_CARGO_TOML_PATH = "src-tauri/Cargo.toml";
 const DEFAULT_INSTALLER_PACKAGE_PATH = "src-tauri/installer/package.signed.json";
 
-const NIGHTLY_PRODUCT_NAME = "CMTrace Open Nightly";
-const NIGHTLY_LITE_PRODUCT_NAME = "CMTrace Open Nightly Lite";
+export const NIGHTLY_PRODUCT_NAME = "CMTrace Open Nightly";
+export const NIGHTLY_LITE_PRODUCT_NAME = "CMTrace Open Lite Nightly";
+export const NIGHTLY_IDENTIFIER = "com.cmtrace.open.nightly";
+export const NIGHTLY_INSTALL_DIR = "%ProgramFiles%\\CMTrace Open Nightly";
+export const NIGHTLY_UPGRADE_CODE = "{7B16F0D6-2B7B-4D4B-9F71-4F1A9F64C0E3}";
+
+const NIGHTLY_FULL_EXE_NAME = "cmtrace-open-nightly.exe";
+const NIGHTLY_LITE_EXE_NAME = "cmtrace-open-lite-nightly.exe";
+const NIGHTLY_FULL_BINARY_NAME = "cmtrace-open-nightly";
+const NIGHTLY_LITE_BINARY_NAME = "cmtrace-open-lite-nightly";
+const INSTALLER_TARGETS = [
+  {
+    productName: NIGHTLY_LITE_PRODUCT_NAME,
+    stableExeName: "cmtrace-open-lite.exe",
+    nightlyExeName: NIGHTLY_LITE_EXE_NAME,
+  },
+  {
+    productName: NIGHTLY_PRODUCT_NAME,
+    stableExeName: "cmtrace-open.exe",
+    nightlyExeName: NIGHTLY_FULL_EXE_NAME,
+  },
+];
 
 function requireValue(name, value) {
   if (!value) {
@@ -26,6 +46,33 @@ function assertNightlyVersion(version) {
   if (!/^\d+\.\d+\.\d+-nightly\.\d{8}\.\d+\.[0-9a-z-]+$/i.test(version)) {
     throw new Error(`Nightly version must be a semver prerelease, got ${version}`);
   }
+}
+
+export function deriveNightlyMsiVersion(baseVersion, runNumber) {
+  const match = /^(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/.exec(baseVersion);
+  if (!match) {
+    throw new Error(`Base version must be semver-like for MSI ProductVersion, got ${baseVersion}`);
+  }
+
+  const major = Number(match[1]);
+  const minor = Number(match[2]);
+  const patch = Number(match[3]);
+  const run = Number(runNumber);
+
+  if (![major, minor, patch, run].every(Number.isInteger) || run < 1) {
+    throw new Error(`Nightly run number must be a positive integer, got ${runNumber}`);
+  }
+
+  if (major > 255 || minor > 255) {
+    throw new Error(`MSI major and minor versions must be between 0 and 255, got ${baseVersion}`);
+  }
+
+  const build = patch + run;
+  if (build < 1 || build > 65535) {
+    throw new Error(`MSI nightly build number must be between 1 and 65535, got ${build}`);
+  }
+
+  return `${major}.${minor}.${build}`;
 }
 
 async function readJson(filePath) {
@@ -97,20 +144,46 @@ function nightlyInstallerDescription(version) {
   ].join(" ");
 }
 
+function normalizedWindowsPath(value) {
+  return String(value ?? "").replaceAll("/", "\\").toLowerCase();
+}
+
+function resolveInstallerTarget(value) {
+  const normalizedValue = normalizedWindowsPath(value);
+  return INSTALLER_TARGETS.find(
+    ({ stableExeName, nightlyExeName }) =>
+      normalizedValue.endsWith(stableExeName) || normalizedValue.endsWith(nightlyExeName)
+  );
+}
+
+function installerTargetPath(target) {
+  return `$.installDir\\${target.nightlyExeName}`;
+}
+
 function applyNightlyInstallerMetadata(installerPackage, version) {
   installerPackage.packageName = NIGHTLY_PRODUCT_NAME;
+  installerPackage.installDir = NIGHTLY_INSTALL_DIR;
   installerPackage.msi ??= {};
   installerPackage.msi.packageName = NIGHTLY_PRODUCT_NAME;
+  installerPackage.msi.upgradeCode = NIGHTLY_UPGRADE_CODE;
   installerPackage.msi.installDialog ??= {};
   installerPackage.msi.installDialog.packageDescription = nightlyInstallerDescription(version);
 
+  if (Array.isArray(installerPackage.fileSystemEntries)) {
+    for (const entry of installerPackage.fileSystemEntries) {
+      const target = resolveInstallerTarget(entry.targetPath);
+      if (target) {
+        entry.targetPath = installerTargetPath(target);
+      }
+    }
+  }
+
   if (Array.isArray(installerPackage.shortcuts)) {
     for (const shortcut of installerPackage.shortcuts) {
-      const target = shortcut.target ?? "";
-      if (target.endsWith("cmtrace-open-lite.exe")) {
-        shortcut.name = NIGHTLY_LITE_PRODUCT_NAME;
-      } else if (target.endsWith("cmtrace-open.exe")) {
-        shortcut.name = NIGHTLY_PRODUCT_NAME;
+      const target = resolveInstallerTarget(shortcut.target);
+      if (target) {
+        shortcut.name = target.productName;
+        shortcut.target = installerTargetPath(target);
       }
     }
   }
@@ -140,7 +213,9 @@ export async function applyNightlyChannel({
 
   const tauriConfig = await readJson(tauriPath);
   tauriConfig.productName = NIGHTLY_PRODUCT_NAME;
+  tauriConfig.mainBinaryName = NIGHTLY_FULL_BINARY_NAME;
   tauriConfig.version = version;
+  tauriConfig.identifier = NIGHTLY_IDENTIFIER;
   setWindowTitles(tauriConfig, NIGHTLY_PRODUCT_NAME);
   tauriConfig.plugins ??= {};
   tauriConfig.plugins.updater ??= {};
@@ -150,6 +225,8 @@ export async function applyNightlyChannel({
   const liteTauriConfig = await readJsonIfExists(liteTauriPath);
   if (liteTauriConfig) {
     liteTauriConfig.productName = NIGHTLY_LITE_PRODUCT_NAME;
+    liteTauriConfig.mainBinaryName = NIGHTLY_LITE_BINARY_NAME;
+    liteTauriConfig.identifier = NIGHTLY_IDENTIFIER;
     setWindowTitles(liteTauriConfig, NIGHTLY_LITE_PRODUCT_NAME);
     await writeJson(liteTauriPath, liteTauriConfig);
   }
@@ -258,6 +335,18 @@ async function main() {
     return;
   }
 
+  if (command === "msi-version") {
+    const baseVersion = process.env.BASE_VERSION ?? process.argv[3];
+    const runNumber = process.env.GITHUB_RUN_NUMBER ?? process.argv[4];
+    console.log(
+      deriveNightlyMsiVersion(
+        requireValue("BASE_VERSION", baseVersion),
+        requireValue("GITHUB_RUN_NUMBER", runNumber)
+      )
+    );
+    return;
+  }
+
   if (command === "manifest") {
     await buildNightlyManifest({
       assetsDir: process.env.RELEASE_ASSETS_DIR ?? "release-assets",
@@ -271,7 +360,7 @@ async function main() {
     return;
   }
 
-  throw new Error("Usage: node .github/scripts/nightly-channel.mjs <apply|manifest>");
+  throw new Error("Usage: node .github/scripts/nightly-channel.mjs <apply|manifest|msi-version>");
 }
 
 export function isMainModule(importMetaUrl, argvPath = process.argv[1]) {

@@ -27,6 +27,7 @@ jobs:
       base_version: ${{ steps.meta.outputs.base_version }}
       build_id: ${{ steps.meta.outputs.build_id }}
       display_version: ${{ steps.meta.outputs.display_version }}
+      msi_version: ${{ steps.meta.outputs.msi_version }}
       release_title: ${{ steps.meta.outputs.release_title }}
       run_url: ${{ steps.meta.outputs.run_url }}
     steps:
@@ -44,6 +45,7 @@ jobs:
           build_id="${date_utc}.${GITHUB_RUN_NUMBER}.${short_sha}"
           asset_prefix="CMTrace-Open_Nightly_${date_utc}_${GITHUB_RUN_NUMBER}_${short_sha}"
           display_version="${base_version}-nightly.${date_utc}.${GITHUB_RUN_NUMBER}.g${short_sha}"
+          msi_version="$(BASE_VERSION="$base_version" node .github/scripts/nightly-channel.mjs msi-version)"
           release_title="CMTrace Open Nightly ${build_id}"
           run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
 
@@ -52,6 +54,7 @@ jobs:
             echo "base_version=$base_version"
             echo "build_id=$build_id"
             echo "display_version=$display_version"
+            echo "msi_version=$msi_version"
             echo "release_title=$release_title"
             echo "run_url=$run_url"
           } >> "$GITHUB_OUTPUT"
@@ -80,7 +83,7 @@ jobs:
       ASSET_PREFIX: ${{ needs.metadata.outputs.asset_prefix }}
       BUILD_ID: ${{ needs.metadata.outputs.build_id }}
       DISPLAY_VERSION: ${{ needs.metadata.outputs.display_version }}
-      MSI_VERSION: ${{ needs.metadata.outputs.base_version }}
+      MSI_VERSION: ${{ needs.metadata.outputs.msi_version }}
 
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -133,7 +136,7 @@ jobs:
         shell: pwsh
         run: |
           $releaseDir = Join-Path $PWD "src-tauri\target\${{ matrix.rust_target }}\release"
-          Copy-Item (Join-Path $releaseDir "cmtrace-open.exe") (Join-Path $PWD "full-edition.exe") -Force
+          Copy-Item (Join-Path $releaseDir "cmtrace-open-nightly.exe") (Join-Path $PWD "full-edition.exe") -Force
 
       - name: Build lite edition (standalone EXE)
         run: npx tauri build --target ${{ matrix.rust_target }} --no-bundle --config src-tauri/tauri.lite.conf.json -- --no-default-features
@@ -153,7 +156,7 @@ jobs:
           Copy-Item (Join-Path $PWD "full-edition.exe") $stagedFullExe -Force
 
           $stagedLiteExe = Join-Path $artifactDir "$($litePrefix)_${{ matrix.artifact_suffix }}.exe"
-          Copy-Item (Join-Path $releaseDir "cmtrace-open.exe") $stagedLiteExe -Force
+          Copy-Item (Join-Path $releaseDir "cmtrace-open-lite-nightly.exe") $stagedLiteExe -Force
 
           $nsisCandidates = Get-ChildItem -Path $bundleNsisDir -Filter *-setup.exe -File -Recurse
           if ($nsisCandidates.Count -ne 1) {
@@ -229,20 +232,51 @@ jobs:
           $installerPackage = Get-Content src-tauri\installer\package.signed.json -Raw | ConvertFrom-Json
           $packageName = [string]$installerPackage.packageName
           $packageDescription = [string]$installerPackage.msi.installDialog.packageDescription
+          $installDir = [string]$installerPackage.installDir
+          $upgradeCode = [string]$installerPackage.msi.upgradeCode
+          $fileTargets = @($installerPackage.fileSystemEntries | ForEach-Object { [string]$_.targetPath })
+          $shortcutNames = @($installerPackage.shortcuts | ForEach-Object { [string]$_.name })
+          $shortcutTargets = @($installerPackage.shortcuts | ForEach-Object { [string]$_.target })
 
           if ($packageName -ne "CMTrace Open Nightly") {
             throw "Nightly MSI packageName was not applied. Got: $packageName"
+          }
+
+          if ($installDir -ne "%ProgramFiles%\CMTrace Open Nightly") {
+            throw "Nightly MSI installDir should isolate the nightly channel. Got: $installDir"
+          }
+
+          if ($upgradeCode -ne "{7B16F0D6-2B7B-4D4B-9F71-4F1A9F64C0E3}") {
+            throw "Nightly MSI upgradeCode should be separate from the main channel. Got: $upgradeCode"
           }
 
           if (-not $packageDescription.Contains($env:DISPLAY_VERSION)) {
             throw "Nightly MSI packageDescription does not contain $env:DISPLAY_VERSION. Got: $packageDescription"
           }
 
+          foreach ($expected in @('$.installDir\cmtrace-open-nightly.exe', '$.installDir\cmtrace-open-lite-nightly.exe')) {
+            if ($fileTargets -notcontains $expected) {
+              throw "Nightly MSI file target missing $expected. Got: $($fileTargets -join ', ')"
+            }
+
+            if ($shortcutTargets -notcontains $expected) {
+              throw "Nightly MSI shortcut target missing $expected. Got: $($shortcutTargets -join ', ')"
+            }
+          }
+
+          foreach ($expected in @('CMTrace Open Nightly', 'CMTrace Open Lite Nightly')) {
+            if ($shortcutNames -notcontains $expected) {
+              throw "Nightly MSI shortcut name missing $expected. Got: $($shortcutNames -join ', ')"
+            }
+          }
+
           mpdev build src-tauri\installer\package.signed.json `
             --working-dir "${{ github.workspace }}" `
             --properties `
               "$.packageName=$packageName" `
+              "$.installDir=$installDir" `
               "$.msi.packageName=$packageName" `
+              "$.msi.upgradeCode=$upgradeCode" `
               "$.msi.installDialog.packageDescription=$packageDescription" `
               "$.version=$env:MSI_VERSION" `
               "$.outputFileName=$($env:ASSET_PREFIX)_${{ matrix.artifact_suffix }}" `
@@ -286,21 +320,94 @@ jobs:
             return $record.GetType().InvokeMember("StringData", "GetProperty", $null, $record, 1)
           }
 
+          function Get-MsiColumnValues {
+            param(
+              [Parameter(Mandatory = $true)]
+              [string] $Path,
+              [Parameter(Mandatory = $true)]
+              [string] $Table,
+              [Parameter(Mandatory = $true)]
+              [string] $Column
+            )
+
+            $installer = New-Object -ComObject WindowsInstaller.Installer
+            $database = $installer.GetType().InvokeMember(
+              "OpenDatabase",
+              "InvokeMethod",
+              $null,
+              $installer,
+              @($Path, 0)
+            )
+            $query = "SELECT ``$Column`` FROM ``$Table``"
+            $view = $database.GetType().InvokeMember(
+              "OpenView",
+              "InvokeMethod",
+              $null,
+              $database,
+              @($query)
+            )
+            $view.GetType().InvokeMember("Execute", "InvokeMethod", $null, $view, $null) | Out-Null
+
+            $values = @()
+            while ($true) {
+              $record = $view.GetType().InvokeMember("Fetch", "InvokeMethod", $null, $view, $null)
+              if ($null -eq $record) {
+                break
+              }
+
+              $values += [string]$record.GetType().InvokeMember("StringData", "GetProperty", $null, $record, 1)
+            }
+
+            return $values
+          }
+
+          function Assert-AnyValueContains {
+            param(
+              [Parameter(Mandatory = $true)]
+              [string[]] $Values,
+              [Parameter(Mandatory = $true)]
+              [string] $Needle,
+              [Parameter(Mandatory = $true)]
+              [string] $Label
+            )
+
+            if (-not ($Values | Where-Object { $_.Contains($Needle) })) {
+              throw "$Label should contain $Needle. Got: $($Values -join ', ')"
+            }
+          }
+
           $msiPath = Join-Path $PWD "release-artifacts\$($env:ASSET_PREFIX)_${{ matrix.artifact_suffix }}.msi"
           if (-not (Test-Path $msiPath)) {
             throw "Expected MSI not found at $msiPath"
           }
 
           $productName = Get-MsiProperty -Path $msiPath -Name "ProductName"
+          $productVersion = Get-MsiProperty -Path $msiPath -Name "ProductVersion"
+          $upgradeCode = Get-MsiProperty -Path $msiPath -Name "UpgradeCode"
           $mpDescription = Get-MsiProperty -Path $msiPath -Name "MpDescription"
+          $fileNames = @(Get-MsiColumnValues -Path $msiPath -Table "File" -Column "FileName")
+          $shortcutNames = @(Get-MsiColumnValues -Path $msiPath -Table "Shortcut" -Column "Name")
 
           if ($productName -ne "CMTrace Open Nightly") {
             throw "MSI ProductName should identify the nightly channel. Got: $productName"
           }
 
+          if ($productVersion -ne $env:MSI_VERSION) {
+            throw "MSI ProductVersion should be the nightly installer version $env:MSI_VERSION. Got: $productVersion"
+          }
+
+          if ($upgradeCode -ne "{7B16F0D6-2B7B-4D4B-9F71-4F1A9F64C0E3}") {
+            throw "MSI UpgradeCode should isolate the nightly channel. Got: $upgradeCode"
+          }
+
           if (-not $mpDescription.Contains($env:DISPLAY_VERSION)) {
             throw "MSI install dialog description should include $env:DISPLAY_VERSION. Got: $mpDescription"
           }
+
+          Assert-AnyValueContains -Values $fileNames -Needle "cmtrace-open-nightly.exe" -Label "MSI File table"
+          Assert-AnyValueContains -Values $fileNames -Needle "cmtrace-open-lite-nightly.exe" -Label "MSI File table"
+          Assert-AnyValueContains -Values $shortcutNames -Needle "CMTrace Open Nightly" -Label "MSI Shortcut table"
+          Assert-AnyValueContains -Values $shortcutNames -Needle "CMTrace Open Lite Nightly" -Label "MSI Shortcut table"
 
           $signature = Get-AuthenticodeSignature $msiPath
           if ($signature.Status -ne "Valid") {

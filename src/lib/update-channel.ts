@@ -9,7 +9,7 @@ export function getUpdateChannel(version: string): UpdateChannel {
 }
 
 export function getUpdateChannelLabel(channel: UpdateChannel): string {
-  return channel === "nightly" ? "Nightly channel" : "Stable channel";
+  return channel === "nightly" ? "Nightly channel" : "Main channel";
 }
 
 export function getReleasePageUrl(channel: UpdateChannel): string {

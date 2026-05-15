@@ -38,7 +38,7 @@ describe("UpdatesTab", () => {
 
     expect(checkbox).not.toBeChecked();
     await expect(screen.findByText("CMTrace Open v1.3.1")).resolves.toBeVisible();
-    expect(await screen.findByText("Stable channel")).toBeVisible();
+    expect(await screen.findByText("Main channel")).toBeVisible();
   });
 
   it("marks nightly prerelease builds as the nightly channel", async () => {
