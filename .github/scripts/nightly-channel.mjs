@@ -1,5 +1,6 @@
 import { access, readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 export const NIGHTLY_UPDATER_ENDPOINT =
   "https://github.com/adamgell/cmtraceopen/releases/download/nightly/latest.json";
@@ -273,7 +274,15 @@ async function main() {
   throw new Error("Usage: node .github/scripts/nightly-channel.mjs <apply|manifest>");
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+export function isMainModule(importMetaUrl, argvPath = process.argv[1]) {
+  if (!argvPath) {
+    return false;
+  }
+
+  return path.resolve(fileURLToPath(importMetaUrl)) === path.resolve(argvPath);
+}
+
+if (isMainModule(import.meta.url)) {
   main().catch((error) => {
     console.error(error);
     process.exit(1);

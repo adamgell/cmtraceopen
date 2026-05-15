@@ -3,10 +3,12 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, it } from "node:test";
+import { pathToFileURL } from "node:url";
 import {
   NIGHTLY_UPDATER_ENDPOINT,
   applyNightlyChannel,
   buildNightlyManifest,
+  isMainModule,
 } from "./nightly-channel.mjs";
 
 async function withTempRepo(testFn) {
@@ -102,6 +104,16 @@ async function withTempRepo(testFn) {
 }
 
 describe("nightly channel workflow helpers", () => {
+  it("detects direct CLI execution using file URLs and filesystem paths", () => {
+    const scriptPath = path.resolve("nightly-channel.mjs");
+
+    assert.equal(isMainModule(pathToFileURL(scriptPath).href, scriptPath), true);
+    assert.equal(
+      isMainModule(pathToFileURL(scriptPath).href, path.resolve("other-script.mjs")),
+      false
+    );
+  });
+
   it("applies nightly version and updater endpoint metadata", async () => {
     await withTempRepo(async (root) => {
       await applyNightlyChannel({
