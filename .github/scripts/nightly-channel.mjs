@@ -6,7 +6,12 @@ export const NIGHTLY_UPDATER_ENDPOINT =
 
 const DEFAULT_PACKAGE_JSON_PATH = "package.json";
 const DEFAULT_TAURI_CONFIG_PATH = "src-tauri/tauri.conf.json";
+const DEFAULT_LITE_TAURI_CONFIG_PATH = "src-tauri/tauri.lite.conf.json";
 const DEFAULT_CARGO_TOML_PATH = "src-tauri/Cargo.toml";
+const DEFAULT_INSTALLER_PACKAGE_PATH = "src-tauri/installer/package.signed.json";
+
+const NIGHTLY_PRODUCT_NAME = "CMTrace Open Nightly";
+const NIGHTLY_LITE_PRODUCT_NAME = "CMTrace Open Nightly Lite";
 
 function requireValue(name, value) {
   if (!value) {
@@ -28,6 +33,18 @@ async function readJson(filePath) {
 
 async function writeJson(filePath, value) {
   await writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`);
+}
+
+async function readJsonIfExists(filePath) {
+  try {
+    return await readJson(filePath);
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      return null;
+    }
+
+    throw error;
+  }
 }
 
 function replaceCargoPackageVersion(cargoToml, version) {
@@ -60,30 +77,86 @@ function replaceCargoPackageVersion(cargoToml, version) {
   return nextLines.join("\n");
 }
 
+function setWindowTitles(tauriConfig, title) {
+  const windows = tauriConfig.app?.windows;
+  if (!Array.isArray(windows)) {
+    return;
+  }
+
+  for (const windowConfig of windows) {
+    windowConfig.title = title;
+  }
+}
+
+function nightlyInstallerDescription(version) {
+  return [
+    `Nightly signed build ${version}.`,
+    "Includes both the full and lite editions.",
+    "Automatic updates use the nightly channel.",
+  ].join(" ");
+}
+
+function applyNightlyInstallerMetadata(installerPackage, version) {
+  installerPackage.packageName = NIGHTLY_PRODUCT_NAME;
+  installerPackage.msi ??= {};
+  installerPackage.msi.installDialog ??= {};
+  installerPackage.msi.installDialog.packageDescription = nightlyInstallerDescription(version);
+
+  if (Array.isArray(installerPackage.shortcuts)) {
+    for (const shortcut of installerPackage.shortcuts) {
+      const target = shortcut.target ?? "";
+      if (target.endsWith("cmtrace-open-lite.exe")) {
+        shortcut.name = NIGHTLY_LITE_PRODUCT_NAME;
+      } else if (target.endsWith("cmtrace-open.exe")) {
+        shortcut.name = NIGHTLY_PRODUCT_NAME;
+      }
+    }
+  }
+}
+
 export async function applyNightlyChannel({
   root,
   version,
   endpoint = NIGHTLY_UPDATER_ENDPOINT,
   packageJsonPath = DEFAULT_PACKAGE_JSON_PATH,
   tauriConfigPath = DEFAULT_TAURI_CONFIG_PATH,
+  liteTauriConfigPath = DEFAULT_LITE_TAURI_CONFIG_PATH,
   cargoTomlPath = DEFAULT_CARGO_TOML_PATH,
+  installerPackagePath = DEFAULT_INSTALLER_PACKAGE_PATH,
 }) {
   assertNightlyVersion(version);
 
   const packagePath = path.join(root, packageJsonPath);
   const tauriPath = path.join(root, tauriConfigPath);
+  const liteTauriPath = path.join(root, liteTauriConfigPath);
   const cargoPath = path.join(root, cargoTomlPath);
+  const installerPath = path.join(root, installerPackagePath);
 
   const packageJson = await readJson(packagePath);
   packageJson.version = version;
   await writeJson(packagePath, packageJson);
 
   const tauriConfig = await readJson(tauriPath);
+  tauriConfig.productName = NIGHTLY_PRODUCT_NAME;
   tauriConfig.version = version;
+  setWindowTitles(tauriConfig, NIGHTLY_PRODUCT_NAME);
   tauriConfig.plugins ??= {};
   tauriConfig.plugins.updater ??= {};
   tauriConfig.plugins.updater.endpoints = [endpoint];
   await writeJson(tauriPath, tauriConfig);
+
+  const liteTauriConfig = await readJsonIfExists(liteTauriPath);
+  if (liteTauriConfig) {
+    liteTauriConfig.productName = NIGHTLY_LITE_PRODUCT_NAME;
+    setWindowTitles(liteTauriConfig, NIGHTLY_LITE_PRODUCT_NAME);
+    await writeJson(liteTauriPath, liteTauriConfig);
+  }
+
+  const installerPackage = await readJsonIfExists(installerPath);
+  if (installerPackage) {
+    applyNightlyInstallerMetadata(installerPackage, version);
+    await writeJson(installerPath, installerPackage);
+  }
 
   const cargoToml = await readFile(cargoPath, "utf8");
   await writeFile(cargoPath, replaceCargoPackageVersion(cargoToml, version));

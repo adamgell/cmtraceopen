@@ -80,7 +80,7 @@ jobs:
       ASSET_PREFIX: ${{ needs.metadata.outputs.asset_prefix }}
       BUILD_ID: ${{ needs.metadata.outputs.build_id }}
       DISPLAY_VERSION: ${{ needs.metadata.outputs.display_version }}
-      VERSION: ${{ needs.metadata.outputs.base_version }}
+      MSI_VERSION: ${{ needs.metadata.outputs.base_version }}
 
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -227,7 +227,7 @@ jobs:
           mpdev build src-tauri\installer\package.signed.json `
             --working-dir "${{ github.workspace }}" `
             --properties `
-              "$.version=$env:VERSION" `
+              "$.version=$env:MSI_VERSION" `
               "$.outputFileName=$($env:ASSET_PREFIX)_${{ matrix.artifact_suffix }}" `
               "$.platform=${{ matrix.artifact_suffix }}"
 

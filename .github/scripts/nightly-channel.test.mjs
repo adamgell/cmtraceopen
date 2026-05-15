@@ -20,7 +20,15 @@ async function withTempRepo(testFn) {
       path.join(root, "tauri.conf.json"),
       JSON.stringify(
         {
+          productName: "CMTrace Open",
           version: "1.3.2",
+          app: {
+            windows: [
+              {
+                title: "CMTrace Open",
+              },
+            ],
+          },
           plugins: {
             updater: {
               endpoints: [
@@ -28,6 +36,49 @@ async function withTempRepo(testFn) {
               ],
             },
           },
+        },
+        null,
+        2
+      )
+    );
+    await writeFile(
+      path.join(root, "tauri.lite.conf.json"),
+      JSON.stringify(
+        {
+          productName: "CMTrace Open Lite",
+          app: {
+            windows: [
+              {
+                title: "CMTrace Open Lite",
+              },
+            ],
+          },
+        },
+        null,
+        2
+      )
+    );
+    await writeFile(
+      path.join(root, "package.signed.json"),
+      JSON.stringify(
+        {
+          packageName: "CMTrace Open",
+          msi: {
+            installDialog: {
+              packageDescription:
+                "Open-source CMTrace log viewer with built-in Intune diagnostics.",
+            },
+          },
+          shortcuts: [
+            {
+              target: "$.installDir\\cmtrace-open.exe",
+              name: "CMTrace Open",
+            },
+            {
+              target: "$.installDir\\cmtrace-open-lite.exe",
+              name: "CMTrace Open Lite",
+            },
+          ],
         },
         null,
         2
@@ -57,17 +108,40 @@ describe("nightly channel workflow helpers", () => {
         root,
         packageJsonPath: "package.json",
         tauriConfigPath: "tauri.conf.json",
+        liteTauriConfigPath: "tauri.lite.conf.json",
         cargoTomlPath: "Cargo.toml",
+        installerPackagePath: "package.signed.json",
         version: "1.3.2-nightly.20260514.42.gabc123def456",
       });
 
       const packageJson = JSON.parse(await readFile(path.join(root, "package.json"), "utf8"));
       const tauriConfig = JSON.parse(await readFile(path.join(root, "tauri.conf.json"), "utf8"));
+      const liteTauriConfig = JSON.parse(
+        await readFile(path.join(root, "tauri.lite.conf.json"), "utf8")
+      );
+      const installerPackage = JSON.parse(
+        await readFile(path.join(root, "package.signed.json"), "utf8")
+      );
       const cargoToml = await readFile(path.join(root, "Cargo.toml"), "utf8");
 
       assert.equal(packageJson.version, "1.3.2-nightly.20260514.42.gabc123def456");
+      assert.equal(tauriConfig.productName, "CMTrace Open Nightly");
       assert.equal(tauriConfig.version, "1.3.2-nightly.20260514.42.gabc123def456");
+      assert.equal(tauriConfig.app.windows[0].title, "CMTrace Open Nightly");
       assert.deepEqual(tauriConfig.plugins.updater.endpoints, [NIGHTLY_UPDATER_ENDPOINT]);
+      assert.equal(liteTauriConfig.productName, "CMTrace Open Nightly Lite");
+      assert.equal(liteTauriConfig.app.windows[0].title, "CMTrace Open Nightly Lite");
+      assert.equal(installerPackage.packageName, "CMTrace Open Nightly");
+      assert.match(
+        installerPackage.msi.installDialog.packageDescription,
+        /Nightly signed build 1\.3\.2-nightly\.20260514\.42\.gabc123def456/
+      );
+      assert.match(
+        installerPackage.msi.installDialog.packageDescription,
+        /nightly channel/
+      );
+      assert.equal(installerPackage.shortcuts[0].name, "CMTrace Open Nightly");
+      assert.equal(installerPackage.shortcuts[1].name, "CMTrace Open Nightly Lite");
       assert.match(cargoToml, /version = "1\.3\.2-nightly\.20260514\.42\.gabc123def456"/);
     });
   });
