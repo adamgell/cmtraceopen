@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, it } from "node:test";
@@ -81,10 +81,13 @@ describe("nightly channel workflow helpers", () => {
         `${assetPrefix}_arm64-setup.exe`,
         `${assetPrefix}_macOS-arm64.app.tar.gz`,
       ];
+      const windowsDir = path.join(assetsDir, "nightly-artifacts");
+      await mkdir(windowsDir);
 
       for (const file of files) {
-        await writeFile(path.join(assetsDir, file), "artifact");
-        await writeFile(path.join(assetsDir, `${file}.sig`), `${file}-signature\n`);
+        const artifactDir = file.includes("macOS") ? assetsDir : windowsDir;
+        await writeFile(path.join(artifactDir, file), "artifact");
+        await writeFile(path.join(artifactDir, `${file}.sig`), `${file}-signature\n`);
       }
 
       const manifestPath = await buildNightlyManifest({

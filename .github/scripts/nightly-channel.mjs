@@ -1,4 +1,4 @@
-import { access, readFile, writeFile } from "node:fs/promises";
+import { access, readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 export const NIGHTLY_UPDATER_ENDPOINT =
@@ -93,6 +93,32 @@ async function readTrimmed(filePath) {
   return (await readFile(filePath, "utf8")).trim();
 }
 
+async function findFileByBasename(root, fileName) {
+  const matches = [];
+
+  async function walk(directory) {
+    const entries = await readdir(directory, { withFileTypes: true });
+    for (const entry of entries) {
+      const entryPath = path.join(directory, entry.name);
+      if (entry.isDirectory()) {
+        await walk(entryPath);
+      } else if (entry.isFile() && entry.name === fileName) {
+        matches.push(entryPath);
+      }
+    }
+  }
+
+  await walk(root);
+
+  if (matches.length !== 1) {
+    throw new Error(
+      `Expected exactly one ${fileName} under ${root}, found ${matches.length}`
+    );
+  }
+
+  return matches[0];
+}
+
 function assetUrl(repository, tagName, fileName) {
   return `https://github.com/${repository}/releases/download/${tagName}/${encodeURIComponent(fileName)}`;
 }
@@ -117,7 +143,7 @@ export async function buildNightlyManifest({
 
   const platforms = {};
   for (const [target, fileName] of Object.entries(assets)) {
-    const artifactPath = path.join(assetsDir, fileName);
+    const artifactPath = await findFileByBasename(assetsDir, fileName);
     const signaturePath = `${artifactPath}.sig`;
     await access(artifactPath);
     const signature = await readTrimmed(signaturePath);
