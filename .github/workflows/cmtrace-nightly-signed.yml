@@ -106,10 +106,28 @@ jobs:
         run: node .github/scripts/nightly-channel.mjs apply
 
       - name: Build full edition (NSIS + standalone EXE)
+        shell: pwsh
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: npm run app:build:release -- --target ${{ matrix.rust_target }} --bundles nsis
+          RUST_TARGET: ${{ matrix.rust_target }}
+        run: |
+          $lastExitCode = 0
+          for ($attempt = 1; $attempt -le 3; $attempt++) {
+            npm run app:build:release -- --target $env:RUST_TARGET --bundles nsis
+            $lastExitCode = $LASTEXITCODE
+            if ($lastExitCode -eq 0) {
+              exit 0
+            }
+
+            if ($attempt -lt 3) {
+              $delaySeconds = 30 * $attempt
+              Write-Warning "NSIS build attempt $attempt failed with exit code $lastExitCode. Retrying in $delaySeconds seconds."
+              Start-Sleep -Seconds $delaySeconds
+            }
+          }
+
+          exit $lastExitCode
 
       - name: Save full edition binary
         shell: pwsh
