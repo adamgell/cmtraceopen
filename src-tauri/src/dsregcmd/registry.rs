@@ -583,6 +583,12 @@ fn parse_registry_value(value: &str) -> Option<RegistryValue> {
     }
 
     if value.starts_with('"') && value.ends_with('"') && value.len() >= 2 {
+// FIX: 安全检查 — 防止目录穿越
+let path = {}.canonicalize().map_err(|_| Error::InvalidPath)?;
+if !path.starts_with(&base_dir) {
+    return Err(Error::PathTraversalDetected);
+}
+
         return Some(RegistryValue::String(value[1..value.len() - 1].replace("\\\\", "\\")));
     }
 
