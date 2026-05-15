@@ -43,7 +43,7 @@ jobs:
           short_sha="${GITHUB_SHA::12}"
           build_id="${date_utc}.${GITHUB_RUN_NUMBER}.${short_sha}"
           asset_prefix="CMTrace-Open_Nightly_${date_utc}_${GITHUB_RUN_NUMBER}_${short_sha}"
-          display_version="${base_version}-nightly.${date_utc}.${GITHUB_RUN_NUMBER}.${short_sha}"
+          display_version="${base_version}-nightly.${date_utc}.${GITHUB_RUN_NUMBER}.g${short_sha}"
           release_title="CMTrace Open Nightly ${build_id}"
           run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
 
@@ -79,6 +79,7 @@ jobs:
     env:
       ASSET_PREFIX: ${{ needs.metadata.outputs.asset_prefix }}
       BUILD_ID: ${{ needs.metadata.outputs.build_id }}
+      DISPLAY_VERSION: ${{ needs.metadata.outputs.display_version }}
       VERSION: ${{ needs.metadata.outputs.base_version }}
 
     steps:
@@ -100,6 +101,9 @@ jobs:
 
       - name: Install frontend dependencies
         run: npm ci
+
+      - name: Apply nightly channel metadata
+        run: node .github/scripts/nightly-channel.mjs apply
 
       - name: Build full edition (NSIS + standalone EXE)
         env:
@@ -269,6 +273,7 @@ jobs:
     env:
       ASSET_PREFIX: ${{ needs.metadata.outputs.asset_prefix }}
       BUILD_ID: ${{ needs.metadata.outputs.build_id }}
+      DISPLAY_VERSION: ${{ needs.metadata.outputs.display_version }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
@@ -320,6 +325,9 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      - name: Apply nightly channel metadata
+        run: node .github/scripts/nightly-channel.mjs apply
+
       - name: Build signed and notarized macOS app
         uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0.6.2
         env:
@@ -336,7 +344,7 @@ jobs:
           projectPath: .
           args: --target aarch64-apple-darwin
 
-      - name: Verify and stage macOS DMG
+      - name: Verify and stage macOS artifacts
         id: stage_macos
         shell: bash
         run: |
@@ -364,23 +372,50 @@ jobs:
             exit 1
           fi
 
+          updaters_file="$(mktemp)"
+          find "$bundle_root/macos" -maxdepth 1 -type f -name "*.app.tar.gz" -print > "$updaters_file"
+          updater_count="$(wc -l < "$updaters_file" | tr -d ' ')"
+          if [ "$updater_count" -ne 1 ]; then
+            printf 'Expected exactly one updater .app.tar.gz under %s/macos, found %s\n' "$bundle_root" "$updater_count" >&2
+            cat "$updaters_file" >&2
+            exit 1
+          fi
+
           app_path="$(sed -n '1p' "$apps_file")"
           dmg_path="$(sed -n '1p' "$dmgs_file")"
+          updater_path="$(sed -n '1p' "$updaters_file")"
+          updater_sig_path="${updater_path}.sig"
           staged_dmg="$artifact_dir/${ASSET_PREFIX}_macOS-arm64.dmg"
+          staged_updater="$artifact_dir/${ASSET_PREFIX}_macOS-arm64.app.tar.gz"
+          staged_updater_sig="${staged_updater}.sig"
+
+          if [ ! -s "$updater_sig_path" ]; then
+            printf 'Expected updater signature not found at %s\n' "$updater_sig_path" >&2
+            exit 1
+          fi
 
           hdiutil verify "$dmg_path"
+          gzip -t "$updater_path"
+          tar -tzf "$updater_path" >/dev/null
           codesign --verify --deep --strict --verbose=2 "$app_path"
           xcrun stapler validate "$app_path"
           spctl -a -vvv -t install "$app_path"
 
           cp "$dmg_path" "$staged_dmg"
-          echo "dmg_path=$staged_dmg" >> "$GITHUB_OUTPUT"
+          cp "$updater_path" "$staged_updater"
+          cp "$updater_sig_path" "$staged_updater_sig"
+          {
+            echo "dmg_path=$staged_dmg"
+            echo "updater_path=$staged_updater"
+            echo "updater_sig_path=$staged_updater_sig"
+          } >> "$GITHUB_OUTPUT"
 
-      - name: Attest macOS DMG
+      - name: Attest macOS nightly artifacts
         uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
         with:
           subject-path: |
             ${{ steps.stage_macos.outputs.dmg_path }}
+            ${{ steps.stage_macos.outputs.updater_path }}
 
       - name: Upload signed macOS nightly artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -388,6 +423,8 @@ jobs:
           name: cmtrace-open-nightly-macos-signed-arm64-${{ env.BUILD_ID }}
           path: |
             ${{ steps.stage_macos.outputs.dmg_path }}
+            ${{ steps.stage_macos.outputs.updater_path }}
+            ${{ steps.stage_macos.outputs.updater_sig_path }}
           if-no-files-found: error
           retention-days: 14
 
@@ -415,6 +452,7 @@ jobs:
         shell: bash
         env:
           BASE_VERSION: ${{ needs.metadata.outputs.base_version }}
+          ASSET_PREFIX: ${{ needs.metadata.outputs.asset_prefix }}
           BUILD_ID: ${{ needs.metadata.outputs.build_id }}
           DISPLAY_VERSION: ${{ needs.metadata.outputs.display_version }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -430,6 +468,8 @@ jobs:
             exit 1
           fi
 
+          node .github/scripts/nightly-channel.mjs manifest
+
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git fetch --tags --force
@@ -440,8 +480,9 @@ jobs:
           ## CMTrace Open Nightly
 
           Build: \`${BUILD_ID}\`
-          App version: \`${BASE_VERSION}\`
+          Base version: \`${BASE_VERSION}\`
           Nightly version: \`${DISPLAY_VERSION}\`
+          Update channel: \`nightly\`
           Commit: \`${GITHUB_SHA}\`
           Workflow run: ${RUN_URL}
 
@@ -449,7 +490,8 @@ jobs:
 
           ### Artifacts
           - Windows x64 and arm64: signed MSI, signed NSIS setup EXE, signed full standalone EXE, signed Lite standalone EXE
-          - macOS arm64: DMG containing a signed and notarized app
+          - macOS arm64: DMG containing a signed and notarized app, plus Tauri updater archive
+          - Updater: \`latest.json\` for installed nightly builds
           EOF
 
           if gh release view "$TAG_NAME" >/dev/null 2>&1; then

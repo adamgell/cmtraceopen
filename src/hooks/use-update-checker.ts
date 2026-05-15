@@ -5,9 +5,13 @@ import { getVersion } from "@tauri-apps/api/app";
 import { platform } from "@tauri-apps/plugin-os";
 import { useUiStore } from "../stores/ui-store";
 import { getUpdatePolicy } from "../lib/commands";
+import {
+  getReleasePageUrl,
+  getUpdateChannel,
+  type UpdateChannel,
+} from "../lib/update-channel";
 
 const SKIPPED_VERSION_KEY = "cmtraceopen-skipped-update-version";
-const GITHUB_RELEASES_URL = "https://github.com/adamgell/cmtraceopen/releases/latest";
 const STARTUP_CHECK_DELAY_MS = 5000;
 
 function getSkippedVersion(): string | null {
@@ -29,6 +33,7 @@ function setSkippedVersion(version: string): void {
 export interface UpdateInfo {
   available: boolean;
   currentVersion: string;
+  updateChannel: UpdateChannel;
   newVersion?: string;
   releaseNotes?: string;
   canAutoUpdate: boolean;
@@ -62,11 +67,13 @@ export function useUpdateChecker() {
         ]);
 
         const canAutoUpdate = currentPlatform !== "linux";
+        const updateChannel = getUpdateChannel(currentVersion);
 
         if (updateChecksDisabledByPolicy) {
           const info: UpdateInfo = {
             available: false,
             currentVersion,
+            updateChannel,
             canAutoUpdate,
             error: "Update checks are disabled by policy.",
           };
@@ -81,6 +88,7 @@ export function useUpdateChecker() {
           const info: UpdateInfo = {
             available: true,
             currentVersion,
+            updateChannel,
             newVersion: update.version,
             releaseNotes: update.body ?? undefined,
             canAutoUpdate,
@@ -92,6 +100,7 @@ export function useUpdateChecker() {
         const info: UpdateInfo = {
           available: false,
           currentVersion,
+          updateChannel,
           canAutoUpdate,
         };
 
@@ -102,6 +111,7 @@ export function useUpdateChecker() {
         const info: UpdateInfo = {
           available: false,
           currentVersion: "unknown",
+          updateChannel: "stable",
           canAutoUpdate: false,
           error: String(err),
         };
@@ -154,11 +164,12 @@ export function useUpdateChecker() {
   }, []);
 
   const openReleasePage = useCallback(() => {
-    const newWindow = window.open(GITHUB_RELEASES_URL, "_blank", "noopener,noreferrer");
+    const releasePageUrl = getReleasePageUrl(updateInfo?.updateChannel ?? "stable");
+    const newWindow = window.open(releasePageUrl, "_blank", "noopener,noreferrer");
     if (newWindow) {
       newWindow.opener = null;
     }
-  }, []);
+  }, [updateInfo?.updateChannel]);
 
   const skipVersion = useCallback((version: string) => {
     setSkippedVersion(version);

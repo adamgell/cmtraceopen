@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { tokens } from "@fluentui/react-components";
 import type { UpdateInfo } from "../../hooks/use-update-checker";
+import { getUpdateChannelLabel } from "../../lib/update-channel";
 
 interface UpdateDialogProps {
   isOpen: boolean;
@@ -143,13 +144,15 @@ export function UpdateDialog({
 
     // State 2: Update available
     if (updateInfo?.available) {
+      const channelLabel = getUpdateChannelLabel(updateInfo.updateChannel);
+
       return (
         <>
           <div style={{ fontSize: "16px", fontWeight: "bold", marginBottom: "2px" }}>
             Update Available
           </div>
           <div style={{ fontSize: "12px", color: tokens.colorNeutralForeground3, marginBottom: "10px" }}>
-            v{updateInfo.currentVersion} &rarr; v{updateInfo.newVersion}
+            {channelLabel}: v{updateInfo.currentVersion} &rarr; v{updateInfo.newVersion}
           </div>
 
           {updateInfo.releaseNotes && (
