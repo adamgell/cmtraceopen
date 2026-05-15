@@ -132,6 +132,7 @@ describe("nightly channel workflow helpers", () => {
       assert.equal(liteTauriConfig.productName, "CMTrace Open Nightly Lite");
       assert.equal(liteTauriConfig.app.windows[0].title, "CMTrace Open Nightly Lite");
       assert.equal(installerPackage.packageName, "CMTrace Open Nightly");
+      assert.equal(installerPackage.msi.packageName, "CMTrace Open Nightly");
       assert.match(
         installerPackage.msi.installDialog.packageDescription,
         /Nightly signed build 1\.3\.2-nightly\.20260514\.42\.gabc123def456/

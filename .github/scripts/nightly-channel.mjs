@@ -99,6 +99,7 @@ function nightlyInstallerDescription(version) {
 function applyNightlyInstallerMetadata(installerPackage, version) {
   installerPackage.packageName = NIGHTLY_PRODUCT_NAME;
   installerPackage.msi ??= {};
+  installerPackage.msi.packageName = NIGHTLY_PRODUCT_NAME;
   installerPackage.msi.installDialog ??= {};
   installerPackage.msi.installDialog.packageDescription = nightlyInstallerDescription(version);
 

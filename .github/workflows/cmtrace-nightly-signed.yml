@@ -224,9 +224,26 @@ jobs:
           SIGNING_ACCOUNT_NAME: ${{ secrets.SIGNING_ACCOUNT_NAME }}
           SIGNING_PROFILE_NAME: ${{ secrets.SIGNING_PROFILE_NAME }}
         run: |
+          node .github/scripts/nightly-channel.mjs apply
+
+          $installerPackage = Get-Content src-tauri\installer\package.signed.json -Raw | ConvertFrom-Json
+          $packageName = [string]$installerPackage.packageName
+          $packageDescription = [string]$installerPackage.msi.installDialog.packageDescription
+
+          if ($packageName -ne "CMTrace Open Nightly") {
+            throw "Nightly MSI packageName was not applied. Got: $packageName"
+          }
+
+          if (-not $packageDescription.Contains($env:DISPLAY_VERSION)) {
+            throw "Nightly MSI packageDescription does not contain $env:DISPLAY_VERSION. Got: $packageDescription"
+          }
+
           mpdev build src-tauri\installer\package.signed.json `
             --working-dir "${{ github.workspace }}" `
             --properties `
+              "$.packageName=$packageName" `
+              "$.msi.packageName=$packageName" `
+              "$.msi.installDialog.packageDescription=$packageDescription" `
               "$.version=$env:MSI_VERSION" `
               "$.outputFileName=$($env:ASSET_PREFIX)_${{ matrix.artifact_suffix }}" `
               "$.platform=${{ matrix.artifact_suffix }}"
@@ -235,9 +252,54 @@ jobs:
         id: verify_msi
         shell: pwsh
         run: |
+          function Get-MsiProperty {
+            param(
+              [Parameter(Mandatory = $true)]
+              [string] $Path,
+              [Parameter(Mandatory = $true)]
+              [string] $Name
+            )
+
+            $installer = New-Object -ComObject WindowsInstaller.Installer
+            $database = $installer.GetType().InvokeMember(
+              "OpenDatabase",
+              "InvokeMethod",
+              $null,
+              $installer,
+              @($Path, 0)
+            )
+            $query = "SELECT ``Value`` FROM ``Property`` WHERE ``Property``='$Name'"
+            $view = $database.GetType().InvokeMember(
+              "OpenView",
+              "InvokeMethod",
+              $null,
+              $database,
+              @($query)
+            )
+            $view.GetType().InvokeMember("Execute", "InvokeMethod", $null, $view, $null) | Out-Null
+            $record = $view.GetType().InvokeMember("Fetch", "InvokeMethod", $null, $view, $null)
+
+            if ($null -eq $record) {
+              return $null
+            }
+
+            return $record.GetType().InvokeMember("StringData", "GetProperty", $null, $record, 1)
+          }
+
           $msiPath = Join-Path $PWD "release-artifacts\$($env:ASSET_PREFIX)_${{ matrix.artifact_suffix }}.msi"
           if (-not (Test-Path $msiPath)) {
             throw "Expected MSI not found at $msiPath"
+          }
+
+          $productName = Get-MsiProperty -Path $msiPath -Name "ProductName"
+          $mpDescription = Get-MsiProperty -Path $msiPath -Name "MpDescription"
+
+          if ($productName -ne "CMTrace Open Nightly") {
+            throw "MSI ProductName should identify the nightly channel. Got: $productName"
+          }
+
+          if (-not $mpDescription.Contains($env:DISPLAY_VERSION)) {
+            throw "MSI install dialog description should include $env:DISPLAY_VERSION. Got: $mpDescription"
           }
 
           $signature = Get-AuthenticodeSignature $msiPath
