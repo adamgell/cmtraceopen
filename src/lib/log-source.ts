@@ -16,6 +16,7 @@ import type {
   FolderEntry,
   KnownSourceMetadata,
   LogEntry,
+  ParserKind,
   LogSource,
   ParseResult,
 } from "../types/log";
@@ -259,8 +260,12 @@ async function loadFolderProgressive(
   // evidence bundles (200+ files).  Each batch is sent as a single IPC call
   // and parsed in parallel on Rust's Rayon thread pool.
   const BATCH_SIZE = 30;
-  const allResults: ParseResult[] = [];
   const paths = fileEntries.map((e) => e.path);
+  const allEntries: LogEntry[] = [];
+  const aggregateFiles: import("../types/log").AggregateParsedFileResult[] = [];
+  const parserKinds: ParserKind[] = [];
+  let totalLines = 0;
+  let nextEntryId = 0;
 
   const totalBatches = Math.ceil(paths.length / BATCH_SIZE);
   console.info(`[log-source] starting batched parse: ${totalFiles} files in ${totalBatches} batches of ${BATCH_SIZE}`);
@@ -282,7 +287,22 @@ async function loadFolderProgressive(
 
     console.info(`[log-source] batch ${batchIndex}/${totalBatches} — completed ${batchResults.length} files in ${batchMs} ms`);
 
-    allResults.push(...batchResults);
+    for (const result of batchResults) {
+      totalLines += result.totalLines;
+      parserKinds.push(result.parserSelection.parser);
+      aggregateFiles.push({
+        filePath: result.filePath,
+        totalLines: result.totalLines,
+        parseErrors: result.parseErrors,
+        fileSize: result.fileSize,
+        byteOffset: result.byteOffset,
+      });
+
+      for (let j = 0; j < result.entries.length; j++) {
+        allEntries.push({ ...result.entries[j], id: nextEntryId });
+        nextEntryId++;
+      }
+    }
   }
 
   const parseMs = Math.round(performance.now() - startTime);
@@ -291,49 +311,6 @@ async function loadFolderProgressive(
   // Yield so the "Finalizing..." progress text renders before the heavy
   // in-memory assembly work below.
   await new Promise((r) => setTimeout(r, 0));
-
-  // Cache each file's entries for instant tab switching
-  for (const result of allResults) {
-    const fileColumns = getColumnsForParser(result.parserSelection.parser);
-    setCachedTabSnapshot(result.filePath, {
-      entries: result.entries,
-      formatDetected: result.formatDetected,
-      parserSelection: result.parserSelection,
-      totalLines: result.totalLines,
-      byteOffset: result.byteOffset,
-      selectedSourceFilePath: result.filePath,
-      sourceOpenMode: "single-file",
-      activeColumns: fileColumns,
-    });
-  }
-
-  // Build aggregate view — use Array.concat or indexed copy instead of
-  // push(...spread) to avoid blowing the JS call stack on large entry arrays.
-  const aggregateFiles: import("../types/log").AggregateParsedFileResult[] = [];
-  let totalLines = 0;
-  let totalEntryCount = 0;
-
-  for (const result of allResults) {
-    totalLines += result.totalLines;
-    totalEntryCount += result.entries.length;
-    aggregateFiles.push({
-      filePath: result.filePath,
-      totalLines: result.totalLines,
-      parseErrors: result.parseErrors,
-      fileSize: result.fileSize,
-      byteOffset: result.byteOffset,
-    });
-  }
-
-  // Pre-allocate and copy with sequential IDs in one pass
-  const allEntries = new Array<LogEntry>(totalEntryCount);
-  let writeIndex = 0;
-  for (const result of allResults) {
-    for (let j = 0; j < result.entries.length; j++) {
-      allEntries[writeIndex] = { ...result.entries[j], id: writeIndex };
-      writeIndex++;
-    }
-  }
 
   // Apply the final aggregate state
   state.setActiveSource(source);
@@ -347,9 +324,7 @@ async function loadFolderProgressive(
   state.setTotalLines(totalLines);
   state.setByteOffset(0);
   // Derive aggregate columns from the union of all parsers + filePath
-  const aggregateColumns = getColumnsForAggregate(
-    allResults.map((r) => r.parserSelection.parser)
-  );
+  const aggregateColumns = getColumnsForAggregate(parserKinds);
   state.setActiveColumns(aggregateColumns);
   useUiStore.getState().resetColumnWidths();
   state.selectEntry(null);
