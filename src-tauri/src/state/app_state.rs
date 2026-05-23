@@ -95,6 +95,22 @@ impl AppState {
             .map(|session| session.entries.clone()))
     }
 
+    pub fn with_parsed_entries_session<R, F>(
+        &self,
+        session_key: &str,
+        f: F,
+    ) -> Result<Option<R>, crate::error::AppError>
+    where
+        F: FnOnce(&[LogEntry]) -> R,
+    {
+        let sessions = self
+            .parsed_entry_sessions
+            .lock()
+            .map_err(|error| crate::error::AppError::State(error.to_string()))?;
+
+        Ok(sessions.get(session_key).map(|session| f(&session.entries)))
+    }
+
     pub fn release_parsed_entries_session(
         &self,
         session_key: &str,

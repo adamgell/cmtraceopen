@@ -428,6 +428,7 @@ export function AppShell() {
       lastAppliedSignatureRef.current = null;
       appliedFilterSnapshotRef.current = null;
       setFilteredIds(null);
+      setFilterError(null);
       setIsFiltering(false);
       return;
     }

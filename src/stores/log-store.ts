@@ -224,7 +224,12 @@ function getAdjacentVisibleErrorId(
       : state.visibleErrorEntryIds[state.visibleErrorEntryIds.length - 1];
   }
 
-  const selectedVisibleIndex = state.visibleEntryIds.indexOf(state.selectedId);
+  const visibleIndexById = new Map<number, number>();
+  for (let index = 0; index < state.visibleEntryIds.length; index += 1) {
+    visibleIndexById.set(state.visibleEntryIds[index], index);
+  }
+
+  const selectedVisibleIndex = visibleIndexById.get(state.selectedId) ?? -1;
   if (selectedVisibleIndex < 0) {
     return direction === "next"
       ? state.visibleErrorEntryIds[0]
@@ -248,7 +253,8 @@ function getAdjacentVisibleErrorId(
 
   if (direction === "next") {
     for (const errorId of state.visibleErrorEntryIds) {
-      if (state.visibleEntryIds.indexOf(errorId) > selectedVisibleIndex) {
+      const visibleIndex = visibleIndexById.get(errorId);
+      if (visibleIndex !== undefined && visibleIndex > selectedVisibleIndex) {
         return errorId;
       }
     }
@@ -258,7 +264,8 @@ function getAdjacentVisibleErrorId(
 
   for (let index = state.visibleErrorEntryIds.length - 1; index >= 0; index -= 1) {
     const errorId = state.visibleErrorEntryIds[index];
-    if (state.visibleEntryIds.indexOf(errorId) < selectedVisibleIndex) {
+    const visibleIndex = visibleIndexById.get(errorId);
+    if (visibleIndex !== undefined && visibleIndex < selectedVisibleIndex) {
       return errorId;
     }
   }

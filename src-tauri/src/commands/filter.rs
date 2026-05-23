@@ -72,24 +72,6 @@ fn compile_clauses<'a>(
         .collect()
 }
 
-fn resolve_filter_entries(
-    entries: Option<Vec<LogEntry>>,
-    session_key: Option<&str>,
-    state: &AppState,
-) -> Result<Vec<LogEntry>, crate::error::AppError> {
-    if let Some(session_key) = session_key {
-        return state
-            .get_parsed_entries_session_entries(session_key)?
-            .ok_or_else(|| {
-                crate::error::AppError::InvalidInput(format!(
-                    "Unknown parsed entries session key '{session_key}'."
-                ))
-            });
-    }
-
-    Ok(entries.unwrap_or_default())
-}
-
 fn apply_filter_to_entries(
     entries: &[LogEntry],
     clauses: &[FilterClause],
@@ -121,7 +103,20 @@ pub fn apply_filter(
     session_key: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<Vec<u64>, crate::error::AppError> {
-    let entries = resolve_filter_entries(entries, session_key.as_deref(), state.inner())?;
+    if let Some(session_key) = session_key.as_deref() {
+        let filtered = state
+            .with_parsed_entries_session(session_key, |session_entries| {
+                apply_filter_to_entries(session_entries, &clauses)
+            })?
+            .ok_or_else(|| {
+                crate::error::AppError::InvalidInput(format!(
+                    "Unknown parsed entries session key '{session_key}'."
+                ))
+            })?;
+        return filtered;
+    }
+
+    let entries = entries.unwrap_or_default();
     apply_filter_to_entries(&entries, &clauses)
 }
 

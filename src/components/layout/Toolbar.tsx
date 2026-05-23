@@ -116,10 +116,15 @@ function getErrorNavigationDisabledReason(
   activeView: WorkspaceId,
   isLoading: boolean,
   entriesCount: number,
-  visibleErrorEntryCount: number
+  visibleErrorEntryCount: number,
+  largeFileModeActive: boolean
 ): string | null {
   if (activeView !== "log") {
     return "Only available in the log view.";
+  }
+
+  if (largeFileModeActive) {
+    return "Unavailable in large-file mode to keep the app responsive.";
   }
 
   if (isLoading) {
@@ -228,7 +233,8 @@ export function useAppActions(): AppActionHandlers {
       activeView,
       isLoading,
       entriesCount,
-      visibleErrorEntryCount
+      visibleErrorEntryCount,
+      largeFileModeActive
     );
 
     return {

@@ -118,7 +118,12 @@ pub struct AggregateParseResultCommandResponse {
 fn register_parsed_entries_backend_session(
     state: &AppState,
     entries: &[LogEntry],
+    large_file_mode: Option<&LargeFileModeMetadata>,
 ) -> Result<Option<ParsedEntriesSessionMetadata>, crate::error::AppError> {
+    if large_file_mode.is_some_and(|metadata| metadata.is_active) {
+        return Ok(None);
+    }
+
     state.register_parsed_entries_session(entries.to_vec())
 }
 
@@ -126,7 +131,11 @@ fn build_parse_result_command_response(
     result: ParseResult,
     state: &AppState,
 ) -> Result<ParseResultCommandResponse, crate::error::AppError> {
-    let backend_session = register_parsed_entries_backend_session(state, &result.entries)?;
+    let backend_session = register_parsed_entries_backend_session(
+        state,
+        &result.entries,
+        result.large_file_mode.as_ref(),
+    )?;
 
     Ok(ParseResultCommandResponse {
         result,
@@ -175,7 +184,11 @@ fn build_aggregate_parse_result_command_response(
     file_sessions: Vec<AggregateParsedFileSessionResponse>,
     state: &AppState,
 ) -> Result<AggregateParseResultCommandResponse, crate::error::AppError> {
-    let backend_session = register_parsed_entries_backend_session(state, &result.entries)?;
+    let backend_session = register_parsed_entries_backend_session(
+        state,
+        &result.entries,
+        result.large_file_mode.as_ref(),
+    )?;
 
     Ok(AggregateParseResultCommandResponse {
         result,
@@ -896,6 +909,19 @@ mod tests {
     }
 
     #[test]
+    fn parse_result_command_response_skips_backend_session_in_large_file_mode() {
+        let state = AppState::default();
+        let mut result =
+            sample_parse_result("single.log", vec![sample_entry(0, "single.log", "alpha")]);
+        result.large_file_mode = Some(evaluate_large_file_mode(LARGE_FILE_MODE_THRESHOLD_BYTES));
+
+        let response =
+            build_parse_result_command_response(result, &state).expect("response should build");
+
+        assert!(response.backend_session.is_none());
+    }
+
+    #[test]
     fn finalize_batch_parse_results_includes_backend_sessions_for_successes() {
         let state = AppState::default();
         let results = vec![Ok((
@@ -943,6 +969,24 @@ mod tests {
         assert!(response.backend_session.is_some());
         assert_eq!(response.file_sessions.len(), 1);
         assert!(response.file_sessions[0].backend_session.is_some());
+    }
+
+    #[test]
+    fn aggregate_parse_result_command_response_skips_backend_session_in_large_file_mode() {
+        let state = AppState::default();
+        let result = crate::models::log_entry::AggregateParseResult {
+            entries: vec![sample_entry(0, "aggregate.log", "gamma")],
+            total_lines: 1,
+            parse_errors: 0,
+            folder_path: "folder".to_string(),
+            files: vec![],
+            large_file_mode: Some(evaluate_large_file_mode(LARGE_FILE_MODE_THRESHOLD_BYTES)),
+        };
+
+        let response = build_aggregate_parse_result_command_response(result, Vec::new(), &state)
+            .expect("aggregate response should build");
+
+        assert!(response.backend_session.is_none());
     }
 
     fn create_temp_dir(prefix: &str) -> PathBuf {
