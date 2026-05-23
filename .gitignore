@@ -43,3 +43,7 @@ loginventory/
 
 # Git worktrees (isolated implementation branches)
 .worktrees/
+.Clairvoyance/editor-session.json
+.gitignore
+.Clairvoyance/workspace-session.json
+.Clairvoyance/ui-state.json
