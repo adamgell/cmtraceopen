@@ -46,7 +46,10 @@ import {
   LOG_UI_FONT_FAMILY,
 } from "../../lib/log-accessibility";
 import type { LogListDataSource } from "./log-list-data-source";
-import { findAdjacentSeverityEntryId } from "../../lib/error-navigation";
+import {
+  findAdjacentSeverityEntryId,
+  type SeverityNavigationDirection,
+} from "../../lib/error-navigation";
 
 const defaultLogStoreDataSource: LogListDataSource = {
   useEntries: () => useLogStore((s) => s.entries),
@@ -593,13 +596,16 @@ export function LogListView({ dataSource }: { dataSource?: LogListDataSource } =
     setColumnWidths(updates);
   }, [visibleColumns, displayEntries, logListFontSize, listMetrics, setColumnWidths]);
 
-  const visibleErrorCount = useMemo(
-    () => displayEntries.filter((entry) => entry.severity === "Error").length,
-    [displayEntries]
-  );
+  const visibleErrorCount = useMemo(() => {
+    let count = 0;
+    for (const entry of displayEntries) {
+      if (entry.severity === "Error") count++;
+    }
+    return count;
+  }, [displayEntries]);
 
   const handleErrorNavigation = useCallback(
-    (direction: "previous" | "next") => {
+    (direction: SeverityNavigationDirection) => {
       const targetId = findAdjacentSeverityEntryId(
         displayEntries,
         selectedId,
@@ -629,6 +635,7 @@ export function LogListView({ dataSource }: { dataSource?: LogListDataSource } =
       }}
     >
       <div
+        role="toolbar"
         aria-label="Error navigation"
         style={{
           display: "flex",
