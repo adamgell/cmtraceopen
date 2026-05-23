@@ -50,7 +50,8 @@ pub fn init(app: &tauri::App) -> Result<PathBuf, Box<dyn std::error::Error>> {
     let log_path = log_dir.join("cmtrace-open.log");
     let file = OpenOptions::new()
         .create(true)
-        .append(true)
+        .write(true)
+        .truncate(true)
         .open(&log_path)?;
 
     log::set_boxed_logger(Box::new(FileLogger {

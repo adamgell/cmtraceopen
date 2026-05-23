@@ -173,15 +173,11 @@ export async function restoreSession(sessionPath: string): Promise<string | null
   // Restore filters AFTER files are loaded so find/highlight operate on the loaded entries
   const logStore = useLogStore.getState();
   const filterStore = useFilterStore.getState();
-  if (session.filters) {
-    filterStore.setClauses(session.filters.clauses.filter(isFilterClause));
-    logStore.setHighlightText(session.filters.highlightText || "");
-    logStore.setFindQuery(session.filters.findQuery || "");
-    logStore.setFindCaseSensitive(session.filters.findCaseSensitive ?? false);
-    logStore.setFindUseRegex(session.filters.findUseRegex ?? false);
-  } else {
-    filterStore.clearFilter();
-  }
+  filterStore.setClauses(session.filters.clauses.filter(isFilterClause));
+  logStore.setHighlightText(session.filters.highlightText || "");
+  logStore.setFindQuery(session.filters.findQuery || "");
+  logStore.setFindCaseSensitive(session.filters.findCaseSensitive ?? false);
+  logStore.setFindUseRegex(session.filters.findUseRegex ?? false);
 
   return sessionPath;
 }
