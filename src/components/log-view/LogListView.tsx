@@ -22,6 +22,8 @@ import { useContextMenu } from "../../hooks/use-context-menu";
 import {
   ArrowBidirectionalLeftRightRegular,
   ArrowDownRegular,
+  ArrowSortDownRegular,
+  ArrowSortUpRegular,
   ArrowUpRegular,
 } from "@fluentui/react-icons";
 import {
@@ -33,11 +35,6 @@ import {
   type ColumnId,
   type ColumnDefinition,
 } from "../../lib/column-config";
-import {
-  ArrowSortDownRegular,
-  ArrowSortUpRegular,
-} from "@fluentui/react-icons";
-
 type SortDir = "asc" | "desc";
 import { getThemeById } from "../../lib/themes";
 import {
