@@ -1,4 +1,11 @@
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
 use serde::Serialize;
+use tauri::{AppHandle, Manager};
+
+use crate::error::{AppError, CmdResult};
 
 const DISABLE_UPDATE_CHECKS_ENV: &str = "CMTRACEOPEN_DISABLE_UPDATE_CHECKS";
 
@@ -48,6 +55,70 @@ fn update_checks_disabled_by_registry() -> bool {
     false
 }
 
+fn get_app_logs_dir(app: &AppHandle) -> CmdResult<PathBuf> {
+    let path = app.path().app_log_dir().map_err(|error| {
+        AppError::Internal(format!("Failed to resolve app log directory: {error}"))
+    })?;
+
+    fs::create_dir_all(&path).map_err(|error| {
+        AppError::Internal(format!(
+            "Failed to create app log directory '{}': {error}",
+            path.display()
+        ))
+    })?;
+
+    Ok(path)
+}
+
+fn open_directory_in_file_manager(path: &Path) -> CmdResult<()> {
+    #[cfg(target_os = "windows")]
+    {
+        Command::new("explorer")
+            .arg(path)
+            .spawn()
+            .map_err(|error| {
+                AppError::Internal(format!(
+                    "Failed to open Explorer for '{}': {error}",
+                    path.display()
+                ))
+            })?;
+
+        return Ok(());
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open").arg(path).spawn().map_err(|error| {
+            AppError::Internal(format!(
+                "Failed to open Finder for '{}': {error}",
+                path.display()
+            ))
+        })?;
+
+        return Ok(());
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        Command::new("xdg-open")
+            .arg(path)
+            .spawn()
+            .map_err(|error| {
+                AppError::Internal(format!(
+                    "Failed to open file manager for '{}': {error}",
+                    path.display()
+                ))
+            })?;
+
+        return Ok(());
+    }
+
+    #[allow(unreachable_code)]
+    Err(AppError::PlatformUnsupported(
+        "Opening the application logs folder is not supported on this platform.".to_string(),
+    ))
+}
+
 #[tauri::command]
 pub fn get_update_policy() -> UpdatePolicy {
     UpdatePolicy {
@@ -93,6 +164,26 @@ pub fn get_available_workspaces() -> Vec<&'static str> {
     workspaces.push("dns-dhcp");
 
     workspaces
+}
+
+#[tauri::command]
+pub fn open_app_logs_folder(app: AppHandle) -> CmdResult<()> {
+    let logs_dir = get_app_logs_dir(&app)?;
+
+    log::info!("app.logs_folder.open requested path={}", logs_dir.display());
+
+    if let Err(error) = open_directory_in_file_manager(&logs_dir) {
+        log::error!(
+            "app.logs_folder.open failed path={} error={}",
+            logs_dir.display(),
+            error
+        );
+        return Err(error);
+    }
+
+    log::info!("app.logs_folder.open succeeded path={}", logs_dir.display());
+
+    Ok(())
 }
 
 #[cfg(test)]

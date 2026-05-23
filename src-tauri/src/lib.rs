@@ -27,12 +27,16 @@ pub mod sysmon;
 pub mod timeline;
 mod watcher;
 
+use log::LevelFilter;
 use state::app_state::AppState;
+use tauri_plugin_log::{RotationStrategy, Target, TargetKind};
 
 #[cfg(target_os = "windows")]
 use graph_api::GraphAuthState;
-#[cfg(target_os = "windows")]
-use tauri::Manager;
+
+const APP_LOG_FILE_NAME: &str = "cmtrace-open";
+const APP_LOG_MAX_FILE_SIZE_BYTES: u128 = 1_000_000;
+const APP_LOG_ROTATION_COUNT: usize = 5;
 
 /// Returns all non-flag CLI arguments as potential file paths.
 ///
@@ -51,14 +55,35 @@ fn get_initial_file_paths_from_args() -> Vec<String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let initial_file_paths = get_initial_file_paths_from_args();
+    let initial_file_path_count = initial_file_paths.len();
 
     tauri::Builder::default()
+        .plugin(
+            tauri_plugin_log::Builder::new()
+                .clear_targets()
+                .targets([
+                    Target::new(TargetKind::Stdout),
+                    Target::new(TargetKind::LogDir {
+                        file_name: Some(APP_LOG_FILE_NAME.to_string()),
+                    }),
+                ])
+                .level(if cfg!(debug_assertions) {
+                    LevelFilter::Debug
+                } else {
+                    LevelFilter::Info
+                })
+                .rotation_strategy(RotationStrategy::KeepSome(APP_LOG_ROTATION_COUNT))
+                .max_file_size(APP_LOG_MAX_FILE_SIZE_BYTES)
+                .build(),
+        )
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_process::init())
-        .setup(|app| {
+        .setup(move |app| {
+            use tauri::Manager as _;
+
             #[cfg(desktop)]
             app.handle()
                 .plugin(tauri_plugin_updater::Builder::new().build())?;
@@ -74,14 +99,31 @@ pub fn run() {
             app.manage(GraphAuthState::new());
 
             {
-                use tauri::Manager as _;
                 app.manage(commands::timeline::TimelineRuntimeMap::new());
+            }
+
+            let package_info = app.package_info();
+            log::info!(
+                "app.startup.ready name={} version={} target_os={} arch={} initial_file_path_count={}",
+                package_info.name,
+                package_info.version,
+                std::env::consts::OS,
+                std::env::consts::ARCH,
+                initial_file_path_count
+            );
+
+            match app.path().app_log_dir() {
+                Ok(log_dir) => {
+                    log::info!("app.startup.logs_dir path={}", log_dir.display());
+                }
+                Err(error) => {
+                    log::warn!("app.startup.logs_dir_unavailable error={error}");
+                }
             }
 
             // Auto-open DevTools in debug builds
             #[cfg(all(debug_assertions, desktop))]
             {
-                use tauri::Manager as _;
                 if let Some(window) = app.get_webview_window("main") {
                     window.open_devtools();
                 }
@@ -101,12 +143,15 @@ pub fn run() {
             commands::file_association::set_file_association_prompt_suppressed,
             commands::app_config::get_available_workspaces,
             commands::app_config::get_update_policy,
+            commands::app_config::open_app_logs_folder,
             commands::dns_dhcp::check_dns_logging_status,
             commands::dns_dhcp::enable_dns_debug_logging,
             commands::dns_dhcp::collect_dns_dhcp_from_domain,
             commands::file_ops::open_log_file,
             commands::file_ops::parse_files_batch,
             commands::file_ops::open_log_folder_aggregate,
+            commands::file_ops::register_parsed_entries_session,
+            commands::file_ops::release_parsed_entries_session,
             commands::file_ops::list_log_folder,
             commands::file_ops::inspect_path_kind,
             commands::file_ops::write_text_output_file,

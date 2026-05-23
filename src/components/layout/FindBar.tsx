@@ -1,4 +1,4 @@
-import { useEffect, useRef, type KeyboardEvent } from "react";
+import { useEffect, useRef, type KeyboardEvent, type ReactNode } from "react";
 import {
   Button,
   Input,
@@ -11,10 +11,21 @@ import {
   ArrowDownRegular,
   TextCaseTitleRegular,
 } from "@fluentui/react-icons";
-import { useLogStore } from "../../stores/log-store";
+import { isLargeFileModeActive, useLogStore } from "../../stores/log-store";
 
 interface FindBarProps {
   onClose: () => void;
+}
+
+const LARGE_FILE_MODE_FIND_MESSAGE =
+  "Find is disabled in large-file mode to keep the app responsive.";
+
+function TooltipButton({ content, children }: { content: string; children: ReactNode }) {
+  return (
+    <Tooltip content={content} relationship="label">
+      <span style={{ display: "inline-flex" }}>{children}</span>
+    </Tooltip>
+  );
 }
 
 export function FindBar({ onClose }: FindBarProps) {
@@ -26,24 +37,30 @@ export function FindBar({ onClose }: FindBarProps) {
   const findRegexError = useLogStore((s) => s.findRegexError);
   const findMatchIds = useLogStore((s) => s.findMatchIds);
   const findCurrentIndex = useLogStore((s) => s.findCurrentIndex);
+  const largeFileModeActive = useLogStore((s) => isLargeFileModeActive(s.largeFileMode));
   const setFindQuery = useLogStore((s) => s.setFindQuery);
   const setFindCaseSensitive = useLogStore((s) => s.setFindCaseSensitive);
   const setFindUseRegex = useLogStore((s) => s.setFindUseRegex);
   const findNext = useLogStore((s) => s.findNext);
   const findPrevious = useLogStore((s) => s.findPrevious);
 
-  // Auto-focus on mount
   useEffect(() => {
-    if (inputRef.current) {
-      inputRef.current.focus();
-      inputRef.current.select();
+    if (largeFileModeActive || !inputRef.current) {
+      return;
     }
-  }, []);
+
+    inputRef.current.focus();
+    inputRef.current.select();
+  }, [largeFileModeActive]);
 
   const handleKeyDown = (event: KeyboardEvent) => {
     if (event.key === "Escape") {
       event.preventDefault();
       onClose();
+      return;
+    }
+
+    if (largeFileModeActive) {
       return;
     }
 
@@ -81,6 +98,19 @@ export function FindBar({ onClose }: FindBarProps) {
     border: active ? "none" : `1px solid ${tokens.colorNeutralStroke1}`,
   });
 
+  const matchCaseTooltip = largeFileModeActive
+    ? LARGE_FILE_MODE_FIND_MESSAGE
+    : "Match case";
+  const regexTooltip = largeFileModeActive
+    ? LARGE_FILE_MODE_FIND_MESSAGE
+    : "Use regular expression";
+  const previousTooltip = largeFileModeActive
+    ? LARGE_FILE_MODE_FIND_MESSAGE
+    : "Previous match (Shift+Enter)";
+  const nextTooltip = largeFileModeActive
+    ? LARGE_FILE_MODE_FIND_MESSAGE
+    : "Next match (Enter)";
+
   return (
     <div
       style={{
@@ -99,11 +129,12 @@ export function FindBar({ onClose }: FindBarProps) {
         value={findQuery}
         onChange={(_, data) => setFindQuery(data.value)}
         onKeyDown={handleKeyDown}
-        placeholder="Find..."
+        placeholder={largeFileModeActive ? "Find unavailable in large-file mode" : "Find..."}
+        disabled={largeFileModeActive}
         size="small"
         style={{ minWidth: 200, maxWidth: 300, flex: 1 }}
         contentAfter={
-          hasQuery ? (
+          hasQuery && !largeFileModeActive ? (
             <span
               style={{
                 fontSize: 11,
@@ -120,7 +151,19 @@ export function FindBar({ onClose }: FindBarProps) {
         }
       />
 
-      <Tooltip content="Match case" relationship="label">
+      {largeFileModeActive && (
+        <span
+          style={{
+            fontSize: 11,
+            color: tokens.colorNeutralForeground3,
+            whiteSpace: "nowrap",
+          }}
+        >
+          {LARGE_FILE_MODE_FIND_MESSAGE}
+        </span>
+      )}
+
+      <TooltipButton content={matchCaseTooltip}>
         <Button
           appearance="subtle"
           size="small"
@@ -128,12 +171,13 @@ export function FindBar({ onClose }: FindBarProps) {
           onClick={() => setFindCaseSensitive(!findCaseSensitive)}
           aria-label="Match case"
           aria-pressed={findCaseSensitive}
+          disabled={largeFileModeActive}
         >
           <TextCaseTitleRegular fontSize={16} />
         </Button>
-      </Tooltip>
+      </TooltipButton>
 
-      <Tooltip content="Use regular expression" relationship="label">
+      <TooltipButton content={regexTooltip}>
         <Button
           appearance="subtle"
           size="small"
@@ -141,36 +185,37 @@ export function FindBar({ onClose }: FindBarProps) {
           onClick={() => setFindUseRegex(!findUseRegex)}
           aria-label="Use regular expression"
           aria-pressed={findUseRegex}
+          disabled={largeFileModeActive}
         >
           <span style={{ fontSize: 13, fontFamily: "monospace", fontWeight: 600 }}>.*</span>
         </Button>
-      </Tooltip>
+      </TooltipButton>
 
       <div style={{ width: 1, height: 20, backgroundColor: tokens.colorNeutralStroke2 }} />
 
-      <Tooltip content="Previous match (Shift+Enter)" relationship="label">
+      <TooltipButton content={previousTooltip}>
         <Button
           appearance="subtle"
           size="small"
           icon={<ArrowUpRegular />}
-          disabled={matchCount === 0}
+          disabled={largeFileModeActive || matchCount === 0}
           onClick={() => findPrevious("find-bar.button")}
           aria-label="Previous match"
           style={{ minWidth: 28, width: 28, height: 28, padding: 0 }}
         />
-      </Tooltip>
+      </TooltipButton>
 
-      <Tooltip content="Next match (Enter)" relationship="label">
+      <TooltipButton content={nextTooltip}>
         <Button
           appearance="subtle"
           size="small"
           icon={<ArrowDownRegular />}
-          disabled={matchCount === 0}
+          disabled={largeFileModeActive || matchCount === 0}
           onClick={() => findNext("find-bar.button")}
           aria-label="Next match"
           style={{ minWidth: 28, width: 28, height: 28, padding: 0 }}
         />
-      </Tooltip>
+      </TooltipButton>
 
       <Tooltip content="Close (Escape)" relationship="label">
         <Button

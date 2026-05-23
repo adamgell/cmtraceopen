@@ -1,9 +1,39 @@
-import { describe, it, expect, beforeEach } from "vitest";
-import { useFilterStore, getFilterStatusSnapshot } from "./filter-store";
+import { invoke } from "@tauri-apps/api/core";
+import { describe, it, expect, beforeEach, vi } from "vitest";
+import {
+  applyBackendFilter,
+  getFilterStatusSnapshot,
+  mergeFilteredIds,
+  useFilterStore,
+} from "./filter-store";
 import type { FilterClause } from "../components/dialogs/FilterDialog";
+import type { LogEntry } from "../types/log";
+
+vi.mock("@tauri-apps/api/core", () => ({
+  invoke: vi.fn(),
+}));
+
+function createEntry(id: number): LogEntry {
+  return {
+    id,
+    lineNumber: id + 1,
+    message: `message ${id}`,
+    component: null,
+    timestamp: null,
+    timestampDisplay: null,
+    severity: "Info",
+    thread: null,
+    threadDisplay: null,
+    sourceFile: null,
+    format: "Plain",
+    filePath: `/logs/${id}.log`,
+    timezoneOffset: null,
+  };
+}
 
 describe("filter-store", () => {
   beforeEach(() => {
+    vi.clearAllMocks();
     useFilterStore.getState().clearFilter();
   });
 
@@ -58,6 +88,14 @@ describe("filter-store", () => {
     });
   });
 
+  describe("mergeFilteredIds", () => {
+    it("merges matching appended IDs into the existing filtered ID set", () => {
+      const merged = mergeFilteredIds(new Set([1, 3]), [5, 3, 8]);
+
+      expect(Array.from(merged)).toEqual([1, 3, 5, 8]);
+    });
+  });
+
   describe("setIsFiltering / setFilterError", () => {
     it("tracks filtering state", () => {
       useFilterStore.getState().setIsFiltering(true);
@@ -73,6 +111,85 @@ describe("filter-store", () => {
 
       useFilterStore.getState().setFilterError(null);
       expect(useFilterStore.getState().filterError).toBeNull();
+    });
+  });
+
+  describe("applyBackendFilter", () => {
+    const clauses: FilterClause[] = [
+      { field: "Message", op: "Contains", value: "error" },
+    ];
+    const entries = [createEntry(1), createEntry(2)];
+
+    it("uses backend session keyed filtering when session metadata exists", async () => {
+      vi.mocked(invoke).mockResolvedValue([2]);
+
+      const ids = await applyBackendFilter(clauses, entries, {
+        backendSessionKey: "session-123",
+      });
+
+      expect(ids).toEqual([2]);
+      expect(invoke).toHaveBeenCalledTimes(1);
+      expect(invoke).toHaveBeenCalledWith("apply_filter", {
+        clauses,
+        sessionKey: "session-123",
+      });
+    });
+
+    it("falls back to raw-entry filtering when the backend session key is stale", async () => {
+      vi.mocked(invoke)
+        .mockRejectedValueOnce(new Error("Unknown parsed entries session key stale-session."))
+        .mockResolvedValueOnce([1]);
+
+      const ids = await applyBackendFilter(clauses, entries, {
+        backendSessionKey: "stale-session",
+      });
+
+      expect(ids).toEqual([1]);
+      expect(invoke).toHaveBeenCalledTimes(2);
+      expect(vi.mocked(invoke).mock.calls).toEqual([
+        ["apply_filter", { clauses, sessionKey: "stale-session" }],
+        ["apply_filter", { clauses, entries }],
+      ]);
+    });
+
+    it("uses raw-entry filtering for frontend-only views or missing session metadata", async () => {
+      vi.mocked(invoke).mockResolvedValue([1, 2]);
+
+      const ids = await applyBackendFilter(clauses, entries, {
+        backendSessionKey: null,
+      });
+
+      expect(ids).toEqual([1, 2]);
+      expect(invoke).toHaveBeenCalledTimes(1);
+      expect(invoke).toHaveBeenCalledWith("apply_filter", {
+        clauses,
+        entries,
+      });
+    });
+
+    it("uses raw-entry filtering for incremental live-tail batches even when a backend session exists", async () => {
+      vi.mocked(invoke).mockResolvedValue([2]);
+
+      const ids = await applyBackendFilter(clauses, entries, {
+        backendSessionKey: "session-123",
+        forceRawEntries: true,
+      });
+
+      expect(ids).toEqual([2]);
+      expect(invoke).toHaveBeenCalledTimes(1);
+      expect(invoke).toHaveBeenCalledWith("apply_filter", {
+        clauses,
+        entries,
+      });
+    });
+
+    it("rethrows non-session backend errors so the existing error state flow remains visible", async () => {
+      vi.mocked(invoke).mockRejectedValue(new Error("Invalid timestamp filter value"));
+
+      await expect(applyBackendFilter(clauses, entries, {
+        backendSessionKey: "session-123",
+      })).rejects.toThrow("Invalid timestamp filter value");
+      expect(invoke).toHaveBeenCalledTimes(1);
     });
   });
 

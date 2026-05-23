@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, Suspense } from "react";
 import { tokens, ProgressBar, Spinner } from "@fluentui/react-components";
 import { ChevronRightRegular } from "@fluentui/react-icons";
-import { invoke } from "@tauri-apps/api/core";
 import { Toolbar } from "./Toolbar";
 import { TabStrip } from "./TabStrip";
 import { StatusBar } from "./StatusBar";
@@ -28,8 +27,16 @@ import { RegistryViewer } from "../registry-view/RegistryViewer";
 import type { FilterClause } from "../dialogs/FilterDialog";
 import type { LogEntry } from "../../types/log";
 import { useUiStore } from "../../stores/ui-store";
-import { useLogStore } from "../../stores/log-store";
-import { useFilterStore } from "../../stores/filter-store";
+import {
+  getActiveFilterSessionKey,
+  isLargeFileModeActive,
+  useLogStore,
+} from "../../stores/log-store";
+import {
+  applyBackendFilter,
+  mergeFilteredIds,
+  useFilterStore,
+} from "../../stores/filter-store";
 import { switchToTab } from "../../lib/log-source";
 import { useFileWatcher } from "../../hooks/use-file-watcher";
 import { useIntuneAnalysisProgress } from "../../workspaces/intune/use-intune-analysis-progress";
@@ -43,18 +50,90 @@ import { useParseProgressListener } from "../../hooks/use-parse-progress-listene
 import { useUpdateChecker } from "../../hooks/use-update-checker";
 import { QuickStatsPanel } from "../panels/QuickStatsPanel";
 
+function buildClauseSignature(clauses: FilterClause[]): string {
+  return clauses
+    .map((clause) => `${clause.field}:${clause.op}:${clause.value}`)
+    .join("|");
+}
+
 function buildFilterRunSignature(
   entries: LogEntry[],
   clauses: FilterClause[],
-  entriesRevision: number
+  entriesRevision: number,
+  filterTarget: string
 ): string {
   const lastId = entries.length > 0 ? entries[entries.length - 1].id : -1;
   const lastLineNumber = entries.length > 0 ? entries[entries.length - 1].lineNumber : -1;
-  const clauseSignature = clauses
-    .map((clause) => `${clause.field}:${clause.op}:${clause.value}`)
-    .join("|");
+  const clauseSignature = buildClauseSignature(clauses);
 
-  return `${clauseSignature}:${entriesRevision}:${entries.length}:${lastId}:${lastLineNumber}`;
+  return `${clauseSignature}:${filterTarget}:${entriesRevision}:${entries.length}:${lastId}:${lastLineNumber}`;
+}
+
+interface AppliedFilterSnapshot {
+  clauseSignature: string;
+  filterTarget: string;
+  entryCount: number;
+  maxEntryId: number;
+}
+
+interface RunFilterOptions {
+  trigger: string;
+  mode?: "full" | "incremental";
+  baseFilteredIds?: ReadonlySet<number> | null;
+  fullEntriesSnapshot?: LogEntry[];
+}
+
+function getMaxEntryId(entries: LogEntry[]): number {
+  let maxEntryId = -1;
+
+  for (const entry of entries) {
+    if (entry.id > maxEntryId) {
+      maxEntryId = entry.id;
+    }
+  }
+
+  return maxEntryId;
+}
+
+function buildAppliedFilterSnapshot(
+  entries: LogEntry[],
+  clauses: FilterClause[],
+  filterTarget: string
+): AppliedFilterSnapshot {
+  return {
+    clauseSignature: buildClauseSignature(clauses),
+    filterTarget,
+    entryCount: entries.length,
+    maxEntryId: getMaxEntryId(entries),
+  };
+}
+
+function getIncrementalTailEntries(
+  entries: LogEntry[],
+  appliedSnapshot: AppliedFilterSnapshot | null,
+  clauses: FilterClause[],
+  filterTarget: string
+): LogEntry[] | null {
+  if (!appliedSnapshot || appliedSnapshot.entryCount >= entries.length) {
+    return null;
+  }
+
+  if (
+    appliedSnapshot.clauseSignature !== buildClauseSignature(clauses) ||
+    appliedSnapshot.filterTarget !== filterTarget
+  ) {
+    return null;
+  }
+
+  const appendedEntries = entries.filter((entry) => entry.id > appliedSnapshot.maxEntryId);
+
+  if (appendedEntries.length === 0) {
+    return null;
+  }
+
+  return appliedSnapshot.entryCount + appendedEntries.length === entries.length
+    ? appendedEntries
+    : null;
 }
 
 export function AppShell() {
@@ -131,6 +210,8 @@ export function AppShell() {
   } = useUpdateChecker();
 
   const entries = useLogStore((s) => s.entries);
+  const largeFileMode = useLogStore((s) => s.largeFileMode);
+  const activeSource = useLogStore((s) => s.activeSource);
   const filterClauses = useFilterStore((s) => s.clauses);
   const setClauses = useFilterStore((s) => s.setClauses);
   const setFilteredIds = useFilterStore((s) => s.setFilteredIds);
@@ -138,6 +219,8 @@ export function AppShell() {
   const setFilterError = useFilterStore((s) => s.setFilterError);
 
   const infoPaneResizeRef = useRef<{ startY: number; startHeight: number } | null>(null);
+  const backendFilterSessionKey = getActiveFilterSessionKey(activeSource, sourceOpenMode);
+  const filterTarget = backendFilterSessionKey ?? `raw:${sourceOpenMode ?? "none"}`;
 
   useEffect(() => {
     const onMouseMove = (e: MouseEvent) => {
@@ -168,8 +251,10 @@ export function AppShell() {
   }, [setInfoPaneHeight]);
 
   const filterRequestIdRef = useRef(0);
+  const largeFileModeFilterMessage = "Filtering is disabled in large-file mode to keep the app responsive.";
   const inFlightSignatureRef = useRef<string | null>(null);
   const lastAppliedSignatureRef = useRef<string | null>(null);
+  const appliedFilterSnapshotRef = useRef<AppliedFilterSnapshot | null>(null);
   const entriesRevisionRef = useRef<{ entries: LogEntry[] | null; revision: number }>({
     entries: null,
     revision: 0,
@@ -187,20 +272,54 @@ export function AppShell() {
   }, []);
 
   const runFilter = useCallback(
-    async (clauses: FilterClause[], entriesSnapshot: LogEntry[], trigger: string) => {
+    async (
+      clauses: FilterClause[],
+      entriesToFilter: LogEntry[],
+      options: RunFilterOptions
+    ) => {
+      const {
+        trigger,
+        mode = "full",
+        baseFilteredIds = null,
+        fullEntriesSnapshot = entriesToFilter,
+      } = options;
+
       if (clauses.length === 0) {
+        filterRequestIdRef.current += 1;
         inFlightSignatureRef.current = null;
         lastAppliedSignatureRef.current = null;
+        appliedFilterSnapshotRef.current = null;
         setFilteredIds(null);
         setIsFiltering(false);
         setFilterError(null);
         return;
       }
 
+      if (isLargeFileModeActive(largeFileMode)) {
+        filterRequestIdRef.current += 1;
+        inFlightSignatureRef.current = null;
+        lastAppliedSignatureRef.current = null;
+        appliedFilterSnapshotRef.current = null;
+        setFilteredIds(null);
+        setIsFiltering(false);
+        setFilterError(largeFileModeFilterMessage);
+        console.info("[app-shell] skipped filter while large-file mode is active", {
+          trigger,
+          mode,
+          clauseCount: clauses.length,
+          entryCount: fullEntriesSnapshot.length,
+          filterEntryCount: entriesToFilter.length,
+          filterTransport: backendFilterSessionKey ? "session-key" : "raw-entries",
+          backendSessionKeyPresent: backendFilterSessionKey !== null,
+        });
+        return;
+      }
+
       const signature = buildFilterRunSignature(
-        entriesSnapshot,
+        fullEntriesSnapshot,
         clauses,
-        getEntriesRevision(entriesSnapshot)
+        getEntriesRevision(fullEntriesSnapshot),
+        filterTarget
       );
 
       if (
@@ -218,38 +337,68 @@ export function AppShell() {
       setIsFiltering(true);
 
       try {
-        const ids = await invoke<number[]>("apply_filter", {
-          entries: entriesSnapshot,
-          clauses,
+        const ids = await applyBackendFilter(clauses, entriesToFilter, {
+          backendSessionKey: backendFilterSessionKey,
+          forceRawEntries: mode === "incremental",
         });
 
         if (filterRequestIdRef.current !== requestId) {
           return;
         }
 
-        setFilteredIds(new Set(ids));
+        const nextFilteredIds =
+          mode === "incremental" && baseFilteredIds
+            ? mergeFilteredIds(baseFilteredIds, ids)
+            : new Set(ids);
+
+        setFilteredIds(nextFilteredIds);
         lastAppliedSignatureRef.current = signature;
+        appliedFilterSnapshotRef.current = buildAppliedFilterSnapshot(
+          fullEntriesSnapshot,
+          clauses,
+          filterTarget
+        );
 
         console.info("[app-shell] applied filter snapshot", {
           trigger,
+          mode,
           clauseCount: clauses.length,
-          entryCount: entriesSnapshot.length,
+          entryCount: fullEntriesSnapshot.length,
+          filterEntryCount: entriesToFilter.length,
           matchedCount: ids.length,
+          mergedMatchedCount: nextFilteredIds.size,
+          filterTransport:
+            mode === "incremental"
+              ? "raw-entries-incremental"
+              : backendFilterSessionKey
+                ? "session-key"
+                : "raw-entries",
+          backendSessionKeyPresent: backendFilterSessionKey !== null,
         });
       } catch (err) {
         if (filterRequestIdRef.current !== requestId) {
           return;
         }
 
+        appliedFilterSnapshotRef.current = null;
         const errorMessage =
           err instanceof Error ? err.message : "Unknown filter error";
 
         setFilterError(errorMessage);
         console.error("[app-shell] failed to apply filter", {
           trigger,
+          mode,
           error: err,
           clauseCount: clauses.length,
-          entryCount: entriesSnapshot.length,
+          entryCount: fullEntriesSnapshot.length,
+          filterEntryCount: entriesToFilter.length,
+          filterTransport:
+            mode === "incremental"
+              ? "raw-entries-incremental"
+              : backendFilterSessionKey
+                ? "session-key"
+                : "raw-entries",
+          backendSessionKeyPresent: backendFilterSessionKey !== null,
         });
 
         throw err;
@@ -260,22 +409,67 @@ export function AppShell() {
         }
       }
     },
-    [getEntriesRevision, setFilterError, setFilteredIds, setIsFiltering]
+    [
+      backendFilterSessionKey,
+      filterTarget,
+      getEntriesRevision,
+      largeFileMode,
+      largeFileModeFilterMessage,
+      setFilterError,
+      setFilteredIds,
+      setIsFiltering,
+    ]
   );
 
   useEffect(() => {
     if (filterClauses.length === 0) {
+      filterRequestIdRef.current += 1;
       inFlightSignatureRef.current = null;
       lastAppliedSignatureRef.current = null;
+      appliedFilterSnapshotRef.current = null;
       setFilteredIds(null);
       setIsFiltering(false);
       return;
     }
 
-    runFilter(filterClauses, entries, "live-tail-update").catch((error) => {
+    const currentFilterState = useFilterStore.getState();
+    const appendedEntries =
+      currentFilterState.filterError === null && currentFilterState.filteredIds !== null
+        ? getIncrementalTailEntries(
+            entries,
+            appliedFilterSnapshotRef.current,
+            filterClauses,
+            filterTarget
+          )
+        : null;
+
+    if (appendedEntries) {
+      runFilter(filterClauses, appendedEntries, {
+        trigger: "live-tail-append",
+        mode: "incremental",
+        baseFilteredIds: currentFilterState.filteredIds,
+        fullEntriesSnapshot: entries,
+      }).catch((error) => {
+        console.warn("[app-shell] live incremental filter refresh failed", { error });
+      });
+      return;
+    }
+
+    runFilter(filterClauses, entries, {
+      trigger: "live-tail-update",
+      mode: "full",
+    }).catch((error) => {
       console.warn("[app-shell] live filter refresh failed", { error });
     });
-  }, [entries, filterClauses, runFilter, setFilteredIds, setIsFiltering]);
+  }, [entries, filterClauses, filterTarget, runFilter, setFilteredIds, setIsFiltering]);
+
+  useEffect(() => {
+    if (!isLargeFileModeActive(largeFileMode) || !showFilterDialog) {
+      return;
+    }
+
+    setShowFilterDialog(false);
+  }, [largeFileMode, setShowFilterDialog, showFilterDialog]);
 
   useFileWatcher();
   useIntuneAnalysisProgress();
@@ -306,7 +500,10 @@ export function AppShell() {
   const handleApplyFilter = useCallback(
     async (clauses: FilterClause[]) => {
       setClauses(clauses);
-      await runFilter(clauses, entries, "filter-dialog-apply");
+      await runFilter(clauses, entries, {
+        trigger: "filter-dialog-apply",
+        mode: "full",
+      });
     },
     [entries, runFilter, setClauses]
   );

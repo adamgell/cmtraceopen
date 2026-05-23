@@ -69,20 +69,31 @@ export type KnownSourceDefaultFileSelectionBehavior =
   | "preferFileNameThenPattern"
   | "preferPattern";
 
+export interface ParsedEntriesSessionMetadata {
+  sessionKey: string;
+  entryCount: number;
+}
+
 export type LogSource =
   | {
     kind: "file";
     path: string;
+    sessionKey?: string | null;
+    aggregateSessionKey?: string | null;
   }
   | {
     kind: "folder";
     path: string;
+    sessionKey?: string | null;
+    aggregateSessionKey?: string | null;
   }
   | {
     kind: "known";
     sourceId: string;
     defaultPath: string;
     pathKind: KnownSourcePathKind;
+    sessionKey?: string | null;
+    aggregateSessionKey?: string | null;
   };
 
 export interface FolderEntry {
@@ -212,6 +223,12 @@ export interface ParserSelectionInfo {
   specialization?: ParserSpecialization | null;
 }
 
+export interface LargeFileModeMetadata {
+  isActive: boolean;
+  thresholdBytes: number;
+  loadedByteCount: number;
+}
+
 export interface ParseResult {
   entries: LogEntry[];
   formatDetected: LogFormat;
@@ -221,6 +238,8 @@ export interface ParseResult {
   filePath: string;
   fileSize: number;
   byteOffset: number;
+  largeFileMode?: LargeFileModeMetadata | null;
+  backendSession?: ParsedEntriesSessionMetadata | null;
 }
 
 export interface AggregateParsedFileResult {
@@ -229,6 +248,8 @@ export interface AggregateParsedFileResult {
   parseErrors: number;
   fileSize: number;
   byteOffset: number;
+  largeFileMode?: LargeFileModeMetadata | null;
+  backendSession?: ParsedEntriesSessionMetadata | null;
 }
 
 export interface AggregateParseResult {
@@ -237,6 +258,8 @@ export interface AggregateParseResult {
   parseErrors: number;
   folderPath: string;
   files: AggregateParsedFileResult[];
+  largeFileMode?: LargeFileModeMetadata | null;
+  backendSession?: ParsedEntriesSessionMetadata | null;
 }
 
 /** Payload emitted by the Rust tail watcher */

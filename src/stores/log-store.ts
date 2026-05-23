@@ -5,6 +5,7 @@ import type {
   FolderEntry,
   KnownSourceMetadata,
   KnownSourceToolbarFamily,
+  LargeFileModeMetadata,
   LogEntry,
   LogFormat,
   LogSource,
@@ -165,6 +166,106 @@ function computeFindMatches(
   return matchIds;
 }
 
+function normalizeVisibleEntryIds(
+  entries: LogEntry[],
+  visibleEntryIds: number[]
+): number[] {
+  if (entries.length === 0 || visibleEntryIds.length === 0) {
+    return [];
+  }
+
+  const availableIds = new Set(entries.map((entry) => entry.id));
+  return visibleEntryIds.filter((id) => availableIds.has(id));
+}
+
+function computeVisibleErrorEntryIds(
+  entries: LogEntry[],
+  visibleEntryIds: number[]
+): number[] {
+  if (entries.length === 0 || visibleEntryIds.length === 0) {
+    return [];
+  }
+
+  const entriesById = new Map(entries.map((entry) => [entry.id, entry]));
+  const errorEntryIds: number[] = [];
+
+  for (const id of visibleEntryIds) {
+    if (entriesById.get(id)?.severity === "Error") {
+      errorEntryIds.push(id);
+    }
+  }
+
+  return errorEntryIds;
+}
+
+function buildVisibleErrorNavigationState(
+  entries: LogEntry[],
+  visibleEntryIds: number[]
+): Pick<LogState, "visibleEntryIds" | "visibleErrorEntryIds"> {
+  const normalizedVisibleEntryIds = normalizeVisibleEntryIds(entries, visibleEntryIds);
+
+  return {
+    visibleEntryIds: normalizedVisibleEntryIds,
+    visibleErrorEntryIds: computeVisibleErrorEntryIds(entries, normalizedVisibleEntryIds),
+  };
+}
+
+function getAdjacentVisibleErrorId(
+  state: Pick<LogState, "selectedId" | "visibleEntryIds" | "visibleErrorEntryIds">,
+  direction: "next" | "previous"
+): number | null {
+  if (state.visibleErrorEntryIds.length === 0) {
+    return null;
+  }
+
+  if (state.selectedId === null) {
+    return direction === "next"
+      ? state.visibleErrorEntryIds[0]
+      : state.visibleErrorEntryIds[state.visibleErrorEntryIds.length - 1];
+  }
+
+  const selectedVisibleIndex = state.visibleEntryIds.indexOf(state.selectedId);
+  if (selectedVisibleIndex < 0) {
+    return direction === "next"
+      ? state.visibleErrorEntryIds[0]
+      : state.visibleErrorEntryIds[state.visibleErrorEntryIds.length - 1];
+  }
+
+  const selectedErrorIndex = state.visibleErrorEntryIds.indexOf(state.selectedId);
+  if (selectedErrorIndex >= 0) {
+    if (direction === "next") {
+      return state.visibleErrorEntryIds[
+        (selectedErrorIndex + 1) % state.visibleErrorEntryIds.length
+      ];
+    }
+
+    return state.visibleErrorEntryIds[
+      selectedErrorIndex <= 0
+        ? state.visibleErrorEntryIds.length - 1
+        : selectedErrorIndex - 1
+    ];
+  }
+
+  if (direction === "next") {
+    for (const errorId of state.visibleErrorEntryIds) {
+      if (state.visibleEntryIds.indexOf(errorId) > selectedVisibleIndex) {
+        return errorId;
+      }
+    }
+
+    return state.visibleErrorEntryIds[0];
+  }
+
+  for (let index = state.visibleErrorEntryIds.length - 1; index >= 0; index -= 1) {
+    const errorId = state.visibleErrorEntryIds[index];
+    if (state.visibleEntryIds.indexOf(errorId) < selectedVisibleIndex) {
+      return errorId;
+    }
+  }
+
+  return state.visibleErrorEntryIds[state.visibleErrorEntryIds.length - 1];
+}
+
 export function hasSourceContext(
   activeSource: LogSource | null,
   openFilePath: string | null
@@ -217,6 +318,25 @@ export function getActiveSourcePath(source: LogSource | null): string | null {
   return source.path;
 }
 
+export function getActiveFilterSessionKey(
+  activeSource: LogSource | null,
+  sourceOpenMode: SourceOpenMode
+): string | null {
+  if (!activeSource) {
+    return null;
+  }
+
+  if (sourceOpenMode === "single-file") {
+    return activeSource.sessionKey ?? null;
+  }
+
+  if (sourceOpenMode === "aggregate-folder") {
+    return activeSource.aggregateSessionKey ?? null;
+  }
+
+  return null;
+}
+
 export function getActiveSourceLabel(
   source: LogSource | null,
   knownSources: KnownSourceMetadata[]
@@ -230,6 +350,10 @@ export function getActiveSourceLabel(
   }
 
   return getBaseName(source.path) || source.path;
+}
+
+export function isLargeFileModeActive(largeFileMode: LargeFileModeMetadata | null | undefined): boolean {
+  return largeFileMode?.isActive === true;
 }
 
 export function getSourceFailureReason(status: SourceStatus): string | null {
@@ -505,6 +629,7 @@ interface LogState {
   formatDetected: LogFormat | null;
   parserSelection: ParserSelectionInfo | null;
   totalLines: number;
+  largeFileMode: LargeFileModeMetadata | null;
   /** Currently selected/tailed file path. */
   openFilePath: string | null;
   /** Broad source container (file, folder, or known source). */
@@ -531,6 +656,8 @@ interface LogState {
   findRegexError: string | null;
   findMatchIds: number[];
   findCurrentIndex: number;
+  visibleEntryIds: number[];
+  visibleErrorEntryIds: number[];
   /** Byte offset in the file after initial parse — used to start tailing */
   byteOffset: number;
   /** Which columns to show — derived from detected parser, not a user preference. */
@@ -556,6 +683,7 @@ interface LogState {
   hasActiveSource: () => boolean;
   canRefreshSource: () => boolean;
   hasFindSession: () => boolean;
+  canNavigateVisibleErrors: () => boolean;
   setEntries: (entries: LogEntry[]) => void;
   appendEntries: (entries: LogEntry[]) => void;
   selectEntry: (id: number | null) => void;
@@ -564,6 +692,7 @@ interface LogState {
   setFormatDetected: (format: LogFormat | null) => void;
   setParserSelection: (selection: ParserSelectionInfo | null) => void;
   setTotalLines: (count: number) => void;
+  setLargeFileMode: (metadata: LargeFileModeMetadata | null) => void;
   setOpenFilePath: (path: string | null) => void;
   setActiveSource: (source: LogSource | null) => void;
   setSourceEntries: (entries: FolderEntry[]) => void;
@@ -582,9 +711,12 @@ interface LogState {
   setFindCaseSensitive: (sensitive: boolean) => void;
   setFindUseRegex: (useRegex: boolean) => void;
   recomputeFindMatches: () => void;
+  setVisibleEntryIds: (ids: number[]) => void;
   appendAggregateEntries: (filePath: string, entries: LogEntry[]) => void;
   findNext: (trigger: string) => void;
   findPrevious: (trigger: string) => void;
+  selectNextVisibleError: (trigger: string) => void;
+  selectPreviousVisibleError: (trigger: string) => void;
   clearFind: () => void;
   clearActiveFile: () => void;
   clear: () => void;
@@ -624,6 +756,11 @@ function recomputeAndSetMatches(): void {
   const query = state.findQuery.trim();
 
   if (!query) {
+    useLogStore.setState({ findMatchIds: [], findCurrentIndex: -1, findRegexError: null });
+    return;
+  }
+
+  if (isLargeFileModeActive(state.largeFileMode)) {
     useLogStore.setState({ findMatchIds: [], findCurrentIndex: -1, findRegexError: null });
     return;
   }
@@ -697,6 +834,7 @@ export const useLogStore = create<LogState>((set, get) => ({
   formatDetected: null,
   parserSelection: null,
   totalLines: 0,
+  largeFileMode: null,
   openFilePath: null,
   activeSource: null,
   sourceEntries: [],
@@ -717,6 +855,8 @@ export const useLogStore = create<LogState>((set, get) => ({
   findRegexError: null,
   findMatchIds: [],
   findCurrentIndex: -1,
+  visibleEntryIds: [],
+  visibleErrorEntryIds: [],
   byteOffset: 0,
   folderLoadProgress: null,
   folderLoadCurrentFile: null,
@@ -740,6 +880,7 @@ export const useLogStore = create<LogState>((set, get) => ({
     return !state.isLoading && hasSourceContext(state.activeSource, state.openFilePath);
   },
   hasFindSession: () => get().findQuery.trim().length > 0 && get().findMatchIds.length > 0,
+  canNavigateVisibleErrors: () => get().visibleErrorEntryIds.length > 0,
   setEntries: (entries) => {
     set((state) => ({
       entries,
@@ -748,15 +889,20 @@ export const useLogStore = create<LogState>((set, get) => ({
         state.selectedId !== null && !entries.some((entry) => entry.id === state.selectedId)
           ? null
           : state.selectedId,
+      ...buildVisibleErrorNavigationState(entries, state.visibleEntryIds),
     }));
     recomputeAndSetMatches();
   },
   appendEntries: (newEntries) => {
-    set((state) => ({
-      entries: [...state.entries, ...newEntries],
-      totalLines: state.totalLines + newEntries.length,
-      guidNameMap: mergeGuidNameMap(state.guidNameMap, newEntries),
-    }));
+    set((state) => {
+      const entries = [...state.entries, ...newEntries];
+      return {
+        entries,
+        totalLines: state.totalLines + newEntries.length,
+        guidNameMap: mergeGuidNameMap(state.guidNameMap, newEntries),
+        ...buildVisibleErrorNavigationState(entries, state.visibleEntryIds),
+      };
+    });
     recomputeAndSetMatches();
   },
   appendAggregateEntries: (filePath, newEntries) => {
@@ -779,6 +925,7 @@ export const useLogStore = create<LogState>((set, get) => ({
         entries,
         totalLines: state.totalLines + entriesWithIds.length,
         guidNameMap: mergeGuidNameMap(state.guidNameMap, newEntries),
+        ...buildVisibleErrorNavigationState(entries, state.visibleEntryIds),
       };
     });
     recomputeAndSetMatches();
@@ -792,6 +939,16 @@ export const useLogStore = create<LogState>((set, get) => ({
   setFormatDetected: (format) => set({ formatDetected: format }),
   setParserSelection: (selection) => set({ parserSelection: selection }),
   setTotalLines: (count) => set({ totalLines: count }),
+  setLargeFileMode: (metadata) => {
+    set({ largeFileMode: metadata });
+
+    if (isLargeFileModeActive(metadata)) {
+      set({ findMatchIds: [], findCurrentIndex: -1, findRegexError: null });
+      return;
+    }
+
+    recomputeAndSetMatches();
+  },
   setSourceOpenMode: (mode) => set({ sourceOpenMode: mode }),
   setAggregateFiles: (files) => set({ aggregateFiles: files }),
   setOpenFilePath: (path) =>
@@ -835,6 +992,8 @@ export const useLogStore = create<LogState>((set, get) => ({
     recomputeAndSetMatches();
   },
   recomputeFindMatches: () => recomputeAndSetMatches(),
+  setVisibleEntryIds: (visibleEntryIds) =>
+    set((state) => buildVisibleErrorNavigationState(state.entries, visibleEntryIds)),
   findNext: (_trigger) => {
     const state = get();
     if (state.findMatchIds.length === 0) return;
@@ -848,6 +1007,22 @@ export const useLogStore = create<LogState>((set, get) => ({
       ? state.findMatchIds.length - 1
       : state.findCurrentIndex - 1;
     set({ findCurrentIndex: prevIndex, selectedId: state.findMatchIds[prevIndex] });
+  },
+  selectNextVisibleError: (_trigger) => {
+    const nextErrorId = getAdjacentVisibleErrorId(get(), "next");
+    if (nextErrorId === null) {
+      return;
+    }
+
+    get().selectEntry(nextErrorId);
+  },
+  selectPreviousVisibleError: (_trigger) => {
+    const previousErrorId = getAdjacentVisibleErrorId(get(), "previous");
+    if (previousErrorId === null) {
+      return;
+    }
+
+    get().selectEntry(previousErrorId);
   },
   clearFind: () => set({
     findQuery: "",
@@ -864,6 +1039,7 @@ export const useLogStore = create<LogState>((set, get) => ({
       formatDetected: null,
       parserSelection: null,
       totalLines: 0,
+      largeFileMode: null,
       openFilePath: null,
       selectedSourceFilePath: null,
       aggregateFiles: [],
@@ -876,6 +1052,8 @@ export const useLogStore = create<LogState>((set, get) => ({
       findMatchIds: [],
       findCurrentIndex: -1,
       findRegexError: null,
+      visibleEntryIds: [],
+      visibleErrorEntryIds: [],
       pendingScrollTarget: null,
     }),
   clear: () =>
@@ -887,6 +1065,7 @@ export const useLogStore = create<LogState>((set, get) => ({
       formatDetected: null,
       parserSelection: null,
       totalLines: 0,
+      largeFileMode: null,
       openFilePath: null,
       activeSource: null,
       sourceEntries: [],
@@ -908,6 +1087,8 @@ export const useLogStore = create<LogState>((set, get) => ({
       findMatchIds: [],
       findCurrentIndex: -1,
       findRegexError: null,
+      visibleEntryIds: [],
+      visibleErrorEntryIds: [],
       pendingScrollTarget: null,
     }),
   setFolderLoadProgress: (progress) =>
@@ -964,7 +1145,10 @@ export const useLogStore = create<LogState>((set, get) => ({
       },
       entries: filterByVisibility(merged, fileVisibility),
       sourceOpenMode: "merged" as SourceOpenMode,
+      largeFileMode: null,
       selectedId: null,
+      visibleEntryIds: [],
+      visibleErrorEntryIds: [],
       correlatedEntries: [],
     });
   },
@@ -974,7 +1158,10 @@ export const useLogStore = create<LogState>((set, get) => ({
       mergedTabState: null,
       entries: [],
       sourceOpenMode: null,
+      largeFileMode: null,
       selectedId: null,
+      visibleEntryIds: [],
+      visibleErrorEntryIds: [],
       correlatedEntries: [],
     });
   },
@@ -986,11 +1173,13 @@ export const useLogStore = create<LogState>((set, get) => ({
         ...state.mergedTabState.fileVisibility,
         [filePath]: visible,
       };
+      const entries = filterByVisibility(state.mergedTabState.mergedEntries, fileVisibility);
       return {
         mergedTabState: { ...state.mergedTabState, fileVisibility },
-        entries: filterByVisibility(state.mergedTabState.mergedEntries, fileVisibility),
+        entries,
         selectedId: null,
         correlatedEntries: [],
+        ...buildVisibleErrorNavigationState(entries, state.visibleEntryIds),
       };
     });
     recomputeAndSetMatches();
@@ -1003,11 +1192,13 @@ export const useLogStore = create<LogState>((set, get) => ({
       for (const fp of state.mergedTabState.sourceFilePaths) {
         fileVisibility[fp] = visible;
       }
+      const entries = visible ? state.mergedTabState.mergedEntries : [];
       return {
         mergedTabState: { ...state.mergedTabState, fileVisibility },
-        entries: visible ? state.mergedTabState.mergedEntries : [],
+        entries,
         selectedId: null,
         correlatedEntries: [],
+        ...buildVisibleErrorNavigationState(entries, state.visibleEntryIds),
       };
     });
     recomputeAndSetMatches();
@@ -1087,7 +1278,10 @@ export const useLogStore = create<LogState>((set, get) => ({
         stats,
       },
       sourceOpenMode: "diff" as SourceOpenMode,
+      largeFileMode: null,
       selectedId: null,
+      visibleEntryIds: [],
+      visibleErrorEntryIds: [],
     });
   },
 
@@ -1095,7 +1289,10 @@ export const useLogStore = create<LogState>((set, get) => ({
     set({
       diffState: null,
       sourceOpenMode: null,
+      largeFileMode: null,
       selectedId: null,
+      visibleEntryIds: [],
+      visibleErrorEntryIds: [],
     });
   },
 

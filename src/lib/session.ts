@@ -1,3 +1,5 @@
+import type { FilterClause, FilterField, FilterOp } from "../components/dialogs/FilterDialog";
+
 export interface SessionFile {
   version: number;
   savedAt: string;
@@ -26,7 +28,7 @@ export interface SessionMergedState {
 }
 
 export interface SessionFilters {
-  clauses: unknown[];
+  clauses: FilterClause[];
   findQuery: string;
   findCaseSensitive: boolean;
   findUseRegex: boolean;
@@ -50,6 +52,8 @@ export type SessionWorkspaceState =
   | { type: string };
 
 const CURRENT_VERSION = 1;
+const FILTER_FIELDS = ["Message", "Component", "Thread", "Timestamp", "Severity"] as const;
+const FILTER_OPS = ["Equals", "NotEquals", "Contains", "NotContains", "Before", "After"] as const;
 
 export function createEmptySession(): SessionFile {
   return {
@@ -67,6 +71,49 @@ export function createEmptySession(): SessionFile {
       highlightText: "",
     },
     workspaceState: { type: "log" },
+  };
+}
+
+function isFilterField(value: unknown): value is FilterField {
+  return typeof value === "string" && FILTER_FIELDS.includes(value as FilterField);
+}
+
+function isFilterOp(value: unknown): value is FilterOp {
+  return typeof value === "string" && FILTER_OPS.includes(value as FilterOp);
+}
+
+export function sanitizeSessionFilterClause(clause: unknown): FilterClause | null {
+  if (typeof clause !== "object" || clause === null) {
+    return null;
+  }
+
+  const candidate = clause as Record<string, unknown>;
+  if (!isFilterField(candidate.field) || !isFilterOp(candidate.op) || typeof candidate.value !== "string") {
+    return null;
+  }
+
+  return {
+    field: candidate.field,
+    op: candidate.op,
+    value: candidate.value,
+  };
+}
+
+export function sanitizeSessionFilters(filters: unknown): SessionFilters {
+  const rawFilters = typeof filters === "object" && filters !== null
+    ? filters as Record<string, unknown>
+    : {};
+
+  return {
+    clauses: Array.isArray(rawFilters.clauses)
+      ? rawFilters.clauses
+          .map((clause) => sanitizeSessionFilterClause(clause))
+          .filter((clause): clause is FilterClause => clause !== null)
+      : [],
+    findQuery: typeof rawFilters.findQuery === "string" ? rawFilters.findQuery : "",
+    findCaseSensitive: typeof rawFilters.findCaseSensitive === "boolean" ? rawFilters.findCaseSensitive : false,
+    findUseRegex: typeof rawFilters.findUseRegex === "boolean" ? rawFilters.findUseRegex : false,
+    highlightText: typeof rawFilters.highlightText === "string" ? rawFilters.highlightText : "",
   };
 }
 
@@ -95,18 +142,7 @@ export function validateSession(data: unknown): SessionFile | null {
   }
 
   const defaults = createEmptySession();
-
-  // Sanitize filters
-  const rawFilters = typeof obj.filters === "object" && obj.filters !== null
-    ? obj.filters as Record<string, unknown>
-    : {};
-  const filters: SessionFilters = {
-    clauses: Array.isArray(rawFilters.clauses) ? rawFilters.clauses : [],
-    findQuery: typeof rawFilters.findQuery === "string" ? rawFilters.findQuery : "",
-    findCaseSensitive: typeof rawFilters.findCaseSensitive === "boolean" ? rawFilters.findCaseSensitive : false,
-    findUseRegex: typeof rawFilters.findUseRegex === "boolean" ? rawFilters.findUseRegex : false,
-    highlightText: typeof rawFilters.highlightText === "string" ? rawFilters.highlightText : "",
-  };
+  const filters = sanitizeSessionFilters(obj.filters);
 
   // Sanitize merged tab state
   let mergedTabState: SessionMergedState | null = null;

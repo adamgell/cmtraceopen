@@ -53,9 +53,7 @@ pub fn is_dns_evtx(path: &Path) -> bool {
 /// produce structured `LogEntry` values.
 pub fn parse_evtx(path: &str) -> Result<ParseResult, String> {
     let path_obj = Path::new(path);
-    let file_size = std::fs::metadata(path)
-        .map(|m| m.len())
-        .unwrap_or(0);
+    let file_size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
 
     let mut parser = EvtxParser::from_path(path_obj)
         .map_err(|e| format!("Failed to open EVTX file {}: {}", path, e))?;
@@ -68,7 +66,11 @@ pub fn parse_evtx(path: &str) -> Result<ParseResult, String> {
         let record = match record_result {
             Ok(r) => r,
             Err(e) => {
-                log::warn!("event=dns_audit_record_skip file=\"{}\" error=\"{}\"", path, e);
+                log::warn!(
+                    "event=dns_audit_record_skip file=\"{}\" error=\"{}\"",
+                    path,
+                    e
+                );
                 parse_errors += 1;
                 continue;
             }
@@ -180,6 +182,7 @@ pub fn parse_evtx(path: &str) -> Result<ParseResult, String> {
         file_path: path.to_string(),
         file_size,
         byte_offset: file_size,
+        large_file_mode: None,
     })
 }
 
@@ -288,10 +291,7 @@ fn extract_event_fields(event_id: u32, data: &Value) -> EventFields {
 }
 
 /// Extract fields for record operation events (515-521).
-fn extract_record_ops(
-    event_id: u32,
-    data: &Value,
-) -> EventFields {
+fn extract_record_ops(event_id: u32, data: &Value) -> EventFields {
     let name = get_str(data, "NAME");
     let zone = get_str(data, "Zone");
     let ttl = get_str(data, "TTL");
@@ -335,10 +335,7 @@ fn extract_record_ops(
 }
 
 /// Extract fields for zone configuration events (513-514, 522-537).
-fn extract_zone_config(
-    event_id: u32,
-    data: &Value,
-) -> EventFields {
+fn extract_zone_config(event_id: u32, data: &Value) -> EventFields {
     let zone = get_str(data, "Zone");
     let setting = get_str(data, "Setting");
     let new_value = get_str(data, "NewValue");
@@ -364,10 +361,7 @@ fn extract_zone_config(
 }
 
 /// Extract fields for server configuration events (540-560).
-fn extract_server_config(
-    event_id: u32,
-    data: &Value,
-) -> EventFields {
+fn extract_server_config(event_id: u32, data: &Value) -> EventFields {
     let setting = get_str(data, "Setting");
     let value = get_str(data, "Value");
     let scope = get_str(data, "Scope");
@@ -390,10 +384,7 @@ fn extract_server_config(
 }
 
 /// Extract fields for DNSSEC key operation events (569-572).
-fn extract_dnssec_key_ops(
-    event_id: u32,
-    data: &Value,
-) -> EventFields {
+fn extract_dnssec_key_ops(event_id: u32, data: &Value) -> EventFields {
     let zone = get_str(data, "Zone");
     let algo = get_str(data, "CryptoAlgorithm");
 
@@ -411,10 +402,7 @@ fn extract_dnssec_key_ops(
 }
 
 /// Extract fields for policy operation events (577-582).
-fn extract_policy_ops(
-    event_id: u32,
-    data: &Value,
-) -> EventFields {
+fn extract_policy_ops(event_id: u32, data: &Value) -> EventFields {
     let policy = get_str(data, "PolicyName");
     let action = get_str(data, "Action");
 
@@ -432,10 +420,7 @@ fn extract_policy_ops(
 }
 
 /// Extract fields for delegation/subnet events (573-576).
-fn extract_delegation_subnet(
-    event_id: u32,
-    data: &Value,
-) -> EventFields {
+fn extract_delegation_subnet(event_id: u32, data: &Value) -> EventFields {
     let zone = get_str(data, "Zone");
     let severity = event_severity(event_id);
 
@@ -448,10 +433,7 @@ fn extract_delegation_subnet(
 }
 
 /// Extract fields for extended zone operation events (561-568).
-fn extract_extended_zone_ops(
-    event_id: u32,
-    data: &Value,
-) -> EventFields {
+fn extract_extended_zone_ops(event_id: u32, data: &Value) -> EventFields {
     let zone = get_str(data, "Zone");
     let severity = event_severity(event_id);
 
@@ -465,10 +447,7 @@ fn extract_extended_zone_ops(
 
 /// Generic fallback extractor for unknown event IDs.
 /// Grabs the first 5 string fields from EventData.
-fn extract_generic(
-    event_id: u32,
-    data: &Value,
-) -> EventFields {
+fn extract_generic(event_id: u32, data: &Value) -> EventFields {
     let severity = event_severity(event_id);
 
     let mut msg = format!("[{} DNS Audit]", event_id);

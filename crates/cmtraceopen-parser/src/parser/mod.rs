@@ -70,6 +70,7 @@ pub fn parse_content(
         file_path: path_obj.to_string_lossy().to_string(),
         file_size,
         byte_offset: file_size,
+        large_file_mode: None,
     };
 
     (result, selection)

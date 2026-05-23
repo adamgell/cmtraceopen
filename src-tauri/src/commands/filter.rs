@@ -1,6 +1,8 @@
 use crate::models::log_entry::LogEntry;
+use crate::state::app_state::AppState;
 use chrono::{DateTime, Local, NaiveDate, NaiveDateTime, TimeZone};
 use serde::{Deserialize, Serialize};
+use tauri::State;
 
 /// The types of filter clause operations.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -70,33 +72,57 @@ fn compile_clauses<'a>(
         .collect()
 }
 
+fn resolve_filter_entries(
+    entries: Option<Vec<LogEntry>>,
+    session_key: Option<&str>,
+    state: &AppState,
+) -> Result<Vec<LogEntry>, crate::error::AppError> {
+    if let Some(session_key) = session_key {
+        return state
+            .get_parsed_entries_session_entries(session_key)?
+            .ok_or_else(|| {
+                crate::error::AppError::InvalidInput(format!(
+                    "Unknown parsed entries session key '{session_key}'."
+                ))
+            });
+    }
+
+    Ok(entries.unwrap_or_default())
+}
+
+fn apply_filter_to_entries(
+    entries: &[LogEntry],
+    clauses: &[FilterClause],
+) -> Result<Vec<u64>, crate::error::AppError> {
+    if clauses.is_empty() {
+        return Ok(entries.iter().map(|entry| entry.id).collect());
+    }
+
+    let compiled = compile_clauses(clauses)?;
+    let mut matching_ids = Vec::new();
+
+    for entry in entries {
+        if compiled.iter().all(|clause| matches_clause(entry, clause)) {
+            matching_ids.push(entry.id);
+        }
+    }
+
+    Ok(matching_ids)
+}
+
 /// Apply filter clauses to a list of entries.
 /// Returns the IDs of entries that match ALL clauses (AND logic).
 /// Returns `Err(AppError::InvalidInput)` if a timestamp clause has an
 /// unparseable value so the caller can surface it to the user.
 #[tauri::command]
 pub fn apply_filter(
-    entries: Vec<LogEntry>,
+    entries: Option<Vec<LogEntry>>,
     clauses: Vec<FilterClause>,
+    session_key: Option<String>,
+    state: State<'_, AppState>,
 ) -> Result<Vec<u64>, crate::error::AppError> {
-    if clauses.is_empty() {
-        // No filter — return all IDs
-        return Ok(entries.iter().map(|e| e.id).collect());
-    }
-
-    // Compile once: parse timestamp targets and lowercase needles up-front
-    // so the per-entry loop below is pure comparison work.
-    let compiled = compile_clauses(&clauses)?;
-
-    let mut matching_ids = Vec::new();
-
-    for entry in &entries {
-        if compiled.iter().all(|c| matches_clause(entry, c)) {
-            matching_ids.push(entry.id);
-        }
-    }
-
-    Ok(matching_ids)
+    let entries = resolve_filter_entries(entries, session_key.as_deref(), state.inner())?;
+    apply_filter_to_entries(&entries, &clauses)
 }
 
 fn matches_clause(entry: &LogEntry, compiled: &CompiledClause) -> bool {
@@ -226,7 +252,62 @@ fn invalid_timestamp_filter_value(value: &str) -> crate::error::AppError {
 
 #[cfg(test)]
 mod tests {
+    use crate::models::log_entry::{LogFormat, Severity};
+
     use super::*;
+
+    fn sample_entry(id: u64, message: &str, severity: Severity) -> LogEntry {
+        LogEntry {
+            id,
+            line_number: (id + 1) as u32,
+            message: message.to_string(),
+            component: None,
+            timestamp: None,
+            timestamp_display: None,
+            severity,
+            thread: None,
+            thread_display: None,
+            source_file: None,
+            format: LogFormat::Plain,
+            file_path: "filter-test.log".to_string(),
+            timezone_offset: None,
+            error_code_spans: Vec::new(),
+            ip_address: None,
+            host_name: None,
+            mac_address: None,
+            result_code: None,
+            gle_code: None,
+            setup_phase: None,
+            operation_name: None,
+            http_method: None,
+            uri_stem: None,
+            uri_query: None,
+            status_code: None,
+            sub_status: None,
+            time_taken_ms: None,
+            client_ip: None,
+            server_ip: None,
+            user_agent: None,
+            server_port: None,
+            username: None,
+            win32_status: None,
+            query_name: None,
+            query_type: None,
+            response_code: None,
+            dns_direction: None,
+            dns_protocol: None,
+            source_ip: None,
+            dns_flags: None,
+            dns_event_id: None,
+            zone_name: None,
+            entry_kind: None,
+            whatif: None,
+            section_name: None,
+            section_color: None,
+            iteration: None,
+            tags: None,
+        }
+    }
 
     #[test]
     fn timestamp_filter_accepts_plain_iso_date() {
@@ -272,8 +353,6 @@ mod tests {
 
     #[test]
     fn timestamp_filter_naive_input_is_local_time() {
-        // A naive input should match an entry whose UTC millis correspond to
-        // that wall-clock instant in the local timezone.
         let naive = NaiveDate::from_ymd_opt(2026, 4, 1)
             .expect("valid date")
             .and_hms_opt(12, 30, 0)
@@ -332,9 +411,68 @@ mod tests {
             op: FilterOp::Contains,
             value: "not-a-date".into(),
         }];
-        let compiled = compile_clauses(&clauses)
-            .expect("substring op should not require parseable value");
+        let compiled =
+            compile_clauses(&clauses).expect("substring op should not require parseable value");
 
         assert!(compiled[0].timestamp_target.is_none());
+    }
+
+    #[test]
+    fn apply_filter_uses_backend_session_entries_when_session_key_is_present() {
+        let state = AppState::default();
+        let metadata = state
+            .register_parsed_entries_session(vec![
+                sample_entry(10, "alpha event", Severity::Info),
+                sample_entry(11, "beta event", Severity::Warning),
+            ])
+            .expect("session should register")
+            .expect("session metadata should exist");
+        let clauses = vec![FilterClause {
+            field: FilterField::Message,
+            op: FilterOp::Contains,
+            value: "beta".into(),
+        }];
+        let entries = resolve_filter_entries(None, Some(&metadata.session_key), &state)
+            .expect("session lookup should succeed");
+
+        let ids = apply_filter_to_entries(&entries, &clauses).expect("filter should succeed");
+
+        assert_eq!(ids, vec![11]);
+    }
+
+    #[test]
+    fn resolve_filter_entries_prefers_session_key_over_raw_entries() {
+        let state = AppState::default();
+        let metadata = state
+            .register_parsed_entries_session(vec![sample_entry(
+                21,
+                "session entry",
+                Severity::Error,
+            )])
+            .expect("session should register")
+            .expect("session metadata should exist");
+
+        let entries = resolve_filter_entries(
+            Some(vec![sample_entry(99, "raw entry", Severity::Info)]),
+            Some(&metadata.session_key),
+            &state,
+        )
+        .expect("entries should resolve");
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].id, 21);
+        assert_eq!(entries[0].message, "session entry");
+    }
+
+    #[test]
+    fn resolve_filter_entries_rejects_unknown_session_keys() {
+        let state = AppState::default();
+        let error = resolve_filter_entries(None, Some("missing-session"), &state)
+            .err()
+            .expect("missing session should fail");
+
+        assert!(error
+            .to_string()
+            .contains("Unknown parsed entries session key"));
     }
 }

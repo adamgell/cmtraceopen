@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { useLogStore, getCachedTabSnapshot, setCachedTabSnapshot, clearAllTabSnapshots } from "./log-store";
-import type { LogEntry } from "../types/log";
+import type { LargeFileModeMetadata, LogEntry } from "../types/log";
 
 function makeEntry(overrides: Partial<LogEntry> & { id: number }): LogEntry {
   return {
@@ -25,6 +25,17 @@ describe("log-store", () => {
     useLogStore.getState().clear();
     clearAllTabSnapshots();
   });
+
+  function makeLargeFileMode(
+    overrides: Partial<LargeFileModeMetadata> = {}
+  ): LargeFileModeMetadata {
+    return {
+      isActive: true,
+      thresholdBytes: 50 * 1024 * 1024,
+      loadedByteCount: 60 * 1024 * 1024,
+      ...overrides,
+    };
+  }
 
   describe("setEntries / entries", () => {
     it("sets entries and reads them back", () => {
@@ -85,11 +96,38 @@ describe("log-store", () => {
     });
   });
 
+  describe("largeFileMode", () => {
+    it("sets and reads active large file mode metadata", () => {
+      const largeFileMode = makeLargeFileMode();
+
+      useLogStore.getState().setLargeFileMode(largeFileMode);
+
+      expect(useLogStore.getState().largeFileMode).toEqual(largeFileMode);
+    });
+
+    it("treats null or disabled metadata as normal mode", () => {
+      expect(useLogStore.getState().largeFileMode).toBeNull();
+
+      const disabledMode = makeLargeFileMode({
+        isActive: false,
+        loadedByteCount: 1024,
+      });
+      useLogStore.getState().setLargeFileMode(disabledMode);
+
+      expect(useLogStore.getState().largeFileMode).toEqual(disabledMode);
+      expect(useLogStore.getState().largeFileMode?.isActive).toBe(false);
+
+      useLogStore.getState().setLargeFileMode(null);
+      expect(useLogStore.getState().largeFileMode).toBeNull();
+    });
+  });
+
   describe("clear", () => {
     it("resets all state to defaults", () => {
       useLogStore.getState().setEntries([makeEntry({ id: 1 })]);
       useLogStore.getState().selectEntry(1);
       useLogStore.getState().setOpenFilePath("/test.log");
+      useLogStore.getState().setLargeFileMode(makeLargeFileMode());
 
       useLogStore.getState().clear();
 
@@ -97,6 +135,7 @@ describe("log-store", () => {
       expect(state.entries).toHaveLength(0);
       expect(state.selectedId).toBeNull();
       expect(state.openFilePath).toBeNull();
+      expect(state.largeFileMode).toBeNull();
       expect(state.sourceStatus.kind).toBe("idle");
     });
   });
@@ -105,10 +144,12 @@ describe("log-store", () => {
     it("clears file-specific state but keeps source context", () => {
       useLogStore.getState().setEntries([makeEntry({ id: 1 })]);
       useLogStore.getState().setActiveSource({ kind: "folder", path: "/logs" });
+      useLogStore.getState().setLargeFileMode(makeLargeFileMode());
 
       useLogStore.getState().clearActiveFile();
 
       expect(useLogStore.getState().entries).toHaveLength(0);
+      expect(useLogStore.getState().largeFileMode).toBeNull();
       // activeSource should be preserved
       expect(useLogStore.getState().activeSource).not.toBeNull();
     });
@@ -179,6 +220,80 @@ describe("log-store", () => {
     });
   });
 
+  describe("error navigation", () => {
+    it("wraps next and previous across visible Error entries", () => {
+      useLogStore.getState().setEntries([
+        makeEntry({ id: 1, severity: "Info" }),
+        makeEntry({ id: 2, severity: "Error" }),
+        makeEntry({ id: 3, severity: "Warning" }),
+        makeEntry({ id: 4, severity: "Error" }),
+      ]);
+      useLogStore.getState().setVisibleEntryIds([1, 2, 3, 4]);
+
+      expect(useLogStore.getState().canNavigateVisibleErrors()).toBe(true);
+
+      useLogStore.getState().selectEntry(4);
+      useLogStore.getState().selectNextVisibleError("test.next-wrap");
+      expect(useLogStore.getState().selectedId).toBe(2);
+
+      useLogStore.getState().selectPreviousVisibleError("test.previous-wrap");
+      expect(useLogStore.getState().selectedId).toBe(4);
+    });
+
+    it("selects the first or last visible Error when nothing is selected", () => {
+      useLogStore.getState().setEntries([
+        makeEntry({ id: 1, severity: "Error" }),
+        makeEntry({ id: 2, severity: "Info" }),
+        makeEntry({ id: 3, severity: "Error" }),
+      ]);
+      useLogStore.getState().setVisibleEntryIds([1, 2, 3]);
+
+      useLogStore.getState().selectNextVisibleError("test.next-no-selection");
+      expect(useLogStore.getState().selectedId).toBe(1);
+
+      useLogStore.getState().selectEntry(null);
+      useLogStore.getState().selectPreviousVisibleError("test.previous-no-selection");
+      expect(useLogStore.getState().selectedId).toBe(3);
+    });
+
+    it("uses the current visible order and exact Error severity", () => {
+      useLogStore.getState().setEntries([
+        makeEntry({ id: 1, severity: "Error" }),
+        makeEntry({ id: 2, severity: "Info" }),
+        makeEntry({ id: 3, severity: "Warning" }),
+        makeEntry({ id: 4, severity: "Error" }),
+      ]);
+      useLogStore.getState().setVisibleEntryIds([4, 3, 2]);
+
+      expect(useLogStore.getState().visibleErrorEntryIds).toEqual([4]);
+
+      useLogStore.getState().selectEntry(3);
+      useLogStore.getState().selectNextVisibleError("test.filtered-visible-order");
+      expect(useLogStore.getState().selectedId).toBe(4);
+    });
+
+    it("does nothing when there are no visible Error entries", () => {
+      useLogStore.getState().setEntries([
+        makeEntry({ id: 1, severity: "Info" }),
+        makeEntry({ id: 2, severity: "Warning" }),
+      ]);
+      useLogStore.getState().setVisibleEntryIds([1, 2]);
+      useLogStore.getState().selectEntry(1);
+
+      expect(useLogStore.getState().canNavigateVisibleErrors()).toBe(false);
+      expect(useLogStore.getState().visibleErrorEntryIds).toEqual([]);
+
+      useLogStore.getState().selectNextVisibleError("test.no-visible-errors");
+      expect(useLogStore.getState().selectedId).toBe(1);
+
+      useLogStore.getState().setEntries([]);
+      useLogStore.getState().setVisibleEntryIds([]);
+      useLogStore.getState().selectEntry(null);
+      useLogStore.getState().selectPreviousVisibleError("test.no-entries");
+      expect(useLogStore.getState().selectedId).toBeNull();
+    });
+  });
+
   describe("source status", () => {
     it("setSourceStatus and clearSourceStatus", () => {
       useLogStore.getState().setSourceStatus({ kind: "loading", message: "Loading..." });
@@ -221,6 +336,7 @@ describe("tab entry cache", () => {
       parserSelection: null,
       totalLines: 1,
       byteOffset: 0,
+      largeFileMode: null,
       selectedSourceFilePath: null,
       sourceOpenMode: null as "single-file" | "aggregate-folder" | null,
       activeColumns: ["message" as const] as ("message")[],

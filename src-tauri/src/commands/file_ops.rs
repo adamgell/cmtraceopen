@@ -9,10 +9,10 @@ use tauri::{AppHandle, Emitter, State};
 
 use crate::intune::models::EvidenceBundleMetadata;
 use crate::models::log_entry::{
-    AggregateParseResult, AggregateParsedFileResult, LogEntry, ParseResult,
+    AggregateParseResult, AggregateParsedFileResult, LargeFileModeMetadata, LogEntry, ParseResult,
 };
 use crate::parser;
-use crate::state::app_state::{AppState, OpenFile};
+use crate::state::app_state::{AppState, OpenFile, ParsedEntriesSessionMetadata};
 
 use super::bundle_ops::{collect_files_recursive, detect_evidence_bundle_metadata};
 use super::known_sources::KnownSourcePathKind;
@@ -74,16 +74,133 @@ pub struct FolderListingResult {
     pub bundle_metadata: Option<EvidenceBundleMetadata>,
 }
 
+const LARGE_FILE_MODE_THRESHOLD_BYTES: u64 = 50 * 1024 * 1024;
+
+fn evaluate_large_file_mode(loaded_byte_count: u64) -> LargeFileModeMetadata {
+    LargeFileModeMetadata {
+        is_active: loaded_byte_count >= LARGE_FILE_MODE_THRESHOLD_BYTES,
+        threshold_bytes: LARGE_FILE_MODE_THRESHOLD_BYTES,
+        loaded_byte_count,
+    }
+}
+
+fn with_large_file_mode_metadata(mut result: ParseResult) -> ParseResult {
+    result.large_file_mode = Some(evaluate_large_file_mode(result.byte_offset));
+    result
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ParseResultCommandResponse {
+    pub result: ParseResult,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backend_session: Option<ParsedEntriesSessionMetadata>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AggregateParsedFileSessionResponse {
+    pub file_path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backend_session: Option<ParsedEntriesSessionMetadata>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AggregateParseResultCommandResponse {
+    pub result: AggregateParseResult,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backend_session: Option<ParsedEntriesSessionMetadata>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub file_sessions: Vec<AggregateParsedFileSessionResponse>,
+}
+
+fn register_parsed_entries_backend_session(
+    state: &AppState,
+    entries: &[LogEntry],
+) -> Result<Option<ParsedEntriesSessionMetadata>, crate::error::AppError> {
+    state.register_parsed_entries_session(entries.to_vec())
+}
+
+fn build_parse_result_command_response(
+    result: ParseResult,
+    state: &AppState,
+) -> Result<ParseResultCommandResponse, crate::error::AppError> {
+    let backend_session = register_parsed_entries_backend_session(state, &result.entries)?;
+
+    Ok(ParseResultCommandResponse {
+        result,
+        backend_session,
+    })
+}
+
+fn finalize_batch_parse_results(
+    results: Vec<
+        Result<(ParseResult, crate::parser::ResolvedParser, String), crate::error::AppError>,
+    >,
+    state: &AppState,
+) -> Result<(Vec<ParseResultCommandResponse>, u32), crate::error::AppError> {
+    let mut parse_results = Vec::with_capacity(results.len());
+    let mut skipped = 0u32;
+    let mut open_files = state
+        .open_files
+        .lock()
+        .map_err(|error| crate::error::AppError::State(error.to_string()))?;
+
+    for item in results {
+        match item {
+            Ok((result, parser_selection, path)) => {
+                open_files.insert(
+                    PathBuf::from(&path),
+                    OpenFile {
+                        path: PathBuf::from(&path),
+                        entries: vec![],
+                        parser_selection,
+                        byte_offset: result.byte_offset,
+                    },
+                );
+                parse_results.push(build_parse_result_command_response(result, state)?);
+            }
+            Err(_) => {
+                skipped = skipped.saturating_add(1);
+            }
+        }
+    }
+
+    Ok((parse_results, skipped))
+}
+
+fn build_aggregate_parse_result_command_response(
+    result: AggregateParseResult,
+    file_sessions: Vec<AggregateParsedFileSessionResponse>,
+    state: &AppState,
+) -> Result<AggregateParseResultCommandResponse, crate::error::AppError> {
+    let backend_session = register_parsed_entries_backend_session(state, &result.entries)?;
+
+    Ok(AggregateParseResultCommandResponse {
+        result,
+        backend_session,
+        file_sessions,
+    })
+}
+
 // ── Tauri Commands ──────────────────────────────────────────────────────
 
 /// Open and parse a log file, auto-detecting its format.
 /// Stores the backend parser selection in AppState for tail reading.
 #[tauri::command]
-pub fn open_log_file(path: String, state: State<'_, AppState>) -> Result<ParseResult, crate::error::AppError> {
+pub fn open_log_file(
+    path: String,
+    state: State<'_, AppState>,
+) -> Result<ParseResultCommandResponse, crate::error::AppError> {
     let (result, parser_selection) = parser::parse_file(&path)?;
+    let result = with_large_file_mode_metadata(result);
 
     // Store in AppState so tail parsing reuses the same backend parser selection.
-    let mut open_files = state.open_files.lock().map_err(|e| crate::error::AppError::State(e.to_string()))?;
+    let mut open_files = state
+        .open_files
+        .lock()
+        .map_err(|e| crate::error::AppError::State(e.to_string()))?;
     open_files.insert(
         PathBuf::from(&path),
         OpenFile {
@@ -94,7 +211,7 @@ pub fn open_log_file(path: String, state: State<'_, AppState>) -> Result<ParseRe
         },
     );
 
-    Ok(result)
+    build_parse_result_command_response(result, state.inner())
 }
 
 /// Parse multiple files in parallel using Rayon, returning all results in a single
@@ -121,7 +238,7 @@ pub fn parse_files_batch(
     paths: Vec<String>,
     state: State<'_, AppState>,
     app: AppHandle,
-) -> Result<Vec<ParseResult>, crate::error::AppError> {
+) -> Result<Vec<ParseResultCommandResponse>, crate::error::AppError> {
     use rayon::prelude::*;
 
     let total = paths.len() as u32;
@@ -152,6 +269,7 @@ pub fn parse_files_batch(
 
             match parse_outcome {
                 Ok((result, parser_selection)) => {
+                    let result = with_large_file_mode_metadata(result);
                     log::info!(
                         "  event=parse_file_done [{done}/{total}] path=\"{path}\" entries={} lines={} size={} ms={file_ms}",
                         result.entries.len(),
@@ -207,29 +325,7 @@ pub fn parse_files_batch(
     );
 
     // Collect successes and store parser state (requires lock, done sequentially).
-    let mut parse_results = Vec::with_capacity(results.len());
-    let mut skipped = 0u32;
-    let mut open_files = state.open_files.lock().map_err(|e| crate::error::AppError::State(e.to_string()))?;
-
-    for item in results {
-        match item {
-            Ok((result, parser_selection, path)) => {
-                open_files.insert(
-                    PathBuf::from(&path),
-                    OpenFile {
-                        path: PathBuf::from(&path),
-                        entries: vec![],
-                        parser_selection,
-                        byte_offset: result.byte_offset,
-                    },
-                );
-                parse_results.push(result);
-            }
-            Err(_) => {
-                skipped = skipped.saturating_add(1);
-            }
-        }
-    }
+    let (parse_results, skipped) = finalize_batch_parse_results(results, state.inner())?;
 
     let total_ms = batch_start.elapsed().as_millis();
     log::info!(
@@ -247,13 +343,18 @@ pub fn parse_files_batch(
 pub fn open_log_folder_aggregate(
     path: String,
     state: State<'_, AppState>,
-) -> Result<AggregateParseResult, crate::error::AppError> {
+) -> Result<AggregateParseResultCommandResponse, crate::error::AppError> {
     let listing = list_log_folder(path.clone())?;
-    let file_entries: Vec<&FolderEntry> = listing.entries.iter().filter(|entry| !entry.is_dir).collect();
+    let file_entries: Vec<&FolderEntry> = listing
+        .entries
+        .iter()
+        .filter(|entry| !entry.is_dir)
+        .collect();
 
     let mut aggregate_entries: Vec<LogEntry> = Vec::new();
     let mut aggregate_files = Vec::with_capacity(file_entries.len());
     let mut open_file_states = Vec::with_capacity(file_entries.len());
+    let mut file_sessions = Vec::with_capacity(file_entries.len());
     let mut total_lines = 0u32;
     let mut parse_errors = 0u32;
 
@@ -271,8 +372,17 @@ pub fn open_log_folder_aggregate(
             }
         };
 
+        let result = with_large_file_mode_metadata(result);
+
+        let backend_session =
+            register_parsed_entries_backend_session(state.inner(), &result.entries)?;
+
         total_lines = total_lines.saturating_add(result.total_lines);
         parse_errors = parse_errors.saturating_add(result.parse_errors);
+        file_sessions.push(AggregateParsedFileSessionResponse {
+            file_path: result.file_path.clone(),
+            backend_session,
+        });
         aggregate_entries.extend(result.entries);
         aggregate_files.push(AggregateParsedFileResult {
             file_path: result.file_path.clone(),
@@ -280,6 +390,7 @@ pub fn open_log_folder_aggregate(
             parse_errors: result.parse_errors,
             file_size: result.file_size,
             byte_offset: result.byte_offset,
+            large_file_mode: result.large_file_mode,
         });
         open_file_states.push((
             PathBuf::from(&result.file_path),
@@ -300,7 +411,10 @@ pub fn open_log_folder_aggregate(
         entry.id = index as u64;
     }
 
-    let mut open_files = state.open_files.lock().map_err(|e| crate::error::AppError::State(e.to_string()))?;
+    let mut open_files = state
+        .open_files
+        .lock()
+        .map_err(|e| crate::error::AppError::State(e.to_string()))?;
     for (path_buf, parser_selection, byte_offset) in open_file_states {
         open_files.insert(
             path_buf.clone(),
@@ -313,13 +427,61 @@ pub fn open_log_folder_aggregate(
         );
     }
 
-    Ok(AggregateParseResult {
+    let aggregate_loaded_byte_count = aggregate_files
+        .iter()
+        .filter_map(|file| {
+            file.large_file_mode
+                .as_ref()
+                .map(|metadata| metadata.loaded_byte_count)
+        })
+        .sum();
+
+    let result = AggregateParseResult {
         entries: aggregate_entries,
         total_lines,
         parse_errors,
         folder_path: path,
         files: aggregate_files,
-    })
+        large_file_mode: Some(evaluate_large_file_mode(aggregate_loaded_byte_count)),
+    };
+
+    build_aggregate_parse_result_command_response(result, file_sessions, state.inner())
+}
+
+#[tauri::command]
+pub fn register_parsed_entries_session(
+    entries: Vec<LogEntry>,
+    state: State<'_, AppState>,
+) -> Result<Option<ParsedEntriesSessionMetadata>, crate::error::AppError> {
+    let metadata = state.register_parsed_entries_session(entries)?;
+
+    match &metadata {
+        Some(metadata) => {
+            log::debug!(
+                "event=parsed_entries_session_register session_key={} entry_count={}",
+                metadata.session_key,
+                metadata.entry_count
+            );
+        }
+        None => {
+            log::debug!("event=parsed_entries_session_register_skipped reason=empty_entries");
+        }
+    }
+
+    Ok(metadata)
+}
+
+#[tauri::command]
+pub fn release_parsed_entries_session(
+    session_key: String,
+    state: State<'_, AppState>,
+) -> Result<(), crate::error::AppError> {
+    let released = state.release_parsed_entries_session(&session_key)?;
+    log::debug!(
+        "event=parsed_entries_session_release session_key={} released={released}",
+        session_key
+    );
+    Ok(())
 }
 
 #[tauri::command]
@@ -342,7 +504,10 @@ pub fn inspect_path_kind(path: String) -> Result<PathKind, crate::error::AppErro
 }
 
 #[tauri::command]
-pub fn write_text_output_file(path: String, contents: String) -> Result<(), crate::error::AppError> {
+pub fn write_text_output_file(
+    path: String,
+    contents: String,
+) -> Result<(), crate::error::AppError> {
     fs::write(&path, contents).map_err(crate::error::AppError::Io)
 }
 
@@ -353,8 +518,13 @@ pub fn write_text_output_file(path: String, contents: String) -> Result<(), crat
 /// with the file paths as command-line arguments. This command retrieves those
 /// paths so the frontend can open them. Consumed on the first call.
 #[tauri::command]
-pub fn get_initial_file_paths(state: State<'_, AppState>) -> Result<Vec<String>, crate::error::AppError> {
-    let mut guard = state.initial_file_paths.lock().map_err(|e| crate::error::AppError::State(e.to_string()))?;
+pub fn get_initial_file_paths(
+    state: State<'_, AppState>,
+) -> Result<Vec<String>, crate::error::AppError> {
+    let mut guard = state
+        .initial_file_paths
+        .lock()
+        .map_err(|e| crate::error::AppError::State(e.to_string()))?;
     let paths = std::mem::take(&mut *guard);
     Ok(paths)
 }
@@ -380,8 +550,7 @@ pub fn list_log_folder(path: String) -> Result<FolderListingResult, crate::error
         )));
     }
 
-    let read_dir = fs::read_dir(&requested_path)
-        .map_err(crate::error::AppError::Io)?;
+    let read_dir = fs::read_dir(&requested_path).map_err(crate::error::AppError::Io)?;
 
     let mut entries: Vec<FolderEntry> = Vec::new();
 
@@ -489,22 +658,21 @@ pub struct FileHashResult {
 
 #[tauri::command]
 pub fn compute_file_hash(path: String) -> Result<FileHashResult, crate::error::AppError> {
-    use sha2::{Sha256, Digest};
+    use sha2::{Digest, Sha256};
     use std::io::Read;
 
-    let mut file = std::fs::File::open(&path)
-        .map_err(crate::error::AppError::Io)?;
+    let mut file = std::fs::File::open(&path).map_err(crate::error::AppError::Io)?;
 
-    let metadata = file.metadata()
-        .map_err(crate::error::AppError::Io)?;
+    let metadata = file.metadata().map_err(crate::error::AppError::Io)?;
     let size_bytes = metadata.len();
 
     let mut hasher = Sha256::new();
     let mut buffer = [0u8; 8192];
     loop {
-        let bytes_read = file.read(&mut buffer)
-            .map_err(crate::error::AppError::Io)?;
-        if bytes_read == 0 { break; }
+        let bytes_read = file.read(&mut buffer).map_err(crate::error::AppError::Io)?;
+        if bytes_read == 0 {
+            break;
+        }
         hasher.update(&buffer[..bytes_read]);
     }
 
@@ -525,7 +693,12 @@ fn compare_aggregate_entries(
             .get(&left.file_path)
             .copied()
             .unwrap_or(usize::MAX)
-            .cmp(&file_order.get(&right.file_path).copied().unwrap_or(usize::MAX))
+            .cmp(
+                &file_order
+                    .get(&right.file_path)
+                    .copied()
+                    .unwrap_or(usize::MAX),
+            )
             .then_with(|| left.line_number.cmp(&right.line_number))
             .then_with(|| left.message.cmp(&right.message)),
     }
@@ -533,10 +706,38 @@ fn compare_aggregate_entries(
 
 #[cfg(test)]
 mod tests {
-    use super::list_log_folder;
+    use super::{
+        build_aggregate_parse_result_command_response, build_parse_result_command_response,
+        evaluate_large_file_mode, finalize_batch_parse_results, list_log_folder,
+        AggregateParsedFileSessionResponse, LARGE_FILE_MODE_THRESHOLD_BYTES,
+    };
+    use crate::models::log_entry::{LogFormat, ParseResult, Severity};
+    use crate::parser::ResolvedParser;
+    use crate::state::app_state::AppState;
     use std::fs;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn evaluate_large_file_mode_marks_threshold_and_loaded_bytes() {
+        let metadata = evaluate_large_file_mode(LARGE_FILE_MODE_THRESHOLD_BYTES);
+
+        assert!(metadata.is_active);
+        assert_eq!(metadata.threshold_bytes, LARGE_FILE_MODE_THRESHOLD_BYTES);
+        assert_eq!(metadata.loaded_byte_count, LARGE_FILE_MODE_THRESHOLD_BYTES);
+    }
+
+    #[test]
+    fn evaluate_large_file_mode_is_inactive_below_threshold() {
+        let metadata = evaluate_large_file_mode(LARGE_FILE_MODE_THRESHOLD_BYTES - 1);
+
+        assert!(!metadata.is_active);
+        assert_eq!(metadata.threshold_bytes, LARGE_FILE_MODE_THRESHOLD_BYTES);
+        assert_eq!(
+            metadata.loaded_byte_count,
+            LARGE_FILE_MODE_THRESHOLD_BYTES - 1
+        );
+    }
 
     #[test]
     fn list_log_folder_marks_evidence_bundle_and_exposes_primary_entry_points() {
@@ -603,6 +804,145 @@ mod tests {
             ));
 
         fs::remove_dir_all(&bundle_dir).expect("remove temp bundle dir");
+    }
+
+    fn sample_entry(id: u64, file_path: &str, message: &str) -> crate::models::log_entry::LogEntry {
+        crate::models::log_entry::LogEntry {
+            id,
+            line_number: (id + 1) as u32,
+            message: message.to_string(),
+            component: None,
+            timestamp: None,
+            timestamp_display: None,
+            severity: Severity::Info,
+            thread: None,
+            thread_display: None,
+            source_file: None,
+            format: LogFormat::Plain,
+            file_path: file_path.to_string(),
+            timezone_offset: None,
+            error_code_spans: Vec::new(),
+            ip_address: None,
+            host_name: None,
+            mac_address: None,
+            result_code: None,
+            gle_code: None,
+            setup_phase: None,
+            operation_name: None,
+            http_method: None,
+            uri_stem: None,
+            uri_query: None,
+            status_code: None,
+            sub_status: None,
+            time_taken_ms: None,
+            client_ip: None,
+            server_ip: None,
+            user_agent: None,
+            server_port: None,
+            username: None,
+            win32_status: None,
+            query_name: None,
+            query_type: None,
+            response_code: None,
+            dns_direction: None,
+            dns_protocol: None,
+            source_ip: None,
+            dns_flags: None,
+            dns_event_id: None,
+            zone_name: None,
+            entry_kind: None,
+            whatif: None,
+            section_name: None,
+            section_color: None,
+            iteration: None,
+            tags: None,
+        }
+    }
+
+    fn sample_parse_result(
+        file_path: &str,
+        entries: Vec<crate::models::log_entry::LogEntry>,
+    ) -> ParseResult {
+        ParseResult {
+            entries,
+            format_detected: LogFormat::Plain,
+            parser_selection: ResolvedParser::simple().to_info(),
+            total_lines: 1,
+            parse_errors: 0,
+            file_path: file_path.to_string(),
+            file_size: 128,
+            byte_offset: 128,
+            large_file_mode: None,
+        }
+    }
+
+    #[test]
+    fn parse_result_command_response_includes_backend_session_for_entries() {
+        let state = AppState::default();
+        let result =
+            sample_parse_result("single.log", vec![sample_entry(0, "single.log", "alpha")]);
+
+        let response =
+            build_parse_result_command_response(result, &state).expect("response should build");
+
+        let backend_session = response
+            .backend_session
+            .expect("session metadata should be present");
+        assert_eq!(backend_session.entry_count, 1);
+        assert!(state
+            .get_parsed_entries_session_entries(&backend_session.session_key)
+            .expect("lookup should succeed")
+            .is_some());
+    }
+
+    #[test]
+    fn finalize_batch_parse_results_includes_backend_sessions_for_successes() {
+        let state = AppState::default();
+        let results = vec![Ok((
+            sample_parse_result("batch.log", vec![sample_entry(10, "batch.log", "beta")]),
+            ResolvedParser::simple(),
+            "batch.log".to_string(),
+        ))];
+
+        let (responses, skipped) = finalize_batch_parse_results(results, &state)
+            .expect("batch finalization should succeed");
+
+        assert_eq!(skipped, 0);
+        assert_eq!(responses.len(), 1);
+        assert!(responses[0].backend_session.is_some());
+    }
+
+    #[test]
+    fn aggregate_parse_result_command_response_includes_backend_session() {
+        let state = AppState::default();
+        let result = crate::models::log_entry::AggregateParseResult {
+            entries: vec![sample_entry(0, "aggregate.log", "gamma")],
+            total_lines: 1,
+            parse_errors: 0,
+            folder_path: "folder".to_string(),
+            files: vec![crate::models::log_entry::AggregateParsedFileResult {
+                file_path: "aggregate.log".to_string(),
+                total_lines: 1,
+                parse_errors: 0,
+                file_size: 128,
+                byte_offset: 128,
+                large_file_mode: None,
+            }],
+            large_file_mode: None,
+        };
+        let file_sessions = vec![AggregateParsedFileSessionResponse {
+            file_path: "aggregate.log".to_string(),
+            backend_session: state
+                .register_parsed_entries_session(vec![sample_entry(0, "aggregate.log", "gamma")])
+                .expect("file session should register"),
+        }];
+
+        let response = build_aggregate_parse_result_command_response(result, file_sessions, &state)
+            .expect("aggregate response should build");
+
+        assert!(response.backend_session.is_some());
+        assert_eq!(response.file_sessions.len(), 1);
+        assert!(response.file_sessions[0].backend_session.is_some());
     }
 
     fn create_temp_dir(prefix: &str) -> PathBuf {

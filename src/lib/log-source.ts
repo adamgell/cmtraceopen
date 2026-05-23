@@ -5,6 +5,7 @@ import {
   openLogSourceFile,
   parseFilesBatch,
   parseRegistryFile,
+  registerParsedEntriesSession,
   stopTail,
 } from "./commands";
 import { useLogStore, setCachedTabSnapshot, getCachedTabSnapshot } from "../stores/log-store";
@@ -13,11 +14,14 @@ import { getBaseName } from "./file-paths";
 import { useUiStore, type TabSourceContext } from "../stores/ui-store";
 import { useFilterStore } from "../stores/filter-store";
 import type {
+  AggregateParsedFileResult,
   FolderEntry,
   KnownSourceMetadata,
+  LargeFileModeMetadata,
   LogEntry,
   LogSource,
   ParseResult,
+  ParsedEntriesSessionMetadata,
 } from "../types/log";
 
 function buildTabSourceContext(source: LogSource): TabSourceContext {
@@ -47,6 +51,136 @@ export interface LoadLogSourceResult {
   entries: FolderEntry[];
   selectedFilePath: string | null;
   parseResult: ParseResult | null;
+}
+
+function normalizeLargeFileMode(
+  metadata: LargeFileModeMetadata | null | undefined
+): LargeFileModeMetadata | null {
+  return metadata ?? null;
+}
+
+function getActiveLargeFileMode(
+  results: Array<{ largeFileMode?: LargeFileModeMetadata | null }>
+): LargeFileModeMetadata | null {
+  for (const result of results) {
+    if (result.largeFileMode?.isActive) {
+      return result.largeFileMode;
+    }
+  }
+
+  return null;
+}
+
+
+function withSourceSessionKeys(
+  source: LogSource,
+  updates: {
+    sessionKey?: string | null;
+    aggregateSessionKey?: string | null;
+  }
+): LogSource {
+  return {
+    ...source,
+    ...(updates.sessionKey !== undefined
+      ? { sessionKey: updates.sessionKey }
+      : {}),
+    ...(updates.aggregateSessionKey !== undefined
+      ? { aggregateSessionKey: updates.aggregateSessionKey }
+      : {}),
+  };
+}
+
+async function registerAggregateEntriesSession(
+  entries: LogEntry[]
+): Promise<ParsedEntriesSessionMetadata | null> {
+  if (entries.length === 0) {
+    return null;
+  }
+
+  try {
+    return await registerParsedEntriesSession(entries);
+  } catch (error) {
+    console.warn("[log-source] failed to register parsed-entry session", {
+      entryCount: entries.length,
+      error,
+    });
+    return null;
+  }
+}
+
+function cacheParsedResults(results: ParseResult[]): void {
+  for (const result of results) {
+    const fileColumns = getColumnsForParser(result.parserSelection.parser);
+    setCachedTabSnapshot(result.filePath, {
+      entries: result.entries,
+      formatDetected: result.formatDetected,
+      parserSelection: result.parserSelection,
+      totalLines: result.totalLines,
+      byteOffset: result.byteOffset,
+      largeFileMode: normalizeLargeFileMode(result.largeFileMode),
+      selectedSourceFilePath: result.filePath,
+      sourceOpenMode: "single-file",
+      activeColumns: fileColumns,
+    });
+  }
+}
+
+function buildAggregateView(results: ParseResult[]): {
+  aggregateFiles: AggregateParsedFileResult[];
+  allEntries: LogEntry[];
+  totalLines: number;
+  parserKinds: ParseResult["parserSelection"]["parser"][];
+} {
+  const aggregateFiles: AggregateParsedFileResult[] = [];
+  const parserKinds: ParseResult["parserSelection"]["parser"][] = [];
+  let totalLines = 0;
+  let totalEntryCount = 0;
+
+  for (const result of results) {
+    totalLines += result.totalLines;
+    totalEntryCount += result.entries.length;
+    parserKinds.push(result.parserSelection.parser);
+    aggregateFiles.push({
+      filePath: result.filePath,
+      totalLines: result.totalLines,
+      parseErrors: result.parseErrors,
+      fileSize: result.fileSize,
+      byteOffset: result.byteOffset,
+      largeFileMode: normalizeLargeFileMode(result.largeFileMode),
+      backendSession: result.backendSession ?? null,
+    });
+  }
+
+  const allEntries = new Array<LogEntry>(totalEntryCount);
+  let writeIndex = 0;
+  for (const result of results) {
+    for (let entryIndex = 0; entryIndex < result.entries.length; entryIndex++) {
+      allEntries[writeIndex] = {
+        ...result.entries[entryIndex],
+        id: writeIndex,
+      };
+      writeIndex += 1;
+    }
+  }
+
+  return {
+    aggregateFiles,
+    allEntries,
+    totalLines,
+    parserKinds,
+  };
+}
+
+
+function resolveSourceSessionKeyForFile(
+  source: LogSource,
+  filePath: string
+): string | null {
+  const aggregateFile = useLogStore
+    .getState()
+    .aggregateFiles.find((file) => file.filePath === filePath);
+
+  return aggregateFile?.backendSession?.sessionKey ?? source.sessionKey ?? null;
 }
 
 const KNOWN_SOURCE_BY_PRESET_MENU_ID: Record<string, string> = {
@@ -128,13 +262,17 @@ async function applyParseResultToStore(
 
   // Registry files use a dedicated viewer — load structured data instead of log entries
   if (result.parserSelection?.parser === "registry") {
-    state.setActiveSource(source);
+    const sourceWithSession = withSourceSessionKeys(source, {
+      sessionKey: result.backendSession?.sessionKey ?? null,
+    });
+    state.setActiveSource(sourceWithSession);
     state.setSelectedSourceFilePath(selectedFilePath);
     state.setSourceOpenMode("single-file");
     state.setAggregateFiles([]);
     state.setEntries([]);
     state.setFormatDetected(result.formatDetected);
     state.setParserSelection(result.parserSelection);
+    state.setLargeFileMode(normalizeLargeFileMode(result.largeFileMode));
     state.setSourceStatus({
       kind: "loaded",
       message: `Loaded ${getBaseName(selectedFilePath)}.`,
@@ -147,13 +285,19 @@ async function applyParseResultToStore(
       parserSelection: result.parserSelection,
       totalLines: 0,
       byteOffset: 0,
+      largeFileMode: normalizeLargeFileMode(result.largeFileMode),
       selectedSourceFilePath: selectedFilePath,
       sourceOpenMode: "single-file",
       activeColumns: [],
     });
 
     const fileName = selectedFilePath.split(/[\\/]/).pop() ?? selectedFilePath;
-    useUiStore.getState().openTab(selectedFilePath, fileName, buildTabSourceContext(source), "registry");
+    useUiStore.getState().openTab(
+      selectedFilePath,
+      fileName,
+      buildTabSourceContext(sourceWithSession),
+      "registry"
+    );
 
     // Load registry data asynchronously — the RegistryViewer component will pick it up
     try {
@@ -168,7 +312,10 @@ async function applyParseResultToStore(
     return;
   }
 
-  state.setActiveSource(source);
+  const sourceWithSession = withSourceSessionKeys(source, {
+    sessionKey: result.backendSession?.sessionKey ?? null,
+  });
+  state.setActiveSource(sourceWithSession);
   state.setSelectedSourceFilePath(selectedFilePath);
   state.setSourceOpenMode("single-file");
   state.setAggregateFiles([]);
@@ -177,6 +324,7 @@ async function applyParseResultToStore(
   state.setParserSelection(result.parserSelection);
   state.setTotalLines(result.totalLines);
   state.setByteOffset(result.byteOffset);
+  state.setLargeFileMode(normalizeLargeFileMode(result.largeFileMode));
   const columns = getColumnsForParser(result.parserSelection.parser);
   state.setActiveColumns(columns);
   useUiStore.getState().resetColumnWidths();
@@ -193,6 +341,7 @@ async function applyParseResultToStore(
     parserSelection: result.parserSelection,
     totalLines: result.totalLines,
     byteOffset: result.byteOffset,
+    largeFileMode: normalizeLargeFileMode(result.largeFileMode),
     selectedSourceFilePath: selectedFilePath,
     sourceOpenMode: "single-file",
     activeColumns: columns,
@@ -200,13 +349,17 @@ async function applyParseResultToStore(
 
   // Open (or switch to) a tab for the loaded file
   const fileName = selectedFilePath.split(/[\\/]/).pop() ?? selectedFilePath;
-  useUiStore.getState().openTab(selectedFilePath, fileName, buildTabSourceContext(source));
+  useUiStore.getState().openTab(
+    selectedFilePath,
+    fileName,
+    buildTabSourceContext(sourceWithSession)
+  );
 }
 
 function clearSelectedFileState(source: LogSource, entries: FolderEntry[]): void {
   const state = useLogStore.getState();
 
-  state.setActiveSource(source);
+  state.setActiveSource(withSourceSessionKeys(source, { sessionKey: null }));
   state.setSourceEntries(entries);
   state.clearActiveFile();
 }
@@ -229,11 +382,17 @@ async function loadFolderProgressive(
   const folderName = getBaseName(folderPath);
 
   if (fileEntries.length === 0) {
-    state.setActiveSource(source);
+    state.setActiveSource(
+      withSourceSessionKeys(source, {
+        sessionKey: null,
+        aggregateSessionKey: null,
+      })
+    );
     state.setSourceEntries(folderEntries);
     state.setSelectedSourceFilePath(null);
     state.setSourceOpenMode("aggregate-folder");
     state.setAggregateFiles([]);
+    state.setLargeFileMode(null);
     state.setEntries([]);
     state.selectEntry(null);
     state.setFolderLoadProgress(null);
@@ -292,77 +451,44 @@ async function loadFolderProgressive(
   // in-memory assembly work below.
   await new Promise((r) => setTimeout(r, 0));
 
-  // Cache each file's entries for instant tab switching
-  for (const result of allResults) {
-    const fileColumns = getColumnsForParser(result.parserSelection.parser);
-    setCachedTabSnapshot(result.filePath, {
-      entries: result.entries,
-      formatDetected: result.formatDetected,
-      parserSelection: result.parserSelection,
-      totalLines: result.totalLines,
-      byteOffset: result.byteOffset,
-      selectedSourceFilePath: result.filePath,
-      sourceOpenMode: "single-file",
-      activeColumns: fileColumns,
-    });
-  }
+  cacheParsedResults(allResults);
 
-  // Build aggregate view — use Array.concat or indexed copy instead of
-  // push(...spread) to avoid blowing the JS call stack on large entry arrays.
-  const aggregateFiles: import("../types/log").AggregateParsedFileResult[] = [];
-  let totalLines = 0;
-  let totalEntryCount = 0;
-
-  for (const result of allResults) {
-    totalLines += result.totalLines;
-    totalEntryCount += result.entries.length;
-    aggregateFiles.push({
-      filePath: result.filePath,
-      totalLines: result.totalLines,
-      parseErrors: result.parseErrors,
-      fileSize: result.fileSize,
-      byteOffset: result.byteOffset,
-    });
-  }
-
-  // Pre-allocate and copy with sequential IDs in one pass
-  const allEntries = new Array<LogEntry>(totalEntryCount);
-  let writeIndex = 0;
-  for (const result of allResults) {
-    for (let j = 0; j < result.entries.length; j++) {
-      allEntries[writeIndex] = { ...result.entries[j], id: writeIndex };
-      writeIndex++;
-    }
-  }
+  const aggregateView = buildAggregateView(allResults);
+  const backendSession = await registerAggregateEntriesSession(
+    aggregateView.allEntries
+  );
+  const sourceWithSession = withSourceSessionKeys(source, {
+    sessionKey: null,
+    aggregateSessionKey: backendSession?.sessionKey ?? null,
+  });
 
   // Apply the final aggregate state
-  state.setActiveSource(source);
+  state.setActiveSource(sourceWithSession);
   state.setSourceEntries(folderEntries);
   state.setSelectedSourceFilePath(null);
   state.setSourceOpenMode("aggregate-folder");
-  state.setAggregateFiles(aggregateFiles);
-  state.setEntries(allEntries);
+  state.setAggregateFiles(aggregateView.aggregateFiles);
+  state.setEntries(aggregateView.allEntries);
   state.setFormatDetected(null);
   state.setParserSelection(null);
-  state.setTotalLines(totalLines);
+  state.setTotalLines(aggregateView.totalLines);
   state.setByteOffset(0);
+  state.setLargeFileMode(getActiveLargeFileMode(allResults));
   // Derive aggregate columns from the union of all parsers + filePath
-  const aggregateColumns = getColumnsForAggregate(
-    allResults.map((r) => r.parserSelection.parser)
-  );
+  const aggregateColumns = getColumnsForAggregate(aggregateView.parserKinds);
   state.setActiveColumns(aggregateColumns);
   useUiStore.getState().resetColumnWidths();
   state.selectEntry(null);
   state.setFolderLoadProgress(null);
   state.setSourceStatus({
     kind: "loaded",
-    message: `Loaded ${aggregateFiles.length} file${aggregateFiles.length === 1 ? "" : "s"} from ${folderName}.`,
+    message: `Loaded ${aggregateView.aggregateFiles.length} file${aggregateView.aggregateFiles.length === 1 ? "" : "s"} from ${folderName}.`,
     detail: `Parsed in ${parseMs} ms (parallel).`,
   });
 
   console.info("[log-source] batch folder load complete", {
-    fileCount: aggregateFiles.length,
-    totalEntries: allEntries.length,
+    fileCount: aggregateView.aggregateFiles.length,
+    totalEntries: aggregateView.allEntries.length,
     parseMs,
   });
 }
@@ -506,17 +632,27 @@ export async function loadSelectedLogFile(
     // Registry files from cache — load via the registry pipeline
     if (cached.parserSelection?.parser === "registry") {
       console.info("[log-source] loadSelectedLogFile registry from cache", { filePath });
+      const sourceWithSession = withSourceSessionKeys(source, {
+        sessionKey: resolveSourceSessionKeyForFile(source, filePath),
+      });
+      state.setActiveSource(sourceWithSession);
       state.setSelectedSourceFilePath(filePath);
       state.setSourceOpenMode("single-file");
       state.setEntries([]);
       state.setFormatDetected(cached.formatDetected);
       state.setParserSelection(cached.parserSelection);
+      state.setLargeFileMode(cached.largeFileMode);
       state.setSourceStatus({
         kind: "loaded",
         message: `Loaded ${getBaseName(filePath)}.`,
       });
       const fileName = filePath.split(/[\\/]/).pop() ?? filePath;
-      useUiStore.getState().openTab(filePath, fileName, buildTabSourceContext(source), "registry");
+      useUiStore.getState().openTab(
+        filePath,
+        fileName,
+        buildTabSourceContext(sourceWithSession),
+        "registry"
+      );
 
       // Load registry data
       const { getCachedRegistry, setCachedRegistry, useRegistryStore } = await import("../stores/registry-store");
@@ -536,11 +672,16 @@ export async function loadSelectedLogFile(
         filePath,
         fileSize: 0,
         byteOffset: 0,
+        largeFileMode: cached.largeFileMode,
       } as ParseResult;
     }
 
     console.info("[log-source] loadSelectedLogFile from cache (instant)", { filePath });
 
+    const sourceWithSession = withSourceSessionKeys(source, {
+      sessionKey: resolveSourceSessionKeyForFile(source, filePath),
+    });
+    state.setActiveSource(sourceWithSession);
     state.setEntries(cached.entries);
     state.setSelectedSourceFilePath(cached.selectedSourceFilePath);
     state.setOpenFilePath(filePath);
@@ -548,6 +689,7 @@ export async function loadSelectedLogFile(
     state.setParserSelection(cached.parserSelection);
     state.setTotalLines(cached.totalLines);
     state.setByteOffset(cached.byteOffset);
+    state.setLargeFileMode(cached.largeFileMode);
     state.setSourceOpenMode(cached.sourceOpenMode);
     state.setActiveColumns(cached.activeColumns);
     state.selectEntry(null);
@@ -558,7 +700,11 @@ export async function loadSelectedLogFile(
 
     // Open/switch to a tab for this file
     const fileName = filePath.split(/[\\/]/).pop() ?? filePath;
-    useUiStore.getState().openTab(filePath, fileName, buildTabSourceContext(source));
+    useUiStore.getState().openTab(
+      filePath,
+      fileName,
+      buildTabSourceContext(sourceWithSession)
+    );
 
     // Return a synthetic ParseResult to satisfy callers
     return {
@@ -570,6 +716,7 @@ export async function loadSelectedLogFile(
       filePath,
       fileSize: 0,
       byteOffset: cached.byteOffset,
+      largeFileMode: cached.largeFileMode,
     } as ParseResult;
   }
 
@@ -618,6 +765,7 @@ export async function switchToTab(
       logState.setSelectedSourceFilePath(filePath);
       logState.setEntries([]);
       logState.setSourceOpenMode("single-file");
+      logState.setLargeFileMode(getCachedTabSnapshot(filePath)?.largeFileMode ?? null);
 
       // Restore sidebar context
       if (sourceContext && sourceContext.sourceKind !== "file") {
@@ -665,6 +813,7 @@ export async function switchToTab(
     logState.setParserSelection(cached.parserSelection);
     logState.setTotalLines(cached.totalLines);
     logState.setByteOffset(cached.byteOffset);
+    logState.setLargeFileMode(cached.largeFileMode);
     logState.setActiveColumns(cached.activeColumns);
     useUiStore.getState().resetColumnWidths();
     logState.setAggregateFiles([]);
@@ -756,52 +905,23 @@ export async function loadFilesAsLogSource(paths: string[]): Promise<void> {
     const results = await parseFilesBatch(paths);
     const parseMs = Math.round(performance.now() - startTime);
 
-    // Cache each file for instant tab switching
-    for (const result of results) {
-      const fileColumns = getColumnsForParser(result.parserSelection.parser);
-      setCachedTabSnapshot(result.filePath, {
-        entries: result.entries,
-        formatDetected: result.formatDetected,
-        parserSelection: result.parserSelection,
-        totalLines: result.totalLines,
-        byteOffset: result.byteOffset,
-        selectedSourceFilePath: result.filePath,
-        sourceOpenMode: "single-file",
-        activeColumns: fileColumns,
-      });
-    }
+    cacheParsedResults(results);
 
-    // Build aggregate view — avoid push(...spread) to prevent call stack overflow
-    const aggregateFiles: import("../types/log").AggregateParsedFileResult[] = [];
-    let totalLines = 0;
-    let totalEntryCount = 0;
-
-    for (const result of results) {
-      totalLines += result.totalLines;
-      totalEntryCount += result.entries.length;
-      aggregateFiles.push({
-        filePath: result.filePath,
-        totalLines: result.totalLines,
-        parseErrors: result.parseErrors,
-        fileSize: result.fileSize,
-        byteOffset: result.byteOffset,
-      });
-    }
-
-    // Pre-allocate and copy with sequential IDs in one pass
-    const allEntries = new Array<LogEntry>(totalEntryCount);
-    let writeIndex = 0;
-    for (const result of results) {
-      for (let j = 0; j < result.entries.length; j++) {
-        allEntries[writeIndex] = { ...result.entries[j], id: writeIndex };
-        writeIndex++;
-      }
-    }
+    const aggregateView = buildAggregateView(results);
+    const backendSession = await registerAggregateEntriesSession(
+      aggregateView.allEntries
+    );
 
     // Derive a common parent folder for the multi-file source so the sidebar
     // treats this as folder-like and refresh/reload work correctly.
     const commonDir = getCommonDirectory(paths);
-    const source: LogSource = { kind: "folder", path: commonDir };
+    const source: LogSource = withSourceSessionKeys(
+      { kind: "folder", path: commonDir },
+      {
+        sessionKey: null,
+        aggregateSessionKey: backendSession?.sessionKey ?? null,
+      }
+    );
 
     // Build sidebar entries from the file list
     const folderEntries: FolderEntry[] = results.map((r) => ({
@@ -816,15 +936,16 @@ export async function loadFilesAsLogSource(paths: string[]): Promise<void> {
     state.setSourceEntries(folderEntries);
     state.setSelectedSourceFilePath(null);
     state.setSourceOpenMode("aggregate-folder");
-    state.setAggregateFiles(aggregateFiles);
-    state.setEntries(allEntries);
+    state.setAggregateFiles(aggregateView.aggregateFiles);
+    state.setEntries(aggregateView.allEntries);
     state.setFormatDetected(null);
     state.setParserSelection(null);
     state.setBundleMetadata(null);
-    state.setTotalLines(totalLines);
+    state.setTotalLines(aggregateView.totalLines);
     state.setByteOffset(0);
+    state.setLargeFileMode(getActiveLargeFileMode(results));
     const aggregateColumns = getColumnsForAggregate(
-      results.map((r) => r.parserSelection.parser)
+      aggregateView.parserKinds
     );
     state.setActiveColumns(aggregateColumns);
     useUiStore.getState().resetColumnWidths();
@@ -835,7 +956,7 @@ export async function loadFilesAsLogSource(paths: string[]): Promise<void> {
 
     state.setSourceStatus({
       kind: "loaded",
-      message: `Loaded ${aggregateFiles.length} files.`,
+      message: `Loaded ${aggregateView.aggregateFiles.length} files.`,
       detail: `Parsed in ${parseMs} ms (parallel).`,
     });
   } finally {
