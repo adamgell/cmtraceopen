@@ -1,0 +1,21 @@
+# Rust
+/target
+**/*.rs.bk
+Cargo.lock
+
+# .NET
+bin/
+obj/
+*.user
+.vs/
+
+# Local data / secrets
+*.db
+*.sqlite
+*.litedb
+appsettings.*.local.json
+.env
+
+# OS / editor
+.DS_Store
+.idea/

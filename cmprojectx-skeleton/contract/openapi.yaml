@@ -1,0 +1,140 @@
+openapi: 3.1.0
+info:
+  title: cmProjectX Service API
+  version: 0.1.0
+  description: >
+    Contract between the Rust/WinUI 3 client and the .NET Intune engine.
+    This is the single source of truth for DTOs and endpoints — generate
+    C# and Rust types from it (see contract/README.md).
+
+servers:
+  - url: http://127.0.0.1:5099
+    description: Local sidecar (MVP)
+
+paths:
+  /health:
+    get:
+      operationId: getHealth
+      summary: Liveness probe
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SyncStatus" }
+
+  /sync:
+    post:
+      operationId: triggerSync
+      summary: Trigger a Graph delta sync for the active tenant
+      responses:
+        "202": { description: Accepted; sync started }
+
+  /audit:
+    get:
+      operationId: getAuditTimeline
+      summary: Query the audit-event timeline (the time-machine)
+      parameters:
+        - { name: from, in: query, schema: { type: string, format: date-time } }
+        - { name: to,   in: query, schema: { type: string, format: date-time } }
+        - { name: q,    in: query, schema: { type: string } }
+      responses:
+        "200":
+          description: Matching audit events, newest first
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/AuditEvent" }
+
+  /drift:
+    get:
+      operationId: getDrift
+      summary: Drift between two config snapshots of an object
+      parameters:
+        - { name: objectId, in: query, required: true, schema: { type: string } }
+        - { name: baseSnapshotId, in: query, schema: { type: string } }
+        - { name: headSnapshotId, in: query, schema: { type: string } }
+      responses:
+        "200":
+          description: Drift record
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DriftRecord" }
+
+  /search:
+    get:
+      operationId: search
+      summary: Full-text search across audit events and config snapshots
+      parameters:
+        - { name: q, in: query, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Search results
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/SearchResult" }
+
+components:
+  schemas:
+    SyncStatus:
+      type: object
+      properties:
+        tenantId:    { type: string }
+        lastSyncUtc: { type: string, format: date-time, nullable: true }
+        cloud:       { type: string, enum: [Commercial, GCC, GCCHigh, DoD] }
+        healthy:     { type: boolean }
+      required: [healthy]
+
+    AuditEvent:
+      type: object
+      properties:
+        id:         { type: string }
+        timestamp:  { type: string, format: date-time }
+        actor:      { type: string, description: "who made the change" }
+        action:     { type: string }
+        objectType: { type: string }
+        objectId:   { type: string }
+        objectName: { type: string }
+      required: [id, timestamp, action, objectType, objectId]
+
+    ConfigSnapshot:
+      type: object
+      properties:
+        snapshotId: { type: string }
+        objectId:   { type: string }
+        objectType: { type: string }
+        capturedUtc: { type: string, format: date-time }
+        body:       { type: object, additionalProperties: true }
+      required: [snapshotId, objectId, objectType, capturedUtc]
+
+    DriftRecord:
+      type: object
+      properties:
+        objectId:       { type: string }
+        baseSnapshotId: { type: string }
+        headSnapshotId: { type: string }
+        changes:
+          type: array
+          items: { $ref: "#/components/schemas/DriftChange" }
+      required: [objectId, changes]
+
+    DriftChange:
+      type: object
+      properties:
+        path:     { type: string, description: "JSON path of the changed field" }
+        kind:     { type: string, enum: [Added, Removed, Modified] }
+        before:   { nullable: true }
+        after:    { nullable: true }
+      required: [path, kind]
+
+    SearchResult:
+      type: object
+      properties:
+        kind:    { type: string, enum: [AuditEvent, ConfigSnapshot] }
+        id:      { type: string }
+        score:   { type: number }
+        summary: { type: string }
+      required: [kind, id, summary]

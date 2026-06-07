@@ -1,0 +1,25 @@
+[package]
+name = "app"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+api-types = { path = "../crates/api-types" }
+serde.workspace = true
+serde_json.workspace = true
+reqwest = { version = "0.12", features = ["json"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+
+# --- WinUI 3 UI (Windows Reactor) -------------------------------------------
+# Windows Reactor landed in microsoft/windows-rs (announced May 2026). Confirm
+# the published crate name/version before enabling. Until then the UI lives in
+# main.rs as a documented sketch and `cargo run -p app` just pings the service.
+#
+# [target.'cfg(windows)'.dependencies]
+# windows-reactor = { git = "https://github.com/microsoft/windows-rs" } # TODO: pin
+# windows-canvas  = { git = "https://github.com/microsoft/windows-rs" } # TODO: pin
+
+# --- CMTrace parser (Phase 2, upstream OSS seam) ----------------------------
+# cmtraceopen-parser = { git = "https://github.com/adamgell/cmtraceopen", rev = "..." }

@@ -1,0 +1,19 @@
+# Rust workspace root for the cmProjectX client side.
+# The .NET service (service/) is a separate build (dotnet).
+[workspace]
+resolver = "2"
+members = [
+    "app",
+    "crates/api-types",
+    # "crates/parser" is an EXTERNAL OSS dependency (see crates/parser/README.md),
+    # not a local member. It is consumed by `app` via a git dependency.
+]
+
+[workspace.package]
+edition = "2021"
+license = "UNLICENSED" # TODO: set commercial/source-available license once decided
+authors = ["adamgell"]
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
