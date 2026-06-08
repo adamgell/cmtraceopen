@@ -71,7 +71,7 @@ jobs:
         run: cargo clippy -- -D warnings
 
       - name: Install cargo-deny and cargo-audit
-        uses: taiki-e/install-action@b550161ef8a7bc4f2a671c0b03a18ac9ccedea1e # v2.79.1
+        uses: taiki-e/install-action@0631aa6515c7d545823c67cfae7ef4fc7f490154 # v2.81.8
         with:
           tool: cargo-deny,cargo-audit
 
