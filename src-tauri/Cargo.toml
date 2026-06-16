@@ -54,7 +54,7 @@ notify = "8"
 tokio = { version = "1", features = ["fs", "io-util", "sync", "rt", "net"] }
 rayon = "1.10"
 font-kit = "0.14"
-evtx = { version = "0.11", optional = true }
+evtx = { version = "0.12", optional = true }
 glob = "0.3"
 sha2 = "0.10"
 tempfile = { version = "3", optional = true }
