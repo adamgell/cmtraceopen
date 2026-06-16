@@ -9,6 +9,8 @@ Built as a modern replacement for Microsoft's CMTrace.exe with added Intune diag
 
 Download the latest release for your platform and run it. That's it — single file, no dependencies.
 
+Build status and nightly downloads are shown on the [CMTrace Open build page](https://adamgell.com/cmtraceopen/).
+
 | Platform | Download |
 |----------|----------|
 | Windows (x64) | [.msi + NSIS .exe installers](https://github.com/adamgell/CMTraceOpen/releases/latest) |

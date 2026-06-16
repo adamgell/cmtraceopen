@@ -3,6 +3,10 @@ import { tokens } from "@fluentui/react-components";
 import { getVersion } from "@tauri-apps/api/app";
 import { useUiStore } from "../../../stores/ui-store";
 import { getUpdatePolicy } from "../../../lib/commands";
+import {
+  getUpdateChannel,
+  getUpdateChannelLabel,
+} from "../../../lib/update-channel";
 
 const SKIPPED_VERSION_KEY = "cmtraceopen-skipped-update-version";
 
@@ -63,6 +67,9 @@ export function UpdatesTab() {
     setSkippedVersion(null);
   };
 
+  const updateChannel = getUpdateChannel(appVersion);
+  const updateChannelLabel = getUpdateChannelLabel(updateChannel);
+
   return (
     <div>
       <div style={{ fontSize: "12px", color: tokens.colorNeutralForeground3, marginBottom: "16px", lineHeight: 1.5 }}>
@@ -75,6 +82,32 @@ export function UpdatesTab() {
         </div>
         <div style={{ fontSize: "12px", color: tokens.colorNeutralForeground1 }}>
           CMTrace Open v{appVersion}
+        </div>
+        <div
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            marginTop: "6px",
+            padding: "2px 8px",
+            border: `1px solid ${
+              updateChannel === "nightly"
+                ? tokens.colorPaletteYellowBorderActive
+                : tokens.colorNeutralStroke1
+            }`,
+            borderRadius: "999px",
+            background:
+              updateChannel === "nightly"
+                ? tokens.colorPaletteYellowBackground2
+                : tokens.colorNeutralBackground3,
+            color:
+              updateChannel === "nightly"
+                ? tokens.colorPaletteYellowForeground2
+                : tokens.colorNeutralForeground2,
+            fontSize: "11px",
+            fontWeight: 700,
+          }}
+        >
+          {updateChannelLabel}
         </div>
       </section>
 

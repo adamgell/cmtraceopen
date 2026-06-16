@@ -1,0 +1,68 @@
+name: "CMTrace Open: Security DevOps (MSDO)"
+
+# Microsoft Security DevOps (MSDO) runs Microsoft's open-source security
+# analyzers (trivy, eslint, template-analyzer, terrascan, checkov, bandit, and
+# binskim on Windows) and publishes a SARIF report to GitHub code scanning.
+# Once the GitHub org/repo is connected to Microsoft Defender for Cloud via the
+# DevOps security connector, those findings also surface in Defender for Cloud.
+#
+# This is a PUBLIC repository, so GitHub code scanning (the Security tab) is
+# free: no GitHub Advanced Security licence is needed to upload the SARIF.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Re-scan weekly so trivy re-evaluates already-pinned dependencies against
+    # newly disclosed CVEs even when no code changes land. Mondays 06:00 UTC,
+    # offset from the Monday Dependabot run.
+    - cron: "0 6 * * 1"
+
+# Cancel superseded PR scans, but let every main-branch and scheduled run finish
+# so the code-scanning history stays complete.
+concurrency:
+  group: msdo-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read # actions/checkout
+  security-events: write # upload SARIF to the Security (code scanning) tab
+  actions: read # codeql-action reads workflow run metadata
+
+jobs:
+  msdo:
+    name: Microsoft Security DevOps
+    # Linux runner: faster than windows-latest and runs every source analyzer
+    # MSDO applies to this repo (trivy, eslint, checkov, terrascan,
+    # template-analyzer, bandit). binskim is Windows/PE-only and there are no
+    # compiled artifacts on a source checkout, so nothing is lost on Linux.
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Run Microsoft Security DevOps
+        id: msdo
+        uses: microsoft/security-devops-action@08976cb623803b1b36d7112d4ff9f59eae704de0 # v1.12.0
+        # Defaults to the 'GitHub' policy (all applicable analyzers/categories).
+        # To narrow it, add e.g.:
+        #   with:
+        #     tools: trivy             # dependency/secret scanning only
+        #     categories: "code,IaC"   # code | artifacts | IaC | containers
+
+      - name: Upload results to the Security tab
+        # SARIF upload needs a write-scoped token. Skip it when the run can't
+        # have one: fork PRs and Dependabot PRs both run read-only. MSDO itself
+        # still runs on those PRs; same-repo human PRs, main pushes, and the
+        # schedule upload normally. (This repo gets frequent Dependabot PRs, so
+        # guarding here avoids a failing check on each one.)
+        if: >-
+          github.actor != 'dependabot[bot]' &&
+          (github.event_name != 'pull_request' ||
+           github.event.pull_request.head.repo.full_name == github.repository)
+        uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4.36.2
+        with:
+          sarif_file: ${{ steps.msdo.outputs.sarifFile }}
+          category: msdo

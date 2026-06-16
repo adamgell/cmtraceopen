@@ -32,6 +32,13 @@ pub const MENU_ID_HELP_ABOUT: &str = "help.about";
 
 const KNOWN_SOURCE_MENU_ID_PREFIX: &str = "known-source.";
 
+fn app_display_name<R: Runtime>(app: &AppHandle<R>) -> String {
+    app.config()
+        .product_name
+        .clone()
+        .unwrap_or_else(|| "CMTrace Open".to_string())
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct AppMenuActionPayload {
     pub version: u8,
@@ -150,7 +157,8 @@ pub fn build_app_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> 
         true,
         None::<&str>,
     )?;
-    let about = MenuItem::with_id(app, MENU_ID_HELP_ABOUT, "About CMTrace Open", true, None::<&str>)?;
+    let about_label = format!("About {}", app_display_name(app));
+    let about = MenuItem::with_id(app, MENU_ID_HELP_ABOUT, about_label, true, None::<&str>)?;
 
     let file_menu = Submenu::with_items(
         app,

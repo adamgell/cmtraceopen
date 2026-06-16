@@ -1,0 +1,717 @@
+name: "CMTrace Open: Nightly Signed Build"
+
+on:
+  schedule:
+    # 07:00 UTC is overnight for America/New_York year-round.
+    - cron: "0 7 * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: cmtrace-open-nightly-signed
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  NIGHTLY_TAG: nightly
+
+jobs:
+  metadata:
+    name: Nightly metadata
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      asset_prefix: ${{ steps.meta.outputs.asset_prefix }}
+      base_version: ${{ steps.meta.outputs.base_version }}
+      build_id: ${{ steps.meta.outputs.build_id }}
+      display_version: ${{ steps.meta.outputs.display_version }}
+      msi_version: ${{ steps.meta.outputs.msi_version }}
+      release_title: ${{ steps.meta.outputs.release_title }}
+      run_url: ${{ steps.meta.outputs.run_url }}
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Resolve nightly metadata
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          base_version="$(node -e "console.log(JSON.parse(require('fs').readFileSync('package.json', 'utf8')).version)")"
+          date_utc="$(date -u +'%Y%m%d')"
+          short_sha="${GITHUB_SHA::12}"
+          build_id="${date_utc}.${GITHUB_RUN_NUMBER}.${short_sha}"
+          asset_prefix="CMTrace-Open_Nightly_${date_utc}_${GITHUB_RUN_NUMBER}_${short_sha}"
+          display_version="${base_version}-nightly.${date_utc}.${GITHUB_RUN_NUMBER}.g${short_sha}"
+          msi_version="$(BASE_VERSION="$base_version" node .github/scripts/nightly-channel.mjs msi-version)"
+          release_title="CMTrace Open Nightly ${build_id}"
+          run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+
+          {
+            echo "asset_prefix=$asset_prefix"
+            echo "base_version=$base_version"
+            echo "build_id=$build_id"
+            echo "display_version=$display_version"
+            echo "msi_version=$msi_version"
+            echo "release_title=$release_title"
+            echo "run_url=$run_url"
+          } >> "$GITHUB_OUTPUT"
+
+  windows-signed-nightly:
+    name: Signed Windows Nightly (${{ matrix.label }})
+    needs: metadata
+    runs-on: windows-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    environment: codesigning
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: Windows-x64
+            rust_target: x86_64-pc-windows-msvc
+            artifact_suffix: x64
+          - label: Windows-arm64
+            rust_target: aarch64-pc-windows-msvc
+            artifact_suffix: arm64
+
+    env:
+      ASSET_PREFIX: ${{ needs.metadata.outputs.asset_prefix }}
+      BUILD_ID: ${{ needs.metadata.outputs.build_id }}
+      DISPLAY_VERSION: ${{ needs.metadata.outputs.display_version }}
+      MSI_VERSION: ${{ needs.metadata.outputs.msi_version }}
+
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          targets: ${{ matrix.rust_target }}
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Apply nightly channel metadata
+        run: node .github/scripts/nightly-channel.mjs apply
+
+      - name: Build full edition (NSIS + standalone EXE)
+        shell: pwsh
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          RUST_TARGET: ${{ matrix.rust_target }}
+        run: |
+          $lastExitCode = 0
+          for ($attempt = 1; $attempt -le 3; $attempt++) {
+            npm run app:build:release -- --target $env:RUST_TARGET --bundles nsis
+            $lastExitCode = $LASTEXITCODE
+            if ($lastExitCode -eq 0) {
+              exit 0
+            }
+
+            if ($attempt -lt 3) {
+              $delaySeconds = 30 * $attempt
+              Write-Warning "NSIS build attempt $attempt failed with exit code $lastExitCode. Retrying in $delaySeconds seconds."
+              Start-Sleep -Seconds $delaySeconds
+            }
+          }
+
+          exit $lastExitCode
+
+      - name: Save full edition binary
+        shell: pwsh
+        run: |
+          $releaseDir = Join-Path $PWD "src-tauri\target\${{ matrix.rust_target }}\release"
+          Copy-Item (Join-Path $releaseDir "cmtrace-open-nightly.exe") (Join-Path $PWD "full-edition.exe") -Force
+
+      - name: Build lite edition (standalone EXE)
+        run: npx tauri build --target ${{ matrix.rust_target }} --no-bundle --config src-tauri/tauri.lite.conf.json -- --no-default-features
+
+      - name: Stage signed Windows payloads
+        id: stage_artifacts
+        shell: pwsh
+        run: |
+          $releaseDir = Join-Path $PWD "src-tauri\target\${{ matrix.rust_target }}\release"
+          $bundleNsisDir = Join-Path $releaseDir "bundle\nsis"
+          $artifactDir = Join-Path $PWD "nightly-artifacts"
+          $litePrefix = $env:ASSET_PREFIX -replace '^CMTrace-Open', 'CMTrace-Open-Lite'
+
+          New-Item -ItemType Directory -Force -Path $artifactDir | Out-Null
+
+          $stagedFullExe = Join-Path $artifactDir "$($env:ASSET_PREFIX)_${{ matrix.artifact_suffix }}.exe"
+          Copy-Item (Join-Path $PWD "full-edition.exe") $stagedFullExe -Force
+
+          $stagedLiteExe = Join-Path $artifactDir "$($litePrefix)_${{ matrix.artifact_suffix }}.exe"
+          Copy-Item (Join-Path $releaseDir "cmtrace-open-lite-nightly.exe") $stagedLiteExe -Force
+
+          $nsisCandidates = Get-ChildItem -Path $bundleNsisDir -Filter *-setup.exe -File -Recurse
+          if ($nsisCandidates.Count -ne 1) {
+            $names = ($nsisCandidates | ForEach-Object { $_.FullName }) -join ", "
+            throw "Expected exactly one NSIS setup EXE in $bundleNsisDir. Found: $names"
+          }
+
+          $stagedNsis = Join-Path $artifactDir "$($env:ASSET_PREFIX)_${{ matrix.artifact_suffix }}-setup.exe"
+          Copy-Item $nsisCandidates[0].FullName $stagedNsis -Force
+
+          "full_exe_path=$stagedFullExe" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "lite_exe_path=$stagedLiteExe" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "nsis_path=$stagedNsis" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+      - name: Sign nightly EXEs
+        uses: azure/trusted-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
+        with:
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          endpoint: ${{ secrets.SIGNING_ENDPOINT }}
+          trusted-signing-account-name: ${{ secrets.SIGNING_ACCOUNT_NAME }}
+          certificate-profile-name: ${{ secrets.SIGNING_PROFILE_NAME }}
+          files-folder: ${{ github.workspace }}\nightly-artifacts
+          files-folder-filter: exe
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+
+      - name: Verify EXE signatures
+        shell: pwsh
+        run: |
+          $files = Get-ChildItem -Path (Join-Path $PWD "nightly-artifacts") -Filter *.exe -File
+          if ($files.Count -lt 3) {
+            throw "Expected at least three signed EXE files, found $($files.Count)."
+          }
+
+          foreach ($file in $files) {
+            $signature = Get-AuthenticodeSignature $file.FullName
+            if ($signature.Status -ne "Valid") {
+              throw "Invalid Authenticode signature for $($file.FullName): $($signature.Status) $($signature.StatusMessage)"
+            }
+          }
+
+      - name: Attest signed EXEs
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
+        with:
+          subject-path: |
+            nightly-artifacts/*.exe
+
+      - name: Install Master Packager Dev
+        shell: pwsh
+        run: |
+          $installer = "$env:TEMP\mpdev.msi"
+          Invoke-WebRequest -Uri "https://cdn.masterpackager.com/installer/dev/2.1.1/mpdev_self_contained_x64_2.1.1.msi" -OutFile $installer
+          Start-Process msiexec.exe -ArgumentList "/i `"$installer`" /quiet /norestart" -Wait
+          "C:\Program Files\Master Packager Ltd\Master Packager Dev" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Build MSI with mpdev
+        shell: pwsh
+        env:
+          FULL_EXE_PATH: ${{ steps.stage_artifacts.outputs.full_exe_path }}
+          LITE_EXE_PATH: ${{ steps.stage_artifacts.outputs.lite_exe_path }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          SIGNING_ENDPOINT: ${{ secrets.SIGNING_ENDPOINT }}
+          SIGNING_ACCOUNT_NAME: ${{ secrets.SIGNING_ACCOUNT_NAME }}
+          SIGNING_PROFILE_NAME: ${{ secrets.SIGNING_PROFILE_NAME }}
+        run: |
+          node .github/scripts/nightly-channel.mjs apply
+
+          $installerPackage = Get-Content src-tauri\installer\package.signed.json -Raw | ConvertFrom-Json
+          $packageName = [string]$installerPackage.packageName
+          $packageDescription = [string]$installerPackage.msi.installDialog.packageDescription
+          $installDir = [string]$installerPackage.installDir
+          $upgradeCode = [string]$installerPackage.msi.upgradeCode
+          $fileTargets = @($installerPackage.fileSystemEntries | ForEach-Object { [string]$_.targetPath })
+          $shortcutNames = @($installerPackage.shortcuts | ForEach-Object { [string]$_.name })
+          $shortcutTargets = @($installerPackage.shortcuts | ForEach-Object { [string]$_.target })
+
+          if ($packageName -ne "CMTrace Open Nightly") {
+            throw "Nightly MSI packageName was not applied. Got: $packageName"
+          }
+
+          if ($installDir -ne "%ProgramFiles%\CMTrace Open Nightly") {
+            throw "Nightly MSI installDir should isolate the nightly channel. Got: $installDir"
+          }
+
+          if ($upgradeCode -ne "{7B16F0D6-2B7B-4D4B-9F71-4F1A9F64C0E3}") {
+            throw "Nightly MSI upgradeCode should be separate from the main channel. Got: $upgradeCode"
+          }
+
+          if (-not $packageDescription.Contains($env:DISPLAY_VERSION)) {
+            throw "Nightly MSI packageDescription does not contain $env:DISPLAY_VERSION. Got: $packageDescription"
+          }
+
+          foreach ($expected in @('$.installDir\cmtrace-open-nightly.exe', '$.installDir\cmtrace-open-lite-nightly.exe')) {
+            if ($fileTargets -notcontains $expected) {
+              throw "Nightly MSI file target missing $expected. Got: $($fileTargets -join ', ')"
+            }
+
+            if ($shortcutTargets -notcontains $expected) {
+              throw "Nightly MSI shortcut target missing $expected. Got: $($shortcutTargets -join ', ')"
+            }
+          }
+
+          foreach ($expected in @('CMTrace Open Nightly', 'CMTrace Open Lite Nightly')) {
+            if ($shortcutNames -notcontains $expected) {
+              throw "Nightly MSI shortcut name missing $expected. Got: $($shortcutNames -join ', ')"
+            }
+          }
+
+          mpdev build src-tauri\installer\package.signed.json `
+            --working-dir "${{ github.workspace }}" `
+            --properties `
+              "$.packageName=$packageName" `
+              "$.installDir=$installDir" `
+              "$.msi.packageName=$packageName" `
+              "$.msi.upgradeCode=$upgradeCode" `
+              "$.msi.installDialog.packageDescription=$packageDescription" `
+              "$.version=$env:MSI_VERSION" `
+              "$.outputFileName=$($env:ASSET_PREFIX)_${{ matrix.artifact_suffix }}" `
+              "$.platform=${{ matrix.artifact_suffix }}"
+
+      - name: Verify MSI output and signature
+        id: verify_msi
+        shell: pwsh
+        run: |
+          function Get-MsiProperty {
+            param(
+              [Parameter(Mandatory = $true)]
+              [string] $Path,
+              [Parameter(Mandatory = $true)]
+              [string] $Name
+            )
+
+            $installer = New-Object -ComObject WindowsInstaller.Installer
+            $database = $installer.GetType().InvokeMember(
+              "OpenDatabase",
+              "InvokeMethod",
+              $null,
+              $installer,
+              @($Path, 0)
+            )
+            $query = "SELECT ``Value`` FROM ``Property`` WHERE ``Property``='$Name'"
+            $view = $database.GetType().InvokeMember(
+              "OpenView",
+              "InvokeMethod",
+              $null,
+              $database,
+              @($query)
+            )
+            $view.GetType().InvokeMember("Execute", "InvokeMethod", $null, $view, $null) | Out-Null
+            $record = $view.GetType().InvokeMember("Fetch", "InvokeMethod", $null, $view, $null)
+
+            if ($null -eq $record) {
+              return $null
+            }
+
+            return $record.GetType().InvokeMember("StringData", "GetProperty", $null, $record, 1)
+          }
+
+          function Get-MsiColumnValues {
+            param(
+              [Parameter(Mandatory = $true)]
+              [string] $Path,
+              [Parameter(Mandatory = $true)]
+              [string] $Table,
+              [Parameter(Mandatory = $true)]
+              [string] $Column
+            )
+
+            $installer = New-Object -ComObject WindowsInstaller.Installer
+            $database = $installer.GetType().InvokeMember(
+              "OpenDatabase",
+              "InvokeMethod",
+              $null,
+              $installer,
+              @($Path, 0)
+            )
+            $query = "SELECT ``$Column`` FROM ``$Table``"
+            $view = $database.GetType().InvokeMember(
+              "OpenView",
+              "InvokeMethod",
+              $null,
+              $database,
+              @($query)
+            )
+            $view.GetType().InvokeMember("Execute", "InvokeMethod", $null, $view, $null) | Out-Null
+
+            $values = @()
+            while ($true) {
+              $record = $view.GetType().InvokeMember("Fetch", "InvokeMethod", $null, $view, $null)
+              if ($null -eq $record) {
+                break
+              }
+
+              $values += [string]$record.GetType().InvokeMember("StringData", "GetProperty", $null, $record, 1)
+            }
+
+            return $values
+          }
+
+          function Assert-AnyValueContains {
+            param(
+              [Parameter(Mandatory = $true)]
+              [string[]] $Values,
+              [Parameter(Mandatory = $true)]
+              [string] $Needle,
+              [Parameter(Mandatory = $true)]
+              [string] $Label
+            )
+
+            if (-not ($Values | Where-Object { $_.Contains($Needle) })) {
+              throw "$Label should contain $Needle. Got: $($Values -join ', ')"
+            }
+          }
+
+          $msiPath = Join-Path $PWD "release-artifacts\$($env:ASSET_PREFIX)_${{ matrix.artifact_suffix }}.msi"
+          if (-not (Test-Path $msiPath)) {
+            throw "Expected MSI not found at $msiPath"
+          }
+
+          $productName = Get-MsiProperty -Path $msiPath -Name "ProductName"
+          $productVersion = Get-MsiProperty -Path $msiPath -Name "ProductVersion"
+          $upgradeCode = Get-MsiProperty -Path $msiPath -Name "UpgradeCode"
+          $mpDescription = Get-MsiProperty -Path $msiPath -Name "MpDescription"
+          $fileNames = @(Get-MsiColumnValues -Path $msiPath -Table "File" -Column "FileName")
+          $shortcutNames = @(Get-MsiColumnValues -Path $msiPath -Table "Shortcut" -Column "Name")
+
+          if ($productName -ne "CMTrace Open Nightly") {
+            throw "MSI ProductName should identify the nightly channel. Got: $productName"
+          }
+
+          if ($productVersion -ne $env:MSI_VERSION) {
+            throw "MSI ProductVersion should be the nightly installer version $env:MSI_VERSION. Got: $productVersion"
+          }
+
+          if ($upgradeCode -ne "{7B16F0D6-2B7B-4D4B-9F71-4F1A9F64C0E3}") {
+            throw "MSI UpgradeCode should isolate the nightly channel. Got: $upgradeCode"
+          }
+
+          if (-not $mpDescription.Contains($env:DISPLAY_VERSION)) {
+            throw "MSI install dialog description should include $env:DISPLAY_VERSION. Got: $mpDescription"
+          }
+
+          Assert-AnyValueContains -Values $fileNames -Needle "cmtrace-open-nightly.exe" -Label "MSI File table"
+          Assert-AnyValueContains -Values $fileNames -Needle "cmtrace-open-lite-nightly.exe" -Label "MSI File table"
+          Assert-AnyValueContains -Values $shortcutNames -Needle "CMTrace Open Nightly" -Label "MSI Shortcut table"
+          Assert-AnyValueContains -Values $shortcutNames -Needle "CMTrace Open Lite Nightly" -Label "MSI Shortcut table"
+
+          $signature = Get-AuthenticodeSignature $msiPath
+          if ($signature.Status -ne "Valid") {
+            throw "Invalid Authenticode signature for $($msiPath): $($signature.Status) $($signature.StatusMessage)"
+          }
+
+          "msi_path=$msiPath" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+      - name: Attest MSI
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
+        with:
+          subject-path: |
+            ${{ steps.verify_msi.outputs.msi_path }}
+
+      - name: Generate updater signature for NSIS installer
+        shell: pwsh
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          NSIS_PATH: ${{ steps.stage_artifacts.outputs.nsis_path }}
+        run: |
+          npx tauri signer sign "$env:NSIS_PATH"
+          $sigPath = "$env:NSIS_PATH.sig"
+          if (-not (Test-Path $sigPath)) {
+            throw "Updater signature file was not generated at $sigPath"
+          }
+
+      - name: Upload signed Windows nightly artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: cmtrace-open-nightly-windows-signed-${{ matrix.artifact_suffix }}-${{ env.BUILD_ID }}
+          path: |
+            ${{ steps.stage_artifacts.outputs.full_exe_path }}
+            ${{ steps.stage_artifacts.outputs.lite_exe_path }}
+            ${{ steps.stage_artifacts.outputs.nsis_path }}
+            ${{ steps.stage_artifacts.outputs.nsis_path }}.sig
+            ${{ steps.verify_msi.outputs.msi_path }}
+          if-no-files-found: error
+          retention-days: 14
+
+  macos-signed-nightly:
+    name: Signed macOS Nightly (macOS-arm64)
+    needs: metadata
+    runs-on: macos-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    environment: codesigning
+    env:
+      ASSET_PREFIX: ${{ needs.metadata.outputs.asset_prefix }}
+      BUILD_ID: ${{ needs.metadata.outputs.build_id }}
+      DISPLAY_VERSION: ${{ needs.metadata.outputs.display_version }}
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Import Apple Developer Certificate
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          echo "$APPLE_CERTIFICATE" | base64 --decode > certificate.p12
+          security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security set-keychain-settings -t 3600 -u build.keychain
+          security import certificate.p12 -k build.keychain \
+            -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PASSWORD" build.keychain
+          rm certificate.p12
+
+      - name: Resolve Apple signing identity
+        run: |
+          set -euo pipefail
+          IDENTITY="$(security find-identity -v -p codesigning build.keychain \
+            | grep "Developer ID Application" \
+            | head -1 \
+            | awk -F'"' '{print $2}')"
+
+          if [ -z "$IDENTITY" ]; then
+            echo "::error::No Developer ID Application signing identity found."
+            exit 1
+          fi
+
+          echo "APPLE_SIGNING_IDENTITY=$IDENTITY" >> "$GITHUB_ENV"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: package-lock.json
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Apply nightly channel metadata
+        run: node .github/scripts/nightly-channel.mjs apply
+
+      - name: Build signed and notarized macOS app
+        uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0.6.2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ env.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        with:
+          projectPath: .
+          args: --target aarch64-apple-darwin
+
+      - name: Verify and stage macOS artifacts
+        id: stage_macos
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          bundle_root="src-tauri/target/aarch64-apple-darwin/release/bundle"
+          artifact_dir="$PWD/nightly-artifacts"
+          mkdir -p "$artifact_dir"
+
+          apps_file="$(mktemp)"
+          find "$bundle_root/macos" -maxdepth 1 -type d -name "*.app" -print > "$apps_file"
+          app_count="$(wc -l < "$apps_file" | tr -d ' ')"
+          if [ "$app_count" -ne 1 ]; then
+            printf 'Expected exactly one .app bundle under %s/macos, found %s\n' "$bundle_root" "$app_count" >&2
+            cat "$apps_file" >&2
+            exit 1
+          fi
+
+          dmgs_file="$(mktemp)"
+          find "$bundle_root/dmg" -type f -name "*.dmg" -print > "$dmgs_file"
+          dmg_count="$(wc -l < "$dmgs_file" | tr -d ' ')"
+          if [ "$dmg_count" -ne 1 ]; then
+            printf 'Expected exactly one DMG under %s/dmg, found %s\n' "$bundle_root" "$dmg_count" >&2
+            cat "$dmgs_file" >&2
+            exit 1
+          fi
+
+          updaters_file="$(mktemp)"
+          find "$bundle_root/macos" -maxdepth 1 -type f -name "*.app.tar.gz" -print > "$updaters_file"
+          updater_count="$(wc -l < "$updaters_file" | tr -d ' ')"
+          if [ "$updater_count" -ne 1 ]; then
+            printf 'Expected exactly one updater .app.tar.gz under %s/macos, found %s\n' "$bundle_root" "$updater_count" >&2
+            cat "$updaters_file" >&2
+            exit 1
+          fi
+
+          app_path="$(sed -n '1p' "$apps_file")"
+          dmg_path="$(sed -n '1p' "$dmgs_file")"
+          updater_path="$(sed -n '1p' "$updaters_file")"
+          updater_sig_path="${updater_path}.sig"
+          staged_dmg="$artifact_dir/${ASSET_PREFIX}_macOS-arm64.dmg"
+          staged_updater="$artifact_dir/${ASSET_PREFIX}_macOS-arm64.app.tar.gz"
+          staged_updater_sig="${staged_updater}.sig"
+
+          if [ ! -s "$updater_sig_path" ]; then
+            printf 'Expected updater signature not found at %s\n' "$updater_sig_path" >&2
+            exit 1
+          fi
+
+          hdiutil verify "$dmg_path"
+          gzip -t "$updater_path"
+          tar -tzf "$updater_path" >/dev/null
+          codesign --verify --deep --strict --verbose=2 "$app_path"
+          xcrun stapler validate "$app_path"
+          spctl -a -vvv -t install "$app_path"
+
+          cp "$dmg_path" "$staged_dmg"
+          cp "$updater_path" "$staged_updater"
+          cp "$updater_sig_path" "$staged_updater_sig"
+          {
+            echo "dmg_path=$staged_dmg"
+            echo "updater_path=$staged_updater"
+            echo "updater_sig_path=$staged_updater_sig"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Attest macOS nightly artifacts
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
+        with:
+          subject-path: |
+            ${{ steps.stage_macos.outputs.dmg_path }}
+            ${{ steps.stage_macos.outputs.updater_path }}
+
+      - name: Upload signed macOS nightly artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: cmtrace-open-nightly-macos-signed-arm64-${{ env.BUILD_ID }}
+          path: |
+            ${{ steps.stage_macos.outputs.dmg_path }}
+            ${{ steps.stage_macos.outputs.updater_path }}
+            ${{ steps.stage_macos.outputs.updater_sig_path }}
+          if-no-files-found: error
+          retention-days: 14
+
+  publish-nightly-release:
+    name: Publish nightly prerelease
+    needs:
+      - metadata
+      - windows-signed-nightly
+      - macos-signed-nightly
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          fetch-depth: 0
+
+      - name: Download signed nightly artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Publish mutable nightly prerelease
+        shell: bash
+        env:
+          BASE_VERSION: ${{ needs.metadata.outputs.base_version }}
+          ASSET_PREFIX: ${{ needs.metadata.outputs.asset_prefix }}
+          BUILD_ID: ${{ needs.metadata.outputs.build_id }}
+          DISPLAY_VERSION: ${{ needs.metadata.outputs.display_version }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TITLE: ${{ needs.metadata.outputs.release_title }}
+          RUN_URL: ${{ needs.metadata.outputs.run_url }}
+          TAG_NAME: ${{ env.NIGHTLY_TAG }}
+        run: |
+          set -euo pipefail
+
+          asset_count="$(find release-assets -type f | wc -l | tr -d ' ')"
+          if [ "$asset_count" -eq 0 ]; then
+            echo "::error::No nightly artifacts were downloaded."
+            exit 1
+          fi
+
+          node .github/scripts/nightly-channel.mjs manifest
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch --tags --force
+          git tag -f "$TAG_NAME" "$GITHUB_SHA"
+          git push --force origin "refs/tags/$TAG_NAME"
+
+          cat > release-notes.md <<EOF
+          ## CMTrace Open Nightly
+
+          Build: \`${BUILD_ID}\`
+          Base version: \`${BASE_VERSION}\`
+          Nightly version: \`${DISPLAY_VERSION}\`
+          Update channel: \`nightly\`
+          Commit: \`${GITHUB_SHA}\`
+          Workflow run: ${RUN_URL}
+
+          This prerelease is replaced after each successful nightly signed build.
+
+          ### Artifacts
+          - Windows x64 and arm64: signed MSI, signed NSIS setup EXE, signed full standalone EXE, signed Lite standalone EXE
+          - macOS arm64: DMG containing a signed and notarized app, plus Tauri updater archive
+          - Updater: \`latest.json\` for installed nightly builds
+          EOF
+
+          if gh release view "$TAG_NAME" >/dev/null 2>&1; then
+            gh release edit "$TAG_NAME" \
+              --draft=false \
+              --prerelease \
+              --target "$GITHUB_SHA" \
+              --title "$RELEASE_TITLE" \
+              --notes-file release-notes.md
+
+            gh release view "$TAG_NAME" --json assets --jq '.assets[].name' |
+              while IFS= read -r asset; do
+                if [ -n "$asset" ]; then
+                  gh release delete-asset "$TAG_NAME" "$asset" --yes
+                fi
+              done
+          else
+            gh release create "$TAG_NAME" \
+              --target "$GITHUB_SHA" \
+              --title "$RELEASE_TITLE" \
+              --notes-file release-notes.md \
+              --prerelease \
+              --latest=false
+          fi
+
+          mapfile -d '' assets < <(find release-assets -type f -print0 | sort -z)
+          gh release upload "$TAG_NAME" "${assets[@]}" --clobber
+
+          {
+            echo "### Nightly prerelease published"
+            echo ""
+            echo "- Tag: \`$TAG_NAME\`"
+            echo "- Build: \`$BUILD_ID\`"
+            echo "- Display version: \`$DISPLAY_VERSION\`"
+            echo "- Assets: \`${#assets[@]}\`"
+          } >> "$GITHUB_STEP_SUMMARY"

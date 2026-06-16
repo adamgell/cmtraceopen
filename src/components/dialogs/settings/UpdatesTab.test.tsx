@@ -38,6 +38,18 @@ describe("UpdatesTab", () => {
 
     expect(checkbox).not.toBeChecked();
     await expect(screen.findByText("CMTrace Open v1.3.1")).resolves.toBeVisible();
+    expect(await screen.findByText("Main channel")).toBeVisible();
+  });
+
+  it("marks nightly prerelease builds as the nightly channel", async () => {
+    getVersionMock.mockResolvedValue("1.3.2-nightly.20260514.42.gabc123def456");
+
+    render(<UpdatesTab />);
+
+    await expect(
+      screen.findByText("CMTrace Open v1.3.2-nightly.20260514.42.gabc123def456")
+    ).resolves.toBeVisible();
+    expect(screen.getByText("Nightly channel")).toBeVisible();
   });
 
   it("disables the startup checkbox when update checks are policy-disabled", async () => {

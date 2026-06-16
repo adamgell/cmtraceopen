@@ -5,7 +5,7 @@ import { check } from "@tauri-apps/plugin-updater";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getUpdatePolicy } from "../lib/commands";
 import { useUiStore } from "../stores/ui-store";
-import { type UpdateInfo, useUpdateChecker } from "./use-update-checker";
+import { useUpdateChecker } from "./use-update-checker";
 
 vi.mock("@tauri-apps/api/app", () => ({
   getVersion: vi.fn(),
@@ -54,18 +54,41 @@ describe("useUpdateChecker", () => {
     });
 
     const { result } = renderHook(() => useUpdateChecker());
-    let info: UpdateInfo | null = null;
-
-    await act(async () => {
-      info = await result.current.checkForUpdates();
-    });
+    const info = await act(async () => result.current.checkForUpdates());
 
     expect(checkMock).not.toHaveBeenCalled();
     expect(info).toEqual({
       available: false,
       currentVersion: "1.3.1",
+      updateChannel: "stable",
       canAutoUpdate: true,
       error: "Update checks are disabled by policy.",
     });
+  });
+
+  it("marks nightly update checks and opens the nightly release page", async () => {
+    const openMock = vi.fn(() => ({ opener: null }));
+    vi.stubGlobal("open", openMock);
+    getVersionMock.mockResolvedValue("1.3.2-nightly.20260514.42.gabc123def456");
+    checkMock.mockResolvedValue({
+      version: "1.3.2-nightly.20260515.43.gdef456abc123",
+      body: "Nightly build",
+      downloadAndInstall: vi.fn(),
+    } as never);
+
+    const { result } = renderHook(() => useUpdateChecker());
+    const info = await act(async () => result.current.checkForUpdates());
+
+    expect(info?.updateChannel).toBe("nightly");
+
+    act(() => {
+      result.current.openReleasePage();
+    });
+
+    expect(openMock).toHaveBeenCalledWith(
+      "https://github.com/adamgell/cmtraceopen/releases/tag/nightly",
+      "_blank",
+      "noopener,noreferrer"
+    );
   });
 });
