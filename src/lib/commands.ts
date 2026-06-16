@@ -1,11 +1,15 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   AggregateParseResult,
+  AggregateParsedFileResult,
   FolderListingResult,
   KnownSourceMetadata,
+  LargeFileModeMetadata,
+  LogEntry,
   LogFormat,
   LogSource,
   ParseResult,
+  ParsedEntriesSessionMetadata,
   WorkspaceId,
 } from "../types/log";
 import type { EvidenceArtifactPreview, EvidenceBundleDetails, EvidenceArtifactIntakeKind } from "../types/evidence";
@@ -68,14 +72,130 @@ async function invokeCommand<T>(commandName: string, args?: Record<string, unkno
   }
 }
 
+function normalizeLargeFileModeMetadata(
+  metadata: LargeFileModeMetadata | null | undefined
+): LargeFileModeMetadata | null {
+  return metadata ?? null;
+}
+
+function normalizeParsedEntriesSessionMetadata(
+  metadata: ParsedEntriesSessionMetadata | null | undefined
+): ParsedEntriesSessionMetadata | null {
+  return metadata ?? null;
+}
+
+type ParseResultPayload = Omit<ParseResult, "backendSession">;
+
+type AggregateParsedFileResultPayload = Omit<AggregateParsedFileResult, "backendSession">;
+
+type AggregateParseResultPayload = Omit<AggregateParseResult, "backendSession" | "files"> & {
+  files: AggregateParsedFileResultPayload[];
+};
+
+interface ParseResultCommandResponse {
+  result: ParseResultPayload;
+  backendSession?: ParsedEntriesSessionMetadata | null;
+}
+
+interface AggregateParsedFileSessionResponse {
+  filePath: string;
+  backendSession?: ParsedEntriesSessionMetadata | null;
+}
+
+interface AggregateParseResultCommandResponse {
+  result: AggregateParseResultPayload;
+  backendSession?: ParsedEntriesSessionMetadata | null;
+  fileSessions?: AggregateParsedFileSessionResponse[];
+}
+
+function isWrappedParseResult(
+  value: ParseResult | ParseResultCommandResponse
+): value is ParseResultCommandResponse {
+  return typeof value === "object" && value !== null && "result" in value;
+}
+
+function isWrappedAggregateParseResult(
+  value: AggregateParseResult | AggregateParseResultCommandResponse
+): value is AggregateParseResultCommandResponse {
+  return typeof value === "object" && value !== null && "result" in value;
+}
+
+function normalizeParseResult(
+  resultOrResponse: ParseResult | ParseResultCommandResponse
+): ParseResult {
+  if (isWrappedParseResult(resultOrResponse)) {
+    return {
+      ...resultOrResponse.result,
+      largeFileMode: normalizeLargeFileModeMetadata(
+        resultOrResponse.result.largeFileMode
+      ),
+      backendSession: normalizeParsedEntriesSessionMetadata(
+        resultOrResponse.backendSession
+      ),
+    };
+  }
+
+  return {
+    ...resultOrResponse,
+    largeFileMode: normalizeLargeFileModeMetadata(resultOrResponse.largeFileMode),
+    backendSession: normalizeParsedEntriesSessionMetadata(
+      resultOrResponse.backendSession
+    ),
+  };
+}
+
+function normalizeAggregateParseResult(
+  resultOrResponse: AggregateParseResult | AggregateParseResultCommandResponse
+): AggregateParseResult {
+  if (isWrappedAggregateParseResult(resultOrResponse)) {
+    const fileSessionByPath = new Map(
+      (resultOrResponse.fileSessions ?? []).map((fileSession) => [
+        fileSession.filePath,
+        normalizeParsedEntriesSessionMetadata(fileSession.backendSession),
+      ])
+    );
+
+    return {
+      ...resultOrResponse.result,
+      backendSession: normalizeParsedEntriesSessionMetadata(
+        resultOrResponse.backendSession
+      ),
+      largeFileMode: normalizeLargeFileModeMetadata(
+        resultOrResponse.result.largeFileMode
+      ),
+      files: resultOrResponse.result.files.map((file) => ({
+        ...file,
+        backendSession: fileSessionByPath.get(file.filePath) ?? null,
+        largeFileMode: normalizeLargeFileModeMetadata(file.largeFileMode),
+      })),
+    };
+  }
+
+  return {
+    ...resultOrResponse,
+    backendSession: normalizeParsedEntriesSessionMetadata(
+      resultOrResponse.backendSession
+    ),
+    largeFileMode: normalizeLargeFileModeMetadata(resultOrResponse.largeFileMode),
+    files: resultOrResponse.files.map((file) => ({
+      ...file,
+      backendSession: normalizeParsedEntriesSessionMetadata(file.backendSession),
+      largeFileMode: normalizeLargeFileModeMetadata(file.largeFileMode),
+    })),
+  };
+}
+
 export async function openLogFile(path: string): Promise<ParseResult> {
-  return invokeCommand<ParseResult>("open_log_file", { path });
+  return normalizeParseResult(
+    await invokeCommand<ParseResult | ParseResultCommandResponse>("open_log_file", { path })
+  );
 }
 
 /** Parse multiple files in parallel on the Rust side (Rayon thread pool).
  *  Returns all results in a single IPC response — eliminates N-1 round-trips. */
 export async function parseFilesBatch(paths: string[]): Promise<ParseResult[]> {
-  return invokeCommand<ParseResult[]>("parse_files_batch", { paths });
+  const results = await invokeCommand<Array<ParseResult | ParseResultCommandResponse>>("parse_files_batch", { paths });
+  return results.map(normalizeParseResult);
 }
 
 export async function listLogFolder(path: string): Promise<FolderListingResult> {
@@ -141,7 +261,9 @@ export async function listLogSourceFolder(
 export async function openLogFolderAggregate(
   path: string
 ): Promise<AggregateParseResult> {
-  return invokeCommand<AggregateParseResult>("open_log_folder_aggregate", { path });
+  return normalizeAggregateParseResult(
+    await invokeCommand<AggregateParseResult | AggregateParseResultCommandResponse>("open_log_folder_aggregate", { path })
+  );
 }
 
 export async function openLogSourceFolderAggregate(
@@ -158,6 +280,23 @@ export async function openLogSourceFolderAggregate(
   throw new Error(
     `Source kind '${source.kind}' does not resolve to a folder path.`
   );
+}
+
+export async function registerParsedEntriesSession(
+  entries: LogEntry[]
+): Promise<ParsedEntriesSessionMetadata | null> {
+  return normalizeParsedEntriesSessionMetadata(
+    await invokeCommand<ParsedEntriesSessionMetadata | null>(
+      "register_parsed_entries_session",
+      { entries }
+    )
+  );
+}
+
+export async function releaseParsedEntriesSession(
+  sessionKey: string
+): Promise<void> {
+  return invokeCommand<void>("release_parsed_entries_session", { sessionKey });
 }
 
 export async function startTail(
@@ -250,6 +389,10 @@ export async function getInitialFilePaths(): Promise<string[]> {
 
 export async function getAvailableWorkspaces(): Promise<WorkspaceId[]> {
   return invokeCommand<WorkspaceId[]>("get_available_workspaces");
+}
+
+export async function openAppLogsFolder(): Promise<void> {
+  return invokeCommand<void>("open_app_logs_folder");
 }
 
 export async function getUpdatePolicy(): Promise<UpdatePolicy> {

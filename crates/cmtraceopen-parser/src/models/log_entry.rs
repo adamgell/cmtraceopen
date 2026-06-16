@@ -284,6 +284,14 @@ pub struct LogEntry {
     pub tags: Option<Vec<String>>,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct LargeFileModeMetadata {
+    pub is_active: bool,
+    pub threshold_bytes: u64,
+    pub loaded_byte_count: u64,
+}
+
 /// Result of parsing a complete log file.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -297,6 +305,8 @@ pub struct ParseResult {
     pub file_size: u64,
     /// Byte offset where parsing ended — used as the starting point for tailing
     pub byte_offset: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub large_file_mode: Option<LargeFileModeMetadata>,
 }
 
 /// Per-file parse metadata for an aggregated folder open.
@@ -308,6 +318,8 @@ pub struct AggregateParsedFileResult {
     pub parse_errors: u32,
     pub file_size: u64,
     pub byte_offset: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub large_file_mode: Option<LargeFileModeMetadata>,
 }
 
 /// Result of parsing every file in a folder into one combined view.
@@ -319,4 +331,6 @@ pub struct AggregateParseResult {
     pub parse_errors: u32,
     pub folder_path: String,
     pub files: Vec<AggregateParsedFileResult>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub large_file_mode: Option<LargeFileModeMetadata>,
 }

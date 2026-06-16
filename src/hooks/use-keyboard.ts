@@ -122,9 +122,12 @@ export function useKeyboard() {
     (state) => state.showFileAssociationPrompt
   );
   const {
+    commandState,
     openSourceFileDialog,
     showFindBar,
     showFilterDialog,
+    goToPreviousError,
+    goToNextError,
     showErrorLookupDialog,
     increaseLogListTextSize,
     decreaseLogListTextSize,
@@ -198,6 +201,22 @@ export function useKeyboard() {
         }
 
         logState.findNext("keyboard.f3");
+        return;
+      }
+
+      if (event.key === "F8" && !isInput) {
+        if (!commandState.canNavigateErrors) {
+          return;
+        }
+
+        event.preventDefault();
+
+        if (event.shiftKey) {
+          goToPreviousError();
+          return;
+        }
+
+        goToNextError();
         return;
       }
 
@@ -306,9 +325,12 @@ export function useKeyboard() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [
     activeView,
+    commandState.canNavigateErrors,
     decreaseLogListTextSize,
     dismissTransientDialogs,
     increaseLogListTextSize,
+    goToNextError,
+    goToPreviousError,
     openSourceFileDialog,
     refreshActiveSource,
     resetLogListTextSize,

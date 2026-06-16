@@ -44,6 +44,7 @@ export function StatusBar() {
   const totalLines = useLogStore((s) => s.totalLines);
   const formatDetected = useLogStore((s) => s.formatDetected);
   const parserSelection = useLogStore((s) => s.parserSelection);
+  const largeFileMode = useLogStore((s) => s.largeFileMode);
   const openFilePath = useLogStore((s) => s.openFilePath);
   const selectedSourceFilePath = useLogStore((s) => s.selectedSourceFilePath);
   const sourceOpenMode = useLogStore((s) => s.sourceOpenMode);
@@ -179,6 +180,10 @@ export function StatusBar() {
     isFiltering,
     filterError
   );
+  const isLargeFileModeActive = largeFileMode?.isActive === true;
+  const largeFileModeStatusText = isLargeFileModeActive
+    ? "Large file mode active — expensive actions may be limited to keep the app responsive."
+    : null;
 
   let leftParts: string[] = [];
   let rightStatusText = "";
@@ -257,8 +262,8 @@ export function StatusBar() {
 
     const filterStatusText = filterError ? `Filter error: ${filterError}` : filterStatus.label;
 
-    rightStatusText = [logStatusText, filterStatusText]
-      .filter((part) => part.length > 0)
+    rightStatusText = [largeFileModeStatusText, logStatusText, filterStatusText]
+      .filter((part): part is string => part !== null && part.length > 0)
       .join(" | ");
     rightTone = filterStatus.tone === "error" ? tokens.colorPaletteRedForeground2 : undefined;
   } else if (isIntuneWorkspace(activeView)) {
@@ -500,6 +505,11 @@ export function StatusBar() {
         <Badge appearance="outline" color="brand">
           {activeViewLabel}
         </Badge>
+        {activeView === "log" && isLargeFileModeActive && (
+          <Badge appearance="tint" color="warning">
+            Large file mode
+          </Badge>
+        )}
         <span
           title={leftStatusText}
           style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}

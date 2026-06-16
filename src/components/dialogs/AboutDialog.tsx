@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { getIdentifier, getName, getTauriVersion, getVersion } from "@tauri-apps/api/app";
 import { tokens } from "@fluentui/react-components";
+import { openAppLogsFolder } from "../../lib/commands";
+import { getUserFriendlyError } from "../../lib/errors";
 import { getUpdateChannel, getUpdateChannelLabel } from "../../lib/update-channel";
 
 interface AboutDialogProps {
@@ -13,11 +15,18 @@ export function AboutDialog({ isOpen, onClose }: AboutDialogProps) {
   const [appVersion, setAppVersion] = useState("0.2.0");
   const [tauriVersion, setTauriVersion] = useState("-");
   const [identifier, setIdentifier] = useState("com.cmtrace.open");
+  const [isOpeningLogsFolder, setIsOpeningLogsFolder] = useState(false);
+  const [logsFolderError, setLogsFolderError] = useState<string | null>(null);
   const updateChannel = getUpdateChannel(appVersion);
   const updateChannelLabel = getUpdateChannelLabel(updateChannel);
 
   useEffect(() => {
-    if (!isOpen) return;
+    if (!isOpen) {
+      setIsOpeningLogsFolder(false);
+      setLogsFolderError(null);
+      return;
+    }
+
     const handleKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
     };
@@ -58,6 +67,20 @@ export function AboutDialog({ isOpen, onClose }: AboutDialogProps) {
   }, [isOpen]);
 
   if (!isOpen) return null;
+
+  const handleOpenLogsFolder = async () => {
+    setIsOpeningLogsFolder(true);
+    setLogsFolderError(null);
+
+    try {
+      await openAppLogsFolder();
+    } catch (error) {
+      console.error("Failed to open app logs folder", { error });
+      setLogsFolderError(getUserFriendlyError(error));
+    } finally {
+      setIsOpeningLogsFolder(false);
+    }
+  };
 
   return (
     <div
@@ -163,11 +186,53 @@ export function AboutDialog({ isOpen, onClose }: AboutDialogProps) {
           </div>
         </div>
 
-        <div style={{ fontSize: "11px", color: tokens.colorNeutralForeground3, marginBottom: "16px" }}>
+        <div
+          style={{
+            fontSize: "11px",
+            color: tokens.colorNeutralForeground3,
+            marginBottom: logsFolderError ? "8px" : "16px",
+          }}
+        >
           Project repository: github.com/adamgell/cmtraceopen
         </div>
 
-        <div style={{ display: "flex", justifyContent: "flex-end" }}>
+        {logsFolderError && (
+          <div
+            role="alert"
+            style={{
+              color: tokens.colorPaletteRedForeground1,
+              fontSize: "11px",
+              marginBottom: "12px",
+            }}
+          >
+            {logsFolderError}
+          </div>
+        )}
+
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            gap: "8px",
+          }}
+        >
+          <button
+            onClick={() => void handleOpenLogsFolder()}
+            disabled={isOpeningLogsFolder}
+            style={{
+              padding: "2px 12px",
+              fontSize: "12px",
+              border: `1px solid ${tokens.colorNeutralStroke1}`,
+              borderRadius: "2px",
+              background: tokens.colorNeutralBackground3,
+              color: tokens.colorNeutralForeground1,
+              cursor: isOpeningLogsFolder ? "default" : "pointer",
+            }}
+          >
+            {isOpeningLogsFolder ? "Opening..." : "Open Logs Folder"}
+          </button>
+
           <button
             onClick={onClose}
             style={{

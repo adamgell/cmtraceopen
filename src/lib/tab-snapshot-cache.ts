@@ -1,4 +1,4 @@
-import type { LogEntry, LogFormat, ParserSelectionInfo } from "../types/log";
+import type { LargeFileModeMetadata, LogEntry, LogFormat, ParserSelectionInfo } from "../types/log";
 import type { ColumnId } from "./column-config";
 
 /**
@@ -25,6 +25,7 @@ export interface TabEntrySnapshot {
   parserSelection: ParserSelectionInfo | null;
   totalLines: number;
   byteOffset: number;
+  largeFileMode: LargeFileModeMetadata | null;
   selectedSourceFilePath: string | null;
   sourceOpenMode: SourceOpenMode;
   activeColumns: ColumnId[];

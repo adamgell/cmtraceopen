@@ -1,6 +1,7 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { getIdentifier, getName, getTauriVersion, getVersion } from "@tauri-apps/api/app";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { openAppLogsFolder } from "../../lib/commands";
 import { AboutDialog } from "./AboutDialog";
 
 vi.mock("@tauri-apps/api/app", () => ({
@@ -10,10 +11,20 @@ vi.mock("@tauri-apps/api/app", () => ({
   getVersion: vi.fn(),
 }));
 
+vi.mock("../../lib/commands", () => ({
+  openAppLogsFolder: vi.fn(),
+}));
+
+const consoleErrorMock = vi.spyOn(console, "error").mockImplementation(() => {});
 const getIdentifierMock = vi.mocked(getIdentifier);
 const getNameMock = vi.mocked(getName);
 const getTauriVersionMock = vi.mocked(getTauriVersion);
 const getVersionMock = vi.mocked(getVersion);
+const openAppLogsFolderMock = vi.mocked(openAppLogsFolder);
+
+afterAll(() => {
+  consoleErrorMock.mockRestore();
+});
 
 describe("AboutDialog", () => {
   beforeEach(() => {
@@ -22,6 +33,7 @@ describe("AboutDialog", () => {
     getNameMock.mockResolvedValue("CMTrace Open");
     getTauriVersionMock.mockResolvedValue("2.11.1");
     getVersionMock.mockResolvedValue("1.3.2");
+    openAppLogsFolderMock.mockResolvedValue(undefined);
   });
 
   it("shows main channel app metadata", async () => {
@@ -31,6 +43,7 @@ describe("AboutDialog", () => {
     expect(await screen.findByText("Version 1.3.2")).toBeVisible();
     expect(screen.getByText("Main channel")).toBeVisible();
     expect(screen.getByText(/github\.com\/adamgell\/cmtraceopen/i)).toBeVisible();
+    expect(screen.getByRole("button", { name: "Open Logs Folder" })).toBeVisible();
   });
 
   it("shows nightly channel app metadata", async () => {
@@ -46,5 +59,30 @@ describe("AboutDialog", () => {
     ).toBeVisible();
     expect(screen.getByText("Nightly channel")).toBeVisible();
     expect(screen.getByText(/com\.cmtrace\.open\.nightly/i)).toBeVisible();
+  });
+
+  it("opens the application logs folder from the about dialog", async () => {
+    render(<AboutDialog isOpen onClose={() => {}} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Open Logs Folder" }));
+
+    await waitFor(() => {
+      expect(openAppLogsFolderMock).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("shows a user-friendly error when opening the logs folder fails", async () => {
+    openAppLogsFolderMock.mockRejectedValue(new Error("I/O error: Access denied"));
+
+    render(<AboutDialog isOpen onClose={() => {}} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Open Logs Folder" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "File operation failed: Access denied"
+    );
+    expect(consoleErrorMock).toHaveBeenCalledWith("Failed to open app logs folder", {
+      error: expect.any(Error),
+    });
   });
 });

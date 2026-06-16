@@ -107,6 +107,12 @@ jobs:
       - name: Frontend tests
         run: npm run test
 
+      - name: Install Playwright browser
+        run: npx playwright install --with-deps chromium
+
+      - name: Frontend smoke tests
+        run: npm run test:e2e
+
       - name: npm security audit
         run: npm audit --audit-level=high
         continue-on-error: true

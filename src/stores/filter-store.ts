@@ -1,11 +1,24 @@
+import { invoke } from "@tauri-apps/api/core";
 import { create } from "zustand";
 import type { FilterClause, FilterField, FilterOp } from "../components/dialogs/FilterDialog";
+import type { LogEntry } from "../types/log";
 import { useLogStore } from "./log-store";
 
 export interface FilterStatusSnapshot {
   tone: "idle" | "active" | "busy" | "error";
   label: string;
 }
+
+interface ApplyBackendFilterOptions {
+  backendSessionKey?: string | null;
+  forceRawEntries?: boolean;
+}
+
+type ApplyFilterCommandArgs = Record<string, unknown> & {
+  clauses: FilterClause[];
+  entries?: LogEntry[];
+  sessionKey?: string;
+};
 
 export function getFilterStatusSnapshot(
   clauseCount: number,
@@ -39,6 +52,79 @@ export function getFilterStatusSnapshot(
     tone: "idle",
     label: "Filter clear",
   };
+}
+
+function normalizeBackendSessionKey(sessionKey: string | null | undefined): string | null {
+  const normalized = sessionKey?.trim() ?? "";
+  return normalized.length > 0 ? normalized : null;
+}
+
+function isMissingParsedEntriesSessionError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /unknown parsed entries session key/i.test(message);
+}
+
+function buildApplyFilterCommandArgs(
+  clauses: FilterClause[],
+  entries: LogEntry[],
+  options: ApplyBackendFilterOptions = {}
+): ApplyFilterCommandArgs {
+  const backendSessionKey = options.forceRawEntries
+    ? null
+    : normalizeBackendSessionKey(options.backendSessionKey);
+
+  if (backendSessionKey) {
+    return {
+      clauses,
+      sessionKey: backendSessionKey,
+    };
+  }
+
+  return {
+    clauses,
+    entries,
+  };
+}
+
+export function mergeFilteredIds(
+  existingIds: ReadonlySet<number>,
+  appendedIds: Iterable<number>
+): Set<number> {
+  const mergedIds = new Set(existingIds);
+
+  for (const id of appendedIds) {
+    mergedIds.add(id);
+  }
+
+  return mergedIds;
+}
+
+export async function applyBackendFilter(
+  clauses: FilterClause[],
+  entries: LogEntry[],
+  options: ApplyBackendFilterOptions = {}
+): Promise<number[]> {
+  const commandArgs = buildApplyFilterCommandArgs(clauses, entries, options);
+
+  try {
+    return await invoke<number[]>("apply_filter", commandArgs);
+  } catch (error) {
+    if (commandArgs.sessionKey && isMissingParsedEntriesSessionError(error)) {
+      console.warn("[filter-store] parsed-entry session unavailable; retrying filter with raw entries", {
+        clauseCount: clauses.length,
+        entryCount: entries.length,
+        sessionKey: commandArgs.sessionKey,
+        error,
+      });
+
+      return invoke<number[]>("apply_filter", {
+        clauses,
+        entries,
+      });
+    }
+
+    throw error;
+  }
 }
 
 function reconcileSelectionWithFilter(ids: Set<number> | null): void {

@@ -8,7 +8,7 @@ import {
 } from "react";
 import { tokens } from "@fluentui/react-components";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { useLogStore } from "../../stores/log-store";
+import { isLargeFileModeActive, useLogStore } from "../../stores/log-store";
 import { useUiStore } from "../../stores/ui-store";
 import { useFilterStore } from "../../stores/filter-store";
 import { LogRow } from "./LogRow";
@@ -70,6 +70,8 @@ export function LogListView({ dataSource }: { dataSource?: LogListDataSource } =
   const showDetails = useUiStore((s) => s.showDetails);
 
   const sourceOpenMode = useLogStore((s) => s.sourceOpenMode);
+  const largeFileMode = useLogStore((s) => s.largeFileMode);
+  const largeFileModeActive = isLargeFileModeActive(largeFileMode);
   const mergedTabState = useLogStore((s) => s.mergedTabState);
   const correlatedEntries = useLogStore((s) => s.correlatedEntries);
   const openFilePath = useLogStore((s) => s.openFilePath);
@@ -96,7 +98,16 @@ export function LogListView({ dataSource }: { dataSource?: LogListDataSource } =
   const [sortColumn, setSortColumn] = useState<ColumnId | null>(null);
   const [sortDir, setSortDir] = useState<SortDir>("asc");
 
+  const largeFileModeSortMessage =
+    "Sorting is disabled in large-file mode to keep the app responsive.";
+  const largeFileModeAutoFitMessage =
+    "Auto-fit is disabled in large-file mode to keep the app responsive.";
+
   const handleColumnSort = useCallback((colId: ColumnId) => {
+    if (largeFileModeActive) {
+      return;
+    }
+
     setSortColumn((prev) => {
       if (prev === colId) {
         setSortDir((d) => (d === "asc" ? "desc" : "asc"));
@@ -105,7 +116,7 @@ export function LogListView({ dataSource }: { dataSource?: LogListDataSource } =
       setSortDir(colId === "dateTime" || colId === "lineNumber" ? "asc" : "asc");
       return colId;
     });
-  }, []);
+  }, [largeFileModeActive]);
 
   const findMatchSet = useMemo(
     () => findMatchIds ?? new Set<number>(),
@@ -128,7 +139,7 @@ export function LogListView({ dataSource }: { dataSource?: LogListDataSource } =
     if (filteredIds) {
       result = result.filter((entry) => filteredIds.has(entry.id));
     }
-    if (sortColumn) {
+    if (sortColumn && !largeFileModeActive) {
       const col = getColumnDef(sortColumn);
       const sorted = [...result].sort((a, b) => {
         let cmp: number;
@@ -155,14 +166,27 @@ export function LogListView({ dataSource }: { dataSource?: LogListDataSource } =
       return sorted;
     }
     return result;
-  }, [entries, externalFilterRange, filteredIds, sortColumn, sortDir]);
+  }, [entries, externalFilterRange, filteredIds, largeFileModeActive, sortColumn, sortDir]);
 
   const selectedEntryIndex = useMemo(
     () => displayEntries.findIndex((entry) => entry.id === selectedId),
     [displayEntries, selectedId]
   );
 
+  useEffect(() => {
+    if (!largeFileModeActive || sortColumn === null) {
+      return;
+    }
+
+    setSortColumn(null);
+  }, [largeFileModeActive, sortColumn]);
+  const displayEntryIds = useMemo(
+    () => displayEntries.map((entry) => entry.id),
+    [displayEntries]
+  );
+
   const activeColumns = useLogStore((s) => s.activeColumns);
+  const setVisibleEntryIds = useLogStore((s) => s.setVisibleEntryIds);
 
   const parentRef = useRef<HTMLDivElement>(null);
   const isAtBottomRef = useRef(true);
@@ -437,6 +461,14 @@ export function LogListView({ dataSource }: { dataSource?: LogListDataSource } =
     virtualizer.scrollToIndex(selectedEntryIndex, { align: "center" });
   }, [selectedEntryIndex, virtualizer]);
 
+  useEffect(() => {
+    setVisibleEntryIds(displayEntryIds);
+  }, [displayEntryIds, setVisibleEntryIds]);
+
+  useEffect(() => () => {
+    setVisibleEntryIds([]);
+  }, [setVisibleEntryIds]);
+
   // ── Consume pending scroll target from deployment workspace ────────
   const pendingScrollTarget = useLogStore((s) => s.pendingScrollTarget);
 
@@ -566,6 +598,10 @@ export function LogListView({ dataSource }: { dataSource?: LogListDataSource } =
   // on the column header or the Fit-all button in the severity column.
   const handleHeaderDoubleClick = useCallback(
     (colId: ColumnId) => {
+      if (largeFileModeActive) {
+        return;
+      }
+
       const def = getColumnDef(colId);
       if (!def) return;
       // Use a rendered row element so the font-family is fully resolved (no CSS variables)
@@ -574,10 +610,14 @@ export function LogListView({ dataSource }: { dataSource?: LogListDataSource } =
       const headerFont = getCanvasFont(listMetrics.headerFontSize, true, rowEl);
       setColumnWidth(colId, calcAutoFitWidth(def, displayEntries, contentFont, headerFont));
     },
-    [displayEntries, logListFontSize, listMetrics, setColumnWidth]
+    [displayEntries, largeFileModeActive, logListFontSize, listMetrics, setColumnWidth]
   );
 
   const handleFitAllColumns = useCallback(() => {
+    if (largeFileModeActive) {
+      return;
+    }
+
     const rowEl = parentRef.current?.querySelector<HTMLElement>(".log-row") ?? null;
     const contentFont = getCanvasFont(logListFontSize, false, rowEl);
     const headerFont = getCanvasFont(listMetrics.headerFontSize, true, rowEl);
@@ -586,7 +626,7 @@ export function LogListView({ dataSource }: { dataSource?: LogListDataSource } =
       updates[col.id] = calcAutoFitWidth(col, displayEntries, contentFont, headerFont);
     }
     setColumnWidths(updates);
-  }, [visibleColumns, displayEntries, logListFontSize, listMetrics, setColumnWidths]);
+  }, [visibleColumns, displayEntries, largeFileModeActive, logListFontSize, listMetrics, setColumnWidths]);
 
   const activeRowDomId =
     selectedEntryIndex >= 0
@@ -643,11 +683,28 @@ export function LogListView({ dataSource }: { dataSource?: LogListDataSource } =
             sortColumn={sortColumn}
             sortDir={sortDir}
             onSort={handleColumnSort}
+            sortDisabledReason={largeFileModeActive ? largeFileModeSortMessage : null}
+            autoFitDisabledReason={largeFileModeActive ? largeFileModeAutoFitMessage : null}
           />
         ))}
       </div>
 
       {sourceOpenMode === "merged" && mergedTabState && <MergeLegendBar />}
+      {largeFileMode?.isActive && (
+        <div
+          style={{
+            padding: "4px 10px",
+            borderBottom: `1px solid ${tokens.colorPaletteMarigoldBorder2}`,
+            backgroundColor: tokens.colorPaletteMarigoldBackground2,
+            color: tokens.colorNeutralForeground1,
+            fontSize: `${Math.max(11, listMetrics.fontSize - 1)}px`,
+            lineHeight: 1.4,
+            flexShrink: 0,
+          }}
+        >
+          This log is large. CMTrace Open may limit expensive actions to keep loading and navigation responsive.
+        </div>
+      )}
 
       <div
         ref={parentRef}
@@ -800,6 +857,8 @@ interface HeaderCellProps {
   sortColumn: ColumnId | null;
   sortDir: SortDir;
   onSort: (colId: ColumnId) => void;
+  sortDisabledReason: string | null;
+  autoFitDisabledReason: string | null;
 }
 
 function HeaderCell({
@@ -818,10 +877,15 @@ function HeaderCell({
   sortColumn,
   sortDir,
   onSort,
+  sortDisabledReason,
+  autoFitDisabledReason,
 }: HeaderCellProps) {
   const [resizeHover, setResizeHover] = useState(false);
   const [fitAllHover, setFitAllHover] = useState(false);
   const isSorted = sortColumn === col.id;
+  const sortDisabled = sortDisabledReason !== null;
+  const autoFitDisabled = autoFitDisabledReason !== null;
+  const headerTitle = autoFitDisabledReason ?? "Double-click to auto-fit this column";
 
   return (
     <div
@@ -836,9 +900,12 @@ function HeaderCell({
         // letting the whole header trigger fit is far more discoverable.
         e.preventDefault();
         e.stopPropagation();
+        if (autoFitDisabled) {
+          return;
+        }
         onDoubleClick(col.id);
       }}
-      title="Double-click to auto-fit this column"
+      title={headerTitle}
       style={{
         position: "relative",
         ...(col.isFlex ? { minWidth: 0 } : {}),
@@ -861,14 +928,26 @@ function HeaderCell({
       {onFitAll ? (
         /* Fit-all-columns button lives in the severity column header (no label, always first) */
         <div
-          role="button"
-          aria-label="Auto-fit all columns to content width"
-          title="Auto-fit all columns to content width"
+          role={autoFitDisabled ? undefined : "button"}
+          aria-label={headerTitle}
+          aria-disabled={autoFitDisabled || undefined}
+          title={headerTitle}
           draggable={false}
           onDragStart={(e) => { e.preventDefault(); e.stopPropagation(); }}
-          onClick={(e) => { e.stopPropagation(); onFitAll(); }}
-          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onFitAll(); } }}
-          tabIndex={0}
+          onClick={(e) => {
+            e.stopPropagation();
+            if (autoFitDisabled) {
+              return;
+            }
+            onFitAll();
+          }}
+          onKeyDown={(e) => {
+            if ((e.key === "Enter" || e.key === " ") && !autoFitDisabled) {
+              e.preventDefault();
+              onFitAll();
+            }
+          }}
+          tabIndex={autoFitDisabled ? -1 : 0}
           onMouseEnter={() => setFitAllHover(true)}
           onMouseLeave={() => setFitAllHover(false)}
           style={{
@@ -877,8 +956,10 @@ function HeaderCell({
             justifyContent: "center",
             width: "100%",
             height: "100%",
-            cursor: "pointer",
-            color: fitAllHover ? tokens.colorBrandForeground1 : tokens.colorNeutralForeground2,
+            cursor: autoFitDisabled ? "not-allowed" : "pointer",
+            color: autoFitDisabled
+              ? tokens.colorNeutralForegroundDisabled
+              : fitAllHover ? tokens.colorBrandForeground1 : tokens.colorNeutralForeground2,
           }}
         >
           <ArrowBidirectionalLeftRightRegular style={{ fontSize: 12 }} />
@@ -887,31 +968,36 @@ function HeaderCell({
         <span style={{ display: "inline-flex", alignItems: "center", gap: "2px" }}>
           {col.label}
           {col.label && (
-            <button
-              type="button"
-              title={`Sort by ${col.label}`}
-              onClick={(e) => { e.stopPropagation(); e.preventDefault(); onSort(col.id); }}
-              onMouseDown={(e) => e.stopPropagation()}
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                justifyContent: "center",
-                padding: "1px 2px",
-                border: `1px solid ${isSorted ? tokens.colorBrandStroke1 : tokens.colorNeutralStroke1}`,
-                borderRadius: "4px",
-                background: isSorted ? tokens.colorBrandBackground2 : tokens.colorNeutralBackground3,
-                cursor: "pointer",
-                color: isSorted ? tokens.colorBrandForeground1 : tokens.colorNeutralForeground2,
-                fontSize: "10px",
-                lineHeight: 1,
-                marginLeft: "2px",
-                flexShrink: 0,
-              }}
-            >
-              {isSorted
-                ? (sortDir === "asc" ? <ArrowSortUpRegular style={{ fontSize: "10px" }} /> : <ArrowSortDownRegular style={{ fontSize: "10px" }} />)
-                : <ArrowSortDownRegular style={{ fontSize: "10px" }} />}
-            </button>
+            <span title={sortDisabledReason ?? `Sort by ${col.label}`}>
+              <button
+                type="button"
+                disabled={sortDisabled}
+                aria-label={sortDisabledReason ?? `Sort by ${col.label}`}
+                onClick={(e) => { e.stopPropagation(); e.preventDefault(); onSort(col.id); }}
+                onMouseDown={(e) => e.stopPropagation()}
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  padding: "1px 2px",
+                  border: `1px solid ${isSorted ? tokens.colorBrandStroke1 : tokens.colorNeutralStroke1}`,
+                  borderRadius: "4px",
+                  background: isSorted ? tokens.colorBrandBackground2 : tokens.colorNeutralBackground3,
+                  cursor: sortDisabled ? "not-allowed" : "pointer",
+                  color: sortDisabled
+                    ? tokens.colorNeutralForegroundDisabled
+                    : isSorted ? tokens.colorBrandForeground1 : tokens.colorNeutralForeground2,
+                  fontSize: "10px",
+                  lineHeight: 1,
+                  marginLeft: "2px",
+                  flexShrink: 0,
+                }}
+              >
+                {isSorted
+                  ? (sortDir === "asc" ? <ArrowSortUpRegular style={{ fontSize: "10px" }} /> : <ArrowSortDownRegular style={{ fontSize: "10px" }} />)
+                  : <ArrowSortDownRegular style={{ fontSize: "10px" }} />}
+              </button>
+            </span>
           )}
         </span>
       )}
@@ -920,7 +1006,7 @@ function HeaderCell({
       {(
         <div
           onMouseDown={(e) => onResizeStart(col.id, e)}
-          onDoubleClick={(e) => { e.preventDefault(); e.stopPropagation(); onDoubleClick(col.id); }}
+          onDoubleClick={(e) => { e.preventDefault(); e.stopPropagation(); if (autoFitDisabled) { return; } onDoubleClick(col.id); }}
           onMouseEnter={() => setResizeHover(true)}
           onMouseLeave={() => setResizeHover(false)}
           style={{

@@ -14,6 +14,7 @@ import {
   MenuPopover,
   MenuTrigger,
   Option,
+  Tooltip,
   tokens,
 } from "@fluentui/react-components";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -28,7 +29,7 @@ import {
   analyzeDsregcmdSource,
   refreshCurrentDsregcmdSource,
 } from "../../lib/dsregcmd-source";
-import { useLogStore } from "../../stores/log-store";
+import { isLargeFileModeActive, useLogStore } from "../../stores/log-store";
 import { useFilterStore } from "../../stores/filter-store";
 import { useIntuneStore } from "../../workspaces/intune/intune-store";
 import { useDsregcmdStore } from "../../workspaces/dsregcmd/dsregcmd-store";
@@ -94,6 +95,7 @@ export interface AppCommandState {
   canPauseResume: boolean;
   canFind: boolean;
   canFilter: boolean;
+  canNavigateErrors: boolean;
   canRefresh: boolean;
   canToggleDetailsPane: boolean;
   canToggleInfoPane: boolean;
@@ -106,7 +108,38 @@ export interface AppCommandState {
   activeFilterCount: number;
   isFiltering: boolean;
   filterError: string | null;
+  errorNavigationDisabledReason: string | null;
   activeView: WorkspaceId;
+}
+
+function getErrorNavigationDisabledReason(
+  activeView: WorkspaceId,
+  isLoading: boolean,
+  entriesCount: number,
+  visibleErrorEntryCount: number,
+  largeFileModeActive: boolean
+): string | null {
+  if (activeView !== "log") {
+    return "Only available in the log view.";
+  }
+
+  if (largeFileModeActive) {
+    return "Unavailable in large-file mode to keep the app responsive.";
+  }
+
+  if (isLoading) {
+    return "Unavailable while log entries are loading.";
+  }
+
+  if (entriesCount === 0) {
+    return "No log entries loaded.";
+  }
+
+  if (visibleErrorEntryCount === 0) {
+    return "No Error entries in the current view.";
+  }
+
+  return null;
 }
 
 export interface AppActionHandlers {
@@ -123,6 +156,8 @@ export interface AppActionHandlers {
   captureDsregcmdSource: () => Promise<void>;
   showFindBar: () => void;
   showFilterDialog: () => void;
+  goToPreviousError: () => void;
+  goToNextError: () => void;
   showErrorLookupDialog: () => void;
   showAboutDialog: () => void;
   showSettingsDialog: () => void;
@@ -142,6 +177,7 @@ export function useAppActions(): AppActionHandlers {
   const isLoading = useLogStore((s) => s.isLoading);
   const isPaused = useLogStore((s) => s.isPaused);
   const entriesCount = useLogStore((s) => s.entries.length);
+  const visibleErrorEntryCount = useLogStore((s) => s.visibleErrorEntryIds.length);
   const activeSource = useLogStore((s) => s.activeSource);
   const openFilePath = useLogStore((s) => s.openFilePath);
   const selectedSourceFilePath = useLogStore((s) => s.selectedSourceFilePath);
@@ -151,6 +187,7 @@ export function useAppActions(): AppActionHandlers {
   const dsregcmdIsAnalyzing = useDsregcmdStore((s) => s.isAnalyzing);
   const dsregcmdSource = useDsregcmdStore((s) => s.sourceContext.source);
   const dsregcmdBundlePath = useDsregcmdStore((s) => s.sourceContext.bundlePath);
+  const largeFileMode = useLogStore((s) => s.largeFileMode);
   const sysmonIsAnalyzing = useSysmonStore((s) => s.isAnalyzing);
   const sysmonSourcePath = useSysmonStore((s) => s.sourcePath);
 
@@ -187,16 +224,26 @@ export function useAppActions(): AppActionHandlers {
     [activeSource, openFilePath]
   );
   const isSourceCommandBusy = isLoading || intuneIsAnalyzing || dsregcmdIsAnalyzing || sysmonIsAnalyzing;
+  const largeFileModeActive = isLargeFileModeActive(largeFileMode);
 
   const commandState = useMemo<AppCommandState>(() => {
     const ws = getWorkspace(activeWorkspace);
     const wsCaps = ws.capabilities ?? {};
+    const errorNavigationDisabledReason = getErrorNavigationDisabledReason(
+      activeView,
+      isLoading,
+      entriesCount,
+      visibleErrorEntryCount,
+      largeFileModeActive
+    );
+
     return {
       canOpenSources: !isSourceCommandBusy,
       canOpenKnownSources: !isSourceCommandBusy && (wsCaps.knownSources ?? true),
       canPauseResume: (wsCaps.tailing ?? false) && !isLoading && refreshSource !== null,
-      canFind: (wsCaps.findBar ?? false) && entriesCount > 0,
-      canFilter: (wsCaps.findBar ?? false) && entriesCount > 0 && !isFiltering,
+      canFind: (wsCaps.findBar ?? false) && entriesCount > 0 && !largeFileModeActive,
+      canFilter: (wsCaps.findBar ?? false) && entriesCount > 0 && !isFiltering && !largeFileModeActive,
+      canNavigateErrors: errorNavigationDisabledReason === null,
       canRefresh:
         !isSourceCommandBusy &&
         (activeWorkspace === "dsregcmd"
@@ -225,6 +272,7 @@ export function useAppActions(): AppActionHandlers {
       activeFilterCount,
       isFiltering,
       filterError,
+      errorNavigationDisabledReason,
       activeView,
     };
   }, [
@@ -241,11 +289,13 @@ export function useAppActions(): AppActionHandlers {
     isFiltering,
     isLoading,
     isPaused,
+    largeFileModeActive,
     isSourceCommandBusy,
     refreshSource,
     showDetails,
     showInfoPane,
     sysmonSourcePath,
+    visibleErrorEntryCount,
   ]);
 
   const loadLogWorkspaceSource = useCallback(
@@ -463,6 +513,22 @@ export function useAppActions(): AppActionHandlers {
     setShowFilterDialog(true);
   }, [commandState.canFilter, setShowFilterDialog]);
 
+  const goToPreviousError = useCallback(() => {
+    if (!commandState.canNavigateErrors) {
+      return;
+    }
+
+    useLogStore.getState().selectPreviousVisibleError("app-actions.previous-error");
+  }, [commandState.canNavigateErrors]);
+
+  const goToNextError = useCallback(() => {
+    if (!commandState.canNavigateErrors) {
+      return;
+    }
+
+    useLogStore.getState().selectNextVisibleError("app-actions.next-error");
+  }, [commandState.canNavigateErrors]);
+
   const showErrorLookupDialog = useCallback(() => {
     setShowErrorLookupDialog(true);
   }, [setShowErrorLookupDialog]);
@@ -594,6 +660,8 @@ export function useAppActions(): AppActionHandlers {
     captureDsregcmdSource,
     showFindBar,
     showFilterDialog,
+    goToPreviousError,
+    goToNextError,
     showErrorLookupDialog,
     showAboutDialog,
     showSettingsDialog,
@@ -613,6 +681,7 @@ export function Toolbar() {
   const highlightText = useLogStore((s) => s.highlightText);
   const setHighlightText = useLogStore((s) => s.setHighlightText);
   const knownSourceToolbarFamilies = useLogStore((s) => s.knownSourceToolbarFamilies);
+  const largeFileModeActive = useLogStore((s) => isLargeFileModeActive(s.largeFileMode));
 
   const activeView = useUiStore((s) => s.activeView);
   const setActiveView = useUiStore((s) => s.setActiveView);
@@ -702,6 +771,8 @@ export function Toolbar() {
     pasteDsregcmdSource,
     captureDsregcmdSource,
     showFilterDialog,
+    goToPreviousError,
+    goToNextError,
     showErrorLookupDialog,
     toggleDetailsPane,
     toggleInfoPane,
@@ -711,6 +782,20 @@ export function Toolbar() {
     useFilterStore.getState().clearFilter();
   }, []);
 
+
+  const previousErrorTitle = commandState.canNavigateErrors
+    ? "Previous Error (Shift+F8)"
+    : `Previous Error unavailable: ${commandState.errorNavigationDisabledReason ?? "Unavailable."}`;
+  const nextErrorTitle = commandState.canNavigateErrors
+    ? "Next Error (F8)"
+    : `Next Error unavailable: ${commandState.errorNavigationDisabledReason ?? "Unavailable."}`;
+  const filterButtonTitle = commandState.activeFilterCount > 0
+    ? largeFileModeActive
+      ? `Clear active filter (${commandState.activeFilterCount} clause${commandState.activeFilterCount === 1 ? "" : "s"}) — filtering is suspended in large-file mode to keep the app responsive.`
+      : `Clear active filter (${commandState.activeFilterCount} clause${commandState.activeFilterCount === 1 ? "" : "s"}) — click to remove`
+    : largeFileModeActive
+      ? "Filtering is disabled in large-file mode to keep the app responsive."
+      : "Filter... (Ctrl+Shift+L)";
 
   useEffect(() => {
     refreshKnownLogSources().catch((error) => {
@@ -936,21 +1021,42 @@ export function Toolbar() {
 
       <Divider vertical />
 
+      <Tooltip content={filterButtonTitle} relationship="label">
+        <span>
+          <Button
+            onClick={commandState.activeFilterCount > 0 ? clearFilter : showFilterDialog}
+            disabled={commandState.activeFilterCount === 0 && !commandState.canFilter}
+            aria-pressed={commandState.activeFilterCount > 0}
+            size="small"
+            appearance={commandState.activeFilterCount > 0 ? "primary" : "secondary"}
+          >
+            {commandState.activeFilterCount > 0
+              ? `Filter (${commandState.activeFilterCount})`
+              : "Filter..."}
+          </Button>
+        </span>
+      </Tooltip>
+
       <Button
-        onClick={commandState.activeFilterCount > 0 ? clearFilter : showFilterDialog}
-        title={
-          commandState.activeFilterCount > 0
-            ? `Clear active filter (${commandState.activeFilterCount} clause${commandState.activeFilterCount === 1 ? "" : "s"}) — click to remove`
-            : "Filter... (Ctrl+Shift+L)"
-        }
-        disabled={commandState.activeFilterCount === 0 && !commandState.canFilter}
-        aria-pressed={commandState.activeFilterCount > 0}
+        onClick={goToPreviousError}
+        title={previousErrorTitle}
+        disabled={!commandState.canNavigateErrors}
+        aria-label="Previous Error"
         size="small"
-        appearance={commandState.activeFilterCount > 0 ? "primary" : "secondary"}
+        appearance="secondary"
       >
-        {commandState.activeFilterCount > 0
-          ? `Filter (${commandState.activeFilterCount})`
-          : "Filter..."}
+        Prev error
+      </Button>
+
+      <Button
+        onClick={goToNextError}
+        title={nextErrorTitle}
+        disabled={!commandState.canNavigateErrors}
+        aria-label="Next Error"
+        size="small"
+        appearance="secondary"
+      >
+        Next error
       </Button>
 
       <Button
