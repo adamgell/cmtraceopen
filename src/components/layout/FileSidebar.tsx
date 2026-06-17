@@ -14,7 +14,6 @@ import { getWorkspace } from "../../workspaces/registry";
 import {
   getActiveSourceLabel,
   getActiveSourcePath,
-  getCachedTabSnapshot,
   getSourceFailureReason,
   useLogStore,
 } from "../../stores/log-store";
@@ -393,9 +392,7 @@ export function LogSidebar() {
                   type="button"
                   aria-label="Merge loaded files"
                   onClick={() => {
-                    const filePaths = files
-                      .filter((e) => !e.isDir && getCachedTabSnapshot(e.path))
-                      .map((e) => e.path);
+                    const filePaths = files.filter((e) => !e.isDir).map((e) => e.path);
                     if (filePaths.length >= 2) createMergedTab(filePaths);
                   }}
                   style={{

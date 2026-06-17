@@ -929,6 +929,7 @@ export const useLogStore = create<LogState>((set, get) => ({
   setPendingScrollTarget: (target) => set({ pendingScrollTarget: target }),
 
   createMergedTab: (sourceFilePaths) => {
+    const state = get();
     const entriesByFile: Record<string, LogEntry[]> = {};
     const entryCounts: Record<string, number> = {};
 
@@ -940,7 +941,19 @@ export const useLogStore = create<LogState>((set, get) => ({
       }
     }
 
-    const validPaths = Object.keys(entriesByFile);
+    if (Object.keys(entriesByFile).length < 2 && state.sourceOpenMode === "aggregate-folder") {
+      const requestedPaths = new Set(sourceFilePaths);
+      for (const entry of state.entries) {
+        if (!requestedPaths.has(entry.filePath)) continue;
+        if (!entriesByFile[entry.filePath]) entriesByFile[entry.filePath] = [];
+        entriesByFile[entry.filePath].push(entry);
+      }
+      for (const [filePath, entries] of Object.entries(entriesByFile)) {
+        entryCounts[filePath] = entries.length;
+      }
+    }
+
+    const validPaths = sourceFilePaths.filter((filePath) => entriesByFile[filePath]?.length);
     if (validPaths.length < 2) return;
 
     const themeId = useUiStore.getState().themeId;

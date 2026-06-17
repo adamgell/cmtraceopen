@@ -74,6 +74,14 @@ See the [DSRegCmd troubleshooting guide](DSREGCMD_TROUBLESHOOTING.md) for a deta
 3. **Open a log** — drag and drop a file, use File > Open, or use a source preset
 4. **Explore** — use Find (Ctrl+F), Filter, or switch to the Intune/DSRegCmd workspace
 
+## Troubleshooting
+
+CMTrace Open writes backend errors and crash details to `cmtrace-open.log` in the app log directory:
+
+- Windows: `%APPDATA%\com.cmtrace.open\logs\cmtrace-open.log`
+- macOS: `~/Library/Logs/com.cmtrace.open/cmtrace-open.log`
+- Linux: `${XDG_CONFIG_HOME:-~/.config}/com.cmtrace.open/logs/cmtrace-open.log`
+
 ## Supported Log Formats
 
 | Format | Examples |

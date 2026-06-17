@@ -3,12 +3,29 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { readTextFile } from "@tauri-apps/plugin-fs";
 import { useLogStore } from "../stores/log-store";
 import { useUiStore } from "../stores/ui-store";
+import { useFilterStore } from "../stores/filter-store";
 import { loadPathAsLogSource, loadFilesAsLogSource } from "./log-source";
 import { validateSession, type FileChangeWarning } from "./session";
+import type { FilterClause } from "../components/dialogs/FilterDialog";
 
 interface FileHashResult {
   hash: string;
   sizeBytes: number;
+}
+
+const FILTER_FIELDS = new Set(["Message", "Component", "Thread", "Timestamp", "Severity"]);
+const FILTER_OPS = new Set(["Equals", "NotEquals", "Contains", "NotContains", "Before", "After"]);
+
+function isFilterClause(value: unknown): value is FilterClause {
+  if (typeof value !== "object" || value === null) return false;
+  const clause = value as Record<string, unknown>;
+  return (
+    typeof clause.field === "string" &&
+    FILTER_FIELDS.has(clause.field) &&
+    typeof clause.op === "string" &&
+    FILTER_OPS.has(clause.op) &&
+    typeof clause.value === "string"
+  );
 }
 
 export async function openSessionDialog(): Promise<string | null> {
@@ -155,12 +172,12 @@ export async function restoreSession(sessionPath: string): Promise<string | null
 
   // Restore filters AFTER files are loaded so find/highlight operate on the loaded entries
   const logStore = useLogStore.getState();
-  if (session.filters) {
-    logStore.setHighlightText(session.filters.highlightText || "");
-    logStore.setFindQuery(session.filters.findQuery || "");
-    logStore.setFindCaseSensitive(session.filters.findCaseSensitive ?? false);
-    logStore.setFindUseRegex(session.filters.findUseRegex ?? false);
-  }
+  const filterStore = useFilterStore.getState();
+  filterStore.setClauses(session.filters.clauses.filter(isFilterClause));
+  logStore.setHighlightText(session.filters.highlightText || "");
+  logStore.setFindQuery(session.filters.findQuery || "");
+  logStore.setFindCaseSensitive(session.filters.findCaseSensitive ?? false);
+  logStore.setFindUseRegex(session.filters.findUseRegex ?? false);
 
   return sessionPath;
 }
