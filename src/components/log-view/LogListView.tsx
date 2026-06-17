@@ -32,6 +32,7 @@ import {
   buildGridTemplateColumns,
   getColumnDef,
   calcAutoFitWidth,
+  getAutoExpandedColumnWidth,
   type ColumnId,
   type ColumnDefinition,
 } from "../../lib/column-config";
@@ -96,6 +97,8 @@ export function LogListView({ dataSource }: { dataSource?: LogListDataSource } =
 
   const [hasKeyboardFocus, setHasKeyboardFocus] = useState(false);
   const [scrollbarWidth, setScrollbarWidth] = useState(0);
+  const autoSizedMessageWidthRef = useRef<number | null>(null);
+  const autoSizedMessageAttemptRef = useRef<string | null>(null);
 
   // Column sort state
   const [sortColumn, setSortColumn] = useState<ColumnId | null>(null);
@@ -592,6 +595,63 @@ export function LogListView({ dataSource }: { dataSource?: LogListDataSource } =
     }
     setColumnWidths(updates);
   }, [visibleColumns, displayEntries, logListFontSize, listMetrics, setColumnWidths]);
+
+  useEffect(() => {
+    const messageCol = getColumnDef("message");
+    if (displayEntries.length === 0) {
+      autoSizedMessageAttemptRef.current = null;
+      return;
+    }
+    if (!messageCol) return;
+    if (
+      columnWidths.message !== undefined &&
+      autoSizedMessageWidthRef.current === null
+    ) {
+      return;
+    }
+    if (
+      columnWidths.message !== undefined &&
+      autoSizedMessageWidthRef.current !== null &&
+      columnWidths.message !== autoSizedMessageWidthRef.current
+    ) {
+      return;
+    }
+    const autoSizeKey = `${sourceOpenMode}:${openFilePath ?? ""}`;
+    if (autoSizedMessageAttemptRef.current === autoSizeKey) return;
+    autoSizedMessageAttemptRef.current = autoSizeKey;
+
+    const timeoutId = window.setTimeout(() => {
+      const contentFont = getCanvasFont(logListFontSize);
+      const headerFont = getCanvasFont(listMetrics.headerFontSize, true);
+      const autoFitWidth = calcAutoFitWidth(
+        messageCol,
+        displayEntries,
+        contentFont,
+        headerFont
+      );
+      const nextWidth = getAutoExpandedColumnWidth(
+        columnWidths.message,
+        autoFitWidth,
+        messageCol.defaultWidth,
+        autoSizedMessageWidthRef.current
+      );
+
+      if (nextWidth === null) return;
+
+      autoSizedMessageWidthRef.current = nextWidth;
+      setColumnWidth("message", nextWidth);
+    }, 100);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [
+    columnWidths.message,
+    displayEntries,
+    listMetrics.headerFontSize,
+    logListFontSize,
+    openFilePath,
+    setColumnWidth,
+    sourceOpenMode,
+  ]);
 
   const visibleErrorCount = useMemo(() => {
     let count = 0;
