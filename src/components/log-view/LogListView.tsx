@@ -98,6 +98,7 @@ export function LogListView({ dataSource }: { dataSource?: LogListDataSource } =
   const [hasKeyboardFocus, setHasKeyboardFocus] = useState(false);
   const [scrollbarWidth, setScrollbarWidth] = useState(0);
   const autoSizedMessageWidthRef = useRef<number | null>(null);
+  const autoSizedMessageSourceRef = useRef<string | null>(null);
 
   // Column sort state
   const [sortColumn, setSortColumn] = useState<ColumnId | null>(null);
@@ -597,7 +598,15 @@ export function LogListView({ dataSource }: { dataSource?: LogListDataSource } =
 
   useEffect(() => {
     const messageCol = getColumnDef("message");
-    if (!messageCol) return;
+    const autoSizeSourceKey = `${sourceOpenMode}:${openFilePath ?? ""}`;
+    if (!messageCol || displayEntries.length === 0) return;
+    if (
+      columnWidths.message !== undefined &&
+      autoSizedMessageWidthRef.current === null
+    ) {
+      return;
+    }
+    if (autoSizedMessageSourceRef.current === autoSizeSourceKey) return;
 
     const rowEl = parentRef.current?.querySelector<HTMLElement>(".log-row") ?? null;
     const contentFont = getCanvasFont(logListFontSize, false, rowEl);
@@ -615,16 +624,19 @@ export function LogListView({ dataSource }: { dataSource?: LogListDataSource } =
       autoSizedMessageWidthRef.current
     );
 
+    autoSizedMessageSourceRef.current = autoSizeSourceKey;
     if (nextWidth === null) return;
 
     autoSizedMessageWidthRef.current = nextWidth;
     setColumnWidth("message", nextWidth);
   }, [
     columnWidths.message,
-    displayEntries,
+    displayEntries.length,
     listMetrics.headerFontSize,
     logListFontSize,
+    openFilePath,
     setColumnWidth,
+    sourceOpenMode,
   ]);
 
   const visibleErrorCount = useMemo(() => {
