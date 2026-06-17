@@ -32,6 +32,7 @@ import {
   buildGridTemplateColumns,
   getColumnDef,
   calcAutoFitWidth,
+  getAutoExpandedColumnWidth,
   type ColumnId,
   type ColumnDefinition,
 } from "../../lib/column-config";
@@ -96,6 +97,7 @@ export function LogListView({ dataSource }: { dataSource?: LogListDataSource } =
 
   const [hasKeyboardFocus, setHasKeyboardFocus] = useState(false);
   const [scrollbarWidth, setScrollbarWidth] = useState(0);
+  const autoSizedMessageWidthRef = useRef<number | null>(null);
 
   // Column sort state
   const [sortColumn, setSortColumn] = useState<ColumnId | null>(null);
@@ -592,6 +594,38 @@ export function LogListView({ dataSource }: { dataSource?: LogListDataSource } =
     }
     setColumnWidths(updates);
   }, [visibleColumns, displayEntries, logListFontSize, listMetrics, setColumnWidths]);
+
+  useEffect(() => {
+    const messageCol = getColumnDef("message");
+    if (!messageCol) return;
+
+    const rowEl = parentRef.current?.querySelector<HTMLElement>(".log-row") ?? null;
+    const contentFont = getCanvasFont(logListFontSize, false, rowEl);
+    const headerFont = getCanvasFont(listMetrics.headerFontSize, true, rowEl);
+    const autoFitWidth = calcAutoFitWidth(
+      messageCol,
+      displayEntries,
+      contentFont,
+      headerFont
+    );
+    const nextWidth = getAutoExpandedColumnWidth(
+      columnWidths.message,
+      autoFitWidth,
+      messageCol.defaultWidth,
+      autoSizedMessageWidthRef.current
+    );
+
+    if (nextWidth === null) return;
+
+    autoSizedMessageWidthRef.current = nextWidth;
+    setColumnWidth("message", nextWidth);
+  }, [
+    columnWidths.message,
+    displayEntries,
+    listMetrics.headerFontSize,
+    logListFontSize,
+    setColumnWidth,
+  ]);
 
   const visibleErrorCount = useMemo(() => {
     let count = 0;
