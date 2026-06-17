@@ -5,6 +5,7 @@ export const themeSeverityPalettes: Record<ThemeId, LogSeverityPalette> = {
   light: {
     error: { background: "#FEE2E2", text: "#7F1D1D" },
     warning: { background: "#FEF3C7", text: "#78350F" },
+    success: { background: "#DCFCE7", text: "#14532D" },
     info: { background: "#FFFFFF", text: "#111827" },
     highlightDefault: "#FDE68A",
     mergeColors: [
@@ -22,6 +23,7 @@ export const themeSeverityPalettes: Record<ThemeId, LogSeverityPalette> = {
   dark: {
     error: { background: "#7F1D1D", text: "#FCA5A5" },
     warning: { background: "#78350F", text: "#FDE68A" },
+    success: { background: "#14532D", text: "#86EFAC" },
     info: { background: "#1E1E1E", text: "#D4D4D4" },
     highlightDefault: "#854D0E",
     mergeColors: [
@@ -39,6 +41,7 @@ export const themeSeverityPalettes: Record<ThemeId, LogSeverityPalette> = {
   "high-contrast": {
     error: { background: "#000000", text: "#FF0000" },
     warning: { background: "#000000", text: "#FFFF00" },
+    success: { background: "#000000", text: "#00FF00" },
     info: { background: "#000000", text: "#FFFFFF" },
     highlightDefault: "#00FF00",
     mergeColors: [
@@ -56,6 +59,7 @@ export const themeSeverityPalettes: Record<ThemeId, LogSeverityPalette> = {
   "classic-cmtrace": {
     error: { background: "#FF0000", text: "#FFFF00" },
     warning: { background: "#FFFF00", text: "#000000" },
+    success: { background: "#00FF00", text: "#000000" },
     info: { background: "#FFFFFF", text: "#000000" },
     highlightDefault: "#FFFF00",
     mergeColors: [
@@ -73,6 +77,7 @@ export const themeSeverityPalettes: Record<ThemeId, LogSeverityPalette> = {
   "solarized-dark": {
     error: { background: "#073642", text: "#DC322F" },
     warning: { background: "#073642", text: "#B58900" },
+    success: { background: "#073642", text: "#859900" },
     info: { background: "#002B36", text: "#839496" },
     highlightDefault: "#586E75",
     mergeColors: [
@@ -90,6 +95,7 @@ export const themeSeverityPalettes: Record<ThemeId, LogSeverityPalette> = {
   nord: {
     error: { background: "#3B4252", text: "#BF616A" },
     warning: { background: "#3B4252", text: "#EBCB8B" },
+    success: { background: "#3B4252", text: "#A3BE8C" },
     info: { background: "#2E3440", text: "#D8DEE9" },
     highlightDefault: "#4C566A",
     mergeColors: [
@@ -107,6 +113,7 @@ export const themeSeverityPalettes: Record<ThemeId, LogSeverityPalette> = {
   dracula: {
     error: { background: "#44475A", text: "#FF5555" },
     warning: { background: "#44475A", text: "#F1FA8C" },
+    success: { background: "#44475A", text: "#50FA7B" },
     info: { background: "#282A36", text: "#F8F8F2" },
     highlightDefault: "#6272A4",
     mergeColors: [
@@ -124,6 +131,7 @@ export const themeSeverityPalettes: Record<ThemeId, LogSeverityPalette> = {
   "hotdog-stand": {
     error: { background: "#FF0000", text: "#FFFF00" },
     warning: { background: "#FFFF00", text: "#FF0000" },
+    success: { background: "#00FF00", text: "#FF0000" },
     info: { background: "#FF0000", text: "#FFFF00" },
     highlightDefault: "#00FF00",
     mergeColors: [

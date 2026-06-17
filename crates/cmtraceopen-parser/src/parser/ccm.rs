@@ -103,7 +103,7 @@ pub(crate) fn build_timestamp(
 
 pub(crate) fn severity_from_type_field(type_value: Option<u32>, message: &str) -> Severity {
     match type_value {
-        Some(0) => Severity::Info, // PSADT v4 Success type — treated as Info
+        Some(0) => Severity::Success,
         Some(2) => Severity::Warning,
         Some(3) => Severity::Error,
         Some(_) => Severity::Info,
@@ -274,17 +274,16 @@ fn parse_captures(caps: &regex::Captures<'_>) -> Option<CcmParsed> {
     let day: u32 = caps.name("day")?.as_str().parse().ok()?;
     let yr: i32 = caps.name("yr")?.as_str().parse().ok()?;
     let comp = caps.name("comp").map(|m| m.as_str().to_string());
-    let typ: u32 = caps
+    let typ: Option<u32> = caps
         .name("typ")
-        .and_then(|m| m.as_str().parse().ok())
-        .unwrap_or(0);
+        .and_then(|m| m.as_str().parse().ok());
     let thr: u32 = caps
         .name("thr")
         .and_then(|m| m.as_str().parse().ok())
         .unwrap_or(0);
     let file = caps.name("file").map(|m| m.as_str().to_string());
 
-    let severity = severity_from_type_field(Some(typ), &msg);
+    let severity = severity_from_type_field(typ, &msg);
     let (timestamp, timestamp_display) = build_timestamp(mon, day, yr, h, m, s, ms, Some(tz));
     let thread_display = Some(format_thread_display(thr));
 
@@ -606,6 +605,13 @@ mod tests {
         let line = r#"<![LOG[Retrying request]LOG]!><time="10:00:00.000+000" date="01-01-2024" component="Test" context="" type="2" thread="100" file="">"#;
         let parsed = parse_line(line).expect("should parse");
         assert_eq!(parsed.severity, Severity::Warning);
+    }
+
+    #[test]
+    fn test_parse_ccm_success() {
+        let line = r#"<![LOG[[Finalization] :: [PSAppDeployToolkit_4.2.0_EN_01] install completed in [13.1467339] seconds with exit code [0].]LOG]!><time="06:22:51.850+000" date="05-06-2026" component="Close-ADTSession" context="" type="0" thread="57068" file="">"#;
+        let parsed = parse_line(line).expect("should parse");
+        assert_eq!(parsed.severity, Severity::Success);
     }
 
     #[test]

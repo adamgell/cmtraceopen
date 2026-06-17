@@ -15,6 +15,7 @@ export interface QuickStats {
   bySeverity: {
     error: number;
     warning: number;
+    success: number;
     info: number;
   };
   errorCodes: ErrorCodeStat[];
@@ -40,7 +41,7 @@ export function useQuickStats(): QuickStats {
       return {
         totalLines: 0,
         filteredLineCount: 0,
-        bySeverity: { error: 0, warning: 0, info: 0 },
+        bySeverity: { error: 0, warning: 0, success: 0, info: 0 },
         errorCodes: [],
         earliestTimestamp: null,
         latestTimestamp: null,
@@ -51,6 +52,7 @@ export function useQuickStats(): QuickStats {
 
     let errorCount = 0;
     let warningCount = 0;
+    let successCount = 0;
     let infoCount = 0;
     let visibleCount = 0;
 
@@ -68,6 +70,9 @@ export function useQuickStats(): QuickStats {
           break;
         case "Warning":
           warningCount++;
+          break;
+        case "Success":
+          successCount++;
           break;
         case "Info":
           infoCount++;
@@ -119,6 +124,7 @@ export function useQuickStats(): QuickStats {
       bySeverity: {
         error: errorCount,
         warning: warningCount,
+        success: successCount,
         info: infoCount,
       },
       errorCodes,

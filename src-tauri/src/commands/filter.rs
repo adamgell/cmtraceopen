@@ -122,6 +122,7 @@ fn matches_clause(entry: &LogEntry, compiled: &CompiledClause) -> bool {
         }
         FilterField::Severity => {
             let sev_str = match &entry.severity {
+                crate::models::log_entry::Severity::Success => "Success",
                 crate::models::log_entry::Severity::Error => "Error",
                 crate::models::log_entry::Severity::Warning => "Warning",
                 crate::models::log_entry::Severity::Info => "Info",
