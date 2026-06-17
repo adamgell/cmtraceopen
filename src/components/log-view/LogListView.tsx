@@ -609,6 +609,13 @@ export function LogListView({ dataSource }: { dataSource?: LogListDataSource } =
     ) {
       return;
     }
+    if (
+      columnWidths.message !== undefined &&
+      autoSizedMessageWidthRef.current !== null &&
+      columnWidths.message !== autoSizedMessageWidthRef.current
+    ) {
+      return;
+    }
     const autoSizeKey = `${sourceOpenMode}:${openFilePath ?? ""}`;
     if (autoSizedMessageAttemptRef.current === autoSizeKey) return;
     autoSizedMessageAttemptRef.current = autoSizeKey;
