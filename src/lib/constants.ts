@@ -7,6 +7,10 @@ export interface LogSeverityPalette {
     background: string;
     text: string;
   };
+  success: {
+    background: string;
+    text: string;
+  };
   info: {
     background: string;
     text: string;
