@@ -66,11 +66,17 @@ describe("column-config", () => {
   });
 
   it("auto-expands the message column only when auto-sizing still owns it", () => {
+    // First auto-expansion grows beyond the default width.
     expect(getAutoExpandedColumnWidth(undefined, 920, 600, null)).toBe(920);
+    // Smaller content should not shrink the default width.
     expect(getAutoExpandedColumnWidth(undefined, 520, 600, null)).toBeNull();
+    // Once auto-sizing owns the column, wider content can grow it again.
     expect(getAutoExpandedColumnWidth(920, 1080, 600, 920)).toBe(1080);
+    // A user resize after auto-sizing should block further automatic changes.
     expect(getAutoExpandedColumnWidth(760, 1080, 600, 920)).toBeNull();
+    // Narrower content should not shrink an already auto-sized column.
     expect(getAutoExpandedColumnWidth(920, 880, 600, 920)).toBeNull();
+    // Existing persisted/manual widths are treated as user-owned from the start.
     expect(getAutoExpandedColumnWidth(920, 1080, 600, null)).toBeNull();
   });
 });
