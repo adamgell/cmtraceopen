@@ -492,6 +492,28 @@ export function calcAutoFitWidth(
   );
 }
 
+export function getAutoExpandedColumnWidth(
+  currentWidth: number | undefined,
+  autoFitWidth: number,
+  defaultWidth: number,
+  lastAutoWidth: number | null
+): number | null {
+  if (currentWidth !== undefined && lastAutoWidth === null) {
+    return null;
+  }
+
+  if (
+    currentWidth !== undefined &&
+    lastAutoWidth !== null &&
+    currentWidth !== lastAutoWidth
+  ) {
+    return null;
+  }
+
+  const baselineWidth = currentWidth ?? defaultWidth;
+  return autoFitWidth > baselineWidth ? autoFitWidth : null;
+}
+
 export function applyColumnOrder(
   activeColumns: ColumnId[],
   userOrder: ColumnId[] | null
