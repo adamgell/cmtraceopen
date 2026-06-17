@@ -498,6 +498,8 @@ export function getAutoExpandedColumnWidth(
   defaultWidth: number,
   lastAutoWidth: number | null
 ): number | null {
+  // When a width already exists before this session auto-sizes the column,
+  // treat it as a user-owned override (persisted manual resize or fit action).
   if (currentWidth !== undefined && lastAutoWidth === null) {
     return null;
   }
