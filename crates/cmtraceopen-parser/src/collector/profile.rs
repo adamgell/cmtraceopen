@@ -83,4 +83,20 @@ mod tests {
         profile.filter_by_families(&[]);
         assert_eq!(profile.total_items(), 0);
     }
+
+    #[test]
+    fn embedded_profile_includes_teams_msix_logs() {
+        let profile = CollectionProfile::embedded();
+        let item = profile
+            .logs
+            .iter()
+            .find(|item| item.id == "teams-msix-logs")
+            .expect("teams msix logs entry should exist");
+
+        assert_eq!(
+            item.source_pattern,
+            "%LOCALAPPDATA%\\Packages\\MSTeams_8wekyb3d8bbwe\\LocalCache\\Microsoft\\MSTeams\\Logs\\*"
+        );
+        assert_eq!(item.family, "teams");
+    }
 }
