@@ -213,6 +213,13 @@
             "notes": "Teams Squirrel installer log."
         },
         {
+            "id": "teams-msix-logs",
+            "family": "teams",
+            "sourcePattern": "%LOCALAPPDATA%\\Packages\\MSTeams_8wekyb3d8bbwe\\LocalCache\\Microsoft\\MSTeams\\Logs\\*",
+            "destinationFolder": "logs/teams",
+            "notes": "New Microsoft Teams MSIX package logs."
+        },
+        {
             "id": "winget-state",
             "family": "wpm",
             "sourcePattern": "%TEMP%\\winget\\defaultState\\WPM-*.txt",

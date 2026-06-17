@@ -129,6 +129,13 @@ fn windows_known_source(
 
 #[cfg(target_os = "windows")]
 fn windows_known_log_sources() -> Vec<KnownSourceMetadata> {
+    let local_app_data = std::env::var("LOCALAPPDATA")
+        .or_else(|_| std::env::var("USERPROFILE").map(|path| format!("{path}\\AppData\\Local")))
+        .unwrap_or_else(|_| "%LOCALAPPDATA%".to_string());
+    let teams_msix_logs_path = format!(
+        "{local_app_data}\\Packages\\MSTeams_8wekyb3d8bbwe\\LocalCache\\Microsoft\\MSTeams\\Logs"
+    );
+
     vec![
         windows_known_source(
             "windows-intune-ime-logs",
@@ -214,6 +221,26 @@ fn windows_known_log_sources() -> Vec<KnownSourceMetadata> {
                 source_order: 40,
             },
             None,
+        ),
+        windows_known_source(
+            "windows-teams-msix-logs",
+            "Teams MSIX Logs Folder",
+            "New Microsoft Teams MSIX package log folder under the current user's LocalAppData package cache.",
+            KnownSourcePathKind::Folder,
+            &teams_msix_logs_path,
+            &["*.log", "*.txt"],
+            KnownSourceGroupingMetadata {
+                family_id: "windows-apps".to_string(),
+                family_label: "Windows Apps".to_string(),
+                group_id: "apps-microsoft".to_string(),
+                group_label: "Microsoft Apps".to_string(),
+                group_order: 35,
+                source_order: 10,
+            },
+            Some(KnownSourceDefaultFileIntent {
+                selection_behavior: KnownSourceDefaultFileSelectionBehavior::PreferPattern,
+                preferred_file_names: Vec::new(),
+            }),
         ),
         windows_known_source(
             "windows-dmclient-logs",
@@ -523,6 +550,35 @@ fn windows_known_log_sources() -> Vec<KnownSourceMetadata> {
             None,
         ),
     ]
+}
+
+#[cfg(all(test, target_os = "windows"))]
+mod tests {
+    use super::{KnownSourcePathKind, windows_known_log_sources};
+    use crate::commands::file_ops::LogSource;
+
+    #[test]
+    fn windows_known_log_sources_include_teams_msix_logs() {
+        let source = windows_known_log_sources()
+            .into_iter()
+            .find(|item| item.id == "windows-teams-msix-logs")
+            .expect("teams msix known source should exist");
+
+        assert_eq!(source.label, "Teams MSIX Logs Folder");
+        assert!(source.file_patterns.iter().any(|pattern| pattern == "*.log"));
+
+        match source.source {
+            LogSource::Known {
+                default_path,
+                path_kind,
+                ..
+            } => {
+                assert_eq!(path_kind, KnownSourcePathKind::Folder);
+                assert!(default_path.ends_with("\\Packages\\MSTeams_8wekyb3d8bbwe\\LocalCache\\Microsoft\\MSTeams\\Logs"));
+            }
+            _ => panic!("teams msix source should be a known folder"),
+        }
+    }
 }
 
 #[cfg(target_os = "macos")]
