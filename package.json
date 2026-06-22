@@ -43,7 +43,7 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.61.0",
-    "@tauri-apps/cli": "^2.11.2",
+    "@tauri-apps/cli": "^2.11.3",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
     "@types/react": "^19.2.17",
