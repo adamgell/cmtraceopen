@@ -786,8 +786,8 @@ jobs:
         run: |
           set -euo pipefail
           label="nightly-build-failure"
-          nums="$(gh issue list --label "$label" --state open --json number \
-            --jq '.[].number' 2>/dev/null || true)"
+          nums="$(gh issue list --label "$label" --state open --limit 1000 --json number \
+            --jq '.[].number')" || exit $?
           for num in $nums; do
             gh issue comment "$num" --body "Recovered — nightly succeeded: [run](${RUN_URL}). Closing."
             gh issue close "$num" --reason completed
