@@ -745,8 +745,8 @@ jobs:
             --description "Automated: signed nightly build failure" \
             || gh label edit "$label" --color b60205 --description "Automated: signed nightly build failure"
 
-          existing="$(gh issue list --label "$label" --state open --json number \
-            --jq '.[0].number // empty' 2>/dev/null || true)"
+          existing="$(gh issue list --label "$label" --state open --limit 1 --json number \
+            --jq '.[0].number // empty')" || exit $?
 
           if [ -n "$existing" ]; then
             gh issue comment "$existing" \
