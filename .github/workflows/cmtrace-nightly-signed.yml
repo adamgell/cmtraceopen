@@ -742,7 +742,8 @@ jobs:
           title="Nightly signed build is failing"
 
           gh label create "$label" --color b60205 \
-            --description "Automated: signed nightly build failure" 2>/dev/null || true
+            --description "Automated: signed nightly build failure" \
+            || gh label edit "$label" --color b60205 --description "Automated: signed nightly build failure"
 
           existing="$(gh issue list --label "$label" --state open --json number \
             --jq '.[0].number // empty' 2>/dev/null || true)"
