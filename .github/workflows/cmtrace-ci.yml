@@ -85,10 +85,14 @@ jobs:
 
       - name: Security vulnerability audit (app)
         # Audit the main app's lockfile for vulnerabilities.
-        # quick-xml 0.39.4 via wayland-scanner 0.31.10 (latest) is ignored
-        # in deny.toml; this audit covers the remainder of src-tauri deps.
+        # quick-xml 0.39.4 is pulled in by wayland-scanner 0.31.10 (latest) on
+        # Linux for Wayland clipboard support (build-time proc-macro only).
+        # Risk is limited to build-time parsing of trusted Wayland protocol
+        # files; wayland-scanner has not yet released a version using quick-xml 0.40+.
+        # RUSTSEC-2026-0194 and RUSTSEC-2026-0195 are suppressed here via
+        # cargo-audit's own --ignore flag (cargo-deny's deny.toml is separate).
         working-directory: src-tauri
-        run: cargo audit
+        run: cargo audit --ignore RUSTSEC-2026-0194 --ignore RUSTSEC-2026-0195
 
       - name: Security vulnerability audit (parser crate)
         # The root Cargo.lock covers only crates/cmtraceopen-parser; src-tauri
