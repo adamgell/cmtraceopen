@@ -8,7 +8,7 @@ import {
 } from "react";
 import { Button, tokens } from "@fluentui/react-components";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { useLogStore } from "../../stores/log-store";
+import { getActiveSourcePath, useLogStore } from "../../stores/log-store";
 import { useUiStore } from "../../stores/ui-store";
 import { useFilterStore } from "../../stores/filter-store";
 import { LogRow } from "./LogRow";
@@ -76,6 +76,7 @@ export function LogListView({ dataSource }: { dataSource?: LogListDataSource } =
   const showDetails = useUiStore((s) => s.showDetails);
 
   const sourceOpenMode = useLogStore((s) => s.sourceOpenMode);
+  const activeSource = useLogStore((s) => s.activeSource);
   const mergedTabState = useLogStore((s) => s.mergedTabState);
   const correlatedEntries = useLogStore((s) => s.correlatedEntries);
   const openFilePath = useLogStore((s) => s.openFilePath);
@@ -195,6 +196,7 @@ export function LogListView({ dataSource }: { dataSource?: LogListDataSource } =
     () => getLogListMetrics(logListFontSize),
     [logListFontSize]
   );
+  const autoSizeSourcePath = openFilePath ?? getActiveSourcePath(activeSource) ?? "";
 
   // ── Section color auto-assignment (uses theme merge palette) ─────────
   const sectionColorMap = useMemo(() => {
@@ -616,11 +618,11 @@ export function LogListView({ dataSource }: { dataSource?: LogListDataSource } =
     ) {
       return;
     }
-    const autoSizeKey = `${sourceOpenMode}:${openFilePath ?? ""}`;
+    const autoSizeKey = `${sourceOpenMode}:${autoSizeSourcePath}`;
     if (autoSizedMessageAttemptRef.current === autoSizeKey) return;
-    autoSizedMessageAttemptRef.current = autoSizeKey;
 
     const timeoutId = window.setTimeout(() => {
+      autoSizedMessageAttemptRef.current = autoSizeKey;
       const contentFont = getCanvasFont(logListFontSize);
       const headerFont = getCanvasFont(listMetrics.headerFontSize, true);
       const autoFitWidth = calcAutoFitWidth(
@@ -648,7 +650,7 @@ export function LogListView({ dataSource }: { dataSource?: LogListDataSource } =
     displayEntries,
     listMetrics.headerFontSize,
     logListFontSize,
-    openFilePath,
+    autoSizeSourcePath,
     setColumnWidth,
     sourceOpenMode,
   ]);
