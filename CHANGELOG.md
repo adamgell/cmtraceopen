@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Changed
+
+- **Re-issued code-signing certificate**: Windows builds are now signed with a re-issued Azure Trusted Signing certificate. The signature is still a valid Microsoft Public Trust certificate, and macOS builds remain signed and notarized — but because the underlying signing identity was renewed, Windows SmartScreen reputation is rebuilding. Fresh installs may briefly show an "unrecognized app" / unknown-publisher prompt until reputation re-establishes over the following weeks. The installers are validly signed; choosing **More info → Run anyway** is safe.
+
 ## [1.3.2] - 2026-05-11
 
 ### Added
