@@ -22,6 +22,13 @@ ignore = [
     "RUSTSEC-2025-0081", # gtk-related (Tauri Linux)
     "RUSTSEC-2025-0098", # gtk-related (Tauri Linux)
     "RUSTSEC-2025-0100", # gtk-related (Tauri Linux)
+    # quick-xml 0.39.4 is pulled in by wayland-scanner 0.31.10 (latest) on
+    # Linux for Wayland clipboard support (build-time proc-macro only).
+    # The wayland-scanner crate has not yet released a version that uses
+    # quick-xml 0.40+. Risk is limited to build-time XML parsing of trusted
+    # Wayland protocol specification files.
+    "RUSTSEC-2026-0194", # quick-xml: transitive via wayland-scanner (Wayland Linux)
+    "RUSTSEC-2026-0195", # quick-xml: transitive via wayland-scanner (Wayland Linux)
 ]
 
 [licenses]

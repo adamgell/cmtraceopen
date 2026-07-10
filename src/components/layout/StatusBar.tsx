@@ -28,6 +28,7 @@ import { useSecureBootStore } from "../../workspaces/secureboot/secureboot-store
 interface SeverityCounts {
   errors: number;
   warnings: number;
+  successes: number;
   info: number;
 }
 
@@ -35,6 +36,7 @@ function formatSeverityCounts(counts: SeverityCounts): string {
   const parts: string[] = [];
   if (counts.errors > 0) parts.push(`${counts.errors} error${counts.errors === 1 ? "" : "s"}`);
   if (counts.warnings > 0) parts.push(`${counts.warnings} warning${counts.warnings === 1 ? "" : "s"}`);
+  if (counts.successes > 0) parts.push(`${counts.successes} success${counts.successes === 1 ? "" : "es"}`);
   if (counts.info > 0) parts.push(`${counts.info} info`);
   return parts.join(", ");
 }
@@ -103,6 +105,7 @@ export function StatusBar() {
   const { filteredCount, severityCounts } = useMemo(() => {
     let errors = 0;
     let warnings = 0;
+    let successes = 0;
     let info = 0;
     let counter = 0;
 
@@ -116,6 +119,9 @@ export function StatusBar() {
         case "Warning":
           warnings++;
           break;
+        case "Success":
+          successes++;
+          break;
         case "Info":
           info++;
           break;
@@ -124,7 +130,7 @@ export function StatusBar() {
 
     return {
       filteredCount: counter,
-      severityCounts: { errors, warnings, info },
+      severityCounts: { errors, warnings, successes, info },
     };
   }, [entries, filteredIds]);
 

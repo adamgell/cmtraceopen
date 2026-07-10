@@ -41,9 +41,9 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             target/
-          # Cargo.lock moved to the workspace root when src-tauri became a
-          # member of the cmtraceopen Cargo workspace; cache key follows.
-          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
+          # src-tauri is a standalone workspace (own Cargo.lock); root workspace
+          # covers only crates/cmtraceopen-parser. Hash both lockfiles.
+          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock', 'src-tauri/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-
 
       - name: Rust check
@@ -52,6 +52,10 @@ jobs:
 
       - name: Rust tests
         working-directory: src-tauri
+        run: cargo test
+
+      - name: Rust tests (parser crate)
+        working-directory: crates/cmtraceopen-parser
         run: cargo test
 
       - name: Rust check (lite)
@@ -79,10 +83,16 @@ jobs:
         working-directory: src-tauri
         run: cargo deny check
 
-      - name: Security vulnerability audit
-        # cargo-audit reads Cargo.lock from the current directory (no
-        # workspace walk); run from the repo root where the lockfile now
-        # lives. Covers the full workspace: src-tauri + cmtraceopen-parser.
+      - name: Security vulnerability audit (app)
+        # Audit the main app's lockfile for vulnerabilities.
+        # quick-xml 0.39.4 via wayland-scanner 0.31.10 (latest) is ignored
+        # in deny.toml; this audit covers the remainder of src-tauri deps.
+        working-directory: src-tauri
+        run: cargo audit
+
+      - name: Security vulnerability audit (parser crate)
+        # The root Cargo.lock covers only crates/cmtraceopen-parser; src-tauri
+        # is a standalone workspace with its own lockfile to avoid conflicts.
         run: cargo audit
 
   frontend:
@@ -163,7 +173,7 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             src-tauri/target/
-          key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('Cargo.lock') }}
+          key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('Cargo.lock', 'src-tauri/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-${{ matrix.target }}-cargo-
 
       - name: Install frontend dependencies

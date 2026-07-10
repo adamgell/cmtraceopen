@@ -77,7 +77,7 @@ export const themeSeverityPalettes: Record<ThemeId, LogSeverityPalette> = {
   "solarized-dark": {
     error: { background: "#073642", text: "#DC322F" },
     warning: { background: "#073642", text: "#B58900" },
-    success: { background: "#073642", text: "#859900" },
+    success: { background: "#073642", text: "#A3B800" },
     info: { background: "#002B36", text: "#839496" },
     highlightDefault: "#586E75",
     mergeColors: [
@@ -131,7 +131,7 @@ export const themeSeverityPalettes: Record<ThemeId, LogSeverityPalette> = {
   "hotdog-stand": {
     error: { background: "#FF0000", text: "#FFFF00" },
     warning: { background: "#FFFF00", text: "#FF0000" },
-    success: { background: "#00FF00", text: "#FF0000" },
+    success: { background: "#00FF00", text: "#000000" },
     info: { background: "#FF0000", text: "#FFFF00" },
     highlightDefault: "#00FF00",
     mergeColors: [
