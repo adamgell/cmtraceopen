@@ -715,3 +715,81 @@ jobs:
             echo "- Display version: \`$DISPLAY_VERSION\`"
             echo "- Assets: \`${#assets[@]}\`"
           } >> "$GITHUB_STEP_SUMMARY"
+
+  notify-failure:
+    name: Open failure tracking issue
+    needs:
+      - metadata
+      - windows-signed-nightly
+      - macos-signed-nightly
+      - publish-nightly-release
+    # Only alert on the scheduled run; manual dispatches are interactive and shouldn't spam issues.
+    if: ${{ failure() && github.event_name == 'schedule' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Open or update the nightly-failure issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          label="nightly-build-failure"
+          title="Nightly signed build is failing"
+
+          gh label create "$label" --color b60205 \
+            --description "Automated: signed nightly build failure" \
+            || gh label edit "$label" --color b60205 --description "Automated: signed nightly build failure"
+
+          existing="$(gh issue list --label "$label" --state open --limit 1 --json number \
+            --jq '.[0].number // empty')" || exit $?
+
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" \
+              --body "Still failing — [run](${RUN_URL}) at commit \`${COMMIT_SHA}\`."
+            echo "Updated tracking issue #$existing"
+          else
+            body="$(printf '%s\n' \
+              "The scheduled **Nightly Signed Build** failed." \
+              "" \
+              "- Run: ${RUN_URL}" \
+              "- Commit: \`${COMMIT_SHA}\`" \
+              "" \
+              "Opened automatically on the first scheduled failure, updated on each subsequent one, and auto-closed when a nightly run fully succeeds again. Open the run to see which job failed (Windows signing, macOS notarization, publish, etc.).")"
+            gh issue create --title "$title" --label "$label" --body "$body"
+            echo "Opened new tracking issue"
+          fi
+
+  notify-recovery:
+    name: Close failure tracking issue on recovery
+    needs:
+      - metadata
+      - windows-signed-nightly
+      - macos-signed-nightly
+      - publish-nightly-release
+    # Runs only on a fully green run (any trigger) so a manual green run also clears the alert.
+    if: ${{ success() }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Close any open nightly-failure issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          label="nightly-build-failure"
+          nums="$(gh issue list --label "$label" --state open --limit 1000 --json number \
+            --jq '.[].number')" || exit $?
+          for num in $nums; do
+            gh issue comment "$num" --body "Recovered — nightly succeeded: [run](${RUN_URL}). Closing."
+            gh issue close "$num" --reason completed
+            echo "Closed tracking issue #$num"
+          done
