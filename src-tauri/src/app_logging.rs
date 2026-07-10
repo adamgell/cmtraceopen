@@ -58,7 +58,9 @@ pub fn init(app: &tauri::App) -> Result<PathBuf, Box<dyn std::error::Error>> {
     if let Ok(meta) = fs::metadata(&log_path) {
         if meta.len() >= MAX_LOG_BYTES {
             let rotated = log_dir.join("cmtrace-open.log.1");
-            let _ = fs::rename(&log_path, &rotated);
+            if let Err(e) = fs::rename(&log_path, &rotated) {
+                eprintln!("failed to rotate CMTrace Open log: {e}");
+            }
         }
     }
 
