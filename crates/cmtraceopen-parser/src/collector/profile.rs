@@ -98,5 +98,6 @@ mod tests {
             "%LOCALAPPDATA%\\Packages\\MSTeams_8wekyb3d8bbwe\\LocalCache\\Microsoft\\MSTeams\\Logs\\*"
         );
         assert_eq!(item.family, "teams");
+        assert_eq!(item.destination_folder, "logs/teams");
     }
 }

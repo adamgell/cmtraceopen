@@ -213,6 +213,20 @@ function Expand-EnvironmentPath {
     return [System.Environment]::ExpandEnvironmentVariables($Path)
 }
 
+function Get-ResolvedLogMatches {
+    param(
+        [AllowEmptyString()]
+        [string]$SourcePattern
+    )
+
+    $resolvedSourcePattern = Expand-EnvironmentPath -Path $SourcePattern
+    if ([string]::IsNullOrWhiteSpace($resolvedSourcePattern)) {
+        return @()
+    }
+
+    return @(Get-ChildItem -Path $resolvedSourcePattern -File -ErrorAction SilentlyContinue | Sort-Object FullName)
+}
+
 function Get-ObjectPropertyValue {
     param(
         [AllowNull()]
@@ -843,13 +857,18 @@ try {
 
     Write-Step 'Collecting curated IME logs'
     foreach ($logItem in @($collectorProfile.logs)) {
-        $matchedFiles = @(Get-ChildItem -Path $logItem.sourcePattern -File -ErrorAction SilentlyContinue | Sort-Object FullName)
+        $resolvedSourcePattern = Expand-EnvironmentPath -Path $logItem.sourcePattern
+        if ([string]::IsNullOrWhiteSpace($resolvedSourcePattern)) {
+            $resolvedSourcePattern = $logItem.sourcePattern
+        }
+
+        $matchedFiles = @(Get-ResolvedLogMatches -SourcePattern $logItem.sourcePattern)
 
         if ($matchedFiles.Count -eq 0) {
-            $relativePath = Join-RelativePath -Left $logItem.destinationFolder -Right (Split-Path -Leaf $logItem.sourcePattern)
-            $artifact = New-ArtifactRecord -Category 'log' -Family $logItem.family -RelativePath $relativePath -OriginPath $logItem.sourcePattern -Status 'missing' -ParseHints $logItem.parseHints -Notes $logItem.notes
+            $relativePath = Join-RelativePath -Left $logItem.destinationFolder -Right (Split-Path -Leaf $resolvedSourcePattern)
+            $artifact = New-ArtifactRecord -Category 'log' -Family $logItem.family -RelativePath $relativePath -OriginPath $resolvedSourcePattern -Status 'missing' -ParseHints $logItem.parseHints -Notes $logItem.notes
             $artifacts.Add($artifact)
-            Add-ObservedGap -ObservedGaps $observedGaps -Status 'missing' -Origin $logItem.sourcePattern -Reason $null
+            Add-ObservedGap -ObservedGaps $observedGaps -Status 'missing' -Origin $resolvedSourcePattern -Reason $null
             continue
         }
 
