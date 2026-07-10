@@ -288,6 +288,21 @@ async function loadFolderProgressive(
     console.info(`[log-source] batch ${batchIndex}/${totalBatches} — completed ${batchResults.length} files in ${batchMs} ms`);
 
     for (const result of batchResults) {
+      // Cache each file for instant single-file tab switching later.
+      // This is consistent with loadFilesAsLogSource which also caches
+      // per-file before assembling the aggregate view.
+      const fileColumns = getColumnsForParser(result.parserSelection.parser);
+      setCachedTabSnapshot(result.filePath, {
+        entries: result.entries,
+        formatDetected: result.formatDetected,
+        parserSelection: result.parserSelection,
+        totalLines: result.totalLines,
+        byteOffset: result.byteOffset,
+        selectedSourceFilePath: result.filePath,
+        sourceOpenMode: "single-file",
+        activeColumns: fileColumns,
+      });
+
       totalLines += result.totalLines;
       parserKinds.push(result.parserSelection.parser);
       aggregateFiles.push({

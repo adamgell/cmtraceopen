@@ -76,9 +76,9 @@ See the [DSRegCmd troubleshooting guide](DSREGCMD_TROUBLESHOOTING.md) for a deta
 
 CMTrace Open writes backend errors and crash details to `cmtrace-open.log` in the app log directory:
 
-- Windows: `%APPDATA%\com.cmtrace.open\logs\cmtrace-open.log`
+- Windows: `%LOCALAPPDATA%\com.cmtrace.open\logs\cmtrace-open.log`
 - macOS: `~/Library/Logs/com.cmtrace.open/cmtrace-open.log`
-- Linux: `${XDG_CONFIG_HOME:-~/.config}/com.cmtrace.open/logs/cmtrace-open.log`
+- Linux: `${XDG_DATA_HOME:-~/.local/share}/com.cmtrace.open/logs/cmtrace-open.log`
 
 ## Supported Log Formats
 

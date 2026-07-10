@@ -43,15 +43,28 @@ impl Log for FileLogger {
     }
 }
 
+/// Maximum log file size before rotating to `cmtrace-open.log.1`.
+/// Keeps the total log footprint under ~4 MB (two files at most).
+const MAX_LOG_BYTES: u64 = 2 * 1024 * 1024; // 2 MiB
+
 pub fn init(app: &tauri::App) -> Result<PathBuf, Box<dyn std::error::Error>> {
     let log_dir = app.path().app_log_dir()?;
     fs::create_dir_all(&log_dir)?;
 
     let log_path = log_dir.join("cmtrace-open.log");
+
+    // Rotate the log when it exceeds the size cap so crash records from the
+    // previous session are preserved while bounding total disk usage.
+    if let Ok(meta) = fs::metadata(&log_path) {
+        if meta.len() >= MAX_LOG_BYTES {
+            let rotated = log_dir.join("cmtrace-open.log.1");
+            let _ = fs::rename(&log_path, &rotated);
+        }
+    }
+
     let file = OpenOptions::new()
         .create(true)
-        .write(true)
-        .truncate(true)
+        .append(true)
         .open(&log_path)?;
 
     log::set_boxed_logger(Box::new(FileLogger {

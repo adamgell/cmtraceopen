@@ -933,24 +933,27 @@ export const useLogStore = create<LogState>((set, get) => ({
     const entriesByFile: Record<string, LogEntry[]> = {};
     const entryCounts: Record<string, number> = {};
 
-    for (const fp of sourceFilePaths) {
-      const snapshot = getCachedTabSnapshot(fp);
-      if (snapshot) {
-        entriesByFile[fp] = snapshot.entries;
-        entryCounts[fp] = snapshot.entries.length;
-      }
-    }
-
-    if (Object.keys(entriesByFile).length < 2 && state.sourceOpenMode === "aggregate-folder") {
+    if (state.sourceOpenMode === "aggregate-folder") {
+      // In aggregate-folder mode per-file snapshots may not be available for
+      // all files. Derive entries from the loaded aggregate state instead so
+      // we never read from (and mutate) cached snapshot arrays.
       const requestedPaths = new Set(sourceFilePaths);
       for (const entry of state.entries) {
         if (!requestedPaths.has(entry.filePath)) continue;
         if (!entriesByFile[entry.filePath]) entriesByFile[entry.filePath] = [];
         entriesByFile[entry.filePath].push(entry);
       }
-      for (const [filePath, entries] of Object.entries(entriesByFile)) {
-        entryCounts[filePath] = entries.length;
+    } else {
+      for (const fp of sourceFilePaths) {
+        const snapshot = getCachedTabSnapshot(fp);
+        if (snapshot) {
+          entriesByFile[fp] = snapshot.entries;
+        }
       }
+    }
+
+    for (const [filePath, entries] of Object.entries(entriesByFile)) {
+      entryCounts[filePath] = entries.length;
     }
 
     const validPaths = sourceFilePaths.filter((filePath) => entriesByFile[filePath]?.length);
