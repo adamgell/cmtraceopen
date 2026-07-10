@@ -22,6 +22,8 @@ ignore = [
     "RUSTSEC-2025-0081", # gtk-related (Tauri Linux)
     "RUSTSEC-2025-0098", # gtk-related (Tauri Linux)
     "RUSTSEC-2025-0100", # gtk-related (Tauri Linux)
+    "RUSTSEC-2026-0194", # quick-xml: quadratic runtime on duplicate attrs (via wayland-scanner, Tauri Linux clipboard)
+    "RUSTSEC-2026-0195", # quick-xml: unbounded namespace-declaration alloc (via wayland-scanner, Tauri Linux clipboard)
 ]
 
 [licenses]
