@@ -103,11 +103,11 @@ pub(crate) fn build_timestamp(
 
 pub(crate) fn severity_from_type_field(type_value: Option<u32>, message: &str) -> Severity {
     match type_value {
-        Some(0) => Severity::Info, // PSADT v4 Success type — treated as Info
+        Some(0) => Severity::Success, // CCM/PSADT type="0" — successful operation (OneTrace green tick)
         Some(2) => Severity::Warning,
         Some(3) => Severity::Error,
-        Some(_) => Severity::Info,
-        None => detect_severity_from_text(message),
+        Some(_) => Severity::Info, // includes type="1" and any unknown numeric type
+        None => detect_severity_from_text(message), // type absent/empty — infer from message text
     }
 }
 
@@ -274,17 +274,17 @@ fn parse_captures(caps: &regex::Captures<'_>) -> Option<CcmParsed> {
     let day: u32 = caps.name("day")?.as_str().parse().ok()?;
     let yr: i32 = caps.name("yr")?.as_str().parse().ok()?;
     let comp = caps.name("comp").map(|m| m.as_str().to_string());
-    let typ: u32 = caps
-        .name("typ")
-        .and_then(|m| m.as_str().parse().ok())
-        .unwrap_or(0);
+    // Preserve absent/empty/unparseable type as `None` so it falls back to
+    // text-based detection. Coercing to `Some(0)` would misclassify neutral
+    // lines as Success now that type="0" maps to Severity::Success.
+    let typ: Option<u32> = caps.name("typ").and_then(|m| m.as_str().parse().ok());
     let thr: u32 = caps
         .name("thr")
         .and_then(|m| m.as_str().parse().ok())
         .unwrap_or(0);
     let file = caps.name("file").map(|m| m.as_str().to_string());
 
-    let severity = severity_from_type_field(Some(typ), &msg);
+    let severity = severity_from_type_field(typ, &msg);
     let (timestamp, timestamp_display) = build_timestamp(mon, day, yr, h, m, s, ms, Some(tz));
     let thread_display = Some(format_thread_display(thr));
 
@@ -621,6 +621,32 @@ mod tests {
         assert_eq!(entries[0].thread, Some(0));
         assert_eq!(entries[0].thread_display.as_deref(), Some("0 (0x0000)"));
         assert_eq!(entries[0].source_file.as_deref(), Some("test.ps1"));
+    }
+
+    #[test]
+    fn test_parse_ccm_type_0_maps_to_success() {
+        let line = r#"<![LOG[Installation completed successfully]LOG]!><time="10:28:53.264+000" date="04-05-2026" component="install.ps1:10" context="" type="0" thread="42" file="install.ps1">"#;
+
+        let (entries, parse_errors) = parse_lines(&[line], "example.log");
+
+        assert_eq!(parse_errors, 0);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].severity, Severity::Success);
+    }
+
+    #[test]
+    fn test_severity_from_type_field_mapping() {
+        // Explicit CCM type values map directly.
+        assert_eq!(severity_from_type_field(Some(0), "anything"), Severity::Success);
+        assert_eq!(severity_from_type_field(Some(1), "anything"), Severity::Info);
+        assert_eq!(severity_from_type_field(Some(2), "anything"), Severity::Warning);
+        assert_eq!(severity_from_type_field(Some(3), "anything"), Severity::Error);
+        // Unknown numeric type falls back to Info.
+        assert_eq!(severity_from_type_field(Some(99), "anything"), Severity::Info);
+        // Absent type infers from message text — a neutral message must NOT
+        // be coerced to Success (the latent unwrap_or(0) bug).
+        assert_eq!(severity_from_type_field(None, "Performing install steps"), Severity::Info);
+        assert_eq!(severity_from_type_field(None, "Operation failed"), Severity::Error);
     }
 
     #[test]

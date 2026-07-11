@@ -247,6 +247,18 @@ export const QuickStatsPanel = memo(function QuickStatsPanel({
                   : "0%"
               }
             />
+            <StatCard
+              label="Success"
+              value={stats.bySeverity.success}
+              color="success"
+              active={activeSeverity === "Success"}
+              onClick={() => handleSeverityClick("Success")}
+              subtitle={
+                stats.filteredLineCount > 0
+                  ? `${((stats.bySeverity.success / stats.filteredLineCount) * 100).toFixed(1)}%`
+                  : "0%"
+              }
+            />
           </div>
 
           {/* Error code table */}

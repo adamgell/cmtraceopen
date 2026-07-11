@@ -6,6 +6,7 @@ export const themeSeverityPalettes: Record<ThemeId, LogSeverityPalette> = {
     error: { background: "#FEE2E2", text: "#7F1D1D" },
     warning: { background: "#FEF3C7", text: "#78350F" },
     info: { background: "#FFFFFF", text: "#111827" },
+    success: { background: "#DCFCE7", text: "#14532D" },
     highlightDefault: "#FDE68A",
     mergeColors: [
       "#2563eb", "#dc2626", "#16a34a", "#9333ea",
@@ -23,6 +24,7 @@ export const themeSeverityPalettes: Record<ThemeId, LogSeverityPalette> = {
     error: { background: "#7F1D1D", text: "#FCA5A5" },
     warning: { background: "#78350F", text: "#FDE68A" },
     info: { background: "#1E1E1E", text: "#D4D4D4" },
+    success: { background: "#14532D", text: "#86EFAC" },
     highlightDefault: "#854D0E",
     mergeColors: [
       "#60a5fa", "#f87171", "#4ade80", "#c084fc",
@@ -40,6 +42,7 @@ export const themeSeverityPalettes: Record<ThemeId, LogSeverityPalette> = {
     error: { background: "#000000", text: "#FF0000" },
     warning: { background: "#000000", text: "#FFFF00" },
     info: { background: "#000000", text: "#FFFFFF" },
+    success: { background: "#000000", text: "#00FF00" },
     highlightDefault: "#00FF00",
     mergeColors: [
       "#00BFFF", "#FF4500", "#00FF00", "#FF00FF",
@@ -57,6 +60,7 @@ export const themeSeverityPalettes: Record<ThemeId, LogSeverityPalette> = {
     error: { background: "#FF0000", text: "#FFFF00" },
     warning: { background: "#FFFF00", text: "#000000" },
     info: { background: "#FFFFFF", text: "#000000" },
+    success: { background: "#92D050", text: "#000000" },
     highlightDefault: "#FFFF00",
     mergeColors: [
       "#2563eb", "#dc2626", "#16a34a", "#9333ea",
@@ -74,6 +78,7 @@ export const themeSeverityPalettes: Record<ThemeId, LogSeverityPalette> = {
     error: { background: "#073642", text: "#DC322F" },
     warning: { background: "#073642", text: "#B58900" },
     info: { background: "#002B36", text: "#839496" },
+    success: { background: "#073642", text: "#859900" },
     highlightDefault: "#586E75",
     mergeColors: [
       "#268BD2", "#DC322F", "#859900", "#6C71C4",
@@ -91,6 +96,7 @@ export const themeSeverityPalettes: Record<ThemeId, LogSeverityPalette> = {
     error: { background: "#3B4252", text: "#BF616A" },
     warning: { background: "#3B4252", text: "#EBCB8B" },
     info: { background: "#2E3440", text: "#D8DEE9" },
+    success: { background: "#3B4252", text: "#A3BE8C" },
     highlightDefault: "#4C566A",
     mergeColors: [
       "#88C0D0", "#BF616A", "#A3BE8C", "#B48EAD",
@@ -108,6 +114,7 @@ export const themeSeverityPalettes: Record<ThemeId, LogSeverityPalette> = {
     error: { background: "#44475A", text: "#FF5555" },
     warning: { background: "#44475A", text: "#F1FA8C" },
     info: { background: "#282A36", text: "#F8F8F2" },
+    success: { background: "#44475A", text: "#50FA7B" },
     highlightDefault: "#6272A4",
     mergeColors: [
       "#8BE9FD", "#FF5555", "#50FA7B", "#BD93F9",
@@ -125,6 +132,7 @@ export const themeSeverityPalettes: Record<ThemeId, LogSeverityPalette> = {
     error: { background: "#FF0000", text: "#FFFF00" },
     warning: { background: "#FFFF00", text: "#FF0000" },
     info: { background: "#FF0000", text: "#FFFF00" },
+    success: { background: "#008000", text: "#FFFFFF" },
     highlightDefault: "#00FF00",
     mergeColors: [
       "#00BFFF", "#00FF00", "#FF69B4", "#FFFF00",

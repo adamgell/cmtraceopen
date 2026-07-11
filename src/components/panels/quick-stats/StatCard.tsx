@@ -4,7 +4,7 @@ import { Card, Text, tokens } from "@fluentui/react-components";
 export interface StatCardProps {
   label: string;
   value: number;
-  color?: "neutral" | "error" | "warning" | "info";
+  color?: "neutral" | "error" | "warning" | "info" | "success";
   subtitle?: string;
   active?: boolean;
   onClick?: () => void;
@@ -38,6 +38,11 @@ export const StatCard = memo(function StatCard({
       borderColor: tokens.colorBrandForeground1,
       backgroundColor: tokens.colorBrandBackground2,
       valueColor: tokens.colorBrandForeground1,
+    },
+    success: {
+      borderColor: tokens.colorStatusSuccessBorder1,
+      backgroundColor: tokens.colorStatusSuccessBackground2,
+      valueColor: tokens.colorStatusSuccessForeground1,
     },
   };
 

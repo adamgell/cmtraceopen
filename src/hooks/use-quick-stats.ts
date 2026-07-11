@@ -16,6 +16,7 @@ export interface QuickStats {
     error: number;
     warning: number;
     info: number;
+    success: number;
   };
   errorCodes: ErrorCodeStat[];
   earliestTimestamp: number | null;
@@ -40,7 +41,7 @@ export function useQuickStats(): QuickStats {
       return {
         totalLines: 0,
         filteredLineCount: 0,
-        bySeverity: { error: 0, warning: 0, info: 0 },
+        bySeverity: { error: 0, warning: 0, info: 0, success: 0 },
         errorCodes: [],
         earliestTimestamp: null,
         latestTimestamp: null,
@@ -52,6 +53,7 @@ export function useQuickStats(): QuickStats {
     let errorCount = 0;
     let warningCount = 0;
     let infoCount = 0;
+    let successCount = 0;
     let visibleCount = 0;
 
     const codeMap = new Map<string, { count: number; description: string; category: string }>();
@@ -71,6 +73,9 @@ export function useQuickStats(): QuickStats {
           break;
         case "Info":
           infoCount++;
+          break;
+        case "Success":
+          successCount++;
           break;
       }
 
@@ -120,6 +125,7 @@ export function useQuickStats(): QuickStats {
         error: errorCount,
         warning: warningCount,
         info: infoCount,
+        success: successCount,
       },
       errorCodes,
       earliestTimestamp: earliest,

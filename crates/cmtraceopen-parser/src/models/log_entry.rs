@@ -1,9 +1,12 @@
 use serde::{Deserialize, Serialize};
 
 /// Log entry severity level.
-/// Maps directly to CMTrace's type field: 1=Info, 2=Warning, 3=Error
+/// Maps directly to CMTrace's type field: 0=Success, 1=Info, 2=Warning, 3=Error.
+/// `Success` corresponds to CCM/PSADT `type="0"` — a completed operation that
+/// OneTrace renders with a green tick.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Severity {
+    Success,
     Info,
     Warning,
     Error,

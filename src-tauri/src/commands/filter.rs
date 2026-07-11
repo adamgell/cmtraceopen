@@ -125,6 +125,7 @@ fn matches_clause(entry: &LogEntry, compiled: &CompiledClause) -> bool {
                 crate::models::log_entry::Severity::Error => "Error",
                 crate::models::log_entry::Severity::Warning => "Warning",
                 crate::models::log_entry::Severity::Info => "Info",
+                crate::models::log_entry::Severity::Success => "Success",
             };
             match_string(sev_str, &clause.op, needle_lower)
         }
