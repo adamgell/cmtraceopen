@@ -30,6 +30,31 @@ The MSI option writes `HKLM\Software\CMTrace Open\DisableUpdateChecks=1` and sur
 
 > **Note:** You do **not** need Node.js, Rust, or any development tools to run CMTrace Open. Just download and run.
 
+## Editions: Full vs Lite
+
+CMTrace Open ships as two standalone builds from the same source. Both are single-file executables with no installer or dependencies. The download page labels them "full edition" and "lite edition". Choose **Full** unless you specifically want the smallest possible download - it is the default build and includes everything.
+
+### Full edition (default)
+
+The complete tool: the log viewer plus every specialized troubleshooting feature.
+
+| Feature | What it does | Platform |
+|---------|--------------|----------|
+| Intune Diagnostics | IntuneManagementExtension (IME) log analysis, event timeline, and download statistics | All |
+| DSRegCmd | Entra join, hybrid join, PRT, MDM, and Windows Hello for Business triage | Windows |
+| Software Deployment | Scan a folder of app-install logs (MSI, PSADT, Burn, PatchMyPC) for exit codes and failures | Windows |
+| Event Log Viewer | Open and query Windows Event Log (`.evtx`) files; enumerate live channels | All (live channels: Windows) |
+| Sysmon | Sysmon operational event log analysis | Windows |
+| Secure Boot Certs | Secure Boot certificate-rotation analysis and remediation | All (live scan: Windows) |
+| macOS Diagnostics | Intune, Defender, configuration profile, and package diagnostics | macOS |
+| Diagnostic Collection | Gather logs, registry keys, and event logs into an evidence bundle | Windows |
+
+### Lite edition
+
+The core log viewer only. It keeps everything under **Log Viewer** below - format auto-detection, real-time tailing, virtual scrolling, find and filter, text highlighting, and the embedded error-code database - plus the Timeline and DNS / DHCP tools. It leaves out the eight specialized features above, which also drops the Windows Event Log and property-list parsers and makes the binary noticeably smaller. Choose Lite if you just want a fast, portable, CMTrace-style log reader with a minimal footprint.
+
+Both editions read the same log formats and share the same viewer, so a log you can open in Full opens identically in Lite.
+
 ## Features
 
 ### Log Viewer
