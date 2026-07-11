@@ -52,7 +52,33 @@ fn get_initial_file_paths_from_args() -> Vec<String> {
 pub fn run() {
     let initial_file_paths = get_initial_file_paths_from_args();
 
+    // Route panics to the persistent log so a hard crash (e.g. the reported
+    // out-of-memory failure) leaves a line users can attach to a report.
+    // Chained after the default hook so the standard abort message is kept.
+    let default_panic_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        log::error!("panic: {info}");
+        default_panic_hook(info);
+    }));
+
     tauri::Builder::default()
+        // Persistent file logging (issue #193): the backend already uses the
+        // `log` facade throughout, but no logger backend was ever registered so
+        // those messages went nowhere. Write to the OS app-log dir with a size
+        // cap + rotation, and keep stderr for `npm run app:dev`.
+        .plugin(
+            tauri_plugin_log::Builder::new()
+                .targets([
+                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::LogDir {
+                        file_name: Some("cmtrace-open".into()),
+                    }),
+                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Stderr),
+                ])
+                .level(log::LevelFilter::Info)
+                .max_file_size(5_000_000)
+                .rotation_strategy(tauri_plugin_log::RotationStrategy::KeepOne)
+                .build(),
+        )
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_clipboard_manager::init())
