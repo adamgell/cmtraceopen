@@ -4,8 +4,20 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **Log error navigation (#192)**: Toolbar controls to jump straight to the previous or next error/warning entry in the log view, so you can step through problems without scrolling.
+- **Teams (MSIX) client log collection (#205, #242)**: The log collector and known-sources list now cover the new Microsoft Teams (MSIX) client log locations.
+
+### Fixed
+
+- **Session filter restore and persistent error logging (#193, #244)**: Opening a saved session now restores the filter that was active when it was saved, and the app writes persistent error logs to make troubleshooting easier.
+- **Tail view reset on truncation or rotation (#234, #243)**: When a tailed file is truncated or rotated, the view now resets and re-reads from the start instead of showing stale or duplicated lines.
+
 ### Changed
 
+- **Tauri 2.11 runtime (#240)**: Upgraded the app to the Tauri 2.11 stack (runtime/webview) to match the frontend, and repaired the Cargo workspace and a stale lockfile so CI, nightly, and release builds pass again.
+- **TypeScript 7 (#247)**: Upgraded the frontend compiler from TypeScript 6 to the native (Go) **TypeScript 7.0.2** (GA). No source changes were required — `tsc --noEmit`, the production build (`tsc && vite build`), and the full test suite (123 tests) all pass unchanged. Type-checking is **~5.5× faster** (`tsc --noEmit` ~3.8s → ~0.7s), speeding up both CI's TypeScript Check job and local builds. The native compiler distributes as per-platform binaries via optional dependencies, so the lockfile carries `@typescript/typescript-<os>-<arch>` entries for each CI target.
 - **Re-issued code-signing certificate**: Windows builds are now signed with a re-issued Azure Trusted Signing certificate. The signature is still a valid Microsoft Public Trust certificate, and macOS builds remain signed and notarized — but because the underlying signing identity was renewed, Windows SmartScreen reputation is rebuilding. Fresh installs may briefly show an "unrecognized app" / unknown-publisher prompt until reputation re-establishes over the following weeks. The installers are validly signed; choosing **More info → Run anyway** is safe.
 
 ## [1.3.2] - 2026-05-11
