@@ -83,4 +83,23 @@ mod tests {
         profile.filter_by_families(&[]);
         assert_eq!(profile.total_items(), 0);
     }
+
+    #[test]
+    fn embedded_profile_includes_new_teams_msix_logs() {
+        // Regression guard for issue #205: the new Teams (MSIX) client writes
+        // logs under %LOCALAPPDATA%\Packages\MSTeams_8wekyb3d8bbwe\..., which the
+        // classic-Teams manifest rows do not cover.
+        let profile = CollectionProfile::embedded();
+        let item = profile
+            .logs
+            .iter()
+            .find(|i| i.id == "teams-msix-logs")
+            .expect("profile must contain the new Teams MSIX log source");
+        assert_eq!(item.family, "teams");
+        assert!(
+            item.source_pattern.contains("MSTeams_8wekyb3d8bbwe"),
+            "unexpected source pattern: {}",
+            item.source_pattern
+        );
+    }
 }
