@@ -1,6 +1,7 @@
 //! Integration test against the real DNS audit EVTX fixture.
 //! Skipped if the fixture file is not present.
 //! Requires the `event-log` feature.
+#![cfg(feature = "event-log")]
 
 use std::path::Path;
 
@@ -10,7 +11,6 @@ const FIXTURE_PATH: &str = concat!(
 );
 
 #[test]
-#[cfg(feature = "event-log")]
 fn test_real_dns_audit_evtx() {
     if !Path::new(FIXTURE_PATH).exists() {
         eprintln!("Skipping: real DNS audit EVTX fixture not found at {}", FIXTURE_PATH);

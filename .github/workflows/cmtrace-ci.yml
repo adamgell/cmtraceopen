@@ -64,11 +64,11 @@ jobs:
 
       - name: Rust clippy (lite)
         working-directory: src-tauri
-        run: cargo clippy --no-default-features -- -D warnings
+        run: cargo clippy --no-default-features --all-targets -- -D warnings
 
       - name: Rust clippy
         working-directory: src-tauri
-        run: cargo clippy -- -D warnings
+        run: cargo clippy --all-targets -- -D warnings
 
       - name: Install cargo-deny and cargo-audit
         uses: taiki-e/install-action@9bcaee1dcae34154180f412e2fa69355a7cda9f6 # v2.82.6
