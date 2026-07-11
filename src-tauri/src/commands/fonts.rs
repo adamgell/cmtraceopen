@@ -38,7 +38,7 @@ mod tests {
     fn test_list_is_sorted() {
         let result = list_system_fonts();
         let mut sorted = result.families.clone();
-        sorted.sort_unstable_by(|a, b| a.to_ascii_lowercase().cmp(&b.to_ascii_lowercase()));
+        sorted.sort_unstable_by_key(|a| a.to_ascii_lowercase());
         assert_eq!(result.families, sorted);
     }
 
