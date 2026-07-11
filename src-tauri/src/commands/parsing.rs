@@ -13,6 +13,10 @@ use crate::watcher::tail;
 pub struct TailPayload {
     pub entries: Vec<LogEntry>,
     pub file_path: String,
+    /// True when the tailed file was truncated/rotated: `entries` are a fresh
+    /// read from the start of the file and the frontend must replace, not
+    /// append to, its existing view for this file.
+    pub reset: bool,
 }
 
 /// Start tailing a file for new log entries.
@@ -53,10 +57,11 @@ pub fn start_tail(
         parser_selection,
         next_id,
         next_line,
-        move |entries| {
+        move |batch| {
             let payload = TailPayload {
-                entries,
+                entries: batch.entries,
                 file_path: file_path_for_event.clone(),
+                reset: batch.reset,
             };
             if let Err(e) = app.emit("tail-new-entries", &payload) {
                 log::error!("Failed to emit tail entries: {}", e);

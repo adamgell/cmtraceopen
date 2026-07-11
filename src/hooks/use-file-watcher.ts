@@ -19,6 +19,8 @@ export function useFileWatcher() {
   const isPaused = useLogStore((s) => s.isPaused);
   const appendEntries = useLogStore((s) => s.appendEntries);
   const appendAggregateEntries = useLogStore((s) => s.appendAggregateEntries);
+  const resetEntries = useLogStore((s) => s.resetEntries);
+  const resetAggregateEntries = useLogStore((s) => s.resetAggregateEntries);
   const setParserSelection = useLogStore((s) => s.setParserSelection);
 
   // Start/stop tailing when file changes
@@ -101,13 +103,24 @@ export function useFileWatcher() {
   // Listen for new tail entries from the Rust backend
   useEffect(() => {
     const unlisten = listen<TailPayload>("tail-new-entries", (event) => {
-      const { entries: newEntries, filePath, parserSelection } = event.payload;
+      const { entries: newEntries, filePath, parserSelection, reset } = event.payload;
       const state = useLogStore.getState();
 
       if (state.sourceOpenMode === "aggregate-folder") {
         const isTrackedFile = state.aggregateFiles.some((file) => file.filePath === filePath);
 
-        if (!isTrackedFile || newEntries.length === 0) {
+        if (!isTrackedFile) {
+          return;
+        }
+
+        // A truncation reset must clear stale entries even when the fresh read
+        // is empty, so it cannot be gated behind the empty-batch guard below.
+        if (reset) {
+          resetAggregateEntries(filePath, newEntries);
+          return;
+        }
+
+        if (newEntries.length === 0) {
           return;
         }
 
@@ -117,12 +130,21 @@ export function useFileWatcher() {
 
       const currentPath = state.openFilePath;
 
-      if (!currentPath || currentPath !== filePath || newEntries.length === 0) {
+      if (!currentPath || currentPath !== filePath) {
         return;
       }
 
       if (parserSelection) {
         setParserSelection(parserSelection);
+      }
+
+      if (reset) {
+        resetEntries(newEntries);
+        return;
+      }
+
+      if (newEntries.length === 0) {
+        return;
       }
 
       appendEntries(newEntries);
@@ -131,5 +153,11 @@ export function useFileWatcher() {
     return () => {
       unlisten.then((fn) => fn());
     };
-  }, [appendAggregateEntries, appendEntries, setParserSelection]);
+  }, [
+    appendAggregateEntries,
+    appendEntries,
+    resetAggregateEntries,
+    resetEntries,
+    setParserSelection,
+  ]);
 }

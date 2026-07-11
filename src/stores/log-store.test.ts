@@ -65,6 +65,61 @@ describe("log-store", () => {
     });
   });
 
+  describe("resetEntries (tail truncation)", () => {
+    it("replaces the whole view with the fresh read and resets totalLines", () => {
+      useLogStore.getState().setEntries([makeEntry({ id: 1 }), makeEntry({ id: 2 })]);
+      useLogStore.getState().setTotalLines(2);
+      useLogStore.getState().appendEntries([makeEntry({ id: 3 })]);
+      expect(useLogStore.getState().entries).toHaveLength(3);
+
+      // The tailed file was truncated: the fresh read is a single new entry.
+      useLogStore.getState().resetEntries([makeEntry({ id: 4, message: "rotated" })]);
+
+      expect(useLogStore.getState().entries).toHaveLength(1);
+      expect(useLogStore.getState().entries[0].message).toBe("rotated");
+      expect(useLogStore.getState().totalLines).toBe(1);
+    });
+
+    it("clears selectedId when the selected entry is gone after reset", () => {
+      useLogStore.getState().setEntries([makeEntry({ id: 1 }), makeEntry({ id: 2 })]);
+      useLogStore.getState().selectEntry(2);
+      useLogStore.getState().resetEntries([makeEntry({ id: 5 })]);
+      expect(useLogStore.getState().selectedId).toBeNull();
+    });
+
+    it("handles an empty fresh read when the file is truncated to empty", () => {
+      useLogStore.getState().setEntries([makeEntry({ id: 1 })]);
+      useLogStore.getState().setTotalLines(1);
+      useLogStore.getState().resetEntries([]);
+      expect(useLogStore.getState().entries).toHaveLength(0);
+      expect(useLogStore.getState().totalLines).toBe(0);
+    });
+  });
+
+  describe("resetAggregateEntries (tail truncation)", () => {
+    it("replaces only the truncated file's entries and preserves the others", () => {
+      useLogStore.getState().setEntries([
+        makeEntry({ id: 1, filePath: "/a.log", timestamp: 100 }),
+        makeEntry({ id: 2, filePath: "/b.log", timestamp: 200 }),
+      ]);
+
+      useLogStore
+        .getState()
+        .resetAggregateEntries("/a.log", [
+          makeEntry({ id: 99, filePath: "/a.log", message: "rotated-a", timestamp: 50 }),
+        ]);
+
+      const entries = useLogStore.getState().entries;
+      const aEntries = entries.filter((e) => e.filePath === "/a.log");
+      const bEntries = entries.filter((e) => e.filePath === "/b.log");
+
+      expect(bEntries).toHaveLength(1);
+      expect(aEntries).toHaveLength(1);
+      expect(aEntries[0].message).toBe("rotated-a");
+      expect(useLogStore.getState().totalLines).toBe(2);
+    });
+  });
+
   describe("selectEntry", () => {
     it("sets and clears selection", () => {
       useLogStore.getState().selectEntry(5);
