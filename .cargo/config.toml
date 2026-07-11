@@ -1,0 +1,6 @@
+# src-tauri is now a member of the cmtraceopen workspace, so Cargo's default
+# target directory would move to the workspace root (target/). Pin it back to
+# src-tauri/target so the release, nightly, and CI artifact/cache paths (which
+# reference src-tauri/target/...) keep working without changes.
+[build]
+target-dir = "src-tauri/target"
