@@ -1,0 +1,14 @@
+# cargo-audit configuration.
+#
+# cargo-audit does NOT read src-tauri/deny.toml, so vulnerability advisories
+# that cannot be resolved by a version bump must be listed here as well.
+# Keep this list in sync with the [advisories] ignore list in src-tauri/deny.toml.
+#
+# All entries are transitive dependencies we do not control and cannot upgrade
+# without an upstream Tauri stack bump.
+[advisories]
+ignore = [
+    "RUSTSEC-2026-0194", # quick-xml <0.41: quadratic runtime on duplicate attrs (transitive: plist/Tauri, wayland-scanner)
+    "RUSTSEC-2026-0195", # quick-xml <0.41: unbounded namespace-declaration alloc (transitive: plist/Tauri, wayland-scanner)
+    "RUSTSEC-2026-0204", # crossbeam-epoch: invalid pointer deref in fmt::Pointer impl (transitive)
+]
