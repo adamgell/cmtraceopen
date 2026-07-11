@@ -558,6 +558,8 @@ interface LogState {
   hasFindSession: () => boolean;
   setEntries: (entries: LogEntry[]) => void;
   appendEntries: (entries: LogEntry[]) => void;
+  /** Replace the single-file view after a tailed file was truncated/rotated. */
+  resetEntries: (entries: LogEntry[]) => void;
   selectEntry: (id: number | null) => void;
   togglePause: () => void;
   setLoading: (loading: boolean) => void;
@@ -583,6 +585,8 @@ interface LogState {
   setFindUseRegex: (useRegex: boolean) => void;
   recomputeFindMatches: () => void;
   appendAggregateEntries: (filePath: string, entries: LogEntry[]) => void;
+  /** Replace one file's entries in an aggregate stream after it was truncated/rotated. */
+  resetAggregateEntries: (filePath: string, entries: LogEntry[]) => void;
   findNext: (trigger: string) => void;
   findPrevious: (trigger: string) => void;
   clearFind: () => void;
@@ -759,6 +763,22 @@ export const useLogStore = create<LogState>((set, get) => ({
     }));
     recomputeAndSetMatches();
   },
+  resetEntries: (newEntries) => {
+    // The tailed file was truncated/rotated: `newEntries` are a fresh read from
+    // the start of the file, so replace the whole view instead of appending.
+    // Without this, rotated logs accumulate forever and eventually OOM.
+    set((state) => ({
+      entries: newEntries,
+      totalLines: newEntries.length,
+      guidNameMap: buildGuidNameMap(newEntries),
+      selectedId:
+        state.selectedId !== null &&
+        !newEntries.some((entry) => entry.id === state.selectedId)
+          ? null
+          : state.selectedId,
+    }));
+    recomputeAndSetMatches();
+  },
   appendAggregateEntries: (filePath, newEntries) => {
     set((state) => {
       const nextId = state.entries.reduce(
@@ -779,6 +799,38 @@ export const useLogStore = create<LogState>((set, get) => ({
         entries,
         totalLines: state.totalLines + entriesWithIds.length,
         guidNameMap: mergeGuidNameMap(state.guidNameMap, newEntries),
+      };
+    });
+    recomputeAndSetMatches();
+  },
+  resetAggregateEntries: (filePath, newEntries) => {
+    // One file in the aggregate stream was truncated/rotated: drop its stale
+    // entries and re-insert the fresh read, keeping the merged sort order.
+    set((state) => {
+      const remaining = state.entries.filter((entry) => entry.filePath !== filePath);
+      const nextId = remaining.reduce(
+        (maxId, entry) => Math.max(maxId, entry.id),
+        -1
+      ) + 1;
+      const entriesWithIds = newEntries.map((entry, index) => ({
+        ...entry,
+        filePath,
+        id: nextId + index,
+      }));
+      const fileOrder = buildAggregateFileOrder(state.aggregateFiles);
+      const entries = [...remaining, ...entriesWithIds].sort((left, right) =>
+        compareMergedLogEntries(left, right, fileOrder)
+      );
+
+      return {
+        entries,
+        totalLines: entries.length,
+        guidNameMap: buildGuidNameMap(entries),
+        selectedId:
+          state.selectedId !== null &&
+          !entries.some((entry) => entry.id === state.selectedId)
+            ? null
+            : state.selectedId,
       };
     });
     recomputeAndSetMatches();

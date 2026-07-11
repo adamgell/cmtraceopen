@@ -244,4 +244,10 @@ export interface TailPayload {
   entries: LogEntry[];
   filePath: string;
   parserSelection?: ParserSelectionInfo;
+  /**
+   * True when the tailed file was truncated/rotated: `entries` are a fresh read
+   * from the start of the file and any previously received entries for this file
+   * are now stale. Consumers must replace, not append, their existing view.
+   */
+  reset: boolean;
 }

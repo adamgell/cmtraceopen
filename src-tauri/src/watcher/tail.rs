@@ -11,6 +11,21 @@ use crate::parser::{self, FileEncoding, ResolvedParser};
 const IME_RECORD_START: &str = "<![LOG[";
 const IME_RECORD_ATTRS_START: &str = "]LOG]!><";
 
+/// The result of reading new content from a tailed file.
+pub struct TailBatch {
+    /// Complete log records parsed since the last read.
+    pub entries: Vec<LogEntry>,
+    /// True when the file was detected as truncated/rotated during this read.
+    ///
+    /// On truncation the reader rewinds to the start of the file, so `entries`
+    /// (when non-empty) represent a fresh read from byte 0 and any entries
+    /// previously emitted for this file are now stale. Consumers must replace,
+    /// not append, their existing view for this file. A reset can also arrive
+    /// with an empty `entries` list (file truncated to empty), which still
+    /// means the prior view should be cleared.
+    pub reset: bool,
+}
+
 /// Manages incremental reading of a log file from a tracked byte offset.
 pub struct TailReader {
     path: PathBuf,
@@ -53,24 +68,33 @@ impl TailReader {
     }
 
     /// Read new content from the file since last read, parse into entries.
-    /// Returns new entries and updates internal byte_offset.
-    pub fn read_new_entries(&mut self) -> Result<Vec<LogEntry>, crate::error::AppError> {
+    /// Returns the new entries plus a `reset` flag and updates internal byte_offset.
+    pub fn read_new_entries(&mut self) -> Result<TailBatch, crate::error::AppError> {
         let mut file = std::fs::File::open(&self.path).map_err(crate::error::AppError::Io)?;
 
         let metadata = file.metadata().map_err(crate::error::AppError::Io)?;
 
         let file_size = metadata.len();
 
-        // File was truncated (e.g. log rotation) — reset to beginning
+        // File was truncated (e.g. log rotation) — rewind to the beginning and
+        // signal a reset so the frontend replaces (not appends) its stale view.
+        // Line numbers restart at 1 to match the new file generation; ids stay
+        // monotonic so they remain unique across the reset.
+        let mut reset = false;
         if file_size < self.byte_offset {
             self.byte_offset = 0;
             self.pending_fragment.clear();
             self.pending_byte = None;
+            self.next_line = 1;
+            reset = true;
         }
 
         // No new data
         if file_size == self.byte_offset {
-            return Ok(vec![]);
+            return Ok(TailBatch {
+                entries: vec![],
+                reset,
+            });
         }
 
         // Seek to our byte offset
@@ -133,7 +157,10 @@ impl TailReader {
 
         if lines.is_empty() {
             self.byte_offset = file_size;
-            return Ok(vec![]);
+            return Ok(TailBatch {
+                entries: vec![],
+                reset,
+            });
         }
 
         // Parse the new complete records through the same dispatch path as initial parsing.
@@ -153,7 +180,7 @@ impl TailReader {
         // actual file size so the same bytes are not read and prepended again.
         self.byte_offset = file_size;
 
-        Ok(entries)
+        Ok(TailBatch { entries, reset })
     }
 }
 
@@ -247,7 +274,7 @@ pub fn start_tail_session<F>(
     on_new_entries: F,
 ) -> Result<TailSession, crate::error::AppError>
 where
-    F: Fn(Vec<LogEntry>) + Send + 'static,
+    F: Fn(TailBatch) + Send + 'static,
 {
     let stop_flag = Arc::new(AtomicBool::new(false));
     let paused = Arc::new(AtomicBool::new(false));
@@ -300,9 +327,9 @@ where
                             if event.paths.iter().any(|p| p == &watch_path)
                                 && !paused_clone.load(Ordering::Relaxed) =>
                         {
-                            if let Ok(entries) = tail_reader.read_new_entries() {
-                                if !entries.is_empty() {
-                                    on_new_entries(entries);
+                            if let Ok(batch) = tail_reader.read_new_entries() {
+                                if batch.reset || !batch.entries.is_empty() {
+                                    on_new_entries(batch);
                                 }
                             }
                         }
@@ -315,9 +342,9 @@ where
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
                     // Periodic poll — check for changes even without FS event
                     if !paused_clone.load(Ordering::Relaxed) {
-                        if let Ok(entries) = tail_reader.read_new_entries() {
-                            if !entries.is_empty() {
-                                on_new_entries(entries);
+                        if let Ok(batch) = tail_reader.read_new_entries() {
+                            if batch.reset || !batch.entries.is_empty() {
+                                on_new_entries(batch);
                             }
                         }
                     }
@@ -418,7 +445,7 @@ mod tests {
         writeln!(file, "16/01/2024 09:30:00 Follow-up entry").expect("should append log line");
         drop(file);
 
-        let entries = reader.read_new_entries().expect("tail read should succeed");
+        let entries = reader.read_new_entries().expect("tail read should succeed").entries;
 
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].format, LogFormat::Timestamped);
@@ -456,7 +483,8 @@ mod tests {
 
         let first_entries = reader
             .read_new_entries()
-            .expect("first tail read should succeed");
+            .expect("first tail read should succeed")
+            .entries;
         assert_eq!(first_entries.len(), 1);
         assert_eq!(first_entries[0].message, "complete");
 
@@ -469,7 +497,8 @@ mod tests {
 
         let second_entries = reader
             .read_new_entries()
-            .expect("second tail read should succeed");
+            .expect("second tail read should succeed")
+            .entries;
         assert_eq!(second_entries.len(), 1);
         assert_eq!(second_entries[0].message, "partial done");
 
@@ -540,7 +569,10 @@ mod tests {
             write!(file, "{}", appended).expect("should append trailing fixture chunk");
             drop(file);
 
-            let tail_entries = reader.read_new_entries().expect("tail read should succeed");
+            let tail_entries = reader
+                .read_new_entries()
+                .expect("tail read should succeed")
+                .entries;
             let (full_result, _) =
                 parser::parse_file(&path_str).expect("full fixture should parse");
             let expected_entries = &full_result.entries[initial_result.entries.len()..];
@@ -601,7 +633,8 @@ mod tests {
 
         let partial_entries = reader
             .read_new_entries()
-            .expect("partial IME tail read should succeed");
+            .expect("partial IME tail read should succeed")
+            .entries;
 
         assert!(partial_entries.is_empty());
 
@@ -618,7 +651,8 @@ mod tests {
 
         let tail_entries = reader
             .read_new_entries()
-            .expect("complete IME tail read should succeed");
+            .expect("complete IME tail read should succeed")
+            .entries;
         let (full_result, _) = parser::parse_file(&path_str).expect("full fixture should parse");
 
         assert_eq!(tail_entries.len(), 1);
@@ -626,9 +660,58 @@ mod tests {
 
         let repeat_entries = reader
             .read_new_entries()
-            .expect("subsequent IME tail read should succeed");
+            .expect("subsequent IME tail read should succeed")
+            .entries;
         assert!(repeat_entries.is_empty());
 
         fs::remove_dir_all(root).expect("should clean up temp IME fixture");
+    }
+
+    #[test]
+    fn test_tail_reader_signals_reset_and_rewinds_on_truncation() {
+        let path = unique_test_path("tail-reader-truncation");
+        fs::write(
+            &path,
+            "15/01/2024 08:00:00 First entry\n15/01/2024 08:00:01 Second entry\n",
+        )
+        .expect("should write initial file");
+
+        let byte_offset = fs::metadata(&path).expect("metadata should exist").len();
+        let selection = ResolvedParser::generic_timestamped(DateOrder::DayFirst);
+        let mut reader = TailReader::new(path.clone(), byte_offset, selection, 2, 3);
+
+        // Normal append — should NOT signal a reset.
+        let mut file = OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .expect("should reopen temp file");
+        writeln!(file, "15/01/2024 08:00:02 Third entry").expect("should append log line");
+        drop(file);
+
+        let batch = reader
+            .read_new_entries()
+            .expect("append tail read should succeed");
+        assert!(!batch.reset, "appending must not signal a reset");
+        assert_eq!(batch.entries.len(), 1);
+        assert_eq!(batch.entries[0].id, 2);
+        assert_eq!(batch.entries[0].line_number, 3);
+
+        // Truncate to a smaller size (log rotation) and write fresh content.
+        fs::write(&path, "16/01/2024 09:00:00 Rotated entry\n").expect("should truncate file");
+
+        let batch = reader
+            .read_new_entries()
+            .expect("truncated tail read should succeed");
+        assert!(
+            batch.reset,
+            "truncation must signal a reset so the UI can drop stale entries"
+        );
+        assert_eq!(batch.entries.len(), 1);
+        assert!(batch.entries[0].message.contains("Rotated entry"));
+        // Line numbers restart at 1 for the new file generation; ids stay monotonic.
+        assert_eq!(batch.entries[0].line_number, 1);
+        assert_eq!(batch.entries[0].id, 3);
+
+        fs::remove_file(path).expect("should clean up temp file");
     }
 }
