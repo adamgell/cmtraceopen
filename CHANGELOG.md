@@ -6,6 +6,7 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
+- **TypeScript 7 (#247)**: Upgraded the frontend compiler from TypeScript 6 to the native (Go) **TypeScript 7.0.2** (GA). No source changes were required — `tsc --noEmit`, the production build (`tsc && vite build`), and the full test suite (123 tests) all pass unchanged. Type-checking is **~5.5× faster** (`tsc --noEmit` ~3.8s → ~0.7s), speeding up both CI's TypeScript Check job and local builds. The native compiler distributes as per-platform binaries via optional dependencies, so the lockfile carries `@typescript/typescript-<os>-<arch>` entries for each CI target.
 - **Re-issued code-signing certificate**: Windows builds are now signed with a re-issued Azure Trusted Signing certificate. The signature is still a valid Microsoft Public Trust certificate, and macOS builds remain signed and notarized — but because the underlying signing identity was renewed, Windows SmartScreen reputation is rebuilding. Fresh installs may briefly show an "unrecognized app" / unknown-publisher prompt until reputation re-establishes over the following weeks. The installers are validly signed; choosing **More info → Run anyway** is safe.
 
 ## [1.3.2] - 2026-05-11
