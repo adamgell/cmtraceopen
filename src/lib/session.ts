@@ -1,3 +1,9 @@
+import type {
+  FilterClause,
+  FilterField,
+  FilterOp,
+} from "../components/dialogs/FilterDialog";
+
 export interface SessionFile {
   version: number;
   savedAt: string;
@@ -26,7 +32,7 @@ export interface SessionMergedState {
 }
 
 export interface SessionFilters {
-  clauses: unknown[];
+  clauses: FilterClause[];
   findQuery: string;
   findCaseSensitive: boolean;
   findUseRegex: boolean;
@@ -50,6 +56,42 @@ export type SessionWorkspaceState =
   | { type: string };
 
 const CURRENT_VERSION = 1;
+
+// Valid filter clause fields/ops, mirrored from FilterDialog. Used to sanitize
+// clauses loaded from a session file so a malformed or hand-edited session can
+// never inject a clause that would be replayed to the backend `apply_filter`.
+const FILTER_FIELDS: readonly FilterField[] = [
+  "Message",
+  "Component",
+  "Thread",
+  "Timestamp",
+  "Severity",
+];
+const FILTER_OPS: readonly FilterOp[] = [
+  "Equals",
+  "NotEquals",
+  "Contains",
+  "NotContains",
+  "Before",
+  "After",
+];
+
+/** Keep only well-formed filter clauses from an untrusted session file. */
+function sanitizeClauses(raw: unknown): FilterClause[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.flatMap((candidate) => {
+    if (typeof candidate !== "object" || candidate === null) return [];
+    const c = candidate as Record<string, unknown>;
+    if (
+      (FILTER_FIELDS as readonly string[]).includes(c.field as string) &&
+      (FILTER_OPS as readonly string[]).includes(c.op as string) &&
+      typeof c.value === "string"
+    ) {
+      return [{ field: c.field as FilterField, op: c.op as FilterOp, value: c.value }];
+    }
+    return [];
+  });
+}
 
 export function createEmptySession(): SessionFile {
   return {
@@ -101,7 +143,7 @@ export function validateSession(data: unknown): SessionFile | null {
     ? obj.filters as Record<string, unknown>
     : {};
   const filters: SessionFilters = {
-    clauses: Array.isArray(rawFilters.clauses) ? rawFilters.clauses : [],
+    clauses: sanitizeClauses(rawFilters.clauses),
     findQuery: typeof rawFilters.findQuery === "string" ? rawFilters.findQuery : "",
     findCaseSensitive: typeof rawFilters.findCaseSensitive === "boolean" ? rawFilters.findCaseSensitive : false,
     findUseRegex: typeof rawFilters.findUseRegex === "boolean" ? rawFilters.findUseRegex : false,

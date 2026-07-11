@@ -3,6 +3,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { readTextFile } from "@tauri-apps/plugin-fs";
 import { useLogStore } from "../stores/log-store";
 import { useUiStore } from "../stores/ui-store";
+import { useFilterStore } from "../stores/filter-store";
 import { loadPathAsLogSource, loadFilesAsLogSource } from "./log-source";
 import { validateSession, type FileChangeWarning } from "./session";
 
@@ -153,13 +154,21 @@ export async function restoreSession(sessionPath: string): Promise<string | null
     }
   }
 
-  // Restore filters AFTER files are loaded so find/highlight operate on the loaded entries
+  // Restore filters AFTER files are loaded so find/highlight/filter operate on
+  // the loaded entries. This runs after clearTabs() above (which clears the
+  // filter store), so it must repopulate the filter clauses too — otherwise
+  // Open Session silently drops the saved filter (issue #193).
   const logStore = useLogStore.getState();
   if (session.filters) {
     logStore.setHighlightText(session.filters.highlightText || "");
     logStore.setFindQuery(session.filters.findQuery || "");
     logStore.setFindCaseSensitive(session.filters.findCaseSensitive ?? false);
     logStore.setFindUseRegex(session.filters.findUseRegex ?? false);
+    if (session.filters.clauses.length > 0) {
+      // Writing the store re-applies the filter to the loaded entries and
+      // refreshes the toolbar badge, status bar, and Filter dialog.
+      useFilterStore.getState().setClauses(session.filters.clauses);
+    }
   }
 
   return sessionPath;
