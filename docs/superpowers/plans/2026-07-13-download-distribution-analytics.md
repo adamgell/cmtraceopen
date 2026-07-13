@@ -785,6 +785,7 @@ Do not edit the live release or push.
 - Modify: `public/cmtraceopen/index.html`
 - Modify: `public/cmtraceopen/app.js`
 - Modify: `public/cmtraceopen/styles.css`
+- Create: `public/cmtraceopen/asset-links.js`
 - Create: `tests/cmtrace-nightly-links.test.mjs`
 
 **Interfaces:**
@@ -794,7 +795,7 @@ Do not edit the live release or push.
 
 - [ ] **Step 1: Write a failing DOM/source test**
 
-Assert index contains both family links. Import/export `assetHref(asset)` from `app.js` and assert numeric asset IDs produce branded URLs, while `latest.json`, updater archives, signatures, and assets without numeric IDs keep their safe GitHub URL or are omitted from human groups according to existing visibility rules.
+Assert index contains both family links. Import `assetHref(asset)` from the pure `asset-links.js` module and assert numeric asset IDs produce branded URLs, while `latest.json`, updater archives, signatures, and assets without numeric IDs keep their safe GitHub URL or are omitted from human groups according to existing visibility rules.
 
 - [ ] **Step 2: Run the test and verify it fails**
 
@@ -811,7 +812,7 @@ export function assetHref(asset) {
 }
 ```
 
-Call this only for visible human-selected nightly assets. Keep GitHub API fetches, release records, updater metadata, and workflow links direct.
+Import this helper into `app.js` and call it only for visible human-selected nightly assets. Keep GitHub API fetches, release records, updater metadata, and workflow links direct.
 
 - [ ] **Step 4: Apply shared visual cues without changing page ownership**
 
@@ -830,7 +831,7 @@ npm run build
 Expected: all pass and the broader Adam Gell site builds.
 
 ```bash
-git add public/cmtraceopen/index.html public/cmtraceopen/app.js public/cmtraceopen/styles.css tests/cmtrace-nightly-links.test.mjs
+git add public/cmtraceopen/index.html public/cmtraceopen/app.js public/cmtraceopen/styles.css public/cmtraceopen/asset-links.js tests/cmtrace-nightly-links.test.mjs
 git commit -m "feat: connect nightly builds to download center"
 ```
 
