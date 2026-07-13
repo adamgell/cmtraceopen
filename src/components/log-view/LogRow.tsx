@@ -63,6 +63,10 @@ function getRowStyle(
       bg = palette.warning.background;
       color = palette.warning.text;
       break;
+    case "Success":
+      bg = palette.success.background;
+      color = palette.success.text;
+      break;
     default:
       bg = palette.info.background;
       color = palette.info.text;
@@ -217,6 +221,8 @@ function getSeverityDotColor(
       return palette.error.text;
     case "Warning":
       return palette.warning.text;
+    case "Success":
+      return palette.success.text;
     default:
       return tokens.colorNeutralForeground4;
   }

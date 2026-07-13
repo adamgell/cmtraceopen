@@ -29,6 +29,7 @@ interface SeverityCounts {
   errors: number;
   warnings: number;
   info: number;
+  success: number;
 }
 
 function formatSeverityCounts(counts: SeverityCounts): string {
@@ -36,6 +37,7 @@ function formatSeverityCounts(counts: SeverityCounts): string {
   if (counts.errors > 0) parts.push(`${counts.errors} error${counts.errors === 1 ? "" : "s"}`);
   if (counts.warnings > 0) parts.push(`${counts.warnings} warning${counts.warnings === 1 ? "" : "s"}`);
   if (counts.info > 0) parts.push(`${counts.info} info`);
+  if (counts.success > 0) parts.push(`${counts.success} success`);
   return parts.join(", ");
 }
 
@@ -104,6 +106,7 @@ export function StatusBar() {
     let errors = 0;
     let warnings = 0;
     let info = 0;
+    let success = 0;
     let counter = 0;
 
     for (const entry of entries) {
@@ -119,12 +122,15 @@ export function StatusBar() {
         case "Info":
           info++;
           break;
+        case "Success":
+          success++;
+          break;
       }
     }
 
     return {
       filteredCount: counter,
-      severityCounts: { errors, warnings, info },
+      severityCounts: { errors, warnings, info, success },
     };
   }, [entries, filteredIds]);
 

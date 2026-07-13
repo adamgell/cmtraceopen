@@ -11,6 +11,11 @@ export interface LogSeverityPalette {
     background: string;
     text: string;
   };
+  /** Row/dot colors for CCM type="0" successful operations. */
+  success: {
+    background: string;
+    text: string;
+  };
   highlightDefault: string;
 
   /** Fixed 8-color palette for merge tab / section identification (OQ-2). */
