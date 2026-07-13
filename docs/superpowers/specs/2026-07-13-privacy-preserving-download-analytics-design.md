@@ -8,7 +8,13 @@
 
 ## Decision Summary
 
-`https://download.cmtraceopen.com/` will become the canonical human download entry point for CMTrace Open. GitHub Releases will remain the storage and delivery origin for every published binary. The new download host will serve the download page and redirect human-selected downloads to their existing GitHub release assets.
+`https://download.cmtraceopen.com/` will become the canonical stable-download entry point for CMTrace Open. GitHub Releases will remain the storage and delivery origin for every published binary. The new download host will serve the stable download page and redirect human-selected downloads to their existing GitHub release assets.
+
+The existing website surfaces retain separate jobs:
+
+- `https://adamgell.com/tools/cmtrace/` remains the product/editorial page.
+- `https://adamgell.com/cmtraceopen/` remains the nightly-build and publication-status page.
+- `https://download.cmtraceopen.com/` becomes the preferred stable-download page and aggregate redirect host.
 
 The project will collect distribution analytics only. The running application will not send usage, device, crash, behavioral, identity, or download-attribution telemetry to the new service. Stable and nightly update checks and updater payloads will continue to use GitHub directly.
 
@@ -55,11 +61,12 @@ This repository owns release production and the authoritative GitHub snapshot co
 
 This repository owns the human download experience and Cloudflare Worker. It will contain:
 
-- The static assets currently used by `adamgell.com/cmtraceopen/`, promoted to the new canonical host.
+- A dedicated stable-download experience for `download.cmtraceopen.com`, reusing shared release-rendering logic where practical without relocating the existing nightly page.
 - A Worker route that validates an asset ID, records an aggregate event, and redirects to GitHub.
-- Stable and nightly asset selection using the public GitHub API.
+- Stable asset selection for the canonical download page using the public GitHub API.
+- Redirect-backed asset links on the existing nightly-build page.
 - Source labels for project-controlled links.
-- A legacy redirect from `adamgell.com/cmtraceopen/` to the canonical host.
+- Product-page and nightly-page links that preserve each page's existing purpose while directing human-selected assets through the branded host.
 
 ### Cloudflare
 
@@ -69,12 +76,12 @@ Cloudflare will provide the `download.cmtraceopen.com` custom hostname, Worker r
 
 ### Root page
 
-`https://download.cmtraceopen.com/` will serve the branded builds page rather than immediately redirecting elsewhere. It will show:
+`https://download.cmtraceopen.com/` will serve the branded stable-download page rather than immediately redirecting elsewhere. It will show:
 
 - The latest stable release with a prominent recommended Windows x64 download.
 - Other stable Windows formats and architectures.
 - macOS and Linux packages.
-- Current nightly packages in a clearly separated section.
+- A clearly labeled link to the dedicated nightly-build page at `https://adamgell.com/cmtraceopen/`.
 - A direct link to the corresponding GitHub release as a transparent fallback.
 
 The page's canonical URL will be `https://download.cmtraceopen.com/`.
@@ -114,9 +121,10 @@ To make the branded domain the majority path:
 - The README's primary download call to action will point to `download.cmtraceopen.com`.
 - The repository homepage/download references will point to the canonical host where appropriate.
 - Future stable release descriptions will begin with a prominent canonical download link.
-- The current stable and nightly release descriptions will receive the same link once during rollout.
-- `cmtraceopen.com` product content will use the branded download host for its primary download action.
-- `adamgell.com/cmtraceopen/` will permanently redirect to the new root page.
+- The current stable release description will receive the same link once during rollout.
+- The nightly release description will link to the dedicated nightly-build page rather than presenting it as the stable download page.
+- The product content at `adamgell.com/tools/cmtrace/` will use the branded download host for its primary stable-download action.
+- The nightly-build page at `adamgell.com/cmtraceopen/` will remain in place and route its human-selected asset buttons through the branded redirect host.
 - Documentation and other project-controlled download links will be updated.
 
 The attached GitHub files remain visible as a fallback for transparency and resilience.
@@ -203,7 +211,7 @@ Initial source labels are:
 - `github-readme`
 - `github-release`
 - `cmtraceopen-product`
-- `legacy-builds-page`
+- `nightly-builds-page`
 - `project-docs`
 - `unknown`
 
@@ -288,7 +296,7 @@ Tests will prove:
 
 ### Download site
 
-Tests will verify stable and nightly rendering, canonical URLs, source labels, accessible download controls, error fallback, and that updater-only metadata is not presented as a normal download.
+Tests will verify stable rendering on the canonical download host, nightly rendering on the existing nightly-build page, correct cross-links between those surfaces, source labels, accessible download controls, error fallback, and that updater-only metadata is not presented as a normal download.
 
 ## Rollout
 
@@ -297,13 +305,15 @@ Tests will verify stable and nightly rendering, canonical URLs, source labels, a
 3. Build and test the Worker and static download site on a non-canonical preview route.
 4. Configure `download.cmtraceopen.com` and verify TLS, DNS, redirect validation, and aggregate event shape.
 5. Publish the privacy wording.
-6. Change the README, current release descriptions, product site, legacy builds page, and project documentation to favor the canonical host.
+6. Change the README, current stable release description, product-page download action, nightly-build asset buttons, and project documentation to favor the canonical host for human-selected downloads without replacing either existing page.
 7. Observe GitHub snapshot deltas and branded-host events for at least one full day.
 8. Keep GitHub direct links available as the resilient fallback.
 
 ## Acceptance Criteria
 
-- `download.cmtraceopen.com` serves the canonical stable and nightly download page.
+- `download.cmtraceopen.com` serves the canonical stable-download page and links clearly to the separate nightly-build page.
+- `adamgell.com/tools/cmtrace/` remains the product/editorial page.
+- `adamgell.com/cmtraceopen/` remains the nightly-build and publication-status page.
 - A human-selected asset records an identifier-free aggregate event and downloads from the existing GitHub asset URL.
 - GitHub's native asset counter continues to increase for redirected downloads.
 - The running application and updater never contact the new host.
