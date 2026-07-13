@@ -76,10 +76,13 @@
 - Modify: `cmtraceopen-site/tsconfig.json`
 - Create: `cmtraceopen-site/vitest.config.ts`
 - Create: `cmtraceopen-site/tests/tsconfig.json`
+- Create: `cmtraceopen-site/src/worker/index.ts`
+- Create: `cmtraceopen-site/tests/worker-smoke.test.ts`
 
 **Interfaces:**
 - Produces: `npm run test:worker` and generated `src/worker-configuration.d.ts` types.
 - Produces: `Env` bindings `ASSETS: Fetcher` and `DOWNLOAD_EVENTS: AnalyticsEngineDataset`.
+- Produces: a minimal pass-through Worker entry whose only behavior is `env.ASSETS.fetch(request)` until later routing tasks extend it.
 - Consumes: `dist/` from the product-site plan.
 
 - [ ] **Step 1: Extend the package scripts and dev dependencies**
@@ -141,16 +144,38 @@ export default defineConfig({
 
 `tests/tsconfig.json` must include `@cloudflare/vitest-pool-workers/types` and `../src/worker-configuration.d.ts`.
 
-- [ ] **Step 4: Install, generate types, and verify configuration**
+- [ ] **Step 4: Write the failing pass-through Worker test**
+
+Create `tests/worker-smoke.test.ts` that imports `handleRequest`, injects an `ASSETS.fetch` stub, and asserts the exact incoming `Request` is forwarded and its `Response` is returned unchanged.
+
+Run: `npm run test:worker`
+
+Expected RED: the test fails because `src/worker/index.ts` does not exist.
+
+- [ ] **Step 5: Implement the minimal Worker entry**
+
+```ts
+export function handleRequest(request: Request, env: Env): Promise<Response> {
+  return env.ASSETS.fetch(request);
+}
+
+export default {
+  fetch: handleRequest,
+} satisfies ExportedHandler<Env>;
+```
+
+Do not add host dispatch, API routes, analytics writes, redirects, logging, or request inspection in this task.
+
+- [ ] **Step 6: Install, generate types, and verify configuration**
 
 Run: `cd cmtraceopen-site && npm install && npm run types:worker`
 
-Expected: npm exits 0 and Wrangler generates `src/worker-configuration.d.ts` containing both bindings.
+Expected: npm exits 0, Wrangler generates `src/worker-configuration.d.ts` containing both bindings, and `npm run test:worker` passes.
 
-- [ ] **Step 5: Commit locally**
+- [ ] **Step 7: Commit locally**
 
 ```bash
-git add cmtraceopen-site/package.json cmtraceopen-site/package-lock.json cmtraceopen-site/wrangler.jsonc cmtraceopen-site/tsconfig.json cmtraceopen-site/vitest.config.ts cmtraceopen-site/tests/tsconfig.json cmtraceopen-site/src/worker-configuration.d.ts
+git add cmtraceopen-site/package.json cmtraceopen-site/package-lock.json cmtraceopen-site/wrangler.jsonc cmtraceopen-site/tsconfig.json cmtraceopen-site/vitest.config.ts cmtraceopen-site/tests/tsconfig.json cmtraceopen-site/src/worker-configuration.d.ts cmtraceopen-site/src/worker/index.ts cmtraceopen-site/tests/worker-smoke.test.ts
 git commit -m "build: add download Worker test boundary"
 ```
 
