@@ -8,7 +8,7 @@ import {
 } from "react";
 import { Button, tokens } from "@fluentui/react-components";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { useLogStore } from "../../stores/log-store";
+import { getActiveSourcePath, useLogStore } from "../../stores/log-store";
 import { useUiStore } from "../../stores/ui-store";
 import { useFilterStore } from "../../stores/filter-store";
 import { LogRow } from "./LogRow";
@@ -32,6 +32,7 @@ import {
   buildGridTemplateColumns,
   getColumnDef,
   calcAutoFitWidth,
+  getAutoExpandedColumnWidth,
   type ColumnId,
   type ColumnDefinition,
 } from "../../lib/column-config";
@@ -75,6 +76,7 @@ export function LogListView({ dataSource }: { dataSource?: LogListDataSource } =
   const showDetails = useUiStore((s) => s.showDetails);
 
   const sourceOpenMode = useLogStore((s) => s.sourceOpenMode);
+  const activeSource = useLogStore((s) => s.activeSource);
   const mergedTabState = useLogStore((s) => s.mergedTabState);
   const correlatedEntries = useLogStore((s) => s.correlatedEntries);
   const openFilePath = useLogStore((s) => s.openFilePath);
@@ -96,6 +98,8 @@ export function LogListView({ dataSource }: { dataSource?: LogListDataSource } =
 
   const [hasKeyboardFocus, setHasKeyboardFocus] = useState(false);
   const [scrollbarWidth, setScrollbarWidth] = useState(0);
+  const autoSizedMessageWidthRef = useRef<number | null>(null);
+  const autoSizedMessageAttemptRef = useRef<string | null>(null);
 
   // Column sort state
   const [sortColumn, setSortColumn] = useState<ColumnId | null>(null);
@@ -192,6 +196,7 @@ export function LogListView({ dataSource }: { dataSource?: LogListDataSource } =
     () => getLogListMetrics(logListFontSize),
     [logListFontSize]
   );
+  const autoSizeSourcePath = openFilePath ?? getActiveSourcePath(activeSource) ?? "";
 
   // ── Section color auto-assignment (uses theme merge palette) ─────────
   const sectionColorMap = useMemo(() => {
@@ -592,6 +597,71 @@ export function LogListView({ dataSource }: { dataSource?: LogListDataSource } =
     }
     setColumnWidths(updates);
   }, [visibleColumns, displayEntries, logListFontSize, listMetrics, setColumnWidths]);
+
+  useEffect(() => {
+    const messageCol = getColumnDef("message");
+    if (displayEntries.length === 0) {
+      autoSizedMessageAttemptRef.current = null;
+      return;
+    }
+    if (!messageCol) return;
+    const currentMessageWidth = Object.prototype.hasOwnProperty.call(
+      columnWidths,
+      "message"
+    )
+      ? columnWidths["message"]
+      : undefined;
+
+    if (currentMessageWidth !== undefined && autoSizedMessageWidthRef.current === null) {
+      return;
+    }
+    if (
+      currentMessageWidth !== undefined &&
+      autoSizedMessageWidthRef.current !== null &&
+      currentMessageWidth !== autoSizedMessageWidthRef.current
+    ) {
+      return;
+    }
+    const autoSizeKey = `${sourceOpenMode}:${autoSizeSourcePath}`;
+    if (autoSizedMessageAttemptRef.current === autoSizeKey) return;
+
+    const timeoutId = window.setTimeout(() => {
+      autoSizedMessageAttemptRef.current = autoSizeKey;
+      // Measure against a rendered row so the font-family is fully resolved
+      // (no CSS variables), matching the double-click Fit handlers exactly —
+      // otherwise auto-expand would compute a different width than manual fit.
+      const rowEl = parentRef.current?.querySelector<HTMLElement>(".log-row") ?? null;
+      const contentFont = getCanvasFont(logListFontSize, false, rowEl);
+      const headerFont = getCanvasFont(listMetrics.headerFontSize, true, rowEl);
+      const autoFitWidth = calcAutoFitWidth(
+        messageCol,
+        displayEntries,
+        contentFont,
+        headerFont
+      );
+      const nextWidth = getAutoExpandedColumnWidth(
+        columnWidths.message,
+        autoFitWidth,
+        messageCol.defaultWidth,
+        autoSizedMessageWidthRef.current
+      );
+
+      if (nextWidth === null) return;
+
+      autoSizedMessageWidthRef.current = nextWidth;
+      setColumnWidth("message", nextWidth);
+    }, 100);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [
+    columnWidths.message,
+    displayEntries,
+    listMetrics.headerFontSize,
+    logListFontSize,
+    autoSizeSourcePath,
+    setColumnWidth,
+    sourceOpenMode,
+  ]);
 
   const visibleErrorCount = useMemo(() => {
     let count = 0;

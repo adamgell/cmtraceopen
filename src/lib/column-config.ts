@@ -492,6 +492,30 @@ export function calcAutoFitWidth(
   );
 }
 
+export function getAutoExpandedColumnWidth(
+  currentWidth: number | undefined,
+  autoFitWidth: number,
+  defaultWidth: number,
+  lastAutoWidth: number | null
+): number | null {
+  // When a width already exists before this session auto-sizes the column,
+  // treat it as a user-owned override (persisted manual resize or fit action).
+  if (currentWidth !== undefined && lastAutoWidth === null) {
+    return null;
+  }
+
+  if (
+    currentWidth !== undefined &&
+    lastAutoWidth !== null &&
+    currentWidth !== lastAutoWidth
+  ) {
+    return null;
+  }
+
+  const baselineWidth = currentWidth ?? defaultWidth;
+  return autoFitWidth > baselineWidth ? autoFitWidth : null;
+}
+
 export function applyColumnOrder(
   activeColumns: ColumnId[],
   userOrder: ColumnId[] | null

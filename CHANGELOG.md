@@ -6,19 +6,44 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- **Log Text column auto-fit on load**: The Log Text (message) column now expands automatically to fit its widest visible content the first time a file is opened, so long messages are readable without a manual resize. Auto-fit runs once per source (keyed by the source's open mode and path so it re-evaluates when a different file is opened), measures against an actually rendered row — so the resolved font family and size match the double-click **Fit** action exactly rather than an estimate computed from CSS variables — and only ever *grows* the column past its default/baseline width; it never shrinks it. A manual drag-resize or an explicit **Fit** is treated as a user-owned override that auto-fit will not overwrite. New `getAutoExpandedColumnWidth()` helper in `column-config.ts` with unit and view-level test coverage.
+- **CCM `type="0"` Success severity (#248, closes #211)**: CCM/PSADT log lines with `type="0"` — a completed operation that OneTrace renders with a green tick — now map to a new first-class **Success** severity instead of being flattened into Info. `Severity` gains a `Success` variant end-to-end (Rust `Severity` enum, TypeScript `Severity` union) and is wired through the severity filter, row rendering, the Quick Stats cards, and the status bar, with per-theme Success palette entries added across all 8 themes. A sanitized real-world PSADT install log is bundled as a regression fixture (`tests/fixtures/ccm/psadt_install.log`) with an integration test, and `.gitattributes` pins the fixture's encoding.
 - **Log error navigation (#192)**: Toolbar controls to jump straight to the previous or next error/warning entry in the log view, so you can step through problems without scrolling.
 - **Teams (MSIX) client log collection (#205, #242)**: The log collector and known-sources list now cover the new Microsoft Teams (MSIX) client log locations.
 
 ### Fixed
 
-- **Session filter restore and persistent error logging (#193, #244)**: Opening a saved session now restores the filter that was active when it was saved, and the app writes persistent error logs to make troubleshooting easier.
+- **CCM empty/absent type coercion (#248)**: Fixed a latent bug where a missing, empty, or unparseable CCM `type` field was coerced to `0` (`unwrap_or(0)`). Now that `type="0"` maps to **Success**, those lines would have been misclassified as successful operations; they now preserve a `None` type and correctly fall back to text-based severity detection. Known numeric types map directly (`0`→Success, `1`→Info, `2`→Warning, `3`→Error) and unknown numeric types fall back to Info.
+- **Session filter restore and persistent error logging (#193, #244)**: Opening a saved session now restores the filter that was active when it was saved, and the app writes persistent error logs (via `tauri-plugin-log`) to make troubleshooting easier.
 - **Tail view reset on truncation or rotation (#234, #243)**: When a tailed file is truncated or rotated, the view now resets and re-reads from the start instead of showing stale or duplicated lines.
 
 ### Changed
 
 - **Tauri 2.11 runtime (#240)**: Upgraded the app to the Tauri 2.11 stack (runtime/webview) to match the frontend, and repaired the Cargo workspace and a stale lockfile so CI, nightly, and release builds pass again.
 - **TypeScript 7 (#247)**: Upgraded the frontend compiler from TypeScript 6 to the native (Go) **TypeScript 7.0.2** (GA). No source changes were required — `tsc --noEmit`, the production build (`tsc && vite build`), and the full test suite (123 tests) all pass unchanged. Type-checking is **~5.5× faster** (`tsc --noEmit` ~3.8s → ~0.7s), speeding up both CI's TypeScript Check job and local builds. The native compiler distributes as per-platform binaries via optional dependencies, so the lockfile carries `@typescript/typescript-<os>-<arch>` entries for each CI target.
+- **Clippy `--all-targets` enforcement (#245)**: CI previously ran `cargo clippy -- -D warnings` without `--all-targets`, so lints in test and benchmark targets were never caught. Both the full and Lite clippy steps now pass `--all-targets`, and the two latent lints this surfaced were fixed: an `unnecessary_sort_by` in `fonts.rs` (`sort_unstable_by(|a, b| …cmp…)` → `sort_unstable_by_key`), and unused-import/unused-const errors in `tests/dns_audit_real.rs` whose `use`/`const` sat outside the file's `event-log` cfg gate (now gated with a file-level `#![cfg(feature = "event-log")]`).
 - **Re-issued code-signing certificate**: Windows builds are now signed with a re-issued Azure Trusted Signing certificate. The signature is still a valid Microsoft Public Trust certificate, and macOS builds remain signed and notarized — but because the underlying signing identity was renewed, Windows SmartScreen reputation is rebuilding. Fresh installs may briefly show an "unrecognized app" / unknown-publisher prompt until reputation re-establishes over the following weeks. The installers are validly signed; choosing **More info → Run anyway** is safe.
+
+### Documentation
+
+- **Full vs Lite editions in README (#227, #241)**: Added an "Editions: Full vs Lite" section between Install and Features describing what each download includes — **Full** (the default build) bundles every specialized workspace and tool; **Lite** (`--no-default-features`) is the core log viewer plus the Timeline and DNS/DHCP workspaces, with a smaller binary. The workspace/feature claims are verified against `get_available_workspaces`.
+
+### Security
+
+- **Ignore quick-xml RUSTSEC-2026-0194/0195 (#239)**: Two newly published quick-xml advisories (quadratic runtime on duplicate attribute names, and unbounded namespace-declaration allocation) began failing `cargo deny check advisories` on every run, turning the required "Check & Test (Rust)" gate red repo-wide and breaking the nightly build. quick-xml enters only transitively on Linux (`wayland-scanner` → `arboard` → `tauri-plugin-clipboard-manager`) and cannot be bumped without an upstream Tauri/wayland update, so it is ignored alongside the other Tauri Linux transitive advisories, matching the existing policy in that config.
+- **Microsoft Security DevOps workflow**: Added a GitHub Actions workflow that runs Microsoft Security DevOps (MSDO) static analysis over the repository.
+
+### Build & CI
+
+- **Signed nightly build channel**: Stood up a signed nightly release channel with its own updater feed and a published "nightly builds" page. Along the way: fixed macOS DMG staging and verify-without-stapled-ticket handling, added NSIS build retries, taught the release step to find nested/nested-named nightly assets and the MSI output among release artifacts, marked and verified nightly installer metadata (running the metadata script on Windows), and corrected the nightly channel's app identity.
+- **Nightly failure alerting (#236)**: A `notify-failure` job opens (or updates) a tracking issue labeled `nightly-build-failure` when a *scheduled* nightly run fails, and a `notify-recovery` job auto-closes it once a nightly fully succeeds again. Manual dispatches don't open issues.
+
+### Dependencies
+
+- **Rust**: `evtx` 0.11 → 0.12 (#217); added `tauri-plugin-log` for persistent error logging (#244).
+- **Frontend (production)**: `react` / `react-dom` 19.2.5 → 19.2.7, `zustand` 5.0.12 → 5.0.14, `@fluentui/react-components` 9.73.8 → 9.74.3, `@fluentui/react-charts` 9.3.18 → 9.3.21, `@fluentui/react-icons` 2.0.325 → 2.0.331, `@tanstack/react-virtual` 3.13.24 → 3.14.4, `@tauri-apps/api` 2.11.0 → 2.11.1, `@tauri-apps/plugin-dialog` 2.7.0 → 2.7.1, `@tauri-apps/plugin-fs` 2.5.0 → 2.5.1 (#209, #233).
+- **Frontend (dev)**: `typescript` 6.0.3 → 7.0.2 (see **TypeScript 7** above), `vite` 8.0.9 → 8.1.3, `@tauri-apps/cli` 2.11.0 → 2.11.4, `@playwright/test` 1.59.1 → 1.61.1, `@vitejs/plugin-react` 6.0.1 → 6.0.3, `@vitest/coverage-v8` 4.1.4 → 4.1.10, `jsdom` 29.0.2 → 29.1.1, `@types/react` 19.2.14 → 19.2.17, `undici` 7.25.0 → 7.28.0 (#222, #235).
+- **GitHub Actions**: `azure/trusted-signing-action` 1.2.0 → 2.0.0 (#198), `actions/checkout` 6.0.2 → 7.0.0 (#207, #223), `actions/cache` 5.0.5 → 6.1.0 (#232), `actions/attest-build-provenance` 4.1.0 → 4.1.1 (#230), `actions/download-artifact` 7.0.0 → 8.0.1 (#197), `github/codeql-action` 3.36.2 → 4.36.2 (#214), `tauri-apps/tauri-action` 0.6.2 → 1.0.0 (#228), `taiki-e/install-action` 2.75.18 → 2.82.6 (#188, #199, #215, #229).
 
 ## [1.3.2] - 2026-05-11
 
