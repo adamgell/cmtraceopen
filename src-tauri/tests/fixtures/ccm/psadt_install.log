@@ -1,0 +1,88 @@
+﻿<![LOG[-------------------------------------------------------------------------------]LOG]!><time="18:22:38.724+600" date="6-05-2026" component="Open-ADTSession" context="WORKSTATION\user" type="1" thread="57068" file="C:\Users\user\Repos\PSAppDeployToolkit\src\PSAppDeployToolkit\Public\Open-ADTSession.ps1">
+<![LOG[[Initialization] :: [PSAppDeployToolkit_4.2.0_EN_01] install started.]LOG]!><time="18:22:38.761+600" date="6-05-2026" component="Open-ADTSession" context="WORKSTATION\user" type="1" thread="57068" file="C:\Users\user\Repos\PSAppDeployToolkit\src\PSAppDeployToolkit\Public\Open-ADTSession.ps1">
+<![LOG[[Initialization] :: [PSAppDeployToolkit_4.2.0_EN_01] script version is [1.0.0].]LOG]!><time="18:22:38.763+600" date="6-05-2026" component="Open-ADTSession" context="WORKSTATION\user" type="1" thread="57068" file="C:\Users\user\Repos\PSAppDeployToolkit\src\PSAppDeployToolkit\Public\Open-ADTSession.ps1">
+<![LOG[[Initialization] :: [Invoke-AppDeployToolkit.ps1] script version is [4.2.0].]LOG]!><time="18:22:38.764+600" date="6-05-2026" component="Open-ADTSession" context="WORKSTATION\user" type="1" thread="57068" file="C:\Users\user\Repos\PSAppDeployToolkit\src\PSAppDeployToolkit\Public\Open-ADTSession.ps1">
+<![LOG[[Initialization] :: The following parameters were passed to [Invoke-AppDeployToolkit.ps1]: [-DeployMode:'Interactive'].]LOG]!><time="18:22:38.768+600" date="6-05-2026" component="Open-ADTSession" context="WORKSTATION\user" type="1" thread="57068" file="C:\Users\user\Repos\PSAppDeployToolkit\src\PSAppDeployToolkit\Public\Open-ADTSession.ps1">
+<![LOG[[Initialization] :: [PSAppDeployToolkit] module version is [4.2.0].]LOG]!><time="18:22:38.769+600" date="6-05-2026" component="Open-ADTSession" context="WORKSTATION\user" type="1" thread="57068" file="C:\Users\user\Repos\PSAppDeployToolkit\src\PSAppDeployToolkit\Public\Open-ADTSession.ps1">
+<![LOG[[Initialization] :: [PSAppDeployToolkit] module imported in [8.991097] seconds.]LOG]!><time="18:22:38.771+600" date="6-05-2026" component="Open-ADTSession" context="WORKSTATION\user" type="1" thread="57068" file="C:\Users\user\Repos\PSAppDeployToolkit\src\PSAppDeployToolkit\Public\Open-ADTSession.ps1">
+<![LOG[[Initialization] :: [PSAppDeployToolkit] module initialized in [2.4536844] seconds.]LOG]!><time="18:22:38.772+600" date="6-05-2026" component="Open-ADTSession" context="WORKSTATION\user" type="1" thread="57068" file="C:\Users\user\Repos\PSAppDeployToolkit\src\PSAppDeployToolkit\Public\Open-ADTSession.ps1">
+<![LOG[[Initialization] :: [PSAppDeployToolkit] module path is ['C:\Users\user\Repos\PSAppDeployToolkit\src\PSAppDeployToolkit'].]LOG]!><time="18:22:38.774+600" date="6-05-2026" component="Open-ADTSession" context="WORKSTATION\user" type="1" thread="57068" file="C:\Users\user\Repos\PSAppDeployToolkit\src\PSAppDeployToolkit\Public\Open-ADTSession.ps1">
+<![LOG[[Initialization] :: [PSAppDeployToolkit] session mode is [Native].]LOG]!><time="18:22:38.775+600" date="6-05-2026" component="Open-ADTSession" context="WORKSTATION\user" type="1" thread="57068" file="C:\Users\user\Repos\PSAppDeployToolkit\src\PSAppDeployToolkit\Public\Open-ADTSession.ps1">
+<![LOG[[Initialization] :: Computer Name is [WORKSTATION].]LOG]!><time="18:22:38.776+600" date="6-05-2026" component="Open-ADTSession" context="WORKSTATION\user" type="1" thread="57068" file="C:\Users\user\Repos\PSAppDeployToolkit\src\PSAppDeployToolkit\Public\Open-ADTSession.ps1">
+<![LOG[[Initialization] :: Current User is [WORKSTATION\user].]LOG]!><time="18:22:38.777+600" date="6-05-2026" component="Open-ADTSession" context="WORKSTATION\user" type="1" thread="57068" file="C:\Users\user\Repos\PSAppDeployToolkit\src\PSAppDeployToolkit\Public\Open-ADTSession.ps1">
+<![LOG[[Initialization] :: OS Version is [Microsoft Windows 11 Enterprise X64 10.0.26200.8457].]LOG]!><time="18:22:38.779+600" date="6-05-2026" component="Open-ADTSession" context="WORKSTATION\user" type="1" thread="57068" file="C:\Users\user\Repos\PSAppDeployToolkit\src\PSAppDeployToolkit\Public\Open-ADTSession.ps1">
+<![LOG[[Initialization] :: OS Type is [Workstation].]LOG]!><time="18:22:38.780+600" date="6-05-2026" component="Open-ADTSession" context="WORKSTATION\user" type="1" thread="57068" file="C:\Users\user\Repos\PSAppDeployToolkit\src\PSAppDeployToolkit\Public\Open-ADTSession.ps1">
+<![LOG[[Initialization] :: Hardware Platform is [Physical].]LOG]!><time="18:22:38.781+600" date="6-05-2026" component="Open-ADTSession" context="WORKSTATION\user" type="1" thread="57068" file="C:\Users\user\Repos\PSAppDeployToolkit\src\PSAppDeployToolkit\Public\Open-ADTSession.ps1">
+<![LOG[[Initialization] :: Current Culture is [en-AU], language is [EN] and UI language is [EN].]LOG]!><time="18:22:38.786+600" date="6-05-2026" component="Open-ADTSession" context="WORKSTATION\user" type="1" thread="57068" file="C:\Users\user\Repos\PSAppDeployToolkit\src\PSAppDeployToolkit\Public\Open-ADTSession.ps1">
+<![LOG[[Initialization] :: PowerShell Host is [ConsoleHost] with version [5.1.26100.8457].]LOG]!><time="18:22:38.788+600" date="6-05-2026" component="Open-ADTSession" context="WORKSTATION\user" type="1" thread="57068" file="C:\Users\user\Repos\PSAppDeployToolkit\src\PSAppDeployToolkit\Public\Open-ADTSession.ps1">
+<![LOG[[Initialization] :: PowerShell Version is [5.1.26100.8457 X64].]LOG]!><time="18:22:38.789+600" date="6-05-2026" component="Open-ADTSession" context="WORKSTATION\user" type="1" thread="57068" file="C:\Users\user\Repos\PSAppDeployToolkit\src\PSAppDeployToolkit\Public\Open-ADTSession.ps1">
+<![LOG[[Initialization] :: PowerShell Process Path is [C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe].]LOG]!><time="18:22:38.791+600" date="6-05-2026" component="Open-ADTSession" context="WORKSTATION\user" type="1" thread="57068" file="C:\Users\user\Repos\PSAppDeployToolkit\src\PSAppDeployToolkit\Public\Open-ADTSession.ps1">
+<![LOG[[Initialization] :: PowerShell CLR (.NET) version is [4.0.30319.42000].]LOG]!><time="18:22:38.792+600" date="6-05-2026" component="Open-ADTSession" context="WORKSTATION\user" type="1" thread="57068" file="C:\Users\user\Repos\PSAppDeployToolkit\src\PSAppDeployToolkit\Public\Open-ADTSession.ps1">
+<![LOG[[Initialization] :: The following users are logged on to the system: [WORKSTATION\kayde, WORKSTATION\user].]LOG]!><time="18:22:38.794+600" date="6-05-2026" component="Open-ADTSession" context="WORKSTATION\user" type="1" thread="57068" file="C:\Users\user\Repos\PSAppDeployToolkit\src\PSAppDeployToolkit\Public\Open-ADTSession.ps1">
+<![LOG[[Initialization] :: Session information for all logged on users:
+ 
+NTAccount           : WORKSTATION\kayde
+SID                 : S-1-5-21-3442802063-1446377815-2928486735-1004
+UserName            : kayde
+DomainName          : WORKSTATION
+SessionId           : 1
+SessionName         : 
+ConnectState        : WTSDisconnected
+IsCurrentSession    : False
+IsConsoleSession    : False
+IsActiveUserSession : False
+IsValidUserSession  : True
+IsUserSession       : True
+IsRdpSession        : False
+IsLocalAdmin        : False
+LogonTime           : 14/05/2026 5:08:08 PM
+IdleTime            : 00:33:45.6105600
+DisconnectTime      : 5/06/2026 5:48:52 PM
+ClientName          : 
+ClientProtocolType  : Console
+ClientDirectory     : 
+ClientBuildNumber   : 
+ 
+ 
+NTAccount           : WORKSTATION\user
+SID                 : S-1-5-21-3442802063-1446377815-2928486735-1002
+UserName            : user
+DomainName          : WORKSTATION
+SessionId           : 3
+SessionName         : Console
+ConnectState        : WTSActive
+IsCurrentSession    : True
+IsConsoleSession    : True
+IsActiveUserSession : True
+IsValidUserSession  : True
+IsUserSession       : True
+IsRdpSession        : False
+IsLocalAdmin        : True
+LogonTime           : 5/06/2026 5:48:53 PM
+IdleTime            : 00:00:06.1090000
+DisconnectTime      : 
+ClientName          : 
+ClientProtocolType  : Console
+ClientDirectory     : 
+ClientBuildNumber   :
+]LOG]!><time="18:22:38.796+600" date="6-05-2026" component="Open-ADTSession" context="WORKSTATION\user" type="1" thread="57068" file="C:\Users\user\Repos\PSAppDeployToolkit\src\PSAppDeployToolkit\Public\Open-ADTSession.ps1">
+<![LOG[[Initialization] :: Current process is running with user account [WORKSTATION\user] under logged on user session for [WORKSTATION\user].]LOG]!><time="18:22:38.798+600" date="6-05-2026" component="Open-ADTSession" context="WORKSTATION\user" type="1" thread="57068" file="C:\Users\user\Repos\PSAppDeployToolkit\src\PSAppDeployToolkit\Public\Open-ADTSession.ps1">
+<![LOG[[Initialization] :: The following user is the console user [WORKSTATION\user] (user with control of physical monitor, keyboard, and mouse).]LOG]!><time="18:22:38.802+600" date="6-05-2026" component="Open-ADTSession" context="WORKSTATION\user" type="1" thread="57068" file="C:\Users\user\Repos\PSAppDeployToolkit\src\PSAppDeployToolkit\Public\Open-ADTSession.ps1">
+<![LOG[[Initialization] :: The active logged on user who will receive UI elements is [WORKSTATION\user].]LOG]!><time="18:22:38.804+600" date="6-05-2026" component="Open-ADTSession" context="WORKSTATION\user" type="1" thread="57068" file="C:\Users\user\Repos\PSAppDeployToolkit\src\PSAppDeployToolkit\Public\Open-ADTSession.ps1">
+<![LOG[[Initialization] :: The current execution context has a primary UI language of [en-GB].]LOG]!><time="18:22:38.807+600" date="6-05-2026" component="Open-ADTSession" context="WORKSTATION\user" type="1" thread="57068" file="C:\Users\user\Repos\PSAppDeployToolkit\src\PSAppDeployToolkit\Public\Open-ADTSession.ps1">
+<![LOG[[Initialization] :: The following locale was used to import UI messages from the strings.psd1 files: [en-AU].]LOG]!><time="18:22:38.810+600" date="6-05-2026" component="Open-ADTSession" context="WORKSTATION\user" type="1" thread="57068" file="C:\Users\user\Repos\PSAppDeployToolkit\src\PSAppDeployToolkit\Public\Open-ADTSession.ps1">
+<![LOG[[Initialization] :: Device has completed the OOBE and toolkit is not running with an active ESP in progress.]LOG]!><time="18:22:38.831+600" date="6-05-2026" component="Open-ADTSession" context="WORKSTATION\user" type="1" thread="57068" file="C:\Users\user\Repos\PSAppDeployToolkit\src\PSAppDeployToolkit\Public\Open-ADTSession.ps1">
+<![LOG[[Initialization] :: Session 0 not detected, toolkit running as non-SYSTEM user account.]LOG]!><time="18:22:38.835+600" date="6-05-2026" component="Open-ADTSession" context="WORKSTATION\user" type="1" thread="57068" file="C:\Users\user\Repos\PSAppDeployToolkit\src\PSAppDeployToolkit\Public\Open-ADTSession.ps1">
+<![LOG[[Initialization] :: No processes were specified as requiring closure but deployment mode was explicitly set to [Interactive].]LOG]!><time="18:22:38.838+600" date="6-05-2026" component="Open-ADTSession" context="WORKSTATION\user" type="1" thread="57068" file="C:\Users\user\Repos\PSAppDeployToolkit\src\PSAppDeployToolkit\Public\Open-ADTSession.ps1">
+<![LOG[[Initialization] :: Installation is running in [Interactive] mode.]LOG]!><time="18:22:38.841+600" date="6-05-2026" component="Open-ADTSession" context="WORKSTATION\user" type="1" thread="57068" file="C:\Users\user\Repos\PSAppDeployToolkit\src\PSAppDeployToolkit\Public\Open-ADTSession.ps1">
+<![LOG[[Initialization] :: Deployment type is [Install].]LOG]!><time="18:22:38.844+600" date="6-05-2026" component="Open-ADTSession" context="WORKSTATION\user" type="1" thread="57068" file="C:\Users\user\Repos\PSAppDeployToolkit\src\PSAppDeployToolkit\Public\Open-ADTSession.ps1">
+<![LOG[[Initialization] :: Module [PSAppDeployToolkit.Extensions] imported successfully.]LOG]!><time="18:22:39.168+600" date="6-05-2026" component="PSAppDeployToolkit.Extensions.psm1" context="WORKSTATION\user" type="1" thread="57068" file="C:\Users\user\Repos\PSAppDeployToolkit\src\PSAppDeployToolkit\opt\Frontend\v4\PSAppDeployToolkit.Extensions\PSAppDeployToolkit.Extensions.psm1">
+<![LOG[[Pre-Install] :: The user has [3] deferrals remaining.]LOG]!><time="18:22:39.566+600" date="6-05-2026" component="Show-ADTInstallationWelcome" context="WORKSTATION\user" type="1" thread="57068" file="C:\Users\user\Repos\PSAppDeployToolkit\src\PSAppDeployToolkit\Public\Show-ADTInstallationWelcome.ps1">
+<![LOG[[Pre-Install] :: Instantiating user client/server process.]LOG]!><time="18:22:40.507+600" date="6-05-2026" component="Invoke-ADTClientServerOperation" context="WORKSTATION\user" type="1" thread="57068" file="C:\Users\user\Repos\PSAppDeployToolkit\src\PSAppDeployToolkit\Private\Invoke-ADTClientServerOperation.ps1">
+<![LOG[[Pre-Install] :: The user selected to continue...]LOG]!><time="18:22:49.282+600" date="6-05-2026" component="Show-ADTInstallationWelcome" context="WORKSTATION\user" type="1" thread="57068" file="C:\Users\user\Repos\PSAppDeployToolkit\src\PSAppDeployToolkit\Public\Show-ADTInstallationWelcome.ps1">
+<![LOG[[Pre-Install] :: Creating a progress dialog with [StatusMessage: Installation in progress. Please wait…], [StatusMessageDetail: This window will close automatically when the installation is complete.].]LOG]!><time="18:22:49.491+600" date="6-05-2026" component="Show-ADTInstallationProgress" context="WORKSTATION\user" type="1" thread="57068" file="C:\Users\user\Repos\PSAppDeployToolkit\src\PSAppDeployToolkit\Public\Show-ADTInstallationProgress.ps1">
+<![LOG[[Post-Install] :: Displaying custom installation prompt asynchronously to [WORKSTATION\user] with message: [Install complete.].]LOG]!><time="18:22:49.749+600" date="6-05-2026" component="Show-ADTInstallationPrompt" context="WORKSTATION\user" type="1" thread="57068" file="C:\Users\user\Repos\PSAppDeployToolkit\src\PSAppDeployToolkit\Public\Show-ADTInstallationPrompt.ps1">
+<![LOG[[Finalization] :: Closing the installation progress dialog.]LOG]!><time="18:22:51.758+600" date="6-05-2026" component="Close-ADTInstallationProgress" context="WORKSTATION\user" type="1" thread="57068" file="C:\Users\user\Repos\PSAppDeployToolkit\src\PSAppDeployToolkit\Public\Close-ADTInstallationProgress.ps1">
+<![LOG[[Finalization] :: Closing user client/server process.]LOG]!><time="18:22:51.792+600" date="6-05-2026" component="Close-ADTClientServerProcess" context="WORKSTATION\user" type="1" thread="57068" file="C:\Users\user\Repos\PSAppDeployToolkit\src\PSAppDeployToolkit\Private\Close-ADTClientServerProcess.ps1">
+<![LOG[[Finalization] :: [PSAppDeployToolkit_4.2.0_EN_01] install completed in [13.1467339] seconds with exit code [0].]LOG]!><time="18:22:51.850+600" date="6-05-2026" component="Close-ADTSession" context="WORKSTATION\user" type="0" thread="57068" file="C:\Users\user\Repos\PSAppDeployToolkit\src\PSAppDeployToolkit\Public\Close-ADTSession.ps1">
+<![LOG[-------------------------------------------------------------------------------]LOG]!><time="18:22:51.857+600" date="6-05-2026" component="Close-ADTSession" context="WORKSTATION\user" type="1" thread="57068" file="C:\Users\user\Repos\PSAppDeployToolkit\src\PSAppDeployToolkit\Public\Close-ADTSession.ps1">
