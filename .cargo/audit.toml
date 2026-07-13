@@ -3,13 +3,19 @@
 # cargo-audit does NOT read src-tauri/deny.toml, so vulnerability advisories
 # that cannot be resolved by a version bump must be listed here as well.
 #
-# quick-xml <0.41 enters only transitively and cannot be upgraded without
-# bumping the Tauri stack itself: it comes in via `plist` (a Tauri dependency,
-# all platforms) and via `wayland-scanner` build tooling on Linux. Neither is a
-# direct dependency we control. Keep this list in sync with the corresponding
-# entries in src-tauri/deny.toml.
+# These advisories enter only transitively via the Tauri stack and cannot be
+# resolved by a version bump we control:
+#
+# * quick-xml <0.41 comes in via `plist` (a Tauri dependency, all platforms) and
+#   via `wayland-scanner` build tooling on Linux.
+# * glib 0.18 (RUSTSEC-2024-0429) is fixed in glib 0.20, but Tauri v2 pins the
+#   gtk-rs 0.18 stack on Linux (gtk 0.18 requires glib ^0.18); it clears only
+#   once Tauri adopts gtk-rs 0.20.
+#
+# Keep this list in sync with the corresponding entries in src-tauri/deny.toml.
 [advisories]
 ignore = [
+    "RUSTSEC-2024-0429", # glib: VariantStrIter unsoundness, fixed in glib 0.20; blocked by Tauri's gtk-rs 0.18 pin (Tauri Linux)
     "RUSTSEC-2026-0194", # quick-xml <0.41: quadratic runtime on duplicate attrs (transitive: plist/Tauri, wayland-scanner)
     "RUSTSEC-2026-0195", # quick-xml <0.41: unbounded namespace-declaration alloc (transitive: plist/Tauri, wayland-scanner)
 ]

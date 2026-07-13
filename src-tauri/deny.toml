@@ -12,6 +12,7 @@ ignore = [
     "RUSTSEC-2024-0414", # gdk-pixbuf: GTK3 unmaintained (Tauri Linux)
     "RUSTSEC-2024-0415", # gio: GTK3 unmaintained (Tauri Linux)
     "RUSTSEC-2024-0416", # glib: GTK3 unmaintained (Tauri Linux)
+    "RUSTSEC-2024-0429", # glib: VariantStrIter unsoundness, fixed in glib 0.20; blocked by Tauri's gtk-rs 0.18 pin (Tauri Linux)
     "RUSTSEC-2024-0417", # pango: GTK3 unmaintained (Tauri Linux)
     "RUSTSEC-2024-0418", # cairo-rs: GTK3 unmaintained (Tauri Linux)
     "RUSTSEC-2024-0419", # gtk-sys etc: GTK3 unmaintained (Tauri Linux)
