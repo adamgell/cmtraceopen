@@ -244,7 +244,7 @@ export function LogListView({ dataSource }: { dataSource?: LogListDataSource } =
   }, [displayEntries, isMerged]);
   // Stable JSON key so loadMarkers fires on set membership change, not on
   // every new array reference.
-  const markerFilePathsKey = markerFilePaths.join(" ");
+  const markerFilePathsKey = markerFilePaths.join("\x00");
 
   useEffect(() => {
     if (isMerged) return;
