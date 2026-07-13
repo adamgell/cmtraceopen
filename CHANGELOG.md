@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-07-13
+
 ### Added
 
 - **Log Text column auto-fit on load**: The Log Text (message) column now expands automatically to fit its widest visible content the first time a file is opened, so long messages are readable without a manual resize. Auto-fit runs once per source (keyed by the source's open mode and path so it re-evaluates when a different file is opened), measures against an actually rendered row — so the resolved font family and size match the double-click **Fit** action exactly rather than an estimate computed from CSS variables — and only ever *grows* the column past its default/baseline width; it never shrinks it. A manual drag-resize or an explicit **Fit** is treated as a user-owned override that auto-fit will not overwrite. New `getAutoExpandedColumnWidth()` helper in `column-config.ts` with unit and view-level test coverage.
@@ -16,6 +18,7 @@ All notable changes to this project will be documented in this file.
 - **CCM empty/absent type coercion (#248)**: Fixed a latent bug where a missing, empty, or unparseable CCM `type` field was coerced to `0` (`unwrap_or(0)`). Now that `type="0"` maps to **Success**, those lines would have been misclassified as successful operations; they now preserve a `None` type and correctly fall back to text-based severity detection. Known numeric types map directly (`0`→Success, `1`→Info, `2`→Warning, `3`→Error) and unknown numeric types fall back to Info.
 - **Session filter restore and persistent error logging (#193, #244)**: Opening a saved session now restores the filter that was active when it was saved, and the app writes persistent error logs (via `tauri-plugin-log`) to make troubleshooting easier.
 - **Tail view reset on truncation or rotation (#234, #243)**: When a tailed file is truncated or rotated, the view now resets and re-reads from the start instead of showing stale or duplicated lines.
+- **Log marker key source hygiene (#250)**: Replaced a raw NUL (`0x00`) control byte embedded in the row-marker key delimiter (`markerFilePathsKey`) with the `\x00` escape sequence. The delimiter is byte-identical at runtime (still a NUL separator), but `LogListView.tsx` is now plain text, so `file`, `grep`, and `ripgrep` no longer treat the source as binary. No behavior change.
 
 ### Changed
 
@@ -30,6 +33,7 @@ All notable changes to this project will be documented in this file.
 
 ### Security
 
+- **Patch `tar` and `rkyv` advisories (#249)**: Bumped `tar` 0.4.45 → 0.4.46 (GHSA-3pv8-6f4r-ffg2, PAX header desynchronization) and `rkyv` 0.8.15 → 0.8.16 (GHSA-vfvv-c25p-m7mm, panic-safety bugs in `InlineVec`/`SerVec` clear enabling arbitrary code execution), resolving the two fixable Dependabot alerts. The remaining `glib` 0.18 unsoundness (RUSTSEC-2024-0429, `VariantStrIter`) is fixed in glib 0.20 but blocked upstream — `gtk` 0.18, pinned transitively by Tauri 2.11 on Linux, requires glib ^0.18 — so it is documented as an accepted, warn-level advisory in `src-tauri/deny.toml` and `.cargo/audit.toml` until Tauri adopts gtk-rs 0.20.
 - **Ignore quick-xml RUSTSEC-2026-0194/0195 (#239)**: Two newly published quick-xml advisories (quadratic runtime on duplicate attribute names, and unbounded namespace-declaration allocation) began failing `cargo deny check advisories` on every run, turning the required "Check & Test (Rust)" gate red repo-wide and breaking the nightly build. quick-xml enters only transitively on Linux (`wayland-scanner` → `arboard` → `tauri-plugin-clipboard-manager`) and cannot be bumped without an upstream Tauri/wayland update, so it is ignored alongside the other Tauri Linux transitive advisories, matching the existing policy in that config.
 - **Microsoft Security DevOps workflow**: Added a GitHub Actions workflow that runs Microsoft Security DevOps (MSDO) static analysis over the repository.
 
@@ -40,7 +44,7 @@ All notable changes to this project will be documented in this file.
 
 ### Dependencies
 
-- **Rust**: `evtx` 0.11 → 0.12 (#217); added `tauri-plugin-log` for persistent error logging (#244).
+- **Rust**: `evtx` 0.11 → 0.12 (#217); added `tauri-plugin-log` for persistent error logging (#244); `tar` 0.4.45 → 0.4.46 and `rkyv` 0.8.15 → 0.8.16 (security patches, #249).
 - **Frontend (production)**: `react` / `react-dom` 19.2.5 → 19.2.7, `zustand` 5.0.12 → 5.0.14, `@fluentui/react-components` 9.73.8 → 9.74.3, `@fluentui/react-charts` 9.3.18 → 9.3.21, `@fluentui/react-icons` 2.0.325 → 2.0.331, `@tanstack/react-virtual` 3.13.24 → 3.14.4, `@tauri-apps/api` 2.11.0 → 2.11.1, `@tauri-apps/plugin-dialog` 2.7.0 → 2.7.1, `@tauri-apps/plugin-fs` 2.5.0 → 2.5.1 (#209, #233).
 - **Frontend (dev)**: `typescript` 6.0.3 → 7.0.2 (see **TypeScript 7** above), `vite` 8.0.9 → 8.1.3, `@tauri-apps/cli` 2.11.0 → 2.11.4, `@playwright/test` 1.59.1 → 1.61.1, `@vitejs/plugin-react` 6.0.1 → 6.0.3, `@vitest/coverage-v8` 4.1.4 → 4.1.10, `jsdom` 29.0.2 → 29.1.1, `@types/react` 19.2.14 → 19.2.17, `undici` 7.25.0 → 7.28.0 (#222, #235).
 - **GitHub Actions**: `azure/trusted-signing-action` 1.2.0 → 2.0.0 (#198), `actions/checkout` 6.0.2 → 7.0.0 (#207, #223), `actions/cache` 5.0.5 → 6.1.0 (#232), `actions/attest-build-provenance` 4.1.0 → 4.1.1 (#230), `actions/download-artifact` 7.0.0 → 8.0.1 (#197), `github/codeql-action` 3.36.2 → 4.36.2 (#214), `tauri-apps/tauri-action` 0.6.2 → 1.0.0 (#228), `taiki-e/install-action` 2.75.18 → 2.82.6 (#188, #199, #215, #229).
