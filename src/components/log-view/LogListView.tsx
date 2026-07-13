@@ -605,16 +605,20 @@ export function LogListView({ dataSource }: { dataSource?: LogListDataSource } =
       return;
     }
     if (!messageCol) return;
-    if (
-      columnWidths.message !== undefined &&
-      autoSizedMessageWidthRef.current === null
-    ) {
+    const currentMessageWidth = Object.prototype.hasOwnProperty.call(
+      columnWidths,
+      "message"
+    )
+      ? columnWidths["message"]
+      : undefined;
+
+    if (currentMessageWidth !== undefined && autoSizedMessageWidthRef.current === null) {
       return;
     }
     if (
-      columnWidths.message !== undefined &&
+      currentMessageWidth !== undefined &&
       autoSizedMessageWidthRef.current !== null &&
-      columnWidths.message !== autoSizedMessageWidthRef.current
+      currentMessageWidth !== autoSizedMessageWidthRef.current
     ) {
       return;
     }
