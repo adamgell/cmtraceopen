@@ -623,8 +623,12 @@ export function LogListView({ dataSource }: { dataSource?: LogListDataSource } =
 
     const timeoutId = window.setTimeout(() => {
       autoSizedMessageAttemptRef.current = autoSizeKey;
-      const contentFont = getCanvasFont(logListFontSize);
-      const headerFont = getCanvasFont(listMetrics.headerFontSize, true);
+      // Measure against a rendered row so the font-family is fully resolved
+      // (no CSS variables), matching the double-click Fit handlers exactly —
+      // otherwise auto-expand would compute a different width than manual fit.
+      const rowEl = parentRef.current?.querySelector<HTMLElement>(".log-row") ?? null;
+      const contentFont = getCanvasFont(logListFontSize, false, rowEl);
+      const headerFont = getCanvasFont(listMetrics.headerFontSize, true, rowEl);
       const autoFitWidth = calcAutoFitWidth(
         messageCol,
         displayEntries,
