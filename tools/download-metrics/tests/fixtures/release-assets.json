@@ -1,0 +1,310 @@
+{
+  "assets": [
+    {
+      "id": 475710704,
+      "name": "CMTrace-Open-Lite_1.4.0_arm64.exe",
+      "size": 16974080,
+      "content_type": "application/x-msdownload",
+      "browser_download_url": "https://github.com/adamgell/cmtraceopen/releases/download/v1.4.0/CMTrace-Open-Lite_1.4.0_arm64.exe",
+      "expected": { "platform": "windows", "architecture": "arm64", "edition": "lite", "packageType": "portable-exe", "deliveryRole": "manual-only" },
+      "expected_rank": null
+    },
+    {
+      "id": 475711962,
+      "name": "CMTrace-Open-Lite_1.4.0_x64.exe",
+      "size": 20365568,
+      "content_type": "application/x-msdownload",
+      "browser_download_url": "https://github.com/adamgell/cmtraceopen/releases/download/v1.4.0/CMTrace-Open-Lite_1.4.0_x64.exe",
+      "expected": { "platform": "windows", "architecture": "x64", "edition": "lite", "packageType": "portable-exe", "deliveryRole": "manual-only" },
+      "expected_rank": null
+    },
+    {
+      "id": 475710701,
+      "name": "CMTrace-Open_1.4.0_arm64-setup.exe",
+      "size": 5355952,
+      "content_type": "application/x-msdownload",
+      "browser_download_url": "https://github.com/adamgell/cmtraceopen/releases/download/v1.4.0/CMTrace-Open_1.4.0_arm64-setup.exe",
+      "expected": { "platform": "windows", "architecture": "arm64", "edition": "full", "packageType": "nsis-setup", "deliveryRole": "mixed-manual-update" },
+      "expected_rank": null
+    },
+    {
+      "id": 475710700,
+      "name": "CMTrace-Open_1.4.0_arm64.exe",
+      "size": 19651328,
+      "content_type": "application/x-msdownload",
+      "browser_download_url": "https://github.com/adamgell/cmtraceopen/releases/download/v1.4.0/CMTrace-Open_1.4.0_arm64.exe",
+      "expected": { "platform": "windows", "architecture": "arm64", "edition": "full", "packageType": "portable-exe", "deliveryRole": "manual-only" },
+      "expected_rank": null
+    },
+    {
+      "id": 475710706,
+      "name": "CMTrace-Open_1.4.0_arm64.msi",
+      "size": 12513280,
+      "content_type": "application/octet-stream",
+      "browser_download_url": "https://github.com/adamgell/cmtraceopen/releases/download/v1.4.0/CMTrace-Open_1.4.0_arm64.msi",
+      "expected": { "platform": "windows", "architecture": "arm64", "edition": "full", "packageType": "msi", "deliveryRole": "manual-only" },
+      "expected_rank": null
+    },
+    {
+      "id": 475711961,
+      "name": "CMTrace-Open_1.4.0_x64-setup.exe",
+      "size": 5970216,
+      "content_type": "application/x-msdownload",
+      "browser_download_url": "https://github.com/adamgell/cmtraceopen/releases/download/v1.4.0/CMTrace-Open_1.4.0_x64-setup.exe",
+      "expected": { "platform": "windows", "architecture": "x64", "edition": "full", "packageType": "nsis-setup", "deliveryRole": "mixed-manual-update" },
+      "expected_rank": null
+    },
+    {
+      "id": 475711960,
+      "name": "CMTrace-Open_1.4.0_x64.exe",
+      "size": 23561984,
+      "content_type": "application/x-msdownload",
+      "browser_download_url": "https://github.com/adamgell/cmtraceopen/releases/download/v1.4.0/CMTrace-Open_1.4.0_x64.exe",
+      "expected": { "platform": "windows", "architecture": "x64", "edition": "full", "packageType": "portable-exe", "deliveryRole": "manual-only" },
+      "expected_rank": 0
+    },
+    {
+      "id": 475711963,
+      "name": "CMTrace-Open_1.4.0_x64.msi",
+      "size": 13324288,
+      "content_type": "application/octet-stream",
+      "browser_download_url": "https://github.com/adamgell/cmtraceopen/releases/download/v1.4.0/CMTrace-Open_1.4.0_x64.msi",
+      "expected": { "platform": "windows", "architecture": "x64", "edition": "full", "packageType": "msi", "deliveryRole": "manual-only" },
+      "expected_rank": null
+    },
+    {
+      "id": 475700404,
+      "name": "CMTrace.Open-1.4.0-1.x86_64.rpm",
+      "size": 8847296,
+      "content_type": "application/zip",
+      "browser_download_url": "https://github.com/adamgell/cmtraceopen/releases/download/v1.4.0/CMTrace.Open-1.4.0-1.x86_64.rpm",
+      "expected": { "platform": "linux", "architecture": "x64", "edition": "full", "packageType": "rpm", "deliveryRole": "manual-only" },
+      "expected_rank": null
+    },
+    {
+      "id": 475700416,
+      "name": "CMTrace.Open-1.4.0-1.x86_64.rpm.sig",
+      "size": 424,
+      "content_type": "application/zip",
+      "browser_download_url": "https://github.com/adamgell/cmtraceopen/releases/download/v1.4.0/CMTrace.Open-1.4.0-1.x86_64.rpm.sig",
+      "expected": { "platform": "linux", "architecture": "x64", "edition": "full", "packageType": "signature", "deliveryRole": "supporting-file" },
+      "expected_rank": null
+    },
+    {
+      "id": 475701234,
+      "name": "CMTrace.Open_1.4.0_aarch64.app.tar.gz",
+      "size": 8769754,
+      "content_type": "application/zip",
+      "browser_download_url": "https://github.com/adamgell/cmtraceopen/releases/download/v1.4.0/CMTrace.Open_1.4.0_aarch64.app.tar.gz",
+      "expected": { "platform": "macos", "architecture": "arm64", "edition": "full", "packageType": "updater-archive", "deliveryRole": "updater-only" },
+      "expected_rank": null
+    },
+    {
+      "id": 475701257,
+      "name": "CMTrace.Open_1.4.0_aarch64.app.tar.gz.sig",
+      "size": 412,
+      "content_type": "application/zip",
+      "browser_download_url": "https://github.com/adamgell/cmtraceopen/releases/download/v1.4.0/CMTrace.Open_1.4.0_aarch64.app.tar.gz.sig",
+      "expected": { "platform": "macos", "architecture": "arm64", "edition": "full", "packageType": "signature", "deliveryRole": "supporting-file" },
+      "expected_rank": null
+    },
+    {
+      "id": 475701213,
+      "name": "CMTrace.Open_1.4.0_aarch64.dmg",
+      "size": 9364364,
+      "content_type": "application/zip",
+      "browser_download_url": "https://github.com/adamgell/cmtraceopen/releases/download/v1.4.0/CMTrace.Open_1.4.0_aarch64.dmg",
+      "expected": { "platform": "macos", "architecture": "arm64", "edition": "full", "packageType": "dmg", "deliveryRole": "manual-only" },
+      "expected_rank": 10
+    },
+    {
+      "id": 475700424,
+      "name": "CMTrace.Open_1.4.0_amd64.AppImage",
+      "size": 82766328,
+      "content_type": "application/zip",
+      "browser_download_url": "https://github.com/adamgell/cmtraceopen/releases/download/v1.4.0/CMTrace.Open_1.4.0_amd64.AppImage",
+      "expected": { "platform": "linux", "architecture": "x64", "edition": "full", "packageType": "appimage", "deliveryRole": "mixed-manual-update" },
+      "expected_rank": 20
+    },
+    {
+      "id": 475700485,
+      "name": "CMTrace.Open_1.4.0_amd64.AppImage.sig",
+      "size": 424,
+      "content_type": "application/zip",
+      "browser_download_url": "https://github.com/adamgell/cmtraceopen/releases/download/v1.4.0/CMTrace.Open_1.4.0_amd64.AppImage.sig",
+      "expected": { "platform": "linux", "architecture": "x64", "edition": "full", "packageType": "signature", "deliveryRole": "supporting-file" },
+      "expected_rank": null
+    },
+    {
+      "id": 475700347,
+      "name": "CMTrace.Open_1.4.0_amd64.deb",
+      "size": 8846378,
+      "content_type": "application/zip",
+      "browser_download_url": "https://github.com/adamgell/cmtraceopen/releases/download/v1.4.0/CMTrace.Open_1.4.0_amd64.deb",
+      "expected": { "platform": "linux", "architecture": "x64", "edition": "full", "packageType": "deb", "deliveryRole": "manual-only" },
+      "expected_rank": null
+    },
+    {
+      "id": 475700391,
+      "name": "CMTrace.Open_1.4.0_amd64.deb.sig",
+      "size": 420,
+      "content_type": "application/zip",
+      "browser_download_url": "https://github.com/adamgell/cmtraceopen/releases/download/v1.4.0/CMTrace.Open_1.4.0_amd64.deb.sig",
+      "expected": { "platform": "linux", "architecture": "x64", "edition": "full", "packageType": "signature", "deliveryRole": "supporting-file" },
+      "expected_rank": null
+    },
+    {
+      "id": 475712003,
+      "name": "latest.json",
+      "size": 5090,
+      "content_type": "application/json",
+      "browser_download_url": "https://github.com/adamgell/cmtraceopen/releases/download/v1.4.0/latest.json",
+      "expected": { "platform": "cross-platform", "architecture": "unknown", "edition": "not-applicable", "packageType": "updater-manifest", "deliveryRole": "updater-only" },
+      "expected_rank": null
+    },
+    {
+      "id": 475701320,
+      "name": "sbom-npm.cdx.json",
+      "size": 439408,
+      "content_type": "application/json",
+      "browser_download_url": "https://github.com/adamgell/cmtraceopen/releases/download/v1.4.0/sbom-npm.cdx.json",
+      "expected": { "platform": "cross-platform", "architecture": "unknown", "edition": "not-applicable", "packageType": "sbom", "deliveryRole": "supporting-file" },
+      "expected_rank": null
+    },
+    {
+      "id": 475701317,
+      "name": "sbom-rust.cdx.json",
+      "size": 529835,
+      "content_type": "application/json",
+      "browser_download_url": "https://github.com/adamgell/cmtraceopen/releases/download/v1.4.0/sbom-rust.cdx.json",
+      "expected": { "platform": "cross-platform", "architecture": "unknown", "edition": "not-applicable", "packageType": "sbom", "deliveryRole": "supporting-file" },
+      "expected_rank": null
+    },
+    {
+      "id": 475898648,
+      "name": "CMTrace-Open-Lite_Nightly_20260713_75_efb9803c9f91_arm64.exe",
+      "size": 16974592,
+      "content_type": "application/octet-stream",
+      "browser_download_url": "https://github.com/adamgell/cmtraceopen/releases/download/nightly/CMTrace-Open-Lite_Nightly_20260713_75_efb9803c9f91_arm64.exe",
+      "expected": { "platform": "windows", "architecture": "arm64", "edition": "lite", "packageType": "portable-exe", "deliveryRole": "manual-only" },
+      "expected_rank": null
+    },
+    {
+      "id": 475898656,
+      "name": "CMTrace-Open-Lite_Nightly_20260713_75_efb9803c9f91_x64.exe",
+      "size": 20365568,
+      "content_type": "application/octet-stream",
+      "browser_download_url": "https://github.com/adamgell/cmtraceopen/releases/download/nightly/CMTrace-Open-Lite_Nightly_20260713_75_efb9803c9f91_x64.exe",
+      "expected": { "platform": "windows", "architecture": "x64", "edition": "lite", "packageType": "portable-exe", "deliveryRole": "manual-only" },
+      "expected_rank": null
+    },
+    {
+      "id": 475898660,
+      "name": "CMTrace-Open_Nightly_20260713_75_efb9803c9f91_arm64-setup.exe",
+      "size": 5355424,
+      "content_type": "application/octet-stream",
+      "browser_download_url": "https://github.com/adamgell/cmtraceopen/releases/download/nightly/CMTrace-Open_Nightly_20260713_75_efb9803c9f91_arm64-setup.exe",
+      "expected": { "platform": "windows", "architecture": "arm64", "edition": "full", "packageType": "nsis-setup", "deliveryRole": "mixed-manual-update" },
+      "expected_rank": null
+    },
+    {
+      "id": 475898669,
+      "name": "CMTrace-Open_Nightly_20260713_75_efb9803c9f91_arm64-setup.exe.sig",
+      "size": 464,
+      "content_type": "application/pgp-signature",
+      "browser_download_url": "https://github.com/adamgell/cmtraceopen/releases/download/nightly/CMTrace-Open_Nightly_20260713_75_efb9803c9f91_arm64-setup.exe.sig",
+      "expected": { "platform": "windows", "architecture": "arm64", "edition": "full", "packageType": "signature", "deliveryRole": "supporting-file" },
+      "expected_rank": null
+    },
+    {
+      "id": 475898672,
+      "name": "CMTrace-Open_Nightly_20260713_75_efb9803c9f91_arm64.exe",
+      "size": 19656448,
+      "content_type": "application/octet-stream",
+      "browser_download_url": "https://github.com/adamgell/cmtraceopen/releases/download/nightly/CMTrace-Open_Nightly_20260713_75_efb9803c9f91_arm64.exe",
+      "expected": { "platform": "windows", "architecture": "arm64", "edition": "full", "packageType": "portable-exe", "deliveryRole": "manual-only" },
+      "expected_rank": null
+    },
+    {
+      "id": 475898705,
+      "name": "CMTrace-Open_Nightly_20260713_75_efb9803c9f91_arm64.msi",
+      "size": 12517376,
+      "content_type": "application/x-msi",
+      "browser_download_url": "https://github.com/adamgell/cmtraceopen/releases/download/nightly/CMTrace-Open_Nightly_20260713_75_efb9803c9f91_arm64.msi",
+      "expected": { "platform": "windows", "architecture": "arm64", "edition": "full", "packageType": "msi", "deliveryRole": "manual-only" },
+      "expected_rank": null
+    },
+    {
+      "id": 475898650,
+      "name": "CMTrace-Open_Nightly_20260713_75_efb9803c9f91_macOS-arm64.app.tar.gz",
+      "size": 8769114,
+      "content_type": "application/x-gtar",
+      "browser_download_url": "https://github.com/adamgell/cmtraceopen/releases/download/nightly/CMTrace-Open_Nightly_20260713_75_efb9803c9f91_macOS-arm64.app.tar.gz",
+      "expected": { "platform": "macos", "architecture": "arm64", "edition": "full", "packageType": "updater-archive", "deliveryRole": "updater-only" },
+      "expected_rank": null
+    },
+    {
+      "id": 475898652,
+      "name": "CMTrace-Open_Nightly_20260713_75_efb9803c9f91_macOS-arm64.app.tar.gz.sig",
+      "size": 424,
+      "content_type": "application/pgp-signature",
+      "browser_download_url": "https://github.com/adamgell/cmtraceopen/releases/download/nightly/CMTrace-Open_Nightly_20260713_75_efb9803c9f91_macOS-arm64.app.tar.gz.sig",
+      "expected": { "platform": "macos", "architecture": "arm64", "edition": "full", "packageType": "signature", "deliveryRole": "supporting-file" },
+      "expected_rank": null
+    },
+    {
+      "id": 475898653,
+      "name": "CMTrace-Open_Nightly_20260713_75_efb9803c9f91_macOS-arm64.dmg",
+      "size": 9364636,
+      "content_type": "application/x-apple-diskimage",
+      "browser_download_url": "https://github.com/adamgell/cmtraceopen/releases/download/nightly/CMTrace-Open_Nightly_20260713_75_efb9803c9f91_macOS-arm64.dmg",
+      "expected": { "platform": "macos", "architecture": "arm64", "edition": "full", "packageType": "dmg", "deliveryRole": "manual-only" },
+      "expected_rank": 10
+    },
+    {
+      "id": 475898688,
+      "name": "CMTrace-Open_Nightly_20260713_75_efb9803c9f91_x64-setup.exe",
+      "size": 5970240,
+      "content_type": "application/octet-stream",
+      "browser_download_url": "https://github.com/adamgell/cmtraceopen/releases/download/nightly/CMTrace-Open_Nightly_20260713_75_efb9803c9f91_x64-setup.exe",
+      "expected": { "platform": "windows", "architecture": "x64", "edition": "full", "packageType": "nsis-setup", "deliveryRole": "mixed-manual-update" },
+      "expected_rank": null
+    },
+    {
+      "id": 475898687,
+      "name": "CMTrace-Open_Nightly_20260713_75_efb9803c9f91_x64-setup.exe.sig",
+      "size": 460,
+      "content_type": "application/pgp-signature",
+      "browser_download_url": "https://github.com/adamgell/cmtraceopen/releases/download/nightly/CMTrace-Open_Nightly_20260713_75_efb9803c9f91_x64-setup.exe.sig",
+      "expected": { "platform": "windows", "architecture": "x64", "edition": "full", "packageType": "signature", "deliveryRole": "supporting-file" },
+      "expected_rank": null
+    },
+    {
+      "id": 475898689,
+      "name": "CMTrace-Open_Nightly_20260713_75_efb9803c9f91_x64.exe",
+      "size": 23564032,
+      "content_type": "application/octet-stream",
+      "browser_download_url": "https://github.com/adamgell/cmtraceopen/releases/download/nightly/CMTrace-Open_Nightly_20260713_75_efb9803c9f91_x64.exe",
+      "expected": { "platform": "windows", "architecture": "x64", "edition": "full", "packageType": "portable-exe", "deliveryRole": "manual-only" },
+      "expected_rank": 0
+    },
+    {
+      "id": 475898706,
+      "name": "CMTrace-Open_Nightly_20260713_75_efb9803c9f91_x64.msi",
+      "size": 13320192,
+      "content_type": "application/x-msi",
+      "browser_download_url": "https://github.com/adamgell/cmtraceopen/releases/download/nightly/CMTrace-Open_Nightly_20260713_75_efb9803c9f91_x64.msi",
+      "expected": { "platform": "windows", "architecture": "x64", "edition": "full", "packageType": "msi", "deliveryRole": "manual-only" },
+      "expected_rank": null
+    },
+    {
+      "id": 475898649,
+      "name": "latest.json",
+      "size": 2389,
+      "content_type": "application/json",
+      "browser_download_url": "https://github.com/adamgell/cmtraceopen/releases/download/nightly/latest.json",
+      "expected": { "platform": "cross-platform", "architecture": "unknown", "edition": "not-applicable", "packageType": "updater-manifest", "deliveryRole": "updater-only" },
+      "expected_rank": null
+    }
+  ]
+}
