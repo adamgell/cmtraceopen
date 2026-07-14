@@ -664,6 +664,8 @@ jobs:
           git push --force origin "refs/tags/$TAG_NAME"
 
           cat > release-notes.md <<EOF
+          Nightly build status and downloads: https://adamgell.com/cmtraceopen/
+
           ## CMTrace Open Nightly
 
           Build: \`${BUILD_ID}\`

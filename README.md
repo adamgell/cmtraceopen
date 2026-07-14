@@ -13,9 +13,9 @@ Build status and nightly downloads are shown on the [CMTrace Open build page](ht
 
 | Platform | Download |
 |----------|----------|
-| Windows (x64) | [.msi + NSIS .exe installers](https://github.com/adamgell/CMTraceOpen/releases/latest) |
-| macOS (Apple Silicon) | [.dmg](https://github.com/adamgell/CMTraceOpen/releases/latest) |
-| Linux (x64) | [.deb / .AppImage](https://github.com/adamgell/CMTraceOpen/releases/latest) |
+| Windows (x64) | [.msi + NSIS .exe installers](https://download.cmtraceopen.com/?source=github-readme) |
+| macOS (Apple Silicon) | [.dmg](https://download.cmtraceopen.com/?source=github-readme) |
+| Linux (x64) | [.deb / .AppImage](https://download.cmtraceopen.com/?source=github-readme) |
 
 All releases are signed. The Windows executable is code-signed and the macOS app is notarized.
 
@@ -94,7 +94,7 @@ See the [DSRegCmd troubleshooting guide](DSREGCMD_TROUBLESHOOTING.md) for a deta
 
 ## Quick Start
 
-1. **Download** the release for your platform from the [Releases page](https://github.com/adamgell/CMTraceOpen/releases/latest)
+1. **Download** the release for your platform from the [CMTrace Open download page](https://download.cmtraceopen.com/?source=github-readme)
 2. **Run** the executable — no install required (or use the Windows MSI/NSIS installer)
 3. **Open a log** — drag and drop a file, use File > Open, or use a source preset
 4. **Explore** — use Find (Ctrl+F), Filter, or switch to the Intune/DSRegCmd workspace

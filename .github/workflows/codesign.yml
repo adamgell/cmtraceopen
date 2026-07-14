@@ -124,6 +124,8 @@ jobs:
         run: |
           $releaseTitle = "CMTrace Open $env:TAG_NAME"
           $releaseNotes = @"
+          Stable downloads: https://download.cmtraceopen.com/?source=github-release
+
           ## CMTrace Open $env:TAG_NAME
 
           Open-source CMTrace log viewer with built-in Intune diagnostics.

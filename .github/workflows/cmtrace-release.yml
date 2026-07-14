@@ -113,6 +113,8 @@ jobs:
           tagName: ${{ github.ref_name }}
           releaseName: "CMTrace Open ${{ github.ref_name }}"
           releaseBody: |
+            Stable downloads: https://download.cmtraceopen.com/?source=github-release
+
             ## CMTrace Open ${{ github.ref_name }}
 
             Open-source CMTrace log viewer with built-in Intune diagnostics.
