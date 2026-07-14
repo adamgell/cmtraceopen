@@ -1,0 +1,74 @@
+name: Download metrics snapshot
+
+on:
+  schedule:
+    - cron: "17 0 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: download-metrics
+  cancel-in-progress: false
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out collector source
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: tools/download-metrics/package-lock.json
+
+      - name: Verify isolated collector
+        working-directory: tools/download-metrics
+        run: |
+          npm ci
+          npm run check
+          npm test
+
+      - name: Open dedicated metrics worktree
+        shell: bash
+        run: |
+          if git ls-remote --exit-code --heads origin refs/heads/download-metrics >/dev/null 2>&1; then
+            git fetch origin refs/heads/download-metrics:refs/remotes/origin/download-metrics
+            git worktree add --detach metrics-worktree origin/download-metrics
+          else
+            git worktree add --detach metrics-worktree HEAD
+            git -C metrics-worktree switch --orphan download-metrics
+            git -C metrics-worktree rm -rf --ignore-unmatch .
+          fi
+
+      - name: Collect cumulative asset counters
+        working-directory: tools/download-metrics
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          metrics_root="${GITHUB_WORKSPACE}/metrics-worktree"
+          args=(--output "${metrics_root}")
+          if [[ -f "${metrics_root}/reports/latest-assets.json" ]]; then
+            args+=(--previous "${metrics_root}/reports/latest-assets.json")
+          fi
+          npm run collect -- "${args[@]}"
+
+      - name: Commit and update only download-metrics
+        shell: bash
+        run: |
+          git -C metrics-worktree config user.name "github-actions[bot]"
+          git -C metrics-worktree config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git -C metrics-worktree add -- snapshots reports
+          if git -C metrics-worktree diff --cached --quiet; then
+            exit 0
+          fi
+          git -C metrics-worktree commit -m "chore: snapshot release download metrics"
+          git -C metrics-worktree push origin HEAD:download-metrics
