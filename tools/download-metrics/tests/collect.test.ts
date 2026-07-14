@@ -4,6 +4,7 @@ import {
   mkdtemp,
   readFile,
   realpath,
+  rm,
   symlink,
   writeFile,
 } from "node:fs/promises";
@@ -244,25 +245,47 @@ describe("collector safety and failure behavior", () => {
     expect(after).toEqual(before);
   });
 
-  it("leaves the last report untouched when staging cannot write", async () => {
+  it("leaves all last-valid reports untouched when publishing cannot create the snapshot path", async () => {
     const root = await temporaryRoot();
     const output = join(root, "output");
     const reports = join(output, "reports");
-    await mkdir(reports, { recursive: true });
-    await writeFile(join(reports, "latest-assets.json"), "last-valid\n");
+    const repositoryRoot = join(root, "source-repository");
+    await collectDownloads({
+      outputDirectory: output,
+      fetcher: fetcherFor(
+        releases({ portable: 12, setup: 8, manifest: 30 }),
+      ),
+      clock,
+      repositoryRoot,
+    });
+    const reportNames = [
+      "latest-assets.json",
+      "latest-assets.csv",
+      "summary.json",
+    ];
+    const before = await Promise.all(
+      reportNames.map((name) => readFile(join(reports, name), "utf8")),
+    );
+
+    await rm(join(output, "snapshots"), { recursive: true });
     await writeFile(join(output, "snapshots"), "blocks snapshot directory\n");
+    const fetcher = fetcherFor(
+      releases({ portable: 13, setup: 9, manifest: 31 }),
+    );
 
     await expect(
       collectDownloads({
         outputDirectory: output,
-        fetcher: fetcherFor(releases({ portable: 12, setup: 8, manifest: 30 })),
+        fetcher,
         clock,
-        repositoryRoot: join(root, "source-repository"),
+        repositoryRoot,
       }),
-    ).rejects.toThrow();
-    expect(await readFile(join(reports, "latest-assets.json"), "utf8")).toBe(
-      "last-valid\n",
+    ).rejects.toThrow(/ENOTDIR|EEXIST/);
+    expect(fetcher).toHaveBeenCalledOnce();
+    const after = await Promise.all(
+      reportNames.map((name) => readFile(join(reports, name), "utf8")),
     );
+    expect(after).toEqual(before);
   });
 
   it("uses GITHUB_TOKEN only for API auth and redacts it from CLI errors", async () => {
