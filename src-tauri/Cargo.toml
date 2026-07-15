@@ -75,6 +75,9 @@ windows = { version = "0.62", features = [
 windows-future = "0.3"
 ureq = "3"
 
+[target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
+tauri-plugin-window-state = "2"
+
 [dev-dependencies]
 criterion = "0.5"
 tempfile = "3"

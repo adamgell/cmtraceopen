@@ -61,7 +61,12 @@ pub fn run() {
         default_panic_hook(info);
     }));
 
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+
+    #[cfg(desktop)]
+    let builder = builder.plugin(tauri_plugin_window_state::Builder::default().build());
+
+    builder
         // Persistent file logging (issue #193): the backend already uses the
         // `log` facade throughout, but no logger backend was ever registered so
         // those messages went nowhere. Write to the OS app-log dir with a size
