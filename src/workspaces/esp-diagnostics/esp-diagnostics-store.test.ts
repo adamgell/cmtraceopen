@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { renderHook } from "@testing-library/react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import {
   analyzeEspEvidence,
   getEspDiagnosticsSession,
@@ -21,6 +23,8 @@ import {
   createEspGraphCoordinator,
   getEspIdentityFingerprint,
   isEspSessionUpdate,
+  refreshEspGraphData,
+  useEspSessionUpdates,
 } from "./use-esp-session-updates";
 import type {
   EspDiagnosticsSnapshot,
@@ -37,6 +41,10 @@ vi.mock("@tauri-apps/api/core", () => ({
 const GRAPH_MANAGED_DEVICE_DEFAULT =
   "10101010-1010-4010-8010-101010101010";
 const GRAPH_MANAGED_DEVICE_B = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: vi.fn(),
+}));
 
 function makeSnapshot(
   evidenceIds: string[] = [],
@@ -2522,18 +2530,24 @@ describe("ESP Graph scheduling", () => {
 
   it("invalidates a captured selection when a same-identity analysis begins during cancellation", async () => {
     const activeCancellation = deferred<void>();
-    const orphanCancellation = deferred<void>();
-    const requestIds = ["graph-selected", "graph-replacement"];
-    const fetchGraph = vi.fn(async (request: EspGraphRequest) =>
-      makeOverlayWithSelectedDevice(
-        request.requestId,
-        request.selectedManagedDeviceId ?? "managed-default",
-      ),
-    );
-    const cancelGraph = vi
-      .fn<(requestId: string) => Promise<void>>()
-      .mockImplementationOnce(() => activeCancellation.promise)
-      .mockImplementationOnce(() => orphanCancellation.promise);
+    const activeOverlay = deferred<EspGraphOverlay>();
+    const requestIds = ["graph-selected", "graph-active", "graph-replacement"];
+    const fetchGraph = vi
+      .fn<(request: EspGraphRequest) => Promise<EspGraphOverlay>>()
+      .mockImplementationOnce(async (request) =>
+        makeOverlayWithSelectedDevice(
+          request.requestId,
+          request.selectedManagedDeviceId ?? "managed-default",
+        ),
+      )
+      .mockImplementationOnce(() => activeOverlay.promise)
+      .mockImplementationOnce(async (request) =>
+        makeOverlayWithSelectedDevice(
+          request.requestId,
+          request.selectedManagedDeviceId ?? "managed-default",
+        ),
+      );
+    const cancelGraph = vi.fn(() => activeCancellation.promise);
     const coordinator = createEspGraphCoordinator({
       fetchGraph,
       cancelGraph,
@@ -2547,10 +2561,10 @@ describe("ESP Graph scheduling", () => {
 
     await coordinator.refresh(GRAPH_MANAGED_DEVICE_B);
     coordinator.start();
-    useEspDiagnosticsStore.setState({
-      graphRequestId: "graph-active",
-      graphPhase: "loading",
-    });
+    const activeRequest = coordinator.refresh();
+    expect(useEspDiagnosticsStore.getState().graphRequestId).toBe(
+      "graph-active",
+    );
 
     const staleRefresh = coordinator.refresh();
     useEspDiagnosticsStore.getState().beginAnalysis("analysis-second");
@@ -2560,23 +2574,24 @@ describe("ESP Graph scheduling", () => {
         "analysis-second",
         makeSnapshot(["local-second"], "same-device"),
       );
-    expect(cancelGraph.mock.calls).toEqual([
-      ["graph-active"],
-      ["graph-active"],
-    ]);
+    expect(cancelGraph).toHaveBeenCalledTimes(1);
+    expect(cancelGraph).toHaveBeenCalledWith("graph-active");
+    const fetchCountBeforeCancellation = fetchGraph.mock.calls.length;
 
     activeCancellation.resolve();
     await staleRefresh;
-    const fetchCountBeforeOrphanCancellation = fetchGraph.mock.calls.length;
 
-    orphanCancellation.resolve();
-    await vi.waitFor(() => expect(fetchGraph).toHaveBeenCalledTimes(2));
-    const replacementRequest = fetchGraph.mock.calls[1]?.[0];
+    await vi.waitFor(() => expect(fetchGraph).toHaveBeenCalledTimes(3));
+    const replacementRequest = fetchGraph.mock.calls[2]?.[0];
     const appliedRequestId =
       useEspDiagnosticsStore.getState().snapshot?.graph?.requestId;
+    activeOverlay.resolve(
+      makeOverlayWithSelectedDevice("graph-active", "managed-candidate-b"),
+    );
+    await activeRequest;
     coordinator.dispose();
 
-    expect(fetchCountBeforeOrphanCancellation).toBe(1);
+    expect(fetchCountBeforeCancellation).toBe(2);
     expect(replacementRequest).toEqual(
       expect.objectContaining({
         requestId: "graph-replacement",
@@ -2868,17 +2883,16 @@ describe("ESP Graph scheduling", () => {
     expect(() => getEspIdentityFingerprint(unclassified)).not.toThrow();
   });
 
-  it("keeps the newest identity in control when cancellation promises settle out of order", async () => {
+  it("keeps newer ownership intact when an older cancellation settles late", async () => {
+    const olderOverlay = deferred<EspGraphOverlay>();
+    const newestOverlay = deferred<EspGraphOverlay>();
     const olderCancellation = deferred<void>();
-    const newerCancellation = deferred<void>();
-    const fetchGraph = vi.fn(async (request: EspGraphRequest) =>
-      makeOverlay(request.requestId),
-    );
-    const cancelGraph = vi
-      .fn<(requestId: string) => Promise<void>>()
-      .mockImplementationOnce(() => olderCancellation.promise)
-      .mockImplementationOnce(() => newerCancellation.promise);
-    const ids = ["graph-newest", "graph-stale"];
+    const fetchGraph = vi
+      .fn<(request: EspGraphRequest) => Promise<EspGraphOverlay>>()
+      .mockImplementationOnce(() => olderOverlay.promise)
+      .mockImplementationOnce(() => newestOverlay.promise);
+    const cancelGraph = vi.fn(() => olderCancellation.promise);
+    const ids = ["graph-older", "graph-newest"];
     const coordinator = createEspGraphCoordinator({
       fetchGraph,
       cancelGraph,
@@ -2888,23 +2902,31 @@ describe("ESP Graph scheduling", () => {
     useEspDiagnosticsStore.setState({
       phase: "ready",
       snapshot: makeSnapshot(["local-y"], "device-y"),
-      graphRequestId: "graph-active",
-      graphPhase: "loading",
     });
 
-    const olderRun = coordinator.reconcile();
+    const olderRequest = coordinator.refresh();
+    const olderRun = coordinator.refresh();
     useEspDiagnosticsStore.setState({
       snapshot: makeSnapshot(["local-z"], "device-z"),
     });
-    const newerRun = coordinator.reconcile();
+    olderOverlay.resolve(makeOverlay("graph-older"));
+    await olderRequest;
+    const newerRun = coordinator.refresh();
+    expect(useEspDiagnosticsStore.getState().graphRequestId).toBe(
+      "graph-newest",
+    );
 
-    newerCancellation.resolve();
-    await newerRun;
     olderCancellation.resolve();
     await olderRun;
+    expect(useEspDiagnosticsStore.getState().graphRequestId).toBe(
+      "graph-newest",
+    );
+    expect(useEspDiagnosticsStore.getState().graphPhase).toBe("loading");
 
-    expect(fetchGraph).toHaveBeenCalledTimes(1);
-    expect(fetchGraph.mock.calls[0][0].identity.deviceName).toBe(
+    newestOverlay.resolve(makeOverlay("graph-newest"));
+    await newerRun;
+    expect(fetchGraph).toHaveBeenCalledTimes(2);
+    expect(fetchGraph.mock.calls[1][0].identity.deviceName).toBe(
       "host-device-z",
     );
     expect(useEspDiagnosticsStore.getState().snapshot?.graph?.requestId).toBe(
@@ -3176,22 +3198,23 @@ describe("ESP Graph scheduling", () => {
     expect(useEspDiagnosticsStore.getState().snapshot?.graph).toBeNull();
   });
 
-  it.each(["refreshFirst", "disableFirst"] as const)(
-    "never launches stale Graph work after opt-out when %s cancellation settles first",
+  it.each(["fetchFirst", "cancelFirst"] as const)(
+    "never launches stale Graph work after opt-out when the active %s settles first",
     async (settlesFirst) => {
-      const refreshCancellation = deferred<void>();
-      const disableCancellation = deferred<void>();
-      const fetchGraph = vi.fn(async (request: EspGraphRequest) =>
-        makeOverlay(request.requestId),
-      );
-      const cancelGraph = vi
-        .fn<(requestId: string) => Promise<void>>()
-        .mockImplementationOnce(() => refreshCancellation.promise)
-        .mockImplementationOnce(() => disableCancellation.promise);
+      const activeOverlay = deferred<EspGraphOverlay>();
+      const activeCancellation = deferred<void>();
+      const fetchGraph = vi
+        .fn<(request: EspGraphRequest) => Promise<EspGraphOverlay>>()
+        .mockImplementationOnce(() => activeOverlay.promise)
+        .mockImplementationOnce(async (request) =>
+          makeOverlay(request.requestId),
+        );
+      const cancelGraph = vi.fn(() => activeCancellation.promise);
+      const requestIds = ["graph-active", "graph-after-opt-out"];
       const coordinator = createEspGraphCoordinator({
         fetchGraph,
         cancelGraph,
-        createRequestId: () => "graph-after-opt-out",
+        createRequestId: () => requestIds.shift() ?? "graph-unexpected",
       });
       useUiStore.setState({
         graphApiEnabled: true,
@@ -3200,27 +3223,26 @@ describe("ESP Graph scheduling", () => {
       useEspDiagnosticsStore.setState({
         phase: "ready",
         snapshot: makeSnapshot(["local-a"]),
-        graphRequestId: "graph-active",
-        graphPhase: "loading",
       });
 
+      const active = coordinator.refresh();
       const refresh = coordinator.refresh();
       useUiStore.setState({ graphApiEnabled: false });
       const disable = coordinator.reconcile();
+      expect(cancelGraph).toHaveBeenCalledTimes(1);
+      expect(cancelGraph).toHaveBeenCalledWith("graph-active");
 
-      if (settlesFirst === "refreshFirst") {
-        refreshCancellation.resolve();
-        await refresh;
-        disableCancellation.resolve();
-        await disable;
+      if (settlesFirst === "fetchFirst") {
+        activeOverlay.resolve(makeOverlay("graph-active"));
+        await active;
+        activeCancellation.resolve();
       } else {
-        disableCancellation.resolve();
-        await disable;
-        refreshCancellation.resolve();
-        await refresh;
+        activeCancellation.resolve();
+        activeOverlay.resolve(makeOverlay("graph-active"));
       }
+      await Promise.all([active, refresh, disable]);
 
-      expect(fetchGraph).not.toHaveBeenCalled();
+      expect(fetchGraph).toHaveBeenCalledTimes(1);
       expect(useEspDiagnosticsStore.getState().graphPhase).toBe("disabled");
       expect(useEspDiagnosticsStore.getState().snapshot?.graph).toBeNull();
       coordinator.dispose();
@@ -3276,13 +3298,18 @@ describe("ESP Graph scheduling", () => {
 
   it("deduplicates concurrent reconcile calls with an in-flight cancellation", async () => {
     const cancellation = deferred<void>();
+    const oldResult = deferred<EspGraphOverlay>();
     const result = deferred<EspGraphOverlay>();
     const cancelGraph = vi.fn(() => cancellation.promise);
-    const fetchGraph = vi.fn(() => result.promise);
+    const fetchGraph = vi
+      .fn<(request: EspGraphRequest) => Promise<EspGraphOverlay>>()
+      .mockImplementationOnce(() => oldResult.promise)
+      .mockImplementationOnce(() => result.promise);
+    const requestIds = ["graph-old", "graph-new"];
     const coordinator = createEspGraphCoordinator({
       fetchGraph,
       cancelGraph,
-      createRequestId: () => "graph-new",
+      createRequestId: () => requestIds.shift() ?? "graph-unexpected",
     });
     useUiStore.setState({ graphApiEnabled: true, graphApiStatus: "connected" });
     useEspDiagnosticsStore.getState().beginAnalysis("analysis-a");
@@ -3290,15 +3317,14 @@ describe("ESP Graph scheduling", () => {
       .getState()
       .applyAnalysis("analysis-a", makeSnapshot(["local-a"]));
 
-    // Simulate a pre-existing in-flight request so cancelCurrentRequest() yields.
+    const oldRequest = coordinator.refresh();
     useEspDiagnosticsStore.setState({
-      graphRequestId: "graph-old",
-      graphPhase: "loading",
+      snapshot: makeSnapshot(["local-b"], "device-b"),
     });
 
     // Two concurrent reconcile() calls. r1 yields inside cancelCurrentRequest()
-    // (awaiting cancellation.promise). Without the fingerprint claim before the
-    // yield, r2 would also pass the dedup guard and dispatch a second fetch.
+    // for the coordinator-owned graph-old request. Without the fingerprint
+    // claim before the yield, r2 would also dispatch a replacement fetch.
     const r1 = coordinator.reconcile();
     const r2 = coordinator.reconcile();
 
@@ -3309,9 +3335,12 @@ describe("ESP Graph scheduling", () => {
     cancellation.resolve();
     result.resolve(makeOverlay("graph-new"));
     await Promise.all([r1, r2]);
+    oldResult.resolve(makeOverlay("graph-old"));
+    await oldRequest;
 
-    // Exactly one fetch should have been dispatched despite two concurrent calls.
-    expect(fetchGraph).toHaveBeenCalledTimes(1);
+    // Exactly one replacement fetch is dispatched despite two concurrent calls.
+    expect(fetchGraph).toHaveBeenCalledTimes(2);
+    expect(fetchGraph.mock.calls[1]).toBeDefined();
     coordinator.dispose();
   });
 
@@ -3323,17 +3352,22 @@ describe("ESP Graph scheduling", () => {
         ...snapshot,
         graph: makeOverlay("graph-complete"),
       },
-      graphRequestId: "graph-active",
-      graphPhase: "loading",
     });
     useUiStore.setState({
-      graphApiEnabled: false,
+      graphApiEnabled: true,
       graphApiStatus: "connected",
     });
+    const pending = deferred<EspGraphOverlay>();
     const cancelGraph = vi.fn(async () => {
       throw new Error("Native cancellation unavailable");
     });
-    const coordinator = createEspGraphCoordinator({ cancelGraph });
+    const coordinator = createEspGraphCoordinator({
+      fetchGraph: vi.fn(() => pending.promise),
+      cancelGraph,
+      createRequestId: () => "graph-active",
+    });
+    const active = coordinator.refresh();
+    useUiStore.setState({ graphApiEnabled: false });
 
     await expect(coordinator.reconcile()).resolves.toBeUndefined();
 
@@ -3343,6 +3377,8 @@ describe("ESP Graph scheduling", () => {
     expect(
       useEspDiagnosticsStore.getState().snapshot?.rawEvidence[0].recordId,
     ).toBe("local-a");
+    pending.resolve(makeOverlay("graph-active"));
+    await active;
     coordinator.dispose();
   });
 
@@ -3422,6 +3458,214 @@ describe("ESP Graph scheduling", () => {
     pending.resolve(makeOverlay("graph-dispose"));
     await activeQuery;
     expect(useEspDiagnosticsStore.getState().snapshot?.graph).toBeNull();
+  });
+
+  it("does not let a live non-owner cancel another coordinator's request", async () => {
+    const ownerOverlay = deferred<EspGraphOverlay>();
+    const ownerCancelGraph = vi.fn(async () => undefined);
+    const nonOwnerCancelGraph = vi.fn(async () => undefined);
+    const owner = createEspGraphCoordinator({
+      fetchGraph: vi.fn(() => ownerOverlay.promise),
+      cancelGraph: ownerCancelGraph,
+      createRequestId: () => "graph-owner",
+    });
+    const nonOwner = createEspGraphCoordinator({
+      cancelGraph: nonOwnerCancelGraph,
+    });
+    useUiStore.setState({ graphApiEnabled: true, graphApiStatus: "connected" });
+    useEspDiagnosticsStore.setState({
+      phase: "ready",
+      snapshot: makeSnapshot(["local-owner"], "owner-device"),
+    });
+
+    const ownerRequest = owner.refresh();
+    const ownerSnapshot = useEspDiagnosticsStore.getState().snapshot;
+    try {
+      expect(useEspDiagnosticsStore.getState().graphRequestId).toBe(
+        "graph-owner",
+      );
+
+      await nonOwner.cancel();
+
+      expect(nonOwnerCancelGraph).not.toHaveBeenCalled();
+      expect(ownerCancelGraph).not.toHaveBeenCalled();
+      expect(useEspDiagnosticsStore.getState().graphRequestId).toBe(
+        "graph-owner",
+      );
+      expect(useEspDiagnosticsStore.getState().graphPhase).toBe("loading");
+      expect(useEspDiagnosticsStore.getState().snapshot).toBe(ownerSnapshot);
+    } finally {
+      owner.dispose();
+      nonOwner.dispose();
+      ownerOverlay.resolve(makeOverlay("graph-owner"));
+      await ownerRequest;
+    }
+  });
+
+  it("does not let a live non-owner dispose another coordinator's request", async () => {
+    const ownerOverlay = deferred<EspGraphOverlay>();
+    const ownerCancelGraph = vi.fn(async () => undefined);
+    const nonOwnerCancelGraph = vi.fn(async () => undefined);
+    const owner = createEspGraphCoordinator({
+      fetchGraph: vi.fn(() => ownerOverlay.promise),
+      cancelGraph: ownerCancelGraph,
+      createRequestId: () => "graph-owner",
+    });
+    const nonOwner = createEspGraphCoordinator({
+      cancelGraph: nonOwnerCancelGraph,
+    });
+    useUiStore.setState({ graphApiEnabled: true, graphApiStatus: "connected" });
+    useEspDiagnosticsStore.setState({
+      phase: "ready",
+      snapshot: makeSnapshot(["local-owner"], "owner-device"),
+    });
+
+    const ownerRequest = owner.refresh();
+    const ownerSnapshot = useEspDiagnosticsStore.getState().snapshot;
+    try {
+      expect(useEspDiagnosticsStore.getState().graphRequestId).toBe(
+        "graph-owner",
+      );
+
+      nonOwner.dispose();
+      await Promise.resolve();
+
+      expect(nonOwnerCancelGraph).not.toHaveBeenCalled();
+      expect(ownerCancelGraph).not.toHaveBeenCalled();
+      expect(useEspDiagnosticsStore.getState().graphRequestId).toBe(
+        "graph-owner",
+      );
+      expect(useEspDiagnosticsStore.getState().graphPhase).toBe("loading");
+      expect(useEspDiagnosticsStore.getState().snapshot).toBe(ownerSnapshot);
+    } finally {
+      owner.dispose();
+      ownerOverlay.resolve(makeOverlay("graph-owner"));
+      await ownerRequest;
+    }
+  });
+
+  it("routes orphan cancellation only through the coordinator that owns the request", async () => {
+    const ownerOverlay = deferred<EspGraphOverlay>();
+    const ownerCancelGraph = vi.fn(async () => undefined);
+    const nonOwnerCancelGraph = vi.fn(async () => undefined);
+    const owner = createEspGraphCoordinator({
+      fetchGraph: vi.fn(() => ownerOverlay.promise),
+      cancelGraph: ownerCancelGraph,
+      createRequestId: () => "graph-owner",
+    });
+    const nonOwner = createEspGraphCoordinator({
+      fetchGraph: vi.fn(async (request: EspGraphRequest) =>
+        makeOverlay(request.requestId),
+      ),
+      cancelGraph: nonOwnerCancelGraph,
+      createRequestId: () => "graph-non-owner",
+    });
+    useUiStore.setState({ graphApiEnabled: true, graphApiStatus: "idle" });
+    useEspDiagnosticsStore.setState({
+      phase: "ready",
+      snapshot: makeSnapshot(["local-owner"], "owner-device"),
+    });
+    owner.start();
+    nonOwner.start();
+    await vi.waitFor(() =>
+      expect(useEspDiagnosticsStore.getState().graphPhase).toBe("unavailable"),
+    );
+    useUiStore.setState({ graphApiStatus: "connected" });
+    await Promise.resolve();
+
+    const ownerRequest = owner.refresh();
+    try {
+      expect(useEspDiagnosticsStore.getState().graphRequestId).toBe(
+        "graph-owner",
+      );
+
+      useEspDiagnosticsStore.getState().beginAnalysis("analysis-replacement");
+      await Promise.resolve();
+
+      expect(ownerCancelGraph).toHaveBeenCalledTimes(1);
+      expect(ownerCancelGraph).toHaveBeenCalledWith("graph-owner");
+      expect(nonOwnerCancelGraph).not.toHaveBeenCalled();
+    } finally {
+      ownerOverlay.resolve(makeOverlay("graph-owner"));
+      await ownerRequest;
+      owner.dispose();
+      nonOwner.dispose();
+    }
+  });
+
+  it("keeps each hook cleanup scoped to its captured Graph coordinator", async () => {
+    const originalEspSubscribe = useEspDiagnosticsStore.subscribe;
+    const originalUiSubscribe = useUiStore.subscribe;
+    const espUnsubscribers: Array<ReturnType<typeof vi.fn>> = [];
+    const uiUnsubscribers: Array<ReturnType<typeof vi.fn>> = [];
+    const espSubscribe = vi
+      .spyOn(useEspDiagnosticsStore, "subscribe")
+      .mockImplementation((listener) => {
+        const unsubscribe = originalEspSubscribe(listener);
+        const trackedUnsubscribe = vi.fn(unsubscribe);
+        espUnsubscribers.push(trackedUnsubscribe);
+        return trackedUnsubscribe;
+      });
+    const uiSubscribe = vi
+      .spyOn(useUiStore, "subscribe")
+      .mockImplementation((listener) => {
+        const unsubscribe = originalUiSubscribe(listener);
+        const trackedUnsubscribe = vi.fn(unsubscribe);
+        uiUnsubscribers.push(trackedUnsubscribe);
+        return trackedUnsubscribe;
+      });
+    const hydration = vi
+      .spyOn(useUiStore.persist, "hasHydrated")
+      .mockReturnValue(true);
+    vi.mocked(listen).mockResolvedValue(vi.fn());
+    vi.mocked(invoke).mockImplementation(async (command, args) => {
+      if (command === "graph_fetch_esp_diagnostics") {
+        const request = (args as { request: EspGraphRequest }).request;
+        return makeOverlay(request.requestId);
+      }
+      if (command === "graph_cancel_esp_diagnostics") {
+        return undefined;
+      }
+      throw new Error(`Unexpected IPC command: ${command}`);
+    });
+    useUiStore.setState({ graphApiEnabled: true, graphApiStatus: "idle" });
+    useEspDiagnosticsStore.setState({
+      phase: "ready",
+      snapshot: makeSnapshot(["local-hook"], "hook-device"),
+    });
+
+    const first = renderHook(() => useEspSessionUpdates());
+    const second = renderHook(() => useEspSessionUpdates());
+    try {
+      expect(espUnsubscribers).toHaveLength(2);
+      expect(uiUnsubscribers).toHaveLength(2);
+
+      first.unmount();
+
+      expect(espUnsubscribers[0]).toHaveBeenCalledTimes(1);
+      expect(uiUnsubscribers[0]).toHaveBeenCalledTimes(1);
+      expect(espUnsubscribers[1]).not.toHaveBeenCalled();
+      expect(uiUnsubscribers[1]).not.toHaveBeenCalled();
+
+      useUiStore.setState({ graphApiStatus: "connected" });
+      vi.mocked(invoke).mockClear();
+      await refreshEspGraphData();
+      expect(vi.mocked(invoke)).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(invoke).mock.calls[0]?.[0]).toBe(
+        "graph_fetch_esp_diagnostics",
+      );
+
+      second.unmount();
+      vi.mocked(invoke).mockClear();
+      await refreshEspGraphData();
+      expect(vi.mocked(invoke)).not.toHaveBeenCalled();
+    } finally {
+      first.unmount();
+      second.unmount();
+      hydration.mockRestore();
+      espSubscribe.mockRestore();
+      uiSubscribe.mockRestore();
+    }
   });
 
   it("keeps repeated lifecycle calls on a disposed coordinator isolated from active work", async () => {
@@ -3590,29 +3834,28 @@ describe("ESP Graph scheduling", () => {
     // cancelCurrentRequest() in the old run and the orphan cancel from the
     // subscription resolve together when cancellation.resolve() fires.
     const cancelGraph = vi.fn(() => cancellation.promise);
-    const fetchGraph = vi.fn(async (request: EspGraphRequest) =>
-      makeOverlay(request.requestId),
-    );
-    let idSeq = 0;
+    const priorOverlay = deferred<EspGraphOverlay>();
+    const fetchGraph = vi
+      .fn<(request: EspGraphRequest) => Promise<EspGraphOverlay>>()
+      .mockImplementationOnce(() => priorOverlay.promise)
+      .mockImplementationOnce(async (request) =>
+        makeOverlay(request.requestId),
+      );
+    const requestIds = ["graph-prior", "graph-current"];
 
     useUiStore.setState({ graphApiEnabled: true, graphApiStatus: "connected" });
     useEspDiagnosticsStore.getState().beginAnalysis("analysis-a");
     useEspDiagnosticsStore.getState().applyAnalysis("analysis-a", snapshotA);
 
-    // Inject a prior in-flight request so cancelCurrentRequest() will yield.
-    useEspDiagnosticsStore.setState({
-      graphRequestId: "graph-prior",
-      graphPhase: "loading",
-    });
-
     const coordinator = createEspGraphCoordinator({
       fetchGraph,
       cancelGraph,
-      createRequestId: () => `graph-${++idSeq}`,
+      createRequestId: () => requestIds.shift() ?? "graph-unexpected",
     });
+    const priorRequest = coordinator.refresh();
 
     // Old run starts. It claims fingerprint-A and blocks in cancelCurrentRequest().
-    const r1 = coordinator.reconcile();
+    const r1 = coordinator.refresh();
 
     // Switch to a different device while r1 is blocked.
     // beginAnalysis clears graphRequestId → null; applyAnalysis sets snapshotB.
@@ -3636,10 +3879,10 @@ describe("ESP Graph scheduling", () => {
     // The fix ensures the old run detects the identity mismatch after the
     // cancellation await and returns without dispatching a device-A fetch.
     // Every fetch that was dispatched should be for device-B.
-    for (const [request] of fetchGraph.mock.calls) {
+    for (const [request] of fetchGraph.mock.calls.slice(1)) {
       expect(request.identity.deviceName).toBe(snapshotB.identity.deviceName);
     }
-    expect(fetchGraph).toHaveBeenCalledTimes(1);
+    expect(fetchGraph).toHaveBeenCalledTimes(2);
 
     // Device-B's overlay is ultimately applied to the current snapshot.
     expect(useEspDiagnosticsStore.getState().snapshot?.graph).not.toBeNull();
@@ -3647,35 +3890,48 @@ describe("ESP Graph scheduling", () => {
       useEspDiagnosticsStore.getState().snapshot?.rawEvidence[0].recordId,
     ).toBe("local-b");
 
+    priorOverlay.resolve(makeOverlay("graph-prior"));
+    await priorRequest;
     coordinator.dispose();
   });
 
   it("does not dispatch a Graph fetch when the option is disabled during a cancellation await", async () => {
     const cancellation = deferred<void>();
     const cancelGraph = vi.fn(() => cancellation.promise);
-    const fetchGraph = vi.fn(async (request: EspGraphRequest) =>
-      makeOverlay(request.requestId),
-    );
+    const activeOverlay = deferred<EspGraphOverlay>();
+    const fetchGraph = vi
+      .fn<(request: EspGraphRequest) => Promise<EspGraphOverlay>>()
+      .mockImplementationOnce(() => activeOverlay.promise)
+      .mockImplementationOnce(async (request) =>
+        makeOverlay(request.requestId),
+      );
+    const requestIds = ["graph-prior", "graph-unexpected"];
 
     useUiStore.setState({ graphApiEnabled: true, graphApiStatus: "connected" });
     useEspDiagnosticsStore.getState().beginAnalysis("analysis-a");
     useEspDiagnosticsStore
       .getState()
       .applyAnalysis("analysis-a", makeSnapshot(["local-a"]));
-    useEspDiagnosticsStore.setState({
-      graphRequestId: "graph-prior",
-      graphPhase: "loading",
+    const coordinator = createEspGraphCoordinator({
+      fetchGraph,
+      cancelGraph,
+      createRequestId: () => requestIds.shift() ?? "graph-extra",
     });
+    const active = coordinator.refresh();
+    coordinator.start();
 
-    const coordinator = createEspGraphCoordinator({ fetchGraph, cancelGraph });
-    const reconcile = coordinator.reconcile();
+    const refresh = coordinator.refresh();
     useUiStore.setState({ graphApiEnabled: false });
     cancellation.resolve();
-    await reconcile;
-    await Promise.resolve();
+    await refresh;
+    await vi.waitFor(() =>
+      expect(useEspDiagnosticsStore.getState().graphPhase).toBe("disabled"),
+    );
 
-    expect(fetchGraph).not.toHaveBeenCalled();
+    expect(fetchGraph).toHaveBeenCalledTimes(1);
     expect(useEspDiagnosticsStore.getState().graphPhase).toBe("disabled");
+    activeOverlay.resolve(makeOverlay("graph-prior"));
+    await active;
     coordinator.dispose();
   });
 

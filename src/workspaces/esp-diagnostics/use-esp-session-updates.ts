@@ -395,7 +395,8 @@ export function createEspGraphCoordinator(
   let selectedManagedDeviceFingerprint: string | null = null;
   let suppressedOverlaySelectionFingerprint: string | null = null;
   let pendingOrphanCancellation: Promise<void> | null = null;
-  let ownedRequestId: string | null = null;
+  const ownedRequestIds = new Set<string>();
+  const requestCancellations = new Map<string, Promise<void>>();
   let unsubscribeEsp: (() => void) | null = null;
   let unsubscribeUi: (() => void) | null = null;
 
@@ -455,39 +456,64 @@ export function createEspGraphCoordinator(
     return overlaySelection;
   };
 
-  const cancelCurrentRequest = (): Promise<void> | null => {
-    const requestId =
-      ownedRequestId ?? useEspDiagnosticsStore.getState().graphRequestId;
-    if (!requestId) {
+  const cancelOwnedRequest = (
+    requestId: string,
+    warning: string,
+  ): Promise<void> | null => {
+    if (!ownedRequestIds.has(requestId)) {
       return null;
     }
+    const existingCancellation = requestCancellations.get(requestId);
+    if (existingCancellation) {
+      return existingCancellation;
+    }
 
-    return cancelGraph(requestId)
-      .catch(() => {
-        console.warn("[esp-diagnostics] native Graph cancellation failed", {
-          requestId,
-        });
-      })
-      .finally(() => {
-        if (ownedRequestId === requestId) {
-          ownedRequestId = null;
-        }
-        useEspDiagnosticsStore.getState().cancelGraph(requestId);
-      });
+    const finishCancellation = () => {
+      ownedRequestIds.delete(requestId);
+      useEspDiagnosticsStore.getState().cancelGraph(requestId);
+      if (requestCancellations.get(requestId) === cancellation) {
+        requestCancellations.delete(requestId);
+      }
+    };
+    const cancellation = cancelGraph(requestId).then(
+      () => {
+        finishCancellation();
+      },
+      () => {
+        console.warn(warning, { requestId });
+        finishCancellation();
+      },
+    );
+    requestCancellations.set(requestId, cancellation);
+    return cancellation;
+  };
+
+  const cancelCurrentRequest = (): Promise<void> | null => {
+    const cancellations = Array.from(ownedRequestIds, (requestId) =>
+      cancelOwnedRequest(
+        requestId,
+        "[esp-diagnostics] native Graph cancellation failed",
+      ),
+    ).filter((cancellation): cancellation is Promise<void> => !!cancellation);
+    if (cancellations.length === 0) {
+      return null;
+    }
+    if (cancellations.length === 1) {
+      return cancellations[0];
+    }
+    return Promise.all(cancellations).then(() => undefined);
   };
 
   const cancelOrphanedRequest = (requestId: string): void => {
-    const cancellation = cancelGraph(requestId).catch(() => {
-      console.warn("[esp-diagnostics] orphan Graph cancel failed", {
-        requestId,
-      });
-    });
+    const cancellation = cancelOwnedRequest(
+      requestId,
+      "[esp-diagnostics] orphan Graph cancel failed",
+    );
+    if (!cancellation) {
+      return;
+    }
     pendingOrphanCancellation = cancellation;
     void cancellation.then(() => {
-      if (ownedRequestId === requestId) {
-        ownedRequestId = null;
-      }
-      useEspDiagnosticsStore.getState().cancelGraph(requestId);
       if (pendingOrphanCancellation === cancellation) {
         pendingOrphanCancellation = null;
       }
@@ -657,7 +683,7 @@ export function createEspGraphCoordinator(
       requestId,
       requestSelectedManagedDeviceId,
     );
-    ownedRequestId = requestId;
+    ownedRequestIds.add(requestId);
     useEspDiagnosticsStore.getState().beginGraph(requestId, currentFingerprint);
 
     try {
@@ -706,9 +732,7 @@ export function createEspGraphCoordinator(
           );
       }
     } finally {
-      if (ownedRequestId === requestId) {
-        ownedRequestId = null;
-      }
+      ownedRequestIds.delete(requestId);
     }
   };
 
@@ -814,14 +838,16 @@ export function useEspSessionUpdates(): void {
     let disposed = false;
     let unlisten: UnlistenFn | null = null;
     let stopWaitingForHydration: (() => void) | null = null;
+    let graphCoordinator: EspGraphCoordinator | null = null;
 
     const attach = () => {
-      if (disposed || unlisten) {
+      if (disposed || unlisten || graphCoordinator) {
         return;
       }
 
-      globalGraphCoordinator = createEspGraphCoordinator();
-      globalGraphCoordinator.start();
+      graphCoordinator = createEspGraphCoordinator();
+      globalGraphCoordinator = graphCoordinator;
+      graphCoordinator.start();
 
       void listen<unknown>(ESP_SESSION_UPDATE_EVENT, (event) => {
         if (isEspSessionUpdate(event.payload)) {
@@ -846,8 +872,11 @@ export function useEspSessionUpdates(): void {
       disposed = true;
       stopWaitingForHydration?.();
       unlisten?.();
-      globalGraphCoordinator?.dispose();
-      globalGraphCoordinator = null;
+      graphCoordinator?.dispose();
+      if (globalGraphCoordinator === graphCoordinator) {
+        globalGraphCoordinator = null;
+      }
+      graphCoordinator = null;
     };
   }, []);
 }
