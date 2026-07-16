@@ -1444,3 +1444,661 @@ fn normalization_timestamps_are_pure_and_require_an_explicit_local_offset() {
     assert_eq!(invalid_offset.kind, EspTimestampKind::Invalid);
     assert_eq!(invalid_offset.normalized_utc, None);
 }
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ScenarioCases {
+    cases: Vec<ScenarioCase>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ScenarioCase {
+    name: String,
+    expected_scenario: EspScenario,
+    records: Vec<ScenarioRegistryRecord>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ScenarioRegistryRecord {
+    source_artifact_id: String,
+    evidence_id: String,
+    key: String,
+    value_name: String,
+    value: EspObservationValue,
+    source_timestamp: String,
+}
+
+fn fixture_context(
+    source_kind: EspSourceKind,
+    source_artifact_id: &str,
+    evidence_id: &str,
+    source_timestamp: &str,
+) -> EspObservationContext {
+    EspObservationContext {
+        evidence_ref: EspEvidenceRef {
+            evidence_id: evidence_id.to_string(),
+            source_artifact_id: source_artifact_id.to_string(),
+        },
+        provenance: EspEvidenceProvenance {
+            source_kind,
+            source_artifact_id: source_artifact_id.to_string(),
+            file_path: None,
+            line_number: None,
+            record_number: None,
+            registry: None,
+            event: None,
+        },
+        source_timestamp: Some(timestamp(source_timestamp)),
+        observed_at_utc: "2026-07-15T18:00:00Z".to_string(),
+        sensitivity: EspSensitivity::Public,
+        parse_state: EspParseState::Parsed,
+        access_state: EspSourceAccessState::Available,
+    }
+}
+
+fn registry_record(
+    source_artifact_id: &str,
+    evidence_id: &str,
+    key: &str,
+    value_name: &str,
+    value: EspObservationValue,
+    source_timestamp: &str,
+) -> EspEvidenceRecord {
+    let mut context = fixture_context(
+        EspSourceKind::Registry,
+        source_artifact_id,
+        evidence_id,
+        source_timestamp,
+    );
+    context.provenance.registry = Some(EspRegistryProvenance {
+        hive: "HKLM".to_string(),
+        key: key.to_string(),
+        value_name: Some(value_name.to_string()),
+    });
+    EspEvidenceRecord::Registry(EspRegistryObservation {
+        context,
+        hive: "HKLM".to_string(),
+        key: key.to_string(),
+        value_name: value_name.to_string(),
+        value,
+    })
+}
+
+fn json_record(
+    source_artifact_id: &str,
+    evidence_id: &str,
+    document_type: &str,
+    json_pointer: &str,
+    value: EspObservationValue,
+    source_timestamp: &str,
+) -> EspEvidenceRecord {
+    EspEvidenceRecord::Json(EspJsonObservation {
+        context: fixture_context(
+            EspSourceKind::Json,
+            source_artifact_id,
+            evidence_id,
+            source_timestamp,
+        ),
+        document_type: document_type.to_string(),
+        json_pointer: json_pointer.to_string(),
+        value,
+    })
+}
+
+fn event_record(
+    source_artifact_id: &str,
+    evidence_id: &str,
+    event_id: u32,
+    record_id: u64,
+    source_timestamp: &str,
+    message: &str,
+) -> EspEvidenceRecord {
+    let mut context = fixture_context(
+        EspSourceKind::EventLog,
+        source_artifact_id,
+        evidence_id,
+        source_timestamp,
+    );
+    context.provenance.record_number = Some(record_id);
+    context.provenance.event = Some(EspEventProvenance {
+        channel: "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin"
+            .to_string(),
+        event_id,
+        record_id: Some(record_id),
+        named_data: vec![],
+    });
+    EspEvidenceRecord::EventLog(EspEventLogObservation {
+        context,
+        channel: "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin"
+            .to_string(),
+        event_id,
+        record_id: Some(record_id),
+        named_data: vec![],
+        message: Some(message.to_string()),
+    })
+}
+
+fn ime_record(
+    source_artifact_id: &str,
+    evidence_id: &str,
+    source_timestamp: &str,
+) -> EspEvidenceRecord {
+    EspEvidenceRecord::Ime(EspImeObservation {
+        context: fixture_context(
+            EspSourceKind::ImeLog,
+            source_artifact_id,
+            evidence_id,
+            source_timestamp,
+        ),
+        component: Some("AppWorkload".to_string()),
+        message: "Retry download".to_string(),
+        app_id: Some("app-retry".to_string()),
+        status: Some(normalize_classic_esp_status(EspRawStatus::Number(2))),
+    })
+}
+
+fn scenario_cases() -> ScenarioCases {
+    serde_json::from_str(include_str!("fixtures/esp/scenario-cases.json"))
+        .expect("scenario fixture must be valid")
+}
+
+#[test]
+fn reducer_classifies_all_five_scenarios_from_explicit_evidence() {
+    for case in scenario_cases().cases {
+        let mut reducer = EspDiagnosticsReducer::new("2026-07-15T18:00:00Z".to_string());
+        reducer.ingest_all(case.records.into_iter().map(|record| {
+            registry_record(
+                &record.source_artifact_id,
+                &record.evidence_id,
+                &record.key,
+                &record.value_name,
+                record.value,
+                &record.source_timestamp,
+            )
+        }));
+
+        assert_eq!(
+            reducer.snapshot().scenario,
+            case.expected_scenario,
+            "{}",
+            case.name
+        );
+    }
+}
+
+#[test]
+fn reducer_retains_classic_device_and_two_user_sessions_and_marks_latest_by_time() {
+    let records = vec![
+        registry_record(
+            "esp-tracking",
+            "device-newer",
+            r"SOFTWARE\Microsoft\Windows\Autopilot\EnrollmentStatusTracking\ESPTrackingInfo\Diagnostics\ExpectedPolicies\2026-07-15T12:00:00Z",
+            "policy-device-newer",
+            EspObservationValue::Integer(1),
+            "2026-07-15T12:00:00Z",
+        ),
+        registry_record(
+            "esp-tracking",
+            "user-a-newer",
+            r"SOFTWARE\Microsoft\Windows\Autopilot\EnrollmentStatusTracking\ESPTrackingInfo\Diagnostics\S-1-5-21-100\ExpectedPolicies\2026-07-15T13:00:00Z",
+            "policy-user-a-newer",
+            EspObservationValue::Integer(0),
+            "2026-07-15T13:00:00Z",
+        ),
+        registry_record(
+            "esp-tracking",
+            "device-older",
+            r"SOFTWARE\Microsoft\Windows\Autopilot\EnrollmentStatusTracking\ESPTrackingInfo\Diagnostics\ExpectedPolicies\2026-07-15T09:00:00Z",
+            "policy-device-older",
+            EspObservationValue::Integer(1),
+            "2026-07-15T09:00:00Z",
+        ),
+        registry_record(
+            "esp-tracking",
+            "user-b-only",
+            r"SOFTWARE\Microsoft\Windows\Autopilot\EnrollmentStatusTracking\ESPTrackingInfo\Diagnostics\S-1-5-21-200\ExpectedPolicies\2026-07-15T11:30:00Z",
+            "policy-user-b",
+            EspObservationValue::Integer(1),
+            "2026-07-15T11:30:00Z",
+        ),
+        registry_record(
+            "esp-tracking",
+            "user-a-older",
+            r"SOFTWARE\Microsoft\Windows\Autopilot\EnrollmentStatusTracking\ESPTrackingInfo\Diagnostics\S-1-5-21-100\ExpectedPolicies\2026-07-15T10:00:00Z",
+            "policy-user-a-older",
+            EspObservationValue::Integer(1),
+            "2026-07-15T10:00:00Z",
+        ),
+    ];
+    let mut reducer = EspDiagnosticsReducer::new("2026-07-15T18:00:00Z".to_string());
+    reducer.ingest_all(records);
+    let snapshot = reducer.snapshot();
+
+    assert_eq!(snapshot.scenario, EspScenario::EspOnly);
+    assert_eq!(snapshot.sessions.len(), 5);
+    assert_eq!(
+        snapshot
+            .sessions
+            .iter()
+            .map(|session| session
+                .started_at
+                .as_ref()
+                .unwrap()
+                .normalized_utc
+                .as_deref())
+            .collect::<Vec<_>>(),
+        vec![
+            Some("2026-07-15T09:00:00Z"),
+            Some("2026-07-15T12:00:00Z"),
+            Some("2026-07-15T10:00:00Z"),
+            Some("2026-07-15T13:00:00Z"),
+            Some("2026-07-15T11:30:00Z"),
+        ]
+    );
+    let latest = snapshot
+        .sessions
+        .iter()
+        .filter(|session| session.is_latest)
+        .map(|session| session.session_id.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        latest,
+        vec![
+            "session|esp-tracking|classic:device:2026-07-15T12:00:00Z|0",
+            "session|esp-tracking|classic:user:S-1-5-21-100:2026-07-15T13:00:00Z|0",
+            "session|esp-tracking|classic:user:S-1-5-21-200:2026-07-15T11:30:00Z|0",
+        ]
+    );
+}
+
+#[test]
+fn reducer_isolates_device_preparation_from_classic_device_and_user_evidence() {
+    let mut reducer = EspDiagnosticsReducer::new("2026-07-15T18:00:00Z".to_string());
+    reducer.ingest_all(vec![
+        registry_record(
+            "autopilot-settings",
+            "device-preparation-hint",
+            r"SOFTWARE\Microsoft\Provisioning\AutopilotSettings",
+            "AutopilotDevicePrepHint",
+            EspObservationValue::Text("enabled".to_string()),
+            "2026-07-15T08:00:00Z",
+        ),
+        registry_record(
+            "esp-tracking",
+            "classic-must-not-leak",
+            r"SOFTWARE\Microsoft\Windows\Autopilot\EnrollmentStatusTracking\ESPTrackingInfo\Diagnostics\Sidecar\2026-07-15T09:00:00Z",
+            "./Device/Vendor/MSFT/Win32App/classic-app",
+            EspObservationValue::Integer(4),
+            "2026-07-15T09:00:00Z",
+        ),
+        json_record(
+            "v2-progress",
+            "v2-id",
+            "ProvisioningProgress",
+            "/Workloads/0/WorkloadId",
+            EspObservationValue::Text("v2-app".to_string()),
+            "2026-07-15T10:00:00Z",
+        ),
+        json_record(
+            "v2-progress",
+            "v2-state",
+            "ProvisioningProgress",
+            "/Workloads/0/WorkloadState",
+            EspObservationValue::Integer(5),
+            "2026-07-15T10:00:00Z",
+        ),
+    ]);
+    let snapshot = reducer.snapshot();
+
+    assert_eq!(snapshot.scenario, EspScenario::AutopilotDevicePreparationV2);
+    assert_eq!(snapshot.sessions.len(), 1);
+    assert_eq!(
+        snapshot.sessions[0].kind,
+        EspSessionKind::DevicePreparationV2
+    );
+    assert_eq!(snapshot.workloads.len(), 1);
+    assert_eq!(snapshot.workloads[0].raw_identifier, "v2-app");
+    assert_eq!(
+        snapshot.workloads[0].kind,
+        EspTrackedKind::DevicePreparationWorkload
+    );
+    assert!(!snapshot
+        .raw_evidence
+        .iter()
+        .any(|record| record.record_id.contains("classic-must-not-leak")));
+}
+
+#[test]
+fn reducer_absent_evidence_never_implies_success() {
+    let snapshot = EspDiagnosticsReducer::new("2026-07-15T18:00:00Z".to_string()).snapshot();
+
+    assert_eq!(snapshot.scenario, EspScenario::Unknown);
+    assert_eq!(snapshot.phase, EspPhase::NotStarted);
+    assert!(snapshot.sessions.is_empty());
+    assert!(snapshot.workloads.is_empty());
+    assert!(snapshot.activity.is_empty());
+    assert!(!matches!(snapshot.phase, EspPhase::Completed));
+}
+
+#[test]
+fn reducer_projects_all_classic_and_v2_workload_kinds_with_identity_based_ids() {
+    let classic_key = |family: &str| {
+        format!(
+            r"SOFTWARE\Microsoft\Windows\Autopilot\EnrollmentStatusTracking\ESPTrackingInfo\Diagnostics\{family}\2026-07-15T12:00:00Z"
+        )
+    };
+    let mut classic = EspDiagnosticsReducer::new("2026-07-15T18:00:00Z".to_string());
+    classic.ingest_all(vec![
+        registry_record(
+            "profile",
+            "profile-v1",
+            r"SOFTWARE\Microsoft\Provisioning\Diagnostics\Autopilot",
+            "DeploymentProfileName",
+            EspObservationValue::Text("Profile".to_string()),
+            "2026-07-15T08:00:00Z",
+        ),
+        registry_record(
+            "esp-workloads",
+            "msi",
+            &classic_key("ExpectedMSIAppPackages"),
+            "./Device/Vendor/MSFT/EnterpriseDesktopAppManagement/MSI/msi-a/Status",
+            EspObservationValue::Integer(70),
+            "2026-07-15T12:00:00Z",
+        ),
+        registry_record(
+            "esp-workloads",
+            "office",
+            &classic_key("ExpectedMSIAppPackages"),
+            "./Vendor/MSFT/Office/Installation/office-a",
+            EspObservationValue::Integer(60),
+            "2026-07-15T12:00:01Z",
+        ),
+        registry_record(
+            "esp-workloads",
+            "modern",
+            &classic_key("ExpectedModernAppPackages"),
+            "./Device/Vendor/MSFT/EnterpriseModernAppManagement/AppManagement/modern-a",
+            EspObservationValue::Integer(1),
+            "2026-07-15T12:00:02Z",
+        ),
+        registry_record(
+            "esp-workloads",
+            "win32-a",
+            &classic_key("Sidecar"),
+            "./Device/Vendor/MSFT/Win32App/win32-a",
+            EspObservationValue::Integer(4),
+            "2026-07-15T12:00:03Z",
+        ),
+        registry_record(
+            "esp-workloads",
+            "win32-b",
+            &classic_key("Sidecar"),
+            "./Device/Vendor/MSFT/Win32App/win32-b",
+            EspObservationValue::Integer(3),
+            "2026-07-15T12:00:04Z",
+        ),
+        registry_record(
+            "esp-workloads",
+            "policy",
+            &classic_key("ExpectedPolicies"),
+            "policy-a",
+            EspObservationValue::Integer(1),
+            "2026-07-15T12:00:05Z",
+        ),
+        registry_record(
+            "esp-workloads",
+            "scep",
+            &classic_key("ExpectedSCEPCerts"),
+            "./Device/Vendor/MSFT/CertificateStore/My/SCEP/cert-a",
+            EspObservationValue::Integer(0),
+            "2026-07-15T12:00:06Z",
+        ),
+    ]);
+    let classic_snapshot = classic.snapshot();
+
+    assert_eq!(
+        classic_snapshot
+            .workloads
+            .iter()
+            .map(|workload| workload.kind.clone())
+            .collect::<Vec<_>>(),
+        vec![
+            EspTrackedKind::Msi,
+            EspTrackedKind::Office,
+            EspTrackedKind::ModernApp,
+            EspTrackedKind::Win32App,
+            EspTrackedKind::Win32App,
+            EspTrackedKind::Policy,
+            EspTrackedKind::ScepCertificate
+        ]
+    );
+    assert_eq!(
+        classic_snapshot.workloads[1].status.raw,
+        EspRawStatus::Number(60)
+    );
+    assert_eq!(
+        classic_snapshot.workloads[1].status.normalized,
+        EspNormalizedStatus::Failed
+    );
+    assert_ne!(
+        classic_snapshot.workloads[3].workload_id,
+        classic_snapshot.workloads[4].workload_id
+    );
+    assert!(classic_snapshot.workloads[3]
+        .workload_id
+        .contains("win32-a"));
+    assert!(!classic_snapshot.workloads[3]
+        .workload_id
+        .contains("PowerToys"));
+
+    let mut v2 = EspDiagnosticsReducer::new("2026-07-15T18:00:00Z".to_string());
+    v2.ingest_all(vec![
+        registry_record("autopilot-settings", "v2-hint", r"SOFTWARE\Microsoft\Provisioning\AutopilotSettings", "AutopilotDevicePrepHint", EspObservationValue::Text("enabled".to_string()), "2026-07-15T08:00:00Z"),
+        json_record("v2-progress", "v2-id", "ProvisioningProgress", "/Workloads/0/WorkloadId", EspObservationValue::Text("v2-app".to_string()), "2026-07-15T10:00:00Z"),
+        json_record("v2-progress", "v2-name", "ProvisioningProgress", "/Workloads/0/FriendlyName", EspObservationValue::Text("PowerToys".to_string()), "2026-07-15T10:00:00Z"),
+        json_record("v2-progress", "v2-state", "ProvisioningProgress", "/Workloads/0/WorkloadState", EspObservationValue::Integer(4), "2026-07-15T10:01:00Z"),
+        json_record("v2-progress", "v2-exit", "ProvisioningProgress", "/Workloads/0/ErrorCode", EspObservationValue::Integer(-1), "2026-07-15T10:01:00Z"),
+        json_record("v2-progress", "v2-enforcement", "ProvisioningProgress", "/Workloads/0/EnforcementErrorCode", EspObservationValue::Text("0x87D30067".to_string()), "2026-07-15T10:01:00Z"),
+        registry_record("ime-policies", "script-result", r"SOFTWARE\Microsoft\IntuneManagementExtension\Policies\00000000-0000-0000-0000-000000000000\script-a", "Result", EspObservationValue::Text("Success".to_string()), "2026-07-15T10:02:00Z"),
+    ]);
+    let v2_snapshot = v2.snapshot();
+    assert_eq!(v2_snapshot.workloads.len(), 2);
+    assert_eq!(
+        v2_snapshot.workloads[0].kind,
+        EspTrackedKind::DevicePreparationWorkload
+    );
+    assert_eq!(
+        v2_snapshot.workloads[0].exit_code.as_ref().unwrap().raw,
+        "-1"
+    );
+    assert_eq!(
+        v2_snapshot.workloads[0]
+            .enforcement_error_code
+            .as_ref()
+            .unwrap()
+            .raw,
+        "0x87D30067"
+    );
+    assert_eq!(
+        v2_snapshot.workloads[1].kind,
+        EspTrackedKind::PlatformScript
+    );
+}
+
+#[test]
+fn reducer_projects_profile_odj_registration_and_delivery_optimization_evidence() {
+    let mut reducer = EspDiagnosticsReducer::new("2026-07-15T18:00:00Z".to_string());
+    reducer.ingest_all(vec![
+        registry_record(
+            "profile",
+            "profile-v1",
+            r"SOFTWARE\Microsoft\Provisioning\Diagnostics\Autopilot",
+            "DeploymentProfileName",
+            EspObservationValue::Text("Profile".to_string()),
+            "2026-07-15T08:00:00Z",
+        ),
+        json_record(
+            "autopilot-json",
+            "profile-download",
+            "AutopilotProfile",
+            "/PolicyDownloadDate",
+            EspObservationValue::Text("2026-07-15T08:30:00Z".to_string()),
+            "2026-07-15T08:30:00Z",
+        ),
+        json_record(
+            "autopilot-json",
+            "join-mode",
+            "AutopilotProfile",
+            "/CloudAssignedDomainJoinMethod",
+            EspObservationValue::Integer(1),
+            "2026-07-15T08:30:00Z",
+        ),
+        registry_record(
+            "odj-registry",
+            "odj-applied",
+            r"SOFTWARE\Microsoft\Provisioning\OMADM\SyncML",
+            "ODJApplied",
+            EspObservationValue::Boolean(true),
+            "2026-07-15T08:31:00Z",
+        ),
+        event_record(
+            "device-registration",
+            "event-306",
+            306,
+            9001,
+            "2026-07-15T08:32:00Z",
+            "Hybrid AADJ device registration succeeded",
+        ),
+        EspEvidenceRecord::DeliveryOptimization(EspDeliveryOptimizationObservation {
+            context: fixture_context(
+                EspSourceKind::DeliveryOptimization,
+                "do-live",
+                "do-start",
+                "2026-07-15T08:33:00Z",
+            ),
+            kind: EspDeliveryOptimizationEventKind::DownloadStarted,
+            content_id: Some("content-a".to_string()),
+            app_id: Some("app-a".to_string()),
+            http_bytes: Some(1000),
+            lan_bytes: Some(250),
+            cache_host_bytes: Some(100),
+        }),
+        EspEvidenceRecord::DeliveryOptimization(EspDeliveryOptimizationObservation {
+            context: fixture_context(
+                EspSourceKind::DeliveryOptimization,
+                "do-live",
+                "do-finish",
+                "2026-07-15T08:34:00Z",
+            ),
+            kind: EspDeliveryOptimizationEventKind::DownloadCompleted,
+            content_id: Some("content-a".to_string()),
+            app_id: Some("app-a".to_string()),
+            http_bytes: None,
+            lan_bytes: None,
+            cache_host_bytes: None,
+        }),
+    ]);
+    let snapshot = reducer.snapshot();
+    let profile = snapshot.profile.as_ref().unwrap();
+    assert_eq!(
+        profile
+            .profile_download_time
+            .as_ref()
+            .unwrap()
+            .normalized_utc
+            .as_deref(),
+        Some("2026-07-15T08:30:00Z")
+    );
+    assert_eq!(profile.join_mode, Some(EspJoinMode::HybridEntra));
+    assert_eq!(profile.odj_applied, Some(true));
+    assert_eq!(snapshot.registration_events[0].event_id, 306);
+    assert_eq!(snapshot.registration_events[0].record_id, Some(9001));
+    let delivery = snapshot.delivery_optimization.as_ref().unwrap();
+    assert_eq!(delivery.download_http_bytes, 1000);
+    assert_eq!(delivery.download_lan_bytes, 250);
+    assert_eq!(delivery.peer_share_percent, Some(25.0));
+    assert_eq!(
+        delivery.transfers[0].transfer_id,
+        "transfer|do-live|do-start|5"
+    );
+}
+
+#[test]
+fn timeline_preserves_repeated_identical_retries_with_source_record_and_ordinal_ids() {
+    let mut reducer = EspDiagnosticsReducer::new("2026-07-15T18:00:00Z".to_string());
+    reducer.ingest_all(vec![
+        ime_record("ime-live", "same-retry-record", "2026-07-15T12:00:00Z"),
+        ime_record("ime-live", "same-retry-record", "2026-07-15T12:00:00Z"),
+    ]);
+    let activity = reducer.snapshot().activity;
+
+    assert_eq!(activity.len(), 2);
+    assert_eq!(
+        activity[0].entry_id,
+        "timeline|ime-live|same-retry-record|0"
+    );
+    assert_eq!(
+        activity[1].entry_id,
+        "timeline|ime-live|same-retry-record|1"
+    );
+    assert_eq!(
+        activity[0].timestamp.normalized_utc,
+        activity[1].timestamp.normalized_utc
+    );
+    assert_eq!(activity[0].title, activity[1].title);
+    assert_eq!(activity[0].status, activity[1].status);
+    assert_eq!(
+        activity[0].evidence,
+        vec![EspEvidenceRef {
+            evidence_id: "same-retry-record".to_string(),
+            source_artifact_id: "ime-live".to_string()
+        }]
+    );
+}
+
+#[test]
+fn timeline_snapshot_is_deterministic_for_the_same_ordered_evidence() {
+    let records = vec![
+        event_record(
+            "events",
+            "event-1920",
+            1920,
+            10,
+            "2026-07-15T12:01:00Z",
+            "Installation started",
+        ),
+        event_record(
+            "events",
+            "event-1905",
+            1905,
+            9,
+            "2026-07-15T12:00:00Z",
+            "Download started",
+        ),
+        ime_record("ime-live", "retry", "2026-07-15T12:00:30Z"),
+    ];
+    let mut first = EspDiagnosticsReducer::new("2026-07-15T18:00:00Z".to_string());
+    first.ingest_all(records.clone());
+    let mut second = EspDiagnosticsReducer::new("2026-07-15T18:00:00Z".to_string());
+    second.ingest_all(records);
+
+    assert_eq!(
+        serde_json::to_value(first.snapshot()).unwrap(),
+        serde_json::to_value(second.snapshot()).unwrap()
+    );
+    assert_eq!(
+        first
+            .snapshot()
+            .activity
+            .iter()
+            .map(|entry| entry.entry_id.as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            "timeline|events|event-1905|1",
+            "timeline|ime-live|retry|2",
+            "timeline|events|event-1920|0"
+        ]
+    );
+}
