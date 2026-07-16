@@ -362,6 +362,150 @@ describe("ESP typed command wrappers", () => {
     expect((error as Error).message).not.toContain("body-secret");
     expect((error as Error).message).not.toContain("token-secret");
   });
+
+  it("strips sibling fields and accessors from augmented Error instances", async () => {
+    const snapshot = makeSnapshot(["augmented-error"]);
+    const request: EspGraphRequest = {
+      requestId: "graph-augmented-error",
+      identity: snapshot.identity,
+      workloadIds: [],
+      selectedManagedDeviceId: null,
+      evidenceWindowStartUtc: null,
+      evidenceWindowEndUtc: null,
+      enrollmentConfigurationIds: [],
+      appIds: [],
+      policyReferences: [],
+      scriptReferences: [],
+    };
+    const secretSymbol = Symbol("graph-error-secret");
+    let unsafeFieldReads = 0;
+    const rejectedError = new Error(
+      "Microsoft Graph transport is unavailable.",
+    );
+    Object.defineProperties(rejectedError, {
+      body: {
+        enumerable: true,
+        get() {
+          unsafeFieldReads += 1;
+          throw new Error("body getter must not run");
+        },
+      },
+      token: {
+        enumerable: true,
+        value: "token-secret",
+      },
+      cause: {
+        get() {
+          unsafeFieldReads += 1;
+          throw new Error("cause getter must not run");
+        },
+      },
+      [secretSymbol]: {
+        enumerable: true,
+        get() {
+          unsafeFieldReads += 1;
+          throw new Error("symbol getter must not run");
+        },
+      },
+    });
+    vi.mocked(invoke).mockRejectedValueOnce(rejectedError);
+
+    const error = await graphFetchEspDiagnostics(request).catch(
+      (caught: unknown) => caught,
+    );
+
+    expect(error).toBeInstanceOf(Error);
+    expect(Object.is(error, rejectedError)).toBe(false);
+    expect((error as Error).message).toBe(
+      "Microsoft Graph transport is unavailable.",
+    );
+    expect(Object.prototype.hasOwnProperty.call(error, "body")).toBe(false);
+    expect(Object.prototype.hasOwnProperty.call(error, "token")).toBe(false);
+    expect(Object.prototype.hasOwnProperty.call(error, "cause")).toBe(false);
+    expect(Object.getOwnPropertySymbols(error as object)).toEqual([]);
+    expect(unsafeFieldReads).toBe(0);
+  });
+
+  it("falls back for a mutable non-string Error message without coercing it", async () => {
+    const snapshot = makeSnapshot(["non-string-error-message"]);
+    const request: EspGraphRequest = {
+      requestId: "graph-non-string-error-message",
+      identity: snapshot.identity,
+      workloadIds: [],
+      selectedManagedDeviceId: null,
+      evidenceWindowStartUtc: null,
+      evidenceWindowEndUtc: null,
+      enrollmentConfigurationIds: [],
+      appIds: [],
+      policyReferences: [],
+      scriptReferences: [],
+    };
+    let coercionReads = 0;
+    const mutableMessage = { secret: "message-secret" };
+    Object.defineProperty(mutableMessage, "toString", {
+      get() {
+        coercionReads += 1;
+        throw new Error("message coercion must not run");
+      },
+    });
+    const rejectedError = new Error("placeholder");
+    Object.defineProperty(rejectedError, "message", {
+      configurable: true,
+      value: mutableMessage,
+      writable: true,
+    });
+    vi.mocked(invoke).mockRejectedValueOnce(rejectedError);
+
+    const error = await graphFetchEspDiagnostics(request).catch(
+      (caught: unknown) => caught,
+    );
+
+    expect(error).toBeInstanceOf(Error);
+    expect(Object.is(error, rejectedError)).toBe(false);
+    expect((error as Error).message).toBe(
+      "Command 'graph_fetch_esp_diagnostics' failed.",
+    );
+    expect((error as Error).message).not.toContain("message-secret");
+    expect(coercionReads).toBe(0);
+  });
+
+  it("does not invoke an Error message accessor", async () => {
+    const snapshot = makeSnapshot(["accessor-error-message"]);
+    const request: EspGraphRequest = {
+      requestId: "graph-accessor-error-message",
+      identity: snapshot.identity,
+      workloadIds: [],
+      selectedManagedDeviceId: null,
+      evidenceWindowStartUtc: null,
+      evidenceWindowEndUtc: null,
+      enrollmentConfigurationIds: [],
+      appIds: [],
+      policyReferences: [],
+      scriptReferences: [],
+    };
+    let messageReads = 0;
+    const rejectedError = new Error("placeholder");
+    Object.defineProperty(rejectedError, "message", {
+      configurable: true,
+      get() {
+        messageReads += 1;
+        return "getter-secret";
+      },
+    });
+    vi.mocked(invoke).mockRejectedValueOnce(rejectedError);
+
+    const error = await graphFetchEspDiagnostics(request).catch(
+      (caught: unknown) => caught,
+    );
+
+    expect(error).toBeInstanceOf(Error);
+    expect(Object.is(error, rejectedError)).toBe(false);
+    expect((error as Error).message).toBe(
+      "Command 'graph_fetch_esp_diagnostics' failed.",
+    );
+    expect((error as Error).message).not.toContain("getter-secret");
+    expect(messageReads).toBe(0);
+  });
 });
 
 describe("ESP local session state", () => {

@@ -46,12 +46,28 @@ export interface UpdatePolicy {
   updateChecksDisabledByPolicy: boolean;
 }
 
+function getOwnStringMessage(error: object): string | null {
+  let message: unknown;
+
+  try {
+    message = Object.getOwnPropertyDescriptor(error, "message")?.value;
+  } catch {
+    return null;
+  }
+
+  if (typeof message !== "string") {
+    return null;
+  }
+
+  return message.trim() || null;
+}
+
 export function getSafeErrorMessage(
   error: unknown,
   fallback = "The operation failed.",
 ): string {
   if (error instanceof Error) {
-    return error.message.trim() || fallback;
+    return getOwnStringMessage(error) ?? fallback;
   }
 
   if (typeof error === "string") {
@@ -59,11 +75,11 @@ export function getSafeErrorMessage(
   }
 
   if (typeof error === "object" && error !== null) {
-    const message = Object.getOwnPropertyDescriptor(error, "message")?.value;
-    if (typeof message === "string" && message.trim()) {
+    const message = getOwnStringMessage(error);
+    if (message) {
       // Tauri may reject with a structured object. Only surface its message;
       // sibling response-body and token fields must never reach the UI.
-      return message.trim();
+      return message;
     }
   }
 
@@ -91,7 +107,7 @@ function normalizeCommandInvokeError(commandName: string, error: unknown): Error
     );
   }
 
-  return error instanceof Error ? error : new Error(message);
+  return new Error(message);
 }
 
 async function invokeCommand<T>(commandName: string, args?: Record<string, unknown>): Promise<T> {
