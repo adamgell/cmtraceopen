@@ -343,7 +343,7 @@ describe("ESP typed command wrappers", () => {
     );
   });
 
-  it("preserves only the safe message from structured command errors", async () => {
+  it("falls back for structured command errors without leaking fields", async () => {
     const snapshot = makeSnapshot(["structured-command-error"]);
     const request: EspGraphRequest = {
       requestId: "graph-structured-error",
@@ -369,7 +369,7 @@ describe("ESP typed command wrappers", () => {
 
     expect(error).toBeInstanceOf(Error);
     expect((error as Error).message).toBe(
-      "Microsoft Graph transport is unavailable.",
+      "Command 'graph_fetch_esp_diagnostics' failed.",
     );
     expect((error as Error).message).not.toContain("body-secret");
     expect((error as Error).message).not.toContain("token-secret");
@@ -429,7 +429,7 @@ describe("ESP typed command wrappers", () => {
     expect(error).toBeInstanceOf(Error);
     expect(Object.is(error, rejectedError)).toBe(false);
     expect((error as Error).message).toBe(
-      "Microsoft Graph transport is unavailable.",
+      "Command 'graph_fetch_esp_diagnostics' failed.",
     );
     expect(Object.prototype.hasOwnProperty.call(error, "body")).toBe(false);
     expect(Object.prototype.hasOwnProperty.call(error, "token")).toBe(false);
@@ -2911,7 +2911,7 @@ describe("ESP Graph scheduling", () => {
     coordinator.dispose();
   });
 
-  it("preserves only the safe message from structured coordinator errors", async () => {
+  it("falls back for structured coordinator errors without leaking fields", async () => {
     const coordinator = createEspGraphCoordinator({
       fetchGraph: vi.fn(async () => {
         throw {
@@ -2939,7 +2939,7 @@ describe("ESP Graph scheduling", () => {
     expect(useEspDiagnosticsStore.getState()).toMatchObject({
       graphRequestId: null,
       graphPhase: "error",
-      graphError: "Microsoft Graph consent is required.",
+      graphError: "Microsoft Graph enrichment failed.",
     });
     expect(useEspDiagnosticsStore.getState().graphError).not.toContain(
       "coordinator-body-secret",

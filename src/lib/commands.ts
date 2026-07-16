@@ -47,51 +47,17 @@ export interface UpdatePolicy {
   updateChecksDisabledByPolicy: boolean;
 }
 
-function getOwnStringMessage(error: object): string | null {
-  let message: unknown;
-
-  try {
-    message = Object.getOwnPropertyDescriptor(error, "message")?.value;
-  } catch {
-    return null;
-  }
-
-  if (typeof message !== "string") {
-    return null;
-  }
-
-  return message.trim() || null;
-}
-
 export function getSafeErrorMessage(
   error: unknown,
   fallback = "The operation failed.",
 ): string {
-  if (error instanceof Error) {
-    return getOwnStringMessage(error) ?? fallback;
-  }
-
   if (typeof error === "string") {
     return error.trim() || fallback;
   }
 
-  if (typeof error === "object" && error !== null) {
-    const message = getOwnStringMessage(error);
-    if (message) {
-      // Tauri may reject with a structured object. Only surface its message;
-      // sibling response-body and token fields must never reach the UI.
-      return message;
-    }
-  }
-
-  if (
-    typeof error === "number" ||
-    typeof error === "boolean" ||
-    typeof error === "bigint"
-  ) {
-    return String(error);
-  }
-
+  // Unknown object and function rejections may be hostile Proxies. Even
+  // seemingly passive brand or descriptor checks can invoke user-controlled
+  // traps, so only primitive strings are safe to consume at this boundary.
   return fallback;
 }
 
