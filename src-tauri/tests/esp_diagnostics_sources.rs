@@ -4039,6 +4039,20 @@ struct BlockingSessionProvider {
     release: Arc<Barrier>,
 }
 
+#[derive(Clone)]
+struct BlockingPanickingSessionProvider {
+    entered: Arc<Barrier>,
+    release: Arc<Barrier>,
+}
+
+impl EspEvidenceProvider for BlockingPanickingSessionProvider {
+    fn collect(&self, _observed_at_utc: &str) -> EspProviderBatch {
+        self.entered.wait();
+        self.release.wait();
+        panic!("fake provider panic after cancellation");
+    }
+}
+
 impl EspEvidenceProvider for BlockingSessionProvider {
     fn collect(&self, observed_at_utc: &str) -> EspProviderBatch {
         if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
@@ -4336,6 +4350,25 @@ fn wait_for_session_updates(sink: &RecordingSessionSink, count: usize) {
             "timed out waiting for update {count}"
         );
         thread::sleep(Duration::from_millis(5));
+    }
+}
+
+fn wait_for_session_state(
+    manager: &EspSessionManager,
+    session_id: &str,
+    expected: EspSessionState,
+) {
+    let deadline = Instant::now() + Duration::from_millis(250);
+    loop {
+        let current = manager.get(session_id).expect("active test session");
+        if current.state == expected {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "session did not enter {expected:?}"
+        );
+        thread::sleep(Duration::from_millis(1));
     }
 }
 
@@ -5585,6 +5618,97 @@ fn session_stop_cancels_initialization_before_later_providers_or_live_publicatio
     assert_eq!(updates.len(), 1);
     assert_eq!(updates[0].state, EspSessionState::Stopped);
     assert_eq!(updates[0].reason, EspUpdateReason::Stopped);
+}
+
+#[test]
+fn session_stop_cancellation_wins_over_an_initialization_panic() {
+    let clock = Arc::new(ManualSessionClock::default());
+    let entered = Arc::new(Barrier::new(2));
+    let release = Arc::new(Barrier::new(2));
+    let sink = RecordingSessionSink::including_initial();
+    let manager = Arc::new(EspSessionManager::new(
+        EspSessionDependencies::new(
+            clock,
+            Arc::new(BlockingPanickingSessionProvider {
+                entered: Arc::clone(&entered),
+                release: Arc::clone(&release),
+            }),
+            Arc::new(FakeSessionProvider::available("event")),
+            Arc::new(FakeSessionProvider::available("system")),
+            Arc::new(FakeSessionProvider::available("process")),
+            Arc::new(FakeSessionDiscovery::default()),
+            Arc::new(FakeSessionTailFactory::default()),
+            Arc::new(sink.clone()),
+        )
+        .with_live_supported_for_tests(true),
+    ));
+
+    let starting = manager
+        .start("adadadad-adad-4dad-8dad-adadadadadad")
+        .expect("start session");
+    entered.wait();
+    let stopper = {
+        let manager = Arc::clone(&manager);
+        let session_id = starting.session_id.clone();
+        thread::spawn(move || manager.stop(&session_id))
+    };
+    wait_for_session_state(&manager, &starting.session_id, EspSessionState::Stopping);
+    release.wait();
+
+    let stopped = stopper
+        .join()
+        .expect("stopper thread")
+        .expect("stop panicking session");
+    assert_eq!(stopped.state, EspSessionState::Stopped);
+    let updates = sink.updates.lock().expect("session updates");
+    assert_eq!(updates.len(), 1);
+    assert_eq!(updates[0].state, EspSessionState::Stopped);
+    assert_eq!(updates[0].reason, EspUpdateReason::Stopped);
+}
+
+#[test]
+fn session_stop_during_tail_poll_never_publishes_live_after_stopping() {
+    let clock = Arc::new(SequencedRollbackSessionClock::new("2026-07-16T06:30:00Z"));
+    let delayed_call = DelayedChangedTailCall::new(UPDATE_DEBOUNCE);
+    let tail_factory = DelayedChangedTailFactory {
+        clock: Arc::clone(&clock),
+        calls: Arc::new(Mutex::new(VecDeque::from([delayed_call.clone()]))),
+    };
+    let sink = RecordingSessionSink::default();
+    let manager = Arc::new(EspSessionManager::new(delayed_tail_session_dependencies(
+        Arc::clone(&clock),
+        tail_factory,
+        sink.clone(),
+    )));
+    let initial = start_initialized_session(&manager, "aeaeaeae-aeae-4eae-8eae-aeaeaeaeaeae")
+        .expect("start delayed-tail session");
+
+    clock.advance(UPDATE_DEBOUNCE, "2026-07-16T06:30:00Z");
+    delayed_call.entered.wait("delayed tail poll entry");
+    let stopper = {
+        let manager = Arc::clone(&manager);
+        let session_id = initial.session_id.clone();
+        thread::spawn(move || manager.stop(&session_id))
+    };
+    wait_for_session_state(&manager, &initial.session_id, EspSessionState::Stopping);
+    delayed_call.complete_at(&clock, "2026-07-16T06:30:05Z");
+
+    let stopped = stopper
+        .join()
+        .expect("stopper thread")
+        .expect("stop delayed-tail session");
+    assert_eq!(stopped.state, EspSessionState::Stopped);
+    let updates = sink.updates.lock().expect("session updates");
+    assert!(
+        updates
+            .iter()
+            .all(|update| update.state != EspSessionState::Live),
+        "a cancelled worker published Live after Stopping: {updates:?}"
+    );
+    assert_eq!(
+        updates.last().map(|update| &update.state),
+        Some(&EspSessionState::Stopped)
+    );
 }
 
 #[test]

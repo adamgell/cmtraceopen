@@ -693,6 +693,7 @@ export type EspSessionState =
 export type EspUpdateReason =
   | "initialSnapshot"
   | "evidenceChanged"
+  | "discoveryRefresh"
   | "sourceAttached"
   | "sourceReset"
   | "stopped"

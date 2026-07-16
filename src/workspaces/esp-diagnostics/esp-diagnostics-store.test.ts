@@ -594,6 +594,31 @@ describe("ESP local session state", () => {
     expect(useEspDiagnosticsStore.getState().sessionId).toBeNull();
   });
 
+  it("keeps stopping monotonic when a late live update arrives", () => {
+    useEspDiagnosticsStore.getState().beginLiveStart("live-a");
+    useEspDiagnosticsStore
+      .getState()
+      .applySessionUpdate(makeSessionUpdate(1, makeSnapshot(["initial"])));
+    useEspDiagnosticsStore.getState().beginStop("session-a");
+
+    useEspDiagnosticsStore
+      .getState()
+      .applySessionUpdate(makeSessionUpdate(2, makeSnapshot(["late-live"])));
+
+    const stopping = useEspDiagnosticsStore.getState();
+    expect(stopping.phase).toBe("stopping");
+    expect(stopping.sequence).toBe(2);
+    expect(stopping.snapshot?.rawEvidence[0]?.recordId).toBe("late-live");
+
+    stopping.applySessionUpdate({
+      ...makeSessionUpdate(3, makeSnapshot(["final"])),
+      state: "stopped",
+      reason: "stopped",
+    });
+    expect(useEspDiagnosticsStore.getState().phase).toBe("ready");
+    expect(useEspDiagnosticsStore.getState().sequence).toBe(3);
+  });
+
   it("accepts sequence zero exactly once as the initial live update", () => {
     useEspDiagnosticsStore.getState().beginLiveStart("live-a");
 
@@ -1019,6 +1044,9 @@ describe("ESP local session state", () => {
   it("validates the complete session envelope before applying native events", () => {
     const update = makeSessionUpdate(1, makeSnapshot(["local-a"]));
     expect(isEspSessionUpdate(update)).toBe(true);
+    expect(isEspSessionUpdate({ ...update, reason: "discoveryRefresh" })).toBe(
+      true,
+    );
     expect(isEspSessionUpdate({ ...update, sequence: -1 })).toBe(false);
     expect(
       isEspSessionUpdate({

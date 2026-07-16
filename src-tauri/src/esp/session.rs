@@ -954,6 +954,19 @@ fn run_worker(active: Arc<ActiveSession>, dependencies: EspSessionDependencies) 
         let refresh_due = reading.monotonic >= engine.next_refresh;
         let refreshed =
             refresh_due && engine.refresh(&dependencies, &reading, &active.cancellation);
+        if active.cancellation.is_cancelled() {
+            let stopped_at = dependencies.clock.now();
+            engine.stop_tail();
+            publish(
+                &active,
+                &dependencies,
+                EspSessionState::Stopped,
+                EspUpdateReason::Stopped,
+                engine.snapshot(&stopped_at.utc),
+                &stopped_at.utc,
+            );
+            return;
+        }
         if tail_changed || refreshed {
             let collection_completed_at_utc = dependencies.clock.now().utc;
             engine.advance_utc_high_water_mark(&collection_completed_at_utc);
@@ -1011,6 +1024,16 @@ fn publish(
     let update = {
         let Ok(mut published) = active.published.lock() else {
             return;
+        };
+        if published.state.is_terminal() {
+            return;
+        }
+        let cancellation_wins = active.cancellation.is_cancelled()
+            || matches!(published.state, EspSessionState::Stopping);
+        let (state, reason) = if cancellation_wins && state != EspSessionState::Stopped {
+            (EspSessionState::Stopped, EspUpdateReason::Stopped)
+        } else {
+            (state, reason)
         };
         published.sequence = published.sequence.saturating_add(1);
         published.state = state.clone();

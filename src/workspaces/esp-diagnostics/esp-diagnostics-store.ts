@@ -532,7 +532,10 @@ export const useEspDiagnosticsStore = create<EspDiagnosticsStore>((set) => ({
         isSourceReset ? boundaryOrder + 1 : boundaryOrder,
       );
       return {
-        phase: phaseForSessionUpdate(update),
+        phase:
+          state.phase === "stopping" && update.state === "live"
+            ? "stopping"
+            : phaseForSessionUpdate(update),
         requestId: update.requestId,
         sessionId:
           update.state === "stopped" ||
