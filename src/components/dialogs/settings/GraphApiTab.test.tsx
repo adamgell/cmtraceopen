@@ -72,6 +72,14 @@ const disconnectedStatus = (): GraphAuthStatus => ({
   error: null,
 });
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
 describe("GraphApiTab delegated capabilities", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -278,5 +286,95 @@ describe("GraphApiTab delegated capabilities", () => {
 
     await waitFor(() => expect(graphSignOut).toHaveBeenCalledOnce());
     expect(useUiStore.getState().graphApiStatus).toBe("idle");
+  });
+
+  it("does not let cache hydration supersede an in-flight sign-out", async () => {
+    const signOut = deferred<void>();
+    useUiStore.setState({ graphApiStatus: "connected" });
+    vi.mocked(graphGetAuthStatus).mockResolvedValue(partialStatus(true));
+    vi.mocked(graphSignOut).mockReturnValue(signOut.promise);
+
+    render(<GraphApiTab />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Sign out" }));
+
+    expect(
+      screen.getByRole("button", { name: "Pre-populate app cache" }),
+    ).toBeDisabled();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Pre-populate app cache" }),
+    );
+    expect(graphFetchAllApps).not.toHaveBeenCalled();
+
+    await act(async () => {
+      signOut.resolve();
+      await signOut.promise;
+    });
+    expect(useUiStore.getState().graphApiStatus).toBe("idle");
+  });
+
+  it("does not let sign-out supersede in-flight cache hydration", async () => {
+    const apps = deferred<Awaited<ReturnType<typeof graphFetchAllApps>>>();
+    vi.mocked(graphGetAuthStatus).mockResolvedValue(partialStatus(true));
+    vi.mocked(graphFetchAllApps).mockReturnValue(apps.promise);
+
+    render(<GraphApiTab />);
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Pre-populate app cache" }),
+    );
+
+    expect(screen.getByRole("button", { name: "Sign out" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Sign out" }));
+    expect(graphSignOut).not.toHaveBeenCalled();
+
+    await act(async () => {
+      apps.resolve([]);
+      await apps.promise;
+    });
+    expect(
+      screen.getByRole("button", { name: "Pre-populate app cache" }),
+    ).toBeEnabled();
+  });
+
+  it("keeps a newer sign-in busy when a disabled operation settles late", async () => {
+    const staleAuthentication = deferred<GraphAuthStatus>();
+    const currentAuthentication = deferred<GraphAuthStatus>();
+    vi.mocked(graphGetAuthStatus).mockResolvedValue(disconnectedStatus());
+    vi.mocked(graphAuthenticate)
+      .mockReturnValueOnce(staleAuthentication.promise)
+      .mockReturnValueOnce(currentAuthentication.promise);
+
+    render(<GraphApiTab />);
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Sign in with Windows" }),
+    );
+    await waitFor(() => expect(graphAuthenticate).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByRole("checkbox"));
+    fireEvent.click(screen.getByRole("checkbox"));
+    fireEvent.click(
+      screen.getByRole("button", { name: "I understand, enable it" }),
+    );
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Sign in with Windows" }),
+    );
+    await waitFor(() => expect(graphAuthenticate).toHaveBeenCalledTimes(2));
+
+    await act(async () => {
+      staleAuthentication.resolve(partialStatus(true));
+      await staleAuthentication.promise;
+    });
+    expect(
+      screen.getByRole("button", { name: "Signing in..." }),
+    ).toBeDisabled();
+
+    await act(async () => {
+      currentAuthentication.resolve(partialStatus(true));
+      await currentAuthentication.promise;
+    });
+    expect(
+      await screen.findByText("Connected with partial permissions"),
+    ).toBeVisible();
   });
 });

@@ -66,6 +66,7 @@ export interface EspDiagnosticsStore {
   snapshot: EspDiagnosticsSnapshot | null;
   error: string | null;
   graphRequestId: string | null;
+  graphRequestFingerprint: string | null;
   graphPhase: EspGraphPhase;
   graphUnavailableReason: EspGraphUnavailableReason | null;
   graphError: string | null;
@@ -82,7 +83,7 @@ export interface EspDiagnosticsStore {
   applyAnalysis(requestId: string, snapshot: EspDiagnosticsSnapshot): void;
   applySessionUpdate(update: EspSessionUpdate): void;
   fail(requestId: string, error: string): void;
-  beginGraph(requestId: string): void;
+  beginGraph(requestId: string, identityFingerprint?: string): void;
   applyGraphOverlay(requestId: string, overlay: EspGraphOverlay): void;
   failGraph(requestId: string, error: string): void;
   setGraphUnavailable(reason: EspGraphUnavailableReason): void;
@@ -360,6 +361,7 @@ export const useEspDiagnosticsStore = create<EspDiagnosticsStore>((set) => ({
   snapshot: null,
   error: null,
   graphRequestId: null,
+  graphRequestFingerprint: null,
   graphPhase: "disabled",
   graphUnavailableReason: "graphDisabled",
   graphError: null,
@@ -379,6 +381,7 @@ export const useEspDiagnosticsStore = create<EspDiagnosticsStore>((set) => ({
       snapshot: null,
       error: null,
       graphRequestId: null,
+      graphRequestFingerprint: null,
       ...graphStateForFreshLocalRun(state),
       graphError: null,
       unreadEvidenceCount: 0,
@@ -402,6 +405,7 @@ export const useEspDiagnosticsStore = create<EspDiagnosticsStore>((set) => ({
       snapshot: null,
       error: null,
       graphRequestId: null,
+      graphRequestFingerprint: null,
       ...graphStateForFreshLocalRun(state),
       graphError: null,
       unreadEvidenceCount: 0,
@@ -531,17 +535,25 @@ export const useEspDiagnosticsStore = create<EspDiagnosticsStore>((set) => ({
       };
     }),
 
-  beginGraph: (requestId) =>
-    set({
+  beginGraph: (requestId, identityFingerprint) =>
+    set((state) => ({
       graphRequestId: requestId,
+      graphRequestFingerprint:
+        identityFingerprint ??
+        (state.snapshot ? getEspIdentityFingerprint(state.snapshot) : null),
       graphPhase: "loading",
       graphUnavailableReason: null,
       graphError: null,
-    }),
+    })),
 
   applyGraphOverlay: (requestId, overlay) =>
     set((state) => {
-      if (state.graphRequestId !== requestId || !state.snapshot) {
+      if (
+        state.graphRequestId !== requestId ||
+        !state.snapshot ||
+        state.graphRequestFingerprint !==
+          getEspIdentityFingerprint(state.snapshot)
+      ) {
         return state;
       }
       if (overlay.requestId !== requestId) {
@@ -549,6 +561,7 @@ export const useEspDiagnosticsStore = create<EspDiagnosticsStore>((set) => ({
       }
       return {
         graphRequestId: null,
+        graphRequestFingerprint: null,
         graphPhase: graphOverlayIsPartial(overlay) ? "partial" : "ready",
         graphUnavailableReason: null,
         graphError: null,
@@ -564,6 +577,7 @@ export const useEspDiagnosticsStore = create<EspDiagnosticsStore>((set) => ({
       state.graphRequestId === requestId
         ? {
             graphRequestId: null,
+            graphRequestFingerprint: null,
             graphPhase: "error",
             graphError: error,
           }
@@ -573,6 +587,7 @@ export const useEspDiagnosticsStore = create<EspDiagnosticsStore>((set) => ({
   setGraphUnavailable: (reason) =>
     set({
       graphRequestId: null,
+      graphRequestFingerprint: null,
       graphPhase: reason === "graphDisabled" ? "disabled" : "unavailable",
       graphUnavailableReason: reason,
       graphError: null,
@@ -583,6 +598,7 @@ export const useEspDiagnosticsStore = create<EspDiagnosticsStore>((set) => ({
       state.graphRequestId === requestId
         ? {
             graphRequestId: null,
+            graphRequestFingerprint: null,
             graphPhase: "cancelled",
             graphError: null,
           }

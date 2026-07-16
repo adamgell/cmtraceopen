@@ -12,8 +12,8 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
 use super::models::{
-    GraphAppInfo, GraphHttpMethod, GraphResolutionResult, GraphTransportRequest,
-    GraphTransportResponse,
+    normalize_graph_guid, GraphAppInfo, GraphHttpMethod, GraphResolutionResult,
+    GraphTransportRequest, GraphTransportResponse,
 };
 
 pub const MAX_GRAPH_ATTEMPTS: usize = 4;
@@ -169,7 +169,17 @@ where
             for guid in guids {
                 match fetch_single(guid) {
                     Ok(Some(info)) => {
-                        result.resolved.insert(guid.clone(), info);
+                        let requested_id = normalize_graph_guid(guid);
+                        let response_id = normalize_graph_guid(&info.id);
+                        if requested_id.is_some() && requested_id == response_id {
+                            result.resolved.insert(guid.clone(), info);
+                        } else {
+                            let error = GraphClientError::new(
+                                GraphClientErrorKind::InvalidResponse,
+                                error.required_scope.as_str(),
+                            );
+                            result.errors.push(format!("{guid}: {error}"));
+                        }
                     }
                     Ok(None) => result.not_found.push(guid.clone()),
                     Err(error) if error.invalidates_auth() => return Err(error),
@@ -821,4 +831,45 @@ fn is_allowed_graph_batch_url(url: &str, graph_host: &str) -> bool {
     };
     let path = &remainder[path_start..];
     path.eq_ignore_ascii_case("/v1.0/$batch") || path.eq_ignore_ascii_case("/beta/$batch")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        resolve_app_chunk_with_fallback, GraphAppInfo, GraphClientError, GraphClientErrorKind,
+    };
+
+    const APP_A: &str = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const APP_B: &str = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+    const APP_SCOPE: &str = "DeviceManagementApps.Read.All";
+
+    #[test]
+    fn fallback_never_indexes_a_mismatched_response_under_the_requested_guid() {
+        let guids = vec![APP_A.to_string()];
+        let result = resolve_app_chunk_with_fallback(
+            &guids,
+            |_| {
+                Err(GraphClientError::new(
+                    GraphClientErrorKind::InvalidResponse,
+                    APP_SCOPE,
+                ))
+            },
+            |_| {
+                Ok(Some(GraphAppInfo {
+                    id: APP_B.to_string(),
+                    display_name: "Wrong app".to_string(),
+                    publisher: None,
+                    odata_type: None,
+                }))
+            },
+        )
+        .expect("a per-item mismatch is reported without poisoning the cache map");
+
+        assert!(result.resolved.is_empty());
+        assert!(result.not_found.is_empty());
+        assert!(result
+            .errors
+            .iter()
+            .any(|error| error.contains("InvalidResponse")));
+    }
 }

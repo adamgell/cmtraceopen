@@ -27,18 +27,23 @@ const GRAPH_CAPABILITY_ROWS = [
   ["Scripts", "scripts", "DeviceManagementScripts.Read.All"],
 ] as const;
 
+type GraphAction = "signIn" | "signOut" | "cache";
+
 export function GraphApiTab() {
   const graphApiEnabled = useUiStore((state) => state.graphApiEnabled);
   const setGraphApiEnabled = useUiStore((state) => state.setGraphApiEnabled);
   const currentPlatform = useUiStore((state) => state.currentPlatform);
 
   const [authStatus, setAuthStatus] = useState<GraphAuthStatus | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [cacheLoading, setCacheLoading] = useState(false);
+  const [activeAction, setActiveAction] = useState<GraphAction | null>(null);
   const [cachedAppCount, setCachedAppCount] = useState<number | null>(null);
   const [cacheError, setCacheError] = useState<string | null>(null);
   const [showConfirmEnable, setShowConfirmEnable] = useState(false);
   const graphOperationGeneration = useRef(0);
+  const activeActionRef = useRef<GraphAction | null>(null);
+  const loading = activeAction === "signIn";
+  const cacheLoading = activeAction === "cache";
+  const graphActionBusy = activeAction !== null;
 
   const isCurrentGraphOperation = useCallback((generation: number) => {
     return (
@@ -48,7 +53,7 @@ export function GraphApiTab() {
   }, []);
 
   const refreshStatus = useCallback(async () => {
-    if (!graphApiEnabled) return;
+    if (!graphApiEnabled || activeActionRef.current !== null) return;
     const generation = ++graphOperationGeneration.current;
     try {
       const status = await graphGetAuthStatus();
@@ -79,9 +84,10 @@ export function GraphApiTab() {
       setShowConfirmEnable(true);
     } else {
       graphOperationGeneration.current += 1;
+      activeActionRef.current = null;
+      setActiveAction(null);
       setGraphApiEnabled(false);
       setAuthStatus(null);
-      setCacheLoading(false);
       setCachedAppCount(null);
       setCacheError(null);
       useUiStore.getState().setGraphApiStatus("idle");
@@ -93,9 +99,28 @@ export function GraphApiTab() {
     setShowConfirmEnable(false);
   };
 
+  const beginGraphAction = (action: GraphAction): number | null => {
+    if (activeActionRef.current !== null) {
+      return null;
+    }
+    activeActionRef.current = action;
+    setActiveAction(action);
+    return ++graphOperationGeneration.current;
+  };
+
+  const finishGraphAction = (action: GraphAction, generation: number) => {
+    if (
+      isCurrentGraphOperation(generation) &&
+      activeActionRef.current === action
+    ) {
+      activeActionRef.current = null;
+      setActiveAction(null);
+    }
+  };
+
   const handleSignIn = async () => {
-    const generation = ++graphOperationGeneration.current;
-    setLoading(true);
+    const generation = beginGraphAction("signIn");
+    if (generation === null) return;
     useUiStore.getState().setGraphApiStatus("connecting");
     try {
       const status = await graphAuthenticate();
@@ -124,12 +149,13 @@ export function GraphApiTab() {
         error: e instanceof Error ? e.message : String(e),
       });
     } finally {
-      setLoading(false);
+      finishGraphAction("signIn", generation);
     }
   };
 
   const handleSignOut = async () => {
-    const generation = ++graphOperationGeneration.current;
+    const generation = beginGraphAction("signOut");
+    if (generation === null) return;
     try {
       await graphSignOut();
       if (!isCurrentGraphOperation(generation)) return;
@@ -138,12 +164,14 @@ export function GraphApiTab() {
       useUiStore.getState().setGraphApiStatus("idle");
     } catch {
       // ignore
+    } finally {
+      finishGraphAction("signOut", generation);
     }
   };
 
   const handlePrePopulateCache = async () => {
-    const generation = ++graphOperationGeneration.current;
-    setCacheLoading(true);
+    const generation = beginGraphAction("cache");
+    if (generation === null) return;
     setCacheError(null);
     setCachedAppCount(null);
     try {
@@ -161,7 +189,7 @@ export function GraphApiTab() {
       const msg = e instanceof Error ? e.message : String(e);
       setCacheError(msg);
     } finally {
-      setCacheLoading(false);
+      finishGraphAction("cache", generation);
     }
   };
 
@@ -446,7 +474,7 @@ export function GraphApiTab() {
                   <button
                     type="button"
                     onClick={handlePrePopulateCache}
-                    disabled={cacheLoading || !authStatus.capabilities.apps}
+                    disabled={graphActionBusy || !authStatus.capabilities.apps}
                     style={{
                       padding: "4px 12px",
                       fontSize: "12px",
@@ -454,13 +482,15 @@ export function GraphApiTab() {
                       backgroundColor: tokens.colorBrandBackground,
                       color: tokens.colorNeutralForegroundOnBrand,
                       borderRadius: "4px",
-                      cursor: cacheLoading
+                      cursor: graphActionBusy
                         ? "wait"
                         : authStatus.capabilities.apps
                           ? "pointer"
                           : "not-allowed",
                       opacity:
-                        cacheLoading || !authStatus.capabilities.apps ? 0.7 : 1,
+                        graphActionBusy || !authStatus.capabilities.apps
+                          ? 0.7
+                          : 1,
                     }}
                   >
                     {cacheLoading
@@ -470,6 +500,7 @@ export function GraphApiTab() {
                   <button
                     type="button"
                     onClick={handleSignOut}
+                    disabled={graphActionBusy}
                     style={{
                       padding: "4px 12px",
                       fontSize: "12px",
@@ -477,7 +508,8 @@ export function GraphApiTab() {
                       backgroundColor: "transparent",
                       color: tokens.colorNeutralForeground2,
                       borderRadius: "4px",
-                      cursor: "pointer",
+                      cursor: graphActionBusy ? "not-allowed" : "pointer",
+                      opacity: graphActionBusy ? 0.7 : 1,
                     }}
                   >
                     Sign out
@@ -556,7 +588,7 @@ export function GraphApiTab() {
                 <button
                   type="button"
                   onClick={handleSignIn}
-                  disabled={loading}
+                  disabled={graphActionBusy}
                   style={{
                     padding: "4px 12px",
                     fontSize: "12px",

@@ -9,6 +9,10 @@ const hasOwn = (value: object, key: PropertyKey): boolean =>
 const string: Guard = (value) => typeof value === "string";
 const number: Guard = (value) =>
   typeof value === "number" && Number.isFinite(value);
+const integer: Guard = (value) =>
+  typeof value === "number" && Number.isSafeInteger(value);
+const unsignedInteger: Guard = (value) =>
+  typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 const boolean: Guard = (value) => typeof value === "boolean";
 const nullable =
   (guard: Guard): Guard =>
@@ -94,16 +98,16 @@ const registryProvenance = fields({
 });
 const eventProvenance = fields({
   channel: string,
-  eventId: number,
-  recordId: nullable(number),
+  eventId: unsignedInteger,
+  recordId: nullable(unsignedInteger),
   namedData: array(namedValue),
 });
 const provenance = fields({
   sourceKind,
   sourceArtifactId: string,
   filePath: nullable(string),
-  lineNumber: nullable(number),
-  recordNumber: nullable(number),
+  lineNumber: nullable(unsignedInteger),
+  recordNumber: nullable(unsignedInteger),
   registry: nullable(registryProvenance),
   event: nullable(eventProvenance),
 });
@@ -116,7 +120,7 @@ const observationContext = fields({
   parseState,
   accessState,
 });
-const rawStatus: Guard = (value) => string(value) || number(value);
+const rawStatus: Guard = (value) => string(value) || integer(value);
 const statusDetail = fields({
   raw: rawStatus,
   normalized: normalizedStatus,
@@ -130,7 +134,7 @@ const status = fields({
 });
 const errorCode = fields({
   raw: string,
-  decimal: nullable(number),
+  decimal: nullable(integer),
   hex: nullable(string),
 });
 const elevation = fields({
@@ -150,7 +154,7 @@ const identity = fields({
   evidence: evidenceRefs,
 });
 const oobeConfig = fields({
-  rawMask: number,
+  rawMask: unsignedInteger,
   skipKeyboard: boolean,
   enablePatchDownload: boolean,
   skipWindowsUpgradeUx: boolean,
@@ -163,8 +167,8 @@ const oobeConfig = fields({
   disallowAdmin: boolean,
 });
 const devicePreparation = fields({
-  agentDownloadTimeoutSeconds: nullable(number),
-  pageTimeoutSeconds: nullable(number),
+  agentDownloadTimeoutSeconds: nullable(unsignedInteger),
+  pageTimeoutSeconds: nullable(unsignedInteger),
   allowSkipOnFailure: nullable(boolean),
   allowDiagnostics: nullable(boolean),
   scriptIds: array(string),
@@ -187,7 +191,7 @@ const profile = fields({
 const enrollmentSettings = fields({
   deviceEspEnabled: nullable(boolean),
   userEspEnabled: nullable(boolean),
-  timeoutSeconds: nullable(number),
+  timeoutSeconds: nullable(unsignedInteger),
   blocking: nullable(boolean),
   allowReset: nullable(boolean),
   allowRetry: nullable(boolean),
@@ -252,9 +256,9 @@ const workload = fields({
 });
 const processObservation = fields({
   context: observationContext,
-  pid: number,
+  pid: unsignedInteger,
   processStartTime: timestamp,
-  parentPid: nullable(number),
+  parentPid: nullable(unsignedInteger),
   executableName: string,
   sanitizedCommandLine: nullable(string),
   referencedLogPath: nullable(string),
@@ -271,15 +275,15 @@ const installerCorrelation = fields({
   evidence: evidenceRefs,
 });
 const nodeCacheEntry = fields({
-  index: number,
+  index: unsignedInteger,
   nodeUri: string,
   expectedValue: nullable(string),
   sensitivity,
   evidence: evidenceRefs,
 });
 const registrationEvent = fields({
-  eventId: number,
-  recordId: nullable(number),
+  eventId: unsignedInteger,
+  recordId: nullable(unsignedInteger),
   status,
   message: string,
   timestamp,
@@ -295,9 +299,9 @@ const doTransfer = fields({
   evidence: evidenceRefs,
 });
 const deliveryOptimization = fields({
-  downloadHttpBytes: number,
-  downloadLanBytes: number,
-  downloadCacheHostBytes: number,
+  downloadHttpBytes: unsignedInteger,
+  downloadLanBytes: unsignedInteger,
+  downloadCacheHostBytes: unsignedInteger,
   peerSharePercent: nullable(number),
   connectedCacheSharePercent: nullable(number),
   transfers: array(doTransfer),
@@ -357,8 +361,8 @@ const coverage = fields({
 const observationValue: Guard = (value) => {
   if (!record(value) || Object.keys(value).length !== 1) return false;
   if (hasOwn(value, "text")) return string(value.text);
-  if (hasOwn(value, "integer")) return number(value.integer);
-  if (hasOwn(value, "unsigned")) return number(value.unsigned);
+  if (hasOwn(value, "integer")) return integer(value.integer);
+  if (hasOwn(value, "unsigned")) return unsignedInteger(value.unsigned);
   if (hasOwn(value, "boolean")) return boolean(value.boolean);
   return hasOwn(value, "stringList") && array(string)(value.stringList);
 };
@@ -379,7 +383,7 @@ const graphError = fields({
   message: string,
   requestId: nullable(string),
   blockedBy: nullable(string),
-  retryAfterSeconds: nullable(number),
+  retryAfterSeconds: nullable(unsignedInteger),
 });
 const assignment = fields({
   assignmentId: string,
@@ -444,7 +448,7 @@ const enrollmentConfiguration = fields({
   displayName: nullable(string),
   deviceEspEnabled: nullable(boolean),
   userEspEnabled: nullable(boolean),
-  timeoutMinutes: nullable(number),
+  timeoutMinutes: nullable(unsignedInteger),
   selectedMobileAppIds: array(string),
   assignments: array(assignment),
   evidence: evidenceRefs,

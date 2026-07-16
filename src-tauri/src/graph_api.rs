@@ -59,6 +59,106 @@ impl VersionedGuidCache {
     }
 }
 
+#[cfg(any(target_os = "windows", test))]
+struct VersionedAuthSlot<T> {
+    generation: u64,
+    value: Option<T>,
+}
+
+#[cfg(any(target_os = "windows", test))]
+impl<T> Default for VersionedAuthSlot<T> {
+    fn default() -> Self {
+        Self {
+            generation: 0,
+            value: None,
+        }
+    }
+}
+
+#[cfg(any(target_os = "windows", test))]
+impl<T> VersionedAuthSlot<T> {
+    fn replace(&mut self, value: Option<T>) -> u64 {
+        self.generation = self
+            .generation
+            .checked_add(1)
+            .expect("Graph auth generation exhausted");
+        self.value = value;
+        self.generation
+    }
+
+    fn replace_if_generation(&mut self, expected: u64, value: Option<T>) -> Option<u64> {
+        if self.generation != expected {
+            return None;
+        }
+        Some(self.replace(value))
+    }
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn invalid_graph_app_response(required_scope: &str) -> client::GraphClientError {
+    client::GraphClientError::new(
+        client::GraphClientErrorKind::InvalidResponse,
+        required_scope,
+    )
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn optional_graph_string(
+    item: &serde_json::Value,
+    key: &str,
+    required_scope: &str,
+) -> Result<Option<String>, client::GraphClientError> {
+    match item.get(key) {
+        None | Some(serde_json::Value::Null) => Ok(None),
+        Some(serde_json::Value::String(value)) => Ok(Some(value.clone())),
+        Some(_) => Err(invalid_graph_app_response(required_scope)),
+    }
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn parse_graph_app_json(
+    item: &serde_json::Value,
+    default_type: Option<&str>,
+    expected_id: Option<&str>,
+    required_scope: &str,
+) -> Result<GraphAppInfo, client::GraphClientError> {
+    let id = item
+        .get("id")
+        .and_then(serde_json::Value::as_str)
+        .and_then(normalize_graph_guid)
+        .ok_or_else(|| invalid_graph_app_response(required_scope))?;
+    if expected_id.is_some_and(|expected| id != expected) {
+        return Err(invalid_graph_app_response(required_scope));
+    }
+    let display_name = item
+        .get("displayName")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| invalid_graph_app_response(required_scope))?
+        .to_string();
+    let publisher = optional_graph_string(item, "publisher", required_scope)?;
+    let odata_type = optional_graph_string(item, "@odata.type", required_scope)?
+        .or_else(|| default_type.map(String::from));
+
+    Ok(GraphAppInfo {
+        id,
+        display_name,
+        publisher,
+        odata_type,
+    })
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn parse_graph_app_values(
+    values: &[serde_json::Value],
+    default_type: Option<&str>,
+    required_scope: &str,
+) -> Result<Vec<GraphAppInfo>, client::GraphClientError> {
+    values
+        .iter()
+        .map(|item| parse_graph_app_json(item, default_type, None, required_scope))
+        .collect()
+}
+
 #[cfg(target_os = "windows")]
 mod windows_impl {
     use std::collections::{BTreeMap, HashMap, HashSet};
@@ -71,8 +171,9 @@ mod windows_impl {
         MAX_GRAPH_RESPONSE_BYTES,
     };
     use super::{
-        normalize_graph_guid, project_graph_auth_status, GraphAppInfo, GraphAuthStatus,
-        GraphHttpMethod, GraphResolutionResult, GraphTransportRequest, GraphTransportResponse,
+        normalize_graph_guid, parse_graph_app_json, parse_graph_app_values,
+        project_graph_auth_status, GraphAppInfo, GraphAuthStatus, GraphHttpMethod,
+        GraphResolutionResult, GraphTransportRequest, GraphTransportResponse, VersionedAuthSlot,
         VersionedGuidCache, GRAPH_SCOPE_REQUEST,
     };
     use crate::error::AppError;
@@ -83,7 +184,7 @@ mod windows_impl {
 
     #[derive(Default)]
     pub struct GraphAuthState {
-        access_token: Mutex<CachedTokenSlot>,
+        access_token: Mutex<VersionedAuthSlot<CachedToken>>,
         guid_cache: Mutex<VersionedGuidCache>,
     }
 
@@ -91,12 +192,6 @@ mod windows_impl {
     struct CachedToken {
         token: String,
         status: GraphAuthStatus,
-    }
-
-    #[derive(Default)]
-    struct CachedTokenSlot {
-        generation: u64,
-        token: Option<CachedToken>,
     }
 
     fn unix_now() -> u64 {
@@ -111,50 +206,75 @@ mod windows_impl {
             Self::default()
         }
 
-        fn get_valid_token(&self) -> Option<(CachedToken, u64)> {
+        fn get_valid_token_snapshot(&self) -> (Option<CachedToken>, u64) {
             let mut guard = self.access_token.lock().unwrap();
             let is_valid = guard
-                .token
+                .value
                 .as_ref()
                 .and_then(|token| token.status.expires_at)
                 .is_some_and(|expires_at| expires_at > unix_now());
             if is_valid {
-                guard.token.clone().map(|token| (token, guard.generation))
-            } else {
-                let had_token = guard.token.take().is_some();
-                if had_token {
-                    guard.generation = guard
-                        .generation
-                        .checked_add(1)
-                        .expect("Graph auth generation exhausted");
-                    let generation = guard.generation;
-                    drop(guard);
-                    self.guid_cache.lock().unwrap().reset_to(generation);
-                }
-                None
+                return (guard.value.clone(), guard.generation);
             }
-        }
 
-        fn set_token(&self, token: CachedToken) {
-            let mut guard = self.access_token.lock().unwrap();
-            guard.generation = guard
-                .generation
-                .checked_add(1)
-                .expect("Graph auth generation exhausted");
-            guard.token = Some(token);
-            let generation = guard.generation;
+            if guard.value.is_none() {
+                return (None, guard.generation);
+            }
+
+            let generation = guard.replace(None);
             drop(guard);
             self.guid_cache.lock().unwrap().reset_to(generation);
+            (None, generation)
+        }
+
+        fn get_valid_token(&self) -> Option<(CachedToken, u64)> {
+            let (token, generation) = self.get_valid_token_snapshot();
+            token.map(|token| (token, generation))
+        }
+
+        fn claim_authentication(&self) -> Result<CachedToken, u64> {
+            let mut guard = self.access_token.lock().unwrap();
+            let is_valid = guard
+                .value
+                .as_ref()
+                .and_then(|token| token.status.expires_at)
+                .is_some_and(|expires_at| expires_at > unix_now());
+            if is_valid {
+                return Ok(guard
+                    .value
+                    .clone()
+                    .expect("validated Graph token must remain present"));
+            }
+
+            let generation = guard.replace(None);
+            drop(guard);
+            self.guid_cache.lock().unwrap().reset_to(generation);
+            Err(generation)
+        }
+
+        fn set_token_if_generation(&self, expected: u64, token: CachedToken) -> bool {
+            let mut guard = self.access_token.lock().unwrap();
+            let Some(generation) = guard.replace_if_generation(expected, Some(token)) else {
+                return false;
+            };
+            drop(guard);
+            self.guid_cache.lock().unwrap().reset_to(generation);
+            true
+        }
+
+        fn clear_token_if_generation(&self, expected: u64) -> bool {
+            let mut guard = self.access_token.lock().unwrap();
+            let Some(generation) = guard.replace_if_generation(expected, None) else {
+                return false;
+            };
+            drop(guard);
+            self.guid_cache.lock().unwrap().reset_to(generation);
+            true
         }
 
         fn clear_token(&self) {
             let mut guard = self.access_token.lock().unwrap();
-            guard.generation = guard
-                .generation
-                .checked_add(1)
-                .expect("Graph auth generation exhausted");
-            guard.token = None;
-            let generation = guard.generation;
+            let generation = guard.replace(None);
             drop(guard);
             self.guid_cache.lock().unwrap().reset_to(generation);
         }
@@ -418,29 +538,22 @@ mod windows_impl {
         })
     }
 
-    /// Helper: extract a GraphAppInfo from a JSON object.
-    fn parse_app_json(item: &serde_json::Value) -> Option<GraphAppInfo> {
-        let id = item.get("id").and_then(|v| v.as_str())?;
-        let name = item.get("displayName").and_then(|v| v.as_str())?;
-        Some(GraphAppInfo {
-            id: id.to_lowercase(),
-            display_name: name.to_string(),
-            publisher: item
-                .get("publisher")
-                .and_then(|v| v.as_str())
-                .map(String::from),
-            odata_type: item
-                .get("@odata.type")
-                .and_then(|v| v.as_str())
-                .map(String::from),
-        })
-    }
-
-    fn graph_request_error(state: &GraphAuthState, error: GraphClientError) -> AppError {
+    fn graph_request_error(
+        state: &GraphAuthState,
+        generation: u64,
+        error: GraphClientError,
+    ) -> AppError {
         if error.invalidates_auth() {
-            state.clear_token();
+            state.clear_token_if_generation(generation);
         }
         AppError::Internal(error.to_string())
+    }
+
+    fn current_auth_status(state: &GraphAuthState) -> GraphAuthStatus {
+        state
+            .get_valid_token()
+            .map(|(cached, _)| cached.status)
+            .unwrap_or_else(|| GraphAuthStatus::disconnected(None))
     }
 
     /// Authenticate with Graph API via WAM. Returns current auth status.
@@ -449,29 +562,33 @@ mod windows_impl {
         state: &GraphAuthState,
         hwnd_raw: isize,
     ) -> Result<GraphAuthStatus, AppError> {
-        if let Some((cached, _)) = state.get_valid_token() {
-            return Ok(cached.status);
-        }
+        let expected_generation = match state.claim_authentication() {
+            Ok(cached) => return Ok(cached.status),
+            Err(generation) => generation,
+        };
 
         match wam::acquire_token(hwnd_raw) {
             Ok(token) => {
                 let status = token.status.clone();
-                state.set_token(token);
-                Ok(status)
+                if state.set_token_if_generation(expected_generation, token) {
+                    Ok(status)
+                } else {
+                    Ok(current_auth_status(state))
+                }
             }
             Err(e) => {
-                state.clear_token();
-                Ok(GraphAuthStatus::disconnected(Some(e.to_string())))
+                if state.clear_token_if_generation(expected_generation) {
+                    Ok(GraphAuthStatus::disconnected(Some(e.to_string())))
+                } else {
+                    Ok(current_auth_status(state))
+                }
             }
         }
     }
 
     /// Get current auth status without triggering a new auth flow.
     pub fn get_auth_status(state: &GraphAuthState) -> GraphAuthStatus {
-        match state.get_valid_token() {
-            Some((cached, _)) => cached.status,
-            None => GraphAuthStatus::disconnected(None),
-        }
+        current_auth_status(state)
     }
 
     /// Sign out — clear cached token and GUID cache.
@@ -534,7 +651,7 @@ mod windows_impl {
                 |guids| fetch_apps_batch(&token.token, guids),
                 |guid| fetch_single_app(&token.token, guid),
             )
-            .map_err(|error| graph_request_error(state, error))?;
+            .map_err(|error| graph_request_error(state, generation, error))?;
 
             for (guid, info) in chunk_result.resolved {
                 resolved.insert(guid, info);
@@ -570,7 +687,7 @@ mod windows_impl {
                 None,
                 "DeviceManagementApps.Read.All",
             )
-            .map_err(|error| graph_request_error(state, error))?,
+            .map_err(|error| graph_request_error(state, generation, error))?,
         );
 
         // Proactive Remediations (Health Scripts)
@@ -582,7 +699,7 @@ mod windows_impl {
     ) {
         Ok(items) => all.extend(items),
         Err(error) if error.invalidates_auth() => {
-            return Err(graph_request_error(state, error));
+            return Err(graph_request_error(state, generation, error));
         }
         Err(error) => log::warn!("event=graph_skip_health_scripts error=\"{error}\""),
     }
@@ -598,7 +715,7 @@ mod windows_impl {
         ) {
             Ok(items) => all.extend(items),
             Err(error) if error.invalidates_auth() => {
-                return Err(graph_request_error(state, error));
+                return Err(graph_request_error(state, generation, error));
             }
             Err(error) => {
                 log::warn!("event=graph_skip_device_scripts error=\"{error}\"");
@@ -616,7 +733,7 @@ mod windows_impl {
         ) {
             Ok(items) => all.extend(items),
             Err(error) if error.invalidates_auth() => {
-                return Err(graph_request_error(state, error));
+                return Err(graph_request_error(state, generation, error));
             }
             Err(error) => log::warn!("event=graph_skip_shell_scripts error=\"{error}\""),
         }
@@ -642,17 +759,7 @@ mod windows_impl {
         let cancellation = NoGraphCancellation;
         let client = GraphClient::new("graph.microsoft.com", &transport, &cancellation);
         let values = client.get_paginated::<serde_json::Value>(initial_url, required_scope)?;
-
-        Ok(values
-            .iter()
-            .filter_map(|item| {
-                let mut app = parse_app_json(item)?;
-                if app.odata_type.is_none() {
-                    app.odata_type = default_type.map(String::from);
-                }
-                Some(app)
-            })
-            .collect())
+        parse_graph_app_values(&values, default_type, required_scope)
     }
 
     // ── Internal helpers ────────────────────────────────────────────────────────
@@ -700,18 +807,12 @@ mod windows_impl {
         for (guid, outcome) in guids.iter().zip(outcomes) {
             match outcome {
                 GraphBatchItem::Success(body) => {
-                    let app = parse_app_json(&body).ok_or_else(|| {
-                        GraphClientError::new(
-                            GraphClientErrorKind::InvalidResponse,
-                            "DeviceManagementApps.Read.All",
-                        )
-                    })?;
-                    if app.id != *guid {
-                        return Err(GraphClientError::new(
-                            GraphClientErrorKind::InvalidResponse,
-                            "DeviceManagementApps.Read.All",
-                        ));
-                    }
+                    let app = parse_graph_app_json(
+                        &body,
+                        None,
+                        Some(guid),
+                        "DeviceManagementApps.Read.All",
+                    )?;
                     resolved.insert(app.id.clone(), app);
                 }
                 GraphBatchItem::NotFound => not_found.push(guid.clone()),
@@ -744,7 +845,10 @@ mod windows_impl {
         };
 
         match client.request_json::<serde_json::Value>(request) {
-            Ok(body) => Ok(parse_app_json(&body)),
+            Ok(body) => {
+                parse_graph_app_json(&body, None, Some(guid), "DeviceManagementApps.Read.All")
+                    .map(Some)
+            }
             Err(error) if error.kind == GraphClientErrorKind::NotFound => Ok(None),
             Err(error) => Err(error),
         }
@@ -758,7 +862,15 @@ pub use windows_impl::*;
 mod tests {
     use std::collections::HashMap;
 
-    use super::{GraphAppInfo, VersionedGuidCache};
+    use super::client::GraphClientErrorKind;
+    use super::{
+        parse_graph_app_json, parse_graph_app_values, GraphAppInfo, VersionedAuthSlot,
+        VersionedGuidCache,
+    };
+
+    const APP_A: &str = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const APP_B: &str = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+    const APP_SCOPE: &str = "DeviceManagementApps.Read.All";
 
     fn app(id: &str, name: &str) -> GraphAppInfo {
         GraphAppInfo {
@@ -828,5 +940,73 @@ mod tests {
         );
         assert!(cache.get(7, "app-wrong").is_none());
         assert!(cache.get(7, "app-current").is_some());
+    }
+
+    #[test]
+    fn graph_auth_slot_rejects_stale_token_set_and_clear_mutations() {
+        let mut slot = VersionedAuthSlot::default();
+        let first_attempt = slot.replace(None);
+        let newer_attempt = slot.replace(None);
+        assert_eq!(
+            slot.replace_if_generation(first_attempt, Some("token-stale")),
+            None
+        );
+        assert_eq!(
+            slot.replace_if_generation(newer_attempt, Some("token-a")),
+            Some(3)
+        );
+
+        let stale_request = newer_attempt;
+        let newer_generation = slot.replace(Some("token-b"));
+        assert_eq!(newer_generation, 4);
+        assert_eq!(slot.replace_if_generation(stale_request, None), None);
+        assert_eq!(slot.value, Some("token-b"));
+
+        assert_eq!(slot.replace_if_generation(newer_generation, None), Some(5));
+        assert_eq!(slot.value, None);
+    }
+
+    #[test]
+    fn successful_graph_app_payloads_require_canonical_matching_guids() {
+        let canonical = parse_graph_app_json(
+            &serde_json::json!({
+                "id": "{AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA}",
+                "displayName": "App A",
+                "publisher": "Contoso"
+            }),
+            Some("#microsoft.graph.win32LobApp"),
+            Some(APP_A),
+            APP_SCOPE,
+        )
+        .expect("canonical response");
+        assert_eq!(canonical.id, APP_A);
+        assert_eq!(
+            canonical.odata_type.as_deref(),
+            Some("#microsoft.graph.win32LobApp")
+        );
+
+        for payload in [
+            serde_json::json!({"id": "not-a-guid", "displayName": "Bad"}),
+            serde_json::json!({"id": APP_A}),
+            serde_json::json!({"id": APP_A, "displayName": 42}),
+            serde_json::json!({"id": APP_A, "displayName": "Bad", "publisher": 42}),
+            serde_json::json!({"id": APP_B, "displayName": "Wrong app"}),
+        ] {
+            let error = parse_graph_app_json(&payload, None, Some(APP_A), APP_SCOPE)
+                .expect_err("malformed or mismatched 2xx payload must fail");
+            assert_eq!(error.kind, GraphClientErrorKind::InvalidResponse);
+        }
+    }
+
+    #[test]
+    fn paginated_graph_app_payloads_fail_instead_of_dropping_malformed_items() {
+        let values = vec![
+            serde_json::json!({"id": APP_A, "displayName": "App A"}),
+            serde_json::json!({"id": "bad", "displayName": "Discarded before fix"}),
+        ];
+
+        let error = parse_graph_app_values(&values, None, APP_SCOPE)
+            .expect_err("one malformed successful item invalidates the page");
+        assert_eq!(error.kind, GraphClientErrorKind::InvalidResponse);
     }
 }

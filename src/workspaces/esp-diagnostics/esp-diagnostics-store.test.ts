@@ -775,6 +775,36 @@ describe("ESP local session state", () => {
       },
       {
         ...update.snapshot,
+        rawEvidence: [
+          {
+            ...update.snapshot.rawEvidence[0],
+            rawValue: { integer: 1.5 },
+          },
+        ],
+      },
+      {
+        ...update.snapshot,
+        rawEvidence: [
+          {
+            ...update.snapshot.rawEvidence[0],
+            rawValue: { unsigned: -1 },
+          },
+        ],
+      },
+      {
+        ...update.snapshot,
+        rawEvidence: [
+          {
+            ...update.snapshot.rawEvidence[0],
+            provenance: {
+              ...update.snapshot.rawEvidence[0].provenance,
+              lineNumber: 2.5,
+            },
+          },
+        ],
+      },
+      {
+        ...update.snapshot,
         graph: {
           ...makeOverlay("graph-malformed"),
           deviceMatch: {
@@ -1154,6 +1184,119 @@ describe("ESP Graph scheduling", () => {
     );
     expect(() => getEspIdentityFingerprint(unclassified)).not.toThrow();
   });
+
+  it("keeps the newest identity in control when cancellation promises settle out of order", async () => {
+    const olderCancellation = deferred<void>();
+    const newerCancellation = deferred<void>();
+    const fetchGraph = vi.fn(async (request: EspGraphRequest) =>
+      makeOverlay(request.requestId),
+    );
+    const cancelGraph = vi
+      .fn<(requestId: string) => Promise<void>>()
+      .mockImplementationOnce(() => olderCancellation.promise)
+      .mockImplementationOnce(() => newerCancellation.promise);
+    const ids = ["graph-newest", "graph-stale"];
+    const coordinator = createEspGraphCoordinator({
+      fetchGraph,
+      cancelGraph,
+      createRequestId: () => ids.shift() ?? "graph-unexpected",
+    });
+    useUiStore.setState({ graphApiEnabled: true, graphApiStatus: "connected" });
+    useEspDiagnosticsStore.setState({
+      phase: "ready",
+      snapshot: makeSnapshot(["local-y"], "device-y"),
+      graphRequestId: "graph-active",
+      graphPhase: "loading",
+    });
+
+    const olderRun = coordinator.reconcile();
+    useEspDiagnosticsStore.setState({
+      snapshot: makeSnapshot(["local-z"], "device-z"),
+    });
+    const newerRun = coordinator.reconcile();
+
+    newerCancellation.resolve();
+    await newerRun;
+    olderCancellation.resolve();
+    await olderRun;
+
+    expect(fetchGraph).toHaveBeenCalledTimes(1);
+    expect(fetchGraph.mock.calls[0][0].identity.deviceName).toBe(
+      "host-device-z",
+    );
+    expect(useEspDiagnosticsStore.getState().snapshot?.graph?.requestId).toBe(
+      "graph-newest",
+    );
+    coordinator.dispose();
+  });
+
+  it("does not attach an overlay to a different identity than its request", () => {
+    const requested = makeSnapshot(["local-y"], "device-y");
+    useEspDiagnosticsStore.setState({ phase: "ready", snapshot: requested });
+    useEspDiagnosticsStore
+      .getState()
+      .beginGraph("graph-y", getEspIdentityFingerprint(requested));
+
+    useEspDiagnosticsStore.setState({
+      snapshot: makeSnapshot(["local-z"], "device-z"),
+    });
+    useEspDiagnosticsStore
+      .getState()
+      .applyGraphOverlay("graph-y", makeOverlay("graph-y"));
+
+    expect(useEspDiagnosticsStore.getState().snapshot?.graph).toBeNull();
+  });
+
+  it.each(["refreshFirst", "disableFirst"] as const)(
+    "never launches stale Graph work after opt-out when %s cancellation settles first",
+    async (settlesFirst) => {
+      const refreshCancellation = deferred<void>();
+      const disableCancellation = deferred<void>();
+      const fetchGraph = vi.fn(async (request: EspGraphRequest) =>
+        makeOverlay(request.requestId),
+      );
+      const cancelGraph = vi
+        .fn<(requestId: string) => Promise<void>>()
+        .mockImplementationOnce(() => refreshCancellation.promise)
+        .mockImplementationOnce(() => disableCancellation.promise);
+      const coordinator = createEspGraphCoordinator({
+        fetchGraph,
+        cancelGraph,
+        createRequestId: () => "graph-after-opt-out",
+      });
+      useUiStore.setState({
+        graphApiEnabled: true,
+        graphApiStatus: "connected",
+      });
+      useEspDiagnosticsStore.setState({
+        phase: "ready",
+        snapshot: makeSnapshot(["local-a"]),
+        graphRequestId: "graph-active",
+        graphPhase: "loading",
+      });
+
+      const refresh = coordinator.refresh();
+      useUiStore.setState({ graphApiEnabled: false });
+      const disable = coordinator.reconcile();
+
+      if (settlesFirst === "refreshFirst") {
+        refreshCancellation.resolve();
+        await refresh;
+        disableCancellation.resolve();
+        await disable;
+      } else {
+        disableCancellation.resolve();
+        await disable;
+        refreshCancellation.resolve();
+        await refresh;
+      }
+
+      expect(fetchGraph).not.toHaveBeenCalled();
+      expect(useEspDiagnosticsStore.getState().graphPhase).toBe("disabled");
+      expect(useEspDiagnosticsStore.getState().snapshot?.graph).toBeNull();
+      coordinator.dispose();
+    },
+  );
 
   it("rejects late refresh results and cancels without sign-out when disabled", async () => {
     const first = deferred<EspGraphOverlay>();

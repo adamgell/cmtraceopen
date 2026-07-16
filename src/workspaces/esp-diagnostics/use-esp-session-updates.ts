@@ -139,6 +139,7 @@ export function createEspGraphCoordinator(
   const nextRequestId = dependencies.createRequestId ?? createRequestId;
   let disposed = false;
   let started = false;
+  let operationGeneration = 0;
   let lastRequestedFingerprint: string | null = null;
   let blockedFingerprint: string | null = null;
   let pendingOrphanCancellation: Promise<void> | null = null;
@@ -198,11 +199,12 @@ export function createEspGraphCoordinator(
     const { graphApiEnabled, graphApiStatus } = useUiStore.getState();
 
     if (!graphApiEnabled) {
+      const generation = ++operationGeneration;
       const cancellation = cancelCurrentRequest();
       if (cancellation) {
         await cancellation;
       }
-      if (disposed) {
+      if (disposed || generation !== operationGeneration) {
         return;
       }
       if (useUiStore.getState().graphApiEnabled) {
@@ -218,9 +220,23 @@ export function createEspGraphCoordinator(
     }
 
     if (graphApiStatus !== "connected") {
+      const generation = ++operationGeneration;
       const cancellation = cancelCurrentRequest();
       if (cancellation) {
         await cancellation;
+      }
+      if (disposed || generation !== operationGeneration) {
+        return;
+      }
+      const currentUi = useUiStore.getState();
+      const currentSnapshot = useEspDiagnosticsStore.getState().snapshot;
+      if (
+        !currentUi.graphApiEnabled ||
+        currentUi.graphApiStatus === "connected" ||
+        !currentSnapshot ||
+        getEspIdentityFingerprint(currentSnapshot) !== fingerprint
+      ) {
+        return run(false);
       }
       useEspDiagnosticsStore.getState().clearGraphOverlay();
       useEspDiagnosticsStore
@@ -243,12 +259,12 @@ export function createEspGraphCoordinator(
     // it immediately and cannot slip through the deduplication guard above.
     lastRequestedFingerprint = fingerprint;
     blockedFingerprint = null;
-
+    const generation = ++operationGeneration;
     const cancellation = cancelCurrentRequest();
     if (cancellation) {
       await cancellation;
     }
-    if (disposed) {
+    if (disposed || generation !== operationGeneration) {
       return;
     }
 
@@ -276,17 +292,29 @@ export function createEspGraphCoordinator(
       return;
     }
 
+    const currentFingerprint = getEspIdentityFingerprint(currentSnapshot);
+    blockedFingerprint = null;
+    lastRequestedFingerprint = fingerprint;
     const requestId = nextRequestId();
     const request = createGraphRequest(currentSnapshot, requestId);
-    useEspDiagnosticsStore.getState().beginGraph(requestId);
+    useEspDiagnosticsStore.getState().beginGraph(requestId, currentFingerprint);
 
     try {
       const overlay = await fetchGraph(request);
-      if (!disposed) {
+      const latestSnapshot = useEspDiagnosticsStore.getState().snapshot;
+      const latestUi = useUiStore.getState();
+      if (
+        !disposed &&
+        generation === operationGeneration &&
+        latestUi.graphApiEnabled &&
+        latestUi.graphApiStatus === "connected" &&
+        latestSnapshot &&
+        getEspIdentityFingerprint(latestSnapshot) === currentFingerprint
+      ) {
         useEspDiagnosticsStore.getState().applyGraphOverlay(requestId, overlay);
       }
     } catch (error) {
-      if (!disposed) {
+      if (!disposed && generation === operationGeneration) {
         useEspDiagnosticsStore
           .getState()
           .failGraph(requestId, errorMessage(error));
@@ -337,6 +365,7 @@ export function createEspGraphCoordinator(
         return;
       }
       disposed = true;
+      operationGeneration += 1;
       const cancellation = cancelCurrentRequest();
       if (cancellation) {
         void cancellation;
