@@ -975,6 +975,8 @@ describe("ESP Graph overlay state", () => {
     expect(useEspDiagnosticsStore.getState().graphUnavailableReason).toBe(
       "graphNotConnected",
     );
+  });
+
   it("reports a failed optional app-intent cross-check as partial without losing primary apps", () => {
     const overlay = makeOverlay("graph-app-intent-partial");
     overlay.apps = {
