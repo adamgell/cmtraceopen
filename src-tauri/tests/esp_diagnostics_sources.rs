@@ -1029,7 +1029,7 @@ fn command_line_sanitizer_fails_closed_on_ambiguous_wider_quote_at_end_of_scan()
     let sanitized = sanitize_command_line(one_layer);
     assert!(!sanitized.contains("one-layer-secret-prefix"));
     assert!(!sanitized.contains("one-layer-visible-secret-suffix"));
-    assert!(sanitized.contains("--keep-real-arg yes"));
+    assert!(sanitized.contains(" --keep-real-arg yes"));
 
     let twice_layer_wider_quote = format!("{}\"", "\\".repeat(7));
     let twice_layer = [
@@ -1041,7 +1041,79 @@ fn command_line_sanitizer_fails_closed_on_ambiguous_wider_quote_at_end_of_scan()
     let sanitized = sanitize_command_line(&twice_layer);
     assert!(!sanitized.contains("twice-layer-secret-prefix"));
     assert!(!sanitized.contains("twice-layer-visible-secret-suffix"));
-    assert!(sanitized.contains("--keep-real-arg yes"));
+    assert!(sanitized.contains(" --keep-real-arg yes"));
+}
+
+#[test]
+fn command_line_sanitizer_does_not_trust_option_shaped_ambiguous_secret_suffixes() {
+    let exact_review_seed = r#"installer.exe --payload {\"password\":\"PREFIX_SECRET\\\"} -STILL_SECRET SECRET_VALUE --keep-real-arg yes"#;
+    let sanitized = sanitize_command_line(exact_review_seed);
+    for secret in ["PREFIX_SECRET", "STILL_SECRET", "SECRET_VALUE"] {
+        assert!(
+            !sanitized.contains(secret),
+            "exact review seed leaked {secret}: {sanitized}"
+        );
+    }
+    assert!(sanitized.contains(" --keep-real-arg yes"));
+
+    let one_layer_wider_quote = format!("{}\"", "\\".repeat(3));
+    let twice_layer_wider_quote = format!("{}\"", "\\".repeat(7));
+    for (prefix, wider_quote) in [
+        (
+            r#"installer.exe --payload {\"password\":\"PREFIX_SECRET"#,
+            one_layer_wider_quote.as_str(),
+        ),
+        (
+            r#"installer.exe --payload {\\\"password\\\":\\\"PREFIX_SECRET"#,
+            twice_layer_wider_quote.as_str(),
+        ),
+    ] {
+        for secret_option in ["-STILL_SECRET", "--STILL_SECRET", "/STILL_SECRET"] {
+            let raw =
+                format!("{prefix}{wider_quote}}} {secret_option} SECRET_VALUE --keep-real-arg yes");
+            let sanitized = sanitize_command_line(&raw);
+
+            for secret in ["PREFIX_SECRET", "STILL_SECRET", "SECRET_VALUE"] {
+                assert!(
+                    !sanitized.contains(secret),
+                    "ambiguous suffix leaked {secret} for {secret_option}: {sanitized}"
+                );
+            }
+            assert!(
+                sanitized.contains(" --keep-real-arg yes"),
+                "later proven option was consumed for {secret_option}: {sanitized}"
+            );
+        }
+    }
+}
+
+#[test]
+fn command_line_sanitizer_redacts_raw_closer_suffix_before_single_dash_option() {
+    let exact_review_seed =
+        r#"{\"password\":\"PREFIX_SECRET}VISIBLE_SECRET_SUFFIX -keep-real-arg yes"#;
+    let sanitized = sanitize_command_line(exact_review_seed);
+    assert!(!sanitized.contains("PREFIX_SECRET"));
+    assert!(!sanitized.contains("VISIBLE_SECRET_SUFFIX"));
+    assert!(sanitized.contains(" -keep-real-arg yes"));
+
+    let neighboring_members = concat!(
+        r#"{\"password\":\"PREFIX_SECRET}VISIBLE_SECRET_SUFFIX -keep-real-arg yes {"#,
+        r#"\"refresh_token\":\"FOLLOWING_MEMBER_SECRET\","#,
+        r#"\"safe.name\":\"KEEP_SAFE_MEMBER\"}"#,
+    );
+    let sanitized = sanitize_command_line(neighboring_members);
+    for secret in [
+        "PREFIX_SECRET",
+        "VISIBLE_SECRET_SUFFIX",
+        "FOLLOWING_MEMBER_SECRET",
+    ] {
+        assert!(
+            !sanitized.contains(secret),
+            "raw closer variant leaked {secret}: {sanitized}"
+        );
+    }
+    assert!(sanitized.contains(" -keep-real-arg yes"));
+    assert!(sanitized.contains(r#"\"safe.name\":\"KEEP_SAFE_MEMBER\""#));
 }
 
 #[test]

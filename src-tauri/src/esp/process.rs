@@ -479,20 +479,15 @@ fn find_escaped_json_value_end(
     let mut terminal_fallback: Option<(usize, usize)> = None;
     while cursor < bytes.len() {
         if let Some((width, quote)) = escaped_quote_run(bytes, cursor) {
-            if width == quote_width {
-                if let Some(fallback) = terminal_fallback {
-                    if is_escaped_json_member_opener_with_width(bytes, cursor, member_quote_width) {
-                        if let Some(boundary) =
-                            ambiguous_terminal_suffix_boundary(bytes, fallback.1 + 1)
-                        {
-                            return EscapedJsonValueEnd::Malformed { boundary };
-                        }
-                        return EscapedJsonValueEnd::Complete {
-                            closing_start: fallback.0,
-                            closing_quote: fallback.1,
-                        };
-                    }
+            if let Some(fallback) = terminal_fallback {
+                if is_escaped_json_member_opener_with_width(bytes, cursor, None) {
+                    return EscapedJsonValueEnd::Complete {
+                        closing_start: fallback.0,
+                        closing_quote: fallback.1,
+                    };
                 }
+            }
+            if width == quote_width {
                 if is_escaped_json_value_close(bytes, quote + 1, member_quote_width) {
                     return EscapedJsonValueEnd::Complete {
                         closing_start: cursor,
@@ -520,11 +515,11 @@ fn find_escaped_json_value_end(
                 }
             }
             cursor = quote + 1;
-        } else if terminal_fallback.is_none()
-            && matches!(bytes[cursor], b'}' | b']')
-            && is_likely_command_json_boundary(bytes, cursor)
-        {
-            return EscapedJsonValueEnd::Malformed { boundary: cursor };
+        } else if terminal_fallback.is_none() && matches!(bytes[cursor], b'}' | b']') {
+            if let Some(boundary) = malformed_raw_closer_boundary(bytes, cursor) {
+                return EscapedJsonValueEnd::Malformed { boundary };
+            }
+            cursor += 1;
         } else {
             cursor += 1;
         }
@@ -544,15 +539,22 @@ fn find_escaped_json_value_end(
     }
 }
 
-fn is_likely_command_json_boundary(bytes: &[u8], boundary: usize) -> bool {
-    let mut cursor = boundary + 1;
-    skip_ascii_whitespace(bytes, &mut cursor);
-    match bytes.get(cursor) {
-        None | Some(b'{' | b'[' | b'/') => true,
-        Some(b'-') => bytes
-            .get(cursor + 1)
-            .is_some_and(|byte| *byte == b'-' || byte.is_ascii_alphabetic()),
-        _ => false,
+fn malformed_raw_closer_boundary(bytes: &[u8], closer: usize) -> Option<usize> {
+    let suffix_start = closer + 1;
+    let mut first_non_whitespace = suffix_start;
+    skip_ascii_whitespace(bytes, &mut first_non_whitespace);
+    if matches!(bytes.get(first_non_whitespace), None | Some(b'{' | b'[')) {
+        return Some(closer);
+    }
+
+    let argument_boundary = find_first_command_argument_boundary(bytes, suffix_start)?;
+    if bytes[suffix_start..argument_boundary]
+        .iter()
+        .any(|byte| !byte.is_ascii_whitespace())
+    {
+        Some(argument_boundary)
+    } else {
+        Some(closer)
     }
 }
 
@@ -564,24 +566,46 @@ fn ambiguous_terminal_suffix_boundary(bytes: &[u8], after_quote: usize) -> Optio
     }
 
     let suffix_start = container + 1;
-    let argument_boundary = find_command_argument_boundary(bytes, suffix_start);
+    let argument_boundary = find_last_command_argument_boundary(bytes, suffix_start);
     bytes[suffix_start..argument_boundary]
         .iter()
         .any(|byte| !byte.is_ascii_whitespace())
         .then_some(argument_boundary)
 }
 
-fn find_command_argument_boundary(bytes: &[u8], start: usize) -> usize {
+fn find_last_command_argument_boundary(bytes: &[u8], start: usize) -> usize {
+    let mut cursor = start;
+    let mut boundary = bytes.len();
+    while cursor < bytes.len() {
+        if (cursor == start || bytes[cursor - 1].is_ascii_whitespace())
+            && is_command_option_start(bytes, cursor)
+        {
+            boundary = command_argument_separator_start(bytes, start, cursor);
+        }
+        cursor += 1;
+    }
+    boundary
+}
+
+fn find_first_command_argument_boundary(bytes: &[u8], start: usize) -> Option<usize> {
     let mut cursor = start;
     while cursor < bytes.len() {
         if (cursor == start || bytes[cursor - 1].is_ascii_whitespace())
             && is_command_option_start(bytes, cursor)
         {
-            return cursor;
+            return Some(command_argument_separator_start(bytes, start, cursor));
         }
         cursor += 1;
     }
-    bytes.len()
+    None
+}
+
+fn command_argument_separator_start(bytes: &[u8], start: usize, option: usize) -> usize {
+    let mut boundary = option;
+    while boundary > start && bytes[boundary - 1].is_ascii_whitespace() {
+        boundary -= 1;
+    }
+    boundary
 }
 
 fn is_command_option_start(bytes: &[u8], start: usize) -> bool {
