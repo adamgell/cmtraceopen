@@ -4,7 +4,9 @@
 //! where the operating system provides the required Windows evidence sources.
 
 pub mod event_logs;
+pub mod process;
 pub mod registry;
+pub mod system;
 
 use serde::{Deserialize, Serialize};
 
