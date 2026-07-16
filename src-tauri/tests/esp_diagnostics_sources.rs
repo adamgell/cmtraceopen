@@ -775,6 +775,36 @@ fn command_line_sanitizer_redacts_complete_escaped_json_secrets_with_escaped_quo
 }
 
 #[test]
+fn command_line_sanitizer_keeps_escaped_json_key_boundaries_and_redacts_two_layers() {
+    let ending_backslash = concat!(
+        r#"installer.exe --payload {\"password\":\"ends-with-literal-backslash\\\","#,
+        r#"\"refresh_token\":\"following-refresh-secret\","#,
+        r#"\"safe\":\"keep-adjacent-json-control\"}"#
+    );
+    let sanitized = sanitize_command_line(ending_backslash);
+
+    for secret in ["ends-with-literal-backslash", "following-refresh-secret"] {
+        assert!(
+            !sanitized.contains(secret),
+            "adjacent escaped JSON secret leaked {secret}: {sanitized}"
+        );
+    }
+    assert!(sanitized.contains(r#"\"password\":\"[REDACTED]\""#));
+    assert!(sanitized.contains(r#"\"refresh_token\":\"[REDACTED]\""#));
+    assert!(sanitized.contains(r#"\"safe\":\"keep-adjacent-json-control\""#));
+
+    let twice_escaped = concat!(
+        r#"installer.exe --payload {\\\"password\\\":\\\"twice-escaped-password-secret\\\","#,
+        r#"\\\"safe\\\":\\\"keep-twice-escaped-control\\\"}"#
+    );
+    let sanitized = sanitize_command_line(twice_escaped);
+
+    assert!(!sanitized.contains("twice-escaped-password-secret"));
+    assert!(sanitized.contains(r#"\\\"password\\\":\\\"[REDACTED]\\\""#));
+    assert!(sanitized.contains(r#"\\\"safe\\\":\\\"keep-twice-escaped-control\\\""#));
+}
+
+#[test]
 fn command_line_sanitizer_redacts_quoted_and_unpadded_basic_credentials() {
     for credential in ["Zm9vOmJhcg", "\"Zm9vOmJhcg==\""] {
         let raw =
@@ -798,11 +828,31 @@ fn command_line_sanitizer_redacts_quoted_and_unpadded_basic_credentials() {
 }
 
 #[test]
+fn command_line_sanitizer_redacts_punctuation_delimited_basic_credentials() {
+    for (raw, expected) in [
+        ("Basic Zm9vOmJhcg==, next", "Basic [REDACTED], next"),
+        ("Basic \"Zm9vOmJhcg==\", next", "Basic [REDACTED], next"),
+        ("Basic Zm9vOmJhcg==. Next", "Basic [REDACTED]. Next"),
+        ("Basic 'Zm9vOmJhcg=='. Next", "Basic [REDACTED]. Next"),
+    ] {
+        assert_eq!(sanitize_command_line(raw), expected);
+    }
+
+    for narrative in [
+        "Basic c2FmZS1uYXJyYXRpdmU=, authentication is supported",
+        "Basic \"c2FmZS1uYXJyYXRpdmU=\". Authentication is supported",
+    ] {
+        assert_eq!(sanitize_command_line(narrative), narrative);
+    }
+}
+
+#[test]
 fn command_line_sanitizer_preserves_punctuated_bearer_authentication_narratives() {
     for narrative in [
         "The Bearer authentication, mode is supported",
         "The Bearer authentication. Next step",
         "The Bearer authentication; mode is supported",
+        "The Bearer (authentication) mode is supported",
     ] {
         assert_eq!(sanitize_command_line(narrative), narrative);
     }
@@ -840,6 +890,54 @@ fn event_parser_rejects_malformed_nesting_and_accepts_empty_self_closing_event_d
             .expect("valid self-closing EventData");
         assert!(parsed.event_data.is_empty());
     }
+}
+
+#[test]
+fn event_parser_rejects_illegal_entities_nulls_and_misplaced_declarations() {
+    let event_with_payload = |payload: &str| {
+        format!(
+            concat!(
+                "<Event><System><EventID>72</EventID>",
+                "<TimeCreated SystemTime='2026-07-16T13:00:00Z'/>",
+                "<Channel>Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin</Channel>",
+                "</System><EventData><Data Name='Payload'>{}</Data></EventData></Event>"
+            ),
+            payload,
+        )
+    };
+    let invalid_records = [
+        event_with_payload("&undefined;"),
+        event_with_payload("&#0;"),
+        event_with_payload("&#x0;"),
+        event_with_payload("raw\0null"),
+        format!(
+            "<!--before-declaration--><?xml version='1.0'?>{}",
+            event_with_payload("valid")
+        ),
+    ];
+
+    for (index, xml) in invalid_records.iter().enumerate() {
+        assert!(
+            parse_esp_event_xml(xml, "invalid.evtx", Some(index as u64 + 1), None, "Unknown")
+                .is_none(),
+            "invalid XML record {index} was accepted"
+        );
+    }
+}
+
+#[test]
+fn event_parser_ignores_event_id_markup_inside_comments() {
+    let xml = concat!(
+        "<Event><!-- <EventID>999</EventID> -->",
+        "<System><EventID>72</EventID>",
+        "<TimeCreated SystemTime='2026-07-16T13:00:00Z'/>",
+        "<Channel>Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin</Channel>",
+        "</System><EventData /></Event>"
+    );
+
+    let parsed = parse_esp_event_xml(xml, "commented.evtx", Some(1), None, "Unknown")
+        .expect("valid event with a comment");
+    assert_eq!(parsed.event_id, 72);
 }
 
 #[test]

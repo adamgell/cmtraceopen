@@ -187,7 +187,6 @@ struct CommandLineSanitizers {
     named_secret: Regex,
     query_secret: Regex,
     json_secret: Regex,
-    escaped_json_secret: Regex,
 }
 
 fn command_line_sanitizers() -> &'static CommandLineSanitizers {
@@ -222,7 +221,7 @@ fn command_line_sanitizers() -> &'static CommandLineSanitizers {
         )
         .expect("constant authorization-credential regex"),
         standalone_basic_credential: Regex::new(
-            r#"(?i)(^|\s)(basic)(\s+)("[a-z0-9+/]+={0,2}"|'[a-z0-9+/]+={0,2}'|[a-z0-9+/]+={0,2})(\s|$)"#,
+            r#"(?i)(^|\s)(basic)(\s+)("[a-z0-9+/]+={0,2}"|'[a-z0-9+/]+={0,2}'|[a-z0-9+/]+={0,2})(\s|[,.]|$)"#,
         )
         .expect("constant standalone-Basic-credential regex"),
         bearer: Regex::new(
@@ -241,10 +240,6 @@ fn command_line_sanitizers() -> &'static CommandLineSanitizers {
             r#"(?i)("(?:access[-_]?token|refresh[-_]?token|id[-_]?token|auth[-_]?token|bearer[-_]?token|client[-_]?secret|app[-_]?secret|api[-_]?key|token|password|secret|authorization)"\s*:\s*")(?:\\.|[^"])*(\")"#,
         )
         .expect("constant JSON-secret regex"),
-        escaped_json_secret: Regex::new(
-            r#"(?i)(\\"(?:access[-_]?token|refresh[-_]?token|id[-_]?token|auth[-_]?token|bearer[-_]?token|client[-_]?secret|app[-_]?secret|api[-_]?key|token|password|secret|authorization)\\"\s*:\s*\\")(?:(?:\\\\)+\\"|\\\\|[^\\"])*(\\")"#,
-        )
-        .expect("constant escaped-JSON-secret regex"),
     })
 }
 
@@ -310,6 +305,10 @@ pub fn sanitize_command_line(command_line: &str) -> String {
                 let narrative_word = credential.trim_end_matches(|character| {
                     matches!(character, ',' | '.' | ';' | ':' | '!' | '?')
                 });
+                let narrative_word = narrative_word
+                    .strip_prefix('(')
+                    .and_then(|value| value.strip_suffix(')'))
+                    .unwrap_or(narrative_word);
                 if narrative_word.eq_ignore_ascii_case("authentication") {
                     captures[0].to_string()
                 } else {
@@ -325,10 +324,178 @@ pub fn sanitize_command_line(command_line: &str) -> String {
     let command_line = sanitizers
         .json_secret
         .replace_all(&command_line, "$1[REDACTED]$2");
-    let command_line = sanitizers
-        .escaped_json_secret
-        .replace_all(&command_line, "$1[REDACTED]$2");
-    command_line.into_owned()
+    redact_escaped_json_secrets(&command_line)
+}
+
+fn redact_escaped_json_secrets(command_line: &str) -> String {
+    let mut output = String::with_capacity(command_line.len());
+    let mut copied_through = 0usize;
+    let mut search_from = 0usize;
+
+    while let Some((value_start, closing_start, closing_end)) =
+        find_escaped_json_secret(command_line, search_from)
+    {
+        output.push_str(&command_line[copied_through..value_start]);
+        output.push_str("[REDACTED]");
+        copied_through = closing_start;
+        search_from = closing_end;
+    }
+
+    if copied_through == 0 {
+        command_line.to_string()
+    } else {
+        output.push_str(&command_line[copied_through..]);
+        output
+    }
+}
+
+fn find_escaped_json_secret(
+    command_line: &str,
+    search_from: usize,
+) -> Option<(usize, usize, usize)> {
+    let bytes = command_line.as_bytes();
+    let mut cursor = search_from;
+
+    while cursor < bytes.len() {
+        let Some((quote_width, opening_quote)) = escaped_quote_run(bytes, cursor) else {
+            cursor += 1;
+            continue;
+        };
+        let key_start = opening_quote + 1;
+        let (key_closing_start, key_closing_quote) =
+            find_matching_escaped_quote(bytes, key_start, quote_width)?;
+        let key = &command_line[key_start..key_closing_start];
+        if !is_json_secret_key(key) {
+            cursor = key_closing_quote + 1;
+            continue;
+        }
+
+        let mut value_opening_start = key_closing_quote + 1;
+        skip_ascii_whitespace(bytes, &mut value_opening_start);
+        if bytes.get(value_opening_start) != Some(&b':') {
+            cursor = key_closing_quote + 1;
+            continue;
+        }
+        value_opening_start += 1;
+        skip_ascii_whitespace(bytes, &mut value_opening_start);
+        let Some((value_quote_width, value_opening_quote)) =
+            escaped_quote_run(bytes, value_opening_start)
+        else {
+            cursor = key_closing_quote + 1;
+            continue;
+        };
+        if value_quote_width != quote_width {
+            cursor = key_closing_quote + 1;
+            continue;
+        }
+
+        let value_start = value_opening_quote + 1;
+        if let Some((closing_start, closing_quote)) =
+            find_escaped_json_value_end(bytes, value_start, quote_width)
+        {
+            return Some((value_start, closing_start, closing_quote + 1));
+        }
+        return None;
+    }
+
+    None
+}
+
+fn escaped_quote_run(bytes: &[u8], start: usize) -> Option<(usize, usize)> {
+    if bytes.get(start) != Some(&b'\\') {
+        return None;
+    }
+    let mut quote = start;
+    while bytes.get(quote) == Some(&b'\\') {
+        quote += 1;
+    }
+    (bytes.get(quote) == Some(&b'"')).then_some((quote - start, quote))
+}
+
+fn find_matching_escaped_quote(
+    bytes: &[u8],
+    start: usize,
+    quote_width: usize,
+) -> Option<(usize, usize)> {
+    let mut cursor = start;
+    while cursor < bytes.len() {
+        if let Some((width, quote)) = escaped_quote_run(bytes, cursor) {
+            if width == quote_width {
+                return Some((cursor, quote));
+            }
+            cursor = quote + 1;
+        } else {
+            cursor += 1;
+        }
+    }
+    None
+}
+
+fn find_escaped_json_value_end(
+    bytes: &[u8],
+    start: usize,
+    quote_width: usize,
+) -> Option<(usize, usize)> {
+    let mut cursor = start;
+    while cursor < bytes.len() {
+        if let Some((width, quote)) = escaped_quote_run(bytes, cursor) {
+            if width == quote_width {
+                return Some((cursor, quote));
+            }
+            if width > quote_width && is_escaped_json_value_boundary(bytes, quote + 1, quote_width)
+            {
+                return Some((cursor + width - quote_width, quote));
+            }
+            cursor = quote + 1;
+        } else {
+            cursor += 1;
+        }
+    }
+    None
+}
+
+fn is_escaped_json_value_boundary(bytes: &[u8], after_quote: usize, quote_width: usize) -> bool {
+    let mut cursor = after_quote;
+    skip_ascii_whitespace(bytes, &mut cursor);
+    match bytes.get(cursor) {
+        None | Some(b'}' | b']') => true,
+        Some(b',') => {
+            cursor += 1;
+            skip_ascii_whitespace(bytes, &mut cursor);
+            escaped_quote_run(bytes, cursor)
+                .is_some_and(|(next_width, _)| next_width == quote_width)
+        }
+        _ => false,
+    }
+}
+
+fn skip_ascii_whitespace(bytes: &[u8], cursor: &mut usize) {
+    while bytes.get(*cursor).is_some_and(u8::is_ascii_whitespace) {
+        *cursor += 1;
+    }
+}
+
+fn is_json_secret_key(key: &str) -> bool {
+    let normalized = key
+        .bytes()
+        .filter(u8::is_ascii_alphanumeric)
+        .map(|byte| byte.to_ascii_lowercase())
+        .collect::<Vec<_>>();
+    matches!(
+        normalized.as_slice(),
+        b"accesstoken"
+            | b"refreshtoken"
+            | b"idtoken"
+            | b"authtoken"
+            | b"bearertoken"
+            | b"clientsecret"
+            | b"appsecret"
+            | b"apikey"
+            | b"token"
+            | b"password"
+            | b"secret"
+            | b"authorization"
+    )
 }
 
 fn process_allowlist(local_installer_names: &[String]) -> BTreeSet<String> {

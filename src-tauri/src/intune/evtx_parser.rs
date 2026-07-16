@@ -3,7 +3,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use evtx::EvtxParser;
-use quick_xml::events::{BytesStart, Event};
+use quick_xml::encoding::Decoder;
+use quick_xml::events::{BytesRef, BytesStart, Event};
+use quick_xml::name::QName;
 use quick_xml::Reader;
 #[cfg(target_os = "windows")]
 use regex::Regex;
@@ -445,7 +447,7 @@ pub fn parse_esp_event_xml(
 }
 
 fn has_valid_bounded_event_xml_structure(xml: &str) -> bool {
-    if xml.len() > MAX_ESP_EVTX_RECORD_BYTES {
+    if xml.len() > MAX_ESP_EVTX_RECORD_BYTES || !xml.chars().all(is_legal_xml_10_character) {
         return false;
     }
 
@@ -455,6 +457,7 @@ fn has_valid_bounded_event_xml_structure(xml: &str) -> bool {
     let mut root_seen = false;
     let mut root_closed = false;
     let mut declaration_seen = false;
+    let mut declaration_allowed = true;
 
     loop {
         let event = match reader.read_event() {
@@ -463,9 +466,10 @@ fn has_valid_bounded_event_xml_structure(xml: &str) -> bool {
         };
         match event {
             Event::Start(start) => {
-                if root_closed || !has_valid_xml_attributes(&start) {
+                if root_closed || !has_valid_xml_attributes(&start, reader.decoder()) {
                     return false;
                 }
+                declaration_allowed = false;
                 if depth == 0 {
                     if root_seen || start.name().as_ref() != b"Event" {
                         return false;
@@ -478,9 +482,10 @@ fn has_valid_bounded_event_xml_structure(xml: &str) -> bool {
                 };
             }
             Event::Empty(start) => {
-                if root_closed || !has_valid_xml_attributes(&start) {
+                if root_closed || !has_valid_xml_attributes(&start, reader.decoder()) {
                     return false;
                 }
+                declaration_allowed = false;
                 if depth == 0 {
                     if root_seen || start.name().as_ref() != b"Event" {
                         return false;
@@ -493,6 +498,7 @@ fn has_valid_bounded_event_xml_structure(xml: &str) -> bool {
                 if depth == 0 {
                     return false;
                 }
+                declaration_allowed = false;
                 depth -= 1;
                 if depth == 0 {
                     root_closed = true;
@@ -502,100 +508,144 @@ fn has_valid_bounded_event_xml_structure(xml: &str) -> bool {
                 if depth == 0 && !text.iter().all(u8::is_ascii_whitespace) {
                     return false;
                 }
+                declaration_allowed = false;
             }
-            Event::CData(_) | Event::GeneralRef(_) if depth == 0 => return false,
             Event::Decl(_) => {
-                if declaration_seen || root_seen {
+                if declaration_seen || !declaration_allowed || root_seen {
                     return false;
                 }
                 declaration_seen = true;
+                declaration_allowed = false;
             }
             Event::DocType(_) => return false,
+            Event::CData(_) if depth == 0 => return false,
+            Event::CData(_) => declaration_allowed = false,
+            Event::GeneralRef(reference) => {
+                if depth == 0 || !is_valid_xml_reference(&reference) {
+                    return false;
+                }
+                declaration_allowed = false;
+            }
+            Event::Comment(_) | Event::PI(_) => declaration_allowed = false,
             Event::Eof => return root_seen && root_closed && depth == 0,
-            Event::CData(_) | Event::GeneralRef(_) | Event::Comment(_) | Event::PI(_) => {}
         }
     }
 }
 
-fn has_valid_xml_attributes(start: &BytesStart<'_>) -> bool {
+fn is_legal_xml_10_character(character: char) -> bool {
+    matches!(
+        character,
+        '\u{9}' | '\u{A}' | '\u{D}' | '\u{20}'..='\u{D7FF}' | '\u{E000}'..='\u{FFFD}' | '\u{10000}'..='\u{10FFFF}'
+    )
+}
+
+fn is_valid_xml_reference(reference: &BytesRef<'_>) -> bool {
+    match reference.resolve_char_ref() {
+        Ok(Some(character)) => is_legal_xml_10_character(character),
+        Ok(None) => {
+            let name: &[u8] = reference;
+            matches!(name, b"amp" | b"lt" | b"gt" | b"apos" | b"quot")
+        }
+        Err(_) => false,
+    }
+}
+
+fn has_valid_xml_attributes(start: &BytesStart<'_>, decoder: Decoder) -> bool {
     let mut attributes = start.attributes();
-    attributes
-        .with_checks(true)
-        .all(|attribute| attribute.is_ok())
+    attributes.with_checks(true).all(|attribute| {
+        attribute.is_ok_and(|attribute| {
+            attribute
+                .decode_and_unescape_value(decoder)
+                .is_ok_and(|value| value.chars().all(is_legal_xml_10_character))
+        })
+    })
 }
 
 fn ordered_event_data(xml: &str) -> Option<Vec<EventLogProperty>> {
-    let Some(event_data_start) = xml.find("<EventData") else {
-        return Some(Vec::new());
-    };
-    let opening_tag_end = event_data_start + xml[event_data_start..].find('>')?;
-    let opening_tag = &xml[event_data_start..=opening_tag_end];
-    if opening_tag.trim_end_matches('>').trim_end().ends_with('/') {
-        return Some(Vec::new());
-    }
-    let content_start = opening_tag_end + 1;
-    let event_data_end_offset = xml[content_start..].find("</EventData>")?;
-    let event_data = &xml[content_start..content_start + event_data_end_offset];
+    let mut reader = Reader::from_str(xml);
     let mut properties = Vec::new();
-    let mut cursor = 0;
+    let mut in_event_data = false;
 
-    while let Some(tag_offset) = event_data[cursor..].find("<Data") {
-        let tag_start = cursor + tag_offset;
-        let after_name = tag_start + "<Data".len();
-        let next_character = event_data[after_name..].chars().next()?;
-        if !next_character.is_ascii_whitespace() && next_character != '>' && next_character != '/' {
-            cursor = after_name;
-            continue;
+    loop {
+        match reader.read_event().ok()? {
+            Event::Start(start) if start.name().as_ref() == b"EventData" => {
+                in_event_data = true;
+            }
+            Event::Empty(start) if start.name().as_ref() == b"EventData" => {
+                return Some(properties);
+            }
+            Event::End(end) if in_event_data && end.name().as_ref() == b"EventData" => {
+                return Some(properties);
+            }
+            Event::Start(start) if in_event_data && start.name().as_ref() == b"Data" => {
+                let name = xml_start_attribute(&start, "Name", reader.decoder())
+                    .unwrap_or_else(|| format!("Data[{}]", properties.len()));
+                let value = reader.read_text(QName(b"Data")).ok()?;
+                properties.push(EventLogProperty {
+                    name,
+                    value: decode_esp_xml_text(value.trim()),
+                });
+            }
+            Event::Empty(start) if in_event_data && start.name().as_ref() == b"Data" => {
+                let name = xml_start_attribute(&start, "Name", reader.decoder())
+                    .unwrap_or_else(|| format!("Data[{}]", properties.len()));
+                properties.push(EventLogProperty {
+                    name,
+                    value: String::new(),
+                });
+            }
+            Event::Eof => return Some(Vec::new()),
+            _ => {}
         }
-        let tag_end_offset = event_data[tag_start..].find('>')?;
-        let tag_end = tag_start + tag_end_offset;
-        let attributes = &event_data[after_name..tag_end];
-        let name = xml_attribute(attributes, "Name")
-            .unwrap_or_else(|| format!("Data[{}]", properties.len()));
-        if attributes.trim_end().ends_with('/') {
-            properties.push(EventLogProperty {
-                name,
-                value: String::new(),
-            });
-            cursor = tag_end + 1;
-            continue;
-        }
-        let value_end_offset = event_data[tag_end + 1..].find("</Data>")?;
-        let value_end = tag_end + 1 + value_end_offset;
-        let value = decode_esp_xml_text(event_data[tag_end + 1..value_end].trim());
-        properties.push(EventLogProperty { name, value });
-        cursor = value_end + "</Data>".len();
     }
-
-    Some(properties)
 }
 
-fn xml_element_text<'a>(xml: &'a str, element: &str) -> Option<&'a str> {
-    let opening = format!("<{element}");
-    let start = xml.find(&opening)?;
-    let content_start = start + xml[start..].find('>')? + 1;
-    let closing = format!("</{element}>");
-    let content_end = content_start + xml[content_start..].find(&closing)?;
-    Some(&xml[content_start..content_end])
+fn xml_element_text(xml: &str, element: &str) -> Option<String> {
+    let mut reader = Reader::from_str(xml);
+    loop {
+        match reader.read_event().ok()? {
+            Event::Start(start) if start.name().as_ref() == element.as_bytes() => {
+                return reader
+                    .read_text(QName(element.as_bytes()))
+                    .ok()
+                    .map(|value| value.into_owned());
+            }
+            Event::Empty(start) if start.name().as_ref() == element.as_bytes() => {
+                return Some(String::new());
+            }
+            Event::Eof => return None,
+            _ => {}
+        }
+    }
 }
 
 fn xml_element_attribute(xml: &str, element: &str, attribute: &str) -> Option<String> {
-    let opening = format!("<{element}");
-    let start = xml.find(&opening)? + opening.len();
-    let end = start + xml[start..].find('>')?;
-    xml_attribute(&xml[start..end], attribute)
-}
-
-fn xml_attribute(attributes: &str, name: &str) -> Option<String> {
-    for quote in ['\'', '"'] {
-        let needle = format!("{name}={quote}");
-        if let Some(needle_start) = attributes.find(&needle) {
-            let value_start = needle_start + needle.len();
-            let value_end = value_start + attributes[value_start..].find(quote)?;
-            return Some(decode_esp_xml_text(&attributes[value_start..value_end]));
+    let mut reader = Reader::from_str(xml);
+    loop {
+        match reader.read_event().ok()? {
+            Event::Start(start) | Event::Empty(start)
+                if start.name().as_ref() == element.as_bytes() =>
+            {
+                return xml_start_attribute(&start, attribute, reader.decoder());
+            }
+            Event::Eof => return None,
+            _ => {}
         }
     }
-    None
+}
+
+fn xml_start_attribute(
+    start: &BytesStart<'_>,
+    attribute_name: &str,
+    decoder: Decoder,
+) -> Option<String> {
+    start.attributes().find_map(|attribute| {
+        let attribute = attribute.ok()?;
+        (attribute.key.as_ref() == attribute_name.as_bytes())
+            .then(|| attribute.decode_and_unescape_value(decoder).ok())
+            .flatten()
+            .map(|value| value.into_owned())
+    })
 }
 
 fn decode_esp_xml_text(value: &str) -> String {
@@ -1583,6 +1633,42 @@ mod tests {
         assert_eq!(batch.records.len(), 1);
         assert_eq!(batch.records[0].record_id, Some(1));
         assert_eq!(batch.parse_failure_count, 2);
+        assert!(batch.truncated);
+    }
+
+    #[test]
+    fn esp_record_stream_counts_illegal_xml_records_as_parse_failures() {
+        let valid_xml = esp_record_xml("valid");
+        let invalid_xml = [
+            esp_record_xml("&undefined;"),
+            esp_record_xml("&#0;"),
+            esp_record_xml("&#x0;"),
+            esp_record_xml("raw\0null"),
+            format!(
+                "<!--before-declaration--><?xml version='1.0'?>{}",
+                esp_record_xml("valid")
+            ),
+        ];
+        let mut input = vec![Ok::<_, &'static str>((valid_xml, 1))];
+        input.extend(
+            invalid_xml
+                .into_iter()
+                .enumerate()
+                .map(|(index, xml)| Ok((xml, index as u64 + 2))),
+        );
+
+        let batch = parse_esp_record_stream(
+            input,
+            "invalid-xml-stream.evtx",
+            10,
+            MAX_ESP_EVTX_RECORD_BYTES,
+            usize::MAX,
+        );
+
+        assert_eq!(batch.inspected_records, 6);
+        assert_eq!(batch.records.len(), 1);
+        assert_eq!(batch.records[0].record_id, Some(1));
+        assert_eq!(batch.parse_failure_count, 5);
         assert!(batch.truncated);
     }
 
