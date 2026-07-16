@@ -396,7 +396,7 @@ mod windows_impl {
         };
         use windows::Win32::Foundation::HWND;
         use windows::Win32::System::WinRT::IWebAuthenticationCoreManagerInterop;
-        use windows_future::IAsyncOperation;
+        use windows_future::{AsyncOperationCompletedHandler, IAsyncOperation};
 
         const GRAPH_WAM_ACQUISITION_TIMEOUT: std::time::Duration =
             std::time::Duration::from_secs(120);
@@ -411,9 +411,11 @@ mod windows_impl {
         {
             let (sender, receiver) = std::sync::mpsc::sync_channel(1);
             operation
-                .when(move |result| {
+                .SetCompleted(&AsyncOperationCompletedHandler::new(move |completed, _| {
+                    let result = completed.ok().and_then(IAsyncOperation::GetResults);
                     let _ = sender.send(result);
-                })
+                    Ok(())
+                }))
                 .map_err(|error| {
                     AppError::Internal(format!(
                         "WAM {stage} completion registration failed: {error}"

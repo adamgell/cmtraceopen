@@ -238,6 +238,51 @@ function assertWorkflowContract(workflowText) {
   );
 }
 
+function assertMsrvWorkflowContract(workflowText) {
+  const workflow = workflowText.replace(/\r\n?/g, "\n");
+  const jobStart = workflow.indexOf("\n  msrv:\n");
+  assert.notEqual(jobStart, -1, "MSRV job must exist");
+
+  const nextJobStart = workflow.indexOf("\n  frontend:\n", jobStart);
+  assert.notEqual(nextJobStart, -1, "frontend job must follow the MSRV job");
+  const msrvJob = workflow.slice(jobStart, nextJobStart);
+  assert.match(
+    msrvJob,
+    /strategy:\n\s+matrix:\n\s+os: \[ubuntu-latest, windows-latest\]/,
+  );
+  assert.match(msrvJob, /runs-on: \$\{\{ matrix\.os \}\}/);
+  assert.match(
+    msrvJob,
+    /- name: Install system dependencies\n\s+if: runner\.os == 'Linux'/,
+  );
+  const orderedSteps = [
+    "- name: Install system dependencies",
+    "- name: Setup Rust 1.77.2",
+    "- name: Cache Rust dependencies",
+    "- name: Rust MSRV check",
+  ];
+  let previousIndex = -1;
+  for (const step of orderedSteps) {
+    const index = msrvJob.indexOf(step);
+    assert.notEqual(index, -1, `${step} must exist in the MSRV job`);
+    assert.ok(index > previousIndex, `${step} must follow the previous step`);
+    previousIndex = index;
+  }
+
+  assert.match(
+    msrvJob,
+    /- name: Setup Rust 1\.77\.2[\s\S]*?uses: dtolnay\/rust-toolchain@[0-9a-f]{40}[\s\S]*?toolchain: "1\.77\.2"/,
+  );
+  assert.match(
+    msrvJob,
+    /- name: Cache Rust dependencies[\s\S]*?src-tauri\/target\/[\s\S]*?key: \$\{\{ runner\.os \}\}-cargo-msrv-1\.77\.2-\$\{\{ hashFiles\('Cargo\.lock'\) \}\}/,
+  );
+  assert.match(
+    msrvJob,
+    /- name: Rust MSRV check\n\s+run: cargo \+1\.77\.2 check --workspace --all-features --locked/,
+  );
+}
+
 test("CI cleans and verifies bundle outputs around every package build", () => {
   assertWorkflowContract(readFileSync(workflowPath, "utf8"));
 });
@@ -246,4 +291,14 @@ test("CI bundle workflow contract accepts CRLF line endings", () => {
   const workflow = readFileSync(workflowPath, "utf8").replaceAll("\n", "\r\n");
 
   assert.doesNotThrow(() => assertWorkflowContract(workflow));
+});
+
+test("CI enforces the declared Rust 1.77.2 MSRV", () => {
+  assertMsrvWorkflowContract(readFileSync(workflowPath, "utf8"));
+});
+
+test("CI MSRV workflow contract accepts CRLF line endings", () => {
+  const workflow = readFileSync(workflowPath, "utf8").replaceAll("\n", "\r\n");
+
+  assert.doesNotThrow(() => assertMsrvWorkflowContract(workflow));
 });

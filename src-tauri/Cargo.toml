@@ -51,7 +51,9 @@ notify = "8"
 tokio = { version = "1", features = ["fs", "io-util", "sync", "rt", "net"] }
 rayon = "1.10"
 font-kit = "0.14"
-evtx = { version = "0.12", optional = true }
+# evtx 0.12 uses Cargo's 2024 edition, which Cargo 1.77.2 cannot parse.
+# Keep this exact pin aligned with the declared MSRV and its CI check.
+evtx = { version = "=0.8.5", optional = true }
 quick-xml = { version = "0.38", optional = true }
 glob = "0.3"
 sha2 = "0.10"
@@ -72,7 +74,9 @@ plist = { version = "1", optional = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 winreg = "0.56"
-windows = { version = "0.62", features = [
+# windows 0.62 raises its MSRV to Rust 1.82. Keep the 0.61 line for the
+# application's declared Rust 1.77.2 floor and exercise it in Windows CI.
+windows = { version = "=0.61.3", features = [
     "Win32_Foundation",
     "Win32_Security_Authorization",
     "Win32_System_EventLog",
@@ -93,8 +97,10 @@ windows = { version = "0.62", features = [
     "Foundation_Collections",
     "Win32_System_WinRT",
 ] }
-windows-future = "0.3"
-ureq = "3"
+windows-future = "=0.2.1"
+# ureq 3.3 uses Cargo's 2024 edition and requires Rust 1.85.
+# Keep this exact pin aligned with the declared Rust 1.77.2 MSRV.
+ureq = "=3.2.0"
 
 [target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
 tauri-plugin-window-state = "2"
