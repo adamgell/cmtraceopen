@@ -204,6 +204,15 @@ describe("getAvailableWorkspaces", () => {
     const workspaces = getAvailableWorkspaces("windows", ["log"]);
     expect(workspaces).toEqual(["log"]);
   });
+
+  it("falls back to log when the backend disables the active workspace", () => {
+    useUiStore.getState().setActiveView("intune");
+
+    useUiStore.getState().setEnabledWorkspaces(["log"]);
+
+    expect(useUiStore.getState().activeWorkspace).toBe("log");
+    expect(useUiStore.getState().activeView).toBe("log");
+  });
 });
 
 describe("isIntuneWorkspace", () => {

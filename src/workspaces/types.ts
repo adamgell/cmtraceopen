@@ -14,6 +14,10 @@ export interface WorkspaceActionLabels {
 }
 
 export interface WorkspaceCapabilities {
+  /** Whether the application sidebar is visible. Defaults to true if omitted. */
+  sidebar?: boolean;
+  /** Whether the workspace can acquire live evidence on the current backend. */
+  liveAcquisition?: boolean;
   tabStrip?: boolean;
   findBar?: boolean;
   detailsPane?: boolean;
@@ -40,7 +44,11 @@ export interface WorkspaceDefinition {
   component: LazyExoticComponent<ComponentType>;
   /** Lazy-loaded sidebar component. Omit for no sidebar. */
   sidebar?: LazyExoticComponent<ComponentType>;
-  /** Boolean capability flags. All default to false if omitted. */
+  /** Lazy-loaded workspace-specific toolbar action. */
+  toolbarAction?: LazyExoticComponent<ComponentType>;
+  /** Lazy-loaded workspace-specific status-bar content. */
+  statusBarContent?: LazyExoticComponent<ComponentType>;
+  /** Boolean capability flags. Sidebar defaults to true; other flags default to false. */
   capabilities?: WorkspaceCapabilities;
   /** File dialog filters for the "Open File" action. */
   fileFilters?: DialogFilter[];

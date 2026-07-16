@@ -59,6 +59,7 @@ export type WorkspaceId =
   | "macos-diag"
   | "deployment"
   | "event-log"
+  | "esp-diagnostics"
   | "secureboot"
   | "sysmon"
   | "timeline"
