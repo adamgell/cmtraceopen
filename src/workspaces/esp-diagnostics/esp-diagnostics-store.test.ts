@@ -461,6 +461,57 @@ describe("ESP Graph overlay state", () => {
 
     expect(useEspDiagnosticsStore.getState().snapshot).toBe(localSnapshot);
   });
+
+  it("preserves Graph when local identity changes only by case or whitespace", () => {
+    const current = {
+      ...makeSnapshot(["local-a"], "same-device"),
+      graph: makeOverlay("graph-a"),
+    };
+    const incoming = makeSnapshot(["local-a", "local-b"], "same-device");
+    incoming.identity = {
+      ...incoming.identity,
+      deviceName: `  ${incoming.identity.deviceName!.toUpperCase()}  `,
+      entraDeviceId: ` ${incoming.identity.entraDeviceId?.toUpperCase()} `,
+      entdmId: {
+        ...incoming.identity.entdmId!,
+        value: ` ${incoming.identity.entdmId!.value.toUpperCase()} `,
+      },
+      tenantId: {
+        ...incoming.identity.tenantId!,
+        value: ` ${incoming.identity.tenantId!.value.toUpperCase()} `,
+      },
+      tenantDomain: {
+        ...incoming.identity.tenantDomain!,
+        value: ` ${incoming.identity.tenantDomain!.value.toUpperCase()} `,
+      },
+      userPrincipalName: {
+        ...incoming.identity.userPrincipalName!,
+        value: ` ${incoming.identity.userPrincipalName!.value.toUpperCase()} `,
+      },
+      serialNumber: {
+        ...incoming.identity.serialNumber!,
+        value: ` ${incoming.identity.serialNumber!.value.toUpperCase()} `,
+      },
+    };
+    useEspDiagnosticsStore.setState({
+      phase: "live",
+      requestId: "live-a",
+      sessionId: "session-a",
+      sequence: 1,
+      snapshot: current,
+    });
+
+    useEspDiagnosticsStore
+      .getState()
+      .applySessionUpdate(makeSessionUpdate(2, incoming));
+
+    expect(getEspIdentityFingerprint(incoming)).toBe(
+      getEspIdentityFingerprint(current),
+    );
+    expect(useEspDiagnosticsStore.getState().snapshot?.graph?.requestId).toBe(
+      "graph-a",
+    );
+  });
 });
 
 describe("ESP Graph scheduling", () => {
@@ -669,5 +720,34 @@ describe("ESP Graph scheduling", () => {
       "local-a",
     );
     coordinator.dispose();
+  });
+
+  it("cancels an in-flight native Graph request when disposed", async () => {
+    const pending = deferred<EspGraphOverlay>();
+    const fetchGraph = vi.fn(() => pending.promise);
+    const cancelGraph = vi.fn(async () => undefined);
+    useUiStore.setState({ graphApiEnabled: true, graphApiStatus: "connected" });
+    useEspDiagnosticsStore.getState().beginAnalysis("analysis-a");
+    useEspDiagnosticsStore
+      .getState()
+      .applyAnalysis("analysis-a", makeSnapshot(["local-a"]));
+    const coordinator = createEspGraphCoordinator({
+      fetchGraph,
+      cancelGraph,
+      createRequestId: () => "graph-dispose",
+    });
+
+    const activeQuery = coordinator.reconcile();
+    expect(fetchGraph).toHaveBeenCalledTimes(1);
+    expect(useEspDiagnosticsStore.getState().graphRequestId).toBe(
+      "graph-dispose",
+    );
+
+    coordinator.dispose();
+
+    expect(cancelGraph).toHaveBeenCalledWith("graph-dispose");
+    pending.resolve(makeOverlay("graph-dispose"));
+    await activeQuery;
+    expect(useEspDiagnosticsStore.getState().snapshot?.graph).toBeNull();
   });
 });

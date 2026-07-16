@@ -65,17 +65,23 @@ export interface EspDiagnosticsStore {
   clearStoppedSession(sessionId: string): void;
 }
 
-function identityKey(snapshot: EspDiagnosticsSnapshot): string {
+function normalizeIdentityValue(value: string | null): string {
+  return value?.trim().toLocaleLowerCase("en-US") ?? "";
+}
+
+export function getEspIdentityFingerprint(
+  snapshot: EspDiagnosticsSnapshot,
+): string {
   const identity = snapshot.identity;
   return JSON.stringify([
-    identity.deviceName,
-    identity.managedDeviceId,
-    identity.entraDeviceId,
-    identity.entdmId?.value ?? null,
-    identity.tenantId?.value ?? null,
-    identity.tenantDomain?.value ?? null,
-    identity.userPrincipalName?.value ?? null,
-    identity.serialNumber?.value ?? null,
+    normalizeIdentityValue(identity.deviceName),
+    normalizeIdentityValue(identity.managedDeviceId),
+    normalizeIdentityValue(identity.entraDeviceId),
+    normalizeIdentityValue(identity.entdmId?.value ?? null),
+    normalizeIdentityValue(identity.tenantId?.value ?? null),
+    normalizeIdentityValue(identity.tenantDomain?.value ?? null),
+    normalizeIdentityValue(identity.userPrincipalName?.value ?? null),
+    normalizeIdentityValue(identity.serialNumber?.value ?? null),
   ]);
 }
 
@@ -83,7 +89,10 @@ function withPreservedGraph(
   current: EspDiagnosticsSnapshot | null,
   incoming: EspDiagnosticsSnapshot,
 ): EspDiagnosticsSnapshot {
-  if (!current || identityKey(current) !== identityKey(incoming)) {
+  if (
+    !current ||
+    getEspIdentityFingerprint(current) !== getEspIdentityFingerprint(incoming)
+  ) {
     return incoming;
   }
 

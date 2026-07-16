@@ -5,7 +5,10 @@ import {
   graphFetchEspDiagnostics,
 } from "../../lib/commands";
 import { useUiStore } from "../../stores/ui-store";
-import { useEspDiagnosticsStore } from "./esp-diagnostics-store";
+import {
+  getEspIdentityFingerprint,
+  useEspDiagnosticsStore,
+} from "./esp-diagnostics-store";
 import type {
   EspDiagnosticsSnapshot,
   EspGraphOverlay,
@@ -16,6 +19,7 @@ import type {
 } from "./types";
 
 export const ESP_SESSION_UPDATE_EVENT = "esp-diagnostics-session-update";
+export { getEspIdentityFingerprint } from "./esp-diagnostics-store";
 
 const SESSION_STATES = new Set<EspSessionState>([
   "starting",
@@ -67,26 +71,6 @@ export function isEspSessionUpdate(value: unknown): value is EspSessionUpdate {
     Array.isArray(value.snapshot.workloads) &&
     Array.isArray(value.snapshot.rawEvidence)
   );
-}
-
-function normalizeIdentityValue(value: string | null): string {
-  return value?.trim().toLocaleLowerCase("en-US") ?? "";
-}
-
-export function getEspIdentityFingerprint(
-  snapshot: EspDiagnosticsSnapshot,
-): string {
-  const identity = snapshot.identity;
-  return JSON.stringify([
-    normalizeIdentityValue(identity.deviceName),
-    normalizeIdentityValue(identity.managedDeviceId),
-    normalizeIdentityValue(identity.entraDeviceId),
-    normalizeIdentityValue(identity.entdmId?.value ?? null),
-    normalizeIdentityValue(identity.tenantId?.value ?? null),
-    normalizeIdentityValue(identity.tenantDomain?.value ?? null),
-    normalizeIdentityValue(identity.userPrincipalName?.value ?? null),
-    normalizeIdentityValue(identity.serialNumber?.value ?? null),
-  ]);
 }
 
 function createGraphRequest(
@@ -260,7 +244,14 @@ export function createEspGraphCoordinator(
       void run(false);
     },
     dispose: () => {
+      if (disposed) {
+        return;
+      }
       disposed = true;
+      const cancellation = cancelCurrentRequest();
+      if (cancellation) {
+        void cancellation;
+      }
       unsubscribeEsp?.();
       unsubscribeUi?.();
       unsubscribeEsp = null;

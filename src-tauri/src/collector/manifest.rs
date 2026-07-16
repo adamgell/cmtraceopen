@@ -36,9 +36,9 @@ pub fn write_manifest(
     let mut artifacts: Vec<serde_json::Value> = results
         .iter()
         .flat_map(|result| {
-            result.files.iter().filter_map(|file| {
+            result.files.iter().map(|file| {
                 let relative_path = canonical_root_relative_path(bundle_root, &file.relative_path)?;
-                Some(json!({
+                Ok(json!({
                     "artifactId": result.id,
                     "category": result.category,
                     "family": result.family,
@@ -52,7 +52,7 @@ pub fn write_manifest(
                 }))
             })
         })
-        .collect();
+        .collect::<Result<Vec<_>, crate::error::AppError>>()?;
     artifacts.sort_by(|left, right| {
         let left_path = left
             .get("relativePath")
@@ -190,23 +190,122 @@ fn hostname() -> String {
         .unwrap_or_else(|_| "unknown".to_string())
 }
 
-fn canonical_root_relative_path(bundle_root: &Path, relative_path: &str) -> Option<String> {
+fn canonical_root_relative_path(
+    bundle_root: &Path,
+    relative_path: &str,
+) -> Result<String, crate::error::AppError> {
     let relative_path = Path::new(relative_path);
     if relative_path.is_absolute() {
-        return None;
+        return Err(manifest_artifact_path_error(
+            relative_path,
+            "path is absolute",
+        ));
     }
 
-    let canonical_root = bundle_root.canonicalize().ok()?;
-    let canonical_file = bundle_root.join(relative_path).canonicalize().ok()?;
-    if !canonical_file.is_file() || !canonical_file.starts_with(&canonical_root) {
-        return None;
+    let canonical_root = bundle_root.canonicalize().map_err(|error| {
+        manifest_artifact_path_error(
+            relative_path,
+            &format!("bundle root could not be canonicalized: {error}"),
+        )
+    })?;
+    let canonical_file = bundle_root
+        .join(relative_path)
+        .canonicalize()
+        .map_err(|error| {
+            manifest_artifact_path_error(
+                relative_path,
+                &format!("file could not be canonicalized: {error}"),
+            )
+        })?;
+    if !canonical_file.is_file() {
+        return Err(manifest_artifact_path_error(
+            relative_path,
+            "path is not a file",
+        ));
+    }
+    if !canonical_file.starts_with(&canonical_root) {
+        return Err(manifest_artifact_path_error(
+            relative_path,
+            "canonical path escapes the bundle root",
+        ));
     }
 
-    Some(
-        canonical_file
-            .strip_prefix(&canonical_root)
-            .ok()?
-            .to_string_lossy()
-            .replace('\\', "/"),
-    )
+    let root_relative = canonical_file
+        .strip_prefix(&canonical_root)
+        .map_err(|error| {
+            manifest_artifact_path_error(
+                relative_path,
+                &format!("canonical path is not root-relative: {error}"),
+            )
+        })?;
+    Ok(root_relative.to_string_lossy().replace('\\', "/"))
+}
+
+fn manifest_artifact_path_error(relative_path: &Path, reason: &str) -> crate::error::AppError {
+    crate::error::AppError::Internal(format!(
+        "cannot include collected artifact '{}' in manifest: {reason}",
+        relative_path.display()
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::write_manifest;
+    use crate::collector::types::{
+        ArtifactCounts, ArtifactResult, ArtifactStatus, CollectedArtifactFile, CollectionProfile,
+    };
+    use std::fs;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn write_manifest_rejects_a_collected_file_that_cannot_be_enumerated() {
+        let bundle_root = temp_bundle_root("manifest-missing-collected-file");
+        let result = ArtifactResult {
+            id: "missing-collected-file".to_string(),
+            category: "logs".to_string(),
+            family: "intune-ime".to_string(),
+            parse_hints: vec!["cmtrace".to_string()],
+            notes: Some("must not disappear from artifacts".to_string()),
+            status: ArtifactStatus::Collected,
+            files: vec![CollectedArtifactFile {
+                relative_path: "evidence/logs/missing.log".to_string(),
+                origin_path: Some("C:\\Windows\\Temp\\missing.log".to_string()),
+                bytes_copied: 42,
+            }],
+            error: None,
+        };
+
+        let error = write_manifest(
+            &bundle_root,
+            "CMTRACE-TEST",
+            &CollectionProfile::embedded(),
+            &[result],
+            &ArtifactCounts {
+                collected: 1,
+                missing: 0,
+                failed: 0,
+                total: 1,
+            },
+            5,
+        )
+        .expect_err("an unenumerated collected file must fail manifest creation");
+
+        assert!(
+            error.to_string().contains("missing.log"),
+            "error must identify the omitted collected file: {error}"
+        );
+        assert!(!bundle_root.join("manifest.json").exists());
+        fs::remove_dir_all(bundle_root).expect("remove temp bundle root");
+    }
+
+    fn temp_bundle_root(prefix: &str) -> PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time after epoch")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("{prefix}-{nonce}"));
+        fs::create_dir_all(&path).expect("create temp bundle root");
+        path
+    }
 }
