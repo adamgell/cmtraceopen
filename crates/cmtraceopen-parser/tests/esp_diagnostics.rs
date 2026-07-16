@@ -5983,7 +5983,7 @@ fn redaction_projection_masks_registration_named_data_by_label() {
 fn redaction_projection_masks_standalone_bearer_tokens_in_generic_named_data() {
     let direct_token = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1c2VyIn0.signature123";
     let structured_token = "opaque-token-value-1234567890";
-    let safe_prose = "Bearer authentication is required for this endpoint";
+    let prose_shaped_arbitrary_value = "Bearer authentication is required for this endpoint";
     let named_data = || {
         vec![
             EspNamedValue {
@@ -5996,7 +5996,7 @@ fn redaction_projection_masks_standalone_bearer_tokens_in_generic_named_data() {
             },
             EspNamedValue {
                 name: "Description".to_string(),
-                value: safe_prose.to_string(),
+                value: prose_shaped_arbitrary_value.to_string(),
             },
             EspNamedValue {
                 name: "PayloadWithContext".to_string(),
@@ -6061,7 +6061,10 @@ fn redaction_projection_masks_standalone_bearer_tokens_in_generic_named_data() {
         assert_eq!(values[0].value, "bEaReR [redacted]");
         assert!(values[1].value.contains(r#""payload":"BEARER [redacted]"#));
         assert!(values[1].value.contains(r#""state":"safe""#));
-        assert_eq!(values[2].value, safe_prose);
+        assert_eq!(
+            values[2].value,
+            "Bearer [redacted] is required for this endpoint"
+        );
         assert_eq!(values[3].value, "Bearer [redacted] expires soon");
     }
     assert_eq!(snapshot, original);
@@ -6299,7 +6302,7 @@ fn redaction_projection_masks_generic_token_labels_without_matching_token_count(
 }
 
 #[test]
-fn redaction_projection_removes_bearer_credentials_but_preserves_safe_raw_prose() {
+fn redaction_projection_removes_all_bearer_shapes_from_arbitrary_raw_evidence() {
     let mut token_text = raw_export_record(
         "bearer-token-text",
         EspSourceKind::DeploymentLog,
@@ -6345,23 +6348,264 @@ fn redaction_projection_removes_bearer_credentials_but_preserves_safe_raw_prose(
     let original = snapshot.clone();
 
     let safe = redacted_export_projection(&snapshot);
+    assert!(safe.raw_evidence.is_empty());
+    assert_eq!(snapshot, original);
+}
+
+#[test]
+fn redaction_projection_masks_quoted_and_descriptor_bearers_in_arbitrary_evidence() {
+    let arbitrary_values = || {
+        vec![
+            EspNamedValue {
+                name: "DoubleQuotedPayload".to_string(),
+                value: r#"Bearer "Q""#.to_string(),
+            },
+            EspNamedValue {
+                name: "SingleQuotedPayload".to_string(),
+                value: "Bearer 'Z'".to_string(),
+            },
+            EspNamedValue {
+                name: "DescriptorPayload".to_string(),
+                value: "Bearer token expires soon".to_string(),
+            },
+            EspNamedValue {
+                name: "ProseShapedPayload".to_string(),
+                value: "Bearer authorization is required".to_string(),
+            },
+        ]
+    };
+    let mut snapshot = findings_snapshot();
+    snapshot.registration_events.push(EspRegistrationEvent {
+        event_id: 304,
+        record_id: Some(42),
+        status: status(
+            EspRawStatus::Text("failed".to_string()),
+            EspNormalizedStatus::Failed,
+        ),
+        message: "Device registration failed".to_string(),
+        timestamp: timestamp("2026-07-15T12:00:00Z"),
+        named_data: arbitrary_values(),
+        evidence: vec![evidence_ref("registration-arbitrary-bearers")],
+    });
+
+    let mut named_value = raw_export_record(
+        "raw-named-arbitrary-bearers",
+        EspSourceKind::EventLog,
+        "event-log",
+        None,
+        "safe raw event payload",
+    );
+    named_value.sensitivity = EspSensitivity::Public;
+    named_value.provenance.event = Some(EspEventProvenance {
+        channel: "Generic event channel".to_string(),
+        event_id: 1,
+        record_id: Some(1),
+        named_data: arbitrary_values(),
+    });
+
+    let mut raw_text = raw_export_record(
+        "raw-double-quoted-bearer",
+        EspSourceKind::DeploymentLog,
+        "deployment-log",
+        None,
+        r#"Bearer "Q""#,
+    );
+    raw_text.sensitivity = EspSensitivity::Public;
+    let mut raw_list = raw_export_record(
+        "raw-single-quoted-bearer",
+        EspSourceKind::DeploymentLog,
+        "deployment-log",
+        None,
+        "placeholder",
+    );
+    raw_list.sensitivity = EspSensitivity::Public;
+    raw_list.raw_value = EspObservationValue::StringList(vec![
+        "safe list value".to_string(),
+        "Bearer 'Z'".to_string(),
+    ]);
+    let mut raw_descriptor = raw_export_record(
+        "raw-descriptor-bearer",
+        EspSourceKind::DeploymentLog,
+        "deployment-log",
+        None,
+        "Bearer token expires soon",
+    );
+    raw_descriptor.sensitivity = EspSensitivity::Public;
+    let mut raw_prose_shape = raw_export_record(
+        "raw-prose-shaped-bearer",
+        EspSourceKind::DeploymentLog,
+        "deployment-log",
+        None,
+        "Bearer authorization is required",
+    );
+    raw_prose_shape.sensitivity = EspSensitivity::Public;
+    snapshot.raw_evidence = vec![
+        named_value,
+        raw_text,
+        raw_list,
+        raw_descriptor,
+        raw_prose_shape,
+    ];
+    let original = snapshot.clone();
+
+    let safe = redacted_export_projection(&snapshot);
+    let expected_values = vec![
+        "Bearer [redacted]",
+        "Bearer [redacted]",
+        "Bearer [redacted] expires soon",
+        "Bearer [redacted] is required",
+    ];
+    assert_eq!(
+        safe.registration_events[0]
+            .named_data
+            .iter()
+            .map(|value| value.value.as_str())
+            .collect::<Vec<_>>(),
+        expected_values
+    );
     assert_eq!(
         safe.raw_evidence
             .iter()
             .map(|record| record.record_id.as_str())
             .collect::<Vec<_>>(),
-        vec!["bearer-prose-text", "bearer-prose-list"]
+        vec!["raw-named-arbitrary-bearers"]
     );
     assert_eq!(
-        safe.raw_evidence[0].raw_value,
-        EspObservationValue::Text("Bearer authentication remains available".to_string())
+        safe.raw_evidence[0]
+            .provenance
+            .event
+            .as_ref()
+            .unwrap()
+            .named_data
+            .iter()
+            .map(|value| value.value.as_str())
+            .collect::<Vec<_>>(),
+        expected_values
+    );
+    let safe_json = serde_json::to_string(&safe).unwrap();
+    for credential in [r#"Bearer "Q""#, "Bearer 'Z'", "Bearer token"] {
+        assert!(
+            !safe_json.contains(credential),
+            "safe export leaked {credential}"
+        );
+    }
+    assert_eq!(snapshot, original);
+}
+
+#[test]
+fn redaction_projection_preserves_safe_bearer_prose_only_in_typed_narratives() {
+    let mut snapshot = findings_snapshot();
+    snapshot.registration_events = vec![
+        EspRegistrationEvent {
+            event_id: 304,
+            record_id: Some(42),
+            status: status(
+                EspRawStatus::Text("failed".to_string()),
+                EspNormalizedStatus::Failed,
+            ),
+            message: "Bearer authorization is required".to_string(),
+            timestamp: timestamp("2026-07-15T12:00:00Z"),
+            named_data: vec![],
+            evidence: vec![evidence_ref("registration-safe-bearer-prose")],
+        },
+        EspRegistrationEvent {
+            event_id: 304,
+            record_id: Some(43),
+            status: status(
+                EspRawStatus::Text("failed".to_string()),
+                EspNormalizedStatus::Failed,
+            ),
+            message: r#"Bearer "Q" expires soon"#.to_string(),
+            timestamp: timestamp("2026-07-15T12:01:00Z"),
+            named_data: vec![],
+            evidence: vec![evidence_ref("registration-quoted-bearer")],
+        },
+    ];
+    snapshot.activity = vec![
+        EspTimelineEntry {
+            entry_id: "safe-bearer-prose".to_string(),
+            timestamp: timestamp("2026-07-15T12:02:00Z"),
+            kind: EspTimelineKind::Other,
+            title: "Bearer token support is enabled".to_string(),
+            detail: Some("Bearer authentication remains available".to_string()),
+            status: None,
+            evidence: vec![evidence_ref("timeline-safe-bearer-prose")],
+        },
+        EspTimelineEntry {
+            entry_id: "true-bearer-credential".to_string(),
+            timestamp: timestamp("2026-07-15T12:03:00Z"),
+            kind: EspTimelineKind::Other,
+            title: "Bearer qwertyz expires soon".to_string(),
+            detail: None,
+            status: None,
+            evidence: vec![evidence_ref("timeline-bearer-credential")],
+        },
+        EspTimelineEntry {
+            entry_id: "descriptor-bearer-credential".to_string(),
+            timestamp: timestamp("2026-07-15T12:03:30Z"),
+            kind: EspTimelineKind::Other,
+            title: "Bearer token expires soon".to_string(),
+            detail: None,
+            status: None,
+            evidence: vec![evidence_ref("timeline-descriptor-bearer-credential")],
+        },
+    ];
+    snapshot.coverage.push(EspArtifactCoverage {
+        artifact_id: "safe-prose".to_string(),
+        family: "Safe prose".to_string(),
+        status: EspArtifactStatus::Available,
+        detail: Some("Bearer scheme negotiation was retried".to_string()),
+        observed_at_utc: "2026-07-15T12:04:00Z".to_string(),
+        evidence: vec![evidence_ref("coverage-safe-bearer-prose")],
+    });
+    let mut graph = findings_graph_overlay(EspGraphAppRecord {
+        app_id: "safe-prose-app".to_string(),
+        display_name: None,
+        tracked_on_enrollment_status: Some(true),
+        status: None,
+        assignments: vec![],
+        evidence: vec![evidence_ref_from("graph-safe-prose-app", "graph-apps")],
+    });
+    graph.device_match.error = Some(GraphSectionError {
+        code: "safeProse".to_string(),
+        message: "Bearer token support is enabled".to_string(),
+        request_id: None,
+        blocked_by: None,
+        retry_after_seconds: None,
+    });
+    snapshot.graph = Some(graph);
+    let original = snapshot.clone();
+
+    let safe = redacted_export_projection(&snapshot);
+    assert_eq!(
+        safe.registration_events[0].message,
+        "Bearer authorization is required"
     );
     assert_eq!(
-        safe.raw_evidence[1].raw_value,
-        EspObservationValue::StringList(vec![
-            "Bearer authentication remains available".to_string(),
-            "Bearer scheme negotiation was retried".to_string(),
-        ])
+        safe.registration_events[1].message,
+        "Bearer [redacted] expires soon"
+    );
+    assert_eq!(safe.activity[0].title, "Bearer token support is enabled");
+    assert_eq!(
+        safe.activity[0].detail.as_deref(),
+        Some("Bearer authentication remains available")
+    );
+    assert_eq!(safe.activity[1].title, "Bearer [redacted] expires soon");
+    assert_eq!(safe.activity[2].title, "Bearer [redacted] expires soon");
+    assert_eq!(
+        safe.coverage.last().unwrap().detail.as_deref(),
+        Some("Bearer scheme negotiation was retried")
+    );
+    assert_eq!(
+        safe.graph
+            .as_ref()
+            .unwrap()
+            .device_match
+            .error
+            .as_ref()
+            .unwrap()
+            .message,
+        "Bearer token support is enabled"
     );
     assert_eq!(snapshot, original);
 }

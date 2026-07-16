@@ -39,7 +39,7 @@ fn authorization_pattern() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
         Regex::new(
-            r#"(?i)(?P<prefix>(?:--?|/)?authorization["']?(?:\s*[=:]\s*|\s+))(?:basic\s+|bearer\s+|digest\s+|apikey\s+)?(?P<value>"[^"]*"|'[^']*'|[^\s]+)"#,
+            r#"(?i)(?P<prefix>(?:(?:--?|/)authorization["']?(?:\s*[=:]\s*|\s+)|\bauthorization["']?\s*[=:]\s*))(?:basic\s+|bearer\s+|digest\s+|apikey\s+)?(?P<value>"[^"]*"|'[^']*'|[^\s]+)"#,
         )
         .expect("authorization redaction pattern must compile")
     })
@@ -49,7 +49,7 @@ fn secret_argument_pattern() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
         Regex::new(
-            r#"(?i)(?P<prefix>(?:--?|/)?(?:password|passwd|pwd|secret|client[_-]?secret|api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|token|tenant(?:id)?|entdmid|serial(?:number)?)["']?(?:\s*[=:]\s*|\s+))(?P<value>"[^"]*"|'[^']*'|[^\s]+)"#,
+            r#"(?i)(?P<prefix>(?:(?:--?|/)(?:password|passwd|pwd|secret|client[_-]?secret|api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|token|tenant(?:id)?|entdmid|serial(?:number)?)["']?(?:\s*[=:]\s*|\s+)|\b(?:password|passwd|pwd|secret|client[_-]?secret|api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|token|tenant(?:id)?|entdmid|serial(?:number)?)["']?\s*[=:]\s*))(?P<value>"[^"]*"|'[^']*'|[^\s]+)"#,
         )
         .expect("secret argument redaction pattern must compile")
     })
@@ -58,8 +58,10 @@ fn secret_argument_pattern() -> &'static Regex {
 fn standalone_bearer_pattern() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
-        Regex::new(r"(?i)(?P<prefix>\bbearer[ \t]+)(?P<value>[A-Z0-9._~+/=-]+)")
-            .expect("standalone Bearer redaction pattern must compile")
+        Regex::new(
+            r#"(?i)(?P<prefix>\bbearer[ \t]+)(?:"(?P<double_quoted>[^"\r\n]+)"|'(?P<single_quoted>[^'\r\n]+)'|(?P<bare>[A-Z0-9._~+/=-]+))"#,
+        )
+        .expect("standalone Bearer redaction pattern must compile")
     })
 }
 
@@ -100,7 +102,7 @@ pub fn redacted_export_projection(snapshot: &EspDiagnosticsSnapshot) -> EspDiagn
         redact_status(&mut workload.status);
     }
     for correlation in &mut safe.installer_correlations {
-        correlation.reason = redact_text(&correlation.reason);
+        correlation.reason = redact_narrative_text(&correlation.reason);
         for process in &mut correlation.process_observations {
             redact_optional_text(&mut process.sanitized_command_line);
             redact_optional_text(&mut process.referenced_log_path);
@@ -113,7 +115,7 @@ pub fn redacted_export_projection(snapshot: &EspDiagnosticsSnapshot) -> EspDiagn
         }
     }
     for registration in &mut safe.registration_events {
-        registration.message = redact_text(&registration.message);
+        registration.message = redact_narrative_text(&registration.message);
         redact_status(&mut registration.status);
         for named in &mut registration.named_data {
             redact_named_value(named);
@@ -123,14 +125,14 @@ pub fn redacted_export_projection(snapshot: &EspDiagnosticsSnapshot) -> EspDiagn
         mask_classified(&mut hardware.serial_number);
     }
     for activity in &mut safe.activity {
-        activity.title = redact_text(&activity.title);
-        redact_optional_text(&mut activity.detail);
+        activity.title = redact_narrative_text(&activity.title);
+        redact_optional_narrative_text(&mut activity.detail);
         if let Some(status) = &mut activity.status {
             redact_status(status);
         }
     }
     for coverage in &mut safe.coverage {
-        redact_optional_text(&mut coverage.detail);
+        redact_optional_narrative_text(&mut coverage.detail);
     }
     safe.raw_evidence
         .retain(|record| !raw_record_must_be_removed(record));
@@ -172,10 +174,10 @@ fn mask_classified(value: &mut Option<EspClassifiedString>) {
 
 fn redact_status(status: &mut EspStatus) {
     redact_raw_status(&mut status.raw);
-    status.display = redact_text(&status.display);
+    status.display = redact_narrative_text(&status.display);
     if let Some(detail) = &mut status.detail {
         redact_raw_status(&mut detail.raw);
-        detail.display = redact_text(&detail.display);
+        detail.display = redact_narrative_text(&detail.display);
     }
 }
 
@@ -371,7 +373,7 @@ fn redact_reference(value: &mut String, pseudonyms: &ReferencePseudonyms) {
     let bounded = bounded_text(value);
     let redacted = authorization_pattern().replace_all(bounded, "${prefix}[redacted]");
     let redacted = secret_argument_pattern().replace_all(&redacted, "${prefix}[redacted]");
-    let redacted = redact_standalone_bearer_tokens(&redacted);
+    let redacted = redact_standalone_bearer_tokens(&redacted, TextRedactionContext::Arbitrary);
     let redacted =
         user_profile_path_pattern().replace_all(&redacted, |captures: &regex::Captures<'_>| {
             let user = captures
@@ -790,11 +792,31 @@ fn redact_optional_text(value: &mut Option<String>) {
     }
 }
 
+fn redact_optional_narrative_text(value: &mut Option<String>) {
+    if let Some(value) = value {
+        *value = redact_narrative_text(value);
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TextRedactionContext {
+    Arbitrary,
+    Narrative,
+}
+
 fn redact_text(value: &str) -> String {
+    redact_text_for_context(value, TextRedactionContext::Arbitrary)
+}
+
+fn redact_narrative_text(value: &str) -> String {
+    redact_text_for_context(value, TextRedactionContext::Narrative)
+}
+
+fn redact_text_for_context(value: &str, context: TextRedactionContext) -> String {
     let bounded = bounded_text(value);
     let redacted = authorization_pattern().replace_all(bounded, "${prefix}[redacted]");
     let redacted = secret_argument_pattern().replace_all(&redacted, "${prefix}[redacted]");
-    let redacted = redact_standalone_bearer_tokens(&redacted);
+    let redacted = redact_standalone_bearer_tokens(&redacted, context);
     let redacted = user_profile_path_pattern().replace_all(&redacted, "${prefix}[redacted]");
     let redacted = email_pattern().replace_all(&redacted, REDACTED);
     let redacted = sid_pattern().replace_all(&redacted, REDACTED);
@@ -928,48 +950,50 @@ fn normalize_label(value: &str) -> String {
 fn forbidden_raw_content(value: &str) -> bool {
     let bounded = bounded_text(value);
     forbidden_raw_content_pattern().is_match(bounded)
-        || standalone_bearer_pattern()
-            .captures_iter(bounded)
-            .any(|captures| bearer_match_contains_credential(bounded, &captures))
+        || standalone_bearer_pattern().is_match(bounded)
 }
 
-fn redact_standalone_bearer_tokens(value: &str) -> String {
+fn redact_standalone_bearer_tokens(value: &str, context: TextRedactionContext) -> String {
     standalone_bearer_pattern()
         .replace_all(value, |captures: &regex::Captures<'_>| {
-            if bearer_match_contains_credential(value, captures) {
-                format!("{}[redacted]", &captures["prefix"])
-            } else {
+            if context == TextRedactionContext::Narrative
+                && bearer_match_is_safe_narrative(value, captures)
+            {
                 captures[0].to_string()
+            } else {
+                format!("{}[redacted]", &captures["prefix"])
             }
         })
         .into_owned()
 }
 
-fn bearer_match_contains_credential(value: &str, captures: &regex::Captures<'_>) -> bool {
-    let candidate = &captures["value"];
-    if !bearer_prose_descriptor(candidate) {
-        return true;
-    }
+fn bearer_match_is_safe_narrative(value: &str, captures: &regex::Captures<'_>) -> bool {
+    // Arbitrary evidence never reaches this exception. Parser-owned narrative
+    // fields preserve only these exact prose shapes; quoted, terminal, and
+    // unrecognized values remain credentials and are redacted.
+    let Some(candidate) = captures.name("bare") else {
+        return false;
+    };
     let Some(matched) = captures.get(0) else {
-        return true;
+        return false;
     };
     let remainder = &value[matched.end()..];
-    let prose = remainder.trim_start_matches([' ', '\t']);
-    prose.len() == remainder.len() || prose.is_empty()
-}
-
-fn bearer_prose_descriptor(value: &str) -> bool {
-    [
-        "authentication",
-        "authorization",
-        "credential",
-        "credentials",
-        "scheme",
-        "token",
-        "tokens",
-    ]
-    .iter()
-    .any(|descriptor| value.eq_ignore_ascii_case(descriptor))
+    let continuation = remainder.trim_start_matches([' ', '\t']);
+    if continuation.len() == remainder.len() || continuation.is_empty() {
+        return false;
+    }
+    let next_word = continuation
+        .split(|character: char| !character.is_ascii_alphabetic())
+        .next()
+        .unwrap_or_default();
+    (candidate.as_str().eq_ignore_ascii_case("authentication")
+        && (next_word.eq_ignore_ascii_case("is") || next_word.eq_ignore_ascii_case("remains")))
+        || (candidate.as_str().eq_ignore_ascii_case("authorization")
+            && next_word.eq_ignore_ascii_case("is"))
+        || (candidate.as_str().eq_ignore_ascii_case("scheme")
+            && next_word.eq_ignore_ascii_case("negotiation"))
+        || (candidate.as_str().eq_ignore_ascii_case("token")
+            && next_word.eq_ignore_ascii_case("support"))
 }
 
 fn redact_provenance(provenance: &mut EspEvidenceProvenance, pseudonyms: &ReferencePseudonyms) {
@@ -1081,6 +1105,6 @@ fn redact_graph_profile_section(section: &mut GraphSection<EspGraphDeploymentPro
 
 fn redact_graph_error(error: &mut Option<GraphSectionError>) {
     if let Some(error) = error {
-        error.message = redact_text(&error.message);
+        error.message = redact_narrative_text(&error.message);
     }
 }
