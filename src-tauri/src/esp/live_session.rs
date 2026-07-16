@@ -25,14 +25,16 @@ use super::discovery::{
     DiscoveryResult, DiscoveryRootKind, DiscoveryRootState, DiscoverySourceOrigin,
 };
 use super::event_logs::{collect_live_event_evidence, EventEvidence, EventSourceError};
-use super::process::{collect_process_evidence, LiveProcessProvider, ProcessEvidence};
+use super::process::{
+    collect_process_evidence, LiveProcessProvider, ProcessEvidence, ProcessProvider,
+};
 #[cfg(target_os = "windows")]
 use super::registry::collect_live_registry_evidence;
 use super::registry::RegistryEvidence;
 use super::session::{
     EspDiscoveryBatch, EspDiscoveryProvider, EspEvidenceProvider, EspProviderBatch,
-    EspSessionDependencies, EspSessionEventSink, EspSessionTail, EspSessionTailFactory,
-    EspTailEvidenceBatch, SystemEspSessionClock,
+    EspSessionClock, EspSessionDependencies, EspSessionEventSink, EspSessionTail,
+    EspSessionTailFactory, EspTailEvidenceBatch, SystemEspSessionClock,
 };
 use super::system::{collect_system_evidence, LiveSystemProvider, SystemEvidence, SystemSource};
 use super::tailing::{EspTailFailure, EspTailPollResult, EspTailReconcileResult, EspTailSet};
@@ -146,21 +148,34 @@ impl EspEvidenceProvider for NativeSystemEvidenceProvider {
 
 struct NativeProcessEvidenceProvider {
     hints: SharedLiveSessionHints,
+    clock: Arc<dyn EspSessionClock>,
 }
 
 impl EspEvidenceProvider for NativeProcessEvidenceProvider {
     fn collect(&self, observed_at_utc: &str) -> EspProviderBatch {
-        let installer_names = self
-            .hints
-            .snapshot()
-            .installer_names
-            .into_iter()
-            .collect::<Vec<_>>();
-        let evidence =
-            collect_process_evidence(&LiveProcessProvider, &installer_names, observed_at_utc);
-        self.hints.update_process(&evidence);
-        process_evidence_to_batch(evidence, observed_at_utc)
+        collect_process_provider_batch(
+            &LiveProcessProvider,
+            &self.hints,
+            self.clock.as_ref(),
+            observed_at_utc,
+        )
     }
+}
+
+fn collect_process_provider_batch(
+    provider: &impl ProcessProvider,
+    hints: &SharedLiveSessionHints,
+    clock: &dyn EspSessionClock,
+    _collection_started_at_utc: &str,
+) -> EspProviderBatch {
+    let installer_names = hints
+        .snapshot()
+        .installer_names
+        .into_iter()
+        .collect::<Vec<_>>();
+    let evidence = collect_process_evidence(provider, &installer_names, || clock.now().utc);
+    hints.update_process(&evidence);
+    process_evidence_to_batch(evidence)
 }
 
 struct NativeDiscoveryProvider {
@@ -221,8 +236,9 @@ impl EspSessionTail for NativeSessionTail {
 /// deliberately absent; the frontend orchestrator owns optional enrichment.
 pub fn native_session_dependencies(sink: Arc<dyn EspSessionEventSink>) -> EspSessionDependencies {
     let hints = SharedLiveSessionHints::default();
+    let clock: Arc<dyn EspSessionClock> = Arc::new(SystemEspSessionClock::default());
     EspSessionDependencies::new(
-        Arc::new(SystemEspSessionClock::default()),
+        Arc::clone(&clock),
         Arc::new(NativeRegistryEvidenceProvider {
             hints: hints.clone(),
         }),
@@ -230,6 +246,7 @@ pub fn native_session_dependencies(sink: Arc<dyn EspSessionEventSink>) -> EspSes
         Arc::new(NativeSystemEvidenceProvider),
         Arc::new(NativeProcessEvidenceProvider {
             hints: hints.clone(),
+            clock,
         }),
         Arc::new(NativeDiscoveryProvider { hints }),
         Arc::new(NativeTailFactory),
@@ -345,19 +362,21 @@ pub fn system_evidence_to_batch(
     EspProviderBatch { records, coverage }
 }
 
-pub fn process_evidence_to_batch(
-    evidence: ProcessEvidence,
-    observed_at_utc: &str,
-) -> EspProviderBatch {
+pub fn process_evidence_to_batch(evidence: ProcessEvidence) -> EspProviderBatch {
+    let ProcessEvidence {
+        sampled_at_utc,
+        access_state,
+        detail,
+        observations,
+    } = evidence;
     let coverage = vec![artifact_coverage(
         "process.allowlisted-installers",
         "process",
-        status_for_access(&evidence.access_state),
-        evidence.detail,
-        observed_at_utc,
+        status_for_access(&access_state),
+        detail,
+        &sampled_at_utc,
     )];
-    let records = evidence
-        .observations
+    let records = observations
         .into_iter()
         .map(EspEvidenceRecord::Process)
         .collect();
@@ -1044,4 +1063,108 @@ fn is_loaded_user_sid(value: &str) -> bool {
             .split('-')
             .skip(1)
             .all(|component| !component.is_empty() && component.chars().all(|c| c.is_ascii_digit()))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use cmtraceopen_parser::esp::{correlate_installer_processes, EspEvidenceRecord};
+
+    use super::*;
+    use crate::esp::process::{
+        ProcessProvider, ProcessSnapshotBatch, RawProcessSnapshot, MAX_PROCESS_RECORDS,
+        PROCESS_QUERY_TIMEOUT,
+    };
+    use crate::esp::session::{EspCancellation, EspClockReading, EspSessionClock};
+
+    struct CompletingProcessProvider<'a> {
+        query_completions: &'a AtomicUsize,
+        process_start_utc: &'static str,
+    }
+
+    impl ProcessProvider for CompletingProcessProvider<'_> {
+        fn snapshot(
+            &self,
+            _allowed_image_names: &[String],
+            timeout: std::time::Duration,
+            max_records: usize,
+        ) -> ProcessSnapshotBatch {
+            assert_eq!(timeout, PROCESS_QUERY_TIMEOUT);
+            assert_eq!(max_records, MAX_PROCESS_RECORDS);
+            self.query_completions.fetch_add(1, Ordering::SeqCst);
+            ProcessSnapshotBatch::complete(vec![RawProcessSnapshot {
+                pid: 8123,
+                parent_pid: None,
+                image_name: "msiexec.exe".to_string(),
+                start_time_utc: self.process_start_utc.to_string(),
+                command_line: None,
+            }])
+        }
+    }
+
+    struct FixedCompletionClock<'a> {
+        query_completions: &'a AtomicUsize,
+        calls: AtomicUsize,
+        completion_utc: &'static str,
+    }
+
+    impl EspSessionClock for FixedCompletionClock<'_> {
+        fn now(&self) -> EspClockReading {
+            let clock_calls = self.calls.load(Ordering::SeqCst);
+            assert_eq!(
+                self.query_completions.load(Ordering::SeqCst),
+                clock_calls + 1,
+                "each process query must return before its completion timestamp is sampled"
+            );
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            EspClockReading {
+                monotonic: std::time::Duration::from_secs(2),
+                utc: self.completion_utc.to_string(),
+            }
+        }
+
+        fn wait(&self, _cancellation: &EspCancellation, _duration: std::time::Duration) {}
+    }
+
+    #[test]
+    fn process_batch_uses_injected_completion_and_one_timestamp_for_records_and_coverage() {
+        let query_completions = AtomicUsize::new(0);
+        let provider = CompletingProcessProvider {
+            query_completions: &query_completions,
+            process_start_utc: "2026-07-15T14:00:01.123456789Z",
+        };
+        let clock = FixedCompletionClock {
+            query_completions: &query_completions,
+            calls: AtomicUsize::new(0),
+            completion_utc: "2026-07-15T14:00:00Z",
+        };
+
+        let collect_once = || {
+            collect_process_provider_batch(
+                &provider,
+                &SharedLiveSessionHints::default(),
+                &clock,
+                "2099-01-01T00:00:00Z",
+            )
+        };
+        let first = collect_once();
+        let second = collect_once();
+
+        assert_eq!(clock.calls.load(Ordering::SeqCst), 2);
+        assert_eq!(first.records, second.records);
+        assert_eq!(first.coverage, second.coverage);
+        let process = match &first.records[0] {
+            EspEvidenceRecord::Process(process) => process,
+            other => panic!("expected process record, got {other:?}"),
+        };
+        let sampled_at = "2026-07-15T14:00:01.123456789Z";
+        assert_eq!(process.context.observed_at_utc, sampled_at);
+        assert_eq!(first.coverage[0].observed_at_utc, sampled_at);
+        assert_ne!(process.context.observed_at_utc, "2099-01-01T00:00:00Z");
+        assert_eq!(
+            correlate_installer_processes(&[], std::slice::from_ref(process), &[], &[]).len(),
+            1
+        );
+    }
 }

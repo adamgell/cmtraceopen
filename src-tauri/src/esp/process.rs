@@ -7,9 +7,9 @@ use std::time::Duration;
 use base64::Engine as _;
 use chrono::{DateTime, FixedOffset, NaiveDateTime, SecondsFormat, TimeZone, Utc};
 use cmtraceopen_parser::esp::{
-    EspEvidenceProvenance, EspEvidenceRef, EspObservationContext, EspParseState,
-    EspProcessObservation, EspSensitivity, EspSourceAccessState, EspSourceKind, EspTimestamp,
-    EspTimestampKind,
+    process_start_instant, EspEvidenceProvenance, EspEvidenceRef, EspObservationContext,
+    EspParseState, EspProcessObservation, EspSensitivity, EspSourceAccessState, EspSourceKind,
+    EspTimestamp, EspTimestampKind,
 };
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -94,16 +94,24 @@ pub trait ProcessProvider {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ProcessEvidence {
+    pub sampled_at_utc: String,
     pub access_state: EspSourceAccessState,
     pub detail: Option<String>,
     pub observations: Vec<EspProcessObservation>,
 }
 
-pub fn collect_process_evidence(
+/// Collects the bounded allowlisted process sample, then invokes
+/// `completion_time` exactly once after the provider returns. The shared sample
+/// timestamp is raised to the latest trustworthy retained process start when a
+/// wall-clock rollback would otherwise predate an observation.
+pub fn collect_process_evidence<F>(
     provider: &impl ProcessProvider,
     local_installer_names: &[String],
-    observed_at_utc: &str,
-) -> ProcessEvidence {
+    completion_time: F,
+) -> ProcessEvidence
+where
+    F: FnOnce() -> String,
+{
     let allowlist = process_allowlist(local_installer_names);
     let allowed_image_names = allowlist.iter().cloned().collect::<Vec<_>>();
     let mut batch = provider.snapshot(
@@ -111,12 +119,10 @@ pub fn collect_process_evidence(
         PROCESS_QUERY_TIMEOUT,
         MAX_PROCESS_RECORDS,
     );
-    let observed_at_utc = process_observation_time_at_completion(observed_at_utc);
     batch.snapshots.truncate(MAX_PROCESS_RECORDS);
     let partial = !batch.snapshots.is_empty();
     let (access_state, detail) = process_coverage(&batch.completion, partial);
-
-    let observations = batch
+    let retained_snapshots = batch
         .snapshots
         .into_iter()
         .filter(|snapshot| {
@@ -124,27 +130,39 @@ pub fn collect_process_evidence(
                 .iter()
                 .any(|allowed| allowed.eq_ignore_ascii_case(&snapshot.image_name))
         })
+        .collect::<Vec<_>>();
+    let sampled_at_utc = coherent_process_sample_time(&retained_snapshots, completion_time());
+    let observations = retained_snapshots
+        .into_iter()
         .enumerate()
-        .map(|(index, snapshot)| process_observation(snapshot, index, &observed_at_utc))
+        .map(|(index, snapshot)| process_observation(snapshot, index, &sampled_at_utc))
         .collect();
 
     ProcessEvidence {
+        sampled_at_utc,
         access_state,
         detail,
         observations,
     }
 }
 
-fn process_observation_time_at_completion(collection_started_at_utc: &str) -> String {
-    // Session polling starts before the bounded process query. Stamp the sample
-    // after it returns so a process born during the query is not pre-dated.
-    let completed_at = Utc::now();
-    let observed_at = DateTime::parse_from_rfc3339(collection_started_at_utc)
+fn coherent_process_sample_time(
+    snapshots: &[RawProcessSnapshot],
+    completed_at_utc: String,
+) -> String {
+    let completed_at = DateTime::parse_from_rfc3339(&completed_at_utc)
         .ok()
-        .map(|value| value.with_timezone(&Utc))
-        .filter(|started_at| *started_at > completed_at)
-        .unwrap_or(completed_at);
-    observed_at.to_rfc3339_opts(SecondsFormat::Nanos, true)
+        .map(|value| value.with_timezone(&Utc));
+    let latest_process_start = snapshots
+        .iter()
+        .filter_map(|snapshot| process_start_instant(&process_timestamp(&snapshot.start_time_utc)))
+        .max();
+    completed_at
+        .into_iter()
+        .chain(latest_process_start)
+        .max()
+        .map(|value| value.to_rfc3339_opts(SecondsFormat::AutoSi, true))
+        .unwrap_or(completed_at_utc)
 }
 
 pub fn parent_chain(
@@ -914,6 +932,8 @@ impl ProcessProvider for LiveProcessProvider {
 #[cfg(test)]
 mod tests {
     use std::cell::RefCell;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
     use std::time::Duration;
 
     use cmtraceopen_parser::esp::{
@@ -956,7 +976,9 @@ mod tests {
         }
     }
 
-    struct DelayedBirthProcessProvider;
+    struct DelayedBirthProcessProvider {
+        query_completed: Arc<AtomicBool>,
+    }
 
     impl ProcessProvider for DelayedBirthProcessProvider {
         fn snapshot(
@@ -967,12 +989,12 @@ mod tests {
         ) -> ProcessSnapshotBatch {
             assert_eq!(timeout, PROCESS_QUERY_TIMEOUT);
             assert_eq!(max_records, MAX_PROCESS_RECORDS);
-            std::thread::sleep(Duration::from_millis(25));
+            self.query_completed.store(true, Ordering::SeqCst);
             ProcessSnapshotBatch::complete(vec![RawProcessSnapshot {
                 pid: 45,
                 parent_pid: None,
                 image_name: "msiexec.exe".to_string(),
-                start_time_utc: Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true),
+                start_time_utc: "2026-07-15T14:00:01.123456789Z".to_string(),
                 command_line: None,
             }])
         }
@@ -1000,7 +1022,7 @@ mod tests {
                 batch: ProcessSnapshotBatch::complete(snapshots),
             },
             local_installers,
-            "2026-07-15T14:00:00Z",
+            || "2026-07-15T14:00:00Z".to_string(),
         )
     }
 
@@ -1066,7 +1088,7 @@ mod tests {
                 r"..\evil.exe".to_string(),
                 "*.exe".to_string(),
             ],
-            "2026-07-15T14:00:00Z",
+            || "2026-07-15T14:00:00Z".to_string(),
         );
 
         assert_eq!(
@@ -1136,10 +1158,15 @@ mod tests {
 
     #[test]
     fn process_born_during_snapshot_query_keeps_a_correlatable_sample_time() {
-        let captured_before_query = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+        let query_completed = Arc::new(AtomicBool::new(false));
+        let provider = DelayedBirthProcessProvider {
+            query_completed: Arc::clone(&query_completed),
+        };
 
-        let evidence =
-            collect_process_evidence(&DelayedBirthProcessProvider, &[], &captured_before_query);
+        let evidence = collect_process_evidence(&provider, &[], || {
+            assert!(query_completed.load(Ordering::SeqCst));
+            "2026-07-15T14:00:02Z".to_string()
+        });
         let observation = &evidence.observations[0];
         let started = DateTime::parse_from_rfc3339(&observation.process_start_time.raw_text)
             .expect("process start time");
@@ -1154,6 +1181,104 @@ mod tests {
             correlate_installer_processes(&[], std::slice::from_ref(observation), &[], &[],).len(),
             1
         );
+    }
+
+    #[test]
+    fn injected_completion_clock_is_repeatable_and_preserves_valid_start_precision() {
+        let snapshots = vec![
+            process(
+                46,
+                None,
+                "msiexec.exe",
+                "2026-07-15T14:00:01.123456789Z",
+                None,
+            ),
+            process(
+                47,
+                None,
+                "msiexec.exe",
+                "2026-07-15T14:00:01.9999999991Z",
+                None,
+            ),
+            process(48, None, "msiexec.exe", "not-a-process-start", None),
+        ];
+        let collect_once = || {
+            collect_process_evidence(
+                &FakeProcessProvider {
+                    batch: ProcessSnapshotBatch::complete(snapshots.clone()),
+                },
+                &[],
+                || "2026-07-15T14:00:00Z".to_string(),
+            )
+        };
+
+        let first = collect_once();
+        let second = collect_once();
+
+        assert_eq!(first, second);
+        assert_eq!(first.sampled_at_utc, "2026-07-15T14:00:01.123456789Z");
+        assert!(first
+            .observations
+            .iter()
+            .all(|observation| observation.context.observed_at_utc == first.sampled_at_utc));
+    }
+
+    #[test]
+    fn disallowed_future_snapshot_does_not_move_the_retained_sample_time() {
+        let evidence = collect_process_evidence(
+            &FakeProcessProvider {
+                batch: ProcessSnapshotBatch::complete(vec![
+                    process(49, None, "msiexec.exe", "2026-07-15T14:00:01Z", None),
+                    process(50, None, "untrusted.exe", "2099-01-01T00:00:00Z", None),
+                ]),
+            },
+            &[],
+            || "2026-07-15T14:00:02Z".to_string(),
+        );
+
+        assert_eq!(evidence.observations.len(), 1);
+        assert_eq!(evidence.sampled_at_utc, "2026-07-15T14:00:02Z");
+        assert_eq!(
+            evidence.observations[0].context.observed_at_utc,
+            evidence.sampled_at_utc
+        );
+    }
+
+    #[test]
+    fn future_snapshot_beyond_record_cap_does_not_move_the_retained_sample_time() {
+        let mut snapshots = (0..MAX_PROCESS_RECORDS)
+            .map(|index| {
+                process(
+                    1_000 + index as u32,
+                    None,
+                    "msiexec.exe",
+                    "2026-07-15T14:00:01Z",
+                    None,
+                )
+            })
+            .collect::<Vec<_>>();
+        snapshots.push(process(
+            9_999,
+            None,
+            "msiexec.exe",
+            "2099-01-01T00:00:00Z",
+            None,
+        ));
+
+        let evidence = collect_process_evidence(
+            &FakeProcessProvider {
+                batch: ProcessSnapshotBatch::complete(snapshots),
+            },
+            &[],
+            || "2026-07-15T14:00:02Z".to_string(),
+        );
+
+        assert_eq!(evidence.observations.len(), MAX_PROCESS_RECORDS);
+        assert_eq!(evidence.sampled_at_utc, "2026-07-15T14:00:02Z");
+        assert!(evidence
+            .observations
+            .iter()
+            .all(|observation| observation.context.observed_at_utc == evidence.sampled_at_utc));
     }
 
     #[test]
@@ -1751,7 +1876,8 @@ mod tests {
             },
         };
 
-        let evidence = collect_process_evidence(&provider, &[], "2026-07-15T14:00:00Z");
+        let evidence =
+            collect_process_evidence(&provider, &[], || "2026-07-15T14:00:00Z".to_string());
         assert_eq!(evidence.observations.len(), MAX_PROCESS_RECORDS);
         assert_eq!(evidence.access_state, EspSourceAccessState::Failed);
         assert_eq!(

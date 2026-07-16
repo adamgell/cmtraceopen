@@ -440,7 +440,7 @@ fn group_process_observations(
         let Some(sampled) = process_sample_timestamp(process) else {
             continue;
         };
-        let Some(started) = process_start_value(&process.process_start_time) else {
+        let Some(started) = process_start_instant(&process.process_start_time) else {
             continue;
         };
         if sampled < started {
@@ -646,11 +646,13 @@ fn process_sample_timestamp(process: &EspProcessObservation) -> Option<DateTime<
 fn process_start_timestamp(samples: &[&EspProcessObservation]) -> Option<DateTime<Utc>> {
     samples
         .iter()
-        .filter_map(|process| process_start_value(&process.process_start_time))
+        .filter_map(|process| process_start_instant(&process.process_start_time))
         .max()
 }
 
-fn process_start_value(timestamp: &EspTimestamp) -> Option<DateTime<Utc>> {
+/// Returns the lossless process-start instant only when the raw timestamp and
+/// timestamp kind form a trustworthy process identity.
+pub fn process_start_instant(timestamp: &EspTimestamp) -> Option<DateTime<Utc>> {
     let raw = timestamp.raw_text.as_str();
     // Process identity requires the model's lossless raw representation. A
     // normalized value may already have discarded sub-second or leap carry.
@@ -1002,7 +1004,7 @@ fn process_group_identity(samples: &[&EspProcessObservation]) -> Option<ProcessI
 }
 
 fn process_identity_key(process: &EspProcessObservation) -> Option<ProcessIdentity> {
-    process_start_value(&process.process_start_time).map(|started| (process.pid, started))
+    process_start_instant(&process.process_start_time).map(|started| (process.pid, started))
 }
 
 fn correlation_id(process: &EspProcessObservation) -> String {
