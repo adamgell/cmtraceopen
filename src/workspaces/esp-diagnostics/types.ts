@@ -472,7 +472,9 @@ export interface EspDeliveryOptimizationObservation {
 type RawPreservingString<Known extends string> =
   Known | (string & Record<never, never>);
 
-export type GraphApiVersion = RawPreservingString<"v1.0" | "beta">;
+export type GraphApiVersion = RawPreservingString<
+  "v1.0" | "beta" | "notRequested"
+>;
 export type GraphSectionStatus = RawPreservingString<
   | "available"
   | "notFound"

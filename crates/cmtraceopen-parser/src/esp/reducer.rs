@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 
 use chrono::{SecondsFormat, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
@@ -10,6 +10,13 @@ use super::normalize::{
     percent_decode_bounded,
 };
 use super::timeline::{sort_timeline_entries, stable_record_id, stable_timeline_entry_id};
+
+pub const MAX_RETAINED_EVIDENCE_RECORDS: usize = 25_000;
+pub const MAX_RETAINED_EVIDENCE_SERIALIZED_BYTES: usize = 32 * 1024 * 1024;
+
+const RETENTION_COVERAGE_ARTIFACT_ID: &str = "session.evidence-retention";
+const RETENTION_COVERAGE_FAMILY: &str = "session-retention";
+const RETENTION_COVERAGE_ORDINAL: usize = usize::MAX;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", content = "record", rename_all = "camelCase")]
@@ -29,46 +36,209 @@ pub enum EspEvidenceRecord {
 #[derive(Debug, Clone)]
 pub struct EspDiagnosticsReducer {
     generated_at_utc: String,
-    records: Vec<EspEvidenceRecord>,
+    records: VecDeque<RetainedEvidenceRecord>,
+    retained_serialized_bytes: usize,
+    next_ordinal: usize,
+    next_occurrence_by_key: BTreeMap<(String, String), usize>,
+    retained_occurrence_counts: BTreeMap<(String, String), usize>,
+    discarded_records: usize,
+    discarded_serialized_bytes: usize,
+    max_retained_records: usize,
+    max_retained_serialized_bytes: usize,
+}
+
+#[derive(Debug, Clone)]
+struct RetainedEvidenceRecord {
+    ordinal: usize,
+    occurrence_ordinal: usize,
+    occurrence_key: Option<(String, String)>,
+    serialized_bytes: usize,
+    record: EspEvidenceRecord,
 }
 
 impl EspDiagnosticsReducer {
     pub fn new(generated_at_utc: String) -> Self {
+        Self::with_retention_limits(
+            generated_at_utc,
+            MAX_RETAINED_EVIDENCE_RECORDS,
+            MAX_RETAINED_EVIDENCE_SERIALIZED_BYTES,
+        )
+    }
+
+    #[doc(hidden)]
+    pub fn with_retention_limits(
+        generated_at_utc: String,
+        max_retained_records: usize,
+        max_retained_serialized_bytes: usize,
+    ) -> Self {
         Self {
             generated_at_utc,
-            records: Vec::new(),
+            records: VecDeque::new(),
+            retained_serialized_bytes: 0,
+            next_ordinal: 0,
+            next_occurrence_by_key: BTreeMap::new(),
+            retained_occurrence_counts: BTreeMap::new(),
+            discarded_records: 0,
+            discarded_serialized_bytes: 0,
+            max_retained_records: max_retained_records.max(1),
+            max_retained_serialized_bytes: max_retained_serialized_bytes.max(1),
         }
     }
 
     pub fn ingest(&mut self, record: EspEvidenceRecord) {
-        self.records.push(record);
+        let ordinal = self.next_ordinal;
+        self.next_ordinal = self.next_ordinal.saturating_add(1);
+        let serialized_bytes = serde_json::to_vec(&record)
+            .map(|serialized| serialized.len())
+            .unwrap_or_else(|_| self.max_retained_serialized_bytes.saturating_add(1));
+        if serialized_bytes > self.max_retained_serialized_bytes {
+            self.note_discard(serialized_bytes);
+            return;
+        }
+        let occurrence_key = record_occurrence_key(&record);
+        let occurrence_ordinal = if let Some(key) = &occurrence_key {
+            let next = self.next_occurrence_by_key.entry(key.clone()).or_insert(0);
+            let occurrence = *next;
+            *next = next.saturating_add(1);
+            let retained_count = self
+                .retained_occurrence_counts
+                .entry(key.clone())
+                .or_insert(0);
+            *retained_count = retained_count.saturating_add(1);
+            occurrence
+        } else {
+            ordinal
+        };
+
+        self.retained_serialized_bytes = self
+            .retained_serialized_bytes
+            .saturating_add(serialized_bytes);
+        self.records.push_back(RetainedEvidenceRecord {
+            ordinal,
+            occurrence_ordinal,
+            occurrence_key,
+            serialized_bytes,
+            record,
+        });
+        while self.records.len() > self.max_retained_records
+            || self.retained_serialized_bytes > self.max_retained_serialized_bytes
+        {
+            let eviction_index = self
+                .records
+                .iter()
+                .position(|retained| is_stream_evidence(&retained.record))
+                .unwrap_or(0);
+            let Some(discarded) = self.records.remove(eviction_index) else {
+                break;
+            };
+            self.retained_serialized_bytes = self
+                .retained_serialized_bytes
+                .saturating_sub(discarded.serialized_bytes);
+            self.release_occurrence_key(discarded.occurrence_key.as_ref());
+            self.note_discard(discarded.serialized_bytes);
+        }
     }
 
     pub fn ingest_all<I: IntoIterator<Item = EspEvidenceRecord>>(&mut self, records: I) {
-        self.records.extend(records);
+        for record in records {
+            self.ingest(record);
+        }
     }
 
     pub fn snapshot(&self) -> EspDiagnosticsSnapshot {
-        let scenario = classify_scenario(&self.records);
-        let mut projection = SnapshotProjection::new(self.generated_at_utc.clone(), scenario);
-        for (ordinal, record) in self.records.iter().enumerate() {
+        let scenario = classify_scenario(self.records.iter().map(|retained| &retained.record));
+        let occurrence_ordinals = self
+            .records
+            .iter()
+            .map(|retained| (retained.ordinal, retained.occurrence_ordinal))
+            .collect();
+        let mut projection =
+            SnapshotProjection::new(self.generated_at_utc.clone(), scenario, occurrence_ordinals);
+        for retained in &self.records {
+            let ordinal = retained.ordinal;
+            let record = &retained.record;
             if is_raw_hardware_hash_record(record) {
                 continue;
             }
-            if let Some(raw) = raw_evidence_record(record, ordinal) {
+            if let Some(raw) = raw_evidence_record(record, retained.occurrence_ordinal) {
                 projection.raw_evidence.push(raw);
             }
             if record_allowed_for_scenario(record, &projection.scenario) {
                 projection.process_record(ordinal, record);
             }
         }
+        if let Some(coverage) = self.retention_coverage() {
+            projection
+                .occurrence_ordinals
+                .insert(RETENTION_COVERAGE_ORDINAL, 0);
+            projection.process_coverage(RETENTION_COVERAGE_ORDINAL, coverage);
+        }
         projection.finish()
     }
+
+    fn note_discard(&mut self, serialized_bytes: usize) {
+        self.discarded_records = self.discarded_records.saturating_add(1);
+        self.discarded_serialized_bytes = self
+            .discarded_serialized_bytes
+            .saturating_add(serialized_bytes);
+    }
+
+    fn release_occurrence_key(&mut self, key: Option<&(String, String)>) {
+        let Some(key) = key else {
+            return;
+        };
+        let remove_key = if let Some(count) = self.retained_occurrence_counts.get_mut(key) {
+            *count = count.saturating_sub(1);
+            *count == 0
+        } else {
+            false
+        };
+        if remove_key {
+            self.retained_occurrence_counts.remove(key);
+            self.next_occurrence_by_key.remove(key);
+        }
+    }
+
+    fn retention_coverage(&self) -> Option<EspArtifactCoverage> {
+        (self.discarded_records != 0).then(|| EspArtifactCoverage {
+            artifact_id: RETENTION_COVERAGE_ARTIFACT_ID.to_string(),
+            family: RETENTION_COVERAGE_FAMILY.to_string(),
+            status: EspArtifactStatus::ParseFailed,
+            detail: Some(format!(
+                "Retained evidence is capped at {} records and {} serialized bytes; {} older or oversized {} totaling {} serialized bytes were discarded. Derived conclusions use retained evidence only.",
+                self.max_retained_records,
+                self.max_retained_serialized_bytes,
+                self.discarded_records,
+                if self.discarded_records == 1 {
+                    "record"
+                } else {
+                    "records"
+                },
+                self.discarded_serialized_bytes,
+            )),
+            observed_at_utc: self.generated_at_utc.clone(),
+            evidence: Vec::new(),
+        })
+    }
+}
+
+fn is_stream_evidence(record: &EspEvidenceRecord) -> bool {
+    matches!(
+        record,
+        EspEvidenceRecord::EventLog(_)
+            | EspEvidenceRecord::Ime(_)
+            | EspEvidenceRecord::DeploymentLog(_)
+            | EspEvidenceRecord::Process(_)
+            | EspEvidenceRecord::System(_)
+            | EspEvidenceRecord::DeliveryOptimization(_)
+            | EspEvidenceRecord::Graph(_)
+    )
 }
 
 struct SnapshotProjection {
     generated_at_utc: String,
     scenario: EspScenario,
+    occurrence_ordinals: BTreeMap<usize, usize>,
     elevation: EspElevationState,
     identity: EspIdentityEvidence,
     profile: Option<EspProfileEvidence>,
@@ -92,10 +262,15 @@ struct SnapshotProjection {
 }
 
 impl SnapshotProjection {
-    fn new(generated_at_utc: String, scenario: EspScenario) -> Self {
+    fn new(
+        generated_at_utc: String,
+        scenario: EspScenario,
+        occurrence_ordinals: BTreeMap<usize, usize>,
+    ) -> Self {
         Self {
             generated_at_utc,
             scenario,
+            occurrence_ordinals,
             elevation: EspElevationState {
                 is_elevated: false,
                 restart_supported: false,
@@ -317,7 +492,7 @@ impl SnapshotProjection {
                     self.activity.push((
                         ordinal,
                         EspTimelineEntry {
-                            entry_id: stable_timeline_entry_id(&observation.context, ordinal),
+                            entry_id: self.timeline_entry_id(&observation.context, ordinal),
                             timestamp: normalized,
                             kind: EspTimelineKind::ProfileDownload,
                             title: "Autopilot profile".to_string(),
@@ -479,7 +654,7 @@ impl SnapshotProjection {
         observation: &EspDeliveryOptimizationObservation,
     ) {
         let transfer = EspDeliveryOptimizationTransfer {
-            transfer_id: stable_record_id("transfer", &observation.context, ordinal),
+            transfer_id: self.record_id("transfer", &observation.context, ordinal),
             kind: observation.kind.clone(),
             content_id: observation.content_id.clone(),
             app_id: observation.app_id.clone(),
@@ -1006,7 +1181,7 @@ impl SnapshotProjection {
         self.activity.push((
             ordinal,
             EspTimelineEntry {
-                entry_id: stable_timeline_entry_id(context, ordinal),
+                entry_id: self.timeline_entry_id(context, ordinal),
                 timestamp: context_timestamp(context),
                 kind,
                 title,
@@ -1029,7 +1204,7 @@ impl SnapshotProjection {
         self.activity.push((
             ordinal,
             EspTimelineEntry {
-                entry_id: stable_timeline_entry_id(context, ordinal),
+                entry_id: self.timeline_entry_id(context, ordinal),
                 timestamp,
                 kind: EspTimelineKind::Workload,
                 title,
@@ -1042,6 +1217,21 @@ impl SnapshotProjection {
 
     fn ensure_profile(&mut self) -> &mut EspProfileEvidence {
         self.profile.get_or_insert_with(empty_profile)
+    }
+
+    fn occurrence_ordinal(&self, ordinal: usize) -> usize {
+        self.occurrence_ordinals
+            .get(&ordinal)
+            .copied()
+            .unwrap_or(ordinal)
+    }
+
+    fn timeline_entry_id(&self, context: &EspObservationContext, ordinal: usize) -> String {
+        stable_timeline_entry_id(context, self.occurrence_ordinal(ordinal))
+    }
+
+    fn record_id(&self, prefix: &str, context: &EspObservationContext, ordinal: usize) -> String {
+        stable_record_id(prefix, context, self.occurrence_ordinal(ordinal))
     }
 
     fn ensure_device_preparation(&mut self) -> &mut EspDevicePreparationEvidence {
@@ -1820,7 +2010,7 @@ struct ClassicSessionInfo {
     raw_time: String,
 }
 
-fn classify_scenario(records: &[EspEvidenceRecord]) -> EspScenario {
+fn classify_scenario<'a>(records: impl IntoIterator<Item = &'a EspEvidenceRecord>) -> EspScenario {
     let mut has_v2 = false;
     let mut has_profile_name = false;
     let mut has_existing_device_identity = false;
@@ -1916,6 +2106,27 @@ fn record_context(record: &EspEvidenceRecord) -> Option<&EspObservationContext> 
         EspEvidenceRecord::Graph(value) => Some(&value.context),
         EspEvidenceRecord::Coverage(_) => None,
     }
+}
+
+fn record_occurrence_key(record: &EspEvidenceRecord) -> Option<(String, String)> {
+    if let Some(context) = record_context(record) {
+        return Some((
+            context.provenance.source_artifact_id.clone(),
+            context.evidence_ref.evidence_id.clone(),
+        ));
+    }
+    let EspEvidenceRecord::Coverage(coverage) = record else {
+        return None;
+    };
+    let evidence = coverage.evidence.first();
+    Some((
+        evidence
+            .map(|value| value.source_artifact_id.clone())
+            .unwrap_or_else(|| coverage.artifact_id.clone()),
+        evidence
+            .map(|value| value.evidence_id.clone())
+            .unwrap_or_else(|| coverage.artifact_id.clone()),
+    ))
 }
 
 fn raw_evidence_record(record: &EspEvidenceRecord, ordinal: usize) -> Option<EspRawEvidenceRecord> {

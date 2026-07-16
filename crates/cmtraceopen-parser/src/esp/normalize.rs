@@ -67,7 +67,7 @@ pub fn normalize_v2_status(raw: EspRawStatus) -> EspStatus {
             .parse::<i64>()
             .ok()
             .and_then(v2_mapping_by_number)
-            .or_else(|| v2_mapping_by_name(value)),
+            .or_else(|| v2_mapping_by_name(value.trim())),
     };
     mapped_status(raw, mapping)
 }

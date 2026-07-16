@@ -10,7 +10,7 @@
 
 **Spec:** `docs/superpowers/specs/2026-07-15-esp-diagnostics-workspace-design.md`
 
-**Source parity reference:** `/Users/Adam.Gell/.codex/attachments/59286a69-c1f2-4567-93fb-20241f374835/pasted-text.txt` (`Get-AutopilotDiagnostics.ps1` v6.3)
+**Source parity contract:** `Get-AutopilotDiagnostics.ps1` v6.3 behavior is captured in the checked-in fixtures under `crates/cmtraceopen-parser/tests/fixtures/esp/` (`normalization-cases.json`, `scenario-cases.json`, `edge-cases.json`, `graph-cases.json`, and `bundle-live-equivalence.json`). A clean checkout never depends on the original chat attachment. A future source-parity re-audit must take an explicitly supplied v6.3 script path and fail clearly when that external input is absent; it must not embed a developer-specific absolute path.
 
 ---
 
@@ -242,6 +242,8 @@ restart_esp_as_administrator()
 
 Neither local analysis command accepts a caller-controlled Graph Boolean or reads frontend persistence. They always produce raw local evidence. The global frontend ESP orchestrator applies CMTrace Open's existing hydrated Graph option and connection state to both live and imported snapshots: disabled means local evidence only; enabled and connected permits a separate additive Graph request; enabled but disconnected/connecting means local evidence plus `GraphNotConnected` and an explicit **Refresh Graph data** action. It never queues behind authentication or initiates WAM.
 
+Graph state ownership is deliberately split: the native overlay returns only per-section request results, while the frontend owns the global disabled, disconnected, connecting, loading, stale, and cancelled presentation states. Disabling Graph cancels any in-flight overlay and clears remote data without producing a warning or altering local evidence. Connected requests represent a dependency that was never dispatched as `status: Skipped`, `data: null`, `error.blockedBy: <dependency>`, and `apiVersion: NotRequested` (`"notRequested"` on the wire); they never claim `v1.0` or `beta` for a request that did not occur.
+
 ### Graph section contract
 
 Create the serializable overlay contract in `crates/cmtraceopen-parser/src/esp/models.rs` so the source-neutral snapshot owns its complete schema and never depends on Tauri. `src-tauri/src/graph_api/models.rs` contains only token capabilities, request types, and raw transport DTOs, then maps them into these parser-owned types:
@@ -268,6 +270,8 @@ pub enum GraphSectionStatus {
     Cancelled,
 }
 ```
+
+`blockedBy` belongs to `GraphSectionError`, not to `GraphSectionStatus`. `GraphApiVersion` has the known wire values `v1.0`, `beta`, and `notRequested`, while still preserving unknown future values.
 
 ### Frontend store contract
 
@@ -1495,7 +1499,7 @@ pub trait EspGraphProvider: Send + Sync {
 }
 ```
 
-Each section is `Available`, `NotFound`, `PermissionDenied`, `Failed`, `Skipped`, or `Cancelled`, includes API version and required scope, and preserves completed siblings. Unknown beta values are retained. If device matching is ambiguous, dependent sections are `Skipped { blockedBy: "deviceMatch" }`.
+Each section is `Available`, `NotFound`, `PermissionDenied`, `Failed`, `Skipped`, or `Cancelled`, includes API version and required scope, and preserves completed siblings. Unknown beta values are retained. If device matching is ambiguous, dependent sections use `status: Skipped`, `apiVersion: NotRequested`, `data: None`, and `error.blockedBy: "deviceMatch"`.
 
 - [ ] **Step 4: Verify and commit**
 

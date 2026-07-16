@@ -443,14 +443,18 @@ fn models_serialize_camel_case() {
         ]),
     );
     assert_unit_variants(
-        &[GraphApiVersion::V1_0, GraphApiVersion::Beta],
-        json!(["v1.0", "beta"]),
+        &[
+            GraphApiVersion::V1_0,
+            GraphApiVersion::Beta,
+            GraphApiVersion::NotRequested,
+        ],
+        json!(["v1.0", "beta", "notRequested"]),
     );
 
     let section = GraphSection::<EspGraphDeviceMatch> {
         status: GraphSectionStatus::Skipped,
         required_scope: Some("DeviceManagementManagedDevices.Read.All".to_string()),
-        api_version: GraphApiVersion::V1_0,
+        api_version: GraphApiVersion::NotRequested,
         data: None,
         error: Some(GraphSectionError {
             code: "blocked".to_string(),
@@ -465,7 +469,7 @@ fn models_serialize_camel_case() {
         json!({
             "status": "skipped",
             "requiredScope": "DeviceManagementManagedDevices.Read.All",
-            "apiVersion": "v1.0",
+            "apiVersion": "notRequested",
             "data": null,
             "error": {
                 "code": "blocked",
@@ -692,7 +696,7 @@ fn models_graph_overlay_freezes_typed_correlated_sections() {
         ),
         autopilot_events: graph_section(
             GraphSectionStatus::Skipped,
-            GraphApiVersion::Beta,
+            GraphApiVersion::NotRequested,
             None,
             Some(GraphSectionError {
                 blocked_by: Some("deviceMatch".to_string()),
@@ -759,6 +763,7 @@ fn models_graph_overlay_freezes_typed_correlated_sections() {
     );
     assert_eq!(value["profileAssignments"]["status"], "failed");
     assert_eq!(value["autopilotEvents"]["status"], "skipped");
+    assert_eq!(value["autopilotEvents"]["apiVersion"], "notRequested");
     assert_eq!(value["enrollmentConfiguration"]["status"], "cancelled");
     assert_eq!(value["deploymentProfile"]["apiVersion"], "beta");
     assert_eq!(
@@ -1349,6 +1354,17 @@ fn normalization_status_dictionaries_cover_every_known_and_unknown_value() {
 }
 
 #[test]
+fn normalization_v2_named_status_trims_transport_whitespace_without_changing_raw() {
+    let raw = EspRawStatus::Text(" \tCompleted\r\n".to_string());
+
+    let normalized = normalize_v2_status(raw.clone());
+
+    assert_eq!(normalized.raw, raw);
+    assert_eq!(normalized.normalized, EspNormalizedStatus::Succeeded);
+    assert_eq!(normalized.display, "Completed");
+}
+
+#[test]
 fn normalization_office_detail_failure_overrides_processed_outer_state() {
     let normalized =
         normalize_office_status(EspRawStatus::Number(1), Some(EspRawStatus::Number(60)));
@@ -1771,7 +1787,7 @@ fn reducer_isolates_device_preparation_from_classic_device_and_user_evidence() {
         .expect("scenario gating must not discard non-hardware-hash raw evidence");
     assert_eq!(
         excluded_classic_raw.record_id,
-        "raw|esp-tracking|classic-must-not-leak|1"
+        "raw|esp-tracking|classic-must-not-leak|0"
     );
     assert_eq!(
         excluded_classic_raw.raw_value,
@@ -2071,7 +2087,7 @@ fn reducer_projects_profile_odj_registration_and_delivery_optimization_evidence(
     );
     assert_eq!(
         delivery.transfers[0].transfer_id,
-        "transfer|do-live|do-start|5"
+        "transfer|do-live|do-start|0"
     );
 }
 
@@ -2105,6 +2121,159 @@ fn timeline_preserves_repeated_identical_retries_with_source_record_and_ordinal_
             evidence_id: "same-retry-record".to_string(),
             source_artifact_id: "ime-live".to_string()
         }]
+    );
+}
+
+#[test]
+fn timeline_repeated_collisions_keep_source_order_past_single_digit_ordinals() {
+    let mut reducer = EspDiagnosticsReducer::new("2026-07-15T18:00:00Z".to_string());
+    for _ in 0..12 {
+        reducer.ingest(ime_record(
+            "ime-live",
+            "same-retry-record",
+            "2026-07-15T12:00:00Z",
+        ));
+    }
+
+    let entry_ids = reducer
+        .snapshot()
+        .activity
+        .into_iter()
+        .map(|entry| entry.entry_id)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        entry_ids,
+        (0..12)
+            .map(|occurrence| format!("timeline|ime-live|same-retry-record|{occurrence}"))
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn reducer_retention_evicts_oldest_stream_records_without_renumbering_occurrences() {
+    let mut reducer = EspDiagnosticsReducer::with_retention_limits(
+        "2026-07-15T18:00:00Z".to_string(),
+        3,
+        usize::MAX,
+    );
+    for _ in 0..4 {
+        reducer.ingest(ime_record("ime-live", "retry", "2026-07-15T12:00:00Z"));
+    }
+
+    let snapshot = reducer.snapshot();
+    let retained_ids = snapshot
+        .raw_evidence
+        .iter()
+        .map(|record| record.evidence[0].evidence_id.as_str())
+        .collect::<Vec<_>>();
+    let workload_entry_ids = snapshot
+        .activity
+        .iter()
+        .filter(|entry| entry.kind == EspTimelineKind::Workload)
+        .map(|entry| entry.entry_id.as_str())
+        .collect::<Vec<_>>();
+
+    assert_eq!(retained_ids, vec!["retry", "retry", "retry"]);
+    assert_eq!(
+        workload_entry_ids,
+        vec![
+            "timeline|ime-live|retry|1",
+            "timeline|ime-live|retry|2",
+            "timeline|ime-live|retry|3",
+        ]
+    );
+    let retention = snapshot
+        .coverage
+        .iter()
+        .find(|coverage| coverage.artifact_id == "session.evidence-retention")
+        .expect("discarded history must be explicit coverage");
+    assert_eq!(retention.status, EspArtifactStatus::ParseFailed);
+    assert!(retention
+        .detail
+        .as_deref()
+        .unwrap()
+        .contains("1 older or oversized record"));
+}
+
+#[test]
+fn reducer_retention_releases_occurrence_history_after_a_key_is_fully_evicted() {
+    let mut reducer = EspDiagnosticsReducer::with_retention_limits(
+        "2026-07-15T18:00:00Z".to_string(),
+        1,
+        usize::MAX,
+    );
+    reducer.ingest(ime_record(
+        "ime-live",
+        "reused-after-eviction",
+        "2026-07-15T12:00:00Z",
+    ));
+    reducer.ingest(ime_record(
+        "ime-live",
+        "intervening-record",
+        "2026-07-15T12:00:01Z",
+    ));
+    reducer.ingest(ime_record(
+        "ime-live",
+        "reused-after-eviction",
+        "2026-07-15T12:00:02Z",
+    ));
+
+    let snapshot = reducer.snapshot();
+    assert_eq!(snapshot.activity.len(), 2, "record plus retention coverage");
+    assert_eq!(
+        snapshot
+            .activity
+            .iter()
+            .find(|entry| entry.kind == EspTimelineKind::Workload)
+            .unwrap()
+            .entry_id,
+        "timeline|ime-live|reused-after-eviction|0"
+    );
+}
+
+#[test]
+fn reducer_retention_bounds_serialized_bytes_and_preserves_rare_profile_state() {
+    let mut byte_bounded =
+        EspDiagnosticsReducer::with_retention_limits("2026-07-15T18:00:00Z".to_string(), 10, 1);
+    byte_bounded.ingest(ime_record("ime-live", "oversized", "2026-07-15T12:00:00Z"));
+    let byte_snapshot = byte_bounded.snapshot();
+    assert!(byte_snapshot.raw_evidence.is_empty());
+    assert!(byte_snapshot.coverage.iter().any(|coverage| {
+        coverage.artifact_id == "session.evidence-retention"
+            && coverage
+                .detail
+                .as_deref()
+                .is_some_and(|detail| detail.contains("serialized bytes"))
+    }));
+
+    let mut record_bounded = EspDiagnosticsReducer::with_retention_limits(
+        "2026-07-15T18:00:00Z".to_string(),
+        3,
+        usize::MAX,
+    );
+    record_bounded.ingest(registry_record(
+        "profile",
+        "profile-name",
+        r"SOFTWARE\Microsoft\Provisioning\Diagnostics\AutoPilot",
+        "DeploymentProfileName",
+        EspObservationValue::Text("Contoso profile".to_string()),
+        "2026-07-15T11:59:00Z",
+    ));
+    for index in 0..3 {
+        record_bounded.ingest(ime_record(
+            "ime-live",
+            &format!("noise-{index}"),
+            "2026-07-15T12:00:00Z",
+        ));
+    }
+    let record_snapshot = record_bounded.snapshot();
+    assert_eq!(record_snapshot.scenario, EspScenario::AutopilotV1);
+    assert_eq!(
+        record_snapshot
+            .profile
+            .as_ref()
+            .and_then(|profile| profile.profile_name.as_deref()),
+        Some("Contoso profile")
     );
 }
 
@@ -2146,11 +2315,48 @@ fn timeline_snapshot_is_deterministic_for_the_same_ordered_evidence() {
             .map(|entry| entry.entry_id.as_str())
             .collect::<Vec<_>>(),
         vec![
-            "timeline|events|event-1905|1",
-            "timeline|ime-live|retry|2",
+            "timeline|events|event-1905|0",
+            "timeline|ime-live|retry|0",
             "timeline|events|event-1920|0"
         ]
     );
+}
+
+#[test]
+fn timeline_identity_and_equal_timestamp_order_ignore_unrelated_ingestion_order() {
+    let event = event_record(
+        "events",
+        "event-1905",
+        1905,
+        9,
+        "2026-07-15T12:00:00Z",
+        "Download started",
+    );
+    let ime = ime_record("ime-live", "retry", "2026-07-15T12:00:00Z");
+
+    let mut forward = EspDiagnosticsReducer::new("2026-07-15T18:00:00Z".to_string());
+    forward.ingest_all(vec![event.clone(), ime.clone()]);
+    let mut reversed = EspDiagnosticsReducer::new("2026-07-15T18:00:00Z".to_string());
+    reversed.ingest_all(vec![ime, event]);
+
+    let forward_ids = forward
+        .snapshot()
+        .activity
+        .into_iter()
+        .map(|entry| entry.entry_id)
+        .collect::<Vec<_>>();
+    let reversed_ids = reversed
+        .snapshot()
+        .activity
+        .into_iter()
+        .map(|entry| entry.entry_id)
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        forward_ids,
+        vec!["timeline|events|event-1905|0", "timeline|ime-live|retry|0",]
+    );
+    assert_eq!(reversed_ids, forward_ids);
 }
 
 #[derive(Debug, Deserialize)]
@@ -2532,7 +2738,7 @@ fn reducer_parity_profile_enrollment_and_v2_page_settings_pin_raw_sources_and_se
     assert_eq!(settings.script_ids, vec!["script-v2"]);
     assert_eq!(
         v2_snapshot.raw_evidence[1].record_id,
-        "raw|page-settings|page-agent-timeout|1"
+        "raw|page-settings|page-agent-timeout|0"
     );
 }
 
@@ -2629,7 +2835,7 @@ fn reducer_parity_nodecache_malformed_denied_hardware_and_hash_exclusion_are_los
         .unwrap();
     assert_eq!(
         node_42_raw.record_id,
-        "raw|node-cache-registry|node-42-expected|5"
+        "raw|node-cache-registry|node-42-expected|0"
     );
     assert_eq!(
         node_42_raw.raw_value,
@@ -2657,7 +2863,7 @@ fn reducer_parity_nodecache_malformed_denied_hardware_and_hash_exclusion_are_los
     );
     assert_eq!(
         malformed[0].record_id,
-        "raw|malformed-json|malformed-page-settings|6"
+        "raw|malformed-json|malformed-page-settings|0"
     );
     assert_eq!(malformed[1].provenance.source_artifact_id, "malformed-json");
     assert!(
@@ -2681,7 +2887,7 @@ fn reducer_parity_nodecache_malformed_denied_hardware_and_hash_exclusion_are_los
         .unwrap();
     assert_eq!(
         coverage_activity.entry_id,
-        "timeline|protected-registry|coverage-denied|16"
+        "timeline|protected-registry|coverage-denied|0"
     );
     assert_eq!(
         coverage_activity.timestamp.normalized_utc.as_deref(),
@@ -2702,7 +2908,7 @@ fn reducer_parity_nodecache_malformed_denied_hardware_and_hash_exclusion_are_los
         .iter()
         .find(|record| record.evidence[0].evidence_id == "serial")
         .unwrap();
-    assert_eq!(serial_raw.record_id, "raw|system-facts|serial|13");
+    assert_eq!(serial_raw.record_id, "raw|system-facts|serial|0");
     assert_eq!(serial_raw.sensitivity, EspSensitivity::Sensitive);
     assert_eq!(
         serial_raw
@@ -2794,7 +3000,7 @@ fn reducer_parity_all_v2_states_pin_raw_normalized_sources_times_and_stable_ids(
         .iter()
         .find(|entry| entry.evidence[0].evidence_id == "v2-state-0")
         .unwrap();
-    assert_eq!(first_activity.entry_id, "timeline|v2-progress|v2-state-0|2");
+    assert_eq!(first_activity.entry_id, "timeline|v2-progress|v2-state-0|0");
     assert_eq!(
         first_activity.status.as_ref().unwrap().raw,
         EspRawStatus::Number(0)
@@ -2821,7 +3027,7 @@ fn reducer_parity_every_required_event_id_pins_raw_normalized_source_time_and_en
     reducer.ingest_all(cases.events.iter().map(parity_event_record));
     let snapshot = reducer.snapshot();
     assert_eq!(snapshot.activity.len(), 14);
-    for (ordinal, case) in cases.events.iter().enumerate() {
+    for case in &cases.events {
         let activity = snapshot
             .activity
             .iter()
@@ -2830,7 +3036,7 @@ fn reducer_parity_every_required_event_id_pins_raw_normalized_source_time_and_en
         assert_eq!(
             activity.entry_id,
             format!(
-                "timeline|{}|{}|{ordinal}",
+                "timeline|{}|{}|0",
                 case.source_artifact_id, case.evidence_id
             )
         );
@@ -2859,10 +3065,7 @@ fn reducer_parity_every_required_event_id_pins_raw_normalized_source_time_and_en
             .unwrap();
         assert_eq!(
             raw.record_id,
-            format!(
-                "raw|{}|{}|{ordinal}",
-                case.source_artifact_id, case.evidence_id
-            )
+            format!("raw|{}|{}|0", case.source_artifact_id, case.evidence_id)
         );
         assert_eq!(
             raw.raw_value,
@@ -2971,7 +3174,7 @@ fn reducer_parity_partial_graph_names_never_replace_raw_ids_or_local_status() {
     );
     assert_eq!(
         snapshot.raw_evidence[3].record_id,
-        "raw|graph-apps|graph-app-a|3"
+        "raw|graph-apps|graph-app-a|0"
     );
 }
 
@@ -3029,11 +3232,11 @@ fn reducer_parity_live_and_captured_equivalent_inputs_keep_equal_logic_and_sourc
         assert_eq!(captured.workloads[0].workload_id, "workload|captured-registry|classic:device:2026-07-15T12:00:00Z:win32App:equivalent-app|0");
         assert_eq!(
             live.raw_evidence[1].record_id,
-            "raw|live-registry|live-workload|1"
+            "raw|live-registry|live-workload|0"
         );
         assert_eq!(
             captured.raw_evidence[1].record_id,
-            "raw|captured-registry|captured-workload|1"
+            "raw|captured-registry|captured-workload|0"
         );
         assert_eq!(
             live.activity[0].evidence[0].source_artifact_id,

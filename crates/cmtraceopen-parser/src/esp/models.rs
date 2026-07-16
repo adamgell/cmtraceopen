@@ -311,6 +311,7 @@ raw_preserving_string_enum! {
     pub enum GraphApiVersion {
         V1_0 => "v1.0",
         Beta => "beta",
+        NotRequested => "notRequested",
     }
 }
 

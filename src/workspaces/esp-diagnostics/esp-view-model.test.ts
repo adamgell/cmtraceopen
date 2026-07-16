@@ -22,7 +22,7 @@ function graphOverlay(): EspGraphOverlay {
   const skipped = {
     status: "skipped" as const,
     requiredScope: null,
-    apiVersion: "v1.0" as const,
+    apiVersion: "notRequested" as const,
     data: null,
     error: null,
   };

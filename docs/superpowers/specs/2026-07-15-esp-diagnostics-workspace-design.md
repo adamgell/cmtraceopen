@@ -89,6 +89,8 @@ Every raw record carries a stable ID and provenance before normalization:
 - raw value/status and sensitivity classification;
 - parse state and source access state.
 
+Occurrence identity is source-derived rather than dependent on unrelated provider arrival order. Its base key combines the source artifact ID and evidence ID, both escaped for the wire ID; a source-local collision ordinal distinguishes only concurrently retained records with the same base key. Equal-timestamp timeline rows are ordered by their stable entry ID, then their source-local sequence. Shuffling records with independent base keys therefore preserves timeline IDs and equal-time row order, while repeated identical same-source retries remain distinct. Eviction never renumbers an occurrence that remains retained; occurrence-key accounting is itself bounded to retained evidence.
+
 Derived records carry their evidence references, correlation basis, and confidence. A derived finding cannot exist without at least one evidence reference or an explicit coverage-gap reference.
 
 ## PowerShell v6.3 parity contract
@@ -169,6 +171,10 @@ Limits:
 - re-run bounded discovery every two seconds while live;
 - debounce UI snapshot emission to 250 ms;
 - expire a live session after eight hours with a final state.
+- retain at most 25,000 evidence records and 32 MiB of serialized evidence in the reducer;
+- evict the oldest high-volume stream evidence first while preserving lower-volume registry, JSON, and coverage state when possible;
+- never renumber retained source occurrences after eviction;
+- emit explicit `session.evidence-retention` coverage with discarded record/byte counts, and derive conclusions only from the retained evidence.
 
 ## MSIEXEC status contract
 
@@ -198,7 +204,9 @@ Requested delegated read scopes:
 
 No write, privileged-operation, or group-membership permission is requested. Assignment target group/filter IDs are shown as declared targeting; they are not presented as effective membership.
 
-The client prefers Graph v1.0 and labels beta-derived sections. Each section has an independent state: available, not found, permission denied, failed, skipped, or cancelled. A 403 affects only its section. A 401 invalidates the cached token once. Responses to 429, 503, and 504 honor bounded `Retry-After` retries. Pagination has host, page, item, and body-size limits and is cancellable.
+The client prefers Graph v1.0 and labels beta-derived sections. Each native overlay section has an independent request state: available, not found, permission denied, failed, skipped, or cancelled. A dependency-blocked section stores `blockedBy` in its structured error and reports `apiVersion: notRequested` when no HTTP request was dispatched. A 403 affects only its section. A 401 invalidates the cached token once. Responses to 429, 503, and 504 honor bounded `Retry-After` retries. Pagination has host, page, item, and body-size limits and is cancellable.
+
+The frontend, not the native overlay, owns global Graph-disabled, disconnected, connecting, loading, stale, and cancelled states. Disabled means local evidence only and clears/cancels remote state without a warning; disconnected or connecting preserves local evidence, presents `GraphNotConnected`, never opens WAM, and requires an explicit refresh after connection.
 
 Remote correlation order is managed-device ID, Entra device ID, serial, then exact hostname plus tenant/user evidence. Ambiguous weak matches require explicit device selection and do not continue automatically.
 
