@@ -172,6 +172,7 @@ export function LiveEvidenceTable({ snapshot }: LiveEvidenceTableProps) {
   const [textFilter, setTextFilter] = useState("");
   const [problemsOnly, setProblemsOnly] = useState(false);
   const [following, setFollowing] = useState(true);
+  const [manualPause, setManualPause] = useState(false);
   const [selectedRecordId, setSelectedRecordId] = useState<string | null>(null);
   const scrollerRef = useRef<HTMLDivElement>(null);
 
@@ -217,13 +218,14 @@ export function LiveEvidenceTable({ snapshot }: LiveEvidenceTableProps) {
 
   const handleScroll = () => {
     const element = scrollerRef.current;
-    if (!element) return;
+    if (!element || manualPause) return;
     const nearBottom =
       element.scrollHeight - element.scrollTop - element.clientHeight <= 48;
     setFollowing(nearBottom);
   };
 
   const resumeFollow = () => {
+    setManualPause(false);
     setFollowing(true);
     if (filteredRows.length > 0) {
       virtualizer.scrollToIndex(filteredRows.length - 1, { align: "end" });
@@ -314,7 +316,14 @@ export function LiveEvidenceTable({ snapshot }: LiveEvidenceTableProps) {
         <Button
           size="small"
           appearance={following ? "subtle" : "primary"}
-          onClick={following ? () => setFollowing(false) : resumeFollow}
+          onClick={
+            following
+              ? () => {
+                  setManualPause(true);
+                  setFollowing(false);
+                }
+              : resumeFollow
+          }
         >
           {following ? "Pause follow" : "Resume follow"}
         </Button>

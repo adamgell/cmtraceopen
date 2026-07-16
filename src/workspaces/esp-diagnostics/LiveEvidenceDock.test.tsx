@@ -343,6 +343,28 @@ describe("LiveEvidenceTable", () => {
     expect(virtualizer.scrollToIndex).toHaveBeenCalled();
   });
 
+  it("keeps an explicit visual pause latched while the scroller remains near the bottom", () => {
+    useEspDiagnosticsStore.getState().setEvidenceViewMode("docked");
+    const view = render(
+      <LiveEvidenceDock snapshot={snapshot(baseRecords.slice(0, 3))} />,
+    );
+    const scroller = screen.getByTestId("live-evidence-scroller");
+    Object.defineProperties(scroller, {
+      clientHeight: { configurable: true, value: 100 },
+      scrollHeight: { configurable: true, value: 100 },
+      scrollTop: { configurable: true, value: 0, writable: true },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Pause follow" }));
+    virtualizer.scrollToIndex.mockClear();
+    fireEvent.scroll(scroller);
+    expect(screen.getByRole("button", { name: "Resume follow" })).toBeVisible();
+
+    view.rerender(<LiveEvidenceDock snapshot={snapshot(baseRecords)} />);
+    expect(screen.getByText("5 / 5")).toBeVisible();
+    expect(virtualizer.scrollToIndex).not.toHaveBeenCalled();
+  });
+
   it("retains the selected record while new evidence arrives", () => {
     useEspDiagnosticsStore.getState().setEvidenceViewMode("docked");
     const view = render(
