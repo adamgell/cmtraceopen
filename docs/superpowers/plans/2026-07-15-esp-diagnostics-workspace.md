@@ -455,7 +455,7 @@ export interface EspDiagnosticsStore {
 
 **Files:** No source edits. The design and plan documents are copied into the new worktree with `apply_patch` before the first implementation commit.
 
-- [ ] **Step 1: Re-read the worktree skill and create the isolated branch**
+- [x] **Step 1: Re-read the worktree skill and create the isolated branch**
 
 Run from `/Users/Adam.Gell/repo/cmtraceopen`:
 
@@ -467,7 +467,7 @@ git worktree add /Users/Adam.Gell/repo/cmtraceopen-esp-diagnostics -b codex/esp-
 
 Expected: the original checkout remains on `pr/260`; the new visible sibling worktree is on `codex/esp-diagnostics` based on the fetched `origin/main`.
 
-- [ ] **Step 2: Copy this plan and its spec into the worktree with `apply_patch`**
+- [x] **Step 2: Copy this plan and its spec into the worktree with `apply_patch`**
 
 Expected paths:
 
@@ -488,7 +488,7 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings
 
 Expected: all baseline checks pass. If a baseline fails on untouched `origin/main`, record the exact failure before any feature edit and route it through `superpowers:systematic-debugging`.
 
-- [ ] **Step 4: Commit only the approved design and plan**
+- [x] **Step 4: Commit only the approved design and plan**
 
 ```bash
 git add -f docs/superpowers/plans/2026-07-15-esp-diagnostics-workspace.md docs/superpowers/specs/2026-07-15-esp-diagnostics-workspace-design.md
@@ -509,7 +509,7 @@ Show baseline evidence and the isolated worktree path. The active goal remains t
 - Modify only if confirmed dead: `src/components/layout/Toolbar.tsx`
 - Modify only if confirmed dead: `src/components/layout/StatusBar.tsx`
 
-- [ ] **Step 1: Audit direct, type, dynamic, export, string, and test references**
+- [x] **Step 1: Audit direct, type, dynamic, export, string, and test references**
 
 ```bash
 rg -n "AppShell|Toolbar|StatusBar|useAppActions|renderWorkspace|activeViewLabel" src e2e
@@ -518,7 +518,7 @@ npx tsc --noEmit --noUnusedLocals --noUnusedParameters
 
 Expected: a concrete list of dead imports/props/exports/logs or a recorded no-op audit. Do not alter behavior in this phase.
 
-- [ ] **Step 2: Remove only proven dead code and run shell tests**
+- [x] **Step 2: Remove only proven dead code and run shell tests**
 
 ```bash
 npx tsc --noEmit
@@ -527,7 +527,7 @@ npm test -- src/stores/ui-store.test.ts src/components/log-view/LogListView.test
 
 Expected: pass with no workspace or shell behavior change.
 
-- [ ] **Step 3: Commit cleanup separately if anything changed**
+- [x] **Step 3: Commit cleanup separately if anything changed**
 
 ```bash
 git add src/components/layout/AppShell.tsx src/components/layout/Toolbar.tsx src/components/layout/StatusBar.tsx
@@ -578,7 +578,7 @@ Show exact cleanup/no-op evidence before beginning structural changes.
 - Modify tests in: `src-tauri/src/commands/bundle_ops.rs`
 - Modify tests in: `src-tauri/src/commands/intune_bundle.rs`
 
-- [ ] **Step 1: Write failing tests**
+- [x] **Step 1: Write failing tests**
 
 Add these exact tests:
 
@@ -610,7 +610,7 @@ pub struct ArtifactResult {
 }
 ```
 
-- [ ] **Step 2: Run the focused tests and confirm failure**
+- [x] **Step 2: Run the focused tests and confirm failure**
 
 ```bash
 cargo test -p cmtrace-open --all-features collector_manifest_serializes_each_globbed_file -- --nocapture
@@ -619,11 +619,11 @@ cargo test -p cmtrace-open --all-features nested_built_in_intune_logs_resolve_fr
 
 Expected: fail because `artifacts[]` is currently empty and nested files are not represented.
 
-- [ ] **Step 3: Implement the file-record and manifest behavior**
+- [x] **Step 3: Implement the file-record and manifest behavior**
 
 Only actual collected files enter `artifacts[]`. Missing/failed sources remain in `collection.results.gaps`. Canonicalize bundle-root membership, store slash-normalized root-relative paths, and sort by `relativePath`, then `artifactId`. Add `parse_hints` to the collection-item and result structs in `collector/types.rs` with `#[serde(default)]` so profiles that predate `parseHints` remain valid; Phase 2B pins profile validation and backwards compatibility.
 
-- [ ] **Step 4: Run focused and package tests**
+- [x] **Step 4: Run focused and package tests**
 
 ```bash
 cargo test -p cmtrace-open --all-features collector::
@@ -632,7 +632,7 @@ cargo test -p cmtrace-open --all-features intune_bundle::
 cargo clippy -p cmtrace-open --all-targets --all-features -- -D warnings
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/cmtraceopen-parser/src/collector/types.rs src-tauri/src/collector/artifacts.rs src-tauri/src/collector/manifest.rs src-tauri/src/commands/bundle_ops.rs src-tauri/src/commands/intune_bundle.rs
@@ -647,7 +647,7 @@ git commit -m "fix: enumerate collected evidence artifacts"
 - Modify: `crates/cmtraceopen-parser/src/collector/profile_data.json`
 - Modify tests in: `crates/cmtraceopen-parser/src/collector/mod.rs`
 
-- [ ] **Step 1: Write failing profile tests**
+- [x] **Step 1: Write failing profile tests**
 
 Add:
 
@@ -661,7 +661,7 @@ esp_profile_artifact_ids_are_unique
 
 Required additions cover `EnterpriseDesktopAppManagement`, `OfficeCSP`, Provisioning diagnostics/settings/OMADM/NodeCache, EnrollmentStatusTracking, Enrollments/FirstSync, IME/Win32Apps, the exact `ServiceState\wmansvc\AutopilotDDSZTDFile.json`, structured OS/hardware/TPM output, and filtered Delivery Optimization output.
 
-- [ ] **Step 2: Confirm red, implement, and verify**
+- [x] **Step 2: Confirm red, implement, and verify**
 
 ```bash
 cargo test -p cmtraceopen-parser collector:: -- --nocapture
@@ -671,7 +671,7 @@ cargo clippy -p cmtraceopen-parser --all-targets -- -D warnings
 
 Expected: tests pass and older profile JSON without `parseHints` still deserializes.
 
-- [ ] **Step 3: Commit and checkpoint**
+- [x] **Step 3: Commit and checkpoint**
 
 ```bash
 git add crates/cmtraceopen-parser/src/collector/profile.rs crates/cmtraceopen-parser/src/collector/profile_data.json crates/cmtraceopen-parser/src/collector/mod.rs
@@ -690,15 +690,15 @@ Show a generated manifest with populated artifacts before parser work begins.
 - Modify: `references/collection/README.md`
 - Modify tests in: `crates/cmtraceopen-parser/src/collector/mod.rs`
 
-- [ ] **Step 1: Write failing cross-profile parity tests**
+- [x] **Step 1: Write failing cross-profile parity tests**
 
 Normalize the applicable ESP artifact IDs, registry roots, event channels, export paths, and command-output contracts from the targeted, reference, and embedded profiles. Assert that each contains the required evidence families and that duplicate parent/child exports are explicitly de-duplicated.
 
-- [ ] **Step 2: Synchronize the shipped profiles**
+- [x] **Step 2: Synchronize the shipped profiles**
 
 Bring the targeted/reference versions and contents into alignment. Add `EnterpriseDesktopAppManagement`, `OfficeCSP`, exact `ServiceState\wmansvc\AutopilotDDSZTDFile.json`, structured hardware facts, and filtered DO output where missing. Document read-only capture, sensitive fields, and the fact that raw hardware hash is excluded from normal analysis.
 
-- [ ] **Step 3: Verify and commit**
+- [x] **Step 3: Verify and commit**
 
 ```bash
 cargo test -p cmtraceopen-parser collector::cross_profile_ -- --nocapture
@@ -707,7 +707,7 @@ git add scripts/collection/intune-evidence-profile.json references/collection/in
 git commit -m "fix: synchronize ESP evidence profiles"
 ```
 
-- [ ] **Step 4: Checkpoint**
+- [x] **Step 4: Checkpoint**
 
 Show the normalized cross-profile parity output before parser work begins.
 
@@ -722,11 +722,11 @@ Show the normalized cross-profile parity output before parser work begins.
 - Modify: `crates/cmtraceopen-parser/src/lib.rs`
 - Create: `crates/cmtraceopen-parser/tests/esp_diagnostics.rs`
 
-- [ ] **Step 1: Write compile-time and serialization tests first**
+- [x] **Step 1: Write compile-time and serialization tests first**
 
 Add tests for camelCase JSON, every enum variant, evidence provenance, sensitivity, coverage, raw/normalized separation, `schemaVersion = 1`, and every `GraphSection<T>` state/API-version/error shape embedded in `EspGraphOverlay`.
 
-- [ ] **Step 2: Confirm the module is missing**
+- [x] **Step 2: Confirm the module is missing**
 
 ```bash
 cargo test -p cmtraceopen-parser --test esp_diagnostics models_serialize_camel_case -- --nocapture
@@ -734,11 +734,11 @@ cargo test -p cmtraceopen-parser --test esp_diagnostics models_serialize_camel_c
 
 Expected: compilation fails because `cmtraceopen_parser::esp` does not exist.
 
-- [ ] **Step 3: Implement all supporting DTOs referenced by the core contract**
+- [x] **Step 3: Implement all supporting DTOs referenced by the core contract**
 
 The model must include identity, profile, ten OOBE booleans, enrollments, device/user scope, classic and v2 sessions, every tracked kind, raw/normalized status, workload timestamps, exit/enforcement codes, NodeCache, registration, DO, hardware, process observations, installer correlation, timeline, coverage, raw evidence, findings, and the parser-owned Graph overlay/section/status/API-version/error types.
 
-- [ ] **Step 4: Verify and commit**
+- [x] **Step 4: Verify and commit**
 
 ```bash
 cargo test -p cmtraceopen-parser --test esp_diagnostics models_ -- --nocapture
@@ -757,7 +757,7 @@ git commit -m "feat: define ESP diagnostics evidence contract"
 - Modify: `crates/cmtraceopen-parser/tests/esp_diagnostics.rs`
 - Create: `crates/cmtraceopen-parser/tests/fixtures/esp/normalization-cases.json`
 
-- [ ] **Step 1: Add failing table-driven tests**
+- [x] **Step 1: Add failing table-driven tests**
 
 Pin:
 
@@ -771,7 +771,7 @@ Pin:
 - local, UTC, offset, and unspecified timestamps;
 - detailed Office failure overriding an outer processed state.
 
-- [ ] **Step 2: Confirm failure, implement pure functions, and verify**
+- [x] **Step 2: Confirm failure, implement pure functions, and verify**
 
 ```bash
 cargo test -p cmtraceopen-parser --test esp_diagnostics normalization_ -- --nocapture
@@ -779,7 +779,7 @@ cargo test -p cmtraceopen-parser --test esp_diagnostics normalization_ -- --noca
 
 Expected before implementation: missing functions. Expected after implementation: every table row passes and no unknown raw value is discarded.
 
-- [ ] **Step 3: Commit and checkpoint**
+- [x] **Step 3: Commit and checkpoint**
 
 ```bash
 git add crates/cmtraceopen-parser/src/esp/normalize.rs crates/cmtraceopen-parser/src/esp/mod.rs crates/cmtraceopen-parser/tests/esp_diagnostics.rs crates/cmtraceopen-parser/tests/fixtures/esp/normalization-cases.json
@@ -800,15 +800,15 @@ Show the serialized model and dictionary coverage.
 - Modify: `crates/cmtraceopen-parser/tests/esp_diagnostics.rs`
 - Create: `crates/cmtraceopen-parser/tests/fixtures/esp/scenario-cases.json`
 
-- [ ] **Step 1: Write failing scenario tests**
+- [x] **Step 1: Write failing scenario tests**
 
 Cover all five scenarios, classic device and two-user sessions, out-of-order session keys, latest-session selection by chronology, Autopilot Device Preparation isolation, ESP-only with no IME logs, and no false success from absent evidence.
 
-- [ ] **Step 2: Write failing workload and timeline tests**
+- [x] **Step 2: Write failing workload and timeline tests**
 
 Cover MSI, Office, UWP, Win32, policy, SCEP certificate, platform script, v2 workload, exit/enforcement codes, profile download, ODJ, registration, Delivery Optimization, and repeated identical retries that must remain distinct stable entries.
 
-- [ ] **Step 3: Confirm red and implement the reducer**
+- [x] **Step 3: Confirm red and implement the reducer**
 
 ```bash
 cargo test -p cmtraceopen-parser --test esp_diagnostics reducer_ -- --nocapture
@@ -817,7 +817,7 @@ cargo test -p cmtraceopen-parser --test esp_diagnostics timeline_ -- --nocapture
 
 The reducer indexes by source identity and session/workload identity, never by display name alone. `snapshot()` is deterministic for the same ordered evidence input.
 
-- [ ] **Step 4: Verify and commit**
+- [x] **Step 4: Verify and commit**
 
 ```bash
 cargo test -p cmtraceopen-parser --test esp_diagnostics
@@ -836,11 +836,11 @@ git commit -m "feat: reduce ESP sessions and timeline evidence"
 - Create: `crates/cmtraceopen-parser/tests/fixtures/esp/graph-cases.json`
 - Create: `crates/cmtraceopen-parser/tests/fixtures/esp/bundle-live-equivalence.json`
 
-- [ ] **Step 1: Add the remaining parity cases**
+- [x] **Step 1: Add the remaining parity cases**
 
 Pin NodeCache keys `2,10,42` with key `0` absent; malformed PageSettings/ProvisioningProgress/enforcement JSON; unknown states; permission-denied roots; sensitive fields; partial Graph names; captured/live logical equivalence; event IDs `72,100,101,107,109,110,111,304,306,1905,1906,1920,1922,1924`; and raw hardware-hash exclusion.
 
-- [ ] **Step 2: Run the full parity suite**
+- [x] **Step 2: Run the full parity suite**
 
 ```bash
 cargo test -p cmtraceopen-parser --test esp_diagnostics -- --nocapture
@@ -848,7 +848,7 @@ cargo test -p cmtraceopen-parser --test esp_diagnostics -- --nocapture
 
 Expected: every raw field, normalized status, source reference, timestamp, and stable entry ID is asserted; tests do not rely only on counts.
 
-- [ ] **Step 3: Commit and checkpoint**
+- [x] **Step 3: Commit and checkpoint**
 
 ```bash
 git add crates/cmtraceopen-parser/tests/esp_diagnostics.rs crates/cmtraceopen-parser/tests/fixtures/esp/edge-cases.json crates/cmtraceopen-parser/tests/fixtures/esp/graph-cases.json crates/cmtraceopen-parser/tests/fixtures/esp/bundle-live-equivalence.json
@@ -868,17 +868,17 @@ Show the parity checklist before adding native I/O.
 - Modify: `crates/cmtraceopen-parser/src/esp/mod.rs`
 - Modify: `crates/cmtraceopen-parser/tests/esp_diagnostics.rs`
 
-- [ ] **Step 1: Write failing finding tests**
+- [x] **Step 1: Write failing finding tests**
 
 Cover failed blocking app, stalled download/install, ESP timeout, failed registration/join, policy/certificate not processed, IME evidence missing, non-elevated coverage loss, ambiguous installer, inconsistent local/Graph state, malformed source, and successful completion with no fabricated warning.
 
 Each assertion pins `finding_id`, severity, confidence, recommended check text, and at least one evidence or coverage-gap reference.
 
-- [ ] **Step 2: Write failing redaction tests**
+- [x] **Step 2: Write failing redaction tests**
 
 Mask UPN, SID, tenant, EntDMID, serial, NodeCache payload, and secret-like command-line arguments by default. Remove tokens, authorization headers, raw Graph responses, and raw hardware hashes entirely.
 
-- [ ] **Step 3: Implement, verify, and commit**
+- [x] **Step 3: Implement, verify, and commit**
 
 ```bash
 cargo test -p cmtraceopen-parser --test esp_diagnostics findings_ -- --nocapture
@@ -897,15 +897,15 @@ git commit -m "feat: derive safe ESP diagnostic findings"
 - Modify: `crates/cmtraceopen-parser/src/esp/reducer.rs`
 - Modify: `crates/cmtraceopen-parser/tests/esp_diagnostics.rs`
 
-- [ ] **Step 1: Write failing correlation tests**
+- [x] **Step 1: Write failing correlation tests**
 
 Test quoted and unquoted `/L`, `/L*V`, `/log`, mixed-case switches, exact canonical log path, IME/AgentExecutor parent PID chain, exact app GUID/product code, PID reuse guarded by process start time, one temporal match, multiple candidates remaining uncorrelated, and sanitized command-line evidence.
 
-- [ ] **Step 2: Implement the exact precedence contract**
+- [x] **Step 2: Implement the exact precedence contract**
 
 Never infer correlation from time when an exact contradictory identifier exists. Return reasons and evidence for every confidence result.
 
-- [ ] **Step 3: Verify, commit, and checkpoint**
+- [x] **Step 3: Verify, commit, and checkpoint**
 
 ```bash
 cargo test -p cmtraceopen-parser --test esp_diagnostics correlation_ -- --nocapture
@@ -929,7 +929,7 @@ Show exact, temporal, and ambiguous correlation outputs.
 - Modify: `src-tauri/src/lib.rs`
 - Create: `src-tauri/tests/esp_diagnostics_sources.rs`
 
-- [ ] **Step 1: Write failing registry acquisition tests against fake snapshots**
+- [x] **Step 1: Write failing registry acquisition tests against fake snapshots**
 
 Pin `KEY_READ | KEY_WOW64_64KEY`, depth/value-size caps, numeric NodeCache ordering with gaps, per-root permission errors, device/user branch separation, uninstall-name lookup only for observed product codes, and no registry write/import API in the module.
 
@@ -947,11 +947,11 @@ HKLM\SOFTWARE\Microsoft\OfficeCSP
 HKLM\SOFTWARE\Microsoft\IntuneManagementExtension
 ```
 
-- [ ] **Step 2: Add the feature and module root**
+- [x] **Step 2: Add the feature and module root**
 
 Add `esp-diagnostics = ["intune-diagnostics"]` without adding it to `full` yet. Export `esp` behind that feature and expose a cross-platform offline capability plus Windows-only live capability.
 
-- [ ] **Step 3: Confirm red, implement, and verify**
+- [x] **Step 3: Confirm red, implement, and verify**
 
 ```bash
 cargo test -p cmtrace-open --all-features --test esp_diagnostics_sources registry_ -- --nocapture
@@ -960,7 +960,7 @@ cargo check -p cmtrace-open --no-default-features --features esp-diagnostics
 
 Missing Autopilot keys are `Missing`, not fatal. Access-denied keys are `PermissionDenied`. Registry observations retain exact hive/key/value provenance.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add src-tauri/src/esp/mod.rs src-tauri/src/esp/registry.rs src-tauri/Cargo.toml src-tauri/src/lib.rs src-tauri/tests/esp_diagnostics_sources.rs
@@ -976,15 +976,15 @@ git commit -m "feat: collect read-only ESP registry evidence"
 - Modify: `src-tauri/src/intune/evtx_parser.rs`
 - Modify: `src-tauri/tests/esp_diagnostics_sources.rs`
 
-- [ ] **Step 1: Write failing event-data tests**
+- [x] **Step 1: Write failing event-data tests**
 
 Extend parsed event records with ordered `event_data: Vec<EventLogProperty>` containing name and value. Pin all 14 required IDs and deterministic fields for event 109/110 state, MSI product code, app/policy ID, result code, and record ID.
 
-- [ ] **Step 2: Implement live/captured event normalization**
+- [x] **Step 2: Implement live/captured event normalization**
 
 Reuse the existing live channel reader and EVTX parser. Missing channels are coverage gaps. Access denied is distinct. Event records retain channel, event ID, record ID, source timestamp, named fields, and raw message provenance.
 
-- [ ] **Step 3: Verify and commit**
+- [x] **Step 3: Verify and commit**
 
 ```bash
 cargo test -p cmtrace-open --all-features --test esp_diagnostics_sources event_ -- --nocapture
@@ -1003,15 +1003,15 @@ git commit -m "feat: collect ESP event evidence"
 - Create: `src-tauri/src/esp/process_win32.rs`
 - Modify: `src-tauri/Cargo.toml`
 
-- [ ] **Step 1: Write failing unit tests inside the new modules**
+- [x] **Step 1: Write failing unit tests inside the new modules**
 
 Cover elevation supported/elevated/non-elevated/error, hardware value parsing, DO counter semantics, timeout/partial source behavior, process allowlisting, PID/start-time identity, parent chain, command-line sanitization, and non-Windows unsupported capability.
 
-- [ ] **Step 2: Add only required Windows API features**
+- [x] **Step 2: Add only required Windows API features**
 
 Add `Win32_Security_Authorization`, `Win32_System_Threading`, `Win32_System_Com`, `Win32_System_Ole`, `Win32_System_Variant`, `Win32_System_Wmi`, `Win32_UI_Shell` for the later explicit `runas` relaunch, and the process-query features actually required by the implementation. Do not enable unrelated feature groups.
 
-- [ ] **Step 3: Implement read-only providers**
+- [x] **Step 3: Implement read-only providers**
 
 Collect elevation, hostname/OS/build, manufacturer/model/serial, TPM version, IME service/process observation, and DO counters/log observations. Prefer Windows/WMI APIs. Any read-only command fallback is non-interactive, has a fixed executable/argument allowlist, captures structured JSON, and times out. Never collect or return the raw hardware hash.
 
@@ -1025,7 +1025,7 @@ winget.exe
 installer image names explicitly referenced by local IME policy evidence
 ```
 
-- [ ] **Step 4: Verify Windows-gated and cross-platform builds**
+- [x] **Step 4: Verify Windows-gated and cross-platform builds**
 
 ```bash
 cargo test -p cmtrace-open --all-features esp::system::
@@ -1034,7 +1034,7 @@ cargo check -p cmtrace-open --no-default-features --features esp-diagnostics
 cargo clippy -p cmtrace-open --all-targets --all-features -- -D warnings
 ```
 
-- [ ] **Step 5: Commit and checkpoint**
+- [x] **Step 5: Commit and checkpoint**
 
 ```bash
 git add src-tauri/src/esp/mod.rs src-tauri/src/esp/system.rs src-tauri/src/esp/process.rs src-tauri/src/esp/process_win32.rs src-tauri/Cargo.toml
@@ -1053,7 +1053,7 @@ Show non-elevated partial coverage and at least zero/one/multiple MSI process sn
 - Modify: `src-tauri/src/esp/mod.rs`
 - Modify tests in: `src-tauri/tests/esp_diagnostics_sources.rs`
 
-- [ ] **Step 1: Write failing discovery tests with temporary directories**
+- [x] **Step 1: Write failing discovery tests with temporary directories**
 
 Add:
 
@@ -1069,7 +1069,7 @@ discovery_accepts_explicit_running_process_log
 discovery_has_no_arbitrary_root_or_deep_mode
 ```
 
-- [ ] **Step 2: Implement fixed limits**
+- [x] **Step 2: Implement fixed limits**
 
 ```rust
 pub const MAX_ROTATIONS_PER_KNOWN_LOG: usize = 3;
@@ -1086,7 +1086,7 @@ Derive stable deployment roots/families from the embedded collector profile rath
 
 Known high-signal sources include IME, ConfigMgr application/content/update logs, Patch My PC, PSAppDeployToolkit, MSI, WinGet, and Windows deployment/reporting logs from existing profile families. Current IME logs win priority over rotations and temp candidates.
 
-- [ ] **Step 3: Verify and commit**
+- [x] **Step 3: Verify and commit**
 
 ```bash
 cargo test -p cmtrace-open --all-features --test esp_diagnostics_sources discovery_ -- --nocapture
@@ -1104,15 +1104,15 @@ git commit -m "feat: bound ESP deployment log discovery"
 - Modify tests in: `src-tauri/tests/esp_diagnostics_sources.rs`
 - Modify only if reuse requires a compatible extraction: `src-tauri/src/watcher/tail.rs`
 
-- [ ] **Step 1: Write failing tail tests**
+- [x] **Step 1: Write failing tail tests**
 
 Cover final-8-MiB initial context, shared read/write/delete behavior on Windows, appended bytes, UTF-8/Windows-1252 handling, partial records, truncation reset, rotation reset, source attachment once, known-source priority, 16-tail cap, and stop cleanup.
 
-- [ ] **Step 2: Implement without using the Log Explorer tail-session map**
+- [x] **Step 2: Implement without using the Log Explorer tail-session map**
 
 Reuse `TailReader` semantics where compatible, but ESP owns its handles because one diagnostic session tails many sources. Known rotations are snapshot-parsed; only current files and newest explicitly active MSI logs are tailed.
 
-- [ ] **Step 3: Verify, commit, and checkpoint**
+- [x] **Step 3: Verify, commit, and checkpoint**
 
 ```bash
 cargo test -p cmtrace-open --all-features --test esp_diagnostics_sources tail_ -- --nocapture
@@ -1136,11 +1136,11 @@ If `watcher/tail.rs` did not change, omit it from `git add`. Show rotation/trunc
 - Create: `src-tauri/src/commands/esp_diagnostics.rs`
 - Modify tests in: `src-tauri/tests/esp_diagnostics_sources.rs`
 
-- [ ] **Step 1: Write failing fake-provider session tests**
+- [x] **Step 1: Write failing fake-provider session tests**
 
 Inject fake clock, discovery, registry/event/system/process providers, tail factory, and event sink. Pin one-session conflict, monotonic sequence, request/session IDs, 250-ms debounce, two-second discovery, source attachment once, 16-tail priority, rotation replacement, late callback rejection after stop, stop/join, eight-hour expiration, partial source errors, and no lock held during I/O/emission.
 
-- [ ] **Step 2: Confirm red and implement the service**
+- [x] **Step 2: Confirm red and implement the service**
 
 ```bash
 cargo test -p cmtrace-open --all-features --test esp_diagnostics_sources session_ -- --nocapture
@@ -1148,11 +1148,11 @@ cargo test -p cmtrace-open --all-features --test esp_diagnostics_sources session
 
 The initial command returns a usable local snapshot, then emits updates. Graph work is scheduled independently and cannot block the first local snapshot.
 
-- [ ] **Step 3: Implement thin commands and typed errors**
+- [x] **Step 3: Implement thin commands and typed errors**
 
 Commands validate IDs and path mode, then delegate. Starting live on non-Windows returns `UnsupportedPlatform`. Starting while active returns `SessionConflict { existingSessionId }`. There is no `includeGraph` request field and no Graph dependency in the native ESP session; local startup never waits for remote work.
 
-- [ ] **Step 4: Verify and commit**
+- [x] **Step 4: Verify and commit**
 
 ```bash
 cargo test -p cmtrace-open --all-features --test esp_diagnostics_sources session_
@@ -1171,15 +1171,15 @@ git commit -m "feat: manage live ESP diagnostic sessions"
 - Modify: `src-tauri/src/ipc_bridge.rs`
 - Modify: `src-tauri/Cargo.toml`
 
-- [ ] **Step 1: Write failing feature/availability tests**
+- [x] **Step 1: Write failing feature/availability tests**
 
 Full builds expose `esp-diagnostics`; lite builds do not. Offline analysis is reported cross-platform. Live capability reports Windows only. Shutdown stops and joins a session.
 
-- [ ] **Step 2: Register commands and lifecycle cleanup**
+- [x] **Step 2: Register commands and lifecycle cleanup**
 
 Add the existing `esp-diagnostics` feature to `full`. Register local ESP commands. The debug bridge may support sanitized fixture-driven local analysis/live events but explicitly rejects Graph ESP commands.
 
-- [ ] **Step 3: Verify full and minimal feature sets**
+- [x] **Step 3: Verify full and minimal feature sets**
 
 ```bash
 cargo test -p cmtrace-open --all-features app_config::
@@ -1188,7 +1188,7 @@ cargo check -p cmtrace-open --no-default-features --features esp-diagnostics
 cargo test -p cmtrace-open --all-features
 ```
 
-- [ ] **Step 4: Commit and checkpoint**
+- [x] **Step 4: Commit and checkpoint**
 
 ```bash
 git add src-tauri/src/lib.rs src-tauri/src/commands/mod.rs src-tauri/src/commands/app_config.rs src-tauri/src/ipc_bridge.rs src-tauri/Cargo.toml
@@ -1207,15 +1207,15 @@ Show live start/get/stop payloads and non-Windows typed behavior.
 - Modify: `src-tauri/src/lib.rs`
 - Modify tests in: `src-tauri/tests/esp_diagnostics_sources.rs`
 
-- [ ] **Step 1: Write failing relaunch-provider tests**
+- [x] **Step 1: Write failing relaunch-provider tests**
 
 Inject a fake relaunch provider and pin already-elevated behavior, `ShellExecuteExW` request shape with verb `runas`, Windows-safe quoting, allowlisted startup-argument preservation, NUL/secret-bearing argument rejection, UAC cancellation, launch failure, non-Windows `UnsupportedPlatform`, and the rule that the current process remains alive unless the elevated child launch succeeds.
 
-- [ ] **Step 2: Implement the explicit user action**
+- [x] **Step 2: Implement the explicit user action**
 
 `restart_esp_as_administrator` is invoked only from the elevation banner. On Windows it resolves the current executable, forwards only allowlisted app-owned startup flags needed to reopen `esp-diagnostics`, uses `ShellExecuteExW` with `SEE_MASK_NOCLOSEPROCESS`, closes the returned process handle, and asks Tauri to exit only after launch success. It returns typed `AlreadyElevated`, `ElevationCancelled`, `UnsafeArgument`, and `LaunchFailed` results. It never forwards tokens, authorization data, arbitrary shell text, or untrusted evidence paths.
 
-- [ ] **Step 3: Verify and commit**
+- [x] **Step 3: Verify and commit**
 
 ```bash
 cargo test -p cmtrace-open --all-features --test esp_diagnostics_sources relaunch_ -- --nocapture
@@ -1225,7 +1225,7 @@ git add src-tauri/src/esp/relaunch.rs src-tauri/src/esp/mod.rs src-tauri/src/com
 git commit -m "feat: restart ESP diagnostics as administrator"
 ```
 
-- [ ] **Step 4: Checkpoint**
+- [x] **Step 4: Checkpoint**
 
 Show fake-provider success/cancel/failure evidence. Defer the real UAC prompt to Windows acceptance; do not trigger it in automated tests.
 
@@ -1241,11 +1241,11 @@ Show fake-provider success/cancel/failure evidence. Defer the real UAC prompt to
 - Modify: `Cargo.lock`
 - Modify: `src-tauri/tests/esp_diagnostics_sources.rs`
 
-- [ ] **Step 1: Write failing archive-safety tests**
+- [x] **Step 1: Write failing archive-safety tests**
 
 Use sanitized ZIP/CAB fixtures. Reject absolute paths, `..`, drive prefixes, symlinks/reparse escapes, more than 512 entries, more than 1 GiB total uncompressed data, more than 256 MiB per file, unsupported archive types, and output outside a unique temporary directory.
 
-- [ ] **Step 2: Add exact MSRV-compatible dependencies**
+- [x] **Step 2: Add exact MSRV-compatible dependencies**
 
 Add these exact entries to `src-tauri/Cargo.toml`:
 
@@ -1257,7 +1257,7 @@ time = { version = "=0.3.36", default-features = false }
 
 `zip` 2.4.2 declares Rust 1.73; only Deflate is enabled, excluding AES, bzip2, zstd, xz, and other unused codecs. `cab` 0.6.0 is pure Rust. The exact `time` constraint prevents `cab`, Tauri, and the existing dependency graph from resolving to a release newer than the repository's Rust 1.77.2 minimum can compile. Update and commit `Cargo.lock`; do not use floating archive versions.
 
-- [ ] **Step 3: Implement bounded extraction and direct parsing**
+- [x] **Step 3: Implement bounded extraction and direct parsing**
 
 Extract only allowlisted evidence. Parse `.reg` content directly with the existing registry parser; never import it. Parse captured JSON/EVTX/command output without consulting the local machine. Temporary extraction is uniquely scoped and automatically removed on success, failure, cancellation, and panic unwinding.
 
@@ -1283,15 +1283,15 @@ Expected: Rust 1.77.2 check exits zero and archive rejection/cleanup tests pass.
 - Modify: `src-tauri/src/esp/mod.rs`
 - Modify: `src-tauri/tests/esp_diagnostics_sources.rs`
 
-- [ ] **Step 1: Write failing bundle-resolution tests**
+- [x] **Step 1: Write failing bundle-resolution tests**
 
 Cover manifest-ID/family precedence, actual nested files, sparse ESP-only bundle, missing/malformed coverage, legacy fallback bounded to depth three/256 entries, allowlisted extensions/basenames, no analyst-machine registry lookup, and bundle/live normalized equivalence.
 
-- [ ] **Step 2: Implement source-neutral bundle intake**
+- [x] **Step 2: Implement source-neutral bundle intake**
 
 Resolve populated manifest artifacts first. Use the legacy fallback only inside the canonical bundle root and within its fixed limits. Feed registry, JSON, EVTX, command output, and deployment logs into the same reducer used by live evidence; do not consult equivalent facts on the analyst machine.
 
-- [ ] **Step 3: Verify and commit**
+- [x] **Step 3: Verify and commit**
 
 ```bash
 cargo test -p cmtrace-open --all-features --test esp_diagnostics_sources bundle_ -- --nocapture
@@ -1301,7 +1301,7 @@ git add src-tauri/src/esp/bundle.rs src-tauri/src/esp/mod.rs src-tauri/tests/esp
 git commit -m "feat: analyze captured ESP evidence bundles"
 ```
 
-- [ ] **Step 4: Checkpoint**
+- [x] **Step 4: Checkpoint**
 
 Show equivalent conclusions for live-shaped and bundle-shaped fixtures, plus ZIP/CAB rejection and cleanup evidence.
 
@@ -1316,7 +1316,7 @@ Show equivalent conclusions for live-shaped and bundle-shaped fixtures, plus ZIP
 - Create: `src-tauri/src/graph_api/models.rs`
 - Create: `src-tauri/tests/graph_esp_diagnostics.rs`
 
-- [ ] **Step 1: Write the failing platform-boundary test**
+- [x] **Step 1: Write the failing platform-boundary test**
 
 The current crate gates the entire `graph_api` module behind `cfg(target_os = "windows")`, so macOS/Linux cannot compile or test the new Graph models and orchestration. Add a test that imports platform-neutral Graph request/transport DTOs and round-trips them on the implementation host.
 
@@ -1326,11 +1326,11 @@ cargo test -p cmtrace-open --all-features --test graph_esp_diagnostics platform_
 
 Expected before implementation: compilation fails because the module/types are unavailable off Windows.
 
-- [ ] **Step 2: Split the module boundary**
+- [x] **Step 2: Split the module boundary**
 
 Compile the `graph_api` module shell and portable DTOs on every platform. Before removing the outer module gate, place every current `ureq`, WAM, HWND, Tauri-state, and Windows symbol/import/function behind internal `cfg(target_os = "windows")` boundaries; the portable side must not name those types. Phase 10C then extracts the reusable client/transport trait. Leave `windows`, `windows-future`, and `ureq` target-specific in `Cargo.toml`; fake transports must not depend on them.
 
-- [ ] **Step 3: Verify and commit**
+- [x] **Step 3: Verify and commit**
 
 ```bash
 cargo test -p cmtrace-open --all-features --test graph_esp_diagnostics platform_boundary_ -- --nocapture
@@ -1350,7 +1350,7 @@ git commit -m "refactor: separate Graph core from Windows WAM"
 - Modify: `src/components/dialogs/settings/GraphApiTab.tsx`
 - Create: `src/components/dialogs/settings/GraphApiTab.test.tsx`
 
-- [ ] **Step 1: Write failing auth/capability tests**
+- [x] **Step 1: Write failing auth/capability tests**
 
 Pin full, app-only, missing-scope, expired, malformed, unacceptable-audience, both accepted Graph audiences, and tenant-mismatch token claims. Keep unsigned claim decoding/sanity checks and capability projection platform-neutral so these tests run on macOS/Linux; only actual WAM acquisition is Windows-gated. `GraphAuthStatus` must expose `grantedScopes`, `missingScopes`, `expiresAt`, `tenantId`, and per-capability availability without returning the token.
 
@@ -1376,7 +1376,7 @@ https://graph.microsoft.com/DeviceManagementScripts.Read.All
 
 Capability matching uses the short names returned in `scp`.
 
-- [ ] **Step 2: Confirm current status lacks capabilities**
+- [x] **Step 2: Confirm current status lacks capabilities**
 
 ```bash
 cargo test -p cmtrace-open --all-features graph_auth_status_reports_capabilities -- --nocapture
@@ -1385,7 +1385,7 @@ npm test -- src/components/dialogs/settings/GraphApiTab.test.tsx
 
 Expected: fail because current WAM resource-mode status does not report scope claims/capabilities.
 
-- [ ] **Step 3: Preserve WAM while making permission use explicit**
+- [x] **Step 3: Preserve WAM while making permission use explicit**
 
 Keep the existing provider, public client ID, HWND-parented interaction, and memory-only cache. Decode and sanity-check unsigned `scp`, `aud`, `tid`, and `exp` only for expiry/cache/capability UX; Microsoft Graph 401/403 responses remain the authorization truth. Accept `aud` values `https://graph.microsoft.com` and `00000003-0000-0000-c000-000000000000`, derive expiry from `exp`, and remove the current fixed 50-minute fallback. Remove token-bearing `Debug` behavior. Continue current app-name enrichment when only app-read capability exists.
 
@@ -1416,7 +1416,7 @@ Record the Windows WAM scope-acquisition evidence before Task 11 begins.
 - Modify: `src-tauri/src/graph_api.rs`
 - Modify: `src-tauri/tests/graph_esp_diagnostics.rs`
 
-- [ ] **Step 1: Write failing transport tests**
+- [x] **Step 1: Write failing transport tests**
 
 Pin exact method/path/query/header contracts, unknown enum preservation, 401 invalidation signal, 403 required-scope error, 404 not found, 429/503/504 retry, `Retry-After` handling, four-attempt exhaustion, cancellation during retry/pagination, HTTPS Graph-host allowlisting, malicious `nextLink`, page/item/body caps, timeout, and redacted errors/logs. Run all fake-transport tests on macOS/Linux as well as Windows.
 
@@ -1430,11 +1430,11 @@ pub const MAX_GRAPH_ITEMS: usize = 5_000;
 pub const MAX_GRAPH_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 ```
 
-- [ ] **Step 2: Implement a fakeable transport and typed page client**
+- [x] **Step 2: Implement a fakeable transport and typed page client**
 
 `GraphPage<T>` accepts unknown JSON fields. `@odata.nextLink` must be HTTPS and match the configured Graph host. Cancellation is checked before requests, before pagination, and during retry waits. Errors expose sanitized status, Graph request ID when present, and required scope—not body or authorization data. The concrete WAM/`ureq` adapter remains Windows-only; the trait, client logic, and test fake remain platform-neutral.
 
-- [ ] **Step 3: Verify and commit**
+- [x] **Step 3: Verify and commit**
 
 ```bash
 cargo test -p cmtrace-open --all-features --test graph_esp_diagnostics client_ -- --nocapture
@@ -1444,7 +1444,7 @@ git add src-tauri/src/graph_api/client.rs src-tauri/src/graph_api/models.rs src-
 git commit -m "feat: harden Graph read transport"
 ```
 
-- [ ] **Step 4: Checkpoint**
+- [x] **Step 4: Checkpoint**
 
 Show cross-platform fake-transport output, capability results, 403 partial behavior, throttled retry, cancelled pagination, and malicious next-link rejection. Windows CI later proves the concrete WAM/`ureq` adapter.
 
@@ -1460,11 +1460,11 @@ Show cross-platform fake-transport output, capability results, 403 partial behav
 - Modify: `src-tauri/tests/graph_esp_diagnostics.rs`
 - Create: `src-tauri/tests/fixtures/graph/esp/orchestration-cases.json`
 
-- [ ] **Step 1: Write failing identity-correlation tests**
+- [x] **Step 1: Write failing identity-correlation tests**
 
 Match priority is explicit managed-device ID, Entra device ID, serial, then exact hostname plus matching tenant/user evidence. Multiple weak candidates return candidates and stop dependent sections. Pin exact GUID correlation, no accidental name merge, declared-versus-effective assignment semantics, and no false ESP-blocking claim from assignment alone. Never treat `policyStatusDetails.id` as the underlying app/policy GUID: it identifies the status-detail object. Exact app IDs come from local evidence or ESP `selectedMobileAppIds`; policy-status detail type/display-name correlation is lower-confidence unless a bounded catalog lookup supplies the real object ID.
 
-- [ ] **Step 2: Write failing endpoint-orchestration tests**
+- [x] **Step 2: Write failing endpoint-orchestration tests**
 
 Use this dependency order:
 
@@ -1485,7 +1485,7 @@ Use this dependency order:
 
 Do not request `GroupMember.Read.All`. Preserve group/filter target IDs as **declared targeting**. Mark an object ESP-blocking only when local tracking, `trackedOnEnrollmentStatus`, Autopilot policy status, or another device-specific result supports it.
 
-- [ ] **Step 3: Implement section-isolated partial behavior**
+- [x] **Step 3: Implement section-isolated partial behavior**
 
 Gate `graph_api::esp` behind `feature = "esp-diagnostics"` so lite/no-default builds retain only existing Graph behavior. Its orchestration is generic over an `EspGraphProvider`/portable client and must not depend directly on Tauri or Windows `GraphAuthState`. Tests use a fake provider on every platform; the Windows command adapter later wraps `GraphAuthState`, while a non-Windows provider returns typed `UnsupportedPlatform`/`Skipped`.
 
@@ -1501,7 +1501,7 @@ pub trait EspGraphProvider: Send + Sync {
 
 Each section is `Available`, `NotFound`, `PermissionDenied`, `Failed`, `Skipped`, or `Cancelled`, includes API version and required scope, and preserves completed siblings. Unknown beta values are retained. If device matching is ambiguous, dependent sections use `status: Skipped`, `apiVersion: NotRequested`, `data: None`, and `error.blockedBy: "deviceMatch"`.
 
-- [ ] **Step 4: Verify and commit**
+- [x] **Step 4: Verify and commit**
 
 ```bash
 cargo test -p cmtrace-open --all-features --test graph_esp_diagnostics correlation_ -- --nocapture
@@ -1520,11 +1520,11 @@ git commit -m "feat: enrich ESP evidence from Graph"
 - Modify: `src/lib/commands.ts`
 - Modify: `src-tauri/tests/graph_esp_diagnostics.rs`
 
-- [ ] **Step 1: Write failing cancellation and stale-overlay tests**
+- [x] **Step 1: Write failing cancellation and stale-overlay tests**
 
 Pin command serialization, per-request cancellation, operation-state removal, 401 cache invalidation once, provider isolation, and typed unsupported behavior. Portable integration tests use the fake provider; Windows-gated tests compile the concrete auth/transport adapter without making tenant calls.
 
-- [ ] **Step 2: Add the commands**
+- [x] **Step 2: Add the commands**
 
 ```text
 graph_fetch_esp_diagnostics(request)
@@ -1533,7 +1533,7 @@ graph_cancel_esp_diagnostics(requestId)
 
 On Windows with `esp-diagnostics`, the command adapter wraps `GraphAuthState` as the concrete `EspGraphProvider`. `GraphAuthState` uses `Arc`-backed memory-only token/cache/operation state so blocking HTTP work runs away from the command runtime. Command execution never opens WAM; unauthenticated state returns `GraphNotConnected`. Non-Windows and lite capability metadata prevents invocation and returns a typed unsupported result if reached. The local ESP session remains completely independent of `GraphAuthState`.
 
-- [ ] **Step 3: Verify and commit**
+- [x] **Step 3: Verify and commit**
 
 ```bash
 cargo test -p cmtrace-open --all-features --test graph_esp_diagnostics ipc_ -- --nocapture
@@ -1542,7 +1542,7 @@ git add src-tauri/src/commands/graph_api.rs src-tauri/src/lib.rs src/lib/command
 git commit -m "feat: expose cancellable ESP Graph overlay"
 ```
 
-- [ ] **Step 4: Checkpoint**
+- [x] **Step 4: Checkpoint**
 
 Show fake-provider full, partial, cancelled, unauthorized, and unsupported command results. Frontend scheduling/off-state behavior lands in Phase 12C.
 
@@ -1557,11 +1557,11 @@ Show fake-provider full, partial, cancelled, unauthorized, and unsupported comma
 - Modify tests in: `src/stores/ui-store.test.ts`
 - Create: `src/workspaces/registry.test.ts`
 
-- [ ] **Step 1: Write failing availability/definition tests**
+- [x] **Step 1: Write failing availability/definition tests**
 
 Pin `esp-diagnostics` as a valid workspace ID, sidebar default behavior, `sidebar: false`, live-capability metadata, and lazy toolbar/status content slot typing. Verify backend-enabled workspace filtering still falls back safely.
 
-- [ ] **Step 2: Add registry capabilities instead of new ID branches**
+- [x] **Step 2: Add registry capabilities instead of new ID branches**
 
 Extend `WorkspaceCapabilities` with:
 
@@ -1579,14 +1579,14 @@ statusBarContent?: LazyExoticComponent<ComponentType>;
 
 `sidebar` defaults to `true`. `liveAcquisition` is capability metadata, not a platform assumption.
 
-- [ ] **Step 3: Implement the contracts and verify**
+- [x] **Step 3: Implement the contracts and verify**
 
 ```bash
 npm test -- src/stores/ui-store.test.ts src/workspaces/registry.test.ts
 npx tsc --noEmit
 ```
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add src/types/log.ts src/workspaces/types.ts src/stores/ui-store.test.ts src/workspaces/registry.test.ts
@@ -1603,15 +1603,15 @@ git commit -m "feat: define ESP workspace shell capabilities"
 - Modify: `src/workspaces/event-log/index.ts`
 - Modify: `src/workspaces/registry.test.ts`
 
-- [ ] **Step 1: Write failing registry shell tests**
+- [x] **Step 1: Write failing registry shell tests**
 
 Pin default sidebar behavior, `sidebar: false`, event-log migration away from its hard-coded exception, lazy toolbar rendering, lazy status rendering, and unaffected legacy workspace labels/actions.
 
-- [ ] **Step 2: Replace hard-coded shell exceptions with the registry**
+- [x] **Step 2: Replace hard-coded shell exceptions with the registry**
 
 `AppShell` checks `workspace.capabilities?.sidebar !== false`. `Toolbar` and `StatusBar` render their active workspace's lazy slot inside `Suspense`. Legacy status logic remains as fallback until migrated separately; ESP adds no new ID branch.
 
-- [ ] **Step 3: Verify and commit**
+- [x] **Step 3: Verify and commit**
 
 ```bash
 npm test -- src/workspaces/registry.test.ts src/stores/ui-store.test.ts
@@ -1630,15 +1630,15 @@ git commit -m "refactor: drive workspace chrome from registry"
 - Create: `src/workspaces/esp-diagnostics/use-esp-session-updates.ts`
 - Modify: `src/lib/commands.ts`
 
-- [ ] **Step 1: Write failing store tests first**
+- [x] **Step 1: Write failing store tests first**
 
 Pin idle/analyzing/starting/live/stopping/ready/error transitions; stale analysis response; wrong session; duplicate and out-of-order sequence; stop; error recovery; and local snapshot preservation after Graph failure. Pin Graph setting disabled, enabled/idle-disconnected, enabled/connecting, enabled/connected, explicit refresh, stale response, disable-during-query cancellation, no sign-out side effect, no automatic WAM invocation, identity-fingerprint de-duplication, and identical behavior for live/imported snapshots. Also pin collapsed default, dock-height clamping, unread count while hidden, and mark-read behavior.
 
-- [ ] **Step 2: Mirror Rust contracts exactly and add typed wrappers**
+- [x] **Step 2: Mirror Rust contracts exactly and add typed wrappers**
 
 Add wrappers for analyze/start/get/stop/relaunch and Graph fetch/cancel. All invoke errors use the existing normalized command error path. No store imports Tauri directly.
 
-- [ ] **Step 3: Implement one global event subscriber**
+- [x] **Step 3: Implement one global event subscriber**
 
 The hook attaches once after Zustand persistence hydration, validates the envelope, applies the raw local snapshot immediately, and cleans up its listener without stopping the native session on component unmount.
 
@@ -1651,7 +1651,7 @@ The same global hook/store orchestration owns optional Graph scheduling for live
 - Disabling during a request calls Graph cancel, removes the remote overlay, prevents new requests, retains the local snapshot, and does not sign out WAM.
 - Navigating to another workspace does not stop local collection or an already-authorized Graph request.
 
-- [ ] **Step 4: Verify and commit**
+- [x] **Step 4: Verify and commit**
 
 ```bash
 npm test -- src/workspaces/esp-diagnostics/esp-diagnostics-store.test.ts
@@ -1669,11 +1669,11 @@ git commit -m "feat: manage ESP diagnostics frontend state"
 - Modify: `src/workspaces/registry.ts`
 - Modify: `src/workspaces/registry.test.ts`
 
-- [ ] **Step 1: Write failing definition and routing tests**
+- [x] **Step 1: Write failing definition and routing tests**
 
 Pin label `ESP Diagnostics`, cross-platform offline availability, Windows-only live capability, `sidebar: false`, no tab strip, and source routing for CMTrace evidence folders, `manifest.json`, CAB, and ZIP.
 
-- [ ] **Step 2: Implement a real base workspace and definition**
+- [x] **Step 2: Implement a real base workspace and definition**
 
 The base workspace renders production idle/analyzing/error state and explicit start-live/import actions from the store; it is not placeholder content. The definition uses `platforms: "all"`, `capabilities.sidebar: false`, and does not import the Intune store.
 
@@ -1682,7 +1682,7 @@ npm test -- src/workspaces/registry.test.ts src/workspaces/esp-diagnostics/esp-d
 npx tsc --noEmit
 ```
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add src/workspaces/esp-diagnostics/EspDiagnosticsWorkspace.tsx src/workspaces/esp-diagnostics/index.ts src/workspaces/registry.ts src/workspaces/registry.test.ts
@@ -1699,11 +1699,11 @@ git commit -m "feat: register ESP diagnostics workspace"
 - Modify: `src/workspaces/esp-diagnostics/index.ts`
 - Modify: `src/workspaces/registry.test.ts`
 
-- [ ] **Step 1: Write failing slot and listener tests**
+- [x] **Step 1: Write failing slot and listener tests**
 
 Pin one listener mount, prominent primary toolbar action only in ESP, live indicator, evidence count, start/stop status, source count, elevation/Graph summary, and no session stop when switching workspace.
 
-- [ ] **Step 2: Implement and verify**
+- [x] **Step 2: Implement and verify**
 
 The toolbar action reads only the ESP store and controls evidence visibility; live-session start remains a workspace action. The status component reads the ESP store and replaces generic status content only for ESP.
 
@@ -1712,7 +1712,7 @@ npm test -- src/workspaces/registry.test.ts src/workspaces/esp-diagnostics/esp-d
 npx tsc --noEmit
 ```
 
-- [ ] **Step 3: Commit and checkpoint**
+- [x] **Step 3: Commit and checkpoint**
 
 ```bash
 git add src/components/layout/AppShell.tsx src/workspaces/esp-diagnostics/EspToolbarAction.tsx src/workspaces/esp-diagnostics/EspStatusBarContent.tsx src/workspaces/esp-diagnostics/index.ts src/workspaces/registry.test.ts
@@ -1733,19 +1733,19 @@ Show full-width content with no sidebar and the primary app-chrome live-log butt
 - Create: `src/workspaces/esp-diagnostics/MsiexecStatus.tsx`
 - Create: `src/workspaces/esp-diagnostics/EspDiagnosticsWorkspace.test.tsx`
 
-- [ ] **Step 1: Write failing component tests**
+- [x] **Step 1: Write failing component tests**
 
 Cover empty, analyzing, live, ready, partial, error, classic ESP, existing-device, ESP-only, Device Preparation, elevated, non-elevated, relaunch supported/unsupported, zero/one/multiple MSI processes, exact/temporal/ambiguous correlation, command-line redaction, and evidence-link actions.
 
-- [ ] **Step 2: Implement the app-chrome cockpit frame**
+- [x] **Step 2: Implement the app-chrome cockpit frame**
 
 Use Fluent UI/tokens and the existing Segoe/log typography. Keep the page dense and Windows-native, with a clear reading hierarchy. Do not add a secondary left navigation rail. The header shows scenario, phase, elapsed time, coverage, local live state, and Graph state.
 
-- [ ] **Step 3: Implement the persistent admin recommendation**
+- [x] **Step 3: Implement the persistent admin recommendation**
 
 Non-elevated mode explains exactly which evidence is restricted and offers the explicit relaunch command. Dismissal, if supported, applies only to the current view and does not hide the coverage gaps.
 
-- [ ] **Step 4: Verify and commit**
+- [x] **Step 4: Verify and commit**
 
 ```bash
 npm test -- src/workspaces/esp-diagnostics/EspDiagnosticsWorkspace.test.tsx
@@ -1764,15 +1764,15 @@ git commit -m "feat: build ESP diagnostics cockpit frame"
 - Create: `src/workspaces/esp-diagnostics/EspWorkloadTable.tsx`
 - Modify: `src/workspaces/esp-diagnostics/EspDiagnosticsWorkspace.test.tsx`
 
-- [ ] **Step 1: Write failing interaction/state tests**
+- [x] **Step 1: Write failing interaction/state tests**
 
 Pin finding severity/confidence/evidence, recommended checks without remediation controls, distinct classic/v2 phase labels, independent real-time activity updates, all workload kinds/states, device/user scope, all-sessions toggle, latest-session default, exit/enforcement codes, raw IDs beside Graph names, and unknown values.
 
-- [ ] **Step 2: Implement with stable keys and accessible semantics**
+- [x] **Step 2: Implement with stable keys and accessible semantics**
 
 Tables sort deterministically, retain retries, expose full values in details, and use text/icon labels in addition to color. The Action Center never presents a destructive or mutating button.
 
-- [ ] **Step 3: Verify and commit**
+- [x] **Step 3: Verify and commit**
 
 ```bash
 npm test -- src/workspaces/esp-diagnostics/EspDiagnosticsWorkspace.test.tsx
@@ -1791,15 +1791,15 @@ git commit -m "feat: show ESP blockers and live workload progress"
 - Modify: `src/workspaces/esp-diagnostics/EspDiagnosticsWorkspace.tsx`
 - Modify: `src/workspaces/esp-diagnostics/EspDiagnosticsWorkspace.test.tsx`
 
-- [ ] **Step 1: Write failing view-model tests**
+- [x] **Step 1: Write failing view-model tests**
 
 Pin sections for identity/profile, OOBE flags, ESP configuration, enrollment/device/user sessions, apps, scripts, policies, certificates, join/registration, Delivery Optimization, hardware, NodeCache, source coverage, and raw provenance. Empty sections show source-aware absence rather than disappearing silently.
 
-- [ ] **Step 2: Implement collapsible inline sections**
+- [x] **Step 2: Implement collapsible inline sections**
 
 All sections live on the same workspace page. Keep primary blockers/workloads above the fold; deeper evidence is collapsed by category. Sensitive fields are masked with an explicit reveal/copy policy. Raw IDs remain visible when Graph is off and beside names when Graph is on.
 
-- [ ] **Step 3: Verify and commit**
+- [x] **Step 3: Verify and commit**
 
 ```bash
 npm test -- src/workspaces/esp-diagnostics/esp-view-model.test.ts src/workspaces/esp-diagnostics/EspDiagnosticsWorkspace.test.tsx
@@ -1823,15 +1823,15 @@ Compare the implemented page at 1200×800 and 1440×900 against the approved act
 - Create: `src/workspaces/esp-diagnostics/LiveEvidenceDock.test.tsx`
 - Modify: `src/workspaces/esp-diagnostics/esp-diagnostics-store.test.ts`
 
-- [ ] **Step 1: Write failing dock tests**
+- [x] **Step 1: Write failing dock tests**
 
 Pin collapsed default, hidden collection continuity, unread count, dock open, minimum 180-pixel height, maximum 70% workspace height, pointer resize, keyboard resize through an accessible separator, full-workspace mode, restore to prior dock height, collapse from either open mode, and state retention while navigating away/back.
 
-- [ ] **Step 2: Write failing evidence-table tests**
+- [x] **Step 2: Write failing evidence-table tests**
 
 Pin virtualized rendering, timestamp/source/severity/component/message columns, source filters, text filter, error/warning filter, auto-follow only while near bottom, paused visual follow without pausing collection, rotation/reset rows, raw provenance drill-down, and stable selection during updates.
 
-- [ ] **Step 3: Implement and verify**
+- [x] **Step 3: Implement and verify**
 
 The evidence table owns no native session. It renders store records and can be hidden without unsubscribe or data loss. Use TanStack Virtual rather than the global Log Explorer store so ESP state cannot contaminate open log tabs.
 
@@ -1840,7 +1840,7 @@ npm test -- src/workspaces/esp-diagnostics/LiveEvidenceDock.test.tsx src/workspa
 npx tsc --noEmit
 ```
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add src/workspaces/esp-diagnostics/LiveEvidenceTable.tsx src/workspaces/esp-diagnostics/LiveEvidenceDock.tsx src/workspaces/esp-diagnostics/LiveEvidenceDock.test.tsx src/workspaces/esp-diagnostics/esp-diagnostics-store.test.ts
@@ -1856,11 +1856,11 @@ git commit -m "feat: add resizable ESP live evidence dock"
 - Modify: `src/workspaces/esp-diagnostics/EspDiagnosticsWorkspace.test.tsx`
 - Modify: `src/workspaces/esp-diagnostics/LiveEvidenceDock.test.tsx`
 
-- [ ] **Step 1: Write failing end-to-end component interactions**
+- [x] **Step 1: Write failing end-to-end component interactions**
 
 The toolbar button says **Open live logs** while collapsed, has a live dot and count, opens the dock, can promote it to full workspace, restores it, and never hides the MSIEXEC/action/progress regions except in intentional full-log mode. Full-log mode has an obvious restore action.
 
-- [ ] **Step 2: Integrate and verify responsive behavior**
+- [x] **Step 2: Integrate and verify responsive behavior**
 
 ```bash
 npm test -- src/workspaces/esp-diagnostics/EspDiagnosticsWorkspace.test.tsx src/workspaces/esp-diagnostics/LiveEvidenceDock.test.tsx
@@ -1889,19 +1889,19 @@ Show collapsed, resized docked, and full-workspace states inside the actual CMTr
 - Modify: `src/workspaces/esp-diagnostics/EspDiagnosticsWorkspace.test.tsx`
 - Modify: `src/components/dialogs/settings/GraphApiTab.tsx`
 
-- [ ] **Step 1: Write failing Graph presentation tests**
+- [x] **Step 1: Write failing Graph presentation tests**
 
 Cover setting disabled, idle/disconnected, connecting-at-session-start (`GraphNotConnected`, no queue), connected/full, connected/partial, permission denied per section, offline, throttled/retrying, stale, cancelled, disable-during-query, no sign-out, manual refresh after connection, no device match, ambiguous device candidates, explicit candidate selection, beta labels, local raw ID beside friendly name, and local evidence remaining visible after every remote failure.
 
-- [ ] **Step 2: Implement explicit remote controls**
+- [x] **Step 2: Implement explicit remote controls**
 
 Starting or importing an ESP diagnostic session permits its configured Graph lookup only when the persisted option is already enabled and `graphApiStatus` is already connected. The workspace also provides **Refresh Graph data** and **Cancel Graph query**. It never opens WAM automatically, never queues behind a connection attempt, and keeps sign-in in existing settings. Ambiguous weak matches require candidate selection before dependent requests resume.
 
-- [ ] **Step 3: Make targeting language precise**
+- [x] **Step 3: Make targeting language precise**
 
 Show group/filter IDs as **Declared targeting**. Show **Effective** only for device-specific status, local ESP tracking, or Autopilot policy-status evidence. A required app assignment alone never becomes a blocking conclusion.
 
-- [ ] **Step 4: Verify and commit**
+- [x] **Step 4: Verify and commit**
 
 ```bash
 npm test -- src/workspaces/esp-diagnostics/EspDiagnosticsWorkspace.test.tsx src/components/dialogs/settings/GraphApiTab.test.tsx
@@ -1920,11 +1920,11 @@ git commit -m "feat: present optional Graph ESP enrichment"
 - Modify: `e2e/fixtures/screenshot-data.ts`
 - Modify: `e2e/screenshots/capture.spec.ts`
 
-- [ ] **Step 1: Add deterministic sanitized fixtures**
+- [x] **Step 1: Add deterministic sanitized fixtures**
 
 Include non-elevated local-only failure, elevated live install, v2 mixed workloads, exact MSI correlation, ambiguous MSI correlation, full Graph overlay, partial Graph overlay, sparse bundle, and rotation update. The shim rejects full Graph ESP IPC and supplies only explicit test fixtures.
 
-- [ ] **Step 2: Implement E2E scenarios**
+- [x] **Step 2: Implement E2E scenarios**
 
 Pin workspace selection, no sidebar, local start, bundle import, admin banner, MSIEXEC box, live phase/activity updates, action evidence drill-down, all evidence sections, raw IDs with Graph off, names with Graph on, collapsed default, hidden collection, dock resize, full logs, restore, source filtering, stop state, and navigation away/back without session loss.
 
@@ -1950,15 +1950,17 @@ git commit -m "test: cover ESP diagnostics end to end"
 - Modify: `docs/superpowers/specs/2026-07-15-esp-diagnostics-workspace-design.md`
 - Modify: `docs/superpowers/plans/2026-07-15-esp-diagnostics-workspace.md`
 
-- [ ] **Step 1: Document shipped behavior exactly**
+- [x] **Step 1: Document shipped behavior exactly**
 
 Document the workspace, elevation recommendation, bounded discovery limits, no deep scan, read-only boundary, local-first behavior, optional WAM/Graph scopes, beta sections, sensitive fields, captured evidence support, live-log modes, MSIEXEC correlation confidence, and incomplete-coverage interpretation.
 
-- [ ] **Step 2: Mark completed plan items and reconcile design drift**
+- [x] **Step 2: Mark completed plan items and reconcile design drift**
 
 Any implementation difference requires an explicit rationale in the spec before release. Do not change the done-definition to match missing code.
 
-- [ ] **Step 3: Run documentation link/path checks and commit**
+**Validation-sequencing drift:** No functional contract drift has been identified. Graph orchestration and UX proceeded against portable models and fake transports before the planned live WAM public-client feasibility gate could run. The exact five-scope WAM v2 request without a resource property is implemented and cross-compiled, but live consent and `scp` evidence remain required in Phase 15F. Fixture-driven Playwright app-shell captures are not accepted as native Windows Tauri visual evidence. Parallel worktrees also split or folded some planned commit boundaries without changing the done-definition.
+
+- [x] **Step 3: Run documentation link/path checks and commit**
 
 ```bash
 rg -n "ESP Diagnostics|DeviceManagementManagedDevices.Read.All|deep scan|read-only|MSIEXEC" README.md CHANGELOG.md docs/superpowers
@@ -1974,11 +1976,11 @@ git commit -m "docs: document ESP diagnostics workspace"
 
 - Modify: `.github/workflows/cmtrace-ci.yml`
 
-- [ ] **Step 1: Record the failing CI coverage assertion**
+- [x] **Step 1: Record the failing CI coverage assertion**
 
 Inspect the workflow and confirm that the existing Windows matrix builds the application but does not execute the Windows-only ESP/Graph tests or clippy. Treat that missing job as a release-gate failure; Linux success cannot prove the `cfg(windows)` acquisition and WAM paths compile or behave correctly.
 
-- [ ] **Step 2: Add a dedicated pinned-action Windows test job**
+- [x] **Step 2: Add a dedicated pinned-action Windows test job**
 
 Add `windows-esp` on `windows-latest`, with the same pinned checkout/toolchain/cache conventions as the existing workflow. It runs from the repository root and executes:
 
@@ -2007,7 +2009,7 @@ Expected: YAML formatting passes, all actions remain commit-SHA pinned, and the 
 
 **Files:** No edits unless a failing gate exposes a defect; fix defects in a new bounded phase with tests.
 
-- [ ] **Step 1: Pure parser gates**
+- [x] **Step 1: Pure parser gates**
 
 ```bash
 cargo fmt --all -- --check
@@ -2026,7 +2028,7 @@ cargo check -p cmtrace-open --no-default-features --features esp-diagnostics
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 ```
 
-- [ ] **Step 3: Frontend gates**
+- [x] **Step 3: Frontend gates**
 
 ```bash
 npm test
@@ -2093,60 +2095,60 @@ Commit any final verified fixes with scoped messages. Do not merge, push, or ope
 
 ## Full PowerShell parity release gate
 
-- [ ] All five scenarios classify correctly: unknown, Autopilot v1, existing-device JSON, ESP-only, and Device Preparation v2.
-- [ ] Profile name, tenant domain/ID, correlation ID, EntDMID, UPN, enrollment GUID/provider, and raw IDs are preserved and sensitivity-marked.
-- [ ] Raw OOBE mask and all ten decoded flags are present.
-- [ ] Profile download, Entra/hybrid join, ODJ applied, and skip-connectivity evidence are present.
-- [ ] Device/user ESP enabled, timeout, blocking, reset, retry, and continue settings are present per enrollment.
-- [ ] V2 agent/page timeouts, skip-on-failure, diagnostics permission, scripts, and all eight workload states are present.
-- [ ] Every device/user session is retained; latest is chronological; all sessions remain selectable.
-- [ ] MSI, Office, UWP, Win32, policy, SCEP certificate, platform script, and v2 workload evidence is present.
-- [ ] All Office, classic ESP, policy, v2, and unknown status values retain raw plus normalized state.
-- [ ] Exit codes and enforcement error codes appear in item details and timeline.
-- [ ] NodeCache gaps do not truncate later numeric keys.
-- [ ] Event IDs 72, 100, 101, 107, 109, 110, 111, 304, 306, 1905, 1906, 1920, 1922, and 1924 are asserted.
-- [ ] Profile-download, ODJ, registration, MSI, script, workload, app/Office DO, and coverage events enter the timeline.
-- [ ] Repeated retries/events are never collapsed.
-- [ ] DO raw counters and derived shares are labeled accurately.
-- [ ] OS/build, manufacturer, model, serial, and TPM are present without raw hardware-hash exposure.
-- [ ] Bundle parsing never reads equivalent facts from the analyst machine.
-- [ ] Missing, permission-denied, malformed, unsupported, and Graph-partial sources remain distinct and non-fatal.
-- [ ] An ESP-only sparse bundle with zero IME text logs produces a useful result.
-- [ ] Local and captured-equivalent fixtures produce equivalent normalized conclusions.
+- [x] All five scenarios classify correctly: unknown, Autopilot v1, existing-device JSON, ESP-only, and Device Preparation v2.
+- [x] Profile name, tenant domain/ID, correlation ID, EntDMID, UPN, enrollment GUID/provider, and raw IDs are preserved and sensitivity-marked.
+- [x] Raw OOBE mask and all ten decoded flags are present.
+- [x] Profile download, Entra/hybrid join, ODJ applied, and skip-connectivity evidence are present.
+- [x] Device/user ESP enabled, timeout, blocking, reset, retry, and continue settings are present per enrollment.
+- [x] V2 agent/page timeouts, skip-on-failure, diagnostics permission, scripts, and all eight workload states are present.
+- [x] Every device/user session is retained; latest is chronological; all sessions remain selectable.
+- [x] MSI, Office, UWP, Win32, policy, SCEP certificate, platform script, and v2 workload evidence is present.
+- [x] All Office, classic ESP, policy, v2, and unknown status values retain raw plus normalized state.
+- [x] Exit codes and enforcement error codes appear in item details and timeline.
+- [x] NodeCache gaps do not truncate later numeric keys.
+- [x] Event IDs 72, 100, 101, 107, 109, 110, 111, 304, 306, 1905, 1906, 1920, 1922, and 1924 are asserted.
+- [x] Profile-download, ODJ, registration, MSI, script, workload, app/Office DO, and coverage events enter the timeline.
+- [x] Repeated retries/events are never collapsed.
+- [x] DO raw counters and derived shares are labeled accurately.
+- [x] OS/build, manufacturer, model, serial, and TPM are present without raw hardware-hash exposure.
+- [x] Bundle parsing never reads equivalent facts from the analyst machine.
+- [x] Missing, permission-denied, malformed, unsupported, and Graph-partial sources remain distinct and non-fatal.
+- [x] An ESP-only sparse bundle with zero IME text logs produces a useful result.
+- [x] Local and captured-equivalent fixtures produce equivalent normalized conclusions.
 
 ## Product and UX release gate
 
-- [ ] The workspace uses actual CMTrace Open chrome and has no left sidebar.
-- [ ] The approved single-page cockpit shows header, admin state, MSIEXEC, findings, progress, activity, workloads, and evidence sections.
-- [ ] Running non-elevated is prominent and explains lost coverage; partial diagnostics still work.
-- [ ] **Open live logs** is a prominent primary chrome action with live indicator and evidence count.
-- [ ] Live evidence is collapsed by default, docked/resizable, and expandable to the full workspace.
-- [ ] Collection continues while logs are hidden and while another workspace is active.
-- [ ] The MSIEXEC card covers zero/one/multiple processes and exposes correlation confidence/evidence.
-- [ ] Bounded known/temp discovery finds IME and deployment logs without a full-drive scan.
-- [ ] No deep-scan command, request field, menu, button, or hidden debug route exists.
-- [ ] Classic ESP and Device Preparation have distinct phase/rule presentation.
-- [ ] Raw IDs render with Graph off and remain visible beside Graph names when on.
-- [ ] Graph partial/offline/cancelled errors never erase local evidence.
-- [ ] A session started while Graph is connecting shows `GraphNotConnected`, does not queue or invoke WAM, and enriches only after explicit refresh.
-- [ ] Disabling Graph cancels in-flight ESP enrichment and clears its overlay without signing out or altering local evidence.
-- [ ] Findings are actionable and provenance-backed but never offer mutating remediation.
-- [ ] Every status uses text/icon semantics in addition to color.
+- [x] The workspace uses actual CMTrace Open chrome and has no left sidebar.
+- [x] The approved single-page cockpit shows header, admin state, MSIEXEC, findings, progress, activity, workloads, and evidence sections.
+- [x] Running non-elevated is prominent and explains lost coverage; partial diagnostics still work.
+- [x] **Open live logs** is a prominent primary chrome action with live indicator and evidence count.
+- [x] Live evidence is collapsed by default, docked/resizable, and expandable to the full workspace.
+- [x] Collection continues while logs are hidden and while another workspace is active.
+- [x] The MSIEXEC card covers zero/one/multiple processes and exposes correlation confidence/evidence.
+- [x] Bounded known/temp discovery finds IME and deployment logs without a full-drive scan.
+- [x] No deep-scan command, request field, menu, button, or hidden debug route exists.
+- [x] Classic ESP and Device Preparation have distinct phase/rule presentation.
+- [x] Raw IDs render with Graph off and remain visible beside Graph names when on.
+- [x] Graph partial/offline/cancelled errors never erase local evidence.
+- [x] A session started while Graph is connecting shows `GraphNotConnected`, does not queue or invoke WAM, and enriches only after explicit refresh.
+- [x] Disabling Graph cancels in-flight ESP enrichment and clears its overlay without signing out or altering local evidence.
+- [x] Findings are actionable and provenance-backed but never offer mutating remediation.
+- [x] Every status uses text/icon semantics in addition to color.
 - [ ] Keyboard, focus, accessible names, virtualized row navigation, resize separator, and reduced-motion behavior pass.
 - [ ] 1200×800 and 1440×900 actual-chrome captures are legible without clipped primary actions.
 
 ## Security and privacy release gate
 
-- [ ] All diagnostic registry access is read-only and scoped.
-- [ ] All Graph ESP requests are read-only and use only the five declared delegated read scopes.
-- [ ] The existing WAM flow is reused; no second login, app secret, or bearer-token input exists.
+- [x] All diagnostic registry access is read-only and scoped.
+- [x] All Graph ESP requests are read-only and use only the five declared delegated read scopes.
+- [x] The existing WAM flow is reused; no second login, app secret, or bearer-token input exists.
 - [ ] WAM v2 requests exactly the five fully qualified delegated scopes with no resource property; short `scp` capability evidence is recorded on Windows.
-- [ ] Tokens remain memory-only and redacted from `Debug`, IPC, logs, screenshots, copy, and export.
-- [ ] Graph host, pagination, item, response-size, timeout, retry, and cancellation limits are enforced.
-- [ ] CAB/ZIP entry count, size, path, type, and extraction-root limits are enforced.
-- [ ] UPN, SID, tenant, EntDMID, serial, NodeCache, and command-line sensitive values are masked by default.
-- [ ] Raw hardware hash is absent from normal IPC, UI, logs, screenshots, copy, and export.
-- [ ] Full Graph ESP commands are unavailable through the debug localhost bridge.
+- [x] Tokens remain memory-only and redacted from `Debug`, IPC, logs, screenshots, copy, and export.
+- [x] Graph host, pagination, item, response-size, timeout, retry, and cancellation limits are enforced.
+- [x] CAB/ZIP entry count, size, path, type, and extraction-root limits are enforced.
+- [x] UPN, SID, tenant, EntDMID, serial, NodeCache, and command-line sensitive values are masked by default.
+- [x] Raw hardware hash is absent from normal IPC, UI, logs, screenshots, copy, and export.
+- [x] Full Graph ESP commands are unavailable through the debug localhost bridge.
 - [ ] Read-only Windows acceptance and cleanup leave no watcher, process sampler, Graph operation, or temp extraction behind.
 
 ## Self-review checklist for this plan
