@@ -33,8 +33,22 @@ pub trait EventLogProvider {
     fn read_channel(
         &self,
         channel: &str,
+        required_event_ids: &[u32],
         record_limit: usize,
     ) -> Result<Vec<ParsedEspEventRecord>, EventSourceError>;
+}
+
+pub fn required_event_id_xpath() -> String {
+    event_id_xpath(REQUIRED_EVENT_IDS)
+}
+
+fn event_id_xpath(event_ids: &[u32]) -> String {
+    let event_ids = event_ids
+        .iter()
+        .map(|event_id| format!("EventID={event_id}"))
+        .collect::<Vec<_>>()
+        .join(" or ");
+    format!("*[System[({event_ids})]]")
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -77,8 +91,25 @@ pub fn collect_event_evidence(
     let mut evidence = EventEvidence::default();
 
     for (channel_index, channel) in ESP_EVENT_CHANNELS.iter().enumerate() {
-        match provider.read_channel(channel, MAX_ESP_EVENT_RECORDS_PER_CHANNEL) {
+        match provider.read_channel(
+            channel,
+            REQUIRED_EVENT_IDS,
+            MAX_ESP_EVENT_RECORDS_PER_CHANNEL,
+        ) {
             Ok(records) => {
+                let mut records = records
+                    .into_iter()
+                    .filter(|record| REQUIRED_EVENT_IDS.binary_search(&record.event_id).is_ok())
+                    .take(MAX_ESP_EVENT_RECORDS_PER_CHANNEL)
+                    .collect::<Vec<_>>();
+                records.sort_by(|left, right| {
+                    left.record_id
+                        .unwrap_or(u64::MAX)
+                        .cmp(&right.record_id.unwrap_or(u64::MAX))
+                        .then_with(|| left.event_id.cmp(&right.event_id))
+                        .then_with(|| left.source_timestamp.cmp(&right.source_timestamp))
+                        .then_with(|| left.source_file.cmp(&right.source_file))
+                });
                 let record_count = records.len();
                 evidence.channels.push(EventChannelEvidence {
                     channel: (*channel).to_string(),
@@ -86,14 +117,7 @@ pub fn collect_event_evidence(
                     record_count,
                     detail: None,
                 });
-                for (record_index, record) in records
-                    .into_iter()
-                    .take(MAX_ESP_EVENT_RECORDS_PER_CHANNEL)
-                    .enumerate()
-                {
-                    if REQUIRED_EVENT_IDS.binary_search(&record.event_id).is_err() {
-                        continue;
-                    }
+                for (record_index, record) in records.into_iter().enumerate() {
                     evidence.observations.push(normalize_record(
                         record,
                         channel_index,
@@ -257,11 +281,18 @@ impl EventLogProvider for CapturedEventLogProvider {
     fn read_channel(
         &self,
         channel: &str,
+        required_event_ids: &[u32],
         _record_limit: usize,
     ) -> Result<Vec<ParsedEspEventRecord>, EventSourceError> {
         self.records_by_channel
             .get(channel)
             .cloned()
+            .map(|records| {
+                records
+                    .into_iter()
+                    .filter(|record| required_event_ids.contains(&record.event_id))
+                    .collect()
+            })
             .ok_or(EventSourceError::Missing)
     }
 }
@@ -275,10 +306,15 @@ impl EventLogProvider for WindowsEventLogProvider {
     fn read_channel(
         &self,
         channel: &str,
+        required_event_ids: &[u32],
         record_limit: usize,
     ) -> Result<Vec<ParsedEspEventRecord>, EventSourceError> {
-        let query = crate::intune::eventlog_win32::query_live_channel(channel, record_limit)
-            .map_err(|error| classify_live_error(&error.to_string()))?;
+        let query = crate::intune::eventlog_win32::query_live_channel_with_xpath(
+            channel,
+            &event_id_xpath(required_event_ids),
+            record_limit,
+        )
+        .map_err(|error| classify_live_error(&error.to_string()))?;
         Ok(query
             .records
             .into_iter()

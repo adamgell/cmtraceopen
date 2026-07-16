@@ -2,8 +2,8 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 
 use app_lib::esp::event_logs::{
-    collect_event_evidence, EventLogProvider, EventSourceError, ESP_EVENT_CHANNELS,
-    REQUIRED_EVENT_IDS,
+    collect_event_evidence, required_event_id_xpath, EventLogProvider, EventSourceError,
+    ESP_EVENT_CHANNELS, MAX_ESP_EVENT_RECORDS_PER_CHANNEL, REQUIRED_EVENT_IDS,
 };
 use app_lib::esp::registry::{
     classify_registry_scope, collect_registry_evidence, RegistryProvider, RegistryReadError,
@@ -172,6 +172,65 @@ fn registry_enforces_depth_and_value_size_caps_and_retains_provenance() {
 }
 
 #[test]
+fn registry_excludes_hardware_hash_keys_and_values_before_evidence_is_created() {
+    let target = &ESP_REGISTRY_TARGETS[0];
+    let provider = FakeRegistryProvider::default().with_tree(
+        target.key,
+        vec![
+            snapshot_key(
+                "Safe",
+                vec![
+                    RegistryValueSnapshot::text("TenantDomain", "contoso.com"),
+                    RegistryValueSnapshot::text("HARDWARE_HASH", "value-secret-sentinel"),
+                    RegistryValueSnapshot::text(
+                        "device.hardware-data",
+                        "second-value-secret-sentinel",
+                    ),
+                ],
+            ),
+            snapshot_key(
+                "Device-Hardware_Data\\Child",
+                vec![RegistryValueSnapshot::text(
+                    "SafeLookingName",
+                    "key-secret-sentinel",
+                )],
+            ),
+            snapshot_key(
+                "hardware/hash",
+                vec![RegistryValueSnapshot::text(
+                    "AnotherSafeName",
+                    "second-key-secret-sentinel",
+                )],
+            ),
+        ],
+    );
+
+    let evidence = collect_registry_evidence(&provider, &[], "2026-07-15T12:00:00Z");
+    let serialized = serde_json::to_string(&evidence).expect("serialize registry evidence");
+
+    assert_eq!(evidence.observations.len(), 1);
+    assert_eq!(
+        evidence.observations[0].observation.value_name,
+        "TenantDomain"
+    );
+    for forbidden in [
+        "value-secret-sentinel",
+        "second-value-secret-sentinel",
+        "key-secret-sentinel",
+        "second-key-secret-sentinel",
+        "HARDWARE_HASH",
+        "device.hardware-data",
+        "Device-Hardware_Data",
+        "hardware/hash",
+    ] {
+        assert!(
+            !serialized.contains(forbidden),
+            "excluded hardware identity material leaked through {forbidden}"
+        );
+    }
+}
+
+#[test]
 fn registry_orders_numeric_node_cache_entries_without_stopping_at_gaps() {
     let target = ESP_REGISTRY_TARGETS
         .iter()
@@ -308,6 +367,7 @@ fn registry_queries_uninstall_names_only_for_observed_product_codes() {
 #[derive(Default)]
 struct FakeEventLogProvider {
     channels: HashMap<String, Result<Vec<ParsedEspEventRecord>, EventSourceError>>,
+    requests: RefCell<Vec<(String, Vec<u32>, usize)>>,
 }
 
 impl FakeEventLogProvider {
@@ -326,8 +386,14 @@ impl EventLogProvider for FakeEventLogProvider {
     fn read_channel(
         &self,
         channel: &str,
-        _record_limit: usize,
+        required_event_ids: &[u32],
+        record_limit: usize,
     ) -> Result<Vec<ParsedEspEventRecord>, EventSourceError> {
+        self.requests.borrow_mut().push((
+            channel.to_string(),
+            required_event_ids.to_vec(),
+            record_limit,
+        ));
         self.channels
             .get(channel)
             .cloned()
@@ -365,6 +431,79 @@ fn event_required_ids_are_complete_and_stable() {
     assert_eq!(
         REQUIRED_EVENT_IDS,
         &[72, 100, 101, 107, 109, 110, 111, 304, 306, 1905, 1906, 1920, 1922, 1924]
+    );
+}
+
+#[test]
+fn event_provider_receives_exact_ids_and_xpath_before_the_record_limit() {
+    let provider = FakeEventLogProvider::default()
+        .with_records(ESP_EVENT_CHANNELS[0], Vec::new())
+        .with_records(ESP_EVENT_CHANNELS[1], Vec::new());
+
+    collect_event_evidence(&provider, "2026-07-15T13:00:00Z");
+
+    assert_eq!(
+        provider.requests.borrow().as_slice(),
+        &[
+            (
+                ESP_EVENT_CHANNELS[0].to_string(),
+                REQUIRED_EVENT_IDS.to_vec(),
+                MAX_ESP_EVENT_RECORDS_PER_CHANNEL,
+            ),
+            (
+                ESP_EVENT_CHANNELS[1].to_string(),
+                REQUIRED_EVENT_IDS.to_vec(),
+                MAX_ESP_EVENT_RECORDS_PER_CHANNEL,
+            ),
+        ]
+    );
+    assert_eq!(
+        required_event_id_xpath(),
+        "*[System[(EventID=72 or EventID=100 or EventID=101 or EventID=107 or EventID=109 or EventID=110 or EventID=111 or EventID=304 or EventID=306 or EventID=1905 or EventID=1906 or EventID=1920 or EventID=1922 or EventID=1924)]]"
+    );
+}
+
+#[test]
+fn event_filters_required_ids_before_applying_the_channel_record_cap() {
+    let channel = ESP_EVENT_CHANNELS[0];
+    let mut records = (0..MAX_ESP_EVENT_RECORDS_PER_CHANNEL)
+        .map(|index| parsed_event(channel, 9_999, index as u64 + 1, Vec::new()))
+        .collect::<Vec<_>>();
+    records.push(parsed_event(channel, 1_924, 9_000, Vec::new()));
+    let provider = FakeEventLogProvider::default()
+        .with_records(channel, records)
+        .with_records(ESP_EVENT_CHANNELS[1], Vec::new());
+
+    let evidence = collect_event_evidence(&provider, "2026-07-15T13:00:00Z");
+
+    assert_eq!(evidence.observations.len(), 1);
+    assert_eq!(evidence.observations[0].observation.event_id, 1_924);
+    assert_eq!(evidence.observations[0].observation.record_id, Some(9_000));
+}
+
+#[test]
+fn event_output_is_deterministic_when_provider_order_changes() {
+    let channel = ESP_EVENT_CHANNELS[0];
+    let provider = FakeEventLogProvider::default()
+        .with_records(
+            channel,
+            vec![
+                parsed_event(channel, 110, 30, Vec::new()),
+                parsed_event(channel, 109, 10, Vec::new()),
+                parsed_event(channel, 111, 20, Vec::new()),
+            ],
+        )
+        .with_records(ESP_EVENT_CHANNELS[1], Vec::new());
+
+    let evidence = collect_event_evidence(&provider, "2026-07-15T13:00:00Z");
+
+    assert_eq!(
+        evidence
+            .observations
+            .iter()
+            .map(|event| event.observation.record_id)
+            .collect::<Vec<_>>(),
+        vec![Some(10), Some(20), Some(30)]
     );
 }
 

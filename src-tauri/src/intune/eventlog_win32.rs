@@ -7,9 +7,9 @@ mod windows_impl {
     use regex::Regex;
     use windows::core::{Error, HSTRING, PCWSTR};
     use windows::Win32::System::EventLog::{
-        EVT_HANDLE, EvtClose, EvtFormatMessage, EvtFormatMessageEvent, EvtNext,
-        EvtOpenPublisherMetadata, EvtQuery, EvtQueryChannelPath, EvtQueryReverseDirection,
-        EvtRender, EvtRenderEventXml,
+        EvtClose, EvtFormatMessage, EvtFormatMessageEvent, EvtNext, EvtOpenPublisherMetadata,
+        EvtQuery, EvtQueryChannelPath, EvtQueryReverseDirection, EvtRender, EvtRenderEventXml,
+        EVT_HANDLE,
     };
 
     fn provider_re() -> &'static Regex {
@@ -61,8 +61,16 @@ mod windows_impl {
         channel: &str,
         entry_limit: usize,
     ) -> Result<LiveChannelQueryResult, crate::error::AppError> {
+        query_live_channel_with_xpath(channel, "*", entry_limit)
+    }
+
+    pub fn query_live_channel_with_xpath(
+        channel: &str,
+        xpath: &str,
+        entry_limit: usize,
+    ) -> Result<LiveChannelQueryResult, crate::error::AppError> {
         let channel_string = HSTRING::from(channel);
-        let query_string = HSTRING::from("*");
+        let query_string = HSTRING::from(xpath);
         let source_file = format!("live-event-log/{}.evtx", sanitize_channel_name(channel));
         let query = unsafe {
             EvtQuery(
@@ -106,13 +114,9 @@ mod windows_impl {
                 let xml = render_event_xml(event_handle.raw()).map_err(format_windows_error)?;
                 let provider_name = extract_provider_name(&xml);
                 let rendered_message = provider_name.as_deref().and_then(|provider| {
-                    format_event_message(
-                        event_handle.raw(),
-                        provider,
-                        &mut publisher_metadata,
-                    )
-                    .ok()
-                    .flatten()
+                    format_event_message(event_handle.raw(), provider, &mut publisher_metadata)
+                        .ok()
+                        .flatten()
                 });
 
                 records.push(LiveEventRecord {
@@ -150,13 +154,13 @@ mod windows_impl {
                 )
             } {
                 Ok(()) => {
-                    let utf16_len = (buffer_used as usize / std::mem::size_of::<u16>())
-                        .saturating_sub(1);
+                    let utf16_len =
+                        (buffer_used as usize / std::mem::size_of::<u16>()).saturating_sub(1);
                     return Ok(String::from_utf16_lossy(&buffer[..utf16_len]));
                 }
                 Err(error) if is_insufficient_buffer(&error) => {
-                    let next_len = (buffer_used as usize / std::mem::size_of::<u16>())
-                        .max(buffer.len() * 2);
+                    let next_len =
+                        (buffer_used as usize / std::mem::size_of::<u16>()).max(buffer.len() * 2);
                     buffer.resize(next_len, 0);
                 }
                 Err(error) => return Err(error),
@@ -171,11 +175,10 @@ mod windows_impl {
     ) -> Result<Option<String>, Error> {
         if !cache.contains_key(provider_name) {
             let provider = HSTRING::from(provider_name);
-            let metadata = unsafe {
-                EvtOpenPublisherMetadata(None, &provider, PCWSTR::null(), 0, 0)
-            }
-            .ok()
-            .map(OwnedEvtHandle::new);
+            let metadata =
+                unsafe { EvtOpenPublisherMetadata(None, &provider, PCWSTR::null(), 0, 0) }
+                    .ok()
+                    .map(OwnedEvtHandle::new);
             cache.insert(provider_name.to_string(), metadata);
         }
 
@@ -235,7 +238,10 @@ mod windows_impl {
     fn format_windows_error(error: Error) -> crate::error::AppError {
         let message = error.message();
         if message.trim().is_empty() {
-            crate::error::AppError::Internal(format!("Windows Event Log API error 0x{:08x}", error.code().0 as u32))
+            crate::error::AppError::Internal(format!(
+                "Windows Event Log API error 0x{:08x}",
+                error.code().0 as u32
+            ))
         } else {
             crate::error::AppError::Internal(message.trim().to_string())
         }
@@ -272,7 +278,9 @@ mod windows_impl {
 }
 
 #[cfg(target_os = "windows")]
-pub use windows_impl::{query_live_channel, LiveChannelQueryResult, LiveEventRecord};
+pub use windows_impl::{
+    query_live_channel, query_live_channel_with_xpath, LiveChannelQueryResult, LiveEventRecord,
+};
 
 #[cfg(not(target_os = "windows"))]
 #[derive(Debug, Clone)]
@@ -295,5 +303,18 @@ pub fn query_live_channel(
     _channel: &str,
     _entry_limit: usize,
 ) -> Result<LiveChannelQueryResult, crate::error::AppError> {
-    Err(crate::error::AppError::PlatformUnsupported("Live Windows Event Log queries are only supported on Windows".to_string()))
+    Err(crate::error::AppError::PlatformUnsupported(
+        "Live Windows Event Log queries are only supported on Windows".to_string(),
+    ))
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn query_live_channel_with_xpath(
+    _channel: &str,
+    _xpath: &str,
+    _entry_limit: usize,
+) -> Result<LiveChannelQueryResult, crate::error::AppError> {
+    Err(crate::error::AppError::PlatformUnsupported(
+        "Live Windows Event Log queries are only supported on Windows".to_string(),
+    ))
 }

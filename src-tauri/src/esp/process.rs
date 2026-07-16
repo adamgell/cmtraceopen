@@ -173,21 +173,23 @@ pub fn parent_chain(
 }
 
 pub fn sanitize_command_line(command_line: &str) -> String {
-    let secret_option = Regex::new(
-        r#"(?i)(--(?:token|password|secret|client-secret|authorization)|/(?:token|password|secret))(\s+|=|:)(?:"[^"]*"|'[^']*'|\S+)"#,
+    let bearer = Regex::new(r#"(?i)(bearer\s+)(?:"[^"]*"|'[^']*'|[^\s&"]+)"#)
+        .expect("constant bearer regex");
+    let named_secret = Regex::new(
+        r#"(?i)(^|\s)((?:--|/)?(?:access[-_]?token|client[-_]?secret|token|password|secret|authorization))(\s*(?:=|:)\s*|\s+)(?:"[^"]*"|'[^']*'|[^\s&"]+)"#,
     )
-    .expect("constant secret-option regex");
+    .expect("constant named-secret regex");
     let query_secret = Regex::new(
-        r#"(?i)([?&](?:sig|token|password|secret|client_secret|authorization)=)[^&\s"]+"#,
+        r#"(?i)([?&](?:sig|access[-_]?token|client[-_]?secret|token|password|secret|authorization)=)[^&\s"]+"#,
     )
     .expect("constant query-secret regex");
-    let bearer = Regex::new(r"(?i)(bearer\s+)\S+").expect("constant bearer regex");
 
-    let command_line = secret_option.replace_all(command_line, "$1$2[REDACTED]");
+    // Bearer credentials are redacted first so an authorization option cannot consume the
+    // literal scheme while leaving the following credential behind.
+    let command_line = bearer.replace_all(command_line, "$1[REDACTED]");
+    let command_line = named_secret.replace_all(&command_line, "$1$2$3[REDACTED]");
     let command_line = query_secret.replace_all(&command_line, "$1[REDACTED]");
-    bearer
-        .replace_all(&command_line, "$1[REDACTED]")
-        .into_owned()
+    command_line.into_owned()
 }
 
 fn process_allowlist(local_installer_names: &[String]) -> BTreeSet<String> {
@@ -616,6 +618,36 @@ mod tests {
             observation.referenced_log_path.as_deref(),
             Some(r"C:\Windows\Temp\contoso.log")
         );
+    }
+
+    #[test]
+    fn command_line_sanitizer_redacts_named_secret_and_bearer_variants() {
+        let cases = [
+            "--access-token s3cr3t",
+            "--access_token=s3cr3t",
+            "--client_secret:s3cr3t",
+            "TOKEN=s3cr3t",
+            "Access_Token = s3cr3t",
+            "/CLIENT-SECRET \"s3cr3t\"",
+            "--authorization:Bearer s3cr3t",
+            "Authorization=Bearer s3cr3t",
+            "https://cache.invalid/content?access_token=s3cr3t&safe=true",
+        ];
+
+        for secret_argument in cases {
+            let raw = format!(
+                "msiexec.exe /i {{12345678-1234-1234-1234-1234567890AB}} /L*V C:\\Windows\\Temp\\contoso.log {secret_argument}"
+            );
+            let sanitized = sanitize_command_line(&raw);
+
+            assert!(
+                !sanitized.contains("s3cr3t"),
+                "secret leaked for variant {secret_argument}: {sanitized}"
+            );
+            assert!(sanitized.contains("/i {12345678-1234-1234-1234-1234567890AB}"));
+            assert!(sanitized.contains("/L*V C:\\Windows\\Temp\\contoso.log"));
+            assert!(sanitized.contains("[REDACTED]"));
+        }
     }
 
     #[test]

@@ -224,7 +224,9 @@ fn append_tree_observations(
     let node_cache_target = target.key.ends_with(r"NodeCache\CSP");
 
     for (entry_index, entry) in entries.into_iter().enumerate() {
-        if registry_depth(&entry.relative_key) > MAX_REGISTRY_DEPTH {
+        if registry_depth(&entry.relative_key) > MAX_REGISTRY_DEPTH
+            || is_hardware_identity_registry_name(&entry.relative_key)
+        {
             continue;
         }
 
@@ -237,7 +239,9 @@ fn append_tree_observations(
         let mut entry_evidence = Vec::new();
 
         for (value_index, value) in entry.values.iter().enumerate() {
-            if value.size_bytes > MAX_REGISTRY_VALUE_BYTES {
+            if value.size_bytes > MAX_REGISTRY_VALUE_BYTES
+                || is_hardware_identity_registry_name(&value.name)
+            {
                 continue;
             }
 
@@ -355,6 +359,15 @@ fn registry_depth(relative_key: &str) -> usize {
         .count()
 }
 
+fn is_hardware_identity_registry_name(value: &str) -> bool {
+    let normalized = value
+        .chars()
+        .filter(|character| character.is_ascii_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect::<String>();
+    normalized.contains("hardwarehash") || normalized.contains("devicehardwaredata")
+}
+
 fn registry_sensitivity(key: &str, value_name: &str) -> EspSensitivity {
     let combined = format!("{key}\\{value_name}").to_ascii_lowercase();
     if combined.contains("nodecache") {
@@ -466,14 +479,24 @@ fn read_key_bounded(
     access: u32,
     entries: &mut Vec<RegistrySnapshotKey>,
 ) {
+    if is_hardware_identity_registry_name(&relative_key) {
+        return;
+    }
+
     let values = key
         .enum_values()
         .filter_map(Result::ok)
+        .filter(|(name, _)| !is_hardware_identity_registry_name(name))
         .filter(|(_, value)| value.bytes.len() <= MAX_REGISTRY_VALUE_BYTES)
-        .map(|(name, value)| RegistryValueSnapshot {
-            name,
-            size_bytes: value.bytes.len(),
-            value: decode_windows_registry_value(&value),
+        .filter_map(|(name, value)| {
+            let size_bytes = value.bytes.len();
+            decode_registry_value(value.vtype.clone() as u32, &value.bytes).map(|value| {
+                RegistryValueSnapshot {
+                    name,
+                    size_bytes,
+                    value,
+                }
+            })
         })
         .collect::<Vec<_>>();
     entries.push(RegistrySnapshotKey {
@@ -488,6 +511,9 @@ fn read_key_bounded(
     let mut subkeys = key.enum_keys().filter_map(Result::ok).collect::<Vec<_>>();
     subkeys.sort_by_key(|name| name.to_ascii_lowercase());
     for subkey_name in subkeys {
+        if is_hardware_identity_registry_name(&subkey_name) {
+            continue;
+        }
         let Ok(subkey) = key.open_subkey_with_flags(&subkey_name, access) else {
             continue;
         };
@@ -500,48 +526,76 @@ fn read_key_bounded(
     }
 }
 
-#[cfg(target_os = "windows")]
-fn decode_windows_registry_value(value: &winreg::RegValue) -> EspObservationValue {
-    use winreg::enums::{REG_DWORD, REG_QWORD};
-
-    if value.vtype == REG_DWORD && value.bytes.len() >= 4 {
-        return EspObservationValue::Unsigned(u64::from(u32::from_le_bytes([
-            value.bytes[0],
-            value.bytes[1],
-            value.bytes[2],
-            value.bytes[3],
-        ])));
-    }
-    if value.vtype == REG_QWORD && value.bytes.len() >= 8 {
-        return EspObservationValue::Unsigned(u64::from_le_bytes([
-            value.bytes[0],
-            value.bytes[1],
-            value.bytes[2],
-            value.bytes[3],
-            value.bytes[4],
-            value.bytes[5],
-            value.bytes[6],
-            value.bytes[7],
-        ]));
+#[cfg(any(target_os = "windows", test))]
+fn decode_registry_value(value_type: u32, bytes: &[u8]) -> Option<EspObservationValue> {
+    if bytes.len() > MAX_REGISTRY_VALUE_BYTES {
+        return None;
     }
 
-    let utf16 = value
-        .bytes
-        .chunks_exact(2)
-        .map(|bytes| u16::from_le_bytes([bytes[0], bytes[1]]))
-        .take_while(|unit| *unit != 0)
-        .collect::<Vec<_>>();
-    if !utf16.is_empty() {
-        return EspObservationValue::Text(String::from_utf16_lossy(&utf16));
-    }
+    let decoded = match value_type {
+        // REG_SZ and REG_EXPAND_SZ
+        1 | 2 => decode_utf16_units(bytes).and_then(|units| {
+            let end = units
+                .iter()
+                .position(|unit| *unit == 0)
+                .unwrap_or(units.len());
+            String::from_utf16(&units[..end])
+                .ok()
+                .map(EspObservationValue::Text)
+        }),
+        // REG_DWORD
+        4 if bytes.len() == 4 => Some(EspObservationValue::Unsigned(u64::from(
+            u32::from_le_bytes(bytes.try_into().expect("length checked")),
+        ))),
+        // REG_DWORD_BIG_ENDIAN
+        5 if bytes.len() == 4 => Some(EspObservationValue::Unsigned(u64::from(
+            u32::from_be_bytes(bytes.try_into().expect("length checked")),
+        ))),
+        // REG_MULTI_SZ
+        7 => decode_utf16_units(bytes).and_then(|mut units| {
+            while units.last() == Some(&0) {
+                units.pop();
+            }
+            if units.is_empty() {
+                return Some(EspObservationValue::StringList(Vec::new()));
+            }
+            units
+                .split(|unit| *unit == 0)
+                .map(String::from_utf16)
+                .collect::<Result<Vec<_>, _>>()
+                .ok()
+                .map(EspObservationValue::StringList)
+        }),
+        // REG_QWORD
+        11 if bytes.len() == 8 => Some(EspObservationValue::Unsigned(u64::from_le_bytes(
+            bytes.try_into().expect("length checked"),
+        ))),
+        _ => None,
+    };
 
-    EspObservationValue::Text(
-        value
-            .bytes
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>(),
+    Some(decoded.unwrap_or_else(|| typed_hex_registry_value(value_type, bytes)))
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn decode_utf16_units(bytes: &[u8]) -> Option<Vec<u16>> {
+    if bytes.len() % 2 != 0 {
+        return None;
+    }
+    Some(
+        bytes
+            .chunks_exact(2)
+            .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+            .collect(),
     )
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn typed_hex_registry_value(value_type: u32, bytes: &[u8]) -> EspObservationValue {
+    let hex = bytes
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    EspObservationValue::Text(format!("registry-type-{value_type}:hex:{hex}"))
 }
 
 #[cfg(target_os = "windows")]
@@ -550,5 +604,103 @@ fn map_io_error(error: std::io::Error) -> RegistryReadError {
         std::io::ErrorKind::NotFound => RegistryReadError::Missing,
         std::io::ErrorKind::PermissionDenied => RegistryReadError::PermissionDenied,
         _ => RegistryReadError::Failed(error.to_string()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn utf16_bytes(units: &[u16]) -> Vec<u8> {
+        units.iter().flat_map(|unit| unit.to_le_bytes()).collect()
+    }
+
+    #[test]
+    fn registry_value_decoder_preserves_each_supported_type_without_guessing() {
+        assert_eq!(
+            decode_registry_value(1, &utf16_bytes(&[b'A' as u16, b'B' as u16, 0])),
+            Some(EspObservationValue::Text("AB".to_string()))
+        );
+        assert_eq!(
+            decode_registry_value(2, &utf16_bytes(&[b'%' as u16, b'X' as u16, b'%' as u16, 0])),
+            Some(EspObservationValue::Text("%X%".to_string()))
+        );
+        assert_eq!(
+            decode_registry_value(
+                7,
+                &utf16_bytes(&[
+                    b'o' as u16,
+                    b'n' as u16,
+                    b'e' as u16,
+                    0,
+                    b't' as u16,
+                    b'w' as u16,
+                    b'o' as u16,
+                    0,
+                    0,
+                ]),
+            ),
+            Some(EspObservationValue::StringList(vec![
+                "one".to_string(),
+                "two".to_string(),
+            ]))
+        );
+        assert_eq!(
+            decode_registry_value(4, &[0x78, 0x56, 0x34, 0x12]),
+            Some(EspObservationValue::Unsigned(0x1234_5678))
+        );
+        assert_eq!(
+            decode_registry_value(5, &[0x12, 0x34, 0x56, 0x78]),
+            Some(EspObservationValue::Unsigned(0x1234_5678))
+        );
+        assert_eq!(
+            decode_registry_value(11, &[0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01]),
+            Some(EspObservationValue::Unsigned(0x0102_0304_0506_0708))
+        );
+        assert_eq!(
+            decode_registry_value(3, &[b'A', 0, b'B', 0]),
+            Some(EspObservationValue::Text(
+                "registry-type-3:hex:41004200".to_string()
+            ))
+        );
+        assert_eq!(
+            decode_registry_value(42, &[0xde, 0xad, 0xbe, 0xef]),
+            Some(EspObservationValue::Text(
+                "registry-type-42:hex:deadbeef".to_string()
+            ))
+        );
+        assert_eq!(
+            decode_registry_value(0, &[]),
+            Some(EspObservationValue::Text(
+                "registry-type-0:hex:".to_string()
+            ))
+        );
+    }
+
+    #[test]
+    fn registry_value_decoder_is_lossless_for_malformed_values_and_enforces_cap() {
+        assert_eq!(
+            decode_registry_value(1, &[0x41]),
+            Some(EspObservationValue::Text(
+                "registry-type-1:hex:41".to_string()
+            ))
+        );
+        assert_eq!(
+            decode_registry_value(1, &[0x00, 0xd8, 0x00, 0x00]),
+            Some(EspObservationValue::Text(
+                "registry-type-1:hex:00d80000".to_string()
+            ))
+        );
+        assert_eq!(
+            decode_registry_value(4, &[0x01, 0x02, 0x03]),
+            Some(EspObservationValue::Text(
+                "registry-type-4:hex:010203".to_string()
+            ))
+        );
+        assert!(decode_registry_value(3, &vec![0xab; MAX_REGISTRY_VALUE_BYTES]).is_some());
+        assert_eq!(
+            decode_registry_value(3, &vec![0xab; MAX_REGISTRY_VALUE_BYTES + 1]),
+            None
+        );
     }
 }

@@ -475,6 +475,76 @@ fn observation_context(
     }
 }
 
+#[cfg(any(target_os = "windows", test))]
+fn run_bounded_system_query<F>(timeout: Duration, work: F) -> SystemQueryBatch
+where
+    F: FnOnce(
+            std::time::Instant,
+            std::sync::Arc<std::sync::Mutex<Vec<SystemRow>>>,
+        ) -> Result<SystemQueryBatch, SystemReadError>
+        + Send
+        + 'static,
+{
+    use std::sync::{mpsc, Arc, Mutex};
+    use std::time::Instant;
+
+    let deadline = Instant::now() + timeout;
+    let partial_rows = Arc::new(Mutex::new(Vec::new()));
+    let worker_rows = Arc::clone(&partial_rows);
+    let (sender, receiver) = mpsc::sync_channel(1);
+    let worker = std::thread::Builder::new()
+        .name("esp-wmi-query".to_string())
+        .spawn(move || {
+            let _ = sender.send(work(deadline, worker_rows));
+        });
+
+    if let Err(error) = worker {
+        return SystemQueryBatch {
+            rows: Vec::new(),
+            completion: Err(SystemReadError::Failed(format!(
+                "WMI worker could not start: {error}"
+            ))),
+        };
+    }
+
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    match receiver.recv_timeout(remaining) {
+        Ok(Ok(batch)) => batch,
+        Ok(Err(error)) => SystemQueryBatch {
+            rows: clone_partial_rows(&partial_rows),
+            completion: Err(error),
+        },
+        Err(mpsc::RecvTimeoutError::Timeout) => SystemQueryBatch {
+            rows: clone_partial_rows(&partial_rows),
+            completion: Err(SystemReadError::TimedOut),
+        },
+        Err(mpsc::RecvTimeoutError::Disconnected) => SystemQueryBatch {
+            rows: clone_partial_rows(&partial_rows),
+            completion: Err(SystemReadError::Failed(
+                "WMI worker stopped before returning a result".to_string(),
+            )),
+        },
+    }
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn clone_partial_rows(rows: &std::sync::Arc<std::sync::Mutex<Vec<SystemRow>>>) -> Vec<SystemRow> {
+    rows.lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone()
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn powershell_path_from_windows_directory(
+    windows_directory: &std::path::Path,
+) -> std::path::PathBuf {
+    windows_directory
+        .join("System32")
+        .join("WindowsPowerShell")
+        .join("v1.0")
+        .join("powershell.exe")
+}
+
 pub struct LiveSystemProvider;
 
 #[cfg(target_os = "windows")]
@@ -490,8 +560,12 @@ pub(crate) enum WmiRequest {
 
 #[cfg(target_os = "windows")]
 mod windows_provider {
+    use std::ffi::OsString;
     use std::io::ErrorKind;
+    use std::os::windows::ffi::OsStringExt;
+    use std::path::PathBuf;
     use std::process::{Command, Stdio};
+    use std::sync::{Arc, Mutex};
     use std::thread;
     use std::time::{Duration, Instant};
 
@@ -505,6 +579,7 @@ mod windows_provider {
         CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER,
         COINIT_MULTITHREADED,
     };
+    use windows::Win32::System::SystemInformation::GetSystemWindowsDirectoryW;
     use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
     use windows::Win32::System::Variant::{VariantClear, VariantToString, VARIANT};
     use windows::Win32::System::Wmi::{
@@ -514,8 +589,8 @@ mod windows_provider {
     };
 
     use super::{
-        LiveSystemProvider, SystemProvider, SystemQueryBatch, SystemReadError, SystemRow,
-        SystemSource, WmiRequest,
+        powershell_path_from_windows_directory, run_bounded_system_query, LiveSystemProvider,
+        SystemProvider, SystemQueryBatch, SystemReadError, SystemRow, SystemSource, WmiRequest,
     };
 
     const MAX_VARIANT_CHARS: usize = 4096;
@@ -618,49 +693,47 @@ mod windows_provider {
         timeout: Duration,
         max_rows: usize,
     ) -> SystemQueryBatch {
-        match query_wmi_inner(request, timeout, max_rows) {
-            Ok(batch) => batch,
-            Err(error) => SystemQueryBatch {
-                rows: Vec::new(),
-                completion: Err(error),
-            },
-        }
+        run_bounded_system_query(timeout, move |deadline, partial_rows| {
+            query_wmi_inner(request, deadline, max_rows, partial_rows)
+        })
     }
 
     fn query_wmi_inner(
         request: WmiRequest,
-        timeout: Duration,
+        deadline: Instant,
         max_rows: usize,
+        partial_rows: Arc<Mutex<Vec<SystemRow>>>,
     ) -> Result<SystemQueryBatch, SystemReadError> {
+        ensure_before_deadline(deadline)?;
         let _com = ComGuard::initialize()?;
+        ensure_before_deadline(deadline)?;
         let (namespace, query, properties) = wmi_spec(request);
         // SAFETY: WbemLocator is a registered in-process COM class and no outer object is used.
         let locator: IWbemLocator =
             unsafe { CoCreateInstance(&WbemLocator, None, CLSCTX_INPROC_SERVER) }
                 .map_err(|error| error_from_windows(error, "WMI locator creation failed"))?;
+        ensure_before_deadline(deadline)?;
         let namespace = BSTR::from(namespace);
         let empty = BSTR::new();
         // SAFETY: all BSTR inputs live through the synchronous ConnectServer call.
         let services =
             unsafe { locator.ConnectServer(&namespace, &empty, &empty, &empty, 0, &empty, None) }
                 .map_err(|error| error_from_windows(error, "WMI namespace connection failed"))?;
+        ensure_before_deadline(deadline)?;
         let language = BSTR::from("WQL");
         let query = BSTR::from(query.as_str());
         let flags = WBEM_FLAG_FORWARD_ONLY | WBEM_FLAG_RETURN_IMMEDIATELY;
         // SAFETY: query text is selected exclusively from wmi_spec's fixed allowlist.
         let enumerator = unsafe { services.ExecQuery(&language, &query, flags, None) }
             .map_err(|error| error_from_windows(error, "WMI query failed"))?;
+        ensure_before_deadline(deadline)?;
 
-        let deadline = Instant::now() + timeout;
         let mut rows = Vec::new();
         let cap = max_rows.min(512);
         while rows.len() < cap {
             let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
-                return Ok(SystemQueryBatch {
-                    rows,
-                    completion: Err(SystemReadError::TimedOut),
-                });
+                return Err(SystemReadError::TimedOut);
             }
             let timeout_ms = remaining.as_millis().min(i32::MAX as u128) as i32;
             let mut objects: [Option<IWbemClassObject>; 1] = [None];
@@ -668,10 +741,7 @@ mod windows_provider {
             // SAFETY: the output slice and returned count are valid for the synchronous call.
             let result = unsafe { enumerator.Next(timeout_ms, &mut objects, &mut returned) };
             if result.0 == WBEM_S_TIMEDOUT.0 {
-                return Ok(SystemQueryBatch {
-                    rows,
-                    completion: Err(SystemReadError::TimedOut),
-                });
+                return Err(SystemReadError::TimedOut);
             }
             if result.is_err() {
                 return Err(error_from_hresult(result, "WMI enumeration failed"));
@@ -680,7 +750,12 @@ mod windows_provider {
                 break;
             }
             if let Some(object) = objects[0].take() {
-                rows.push(read_wmi_row(&object, properties)?);
+                let row = read_wmi_row(&object, properties)?;
+                partial_rows
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .push(row.clone());
+                rows.push(row);
             }
         }
 
@@ -688,6 +763,14 @@ mod windows_provider {
             Ok(SystemQueryBatch::missing())
         } else {
             Ok(SystemQueryBatch::complete(rows))
+        }
+    }
+
+    fn ensure_before_deadline(deadline: Instant) -> Result<(), SystemReadError> {
+        if Instant::now() >= deadline {
+            Err(SystemReadError::TimedOut)
+        } else {
+            Ok(())
         }
     }
 
@@ -791,7 +874,24 @@ mod windows_provider {
     }
 
     fn query_delivery_optimization(timeout: Duration, max_rows: usize) -> SystemQueryBatch {
-        let mut child = match Command::new("powershell.exe")
+        let deadline = Instant::now() + timeout;
+        let powershell = match trusted_powershell_path() {
+            Ok(path) => path,
+            Err(error) => {
+                return SystemQueryBatch {
+                    rows: Vec::new(),
+                    completion: Err(error),
+                }
+            }
+        };
+        if Instant::now() >= deadline {
+            return SystemQueryBatch {
+                rows: Vec::new(),
+                completion: Err(SystemReadError::TimedOut),
+            };
+        }
+
+        let mut child = match Command::new(&powershell)
             .args([
                 "-NoLogo",
                 "-NoProfile",
@@ -808,7 +908,7 @@ mod windows_provider {
         {
             Ok(child) => child,
             Err(error) if error.kind() == ErrorKind::NotFound => {
-                return SystemQueryBatch::unsupported()
+                return SystemQueryBatch::missing()
             }
             Err(_) => {
                 return SystemQueryBatch {
@@ -820,7 +920,6 @@ mod windows_provider {
             }
         };
 
-        let deadline = Instant::now() + timeout;
         let status = loop {
             match child.try_wait() {
                 Ok(Some(status)) => break Some(status),
@@ -887,6 +986,44 @@ mod windows_provider {
                 completion: Err(error),
             },
         }
+    }
+
+    fn trusted_powershell_path() -> Result<PathBuf, SystemReadError> {
+        const MAX_WINDOWS_DIRECTORY_UNITS: usize = 32_768;
+
+        let mut buffer = vec![0_u16; 260];
+        loop {
+            // SAFETY: buffer is writable UTF-16 storage and the API receives its exact length.
+            let length = unsafe { GetSystemWindowsDirectoryW(Some(&mut buffer)) } as usize;
+            if length == 0 {
+                return Err(SystemReadError::Failed(
+                    "trusted Windows directory could not be resolved".to_string(),
+                ));
+            }
+            if length < buffer.len() {
+                buffer.truncate(length);
+                break;
+            }
+            let required = length.saturating_add(1);
+            if required > MAX_WINDOWS_DIRECTORY_UNITS {
+                return Err(SystemReadError::Failed(
+                    "trusted Windows directory exceeded the size limit".to_string(),
+                ));
+            }
+            buffer.resize(required, 0);
+        }
+
+        let windows_directory = PathBuf::from(OsString::from_wide(&buffer));
+        if !windows_directory.is_absolute() {
+            return Err(SystemReadError::Failed(
+                "trusted Windows directory was not absolute".to_string(),
+            ));
+        }
+        let powershell = powershell_path_from_windows_directory(&windows_directory);
+        if !powershell.is_file() {
+            return Err(SystemReadError::Missing);
+        }
+        Ok(powershell)
     }
 
     fn parse_delivery_json(
@@ -971,7 +1108,9 @@ impl SystemProvider for LiveSystemProvider {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
-    use std::time::Duration;
+    use std::path::Path;
+    use std::sync::mpsc;
+    use std::time::{Duration, Instant};
 
     use cmtraceopen_parser::esp::{EspSensitivity, EspSourceAccessState, EspSystemFact};
 
@@ -1165,6 +1304,43 @@ mod tests {
             tpm.detail.as_deref(),
             Some("query timed out after partial results")
         );
+    }
+
+    #[test]
+    fn bounded_worker_times_out_when_setup_blocks_before_producing_rows() {
+        let (release_sender, release_receiver) = mpsc::channel();
+        let started_at = Instant::now();
+
+        let batch = run_bounded_system_query(Duration::from_millis(25), move |_, _| {
+            let _ = release_receiver.recv();
+            Ok(SystemQueryBatch::missing())
+        });
+
+        let elapsed = started_at.elapsed();
+        assert!(
+            elapsed < Duration::from_millis(500),
+            "blocked setup escaped the outer timeout: {elapsed:?}"
+        );
+        assert!(batch.rows.is_empty());
+        assert_eq!(batch.completion, Err(SystemReadError::TimedOut));
+        let _ = release_sender.send(());
+    }
+
+    #[test]
+    fn trusted_powershell_path_is_absolute_and_never_uses_path_search() {
+        let windows_directory = Path::new("/trusted/windows");
+        let executable = powershell_path_from_windows_directory(windows_directory);
+
+        assert!(executable.is_absolute());
+        assert_eq!(
+            executable,
+            windows_directory
+                .join("System32")
+                .join("WindowsPowerShell")
+                .join("v1.0")
+                .join("powershell.exe")
+        );
+        assert!(!include_str!("system.rs").contains("Command::new(\"powershell.exe\")"));
     }
 
     #[test]
