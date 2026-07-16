@@ -103,6 +103,7 @@ tauri-plugin-window-state = "2"
 criterion = "0.5"
 tempfile = "3"
 plist = "1"
+tauri = { version = "2", features = ["test"] }
 
 [[test]]
 name = "sysmon_parser"

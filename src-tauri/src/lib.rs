@@ -49,6 +49,20 @@ fn get_initial_file_paths_from_args() -> Vec<String> {
         .collect()
 }
 
+// Keep the ESP Graph commands in one handler fragment so the production app
+// and the registration-level test exercise the same generated Tauri routes.
+macro_rules! app_invoke_handler {
+    ($($command:tt)*) => {
+        tauri::generate_handler![
+            $($command)*
+            #[cfg(feature = "esp-diagnostics")]
+            $crate::commands::graph_api::graph_fetch_esp_diagnostics,
+            #[cfg(feature = "esp-diagnostics")]
+            $crate::commands::graph_api::graph_cancel_esp_diagnostics,
+        ]
+    };
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let initial_file_paths = get_initial_file_paths_from_args();
@@ -130,7 +144,7 @@ pub fn run() {
 
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![
+        .invoke_handler(app_invoke_handler![
             commands::file_association::get_file_association_prompt_status,
             commands::file_association::associate_log_files_with_app,
             commands::file_association::set_file_association_prompt_suppressed,
@@ -224,10 +238,6 @@ pub fn run() {
             commands::graph_api::graph_resolve_guids,
             #[cfg(target_os = "windows")]
             commands::graph_api::graph_fetch_all_apps,
-            #[cfg(feature = "esp-diagnostics")]
-            commands::graph_api::graph_fetch_esp_diagnostics,
-            #[cfg(feature = "esp-diagnostics")]
-            commands::graph_api::graph_cancel_esp_diagnostics,
             #[cfg(feature = "secureboot")]
             commands::secureboot::analyze_secureboot,
             #[cfg(feature = "secureboot")]
@@ -263,4 +273,86 @@ pub fn run() {
 
     #[cfg(not(feature = "esp-diagnostics"))]
     app.run(|_, _| {});
+}
+
+#[cfg(all(test, feature = "esp-diagnostics", not(target_os = "windows")))]
+mod tests {
+    use cmtraceopen_parser::esp::EspIdentityEvidence;
+    use tauri::test::{get_ipc_response, mock_builder, mock_context, noop_assets, INVOKE_KEY};
+
+    use crate::graph_api::esp::EspGraphRequest;
+
+    fn invoke_request(command: &str, body: serde_json::Value) -> tauri::webview::InvokeRequest {
+        tauri::webview::InvokeRequest {
+            cmd: command.into(),
+            callback: tauri::ipc::CallbackFn(0),
+            error: tauri::ipc::CallbackFn(1),
+            url: "tauri://localhost".parse().expect("test origin"),
+            body: tauri::ipc::InvokeBody::Json(body),
+            headers: Default::default(),
+            invoke_key: INVOKE_KEY.to_string(),
+        }
+    }
+
+    fn graph_request() -> EspGraphRequest {
+        EspGraphRequest {
+            request_id: "550e8400-e29b-41d4-a716-446655440000".to_string(),
+            identity: EspIdentityEvidence {
+                device_name: Some("DEVICE-01".to_string()),
+                managed_device_id: None,
+                entra_device_id: None,
+                entdm_id: None,
+                tenant_id: None,
+                tenant_domain: None,
+                user_principal_name: None,
+                serial_number: None,
+                evidence: Vec::new(),
+            },
+            workload_ids: Vec::new(),
+            selected_managed_device_id: None,
+            evidence_window_start_utc: None,
+            evidence_window_end_utc: None,
+            enrollment_configuration_ids: Vec::new(),
+            app_ids: Vec::new(),
+            policy_references: Vec::new(),
+            script_references: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn esp_graph_tauri_commands_are_registered() {
+        let app = mock_builder()
+            .invoke_handler(app_invoke_handler![])
+            .build(mock_context(noop_assets()))
+            .expect("mock app");
+        let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .expect("mock webview");
+
+        let fetch_error = get_ipc_response(
+            &webview,
+            invoke_request(
+                "graph_fetch_esp_diagnostics",
+                serde_json::json!({ "request": graph_request() }),
+            ),
+        )
+        .expect_err("Graph ESP is unavailable off Windows");
+        let cancel_error = get_ipc_response(
+            &webview,
+            invoke_request(
+                "graph_cancel_esp_diagnostics",
+                serde_json::json!({ "requestId": "550e8400-e29b-41d4-a716-446655440000" }),
+            ),
+        )
+        .expect_err("Graph ESP is unavailable off Windows");
+
+        for error in [fetch_error, cancel_error] {
+            let rendered = error.to_string();
+            assert!(
+                rendered.contains("GraphEspDiagnostics"),
+                "registered command must return its typed platform error, got: {rendered}"
+            );
+            assert!(!rendered.to_ascii_lowercase().contains("not found"));
+        }
+    }
 }

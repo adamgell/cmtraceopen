@@ -744,7 +744,7 @@ fn fetch_managed_candidates<P: EspGraphProvider>(
     } else {
         get(provider, &primary, cancellation)
     }
-        .and_then(|value| parse_managed_devices(&value, MANAGED_DEVICES_SCOPE));
+    .and_then(|value| parse_managed_devices(&value, MANAGED_DEVICES_SCOPE));
     if let Some(selected) = selected {
         return primary_result.and_then(|candidates| {
             if candidates.len() == 1 && candidates[0].managed_device_id == selected {
