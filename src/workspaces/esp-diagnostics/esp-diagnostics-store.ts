@@ -7,7 +7,13 @@ import type {
 } from "./types";
 
 export type EspWorkspacePhase =
-  "idle" | "analyzing" | "starting" | "live" | "stopping" | "ready" | "error";
+  | "idle"
+  | "analyzing"
+  | "starting"
+  | "live"
+  | "stopping"
+  | "ready"
+  | "error";
 
 export type EspEvidenceViewMode = "collapsed" | "docked" | "full";
 export type EspGraphPhase =
@@ -20,7 +26,17 @@ export type EspGraphPhase =
   | "error"
   | "cancelled";
 export type EspGraphUnavailableReason =
-  "graphDisabled" | "graphNotConnected" | "unsupportedPlatform";
+  | "graphDisabled"
+  | "graphNotConnected"
+  | "unsupportedPlatform";
+
+const espGraphOwnershipLeaseBrand: unique symbol = Symbol(
+  "espGraphOwnershipLease",
+);
+
+export interface EspGraphOwnershipLease {
+  readonly [espGraphOwnershipLeaseBrand]: true;
+}
 
 export const ESP_EVIDENCE_DOCK_MIN_HEIGHT = 180;
 export const ESP_EVIDENCE_DOCK_MAX_HEIGHT = 720;
@@ -65,7 +81,9 @@ export interface EspDiagnosticsStore {
   sequence: number;
   snapshot: EspDiagnosticsSnapshot | null;
   error: string | null;
+  // The public ID is observational; exact run ownership is this opaque lease.
   graphRequestId: string | null;
+  graphRequestLease: EspGraphOwnershipLease | null;
   graphRequestFingerprint: string | null;
   graphPhase: EspGraphPhase;
   graphUnavailableReason: EspGraphUnavailableReason | null;
@@ -83,11 +101,22 @@ export interface EspDiagnosticsStore {
   applyAnalysis(requestId: string, snapshot: EspDiagnosticsSnapshot): void;
   applySessionUpdate(update: EspSessionUpdate): void;
   fail(requestId: string, error: string): void;
-  beginGraph(requestId: string, identityFingerprint?: string): void;
-  applyGraphOverlay(requestId: string, overlay: EspGraphOverlay): void;
-  failGraph(requestId: string, error: string): void;
+  beginGraph(
+    requestId: string,
+    identityFingerprint?: string,
+  ): EspGraphOwnershipLease;
+  applyGraphOverlay(
+    requestId: string,
+    ownershipLease: EspGraphOwnershipLease,
+    overlay: EspGraphOverlay,
+  ): void;
+  failGraph(
+    requestId: string,
+    ownershipLease: EspGraphOwnershipLease,
+    error: string,
+  ): void;
   setGraphUnavailable(reason: EspGraphUnavailableReason): void;
-  cancelGraph(requestId: string): void;
+  cancelGraph(requestId: string, ownershipLease: EspGraphOwnershipLease): void;
   clearGraphOverlay(): void;
   setEvidenceViewMode(mode: EspEvidenceViewMode): void;
   setEvidenceDockHeight(height: number, workspaceHeight?: number): void;
@@ -368,6 +397,7 @@ export const useEspDiagnosticsStore = create<EspDiagnosticsStore>((set) => ({
   snapshot: null,
   error: null,
   graphRequestId: null,
+  graphRequestLease: null,
   graphRequestFingerprint: null,
   graphPhase: "disabled",
   graphUnavailableReason: "graphDisabled",
@@ -388,6 +418,7 @@ export const useEspDiagnosticsStore = create<EspDiagnosticsStore>((set) => ({
       snapshot: null,
       error: null,
       graphRequestId: null,
+      graphRequestLease: null,
       graphRequestFingerprint: null,
       ...graphStateForFreshLocalRun(state),
       graphError: null,
@@ -412,6 +443,7 @@ export const useEspDiagnosticsStore = create<EspDiagnosticsStore>((set) => ({
       snapshot: null,
       error: null,
       graphRequestId: null,
+      graphRequestLease: null,
       graphRequestFingerprint: null,
       ...graphStateForFreshLocalRun(state),
       graphError: null,
@@ -441,6 +473,7 @@ export const useEspDiagnosticsStore = create<EspDiagnosticsStore>((set) => ({
       const graphIdentityState = identityChanged(state.snapshot, snapshot)
         ? {
             graphRequestId: null,
+            graphRequestLease: null,
             ...graphStateForFreshLocalRun(state),
             graphError: null,
           }
@@ -486,6 +519,7 @@ export const useEspDiagnosticsStore = create<EspDiagnosticsStore>((set) => ({
       )
         ? {
             graphRequestId: null,
+            graphRequestLease: null,
             ...graphStateForFreshLocalRun(state),
             graphError: null,
           }
@@ -542,21 +576,28 @@ export const useEspDiagnosticsStore = create<EspDiagnosticsStore>((set) => ({
       };
     }),
 
-  beginGraph: (requestId, identityFingerprint) =>
+  beginGraph: (requestId, identityFingerprint) => {
+    const ownershipLease: EspGraphOwnershipLease = Object.freeze({
+      [espGraphOwnershipLeaseBrand]: true as const,
+    });
     set((state) => ({
       graphRequestId: requestId,
+      graphRequestLease: ownershipLease,
       graphRequestFingerprint:
         identityFingerprint ??
         (state.snapshot ? getEspIdentityFingerprint(state.snapshot) : null),
       graphPhase: "loading",
       graphUnavailableReason: null,
       graphError: null,
-    })),
+    }));
+    return ownershipLease;
+  },
 
-  applyGraphOverlay: (requestId, overlay) =>
+  applyGraphOverlay: (requestId, ownershipLease, overlay) =>
     set((state) => {
       if (
         state.graphRequestId !== requestId ||
+        state.graphRequestLease !== ownershipLease ||
         !state.snapshot ||
         state.graphRequestFingerprint !==
           getEspIdentityFingerprint(state.snapshot)
@@ -568,6 +609,7 @@ export const useEspDiagnosticsStore = create<EspDiagnosticsStore>((set) => ({
       }
       return {
         graphRequestId: null,
+        graphRequestLease: null,
         graphRequestFingerprint: null,
         graphPhase: graphOverlayIsPartial(overlay) ? "partial" : "ready",
         graphUnavailableReason: null,
@@ -579,11 +621,13 @@ export const useEspDiagnosticsStore = create<EspDiagnosticsStore>((set) => ({
       };
     }),
 
-  failGraph: (requestId, error) =>
+  failGraph: (requestId, ownershipLease, error) =>
     set((state) =>
-      state.graphRequestId === requestId
+      state.graphRequestId === requestId &&
+      state.graphRequestLease === ownershipLease
         ? {
             graphRequestId: null,
+            graphRequestLease: null,
             graphRequestFingerprint: null,
             graphPhase: "error",
             graphError: error,
@@ -594,17 +638,20 @@ export const useEspDiagnosticsStore = create<EspDiagnosticsStore>((set) => ({
   setGraphUnavailable: (reason) =>
     set({
       graphRequestId: null,
+      graphRequestLease: null,
       graphRequestFingerprint: null,
       graphPhase: reason === "graphDisabled" ? "disabled" : "unavailable",
       graphUnavailableReason: reason,
       graphError: null,
     }),
 
-  cancelGraph: (requestId) =>
+  cancelGraph: (requestId, ownershipLease) =>
     set((state) =>
-      state.graphRequestId === requestId
+      state.graphRequestId === requestId &&
+      state.graphRequestLease === ownershipLease
         ? {
             graphRequestId: null,
+            graphRequestLease: null,
             graphRequestFingerprint: null,
             graphPhase: "cancelled",
             graphError: null,

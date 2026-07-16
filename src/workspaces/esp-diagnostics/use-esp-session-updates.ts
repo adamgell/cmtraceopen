@@ -9,6 +9,7 @@ import { createUuidRequestId } from "../../lib/uuid-request-id";
 import { useUiStore } from "../../stores/ui-store";
 import {
   getEspIdentityFingerprint,
+  type EspGraphOwnershipLease,
   useEspDiagnosticsStore,
 } from "./esp-diagnostics-store";
 import type {
@@ -381,6 +382,7 @@ export interface EspGraphCoordinator {
 
 interface OwnedGraphRequest {
   requestId: string;
+  ownershipLease: EspGraphOwnershipLease;
 }
 
 export function createEspGraphCoordinator(
@@ -488,14 +490,16 @@ export function createEspGraphCoordinator(
         console.warn(warning, { requestId: ownership.requestId });
       }
       ownedRequests.delete(ownership);
-      useEspDiagnosticsStore.getState().cancelGraph(ownership.requestId);
+      useEspDiagnosticsStore
+        .getState()
+        .cancelGraph(ownership.requestId, ownership.ownershipLease);
       if (requestCancellations.get(ownership) === cancellation) {
         requestCancellations.delete(ownership);
       }
       resolveCancellation();
     };
     try {
-      void cancelGraph(ownership.requestId).then(
+      void Promise.resolve(cancelGraph(ownership.requestId)).then(
         () => {
           finishCancellation(false);
         },
@@ -723,9 +727,11 @@ export function createEspGraphCoordinator(
       requestId,
       requestSelectedManagedDeviceId,
     );
-    const ownership: OwnedGraphRequest = { requestId };
+    const ownershipLease = useEspDiagnosticsStore
+      .getState()
+      .beginGraph(requestId, currentFingerprint);
+    const ownership: OwnedGraphRequest = { requestId, ownershipLease };
     ownedRequests.add(ownership);
-    useEspDiagnosticsStore.getState().beginGraph(requestId, currentFingerprint);
 
     try {
       const overlay = await fetchGraph(request);
@@ -745,12 +751,17 @@ export function createEspGraphCoordinator(
             .getState()
             .failGraph(
               requestId,
+              ownership.ownershipLease,
               "Microsoft Graph returned data for a different request. Refresh Graph data to try again.",
             );
         } else {
           useEspDiagnosticsStore
             .getState()
-            .applyGraphOverlay(requestId, overlay);
+            .applyGraphOverlay(
+              requestId,
+              ownership.ownershipLease,
+              overlay,
+            );
           if (
             suppressedOverlaySelectionFingerprint === currentFingerprint &&
             useEspDiagnosticsStore.getState().snapshot?.graph === overlay
@@ -769,11 +780,16 @@ export function createEspGraphCoordinator(
           .getState()
           .failGraph(
             requestId,
+            ownership.ownershipLease,
             getSafeErrorMessage(error, "Microsoft Graph enrichment failed."),
           );
       }
     } finally {
-      ownedRequests.delete(ownership);
+      // A settled fetch can still have a native cancellation in flight. Keep
+      // that ownership discoverable so replacements await its finalizer.
+      if (!requestCancellations.has(ownership)) {
+        ownedRequests.delete(ownership);
+      }
     }
   };
 
