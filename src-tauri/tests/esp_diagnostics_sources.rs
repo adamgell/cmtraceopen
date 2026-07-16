@@ -969,6 +969,118 @@ fn command_line_sanitizer_stops_at_terminal_escaped_json_object_boundaries() {
 }
 
 #[test]
+fn command_line_sanitizer_fails_closed_on_unterminated_escaped_secret_and_keeps_scanning() {
+    for raw in [
+        r#"installer.exe --payload {\"password\":\"unterminated-one-layer-at-eof"#,
+        r#"installer.exe --payload {\\\"password\\\":\\\"unterminated-two-layer-at-eof"#,
+    ] {
+        let sanitized = sanitize_command_line(raw);
+        assert!(!sanitized.contains("unterminated-one-layer-at-eof"));
+        assert!(!sanitized.contains("unterminated-two-layer-at-eof"));
+        assert!(sanitized.ends_with("[REDACTED]"));
+    }
+
+    for (malformed, following) in [
+        (
+            r#"{\"password\":\"unterminated-one-layer-secret}"#,
+            r#"{\"refresh_token\":\"following-one-layer-secret\",\"safe\":\"keep-one-layer-safe\"}"#,
+        ),
+        (
+            r#"{\\\"password\\\":\\\"unterminated-two-layer-secret}"#,
+            r#"{\"refresh_token\":\"following-one-layer-after-two-layer-secret\",\"safe\":\"keep-cross-layer-safe\"}"#,
+        ),
+    ] {
+        let raw = format!(
+            "installer.exe --malformed {malformed} --keep-real-arg yes --following {following}"
+        );
+        let sanitized = sanitize_command_line(&raw);
+
+        for secret in [
+            "unterminated-one-layer-secret",
+            "following-one-layer-secret",
+            "unterminated-two-layer-secret",
+            "following-two-layer-secret",
+            "following-one-layer-after-two-layer-secret",
+        ] {
+            assert!(
+                !sanitized.contains(secret),
+                "malformed escaped JSON leaked {secret}: {sanitized}"
+            );
+        }
+        assert!(
+            sanitized.contains("--keep-real-arg yes"),
+            "malformed secret redaction consumed a real argument: {sanitized}"
+        );
+        assert!(
+            sanitized.contains("keep-one-layer-safe")
+                || sanitized.contains("keep-cross-layer-safe"),
+            "following safe member was lost: {sanitized}"
+        );
+        assert!(sanitized.matches("[REDACTED]").count() >= 2);
+    }
+}
+
+#[test]
+fn command_line_sanitizer_redacts_escaped_secret_aliases_with_safe_punctuation() {
+    for raw in [
+        concat!(
+            r#"installer.exe --payload {\"access.token\":\"dot-access-secret\","#,
+            r#"\"refresh token\":\"space-refresh-secret\","#,
+            r#"\"client.secret\":\"dot-client-secret\","#,
+            r#"\"safe.name\":\"keep-dotted-safe-value\"}"#,
+        ),
+        concat!(
+            r#"installer.exe --payload {\\\"access.token\\\":\\\"twice-dot-access-secret\\\","#,
+            r#"\\\"refresh token\\\":\\\"twice-space-refresh-secret\\\","#,
+            r#"\\\"client.secret\\\":\\\"twice-dot-client-secret\\\","#,
+            r#"\\\"safe.name\\\":\\\"keep-twice-dotted-safe-value\\\"}"#,
+        ),
+    ] {
+        let sanitized = sanitize_command_line(raw);
+
+        for secret in [
+            "dot-access-secret",
+            "space-refresh-secret",
+            "dot-client-secret",
+            "twice-dot-access-secret",
+            "twice-space-refresh-secret",
+            "twice-dot-client-secret",
+        ] {
+            assert!(
+                !sanitized.contains(secret),
+                "escaped JSON alias leaked {secret}: {sanitized}"
+            );
+        }
+        assert!(sanitized.contains("safe.name"));
+        assert!(
+            sanitized.contains("keep-dotted-safe-value")
+                || sanitized.contains("keep-twice-dotted-safe-value")
+        );
+    }
+}
+
+#[test]
+fn command_line_sanitizer_preserves_arguments_across_mixed_escape_width_objects() {
+    let raw = concat!(
+        r#"installer.exe --one {\"password\":\"one-layer-secret-ending-backslash\\\"} "#,
+        r#"--keep-real-arg yes --two {\\\"password\\\":\\\"twice-layer-secret\\\","#,
+        r#"\\\"safe.name\\\":\\\"keep-safe-name-value\\\"}"#,
+    );
+    let sanitized = sanitize_command_line(raw);
+
+    assert!(!sanitized.contains("one-layer-secret-ending-backslash"));
+    assert!(!sanitized.contains("twice-layer-secret"));
+    assert!(
+        sanitized.contains("--keep-real-arg yes"),
+        "mixed-width redaction consumed a real argument: {sanitized}"
+    );
+    assert!(
+        sanitized.contains(r#"\\\"safe.name\\\":\\\"keep-safe-name-value\\\""#),
+        "mixed-width redaction consumed a safe member: {sanitized}"
+    );
+}
+
+#[test]
 fn command_line_sanitizer_redacts_quoted_and_unpadded_basic_credentials() {
     for credential in ["Zm9vOmJhcg", "\"Zm9vOmJhcg==\""] {
         let raw =
@@ -1193,6 +1305,25 @@ fn event_parser_reads_identity_fields_only_from_direct_system_children() {
     )
     .expect("valid event without a System Channel");
     assert_eq!(parsed.channel, "Fallback/Channel");
+}
+
+#[test]
+fn event_parser_never_splices_identity_fields_across_sibling_system_elements() {
+    let spliced = concat!(
+        "<Event>",
+        "<System><EventID>72</EventID></System>",
+        "<System>",
+        "<TimeCreated SystemTime='2026-07-16T13:00:00Z'/>",
+        "<Channel>Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin</Channel>",
+        "</System>",
+        "<EventData />",
+        "</Event>"
+    );
+
+    assert!(
+        parse_esp_event_xml(spliced, "sibling-system.evtx", Some(4), None, "Fallback").is_none(),
+        "EventID and timestamp/channel from different System siblings were spliced"
+    );
 }
 
 #[test]

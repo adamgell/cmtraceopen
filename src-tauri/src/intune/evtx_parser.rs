@@ -659,11 +659,18 @@ fn esp_system_fields(xml: &str) -> Option<EspSystemFields> {
     let mut reader = Reader::from_str(xml);
     let mut path = Vec::<Vec<u8>>::new();
     let mut fields = EspSystemFields::default();
+    let mut direct_system_seen = false;
 
     loop {
         match reader.read_event().ok()? {
             Event::Start(start) => {
                 let name = start.name().as_ref().to_vec();
+                if is_direct_event_child(&path) && name.as_slice() == b"System" {
+                    if direct_system_seen {
+                        return None;
+                    }
+                    direct_system_seen = true;
+                }
                 if is_direct_system_path(&path) {
                     match name.as_slice() {
                         b"EventID" => {
@@ -695,6 +702,12 @@ fn esp_system_fields(xml: &str) -> Option<EspSystemFields> {
                 path.push(name);
             }
             Event::Empty(start) => {
+                if is_direct_event_child(&path) && start.name().as_ref() == b"System" {
+                    if direct_system_seen {
+                        return None;
+                    }
+                    direct_system_seen = true;
+                }
                 if is_direct_system_path(&path) {
                     match start.name().as_ref() {
                         b"EventID" => {
@@ -728,6 +741,10 @@ fn esp_system_fields(xml: &str) -> Option<EspSystemFields> {
 
 fn is_direct_system_path(path: &[Vec<u8>]) -> bool {
     path.len() == 2 && path[0].as_slice() == b"Event" && path[1].as_slice() == b"System"
+}
+
+fn is_direct_event_child(path: &[Vec<u8>]) -> bool {
+    path.len() == 1 && path[0].as_slice() == b"Event"
 }
 
 fn xml_element_text(xml: &str, element: &str) -> Option<String> {

@@ -399,12 +399,20 @@ fn find_escaped_json_secret(
         }
 
         let value_start = value_opening_quote + 1;
-        if let Some((closing_start, closing_quote)) =
-            find_escaped_json_value_end(bytes, value_start, quote_width)
-        {
-            return Some((value_start, closing_start, closing_quote + 1));
-        }
-        return None;
+        return Some(
+            match find_escaped_json_value_end(bytes, value_start, quote_width) {
+                EscapedJsonValueEnd::Complete {
+                    closing_start,
+                    closing_quote,
+                } => (value_start, closing_start, closing_quote + 1),
+                EscapedJsonValueEnd::Malformed { boundary } => {
+                    // The candidate key is sensitive, so an unterminated value must fail closed.
+                    // Stop at a defensible outer boundary when one exists; scanning resumes there
+                    // so a later well-formed secret is redacted independently.
+                    (value_start, boundary, boundary)
+                }
+            },
+        );
     }
 
     None
@@ -435,21 +443,36 @@ fn find_escaped_json_key_end(
     quote_width: usize,
 ) -> Option<(usize, usize)> {
     let mut cursor = start;
-    while bytes
-        .get(cursor)
-        .is_some_and(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    while bytes.get(cursor).is_some_and(|byte| {
+        byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b' ')
+    }) && cursor - start < MAX_ESCAPED_JSON_KEY_BYTES
     {
         cursor += 1;
     }
+    if cursor == start || cursor - start > MAX_ESCAPED_JSON_KEY_BYTES {
+        return None;
+    }
     let (width, quote) = escaped_quote_run(bytes, cursor)?;
     (width == quote_width).then_some((cursor, quote))
+}
+
+const MAX_ESCAPED_JSON_KEY_BYTES: usize = 64;
+
+enum EscapedJsonValueEnd {
+    Complete {
+        closing_start: usize,
+        closing_quote: usize,
+    },
+    Malformed {
+        boundary: usize,
+    },
 }
 
 fn find_escaped_json_value_end(
     bytes: &[u8],
     start: usize,
     quote_width: usize,
-) -> Option<(usize, usize)> {
+) -> EscapedJsonValueEnd {
     let mut cursor = start;
     let mut terminal_fallback: Option<(usize, usize)> = None;
     while cursor < bytes.len() {
@@ -457,11 +480,17 @@ fn find_escaped_json_value_end(
             if width == quote_width {
                 if let Some(fallback) = terminal_fallback {
                     if is_escaped_json_member_opener(bytes, cursor, quote_width) {
-                        return Some(fallback);
+                        return EscapedJsonValueEnd::Complete {
+                            closing_start: fallback.0,
+                            closing_quote: fallback.1,
+                        };
                     }
                 }
                 if is_escaped_json_value_close(bytes, quote + 1, quote_width) {
-                    return Some((cursor, quote));
+                    return EscapedJsonValueEnd::Complete {
+                        closing_start: cursor,
+                        closing_quote: quote,
+                    };
                 }
                 cursor = quote + 1;
                 continue;
@@ -469,17 +498,49 @@ fn find_escaped_json_value_end(
             if width > quote_width {
                 let closing = (cursor + width - quote_width, quote);
                 match escaped_json_value_boundary(bytes, quote + 1, quote_width) {
-                    EscapedJsonValueBoundary::NextMember => return Some(closing),
-                    EscapedJsonValueBoundary::Terminal => terminal_fallback = Some(closing),
+                    EscapedJsonValueBoundary::NextMember => {
+                        return EscapedJsonValueEnd::Complete {
+                            closing_start: closing.0,
+                            closing_quote: closing.1,
+                        };
+                    }
+                    EscapedJsonValueBoundary::Terminal => {
+                        // Retain the first structurally plausible terminator. A later object with
+                        // a wider escape layer must not move the boundary across real arguments.
+                        terminal_fallback.get_or_insert(closing);
+                    }
                     EscapedJsonValueBoundary::None => {}
                 }
             }
             cursor = quote + 1;
+        } else if terminal_fallback.is_none()
+            && matches!(bytes[cursor], b'}' | b']')
+            && is_likely_command_json_boundary(bytes, cursor)
+        {
+            return EscapedJsonValueEnd::Malformed { boundary: cursor };
         } else {
             cursor += 1;
         }
     }
-    terminal_fallback
+    terminal_fallback.map_or(
+        EscapedJsonValueEnd::Malformed {
+            boundary: bytes.len(),
+        },
+        |(closing_start, closing_quote)| EscapedJsonValueEnd::Complete {
+            closing_start,
+            closing_quote,
+        },
+    )
+}
+
+fn is_likely_command_json_boundary(bytes: &[u8], boundary: usize) -> bool {
+    let mut cursor = boundary + 1;
+    skip_ascii_whitespace(bytes, &mut cursor);
+    match bytes.get(cursor) {
+        None | Some(b'{' | b'[' | b'/') => true,
+        Some(b'-') => bytes.get(cursor + 1) == Some(&b'-'),
+        _ => false,
+    }
 }
 
 fn is_escaped_json_member_opener(bytes: &[u8], start: usize, quote_width: usize) -> bool {
@@ -508,17 +569,17 @@ fn find_escaped_json_member_key_end(
     quote_width: usize,
 ) -> Option<(usize, usize)> {
     let mut cursor = start;
-    while cursor < bytes.len() {
-        if let Some((width, quote)) = escaped_quote_run(bytes, cursor) {
-            if width == quote_width {
-                return Some((cursor, quote));
-            }
-            cursor = quote + 1;
-        } else {
-            cursor += 1;
-        }
+    while bytes.get(cursor).is_some_and(|byte| {
+        byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b' ')
+    }) && cursor - start < MAX_ESCAPED_JSON_KEY_BYTES
+    {
+        cursor += 1;
     }
-    None
+    if cursor == start || cursor - start > MAX_ESCAPED_JSON_KEY_BYTES {
+        return None;
+    }
+    let (width, quote) = escaped_quote_run(bytes, cursor)?;
+    (width == quote_width).then_some((cursor, quote))
 }
 
 fn is_escaped_json_value_close(bytes: &[u8], after_quote: usize, quote_width: usize) -> bool {
