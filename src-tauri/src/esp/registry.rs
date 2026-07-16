@@ -666,19 +666,33 @@ fn lookup_observed_uninstall_names(
         }
     }
 
-    product_codes
-        .into_iter()
-        .filter_map(|product_code| {
-            provider
-                .lookup_uninstall_display_name(&product_code, REGISTRY_READ_ACCESS)
-                .ok()
-                .flatten()
-                .map(|display_name| UninstallProductName {
-                    product_code,
-                    display_name,
-                })
-        })
-        .collect()
+    let mut names = Vec::new();
+    for product_code in product_codes {
+        let Ok(Some(display_name)) =
+            provider.lookup_uninstall_display_name(&product_code, REGISTRY_READ_ACCESS)
+        else {
+            continue;
+        };
+        let size_bytes = display_name
+            .encode_utf16()
+            .count()
+            .saturating_add(1)
+            .saturating_mul(std::mem::size_of::<u16>());
+        if size_bytes > MAX_REGISTRY_VALUE_BYTES {
+            budget.record_limitation(format!(
+                "Registry uninstall display-name byte limit of {MAX_REGISTRY_VALUE_BYTES} was exceeded."
+            ));
+            continue;
+        }
+        if !budget.take_value(size_bytes) {
+            break;
+        }
+        names.push(UninstallProductName {
+            product_code,
+            display_name,
+        });
+    }
+    names
 }
 
 fn normalize_msi_product_code(product_code: &str) -> Option<String> {
@@ -1180,6 +1194,8 @@ mod tests {
         uninstall_lookups: RefCell<Vec<String>>,
     }
 
+    struct OversizedUninstallRegistryProvider;
+
     impl RegistryProvider for BudgetRegistryProvider {
         fn read_tree(
             &self,
@@ -1224,6 +1240,24 @@ mod tests {
                 .borrow_mut()
                 .push(product_code.to_string());
             Ok(Some(format!("Product {product_code}")))
+        }
+    }
+
+    impl RegistryProvider for OversizedUninstallRegistryProvider {
+        fn read_tree(
+            &self,
+            _target: &RegistryTarget,
+            _access: u32,
+        ) -> Result<Vec<RegistrySnapshotKey>, RegistryReadError> {
+            Err(RegistryReadError::Missing)
+        }
+
+        fn lookup_uninstall_display_name(
+            &self,
+            _product_code: &str,
+            _access: u32,
+        ) -> Result<Option<String>, RegistryReadError> {
+            Ok(Some("X".repeat(MAX_REGISTRY_VALUE_BYTES)))
         }
     }
 
@@ -1528,6 +1562,23 @@ mod tests {
             ["{11111111-1111-1111-1111-111111111111}"]
         );
         assert_eq!(evidence.uninstall_names.len(), 1);
+    }
+
+    #[test]
+    fn registry_uninstall_display_names_obey_the_per_value_byte_limit() {
+        let product_codes = ["{11111111-1111-1111-1111-111111111111}".to_string()];
+        let evidence = collect_registry_evidence_with_limits(
+            &OversizedUninstallRegistryProvider,
+            &product_codes,
+            "2026-07-16T12:00:00Z",
+            acquisition_limits(16, 16, 1024, 1, std::time::Duration::from_secs(5)),
+        );
+
+        assert!(evidence.uninstall_names.is_empty());
+        assert!(evidence
+            .limitations
+            .iter()
+            .any(|detail| detail.contains("uninstall display-name byte limit")));
     }
 
     #[test]

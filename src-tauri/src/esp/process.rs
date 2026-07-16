@@ -174,18 +174,18 @@ pub fn parent_chain(
 
 pub fn sanitize_command_line(command_line: &str) -> String {
     let double_quoted_authorization = Regex::new(
-        r#"(?i)(\")((?:--|/)?authorization)(\s*(?:=|:)\s*|\s+)(?:bearer|basic|api[-_]?key|digest)\s+(?:\\.|[^\"])*\""#,
+        r#"(?i)(\")((?:--|/)?authorization)(\s*(?:=|:)\s*|\s+)[!#$%&'*+\-.^_`|~a-z0-9]+\s+(?:\\.|[^\"])*\""#,
     )
     .expect("constant double-quoted-authorization regex");
     let single_quoted_authorization = Regex::new(
-        r#"(?i)(')((?:--|/)?authorization)(\s*(?:=|:)\s*|\s+)(?:bearer|basic|api[-_]?key|digest)\s+(?:\\.|[^'])*'"#,
+        r#"(?i)(')((?:--|/)?authorization)(\s*(?:=|:)\s*|\s+)[!#$%&'*+\-.^_`|~a-z0-9]+\s+(?:\\.|[^'])*'"#,
     )
     .expect("constant single-quoted-authorization regex");
     let digest_authorization =
         Regex::new(r#"(?i)(^|\s)((?:--|/)?authorization)(\s*(?:=|:)\s*|\s+)digest\s+.*"#)
             .expect("constant digest-authorization regex");
     let authorization_credential = Regex::new(
-        r#"(?i)(^|\s)((?:--|/)?authorization)(\s*(?:=|:)\s*|\s+)(?:bearer|basic|api[-_]?key)\s+(?:"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|[^\s&"]+)"#,
+        r#"(?i)(^|\s)((?:--|/)?authorization)(\s*(?:=|:)\s*|\s+)[!#$%&'*+\-.^_`|~a-z0-9]+\s+(?:"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|[^\s&"]+)"#,
     )
     .expect("constant authorization-credential regex");
     let bearer = Regex::new(r#"(?i)(bearer\s+)(?:"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|[^\s&"]+)"#)
@@ -858,6 +858,42 @@ mod tests {
             assert!(sanitized.contains("/i {12345678-1234-1234-1234-1234567890AB}"));
             assert!(sanitized.contains("/L*V C:\\Windows\\Temp\\contoso.log"));
             assert!(sanitized.contains("[REDACTED]"));
+        }
+    }
+
+    #[test]
+    fn command_line_sanitizer_redacts_unknown_authorization_schemes_as_one_value() {
+        let cases = [
+            (
+                "unquoted RFC token scheme",
+                "--authorization Custom._~+-V1 unknown-auth-secret",
+                "unknown-auth-secret",
+            ),
+            (
+                "double-quoted header",
+                "-H \"Authorization: Custom+V1 quoted-auth-secret\"",
+                "quoted-auth-secret",
+            ),
+            (
+                "single-quoted header",
+                "-H 'Authorization: Negotiate negotiate-auth-secret'",
+                "negotiate-auth-secret",
+            ),
+        ];
+
+        for (case, secret_argument, sentinel) in cases {
+            let raw = format!(
+                "msiexec.exe /i {{12345678-1234-1234-1234-1234567890AB}} /L*V C:\\Windows\\Temp\\contoso.log {secret_argument}"
+            );
+            let sanitized = sanitize_command_line(&raw);
+
+            assert!(
+                !sanitized.contains(sentinel),
+                "{case} leaked {sentinel}: {sanitized}"
+            );
+            assert!(sanitized.contains("[REDACTED]"));
+            assert!(sanitized.contains("/i {12345678-1234-1234-1234-1234567890AB}"));
+            assert!(sanitized.contains("/L*V C:\\Windows\\Temp\\contoso.log"));
         }
     }
 
