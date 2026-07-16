@@ -1,6 +1,7 @@
 //! Bounded, read-only acquisition of ESP-related Windows registry evidence.
 
 use std::collections::BTreeSet;
+use std::time::{Duration, Instant};
 
 use cmtraceopen_parser::esp::{
     EspEvidenceProvenance, EspEvidenceRef, EspNodeCacheEntry, EspObservationContext,
@@ -13,6 +14,199 @@ use serde::{Deserialize, Serialize};
 pub const REGISTRY_READ_ACCESS: u32 = 0x0002_0019 | 0x0000_0100;
 pub const MAX_REGISTRY_DEPTH: usize = 8;
 pub const MAX_REGISTRY_VALUE_BYTES: usize = 64 * 1024;
+pub const MAX_REGISTRY_KEYS: usize = 4_096;
+pub const MAX_REGISTRY_VALUES: usize = 16_384;
+pub const MAX_REGISTRY_TOTAL_BYTES: usize = 16 * 1024 * 1024;
+pub const MAX_REGISTRY_UNINSTALL_LOOKUPS: usize = 256;
+pub const MAX_REGISTRY_ACQUISITION_DURATION: Duration = Duration::from_secs(3);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RegistryAcquisitionLimits {
+    pub max_keys: usize,
+    pub max_values: usize,
+    pub max_total_bytes: usize,
+    pub max_uninstall_lookups: usize,
+    pub max_duration: Duration,
+}
+
+impl Default for RegistryAcquisitionLimits {
+    fn default() -> Self {
+        Self {
+            max_keys: MAX_REGISTRY_KEYS,
+            max_values: MAX_REGISTRY_VALUES,
+            max_total_bytes: MAX_REGISTRY_TOTAL_BYTES,
+            max_uninstall_lookups: MAX_REGISTRY_UNINSTALL_LOOKUPS,
+            max_duration: MAX_REGISTRY_ACQUISITION_DURATION,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct RegistryAcquisitionBudget {
+    limits: RegistryAcquisitionLimits,
+    deadline: Instant,
+    keys: usize,
+    values: usize,
+    total_bytes: usize,
+    uninstall_candidates: usize,
+    limitations: Vec<String>,
+    limitation_occurrences: u64,
+    last_limitation: Option<String>,
+}
+
+impl RegistryAcquisitionBudget {
+    fn new(limits: RegistryAcquisitionLimits) -> Self {
+        Self {
+            limits,
+            deadline: Instant::now() + limits.max_duration,
+            keys: 0,
+            values: 0,
+            total_bytes: 0,
+            uninstall_candidates: 0,
+            limitations: Vec::new(),
+            limitation_occurrences: 0,
+            last_limitation: None,
+        }
+    }
+
+    fn checkpoint(&self) -> u64 {
+        self.limitation_occurrences
+    }
+
+    fn detail_since(&self, checkpoint: u64) -> Option<String> {
+        (checkpoint < self.limitation_occurrences)
+            .then(|| self.last_limitation.clone())
+            .flatten()
+    }
+
+    fn record_limitation(&mut self, detail: impl Into<String>) {
+        let detail = detail.into();
+        self.limitation_occurrences = self.limitation_occurrences.saturating_add(1);
+        self.last_limitation = Some(detail.clone());
+        if !self.limitations.contains(&detail) {
+            self.limitations.push(detail);
+        }
+    }
+
+    fn check_time(&mut self) -> bool {
+        if Instant::now() >= self.deadline {
+            self.record_limitation("Registry acquisition time budget was exhausted.");
+            false
+        } else {
+            true
+        }
+    }
+
+    fn root_unavailable_detail(&mut self) -> Option<String> {
+        if !self.check_time() {
+            return Some("Registry acquisition time budget was exhausted.".to_string());
+        }
+        let detail = if self.keys >= self.limits.max_keys {
+            Some("Registry key budget was exhausted.")
+        } else if self.values >= self.limits.max_values {
+            Some("Registry value budget was exhausted.")
+        } else if self.total_bytes >= self.limits.max_total_bytes {
+            Some("Registry byte budget was exhausted.")
+        } else {
+            None
+        };
+        detail.map(|detail| {
+            self.record_limitation(detail);
+            detail.to_string()
+        })
+    }
+
+    fn take_key(&mut self) -> bool {
+        if !self.check_time() {
+            return false;
+        }
+        if self.keys >= self.limits.max_keys {
+            self.record_limitation("Registry key budget was exhausted.");
+            return false;
+        }
+        self.keys += 1;
+        true
+    }
+
+    #[cfg(target_os = "windows")]
+    fn remaining_keys(&self) -> usize {
+        self.limits.max_keys.saturating_sub(self.keys)
+    }
+
+    fn take_value(&mut self, size_bytes: usize) -> bool {
+        if !self.check_time() {
+            return false;
+        }
+        if self.values >= self.limits.max_values {
+            self.record_limitation("Registry value budget was exhausted.");
+            return false;
+        }
+        if size_bytes > self.limits.max_total_bytes.saturating_sub(self.total_bytes) {
+            self.record_limitation("Registry byte budget was exhausted.");
+            return false;
+        }
+        self.values += 1;
+        self.total_bytes += size_bytes;
+        true
+    }
+
+    fn take_uninstall_candidate(&mut self) -> bool {
+        if !self.check_time() {
+            return false;
+        }
+        if self.uninstall_candidates >= self.limits.max_uninstall_lookups {
+            self.record_limitation("Registry uninstall lookup budget was exhausted.");
+            return false;
+        }
+        self.uninstall_candidates += 1;
+        true
+    }
+}
+
+#[cfg(any(target_os = "windows", test))]
+#[derive(Debug)]
+struct BoundedRegistryNameSet {
+    capacity: usize,
+    names: BTreeSet<(String, String)>,
+    eligible_seen: bool,
+    truncated: bool,
+}
+
+#[cfg(any(target_os = "windows", test))]
+impl BoundedRegistryNameSet {
+    fn new(capacity: usize) -> Self {
+        Self {
+            capacity,
+            names: BTreeSet::new(),
+            eligible_seen: false,
+            truncated: false,
+        }
+    }
+
+    fn push(&mut self, name: String) {
+        if is_hardware_identity_registry_name(&name) {
+            return;
+        }
+        self.eligible_seen = true;
+        self.names.insert((name.to_ascii_lowercase(), name));
+        if self.names.len() > self.capacity {
+            self.names.pop_last();
+            self.truncated = true;
+        }
+    }
+
+    fn has_eligible_names(&self) -> bool {
+        self.eligible_seen
+    }
+
+    fn truncated(&self) -> bool {
+        self.truncated
+    }
+
+    fn into_names(self) -> Vec<String> {
+        self.names.into_iter().map(|(_, name)| name).collect()
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RegistryTarget {
@@ -120,6 +314,16 @@ pub trait RegistryProvider {
         access: u32,
     ) -> Result<Vec<RegistrySnapshotKey>, RegistryReadError>;
 
+    fn read_tree_bounded(
+        &self,
+        target: &RegistryTarget,
+        access: u32,
+        budget: &mut RegistryAcquisitionBudget,
+    ) -> Result<Vec<RegistrySnapshotKey>, RegistryReadError> {
+        self.read_tree(target, access)
+            .map(|entries| bound_registry_snapshot(entries, budget))
+    }
+
     fn lookup_uninstall_display_name(
         &self,
         product_code: &str,
@@ -168,6 +372,8 @@ pub struct RegistryEvidence {
     pub observations: Vec<ScopedRegistryObservation>,
     pub node_cache: Vec<EspNodeCacheEntry>,
     pub uninstall_names: Vec<UninstallProductName>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub limitations: Vec<String>,
 }
 
 pub fn collect_registry_evidence(
@@ -175,14 +381,46 @@ pub fn collect_registry_evidence(
     observed_product_codes: &[String],
     observed_at_utc: &str,
 ) -> RegistryEvidence {
+    collect_registry_evidence_with_limits(
+        provider,
+        observed_product_codes,
+        observed_at_utc,
+        RegistryAcquisitionLimits::default(),
+    )
+}
+
+fn collect_registry_evidence_with_limits(
+    provider: &impl RegistryProvider,
+    observed_product_codes: &[String],
+    observed_at_utc: &str,
+    limits: RegistryAcquisitionLimits,
+) -> RegistryEvidence {
     let mut evidence = RegistryEvidence::default();
+    let mut budget = RegistryAcquisitionBudget::new(limits);
 
     for (target_index, target) in ESP_REGISTRY_TARGETS.iter().enumerate() {
-        match provider.read_tree(target, REGISTRY_READ_ACCESS) {
+        if let Some(detail) = budget.root_unavailable_detail() {
+            evidence.roots.push(root_evidence(
+                target,
+                EspSourceAccessState::Failed,
+                Some(format!("Partial registry evidence: {detail}")),
+            ));
+            continue;
+        }
+
+        let checkpoint = budget.checkpoint();
+        match provider.read_tree_bounded(target, REGISTRY_READ_ACCESS, &mut budget) {
             Ok(entries) => {
-                evidence
-                    .roots
-                    .push(root_evidence(target, EspSourceAccessState::Available, None));
+                let detail = budget.detail_since(checkpoint);
+                evidence.roots.push(root_evidence(
+                    target,
+                    if detail.is_some() {
+                        EspSourceAccessState::Failed
+                    } else {
+                        EspSourceAccessState::Available
+                    },
+                    detail.map(|detail| format!("Partial registry evidence: {detail}")),
+                ));
                 append_tree_observations(
                     &mut evidence,
                     target,
@@ -204,8 +442,63 @@ pub fn collect_registry_evidence(
         .descendant_coverage
         .sort_by(|left, right| left.key.cmp(&right.key));
     evidence.node_cache.sort_by_key(|entry| entry.index);
-    evidence.uninstall_names = lookup_observed_uninstall_names(provider, observed_product_codes);
+    evidence.uninstall_names =
+        lookup_observed_uninstall_names(provider, observed_product_codes, &mut budget);
+    evidence.limitations = budget.limitations;
     evidence
+}
+
+fn bound_registry_snapshot(
+    mut entries: Vec<RegistrySnapshotKey>,
+    budget: &mut RegistryAcquisitionBudget,
+) -> Vec<RegistrySnapshotKey> {
+    let mut bounded = Vec::new();
+    entries.sort_by(|left, right| {
+        left.relative_key
+            .to_ascii_lowercase()
+            .cmp(&right.relative_key.to_ascii_lowercase())
+            .then_with(|| left.relative_key.cmp(&right.relative_key))
+    });
+
+    for mut entry in entries {
+        if !budget.take_key() {
+            break;
+        }
+        if registry_depth(&entry.relative_key) > MAX_REGISTRY_DEPTH {
+            budget.record_limitation(format!(
+                "Registry depth budget of {MAX_REGISTRY_DEPTH} was exhausted."
+            ));
+            continue;
+        }
+        entry.values.sort_by(|left, right| {
+            left.name
+                .to_ascii_lowercase()
+                .cmp(&right.name.to_ascii_lowercase())
+                .then_with(|| left.name.cmp(&right.name))
+        });
+        let mut values = Vec::new();
+        let mut stop = false;
+        for value in entry.values {
+            if value.size_bytes > MAX_REGISTRY_VALUE_BYTES {
+                budget.record_limitation(format!(
+                    "Registry per-value byte limit of {MAX_REGISTRY_VALUE_BYTES} was exceeded."
+                ));
+                continue;
+            }
+            if !budget.take_value(value.size_bytes) {
+                stop = true;
+                break;
+            }
+            values.push(value);
+        }
+        entry.values = values;
+        bounded.push(entry);
+        if stop {
+            break;
+        }
+    }
+
+    bounded
 }
 
 pub fn classify_registry_scope(key: &str) -> Option<EspScope> {
@@ -361,11 +654,19 @@ fn text_value(values: &[RegistryValueSnapshot], name: &str) -> Option<String> {
 fn lookup_observed_uninstall_names(
     provider: &impl RegistryProvider,
     observed_product_codes: &[String],
+    budget: &mut RegistryAcquisitionBudget,
 ) -> Vec<UninstallProductName> {
-    observed_product_codes
-        .iter()
-        .map(|product_code| product_code.to_ascii_uppercase())
-        .collect::<BTreeSet<_>>()
+    let mut product_codes = BTreeSet::new();
+    for product_code in observed_product_codes {
+        if !budget.take_uninstall_candidate() {
+            break;
+        }
+        if let Some(product_code) = normalize_msi_product_code(product_code) {
+            product_codes.insert(product_code);
+        }
+    }
+
+    product_codes
         .into_iter()
         .filter_map(|product_code| {
             provider
@@ -378,6 +679,24 @@ fn lookup_observed_uninstall_names(
                 })
         })
         .collect()
+}
+
+fn normalize_msi_product_code(product_code: &str) -> Option<String> {
+    let product_code = product_code.trim();
+    let inner =
+        if product_code.len() == 38 && product_code.starts_with('{') && product_code.ends_with('}')
+        {
+            &product_code[1..37]
+        } else if product_code.len() == 36 {
+            product_code
+        } else {
+            return None;
+        };
+    let valid = inner.split('-').map(str::len).eq([8, 4, 4, 4, 12])
+        && inner
+            .chars()
+            .all(|character| character == '-' || character.is_ascii_hexdigit());
+    valid.then(|| format!("{{{}}}", inner.to_ascii_uppercase()))
 }
 
 fn registry_depth(relative_key: &str) -> usize {
@@ -561,6 +880,16 @@ impl RegistryProvider for WindowsRegistryProvider {
         target: &RegistryTarget,
         access: u32,
     ) -> Result<Vec<RegistrySnapshotKey>, RegistryReadError> {
+        let mut budget = RegistryAcquisitionBudget::new(RegistryAcquisitionLimits::default());
+        self.read_tree_bounded(target, access, &mut budget)
+    }
+
+    fn read_tree_bounded(
+        &self,
+        target: &RegistryTarget,
+        access: u32,
+        budget: &mut RegistryAcquisitionBudget,
+    ) -> Result<Vec<RegistrySnapshotKey>, RegistryReadError> {
         use winreg::enums::HKEY_LOCAL_MACHINE;
         use winreg::RegKey;
 
@@ -569,7 +898,7 @@ impl RegistryProvider for WindowsRegistryProvider {
             .open_subkey_with_flags(target.key, access)
             .map_err(map_io_error)?;
         let mut entries = Vec::new();
-        read_key_bounded(&root, String::new(), 0, access, &mut entries);
+        read_key_bounded(&root, String::new(), 0, access, &mut entries, budget);
         Ok(entries)
     }
 
@@ -624,14 +953,23 @@ fn read_key_bounded(
     depth: usize,
     access: u32,
     entries: &mut Vec<RegistrySnapshotKey>,
+    budget: &mut RegistryAcquisitionBudget,
 ) {
     if is_hardware_identity_registry_name(&relative_key) {
+        return;
+    }
+    if !budget.take_key() {
         return;
     }
 
     let mut access_error = None;
     let mut values = Vec::new();
+    let mut budget_limited = false;
     for value_result in key.enum_values() {
+        if !budget.check_time() {
+            budget_limited = true;
+            break;
+        }
         let (name, value) = match value_result {
             Ok(value) => value,
             Err(error) => {
@@ -639,11 +977,20 @@ fn read_key_bounded(
                 continue;
             }
         };
-        if is_hardware_identity_registry_name(&name) || value.bytes.len() > MAX_REGISTRY_VALUE_BYTES
-        {
+        if is_hardware_identity_registry_name(&name) {
+            continue;
+        }
+        if value.bytes.len() > MAX_REGISTRY_VALUE_BYTES {
+            budget.record_limitation(format!(
+                "Registry per-value byte limit of {MAX_REGISTRY_VALUE_BYTES} was exceeded."
+            ));
             continue;
         }
         let size_bytes = value.bytes.len();
+        if !budget.take_value(size_bytes) {
+            budget_limited = true;
+            break;
+        }
         if let Some(value) = decode_registry_value(value.vtype.clone() as u32, &value.bytes) {
             values.push(RegistryValueSnapshot {
                 name,
@@ -659,12 +1006,15 @@ fn read_key_bounded(
         access_error,
     });
 
-    if depth >= MAX_REGISTRY_DEPTH {
+    if budget_limited {
         return;
     }
 
-    let mut subkeys = Vec::new();
+    let mut subkeys = BoundedRegistryNameSet::new(budget.remaining_keys());
     for subkey_result in key.enum_keys() {
+        if !budget.check_time() {
+            return;
+        }
         match subkey_result {
             Ok(name) => subkeys.push(name),
             Err(error) => {
@@ -672,10 +1022,25 @@ fn read_key_bounded(
             }
         }
     }
-    subkeys.sort_by_key(|name| name.to_ascii_lowercase());
-    for subkey_name in subkeys {
-        if is_hardware_identity_registry_name(&subkey_name) {
-            continue;
+    if subkeys.truncated() {
+        budget.record_limitation("Registry key budget was exhausted.");
+    }
+    if depth >= MAX_REGISTRY_DEPTH {
+        if subkeys.has_eligible_names() {
+            budget.record_limitation(format!(
+                "Registry depth budget of {MAX_REGISTRY_DEPTH} was exhausted."
+            ));
+        }
+        return;
+    }
+
+    for subkey_name in subkeys.into_names() {
+        if !budget.check_time() {
+            return;
+        }
+        if budget.remaining_keys() == 0 {
+            budget.record_limitation("Registry key budget was exhausted.");
+            return;
         }
         let child_relative_key = if relative_key.is_empty() {
             subkey_name.clone()
@@ -685,6 +1050,9 @@ fn read_key_bounded(
         let subkey = match key.open_subkey_with_flags(&subkey_name, access) {
             Ok(subkey) => subkey,
             Err(error) => {
+                if !budget.take_key() {
+                    return;
+                }
                 entries.push(RegistrySnapshotKey {
                     relative_key: child_relative_key,
                     values: Vec::new(),
@@ -693,7 +1061,14 @@ fn read_key_bounded(
                 continue;
             }
         };
-        read_key_bounded(&subkey, child_relative_key, depth + 1, access, entries);
+        read_key_bounded(
+            &subkey,
+            child_relative_key,
+            depth + 1,
+            access,
+            entries,
+            budget,
+        );
     }
 }
 
@@ -790,10 +1165,369 @@ fn map_io_error(error: std::io::Error) -> RegistryReadError {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::RefCell;
+
     use super::*;
+
+    struct BudgetRegistryProvider {
+        entries: Vec<RegistrySnapshotKey>,
+        reads: RefCell<usize>,
+        uninstall_lookups: RefCell<Vec<String>>,
+    }
+
+    struct RepeatingRegistryProvider {
+        entries: Vec<RegistrySnapshotKey>,
+        uninstall_lookups: RefCell<Vec<String>>,
+    }
+
+    impl RegistryProvider for BudgetRegistryProvider {
+        fn read_tree(
+            &self,
+            target: &RegistryTarget,
+            _access: u32,
+        ) -> Result<Vec<RegistrySnapshotKey>, RegistryReadError> {
+            *self.reads.borrow_mut() += 1;
+            if target.key == ESP_REGISTRY_TARGETS[0].key {
+                Ok(self.entries.clone())
+            } else {
+                Err(RegistryReadError::Missing)
+            }
+        }
+
+        fn lookup_uninstall_display_name(
+            &self,
+            product_code: &str,
+            _access: u32,
+        ) -> Result<Option<String>, RegistryReadError> {
+            self.uninstall_lookups
+                .borrow_mut()
+                .push(product_code.to_string());
+            Ok(Some(format!("Product {product_code}")))
+        }
+    }
+
+    impl RegistryProvider for RepeatingRegistryProvider {
+        fn read_tree(
+            &self,
+            _target: &RegistryTarget,
+            _access: u32,
+        ) -> Result<Vec<RegistrySnapshotKey>, RegistryReadError> {
+            Ok(self.entries.clone())
+        }
+
+        fn lookup_uninstall_display_name(
+            &self,
+            product_code: &str,
+            _access: u32,
+        ) -> Result<Option<String>, RegistryReadError> {
+            self.uninstall_lookups
+                .borrow_mut()
+                .push(product_code.to_string());
+            Ok(Some(format!("Product {product_code}")))
+        }
+    }
+
+    fn budget_provider() -> BudgetRegistryProvider {
+        BudgetRegistryProvider {
+            entries: (0..4)
+                .map(|index| RegistrySnapshotKey {
+                    relative_key: format!("Child-{index}"),
+                    values: vec![RegistryValueSnapshot::text_with_size(
+                        format!("Value-{index}"),
+                        format!("Data-{index}"),
+                        4,
+                    )],
+                    access_error: None,
+                })
+                .collect(),
+            reads: RefCell::new(0),
+            uninstall_lookups: RefCell::new(Vec::new()),
+        }
+    }
+
+    fn acquisition_limits(
+        max_keys: usize,
+        max_values: usize,
+        max_total_bytes: usize,
+        max_uninstall_lookups: usize,
+        max_duration: std::time::Duration,
+    ) -> RegistryAcquisitionLimits {
+        RegistryAcquisitionLimits {
+            max_keys,
+            max_values,
+            max_total_bytes,
+            max_uninstall_lookups,
+            max_duration,
+        }
+    }
 
     fn utf16_bytes(units: &[u16]) -> Vec<u8> {
         units.iter().flat_map(|unit| unit.to_le_bytes()).collect()
+    }
+
+    #[test]
+    fn registry_aggregate_key_value_and_byte_budgets_preserve_partial_evidence() {
+        let cases = [
+            (
+                "key",
+                acquisition_limits(2, 16, 1024, 0, std::time::Duration::from_secs(5)),
+                2,
+            ),
+            (
+                "value",
+                acquisition_limits(16, 2, 1024, 0, std::time::Duration::from_secs(5)),
+                2,
+            ),
+            (
+                "byte",
+                acquisition_limits(16, 16, 8, 0, std::time::Duration::from_secs(5)),
+                2,
+            ),
+        ];
+
+        for (expected_limit, limits, expected_observations) in cases {
+            let provider = budget_provider();
+            let evidence = collect_registry_evidence_with_limits(
+                &provider,
+                &[],
+                "2026-07-16T12:00:00Z",
+                limits,
+            );
+
+            assert_eq!(
+                evidence.observations.len(),
+                expected_observations,
+                "wrong retained observation count for {expected_limit} budget"
+            );
+            assert_eq!(
+                evidence.roots[0].access_state,
+                EspSourceAccessState::Failed,
+                "partial root was reported as complete for {expected_limit} budget"
+            );
+            assert!(evidence
+                .limitations
+                .iter()
+                .any(|detail| detail.to_ascii_lowercase().contains(expected_limit)));
+        }
+    }
+
+    #[test]
+    fn registry_snapshot_truncation_is_deterministic_across_provider_order() {
+        let entries = ["Zulu", "Alpha", "Mike"]
+            .map(|relative_key| RegistrySnapshotKey {
+                relative_key: relative_key.to_string(),
+                values: Vec::new(),
+                access_error: None,
+            })
+            .to_vec();
+        let limits = acquisition_limits(2, 16, 1024, 0, std::time::Duration::from_secs(5));
+
+        let forward =
+            bound_registry_snapshot(entries.clone(), &mut RegistryAcquisitionBudget::new(limits));
+        let reverse = bound_registry_snapshot(
+            entries.into_iter().rev().collect(),
+            &mut RegistryAcquisitionBudget::new(limits),
+        );
+        let retained_keys = |entries: Vec<RegistrySnapshotKey>| {
+            entries
+                .into_iter()
+                .map(|entry| entry.relative_key)
+                .collect::<Vec<_>>()
+        };
+
+        assert_eq!(retained_keys(forward), ["Alpha", "Mike"]);
+        assert_eq!(retained_keys(reverse), ["Alpha", "Mike"]);
+    }
+
+    #[test]
+    fn registry_review_subkey_truncation_keeps_smallest_eligible_names_across_provider_order() {
+        let names = ["Zulu", "HardwareHash", "Alpha", "Mike"];
+        let select = |names: Vec<&str>| {
+            let mut selected = BoundedRegistryNameSet::new(2);
+            for name in names {
+                selected.push(name.to_string());
+            }
+            assert!(selected.has_eligible_names());
+            assert!(selected.truncated());
+            selected.into_names()
+        };
+
+        assert_eq!(select(names.to_vec()), ["Alpha", "Mike"]);
+        assert_eq!(select(names.into_iter().rev().collect()), ["Alpha", "Mike"]);
+    }
+
+    #[test]
+    fn registry_review_value_truncation_is_deterministic_across_provider_order() {
+        let values = ["Zulu", "Alpha", "Mike"]
+            .map(|name| RegistryValueSnapshot::text_with_size(name, name, 1))
+            .to_vec();
+        let entry = |values| RegistrySnapshotKey {
+            relative_key: "Child".to_string(),
+            values,
+            access_error: None,
+        };
+        let limits = acquisition_limits(1, 2, 1024, 0, std::time::Duration::from_secs(5));
+
+        let forward = bound_registry_snapshot(
+            vec![entry(values.clone())],
+            &mut RegistryAcquisitionBudget::new(limits),
+        );
+        let reverse = bound_registry_snapshot(
+            vec![entry(values.into_iter().rev().collect())],
+            &mut RegistryAcquisitionBudget::new(limits),
+        );
+        let retained_names = |entries: Vec<RegistrySnapshotKey>| {
+            entries[0]
+                .values
+                .iter()
+                .map(|value| value.name.clone())
+                .collect::<Vec<_>>()
+        };
+
+        assert_eq!(retained_names(forward), ["Alpha", "Mike"]);
+        assert_eq!(retained_names(reverse), ["Alpha", "Mike"]);
+    }
+
+    #[test]
+    fn registry_review_repeated_oversized_values_mark_every_affected_root_partial() {
+        let provider = RepeatingRegistryProvider {
+            entries: vec![RegistrySnapshotKey {
+                relative_key: "Child".to_string(),
+                values: vec![RegistryValueSnapshot::text_with_size(
+                    "Oversized",
+                    "not retained",
+                    MAX_REGISTRY_VALUE_BYTES + 1,
+                )],
+                access_error: None,
+            }],
+            uninstall_lookups: RefCell::new(Vec::new()),
+        };
+
+        let evidence = collect_registry_evidence_with_limits(
+            &provider,
+            &[],
+            "2026-07-16T12:00:00Z",
+            acquisition_limits(32, 32, 1024, 0, std::time::Duration::from_secs(5)),
+        );
+
+        assert!(evidence
+            .roots
+            .iter()
+            .all(|root| root.access_state == EspSourceAccessState::Failed));
+        assert!(evidence
+            .limitations
+            .iter()
+            .any(|detail| detail.contains("per-value")));
+        assert_eq!(evidence.limitations.len(), 1);
+    }
+
+    #[test]
+    fn registry_review_depth_truncation_marks_every_affected_root_partial() {
+        let provider = RepeatingRegistryProvider {
+            entries: vec![RegistrySnapshotKey {
+                relative_key: (0..=MAX_REGISTRY_DEPTH)
+                    .map(|index| format!("Level{index}"))
+                    .collect::<Vec<_>>()
+                    .join("\\"),
+                values: Vec::new(),
+                access_error: None,
+            }],
+            uninstall_lookups: RefCell::new(Vec::new()),
+        };
+
+        let evidence = collect_registry_evidence_with_limits(
+            &provider,
+            &[],
+            "2026-07-16T12:00:00Z",
+            acquisition_limits(32, 32, 1024, 0, std::time::Duration::from_secs(5)),
+        );
+
+        assert!(evidence
+            .roots
+            .iter()
+            .all(|root| root.access_state == EspSourceAccessState::Failed));
+        assert!(evidence
+            .limitations
+            .iter()
+            .any(|detail| detail.contains("depth budget")));
+        assert_eq!(evidence.limitations.len(), 1);
+    }
+
+    #[test]
+    fn registry_time_budget_skips_reads_and_reports_partial_coverage() {
+        let provider = budget_provider();
+        let evidence = collect_registry_evidence_with_limits(
+            &provider,
+            &[],
+            "2026-07-16T12:00:00Z",
+            acquisition_limits(16, 16, 1024, 16, std::time::Duration::ZERO),
+        );
+
+        assert_eq!(*provider.reads.borrow(), 0);
+        assert!(evidence.observations.is_empty());
+        assert!(evidence
+            .roots
+            .iter()
+            .all(|root| root.access_state == EspSourceAccessState::Failed));
+        assert!(evidence
+            .limitations
+            .iter()
+            .any(|detail| detail.to_ascii_lowercase().contains("time")));
+    }
+
+    #[test]
+    fn registry_uninstall_lookup_budget_caps_observed_product_codes_honestly() {
+        let provider = BudgetRegistryProvider {
+            entries: Vec::new(),
+            reads: RefCell::new(0),
+            uninstall_lookups: RefCell::new(Vec::new()),
+        };
+        let product_codes = [
+            "{11111111-1111-1111-1111-111111111111}",
+            "{22222222-2222-2222-2222-222222222222}",
+            "{33333333-3333-3333-3333-333333333333}",
+        ]
+        .map(str::to_string);
+
+        let evidence = collect_registry_evidence_with_limits(
+            &provider,
+            &product_codes,
+            "2026-07-16T12:00:00Z",
+            acquisition_limits(16, 16, 1024, 2, std::time::Duration::from_secs(5)),
+        );
+
+        assert_eq!(provider.uninstall_lookups.borrow().len(), 2);
+        assert_eq!(evidence.uninstall_names.len(), 2);
+        assert!(evidence
+            .limitations
+            .iter()
+            .any(|detail| detail.to_ascii_lowercase().contains("uninstall lookup")));
+    }
+
+    #[test]
+    fn registry_review_canonicalizes_bare_and_braced_product_codes_before_lookup() {
+        let provider = BudgetRegistryProvider {
+            entries: Vec::new(),
+            reads: RefCell::new(0),
+            uninstall_lookups: RefCell::new(Vec::new()),
+        };
+        let product_codes = [
+            "11111111-1111-1111-1111-111111111111".to_string(),
+            "{11111111-1111-1111-1111-111111111111}".to_string(),
+        ];
+
+        let evidence = collect_registry_evidence_with_limits(
+            &provider,
+            &product_codes,
+            "2026-07-16T12:00:00Z",
+            acquisition_limits(16, 16, 1024, 2, std::time::Duration::from_secs(5)),
+        );
+
+        assert_eq!(
+            provider.uninstall_lookups.into_inner(),
+            ["{11111111-1111-1111-1111-111111111111}"]
+        );
+        assert_eq!(evidence.uninstall_names.len(), 1);
     }
 
     #[test]

@@ -23,6 +23,7 @@ use crate::intune::models::{EventLogLiveQueryChannelResult, EventLogLiveQuerySta
 
 /// Maximum entries to parse from a single .evtx file to prevent memory issues.
 const MAX_ENTRIES_PER_FILE: usize = 50_000;
+pub const MAX_ESP_EVTX_RECORD_BYTES: usize = 512 * 1024;
 #[cfg(target_os = "windows")]
 const MAX_LIVE_ENTRIES_PER_CHANNEL: usize = 200;
 
@@ -49,6 +50,13 @@ pub struct ParsedEspEventRecord {
     pub message: Option<String>,
     pub source_file: String,
     pub raw_xml: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParsedEspEvtxBatch {
+    pub records: Vec<ParsedEspEventRecord>,
+    pub inspected_records: usize,
+    pub truncated: bool,
 }
 
 #[cfg(target_os = "windows")]
@@ -259,6 +267,7 @@ pub fn parse_evtx_file(path: &Path, id_offset: u64) -> Result<Vec<EventLogEntry>
 /// Parse a captured EVTX file into ESP records while preserving EventData order
 /// and Windows record IDs. XML is used because object-shaped JSON cannot retain
 /// duplicate EventData names and may reorder properties.
+#[cfg(test)]
 fn collect_bounded_records<I, T, E, U, F>(records: I, parse: F) -> Vec<U>
 where
     I: IntoIterator<Item = Result<T, E>>,
@@ -273,20 +282,45 @@ where
 }
 
 pub fn parse_esp_evtx_file(path: &Path) -> Result<Vec<ParsedEspEventRecord>, String> {
+    parse_esp_evtx_file_bounded(path, MAX_ENTRIES_PER_FILE, usize::MAX).map(|batch| batch.records)
+}
+
+pub fn parse_esp_evtx_file_bounded(
+    path: &Path,
+    inspection_limit: usize,
+    max_record_bytes: usize,
+) -> Result<ParsedEspEvtxBatch, String> {
     let mut parser = EvtxParser::from_path(path)
         .map_err(|error| format!("Failed to open EVTX file {}: {error}", path.display()))?;
     let source_file = path.to_string_lossy().to_string();
-    let records = collect_bounded_records(parser.records(), |record| {
-        parse_esp_event_xml(
+    let mut records = Vec::new();
+    let mut inspected_records = 0;
+    let mut oversized_record = false;
+    for record_result in parser.records().take(inspection_limit) {
+        inspected_records += 1;
+        let Ok(record) = record_result else {
+            continue;
+        };
+        if record.data.len() > max_record_bytes {
+            oversized_record = true;
+            continue;
+        }
+        if let Some(record) = parse_esp_event_xml(
             &record.data,
             &source_file,
             Some(record.event_record_id),
             None,
             "Unknown",
-        )
-    });
+        ) {
+            records.push(record);
+        }
+    }
 
-    Ok(records)
+    Ok(ParsedEspEvtxBatch {
+        records,
+        inspected_records,
+        truncated: oversized_record || inspected_records >= inspection_limit,
+    })
 }
 
 /// Normalize rendered live XML or captured EVTX XML into the same ordered

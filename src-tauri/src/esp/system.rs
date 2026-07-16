@@ -21,11 +21,224 @@ pub const MAX_SYSTEM_ROWS: usize = 64;
 
 #[cfg(any(target_os = "windows", test))]
 const DELIVERY_OPTIMIZATION_SCRIPT: &str = concat!(
-    "$ErrorActionPreference='Stop';",
+    "$ErrorActionPreference='Stop';try{",
     "$perf=Get-DeliveryOptimizationPerfSnapThisMonth|Select-Object DownloadHttpBytes,DownloadLanBytes,DownloadCacheHostBytes;",
     "$events=@(Get-DeliveryOptimizationLog|Where-Object {$_.Function -match '(DownloadStart)|(DownloadCompleted)' -and ($_.Message -like '*.intunewin.bin,*' -or $_.Message -like '*Microsoft Office Click-to-Run*')}|Select-Object -First 64|ForEach-Object {[pscustomobject]@{Function=[string]$_.Function;TimeCreated=$_.TimeCreated.ToUniversalTime().ToString('o');Message=[string]$_.Message}});",
-    "[pscustomobject]@{perf=$perf;events=$events}|ConvertTo-Json -Compress -Depth 4",
+    "[pscustomobject]@{perf=$perf;events=$events}|ConvertTo-Json -Compress -Depth 4;",
+    "}catch{[Console]::Error.Write(('CMTRACEOPEN_HRESULT=0x{0:X8}' -f [int]$_.Exception.HResult));exit 1}",
 );
+
+#[cfg(target_os = "windows")]
+const MAX_COMMAND_OUTPUT_BYTES: usize = 1024 * 1024;
+#[cfg(target_os = "windows")]
+const MAX_COMMAND_ERROR_BYTES: usize = 16 * 1024;
+
+#[cfg(any(target_os = "windows", test))]
+#[derive(Debug)]
+struct BoundedCommandOutput {
+    status: std::process::ExitStatus,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+    stdout_truncated: bool,
+    stderr_truncated: bool,
+}
+
+#[cfg(any(target_os = "windows", test))]
+#[derive(Debug)]
+struct BoundedReaderOutput {
+    bytes: Vec<u8>,
+    truncated: bool,
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn run_bounded_command(
+    mut command: std::process::Command,
+    timeout: Duration,
+    max_stdout_bytes: usize,
+    max_stderr_bytes: usize,
+) -> Result<BoundedCommandOutput, SystemReadError> {
+    use std::io::ErrorKind;
+    use std::process::Stdio;
+    use std::time::Instant;
+
+    if timeout.is_zero() {
+        return Err(SystemReadError::TimedOut);
+    }
+
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = match command.spawn() {
+        Ok(child) => child,
+        Err(error) if error.kind() == ErrorKind::NotFound => return Err(SystemReadError::Missing),
+        Err(_) => {
+            return Err(SystemReadError::Failed(
+                "Delivery Optimization command could not start".to_string(),
+            ))
+        }
+    };
+
+    let stdout = child.stdout.take().ok_or_else(|| {
+        SystemReadError::Failed("Delivery Optimization stdout pipe was unavailable".to_string())
+    })?;
+    let stderr = child.stderr.take().ok_or_else(|| {
+        SystemReadError::Failed("Delivery Optimization stderr pipe was unavailable".to_string())
+    })?;
+    let stdout_reader = match spawn_bounded_reader(stdout, max_stdout_bytes, "stdout") {
+        Ok(reader) => reader,
+        Err(error) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(error);
+        }
+    };
+    let stderr_reader = match spawn_bounded_reader(stderr, max_stderr_bytes, "stderr") {
+        Ok(reader) => reader,
+        Err(error) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = stdout_reader.join();
+            return Err(error);
+        }
+    };
+
+    let deadline = Instant::now() + timeout;
+    let (status, timed_out) = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break (status, false),
+            Ok(None) if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            Ok(None) => {
+                let _ = child.kill();
+                let status = child.wait().map_err(|_| {
+                    SystemReadError::Failed(
+                        "Delivery Optimization command could not be reaped after timeout"
+                            .to_string(),
+                    )
+                })?;
+                break (status, true);
+            }
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = stdout_reader.join();
+                let _ = stderr_reader.join();
+                return Err(SystemReadError::Failed(
+                    "Delivery Optimization command wait failed".to_string(),
+                ));
+            }
+        }
+    };
+
+    let stdout = join_bounded_reader(stdout_reader, "stdout")?;
+    let stderr = join_bounded_reader(stderr_reader, "stderr")?;
+    if timed_out {
+        return Err(SystemReadError::TimedOut);
+    }
+
+    Ok(BoundedCommandOutput {
+        status,
+        stdout: stdout.bytes,
+        stderr: stderr.bytes,
+        stdout_truncated: stdout.truncated,
+        stderr_truncated: stderr.truncated,
+    })
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn spawn_bounded_reader<R>(
+    reader: R,
+    max_bytes: usize,
+    stream_name: &str,
+) -> Result<std::thread::JoinHandle<std::io::Result<BoundedReaderOutput>>, SystemReadError>
+where
+    R: std::io::Read + Send + 'static,
+{
+    std::thread::Builder::new()
+        .name(format!("esp-command-{stream_name}"))
+        .spawn(move || drain_bounded_reader(reader, max_bytes))
+        .map_err(|_| {
+            SystemReadError::Failed(format!(
+                "Delivery Optimization {stream_name} reader could not start"
+            ))
+        })
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn drain_bounded_reader(
+    mut reader: impl std::io::Read,
+    max_bytes: usize,
+) -> std::io::Result<BoundedReaderOutput> {
+    let mut bytes = Vec::with_capacity(max_bytes.min(8 * 1024));
+    let mut truncated = false;
+    let mut buffer = [0_u8; 8 * 1024];
+
+    loop {
+        let read = reader.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        let remaining = max_bytes.saturating_sub(bytes.len());
+        let retained = remaining.min(read);
+        bytes.extend_from_slice(&buffer[..retained]);
+        truncated |= retained < read;
+    }
+
+    Ok(BoundedReaderOutput { bytes, truncated })
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn join_bounded_reader(
+    reader: std::thread::JoinHandle<std::io::Result<BoundedReaderOutput>>,
+    stream_name: &str,
+) -> Result<BoundedReaderOutput, SystemReadError> {
+    reader
+        .join()
+        .map_err(|_| {
+            SystemReadError::Failed(format!(
+                "Delivery Optimization {stream_name} reader stopped unexpectedly"
+            ))
+        })?
+        .map_err(|_| {
+            SystemReadError::Failed(format!(
+                "Delivery Optimization {stream_name} could not be read"
+            ))
+        })
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn classify_delivery_command_failure(output: &BoundedCommandOutput) -> SystemReadError {
+    if structured_hresult(&output.stderr).is_some_and(|code| windows_hresult_matches(code, 5)) {
+        SystemReadError::PermissionDenied
+    } else {
+        SystemReadError::Failed(format!(
+            "Delivery Optimization command failed with exit code {}",
+            output.status.code().unwrap_or(-1)
+        ))
+    }
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn structured_hresult(stderr: &[u8]) -> Option<u32> {
+    const PREFIX: &str = "CMTRACEOPEN_HRESULT=0x";
+    let stderr = std::str::from_utf8(stderr).ok()?;
+    let value = stderr.split_once(PREFIX)?.1;
+    let digits = value
+        .chars()
+        .take_while(|character| character.is_ascii_hexdigit())
+        .take(8)
+        .collect::<String>();
+    (!digits.is_empty())
+        .then(|| u32::from_str_radix(&digits, 16).ok())
+        .flatten()
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn windows_hresult_matches(code: u32, win32_code: u32) -> bool {
+    code == win32_code || code == (0x8007_0000 | win32_code)
+}
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "camelCase")]
@@ -1317,12 +1530,10 @@ fn finish_wmi_query(request: &WmiRequest, rows: Vec<SystemRow>) -> SystemQueryBa
 #[cfg(target_os = "windows")]
 mod windows_provider {
     use std::ffi::OsString;
-    use std::io::ErrorKind;
     use std::os::windows::ffi::OsStringExt;
     use std::path::PathBuf;
-    use std::process::{Command, Stdio};
+    use std::process::Command;
     use std::sync::{Arc, Mutex};
-    use std::thread;
     use std::time::{Duration, Instant};
 
     use windows::core::{BSTR, HRESULT, PCWSTR};
@@ -1344,14 +1555,14 @@ mod windows_provider {
     };
 
     use super::{
-        finish_wmi_query, parse_delivery_json, powershell_path_from_windows_directory,
-        run_bounded_system_query, LiveSystemProvider, SystemProvider, SystemQueryBatch,
-        SystemQueryCancellation, SystemReadError, SystemRow, SystemSource, WmiRequest,
-        DELIVERY_OPTIMIZATION_SCRIPT,
+        classify_delivery_command_failure, finish_wmi_query, parse_delivery_json,
+        powershell_path_from_windows_directory, run_bounded_command, run_bounded_system_query,
+        LiveSystemProvider, SystemProvider, SystemQueryBatch, SystemQueryCancellation,
+        SystemReadError, SystemRow, SystemSource, WmiRequest, DELIVERY_OPTIMIZATION_SCRIPT,
+        MAX_COMMAND_ERROR_BYTES, MAX_COMMAND_OUTPUT_BYTES,
     };
 
     const MAX_VARIANT_CHARS: usize = 4096;
-    const MAX_COMMAND_OUTPUT_BYTES: usize = 1024 * 1024;
     struct HandleGuard(HANDLE);
 
     impl Drop for HandleGuard {
@@ -1667,94 +1878,55 @@ mod windows_provider {
             };
         }
 
-        let mut child = match Command::new(&powershell)
-            .args([
-                "-NoLogo",
-                "-NoProfile",
-                "-NonInteractive",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-Command",
-                DELIVERY_OPTIMIZATION_SCRIPT,
-            ])
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
-        {
-            Ok(child) => child,
-            Err(error) if error.kind() == ErrorKind::NotFound => {
-                return SystemQueryBatch::missing()
-            }
-            Err(_) => {
+        let mut command = Command::new(&powershell);
+        command.args([
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            DELIVERY_OPTIMIZATION_SCRIPT,
+        ]);
+        let output = match run_bounded_command(
+            command,
+            deadline.saturating_duration_since(Instant::now()),
+            MAX_COMMAND_OUTPUT_BYTES,
+            MAX_COMMAND_ERROR_BYTES,
+        ) {
+            Ok(output) => output,
+            Err(SystemReadError::Missing) => return SystemQueryBatch::missing(),
+            Err(error) => {
                 return SystemQueryBatch {
                     rows: Vec::new(),
-                    completion: Err(SystemReadError::Failed(
-                        "Delivery Optimization command could not start".to_string(),
-                    )),
+                    completion: Err(error),
                 }
             }
         };
-
-        let status = loop {
-            match child.try_wait() {
-                Ok(Some(status)) => break Some(status),
-                Ok(None) if Instant::now() < deadline => {
-                    thread::sleep(Duration::from_millis(20));
-                }
-                Ok(None) => {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    break None;
-                }
-                Err(_) => {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return SystemQueryBatch {
-                        rows: Vec::new(),
-                        completion: Err(SystemReadError::Failed(
-                            "Delivery Optimization command wait failed".to_string(),
-                        )),
-                    };
-                }
-            }
-        };
-        let Some(status) = status else {
+        if output.stdout_truncated {
             return SystemQueryBatch {
                 rows: Vec::new(),
-                completion: Err(SystemReadError::TimedOut),
+                completion: Err(SystemReadError::Failed(
+                    "Delivery Optimization output exceeded the size limit".to_string(),
+                )),
             };
-        };
-        if !status.success() {
+        }
+        if !output.status.success() {
             return SystemQueryBatch {
                 rows: Vec::new(),
-                completion: Err(SystemReadError::Failed(format!(
-                    "Delivery Optimization command failed with exit code {}",
-                    status.code().unwrap_or(-1)
-                ))),
+                completion: Err(classify_delivery_command_failure(&output)),
+            };
+        }
+        if output.stderr_truncated {
+            return SystemQueryBatch {
+                rows: Vec::new(),
+                completion: Err(SystemReadError::Failed(
+                    "Delivery Optimization error output exceeded the size limit".to_string(),
+                )),
             };
         }
 
-        let output = match child.wait_with_output() {
-            Ok(output) if output.stdout.len() <= MAX_COMMAND_OUTPUT_BYTES => output.stdout,
-            Ok(_) => {
-                return SystemQueryBatch {
-                    rows: Vec::new(),
-                    completion: Err(SystemReadError::Failed(
-                        "Delivery Optimization output exceeded the size limit".to_string(),
-                    )),
-                }
-            }
-            Err(_) => {
-                return SystemQueryBatch {
-                    rows: Vec::new(),
-                    completion: Err(SystemReadError::Failed(
-                        "Delivery Optimization output read failed".to_string(),
-                    )),
-                }
-            }
-        };
-        match parse_delivery_json(&output, max_rows) {
+        match parse_delivery_json(&output.stdout, max_rows) {
             Ok(rows) if rows.is_empty() => SystemQueryBatch::missing(),
             Ok(rows) => SystemQueryBatch::complete(rows),
             Err(error) => SystemQueryBatch {
@@ -2089,7 +2261,72 @@ mod tests {
         assert!(DELIVERY_OPTIMIZATION_SCRIPT.contains("Get-DeliveryOptimizationLog"));
         assert!(DELIVERY_OPTIMIZATION_SCRIPT.contains("DownloadStart"));
         assert!(DELIVERY_OPTIMIZATION_SCRIPT.contains("DownloadCompleted"));
+        assert!(DELIVERY_OPTIMIZATION_SCRIPT.contains("CMTRACEOPEN_HRESULT=0x"));
         assert!(!DELIVERY_OPTIMIZATION_SCRIPT.contains("Get-DeliveryOptimizationStatus"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bounded_command_drains_output_larger_than_pipe_capacity_before_waiting() {
+        let mut command = std::process::Command::new("/bin/dd");
+        command.args(["if=/dev/zero", "bs=262144", "count=1"]);
+
+        let output = run_bounded_command(command, Duration::from_secs(2), 512 * 1024, 16 * 1024)
+            .expect("large child output must not deadlock behind an unread pipe");
+
+        assert!(output.status.success());
+        assert_eq!(output.stdout.len(), 262_144);
+        assert!(!output.stdout_truncated);
+        assert!(!output.stderr_truncated);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bounded_command_drains_but_does_not_retain_output_past_the_byte_cap() {
+        let mut command = std::process::Command::new("/bin/dd");
+        command.args(["if=/dev/zero", "bs=262144", "count=1"]);
+
+        let output = run_bounded_command(command, Duration::from_secs(2), 4 * 1024, 4 * 1024)
+            .expect("oversized output is drained without blocking");
+
+        assert!(output.status.success());
+        assert_eq!(output.stdout.len(), 4 * 1024);
+        assert!(output.stdout_truncated);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn delivery_command_failure_uses_structured_numeric_hresult_for_permission_denied() {
+        for code in ["00000005", "80070005"] {
+            let mut command = std::process::Command::new("/bin/sh");
+            command.args([
+                "-c",
+                &format!("printf 'CMTRACEOPEN_HRESULT=0x{code}' >&2; exit 1"),
+            ]);
+
+            let output = run_bounded_command(command, Duration::from_secs(2), 4 * 1024, 4 * 1024)
+                .expect("structured failure output");
+
+            assert_eq!(
+                classify_delivery_command_failure(&output),
+                SystemReadError::PermissionDenied,
+                "unexpected classification for Windows error 0x{code}"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bounded_command_kills_and_reaps_a_timed_out_child() {
+        let mut command = std::process::Command::new("/bin/sleep");
+        command.arg("5");
+        let started = Instant::now();
+
+        let error = run_bounded_command(command, Duration::from_millis(50), 4 * 1024, 4 * 1024)
+            .expect_err("sleeping child must time out");
+
+        assert_eq!(error, SystemReadError::TimedOut);
+        assert!(started.elapsed() < Duration::from_secs(1));
     }
 
     #[test]

@@ -185,17 +185,17 @@ pub fn sanitize_command_line(command_line: &str) -> String {
         Regex::new(r#"(?i)(^|\s)((?:--|/)?authorization)(\s*(?:=|:)\s*|\s+)digest\s+.*"#)
             .expect("constant digest-authorization regex");
     let authorization_credential = Regex::new(
-        r#"(?i)(^|\s)((?:--|/)?authorization)(\s*(?:=|:)\s*|\s+)(?:bearer|basic|api[-_]?key)\s+(?:"[^"]*"|'[^']*'|[^\s&"]+)"#,
+        r#"(?i)(^|\s)((?:--|/)?authorization)(\s*(?:=|:)\s*|\s+)(?:bearer|basic|api[-_]?key)\s+(?:"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|[^\s&"]+)"#,
     )
     .expect("constant authorization-credential regex");
-    let bearer = Regex::new(r#"(?i)(bearer\s+)(?:"[^"]*"|'[^']*'|[^\s&"]+)"#)
+    let bearer = Regex::new(r#"(?i)(bearer\s+)(?:"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|[^\s&"]+)"#)
         .expect("constant bearer regex");
     let named_secret = Regex::new(
-        r#"(?i)(^|\s)((?:--|/)?(?:access[-_]?token|bearer[-_]?token|client[-_]?secret|app[-_]?secret|api[-_]?key|token|password|secret|authorization))(\s*(?:=|:)\s*|\s+)(?:"[^"]*"|'[^']*'|[^\s&"]+)"#,
+        r#"(?i)(^|\s)((?:--|/)?(?:access[-_]?token|bearer[-_]?token|client[-_]?secret|app[-_]?secret|api[-_]?key|token|password|secret|authorization))(\s*(?:=|:)\s*|\s+)(?:"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|[^\s&"]+)"#,
     )
     .expect("constant named-secret regex");
     let query_secret = Regex::new(
-        r#"(?i)([?&](?:sig|access[-_]?token|bearer[-_]?token|client[-_]?secret|app[-_]?secret|api[-_]?key|token|password|secret|authorization)=)(?:"[^"]*"|'[^']*'|[^&\s"]+)"#,
+        r#"(?i)([?&](?:sig|access[-_]?token|bearer[-_]?token|client[-_]?secret|app[-_]?secret|api[-_]?key|token|password|secret|authorization)=)(?:"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|[^&\s"]+)"#,
     )
     .expect("constant query-secret regex");
 
@@ -713,6 +713,43 @@ mod tests {
             assert!(
                 !sanitized.contains("s3cr3t"),
                 "secret leaked for variant {secret_argument}: {sanitized}"
+            );
+            assert!(sanitized.contains("/i {12345678-1234-1234-1234-1234567890AB}"));
+            assert!(sanitized.contains("/L*V C:\\Windows\\Temp\\contoso.log"));
+            assert!(sanitized.contains("[REDACTED]"));
+        }
+    }
+
+    #[test]
+    fn command_line_sanitizer_redacts_escaped_quotes_inside_named_secrets() {
+        let cases = [
+            (
+                r#"--client-secret "prefix\"client-secret-sentinel""#,
+                "client-secret-sentinel",
+            ),
+            (
+                r#"--app_secret="prefix\"app-secret-sentinel""#,
+                "app-secret-sentinel",
+            ),
+            (
+                r#"Bearer "prefix\"bearer-secret-sentinel""#,
+                "bearer-secret-sentinel",
+            ),
+            (
+                r#"https://cache.invalid/content?access_token="prefix\"query-secret-sentinel"&safe=true"#,
+                "query-secret-sentinel",
+            ),
+        ];
+
+        for (secret_argument, sentinel) in cases {
+            let raw = format!(
+                "msiexec.exe /i {{12345678-1234-1234-1234-1234567890AB}} {secret_argument} /L*V C:\\Windows\\Temp\\contoso.log"
+            );
+            let sanitized = sanitize_command_line(&raw);
+
+            assert!(
+                !sanitized.contains(sentinel),
+                "escaped quoted secret leaked for {secret_argument}: {sanitized}"
             );
             assert!(sanitized.contains("/i {12345678-1234-1234-1234-1234567890AB}"));
             assert!(sanitized.contains("/L*V C:\\Windows\\Temp\\contoso.log"));
