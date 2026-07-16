@@ -224,6 +224,10 @@ pub fn run() {
             commands::graph_api::graph_resolve_guids,
             #[cfg(target_os = "windows")]
             commands::graph_api::graph_fetch_all_apps,
+            #[cfg(feature = "esp-diagnostics")]
+            commands::graph_api::graph_fetch_esp_diagnostics,
+            #[cfg(feature = "esp-diagnostics")]
+            commands::graph_api::graph_cancel_esp_diagnostics,
             #[cfg(feature = "secureboot")]
             commands::secureboot::analyze_secureboot,
             #[cfg(feature = "secureboot")]

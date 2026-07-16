@@ -99,6 +99,31 @@ impl<T> VersionedAuthSlot<T> {
 }
 
 #[cfg(any(target_os = "windows", test))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DeadlineReceiveError {
+    Timeout,
+    Disconnected,
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn receive_before_deadline<T>(
+    receiver: &std::sync::mpsc::Receiver<T>,
+    deadline: std::time::Instant,
+) -> Result<T, DeadlineReceiveError> {
+    let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+    if remaining.is_zero() {
+        return Err(DeadlineReceiveError::Timeout);
+    }
+    match receiver.recv_timeout(remaining) {
+        Ok(value) => Ok(value),
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Err(DeadlineReceiveError::Timeout),
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+            Err(DeadlineReceiveError::Disconnected)
+        }
+    }
+}
+
+#[cfg(any(target_os = "windows", test))]
 fn invalid_graph_app_response(required_scope: &str) -> client::GraphClientError {
     client::GraphClientError::new(
         client::GraphClientErrorKind::InvalidResponse,
@@ -167,18 +192,23 @@ fn parse_graph_app_values(
 mod windows_impl {
     use std::collections::{BTreeMap, HashMap, HashSet};
     use std::io::Read;
-    use std::sync::Mutex;
+    use std::sync::{Arc, Mutex};
 
     use super::client::{
         resolve_app_chunk_with_fallback, GraphBatchItem, GraphCancellation, GraphClient,
         GraphClientError, GraphClientErrorKind, GraphTransport, GraphTransportFailure,
         MAX_GRAPH_RESPONSE_BYTES,
     };
+    #[cfg(feature = "esp-diagnostics")]
+    use super::esp::{
+        EspGraphEndpoint, EspGraphOperation, EspGraphOperationError, EspGraphOperationRegistry,
+        EspGraphProvider, EspGraphRequest,
+    };
     use super::{
         normalize_graph_guid, parse_graph_app_json, parse_graph_app_values,
-        project_graph_auth_status, GraphAppInfo, GraphAuthStatus, GraphHttpMethod,
-        GraphResolutionResult, GraphTransportRequest, GraphTransportResponse, VersionedAuthSlot,
-        VersionedGuidCache, GRAPH_SCOPE_REQUEST,
+        project_graph_auth_status, receive_before_deadline, DeadlineReceiveError, GraphAppInfo,
+        GraphAuthStatus, GraphHttpMethod, GraphResolutionResult, GraphTransportRequest,
+        GraphTransportResponse, VersionedAuthSlot, VersionedGuidCache, GRAPH_SCOPE_REQUEST,
     };
     use crate::error::AppError;
 
@@ -187,9 +217,16 @@ mod windows_impl {
     // ── Token cache ─────────────────────────────────────────────────────────────
 
     #[derive(Default)]
-    pub struct GraphAuthState {
+    struct GraphAuthStateInner {
         access_token: Mutex<VersionedAuthSlot<CachedToken>>,
         guid_cache: Mutex<VersionedGuidCache>,
+        #[cfg(feature = "esp-diagnostics")]
+        esp_operations: EspGraphOperationRegistry,
+    }
+
+    #[derive(Clone, Default)]
+    pub struct GraphAuthState {
+        inner: Arc<GraphAuthStateInner>,
     }
 
     #[derive(Clone)]
@@ -211,7 +248,7 @@ mod windows_impl {
         }
 
         fn get_valid_token_snapshot(&self) -> (Option<CachedToken>, u64) {
-            let mut guard = self.access_token.lock().unwrap();
+            let mut guard = self.inner.access_token.lock().unwrap();
             let is_valid = guard
                 .value
                 .as_ref()
@@ -227,7 +264,8 @@ mod windows_impl {
 
             let generation = guard.replace(None);
             drop(guard);
-            self.guid_cache.lock().unwrap().reset_to(generation);
+            self.inner.guid_cache.lock().unwrap().reset_to(generation);
+            self.cancel_esp_operations();
             (None, generation)
         }
 
@@ -237,7 +275,7 @@ mod windows_impl {
         }
 
         fn claim_authentication(&self) -> Result<CachedToken, u64> {
-            let mut guard = self.access_token.lock().unwrap();
+            let mut guard = self.inner.access_token.lock().unwrap();
             let is_valid = guard
                 .value
                 .as_ref()
@@ -252,50 +290,77 @@ mod windows_impl {
 
             let generation = guard.replace(None);
             drop(guard);
-            self.guid_cache.lock().unwrap().reset_to(generation);
+            self.inner.guid_cache.lock().unwrap().reset_to(generation);
+            self.cancel_esp_operations();
             Err(generation)
         }
 
         fn set_token_if_generation(&self, expected: u64, token: CachedToken) -> bool {
-            let mut guard = self.access_token.lock().unwrap();
+            let mut guard = self.inner.access_token.lock().unwrap();
             let Some(generation) = guard.replace_if_generation(expected, Some(token)) else {
                 return false;
             };
             drop(guard);
-            self.guid_cache.lock().unwrap().reset_to(generation);
+            self.inner.guid_cache.lock().unwrap().reset_to(generation);
+            self.cancel_esp_operations();
             true
         }
 
         fn clear_token_if_generation(&self, expected: u64) -> bool {
-            let mut guard = self.access_token.lock().unwrap();
+            let mut guard = self.inner.access_token.lock().unwrap();
             let Some(generation) = guard.replace_if_generation(expected, None) else {
                 return false;
             };
             drop(guard);
-            self.guid_cache.lock().unwrap().reset_to(generation);
+            self.inner.guid_cache.lock().unwrap().reset_to(generation);
+            self.cancel_esp_operations();
             true
         }
 
         fn clear_token(&self) {
-            let mut guard = self.access_token.lock().unwrap();
+            let mut guard = self.inner.access_token.lock().unwrap();
             let generation = guard.replace(None);
             drop(guard);
-            self.guid_cache.lock().unwrap().reset_to(generation);
+            self.inner.guid_cache.lock().unwrap().reset_to(generation);
+            self.cancel_esp_operations();
         }
 
         fn get_cached_app(&self, generation: u64, guid: &str) -> Option<GraphAppInfo> {
-            self.guid_cache.lock().unwrap().get(generation, guid)
+            self.inner.guid_cache.lock().unwrap().get(generation, guid)
         }
 
         fn cache_apps(&self, generation: u64, apps: &HashMap<String, GraphAppInfo>) {
-            self.guid_cache.lock().unwrap().insert_all(generation, apps);
+            self.inner
+                .guid_cache
+                .lock()
+                .unwrap()
+                .insert_all(generation, apps);
         }
 
         fn replace_apps(&self, generation: u64, apps: HashMap<String, GraphAppInfo>) {
-            self.guid_cache
+            self.inner
+                .guid_cache
                 .lock()
                 .unwrap()
                 .replace_all(generation, apps);
+        }
+
+        #[cfg(feature = "esp-diagnostics")]
+        pub(crate) fn begin_esp_operation(
+            &self,
+            request_id: &str,
+        ) -> Result<EspGraphOperation, EspGraphOperationError> {
+            self.inner.esp_operations.begin(request_id)
+        }
+
+        #[cfg(feature = "esp-diagnostics")]
+        pub(crate) fn cancel_esp_operation(&self, request_id: &str) -> bool {
+            self.inner.esp_operations.cancel(request_id)
+        }
+
+        fn cancel_esp_operations(&self) {
+            #[cfg(feature = "esp-diagnostics")]
+            self.inner.esp_operations.cancel_all();
         }
     }
 
@@ -307,7 +372,7 @@ mod windows_impl {
     mod wam {
         use super::*;
 
-        use windows::core::{factory, HSTRING};
+        use windows::core::{factory, RuntimeType, HSTRING};
         use windows::Security::Authentication::Web::Core::{
             WebAuthenticationCoreManager, WebTokenRequest, WebTokenRequestResult,
             WebTokenRequestStatus,
@@ -316,6 +381,44 @@ mod windows_impl {
         use windows::Win32::System::WinRT::IWebAuthenticationCoreManagerInterop;
         use windows_future::IAsyncOperation;
 
+        const GRAPH_WAM_ACQUISITION_TIMEOUT: std::time::Duration =
+            std::time::Duration::from_secs(120);
+
+        fn wait_for_operation<T>(
+            operation: &IAsyncOperation<T>,
+            deadline: std::time::Instant,
+            stage: &str,
+        ) -> Result<T, AppError>
+        where
+            T: RuntimeType + Send + 'static,
+        {
+            let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+            operation
+                .when(move |result| {
+                    let _ = sender.send(result);
+                })
+                .map_err(|error| {
+                    AppError::Internal(format!(
+                        "WAM {stage} completion registration failed: {error}"
+                    ))
+                })?;
+
+            match receive_before_deadline(&receiver, deadline) {
+                Ok(result) => result
+                    .map_err(|error| AppError::Internal(format!("WAM {stage} failed: {error}"))),
+                Err(DeadlineReceiveError::Timeout) => {
+                    let _ = operation.Cancel();
+                    Err(AppError::Internal(format!(
+                        "WAM authentication timed out during {stage} after {} seconds.",
+                        GRAPH_WAM_ACQUISITION_TIMEOUT.as_secs()
+                    )))
+                }
+                Err(DeadlineReceiveError::Disconnected) => Err(AppError::Internal(format!(
+                    "WAM {stage} completion channel disconnected."
+                ))),
+            }
+        }
+
         /// Acquire a token via WAM using the Win32 interop path.
         ///
         /// Desktop (Win32) apps don't have a CoreWindow, so we must use
@@ -323,16 +426,17 @@ mod windows_impl {
         /// with an explicit HWND instead of the UWP `RequestTokenAsync`.
         pub fn acquire_token(hwnd_raw: isize) -> Result<CachedToken, AppError> {
             let hwnd = HWND(hwnd_raw as *mut _);
+            let deadline = std::time::Instant::now() + GRAPH_WAM_ACQUISITION_TIMEOUT;
 
             // Provider lookup doesn't need a window
             let authority = HSTRING::from("organizations");
-            let provider = WebAuthenticationCoreManager::FindAccountProviderWithAuthorityAsync(
-                &HSTRING::from("https://login.microsoft.com"),
-                &authority,
-            )
-            .map_err(|e| AppError::Internal(format!("WAM provider lookup failed: {e}")))?
-            .join()
-            .map_err(|e| AppError::Internal(format!("WAM provider await failed: {e}")))?;
+            let provider_operation =
+                WebAuthenticationCoreManager::FindAccountProviderWithAuthorityAsync(
+                    &HSTRING::from("https://login.microsoft.com"),
+                    &authority,
+                )
+                .map_err(|e| AppError::Internal(format!("WAM provider lookup failed: {e}")))?;
+            let provider = wait_for_operation(&provider_operation, deadline, "provider lookup")?;
 
             // WAM v2 scope model: request only the five delegated Intune read
             // capabilities and do not attach a v1 `resource` property.
@@ -350,9 +454,7 @@ mod windows_impl {
                 unsafe { interop.RequestTokenForWindowAsync(hwnd, &request) }
                     .map_err(|e| AppError::Internal(format!("WAM token request failed: {e}")))?;
 
-            let result = operation
-                .join()
-                .map_err(|e| AppError::Internal(format!("WAM token await failed: {e}")))?;
+            let result = wait_for_operation(&operation, deadline, "token request")?;
 
             let status = result
                 .ResponseStatus()
@@ -437,6 +539,7 @@ mod windows_impl {
 
     struct UreqGraphTransport<'a> {
         access_token: &'a str,
+        deadline: Option<std::time::Instant>,
     }
 
     impl GraphTransport for UreqGraphTransport<'_> {
@@ -445,11 +548,22 @@ mod windows_impl {
             request: &GraphTransportRequest,
             timeout: std::time::Duration,
         ) -> Result<GraphTransportResponse, GraphTransportFailure> {
+            let timeout = self
+                .deadline
+                .map(|deadline| deadline.saturating_duration_since(std::time::Instant::now()))
+                .unwrap_or(timeout)
+                .min(timeout);
+            if timeout.is_zero() {
+                return Err(GraphTransportFailure::Timeout);
+            }
             let agent = ureq::Agent::config_builder()
                 .https_only(true)
                 .http_status_as_error(false)
                 .max_redirects(0)
                 .timeout_global(Some(timeout))
+                .timeout_connect(Some(timeout.min(std::time::Duration::from_secs(10))))
+                .timeout_recv_response(Some(timeout))
+                .timeout_recv_body(Some(timeout))
                 .build()
                 .new_agent();
             let authorization = format!("Bearer {}", self.access_token);
@@ -497,6 +611,93 @@ mod windows_impl {
             std::thread::sleep(duration);
             true
         }
+    }
+
+    #[cfg(feature = "esp-diagnostics")]
+    struct WindowsEspGraphProvider {
+        state: GraphAuthState,
+        token: CachedToken,
+        generation: u64,
+        deadline: std::time::Instant,
+    }
+
+    #[cfg(feature = "esp-diagnostics")]
+    impl EspGraphProvider for WindowsEspGraphProvider {
+        fn get(
+            &self,
+            endpoint: &EspGraphEndpoint,
+            cancellation: &dyn GraphCancellation,
+        ) -> Result<serde_json::Value, GraphClientError> {
+            let transport = UreqGraphTransport {
+                access_token: &self.token.token,
+                deadline: Some(self.deadline),
+            };
+            let client = GraphClient::new("graph.microsoft.com", &transport, cancellation);
+            let result = client.request_json::<serde_json::Value>(GraphTransportRequest {
+                method: GraphHttpMethod::Get,
+                url: format!("https://graph.microsoft.com{}", endpoint.path),
+                consistency_level: None,
+                content_type: None,
+                body: None,
+                required_scope: endpoint.required_scope.clone(),
+            });
+            if let Err(error) = &result {
+                if error.invalidates_auth() {
+                    self.state.clear_token_if_generation(self.generation);
+                }
+            }
+            result
+        }
+    }
+
+    #[cfg(feature = "esp-diagnostics")]
+    pub struct PreparedEspGraphRequest {
+        provider: WindowsEspGraphProvider,
+        request: EspGraphRequest,
+        operation: EspGraphOperation,
+    }
+
+    #[cfg(feature = "esp-diagnostics")]
+    impl PreparedEspGraphRequest {
+        pub fn execute(self) -> cmtraceopen_parser::esp::EspGraphOverlay {
+            let requested_at =
+                chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+            super::esp::fetch_esp_graph_overlay(
+                &self.provider,
+                &self.request,
+                &self.operation,
+                &requested_at,
+            )
+        }
+    }
+
+    #[cfg(feature = "esp-diagnostics")]
+    pub fn prepare_esp_diagnostics(
+        state: &GraphAuthState,
+        request: EspGraphRequest,
+    ) -> Result<PreparedEspGraphRequest, AppError> {
+        let operation = state
+            .begin_esp_operation(&request.request_id)
+            .map_err(|error| AppError::InvalidInput(error.to_string()))?;
+        let (token, generation) = state
+            .get_valid_token()
+            .ok_or_else(|| AppError::Internal("GraphNotConnected".to_string()))?;
+        let deadline = std::time::Instant::now() + operation.remaining();
+        Ok(PreparedEspGraphRequest {
+            provider: WindowsEspGraphProvider {
+                state: state.clone(),
+                token,
+                generation,
+                deadline,
+            },
+            request,
+            operation,
+        })
+    }
+
+    #[cfg(feature = "esp-diagnostics")]
+    pub fn cancel_esp_diagnostics(state: &GraphAuthState, request_id: &str) -> bool {
+        state.cancel_esp_operation(request_id)
     }
 
     fn map_ureq_transport_error(error: ureq::Error) -> GraphTransportFailure {
@@ -759,6 +960,7 @@ mod windows_impl {
     ) -> Result<Vec<GraphAppInfo>, GraphClientError> {
         let transport = UreqGraphTransport {
             access_token: token,
+            deadline: None,
         };
         let cancellation = NoGraphCancellation;
         let client = GraphClient::new("graph.microsoft.com", &transport, &cancellation);
@@ -793,6 +995,7 @@ mod windows_impl {
         })?;
         let transport = UreqGraphTransport {
             access_token: token,
+            deadline: None,
         };
         let cancellation = NoGraphCancellation;
         let client = GraphClient::new("graph.microsoft.com", &transport, &cancellation);
@@ -836,6 +1039,7 @@ mod windows_impl {
     );
         let transport = UreqGraphTransport {
             access_token: token,
+            deadline: None,
         };
         let cancellation = NoGraphCancellation;
         let client = GraphClient::new("graph.microsoft.com", &transport, &cancellation);
@@ -857,6 +1061,81 @@ mod windows_impl {
             Err(error) => Err(error),
         }
     }
+
+    #[cfg(all(test, feature = "esp-diagnostics"))]
+    mod esp_tests {
+        use super::*;
+        use cmtraceopen_parser::esp::EspIdentityEvidence;
+
+        fn request(request_id: &str) -> EspGraphRequest {
+            EspGraphRequest {
+                request_id: request_id.to_string(),
+                identity: EspIdentityEvidence {
+                    device_name: Some("DEVICE-01".to_string()),
+                    managed_device_id: None,
+                    entra_device_id: None,
+                    entdm_id: None,
+                    tenant_id: None,
+                    tenant_domain: None,
+                    user_principal_name: None,
+                    serial_number: None,
+                    evidence: Vec::new(),
+                },
+                workload_ids: Vec::new(),
+                selected_managed_device_id: None,
+                evidence_window_start_utc: None,
+                evidence_window_end_utc: None,
+                enrollment_configuration_ids: Vec::new(),
+                app_ids: Vec::new(),
+                policy_references: Vec::new(),
+                script_references: Vec::new(),
+            }
+        }
+
+        fn valid_token() -> CachedToken {
+            CachedToken {
+                token: "memory-only-test-token".to_string(),
+                status: GraphAuthStatus {
+                    is_authenticated: true,
+                    user_principal_name: Some("user@contoso.example".to_string()),
+                    tenant_id: Some("tenant-a".to_string()),
+                    granted_scopes: Vec::new(),
+                    missing_scopes: Vec::new(),
+                    expires_at: Some(unix_now() + 3_600),
+                    capabilities: super::super::GraphAuthCapabilities::all(),
+                    error: None,
+                },
+            }
+        }
+
+        #[test]
+        fn disconnected_prepare_releases_request_id_ownership() {
+            let state = GraphAuthState::new();
+
+            for _ in 0..2 {
+                let result = prepare_esp_diagnostics(&state, request("request-a"));
+                let error = match result {
+                    Ok(_) => panic!("disconnected Graph state must not prepare a request"),
+                    Err(error) => error,
+                };
+                assert_eq!(error.to_string(), "GraphNotConnected");
+            }
+        }
+
+        #[test]
+        fn matching_generation_invalidation_cancels_owned_operation_once() {
+            let state = GraphAuthState::new();
+            assert!(state.set_token_if_generation(0, valid_token()));
+            let operation = state
+                .begin_esp_operation("request-b")
+                .expect("request ownership");
+            assert!(!operation.is_cancelled());
+
+            assert!(state.clear_token_if_generation(1));
+            assert!(operation.is_cancelled());
+            assert!(!state.clear_token_if_generation(1));
+        }
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -865,6 +1144,8 @@ pub use windows_impl::*;
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::sync::mpsc;
+    use std::time::{Duration, Instant};
 
     use super::client::GraphClientErrorKind;
     use super::{
@@ -875,6 +1156,35 @@ mod tests {
     const APP_A: &str = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
     const APP_B: &str = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
     const APP_SCOPE: &str = "DeviceManagementApps.Read.All";
+
+    #[test]
+    fn deadline_receiver_distinguishes_ready_timeout_and_disconnect() {
+        let (ready_sender, ready_receiver) = mpsc::sync_channel(1);
+        ready_sender.send(7_u8).expect("ready value");
+        assert_eq!(
+            super::receive_before_deadline(
+                &ready_receiver,
+                Instant::now() + Duration::from_secs(1)
+            ),
+            Ok(7)
+        );
+
+        let (_pending_sender, pending_receiver) = mpsc::sync_channel::<u8>(1);
+        assert_eq!(
+            super::receive_before_deadline(&pending_receiver, Instant::now()),
+            Err(super::DeadlineReceiveError::Timeout)
+        );
+
+        let (disconnected_sender, disconnected_receiver) = mpsc::sync_channel::<u8>(1);
+        drop(disconnected_sender);
+        assert_eq!(
+            super::receive_before_deadline(
+                &disconnected_receiver,
+                Instant::now() + Duration::from_secs(1)
+            ),
+            Err(super::DeadlineReceiveError::Disconnected)
+        );
+    }
 
     fn app(id: &str, name: &str) -> GraphAppInfo {
         GraphAppInfo {

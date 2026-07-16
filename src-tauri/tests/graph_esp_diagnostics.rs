@@ -1698,12 +1698,14 @@ mod esp_correlation_tests {
 mod esp_orchestration_tests {
     use std::collections::HashMap;
     use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::{Arc, Mutex};
+    use std::sync::{Arc, Barrier, Mutex};
+    use std::time::{Duration, Instant};
 
     use app_lib::graph_api::client::{GraphCancellation, GraphClientError, GraphClientErrorKind};
     use app_lib::graph_api::esp::{
-        fetch_esp_graph_overlay, EspGraphEndpoint, EspGraphPolicyReference, EspGraphProvider,
-        EspGraphRequest, EspGraphScriptReference,
+        fetch_esp_graph_overlay, EspGraphEndpoint, EspGraphOperationError,
+        EspGraphOperationRegistry, EspGraphPolicyReference, EspGraphProvider, EspGraphRequest,
+        EspGraphScriptReference,
     };
     use cmtraceopen_parser::esp::{
         EspClassifiedString, EspCorrelationConfidence, EspGraphPolicyKind,
@@ -3042,5 +3044,99 @@ mod esp_orchestration_tests {
                 .map(|error| error.code.as_str()),
             Some("ItemLimitExceeded")
         );
+    }
+
+    #[test]
+    fn ipc_request_contract_round_trips_every_reference_class_without_credentials() {
+        let request = request();
+        let value = serde_json::to_value(&request).expect("serialize ESP Graph request");
+
+        assert_eq!(value["requestId"], "esp-request-1");
+        assert_eq!(value["workloadIds"], serde_json::json!([APP]));
+        assert_eq!(value["appIds"], serde_json::json!([APP]));
+        assert_eq!(
+            value["policyReferences"],
+            serde_json::json!([{"id": POLICY, "kind": "deviceConfiguration"}])
+        );
+        assert_eq!(
+            value["scriptReferences"],
+            serde_json::json!([{"id": SCRIPT, "kind": "platformScript"}])
+        );
+        let serialized = serde_json::to_string(&value).expect("request JSON");
+        assert!(!serialized.contains("accessToken"));
+        assert!(!serialized.contains("Authorization"));
+        assert_eq!(
+            serde_json::from_value::<EspGraphRequest>(value).expect("deserialize request"),
+            request
+        );
+    }
+
+    #[test]
+    fn ipc_operation_registry_cancels_only_the_owned_id_and_releases_on_drop() {
+        let registry = EspGraphOperationRegistry::default();
+        let first = registry.begin("graph-first").expect("first operation");
+        let second = registry.begin("graph-second").expect("second operation");
+
+        assert!(matches!(
+            registry.begin("graph-first"),
+            Err(EspGraphOperationError::DuplicateRequest)
+        ));
+        assert!(!registry.cancel("graph-missing"));
+        assert!(registry.cancel("graph-first"));
+        assert!(first.is_cancelled());
+        assert!(!second.is_cancelled());
+
+        drop(first);
+        assert!(registry.begin("graph-first").is_ok());
+        assert!(!second.is_cancelled());
+    }
+
+    #[test]
+    fn ipc_operation_registry_rejects_invalid_ids_and_bounds_active_ownership() {
+        let registry = EspGraphOperationRegistry::default();
+        for invalid in ["", " leading", "trailing ", "line\nbreak"] {
+            assert!(matches!(
+                registry.begin(invalid),
+                Err(EspGraphOperationError::InvalidRequestId)
+            ));
+        }
+        assert!(matches!(
+            registry.begin(&"x".repeat(129)),
+            Err(EspGraphOperationError::InvalidRequestId)
+        ));
+
+        let operations: Vec<_> = (0..32)
+            .map(|index| {
+                registry
+                    .begin(&format!("graph-{index}"))
+                    .expect("bounded active operation")
+            })
+            .collect();
+        assert!(matches!(
+            registry.begin("graph-over-limit"),
+            Err(EspGraphOperationError::ResourceLimit)
+        ));
+
+        drop(operations);
+        assert!(registry.begin("graph-after-release").is_ok());
+    }
+
+    #[test]
+    fn ipc_operation_cancellation_interrupts_a_retry_wait() {
+        let registry = EspGraphOperationRegistry::default();
+        let operation = Arc::new(registry.begin("graph-wait").expect("wait operation"));
+        let worker_operation = Arc::clone(&operation);
+        let barrier = Arc::new(Barrier::new(2));
+        let worker_barrier = Arc::clone(&barrier);
+        let started = Instant::now();
+        let worker = std::thread::spawn(move || {
+            worker_barrier.wait();
+            worker_operation.wait_for_retry(Duration::from_secs(10))
+        });
+
+        barrier.wait();
+        assert!(registry.cancel("graph-wait"));
+        assert!(!worker.join().expect("wait worker"));
+        assert!(started.elapsed() < Duration::from_secs(1));
     }
 }

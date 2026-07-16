@@ -250,13 +250,13 @@ enum GraphStatusAction {
     Error(GraphClientErrorKind),
 }
 
-pub struct GraphClient<'a, T: GraphTransport, C: GraphCancellation> {
+pub struct GraphClient<'a, T: GraphTransport, C: GraphCancellation + ?Sized> {
     graph_host: String,
     transport: &'a T,
     cancellation: &'a C,
 }
 
-impl<'a, T: GraphTransport, C: GraphCancellation> GraphClient<'a, T, C> {
+impl<'a, T: GraphTransport, C: GraphCancellation + ?Sized> GraphClient<'a, T, C> {
     pub fn new(graph_host: &str, transport: &'a T, cancellation: &'a C) -> Self {
         Self {
             graph_host: graph_host.trim().trim_end_matches('.').to_ascii_lowercase(),

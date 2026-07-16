@@ -1,6 +1,9 @@
 //! Portable, read-only Microsoft Graph orchestration for ESP diagnostics.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::fmt;
+use std::sync::{Arc, Condvar, Mutex, Weak};
+use std::time::{Duration, Instant};
 
 use chrono::{DateTime, SecondsFormat, Utc};
 use cmtraceopen_parser::esp::{
@@ -27,6 +30,204 @@ pub const CONFIGURATION_SCOPE: &str = "DeviceManagementConfiguration.Read.All";
 pub const SCRIPTS_SCOPE: &str = "DeviceManagementScripts.Read.All";
 const GRAPH_ARTIFACT_ID: &str = "microsoft-graph";
 const MAX_REFERENCED_OBJECTS: usize = 100;
+const MAX_GRAPH_REQUEST_ID_BYTES: usize = 128;
+const MAX_ACTIVE_ESP_GRAPH_OPERATIONS: usize = 32;
+pub const ESP_GRAPH_OVERALL_TIMEOUT: Duration = Duration::from_secs(120);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EspGraphOperationError {
+    InvalidRequestId,
+    DuplicateRequest,
+    ResourceLimit,
+}
+
+impl fmt::Display for EspGraphOperationError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::InvalidRequestId => "InvalidGraphRequestId",
+            Self::DuplicateRequest => "GraphRequestAlreadyActive",
+            Self::ResourceLimit => "GraphRequestLimitReached",
+        })
+    }
+}
+
+impl std::error::Error for EspGraphOperationError {}
+
+#[derive(Default)]
+struct EspGraphOperationRegistryInner {
+    operations: Mutex<HashMap<String, Arc<EspGraphCancellationState>>>,
+}
+
+/// Request-owned cancellation registry shared by the Tauri command adapter.
+/// Dropping an operation removes only that exact ownership instance, so a late
+/// completion cannot delete a newer operation that reused the same request ID.
+#[derive(Clone, Default)]
+pub struct EspGraphOperationRegistry {
+    inner: Arc<EspGraphOperationRegistryInner>,
+}
+
+impl EspGraphOperationRegistry {
+    pub fn begin(&self, request_id: &str) -> Result<EspGraphOperation, EspGraphOperationError> {
+        if !valid_graph_request_id(request_id) {
+            return Err(EspGraphOperationError::InvalidRequestId);
+        }
+
+        let state = Arc::new(EspGraphCancellationState {
+            cancelled: Mutex::new(false),
+            wake: Condvar::new(),
+            deadline: Instant::now() + ESP_GRAPH_OVERALL_TIMEOUT,
+        });
+        let mut operations = self
+            .inner
+            .operations
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if operations.contains_key(request_id) {
+            return Err(EspGraphOperationError::DuplicateRequest);
+        }
+        if operations.len() >= MAX_ACTIVE_ESP_GRAPH_OPERATIONS {
+            return Err(EspGraphOperationError::ResourceLimit);
+        }
+        operations.insert(request_id.to_string(), Arc::clone(&state));
+        Ok(EspGraphOperation {
+            request_id: request_id.to_string(),
+            state,
+            registry: Arc::downgrade(&self.inner),
+        })
+    }
+
+    pub fn cancel(&self, request_id: &str) -> bool {
+        if !valid_graph_request_id(request_id) {
+            return false;
+        }
+        let state = self
+            .inner
+            .operations
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(request_id)
+            .cloned();
+        state.is_some_and(|state| {
+            state.cancel();
+            true
+        })
+    }
+
+    pub fn cancel_all(&self) {
+        let operations: Vec<Arc<EspGraphCancellationState>> = self
+            .inner
+            .operations
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .values()
+            .cloned()
+            .collect();
+        for operation in operations {
+            operation.cancel();
+        }
+    }
+}
+
+fn valid_graph_request_id(request_id: &str) -> bool {
+    !request_id.is_empty()
+        && request_id.len() <= MAX_GRAPH_REQUEST_ID_BYTES
+        && request_id.trim() == request_id
+        && !request_id.chars().any(char::is_control)
+}
+
+struct EspGraphCancellationState {
+    cancelled: Mutex<bool>,
+    wake: Condvar,
+    deadline: Instant,
+}
+
+impl EspGraphCancellationState {
+    fn cancel(&self) {
+        *self
+            .cancelled
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = true;
+        self.wake.notify_all();
+    }
+
+    fn is_cancelled(&self) -> bool {
+        *self
+            .cancelled
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            || Instant::now() >= self.deadline
+    }
+}
+
+pub struct EspGraphOperation {
+    request_id: String,
+    state: Arc<EspGraphCancellationState>,
+    registry: Weak<EspGraphOperationRegistryInner>,
+}
+
+impl EspGraphOperation {
+    pub fn remaining(&self) -> Duration {
+        self.state
+            .deadline
+            .saturating_duration_since(Instant::now())
+    }
+}
+
+impl GraphCancellation for EspGraphOperation {
+    fn is_cancelled(&self) -> bool {
+        self.state.is_cancelled()
+    }
+
+    fn wait_for_retry(&self, duration: Duration) -> bool {
+        let requested_deadline = Instant::now()
+            .checked_add(duration)
+            .unwrap_or(self.state.deadline)
+            .min(self.state.deadline);
+        let mut cancelled = self
+            .state
+            .cancelled
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        loop {
+            if *cancelled {
+                return false;
+            }
+            let now = Instant::now();
+            if now >= self.state.deadline {
+                *cancelled = true;
+                return false;
+            }
+            if now >= requested_deadline {
+                return true;
+            }
+            let wait = requested_deadline.saturating_duration_since(now);
+            let (guard, _) = self
+                .state
+                .wake
+                .wait_timeout(cancelled, wait)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            cancelled = guard;
+        }
+    }
+}
+
+impl Drop for EspGraphOperation {
+    fn drop(&mut self) {
+        let Some(registry) = self.registry.upgrade() else {
+            return;
+        };
+        let mut operations = registry
+            .operations
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if operations
+            .get(&self.request_id)
+            .is_some_and(|current| Arc::ptr_eq(current, &self.state))
+        {
+            operations.remove(&self.request_id);
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
