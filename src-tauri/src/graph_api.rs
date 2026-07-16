@@ -19,8 +19,8 @@ mod windows_impl {
     use std::sync::Mutex;
 
     use super::client::{
-        GraphCancellation, GraphClient, GraphClientError, GraphClientErrorKind, GraphTransport,
-        GraphTransportFailure, MAX_GRAPH_RESPONSE_BYTES,
+        GraphBatchItem, GraphCancellation, GraphClient, GraphClientError, GraphClientErrorKind,
+        GraphTransport, GraphTransportFailure, MAX_GRAPH_RESPONSE_BYTES,
     };
     use super::{
         normalize_graph_guid, project_graph_auth_status, GraphAppInfo, GraphAuthStatus,
@@ -619,7 +619,7 @@ mod windows_impl {
         };
         let cancellation = NoGraphCancellation;
         let client = GraphClient::new("graph.microsoft.com", &transport, &cancellation);
-        let body: serde_json::Value = client.request_json(GraphTransportRequest {
+        let outcomes = client.request_batch_json::<serde_json::Value>(GraphTransportRequest {
             method: GraphHttpMethod::Post,
             url: format!("{GRAPH_BETA_BASE}/$batch"),
             consistency_level: None,
@@ -630,33 +630,32 @@ mod windows_impl {
 
         let mut resolved = HashMap::new();
         let mut not_found = Vec::new();
-        let mut errors = Vec::new();
 
-        if let Some(responses) = body.get("responses").and_then(|v| v.as_array()) {
-            for resp in responses {
-                let id_str = resp.get("id").and_then(|v| v.as_str()).unwrap_or("0");
-                let idx: usize = id_str.parse().unwrap_or(0);
-                let status = resp.get("status").and_then(|v| v.as_u64()).unwrap_or(0);
-                let guid = guids.get(idx).cloned().unwrap_or_default();
-
-                if status == 200 {
-                    if let Some(resp_body) = resp.get("body") {
-                        if let Some(app) = parse_app_json(resp_body) {
-                            resolved.insert(app.id.clone(), app);
-                        }
+        for (guid, outcome) in guids.iter().zip(outcomes) {
+            match outcome {
+                GraphBatchItem::Success(body) => {
+                    let app = parse_app_json(&body).ok_or_else(|| {
+                        GraphClientError::new(
+                            GraphClientErrorKind::InvalidResponse,
+                            "DeviceManagementApps.Read.All",
+                        )
+                    })?;
+                    if app.id != *guid {
+                        return Err(GraphClientError::new(
+                            GraphClientErrorKind::InvalidResponse,
+                            "DeviceManagementApps.Read.All",
+                        ));
                     }
-                } else if status == 404 {
-                    not_found.push(guid);
-                } else {
-                    errors.push(format!("{guid}: HTTP {status}"));
+                    resolved.insert(app.id.clone(), app);
                 }
+                GraphBatchItem::NotFound => not_found.push(guid.clone()),
             }
         }
 
         Ok(GraphResolutionResult {
             resolved,
             not_found,
-            errors,
+            errors: Vec::new(),
         })
     }
 

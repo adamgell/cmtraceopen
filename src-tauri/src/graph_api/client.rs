@@ -4,11 +4,12 @@
 //! policy. Concrete bearer-token attachment and HTTP I/O stay behind a
 //! platform adapter implementing [`GraphTransport`].
 
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 use std::time::Duration;
 
 use serde::de::DeserializeOwned;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use super::models::{GraphHttpMethod, GraphTransportRequest, GraphTransportResponse};
 
@@ -18,6 +19,7 @@ pub const MAX_GRAPH_PAGES: usize = 25;
 pub const MAX_GRAPH_ITEMS: usize = 5_000;
 pub const MAX_GRAPH_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 pub const GRAPH_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+const MAX_GRAPH_BATCH_REQUESTS: usize = 20;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GraphTransportFailure {
@@ -82,16 +84,25 @@ impl GraphClientError {
         response: &GraphTransportResponse,
         required_scope: &str,
     ) -> Self {
+        Self::for_status(kind, response.status, &response.headers, required_scope)
+    }
+
+    fn for_status(
+        kind: GraphClientErrorKind,
+        status: u16,
+        headers: &BTreeMap<String, String>,
+        required_scope: &str,
+    ) -> Self {
         Self {
             kind,
-            status: Some(response.status),
-            request_id: graph_request_id(&response.headers),
+            status: Some(status),
+            request_id: graph_request_id(headers),
             required_scope: sanitize_scope(required_scope),
         }
     }
 
     pub fn invalidates_auth(&self) -> bool {
-        self.kind == GraphClientErrorKind::Unauthorized
+        self.kind == GraphClientErrorKind::Unauthorized || self.status == Some(401)
     }
 }
 
@@ -115,6 +126,57 @@ pub struct GraphPage<T> {
     pub value: Vec<T>,
     #[serde(rename = "@odata.nextLink")]
     pub next_link: Option<String>,
+}
+
+#[derive(Clone, PartialEq)]
+pub enum GraphBatchItem<T> {
+    Success(T),
+    NotFound,
+}
+
+impl<T> fmt::Debug for GraphBatchItem<T> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Success(_) => formatter.write_str("GraphBatchItem::Success(<redacted>)"),
+            Self::NotFound => formatter.write_str("GraphBatchItem::NotFound"),
+        }
+    }
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct GraphBatchRequestEnvelope {
+    requests: Vec<GraphBatchSubrequest>,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct GraphBatchSubrequest {
+    id: String,
+    method: String,
+    url: String,
+}
+
+#[derive(Deserialize)]
+struct GraphBatchResponseEnvelope {
+    responses: Vec<GraphBatchSubresponse>,
+}
+
+#[derive(Deserialize)]
+struct GraphBatchSubresponse {
+    id: String,
+    status: u16,
+    #[serde(default)]
+    headers: BTreeMap<String, String>,
+    #[serde(default)]
+    body: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GraphStatusAction {
+    Success,
+    Retry,
+    Error(GraphClientErrorKind),
 }
 
 pub struct GraphClient<'a, T: GraphTransport, C: GraphCancellation> {
@@ -218,6 +280,123 @@ impl<'a, T: GraphTransport, C: GraphCancellation> GraphClient<'a, T, C> {
         })
     }
 
+    pub fn request_batch_json<Response: DeserializeOwned>(
+        &self,
+        mut request: GraphTransportRequest,
+    ) -> Result<Vec<GraphBatchItem<Response>>, GraphClientError> {
+        let required_scope = sanitize_scope(&request.required_scope);
+        request.required_scope = required_scope.clone();
+        if !is_allowed_graph_batch_url(&request.url, &self.graph_host) {
+            return Err(GraphClientError::new(
+                GraphClientErrorKind::InvalidUrl,
+                &required_scope,
+            ));
+        }
+        let batch = parse_batch_request(&request, &required_scope)?;
+        let envelope: GraphBatchResponseEnvelope = self.request_json(request.clone())?;
+        let mut responses =
+            index_batch_responses(envelope.responses, &batch.requests, &required_scope)?;
+        let mut items = Vec::with_capacity(batch.requests.len());
+
+        for subrequest in &batch.requests {
+            let response = responses
+                .get(&subrequest.id)
+                .ok_or_else(|| invalid_batch_response(&required_scope))?;
+            if let GraphStatusAction::Error(kind) = graph_status_action(response.status, 0) {
+                if kind != GraphClientErrorKind::NotFound {
+                    return Err(GraphClientError::for_status(
+                        kind,
+                        response.status,
+                        &response.headers,
+                        &required_scope,
+                    ));
+                }
+            }
+        }
+
+        for subrequest in &batch.requests {
+            let response = responses
+                .remove(&subrequest.id)
+                .ok_or_else(|| invalid_batch_response(&required_scope))?;
+            items.push(self.resolve_batch_item(&request, subrequest, response, &required_scope)?);
+        }
+
+        Ok(items)
+    }
+
+    fn resolve_batch_item<Response: DeserializeOwned>(
+        &self,
+        request_template: &GraphTransportRequest,
+        subrequest: &GraphBatchSubrequest,
+        mut response: GraphBatchSubresponse,
+        required_scope: &str,
+    ) -> Result<GraphBatchItem<Response>, GraphClientError> {
+        for attempt in 0..MAX_GRAPH_ATTEMPTS {
+            match graph_status_action(response.status, attempt) {
+                GraphStatusAction::Success => {
+                    let body = response.body.take().ok_or_else(|| {
+                        GraphClientError::for_status(
+                            GraphClientErrorKind::InvalidResponse,
+                            response.status,
+                            &response.headers,
+                            required_scope,
+                        )
+                    })?;
+                    let item = serde_json::from_value(body).map_err(|_| {
+                        GraphClientError::for_status(
+                            GraphClientErrorKind::InvalidResponse,
+                            response.status,
+                            &response.headers,
+                            required_scope,
+                        )
+                    })?;
+                    return Ok(GraphBatchItem::Success(item));
+                }
+                GraphStatusAction::Error(GraphClientErrorKind::NotFound) => {
+                    return Ok(GraphBatchItem::NotFound);
+                }
+                GraphStatusAction::Retry => {
+                    let delay = retry_delay(&response.headers, attempt);
+                    if !self.cancellation.wait_for_retry(delay) {
+                        return Err(GraphClientError::new(
+                            GraphClientErrorKind::Cancelled,
+                            required_scope,
+                        ));
+                    }
+
+                    let body = serde_json::to_vec(&GraphBatchRequestEnvelope {
+                        requests: vec![subrequest.clone()],
+                    })
+                    .map_err(|_| invalid_batch_response(required_scope))?;
+                    let mut retry_request = request_template.clone();
+                    retry_request.body = Some(body);
+                    let envelope: GraphBatchResponseEnvelope = self.request_json(retry_request)?;
+                    let mut retry_responses = index_batch_responses(
+                        envelope.responses,
+                        std::slice::from_ref(subrequest),
+                        required_scope,
+                    )?;
+                    response = retry_responses
+                        .remove(&subrequest.id)
+                        .ok_or_else(|| invalid_batch_response(required_scope))?;
+                }
+                GraphStatusAction::Error(kind) => {
+                    return Err(GraphClientError::for_status(
+                        kind,
+                        response.status,
+                        &response.headers,
+                        required_scope,
+                    ));
+                }
+            }
+        }
+
+        Err(GraphClientError::new(
+            GraphClientErrorKind::RetryExhausted,
+            required_scope,
+        ))
+    }
+
     fn execute_with_retry(
         &self,
         request: &GraphTransportRequest,
@@ -248,31 +427,10 @@ impl<'a, T: GraphTransport, C: GraphCancellation> GraphClient<'a, T, C> {
                 ));
             }
 
-            match response.status {
-                200..=299 => return Ok(response),
-                401 => {
-                    return Err(GraphClientError::for_response(
-                        GraphClientErrorKind::Unauthorized,
-                        &response,
-                        required_scope,
-                    ));
-                }
-                403 => {
-                    return Err(GraphClientError::for_response(
-                        GraphClientErrorKind::PermissionDenied,
-                        &response,
-                        required_scope,
-                    ));
-                }
-                404 => {
-                    return Err(GraphClientError::for_response(
-                        GraphClientErrorKind::NotFound,
-                        &response,
-                        required_scope,
-                    ));
-                }
-                429 | 503 | 504 if attempt + 1 < MAX_GRAPH_ATTEMPTS => {
-                    let delay = retry_delay(&response, attempt);
+            match graph_status_action(response.status, attempt) {
+                GraphStatusAction::Success => return Ok(response),
+                GraphStatusAction::Retry => {
+                    let delay = retry_delay(&response.headers, attempt);
                     if !self.cancellation.wait_for_retry(delay) {
                         return Err(GraphClientError::new(
                             GraphClientErrorKind::Cancelled,
@@ -280,16 +438,9 @@ impl<'a, T: GraphTransport, C: GraphCancellation> GraphClient<'a, T, C> {
                         ));
                     }
                 }
-                429 | 503 | 504 => {
+                GraphStatusAction::Error(kind) => {
                     return Err(GraphClientError::for_response(
-                        GraphClientErrorKind::RetryExhausted,
-                        &response,
-                        required_scope,
-                    ));
-                }
-                _ => {
-                    return Err(GraphClientError::for_response(
-                        GraphClientErrorKind::HttpStatus,
+                        kind,
                         &response,
                         required_scope,
                     ));
@@ -326,9 +477,89 @@ impl<'a, T: GraphTransport, C: GraphCancellation> GraphClient<'a, T, C> {
     }
 }
 
-fn retry_delay(response: &GraphTransportResponse, attempt: usize) -> Duration {
-    let retry_after = response
-        .headers
+fn parse_batch_request(
+    request: &GraphTransportRequest,
+    required_scope: &str,
+) -> Result<GraphBatchRequestEnvelope, GraphClientError> {
+    if request.method != GraphHttpMethod::Post
+        || !request
+            .content_type
+            .as_deref()
+            .is_some_and(|value| value.eq_ignore_ascii_case("application/json"))
+    {
+        return Err(invalid_batch_response(required_scope));
+    }
+
+    let body = request
+        .body
+        .as_deref()
+        .filter(|body| body.len() <= MAX_GRAPH_RESPONSE_BYTES)
+        .ok_or_else(|| invalid_batch_response(required_scope))?;
+    let batch: GraphBatchRequestEnvelope =
+        serde_json::from_slice(body).map_err(|_| invalid_batch_response(required_scope))?;
+    if batch.requests.is_empty() || batch.requests.len() > MAX_GRAPH_BATCH_REQUESTS {
+        return Err(invalid_batch_response(required_scope));
+    }
+
+    let mut request_ids = HashSet::with_capacity(batch.requests.len());
+    for subrequest in &batch.requests {
+        if subrequest.method != "GET"
+            || sanitize_request_id(&subrequest.id).as_deref() != Some(subrequest.id.as_str())
+            || !request_ids.insert(subrequest.id.as_str())
+            || !is_allowed_batch_relative_url(&subrequest.url)
+        {
+            return Err(invalid_batch_response(required_scope));
+        }
+    }
+
+    Ok(batch)
+}
+
+fn index_batch_responses(
+    responses: Vec<GraphBatchSubresponse>,
+    expected_requests: &[GraphBatchSubrequest],
+    required_scope: &str,
+) -> Result<HashMap<String, GraphBatchSubresponse>, GraphClientError> {
+    if responses.len() != expected_requests.len() {
+        return Err(invalid_batch_response(required_scope));
+    }
+
+    let expected_ids: HashSet<&str> = expected_requests
+        .iter()
+        .map(|request| request.id.as_str())
+        .collect();
+    let mut indexed = HashMap::with_capacity(responses.len());
+    for response in responses {
+        let id = response.id.clone();
+        if !expected_ids.contains(id.as_str()) || indexed.insert(id, response).is_some() {
+            return Err(invalid_batch_response(required_scope));
+        }
+    }
+    if indexed.len() != expected_ids.len() {
+        return Err(invalid_batch_response(required_scope));
+    }
+
+    Ok(indexed)
+}
+
+fn invalid_batch_response(required_scope: &str) -> GraphClientError {
+    GraphClientError::new(GraphClientErrorKind::InvalidResponse, required_scope)
+}
+
+fn graph_status_action(status: u16, attempt: usize) -> GraphStatusAction {
+    match status {
+        200..=299 => GraphStatusAction::Success,
+        401 => GraphStatusAction::Error(GraphClientErrorKind::Unauthorized),
+        403 => GraphStatusAction::Error(GraphClientErrorKind::PermissionDenied),
+        404 => GraphStatusAction::Error(GraphClientErrorKind::NotFound),
+        429 | 503 | 504 if attempt + 1 < MAX_GRAPH_ATTEMPTS => GraphStatusAction::Retry,
+        429 | 503 | 504 => GraphStatusAction::Error(GraphClientErrorKind::RetryExhausted),
+        _ => GraphStatusAction::Error(GraphClientErrorKind::HttpStatus),
+    }
+}
+
+fn retry_delay(headers: &BTreeMap<String, String>, attempt: usize) -> Duration {
+    let retry_after = headers
         .iter()
         .find(|(name, _)| name.eq_ignore_ascii_case("retry-after"))
         .and_then(|(_, value)| value.trim().parse::<u64>().ok())
@@ -338,11 +569,27 @@ fn retry_delay(response: &GraphTransportResponse, attempt: usize) -> Duration {
         .min(MAX_GRAPH_RETRY_DELAY)
 }
 
-fn graph_request_id(headers: &std::collections::BTreeMap<String, String>) -> Option<String> {
+fn graph_request_id(headers: &BTreeMap<String, String>) -> Option<String> {
     headers
         .iter()
         .find(|(name, _)| name.eq_ignore_ascii_case("request-id"))
         .and_then(|(_, value)| sanitize_request_id(value))
+}
+
+fn is_allowed_batch_relative_url(url: &str) -> bool {
+    url.starts_with('/')
+        && !url.starts_with("//")
+        && url.len() <= 16 * 1024
+        && !url.contains('#')
+        && !url
+            .bytes()
+            .any(|byte| byte.is_ascii_control() || byte.is_ascii_whitespace() || byte == b'\\')
+        && !url
+            .split('?')
+            .next()
+            .unwrap_or_default()
+            .split('/')
+            .any(|segment| matches!(segment, "." | ".."))
 }
 
 fn sanitize_request_id(value: &str) -> Option<String> {
@@ -398,4 +645,17 @@ fn is_allowed_graph_url(url: &str, graph_host: &str) -> bool {
         && !authority.contains('@')
         && !authority.contains(':')
         && authority.eq_ignore_ascii_case(graph_host)
+}
+
+fn is_allowed_graph_batch_url(url: &str, graph_host: &str) -> bool {
+    if !is_allowed_graph_url(url, graph_host) {
+        return false;
+    }
+
+    let remainder = &url[8..];
+    let Some(path_start) = remainder.find('/') else {
+        return false;
+    };
+    let path = &remainder[path_start..];
+    path.eq_ignore_ascii_case("/v1.0/$batch") || path.eq_ignore_ascii_case("/beta/$batch")
 }
