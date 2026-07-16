@@ -21,11 +21,11 @@ use app_lib::esp::bundle::{
 use app_lib::esp::discovery::default_known_source_specs;
 use app_lib::esp::discovery::{
     build_runtime_temp_roots, discover_bounded_logs, embedded_known_source_specs,
-    DiscoveredLogSource, DiscoveryInput, DiscoveryRootKind, DiscoveryRootState,
-    DiscoverySourceOrigin, KnownSourceSpec, DISCOVERY_INTERVAL, MAX_ACTIVE_TAILS,
-    MAX_INITIAL_READ_BYTES, MAX_KNOWN_ENTRIES_PROBED_PER_ROOT, MAX_ROTATIONS_PER_KNOWN_LOG,
-    MAX_SESSION_DURATION, MAX_TEMP_ENTRIES_INSPECTED_PER_ROOT, MAX_TEMP_ENTRIES_PROBED_PER_ROOT,
-    TEMP_LOOKBACK, UPDATE_DEBOUNCE,
+    DiscoveredLogSource, DiscoveryInput, DiscoveryPathFailureKind, DiscoveryRootKind,
+    DiscoveryRootState, DiscoverySourceOrigin, KnownSourceSpec, DISCOVERY_INTERVAL,
+    MAX_ACTIVE_TAILS, MAX_INITIAL_READ_BYTES, MAX_KNOWN_ENTRIES_PROBED_PER_ROOT,
+    MAX_ROTATIONS_PER_KNOWN_LOG, MAX_SESSION_DURATION, MAX_TEMP_ENTRIES_INSPECTED_PER_ROOT,
+    MAX_TEMP_ENTRIES_PROBED_PER_ROOT, TEMP_LOOKBACK, UPDATE_DEBOUNCE,
 };
 use app_lib::esp::event_logs::{
     collect_event_evidence, required_event_id_xpath, EventLogProvider, EventSourceError,
@@ -49,7 +49,8 @@ use app_lib::esp::session::{
 };
 use app_lib::esp::system::{delivery_optimization_from_rows, SystemEvidence, SystemRow};
 use app_lib::esp::tailing::{
-    EspTailResetReason, EspTailSet, MAX_SESSION_TAIL_SOURCES, WINDOWS_SHARED_READ_WRITE_DELETE,
+    EspTailResetReason, EspTailSet, MAX_DORMANT_TAIL_CURSORS, MAX_SESSION_TAIL_SOURCES,
+    WINDOWS_SHARED_READ_WRITE_DELETE,
 };
 use app_lib::intune::evtx_parser::{
     parse_esp_event_xml, EventLogProperty, ParsedEspEventRecord, MAX_ESP_EVTX_RECORD_BYTES,
@@ -2484,6 +2485,39 @@ fn discovery_keeps_numeric_ime_rotations_under_the_same_three_file_cap() {
 }
 
 #[test]
+fn discovery_rejects_unsupported_log_suffixes_instead_of_treating_them_as_current() {
+    let root = tempdir().expect("known root");
+    let now = SystemTime::now();
+    for file_name in [
+        "AppWorkload.log",
+        "AppWorkload.log.1",
+        "AppWorkload.log.bak",
+        "AppWorkload.log.gz",
+    ] {
+        write_discovery_file(&root.path().join(file_name), b"known", now);
+    }
+    let mut input = discovery_input(now);
+    input.known_sources.push(KnownSourceSpec::folder(
+        "ime-logs",
+        "intune-ime",
+        root.path(),
+        ["AppWorkload.log*"],
+    ));
+
+    let result = discover_bounded_logs(&input);
+    let names = result
+        .sources
+        .iter()
+        .filter_map(|source| source.path.file_name()?.to_str())
+        .collect::<Vec<_>>();
+
+    assert!(names.contains(&"AppWorkload.log"));
+    assert!(names.contains(&"AppWorkload.log.1"));
+    assert!(!names.contains(&"AppWorkload.log.bak"));
+    assert!(!names.contains(&"AppWorkload.log.gz"));
+}
+
+#[test]
 fn discovery_groups_log_old_with_other_rotations_for_the_same_stem() {
     let root = tempdir().expect("known root");
     let now = SystemTime::now();
@@ -2660,6 +2694,15 @@ fn known_discovery_reports_rejected_symlink_entry_coverage() {
     assert_eq!(coverage.entries_probed, 1);
     assert_eq!(coverage.entries_rejected, 1);
     assert!(result.sources.is_empty());
+    assert_eq!(result.path_failures.len(), 1);
+    assert_eq!(
+        result.path_failures[0].kind,
+        DiscoveryPathFailureKind::ReparseRejected
+    );
+    assert_eq!(
+        result.path_failures[0].source_id.as_deref(),
+        Some("ime-logs")
+    );
 }
 
 #[cfg(unix)]
@@ -2742,6 +2785,49 @@ fn discovery_accepts_explicit_running_process_log_outside_temp_lookback() {
         .find(|source| source.path == canonical_discovery_path(&process_log))
         .expect("active process log");
     assert_eq!(source.origin, DiscoverySourceOrigin::ActiveProcess);
+}
+
+#[test]
+fn discovery_reports_missing_explicit_process_log_with_typed_coverage() {
+    let root = tempdir().expect("process root");
+    let missing = root.path().join("missing-active-msi.log");
+    let mut input = discovery_input(SystemTime::now());
+    input.active_process_logs.push(missing.clone());
+
+    let result = discover_bounded_logs(&input);
+
+    assert!(result.sources.is_empty());
+    assert_eq!(result.path_failures.len(), 1);
+    let failure = &result.path_failures[0];
+    assert_eq!(failure.path, missing);
+    assert_eq!(failure.source_id.as_deref(), Some("active-process-log"));
+    assert_eq!(failure.origin, DiscoverySourceOrigin::ActiveProcess);
+    assert_eq!(failure.kind, DiscoveryPathFailureKind::Missing);
+}
+
+#[cfg(unix)]
+#[test]
+fn discovery_reports_reparse_explicit_process_log_with_typed_coverage() {
+    use std::os::unix::fs::symlink;
+
+    let root = tempdir().expect("process root");
+    let outside = tempdir().expect("outside root");
+    let target = outside.path().join("outside-active-msi.log");
+    fs::write(&target, b"outside\n").expect("write outside target");
+    let link = root.path().join("active-msi.log");
+    symlink(&target, &link).expect("create process-log symlink");
+    let mut input = discovery_input(SystemTime::now());
+    input.active_process_logs.push(link.clone());
+
+    let result = discover_bounded_logs(&input);
+
+    assert!(result.sources.is_empty());
+    assert_eq!(result.path_failures.len(), 1);
+    assert_eq!(result.path_failures[0].path, link);
+    assert_eq!(
+        result.path_failures[0].kind,
+        DiscoveryPathFailureKind::ReparseRejected
+    );
 }
 
 #[test]
@@ -2946,6 +3032,74 @@ fn tail_distinguishes_truncation_from_file_rotation() {
 }
 
 #[test]
+fn tail_reads_bytes_appended_while_source_is_temporarily_deselected() {
+    let root = tempdir().expect("tail root");
+    let path = root.path().join("temporarily-deselected.log");
+    fs::write(&path, b"initial\n").expect("write tail fixture");
+    let source = tail_source(
+        path.clone(),
+        "temporarily-deselected",
+        0,
+        DiscoverySourceOrigin::CuratedKnown,
+        true,
+    );
+    let mut tails = EspTailSet::new();
+    let initial = tails.reconcile(std::slice::from_ref(&source));
+    let initial_id = initial.attachments[0].entries[0].id;
+
+    tails.reconcile(&[]);
+    OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .expect("open deselected source")
+        .write_all(b"written during gap\n")
+        .expect("append during gap");
+    let rediscovered = tails.reconcile(std::slice::from_ref(&source));
+    let update = tails.poll();
+
+    assert!(rediscovered.attachments.is_empty());
+    assert!(update.failures.is_empty());
+    assert_eq!(update.updates.len(), 1);
+    assert_eq!(update.updates[0].entries[0].message, "written during gap");
+    assert!(update.updates[0].entries[0].id > initial_id);
+    assert_eq!(update.updates[0].reset_reason, None);
+}
+
+#[test]
+fn tail_reports_rotation_and_preserves_identity_when_source_returns_after_disappearing() {
+    let root = tempdir().expect("tail root");
+    let path = root.path().join("temporarily-missing.log");
+    fs::write(&path, b"old generation\n").expect("write tail fixture");
+    let source = tail_source(
+        path.clone(),
+        "temporarily-missing",
+        0,
+        DiscoverySourceOrigin::CuratedKnown,
+        true,
+    );
+    let mut tails = EspTailSet::new();
+    let initial = tails.reconcile(std::slice::from_ref(&source));
+    let initial_id = initial.attachments[0].entries[0].id;
+
+    tails.reconcile(&[]);
+    fs::rename(&path, root.path().join("temporarily-missing.log.1"))
+        .expect("rotate missing source");
+    fs::write(&path, b"new generation\n").expect("replace missing source");
+    let rediscovered = tails.reconcile(std::slice::from_ref(&source));
+    let update = tails.poll();
+
+    assert!(rediscovered.attachments.is_empty());
+    assert!(update.failures.is_empty());
+    assert_eq!(update.updates.len(), 1);
+    assert_eq!(
+        update.updates[0].reset_reason,
+        Some(EspTailResetReason::Rotated)
+    );
+    assert_eq!(update.updates[0].entries[0].message, "new generation");
+    assert!(update.updates[0].entries[0].id > initial_id);
+}
+
+#[test]
 fn tail_attaches_sources_once_and_enforces_priority_and_sixteen_tail_cap() {
     let root = tempdir().expect("tail root");
     let mut sources = Vec::new();
@@ -3036,6 +3190,63 @@ fn tail_stop_drops_all_owned_state_and_prevents_restart() {
 }
 
 #[test]
+fn tail_reports_missing_selected_file_with_typed_failure() {
+    let root = tempdir().expect("tail root");
+    let path = root.path().join("removed.log");
+    fs::write(&path, b"initial\n").expect("write tail fixture");
+    let source = tail_source(
+        path.clone(),
+        "removed",
+        0,
+        DiscoverySourceOrigin::ActiveProcess,
+        true,
+    );
+    let mut tails = EspTailSet::new();
+    tails.reconcile(std::slice::from_ref(&source));
+    fs::remove_file(&path).expect("remove selected file");
+
+    let result = tails.poll();
+
+    assert!(result.updates.is_empty());
+    assert_eq!(result.failures.len(), 1);
+    assert_eq!(result.failures[0].path, path);
+    assert_eq!(result.failures[0].kind, DiscoveryPathFailureKind::Missing);
+}
+
+#[cfg(unix)]
+#[test]
+fn tail_rejects_reparse_replacement_with_typed_failure() {
+    use std::os::unix::fs::symlink;
+
+    let root = tempdir().expect("tail root");
+    let outside = tempdir().expect("outside root");
+    let path = root.path().join("selected.log");
+    let outside_path = outside.path().join("outside.log");
+    fs::write(&path, b"initial\n").expect("write tail fixture");
+    fs::write(&outside_path, b"must not be read\n").expect("write outside fixture");
+    let source = tail_source(
+        path.clone(),
+        "selected",
+        0,
+        DiscoverySourceOrigin::ActiveProcess,
+        true,
+    );
+    let mut tails = EspTailSet::new();
+    tails.reconcile(std::slice::from_ref(&source));
+    fs::remove_file(&path).expect("remove selected file");
+    symlink(&outside_path, &path).expect("replace selected file with symlink");
+
+    let result = tails.poll();
+
+    assert!(result.updates.is_empty());
+    assert_eq!(result.failures.len(), 1);
+    assert_eq!(
+        result.failures[0].kind,
+        DiscoveryPathFailureKind::ReparseRejected
+    );
+}
+
+#[test]
 fn tail_bounds_an_incomplete_record_to_eight_mib() {
     let root = tempdir().expect("tail root");
     let path = root.path().join("unterminated.log");
@@ -3062,6 +3273,10 @@ fn tail_bounds_an_incomplete_record_to_eight_mib() {
 
     assert!(result.updates.is_empty());
     assert_eq!(result.failures.len(), 1);
+    assert_eq!(
+        result.failures[0].kind,
+        DiscoveryPathFailureKind::ResourceLimit
+    );
     assert!(result.failures[0].detail.contains("pending record"));
 }
 
@@ -3087,6 +3302,105 @@ fn tail_bounds_unique_source_attachments_for_the_session() {
     assert_eq!(result.attachments.len(), MAX_SESSION_TAIL_SOURCES);
     assert!(result.source_limit_reached);
     assert_eq!(tails.active_tail_count(), 0);
+}
+
+#[test]
+fn tail_attachment_budget_evicts_deterministically_for_a_later_active_msi_log() {
+    let root = tempdir().expect("tail root");
+    let modified = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000);
+    let mut snapshots = Vec::new();
+    for index in 0..MAX_SESSION_TAIL_SOURCES {
+        let path = root.path().join(format!("MSI-{index:03}.log"));
+        fs::write(&path, b"snapshot\n").expect("write bounded snapshot");
+        let mut source = tail_source(
+            path,
+            format!("bounded-{index:03}"),
+            5,
+            DiscoverySourceOrigin::Temp,
+            true,
+        );
+        source.modified = Some(modified);
+        snapshots.push(source);
+    }
+    let mut tails = EspTailSet::new();
+    let initial = tails.reconcile(&snapshots);
+    assert_eq!(initial.attachments.len(), MAX_SESSION_TAIL_SOURCES);
+
+    let active_path = root.path().join("active-msiexec.log");
+    fs::write(&active_path, b"active MSI\n").expect("write active MSI log");
+    let active = tail_source(
+        active_path.clone(),
+        "active-msiexec",
+        1,
+        DiscoverySourceOrigin::ActiveProcess,
+        true,
+    );
+    let mut next_sources = snapshots;
+    next_sources.push(active);
+    let result = tails.reconcile(&next_sources);
+
+    assert!(result
+        .attachments
+        .iter()
+        .any(|attachment| attachment.source.path == active_path));
+    assert!(tails.active_paths().contains(&active_path));
+    assert_eq!(result.evicted_sources.len(), 1);
+    assert!(result.evicted_sources[0].path.ends_with("MSI-511.log"));
+    assert!(result.source_limit_reached);
+}
+
+#[test]
+fn tail_dormant_cursor_cache_is_bounded_and_reattachment_is_an_explicit_reset() {
+    let root = tempdir().expect("tail root");
+    let modified = SystemTime::UNIX_EPOCH + Duration::from_secs(2_000);
+    let mut sources = Vec::new();
+    for index in 0..(MAX_ACTIVE_TAILS * 3) {
+        let path = root.path().join(format!("current-{index:02}.log"));
+        fs::write(&path, format!("source {index}\n")).expect("write current source");
+        let mut source = tail_source(
+            path,
+            format!("current-{index:02}"),
+            if index < MAX_ACTIVE_TAILS { 0 } else { 10 },
+            DiscoverySourceOrigin::CuratedKnown,
+            true,
+        );
+        source.modified = Some(modified);
+        sources.push(source);
+    }
+    let mut tails = EspTailSet::new();
+    let initial = tails.reconcile(&sources);
+    assert_eq!(initial.attachments.len(), sources.len());
+
+    for (index, source) in sources.iter_mut().enumerate() {
+        source.priority = if (MAX_ACTIVE_TAILS..MAX_ACTIVE_TAILS * 2).contains(&index) {
+            0
+        } else {
+            10
+        };
+    }
+    let second = tails.reconcile(&sources);
+    assert_eq!(second.attachments.len(), MAX_ACTIVE_TAILS);
+    assert!(second
+        .attachments
+        .iter()
+        .all(|attachment| { attachment.reset_reason == Some(EspTailResetReason::Reattached) }));
+
+    for (index, source) in sources.iter_mut().enumerate() {
+        source.priority = if (MAX_ACTIVE_TAILS * 2..MAX_ACTIVE_TAILS * 3).contains(&index) {
+            0
+        } else {
+            10
+        };
+    }
+    let third = tails.reconcile(&sources);
+
+    assert_eq!(third.attachments.len(), MAX_ACTIVE_TAILS);
+    assert!(third
+        .attachments
+        .iter()
+        .all(|attachment| { attachment.reset_reason == Some(EspTailResetReason::Reattached) }));
+    assert_eq!(tails.active_tail_count(), MAX_ACTIVE_TAILS);
+    assert!(tails.retained_tail_cursor_count() <= MAX_ACTIVE_TAILS + MAX_DORMANT_TAIL_CURSORS);
 }
 
 #[test]

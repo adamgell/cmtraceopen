@@ -11,7 +11,8 @@ use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 use crate::esp::discovery::{
-    DiscoveredLogSource, DiscoverySourceOrigin, MAX_ACTIVE_TAILS, MAX_INITIAL_READ_BYTES,
+    metadata_is_reparse_point, DiscoveredLogSource, DiscoveryPathFailureKind,
+    DiscoverySourceOrigin, MAX_ACTIVE_TAILS, MAX_INITIAL_READ_BYTES,
 };
 use crate::models::log_entry::{LogEntry, ParserSpecialization, RecordFraming};
 use crate::parser::{self, ResolvedParser};
@@ -21,11 +22,13 @@ const IME_RECORD_ATTRS_START: &str = "]LOG]!><";
 
 pub const WINDOWS_SHARED_READ_WRITE_DELETE: u32 = 0x1 | 0x2 | 0x4;
 pub const MAX_SESSION_TAIL_SOURCES: usize = 512;
+pub const MAX_DORMANT_TAIL_CURSORS: usize = MAX_ACTIVE_TAILS;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EspTailResetReason {
     Truncated,
     Rotated,
+    Reattached,
 }
 
 #[derive(Debug, Clone)]
@@ -34,6 +37,7 @@ pub struct EspTailAttachment {
     pub start_offset: u64,
     pub end_offset: u64,
     pub entries: Vec<LogEntry>,
+    pub reset_reason: Option<EspTailResetReason>,
 }
 
 #[derive(Debug, Clone)]
@@ -48,6 +52,7 @@ pub struct EspTailUpdate {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EspTailFailure {
     pub path: PathBuf,
+    pub kind: DiscoveryPathFailureKind,
     pub detail: String,
 }
 
@@ -55,6 +60,7 @@ pub struct EspTailFailure {
 pub struct EspTailReconcileResult {
     pub attachments: Vec<EspTailAttachment>,
     pub failures: Vec<EspTailFailure>,
+    pub evicted_sources: Vec<DiscoveredLogSource>,
     pub source_limit_reached: bool,
 }
 
@@ -67,8 +73,15 @@ pub struct EspTailPollResult {
 #[derive(Debug, Default)]
 pub struct EspTailSet {
     tails: BTreeMap<String, ActiveTail>,
-    attached_paths: BTreeSet<String>,
+    selected_tail_keys: BTreeSet<String>,
+    attached_sources: BTreeMap<String, AttachedSourceState>,
     stopped: bool,
+}
+
+#[derive(Debug, Clone)]
+struct AttachedSourceState {
+    source: DiscoveredLogSource,
+    next_id: u64,
 }
 
 impl EspTailSet {
@@ -86,7 +99,7 @@ impl EspTailSet {
             .iter()
             .map(|source| path_identity(&source.path))
             .collect::<BTreeSet<_>>();
-        self.tails.retain(|key, _| selected_keys.contains(key));
+        self.selected_tail_keys = selected_keys.clone();
 
         let mut result = EspTailReconcileResult::default();
         let attachment_sources = select_attachment_sources(sources);
@@ -98,47 +111,69 @@ impl EspTailSet {
             let key = path_identity(&source.path);
             if selected_keys.contains(&key) {
                 if let Some(existing) = self.tails.get_mut(&key) {
-                    existing.source = source;
+                    existing.source = source.clone();
+                    if let Some(attached) = self.attached_sources.get_mut(&key) {
+                        attached.source = source;
+                        attached.next_id = attached.next_id.max(existing.next_id);
+                    }
                     continue;
                 }
 
-                if !self.attached_paths.contains(&key)
-                    && self.attached_paths.len() >= MAX_SESSION_TAIL_SOURCES
-                {
-                    result.source_limit_reached = true;
-                    continue;
-                }
-
-                match ActiveTail::attach(source) {
-                    Ok((tail, attachment)) => {
-                        let first_attachment = self.attached_paths.insert(key.clone());
-                        self.tails.insert(key, tail);
-                        if first_attachment {
+                if let Some(attached) = self.attached_sources.get(&key) {
+                    let next_id = attached.next_id;
+                    match ActiveTail::reattach(source.clone(), next_id) {
+                        Ok((tail, attachment)) => {
+                            let next_id = tail.next_id;
+                            self.tails.insert(key.clone(), tail);
+                            if let Some(attached) = self.attached_sources.get_mut(&key) {
+                                attached.source = source;
+                                attached.next_id = next_id;
+                            }
                             result.attachments.push(attachment);
                         }
+                        Err(failure) => result.failures.push(failure),
+                    }
+                    continue;
+                }
+
+                if !self.reserve_attachment_slot(&selected_keys, &mut result) {
+                    continue;
+                }
+                match ActiveTail::attach(source.clone()) {
+                    Ok((tail, attachment)) => {
+                        let next_id = tail.next_id;
+                        self.tails.insert(key, tail);
+                        self.attached_sources.insert(
+                            path_identity(&source.path),
+                            AttachedSourceState { source, next_id },
+                        );
+                        result.attachments.push(attachment);
                     }
                     Err(failure) => result.failures.push(failure),
                 }
                 continue;
             }
 
-            if self.attached_paths.contains(&key) {
+            if let Some(attached) = self.attached_sources.get_mut(&key) {
+                attached.source = source;
                 continue;
             }
-            if self.attached_paths.len() >= MAX_SESSION_TAIL_SOURCES {
+            if self.attached_sources.len() >= MAX_SESSION_TAIL_SOURCES {
                 result.source_limit_reached = true;
                 continue;
             }
             match read_initial(&source.path) {
                 Ok(initial) => {
-                    self.attached_paths.insert(key);
-                    result
-                        .attachments
-                        .push(attachment_from_initial(source, &initial));
+                    let next_id = next_entry_id(&initial.entries);
+                    let attachment = attachment_from_initial(source.clone(), &initial, None);
+                    self.attached_sources
+                        .insert(key, AttachedSourceState { source, next_id });
+                    result.attachments.push(attachment);
                 }
                 Err(failure) => result.failures.push(failure),
             }
         }
+        self.trim_dormant_tail_cursors();
         result
     }
 
@@ -147,8 +182,17 @@ impl EspTailSet {
             return EspTailPollResult::default();
         }
         let mut result = EspTailPollResult::default();
-        for tail in self.tails.values_mut() {
-            match tail.poll() {
+        let selected_keys = self.selected_tail_keys.iter().cloned().collect::<Vec<_>>();
+        for key in selected_keys {
+            let Some(tail) = self.tails.get_mut(&key) else {
+                continue;
+            };
+            let outcome = tail.poll();
+            let next_id = tail.next_id;
+            if let Some(attached) = self.attached_sources.get_mut(&key) {
+                attached.next_id = attached.next_id.max(next_id);
+            }
+            match outcome {
                 Ok(Some(update)) => result.updates.push(update),
                 Ok(None) => {}
                 Err(failure) => result.failures.push(failure),
@@ -160,7 +204,8 @@ impl EspTailSet {
     pub fn stop(&mut self) {
         self.stopped = true;
         self.tails.clear();
-        self.attached_paths.clear();
+        self.selected_tail_keys.clear();
+        self.attached_sources.clear();
     }
 
     pub fn is_stopped(&self) -> bool {
@@ -168,14 +213,87 @@ impl EspTailSet {
     }
 
     pub fn active_tail_count(&self) -> usize {
-        self.tails.len()
+        self.selected_tail_keys
+            .iter()
+            .filter(|key| self.tails.contains_key(*key))
+            .count()
     }
 
     pub fn active_paths(&self) -> Vec<PathBuf> {
-        self.tails
-            .values()
+        self.selected_tail_keys
+            .iter()
+            .filter_map(|key| self.tails.get(key))
             .map(|tail| tail.source.path.clone())
             .collect()
+    }
+
+    pub fn retained_tail_cursor_count(&self) -> usize {
+        self.tails.len()
+    }
+
+    fn reserve_attachment_slot(
+        &mut self,
+        selected_keys: &BTreeSet<String>,
+        result: &mut EspTailReconcileResult,
+    ) -> bool {
+        if self.attached_sources.len() < MAX_SESSION_TAIL_SOURCES {
+            return true;
+        }
+
+        let eviction_key = self
+            .attached_sources
+            .iter()
+            .filter(|(key, _)| !selected_keys.contains(*key))
+            .max_by(|(left_key, left), (right_key, right)| {
+                source_cmp(&left.source, &right.source).then_with(|| left_key.cmp(right_key))
+            })
+            .map(|(key, _)| key.clone());
+        let Some(eviction_key) = eviction_key else {
+            result.source_limit_reached = true;
+            return false;
+        };
+
+        if let Some(evicted) = self.attached_sources.remove(&eviction_key) {
+            self.tails.remove(&eviction_key);
+            result.evicted_sources.push(evicted.source);
+            result.source_limit_reached = true;
+            true
+        } else {
+            false
+        }
+    }
+
+    fn trim_dormant_tail_cursors(&mut self) {
+        let mut dormant = self
+            .tails
+            .keys()
+            .filter(|key| !self.selected_tail_keys.contains(*key))
+            .cloned()
+            .collect::<Vec<_>>();
+        dormant.sort_by(|left_key, right_key| {
+            match (
+                self.attached_sources.get(left_key),
+                self.attached_sources.get(right_key),
+            ) {
+                (Some(left), Some(right)) => {
+                    source_cmp(&left.source, &right.source).then_with(|| left_key.cmp(right_key))
+                }
+                (Some(_), None) => std::cmp::Ordering::Less,
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                (None, None) => left_key.cmp(right_key),
+            }
+        });
+
+        while dormant.len() > MAX_DORMANT_TAIL_CURSORS {
+            let Some(key) = dormant.pop() else {
+                break;
+            };
+            if let Some(tail) = self.tails.remove(&key) {
+                if let Some(attached) = self.attached_sources.get_mut(&key) {
+                    attached.next_id = attached.next_id.max(tail.next_id);
+                }
+            }
+        }
     }
 }
 
@@ -235,13 +353,8 @@ struct ActiveTail {
 impl ActiveTail {
     fn attach(source: DiscoveredLogSource) -> Result<(Self, EspTailAttachment), EspTailFailure> {
         let initial = read_initial(&source.path)?;
-        let attachment = attachment_from_initial(source.clone(), &initial);
-        let next_id = initial
-            .entries
-            .iter()
-            .map(|entry| entry.id)
-            .max()
-            .map_or(0, |id| id.saturating_add(1));
+        let attachment = attachment_from_initial(source.clone(), &initial, None);
+        let next_id = next_entry_id(&initial.entries);
         let next_line = initial
             .entries
             .iter()
@@ -264,9 +377,40 @@ impl ActiveTail {
         ))
     }
 
+    fn reattach(
+        source: DiscoveredLogSource,
+        previous_next_id: u64,
+    ) -> Result<(Self, EspTailAttachment), EspTailFailure> {
+        let initial = read_initial(&source.path)?;
+        let mut entries = initial.entries.clone();
+        let mut next_id = previous_next_id;
+        let mut next_line = 1;
+        assign_entry_identity(&mut entries, &mut next_id, &mut next_line);
+        let attachment = EspTailAttachment {
+            source: source.clone(),
+            start_offset: initial.start_offset,
+            end_offset: initial.end_offset,
+            entries,
+            reset_reason: Some(EspTailResetReason::Reattached),
+        };
+        Ok((
+            Self {
+                source,
+                byte_offset: initial.end_offset,
+                identity: initial.identity,
+                encoding: initial.encoding,
+                pending_bytes: initial.pending_bytes,
+                pending_text: initial.pending_text,
+                parser_selection: initial.parser_selection,
+                next_id,
+                next_line,
+            },
+            attachment,
+        ))
+    }
+
     fn poll(&mut self) -> Result<Option<EspTailUpdate>, EspTailFailure> {
-        let mut file = open_shared_read(&self.source.path)
-            .map_err(|error| tail_failure(&self.source.path, "open", error))?;
+        let mut file = open_tail_file(&self.source.path)?;
         let metadata = file
             .metadata()
             .map_err(|error| tail_failure(&self.source.path, "metadata", error))?;
@@ -299,6 +443,7 @@ impl ActiveTail {
             self.pending_bytes.clear();
             return Err(EspTailFailure {
                 path: self.source.path.clone(),
+                kind: DiscoveryPathFailureKind::ResourceLimit,
                 detail: format!(
                     "pending record exceeded the {MAX_INITIAL_READ_BYTES}-byte tail limit"
                 ),
@@ -355,13 +500,23 @@ impl ActiveTail {
 fn attachment_from_initial(
     source: DiscoveredLogSource,
     initial: &InitialTailState,
+    reset_reason: Option<EspTailResetReason>,
 ) -> EspTailAttachment {
     EspTailAttachment {
         source,
         start_offset: initial.start_offset,
         end_offset: initial.end_offset,
         entries: initial.entries.clone(),
+        reset_reason,
     }
+}
+
+fn next_entry_id(entries: &[LogEntry]) -> u64 {
+    entries
+        .iter()
+        .map(|entry| entry.id)
+        .max()
+        .map_or(0, |id| id.saturating_add(1))
 }
 
 fn assign_entry_identity(entries: &mut [LogEntry], next_id: &mut u64, next_line: &mut u32) {
@@ -386,7 +541,7 @@ struct InitialTailState {
 }
 
 fn read_initial(path: &Path) -> Result<InitialTailState, EspTailFailure> {
-    let mut file = open_shared_read(path).map_err(|error| tail_failure(path, "open", error))?;
+    let mut file = open_tail_file(path)?;
     let metadata = file
         .metadata()
         .map_err(|error| tail_failure(path, "metadata", error))?;
@@ -616,6 +771,26 @@ fn open_shared_read(path: &Path) -> std::io::Result<File> {
     options.open(path)
 }
 
+fn open_tail_file(path: &Path) -> Result<File, EspTailFailure> {
+    let metadata =
+        std::fs::symlink_metadata(path).map_err(|error| tail_failure(path, "metadata", error))?;
+    if metadata_is_reparse_point(&metadata) {
+        return Err(EspTailFailure {
+            path: path.to_path_buf(),
+            kind: DiscoveryPathFailureKind::ReparseRejected,
+            detail: "tail path is a symlink or reparse point".to_string(),
+        });
+    }
+    if !metadata.is_file() {
+        return Err(EspTailFailure {
+            path: path.to_path_buf(),
+            kind: DiscoveryPathFailureKind::NotRegularFile,
+            detail: "tail path is not a regular file".to_string(),
+        });
+    }
+    open_shared_read(path).map_err(|error| tail_failure(path, "open", error))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct FileIdentity {
     volume: u64,
@@ -661,8 +836,14 @@ fn identities_differ(previous: Option<FileIdentity>, current: Option<FileIdentit
 }
 
 fn tail_failure(path: &Path, operation: &str, error: std::io::Error) -> EspTailFailure {
+    let kind = match error.kind() {
+        std::io::ErrorKind::NotFound => DiscoveryPathFailureKind::Missing,
+        std::io::ErrorKind::PermissionDenied => DiscoveryPathFailureKind::PermissionDenied,
+        _ => DiscoveryPathFailureKind::Failed,
+    };
     EspTailFailure {
         path: path.to_path_buf(),
+        kind,
         detail: format!("{operation} failed: {error}"),
     }
 }
@@ -673,5 +854,21 @@ fn path_identity(path: &Path) -> String {
         value.to_ascii_lowercase()
     } else {
         value
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tail_failure_preserves_permission_denied_kind() {
+        let failure = tail_failure(
+            Path::new("protected.log"),
+            "open tail",
+            std::io::Error::from(std::io::ErrorKind::PermissionDenied),
+        );
+
+        assert_eq!(failure.kind, DiscoveryPathFailureKind::PermissionDenied);
     }
 }

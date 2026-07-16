@@ -26,6 +26,7 @@ pub const TEMP_LOOKBACK: Duration = Duration::from_secs(30 * 60);
 pub const DISCOVERY_INTERVAL: Duration = Duration::from_secs(2);
 pub const UPDATE_DEBOUNCE: Duration = Duration::from_millis(250);
 pub const MAX_SESSION_DURATION: Duration = Duration::from_secs(8 * 60 * 60);
+pub const MAX_DISCOVERY_PATH_FAILURES: usize = 256;
 
 const SIGNATURE_BYTES: u64 = 4 * 1024;
 #[cfg(any(target_os = "windows", test))]
@@ -95,6 +96,26 @@ pub struct DiscoveryRootCoverage {
     /// Entries rejected because enumeration, metadata, or path safety failed.
     pub entries_rejected: usize,
     pub truncated: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiscoveryPathFailureKind {
+    Missing,
+    PermissionDenied,
+    ReparseRejected,
+    OutsideAllowedRoot,
+    NotRegularFile,
+    ResourceLimit,
+    Failed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiscoveryPathFailure {
+    pub path: PathBuf,
+    pub source_id: Option<String>,
+    pub origin: DiscoverySourceOrigin,
+    pub kind: DiscoveryPathFailureKind,
+    pub detail: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -193,6 +214,8 @@ pub struct DiscoveryResult {
     pub temp_entries_probed: usize,
     pub temp_entries_inspected: usize,
     pub root_coverage: Vec<DiscoveryRootCoverage>,
+    pub path_failures: Vec<DiscoveryPathFailure>,
+    pub path_failures_truncated: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -200,6 +223,57 @@ struct Candidate {
     source: DiscoveredLogSource,
     identity_key: String,
     rotation_key: String,
+}
+
+#[derive(Debug, Default)]
+struct PathFailureCollector {
+    failures: Vec<DiscoveryPathFailure>,
+    truncated: bool,
+}
+
+impl PathFailureCollector {
+    fn push(&mut self, failure: DiscoveryPathFailure) {
+        if self.failures.len() < MAX_DISCOVERY_PATH_FAILURES {
+            self.failures.push(failure);
+        } else {
+            self.truncated = true;
+        }
+    }
+}
+
+#[derive(Debug)]
+struct PathInspectionFailure {
+    kind: DiscoveryPathFailureKind,
+    detail: String,
+}
+
+impl PathInspectionFailure {
+    fn from_io(operation: &str, error: std::io::Error) -> Self {
+        let kind = match error.kind() {
+            std::io::ErrorKind::NotFound => DiscoveryPathFailureKind::Missing,
+            std::io::ErrorKind::PermissionDenied => DiscoveryPathFailureKind::PermissionDenied,
+            _ => DiscoveryPathFailureKind::Failed,
+        };
+        Self {
+            kind,
+            detail: format!("{operation} failed: {error}"),
+        }
+    }
+
+    fn coverage(
+        self,
+        path: &Path,
+        source_id: Option<String>,
+        origin: DiscoverySourceOrigin,
+    ) -> DiscoveryPathFailure {
+        DiscoveryPathFailure {
+            path: path.to_path_buf(),
+            source_id,
+            origin,
+            kind: self.kind,
+            detail: self.detail,
+        }
+    }
 }
 
 /// Converts the embedded profile's stable deployment families into fixed,
@@ -345,28 +419,39 @@ pub fn runtime_discovery_input(
 pub fn discover_bounded_logs(input: &DiscoveryInput) -> DiscoveryResult {
     let mut candidates = Vec::new();
     let mut root_coverage = Vec::new();
+    let mut path_failures = PathFailureCollector::default();
     for spec in &input.known_sources {
-        root_coverage.push(collect_known_candidates(spec, &mut candidates));
+        root_coverage.push(collect_known_candidates(
+            spec,
+            &mut candidates,
+            &mut path_failures,
+        ));
     }
 
     let mut temp_entries_probed = 0;
     let mut temp_entries_inspected = 0;
     for root in &input.temp_roots {
-        let coverage = collect_temp_candidates(root, input.now, &mut candidates);
+        let coverage =
+            collect_temp_candidates(root, input.now, &mut candidates, &mut path_failures);
         temp_entries_probed += coverage.entries_probed;
         temp_entries_inspected += coverage.entries_inspected;
         root_coverage.push(coverage);
     }
 
     for path in &input.active_process_logs {
-        if let Some((safe_path, metadata)) = safe_regular_file(path, None) {
-            candidates.push(candidate(
+        match safe_regular_file(path, None) {
+            Ok((safe_path, metadata)) => candidates.push(candidate(
                 safe_path,
                 "active-process-log".to_string(),
                 "installer".to_string(),
                 DiscoverySourceOrigin::ActiveProcess,
                 metadata.modified().ok(),
-            ));
+            )),
+            Err(failure) => path_failures.push(failure.coverage(
+                path,
+                Some("active-process-log".to_string()),
+                DiscoverySourceOrigin::ActiveProcess,
+            )),
         }
     }
 
@@ -406,12 +491,15 @@ pub fn discover_bounded_logs(input: &DiscoveryInput) -> DiscoveryResult {
         temp_entries_probed,
         temp_entries_inspected,
         root_coverage,
+        path_failures: path_failures.failures,
+        path_failures_truncated: path_failures.truncated,
     }
 }
 
 fn collect_known_candidates(
     spec: &KnownSourceSpec,
     output: &mut Vec<Candidate>,
+    path_failures: &mut PathFailureCollector,
 ) -> DiscoveryRootCoverage {
     let mut coverage = DiscoveryRootCoverage {
         root: spec.root.clone(),
@@ -480,9 +568,17 @@ fn collect_known_candidates(
         if !matches_any_pattern(file_name, &spec.patterns) || !is_known_log_file(file_name) {
             continue;
         }
-        let Some((safe_path, metadata)) = safe_regular_file(&path, Some(&root_canonical)) else {
-            coverage.entries_rejected += 1;
-            continue;
+        let (safe_path, metadata) = match safe_regular_file(&path, Some(&root_canonical)) {
+            Ok(file) => file,
+            Err(failure) => {
+                coverage.entries_rejected += 1;
+                path_failures.push(failure.coverage(
+                    &path,
+                    Some(spec.source_id.clone()),
+                    spec.origin,
+                ));
+                continue;
+            }
         };
         output.push(candidate(
             safe_path,
@@ -501,6 +597,7 @@ fn collect_temp_candidates(
     root: &Path,
     now: SystemTime,
     output: &mut Vec<Candidate>,
+    path_failures: &mut PathFailureCollector,
 ) -> DiscoveryRootCoverage {
     let mut coverage = DiscoveryRootCoverage {
         root: root.to_path_buf(),
@@ -542,9 +639,23 @@ fn collect_temp_candidates(
             continue;
         };
         let path = entry.path();
-        let Some((safe_path, metadata)) = safe_regular_file(&path, Some(&root_canonical)) else {
-            coverage.entries_rejected += 1;
-            continue;
+        let high_signal_name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(is_high_signal_temp_name);
+        let (safe_path, metadata) = match safe_regular_file(&path, Some(&root_canonical)) {
+            Ok(file) => file,
+            Err(failure) => {
+                coverage.entries_rejected += 1;
+                if high_signal_name {
+                    path_failures.push(failure.coverage(
+                        &path,
+                        Some("bounded-temp-log".to_string()),
+                        DiscoverySourceOrigin::Temp,
+                    ));
+                }
+                continue;
+            }
         };
         let Ok(modified) = metadata.modified() else {
             coverage.entries_rejected += 1;
@@ -577,8 +688,19 @@ fn collect_temp_candidates(
             .file_name()
             .and_then(|name| name.to_str())
             .unwrap_or_default();
-        if !is_high_signal_temp_name(file_name) && !has_installer_signature(&path) {
-            continue;
+        if !is_high_signal_temp_name(file_name) {
+            match has_installer_signature(&path) {
+                Ok(true) => {}
+                Ok(false) => continue,
+                Err(failure) => {
+                    path_failures.push(failure.coverage(
+                        &path,
+                        Some("bounded-temp-log".to_string()),
+                        DiscoverySourceOrigin::Temp,
+                    ));
+                    continue;
+                }
+            }
         }
         output.push(candidate(
             path,
@@ -655,21 +777,35 @@ fn candidate_cmp(left: &Candidate, right: &Candidate) -> Ordering {
         .then_with(|| left.identity_key.cmp(&right.identity_key))
 }
 
-fn safe_regular_file(path: &Path, allowed_root: Option<&Path>) -> Option<(PathBuf, Metadata)> {
-    let link_metadata = fs::symlink_metadata(path).ok()?;
+fn safe_regular_file(
+    path: &Path,
+    allowed_root: Option<&Path>,
+) -> Result<(PathBuf, Metadata), PathInspectionFailure> {
+    let link_metadata = fs::symlink_metadata(path)
+        .map_err(|error| PathInspectionFailure::from_io("metadata", error))?;
     if link_metadata.file_type().is_symlink() || is_reparse_point(&link_metadata) {
-        return None;
+        return Err(PathInspectionFailure {
+            kind: DiscoveryPathFailureKind::ReparseRejected,
+            detail: "path is a symlink or reparse point".to_string(),
+        });
     }
     if !link_metadata.is_file() {
-        return None;
+        return Err(PathInspectionFailure {
+            kind: DiscoveryPathFailureKind::NotRegularFile,
+            detail: "path is not a regular file".to_string(),
+        });
     }
-    let canonical = fs::canonicalize(path).ok()?;
+    let canonical = fs::canonicalize(path)
+        .map_err(|error| PathInspectionFailure::from_io("canonicalize", error))?;
     if let Some(root) = allowed_root {
         if !path_is_within_root_for_platform(&canonical, root, cfg!(target_os = "windows")) {
-            return None;
+            return Err(PathInspectionFailure {
+                kind: DiscoveryPathFailureKind::OutsideAllowedRoot,
+                detail: "canonical path escapes the approved discovery root".to_string(),
+            });
         }
     }
-    Some((canonical, link_metadata))
+    Ok((canonical, link_metadata))
 }
 
 fn safe_directory_root(path: &Path) -> std::io::Result<PathBuf> {
@@ -700,6 +836,10 @@ fn is_reparse_point(_metadata: &Metadata) -> bool {
     false
 }
 
+pub(crate) fn metadata_is_reparse_point(metadata: &Metadata) -> bool {
+    metadata.file_type().is_symlink() || is_reparse_point(metadata)
+}
+
 #[cfg(any(target_os = "windows", test))]
 fn file_attributes_indicate_reparse(file_attributes: u32) -> bool {
     file_attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0
@@ -723,7 +863,9 @@ fn is_known_log_file(file_name: &str) -> bool {
     [".log", ".log.old", ".lo_", ".txt"]
         .iter()
         .any(|extension| lower.ends_with(extension))
-        || lower.contains(".log.")
+        || lower.rsplit_once(".log.").is_some_and(|(_, suffix)| {
+            !suffix.is_empty() && suffix.chars().all(|character| character.is_ascii_digit())
+        })
 }
 
 fn is_high_signal_temp_name(file_name: &str) -> bool {
@@ -742,19 +884,28 @@ fn is_high_signal_temp_name(file_name: &str) -> bool {
     .any(|signal| lower.contains(signal))
 }
 
-fn has_installer_signature(path: &Path) -> bool {
-    let Some((canonical, _metadata)) = safe_regular_file(path, None) else {
-        return false;
-    };
-    let mut bytes = Vec::new();
-    if File::open(canonical)
-        .and_then(|file| file.take(SIGNATURE_BYTES).read_to_end(&mut bytes))
-        .is_err()
-    {
-        return false;
+fn has_installer_signature(path: &Path) -> Result<bool, PathInspectionFailure> {
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|error| PathInspectionFailure::from_io("inspect installer signature", error))?;
+    if metadata_is_reparse_point(&metadata) {
+        return Err(PathInspectionFailure {
+            kind: DiscoveryPathFailureKind::ReparseRejected,
+            detail: "installer signature candidate is a symlink or reparse point".to_string(),
+        });
     }
+    if !metadata.is_file() {
+        return Err(PathInspectionFailure {
+            kind: DiscoveryPathFailureKind::NotRegularFile,
+            detail: "installer signature candidate is not a regular file".to_string(),
+        });
+    }
+
+    let mut bytes = Vec::new();
+    File::open(path)
+        .and_then(|file| file.take(SIGNATURE_BYTES).read_to_end(&mut bytes))
+        .map_err(|error| PathInspectionFailure::from_io("read installer signature", error))?;
     let text = String::from_utf8_lossy(&bytes).to_ascii_lowercase();
-    [
+    Ok([
         "windows installer",
         "=== verbose logging started",
         "msi (s)",
@@ -763,7 +914,7 @@ fn has_installer_signature(path: &Path) -> bool {
         "patchmypc",
     ]
     .iter()
-    .any(|signature| text.contains(signature))
+    .any(|signature| text.contains(signature)))
 }
 
 fn is_current_log(path: &Path, family: &str) -> bool {
@@ -921,6 +1072,19 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn regular_file_outside_allowed_root_has_typed_containment_failure() {
+        let allowed = tempfile::tempdir().expect("allowed root");
+        let outside = tempfile::tempdir().expect("outside root");
+        let path = outside.path().join("outside.log");
+        fs::write(&path, b"outside").expect("write outside fixture");
+        let allowed = fs::canonicalize(allowed.path()).expect("canonical allowed root");
+
+        let failure = safe_regular_file(&path, Some(&allowed)).expect_err("reject outside file");
+
+        assert_eq!(failure.kind, DiscoveryPathFailureKind::OutsideAllowedRoot);
+    }
+
     #[cfg(unix)]
     #[test]
     fn installer_signature_reopen_rejects_symlink() {
@@ -933,6 +1097,6 @@ mod tests {
         let link = root.path().join("candidate.log");
         symlink(&target, &link).expect("create signature symlink");
 
-        assert!(!has_installer_signature(&link));
+        assert!(has_installer_signature(&link).is_err());
     }
 }
