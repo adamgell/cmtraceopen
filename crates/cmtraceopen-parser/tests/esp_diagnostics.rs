@@ -11457,3 +11457,149 @@ fn redaction_projection_removes_folded_standalone_scheme_separators_from_public_
     assert_eq!(redacted_export_projection(&safe), safe);
     assert_eq!(snapshot, original);
 }
+
+struct FoldedDigestParameterCase {
+    label: String,
+    payload: String,
+    secrets: [String; 3],
+    boundary_control: String,
+}
+
+fn folded_digest_parameter_matrix() -> Vec<FoldedDigestParameterCase> {
+    let logical_separators = [
+        ("mixed-ows-crlf", " \t\r\n "),
+        ("repeated-crlf", "\r\n \r\n\t"),
+    ];
+    let serializations = [
+        ("literal", r#"""#),
+        ("escaped", r#"\""#),
+        ("twice-escaped", r#"\\\""#),
+    ];
+    let mut matrix = Vec::new();
+
+    for (separator_name, separator) in logical_separators {
+        for (serialization_name, delimiter) in serializations {
+            let label = format!("{separator_name}-{serialization_name}");
+            let username_secret = format!("{}_USERNAME_SECRET", label.to_ascii_uppercase());
+            let qop_secret = format!("{}_QOP_SECRET", label.to_ascii_uppercase());
+            let nonce_secret = format!("{}_NONCE_SECRET", label.to_ascii_uppercase());
+            let boundary_control = format!("{}_BOUNDARY_CONTROL", label.to_ascii_uppercase());
+            let payload = format!(
+                "Digest{separator}username={delimiter}{username_secret}{delimiter}, qop={delimiter}auth,{qop_secret}{delimiter}, nonce={delimiter}{nonce_secret}{delimiter}\r\n{boundary_control}"
+            );
+            matrix.push(FoldedDigestParameterCase {
+                label,
+                payload,
+                secrets: [username_secret, qop_secret, nonce_secret],
+                boundary_control,
+            });
+        }
+    }
+
+    matrix
+}
+
+#[test]
+fn redaction_projection_masks_parameterized_digest_after_mixed_and_repeated_obs_fold_on_typed_and_reference_surfaces(
+) {
+    let matrix = folded_digest_parameter_matrix();
+    let mut snapshot = findings_snapshot();
+    snapshot.identity.evidence = matrix
+        .iter()
+        .map(|case| evidence_ref_from(&case.payload, &case.payload))
+        .collect();
+    snapshot.activity = matrix
+        .iter()
+        .enumerate()
+        .map(|(index, case)| EspTimelineEntry {
+            entry_id: format!("folded-digest-parameters-{}", case.label),
+            timestamp: timestamp(&format!("2026-07-16T17:{index:02}:00Z")),
+            kind: EspTimelineKind::Other,
+            title: case.payload.clone(),
+            detail: Some(case.payload.clone()),
+            status: None,
+            evidence: vec![],
+        })
+        .collect();
+    let original = snapshot.clone();
+
+    let safe = redacted_export_projection(&snapshot);
+    let safe_json = serde_json::to_string(&safe).unwrap();
+
+    for (index, case) in matrix.iter().enumerate() {
+        for secret in &case.secrets {
+            assert!(
+                !safe_json.contains(secret),
+                "folded parameterized Digest {} leaked {secret}: {safe_json}",
+                case.label
+            );
+        }
+        let reference = &safe.identity.evidence[index];
+        let activity = &safe.activity[index];
+        for surface in [
+            reference.evidence_id.as_str(),
+            reference.source_artifact_id.as_str(),
+            activity.title.as_str(),
+            activity
+                .detail
+                .as_deref()
+                .expect("Digest matrix activity keeps detail"),
+        ] {
+            assert!(
+                surface.contains(&case.boundary_control),
+                "folded parameterized Digest {} consumed the next non-continuation line: {surface}",
+                case.label
+            );
+        }
+    }
+    assert_eq!(redacted_export_projection(&safe), safe);
+    assert_eq!(snapshot, original);
+}
+
+#[test]
+fn redaction_projection_removes_parameterized_digest_after_mixed_and_repeated_obs_fold_from_public_raw_evidence(
+) {
+    let matrix = folded_digest_parameter_matrix();
+    let mut snapshot = findings_snapshot();
+    snapshot.raw_evidence = matrix
+        .iter()
+        .enumerate()
+        .map(|(index, case)| {
+            let mut record = raw_export_record(
+                &format!("folded-digest-parameters-{index}"),
+                EspSourceKind::DeploymentLog,
+                "neutral-folded-digest-source",
+                None,
+                &case.payload,
+            );
+            record.sensitivity = EspSensitivity::Public;
+            if index % 2 == 1 {
+                record.raw_value = EspObservationValue::StringList(vec![
+                    "safe-list-control".to_string(),
+                    case.payload.clone(),
+                ]);
+            }
+            record
+        })
+        .collect();
+    let original = snapshot.clone();
+
+    let safe = redacted_export_projection(&snapshot);
+    let safe_json = serde_json::to_string(&safe).unwrap();
+
+    assert!(
+        safe.raw_evidence.is_empty(),
+        "folded parameterized Digest survived Public raw classification: {safe_json}"
+    );
+    for case in &matrix {
+        for secret in &case.secrets {
+            assert!(
+                !safe_json.contains(secret),
+                "folded parameterized Digest {} leaked {secret} from Public raw evidence: {safe_json}",
+                case.label
+            );
+        }
+    }
+    assert_eq!(redacted_export_projection(&safe), safe);
+    assert_eq!(snapshot, original);
+}

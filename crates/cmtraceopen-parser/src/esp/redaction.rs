@@ -101,7 +101,7 @@ fn standalone_digest_challenge_pattern() -> &'static Regex {
             r#"[A-Z0-9!#$%&'*+.^_`|~-]+[ \t]*=[ \t]*{DIGEST_VALUE_PATTERN}"#
         );
         Regex::new(&format!(
-            r#"(?i)(?P<prefix>\bdigest)(?:[ \t]+|\r?\n[ \t]+)(?P<parameters>{parameter}(?:(?:[ \t]*[,;][ \t]*(?:\r?\n[ \t]+)?|\r?\n[ \t]+|[ \t]+){parameter})*)(?P<tail>[^\r\n]*(?:\r?\n[ \t]+[^\r\n]*)*)"#,
+            r#"(?i)(?P<prefix>\bdigest)(?:[ \t]|\r?\n[ \t]+)+(?P<parameters>{parameter}(?:(?:[ \t]*[,;][ \t]*(?:\r?\n[ \t]+)?|\r?\n[ \t]+|[ \t]+){parameter})*)(?P<tail>[^\r\n]*(?:\r?\n[ \t]+[^\r\n]*)*)"#,
         ))
         .expect("standalone Digest challenge redaction pattern must compile")
     })
