@@ -490,8 +490,8 @@ fn extend_status_conflict_evidence(
 }
 
 fn statuses_contradict(local: &EspNormalizedStatus, remote: &EspNormalizedStatus) -> bool {
-    (*local == EspNormalizedStatus::Failed && is_successful_terminal_status(remote))
-        || (*remote == EspNormalizedStatus::Failed && is_successful_terminal_status(local))
+    (is_unsuccessful_terminal_status(local) && is_successful_terminal_status(remote))
+        || (is_unsuccessful_terminal_status(remote) && is_successful_terminal_status(local))
 }
 
 fn push_malformed_source(
@@ -685,6 +685,13 @@ fn is_successful_terminal_status(status: &EspNormalizedStatus) -> bool {
             | EspNormalizedStatus::Processed
             | EspNormalizedStatus::Skipped
             | EspNormalizedStatus::Uninstalled
+    )
+}
+
+fn is_unsuccessful_terminal_status(status: &EspNormalizedStatus) -> bool {
+    matches!(
+        status,
+        EspNormalizedStatus::Failed | EspNormalizedStatus::Cancelled
     )
 }
 

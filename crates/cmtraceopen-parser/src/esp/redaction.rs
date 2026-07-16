@@ -58,7 +58,7 @@ fn secret_argument_pattern() -> &'static Regex {
 fn standalone_bearer_pattern() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
-        Regex::new(r"(?i)(?P<prefix>\bbearer[ \t]+)(?P<value>[A-Z0-9._~+/=-]{8,})")
+        Regex::new(r"(?i)(?P<prefix>\bbearer[ \t]+)(?P<value>[A-Z0-9._~+/=-]+)")
             .expect("standalone Bearer redaction pattern must compile")
     })
 }
@@ -928,13 +928,48 @@ fn normalize_label(value: &str) -> String {
 fn forbidden_raw_content(value: &str) -> bool {
     let bounded = bounded_text(value);
     forbidden_raw_content_pattern().is_match(bounded)
-        || standalone_bearer_pattern().is_match(bounded)
+        || standalone_bearer_pattern()
+            .captures_iter(bounded)
+            .any(|captures| bearer_match_contains_credential(bounded, &captures))
 }
 
 fn redact_standalone_bearer_tokens(value: &str) -> String {
     standalone_bearer_pattern()
-        .replace_all(value, "${prefix}[redacted]")
+        .replace_all(value, |captures: &regex::Captures<'_>| {
+            if bearer_match_contains_credential(value, captures) {
+                format!("{}[redacted]", &captures["prefix"])
+            } else {
+                captures[0].to_string()
+            }
+        })
         .into_owned()
+}
+
+fn bearer_match_contains_credential(value: &str, captures: &regex::Captures<'_>) -> bool {
+    let candidate = &captures["value"];
+    if !bearer_prose_descriptor(candidate) {
+        return true;
+    }
+    let Some(matched) = captures.get(0) else {
+        return true;
+    };
+    let remainder = &value[matched.end()..];
+    let prose = remainder.trim_start_matches([' ', '\t']);
+    prose.len() == remainder.len() || prose.is_empty()
+}
+
+fn bearer_prose_descriptor(value: &str) -> bool {
+    [
+        "authentication",
+        "authorization",
+        "credential",
+        "credentials",
+        "scheme",
+        "token",
+        "tokens",
+    ]
+    .iter()
+    .any(|descriptor| value.eq_ignore_ascii_case(descriptor))
 }
 
 fn redact_provenance(provenance: &mut EspEvidenceProvenance, pseudonyms: &ReferencePseudonyms) {

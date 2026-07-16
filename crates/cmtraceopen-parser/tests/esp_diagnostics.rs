@@ -5196,6 +5196,139 @@ fn findings_report_exact_local_graph_status_conflicts_with_both_sources() {
 }
 
 #[test]
+fn findings_report_cancelled_success_terminal_conflicts_in_both_directions() {
+    let contradictory_statuses = [
+        (
+            EspNormalizedStatus::Cancelled,
+            EspNormalizedStatus::Succeeded,
+        ),
+        (
+            EspNormalizedStatus::Succeeded,
+            EspNormalizedStatus::Cancelled,
+        ),
+        (
+            EspNormalizedStatus::Cancelled,
+            EspNormalizedStatus::Processed,
+        ),
+        (
+            EspNormalizedStatus::Processed,
+            EspNormalizedStatus::Cancelled,
+        ),
+        (EspNormalizedStatus::Cancelled, EspNormalizedStatus::Skipped),
+        (EspNormalizedStatus::Skipped, EspNormalizedStatus::Cancelled),
+        (
+            EspNormalizedStatus::Cancelled,
+            EspNormalizedStatus::Uninstalled,
+        ),
+        (
+            EspNormalizedStatus::Uninstalled,
+            EspNormalizedStatus::Cancelled,
+        ),
+    ];
+
+    for (case_index, (local_status, graph_status)) in contradictory_statuses.into_iter().enumerate()
+    {
+        let app_id = format!("cancelled-conflict-{case_index}");
+        let local_evidence_id = format!("local-cancelled-conflict-{case_index}");
+        let graph_evidence_id = format!("graph-cancelled-conflict-{case_index}");
+        let mut snapshot = findings_snapshot();
+        let mut workload = findings_workload(
+            &app_id,
+            EspTrackedKind::Win32App,
+            local_status,
+            Some(true),
+            "2026-07-15T12:29:00Z",
+        );
+        workload.evidence = vec![evidence_ref_from(&local_evidence_id, "artifact-registry")];
+        snapshot.workloads.push(workload);
+
+        let graph_app = EspGraphAppRecord {
+            app_id,
+            display_name: Some("Terminal conflict".to_string()),
+            tracked_on_enrollment_status: Some(true),
+            status: Some(status(
+                EspRawStatus::Text(format!("graph-status-{case_index}")),
+                graph_status,
+            )),
+            assignments: vec![],
+            evidence: vec![evidence_ref_from(&graph_evidence_id, "graph-apps")],
+        };
+
+        let overlaid = attach_graph_overlay(&snapshot, findings_graph_overlay(graph_app));
+        assert_finding_contract(
+            finding_by_id(&overlaid.findings, "local-graph-state-conflict"),
+            "local-graph-state-conflict",
+            EspFindingSeverity::Warning,
+            EspFindingConfidence::High,
+            "Compare the cited local workload state with the current Intune Graph status.",
+            &[
+                (graph_evidence_id.as_str(), "graph-apps"),
+                (local_evidence_id.as_str(), "artifact-registry"),
+            ],
+            &[],
+        );
+    }
+}
+
+#[test]
+fn findings_do_not_report_noncontradictory_cancelled_graph_pairs() {
+    let noncontradictory_statuses = [
+        (
+            EspNormalizedStatus::Cancelled,
+            EspNormalizedStatus::Cancelled,
+        ),
+        (EspNormalizedStatus::Cancelled, EspNormalizedStatus::Failed),
+        (EspNormalizedStatus::Failed, EspNormalizedStatus::Cancelled),
+        (EspNormalizedStatus::Cancelled, EspNormalizedStatus::Pending),
+        (EspNormalizedStatus::Pending, EspNormalizedStatus::Cancelled),
+        (
+            EspNormalizedStatus::Cancelled,
+            EspNormalizedStatus::Installing,
+        ),
+        (
+            EspNormalizedStatus::Installing,
+            EspNormalizedStatus::Cancelled,
+        ),
+    ];
+
+    for (case_index, (local_status, graph_status)) in
+        noncontradictory_statuses.into_iter().enumerate()
+    {
+        let app_id = format!("cancelled-consistent-{case_index}");
+        let mut snapshot = findings_snapshot();
+        snapshot.workloads.push(findings_workload(
+            &app_id,
+            EspTrackedKind::Win32App,
+            local_status,
+            Some(true),
+            "2026-07-15T12:29:00Z",
+        ));
+        let graph_app = EspGraphAppRecord {
+            app_id,
+            display_name: None,
+            tracked_on_enrollment_status: Some(true),
+            status: Some(status(
+                EspRawStatus::Text(format!("graph-status-{case_index}")),
+                graph_status,
+            )),
+            assignments: vec![],
+            evidence: vec![evidence_ref_from(
+                &format!("graph-cancelled-consistent-{case_index}"),
+                "graph-apps",
+            )],
+        };
+
+        assert!(
+            attach_graph_overlay(&snapshot, findings_graph_overlay(graph_app))
+                .findings
+                .iter()
+                .all(|finding| finding.finding_id != "local-graph-state-conflict"),
+            "case {case_index} produced a false-positive conflict"
+        );
+    }
+}
+
+#[test]
 fn findings_report_policy_certificate_and_script_graph_conflicts() {
     let mut snapshot = findings_snapshot();
     snapshot.workloads = vec![
@@ -5928,10 +6061,7 @@ fn redaction_projection_masks_standalone_bearer_tokens_in_generic_named_data() {
         assert_eq!(values[0].value, "bEaReR [redacted]");
         assert!(values[1].value.contains(r#""payload":"BEARER [redacted]"#));
         assert!(values[1].value.contains(r#""state":"safe""#));
-        assert_eq!(
-            values[2].value,
-            "Bearer [redacted] is required for this endpoint"
-        );
+        assert_eq!(values[2].value, safe_prose);
         assert_eq!(values[3].value, "Bearer [redacted] expires soon");
     }
     assert_eq!(snapshot, original);
@@ -5939,8 +6069,8 @@ fn redaction_projection_masks_standalone_bearer_tokens_in_generic_named_data() {
 
 #[test]
 fn redaction_projection_masks_short_alphabetic_bearers_across_safe_export_paths() {
-    let short_token = "abcdefgh";
-    let medium_token = "abcdefghijklmnopqrstuvw";
+    let short_token = "Q";
+    let medium_token = "qwertyz";
     let mut snapshot = findings_snapshot();
     snapshot.registration_events.push(EspRegistrationEvent {
         event_id: 304,
@@ -6022,7 +6152,7 @@ fn redaction_projection_masks_short_alphabetic_bearers_across_safe_export_paths(
         "Bearer [redacted]"
     );
     let safe_json = serde_json::to_string(&safe).unwrap();
-    assert!(!safe_json.contains(short_token));
+    assert!(!safe_json.contains(&format!("Bearer {short_token}")));
     assert!(!safe_json.contains(medium_token));
     assert_eq!(snapshot, original);
 }
@@ -6169,7 +6299,7 @@ fn redaction_projection_masks_generic_token_labels_without_matching_token_count(
 }
 
 #[test]
-fn redaction_projection_removes_ambiguous_bearer_raw_values_conservatively() {
+fn redaction_projection_removes_bearer_credentials_but_preserves_safe_raw_prose() {
     let mut token_text = raw_export_record(
         "bearer-token-text",
         EspSourceKind::DeploymentLog,
@@ -6215,7 +6345,24 @@ fn redaction_projection_removes_ambiguous_bearer_raw_values_conservatively() {
     let original = snapshot.clone();
 
     let safe = redacted_export_projection(&snapshot);
-    assert!(safe.raw_evidence.is_empty());
+    assert_eq!(
+        safe.raw_evidence
+            .iter()
+            .map(|record| record.record_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["bearer-prose-text", "bearer-prose-list"]
+    );
+    assert_eq!(
+        safe.raw_evidence[0].raw_value,
+        EspObservationValue::Text("Bearer authentication remains available".to_string())
+    );
+    assert_eq!(
+        safe.raw_evidence[1].raw_value,
+        EspObservationValue::StringList(vec![
+            "Bearer authentication remains available".to_string(),
+            "Bearer scheme negotiation was retried".to_string(),
+        ])
+    );
     assert_eq!(snapshot, original);
 }
 
