@@ -4858,6 +4858,32 @@ fn archive_rejects_zip_symlink_entries_before_materializing_any_evidence() {
 }
 
 #[test]
+fn archive_rejects_trailing_separator_zip_symlink_entries() {
+    let source = tempfile::tempdir().expect("source tempdir");
+    let archive_path = source.path().join("trailing-separator-symlink.zip");
+    let file = File::create(&archive_path).expect("create symlink ZIP");
+    let mut writer = zip::ZipWriter::new(file);
+    writer
+        .add_symlink(
+            "evidence/link/",
+            "../../outside.log",
+            zip::write::SimpleFileOptions::default(),
+        )
+        .expect("write trailing-separator symlink entry");
+    writer.finish().expect("finish symlink ZIP");
+
+    let error = extract_captured_archive(&archive_path)
+        .expect_err("reject a symlink even when its name ends in a separator");
+    assert!(matches!(
+        error,
+        ArchiveError::UnsupportedEntryType {
+            kind: ArchiveEntryKind::Symlink,
+            ..
+        }
+    ));
+}
+
+#[test]
 fn archive_rejects_non_symlink_zip_special_entries() {
     let source = tempfile::tempdir().expect("source tempdir");
     let archive_path = source.path().join("special.zip");
@@ -4878,6 +4904,29 @@ fn archive_rejects_non_symlink_zip_special_entries() {
             kind: ArchiveEntryKind::Other,
             ..
         })
+    ));
+}
+
+#[test]
+fn archive_rejects_trailing_separator_zip_special_entries() {
+    let source = tempfile::tempdir().expect("source tempdir");
+    let archive_path = source.path().join("trailing-separator-special.zip");
+    write_test_zip(&archive_path, &[("evidence/fifo/", b"not a regular file")]);
+
+    let mut bytes = std::fs::read(&archive_path).expect("read ZIP fixture");
+    let central = find_last_signature(&bytes, [0x50, 0x4b, 0x01, 0x02]);
+    bytes[central + 5] = 3;
+    patch_u32(&mut bytes, central + 38, 0o010644_u32 << 16);
+    std::fs::write(&archive_path, bytes).expect("patch ZIP fixture");
+
+    let error = extract_captured_archive(&archive_path)
+        .expect_err("reject a special entry even when its name ends in a separator");
+    assert!(matches!(
+        error,
+        ArchiveError::UnsupportedEntryType {
+            kind: ArchiveEntryKind::Other,
+            ..
+        }
     ));
 }
 

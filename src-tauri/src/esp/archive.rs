@@ -863,11 +863,17 @@ fn is_reserved_windows_component(component: &str) -> bool {
 }
 
 fn zip_entry_kind(entry: &zip::read::ZipFile<'_>) -> ArchiveEntryKind {
+    let unix_file_type = entry.unix_mode().map(|mode| mode & 0o170000);
+    if unix_file_type == Some(0o120000) {
+        return ArchiveEntryKind::Symlink;
+    }
+    if unix_file_type.is_some_and(|kind| !matches!(kind, 0 | 0o040000 | 0o100000)) {
+        return ArchiveEntryKind::Other;
+    }
     if entry.is_dir() {
         return ArchiveEntryKind::Directory;
     }
-    match entry.unix_mode().map(|mode| mode & 0o170000) {
-        Some(0o120000) => ArchiveEntryKind::Symlink,
+    match unix_file_type {
         Some(0) | Some(0o100000) | None => ArchiveEntryKind::File,
         _ => ArchiveEntryKind::Other,
     }
