@@ -9,10 +9,20 @@ pub mod profile;
 pub mod types;
 
 #[cfg(test)]
-mod tests {
+mod cross_profile_tests {
     use std::collections::HashSet;
 
+    use serde_json::Value;
+
     use super::types::CollectionProfile;
+
+    const TARGETED_PROFILE_JSON: &str =
+        include_str!("../../../../scripts/collection/intune-evidence-profile.json");
+    const REFERENCE_PROFILE_JSON: &str =
+        include_str!("../../../../references/collection/intune-evidence-profile.json");
+    const EMBEDDED_PROFILE_JSON: &str = include_str!("profile_data.json");
+    const TARGETED_README: &str = include_str!("../../../../scripts/collection/README.md");
+    const REFERENCE_README: &str = include_str!("../../../../references/collection/README.md");
 
     #[test]
     fn esp_profile_has_required_registry_families() {
@@ -152,6 +162,268 @@ mod tests {
         }
         assert!(profile.has_unique_artifact_ids());
         assert_eq!(seen.len(), profile.total_items());
+    }
+
+    #[test]
+    fn cross_profile_targeted_and_reference_profiles_match() {
+        let targeted = parse_profile(TARGETED_PROFILE_JSON);
+        let reference = parse_profile(REFERENCE_PROFILE_JSON);
+        assert_eq!(
+            targeted, reference,
+            "targeted and reference profiles drifted"
+        );
+    }
+
+    #[test]
+    fn cross_profile_required_esp_contract_is_present() {
+        for (name, profile) in [
+            ("targeted", parse_profile(TARGETED_PROFILE_JSON)),
+            ("reference", parse_profile(REFERENCE_PROFILE_JSON)),
+            ("embedded", parse_profile(EMBEDDED_PROFILE_JSON)),
+        ] {
+            assert_required_profile_contract(name, &profile);
+        }
+    }
+
+    #[test]
+    fn cross_profile_registry_exports_are_deduplicated() {
+        for (name, profile) in [
+            ("targeted", parse_profile(TARGETED_PROFILE_JSON)),
+            ("reference", parse_profile(REFERENCE_PROFILE_JSON)),
+        ] {
+            let paths: Vec<String> = profile_array(&profile, "registry")
+                .iter()
+                .filter_map(|item| item.get("path").and_then(Value::as_str))
+                .map(normalize_registry_path)
+                .collect();
+            for (index, parent) in paths.iter().enumerate() {
+                for (other_index, child) in paths.iter().enumerate() {
+                    if index != other_index && child.starts_with(&format!("{parent}\\")) {
+                        panic!(
+                            "{name} profile duplicates parent registry export {parent} with child {child}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn cross_profile_documentation_matches_safety_contract() {
+        assert_eq!(
+            TARGETED_README, REFERENCE_README,
+            "collection READMEs drifted"
+        );
+        let readme = TARGETED_README.to_ascii_lowercase();
+        for required_phrase in [
+            "read-only",
+            "sensitive fields",
+            "raw hardware hash",
+            "firstsync",
+            "win32apps",
+        ] {
+            assert!(
+                readme.contains(required_phrase),
+                "collection README omits safety contract phrase: {required_phrase}"
+            );
+        }
+    }
+
+    fn assert_required_profile_contract(name: &str, profile: &Value) {
+        let registry = profile_array(profile, "registry");
+        for required_path in [
+            r"HKLM\SOFTWARE\Microsoft\Provisioning\Diagnostics\Autopilot",
+            r"HKLM\SOFTWARE\Microsoft\Provisioning\AutopilotSettings",
+            r"HKLM\SOFTWARE\Microsoft\Provisioning\OMADM",
+            r"HKLM\SOFTWARE\Microsoft\Provisioning\NodeCache\CSP",
+            r"HKLM\SOFTWARE\Microsoft\Windows\Autopilot\EnrollmentStatusTracking",
+            r"HKLM\SOFTWARE\Microsoft\Enrollments\{enrollment-id}\FirstSync",
+            r"HKLM\SOFTWARE\Microsoft\EnterpriseDesktopAppManagement",
+            r"HKLM\SOFTWARE\Microsoft\OfficeCSP",
+            r"HKLM\SOFTWARE\Microsoft\IntuneManagementExtension\Win32Apps",
+        ] {
+            assert!(
+                registry.iter().any(|item| {
+                    item.get("path")
+                        .and_then(Value::as_str)
+                        .is_some_and(|path| registry_export_covers(path, required_path))
+                }),
+                "{name} profile does not cover {required_path}"
+            );
+        }
+
+        let required_ids = [
+            "ime-logs",
+            "mdm-enrollments",
+            "autopilot-diagnostics",
+            "autopilot-settings",
+            "autopilot-esp-diagnostics",
+            "ime-state",
+            "provisioning-nodecache-csp",
+            "enterprise-desktop-app-mgmt",
+            "office-csp",
+            "autopilot-dds-ztd-wmansvc",
+            "delivery-optimization-status",
+            "delivery-optimization-perf-snap",
+            "esp-os-facts",
+            "esp-hardware-facts",
+            "esp-tpm-facts",
+        ];
+        let ids = profile_artifact_ids(profile);
+        for required_id in required_ids {
+            assert!(
+                ids.contains(required_id),
+                "{name} profile is missing {required_id}"
+            );
+        }
+
+        let all_id_count = ["logs", "registry", "eventLogs", "exports", "commands"]
+            .iter()
+            .map(|category| profile_array(profile, category).len())
+            .sum::<usize>();
+        assert_eq!(ids.len(), all_id_count, "{name} profile has duplicate IDs");
+
+        let exports = profile_array(profile, "exports");
+        let wmansvc_suffix = r"\ServiceState\wmansvc\AutopilotDDSZTDFile.json";
+        assert!(
+            exports.iter().any(|item| {
+                item.get("sourcePath")
+                    .and_then(Value::as_str)
+                    .is_some_and(|path| {
+                        path.to_ascii_lowercase()
+                            .ends_with(&wmansvc_suffix.to_ascii_lowercase())
+                            && !path.contains('*')
+                    })
+            }),
+            "{name} profile lacks the exact wmansvc Autopilot JSON"
+        );
+
+        let commands = profile_array(profile, "commands");
+        for command_id in ["esp-os-facts", "esp-hardware-facts", "esp-tpm-facts"] {
+            let command = command_by_id(commands, command_id, name);
+            let arguments = command_arguments(command);
+            assert!(
+                arguments.contains("Select-Object") || arguments.contains("[pscustomobject]@"),
+                "{name} {command_id} does not select bounded fields"
+            );
+            assert!(arguments.contains("ConvertTo-Json"));
+            let lowered = arguments.to_ascii_lowercase();
+            assert!(!lowered.contains("devicehardwaredata"));
+            assert!(!lowered.contains("decodehwhash"));
+            assert!(!lowered.contains("hardware hash"));
+        }
+        for command_id in [
+            "delivery-optimization-status",
+            "delivery-optimization-perf-snap",
+        ] {
+            let command = command_by_id(commands, command_id, name);
+            let arguments = command_arguments(command);
+            assert!(
+                arguments.contains("Select-Object"),
+                "{name} {command_id} is unfiltered"
+            );
+            assert!(
+                arguments.contains("ConvertTo-Json"),
+                "{name} {command_id} is unstructured"
+            );
+            assert!(!arguments.contains("Format-List *"));
+        }
+
+        let event_families = normalized_event_families(profile);
+        for required_family in [
+            "aad",
+            "device-management",
+            "modern-deployment",
+            "provisioning",
+            "shell-core",
+            "user-device-registration",
+        ] {
+            assert!(
+                event_families.contains(required_family),
+                "{name} profile lacks normalized event family {required_family}"
+            );
+        }
+
+        if profile_array(profile, "eventLogs")
+            .iter()
+            .any(|item| item.get("channel").is_some())
+        {
+            let channels: HashSet<&str> = profile_array(profile, "eventLogs")
+                .iter()
+                .filter_map(|item| item.get("channel").and_then(Value::as_str))
+                .collect();
+            for channel in [
+                "Microsoft-Windows-DeliveryOptimization/Operational",
+                "Microsoft-Windows-Time-Service/Operational",
+            ] {
+                assert!(channels.contains(channel), "{name} profile lacks {channel}");
+            }
+        }
+    }
+
+    fn parse_profile(json: &str) -> Value {
+        serde_json::from_str(json).expect("valid collection profile JSON")
+    }
+
+    fn profile_array<'a>(profile: &'a Value, key: &str) -> &'a Vec<Value> {
+        profile
+            .get(key)
+            .and_then(Value::as_array)
+            .unwrap_or_else(|| panic!("profile is missing array: {key}"))
+    }
+
+    fn profile_artifact_ids(profile: &Value) -> HashSet<&str> {
+        ["logs", "registry", "eventLogs", "exports", "commands"]
+            .iter()
+            .flat_map(|category| profile_array(profile, category))
+            .filter_map(|item| item.get("id").and_then(Value::as_str))
+            .collect()
+    }
+
+    fn command_by_id<'a>(commands: &'a [Value], id: &str, profile_name: &str) -> &'a Value {
+        commands
+            .iter()
+            .find(|item| item.get("id").and_then(Value::as_str) == Some(id))
+            .unwrap_or_else(|| panic!("{profile_name} profile lacks command {id}"))
+    }
+
+    fn command_arguments(command: &Value) -> String {
+        command
+            .get("arguments")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    fn normalized_event_families(profile: &Value) -> HashSet<&'static str> {
+        let mut families = HashSet::new();
+        for item in profile_array(profile, "eventLogs") {
+            let value = item
+                .get("channel")
+                .or_else(|| item.get("sourcePattern"))
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_ascii_lowercase();
+            for (family, needles) in [
+                ("aad", &["aad"][..]),
+                ("device-management", &["devicemanagement"][..]),
+                ("modern-deployment", &["moderndeployment"][..]),
+                ("provisioning", &["provisioning-"][..]),
+                ("shell-core", &["shell-core"][..]),
+                (
+                    "user-device-registration",
+                    &["user device", "user*device"][..],
+                ),
+            ] {
+                if needles.iter().any(|needle| value.contains(needle)) {
+                    families.insert(family);
+                }
+            }
+        }
+        families
     }
 
     fn registry_export_covers(exported_path: &str, required_path: &str) -> bool {
