@@ -261,12 +261,7 @@ test.describe("repo screenshots", () => {
         animations: "disabled",
       });
 
-      await showEspCapture(
-        page,
-        buildBaseEspSnapshot(),
-        "collapsed",
-        "ready",
-      );
+      await showEspCapture(page, buildBaseEspSnapshot(), "collapsed", "ready");
       const recommendation = page.getByRole("region", {
         name: "Administrator coverage recommendation",
       });

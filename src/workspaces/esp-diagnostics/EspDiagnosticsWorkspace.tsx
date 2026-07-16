@@ -106,9 +106,7 @@ export function EspDiagnosticsWorkspace() {
       .then((elevation) => {
         if (disposed) return;
         setEntryElevation(
-          validElevationState(elevation)
-            ? elevation
-            : ELEVATION_PROBE_FALLBACK,
+          validElevationState(elevation) ? elevation : ELEVATION_PROBE_FALLBACK,
         );
       })
       .catch(applyFallback);

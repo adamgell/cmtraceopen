@@ -313,9 +313,7 @@ test.describe("ESP Diagnostics workspace", () => {
     page,
   }) => {
     const snapshot = cloneSnapshot();
-    snapshot.installerCorrelations = [
-      structuredClone(ambiguousMsi),
-    ];
+    snapshot.installerCorrelations = [structuredClone(ambiguousMsi)];
 
     await page.goto("/");
     await dismissSplash(page);
@@ -716,7 +714,11 @@ test.describe("ESP Diagnostics workspace", () => {
 
     expect(message).toContain("rejected live ESP Graph command");
 
-    await installGraphFixture(page, null, "Deterministic Graph transport failed");
+    await installGraphFixture(
+      page,
+      null,
+      "Deterministic Graph transport failed",
+    );
     await openEspWorkspace(page);
     await analyzeWithConnectedGraph(page, cloneSnapshot());
 

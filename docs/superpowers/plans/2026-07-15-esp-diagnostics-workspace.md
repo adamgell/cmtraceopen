@@ -2030,7 +2030,7 @@ cargo check -p cmtrace-open --no-default-features --features esp-diagnostics
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 ```
 
-Exact rehearsal head `8215ef8952e` passes the native ESP and Graph suites, the serial full locked workspace, both no-default feature checks, strict host Clippy, and strict Windows xwin Clippy.
+Verified rehearsal code head `ae174448121` passes 171 native ESP tests, 66 Graph tests, the serial full locked workspace, both no-default feature checks, strict host Clippy, and strict Windows xwin Clippy. Its 210 parser tests, 390 frontend tests, TypeScript build, production frontend build, Tauri Graph registration assertion, and 13-scenario Chromium ESP matrix also pass. Live Windows acceptance remains tracked separately below.
 
 - [x] **Step 3: Frontend gates**
 

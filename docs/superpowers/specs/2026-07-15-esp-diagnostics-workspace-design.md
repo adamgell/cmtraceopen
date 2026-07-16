@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-15
 
-**Status:** Approved direction; implementation pending
+**Status:** Implemented in the feature branch; live Windows acceptance pending
 
 ## Product outcome
 
