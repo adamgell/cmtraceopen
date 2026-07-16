@@ -2017,7 +2017,7 @@ cargo test -p cmtraceopen-parser --test esp_diagnostics -- --nocapture
 cargo test -p cmtraceopen-parser
 ```
 
-Current-head parser tests pass (210 ESP integration tests and the full parser package), the three Rust files in the final timestamp repair pass scoped `rustfmt`, and the branch-owned collector formatting hunk is corrected. This grouped step remains open because repository-wide `cargo fmt --all -- --check` still reports broad pre-existing formatting drift in untouched code.
+Current-head parser tests pass (210 ESP integration tests and the full parser package), and the three Rust files in the final timestamp repair pass scoped `rustfmt`. This grouped step remains open because repository-wide `cargo fmt --all -- --check` still reports broad legacy drift plus formatting drift in earlier branch-owned files outside the final repair.
 
 - [x] **Step 2: Native and feature gates**
 

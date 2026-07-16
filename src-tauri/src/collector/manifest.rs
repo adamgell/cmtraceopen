@@ -351,7 +351,10 @@ mod tests {
         .expect("parse manifest");
         assert_eq!(manifest["artifacts"][0]["relativePath"], relative_path);
         assert_eq!(manifest["artifacts"][0]["status"], "failed");
-        assert_eq!(manifest["collection"]["results"]["gaps"][0]["status"], "Failed");
+        assert_eq!(
+            manifest["collection"]["results"]["gaps"][0]["status"],
+            "Failed"
+        );
         fs::remove_dir_all(bundle_root).expect("remove temp bundle root");
     }
 
