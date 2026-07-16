@@ -5178,6 +5178,47 @@ fn archive_zip_extracts_only_allowlisted_evidence_and_parses_registry_in_place()
 }
 
 #[test]
+fn archive_keeps_manifest_listed_numeric_log_rotations_for_bundle_analysis() {
+    let source = tempfile::tempdir().expect("source tempdir");
+    let archive_path = source.path().join("captured-rotation.zip");
+    let manifest = serde_json::to_vec(&serde_json::json!({
+        "collection": { "collectedUtc": BUNDLE_OBSERVED_AT, "results": { "gaps": [] } },
+        "artifacts": [{
+            "artifactId": "ime-agent-executor-rotation",
+            "category": "logs",
+            "family": "intune-ime",
+            "relativePath": "evidence/logs/AgentExecutor.log.1",
+            "status": "collected"
+        }]
+    }))
+    .expect("serialize rotation manifest");
+    write_test_zip(
+        &archive_path,
+        &[
+            ("manifest.json", manifest.as_slice()),
+            (
+                "evidence/logs/AgentExecutor.log.1",
+                b"<![LOG[Processing rotated app evidence]LOG]!><time=\"08:00:00.000+000\" date=\"07-16-2026\" component=\"AgentExecutor\" context=\"\" type=\"1\" thread=\"1\" file=\"\">",
+            ),
+        ],
+    );
+
+    let snapshot = analyze_captured_evidence_at(&archive_path, BUNDLE_REQUEST_ID, BUNDLE_OBSERVED_AT)
+        .expect("analyze archived rotation");
+
+    assert!(snapshot.raw_evidence.iter().any(|record| {
+        record
+            .provenance
+            .file_path
+            .as_deref()
+            .is_some_and(|path| path.ends_with("AgentExecutor.log.1"))
+    }));
+    assert!(snapshot.coverage.iter().any(|coverage| {
+        coverage.family == "intune-ime" && coverage.status == EspArtifactStatus::Available
+    }));
+}
+
+#[test]
 fn archive_parses_utf8_utf16be_and_windows1252_registry_exports() {
     let source = tempfile::tempdir().expect("source tempdir");
     let archive_path = source.path().join("registry-encodings.zip");
@@ -5866,7 +5907,7 @@ fn bundle_legacy_fallback_is_depth_extension_and_basename_allowlisted() {
 #[test]
 fn bundle_legacy_fallback_stops_after_256_directory_entries() {
     let bundle = tempfile::tempdir().expect("bundle tempdir");
-    for index in 0..(MAX_LEGACY_BUNDLE_ENTRIES + 8) {
+    for index in (0..(MAX_LEGACY_BUNDLE_ENTRIES + 8)).rev() {
         std::fs::write(
             bundle.path().join(format!("evidence-{index:03}.log")),
             format!("evidence {index}"),
@@ -5880,6 +5921,15 @@ fn bundle_legacy_fallback_stops_after_256_directory_entries() {
 
     assert_eq!(MAX_LEGACY_BUNDLE_ENTRIES, 256);
     assert!(snapshot.raw_evidence.len() <= MAX_LEGACY_BUNDLE_ENTRIES);
+    let retained_paths = snapshot
+        .raw_evidence
+        .iter()
+        .filter_map(|record| record.provenance.file_path.as_deref())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert!(retained_paths.contains("evidence-000.log"));
+    assert!(retained_paths.contains("evidence-255.log"));
+    assert!(!retained_paths.contains("evidence-256.log"));
+    assert!(!retained_paths.contains("evidence-263.log"));
     assert!(snapshot.coverage.iter().any(|coverage| {
         coverage.artifact_id == "bundle.legacy-limit"
             && coverage.status == EspArtifactStatus::ParseFailed

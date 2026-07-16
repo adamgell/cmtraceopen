@@ -880,10 +880,26 @@ fn zip_entry_kind(entry: &zip::read::ZipFile<'_>) -> ArchiveEntryKind {
 }
 
 fn is_allowlisted_evidence(path: &Path) -> bool {
-    path.extension()
+    let extension_allowed = path
+        .extension()
         .and_then(|extension| extension.to_str())
         .map(str::to_ascii_lowercase)
-        .is_some_and(|extension| ALLOWED_EVIDENCE_EXTENSIONS.contains(&extension.as_str()))
+        .is_some_and(|extension| ALLOWED_EVIDENCE_EXTENSIONS.contains(&extension.as_str()));
+    extension_allowed
+        || path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(is_numeric_log_rotation)
+}
+
+fn is_numeric_log_rotation(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    let Some((_, suffix)) = lower.rsplit_once(".log.") else {
+        return false;
+    };
+    !suffix.is_empty()
+        && suffix.len() <= 8
+        && suffix.chars().all(|character| character.is_ascii_digit())
 }
 
 fn write_bounded_entry(

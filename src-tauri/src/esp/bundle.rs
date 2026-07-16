@@ -483,31 +483,49 @@ fn resolve_legacy_artifacts(
                 continue;
             }
         };
-        let mut resolved_entries = Vec::new();
+        let remaining = MAX_LEGACY_BUNDLE_ENTRIES.saturating_sub(inspected);
+        if remaining == 0 {
+            limit_reached = true;
+            break 'walk;
+        }
+        let mut selected_entries = BTreeMap::new();
+        let mut successful_entries = 0_usize;
+        let mut entry_errors = 0_usize;
         for (index, entry) in entries.enumerate() {
-            if inspected >= MAX_LEGACY_BUNDLE_ENTRIES {
-                limit_reached = true;
-                break;
-            }
-            inspected += 1;
             match entry {
-                Ok(entry) => resolved_entries.push(entry),
+                Ok(entry) => {
+                    successful_entries = successful_entries.saturating_add(1);
+                    let exact_name = entry.file_name().to_string_lossy().into_owned();
+                    selected_entries.insert((exact_name.to_ascii_lowercase(), exact_name), entry);
+                    if selected_entries.len() > remaining {
+                        selected_entries.pop_last();
+                    }
+                }
                 Err(error) => {
-                    coverage.push(artifact_coverage(
-                        format!(
-                            "bundle.legacy-directory:{}:entry-{index}",
-                            portable_relative(root, &directory)
-                        ),
-                        "legacy-discovery",
-                        EspArtifactStatus::ParseFailed,
-                        Some(error.to_string()),
-                        observed_at_utc,
-                    ));
+                    if entry_errors < remaining {
+                        coverage.push(artifact_coverage(
+                            format!(
+                                "bundle.legacy-directory:{}:entry-{index}",
+                                portable_relative(root, &directory)
+                            ),
+                            "legacy-discovery",
+                            EspArtifactStatus::ParseFailed,
+                            Some(error.to_string()),
+                            observed_at_utc,
+                        ));
+                    }
+                    entry_errors = entry_errors.saturating_add(1);
                 }
             }
         }
-        let mut entries = resolved_entries;
-        entries.sort_by_key(|entry| entry.file_name().to_string_lossy().to_ascii_lowercase());
+        let retained_errors = entry_errors.min(remaining);
+        let retained_successes = remaining.saturating_sub(retained_errors);
+        while selected_entries.len() > retained_successes {
+            selected_entries.pop_last();
+        }
+        let entries = selected_entries.into_values().collect::<Vec<_>>();
+        inspected = inspected.saturating_add(retained_errors + entries.len());
+        limit_reached = successful_entries.saturating_add(entry_errors) > remaining;
         for entry in entries {
             let entry_depth = depth.saturating_add(1);
             let path = entry.path();
