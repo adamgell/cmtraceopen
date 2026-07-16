@@ -39,6 +39,7 @@ pub const ESP_GRAPH_OVERALL_TIMEOUT: Duration = Duration::from_secs(120);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EspGraphOperationError {
     InvalidRequestId,
+    StaleGeneration,
     DuplicateRequest,
     ResourceLimit,
 }
@@ -47,6 +48,7 @@ impl fmt::Display for EspGraphOperationError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
             Self::InvalidRequestId => "InvalidGraphRequestId",
+            Self::StaleGeneration => "GraphAuthStateChanged",
             Self::DuplicateRequest => "GraphRequestAlreadyActive",
             Self::ResourceLimit => "GraphRequestLimitReached",
         })
@@ -57,7 +59,18 @@ impl std::error::Error for EspGraphOperationError {}
 
 #[derive(Default)]
 struct EspGraphOperationRegistryInner {
-    operations: Mutex<HashMap<String, Arc<EspGraphCancellationState>>>,
+    state: Mutex<EspGraphOperationRegistryState>,
+}
+
+#[derive(Default)]
+struct EspGraphOperationRegistryState {
+    generation: u64,
+    operations: HashMap<String, RegisteredEspGraphOperation>,
+}
+
+struct RegisteredEspGraphOperation {
+    generation: u64,
+    state: Arc<EspGraphCancellationState>,
 }
 
 /// Request-owned cancellation registry shared by the Tauri command adapter.
@@ -69,7 +82,11 @@ pub struct EspGraphOperationRegistry {
 }
 
 impl EspGraphOperationRegistry {
-    pub fn begin(&self, request_id: &str) -> Result<EspGraphOperation, EspGraphOperationError> {
+    pub fn begin(
+        &self,
+        request_id: &str,
+        generation: u64,
+    ) -> Result<EspGraphOperation, EspGraphOperationError> {
         if !valid_graph_request_id(request_id) {
             return Err(EspGraphOperationError::InvalidRequestId);
         }
@@ -79,18 +96,27 @@ impl EspGraphOperationRegistry {
             wake: Condvar::new(),
             deadline: Instant::now() + ESP_GRAPH_OVERALL_TIMEOUT,
         });
-        let mut operations = self
+        let mut registry = self
             .inner
-            .operations
+            .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if operations.contains_key(request_id) {
+        if registry.generation != generation {
+            return Err(EspGraphOperationError::StaleGeneration);
+        }
+        if registry.operations.contains_key(request_id) {
             return Err(EspGraphOperationError::DuplicateRequest);
         }
-        if operations.len() >= MAX_ACTIVE_ESP_GRAPH_OPERATIONS {
+        if registry.operations.len() >= MAX_ACTIVE_ESP_GRAPH_OPERATIONS {
             return Err(EspGraphOperationError::ResourceLimit);
         }
-        operations.insert(request_id.to_string(), Arc::clone(&state));
+        registry.operations.insert(
+            request_id.to_string(),
+            RegisteredEspGraphOperation {
+                generation,
+                state: Arc::clone(&state),
+            },
+        );
         Ok(EspGraphOperation {
             request_id: request_id.to_string(),
             state,
@@ -104,26 +130,39 @@ impl EspGraphOperationRegistry {
         }
         let state = self
             .inner
-            .operations
+            .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .operations
             .get(request_id)
-            .cloned();
+            .map(|operation| Arc::clone(&operation.state));
         state.is_some_and(|state| {
             state.cancel();
             true
         })
     }
 
-    pub fn cancel_all(&self) {
-        let operations: Vec<Arc<EspGraphCancellationState>> = self
-            .inner
-            .operations
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .values()
-            .cloned()
-            .collect();
+    /// Publish an auth generation before its token becomes observable and
+    /// retire only operations acquired from older token snapshots. Repeating
+    /// cleanup for the current generation is intentionally idempotent.
+    pub fn advance_generation(&self, generation: u64) {
+        let operations: Vec<Arc<EspGraphCancellationState>> = {
+            let mut registry = self
+                .inner
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if generation <= registry.generation {
+                return;
+            }
+            registry.generation = generation;
+            registry
+                .operations
+                .values()
+                .filter(|operation| operation.generation < generation)
+                .map(|operation| Arc::clone(&operation.state))
+                .collect()
+        };
         for operation in operations {
             operation.cancel();
         }
@@ -131,10 +170,7 @@ impl EspGraphOperationRegistry {
 }
 
 fn valid_graph_request_id(request_id: &str) -> bool {
-    !request_id.is_empty()
-        && request_id.len() <= MAX_GRAPH_REQUEST_ID_BYTES
-        && request_id.trim() == request_id
-        && !request_id.chars().any(char::is_control)
+    request_id.len() <= MAX_GRAPH_REQUEST_ID_BYTES && uuid::Uuid::parse_str(request_id).is_ok()
 }
 
 struct EspGraphCancellationState {
@@ -219,14 +255,15 @@ impl Drop for EspGraphOperation {
             return;
         };
         let mut operations = registry
-            .operations
+            .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         if operations
+            .operations
             .get(&self.request_id)
-            .is_some_and(|current| Arc::ptr_eq(current, &self.state))
+            .is_some_and(|current| Arc::ptr_eq(&current.state, &self.state))
         {
-            operations.remove(&self.request_id);
+            operations.operations.remove(&self.request_id);
         }
     }
 }

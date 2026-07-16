@@ -263,9 +263,8 @@ mod windows_impl {
             }
 
             let generation = guard.replace(None);
+            self.advance_dependent_generation(generation);
             drop(guard);
-            self.inner.guid_cache.lock().unwrap().reset_to(generation);
-            self.cancel_esp_operations();
             (None, generation)
         }
 
@@ -289,9 +288,8 @@ mod windows_impl {
             }
 
             let generation = guard.replace(None);
+            self.advance_dependent_generation(generation);
             drop(guard);
-            self.inner.guid_cache.lock().unwrap().reset_to(generation);
-            self.cancel_esp_operations();
             Err(generation)
         }
 
@@ -300,9 +298,8 @@ mod windows_impl {
             let Some(generation) = guard.replace_if_generation(expected, Some(token)) else {
                 return false;
             };
+            self.advance_dependent_generation(generation);
             drop(guard);
-            self.inner.guid_cache.lock().unwrap().reset_to(generation);
-            self.cancel_esp_operations();
             true
         }
 
@@ -311,18 +308,26 @@ mod windows_impl {
             let Some(generation) = guard.replace_if_generation(expected, None) else {
                 return false;
             };
+            self.advance_dependent_generation(generation);
             drop(guard);
-            self.inner.guid_cache.lock().unwrap().reset_to(generation);
-            self.cancel_esp_operations();
             true
         }
 
         fn clear_token(&self) {
             let mut guard = self.inner.access_token.lock().unwrap();
             let generation = guard.replace(None);
+            self.advance_dependent_generation(generation);
             drop(guard);
+        }
+
+        /// Advance dependent in-memory state while the auth slot remains
+        /// locked. The global lock order is auth -> ESP registry -> GUID cache,
+        /// so a new token generation cannot become observable before operation
+        /// ownership is ready for that same generation.
+        fn advance_dependent_generation(&self, generation: u64) {
+            #[cfg(feature = "esp-diagnostics")]
+            self.inner.esp_operations.advance_generation(generation);
             self.inner.guid_cache.lock().unwrap().reset_to(generation);
-            self.cancel_esp_operations();
         }
 
         fn get_cached_app(&self, generation: u64, guid: &str) -> Option<GraphAppInfo> {
@@ -346,21 +351,33 @@ mod windows_impl {
         }
 
         #[cfg(feature = "esp-diagnostics")]
-        pub(crate) fn begin_esp_operation(
+        fn acquire_esp_operation(
             &self,
             request_id: &str,
-        ) -> Result<EspGraphOperation, EspGraphOperationError> {
-            self.inner.esp_operations.begin(request_id)
+        ) -> Result<Option<(CachedToken, u64, EspGraphOperation)>, EspGraphOperationError> {
+            let mut guard = self.inner.access_token.lock().unwrap();
+            let is_valid = guard
+                .value
+                .as_ref()
+                .and_then(|token| token.status.expires_at)
+                .is_some_and(|expires_at| expires_at > unix_now());
+            if !is_valid && guard.value.is_some() {
+                let generation = guard.replace(None);
+                self.advance_dependent_generation(generation);
+            }
+
+            let generation = guard.generation;
+            self.inner.esp_operations.advance_generation(generation);
+            let operation = self.inner.esp_operations.begin(request_id, generation)?;
+            let token = guard.value.clone();
+            drop(guard);
+
+            Ok(token.map(|token| (token, generation, operation)))
         }
 
         #[cfg(feature = "esp-diagnostics")]
         pub(crate) fn cancel_esp_operation(&self, request_id: &str) -> bool {
             self.inner.esp_operations.cancel(request_id)
-        }
-
-        fn cancel_esp_operations(&self) {
-            #[cfg(feature = "esp-diagnostics")]
-            self.inner.esp_operations.cancel_all();
         }
     }
 
@@ -693,11 +710,9 @@ mod windows_impl {
         state: &GraphAuthState,
         request: EspGraphRequest,
     ) -> Result<PreparedEspGraphRequest, AppError> {
-        let operation = state
-            .begin_esp_operation(&request.request_id)
-            .map_err(|error| AppError::InvalidInput(error.to_string()))?;
-        let (token, generation) = state
-            .get_valid_token()
+        let (token, generation, operation) = state
+            .acquire_esp_operation(&request.request_id)
+            .map_err(|error| AppError::InvalidInput(error.to_string()))?
             .ok_or_else(|| AppError::Internal("GraphNotConnected".to_string()))?;
         let deadline = std::time::Instant::now() + operation.remaining();
         Ok(PreparedEspGraphRequest {
@@ -1130,7 +1145,10 @@ mod windows_impl {
             let state = GraphAuthState::new();
 
             for _ in 0..2 {
-                let result = prepare_esp_diagnostics(&state, request("request-a"));
+                let result = prepare_esp_diagnostics(
+                    &state,
+                    request("30000000-0000-4000-8000-000000000002"),
+                );
                 let error = match result {
                     Ok(_) => panic!("disconnected Graph state must not prepare a request"),
                     Err(error) => error,
@@ -1143,13 +1161,13 @@ mod windows_impl {
         fn matching_generation_invalidation_cancels_owned_operation_once() {
             let state = GraphAuthState::new();
             assert!(state.set_token_if_generation(0, valid_token()));
-            let operation = state
-                .begin_esp_operation("request-b")
-                .expect("request ownership");
-            assert!(!operation.is_cancelled());
+            let prepared =
+                prepare_esp_diagnostics(&state, request("30000000-0000-4000-8000-000000000003"))
+                    .expect("request ownership");
+            assert!(!prepared.operation.is_cancelled());
 
             assert!(state.clear_token_if_generation(1));
-            assert!(operation.is_cancelled());
+            assert!(prepared.operation.is_cancelled());
             assert!(!state.clear_token_if_generation(1));
         }
     }

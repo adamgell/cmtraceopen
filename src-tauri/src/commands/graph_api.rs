@@ -121,7 +121,9 @@ mod tests {
     #[test]
     fn non_windows_graph_esp_cancellation_is_typed_unsupported() {
         assert!(matches!(
-            graph_cancel_esp_diagnostics("request-a".to_string()),
+            graph_cancel_esp_diagnostics(
+                "30000000-0000-4000-8000-000000000001".to_string()
+            ),
             Err(AppError::PlatformUnsupported(capability))
                 if capability == "GraphEspDiagnostics"
         ));

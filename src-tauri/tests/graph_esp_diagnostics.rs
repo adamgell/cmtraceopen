@@ -1914,6 +1914,17 @@ mod esp_orchestration_tests {
     const CONFIG_POLICY: &str = "afdc0879-e75d-42ef-8aee-50f5dc67cb8f";
     const REMEDIATION: &str = "79efc4f2-a93f-48e4-9b45-88da3a4628cb";
     const USER: &str = "b63ca3f8-cd07-4ef5-824f-1f923df54ea7";
+    const REQUEST: &str = "10000000-0000-4000-8000-000000000001";
+    const REQUEST_FIRST: &str = "10000000-0000-4000-8000-000000000002";
+    const REQUEST_SECOND: &str = "10000000-0000-4000-8000-000000000003";
+    const REQUEST_MISSING: &str = "10000000-0000-4000-8000-000000000004";
+    const REQUEST_REUSED: &str = "10000000-0000-4000-8000-000000000005";
+    const REQUEST_OVER_LIMIT: &str = "10000000-0000-4000-8000-000000000006";
+    const REQUEST_WAIT: &str = "10000000-0000-4000-8000-000000000007";
+    const REQUEST_NEW_GENERATION: &str = "10000000-0000-4000-8000-000000000008";
+    const REQUEST_OLD_GENERATION: &str = "10000000-0000-4000-8000-000000000009";
+    const REQUEST_STALE_GENERATION: &str = "10000000-0000-4000-8000-00000000000a";
+    const REQUEST_CURRENT_GENERATION: &str = "10000000-0000-4000-8000-00000000000b";
 
     fn classified(value: &str) -> EspClassifiedString {
         EspClassifiedString {
@@ -1938,7 +1949,7 @@ mod esp_orchestration_tests {
 
     fn request() -> EspGraphRequest {
         EspGraphRequest {
-            request_id: "esp-request-1".to_string(),
+            request_id: REQUEST.to_string(),
             identity: identity(),
             workload_ids: vec![APP.to_string()],
             selected_managed_device_id: None,
@@ -2359,7 +2370,7 @@ mod esp_orchestration_tests {
         let overlay =
             fetch_esp_graph_overlay(&provider, &request(), &cancellation, "2026-07-16T12:00:00Z");
 
-        assert_eq!(overlay.request_id, "esp-request-1");
+        assert_eq!(overlay.request_id, REQUEST);
         assert_eq!(overlay.device_match.status, GraphSectionStatus::Available);
         assert_eq!(
             overlay.autopilot_identity.status,
@@ -3609,7 +3620,7 @@ mod esp_orchestration_tests {
         let request = request();
         let value = serde_json::to_value(&request).expect("serialize ESP Graph request");
 
-        assert_eq!(value["requestId"], "esp-request-1");
+        assert_eq!(value["requestId"], REQUEST);
         assert_eq!(value["workloadIds"], serde_json::json!([APP]));
         assert_eq!(value["appIds"], serde_json::json!([APP]));
         assert_eq!(
@@ -3632,57 +3643,102 @@ mod esp_orchestration_tests {
     #[test]
     fn ipc_operation_registry_cancels_only_the_owned_id_and_releases_on_drop() {
         let registry = EspGraphOperationRegistry::default();
-        let first = registry.begin("graph-first").expect("first operation");
-        let second = registry.begin("graph-second").expect("second operation");
+        let first = registry.begin(REQUEST_FIRST, 0).expect("first operation");
+        let second = registry.begin(REQUEST_SECOND, 0).expect("second operation");
 
         assert!(matches!(
-            registry.begin("graph-first"),
+            registry.begin(REQUEST_FIRST, 0),
             Err(EspGraphOperationError::DuplicateRequest)
         ));
-        assert!(!registry.cancel("graph-missing"));
-        assert!(registry.cancel("graph-first"));
+        assert!(!registry.cancel(REQUEST_MISSING));
+        assert!(registry.cancel(REQUEST_FIRST));
         assert!(first.is_cancelled());
         assert!(!second.is_cancelled());
 
         drop(first);
-        assert!(registry.begin("graph-first").is_ok());
+        assert!(registry.begin(REQUEST_FIRST, 0).is_ok());
         assert!(!second.is_cancelled());
     }
 
     #[test]
     fn ipc_operation_registry_rejects_invalid_ids_and_bounds_active_ownership() {
         let registry = EspGraphOperationRegistry::default();
-        for invalid in ["", " leading", "trailing ", "line\nbreak"] {
+        for invalid in [
+            "",
+            "caller-controlled-request-name",
+            " leading",
+            "trailing ",
+            "line\nbreak",
+        ] {
             assert!(matches!(
-                registry.begin(invalid),
+                registry.begin(invalid, 0),
                 Err(EspGraphOperationError::InvalidRequestId)
             ));
         }
         assert!(matches!(
-            registry.begin(&"x".repeat(129)),
+            registry.begin(&"x".repeat(129), 0),
             Err(EspGraphOperationError::InvalidRequestId)
         ));
+        assert!(registry.begin(REQUEST_REUSED, 0).is_ok());
+        drop(registry);
+
+        let registry = EspGraphOperationRegistry::default();
 
         let operations: Vec<_> = (0..32)
             .map(|index| {
                 registry
-                    .begin(&format!("graph-{index}"))
+                    .begin(&format!("20000000-0000-4000-8000-{index:012x}"), 0)
                     .expect("bounded active operation")
             })
             .collect();
         assert!(matches!(
-            registry.begin("graph-over-limit"),
+            registry.begin(REQUEST_OVER_LIMIT, 0),
             Err(EspGraphOperationError::ResourceLimit)
         ));
 
         drop(operations);
-        assert!(registry.begin("graph-after-release").is_ok());
+        assert!(registry.begin(REQUEST_REUSED, 0).is_ok());
+    }
+
+    #[test]
+    fn ipc_operation_new_generation_survives_delayed_prior_generation_cleanup() {
+        let registry = EspGraphOperationRegistry::default();
+        registry.advance_generation(7);
+        let operation = registry
+            .begin(REQUEST_NEW_GENERATION, 7)
+            .expect("new-generation operation");
+
+        registry.advance_generation(7);
+
+        assert!(!operation.is_cancelled());
+    }
+
+    #[test]
+    fn ipc_operation_old_generation_cannot_begin_or_survive_after_transition() {
+        let registry = EspGraphOperationRegistry::default();
+        registry.advance_generation(11);
+        let old_operation = registry
+            .begin(REQUEST_OLD_GENERATION, 11)
+            .expect("old-generation operation");
+        let captured_generation = 11;
+
+        registry.advance_generation(12);
+
+        assert!(old_operation.is_cancelled());
+        assert!(matches!(
+            registry.begin(REQUEST_STALE_GENERATION, captured_generation),
+            Err(EspGraphOperationError::StaleGeneration)
+        ));
+        let current_operation = registry
+            .begin(REQUEST_CURRENT_GENERATION, 12)
+            .expect("current-generation operation");
+        assert!(!current_operation.is_cancelled());
     }
 
     #[test]
     fn ipc_operation_cancellation_interrupts_a_retry_wait() {
         let registry = EspGraphOperationRegistry::default();
-        let operation = Arc::new(registry.begin("graph-wait").expect("wait operation"));
+        let operation = Arc::new(registry.begin(REQUEST_WAIT, 0).expect("wait operation"));
         let worker_operation = Arc::clone(&operation);
         let barrier = Arc::new(Barrier::new(2));
         let worker_barrier = Arc::clone(&barrier);
@@ -3693,7 +3749,7 @@ mod esp_orchestration_tests {
         });
 
         barrier.wait();
-        assert!(registry.cancel("graph-wait"));
+        assert!(registry.cancel(REQUEST_WAIT));
         assert!(!worker.join().expect("wait worker"));
         assert!(started.elapsed() < Duration::from_secs(1));
     }
