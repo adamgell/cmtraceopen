@@ -2897,7 +2897,11 @@ mod tests {
 
     #[test]
     fn trusted_powershell_path_is_absolute_and_never_uses_path_search() {
-        let windows_directory = Path::new("/trusted/windows");
+        let windows_directory = Path::new(if cfg!(target_os = "windows") {
+            r"C:\trusted\windows"
+        } else {
+            "/trusted/windows"
+        });
         let executable = powershell_path_from_windows_directory(windows_directory);
 
         assert!(executable.is_absolute());
