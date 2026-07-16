@@ -373,6 +373,8 @@ describe("ESP local session state", () => {
     expect(useEspDiagnosticsStore.getState().evidenceDockHeight).toBe(
       ESP_EVIDENCE_DOCK_MAX_HEIGHT,
     );
+    state.setEvidenceDockHeight(10_000, 600);
+    expect(useEspDiagnosticsStore.getState().evidenceDockHeight).toBe(420);
 
     state.beginLiveStart("live-a");
     useEspDiagnosticsStore

@@ -32,6 +32,7 @@ export type EspGraphUnavailableReason =
 export const ESP_EVIDENCE_DOCK_MIN_HEIGHT = 180;
 export const ESP_EVIDENCE_DOCK_MAX_HEIGHT = 720;
 export const ESP_EVIDENCE_DOCK_DEFAULT_HEIGHT = 280;
+export const ESP_EVIDENCE_DOCK_MAX_WORKSPACE_RATIO = 0.7;
 
 export interface EspDiagnosticsStore {
   phase: EspWorkspacePhase;
@@ -60,7 +61,7 @@ export interface EspDiagnosticsStore {
   cancelGraph(requestId: string): void;
   clearGraphOverlay(): void;
   setEvidenceViewMode(mode: EspEvidenceViewMode): void;
-  setEvidenceDockHeight(height: number): void;
+  setEvidenceDockHeight(height: number, workspaceHeight?: number): void;
   markEvidenceRead(): void;
   clearStoppedSession(sessionId: string): void;
 }
@@ -168,6 +169,19 @@ function phaseForSessionUpdate(update: EspSessionUpdate): EspWorkspacePhase {
     case "error":
       return "error";
   }
+}
+
+export function getEspEvidenceDockMaxHeight(workspaceHeight?: number): number {
+  if (workspaceHeight === undefined || !Number.isFinite(workspaceHeight)) {
+    return ESP_EVIDENCE_DOCK_MAX_HEIGHT;
+  }
+  return Math.max(
+    ESP_EVIDENCE_DOCK_MIN_HEIGHT,
+    Math.min(
+      ESP_EVIDENCE_DOCK_MAX_HEIGHT,
+      Math.floor(Math.max(0, workspaceHeight) * ESP_EVIDENCE_DOCK_MAX_WORKSPACE_RATIO),
+    ),
+  );
 }
 
 export const useEspDiagnosticsStore = create<EspDiagnosticsStore>((set) => ({
@@ -357,12 +371,15 @@ export const useEspDiagnosticsStore = create<EspDiagnosticsStore>((set) => ({
 
   setEvidenceViewMode: (evidenceViewMode) => set({ evidenceViewMode }),
 
-  setEvidenceDockHeight: (height) =>
-    set({
-      evidenceDockHeight: Math.max(
+  setEvidenceDockHeight: (height, workspaceHeight) =>
+    set((state) => {
+      const evidenceDockHeight = Math.max(
         ESP_EVIDENCE_DOCK_MIN_HEIGHT,
-        Math.min(ESP_EVIDENCE_DOCK_MAX_HEIGHT, Math.round(height)),
-      ),
+        Math.min(getEspEvidenceDockMaxHeight(workspaceHeight), Math.round(height)),
+      );
+      return evidenceDockHeight === state.evidenceDockHeight
+        ? state
+        : { evidenceDockHeight };
     }),
 
   markEvidenceRead: () => set({ unreadEvidenceCount: 0 }),
