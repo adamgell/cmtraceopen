@@ -923,6 +923,25 @@ describe("independent live activity", () => {
     expect(workloadRows[0]).toHaveTextContent("normalized-workload");
     expect(workloadRows[1]).toHaveTextContent("raw-workload");
   });
+
+  it("moves from a clamped page using the visible window after entries shrink", () => {
+    const entries = Array.from({ length: 200 }, (_, index) =>
+      makeActivity(
+        `page-${index}`,
+        `2026-07-15T20:${String(index % 60).padStart(2, "0")}:00Z`,
+      ),
+    );
+    const view = render(<LiveActivity entries={entries} />);
+    const activity = screen.getByRole("region", { name: "Live activity" });
+
+    fireEvent.click(within(activity).getByRole("button", { name: "Older" }));
+    fireEvent.click(within(activity).getByRole("button", { name: "Older" }));
+    view.rerender(<LiveActivity entries={entries.slice(0, 100)} />);
+    expect(activity).toHaveTextContent("Showing 21–100 of 100 occurrences");
+
+    fireEvent.click(within(activity).getByRole("button", { name: "Newer" }));
+    expect(activity).toHaveTextContent("Showing 1–80 of 100 occurrences");
+  });
 });
 
 describe("workload table", () => {
@@ -954,6 +973,12 @@ describe("workload table", () => {
     expect(row).toHaveTextContent("Detail · Installer failed");
     expect(row).toHaveTextContent("Raw · outer-success");
     expect(row).toHaveTextContent("Detail raw · inner-failure-1603");
+    expect(
+      within(row).getByTestId("esp-workload-effective-status"),
+    ).toHaveTextContent("Installer failed");
+    expect(
+      within(row).getByTestId("esp-workload-effective-status"),
+    ).not.toHaveTextContent("Outer processing succeeded");
     expect(
       row.querySelector('[data-effective-status="failed"]'),
     ).toBeInTheDocument();

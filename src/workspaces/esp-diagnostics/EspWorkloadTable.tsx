@@ -142,6 +142,11 @@ interface WorkloadRowProps {
 function WorkloadRow({ workload, graphName }: WorkloadRowProps) {
   const [showFullValues, setShowFullValues] = useState(false);
   const effectiveStatus = effectiveNormalizedStatus(workload.status);
+  const effectiveDisplay =
+    workload.status.detail &&
+    effectiveStatus === workload.status.detail.normalized
+      ? workload.status.detail.display
+      : workload.status.display;
   return (
     <tr
       data-testid="esp-workload-row"
@@ -200,7 +205,6 @@ function WorkloadRow({ workload, graphName }: WorkloadRowProps) {
           {kindLabels[workload.kind]}
         </div>
         <div
-          data-effective-status={effectiveStatus}
           style={{
             color: tokens.colorNeutralForeground3,
             fontFamily: LOG_MONOSPACE_FONT_FAMILY,
@@ -213,6 +217,8 @@ function WorkloadRow({ workload, graphName }: WorkloadRowProps) {
       </td>
       <td style={{ width: "17%", padding: "7px 9px", verticalAlign: "top" }}>
         <div
+          data-testid="esp-workload-effective-status"
+          data-effective-status={effectiveStatus}
           style={{
             display: "flex",
             alignItems: "center",
@@ -224,8 +230,21 @@ function WorkloadRow({ workload, graphName }: WorkloadRowProps) {
           }}
         >
           <span aria-hidden="true">{statusGlyph(effectiveStatus)}</span>
-          <span>{workload.status.display}</span>
+          <span>{effectiveDisplay}</span>
         </div>
+        {workload.status.detail &&
+        effectiveStatus === workload.status.detail.normalized ? (
+          <div
+            style={{
+              color: statusColor(workload.status.normalized),
+              fontSize: 10,
+              fontWeight: 650,
+              lineHeight: "14px",
+            }}
+          >
+            Outer · {workload.status.display}
+          </div>
+        ) : null}
         {workload.status.detail ? (
           <div
             style={{

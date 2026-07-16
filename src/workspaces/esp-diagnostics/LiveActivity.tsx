@@ -179,8 +179,8 @@ export function LiveActivity({ entries }: LiveActivityProps) {
                   size="small"
                   disabled={safeStart === 0}
                   onClick={() =>
-                    setWindowStart((current) =>
-                      Math.max(0, current - ESP_ACTIVITY_WINDOW_SIZE),
+                    setWindowStart(
+                      Math.max(0, safeStart - ESP_ACTIVITY_WINDOW_SIZE),
                     )
                   }
                 >
@@ -190,10 +190,10 @@ export function LiveActivity({ entries }: LiveActivityProps) {
                   size="small"
                   disabled={safeStart >= maximumStart}
                   onClick={() =>
-                    setWindowStart((current) =>
+                    setWindowStart(
                       Math.min(
                         maximumStart,
-                        current + ESP_ACTIVITY_WINDOW_SIZE,
+                        safeStart + ESP_ACTIVITY_WINDOW_SIZE,
                       ),
                     )
                   }
