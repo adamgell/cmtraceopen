@@ -10,6 +10,11 @@ use std::time::{Duration, Instant, SystemTime};
 
 #[cfg(target_os = "windows")]
 use app_lib::esp::discovery::default_known_source_specs;
+use app_lib::esp::archive::{
+    extract_captured_archive, extract_captured_archive_with_cancel_in, validate_archive_manifest,
+    ArchiveEntryKind, ArchiveEntryMetadata, ArchiveError, ArchiveFormat, MAX_ARCHIVE_ENTRIES,
+    MAX_ARCHIVE_FILE_BYTES, MAX_ARCHIVE_TOTAL_UNCOMPRESSED_BYTES,
+};
 use app_lib::esp::discovery::{
     build_runtime_temp_roots, discover_bounded_logs, embedded_known_source_specs,
     DiscoveredLogSource, DiscoveryInput, DiscoveryRootKind, DiscoveryRootState,
@@ -4221,5 +4226,724 @@ fn relaunch_windows_argument_quoting_handles_spaces_quotes_and_backslashes() {
             r"trailing\".to_string(),
         ]),
         r#"plain "two words" "quote\"inside" trailing\"#
+    );
+}
+fn write_test_zip(path: &Path, entries: &[(&str, &[u8])]) {
+    let file = File::create(path).expect("create ZIP fixture");
+    let mut writer = zip::ZipWriter::new(file);
+    let options = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated);
+    for (name, content) in entries {
+        writer
+            .start_file(*name, options)
+            .expect("start ZIP fixture entry");
+        writer.write_all(content).expect("write ZIP fixture entry");
+    }
+    writer.finish().expect("finish ZIP fixture");
+}
+
+fn write_test_cab(path: &Path, entries: &[(&str, &[u8])]) {
+    let mut builder = cab::CabinetBuilder::new();
+    {
+        let folder = builder.add_folder(cab::CompressionType::MsZip);
+        for (name, _) in entries {
+            folder.add_file(*name);
+        }
+    }
+    let file = File::create(path).expect("create CAB fixture");
+    let mut writer = builder.build(file).expect("start CAB fixture");
+    while let Some(mut entry) = writer.next_file().expect("next CAB fixture entry") {
+        let content = entries
+            .iter()
+            .find(|(name, _)| *name == entry.file_name())
+            .map(|(_, content)| *content)
+            .expect("CAB fixture content");
+        entry.write_all(content).expect("write CAB fixture entry");
+    }
+    writer.finish().expect("finish CAB fixture");
+}
+
+fn find_last_signature(bytes: &[u8], signature: [u8; 4]) -> usize {
+    bytes
+        .windows(signature.len())
+        .rposition(|window| window == signature)
+        .expect("fixture signature")
+}
+
+fn patch_u16(bytes: &mut [u8], offset: usize, value: u16) {
+    bytes[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
+}
+
+fn patch_u32(bytes: &mut [u8], offset: usize, value: u32) {
+    bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+}
+
+fn read_u32(bytes: &[u8], offset: usize) -> u32 {
+    u32::from_le_bytes(bytes[offset..offset + 4].try_into().expect("u32 fixture"))
+}
+
+fn append_u16(bytes: &mut Vec<u8>, value: u16) {
+    bytes.extend_from_slice(&value.to_le_bytes());
+}
+
+fn append_u32(bytes: &mut Vec<u8>, value: u32) {
+    bytes.extend_from_slice(&value.to_le_bytes());
+}
+
+fn append_u64(bytes: &mut Vec<u8>, value: u64) {
+    bytes.extend_from_slice(&value.to_le_bytes());
+}
+
+fn cab_file_header_offsets(bytes: &[u8]) -> Vec<usize> {
+    let mut offset = read_u32(bytes, 16) as usize;
+    let file_count = u16::from_le_bytes(bytes[28..30].try_into().expect("CAB file count"));
+    let mut offsets = Vec::with_capacity(file_count as usize);
+    for _ in 0..file_count {
+        offsets.push(offset);
+        let name_start = offset + 16;
+        let name_len = bytes[name_start..]
+            .iter()
+            .position(|byte| *byte == 0)
+            .expect("CAB filename terminator");
+        offset = name_start + name_len + 1;
+    }
+    offsets
+}
+
+#[test]
+fn archive_preflights_classic_zip_entry_count_before_constructing_the_parser() {
+    let source = tempfile::tempdir().expect("source tempdir");
+    let archive_path = source.path().join("too-many-classic.zip");
+    write_test_zip(&archive_path, &[("logs/one.log", b"one")]);
+
+    let mut bytes = std::fs::read(&archive_path).expect("read ZIP fixture");
+    let eocd = find_last_signature(&bytes, [0x50, 0x4b, 0x05, 0x06]);
+    patch_u16(&mut bytes, eocd + 8, (MAX_ARCHIVE_ENTRIES + 1) as u16);
+    patch_u16(&mut bytes, eocd + 10, (MAX_ARCHIVE_ENTRIES + 1) as u16);
+    std::fs::write(&archive_path, bytes).expect("patch ZIP fixture");
+
+    assert!(matches!(
+        extract_captured_archive(&archive_path),
+        Err(ArchiveError::EntryCountExceeded {
+            count,
+            maximum: MAX_ARCHIVE_ENTRIES,
+        }) if count == MAX_ARCHIVE_ENTRIES + 1
+    ));
+}
+
+#[test]
+fn archive_preflights_zip64_entry_count_before_constructing_the_parser() {
+    let source = tempfile::tempdir().expect("source tempdir");
+    let archive_path = source.path().join("too-many-zip64.zip");
+    write_test_zip(&archive_path, &[("logs/one.log", b"one")]);
+
+    let original = std::fs::read(&archive_path).expect("read ZIP fixture");
+    let eocd = find_last_signature(&original, [0x50, 0x4b, 0x05, 0x06]);
+    let mut bytes = original[..eocd].to_vec();
+    let zip64_eocd_offset = bytes.len() as u64;
+    append_u32(&mut bytes, 0x0606_4b50);
+    append_u64(&mut bytes, 44);
+    append_u16(&mut bytes, 45);
+    append_u16(&mut bytes, 45);
+    append_u32(&mut bytes, 0);
+    append_u32(&mut bytes, 0);
+    append_u64(&mut bytes, (MAX_ARCHIVE_ENTRIES + 1) as u64);
+    append_u64(&mut bytes, (MAX_ARCHIVE_ENTRIES + 1) as u64);
+    append_u64(&mut bytes, read_u32(&original, eocd + 12) as u64);
+    append_u64(&mut bytes, read_u32(&original, eocd + 16) as u64);
+    append_u32(&mut bytes, 0x0706_4b50);
+    append_u32(&mut bytes, 0);
+    append_u64(&mut bytes, zip64_eocd_offset);
+    append_u32(&mut bytes, 1);
+    let classic_eocd = bytes.len();
+    bytes.extend_from_slice(&original[eocd..]);
+    patch_u16(&mut bytes, classic_eocd + 8, u16::MAX);
+    patch_u16(&mut bytes, classic_eocd + 10, u16::MAX);
+    std::fs::write(&archive_path, bytes).expect("patch ZIP64 fixture");
+
+    assert!(matches!(
+        extract_captured_archive(&archive_path),
+        Err(ArchiveError::EntryCountExceeded {
+            count,
+            maximum: MAX_ARCHIVE_ENTRIES,
+        }) if count == MAX_ARCHIVE_ENTRIES + 1
+    ));
+}
+
+#[test]
+fn archive_preflights_cab_entry_count_before_constructing_the_parser() {
+    let source = tempfile::tempdir().expect("source tempdir");
+    let archive_path = source.path().join("too-many.cab");
+    write_test_cab(&archive_path, &[("logs/one.log", b"one")]);
+
+    let mut bytes = std::fs::read(&archive_path).expect("read CAB fixture");
+    patch_u16(&mut bytes, 28, (MAX_ARCHIVE_ENTRIES + 1) as u16);
+    std::fs::write(&archive_path, bytes).expect("patch CAB fixture");
+
+    assert!(matches!(
+        extract_captured_archive(&archive_path),
+        Err(ArchiveError::EntryCountExceeded {
+            count,
+            maximum: MAX_ARCHIVE_ENTRIES,
+        }) if count == MAX_ARCHIVE_ENTRIES + 1
+    ));
+}
+
+#[test]
+fn archive_rejects_cab_entry_with_uninterruptible_preseek_work() {
+    const MAX_CAB_ENTRY_PRESEEK_BYTES: u32 = 64 * 1024 * 1024;
+
+    let source = tempfile::tempdir().expect("source tempdir");
+    let archive_path = source.path().join("preseek-amplification.cab");
+    write_test_cab(&archive_path, &[("logs/evidence.log", b"evidence")]);
+
+    let mut bytes = std::fs::read(&archive_path).expect("read CAB fixture");
+    let file_header = cab_file_header_offsets(&bytes)[0];
+    patch_u32(&mut bytes, file_header + 4, MAX_CAB_ENTRY_PRESEEK_BYTES + 1);
+    std::fs::write(&archive_path, bytes).expect("patch CAB fixture");
+
+    assert!(matches!(
+        extract_captured_archive(&archive_path),
+        Err(ArchiveError::InvalidEvidence { detail })
+            if detail.contains("CAB pre-seek work exceeds")
+    ));
+}
+
+#[test]
+fn archive_rejects_cab_cumulative_restart_decompression_amplification() {
+    const MAX_CAB_ENTRY_PRESEEK_BYTES: u32 = 64 * 1024 * 1024;
+    const ENTRY_COUNT: usize = 17;
+
+    let source = tempfile::tempdir().expect("source tempdir");
+    let archive_path = source.path().join("cumulative-amplification.cab");
+    let names = (0..ENTRY_COUNT)
+        .map(|index| format!("logs/{index}.log"))
+        .collect::<Vec<_>>();
+    let entries = names
+        .iter()
+        .map(|name| (name.as_str(), b"x".as_slice()))
+        .collect::<Vec<_>>();
+    write_test_cab(&archive_path, &entries);
+
+    let mut bytes = std::fs::read(&archive_path).expect("read CAB fixture");
+    for file_header in cab_file_header_offsets(&bytes) {
+        patch_u32(&mut bytes, file_header + 4, MAX_CAB_ENTRY_PRESEEK_BYTES);
+    }
+    std::fs::write(&archive_path, bytes).expect("patch CAB fixture");
+
+    let result = extract_captured_archive(&archive_path);
+    assert!(
+        matches!(
+            &result,
+            Err(ArchiveError::InvalidEvidence { detail })
+                if detail.contains("CAB cumulative decode work exceeds")
+        ),
+        "unexpected CAB amplification result: {result:?}"
+    );
+}
+
+#[test]
+fn archive_zip_extracts_only_allowlisted_evidence_and_parses_registry_in_place() {
+    let source = tempfile::tempdir().expect("source tempdir");
+    let archive_path = source.path().join("captured.zip");
+    let registry_text = r#"Windows Registry Editor Version 5.00
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\Contoso]
+"Status"="Ready"
+"#;
+    let mut registry = vec![0xff, 0xfe];
+    registry.extend(registry_text.encode_utf16().flat_map(u16::to_le_bytes));
+    write_test_zip(
+        &archive_path,
+        &[
+            ("evidence/registry/device.reg", registry.as_slice()),
+            (
+                "evidence/logs/IntuneManagementExtension.log",
+                b"IME evidence",
+            ),
+            ("payload/installer.exe", b"not evidence"),
+        ],
+    );
+
+    let extracted = extract_captured_archive(&archive_path).expect("extract safe ZIP");
+
+    assert_eq!(extracted.format(), ArchiveFormat::Zip);
+    assert_eq!(
+        extracted
+            .files()
+            .iter()
+            .map(|file| file.relative_path.to_string_lossy().replace('\\', "/"))
+            .collect::<Vec<_>>(),
+        vec![
+            "evidence/logs/IntuneManagementExtension.log",
+            "evidence/registry/device.reg",
+        ]
+    );
+    assert!(!extracted.root().join("payload/installer.exe").exists());
+    let registry_exports = extracted
+        .parse_registry_exports()
+        .expect("parse extracted registry evidence");
+    assert_eq!(registry_exports.len(), 1);
+    assert_eq!(registry_exports[0].total_keys, 1);
+    assert_eq!(registry_exports[0].total_values, 1);
+
+    let extraction_root = extracted.root().to_path_buf();
+    assert!(extraction_root.exists());
+    drop(extracted);
+    assert!(
+        !extraction_root.exists(),
+        "successful extraction must clean on drop"
+    );
+
+    let source_code = include_str!("../src/esp/archive.rs").to_ascii_lowercase();
+    assert!(!source_code.contains("reg.exe import"));
+    assert!(!source_code.contains("reg import"));
+}
+
+#[test]
+fn archive_parses_utf8_utf16be_and_windows1252_registry_exports() {
+    let source = tempfile::tempdir().expect("source tempdir");
+    let archive_path = source.path().join("registry-encodings.zip");
+
+    let utf8_text = "Windows Registry Editor Version 5.00\r\n\r\n[HKEY_LOCAL_MACHINE\\SOFTWARE\\Utf8]\r\n\"Status\"=\"Ready ✓\"\r\n";
+    let utf16be_text = "Windows Registry Editor Version 5.00\r\n\r\n[HKEY_LOCAL_MACHINE\\SOFTWARE\\Utf16Be]\r\n\"Status\"=\"Ready BE\"\r\n";
+    let mut utf16be = vec![0xfe, 0xff];
+    utf16be.extend(utf16be_text.encode_utf16().flat_map(u16::to_be_bytes));
+    let windows1252 = b"Windows Registry Editor Version 5.00\r\n\r\n[HKEY_LOCAL_MACHINE\\SOFTWARE\\Ansi]\r\n\"Status\"=\"Caf\xe9\"\r\n";
+
+    write_test_zip(
+        &archive_path,
+        &[
+            ("registry/utf8.reg", utf8_text.as_bytes()),
+            ("registry/utf16be.reg", utf16be.as_slice()),
+            ("registry/windows1252.reg", windows1252.as_slice()),
+        ],
+    );
+
+    let extracted = extract_captured_archive(&archive_path).expect("extract registry encodings");
+    let parsed = extracted
+        .parse_registry_exports()
+        .expect("parse registry encodings");
+    assert_eq!(parsed.len(), 3);
+    assert!(parsed.iter().all(|result| {
+        result.total_keys == 1 && result.total_values == 1 && result.parse_errors == 0
+    }));
+    let values = parsed
+        .iter()
+        .map(|result| {
+            (
+                result.file_path.as_str(),
+                result.keys[0].values[0].data.as_str(),
+            )
+        })
+        .collect::<HashMap<_, _>>();
+    assert_eq!(values["registry/utf8.reg"], "Ready ✓");
+    assert_eq!(values["registry/utf16be.reg"], "Ready BE");
+    assert_eq!(values["registry/windows1252.reg"], "Café");
+}
+
+#[test]
+fn archive_cab_uses_the_same_bounded_allowlist_and_cleanup_contract() {
+    let source = tempfile::tempdir().expect("source tempdir");
+    let archive_path = source.path().join("mdmdiagnostics.cab");
+    write_test_cab(
+        &archive_path,
+        &[
+            ("MDMDiagnostics/MDMDiagReport.xml", b"<report />"),
+            (
+                "MDMDiagnostics/DeviceManagement-Enterprise-Diagnostics-Provider.evtx",
+                b"evtx",
+            ),
+            ("MDMDiagnostics/tool.dll", b"not evidence"),
+        ],
+    );
+
+    let extracted = extract_captured_archive(&archive_path).expect("extract safe CAB");
+
+    assert_eq!(extracted.format(), ArchiveFormat::Cab);
+    assert_eq!(extracted.files().len(), 2);
+    assert!(extracted.files().iter().all(|entry| {
+        matches!(
+            entry
+                .relative_path
+                .extension()
+                .and_then(|value| value.to_str()),
+            Some("xml" | "evtx")
+        )
+    }));
+    let extraction_root = extracted.root().to_path_buf();
+    drop(extracted);
+    assert!(
+        !extraction_root.exists(),
+        "CAB extraction must clean on drop"
+    );
+}
+
+#[test]
+fn archive_cab_rejects_traversal_absolute_drive_unc_and_mixed_separators() {
+    let source = tempfile::tempdir().expect("source tempdir");
+    for (index, unsafe_name) in [
+        "/absolute.log",
+        "../parent.log",
+        "C:/drive.log",
+        r"\\server\share\unc.log",
+        r"safe\..\mixed.log",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let archive_path = source.path().join(format!("unsafe-cab-{index}.cab"));
+        write_test_cab(&archive_path, &[(unsafe_name, b"must not extract")]);
+        let result = extract_captured_archive(&archive_path);
+        assert!(
+            matches!(result, Err(ArchiveError::UnsafeEntryPath { .. })),
+            "unexpected CAB result for {unsafe_name}: {result:?}"
+        );
+    }
+}
+
+#[test]
+fn archive_rejects_case_insensitive_duplicates_in_zip_and_cab() {
+    let source = tempfile::tempdir().expect("source tempdir");
+    let entries: [(&str, &[u8]); 2] =
+        [("Logs/Evidence.log", b"one"), ("logs/evidence.LOG", b"two")];
+
+    let zip_path = source.path().join("duplicates.zip");
+    write_test_zip(&zip_path, &entries);
+    assert!(matches!(
+        extract_captured_archive(&zip_path),
+        Err(ArchiveError::DuplicateEntry { .. })
+    ));
+
+    let cab_path = source.path().join("duplicates.cab");
+    write_test_cab(&cab_path, &entries);
+    assert!(matches!(
+        extract_captured_archive(&cab_path),
+        Err(ArchiveError::DuplicateEntry { .. })
+    ));
+}
+
+#[test]
+fn archive_rejects_cab_continuation_entries_as_special_files() {
+    let source = tempfile::tempdir().expect("source tempdir");
+    let archive_path = source.path().join("continued.cab");
+    write_test_cab(&archive_path, &[("logs/evidence.log", b"evidence")]);
+
+    let mut bytes = std::fs::read(&archive_path).expect("read CAB fixture");
+    let file_header = cab_file_header_offsets(&bytes)[0];
+    patch_u16(&mut bytes, file_header + 8, 0xfffd);
+    std::fs::write(&archive_path, bytes).expect("patch CAB fixture");
+
+    assert!(matches!(
+        extract_captured_archive(&archive_path),
+        Err(ArchiveError::UnsupportedEntryType {
+            kind: ArchiveEntryKind::Other,
+            ..
+        })
+    ));
+}
+
+#[test]
+fn archive_rejects_declared_sizes_that_exceed_produced_zip_and_cab_data() {
+    let source = tempfile::tempdir().expect("source tempdir");
+
+    let zip_path = source.path().join("declared-size.zip");
+    write_test_zip(&zip_path, &[("logs/evidence.log", b"evidence")]);
+    let mut zip_bytes = std::fs::read(&zip_path).expect("read ZIP fixture");
+    let local = find_last_signature(&zip_bytes, [0x50, 0x4b, 0x03, 0x04]);
+    let central = find_last_signature(&zip_bytes, [0x50, 0x4b, 0x01, 0x02]);
+    patch_u32(&mut zip_bytes, local + 22, 9);
+    patch_u32(&mut zip_bytes, central + 24, 9);
+    std::fs::write(&zip_path, zip_bytes).expect("patch ZIP fixture");
+    assert!(matches!(
+        extract_captured_archive(&zip_path),
+        Err(ArchiveError::InvalidEvidence { .. }) | Err(ArchiveError::InvalidArchive { .. })
+    ));
+
+    let cab_path = source.path().join("declared-size.cab");
+    write_test_cab(&cab_path, &[("logs/evidence.log", b"evidence")]);
+    let mut cab_bytes = std::fs::read(&cab_path).expect("read CAB fixture");
+    let file_header = cab_file_header_offsets(&cab_bytes)[0];
+    patch_u32(&mut cab_bytes, file_header, 9);
+    std::fs::write(&cab_path, cab_bytes).expect("patch CAB fixture");
+    assert!(matches!(
+        extract_captured_archive(&cab_path),
+        Err(ArchiveError::InvalidEvidence { detail })
+            if detail.contains("declares range")
+    ));
+}
+
+#[test]
+fn archive_cab_preflight_cancellation_is_responsive_and_cleans() {
+    let source = tempfile::tempdir().expect("source tempdir");
+    let extraction_parent = tempfile::tempdir().expect("extraction parent");
+    let archive_path = source.path().join("cancel-preflight.cab");
+    write_test_cab(&archive_path, &[("logs/evidence.log", b"evidence")]);
+    let checks = AtomicUsize::new(0);
+    let cancelled = || checks.fetch_add(1, Ordering::SeqCst) >= 1;
+
+    let result = extract_captured_archive_with_cancel_in(
+        &archive_path,
+        extraction_parent.path(),
+        &cancelled,
+    );
+    assert_eq!(
+        result.expect_err("cancel CAB preflight"),
+        ArchiveError::Cancelled
+    );
+    assert_eq!(
+        extraction_parent
+            .path()
+            .read_dir()
+            .expect("list extraction parent")
+            .count(),
+        0
+    );
+}
+
+#[test]
+fn archive_rejects_absolute_parent_drive_unc_and_mixed_separator_escapes() {
+    let source = tempfile::tempdir().expect("source tempdir");
+    for (index, unsafe_name) in [
+        "/absolute.log",
+        "../parent.log",
+        "C:/drive.log",
+        r"\\server\share\unc.log",
+        r"safe\..\mixed.log",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let archive_path = source.path().join(format!("unsafe-{index}.zip"));
+        write_test_zip(&archive_path, &[(unsafe_name, b"must not extract")]);
+
+        let error = extract_captured_archive(&archive_path).expect_err("reject unsafe path");
+        assert!(
+            matches!(error, ArchiveError::UnsafeEntryPath { .. }),
+            "unexpected error for {unsafe_name}: {error:?}"
+        );
+    }
+}
+
+#[test]
+fn archive_rejects_superscript_windows_device_names_in_zip_and_cab() {
+    let source = tempfile::tempdir().expect("source tempdir");
+    for (index, reserved_name) in [
+        "COM¹.log",
+        "COM².eVtX",
+        "COM³.txt",
+        "LPT¹.json",
+        "LPT².xml",
+        "LPT³.reg",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let zip_path = source.path().join(format!("reserved-{index}.zip"));
+        write_test_zip(&zip_path, &[(reserved_name, b"must not extract")]);
+        assert!(
+            matches!(
+                extract_captured_archive(&zip_path),
+                Err(ArchiveError::UnsafeEntryPath { .. })
+            ),
+            "ZIP must reject Windows device name {reserved_name}"
+        );
+
+        let cab_path = source.path().join(format!("reserved-{index}.cab"));
+        write_test_cab(&cab_path, &[(reserved_name, b"must not extract")]);
+        assert!(
+            matches!(
+                extract_captured_archive(&cab_path),
+                Err(ArchiveError::UnsafeEntryPath { .. })
+            ),
+            "CAB must reject Windows device name {reserved_name}"
+        );
+    }
+}
+
+#[test]
+fn archive_rejects_zip_symlink_entries_before_materializing_any_evidence() {
+    let source = tempfile::tempdir().expect("source tempdir");
+    let archive_path = source.path().join("symlink.zip");
+    let file = File::create(&archive_path).expect("create symlink ZIP");
+    let mut writer = zip::ZipWriter::new(file);
+    writer
+        .add_symlink(
+            "evidence/link.log",
+            "../../outside.log",
+            zip::write::SimpleFileOptions::default(),
+        )
+        .expect("write symlink entry");
+    writer.finish().expect("finish symlink ZIP");
+
+    let error = extract_captured_archive(&archive_path).expect_err("reject symlink");
+    assert!(matches!(
+        error,
+        ArchiveError::UnsupportedEntryType {
+            kind: ArchiveEntryKind::Symlink,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn archive_rejects_non_symlink_zip_special_entries() {
+    let source = tempfile::tempdir().expect("source tempdir");
+    let archive_path = source.path().join("special.zip");
+    write_test_zip(
+        &archive_path,
+        &[("evidence/fifo.log", b"not a regular file")],
+    );
+
+    let mut bytes = std::fs::read(&archive_path).expect("read ZIP fixture");
+    let central = find_last_signature(&bytes, [0x50, 0x4b, 0x01, 0x02]);
+    bytes[central + 5] = 3;
+    patch_u32(&mut bytes, central + 38, 0o010644_u32 << 16);
+    std::fs::write(&archive_path, bytes).expect("patch ZIP fixture");
+
+    assert!(matches!(
+        extract_captured_archive(&archive_path),
+        Err(ArchiveError::UnsupportedEntryType {
+            kind: ArchiveEntryKind::Other,
+            ..
+        })
+    ));
+}
+
+#[test]
+fn archive_manifest_enforces_entry_per_file_and_total_uncompressed_caps() {
+    let too_many = (0..=MAX_ARCHIVE_ENTRIES)
+        .map(|index| ArchiveEntryMetadata::file(format!("logs/{index}.log"), 0))
+        .collect::<Vec<_>>();
+    assert!(matches!(
+        validate_archive_manifest(&too_many),
+        Err(ArchiveError::EntryCountExceeded { .. })
+    ));
+
+    assert!(matches!(
+        validate_archive_manifest(&[ArchiveEntryMetadata::file(
+            "logs/oversized.log",
+            MAX_ARCHIVE_FILE_BYTES + 1,
+        )]),
+        Err(ArchiveError::EntryTooLarge { .. })
+    ));
+
+    let total_too_large = [
+        ArchiveEntryMetadata::file("logs/one.log", MAX_ARCHIVE_FILE_BYTES),
+        ArchiveEntryMetadata::file("logs/two.log", MAX_ARCHIVE_FILE_BYTES),
+        ArchiveEntryMetadata::file("logs/three.log", MAX_ARCHIVE_FILE_BYTES),
+        ArchiveEntryMetadata::file("logs/four.log", MAX_ARCHIVE_FILE_BYTES),
+        ArchiveEntryMetadata::file("logs/five.log", 1),
+    ];
+    assert_eq!(
+        total_too_large
+            .iter()
+            .map(|entry| entry.uncompressed_size)
+            .sum::<u64>(),
+        MAX_ARCHIVE_TOTAL_UNCOMPRESSED_BYTES + 1
+    );
+    assert!(matches!(
+        validate_archive_manifest(&total_too_large),
+        Err(ArchiveError::TotalSizeExceeded { .. })
+    ));
+}
+
+#[test]
+fn archive_cancellation_removes_the_unique_partial_extraction_directory() {
+    let source = tempfile::tempdir().expect("source tempdir");
+    let extraction_parent = tempfile::tempdir().expect("extraction parent");
+    let archive_path = source.path().join("cancel.zip");
+    write_test_zip(
+        &archive_path,
+        &[("logs/one.log", b"one"), ("logs/two.log", b"two")],
+    );
+    let checks = AtomicUsize::new(0);
+    let cancelled = || checks.fetch_add(1, Ordering::SeqCst) >= 2;
+
+    let error = extract_captured_archive_with_cancel_in(
+        &archive_path,
+        extraction_parent.path(),
+        &cancelled,
+    )
+    .expect_err("cancel extraction");
+
+    assert_eq!(error, ArchiveError::Cancelled);
+    assert_eq!(
+        extraction_parent
+            .path()
+            .read_dir()
+            .expect("list extraction parent")
+            .count(),
+        0,
+        "cancelled extraction must not leave a partial directory"
+    );
+}
+
+#[test]
+fn archive_rejects_unsupported_extensions_and_invalid_container_bytes() {
+    let source = tempfile::tempdir().expect("source tempdir");
+    let tar_path = source.path().join("captured.tar");
+    std::fs::write(&tar_path, b"not a supported archive").expect("write TAR fixture");
+    assert!(matches!(
+        extract_captured_archive(&tar_path),
+        Err(ArchiveError::UnsupportedArchiveType { .. })
+    ));
+
+    let invalid_zip = source.path().join("invalid.zip");
+    std::fs::write(&invalid_zip, b"not a ZIP").expect("write invalid ZIP");
+    assert!(matches!(
+        extract_captured_archive(&invalid_zip),
+        Err(ArchiveError::InvalidArchive { .. })
+    ));
+}
+
+#[test]
+fn archive_failure_and_panic_unwinding_remove_unique_partial_directories() {
+    let source = tempfile::tempdir().expect("source tempdir");
+
+    let failure_parent = tempfile::tempdir().expect("failure extraction parent");
+    let invalid_zip = source.path().join("invalid-for-cleanup.zip");
+    std::fs::write(&invalid_zip, b"not a ZIP").expect("write invalid ZIP");
+    assert!(
+        extract_captured_archive_with_cancel_in(&invalid_zip, failure_parent.path(), &|| false,)
+            .is_err()
+    );
+    assert_eq!(
+        failure_parent
+            .path()
+            .read_dir()
+            .expect("list failed extraction parent")
+            .count(),
+        0,
+        "failed extraction must not leave its unique directory"
+    );
+
+    let panic_parent = tempfile::tempdir().expect("panic extraction parent");
+    let safe_zip = source.path().join("panic-cleanup.zip");
+    write_test_zip(&safe_zip, &[("logs/evidence.log", b"evidence")]);
+    let checks = AtomicUsize::new(0);
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let panic_during_extraction = || {
+            if checks.fetch_add(1, Ordering::SeqCst) >= 1 {
+                panic!("fixture panic after extraction directory creation");
+            }
+            false
+        };
+        let _ = extract_captured_archive_with_cancel_in(
+            &safe_zip,
+            panic_parent.path(),
+            &panic_during_extraction,
+        );
+    }));
+
+    assert!(result.is_err(), "fixture must unwind through extraction");
+    assert_eq!(
+        panic_parent
+            .path()
+            .read_dir()
+            .expect("list panic extraction parent")
+            .count(),
+        0,
+        "panic unwinding must remove the unique extraction directory"
     );
 }
