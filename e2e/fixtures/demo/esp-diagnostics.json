@@ -9,7 +9,6 @@
       "restartSupported": true,
       "restrictedSources": [
         "Enrollment Status Tracking registry",
-        "MDM diagnostic event logs",
         "SYSTEM temporary installer logs"
       ]
     },

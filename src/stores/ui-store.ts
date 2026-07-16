@@ -609,7 +609,7 @@ export const useUiStore = create<UiState>()(
         recentSessions: state.recentSessions,
       }),
       merge: (persistedState, currentState) => {
-        const raw = persistedState as Partial<UiState> & {
+        const raw = (persistedState ?? {}) as Partial<UiState> & {
           logSeverityPaletteMode?: string;
         };
 

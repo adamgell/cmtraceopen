@@ -69,6 +69,7 @@ export function EspDiagnosticsWorkspace() {
   const sessionId = useEspDiagnosticsStore((state) => state.sessionId);
   const snapshot = useEspDiagnosticsStore((state) => state.snapshot);
   const error = useEspDiagnosticsStore((state) => state.error);
+  const graphError = useEspDiagnosticsStore((state) => state.graphError);
   const liveSupported = currentPlatform === "windows";
   const isBusy = ["analyzing", "starting", "stopping"].includes(phase);
 
@@ -210,6 +211,25 @@ export function EspDiagnosticsWorkspace() {
             }}
           >
             {error}
+          </div>
+        ) : null}
+
+        {graphError ? (
+          <div
+            role="alert"
+            aria-label="Graph enrichment error"
+            style={{
+              padding: "10px 12px",
+              border: `1px solid ${tokens.colorPaletteRedBorder2}`,
+              borderLeftWidth: 4,
+              backgroundColor: tokens.colorPaletteRedBackground1,
+              color: tokens.colorPaletteRedForeground1,
+              fontSize: 12,
+              fontWeight: 650,
+            }}
+          >
+            Graph enrichment failed. Local evidence remains available; check the
+            Graph connection and retry.
           </div>
         ) : null}
 

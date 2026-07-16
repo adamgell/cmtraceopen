@@ -27,6 +27,17 @@ describe("ui-store", () => {
     });
   });
 
+  describe("persisted preferences", () => {
+    it("finishes hydration when no preferences have been stored yet", async () => {
+      await useUiStore.persist.clearStorage();
+
+      await useUiStore.persist.rehydrate();
+
+      expect(useUiStore.persist.hasHydrated()).toBe(true);
+      expect(useUiStore.getState().activeView).toBe("log");
+    });
+  });
+
   describe("font size controls", () => {
     it("increases log list font size", () => {
       const initial = useUiStore.getState().logListFontSize;

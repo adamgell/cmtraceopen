@@ -30,8 +30,12 @@ import {
   MOCK_LOG_PARSE_RESULT,
   MOCK_INTUNE,
   MOCK_DSREGCMD,
-  MOCK_ESP_DIAGNOSTICS,
 } from "../fixtures/screenshot-data";
+import {
+  buildBaseEspSnapshot,
+  buildDevicePreparationSnapshot,
+  buildElevatedEspSnapshot,
+} from "../fixtures/esp-diagnostics-data";
 import type { EspDiagnosticsSnapshot } from "../../src/workspaces/esp-diagnostics/types";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -59,111 +63,6 @@ async function dismissSplash(
 /** Let virtual-scroll rows, fonts, and any mount transitions settle. */
 async function settle(page: import("@playwright/test").Page): Promise<void> {
   await page.waitForTimeout(500);
-}
-
-function elevatedEspSnapshot(): EspDiagnosticsSnapshot {
-  const snapshot = structuredClone(MOCK_ESP_DIAGNOSTICS.baseSnapshot);
-  snapshot.elevation = {
-    isElevated: true,
-    restartSupported: true,
-    restrictedSources: [],
-  };
-  return snapshot;
-}
-
-function devicePreparationSnapshot(): EspDiagnosticsSnapshot {
-  const snapshot = elevatedEspSnapshot();
-  const variant = MOCK_ESP_DIAGNOSTICS.variants.devicePreparationV2;
-  const workload = variant.workload;
-  const template = snapshot.workloads[0];
-  snapshot.scenario = variant.scenario as EspDiagnosticsSnapshot["scenario"];
-  snapshot.phase = variant.phase as EspDiagnosticsSnapshot["phase"];
-  snapshot.sessions = [
-    {
-      ...snapshot.sessions[0],
-      kind: "devicePreparationV2",
-      phase: "devicePreparation",
-      workloadIds: [workload.workloadId],
-    },
-  ];
-  snapshot.workloads = [
-    {
-      ...template,
-      workloadId: workload.workloadId,
-      kind: workload.kind as typeof template.kind,
-      rawIdentifier: workload.rawIdentifier,
-      displayName: workload.displayName,
-      status: {
-        ...template.status,
-        raw: workload.normalizedStatus,
-        normalized:
-          workload.normalizedStatus as typeof template.status.normalized,
-        display: workload.displayStatus,
-      },
-    },
-  ];
-  if (snapshot.profile) {
-    snapshot.profile = {
-      ...snapshot.profile,
-      devicePreparation: {
-        agentDownloadTimeoutSeconds: 300,
-        pageTimeoutSeconds: 3_600,
-        allowSkipOnFailure: false,
-        allowDiagnostics: true,
-        scriptIds: [],
-        evidence: [],
-      },
-    };
-  }
-  const v2Status = snapshot.workloads[0].status;
-  const v2Timestamp =
-    snapshot.workloads[0].timestamps.lastUpdated ??
-    snapshot.workloads[0].timestamps.firstObserved;
-  snapshot.activity = [
-    {
-      entryId: "activity-device-preparation-v2",
-      timestamp: v2Timestamp,
-      kind: "workload",
-      title: "Device Preparation bootstrap is installing",
-      detail: "Required apps and scripts are being evaluated.",
-      status: v2Status,
-      evidence: [],
-    },
-  ];
-  const rawTemplate = snapshot.rawEvidence[0];
-  snapshot.rawEvidence = [
-    {
-      ...rawTemplate,
-      recordId: "raw-device-preparation-v2",
-      provenance: {
-        sourceKind: "json",
-        sourceArtifactId: "device-preparation-v2",
-        filePath: null,
-        lineNumber: null,
-        recordNumber: 1,
-        registry: null,
-        event: null,
-      },
-      rawValue: {
-        text: "Device Preparation workload bootstrap is in progress",
-      },
-      evidence: [],
-    },
-  ];
-  snapshot.coverage = [
-    {
-      ...snapshot.coverage[0],
-      artifactId: "device-preparation-v2",
-      family: "Device Preparation v2",
-      status: "available",
-      detail: null,
-      evidence: [],
-    },
-  ];
-  snapshot.deliveryOptimization = null;
-  snapshot.findings = [];
-  snapshot.installerCorrelations = [];
-  return snapshot;
 }
 
 async function showEspCapture(
@@ -329,8 +228,16 @@ test.describe("repo screenshots", () => {
       await page.goto("/");
       await dismissSplash(page);
 
-      const elevated = elevatedEspSnapshot();
+      const elevated = buildElevatedEspSnapshot();
       await showEspCapture(page, elevated, "collapsed");
+      await expect(page.getByLabel("ESP session summary")).toContainText(
+        "3 / 3 sources",
+      );
+      await expect(
+        page.getByRole("region", {
+          name: "Administrator coverage recommendation",
+        }),
+      ).toHaveCount(0);
       await page.screenshot({
         path: outPath(
           `esp-diagnostics-${viewport.width}x${viewport.height}-collapsed.png`,
@@ -356,9 +263,18 @@ test.describe("repo screenshots", () => {
 
       await showEspCapture(
         page,
-        structuredClone(MOCK_ESP_DIAGNOSTICS.baseSnapshot),
+        buildBaseEspSnapshot(),
         "collapsed",
         "ready",
+      );
+      const recommendation = page.getByRole("region", {
+        name: "Administrator coverage recommendation",
+      });
+      await expect(recommendation).toContainText(
+        "2 restricted evidence sources are unavailable",
+      );
+      await expect(recommendation).not.toContainText(
+        "MDM diagnostic event logs",
       );
       await page.screenshot({
         path: outPath(
@@ -367,8 +283,15 @@ test.describe("repo screenshots", () => {
         animations: "disabled",
       });
 
-      const devicePreparation = devicePreparationSnapshot();
+      const devicePreparation = buildDevicePreparationSnapshot();
       expect(devicePreparation.profile?.devicePreparation).not.toBeNull();
+      expect(
+        devicePreparation.workloads.map((workload) => workload.kind),
+      ).toEqual([
+        "devicePreparationWorkload",
+        "platformScript",
+        "scepCertificate",
+      ]);
       expect(
         devicePreparation.activity.map((entry) => entry.title),
       ).not.toEqual(
