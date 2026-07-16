@@ -39,7 +39,7 @@ fn authorization_digest_challenge_pattern() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
         Regex::new(
-            r#"(?i)(?P<prefix>(?:(?:--?|/)authorization["']?(?:\s*[=:]\s*|\s+)|\bauthorization["']?(?:\s*[=:]\s*|\s+)))digest(?:[ \t]+|\r?\n[ \t]+)[A-Z][A-Z0-9_-]*\*?[ \t]*=[ \t]*(?:"[^"\r\n]*"|'[^'\r\n]*'|[^,;\s\r\n]+)(?:(?:[ \t]*[,;][ \t]*(?:\r?\n[ \t]+)?|\r?\n[ \t]+)[A-Z][A-Z0-9_-]*\*?[ \t]*=[ \t]*(?:"[^"\r\n]*"|'[^'\r\n]*'|[^,;\s\r\n]+))*"#,
+            r#"(?i)(?P<prefix>(?:(?:--?|/)authorization["']?(?:[ \t]*(?:\r?\n[ \t]+)?(?:->|=>)[ \t]*(?:\r?\n[ \t]+)?|\s*[=:]\s*|\s+)|\bauthorization["']?(?:[ \t]*(?:\r?\n[ \t]+)?(?:->|=>)[ \t]*(?:\r?\n[ \t]+)?|\s*[=:]\s*|\s+)))digest(?:[ \t]+|\r?\n[ \t]+)[A-Z0-9!#$%&'*+.^_`|~-]+[ \t]*=[ \t]*(?:"[^"\r\n]*"|'[^'\r\n]*'|[^,;\s\r\n]+)(?:(?:[ \t]*[,;][ \t]*(?:\r?\n[ \t]+)?|\r?\n[ \t]+)[A-Z0-9!#$%&'*+.^_`|~-]+[ \t]*=[ \t]*(?:"[^"\r\n]*"|'[^'\r\n]*'|[^,;\s\r\n]+))*"#,
         )
         .expect("Authorization Digest challenge redaction pattern must compile")
     })
@@ -69,7 +69,7 @@ fn authorization_pattern() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
         Regex::new(
-            r#"(?i)(?P<prefix>(?:(?:--?|/)authorization["']?(?:\s*[=:]\s*|\s+)|\bauthorization["']?\s*[=:]\s*))(?:basic\s+|bearer\s+|digest\s+|apikey\s+)?(?P<value>"[^"]*"|'[^']*'|[^\s]+)"#,
+            r#"(?i)(?P<prefix>(?:(?:--?|/)authorization["']?(?:[ \t]*(?:\r?\n[ \t]+)?(?:->|=>)[ \t]*(?:\r?\n[ \t]+)?|\s*[=:]\s*|\s+)|\bauthorization["']?(?:[ \t]*(?:\r?\n[ \t]+)?(?:->|=>)[ \t]*(?:\r?\n[ \t]+)?|\s*[=:]\s*)))(?:basic\s+|bearer\s+|digest\s+|apikey\s+)?(?P<value>(?:"[^"]*"|'[^']*'|[^\s]+)(?:\r?\n[ \t]+[^\r\n]+)*)"#,
         )
         .expect("authorization redaction pattern must compile")
     })
@@ -79,7 +79,7 @@ fn authorization_scheme_and_credential_pattern() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
         Regex::new(
-            r#"(?i)(?P<prefix>(?:(?:--?|/)authorization["']?(?:\s*[=:]\s*|\s+)|\bauthorization["']?(?:\s*[=:]\s*|\s+)))(?:"(?:basic|bearer|digest|apikey)\s+[^"\r\n]+"|'(?:basic|bearer|digest|apikey)\s+[^'\r\n]+'|(?:"(?:basic|bearer|digest|apikey)"|'(?:basic|bearer|digest|apikey)'|(?:basic|bearer|digest|apikey))[ \t]+(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s]+))"#,
+            r#"(?i)(?P<prefix>(?:(?:--?|/)authorization["']?(?:[ \t]*(?:\r?\n[ \t]+)?(?:->|=>)[ \t]*(?:\r?\n[ \t]+)?|\s*[=:]\s*|\s+)|\bauthorization["']?(?:[ \t]*(?:\r?\n[ \t]+)?(?:->|=>)[ \t]*(?:\r?\n[ \t]+)?|\s*[=:]\s*|\s+)))(?:"(?:basic|bearer|digest|apikey)\s+[^"\r\n]+"|'(?:basic|bearer|digest|apikey)\s+[^'\r\n]+'|(?:"(?:basic|bearer|digest|apikey)"|'(?:basic|bearer|digest|apikey)'|(?:basic|bearer|digest|apikey))[ \t]+(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s]+))(?:\r?\n[ \t]+[^\r\n]+)*"#,
         )
         .expect("authorization scheme-and-credential redaction pattern must compile")
     })
@@ -89,7 +89,7 @@ fn generic_authorization_scheme_and_credential_pattern() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
         Regex::new(
-            r#"(?i)(?P<prefix>(?:(?:--?|/)authorization["']?(?:\s*[=:]\s*|\s+)|\bauthorization["']?(?:\s*[=:]\s*|\s+)))(?P<scheme>[A-Z0-9!#$%&'*+.^_`|~-]+)(?:[ \t]+|\r?\n[ \t]+)(?P<credential>[^\r\n]+)"#,
+            r#"(?i)(?P<prefix>(?:(?:--?|/)authorization["']?(?:[ \t]*(?:\r?\n[ \t]+)?(?:->|=>)[ \t]*(?:\r?\n[ \t]+)?|\s*[=:]\s*|\s+)|\bauthorization["']?(?:[ \t]*(?:\r?\n[ \t]+)?(?:->|=>)[ \t]*(?:\r?\n[ \t]+)?|\s*[=:]\s*|\s+)))(?P<scheme>[A-Z0-9!#$%&'*+.^_`|~-]+)(?:[ \t]+|\r?\n[ \t]+)(?P<credential>[^\r\n]+(?:\r?\n[ \t]+[^\r\n]+)*)"#,
         )
         .expect("generic authorization scheme-and-credential pattern must compile")
     })
@@ -99,7 +99,7 @@ fn secret_argument_pattern() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
         Regex::new(
-            r#"(?i)(?P<prefix>(?:(?:--?|/)(?:password|passwd|pwd|secret|client[_-]?secret|api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|auth[_-]?token|bearer[_-]?token|token|tenant(?:id)?|entdmid|serial(?:number)?|hardware[_-]?hash|device[_-]?hardware[_-]?data)["']?(?:[ \t]*(?:->|=>)\s*|\s*[=:]\s*|\s+)|\b(?:password|passwd|pwd|secret|client[_-]?secret|api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|auth[_-]?token|bearer[_-]?token|token|tenant(?:id)?|entdmid|serial(?:number)?|hardware[_-]?hash|device[_-]?hardware[_-]?data)["']?(?:[ \t]*(?:->|=>)\s*|\s*[=:]\s*)))(?P<value>"[^"]*"|'[^']*'|[^\s]+)"#,
+            r#"(?i)(?P<prefix>(?:(?:--?|/)(?:password|passwd|pwd|secret|client[_-]?secret|api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|auth[_-]?token|bearer[_-]?token|token|tenant(?:id)?|entdmid|serial(?:number)?|hardware[_-]?hash|device[_-]?hardware[_-]?data)["']?(?:[ \t]*(?:\r?\n[ \t]+)?(?:->|=>)[ \t]*(?:\r?\n[ \t]+)?|\s*[=:]\s*|\s+)|\b(?:password|passwd|pwd|secret|client[_-]?secret|api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|auth[_-]?token|bearer[_-]?token|token|tenant(?:id)?|entdmid|serial(?:number)?|hardware[_-]?hash|device[_-]?hardware[_-]?data)["']?(?:[ \t]*(?:\r?\n[ \t]+)?(?:->|=>)[ \t]*(?:\r?\n[ \t]+)?|\s*[=:]\s*)))(?P<value>"[^"]*"|'[^']*'|[^\s]+)"#,
         )
         .expect("secret argument redaction pattern must compile")
     })
@@ -109,7 +109,7 @@ fn bare_authorization_pattern() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
         Regex::new(
-            r#"(?i)(?P<prefix>\bauthorization["']?\s+)(?:(?P<scheme>basic|bearer|digest|apikey)\s+)?(?P<value>"[^"]*"|'[^']*'|[^\s]+)"#,
+            r#"(?i)(?P<prefix>\bauthorization["']?(?:[ \t]*(?:\r?\n[ \t]+)?(?:->|=>)[ \t]*(?:\r?\n[ \t]+)?|\s+))(?:(?P<scheme>basic|bearer|digest|apikey)\s+)?(?P<value>"[^"]*"|'[^']*'|[^\s]+)"#,
         )
         .expect("bare authorization redaction pattern must compile")
     })
@@ -119,7 +119,7 @@ fn bare_secret_argument_pattern() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
         Regex::new(
-            r#"(?i)(?P<prefix>\b(?P<name>password|passwd|pwd|secret|client[_-]?secret|api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|auth[_-]?token|bearer[_-]?token|token|tenant(?:id)?|entdmid|serial(?:number)?|hardware[_-]?hash|device[_-]?hardware[_-]?data)["']?(?:[ \t]*(?:->|=>)\s*|\s+))(?P<value>"[^"]*"|'[^']*'|[^\s]+)"#,
+            r#"(?i)(?P<prefix>\b(?P<name>password|passwd|pwd|secret|client[_-]?secret|api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|auth[_-]?token|bearer[_-]?token|token|tenant(?:id)?|entdmid|serial(?:number)?|hardware[_-]?hash|device[_-]?hardware[_-]?data)["']?(?:[ \t]*(?:\r?\n[ \t]+)?(?:->|=>)[ \t]*(?:\r?\n[ \t]+)?|\s+))(?P<value>"[^"]*"|'[^']*'|[^\s]+)"#,
         )
         .expect("bare secret-argument redaction pattern must compile")
     })
@@ -129,7 +129,7 @@ fn standalone_authorization_scheme_pattern() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
         Regex::new(
-            r#"(?i)(?P<prefix>\b(?P<scheme>basic|bearer|digest|apikey|negotiate|ntlm)[ \t]+)(?:"(?P<double_quoted>[^"\r\n]+)"|'(?P<single_quoted>[^'\r\n]+)'|(?P<bare>[A-Z0-9._~+/=-]+))"#,
+            r#"(?i)(?P<prefix>\b(?P<scheme>basic|bearer|digest|apikey|negotiate|ntlm)[ \t]+)(?:"(?P<double_quoted>[^"\r\n]+)"|'(?P<single_quoted>[^'\r\n]+)'|(?P<bare>[A-Z0-9._~+/=-]+))(?:\r?\n[ \t]+[^\r\n]+)*"#,
         )
         .expect("standalone authorization-scheme redaction pattern must compile")
     })
@@ -1208,6 +1208,7 @@ fn forbidden_raw_content(value: &str) -> bool {
     plain_json_secret_member_key_pattern().is_match(bounded)
         || escaped_json_secret_member_key_pattern().is_match(bounded)
         || forbidden_raw_content_pattern().is_match(bounded)
+        || authorization_pattern().is_match(bounded)
         || authorization_scheme_and_credential_pattern().is_match(bounded)
         || generic_authorization_scheme_and_credential_pattern().is_match(bounded)
         || standalone_authorization_scheme_pattern().is_match(bounded)
