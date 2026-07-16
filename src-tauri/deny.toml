@@ -1,7 +1,10 @@
 [advisories]
-# These are all unmaintained-crate advisories from Tauri's transitive
-# dependency tree (GTK3 bindings, encoding, fxhash, proc-macro-error, etc.).
-# We cannot fix them — they require upstream Tauri/evtx migrations.
+# These unresolved advisories are in transitive Tauri/evtx dependencies. The
+# quick-xml package also enters through evtx 0.8.5, but evtx only writes/escapes
+# XML in production; its Reader/attributes use is test-only and it never uses
+# NsReader. Keep these package-level exceptions scoped to their existing IDs.
+# RUSTSEC-2026-0009 is not ignored: the workspace path-patches time 0.3.36 with
+# the upstream recursion limit and tests its exact boundary.
 ignore = [
     "RUSTSEC-2021-0153", # encoding: unmaintained (via evtx crate)
     "RUSTSEC-2024-0370", # proc-macro-error: unmaintained (via Tauri)
@@ -23,8 +26,8 @@ ignore = [
     "RUSTSEC-2025-0081", # gtk-related (Tauri Linux)
     "RUSTSEC-2025-0098", # gtk-related (Tauri Linux)
     "RUSTSEC-2025-0100", # gtk-related (Tauri Linux)
-    "RUSTSEC-2026-0194", # quick-xml <0.41: quadratic runtime on duplicate attrs (transitive: plist/Tauri, wayland-scanner)
-    "RUSTSEC-2026-0195", # quick-xml <0.41: unbounded namespace-declaration alloc (transitive: plist/Tauri, wayland-scanner)
+    "RUSTSEC-2026-0194", # quick-xml duplicate-attribute CPU DoS; evtx Reader use is test-only (also plist/Tauri, wayland-scanner)
+    "RUSTSEC-2026-0195", # quick-xml NsReader allocation DoS; evtx has no NsReader use (also plist/Tauri, wayland-scanner)
 ]
 
 [licenses]
