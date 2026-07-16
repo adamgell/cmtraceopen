@@ -5,7 +5,8 @@ use serde::{Deserialize, Serialize};
 use super::models::*;
 use super::normalize::{
     decode_oobe_config, extract_guid, normalize_classic_esp_status, normalize_office_detail_status,
-    normalize_policy_status, normalize_timestamp, normalize_v2_status, percent_decode_bounded,
+    normalize_office_status, normalize_policy_status, normalize_timestamp, normalize_v2_status,
+    percent_decode_bounded,
 };
 use super::timeline::{sort_timeline_entries, stable_record_id, stable_timeline_entry_id};
 
@@ -50,6 +51,12 @@ impl EspDiagnosticsReducer {
         let scenario = classify_scenario(&self.records);
         let mut projection = SnapshotProjection::new(self.generated_at_utc.clone(), scenario);
         for (ordinal, record) in self.records.iter().enumerate() {
+            if is_raw_hardware_hash_record(record) {
+                continue;
+            }
+            if let Some(raw) = raw_evidence_record(record, ordinal) {
+                projection.raw_evidence.push(raw);
+            }
             if record_allowed_for_scenario(record, &projection.scenario) {
                 projection.process_record(ordinal, record);
             }
@@ -77,7 +84,8 @@ struct SnapshotProjection {
     v2_workloads: BTreeMap<(String, usize), V2WorkloadAccumulator>,
     platform_scripts: Vec<(usize, EspRegistryObservation)>,
     graph_observations: Vec<EspGraphObservation>,
-    deferred_error_codes: Vec<(String, EspErrorCode, bool, EspEvidenceRef)>,
+    office_details: Vec<OfficeDetailObservation>,
+    deferred_error_codes: Vec<DeferredErrorCode>,
 }
 
 impl SnapshotProjection {
@@ -115,19 +123,12 @@ impl SnapshotProjection {
             v2_workloads: BTreeMap::new(),
             platform_scripts: Vec::new(),
             graph_observations: Vec::new(),
+            office_details: Vec::new(),
             deferred_error_codes: Vec::new(),
         }
     }
 
     fn process_record(&mut self, ordinal: usize, record: &EspEvidenceRecord) {
-        if is_raw_hardware_hash_record(record) {
-            return;
-        }
-
-        if let Some(raw) = raw_evidence_record(record, ordinal) {
-            self.raw_evidence.push(raw);
-        }
-
         match record {
             EspEvidenceRecord::Coverage(coverage) => {
                 self.process_coverage(ordinal, coverage.clone());
@@ -160,6 +161,14 @@ impl SnapshotProjection {
         }
         if is_platform_script_observation(observation) {
             self.platform_scripts.push((ordinal, observation.clone()));
+            return;
+        }
+        if let Some(detail) = office_detail_observation(ordinal, observation) {
+            self.office_details.push(detail);
+            return;
+        }
+        if let Some(deferred) = deferred_error_code_observation(observation) {
+            self.deferred_error_codes.push(deferred);
             return;
         }
         if let Some(session_info) = classic_session_info(observation) {
@@ -245,17 +254,6 @@ impl SnapshotProjection {
                     .evidence
                     .push(observation.context.evidence_ref.clone());
                 self.add_profile_evidence(&observation.context.evidence_ref);
-            }
-            "exitcode" | "enforcementerrorcode" => {
-                let identifier = last_path_component(&observation.key).unwrap_or_default();
-                if let Some(raw) = observation_text(&observation.value) {
-                    self.deferred_error_codes.push((
-                        identifier,
-                        error_code(&raw),
-                        name == "enforcementerrorcode",
-                        observation.context.evidence_ref.clone(),
-                    ));
-                }
             }
             _ => {}
         }
@@ -488,9 +486,13 @@ impl SnapshotProjection {
             .evidence
             .push(observation.context.evidence_ref.clone());
 
-        let detail = match observation.kind {
-            EspDeliveryOptimizationEventKind::DownloadStarted => "Download started",
-            EspDeliveryOptimizationEventKind::DownloadCompleted => "Download completed",
+        let (detail, status) = match observation.kind {
+            EspDeliveryOptimizationEventKind::DownloadStarted => {
+                ("Download started", EspNormalizedStatus::Downloading)
+            }
+            EspDeliveryOptimizationEventKind::DownloadCompleted => {
+                ("Download completed", EspNormalizedStatus::Downloaded)
+            }
         };
         self.push_timeline(
             ordinal,
@@ -501,7 +503,7 @@ impl SnapshotProjection {
                 .clone()
                 .unwrap_or_else(|| "Delivery Optimization".to_string()),
             Some(detail.to_string()),
-            Some(text_status(detail, EspNormalizedStatus::InProgress)),
+            Some(text_status(detail, status)),
         );
     }
 
@@ -551,6 +553,13 @@ impl SnapshotProjection {
         else {
             return false;
         };
+        let value_name = observation.value_name.to_ascii_lowercase();
+        if !matches!(value_name.as_str(), "nodeuri" | "expectedvalue") {
+            return false;
+        }
+        let Some(value) = observation_text(&observation.value) else {
+            return false;
+        };
         let entry = self
             .node_cache
             .entry(index)
@@ -560,11 +569,13 @@ impl SnapshotProjection {
                 sensitivity: observation.context.sensitivity.clone(),
                 evidence: Vec::new(),
             });
-        match observation.value_name.to_ascii_lowercase().as_str() {
-            "nodeuri" => entry.node_uri = observation_text(&observation.value),
-            "expectedvalue" => entry.expected_value = observation_text(&observation.value),
-            _ => return false,
+        match value_name.as_str() {
+            "nodeuri" => entry.node_uri = Some(value),
+            "expectedvalue" => entry.expected_value = Some(value),
+            _ => unreachable!("value name was validated above"),
         }
+        entry.sensitivity =
+            more_restrictive_sensitivity(&entry.sensitivity, &observation.context.sensitivity);
         entry
             .evidence
             .push(observation.context.evidence_ref.clone());
@@ -580,6 +591,9 @@ impl SnapshotProjection {
             return false;
         };
         let Some(enrollment_id) = components.get(enrollments_index + 1) else {
+            return false;
+        };
+        let Some(update) = enrollment_update(observation) else {
             return false;
         };
         let entry = if let Some(index) = self
@@ -608,38 +622,26 @@ impl SnapshotProjection {
             });
             self.enrollments.last_mut().expect("just inserted")
         };
-        match observation.value_name.to_ascii_lowercase().as_str() {
-            "providerid" => entry.provider_id = observation_text(&observation.value),
-            "aadtenantid" | "tenantid" => {
-                entry.tenant_id = observation_text(&observation.value).map(sensitive_string)
+        match update {
+            EnrollmentUpdate::ProviderId(value) => entry.provider_id = Some(value),
+            EnrollmentUpdate::TenantId(value) => entry.tenant_id = Some(sensitive_string(value)),
+            EnrollmentUpdate::UserPrincipalName(value) => {
+                entry.user_principal_name = Some(sensitive_string(value))
             }
-            "upn" | "userprincipalname" => {
-                entry.user_principal_name =
-                    observation_text(&observation.value).map(sensitive_string)
+            EnrollmentUpdate::EntdmId(value) => entry.entdm_id = Some(sensitive_string(value)),
+            EnrollmentUpdate::DeviceEspEnabled(value) => {
+                entry.settings.device_esp_enabled = Some(value)
             }
-            "entdmid" => {
-                entry.entdm_id = observation_text(&observation.value).map(sensitive_string)
+            EnrollmentUpdate::UserEspEnabled(value) => {
+                entry.settings.user_esp_enabled = Some(value)
             }
-            "skipdevicestatuspage" => {
-                entry.settings.device_esp_enabled =
-                    observation_i64(&observation.value).map(|v| v == 0)
+            EnrollmentUpdate::TimeoutSeconds(value) => entry.settings.timeout_seconds = Some(value),
+            EnrollmentUpdate::Blocking(bits) => {
+                entry.settings.blocking = Some(bits != 0);
+                entry.settings.allow_reset = Some(bits & 1 != 0);
+                entry.settings.allow_retry = Some(bits & 2 != 0);
+                entry.settings.continue_anyway = Some(bits & 4 != 0);
             }
-            "skipuserstatuspage" => {
-                entry.settings.user_esp_enabled =
-                    observation_i64(&observation.value).map(|v| v == 0)
-            }
-            "syncfailuretimeout" => {
-                entry.settings.timeout_seconds = observation_u64(&observation.value)
-            }
-            "blockinstatuspage" => {
-                if let Some(bits) = observation_u64(&observation.value) {
-                    entry.settings.blocking = Some(bits != 0);
-                    entry.settings.allow_reset = Some(bits & 1 != 0);
-                    entry.settings.allow_retry = Some(bits & 2 != 0);
-                    entry.settings.continue_anyway = Some(bits & 4 != 0);
-                }
-            }
-            _ => return false,
         }
         entry
             .evidence
@@ -659,18 +661,8 @@ impl SnapshotProjection {
         };
         let raw_identifier = classic_raw_identifier(&kind, &observation.value_name);
         let source = &observation.context.provenance.source_artifact_id;
-        let session_identity = match (&session_info.scope, &session_info.user_sid) {
-            (EspScope::Device, _) => format!("classic:device:{}", session_info.raw_time),
-            (EspScope::User, Some(sid)) => {
-                format!("classic:user:{sid}:{}", session_info.raw_time)
-            }
-            (EspScope::User, None) => format!("classic:user:unknown:{}", session_info.raw_time),
-        };
-        let session_id = format!(
-            "session|{}|{}|0",
-            escape_component(source),
-            escape_component(&session_identity)
-        );
+        let session_identity = classic_session_identity(&session_info);
+        let session_id = classic_session_id(source, &session_info);
         let started_at = normalize_timestamp(&session_info.raw_time, None);
         let user_sid = session_info
             .user_sid
@@ -723,8 +715,18 @@ impl SnapshotProjection {
             .iter_mut()
             .find(|workload| workload.workload_id == workload_id)
         {
-            workload.status = normalized_status.clone();
-            workload.timestamps.last_updated = Some(observed);
+            let replace_status = workload
+                .timestamps
+                .last_updated
+                .as_ref()
+                .map(|current| {
+                    timestamp_chronology_key(&observed) >= timestamp_chronology_key(current)
+                })
+                .unwrap_or(true);
+            merge_workload_timestamps(&mut workload.timestamps, timestamps);
+            if replace_status {
+                workload.status = normalized_status.clone();
+            }
             workload
                 .evidence
                 .push(observation.context.evidence_ref.clone());
@@ -775,6 +777,19 @@ impl SnapshotProjection {
         let Ok(index) = components[1].parse::<usize>() else {
             return;
         };
+        let field = components[2].to_ascii_lowercase();
+        if !matches!(
+            field.as_str(),
+            "workloadid"
+                | "friendlyname"
+                | "workloadstate"
+                | "starttime"
+                | "endtime"
+                | "errorcode"
+                | "enforcementerrorcode"
+        ) {
+            return;
+        }
         let key = (
             observation.context.provenance.source_artifact_id.clone(),
             index,
@@ -783,26 +798,25 @@ impl SnapshotProjection {
             .v2_workloads
             .entry(key)
             .or_insert_with(|| V2WorkloadAccumulator {
-                first_ordinal: ordinal,
-                first_context: observation.context.clone(),
                 workload_id: None,
                 friendly_name: None,
-                raw_status: None,
                 started: None,
                 ended: None,
                 exit_code: None,
                 enforcement_error_code: None,
                 evidence: Vec::new(),
-                state_context: None,
-                state_ordinal: None,
+                observations: Vec::new(),
+                states: Vec::new(),
             });
-        match components[2].to_ascii_lowercase().as_str() {
+        match field.as_str() {
             "workloadid" => entry.workload_id = observation_text(&observation.value),
             "friendlyname" => entry.friendly_name = observation_text(&observation.value),
             "workloadstate" => {
-                entry.raw_status = Some(observation_raw_status(&observation.value));
-                entry.state_context = Some(observation.context.clone());
-                entry.state_ordinal = Some(ordinal);
+                entry.states.push(V2StateOccurrence {
+                    ordinal,
+                    context: observation.context.clone(),
+                    raw_status: observation_raw_status(&observation.value),
+                });
             }
             "starttime" => entry.started = timestamp_from_observation_value(&observation.value),
             "endtime" => entry.ended = timestamp_from_observation_value(&observation.value),
@@ -814,8 +828,9 @@ impl SnapshotProjection {
                 entry.enforcement_error_code =
                     observation_text(&observation.value).map(|value| error_code(&value))
             }
-            _ => return,
+            _ => unreachable!("field was validated above"),
         }
+        entry.observations.push(observation.context.clone());
         entry
             .evidence
             .push(observation.context.evidence_ref.clone());
@@ -871,9 +886,10 @@ impl SnapshotProjection {
     fn finish(mut self) -> EspDiagnosticsSnapshot {
         self.finalize_v2_workloads();
         self.finalize_platform_scripts();
-        self.apply_deferred_error_codes();
+        self.apply_office_details();
         self.apply_graph_names();
         self.finalize_sessions();
+        self.apply_deferred_error_codes();
         self.finalize_delivery_optimization();
 
         let phase = snapshot_phase(&self.scenario, &self.sessions);
@@ -919,9 +935,13 @@ impl SnapshotProjection {
                 .workload_id
                 .clone()
                 .unwrap_or_else(|| format!("unknown-{index}"));
-            let raw_status = entry
-                .raw_status
-                .clone()
+            let latest_state = entry.states.iter().max_by(|left, right| {
+                context_chronology_key(&left.context)
+                    .cmp(&context_chronology_key(&right.context))
+                    .then_with(|| left.ordinal.cmp(&right.ordinal))
+            });
+            let raw_status = latest_state
+                .map(|state| state.raw_status.clone())
                 .unwrap_or_else(|| EspRawStatus::Text("missing".to_string()));
             let normalized_status = normalize_v2_status(raw_status);
             let session_identity = "devicePreparationV2:device:ProvisioningProgress";
@@ -930,21 +950,33 @@ impl SnapshotProjection {
                 escape_component(&source),
                 session_identity
             );
-            let first_observed = context_timestamp(&entry.first_context);
-            if !self
-                .sessions
+            let first_observed = entry
+                .observations
                 .iter()
-                .any(|session| session.session_id == session_id)
+                .min_by(|left, right| {
+                    context_chronology_key(left).cmp(&context_chronology_key(right))
+                })
+                .map(context_timestamp)
+                .unwrap_or_else(|| normalize_timestamp(&self.generated_at_utc, None));
+            let session_started = entry
+                .started
+                .clone()
+                .unwrap_or_else(|| first_observed.clone());
+            if let Some(session) = self
+                .sessions
+                .iter_mut()
+                .find(|session| session.session_id == session_id)
             {
+                merge_earliest_timestamp(&mut session.started_at, Some(session_started));
+                merge_latest_timestamp(&mut session.ended_at, entry.ended.clone());
+                session.evidence.extend(entry.evidence.clone());
+            } else {
                 self.sessions.push(EspSession {
                     session_id: session_id.clone(),
                     kind: EspSessionKind::DevicePreparationV2,
                     scope: EspScope::Device,
                     user_sid: None,
-                    started_at: entry
-                        .started
-                        .clone()
-                        .or_else(|| Some(first_observed.clone())),
+                    started_at: Some(session_started),
                     ended_at: entry.ended.clone(),
                     phase: EspPhase::DevicePreparation,
                     is_latest: false,
@@ -962,7 +994,7 @@ impl SnapshotProjection {
                 first_observed,
                 started: entry.started.clone(),
                 ended: entry.ended.clone(),
-                last_updated: entry.state_context.as_ref().map(context_timestamp),
+                last_updated: latest_state.map(|state| context_timestamp(&state.context)),
             };
             self.workloads.push(EspWorkload {
                 workload_id: workload_id.clone(),
@@ -985,17 +1017,18 @@ impl SnapshotProjection {
             {
                 session.workload_ids.push(workload_id);
             }
-            if let (Some(context), Some(ordinal)) = (entry.state_context, entry.state_ordinal) {
+            for state in entry.states {
                 self.push_timeline(
-                    ordinal,
-                    &context,
+                    state.ordinal,
+                    &state.context,
                     EspTimelineKind::Workload,
-                    entry.friendly_name.unwrap_or(raw_identifier),
+                    entry
+                        .friendly_name
+                        .clone()
+                        .unwrap_or_else(|| raw_identifier.clone()),
                     Some("devicePreparationWorkload".to_string()),
-                    Some(normalized_status),
+                    Some(normalize_v2_status(state.raw_status)),
                 );
-            } else {
-                let _ = entry.first_ordinal;
             }
         }
     }
@@ -1076,33 +1109,103 @@ impl SnapshotProjection {
     }
 
     fn apply_deferred_error_codes(&mut self) {
-        for (identifier, code, is_enforcement, evidence) in
-            std::mem::take(&mut self.deferred_error_codes)
-        {
-            if let Some(workload) = self.workloads.iter_mut().find(|workload| {
-                workload.raw_identifier.eq_ignore_ascii_case(&identifier)
-                    || workload
-                        .raw_identifier
-                        .to_ascii_lowercase()
-                        .contains(&identifier.to_ascii_lowercase())
-            }) {
-                if is_enforcement {
-                    workload.enforcement_error_code = Some(code);
+        for deferred in std::mem::take(&mut self.deferred_error_codes) {
+            let candidates = self
+                .workloads
+                .iter()
+                .enumerate()
+                .filter_map(|(index, workload)| {
+                    if !identifiers_match(&workload.raw_identifier, &deferred.identifier)
+                        || !workload.evidence.iter().any(|evidence| {
+                            evidence.source_artifact_id == deferred.source_artifact_id
+                        })
+                        || deferred
+                            .kind
+                            .as_ref()
+                            .map(|kind| kind != &workload.kind)
+                            .unwrap_or(false)
+                    {
+                        return None;
+                    }
+                    let session = self
+                        .sessions
+                        .iter()
+                        .find(|session| session.session_id == workload.session_id)?;
+                    if let Some(explicit_session_id) = &deferred.explicit_session_id {
+                        return (session.session_id == *explicit_session_id).then_some(index);
+                    }
+                    if !session.is_latest {
+                        return None;
+                    }
+                    if deferred
+                        .scope
+                        .as_ref()
+                        .map(|scope| scope != &session.scope)
+                        .unwrap_or(false)
+                    {
+                        return None;
+                    }
+                    if let Some(user_sid) = &deferred.user_sid {
+                        if session.user_sid.as_ref().map(|sid| sid.value.as_str())
+                            != Some(user_sid.as_str())
+                        {
+                            return None;
+                        }
+                    }
+                    Some(index)
+                })
+                .collect::<Vec<_>>();
+            if let [index] = candidates.as_slice() {
+                let workload = &mut self.workloads[*index];
+                if deferred.is_enforcement {
+                    workload.enforcement_error_code = Some(deferred.code);
                 } else {
-                    workload.exit_code = Some(code);
+                    workload.exit_code = Some(deferred.code);
                 }
-                workload.evidence.push(evidence);
+                workload.evidence.push(deferred.evidence);
             }
+        }
+    }
+
+    fn apply_office_details(&mut self) {
+        for workload in self
+            .workloads
+            .iter_mut()
+            .filter(|workload| workload.kind == EspTrackedKind::Office)
+        {
+            let best = self
+                .office_details
+                .iter()
+                .filter(|detail| identifiers_match(&workload.raw_identifier, &detail.identifier))
+                .max_by(|left, right| {
+                    left.is_final
+                        .cmp(&right.is_final)
+                        .then_with(|| {
+                            context_chronology_key(&left.context)
+                                .cmp(&context_chronology_key(&right.context))
+                        })
+                        .then_with(|| left.ordinal.cmp(&right.ordinal))
+                });
+            let status = normalize_office_status(
+                workload.status.raw.clone(),
+                best.map(|detail| detail.raw_status.clone()),
+            );
+            if let Some(detail) = best {
+                let observed = context_timestamp(&detail.context);
+                let timestamps = workload_timestamps(observed, &status.normalized);
+                merge_workload_timestamps(&mut workload.timestamps, timestamps);
+                workload.evidence.push(detail.context.evidence_ref.clone());
+            }
+            workload.status = status;
         }
     }
 
     fn apply_graph_names(&mut self) {
         for graph in &self.graph_observations {
-            if let Some(workload) = self
-                .workloads
-                .iter_mut()
-                .find(|workload| identifiers_match(&workload.raw_identifier, &graph.record_id))
-            {
+            for workload in self.workloads.iter_mut().filter(|workload| {
+                graph_section_matches_workload(&graph.section, &workload.kind)
+                    && identifiers_match(&workload.raw_identifier, &graph.record_id)
+            }) {
                 if let Some(display_name) = &graph.display_name {
                     workload.display_name = Some(display_name.clone());
                 }
@@ -1113,16 +1216,19 @@ impl SnapshotProjection {
 
     fn finalize_sessions(&mut self) {
         for session in &mut self.sessions {
-            let statuses: Vec<&EspNormalizedStatus> = session
+            let session_workloads = session
                 .workload_ids
                 .iter()
                 .filter_map(|id| {
                     self.workloads
                         .iter()
                         .find(|workload| &workload.workload_id == id)
-                        .map(|workload| &workload.status.normalized)
                 })
-                .collect();
+                .collect::<Vec<_>>();
+            let statuses = session_workloads
+                .iter()
+                .map(|workload| &workload.status.normalized)
+                .collect::<Vec<_>>();
             if statuses
                 .iter()
                 .any(|status| matches!(status, EspNormalizedStatus::Failed))
@@ -1137,6 +1243,16 @@ impl SnapshotProjection {
                 })
             {
                 session.phase = EspPhase::Completed;
+            }
+            if matches!(session.phase, EspPhase::Completed | EspPhase::Failed) {
+                let latest_end = session_workloads
+                    .iter()
+                    .filter_map(|workload| workload.timestamps.ended.as_ref())
+                    .max_by(|left, right| {
+                        timestamp_chronology_key(left).cmp(timestamp_chronology_key(right))
+                    })
+                    .cloned();
+                merge_latest_timestamp(&mut session.ended_at, latest_end);
             }
         }
 
@@ -1181,18 +1297,55 @@ struct NodeCacheAccumulator {
 
 #[derive(Debug)]
 struct V2WorkloadAccumulator {
-    first_ordinal: usize,
-    first_context: EspObservationContext,
     workload_id: Option<String>,
     friendly_name: Option<String>,
-    raw_status: Option<EspRawStatus>,
     started: Option<EspTimestamp>,
     ended: Option<EspTimestamp>,
     exit_code: Option<EspErrorCode>,
     enforcement_error_code: Option<EspErrorCode>,
     evidence: Vec<EspEvidenceRef>,
-    state_context: Option<EspObservationContext>,
-    state_ordinal: Option<usize>,
+    observations: Vec<EspObservationContext>,
+    states: Vec<V2StateOccurrence>,
+}
+
+#[derive(Debug)]
+struct V2StateOccurrence {
+    ordinal: usize,
+    context: EspObservationContext,
+    raw_status: EspRawStatus,
+}
+
+#[derive(Debug)]
+struct OfficeDetailObservation {
+    ordinal: usize,
+    identifier: String,
+    raw_status: EspRawStatus,
+    is_final: bool,
+    context: EspObservationContext,
+}
+
+#[derive(Debug)]
+struct DeferredErrorCode {
+    source_artifact_id: String,
+    identifier: String,
+    explicit_session_id: Option<String>,
+    scope: Option<EspScope>,
+    user_sid: Option<String>,
+    kind: Option<EspTrackedKind>,
+    code: EspErrorCode,
+    is_enforcement: bool,
+    evidence: EspEvidenceRef,
+}
+
+enum EnrollmentUpdate {
+    ProviderId(String),
+    TenantId(String),
+    UserPrincipalName(String),
+    EntdmId(String),
+    DeviceEspEnabled(bool),
+    UserEspEnabled(bool),
+    TimeoutSeconds(u64),
+    Blocking(u64),
 }
 
 struct ClassicSessionInfo {
@@ -1351,10 +1504,28 @@ fn raw_observation_value(record: &EspEvidenceRecord) -> EspObservationValue {
                 value.cache_host_bytes.unwrap_or_default()
             ),
         ]),
-        EspEvidenceRecord::Graph(value) => EspObservationValue::StringList(vec![
-            value.record_id.clone(),
-            value.display_name.clone().unwrap_or_default(),
-        ]),
+        EspEvidenceRecord::Graph(value) => {
+            let mut fields = vec![
+                format!("section={}", serialized_wire_value(&value.section)),
+                format!("apiVersion={}", serialized_wire_value(&value.api_version)),
+                format!("recordId={}", value.record_id),
+                format!(
+                    "displayName={}",
+                    value.display_name.clone().unwrap_or_default()
+                ),
+            ];
+            if let Some(status) = &value.status {
+                fields.extend([
+                    format!("remoteStatus.raw={}", serialized_wire_value(&status.raw)),
+                    format!(
+                        "remoteStatus.normalized={}",
+                        serialized_wire_value(&status.normalized)
+                    ),
+                    format!("remoteStatus.display={}", status.display),
+                ]);
+            }
+            EspObservationValue::StringList(fields)
+        }
         EspEvidenceRecord::Coverage(_) => EspObservationValue::Text(String::new()),
     }
 }
@@ -1375,6 +1546,40 @@ fn is_raw_hardware_hash_record(record: &EspEvidenceRecord) -> bool {
 fn contains_hardware_hash(value: &str) -> bool {
     let value = value.to_ascii_lowercase().replace([' ', '-', '_'], "");
     value.contains("hardwarehash") || value.contains("devicehardwaredata")
+}
+
+fn serialized_wire_value<T: Serialize>(value: &T) -> String {
+    match serde_json::to_value(value) {
+        Ok(serde_json::Value::String(value)) => value,
+        Ok(value) => value.to_string(),
+        Err(_) => String::new(),
+    }
+}
+
+fn graph_section_matches_workload(
+    section: &EspGraphObservationSection,
+    kind: &EspTrackedKind,
+) -> bool {
+    match section {
+        EspGraphObservationSection::App => matches!(
+            kind,
+            EspTrackedKind::ModernApp
+                | EspTrackedKind::Win32App
+                | EspTrackedKind::DevicePreparationWorkload
+        ),
+        EspGraphObservationSection::Policy => {
+            matches!(
+                kind,
+                EspTrackedKind::Policy | EspTrackedKind::ScepCertificate
+            )
+        }
+        EspGraphObservationSection::Script => matches!(kind, EspTrackedKind::PlatformScript),
+        EspGraphObservationSection::ManagedDevice
+        | EspGraphObservationSection::AutopilotIdentity
+        | EspGraphObservationSection::DeploymentProfile
+        | EspGraphObservationSection::EnrollmentConfiguration
+        | EspGraphObservationSection::Unknown(_) => false,
+    }
 }
 
 fn classic_session_info(observation: &EspRegistryObservation) -> Option<ClassicSessionInfo> {
@@ -1405,6 +1610,131 @@ fn classic_session_info(observation: &EspRegistryObservation) -> Option<ClassicS
         user_sid,
         family,
         raw_time,
+    })
+}
+
+fn classic_session_identity(info: &ClassicSessionInfo) -> String {
+    match (&info.scope, &info.user_sid) {
+        (EspScope::Device, _) => format!("classic:device:{}", info.raw_time),
+        (EspScope::User, Some(sid)) => format!("classic:user:{sid}:{}", info.raw_time),
+        (EspScope::User, None) => format!("classic:user:unknown:{}", info.raw_time),
+    }
+}
+
+fn classic_session_id(source_artifact_id: &str, info: &ClassicSessionInfo) -> String {
+    format!(
+        "session|{}|{}|0",
+        escape_component(source_artifact_id),
+        escape_component(&classic_session_identity(info))
+    )
+}
+
+fn deferred_error_code_observation(
+    observation: &EspRegistryObservation,
+) -> Option<DeferredErrorCode> {
+    let is_enforcement = if observation
+        .value_name
+        .eq_ignore_ascii_case("EnforcementErrorCode")
+    {
+        true
+    } else if observation.value_name.eq_ignore_ascii_case("ExitCode") {
+        false
+    } else {
+        return None;
+    };
+    let raw = observation_text(&observation.value)?;
+    let identifier = last_path_component(&observation.key)?;
+    let source_artifact_id = observation.context.provenance.source_artifact_id.clone();
+    let explicit_session = classic_session_info(observation);
+    let explicit_session_id = explicit_session
+        .as_ref()
+        .map(|info| classic_session_id(&source_artifact_id, info));
+    let (scope, user_sid) = if let Some(info) = &explicit_session {
+        (Some(info.scope.clone()), info.user_sid.clone())
+    } else if let Some(sid) = path_components(&observation.key)
+        .into_iter()
+        .find(|part| part.to_ascii_uppercase().starts_with("S-"))
+    {
+        if is_device_scope_sid(&sid) {
+            (Some(EspScope::Device), None)
+        } else {
+            (Some(EspScope::User), Some(sid))
+        }
+    } else {
+        (None, None)
+    };
+    let key = observation.key.to_ascii_lowercase();
+    let kind = if key.contains("win32apps")
+        || explicit_session
+            .as_ref()
+            .map(|info| info.family.eq_ignore_ascii_case("Sidecar"))
+            .unwrap_or(false)
+    {
+        Some(EspTrackedKind::Win32App)
+    } else {
+        None
+    };
+    Some(DeferredErrorCode {
+        source_artifact_id,
+        identifier,
+        explicit_session_id,
+        scope,
+        user_sid,
+        kind,
+        code: error_code(&raw),
+        is_enforcement,
+        evidence: observation.context.evidence_ref.clone(),
+    })
+}
+
+fn is_device_scope_sid(value: &str) -> bool {
+    value.to_ascii_uppercase().starts_with("S-0-")
+}
+
+fn enrollment_update(observation: &EspRegistryObservation) -> Option<EnrollmentUpdate> {
+    match observation.value_name.to_ascii_lowercase().as_str() {
+        "providerid" => observation_text(&observation.value).map(EnrollmentUpdate::ProviderId),
+        "aadtenantid" | "tenantid" => {
+            observation_text(&observation.value).map(EnrollmentUpdate::TenantId)
+        }
+        "upn" | "userprincipalname" => {
+            observation_text(&observation.value).map(EnrollmentUpdate::UserPrincipalName)
+        }
+        "entdmid" => observation_text(&observation.value).map(EnrollmentUpdate::EntdmId),
+        "skipdevicestatuspage" => observation_i64(&observation.value)
+            .map(|value| EnrollmentUpdate::DeviceEspEnabled(value == 0)),
+        "skipuserstatuspage" => observation_i64(&observation.value)
+            .map(|value| EnrollmentUpdate::UserEspEnabled(value == 0)),
+        "syncfailuretimeout" => {
+            observation_u64(&observation.value).map(EnrollmentUpdate::TimeoutSeconds)
+        }
+        "blockinstatuspage" => observation_u64(&observation.value).map(EnrollmentUpdate::Blocking),
+        _ => None,
+    }
+}
+
+fn office_detail_observation(
+    ordinal: usize,
+    observation: &EspRegistryObservation,
+) -> Option<OfficeDetailObservation> {
+    let components = path_components(&observation.key);
+    let office = components
+        .iter()
+        .position(|part| part.eq_ignore_ascii_case("OfficeCSP"))?;
+    let identifier = components.get(office + 1)?;
+    let is_final = if observation.value_name.eq_ignore_ascii_case("FinalStatus") {
+        true
+    } else if observation.value_name.eq_ignore_ascii_case("Status") {
+        false
+    } else {
+        return None;
+    };
+    Some(OfficeDetailObservation {
+        ordinal,
+        identifier: percent_decode_bounded(identifier).unwrap_or_else(|_| identifier.clone()),
+        raw_status: observation_raw_status(&observation.value),
+        is_final,
+        context: observation.context.clone(),
     })
 }
 
@@ -1465,7 +1795,8 @@ fn classic_raw_identifier(kind: &EspTrackedKind, value_name: &str) -> String {
 
 fn normalize_for_kind(kind: &EspTrackedKind, raw: EspRawStatus) -> EspStatus {
     match kind {
-        EspTrackedKind::Msi | EspTrackedKind::Office => normalize_office_detail_status(raw),
+        EspTrackedKind::Msi => normalize_office_detail_status(raw),
+        EspTrackedKind::Office => normalize_office_status(raw, None),
         EspTrackedKind::ModernApp | EspTrackedKind::Policy | EspTrackedKind::ScepCertificate => {
             normalize_policy_status(raw)
         }
@@ -1519,7 +1850,9 @@ fn event_normalized_status(event_id: u32) -> EspNormalizedStatus {
         100 | 304 | 1924 => EspNormalizedStatus::Failed,
         107 | 306 | 1922 => EspNormalizedStatus::Succeeded,
         101 | 72 => EspNormalizedStatus::Processed,
-        109 | 110 | 111 | 1905 | 1906 | 1920 => EspNormalizedStatus::InProgress,
+        1905 => EspNormalizedStatus::Downloading,
+        1906 => EspNormalizedStatus::Downloaded,
+        109 | 110 | 111 | 1920 => EspNormalizedStatus::InProgress,
         _ => EspNormalizedStatus::Unknown,
     }
 }
@@ -1621,6 +1954,43 @@ fn context_timestamp(context: &EspObservationContext) -> EspTimestamp {
         .unwrap_or_else(|| normalize_timestamp(&context.observed_at_utc, None))
 }
 
+fn timestamp_chronology_key(timestamp: &EspTimestamp) -> &str {
+    timestamp
+        .normalized_utc
+        .as_deref()
+        .unwrap_or(&timestamp.raw_text)
+}
+
+fn context_chronology_key(context: &EspObservationContext) -> String {
+    timestamp_chronology_key(&context_timestamp(context)).to_string()
+}
+
+fn merge_earliest_timestamp(target: &mut Option<EspTimestamp>, incoming: Option<EspTimestamp>) {
+    let Some(incoming) = incoming else {
+        return;
+    };
+    if target
+        .as_ref()
+        .map(|current| timestamp_chronology_key(&incoming) < timestamp_chronology_key(current))
+        .unwrap_or(true)
+    {
+        *target = Some(incoming);
+    }
+}
+
+fn merge_latest_timestamp(target: &mut Option<EspTimestamp>, incoming: Option<EspTimestamp>) {
+    let Some(incoming) = incoming else {
+        return;
+    };
+    if target
+        .as_ref()
+        .map(|current| timestamp_chronology_key(&incoming) >= timestamp_chronology_key(current))
+        .unwrap_or(true)
+    {
+        *target = Some(incoming);
+    }
+}
+
 fn workload_timestamps(
     observed: EspTimestamp,
     status: &EspNormalizedStatus,
@@ -1649,6 +2019,17 @@ fn workload_timestamps(
         ended,
         last_updated: Some(observed),
     }
+}
+
+fn merge_workload_timestamps(current: &mut EspWorkloadTimestamps, incoming: EspWorkloadTimestamps) {
+    if timestamp_chronology_key(&incoming.first_observed)
+        < timestamp_chronology_key(&current.first_observed)
+    {
+        current.first_observed = incoming.first_observed;
+    }
+    merge_earliest_timestamp(&mut current.started, incoming.started);
+    merge_latest_timestamp(&mut current.ended, incoming.ended);
+    merge_latest_timestamp(&mut current.last_updated, incoming.last_updated);
 }
 
 fn text_status(raw: &str, normalized: EspNormalizedStatus) -> EspStatus {
@@ -1766,6 +2147,22 @@ fn sensitive_string(value: String) -> EspClassifiedString {
     }
 }
 
+fn more_restrictive_sensitivity(
+    current: &EspSensitivity,
+    incoming: &EspSensitivity,
+) -> EspSensitivity {
+    let rank = |value: &EspSensitivity| match value {
+        EspSensitivity::Public => 0,
+        EspSensitivity::Sensitive => 1,
+        EspSensitivity::Restricted => 2,
+    };
+    if rank(incoming) > rank(current) {
+        incoming.clone()
+    } else {
+        current.clone()
+    }
+}
+
 fn tracked_kind_name(kind: &EspTrackedKind) -> &'static str {
     match kind {
         EspTrackedKind::Msi => "msi",
@@ -1842,24 +2239,29 @@ fn session_chronology(session: &EspSession) -> &str {
 }
 
 fn snapshot_phase(scenario: &EspScenario, sessions: &[EspSession]) -> EspPhase {
-    if sessions
+    let latest = sessions
+        .iter()
+        .filter(|session| session.is_latest)
+        .collect::<Vec<_>>();
+    if latest
         .iter()
         .any(|session| session.phase == EspPhase::Failed)
     {
         EspPhase::Failed
-    } else if !sessions.is_empty()
-        && sessions
+    } else if !latest.is_empty()
+        && latest
             .iter()
             .all(|session| session.phase == EspPhase::Completed)
     {
         EspPhase::Completed
     } else if *scenario == EspScenario::AutopilotDevicePreparationV2 {
         EspPhase::DevicePreparation
-    } else if sessions.iter().any(|session| {
-        session.is_latest && session.scope == EspScope::User && session.phase != EspPhase::Completed
-    }) {
+    } else if latest
+        .iter()
+        .any(|session| session.scope == EspScope::User && session.phase != EspPhase::Completed)
+    {
         EspPhase::AccountSetup
-    } else if sessions
+    } else if latest
         .iter()
         .any(|session| session.scope == EspScope::Device)
     {
