@@ -658,11 +658,20 @@ impl SessionEngine {
             .chain(self.tail_coverage.iter())
     }
 
-    fn poll_tail(&mut self, observed_at_utc: &str) {
+    fn advance_utc_high_water_mark(&mut self, completed_at_utc: &str) {
+        self.utc_high_water_mark = coherent_utc_timestamp(
+            completed_at_utc,
+            std::iter::once(self.utc_high_water_mark.as_str()),
+        );
+    }
+
+    fn poll_tail(&mut self, observed_at_utc: &str) -> bool {
         let batch = self.tail.poll(observed_at_utc);
-        if self.apply_tail_batch(batch) {
+        let changed = self.apply_tail_batch(batch);
+        if changed {
             self.pending_reason = EspUpdateReason::EvidenceChanged;
         }
+        changed
     }
 
     fn refresh(&mut self, dependencies: &EspSessionDependencies, reading: &EspClockReading) {
@@ -853,9 +862,14 @@ fn run_worker(
             return;
         }
 
-        engine.poll_tail(&reading.utc);
-        if reading.monotonic >= engine.next_refresh {
+        let tail_changed = engine.poll_tail(&reading.utc);
+        let refresh_due = reading.monotonic >= engine.next_refresh;
+        if refresh_due {
             engine.refresh(&dependencies, &reading);
+        }
+        if tail_changed || refresh_due {
+            let collection_completed_at_utc = dependencies.clock.now().utc;
+            engine.advance_utc_high_water_mark(&collection_completed_at_utc);
         }
         if engine.dirty && reading.monotonic.saturating_sub(engine.last_emit) >= UPDATE_DEBOUNCE {
             let publication_utc = dependencies.clock.now().utc;

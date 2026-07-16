@@ -3639,6 +3639,7 @@ impl EspSessionClock for ManualSessionClock {
 struct SequencedRollbackClockState {
     monotonic: Duration,
     utc: String,
+    utc_samples: HashMap<String, usize>,
 }
 
 struct SequencedRollbackSessionClock {
@@ -3652,6 +3653,7 @@ impl SequencedRollbackSessionClock {
             state: Mutex::new(SequencedRollbackClockState {
                 monotonic: Duration::ZERO,
                 utc: utc.to_string(),
+                utc_samples: HashMap::new(),
             }),
             changed: Condvar::new(),
         }
@@ -3667,15 +3669,33 @@ impl SequencedRollbackSessionClock {
         state.utc = utc.to_string();
         self.changed.notify_all();
     }
+
+    fn wait_for_utc_sample(&self, utc: &str, label: &str) {
+        let state = self.state.lock().expect("sequenced clock");
+        let (state, _) = self
+            .changed
+            .wait_timeout_while(state, Duration::from_secs(2), |state| {
+                state.utc_samples.get(utc).copied().unwrap_or_default() == 0
+            })
+            .expect("sequenced clock sample wait");
+        assert!(
+            state.utc_samples.get(utc).copied().unwrap_or_default() > 0,
+            "timed out waiting for {label}"
+        );
+    }
 }
 
 impl EspSessionClock for SequencedRollbackSessionClock {
     fn now(&self) -> EspClockReading {
-        let state = self.state.lock().expect("sequenced clock");
-        EspClockReading {
+        let mut state = self.state.lock().expect("sequenced clock");
+        let reading = EspClockReading {
             monotonic: state.monotonic,
             utc: state.utc.clone(),
-        }
+        };
+        *state.utc_samples.entry(reading.utc.clone()).or_default() += 1;
+        drop(state);
+        self.changed.notify_all();
+        reading
     }
 
     fn wait(&self, cancellation: &EspCancellation, _duration: Duration) {
@@ -4638,6 +4658,64 @@ fn session_tail_only_update_uses_post_poll_utc_without_changing_monotonic_deboun
     assert!(update.snapshot.coverage.is_empty());
     assert_eq!(update.snapshot.generated_at_utc, "2026-07-16T06:30:05Z");
     assert_eq!(update.emitted_at_utc, update.snapshot.generated_at_utc);
+    manager.stop(&initial.session_id).expect("stop session");
+}
+
+#[test]
+fn session_tail_change_before_debounce_preserves_completion_utc_through_rollback() {
+    const EARLY_CHANGE: Duration = Duration::from_millis(50);
+    assert!(EARLY_CHANGE < UPDATE_DEBOUNCE);
+    let clock = Arc::new(SequencedRollbackSessionClock::new("2026-07-16T06:30:00Z"));
+    let delayed_call = DelayedChangedTailCall::new(EARLY_CHANGE);
+    let tail_factory = DelayedChangedTailFactory {
+        clock: Arc::clone(&clock),
+        calls: Arc::new(Mutex::new(VecDeque::from([delayed_call.clone()]))),
+    };
+    let discovery = FakeSessionDiscovery::default();
+    let discovery_calls = Arc::clone(&discovery.calls);
+    let empty = empty_session_provider();
+    let sink = RecordingSessionSink::default();
+    let manager = EspSessionManager::new(
+        EspSessionDependencies::new(
+            Arc::clone(&clock) as Arc<dyn EspSessionClock>,
+            empty.clone(),
+            empty.clone(),
+            empty.clone(),
+            empty,
+            Arc::new(discovery),
+            Arc::new(tail_factory),
+            Arc::new(sink.clone()),
+        )
+        .with_live_supported_for_tests(true),
+    );
+    let initial = manager
+        .start("66666666-6666-4666-8666-666666666666")
+        .expect("start pre-debounce tail session");
+
+    clock.advance(EARLY_CHANGE, "2026-07-16T06:30:00Z");
+    delayed_call.complete_at(&clock, "2026-07-16T06:30:05Z");
+    clock.wait_for_utc_sample("2026-07-16T06:30:05Z", "post-tail completion UTC sample");
+    clock.set_utc("2026-07-16T06:30:02Z");
+    thread::sleep(Duration::from_millis(20));
+    assert!(sink.updates.lock().expect("session updates").is_empty());
+
+    clock.advance(
+        UPDATE_DEBOUNCE.saturating_sub(EARLY_CHANGE),
+        "2026-07-16T06:30:02Z",
+    );
+    wait_for_session_updates(&sink, 1);
+    let update = sink.updates.lock().expect("session updates")[0].clone();
+    assert_eq!(update.sequence, 2);
+    assert_eq!(update.reason, EspUpdateReason::EvidenceChanged);
+    assert!(update.snapshot.raw_evidence.is_empty());
+    assert!(update.snapshot.coverage.is_empty());
+    assert_eq!(update.snapshot.generated_at_utc, "2026-07-16T06:30:05Z");
+    assert_eq!(update.emitted_at_utc, "2026-07-16T06:30:05Z");
+    assert_eq!(
+        discovery_calls.load(Ordering::SeqCst),
+        1,
+        "UTC movement must not trigger a discovery refresh"
+    );
     manager.stop(&initial.session_id).expect("stop session");
 }
 
