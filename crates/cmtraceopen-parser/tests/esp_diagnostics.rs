@@ -2369,6 +2369,66 @@ fn reducer_retention_bounds_serialized_bytes_and_preserves_rare_profile_state() 
 }
 
 #[test]
+fn reducer_keeps_ids_source_local_when_unrelated_provider_order_changes() {
+    let target = registry_record(
+        "profile-provider",
+        "profile-name",
+        r"SOFTWARE\Microsoft\Provisioning\Diagnostics\Autopilot",
+        "DeploymentProfileName",
+        EspObservationValue::Text("Contoso profile".to_string()),
+        "2026-07-15T12:00:00Z",
+    );
+    let noise = ime_record("unrelated-ime-provider", "noise", "2026-07-15T12:00:01Z");
+
+    let mut target_first = EspDiagnosticsReducer::new("2026-07-15T18:00:00Z".to_string());
+    target_first.ingest(target.clone());
+    target_first.ingest(noise.clone());
+
+    let mut target_last = EspDiagnosticsReducer::new("2026-07-15T18:00:00Z".to_string());
+    target_last.ingest(noise);
+    target_last.ingest(target);
+
+    let first = target_first.snapshot();
+    let last = target_last.snapshot();
+    assert_eq!(first.raw_evidence.len(), 2);
+    assert_eq!(last.raw_evidence.len(), 2);
+
+    let target_id = |snapshot: &EspDiagnosticsSnapshot| {
+        snapshot
+            .raw_evidence
+            .iter()
+            .find(|record| record.evidence[0].evidence_id == "profile-name")
+            .expect("target profile evidence")
+            .record_id
+            .clone()
+    };
+    assert_eq!(target_id(&first), target_id(&last));
+    assert_eq!(target_id(&first), "raw|profile-provider|profile-name|0");
+}
+
+#[test]
+fn evidence_identity_allocator_bounds_sources_and_keeps_existing_source_counters() {
+    let mut allocator = EspEvidenceIdentityAllocator::with_source_limit(2);
+
+    let first = allocator
+        .try_identify(ime_record("source-a", "first", "2026-07-15T12:00:00Z"))
+        .expect("first source is tracked");
+    allocator
+        .try_identify(ime_record("source-b", "second", "2026-07-15T12:00:01Z"))
+        .expect("second source is tracked");
+    assert!(allocator
+        .try_identify(ime_record("source-c", "third", "2026-07-15T12:00:02Z"))
+        .is_err());
+
+    let next_existing = allocator
+        .try_identify(ime_record("source-a", "fourth", "2026-07-15T12:00:03Z"))
+        .expect("an existing source remains usable at the bound");
+    assert_eq!(allocator.tracked_source_count(), 2);
+    assert_eq!(first.occurrence_ordinal(), 0);
+    assert_eq!(next_existing.occurrence_ordinal(), 1);
+}
+
+#[test]
 fn timeline_snapshot_is_deterministic_for_the_same_ordered_evidence() {
     let records = vec![
         event_record(

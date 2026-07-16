@@ -58,11 +58,12 @@ use app_lib::intune::evtx_parser::{
     parse_esp_event_xml, EventLogProperty, ParsedEspEventRecord, MAX_ESP_EVTX_RECORD_BYTES,
 };
 use cmtraceopen_parser::esp::{
-    EspArtifactCoverage, EspArtifactStatus, EspDiagnosticsReducer, EspElevationState,
-    EspEvidenceProvenance, EspEvidenceRecord, EspEvidenceRef, EspGraphObservation,
-    EspGraphObservationSection, EspHardwareEvidence, EspObservationContext, EspObservationValue,
-    EspParseState, EspRegistryObservation, EspRegistryProvenance, EspScope, EspSensitivity,
-    EspSourceAccessState, EspSourceKind, EspSystemFact, EspSystemObservation, GraphApiVersion,
+    EspArtifactCoverage, EspArtifactStatus, EspDiagnosticsReducer, EspDiagnosticsSnapshot,
+    EspElevationState, EspEvidenceProvenance, EspEvidenceRecord, EspEvidenceRef,
+    EspGraphObservation, EspGraphObservationSection, EspHardwareEvidence, EspObservationContext,
+    EspObservationValue, EspParseState, EspRegistryObservation, EspRegistryProvenance, EspScope,
+    EspSensitivity, EspSourceAccessState, EspSourceKind, EspSystemFact, EspSystemObservation,
+    GraphApiVersion,
 };
 use tempfile::tempdir;
 
@@ -3683,6 +3684,19 @@ struct StaticSessionProvider {
 }
 
 #[derive(Clone)]
+struct SequencedSessionProvider {
+    batches: Arc<Mutex<VecDeque<Vec<EspEvidenceRecord>>>>,
+}
+
+impl SequencedSessionProvider {
+    fn new(batches: Vec<Vec<EspEvidenceRecord>>) -> Self {
+        Self {
+            batches: Arc::new(Mutex::new(batches.into())),
+        }
+    }
+}
+
+#[derive(Clone)]
 struct BlockingSessionProvider {
     calls: Arc<AtomicUsize>,
     entered: Arc<Barrier>,
@@ -3710,6 +3724,20 @@ impl EspEvidenceProvider for StaticSessionProvider {
     fn collect(&self, _observed_at_utc: &str) -> EspProviderBatch {
         EspProviderBatch {
             records: self.records.clone(),
+            coverage: Vec::new(),
+        }
+    }
+}
+
+impl EspEvidenceProvider for SequencedSessionProvider {
+    fn collect(&self, _observed_at_utc: &str) -> EspProviderBatch {
+        EspProviderBatch {
+            records: self
+                .batches
+                .lock()
+                .expect("sequenced provider batches")
+                .pop_front()
+                .unwrap_or_default(),
             coverage: Vec::new(),
         }
     }
@@ -3916,6 +3944,172 @@ fn wait_for_session_updates(sink: &RecordingSessionSink, count: usize) {
         );
         thread::sleep(Duration::from_millis(5));
     }
+}
+
+fn empty_session_provider() -> Arc<StaticSessionProvider> {
+    Arc::new(StaticSessionProvider {
+        records: Vec::new(),
+    })
+}
+
+fn session_raw_record_id(snapshot: &EspDiagnosticsSnapshot, evidence_id: &str) -> String {
+    snapshot
+        .raw_evidence
+        .iter()
+        .find(|record| record.evidence[0].evidence_id == evidence_id)
+        .unwrap_or_else(|| panic!("missing session evidence {evidence_id}"))
+        .record_id
+        .clone()
+}
+
+#[test]
+fn session_keeps_record_identity_across_consecutive_snapshots_with_unrelated_provider_growth() {
+    let clock = Arc::new(ManualSessionClock::default());
+    let tails = FakeSessionTailFactory::default();
+    let sink = RecordingSessionSink::default();
+    let empty = empty_session_provider();
+    let dependencies = EspSessionDependencies::new(
+        Arc::clone(&clock) as Arc<dyn EspSessionClock>,
+        Arc::new(SequencedSessionProvider::new(vec![
+            Vec::new(),
+            vec![session_system_record(
+                "unrelated-registry-provider",
+                "new-registry-evidence",
+                "2026-07-16T06:30:02Z",
+            )],
+        ])),
+        Arc::new(StaticSessionProvider {
+            records: vec![session_system_record(
+                "stable-event-provider",
+                "stable-event-evidence",
+                "2026-07-16T06:30:00Z",
+            )],
+        }),
+        empty.clone(),
+        empty,
+        Arc::new(FakeSessionDiscovery::default()),
+        Arc::new(tails),
+        Arc::new(sink.clone()),
+    )
+    .with_live_supported_for_tests(true);
+    let manager = EspSessionManager::new(dependencies);
+    let initial = manager
+        .start("10101010-1010-4010-8010-101010101010")
+        .expect("start identity session");
+    let initial_id = session_raw_record_id(&initial.snapshot, "stable-event-evidence");
+
+    clock.advance(DISCOVERY_INTERVAL);
+    wait_for_session_updates(&sink, 1);
+    let refreshed_id = session_raw_record_id(
+        &sink.updates.lock().expect("session updates")[0].snapshot,
+        "stable-event-evidence",
+    );
+
+    assert_eq!(initial_id, refreshed_id);
+    manager.stop(&initial.session_id).expect("stop session");
+}
+
+#[test]
+fn session_tail_identity_survives_remove_and_reappearance_but_resets_for_a_new_session() {
+    let clock = Arc::new(ManualSessionClock::default());
+    let tails = FakeSessionTailFactory::default();
+    let sink = RecordingSessionSink::default();
+    let empty = empty_session_provider();
+    let dependencies = EspSessionDependencies::new(
+        Arc::clone(&clock) as Arc<dyn EspSessionClock>,
+        empty.clone(),
+        empty.clone(),
+        empty.clone(),
+        empty,
+        Arc::new(FakeSessionDiscovery::default()),
+        Arc::new(tails.clone()),
+        Arc::new(sink.clone()),
+    )
+    .with_live_supported_for_tests(true);
+    let manager = EspSessionManager::new(dependencies);
+    let first_session = manager
+        .start("20202020-2020-4020-8020-202020202020")
+        .expect("start first identity session");
+    let repeated_record = || {
+        session_system_record(
+            "tail.identity-source",
+            "tail-repeated-evidence",
+            "2026-07-16T06:30:01Z",
+        )
+    };
+
+    tails
+        .queued
+        .lock()
+        .expect("tail queue")
+        .push_back(EspTailEvidenceBatch {
+            records: vec![repeated_record()],
+            ..EspTailEvidenceBatch::default()
+        });
+    clock.advance(UPDATE_DEBOUNCE);
+    wait_for_session_updates(&sink, 1);
+    let first_id = session_raw_record_id(
+        &sink.updates.lock().expect("session updates")[0].snapshot,
+        "tail-repeated-evidence",
+    );
+
+    tails
+        .queued
+        .lock()
+        .expect("tail queue")
+        .push_back(EspTailEvidenceBatch {
+            replace_artifact_ids: vec!["tail.identity-source".to_string()],
+            changed: true,
+            ..EspTailEvidenceBatch::default()
+        });
+    clock.advance(UPDATE_DEBOUNCE);
+    wait_for_session_updates(&sink, 2);
+    assert!(sink.updates.lock().expect("session updates")[1]
+        .snapshot
+        .raw_evidence
+        .iter()
+        .all(|record| record.evidence[0].evidence_id != "tail-repeated-evidence"));
+
+    tails
+        .queued
+        .lock()
+        .expect("tail queue")
+        .push_back(EspTailEvidenceBatch {
+            records: vec![repeated_record()],
+            ..EspTailEvidenceBatch::default()
+        });
+    clock.advance(UPDATE_DEBOUNCE);
+    wait_for_session_updates(&sink, 3);
+    let reappeared_id = session_raw_record_id(
+        &sink.updates.lock().expect("session updates")[2].snapshot,
+        "tail-repeated-evidence",
+    );
+    assert_ne!(first_id, reappeared_id);
+
+    manager
+        .stop(&first_session.session_id)
+        .expect("stop first session");
+    let second_session = manager
+        .start("30303030-3030-4030-8030-303030303030")
+        .expect("start second identity session");
+    tails
+        .queued
+        .lock()
+        .expect("tail queue")
+        .push_back(EspTailEvidenceBatch {
+            records: vec![repeated_record()],
+            ..EspTailEvidenceBatch::default()
+        });
+    clock.advance(UPDATE_DEBOUNCE);
+    wait_for_session_updates(&sink, 5);
+    let new_session_id = session_raw_record_id(
+        &sink.updates.lock().expect("session updates")[4].snapshot,
+        "tail-repeated-evidence",
+    );
+    assert_eq!(first_id, new_session_id);
+    manager
+        .stop(&second_session.session_id)
+        .expect("stop second session");
 }
 
 #[test]

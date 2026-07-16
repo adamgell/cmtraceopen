@@ -14,6 +14,7 @@ use super::timeline::{sort_timeline_entries, stable_record_id, stable_timeline_e
 
 pub const MAX_RETAINED_EVIDENCE_RECORDS: usize = 25_000;
 pub const MAX_RETAINED_EVIDENCE_SERIALIZED_BYTES: usize = 32 * 1024 * 1024;
+pub const MAX_EVIDENCE_IDENTITY_SOURCES: usize = 25_000;
 
 const RETENTION_COVERAGE_ARTIFACT_ID: &str = "session.evidence-retention";
 const RETENTION_COVERAGE_FAMILY: &str = "session-retention";
@@ -33,6 +34,88 @@ pub enum EspEvidenceRecord {
     DeliveryOptimization(EspDeliveryOptimizationObservation),
     Graph(EspGraphObservation),
     Coverage(EspArtifactCoverage),
+}
+
+/// An evidence record whose source-local occurrence identity was assigned at
+/// acquisition time and must remain unchanged across later projections.
+#[doc(hidden)]
+#[derive(Debug, Clone)]
+pub struct EspIdentifiedEvidenceRecord {
+    record: EspEvidenceRecord,
+    occurrence_ordinal: usize,
+}
+
+impl EspIdentifiedEvidenceRecord {
+    pub fn with_occurrence(record: EspEvidenceRecord, occurrence_ordinal: usize) -> Self {
+        Self {
+            record,
+            occurrence_ordinal,
+        }
+    }
+
+    pub fn record(&self) -> &EspEvidenceRecord {
+        &self.record
+    }
+
+    pub fn occurrence_ordinal(&self) -> usize {
+        self.occurrence_ordinal
+    }
+}
+
+/// Bounded session-owned allocator. Counters are isolated by source artifact,
+/// so activity from one provider cannot renumber another provider's records.
+#[doc(hidden)]
+#[derive(Debug, Clone)]
+pub struct EspEvidenceIdentityAllocator {
+    next_by_source: BTreeMap<String, usize>,
+    max_sources: usize,
+}
+
+impl Default for EspEvidenceIdentityAllocator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl EspEvidenceIdentityAllocator {
+    pub fn new() -> Self {
+        Self::with_source_limit(MAX_EVIDENCE_IDENTITY_SOURCES)
+    }
+
+    #[doc(hidden)]
+    pub fn with_source_limit(max_sources: usize) -> Self {
+        Self {
+            next_by_source: BTreeMap::new(),
+            max_sources: max_sources.max(1),
+        }
+    }
+
+    pub fn try_identify(
+        &mut self,
+        record: EspEvidenceRecord,
+    ) -> Result<EspIdentifiedEvidenceRecord, Box<EspEvidenceRecord>> {
+        let source = record_identity_source(&record);
+        if !self.next_by_source.contains_key(&source)
+            && self.next_by_source.len() >= self.max_sources
+        {
+            return Err(Box::new(record));
+        }
+        let next = self.next_by_source.entry(source).or_insert(0);
+        let occurrence_ordinal = *next;
+        let Some(following) = next.checked_add(1) else {
+            return Err(Box::new(record));
+        };
+        *next = following;
+        Ok(EspIdentifiedEvidenceRecord::with_occurrence(
+            record,
+            occurrence_ordinal,
+        ))
+    }
+
+    #[doc(hidden)]
+    pub fn tracked_source_count(&self) -> usize {
+        self.next_by_source.len()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -90,6 +173,25 @@ impl EspDiagnosticsReducer {
     pub fn ingest(&mut self, record: EspEvidenceRecord) {
         let ordinal = self.next_ordinal;
         self.next_ordinal = self.next_ordinal.saturating_add(1);
+        let occurrence_key = record_occurrence_key(&record);
+        let occurrence_ordinal = if let Some(key) = &occurrence_key {
+            let next = self.next_occurrence_by_key.entry(key.clone()).or_insert(0);
+            let occurrence = *next;
+            *next = next.saturating_add(1);
+            occurrence
+        } else {
+            ordinal
+        };
+        self.retain_record(record, ordinal, occurrence_ordinal, occurrence_key);
+    }
+
+    fn retain_record(
+        &mut self,
+        record: EspEvidenceRecord,
+        ordinal: usize,
+        occurrence_ordinal: usize,
+        occurrence_key: Option<(String, String)>,
+    ) {
         let serialized_bytes = serde_json::to_vec(&record)
             .map(|serialized| serialized.len())
             .unwrap_or_else(|_| self.max_retained_serialized_bytes.saturating_add(1));
@@ -97,21 +199,13 @@ impl EspDiagnosticsReducer {
             self.note_discard(serialized_bytes);
             return;
         }
-        let occurrence_key = record_occurrence_key(&record);
-        let occurrence_ordinal = if let Some(key) = &occurrence_key {
-            let next = self.next_occurrence_by_key.entry(key.clone()).or_insert(0);
-            let occurrence = *next;
-            *next = next.saturating_add(1);
+        if let Some(key) = &occurrence_key {
             let retained_count = self
                 .retained_occurrence_counts
                 .entry(key.clone())
                 .or_insert(0);
             *retained_count = retained_count.saturating_add(1);
-            occurrence
-        } else {
-            ordinal
-        };
-
+        }
         self.retained_serialized_bytes = self
             .retained_serialized_bytes
             .saturating_add(serialized_bytes);
@@ -144,6 +238,30 @@ impl EspDiagnosticsReducer {
     pub fn ingest_all<I: IntoIterator<Item = EspEvidenceRecord>>(&mut self, records: I) {
         for record in records {
             self.ingest(record);
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn ingest_identified(&mut self, identified: EspIdentifiedEvidenceRecord) {
+        let ordinal = self.next_ordinal;
+        self.next_ordinal = self.next_ordinal.saturating_add(1);
+        let occurrence_ordinal = identified.occurrence_ordinal();
+        let record = identified.record;
+        let occurrence_key = record_occurrence_key(&record);
+        if let Some(key) = &occurrence_key {
+            let next = self.next_occurrence_by_key.entry(key.clone()).or_insert(0);
+            *next = (*next).max(occurrence_ordinal.saturating_add(1));
+        }
+        self.retain_record(record, ordinal, occurrence_ordinal, occurrence_key);
+    }
+
+    #[doc(hidden)]
+    pub fn ingest_identified_all<I: IntoIterator<Item = EspIdentifiedEvidenceRecord>>(
+        &mut self,
+        records: I,
+    ) {
+        for record in records {
+            self.ingest_identified(record);
         }
     }
 
@@ -2192,6 +2310,23 @@ fn record_occurrence_key(record: &EspEvidenceRecord) -> Option<(String, String)>
             .map(|value| value.evidence_id.clone())
             .unwrap_or_else(|| coverage.artifact_id.clone()),
     ))
+}
+
+fn record_identity_source(record: &EspEvidenceRecord) -> String {
+    if let Some(context) = record_context(record) {
+        return context.provenance.source_artifact_id.clone();
+    }
+    match record {
+        EspEvidenceRecord::Coverage(coverage) => coverage
+            .evidence
+            .first()
+            .map(|evidence| evidence.source_artifact_id.clone())
+            .unwrap_or_else(|| coverage.artifact_id.clone()),
+        EspEvidenceRecord::DeliveryOptimizationSummary(_) => {
+            "delivery-optimization.summary".to_string()
+        }
+        _ => "source-neutral".to_string(),
+    }
 }
 
 fn raw_evidence_record(record: &EspEvidenceRecord, ordinal: usize) -> Option<EspRawEvidenceRecord> {
