@@ -6184,6 +6184,51 @@ fn bundle_hardware_and_delivery_json_normalize_without_raw_hardware_hash() {
 }
 
 #[test]
+fn bundle_drops_hardware_hash_records_from_any_captured_log_before_reduction() {
+    let bundle = tempfile::tempdir().expect("bundle tempdir");
+    std::fs::create_dir_all(bundle.path().join("evidence/logs"))
+        .expect("create captured log folder");
+    std::fs::write(
+        bundle.path().join("evidence/logs/AgentExecutor.log"),
+        concat!(
+            "2026-07-16 08:00:00 Safe deployment evidence retained\n",
+            "2026-07-16 08:00:01 DeviceHardwareData=BASE64-HARDWARE-SECRET\n",
+            "2026-07-16 08:00:02 HardwareHash: SECOND-HARDWARE-SECRET\n",
+        ),
+    )
+    .expect("write secret-bearing captured log");
+    write_bundle_manifest(
+        bundle.path(),
+        serde_json::json!([{
+            "artifactId": "ime-agent-executor",
+            "category": "logs",
+            "family": "intune-ime",
+            "relativePath": "evidence/logs/AgentExecutor.log",
+            "status": "collected"
+        }]),
+    );
+
+    let snapshot =
+        analyze_captured_evidence_at(bundle.path(), BUNDLE_REQUEST_ID, BUNDLE_OBSERVED_AT)
+            .expect("analyze captured log");
+    let serialized = serde_json::to_string(&snapshot).expect("serialize captured snapshot");
+    let lower = serialized.to_ascii_lowercase();
+
+    assert!(serialized.contains("Safe deployment evidence retained"));
+    for forbidden in [
+        "BASE64-HARDWARE-SECRET",
+        "SECOND-HARDWARE-SECRET",
+        "devicehardwaredata",
+        "hardwarehash",
+    ] {
+        assert!(
+            !lower.contains(&forbidden.to_ascii_lowercase()),
+            "captured log hardware identity material leaked through {forbidden}"
+        );
+    }
+}
+
+#[test]
 fn bundle_analyzes_manifest_first_zip_inputs_through_scoped_extraction() {
     let source = tempfile::tempdir().expect("archive source tempdir");
     let archive = source.path().join("captured.zip");

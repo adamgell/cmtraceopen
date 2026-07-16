@@ -902,6 +902,11 @@ fn parse_log_artifact(path: &Path, artifact: &BundleArtifact) -> ArtifactParseOu
             let parse_errors = result.parse_errors;
             let records_truncated = result.entries.len() > MAX_LOG_RECORDS_PER_ARTIFACT;
             result.entries.truncate(MAX_LOG_RECORDS_PER_ARTIFACT);
+            result.entries.retain(|entry| {
+                serde_json::to_string(entry)
+                    .map(|serialized| !contains_hardware_hash(&serialized))
+                    .unwrap_or(false)
+            });
             let records = log_entries_to_records(
                 Path::new(&artifact.relative_path),
                 &source_artifact_id(artifact),
