@@ -547,7 +547,8 @@ fn malformed_raw_closer_boundary(bytes: &[u8], closer: usize) -> Option<usize> {
         return Some(closer);
     }
 
-    let argument_boundary = find_first_command_argument_boundary(bytes, suffix_start)?;
+    let argument_boundary =
+        find_non_sensitive_command_argument_boundary(bytes, suffix_start).unwrap_or(bytes.len());
     if bytes[suffix_start..argument_boundary]
         .iter()
         .any(|byte| !byte.is_ascii_whitespace())
@@ -566,32 +567,37 @@ fn ambiguous_terminal_suffix_boundary(bytes: &[u8], after_quote: usize) -> Optio
     }
 
     let suffix_start = container + 1;
-    let argument_boundary = find_last_command_argument_boundary(bytes, suffix_start);
+    let argument_boundary =
+        find_non_sensitive_command_argument_boundary(bytes, suffix_start).unwrap_or(bytes.len());
     bytes[suffix_start..argument_boundary]
         .iter()
         .any(|byte| !byte.is_ascii_whitespace())
         .then_some(argument_boundary)
 }
 
-fn find_last_command_argument_boundary(bytes: &[u8], start: usize) -> usize {
+fn find_non_sensitive_command_argument_boundary(bytes: &[u8], start: usize) -> Option<usize> {
+    // An option-shaped token is not automatically outside a malformed secret: the value can
+    // itself contain `-`, `--`, or `/` prefixes. Treat every secret-named option as part of the
+    // value, then preserve only the first non-sensitive option that follows the final one. If a
+    // sensitive option is last, callers fail closed through EOF. Reordering therefore consumes
+    // earlier safe-looking arguments instead of exposing the later credential-shaped suffix.
     let mut cursor = start;
-    let mut boundary = bytes.len();
+    let mut last_sensitive_option = None;
     while cursor < bytes.len() {
         if (cursor == start || bytes[cursor - 1].is_ascii_whitespace())
             && is_command_option_start(bytes, cursor)
+            && is_sensitive_command_option(bytes, cursor)
         {
-            boundary = command_argument_separator_start(bytes, start, cursor);
+            last_sensitive_option = Some(cursor);
         }
         cursor += 1;
     }
-    boundary
-}
 
-fn find_first_command_argument_boundary(bytes: &[u8], start: usize) -> Option<usize> {
-    let mut cursor = start;
+    let mut cursor = last_sensitive_option.map_or(start, |option| option + 1);
     while cursor < bytes.len() {
         if (cursor == start || bytes[cursor - 1].is_ascii_whitespace())
             && is_command_option_start(bytes, cursor)
+            && !is_sensitive_command_option(bytes, cursor)
         {
             return Some(command_argument_separator_start(bytes, start, cursor));
         }
@@ -616,6 +622,52 @@ fn is_command_option_start(bytes: &[u8], start: usize) -> bool {
         Some(b'/') => bytes.get(start + 1).is_some_and(u8::is_ascii_alphabetic),
         _ => false,
     }
+}
+
+fn is_sensitive_command_option(bytes: &[u8], start: usize) -> bool {
+    let mut cursor = start;
+    match bytes.get(cursor) {
+        Some(b'-') => {
+            cursor += 1;
+            if bytes.get(cursor) == Some(&b'-') {
+                cursor += 1;
+            }
+        }
+        Some(b'/') => cursor += 1,
+        _ => return false,
+    }
+
+    let name_start = cursor;
+    while bytes
+        .get(cursor)
+        .is_some_and(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+    {
+        cursor += 1;
+    }
+    if cursor == name_start {
+        return false;
+    }
+
+    let normalized = bytes[name_start..cursor]
+        .iter()
+        .filter(|byte| byte.is_ascii_alphanumeric())
+        .map(u8::to_ascii_lowercase)
+        .collect::<Vec<_>>();
+    [
+        b"token".as_slice(),
+        b"password".as_slice(),
+        b"secret".as_slice(),
+        b"authorization".as_slice(),
+        b"apikey".as_slice(),
+        b"credential".as_slice(),
+        b"signature".as_slice(),
+    ]
+    .iter()
+    .any(|marker| {
+        normalized
+            .windows(marker.len())
+            .any(|candidate| candidate == *marker)
+    }) || matches!(normalized.as_slice(), b"sig" | b"sas")
 }
 
 fn is_escaped_json_member_opener_with_width(

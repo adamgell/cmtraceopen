@@ -1088,6 +1088,126 @@ fn command_line_sanitizer_does_not_trust_option_shaped_ambiguous_secret_suffixes
 }
 
 #[test]
+fn command_line_sanitizer_requires_a_non_sensitive_option_after_ambiguous_secret_suffixes() {
+    let quote = |width: usize| format!("{}\"", "\\".repeat(width));
+
+    for (value_width, closer_width) in [(1, 3), (1, 7), (3, 7)] {
+        let member_quote = quote(value_width);
+        let wider_quote = quote(closer_width);
+        let prefix = format!(
+            "installer.exe --payload {{{member_quote}password{member_quote}:{member_quote}PREFIX_SECRET{wider_quote}}}"
+        );
+
+        for secret_option in ["-STILL_SECRET", "--STILL_SECRET", "/STILL_SECRET"] {
+            for (suffix, keeps_first_safe, keeps_second_safe) in [
+                (format!(" {secret_option} SECRET_VALUE"), false, false),
+                (
+                    format!(
+                        " {secret_option} SECRET_VALUE --keep-real-arg yes --other-real-arg two"
+                    ),
+                    true,
+                    true,
+                ),
+                (
+                    format!(" --keep-real-arg yes {secret_option} SECRET_VALUE"),
+                    false,
+                    false,
+                ),
+                (
+                    format!(
+                        " --keep-real-arg yes {secret_option} SECRET_VALUE --other-real-arg two"
+                    ),
+                    false,
+                    true,
+                ),
+                (
+                    format!(
+                        " --keep-real-arg yes --other-real-arg two {secret_option} SECRET_VALUE"
+                    ),
+                    false,
+                    false,
+                ),
+            ] {
+                let sanitized = sanitize_command_line(&format!("{prefix}{suffix}"));
+                for secret in ["PREFIX_SECRET", "STILL_SECRET", "SECRET_VALUE"] {
+                    assert!(
+                        !sanitized.contains(secret),
+                        "wider-close suffix leaked {secret} for {value_width}/{closer_width} {secret_option}: {sanitized}"
+                    );
+                }
+                assert_eq!(
+                    sanitized.contains("--keep-real-arg yes"),
+                    keeps_first_safe,
+                    "wider-close option ordering chose an unsafe boundary for {value_width}/{closer_width} {secret_option}: {sanitized}"
+                );
+                assert_eq!(
+                    sanitized.contains("--other-real-arg two"),
+                    keeps_second_safe,
+                    "wider-close option ordering lost the final safe boundary for {value_width}/{closer_width} {secret_option}: {sanitized}"
+                );
+            }
+        }
+    }
+
+    for value_width in [1, 3, 7] {
+        let member_quote = quote(value_width);
+        let prefix = format!(
+            "installer.exe --payload {{{member_quote}password{member_quote}:{member_quote}PREFIX_SECRET}}"
+        );
+
+        for secret_option in ["-STILL_SECRET", "--STILL_SECRET", "/STILL_SECRET"] {
+            for (suffix, keeps_first_safe, keeps_second_safe) in [
+                (format!(" {secret_option} SECRET_VALUE"), false, false),
+                (
+                    format!(
+                        " {secret_option} SECRET_VALUE --keep-real-arg yes --other-real-arg two"
+                    ),
+                    true,
+                    true,
+                ),
+                (
+                    format!(" --keep-real-arg yes {secret_option} SECRET_VALUE"),
+                    false,
+                    false,
+                ),
+                (
+                    format!(
+                        " --keep-real-arg yes {secret_option} SECRET_VALUE --other-real-arg two"
+                    ),
+                    false,
+                    true,
+                ),
+                (
+                    format!(
+                        " --keep-real-arg yes --other-real-arg two {secret_option} SECRET_VALUE"
+                    ),
+                    false,
+                    false,
+                ),
+            ] {
+                let sanitized = sanitize_command_line(&format!("{prefix}{suffix}"));
+                for secret in ["PREFIX_SECRET", "STILL_SECRET", "SECRET_VALUE"] {
+                    assert!(
+                        !sanitized.contains(secret),
+                        "raw-close suffix leaked {secret} for width {value_width} {secret_option}: {sanitized}"
+                    );
+                }
+                assert_eq!(
+                    sanitized.contains("--keep-real-arg yes"),
+                    keeps_first_safe,
+                    "raw-close option ordering chose an unsafe boundary for width {value_width} {secret_option}: {sanitized}"
+                );
+                assert_eq!(
+                    sanitized.contains("--other-real-arg two"),
+                    keeps_second_safe,
+                    "raw-close option ordering lost the final safe boundary for width {value_width} {secret_option}: {sanitized}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn command_line_sanitizer_redacts_raw_closer_suffix_before_single_dash_option() {
     let exact_review_seed =
         r#"{\"password\":\"PREFIX_SECRET}VISIBLE_SECRET_SUFFIX -keep-real-arg yes"#;
