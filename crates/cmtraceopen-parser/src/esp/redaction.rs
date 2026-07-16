@@ -39,19 +39,19 @@ fn authorization_digest_challenge_pattern() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
         Regex::new(
-            r#"(?i)(?P<prefix>(?:(?:--?|/)authorization["']?(?:\s*[=:]\s*|\s+)|\bauthorization["']?(?:\s*[=:]\s*|\s+)))digest(?:[ \t]+|\r?\n[ \t]+)[A-Z][A-Z0-9_-]*[ \t]*=[ \t]*(?:"[^"\r\n]*"|'[^'\r\n]*'|[^,\s\r\n]+)(?:[ \t]*,[ \t]*(?:\r?\n[ \t]+)?[A-Z][A-Z0-9_-]*[ \t]*=[ \t]*(?:"[^"\r\n]*"|'[^'\r\n]*'|[^,\s\r\n]+))+"#,
+            r#"(?i)(?P<prefix>(?:(?:--?|/)authorization["']?(?:\s*[=:]\s*|\s+)|\bauthorization["']?(?:\s*[=:]\s*|\s+)))digest(?:[ \t]+|\r?\n[ \t]+)[A-Z][A-Z0-9_-]*[ \t]*=[ \t]*(?:"[^"\r\n]*"|'[^'\r\n]*'|[^,;\s\r\n]+)(?:(?:[ \t]*[,;][ \t]*(?:\r?\n[ \t]+)?|\r?\n[ \t]+)[A-Z][A-Z0-9_-]*[ \t]*=[ \t]*(?:"[^"\r\n]*"|'[^'\r\n]*'|[^,;\s\r\n]+))*"#,
         )
         .expect("Authorization Digest challenge redaction pattern must compile")
     })
 }
 
-fn escaped_json_secret_member_pattern() -> &'static Regex {
+fn escaped_json_secret_member_key_pattern() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
         Regex::new(
-            r#"(?i)(?P<prefix>\\["](?:authorization|hardware[_-]?hash|device[_-]?hardware[_-]?data)\\["][ \t]*(?:\r?\n[ \t]*)?:[ \t]*(?:\r?\n[ \t]*)?)\\["](?:[^"\\\r\n]|\\[^"\r\n])*\\["]"#,
+            r#"(?i)\\["](?:authorization|hardware[_-]?hash|device[_-]?hardware[_-]?data)\\["][ \t\r\n]*:[ \t\r\n]*"#,
         )
-        .expect("escaped JSON secret-member redaction pattern must compile")
+        .expect("escaped JSON secret-member key pattern must compile")
     })
 }
 
@@ -72,6 +72,16 @@ fn authorization_scheme_and_credential_pattern() -> &'static Regex {
             r#"(?i)(?P<prefix>(?:(?:--?|/)authorization["']?(?:\s*[=:]\s*|\s+)|\bauthorization["']?(?:\s*[=:]\s*|\s+)))(?:"(?:basic|bearer|digest|apikey)\s+[^"\r\n]+"|'(?:basic|bearer|digest|apikey)\s+[^'\r\n]+'|(?:"(?:basic|bearer|digest|apikey)"|'(?:basic|bearer|digest|apikey)'|(?:basic|bearer|digest|apikey))[ \t]+(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s]+))"#,
         )
         .expect("authorization scheme-and-credential redaction pattern must compile")
+    })
+}
+
+fn generic_authorization_scheme_and_credential_pattern() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
+        Regex::new(
+            r#"(?i)(?P<prefix>(?:(?:--?|/)authorization["']?(?:\s*[=:]\s*|\s+)|\bauthorization["']?(?:\s*[=:]\s*|\s+)))(?P<scheme>[A-Z][A-Z0-9._~-]*)(?:[ \t]+|\r?\n[ \t]+)(?P<credential>[^\r\n]+)"#,
+        )
+        .expect("generic authorization scheme-and-credential pattern must compile")
     })
 }
 
@@ -99,7 +109,7 @@ fn bare_secret_argument_pattern() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
         Regex::new(
-            r#"(?i)(?P<prefix>\b(?P<name>password|passwd|pwd|secret|client[_-]?secret|api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|auth[_-]?token|bearer[_-]?token|token|tenant(?:id)?|entdmid|serial(?:number)?|hardware[_-]?hash|device[_-]?hardware[_-]?data)["']?\s+)(?P<value>"[^"]*"|'[^']*'|[^\s]+)"#,
+            r#"(?i)(?P<prefix>\b(?P<name>password|passwd|pwd|secret|client[_-]?secret|api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|auth[_-]?token|bearer[_-]?token|token|tenant(?:id)?|entdmid|serial(?:number)?|hardware[_-]?hash|device[_-]?hardware[_-]?data)["']?(?:[ \t]*(?:->|=>)[ \t]*|\s+))(?P<value>"[^"]*"|'[^']*'|[^\s]+)"#,
         )
         .expect("bare secret-argument redaction pattern must compile")
     })
@@ -109,10 +119,111 @@ fn standalone_authorization_scheme_pattern() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
         Regex::new(
-            r#"(?i)(?P<prefix>\b(?P<scheme>basic|bearer|digest|apikey)[ \t]+)(?:"(?P<double_quoted>[^"\r\n]+)"|'(?P<single_quoted>[^'\r\n]+)'|(?P<bare>[A-Z0-9._~+/=-]+))"#,
+            r#"(?i)(?P<prefix>\b(?P<scheme>basic|bearer|digest|apikey|negotiate|ntlm)[ \t]+)(?:"(?P<double_quoted>[^"\r\n]+)"|'(?P<single_quoted>[^'\r\n]+)'|(?P<bare>[A-Z0-9._~+/=-]+))"#,
         )
         .expect("standalone authorization-scheme redaction pattern must compile")
     })
+}
+
+fn redact_escaped_json_secret_members(value: &str) -> String {
+    let pattern = escaped_json_secret_member_key_pattern();
+    let mut redacted = String::with_capacity(value.len());
+    let mut cursor = 0;
+
+    while let Some(secret_key) = pattern.find_at(value, cursor) {
+        redacted.push_str(&value[cursor..secret_key.end()]);
+        redacted.push_str(r#"\"[redacted]\""#);
+        cursor = escaped_json_value_end(value, secret_key.end());
+        if cursor >= value.len() {
+            break;
+        }
+    }
+    redacted.push_str(&value[cursor..]);
+    redacted
+}
+
+fn escaped_json_value_end(value: &str, start: usize) -> usize {
+    let bytes = value.as_bytes();
+    if start >= bytes.len() {
+        return bytes.len();
+    }
+
+    if bytes[start] == b'\\' && bytes.get(start + 1) == Some(&b'"') {
+        return escaped_json_string_end(bytes, start + 2);
+    }
+    if bytes[start] == b'"' {
+        return json_string_end(bytes, start + 1);
+    }
+    if matches!(bytes[start], b'{' | b'[') {
+        return escaped_json_container_end(bytes, start);
+    }
+
+    bytes[start..]
+        .iter()
+        .position(|byte| matches!(byte, b',' | b'}' | b']' | b'\r' | b'\n'))
+        .map_or(bytes.len(), |offset| start + offset)
+}
+
+fn escaped_json_string_end(bytes: &[u8], start: usize) -> usize {
+    for index in start..bytes.len() {
+        if bytes[index] == b'"' && escaped_json_quote_is_delimiter(bytes, index) {
+            return index + 1;
+        }
+    }
+    bytes.len()
+}
+
+fn json_string_end(bytes: &[u8], start: usize) -> usize {
+    for index in start..bytes.len() {
+        if bytes[index] != b'"' {
+            continue;
+        }
+        let slash_count = preceding_backslash_count(bytes, index);
+        if slash_count % 2 == 0 {
+            return index + 1;
+        }
+    }
+    bytes.len()
+}
+
+fn escaped_json_container_end(bytes: &[u8], start: usize) -> usize {
+    let mut delimiters = Vec::with_capacity(4);
+    let mut in_string = false;
+
+    for index in start..bytes.len() {
+        if bytes[index] == b'"' && escaped_json_quote_is_delimiter(bytes, index) {
+            in_string = !in_string;
+            continue;
+        }
+        if in_string {
+            continue;
+        }
+        match bytes[index] {
+            b'{' => delimiters.push(b'}'),
+            b'[' => delimiters.push(b']'),
+            b'}' | b']' if delimiters.last() == Some(&bytes[index]) => {
+                delimiters.pop();
+                if delimiters.is_empty() {
+                    return index + 1;
+                }
+            }
+            b'}' | b']' => return bytes.len(),
+            _ => {}
+        }
+    }
+    bytes.len()
+}
+
+fn escaped_json_quote_is_delimiter(bytes: &[u8], quote_index: usize) -> bool {
+    preceding_backslash_count(bytes, quote_index) % 4 != 3
+}
+
+fn preceding_backslash_count(bytes: &[u8], index: usize) -> usize {
+    let mut cursor = index;
+    while cursor > 0 && bytes[cursor - 1] == b'\\' {
+        cursor -= 1;
+    }
+    index - cursor
 }
 
 fn forbidden_raw_content_pattern() -> &'static Regex {
@@ -423,16 +534,17 @@ fn pseudonymize_sids(value: &mut String, pseudonyms: &BTreeMap<String, String>) 
 
 fn redact_reference(value: &mut String, pseudonyms: &ReferencePseudonyms) {
     let bounded = bounded_text(value);
-    let redacted =
-        escaped_json_secret_member_pattern().replace_all(bounded, r#"${prefix}\"[redacted]\""#);
+    let redacted = redact_escaped_json_secret_members(bounded);
     let redacted =
         authorization_digest_challenge_pattern().replace_all(&redacted, "${prefix}[redacted]");
     let redacted =
         authorization_scheme_and_credential_pattern().replace_all(&redacted, "${prefix}[redacted]");
-    let redacted = authorization_pattern().replace_all(&redacted, "${prefix}[redacted]");
-    let redacted = secret_argument_pattern().replace_all(&redacted, "${prefix}[redacted]");
     let redacted =
         redact_standalone_authorization_credentials(&redacted, TextRedactionContext::Arbitrary);
+    let redacted =
+        redact_generic_authorization_credentials(&redacted, TextRedactionContext::Arbitrary);
+    let redacted = authorization_pattern().replace_all(&redacted, "${prefix}[redacted]");
+    let redacted = secret_argument_pattern().replace_all(&redacted, "${prefix}[redacted]");
     let redacted = redact_bare_secret_arguments(&redacted, TextRedactionContext::Arbitrary);
     let redacted =
         user_profile_path_pattern().replace_all(&redacted, |captures: &regex::Captures<'_>| {
@@ -874,15 +986,15 @@ fn redact_narrative_text(value: &str) -> String {
 
 fn redact_text_for_context(value: &str, context: TextRedactionContext) -> String {
     let bounded = bounded_text(value);
-    let redacted =
-        escaped_json_secret_member_pattern().replace_all(bounded, r#"${prefix}\"[redacted]\""#);
+    let redacted = redact_escaped_json_secret_members(bounded);
     let redacted =
         authorization_digest_challenge_pattern().replace_all(&redacted, "${prefix}[redacted]");
     let redacted =
         authorization_scheme_and_credential_pattern().replace_all(&redacted, "${prefix}[redacted]");
+    let redacted = redact_standalone_authorization_credentials(&redacted, context);
+    let redacted = redact_generic_authorization_credentials(&redacted, context);
     let redacted = authorization_pattern().replace_all(&redacted, "${prefix}[redacted]");
     let redacted = secret_argument_pattern().replace_all(&redacted, "${prefix}[redacted]");
-    let redacted = redact_standalone_authorization_credentials(&redacted, context);
     let redacted = redact_bare_secret_arguments(&redacted, context);
     let redacted = user_profile_path_pattern().replace_all(&redacted, "${prefix}[redacted]");
     let redacted = email_pattern().replace_all(&redacted, REDACTED);
@@ -1017,11 +1129,24 @@ fn normalize_label(value: &str) -> String {
 
 fn forbidden_raw_content(value: &str) -> bool {
     let bounded = bounded_text(value);
-    escaped_json_secret_member_pattern().is_match(bounded)
+    escaped_json_secret_member_key_pattern().is_match(bounded)
         || forbidden_raw_content_pattern().is_match(bounded)
         || authorization_scheme_and_credential_pattern().is_match(bounded)
+        || generic_authorization_scheme_and_credential_pattern().is_match(bounded)
         || standalone_authorization_scheme_pattern().is_match(bounded)
         || bare_authorization_pattern().is_match(bounded)
+}
+
+fn redact_generic_authorization_credentials(value: &str, context: TextRedactionContext) -> String {
+    generic_authorization_scheme_and_credential_pattern()
+        .replace_all(value, |captures: &regex::Captures<'_>| {
+            if bare_argument_is_safe_narrative(context, "authorization", &captures["scheme"]) {
+                captures[0].to_string()
+            } else {
+                format!("{}[redacted]", &captures["prefix"])
+            }
+        })
+        .into_owned()
 }
 
 fn redact_standalone_authorization_credentials(
