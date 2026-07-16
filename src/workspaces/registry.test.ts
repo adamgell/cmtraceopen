@@ -207,6 +207,7 @@ const espDefinition = {
   },
   toolbarAction: TestWorkspace,
   statusBarContent: TestWorkspace,
+  dock: TestWorkspace,
 } satisfies WorkspaceDefinition;
 
 function hasSidebar(workspace: WorkspaceDefinition): boolean {
@@ -230,10 +231,14 @@ describe("workspace definition contract", () => {
     expect(espDefinition.capabilities.liveAcquisition).toBe(true);
     expect(espDefinition.toolbarAction).toBe(TestWorkspace);
     expect(espDefinition.statusBarContent).toBe(TestWorkspace);
+    expect(espDefinition.dock).toBe(TestWorkspace);
     expectTypeOf(espDefinition.toolbarAction).toMatchTypeOf<
       LazyExoticComponent<ComponentType>
     >();
     expectTypeOf(espDefinition.statusBarContent).toMatchTypeOf<
+      LazyExoticComponent<ComponentType>
+    >();
+    expectTypeOf(espDefinition.dock).toMatchTypeOf<
       LazyExoticComponent<ComponentType>
     >();
   });
@@ -646,9 +651,10 @@ describe("ESP workspace app chrome", () => {
     expect(screen.queryByText("Elevation unavailable")).not.toBeInTheDocument();
   });
 
-  it("registers lazy ESP toolbar and status slots", () => {
+  it("registers lazy ESP toolbar, status, and live-evidence dock slots", () => {
     expect(espDiagnosticsWorkspace.toolbarAction).toBeDefined();
     expect(espDiagnosticsWorkspace.statusBarContent).toBeDefined();
+    expect(espDiagnosticsWorkspace.dock).toBeDefined();
     expect(espDiagnosticsWorkspace.toolbarAction).not.toBe(EspToolbarAction);
     expect(espDiagnosticsWorkspace.statusBarContent).not.toBe(
       EspStatusBarContent,

@@ -51,6 +51,8 @@ export interface WorkspaceDefinition {
   toolbarAction?: LazyExoticComponent<ComponentType>;
   /** Lazy-loaded workspace-specific status-bar content. */
   statusBarContent?: LazyExoticComponent<ComponentType>;
+  /** Lazy-loaded dock rendered beneath (or over) the active workspace body. */
+  dock?: LazyExoticComponent<ComponentType>;
   /** Boolean capability flags. Sidebar defaults to true; other flags default to false. */
   capabilities?: WorkspaceCapabilities;
   /** File dialog filters for the "Open File" action. */

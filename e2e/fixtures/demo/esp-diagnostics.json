@@ -759,6 +759,13 @@
             "displayName": "Contoso VPN Client from Graph",
             "trackedOnEnrollmentStatus": true,
             "status": null,
+            "intentState": {
+              "status": "skipped",
+              "requiredScope": null,
+              "apiVersion": "notRequested",
+              "data": null,
+              "error": null
+            },
             "assignments": [],
             "evidence": []
           }

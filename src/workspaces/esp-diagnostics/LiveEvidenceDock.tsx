@@ -27,6 +27,12 @@ export interface LiveEvidenceDockProps {
   snapshot: EspDiagnosticsSnapshot | null;
 }
 
+/** Registry slot that binds the shared dock to the app-lifetime ESP store. */
+export function EspLiveEvidenceDock() {
+  const snapshot = useEspDiagnosticsStore((state) => state.snapshot);
+  return <LiveEvidenceDock snapshot={snapshot} />;
+}
+
 const KEYBOARD_RESIZE_STEP = 24;
 
 function workspaceHeight(element: HTMLElement | null): number {
@@ -174,8 +180,9 @@ export function LiveEvidenceDock({ snapshot }: LiveEvidenceDockProps) {
       aria-label="Live evidence and logs"
       data-view-mode={viewMode}
       style={{
-        position: "relative",
-        zIndex: 4,
+        position: isFull ? "absolute" : "relative",
+        inset: isFull ? 0 : undefined,
+        zIndex: isFull ? 10 : 4,
         display: "grid",
         gridTemplateRows: "auto minmax(0, 1fr)",
         width: "100%",

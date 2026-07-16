@@ -649,7 +649,9 @@ test.describe("ESP Diagnostics workspace", () => {
     await openEspWorkspace(page);
     await analyzeWithConnectedGraph(page, cloneSnapshot());
 
-    await expect(page.getByText("Contoso VPN Client from Graph")).toBeVisible();
+    await expect(
+      page.getByText("Contoso VPN Client from Graph", { exact: true }),
+    ).toBeVisible();
     await expect(
       page
         .getByText("66666666-6666-4666-8666-666666666666", {

@@ -95,6 +95,11 @@ export const espDiagnosticsWorkspace: WorkspaceDefinition = {
       default: module.EspStatusBarContent,
     })),
   ),
+  dock: lazy(() =>
+    import("./LiveEvidenceDock").then((module) => ({
+      default: module.EspLiveEvidenceDock,
+    })),
+  ),
   capabilities: {
     sidebar: false,
     liveAcquisition: true,

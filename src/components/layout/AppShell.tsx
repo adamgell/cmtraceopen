@@ -438,11 +438,36 @@ export function AppShell() {
     // All other workspaces: registry lookup with lazy loading
     const workspace = getWorkspace(activeView);
     const WorkspaceComponent = workspace.component;
+    const WorkspaceDock = workspace.dock;
     return (
-      <div style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column" }}>
-        <Suspense fallback={null}>
-          <WorkspaceComponent />
-        </Suspense>
+      <div
+        style={{
+          position: "relative",
+          flex: 1,
+          minHeight: 0,
+          overflow: "hidden",
+          display: "flex",
+          flexDirection: "column",
+        }}
+      >
+        <div
+          style={{
+            flex: 1,
+            minHeight: 0,
+            overflow: "hidden",
+            display: "flex",
+            flexDirection: "column",
+          }}
+        >
+          <Suspense fallback={null}>
+            <WorkspaceComponent />
+          </Suspense>
+        </div>
+        {WorkspaceDock ? (
+          <Suspense fallback={null}>
+            <WorkspaceDock />
+          </Suspense>
+        ) : null}
       </div>
     );
   };
