@@ -7,7 +7,9 @@
 
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::fs::{self, Metadata, OpenOptions};
+#[cfg(not(unix))]
+use std::fs::OpenOptions;
+use std::fs::{self, File, Metadata};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
@@ -27,6 +29,7 @@ pub const DISCOVERY_INTERVAL: Duration = Duration::from_secs(2);
 pub const UPDATE_DEBOUNCE: Duration = Duration::from_millis(250);
 pub const MAX_SESSION_DURATION: Duration = Duration::from_secs(8 * 60 * 60);
 pub const MAX_DISCOVERY_PATH_FAILURES: usize = 256;
+pub const WINDOWS_SHARED_READ_WRITE_DELETE: u32 = 0x1 | 0x2 | 0x4;
 
 const SIGNATURE_BYTES: u64 = 4 * 1024;
 #[cfg(any(target_os = "windows", test))]
@@ -247,6 +250,65 @@ struct PathInspectionFailure {
     detail: String,
 }
 
+#[derive(Debug)]
+pub(crate) struct VerifiedFileOpenFailure {
+    pub(crate) kind: DiscoveryPathFailureKind,
+    pub(crate) detail: String,
+}
+
+impl VerifiedFileOpenFailure {
+    fn from_io(operation: &str, error: std::io::Error) -> Self {
+        #[cfg(unix)]
+        let no_follow_reparse = error.raw_os_error() == Some(libc::ELOOP);
+        #[cfg(not(unix))]
+        let no_follow_reparse = false;
+        let kind = if no_follow_reparse {
+            DiscoveryPathFailureKind::ReparseRejected
+        } else {
+            match error.kind() {
+                std::io::ErrorKind::NotFound => DiscoveryPathFailureKind::Missing,
+                std::io::ErrorKind::PermissionDenied => DiscoveryPathFailureKind::PermissionDenied,
+                _ => DiscoveryPathFailureKind::Failed,
+            }
+        };
+        Self {
+            kind,
+            detail: format!("{operation} failed: {error}"),
+        }
+    }
+
+    #[cfg(unix)]
+    fn from_unix_component_open(
+        path: &Path,
+        component: &std::ffi::OsStr,
+        is_directory: bool,
+        error: std::io::Error,
+    ) -> Self {
+        if error.raw_os_error() == Some(libc::ELOOP)
+            || (is_directory && error.raw_os_error() == Some(libc::ENOTDIR))
+        {
+            return Self {
+                kind: DiscoveryPathFailureKind::ReparseRejected,
+                detail: format!(
+                    "component-safe open rejected changed or linked component {:?} in {}: {error}",
+                    component,
+                    path.display()
+                ),
+            };
+        }
+        Self::from_io("component-safe open", error)
+    }
+}
+
+impl From<VerifiedFileOpenFailure> for PathInspectionFailure {
+    fn from(failure: VerifiedFileOpenFailure) -> Self {
+        Self {
+            kind: failure.kind,
+            detail: failure.detail,
+        }
+    }
+}
+
 impl PathInspectionFailure {
     fn from_io(operation: &str, error: std::io::Error) -> Self {
         let kind = match error.kind() {
@@ -258,17 +320,6 @@ impl PathInspectionFailure {
             kind,
             detail: format!("{operation} failed: {error}"),
         }
-    }
-
-    fn from_open_io(operation: &str, error: std::io::Error) -> Self {
-        #[cfg(unix)]
-        if error.raw_os_error() == Some(libc::ELOOP) {
-            return Self {
-                kind: DiscoveryPathFailureKind::ReparseRejected,
-                detail: format!("{operation} rejected a symlink or reparse point: {error}"),
-            };
-        }
-        Self::from_io(operation, error)
     }
 
     fn coverage(
@@ -896,41 +947,183 @@ fn is_high_signal_temp_name(file_name: &str) -> bool {
     .any(|signal| lower.contains(signal))
 }
 
-fn has_installer_signature(path: &Path) -> Result<bool, PathInspectionFailure> {
-    let mut options = OpenOptions::new();
-    options.read(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
-    }
-    #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::fs::OpenOptionsExt;
-        use windows::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT;
-
-        options
-            .share_mode(0x1 | 0x2 | 0x4)
-            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT.0);
-    }
-    let file = options
-        .open(path)
-        .map_err(|error| PathInspectionFailure::from_open_io("open installer signature", error))?;
-    let metadata = file.metadata().map_err(|error| {
-        PathInspectionFailure::from_io("inspect opened installer signature", error)
-    })?;
+pub(crate) fn open_verified_regular_file(path: &Path) -> Result<File, VerifiedFileOpenFailure> {
+    let file = open_no_follow_components(path)?;
+    let metadata = file
+        .metadata()
+        .map_err(|error| VerifiedFileOpenFailure::from_io("inspect opened file", error))?;
     if metadata_is_reparse_point(&metadata) {
-        return Err(PathInspectionFailure {
+        return Err(VerifiedFileOpenFailure {
             kind: DiscoveryPathFailureKind::ReparseRejected,
-            detail: "installer signature candidate is a symlink or reparse point".to_string(),
+            detail: "opened path is a symlink or reparse point".to_string(),
         });
     }
     if !metadata.is_file() {
-        return Err(PathInspectionFailure {
+        return Err(VerifiedFileOpenFailure {
             kind: DiscoveryPathFailureKind::NotRegularFile,
-            detail: "installer signature candidate is not a regular file".to_string(),
+            detail: "opened path is not a regular file".to_string(),
         });
     }
+    Ok(file)
+}
+
+#[cfg(unix)]
+fn open_no_follow_components(path: &Path) -> Result<File, VerifiedFileOpenFailure> {
+    use std::ffi::CString;
+    use std::os::fd::{AsRawFd, FromRawFd};
+    use std::os::unix::ffi::OsStrExt;
+    use std::path::Component;
+
+    let mut components = path.components();
+    if !matches!(components.next(), Some(Component::RootDir)) {
+        return Err(VerifiedFileOpenFailure {
+            kind: DiscoveryPathFailureKind::Failed,
+            detail: format!(
+                "component-safe open requires an absolute canonical path: {}",
+                path.display()
+            ),
+        });
+    }
+    let mut parts = Vec::new();
+    for component in components {
+        match component {
+            Component::Normal(part) => parts.push(part),
+            _ => {
+                return Err(VerifiedFileOpenFailure {
+                    kind: DiscoveryPathFailureKind::Failed,
+                    detail: format!(
+                        "component-safe open rejected a non-canonical path: {}",
+                        path.display()
+                    ),
+                });
+            }
+        }
+    }
+    if parts.is_empty() {
+        return Err(VerifiedFileOpenFailure {
+            kind: DiscoveryPathFailureKind::NotRegularFile,
+            detail: "component-safe open cannot tail the filesystem root".to_string(),
+        });
+    }
+
+    let mut directory = File::open(Path::new("/"))
+        .map_err(|error| VerifiedFileOpenFailure::from_io("open filesystem root", error))?;
+    for (index, part) in parts.iter().enumerate() {
+        let is_last = index + 1 == parts.len();
+        let component = CString::new(part.as_bytes()).map_err(|_| VerifiedFileOpenFailure {
+            kind: DiscoveryPathFailureKind::Failed,
+            detail: format!(
+                "component-safe open rejected a path component containing NUL: {}",
+                path.display()
+            ),
+        })?;
+        let mut flags = libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK;
+        if !is_last {
+            flags |= libc::O_DIRECTORY;
+        }
+        // SAFETY: `directory` is a live directory descriptor, `component` is
+        // NUL-terminated, and the returned descriptor is immediately owned by
+        // a `File` on success.
+        let descriptor = unsafe { libc::openat(directory.as_raw_fd(), component.as_ptr(), flags) };
+        if descriptor < 0 {
+            return Err(VerifiedFileOpenFailure::from_unix_component_open(
+                path,
+                part,
+                !is_last,
+                std::io::Error::last_os_error(),
+            ));
+        }
+        // SAFETY: `openat` returned a new owned descriptor on success.
+        let opened = unsafe { File::from_raw_fd(descriptor) };
+        if is_last {
+            return Ok(opened);
+        }
+        directory = opened;
+    }
+    unreachable!("a non-empty component list returns from its final component")
+}
+
+#[cfg(target_os = "windows")]
+fn open_no_follow_components(path: &Path) -> Result<File, VerifiedFileOpenFailure> {
+    use std::os::windows::fs::OpenOptionsExt;
+    use windows::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT;
+
+    let mut options = OpenOptions::new();
+    options
+        .read(true)
+        .share_mode(WINDOWS_SHARED_READ_WRITE_DELETE)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT.0);
+    let file = options
+        .open(path)
+        .map_err(|error| VerifiedFileOpenFailure::from_io("open verified file", error))?;
+    let opened_path = windows_final_path(&file)
+        .map_err(|error| VerifiedFileOpenFailure::from_io("resolve opened file handle", error))?;
+    if !opened_path_matches_expected_for_platform(path, &opened_path, true) {
+        return Err(VerifiedFileOpenFailure {
+            kind: DiscoveryPathFailureKind::ReparseRejected,
+            detail: format!(
+                "opened file resolved outside its approved canonical path (expected {}, opened {})",
+                path.display(),
+                opened_path.display()
+            ),
+        });
+    }
+    Ok(file)
+}
+
+#[cfg(target_os = "windows")]
+fn windows_final_path(file: &File) -> std::io::Result<PathBuf> {
+    use std::ffi::OsString;
+    use std::os::windows::ffi::OsStringExt;
+    use std::os::windows::io::AsRawHandle;
+    use windows::Win32::Foundation::HANDLE;
+    use windows::Win32::Storage::FileSystem::{
+        GetFinalPathNameByHandleW, FILE_NAME_NORMALIZED, GETFINALPATHNAMEBYHANDLE_FLAGS,
+        VOLUME_NAME_DOS,
+    };
+
+    let mut buffer = vec![0u16; 512];
+    loop {
+        // SAFETY: the handle is borrowed from the live `File`, and `buffer`
+        // remains valid and writable for the duration of the call.
+        let length = unsafe {
+            GetFinalPathNameByHandleW(
+                HANDLE(file.as_raw_handle()),
+                &mut buffer,
+                GETFINALPATHNAMEBYHANDLE_FLAGS(FILE_NAME_NORMALIZED.0 | VOLUME_NAME_DOS.0),
+            )
+        };
+        if length == 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        let length = length as usize;
+        if length < buffer.len() {
+            return Ok(PathBuf::from(OsString::from_wide(&buffer[..length])));
+        }
+        buffer.resize(length.saturating_add(1), 0);
+    }
+}
+
+#[cfg(not(any(unix, target_os = "windows")))]
+fn open_no_follow_components(path: &Path) -> Result<File, VerifiedFileOpenFailure> {
+    OpenOptions::new()
+        .read(true)
+        .open(path)
+        .map_err(|error| VerifiedFileOpenFailure::from_io("open verified file", error))
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn opened_path_matches_expected_for_platform(
+    expected: &Path,
+    opened: &Path,
+    windows_semantics: bool,
+) -> bool {
+    path_identity_for_platform(expected, windows_semantics)
+        == path_identity_for_platform(opened, windows_semantics)
+}
+
+fn has_installer_signature(path: &Path) -> Result<bool, PathInspectionFailure> {
+    let file = open_verified_regular_file(path).map_err(PathInspectionFailure::from)?;
 
     let mut bytes = Vec::new();
     file.take(SIGNATURE_BYTES)
@@ -1063,6 +1256,35 @@ fn deduplicate_paths(paths: Vec<PathBuf>) -> Vec<PathBuf> {
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
+    #[test]
+    fn installer_signature_rejects_replaced_parent_component() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().expect("approved root");
+        let approved_parent = root.path().join("approved");
+        fs::create_dir(&approved_parent).expect("create approved parent");
+        let approved_path = approved_parent.join("candidate.data");
+        fs::write(&approved_path, b"approved content without a signature\n")
+            .expect("write approved candidate");
+        let canonical_approved = fs::canonicalize(&approved_path).expect("canonical candidate");
+
+        let outside = tempfile::tempdir().expect("outside root");
+        fs::write(
+            outside.path().join("candidate.data"),
+            b"=== Verbose Logging Started\n",
+        )
+        .expect("write outside signature");
+        fs::rename(&approved_parent, root.path().join("approved-original"))
+            .expect("move approved parent");
+        symlink(outside.path(), &approved_parent).expect("replace parent with symlink");
+
+        let failure = has_installer_signature(&canonical_approved)
+            .expect_err("parent replacement must not expose the outside signature");
+
+        assert_eq!(failure.kind, DiscoveryPathFailureKind::ReparseRejected);
+    }
+
     #[test]
     fn permission_denied_io_error_maps_to_permission_denied_coverage() {
         let error = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
@@ -1079,6 +1301,22 @@ mod tests {
         let verbatim = path_identity_for_platform(Path::new(r"\\?\c:\temp\msi123.LOG"), true);
 
         assert_eq!(ordinary, verbatim);
+    }
+
+    #[test]
+    fn windows_handle_path_validation_rejects_redirected_parent() {
+        let expected = Path::new(r"\\?\C:\Users\Alice\AppData\Local\Temp\MSI123.log");
+
+        assert!(opened_path_matches_expected_for_platform(
+            expected,
+            Path::new(r"c:\users\alice\appdata\local\temp\msi123.LOG"),
+            true
+        ));
+        assert!(!opened_path_matches_expected_for_platform(
+            expected,
+            Path::new(r"\\?\C:\Windows\System32\config\SAM"),
+            true
+        ));
     }
 
     #[test]

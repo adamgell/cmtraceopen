@@ -6,12 +6,13 @@
 //! final eight MiB for an attachment or a single poll.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs::{File, Metadata, OpenOptions};
+use std::fs::{File, Metadata};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
+pub use crate::esp::discovery::WINDOWS_SHARED_READ_WRITE_DELETE;
 use crate::esp::discovery::{
-    metadata_is_reparse_point, DiscoveredLogSource, DiscoveryPathFailureKind,
+    open_verified_regular_file, DiscoveredLogSource, DiscoveryPathFailureKind,
     DiscoverySourceOrigin, MAX_ACTIVE_TAILS, MAX_INITIAL_READ_BYTES,
 };
 use crate::models::log_entry::{LogEntry, ParserSpecialization, RecordFraming};
@@ -20,7 +21,6 @@ use crate::parser::{self, ResolvedParser};
 const IME_RECORD_START: &str = "<![LOG[";
 const IME_RECORD_ATTRS_START: &str = "]LOG]!><";
 
-pub const WINDOWS_SHARED_READ_WRITE_DELETE: u32 = 0x1 | 0x2 | 0x4;
 pub const MAX_SESSION_TAIL_SOURCES: usize = 512;
 pub const MAX_DORMANT_TAIL_CURSORS: usize = MAX_ACTIVE_TAILS;
 
@@ -767,46 +767,12 @@ fn complete_unmatched_tail_len(text: &str) -> usize {
     }
 }
 
-fn open_shared_read(path: &Path) -> std::io::Result<File> {
-    let mut options = OpenOptions::new();
-    options.read(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
-    }
-    #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::fs::OpenOptionsExt;
-        use windows::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT;
-
-        options
-            .share_mode(WINDOWS_SHARED_READ_WRITE_DELETE)
-            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT.0);
-    }
-    options.open(path)
-}
-
 fn open_tail_file(path: &Path) -> Result<File, EspTailFailure> {
-    let file = open_shared_read(path).map_err(|error| tail_failure(path, "open", error))?;
-    let metadata = file
-        .metadata()
-        .map_err(|error| tail_failure(path, "inspect opened tail", error))?;
-    if metadata_is_reparse_point(&metadata) {
-        return Err(EspTailFailure {
-            path: path.to_path_buf(),
-            kind: DiscoveryPathFailureKind::ReparseRejected,
-            detail: "tail path is a symlink or reparse point".to_string(),
-        });
-    }
-    if !metadata.is_file() {
-        return Err(EspTailFailure {
-            path: path.to_path_buf(),
-            kind: DiscoveryPathFailureKind::NotRegularFile,
-            detail: "tail path is not a regular file".to_string(),
-        });
-    }
-    Ok(file)
+    open_verified_regular_file(path).map_err(|failure| EspTailFailure {
+        path: path.to_path_buf(),
+        kind: failure.kind,
+        detail: format!("open verified tail failed: {}", failure.detail),
+    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

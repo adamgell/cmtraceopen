@@ -2905,6 +2905,7 @@ fn tail_source(
     origin: DiscoverySourceOrigin,
     is_current: bool,
 ) -> DiscoveredLogSource {
+    let path = fs::canonicalize(&path).unwrap_or(path);
     DiscoveredLogSource {
         path,
         source_id: source_id.into(),
@@ -3010,6 +3011,8 @@ fn tail_distinguishes_truncation_from_file_rotation() {
     fs::write(&truncated_path, b"original content is deliberately long\n")
         .expect("write truncation fixture");
     fs::write(&rotated_path, b"old generation\n").expect("write rotation fixture");
+    let truncated_path = canonical_discovery_path(&truncated_path);
+    let rotated_path = canonical_discovery_path(&rotated_path);
     let mut tails = EspTailSet::new();
     tails.reconcile(&[
         tail_source(
@@ -3143,6 +3146,7 @@ fn tail_attaches_sources_once_and_enforces_priority_and_sixteen_tail_cap() {
     }
     let rotation_path = root.path().join("known.log.1");
     fs::write(&rotation_path, b"snapshot only\n").expect("write known rotation");
+    let rotation_path = canonical_discovery_path(&rotation_path);
     sources.push(tail_source(
         rotation_path.clone(),
         "known-rotation",
@@ -3152,6 +3156,7 @@ fn tail_attaches_sources_once_and_enforces_priority_and_sixteen_tail_cap() {
     ));
     let temp_path = root.path().join("MSI-temp.log");
     fs::write(&temp_path, b"snapshot only\n").expect("write temp candidate");
+    let temp_path = canonical_discovery_path(&temp_path);
     sources.push(tail_source(
         temp_path.clone(),
         "temp",
@@ -3229,6 +3234,7 @@ fn tail_reports_missing_selected_file_with_typed_failure() {
         true,
     );
     let mut tails = EspTailSet::new();
+    let expected_path = source.path.clone();
     tails.reconcile(std::slice::from_ref(&source));
     fs::remove_file(&path).expect("remove selected file");
 
@@ -3236,7 +3242,7 @@ fn tail_reports_missing_selected_file_with_typed_failure() {
 
     assert!(result.updates.is_empty());
     assert_eq!(result.failures.len(), 1);
-    assert_eq!(result.failures[0].path, path);
+    assert_eq!(result.failures[0].path, expected_path);
     assert_eq!(result.failures[0].kind, DiscoveryPathFailureKind::Missing);
 }
 
@@ -3267,6 +3273,44 @@ fn tail_rejects_reparse_replacement_with_typed_failure() {
 
     assert!(result.updates.is_empty());
     assert_eq!(result.failures.len(), 1);
+    assert_eq!(
+        result.failures[0].kind,
+        DiscoveryPathFailureKind::ReparseRejected
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn tail_rejects_replaced_parent_component_before_reading_outside_file() {
+    use std::os::unix::fs::symlink;
+
+    let root = tempdir().expect("tail root");
+    let approved_parent = root.path().join("approved");
+    fs::create_dir(&approved_parent).expect("create approved parent");
+    let approved_path = approved_parent.join("selected.log");
+    fs::write(&approved_path, b"approved\n").expect("write approved tail");
+    let canonical_approved = canonical_discovery_path(&approved_path);
+    let source = tail_source(
+        canonical_approved.clone(),
+        "selected",
+        0,
+        DiscoverySourceOrigin::ActiveProcess,
+        true,
+    );
+
+    let outside = tempdir().expect("outside root");
+    fs::write(outside.path().join("selected.log"), b"must not be read\n")
+        .expect("write outside tail");
+    fs::rename(&approved_parent, root.path().join("approved-original"))
+        .expect("move approved parent");
+    symlink(outside.path(), &approved_parent).expect("replace parent with symlink");
+
+    let mut tails = EspTailSet::new();
+    let result = tails.reconcile(&[source]);
+
+    assert!(result.attachments.is_empty());
+    assert_eq!(result.failures.len(), 1);
+    assert_eq!(result.failures[0].path, canonical_approved);
     assert_eq!(
         result.failures[0].kind,
         DiscoveryPathFailureKind::ReparseRejected
@@ -3355,6 +3399,7 @@ fn tail_attachment_budget_evicts_deterministically_for_a_later_active_msi_log() 
 
     let active_path = root.path().join("active-msiexec.log");
     fs::write(&active_path, b"active MSI\n").expect("write active MSI log");
+    let active_path = canonical_discovery_path(&active_path);
     let active = tail_source(
         active_path.clone(),
         "active-msiexec",
@@ -3393,6 +3438,7 @@ fn tail_selected_current_source_precedes_snapshot_attachment_budget() {
     }
     let current_path = root.path().join("current-configmgr.log");
     fs::write(&current_path, b"current\n").expect("write current source");
+    let current_path = canonical_discovery_path(&current_path);
     sources.push(tail_source(
         current_path.clone(),
         "current-configmgr",
@@ -3433,7 +3479,7 @@ fn tail_failed_priority_attachment_preserves_existing_budget_entry() {
         MAX_SESSION_TAIL_SOURCES
     );
 
-    let missing_path = root.path().join("missing-active-msiexec.log");
+    let missing_path = canonical_discovery_path(root.path()).join("missing-active-msiexec.log");
     snapshots.push(tail_source(
         missing_path.clone(),
         "missing-active-msiexec",
@@ -3513,8 +3559,10 @@ fn tail_dormant_cursor_cache_is_bounded_and_reattachment_is_an_explicit_reset() 
 #[test]
 fn tail_windows_file_opens_request_read_write_delete_sharing() {
     assert_eq!(WINDOWS_SHARED_READ_WRITE_DELETE, 0x1 | 0x2 | 0x4);
-    let source = include_str!("../src/esp/tailing.rs");
-    assert!(source.contains("share_mode(WINDOWS_SHARED_READ_WRITE_DELETE)"));
+    let discovery = include_str!("../src/esp/discovery.rs");
+    let tailing = include_str!("../src/esp/tailing.rs");
+    assert!(discovery.contains("share_mode(WINDOWS_SHARED_READ_WRITE_DELETE)"));
+    assert!(tailing.contains("open_verified_regular_file(path)"));
 }
 
 #[derive(Default)]
@@ -6039,10 +6087,10 @@ fn signature_and_tail_reads_require_platform_no_follow_flags() {
     let discovery = include_str!("../src/esp/discovery.rs");
     let tailing = include_str!("../src/esp/tailing.rs");
 
-    for source in [discovery, tailing] {
-        assert!(source.contains("libc::O_NOFOLLOW"));
-        assert!(source.contains("libc::O_NONBLOCK"));
-        assert!(source.contains("FILE_FLAG_OPEN_REPARSE_POINT"));
-    }
+    assert!(discovery.contains("libc::O_NOFOLLOW"));
+    assert!(discovery.contains("libc::O_NONBLOCK"));
+    assert!(discovery.contains("FILE_FLAG_OPEN_REPARSE_POINT"));
+    assert!(discovery.contains("GetFinalPathNameByHandleW"));
+    assert!(tailing.contains("open_verified_regular_file(path)"));
     assert!(!discovery.contains("File::open(path)"));
 }
