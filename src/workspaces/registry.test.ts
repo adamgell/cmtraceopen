@@ -4,14 +4,33 @@ import {
   type ComponentType,
   type LazyExoticComponent,
 } from "react";
-import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, expectTypeOf, it, vi } from "vitest";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  expectTypeOf,
+  it,
+  vi,
+} from "vitest";
+import { invoke } from "@tauri-apps/api/core";
+import { open } from "@tauri-apps/plugin-dialog";
 import { shouldRenderWorkspaceSidebar } from "../components/layout/AppShell";
 import { WorkspaceToolbarAction } from "../components/layout/Toolbar";
 import { WorkspaceStatusBarContent } from "../components/layout/StatusBar";
 import type { WorkspaceId } from "../types/log";
+import { useUiStore } from "../stores/ui-store";
+import { useEspDiagnosticsStore } from "./esp-diagnostics/esp-diagnostics-store";
+import { EspDiagnosticsWorkspace } from "./esp-diagnostics/EspDiagnosticsWorkspace";
+import {
+  espDiagnosticsWorkspace,
+  resolveEspEvidenceSource,
+  supportsEspLiveAcquisition,
+} from "./esp-diagnostics";
 import { eventLogWorkspace } from "./event-log";
 import { logWorkspace } from "./log";
+import { getAvailableWorkspaces, getWorkspace } from "./registry";
 import type { WorkspaceDefinition } from "./types";
 
 vi.mock("./event-log/evtx-store", () => ({
@@ -27,6 +46,10 @@ const TestStatusContent = lazy(async () => ({
 }));
 
 afterEach(cleanup);
+beforeEach(() => {
+  useEspDiagnosticsStore.setState(useEspDiagnosticsStore.getInitialState(), true);
+  useUiStore.setState({ currentPlatform: "windows", enabledWorkspaces: null });
+});
 
 const espWorkspaceId: WorkspaceId = "esp-diagnostics";
 
@@ -126,5 +149,142 @@ describe("registry-driven shell chrome", () => {
       folder: "Open folder...",
       placeholder: "Open...",
     });
+  });
+});
+
+describe("ESP workspace registration", () => {
+  it("registers cross-platform offline analysis with Windows-only live capability", () => {
+    expect(getWorkspace("esp-diagnostics")).toBe(espDiagnosticsWorkspace);
+    expect(espDiagnosticsWorkspace.label).toBe("ESP Diagnostics");
+    expect(espDiagnosticsWorkspace.platforms).toBe("all");
+    expect(espDiagnosticsWorkspace.capabilities).toMatchObject({
+      sidebar: false,
+      liveAcquisition: true,
+      tabStrip: false,
+    });
+    expect(getAvailableWorkspaces("windows").map((workspace) => workspace.id)).toContain(
+      "esp-diagnostics",
+    );
+    expect(getAvailableWorkspaces("macos").map((workspace) => workspace.id)).toContain(
+      "esp-diagnostics",
+    );
+    expect(getAvailableWorkspaces("linux").map((workspace) => workspace.id)).toContain(
+      "esp-diagnostics",
+    );
+    expect(supportsEspLiveAcquisition("windows")).toBe(true);
+    expect(supportsEspLiveAcquisition("macos")).toBe(false);
+    expect(supportsEspLiveAcquisition("linux")).toBe(false);
+  });
+
+  it("routes evidence folders, manifests, CABs, and ZIPs only", () => {
+    expect(
+      resolveEspEvidenceSource({ kind: "folder", path: "/captures/cmtrace-bundle" }),
+    ).toBe("/captures/cmtrace-bundle");
+    expect(
+      resolveEspEvidenceSource({
+        kind: "known",
+        sourceId: "cmtrace-evidence",
+        defaultPath: "/captures/known-bundle",
+        pathKind: "folder",
+      }),
+    ).toBe("/captures/known-bundle");
+    expect(
+      resolveEspEvidenceSource({ kind: "file", path: "/captures/manifest.json" }),
+    ).toBe("/captures/manifest.json");
+    expect(
+      resolveEspEvidenceSource({ kind: "file", path: "/captures/MDMDiagReport.CAB" }),
+    ).toBe("/captures/MDMDiagReport.CAB");
+    expect(
+      resolveEspEvidenceSource({ kind: "file", path: "/captures/evidence.zip" }),
+    ).toBe("/captures/evidence.zip");
+    expect(
+      resolveEspEvidenceSource({ kind: "file", path: "/captures/random.json" }),
+    ).toBeNull();
+    expect(
+      resolveEspEvidenceSource({ kind: "file", path: "/captures/ime.log" }),
+    ).toBeNull();
+  });
+
+  it("rejects an unsupported file selected from the workspace import action", async () => {
+    vi.mocked(open).mockResolvedValueOnce("/captures/random.json");
+    render(createElement(EspDiagnosticsWorkspace));
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Import captured evidence" }),
+    );
+
+    expect(
+      await screen.findByText(
+        "ESP Diagnostics accepts CMTrace evidence folders, manifest.json, CAB, or ZIP sources.",
+      ),
+    ).toBeInTheDocument();
+    expect(vi.mocked(invoke)).not.toHaveBeenCalledWith(
+      "analyze_esp_evidence",
+      expect.anything(),
+    );
+  });
+
+  it("renders a production idle workspace with explicit local actions", () => {
+    render(createElement(EspDiagnosticsWorkspace));
+
+    expect(
+      screen.getByRole("heading", { name: "ESP Diagnostics" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Import captured evidence" }),
+    ).toBeEnabled();
+    expect(
+      screen.getByRole("button", { name: "Start live diagnostics" }),
+    ).toBeEnabled();
+    expect(screen.getByText("Waiting for evidence")).toBeInTheDocument();
+  });
+
+  it("renders analyzing and error states without discarding the action surface", () => {
+    useEspDiagnosticsStore.getState().beginAnalysis("analysis-a");
+    const view = render(createElement(EspDiagnosticsWorkspace));
+    expect(screen.getByText("Analyzing captured evidence")).toBeInTheDocument();
+
+    act(() => {
+      useEspDiagnosticsStore.getState().fail("analysis-a", "Bundle is unreadable");
+    });
+    expect(screen.getByText("Bundle is unreadable")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Import captured evidence" }),
+    ).toBeEnabled();
+    view.unmount();
+  });
+
+  it("keeps an active live session under explicit stop control", async () => {
+    useEspDiagnosticsStore.setState({
+      phase: "live",
+      requestId: "live-a",
+      sessionId: "session-a",
+      sequence: 1,
+      snapshot: null,
+    });
+
+    render(createElement(EspDiagnosticsWorkspace));
+
+    expect(
+      screen.getByRole("button", { name: "Import evidence folder" }),
+    ).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "Import captured evidence" }),
+    ).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "Stop live diagnostics" }),
+    ).toBeEnabled();
+
+    await expect(
+      espDiagnosticsWorkspace.onOpenSource!(
+        { kind: "file", path: "/captures/manifest.json" },
+        "toolbar.open-file",
+      ),
+    ).rejects.toThrow("Stop live diagnostics before importing");
+    expect(useEspDiagnosticsStore.getState().sessionId).toBe("session-a");
+    expect(vi.mocked(invoke)).not.toHaveBeenCalledWith(
+      "analyze_esp_evidence",
+      expect.anything(),
+    );
   });
 });
