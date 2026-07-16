@@ -123,7 +123,7 @@ function displayClassified(
   return value.value;
 }
 
-function displayValue(
+export function displayEvidenceValue(
   value: string,
   sensitivity: EspSensitivity,
   revealSensitive: boolean,
@@ -690,7 +690,7 @@ export function buildEspEvidenceViewModel(
       [
         field(
           "Expected value",
-          displayValue(
+          displayEvidenceValue(
             entry.expectedValue ?? "Unknown",
             entry.sensitivity,
             revealSensitive,
@@ -747,7 +747,7 @@ export function buildEspEvidenceViewModel(
       [
         field(
           "Raw value",
-          displayValue(
+          displayEvidenceValue(
             displayObservationValue(record.rawValue),
             record.sensitivity,
             revealSensitive,
@@ -797,7 +797,7 @@ export function buildEspEvidenceViewModel(
               ...event.namedData.map((value) =>
                 field(
                   `Event data · ${value.name}`,
-                  displayValue(
+                  displayEvidenceValue(
                     value.value,
                     record.sensitivity,
                     revealSensitive,

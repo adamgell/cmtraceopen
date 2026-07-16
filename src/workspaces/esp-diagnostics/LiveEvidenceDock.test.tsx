@@ -977,6 +977,85 @@ describe("LiveEvidenceTable", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("masks sensitive raw messages while leaving public log text verbatim", () => {
+    useEspDiagnosticsStore.getState().setEvidenceViewMode("docked");
+    const publicLine = "  Public  log\ttext stays unchanged  ";
+    const sensitiveLine = "operator@contoso.example tenant-secret-value";
+    render(
+      <LiveEvidenceDock
+        snapshot={snapshot([
+          record("public-record", publicLine),
+          record("sensitive-record", sensitiveLine, {
+            sensitivity: "sensitive",
+          }),
+        ])}
+      />,
+    );
+
+    const publicMessage = screen
+      .getAllByRole("cell")
+      .find((cell) => cell.getAttribute("title") === publicLine);
+    if (!publicMessage) throw new Error("Expected the public raw message cell");
+    expect(publicMessage.textContent).toBe(publicLine);
+    expect(publicMessage).toHaveStyle({ whiteSpace: "pre" });
+
+    const maskedMessage = screen.getByText("Sensitive value · masked");
+    expect(maskedMessage).toBeVisible();
+    expect(maskedMessage).toHaveAttribute("title", "Sensitive value · masked");
+    expect(screen.queryByText(sensitiveLine)).not.toBeInTheDocument();
+    expect(
+      screen
+        .getAllByRole("cell")
+        .some((cell) => cell.getAttribute("title") === sensitiveLine),
+    ).toBe(false);
+  });
+
+  it("retains linked evidence semantics and provenance after masking a sensitive message", () => {
+    useEspDiagnosticsStore.getState().setEvidenceViewMode("docked");
+    const linkedReference = {
+      evidenceId: "linked-sensitive-evidence",
+      sourceArtifactId: "mdm-events",
+    };
+    const evidence = snapshot([
+      record("sensitive-linked-record", "fatal tenant-secret-value", {
+        sensitivity: "sensitive",
+        evidence: [linkedReference],
+      }),
+    ]);
+    evidence.activity = [
+      {
+        entryId: "linked-activity",
+        timestamp: {
+          rawText: "2026-07-15T20:00:00.000Z",
+          originalOffset: "+00:00",
+          normalizedUtc: "2026-07-15T20:00:00.000Z",
+          kind: "utc",
+        },
+        kind: "registration",
+        title: "Linked registration evidence",
+        detail: null,
+        status: null,
+        evidence: [linkedReference],
+      },
+    ];
+
+    render(<LiveEvidenceDock snapshot={evidence} />);
+
+    const row = screen.getByTestId("live-evidence-row");
+    expect(row).toHaveTextContent("Sensitive value · masked");
+    expect(row).not.toHaveTextContent("tenant-secret-value");
+    expect(row).toHaveTextContent(/error/i);
+    expect(row).toHaveTextContent(/registration/i);
+
+    fireEvent.click(row);
+    const provenance = screen.getByRole("complementary", {
+      name: "Raw evidence provenance",
+    });
+    expect(provenance).toHaveTextContent("sensitive-linked-record");
+    expect(provenance).toHaveTextContent("AppWorkload.log");
+    expect(provenance).toHaveTextContent("Sensitivity sensitive");
+  });
+
   it("pauses visual follow away from the bottom without pausing collection", () => {
     useEspDiagnosticsStore.getState().setEvidenceViewMode("docked");
     const view = render(
