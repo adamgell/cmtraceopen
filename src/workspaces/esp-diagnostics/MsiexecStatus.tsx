@@ -1,6 +1,7 @@
 import { tokens } from "@fluentui/react-components";
 import { LinkRegular, PulseRegular } from "@fluentui/react-icons";
 import { LOG_MONOSPACE_FONT_FAMILY, LOG_UI_FONT_FAMILY } from "../../lib/log-accessibility";
+import { requestEspEvidenceNavigation } from "./evidence-navigation";
 import type {
   EspDiagnosticsSnapshot,
   EspEvidenceRef,
@@ -70,15 +71,16 @@ function InstallerRow({
 
   return (
     <article
+      className="esp-msi-row"
+      data-testid="esp-installer-row"
       style={{
         display: "grid",
-        gridTemplateColumns: "minmax(188px, 0.8fr) minmax(260px, 1.5fr) minmax(178px, 0.9fr)",
         gap: 0,
         borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
         backgroundColor: tokens.colorNeutralBackground1,
       }}
     >
-      <div style={{ padding: "9px 11px", borderRight: `1px solid ${tokens.colorNeutralStroke2}` }}>
+      <div className="esp-msi-cell" style={{ padding: "9px 11px", borderRight: `1px solid ${tokens.colorNeutralStroke2}` }}>
         <div
           style={{
             display: "flex",
@@ -86,7 +88,7 @@ function InstallerRow({
             gap: 6,
             color: tokens.colorNeutralForeground3,
             fontFamily: LOG_MONOSPACE_FONT_FAMILY,
-            fontSize: 9,
+            fontSize: 10,
             fontWeight: 700,
             letterSpacing: "0.08em",
             textTransform: "uppercase",
@@ -105,7 +107,7 @@ function InstallerRow({
         </div>
       </div>
 
-      <div style={{ minWidth: 0, padding: "9px 11px", borderRight: `1px solid ${tokens.colorNeutralStroke2}` }}>
+      <div className="esp-msi-cell" style={{ minWidth: 0, padding: "9px 11px", borderRight: `1px solid ${tokens.colorNeutralStroke2}` }}>
         <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 10 }}>
           <strong style={{ overflow: "hidden", fontFamily: LOG_UI_FONT_FAMILY, fontSize: 12, textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
             {displayName}
@@ -122,7 +124,7 @@ function InstallerRow({
                     : tokens.colorPaletteGreenBorder2
               }`,
               fontFamily: LOG_MONOSPACE_FONT_FAMILY,
-              fontSize: 9,
+              fontSize: 10,
               fontWeight: 700,
               lineHeight: "14px",
             }}
@@ -161,11 +163,12 @@ function InstallerRow({
         </code>
       </div>
 
-      <div style={{ minWidth: 0, padding: "9px 11px" }}>
-        <div style={{ color: tokens.colorNeutralForeground3, fontFamily: LOG_MONOSPACE_FONT_FAMILY, fontSize: 9, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase" }}>
+      <div className="esp-msi-cell" style={{ minWidth: 0, padding: "9px 11px" }}>
+        <div style={{ color: tokens.colorNeutralForeground3, fontFamily: LOG_MONOSPACE_FONT_FAMILY, fontSize: 10, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase" }}>
           Active MSI log
         </div>
         <div
+          className="esp-msi-log-path"
           title={process.referencedLogPath ?? undefined}
           style={{
             marginTop: 4,
@@ -187,6 +190,12 @@ function InstallerRow({
             <a
               key={reference.evidenceId}
               href={`#evidence-${reference.evidenceId}`}
+              onClick={() =>
+                requestEspEvidenceNavigation({
+                  kind: "evidence",
+                  id: reference.evidenceId,
+                })
+              }
               aria-label={`Open evidence ${reference.evidenceId}`}
               title={`${reference.sourceArtifactId} · ${reference.evidenceId}`}
               style={{
@@ -195,7 +204,7 @@ function InstallerRow({
                 gap: 3,
                 color: tokens.colorBrandForegroundLink,
                 fontFamily: LOG_MONOSPACE_FONT_FAMILY,
-                fontSize: 9,
+                fontSize: 10,
                 fontWeight: 650,
                 textDecoration: "none",
               }}
@@ -222,6 +231,7 @@ export function MsiexecStatus({ snapshot }: MsiexecStatusProps) {
     <section
       role="region"
       aria-labelledby="msiexec-status-heading"
+      className="esp-msi-status"
       style={{
         border: `1px solid ${tokens.colorNeutralStroke1}`,
         backgroundColor: tokens.colorNeutralBackground1,
@@ -245,7 +255,7 @@ export function MsiexecStatus({ snapshot }: MsiexecStatusProps) {
         }}
       >
         <div>
-          <div style={{ color: tokens.colorNeutralForeground3, fontFamily: LOG_MONOSPACE_FONT_FAMILY, fontSize: 9, fontWeight: 700, letterSpacing: "0.09em", lineHeight: "11px", textTransform: "uppercase" }}>
+          <div style={{ color: tokens.colorNeutralForeground3, fontFamily: LOG_MONOSPACE_FONT_FAMILY, fontSize: 10, fontWeight: 700, letterSpacing: "0.09em", lineHeight: "11px", textTransform: "uppercase" }}>
             Installer process sampler
           </div>
           <h2 id="msiexec-status-heading" style={{ margin: 0, fontFamily: LOG_UI_FONT_FAMILY, fontSize: 13, fontWeight: 650, lineHeight: "17px" }}>

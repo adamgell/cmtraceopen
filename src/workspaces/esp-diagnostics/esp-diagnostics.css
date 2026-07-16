@@ -1,0 +1,49 @@
+.esp-diagnostics-workspace {
+  container-type: inline-size;
+}
+
+.esp-cockpit-panel-grid {
+  grid-template-columns: repeat(
+    auto-fit,
+    minmax(min(100%, 360px), 1fr)
+  );
+}
+
+.esp-msi-status {
+  min-width: 0;
+  overflow: hidden;
+  container-type: inline-size;
+}
+
+.esp-msi-row {
+  min-width: 0;
+  grid-template-columns:
+    minmax(160px, 0.8fr)
+    minmax(220px, 1.5fr)
+    minmax(150px, 0.9fr);
+}
+
+.esp-msi-cell {
+  min-width: 0;
+}
+
+@container (max-width: 680px) {
+  .esp-msi-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .esp-msi-cell {
+    border-right: 0 !important;
+    border-bottom: 1px solid var(--colorNeutralStroke2);
+  }
+
+  .esp-msi-cell:last-child {
+    border-bottom: 0;
+  }
+
+  .esp-msi-log-path {
+    overflow-wrap: anywhere !important;
+    text-overflow: clip !important;
+    white-space: normal !important;
+  }
+}

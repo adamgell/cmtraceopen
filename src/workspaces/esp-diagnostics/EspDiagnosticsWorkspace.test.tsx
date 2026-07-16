@@ -10,6 +10,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useUiStore } from "../../stores/ui-store";
 import { ActionCenter } from "./ActionCenter";
+import { EvidenceSections } from "./EvidenceSections";
 import { EspDiagnosticsWorkspace } from "./EspDiagnosticsWorkspace";
 import { EspPhaseProgress } from "./EspPhaseProgress";
 import { useEspDiagnosticsStore } from "./esp-diagnostics-store";
@@ -22,6 +23,7 @@ import type {
   EspInstallerCorrelation,
   EspNormalizedStatus,
   EspProcessObservation,
+  EspRawEvidenceRecord,
   EspScenario,
   EspTimelineEntry,
   EspTrackedKind,
@@ -299,6 +301,31 @@ function makeActivity(
   };
 }
 
+function makeRawRecord(
+  index: number,
+  evidenceId = `ev-raw-${index}`,
+): EspRawEvidenceRecord {
+  return {
+    recordId: `raw-record-${index}`,
+    provenance: {
+      sourceKind: "imeLog",
+      sourceArtifactId: "ime-app-workload",
+      filePath: "C:\\ProgramData\\Microsoft\\IntuneManagementExtension\\Logs\\IntuneManagementExtension.log",
+      lineNumber: index + 1,
+      recordNumber: index,
+      registry: null,
+      event: null,
+    },
+    sourceTimestamp: timestamp(`2026-07-15T20:07:${String(index % 60).padStart(2, "0")}Z`),
+    observedAtUtc: `2026-07-15T20:07:${String(index % 60).padStart(2, "0")}Z`,
+    rawValue: { text: `Raw record ${index}` },
+    sensitivity: "public",
+    parseState: "parsed",
+    accessState: "available",
+    evidence: [{ evidenceId, sourceArtifactId: "ime-app-workload" }],
+  };
+}
+
 function makeGraphOverlay(appId: string, displayName: string): EspGraphOverlay {
   const skipped = {
     status: "skipped" as const,
@@ -422,6 +449,28 @@ describe("ESP diagnostic cockpit frame", () => {
     });
     expect(screen.getByText("Analysis ready")).toBeInTheDocument();
     expect(screen.getByText("Connected", { selector: "strong" })).toBeInTheDocument();
+  });
+
+  it("computes elapsed time deterministically across multiple latest sessions", () => {
+    const base = makeSnapshot();
+    const deviceSession = base.sessions[0];
+    const userSession = {
+      ...deviceSession,
+      sessionId: "session-user-current",
+      scope: "user" as const,
+      startedAt: timestamp("2026-07-15T20:04:00Z"),
+      workloadIds: [],
+    };
+    showSnapshot(
+      makeSnapshot({
+        sessions: [userSession, deviceSession],
+      }),
+    );
+
+    render(<EspDiagnosticsWorkspace />);
+
+    expect(screen.getByText("8m 05s")).toBeInTheDocument();
+    expect(screen.queryByText("4m 05s")).not.toBeInTheDocument();
   });
 });
 
@@ -640,6 +689,84 @@ describe("scenario-aware phase progress", () => {
     expect(progress).toHaveTextContent("Agent bootstrap · Current");
     expect(progress).not.toHaveTextContent("Classic ESP phases");
   });
+
+  it("keeps not-started stages pending for both classic and Device Preparation", () => {
+    const view = render(
+      <EspPhaseProgress
+        snapshot={makeSnapshot({
+          phase: "notStarted",
+          sessions: [
+            {
+              ...makeSnapshot().sessions[0],
+              phase: "notStarted",
+            },
+          ],
+        })}
+      />,
+    );
+
+    const progress = screen.getByRole("region", { name: "ESP phase progress" });
+    expect(within(progress).getAllByText(/· Pending$/)).toHaveLength(3);
+    expect(progress).not.toHaveTextContent("· Current");
+    expect(progress).not.toHaveTextContent("· Complete");
+    expect(progress).not.toHaveTextContent("· Failed");
+
+    view.rerender(
+      <EspPhaseProgress
+        snapshot={makeSnapshot({
+          scenario: "autopilotDevicePreparationV2",
+          phase: "notStarted",
+          sessions: [
+            {
+              ...makeSnapshot().sessions[0],
+              kind: "devicePreparationV2",
+              phase: "notStarted",
+            },
+          ],
+        })}
+      />,
+    );
+    expect(within(progress).getAllByText(/· Pending$/)).toHaveLength(4);
+    expect(progress).not.toHaveTextContent("· Current");
+    expect(progress).not.toHaveTextContent("· Failed");
+  });
+
+  it("does not invent a failing stage when the snapshot only reports failure", () => {
+    const view = render(
+      <EspPhaseProgress
+        snapshot={makeSnapshot({
+          phase: "failed",
+          sessions: [
+            {
+              ...makeSnapshot().sessions[0],
+              phase: "failed",
+            },
+          ],
+        })}
+      />,
+    );
+
+    const progress = screen.getByRole("region", { name: "ESP phase progress" });
+    expect(progress).toHaveTextContent("Failing stage not identified");
+    expect(progress).not.toHaveTextContent("Account setup · Failed");
+
+    view.rerender(
+      <EspPhaseProgress
+        snapshot={makeSnapshot({
+          scenario: "autopilotDevicePreparationV2",
+          phase: "failed",
+          sessions: [
+            {
+              ...makeSnapshot().sessions[0],
+              kind: "devicePreparationV2",
+              phase: "failed",
+            },
+          ],
+        })}
+      />,
+    );
+    expect(progress).not.toHaveTextContent("Completion · Failed");
+  });
 });
 
 describe("independent live activity", () => {
@@ -695,6 +822,41 @@ describe("independent live activity", () => {
 });
 
 describe("workload table", () => {
+  it("uses nested status detail for visual severity and shows both wire statuses", () => {
+    const workload = makeWorkload(
+      "nested-failure",
+      "win32App",
+      "succeeded",
+      "Outer processing succeeded",
+      {
+        status: {
+          raw: "outer-success",
+          normalized: "succeeded",
+          display: "Outer processing succeeded",
+          detail: {
+            raw: "inner-failure-1603",
+            normalized: "failed",
+            display: "Installer failed",
+          },
+        },
+      },
+    );
+    render(
+      <EspWorkloadTable
+        snapshot={makeSnapshot({ workloads: [workload] })}
+      />,
+    );
+
+    const row = screen.getByRole("row", { name: /nested-failure/i });
+    expect(row).toHaveTextContent("Outer processing succeeded");
+    expect(row).toHaveTextContent("Detail · Installer failed");
+    expect(row).toHaveTextContent("Raw · outer-success");
+    expect(row).toHaveTextContent("Detail raw · inner-failure-1603");
+    expect(
+      row.querySelector('[data-effective-status="failed"]'),
+    ).toBeInTheDocument();
+  });
+
   it("renders every workload kind and wire state with scope, codes, unknowns, and additive Graph names", () => {
     const kinds: EspTrackedKind[] = [
       "msi",
@@ -903,6 +1065,8 @@ describe("complete single-page evidence composition", () => {
     const evidence = screen.getByRole("region", { name: "ESP evidence" });
     expect(evidence).toHaveTextContent("Sensitive values are masked by default");
     expect(evidence).toHaveTextContent("Copy remains unavailable for restricted values");
+
+    fireEvent.click(within(evidence).getByText("Identity and profile"));
     expect(evidence).toHaveTextContent("Sensitive value · masked");
     expect(evidence).toHaveTextContent("Restricted value · reveal unavailable");
     expect(evidence).not.toHaveTextContent("tenant-sensitive");
@@ -917,5 +1081,175 @@ describe("complete single-page evidence composition", () => {
     expect(
       within(evidence).getByRole("button", { name: "Mask sensitive values" }),
     ).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("does not mount evidence item bodies until their disclosure is opened", () => {
+    render(<EvidenceSections snapshot={makeSnapshot()} />);
+
+    const evidence = screen.getByRole("region", { name: "ESP evidence" });
+    expect(evidence).not.toHaveTextContent("managed-device-raw-guid");
+    expect(within(evidence).queryAllByTestId("esp-evidence-item")).toHaveLength(0);
+
+    fireEvent.click(within(evidence).getByText("Identity and profile"));
+
+    expect(evidence).toHaveTextContent("managed-device-raw-guid");
+    expect(within(evidence).getAllByTestId("esp-evidence-item").length).toBeGreaterThan(0);
+  });
+
+  it("bounds high-volume activity and raw-evidence DOM across live snapshot updates", () => {
+    const activity = Array.from({ length: 600 }, (_, index) =>
+      makeActivity(`bulk-${index}`, `2026-07-15T20:${String(index % 60).padStart(2, "0")}:00Z`),
+    );
+    const rawEvidence = Array.from({ length: 600 }, (_, index) =>
+      makeRawRecord(index),
+    );
+    const initial = makeSnapshot({ activity, rawEvidence });
+    showSnapshot(initial, { phase: "live" });
+    render(<EspDiagnosticsWorkspace />);
+
+    const live = screen.getByRole("region", { name: "Live activity" });
+    const evidence = screen.getByRole("region", { name: "ESP evidence" });
+    expect(live).toHaveTextContent("600 occurrences");
+    expect(within(live).getAllByTestId("esp-activity-entry").length).toBeLessThanOrEqual(80);
+    expect(within(evidence).queryAllByTestId("esp-evidence-item")).toHaveLength(0);
+
+    fireEvent.click(within(evidence).getByText("Raw provenance"));
+    const rawDisclosure = within(evidence)
+      .getByText("Raw provenance")
+      .closest("details");
+    expect(rawDisclosure).not.toBeNull();
+    expect(
+      within(rawDisclosure as HTMLElement).getAllByTestId("esp-evidence-item")
+        .length,
+    ).toBeLessThanOrEqual(80);
+    expect(rawDisclosure).toHaveTextContent("Showing 1–80 of 600 records");
+
+    act(() => {
+      useEspDiagnosticsStore.setState({
+        snapshot: {
+          ...initial,
+          activity: [...activity, makeActivity("bulk-600", "2026-07-15T21:00:00Z")],
+          rawEvidence: [...rawEvidence, makeRawRecord(600)],
+        },
+      });
+    });
+
+    expect(live).toHaveTextContent("601 occurrences");
+    expect(within(live).getAllByTestId("esp-activity-entry").length).toBeLessThanOrEqual(80);
+    expect(rawDisclosure).toHaveTextContent("601 records");
+    expect(
+      within(rawDisclosure as HTMLElement).getAllByTestId("esp-evidence-item")
+        .length,
+    ).toBeLessThanOrEqual(80);
+    expect(useEspDiagnosticsStore.getState().snapshot?.activity).toHaveLength(601);
+    expect(useEspDiagnosticsStore.getState().snapshot?.rawEvidence).toHaveLength(601);
+  });
+
+  it("navigates duplicate evidence references to one canonical raw target", async () => {
+    const sharedEvidenceId = "ev-shared-canonical";
+    const finding = {
+      ...makeFinding(),
+      evidence: [
+        { evidenceId: sharedEvidenceId, sourceArtifactId: "ime-app-workload" },
+      ],
+    };
+    const workload = makeWorkload(
+      "shared-evidence-workload",
+      "win32App",
+      "failed",
+      "Failed",
+      {
+        evidence: [
+          { evidenceId: sharedEvidenceId, sourceArtifactId: "ime-app-workload" },
+        ],
+      },
+    );
+    showSnapshot(
+      makeSnapshot({
+        findings: [finding],
+        workloads: [workload],
+        rawEvidence: [makeRawRecord(1, sharedEvidenceId)],
+      }),
+    );
+    render(<EspDiagnosticsWorkspace />);
+
+    expect(document.querySelectorAll(`#evidence-${sharedEvidenceId}`)).toHaveLength(0);
+    fireEvent.click(
+      within(screen.getByRole("region", { name: "Action center" })).getByRole(
+        "link",
+        { name: `Open evidence ${sharedEvidenceId}` },
+      ),
+    );
+
+    await waitFor(() =>
+      expect(document.querySelectorAll(`#evidence-${sharedEvidenceId}`)).toHaveLength(1),
+    );
+    const target = document.getElementById(`evidence-${sharedEvidenceId}`);
+    expect(target).not.toBeNull();
+    expect(target).toHaveFocus();
+    expect(target?.closest("details")).toHaveAttribute("open");
+    expect(target?.closest('[data-evidence-item-id="raw-record-1"]')).not.toBeNull();
+    const ids = Array.from(document.querySelectorAll<HTMLElement>("[id]"))
+      .map((element) => element.id)
+      .filter(Boolean);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it("navigates orphan process evidence to an explicit reference-only target", async () => {
+    showSnapshot();
+    render(<EspDiagnosticsWorkspace />);
+
+    const installer = screen.getByRole("region", {
+      name: "What MSIEXEC is doing now",
+    });
+    fireEvent.click(
+      within(installer).getByRole("link", {
+        name: "Open evidence ev-process-8044",
+      }),
+    );
+
+    await waitFor(() =>
+      expect(document.getElementById("evidence-ev-process-8044")).not.toBeNull(),
+    );
+    const target = document.getElementById("evidence-ev-process-8044");
+    expect(target).toHaveFocus();
+    expect(target?.closest("details")).toHaveAttribute("open");
+    expect(
+      target?.closest('[data-evidence-item-id="reference-only-ev-process-8044"]'),
+    ).toHaveTextContent("Raw record not included in this snapshot");
+  });
+
+  it("exposes responsive panel and installer reflow hooks", () => {
+    showSnapshot();
+    render(<EspDiagnosticsWorkspace />);
+
+    expect(screen.getByRole("main")).toHaveClass("esp-diagnostics-workspace");
+    expect(document.querySelectorAll(".esp-cockpit-panel-grid")).toHaveLength(2);
+
+    const installer = screen.getByRole("region", {
+      name: "What MSIEXEC is doing now",
+    });
+    expect(installer).toHaveClass("esp-msi-status");
+
+    const row = within(installer).getByTestId("esp-installer-row");
+    expect(row).toHaveClass("esp-msi-row");
+    expect(row.querySelectorAll(":scope > .esp-msi-cell")).toHaveLength(3);
+    expect(row.querySelector(".esp-msi-log-path")).not.toBeNull();
+  });
+
+  it("does not render diagnostic labels below ten pixels", () => {
+    showSnapshot();
+    const { container } = render(<EspDiagnosticsWorkspace />);
+
+    const undersizedLabels = Array.from(
+      container.querySelectorAll<HTMLElement>("*"),
+    )
+      .filter((element) => {
+        const fontSize = Number.parseFloat(element.style.fontSize);
+        return Number.isFinite(fontSize) && fontSize > 0 && fontSize < 10;
+      })
+      .map((element) => element.textContent?.trim().slice(0, 80));
+
+    expect(undersizedLabels).toEqual([]);
   });
 });

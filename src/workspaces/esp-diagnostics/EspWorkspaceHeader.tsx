@@ -50,9 +50,19 @@ const graphStateLabels: Record<EspGraphPhase, string> = {
 function elapsedLabel(snapshot: EspDiagnosticsSnapshot | null): string {
   if (!snapshot) return "Not available";
 
-  const currentSession =
-    snapshot.sessions.find((session) => session.isLatest) ??
-    snapshot.sessions[snapshot.sessions.length - 1];
+  const latestSessions = snapshot.sessions.filter((session) => session.isLatest);
+  const candidates = latestSessions.length > 0 ? latestSessions : snapshot.sessions;
+  const currentSession = [...candidates].sort((left, right) => {
+    const leftStart = Date.parse(
+      left.startedAt?.normalizedUtc ?? left.startedAt?.rawText ?? "",
+    );
+    const rightStart = Date.parse(
+      right.startedAt?.normalizedUtc ?? right.startedAt?.rawText ?? "",
+    );
+    const leftValue = Number.isFinite(leftStart) ? leftStart : Number.MAX_SAFE_INTEGER;
+    const rightValue = Number.isFinite(rightStart) ? rightStart : Number.MAX_SAFE_INTEGER;
+    return leftValue - rightValue || left.sessionId.localeCompare(right.sessionId);
+  })[0];
   const startedAt = currentSession?.startedAt?.normalizedUtc;
   if (!startedAt) return "Not available";
 
@@ -109,7 +119,7 @@ function Metric({ label, value, detail, accent = false }: MetricProps) {
         style={{
           color: tokens.colorNeutralForeground3,
           fontFamily: LOG_MONOSPACE_FONT_FAMILY,
-          fontSize: 9,
+          fontSize: 10,
           fontWeight: 700,
           letterSpacing: "0.1em",
           lineHeight: "13px",
@@ -144,7 +154,7 @@ function Metric({ label, value, detail, accent = false }: MetricProps) {
             overflow: "hidden",
             color: tokens.colorNeutralForeground3,
             fontFamily: LOG_MONOSPACE_FONT_FAMILY,
-            fontSize: 9,
+            fontSize: 10,
             lineHeight: "12px",
             textOverflow: "ellipsis",
             whiteSpace: "nowrap",
@@ -206,7 +216,7 @@ export function EspWorkspaceHeader({
             style={{
               color: tokens.colorBrandForeground1,
               fontFamily: LOG_MONOSPACE_FONT_FAMILY,
-              fontSize: 9,
+              fontSize: 10,
               fontWeight: 700,
               letterSpacing: "0.13em",
               lineHeight: "12px",

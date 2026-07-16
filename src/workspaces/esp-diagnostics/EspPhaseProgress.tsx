@@ -26,6 +26,7 @@ function currentStepIndex(phase: EspPhase, isDevicePreparationV2: boolean) {
   if (isDevicePreparationV2) {
     switch (phase) {
       case "notStarted":
+        return -1;
       case "devicePreparation":
         return 0;
       case "deviceSetup":
@@ -35,7 +36,7 @@ function currentStepIndex(phase: EspPhase, isDevicePreparationV2: boolean) {
       case "completed":
         return 4;
       case "failed":
-        return 3;
+        return -1;
       case "unknown":
         return -1;
     }
@@ -43,6 +44,7 @@ function currentStepIndex(phase: EspPhase, isDevicePreparationV2: boolean) {
 
   switch (phase) {
     case "notStarted":
+      return -1;
     case "devicePreparation":
       return 0;
     case "deviceSetup":
@@ -52,7 +54,7 @@ function currentStepIndex(phase: EspPhase, isDevicePreparationV2: boolean) {
     case "completed":
       return 3;
     case "failed":
-      return 2;
+      return -1;
     case "unknown":
       return -1;
   }
@@ -62,9 +64,12 @@ function stateForStep(
   stepIndex: number,
   currentIndex: number,
   phase: EspPhase,
+  failureObserved: boolean,
 ): StepState {
+  if (phase === "notStarted") return "Pending";
+  if (failureObserved && currentIndex < 0) return "Unknown";
   if (phase === "unknown") return "Unknown";
-  if (phase === "failed" && stepIndex === currentIndex) return "Failed";
+  if (failureObserved && stepIndex === currentIndex) return "Failed";
   if (currentIndex >= 0 && stepIndex < currentIndex) return "Complete";
   if (stepIndex === currentIndex) return "Current";
   return "Pending";
@@ -113,7 +118,16 @@ export function EspPhaseProgress({ snapshot }: EspPhaseProgressProps) {
   const steps = isDevicePreparationV2
     ? devicePreparationSteps
     : classicSteps;
-  const currentIndex = currentStepIndex(snapshot.phase, isDevicePreparationV2);
+  const failureObserved = snapshot.phase === "failed";
+  const explicitFailurePhase = failureObserved
+    ? latestSession?.phase === "devicePreparation" ||
+      latestSession?.phase === "deviceSetup" ||
+      latestSession?.phase === "accountSetup"
+      ? latestSession.phase
+      : null
+    : null;
+  const progressPhase = explicitFailurePhase ?? snapshot.phase;
+  const currentIndex = currentStepIndex(progressPhase, isDevicePreparationV2);
 
   return (
     <section
@@ -142,7 +156,7 @@ export function EspPhaseProgress({ snapshot }: EspPhaseProgressProps) {
             style={{
               color: tokens.colorNeutralForeground3,
               fontFamily: LOG_MONOSPACE_FONT_FAMILY,
-              fontSize: 9,
+              fontSize: 10,
               fontWeight: 700,
               letterSpacing: "0.09em",
               lineHeight: "11px",
@@ -181,7 +195,12 @@ export function EspPhaseProgress({ snapshot }: EspPhaseProgressProps) {
         }}
       >
         {steps.map((step, index) => {
-          const state = stateForStep(index, currentIndex, snapshot.phase);
+          const state = stateForStep(
+            index,
+            currentIndex,
+            progressPhase,
+            failureObserved,
+          );
           return (
             <li
               key={step.id}
@@ -221,13 +240,15 @@ export function EspPhaseProgress({ snapshot }: EspPhaseProgressProps) {
           padding: "5px 9px",
           borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
           color: tokens.colorNeutralForeground3,
-          fontSize: 9,
+          fontSize: 10,
           lineHeight: "13px",
         }}
       >
-        {isDevicePreparationV2
-          ? "Device Preparation tracks agent, scripts, applications, and certificates under its own timeout and skip rules."
-          : "Classic ESP evaluates device and account setup as separate blocking phases."}
+        {failureObserved && !explicitFailurePhase
+          ? "Failure observed · Failing stage not identified in the collected evidence."
+          : isDevicePreparationV2
+            ? "Device Preparation tracks agent, scripts, applications, and certificates under its own timeout and skip rules."
+            : "Classic ESP evaluates device and account setup as separate blocking phases."}
       </div>
     </section>
   );

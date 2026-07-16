@@ -27,6 +27,7 @@ import {
 } from "./index";
 import { LiveActivity } from "./LiveActivity";
 import { MsiexecStatus } from "./MsiexecStatus";
+import "./esp-diagnostics.css";
 
 function createRequestId(prefix: "analysis" | "live"): string {
   return `esp-${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
@@ -165,6 +166,7 @@ export function EspDiagnosticsWorkspace() {
   return (
     <main
       aria-labelledby="esp-diagnostics-heading"
+      className="esp-diagnostics-workspace"
       style={{
         width: "100%",
         height: "100%",
@@ -212,9 +214,9 @@ export function EspDiagnosticsWorkspace() {
         {snapshot ? (
           <>
             <div
+              className="esp-cockpit-panel-grid"
               style={{
                 display: "grid",
-                gridTemplateColumns: "repeat(auto-fit, minmax(360px, 1fr))",
                 alignItems: "start",
                 gap: 10,
               }}
@@ -226,9 +228,9 @@ export function EspDiagnosticsWorkspace() {
             <EspWorkloadTable snapshot={snapshot} />
 
             <div
+              className="esp-cockpit-panel-grid"
               style={{
                 display: "grid",
-                gridTemplateColumns: "repeat(auto-fit, minmax(360px, 1fr))",
                 alignItems: "start",
                 gap: 10,
               }}
@@ -269,7 +271,7 @@ export function EspDiagnosticsWorkspace() {
                 style={{
                   color: tokens.colorNeutralForeground3,
                   fontFamily: LOG_MONOSPACE_FONT_FAMILY,
-                  fontSize: 9,
+                  fontSize: 10,
                   fontWeight: 700,
                   letterSpacing: "0.1em",
                   textTransform: "uppercase",

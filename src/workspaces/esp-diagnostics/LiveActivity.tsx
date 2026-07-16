@@ -1,6 +1,8 @@
-import { tokens } from "@fluentui/react-components";
+import { useMemo, useState } from "react";
+import { Button, tokens } from "@fluentui/react-components";
 import { LinkRegular, PulseRegular } from "@fluentui/react-icons";
 import { LOG_MONOSPACE_FONT_FAMILY, LOG_UI_FONT_FAMILY } from "../../lib/log-accessibility";
+import { requestEspEvidenceNavigation } from "./evidence-navigation";
 import type { EspTimelineEntry } from "./types";
 
 function timestampValue(entry: EspTimelineEntry): number {
@@ -42,11 +44,24 @@ interface LiveActivityProps {
   entries: EspTimelineEntry[];
 }
 
+export const ESP_ACTIVITY_WINDOW_SIZE = 80;
+
 export function LiveActivity({ entries }: LiveActivityProps) {
-  const orderedEntries = [...entries].sort(
-    (left, right) =>
-      timestampValue(right) - timestampValue(left) ||
-      left.entryId.localeCompare(right.entryId),
+  const [windowStart, setWindowStart] = useState(0);
+  const orderedEntries = useMemo(
+    () =>
+      [...entries].sort(
+        (left, right) =>
+          timestampValue(right) - timestampValue(left) ||
+          left.entryId.localeCompare(right.entryId),
+      ),
+    [entries],
+  );
+  const maximumStart = Math.max(0, orderedEntries.length - ESP_ACTIVITY_WINDOW_SIZE);
+  const safeStart = Math.min(windowStart, maximumStart);
+  const visibleEntries = orderedEntries.slice(
+    safeStart,
+    safeStart + ESP_ACTIVITY_WINDOW_SIZE,
   );
 
   return (
@@ -76,7 +91,7 @@ export function LiveActivity({ entries }: LiveActivityProps) {
             style={{
               color: tokens.colorNeutralForeground3,
               fontFamily: LOG_MONOSPACE_FONT_FAMILY,
-              fontSize: 9,
+              fontSize: 10,
               fontWeight: 700,
               letterSpacing: "0.09em",
               lineHeight: "11px",
@@ -120,10 +135,54 @@ export function LiveActivity({ entries }: LiveActivityProps) {
           yet.
         </div>
       ) : (
-        <ol style={{ margin: 0, padding: 0, listStyle: "none" }}>
-          {orderedEntries.map((entry) => (
+        <>
+          {orderedEntries.length > ESP_ACTIVITY_WINDOW_SIZE ? (
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 8,
+                padding: "5px 9px",
+                borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
+                color: tokens.colorNeutralForeground2,
+                fontSize: 10,
+              }}
+            >
+              <span>
+                Showing {safeStart + 1}–{Math.min(safeStart + ESP_ACTIVITY_WINDOW_SIZE, orderedEntries.length)} of {orderedEntries.length} occurrences
+              </span>
+              <span style={{ display: "inline-flex", gap: 5 }}>
+                <Button
+                  size="small"
+                  disabled={safeStart === 0}
+                  onClick={() =>
+                    setWindowStart((current) =>
+                      Math.max(0, current - ESP_ACTIVITY_WINDOW_SIZE),
+                    )
+                  }
+                >
+                  Newer
+                </Button>
+                <Button
+                  size="small"
+                  disabled={safeStart >= maximumStart}
+                  onClick={() =>
+                    setWindowStart((current) =>
+                      Math.min(maximumStart, current + ESP_ACTIVITY_WINDOW_SIZE),
+                    )
+                  }
+                >
+                  Older
+                </Button>
+              </span>
+            </div>
+          ) : null}
+          <ol style={{ margin: 0, padding: 0, listStyle: "none" }}>
+          {visibleEntries.map((entry) => (
             <li
               key={entry.entryId}
+              data-testid="esp-activity-entry"
               style={{
                 display: "grid",
                 gridTemplateColumns: "58px 86px minmax(0, 1fr) auto",
@@ -148,7 +207,7 @@ export function LiveActivity({ entries }: LiveActivityProps) {
                 style={{
                   color: tokens.colorBrandForeground1,
                   fontFamily: LOG_MONOSPACE_FONT_FAMILY,
-                  fontSize: 9,
+                  fontSize: 10,
                   fontWeight: 700,
                   lineHeight: "14px",
                   textTransform: "uppercase",
@@ -174,7 +233,7 @@ export function LiveActivity({ entries }: LiveActivityProps) {
                       style={{
                         color: tokens.colorNeutralForeground3,
                         fontFamily: LOG_MONOSPACE_FONT_FAMILY,
-                        fontSize: 9,
+                        fontSize: 10,
                       }}
                     >
                       {entry.status.display}
@@ -187,7 +246,7 @@ export function LiveActivity({ entries }: LiveActivityProps) {
                       marginTop: 1,
                       overflow: "hidden",
                       color: tokens.colorNeutralForeground3,
-                      fontSize: 9,
+                      fontSize: 10,
                       lineHeight: "13px",
                       textOverflow: "ellipsis",
                       whiteSpace: "nowrap",
@@ -203,6 +262,12 @@ export function LiveActivity({ entries }: LiveActivityProps) {
                   <a
                     key={reference.evidenceId}
                     href={`#evidence-${reference.evidenceId}`}
+                    onClick={() =>
+                      requestEspEvidenceNavigation({
+                        kind: "evidence",
+                        id: reference.evidenceId,
+                      })
+                    }
                     aria-label={`Open evidence ${reference.evidenceId}`}
                     title={`${reference.sourceArtifactId} · ${reference.evidenceId}`}
                     style={{ color: tokens.colorBrandForegroundLink }}
@@ -213,7 +278,8 @@ export function LiveActivity({ entries }: LiveActivityProps) {
               </div>
             </li>
           ))}
-        </ol>
+          </ol>
+        </>
       )}
     </section>
   );

@@ -545,4 +545,229 @@ describe("ESP evidence view model", () => {
       ]),
     );
   });
+
+  it("projects profile, enrollment, transfer, and raw provenance details without leaking sensitive values", () => {
+    const base = snapshot();
+    const eventRecord: EspRawEvidenceRecord = {
+      ...rawEvidence(),
+      recordId: "raw-event-42",
+      provenance: {
+        sourceKind: "eventLog",
+        sourceArtifactId: "mdm-event-log",
+        filePath: "C:\\Windows\\System32\\winevt\\Logs\\MDM.evtx",
+        lineNumber: 42,
+        recordNumber: 314,
+        registry: null,
+        event: {
+          channel: "DeviceManagement-Enterprise-Diagnostics-Provider/Admin",
+          eventId: 75,
+          recordId: 991,
+          namedData: [
+            { name: "UserPrincipalName", value: "event-user@contoso.example" },
+          ],
+        },
+      },
+      rawValue: { text: "event-raw-sensitive" },
+      evidence: [
+        { evidenceId: "evidence-event-42", sourceArtifactId: "mdm-event-log" },
+      ],
+    };
+    const complete = snapshot({
+      profile: base.profile
+        ? {
+            ...base.profile,
+            tenantDomain: {
+              value: "profile.contoso.example",
+              sensitivity: "public",
+            },
+            tenantId: {
+              value: "profile-tenant-sensitive",
+              sensitivity: "sensitive",
+            },
+          }
+        : null,
+      enrollments: base.enrollments.map((enrollment) => ({
+        ...enrollment,
+        entdmId: {
+          value: "enrollment-entdm-sensitive",
+          sensitivity: "sensitive",
+        },
+      })),
+      deliveryOptimization: base.deliveryOptimization
+        ? {
+            ...base.deliveryOptimization,
+            transfers: [
+              {
+                transferId: "transfer-42",
+                kind: "downloadCompleted",
+                contentId: "content-42",
+                appId: "app-raw-guid",
+                timestamp: timestamp("2026-07-15T20:06:30Z"),
+                evidence: [
+                  {
+                    evidenceId: "evidence-transfer-42",
+                    sourceArtifactId: "delivery-optimization",
+                  },
+                ],
+              },
+            ],
+          }
+        : null,
+      rawEvidence: [eventRecord],
+    });
+
+    const masked = buildEspEvidenceViewModel(complete);
+    const revealed = buildEspEvidenceViewModel(complete, {
+      revealSensitive: true,
+    });
+    const section = (id: string) =>
+      masked.sections.find((candidate) => candidate.id === id);
+    const revealedSection = (id: string) =>
+      revealed.sections.find((candidate) => candidate.id === id);
+
+    const profile = section("identity-profile")?.items.find(
+      (candidate) => candidate.id === "deployment-profile",
+    );
+    expect(profile?.fields).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          label: "Tenant domain",
+          value: "profile.contoso.example",
+        }),
+        expect.objectContaining({
+          label: "Tenant ID",
+          value: "Sensitive value · masked",
+        }),
+      ]),
+    );
+    expect(
+      revealedSection("identity-profile")?.items.find(
+        (candidate) => candidate.id === "deployment-profile",
+      )?.fields,
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          label: "Tenant ID",
+          value: "profile-tenant-sensitive",
+        }),
+      ]),
+    );
+
+    const enrollment = section("enrollment-sessions")?.items.find(
+      (candidate) => candidate.id === "enrollment-enrollment-raw-guid",
+    );
+    expect(enrollment?.fields).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          label: "EntDM ID",
+          value: "Sensitive value · masked",
+        }),
+      ]),
+    );
+
+    const delivery = section("delivery-optimization");
+    expect(delivery?.items).toHaveLength(2);
+    expect(delivery?.items[1]).toMatchObject({
+      id: "delivery-transfer-transfer-42",
+      rawId: "transfer-42",
+      evidence: [
+        {
+          evidenceId: "evidence-transfer-42",
+          sourceArtifactId: "delivery-optimization",
+        },
+      ],
+    });
+    expect(delivery?.items[1].fields).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ label: "Kind", value: "downloadCompleted" }),
+        expect.objectContaining({ label: "Content ID", value: "content-42" }),
+        expect.objectContaining({ label: "App ID", value: "app-raw-guid" }),
+      ]),
+    );
+
+    const raw = section("raw-provenance")?.items[0];
+    expect(raw?.fields).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ label: "Line number", value: "42" }),
+        expect.objectContaining({ label: "Record number", value: "314" }),
+        expect.objectContaining({
+          label: "Event data · UserPrincipalName",
+          value: "Sensitive value · masked",
+        }),
+      ]),
+    );
+    expect(
+      revealedSection("raw-provenance")?.items[0].fields,
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          label: "Event data · UserPrincipalName",
+          value: "event-user@contoso.example",
+        }),
+      ]),
+    );
+    expect(
+      masked.sections.flatMap((candidate) =>
+        candidate.items.flatMap((candidateItem) =>
+          candidateItem.fields.map((candidateField) => candidateField.value),
+        ),
+      ),
+    ).not.toContain("event-user@contoso.example");
+  });
+
+  it("does not fabricate an available identity record when every identity field is null", () => {
+    const emptyIdentity = buildEspEvidenceViewModel(
+      snapshot({
+        identity: {
+          deviceName: null,
+          managedDeviceId: null,
+          entraDeviceId: null,
+          entdmId: null,
+          tenantId: null,
+          tenantDomain: null,
+          userPrincipalName: null,
+          serialNumber: null,
+          evidence: [],
+        },
+        profile: null,
+        coverage: [],
+      }),
+    ).sections.find((section) => section.id === "identity-profile");
+
+    expect(emptyIdentity).toMatchObject({
+      sourceState: "notObserved",
+      items: [],
+    });
+  });
+
+  it("keeps partial source coverage visible when normalized records also exist", () => {
+    const partial = buildEspEvidenceViewModel(
+      snapshot({
+        coverage: [
+          {
+            artifactId: "device-identity",
+            family: "Device identity registry",
+            status: "available",
+            detail: null,
+            observedAtUtc: "2026-07-15T20:08:00Z",
+            evidence: [],
+          },
+          {
+            artifactId: "autopilot-profile",
+            family: "Autopilot profile registry",
+            status: "permissionDenied",
+            detail: "Administrator rights required",
+            observedAtUtc: "2026-07-15T20:08:00Z",
+            evidence: [],
+          },
+        ],
+      }),
+    ).sections.find((section) => section.id === "identity-profile");
+
+    expect(partial).toMatchObject({
+      sourceState: "partial",
+      sourceNote: expect.stringContaining("Administrator rights required"),
+    });
+    expect(partial?.sourceNote).toContain("normalized records");
+  });
 });

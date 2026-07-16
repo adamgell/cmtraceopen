@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Button, tokens } from "@fluentui/react-components";
 import {
   CheckmarkRegular,
@@ -13,18 +13,34 @@ import {
 import {
   buildEspEvidenceViewModel,
   type EspEvidenceItemViewModel,
+  type EspEvidenceSectionViewModel,
   type EspEvidenceSourceState,
 } from "./esp-view-model";
+import {
+  ESP_EVIDENCE_NAVIGATION_EVENT,
+  type EspEvidenceNavigationTarget,
+} from "./evidence-navigation";
 import type { EspDiagnosticsSnapshot } from "./types";
 
 interface EvidenceSectionsProps {
   snapshot: EspDiagnosticsSnapshot;
 }
 
+export const ESP_EVIDENCE_ITEM_WINDOW_SIZE = 80;
+
+interface CanonicalEvidenceTarget {
+  sectionId: string;
+  itemId: string;
+}
+
+type CanonicalEvidenceTargets = Map<string, CanonicalEvidenceTarget>;
+
 function sourceStateLabel(state: EspEvidenceSourceState): string {
   switch (state) {
     case "available":
       return "Available";
+    case "partial":
+      return "Partial coverage";
     case "notObserved":
       return "No records";
     case "missing":
@@ -42,6 +58,8 @@ function sourceStateColor(state: EspEvidenceSourceState): string {
   switch (state) {
     case "available":
       return tokens.colorPaletteGreenForeground1;
+    case "partial":
+      return tokens.colorPaletteYellowForeground2;
     case "permissionDenied":
     case "parseFailed":
       return tokens.colorPaletteRedForeground1;
@@ -57,6 +75,8 @@ function SourceStateIcon({ state }: { state: EspEvidenceSourceState }) {
   switch (state) {
     case "available":
       return <CheckmarkRegular aria-hidden="true" />;
+    case "partial":
+      return <WarningRegular aria-hidden="true" />;
     case "permissionDenied":
     case "parseFailed":
       return <ErrorCircleRegular aria-hidden="true" />;
@@ -68,8 +88,22 @@ function SourceStateIcon({ state }: { state: EspEvidenceSourceState }) {
   }
 }
 
-function EvidenceReferences({ item }: { item: EspEvidenceItemViewModel }) {
+function EvidenceReferences({
+  item,
+  sectionId,
+  canonicalTargets,
+}: {
+  item: EspEvidenceItemViewModel;
+  sectionId: string;
+  canonicalTargets: CanonicalEvidenceTargets;
+}) {
   if (item.evidence.length === 0) return null;
+  const references = item.evidence.filter(
+    (reference, index, all) =>
+      all.findIndex(
+        (candidate) => candidate.evidenceId === reference.evidenceId,
+      ) === index,
+  );
   return (
     <div
       aria-label="Evidence references"
@@ -80,32 +114,51 @@ function EvidenceReferences({ item }: { item: EspEvidenceItemViewModel }) {
         marginTop: 7,
       }}
     >
-      {item.evidence.map((reference) => (
-        <span
-          key={`${reference.sourceArtifactId}:${reference.evidenceId}`}
-          id={`evidence-${reference.evidenceId}`}
-          title={`${reference.sourceArtifactId} · ${reference.evidenceId}`}
-          style={{
-            padding: "1px 5px",
-            border: `1px solid ${tokens.colorNeutralStroke2}`,
-            backgroundColor: tokens.colorNeutralBackground3,
-            color: tokens.colorNeutralForeground2,
-            fontFamily: LOG_MONOSPACE_FONT_FAMILY,
-            fontSize: 9,
-            lineHeight: "13px",
-          }}
-        >
-          {reference.sourceArtifactId} · {reference.evidenceId}
-        </span>
-      ))}
+      {references.map((reference) => {
+        const canonical = canonicalTargets.get(reference.evidenceId);
+        const isCanonical =
+          canonical?.sectionId === sectionId && canonical.itemId === item.id;
+        return (
+          <span
+            key={`${reference.sourceArtifactId}:${reference.evidenceId}`}
+            id={isCanonical ? `evidence-${reference.evidenceId}` : undefined}
+            data-evidence-id={reference.evidenceId}
+            tabIndex={isCanonical ? -1 : undefined}
+            title={`${reference.sourceArtifactId} · ${reference.evidenceId}`}
+            style={{
+              padding: "1px 5px",
+              border: `1px solid ${tokens.colorNeutralStroke2}`,
+              backgroundColor: tokens.colorNeutralBackground3,
+              color: tokens.colorNeutralForeground2,
+              fontFamily: LOG_MONOSPACE_FONT_FAMILY,
+              fontSize: 10,
+              lineHeight: "13px",
+            }}
+          >
+            {reference.sourceArtifactId} · {reference.evidenceId}
+          </span>
+        );
+      })}
     </div>
   );
 }
 
-function EvidenceItem({ item }: { item: EspEvidenceItemViewModel }) {
+function EvidenceItem({
+  item,
+  sectionId,
+  canonicalTargets,
+}: {
+  item: EspEvidenceItemViewModel;
+  sectionId: string;
+  canonicalTargets: CanonicalEvidenceTargets;
+}) {
+  const coverageTarget = item.id.startsWith("coverage-");
   return (
     <article
-      id={item.id.startsWith("coverage-") ? item.id : undefined}
+      id={coverageTarget ? item.id : undefined}
+      data-testid="esp-evidence-item"
+      data-evidence-item-id={item.id}
+      tabIndex={coverageTarget ? -1 : undefined}
       style={{
         minWidth: 0,
         padding: "9px 10px",
@@ -144,7 +197,7 @@ function EvidenceItem({ item }: { item: EspEvidenceItemViewModel }) {
               overflow: "hidden",
               color: tokens.colorNeutralForeground2,
               fontFamily: LOG_MONOSPACE_FONT_FAMILY,
-              fontSize: 9,
+              fontSize: 10,
               lineHeight: "13px",
               textOverflow: "ellipsis",
               whiteSpace: "nowrap",
@@ -182,7 +235,7 @@ function EvidenceItem({ item }: { item: EspEvidenceItemViewModel }) {
               style={{
                 color: tokens.colorNeutralForeground3,
                 fontFamily: LOG_MONOSPACE_FONT_FAMILY,
-                fontSize: 8,
+                fontSize: 10,
                 fontWeight: 700,
                 letterSpacing: "0.06em",
                 lineHeight: "11px",
@@ -215,17 +268,193 @@ function EvidenceItem({ item }: { item: EspEvidenceItemViewModel }) {
           </div>
         ))}
       </dl>
-      <EvidenceReferences item={item} />
+      <EvidenceReferences
+        item={item}
+        sectionId={sectionId}
+        canonicalTargets={canonicalTargets}
+      />
     </article>
+  );
+}
+
+function EvidenceSectionBody({
+  section,
+  page,
+  canonicalTargets,
+  onPageChange,
+}: {
+  section: EspEvidenceSectionViewModel;
+  page: number;
+  canonicalTargets: CanonicalEvidenceTargets;
+  onPageChange(page: number): void;
+}) {
+  const maximumPage = Math.max(
+    0,
+    Math.ceil(section.items.length / ESP_EVIDENCE_ITEM_WINDOW_SIZE) - 1,
+  );
+  const safePage = Math.min(page, maximumPage);
+  const start = safePage * ESP_EVIDENCE_ITEM_WINDOW_SIZE;
+  const end = Math.min(
+    start + ESP_EVIDENCE_ITEM_WINDOW_SIZE,
+    section.items.length,
+  );
+  const visibleItems = section.items.slice(start, end);
+
+  return (
+    <div
+      style={{
+        display: "grid",
+        gap: 7,
+        padding: "8px 10px 10px",
+        borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
+        backgroundColor: tokens.colorNeutralBackground2,
+      }}
+    >
+      <div
+        role="status"
+        style={{
+          color: sourceStateColor(section.sourceState),
+          fontFamily: LOG_MONOSPACE_FONT_FAMILY,
+          fontSize: 10,
+          fontWeight: 650,
+          lineHeight: "13px",
+        }}
+      >
+        {sourceStateLabel(section.sourceState)} · {section.sourceNote}
+      </div>
+      {section.items.length > ESP_EVIDENCE_ITEM_WINDOW_SIZE ? (
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 8,
+            color: tokens.colorNeutralForeground2,
+            fontSize: 10,
+          }}
+        >
+          <span>
+            Showing {start + 1}–{end} of {section.items.length} records
+          </span>
+          <span style={{ display: "inline-flex", gap: 5 }}>
+            <Button
+              size="small"
+              disabled={safePage === 0}
+              onClick={() => onPageChange(Math.max(0, safePage - 1))}
+            >
+              Previous records
+            </Button>
+            <Button
+              size="small"
+              disabled={safePage >= maximumPage}
+              onClick={() => onPageChange(Math.min(maximumPage, safePage + 1))}
+            >
+              Next records
+            </Button>
+          </span>
+        </div>
+      ) : null}
+      {visibleItems.map((evidenceItem) => (
+        <EvidenceItem
+          key={evidenceItem.id}
+          item={evidenceItem}
+          sectionId={section.id}
+          canonicalTargets={canonicalTargets}
+        />
+      ))}
+    </div>
   );
 }
 
 export function EvidenceSections({ snapshot }: EvidenceSectionsProps) {
   const [revealSensitive, setRevealSensitive] = useState(false);
+  const [openSections, setOpenSections] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const [sectionPages, setSectionPages] = useState<Record<string, number>>({});
+  const [pendingTargetId, setPendingTargetId] = useState<string | null>(null);
   const viewModel = useMemo(
     () => buildEspEvidenceViewModel(snapshot, { revealSensitive }),
     [revealSensitive, snapshot],
   );
+  const canonicalTargets = useMemo(() => {
+    const targets: CanonicalEvidenceTargets = new Map();
+    const rawSection = viewModel.sections.find(
+      (section) => section.id === "raw-provenance",
+    );
+    const orderedSections = rawSection
+      ? [
+          rawSection,
+          ...viewModel.sections.filter((section) => section !== rawSection),
+        ]
+      : viewModel.sections;
+    for (const section of orderedSections) {
+      for (const evidenceItem of section.items) {
+        for (const reference of evidenceItem.evidence) {
+          if (!targets.has(reference.evidenceId)) {
+            targets.set(reference.evidenceId, {
+              sectionId: section.id,
+              itemId: evidenceItem.id,
+            });
+          }
+        }
+      }
+    }
+    return targets;
+  }, [viewModel]);
+
+  useEffect(() => {
+    const handleNavigation = (event: Event) => {
+      const target = (event as CustomEvent<EspEvidenceNavigationTarget>).detail;
+      const destination =
+        target.kind === "evidence"
+          ? canonicalTargets.get(target.id) ?? null
+          : {
+              sectionId: "source-coverage",
+              itemId: `coverage-${target.id}`,
+            };
+      if (!destination) return;
+      const section = viewModel.sections.find(
+        (candidate) => candidate.id === destination.sectionId,
+      );
+      const itemIndex =
+        section?.items.findIndex((item) => item.id === destination.itemId) ?? -1;
+      if (!section || itemIndex < 0) return;
+
+      setOpenSections((current) => {
+        const next = new Set(current);
+        next.add(section.id);
+        return next;
+      });
+      setSectionPages((current) => ({
+        ...current,
+        [section.id]: Math.floor(itemIndex / ESP_EVIDENCE_ITEM_WINDOW_SIZE),
+      }));
+      setPendingTargetId(
+        target.kind === "evidence"
+          ? `evidence-${target.id}`
+          : `coverage-${target.id}`,
+      );
+    };
+
+    window.addEventListener(ESP_EVIDENCE_NAVIGATION_EVENT, handleNavigation);
+    return () =>
+      window.removeEventListener(
+        ESP_EVIDENCE_NAVIGATION_EVENT,
+        handleNavigation,
+      );
+  }, [canonicalTargets, viewModel.sections]);
+
+  useEffect(() => {
+    if (!pendingTargetId) return;
+    const target = document.getElementById(pendingTargetId);
+    if (!target) return;
+    target.focus({ preventScroll: true });
+    if (typeof target.scrollIntoView === "function") {
+      target.scrollIntoView({ block: "center", inline: "nearest" });
+    }
+    setPendingTargetId(null);
+  }, [openSections, pendingTargetId, sectionPages]);
 
   return (
     <section
@@ -254,7 +483,7 @@ export function EvidenceSections({ snapshot }: EvidenceSectionsProps) {
             style={{
               color: tokens.colorBrandForeground1,
               fontFamily: LOG_MONOSPACE_FONT_FAMILY,
-              fontSize: 8,
+              fontSize: 10,
               fontWeight: 700,
               letterSpacing: "0.12em",
               lineHeight: "11px",
@@ -300,10 +529,21 @@ export function EvidenceSections({ snapshot }: EvidenceSectionsProps) {
         {viewModel.sections.map((section) => (
           <details
             key={section.id}
+            id={`esp-evidence-section-${section.id}`}
+            open={openSections.has(section.id)}
             data-source-state={section.sourceState}
             style={{ backgroundColor: tokens.colorNeutralBackground1 }}
           >
             <summary
+              onClick={(event) => {
+                event.preventDefault();
+                setOpenSections((current) => {
+                  const next = new Set(current);
+                  if (next.has(section.id)) next.delete(section.id);
+                  else next.add(section.id);
+                  return next;
+                });
+              }}
               style={{
                 display: "grid",
                 gridTemplateColumns: "minmax(170px, 0.7fr) minmax(240px, 1.3fr) auto",
@@ -332,7 +572,7 @@ export function EvidenceSections({ snapshot }: EvidenceSectionsProps) {
                   justifyContent: "flex-end",
                   gap: 4,
                   color: sourceStateColor(section.sourceState),
-                  fontSize: 9,
+                  fontSize: 10,
                   fontWeight: 700,
                   lineHeight: "13px",
                   textTransform: "uppercase",
@@ -343,31 +583,19 @@ export function EvidenceSections({ snapshot }: EvidenceSectionsProps) {
                 {sourceStateLabel(section.sourceState)} · {section.items.length}
               </span>
             </summary>
-            <div
-              style={{
-                display: "grid",
-                gap: 7,
-                padding: "8px 10px 10px",
-                borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
-                backgroundColor: tokens.colorNeutralBackground2,
-              }}
-            >
-              <div
-                role="status"
-                style={{
-                  color: sourceStateColor(section.sourceState),
-                  fontFamily: LOG_MONOSPACE_FONT_FAMILY,
-                  fontSize: 9,
-                  fontWeight: 650,
-                  lineHeight: "13px",
-                }}
-              >
-                {sourceStateLabel(section.sourceState)} · {section.sourceNote}
-              </div>
-              {section.items.map((evidenceItem) => (
-                <EvidenceItem key={evidenceItem.id} item={evidenceItem} />
-              ))}
-            </div>
+            {openSections.has(section.id) ? (
+              <EvidenceSectionBody
+                section={section}
+                page={sectionPages[section.id] ?? 0}
+                canonicalTargets={canonicalTargets}
+                onPageChange={(page) =>
+                  setSectionPages((current) => ({
+                    ...current,
+                    [section.id]: page,
+                  }))
+                }
+              />
+            ) : null}
           </details>
         ))}
       </div>

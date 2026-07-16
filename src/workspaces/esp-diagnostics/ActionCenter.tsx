@@ -8,6 +8,7 @@ import {
   WarningRegular,
 } from "@fluentui/react-icons";
 import { LOG_MONOSPACE_FONT_FAMILY, LOG_UI_FONT_FAMILY } from "../../lib/log-accessibility";
+import { requestEspEvidenceNavigation } from "./evidence-navigation";
 import type {
   EspDiagnosticFinding,
   EspFindingConfidence,
@@ -90,7 +91,7 @@ function Finding({ finding }: FindingProps) {
               gap: 5,
               color: severityColor(finding.severity),
               fontFamily: LOG_MONOSPACE_FONT_FAMILY,
-              fontSize: 9,
+              fontSize: 10,
               fontWeight: 700,
               letterSpacing: "0.04em",
               textTransform: "uppercase",
@@ -105,7 +106,7 @@ function Finding({ finding }: FindingProps) {
             style={{
               color: tokens.colorNeutralForeground3,
               fontFamily: LOG_MONOSPACE_FONT_FAMILY,
-              fontSize: 9,
+              fontSize: 10,
             }}
           >
             {finding.findingId}
@@ -140,7 +141,7 @@ function Finding({ finding }: FindingProps) {
               style={{
                 color: tokens.colorNeutralForeground3,
                 fontFamily: LOG_MONOSPACE_FONT_FAMILY,
-                fontSize: 9,
+                fontSize: 10,
                 fontWeight: 700,
                 letterSpacing: "0.07em",
                 textTransform: "uppercase",
@@ -178,6 +179,12 @@ function Finding({ finding }: FindingProps) {
             <a
               key={reference.evidenceId}
               href={`#evidence-${reference.evidenceId}`}
+              onClick={() =>
+                requestEspEvidenceNavigation({
+                  kind: "evidence",
+                  id: reference.evidenceId,
+                })
+              }
               aria-label={`Open evidence ${reference.evidenceId}`}
               title={`${reference.sourceArtifactId} · ${reference.evidenceId}`}
               style={{
@@ -186,7 +193,7 @@ function Finding({ finding }: FindingProps) {
                 gap: 3,
                 color: tokens.colorBrandForegroundLink,
                 fontFamily: LOG_MONOSPACE_FONT_FAMILY,
-                fontSize: 9,
+                fontSize: 10,
                 fontWeight: 650,
                 textDecoration: "none",
               }}
@@ -198,10 +205,16 @@ function Finding({ finding }: FindingProps) {
             <a
               key={coverageGapId}
               href={`#coverage-${coverageGapId}`}
+              onClick={() =>
+                requestEspEvidenceNavigation({
+                  kind: "coverage",
+                  id: coverageGapId,
+                })
+              }
               style={{
                 color: tokens.colorPaletteYellowForeground2,
                 fontFamily: LOG_MONOSPACE_FONT_FAMILY,
-                fontSize: 9,
+                fontSize: 10,
                 fontWeight: 650,
                 textDecoration: "none",
               }}
@@ -262,7 +275,7 @@ export function ActionCenter({ findings }: ActionCenterProps) {
             style={{
               color: tokens.colorNeutralForeground3,
               fontFamily: LOG_MONOSPACE_FONT_FAMILY,
-              fontSize: 9,
+              fontSize: 10,
               fontWeight: 700,
               letterSpacing: "0.09em",
               lineHeight: "11px",

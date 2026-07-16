@@ -16,6 +16,7 @@ export const ESP_EVIDENCE_DISCLOSURE_POLICY =
 
 export type EspEvidenceSourceState =
   | EspArtifactStatus
+  | "partial"
   | "notObserved";
 
 export interface EspEvidenceFieldViewModel {
@@ -58,6 +59,10 @@ interface SectionDefinition {
   emptyNoun: string;
   coverageTerms: string[];
   items: EspEvidenceItemViewModel[];
+  sourceOverride?: {
+    state: EspEvidenceSourceState;
+    note: string;
+  };
 }
 
 const MASKED_SENSITIVE_VALUE = "Sensitive value · masked";
@@ -174,6 +179,12 @@ function workloadItem(
     [
       field("Status", workload.status.display),
       field("Raw status", String(workload.status.raw)),
+      ...(workload.status.detail
+        ? [
+            field("Status detail", workload.status.detail.display),
+            field("Detail raw status", String(workload.status.detail.raw)),
+          ]
+        : []),
       field("Scope", workload.scope),
       field("Session", workload.sessionId),
       field("Blocking", displayBoolean(workload.blocking)),
@@ -223,25 +234,45 @@ function finishSection(
   definition: SectionDefinition,
   coverage: EspArtifactCoverage[],
 ): EspEvidenceSectionViewModel {
-  if (definition.items.length > 0) {
+  const section = {
+    id: definition.id,
+    title: definition.title,
+    description: definition.description,
+    items: definition.items,
+  };
+  if (definition.sourceOverride) {
     return {
-      ...definition,
+      ...section,
+      sourceState: definition.sourceOverride.state,
+      sourceNote: definition.sourceOverride.note,
+    };
+  }
+  const match = coverageMatch(coverage, definition.coverageTerms);
+  if (definition.items.length > 0) {
+    if (match && match.status !== "available") {
+      return {
+        ...section,
+        sourceState: "partial",
+        sourceNote: `${definition.items.length} normalized records available; partial source coverage: ${match.family} · ${match.detail ?? match.status}`,
+      };
+    }
+    return {
+      ...section,
       sourceState: "available",
       sourceNote: `${definition.items.length} normalized ${
         definition.items.length === 1 ? "record" : "records"
       } available.`,
     };
   }
-  const match = coverageMatch(coverage, definition.coverageTerms);
   if (match && match.status !== "available") {
     return {
-      ...definition,
+      ...section,
       sourceState: match.status,
       sourceNote: `${match.family} · ${match.detail ?? match.status}`,
     };
   }
   return {
-    ...definition,
+    ...section,
     sourceState: "notObserved",
     sourceNote: `No ${definition.emptyNoun} records were observed in the collected sources.`,
   };
@@ -255,42 +286,54 @@ export function buildEspEvidenceViewModel(
   const identity = snapshot.identity;
   const profile = snapshot.profile;
 
-  const identityItems = [
-    item(
-      "local-identity",
-      identity.deviceName ?? "Local device identity",
-      [
-        field("Managed device ID", displayNullable(identity.managedDeviceId)),
-        field("Entra device ID", displayNullable(identity.entraDeviceId)),
-        field(
-          "EntDM ID",
-          displayClassified(identity.entdmId, revealSensitive),
-          identity.entdmId?.sensitivity ?? "public",
+  const hasIdentityEvidence =
+    identity.deviceName !== null ||
+    identity.managedDeviceId !== null ||
+    identity.entraDeviceId !== null ||
+    identity.entdmId !== null ||
+    identity.tenantId !== null ||
+    identity.tenantDomain !== null ||
+    identity.userPrincipalName !== null ||
+    identity.serialNumber !== null ||
+    identity.evidence.length > 0;
+  const identityItems: EspEvidenceItemViewModel[] = hasIdentityEvidence
+    ? [
+        item(
+          "local-identity",
+          identity.deviceName ?? "Local device identity",
+          [
+            field("Managed device ID", displayNullable(identity.managedDeviceId)),
+            field("Entra device ID", displayNullable(identity.entraDeviceId)),
+            field(
+              "EntDM ID",
+              displayClassified(identity.entdmId, revealSensitive),
+              identity.entdmId?.sensitivity ?? "public",
+            ),
+            field(
+              "Tenant ID",
+              displayClassified(identity.tenantId, revealSensitive),
+              identity.tenantId?.sensitivity ?? "public",
+            ),
+            field(
+              "Tenant domain",
+              displayClassified(identity.tenantDomain, revealSensitive),
+              identity.tenantDomain?.sensitivity ?? "public",
+            ),
+            field(
+              "User principal name",
+              displayClassified(identity.userPrincipalName, revealSensitive),
+              identity.userPrincipalName?.sensitivity ?? "public",
+            ),
+            field(
+              "Serial number",
+              displayClassified(identity.serialNumber, revealSensitive),
+              identity.serialNumber?.sensitivity ?? "public",
+            ),
+          ],
+          { evidence: identity.evidence },
         ),
-        field(
-          "Tenant ID",
-          displayClassified(identity.tenantId, revealSensitive),
-          identity.tenantId?.sensitivity ?? "public",
-        ),
-        field(
-          "Tenant domain",
-          displayClassified(identity.tenantDomain, revealSensitive),
-          identity.tenantDomain?.sensitivity ?? "public",
-        ),
-        field(
-          "User principal name",
-          displayClassified(identity.userPrincipalName, revealSensitive),
-          identity.userPrincipalName?.sensitivity ?? "public",
-        ),
-        field(
-          "Serial number",
-          displayClassified(identity.serialNumber, revealSensitive),
-          identity.serialNumber?.sensitivity ?? "public",
-        ),
-      ],
-      { evidence: identity.evidence },
-    ),
-  ];
+      ]
+    : [];
   if (profile) {
     identityItems.push(
       item(
@@ -298,6 +341,16 @@ export function buildEspEvidenceViewModel(
         profile.profileName ?? "Deployment profile",
         [
           field("Correlation ID", displayNullable(profile.correlationId)),
+          field(
+            "Tenant domain",
+            displayClassified(profile.tenantDomain, revealSensitive),
+            profile.tenantDomain?.sensitivity ?? "public",
+          ),
+          field(
+            "Tenant ID",
+            displayClassified(profile.tenantId, revealSensitive),
+            profile.tenantId?.sensitivity ?? "public",
+          ),
           field("Join mode", displayNullable(profile.joinMode)),
           field("Profile downloaded", displayTimestamp(profile.profileDownloadTime)),
         ],
@@ -374,6 +427,11 @@ export function buildEspEvidenceViewModel(
             displayClassified(enrollment.userPrincipalName, revealSensitive),
             enrollment.userPrincipalName?.sensitivity ?? "public",
           ),
+          field(
+            "EntDM ID",
+            displayClassified(enrollment.entdmId, revealSensitive),
+            enrollment.entdmId?.sensitivity ?? "public",
+          ),
         ],
         { rawId: enrollment.enrollmentId, evidence: enrollment.evidence },
       ),
@@ -435,6 +493,22 @@ export function buildEspEvidenceViewModel(
           field("Connected Cache share", displayNullable(snapshot.deliveryOptimization.connectedCacheSharePercent)),
           field("Transfers", String(snapshot.deliveryOptimization.transfers.length)),
         ], { evidence: snapshot.deliveryOptimization.evidence }),
+        ...snapshot.deliveryOptimization.transfers.map((transfer) =>
+          item(
+            `delivery-transfer-${transfer.transferId}`,
+            `Delivery Optimization transfer · ${transfer.kind}`,
+            [
+              field("Kind", transfer.kind),
+              field("Content ID", displayNullable(transfer.contentId)),
+              field("App ID", displayNullable(transfer.appId)),
+              field("Timestamp", displayTimestamp(transfer.timestamp)),
+            ],
+            {
+              rawId: transfer.transferId,
+              evidence: transfer.evidence,
+            },
+          ),
+        ),
       ]
     : [];
 
@@ -504,6 +578,12 @@ export function buildEspEvidenceViewModel(
         field("Sensitivity", record.sensitivity),
         field("Observed", record.observedAtUtc),
         field("Source timestamp", displayTimestamp(record.sourceTimestamp)),
+        ...(record.provenance.lineNumber === null
+          ? []
+          : [field("Line number", String(record.provenance.lineNumber))]),
+        ...(record.provenance.recordNumber === null
+          ? []
+          : [field("Record number", String(record.provenance.recordNumber))]),
         ...(record.provenance.filePath
           ? [field("File", record.provenance.filePath)]
           : []),
@@ -524,6 +604,17 @@ export function buildEspEvidenceViewModel(
                 `${event.channel} · Event ${event.eventId} · Record ${
                   event.recordId ?? "unknown"
                 }`,
+              ),
+              ...event.namedData.map((value) =>
+                field(
+                  `Event data · ${value.name}`,
+                  displayValue(
+                    value.value,
+                    record.sensitivity,
+                    revealSensitive,
+                  ),
+                  record.sensitivity,
+                ),
               ),
             ]
           : []),
@@ -646,6 +737,67 @@ export function buildEspEvidenceViewModel(
       items: rawItems,
     },
   ];
+
+  const representedEvidenceIds = new Set(
+    definitions.flatMap((definition) =>
+      definition.items.flatMap((evidenceItem) =>
+        evidenceItem.evidence.map((reference) => reference.evidenceId),
+      ),
+    ),
+  );
+  const linkedReferences = [
+    ...snapshot.findings.flatMap((finding) => finding.evidence),
+    ...snapshot.activity.flatMap((entry) => entry.evidence),
+    ...snapshot.workloads.flatMap((workload) => workload.evidence),
+    ...snapshot.installerCorrelations.flatMap((correlation) => [
+      ...correlation.evidence,
+      ...correlation.processObservations.map(
+        (process) => process.context.evidenceRef,
+      ),
+    ]),
+  ];
+  const seenLinkedEvidence = new Set<string>();
+  const referenceOnlyItems = linkedReferences
+    .filter((reference) => {
+      if (
+        representedEvidenceIds.has(reference.evidenceId) ||
+        seenLinkedEvidence.has(reference.evidenceId)
+      ) {
+        return false;
+      }
+      seenLinkedEvidence.add(reference.evidenceId);
+      return true;
+    })
+    .map((reference) =>
+      item(
+        `reference-only-${reference.evidenceId}`,
+        `Evidence reference · ${reference.sourceArtifactId}`,
+        [
+          field("Evidence ID", reference.evidenceId),
+          field("Source artifact", reference.sourceArtifactId),
+          field("Raw record", "Raw record not included in this snapshot"),
+        ],
+        { rawId: reference.evidenceId, evidence: [reference] },
+      ),
+    );
+
+  if (referenceOnlyItems.length > 0) {
+    const coverageDefinition = definitions.find(
+      (definition) => definition.id === "source-coverage",
+    );
+    if (coverageDefinition) {
+      const coverageRecordCount = coverageDefinition.items.length;
+      coverageDefinition.items.push(...referenceOnlyItems);
+      coverageDefinition.sourceOverride = {
+        state: "partial",
+        note: `${coverageRecordCount} source coverage ${
+          coverageRecordCount === 1 ? "record" : "records"
+        } available; ${referenceOnlyItems.length} linked evidence ${
+          referenceOnlyItems.length === 1 ? "reference has" : "references have"
+        } no raw or normalized record in this snapshot.`,
+      };
+    }
+  }
 
   return {
     disclosurePolicy: ESP_EVIDENCE_DISCLOSURE_POLICY,

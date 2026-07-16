@@ -2,10 +2,12 @@ import { useMemo, useState } from "react";
 import { tokens } from "@fluentui/react-components";
 import { LinkRegular } from "@fluentui/react-icons";
 import { LOG_MONOSPACE_FONT_FAMILY, LOG_UI_FONT_FAMILY } from "../../lib/log-accessibility";
+import { requestEspEvidenceNavigation } from "./evidence-navigation";
 import type {
   EspDiagnosticsSnapshot,
   EspErrorCode,
   EspNormalizedStatus,
+  EspStatus,
   EspTrackedKind,
   EspWorkload,
 } from "./types";
@@ -61,6 +63,32 @@ function statusColor(status: EspNormalizedStatus): string {
   }
 }
 
+const statusSeverity: Record<EspNormalizedStatus, number> = {
+  failed: 6,
+  cancelled: 5,
+  rebootRequired: 4,
+  downloading: 3,
+  installing: 3,
+  inProgress: 3,
+  pending: 2,
+  initialized: 2,
+  notStarted: 2,
+  notInstalled: 2,
+  skipped: 2,
+  uninstalled: 2,
+  unknown: 2,
+  downloaded: 1,
+  processed: 1,
+  succeeded: 1,
+};
+
+function effectiveNormalizedStatus(status: EspStatus): EspNormalizedStatus {
+  const detail = status.detail?.normalized;
+  return detail && statusSeverity[detail] > statusSeverity[status.normalized]
+    ? detail
+    : status.normalized;
+}
+
 function formatCode(code: EspErrorCode | null, absentLabel: string): string {
   if (!code) return absentLabel;
   return code.hex ? `${code.raw} · ${code.hex}` : code.raw;
@@ -95,6 +123,7 @@ interface WorkloadRowProps {
 }
 
 function WorkloadRow({ workload, graphName }: WorkloadRowProps) {
+  const effectiveStatus = effectiveNormalizedStatus(workload.status);
   return (
     <tr style={{ borderTop: `1px solid ${tokens.colorNeutralStroke2}` }}>
       <td style={{ width: "31%", padding: "7px 9px", verticalAlign: "top" }}>
@@ -118,7 +147,7 @@ function WorkloadRow({ workload, graphName }: WorkloadRowProps) {
               marginTop: 1,
               overflow: "hidden",
               color: tokens.colorBrandForeground1,
-              fontSize: 9,
+              fontSize: 10,
               lineHeight: "13px",
               textOverflow: "ellipsis",
               whiteSpace: "nowrap",
@@ -136,7 +165,7 @@ function WorkloadRow({ workload, graphName }: WorkloadRowProps) {
             overflow: "hidden",
             color: tokens.colorNeutralForeground3,
             fontFamily: LOG_MONOSPACE_FONT_FAMILY,
-            fontSize: 9,
+            fontSize: 10,
             lineHeight: "13px",
             textOverflow: "ellipsis",
             whiteSpace: "nowrap",
@@ -150,10 +179,11 @@ function WorkloadRow({ workload, graphName }: WorkloadRowProps) {
           {kindLabels[workload.kind]}
         </div>
         <div
+          data-effective-status={effectiveStatus}
           style={{
             color: tokens.colorNeutralForeground3,
             fontFamily: LOG_MONOSPACE_FONT_FAMILY,
-            fontSize: 9,
+            fontSize: 10,
             lineHeight: "13px",
           }}
         >
@@ -166,31 +196,55 @@ function WorkloadRow({ workload, graphName }: WorkloadRowProps) {
             display: "flex",
             alignItems: "center",
             gap: 5,
-            color: statusColor(workload.status.normalized),
+            color: statusColor(effectiveStatus),
             fontSize: 10,
             fontWeight: 700,
             lineHeight: "14px",
           }}
         >
           <span aria-hidden="true">
-            {statusGlyph(workload.status.normalized)}
+            {statusGlyph(effectiveStatus)}
           </span>
           <span>{workload.status.display}</span>
         </div>
+        {workload.status.detail ? (
+          <div
+            style={{
+              color: statusColor(workload.status.detail.normalized),
+              fontSize: 10,
+              fontWeight: 650,
+              lineHeight: "14px",
+            }}
+          >
+            Detail · {workload.status.detail.display}
+          </div>
+        ) : null}
         <div
           style={{
             color: tokens.colorNeutralForeground3,
             fontFamily: LOG_MONOSPACE_FONT_FAMILY,
-            fontSize: 9,
+            fontSize: 10,
             lineHeight: "13px",
           }}
         >
           Raw · {String(workload.status.raw)}
         </div>
+        {workload.status.detail ? (
+          <div
+            style={{
+              color: tokens.colorNeutralForeground3,
+              fontFamily: LOG_MONOSPACE_FONT_FAMILY,
+              fontSize: 10,
+              lineHeight: "13px",
+            }}
+          >
+            Detail raw · {String(workload.status.detail.raw)}
+          </div>
+        ) : null}
         <div
           style={{
             color: tokens.colorNeutralForeground3,
-            fontSize: 9,
+            fontSize: 10,
             lineHeight: "13px",
           }}
         >
@@ -208,7 +262,7 @@ function WorkloadRow({ workload, graphName }: WorkloadRowProps) {
               ? tokens.colorNeutralForeground1
               : tokens.colorNeutralForeground3,
             fontFamily: LOG_MONOSPACE_FONT_FAMILY,
-            fontSize: 9,
+            fontSize: 10,
             lineHeight: "13px",
           }}
         >
@@ -221,7 +275,7 @@ function WorkloadRow({ workload, graphName }: WorkloadRowProps) {
               ? tokens.colorPaletteRedForeground1
               : tokens.colorNeutralForeground3,
             fontFamily: LOG_MONOSPACE_FONT_FAMILY,
-            fontSize: 9,
+            fontSize: 10,
             lineHeight: "13px",
           }}
         >
@@ -237,7 +291,7 @@ function WorkloadRow({ workload, graphName }: WorkloadRowProps) {
             style={{
               cursor: "pointer",
               color: tokens.colorBrandForegroundLink,
-              fontSize: 9,
+              fontSize: 10,
               fontWeight: 650,
               lineHeight: "13px",
             }}
@@ -249,7 +303,7 @@ function WorkloadRow({ workload, graphName }: WorkloadRowProps) {
               marginTop: 4,
               color: tokens.colorNeutralForeground3,
               fontFamily: LOG_MONOSPACE_FONT_FAMILY,
-              fontSize: 8,
+              fontSize: 10,
               lineHeight: "12px",
               overflowWrap: "anywhere",
             }}
@@ -261,6 +315,12 @@ function WorkloadRow({ workload, graphName }: WorkloadRowProps) {
               <a
                 key={reference.evidenceId}
                 href={`#evidence-${reference.evidenceId}`}
+                onClick={() =>
+                  requestEspEvidenceNavigation({
+                    kind: "evidence",
+                    id: reference.evidenceId,
+                  })
+                }
                 aria-label={`Open evidence ${reference.evidenceId}`}
                 style={{
                   display: "flex",
@@ -344,7 +404,7 @@ export function EspWorkloadTable({ snapshot }: EspWorkloadTableProps) {
             style={{
               color: tokens.colorNeutralForeground3,
               fontFamily: LOG_MONOSPACE_FONT_FAMILY,
-              fontSize: 9,
+              fontSize: 10,
               fontWeight: 700,
               letterSpacing: "0.09em",
               lineHeight: "11px",
@@ -367,7 +427,7 @@ export function EspWorkloadTable({ snapshot }: EspWorkloadTableProps) {
           </h2>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          <strong style={{ fontFamily: LOG_MONOSPACE_FONT_FAMILY, fontSize: 9 }}>
+          <strong style={{ fontFamily: LOG_MONOSPACE_FONT_FAMILY, fontSize: 10 }}>
             {countLabel}
           </strong>
           <label
@@ -404,7 +464,7 @@ export function EspWorkloadTable({ snapshot }: EspWorkloadTableProps) {
               style={{
                 color: tokens.colorNeutralForeground3,
                 fontFamily: LOG_MONOSPACE_FONT_FAMILY,
-                fontSize: 8,
+                fontSize: 10,
                 fontWeight: 700,
                 letterSpacing: "0.07em",
                 textAlign: "left",
