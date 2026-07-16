@@ -1206,9 +1206,7 @@ describe("ESP Graph overlay state", () => {
     useEspDiagnosticsStore
       .getState()
       .applyAnalysis("analysis-app-intent", makeSnapshot(["local-app"]));
-    const ownershipLease = useEspDiagnosticsStore
-      .getState()
-      .beginGraph("graph-app-intent-partial");
+    const ownershipLease = beginGraphForTest("graph-app-intent-partial");
 
     useEspDiagnosticsStore
       .getState()
