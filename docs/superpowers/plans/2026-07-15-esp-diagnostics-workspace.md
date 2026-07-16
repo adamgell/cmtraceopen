@@ -2009,7 +2009,7 @@ Expected: YAML formatting passes, all actions remain commit-SHA pinned, and the 
 
 **Files:** No edits unless a failing gate exposes a defect; fix defects in a new bounded phase with tests.
 
-- [x] **Step 1: Pure parser gates**
+- [ ] **Step 1: Pure parser gates**
 
 ```bash
 cargo fmt --all -- --check
@@ -2017,7 +2017,9 @@ cargo test -p cmtraceopen-parser --test esp_diagnostics -- --nocapture
 cargo test -p cmtraceopen-parser
 ```
 
-- [ ] **Step 2: Native and feature gates**
+Current-head parser tests pass (210 ESP integration tests and the full parser package), and every modified Rust file passes scoped `rustfmt`. This grouped step remains open because repository-wide `cargo fmt --all -- --check` still reports unrelated pre-existing formatting drift.
+
+- [x] **Step 2: Native and feature gates**
 
 ```bash
 cargo test -p cmtrace-open --all-features --test esp_diagnostics_sources -- --nocapture
@@ -2027,6 +2029,8 @@ cargo check -p cmtrace-open --no-default-features
 cargo check -p cmtrace-open --no-default-features --features esp-diagnostics
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 ```
+
+Exact rehearsal head `8215ef8952e` passes the native ESP and Graph suites, the serial full locked workspace, both no-default feature checks, strict host Clippy, and strict Windows xwin Clippy.
 
 - [x] **Step 3: Frontend gates**
 
@@ -2043,6 +2047,8 @@ npx playwright test e2e/esp-diagnostics.spec.ts
 npm run app:build:lite
 npm run app:build:debug
 ```
+
+Both Lite and Debug builds compile and bundle the application, DMG, and updater archive. This grouped step remains open because updater signing exits nonzero when `TAURI_SIGNING_PRIVATE_KEY` is unavailable in the local environment.
 
 Expected: every command exits zero. Save concise evidence for each gate.
 
