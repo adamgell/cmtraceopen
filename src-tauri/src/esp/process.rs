@@ -351,6 +351,7 @@ fn command_line_sanitizers() -> &'static CommandLineSanitizers {
 
 pub fn sanitize_command_line(command_line: &str) -> String {
     let sanitizers = command_line_sanitizers();
+    let source_is_json = serde_json::from_str::<serde_json::Value>(command_line).is_ok();
 
     // Hardware identity payloads can be very long and may contain argument-like text. If a
     // quoted value is truncated before its closing quote, fail closed by redacting the rest.
@@ -433,22 +434,24 @@ pub fn sanitize_command_line(command_line: &str) -> String {
                     format!("{}[REDACTED]", &captures[1])
                 }
             });
+    let command_line = redact_secret_argument_fragments(
+        &command_line,
+        &sanitizers.named_secret_argument_prefix,
+        false,
+        source_is_json,
+    );
     let command_line = sanitizers
         .named_secret
         .replace_all(&command_line, "$1$2$3[REDACTED]");
     let command_line = redact_secret_argument_fragments(
         &command_line,
-        &sanitizers.named_secret_argument_prefix,
-        false,
+        &sanitizers.query_secret_argument_prefix,
+        true,
+        source_is_json,
     );
     let command_line = sanitizers
         .query_secret
         .replace_all(&command_line, "$1[REDACTED]");
-    let command_line = redact_secret_argument_fragments(
-        &command_line,
-        &sanitizers.query_secret_argument_prefix,
-        true,
-    );
     let command_line = sanitizers
         .json_secret
         .replace_all(&command_line, "$1[REDACTED]$2");
@@ -459,6 +462,7 @@ fn redact_secret_argument_fragments(
     command_line: &str,
     prefix: &Regex,
     stop_at_ampersand: bool,
+    stop_at_json_string_end: bool,
 ) -> String {
     let mut sanitized = String::with_capacity(command_line.len());
     let mut copied_through = 0;
@@ -469,7 +473,12 @@ fn redact_secret_argument_fragments(
             break;
         };
         let value_start = prefix_match.end();
-        let value_end = secret_argument_end(command_line, value_start, stop_at_ampersand);
+        let value_end = secret_argument_end(
+            command_line,
+            value_start,
+            stop_at_ampersand,
+            stop_at_json_string_end,
+        );
         if value_end == value_start {
             search_from = value_start;
             if search_from == command_line.len() {
@@ -498,7 +507,7 @@ fn consume_adjacent_redacted_fragments(command_line: &str, redaction_end: &Regex
             break;
         };
         let suffix_start = redacted_match.end();
-        let suffix_end = secret_argument_end(command_line, suffix_start, false);
+        let suffix_end = secret_argument_end(command_line, suffix_start, false, false);
         if suffix_end == suffix_start {
             search_from = suffix_start;
             if search_from == command_line.len() {
@@ -516,18 +525,34 @@ fn consume_adjacent_redacted_fragments(command_line: &str, redaction_end: &Regex
     sanitized
 }
 
-// Windows joins adjacent quoted and unquoted fragments into one argument. Track double-quote
-// state (including backslash parity) so a sensitive value is consumed to its real argument
-// boundary; an unmatched quote deliberately consumes the remaining command line.
-fn secret_argument_end(command_line: &str, value_start: usize, stop_at_ampersand: bool) -> usize {
+// Windows joins adjacent quoted and unquoted fragments into one argument. Track quote state
+// (including double-quote backslash parity) so a sensitive value is consumed to its real
+// argument boundary; an unmatched quote deliberately consumes the remaining command line.
+fn secret_argument_end(
+    command_line: &str,
+    value_start: usize,
+    stop_at_ampersand: bool,
+    stop_at_json_string_end: bool,
+) -> usize {
     let bytes = command_line.as_bytes();
     let mut index = value_start;
     let mut in_double_quotes = false;
+    let mut in_single_quotes = false;
 
     while index < bytes.len() {
         let byte = bytes[index];
         if !in_double_quotes
+            && !in_single_quotes
             && (matches!(byte, b' ' | b'\t' | b'\r' | b'\n') || (stop_at_ampersand && byte == b'&'))
+        {
+            break;
+        }
+
+        if !in_double_quotes
+            && !in_single_quotes
+            && byte == b'"'
+            && stop_at_json_string_end
+            && is_json_string_end(bytes, index)
         {
             break;
         }
@@ -538,7 +563,7 @@ fn secret_argument_end(command_line: &str, value_start: usize, stop_at_ampersand
                 index += 1;
             }
             if index < bytes.len() && bytes[index] == b'"' {
-                if (index - slash_start) % 2 == 0 {
+                if !in_single_quotes && (index - slash_start) % 2 == 0 {
                     in_double_quotes = !in_double_quotes;
                 }
                 index += 1;
@@ -546,13 +571,23 @@ fn secret_argument_end(command_line: &str, value_start: usize, stop_at_ampersand
             continue;
         }
 
-        if byte == b'"' {
+        if byte == b'"' && !in_single_quotes {
             in_double_quotes = !in_double_quotes;
+        } else if byte == b'\'' && !in_double_quotes && (in_single_quotes || index == value_start) {
+            in_single_quotes = !in_single_quotes;
         }
         index += 1;
     }
 
     index
+}
+
+fn is_json_string_end(bytes: &[u8], quote_index: usize) -> bool {
+    let mut index = quote_index + 1;
+    while index < bytes.len() && matches!(bytes[index], b' ' | b'\t' | b'\r' | b'\n') {
+        index += 1;
+    }
+    index == bytes.len() || matches!(bytes[index], b',' | b'}' | b']')
 }
 
 fn redact_escaped_json_secrets(command_line: &str) -> String {
@@ -1838,6 +1873,40 @@ mod tests {
                 );
             }
             assert!(sanitized.contains(safe_sentinel));
+        }
+    }
+
+    #[test]
+    fn named_secret_arguments_inside_valid_json_preserve_safe_siblings() {
+        let cases = [
+            (
+                r#"{"command":"installer --token=embedded-token-secret","safe":"keep-json-sibling"}"#,
+                &["embedded-token-secret"][..],
+                "keep-json-sibling",
+            ),
+            (
+                r#"{"command":"installer --token=\"prefix-json-token-secret\"suffix-json-token-secret","safe":"keep-escaped-json-sibling"}"#,
+                &["prefix-json-token-secret", "suffix-json-token-secret"][..],
+                "keep-escaped-json-sibling",
+            ),
+        ];
+
+        for (raw, sentinels, safe_sentinel) in cases {
+            serde_json::from_str::<serde_json::Value>(raw).expect("valid source JSON");
+            let sanitized = sanitize_command_line(raw);
+
+            for sentinel in sentinels {
+                assert!(
+                    !sanitized.contains(sentinel),
+                    "JSON command secret leaked {sentinel}: {sanitized}"
+                );
+            }
+            assert!(
+                sanitized.contains(safe_sentinel),
+                "safe JSON sibling was consumed: {sanitized}"
+            );
+            serde_json::from_str::<serde_json::Value>(&sanitized)
+                .expect("sanitized command container remains valid JSON");
         }
     }
 
