@@ -76,6 +76,7 @@ export interface EspDiagnosticsStore {
   evidenceRecordRows: Map<string, EspEvidenceRecordRow>;
   nextEvidenceOrder: number;
   beginAnalysis(requestId: string): void;
+  rejectAnalysisInput(error: string): void;
   beginLiveStart(requestId: string): void;
   beginStop(sessionId: string): void;
   applyAnalysis(requestId: string, snapshot: EspDiagnosticsSnapshot): void;
@@ -375,6 +376,12 @@ export const useEspDiagnosticsStore = create<EspDiagnosticsStore>((set) => ({
       evidenceBoundaryMarkers: [],
       evidenceRecordRows: new Map(),
       nextEvidenceOrder: 0,
+    })),
+
+  rejectAnalysisInput: (error) =>
+    set((state) => ({
+      phase: state.snapshot ? "ready" : "error",
+      error,
     })),
 
   beginLiveStart: (requestId) =>

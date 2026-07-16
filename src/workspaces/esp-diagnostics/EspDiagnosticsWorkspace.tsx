@@ -54,9 +54,7 @@ async function analyzePath(
   const source = { kind: sourceKind, path } as const;
   const store = useEspDiagnosticsStore.getState();
   if (!resolveEspEvidenceSource(source)) {
-    const requestId = createRequestId("analysis");
-    store.beginAnalysis(requestId);
-    store.fail(requestId, ESP_EVIDENCE_SOURCE_ERROR);
+    store.rejectAnalysisInput(ESP_EVIDENCE_SOURCE_ERROR);
     return;
   }
 

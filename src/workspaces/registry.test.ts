@@ -64,7 +64,8 @@ vi.mock("./event-log/evtx-store", () => ({
 
 const TestWorkspace = lazy(async () => ({ default: () => null }));
 const TestToolbarAction = lazy(async () => ({
-  default: () => createElement("button", { type: "button" }, "Workspace live action"),
+  default: () =>
+    createElement("button", { type: "button" }, "Workspace live action"),
 }));
 const TestStatusContent = lazy(async () => ({
   default: () => createElement("span", null, "Workspace status content"),
@@ -136,7 +137,8 @@ function makeChromeSnapshot(): EspDiagnosticsSnapshot {
         provenance: {
           sourceKind: "imeLog",
           sourceArtifactId: "ime-log",
-          filePath: "C:\\ProgramData\\Microsoft\\IntuneManagementExtension\\Logs\\IntuneManagementExtension.log",
+          filePath:
+            "C:\\ProgramData\\Microsoft\\IntuneManagementExtension\\Logs\\IntuneManagementExtension.log",
           lineNumber: 1,
           recordNumber: null,
           registry: null,
@@ -155,7 +157,8 @@ function makeChromeSnapshot(): EspDiagnosticsSnapshot {
         provenance: {
           sourceKind: "imeLog",
           sourceArtifactId: "ime-log",
-          filePath: "C:\\ProgramData\\Microsoft\\IntuneManagementExtension\\Logs\\IntuneManagementExtension.log",
+          filePath:
+            "C:\\ProgramData\\Microsoft\\IntuneManagementExtension\\Logs\\IntuneManagementExtension.log",
           lineNumber: 2,
           recordNumber: null,
           registry: null,
@@ -177,7 +180,10 @@ function makeChromeSnapshot(): EspDiagnosticsSnapshot {
 afterEach(cleanup);
 beforeEach(() => {
   vi.clearAllMocks();
-  useEspDiagnosticsStore.setState(useEspDiagnosticsStore.getInitialState(), true);
+  useEspDiagnosticsStore.setState(
+    useEspDiagnosticsStore.getInitialState(),
+    true,
+  );
   useUiStore.setState({
     activeView: "esp-diagnostics",
     activeWorkspace: "esp-diagnostics",
@@ -251,32 +257,32 @@ describe("registry-driven shell chrome", () => {
       createElement(
         "div",
         null,
-        createElement(WorkspaceToolbarAction, { workspace: workspaceWithSlots }),
-        createElement(
-          WorkspaceStatusBarContent,
-          {
-            workspace: workspaceWithSlots,
-            children: createElement("span", null, "Legacy status fallback"),
-          },
-        ),
+        createElement(WorkspaceToolbarAction, {
+          workspace: workspaceWithSlots,
+        }),
+        createElement(WorkspaceStatusBarContent, {
+          workspace: workspaceWithSlots,
+          children: createElement("span", null, "Legacy status fallback"),
+        }),
       ),
     );
 
     expect(
       await screen.findByRole("button", { name: "Workspace live action" }),
     ).toBeInTheDocument();
-    expect(await screen.findByText("Workspace status content")).toBeInTheDocument();
-    expect(screen.queryByText("Legacy status fallback")).not.toBeInTheDocument();
+    expect(
+      await screen.findByText("Workspace status content"),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText("Legacy status fallback"),
+    ).not.toBeInTheDocument();
 
     cleanup();
     render(
-      createElement(
-        WorkspaceStatusBarContent,
-        {
-          workspace: logWorkspace,
-          children: createElement("span", null, "Legacy status fallback"),
-        },
-      ),
+      createElement(WorkspaceStatusBarContent, {
+        workspace: logWorkspace,
+        children: createElement("span", null, "Legacy status fallback"),
+      }),
     );
 
     expect(screen.getByText("Legacy status fallback")).toBeInTheDocument();
@@ -290,8 +296,7 @@ describe("registry-driven shell chrome", () => {
 
   it("keeps legacy status content visible while a workspace status slot is loading", async () => {
     let resolveStatusContent:
-      | ((module: { default: ComponentType }) => void)
-      | undefined;
+      ((module: { default: ComponentType }) => void) | undefined;
     const DelayedStatusContent = lazy(
       () =>
         new Promise<{ default: ComponentType }>((resolve) => {
@@ -304,13 +309,10 @@ describe("registry-driven shell chrome", () => {
     };
 
     render(
-      createElement(
-        WorkspaceStatusBarContent,
-        {
-          workspace: workspaceWithDelayedStatus,
-          children: createElement("span", null, "Legacy status while loading"),
-        },
-      ),
+      createElement(WorkspaceStatusBarContent, {
+        workspace: workspaceWithDelayedStatus,
+        children: createElement("span", null, "Legacy status while loading"),
+      }),
     );
 
     expect(screen.getByText("Legacy status while loading")).toBeInTheDocument();
@@ -321,8 +323,12 @@ describe("registry-driven shell chrome", () => {
       });
     });
 
-    expect(await screen.findByText("Loaded workspace status")).toBeInTheDocument();
-    expect(screen.queryByText("Legacy status while loading")).not.toBeInTheDocument();
+    expect(
+      await screen.findByText("Loaded workspace status"),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText("Legacy status while loading"),
+    ).not.toBeInTheDocument();
   });
 });
 
@@ -336,15 +342,15 @@ describe("ESP workspace registration", () => {
       liveAcquisition: true,
       tabStrip: false,
     });
-    expect(getAvailableWorkspaces("windows").map((workspace) => workspace.id)).toContain(
-      "esp-diagnostics",
-    );
-    expect(getAvailableWorkspaces("macos").map((workspace) => workspace.id)).toContain(
-      "esp-diagnostics",
-    );
-    expect(getAvailableWorkspaces("linux").map((workspace) => workspace.id)).toContain(
-      "esp-diagnostics",
-    );
+    expect(
+      getAvailableWorkspaces("windows").map((workspace) => workspace.id),
+    ).toContain("esp-diagnostics");
+    expect(
+      getAvailableWorkspaces("macos").map((workspace) => workspace.id),
+    ).toContain("esp-diagnostics");
+    expect(
+      getAvailableWorkspaces("linux").map((workspace) => workspace.id),
+    ).toContain("esp-diagnostics");
     expect(supportsEspLiveAcquisition("windows")).toBe(true);
     expect(supportsEspLiveAcquisition("macos")).toBe(false);
     expect(supportsEspLiveAcquisition("linux")).toBe(false);
@@ -352,7 +358,10 @@ describe("ESP workspace registration", () => {
 
   it("routes evidence folders, manifests, CABs, and ZIPs only", () => {
     expect(
-      resolveEspEvidenceSource({ kind: "folder", path: "/captures/cmtrace-bundle" }),
+      resolveEspEvidenceSource({
+        kind: "folder",
+        path: "/captures/cmtrace-bundle",
+      }),
     ).toBe("/captures/cmtrace-bundle");
     expect(
       resolveEspEvidenceSource({
@@ -363,13 +372,22 @@ describe("ESP workspace registration", () => {
       }),
     ).toBe("/captures/known-bundle");
     expect(
-      resolveEspEvidenceSource({ kind: "file", path: "/captures/manifest.json" }),
+      resolveEspEvidenceSource({
+        kind: "file",
+        path: "/captures/manifest.json",
+      }),
     ).toBe("/captures/manifest.json");
     expect(
-      resolveEspEvidenceSource({ kind: "file", path: "/captures/MDMDiagReport.CAB" }),
+      resolveEspEvidenceSource({
+        kind: "file",
+        path: "/captures/MDMDiagReport.CAB",
+      }),
     ).toBe("/captures/MDMDiagReport.CAB");
     expect(
-      resolveEspEvidenceSource({ kind: "file", path: "/captures/evidence.zip" }),
+      resolveEspEvidenceSource({
+        kind: "file",
+        path: "/captures/evidence.zip",
+      }),
     ).toBe("/captures/evidence.zip");
     expect(
       resolveEspEvidenceSource({ kind: "file", path: "/captures/random.json" }),
@@ -398,6 +416,12 @@ describe("ESP workspace registration", () => {
   });
 
   it("rejects an unsupported file selected from the workspace import action", async () => {
+    const currentSnapshot = makeChromeSnapshot();
+    useEspDiagnosticsStore.setState({
+      phase: "ready",
+      snapshot: currentSnapshot,
+      error: null,
+    });
     vi.mocked(open).mockResolvedValueOnce("/captures/random.json");
     render(createElement(EspDiagnosticsWorkspace));
 
@@ -414,6 +438,12 @@ describe("ESP workspace registration", () => {
       "analyze_esp_evidence",
       expect.anything(),
     );
+    expect(useEspDiagnosticsStore.getState()).toMatchObject({
+      phase: "ready",
+      snapshot: currentSnapshot,
+      error:
+        "ESP Diagnostics accepts CMTrace evidence folders, manifest.json, CAB, or ZIP sources.",
+    });
   });
 
   it("renders a production idle workspace with explicit local actions", () => {
@@ -437,7 +467,9 @@ describe("ESP workspace registration", () => {
     expect(screen.getByText("Analyzing captured evidence")).toBeInTheDocument();
 
     act(() => {
-      useEspDiagnosticsStore.getState().fail("analysis-a", "Bundle is unreadable");
+      useEspDiagnosticsStore
+        .getState()
+        .fail("analysis-a", "Bundle is unreadable");
     });
     expect(screen.getByText("Bundle is unreadable")).toBeInTheDocument();
     expect(
@@ -617,9 +649,7 @@ describe("ESP workspace app chrome", () => {
   it("registers lazy ESP toolbar and status slots", () => {
     expect(espDiagnosticsWorkspace.toolbarAction).toBeDefined();
     expect(espDiagnosticsWorkspace.statusBarContent).toBeDefined();
-    expect(espDiagnosticsWorkspace.toolbarAction).not.toBe(
-      EspToolbarAction,
-    );
+    expect(espDiagnosticsWorkspace.toolbarAction).not.toBe(EspToolbarAction);
     expect(espDiagnosticsWorkspace.statusBarContent).not.toBe(
       EspStatusBarContent,
     );

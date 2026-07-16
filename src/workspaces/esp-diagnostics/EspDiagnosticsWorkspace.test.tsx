@@ -1633,7 +1633,9 @@ describe("complete single-page evidence composition", () => {
       container.querySelectorAll<HTMLElement>("*"),
     )
       .filter((element) => {
-        const fontSize = Number.parseFloat(element.style.fontSize);
+        const fontSize = Number.parseFloat(
+          window.getComputedStyle(element).fontSize,
+        );
         return Number.isFinite(fontSize) && fontSize > 0 && fontSize < 10;
       })
       .map((element) => element.textContent?.trim().slice(0, 80));
