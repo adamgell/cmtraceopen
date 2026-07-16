@@ -143,11 +143,13 @@ export function createEspGraphCoordinator(
   let lastRequestedFingerprint: string | null = null;
   let blockedFingerprint: string | null = null;
   let pendingOrphanCancellation: Promise<void> | null = null;
+  let ownedRequestId: string | null = null;
   let unsubscribeEsp: (() => void) | null = null;
   let unsubscribeUi: (() => void) | null = null;
 
   const cancelCurrentRequest = (): Promise<void> | null => {
-    const requestId = useEspDiagnosticsStore.getState().graphRequestId;
+    const requestId =
+      ownedRequestId ?? useEspDiagnosticsStore.getState().graphRequestId;
     if (!requestId) {
       return null;
     }
@@ -159,6 +161,9 @@ export function createEspGraphCoordinator(
         });
       })
       .finally(() => {
+        if (ownedRequestId === requestId) {
+          ownedRequestId = null;
+        }
         useEspDiagnosticsStore.getState().cancelGraph(requestId);
       });
   };
@@ -192,6 +197,16 @@ export function createEspGraphCoordinator(
 
     const snapshot = useEspDiagnosticsStore.getState().snapshot;
     if (!snapshot) {
+      const generation = ++operationGeneration;
+      blockedFingerprint = null;
+      lastRequestedFingerprint = null;
+      const cancellation = cancelCurrentRequest();
+      if (cancellation) {
+        await cancellation;
+      }
+      if (disposed || generation !== operationGeneration) {
+        return;
+      }
       return;
     }
 
@@ -297,6 +312,7 @@ export function createEspGraphCoordinator(
     lastRequestedFingerprint = fingerprint;
     const requestId = nextRequestId();
     const request = createGraphRequest(currentSnapshot, requestId);
+    ownedRequestId = requestId;
     useEspDiagnosticsStore.getState().beginGraph(requestId, currentFingerprint);
 
     try {
@@ -318,6 +334,10 @@ export function createEspGraphCoordinator(
         useEspDiagnosticsStore
           .getState()
           .failGraph(requestId, errorMessage(error));
+      }
+    } finally {
+      if (ownedRequestId === requestId) {
+        ownedRequestId = null;
       }
     }
   };

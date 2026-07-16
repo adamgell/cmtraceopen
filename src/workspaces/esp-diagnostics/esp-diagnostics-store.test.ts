@@ -1230,6 +1230,110 @@ describe("ESP Graph scheduling", () => {
     coordinator.dispose();
   });
 
+  it("refetches Graph after a completed same-identity analysis is reset", async () => {
+    let requestNumber = 0;
+    const fetchGraph = vi.fn(async (request: EspGraphRequest) =>
+      makeOverlay(request.requestId),
+    );
+    const coordinator = createEspGraphCoordinator({
+      fetchGraph,
+      cancelGraph: vi.fn(async () => undefined),
+      createRequestId: () => `graph-${++requestNumber}`,
+    });
+    useUiStore.setState({ graphApiEnabled: true, graphApiStatus: "connected" });
+    useEspDiagnosticsStore.getState().beginAnalysis("analysis-first");
+    useEspDiagnosticsStore
+      .getState()
+      .applyAnalysis(
+        "analysis-first",
+        makeSnapshot(["local-first"], "same-device"),
+      );
+
+    coordinator.start();
+    try {
+      await vi.waitFor(() => expect(fetchGraph).toHaveBeenCalledTimes(1));
+      await vi.waitFor(() =>
+        expect(
+          useEspDiagnosticsStore.getState().snapshot?.graph?.requestId,
+        ).toBe("graph-1"),
+      );
+
+      useEspDiagnosticsStore.getState().beginAnalysis("analysis-second");
+      useEspDiagnosticsStore
+        .getState()
+        .applyAnalysis(
+          "analysis-second",
+          makeSnapshot(["local-second"], "same-device"),
+        );
+
+      await vi.waitFor(() => expect(fetchGraph).toHaveBeenCalledTimes(2));
+      expect(useEspDiagnosticsStore.getState().snapshot?.graph?.requestId).toBe(
+        "graph-2",
+      );
+    } finally {
+      coordinator.dispose();
+    }
+  });
+
+  it("cancels coordinator-owned work across a reset before replacing it", async () => {
+    const staleOverlay = deferred<EspGraphOverlay>();
+    const fetchGraph = vi
+      .fn<(request: EspGraphRequest) => Promise<EspGraphOverlay>>()
+      .mockImplementationOnce(() => staleOverlay.promise)
+      .mockImplementationOnce(async (request) =>
+        makeOverlay(request.requestId),
+      );
+    const cancelGraph = vi.fn(async () => undefined);
+    const ids = ["graph-stale", "graph-replacement"];
+    const coordinator = createEspGraphCoordinator({
+      fetchGraph,
+      cancelGraph,
+      createRequestId: () => ids.shift() ?? "graph-unexpected",
+    });
+    useUiStore.setState({ graphApiEnabled: true, graphApiStatus: "connected" });
+    useEspDiagnosticsStore.getState().beginAnalysis("analysis-first");
+    useEspDiagnosticsStore
+      .getState()
+      .applyAnalysis(
+        "analysis-first",
+        makeSnapshot(["local-first"], "same-device"),
+      );
+
+    coordinator.start();
+    try {
+      await vi.waitFor(() => expect(fetchGraph).toHaveBeenCalledTimes(1));
+      expect(useEspDiagnosticsStore.getState().graphRequestId).toBe(
+        "graph-stale",
+      );
+
+      useEspDiagnosticsStore.getState().beginAnalysis("analysis-second");
+      await vi.waitFor(() =>
+        expect(cancelGraph).toHaveBeenCalledWith("graph-stale"),
+      );
+      useEspDiagnosticsStore
+        .getState()
+        .applyAnalysis(
+          "analysis-second",
+          makeSnapshot(["local-second"], "same-device"),
+        );
+
+      await vi.waitFor(() => expect(fetchGraph).toHaveBeenCalledTimes(2));
+      await vi.waitFor(() =>
+        expect(
+          useEspDiagnosticsStore.getState().snapshot?.graph?.requestId,
+        ).toBe("graph-replacement"),
+      );
+
+      staleOverlay.resolve(makeOverlay("graph-stale"));
+      await Promise.resolve();
+      expect(useEspDiagnosticsStore.getState().snapshot?.graph?.requestId).toBe(
+        "graph-replacement",
+      );
+    } finally {
+      coordinator.dispose();
+    }
+  });
+
   it("does not attach an overlay to a different identity than its request", () => {
     const requested = makeSnapshot(["local-y"], "device-y");
     useEspDiagnosticsStore.setState({ phase: "ready", snapshot: requested });
