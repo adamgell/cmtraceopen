@@ -7,19 +7,21 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use chrono::{DateTime, Duration, SecondsFormat, Utc};
+use chrono::{
+    DateTime, Duration, FixedOffset, NaiveDateTime, SecondsFormat, TimeZone, Timelike, Utc,
+};
 
 use super::models::{
     EspCorrelationConfidence, EspDeploymentLogObservation, EspEvidenceRef, EspImeObservation,
     EspInstallerCorrelation, EspObservationContext, EspProcessObservation, EspTimestamp,
-    EspWorkload,
+    EspTimestampKind, EspWorkload,
 };
 use super::normalize::extract_guid;
 
 const TEMPORAL_SLOP: Duration = Duration::minutes(2);
 const MAX_PARENT_CHAIN_DEPTH: usize = 16;
 
-type ProcessIdentity = (u32, String);
+type ProcessIdentity = (u32, DateTime<Utc>);
 type ProcessSamples<'a> = Vec<&'a EspProcessObservation>;
 
 /// Extracts an MSI-style `/L`, `/L*V`, or generic `/log` target without
@@ -156,6 +158,33 @@ fn correlate_one<'a>(
         .flat_map(|samples| samples.iter())
         .map(|process| process.context.evidence_ref.clone())
         .collect::<Vec<_>>();
+    if lineage
+        .iter()
+        .any(|samples| process_samples_conflict(samples))
+    {
+        let candidates = matching_lineage_workloads(&lineage, workload_identifiers);
+        for candidate in &candidates {
+            if let Some(workload) = workloads
+                .iter()
+                .find(|workload| workload.workload_id == *candidate)
+            {
+                evidence.extend(workload.evidence.iter().cloned());
+            }
+        }
+        deduplicate_evidence(&mut evidence);
+        return EspInstallerCorrelation {
+            correlation_id: correlation_id(root_representative),
+            workload_id: None,
+            confidence: EspCorrelationConfidence::Uncorrelated,
+            reason: "conflictingProcessSamples".to_string(),
+            candidate_workload_ids: candidates.into_iter().collect(),
+            process_observations: lineage
+                .iter()
+                .flat_map(|samples| samples.iter().map(|process| (*process).clone()))
+                .collect(),
+            evidence,
+        };
+    }
     let mut signals: BTreeMap<&'static str, BTreeSet<String>> = BTreeMap::new();
     let mut exact_signal_sets = Vec::new();
     let mut exact_identifier_present = false;
@@ -417,10 +446,19 @@ fn group_process_observations(
 ) -> BTreeMap<ProcessIdentity, ProcessSamples<'_>> {
     let mut groups = BTreeMap::<ProcessIdentity, ProcessSamples<'_>>::new();
     for process in processes {
-        groups
-            .entry(process_identity_key(process))
-            .or_default()
-            .push(process);
+        let Some(identity) = process_identity_key(process) else {
+            continue;
+        };
+        let Some(sampled) = process_sample_timestamp(process) else {
+            continue;
+        };
+        let Some(started) = process_start_value(&process.process_start_time) else {
+            continue;
+        };
+        if sampled < started {
+            continue;
+        }
+        groups.entry(identity).or_default().push(process);
     }
     for samples in groups.values_mut() {
         samples.sort_by_key(|process| process_preference_key(process));
@@ -517,6 +555,28 @@ fn add_identifier_signal(
     }
     signals.entry(signal).or_default().extend(matches);
     true
+}
+
+fn matching_lineage_workloads(
+    lineage: &[ProcessSamples<'_>],
+    workload_identifiers: &[(&str, BTreeSet<String>)],
+) -> BTreeSet<String> {
+    let mut candidates = BTreeSet::new();
+    for process in lineage.iter().flat_map(|samples| samples.iter().copied()) {
+        for value in [process.app_id.as_deref(), process.product_code.as_deref()]
+            .into_iter()
+            .flatten()
+        {
+            let identifiers = normalized_identifiers(value);
+            candidates.extend(
+                workload_identifiers
+                    .iter()
+                    .filter(|(_, workload_values)| !identifiers.is_disjoint(workload_values))
+                    .map(|(workload_id, _)| (*workload_id).to_string()),
+            );
+        }
+    }
+    candidates
 }
 
 fn has_normalized_identifier(value: &str) -> bool {
@@ -620,8 +680,56 @@ fn process_sample_timestamp(process: &EspProcessObservation) -> Option<DateTime<
 fn process_start_timestamp(samples: &[&EspProcessObservation]) -> Option<DateTime<Utc>> {
     samples
         .iter()
-        .filter_map(|process| timestamp_value(&process.process_start_time))
+        .filter_map(|process| process_start_value(&process.process_start_time))
         .max()
+}
+
+fn process_start_value(timestamp: &EspTimestamp) -> Option<DateTime<Utc>> {
+    if timestamp.raw_text.trim().is_empty()
+        || matches!(
+            &timestamp.kind,
+            EspTimestampKind::Invalid | EspTimestampKind::Unspecified
+        )
+    {
+        return None;
+    }
+
+    parse_process_start_raw(&timestamp.raw_text).or_else(|| {
+        timestamp
+            .normalized_utc
+            .as_deref()
+            .and_then(parse_rfc3339_utc)
+    })
+}
+
+fn parse_process_start_raw(raw: &str) -> Option<DateTime<Utc>> {
+    parse_rfc3339_utc(raw).or_else(|| parse_wmi_process_start(raw))
+}
+
+fn parse_rfc3339_utc(raw: &str) -> Option<DateTime<Utc>> {
+    DateTime::parse_from_rfc3339(raw)
+        .ok()
+        .map(|value| value.with_timezone(&Utc))
+}
+
+fn parse_wmi_process_start(raw: &str) -> Option<DateTime<Utc>> {
+    if raw.len() != 25 || raw.as_bytes().get(14) != Some(&b'.') {
+        return None;
+    }
+    let naive = NaiveDateTime::parse_from_str(raw.get(..14)?, "%Y%m%d%H%M%S").ok()?;
+    let microseconds = raw.get(15..21)?.parse::<u32>().ok()?;
+    let naive = naive.with_nanosecond(microseconds.checked_mul(1_000)?)?;
+    let sign = match raw.as_bytes().get(21)? {
+        b'+' => 1,
+        b'-' => -1,
+        _ => return None,
+    };
+    let offset_minutes = raw.get(22..25)?.parse::<i32>().ok()?.checked_mul(sign)?;
+    let offset = FixedOffset::east_opt(offset_minutes.checked_mul(60)?)?;
+    offset
+        .from_local_datetime(&naive)
+        .single()
+        .map(|value| value.with_timezone(&Utc))
 }
 
 fn latest_process_sample_timestamp(samples: &[&EspProcessObservation]) -> Option<DateTime<Utc>> {
@@ -654,6 +762,85 @@ fn preferred_process<'a>(
         .iter()
         .copied()
         .max_by_key(|process| process_preference_key(process))
+}
+
+fn process_samples_conflict(samples: &[&EspProcessObservation]) -> bool {
+    normalized_string_conflict(samples, |process| {
+        let normalized = normalized_executable_name(&process.executable_name);
+        (!normalized.is_empty()).then_some(normalized)
+    }) || normalized_string_conflict(samples, |process| {
+        process
+            .sanitized_command_line
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_ascii_lowercase)
+    }) || normalized_string_conflict(samples, |process| {
+        process
+            .referenced_log_path
+            .as_deref()
+            .and_then(canonical_installer_log_path)
+    }) || identifier_field_conflict(samples, |process| process.app_id.as_deref())
+        || identifier_field_conflict(samples, |process| process.product_code.as_deref())
+        || cross_sample_identifier_conflict(samples)
+}
+
+fn normalized_string_conflict(
+    samples: &[&EspProcessObservation],
+    value: impl Fn(&EspProcessObservation) -> Option<String>,
+) -> bool {
+    samples
+        .iter()
+        .filter_map(|process| value(process))
+        .collect::<BTreeSet<_>>()
+        .len()
+        > 1
+}
+
+fn identifier_field_conflict<'a>(
+    samples: &[&'a EspProcessObservation],
+    value: impl Fn(&'a EspProcessObservation) -> Option<&'a str>,
+) -> bool {
+    let identifiers = samples
+        .iter()
+        .filter_map(|process| value(process))
+        .map(normalized_identifiers)
+        .filter(|values| !values.is_empty())
+        .collect::<Vec<_>>();
+    identifier_sets_conflict(&identifiers)
+}
+
+fn cross_sample_identifier_conflict(samples: &[&EspProcessObservation]) -> bool {
+    for (left_index, left) in samples.iter().enumerate() {
+        let left_identifiers = [left.app_id.as_deref(), left.product_code.as_deref()]
+            .into_iter()
+            .flatten()
+            .map(normalized_identifiers)
+            .filter(|values| !values.is_empty())
+            .collect::<Vec<_>>();
+        for right in samples.iter().skip(left_index + 1) {
+            let right_identifiers = [right.app_id.as_deref(), right.product_code.as_deref()]
+                .into_iter()
+                .flatten()
+                .map(normalized_identifiers)
+                .filter(|values| !values.is_empty())
+                .collect::<Vec<_>>();
+            if left_identifiers.iter().any(|left| {
+                right_identifiers
+                    .iter()
+                    .any(|right| left.is_disjoint(right))
+            }) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn identifier_sets_conflict(identifiers: &[BTreeSet<String>]) -> bool {
+    identifiers
+        .iter()
+        .any(|left| identifiers.iter().any(|right| left.is_disjoint(right)))
 }
 
 fn merge_process_samples(samples: &[&EspProcessObservation]) -> Option<EspProcessObservation> {
@@ -746,31 +933,22 @@ fn process_preference_key(
 }
 
 fn process_group_identity(samples: &[&EspProcessObservation]) -> Option<ProcessIdentity> {
-    samples.first().map(|process| process_identity_key(process))
+    samples
+        .first()
+        .and_then(|process| process_identity_key(process))
 }
 
-fn process_identity_key(process: &EspProcessObservation) -> ProcessIdentity {
-    (
-        process.pid,
-        process
-            .process_start_time
-            .normalized_utc
-            .clone()
-            .unwrap_or_else(|| process.process_start_time.raw_text.clone()),
-    )
+fn process_identity_key(process: &EspProcessObservation) -> Option<ProcessIdentity> {
+    process_start_value(&process.process_start_time).map(|started| (process.pid, started))
 }
 
 fn correlation_id(process: &EspProcessObservation) -> String {
+    let (pid, started) =
+        process_identity_key(process).expect("correlated process has a validated identity");
     format!(
         "installer|{}|{}",
-        process.pid,
-        escape_component(
-            process
-                .process_start_time
-                .normalized_utc
-                .as_deref()
-                .unwrap_or(&process.process_start_time.raw_text),
-        )
+        pid,
+        escape_component(&started.to_rfc3339_opts(SecondsFormat::AutoSi, true))
     )
 }
 
