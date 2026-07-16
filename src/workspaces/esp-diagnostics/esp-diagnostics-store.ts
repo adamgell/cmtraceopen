@@ -144,7 +144,7 @@ function identityChanged(
 
 function graphOverlayIsPartial(overlay: EspGraphOverlay): boolean {
   const completeStatuses = new Set(["available", "notFound", "skipped"]);
-  return [
+  const sectionIsPartial = [
     overlay.deviceMatch,
     overlay.autopilotIdentity,
     overlay.deploymentProfile,
@@ -156,6 +156,13 @@ function graphOverlayIsPartial(overlay: EspGraphOverlay): boolean {
     overlay.policies,
     overlay.scripts,
   ].some((section) => !completeStatuses.has(section.status));
+  return (
+    sectionIsPartial ||
+    (overlay.apps.data?.some(
+      (app) => !completeStatuses.has(app.intentState.status),
+    ) ??
+      false)
+  );
 }
 
 function graphStateForFreshLocalRun(

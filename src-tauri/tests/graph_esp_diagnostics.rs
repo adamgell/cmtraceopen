@@ -1550,6 +1550,29 @@ mod esp_correlation_tests {
     }
 
     #[test]
+    fn correlation_unmatched_explicit_selection_never_falls_through_to_local_identity() {
+        let locally_matching = candidate(
+            LOCAL_MANAGED,
+            LOCAL_ENTRA,
+            "SERIAL-001",
+            "DEVICE-01",
+            Some("tenant-a"),
+            Some("user@contoso.example"),
+        );
+
+        let matched =
+            correlate_managed_device(&identity(), Some(OTHER_MANAGED), vec![locally_matching]);
+
+        assert!(matched.selected.is_none());
+        assert_eq!(matched.candidates.len(), 1);
+        assert_eq!(
+            matched.match_basis.as_deref(),
+            Some("selectedManagedDeviceId")
+        );
+        assert_eq!(matched.confidence, EspCorrelationConfidence::Uncorrelated);
+    }
+
+    #[test]
     fn correlation_priority_is_managed_then_entra_then_serial() {
         let local_managed = candidate(
             LOCAL_MANAGED,
@@ -1731,6 +1754,8 @@ mod esp_orchestration_tests {
             identity: identity(),
             workload_ids: vec![APP.to_string()],
             selected_managed_device_id: None,
+            evidence_window_start_utc: Some("2026-07-15T09:00:00Z".to_string()),
+            evidence_window_end_utc: Some("2026-07-15T13:00:00Z".to_string()),
             enrollment_configuration_ids: Vec::new(),
             app_ids: vec![APP.to_string()],
             policy_references: vec![EspGraphPolicyReference {
@@ -1931,8 +1956,8 @@ mod esp_orchestration_tests {
             .with(
                 &format!("/v1.0/deviceManagement/deviceConfigurations/{POLICY}/deviceStatuses?$top=100"),
                 serde_json::json!({"value": [
-                    {"id": "status-elsewhere", "deviceId": "5eb3db17-64cf-4b17-b00c-d93d9ec8c31c", "status": "compliant"},
-                    {"id": "status-local", "deviceId": MANAGED, "status": "error"}
+                    {"id": "status-elsewhere", "deviceDisplayName": "OTHER", "userPrincipalName": "other@contoso.example", "status": "compliant"},
+                    {"id": "status-local", "deviceDisplayName": "DEVICE-01", "userPrincipalName": "user@contoso.example", "status": "error"}
                 ]}),
             )
             .with(
@@ -1944,9 +1969,9 @@ mod esp_orchestration_tests {
                 serde_json::json!({"value": []}),
             )
             .with(
-                &format!("/beta/deviceManagement/deviceManagementScripts/{SCRIPT}/deviceRunStates?$top=100"),
+                &format!("/beta/deviceManagement/deviceManagementScripts/{SCRIPT}/deviceRunStates?$expand=managedDevice($select=id)&$top=100"),
                 serde_json::json!({"value": [
-                    {"id": "run-local", "managedDeviceId": MANAGED, "resultState": "success"}
+                    {"id": "run-local", "managedDevice": {"id": MANAGED}, "runState": "success"}
                 ]}),
             )
     }
@@ -2028,6 +2053,13 @@ mod esp_orchestration_tests {
             "failed",
             "user intent must be filtered to the matched device"
         );
+        let intent_state = &overlay.apps.data.as_ref().unwrap()[0].intent_state;
+        assert_eq!(intent_state.status, GraphSectionStatus::Available);
+        assert_eq!(intent_state.api_version, GraphApiVersion::Beta);
+        assert_eq!(
+            intent_state.required_scope.as_deref(),
+            Some("DeviceManagementConfiguration.Read.All")
+        );
         assert_eq!(
             overlay.policies.data.as_ref().unwrap()[0]
                 .status
@@ -2069,6 +2101,104 @@ mod esp_orchestration_tests {
                 "forbidden Graph path fragment requested: {forbidden}"
             );
         }
+    }
+
+    #[test]
+    fn orchestration_autopilot_events_use_instant_order_and_local_evidence_window() {
+        let older_event = "0f8105d6-955b-4d55-a8de-6a1786dc0135";
+        let outside_event = "6e8b56ec-e722-4d2c-916b-6fa55f8b6693";
+        let older_configuration = "00000000-0000-4000-8000-000000000001";
+        let managed_path = format!("/v1.0/deviceManagement/managedDevices/{MANAGED}");
+        let autopilot_path = format!("/v1.0/deviceManagement/windowsAutopilotDeviceIdentities?$filter=azureActiveDirectoryDeviceId%20eq%20'{ENTRA}'&$top=25");
+        let event_path = format!("/beta/deviceManagement/autopilotEvents?$filter=deviceId%20eq%20'{ENTRA}'&$orderby=eventDateTime%20desc&$top=25");
+        let detail_path =
+            format!("/beta/deviceManagement/autopilotEvents/{EVENT}/policyStatusDetails");
+        let configuration_path =
+            format!("/v1.0/deviceManagement/deviceEnrollmentConfigurations/{ENROLLMENT}");
+        let provider = FakeEspGraphProvider::default()
+            .with(
+                &managed_path,
+                serde_json::json!({
+                    "id": MANAGED,
+                    "azureADDeviceId": ENTRA,
+                    "serialNumber": "SERIAL-001",
+                    "deviceName": "DEVICE-01"
+                }),
+            )
+            .with_error(&autopilot_path, GraphClientErrorKind::PermissionDenied)
+            .with(
+                &event_path,
+                serde_json::json!({"value": [
+                    {
+                        "id": outside_event,
+                        "deviceId": ENTRA,
+                        "eventDateTime": "2026-07-15T17:00:00Z",
+                        "deploymentState": "failure",
+                        "windows10EnrollmentCompletionPageConfigurationId": older_configuration
+                    },
+                    {
+                        "id": older_event,
+                        "deviceId": ENTRA,
+                        "eventDateTime": "2026-07-15T15:00:00+01:00",
+                        "deploymentState": "success",
+                        "windows10EnrollmentCompletionPageConfigurationId": older_configuration
+                    },
+                    {
+                        "id": EVENT,
+                        "deviceId": ENTRA,
+                        "eventDateTime": "2026-07-15T10:30:00-04:00",
+                        "deploymentState": "failure",
+                        "windows10EnrollmentCompletionPageConfigurationId": ENROLLMENT
+                    }
+                ]}),
+            )
+            .with(&detail_path, serde_json::json!({"value": []}))
+            .with(
+                &configuration_path,
+                serde_json::json!({
+                    "id": ENROLLMENT,
+                    "displayName": "Current ESP",
+                    "deviceEspEnabled": true
+                }),
+            )
+            .with(
+                &format!("{configuration_path}/assignments"),
+                serde_json::json!({"value": []}),
+            );
+        let cancellation = super::FakeGraphCancellation::default();
+        let mut request = request();
+        request.evidence_window_start_utc = Some("2026-07-15T13:00:00Z".to_string());
+        request.evidence_window_end_utc = Some("2026-07-15T15:00:00Z".to_string());
+        request.workload_ids.clear();
+        request.app_ids.clear();
+        request.enrollment_configuration_ids = vec![older_configuration.to_string()];
+        request.policy_references.clear();
+        request.script_references.clear();
+
+        let overlay =
+            fetch_esp_graph_overlay(&provider, &request, &cancellation, "2026-07-16T12:00:00Z");
+
+        let events = overlay.autopilot_events.data.as_ref().expect("events");
+        assert_eq!(
+            events
+                .iter()
+                .map(|event| event.event_id.as_str())
+                .collect::<Vec<_>>(),
+            vec![EVENT, older_event]
+        );
+        assert_eq!(
+            events[0]
+                .event_time
+                .as_ref()
+                .and_then(|timestamp| timestamp.normalized_utc.as_deref()),
+            Some("2026-07-15T14:30:00Z")
+        );
+        assert!(provider.paths().contains(&configuration_path));
+        assert!(!provider.paths().iter().any(|path| {
+            path.ends_with(&format!(
+                "deviceEnrollmentConfigurations/{older_configuration}"
+            ))
+        }));
     }
 
     #[test]
@@ -2205,6 +2335,39 @@ mod esp_orchestration_tests {
     }
 
     #[test]
+    fn orchestration_optional_app_intent_failure_preserves_primary_app_section() {
+        let user_path = format!("/beta/users/{USER}/mobileAppIntentAndStates?$top=100");
+        let provider =
+            full_provider().with_error(&user_path, GraphClientErrorKind::PermissionDenied);
+        let cancellation = super::FakeGraphCancellation::default();
+        let mut request = request();
+        request.policy_references.clear();
+        request.script_references.clear();
+
+        let overlay =
+            fetch_esp_graph_overlay(&provider, &request, &cancellation, "2026-07-16T12:00:00Z");
+
+        assert_eq!(overlay.apps.status, GraphSectionStatus::Available);
+        assert_eq!(overlay.apps.api_version, GraphApiVersion::V1_0);
+        assert_eq!(
+            overlay.apps.required_scope.as_deref(),
+            Some("DeviceManagementApps.Read.All")
+        );
+        let apps = overlay.apps.data.as_ref().expect("primary app records");
+        assert_eq!(apps.len(), 1);
+        assert_eq!(apps[0].app_id, APP);
+        assert_eq!(
+            apps[0].intent_state.status,
+            GraphSectionStatus::PermissionDenied
+        );
+        assert_eq!(apps[0].intent_state.api_version, GraphApiVersion::Beta);
+        assert_eq!(
+            apps[0].intent_state.required_scope.as_deref(),
+            Some("DeviceManagementConfiguration.Read.All")
+        );
+    }
+
+    #[test]
     fn orchestration_managed_device_not_found_uses_one_bounded_fallback() {
         let primary = format!("/v1.0/deviceManagement/managedDevices/{MANAGED}");
         let fallback = "/v1.0/deviceManagement/managedDevices?$top=100";
@@ -2247,6 +2410,64 @@ mod esp_orchestration_tests {
             GraphSectionStatus::Cancelled
         );
         assert_eq!(overlay.apps.status, GraphSectionStatus::Cancelled);
+    }
+
+    #[test]
+    fn orchestration_explicit_managed_device_not_found_is_authoritative() {
+        let primary = format!("/v1.0/deviceManagement/managedDevices/{MANAGED}");
+        let provider =
+            FakeEspGraphProvider::default().with_error(&primary, GraphClientErrorKind::NotFound);
+        let cancellation = super::FakeGraphCancellation::default();
+        let mut request = request();
+        request.selected_managed_device_id = Some(MANAGED.to_string());
+
+        let overlay =
+            fetch_esp_graph_overlay(&provider, &request, &cancellation, "2026-07-16T12:00:00Z");
+
+        assert_eq!(provider.paths(), [primary]);
+        assert_eq!(overlay.device_match.status, GraphSectionStatus::NotFound);
+        assert!(overlay.device_match.data.is_none());
+        assert_eq!(
+            overlay
+                .autopilot_identity
+                .error
+                .as_ref()
+                .and_then(|error| error.blocked_by.as_deref()),
+            Some("deviceMatch")
+        );
+    }
+
+    #[test]
+    fn orchestration_explicit_managed_device_payload_mismatch_is_rejected() {
+        let other_managed = "6122aaff-6736-4ccf-b0fe-82932dd076f0";
+        let primary = format!("/v1.0/deviceManagement/managedDevices/{MANAGED}");
+        let provider = FakeEspGraphProvider::default().with(
+            &primary,
+            serde_json::json!({
+                "id": other_managed,
+                "azureADDeviceId": "c7fde315-1d29-489f-a880-3d781f54c6e3",
+                "serialNumber": "OTHER",
+                "deviceName": "OTHER"
+            }),
+        );
+        let cancellation = super::FakeGraphCancellation::default();
+        let mut request = request();
+        request.selected_managed_device_id = Some(MANAGED.to_string());
+
+        let overlay =
+            fetch_esp_graph_overlay(&provider, &request, &cancellation, "2026-07-16T12:00:00Z");
+
+        assert_eq!(provider.paths(), [primary]);
+        assert_eq!(overlay.device_match.status, GraphSectionStatus::Failed);
+        assert_eq!(
+            overlay
+                .device_match
+                .error
+                .as_ref()
+                .map(|error| error.code.as_str()),
+            Some("InvalidResponse")
+        );
+        assert_eq!(overlay.autopilot_events.status, GraphSectionStatus::Skipped);
     }
 
     #[test]
@@ -2469,7 +2690,8 @@ mod esp_orchestration_tests {
                 &managed_path,
                 serde_json::json!({
                     "id": MANAGED, "azureADDeviceId": ENTRA, "serialNumber": "SERIAL-001",
-                    "deviceName": "DEVICE-01", "userId": USER
+                    "deviceName": "DEVICE-01", "userId": USER,
+                    "userPrincipalName": "user@contoso.example"
                 }),
             )
             .with_error(&autopilot_path, GraphClientErrorKind::PermissionDenied)
@@ -2484,7 +2706,12 @@ mod esp_orchestration_tests {
             )
             .with(
                 &format!("{compliance_base}/deviceStatuses?$top=100"),
-                serde_json::json!({"value": [{"id": "status", "deviceId": MANAGED, "status": "error"}]}),
+                serde_json::json!({"value": [{
+                    "id": "status",
+                    "deviceDisplayName": "DEVICE-01",
+                    "userPrincipalName": "user@contoso.example",
+                    "status": "error"
+                }]}),
             )
             .with(
                 &configuration_base,
@@ -2503,8 +2730,15 @@ mod esp_orchestration_tests {
                 serde_json::json!({"value": []}),
             )
             .with(
-                &format!("{remediation_base}/deviceRunStates?$top=100"),
-                serde_json::json!({"value": [{"id": "run", "managedDeviceId": MANAGED, "resultState": "success"}]}),
+                &format!(
+                    "{remediation_base}/deviceRunStates?$expand=managedDevice($select=id)&$top=100"
+                ),
+                serde_json::json!({"value": [{
+                    "id": "run",
+                    "managedDevice": {"id": MANAGED},
+                    "detectionState": "success",
+                    "remediationState": "success"
+                }]}),
             );
         let mut request = request();
         request.workload_ids.clear();
@@ -2532,7 +2766,29 @@ mod esp_orchestration_tests {
         assert_eq!(overlay.policies.status, GraphSectionStatus::Available);
         assert_eq!(overlay.policies.api_version, GraphApiVersion::Beta);
         assert_eq!(overlay.policies.data.as_ref().unwrap().len(), 2);
+        let compliance = overlay
+            .policies
+            .data
+            .as_ref()
+            .unwrap()
+            .iter()
+            .find(|policy| policy.policy_id == COMPLIANCE)
+            .expect("compliance policy");
+        assert_eq!(
+            compliance
+                .status
+                .as_ref()
+                .map(|status| status.display.as_str()),
+            Some("error")
+        );
         assert_eq!(overlay.scripts.status, GraphSectionStatus::Available);
+        assert_eq!(
+            overlay.scripts.data.as_ref().unwrap()[0]
+                .status
+                .as_ref()
+                .map(|status| status.display.as_str()),
+            Some("success")
+        );
         let paths = provider.paths();
         assert!(paths.contains(&format!("{compliance_base}/deviceStatuses?$top=100")));
         assert!(paths.contains(&format!("{configuration_base}/assignments")));
@@ -2540,7 +2796,9 @@ mod esp_orchestration_tests {
             !paths.contains(&format!("{configuration_base}/deviceStatuses?$top=100")),
             "configurationPolicies must not use the classic status path"
         );
-        assert!(paths.contains(&format!("{remediation_base}/deviceRunStates?$top=100")));
+        assert!(paths.contains(&format!(
+            "{remediation_base}/deviceRunStates?$expand=managedDevice($select=id)&$top=100"
+        )));
     }
 
     #[test]
@@ -2632,6 +2890,7 @@ mod esp_orchestration_tests {
                 serde_json::json!({
                     "id": ENROLLMENT, "displayName": "Default ESP",
                     "showInstallationProgress": true,
+                    "disableUserStatusTrackingAfterFirstUser": true,
                     "installProgressTimeoutInMinutes": 45,
                     "selectedMobileAppIds": []
                 }),
@@ -2656,8 +2915,13 @@ mod esp_orchestration_tests {
             GraphApiVersion::Beta
         );
         let configuration = overlay.enrollment_configuration.data.as_ref().unwrap();
-        assert_eq!(configuration.device_esp_enabled, Some(true));
-        assert_eq!(configuration.user_esp_enabled, Some(true));
+        assert_eq!(configuration.show_installation_progress, Some(true));
+        assert_eq!(configuration.device_esp_enabled, None);
+        assert_eq!(configuration.user_esp_enabled, None);
+        assert_eq!(
+            configuration.disable_user_status_tracking_after_first_user,
+            Some(true)
+        );
         assert_eq!(configuration.timeout_minutes, Some(45));
         let paths = provider.paths();
         let v1_index = paths
@@ -2666,5 +2930,117 @@ mod esp_orchestration_tests {
             .unwrap();
         assert_eq!(paths[v1_index + 1], beta_configuration);
         assert_eq!(paths[v1_index + 2], assignment_path);
+    }
+
+    #[test]
+    fn orchestration_marks_all_referenced_object_caps_as_partial() {
+        let managed_path = format!("/v1.0/deviceManagement/managedDevices/{MANAGED}");
+        let autopilot_path = format!("/v1.0/deviceManagement/windowsAutopilotDeviceIdentities?$filter=azureActiveDirectoryDeviceId%20eq%20'{ENTRA}'&$top=25");
+        let event_path = format!("/beta/deviceManagement/autopilotEvents?$filter=deviceId%20eq%20'{ENTRA}'&$orderby=eventDateTime%20desc&$top=25");
+        let mut provider = FakeEspGraphProvider::default()
+            .with(
+                &managed_path,
+                serde_json::json!({
+                    "id": MANAGED,
+                    "azureADDeviceId": ENTRA,
+                    "serialNumber": "SERIAL-001",
+                    "deviceName": "DEVICE-01",
+                    "userPrincipalName": "user@contoso.example"
+                }),
+            )
+            .with_error(&autopilot_path, GraphClientErrorKind::NotFound)
+            .with(&event_path, serde_json::json!({"value": []}));
+        let mut app_ids = Vec::new();
+        let mut policy_references = Vec::new();
+        let mut script_references = Vec::new();
+        for index in 1..=101_u64 {
+            let app_id = format!("10000000-0000-4000-8000-{index:012x}");
+            let policy_id = format!("20000000-0000-4000-8000-{index:012x}");
+            let script_id = format!("30000000-0000-4000-8000-{index:012x}");
+            let app_base = format!("/v1.0/deviceAppManagement/mobileApps/{app_id}");
+            let policy_base = format!("/v1.0/deviceManagement/deviceConfigurations/{policy_id}");
+            let script_base = format!("/beta/deviceManagement/deviceManagementScripts/{script_id}");
+            provider = provider
+                .with(
+                    &app_base,
+                    serde_json::json!({"id": app_id, "displayName": "Bounded App"}),
+                )
+                .with(
+                    &format!("{app_base}/assignments"),
+                    serde_json::json!({"value": []}),
+                )
+                .with(
+                    &policy_base,
+                    serde_json::json!({"id": policy_id, "displayName": "Bounded Policy"}),
+                )
+                .with(
+                    &format!("{policy_base}/assignments"),
+                    serde_json::json!({"value": []}),
+                )
+                .with(
+                    &format!("{policy_base}/deviceStatuses?$top=100"),
+                    serde_json::json!({"value": []}),
+                )
+                .with(
+                    &script_base,
+                    serde_json::json!({"id": script_id, "displayName": "Bounded Script"}),
+                )
+                .with(
+                    &format!("{script_base}/assignments"),
+                    serde_json::json!({"value": []}),
+                )
+                .with(
+                    &format!(
+                        "{script_base}/deviceRunStates?$expand=managedDevice($select=id)&$top=100"
+                    ),
+                    serde_json::json!({"value": []}),
+                );
+            app_ids.push(app_id);
+            policy_references.push(EspGraphPolicyReference {
+                id: policy_id,
+                kind: EspGraphPolicyKind::DeviceConfiguration,
+            });
+            script_references.push(EspGraphScriptReference {
+                id: script_id,
+                kind: EspGraphScriptKind::PlatformScript,
+            });
+        }
+        let mut request = request();
+        request.workload_ids.clear();
+        request.app_ids = app_ids;
+        request.enrollment_configuration_ids.clear();
+        request.policy_references = policy_references;
+        request.script_references = script_references;
+        let cancellation = super::FakeGraphCancellation::default();
+
+        let overlay =
+            fetch_esp_graph_overlay(&provider, &request, &cancellation, "2026-07-16T12:00:00Z");
+
+        assert_eq!(overlay.apps.status, GraphSectionStatus::Failed);
+        assert_eq!(overlay.apps.data.as_ref().map(Vec::len), Some(100));
+        assert_eq!(
+            overlay.apps.error.as_ref().map(|error| error.code.as_str()),
+            Some("ItemLimitExceeded")
+        );
+        assert_eq!(overlay.policies.status, GraphSectionStatus::Failed);
+        assert_eq!(overlay.policies.data.as_ref().map(Vec::len), Some(100));
+        assert_eq!(
+            overlay
+                .policies
+                .error
+                .as_ref()
+                .map(|error| error.code.as_str()),
+            Some("ItemLimitExceeded")
+        );
+        assert_eq!(overlay.scripts.status, GraphSectionStatus::Failed);
+        assert_eq!(overlay.scripts.data.as_ref().map(Vec::len), Some(100));
+        assert_eq!(
+            overlay
+                .scripts
+                .error
+                .as_ref()
+                .map(|error| error.code.as_str()),
+            Some("ItemLimitExceeded")
+        );
     }
 }

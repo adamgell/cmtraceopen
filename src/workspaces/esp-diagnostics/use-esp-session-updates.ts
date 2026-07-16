@@ -93,6 +93,7 @@ function createGraphRequest(
   snapshot: EspDiagnosticsSnapshot,
   requestId: string,
 ): EspGraphRequest {
+  const evidenceWindow = getEvidenceWindow(snapshot);
   return {
     requestId,
     identity: snapshot.identity,
@@ -104,6 +105,75 @@ function createGraphRequest(
       ),
     ),
     selectedManagedDeviceId: null,
+    evidenceWindowStartUtc: evidenceWindow?.start ?? null,
+    evidenceWindowEndUtc: evidenceWindow?.end ?? null,
+  };
+}
+
+function timestampInstant(value: string | null | undefined): number | null {
+  if (!value) {
+    return null;
+  }
+  const instant = Date.parse(value);
+  return Number.isFinite(instant) ? instant : null;
+}
+
+function timestampUtc(
+  timestamp: { normalizedUtc: string | null; rawText: string } | null,
+): string | null {
+  const value = timestamp?.normalizedUtc ?? timestamp?.rawText ?? null;
+  const instant = timestampInstant(value);
+  return instant == null ? null : new Date(instant).toISOString();
+}
+
+function getEvidenceWindow(
+  snapshot: EspDiagnosticsSnapshot,
+): { start: string; end: string } | null {
+  const latestSessions = snapshot.sessions
+    .filter((session) => session.isLatest)
+    .map((session) => ({
+      session,
+      start: timestampUtc(session.startedAt),
+    }))
+    .filter(
+      (candidate): candidate is typeof candidate & { start: string } =>
+        candidate.start !== null,
+    )
+    .sort(
+      (left, right) =>
+        (timestampInstant(right.start) ?? 0) -
+          (timestampInstant(left.start) ?? 0) ||
+        left.session.sessionId.localeCompare(right.session.sessionId),
+    );
+  const latest = latestSessions[0];
+  if (latest) {
+    const end = timestampUtc(latest.session.endedAt) ?? snapshot.generatedAtUtc;
+    const startInstant = timestampInstant(latest.start);
+    const endInstant = timestampInstant(end);
+    if (
+      startInstant != null &&
+      endInstant != null &&
+      startInstant <= endInstant
+    ) {
+      return { start: latest.start, end: new Date(endInstant).toISOString() };
+    }
+  }
+
+  const activityInstants = snapshot.activity
+    .map((entry) => timestampUtc(entry.timestamp))
+    .filter((value): value is string => value !== null)
+    .map((value) => ({ value, instant: timestampInstant(value) }))
+    .filter(
+      (candidate): candidate is { value: string; instant: number } =>
+        candidate.instant !== null,
+    )
+    .sort((left, right) => left.instant - right.instant);
+  if (activityInstants.length === 0) {
+    return null;
+  }
+  return {
+    start: activityInstants[0].value,
+    end: activityInstants[activityInstants.length - 1].value,
   };
 }
 

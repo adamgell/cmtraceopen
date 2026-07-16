@@ -595,8 +595,10 @@ export interface EspGraphAutopilotEvent {
 export interface EspGraphEnrollmentConfiguration {
   configurationId: string;
   displayName: string | null;
+  showInstallationProgress: boolean | null;
   deviceEspEnabled: boolean | null;
   userEspEnabled: boolean | null;
+  disableUserStatusTrackingAfterFirstUser: boolean | null;
   timeoutMinutes: number | null;
   selectedMobileAppIds: string[];
   assignments: EspGraphAssignment[];
@@ -608,6 +610,7 @@ export interface EspGraphAppRecord {
   displayName: string | null;
   trackedOnEnrollmentStatus: boolean | null;
   status: EspStatus | null;
+  intentState: GraphSection<EspStatus>;
   assignments: EspGraphAssignment[];
   evidence: EspEvidenceRef[];
 }
@@ -704,6 +707,8 @@ export interface EspGraphRequest {
   identity: EspIdentityEvidence;
   workloadIds: string[];
   selectedManagedDeviceId: string | null;
+  evidenceWindowStartUtc?: string | null;
+  evidenceWindowEndUtc?: string | null;
 }
 
 export interface EspRelaunchResult {

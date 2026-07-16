@@ -448,18 +448,29 @@ const autopilotEvent = fields({
 const enrollmentConfiguration = fields({
   configurationId: string,
   displayName: nullable(string),
+  showInstallationProgress: nullable(boolean),
   deviceEspEnabled: nullable(boolean),
   userEspEnabled: nullable(boolean),
+  disableUserStatusTrackingAfterFirstUser: nullable(boolean),
   timeoutMinutes: nullable(unsignedInteger),
   selectedMobileAppIds: array(string),
   assignments: array(assignment),
   evidence: evidenceRefs,
 });
+const graphSection = (data: Guard): Guard =>
+  fields({
+    status: string,
+    requiredScope: nullable(string),
+    apiVersion: string,
+    data: nullable(data),
+    error: nullable(graphError),
+  });
 const graphApp = fields({
   appId: string,
   displayName: nullable(string),
   trackedOnEnrollmentStatus: nullable(boolean),
   status: nullable(status),
+  intentState: graphSection(status),
   assignments: array(assignment),
   evidence: evidenceRefs,
 });
@@ -479,15 +490,6 @@ const graphScript = fields({
   assignments: array(assignment),
   evidence: evidenceRefs,
 });
-const graphSection = (data: Guard): Guard =>
-  fields({
-    status: string,
-    requiredScope: nullable(string),
-    apiVersion: string,
-    data: nullable(data),
-    error: nullable(graphError),
-  });
-
 const graphOverlay: Guard = fields({
   requestId: string,
   requestedAtUtc: string,

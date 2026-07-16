@@ -31,22 +31,32 @@ pub fn correlate_managed_device(
             .then_with(|| left.managed_device_id.cmp(&right.managed_device_id))
     });
 
-    let rules: Vec<(MatchRule, Vec<EspGraphManagedDevice>)> = vec![
-        (
-            MatchRule {
-                basis: "selectedManagedDeviceId",
+    if let Some(selected) = selected_managed_device_id {
+        let matched: Vec<EspGraphManagedDevice> = candidates
+            .iter()
+            .filter(|candidate| guid_eq(&candidate.managed_device_id, selected))
+            .cloned()
+            .collect();
+        if matched.len() == 1 {
+            return EspGraphDeviceMatch {
+                selected: matched.first().cloned(),
+                evidence: combined_evidence(identity, &matched),
+                candidates: matched,
+                match_basis: Some("selectedManagedDeviceId".to_string()),
                 confidence: EspCorrelationConfidence::Exact,
-            },
-            selected_managed_device_id
-                .map(|selected| {
-                    candidates
-                        .iter()
-                        .filter(|candidate| guid_eq(&candidate.managed_device_id, selected))
-                        .cloned()
-                        .collect()
-                })
-                .unwrap_or_default(),
-        ),
+            };
+        }
+
+        return EspGraphDeviceMatch {
+            selected: None,
+            evidence: combined_evidence(identity, &candidates),
+            candidates,
+            match_basis: Some("selectedManagedDeviceId".to_string()),
+            confidence: EspCorrelationConfidence::Uncorrelated,
+        };
+    }
+
+    let rules: Vec<(MatchRule, Vec<EspGraphManagedDevice>)> = vec![
         (
             MatchRule {
                 basis: "managedDeviceId",

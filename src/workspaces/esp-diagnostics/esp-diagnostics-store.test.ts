@@ -887,6 +887,52 @@ describe("ESP Graph overlay state", () => {
     expect(useEspDiagnosticsStore.getState().graphUnavailableReason).toBe(
       "graphNotConnected",
     );
+  it("reports a failed optional app-intent cross-check as partial without losing primary apps", () => {
+    const overlay = makeOverlay("graph-app-intent-partial");
+    overlay.apps = {
+      status: "available",
+      requiredScope: "DeviceManagementApps.Read.All",
+      apiVersion: "v1.0",
+      data: [
+        {
+          appId: "app-a",
+          displayName: "Primary App",
+          trackedOnEnrollmentStatus: true,
+          status: null,
+          intentState: {
+            status: "permissionDenied",
+            requiredScope: "DeviceManagementConfiguration.Read.All",
+            apiVersion: "beta",
+            data: null,
+            error: {
+              code: "PermissionDenied",
+              message: "Microsoft Graph could not provide this section.",
+              requestId: "graph-request-error",
+              blockedBy: null,
+              retryAfterSeconds: null,
+            },
+          },
+          assignments: [],
+          evidence: [],
+        },
+      ],
+      error: null,
+    };
+    useEspDiagnosticsStore.getState().beginAnalysis("analysis-app-intent");
+    useEspDiagnosticsStore
+      .getState()
+      .applyAnalysis("analysis-app-intent", makeSnapshot(["local-app"]));
+    useEspDiagnosticsStore.getState().beginGraph("graph-app-intent-partial");
+
+    useEspDiagnosticsStore
+      .getState()
+      .applyGraphOverlay("graph-app-intent-partial", overlay);
+
+    expect(useEspDiagnosticsStore.getState().graphPhase).toBe("partial");
+    expect(
+      useEspDiagnosticsStore.getState().snapshot?.graph?.apps.data?.[0]
+        .displayName,
+    ).toBe("Primary App");
   });
 
   it("preserves raw unknown Graph status and API-version wire values", () => {
@@ -1051,6 +1097,74 @@ describe("ESP Graph overlay state", () => {
 });
 
 describe("ESP Graph scheduling", () => {
+  it("sends the latest local ESP session window with Graph event requests", async () => {
+    const fetchGraph = vi.fn(async (request: EspGraphRequest) =>
+      makeOverlay(request.requestId),
+    );
+    const coordinator = createEspGraphCoordinator({
+      fetchGraph,
+      cancelGraph: vi.fn(async () => undefined),
+      createRequestId: () => "graph-window",
+    });
+    const snapshot = makeSnapshot(["local-window"]);
+    snapshot.sessions = [
+      {
+        sessionId: "older",
+        kind: "classic",
+        scope: "device",
+        userSid: null,
+        startedAt: {
+          rawText: "2026-07-14T08:00:00-04:00",
+          originalOffset: "-04:00",
+          normalizedUtc: "2026-07-14T12:00:00Z",
+          kind: "offset",
+        },
+        endedAt: null,
+        phase: "completed",
+        isLatest: false,
+        workloadIds: [],
+        evidence: [],
+      },
+      {
+        sessionId: "latest",
+        kind: "classic",
+        scope: "device",
+        userSid: null,
+        startedAt: {
+          rawText: "2026-07-15T14:00:00-04:00",
+          originalOffset: "-04:00",
+          normalizedUtc: "2026-07-15T18:00:00Z",
+          kind: "offset",
+        },
+        endedAt: {
+          rawText: "2026-07-15T15:00:00-04:00",
+          originalOffset: "-04:00",
+          normalizedUtc: "2026-07-15T19:00:00Z",
+          kind: "offset",
+        },
+        phase: "failed",
+        isLatest: true,
+        workloadIds: [],
+        evidence: [],
+      },
+    ];
+    useUiStore.setState({ graphApiEnabled: true, graphApiStatus: "connected" });
+    useEspDiagnosticsStore.getState().beginAnalysis("analysis-window");
+    useEspDiagnosticsStore
+      .getState()
+      .applyAnalysis("analysis-window", snapshot);
+
+    await coordinator.reconcile();
+
+    expect(fetchGraph).toHaveBeenCalledWith(
+      expect.objectContaining({
+        evidenceWindowStartUtc: "2026-07-15T18:00:00.000Z",
+        evidenceWindowEndUtc: "2026-07-15T19:00:00.000Z",
+      }),
+    );
+    coordinator.dispose();
+  });
+
   it("keeps Graph disabled without fetching and removes only the remote overlay", async () => {
     const fetchGraph =
       vi.fn<(request: EspGraphRequest) => Promise<EspGraphOverlay>>();

@@ -735,6 +735,13 @@ fn models_graph_overlay_freezes_typed_correlated_sections() {
                     EspRawStatus::Text("installed".to_string()),
                     EspNormalizedStatus::Succeeded,
                 )),
+                intent_state: graph_section(
+                    GraphSectionStatus::NotFound,
+                    "DeviceManagementConfiguration.Read.All",
+                    GraphApiVersion::Beta,
+                    None,
+                    None,
+                ),
                 assignments: vec![assignment("app-assignment")],
                 evidence: vec![evidence_ref("app-1")],
             }]),
@@ -786,6 +793,14 @@ fn models_graph_overlay_freezes_typed_correlated_sections() {
     assert_eq!(
         value["apps"]["data"][0]["evidence"][0]["evidenceId"],
         "app-1"
+    );
+    assert_eq!(
+        value["apps"]["data"][0]["intentState"]["status"],
+        "notFound"
+    );
+    assert_eq!(
+        value["apps"]["data"][0]["intentState"]["apiVersion"],
+        "beta"
     );
     assert_eq!(
         value["profileAssignments"]["error"]["requestId"],
@@ -1045,8 +1060,10 @@ fn models_graph_correlated_record_shapes_keep_provenance() {
     let enrollment = EspGraphEnrollmentConfiguration {
         configuration_id: "esp-config-1".to_string(),
         display_name: Some("All users and devices".to_string()),
+        show_installation_progress: Some(true),
         device_esp_enabled: Some(true),
         user_esp_enabled: Some(true),
+        disable_user_status_tracking_after_first_user: Some(false),
         timeout_minutes: Some(60),
         selected_mobile_app_ids: vec!["app-1".to_string()],
         assignments: vec![assignment("enrollment-assignment")],
@@ -1061,6 +1078,8 @@ fn models_graph_correlated_record_shapes_keep_provenance() {
         Value::Null
     );
     assert_eq!(value[3]["assignments"][0]["targeting"], "declared");
+    assert_eq!(value[3]["showInstallationProgress"], true);
+    assert_eq!(value[3]["disableUserStatusTrackingAfterFirstUser"], false);
 }
 
 #[test]

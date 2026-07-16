@@ -818,7 +818,7 @@ pub struct GraphSectionError {
     pub retry_after_seconds: Option<u64>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct GraphSection<T> {
     pub status: GraphSectionStatus,
@@ -916,8 +916,12 @@ pub struct EspGraphAutopilotEvent {
 pub struct EspGraphEnrollmentConfiguration {
     pub configuration_id: String,
     pub display_name: Option<String>,
+    #[serde(default)]
+    pub show_installation_progress: Option<bool>,
     pub device_esp_enabled: Option<bool>,
     pub user_esp_enabled: Option<bool>,
+    #[serde(default)]
+    pub disable_user_status_tracking_after_first_user: Option<bool>,
     pub timeout_minutes: Option<u64>,
     pub selected_mobile_app_ids: Vec<String>,
     pub assignments: Vec<EspGraphAssignment>,
@@ -931,6 +935,7 @@ pub struct EspGraphAppRecord {
     pub display_name: Option<String>,
     pub tracked_on_enrollment_status: Option<bool>,
     pub status: Option<EspStatus>,
+    pub intent_state: GraphSection<EspStatus>,
     pub assignments: Vec<EspGraphAssignment>,
     pub evidence: Vec<EspEvidenceRef>,
 }

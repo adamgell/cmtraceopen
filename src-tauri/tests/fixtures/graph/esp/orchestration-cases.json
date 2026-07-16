@@ -17,7 +17,7 @@
     "/v1.0/deviceManagement/deviceConfigurations/d329d4b4-5acc-4ff2-a5b5-8457cadf2a7f/deviceStatuses?$top=100",
     "/beta/deviceManagement/deviceManagementScripts/c2d8ffcb-b328-40c0-b87c-5cb862337d01",
     "/beta/deviceManagement/deviceManagementScripts/c2d8ffcb-b328-40c0-b87c-5cb862337d01/assignments",
-    "/beta/deviceManagement/deviceManagementScripts/c2d8ffcb-b328-40c0-b87c-5cb862337d01/deviceRunStates?$top=100"
+    "/beta/deviceManagement/deviceManagementScripts/c2d8ffcb-b328-40c0-b87c-5cb862337d01/deviceRunStates?$expand=managedDevice($select=id)&$top=100"
   ],
   "forbiddenPathFragments": [
     "memberOf",

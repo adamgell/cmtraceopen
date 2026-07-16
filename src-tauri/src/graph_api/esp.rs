@@ -1,7 +1,8 @@
 //! Portable, read-only Microsoft Graph orchestration for ESP diagnostics.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
+use chrono::{DateTime, SecondsFormat, Utc};
 use cmtraceopen_parser::esp::{
     EspClassifiedString, EspCorrelationConfidence, EspEvidenceRef, EspGraphAppRecord,
     EspGraphAssignment, EspGraphAssignmentIntent, EspGraphAutopilotEvent,
@@ -50,6 +51,10 @@ pub struct EspGraphRequest {
     pub workload_ids: Vec<String>,
     #[serde(default)]
     pub selected_managed_device_id: Option<String>,
+    #[serde(default)]
+    pub evidence_window_start_utc: Option<String>,
+    #[serde(default)]
+    pub evidence_window_end_utc: Option<String>,
     #[serde(default)]
     pub enrollment_configuration_ids: Vec<String>,
     #[serde(default)]
@@ -172,7 +177,7 @@ pub fn fetch_esp_graph_overlay<P: EspGraphProvider>(
         );
     }
 
-    overlay.autopilot_events = fetch_autopilot_events(provider, &device, cancellation);
+    overlay.autopilot_events = fetch_autopilot_events(provider, request, &device, cancellation);
     overlay.enrollment_configuration = fetch_enrollment_configuration(
         provider,
         request,
@@ -303,9 +308,25 @@ fn fetch_managed_candidates<P: EspGraphProvider>(
     request: &EspGraphRequest,
     cancellation: &dyn GraphCancellation,
 ) -> Result<Vec<EspGraphManagedDevice>, GraphClientError> {
+    let selected = request
+        .selected_managed_device_id
+        .as_deref()
+        .map(|value| {
+            normalize_graph_guid(value).ok_or_else(|| invalid_response(MANAGED_DEVICES_SCOPE))
+        })
+        .transpose()?;
     let primary = managed_device_endpoint(request);
     let primary_result = get(provider, &primary, cancellation)
         .and_then(|value| parse_managed_devices(&value, MANAGED_DEVICES_SCOPE));
+    if let Some(selected) = selected {
+        return primary_result.and_then(|candidates| {
+            if candidates.len() == 1 && candidates[0].managed_device_id == selected {
+                Ok(candidates)
+            } else {
+                Err(invalid_response(MANAGED_DEVICES_SCOPE))
+            }
+        });
+    }
     match primary_result {
         Ok(candidates) if !candidates.is_empty() => Ok(candidates),
         Err(error) if error.kind != GraphClientErrorKind::NotFound => Err(error),
@@ -491,9 +512,23 @@ fn fetch_profile_assignments<P: EspGraphProvider>(
 
 fn fetch_autopilot_events<P: EspGraphProvider>(
     provider: &P,
+    request: &EspGraphRequest,
     device: &EspGraphManagedDevice,
     cancellation: &dyn GraphCancellation,
 ) -> GraphSection<Vec<EspGraphAutopilotEvent>> {
+    let window = match evidence_window(request) {
+        Ok(Some(window)) => window,
+        Ok(None) => {
+            return skipped_section(
+                MANAGED_DEVICES_SCOPE,
+                GraphApiVersion::Beta,
+                "localEvidenceWindow",
+            )
+        }
+        Err(error) => {
+            return error_section(error, MANAGED_DEVICES_SCOPE, GraphApiVersion::Beta, None)
+        }
+    };
     let managed_id = &device.managed_device_id;
     let event_device_id = device
         .entra_device_id
@@ -521,21 +556,27 @@ fn fetch_autopilot_events<P: EspGraphProvider>(
             }
             let id = required_guid(item, "id", MANAGED_DEVICES_SCOPE)?;
             let raw_state = required_string(item, "deploymentState", MANAGED_DEVICES_SCOPE)?;
-            let event_time = optional_string(item, "eventDateTime", MANAGED_DEVICES_SCOPE)?
-                .map(|value| graph_timestamp(&value));
-            events.push(EspGraphAutopilotEvent {
-                event_id: id.clone(),
-                managed_device_id: Some(managed_id.clone()),
-                enrollment_configuration_id: optional_guid(
-                    item,
-                    "windows10EnrollmentCompletionPageConfigurationId",
-                    MANAGED_DEVICES_SCOPE,
-                )?,
-                event_time,
-                deployment_state: graph_status(&raw_state),
-                policy_status_details: Vec::new(),
-                evidence: vec![graph_evidence("autopilot-event", &id)],
-            });
+            let event_time = required_string(item, "eventDateTime", MANAGED_DEVICES_SCOPE)?;
+            let (event_time, instant) = graph_timestamp(&event_time, MANAGED_DEVICES_SCOPE)?;
+            if instant < window.start || instant > window.end {
+                continue;
+            }
+            events.push((
+                instant,
+                EspGraphAutopilotEvent {
+                    event_id: id.clone(),
+                    managed_device_id: Some(managed_id.clone()),
+                    enrollment_configuration_id: optional_guid(
+                        item,
+                        "windows10EnrollmentCompletionPageConfigurationId",
+                        MANAGED_DEVICES_SCOPE,
+                    )?,
+                    event_time: Some(event_time),
+                    deployment_state: graph_status(&raw_state),
+                    policy_status_details: Vec::new(),
+                    evidence: vec![graph_evidence("autopilot-event", &id)],
+                },
+            ));
         }
         Ok::<_, GraphClientError>(events)
     })() {
@@ -546,12 +587,12 @@ fn fetch_autopilot_events<P: EspGraphProvider>(
     };
     events.sort_by(|left, right| {
         right
-            .event_time
-            .as_ref()
-            .map(|time| time.raw_text.as_str())
-            .cmp(&left.event_time.as_ref().map(|time| time.raw_text.as_str()))
-            .then_with(|| left.event_id.cmp(&right.event_id))
+            .0
+            .cmp(&left.0)
+            .then_with(|| left.1.event_id.cmp(&right.1.event_id))
     });
+    let mut events: Vec<EspGraphAutopilotEvent> =
+        events.into_iter().map(|(_, event)| event).collect();
     if let Some(newest) = events.first_mut() {
         let detail_endpoint = EspGraphEndpoint::new(
             format!(
@@ -645,15 +686,17 @@ fn fetch_enrollment_configuration<P: EspGraphProvider>(
     if cancellation.is_cancelled() {
         return cancelled_section(SERVICE_CONFIG_SCOPE, GraphApiVersion::V1_0);
     }
-    let mut configuration_ids = normalized_ids(&request.enrollment_configuration_ids);
+    let mut configuration_ids = Vec::new();
     if let Some(events) = events {
-        configuration_ids.extend(
-            events
-                .iter()
-                .filter_map(|event| event.enrollment_configuration_id.clone()),
-        );
-        configuration_ids.sort();
-        configuration_ids.dedup();
+        for id in events
+            .iter()
+            .filter_map(|event| event.enrollment_configuration_id.as_deref())
+        {
+            push_unique_guid(&mut configuration_ids, id);
+        }
+    }
+    for id in &request.enrollment_configuration_ids {
+        push_unique_guid(&mut configuration_ids, id);
     }
     let Some(configuration_id) = configuration_ids.into_iter().next() else {
         return skipped_section(
@@ -761,12 +804,18 @@ fn parse_enrollment_configuration(
     Ok(EspGraphEnrollmentConfiguration {
         configuration_id: id.to_string(),
         display_name: optional_string(value, "displayName", SERVICE_CONFIG_SCOPE)?,
-        device_esp_enabled: optional_bool(value, "deviceEspEnabled", SERVICE_CONFIG_SCOPE)?.or(
-            optional_bool(value, "showInstallationProgress", SERVICE_CONFIG_SCOPE)?,
-        ),
-        user_esp_enabled: optional_bool(value, "userEspEnabled", SERVICE_CONFIG_SCOPE)?.or(
-            optional_bool(value, "showInstallationProgress", SERVICE_CONFIG_SCOPE)?,
-        ),
+        show_installation_progress: optional_bool(
+            value,
+            "showInstallationProgress",
+            SERVICE_CONFIG_SCOPE,
+        )?,
+        device_esp_enabled: optional_bool(value, "deviceEspEnabled", SERVICE_CONFIG_SCOPE)?,
+        user_esp_enabled: optional_bool(value, "userEspEnabled", SERVICE_CONFIG_SCOPE)?,
+        disable_user_status_tracking_after_first_user: optional_bool(
+            value,
+            "disableUserStatusTrackingAfterFirstUser",
+            SERVICE_CONFIG_SCOPE,
+        )?,
         timeout_minutes: optional_u64(value, "timeoutInMinutes", SERVICE_CONFIG_SCOPE)?.or(
             optional_u64(
                 value,
@@ -787,6 +836,7 @@ fn has_rich_enrollment_fields(value: &Value) -> bool {
         "selectedMobileAppIds",
         "deviceEspEnabled",
         "userEspEnabled",
+        "disableUserStatusTrackingAfterFirstUser",
     ]
     .into_iter()
     .any(|key| value.get(key).is_some())
@@ -812,6 +862,7 @@ fn fetch_apps<P: EspGraphProvider>(
     }
     ids.sort();
     ids.dedup();
+    let truncated = ids.len() > MAX_REFERENCED_OBJECTS;
     ids.truncate(MAX_REFERENCED_OBJECTS);
     if ids.is_empty() {
         return skipped_section(APPS_SCOPE, GraphApiVersion::V1_0, "referencedAppIds");
@@ -886,6 +937,11 @@ fn fetch_apps<P: EspGraphProvider>(
             display_name,
             tracked_on_enrollment_status: tracked,
             status: object_status,
+            intent_state: skipped_section(
+                CONFIGURATION_SCOPE,
+                GraphApiVersion::Beta,
+                "mobileAppIntentAndStates",
+            ),
             assignments,
             evidence: vec![graph_evidence("mobile-app", &response_id)],
         });
@@ -899,108 +955,98 @@ fn fetch_apps<P: EspGraphProvider>(
         );
         match get(provider, &endpoint, cancellation) {
             Ok(value) => {
-                let items = match page_items(&value, CONFIGURATION_SCOPE) {
-                    Ok(items) => items,
-                    Err(error) => {
-                        return error_section(
-                            error,
-                            APPS_SCOPE,
-                            GraphApiVersion::V1_0,
-                            Some(records),
-                        )
-                    }
-                };
-                for item in items {
-                    let item_device =
-                        match optional_string(item, "managedDeviceIdentifier", CONFIGURATION_SCOPE)
-                        {
-                            Ok(Some(value)) => value,
-                            Ok(None) => {
-                                return error_section(
-                                    invalid_response(CONFIGURATION_SCOPE),
-                                    APPS_SCOPE,
-                                    GraphApiVersion::V1_0,
-                                    Some(records),
-                                )
-                            }
-                            Err(error) => {
-                                return error_section(
-                                    error,
-                                    APPS_SCOPE,
-                                    GraphApiVersion::V1_0,
-                                    Some(records),
-                                )
-                            }
-                        };
-                    if !device_identifier_matches(&item_device, device) {
-                        continue;
-                    }
-                    let item_user = match optional_guid(item, "userId", CONFIGURATION_SCOPE) {
-                        Ok(value) => value,
-                        Err(error) => {
-                            return error_section(
-                                error,
-                                APPS_SCOPE,
-                                GraphApiVersion::V1_0,
-                                Some(records),
-                            )
-                        }
-                    };
-                    if device.user_id.is_some() && item_user != device.user_id {
-                        continue;
-                    }
-                    let app_items = match item.get("mobileAppList").and_then(Value::as_array) {
-                        Some(items) => items,
-                        None => {
-                            return error_section(
-                                invalid_response(CONFIGURATION_SCOPE),
-                                APPS_SCOPE,
-                                GraphApiVersion::V1_0,
-                                Some(records),
-                            )
-                        }
-                    };
-                    for app_item in app_items {
-                        let item_app =
-                            match required_guid(app_item, "applicationId", CONFIGURATION_SCOPE) {
-                                Ok(value) => value,
-                                Err(error) => {
-                                    return error_section(
-                                        error,
-                                        APPS_SCOPE,
-                                        GraphApiVersion::V1_0,
-                                        Some(records),
-                                    )
-                                }
-                            };
-                        let Some(record) =
-                            records.iter_mut().find(|record| record.app_id == item_app)
-                        else {
-                            continue;
-                        };
-                        match optional_string(app_item, "installState", CONFIGURATION_SCOPE) {
-                            Ok(Some(raw)) => record.status = Some(graph_status(&raw)),
-                            Ok(None) => {}
-                            Err(error) => {
-                                return error_section(
-                                    error,
-                                    APPS_SCOPE,
-                                    GraphApiVersion::V1_0,
-                                    Some(records),
-                                )
-                            }
-                        }
-                    }
+                if let Err(error) = apply_app_intent_states(&value, device, &mut records) {
+                    set_app_intent_error(&mut records, error);
                 }
             }
-            Err(error) if error.kind == GraphClientErrorKind::NotFound => {}
+            Err(error) if error.kind == GraphClientErrorKind::NotFound => {
+                for record in &mut records {
+                    record.intent_state =
+                        not_found_section(CONFIGURATION_SCOPE, GraphApiVersion::Beta);
+                }
+            }
             Err(error) => {
-                return error_section(error, APPS_SCOPE, GraphApiVersion::V1_0, Some(records))
+                set_app_intent_error(&mut records, error);
             }
         }
     }
 
-    available_section(APPS_SCOPE, GraphApiVersion::V1_0, records)
+    if truncated {
+        error_section(
+            item_limit_error(APPS_SCOPE),
+            APPS_SCOPE,
+            GraphApiVersion::V1_0,
+            Some(records),
+        )
+    } else {
+        available_section(APPS_SCOPE, GraphApiVersion::V1_0, records)
+    }
+}
+
+fn apply_app_intent_states(
+    value: &Value,
+    device: &EspGraphManagedDevice,
+    records: &mut [EspGraphAppRecord],
+) -> Result<(), GraphClientError> {
+    let mut states: BTreeMap<String, (EspStatus, Vec<EspEvidenceRef>)> = BTreeMap::new();
+    for item in page_items(value, CONFIGURATION_SCOPE)? {
+        let item_id = required_string(item, "id", CONFIGURATION_SCOPE)?;
+        let item_device = required_string(item, "managedDeviceIdentifier", CONFIGURATION_SCOPE)?;
+        if !device_identifier_matches(&item_device, device) {
+            continue;
+        }
+        if let Some(item_user) = optional_guid(item, "userId", CONFIGURATION_SCOPE)? {
+            if device.user_id.as_deref() != Some(item_user.as_str()) {
+                continue;
+            }
+        }
+        let app_items = item
+            .get("mobileAppList")
+            .and_then(Value::as_array)
+            .ok_or_else(|| invalid_response(CONFIGURATION_SCOPE))?;
+        for app_item in app_items {
+            let app_id = required_guid(app_item, "applicationId", CONFIGURATION_SCOPE)?;
+            let Some(raw) = optional_string(app_item, "installState", CONFIGURATION_SCOPE)? else {
+                continue;
+            };
+            let state = graph_status(&raw);
+            if states
+                .get(&app_id)
+                .is_some_and(|(existing, _)| existing != &state)
+            {
+                return Err(invalid_response(CONFIGURATION_SCOPE));
+            }
+            states.entry(app_id).or_insert_with(|| {
+                (
+                    state,
+                    vec![graph_evidence("mobile-app-intent-state", &item_id)],
+                )
+            });
+        }
+    }
+
+    for record in records {
+        if let Some((state, evidence)) = states.remove(&record.app_id) {
+            record.status = Some(state.clone());
+            record.intent_state =
+                available_section(CONFIGURATION_SCOPE, GraphApiVersion::Beta, state);
+            extend_evidence(&mut record.evidence, &evidence);
+        } else {
+            record.intent_state = not_found_section(CONFIGURATION_SCOPE, GraphApiVersion::Beta);
+        }
+    }
+    Ok(())
+}
+
+fn set_app_intent_error(records: &mut [EspGraphAppRecord], error: GraphClientError) {
+    for record in records {
+        record.intent_state = error_section(
+            error.clone(),
+            CONFIGURATION_SCOPE,
+            GraphApiVersion::Beta,
+            None,
+        );
+    }
 }
 
 fn fetch_policies<P: EspGraphProvider>(
@@ -1028,6 +1074,7 @@ fn fetch_policies<P: EspGraphProvider>(
             .then_with(|| policy_kind_sort_key(&left.kind).cmp(&policy_kind_sort_key(&right.kind)))
     });
     references.dedup_by(|left, right| left.id == right.id && left.kind == right.kind);
+    let truncated = references.len() > MAX_REFERENCED_OBJECTS;
     references.truncate(MAX_REFERENCED_OBJECTS);
     if references.is_empty() {
         return skipped_section(
@@ -1092,9 +1139,9 @@ fn fetch_policies<P: EspGraphProvider>(
                 CONFIGURATION_SCOPE,
                 version.clone(),
             );
-            match get(provider, &status_endpoint, cancellation).and_then(|value| {
-                device_status(&value, &device.managed_device_id, CONFIGURATION_SCOPE)
-            }) {
+            match get(provider, &status_endpoint, cancellation)
+                .and_then(|value| classic_device_status(&value, device, CONFIGURATION_SCOPE))
+            {
                 Ok(status) => status,
                 Err(error) => {
                     return error_section(error, CONFIGURATION_SCOPE, version, Some(records))
@@ -1116,15 +1163,21 @@ fn fetch_policies<P: EspGraphProvider>(
             evidence: vec![graph_evidence("policy", &id)],
         });
     }
-    available_section(
-        CONFIGURATION_SCOPE,
-        if used_beta {
-            GraphApiVersion::Beta
-        } else {
-            GraphApiVersion::V1_0
-        },
-        records,
-    )
+    let api_version = if used_beta {
+        GraphApiVersion::Beta
+    } else {
+        GraphApiVersion::V1_0
+    };
+    if truncated {
+        error_section(
+            item_limit_error(CONFIGURATION_SCOPE),
+            CONFIGURATION_SCOPE,
+            api_version,
+            Some(records),
+        )
+    } else {
+        available_section(CONFIGURATION_SCOPE, api_version, records)
+    }
 }
 
 fn fetch_scripts<P: EspGraphProvider>(
@@ -1152,6 +1205,7 @@ fn fetch_scripts<P: EspGraphProvider>(
             .then_with(|| script_kind_sort_key(&left.kind).cmp(&script_kind_sort_key(&right.kind)))
     });
     references.dedup_by(|left, right| left.id == right.id && left.kind == right.kind);
+    let truncated = references.len() > MAX_REFERENCED_OBJECTS;
     references.truncate(MAX_REFERENCED_OBJECTS);
     if references.is_empty() {
         return skipped_section(SCRIPTS_SCOPE, GraphApiVersion::Beta, "referencedScriptIds");
@@ -1193,12 +1247,12 @@ fn fetch_scripts<P: EspGraphProvider>(
             }
         };
         let states_endpoint = EspGraphEndpoint::new(
-            format!("{base}/deviceRunStates?$top=100"),
+            format!("{base}/deviceRunStates?$expand=managedDevice($select=id)&$top=100"),
             SCRIPTS_SCOPE,
             GraphApiVersion::Beta,
         );
         let status = match get(provider, &states_endpoint, cancellation)
-            .and_then(|value| device_status(&value, &device.managed_device_id, SCRIPTS_SCOPE))
+            .and_then(|value| script_device_status(&value, device, &reference.kind, SCRIPTS_SCOPE))
         {
             Ok(status) => status,
             Err(error) => {
@@ -1220,27 +1274,81 @@ fn fetch_scripts<P: EspGraphProvider>(
             evidence: vec![graph_evidence("script", &id)],
         });
     }
-    available_section(SCRIPTS_SCOPE, GraphApiVersion::Beta, records)
+    if truncated {
+        error_section(
+            item_limit_error(SCRIPTS_SCOPE),
+            SCRIPTS_SCOPE,
+            GraphApiVersion::Beta,
+            Some(records),
+        )
+    } else {
+        available_section(SCRIPTS_SCOPE, GraphApiVersion::Beta, records)
+    }
 }
 
-fn device_status(
+fn classic_device_status(
     value: &Value,
-    managed_device_id: &str,
+    device: &EspGraphManagedDevice,
     scope: &str,
 ) -> Result<Option<EspStatus>, GraphClientError> {
+    let (Some(device_name), Some(user_principal_name)) = (
+        device.device_name.as_deref(),
+        device
+            .user_principal_name
+            .as_ref()
+            .map(|value| value.value.as_str()),
+    ) else {
+        return Ok(None);
+    };
+    let mut matched = Vec::new();
     for item in page_items(value, scope)? {
-        let item_device = optional_guid(item, "managedDeviceId", scope)?
-            .or(optional_guid(item, "deviceId", scope)?);
-        if item_device.as_deref() != Some(managed_device_id) {
+        let item_name = optional_string(item, "deviceDisplayName", scope)?;
+        let item_user = optional_string(item, "userPrincipalName", scope)?;
+        if !item_name
+            .as_deref()
+            .is_some_and(|value| text_eq(value, device_name))
+            || !item_user
+                .as_deref()
+                .is_some_and(|value| text_eq(value, user_principal_name))
+        {
             continue;
         }
-        for key in ["status", "resultState", "detectionState"] {
+        if let Some(raw) = optional_string(item, "status", scope)? {
+            matched.push(graph_status(&raw));
+        }
+    }
+    Ok((matched.len() == 1).then(|| matched.remove(0)))
+}
+
+fn script_device_status(
+    value: &Value,
+    device: &EspGraphManagedDevice,
+    kind: &EspGraphScriptKind,
+    scope: &str,
+) -> Result<Option<EspStatus>, GraphClientError> {
+    let keys: &[&str] = match kind {
+        EspGraphScriptKind::Remediation => &["remediationState", "detectionState"],
+        _ => &["runState"],
+    };
+    let mut matched = Vec::new();
+    for item in page_items(value, scope)? {
+        let Some(relationship) = item.get("managedDevice") else {
+            continue;
+        };
+        if !relationship.is_object() {
+            return Err(invalid_response(scope));
+        }
+        if required_guid(relationship, "id", scope)? != device.managed_device_id {
+            continue;
+        }
+        for key in keys {
             if let Some(raw) = optional_string(item, key, scope)? {
-                return Ok(Some(graph_status(&raw)));
+                matched.push(graph_status(&raw));
+                break;
             }
         }
     }
-    Ok(None)
+    Ok((matched.len() == 1).then(|| matched.remove(0)))
 }
 
 fn correlate_policy_status_details(overlay: &mut EspGraphOverlay) {
@@ -1515,7 +1623,6 @@ fn normalized_ids(values: &[String]) -> Vec<String> {
         .collect();
     ids.sort();
     ids.dedup();
-    ids.truncate(MAX_REFERENCED_OBJECTS);
     ids
 }
 
@@ -1555,16 +1662,68 @@ fn graph_status(raw: &str) -> EspStatus {
     }
 }
 
-fn graph_timestamp(raw: &str) -> EspTimestamp {
-    EspTimestamp {
-        raw_text: raw.to_string(),
-        original_offset: raw.ends_with('Z').then(|| "Z".to_string()),
-        normalized_utc: raw.ends_with('Z').then(|| raw.to_string()),
-        kind: if raw.ends_with('Z') {
-            EspTimestampKind::Utc
-        } else {
-            EspTimestampKind::Unspecified
+struct EvidenceWindow {
+    start: DateTime<Utc>,
+    end: DateTime<Utc>,
+}
+
+fn evidence_window(request: &EspGraphRequest) -> Result<Option<EvidenceWindow>, GraphClientError> {
+    let (Some(start), Some(end)) = (
+        request.evidence_window_start_utc.as_deref(),
+        request.evidence_window_end_utc.as_deref(),
+    ) else {
+        if request.evidence_window_start_utc.is_some() || request.evidence_window_end_utc.is_some()
+        {
+            return Err(invalid_response(MANAGED_DEVICES_SCOPE));
+        }
+        return Ok(None);
+    };
+    let start = parse_rfc3339_instant(start, MANAGED_DEVICES_SCOPE)?;
+    let end = parse_rfc3339_instant(end, MANAGED_DEVICES_SCOPE)?;
+    if start > end {
+        return Err(invalid_response(MANAGED_DEVICES_SCOPE));
+    }
+    Ok(Some(EvidenceWindow { start, end }))
+}
+
+fn graph_timestamp(
+    raw: &str,
+    scope: &str,
+) -> Result<(EspTimestamp, DateTime<Utc>), GraphClientError> {
+    let parsed = DateTime::parse_from_rfc3339(raw).map_err(|_| invalid_response(scope))?;
+    let instant = parsed.with_timezone(&Utc);
+    let is_utc = raw.ends_with('Z') || raw.ends_with('z');
+    Ok((
+        EspTimestamp {
+            raw_text: raw.to_string(),
+            original_offset: Some(if is_utc {
+                "Z".to_string()
+            } else {
+                parsed.offset().to_string()
+            }),
+            normalized_utc: Some(instant.to_rfc3339_opts(SecondsFormat::AutoSi, true)),
+            kind: if is_utc {
+                EspTimestampKind::Utc
+            } else {
+                EspTimestampKind::Offset
+            },
         },
+        instant,
+    ))
+}
+
+fn parse_rfc3339_instant(raw: &str, scope: &str) -> Result<DateTime<Utc>, GraphClientError> {
+    DateTime::parse_from_rfc3339(raw)
+        .map(|timestamp| timestamp.with_timezone(&Utc))
+        .map_err(|_| invalid_response(scope))
+}
+
+fn push_unique_guid(ids: &mut Vec<String>, value: &str) {
+    let Some(id) = normalize_graph_guid(value) else {
+        return;
+    };
+    if !ids.iter().any(|existing| existing == &id) {
+        ids.push(id);
     }
 }
 
@@ -1662,6 +1821,15 @@ fn error_section<T>(
 fn invalid_response(scope: &str) -> GraphClientError {
     GraphClientError {
         kind: GraphClientErrorKind::InvalidResponse,
+        status: None,
+        request_id: None,
+        required_scope: scope.to_string(),
+    }
+}
+
+fn item_limit_error(scope: &str) -> GraphClientError {
+    GraphClientError {
+        kind: GraphClientErrorKind::ItemLimitExceeded,
         status: None,
         request_id: None,
         required_scope: scope.to_string(),
