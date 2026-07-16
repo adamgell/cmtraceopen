@@ -2748,7 +2748,7 @@ fn error_code(raw: &str) -> EspErrorCode {
         EspErrorCode {
             raw: raw.to_string(),
             decimal: None,
-            hex: Some(format!("0x{}", &raw[2..].to_ascii_uppercase())),
+            hex: Some(format!("0x{}", raw[2..].to_ascii_uppercase())),
         }
     } else {
         let decimal = raw.parse::<i64>().ok();

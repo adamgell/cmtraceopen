@@ -34,7 +34,7 @@ export function EspToolbarAction() {
 
   const isOpen = evidenceViewMode !== "collapsed";
   const actionLabel = isOpen ? "Hide live logs" : "Open live logs";
-  const accessibleLabel = `${actionLabel}, ${evidenceCount} evidence ${
+  const accessibleLabel = `${actionLabel}, ${liveStateLabel(phase)}, ${evidenceCount} evidence ${
     evidenceCount === 1 ? "record" : "records"
   }, ${unreadEvidenceCount} unread`;
   const isLive = phase === "live";
@@ -64,8 +64,8 @@ export function EspToolbarAction() {
       }}
     >
       <span
-        aria-label={liveStateLabel(phase)}
-        role="status"
+        aria-hidden="true"
+        data-testid="esp-live-status-dot"
         style={{
           width: 8,
           height: 8,

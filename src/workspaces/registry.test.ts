@@ -537,17 +537,21 @@ describe("ESP workspace app chrome", () => {
     );
 
     const action = await screen.findByRole("button", {
-      name: "Open live logs, 3 evidence records, 2 unread",
+      name: "Open live logs, Live diagnostics active, 3 evidence records, 2 unread",
     });
     expect(action).toHaveAttribute("data-appearance", "primary");
-    expect(screen.getByLabelText("Live diagnostics active")).toBeInTheDocument();
+    expect(screen.getByTestId("esp-live-status-dot")).toHaveAttribute(
+      "aria-hidden",
+      "true",
+    );
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
     expect(screen.getByText("3")).toBeInTheDocument();
 
     fireEvent.click(action);
     expect(useEspDiagnosticsStore.getState().evidenceViewMode).toBe("docked");
     expect(
       screen.getByRole("button", {
-        name: "Hide live logs, 3 evidence records, 0 unread",
+        name: "Hide live logs, Live diagnostics active, 3 evidence records, 0 unread",
       }),
     ).toHaveAttribute("aria-pressed", "true");
 
