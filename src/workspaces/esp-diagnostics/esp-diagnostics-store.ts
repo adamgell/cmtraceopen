@@ -2,6 +2,7 @@ import { create } from "zustand";
 import type {
   EspDiagnosticsSnapshot,
   EspGraphOverlay,
+  EspRawEvidenceRecord,
   EspSessionUpdate,
 } from "./types";
 
@@ -25,6 +26,19 @@ export const ESP_EVIDENCE_DOCK_MIN_HEIGHT = 180;
 export const ESP_EVIDENCE_DOCK_MAX_HEIGHT = 720;
 export const ESP_EVIDENCE_DOCK_DEFAULT_HEIGHT = 280;
 export const ESP_EVIDENCE_DOCK_MAX_WORKSPACE_RATIO = 0.7;
+export const ESP_EVIDENCE_BOUNDARY_MARKER_LIMIT = 64;
+
+export interface EspEvidenceBoundarySource {
+  sourceArtifactId: string;
+  filePath: string | null;
+}
+
+export interface EspEvidenceBoundaryMarker {
+  markerId: string;
+  kind: "sourceReset";
+  emittedAtUtc: string;
+  sources: EspEvidenceBoundarySource[];
+}
 
 export interface EspDiagnosticsStore {
   phase: EspWorkspacePhase;
@@ -40,6 +54,7 @@ export interface EspDiagnosticsStore {
   evidenceViewMode: EspEvidenceViewMode;
   evidenceDockHeight: number;
   unreadEvidenceCount: number;
+  evidenceBoundaryMarkers: EspEvidenceBoundaryMarker[];
   beginAnalysis(requestId: string): void;
   beginLiveStart(requestId: string): void;
   beginStop(sessionId: string): void;
@@ -150,6 +165,61 @@ function unreadEvidenceDelta(
   return unread;
 }
 
+function recordsMatch(
+  current: EspRawEvidenceRecord,
+  incoming: EspRawEvidenceRecord,
+): boolean {
+  return JSON.stringify(current) === JSON.stringify(incoming);
+}
+
+function changedEvidenceSources(
+  current: EspDiagnosticsSnapshot | null,
+  incoming: EspDiagnosticsSnapshot,
+): EspEvidenceBoundarySource[] {
+  const currentById = new Map(
+    current?.rawEvidence.map((record) => [record.recordId, record]) ?? [],
+  );
+  const incomingById = new Map(
+    incoming.rawEvidence.map((record) => [record.recordId, record]),
+  );
+  const changedRecords = [
+    ...(current?.rawEvidence.filter((record) => {
+      const replacement = incomingById.get(record.recordId);
+      return !replacement || !recordsMatch(record, replacement);
+    }) ?? []),
+    ...incoming.rawEvidence.filter((record) => {
+      const previous = currentById.get(record.recordId);
+      return !previous || !recordsMatch(previous, record);
+    }),
+  ];
+  const sources = new Map<string, EspEvidenceBoundarySource>();
+  for (const record of changedRecords) {
+    const source = {
+      sourceArtifactId: record.provenance.sourceArtifactId,
+      filePath: record.provenance.filePath,
+    };
+    sources.set(
+      `${source.sourceArtifactId}\u0000${source.filePath ?? ""}`,
+      source,
+    );
+  }
+  return [...sources.values()];
+}
+
+function appendBoundaryMarker(
+  markers: EspEvidenceBoundaryMarker[],
+  current: EspDiagnosticsSnapshot | null,
+  update: EspSessionUpdate,
+): EspEvidenceBoundaryMarker[] {
+  const marker: EspEvidenceBoundaryMarker = {
+    markerId: `source-reset:${update.sessionId}:${update.sequence}`,
+    kind: "sourceReset",
+    emittedAtUtc: update.emittedAtUtc,
+    sources: changedEvidenceSources(current, update.snapshot),
+  };
+  return [...markers, marker].slice(-ESP_EVIDENCE_BOUNDARY_MARKER_LIMIT);
+}
+
 function phaseForSessionUpdate(update: EspSessionUpdate): EspWorkspacePhase {
   switch (update.state) {
     case "starting":
@@ -196,6 +266,7 @@ export const useEspDiagnosticsStore = create<EspDiagnosticsStore>((set) => ({
   evidenceViewMode: "collapsed",
   evidenceDockHeight: ESP_EVIDENCE_DOCK_DEFAULT_HEIGHT,
   unreadEvidenceCount: 0,
+  evidenceBoundaryMarkers: [],
 
   beginAnalysis: (requestId) =>
     set((state) => ({
@@ -209,6 +280,7 @@ export const useEspDiagnosticsStore = create<EspDiagnosticsStore>((set) => ({
       ...graphStateForFreshLocalRun(state),
       graphError: null,
       unreadEvidenceCount: 0,
+      evidenceBoundaryMarkers: [],
     })),
 
   beginLiveStart: (requestId) =>
@@ -223,6 +295,7 @@ export const useEspDiagnosticsStore = create<EspDiagnosticsStore>((set) => ({
       ...graphStateForFreshLocalRun(state),
       graphError: null,
       unreadEvidenceCount: 0,
+      evidenceBoundaryMarkers: [],
     })),
 
   beginStop: (sessionId) =>
@@ -283,6 +356,14 @@ export const useEspDiagnosticsStore = create<EspDiagnosticsStore>((set) => ({
             update.snapshot,
             state.evidenceViewMode,
           ),
+        evidenceBoundaryMarkers:
+          update.reason === "sourceReset"
+            ? appendBoundaryMarker(
+                state.evidenceBoundaryMarkers,
+                state.snapshot,
+                update,
+              )
+            : state.evidenceBoundaryMarkers,
       };
     }),
 

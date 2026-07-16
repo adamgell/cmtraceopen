@@ -1,6 +1,7 @@
 import {
   useEffect,
   useRef,
+  useState,
   type KeyboardEvent,
   type PointerEvent,
 } from "react";
@@ -42,6 +43,9 @@ export function LiveEvidenceDock({ snapshot }: LiveEvidenceDockProps) {
   const unreadCount = useEspDiagnosticsStore(
     (state) => state.unreadEvidenceCount,
   );
+  const boundaryMarkers = useEspDiagnosticsStore(
+    (state) => state.evidenceBoundaryMarkers,
+  );
   const setViewMode = useEspDiagnosticsStore(
     (state) => state.setEvidenceViewMode,
   );
@@ -53,6 +57,9 @@ export function LiveEvidenceDock({ snapshot }: LiveEvidenceDockProps) {
   );
   const dockRef = useRef<HTMLElement>(null);
   const stopPointerResizeRef = useRef<(() => void) | null>(null);
+  const [measuredWorkspaceHeight, setMeasuredWorkspaceHeight] = useState(() =>
+    typeof window === "undefined" ? 0 : window.innerHeight,
+  );
 
   useEffect(
     () => () => {
@@ -66,11 +73,17 @@ export function LiveEvidenceDock({ snapshot }: LiveEvidenceDockProps) {
   }, [markEvidenceRead, viewMode]);
 
   useEffect(() => {
+    if (viewMode !== "docked") stopPointerResizeRef.current?.();
+  }, [viewMode]);
+
+  useEffect(() => {
     if (viewMode !== "docked") return;
 
     const clampToWorkspace = () => {
+      const availableHeight = workspaceHeight(dockRef.current);
+      setMeasuredWorkspaceHeight(availableHeight);
       const state = useEspDiagnosticsStore.getState();
-      setDockHeight(state.evidenceDockHeight, workspaceHeight(dockRef.current));
+      setDockHeight(state.evidenceDockHeight, availableHeight);
     };
     clampToWorkspace();
     window.addEventListener("resize", clampToWorkspace);
@@ -121,13 +134,15 @@ export function LiveEvidenceDock({ snapshot }: LiveEvidenceDockProps) {
     stopPointerResizeRef.current?.();
     const startY = event.clientY;
     const startHeight = dockHeight;
-    const availableHeight = workspaceHeight(dockRef.current);
     const pointerId = event.pointerId;
 
     const move = (moveEvent: globalThis.PointerEvent) => {
       if (pointerId && moveEvent.pointerId && moveEvent.pointerId !== pointerId)
         return;
-      setDockHeight(startHeight + startY - moveEvent.clientY, availableHeight);
+      setDockHeight(
+        startHeight + startY - moveEvent.clientY,
+        workspaceHeight(dockRef.current),
+      );
     };
     const cleanup = () => {
       window.removeEventListener("pointermove", move);
@@ -178,9 +193,7 @@ export function LiveEvidenceDock({ snapshot }: LiveEvidenceDockProps) {
           aria-label="Resize live evidence and logs"
           aria-orientation="horizontal"
           aria-valuemin={ESP_EVIDENCE_DOCK_MIN_HEIGHT}
-          aria-valuemax={getEspEvidenceDockMaxHeight(
-            workspaceHeight(dockRef.current),
-          )}
+          aria-valuemax={getEspEvidenceDockMaxHeight(measuredWorkspaceHeight)}
           aria-valuenow={dockHeight}
           tabIndex={0}
           onKeyDown={resizeFromKeyboard}
@@ -306,7 +319,10 @@ export function LiveEvidenceDock({ snapshot }: LiveEvidenceDockProps) {
         </div>
       </header>
 
-      <LiveEvidenceTable snapshot={snapshot} />
+      <LiveEvidenceTable
+        snapshot={snapshot}
+        boundaryMarkers={boundaryMarkers}
+      />
     </section>
   );
 }

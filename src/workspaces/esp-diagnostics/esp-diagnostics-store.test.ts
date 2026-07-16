@@ -11,6 +11,7 @@ import {
 } from "../../lib/commands";
 import { useUiStore } from "../../stores/ui-store";
 import {
+  ESP_EVIDENCE_BOUNDARY_MARKER_LIMIT,
   ESP_EVIDENCE_DOCK_MAX_HEIGHT,
   ESP_EVIDENCE_DOCK_MIN_HEIGHT,
   useEspDiagnosticsStore,
@@ -151,6 +152,7 @@ function makeSessionUpdate(
   sequence: number,
   snapshot: EspDiagnosticsSnapshot,
   sessionId = "session-a",
+  overrides: Partial<EspSessionUpdate> = {},
 ): EspSessionUpdate {
   return {
     sessionId,
@@ -160,7 +162,12 @@ function makeSessionUpdate(
     reason: "evidenceChanged",
     emittedAtUtc: "2026-07-15T20:00:00Z",
     snapshot,
+    ...overrides,
   };
+}
+
+function evidenceBoundaryMarkers() {
+  return useEspDiagnosticsStore.getState().evidenceBoundaryMarkers;
 }
 
 function deferred<T>() {
@@ -410,6 +417,117 @@ describe("ESP local session state", () => {
       );
 
     expect(useEspDiagnosticsStore.getState().unreadEvidenceCount).toBe(1);
+  });
+
+  it("persists a typed source-reset boundary outside native evidence through later updates", () => {
+    const initial = makeSnapshot(["old-a"]);
+    initial.rawEvidence[0].provenance.filePath =
+      "C:\\ProgramData\\Microsoft\\IntuneManagementExtension\\Logs\\AppWorkload.log";
+    const replacement = makeSnapshot(["new-b"]);
+    replacement.rawEvidence[0].provenance.filePath =
+      "C:\\ProgramData\\Microsoft\\IntuneManagementExtension\\Logs\\AppWorkload-20260715.log";
+    const state = useEspDiagnosticsStore.getState();
+    state.beginLiveStart("live-a");
+    state.applySessionUpdate(
+      makeSessionUpdate(1, initial, "session-a", {
+        reason: "initialSnapshot",
+      }),
+    );
+    useEspDiagnosticsStore.getState().markEvidenceRead();
+
+    useEspDiagnosticsStore.getState().applySessionUpdate(
+      makeSessionUpdate(2, replacement, "session-a", {
+        reason: "sourceReset",
+        emittedAtUtc: "2026-07-15T20:00:42Z",
+      }),
+    );
+
+    expect(useEspDiagnosticsStore.getState().unreadEvidenceCount).toBe(1);
+    expect(evidenceBoundaryMarkers()).toEqual([
+      {
+        markerId: "source-reset:session-a:2",
+        kind: "sourceReset",
+        emittedAtUtc: "2026-07-15T20:00:42Z",
+        sources: [
+          {
+            sourceArtifactId: "ime-app-workload",
+            filePath:
+              "C:\\ProgramData\\Microsoft\\IntuneManagementExtension\\Logs\\AppWorkload.log",
+          },
+          {
+            sourceArtifactId: "ime-app-workload",
+            filePath:
+              "C:\\ProgramData\\Microsoft\\IntuneManagementExtension\\Logs\\AppWorkload-20260715.log",
+          },
+        ],
+      },
+    ]);
+    expect(useEspDiagnosticsStore.getState().snapshot?.rawEvidence).toEqual(
+      replacement.rawEvidence,
+    );
+    expect(
+      useEspDiagnosticsStore
+        .getState()
+        .snapshot?.rawEvidence.some((record) =>
+          record.recordId.includes("reset"),
+        ),
+    ).toBe(false);
+
+    const later = makeSnapshot(["new-b", "new-c"]);
+    useEspDiagnosticsStore
+      .getState()
+      .applySessionUpdate(makeSessionUpdate(3, later));
+    expect(useEspDiagnosticsStore.getState().unreadEvidenceCount).toBe(2);
+    expect(evidenceBoundaryMarkers()).toHaveLength(1);
+    expect(evidenceBoundaryMarkers()[0].markerId).toBe(
+      "source-reset:session-a:2",
+    );
+  });
+
+  it("bounds reset-marker history and clears it for every new local run", () => {
+    const markerLimit = ESP_EVIDENCE_BOUNDARY_MARKER_LIMIT;
+    const state = useEspDiagnosticsStore.getState();
+    state.beginLiveStart("live-a");
+    state.applySessionUpdate(
+      makeSessionUpdate(1, makeSnapshot(["record-1"]), "session-a", {
+        reason: "initialSnapshot",
+      }),
+    );
+
+    for (let sequence = 2; sequence <= markerLimit + 7; sequence += 1) {
+      useEspDiagnosticsStore
+        .getState()
+        .applySessionUpdate(
+          makeSessionUpdate(
+            sequence,
+            makeSnapshot([`record-${sequence}`]),
+            "session-a",
+            { reason: "sourceReset" },
+          ),
+        );
+    }
+
+    expect(evidenceBoundaryMarkers()).toHaveLength(markerLimit);
+    expect(evidenceBoundaryMarkers()[0].markerId).toBe(
+      "source-reset:session-a:8",
+    );
+    const retainedMarkers = evidenceBoundaryMarkers();
+    expect(retainedMarkers[retainedMarkers.length - 1]?.markerId).toBe(
+      "source-reset:session-a:71",
+    );
+
+    useEspDiagnosticsStore.getState().beginLiveStart("live-b");
+    expect(evidenceBoundaryMarkers()).toEqual([]);
+    useEspDiagnosticsStore.getState().applySessionUpdate(
+      makeSessionUpdate(1, makeSnapshot(["session-b"]), "session-b", {
+        requestId: "live-b",
+        reason: "sourceReset",
+      }),
+    );
+    expect(evidenceBoundaryMarkers()).toHaveLength(1);
+
+    useEspDiagnosticsStore.getState().beginAnalysis("analysis-a");
+    expect(evidenceBoundaryMarkers()).toEqual([]);
   });
 
   it("validates the complete session envelope before applying native events", () => {

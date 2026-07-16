@@ -5,6 +5,7 @@ import {
   LOG_MONOSPACE_FONT_FAMILY,
   LOG_UI_FONT_FAMILY,
 } from "../../lib/log-accessibility";
+import type { EspEvidenceBoundaryMarker } from "./esp-diagnostics-store";
 import type {
   EspDiagnosticsSnapshot,
   EspObservationValue,
@@ -14,8 +15,8 @@ import type {
 
 type LiveEvidenceSeverity = "error" | "warning" | "info";
 
-interface LiveEvidenceRow {
-  record: EspRawEvidenceRecord;
+interface LiveEvidenceRowBase {
+  rowId: string;
   timestamp: string;
   source: string;
   severity: LiveEvidenceSeverity;
@@ -23,8 +24,21 @@ interface LiveEvidenceRow {
   message: string;
 }
 
+interface LiveEvidenceRecordRow extends LiveEvidenceRowBase {
+  kind: "evidence";
+  record: EspRawEvidenceRecord;
+}
+
+interface LiveEvidenceBoundaryRow extends LiveEvidenceRowBase {
+  kind: "sourceReset";
+  marker: EspEvidenceBoundaryMarker;
+}
+
+type LiveEvidenceRow = LiveEvidenceRecordRow | LiveEvidenceBoundaryRow;
+
 export interface LiveEvidenceTableProps {
   snapshot: EspDiagnosticsSnapshot | null;
+  boundaryMarkers?: EspEvidenceBoundaryMarker[];
 }
 
 function observationValueText(value: EspObservationValue): string {
@@ -78,13 +92,15 @@ function severityForRecord(
 function rowForRecord(
   record: EspRawEvidenceRecord,
   activity: EspTimelineEntry[],
-): LiveEvidenceRow {
+): LiveEvidenceRecordRow {
   const timeline = timelineForRecord(record, activity);
   const rawMessage = observationValueText(record.rawValue);
   const normalizedContext = timeline
     ? `${timeline.title} ${timeline.detail ?? ""}`
     : "";
   return {
+    kind: "evidence",
+    rowId: record.recordId,
     record,
     timestamp:
       record.sourceTimestamp?.rawText ||
@@ -101,6 +117,24 @@ function rowForRecord(
   };
 }
 
+function rowForBoundary(
+  marker: EspEvidenceBoundaryMarker,
+): LiveEvidenceBoundaryRow {
+  const source = [
+    ...new Set(marker.sources.map((entry) => entry.sourceArtifactId)),
+  ].join(", ");
+  return {
+    kind: "sourceReset",
+    rowId: marker.markerId,
+    marker,
+    timestamp: marker.emittedAtUtc,
+    source: source || "Unknown source",
+    severity: "info",
+    component: "Source reset",
+    message: "Source reset after rotation or truncation",
+  };
+}
+
 function severityColor(severity: LiveEvidenceSeverity): string {
   switch (severity) {
     case "error":
@@ -113,6 +147,39 @@ function severityColor(severity: LiveEvidenceSeverity): string {
 }
 
 function ProvenanceDetails({ row }: { row: LiveEvidenceRow }) {
+  if (row.kind === "sourceReset") {
+    return (
+      <aside
+        aria-label="Reset boundary provenance"
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
+          gap: "6px 16px",
+          padding: "8px 10px",
+          borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
+          backgroundColor: tokens.colorNeutralBackground3,
+          color: tokens.colorNeutralForeground2,
+          fontFamily: LOG_MONOSPACE_FONT_FAMILY,
+          fontSize: 10,
+          lineHeight: "15px",
+        }}
+      >
+        <span>Boundary {row.marker.markerId}</span>
+        <span>Emitted {row.marker.emittedAtUtc}</span>
+        {row.marker.sources.length > 0 ? (
+          row.marker.sources.map((source) => (
+            <span
+              key={`${source.sourceArtifactId}\u0000${source.filePath ?? ""}`}
+            >
+              {source.sourceArtifactId} · {source.filePath ?? "No file path"}
+            </span>
+          ))
+        ) : (
+          <span>Source provenance unavailable</span>
+        )}
+      </aside>
+    );
+  }
   const { record } = row;
   const { provenance } = record;
   return (
@@ -161,12 +228,18 @@ function ProvenanceDetails({ row }: { row: LiveEvidenceRow }) {
   );
 }
 
-export function LiveEvidenceTable({ snapshot }: LiveEvidenceTableProps) {
+export function LiveEvidenceTable({
+  snapshot,
+  boundaryMarkers = [],
+}: LiveEvidenceTableProps) {
   const records = snapshot?.rawEvidence ?? [];
   const activity = snapshot?.activity ?? [];
   const rows = useMemo(
-    () => records.map((record) => rowForRecord(record, activity)),
-    [activity, records],
+    () => [
+      ...records.map((record) => rowForRecord(record, activity)),
+      ...boundaryMarkers.map(rowForBoundary),
+    ],
+    [activity, boundaryMarkers, records],
   );
   const sources = useMemo(
     () => [...new Set(rows.map((row) => row.source))].sort(),
@@ -177,7 +250,7 @@ export function LiveEvidenceTable({ snapshot }: LiveEvidenceTableProps) {
   const [problemsOnly, setProblemsOnly] = useState(false);
   const [following, setFollowing] = useState(true);
   const [manualPause, setManualPause] = useState(false);
-  const [selectedRecordId, setSelectedRecordId] = useState<string | null>(null);
+  const [selectedRowId, setSelectedRowId] = useState<string | null>(null);
   const scrollerRef = useRef<HTMLDivElement>(null);
 
   const filteredRows = useMemo(() => {
@@ -198,7 +271,7 @@ export function LiveEvidenceTable({ snapshot }: LiveEvidenceTableProps) {
     getScrollElement: () => scrollerRef.current,
     estimateSize: () => 32,
     overscan: 10,
-    getItemKey: (index) => filteredRows[index]?.record.recordId ?? index,
+    getItemKey: (index) => filteredRows[index]?.rowId ?? index,
   });
 
   useEffect(() => {
@@ -208,17 +281,12 @@ export function LiveEvidenceTable({ snapshot }: LiveEvidenceTableProps) {
   }, [filteredRows.length, following, virtualizer]);
 
   useEffect(() => {
-    if (
-      selectedRecordId &&
-      !rows.some((row) => row.record.recordId === selectedRecordId)
-    ) {
-      setSelectedRecordId(null);
+    if (selectedRowId && !rows.some((row) => row.rowId === selectedRowId)) {
+      setSelectedRowId(null);
     }
-  }, [rows, selectedRecordId]);
+  }, [rows, selectedRowId]);
 
-  const selectedRow = rows.find(
-    (row) => row.record.recordId === selectedRecordId,
-  );
+  const selectedRow = rows.find((row) => row.rowId === selectedRowId);
 
   const handleScroll = () => {
     const element = scrollerRef.current;
@@ -393,21 +461,26 @@ export function LiveEvidenceTable({ snapshot }: LiveEvidenceTableProps) {
             {virtualizer.getVirtualItems().map((virtualRow) => {
               const row = filteredRows[virtualRow.index];
               if (!row) return null;
-              const selected = selectedRecordId === row.record.recordId;
+              const selected = selectedRowId === row.rowId;
               return (
                 <div
-                  key={row.record.recordId}
+                  key={row.rowId}
                   ref={virtualizer.measureElement}
                   role="row"
                   data-index={virtualRow.index}
-                  data-testid="live-evidence-row"
+                  data-testid={
+                    row.kind === "sourceReset"
+                      ? "live-evidence-reset-row"
+                      : "live-evidence-row"
+                  }
+                  data-record-id={row.rowId}
                   aria-selected={selected}
                   tabIndex={0}
-                  onClick={() => setSelectedRecordId(row.record.recordId)}
+                  onClick={() => setSelectedRowId(row.rowId)}
                   onKeyDown={(event) => {
                     if (event.key === "Enter" || event.key === " ") {
                       event.preventDefault();
-                      setSelectedRecordId(row.record.recordId);
+                      setSelectedRowId(row.rowId);
                     }
                   }}
                   style={{
@@ -424,8 +497,14 @@ export function LiveEvidenceTable({ snapshot }: LiveEvidenceTableProps) {
                     borderBottom: "1px solid #252b30",
                     borderLeft: selected
                       ? `3px solid ${tokens.colorBrandStroke1}`
-                      : "3px solid transparent",
-                    backgroundColor: selected ? "#26323a" : "transparent",
+                      : row.kind === "sourceReset"
+                        ? "3px solid #5b9bd5"
+                        : "3px solid transparent",
+                    backgroundColor: selected
+                      ? "#26323a"
+                      : row.kind === "sourceReset"
+                        ? "#17242b"
+                        : "transparent",
                     cursor: "default",
                   }}
                 >
@@ -466,7 +545,7 @@ export function LiveEvidenceTable({ snapshot }: LiveEvidenceTableProps) {
                       overflow: "hidden",
                       padding: "0 8px",
                       textOverflow: "ellipsis",
-                      whiteSpace: "nowrap",
+                      whiteSpace: "pre",
                     }}
                   >
                     {row.message}
