@@ -14,6 +14,7 @@ export interface GraphStartupDependencies {
   fetchAllApps: typeof graphFetchAllApps;
   mergeApps(apps: GraphAppInfo[]): void;
   setConnectionStatus(status: GraphConnectionStatus): void;
+  isCurrent(): boolean;
 }
 
 const defaultDependencies: GraphStartupDependencies = {
@@ -25,20 +26,25 @@ const defaultDependencies: GraphStartupDependencies = {
       .mergeGuidRegistry(buildGraphRegistryEntries(apps)),
   setConnectionStatus: (status) =>
     useUiStore.getState().setGraphApiStatus(status),
+  isCurrent: () => useUiStore.getState().graphApiEnabled,
 };
 
 export async function connectAndPopulate(
   dependencies: GraphStartupDependencies = defaultDependencies,
 ) {
+  if (!dependencies.isCurrent()) return;
   dependencies.setConnectionStatus("connecting");
 
   let status;
   try {
     status = await dependencies.authenticate();
   } catch {
-    dependencies.setConnectionStatus("error");
+    if (dependencies.isCurrent()) {
+      dependencies.setConnectionStatus("error");
+    }
     return;
   }
+  if (!dependencies.isCurrent()) return;
   if (!status.isAuthenticated) {
     dependencies.setConnectionStatus("error");
     return;
@@ -48,7 +54,7 @@ export async function connectAndPopulate(
   try {
     if (status.capabilities.apps) {
       const apps = await dependencies.fetchAllApps();
-      if (apps.length > 0) {
+      if (apps.length > 0 && dependencies.isCurrent()) {
         dependencies.mergeApps(apps);
       }
     }
@@ -60,7 +66,22 @@ export async function connectAndPopulate(
 function tryStart() {
   const { graphApiEnabled, currentPlatform } = useUiStore.getState();
   if (!graphApiEnabled || currentPlatform !== "windows") return;
-  connectAndPopulate();
+  let current = true;
+  const unsubscribe = useUiStore.subscribe((state, previous) => {
+    if (
+      state.graphApiEnabled !== previous.graphApiEnabled ||
+      state.currentPlatform !== previous.currentPlatform
+    ) {
+      current = false;
+    }
+  });
+  void connectAndPopulate({
+    ...defaultDependencies,
+    isCurrent: () =>
+      current &&
+      useUiStore.getState().graphApiEnabled &&
+      useUiStore.getState().currentPlatform === "windows",
+  }).finally(unsubscribe);
 }
 
 if (useUiStore.persist.hasHydrated()) {

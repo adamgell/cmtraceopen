@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { tokens } from "@fluentui/react-components";
 import { useUiStore } from "../../../stores/ui-store";
 import {
@@ -38,12 +38,21 @@ export function GraphApiTab() {
   const [cachedAppCount, setCachedAppCount] = useState<number | null>(null);
   const [cacheError, setCacheError] = useState<string | null>(null);
   const [showConfirmEnable, setShowConfirmEnable] = useState(false);
+  const graphOperationGeneration = useRef(0);
+
+  const isCurrentGraphOperation = useCallback((generation: number) => {
+    return (
+      generation === graphOperationGeneration.current &&
+      useUiStore.getState().graphApiEnabled
+    );
+  }, []);
 
   const refreshStatus = useCallback(async () => {
     if (!graphApiEnabled) return;
+    const generation = ++graphOperationGeneration.current;
     try {
       const status = await graphGetAuthStatus();
-      if (!useUiStore.getState().graphApiEnabled) return;
+      if (!isCurrentGraphOperation(generation)) return;
       setAuthStatus(status);
       useUiStore
         .getState()
@@ -55,11 +64,11 @@ export function GraphApiTab() {
               : "idle",
         );
     } catch {
-      if (useUiStore.getState().graphApiEnabled) {
+      if (isCurrentGraphOperation(generation)) {
         useUiStore.getState().setGraphApiStatus("error");
       }
     }
-  }, [graphApiEnabled]);
+  }, [graphApiEnabled, isCurrentGraphOperation]);
 
   useEffect(() => {
     refreshStatus();
@@ -69,8 +78,12 @@ export function GraphApiTab() {
     if (checked) {
       setShowConfirmEnable(true);
     } else {
+      graphOperationGeneration.current += 1;
       setGraphApiEnabled(false);
       setAuthStatus(null);
+      setCacheLoading(false);
+      setCachedAppCount(null);
+      setCacheError(null);
       useUiStore.getState().setGraphApiStatus("idle");
     }
   };
@@ -81,15 +94,18 @@ export function GraphApiTab() {
   };
 
   const handleSignIn = async () => {
+    const generation = ++graphOperationGeneration.current;
     setLoading(true);
     useUiStore.getState().setGraphApiStatus("connecting");
     try {
       const status = await graphAuthenticate();
+      if (!isCurrentGraphOperation(generation)) return;
       setAuthStatus(status);
       useUiStore
         .getState()
         .setGraphApiStatus(status.isAuthenticated ? "connected" : "error");
     } catch (e) {
+      if (!isCurrentGraphOperation(generation)) return;
       useUiStore.getState().setGraphApiStatus("error");
       setAuthStatus({
         isAuthenticated: false,
@@ -113,8 +129,10 @@ export function GraphApiTab() {
   };
 
   const handleSignOut = async () => {
+    const generation = ++graphOperationGeneration.current;
     try {
       await graphSignOut();
+      if (!isCurrentGraphOperation(generation)) return;
       setAuthStatus(null);
       setCachedAppCount(null);
       useUiStore.getState().setGraphApiStatus("idle");
@@ -124,11 +142,13 @@ export function GraphApiTab() {
   };
 
   const handlePrePopulateCache = async () => {
+    const generation = ++graphOperationGeneration.current;
     setCacheLoading(true);
     setCacheError(null);
     setCachedAppCount(null);
     try {
       const apps = await graphFetchAllApps();
+      if (!isCurrentGraphOperation(generation)) return;
       setCachedAppCount(apps.length);
 
       if (apps.length > 0) {
@@ -137,6 +157,7 @@ export function GraphApiTab() {
           .mergeGuidRegistry(buildGraphRegistryEntries(apps));
       }
     } catch (e) {
+      if (!isCurrentGraphOperation(generation)) return;
       const msg = e instanceof Error ? e.message : String(e);
       setCacheError(msg);
     } finally {

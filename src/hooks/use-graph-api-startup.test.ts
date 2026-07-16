@@ -34,6 +34,7 @@ describe("Graph API persisted startup", () => {
       fetchAllApps: vi.fn(),
       mergeApps: vi.fn(),
       setConnectionStatus: vi.fn(),
+      isCurrent: () => true,
     };
 
     await connectAndPopulate(dependencies);
@@ -66,6 +67,7 @@ describe("Graph API persisted startup", () => {
       fetchAllApps: vi.fn().mockRejectedValue(new Error("offline")),
       mergeApps: vi.fn(),
       setConnectionStatus: vi.fn(),
+      isCurrent: () => true,
     };
 
     await connectAndPopulate(dependencies);
@@ -80,5 +82,70 @@ describe("Graph API persisted startup", () => {
       2,
       "connected",
     );
+  });
+
+  it("does not reconnect or hydrate apps when Graph is disabled during authentication", async () => {
+    let enabled = true;
+    let resolveAuthentication!: (status: GraphAuthStatus) => void;
+    const status = partialStatusWithoutApps();
+    status.capabilities.apps = true;
+    const dependencies: GraphStartupDependencies = {
+      authenticate: vi.fn().mockReturnValue(
+        new Promise((resolve) => {
+          resolveAuthentication = resolve;
+        }),
+      ),
+      fetchAllApps: vi.fn(),
+      mergeApps: vi.fn(),
+      setConnectionStatus: vi.fn(),
+      isCurrent: () => enabled,
+    };
+
+    const pending = connectAndPopulate(dependencies);
+    enabled = false;
+    resolveAuthentication(status);
+    await pending;
+
+    expect(dependencies.setConnectionStatus).toHaveBeenCalledOnce();
+    expect(dependencies.setConnectionStatus).toHaveBeenCalledWith("connecting");
+    expect(dependencies.fetchAllApps).not.toHaveBeenCalled();
+    expect(dependencies.mergeApps).not.toHaveBeenCalled();
+  });
+
+  it("does not merge app data when Graph is disabled during cache hydration", async () => {
+    let enabled = true;
+    let resolveApps!: (
+      apps: Awaited<ReturnType<GraphStartupDependencies["fetchAllApps"]>>,
+    ) => void;
+    const status = partialStatusWithoutApps();
+    status.capabilities.apps = true;
+    const dependencies: GraphStartupDependencies = {
+      authenticate: vi.fn().mockResolvedValue(status),
+      fetchAllApps: vi.fn().mockReturnValue(
+        new Promise((resolve) => {
+          resolveApps = resolve;
+        }),
+      ),
+      mergeApps: vi.fn(),
+      setConnectionStatus: vi.fn(),
+      isCurrent: () => enabled,
+    };
+
+    const pending = connectAndPopulate(dependencies);
+    await vi.waitFor(() =>
+      expect(dependencies.fetchAllApps).toHaveBeenCalled(),
+    );
+    enabled = false;
+    resolveApps([
+      {
+        id: "app-a",
+        displayName: "App A",
+        publisher: null,
+        odataType: "#microsoft.graph.win32LobApp",
+      },
+    ]);
+    await pending;
+
+    expect(dependencies.mergeApps).not.toHaveBeenCalled();
   });
 });

@@ -15,6 +15,7 @@ import {
   type GraphAuthStatus,
 } from "../../../lib/commands";
 import { useUiStore } from "../../../stores/ui-store";
+import { useIntuneStore } from "../../../workspaces/intune/intune-store";
 import { GraphApiTab } from "./GraphApiTab";
 
 vi.mock("../../../lib/commands", () => ({
@@ -79,6 +80,7 @@ describe("GraphApiTab delegated capabilities", () => {
       graphApiEnabled: true,
       graphApiStatus: "idle",
     });
+    useIntuneStore.setState({ guidRegistry: {} });
     vi.mocked(graphAuthenticate).mockResolvedValue(partialStatus(true));
     vi.mocked(graphFetchAllApps).mockResolvedValue([]);
     vi.mocked(graphSignOut).mockResolvedValue();
@@ -200,6 +202,70 @@ describe("GraphApiTab delegated capabilities", () => {
 
     expect(useUiStore.getState().graphApiEnabled).toBe(false);
     expect(useUiStore.getState().graphApiStatus).toBe("idle");
+  });
+
+  it("does not restore connected state when manual authentication finishes after Graph is disabled", async () => {
+    let resolveAuthentication!: (status: GraphAuthStatus) => void;
+    vi.mocked(graphGetAuthStatus).mockResolvedValue(disconnectedStatus());
+    vi.mocked(graphAuthenticate).mockReturnValue(
+      new Promise((resolve) => {
+        resolveAuthentication = resolve;
+      }),
+    );
+
+    render(<GraphApiTab />);
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Sign in with Windows" }),
+    );
+    await waitFor(() => expect(graphAuthenticate).toHaveBeenCalledOnce());
+
+    fireEvent.click(screen.getByRole("checkbox"));
+    expect(useUiStore.getState().graphApiEnabled).toBe(false);
+    expect(useUiStore.getState().graphApiStatus).toBe("idle");
+
+    await act(async () => {
+      resolveAuthentication(partialStatus(true));
+      await Promise.resolve();
+    });
+
+    expect(useUiStore.getState().graphApiEnabled).toBe(false);
+    expect(useUiStore.getState().graphApiStatus).toBe("idle");
+  });
+
+  it("does not merge app data when Graph is disabled during manual cache hydration", async () => {
+    let resolveApps!: (
+      apps: Awaited<ReturnType<typeof graphFetchAllApps>>,
+    ) => void;
+    vi.mocked(graphGetAuthStatus).mockResolvedValue(partialStatus(true));
+    vi.mocked(graphFetchAllApps).mockReturnValue(
+      new Promise((resolve) => {
+        resolveApps = resolve;
+      }),
+    );
+
+    render(<GraphApiTab />);
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Pre-populate app cache" }),
+    );
+    await waitFor(() => expect(graphFetchAllApps).toHaveBeenCalledOnce());
+
+    fireEvent.click(screen.getByRole("checkbox"));
+    await act(async () => {
+      resolveApps([
+        {
+          id: "app-a",
+          displayName: "App A",
+          publisher: null,
+          odataType: "#microsoft.graph.win32LobApp",
+        },
+      ]);
+      await Promise.resolve();
+    });
+
+    expect(useUiStore.getState().graphApiEnabled).toBe(false);
+    expect(useIntuneStore.getState().guidRegistry).toEqual({});
   });
 
   it("clears the global connection phase after manual sign-out", async () => {
