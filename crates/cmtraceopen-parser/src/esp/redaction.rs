@@ -23,6 +23,14 @@ fn sid_pattern() -> &'static Regex {
     })
 }
 
+fn user_profile_path_pattern() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
+        Regex::new(r"(?i)(?P<prefix>(?:^|[\\/])(?:users|documents and settings)[\\/])[^\\/\r\n]+")
+            .expect("user-profile path redaction pattern must compile")
+    })
+}
+
 fn authorization_pattern() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
@@ -176,16 +184,7 @@ fn redact_observation_value(value: &mut EspObservationValue) {
 }
 
 fn mask_observation_value(value: &mut EspObservationValue) {
-    match value {
-        EspObservationValue::Text(value) => *value = REDACTED.to_string(),
-        EspObservationValue::StringList(values) => {
-            values.clear();
-            values.push(REDACTED.to_string());
-        }
-        EspObservationValue::Integer(_)
-        | EspObservationValue::Unsigned(_)
-        | EspObservationValue::Boolean(_) => {}
-    }
+    *value = EspObservationValue::Text(REDACTED.to_string());
 }
 
 fn redact_optional_text(value: &mut Option<String>) {
@@ -198,6 +197,7 @@ fn redact_text(value: &str) -> String {
     let bounded = bounded_text(value);
     let redacted = authorization_pattern().replace_all(bounded, "${prefix}[redacted]");
     let redacted = secret_argument_pattern().replace_all(&redacted, "${prefix}[redacted]");
+    let redacted = user_profile_path_pattern().replace_all(&redacted, "${prefix}[redacted]");
     let redacted = email_pattern().replace_all(&redacted, REDACTED);
     let redacted = sid_pattern().replace_all(&redacted, REDACTED);
     if bounded.len() == value.len() {
@@ -253,6 +253,14 @@ fn raw_record_must_be_removed(record: &EspRawEvidenceRecord) -> bool {
 }
 
 fn raw_record_must_be_masked(record: &EspRawEvidenceRecord) -> bool {
+    if record.provenance.registry.is_none()
+        && matches!(
+            record.sensitivity,
+            EspSensitivity::Sensitive | EspSensitivity::Restricted
+        )
+    {
+        return true;
+    }
     let Some(registry) = &record.provenance.registry else {
         return false;
     };
@@ -312,6 +320,12 @@ fn forbidden_raw_content(value: &str) -> bool {
 }
 
 fn redact_provenance(provenance: &mut EspEvidenceProvenance) {
+    if let Some(path) = &mut provenance.file_path {
+        *path = redact_text(path);
+    }
+    if let Some(registry) = &mut provenance.registry {
+        registry.key = redact_text(&registry.key);
+    }
     if let Some(event) = &mut provenance.event {
         for named in &mut event.named_data {
             named.value = if sensitive_value_label(&named.name) || forbidden_raw_label(&named.name)

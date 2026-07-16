@@ -22,7 +22,9 @@ pub fn derive_findings(snapshot: &EspDiagnosticsSnapshot) -> Vec<EspDiagnosticFi
     push_ime_coverage_gap(snapshot, &mut findings);
     push_non_elevated_coverage_loss(snapshot, &mut findings);
     push_ambiguous_installer(snapshot, &mut findings);
-    push_local_graph_conflict(snapshot, &mut findings);
+    // Graph overlays are attached by the frontend after native reduction. A
+    // local/Graph contradiction rule must wait for a parser-owned overlay
+    // reduction path so it cannot become stale or exist only in unit tests.
     push_malformed_source(snapshot, &mut findings);
     push_successful_completion(snapshot, &mut findings);
 
@@ -241,8 +243,7 @@ fn push_ime_coverage_gap(
     findings: &mut Vec<EspDiagnosticFinding>,
 ) {
     let coverage = snapshot.coverage.iter().filter(|coverage| {
-        let identity = format!("{} {}", coverage.artifact_id, coverage.family).to_ascii_lowercase();
-        identity.contains("ime")
+        is_ime_log_coverage(coverage)
             && matches!(
                 coverage.status,
                 EspArtifactStatus::Missing | EspArtifactStatus::PermissionDenied
@@ -264,6 +265,30 @@ fn push_ime_coverage_gap(
             gaps,
         ),
     );
+}
+
+fn is_ime_log_coverage(coverage: &EspArtifactCoverage) -> bool {
+    let artifact = normalize_source_identity(&coverage.artifact_id);
+    let family = normalize_source_identity(&coverage.family);
+    matches!(
+        artifact.as_str(),
+        "imelogs"
+            | "intuneimelogs"
+            | "windowsintuneimelogs"
+            | "intunemanagementextensionlog"
+            | "intunemanagementextensionlogs"
+    ) || matches!(
+        family.as_str(),
+        "intuneime" | "intunemanagementextension" | "intunemanagementextensionlogs"
+    )
+}
+
+fn normalize_source_identity(value: &str) -> String {
+    value
+        .chars()
+        .filter(|character| character.is_ascii_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
 }
 
 fn push_non_elevated_coverage_loss(
@@ -335,50 +360,6 @@ fn push_ambiguous_installer(
     );
 }
 
-fn push_local_graph_conflict(
-    snapshot: &EspDiagnosticsSnapshot,
-    findings: &mut Vec<EspDiagnosticFinding>,
-) {
-    let Some(graph) = &snapshot.graph else {
-        return;
-    };
-    if graph.apps.status != GraphSectionStatus::Available {
-        return;
-    }
-    let Some(apps) = &graph.apps.data else {
-        return;
-    };
-    let mut evidence = Vec::new();
-    for workload in &snapshot.workloads {
-        for app in apps.iter().filter(|app| {
-            identifiers_equal(&app.app_id, &workload.raw_identifier)
-                || identifiers_equal(&app.app_id, &workload.workload_id)
-        }) {
-            let Some(graph_status) = &app.status else {
-                continue;
-            };
-            if statuses_contradict(&workload.status.normalized, &graph_status.normalized) {
-                evidence.extend(workload.evidence.iter().cloned());
-                evidence.extend(app.evidence.iter().cloned());
-            }
-        }
-    }
-    normalize_evidence(&mut evidence);
-    push_finding(
-        findings,
-        finding(
-            "local-graph-state-conflict",
-            EspFindingSeverity::Warning,
-            EspFindingConfidence::High,
-            "Local and Graph application states conflict",
-            "The same exact application identifier has contradictory terminal local and Graph states.",
-            "Compare the cited local workload and Graph app status without changing either source.",
-            evidence,
-            vec![],
-        ),
-    );
-}
-
 fn push_malformed_source(
     snapshot: &EspDiagnosticsSnapshot,
     findings: &mut Vec<EspDiagnosticFinding>,
@@ -426,33 +407,51 @@ fn push_successful_completion(
     findings: &mut Vec<EspDiagnosticFinding>,
 ) {
     if snapshot.phase != EspPhase::Completed
-        || snapshot.workloads.iter().any(|workload| {
-            !matches!(
-                workload.status.normalized,
-                EspNormalizedStatus::Succeeded
-                    | EspNormalizedStatus::Processed
-                    | EspNormalizedStatus::Skipped
-                    | EspNormalizedStatus::Uninstalled
-            )
-        })
+        || snapshot.coverage.is_empty()
+        || snapshot
+            .coverage
+            .iter()
+            .any(|coverage| coverage.status != EspArtifactStatus::Available)
     {
         return;
     }
-    let completed_sessions = snapshot
+    let latest_sessions = snapshot
         .sessions
         .iter()
-        .filter(|session| session.is_latest && session.phase == EspPhase::Completed);
-    let mut evidence =
-        collect_evidence(completed_sessions.flat_map(|session| session.evidence.iter()));
+        .filter(|session| session.is_latest)
+        .collect::<Vec<_>>();
+    if latest_sessions.is_empty()
+        || latest_sessions
+            .iter()
+            .any(|session| session.phase != EspPhase::Completed || session.workload_ids.is_empty())
+    {
+        return;
+    }
+
+    let mut evidence = collect_evidence(
+        latest_sessions
+            .iter()
+            .flat_map(|session| session.evidence.iter()),
+    );
+    for workload_id in latest_sessions
+        .iter()
+        .flat_map(|session| session.workload_ids.iter())
+    {
+        let Some(workload) = snapshot
+            .workloads
+            .iter()
+            .find(|workload| &workload.workload_id == workload_id)
+        else {
+            return;
+        };
+        if !is_successful_terminal_status(&workload.status.normalized) {
+            return;
+        }
+        evidence.extend(workload.evidence.iter().cloned());
+    }
     if evidence.is_empty() {
         return;
     }
-    evidence.extend(collect_evidence(
-        snapshot
-            .workloads
-            .iter()
-            .flat_map(|workload| workload.evidence.iter()),
-    ));
     normalize_evidence(&mut evidence);
     push_finding(
         findings,
@@ -461,7 +460,7 @@ fn push_successful_completion(
             EspFindingSeverity::Info,
             EspFindingConfidence::High,
             "ESP completed successfully",
-            "The cited latest session completed and all observed workloads are in successful terminal states.",
+            "The cited latest session completed and every declared workload was observed in a successful terminal state.",
             "Review the cited completed session and terminal workload states.",
             evidence,
             vec![],
@@ -522,19 +521,14 @@ fn is_not_processed(status: &EspNormalizedStatus) -> bool {
     )
 }
 
-fn statuses_contradict(local: &EspNormalizedStatus, remote: &EspNormalizedStatus) -> bool {
+fn is_successful_terminal_status(status: &EspNormalizedStatus) -> bool {
     matches!(
-        (local, remote),
-        (EspNormalizedStatus::Failed, EspNormalizedStatus::Succeeded)
-            | (EspNormalizedStatus::Failed, EspNormalizedStatus::Processed)
-            | (EspNormalizedStatus::Succeeded, EspNormalizedStatus::Failed)
-            | (EspNormalizedStatus::Processed, EspNormalizedStatus::Failed)
+        status,
+        EspNormalizedStatus::Succeeded
+            | EspNormalizedStatus::Processed
+            | EspNormalizedStatus::Skipped
+            | EspNormalizedStatus::Uninstalled
     )
-}
-
-fn identifiers_equal(left: &str, right: &str) -> bool {
-    left.trim_matches(['{', '}'])
-        .eq_ignore_ascii_case(right.trim_matches(['{', '}']))
 }
 
 fn normalized_timestamp(timestamp: &EspTimestamp) -> Option<DateTime<Utc>> {
