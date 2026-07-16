@@ -171,7 +171,7 @@ fn standalone_authorization_scheme_pattern() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
         Regex::new(
-            r#"(?i)(?P<prefix>\b(?P<scheme>basic|bearer|digest|apikey|negotiate|ntlm)(?:[ \t]+|\r?\n[ \t]+))(?:\\+"[^"\r\n]*"|\\+'[^'\r\n]*'|"(?P<double_quoted>[^"\r\n]+)"|'(?P<single_quoted>[^'\r\n]+)'|(?P<bare>[A-Z0-9._~+/=-]+))(?P<tail>[^\r\n]*)(?:\r?\n[ \t]+[^\r\n]+)*"#,
+            r#"(?i)(?P<prefix>\b(?P<scheme>basic|bearer|digest|apikey|negotiate|ntlm)(?:[ \t]|\r?\n[ \t]+)+)(?:\\+"[^"\r\n]*"|\\+'[^'\r\n]*'|"(?P<double_quoted>[^"\r\n]+)"|'(?P<single_quoted>[^'\r\n]+)'|(?P<bare>[A-Z0-9._~+/=-]+))(?P<tail>[^\r\n]*)(?:\r?\n[ \t]+[^\r\n]+)*"#,
         )
         .expect("standalone authorization-scheme redaction pattern must compile")
     })
@@ -181,7 +181,7 @@ fn quoted_authorization_credential_start_pattern() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
         Regex::new(
-            r#"(?i)(?P<prefix>(?:\b(?:basic|bearer|digest|apikey|negotiate|ntlm)(?:[ \t]+|\r?\n[ \t]+)|(?:(?:--?|/)authorization["']?(?:[ \t]*(?:\r?\n[ \t]+)?(?:->|=>)[ \t]*(?:\r?\n[ \t]+)?|\s*[=:]\s*|\s+)|\bauthorization["']?(?:[ \t]*(?:\r?\n[ \t]+)?(?:->|=>)[ \t]*(?:\r?\n[ \t]+)?|\s*[=:]\s*|\s+))(?:(?:basic|bearer|digest|apikey|negotiate|ntlm)[ \t]+)?))(?P<opening>\\*["'])"#,
+            r#"(?i)(?P<prefix>(?:\b(?:basic|bearer|digest|apikey|negotiate|ntlm)(?:[ \t]|\r?\n[ \t]+)+|(?:(?:--?|/)authorization["']?(?:[ \t]*(?:\r?\n[ \t]+)?(?:->|=>)[ \t]*(?:\r?\n[ \t]+)?|\s*[=:]\s*|\s+)|\bauthorization["']?(?:[ \t]*(?:\r?\n[ \t]+)?(?:->|=>)[ \t]*(?:\r?\n[ \t]+)?|\s*[=:]\s*|\s+))(?:(?:basic|bearer|digest|apikey|negotiate|ntlm)[ \t]+)?))(?P<opening>\\*["'])"#,
         )
         .expect("quoted authorization-credential start pattern must compile")
     })

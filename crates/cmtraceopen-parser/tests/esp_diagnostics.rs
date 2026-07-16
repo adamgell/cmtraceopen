@@ -11304,36 +11304,48 @@ struct FoldedSchemeSeparatorCase {
 
 fn folded_scheme_separator_credential_matrix() -> Vec<FoldedSchemeSeparatorCase> {
     let schemes = ["Basic", "Bearer", "Digest", "ApiKey", "Negotiate", "NTLM"];
-    let line_endings = [("lf", "\n"), ("crlf", "\r\n")];
-    let forms = [("quoted", true), ("unclosed-quoted", false)];
+    let logical_separators = [
+        ("lf", "\n ", "\n"),
+        ("crlf", "\r\n ", "\r\n"),
+        ("lf-with-ows", " \t\n ", "\n"),
+        ("crlf-with-ows", "\t \r\n ", "\r\n"),
+        ("lf-repeated", "\n \n\t", "\n"),
+        ("crlf-repeated", "\r\n \r\n\t", "\r\n"),
+    ];
+    let quoted_forms = [
+        ("literal-quoted", "\"", true),
+        ("literal-unclosed-quoted", "\"", false),
+        ("escaped-quoted", "\\\"", true),
+        ("twice-escaped-quoted", "\\\\\"", true),
+    ];
     let mut matrix = Vec::new();
 
     for scheme in schemes {
-        for (line_ending_name, line_ending) in line_endings {
-            let bare_label = format!("{}-{line_ending_name}-bare", scheme.to_ascii_lowercase());
+        for (separator_name, separator, continuation_line_ending) in logical_separators {
+            let bare_label = format!("{}-{separator_name}-bare", scheme.to_ascii_lowercase());
             let bare_head = format!("{}_HEAD_SECRET", bare_label.to_ascii_uppercase());
             let bare_tail = format!("{}_TAIL_SECRET", bare_label.to_ascii_uppercase());
             let bare_boundary = format!("{}_BOUNDARY_CONTROL", bare_label.to_ascii_uppercase());
             matrix.push(FoldedSchemeSeparatorCase {
                 label: bare_label,
                 payload: format!(
-                    "{scheme}{line_ending} {bare_head}{line_ending}\t{bare_tail}{line_ending}{bare_boundary}"
+                    "{scheme}{separator}{bare_head}{continuation_line_ending}\t{bare_tail}{continuation_line_ending}{bare_boundary}"
                 ),
                 head_secret: bare_head,
                 tail_secret: bare_tail,
                 boundary_control: bare_boundary,
             });
 
-            for (form, closed) in forms {
-                let label = format!("{}-{line_ending_name}-{form}", scheme.to_ascii_lowercase());
+            for (form, delimiter, closed) in quoted_forms {
+                let label = format!("{}-{separator_name}-{form}", scheme.to_ascii_lowercase());
                 let head_secret = format!("{}_HEAD_SECRET", label.to_ascii_uppercase());
                 let tail_secret = format!("{}_TAIL_SECRET", label.to_ascii_uppercase());
                 let boundary_control = format!("{}_BOUNDARY_CONTROL", label.to_ascii_uppercase());
-                let closing_quote = if closed { "\"" } else { "" };
+                let closing_delimiter = if closed { delimiter } else { "" };
                 matrix.push(FoldedSchemeSeparatorCase {
                     label,
                     payload: format!(
-                        "{scheme}{line_ending} \"{head_secret}{closing_quote}{line_ending}\t{tail_secret}{line_ending}{boundary_control}"
+                        "{scheme}{separator}{delimiter}{head_secret}{closing_delimiter}{continuation_line_ending}\t{tail_secret}{continuation_line_ending}{boundary_control}"
                     ),
                     head_secret,
                     tail_secret,
