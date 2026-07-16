@@ -14,7 +14,8 @@ Fill this table from the exact-head GitHub workflow and transferred package. A b
 
 | Field | Recorded value |
 | --- | --- |
-| Source commit (40 characters) | `TBD` |
+| Source branch commit (40 characters) | `TBD` |
+| CI build commit (PR merge SHA or source SHA) | `TBD` |
 | Branch | `codex/esp-diagnostics` |
 | Pull request | `266` |
 | Workflow name and run ID | `TBD` |
@@ -23,8 +24,9 @@ Fill this table from the exact-head GitHub workflow and transferred package. A b
 | Downloaded archive SHA-256 | `TBD` |
 | Installer filename and SHA-256 | `TBD` |
 | Installer Authenticode status and signer | `TBD` |
-| Package version | `TBD` |
-| Installed executable path and SHA-256 | `TBD` |
+| MSI ProductVersion, ProductCode, and UpgradeCode, or NSIS ProductVersion | `TBD` |
+| Expected installed executable SHA-256 from exact-head provenance | `TBD` |
+| Installed executable path and actual SHA-256 | `TBD` |
 | This runbook commit | `TBD` |
 | Tester, VM, Windows build, and UTC start | `TBD` |
 
@@ -42,17 +44,65 @@ Get-AuthenticodeSignature -LiteralPath $Installer |
     Select-Object Status, StatusMessage,
         @{Name='Signer';Expression={$_.SignerCertificate.Subject}}
 
-$InstallerVersion = (Get-Item -LiteralPath $Installer).VersionInfo.ProductVersion
-$InstallerVersion
+$InstallerItem = Get-Item -LiteralPath $Installer
+if ($InstallerItem.Extension -ieq '.msi') {
+    $WindowsInstaller = New-Object -ComObject WindowsInstaller.Installer
+    $Database = $WindowsInstaller.GetType().InvokeMember(
+        'OpenDatabase', 'InvokeMethod', $null, $WindowsInstaller, @($Installer, 0)
+    )
+    function Get-MsiProperty {
+        param([object]$Database, [string]$Name)
+        $Query = 'SELECT `Value` FROM `Property` WHERE `Property`=''{0}''' -f $Name
+        $View = $null
+        $Record = $null
+        try {
+            $View = $Database.GetType().InvokeMember(
+                'OpenView', 'InvokeMethod', $null, $Database, @($Query)
+            )
+            $null = $View.GetType().InvokeMember(
+                'Execute', 'InvokeMethod', $null, $View, $null
+            )
+            $Record = $View.GetType().InvokeMember(
+                'Fetch', 'InvokeMethod', $null, $View, $null
+            )
+            if ($null -eq $Record) { throw "MSI property missing: $Name" }
+            $Record.GetType().InvokeMember(
+                'StringData', 'GetProperty', $null, $Record, 1
+            )
+        }
+        finally {
+            if ($null -ne $Record) {
+                [void][Runtime.InteropServices.Marshal]::ReleaseComObject($Record)
+            }
+            if ($null -ne $View) {
+                [void][Runtime.InteropServices.Marshal]::ReleaseComObject($View)
+            }
+        }
+    }
+    [pscustomobject]@{
+        ProductVersion = Get-MsiProperty $Database 'ProductVersion'
+        ProductCode = Get-MsiProperty $Database 'ProductCode'
+        UpgradeCode = Get-MsiProperty $Database 'UpgradeCode'
+    } | Format-List
+    [void][Runtime.InteropServices.Marshal]::ReleaseComObject($Database)
+    [void][Runtime.InteropServices.Marshal]::ReleaseComObject($WindowsInstaller)
+}
+else {
+    $InstallerItem.VersionInfo | Select-Object FileVersion, ProductVersion
+}
 
 # Set after installation.
 $Exe = '<installed Full CMTrace Open executable>'
-Get-FileHash -LiteralPath $Exe -Algorithm SHA256
+$ExpectedExeSha256 = '<sha256 from provenance/windows-build-provenance.json>'
+$ActualExeSha256 = (Get-FileHash -LiteralPath $Exe -Algorithm SHA256).Hash
+if ($ActualExeSha256 -ne $ExpectedExeSha256) {
+    throw "Installed executable hash mismatch: $ActualExeSha256"
+}
 (Get-Item -LiteralPath $Exe).VersionInfo |
     Select-Object FileVersion, ProductVersion
 ```
 
-Record an unsigned CI package as unsigned; never describe it as signed. The artifact provenance, hashes, package version, installed executable hash, and source commit must still agree.
+Record an unsigned CI package as unsigned; never describe it as signed. The artifact must include `provenance/windows-build-provenance.json`. On a pull request, `sourceCommit` is the exact pushed branch head while `buildCommit` is GitHub's tested synthetic merge commit; on a main-branch push they are the same. Record both, verify that the workflow run belongs to that source head, and make the target, release-executable hash, installer hash, and installed executable hash agree. Separately record the MSI/NSIS properties from the transferred package and confirm its ProductVersion matches the manifest's `packageVersion`; ProductCode and UpgradeCode are local package metadata, not fields claimed by the provenance manifest. A missing or ambiguous provenance file blocks acceptance even if the displayed product version is correct.
 
 ### Tools under test
 
@@ -148,7 +198,7 @@ Save the restricted PML and a UTC CSV export, then save snapshot `ESP-02-live-co
 
 ## Phase C: post-enrollment canaries
 
-Run this entire phase from `ESP-03-post-enrollment`. Each block uses `try/finally`; cleanup is part of the gate.
+With CMTrace Open and capture tools stopped, create a new VM snapshot or full clone named `ESP-03-post-enrollment` from the accepted post-enrollment state. Boot that disposable state and record its snapshot/clone ID before creating any synthetic evidence. Run this entire phase only from `ESP-03-post-enrollment`. Each block uses `try/finally`; cleanup is part of the gate.
 
 ### Live tail, resets, MSI identity, and redaction
 
@@ -168,13 +218,30 @@ try {
     Set-Content -LiteralPath $Tail -Encoding UTF8 -Value "$(Get-Date -Format o) CANARY_INITIAL"
     $Process = Start-Process -FilePath "$env:WINDIR\System32\msiexec.exe" `
         -ArgumentList "/? /L*V `"$Tail`" --token $Sentinel" -PassThru
-    $Identity = [pscustomobject]@{
-        Pid = $Process.Id
-        StartTimeUtc = $Process.StartTime.ToUniversalTime()
-        LogPath = $Tail
+    try {
+        $Identity = [pscustomobject]@{
+            Pid = $Process.Id
+            StartTimeUtc = $Process.StartTime.ToUniversalTime()
+            LogPath = $Tail
+        }
+        $CanaryProcesses.Add($Identity)
+        $Identity | Format-List
     }
-    $CanaryProcesses.Add($Identity)
-    $Identity | Format-List
+    catch {
+        try {
+            $Process.Refresh()
+            if (-not $Process.HasExited) {
+                $Process.Kill()
+                if (-not $Process.WaitForExit(5000)) {
+                    throw 'owned MSI help process did not exit within five seconds'
+                }
+            }
+        }
+        catch {
+            throw "Could not secure the owned MSI help process after identity capture failed: $($_.Exception.Message)"
+        }
+        Write-Warning 'MSI help exited before a safe PID/start-time identity could be saved; active-process canary is not exercised.'
+    }
 
     # Perform the UI checks below before continuing.
     Read-Host 'Press Enter after the initial attach/redaction checks'
@@ -190,16 +257,46 @@ try {
     Start-Sleep -Seconds 3
     Set-Content -LiteralPath $Tail -Encoding UTF8 -Value "$(Get-Date -Format o) CANARY_TRUNCATED_GENERATION"
     Read-Host 'Press Enter after the truncation reset boundary appears'
+
+    Read-Host 'Select Stop live diagnostics, then press Enter'
+    Add-Content -LiteralPath $Tail -Value "$(Get-Date -Format o) CANARY_AFTER_STOP_MUST_NOT_APPEAR"
+    Start-Sleep -Seconds 10
+    Read-Host 'Confirm the post-stop line is absent in CMTrace Open and ProcMon shows no new source read, then press Enter'
+    Read-Host 'Start and stop live diagnostics once more; after confirming no ownership conflict, press Enter'
 }
 finally {
+    $CleanupFailures = [System.Collections.Generic.List[string]]::new()
     foreach ($Identity in $CanaryProcesses) {
-        $Candidate = Get-Process -Id $Identity.Pid -ErrorAction SilentlyContinue
-        if ($Candidate -and $Candidate.ProcessName -ieq 'msiexec' -and
-            $Candidate.StartTime.ToUniversalTime() -eq $Identity.StartTimeUtc) {
-            Stop-Process -Id $Identity.Pid -ErrorAction SilentlyContinue
+        try {
+            $Candidate = Get-Process -Id $Identity.Pid -ErrorAction SilentlyContinue
+            if ($Candidate -and $Candidate.ProcessName -ieq 'msiexec' -and
+                $Candidate.StartTime.ToUniversalTime() -eq $Identity.StartTimeUtc) {
+                Stop-Process -Id $Identity.Pid -ErrorAction Stop
+                $Candidate.WaitForExit(5000)
+            }
+            $Remaining = Get-Process -Id $Identity.Pid -ErrorAction SilentlyContinue
+            if ($Remaining -and $Remaining.ProcessName -ieq 'msiexec' -and
+                $Remaining.StartTime.ToUniversalTime() -eq $Identity.StartTimeUtc) {
+                $CleanupFailures.Add("canary process $($Identity.Pid) is still running")
+            }
+        }
+        catch {
+            $CleanupFailures.Add("canary process $($Identity.Pid): $($_.Exception.Message)")
         }
     }
-    Remove-Item -LiteralPath $Tail,$Rotated -Force -ErrorAction SilentlyContinue
+    foreach ($CanaryPath in @($Tail, $Rotated)) {
+        try {
+            Remove-Item -LiteralPath $CanaryPath -Force -ErrorAction Stop
+        }
+        catch {
+            if (Test-Path -LiteralPath $CanaryPath) {
+                $CleanupFailures.Add("canary path remains: $CanaryPath")
+            }
+        }
+    }
+    if ($CleanupFailures.Count -ne 0) {
+        throw "Canary cleanup incomplete: $($CleanupFailures -join '; ')"
+    }
 }
 ```
 
@@ -213,7 +310,7 @@ If `msiexec /?` exits immediately, record the active-process canary as `not exer
 - after **Stop live diagnostics**, an appended `CANARY_AFTER_STOP_MUST_NOT_APPEAR` line never enters the UI and no new source read occurs;
 - a second start/stop has no ownership conflict.
 
-For a multiple-process state, repeat the help-only launch with two unique log names, store all three identities, and use the same identity check in `finally`. Never stop a PID by number alone.
+For a multiple-process state, make a separate copy of the complete script and add two help-only launches with unique log names inside the same `try` block, before the UI prompts. Add each `{ PID, startTimeUtc, logPath }` to that run's `$CanaryProcesses` list so its single `finally` owns every cleanup. Do not try to reuse the list after the script exits. Never stop a PID by number alone.
 
 ### Delivery Optimization module-shadow defense
 
@@ -232,8 +329,12 @@ if (-not $CurrentUserModuleBase) { throw 'No CurrentUser module path is present.
 
 $ShadowRoot = Join-Path $CurrentUserModuleBase 'DeliveryOptimization'
 $Marker = Join-Path $env:TEMP 'cmtraceopen-do-shadow-imported.txt'
-if (Test-Path -LiteralPath $ShadowRoot) {
-    throw 'CurrentUser DeliveryOptimization already exists; aborting.'
+if ((Test-Path -LiteralPath $ShadowRoot) -or (Test-Path -LiteralPath $Marker)) {
+    throw 'A shadow root or prior marker already exists; abort without deleting either artifact.'
+}
+$ExistingInstances = @(Get-Process -Name 'cmtrace-open' -ErrorAction SilentlyContinue)
+if ($ExistingInstances.Count -ne 0) {
+    throw 'Close every existing CMTrace Open process before the module-shadow test.'
 }
 
 try {
@@ -252,9 +353,18 @@ Export-ModuleMember -Function Get-DeliveryOptimizationPerfSnapThisMonth,Get-Deli
             'Get-DeliveryOptimizationPerfSnapThisMonth',
             'Get-DeliveryOptimizationLog'
         )
-    Remove-Item -LiteralPath $Marker -Force -ErrorAction SilentlyContinue
-
-    Start-Process -FilePath $Exe -ArgumentList '--workspace=esp-diagnostics'
+    $App = Start-Process -FilePath $Exe -ArgumentList '--workspace=esp-diagnostics' -PassThru
+    Start-Sleep -Seconds 2
+    $App.Refresh()
+    if ($App.HasExited) {
+        throw 'The launched instance exited before testing; possible single-instance routing invalidates this run.'
+    }
+    $AppIdentity = [pscustomobject]@{
+        Pid = $App.Id
+        StartTimeUtc = $App.StartTime.ToUniversalTime()
+        Executable = $Exe
+    }
+    $AppIdentity | Format-List
     Read-Host 'Use Restart as administrator, start diagnostics, then press Enter'
 
     if (Test-Path -LiteralPath $Marker) {
@@ -273,6 +383,8 @@ ProcMon and process evidence must prove the child is the inbox Windows PowerShel
 - imports only `$PSHOME\Modules\DeliveryOptimization\DeliveryOptimization.psd1`;
 - invokes module-qualified Delivery Optimization commands;
 - never reads the CurrentUser shadow path.
+
+The process tree must begin with the saved non-elevated `$AppIdentity`, show that exact process exiting during **Restart as administrator**, and identify the replacement elevated CMTrace Open PID/start time. If another instance receives a single-instance message or the saved launch identity is not the process that performed the relaunch, discard the run.
 
 Delivery Optimization must return evidence or an explicit coverage result without `CURRENT_USER_SHADOW_EXECUTED`.
 
@@ -317,9 +429,11 @@ Local diagnostics are mandatory. Graph enrichment is conditional on the existing
 
 | State | Required result |
 | --- | --- |
-| Graph option off | Local evidence only; no WAM prompt, Graph request, warning, or loss of raw IDs. |
-| Option on, disconnected | `GraphNotConnected`; no silent WAM prompt or queued query. |
+| Graph option off, current session and cold start | Local evidence only; no WAM prompt, Graph request, warning, or loss of raw IDs. |
+| Enable option in the current Settings session | The confirmation enables Graph and reads cached status; opening ESP or starting/refreshing local diagnostics does not itself initiate WAM. |
 | Explicit **Sign in with Windows** | HWND-parented WAM interaction; five capability rows; no token display. |
+| Cold start with the option already persisted on | The existing application startup flow may call WAM before ESP opens. Record whether cached credentials complete silently or WAM becomes interactive; attribute this to startup, not ESP. |
+| Startup authentication unavailable or cancelled | ESP shows `GraphNotConnected`; it does not queue enrichment or open a second WAM interaction. |
 | Connected, before refresh | Existing local session remains unchanged; enrichment does not start automatically. |
 | Explicit refresh | Progress followed by complete or section-level partial result; local evidence remains. |
 | Cancel refresh | Remote request stops; local evidence remains. |
@@ -327,7 +441,7 @@ Local diagnostics are mandatory. Graph enrichment is conditional on the existing
 | 401/403, if naturally observed | 401 invalidates once; 403 is isolated to its section. |
 | Missing scope, offline, throttled, ambiguous device, beta unknown | Record only if naturally observed or exercised in an isolated test tenant; otherwise `not exercised`. |
 
-Static review evidence must additionally show five fully qualified v2 scopes, no WAM resource property, GET-only ESP Graph operations, bounded retry/pagination/body limits, and token/authorization-header redaction.
+Static review evidence must additionally distinguish the existing persisted-option startup connection from ESP behavior, and show five fully qualified v2 scopes, no WAM resource property, GET-only ESP Graph operations, bounded retry/pagination/body limits, and token/authorization-header redaction.
 
 Compare enriched values read-only with the Intune portal and record `match`, `mismatch`, `not found`, or `not exercised` for managed device, Autopilot identity/group tag, profile, declared assignments and filters, Autopilot events, ESP configuration, apps, scripts, and policy state. Declared targeting must never be presented as effective group membership or proof that an app blocks ESP.
 
@@ -343,20 +457,82 @@ For Graph-off collection, one explicit Graph refresh, archive success/failure, a
 - archive/intake staging is removed;
 - no acquisition continues ten seconds after Stop.
 
-Optional packet metadata capture is allowed only from an isolated disposable snapshot. Record `pktmon filter list` before capture and do not run `pktmon filter remove` or modify shared filters. If existing filters make the capture ambiguous, skip the live packet gate and revert to a clean snapshot instead of altering them.
+Optional bounded packet-header capture is allowed only from an isolated disposable snapshot and must remain in the restricted evidence location. `--pkt-size 0` is forbidden because it captures complete packets. Record `pktmon status` and `pktmon filter list` before capture; do not run `pktmon filter remove` or modify shared filters. If another capture is active or existing filters make the result ambiguous, skip the live packet gate and revert to a clean snapshot instead of stopping or altering work you do not own.
 
 ```powershell
 $Evidence = '<approved restricted evidence folder>'
-pktmon filter list | Out-File -LiteralPath "$Evidence\pktmon-filters-before.txt"
-pktmon start --capture --comp nics --pkt-size 0 --file-name "$Evidence\graph.etl"
+$CaptureId = Get-Date -Format 'yyyyMMdd-HHmmss'
+$Etl = Join-Path $Evidence "graph-$CaptureId.etl"
+$Pcap = Join-Path $Evidence "graph-$CaptureId.pcapng"
+$StatusBeforePath = Join-Path $Evidence "pktmon-status-before-$CaptureId.txt"
+$StatusAfterPath = Join-Path $Evidence "pktmon-status-after-$CaptureId.txt"
+$FiltersBeforePath = Join-Path $Evidence "pktmon-filters-before-$CaptureId.txt"
+$FiltersAfterPath = Join-Path $Evidence "pktmon-filters-after-$CaptureId.txt"
+$CaptureStartedByThisRun = $false
+$StopFailed = $false
 
-# Run one Graph-off session and one explicit Graph refresh, then:
-pktmon stop
-pktmon etl2pcap "$Evidence\graph.etl" --out "$Evidence\graph.pcapng"
-pktmon filter list | Out-File -LiteralPath "$Evidence\pktmon-filters-after.txt"
+if (-not (Test-Path -LiteralPath $Evidence -PathType Container)) {
+    throw "Restricted evidence directory does not exist: $Evidence"
+}
+foreach ($OutputPath in @(
+    $Etl, $Pcap, $StatusBeforePath, $StatusAfterPath,
+    $FiltersBeforePath, $FiltersAfterPath
+)) {
+    if (Test-Path -LiteralPath $OutputPath) {
+        throw "Packet evidence output already exists: $OutputPath"
+    }
+}
+
+$StatusBefore = & pktmon status 2>&1
+$StatusExit = $LASTEXITCODE
+$StatusBefore | Set-Content -LiteralPath $StatusBeforePath -ErrorAction Stop
+if ($StatusExit -ne 0) { throw "pktmon status failed: $StatusExit" }
+
+$FiltersBefore = & pktmon filter list 2>&1
+$FilterExit = $LASTEXITCODE
+$FiltersBefore | Set-Content -LiteralPath $FiltersBeforePath -ErrorAction Stop
+if ($FilterExit -ne 0) { throw "pktmon filter list failed: $FilterExit" }
+
+$OwnershipConfirmation = Read-Host 'After reviewing status, type INACTIVE only if no capture is running'
+if ($OwnershipConfirmation -cne 'INACTIVE') {
+    throw 'Packet capture ownership was not established; do not stop another capture.'
+}
+
+try {
+    & pktmon start --capture --comp nics --pkt-size 128 --file-size 128 `
+        --log-mode circular --file-name $Etl
+    if ($LASTEXITCODE -ne 0) { throw "pktmon start failed: $LASTEXITCODE" }
+    $CaptureStartedByThisRun = $true
+
+    Read-Host 'Run one Graph-off session and one explicit Graph refresh, then press Enter'
+}
+finally {
+    if ($CaptureStartedByThisRun) {
+        & pktmon stop
+        if ($LASTEXITCODE -ne 0) { $StopFailed = $true }
+    }
+}
+if ($StopFailed) { throw 'The runbook-owned pktmon capture did not stop cleanly.' }
+
+& pktmon etl2pcap $Etl --out $Pcap
+if ($LASTEXITCODE -ne 0) { throw "pktmon etl2pcap failed: $LASTEXITCODE" }
+
+$StatusAfter = & pktmon status 2>&1
+$StatusAfterExit = $LASTEXITCODE
+$StatusAfter | Set-Content -LiteralPath $StatusAfterPath -ErrorAction Stop
+if ($StatusAfterExit -ne 0) { throw "pktmon status failed after capture: $StatusAfterExit" }
+$StoppedConfirmation = Read-Host 'After reviewing the saved post-capture status, type INACTIVE only if capture is stopped'
+if ($StoppedConfirmation -cne 'INACTIVE') {
+    throw 'Post-capture inactive state was not established; do not stop any later or unowned capture.'
+}
+
+$FiltersAfter = & pktmon filter list 2>&1
+$FiltersAfterExit = $LASTEXITCODE
+$FiltersAfter | Set-Content -LiteralPath $FiltersAfterPath -ErrorAction Stop
+if ($FiltersAfterExit -ne 0) { throw "pktmon filter list failed after capture: $FiltersAfterExit" }
 ```
 
-Graph-off must produce no Graph connection. Identity traffic is expected only during explicit sign-in; Graph traffic is expected only during explicit enrichment. TLS metadata proves destination and timing, not the HTTP verb; use static review for GET-only proof.
+The 128-byte packet limit and 128 MB circular file cap bound the capture but do not make it non-sensitive. Graph-off must produce no Graph connection. Identity traffic is expected only during the existing startup flow or explicit sign-in; Graph traffic is expected only during explicit enrichment. TLS evidence proves destination and timing, not the HTTP verb; use static review for GET-only proof.
 
 ## Native accessibility and responsive layout
 
@@ -381,7 +557,7 @@ Capture at least: elevated/collapsed, docked logs, full-page logs, non-elevated 
 4. Remove canary logs, rotated files, sanitized fixture copies, shadow module, and marker.
 5. Confirm no `cmtrace-open-esp-archive-*` or `cmtraceopen-esp-intake-*` directory remains.
 6. Close CMTrace Open and verify the process and its acquisition children exit.
-7. Stop ProcMon/pktmon and retain restricted evidence according to policy.
+7. Stop only a ProcMon capture owned by this test. Verify the runbook-owned pktmon capture is already inactive from its saved post-capture status; never issue a later `pktmon stop`, because that could stop an unrelated capture. Retain restricted evidence according to policy.
 8. Revert the disposable post-enrollment snapshot.
 
 Any remediation, tenant write, installer retry, MDM sync, unexpected diagnostic-root write, token disclosure, unrelated process-command-line capture, unsafe path traversal, or post-stop acquisition is an immediate acceptance failure.
