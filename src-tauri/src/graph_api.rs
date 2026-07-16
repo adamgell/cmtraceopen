@@ -3,6 +3,7 @@
 //! Portable models compile on every platform. The existing WAM token cache and
 //! concrete HTTP implementation remain Windows-only and user-opt-in.
 
+pub mod client;
 pub mod models;
 
 pub use models::{
@@ -13,12 +14,17 @@ pub use models::{
 
 #[cfg(target_os = "windows")]
 mod windows_impl {
-    use std::collections::HashMap;
+    use std::collections::{BTreeMap, HashMap};
+    use std::io::Read;
     use std::sync::Mutex;
 
+    use super::client::{
+        GraphCancellation, GraphClient, GraphTransport, GraphTransportFailure,
+        MAX_GRAPH_RESPONSE_BYTES,
+    };
     use super::{
-        project_graph_auth_status, GraphAppInfo, GraphAuthStatus, GraphResolutionResult,
-        GRAPH_SCOPE_REQUEST,
+        project_graph_auth_status, GraphAppInfo, GraphAuthStatus, GraphHttpMethod,
+        GraphResolutionResult, GraphTransportRequest, GraphTransportResponse, GRAPH_SCOPE_REQUEST,
     };
     use crate::error::AppError;
 
@@ -219,6 +225,113 @@ mod windows_impl {
 
     const GRAPH_BETA_BASE: &str = "https://graph.microsoft.com/beta";
 
+    struct UreqGraphTransport<'a> {
+        access_token: &'a str,
+    }
+
+    impl GraphTransport for UreqGraphTransport<'_> {
+        fn execute(
+            &self,
+            request: &GraphTransportRequest,
+            timeout: std::time::Duration,
+        ) -> Result<GraphTransportResponse, GraphTransportFailure> {
+            let agent = ureq::Agent::config_builder()
+                .https_only(true)
+                .http_status_as_error(false)
+                .max_redirects(0)
+                .timeout_global(Some(timeout))
+                .build()
+                .new_agent();
+            let authorization = format!("Bearer {}", self.access_token);
+
+            let response = match request.method {
+                GraphHttpMethod::Get => {
+                    let mut builder = agent
+                        .get(&request.url)
+                        .header("Authorization", &authorization);
+                    if let Some(consistency) = &request.consistency_level {
+                        builder = builder.header("ConsistencyLevel", consistency);
+                    }
+                    builder.call()
+                }
+                GraphHttpMethod::Post => {
+                    let mut builder = agent
+                        .post(&request.url)
+                        .header("Authorization", &authorization);
+                    if let Some(consistency) = &request.consistency_level {
+                        builder = builder.header("ConsistencyLevel", consistency);
+                    }
+                    if let Some(content_type) = &request.content_type {
+                        builder = builder.header("Content-Type", content_type);
+                    }
+                    match &request.body {
+                        Some(body) => builder.send(body.as_slice()),
+                        None => builder.send_empty(),
+                    }
+                }
+            }
+            .map_err(map_ureq_transport_error)?;
+
+            bounded_transport_response(response)
+        }
+    }
+
+    struct NoGraphCancellation;
+
+    impl GraphCancellation for NoGraphCancellation {
+        fn is_cancelled(&self) -> bool {
+            false
+        }
+
+        fn wait_for_retry(&self, duration: std::time::Duration) -> bool {
+            std::thread::sleep(duration);
+            true
+        }
+    }
+
+    fn map_ureq_transport_error(error: ureq::Error) -> GraphTransportFailure {
+        match error {
+            ureq::Error::Timeout(_) => GraphTransportFailure::Timeout,
+            _ => GraphTransportFailure::Network,
+        }
+    }
+
+    fn bounded_transport_response(
+        response: ureq::http::Response<ureq::Body>,
+    ) -> Result<GraphTransportResponse, GraphTransportFailure> {
+        let (parts, body) = response.into_parts();
+        let headers: BTreeMap<String, String> = parts
+            .headers
+            .iter()
+            .filter_map(|(name, value)| {
+                value
+                    .to_str()
+                    .ok()
+                    .map(|value| (name.as_str().to_string(), value.to_string()))
+            })
+            .collect();
+        let mut bytes = Vec::new();
+        body.into_reader()
+            .take((MAX_GRAPH_RESPONSE_BYTES + 1) as u64)
+            .read_to_end(&mut bytes)
+            .map_err(|error| {
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+                ) {
+                    GraphTransportFailure::Timeout
+                } else {
+                    GraphTransportFailure::Network
+                }
+            })?;
+
+        Ok(GraphTransportResponse {
+            status: parts.status.as_u16(),
+            headers,
+            body: bytes,
+        })
+    }
+
     /// Helper: parse a ureq response body as JSON.
     fn read_json(
         response: ureq::http::Response<ureq::Body>,
@@ -375,6 +488,7 @@ mod windows_impl {
                 "{GRAPH_BETA_BASE}/deviceAppManagement/mobileApps?$select=id,displayName,publisher"
             ),
             None,
+            "DeviceManagementApps.Read.All",
         )?);
 
         // Proactive Remediations (Health Scripts)
@@ -382,6 +496,7 @@ mod windows_impl {
         &token.token,
         &format!("{GRAPH_BETA_BASE}/deviceManagement/deviceHealthScripts?$select=id,displayName,publisher"),
         Some("#microsoft.graph.deviceHealthScript"),
+        "DeviceManagementScripts.Read.All",
     ) {
         Ok(items) => all.extend(items),
         Err(e) => log::warn!("event=graph_skip_health_scripts error=\"{e}\""),
@@ -394,6 +509,7 @@ mod windows_impl {
                 "{GRAPH_BETA_BASE}/deviceManagement/deviceManagementScripts?$select=id,displayName"
             ),
             Some("#microsoft.graph.deviceManagementScript"),
+            "DeviceManagementScripts.Read.All",
         ) {
             Ok(items) => all.extend(items),
             Err(e) => log::warn!("event=graph_skip_device_scripts error=\"{e}\""),
@@ -406,6 +522,7 @@ mod windows_impl {
                 "{GRAPH_BETA_BASE}/deviceManagement/deviceShellScripts?$select=id,displayName"
             ),
             Some("#microsoft.graph.deviceShellScript"),
+            "DeviceManagementScripts.Read.All",
         ) {
             Ok(items) => all.extend(items),
             Err(e) => log::warn!("event=graph_skip_shell_scripts error=\"{e}\""),
@@ -424,39 +541,27 @@ mod windows_impl {
         token: &str,
         initial_url: &str,
         default_type: Option<&str>,
+        required_scope: &str,
     ) -> Result<Vec<GraphAppInfo>, AppError> {
-        let agent = make_agent();
-        let mut items: Vec<GraphAppInfo> = Vec::new();
-        let mut next_url: Option<String> = Some(initial_url.to_string());
+        let transport = UreqGraphTransport {
+            access_token: token,
+        };
+        let cancellation = NoGraphCancellation;
+        let client = GraphClient::new("graph.microsoft.com", &transport, &cancellation);
+        let values = client
+            .get_paginated::<serde_json::Value>(initial_url, required_scope)
+            .map_err(|error| AppError::Internal(error.to_string()))?;
 
-        while let Some(url) = next_url.take() {
-            let response = agent
-                .get(&url)
-                .header("Authorization", &format!("Bearer {token}"))
-                .header("ConsistencyLevel", "eventual")
-                .call()
-                .map_err(|e| AppError::Internal(format!("Graph API request failed: {e}")))?;
-
-            let body = read_json(response)?;
-
-            if let Some(value) = body.get("value").and_then(|v| v.as_array()) {
-                for item in value {
-                    if let Some(mut app) = parse_app_json(item) {
-                        if app.odata_type.is_none() {
-                            app.odata_type = default_type.map(String::from);
-                        }
-                        items.push(app);
-                    }
+        Ok(values
+            .iter()
+            .filter_map(|item| {
+                let mut app = parse_app_json(item)?;
+                if app.odata_type.is_none() {
+                    app.odata_type = default_type.map(String::from);
                 }
-            }
-
-            next_url = body
-                .get("@odata.nextLink")
-                .and_then(|v| v.as_str())
-                .map(String::from);
-        }
-
-        Ok(items)
+                Some(app)
+            })
+            .collect())
     }
 
     // ── Internal helpers ────────────────────────────────────────────────────────

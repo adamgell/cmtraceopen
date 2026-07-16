@@ -1,11 +1,20 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
+use app_lib::graph_api::client::{
+    GraphCancellation, GraphClient, GraphClientErrorKind, GraphTransport, GraphTransportFailure,
+    GRAPH_REQUEST_TIMEOUT, MAX_GRAPH_ATTEMPTS, MAX_GRAPH_ITEMS, MAX_GRAPH_PAGES,
+    MAX_GRAPH_RESPONSE_BYTES, MAX_GRAPH_RETRY_DELAY,
+};
 use app_lib::graph_api::models::{
     project_graph_auth_status, GraphAppInfo, GraphAuthCapabilities, GraphAuthStatus,
     GraphHttpMethod, GraphResolutionResult, GraphTransportRequest, GraphTransportResponse,
     GRAPH_DELEGATED_SCOPES, GRAPH_SCOPE_REQUEST,
 };
 use base64::Engine;
+use serde::Deserialize;
 
 fn unsigned_token(claims: serde_json::Value) -> String {
     let encode = |value: &[u8]| base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(value);
@@ -195,4 +204,443 @@ fn graph_auth_status_rejects_expired_malformed_audience_and_tenant_claims() {
         Some("tenant-a"),
         "TenantMismatch",
     );
+}
+
+struct FakeGraphTransport {
+    responses: Mutex<VecDeque<Result<GraphTransportResponse, GraphTransportFailure>>>,
+    requests: Mutex<Vec<(GraphTransportRequest, Duration)>>,
+    cancel_after_call: Option<(usize, Arc<AtomicBool>)>,
+}
+
+impl FakeGraphTransport {
+    fn new(responses: Vec<Result<GraphTransportResponse, GraphTransportFailure>>) -> Self {
+        Self {
+            responses: Mutex::new(responses.into()),
+            requests: Mutex::new(Vec::new()),
+            cancel_after_call: None,
+        }
+    }
+
+    fn cancelling_after(
+        responses: Vec<Result<GraphTransportResponse, GraphTransportFailure>>,
+        call: usize,
+        cancelled: Arc<AtomicBool>,
+    ) -> Self {
+        Self {
+            responses: Mutex::new(responses.into()),
+            requests: Mutex::new(Vec::new()),
+            cancel_after_call: Some((call, cancelled)),
+        }
+    }
+
+    fn requests(&self) -> Vec<(GraphTransportRequest, Duration)> {
+        self.requests.lock().expect("requests lock").clone()
+    }
+}
+
+impl GraphTransport for FakeGraphTransport {
+    fn execute(
+        &self,
+        request: &GraphTransportRequest,
+        timeout: Duration,
+    ) -> Result<GraphTransportResponse, GraphTransportFailure> {
+        let call = {
+            let mut requests = self.requests.lock().expect("requests lock");
+            requests.push((request.clone(), timeout));
+            requests.len()
+        };
+        let response = self
+            .responses
+            .lock()
+            .expect("responses lock")
+            .pop_front()
+            .expect("fake response");
+        if self
+            .cancel_after_call
+            .as_ref()
+            .is_some_and(|(target, _)| call == *target)
+        {
+            self.cancel_after_call
+                .as_ref()
+                .expect("cancel target")
+                .1
+                .store(true, Ordering::SeqCst);
+        }
+        response
+    }
+}
+
+#[derive(Default)]
+struct FakeGraphCancellation {
+    cancelled: Arc<AtomicBool>,
+    waits: Mutex<Vec<Duration>>,
+    cancel_during_wait: bool,
+}
+
+impl FakeGraphCancellation {
+    fn cancelling_during_wait() -> Self {
+        Self {
+            cancelled: Arc::new(AtomicBool::new(false)),
+            waits: Mutex::new(Vec::new()),
+            cancel_during_wait: true,
+        }
+    }
+}
+
+impl GraphCancellation for FakeGraphCancellation {
+    fn is_cancelled(&self) -> bool {
+        self.cancelled.load(Ordering::SeqCst)
+    }
+
+    fn wait_for_retry(&self, duration: Duration) -> bool {
+        self.waits.lock().expect("waits lock").push(duration);
+        if self.cancel_during_wait {
+            self.cancelled.store(true, Ordering::SeqCst);
+        }
+        !self.is_cancelled()
+    }
+}
+
+fn graph_response(
+    status: u16,
+    body: impl Into<Vec<u8>>,
+    headers: &[(&str, &str)],
+) -> GraphTransportResponse {
+    GraphTransportResponse {
+        status,
+        headers: headers
+            .iter()
+            .map(|(name, value)| ((*name).to_string(), (*value).to_string()))
+            .collect(),
+        body: body.into(),
+    }
+}
+
+fn graph_page(value: serde_json::Value, next_link: Option<&str>) -> Vec<u8> {
+    serde_json::to_vec(&serde_json::json!({
+        "value": value,
+        "@odata.nextLink": next_link,
+        "unknownPageField": { "preservedByWire": true },
+    }))
+    .expect("page JSON")
+}
+
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+struct FakeWireItem {
+    id: String,
+    state: String,
+}
+
+#[test]
+fn client_pins_get_contract_and_preserves_unknown_wire_values() {
+    let url = "https://graph.microsoft.com/v1.0/deviceManagement/managedDevices?$select=id,state&$top=100";
+    let scope = "DeviceManagementManagedDevices.Read.All";
+    let transport = FakeGraphTransport::new(vec![Ok(graph_response(
+        200,
+        graph_page(
+            serde_json::json!([{
+                "id": "device-a",
+                "state": "futureState",
+                "unknownItemField": [1, 2, 3],
+            }]),
+            None,
+        ),
+        &[],
+    ))]);
+    let cancellation = FakeGraphCancellation::default();
+    let client = GraphClient::new("graph.microsoft.com", &transport, &cancellation);
+
+    let items = client
+        .get_paginated::<FakeWireItem>(url, scope)
+        .expect("typed page should load");
+
+    assert_eq!(
+        items,
+        [FakeWireItem {
+            id: "device-a".to_string(),
+            state: "futureState".to_string(),
+        }]
+    );
+    let requests = transport.requests();
+    assert_eq!(requests.len(), 1);
+    let (request, timeout) = &requests[0];
+    assert_eq!(request.method, GraphHttpMethod::Get);
+    assert_eq!(request.url, url);
+    assert_eq!(request.consistency_level.as_deref(), Some("eventual"));
+    assert_eq!(request.content_type, None);
+    assert_eq!(request.body, None);
+    assert_eq!(request.required_scope, scope);
+    assert_eq!(*timeout, GRAPH_REQUEST_TIMEOUT);
+}
+
+#[test]
+fn client_maps_auth_http_errors_without_exposing_bodies_or_tokens() {
+    let scope = "DeviceManagementApps.Read.All";
+    for (status, expected_kind, invalidates_auth) in [
+        (401, GraphClientErrorKind::Unauthorized, true),
+        (403, GraphClientErrorKind::PermissionDenied, false),
+        (404, GraphClientErrorKind::NotFound, false),
+    ] {
+        let transport = FakeGraphTransport::new(vec![Ok(graph_response(
+            status,
+            br#"{"error":{"message":"secret-access-token body"}}"#.to_vec(),
+            &[("request-id", "request-safe-123")],
+        ))]);
+        let cancellation = FakeGraphCancellation::default();
+        let client = GraphClient::new("graph.microsoft.com", &transport, &cancellation);
+
+        let error = client
+            .get_paginated::<serde_json::Value>(
+                "https://graph.microsoft.com/v1.0/deviceAppManagement/mobileApps",
+                scope,
+            )
+            .expect_err("status should fail");
+
+        assert_eq!(error.kind, expected_kind);
+        assert_eq!(error.status, Some(status));
+        assert_eq!(error.request_id.as_deref(), Some("request-safe-123"));
+        assert_eq!(error.required_scope, scope);
+        assert_eq!(error.invalidates_auth(), invalidates_auth);
+        let rendered = format!("{error:?} {error}");
+        assert!(!rendered.contains("secret-access-token"));
+        assert!(!rendered.contains("mobileApps"));
+        assert_eq!(transport.requests().len(), 1);
+    }
+}
+
+#[test]
+fn client_retries_429_503_504_with_capped_delay_and_four_attempt_limit() {
+    let scope = "DeviceManagementManagedDevices.Read.All";
+    let transport = FakeGraphTransport::new(vec![
+        Ok(graph_response(429, Vec::new(), &[("Retry-After", "90")])),
+        Ok(graph_response(503, Vec::new(), &[])),
+        Ok(graph_response(504, Vec::new(), &[])),
+        Ok(graph_response(
+            200,
+            graph_page(serde_json::json!([]), None),
+            &[],
+        )),
+    ]);
+    let cancellation = FakeGraphCancellation::default();
+    let client = GraphClient::new("graph.microsoft.com", &transport, &cancellation);
+
+    client
+        .get_paginated::<serde_json::Value>(
+            "https://graph.microsoft.com/v1.0/deviceManagement/managedDevices",
+            scope,
+        )
+        .expect("fourth attempt should succeed");
+
+    assert_eq!(transport.requests().len(), MAX_GRAPH_ATTEMPTS);
+    assert_eq!(
+        *cancellation.waits.lock().expect("waits lock"),
+        [
+            MAX_GRAPH_RETRY_DELAY,
+            Duration::from_secs(2),
+            Duration::from_secs(4),
+        ]
+    );
+
+    let exhausted = FakeGraphTransport::new(
+        (0..MAX_GRAPH_ATTEMPTS)
+            .map(|_| Ok(graph_response(503, Vec::new(), &[])))
+            .collect(),
+    );
+    let cancellation = FakeGraphCancellation::default();
+    let client = GraphClient::new("graph.microsoft.com", &exhausted, &cancellation);
+    let error = client
+        .get_paginated::<serde_json::Value>(
+            "https://graph.microsoft.com/v1.0/deviceManagement/managedDevices",
+            scope,
+        )
+        .expect_err("four retryable responses should exhaust");
+    assert_eq!(error.kind, GraphClientErrorKind::RetryExhausted);
+    assert_eq!(error.status, Some(503));
+    assert_eq!(exhausted.requests().len(), MAX_GRAPH_ATTEMPTS);
+    assert_eq!(
+        *cancellation.waits.lock().expect("waits lock"),
+        [
+            Duration::from_secs(1),
+            Duration::from_secs(2),
+            Duration::from_secs(4),
+        ]
+    );
+}
+
+#[test]
+fn client_cancels_before_requests_during_retry_and_before_pagination() {
+    let scope = "DeviceManagementApps.Read.All";
+    let transport = FakeGraphTransport::new(vec![Ok(graph_response(
+        200,
+        graph_page(serde_json::json!([]), None),
+        &[],
+    ))]);
+    let cancellation = FakeGraphCancellation::default();
+    cancellation.cancelled.store(true, Ordering::SeqCst);
+    let client = GraphClient::new("graph.microsoft.com", &transport, &cancellation);
+    let error = client
+        .get_paginated::<serde_json::Value>(
+            "https://graph.microsoft.com/v1.0/deviceAppManagement/mobileApps",
+            scope,
+        )
+        .expect_err("pre-cancelled request should stop");
+    assert_eq!(error.kind, GraphClientErrorKind::Cancelled);
+    assert!(transport.requests().is_empty());
+
+    let transport = FakeGraphTransport::new(vec![
+        Ok(graph_response(429, Vec::new(), &[("retry-after", "1")])),
+        Ok(graph_response(
+            200,
+            graph_page(serde_json::json!([]), None),
+            &[],
+        )),
+    ]);
+    let cancellation = FakeGraphCancellation::cancelling_during_wait();
+    let client = GraphClient::new("graph.microsoft.com", &transport, &cancellation);
+    let error = client
+        .get_paginated::<serde_json::Value>(
+            "https://graph.microsoft.com/v1.0/deviceAppManagement/mobileApps",
+            scope,
+        )
+        .expect_err("retry wait cancellation should stop");
+    assert_eq!(error.kind, GraphClientErrorKind::Cancelled);
+    assert_eq!(transport.requests().len(), 1);
+
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let transport = FakeGraphTransport::cancelling_after(
+        vec![
+            Ok(graph_response(
+                200,
+                graph_page(
+                    serde_json::json!([{"id": "app-a"}]),
+                    Some("https://graph.microsoft.com/v1.0/next?page=2"),
+                ),
+                &[],
+            )),
+            Ok(graph_response(
+                200,
+                graph_page(serde_json::json!([]), None),
+                &[],
+            )),
+        ],
+        1,
+        Arc::clone(&cancelled),
+    );
+    let cancellation = FakeGraphCancellation {
+        cancelled,
+        ..Default::default()
+    };
+    let client = GraphClient::new("graph.microsoft.com", &transport, &cancellation);
+    let error = client
+        .get_paginated::<serde_json::Value>(
+            "https://graph.microsoft.com/v1.0/deviceAppManagement/mobileApps",
+            scope,
+        )
+        .expect_err("pagination cancellation should stop");
+    assert_eq!(error.kind, GraphClientErrorKind::Cancelled);
+    assert_eq!(transport.requests().len(), 1);
+}
+
+#[test]
+fn client_rejects_untrusted_next_links_and_enforces_page_item_body_caps() {
+    let scope = "DeviceManagementApps.Read.All";
+    for next_link in [
+        "http://graph.microsoft.com/v1.0/next",
+        "https://graph.microsoft.com.evil.example/v1.0/next",
+        "https://graph.microsoft.com@evil.example/v1.0/next",
+    ] {
+        let transport = FakeGraphTransport::new(vec![Ok(graph_response(
+            200,
+            graph_page(serde_json::json!([]), Some(next_link)),
+            &[],
+        ))]);
+        let cancellation = FakeGraphCancellation::default();
+        let client = GraphClient::new("graph.microsoft.com", &transport, &cancellation);
+        let error = client
+            .get_paginated::<serde_json::Value>(
+                "https://graph.microsoft.com/v1.0/deviceAppManagement/mobileApps",
+                scope,
+            )
+            .expect_err("untrusted nextLink should fail");
+        assert_eq!(error.kind, GraphClientErrorKind::InvalidUrl);
+        assert_eq!(transport.requests().len(), 1);
+        assert!(!format!("{error:?} {error}").contains("evil.example"));
+    }
+
+    let transport = FakeGraphTransport::new(vec![Ok(graph_response(
+        200,
+        vec![b'x'; MAX_GRAPH_RESPONSE_BYTES + 1],
+        &[],
+    ))]);
+    let cancellation = FakeGraphCancellation::default();
+    let client = GraphClient::new("graph.microsoft.com", &transport, &cancellation);
+    let error = client
+        .get_paginated::<serde_json::Value>(
+            "https://graph.microsoft.com/v1.0/deviceAppManagement/mobileApps",
+            scope,
+        )
+        .expect_err("oversized body should fail before parsing");
+    assert_eq!(error.kind, GraphClientErrorKind::ResponseTooLarge);
+
+    let items = vec![serde_json::json!({"id": "app"}); MAX_GRAPH_ITEMS + 1];
+    let transport = FakeGraphTransport::new(vec![Ok(graph_response(
+        200,
+        graph_page(serde_json::Value::Array(items), None),
+        &[],
+    ))]);
+    let cancellation = FakeGraphCancellation::default();
+    let client = GraphClient::new("graph.microsoft.com", &transport, &cancellation);
+    let error = client
+        .get_paginated::<serde_json::Value>(
+            "https://graph.microsoft.com/v1.0/deviceAppManagement/mobileApps",
+            scope,
+        )
+        .expect_err("item cap should fail");
+    assert_eq!(error.kind, GraphClientErrorKind::ItemLimitExceeded);
+
+    let pages = (0..MAX_GRAPH_PAGES)
+        .map(|page| {
+            Ok(graph_response(
+                200,
+                graph_page(
+                    serde_json::json!([]),
+                    Some(&format!(
+                        "https://graph.microsoft.com/v1.0/deviceAppManagement/mobileApps?page={}",
+                        page + 2
+                    )),
+                ),
+                &[],
+            ))
+        })
+        .collect();
+    let transport = FakeGraphTransport::new(pages);
+    let cancellation = FakeGraphCancellation::default();
+    let client = GraphClient::new("graph.microsoft.com", &transport, &cancellation);
+    let error = client
+        .get_paginated::<serde_json::Value>(
+            "https://graph.microsoft.com/v1.0/deviceAppManagement/mobileApps?page=1",
+            scope,
+        )
+        .expect_err("page cap should fail");
+    assert_eq!(error.kind, GraphClientErrorKind::PageLimitExceeded);
+    assert_eq!(transport.requests().len(), MAX_GRAPH_PAGES);
+}
+
+#[test]
+fn client_passes_a_fixed_timeout_and_sanitizes_transport_failures() {
+    let transport = FakeGraphTransport::new(vec![Err(GraphTransportFailure::Timeout)]);
+    let cancellation = FakeGraphCancellation::default();
+    let client = GraphClient::new("graph.microsoft.com", &transport, &cancellation);
+    let error = client
+        .get_paginated::<serde_json::Value>(
+            "https://graph.microsoft.com/v1.0/deviceManagement/managedDevices?secret=token",
+            "DeviceManagementManagedDevices.Read.All",
+        )
+        .expect_err("timeout should fail");
+
+    assert_eq!(error.kind, GraphClientErrorKind::Timeout);
+    assert_eq!(error.status, None);
+    assert_eq!(transport.requests()[0].1, GRAPH_REQUEST_TIMEOUT);
+    let rendered = format!("{error:?} {error}");
+    assert!(!rendered.contains("secret=token"));
 }
