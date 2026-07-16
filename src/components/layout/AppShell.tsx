@@ -24,6 +24,7 @@ import { UpdateDialog } from "../dialogs/UpdateDialog";
 import { MergeTabsDialog } from "../dialogs/MergeTabsDialog";
 import { DiffConfigDialog } from "../dialogs/DiffConfigDialog";
 import { getWorkspace } from "../../workspaces/registry";
+import type { WorkspaceDefinition } from "../../workspaces/types";
 import { RegistryViewer } from "../registry-view/RegistryViewer";
 import type { FilterClause } from "../dialogs/FilterDialog";
 import type { LogEntry } from "../../types/log";
@@ -55,6 +56,12 @@ function buildFilterRunSignature(
     .join("|");
 
   return `${clauseSignature}:${entriesRevision}:${entries.length}:${lastId}:${lastLineNumber}`;
+}
+
+export function shouldRenderWorkspaceSidebar(
+  workspace: WorkspaceDefinition,
+): boolean {
+  return workspace.capabilities?.sidebar !== false;
 }
 
 export function AppShell() {
@@ -454,7 +461,7 @@ export function AppShell() {
           backgroundColor: tokens.colorNeutralBackground2,
         }}
       >
-        {activeView !== "event-log" && (
+        {shouldRenderWorkspaceSidebar(getWorkspace(activeView)) && (
           sidebarCollapsed ? (
             <div
               style={{
