@@ -9,6 +9,7 @@ use super::normalize::{
     normalize_office_status, normalize_policy_status, normalize_timestamp, normalize_v2_status,
     percent_decode_bounded,
 };
+use super::rules::derive_findings;
 use super::timeline::{sort_timeline_entries, stable_record_id, stable_timeline_entry_id};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -1087,7 +1088,7 @@ impl SnapshotProjection {
                 evidence: entry.evidence,
             })
             .collect();
-        EspDiagnosticsSnapshot {
+        let mut snapshot = EspDiagnosticsSnapshot {
             schema_version: ESP_DIAGNOSTICS_SCHEMA_VERSION,
             scenario: self.scenario,
             phase,
@@ -1108,7 +1109,9 @@ impl SnapshotProjection {
             coverage: self.coverage,
             raw_evidence: self.raw_evidence,
             graph: None,
-        }
+        };
+        snapshot.findings = derive_findings(&snapshot);
+        snapshot
     }
 
     fn finalize_v2_workloads(&mut self) {

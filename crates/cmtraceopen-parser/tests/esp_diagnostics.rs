@@ -4366,3 +4366,742 @@ fn reducer_rereview_delivery_optimization_zero_http_with_nonzero_components_is_u
     assert_eq!(delivery.peer_share_percent, None);
     assert_eq!(delivery.connected_cache_share_percent, None);
 }
+
+fn findings_snapshot() -> EspDiagnosticsSnapshot {
+    EspDiagnosticsSnapshot {
+        schema_version: ESP_DIAGNOSTICS_SCHEMA_VERSION,
+        scenario: EspScenario::AutopilotV1,
+        phase: EspPhase::DeviceSetup,
+        generated_at_utc: "2026-07-15T12:30:00Z".to_string(),
+        elevation: EspElevationState {
+            is_elevated: true,
+            restart_supported: true,
+            restricted_sources: vec![],
+        },
+        identity: EspIdentityEvidence {
+            device_name: Some("DEVICE-1".to_string()),
+            managed_device_id: None,
+            entra_device_id: None,
+            entdm_id: None,
+            tenant_id: None,
+            tenant_domain: None,
+            user_principal_name: None,
+            serial_number: None,
+            evidence: vec![],
+        },
+        profile: None,
+        enrollments: vec![],
+        sessions: vec![],
+        workloads: vec![],
+        installer_correlations: vec![],
+        node_cache: vec![],
+        registration_events: vec![],
+        delivery_optimization: None,
+        hardware: None,
+        activity: vec![],
+        findings: vec![],
+        coverage: vec![],
+        raw_evidence: vec![],
+        graph: None,
+    }
+}
+
+fn findings_workload(
+    id: &str,
+    kind: EspTrackedKind,
+    normalized: EspNormalizedStatus,
+    blocking: Option<bool>,
+    last_updated: &str,
+) -> EspWorkload {
+    EspWorkload {
+        workload_id: format!("workload-{id}"),
+        session_id: "session-device".to_string(),
+        kind,
+        scope: EspScope::Device,
+        raw_identifier: id.to_string(),
+        display_name: Some(format!("Workload {id}")),
+        status: status(EspRawStatus::Text(format!("{normalized:?}")), normalized),
+        timestamps: EspWorkloadTimestamps {
+            first_observed: timestamp("2026-07-15T12:00:00Z"),
+            started: Some(timestamp("2026-07-15T12:01:00Z")),
+            ended: None,
+            last_updated: Some(timestamp(last_updated)),
+        },
+        exit_code: None,
+        enforcement_error_code: None,
+        blocking,
+        evidence: vec![evidence_ref(&format!("evidence-{id}"))],
+    }
+}
+
+fn assert_finding_contract(
+    finding: &EspDiagnosticFinding,
+    id: &str,
+    severity: EspFindingSeverity,
+    confidence: EspFindingConfidence,
+    recommended_check: &str,
+) {
+    assert_eq!(finding.finding_id, id);
+    assert_eq!(finding.severity, severity);
+    assert_eq!(finding.confidence, confidence);
+    assert!(
+        finding
+            .recommended_checks
+            .iter()
+            .any(|check| check == recommended_check),
+        "missing recommended check {recommended_check:?} in {finding:?}"
+    );
+    assert!(
+        !finding.evidence.is_empty() || !finding.coverage_gap_ids.is_empty(),
+        "finding {id} has no provenance"
+    );
+}
+
+fn finding_by_id<'a>(findings: &'a [EspDiagnosticFinding], id: &str) -> &'a EspDiagnosticFinding {
+    findings
+        .iter()
+        .find(|finding| finding.finding_id == id)
+        .unwrap_or_else(|| panic!("missing finding {id}: {findings:#?}"))
+}
+
+#[test]
+fn findings_failed_blocking_app_and_stalled_install_are_evidence_backed() {
+    let mut snapshot = findings_snapshot();
+    snapshot.workloads = vec![
+        findings_workload(
+            "app-failed",
+            EspTrackedKind::Win32App,
+            EspNormalizedStatus::Failed,
+            Some(true),
+            "2026-07-15T12:29:00Z",
+        ),
+        findings_workload(
+            "app-stalled",
+            EspTrackedKind::Msi,
+            EspNormalizedStatus::Installing,
+            Some(false),
+            "2026-07-15T12:05:00Z",
+        ),
+    ];
+
+    let findings = derive_findings(&snapshot);
+    assert_finding_contract(
+        finding_by_id(&findings, "blocking-app-failed"),
+        "blocking-app-failed",
+        EspFindingSeverity::Blocker,
+        EspFindingConfidence::High,
+        "Inspect the cited IME or deployment log around the app's final failure.",
+    );
+    assert_finding_contract(
+        finding_by_id(&findings, "workload-stalled"),
+        "workload-stalled",
+        EspFindingSeverity::Error,
+        EspFindingConfidence::High,
+        "Compare the cited workload's last update with IME and Delivery Optimization activity.",
+    );
+}
+
+#[test]
+fn findings_timeout_registration_policy_and_certificate_states_require_exact_evidence() {
+    let mut snapshot = findings_snapshot();
+    snapshot.enrollments.push(EspEnrollmentEvidence {
+        enrollment_id: "enrollment-1".to_string(),
+        provider_id: Some("MS DM Server".to_string()),
+        tenant_id: None,
+        user_principal_name: None,
+        entdm_id: None,
+        settings: EspEnrollmentSettings {
+            device_esp_enabled: Some(true),
+            user_esp_enabled: None,
+            timeout_seconds: Some(600),
+            blocking: Some(true),
+            allow_reset: None,
+            allow_retry: None,
+            continue_anyway: None,
+        },
+        evidence: vec![evidence_ref("enrollment-timeout")],
+    });
+    snapshot.sessions.push(EspSession {
+        session_id: "session-device".to_string(),
+        kind: EspSessionKind::Classic,
+        scope: EspScope::Device,
+        user_sid: None,
+        started_at: Some(timestamp("2026-07-15T12:00:00Z")),
+        ended_at: None,
+        phase: EspPhase::DeviceSetup,
+        is_latest: true,
+        workload_ids: vec!["workload-policy".to_string(), "workload-cert".to_string()],
+        evidence: vec![evidence_ref("session-timeout")],
+    });
+    snapshot.registration_events.push(EspRegistrationEvent {
+        event_id: 304,
+        record_id: Some(42),
+        status: status(
+            EspRawStatus::Text("Hybrid AADJ device registration failed".to_string()),
+            EspNormalizedStatus::Failed,
+        ),
+        message: "Hybrid AADJ device registration failed".to_string(),
+        timestamp: timestamp("2026-07-15T12:02:00Z"),
+        named_data: vec![],
+        evidence: vec![evidence_ref("registration-failed")],
+    });
+    snapshot.workloads = vec![
+        findings_workload(
+            "policy",
+            EspTrackedKind::Policy,
+            EspNormalizedStatus::Pending,
+            Some(true),
+            "2026-07-15T12:29:00Z",
+        ),
+        findings_workload(
+            "cert",
+            EspTrackedKind::ScepCertificate,
+            EspNormalizedStatus::NotStarted,
+            Some(true),
+            "2026-07-15T12:29:00Z",
+        ),
+    ];
+
+    let findings = derive_findings(&snapshot);
+    assert_finding_contract(
+        finding_by_id(&findings, "esp-timeout-reached"),
+        "esp-timeout-reached",
+        EspFindingSeverity::Blocker,
+        EspFindingConfidence::High,
+        "Compare the cited ESP session start time with the configured timeout.",
+    );
+    assert_finding_contract(
+        finding_by_id(&findings, "registration-or-join-failed"),
+        "registration-or-join-failed",
+        EspFindingSeverity::Error,
+        EspFindingConfidence::High,
+        "Inspect the cited Device Registration event and its named data.",
+    );
+    assert_finding_contract(
+        finding_by_id(&findings, "policy-not-processed"),
+        "policy-not-processed",
+        EspFindingSeverity::Warning,
+        EspFindingConfidence::High,
+        "Inspect the cited policy tracking state and enrollment scope.",
+    );
+    assert_finding_contract(
+        finding_by_id(&findings, "certificate-not-processed"),
+        "certificate-not-processed",
+        EspFindingSeverity::Warning,
+        EspFindingConfidence::High,
+        "Inspect the cited certificate tracking state and enrollment scope.",
+    );
+}
+
+#[test]
+fn findings_timeout_is_not_inferred_from_ambiguous_or_unrepresentable_settings() {
+    let mut snapshot = findings_snapshot();
+    snapshot.sessions.push(EspSession {
+        session_id: "session-device".to_string(),
+        kind: EspSessionKind::Classic,
+        scope: EspScope::Device,
+        user_sid: None,
+        started_at: Some(timestamp("2026-07-15T12:00:00Z")),
+        ended_at: None,
+        phase: EspPhase::DeviceSetup,
+        is_latest: true,
+        workload_ids: vec![],
+        evidence: vec![evidence_ref("session-timeout-ambiguous")],
+    });
+    let enrollment = |id: &str, timeout_seconds| EspEnrollmentEvidence {
+        enrollment_id: id.to_string(),
+        provider_id: Some("MS DM Server".to_string()),
+        tenant_id: None,
+        user_principal_name: None,
+        entdm_id: None,
+        settings: EspEnrollmentSettings {
+            device_esp_enabled: Some(true),
+            user_esp_enabled: None,
+            timeout_seconds: Some(timeout_seconds),
+            blocking: Some(true),
+            allow_reset: None,
+            allow_retry: None,
+            continue_anyway: None,
+        },
+        evidence: vec![evidence_ref(id)],
+    };
+    snapshot.enrollments = vec![
+        enrollment("timeout-10m", 600),
+        enrollment("timeout-20m", 1200),
+    ];
+
+    assert!(derive_findings(&snapshot)
+        .iter()
+        .all(|finding| finding.finding_id != "esp-timeout-reached"));
+
+    snapshot.enrollments = vec![enrollment("timeout-overflow", u64::MAX)];
+    assert!(derive_findings(&snapshot)
+        .iter()
+        .all(|finding| finding.finding_id != "esp-timeout-reached"));
+}
+
+#[test]
+fn findings_coverage_ambiguity_and_malformed_source_are_never_unpinned() {
+    let mut snapshot = findings_snapshot();
+    snapshot.elevation = EspElevationState {
+        is_elevated: false,
+        restart_supported: true,
+        restricted_sources: vec!["ime-logs".to_string()],
+    };
+    snapshot.coverage = vec![
+        EspArtifactCoverage {
+            artifact_id: "ime-logs".to_string(),
+            family: "Intune Management Extension logs".to_string(),
+            status: EspArtifactStatus::PermissionDenied,
+            detail: Some("Administrator access is required".to_string()),
+            observed_at_utc: "2026-07-15T12:30:00Z".to_string(),
+            evidence: vec![evidence_ref("ime-coverage")],
+        },
+        EspArtifactCoverage {
+            artifact_id: "page-settings-json".to_string(),
+            family: "ESP PageSettings".to_string(),
+            status: EspArtifactStatus::ParseFailed,
+            detail: Some("invalid JSON".to_string()),
+            observed_at_utc: "2026-07-15T12:30:00Z".to_string(),
+            evidence: vec![evidence_ref("malformed-coverage")],
+        },
+    ];
+    snapshot
+        .installer_correlations
+        .push(EspInstallerCorrelation {
+            correlation_id: "correlation-ambiguous".to_string(),
+            workload_id: None,
+            confidence: EspCorrelationConfidence::Uncorrelated,
+            reason: "two candidates overlap".to_string(),
+            candidate_workload_ids: vec!["app-a".to_string(), "app-b".to_string()],
+            process_observations: vec![],
+            evidence: vec![evidence_ref("ambiguous-msi")],
+        });
+
+    let findings = derive_findings(&snapshot);
+    assert_finding_contract(
+        finding_by_id(&findings, "ime-evidence-unavailable"),
+        "ime-evidence-unavailable",
+        EspFindingSeverity::Warning,
+        EspFindingConfidence::High,
+        "Open the cited IME coverage entry and verify the protected log path is readable.",
+    );
+    assert_finding_contract(
+        finding_by_id(&findings, "non-elevated-coverage-loss"),
+        "non-elevated-coverage-loss",
+        EspFindingSeverity::Warning,
+        EspFindingConfidence::High,
+        "Review the cited coverage gaps, then relaunch CMTrace Open as administrator if deeper evidence is required.",
+    );
+    assert_finding_contract(
+        finding_by_id(&findings, "installer-correlation-ambiguous"),
+        "installer-correlation-ambiguous",
+        EspFindingSeverity::Warning,
+        EspFindingConfidence::Medium,
+        "Compare the cited process start time, log path, app ID, and product code with each candidate workload.",
+    );
+    assert_finding_contract(
+        finding_by_id(&findings, "source-evidence-malformed"),
+        "source-evidence-malformed",
+        EspFindingSeverity::Warning,
+        EspFindingConfidence::High,
+        "Inspect the cited raw source record and its parse state.",
+    );
+}
+
+fn findings_graph_overlay(app: EspGraphAppRecord) -> EspGraphOverlay {
+    EspGraphOverlay {
+        request_id: "request-findings".to_string(),
+        requested_at_utc: "2026-07-15T12:30:00Z".to_string(),
+        device_match: graph_section(
+            GraphSectionStatus::Skipped,
+            GraphApiVersion::V1_0,
+            None,
+            None,
+        ),
+        autopilot_identity: graph_section(
+            GraphSectionStatus::Skipped,
+            GraphApiVersion::V1_0,
+            None,
+            None,
+        ),
+        deployment_profile: graph_section(
+            GraphSectionStatus::Skipped,
+            GraphApiVersion::Beta,
+            None,
+            None,
+        ),
+        intended_deployment_profile: graph_section(
+            GraphSectionStatus::Skipped,
+            GraphApiVersion::Beta,
+            None,
+            None,
+        ),
+        profile_assignments: graph_section(
+            GraphSectionStatus::Skipped,
+            GraphApiVersion::Beta,
+            None,
+            None,
+        ),
+        autopilot_events: graph_section(
+            GraphSectionStatus::Skipped,
+            GraphApiVersion::Beta,
+            None,
+            None,
+        ),
+        enrollment_configuration: graph_section(
+            GraphSectionStatus::Skipped,
+            GraphApiVersion::V1_0,
+            None,
+            None,
+        ),
+        apps: graph_section(
+            GraphSectionStatus::Available,
+            GraphApiVersion::V1_0,
+            Some(vec![app]),
+            None,
+        ),
+        policies: graph_section(
+            GraphSectionStatus::Skipped,
+            GraphApiVersion::V1_0,
+            None,
+            None,
+        ),
+        scripts: graph_section(
+            GraphSectionStatus::Skipped,
+            GraphApiVersion::Beta,
+            None,
+            None,
+        ),
+    }
+}
+
+#[test]
+fn findings_graph_conflict_requires_exact_matching_ids_and_graph_off_stays_local_only() {
+    let mut snapshot = findings_snapshot();
+    snapshot.workloads.push(findings_workload(
+        "app-conflict",
+        EspTrackedKind::Win32App,
+        EspNormalizedStatus::Failed,
+        Some(false),
+        "2026-07-15T12:29:00Z",
+    ));
+
+    let graph_app = EspGraphAppRecord {
+        app_id: "app-conflict".to_string(),
+        display_name: Some("Conflicting App".to_string()),
+        tracked_on_enrollment_status: Some(true),
+        status: Some(status(
+            EspRawStatus::Text("installed".to_string()),
+            EspNormalizedStatus::Succeeded,
+        )),
+        assignments: vec![],
+        evidence: vec![evidence_ref("graph-app-succeeded")],
+    };
+
+    assert!(derive_findings(&snapshot)
+        .iter()
+        .all(|finding| finding.finding_id != "local-graph-state-conflict"));
+
+    snapshot.graph = Some(findings_graph_overlay(graph_app));
+    let findings = derive_findings(&snapshot);
+    assert_finding_contract(
+        finding_by_id(&findings, "local-graph-state-conflict"),
+        "local-graph-state-conflict",
+        EspFindingSeverity::Warning,
+        EspFindingConfidence::High,
+        "Compare the cited local workload and Graph app status without changing either source.",
+    );
+    let conflict = finding_by_id(&findings, "local-graph-state-conflict");
+    assert_eq!(
+        conflict
+            .evidence
+            .iter()
+            .map(|evidence| evidence.evidence_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["evidence-app-conflict", "graph-app-succeeded"]
+    );
+}
+
+#[test]
+fn findings_completed_session_emits_only_evidence_backed_info() {
+    let mut snapshot = findings_snapshot();
+    snapshot.phase = EspPhase::Completed;
+    snapshot.sessions.push(EspSession {
+        session_id: "session-completed".to_string(),
+        kind: EspSessionKind::Classic,
+        scope: EspScope::Device,
+        user_sid: None,
+        started_at: Some(timestamp("2026-07-15T12:00:00Z")),
+        ended_at: Some(timestamp("2026-07-15T12:10:00Z")),
+        phase: EspPhase::Completed,
+        is_latest: true,
+        workload_ids: vec!["workload-app-success".to_string()],
+        evidence: vec![evidence_ref("session-completed")],
+    });
+    snapshot.workloads.push(findings_workload(
+        "app-success",
+        EspTrackedKind::Win32App,
+        EspNormalizedStatus::Succeeded,
+        Some(true),
+        "2026-07-15T12:10:00Z",
+    ));
+
+    let findings = derive_findings(&snapshot);
+    assert_eq!(
+        findings
+            .iter()
+            .map(|finding| finding.finding_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["esp-completed"]
+    );
+    assert_finding_contract(
+        &findings[0],
+        "esp-completed",
+        EspFindingSeverity::Info,
+        EspFindingConfidence::High,
+        "Review the cited completed session and terminal workload states.",
+    );
+}
+
+#[test]
+fn findings_reducer_snapshot_populates_rules_without_mutating_raw_evidence() {
+    let mut reducer = EspDiagnosticsReducer::new("2026-07-15T12:30:00Z".to_string());
+    reducer.ingest(EspEvidenceRecord::Coverage(EspArtifactCoverage {
+        artifact_id: "ime-logs".to_string(),
+        family: "IME logs".to_string(),
+        status: EspArtifactStatus::Missing,
+        detail: Some("not found".to_string()),
+        observed_at_utc: "2026-07-15T12:30:00Z".to_string(),
+        evidence: vec![evidence_ref("ime-missing")],
+    }));
+
+    let snapshot = reducer.snapshot();
+    assert_eq!(snapshot.coverage.len(), 1);
+    assert_eq!(
+        finding_by_id(&snapshot.findings, "ime-evidence-unavailable").coverage_gap_ids,
+        vec!["ime-logs"]
+    );
+}
+
+fn raw_export_record(
+    id: &str,
+    source_kind: EspSourceKind,
+    source_artifact_id: &str,
+    registry_value_name: Option<&str>,
+    value: &str,
+) -> EspRawEvidenceRecord {
+    EspRawEvidenceRecord {
+        record_id: id.to_string(),
+        provenance: EspEvidenceProvenance {
+            source_kind,
+            source_artifact_id: source_artifact_id.to_string(),
+            file_path: None,
+            line_number: Some(1),
+            record_number: None,
+            registry: registry_value_name.map(|value_name| EspRegistryProvenance {
+                hive: "HKLM".to_string(),
+                key: r"SOFTWARE\Microsoft\Provisioning".to_string(),
+                value_name: Some(value_name.to_string()),
+            }),
+            event: None,
+        },
+        source_timestamp: Some(timestamp("2026-07-15T12:00:00Z")),
+        observed_at_utc: "2026-07-15T12:00:01Z".to_string(),
+        raw_value: EspObservationValue::Text(value.to_string()),
+        sensitivity: EspSensitivity::Sensitive,
+        parse_state: EspParseState::Raw,
+        access_state: EspSourceAccessState::Available,
+        evidence: vec![evidence_ref(id)],
+    }
+}
+
+#[test]
+fn redaction_projection_masks_identity_session_node_cache_hardware_and_command_secrets() {
+    let mut snapshot = findings_snapshot();
+    let mut process_context = observation_context("process-sensitive");
+    process_context.provenance.event = Some(EspEventProvenance {
+        channel: "Process inventory".to_string(),
+        event_id: 1,
+        record_id: Some(1),
+        named_data: vec![EspNamedValue {
+            name: "Authorization".to_string(),
+            value: "Bearer process-context-secret".to_string(),
+        }],
+    });
+    snapshot.identity.user_principal_name = Some(sensitive("person@example.test"));
+    snapshot.identity.tenant_id = Some(sensitive("tenant-secret"));
+    snapshot.identity.entdm_id = Some(sensitive("entdm-secret"));
+    snapshot.identity.serial_number = Some(sensitive("SERIAL-SECRET"));
+    snapshot.sessions.push(EspSession {
+        session_id: "session-sensitive".to_string(),
+        kind: EspSessionKind::Classic,
+        scope: EspScope::User,
+        user_sid: Some(sensitive("S-1-5-21-111-222-333-1001")),
+        started_at: None,
+        ended_at: None,
+        phase: EspPhase::AccountSetup,
+        is_latest: true,
+        workload_ids: vec![],
+        evidence: vec![evidence_ref("session-sensitive")],
+    });
+    snapshot.node_cache.push(EspNodeCacheEntry {
+        index: 1,
+        node_uri: "./Vendor/MSFT/Secret".to_string(),
+        expected_value: Some("NodeCache private payload".to_string()),
+        sensitivity: EspSensitivity::Sensitive,
+        evidence: vec![evidence_ref("node-sensitive")],
+    });
+    snapshot.hardware = Some(EspHardwareEvidence {
+        os_version: Some("10.0.26100".to_string()),
+        os_build: Some("26100.1".to_string()),
+        manufacturer: Some("Contoso".to_string()),
+        model: Some("Model 1".to_string()),
+        serial_number: Some(sensitive("SERIAL-HARDWARE")),
+        tpm_version: Some("2.0".to_string()),
+        evidence: vec![evidence_ref("hardware-sensitive")],
+    });
+    snapshot.installer_correlations.push(EspInstallerCorrelation {
+        correlation_id: "correlation-1".to_string(),
+        workload_id: Some("app-1".to_string()),
+        confidence: EspCorrelationConfidence::Exact,
+        reason: "exact product code".to_string(),
+        candidate_workload_ids: vec![],
+        process_observations: vec![EspProcessObservation {
+            context: process_context,
+            pid: 42,
+            process_start_time: timestamp("2026-07-15T12:00:00Z"),
+            parent_pid: None,
+            executable_name: "msiexec.exe".to_string(),
+            sanitized_command_line: Some(
+                r#"msiexec /i {11111111-2222-3333-4444-555555555555} /L*V C:\Windows\Temp\install.log --password hunter2 --api-key=topsecret"#.to_string(),
+            ),
+            referenced_log_path: Some(r"C:\Windows\Temp\install.log".to_string()),
+            app_id: Some("app-1".to_string()),
+            product_code: Some("{11111111-2222-3333-4444-555555555555}".to_string()),
+        }],
+        evidence: vec![evidence_ref("process-sensitive")],
+    });
+
+    let safe = redacted_export_projection(&snapshot);
+    let safe_json = serde_json::to_string(&safe).unwrap();
+    for secret in [
+        "person@example.test",
+        "tenant-secret",
+        "entdm-secret",
+        "SERIAL-SECRET",
+        "S-1-5-21-111-222-333-1001",
+        "NodeCache private payload",
+        "SERIAL-HARDWARE",
+        "hunter2",
+        "topsecret",
+        "process-context-secret",
+    ] {
+        assert!(!safe_json.contains(secret), "safe export leaked {secret}");
+    }
+    let command = safe.installer_correlations[0].process_observations[0]
+        .sanitized_command_line
+        .as_deref()
+        .unwrap();
+    assert!(command.contains("{11111111-2222-3333-4444-555555555555}"));
+    assert!(command.contains(r"C:\Windows\Temp\install.log"));
+    assert_eq!(
+        safe.installer_correlations[0].process_observations[0]
+            .product_code
+            .as_deref(),
+        Some("{11111111-2222-3333-4444-555555555555}")
+    );
+    assert!(serde_json::to_string(&snapshot)
+        .unwrap()
+        .contains("hunter2"));
+}
+
+#[test]
+fn redaction_projection_removes_tokens_authorization_graph_bodies_and_hardware_hashes() {
+    let mut snapshot = findings_snapshot();
+    let mut raw_node_cache = raw_export_record(
+        "raw-node-cache",
+        EspSourceKind::Registry,
+        "esp-node-cache",
+        Some("ExpectedValue"),
+        "opaque-node-secret",
+    );
+    raw_node_cache.provenance.registry.as_mut().unwrap().key =
+        r"SOFTWARE\Microsoft\Enrollments\Enrollment-1\NodeCache\42".to_string();
+    snapshot.raw_evidence = vec![
+        raw_export_record(
+            "raw-log-safe",
+            EspSourceKind::DeploymentLog,
+            "deployment-log",
+            None,
+            r"MSI {11111111-2222-3333-4444-555555555555} wrote C:\Windows\Temp\install.log for person@example.test",
+        ),
+        raw_export_record(
+            "raw-authorization",
+            EspSourceKind::ImeLog,
+            "ime-log",
+            None,
+            "Authorization: Bearer ey.secret.token",
+        ),
+        raw_export_record(
+            "raw-token",
+            EspSourceKind::Registry,
+            "wam-access-token",
+            Some("AccessToken"),
+            "ey.another.secret",
+        ),
+        raw_export_record(
+            "raw-graph-body",
+            EspSourceKind::Graph,
+            "graph-response-body",
+            None,
+            r#"{"value":[{"userPrincipalName":"person@example.test"}]}"#,
+        ),
+        raw_export_record(
+            "raw-hardware-hash",
+            EspSourceKind::Registry,
+            "autopilot-hardware-hash",
+            Some("HardwareHash"),
+            "BASE64-HARDWARE-HASH",
+        ),
+        raw_node_cache,
+        raw_export_record(
+            "raw-tenant",
+            EspSourceKind::Registry,
+            "autopilot-profile",
+            Some("AADTenantID"),
+            "tenant-from-registry",
+        ),
+        raw_export_record(
+            "raw-serial",
+            EspSourceKind::Registry,
+            "system-hardware",
+            Some("SerialNumber"),
+            "SERIAL-FROM-REGISTRY",
+        ),
+    ];
+
+    let safe = redacted_export_projection(&snapshot);
+    assert_eq!(
+        safe.raw_evidence
+            .iter()
+            .map(|record| record.record_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["raw-log-safe", "raw-node-cache", "raw-tenant", "raw-serial"]
+    );
+    let safe_text = match &safe.raw_evidence[0].raw_value {
+        EspObservationValue::Text(value) => value,
+        other => panic!("unexpected safe raw value: {other:?}"),
+    };
+    assert!(!safe_text.contains("person@example.test"));
+    assert!(safe_text.contains("{11111111-2222-3333-4444-555555555555}"));
+    assert!(safe_text.contains(r"C:\Windows\Temp\install.log"));
+    for record in &safe.raw_evidence[1..] {
+        assert_eq!(
+            record.raw_value,
+            EspObservationValue::Text("[redacted]".to_string()),
+            "sensitive raw field was not fully masked: {record:?}"
+        );
+    }
+    assert_eq!(snapshot.raw_evidence.len(), 8);
+}
