@@ -466,38 +466,47 @@ fn is_windows_sid_component(component: &str) -> bool {
     if !is_sid_identifier_authority(identifier_authority) {
         return false;
     }
-    let subauthorities = fields.collect::<Vec<_>>();
-    (1..=15).contains(&subauthorities.len())
-        && subauthorities
-            .iter()
-            .all(|field| is_sid_subauthority(field))
+    let mut subauthority_count = 0;
+    for field in fields {
+        subauthority_count += 1;
+        if subauthority_count > 15 || !is_sid_subauthority(field) {
+            return false;
+        }
+    }
+    subauthority_count != 0
 }
 
 fn is_sid_identifier_authority(value: &str) -> bool {
+    const MAX_DECIMAL_IDENTIFIER_AUTHORITY: u64 = u32::MAX as u64;
+    const MIN_HEX_IDENTIFIER_AUTHORITY: u64 = MAX_DECIMAL_IDENTIFIER_AUTHORITY + 1;
     const MAX_IDENTIFIER_AUTHORITY: u64 = 0xFFFF_FFFF_FFFF;
 
     if let Some(hex) = value
         .strip_prefix("0x")
         .or_else(|| value.strip_prefix("0X"))
     {
-        return !hex.is_empty()
-            && hex.len() <= 12
+        return hex.len() == 12
             && hex.chars().all(|character| character.is_ascii_hexdigit())
-            && u64::from_str_radix(hex, 16)
-                .is_ok_and(|authority| authority <= MAX_IDENTIFIER_AUTHORITY);
+            && u64::from_str_radix(hex, 16).is_ok_and(|authority| {
+                (MIN_HEX_IDENTIFIER_AUTHORITY..=MAX_IDENTIFIER_AUTHORITY).contains(&authority)
+            });
     }
 
-    !value.is_empty()
-        && value.chars().all(|character| character.is_ascii_digit())
+    is_canonical_sid_decimal(value)
         && value
             .parse::<u64>()
-            .is_ok_and(|authority| authority <= MAX_IDENTIFIER_AUTHORITY)
+            .is_ok_and(|authority| authority <= MAX_DECIMAL_IDENTIFIER_AUTHORITY)
 }
 
 fn is_sid_subauthority(value: &str) -> bool {
+    is_canonical_sid_decimal(value) && value.parse::<u32>().is_ok()
+}
+
+fn is_canonical_sid_decimal(value: &str) -> bool {
     !value.is_empty()
-        && value.chars().all(|character| character.is_ascii_digit())
-        && value.parse::<u32>().is_ok()
+        && value.len() <= 10
+        && value.bytes().all(|byte| byte.is_ascii_digit())
+        && (value == "0" || !value.starts_with('0'))
 }
 
 fn root_evidence(
@@ -866,13 +875,15 @@ mod tests {
     #[test]
     fn registry_path_sensitivity_accepts_complete_sid_grammar() {
         for sid in [
+            "S-1-0-0",
             "S-1-5-21-111-222-333-1001",
             "S-1-12-1-111-222-333",
             "S-1-15-2-1",
             "S-1-16-12288",
-            "S-1-281474976710655-1",
-            "S-1-0x100000000-1",
-            "S-1-0XFFFFFFFFFFFF-1",
+            "S-1-4294967295-1",
+            "S-1-0x000100000000-1",
+            "S-1-0XFFFFFFFFFFFF-4294967295",
+            "S-1-5-1-2-3-4-5-6-7-8-9-10-11-12-13-14-15",
         ] {
             assert_eq!(
                 registry_path_sensitivity(&format!(
@@ -886,9 +897,16 @@ mod tests {
         for near_miss in [
             "S-1-5",
             "S-2-5-1",
+            "S-1-05-1",
+            "S-1-4294967296-1",
+            "S-1-281474976710655-1",
+            "S-1-10000000000-1",
             "S-1-0x-1",
+            "S-1-0x100000000-1",
+            "S-1-0x000000000005-1",
             "S-1-0x1000000000000-1",
-            "S-1-281474976710656-1",
+            "S-1-5-01",
+            "S-1-5-00000000000",
             "S-1-5-4294967296",
             "S-1-5-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1",
             "S-1-5-not-numeric",
