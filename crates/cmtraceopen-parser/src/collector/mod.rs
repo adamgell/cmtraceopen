@@ -239,9 +239,7 @@ mod cross_profile_tests {
             TARGETED_COLLECTOR_PS1, REFERENCE_COLLECTOR_PS1,
             "collection scripts drifted"
         );
-        assert!(TARGETED_COLLECTOR_PS1.contains(
-            "optionalArrays  = @('arguments', 'parseHints')"
-        ));
+        assert!(TARGETED_COLLECTOR_PS1.contains("optionalArrays  = @('arguments', 'parseHints')"));
         assert!(TARGETED_COLLECTOR_PS1.contains(
             "$commandParseHints = @(Get-ObjectPropertyValue -InputObject $commandItem -Name 'parseHints' -DefaultValue @())"
         ));
