@@ -41,6 +41,18 @@ pub enum EspEvidenceRecord {
     Coverage(EspArtifactCoverage),
 }
 
+impl EspEvidenceRecord {
+    /// Returns the acquisition timestamp carried by an observation or coverage
+    /// record. Aggregate-only records without an observation context return
+    /// `None`.
+    pub fn observed_at_utc(&self) -> Option<&str> {
+        match self {
+            Self::Coverage(value) => Some(&value.observed_at_utc),
+            _ => record_context(self).map(|context| context.observed_at_utc.as_str()),
+        }
+    }
+}
+
 /// An evidence record whose source-local occurrence identity was assigned at
 /// acquisition time and must remain unchanged across later projections.
 #[doc(hidden)]

@@ -57,13 +57,15 @@ use app_lib::esp::tailing::{
 use app_lib::intune::evtx_parser::{
     parse_esp_event_xml, EventLogProperty, ParsedEspEventRecord, MAX_ESP_EVTX_RECORD_BYTES,
 };
+use chrono::DateTime;
 use cmtraceopen_parser::esp::{
     EspArtifactCoverage, EspArtifactStatus, EspDiagnosticsReducer, EspDiagnosticsSnapshot,
     EspElevationState, EspEvidenceProvenance, EspEvidenceRecord, EspEvidenceRef,
     EspGraphObservation, EspGraphObservationSection, EspHardwareEvidence, EspObservationContext,
-    EspObservationValue, EspParseState, EspRegistryObservation, EspRegistryProvenance, EspScope,
-    EspSensitivity, EspSourceAccessState, EspSourceKind, EspSystemFact, EspSystemObservation,
-    GraphApiVersion, MAX_EVIDENCE_IDENTITY_SOURCES, MAX_RETAINED_EVIDENCE_RECORDS,
+    EspObservationValue, EspParseState, EspProcessObservation, EspRegistryObservation,
+    EspRegistryProvenance, EspScope, EspSensitivity, EspSourceAccessState, EspSourceKind,
+    EspSystemFact, EspSystemObservation, EspTimestamp, EspTimestampKind, GraphApiVersion,
+    MAX_EVIDENCE_IDENTITY_SOURCES, MAX_RETAINED_EVIDENCE_RECORDS,
 };
 use tempfile::tempdir;
 
@@ -3634,6 +3636,300 @@ impl EspSessionClock for ManualSessionClock {
     }
 }
 
+struct SequencedRollbackClockState {
+    monotonic: Duration,
+    utc: String,
+}
+
+struct SequencedRollbackSessionClock {
+    state: Mutex<SequencedRollbackClockState>,
+    changed: Condvar,
+}
+
+impl SequencedRollbackSessionClock {
+    fn new(utc: &str) -> Self {
+        Self {
+            state: Mutex::new(SequencedRollbackClockState {
+                monotonic: Duration::ZERO,
+                utc: utc.to_string(),
+            }),
+            changed: Condvar::new(),
+        }
+    }
+
+    fn set_utc(&self, utc: &str) {
+        self.state.lock().expect("sequenced clock").utc = utc.to_string();
+    }
+
+    fn advance(&self, duration: Duration, utc: &str) {
+        let mut state = self.state.lock().expect("sequenced clock");
+        state.monotonic += duration;
+        state.utc = utc.to_string();
+        self.changed.notify_all();
+    }
+}
+
+impl EspSessionClock for SequencedRollbackSessionClock {
+    fn now(&self) -> EspClockReading {
+        let state = self.state.lock().expect("sequenced clock");
+        EspClockReading {
+            monotonic: state.monotonic,
+            utc: state.utc.clone(),
+        }
+    }
+
+    fn wait(&self, cancellation: &EspCancellation, _duration: Duration) {
+        if cancellation.is_cancelled() {
+            return;
+        }
+        let state = self.state.lock().expect("sequenced clock");
+        let _ = self
+            .changed
+            .wait_timeout(state, Duration::from_millis(5))
+            .expect("sequenced clock wait");
+    }
+}
+
+#[derive(Clone)]
+struct SessionTestSignal {
+    state: Arc<(Mutex<bool>, Condvar)>,
+}
+
+impl SessionTestSignal {
+    fn new() -> Self {
+        Self {
+            state: Arc::new((Mutex::new(false), Condvar::new())),
+        }
+    }
+
+    fn signal(&self) {
+        let (state, changed) = self.state.as_ref();
+        *state.lock().expect("session test signal") = true;
+        changed.notify_all();
+    }
+
+    fn is_signaled(&self) -> bool {
+        *self.state.0.lock().expect("session test signal")
+    }
+
+    fn wait(&self, label: &str) {
+        let (state, changed) = self.state.as_ref();
+        let signaled = state.lock().expect("session test signal");
+        let (signaled, _) = changed
+            .wait_timeout_while(signaled, Duration::from_secs(2), |value| !*value)
+            .expect("session test signal wait");
+        assert!(*signaled, "timed out waiting for {label}");
+    }
+}
+
+#[derive(Clone)]
+struct DelayedProcessCall {
+    entered: SessionTestSignal,
+    sample_ready: SessionTestSignal,
+    sampled: SessionTestSignal,
+    return_ready: SessionTestSignal,
+    evidence_id: &'static str,
+    pid: u32,
+    include_evidence: bool,
+}
+
+impl DelayedProcessCall {
+    fn with_evidence(evidence_id: &'static str, pid: u32) -> Self {
+        Self::new(evidence_id, pid, true)
+    }
+
+    fn without_evidence() -> Self {
+        Self::new("unused-delayed-process", 0, false)
+    }
+
+    fn new(evidence_id: &'static str, pid: u32, include_evidence: bool) -> Self {
+        Self {
+            entered: SessionTestSignal::new(),
+            sample_ready: SessionTestSignal::new(),
+            sampled: SessionTestSignal::new(),
+            return_ready: SessionTestSignal::new(),
+            evidence_id,
+            pid,
+            include_evidence,
+        }
+    }
+
+    fn complete_with_times(
+        &self,
+        clock: &SequencedRollbackSessionClock,
+        sampled_at_utc: &str,
+        returned_at_utc: &str,
+    ) {
+        self.entered.wait("delayed process provider entry");
+        clock.set_utc(sampled_at_utc);
+        self.sample_ready.signal();
+        self.sampled.wait("delayed process timestamp sample");
+        clock.set_utc(returned_at_utc);
+        self.return_ready.signal();
+    }
+}
+
+#[derive(Clone)]
+struct DelayedProcessSessionProvider {
+    clock: Arc<SequencedRollbackSessionClock>,
+    calls: Arc<Mutex<VecDeque<DelayedProcessCall>>>,
+}
+
+impl DelayedProcessSessionProvider {
+    fn new(clock: Arc<SequencedRollbackSessionClock>, calls: Vec<DelayedProcessCall>) -> Self {
+        Self {
+            clock,
+            calls: Arc::new(Mutex::new(calls.into())),
+        }
+    }
+}
+
+impl EspEvidenceProvider for DelayedProcessSessionProvider {
+    fn collect(&self, _observed_at_utc: &str) -> EspProviderBatch {
+        let call = self
+            .calls
+            .lock()
+            .expect("delayed process calls")
+            .pop_front()
+            .expect("unexpected delayed process collection");
+        call.entered.signal();
+        call.sample_ready.wait("sample-ready signal");
+        let sampled_at_utc = self.clock.now().utc;
+        call.sampled.signal();
+        call.return_ready.wait("return-ready signal");
+
+        if !call.include_evidence {
+            return EspProviderBatch::default();
+        }
+        let evidence_ref = EspEvidenceRef {
+            evidence_id: call.evidence_id.to_string(),
+            source_artifact_id: "process.delayed-session-test".to_string(),
+        };
+        let process = EspProcessObservation {
+            context: EspObservationContext {
+                evidence_ref: evidence_ref.clone(),
+                provenance: EspEvidenceProvenance {
+                    source_kind: EspSourceKind::Process,
+                    source_artifact_id: evidence_ref.source_artifact_id.clone(),
+                    file_path: None,
+                    line_number: None,
+                    record_number: None,
+                    registry: None,
+                    event: None,
+                },
+                source_timestamp: None,
+                observed_at_utc: sampled_at_utc.clone(),
+                sensitivity: EspSensitivity::Public,
+                parse_state: EspParseState::Parsed,
+                access_state: EspSourceAccessState::Available,
+            },
+            pid: call.pid,
+            process_start_time: EspTimestamp {
+                raw_text: sampled_at_utc.clone(),
+                original_offset: Some("Z".to_string()),
+                normalized_utc: Some(sampled_at_utc.clone()),
+                kind: EspTimestampKind::Utc,
+            },
+            parent_pid: None,
+            executable_name: "msiexec.exe".to_string(),
+            sanitized_command_line: None,
+            referenced_log_path: None,
+            app_id: None,
+            product_code: None,
+        };
+        EspProviderBatch {
+            records: vec![EspEvidenceRecord::Process(process)],
+            coverage: vec![EspArtifactCoverage {
+                artifact_id: evidence_ref.source_artifact_id.clone(),
+                family: "process".to_string(),
+                status: EspArtifactStatus::Available,
+                detail: None,
+                observed_at_utc: sampled_at_utc,
+                evidence: vec![evidence_ref],
+            }],
+        }
+    }
+}
+
+#[derive(Clone)]
+struct DelayedChangedTailCall {
+    ready_at: Duration,
+    entered: SessionTestSignal,
+    return_ready: SessionTestSignal,
+}
+
+impl DelayedChangedTailCall {
+    fn new(ready_at: Duration) -> Self {
+        Self {
+            ready_at,
+            entered: SessionTestSignal::new(),
+            return_ready: SessionTestSignal::new(),
+        }
+    }
+
+    fn complete_at(&self, clock: &SequencedRollbackSessionClock, completed_at_utc: &str) {
+        self.entered.wait("delayed changed tail poll");
+        clock.set_utc(completed_at_utc);
+        self.return_ready.signal();
+    }
+}
+
+#[derive(Clone)]
+struct DelayedChangedTailFactory {
+    clock: Arc<SequencedRollbackSessionClock>,
+    calls: Arc<Mutex<VecDeque<DelayedChangedTailCall>>>,
+}
+
+impl EspSessionTailFactory for DelayedChangedTailFactory {
+    fn create(&self) -> Box<dyn EspSessionTail> {
+        Box::new(DelayedChangedTail {
+            clock: Arc::clone(&self.clock),
+            calls: Arc::clone(&self.calls),
+        })
+    }
+}
+
+struct DelayedChangedTail {
+    clock: Arc<SequencedRollbackSessionClock>,
+    calls: Arc<Mutex<VecDeque<DelayedChangedTailCall>>>,
+}
+
+impl EspSessionTail for DelayedChangedTail {
+    fn reconcile(
+        &mut self,
+        _sources: &[DiscoveredLogSource],
+        _observed_at_utc: &str,
+    ) -> EspTailEvidenceBatch {
+        EspTailEvidenceBatch::default()
+    }
+
+    fn poll(&mut self, _observed_at_utc: &str) -> EspTailEvidenceBatch {
+        let ready = self
+            .calls
+            .lock()
+            .expect("delayed changed tail calls")
+            .front()
+            .is_some_and(|call| self.clock.now().monotonic >= call.ready_at);
+        if !ready {
+            return EspTailEvidenceBatch::default();
+        }
+        let call = self
+            .calls
+            .lock()
+            .expect("delayed changed tail calls")
+            .pop_front()
+            .expect("ready delayed changed tail call");
+        call.entered.signal();
+        call.return_ready.wait("delayed changed tail return");
+        EspTailEvidenceBatch {
+            changed: true,
+            ..EspTailEvidenceBatch::default()
+        }
+    }
+
+    fn stop(&mut self) {}
+}
+
 #[derive(Clone)]
 struct FakeSessionProvider {
     artifact_id: &'static str,
@@ -3873,6 +4169,47 @@ fn session_system_record(
     })
 }
 
+fn session_registry_record(
+    artifact_id: &str,
+    evidence_id: &str,
+    key: &str,
+    value_name: &str,
+    value: EspObservationValue,
+    observed_at_utc: &str,
+) -> EspEvidenceRecord {
+    let evidence_ref = EspEvidenceRef {
+        evidence_id: evidence_id.to_string(),
+        source_artifact_id: artifact_id.to_string(),
+    };
+    EspEvidenceRecord::Registry(EspRegistryObservation {
+        context: EspObservationContext {
+            evidence_ref,
+            provenance: EspEvidenceProvenance {
+                source_kind: EspSourceKind::Registry,
+                source_artifact_id: artifact_id.to_string(),
+                file_path: None,
+                line_number: None,
+                record_number: None,
+                registry: Some(EspRegistryProvenance {
+                    hive: "HKLM".to_string(),
+                    key: key.to_string(),
+                    value_name: Some(value_name.to_string()),
+                }),
+                event: None,
+            },
+            source_timestamp: None,
+            observed_at_utc: observed_at_utc.to_string(),
+            sensitivity: EspSensitivity::Public,
+            parse_state: EspParseState::Parsed,
+            access_state: EspSourceAccessState::Available,
+        },
+        hive: "HKLM".to_string(),
+        key: key.to_string(),
+        value_name: value_name.to_string(),
+        value,
+    })
+}
+
 fn session_graph_record(observed_at_utc: &str) -> EspEvidenceRecord {
     let evidence_ref = EspEvidenceRef {
         evidence_id: "forbidden-local-graph".to_string(),
@@ -3946,6 +4283,134 @@ fn wait_for_session_updates(sink: &RecordingSessionSink, count: usize) {
     }
 }
 
+fn delayed_process_session_dependencies(
+    clock: Arc<SequencedRollbackSessionClock>,
+    process: DelayedProcessSessionProvider,
+    sink: RecordingSessionSink,
+) -> EspSessionDependencies {
+    let empty = empty_session_provider();
+    EspSessionDependencies::new(
+        Arc::clone(&clock) as Arc<dyn EspSessionClock>,
+        empty.clone(),
+        empty.clone(),
+        empty,
+        Arc::new(process),
+        Arc::new(FakeSessionDiscovery::default()),
+        Arc::new(FakeSessionTailFactory::default()),
+        Arc::new(sink),
+    )
+    .with_live_supported_for_tests(true)
+}
+
+fn delayed_tail_session_dependencies(
+    clock: Arc<SequencedRollbackSessionClock>,
+    tail_factory: DelayedChangedTailFactory,
+    sink: RecordingSessionSink,
+) -> EspSessionDependencies {
+    let empty = empty_session_provider();
+    EspSessionDependencies::new(
+        Arc::clone(&clock) as Arc<dyn EspSessionClock>,
+        empty.clone(),
+        empty.clone(),
+        empty.clone(),
+        empty,
+        Arc::new(FakeSessionDiscovery::default()),
+        Arc::new(tail_factory),
+        Arc::new(sink),
+    )
+    .with_live_supported_for_tests(true)
+}
+
+fn snapshot_observed_at_values(snapshot: &EspDiagnosticsSnapshot) -> Vec<String> {
+    snapshot
+        .raw_evidence
+        .iter()
+        .map(|record| record.observed_at_utc.clone())
+        .chain(
+            snapshot
+                .coverage
+                .iter()
+                .map(|coverage| coverage.observed_at_utc.clone()),
+        )
+        .collect()
+}
+
+fn assert_snapshot_time_covers_all_evidence(snapshot: &EspDiagnosticsSnapshot) {
+    let generated =
+        DateTime::parse_from_rfc3339(&snapshot.generated_at_utc).expect("snapshot generatedAtUtc");
+    for observed_at_utc in snapshot_observed_at_values(snapshot) {
+        let observed = DateTime::parse_from_rfc3339(&observed_at_utc)
+            .unwrap_or_else(|_| panic!("evidence observedAtUtc {observed_at_utc}"));
+        assert!(
+            generated >= observed,
+            "snapshot generatedAtUtc {} predates evidence observedAtUtc {observed_at_utc}",
+            snapshot.generated_at_utc
+        );
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct RollbackSessionTimestamps {
+    initial_generated_at_utc: String,
+    initial_observed_at_utc: Vec<String>,
+    refresh_generated_at_utc: String,
+    refresh_emitted_at_utc: String,
+    refresh_observed_at_utc: Vec<String>,
+}
+
+fn run_delayed_process_rollback_session(request_id: &'static str) -> RollbackSessionTimestamps {
+    let clock = Arc::new(SequencedRollbackSessionClock::new("2026-07-16T06:30:00Z"));
+    let initial_call = DelayedProcessCall::with_evidence("delayed-process-initial", 7_001);
+    let refresh_call = DelayedProcessCall::with_evidence("delayed-process-refresh", 7_002);
+    let process = DelayedProcessSessionProvider::new(
+        Arc::clone(&clock),
+        vec![initial_call.clone(), refresh_call.clone()],
+    );
+    let sink = RecordingSessionSink::default();
+    let manager = Arc::new(EspSessionManager::new(
+        delayed_process_session_dependencies(Arc::clone(&clock), process, sink.clone()),
+    ));
+
+    let start_manager = Arc::clone(&manager);
+    let start = thread::spawn(move || start_manager.start(request_id));
+    initial_call.complete_with_times(
+        &clock,
+        "2026-07-16T06:30:01.123456789Z",
+        "2026-07-16T06:29:59Z",
+    );
+    let initial = start
+        .join()
+        .expect("start thread")
+        .expect("start rollback session");
+    assert_snapshot_time_covers_all_evidence(&initial.snapshot);
+
+    clock.advance(DISCOVERY_INTERVAL, "2026-07-16T06:30:02Z");
+    refresh_call.complete_with_times(
+        &clock,
+        "2026-07-16T06:30:03.987654321Z",
+        "2026-07-16T06:29:58Z",
+    );
+    wait_for_session_updates(&sink, 1);
+    let refresh = sink.updates.lock().expect("session updates")[0].clone();
+    assert_eq!(refresh.reason, EspUpdateReason::DiscoveryRefresh);
+    assert_snapshot_time_covers_all_evidence(&refresh.snapshot);
+    assert!(
+        DateTime::parse_from_rfc3339(&refresh.emitted_at_utc).expect("refresh emittedAtUtc")
+            >= DateTime::parse_from_rfc3339(&refresh.snapshot.generated_at_utc)
+                .expect("refresh generatedAtUtc")
+    );
+
+    let result = RollbackSessionTimestamps {
+        initial_generated_at_utc: initial.snapshot.generated_at_utc.clone(),
+        initial_observed_at_utc: snapshot_observed_at_values(&initial.snapshot),
+        refresh_generated_at_utc: refresh.snapshot.generated_at_utc.clone(),
+        refresh_emitted_at_utc: refresh.emitted_at_utc.clone(),
+        refresh_observed_at_utc: snapshot_observed_at_values(&refresh.snapshot),
+    };
+    manager.stop(&initial.session_id).expect("stop session");
+    result
+}
+
 fn empty_session_provider() -> Arc<StaticSessionProvider> {
     Arc::new(StaticSessionProvider {
         records: Vec::new(),
@@ -3960,6 +4425,245 @@ fn session_raw_record_id(snapshot: &EspDiagnosticsSnapshot, evidence_id: &str) -
         .unwrap_or_else(|| panic!("missing session evidence {evidence_id}"))
         .record_id
         .clone()
+}
+
+#[test]
+fn session_start_uses_post_collection_clock_even_without_evidence() {
+    let clock = Arc::new(SequencedRollbackSessionClock::new("2026-07-16T06:30:00Z"));
+    let delayed_call = DelayedProcessCall::without_evidence();
+    let process =
+        DelayedProcessSessionProvider::new(Arc::clone(&clock), vec![delayed_call.clone()]);
+    let manager = Arc::new(EspSessionManager::new(
+        delayed_process_session_dependencies(
+            Arc::clone(&clock),
+            process,
+            RecordingSessionSink::default(),
+        ),
+    ));
+    let start_manager = Arc::clone(&manager);
+    let start = thread::spawn(move || start_manager.start("61616161-6161-4161-8161-616161616161"));
+
+    delayed_call.complete_with_times(&clock, "2026-07-16T06:30:05Z", "2026-07-16T06:30:05Z");
+    let initial = start
+        .join()
+        .expect("start thread")
+        .expect("start delayed empty session");
+
+    assert!(initial.snapshot.raw_evidence.is_empty());
+    assert_eq!(initial.snapshot.generated_at_utc, "2026-07-16T06:30:05Z");
+    manager.stop(&initial.session_id).expect("stop session");
+}
+
+#[test]
+fn session_start_and_stop_preserve_pre_collection_high_water_without_evidence() {
+    let clock = Arc::new(SequencedRollbackSessionClock::new("2026-07-16T06:30:05Z"));
+    let delayed_call = DelayedProcessCall::without_evidence();
+    let process =
+        DelayedProcessSessionProvider::new(Arc::clone(&clock), vec![delayed_call.clone()]);
+    let sink = RecordingSessionSink::default();
+    let manager = Arc::new(EspSessionManager::new(
+        delayed_process_session_dependencies(Arc::clone(&clock), process, sink.clone()),
+    ));
+    let start_manager = Arc::clone(&manager);
+    let start = thread::spawn(move || start_manager.start("63636363-6363-4363-8363-636363636363"));
+
+    delayed_call.complete_with_times(&clock, "2026-07-16T06:30:04Z", "2026-07-16T06:29:59Z");
+    let initial = start
+        .join()
+        .expect("start thread")
+        .expect("start pre-collection rollback session");
+    assert!(initial.snapshot.raw_evidence.is_empty());
+    assert_eq!(initial.snapshot.generated_at_utc, "2026-07-16T06:30:05Z");
+
+    clock.set_utc("2026-07-16T06:29:58Z");
+    let stopped = manager
+        .stop(&initial.session_id)
+        .expect("stop rollback session");
+    assert_eq!(stopped.sequence, 2);
+    assert_eq!(stopped.state, EspSessionState::Stopped);
+    assert_eq!(stopped.snapshot.generated_at_utc, "2026-07-16T06:30:05Z");
+    let update = sink.updates.lock().expect("session updates")[0].clone();
+    assert_eq!(update.reason, EspUpdateReason::Stopped);
+    assert_eq!(update.emitted_at_utc, "2026-07-16T06:30:05Z");
+}
+
+#[test]
+fn session_refresh_removal_preserves_timestamp_high_water_and_timeout_finding() {
+    const ARTIFACT_ID: &str = "registry.session-time-high-water";
+    const ENROLLMENT_KEY: &str =
+        r"SOFTWARE\Microsoft\Enrollments\session-time-high-water-enrollment";
+    const SESSION_KEY: &str = r"SOFTWARE\Microsoft\Windows\Autopilot\EnrollmentStatusTracking\ESPTrackingInfo\Diagnostics\Sidecar\2026-07-16T06:29:00Z";
+    let clock = Arc::new(SequencedRollbackSessionClock::new("2026-07-16T06:29:59Z"));
+    let enrollment = session_registry_record(
+        ARTIFACT_ID,
+        "session-timeout-setting",
+        ENROLLMENT_KEY,
+        "SyncFailureTimeout",
+        EspObservationValue::Unsigned(60),
+        "2026-07-16T06:29:00Z",
+    );
+    let active_workload = session_registry_record(
+        ARTIFACT_ID,
+        "session-timeout-workload",
+        SESSION_KEY,
+        "./Device/Vendor/MSFT/Win32App/session-time-high-water-app",
+        EspObservationValue::Integer(1),
+        "2026-07-16T06:29:00Z",
+    );
+    let removed_high_water = session_system_record(
+        "system.session-time-high-water",
+        "removed-session-time-high-water",
+        "2026-07-16T06:30:05Z",
+    );
+    let registry = SequencedSessionProvider::new(vec![
+        vec![
+            enrollment.clone(),
+            active_workload.clone(),
+            removed_high_water,
+        ],
+        vec![enrollment, active_workload],
+    ]);
+    let empty = empty_session_provider();
+    let sink = RecordingSessionSink::default();
+    let manager = EspSessionManager::new(
+        EspSessionDependencies::new(
+            Arc::clone(&clock) as Arc<dyn EspSessionClock>,
+            Arc::new(registry),
+            empty.clone(),
+            empty.clone(),
+            empty,
+            Arc::new(FakeSessionDiscovery::default()),
+            Arc::new(FakeSessionTailFactory::default()),
+            Arc::new(sink.clone()),
+        )
+        .with_live_supported_for_tests(true),
+    );
+
+    let initial = manager
+        .start("64646464-6464-4464-8464-646464646464")
+        .expect("start refresh-removal session");
+    assert_eq!(initial.sequence, 1);
+    assert_eq!(initial.snapshot.generated_at_utc, "2026-07-16T06:30:05Z");
+    assert!(initial
+        .snapshot
+        .findings
+        .iter()
+        .any(|finding| finding.finding_id == "esp-timeout-reached"));
+
+    clock.advance(DISCOVERY_INTERVAL, "2026-07-16T06:29:59Z");
+    wait_for_session_updates(&sink, 1);
+    let refresh = sink.updates.lock().expect("session updates")[0].clone();
+    assert_eq!(refresh.sequence, 2);
+    assert_eq!(refresh.reason, EspUpdateReason::DiscoveryRefresh);
+    assert!(!refresh
+        .snapshot
+        .raw_evidence
+        .iter()
+        .any(|record| { record.evidence[0].evidence_id == "removed-session-time-high-water" }));
+    assert_eq!(refresh.snapshot.generated_at_utc, "2026-07-16T06:30:05Z");
+    assert_eq!(refresh.emitted_at_utc, "2026-07-16T06:30:05Z");
+    assert!(refresh
+        .snapshot
+        .findings
+        .iter()
+        .any(|finding| finding.finding_id == "esp-timeout-reached"));
+    manager.stop(&initial.session_id).expect("stop session");
+}
+
+#[test]
+fn session_expiry_preserves_timestamp_high_water_after_wall_clock_rollback() {
+    let clock = Arc::new(SequencedRollbackSessionClock::new("2026-07-16T06:31:05Z"));
+    let empty = empty_session_provider();
+    let sink = RecordingSessionSink::default();
+    let manager = EspSessionManager::new(
+        EspSessionDependencies::new(
+            Arc::clone(&clock) as Arc<dyn EspSessionClock>,
+            empty.clone(),
+            empty.clone(),
+            empty.clone(),
+            empty,
+            Arc::new(FakeSessionDiscovery::default()),
+            Arc::new(FakeSessionTailFactory::default()),
+            Arc::new(sink.clone()),
+        )
+        .with_live_supported_for_tests(true),
+    );
+    let initial = manager
+        .start("65656565-6565-4565-8565-656565656565")
+        .expect("start expiry rollback session");
+    assert!(initial.snapshot.raw_evidence.is_empty());
+    assert_eq!(initial.snapshot.generated_at_utc, "2026-07-16T06:31:05Z");
+
+    clock.advance(MAX_SESSION_DURATION, "2026-07-16T06:29:58Z");
+    wait_for_session_updates(&sink, 1);
+    let expired = sink.updates.lock().expect("session updates")[0].clone();
+    assert_eq!(expired.sequence, 2);
+    assert_eq!(expired.reason, EspUpdateReason::Expired);
+    assert_eq!(expired.snapshot.generated_at_utc, "2026-07-16T06:31:05Z");
+    assert_eq!(expired.emitted_at_utc, "2026-07-16T06:31:05Z");
+    manager
+        .stop(&initial.session_id)
+        .expect("join expired session");
+}
+
+#[test]
+fn session_tail_only_update_uses_post_poll_utc_without_changing_monotonic_debounce() {
+    let clock = Arc::new(SequencedRollbackSessionClock::new("2026-07-16T06:30:00Z"));
+    let delayed_call = DelayedChangedTailCall::new(UPDATE_DEBOUNCE);
+    let tail_factory = DelayedChangedTailFactory {
+        clock: Arc::clone(&clock),
+        calls: Arc::new(Mutex::new(VecDeque::from([delayed_call.clone()]))),
+    };
+    let sink = RecordingSessionSink::default();
+    let manager = EspSessionManager::new(delayed_tail_session_dependencies(
+        Arc::clone(&clock),
+        tail_factory,
+        sink.clone(),
+    ));
+    let initial = manager
+        .start("62626262-6262-4262-8262-626262626262")
+        .expect("start delayed tail session");
+
+    thread::sleep(Duration::from_millis(20));
+    assert!(!delayed_call.entered.is_signaled());
+    assert!(sink.updates.lock().expect("session updates").is_empty());
+
+    clock.advance(UPDATE_DEBOUNCE, "2026-07-16T06:30:00Z");
+    delayed_call.complete_at(&clock, "2026-07-16T06:30:05Z");
+    wait_for_session_updates(&sink, 1);
+    let update = sink.updates.lock().expect("session updates")[0].clone();
+
+    assert_eq!(update.reason, EspUpdateReason::EvidenceChanged);
+    assert!(update.snapshot.raw_evidence.is_empty());
+    assert!(update.snapshot.coverage.is_empty());
+    assert_eq!(update.snapshot.generated_at_utc, "2026-07-16T06:30:05Z");
+    assert_eq!(update.emitted_at_utc, update.snapshot.generated_at_utc);
+    manager.stop(&initial.session_id).expect("stop session");
+}
+
+#[test]
+fn session_start_and_refresh_times_cover_delayed_process_evidence_during_clock_rollback() {
+    let first = run_delayed_process_rollback_session("71717171-7171-4171-8171-717171717171");
+    let second = run_delayed_process_rollback_session("81818181-8181-4181-8181-818181818181");
+
+    assert_eq!(first, second, "injected-clock runs must be repeatable");
+    assert_eq!(
+        first.initial_generated_at_utc,
+        "2026-07-16T06:30:01.123456789Z"
+    );
+    assert_eq!(
+        first.refresh_generated_at_utc,
+        "2026-07-16T06:30:03.987654321Z"
+    );
+    assert_eq!(first.refresh_emitted_at_utc, first.refresh_generated_at_utc);
+    assert!(first
+        .initial_observed_at_utc
+        .iter()
+        .any(|value| value == "2026-07-16T06:30:01.123456789Z"));
+    assert!(first
+        .refresh_observed_at_utc
+        .iter()
+        .any(|value| value == "2026-07-16T06:30:03.987654321Z"));
 }
 
 #[test]

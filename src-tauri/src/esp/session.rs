@@ -11,7 +11,7 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use chrono::{SecondsFormat, Utc};
+use chrono::{DateTime, SecondsFormat, Utc};
 use cmtraceopen_parser::esp::{
     EspArtifactCoverage, EspDiagnosticsReducer, EspDiagnosticsSnapshot,
     EspEvidenceIdentityAllocator, EspEvidenceIdentityRejectionCounts, EspEvidenceRecord,
@@ -277,8 +277,9 @@ impl EspSessionManager {
         self.reserve(&session_id, request_id)?;
 
         let reading = self.dependencies.clock.now();
-        let engine = SessionEngine::initialize(&self.dependencies, &reading);
-        let snapshot = engine.snapshot(&reading.utc);
+        let mut engine = SessionEngine::initialize(&self.dependencies, &reading);
+        let collection_completed_at_utc = self.dependencies.clock.now().utc;
+        let snapshot = engine.snapshot(&collection_completed_at_utc);
         let active = Arc::new(ActiveSession {
             session_id: session_id.clone(),
             request_id: request_id.to_string(),
@@ -560,6 +561,7 @@ struct SessionEngine {
     started_at: Duration,
     next_refresh: Duration,
     last_emit: Duration,
+    utc_high_water_mark: String,
     dirty: bool,
     pending_reason: EspUpdateReason,
     provider_records: BTreeMap<ProviderSlot, Vec<EspIdentifiedEvidenceRecord>>,
@@ -609,6 +611,7 @@ impl SessionEngine {
             started_at: reading.monotonic,
             next_refresh: reading.monotonic + DISCOVERY_INTERVAL,
             last_emit: reading.monotonic,
+            utc_high_water_mark: reading.utc.clone(),
             dirty: false,
             pending_reason: EspUpdateReason::EvidenceChanged,
             provider_records,
@@ -626,7 +629,15 @@ impl SessionEngine {
         engine
     }
 
-    fn snapshot(&self, generated_at_utc: &str) -> EspDiagnosticsSnapshot {
+    fn snapshot(&mut self, requested_generated_at_utc: &str) -> EspDiagnosticsSnapshot {
+        let generated_at_utc = coherent_utc_timestamp(
+            requested_generated_at_utc,
+            std::iter::once(self.utc_high_water_mark.as_str()).chain(
+                self.retained_records()
+                    .filter_map(|record| record.record().observed_at_utc()),
+            ),
+        );
+        self.utc_high_water_mark.clone_from(&generated_at_utc);
         let mut reducer = EspDiagnosticsReducer::new(generated_at_utc.to_string());
         for records in self.provider_records.values() {
             reducer.ingest_identified_all(records.iter().cloned());
@@ -636,6 +647,15 @@ impl SessionEngine {
         reducer.ingest_identified_all(self.tail_coverage.iter().cloned());
         reducer.merge_identity_rejections(self.identity_rejections);
         reducer.snapshot()
+    }
+
+    fn retained_records(&self) -> impl Iterator<Item = &EspIdentifiedEvidenceRecord> {
+        self.provider_records
+            .values()
+            .flat_map(|records| records.iter())
+            .chain(self.discovery_coverage.iter())
+            .chain(self.tail_records.iter())
+            .chain(self.tail_coverage.iter())
     }
 
     fn poll_tail(&mut self, observed_at_utc: &str) {
@@ -749,6 +769,29 @@ impl Drop for SessionEngine {
     }
 }
 
+fn coherent_utc_timestamp<'a>(
+    requested_utc: &str,
+    observed_at_values: impl IntoIterator<Item = &'a str>,
+) -> String {
+    let mut latest = DateTime::parse_from_rfc3339(requested_utc)
+        .ok()
+        .map(|value| value.with_timezone(&Utc));
+    let mut coherent = requested_utc.to_string();
+    for observed_at_utc in observed_at_values {
+        let Some(observed) = DateTime::parse_from_rfc3339(observed_at_utc)
+            .ok()
+            .map(|value| value.with_timezone(&Utc))
+        else {
+            continue;
+        };
+        if latest.map_or(true, |current| observed > current) {
+            coherent = observed.to_rfc3339_opts(SecondsFormat::AutoSi, true);
+            latest = Some(observed);
+        }
+    }
+    coherent
+}
+
 fn run_worker(
     mut engine: SessionEngine,
     active: Arc<ActiveSession>,
@@ -815,7 +858,8 @@ fn run_worker(
             engine.refresh(&dependencies, &reading);
         }
         if engine.dirty && reading.monotonic.saturating_sub(engine.last_emit) >= UPDATE_DEBOUNCE {
-            let snapshot = engine.snapshot(&reading.utc);
+            let publication_utc = dependencies.clock.now().utc;
+            let snapshot = engine.snapshot(&publication_utc);
             let reason = engine.pending_reason.clone();
             engine.dirty = false;
             engine.last_emit = reading.monotonic;
@@ -825,7 +869,7 @@ fn run_worker(
                 EspSessionState::Live,
                 reason,
                 snapshot,
-                &reading.utc,
+                &publication_utc,
             );
         }
     }
@@ -839,6 +883,10 @@ fn publish(
     snapshot: EspDiagnosticsSnapshot,
     emitted_at_utc: &str,
 ) {
+    let emitted_at_utc = coherent_utc_timestamp(
+        emitted_at_utc,
+        std::iter::once(snapshot.generated_at_utc.as_str()),
+    );
     let update = {
         let Ok(mut published) = active.published.lock() else {
             return;
@@ -852,7 +900,7 @@ fn publish(
             sequence: published.sequence,
             state,
             reason,
-            emitted_at_utc: emitted_at_utc.to_string(),
+            emitted_at_utc,
             snapshot,
         }
     };
@@ -1073,5 +1121,26 @@ fn state_error(error: impl std::fmt::Display) -> EspSessionError {
 fn worker_error(error: impl std::fmt::Display) -> EspSessionError {
     EspSessionError::Worker {
         message: error.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::coherent_utc_timestamp;
+
+    #[test]
+    fn coherent_timestamp_compares_offsets_and_ignores_malformed_evidence_times() {
+        let requested = "2026-07-16T02:30:05-04:00";
+        assert_eq!(
+            coherent_utc_timestamp(requested, ["not-a-timestamp", "2026-07-16T08:30:04+02:00"]),
+            requested
+        );
+        assert_eq!(
+            coherent_utc_timestamp(
+                requested,
+                ["not-a-timestamp", "2026-07-16T08:30:06.123456789+02:00"]
+            ),
+            "2026-07-16T06:30:06.123456789Z"
+        );
     }
 }
