@@ -5380,8 +5380,8 @@ fn no_byte_tail_recovery_replaces_transient_session_failure_coverage() {
 
     for batch in [failed_batch, recovered_batch] {
         tails.queued.lock().expect("tail queue").push_back(batch);
-        clock.advance(UPDATE_DEBOUNCE);
         let expected = sink.updates.lock().expect("session updates").len() + 1;
+        clock.advance(UPDATE_DEBOUNCE);
         wait_for_session_updates(&sink, expected);
     }
 
