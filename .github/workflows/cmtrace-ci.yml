@@ -111,9 +111,44 @@ jobs:
         run: npm audit --audit-level=high
         continue-on-error: true
 
+  windows-esp:
+    name: ESP Diagnostics (Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+
+      - name: Cache Rust dependencies
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            src-tauri/target/
+          key: ${{ runner.os }}-esp-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-esp-cargo-
+
+      - name: Test ESP parser contracts
+        run: cargo test --locked -p cmtraceopen-parser --test esp_diagnostics
+
+      - name: Test native ESP diagnostics
+        run: cargo test --locked -p cmtrace-open --all-features --test esp_diagnostics_sources
+
+      - name: Test Graph ESP diagnostics
+        run: cargo test --locked -p cmtrace-open --all-features --test graph_esp_diagnostics
+
+      - name: Test full Windows application workspace
+        run: cargo test --locked -p cmtrace-open --all-features
+
+      - name: Clippy Windows ESP paths
+        run: cargo clippy --locked -p cmtrace-open --all-targets --all-features -- -D warnings
   build:
     name: Build (${{ matrix.label }})
-    needs: [check, frontend]
+    needs: [check, frontend, windows-esp]
     strategy:
       fail-fast: false
       matrix:
