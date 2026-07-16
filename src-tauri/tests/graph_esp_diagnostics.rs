@@ -1925,6 +1925,10 @@ mod esp_orchestration_tests {
     const REQUEST_OLD_GENERATION: &str = "10000000-0000-4000-8000-000000000009";
     const REQUEST_STALE_GENERATION: &str = "10000000-0000-4000-8000-00000000000a";
     const REQUEST_CURRENT_GENERATION: &str = "10000000-0000-4000-8000-00000000000b";
+    const REQUEST_CANONICAL: &str = "abcdef01-2345-4678-9abc-def012345678";
+    const REQUEST_UPPERCASE: &str = "ABCDEF01-2345-4678-9ABC-DEF012345678";
+    const REQUEST_BRACED: &str = "{abcdef01-2345-4678-9abc-def012345678}";
+    const REQUEST_SIMPLE: &str = "abcdef01234546789abcdef012345678";
 
     fn classified(value: &str) -> EspClassifiedString {
         EspClassifiedString {
@@ -3709,6 +3713,7 @@ mod esp_orchestration_tests {
             .expect("new-generation operation");
 
         registry.advance_generation(7);
+        registry.advance_generation(6);
 
         assert!(!operation.is_cancelled());
     }
@@ -3733,6 +3738,70 @@ mod esp_orchestration_tests {
             .begin(REQUEST_CURRENT_GENERATION, 12)
             .expect("current-generation operation");
         assert!(!current_operation.is_cancelled());
+    }
+
+    #[test]
+    fn ipc_operation_generation_advance_drains_capacity_and_preserves_replacement_ownership() {
+        let registry = EspGraphOperationRegistry::default();
+        let request_ids: Vec<_> = (0..32)
+            .map(|index| format!("20000000-0000-4000-8000-{index:012x}"))
+            .collect();
+        let old_operations: Vec<_> = request_ids
+            .iter()
+            .map(|request_id| {
+                registry
+                    .begin(request_id, 0)
+                    .expect("old-generation operation")
+            })
+            .collect();
+
+        registry.advance_generation(1);
+
+        assert!(old_operations.iter().all(GraphCancellation::is_cancelled));
+        let fresh_operation = registry
+            .begin(REQUEST_CURRENT_GENERATION, 1)
+            .expect("fresh current-generation operation");
+        let replacement = registry
+            .begin(&request_ids[0], 1)
+            .expect("replacement using an old request ID");
+        let _remaining_current_operations: Vec<_> = request_ids[1..31]
+            .iter()
+            .map(|request_id| {
+                registry
+                    .begin(request_id, 1)
+                    .expect("restored current-generation capacity")
+            })
+            .collect();
+        assert!(matches!(
+            registry.begin(&request_ids[31], 1),
+            Err(EspGraphOperationError::ResourceLimit)
+        ));
+
+        drop(old_operations);
+
+        assert!(!fresh_operation.is_cancelled());
+        assert!(registry.cancel(&request_ids[0]));
+        assert!(replacement.is_cancelled());
+    }
+
+    #[test]
+    fn ipc_operation_equivalent_uuid_spellings_share_one_owner() {
+        let registry = EspGraphOperationRegistry::default();
+        let operation = registry
+            .begin(REQUEST_CANONICAL, 0)
+            .expect("canonical UUID operation");
+
+        for equivalent in [REQUEST_UPPERCASE, REQUEST_BRACED, REQUEST_SIMPLE] {
+            assert!(matches!(
+                registry.begin(equivalent, 0),
+                Err(EspGraphOperationError::DuplicateRequest)
+            ));
+            assert!(registry.cancel(equivalent));
+        }
+        assert!(operation.is_cancelled());
+
+        drop(operation);
+        assert!(!registry.cancel(REQUEST_CANONICAL));
     }
 
     #[test]

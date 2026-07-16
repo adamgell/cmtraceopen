@@ -18,6 +18,7 @@ use cmtraceopen_parser::esp::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use uuid::Uuid;
 
 use super::client::{
     GraphCancellation, GraphClient, GraphClientError, GraphClientErrorKind, GraphTransport,
@@ -65,7 +66,7 @@ struct EspGraphOperationRegistryInner {
 #[derive(Default)]
 struct EspGraphOperationRegistryState {
     generation: u64,
-    operations: HashMap<String, RegisteredEspGraphOperation>,
+    operations: HashMap<Uuid, RegisteredEspGraphOperation>,
 }
 
 struct RegisteredEspGraphOperation {
@@ -87,9 +88,8 @@ impl EspGraphOperationRegistry {
         request_id: &str,
         generation: u64,
     ) -> Result<EspGraphOperation, EspGraphOperationError> {
-        if !valid_graph_request_id(request_id) {
-            return Err(EspGraphOperationError::InvalidRequestId);
-        }
+        let request_id =
+            parse_graph_request_id(request_id).ok_or(EspGraphOperationError::InvalidRequestId)?;
 
         let state = Arc::new(EspGraphCancellationState {
             cancelled: Mutex::new(false),
@@ -104,37 +104,37 @@ impl EspGraphOperationRegistry {
         if registry.generation != generation {
             return Err(EspGraphOperationError::StaleGeneration);
         }
-        if registry.operations.contains_key(request_id) {
+        if registry.operations.contains_key(&request_id) {
             return Err(EspGraphOperationError::DuplicateRequest);
         }
         if registry.operations.len() >= MAX_ACTIVE_ESP_GRAPH_OPERATIONS {
             return Err(EspGraphOperationError::ResourceLimit);
         }
         registry.operations.insert(
-            request_id.to_string(),
+            request_id,
             RegisteredEspGraphOperation {
                 generation,
                 state: Arc::clone(&state),
             },
         );
         Ok(EspGraphOperation {
-            request_id: request_id.to_string(),
+            request_id,
             state,
             registry: Arc::downgrade(&self.inner),
         })
     }
 
     pub fn cancel(&self, request_id: &str) -> bool {
-        if !valid_graph_request_id(request_id) {
+        let Some(request_id) = parse_graph_request_id(request_id) else {
             return false;
-        }
+        };
         let state = self
             .inner
             .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .operations
-            .get(request_id)
+            .get(&request_id)
             .map(|operation| Arc::clone(&operation.state));
         state.is_some_and(|state| {
             state.cancel();
@@ -146,7 +146,7 @@ impl EspGraphOperationRegistry {
     /// retire only operations acquired from older token snapshots. Repeating
     /// cleanup for the current generation is intentionally idempotent.
     pub fn advance_generation(&self, generation: u64) {
-        let operations: Vec<Arc<EspGraphCancellationState>> = {
+        let retired_operations = {
             let mut registry = self
                 .inner
                 .state
@@ -156,21 +156,27 @@ impl EspGraphOperationRegistry {
                 return;
             }
             registry.generation = generation;
-            registry
-                .operations
-                .values()
-                .filter(|operation| operation.generation < generation)
-                .map(|operation| Arc::clone(&operation.state))
-                .collect()
+            let mut retired = Vec::new();
+            registry.operations.retain(|_, operation| {
+                if operation.generation < generation {
+                    retired.push(Arc::clone(&operation.state));
+                    false
+                } else {
+                    true
+                }
+            });
+            retired
         };
-        for operation in operations {
+        for operation in retired_operations {
             operation.cancel();
         }
     }
 }
 
-fn valid_graph_request_id(request_id: &str) -> bool {
-    request_id.len() <= MAX_GRAPH_REQUEST_ID_BYTES && uuid::Uuid::parse_str(request_id).is_ok()
+fn parse_graph_request_id(request_id: &str) -> Option<Uuid> {
+    (request_id.len() <= MAX_GRAPH_REQUEST_ID_BYTES)
+        .then(|| Uuid::parse_str(request_id).ok())
+        .flatten()
 }
 
 struct EspGraphCancellationState {
@@ -198,7 +204,7 @@ impl EspGraphCancellationState {
 }
 
 pub struct EspGraphOperation {
-    request_id: String,
+    request_id: Uuid,
     state: Arc<EspGraphCancellationState>,
     registry: Weak<EspGraphOperationRegistryInner>,
 }
