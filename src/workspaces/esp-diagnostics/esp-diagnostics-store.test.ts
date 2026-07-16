@@ -1199,11 +1199,17 @@ describe("ESP Graph overlay state", () => {
     useEspDiagnosticsStore
       .getState()
       .applyAnalysis("analysis-app-intent", makeSnapshot(["local-app"]));
-    useEspDiagnosticsStore.getState().beginGraph("graph-app-intent-partial");
+    const ownershipLease = useEspDiagnosticsStore
+      .getState()
+      .beginGraph("graph-app-intent-partial");
 
     useEspDiagnosticsStore
       .getState()
-      .applyGraphOverlay("graph-app-intent-partial", overlay);
+      .applyGraphOverlay(
+        "graph-app-intent-partial",
+        ownershipLease,
+        overlay,
+      );
 
     expect(useEspDiagnosticsStore.getState().graphPhase).toBe("partial");
     expect(
