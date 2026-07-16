@@ -2,7 +2,7 @@
 
 A free, open-source log viewer and Windows troubleshooting tool. Drop in a log file and start reading — no install wizards, no prerequisites, no license keys.
 
-Built as a modern replacement for Microsoft's CMTrace.exe with added Intune diagnostics, DSRegCmd analysis, and real-time log tailing.
+Built as a modern replacement for Microsoft's CMTrace.exe with added Intune and Autopilot ESP diagnostics, DSRegCmd analysis, and real-time log tailing.
 
 ## Screenshots
 
@@ -17,6 +17,12 @@ Format auto-detection, severity color coding, and one-click Windows error-code l
 A color-coded event timeline for Win32 apps, scripts, and downloads — success and failure at a glance.
 
 ![CMTrace Open Intune Diagnostics workspace showing a color-coded IME event timeline with success and failure states](screenshots/intune-diagnostics.png)
+
+### ESP Diagnostics
+
+A single-page Autopilot and Device Preparation cockpit with actionable workload, MSIEXEC, coverage, and live-log evidence.
+
+![CMTrace Open ESP Diagnostics workspace showing enrollment progress, workload failures, MSIEXEC activity, and docked live evidence](screenshots/esp-diagnostics-1200x800-docked.png)
 
 ### DSRegCmd Troubleshooting
 
@@ -63,6 +69,7 @@ The complete tool: the log viewer plus every specialized troubleshooting feature
 | Feature | What it does | Platform |
 |---------|--------------|----------|
 | Intune Diagnostics | IntuneManagementExtension (IME) log analysis, event timeline, and download statistics | All |
+| ESP Diagnostics | Read-only Autopilot ESP and Device Preparation triage with bounded live evidence, MSIEXEC activity, and optional Microsoft Graph enrichment | All (live acquisition: Windows) |
 | DSRegCmd | Entra join, hybrid join, PRT, MDM, and Windows Hello for Business triage | Windows |
 | Software Deployment | Scan a folder of app-install logs (MSI, PSADT, Burn, PatchMyPC) for exit codes and failures | Windows |
 | Event Log Viewer | Open and query Windows Event Log (`.evtx`) files; enumerate live channels | All (live channels: Windows) |
@@ -73,7 +80,7 @@ The complete tool: the log viewer plus every specialized troubleshooting feature
 
 ### Lite edition
 
-The core log viewer only. It keeps everything under **Log Viewer** below - format auto-detection, real-time tailing, virtual scrolling, find and filter, text highlighting, and the embedded error-code database - plus the Timeline and DNS / DHCP tools. It leaves out the eight specialized features above, which also drops the Windows Event Log and property-list parsers and makes the binary noticeably smaller. Choose Lite if you just want a fast, portable, CMTrace-style log reader with a minimal footprint.
+The core log viewer only. It keeps everything under **Log Viewer** below - format auto-detection, real-time tailing, virtual scrolling, find and filter, text highlighting, and the embedded error-code database - plus the Timeline and DNS / DHCP tools. It leaves out the nine specialized features above, which also drops the Windows Event Log and property-list parsers and makes the binary noticeably smaller. Choose Lite if you just want a fast, portable, CMTrace-style log reader with a minimal footprint.
 
 Both editions read the same log formats and share the same viewer, so a log you can open in Full opens identically in Lite.
 
@@ -101,6 +108,24 @@ Analyze Intune Management Extension logs without reading raw text line by line.
 - Summary dashboard with event counts, success/failure rates, and log time span
 - Automatic GUID extraction for app and policy identifiers
 - Issue clustering with suggested next steps
+
+### ESP Diagnostics Workspace
+
+Troubleshoot Windows Autopilot Enrollment Status Page (ESP), Autopilot Device Preparation, and software-install failures in one read-only workspace. Live collection runs on Windows; captured CMTrace Open evidence folders, `manifest.json`, CAB, and ZIP inputs can be analyzed on every supported desktop platform.
+
+- Single full-width cockpit with no left sidebar: current phase, findings, workload status, enrollment evidence, Delivery Optimization, coverage, and **What MSIEXEC is doing now** stay visible together
+- Classic ESP and Device Preparation are classified separately, including the applicable profile, enrollment, app, script, policy, certificate, Office, NodeCache, hardware, and event evidence from the PowerShell v6.3 diagnostic contract
+- Every device and user enrollment session is retained; the latest session is identified chronologically, and a session selector can isolate any earlier attempt without collapsing retries
+- Running as administrator is recommended as soon as a non-elevated Windows process enters the workspace because protected registry, event-log, process-command-line, SYSTEM-temp, and user-temp evidence materially improves coverage; non-elevated analysis still works and reports each unavailable source explicitly
+- Live deployment logs are discovered only from curated IME/deployment roots and shallow, high-signal temporary locations; there is no deep scan or full-drive search
+- **Open live logs** keeps collecting while collapsed, opens a vertically resizable dock, and can expand the logs to the full workspace with a clear restore action
+- MSIEXEC sampling covers zero, one, or multiple processes and labels exact, parent-chain, identifier, temporal, or ambiguous correlation instead of guessing
+- Local evidence and raw identifiers are always shown. The existing opt-in Windows WAM connection can add Intune names, assignments, Autopilot/ESP configuration, and device status without replacing local provenance or opening another sign-in flow
+- Graph sections fail independently and label beta endpoints. Disabled, disconnected, denied, offline, throttled, partial, and cancelled Graph states never erase local logs or conclusions
+- Graph requests are limited to the existing delegated read scopes `DeviceManagementManagedDevices.Read.All`, `DeviceManagementServiceConfig.Read.All`, `DeviceManagementApps.Read.All`, `DeviceManagementConfiguration.Read.All`, and `DeviceManagementScripts.Read.All`; no write or group-membership permission is requested
+- Findings recommend read-only checks; the workspace does not install or retry applications, sync MDM, start or stop services, change registry values, run remediation, or modify Intune
+- Missing, permission-denied, malformed, unsupported, and retention-limited sources remain explicit coverage gaps. A gap means the conclusion is incomplete, not that the device or workload is healthy
+- Sensitive UPN, SID, tenant, EntDMID, serial, and NodeCache fields are masked by default, command lines are sanitized, access tokens remain memory-only, and raw hardware hashes are excluded from normal UI, logs, screenshots, copy, and export
 
 ### DSRegCmd Troubleshooting Workspace
 
