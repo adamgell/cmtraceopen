@@ -17,6 +17,7 @@ import type {
   EspSessionUpdate,
   EspUpdateReason,
 } from "./types";
+import { isEspDiagnosticsSnapshot } from "./esp-wire-validation";
 
 export const ESP_SESSION_UPDATE_EVENT = "esp-diagnostics-session-update";
 export { getEspIdentityFingerprint } from "./esp-diagnostics-store";
@@ -62,11 +63,7 @@ function isSessionRawEvidence(value: unknown): boolean {
 }
 
 export function isEspSessionUpdate(value: unknown): value is EspSessionUpdate {
-  if (
-    !isRecord(value) ||
-    !isRecord(value.snapshot) ||
-    !isRecord(value.snapshot.identity)
-  ) {
+  if (!isRecord(value) || !isEspDiagnosticsSnapshot(value.snapshot)) {
     return false;
   }
 
@@ -204,6 +201,14 @@ export function createEspGraphCoordinator(
       const cancellation = cancelCurrentRequest();
       if (cancellation) {
         await cancellation;
+      }
+      if (disposed) {
+        return;
+      }
+      if (useUiStore.getState().graphApiEnabled) {
+        blockedFingerprint = null;
+        lastRequestedFingerprint = null;
+        return run(false);
       }
       useEspDiagnosticsStore.getState().clearGraphOverlay();
       useEspDiagnosticsStore.getState().setGraphUnavailable("graphDisabled");

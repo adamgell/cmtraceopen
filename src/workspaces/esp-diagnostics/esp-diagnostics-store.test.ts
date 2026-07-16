@@ -760,6 +760,37 @@ describe("ESP local session state", () => {
         },
       }),
     ).toBe(false);
+
+    const invalidSnapshots: unknown[] = [
+      { ...update.snapshot, schemaVersion: 2 },
+      { ...update.snapshot, identity: {} },
+      { ...update.snapshot, coverage: undefined },
+      {
+        ...update.snapshot,
+        workloads: [{ workloadId: "missing-required-workload-fields" }],
+      },
+      {
+        ...update.snapshot,
+        rawEvidence: [{ recordId: "missing-required-evidence-fields" }],
+      },
+      {
+        ...update.snapshot,
+        graph: {
+          ...makeOverlay("graph-malformed"),
+          deviceMatch: {
+            ...makeOverlay("graph-malformed").deviceMatch,
+            data: { selected: {}, candidates: [] },
+          },
+        },
+      },
+    ];
+
+    for (const snapshot of invalidSnapshots) {
+      expect(
+        isEspSessionUpdate({ ...update, snapshot }),
+        JSON.stringify(snapshot),
+      ).toBe(false);
+    }
   });
 });
 
@@ -850,6 +881,25 @@ describe("ESP Graph overlay state", () => {
     expect(useEspDiagnosticsStore.getState().snapshot?.graph?.scripts).toEqual(
       overlay.scripts,
     );
+    expect(useEspDiagnosticsStore.getState().graphPhase).toBe("partial");
+  });
+
+  it("rejects a native Graph overlay whose embedded request ID is mismatched", () => {
+    useEspDiagnosticsStore.getState().beginAnalysis("analysis-a");
+    useEspDiagnosticsStore
+      .getState()
+      .applyAnalysis("analysis-a", makeSnapshot(["local-a"]));
+    useEspDiagnosticsStore.getState().beginGraph("graph-active");
+
+    useEspDiagnosticsStore
+      .getState()
+      .applyGraphOverlay("graph-active", makeOverlay("graph-other"));
+
+    expect(useEspDiagnosticsStore.getState().graphRequestId).toBe(
+      "graph-active",
+    );
+    expect(useEspDiagnosticsStore.getState().graphPhase).toBe("loading");
+    expect(useEspDiagnosticsStore.getState().snapshot?.graph).toBeNull();
   });
 
   it("classifies the exact Rust Graph sections without reading absent frontend-only keys", () => {
@@ -1221,6 +1271,55 @@ describe("ESP Graph scheduling", () => {
     expect(
       useEspDiagnosticsStore.getState().snapshot?.rawEvidence[0].recordId,
     ).toBe("local-a");
+    coordinator.dispose();
+  });
+
+  it("reconciles a Graph re-enable that occurs while cancellation is pending", async () => {
+    const firstOverlay = deferred<EspGraphOverlay>();
+    const cancel = deferred<void>();
+    const fetchGraph = vi
+      .fn<(request: EspGraphRequest) => Promise<EspGraphOverlay>>()
+      .mockImplementationOnce(() => firstOverlay.promise)
+      .mockImplementationOnce(async (request) =>
+        makeOverlay(request.requestId),
+      );
+    const cancelGraph = vi.fn(() => cancel.promise);
+    const ids = ["graph-first", "graph-reenabled"];
+    const coordinator = createEspGraphCoordinator({
+      fetchGraph,
+      cancelGraph,
+      createRequestId: () => ids.shift() ?? "graph-extra",
+    });
+    useUiStore.setState({ graphApiEnabled: true, graphApiStatus: "connected" });
+    useEspDiagnosticsStore.getState().beginAnalysis("analysis-a");
+    useEspDiagnosticsStore
+      .getState()
+      .applyAnalysis("analysis-a", makeSnapshot(["local-a"]));
+
+    const initial = coordinator.reconcile();
+    await vi.waitFor(() => expect(fetchGraph).toHaveBeenCalledTimes(1));
+
+    useUiStore.setState({ graphApiEnabled: false });
+    const disabling = coordinator.reconcile();
+    await vi.waitFor(() =>
+      expect(cancelGraph).toHaveBeenCalledWith("graph-first"),
+    );
+    useUiStore.setState({ graphApiEnabled: true, graphApiStatus: "connected" });
+    await coordinator.reconcile();
+
+    cancel.resolve();
+    await disabling;
+    expect(fetchGraph).toHaveBeenCalledTimes(2);
+    expect(useEspDiagnosticsStore.getState().graphPhase).toBe("ready");
+    expect(useEspDiagnosticsStore.getState().snapshot?.graph?.requestId).toBe(
+      "graph-reenabled",
+    );
+
+    firstOverlay.resolve(makeOverlay("graph-first"));
+    await initial;
+    expect(useEspDiagnosticsStore.getState().snapshot?.graph?.requestId).toBe(
+      "graph-reenabled",
+    );
     coordinator.dispose();
   });
 

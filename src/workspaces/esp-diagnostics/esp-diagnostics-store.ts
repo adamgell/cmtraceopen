@@ -142,6 +142,7 @@ function identityChanged(
 }
 
 function graphOverlayIsPartial(overlay: EspGraphOverlay): boolean {
+  const completeStatuses = new Set(["available", "notFound", "skipped"]);
   return [
     overlay.deviceMatch,
     overlay.autopilotIdentity,
@@ -153,9 +154,7 @@ function graphOverlayIsPartial(overlay: EspGraphOverlay): boolean {
     overlay.apps,
     overlay.policies,
     overlay.scripts,
-  ].some((section) =>
-    ["permissionDenied", "failed", "cancelled"].includes(section.status),
-  );
+  ].some((section) => !completeStatuses.has(section.status));
 }
 
 function graphStateForFreshLocalRun(
@@ -543,6 +542,9 @@ export const useEspDiagnosticsStore = create<EspDiagnosticsStore>((set) => ({
   applyGraphOverlay: (requestId, overlay) =>
     set((state) => {
       if (state.graphRequestId !== requestId || !state.snapshot) {
+        return state;
+      }
+      if (overlay.requestId !== requestId) {
         return state;
       }
       return {
