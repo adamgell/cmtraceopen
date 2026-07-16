@@ -144,6 +144,7 @@ export function createEspGraphCoordinator(
   let started = false;
   let lastRequestedFingerprint: string | null = null;
   let blockedFingerprint: string | null = null;
+  let pendingOrphanCancellation: Promise<void> | null = null;
   let unsubscribeEsp: (() => void) | null = null;
   let unsubscribeUi: (() => void) | null = null;
 
@@ -164,7 +165,29 @@ export function createEspGraphCoordinator(
       });
   };
 
+  const cancelOrphanedRequest = (requestId: string): void => {
+    const cancellation = cancelGraph(requestId).catch(() => {
+      console.warn("[esp-diagnostics] orphan Graph cancel failed", {
+        requestId,
+      });
+    });
+    pendingOrphanCancellation = cancellation;
+    void cancellation.then(() => {
+      if (pendingOrphanCancellation === cancellation) {
+        pendingOrphanCancellation = null;
+      }
+    });
+  };
+
   const run = async (force: boolean) => {
+    if (disposed) {
+      return;
+    }
+
+    const orphanCancellation = pendingOrphanCancellation;
+    if (orphanCancellation) {
+      await orphanCancellation;
+    }
     if (disposed) {
       return;
     }
@@ -251,26 +274,22 @@ export function createEspGraphCoordinator(
       started = true;
       unsubscribeEsp = useEspDiagnosticsStore.subscribe((state, previous) => {
         if (state.snapshot !== previous.snapshot) {
-          // When beginAnalysis/beginLiveStart atomically clears both snapshot
-          // and graphRequestId, cancelCurrentRequest() can no longer read the
-          // stale requestId from the store. Detect the transition here using
-          // the previous snapshot and issue the native cancel directly so the
-          // backend can stop the in-flight work. The result will still be
-          // silently dropped by the requestId guard in applyGraphOverlay.
-          if (
-            !state.snapshot &&
-            previous.graphRequestId !== null &&
-            state.graphRequestId === null
-          ) {
-            void cancelGraph(previous.graphRequestId).catch(() => {
-              console.warn(
-                "[esp-diagnostics] orphan Graph cancel failed",
-                { requestId: previous.graphRequestId },
-              );
-            });
-          } else {
-            void run(false);
+          if (!state.snapshot) {
+            // A replacement analysis is a new enrichment lifecycle even when
+            // it describes the same device. Release both fingerprint guards
+            // before its snapshot arrives, and preserve the old request ID
+            // long enough to finish native cancellation first.
+            lastRequestedFingerprint = null;
+            blockedFingerprint = null;
+            if (
+              previous.graphRequestId !== null &&
+              state.graphRequestId === null
+            ) {
+              cancelOrphanedRequest(previous.graphRequestId);
+            }
+            return;
           }
+          void run(false);
         }
       });
       unsubscribeUi = useUiStore.subscribe((state, previous) => {

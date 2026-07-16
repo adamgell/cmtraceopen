@@ -930,4 +930,54 @@ describe("ESP Graph scheduling", () => {
 
     coordinator.dispose();
   });
+
+  it("re-enriches a replacement analysis with the same identity after cancelling the orphaned request", async () => {
+    const first = deferred<EspGraphOverlay>();
+    const second = deferred<EspGraphOverlay>();
+    const orphanCancellation = deferred<void>();
+    const fetchGraph = vi
+      .fn<(request: EspGraphRequest) => Promise<EspGraphOverlay>>()
+      .mockImplementationOnce(() => first.promise)
+      .mockImplementationOnce(() => second.promise);
+    const cancelGraph = vi.fn(() => orphanCancellation.promise);
+    const requestIds = ["graph-first", "graph-second"];
+    useUiStore.setState({ graphApiEnabled: true, graphApiStatus: "connected" });
+    useEspDiagnosticsStore.getState().beginAnalysis("analysis-a");
+    useEspDiagnosticsStore
+      .getState()
+      .applyAnalysis("analysis-a", makeSnapshot(["local-a"], "same-device"));
+
+    const coordinator = createEspGraphCoordinator({
+      fetchGraph,
+      cancelGraph,
+      createRequestId: () => requestIds.shift() ?? "graph-extra",
+    });
+    coordinator.start();
+    await Promise.resolve();
+    expect(fetchGraph).toHaveBeenCalledTimes(1);
+
+    useEspDiagnosticsStore.getState().beginAnalysis("analysis-b");
+    useEspDiagnosticsStore
+      .getState()
+      .applyAnalysis("analysis-b", makeSnapshot(["local-b"], "same-device"));
+    await Promise.resolve();
+
+    expect(cancelGraph).toHaveBeenCalledWith("graph-first");
+    expect(fetchGraph).toHaveBeenCalledTimes(1);
+
+    orphanCancellation.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(fetchGraph).toHaveBeenCalledTimes(2);
+    expect(fetchGraph.mock.calls[1]?.[0].requestId).toBe("graph-second");
+
+    first.resolve(makeOverlay("graph-first"));
+    second.resolve(makeOverlay("graph-second"));
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(useEspDiagnosticsStore.getState().snapshot?.graph?.requestId).toBe(
+      "graph-second",
+    );
+    coordinator.dispose();
+  });
 });
