@@ -430,28 +430,25 @@ fn push_successful_completion(
         .filter(|evidence| !evidence.source_artifact_id.trim().is_empty())
         .map(|evidence| evidence.source_artifact_id.clone())
         .collect::<BTreeSet<_>>();
-    for workload_id in latest_sessions
-        .iter()
-        .flat_map(|session| session.workload_ids.iter())
-    {
-        let Some(workload) = snapshot
-            .workloads
-            .iter()
-            .find(|workload| &workload.workload_id == workload_id)
-        else {
-            return;
-        };
-        if !is_successful_terminal_status(&workload.status.normalized) {
-            return;
+    for session in &latest_sessions {
+        for workload_id in &session.workload_ids {
+            let Some(workload) = snapshot.workloads.iter().find(|workload| {
+                workload.session_id == session.session_id && &workload.workload_id == workload_id
+            }) else {
+                return;
+            };
+            if !is_successful_terminal_status(&workload.status.normalized) {
+                return;
+            }
+            supporting_source_ids.extend(
+                workload
+                    .evidence
+                    .iter()
+                    .filter(|evidence| !evidence.source_artifact_id.trim().is_empty())
+                    .map(|evidence| evidence.source_artifact_id.clone()),
+            );
+            evidence.extend(workload.evidence.iter().cloned());
         }
-        supporting_source_ids.extend(
-            workload
-                .evidence
-                .iter()
-                .filter(|evidence| !evidence.source_artifact_id.trim().is_empty())
-                .map(|evidence| evidence.source_artifact_id.clone()),
-        );
-        evidence.extend(workload.evidence.iter().cloned());
     }
     if evidence.is_empty() {
         return;
@@ -557,23 +554,22 @@ fn is_successful_terminal_status(status: &EspNormalizedStatus) -> bool {
 
 fn current_workloads(snapshot: &EspDiagnosticsSnapshot) -> impl Iterator<Item = &EspWorkload> {
     let sessionless = snapshot.sessions.is_empty();
-    let latest_session_ids = snapshot
+    let latest_workload_keys = snapshot
         .sessions
         .iter()
         .filter(|session| session.is_latest)
-        .map(|session| session.session_id.as_str())
-        .collect::<BTreeSet<_>>();
-    let latest_workload_ids = snapshot
-        .sessions
-        .iter()
-        .filter(|session| session.is_latest)
-        .flat_map(|session| session.workload_ids.iter().map(String::as_str))
+        .flat_map(|session| {
+            session
+                .workload_ids
+                .iter()
+                .map(move |workload_id| (session.session_id.as_str(), workload_id.as_str()))
+        })
         .collect::<BTreeSet<_>>();
 
     snapshot.workloads.iter().filter(move |workload| {
         sessionless
-            || (latest_session_ids.contains(workload.session_id.as_str())
-                && latest_workload_ids.contains(workload.workload_id.as_str()))
+            || latest_workload_keys
+                .contains(&(workload.session_id.as_str(), workload.workload_id.as_str()))
     })
 }
 

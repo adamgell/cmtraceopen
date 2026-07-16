@@ -4612,6 +4612,51 @@ fn findings_ignore_workloads_that_belong_only_to_non_latest_sessions() {
 }
 
 #[test]
+fn findings_do_not_cross_join_latest_session_and_workload_id_membership() {
+    let mut snapshot = findings_snapshot();
+    snapshot.sessions = vec![
+        EspSession {
+            session_id: "session-a".to_string(),
+            kind: EspSessionKind::Classic,
+            scope: EspScope::Device,
+            user_sid: None,
+            started_at: Some(timestamp("2026-07-15T12:00:00Z")),
+            ended_at: None,
+            phase: EspPhase::DeviceSetup,
+            is_latest: true,
+            workload_ids: vec!["workload-a".to_string()],
+            evidence: vec![evidence_ref("session-a")],
+        },
+        EspSession {
+            session_id: "session-b".to_string(),
+            kind: EspSessionKind::Classic,
+            scope: EspScope::User,
+            user_sid: Some(sensitive("S-1-5-21-111-222-333-1001")),
+            started_at: Some(timestamp("2026-07-15T12:00:00Z")),
+            ended_at: None,
+            phase: EspPhase::AccountSetup,
+            is_latest: true,
+            workload_ids: vec!["workload-b".to_string()],
+            evidence: vec![evidence_ref("session-b")],
+        },
+    ];
+    let mut cross_joined = findings_workload(
+        "cross-joined",
+        EspTrackedKind::Win32App,
+        EspNormalizedStatus::Failed,
+        Some(true),
+        "2026-07-15T12:29:00Z",
+    );
+    cross_joined.session_id = "session-a".to_string();
+    cross_joined.workload_id = "workload-b".to_string();
+    snapshot.workloads = vec![cross_joined];
+
+    assert!(derive_findings(&snapshot)
+        .iter()
+        .all(|finding| finding.finding_id != "blocking-app-failed"));
+}
+
+#[test]
 fn findings_keep_sessionless_workload_evidence_eligible() {
     let mut snapshot = findings_snapshot();
     snapshot.workloads.push(findings_workload(
@@ -5028,6 +5073,7 @@ fn findings_completed_session_emits_only_evidence_backed_info() {
         Some(true),
         "2026-07-15T12:10:00Z",
     );
+    successful_workload.session_id = "session-completed".to_string();
     successful_workload.evidence = vec![evidence_ref_from(
         "evidence-app-success",
         "esp-session-registry",
@@ -5065,6 +5111,111 @@ fn findings_completed_session_emits_only_evidence_backed_info() {
         ],
         &[],
     );
+}
+
+fn completion_snapshot_with_duplicate_workload_ids(
+    old_status: EspNormalizedStatus,
+    current_status: EspNormalizedStatus,
+) -> EspDiagnosticsSnapshot {
+    let mut snapshot = findings_snapshot();
+    snapshot.phase = EspPhase::Completed;
+    snapshot.sessions = vec![
+        EspSession {
+            session_id: "session-old".to_string(),
+            kind: EspSessionKind::Classic,
+            scope: EspScope::Device,
+            user_sid: None,
+            started_at: Some(timestamp("2026-07-15T11:00:00Z")),
+            ended_at: Some(timestamp("2026-07-15T11:10:00Z")),
+            phase: EspPhase::Completed,
+            is_latest: false,
+            workload_ids: vec!["workload-duplicate".to_string()],
+            evidence: vec![evidence_ref_from("old-session", "old-source")],
+        },
+        EspSession {
+            session_id: "session-current".to_string(),
+            kind: EspSessionKind::Classic,
+            scope: EspScope::Device,
+            user_sid: None,
+            started_at: Some(timestamp("2026-07-15T12:00:00Z")),
+            ended_at: Some(timestamp("2026-07-15T12:10:00Z")),
+            phase: EspPhase::Completed,
+            is_latest: true,
+            workload_ids: vec!["workload-duplicate".to_string()],
+            evidence: vec![evidence_ref_from("current-session", "current-source")],
+        },
+    ];
+    let mut old_workload = findings_workload(
+        "old-duplicate",
+        EspTrackedKind::Win32App,
+        old_status,
+        Some(true),
+        "2026-07-15T11:10:00Z",
+    );
+    old_workload.workload_id = "workload-duplicate".to_string();
+    old_workload.session_id = "session-old".to_string();
+    old_workload.evidence = vec![evidence_ref_from("old-workload", "old-source")];
+    let mut current_workload = findings_workload(
+        "current-duplicate",
+        EspTrackedKind::Win32App,
+        current_status,
+        Some(true),
+        "2026-07-15T12:10:00Z",
+    );
+    current_workload.workload_id = "workload-duplicate".to_string();
+    current_workload.session_id = "session-current".to_string();
+    current_workload.evidence = vec![evidence_ref_from("current-workload", "current-source")];
+    snapshot.workloads = vec![old_workload, current_workload];
+    snapshot.coverage = ["old-source", "current-source"]
+        .into_iter()
+        .map(|source| EspArtifactCoverage {
+            artifact_id: source.to_string(),
+            family: "ESP supporting evidence".to_string(),
+            status: EspArtifactStatus::Available,
+            detail: None,
+            observed_at_utc: "2026-07-15T12:10:00Z".to_string(),
+            evidence: vec![evidence_ref_from(&format!("coverage-{source}"), source)],
+        })
+        .collect();
+    snapshot
+}
+
+#[test]
+fn findings_success_does_not_use_succeeded_duplicate_from_non_latest_session() {
+    let snapshot = completion_snapshot_with_duplicate_workload_ids(
+        EspNormalizedStatus::Succeeded,
+        EspNormalizedStatus::Failed,
+    );
+
+    let findings = derive_findings(&snapshot);
+    assert!(findings
+        .iter()
+        .all(|finding| finding.finding_id != "esp-completed"));
+    assert_eq!(
+        finding_by_id(&findings, "blocking-app-failed").evidence,
+        vec![evidence_ref_from("current-workload", "current-source")]
+    );
+}
+
+#[test]
+fn findings_success_uses_succeeded_duplicate_from_latest_session() {
+    let snapshot = completion_snapshot_with_duplicate_workload_ids(
+        EspNormalizedStatus::Failed,
+        EspNormalizedStatus::Succeeded,
+    );
+
+    let finding = finding_by_id(&derive_findings(&snapshot), "esp-completed").clone();
+    assert_eq!(
+        finding.evidence,
+        vec![
+            evidence_ref_from("current-session", "current-source"),
+            evidence_ref_from("current-workload", "current-source"),
+        ]
+    );
+    assert!(finding
+        .evidence
+        .iter()
+        .all(|evidence| !evidence.evidence_id.starts_with("old-")));
 }
 
 #[test]
@@ -5119,6 +5270,7 @@ fn findings_success_requires_observed_declared_workloads_and_relevant_coverage()
         Some(true),
         "2026-07-15T12:10:00Z",
     );
+    unrelated_workload.session_id = "session-completed".to_string();
     unrelated_workload.evidence = vec![evidence_ref_from(
         "evidence-different-success",
         "esp-session-registry",
@@ -5139,6 +5291,7 @@ fn findings_success_requires_observed_declared_workloads_and_relevant_coverage()
         Some(true),
         "2026-07-15T12:10:00Z",
     );
+    observed_workload.session_id = "session-completed".to_string();
     observed_workload.evidence = vec![evidence_ref_from(
         "evidence-app-success",
         "esp-session-registry",
@@ -5176,6 +5329,7 @@ fn findings_success_ignores_unrelated_optional_coverage_gaps() {
         Some(true),
         "2026-07-15T12:10:00Z",
     );
+    successful_workload.session_id = "session-completed".to_string();
     successful_workload.evidence = vec![evidence_ref_from(
         "evidence-app-success",
         "esp-session-registry",
@@ -5436,6 +5590,159 @@ fn redaction_projection_masks_registration_named_data_by_label() {
         snapshot.registration_events[0].named_data[0].value,
         "opaque-tenant-guid"
     );
+}
+
+#[test]
+fn redaction_projection_masks_standalone_bearer_tokens_in_generic_named_data() {
+    let direct_token = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1c2VyIn0.signature123";
+    let structured_token = "opaque-token-value-1234567890";
+    let safe_prose = "Bearer authentication is required for this endpoint";
+    let named_data = || {
+        vec![
+            EspNamedValue {
+                name: "Payload".to_string(),
+                value: format!("bEaReR {direct_token}"),
+            },
+            EspNamedValue {
+                name: "StructuredPayload".to_string(),
+                value: format!(r#"{{"payload":"BEARER {structured_token}","state":"safe"}}"#),
+            },
+            EspNamedValue {
+                name: "Description".to_string(),
+                value: safe_prose.to_string(),
+            },
+            EspNamedValue {
+                name: "PayloadWithContext".to_string(),
+                value: format!("Bearer {direct_token} expires soon"),
+            },
+        ]
+    };
+    let mut snapshot = findings_snapshot();
+    snapshot.registration_events.push(EspRegistrationEvent {
+        event_id: 304,
+        record_id: Some(42),
+        status: status(
+            EspRawStatus::Text("failed".to_string()),
+            EspNormalizedStatus::Failed,
+        ),
+        message: "Device registration failed".to_string(),
+        timestamp: timestamp("2026-07-15T12:00:00Z"),
+        named_data: named_data(),
+        evidence: vec![evidence_ref("registration-bearer")],
+    });
+    let mut raw = raw_export_record(
+        "raw-event-bearer",
+        EspSourceKind::EventLog,
+        "event-log",
+        None,
+        "safe raw event payload",
+    );
+    raw.sensitivity = EspSensitivity::Public;
+    raw.provenance.event = Some(EspEventProvenance {
+        channel: "Generic event channel".to_string(),
+        event_id: 1,
+        record_id: Some(1),
+        named_data: named_data(),
+    });
+    snapshot.raw_evidence = vec![raw];
+    let original = snapshot.clone();
+
+    let safe = redacted_export_projection(&snapshot);
+    let safe_json = serde_json::to_string(&safe).unwrap();
+    for fragment in [
+        direct_token,
+        "eyJhbGciOiJIUzI1NiJ9",
+        "signature123",
+        structured_token,
+        "opaque-token-value",
+        "1234567890",
+    ] {
+        assert!(
+            !safe_json.contains(fragment),
+            "safe export leaked {fragment}"
+        );
+    }
+    for values in [
+        &safe.registration_events[0].named_data,
+        &safe.raw_evidence[0]
+            .provenance
+            .event
+            .as_ref()
+            .unwrap()
+            .named_data,
+    ] {
+        assert_eq!(values[0].value, "bEaReR [redacted]");
+        assert!(values[1].value.contains(r#""payload":"BEARER [redacted]"#));
+        assert!(values[1].value.contains(r#""state":"safe""#));
+        assert_eq!(values[2].value, safe_prose);
+        assert_eq!(values[3].value, "Bearer [redacted] expires soon");
+    }
+    assert_eq!(snapshot, original);
+}
+
+#[test]
+fn redaction_projection_removes_bearer_raw_values_without_matching_nearby_prose() {
+    let mut token_text = raw_export_record(
+        "bearer-token-text",
+        EspSourceKind::DeploymentLog,
+        "deployment-log",
+        None,
+        "BEARER opaque-token-value-1234567890",
+    );
+    token_text.sensitivity = EspSensitivity::Public;
+    let mut token_list = raw_export_record(
+        "bearer-token-list",
+        EspSourceKind::DeploymentLog,
+        "deployment-log",
+        None,
+        "placeholder",
+    );
+    token_list.sensitivity = EspSensitivity::Public;
+    token_list.raw_value = EspObservationValue::StringList(vec![
+        "safe list value".to_string(),
+        "bEaReR eyJhbGciOiJIUzI1NiJ9.payload.signature123 expires soon".to_string(),
+    ]);
+    let mut prose_text = raw_export_record(
+        "bearer-prose-text",
+        EspSourceKind::DeploymentLog,
+        "deployment-log",
+        None,
+        "Bearer authentication remains available",
+    );
+    prose_text.sensitivity = EspSensitivity::Public;
+    let mut prose_list = raw_export_record(
+        "bearer-prose-list",
+        EspSourceKind::DeploymentLog,
+        "deployment-log",
+        None,
+        "placeholder",
+    );
+    prose_list.sensitivity = EspSensitivity::Public;
+    prose_list.raw_value = EspObservationValue::StringList(vec![
+        "Bearer authentication remains available".to_string(),
+        "Bearer scheme negotiation was retried".to_string(),
+    ]);
+    let mut snapshot = findings_snapshot();
+    snapshot.raw_evidence = vec![token_text, token_list, prose_text, prose_list];
+    let original = snapshot.clone();
+
+    let safe = redacted_export_projection(&snapshot);
+    assert_eq!(
+        safe.raw_evidence
+            .iter()
+            .map(|record| record.record_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["bearer-prose-text", "bearer-prose-list"]
+    );
+    assert_eq!(
+        safe.raw_evidence[0].raw_value,
+        original.raw_evidence[2].raw_value
+    );
+    assert_eq!(
+        safe.raw_evidence[1].raw_value,
+        original.raw_evidence[3].raw_value
+    );
+    assert_eq!(snapshot, original);
 }
 
 #[test]

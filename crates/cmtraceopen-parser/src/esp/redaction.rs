@@ -55,13 +55,19 @@ fn secret_argument_pattern() -> &'static Regex {
     })
 }
 
+fn standalone_bearer_pattern() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
+        Regex::new(r"(?i)(?P<prefix>\bbearer[ \t]+)(?P<value>[A-Z0-9._~+/=-]{8,})")
+            .expect("standalone Bearer redaction pattern must compile")
+    })
+}
+
 fn forbidden_raw_content_pattern() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
-        Regex::new(
-            r#"(?i)(authorization["']?\s*:|(?:access|refresh|id)[_-]?token["']?\s*[:=]|bearer\s+[A-Z0-9._~+/=-]{8,})"#,
-        )
-        .expect("forbidden raw-content pattern must compile")
+        Regex::new(r#"(?i)(authorization["']?\s*:|(?:access|refresh|id)[_-]?token["']?\s*[:=])"#)
+            .expect("forbidden raw-content pattern must compile")
     })
 }
 
@@ -365,6 +371,7 @@ fn redact_reference(value: &mut String, pseudonyms: &ReferencePseudonyms) {
     let bounded = bounded_text(value);
     let redacted = authorization_pattern().replace_all(bounded, "${prefix}[redacted]");
     let redacted = secret_argument_pattern().replace_all(&redacted, "${prefix}[redacted]");
+    let redacted = redact_standalone_bearer_tokens(&redacted);
     let redacted =
         user_profile_path_pattern().replace_all(&redacted, |captures: &regex::Captures<'_>| {
             let user = captures
@@ -787,6 +794,7 @@ fn redact_text(value: &str) -> String {
     let bounded = bounded_text(value);
     let redacted = authorization_pattern().replace_all(bounded, "${prefix}[redacted]");
     let redacted = secret_argument_pattern().replace_all(&redacted, "${prefix}[redacted]");
+    let redacted = redact_standalone_bearer_tokens(&redacted);
     let redacted = user_profile_path_pattern().replace_all(&redacted, "${prefix}[redacted]");
     let redacted = email_pattern().replace_all(&redacted, REDACTED);
     let redacted = sid_pattern().replace_all(&redacted, REDACTED);
@@ -904,7 +912,31 @@ fn normalize_label(value: &str) -> String {
 }
 
 fn forbidden_raw_content(value: &str) -> bool {
-    forbidden_raw_content_pattern().is_match(bounded_text(value))
+    let bounded = bounded_text(value);
+    forbidden_raw_content_pattern().is_match(bounded)
+        || standalone_bearer_pattern()
+            .captures_iter(bounded)
+            .any(|captures| likely_bearer_token(&captures["value"]))
+}
+
+fn redact_standalone_bearer_tokens(value: &str) -> String {
+    standalone_bearer_pattern()
+        .replace_all(value, |captures: &regex::Captures<'_>| {
+            if likely_bearer_token(&captures["value"]) {
+                format!("{}[redacted]", &captures["prefix"])
+            } else {
+                captures[0].to_string()
+            }
+        })
+        .into_owned()
+}
+
+fn likely_bearer_token(value: &str) -> bool {
+    let without_sentence_period = value.strip_suffix('.').unwrap_or(value);
+    without_sentence_period.len() >= 24
+        || without_sentence_period.bytes().any(|byte| {
+            byte.is_ascii_digit() || matches!(byte, b'.' | b'_' | b'~' | b'+' | b'/' | b'=' | b'-')
+        })
 }
 
 fn redact_provenance(provenance: &mut EspEvidenceProvenance, pseudonyms: &ReferencePseudonyms) {
