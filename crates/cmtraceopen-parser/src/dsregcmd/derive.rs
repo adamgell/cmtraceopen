@@ -482,10 +482,8 @@ fn extract_bracket_detail(value: &str) -> Option<String> {
     (!detail.trim().is_empty()).then(|| detail.trim().to_string())
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "diagnostic construction keeps explicit backend contract fields together"
-)]
+// Diagnostic construction keeps explicit backend contract fields together.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn issue(
     id: &str,
     severity: IntuneDiagnosticSeverity,
