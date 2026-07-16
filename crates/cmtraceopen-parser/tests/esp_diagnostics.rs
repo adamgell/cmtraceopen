@@ -11121,3 +11121,175 @@ fn redaction_projection_rejects_complete_tail_smuggling_after_safe_prose_prefixe
     assert_eq!(redacted_export_projection(&safe), safe);
     assert_eq!(snapshot, original);
 }
+
+fn folded_quoted_credential_matrix() -> Vec<(String, String, String)> {
+    let schemes = ["Basic", "Bearer", "Negotiate", "NTLM"];
+    let serializations = [
+        ("literal", r#"""#),
+        ("escaped", r#"\""#),
+        ("twice-escaped", r#"\\\""#),
+    ];
+    let line_endings = [
+        ("lf", "\n"),
+        ("lf-with-ows", " \t\n"),
+        ("crlf", "\r\n"),
+        ("crlf-with-ows", "\t \r\n"),
+    ];
+    let mut matrix = Vec::new();
+
+    for scheme in schemes {
+        for (serialization, delimiter) in serializations {
+            for (line_ending_name, line_ending) in line_endings {
+                for closed in [true, false] {
+                    let closure_name = if closed { "closed" } else { "unclosed" };
+                    let label = format!(
+                        "{}-{serialization}-{line_ending_name}-{closure_name}",
+                        scheme.to_ascii_lowercase()
+                    );
+                    let secret = format!(
+                        "FOLDED_{}_{}_{}_{}_SECRET",
+                        scheme.to_ascii_uppercase(),
+                        serialization.replace('-', "_").to_ascii_uppercase(),
+                        line_ending_name.to_ascii_uppercase(),
+                        closure_name.to_ascii_uppercase()
+                    );
+                    let closing_delimiter = if closed { delimiter } else { "" };
+                    let payload = format!(
+                        "{scheme} {delimiter}CREDENTIAL_HEAD{closing_delimiter}{line_ending} {secret}"
+                    );
+                    matrix.push((label, payload, secret));
+                }
+            }
+        }
+    }
+
+    matrix
+}
+
+#[test]
+fn redaction_projection_masks_folded_quoted_credentials_across_public_typed_and_reference_surfaces()
+{
+    let matrix = folded_quoted_credential_matrix();
+    let safe_prose = ["Basic", "Bearer", "Negotiate", "NTLM"]
+        .into_iter()
+        .flat_map(|scheme| {
+            [
+                format!("{scheme} authentication is configured"),
+                format!("{scheme} authentication remains available"),
+                format!("{scheme} authorization is required"),
+                format!("{scheme} scheme negotiation was retried"),
+                format!("{scheme} token support is enabled"),
+            ]
+        })
+        .collect::<Vec<_>>();
+    let mut snapshot = findings_snapshot();
+    snapshot.identity.evidence = matrix
+        .iter()
+        .map(|(label, payload, _)| {
+            evidence_ref_from(
+                &format!("identity-{label}|{payload}"),
+                &format!("identity-source-{label}|{payload}"),
+            )
+        })
+        .collect();
+    snapshot.activity = matrix
+        .iter()
+        .enumerate()
+        .map(|(index, (label, payload, _))| EspTimelineEntry {
+            entry_id: format!("folded-credential-{label}"),
+            timestamp: timestamp(&format!("2026-07-16T14:{:02}:00Z", index % 60)),
+            kind: EspTimelineKind::Other,
+            title: payload.clone(),
+            detail: Some(payload.clone()),
+            status: None,
+            evidence: vec![evidence_ref_from(
+                &format!("timeline-{label}|{payload}"),
+                &format!("timeline-source-{label}|{payload}"),
+            )],
+        })
+        .chain(
+            safe_prose
+                .iter()
+                .enumerate()
+                .map(|(index, control)| EspTimelineEntry {
+                    entry_id: format!("folded-credential-safe-prose-{index}"),
+                    timestamp: timestamp(&format!("2026-07-16T15:{index:02}:00Z")),
+                    kind: EspTimelineKind::Other,
+                    title: control.clone(),
+                    detail: Some(control.clone()),
+                    status: None,
+                    evidence: vec![],
+                }),
+        )
+        .collect();
+    let original = snapshot.clone();
+
+    let safe = redacted_export_projection(&snapshot);
+    let safe_json = serde_json::to_string(&safe).unwrap();
+
+    for (label, _, secret) in &matrix {
+        assert!(
+            !safe_json.contains(secret),
+            "folded {label} credential leaked from a public typed or reference surface: {safe_json}"
+        );
+    }
+    let safe_prose_start = safe.activity.len() - safe_prose.len();
+    for (index, control) in safe_prose.iter().enumerate() {
+        assert_eq!(safe.activity[safe_prose_start + index].title, *control);
+        assert_eq!(
+            safe.activity[safe_prose_start + index].detail.as_ref(),
+            Some(control)
+        );
+    }
+    assert_eq!(redacted_export_projection(&safe), safe);
+    assert_eq!(snapshot, original);
+}
+
+#[test]
+fn redaction_projection_removes_folded_quoted_credentials_from_public_raw_evidence() {
+    let matrix = folded_quoted_credential_matrix();
+    let mut snapshot = findings_snapshot();
+    snapshot.raw_evidence = matrix
+        .iter()
+        .enumerate()
+        .map(|(index, (label, payload, _))| {
+            let mut record = raw_export_record(
+                &format!("folded-credential-{label}"),
+                EspSourceKind::DeploymentLog,
+                "neutral-folded-credential-source",
+                None,
+                payload,
+            );
+            record.sensitivity = EspSensitivity::Public;
+            if index % 2 == 1 {
+                record.raw_value = EspObservationValue::StringList(vec![
+                    "safe-list-control".to_string(),
+                    payload.clone(),
+                ]);
+            }
+            record
+        })
+        .collect();
+    let original = snapshot.clone();
+
+    let safe = redacted_export_projection(&snapshot);
+    let retained_record_ids = safe
+        .raw_evidence
+        .iter()
+        .map(|record| record.record_id.as_str())
+        .collect::<Vec<_>>();
+    let safe_json = serde_json::to_string(&safe).unwrap();
+
+    assert!(
+        retained_record_ids.is_empty(),
+        "folded credentials survived Public raw-evidence classification: {retained_record_ids:?}; {safe_json}"
+    );
+    for (label, _, secret) in &matrix {
+        assert!(
+            !safe_json.contains(secret),
+            "folded {label} credential leaked from Public raw evidence: {safe_json}"
+        );
+    }
+    assert_eq!(redacted_export_projection(&safe), safe);
+    assert_eq!(snapshot, original);
+}

@@ -218,6 +218,7 @@ fn redact_quoted_authorization_credentials(value: &str) -> String {
             credential_end =
                 serialized_quoted_credential_end(value, next_opening_start, next_opening_end);
         }
+        credential_end = folded_authorization_credential_end(value, credential_end);
 
         if !has_adjacent_quoted_segment
             && serialized_quoted_credential_is_redacted(
@@ -288,6 +289,41 @@ fn serialized_quoted_credential_end(
     }
 
     line_end
+}
+
+fn folded_authorization_credential_end(value: &str, mut credential_end: usize) -> usize {
+    let bytes = value.as_bytes();
+
+    loop {
+        let mut line_break_start = credential_end;
+        while bytes
+            .get(line_break_start)
+            .is_some_and(|byte| matches!(*byte, b' ' | b'\t'))
+        {
+            line_break_start += 1;
+        }
+        let continuation_start = if bytes.get(line_break_start) == Some(&b'\r')
+            && bytes.get(line_break_start + 1) == Some(&b'\n')
+        {
+            line_break_start + 2
+        } else if bytes.get(line_break_start) == Some(&b'\n') {
+            line_break_start + 1
+        } else {
+            break;
+        };
+        if !bytes
+            .get(continuation_start)
+            .is_some_and(|byte| matches!(*byte, b' ' | b'\t'))
+        {
+            break;
+        }
+        credential_end = bytes[continuation_start..]
+            .iter()
+            .position(|byte| matches!(byte, b'\r' | b'\n'))
+            .map_or(bytes.len(), |offset| continuation_start + offset);
+    }
+
+    credential_end
 }
 
 fn redact_escaped_json_secret_members(value: &str) -> String {
@@ -1424,6 +1460,7 @@ fn forbidden_raw_content(value: &str) -> bool {
         || authorization_scheme_and_credential_pattern().is_match(bounded)
         || generic_authorization_scheme_and_credential_pattern().is_match(bounded)
         || standalone_authorization_scheme_pattern().is_match(bounded)
+        || quoted_authorization_credential_start_pattern().is_match(bounded)
         || bare_authorization_pattern().is_match(bounded)
 }
 
