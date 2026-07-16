@@ -6,8 +6,9 @@
 pub mod models;
 
 pub use models::{
-    GraphAppInfo, GraphAuthStatus, GraphHttpMethod, GraphResolutionResult, GraphTransportRequest,
-    GraphTransportResponse,
+    project_graph_auth_status, GraphAppInfo, GraphAuthCapabilities, GraphAuthStatus,
+    GraphHttpMethod, GraphResolutionResult, GraphTransportRequest, GraphTransportResponse,
+    GRAPH_DELEGATED_SCOPES, GRAPH_SCOPE_REQUEST,
 };
 
 #[cfg(target_os = "windows")]
@@ -15,25 +16,33 @@ mod windows_impl {
     use std::collections::HashMap;
     use std::sync::Mutex;
 
-    use super::{GraphAppInfo, GraphAuthStatus, GraphResolutionResult};
+    use super::{
+        project_graph_auth_status, GraphAppInfo, GraphAuthStatus, GraphResolutionResult,
+        GRAPH_SCOPE_REQUEST,
+    };
     use crate::error::AppError;
 
     // ── Public types ────────────────────────────────────────────────────────────
 
     // ── Token cache ─────────────────────────────────────────────────────────────
 
-    #[derive(Debug, Default)]
+    #[derive(Default)]
     pub struct GraphAuthState {
         access_token: Mutex<Option<CachedToken>>,
         guid_cache: Mutex<HashMap<String, GraphAppInfo>>,
     }
 
-    #[derive(Debug, Clone)]
+    #[derive(Clone)]
     struct CachedToken {
         token: String,
-        user_principal_name: Option<String>,
-        tenant_id: Option<String>,
-        expires_at: std::time::Instant,
+        status: GraphAuthStatus,
+    }
+
+    fn unix_now() -> u64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
     }
 
     impl GraphAuthState {
@@ -42,14 +51,17 @@ mod windows_impl {
         }
 
         fn get_valid_token(&self) -> Option<CachedToken> {
-            let guard = self.access_token.lock().unwrap();
-            guard.as_ref().and_then(|t| {
-                if t.expires_at > std::time::Instant::now() {
-                    Some(t.clone())
-                } else {
-                    None
-                }
-            })
+            let mut guard = self.access_token.lock().unwrap();
+            let is_valid = guard
+                .as_ref()
+                .and_then(|token| token.status.expires_at)
+                .is_some_and(|expires_at| expires_at > unix_now());
+            if is_valid {
+                guard.clone()
+            } else {
+                *guard = None;
+                None
+            }
         }
 
         fn set_token(&self, token: CachedToken) {
@@ -76,7 +88,6 @@ mod windows_impl {
 
     /// Well-known Microsoft Graph PowerShell client ID (public client, no app reg needed).
     const GRAPH_POWERSHELL_CLIENT_ID: &str = "14d82eec-204b-4c2f-b7e8-296a70dab67e";
-    const GRAPH_RESOURCE: &str = "https://graph.microsoft.com";
 
     mod wam {
         use super::*;
@@ -108,17 +119,12 @@ mod windows_impl {
             .join()
             .map_err(|e| AppError::Internal(format!("WAM provider await failed: {e}")))?;
 
-            // WAM v1 resource model: pass empty scope, set resource via properties
-            let scope = HSTRING::from("");
+            // WAM v2 scope model: request only the five delegated Intune read
+            // capabilities and do not attach a v1 `resource` property.
+            let scope = HSTRING::from(GRAPH_SCOPE_REQUEST);
             let client_id = HSTRING::from(GRAPH_POWERSHELL_CLIENT_ID);
             let request = WebTokenRequest::Create(&provider, &scope, &client_id)
                 .map_err(|e| AppError::Internal(format!("WAM request creation failed: {e}")))?;
-
-            request
-                .Properties()
-                .map_err(|e| AppError::Internal(format!("WAM properties failed: {e}")))?
-                .Insert(&HSTRING::from("resource"), &HSTRING::from(GRAPH_RESOURCE))
-                .map_err(|e| AppError::Internal(format!("WAM set resource failed: {e}")))?;
 
             // Use the COM interop interface to pass our HWND
             let interop: IWebAuthenticationCoreManagerInterop =
@@ -154,7 +160,7 @@ mod windows_impl {
                     if token.is_empty() {
                         return Err(AppError::Internal(
                             "WAM returned Success but the access token is empty. \
-                             Ensure the resource property is set correctly."
+                             The delegated scope request did not return usable credentials."
                                 .into(),
                         ));
                     }
@@ -171,13 +177,22 @@ mod windows_impl {
                         .and_then(|props| props.Lookup(&HSTRING::from("TenantId")).ok())
                         .map(|s| s.to_string());
 
-                    Ok(CachedToken {
-                        token,
-                        user_principal_name: upn,
-                        tenant_id: tenant,
-                        expires_at: std::time::Instant::now()
-                            + std::time::Duration::from_secs(50 * 60),
-                    })
+                    let status = project_graph_auth_status(
+                        &token,
+                        upn.as_deref(),
+                        tenant.as_deref(),
+                        unix_now(),
+                    );
+                    if !status.is_authenticated {
+                        return Err(AppError::Internal(
+                            status
+                                .error
+                                .clone()
+                                .unwrap_or_else(|| "InvalidWamToken".to_string()),
+                        ));
+                    }
+
+                    Ok(CachedToken { token, status })
                 }
                 WebTokenRequestStatus::UserCancel => Err(AppError::Internal(
                     "Authentication was cancelled by user.".into(),
@@ -249,33 +264,18 @@ mod windows_impl {
         hwnd_raw: isize,
     ) -> Result<GraphAuthStatus, AppError> {
         if let Some(cached) = state.get_valid_token() {
-            return Ok(GraphAuthStatus {
-                is_authenticated: true,
-                user_principal_name: cached.user_principal_name,
-                tenant_id: cached.tenant_id,
-                error: None,
-            });
+            return Ok(cached.status);
         }
 
         match wam::acquire_token(hwnd_raw) {
             Ok(token) => {
-                let status = GraphAuthStatus {
-                    is_authenticated: true,
-                    user_principal_name: token.user_principal_name.clone(),
-                    tenant_id: token.tenant_id.clone(),
-                    error: None,
-                };
+                let status = token.status.clone();
                 state.set_token(token);
                 Ok(status)
             }
             Err(e) => {
                 state.clear_token();
-                Ok(GraphAuthStatus {
-                    is_authenticated: false,
-                    user_principal_name: None,
-                    tenant_id: None,
-                    error: Some(e.to_string()),
-                })
+                Ok(GraphAuthStatus::disconnected(Some(e.to_string())))
             }
         }
     }
@@ -283,18 +283,8 @@ mod windows_impl {
     /// Get current auth status without triggering a new auth flow.
     pub fn get_auth_status(state: &GraphAuthState) -> GraphAuthStatus {
         match state.get_valid_token() {
-            Some(cached) => GraphAuthStatus {
-                is_authenticated: true,
-                user_principal_name: cached.user_principal_name,
-                tenant_id: cached.tenant_id,
-                error: None,
-            },
-            None => GraphAuthStatus {
-                is_authenticated: false,
-                user_principal_name: None,
-                tenant_id: None,
-                error: None,
-            },
+            Some(cached) => cached.status,
+            None => GraphAuthStatus::disconnected(None),
         }
     }
 
