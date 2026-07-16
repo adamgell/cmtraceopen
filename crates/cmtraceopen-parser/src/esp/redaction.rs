@@ -35,6 +35,16 @@ fn user_profile_path_pattern() -> &'static Regex {
     })
 }
 
+fn authorization_digest_challenge_pattern() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
+        Regex::new(
+            r#"(?i)(?P<prefix>(?:(?:--?|/)authorization["']?(?:\s*[=:]\s*|\s+)|\bauthorization["']?(?:\s*[=:]\s*|\s+)))digest[ \t]+[A-Z][A-Z0-9_-]*[ \t]*=[ \t]*(?:"[^"\r\n]*"|'[^'\r\n]*'|[^,\s\r\n]+)(?:[ \t]*,[ \t]*[A-Z][A-Z0-9_-]*[ \t]*=[ \t]*(?:"[^"\r\n]*"|'[^'\r\n]*'|[^,\s\r\n]+))+"#,
+        )
+        .expect("Authorization Digest challenge redaction pattern must compile")
+    })
+}
+
 fn authorization_pattern() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
@@ -59,7 +69,7 @@ fn secret_argument_pattern() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
         Regex::new(
-            r#"(?i)(?P<prefix>(?:(?:--?|/)(?:password|passwd|pwd|secret|client[_-]?secret|api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|auth[_-]?token|bearer[_-]?token|token|tenant(?:id)?|entdmid|serial(?:number)?)["']?(?:\s*[=:]\s*|\s+)|\b(?:password|passwd|pwd|secret|client[_-]?secret|api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|auth[_-]?token|bearer[_-]?token|token|tenant(?:id)?|entdmid|serial(?:number)?)["']?\s*[=:]\s*))(?P<value>"[^"]*"|'[^']*'|[^\s]+)"#,
+            r#"(?i)(?P<prefix>(?:(?:--?|/)(?:password|passwd|pwd|secret|client[_-]?secret|api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|auth[_-]?token|bearer[_-]?token|token|tenant(?:id)?|entdmid|serial(?:number)?|hardware[_-]?hash|device[_-]?hardware[_-]?data)["']?(?:\s*[=:]\s*|\s+)|\b(?:password|passwd|pwd|secret|client[_-]?secret|api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|auth[_-]?token|bearer[_-]?token|token|tenant(?:id)?|entdmid|serial(?:number)?|hardware[_-]?hash|device[_-]?hardware[_-]?data)["']?\s*[=:]\s*))(?P<value>"[^"]*"|'[^']*'|[^\s]+)"#,
         )
         .expect("secret argument redaction pattern must compile")
     })
@@ -79,7 +89,7 @@ fn bare_secret_argument_pattern() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
         Regex::new(
-            r#"(?i)(?P<prefix>\b(?P<name>password|passwd|pwd|secret|client[_-]?secret|api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|auth[_-]?token|bearer[_-]?token|token|tenant(?:id)?|entdmid|serial(?:number)?)["']?\s+)(?P<value>"[^"]*"|'[^']*'|[^\s]+)"#,
+            r#"(?i)(?P<prefix>\b(?P<name>password|passwd|pwd|secret|client[_-]?secret|api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|auth[_-]?token|bearer[_-]?token|token|tenant(?:id)?|entdmid|serial(?:number)?|hardware[_-]?hash|device[_-]?hardware[_-]?data)["']?\s+)(?P<value>"[^"]*"|'[^']*'|[^\s]+)"#,
         )
         .expect("bare secret-argument redaction pattern must compile")
     })
@@ -99,7 +109,7 @@ fn forbidden_raw_content_pattern() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
         Regex::new(
-            r#"(?i)(authorization["']?\s*[:=]|(?:access[_-]?token|refresh[_-]?token|id[_-]?token|auth[_-]?token|bearer[_-]?token)["']?\s*(?:[:=]|\s)|token["']?\s*[:=])"#,
+            r#"(?i)(authorization["']?\s*[:=]|(?:access[_-]?token|refresh[_-]?token|id[_-]?token|auth[_-]?token|bearer[_-]?token|hardware[_-]?hash|device[_-]?hardware[_-]?data)["']?\s*(?:[:=]|\s)|token["']?\s*[:=])"#,
         )
             .expect("forbidden raw-content pattern must compile")
     })
@@ -404,7 +414,9 @@ fn pseudonymize_sids(value: &mut String, pseudonyms: &BTreeMap<String, String>) 
 fn redact_reference(value: &mut String, pseudonyms: &ReferencePseudonyms) {
     let bounded = bounded_text(value);
     let redacted =
-        authorization_scheme_and_credential_pattern().replace_all(bounded, "${prefix}[redacted]");
+        authorization_digest_challenge_pattern().replace_all(bounded, "${prefix}[redacted]");
+    let redacted =
+        authorization_scheme_and_credential_pattern().replace_all(&redacted, "${prefix}[redacted]");
     let redacted = authorization_pattern().replace_all(&redacted, "${prefix}[redacted]");
     let redacted = secret_argument_pattern().replace_all(&redacted, "${prefix}[redacted]");
     let redacted =
@@ -851,7 +863,9 @@ fn redact_narrative_text(value: &str) -> String {
 fn redact_text_for_context(value: &str, context: TextRedactionContext) -> String {
     let bounded = bounded_text(value);
     let redacted =
-        authorization_scheme_and_credential_pattern().replace_all(bounded, "${prefix}[redacted]");
+        authorization_digest_challenge_pattern().replace_all(bounded, "${prefix}[redacted]");
+    let redacted =
+        authorization_scheme_and_credential_pattern().replace_all(&redacted, "${prefix}[redacted]");
     let redacted = authorization_pattern().replace_all(&redacted, "${prefix}[redacted]");
     let redacted = secret_argument_pattern().replace_all(&redacted, "${prefix}[redacted]");
     let redacted = redact_standalone_authorization_credentials(&redacted, context);
@@ -992,9 +1006,7 @@ fn forbidden_raw_content(value: &str) -> bool {
     forbidden_raw_content_pattern().is_match(bounded)
         || authorization_scheme_and_credential_pattern().is_match(bounded)
         || standalone_authorization_scheme_pattern().is_match(bounded)
-        || bare_authorization_pattern()
-            .captures_iter(bounded)
-            .any(|captures| captures.name("scheme").is_some())
+        || bare_authorization_pattern().is_match(bounded)
 }
 
 fn redact_standalone_authorization_credentials(

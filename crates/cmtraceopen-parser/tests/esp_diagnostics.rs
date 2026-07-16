@@ -7158,6 +7158,255 @@ fn redaction_projection_removes_quoted_and_assignment_authorization_forms() {
 }
 
 #[test]
+fn redaction_projection_masks_entire_digest_challenges_across_public_boundaries() {
+    let evidence_challenge = r#"Authorization Digest username="evidence-user", realm="evidence-realm", nonce="evidence-nonce""#;
+    let source_challenge = r#"Authorization Digest username="source-user", realm="source-realm", nonce="source-nonce""#;
+    let named_challenge =
+        r#"Authorization Digest username="named-user", realm="named-realm", nonce="named-nonce""#;
+    let raw_challenge =
+        r#"Authorization Digest username="raw-user", realm="raw-realm", nonce="raw-nonce""#;
+
+    let mut snapshot = findings_snapshot();
+    snapshot.identity.evidence = vec![evidence_ref_from(evidence_challenge, source_challenge)];
+    snapshot.registration_events.push(EspRegistrationEvent {
+        event_id: 304,
+        record_id: Some(42),
+        status: status(
+            EspRawStatus::Text("failed".to_string()),
+            EspNormalizedStatus::Failed,
+        ),
+        message: "Device registration failed".to_string(),
+        timestamp: timestamp("2026-07-15T12:00:00Z"),
+        named_data: vec![EspNamedValue {
+            name: "Payload".to_string(),
+            value: named_challenge.to_string(),
+        }],
+        evidence: vec![evidence_ref("registration-digest-challenge")],
+    });
+
+    let mut raw = raw_export_record(
+        "raw-digest-challenge",
+        EspSourceKind::DeploymentLog,
+        "deployment-log",
+        None,
+        raw_challenge,
+    );
+    raw.sensitivity = EspSensitivity::Public;
+    snapshot.raw_evidence = vec![raw];
+    let original = snapshot.clone();
+
+    let safe = redacted_export_projection(&snapshot);
+    assert_eq!(
+        safe.identity.evidence[0],
+        evidence_ref_from("Authorization [redacted]", "Authorization [redacted]")
+    );
+    assert_eq!(
+        safe.registration_events[0].named_data[0].value,
+        "Authorization [redacted]"
+    );
+    assert!(safe.raw_evidence.is_empty());
+    let safe_json = serde_json::to_string(&safe).unwrap();
+    for secret in [
+        "evidence-user",
+        "evidence-realm",
+        "evidence-nonce",
+        "source-user",
+        "source-realm",
+        "source-nonce",
+        "named-user",
+        "named-realm",
+        "named-nonce",
+        "raw-user",
+        "raw-realm",
+        "raw-nonce",
+    ] {
+        assert!(!safe_json.contains(secret), "safe export leaked {secret}");
+    }
+    assert_eq!(snapshot, original);
+}
+
+#[test]
+fn redaction_projection_masks_generic_hardware_material_across_public_boundaries() {
+    let mut snapshot = findings_snapshot();
+    snapshot.identity.evidence = vec![evidence_ref_from(
+        "HardwareHash evidence-hardware-secret",
+        "DeviceHardwareData source-hardware-secret",
+    )];
+    snapshot.registration_events.push(EspRegistrationEvent {
+        event_id: 304,
+        record_id: Some(42),
+        status: status(
+            EspRawStatus::Text("failed".to_string()),
+            EspNormalizedStatus::Failed,
+        ),
+        message: "Device registration failed".to_string(),
+        timestamp: timestamp("2026-07-15T12:00:00Z"),
+        named_data: vec![
+            EspNamedValue {
+                name: "Payload".to_string(),
+                value: "HardwareHash named-hardware-secret".to_string(),
+            },
+            EspNamedValue {
+                name: "AdditionalPayload".to_string(),
+                value: "DeviceHardwareData named-device-data-secret".to_string(),
+            },
+            EspNamedValue {
+                name: "TokenCount".to_string(),
+                value: "5".to_string(),
+            },
+        ],
+        evidence: vec![evidence_ref("registration-generic-hardware-material")],
+    });
+
+    let mut event = raw_export_record(
+        "safe-event-record",
+        EspSourceKind::EventLog,
+        "event-log",
+        None,
+        "safe raw event payload",
+    );
+    event.sensitivity = EspSensitivity::Public;
+    event.provenance.event = Some(EspEventProvenance {
+        channel: "Generic event channel".to_string(),
+        event_id: 1,
+        record_id: Some(1),
+        named_data: vec![
+            EspNamedValue {
+                name: "Payload".to_string(),
+                value: "HardwareHash event-hardware-secret".to_string(),
+            },
+            EspNamedValue {
+                name: "AdditionalPayload".to_string(),
+                value: "DeviceHardwareData event-device-data-secret".to_string(),
+            },
+            EspNamedValue {
+                name: "TokenCount".to_string(),
+                value: "7".to_string(),
+            },
+        ],
+    });
+    let mut raw_hash = raw_export_record(
+        "raw-three",
+        EspSourceKind::DeploymentLog,
+        "deployment-log",
+        None,
+        "HardwareHash raw-hardware-secret",
+    );
+    raw_hash.sensitivity = EspSensitivity::Public;
+    let mut raw_device_data = raw_export_record(
+        "raw-four",
+        EspSourceKind::DeploymentLog,
+        "deployment-log",
+        None,
+        "DeviceHardwareData raw-device-data-secret",
+    );
+    raw_device_data.sensitivity = EspSensitivity::Public;
+    snapshot.raw_evidence = vec![event, raw_hash, raw_device_data];
+    let original = snapshot.clone();
+
+    let safe = redacted_export_projection(&snapshot);
+    assert_eq!(
+        safe.identity.evidence[0],
+        evidence_ref_from("HardwareHash [redacted]", "DeviceHardwareData [redacted]")
+    );
+    assert_eq!(
+        safe.registration_events[0]
+            .named_data
+            .iter()
+            .map(|value| value.value.as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            "HardwareHash [redacted]",
+            "DeviceHardwareData [redacted]",
+            "5",
+        ]
+    );
+    assert_eq!(
+        safe.raw_evidence
+            .iter()
+            .map(|record| record.record_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["safe-event-record"]
+    );
+    assert_eq!(
+        safe.raw_evidence[0]
+            .provenance
+            .event
+            .as_ref()
+            .unwrap()
+            .named_data
+            .iter()
+            .map(|value| value.value.as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            "HardwareHash [redacted]",
+            "DeviceHardwareData [redacted]",
+            "7",
+        ]
+    );
+    let safe_json = serde_json::to_string(&safe).unwrap();
+    for secret in [
+        "evidence-hardware-secret",
+        "source-hardware-secret",
+        "named-hardware-secret",
+        "named-device-data-secret",
+        "event-hardware-secret",
+        "event-device-data-secret",
+        "raw-hardware-secret",
+        "raw-device-data-secret",
+    ] {
+        assert!(!safe_json.contains(secret), "safe export leaked {secret}");
+    }
+    assert_eq!(snapshot, original);
+}
+
+#[test]
+fn redaction_projection_omits_bare_and_unknown_authorization_raw_records() {
+    let mut bare = raw_export_record(
+        "raw-one",
+        EspSourceKind::DeploymentLog,
+        "deployment-log",
+        None,
+        "Authorization qwertyz",
+    );
+    bare.sensitivity = EspSensitivity::Public;
+    let mut unknown_scheme = raw_export_record(
+        "raw-two",
+        EspSourceKind::DeploymentLog,
+        "deployment-log",
+        None,
+        "Authorization Custom custom-authorization-secret",
+    );
+    unknown_scheme.sensitivity = EspSensitivity::Public;
+    let mut safe_control = raw_export_record(
+        "raw-safe-control",
+        EspSourceKind::DeploymentLog,
+        "deployment-log",
+        None,
+        "safe control value",
+    );
+    safe_control.sensitivity = EspSensitivity::Public;
+
+    let mut snapshot = findings_snapshot();
+    snapshot.raw_evidence = vec![bare, unknown_scheme, safe_control];
+    let original = snapshot.clone();
+
+    let safe = redacted_export_projection(&snapshot);
+    assert_eq!(
+        safe.raw_evidence
+            .iter()
+            .map(|record| record.record_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["raw-safe-control"]
+    );
+    let safe_json = serde_json::to_string(&safe).unwrap();
+    for secret in ["qwertyz", "Custom", "custom-authorization-secret"] {
+        assert!(!safe_json.contains(secret), "safe export leaked {secret}");
+    }
+    assert_eq!(snapshot, original);
+}
+
+#[test]
 fn redaction_projection_scrubs_raw_metadata_and_all_matching_evidence_references() {
     let sid = "S-1-5-21-111-222-333-1001";
     let source_artifact_id = format!("source:{sid}:person@example.test");
