@@ -10,9 +10,10 @@ use std::path::{Component, Path, PathBuf};
 
 use chrono::{SecondsFormat, Utc};
 use cmtraceopen_parser::esp::{
-    EspArtifactCoverage, EspArtifactStatus, EspDiagnosticsReducer, EspDiagnosticsSnapshot,
-    EspEvidenceProvenance, EspEvidenceRecord, EspEvidenceRef, EspJsonObservation,
-    EspJoinMode, EspObservationContext, EspObservationValue, EspParseState,
+    EspArtifactCoverage, EspArtifactStatus, EspDeliveryOptimizationEventKind,
+    EspDeliveryOptimizationEvidence, EspDeliveryOptimizationObservation, EspDiagnosticsReducer,
+    EspDiagnosticsSnapshot, EspEvidenceProvenance, EspEvidenceRecord, EspEvidenceRef, EspJoinMode,
+    EspJsonObservation, EspObservationContext, EspObservationValue, EspParseState,
     EspRegistryObservation, EspRegistryProvenance, EspSensitivity, EspSourceAccessState,
     EspSourceKind, EspSystemFact, EspSystemObservation,
 };
@@ -37,6 +38,7 @@ pub const MAX_JSON_NODES: usize = 16_384;
 pub const MAX_JSON_DEPTH: usize = 32;
 pub const MAX_REGISTRY_RECORDS: usize = 8192;
 pub const MAX_LOG_RECORDS_PER_ARTIFACT: usize = 65_536;
+pub const MAX_DELIVERY_STATUS_RECORDS: usize = 64;
 
 const SUPPORTED_MANIFEST_EXTENSIONS: &[&str] = &["evtx", "json", "log", "reg", "txt", "xml"];
 const LEGACY_JSON_BASENAMES: &[&str] = &[
@@ -847,6 +849,11 @@ fn parse_json_artifact(path: &Path, artifact: &BundleArtifact) -> ArtifactParseO
         artifact,
         &source_artifact_id,
     ));
+    records.extend(delivery_status_from_json(
+        &document,
+        artifact,
+        &source_artifact_id,
+    ));
     ArtifactParseOutcome {
         records,
         coverage: Vec::new(),
@@ -908,11 +915,8 @@ fn parse_log_artifact(path: &Path, artifact: &BundleArtifact) -> ArtifactParseOu
                     .unwrap_or(false)
             });
             let source_artifact_id = source_artifact_id(artifact);
-            let mut records = dsregcmd_system_records(
-                &result.entries,
-                artifact,
-                &source_artifact_id,
-            );
+            let mut records =
+                dsregcmd_system_records(&result.entries, artifact, &source_artifact_id);
             records.extend(log_entries_to_records(
                 Path::new(&artifact.relative_path),
                 &source_artifact_id,
@@ -968,7 +972,10 @@ fn dsregcmd_system_records(
 
     let mut facts = Vec::<(EspSystemFact, EspSensitivity)>::new();
     if let Some(value) = values.get("devicename") {
-        facts.push((EspSystemFact::Hostname(value.clone()), EspSensitivity::Public));
+        facts.push((
+            EspSystemFact::Hostname(value.clone()),
+            EspSensitivity::Public,
+        ));
     }
     if let Some(value) = values.get("deviceid") {
         facts.push((
@@ -1345,6 +1352,114 @@ fn delivery_summary_from_json(
         source_artifact_id: source_artifact_id.to_string(),
     });
     vec![EspEvidenceRecord::DeliveryOptimizationSummary(summary)]
+}
+
+fn delivery_status_from_json(
+    document: &Value,
+    artifact: &BundleArtifact,
+    source_artifact_id: &str,
+) -> Vec<EspEvidenceRecord> {
+    if !semantic_identity(artifact).contains("delivery-optimization-status") {
+        return Vec::new();
+    }
+    let values = document
+        .as_array()
+        .map(Vec::as_slice)
+        .unwrap_or_else(|| std::slice::from_ref(document));
+    let mut observations = Vec::new();
+    let mut evidence = Vec::new();
+    let mut download_http_bytes = 0_u64;
+    let mut download_lan_bytes = 0_u64;
+    let mut download_cache_host_bytes = 0_u64;
+
+    for (index, object) in values
+        .iter()
+        .filter_map(Value::as_object)
+        .take(MAX_DELIVERY_STATUS_RECORDS)
+        .enumerate()
+    {
+        let field = |name: &str| {
+            object.iter().find_map(|(candidate, value)| {
+                candidate
+                    .eq_ignore_ascii_case(name)
+                    .then(|| json_scalar_text(value))
+                    .flatten()
+            })
+        };
+        let status = field("Status").unwrap_or_default();
+        let kind = if [
+            "complete",
+            "completed",
+            "success",
+            "succeeded",
+            "transferred",
+        ]
+        .iter()
+        .any(|candidate| status.eq_ignore_ascii_case(candidate))
+        {
+            EspDeliveryOptimizationEventKind::DownloadCompleted
+        } else {
+            EspDeliveryOptimizationEventKind::DownloadStarted
+        };
+        let http_bytes = field("BytesFromHttp").and_then(|value| value.parse::<u64>().ok());
+        let lan_bytes = field("BytesFromLanPeers").and_then(|value| value.parse::<u64>().ok());
+        let cache_host_bytes =
+            field("BytesFromCacheServer").and_then(|value| value.parse::<u64>().ok());
+        download_http_bytes = download_http_bytes.saturating_add(http_bytes.unwrap_or(0));
+        download_lan_bytes = download_lan_bytes.saturating_add(lan_bytes.unwrap_or(0));
+        download_cache_host_bytes =
+            download_cache_host_bytes.saturating_add(cache_host_bytes.unwrap_or(0));
+        let evidence_ref = EspEvidenceRef {
+            evidence_id: format!("{source_artifact_id}:delivery-status:{index}"),
+            source_artifact_id: source_artifact_id.to_string(),
+        };
+        evidence.push(evidence_ref.clone());
+        observations.push(EspEvidenceRecord::DeliveryOptimization(
+            EspDeliveryOptimizationObservation {
+                context: EspObservationContext {
+                    evidence_ref,
+                    provenance: EspEvidenceProvenance {
+                        source_kind: EspSourceKind::DeliveryOptimization,
+                        source_artifact_id: source_artifact_id.to_string(),
+                        file_path: Some(artifact.relative_path.clone()),
+                        line_number: None,
+                        record_number: Some(index as u64),
+                        registry: None,
+                        event: None,
+                    },
+                    source_timestamp: None,
+                    observed_at_utc: artifact.observed_at_utc.clone(),
+                    sensitivity: EspSensitivity::Public,
+                    parse_state: EspParseState::Parsed,
+                    access_state: EspSourceAccessState::Available,
+                },
+                kind,
+                content_id: field("FileId"),
+                app_id: None,
+                http_bytes,
+                lan_bytes,
+                cache_host_bytes,
+            },
+        ));
+    }
+    if observations.is_empty() {
+        return observations;
+    }
+    let share = |bytes: u64| {
+        (download_http_bytes != 0).then(|| (bytes as f64 / download_http_bytes as f64) * 100.0)
+    };
+    observations.push(EspEvidenceRecord::DeliveryOptimizationSummary(
+        EspDeliveryOptimizationEvidence {
+            download_http_bytes,
+            download_lan_bytes,
+            download_cache_host_bytes,
+            peer_share_percent: share(download_lan_bytes),
+            connected_cache_share_percent: share(download_cache_host_bytes),
+            transfers: Vec::new(),
+            evidence,
+        },
+    ));
+    observations
 }
 
 fn object_value_case_insensitive<'a>(document: &'a Value, name: &str) -> Option<&'a Value> {

@@ -22,8 +22,8 @@ use app_lib::esp::discovery::default_known_source_specs;
 use app_lib::esp::discovery::{
     build_runtime_temp_roots, discover_bounded_logs, embedded_known_source_specs,
     DiscoveredLogSource, DiscoveryInput, DiscoveryPathFailure, DiscoveryPathFailureKind,
-    DiscoveryResult, DiscoveryRootKind, DiscoveryRootState, DiscoverySourceOrigin,
-    KnownSourceSpec, DISCOVERY_INTERVAL, MAX_ACTIVE_TAILS, MAX_INITIAL_READ_BYTES,
+    DiscoveryResult, DiscoveryRootKind, DiscoveryRootState, DiscoverySourceOrigin, KnownSourceSpec,
+    DISCOVERY_INTERVAL, MAX_ACTIVE_TAILS, MAX_INITIAL_READ_BYTES,
     MAX_KNOWN_ENTRIES_PROBED_PER_ROOT, MAX_ROTATIONS_PER_KNOWN_LOG, MAX_SESSION_DURATION,
     MAX_TEMP_ENTRIES_INSPECTED_PER_ROOT, MAX_TEMP_ENTRIES_PROBED_PER_ROOT, TEMP_LOOKBACK,
     UPDATE_DEBOUNCE,
@@ -4556,8 +4556,7 @@ fn live_session_adapters_preserve_bounded_path_reset_eviction_and_family_semanti
         .coverage
         .iter()
         .find(|coverage| {
-            coverage.family == "intune-ime"
-                && coverage.status == EspArtifactStatus::Available
+            coverage.family == "intune-ime" && coverage.status == EspArtifactStatus::Available
         })
         .expect("reset source coverage")
         .artifact_id
@@ -5203,8 +5202,9 @@ fn archive_keeps_manifest_listed_numeric_log_rotations_for_bundle_analysis() {
         ],
     );
 
-    let snapshot = analyze_captured_evidence_at(&archive_path, BUNDLE_REQUEST_ID, BUNDLE_OBSERVED_AT)
-        .expect("analyze archived rotation");
+    let snapshot =
+        analyze_captured_evidence_at(&archive_path, BUNDLE_REQUEST_ID, BUNDLE_OBSERVED_AT)
+            .expect("analyze archived rotation");
 
     assert!(snapshot.raw_evidence.iter().any(|record| {
         record
@@ -6275,8 +6275,73 @@ fn bundle_dsregcmd_status_populates_captured_identity_and_join_facts() {
     );
     assert_eq!(value["profile"]["joinMode"], "hybridEntra");
     assert!(snapshot.identity.evidence.iter().all(|evidence| {
-        evidence.source_artifact_id.starts_with("bundle:dsregcmd-status:")
+        evidence
+            .source_artifact_id
+            .starts_with("bundle:dsregcmd-status:")
     }));
+}
+
+#[test]
+fn bundle_delivery_optimization_status_rows_normalize_transfers_and_byte_sources() {
+    let bundle = tempfile::tempdir().expect("bundle tempdir");
+    let output = bundle.path().join("evidence/command-output");
+    std::fs::create_dir_all(&output).expect("create command output folder");
+    std::fs::write(
+        output.join("delivery-optimization-status.json"),
+        serde_json::to_vec(&serde_json::json!([
+            {
+                "FileId": "content-one.intunewin.bin",
+                "Status": "Downloading",
+                "BytesFromHttp": 1000,
+                "BytesFromLanPeers": 100,
+                "BytesFromCacheServer": 25
+            },
+            {
+                "FileId": "content-two.intunewin.bin",
+                "Status": "Completed",
+                "BytesFromHttp": 250,
+                "BytesFromLanPeers": 50,
+                "BytesFromCacheServer": 10
+            }
+        ]))
+        .expect("serialize Delivery Optimization status"),
+    )
+    .expect("write Delivery Optimization status fixture");
+    write_bundle_manifest(
+        bundle.path(),
+        serde_json::json!([{
+            "artifactId": "delivery-optimization-status",
+            "category": "command-output",
+            "family": "delivery-optimization-command",
+            "relativePath": "evidence/command-output/delivery-optimization-status.json",
+            "status": "collected",
+            "parseHints": ["json", "delivery-optimization"]
+        }]),
+    );
+
+    let snapshot =
+        analyze_captured_evidence_at(bundle.path(), BUNDLE_REQUEST_ID, BUNDLE_OBSERVED_AT)
+            .expect("analyze captured Delivery Optimization status");
+    let delivery = snapshot
+        .delivery_optimization
+        .as_ref()
+        .expect("normalized Delivery Optimization evidence");
+    let value = serde_json::to_value(delivery).expect("serialize Delivery Optimization evidence");
+
+    assert_eq!(delivery.download_http_bytes, 1250);
+    assert_eq!(delivery.download_lan_bytes, 150);
+    assert_eq!(delivery.download_cache_host_bytes, 35);
+    assert_eq!(delivery.transfers.len(), 2);
+    assert_eq!(
+        value["transfers"][0]["contentId"],
+        "content-one.intunewin.bin"
+    );
+    assert_eq!(value["transfers"][0]["kind"], "downloadStarted");
+    assert_eq!(
+        value["transfers"][1]["contentId"],
+        "content-two.intunewin.bin"
+    );
+    assert_eq!(value["transfers"][1]["kind"], "downloadCompleted");
 }
 
 #[test]
