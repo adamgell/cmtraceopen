@@ -26,6 +26,7 @@ use crate::intune::models::{
 /// Maximum entries to parse from a single .evtx file to prevent memory issues.
 const MAX_ENTRIES_PER_FILE: usize = 50_000;
 pub const MAX_ESP_EVTX_RECORD_BYTES: usize = 512 * 1024;
+pub const MAX_ESP_EVTX_BATCH_BYTES: usize = 32 * 1024 * 1024;
 #[cfg(target_os = "windows")]
 const MAX_LIVE_ENTRIES_PER_CHANNEL: usize = 200;
 
@@ -54,11 +55,31 @@ pub struct ParsedEspEventRecord {
     pub raw_xml: String,
 }
 
+impl ParsedEspEventRecord {
+    pub fn retained_bytes(&self) -> usize {
+        let event_data_bytes = self.event_data.iter().fold(0usize, |total, property| {
+            total
+                .saturating_add(property.name.len())
+                .saturating_add(property.value.len())
+        });
+        self.channel
+            .len()
+            .saturating_add(self.source_timestamp.len())
+            .saturating_add(self.source_file.len())
+            .saturating_add(self.raw_xml.len())
+            .saturating_add(self.message.as_ref().map_or(0, String::len))
+            .saturating_add(event_data_bytes)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParsedEspEvtxBatch {
     pub records: Vec<ParsedEspEventRecord>,
     pub inspected_records: usize,
     pub truncated: bool,
+    pub parse_failure_count: usize,
+    pub oversized_record_count: usize,
+    pub retained_byte_budget_exhausted: bool,
 }
 
 #[cfg(target_os = "windows")]
@@ -289,47 +310,89 @@ pub fn parse_esp_evtx_file(path: &Path) -> Result<Vec<ParsedEspEventRecord>, Str
 
 fn parse_esp_evtx_file_with<F>(path: &Path, parse: F) -> Result<Vec<ParsedEspEventRecord>, String>
 where
-    F: FnOnce(&Path, usize, usize) -> Result<ParsedEspEvtxBatch, String>,
+    F: FnOnce(&Path, usize, usize, usize) -> Result<ParsedEspEvtxBatch, String>,
 {
-    parse(path, MAX_ENTRIES_PER_FILE, MAX_ESP_EVTX_RECORD_BYTES).map(|batch| batch.records)
+    parse(
+        path,
+        MAX_ENTRIES_PER_FILE,
+        MAX_ESP_EVTX_RECORD_BYTES,
+        MAX_ESP_EVTX_BATCH_BYTES,
+    )
+    .map(|batch| batch.records)
 }
 
 pub fn parse_esp_evtx_file_bounded(
     path: &Path,
     inspection_limit: usize,
     max_record_bytes: usize,
+    max_retained_bytes: usize,
 ) -> Result<ParsedEspEvtxBatch, String> {
     let mut parser = EvtxParser::from_path(path)
         .map_err(|error| format!("Failed to open EVTX file {}: {error}", path.display()))?;
     let source_file = path.to_string_lossy().to_string();
+    Ok(parse_esp_record_stream(
+        parser
+            .records()
+            .map(|result| result.map(|record| (record.data, record.event_record_id))),
+        &source_file,
+        inspection_limit,
+        max_record_bytes,
+        max_retained_bytes,
+    ))
+}
+
+fn parse_esp_record_stream<I, E>(
+    record_results: I,
+    source_file: &str,
+    inspection_limit: usize,
+    max_record_bytes: usize,
+    max_retained_bytes: usize,
+) -> ParsedEspEvtxBatch
+where
+    I: IntoIterator<Item = Result<(String, u64), E>>,
+{
     let mut records = Vec::new();
     let mut inspected_records = 0;
-    let mut oversized_record = false;
-    for record_result in parser.records().take(inspection_limit) {
+    let mut parse_failure_count = 0usize;
+    let mut oversized_record_count = 0usize;
+    let mut retained_bytes = 0usize;
+    let mut retained_byte_budget_exhausted = false;
+    for record_result in record_results.into_iter().take(inspection_limit) {
         inspected_records += 1;
-        let Ok(record) = record_result else {
+        let Ok((data, event_record_id)) = record_result else {
+            parse_failure_count += 1;
             continue;
         };
-        if record.data.len() > max_record_bytes {
-            oversized_record = true;
+        if data.len() > max_record_bytes {
+            oversized_record_count += 1;
             continue;
         }
-        if let Some(record) = parse_esp_event_xml(
-            &record.data,
-            &source_file,
-            Some(record.event_record_id),
-            None,
-            "Unknown",
-        ) {
-            records.push(record);
+        let Some(record) =
+            parse_esp_event_xml(&data, source_file, Some(event_record_id), None, "Unknown")
+        else {
+            parse_failure_count += 1;
+            continue;
+        };
+        let record_bytes = record.retained_bytes();
+        if record_bytes > max_retained_bytes.saturating_sub(retained_bytes) {
+            retained_byte_budget_exhausted = true;
+            continue;
         }
+        retained_bytes += record_bytes;
+        records.push(record);
     }
 
-    Ok(ParsedEspEvtxBatch {
+    ParsedEspEvtxBatch {
         records,
         inspected_records,
-        truncated: oversized_record || inspected_records >= inspection_limit,
-    })
+        truncated: parse_failure_count > 0
+            || oversized_record_count > 0
+            || retained_byte_budget_exhausted
+            || inspected_records >= inspection_limit,
+        parse_failure_count,
+        oversized_record_count,
+        retained_byte_budget_exhausted,
+    }
 }
 
 /// Normalize rendered live XML or captured EVTX XML into the same ordered
@@ -594,9 +657,28 @@ pub fn parse_live_event_logs() -> Option<EventLogAnalysis> {
             match eventlog_win32::query_live_channel(channel, MAX_LIVE_ENTRIES_PER_CHANNEL) {
                 Ok(result) => {
                     let channel_enum = EventLogChannel::from_channel_string(&result.channel_path);
+                    let partial_detail = result.partial_detail;
+                    let mut parsed_entries = Vec::with_capacity(result.records.len());
+                    let mut parse_failure_count = 0usize;
+
+                    for record in result.records {
+                        if let Some(entry) = parse_live_event_record(
+                            &record.xml,
+                            &record.source_file,
+                            record.rendered_message,
+                            id_offset,
+                            &result.channel_path,
+                        ) {
+                            parsed_entries.push(entry);
+                            id_offset += 1;
+                        } else {
+                            parse_failure_count += 1;
+                        }
+                    }
                     let (status, entry_count, error_message) = live_channel_outcome(
-                        result.records.len() as u32,
-                        result.partial_detail.as_deref(),
+                        parsed_entries.len() as u32,
+                        partial_detail.as_deref(),
+                        parse_failure_count,
                     );
 
                     live_channels.push(EventLogLiveQueryChannelResult {
@@ -609,18 +691,7 @@ pub fn parse_live_event_logs() -> Option<EventLogAnalysis> {
                         error_message,
                     });
 
-                    for record in result.records {
-                        if let Some(entry) = parse_live_event_record(
-                            &record.xml,
-                            &record.source_file,
-                            record.rendered_message,
-                            id_offset,
-                            &result.channel_path,
-                        ) {
-                            all_entries.push(entry);
-                            id_offset += 1;
-                        }
-                    }
+                    all_entries.extend(parsed_entries);
 
                     if entry_count > 0 {
                         parsed_file_count += 1;
@@ -668,12 +739,22 @@ pub fn parse_live_event_logs() -> Option<EventLogAnalysis> {
 fn live_channel_outcome(
     entry_count: u32,
     partial_detail: Option<&str>,
+    parse_failure_count: usize,
 ) -> (EventLogLiveQueryStatus, u32, Option<String>) {
-    if let Some(detail) = partial_detail {
+    let mut details = partial_detail
+        .filter(|detail| !detail.trim().is_empty())
+        .map(|detail| vec![detail.to_string()])
+        .unwrap_or_default();
+    if parse_failure_count > 0 {
+        details.push(format!(
+            "{parse_failure_count} Windows Event Log record(s) could not be parsed"
+        ));
+    }
+    if !details.is_empty() {
         return (
             EventLogLiveQueryStatus::Failed,
             entry_count,
-            Some(detail.to_string()),
+            Some(details.join(". ")),
         );
     }
     let status = if entry_count == 0 {
@@ -1304,6 +1385,16 @@ mod tests {
 
     use super::*;
 
+    fn esp_record_xml(payload: &str) -> String {
+        format!(
+            "<Event><System><EventID>72</EventID><TimeCreated SystemTime='2026-07-16T13:00:00Z'/><Channel>Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin</Channel></System><EventData><Data Name='Payload'>{payload}</Data></EventData></Event>"
+        )
+    }
+
+    fn retained_record_bytes(record: &ParsedEspEventRecord) -> usize {
+        record.retained_bytes()
+    }
+
     #[test]
     fn evtx_record_limit_bounds_inspection_before_skipping_malformed_records() {
         let inspected = Cell::new(0_usize);
@@ -1331,20 +1422,83 @@ mod tests {
     fn public_esp_evtx_wrapper_forwards_the_default_record_size_limit() {
         let records = parse_esp_evtx_file_with(
             Path::new("bounded-wrapper.evtx"),
-            |path, inspection_limit, max_record_bytes| {
+            |path, inspection_limit, max_record_bytes, max_retained_bytes| {
                 assert_eq!(path, Path::new("bounded-wrapper.evtx"));
                 assert_eq!(inspection_limit, MAX_ENTRIES_PER_FILE);
                 assert_eq!(max_record_bytes, MAX_ESP_EVTX_RECORD_BYTES);
+                assert_eq!(max_retained_bytes, MAX_ESP_EVTX_BATCH_BYTES);
                 Ok(ParsedEspEvtxBatch {
                     records: Vec::new(),
                     inspected_records: 0,
                     truncated: false,
+                    parse_failure_count: 0,
+                    oversized_record_count: 0,
+                    retained_byte_budget_exhausted: false,
                 })
             },
         )
         .expect("bounded public wrapper");
 
         assert!(records.is_empty());
+    }
+
+    #[test]
+    fn esp_record_stream_enforces_aggregate_retained_bytes_before_materialization() {
+        let first_xml = esp_record_xml(&"a".repeat(256));
+        let second_xml = esp_record_xml(&"b".repeat(256));
+        let first_record =
+            parse_esp_event_xml(&first_xml, "bounded-stream.evtx", Some(1), None, "Unknown")
+                .expect("valid first record");
+        let max_retained_bytes = retained_record_bytes(&first_record);
+        let input = vec![
+            Ok::<_, &'static str>((first_xml, 1)),
+            Ok::<_, &'static str>((second_xml, 2)),
+        ];
+
+        let batch = parse_esp_record_stream(
+            input,
+            "bounded-stream.evtx",
+            10,
+            MAX_ESP_EVTX_RECORD_BYTES,
+            max_retained_bytes,
+        );
+
+        assert_eq!(batch.inspected_records, 2);
+        assert_eq!(batch.records.len(), 1);
+        assert!(
+            batch
+                .records
+                .iter()
+                .map(retained_record_bytes)
+                .sum::<usize>()
+                <= max_retained_bytes
+        );
+        assert!(batch.truncated);
+    }
+
+    #[test]
+    fn esp_record_stream_counts_record_and_xml_parse_failures_while_retaining_valid_records() {
+        let valid_xml = esp_record_xml("valid");
+        let invalid_xml = "<Event><System><EventID>not-a-number</EventID></System></Event>";
+        let input = vec![
+            Ok((valid_xml, 1)),
+            Err("corrupt EVTX record"),
+            Ok((invalid_xml.to_string(), 3)),
+        ];
+
+        let batch = parse_esp_record_stream(
+            input,
+            "partial-stream.evtx",
+            10,
+            MAX_ESP_EVTX_RECORD_BYTES,
+            usize::MAX,
+        );
+
+        assert_eq!(batch.inspected_records, 3);
+        assert_eq!(batch.records.len(), 1);
+        assert_eq!(batch.records[0].record_id, Some(1));
+        assert_eq!(batch.parse_failure_count, 2);
+        assert!(batch.truncated);
     }
 
     #[test]
@@ -1442,20 +1596,31 @@ mod tests {
         let partial_detail = "Windows Event Log channel exceeded its byte budget";
 
         let (status, retained_entry_count, error_message) =
-            live_channel_outcome(7, Some(partial_detail));
+            live_channel_outcome(7, Some(partial_detail), 0);
 
         assert_eq!(status, EventLogLiveQueryStatus::Failed);
         assert_eq!(retained_entry_count, 7);
         assert_eq!(error_message.as_deref(), Some(partial_detail));
 
         assert_eq!(
-            live_channel_outcome(1, None),
+            live_channel_outcome(1, None, 0),
             (EventLogLiveQueryStatus::Success, 1, None)
         );
         assert_eq!(
-            live_channel_outcome(0, None),
+            live_channel_outcome(0, None, 0),
             (EventLogLiveQueryStatus::Empty, 0, None)
         );
+    }
+
+    #[test]
+    fn live_channel_parse_failures_are_partial_failed_with_retained_entry_count() {
+        let (status, retained_entry_count, error_message) = live_channel_outcome(7, None, 2);
+
+        assert_eq!(status, EventLogLiveQueryStatus::Failed);
+        assert_eq!(retained_entry_count, 7);
+        let detail = error_message.expect("parse-failure detail");
+        assert!(detail.contains('2'));
+        assert!(detail.contains("could not be parsed"));
     }
 
     #[cfg(target_os = "windows")]

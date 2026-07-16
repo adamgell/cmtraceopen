@@ -836,6 +836,37 @@ fn event_ingestion_excludes_hardware_identity_redacts_authorization_and_marks_id
 }
 
 #[test]
+fn event_identity_aliases_and_full_windows_sid_grammar_are_always_sensitive() {
+    let cases = [
+        ("DeviceSerialNumber", "DVC-739185"),
+        ("AzureADTenantID", "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"),
+        ("Data[0]", "S-1-5-1-2-3-4-5-6-7-8-9-10-11-12-13-14-15"),
+        ("Data[0]", "S-1-0x000000000005-21"),
+    ];
+
+    for (index, (name, value)) in cases.into_iter().enumerate() {
+        let channel = ESP_EVENT_CHANNELS[0];
+        let record = parsed_event(
+            channel,
+            72,
+            1_000 + index as u64,
+            vec![event_property(name, value)],
+        );
+        let provider = FakeEventLogProvider::default()
+            .with_records(channel, vec![record])
+            .with_records(ESP_EVENT_CHANNELS[1], Vec::new());
+
+        let evidence = collect_event_evidence(&provider, "2026-07-16T13:00:00Z");
+
+        assert_eq!(
+            evidence.observations[0].observation.context.sensitivity,
+            EspSensitivity::Sensitive,
+            "identity value was published as Public: {name}={value}"
+        );
+    }
+}
+
+#[test]
 fn event_hardware_redaction_preserves_positional_field_indexes() {
     let channel = ESP_EVENT_CHANNELS[0];
     let record = parsed_event(

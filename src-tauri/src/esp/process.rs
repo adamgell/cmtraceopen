@@ -177,12 +177,14 @@ struct CommandLineSanitizers {
     double_quoted_authorization: Regex,
     single_quoted_authorization: Regex,
     parameterized_authorization: Regex,
+    standalone_digest_challenge: Regex,
     digest_authorization: Regex,
     authorization_credential: Regex,
     bearer: Regex,
     named_secret: Regex,
     query_secret: Regex,
     json_secret: Regex,
+    escaped_json_secret: Regex,
 }
 
 fn command_line_sanitizers() -> &'static CommandLineSanitizers {
@@ -197,9 +199,13 @@ fn command_line_sanitizers() -> &'static CommandLineSanitizers {
         )
         .expect("constant single-quoted-authorization regex"),
         parameterized_authorization: Regex::new(
-            r#"(?i)(^|\s)((?:--|/)?authorization)(\s*(?:=|:)\s*|\s+)[!#$%&'*+\-.^_`|~a-z0-9]+\s+[!#$%&'*+\-.^_`|~a-z0-9]+\s*=\s*(?:"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|[^\s,]+)(?:\s*,\s*[!#$%&'*+\-.^_`|~a-z0-9]+\s*=\s*(?:"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|[^\s,]+))*"#,
+            r#"(?i)(^|\s)((?:--|/)?authorization)(\s*(?:=|:)\s*|\s+)[!#$%&'*+\-.^_`|~a-z0-9]+\s+[!#$%&'*+\-.^_`|~a-z0-9]+\s*=\s*(?:"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|[^\s,]+)(?:(?:\s*,\s*[!#$%&'*+\-.^_`|~a-z0-9]+|\s+[!#$%&'*+.^_`|~a-z0-9][!#$%&'*+\-.^_`|~a-z0-9]*)\s*=\s*(?:"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|[^\s,]+))*"#,
         )
         .expect("constant parameterized-authorization regex"),
+        standalone_digest_challenge: Regex::new(
+            r#"(?i)(^|\s)(digest)(\s+)[!#$%&'*+\-.^_`|~a-z0-9]+\s*=\s*(?:"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|[^\s,]+)(?:(?:\s*,\s*[!#$%&'*+\-.^_`|~a-z0-9]+|\s+[!#$%&'*+.^_`|~a-z0-9][!#$%&'*+\-.^_`|~a-z0-9]*)\s*=\s*(?:"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|[^\s,]+))*"#,
+        )
+        .expect("constant standalone-Digest-challenge regex"),
         digest_authorization: Regex::new(
             r#"(?i)(^|\s)((?:--|/)?authorization)(\s*(?:=|:)\s*|\s+)digest\s+.*"#,
         )
@@ -213,17 +219,21 @@ fn command_line_sanitizers() -> &'static CommandLineSanitizers {
         )
         .expect("constant bearer regex"),
         named_secret: Regex::new(
-            r#"(?i)(^|\s)((?:--|/)?(?:access[-_]?token|bearer[-_]?token|client[-_]?secret|app[-_]?secret|api[-_]?key|token|password|secret|authorization))(\s*(?:=|:)\s*|\s+)(?:"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|[^\s&"]+)"#,
+            r#"(?i)(^|\s)((?:--|/)?(?:access[-_]?token|refresh[-_]?token|id[-_]?token|auth[-_]?token|bearer[-_]?token|client[-_]?secret|app[-_]?secret|api[-_]?key|token|password|secret|authorization))(\s*(?:=|:)\s*|\s+)(?:"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|[^\s&"]+)"#,
         )
         .expect("constant named-secret regex"),
         query_secret: Regex::new(
-            r#"(?i)([?&](?:sig|access[-_]?token|bearer[-_]?token|client[-_]?secret|app[-_]?secret|api[-_]?key|token|password|secret|authorization)=)(?:"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|[^&\s"]+)"#,
+            r#"(?i)([?&](?:sig|access[-_]?token|refresh[-_]?token|id[-_]?token|auth[-_]?token|bearer[-_]?token|client[-_]?secret|app[-_]?secret|api[-_]?key|token|password|secret|authorization)=)(?:"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|[^&\s"]+)"#,
         )
         .expect("constant query-secret regex"),
         json_secret: Regex::new(
-            r#"(?i)("(?:access[-_]?token|bearer[-_]?token|client[-_]?secret|app[-_]?secret|api[-_]?key|token|password|secret|authorization)"\s*:\s*")(?:\\.|[^"])*(\")"#,
+            r#"(?i)("(?:access[-_]?token|refresh[-_]?token|id[-_]?token|auth[-_]?token|bearer[-_]?token|client[-_]?secret|app[-_]?secret|api[-_]?key|token|password|secret|authorization)"\s*:\s*")(?:\\.|[^"])*(\")"#,
         )
         .expect("constant JSON-secret regex"),
+        escaped_json_secret: Regex::new(
+            r#"(?i)(\\"(?:access[-_]?token|refresh[-_]?token|id[-_]?token|auth[-_]?token|bearer[-_]?token|client[-_]?secret|app[-_]?secret|api[-_]?key|token|password|secret|authorization)\\"\s*:\s*\\")[^\\"]*(\\")"#,
+        )
+        .expect("constant escaped-JSON-secret regex"),
     })
 }
 
@@ -238,6 +248,9 @@ pub fn sanitize_command_line(command_line: &str) -> String {
         .replace_all(&command_line, "$1$2$3[REDACTED]'");
     let command_line = sanitizers
         .parameterized_authorization
+        .replace_all(&command_line, "$1$2$3[REDACTED]");
+    let command_line = sanitizers
+        .standalone_digest_challenge
         .replace_all(&command_line, "$1$2$3[REDACTED]");
     // Digest credentials can contain a comma-separated parameter list, so conservatively
     // redact the rest of the command line once an unquoted Digest authorization value starts.
@@ -258,6 +271,9 @@ pub fn sanitize_command_line(command_line: &str) -> String {
         .replace_all(&command_line, "$1[REDACTED]");
     let command_line = sanitizers
         .json_secret
+        .replace_all(&command_line, "$1[REDACTED]$2");
+    let command_line = sanitizers
+        .escaped_json_secret
         .replace_all(&command_line, "$1[REDACTED]$2");
     command_line.into_owned()
 }
@@ -982,6 +998,75 @@ mod tests {
         assert!(sanitized.contains(r#""Authorization":"[REDACTED]""#));
         assert!(sanitized.contains(r#""safe":"keep-this-json-control""#));
         assert!(sanitized.contains("/i {12345678-1234-1234-1234-1234567890AB}"));
+    }
+
+    #[test]
+    fn command_line_sanitizer_redacts_uncommaed_unknown_authorization_parameter_tails() {
+        let raw = concat!(
+            "installer.exe Authorization: Custom-V1 realm=public ",
+            "response=uncommaed-authorization-secret-sentinel ",
+            "/i {12345678-1234-1234-1234-1234567890AB} ",
+            "/L*V C:\\Windows\\Temp\\contoso.log --response keep-this-positive-control"
+        );
+
+        let sanitized = sanitize_command_line(raw);
+
+        assert!(!sanitized.contains("uncommaed-authorization-secret-sentinel"));
+        assert!(!sanitized.contains("realm=public"));
+        assert!(sanitized.contains("Authorization: [REDACTED]"));
+        assert!(sanitized.contains("/i {12345678-1234-1234-1234-1234567890AB}"));
+        assert!(sanitized.contains("/L*V C:\\Windows\\Temp\\contoso.log"));
+        assert!(sanitized.contains("--response keep-this-positive-control"));
+    }
+
+    #[test]
+    fn command_line_sanitizer_redacts_one_layer_escaped_json_authorization_and_token_aliases() {
+        let raw = concat!(
+            r#"installer.exe --payload {\"Authorization\":\"Custom-V1 escaped-authorization-secret-sentinel\","#,
+            r#"\"refresh_token\":\"escaped-refresh-token-secret-sentinel\","#,
+            r#"\"id_token\":\"escaped-id-token-secret-sentinel\",\"safe\":\"keep-this-escaped-json-control\"} "#,
+            "/i {12345678-1234-1234-1234-1234567890AB}"
+        );
+
+        let sanitized = sanitize_command_line(raw);
+
+        for secret in [
+            "escaped-authorization-secret-sentinel",
+            "escaped-refresh-token-secret-sentinel",
+            "escaped-id-token-secret-sentinel",
+        ] {
+            assert!(!sanitized.contains(secret), "escaped JSON leaked {secret}");
+        }
+        assert!(sanitized.contains(r#"\"Authorization\":\"[REDACTED]\""#));
+        assert!(sanitized.contains(r#"\"refresh_token\":\"[REDACTED]\""#));
+        assert!(sanitized.contains(r#"\"id_token\":\"[REDACTED]\""#));
+        assert!(sanitized.contains(r#"\"safe\":\"keep-this-escaped-json-control\""#));
+        assert!(sanitized.contains("/i {12345678-1234-1234-1234-1234567890AB}"));
+    }
+
+    #[test]
+    fn command_line_sanitizer_redacts_complete_standalone_digest_challenges() {
+        let raw = concat!(
+            r#"installer.exe Digest username=\"digest-user-sentinel\", realm=\"digest-realm-sentinel\", response=\"digest-response-secret-sentinel\" "#,
+            "/i {12345678-1234-1234-1234-1234567890AB} ",
+            "/L*V C:\\Windows\\Temp\\contoso.log"
+        );
+
+        let sanitized = sanitize_command_line(raw);
+
+        for secret in [
+            "digest-user-sentinel",
+            "digest-realm-sentinel",
+            "digest-response-secret-sentinel",
+        ] {
+            assert!(
+                !sanitized.contains(secret),
+                "Digest challenge leaked {secret}"
+            );
+        }
+        assert!(sanitized.contains("Digest [REDACTED]"));
+        assert!(sanitized.contains("/i {12345678-1234-1234-1234-1234567890AB}"));
+        assert!(sanitized.contains("/L*V C:\\Windows\\Temp\\contoso.log"));
     }
 
     #[test]

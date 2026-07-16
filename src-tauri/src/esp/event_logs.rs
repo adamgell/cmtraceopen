@@ -246,7 +246,7 @@ fn collect_captured_evtx_files_with<F>(
     mut parse_file: F,
 ) -> Result<EventEvidence, EventSourceError>
 where
-    F: FnMut(&Path, usize, usize) -> Result<ParsedEspEvtxBatch, String>,
+    F: FnMut(&Path, usize, usize, usize) -> Result<ParsedEspEvtxBatch, String>,
 {
     let mut records_by_channel = HashMap::<String, Vec<ParsedEspEventRecord>>::new();
     let mut limitations = Vec::new();
@@ -278,10 +278,15 @@ where
             );
             break;
         }
+        let retained_bytes = records_by_channel.values().fold(0usize, |total, records| {
+            total.saturating_add(retained_event_bytes(records))
+        });
+        let remaining_retained_bytes = limits.max_retained_bytes.saturating_sub(retained_bytes);
         let batch = match parse_file(
             path.as_path(),
             remaining_inspections,
             limits.max_record_bytes,
+            remaining_retained_bytes,
         ) {
             Ok(batch) => batch,
             Err(detail) => {
@@ -297,12 +302,42 @@ where
         };
         inspected_records =
             inspected_records.saturating_add(batch.inspected_records.min(remaining_inspections));
-        if batch.truncated || inspected_records >= limits.max_inspected_records {
+        if inspected_records >= limits.max_inspected_records {
             push_unique_limitation(
                 &mut limitations,
                 format!(
                     "Captured EVTX inspection budget of {} records was exhausted.",
                     limits.max_inspected_records
+                ),
+            );
+        }
+        if batch.parse_failure_count > 0 {
+            push_unique_limitation(
+                &mut limitations,
+                format!(
+                    "Captured EVTX file {} contained {} record(s) that could not be parsed.",
+                    path.display(),
+                    batch.parse_failure_count
+                ),
+            );
+        }
+        if batch.oversized_record_count > 0 {
+            push_unique_limitation(
+                &mut limitations,
+                format!(
+                    "Captured EVTX file {} contained {} record(s) above the {}-byte record limit.",
+                    path.display(),
+                    batch.oversized_record_count,
+                    limits.max_record_bytes
+                ),
+            );
+        }
+        if batch.retained_byte_budget_exhausted {
+            push_unique_limitation(
+                &mut limitations,
+                format!(
+                    "Captured EVTX retained-byte budget of {} was exhausted.",
+                    limits.max_retained_bytes
                 ),
             );
         }
@@ -358,19 +393,7 @@ fn retained_event_bytes(records: &[ParsedEspEventRecord]) -> usize {
 }
 
 fn record_event_bytes(record: &ParsedEspEventRecord) -> usize {
-    let event_data_bytes = record.event_data.iter().fold(0usize, |total, property| {
-        total
-            .saturating_add(property.name.len())
-            .saturating_add(property.value.len())
-    });
-    record
-        .channel
-        .len()
-        .saturating_add(record.source_timestamp.len())
-        .saturating_add(record.source_file.len())
-        .saturating_add(record.raw_xml.len())
-        .saturating_add(record.message.as_ref().map_or(0, String::len))
-        .saturating_add(event_data_bytes)
+    record.retained_bytes()
 }
 
 fn push_unique_limitation(limitations: &mut Vec<String>, detail: String) {
@@ -500,6 +523,7 @@ fn deterministic_fields(
 fn event_sensitivity(event_data: &[EventLogProperty], message: Option<&str>) -> EspSensitivity {
     if event_data.iter().any(|property| {
         is_sensitive_event_field_name(&property.name)
+            || contains_sensitive_identity_text(&property.name)
             || contains_sensitive_identity_text(&property.value)
     }) || message.is_some_and(contains_sensitive_identity_text)
     {
@@ -523,7 +547,7 @@ fn contains_sensitive_identity_text(value: &str) -> bool {
     IDENTITY_TEXT
         .get_or_init(|| {
             regex::Regex::new(
-                r"(?i)(?:[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}|(?:^|[^a-z0-9])s-1-(?:[0-9]+-){1,14}[0-9]+(?:$|[^0-9])|(?:^|[^a-z0-9])(?:upn|user[ _-]*principal[ _-]*name|user[ _-]*sid|tenant[ _-]*(?:id|domain)|ent[ _-]*dm[ _-]*id|serial[ _-]*(?:number|no))(?:$|[^a-z0-9]))",
+                r"(?i)(?:[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}|(?:^|[^a-z0-9])s-1-(?:0x[0-9a-f]{1,12}|[0-9]{1,10})(?:-[0-9]{1,10}){1,15}(?:$|[^0-9])|(?:^|[^a-z0-9])(?:upn|user[ _-]*principal[ _-]*name|user[ _-]*sid|tenant[ _-]*(?:id|domain)|ent[ _-]*dm[ _-]*id|serial[ _-]*(?:number|no))(?:$|[^a-z0-9]))",
             )
             .expect("constant event identity regex")
         })
@@ -546,12 +570,14 @@ fn is_sensitive_event_field_name(value: &str) -> bool {
             | "tenantid"
             | "tenantdomain"
             | "aadtenantid"
+            | "azureadtenantid"
             | "aadtenantdomain"
             | "cloudassignedtenantid"
             | "cloudassignedtenantdomain"
             | "entdmid"
             | "serial"
             | "serialnumber"
+            | "deviceserialnumber"
     )
 }
 
@@ -662,23 +688,35 @@ fn read_live_event_channel_batch(
             }
         }
     };
-    let completion = query
-        .partial_detail
-        .map(EventSourceError::Failed)
-        .map_or(Ok(()), Err);
+    let mut partial_details = query.partial_detail.into_iter().collect::<Vec<_>>();
+    let mut parse_failure_count = 0usize;
     let records = query
         .records
         .into_iter()
         .filter_map(|record| {
-            crate::intune::evtx_parser::parse_esp_event_xml(
+            let parsed = crate::intune::evtx_parser::parse_esp_event_xml(
                 &record.xml,
                 &record.source_file,
                 None,
                 record.rendered_message,
                 channel,
-            )
+            );
+            if parsed.is_none() {
+                parse_failure_count += 1;
+            }
+            parsed
         })
         .collect();
+    if parse_failure_count > 0 {
+        partial_details.push(format!(
+            "{parse_failure_count} Windows Event Log record(s) could not be parsed"
+        ));
+    }
+    let completion = if partial_details.is_empty() {
+        Ok(())
+    } else {
+        Err(EventSourceError::Failed(partial_details.join(". ")))
+    };
     EventReadBatch {
         records,
         completion,
@@ -807,7 +845,7 @@ mod tests {
             &paths,
             "2026-07-16T12:01:00Z",
             limits,
-            |path, inspection_limit, _max_record_bytes| {
+            |path, inspection_limit, _max_record_bytes, _max_retained_bytes| {
                 calls.borrow_mut().push((
                     path.file_name()
                         .expect("file name")
@@ -825,6 +863,9 @@ mod tests {
                     records,
                     inspected_records: inspection_limit.min(2),
                     truncated: name == "b.evtx",
+                    parse_failure_count: 0,
+                    oversized_record_count: 0,
+                    retained_byte_budget_exhausted: false,
                 })
             },
         )
@@ -869,13 +910,17 @@ mod tests {
                 max_retained_bytes: 1,
                 max_records_per_channel: 10,
             },
-            |_path, inspection_limit, max_record_bytes| {
+            |_path, inspection_limit, max_record_bytes, max_retained_bytes| {
                 assert_eq!(inspection_limit, 10);
                 assert_eq!(max_record_bytes, 1024);
+                assert_eq!(max_retained_bytes, 1);
                 Ok(ParsedEspEvtxBatch {
                     records: vec![captured_record(1, "bounded.evtx")],
                     inspected_records: 1,
                     truncated: false,
+                    parse_failure_count: 0,
+                    oversized_record_count: 0,
+                    retained_byte_budget_exhausted: false,
                 })
             },
         )
@@ -901,12 +946,15 @@ mod tests {
             ],
             "2026-07-16T12:01:00Z",
             CapturedEventAcquisitionLimits::default(),
-            |path, _inspection_limit, _max_record_bytes| {
+            |path, _inspection_limit, _max_record_bytes, _max_retained_bytes| {
                 if path.ends_with("a-valid.evtx") {
                     Ok(ParsedEspEvtxBatch {
                         records: vec![captured_record(1, "a-valid.evtx")],
                         inspected_records: 1,
                         truncated: false,
+                        parse_failure_count: 0,
+                        oversized_record_count: 0,
+                        retained_byte_budget_exhausted: false,
                     })
                 } else {
                     Err("malformed EVTX sentinel".to_string())
@@ -923,6 +971,38 @@ mod tests {
         );
         assert!(evidence.limitations.iter().any(|detail| {
             detail.contains("b-malformed.evtx") && detail.contains("malformed EVTX sentinel")
+        }));
+    }
+
+    #[test]
+    fn captured_event_acquisition_propagates_record_parse_failures_as_partial_coverage() {
+        let evidence = collect_captured_evtx_files_with(
+            &[PathBuf::from("partially-malformed.evtx")],
+            "2026-07-16T13:01:00Z",
+            CapturedEventAcquisitionLimits::default(),
+            |_path, _inspection_limit, _max_record_bytes, _max_retained_bytes| {
+                Ok(ParsedEspEvtxBatch {
+                    records: vec![captured_record(1, "partially-malformed.evtx")],
+                    inspected_records: 3,
+                    truncated: true,
+                    parse_failure_count: 2,
+                    oversized_record_count: 0,
+                    retained_byte_budget_exhausted: false,
+                })
+            },
+        )
+        .expect("valid records must survive malformed neighbors");
+
+        assert_eq!(evidence.observations.len(), 1);
+        assert_eq!(evidence.observations[0].observation.record_id, Some(1));
+        assert_eq!(
+            evidence.channels[0].access_state,
+            EspSourceAccessState::Failed
+        );
+        assert!(evidence.limitations.iter().any(|detail| {
+            detail.contains("partially-malformed.evtx")
+                && detail.contains('2')
+                && detail.contains("could not be parsed")
         }));
     }
 
