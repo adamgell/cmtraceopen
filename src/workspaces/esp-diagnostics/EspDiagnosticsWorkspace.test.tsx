@@ -779,6 +779,43 @@ describe("optional Graph enrichment presentation", () => {
     );
   });
 
+  it("renders an accessible API version for dependency-blocked sections that were not requested", () => {
+    const overlay = makeGraphOverlay(
+      "app-vpn-raw-guid",
+      "Contoso VPN from Graph",
+    );
+    overlay.autopilotIdentity = {
+      status: "skipped",
+      requiredScope: "DeviceManagementServiceConfig.Read.All",
+      apiVersion: "notRequested",
+      data: null,
+      error: {
+        code: "Blocked",
+        message: "Select a managed device first",
+        requestId: "request-blocked",
+        blockedBy: "deviceMatch",
+        retryAfterSeconds: null,
+      },
+    };
+    const snapshot = makeSnapshot({ graph: overlay });
+    useUiStore.setState({
+      graphApiEnabled: true,
+      graphApiStatus: "connected",
+    });
+    useEspDiagnosticsStore.setState({
+      snapshot,
+      graphPhase: "partial",
+      graphUnavailableReason: null,
+    });
+
+    renderGraphPanel(snapshot);
+
+    const autopilotIdentity = screen.getByRole("article", {
+      name: "Graph section Autopilot identity",
+    });
+    expect(within(autopilotIdentity).getByText("Not requested")).toBeVisible();
+  });
+
   it("requires explicit selection for ambiguous managed-device candidates", () => {
     const onSelectDevice = vi.fn();
     const overlay = makeGraphOverlay(

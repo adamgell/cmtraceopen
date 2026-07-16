@@ -269,7 +269,9 @@ function GraphSectionCard<T>({
             </span>
           ) : section.apiVersion !== "notRequested" ? (
             <span>{section.apiVersion}</span>
-          ) : null}
+          ) : (
+            <span>Not requested</span>
+          )}
           <StatusIcon status={section.status} />
           <span>{statusLabel(section.status)}</span>
         </div>

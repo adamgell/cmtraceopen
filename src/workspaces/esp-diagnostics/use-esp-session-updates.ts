@@ -392,10 +392,52 @@ export function createEspGraphCoordinator(
   let operationGeneration = 0;
   let lastRequestedFingerprint: string | null = null;
   let blockedFingerprint: string | null = null;
+  let selectedManagedDeviceId: string | null = null;
+  let selectedManagedDeviceFingerprint: string | null = null;
   let pendingOrphanCancellation: Promise<void> | null = null;
   let ownedRequestId: string | null = null;
   let unsubscribeEsp: (() => void) | null = null;
   let unsubscribeUi: (() => void) | null = null;
+
+  const clearSelectedManagedDevice = () => {
+    selectedManagedDeviceId = null;
+    selectedManagedDeviceFingerprint = null;
+  };
+
+  const resolveSelectedManagedDeviceId = (
+    snapshot: EspDiagnosticsSnapshot,
+    fingerprint: string,
+    requestedManagedDeviceId: string | null | undefined,
+  ): string | null => {
+    if (
+      selectedManagedDeviceFingerprint !== null &&
+      selectedManagedDeviceFingerprint !== fingerprint
+    ) {
+      clearSelectedManagedDevice();
+    }
+
+    if (requestedManagedDeviceId !== undefined) {
+      if (requestedManagedDeviceId === null) {
+        clearSelectedManagedDevice();
+        return null;
+      }
+      selectedManagedDeviceId = requestedManagedDeviceId;
+      selectedManagedDeviceFingerprint = fingerprint;
+      return requestedManagedDeviceId;
+    }
+
+    if (selectedManagedDeviceFingerprint === fingerprint) {
+      return selectedManagedDeviceId;
+    }
+
+    const overlaySelection =
+      snapshot.graph?.deviceMatch.data?.selected?.managedDeviceId ?? null;
+    if (overlaySelection) {
+      selectedManagedDeviceId = overlaySelection;
+      selectedManagedDeviceFingerprint = fingerprint;
+    }
+    return overlaySelection;
+  };
 
   const cancelCurrentRequest = (): Promise<void> | null => {
     const requestId =
@@ -438,10 +480,17 @@ export function createEspGraphCoordinator(
 
   const run = async (
     force: boolean,
-    selectedManagedDeviceId: string | null = null,
+    requestedManagedDeviceId?: string | null,
   ) => {
     if (disposed) {
       return;
+    }
+
+    if (
+      !useEspDiagnosticsStore.getState().snapshot ||
+      !useUiStore.getState().graphApiEnabled
+    ) {
+      clearSelectedManagedDevice();
     }
 
     const orphanCancellation = pendingOrphanCancellation;
@@ -455,6 +504,7 @@ export function createEspGraphCoordinator(
     const snapshot = useEspDiagnosticsStore.getState().snapshot;
     if (!snapshot) {
       const generation = ++operationGeneration;
+      clearSelectedManagedDevice();
       blockedFingerprint = null;
       lastRequestedFingerprint = null;
       const cancellation = cancelCurrentRequest();
@@ -468,10 +518,17 @@ export function createEspGraphCoordinator(
     }
 
     const fingerprint = getEspIdentityFingerprint(snapshot);
+    if (
+      selectedManagedDeviceFingerprint !== null &&
+      selectedManagedDeviceFingerprint !== fingerprint
+    ) {
+      clearSelectedManagedDevice();
+    }
     const { graphApiEnabled, graphApiStatus } = useUiStore.getState();
 
     if (!graphApiEnabled) {
       const generation = ++operationGeneration;
+      clearSelectedManagedDevice();
       const cancellation = cancelCurrentRequest();
       if (cancellation) {
         await cancellation;
@@ -517,6 +574,12 @@ export function createEspGraphCoordinator(
       blockedFingerprint = fingerprint;
       return;
     }
+
+    const requestSelectedManagedDeviceId = resolveSelectedManagedDeviceId(
+      snapshot,
+      fingerprint,
+      requestedManagedDeviceId,
+    );
 
     if (!force) {
       if (
@@ -571,7 +634,7 @@ export function createEspGraphCoordinator(
     const request = createGraphRequest(
       currentSnapshot,
       requestId,
-      selectedManagedDeviceId,
+      requestSelectedManagedDeviceId,
     );
     ownedRequestId = requestId;
     useEspDiagnosticsStore.getState().beginGraph(requestId, currentFingerprint);
@@ -619,8 +682,7 @@ export function createEspGraphCoordinator(
 
   return {
     reconcile: () => run(false),
-    refresh: (selectedManagedDeviceId = null) =>
-      run(true, selectedManagedDeviceId),
+    refresh: (selectedManagedDeviceId) => run(true, selectedManagedDeviceId),
     cancel: async () => {
       operationGeneration += 1;
       const cancellation = cancelCurrentRequest();
@@ -642,6 +704,7 @@ export function createEspGraphCoordinator(
             // long enough to finish native cancellation first.
             lastRequestedFingerprint = null;
             blockedFingerprint = null;
+            clearSelectedManagedDevice();
             if (
               previous.graphRequestId !== null &&
               state.graphRequestId === null
@@ -658,6 +721,9 @@ export function createEspGraphCoordinator(
           state.graphApiEnabled !== previous.graphApiEnabled ||
           state.graphApiStatus !== previous.graphApiStatus
         ) {
+          if (!state.graphApiEnabled) {
+            clearSelectedManagedDevice();
+          }
           void run(false);
         }
       });
@@ -684,7 +750,7 @@ export function createEspGraphCoordinator(
 let globalGraphCoordinator: EspGraphCoordinator | null = null;
 
 export async function refreshEspGraphData(
-  selectedManagedDeviceId: string | null = null,
+  selectedManagedDeviceId?: string | null,
 ): Promise<void> {
   await globalGraphCoordinator?.refresh(selectedManagedDeviceId);
 }
