@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import {
   analyzeEspEvidence,
   getEspDiagnosticsSession,
+  getEspElevationState,
   graphCancelEspDiagnostics,
   graphFetchEspDiagnostics,
   restartEspAsAdministrator,
@@ -275,6 +276,11 @@ describe("ESP typed command wrappers", () => {
     };
     const overlay = makeOverlay("graph-a");
     vi.mocked(invoke)
+      .mockResolvedValueOnce({
+        isElevated: false,
+        restartSupported: true,
+        restrictedSources: [],
+      })
       .mockResolvedValueOnce(snapshot)
       .mockResolvedValueOnce(envelope)
       .mockResolvedValueOnce(envelope)
@@ -283,6 +289,11 @@ describe("ESP typed command wrappers", () => {
       .mockResolvedValueOnce(overlay)
       .mockResolvedValueOnce(undefined);
 
+    await expect(getEspElevationState()).resolves.toEqual({
+      isElevated: false,
+      restartSupported: true,
+      restrictedSources: [],
+    });
     await expect(analyzeEspEvidence("/bundle", "analysis-a")).resolves.toBe(
       snapshot,
     );
@@ -311,6 +322,7 @@ describe("ESP typed command wrappers", () => {
     await expect(graphCancelEspDiagnostics("graph-a")).resolves.toBeUndefined();
 
     expect(vi.mocked(invoke).mock.calls).toEqual([
+      ["get_esp_elevation_state", undefined],
       ["analyze_esp_evidence", { path: "/bundle", requestId: "analysis-a" }],
       ["start_esp_diagnostics_session", { requestId: "live-a" }],
       ["get_esp_diagnostics_session", { sessionId: "session-a" }],

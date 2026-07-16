@@ -56,6 +56,11 @@ const DEFAULT_RESPONSES: Record<string, unknown> = {
   ],
   get_known_log_sources: [],
   get_file_association_prompt_status: "dismissed",
+  get_esp_elevation_state: {
+    isElevated: false,
+    restartSupported: true,
+    restrictedSources: [],
+  },
 };
 
 /** Commands the browser fixture must never forward to a real Graph tenant. */

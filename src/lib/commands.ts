@@ -19,6 +19,7 @@ import type {
 } from "../workspaces/dsregcmd/types";
 import type {
   EspDiagnosticsSnapshot,
+  EspElevationState,
   EspGraphOverlay,
   EspGraphRequest,
   EspRelaunchResult,
@@ -407,6 +408,10 @@ export async function collectDiagnostics(
 }
 
 // --- ESP Diagnostics ---
+
+export async function getEspElevationState(): Promise<EspElevationState> {
+  return invokeCommand<EspElevationState>("get_esp_elevation_state");
+}
 
 export async function analyzeEspEvidence(
   path: string,

@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Button, Spinner, tokens } from "@fluentui/react-components";
 import {
   DocumentArrowUpRegular,
@@ -8,6 +8,7 @@ import {
 } from "@fluentui/react-icons";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
+  getEspElevationState,
   startEspDiagnosticsSession,
   stopEspDiagnosticsSession,
 } from "../../lib/commands";
@@ -32,7 +33,25 @@ import {
 } from "./index";
 import { LiveActivity } from "./LiveActivity";
 import { MsiexecStatus } from "./MsiexecStatus";
+import type { EspElevationState } from "./types";
 import "./esp-diagnostics.css";
+
+const ELEVATION_PROBE_FALLBACK: EspElevationState = {
+  isElevated: false,
+  restartSupported: true,
+  restrictedSources: [],
+};
+
+function validElevationState(value: unknown): value is EspElevationState {
+  if (typeof value !== "object" || value === null) return false;
+  const candidate = value as Partial<EspElevationState>;
+  return (
+    typeof candidate.isElevated === "boolean" &&
+    typeof candidate.restartSupported === "boolean" &&
+    Array.isArray(candidate.restrictedSources) &&
+    candidate.restrictedSources.every((source) => typeof source === "string")
+  );
+}
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -67,8 +86,36 @@ export function EspDiagnosticsWorkspace() {
   const snapshot = useEspDiagnosticsStore((state) => state.snapshot);
   const error = useEspDiagnosticsStore((state) => state.error);
   const graphError = useEspDiagnosticsStore((state) => state.graphError);
+  const [entryElevation, setEntryElevation] =
+    useState<EspElevationState | null>(null);
   const liveSupported = currentPlatform === "windows";
   const isBusy = ["analyzing", "starting", "stopping"].includes(phase);
+  const effectiveElevation = snapshot?.elevation ?? entryElevation;
+
+  useEffect(() => {
+    if (currentPlatform !== "windows" || snapshot) {
+      setEntryElevation(null);
+      return;
+    }
+
+    let disposed = false;
+    const applyFallback = () => {
+      if (!disposed) setEntryElevation(ELEVATION_PROBE_FALLBACK);
+    };
+    void getEspElevationState()
+      .then((elevation) => {
+        if (disposed) return;
+        setEntryElevation(
+          validElevationState(elevation)
+            ? elevation
+            : ELEVATION_PROBE_FALLBACK,
+        );
+      })
+      .catch(applyFallback);
+    return () => {
+      disposed = true;
+    };
+  }, [currentPlatform, snapshot]);
 
   const importCapturedEvidence = useCallback(async () => {
     const path = normalizeSelection(
@@ -184,7 +231,9 @@ export function EspDiagnosticsWorkspace() {
         actions={headerActions}
       />
 
-      {snapshot ? <ElevationBanner elevation={snapshot.elevation} /> : null}
+      {effectiveElevation ? (
+        <ElevationBanner elevation={effectiveElevation} />
+      ) : null}
 
       <div
         style={{

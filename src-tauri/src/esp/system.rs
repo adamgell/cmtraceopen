@@ -411,6 +411,10 @@ pub fn elevation_from_probe(
     }
 }
 
+pub fn current_elevation_state() -> EspElevationState {
+    elevation_from_probe(LiveSystemProvider.elevation()).0
+}
+
 pub fn collect_system_evidence(
     provider: &impl SystemProvider,
     observed_at_utc: &str,

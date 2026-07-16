@@ -175,6 +175,11 @@ fn dispatch(body: &str, state: &Arc<BridgeState>) -> String {
         }
 
         #[cfg(feature = "esp-diagnostics")]
+        "get_esp_elevation_state" => {
+            ok_json(&crate::esp::system::current_elevation_state())
+        }
+
+        #[cfg(feature = "esp-diagnostics")]
         "graph_fetch_esp_diagnostics" | "graph_cancel_esp_diagnostics" => {
             err_json("ESP Graph commands are unavailable through the debug IPC bridge")
         }

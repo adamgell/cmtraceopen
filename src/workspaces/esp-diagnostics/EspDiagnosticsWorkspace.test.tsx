@@ -425,7 +425,12 @@ beforeEach(() => {
 });
 
 describe("ESP diagnostic cockpit frame", () => {
-  it("keeps explicit empty, analyzing, and error states inside the full-width workspace", () => {
+  it("keeps admin guidance plus explicit empty, analyzing, and error states inside the full-width workspace", async () => {
+    vi.mocked(invoke).mockResolvedValueOnce({
+      isElevated: false,
+      restartSupported: true,
+      restrictedSources: [],
+    });
     render(<EspDiagnosticsWorkspace />);
 
     expect(
@@ -435,6 +440,15 @@ describe("ESP diagnostic cockpit frame", () => {
     expect(screen.getByText("Scenario not detected")).toBeInTheDocument();
     expect(screen.getByText("No evidence loaded")).toBeInTheDocument();
     expect(screen.queryByRole("navigation")).not.toBeInTheDocument();
+    expect(
+      await screen.findByRole("region", {
+        name: "Administrator coverage recommendation",
+      }),
+    ).toBeInTheDocument();
+    expect(vi.mocked(invoke)).toHaveBeenCalledWith(
+      "get_esp_elevation_state",
+      undefined,
+    );
 
     act(() => {
       useEspDiagnosticsStore.setState({ phase: "analyzing" });
@@ -452,6 +466,40 @@ describe("ESP diagnostic cockpit frame", () => {
     expect(screen.getByRole("alert")).toHaveTextContent(
       "The evidence archive is malformed.",
     );
+  });
+
+  it("does not recommend elevation when the entry probe reports administrator", async () => {
+    vi.mocked(invoke).mockResolvedValueOnce({
+      isElevated: true,
+      restartSupported: true,
+      restrictedSources: [],
+    });
+
+    render(<EspDiagnosticsWorkspace />);
+
+    await waitFor(() =>
+      expect(vi.mocked(invoke)).toHaveBeenCalledWith(
+        "get_esp_elevation_state",
+        undefined,
+      ),
+    );
+    expect(
+      screen.queryByRole("region", {
+        name: "Administrator coverage recommendation",
+      }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("fails safely toward admin guidance when the entry probe is unavailable", async () => {
+    vi.mocked(invoke).mockRejectedValueOnce(new Error("probe unavailable"));
+
+    render(<EspDiagnosticsWorkspace />);
+
+    expect(
+      await screen.findByRole("region", {
+        name: "Administrator coverage recommendation",
+      }),
+    ).toBeInTheDocument();
   });
 
   it.each<[EspScenario, string]>([

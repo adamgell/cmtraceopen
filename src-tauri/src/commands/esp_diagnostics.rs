@@ -7,7 +7,7 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use cmtraceopen_parser::esp::EspDiagnosticsSnapshot;
+use cmtraceopen_parser::esp::{EspDiagnosticsSnapshot, EspElevationState};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::esp::bundle::{analyze_captured_evidence, BundleError};
@@ -19,6 +19,7 @@ use crate::esp::session::{
     EspSessionEnvelope, EspSessionError, EspSessionEventSink, EspSessionManager, EspSessionUpdate,
     ESP_SESSION_UPDATE_EVENT,
 };
+use crate::esp::system::current_elevation_state;
 use crate::esp::{acquisition_capability, EspAcquisitionCapability};
 use crate::state::app_state::AppState;
 
@@ -47,6 +48,11 @@ pub fn shutdown_esp_session_manager(app: &AppHandle) -> Result<(), EspSessionErr
 #[tauri::command]
 pub fn get_esp_diagnostics_capability() -> EspAcquisitionCapability {
     acquisition_capability()
+}
+
+#[tauri::command]
+pub fn get_esp_elevation_state() -> EspElevationState {
+    current_elevation_state()
 }
 
 #[tauri::command]
@@ -118,7 +124,7 @@ fn runtime_join_error(error: impl std::fmt::Display) -> EspSessionError {
 
 #[cfg(test)]
 mod tests {
-    use super::get_esp_diagnostics_capability;
+    use super::{get_esp_diagnostics_capability, get_esp_elevation_state};
 
     #[test]
     fn capability_command_reports_portable_offline_and_platform_live_support() {
@@ -132,5 +138,11 @@ mod tests {
             capability.live_acquisition_detail.is_none(),
             cfg!(target_os = "windows")
         );
+    }
+
+    #[test]
+    fn elevation_command_reports_platform_restart_capability() {
+        let elevation = get_esp_elevation_state();
+        assert_eq!(elevation.restart_supported, cfg!(target_os = "windows"));
     }
 }
