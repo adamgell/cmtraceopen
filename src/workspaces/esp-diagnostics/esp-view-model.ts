@@ -80,6 +80,39 @@ function displayTimestamp(value: EspTimestamp | null): string {
   return value?.normalizedUtc ?? value?.rawText ?? "Unknown";
 }
 
+function hasDevicePreparationEvidence(
+  value: NonNullable<EspDiagnosticsSnapshot["profile"]>["devicePreparation"],
+): boolean {
+  return Boolean(
+    value &&
+      (value.agentDownloadTimeoutSeconds !== null ||
+        value.pageTimeoutSeconds !== null ||
+        value.allowSkipOnFailure !== null ||
+        value.allowDiagnostics !== null ||
+        value.scriptIds.length > 0 ||
+        value.evidence.length > 0),
+  );
+}
+
+function hasProfileEvidence(
+  profile: NonNullable<EspDiagnosticsSnapshot["profile"]>,
+): boolean {
+  return (
+    profile.profileName !== null ||
+    profile.deploymentProfileId !== null ||
+    profile.correlationId !== null ||
+    profile.tenantDomain !== null ||
+    profile.tenantId !== null ||
+    profile.oobeConfig !== null ||
+    profile.profileDownloadTime !== null ||
+    profile.joinMode !== null ||
+    profile.odjApplied !== null ||
+    profile.skipDomainConnectivityCheck !== null ||
+    hasDevicePreparationEvidence(profile.devicePreparation) ||
+    profile.evidence.length > 0
+  );
+}
+
 function displayClassified(
   value: EspClassifiedString | null,
   revealSensitive: boolean,
@@ -284,7 +317,10 @@ export function buildEspEvidenceViewModel(
 ): EspEvidenceViewModel {
   const revealSensitive = options.revealSensitive ?? false;
   const identity = snapshot.identity;
-  const profile = snapshot.profile;
+  const profile =
+    snapshot.profile && hasProfileEvidence(snapshot.profile)
+      ? snapshot.profile
+      : null;
 
   const hasIdentityEvidence =
     identity.deviceName !== null ||
@@ -378,7 +414,10 @@ export function buildEspEvidenceViewModel(
     : [];
 
   const configurationItems: EspEvidenceItemViewModel[] = [];
-  if (profile?.devicePreparation) {
+  if (
+    profile?.devicePreparation &&
+    hasDevicePreparationEvidence(profile.devicePreparation)
+  ) {
     const configuration = profile.devicePreparation;
     configurationItems.push(
       item("device-preparation-config", "Device Preparation configuration", [
@@ -467,10 +506,25 @@ export function buildEspEvidenceViewModel(
       ], { rawId: profile.deploymentProfileId, evidence: profile.evidence }),
     );
   }
+  const registrationOccurrences = new Map<string, number>();
   joinItems.push(
-    ...snapshot.registrationEvents.map((event) =>
-      item(
-        `registration-${event.eventId}-${event.recordId ?? "unknown"}`,
+    ...snapshot.registrationEvents.map((event) => {
+      const primaryEvidence = [...event.evidence].sort(
+        (left, right) =>
+          left.sourceArtifactId.localeCompare(right.sourceArtifactId) ||
+          left.evidenceId.localeCompare(right.evidenceId),
+      )[0];
+      const identity =
+        event.recordId === null
+          ? `${primaryEvidence?.sourceArtifactId ?? "unreferenced"}-${
+              primaryEvidence?.evidenceId ?? "no-evidence"
+            }`
+          : `record-${event.recordId}`;
+      const baseId = `registration-${event.eventId}-${encodeURIComponent(identity)}`;
+      const occurrence = (registrationOccurrences.get(baseId) ?? 0) + 1;
+      registrationOccurrences.set(baseId, occurrence);
+      return item(
+        `${baseId}-${occurrence}`,
         event.message,
         [
           field("Status", event.status.display),
@@ -478,9 +532,12 @@ export function buildEspEvidenceViewModel(
           field("Timestamp", displayTimestamp(event.timestamp)),
           ...event.namedData.map((value) => field(value.name, value.value)),
         ],
-        { rawId: event.recordId === null ? null : String(event.recordId), evidence: event.evidence },
-      ),
-    ),
+        {
+          rawId: event.recordId === null ? null : String(event.recordId),
+          evidence: event.evidence,
+        },
+      );
+    }),
   );
 
   const deliveryItems = snapshot.deliveryOptimization
@@ -556,6 +613,29 @@ export function buildEspEvidenceViewModel(
       { rawId: entry.artifactId, evidence: entry.evidence },
     ),
   );
+  const representedCoverageIds = new Set(
+    snapshot.coverage.map((entry) => entry.artifactId),
+  );
+  const missingCoverageGapIds = Array.from(
+    new Set(snapshot.findings.flatMap((finding) => finding.coverageGapIds)),
+  ).filter((coverageGapId) => !representedCoverageIds.has(coverageGapId));
+  coverageItems.push(
+    ...missingCoverageGapIds.map((coverageGapId) =>
+      item(
+        `coverage-${coverageGapId}`,
+        "Referenced coverage gap",
+        [
+          field("Status", "Referenced gap"),
+          field(
+            "Detail",
+            "A finding references this coverage gap, but no source coverage record was included in this snapshot.",
+          ),
+          field("Observed", "Unknown"),
+        ],
+        { rawId: coverageGapId },
+      ),
+    ),
+  );
 
   const rawItems = snapshot.rawEvidence.map((record) => {
     const registry = record.provenance.registry;
@@ -578,6 +658,14 @@ export function buildEspEvidenceViewModel(
         field("Sensitivity", record.sensitivity),
         field("Observed", record.observedAtUtc),
         field("Source timestamp", displayTimestamp(record.sourceTimestamp)),
+        field(
+          "Source timestamp kind",
+          record.sourceTimestamp?.kind ?? "Unknown",
+        ),
+        field(
+          "Source original offset",
+          record.sourceTimestamp?.originalOffset ?? "Unknown",
+        ),
         ...(record.provenance.lineNumber === null
           ? []
           : [field("Line number", String(record.provenance.lineNumber))]),
@@ -781,20 +869,32 @@ export function buildEspEvidenceViewModel(
       ),
     );
 
-  if (referenceOnlyItems.length > 0) {
+  if (referenceOnlyItems.length > 0 || missingCoverageGapIds.length > 0) {
     const coverageDefinition = definitions.find(
       (definition) => definition.id === "source-coverage",
     );
     if (coverageDefinition) {
-      const coverageRecordCount = coverageDefinition.items.length;
       coverageDefinition.items.push(...referenceOnlyItems);
+      const notes = [];
+      if (missingCoverageGapIds.length > 0) {
+        notes.push(
+          `${missingCoverageGapIds.length} referenced coverage ${
+            missingCoverageGapIds.length === 1 ? "gap has" : "gaps have"
+          } no source coverage record in this snapshot`,
+        );
+      }
+      if (referenceOnlyItems.length > 0) {
+        notes.push(
+          `${referenceOnlyItems.length} linked evidence ${
+            referenceOnlyItems.length === 1 ? "reference has" : "references have"
+          } no raw or normalized record in this snapshot`,
+        );
+      }
       coverageDefinition.sourceOverride = {
         state: "partial",
-        note: `${coverageRecordCount} source coverage ${
-          coverageRecordCount === 1 ? "record" : "records"
-        } available; ${referenceOnlyItems.length} linked evidence ${
-          referenceOnlyItems.length === 1 ? "reference has" : "references have"
-        } no raw or normalized record in this snapshot.`,
+        note: `${snapshot.coverage.length} source coverage ${
+          snapshot.coverage.length === 1 ? "record" : "records"
+        } available; ${notes.join("; ")}.`,
       };
     }
   }

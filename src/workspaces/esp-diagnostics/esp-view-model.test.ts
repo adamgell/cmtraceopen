@@ -521,7 +521,16 @@ describe("ESP evidence view model", () => {
   });
 
   it("retains raw provenance, source state, sensitivity, parse state, and evidence IDs", () => {
-    const raw = buildEspEvidenceViewModel(snapshot()).sections.find(
+    const record = {
+      ...rawEvidence(),
+      sourceTimestamp: {
+        rawText: "07/15/2026 13:07:00",
+        originalOffset: "-07:00",
+        normalizedUtc: null,
+        kind: "offset" as const,
+      },
+    };
+    const raw = buildEspEvidenceViewModel(snapshot({ rawEvidence: [record] })).sections.find(
       (section) => section.id === "raw-provenance",
     );
 
@@ -538,6 +547,18 @@ describe("ESP evidence view model", () => {
         expect.objectContaining({ label: "Access", value: "available" }),
         expect.objectContaining({ label: "Parse", value: "parsed" }),
         expect.objectContaining({ label: "Sensitivity", value: "sensitive" }),
+        expect.objectContaining({
+          label: "Source timestamp",
+          value: "07/15/2026 13:07:00",
+        }),
+        expect.objectContaining({
+          label: "Source timestamp kind",
+          value: "offset",
+        }),
+        expect.objectContaining({
+          label: "Source original offset",
+          value: "-07:00",
+        }),
         expect.objectContaining({
           label: "Registry",
           value: expect.stringContaining("HKLM"),
@@ -738,6 +759,153 @@ describe("ESP evidence view model", () => {
       sourceState: "notObserved",
       items: [],
     });
+  });
+
+  it("does not fabricate profile or join records for an exact all-null profile object", () => {
+    const allNullProfile = {
+      profileName: null,
+      deploymentProfileId: null,
+      correlationId: null,
+      tenantDomain: null,
+      tenantId: null,
+      oobeConfig: null,
+      profileDownloadTime: null,
+      joinMode: null,
+      odjApplied: null,
+      skipDomainConnectivityCheck: null,
+      devicePreparation: null,
+      evidence: [],
+    };
+    const sections = buildEspEvidenceViewModel(
+      snapshot({ profile: allNullProfile }),
+    ).sections;
+
+    expect(
+      sections
+        .find((section) => section.id === "identity-profile")
+        ?.items.some((candidate) => candidate.id === "deployment-profile"),
+    ).toBe(false);
+    expect(
+      sections
+        .find((section) => section.id === "join-registration")
+        ?.items.some((candidate) => candidate.id === "join-profile"),
+    ).toBe(false);
+  });
+
+  it("preserves truthful mixed partial profiles, including false boolean evidence", () => {
+    const base = snapshot().profile;
+    if (!base) throw new Error("Expected profile fixture");
+    const sections = buildEspEvidenceViewModel(
+      snapshot({
+        profile: {
+          ...base,
+          profileName: "Partial profile",
+          deploymentProfileId: null,
+          correlationId: null,
+          tenantDomain: null,
+          tenantId: null,
+          oobeConfig: null,
+          profileDownloadTime: null,
+          joinMode: null,
+          odjApplied: false,
+          skipDomainConnectivityCheck: null,
+          devicePreparation: null,
+          evidence: [],
+        },
+      }),
+    ).sections;
+
+    expect(
+      sections
+        .find((section) => section.id === "identity-profile")
+        ?.items.find((candidate) => candidate.id === "deployment-profile"),
+    ).toMatchObject({ title: "Partial profile" });
+    expect(
+      sections
+        .find((section) => section.id === "join-registration")
+        ?.items.find((candidate) => candidate.id === "join-profile")
+        ?.fields,
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          label: "Offline domain join applied",
+          value: "Disabled",
+        }),
+      ]),
+    );
+  });
+
+  it("synthesizes one canonical target for an orphan finding coverage gap", () => {
+    const finding = {
+      findingId: "finding-orphan-gap",
+      severity: "warning" as const,
+      confidence: "high" as const,
+      title: "Temporary installer logs unavailable",
+      summary: "A source gap remains.",
+      recommendedChecks: [],
+      evidence: [],
+      coverageGapIds: ["coverage-system-temp", "coverage-system-temp"],
+    };
+    const sourceCoverage = buildEspEvidenceViewModel(
+      snapshot({ findings: [finding] }),
+    ).sections.find((section) => section.id === "source-coverage");
+    const targets =
+      sourceCoverage?.items.filter(
+        (candidate) => candidate.id === "coverage-coverage-system-temp",
+      ) ?? [];
+
+    expect(targets).toHaveLength(1);
+    expect(targets[0]).toMatchObject({
+      title: "Referenced coverage gap",
+      rawId: "coverage-system-temp",
+    });
+    expect(sourceCoverage).toMatchObject({
+      sourceState: "partial",
+      sourceNote: expect.stringContaining("coverage gap"),
+    });
+  });
+
+  it("derives stable unique registration IDs for duplicate null record IDs", () => {
+    const baseEvent = snapshot().registrationEvents[0];
+    const registrationEvents = [
+      {
+        ...baseEvent,
+        recordId: null,
+        message: "First registration occurrence",
+        evidence: [
+          { evidenceId: "ev-registration-a", sourceArtifactId: "mdm-events" },
+        ],
+      },
+      {
+        ...baseEvent,
+        recordId: null,
+        message: "Second registration occurrence",
+        evidence: [
+          { evidenceId: "ev-registration-b", sourceArtifactId: "mdm-events" },
+        ],
+      },
+      {
+        ...baseEvent,
+        recordId: null,
+        message: "Repeated registration occurrence",
+        evidence: [
+          { evidenceId: "ev-registration-b", sourceArtifactId: "mdm-events" },
+        ],
+      },
+    ];
+    const buildIds = () =>
+      buildEspEvidenceViewModel(snapshot({ registrationEvents }))
+        .sections.find((section) => section.id === "join-registration")
+        ?.items.filter((candidate) => candidate.id.startsWith("registration-"))
+        .map((candidate) => candidate.id) ?? [];
+
+    const first = buildIds();
+    const second = buildIds();
+    expect(first).toHaveLength(3);
+    expect(new Set(first).size).toBe(3);
+    expect(first).toEqual(second);
+    expect(first.every((id) => id.includes("mdm-events"))).toBe(true);
+    expect(first.filter((id) => id.includes("ev-registration-b"))).toHaveLength(2);
   });
 
   it("keeps partial source coverage visible when normalized records also exist", () => {

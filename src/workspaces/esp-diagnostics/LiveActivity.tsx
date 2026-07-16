@@ -5,16 +5,29 @@ import { LOG_MONOSPACE_FONT_FAMILY, LOG_UI_FONT_FAMILY } from "../../lib/log-acc
 import { requestEspEvidenceNavigation } from "./evidence-navigation";
 import type { EspTimelineEntry } from "./types";
 
-function timestampValue(entry: EspTimelineEntry): number {
-  const parsed = Date.parse(
-    entry.timestamp.normalizedUtc ?? entry.timestamp.rawText,
-  );
-  return Number.isFinite(parsed) ? parsed : 0;
+function timestampValue(entry: EspTimelineEntry): number | null {
+  if (!entry.timestamp.normalizedUtc) return null;
+  const parsed = Date.parse(entry.timestamp.normalizedUtc);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function compareEntries(left: EspTimelineEntry, right: EspTimelineEntry): number {
+  const leftTimestamp = timestampValue(left);
+  const rightTimestamp = timestampValue(right);
+  if (leftTimestamp !== null && rightTimestamp !== null) {
+    return (
+      rightTimestamp - leftTimestamp ||
+      left.entryId.localeCompare(right.entryId)
+    );
+  }
+  if (leftTimestamp !== null) return -1;
+  if (rightTimestamp !== null) return 1;
+  return left.entryId.localeCompare(right.entryId);
 }
 
 function timeLabel(entry: EspTimelineEntry): string {
-  const value = entry.timestamp.normalizedUtc ?? entry.timestamp.rawText;
-  const parsed = new Date(value);
+  if (!entry.timestamp.normalizedUtc) return entry.timestamp.rawText;
+  const parsed = new Date(entry.timestamp.normalizedUtc);
   if (Number.isNaN(parsed.getTime())) return entry.timestamp.rawText;
   return parsed.toISOString().slice(11, 19);
 }
@@ -49,12 +62,7 @@ export const ESP_ACTIVITY_WINDOW_SIZE = 80;
 export function LiveActivity({ entries }: LiveActivityProps) {
   const [windowStart, setWindowStart] = useState(0);
   const orderedEntries = useMemo(
-    () =>
-      [...entries].sort(
-        (left, right) =>
-          timestampValue(right) - timestampValue(left) ||
-          left.entryId.localeCompare(right.entryId),
-      ),
+    () => [...entries].sort(compareEntries),
     [entries],
   );
   const maximumStart = Math.max(0, orderedEntries.length - ESP_ACTIVITY_WINDOW_SIZE);

@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { tokens } from "@fluentui/react-components";
+import { Button, tokens } from "@fluentui/react-components";
 import { LinkRegular } from "@fluentui/react-icons";
 import { LOG_MONOSPACE_FONT_FAMILY, LOG_UI_FONT_FAMILY } from "../../lib/log-accessibility";
 import { requestEspEvidenceNavigation } from "./evidence-navigation";
@@ -94,13 +94,27 @@ function formatCode(code: EspErrorCode | null, absentLabel: string): string {
   return code.hex ? `${code.raw} · ${code.hex}` : code.raw;
 }
 
-function timestampValue(workload: EspWorkload): number {
-  const value =
+function timestampValue(workload: EspWorkload): number | null {
+  const normalizedUtc =
     workload.timestamps.started?.normalizedUtc ??
-    workload.timestamps.firstObserved.normalizedUtc ??
-    workload.timestamps.firstObserved.rawText;
-  const parsed = Date.parse(value);
-  return Number.isFinite(parsed) ? parsed : Number.MAX_SAFE_INTEGER;
+    workload.timestamps.firstObserved.normalizedUtc;
+  if (!normalizedUtc) return null;
+  const parsed = Date.parse(normalizedUtc);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function compareWorkloads(left: EspWorkload, right: EspWorkload): number {
+  const leftTimestamp = timestampValue(left);
+  const rightTimestamp = timestampValue(right);
+  if (leftTimestamp !== null && rightTimestamp !== null) {
+    return (
+      leftTimestamp - rightTimestamp ||
+      left.workloadId.localeCompare(right.workloadId)
+    );
+  }
+  if (leftTimestamp !== null) return -1;
+  if (rightTimestamp !== null) return 1;
+  return left.workloadId.localeCompare(right.workloadId);
 }
 
 function graphNames(snapshot: EspDiagnosticsSnapshot): Map<string, string> {
@@ -123,9 +137,13 @@ interface WorkloadRowProps {
 }
 
 function WorkloadRow({ workload, graphName }: WorkloadRowProps) {
+  const [showFullValues, setShowFullValues] = useState(false);
   const effectiveStatus = effectiveNormalizedStatus(workload.status);
   return (
-    <tr style={{ borderTop: `1px solid ${tokens.colorNeutralStroke2}` }}>
+    <tr
+      data-testid="esp-workload-row"
+      style={{ borderTop: `1px solid ${tokens.colorNeutralStroke2}` }}
+    >
       <td style={{ width: "31%", padding: "7px 9px", verticalAlign: "top" }}>
         <strong
           style={{
@@ -286,8 +304,13 @@ function WorkloadRow({ workload, graphName }: WorkloadRowProps) {
         </div>
       </td>
       <td style={{ width: "12%", padding: "7px 9px", verticalAlign: "top" }}>
-        <details>
+        <details open={showFullValues}>
           <summary
+            aria-expanded={showFullValues}
+            onClick={(event) => {
+              event.preventDefault();
+              setShowFullValues((current) => !current);
+            }}
             style={{
               cursor: "pointer",
               color: tokens.colorBrandForegroundLink,
@@ -298,43 +321,46 @@ function WorkloadRow({ workload, graphName }: WorkloadRowProps) {
           >
             View full values
           </summary>
-          <div
-            style={{
-              marginTop: 4,
-              color: tokens.colorNeutralForeground3,
-              fontFamily: LOG_MONOSPACE_FONT_FAMILY,
-              fontSize: 10,
-              lineHeight: "12px",
-              overflowWrap: "anywhere",
-            }}
-          >
-            <div>Workload · {workload.workloadId}</div>
-            <div>Session · {workload.sessionId}</div>
-            <div>First observed · {workload.timestamps.firstObserved.rawText}</div>
-            {workload.evidence.map((reference) => (
-              <a
-                key={reference.evidenceId}
-                href={`#evidence-${reference.evidenceId}`}
-                onClick={() =>
-                  requestEspEvidenceNavigation({
-                    kind: "evidence",
-                    id: reference.evidenceId,
-                  })
-                }
-                aria-label={`Open evidence ${reference.evidenceId}`}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 2,
-                  color: tokens.colorBrandForegroundLink,
-                  textDecoration: "none",
-                }}
-              >
-                <LinkRegular aria-hidden="true" />
-                <code>{reference.evidenceId}</code>
-              </a>
-            ))}
-          </div>
+          {showFullValues ? (
+            <div
+              data-testid="esp-workload-full-values"
+              style={{
+                marginTop: 4,
+                color: tokens.colorNeutralForeground3,
+                fontFamily: LOG_MONOSPACE_FONT_FAMILY,
+                fontSize: 10,
+                lineHeight: "12px",
+                overflowWrap: "anywhere",
+              }}
+            >
+              <div>Workload · {workload.workloadId}</div>
+              <div>Session · {workload.sessionId}</div>
+              <div>First observed · {workload.timestamps.firstObserved.rawText}</div>
+              {workload.evidence.map((reference) => (
+                <a
+                  key={reference.evidenceId}
+                  href={`#evidence-${reference.evidenceId}`}
+                  onClick={() =>
+                    requestEspEvidenceNavigation({
+                      kind: "evidence",
+                      id: reference.evidenceId,
+                    })
+                  }
+                  aria-label={`Open evidence ${reference.evidenceId}`}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 2,
+                    color: tokens.colorBrandForegroundLink,
+                    textDecoration: "none",
+                  }}
+                >
+                  <LinkRegular aria-hidden="true" />
+                  <code>{reference.evidenceId}</code>
+                </a>
+              ))}
+            </div>
+          ) : null}
         </details>
       </td>
     </tr>
@@ -345,8 +371,11 @@ interface EspWorkloadTableProps {
   snapshot: EspDiagnosticsSnapshot;
 }
 
+export const ESP_WORKLOAD_WINDOW_SIZE = 80;
+
 export function EspWorkloadTable({ snapshot }: EspWorkloadTableProps) {
   const [showAllSessions, setShowAllSessions] = useState(false);
+  const [workloadPage, setWorkloadPage] = useState(0);
   const names = useMemo(() => graphNames(snapshot), [snapshot]);
   const latestSessionIds = useMemo(
     () =>
@@ -357,7 +386,7 @@ export function EspWorkloadTable({ snapshot }: EspWorkloadTableProps) {
       ),
     [snapshot.sessions],
   );
-  const visibleWorkloads = useMemo(
+  const filteredWorkloads = useMemo(
     () =>
       [...snapshot.workloads]
         .filter(
@@ -366,16 +395,23 @@ export function EspWorkloadTable({ snapshot }: EspWorkloadTableProps) {
             latestSessionIds.size === 0 ||
             latestSessionIds.has(workload.sessionId),
         )
-        .sort(
-          (left, right) =>
-            timestampValue(left) - timestampValue(right) ||
-            left.workloadId.localeCompare(right.workloadId),
-        ),
+        .sort(compareWorkloads),
     [latestSessionIds, showAllSessions, snapshot.workloads],
   );
+  const maximumPage = Math.max(
+    0,
+    Math.ceil(filteredWorkloads.length / ESP_WORKLOAD_WINDOW_SIZE) - 1,
+  );
+  const safePage = Math.min(workloadPage, maximumPage);
+  const workloadStart = safePage * ESP_WORKLOAD_WINDOW_SIZE;
+  const workloadEnd = Math.min(
+    workloadStart + ESP_WORKLOAD_WINDOW_SIZE,
+    filteredWorkloads.length,
+  );
+  const visibleWorkloads = filteredWorkloads.slice(workloadStart, workloadEnd);
   const countLabel = showAllSessions
-    ? `All sessions · ${visibleWorkloads.length} workloads`
-    : `Latest sessions · ${visibleWorkloads.length} of ${snapshot.workloads.length} workloads`;
+    ? `All sessions · ${filteredWorkloads.length} workloads`
+    : `Latest sessions · ${filteredWorkloads.length} of ${snapshot.workloads.length} workloads`;
 
   return (
     <section
@@ -443,12 +479,52 @@ export function EspWorkloadTable({ snapshot }: EspWorkloadTableProps) {
               type="checkbox"
               aria-label="Show all sessions"
               checked={showAllSessions}
-              onChange={(event) => setShowAllSessions(event.currentTarget.checked)}
+              onChange={(event) => {
+                setShowAllSessions(event.currentTarget.checked);
+                setWorkloadPage(0);
+              }}
             />
             Show all sessions
           </label>
         </div>
       </div>
+
+      {filteredWorkloads.length > ESP_WORKLOAD_WINDOW_SIZE ? (
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 8,
+            padding: "5px 9px",
+            borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
+            color: tokens.colorNeutralForeground2,
+            fontSize: 10,
+          }}
+        >
+          <span>
+            Showing {workloadStart + 1}–{workloadEnd} of {filteredWorkloads.length} workloads
+          </span>
+          <span style={{ display: "inline-flex", gap: 5 }}>
+            <Button
+              size="small"
+              disabled={safePage === 0}
+              onClick={() => setWorkloadPage(Math.max(0, safePage - 1))}
+            >
+              Previous workloads
+            </Button>
+            <Button
+              size="small"
+              disabled={safePage >= maximumPage}
+              onClick={() =>
+                setWorkloadPage(Math.min(maximumPage, safePage + 1))
+              }
+            >
+              Next workloads
+            </Button>
+          </span>
+        </div>
+      ) : null}
 
       <div style={{ overflowX: "auto" }}>
         <table
@@ -479,7 +555,7 @@ export function EspWorkloadTable({ snapshot }: EspWorkloadTableProps) {
             </tr>
           </thead>
           <tbody>
-            {visibleWorkloads.length === 0 ? (
+            {filteredWorkloads.length === 0 ? (
               <tr>
                 <td
                   colSpan={5}

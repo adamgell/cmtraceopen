@@ -24,6 +24,7 @@ import type {
   EspNormalizedStatus,
   EspProcessObservation,
   EspRawEvidenceRecord,
+  EspRegistrationEvent,
   EspScenario,
   EspTimelineEntry,
   EspTrackedKind,
@@ -36,6 +37,18 @@ function timestamp(rawText: string) {
     originalOffset: "+00:00",
     normalizedUtc: rawText,
     kind: "utc" as const,
+  };
+}
+
+function unnormalizedTimestamp(
+  rawText: string,
+  originalOffset: string | null = null,
+) {
+  return {
+    rawText,
+    originalOffset,
+    normalizedUtc: null,
+    kind: originalOffset === null ? ("unspecified" as const) : ("offset" as const),
   };
 }
 
@@ -819,6 +832,77 @@ describe("independent live activity", () => {
       ),
     ).toBeInTheDocument();
   });
+
+  it("keeps raw timestamps verbatim and orders only normalized UTC timestamps", () => {
+    const rawActivity = {
+      ...makeActivity("raw-activity", "2026-07-15T01:00:00Z"),
+      timestamp: unnormalizedTimestamp("2026-07-15T01:00:00"),
+    };
+    const normalizedActivity = makeActivity(
+      "normalized-activity",
+      "2026-07-15T04:00:00Z",
+    );
+    const rawWorkload = makeWorkload(
+      "raw-workload",
+      "win32App",
+      "pending",
+      "Pending",
+      {
+        timestamps: {
+          firstObserved: unnormalizedTimestamp("2026-07-15T01:00:00"),
+          started: null,
+          ended: null,
+          lastUpdated: null,
+        },
+      },
+    );
+    const normalizedWorkload = makeWorkload(
+      "normalized-workload",
+      "win32App",
+      "installing",
+      "Installing",
+      {
+        timestamps: {
+          firstObserved: timestamp("2026-07-15T04:00:00Z"),
+          started: null,
+          ended: null,
+          lastUpdated: null,
+        },
+      },
+    );
+
+    render(
+      <>
+        <LiveActivity entries={[rawActivity, normalizedActivity]} />
+        <EspWorkloadTable
+          snapshot={makeSnapshot({
+            installerCorrelations: [],
+            activity: [],
+            workloads: [rawWorkload, normalizedWorkload],
+            sessions: [
+              {
+                ...makeSnapshot().sessions[0],
+                workloadIds: [rawWorkload.workloadId, normalizedWorkload.workloadId],
+              },
+            ],
+          })}
+        />
+      </>,
+    );
+
+    const activityEntries = within(
+      screen.getByRole("region", { name: "Live activity" }),
+    ).getAllByTestId("esp-activity-entry");
+    expect(activityEntries[0]).toHaveTextContent("normalized-activity");
+    expect(activityEntries[1]).toHaveTextContent("raw-activity");
+    expect(activityEntries[1]).toHaveTextContent("2026-07-15T01:00:00");
+
+    const workloadRows = within(
+      screen.getByRole("region", { name: "Tracked workloads" }),
+    ).getAllByTestId("esp-workload-row");
+    expect(workloadRows[0]).toHaveTextContent("normalized-workload");
+    expect(workloadRows[1]).toHaveTextContent("raw-workload");
+  });
 });
 
 describe("workload table", () => {
@@ -1015,8 +1099,100 @@ describe("workload table", () => {
       rowText.findIndex((text) => text.includes("retry 2")),
     );
     expect(within(table).getAllByText("View full values")).toHaveLength(2);
+    expect(within(table).queryAllByTestId("esp-workload-full-values")).toHaveLength(0);
+
+    fireEvent.click(within(table).getAllByText("View full values")[0]);
+    expect(within(table).getAllByTestId("esp-workload-full-values")).toHaveLength(1);
     expect(table).toHaveTextContent("ev-retry-old");
-    expect(table).toHaveTextContent("ev-retry-current");
+  });
+
+  it("bounds large workload volumes, lazily mounts full values, and keeps every session record reachable", () => {
+    const currentWorkloads = Array.from({ length: 130 }, (_, index) =>
+      makeWorkload(
+        `current-${String(index).padStart(3, "0")}`,
+        "win32App",
+        "installing",
+        "Installing",
+        {
+          displayName: `Current workload ${String(index).padStart(3, "0")}`,
+          timestamps: {
+            firstObserved: timestamp("2026-07-15T20:00:00Z"),
+            started: null,
+            ended: null,
+            lastUpdated: null,
+          },
+        },
+      ),
+    );
+    const historicWorkloads = Array.from({ length: 75 }, (_, index) =>
+      makeWorkload(
+        `historic-${String(index).padStart(3, "0")}`,
+        "win32App",
+        "failed",
+        "Failed",
+        {
+          sessionId: "session-old",
+          displayName: `Historic workload ${String(index).padStart(3, "0")}`,
+          timestamps: {
+            firstObserved: timestamp("2026-07-15T19:00:00Z"),
+            started: null,
+            ended: null,
+            lastUpdated: null,
+          },
+        },
+      ),
+    );
+    render(
+      <EspWorkloadTable
+        snapshot={makeSnapshot({
+          installerCorrelations: [],
+          sessions: [
+            {
+              ...makeSnapshot().sessions[0],
+              sessionId: "session-old",
+              isLatest: false,
+              workloadIds: historicWorkloads.map((workload) => workload.workloadId),
+            },
+            {
+              ...makeSnapshot().sessions[0],
+              workloadIds: currentWorkloads.map((workload) => workload.workloadId),
+            },
+          ],
+          workloads: [...currentWorkloads, ...historicWorkloads],
+        })}
+      />,
+    );
+
+    const table = screen.getByRole("region", { name: "Tracked workloads" });
+    expect(table).toHaveTextContent("Showing 1–80 of 130 workloads");
+    expect(within(table).getAllByTestId("esp-workload-row")).toHaveLength(80);
+    expect(within(table).queryAllByTestId("esp-workload-full-values")).toHaveLength(0);
+    expect(table).not.toHaveTextContent("Current workload 129");
+
+    fireEvent.click(within(table).getByRole("button", { name: "Next workloads" }));
+    expect(table).toHaveTextContent("Showing 81–130 of 130 workloads");
+    const lastCurrentRow = within(table).getByRole("row", {
+      name: /Current workload 129/i,
+    });
+    fireEvent.click(within(lastCurrentRow).getByText("View full values"));
+    expect(within(table).getAllByTestId("esp-workload-full-values")).toHaveLength(1);
+    expect(lastCurrentRow).toHaveTextContent("ev-current-129");
+    fireEvent.click(within(lastCurrentRow).getByText("View full values"));
+    expect(within(table).queryAllByTestId("esp-workload-full-values")).toHaveLength(0);
+
+    fireEvent.click(
+      within(table).getByRole("checkbox", { name: "Show all sessions" }),
+    );
+    expect(table).toHaveTextContent("All sessions · 205 workloads");
+    expect(table).toHaveTextContent("Showing 1–80 of 205 workloads");
+    expect(table).toHaveTextContent("Historic workload 000");
+    expect(within(table).getAllByTestId("esp-workload-row")).toHaveLength(80);
+
+    fireEvent.click(within(table).getByRole("button", { name: "Next workloads" }));
+    fireEvent.click(within(table).getByRole("button", { name: "Next workloads" }));
+    expect(table).toHaveTextContent("Showing 161–205 of 205 workloads");
+    expect(table).toHaveTextContent("Current workload 129");
+    expect(within(table).getAllByTestId("esp-workload-row")).toHaveLength(45);
   });
 });
 
@@ -1217,6 +1393,101 @@ describe("complete single-page evidence composition", () => {
     expect(
       target?.closest('[data-evidence-item-id="reference-only-ev-process-8044"]'),
     ).toHaveTextContent("Raw record not included in this snapshot");
+  });
+
+  it("navigates an orphan finding coverage gap to a canonical placeholder", async () => {
+    showSnapshot(makeSnapshot({ findings: [makeFinding()] }));
+    render(<EspDiagnosticsWorkspace />);
+
+    const actionCenter = screen.getByRole("region", { name: "Action center" });
+    fireEvent.click(
+      within(actionCenter).getByRole("link", {
+        name: "Coverage gap · coverage-system-temp",
+      }),
+    );
+
+    await waitFor(() =>
+      expect(document.getElementById("coverage-coverage-system-temp")).not.toBeNull(),
+    );
+    const target = document.getElementById("coverage-coverage-system-temp");
+    expect(target).toHaveFocus();
+    expect(target?.closest("details")).toHaveAttribute("open");
+    expect(target).toHaveTextContent("Referenced coverage gap");
+    expect(target).toHaveTextContent("no source coverage record was included");
+    expect(document.querySelectorAll("#coverage-coverage-system-temp")).toHaveLength(1);
+  });
+
+  it("keeps duplicate null-record registration events unique and navigable", async () => {
+    const registrationEvents: EspRegistrationEvent[] = [
+      {
+        eventId: 75,
+        recordId: null,
+        status: {
+          raw: "0x0",
+          normalized: "succeeded",
+          display: "Registration succeeded",
+          detail: null,
+        },
+        message: "First registration occurrence",
+        timestamp: timestamp("2026-07-15T19:59:00Z"),
+        namedData: [],
+        evidence: [
+          { evidenceId: "ev-registration-a", sourceArtifactId: "mdm-events" },
+        ],
+      },
+      {
+        eventId: 75,
+        recordId: null,
+        status: {
+          raw: "0x0",
+          normalized: "succeeded",
+          display: "Registration succeeded",
+          detail: null,
+        },
+        message: "Second registration occurrence",
+        timestamp: timestamp("2026-07-15T20:00:00Z"),
+        namedData: [],
+        evidence: [
+          { evidenceId: "ev-registration-b", sourceArtifactId: "mdm-events" },
+        ],
+      },
+    ];
+    const finding = {
+      ...makeFinding(),
+      evidence: [registrationEvents[1].evidence[0]],
+      coverageGapIds: [],
+    };
+    showSnapshot(
+      makeSnapshot({
+        findings: [finding],
+        registrationEvents,
+      }),
+    );
+    render(<EspDiagnosticsWorkspace />);
+
+    fireEvent.click(
+      within(screen.getByRole("region", { name: "Action center" })).getByRole(
+        "link",
+        { name: "Open evidence ev-registration-b" },
+      ),
+    );
+
+    await waitFor(() =>
+      expect(document.getElementById("evidence-ev-registration-b")).not.toBeNull(),
+    );
+    const target = document.getElementById("evidence-ev-registration-b");
+    expect(target).toHaveFocus();
+    expect(target?.closest("details")).toHaveAttribute("open");
+    expect(
+      target?.closest('[data-evidence-item-id^="registration-75-"]'),
+    ).toHaveTextContent("Second registration occurrence");
+    const registrationItems = Array.from(
+      target?.closest("details")?.querySelectorAll<HTMLElement>(
+        '[data-evidence-item-id^="registration-75-"]',
+      ) ?? [],
+    );
+    expect(registrationItems).toHaveLength(2);
+    expect(new Set(registrationItems.map((item) => item.dataset.evidenceItemId)).size).toBe(2);
   });
 
   it("exposes responsive panel and installer reflow hooks", () => {
