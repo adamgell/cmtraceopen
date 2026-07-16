@@ -43,6 +43,7 @@ import { useCollectionProgressListener } from "../../hooks/use-collection-progre
 import { useParseProgressListener } from "../../hooks/use-parse-progress-listener";
 import { useUpdateChecker } from "../../hooks/use-update-checker";
 import { QuickStatsPanel } from "../panels/QuickStatsPanel";
+import { useEspSessionUpdates } from "../../workspaces/esp-diagnostics/use-esp-session-updates";
 
 function buildFilterRunSignature(
   entries: LogEntry[],
@@ -62,6 +63,15 @@ export function shouldRenderWorkspaceSidebar(
   workspace: WorkspaceDefinition,
 ): boolean {
   return workspace.capabilities?.sidebar !== false;
+}
+
+/**
+ * App-lifetime ESP subscriptions live outside workspace routing so changing
+ * views cannot stop collection or detach the native session listener.
+ */
+export function GlobalWorkspaceListeners() {
+  useEspSessionUpdates();
+  return null;
 }
 
 export function AppShell() {
@@ -447,6 +457,7 @@ export function AppShell() {
         backgroundColor: tokens.colorNeutralBackground3,
       }}
     >
+      <GlobalWorkspaceListeners />
       <Toolbar />
       {getWorkspace(activeView).capabilities?.tabStrip && <TabStrip />}
       {showFindBar && getWorkspace(activeView).capabilities?.findBar && (

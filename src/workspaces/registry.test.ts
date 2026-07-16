@@ -4,7 +4,14 @@ import {
   type ComponentType,
   type LazyExoticComponent,
 } from "react";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import {
   afterEach,
   beforeEach,
@@ -16,13 +23,19 @@ import {
 } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
-import { shouldRenderWorkspaceSidebar } from "../components/layout/AppShell";
+import {
+  GlobalWorkspaceListeners,
+  shouldRenderWorkspaceSidebar,
+} from "../components/layout/AppShell";
 import { WorkspaceToolbarAction } from "../components/layout/Toolbar";
 import { WorkspaceStatusBarContent } from "../components/layout/StatusBar";
 import type { WorkspaceId } from "../types/log";
 import { useUiStore } from "../stores/ui-store";
 import { useEspDiagnosticsStore } from "./esp-diagnostics/esp-diagnostics-store";
 import { EspDiagnosticsWorkspace } from "./esp-diagnostics/EspDiagnosticsWorkspace";
+import { EspStatusBarContent } from "./esp-diagnostics/EspStatusBarContent";
+import { EspToolbarAction } from "./esp-diagnostics/EspToolbarAction";
+import type { EspDiagnosticsSnapshot } from "./esp-diagnostics/types";
 import {
   espDiagnosticsWorkspace,
   resolveEspEvidenceSource,
@@ -32,6 +45,18 @@ import { eventLogWorkspace } from "./event-log";
 import { logWorkspace } from "./log";
 import { getAvailableWorkspaces, getWorkspace } from "./registry";
 import type { WorkspaceDefinition } from "./types";
+
+const eventMocks = vi.hoisted(() => {
+  const unlisten = vi.fn();
+  return {
+    listen: vi.fn(async () => unlisten),
+    unlisten,
+  };
+});
+
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: eventMocks.listen,
+}));
 
 vi.mock("./event-log/evtx-store", () => ({
   useEvtxStore: vi.fn(),
@@ -45,10 +70,103 @@ const TestStatusContent = lazy(async () => ({
   default: () => createElement("span", null, "Workspace status content"),
 }));
 
+function makeChromeSnapshot(): EspDiagnosticsSnapshot {
+  return {
+    schemaVersion: 1,
+    scenario: "autopilotV1",
+    phase: "deviceSetup",
+    generatedAtUtc: "2026-07-15T20:00:00Z",
+    elevation: {
+      supported: true,
+      isElevated: false,
+      error: null,
+      evidenceRefs: [],
+    },
+    identity: {
+      tenantDomain: "contoso.example",
+      tenantId: "tenant-a",
+      correlationId: "correlation-a",
+      entDmId: "entdm-a",
+      userPrincipalName: "user@contoso.example",
+      enrollmentIds: ["enrollment-a"],
+      managedDeviceId: null,
+      entraDeviceId: "entra-device-a",
+      serialNumber: "serial-device-a",
+      hostName: "host-device-a",
+      evidenceRefs: [],
+    },
+    profile: null,
+    enrollments: [],
+    sessions: [],
+    workloads: [],
+    installerCorrelations: [],
+    nodeCache: [],
+    registrationEvents: [],
+    deliveryOptimization: null,
+    hardware: null,
+    activity: [],
+    findings: [],
+    coverage: [],
+    rawEvidence: [
+      {
+        id: "evidence-a",
+        sourceKind: "registry",
+        sourceArtifactId: "registry-device",
+        observedAtUtc: "2026-07-15T20:00:00Z",
+        sourceTimestamp: null,
+        originalOffset: null,
+        normalizedTimestampUtc: null,
+        rawValue: "registry-value",
+        sensitivity: "none",
+        parseState: "parsed",
+        accessState: "available",
+        evidenceRefs: [],
+      },
+      {
+        id: "evidence-b",
+        sourceKind: "ime",
+        sourceArtifactId: "ime-log",
+        observedAtUtc: "2026-07-15T20:00:01Z",
+        sourceTimestamp: null,
+        originalOffset: null,
+        normalizedTimestampUtc: null,
+        rawValue: "ime-value-a",
+        sensitivity: "none",
+        parseState: "parsed",
+        accessState: "available",
+        evidenceRefs: [],
+      },
+      {
+        id: "evidence-c",
+        sourceKind: "ime",
+        sourceArtifactId: "ime-log",
+        observedAtUtc: "2026-07-15T20:00:02Z",
+        sourceTimestamp: null,
+        originalOffset: null,
+        normalizedTimestampUtc: null,
+        rawValue: "ime-value-b",
+        sensitivity: "none",
+        parseState: "parsed",
+        accessState: "available",
+        evidenceRefs: [],
+      },
+    ],
+    graph: null,
+  };
+}
+
 afterEach(cleanup);
 beforeEach(() => {
+  vi.clearAllMocks();
   useEspDiagnosticsStore.setState(useEspDiagnosticsStore.getInitialState(), true);
-  useUiStore.setState({ currentPlatform: "windows", enabledWorkspaces: null });
+  useUiStore.setState({
+    activeView: "esp-diagnostics",
+    activeWorkspace: "esp-diagnostics",
+    currentPlatform: "windows",
+    enabledWorkspaces: null,
+    graphApiEnabled: false,
+    graphApiStatus: "idle",
+  });
 });
 
 const espWorkspaceId: WorkspaceId = "esp-diagnostics";
@@ -285,6 +403,127 @@ describe("ESP workspace registration", () => {
     expect(vi.mocked(invoke)).not.toHaveBeenCalledWith(
       "analyze_esp_evidence",
       expect.anything(),
+    );
+  });
+});
+
+describe("ESP workspace app chrome", () => {
+  it("mounts one global session listener and never stops collection on navigation", async () => {
+    useEspDiagnosticsStore.setState({
+      phase: "live",
+      requestId: "live-a",
+      sessionId: "session-a",
+      sequence: 1,
+      snapshot: makeChromeSnapshot(),
+    });
+
+    await act(async () => {
+      await useUiStore.persist.rehydrate();
+    });
+
+    const view = render(createElement(GlobalWorkspaceListeners));
+    await waitFor(() => expect(eventMocks.listen).toHaveBeenCalledTimes(1));
+
+    act(() => {
+      useUiStore.setState({ activeView: "log", activeWorkspace: "log" });
+    });
+    view.rerender(createElement(GlobalWorkspaceListeners));
+
+    expect(eventMocks.listen).toHaveBeenCalledTimes(1);
+    expect(eventMocks.listen).toHaveBeenCalledWith(
+      "esp-diagnostics-session-update",
+      expect.any(Function),
+    );
+    expect(useEspDiagnosticsStore.getState().sessionId).toBe("session-a");
+
+    view.unmount();
+    await waitFor(() => expect(eventMocks.unlisten).toHaveBeenCalledTimes(1));
+    expect(useEspDiagnosticsStore.getState().sessionId).toBe("session-a");
+    expect(vi.mocked(invoke)).not.toHaveBeenCalledWith(
+      "stop_esp_diagnostics_session",
+      expect.anything(),
+    );
+  });
+
+  it("exposes a prominent ESP-only live-log action with state and counts", async () => {
+    useEspDiagnosticsStore.setState({
+      phase: "live",
+      requestId: "live-a",
+      sessionId: "session-a",
+      sequence: 1,
+      snapshot: makeChromeSnapshot(),
+      unreadEvidenceCount: 2,
+      evidenceViewMode: "collapsed",
+    });
+
+    render(
+      createElement(WorkspaceToolbarAction, {
+        workspace: espDiagnosticsWorkspace,
+      }),
+    );
+
+    const action = await screen.findByRole("button", {
+      name: "Open live logs, 3 evidence records, 2 unread",
+    });
+    expect(action).toHaveAttribute("data-appearance", "primary");
+    expect(screen.getByLabelText("Live diagnostics active")).toBeInTheDocument();
+    expect(screen.getByText("3")).toBeInTheDocument();
+
+    fireEvent.click(action);
+    expect(useEspDiagnosticsStore.getState().evidenceViewMode).toBe("docked");
+    expect(
+      screen.getByRole("button", {
+        name: "Hide live logs, 3 evidence records, 0 unread",
+      }),
+    ).toHaveAttribute("aria-pressed", "true");
+
+    cleanup();
+    render(createElement(WorkspaceToolbarAction, { workspace: logWorkspace }));
+    expect(
+      screen.queryByRole("button", { name: /live logs/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("summarizes start-stop state, sources, elevation, and Graph status", () => {
+    useEspDiagnosticsStore.setState({
+      phase: "live",
+      requestId: "live-a",
+      sessionId: "session-a",
+      sequence: 1,
+      snapshot: makeChromeSnapshot(),
+      graphPhase: "partial",
+    });
+
+    render(createElement(EspStatusBarContent));
+    expect(screen.getByText("Live session")).toBeInTheDocument();
+    expect(screen.getByText("2 sources")).toBeInTheDocument();
+    expect(screen.getByText("3 evidence")).toBeInTheDocument();
+    expect(screen.getByText("Not elevated")).toBeInTheDocument();
+    expect(screen.getByText("Graph partial")).toBeInTheDocument();
+
+    act(() => {
+      useEspDiagnosticsStore.setState({ phase: "stopping" });
+    });
+    expect(screen.getByText("Stopping live session")).toBeInTheDocument();
+
+    act(() => {
+      useEspDiagnosticsStore.setState({
+        phase: "starting",
+        sessionId: null,
+        snapshot: null,
+      });
+    });
+    expect(screen.getByText("Starting live session")).toBeInTheDocument();
+  });
+
+  it("registers lazy ESP toolbar and status slots", () => {
+    expect(espDiagnosticsWorkspace.toolbarAction).toBeDefined();
+    expect(espDiagnosticsWorkspace.statusBarContent).toBeDefined();
+    expect(espDiagnosticsWorkspace.toolbarAction).not.toBe(
+      EspToolbarAction,
+    );
+    expect(espDiagnosticsWorkspace.statusBarContent).not.toBe(
+      EspStatusBarContent,
     );
   });
 });

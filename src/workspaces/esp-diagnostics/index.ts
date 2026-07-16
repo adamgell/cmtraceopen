@@ -88,6 +88,16 @@ export const espDiagnosticsWorkspace: WorkspaceDefinition = {
       default: module.EspDiagnosticsWorkspace,
     })),
   ),
+  toolbarAction: lazy(() =>
+    import("./EspToolbarAction").then((module) => ({
+      default: module.EspToolbarAction,
+    })),
+  ),
+  statusBarContent: lazy(() =>
+    import("./EspStatusBarContent").then((module) => ({
+      default: module.EspStatusBarContent,
+    })),
+  ),
   capabilities: {
     sidebar: false,
     liveAcquisition: true,
