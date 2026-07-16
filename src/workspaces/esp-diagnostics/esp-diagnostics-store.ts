@@ -430,7 +430,11 @@ export const useEspDiagnosticsStore = create<EspDiagnosticsStore>((set) => ({
         state.phase === "starting" &&
         state.sessionId === null &&
         state.requestId === update.requestId;
-      if (!isInitialUpdate && state.sessionId !== update.sessionId) {
+      if (
+        !isInitialUpdate &&
+        (state.sessionId !== update.sessionId ||
+          state.requestId !== update.requestId)
+      ) {
         return state;
       }
       if (

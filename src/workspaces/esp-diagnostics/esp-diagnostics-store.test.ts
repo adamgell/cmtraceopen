@@ -342,6 +342,24 @@ describe("ESP local session state", () => {
     ).toBe("initial-zero");
   });
 
+  it("rejects a same-session update from a different live request", () => {
+    useEspDiagnosticsStore.getState().beginLiveStart("live-a");
+    useEspDiagnosticsStore
+      .getState()
+      .applySessionUpdate(makeSessionUpdate(1, makeSnapshot(["accepted"])));
+
+    useEspDiagnosticsStore.getState().applySessionUpdate(
+      makeSessionUpdate(2, makeSnapshot(["wrong-request"]), "session-a", {
+        requestId: "live-b",
+      }),
+    );
+
+    const state = useEspDiagnosticsStore.getState();
+    expect(state.requestId).toBe("live-a");
+    expect(state.sequence).toBe(1);
+    expect(state.snapshot?.rawEvidence[0].recordId).toBe("accepted");
+  });
+
   it("clears the native session identity when live collection expires", () => {
     useEspDiagnosticsStore.getState().beginLiveStart("live-a");
     useEspDiagnosticsStore

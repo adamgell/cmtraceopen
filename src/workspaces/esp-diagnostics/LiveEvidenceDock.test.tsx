@@ -5,11 +5,16 @@ import {
   useEspDiagnosticsStore,
 } from "./esp-diagnostics-store";
 import { LiveEvidenceDock } from "./LiveEvidenceDock";
-import type { EspDiagnosticsSnapshot, EspRawEvidenceRecord } from "./types";
+import type {
+  EspDiagnosticsSnapshot,
+  EspRawEvidenceRecord,
+  EspTimelineEntry,
+} from "./types";
 
 const virtualizer = vi.hoisted(() => ({
   scrollToIndex: vi.fn(),
   itemKeys: [] as Array<string | number>,
+  startIndex: 0,
 }));
 
 class ResizeObserverDouble {
@@ -37,12 +42,20 @@ vi.mock("@tanstack/react-virtual", () => ({
     );
     return {
       getVirtualItems: () =>
-        Array.from({ length: Math.min(count, 3) }, (_, index) => ({
-          index,
-          key: getItemKey(index),
-          start: index * 32,
-          size: 32,
-        })),
+        Array.from(
+          {
+            length: Math.min(Math.max(count - virtualizer.startIndex, 0), 3),
+          },
+          (_, offset) => {
+            const index = virtualizer.startIndex + offset;
+            return {
+              index,
+              key: getItemKey(index),
+              start: index * 32,
+              size: 32,
+            };
+          },
+        ),
       getTotalSize: () => count * 32,
       measureElement: vi.fn(),
       scrollToIndex: virtualizer.scrollToIndex,
@@ -175,6 +188,7 @@ beforeEach(() => {
   );
   virtualizer.scrollToIndex.mockReset();
   virtualizer.itemKeys = [];
+  virtualizer.startIndex = 0;
   Object.defineProperty(window, "innerHeight", {
     configurable: true,
     value: 600,
@@ -762,6 +776,112 @@ describe("LiveEvidenceTable", () => {
     expect(details).toHaveTextContent("AppWorkload.log");
     expect(details).toHaveTextContent("Line 1");
     expect(details).toHaveTextContent("record-1");
+  });
+
+  it("reconciles a removed active source filter back to all sources", () => {
+    useEspDiagnosticsStore.getState().setEvidenceViewMode("docked");
+    const view = render(
+      <LiveEvidenceDock snapshot={snapshot(baseRecords.slice(0, 2))} />,
+    );
+    const sourceSelect = screen.getByLabelText(
+      "Filter live evidence by source",
+    );
+    fireEvent.change(sourceSelect, {
+      target: { value: "configmgr-cas" },
+    });
+    expect(sourceSelect).toHaveValue("configmgr-cas");
+    expect(screen.getByText("1 / 2")).toBeVisible();
+
+    view.rerender(
+      <LiveEvidenceDock snapshot={snapshot(baseRecords.slice(0, 1))} />,
+    );
+
+    expect(sourceSelect).toHaveValue("all");
+    expect(screen.getByText("1 / 1")).toBeVisible();
+    expect(screen.getByText(/Installation failed/)).toBeVisible();
+  });
+
+  it("reports the complete virtual row count and absolute one-based row positions", () => {
+    useEspDiagnosticsStore.getState().setEvidenceViewMode("docked");
+    virtualizer.startIndex = 2;
+    render(<LiveEvidenceDock snapshot={snapshot(baseRecords)} />);
+
+    const table = screen.getByRole("table", { name: "Live evidence records" });
+    expect(table).toHaveAttribute("aria-rowcount", "6");
+    const renderedRows = within(table).getAllByRole("row");
+    expect(renderedRows[0]).toHaveAttribute("aria-rowindex", "1");
+    const evidenceRows = screen.getAllByTestId("live-evidence-row");
+    expect(evidenceRows).toHaveLength(3);
+    expect(evidenceRows[0]).toHaveAttribute("aria-rowindex", "4");
+    expect(evidenceRows[1]).toHaveAttribute("aria-rowindex", "5");
+    expect(evidenceRows[2]).toHaveAttribute("aria-rowindex", "6");
+  });
+
+  it("displays normalized UTC instead of raw local timestamp text when available", () => {
+    useEspDiagnosticsStore.getState().setEvidenceViewMode("docked");
+    const evidence = snapshot([
+      record("record-local-time", "Timestamp normalization evidence", {
+        sourceTimestamp: {
+          rawText: "07/15/2026 16:00:00",
+          originalOffset: "-04:00",
+          normalizedUtc: "2026-07-15T20:00:00.000Z",
+          kind: "local",
+        },
+      }),
+    ]);
+
+    render(<LiveEvidenceDock snapshot={evidence} />);
+
+    const row = screen
+      .getByText("Timestamp normalization evidence")
+      .closest<HTMLElement>('[role="row"]');
+    if (!row) throw new Error("Expected a live evidence row");
+    expect(within(row).getByText("2026-07-15T20:00:00.000Z")).toBeVisible();
+    expect(within(row).queryByText("07/15/2026 16:00:00")).toBeNull();
+  });
+
+  it("indexes timeline evidence once instead of rescanning activity for every record", () => {
+    useEspDiagnosticsStore.getState().setEvidenceViewMode("docked");
+    const entryCount = 40;
+    let evidenceReads = 0;
+    const records = Array.from({ length: entryCount }, (_, index) =>
+      record(`linear-${index}`, `Linear evidence ${index}`),
+    );
+    const activity = records.map((item, index) => {
+      const entry: EspTimelineEntry = {
+        entryId: `activity-${index}`,
+        timestamp: {
+          rawText: "2026-07-15T20:00:00.000Z",
+          originalOffset: "+00:00",
+          normalizedUtc: "2026-07-15T20:00:00.000Z",
+          kind: "utc",
+        },
+        kind: "workload",
+        title: `Activity ${index}`,
+        detail: null,
+        status: null,
+        evidence: [],
+      };
+      Object.defineProperty(entry, "evidence", {
+        enumerable: true,
+        get: () => {
+          evidenceReads += 1;
+          return [
+            {
+              evidenceId: item.recordId,
+              sourceArtifactId: item.provenance.sourceArtifactId,
+            },
+          ];
+        },
+      });
+      return entry;
+    });
+    const evidence = snapshot(records);
+    evidence.activity = activity;
+
+    render(<LiveEvidenceDock snapshot={evidence} />);
+
+    expect(evidenceReads).toBeLessThanOrEqual(entryCount * 2);
   });
 
   it("keeps local raw log text verbatim when normalized timeline evidence exists", () => {

@@ -42,6 +42,13 @@ interface LiveEvidenceBoundaryRow extends LiveEvidenceRowBase {
 
 type LiveEvidenceRow = LiveEvidenceRecordRow | LiveEvidenceBoundaryRow;
 
+interface IndexedTimelineEntry {
+  activityIndex: number;
+  entry: EspTimelineEntry;
+}
+
+type TimelineEvidenceIndex = Map<string, Map<string, IndexedTimelineEntry>>;
+
 export interface LiveEvidenceTableProps {
   snapshot: EspDiagnosticsSnapshot | null;
   boundaryMarkers?: EspEvidenceBoundaryMarker[];
@@ -56,21 +63,47 @@ function observationValueText(value: EspObservationValue): string {
   return value.stringList.join(", ");
 }
 
+function indexTimelineEvidence(
+  activity: EspTimelineEntry[],
+): TimelineEvidenceIndex {
+  const index: TimelineEvidenceIndex = new Map();
+  activity.forEach((entry, activityIndex) => {
+    for (const reference of entry.evidence) {
+      let sourceIndex = index.get(reference.sourceArtifactId);
+      if (!sourceIndex) {
+        sourceIndex = new Map();
+        index.set(reference.sourceArtifactId, sourceIndex);
+      }
+      if (!sourceIndex.has(reference.evidenceId)) {
+        sourceIndex.set(reference.evidenceId, { activityIndex, entry });
+      }
+    }
+  });
+  return index;
+}
+
 function timelineForRecord(
   record: EspRawEvidenceRecord,
-  activity: EspTimelineEntry[],
+  timelineIndex: TimelineEvidenceIndex,
 ): EspTimelineEntry | undefined {
+  const sourceIndex = timelineIndex.get(record.provenance.sourceArtifactId);
+  if (!sourceIndex) return undefined;
+
   const evidenceIds = new Set([
     record.recordId,
     ...record.evidence.map((reference) => reference.evidenceId),
   ]);
-  return activity.find((entry) =>
-    entry.evidence.some(
-      (reference) =>
-        evidenceIds.has(reference.evidenceId) &&
-        reference.sourceArtifactId === record.provenance.sourceArtifactId,
-    ),
-  );
+  let earliest: IndexedTimelineEntry | undefined;
+  for (const evidenceId of evidenceIds) {
+    const candidate = sourceIndex.get(evidenceId);
+    if (
+      candidate &&
+      (!earliest || candidate.activityIndex < earliest.activityIndex)
+    ) {
+      earliest = candidate;
+    }
+  }
+  return earliest?.entry;
 }
 
 function severityForRecord(
@@ -98,11 +131,11 @@ function severityForRecord(
 
 function rowForRecord(
   record: EspRawEvidenceRecord,
-  activity: EspTimelineEntry[],
+  timelineIndex: TimelineEvidenceIndex,
   recordRow: EspEvidenceRecordRow | undefined,
   fallbackOrder: number,
 ): LiveEvidenceRecordRow {
-  const timeline = timelineForRecord(record, activity);
+  const timeline = timelineForRecord(record, timelineIndex);
   const rawMessage = observationValueText(record.rawValue);
   const normalizedContext = timeline
     ? `${timeline.title} ${timeline.detail ?? ""}`
@@ -112,8 +145,8 @@ function rowForRecord(
     rowId: recordRow?.rowId ?? record.recordId,
     record,
     timestamp:
-      record.sourceTimestamp?.rawText ||
       record.sourceTimestamp?.normalizedUtc ||
+      record.sourceTimestamp?.rawText ||
       record.observedAtUtc,
     source: record.provenance.sourceArtifactId,
     severity: severityForRecord(
@@ -278,25 +311,24 @@ export function LiveEvidenceTable({
 }: LiveEvidenceTableProps) {
   const records = snapshot?.rawEvidence ?? [];
   const activity = snapshot?.activity ?? [];
-  const rows = useMemo(
-    () =>
-      [
-        ...records.map((record, index) =>
-          rowForRecord(
-            record,
-            activity,
-            recordRows?.get(record.recordId),
-            index,
-          ),
+  const rows = useMemo(() => {
+    const timelineIndex = indexTimelineEvidence(activity);
+    return [
+      ...records.map((record, index) =>
+        rowForRecord(
+          record,
+          timelineIndex,
+          recordRows?.get(record.recordId),
+          index,
         ),
-        ...boundaryMarkers.map(rowForBoundary),
-      ].sort((left, right) =>
-        left.order === right.order
-          ? left.rowId.localeCompare(right.rowId)
-          : left.order - right.order,
       ),
-    [activity, boundaryMarkers, recordRows, records],
-  );
+      ...boundaryMarkers.map(rowForBoundary),
+    ].sort((left, right) =>
+      left.order === right.order
+        ? left.rowId.localeCompare(right.rowId)
+        : left.order - right.order,
+    );
+  }, [activity, boundaryMarkers, recordRows, records]);
   const sources = useMemo(
     () => [...new Set(rows.flatMap((row) => row.sourceIds))].sort(),
     [rows],
@@ -308,11 +340,24 @@ export function LiveEvidenceTable({
   const [manualPause, setManualPause] = useState(false);
   const [selectedRowId, setSelectedRowId] = useState<string | null>(null);
   const scrollerRef = useRef<HTMLDivElement>(null);
+  const activeSourceFilter =
+    sourceFilter === "all" || sources.includes(sourceFilter)
+      ? sourceFilter
+      : "all";
+
+  useEffect(() => {
+    if (sourceFilter !== activeSourceFilter) {
+      setSourceFilter(activeSourceFilter);
+    }
+  }, [activeSourceFilter, sourceFilter]);
 
   const filteredRows = useMemo(() => {
     const query = textFilter.trim().toLocaleLowerCase("en-US");
     return rows.filter((row) => {
-      if (sourceFilter !== "all" && !row.sourceIds.includes(sourceFilter)) {
+      if (
+        activeSourceFilter !== "all" &&
+        !row.sourceIds.includes(activeSourceFilter)
+      ) {
         return false;
       }
       if (problemsOnly && row.severity === "info") return false;
@@ -328,7 +373,7 @@ export function LiveEvidenceTable({
         .toLocaleLowerCase("en-US")
         .includes(query);
     });
-  }, [problemsOnly, rows, sourceFilter, textFilter]);
+  }, [activeSourceFilter, problemsOnly, rows, textFilter]);
 
   const virtualizer = useVirtualizer({
     count: filteredRows.length,
@@ -409,7 +454,7 @@ export function LiveEvidenceTable({
           Source
           <select
             aria-label="Filter live evidence by source"
-            value={sourceFilter}
+            value={activeSourceFilter}
             onChange={(event) => setSourceFilter(event.target.value)}
             style={{
               minWidth: 150,
@@ -474,7 +519,7 @@ export function LiveEvidenceTable({
         <div
           role="table"
           aria-label="Live evidence records"
-          aria-rowcount={filteredRows.length}
+          aria-rowcount={filteredRows.length + 1}
           style={{
             minWidth: 900,
             color: "#e8ecef",
@@ -484,6 +529,7 @@ export function LiveEvidenceTable({
         >
           <div
             role="row"
+            aria-rowindex={1}
             style={{
               position: "sticky",
               zIndex: 2,
@@ -538,6 +584,7 @@ export function LiveEvidenceTable({
                       : "live-evidence-row"
                   }
                   data-record-id={row.rowId}
+                  aria-rowindex={virtualRow.index + 2}
                   aria-selected={selected}
                   tabIndex={0}
                   onClick={() => setSelectedRowId(row.rowId)}
