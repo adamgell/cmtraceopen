@@ -5,11 +5,15 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
+#[cfg(target_os = "windows")]
+use app_lib::esp::discovery::default_known_source_specs;
 use app_lib::esp::discovery::{
     build_runtime_temp_roots, discover_bounded_logs, embedded_known_source_specs,
-    DiscoveredLogSource, DiscoveryInput, DiscoverySourceOrigin, KnownSourceSpec,
-    DISCOVERY_INTERVAL, MAX_ACTIVE_TAILS, MAX_INITIAL_READ_BYTES, MAX_ROTATIONS_PER_KNOWN_LOG,
-    MAX_SESSION_DURATION, MAX_TEMP_ENTRIES_INSPECTED_PER_ROOT, TEMP_LOOKBACK, UPDATE_DEBOUNCE,
+    DiscoveredLogSource, DiscoveryInput, DiscoveryRootKind, DiscoveryRootState,
+    DiscoverySourceOrigin, KnownSourceSpec, DISCOVERY_INTERVAL, MAX_ACTIVE_TAILS,
+    MAX_INITIAL_READ_BYTES, MAX_KNOWN_ENTRIES_PROBED_PER_ROOT, MAX_ROTATIONS_PER_KNOWN_LOG,
+    MAX_SESSION_DURATION, MAX_TEMP_ENTRIES_INSPECTED_PER_ROOT,
+    MAX_TEMP_ENTRIES_PROBED_PER_ROOT, TEMP_LOOKBACK, UPDATE_DEBOUNCE,
 };
 use app_lib::esp::event_logs::{
     collect_event_evidence, required_event_id_xpath, EventLogProvider, EventSourceError,
@@ -2058,6 +2062,10 @@ fn write_discovery_file(path: &Path, bytes: &[u8], modified: SystemTime) {
         .expect("set discovery fixture time");
 }
 
+fn canonical_discovery_path(path: &Path) -> PathBuf {
+    fs::canonicalize(path).expect("canonical discovery fixture path")
+}
+
 fn discovery_input(now: SystemTime) -> DiscoveryInput {
     DiscoveryInput {
         known_sources: Vec::new(),
@@ -2075,6 +2083,7 @@ fn discovery_uses_embedded_known_source_families_and_fixed_limits() {
         "configmgr",
         "msi",
         "panther",
+        "setup",
         "windows-update",
         "wpm",
     ] {
@@ -2092,6 +2101,36 @@ fn discovery_uses_embedded_known_source_families_and_fixed_limits() {
     assert_eq!(DISCOVERY_INTERVAL, Duration::from_secs(2));
     assert_eq!(UPDATE_DEBOUNCE, Duration::from_millis(250));
     assert_eq!(MAX_SESSION_DURATION, Duration::from_secs(8 * 60 * 60));
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+fn discovery_windows_catalog_covers_required_deployment_sources() {
+    let specs = default_known_source_specs();
+    let source_ids = specs
+        .iter()
+        .map(|spec| spec.source_id.as_str())
+        .collect::<std::collections::HashSet<_>>();
+
+    for required in [
+        "ime-logs",
+        "windows-configmgr-ccm-logs",
+        "windows-configmgr-ccmsetup-logs",
+        "msi-logs-windir",
+        "winget-state",
+        "windows-panther-setupact-log",
+        "windows-reporting-events-log",
+        "windows-deployment-logs-software",
+        "windows-deployment-psadt",
+        "windows-deployment-patchmypc-logs",
+        "windows-deployment-patchmypc-install-logs",
+        "windows-deployment-patchmypc-intune-logs",
+    ] {
+        assert!(
+            source_ids.contains(required),
+            "Windows deployment discovery omitted {required}"
+        );
+    }
 }
 
 #[test]
@@ -2130,8 +2169,14 @@ fn temp_discovery_is_non_recursive() {
 
     let result = discover_bounded_logs(&input);
 
-    assert!(result.sources.iter().any(|source| source.path == top));
-    assert!(!result.sources.iter().any(|source| source.path == nested));
+    assert!(result
+        .sources
+        .iter()
+        .any(|source| source.path == canonical_discovery_path(&top)));
+    assert!(!result
+        .sources
+        .iter()
+        .any(|source| source.path == canonical_discovery_path(&nested)));
 }
 
 #[test]
@@ -2150,6 +2195,7 @@ fn temp_discovery_inspects_only_128_newest_entries() {
 
     let result = discover_bounded_logs(&input);
 
+    assert_eq!(result.temp_entries_probed, 130);
     assert_eq!(result.temp_entries_inspected, 128);
     assert_eq!(result.sources.len(), 128);
     assert!(result
@@ -2160,6 +2206,108 @@ fn temp_discovery_inspects_only_128_newest_entries() {
         .sources
         .iter()
         .any(|source| source.path.ends_with("MSI-129.log")));
+}
+
+#[test]
+fn temp_discovery_reports_truncated_probe_coverage_at_hard_bound() {
+    let temp = tempdir().expect("temp root");
+    let now = SystemTime::now();
+    for index in 0..=MAX_TEMP_ENTRIES_PROBED_PER_ROOT {
+        write_discovery_file(
+            &temp.path().join(format!("MSI-{index:04}.log")),
+            b"candidate",
+            now - Duration::from_secs(index as u64),
+        );
+    }
+    let mut input = discovery_input(now);
+    input.temp_roots.push(temp.path().to_path_buf());
+
+    let result = discover_bounded_logs(&input);
+    let coverage = result.root_coverage.first().expect("temp root coverage");
+
+    assert_eq!(coverage.kind, DiscoveryRootKind::Temp);
+    assert_eq!(coverage.state, DiscoveryRootState::Available);
+    assert_eq!(coverage.entries_probed, MAX_TEMP_ENTRIES_PROBED_PER_ROOT);
+    assert_eq!(
+        coverage.entries_inspected,
+        MAX_TEMP_ENTRIES_INSPECTED_PER_ROOT
+    );
+    assert!(coverage.truncated);
+    assert!(coverage
+        .detail
+        .as_deref()
+        .is_some_and(|detail| detail.contains("newest coverage is partial")));
+    assert_eq!(result.temp_entries_probed, MAX_TEMP_ENTRIES_PROBED_PER_ROOT);
+}
+
+#[test]
+fn temp_discovery_reports_missing_root_coverage() {
+    let container = tempdir().expect("temp root container");
+    let missing = container.path().join("missing-temp-root");
+    let mut input = discovery_input(SystemTime::now());
+    input.temp_roots.push(missing.clone());
+
+    let result = discover_bounded_logs(&input);
+    let coverage = result.root_coverage.first().expect("missing root coverage");
+
+    assert_eq!(coverage.root, missing);
+    assert_eq!(coverage.kind, DiscoveryRootKind::Temp);
+    assert_eq!(coverage.state, DiscoveryRootState::Missing);
+    assert_eq!(coverage.entries_probed, 0);
+    assert!(!coverage.truncated);
+    assert!(result.sources.is_empty());
+}
+
+#[test]
+fn known_discovery_reports_missing_root_coverage_with_source_identity() {
+    let container = tempdir().expect("known root container");
+    let missing = container.path().join("missing-ime-root");
+    let mut input = discovery_input(SystemTime::now());
+    input.known_sources.push(KnownSourceSpec::folder(
+        "ime-logs",
+        "intune-ime",
+        &missing,
+        ["*.log"],
+    ));
+
+    let result = discover_bounded_logs(&input);
+    let coverage = result.root_coverage.first().expect("known root coverage");
+
+    assert_eq!(coverage.root, missing);
+    assert_eq!(coverage.kind, DiscoveryRootKind::Known);
+    assert_eq!(coverage.source_id.as_deref(), Some("ime-logs"));
+    assert_eq!(coverage.state, DiscoveryRootState::Missing);
+    assert!(result.sources.is_empty());
+}
+
+#[test]
+fn known_discovery_reports_truncated_coverage_at_hard_bound() {
+    let root = tempdir().expect("known root");
+    let now = SystemTime::now();
+    for index in 0..=MAX_KNOWN_ENTRIES_PROBED_PER_ROOT {
+        write_discovery_file(
+            &root.path().join(format!("Known-{index:04}.log")),
+            b"known",
+            now,
+        );
+    }
+    let mut input = discovery_input(now);
+    input.known_sources.push(KnownSourceSpec::folder(
+        "bounded-known",
+        "windows-deployment",
+        root.path(),
+        ["*.log"],
+    ));
+
+    let result = discover_bounded_logs(&input);
+    let coverage = result.root_coverage.first().expect("known root coverage");
+
+    assert_eq!(coverage.entries_probed, MAX_KNOWN_ENTRIES_PROBED_PER_ROOT);
+    assert!(coverage.truncated);
+    assert!(coverage
+        .detail
+        .as_deref()
+        .is_some_and(|detail| detail.contains("known-source coverage is partial")));
 }
 
 #[test]
@@ -2175,12 +2323,103 @@ fn temp_discovery_excludes_files_older_than_30_minutes() {
 
     let result = discover_bounded_logs(&input);
 
-    assert!(result.sources.iter().any(|source| source.path == recent));
-    assert!(!result.sources.iter().any(|source| source.path == old));
+    assert!(result
+        .sources
+        .iter()
+        .any(|source| source.path == canonical_discovery_path(&recent)));
+    assert!(!result
+        .sources
+        .iter()
+        .any(|source| source.path == canonical_discovery_path(&old)));
 }
 
 #[test]
-fn discovery_caps_rotations_at_three_per_stem_and_keeps_current_first() {
+fn discovery_classifies_timestamped_ime_file_as_a_rotation() {
+    let root = tempdir().expect("known root");
+    let now = SystemTime::now();
+    let current = root.path().join("AppWorkload.log");
+    let rotation = root.path().join("AppWorkload-20260715-143022.log");
+    write_discovery_file(&current, b"current", now - Duration::from_secs(30));
+    write_discovery_file(&rotation, b"rotation", now);
+    let mut input = discovery_input(now);
+    input.known_sources.push(KnownSourceSpec::folder(
+        "ime-logs",
+        "intune-ime",
+        root.path(),
+        ["AppWorkload*.log"],
+    ));
+
+    let result = discover_bounded_logs(&input);
+
+    let current_source = result
+        .sources
+        .iter()
+        .find(|source| source.path == canonical_discovery_path(&current))
+        .expect("current IME source");
+    let rotation_source = result
+        .sources
+        .iter()
+        .find(|source| source.path == canonical_discovery_path(&rotation))
+        .expect("timestamped IME rotation");
+    assert!(current_source.is_current);
+    assert!(!rotation_source.is_current);
+    assert!(current_source.priority < rotation_source.priority);
+}
+
+#[test]
+fn discovery_keeps_current_plus_three_newest_rotations_per_stem() {
+    let root = tempdir().expect("known root");
+    let now = SystemTime::now();
+    let file_names = [
+        "AppWorkload.log",
+        "AppWorkload-20260715-143022.log",
+        "AppWorkload-20260715-143021.log",
+        "AppWorkload-20260715-143020.log",
+        "AppWorkload-20260715-143019.log",
+    ];
+    for (index, file_name) in file_names.into_iter().enumerate() {
+        write_discovery_file(
+            &root.path().join(file_name),
+            b"known",
+            now - Duration::from_secs(index as u64),
+        );
+    }
+    let mut input = discovery_input(now);
+    input.known_sources.push(KnownSourceSpec::folder(
+        "ime-logs",
+        "intune-ime",
+        root.path(),
+        ["AppWorkload*.log"],
+    ));
+
+    let result = discover_bounded_logs(&input);
+    let workload = result
+        .sources
+        .iter()
+        .filter(|source| {
+            source
+                .path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("AppWorkload"))
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(workload.len(), MAX_ROTATIONS_PER_KNOWN_LOG + 1);
+    assert_eq!(
+        workload[0].path.file_name().and_then(|name| name.to_str()),
+        Some("AppWorkload.log")
+    );
+    assert!(workload
+        .iter()
+        .any(|source| source.path.ends_with("AppWorkload-20260715-143020.log")));
+    assert!(!workload
+        .iter()
+        .any(|source| source.path.ends_with("AppWorkload-20260715-143019.log")));
+}
+
+#[test]
+fn discovery_keeps_numeric_ime_rotations_under_the_same_three_file_cap() {
     let root = tempdir().expect("known root");
     let now = SystemTime::now();
     for (index, suffix) in ["", ".1", ".2", ".3", ".4"].into_iter().enumerate() {
@@ -2211,15 +2450,61 @@ fn discovery_caps_rotations_at_three_per_stem_and_keeps_current_first() {
         })
         .collect::<Vec<_>>();
 
-    assert_eq!(workload.len(), MAX_ROTATIONS_PER_KNOWN_LOG);
-    assert_eq!(
-        workload[0].path.file_name().and_then(|name| name.to_str()),
-        Some("AppWorkload.log")
-    );
+    assert_eq!(workload.len(), MAX_ROTATIONS_PER_KNOWN_LOG + 1);
+    assert!(!workload
+        .iter()
+        .any(|source| source.path.ends_with("AppWorkload.log.4")));
 }
 
 #[test]
-fn discovery_prioritizes_current_ime_before_rotations_process_and_temp_logs() {
+fn discovery_groups_log_old_with_other_rotations_for_the_same_stem() {
+    let root = tempdir().expect("known root");
+    let now = SystemTime::now();
+    for (index, file_name) in [
+        "AppEnforce.log",
+        "AppEnforce.log.old",
+        "AppEnforce.log.1",
+        "AppEnforce.log.2",
+        "AppEnforce.log.3",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        write_discovery_file(
+            &root.path().join(file_name),
+            b"known",
+            now - Duration::from_secs(index as u64),
+        );
+    }
+    let mut input = discovery_input(now);
+    input.known_sources.push(KnownSourceSpec::folder(
+        "configmgr-logs",
+        "configmgr",
+        root.path(),
+        ["AppEnforce*"],
+    ));
+
+    let result = discover_bounded_logs(&input);
+    let app_enforce = result
+        .sources
+        .iter()
+        .filter(|source| {
+            source
+                .path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("AppEnforce"))
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(app_enforce.len(), MAX_ROTATIONS_PER_KNOWN_LOG + 1);
+    assert!(!app_enforce
+        .iter()
+        .any(|source| source.path.ends_with("AppEnforce.log.3")));
+}
+
+#[test]
+fn discovery_prioritizes_current_ime_then_process_before_rotations_and_temp_logs() {
     let root = tempdir().expect("discovery root");
     let now = SystemTime::now();
     let current = root.path().join("AppWorkload.log");
@@ -2242,13 +2527,64 @@ fn discovery_prioritizes_current_ime_before_rotations_process_and_temp_logs() {
 
     let result = discover_bounded_logs(&input);
 
-    assert_eq!(result.sources[0].path, current);
-    assert_eq!(result.sources[1].path, rotation);
-    assert_eq!(result.sources[2].path, process);
+    assert_eq!(result.sources[0].path, canonical_discovery_path(&current));
+    assert_eq!(result.sources[1].path, canonical_discovery_path(&process));
+    assert_eq!(result.sources[2].path, canonical_discovery_path(&rotation));
     assert_eq!(
         result.sources.last().map(|source| &source.path),
-        Some(&temp_log)
+        Some(&canonical_discovery_path(&temp_log))
     );
+}
+
+#[test]
+fn discovery_keeps_active_process_log_inside_sixteen_tail_priority_window() {
+    let root = tempdir().expect("discovery root");
+    let now = SystemTime::now();
+    let stems = [
+        "IntuneManagementExtension",
+        "AppWorkload",
+        "AppActionProcessor",
+        "AgentExecutor",
+        "Win32AppInventory",
+    ];
+    for (stem_index, stem) in stems.into_iter().enumerate() {
+        write_discovery_file(
+            &root.path().join(format!("{stem}.log")),
+            b"current",
+            now - Duration::from_secs(100 + stem_index as u64),
+        );
+        for rotation_index in 0..MAX_ROTATIONS_PER_KNOWN_LOG {
+            write_discovery_file(
+                &root
+                    .path()
+                    .join(format!("{stem}-20260715-14302{rotation_index}.log")),
+                b"rotation",
+                now - Duration::from_secs(rotation_index as u64),
+            );
+        }
+    }
+    let process = root.path().join("active-msiexec-output.data");
+    write_discovery_file(&process, b"active process", now);
+    let mut input = discovery_input(now);
+    input.known_sources.push(KnownSourceSpec::folder(
+        "ime-logs",
+        "intune-ime",
+        root.path(),
+        ["*.log"],
+    ));
+    input.active_process_logs.push(process.clone());
+
+    let result = discover_bounded_logs(&input);
+    let priority_window = result
+        .sources
+        .iter()
+        .take(MAX_ACTIVE_TAILS)
+        .collect::<Vec<_>>();
+
+    assert_eq!(priority_window.len(), MAX_ACTIVE_TAILS);
+    assert!(priority_window
+        .iter()
+        .any(|source| source.path == canonical_discovery_path(&process)));
 }
 
 #[cfg(unix)]
@@ -2273,6 +2609,34 @@ fn discovery_rejects_symlink_escape() {
 
 #[cfg(unix)]
 #[test]
+fn known_discovery_reports_rejected_symlink_entry_coverage() {
+    use std::os::unix::fs::symlink;
+
+    let root = tempdir().expect("known root");
+    let outside = tempdir().expect("outside root");
+    let now = SystemTime::now();
+    let target = outside.path().join("AppWorkload.log");
+    write_discovery_file(&target, b"outside", now);
+    symlink(&target, root.path().join("AppWorkload.log")).expect("create escape symlink");
+    let mut input = discovery_input(now);
+    input.known_sources.push(KnownSourceSpec::folder(
+        "ime-logs",
+        "intune-ime",
+        root.path(),
+        ["*.log"],
+    ));
+
+    let result = discover_bounded_logs(&input);
+    let coverage = result.root_coverage.first().expect("known root coverage");
+
+    assert_eq!(coverage.state, DiscoveryRootState::Available);
+    assert_eq!(coverage.entries_probed, 1);
+    assert_eq!(coverage.entries_rejected, 1);
+    assert!(result.sources.is_empty());
+}
+
+#[cfg(unix)]
+#[test]
 fn discovery_rejects_symlink_root_escape() {
     use std::os::unix::fs::symlink;
 
@@ -2290,6 +2654,15 @@ fn discovery_rejects_symlink_root_escape() {
 
     assert!(result.sources.is_empty());
     assert_eq!(result.temp_entries_inspected, 0);
+    let coverage = result
+        .root_coverage
+        .first()
+        .expect("reparse-rejected root coverage");
+    assert_eq!(coverage.state, DiscoveryRootState::ReparseRejected);
+    assert!(coverage
+        .detail
+        .as_deref()
+        .is_some_and(|detail| detail.contains("reparse")));
 }
 
 #[test]
@@ -2311,8 +2684,14 @@ fn discovery_accepts_msi_signature_in_first_4k_only() {
 
     let result = discover_bounded_logs(&input);
 
-    assert!(result.sources.iter().any(|source| source.path == signed));
-    assert!(!result.sources.iter().any(|source| source.path == late));
+    assert!(result
+        .sources
+        .iter()
+        .any(|source| source.path == canonical_discovery_path(&signed)));
+    assert!(!result
+        .sources
+        .iter()
+        .any(|source| source.path == canonical_discovery_path(&late)));
 }
 
 #[test]
@@ -2333,9 +2712,32 @@ fn discovery_accepts_explicit_running_process_log_outside_temp_lookback() {
     let source = result
         .sources
         .iter()
-        .find(|source| source.path == process_log)
+        .find(|source| source.path == canonical_discovery_path(&process_log))
         .expect("active process log");
     assert_eq!(source.origin, DiscoverySourceOrigin::ActiveProcess);
+}
+
+#[test]
+fn discovery_canonicalizes_and_deduplicates_active_process_paths() {
+    let root = tempdir().expect("process root");
+    let now = SystemTime::now();
+    let process_log = root.path().join("active-installer.log");
+    write_discovery_file(&process_log, b"active", now);
+    let lexical_alias = root.path().join(".").join("active-installer.log");
+    let mut input = discovery_input(now);
+    input
+        .active_process_logs
+        .extend([process_log.clone(), lexical_alias]);
+
+    let result = discover_bounded_logs(&input);
+    let active = result
+        .sources
+        .iter()
+        .filter(|source| source.origin == DiscoverySourceOrigin::ActiveProcess)
+        .collect::<Vec<_>>();
+
+    assert_eq!(active.len(), 1);
+    assert_eq!(active[0].path, canonical_discovery_path(&process_log));
 }
 
 #[test]

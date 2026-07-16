@@ -17,7 +17,9 @@ use cmtraceopen_parser::collector::types::CollectionProfile;
 use glob::{MatchOptions, Pattern};
 
 pub const MAX_ROTATIONS_PER_KNOWN_LOG: usize = 3;
+pub const MAX_KNOWN_ENTRIES_PROBED_PER_ROOT: usize = 512;
 pub const MAX_TEMP_ENTRIES_INSPECTED_PER_ROOT: usize = 128;
+pub const MAX_TEMP_ENTRIES_PROBED_PER_ROOT: usize = 4_096;
 pub const MAX_ACTIVE_TAILS: usize = 16;
 pub const MAX_INITIAL_READ_BYTES: u64 = 8 * 1024 * 1024;
 pub const TEMP_LOOKBACK: Duration = Duration::from_secs(30 * 60);
@@ -25,9 +27,9 @@ pub const DISCOVERY_INTERVAL: Duration = Duration::from_secs(2);
 pub const UPDATE_DEBOUNCE: Duration = Duration::from_millis(250);
 pub const MAX_SESSION_DURATION: Duration = Duration::from_secs(8 * 60 * 60);
 
-const MAX_KNOWN_ENTRIES_ENUMERATED_PER_ROOT: usize = 512;
-const MAX_TEMP_ENTRIES_ENUMERATED_PER_ROOT: usize = 4_096;
 const SIGNATURE_BYTES: u64 = 4 * 1024;
+#[cfg(any(target_os = "windows", test))]
+const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
 
 const PROFILE_FAMILIES: &[&str] = &[
     "intune-ime",
@@ -60,6 +62,39 @@ pub enum DiscoverySourceOrigin {
     CuratedKnown,
     Temp,
     ActiveProcess,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiscoveryRootKind {
+    Known,
+    Temp,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiscoveryRootState {
+    Available,
+    Missing,
+    PermissionDenied,
+    ReparseRejected,
+    Failed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiscoveryRootCoverage {
+    pub root: PathBuf,
+    pub source_id: Option<String>,
+    pub kind: DiscoveryRootKind,
+    pub state: DiscoveryRootState,
+    pub detail: Option<String>,
+    /// Directory entries whose metadata/path safety was evaluated.
+    pub entries_probed: usize,
+    /// Safe candidates inspected by the source-specific bounded classifier.
+    pub entries_inspected: usize,
+    /// Candidates matched before cross-root canonical deduplication.
+    pub entries_matched: usize,
+    /// Entries rejected because enumeration, metadata, or path safety failed.
+    pub entries_rejected: usize,
+    pub truncated: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -155,7 +190,9 @@ pub struct DiscoveredLogSource {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct DiscoveryResult {
     pub sources: Vec<DiscoveredLogSource>,
+    pub temp_entries_probed: usize,
     pub temp_entries_inspected: usize,
+    pub root_coverage: Vec<DiscoveryRootCoverage>,
 }
 
 #[derive(Debug, Clone)]
@@ -307,13 +344,18 @@ pub fn runtime_discovery_input(
 
 pub fn discover_bounded_logs(input: &DiscoveryInput) -> DiscoveryResult {
     let mut candidates = Vec::new();
+    let mut root_coverage = Vec::new();
     for spec in &input.known_sources {
-        collect_known_candidates(spec, &mut candidates);
+        root_coverage.push(collect_known_candidates(spec, &mut candidates));
     }
 
+    let mut temp_entries_probed = 0;
     let mut temp_entries_inspected = 0;
     for root in &input.temp_roots {
-        temp_entries_inspected += collect_temp_candidates(root, input.now, &mut candidates);
+        let coverage = collect_temp_candidates(root, input.now, &mut candidates);
+        temp_entries_probed += coverage.entries_probed;
+        temp_entries_inspected += coverage.entries_inspected;
+        root_coverage.push(coverage);
     }
 
     for path in &input.active_process_logs {
@@ -346,7 +388,8 @@ pub fn discover_bounded_logs(input: &DiscoveryInput) -> DiscoveryResult {
         if matches!(
             candidate.source.origin,
             DiscoverySourceOrigin::EmbeddedKnown | DiscoverySourceOrigin::CuratedKnown
-        ) {
+        ) && !candidate.source.is_current
+        {
             let count = rotation_counts
                 .entry(candidate.rotation_key.clone())
                 .or_default();
@@ -360,32 +403,76 @@ pub fn discover_bounded_logs(input: &DiscoveryInput) -> DiscoveryResult {
 
     DiscoveryResult {
         sources,
+        temp_entries_probed,
         temp_entries_inspected,
+        root_coverage,
     }
 }
 
-fn collect_known_candidates(spec: &KnownSourceSpec, output: &mut Vec<Candidate>) {
+fn collect_known_candidates(
+    spec: &KnownSourceSpec,
+    output: &mut Vec<Candidate>,
+) -> DiscoveryRootCoverage {
+    let mut coverage = DiscoveryRootCoverage {
+        root: spec.root.clone(),
+        source_id: Some(spec.source_id.clone()),
+        kind: DiscoveryRootKind::Known,
+        state: DiscoveryRootState::Available,
+        detail: None,
+        entries_probed: 0,
+        entries_inspected: 0,
+        entries_matched: 0,
+        entries_rejected: 0,
+        truncated: false,
+    };
     let root_canonical = match safe_directory_root(&spec.root) {
         Ok(root) => root,
-        Err(_) => return,
+        Err(error) => {
+            coverage.state = discovery_root_state(&error);
+            coverage.detail = Some(error.to_string());
+            return coverage;
+        }
     };
+    coverage.root = root_canonical.clone();
 
     let paths = match spec.path_kind {
-        KnownSourcePathKind::File => spec
-            .patterns
-            .first()
-            .map(|file_name| vec![spec.root.join(file_name)])
-            .unwrap_or_default(),
+        KnownSourcePathKind::File => {
+            coverage.entries_probed = usize::from(!spec.patterns.is_empty());
+            spec.patterns
+                .first()
+                .map(|file_name| vec![spec.root.join(file_name)])
+                .unwrap_or_default()
+        }
         KnownSourcePathKind::Folder => match fs::read_dir(&spec.root) {
-            Ok(entries) => entries
-                .take(MAX_KNOWN_ENTRIES_ENUMERATED_PER_ROOT)
-                .filter_map(Result::ok)
-                .map(|entry| entry.path())
-                .collect(),
-            Err(_) => return,
+            Ok(mut entries) => {
+                let mut paths = Vec::new();
+                while coverage.entries_probed < MAX_KNOWN_ENTRIES_PROBED_PER_ROOT {
+                    let Some(entry) = entries.next() else {
+                        break;
+                    };
+                    coverage.entries_probed += 1;
+                    match entry {
+                        Ok(entry) => paths.push(entry.path()),
+                        Err(_) => coverage.entries_rejected += 1,
+                    }
+                }
+                if entries.next().is_some() {
+                    coverage.truncated = true;
+                    coverage.detail = Some(format!(
+                        "probed the bounded first {MAX_KNOWN_ENTRIES_PROBED_PER_ROOT} directory entries; known-source coverage is partial"
+                    ));
+                }
+                paths
+            }
+            Err(error) => {
+                coverage.state = discovery_root_state(&error);
+                coverage.detail = Some(error.to_string());
+                return coverage;
+            }
         },
     };
 
+    let matched_before = output.len();
     for path in paths {
         let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
             continue;
@@ -394,6 +481,7 @@ fn collect_known_candidates(spec: &KnownSourceSpec, output: &mut Vec<Candidate>)
             continue;
         }
         let Some((safe_path, metadata)) = safe_regular_file(&path, Some(&root_canonical)) else {
+            coverage.entries_rejected += 1;
             continue;
         };
         output.push(candidate(
@@ -403,27 +491,73 @@ fn collect_known_candidates(spec: &KnownSourceSpec, output: &mut Vec<Candidate>)
             spec.origin,
             metadata.modified().ok(),
         ));
+        coverage.entries_inspected += 1;
     }
+    coverage.entries_matched = output.len() - matched_before;
+    coverage
 }
 
-fn collect_temp_candidates(root: &Path, now: SystemTime, output: &mut Vec<Candidate>) -> usize {
+fn collect_temp_candidates(
+    root: &Path,
+    now: SystemTime,
+    output: &mut Vec<Candidate>,
+) -> DiscoveryRootCoverage {
+    let mut coverage = DiscoveryRootCoverage {
+        root: root.to_path_buf(),
+        source_id: None,
+        kind: DiscoveryRootKind::Temp,
+        state: DiscoveryRootState::Available,
+        detail: None,
+        entries_probed: 0,
+        entries_inspected: 0,
+        entries_matched: 0,
+        entries_rejected: 0,
+        truncated: false,
+    };
     let root_canonical = match safe_directory_root(root) {
         Ok(root) => root,
-        Err(_) => return 0,
+        Err(error) => {
+            coverage.state = discovery_root_state(&error);
+            coverage.detail = Some(error.to_string());
+            return coverage;
+        }
     };
-    let mut entries = match fs::read_dir(root) {
-        Ok(entries) => entries
-            .take(MAX_TEMP_ENTRIES_ENUMERATED_PER_ROOT)
-            .filter_map(Result::ok)
-            .filter_map(|entry| {
-                let path = entry.path();
-                let (safe_path, metadata) = safe_regular_file(&path, Some(&root_canonical))?;
-                let modified = metadata.modified().ok()?;
-                Some((safe_path, metadata, modified))
-            })
-            .collect::<Vec<_>>(),
-        Err(_) => return 0,
+    coverage.root = root_canonical.clone();
+    let mut directory = match fs::read_dir(root) {
+        Ok(entries) => entries,
+        Err(error) => {
+            coverage.state = discovery_root_state(&error);
+            coverage.detail = Some(error.to_string());
+            return coverage;
+        }
     };
+    let mut entries = Vec::new();
+    while coverage.entries_probed < MAX_TEMP_ENTRIES_PROBED_PER_ROOT {
+        let Some(entry) = directory.next() else {
+            break;
+        };
+        coverage.entries_probed += 1;
+        let Ok(entry) = entry else {
+            coverage.entries_rejected += 1;
+            continue;
+        };
+        let path = entry.path();
+        let Some((safe_path, metadata)) = safe_regular_file(&path, Some(&root_canonical)) else {
+            coverage.entries_rejected += 1;
+            continue;
+        };
+        let Ok(modified) = metadata.modified() else {
+            coverage.entries_rejected += 1;
+            continue;
+        };
+        entries.push((safe_path, metadata, modified));
+    }
+    if directory.next().is_some() {
+        coverage.truncated = true;
+        coverage.detail = Some(format!(
+            "probed the bounded first {MAX_TEMP_ENTRIES_PROBED_PER_ROOT} directory entries; newest coverage is partial"
+        ));
+    }
     entries.sort_by(|left, right| {
         right
             .2
@@ -431,8 +565,9 @@ fn collect_temp_candidates(root: &Path, now: SystemTime, output: &mut Vec<Candid
             .then_with(|| path_identity(&left.0).cmp(&path_identity(&right.0)))
     });
     entries.truncate(MAX_TEMP_ENTRIES_INSPECTED_PER_ROOT);
-    let inspected = entries.len();
+    coverage.entries_inspected = entries.len();
 
+    let matched_before = output.len();
     for (path, _metadata, modified) in entries {
         let age = now.duration_since(modified).unwrap_or(Duration::ZERO);
         if age > TEMP_LOOKBACK {
@@ -453,7 +588,19 @@ fn collect_temp_candidates(root: &Path, now: SystemTime, output: &mut Vec<Candid
             Some(modified),
         ));
     }
-    inspected
+    coverage.entries_matched = output.len() - matched_before;
+    coverage
+}
+
+fn discovery_root_state(error: &std::io::Error) -> DiscoveryRootState {
+    match error.kind() {
+        std::io::ErrorKind::NotFound => DiscoveryRootState::Missing,
+        std::io::ErrorKind::PermissionDenied => DiscoveryRootState::PermissionDenied,
+        std::io::ErrorKind::InvalidInput if error.to_string().contains("reparse") => {
+            DiscoveryRootState::ReparseRejected
+        }
+        _ => DiscoveryRootState::Failed,
+    }
 }
 
 fn candidate(
@@ -463,7 +610,7 @@ fn candidate(
     origin: DiscoverySourceOrigin,
     modified: Option<SystemTime>,
 ) -> Candidate {
-    let is_current = is_current_log(&path);
+    let is_current = is_current_log(&path, &family);
     let priority = match origin {
         DiscoverySourceOrigin::EmbeddedKnown | DiscoverySourceOrigin::CuratedKnown
             if family == "intune-ime" && is_current =>
@@ -473,9 +620,9 @@ fn candidate(
         DiscoverySourceOrigin::EmbeddedKnown | DiscoverySourceOrigin::CuratedKnown
             if family == "intune-ime" =>
         {
-            1
+            2
         }
-        DiscoverySourceOrigin::ActiveProcess => 2,
+        DiscoverySourceOrigin::ActiveProcess => 1,
         DiscoverySourceOrigin::EmbeddedKnown | DiscoverySourceOrigin::CuratedKnown
             if is_current =>
         {
@@ -486,7 +633,7 @@ fn candidate(
     };
     Candidate {
         identity_key: path_identity(&path),
-        rotation_key: rotation_identity(&path),
+        rotation_key: rotation_identity(&path, &family),
         source: DiscoveredLogSource {
             path,
             source_id,
@@ -518,19 +665,25 @@ fn safe_regular_file(path: &Path, allowed_root: Option<&Path>) -> Option<(PathBu
     }
     let canonical = fs::canonicalize(path).ok()?;
     if let Some(root) = allowed_root {
-        if !canonical.starts_with(root) {
+        if !path_is_within_root_for_platform(&canonical, root, cfg!(target_os = "windows")) {
             return None;
         }
     }
-    Some((path.to_path_buf(), link_metadata))
+    Some((canonical, link_metadata))
 }
 
 fn safe_directory_root(path: &Path) -> std::io::Result<PathBuf> {
     let metadata = fs::symlink_metadata(path)?;
-    if metadata.file_type().is_symlink() || is_reparse_point(&metadata) || !metadata.is_dir() {
+    if metadata.file_type().is_symlink() || is_reparse_point(&metadata) {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
-            "discovery root is not a direct directory",
+            "discovery root is a symlink or reparse point",
+        ));
+    }
+    if !metadata.is_dir() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "discovery root is not a directory",
         ));
     }
     fs::canonicalize(path)
@@ -539,13 +692,17 @@ fn safe_directory_root(path: &Path) -> std::io::Result<PathBuf> {
 #[cfg(target_os = "windows")]
 fn is_reparse_point(metadata: &Metadata) -> bool {
     use std::os::windows::fs::MetadataExt;
-    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
-    metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+    file_attributes_indicate_reparse(metadata.file_attributes())
 }
 
 #[cfg(not(target_os = "windows"))]
 fn is_reparse_point(_metadata: &Metadata) -> bool {
     false
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn file_attributes_indicate_reparse(file_attributes: u32) -> bool {
+    file_attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0
 }
 
 fn matches_any_pattern(file_name: &str, patterns: &[String]) -> bool {
@@ -586,8 +743,11 @@ fn is_high_signal_temp_name(file_name: &str) -> bool {
 }
 
 fn has_installer_signature(path: &Path) -> bool {
+    let Some((canonical, _metadata)) = safe_regular_file(path, None) else {
+        return false;
+    };
     let mut bytes = Vec::new();
-    if File::open(path)
+    if File::open(canonical)
         .and_then(|file| file.take(SIGNATURE_BYTES).read_to_end(&mut bytes))
         .is_err()
     {
@@ -606,32 +766,40 @@ fn has_installer_signature(path: &Path) -> bool {
     .any(|signature| text.contains(signature))
 }
 
-fn is_current_log(path: &Path) -> bool {
+fn is_current_log(path: &Path, family: &str) -> bool {
     let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
         return false;
     };
     let lower = name.to_ascii_lowercase();
-    !lower.ends_with(".old")
-        && !lower.ends_with(".lo_")
-        && !lower
+    !(lower.ends_with(".old")
+        || lower.ends_with(".lo_")
+        || lower
             .rsplit_once(".log.")
             .is_some_and(|(_, suffix)| suffix.chars().all(|character| character.is_ascii_digit()))
+        || (family == "intune-ime" && ime_timestamped_rotation_base(&lower).is_some()))
 }
 
-fn rotation_identity(path: &Path) -> String {
+fn rotation_identity(path: &Path, family: &str) -> String {
     let name = path
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or_default()
         .to_ascii_lowercase();
-    let base = if let Some((prefix, suffix)) = name.rsplit_once(".log.") {
+    let timestamped_base = if family == "intune-ime" {
+        ime_timestamped_rotation_base(&name)
+    } else {
+        None
+    };
+    let base = if let Some(base) = timestamped_base {
+        base
+    } else if let Some(prefix) = name.strip_suffix(".log.old") {
+        format!("{prefix}.log")
+    } else if let Some((prefix, suffix)) = name.rsplit_once(".log.") {
         if suffix.chars().all(|character| character.is_ascii_digit()) {
             format!("{prefix}.log")
         } else {
             name
         }
-    } else if let Some(prefix) = name.strip_suffix(".log.old") {
-        format!("{prefix}.log")
     } else if let Some(prefix) = name.strip_suffix(".lo_") {
         format!("{prefix}.log")
     } else {
@@ -641,13 +809,46 @@ fn rotation_identity(path: &Path) -> String {
     format!("{parent}/{base}")
 }
 
+fn ime_timestamped_rotation_base(file_name: &str) -> Option<String> {
+    let stem = file_name.strip_suffix(".log")?;
+    let (dated_stem, time) = stem.rsplit_once('-')?;
+    let (base, date) = dated_stem.rsplit_once('-')?;
+    if base.is_empty()
+        || date.len() != 8
+        || time.len() != 6
+        || !date.chars().all(|character| character.is_ascii_digit())
+        || !time.chars().all(|character| character.is_ascii_digit())
+    {
+        return None;
+    }
+    Some(format!("{base}.log"))
+}
+
 fn path_identity(path: &Path) -> String {
+    path_identity_for_platform(path, cfg!(target_os = "windows"))
+}
+
+fn path_identity_for_platform(path: &Path, windows_semantics: bool) -> String {
     let value = path.to_string_lossy().replace('\\', "/");
-    if cfg!(target_os = "windows") {
-        value.to_ascii_lowercase()
+    if windows_semantics {
+        let value = value.to_ascii_lowercase();
+        if let Some(unc) = value.strip_prefix("//?/unc/") {
+            format!("//{unc}")
+        } else {
+            value.strip_prefix("//?/").unwrap_or(&value).to_string()
+        }
     } else {
         value
     }
+}
+
+fn path_is_within_root_for_platform(path: &Path, root: &Path, windows_semantics: bool) -> bool {
+    if !windows_semantics {
+        return path.starts_with(root);
+    }
+    let path = path_identity_for_platform(path, true);
+    let root = path_identity_for_platform(root, true);
+    path == root || path.starts_with(&format!("{}/", root.trim_end_matches('/')))
 }
 
 fn native_path(value: &str) -> PathBuf {
@@ -673,4 +874,65 @@ fn deduplicate_paths(paths: Vec<PathBuf>) -> Vec<PathBuf> {
         .into_iter()
         .filter(|path| seen.insert(path_identity(path)))
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn permission_denied_io_error_maps_to_permission_denied_coverage() {
+        let error = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
+
+        assert_eq!(
+            discovery_root_state(&error),
+            DiscoveryRootState::PermissionDenied
+        );
+    }
+
+    #[test]
+    fn windows_path_identity_is_case_insensitive_and_ignores_verbatim_prefix() {
+        let ordinary = path_identity_for_platform(Path::new(r"C:\Temp\MSI123.log"), true);
+        let verbatim = path_identity_for_platform(Path::new(r"\\?\c:\temp\msi123.LOG"), true);
+
+        assert_eq!(ordinary, verbatim);
+    }
+
+    #[test]
+    fn windows_reparse_attribute_is_detected_without_windows_runtime() {
+        assert!(!file_attributes_indicate_reparse(0));
+        assert!(file_attributes_indicate_reparse(0x400));
+        assert!(file_attributes_indicate_reparse(0x400 | 0x20));
+    }
+
+    #[test]
+    fn windows_containment_is_case_insensitive_and_component_bounded() {
+        let root = Path::new(r"C:\Temp");
+
+        assert!(path_is_within_root_for_platform(
+            Path::new(r"\\?\c:\TEMP\MSI123.log"),
+            root,
+            true
+        ));
+        assert!(!path_is_within_root_for_platform(
+            Path::new(r"C:\Temp-Escape\MSI123.log"),
+            root,
+            true
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn installer_signature_reopen_rejects_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().expect("signature root");
+        let outside = tempfile::tempdir().expect("signature outside root");
+        let target = outside.path().join("outside.log");
+        fs::write(&target, b"Windows Installer").expect("write signature target");
+        let link = root.path().join("candidate.log");
+        symlink(&target, &link).expect("create signature symlink");
+
+        assert!(!has_installer_signature(&link));
+    }
 }
