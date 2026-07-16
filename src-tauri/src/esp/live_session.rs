@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", test))]
 use std::sync::OnceLock;
 use std::sync::{Arc, Mutex};
 
@@ -14,7 +14,7 @@ use cmtraceopen_parser::esp::{
     EspRegistryObservation, EspRegistryProvenance, EspSensitivity, EspSourceAccessState,
     EspSourceKind, EspTimestamp, EspTimestampKind,
 };
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", test))]
 use regex::Regex;
 use sha2::{Digest, Sha256};
 
@@ -25,6 +25,8 @@ use super::discovery::{
     DiscoveryResult, DiscoveryRootKind, DiscoveryRootState, DiscoverySourceOrigin,
 };
 use super::event_logs::{collect_live_event_evidence, EventEvidence, EventSourceError};
+#[cfg(any(target_os = "windows", test))]
+use super::process::normalize_local_installer_name;
 use super::process::{
     collect_process_evidence, LiveProcessProvider, ProcessEvidence, ProcessProvider,
 };
@@ -58,7 +60,7 @@ impl SharedLiveSessionHints {
         self.0.lock().map(|hints| hints.clone()).unwrap_or_default()
     }
 
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "windows", test))]
     fn update_registry(&self, evidence: &RegistryEvidence) {
         let installer_names = installer_names_from_registry(evidence);
         if let Ok(mut hints) = self.0.lock() {
@@ -794,7 +796,7 @@ fn uninstall_name_observation(
     }
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", test))]
 fn installer_names_from_registry(evidence: &RegistryEvidence) -> BTreeSet<String> {
     evidence
         .observations
@@ -806,12 +808,12 @@ fn installer_names_from_registry(evidence: &RegistryEvidence) -> BTreeSet<String
         })
         .filter(|value| installer_command_value_name(&value.observation.value_name))
         .flat_map(|value| observation_strings(&value.observation.value))
-        .flat_map(executable_names)
+        .filter_map(command_executable_name)
         .take(MAX_LIVE_HINTS)
         .collect()
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", test))]
 fn installer_command_value_name(value_name: &str) -> bool {
     let normalized = value_name
         .chars()
@@ -832,7 +834,7 @@ fn installer_command_value_name(value_name: &str) -> bool {
     )
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", test))]
 fn observation_strings(value: &EspObservationValue) -> Vec<&str> {
     match value {
         EspObservationValue::Text(value) => vec![value],
@@ -841,34 +843,27 @@ fn observation_strings(value: &EspObservationValue) -> Vec<&str> {
     }
 }
 
-#[cfg(target_os = "windows")]
-fn executable_names(command_line: &str) -> Vec<String> {
+#[cfg(any(target_os = "windows", test))]
+fn command_executable_name(command_line: &str) -> Option<String> {
     static EXECUTABLE: OnceLock<Regex> = OnceLock::new();
     if command_line.len() > 32 * 1024 {
-        return Vec::new();
+        return None;
     }
+    // Arguments can contain executable-looking paths that are not launched by this command.
+    // Only the leading executable is trusted as a registry-derived process hint.
     let expression = EXECUTABLE.get_or_init(|| {
-        Regex::new(r#"(?i)(?:[\"']([^\"']+\.exe)[\"']|(?:^|\s)([^\s\"']+\.exe)(?:\s|$))"#)
+        Regex::new(r#"(?i)^\s*(?:\"([^\"]+\.exe)\"|'([^']+\.exe)'|([^\s\"']+\.exe))(?:\s|$)"#)
             .expect("constant installer executable regex")
     });
     expression
-        .captures_iter(command_line)
-        .filter_map(|captures| captures.get(1).or_else(|| captures.get(2)))
-        .filter_map(|value| normalize_executable_name(value.as_str()))
-        .collect()
-}
-
-#[cfg(target_os = "windows")]
-fn normalize_executable_name(value: &str) -> Option<String> {
-    let name = value.rsplit(['\\', '/']).next()?.trim();
-    if name.is_empty()
-        || name.len() > 260
-        || name.contains("..")
-        || !name.to_ascii_lowercase().ends_with(".exe")
-    {
-        return None;
-    }
-    Some(name.to_string())
+        .captures(command_line)
+        .and_then(|captures| {
+            captures
+                .get(1)
+                .or_else(|| captures.get(2))
+                .or_else(|| captures.get(3))
+        })
+        .and_then(|value| normalize_local_installer_name(value.as_str()))
 }
 
 fn artifact_coverage(
@@ -1067,6 +1062,7 @@ fn is_loaded_user_sid(value: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::RefCell;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use cmtraceopen_parser::esp::{correlate_installer_processes, EspEvidenceRecord};
@@ -1076,6 +1072,7 @@ mod tests {
         ProcessProvider, ProcessSnapshotBatch, RawProcessSnapshot, MAX_PROCESS_RECORDS,
         PROCESS_QUERY_TIMEOUT,
     };
+    use crate::esp::registry::ScopedRegistryObservation;
     use crate::esp::session::{EspCancellation, EspClockReading, EspSessionClock};
 
     struct CompletingProcessProvider<'a> {
@@ -1103,6 +1100,34 @@ mod tests {
         }
     }
 
+    struct UnrelatedPowerShellProvider<'a> {
+        query_completions: &'a AtomicUsize,
+        requested_names: RefCell<Vec<String>>,
+    }
+
+    impl ProcessProvider for UnrelatedPowerShellProvider<'_> {
+        fn snapshot(
+            &self,
+            allowed_image_names: &[String],
+            timeout: std::time::Duration,
+            max_records: usize,
+        ) -> ProcessSnapshotBatch {
+            assert_eq!(timeout, PROCESS_QUERY_TIMEOUT);
+            assert_eq!(max_records, MAX_PROCESS_RECORDS);
+            *self.requested_names.borrow_mut() = allowed_image_names.to_vec();
+            self.query_completions.fetch_add(1, Ordering::SeqCst);
+            ProcessSnapshotBatch::complete(vec![RawProcessSnapshot {
+                pid: 9_001,
+                parent_pid: None,
+                image_name: "powershell.exe".to_string(),
+                start_time_utc: "2026-07-15T14:00:00Z".to_string(),
+                command_line: Some(
+                    "powershell.exe --DeviceHardwareData unrelated-raw-hardware-secret".to_string(),
+                ),
+            }])
+        }
+    }
+
     struct FixedCompletionClock<'a> {
         query_completions: &'a AtomicUsize,
         calls: AtomicUsize,
@@ -1125,6 +1150,27 @@ mod tests {
         }
 
         fn wait(&self, _cancellation: &EspCancellation, _duration: std::time::Duration) {}
+    }
+
+    fn registry_command_observation(index: usize, command_line: &str) -> ScopedRegistryObservation {
+        let mut observation = uninstall_name_observation(
+            index,
+            format!("{{00000000-0000-0000-0000-{index:012}}}"),
+            command_line.to_string(),
+            "2026-07-15T14:00:00Z",
+        );
+        observation.key =
+            format!(r"SOFTWARE\Microsoft\IntuneManagementExtension\Win32Apps\App{index}");
+        observation.value_name = "InstallCommand".to_string();
+        observation.value = EspObservationValue::Text(command_line.to_string());
+        if let Some(registry) = observation.context.provenance.registry.as_mut() {
+            registry.key = observation.key.clone();
+            registry.value_name = Some(observation.value_name.clone());
+        }
+        ScopedRegistryObservation {
+            scope: None,
+            observation,
+        }
     }
 
     #[test]
@@ -1166,5 +1212,45 @@ mod tests {
             correlate_installer_processes(&[], std::slice::from_ref(process), &[], &[]).len(),
             1
         );
+    }
+
+    #[test]
+    fn registry_hints_trust_only_non_host_launcher_and_drop_unrelated_host_snapshot() {
+        let evidence = RegistryEvidence {
+            observations: vec![
+                registry_command_observation(
+                    1,
+                    r#""C:\IME\ContosoSetup.exe" /quiet --viewer "C:\Windows\System32\notepad.exe""#,
+                ),
+                registry_command_observation(
+                    2,
+                    r#"powershell.exe -NoProfile -Command "& 'C:\IME\NestedSetup.exe'""#,
+                ),
+            ],
+            ..RegistryEvidence::default()
+        };
+        let hints = SharedLiveSessionHints::default();
+        hints.update_registry(&evidence);
+
+        let query_completions = AtomicUsize::new(0);
+        let provider = UnrelatedPowerShellProvider {
+            query_completions: &query_completions,
+            requested_names: RefCell::new(Vec::new()),
+        };
+        let clock = FixedCompletionClock {
+            query_completions: &query_completions,
+            calls: AtomicUsize::new(0),
+            completion_utc: "2026-07-15T14:00:01Z",
+        };
+
+        let batch =
+            collect_process_provider_batch(&provider, &hints, &clock, "2026-07-15T14:00:00Z");
+        let requested_names = provider.requested_names.into_inner();
+
+        assert!(requested_names.contains(&"contososetup.exe".to_string()));
+        assert!(!requested_names.contains(&"notepad.exe".to_string()));
+        assert!(!requested_names.contains(&"nestedsetup.exe".to_string()));
+        assert!(!requested_names.contains(&"powershell.exe".to_string()));
+        assert!(batch.records.is_empty());
     }
 }

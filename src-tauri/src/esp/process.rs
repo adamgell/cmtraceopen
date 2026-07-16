@@ -32,6 +32,35 @@ pub const FIXED_PROCESS_ALLOWLIST: &[&str] = &[
     "winget.exe",
 ];
 
+// Registry-derived hints are matched by image basename. Never widen that query to a shared
+// interpreter or host, because an unrelated process with the same basename could expose its
+// command line. Intentionally fixed names above (for example msiexec.exe) remain unaffected.
+const GENERIC_PROCESS_HOSTS: &[&str] = &[
+    "bash.exe",
+    "cmd.exe",
+    "conhost.exe",
+    "cscript.exe",
+    "dotnet.exe",
+    "installutil.exe",
+    "java.exe",
+    "javaw.exe",
+    "msbuild.exe",
+    "mshta.exe",
+    "node.exe",
+    "powershell.exe",
+    "pwsh.exe",
+    "py.exe",
+    "python.exe",
+    "pythonw.exe",
+    "regasm.exe",
+    "regsvr32.exe",
+    "rundll32.exe",
+    "sh.exe",
+    "wmic.exe",
+    "wscript.exe",
+    "wsl.exe",
+];
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProcessReadError {
     Missing,
@@ -260,15 +289,15 @@ fn command_line_sanitizers() -> &'static CommandLineSanitizers {
         )
         .expect("constant bearer regex"),
         named_secret: Regex::new(
-            r#"(?i)(^|\s)((?:--|/)?(?:access[-_]?token|refresh[-_]?token|id[-_]?token|auth[-_]?token|bearer[-_]?token|client[-_]?secret|app[-_]?secret|api[-_]?key|token|password|secret|authorization))(\s*(?:=|:)\s*|\s+)(?:"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|[^\s&"]+)"#,
+            r#"(?i)(^|\s)((?:--?|/)?(?:access[-_]?token|refresh[-_]?token|id[-_]?token|auth[-_]?token|bearer[-_]?token|client[-_]?secret|app[-_]?secret|api[-_]?key|hardware[-_]?hash|device[-_]?hardware[-_]?data|token|password|secret|authorization))(\s*(?:=|:)\s*|\s+)(?:"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|[^\s&"]+)"#,
         )
         .expect("constant named-secret regex"),
         query_secret: Regex::new(
-            r#"(?i)([?&](?:sig|access[-_]?token|refresh[-_]?token|id[-_]?token|auth[-_]?token|bearer[-_]?token|client[-_]?secret|app[-_]?secret|api[-_]?key|token|password|secret|authorization)=)(?:"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|[^&\s"]+)"#,
+            r#"(?i)([?&](?:sig|access[-_]?token|refresh[-_]?token|id[-_]?token|auth[-_]?token|bearer[-_]?token|client[-_]?secret|app[-_]?secret|api[-_]?key|hardware[-_]?hash|device[-_]?hardware[-_]?data|token|password|secret|authorization)=)(?:"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|[^&\s"]+)"#,
         )
         .expect("constant query-secret regex"),
         json_secret: Regex::new(
-            r#"(?i)("(?:access[-_]?token|refresh[-_]?token|id[-_]?token|auth[-_]?token|bearer[-_]?token|client[-_]?secret|app[-_]?secret|api[-_]?key|token|password|secret|authorization)"\s*:\s*")(?:\\.|[^"])*(\")"#,
+            r#"(?i)("(?:access[-_]?token|refresh[-_]?token|id[-_]?token|auth[-_]?token|bearer[-_]?token|client[-_]?secret|app[-_]?secret|api[-_]?key|hardware[-_]?hash|device[-_]?hardware[-_]?data|token|password|secret|authorization)"\s*:\s*")(?:\\.|[^"])*(\")"#,
         )
         .expect("constant JSON-secret regex"),
     })
@@ -711,6 +740,8 @@ fn is_json_secret_key(key: &str) -> bool {
             | b"clientsecret"
             | b"appsecret"
             | b"apikey"
+            | b"hardwarehash"
+            | b"devicehardwaredata"
             | b"token"
             | b"password"
             | b"secret"
@@ -733,7 +764,7 @@ fn process_allowlist(local_installer_names: &[String]) -> BTreeSet<String> {
     allowlist
 }
 
-fn normalize_local_installer_name(raw: &str) -> Option<String> {
+pub(super) fn normalize_local_installer_name(raw: &str) -> Option<String> {
     let raw = raw.trim();
     if raw.is_empty() || raw.contains('*') || raw.contains('?') {
         return None;
@@ -745,6 +776,9 @@ fn normalize_local_installer_name(raw: &str) -> Option<String> {
     let name = components.last()?.trim();
     if name.len() > 255
         || !name.to_ascii_lowercase().ends_with(".exe")
+        || GENERIC_PROCESS_HOSTS
+            .iter()
+            .any(|host| host.eq_ignore_ascii_case(name))
         || !name
             .chars()
             .all(|character| character.is_ascii_alphanumeric() || " ._-()".contains(character))
@@ -1104,6 +1138,30 @@ mod tests {
     }
 
     #[test]
+    fn generic_interpreters_are_never_promoted_by_local_installer_hints() {
+        let provider = RecordingProcessProvider {
+            requested_names: RefCell::new(Vec::new()),
+        };
+        collect_process_evidence(
+            &provider,
+            &[
+                "powershell.exe".to_string(),
+                "pwsh.exe".to_string(),
+                "cmd.exe".to_string(),
+                "wscript.exe".to_string(),
+                "ContosoSetup.exe".to_string(),
+            ],
+            || "2026-07-15T14:00:00Z".to_string(),
+        );
+
+        let requested_names = provider.requested_names.into_inner();
+        assert!(requested_names.contains(&"contososetup.exe".to_string()));
+        for generic_host in ["powershell.exe", "pwsh.exe", "cmd.exe", "wscript.exe"] {
+            assert!(!requested_names.contains(&generic_host.to_string()));
+        }
+    }
+
+    #[test]
     fn process_identity_includes_pid_and_start_time_to_survive_pid_reuse() {
         let before = process(42, None, "msiexec.exe", "2026-07-15T13:00:00Z", None);
         let after = process(42, None, "msiexec.exe", "2026-07-15T14:00:00Z", None);
@@ -1342,6 +1400,75 @@ mod tests {
             observation.referenced_log_path.as_deref(),
             Some(r"C:\Windows\Temp\contoso.log")
         );
+    }
+
+    #[test]
+    fn hardware_identity_values_are_redacted_before_process_evidence_serialization() {
+        let raw = concat!(
+            "msiexec.exe /i {12345678-1234-1234-1234-1234567890AB} ",
+            "--HardwareHash hardware-hash-raw-secret ",
+            "--DeviceHardwareData=device-hardware-data-raw-secret ",
+            "/L*V C:\\Windows\\Temp\\contoso.log"
+        );
+        let evidence = collect(
+            vec![process(
+                52,
+                Some(20),
+                "msiexec.exe",
+                "2026-07-15T13:20:00Z",
+                Some(raw),
+            )],
+            &[],
+        );
+
+        let serialized = serde_json::to_string(&evidence).expect("serialize process evidence");
+        assert!(!serialized.contains("hardware-hash-raw-secret"));
+        assert!(!serialized.contains("device-hardware-data-raw-secret"));
+        assert!(serialized.matches("[REDACTED]").count() >= 2);
+        assert!(serialized.contains("contoso.log"));
+    }
+
+    #[test]
+    fn command_line_sanitizer_redacts_hardware_identity_field_variants() {
+        let cases = [
+            (
+                "-HardwareHash single-dash-hash-secret",
+                "single-dash-hash-secret",
+            ),
+            ("--HardwareHash direct-hash-secret", "direct-hash-secret"),
+            (
+                "/device_hardware_data=direct-device-data-secret",
+                "direct-device-data-secret",
+            ),
+            (
+                "https://enrollment.invalid/?hardware-hash=query-hash-secret&safe=true",
+                "query-hash-secret",
+            ),
+            (
+                r#"--payload {"DeviceHardwareData":"json-device-data-secret","safe":"keep-json-control"}"#,
+                "json-device-data-secret",
+            ),
+            (
+                r#"--payload {\"HardwareHash\":\"escaped-hash-secret\",\"safe\":\"keep-escaped-control\"}"#,
+                "escaped-hash-secret",
+            ),
+        ];
+
+        for (argument, sentinel) in cases {
+            let raw = format!("msiexec.exe {argument} --mode keep-this-control");
+            let sanitized = sanitize_command_line(&raw);
+
+            assert!(
+                !sanitized.contains(sentinel),
+                "hardware identity leaked for {argument}: {sanitized}"
+            );
+            assert!(sanitized.contains("[REDACTED]"));
+            assert!(sanitized.contains("--mode keep-this-control"));
+        }
+
+        let safe_neighbors =
+            "installer.exe --hardware-hash-mode SHA256 --device-hardware-data-format base64";
+        assert_eq!(sanitize_command_line(safe_neighbors), safe_neighbors);
     }
 
     #[test]
