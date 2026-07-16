@@ -8,13 +8,17 @@ use std::sync::{mpsc, Arc, Barrier, Condvar, Mutex, Weak};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
-#[cfg(target_os = "windows")]
-use app_lib::esp::discovery::default_known_source_specs;
 use app_lib::esp::archive::{
     extract_captured_archive, extract_captured_archive_with_cancel_in, validate_archive_manifest,
     ArchiveEntryKind, ArchiveEntryMetadata, ArchiveError, ArchiveFormat, MAX_ARCHIVE_ENTRIES,
     MAX_ARCHIVE_FILE_BYTES, MAX_ARCHIVE_TOTAL_UNCOMPRESSED_BYTES,
 };
+use app_lib::esp::bundle::{
+    analyze_captured_evidence_at, BundleError, MAX_JSON_SCALAR_RECORDS, MAX_LEGACY_BUNDLE_DEPTH,
+    MAX_LEGACY_BUNDLE_ENTRIES,
+};
+#[cfg(target_os = "windows")]
+use app_lib::esp::discovery::default_known_source_specs;
 use app_lib::esp::discovery::{
     build_runtime_temp_roots, discover_bounded_logs, embedded_known_source_specs,
     DiscoveredLogSource, DiscoveryInput, DiscoveryRootKind, DiscoveryRootState,
@@ -54,8 +58,8 @@ use cmtraceopen_parser::esp::{
     EspArtifactCoverage, EspArtifactStatus, EspDiagnosticsReducer, EspElevationState,
     EspEvidenceProvenance, EspEvidenceRecord, EspEvidenceRef, EspGraphObservation,
     EspGraphObservationSection, EspHardwareEvidence, EspObservationContext, EspObservationValue,
-    EspParseState, EspScope, EspSensitivity, EspSourceAccessState, EspSourceKind, EspSystemFact,
-    EspSystemObservation, GraphApiVersion,
+    EspParseState, EspRegistryObservation, EspRegistryProvenance, EspScope, EspSensitivity,
+    EspSourceAccessState, EspSourceKind, EspSystemFact, EspSystemObservation, GraphApiVersion,
 };
 use tempfile::tempdir;
 
@@ -5066,4 +5070,545 @@ fn archive_failure_and_panic_unwinding_remove_unique_partial_directories() {
         0,
         "panic unwinding must remove the unique extraction directory"
     );
+}
+
+const BUNDLE_REQUEST_ID: &str = "5d33649d-7425-42fb-8d44-7a0ef39b0dbc";
+const BUNDLE_OBSERVED_AT: &str = "2026-07-16T08:00:00.000Z";
+
+fn write_bundle_manifest(root: &Path, artifacts: serde_json::Value) {
+    let manifest = serde_json::json!({
+        "bundle": { "bundleId": "bundle-fixture" },
+        "collection": {
+            "collectedUtc": BUNDLE_OBSERVED_AT,
+            "results": { "gaps": [] }
+        },
+        "artifacts": artifacts,
+    });
+    std::fs::write(
+        root.join("manifest.json"),
+        serde_json::to_vec_pretty(&manifest).expect("serialize bundle manifest"),
+    )
+    .expect("write bundle manifest");
+}
+
+#[test]
+fn bundle_manifest_identity_and_family_drive_nested_sparse_intake() {
+    let bundle = tempfile::tempdir().expect("bundle tempdir");
+    let nested = bundle.path().join("actual").join("nested");
+    std::fs::create_dir_all(&nested).expect("create nested artifact folder");
+    std::fs::write(
+        nested.join("misleading-name.txt"),
+        r#"{"DeploymentProfileName":"Manifest Profile","CloudAssignedDomainJoinMethod":0}"#,
+    )
+    .expect("write nested JSON artifact");
+    write_bundle_manifest(
+        bundle.path(),
+        serde_json::json!([{
+            "artifactId": "autopilot-dds-ztd-file",
+            "category": "registry",
+            "family": "autopilot-profile-json",
+            "relativePath": "actual/nested/misleading-name.txt",
+            "status": "collected",
+            "parseHints": ["json", "autopilot"]
+        }]),
+    );
+
+    let snapshot =
+        analyze_captured_evidence_at(bundle.path(), BUNDLE_REQUEST_ID, BUNDLE_OBSERVED_AT)
+            .expect("analyze sparse manifest bundle");
+
+    assert_eq!(
+        snapshot
+            .profile
+            .as_ref()
+            .and_then(|profile| profile.profile_name.as_deref()),
+        Some("Manifest Profile")
+    );
+    assert!(snapshot.raw_evidence.iter().any(|record| {
+        record
+            .provenance
+            .source_artifact_id
+            .contains("autopilot-dds-ztd-file")
+            && record
+                .provenance
+                .file_path
+                .as_deref()
+                .is_some_and(|path| path.ends_with("actual/nested/misleading-name.txt"))
+    }));
+    assert!(snapshot.coverage.iter().any(|coverage| {
+        coverage.family == "autopilot-profile-json"
+            && coverage.status == EspArtifactStatus::Available
+    }));
+}
+
+#[test]
+fn bundle_manifest_reports_missing_and_malformed_artifacts_without_fallback() {
+    let bundle = tempfile::tempdir().expect("bundle tempdir");
+    std::fs::create_dir_all(bundle.path().join("evidence")).expect("create evidence folder");
+    std::fs::write(bundle.path().join("evidence/bad.json"), b"{not-json")
+        .expect("write malformed JSON");
+    std::fs::write(
+        bundle.path().join("evidence/unlisted.log"),
+        b"must not be analyzed",
+    )
+    .expect("write unlisted fallback candidate");
+    write_bundle_manifest(
+        bundle.path(),
+        serde_json::json!([
+            {
+                "artifactId": "missing-profile",
+                "category": "exports",
+                "family": "autopilot-profile-json",
+                "relativePath": "evidence/missing.json",
+                "status": "collected"
+            },
+            {
+                "artifactId": "malformed-profile",
+                "category": "exports",
+                "family": "autopilot-profile-json",
+                "relativePath": "evidence/bad.json",
+                "status": "collected"
+            }
+        ]),
+    );
+
+    let snapshot =
+        analyze_captured_evidence_at(bundle.path(), BUNDLE_REQUEST_ID, BUNDLE_OBSERVED_AT)
+            .expect("analyze partial manifest bundle");
+
+    assert!(snapshot.coverage.iter().any(|coverage| {
+        coverage.artifact_id.contains("missing-profile")
+            && coverage.status == EspArtifactStatus::Missing
+    }));
+    assert!(snapshot.coverage.iter().any(|coverage| {
+        coverage.artifact_id.contains("malformed-profile")
+            && coverage.status == EspArtifactStatus::ParseFailed
+    }));
+    assert!(snapshot.raw_evidence.iter().all(|record| {
+        record
+            .provenance
+            .file_path
+            .as_deref()
+            .map_or(true, |path| !path.ends_with("unlisted.log"))
+    }));
+}
+
+#[test]
+fn bundle_malformed_manifest_is_coverage_not_an_implicit_legacy_scan() {
+    let bundle = tempfile::tempdir().expect("bundle tempdir");
+    std::fs::write(bundle.path().join("manifest.json"), b"{not-json")
+        .expect("write malformed manifest");
+    std::fs::write(
+        bundle.path().join("AgentExecutor.log"),
+        b"must not be analyzed",
+    )
+    .expect("write legacy candidate");
+
+    let snapshot = analyze_captured_evidence_at(
+        &bundle.path().join("manifest.json"),
+        BUNDLE_REQUEST_ID,
+        BUNDLE_OBSERVED_AT,
+    )
+    .expect("malformed manifest returns an actionable snapshot");
+
+    assert!(snapshot.raw_evidence.is_empty());
+    assert!(snapshot.coverage.iter().any(|coverage| {
+        coverage.artifact_id == "bundle.manifest"
+            && coverage.status == EspArtifactStatus::ParseFailed
+    }));
+}
+
+#[test]
+fn bundle_legacy_fallback_is_depth_extension_and_basename_allowlisted() {
+    let bundle = tempfile::tempdir().expect("bundle tempdir");
+    let accepted = bundle.path().join("one").join("two");
+    let too_deep = accepted.join("three");
+    std::fs::create_dir_all(&too_deep).expect("create legacy fixture folders");
+    std::fs::write(
+        accepted.join("AutoPilotConfigurationFile.json"),
+        r#"{"DeploymentProfileName":"Legacy Profile"}"#,
+    )
+    .expect("write accepted legacy JSON");
+    std::fs::write(
+        too_deep.join("AutoPilotConfigurationFile.json"),
+        r#"{"DeploymentProfileName":"Too Deep"}"#,
+    )
+    .expect("write too-deep legacy JSON");
+    std::fs::write(
+        bundle.path().join("arbitrary.json"),
+        r#"{"secret":"ignored"}"#,
+    )
+    .expect("write unknown JSON");
+    std::fs::write(bundle.path().join("ignored.exe"), b"ignored")
+        .expect("write unsupported extension");
+
+    let snapshot =
+        analyze_captured_evidence_at(bundle.path(), BUNDLE_REQUEST_ID, BUNDLE_OBSERVED_AT)
+            .expect("analyze legacy bundle");
+
+    assert_eq!(MAX_LEGACY_BUNDLE_DEPTH, 3);
+    assert_eq!(
+        snapshot
+            .profile
+            .as_ref()
+            .and_then(|profile| profile.profile_name.as_deref()),
+        Some("Legacy Profile")
+    );
+    assert!(snapshot.raw_evidence.iter().all(|record| {
+        record.provenance.file_path.as_deref().map_or(true, |path| {
+            !path.ends_with("arbitrary.json") && !path.ends_with("ignored.exe")
+        })
+    }));
+}
+
+#[test]
+fn bundle_legacy_fallback_stops_after_256_directory_entries() {
+    let bundle = tempfile::tempdir().expect("bundle tempdir");
+    for index in 0..(MAX_LEGACY_BUNDLE_ENTRIES + 8) {
+        std::fs::write(
+            bundle.path().join(format!("evidence-{index:03}.log")),
+            format!("evidence {index}"),
+        )
+        .expect("write bounded legacy fixture");
+    }
+
+    let snapshot =
+        analyze_captured_evidence_at(bundle.path(), BUNDLE_REQUEST_ID, BUNDLE_OBSERVED_AT)
+            .expect("analyze bounded legacy bundle");
+
+    assert_eq!(MAX_LEGACY_BUNDLE_ENTRIES, 256);
+    assert!(snapshot.raw_evidence.len() <= MAX_LEGACY_BUNDLE_ENTRIES);
+    assert!(snapshot.coverage.iter().any(|coverage| {
+        coverage.artifact_id == "bundle.legacy-limit"
+            && coverage.status == EspArtifactStatus::ParseFailed
+    }));
+}
+
+#[test]
+fn bundle_intake_never_queries_equivalent_live_machine_sources() {
+    let source = include_str!("../src/esp/bundle.rs");
+    for forbidden in [
+        "collect_live_registry_evidence",
+        "LiveSystemProvider",
+        "collect_live_event_evidence",
+        "runtime_discovery_input",
+        "Registry::local_machine",
+    ] {
+        assert!(
+            !source.contains(forbidden),
+            "captured analysis must not query analyst-machine source {forbidden}"
+        );
+    }
+}
+
+#[test]
+fn bundle_and_live_shaped_registry_evidence_have_equivalent_conclusions() {
+    let bundle = tempfile::tempdir().expect("bundle tempdir");
+    std::fs::create_dir_all(bundle.path().join("evidence/registry"))
+        .expect("create registry folder");
+    std::fs::write(
+        bundle
+            .path()
+            .join("evidence/registry/autopilot-settings.reg"),
+        concat!(
+            "Windows Registry Editor Version 5.00\n\n",
+            "[HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Provisioning\\AutopilotSettings]\n",
+            "\"DeploymentProfileName\"=\"Equivalent Profile\"\n",
+            "\"CloudAssignedDomainJoinMethod\"=dword:00000000\n",
+        ),
+    )
+    .expect("write registry export");
+    write_bundle_manifest(
+        bundle.path(),
+        serde_json::json!([{
+            "artifactId": "autopilot-settings",
+            "category": "registry",
+            "family": "autopilot-settings",
+            "relativePath": "evidence/registry/autopilot-settings.reg",
+            "status": "collected"
+        }]),
+    );
+
+    let captured =
+        analyze_captured_evidence_at(bundle.path(), BUNDLE_REQUEST_ID, BUNDLE_OBSERVED_AT)
+            .expect("analyze captured registry evidence");
+    let mut live = EspDiagnosticsReducer::new(BUNDLE_OBSERVED_AT.to_string());
+    for (index, (value_name, value)) in [
+        (
+            "DeploymentProfileName",
+            EspObservationValue::Text("Equivalent Profile".to_string()),
+        ),
+        (
+            "CloudAssignedDomainJoinMethod",
+            EspObservationValue::Integer(0),
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let source_artifact_id = "registry:autopilot-settings".to_string();
+        live.ingest(EspEvidenceRecord::Registry(EspRegistryObservation {
+            context: EspObservationContext {
+                evidence_ref: EspEvidenceRef {
+                    evidence_id: format!("live-registry-{index}"),
+                    source_artifact_id: source_artifact_id.clone(),
+                },
+                provenance: EspEvidenceProvenance {
+                    source_kind: EspSourceKind::Registry,
+                    source_artifact_id,
+                    file_path: None,
+                    line_number: Some((index + 3) as u64),
+                    record_number: None,
+                    registry: Some(EspRegistryProvenance {
+                        hive: "HKLM".to_string(),
+                        key: r"SOFTWARE\Microsoft\Provisioning\AutopilotSettings".to_string(),
+                        value_name: Some(value_name.to_string()),
+                    }),
+                    event: None,
+                },
+                source_timestamp: None,
+                observed_at_utc: BUNDLE_OBSERVED_AT.to_string(),
+                sensitivity: EspSensitivity::Public,
+                parse_state: EspParseState::Parsed,
+                access_state: EspSourceAccessState::Available,
+            },
+            hive: "HKLM".to_string(),
+            key: r"SOFTWARE\Microsoft\Provisioning\AutopilotSettings".to_string(),
+            value_name: value_name.to_string(),
+            value,
+        }));
+    }
+    let live = live.snapshot();
+
+    assert_eq!(captured.scenario, live.scenario);
+    assert_eq!(captured.phase, live.phase);
+    assert_eq!(
+        captured
+            .profile
+            .as_ref()
+            .and_then(|profile| profile.profile_name.clone()),
+        live.profile
+            .as_ref()
+            .and_then(|profile| profile.profile_name.clone())
+    );
+    assert_eq!(
+        captured
+            .profile
+            .as_ref()
+            .and_then(|profile| profile.join_mode.clone()),
+        live.profile
+            .as_ref()
+            .and_then(|profile| profile.join_mode.clone())
+    );
+}
+
+#[test]
+fn bundle_rejects_non_uuid_request_ids_before_reading_the_source() {
+    assert_eq!(
+        analyze_captured_evidence_at(
+            Path::new("/source-that-must-not-be-read"),
+            "analysis-not-a-uuid",
+            BUNDLE_OBSERVED_AT,
+        )
+        .expect_err("reject non-UUID request ID first"),
+        BundleError::InvalidRequestId
+    );
+}
+
+#[test]
+fn bundle_registry_json_values_feed_device_preparation_reducer_paths() {
+    let bundle = tempfile::tempdir().expect("bundle tempdir");
+    std::fs::create_dir_all(bundle.path().join("evidence/registry"))
+        .expect("create registry folder");
+    std::fs::write(
+        bundle.path().join("evidence/registry/esp.reg"),
+        concat!(
+            "Windows Registry Editor Version 5.00\n\n",
+            "[HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\Autopilot\\EnrollmentStatusTracking]\n",
+            "\"ProvisioningProgress\"=\"{\\\"Workloads\\\":[{\\\"WorkloadId\\\":\\\"app-42\\\",\\\"FriendlyName\\\":\\\"Required App\\\",\\\"WorkloadState\\\":4}]}\"\n",
+        ),
+    )
+    .expect("write registry JSON fixture");
+    write_bundle_manifest(
+        bundle.path(),
+        serde_json::json!([{
+            "artifactId": "autopilot-esp-diagnostics",
+            "category": "registry",
+            "family": "autopilot-esp-diagnostics",
+            "relativePath": "evidence/registry/esp.reg",
+            "status": "collected"
+        }]),
+    );
+
+    let snapshot =
+        analyze_captured_evidence_at(bundle.path(), BUNDLE_REQUEST_ID, BUNDLE_OBSERVED_AT)
+            .expect("analyze registry-embedded JSON");
+
+    assert!(snapshot
+        .workloads
+        .iter()
+        .any(|workload| workload.raw_identifier == "app-42"
+            && workload.display_name.as_deref() == Some("Required App")));
+    assert!(snapshot.raw_evidence.iter().any(|record| {
+        record
+            .provenance
+            .registry
+            .as_ref()
+            .and_then(|registry| registry.value_name.as_deref())
+            == Some("ProvisioningProgress")
+    }));
+}
+
+#[test]
+fn bundle_hardware_and_delivery_json_normalize_without_raw_hardware_hash() {
+    let bundle = tempfile::tempdir().expect("bundle tempdir");
+    let output = bundle.path().join("evidence/command-output");
+    std::fs::create_dir_all(&output).expect("create command output folder");
+    std::fs::write(
+        output.join("esp-hardware-facts.json"),
+        r#"{"Manufacturer":"Contoso","Model":"Model 42","SerialNumber":"SERIAL-42","DeviceHardwareData":"BASE64-HASH-SECRET"}"#,
+    )
+    .expect("write hardware JSON");
+    std::fs::write(
+        output.join("esp-os-facts.json"),
+        r#"{"Version":"10.0.26100","BuildNumber":"26100"}"#,
+    )
+    .expect("write OS JSON");
+    std::fs::write(
+        output.join("delivery-optimization-perf-snap.json"),
+        r#"{"DownloadHttpBytes":1000,"DownloadLanBytes":250,"DownloadCacheHostBytes":100}"#,
+    )
+    .expect("write DO JSON");
+    write_bundle_manifest(
+        bundle.path(),
+        serde_json::json!([
+            {
+                "artifactId": "esp-hardware-facts",
+                "category": "command-output",
+                "family": "esp-hardware",
+                "relativePath": "evidence/command-output/esp-hardware-facts.json",
+                "status": "collected",
+                "parseHints": ["json", "esp-hardware"]
+            },
+            {
+                "artifactId": "esp-os-facts",
+                "category": "command-output",
+                "family": "esp-hardware",
+                "relativePath": "evidence/command-output/esp-os-facts.json",
+                "status": "collected",
+                "parseHints": ["json", "esp-hardware"]
+            },
+            {
+                "artifactId": "delivery-optimization-perf-snap",
+                "category": "command-output",
+                "family": "delivery-optimization-command",
+                "relativePath": "evidence/command-output/delivery-optimization-perf-snap.json",
+                "status": "collected",
+                "parseHints": ["json", "delivery-optimization"]
+            }
+        ]),
+    );
+
+    let snapshot =
+        analyze_captured_evidence_at(bundle.path(), BUNDLE_REQUEST_ID, BUNDLE_OBSERVED_AT)
+            .expect("analyze system and DO JSON");
+    let hardware = snapshot.hardware.as_ref().expect("normalized hardware");
+    assert_eq!(hardware.manufacturer.as_deref(), Some("Contoso"));
+    assert_eq!(hardware.model.as_deref(), Some("Model 42"));
+    assert_eq!(hardware.os_version.as_deref(), Some("10.0.26100"));
+    assert_eq!(hardware.os_build.as_deref(), Some("26100"));
+    let delivery = snapshot
+        .delivery_optimization
+        .as_ref()
+        .expect("normalized Delivery Optimization");
+    assert_eq!(delivery.download_http_bytes, 1000);
+    assert_eq!(delivery.download_lan_bytes, 250);
+    assert_eq!(delivery.download_cache_host_bytes, 100);
+    let serialized = serde_json::to_string(&snapshot).expect("serialize captured snapshot");
+    assert!(!serialized.contains("BASE64-HASH-SECRET"));
+    assert!(!serialized
+        .to_ascii_lowercase()
+        .contains("devicehardwaredata"));
+}
+
+#[test]
+fn bundle_analyzes_manifest_first_zip_inputs_through_scoped_extraction() {
+    let source = tempfile::tempdir().expect("archive source tempdir");
+    let archive = source.path().join("captured.zip");
+    let manifest = serde_json::to_vec(&serde_json::json!({
+        "collection": { "collectedUtc": BUNDLE_OBSERVED_AT, "results": { "gaps": [] } },
+        "artifacts": [{
+            "artifactId": "ime-logs",
+            "category": "logs",
+            "family": "intune-ime",
+            "relativePath": "evidence/logs/AgentExecutor.log",
+            "status": "collected"
+        }]
+    }))
+    .expect("serialize archive manifest");
+    write_test_zip(
+        &archive,
+        &[
+            ("manifest.json", manifest.as_slice()),
+            (
+                "evidence/logs/AgentExecutor.log",
+                b"<![LOG[Processing app id 00000000-0000-0000-0000-000000000042]LOG]!><time=\"08:00:00.000+000\" date=\"07-16-2026\" component=\"AgentExecutor\" context=\"\" type=\"1\" thread=\"1\" file=\"\">",
+            ),
+        ],
+    );
+
+    let snapshot = analyze_captured_evidence_at(&archive, BUNDLE_REQUEST_ID, BUNDLE_OBSERVED_AT)
+        .expect("analyze ZIP bundle");
+
+    assert!(snapshot
+        .raw_evidence
+        .iter()
+        .any(|record| { record.provenance.source_artifact_id.contains("ime-logs") }));
+    assert!(snapshot.coverage.iter().any(|coverage| {
+        coverage.family == "intune-ime" && coverage.status == EspArtifactStatus::Available
+    }));
+}
+
+#[test]
+fn bundle_json_scalar_bound_distinguishes_exact_capacity_from_truncation() {
+    let analyze_count = |count: usize| {
+        let bundle = tempfile::tempdir().expect("bundle tempdir");
+        let values = (0..count).map(|index| index as u64).collect::<Vec<_>>();
+        std::fs::write(
+            bundle.path().join("AutoPilotConfigurationFile.json"),
+            serde_json::to_vec(&values).expect("serialize bounded JSON"),
+        )
+        .expect("write bounded JSON");
+        write_bundle_manifest(
+            bundle.path(),
+            serde_json::json!([{
+                "artifactId": "autopilot-configuration-file",
+                "category": "exports",
+                "family": "autopilot-profile-json",
+                "relativePath": "AutoPilotConfigurationFile.json",
+                "status": "collected",
+                "parseHints": ["json", "autopilot"]
+            }]),
+        );
+        analyze_captured_evidence_at(bundle.path(), BUNDLE_REQUEST_ID, BUNDLE_OBSERVED_AT)
+            .expect("analyze bounded JSON")
+    };
+
+    let exact = analyze_count(MAX_JSON_SCALAR_RECORDS);
+    assert_eq!(exact.raw_evidence.len(), MAX_JSON_SCALAR_RECORDS);
+    assert!(exact.coverage.iter().any(|coverage| {
+        coverage.family == "autopilot-profile-json"
+            && coverage.status == EspArtifactStatus::Available
+    }));
+
+    let truncated = analyze_count(MAX_JSON_SCALAR_RECORDS + 1);
+    assert_eq!(truncated.raw_evidence.len(), MAX_JSON_SCALAR_RECORDS);
+    assert!(truncated.coverage.iter().any(|coverage| {
+        coverage.family == "autopilot-profile-json"
+            && coverage.status == EspArtifactStatus::ParseFailed
+            && coverage
+                .detail
+                .as_deref()
+                .is_some_and(|detail| detail.contains("4096-record bound"))
+    }));
 }

@@ -476,7 +476,7 @@ fn append_tail_failures(
     }));
 }
 
-fn log_entries_to_records(
+pub(crate) fn log_entries_to_records(
     path: &Path,
     source_id: &str,
     family: &str,

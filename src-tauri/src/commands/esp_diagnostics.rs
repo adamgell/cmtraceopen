@@ -4,10 +4,13 @@
 //! existing authenticated Graph/WAM coordinator runs separately in the
 //! frontend and overlays its result only when the user has enabled Graph.
 
+use std::path::Path;
 use std::sync::Arc;
 
+use cmtraceopen_parser::esp::EspDiagnosticsSnapshot;
 use tauri::{AppHandle, Emitter, Manager, State};
 
+use crate::esp::bundle::{analyze_captured_evidence, BundleError};
 use crate::esp::live_session::native_session_dependencies;
 use crate::esp::relaunch::{
     restart_with_provider, EspRelaunchError, EspRelaunchResult, NativeEspRelaunchProvider,
@@ -44,6 +47,20 @@ pub fn shutdown_esp_session_manager(app: &AppHandle) -> Result<(), EspSessionErr
 #[tauri::command]
 pub fn get_esp_diagnostics_capability() -> EspAcquisitionCapability {
     acquisition_capability()
+}
+
+#[tauri::command]
+pub async fn analyze_esp_evidence(
+    path: String,
+    request_id: String,
+) -> Result<EspDiagnosticsSnapshot, BundleError> {
+    tauri::async_runtime::spawn_blocking(move || {
+        analyze_captured_evidence(Path::new(&path), &request_id)
+    })
+    .await
+    .map_err(|error| BundleError::SourceAccess {
+        message: format!("captured ESP analysis task failed: {error}"),
+    })?
 }
 
 #[tauri::command]

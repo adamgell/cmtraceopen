@@ -4,6 +4,7 @@
 //! where the operating system provides the required Windows evidence sources.
 
 pub mod archive;
+pub mod bundle;
 pub mod discovery;
 pub mod event_logs;
 pub mod live_session;
