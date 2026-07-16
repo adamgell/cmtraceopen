@@ -221,7 +221,7 @@ fn command_line_sanitizers() -> &'static CommandLineSanitizers {
         )
         .expect("constant authorization-credential regex"),
         standalone_basic_credential: Regex::new(
-            r#"(?i)(^|\s)(basic)(\s+)("[a-z0-9+/]+={0,2}"|'[a-z0-9+/]+={0,2}'|[a-z0-9+/]+={0,2})(\s|[,.]|$)"#,
+            r#"(?i)(^|\s)(basic)(\s+)("[a-z0-9+/]+={0,2}"|'[a-z0-9+/]+={0,2}'|[a-z0-9+/]+={0,2})(\s|[.,;:!?)\]}]|$)"#,
         )
         .expect("constant standalone-Basic-credential regex"),
         bearer: Regex::new(
@@ -309,6 +309,7 @@ pub fn sanitize_command_line(command_line: &str) -> String {
                     .strip_prefix('(')
                     .and_then(|value| value.strip_suffix(')'))
                     .unwrap_or(narrative_word);
+                let narrative_word = narrative_word.strip_suffix(')').unwrap_or(narrative_word);
                 if narrative_word.eq_ignore_ascii_case("authentication") {
                     captures[0].to_string()
                 } else {
@@ -361,9 +362,17 @@ fn find_escaped_json_secret(
             cursor += 1;
             continue;
         };
+        if !is_escaped_json_key_boundary(bytes, cursor) {
+            cursor = opening_quote + 1;
+            continue;
+        }
         let key_start = opening_quote + 1;
-        let (key_closing_start, key_closing_quote) =
-            find_matching_escaped_quote(bytes, key_start, quote_width)?;
+        let Some((key_closing_start, key_closing_quote)) =
+            find_escaped_json_key_end(bytes, key_start, quote_width)
+        else {
+            cursor = opening_quote + 1;
+            continue;
+        };
         let key = &command_line[key_start..key_closing_start];
         if !is_json_secret_key(key) {
             cursor = key_closing_quote + 1;
@@ -412,23 +421,28 @@ fn escaped_quote_run(bytes: &[u8], start: usize) -> Option<(usize, usize)> {
     (bytes.get(quote) == Some(&b'"')).then_some((quote - start, quote))
 }
 
-fn find_matching_escaped_quote(
+fn is_escaped_json_key_boundary(bytes: &[u8], start: usize) -> bool {
+    let mut cursor = start;
+    while cursor > 0 && bytes[cursor - 1].is_ascii_whitespace() {
+        cursor -= 1;
+    }
+    cursor == 0 || matches!(bytes[cursor - 1], b'{' | b'[' | b',' | b'=')
+}
+
+fn find_escaped_json_key_end(
     bytes: &[u8],
     start: usize,
     quote_width: usize,
 ) -> Option<(usize, usize)> {
     let mut cursor = start;
-    while cursor < bytes.len() {
-        if let Some((width, quote)) = escaped_quote_run(bytes, cursor) {
-            if width == quote_width {
-                return Some((cursor, quote));
-            }
-            cursor = quote + 1;
-        } else {
-            cursor += 1;
-        }
+    while bytes
+        .get(cursor)
+        .is_some_and(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    {
+        cursor += 1;
     }
-    None
+    let (width, quote) = escaped_quote_run(bytes, cursor)?;
+    (width == quote_width).then_some((cursor, quote))
 }
 
 fn find_escaped_json_value_end(
@@ -437,14 +451,67 @@ fn find_escaped_json_value_end(
     quote_width: usize,
 ) -> Option<(usize, usize)> {
     let mut cursor = start;
+    let mut terminal_fallback: Option<(usize, usize)> = None;
+    while cursor < bytes.len() {
+        if let Some((width, quote)) = escaped_quote_run(bytes, cursor) {
+            if width == quote_width {
+                if let Some(fallback) = terminal_fallback {
+                    if is_escaped_json_member_opener(bytes, cursor, quote_width) {
+                        return Some(fallback);
+                    }
+                }
+                if is_escaped_json_value_close(bytes, quote + 1, quote_width) {
+                    return Some((cursor, quote));
+                }
+                cursor = quote + 1;
+                continue;
+            }
+            if width > quote_width {
+                let closing = (cursor + width - quote_width, quote);
+                match escaped_json_value_boundary(bytes, quote + 1, quote_width) {
+                    EscapedJsonValueBoundary::NextMember => return Some(closing),
+                    EscapedJsonValueBoundary::Terminal => terminal_fallback = Some(closing),
+                    EscapedJsonValueBoundary::None => {}
+                }
+            }
+            cursor = quote + 1;
+        } else {
+            cursor += 1;
+        }
+    }
+    terminal_fallback
+}
+
+fn is_escaped_json_member_opener(bytes: &[u8], start: usize, quote_width: usize) -> bool {
+    if !is_escaped_json_key_boundary(bytes, start) {
+        return false;
+    }
+    let Some((width, opening_quote)) = escaped_quote_run(bytes, start) else {
+        return false;
+    };
+    if width != quote_width {
+        return false;
+    }
+    let Some((_, key_closing_quote)) =
+        find_escaped_json_member_key_end(bytes, opening_quote + 1, quote_width)
+    else {
+        return false;
+    };
+    let mut cursor = key_closing_quote + 1;
+    skip_ascii_whitespace(bytes, &mut cursor);
+    bytes.get(cursor) == Some(&b':')
+}
+
+fn find_escaped_json_member_key_end(
+    bytes: &[u8],
+    start: usize,
+    quote_width: usize,
+) -> Option<(usize, usize)> {
+    let mut cursor = start;
     while cursor < bytes.len() {
         if let Some((width, quote)) = escaped_quote_run(bytes, cursor) {
             if width == quote_width {
                 return Some((cursor, quote));
-            }
-            if width > quote_width && is_escaped_json_value_boundary(bytes, quote + 1, quote_width)
-            {
-                return Some((cursor + width - quote_width, quote));
             }
             cursor = quote + 1;
         } else {
@@ -454,7 +521,7 @@ fn find_escaped_json_value_end(
     None
 }
 
-fn is_escaped_json_value_boundary(bytes: &[u8], after_quote: usize, quote_width: usize) -> bool {
+fn is_escaped_json_value_close(bytes: &[u8], after_quote: usize, quote_width: usize) -> bool {
     let mut cursor = after_quote;
     skip_ascii_whitespace(bytes, &mut cursor);
     match bytes.get(cursor) {
@@ -462,10 +529,38 @@ fn is_escaped_json_value_boundary(bytes: &[u8], after_quote: usize, quote_width:
         Some(b',') => {
             cursor += 1;
             skip_ascii_whitespace(bytes, &mut cursor);
-            escaped_quote_run(bytes, cursor)
-                .is_some_and(|(next_width, _)| next_width == quote_width)
+            is_escaped_json_member_opener(bytes, cursor, quote_width)
         }
         _ => false,
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum EscapedJsonValueBoundary {
+    None,
+    NextMember,
+    Terminal,
+}
+
+fn escaped_json_value_boundary(
+    bytes: &[u8],
+    after_quote: usize,
+    quote_width: usize,
+) -> EscapedJsonValueBoundary {
+    let mut cursor = after_quote;
+    skip_ascii_whitespace(bytes, &mut cursor);
+    match bytes.get(cursor) {
+        None | Some(b'}' | b']') => EscapedJsonValueBoundary::Terminal,
+        Some(b',') => {
+            cursor += 1;
+            skip_ascii_whitespace(bytes, &mut cursor);
+            if is_escaped_json_member_opener(bytes, cursor, quote_width) {
+                EscapedJsonValueBoundary::NextMember
+            } else {
+                EscapedJsonValueBoundary::None
+            }
+        }
+        _ => EscapedJsonValueBoundary::None,
     }
 }
 

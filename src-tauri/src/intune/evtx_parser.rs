@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use evtx::EvtxParser;
 use quick_xml::encoding::Decoder;
-use quick_xml::events::{BytesRef, BytesStart, Event};
+use quick_xml::events::{BytesDecl, BytesRef, BytesStart, Event};
 use quick_xml::name::QName;
 use quick_xml::Reader;
 #[cfg(target_os = "windows")]
@@ -413,18 +413,20 @@ pub fn parse_esp_event_xml(
     if !has_valid_bounded_event_xml_structure(xml) {
         return None;
     }
-    let event_id = xml_element_text(xml, "EventID")?
-        .trim()
-        .parse::<u32>()
-        .ok()?;
-    let channel = xml_element_text(xml, "Channel")
+    let EspSystemFields {
+        event_id,
+        channel,
+        source_timestamp,
+        record_id: xml_record_id,
+    } = esp_system_fields(xml)?;
+    let event_id = event_id?.trim().parse::<u32>().ok()?;
+    let channel = channel
         .map(|value| decode_esp_xml_text(value.trim()))
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| fallback_channel.to_string());
-    let source_timestamp = xml_element_attribute(xml, "TimeCreated", "SystemTime")?;
-    let record_id = record_id.or_else(|| {
-        xml_element_text(xml, "EventRecordID").and_then(|value| value.trim().parse::<u64>().ok())
-    });
+    let source_timestamp = source_timestamp?;
+    let record_id =
+        record_id.or_else(|| xml_record_id.and_then(|value| value.trim().parse::<u64>().ok()));
     let message = rendered_message
         .filter(|value| !value.trim().is_empty())
         .or_else(|| {
@@ -453,6 +455,7 @@ fn has_valid_bounded_event_xml_structure(xml: &str) -> bool {
 
     let mut reader = Reader::from_str(xml);
     reader.config_mut().check_end_names = true;
+    reader.config_mut().check_comments = true;
     let mut depth = 0usize;
     let mut root_seen = false;
     let mut root_closed = false;
@@ -510,8 +513,12 @@ fn has_valid_bounded_event_xml_structure(xml: &str) -> bool {
                 }
                 declaration_allowed = false;
             }
-            Event::Decl(_) => {
-                if declaration_seen || !declaration_allowed || root_seen {
+            Event::Decl(declaration) => {
+                if declaration_seen
+                    || !declaration_allowed
+                    || root_seen
+                    || !has_valid_xml_declaration(&declaration, reader.decoder())
+                {
                     return false;
                 }
                 declaration_seen = true;
@@ -526,10 +533,50 @@ fn has_valid_bounded_event_xml_structure(xml: &str) -> bool {
                 }
                 declaration_allowed = false;
             }
-            Event::Comment(_) | Event::PI(_) => declaration_allowed = false,
+            Event::Comment(_) => declaration_allowed = false,
+            Event::PI(instruction) => {
+                if instruction.target().eq_ignore_ascii_case(b"xml") {
+                    return false;
+                }
+                declaration_allowed = false;
+            }
             Event::Eof => return root_seen && root_closed && depth == 0,
         }
     }
+}
+
+fn has_valid_xml_declaration(declaration: &BytesDecl<'_>, decoder: Decoder) -> bool {
+    let Ok(content) = std::str::from_utf8(declaration.as_ref()) else {
+        return false;
+    };
+    let declaration = BytesStart::from_content(content, b"xml".len());
+    let mut attributes = declaration.attributes();
+    let mut stage = 0u8;
+
+    for attribute in attributes.with_checks(true) {
+        let Ok(attribute) = attribute else {
+            return false;
+        };
+        let Ok(value) = attribute.decode_and_unescape_value(decoder) else {
+            return false;
+        };
+        match attribute.key.as_ref() {
+            b"version" if stage == 0 && value == "1.0" => stage = 1,
+            b"encoding" if stage == 1 && is_valid_xml_encoding_name(&value) => stage = 2,
+            b"standalone" if matches!(stage, 1 | 2) && matches!(value.as_ref(), "yes" | "no") => {
+                stage = 3;
+            }
+            _ => return false,
+        }
+    }
+
+    stage >= 1
+}
+
+fn is_valid_xml_encoding_name(value: &str) -> bool {
+    let mut bytes = value.bytes();
+    bytes.next().is_some_and(|byte| byte.is_ascii_alphabetic())
+        && bytes.all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
 }
 
 fn is_legal_xml_10_character(character: char) -> bool {
@@ -600,6 +647,89 @@ fn ordered_event_data(xml: &str) -> Option<Vec<EventLogProperty>> {
     }
 }
 
+#[derive(Default)]
+struct EspSystemFields {
+    event_id: Option<String>,
+    channel: Option<String>,
+    source_timestamp: Option<String>,
+    record_id: Option<String>,
+}
+
+fn esp_system_fields(xml: &str) -> Option<EspSystemFields> {
+    let mut reader = Reader::from_str(xml);
+    let mut path = Vec::<Vec<u8>>::new();
+    let mut fields = EspSystemFields::default();
+
+    loop {
+        match reader.read_event().ok()? {
+            Event::Start(start) => {
+                let name = start.name().as_ref().to_vec();
+                if is_direct_system_path(&path) {
+                    match name.as_slice() {
+                        b"EventID" => {
+                            let value = reader.read_text(QName(b"EventID")).ok()?.into_owned();
+                            fields.event_id.get_or_insert(value);
+                            continue;
+                        }
+                        b"Channel" => {
+                            let value = reader.read_text(QName(b"Channel")).ok()?.into_owned();
+                            fields.channel.get_or_insert(value);
+                            continue;
+                        }
+                        b"EventRecordID" => {
+                            let value =
+                                reader.read_text(QName(b"EventRecordID")).ok()?.into_owned();
+                            fields.record_id.get_or_insert(value);
+                            continue;
+                        }
+                        b"TimeCreated" => {
+                            if let Some(value) =
+                                xml_start_attribute(&start, "SystemTime", reader.decoder())
+                            {
+                                fields.source_timestamp.get_or_insert(value);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                path.push(name);
+            }
+            Event::Empty(start) => {
+                if is_direct_system_path(&path) {
+                    match start.name().as_ref() {
+                        b"EventID" => {
+                            fields.event_id.get_or_insert_with(String::new);
+                        }
+                        b"Channel" => {
+                            fields.channel.get_or_insert_with(String::new);
+                        }
+                        b"EventRecordID" => {
+                            fields.record_id.get_or_insert_with(String::new);
+                        }
+                        b"TimeCreated" => {
+                            if let Some(value) =
+                                xml_start_attribute(&start, "SystemTime", reader.decoder())
+                            {
+                                fields.source_timestamp.get_or_insert(value);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            Event::End(_) => {
+                path.pop()?;
+            }
+            Event::Eof => return Some(fields),
+            _ => {}
+        }
+    }
+}
+
+fn is_direct_system_path(path: &[Vec<u8>]) -> bool {
+    path.len() == 2 && path[0].as_slice() == b"Event" && path[1].as_slice() == b"System"
+}
+
 fn xml_element_text(xml: &str, element: &str) -> Option<String> {
     let mut reader = Reader::from_str(xml);
     loop {
@@ -612,21 +742,6 @@ fn xml_element_text(xml: &str, element: &str) -> Option<String> {
             }
             Event::Empty(start) if start.name().as_ref() == element.as_bytes() => {
                 return Some(String::new());
-            }
-            Event::Eof => return None,
-            _ => {}
-        }
-    }
-}
-
-fn xml_element_attribute(xml: &str, element: &str, attribute: &str) -> Option<String> {
-    let mut reader = Reader::from_str(xml);
-    loop {
-        match reader.read_event().ok()? {
-            Event::Start(start) | Event::Empty(start)
-                if start.name().as_ref() == element.as_bytes() =>
-            {
-                return xml_start_attribute(&start, attribute, reader.decoder());
             }
             Event::Eof => return None,
             _ => {}
@@ -1639,6 +1754,8 @@ mod tests {
     #[test]
     fn esp_record_stream_counts_illegal_xml_records_as_parse_failures() {
         let valid_xml = esp_record_xml("valid");
+        let malformed_comment =
+            esp_record_xml("valid").replacen("<Event>", "<Event><!-- malformed--comment -->", 1);
         let invalid_xml = [
             esp_record_xml("&undefined;"),
             esp_record_xml("&#0;"),
@@ -1648,6 +1765,17 @@ mod tests {
                 "<!--before-declaration--><?xml version='1.0'?>{}",
                 esp_record_xml("valid")
             ),
+            format!("<?xml?>{}", esp_record_xml("valid")),
+            format!("<?XmL?>{}", esp_record_xml("valid")),
+            format!(
+                "<?xml version='1.0' version='1.0'?>{}",
+                esp_record_xml("valid")
+            ),
+            format!(
+                "<?xml version='1.0' encoding='UTF-8' encoding='UTF-8'?>{}",
+                esp_record_xml("valid")
+            ),
+            malformed_comment,
         ];
         let mut input = vec![Ok::<_, &'static str>((valid_xml, 1))];
         input.extend(
@@ -1660,15 +1788,15 @@ mod tests {
         let batch = parse_esp_record_stream(
             input,
             "invalid-xml-stream.evtx",
-            10,
+            20,
             MAX_ESP_EVTX_RECORD_BYTES,
             usize::MAX,
         );
 
-        assert_eq!(batch.inspected_records, 6);
+        assert_eq!(batch.inspected_records, 11);
         assert_eq!(batch.records.len(), 1);
         assert_eq!(batch.records[0].record_id, Some(1));
-        assert_eq!(batch.parse_failure_count, 5);
+        assert_eq!(batch.parse_failure_count, 10);
         assert!(batch.truncated);
     }
 

@@ -802,6 +802,170 @@ fn command_line_sanitizer_keeps_escaped_json_key_boundaries_and_redacts_two_laye
     assert!(!sanitized.contains("twice-escaped-password-secret"));
     assert!(sanitized.contains(r#"\\\"password\\\":\\\"[REDACTED]\\\""#));
     assert!(sanitized.contains(r#"\\\"safe\\\":\\\"keep-twice-escaped-control\\\""#));
+
+    let general_safe_keys = concat!(
+        r#"installer.exe --payload {\"password\":\"general-key-secret\","#,
+        r#"\"safe.name\":\"keep-dotted-safe-value\","#,
+        r#"\"display name\":\"keep-spaced-safe-value\"}"#
+    );
+    let sanitized = sanitize_command_line(general_safe_keys);
+    assert!(!sanitized.contains("general-key-secret"));
+    assert!(sanitized.contains(r#"\"safe.name\":\"keep-dotted-safe-value\""#));
+    assert!(sanitized.contains(r#"\"display name\":\"keep-spaced-safe-value\""#));
+}
+
+#[test]
+fn command_line_sanitizer_keeps_wider_escaped_quotes_inside_json_secret_values() {
+    for marker in ["}", "]"] {
+        let raw = r#"installer.exe --payload {\"password\":\"first-secret-segment\\\"MARKERsecond-secret-segment\",\"safe\":\"keep-boundary-control\"}"#
+            .replace("MARKER", marker);
+        let sanitized = sanitize_command_line(&raw);
+
+        for secret in ["first-secret-segment", "second-secret-segment"] {
+            assert!(
+                !sanitized.contains(secret),
+                "one-layer escaped JSON secret leaked {secret}: {sanitized}"
+            );
+        }
+        assert!(sanitized.contains(r#"\"password\":\"[REDACTED]\""#));
+        assert!(sanitized.contains(r#"\"safe\":\"keep-boundary-control\""#));
+    }
+
+    let twice_inner_quote = format!("{}\"", "\\".repeat(7));
+    for marker in ["}", "]"] {
+        let twice_escaped = [
+            r#"installer.exe --payload {\\\"password\\\":\\\"twice-secret-prefix"#,
+            twice_inner_quote.as_str(),
+            marker,
+            r#"twice-secret-suffix\\\",\\\"safe\\\":\\\"keep-twice-control\\\"}"#,
+        ]
+        .concat();
+        let sanitized = sanitize_command_line(&twice_escaped);
+
+        assert!(!sanitized.contains("twice-secret-prefix"));
+        assert!(!sanitized.contains("twice-secret-suffix"));
+        assert!(sanitized.contains(r#"\\\"password\\\":\\\"[REDACTED]\\\""#));
+        assert!(sanitized.contains(r#"\\\"safe\\\":\\\"keep-twice-control\\\""#));
+    }
+
+    let option_shaped_suffix = concat!(
+        r#"installer.exe --payload {\"password\":\"secret-prefix\\\"} "#,
+        r#"--still-secret suffix\",\"safe\":\"keep-option-shaped-control\"}"#
+    );
+    let sanitized = sanitize_command_line(option_shaped_suffix);
+    assert!(!sanitized.contains("secret-prefix"));
+    assert!(!sanitized.contains("--still-secret suffix"));
+    assert!(sanitized.contains(r#"\"safe\":\"keep-option-shaped-control\""#));
+
+    let twice_option_shaped_suffix = [
+        r#"installer.exe --payload {\\\"password\\\":\\\"twice-secret-prefix"#,
+        twice_inner_quote.as_str(),
+        r#"} --twice-still-secret suffix\\\",\\\"safe\\\":\\\"keep-twice-option-control\\\"}"#,
+    ]
+    .concat();
+    let sanitized = sanitize_command_line(&twice_option_shaped_suffix);
+    assert!(!sanitized.contains("twice-secret-prefix"));
+    assert!(!sanitized.contains("--twice-still-secret suffix"));
+    assert!(sanitized.contains(r#"\\\"safe\\\":\\\"keep-twice-option-control\\\""#));
+
+    let comma_quote_not_member = concat!(
+        r#"installer.exe --payload {\"password\":\"comma-secret-prefix\\\", "#,
+        r#"\"not-a-member\" comma-secret-suffix\","#,
+        r#"\"safe\":\"keep-comma-control\"}"#
+    );
+    let sanitized = sanitize_command_line(comma_quote_not_member);
+    assert!(!sanitized.contains("comma-secret-prefix"));
+    assert!(!sanitized.contains("comma-secret-suffix"));
+    assert!(sanitized.contains(r#"\"safe\":\"keep-comma-control\""#));
+}
+
+#[test]
+fn command_line_sanitizer_finds_secret_after_safe_escaped_json_backslash_value() {
+    let raw = concat!(
+        r#"installer.exe --payload {\"safe\":\"keep-literal-backslash\\\","#,
+        r#"\"password\":\"following-password-secret\","#,
+        r#"\"control\":\"keep-safe-boundary-control\"}"#
+    );
+    let sanitized = sanitize_command_line(raw);
+
+    assert!(sanitized.contains("keep-literal-backslash"));
+    assert!(!sanitized.contains("following-password-secret"));
+    assert!(sanitized.contains(r#"\"password\":\"[REDACTED]\""#));
+    assert!(sanitized.contains(r#"\"control\":\"keep-safe-boundary-control\""#));
+
+    let twice_literal_backslash_close = format!("{}\"", "\\".repeat(7));
+    let twice_escaped = [
+        r#"installer.exe --payload {\\\"safe\\\":\\\"keep-twice-literal-backslash"#,
+        twice_literal_backslash_close.as_str(),
+        r#",\\\"password\\\":\\\"following-twice-password-secret\\\",\\\"control\\\":\\\"keep-twice-safe-control\\\"}"#,
+    ]
+    .concat();
+    let sanitized = sanitize_command_line(&twice_escaped);
+
+    assert!(sanitized.contains("keep-twice-literal-backslash"));
+    assert!(!sanitized.contains("following-twice-password-secret"));
+    assert!(sanitized.contains(r#"\\\"password\\\":\\\"[REDACTED]\\\""#));
+    assert!(sanitized.contains(r#"\\\"control\\\":\\\"keep-twice-safe-control\\\""#));
+}
+
+#[test]
+fn command_line_sanitizer_stops_at_terminal_escaped_json_object_boundaries() {
+    let raw = concat!(
+        r#"installer.exe --a {\"password\":\"ends-with-backslash\\\"} --b {"#,
+        r#"\"refresh_token\":\"following-object-secret\","#,
+        r#"\"safe\":\"keep-separate-object-control\"}"#
+    );
+    let sanitized = sanitize_command_line(raw);
+
+    assert!(!sanitized.contains("ends-with-backslash"));
+    assert!(!sanitized.contains("following-object-secret"));
+    assert!(sanitized.contains(r#"\"password\":\"[REDACTED]\"} --b {"#));
+    assert!(sanitized.contains(r#"\"refresh_token\":\"[REDACTED]\""#));
+    assert!(sanitized.contains(r#"\"safe\":\"keep-separate-object-control\""#));
+
+    let safe_first = concat!(
+        r#"installer.exe --a {\"password\":\"ends-with-backslash\\\"} --b {"#,
+        r#"\"safe\":\"keep-leading-safe-control\","#,
+        r#"\"refresh_token\":\"safe-first-following-secret\"}"#
+    );
+    let sanitized = sanitize_command_line(safe_first);
+
+    assert!(!sanitized.contains("safe-first-following-secret"));
+    assert!(sanitized.contains(r#"} --b {\"safe\":\"keep-leading-safe-control\""#));
+    assert!(sanitized.contains(r#"\"refresh_token\":\"[REDACTED]\""#));
+
+    let twice_terminal_close = format!("{}\"", "\\".repeat(7));
+    let twice_escaped = [
+        r#"installer.exe --a {\\\"password\\\":\\\"twice-terminal-backslash"#,
+        twice_terminal_close.as_str(),
+        r#"} --b {\\\"refresh_token\\\":\\\"twice-following-object-secret\\\",\\\"safe\\\":\\\"keep-twice-object-control\\\"}"#,
+    ]
+    .concat();
+    let sanitized = sanitize_command_line(&twice_escaped);
+
+    assert!(!sanitized.contains("twice-terminal-backslash"));
+    assert!(!sanitized.contains("twice-following-object-secret"));
+    assert!(sanitized.contains(r#"\\\"password\\\":\\\"[REDACTED]\\\"} --b {"#));
+    assert!(sanitized.contains(r#"\\\"refresh_token\\\":\\\"[REDACTED]\\\""#));
+    assert!(sanitized.contains(r#"\\\"safe\\\":\\\"keep-twice-object-control\\\""#));
+
+    let quoted_argument_between_objects = concat!(
+        r#"installer.exe --a {\"password\":\"ends-with-backslash\\\"} "#,
+        r#"--note \"keep-quoted-note\" --b {"#,
+        r#"\"refresh_token\":\"following-quoted-argument-secret\","#,
+        r#"\"safe\":\"keep-quoted-argument-control\"}"#
+    );
+    let sanitized = sanitize_command_line(quoted_argument_between_objects);
+
+    assert_eq!(
+        sanitized,
+        concat!(
+            r#"installer.exe --a {\"password\":\"[REDACTED]\"} "#,
+            r#"--note \"keep-quoted-note\" --b {"#,
+            r#"\"refresh_token\":\"[REDACTED]\","#,
+            r#"\"safe\":\"keep-quoted-argument-control\"}"#
+        )
+    );
 }
 
 #[test]
@@ -847,12 +1011,34 @@ fn command_line_sanitizer_redacts_punctuation_delimited_basic_credentials() {
 }
 
 #[test]
+fn command_line_sanitizer_redacts_basic_credentials_before_closing_punctuation() {
+    for (raw, expected) in [
+        ("Basic Zm9vOmJhcg==; next", "Basic [REDACTED]; next"),
+        ("Basic \"Zm9vOmJhcg==\": next", "Basic [REDACTED]: next"),
+        ("Basic Zm9vOmJhcg==! next", "Basic [REDACTED]! next"),
+        ("Basic 'Zm9vOmJhcg=='? next", "Basic [REDACTED]? next"),
+        ("Basic Zm9vOmJhcg==) next", "Basic [REDACTED]) next"),
+        ("Basic \"Zm9vOmJhcg==\"] next", "Basic [REDACTED]] next"),
+        ("Basic Zm9vOmJhcg==} next", "Basic [REDACTED]} next"),
+    ] {
+        assert_eq!(sanitize_command_line(raw), expected);
+    }
+
+    for delimiter in [';', ':', '!', '?', ')', ']', '}'] {
+        let narrative =
+            format!("Basic c2FmZS1uYXJyYXRpdmU={delimiter} authentication is supported");
+        assert_eq!(sanitize_command_line(&narrative), narrative);
+    }
+}
+
+#[test]
 fn command_line_sanitizer_preserves_punctuated_bearer_authentication_narratives() {
     for narrative in [
         "The Bearer authentication, mode is supported",
         "The Bearer authentication. Next step",
         "The Bearer authentication; mode is supported",
         "The Bearer (authentication) mode is supported",
+        "The (Bearer authentication) mode is supported",
     ] {
         assert_eq!(sanitize_command_line(narrative), narrative);
     }
@@ -938,6 +1124,123 @@ fn event_parser_ignores_event_id_markup_inside_comments() {
     let parsed = parse_esp_event_xml(xml, "commented.evtx", Some(1), None, "Unknown")
         .expect("valid event with a comment");
     assert_eq!(parsed.event_id, 72);
+}
+
+#[test]
+fn event_parser_reads_identity_fields_only_from_direct_system_children() {
+    let xml = concat!(
+        "<Event>",
+        "<EventID>999</EventID>",
+        "<EventRecordID>9999</EventRecordID>",
+        "<TimeCreated SystemTime='1900-01-01T00:00:00Z'/>",
+        "<Channel>Top-Level/Shadow</Channel>",
+        "<EventData>",
+        "<EventID>998</EventID>",
+        "<EventRecordID>9988</EventRecordID>",
+        "<TimeCreated SystemTime='1901-01-01T00:00:00Z'/>",
+        "<Channel>EventData/Shadow</Channel>",
+        "</EventData>",
+        "<System>",
+        "<EventID>72</EventID>",
+        "<EventRecordID>909</EventRecordID>",
+        "<TimeCreated SystemTime='2026-07-16T13:00:00Z'/>",
+        "<Channel>Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin</Channel>",
+        "</System>",
+        "</Event>"
+    );
+    let parsed = parse_esp_event_xml(xml, "shadowed.evtx", None, None, "Fallback")
+        .expect("valid event with shadow elements");
+
+    assert_eq!(parsed.event_id, 72);
+    assert_eq!(parsed.record_id, Some(909));
+    assert_eq!(parsed.source_timestamp, "2026-07-16T13:00:00Z");
+    assert_eq!(
+        parsed.channel,
+        "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin"
+    );
+
+    let missing_system_fields = concat!(
+        "<Event>",
+        "<EventID>72</EventID>",
+        "<TimeCreated SystemTime='2026-07-16T13:00:00Z'/>",
+        "<System></System><EventData />",
+        "</Event>"
+    );
+    assert!(
+        parse_esp_event_xml(
+            missing_system_fields,
+            "missing-system-fields.evtx",
+            Some(2),
+            None,
+            "Fallback"
+        )
+        .is_none(),
+        "top-level fields satisfied required System fields"
+    );
+
+    let top_level_channel_only = concat!(
+        "<Event><Channel>Top-Level/Shadow</Channel><System>",
+        "<EventID>72</EventID>",
+        "<TimeCreated SystemTime='2026-07-16T13:00:00Z'/>",
+        "</System><EventData /></Event>"
+    );
+    let parsed = parse_esp_event_xml(
+        top_level_channel_only,
+        "fallback-channel.evtx",
+        Some(3),
+        None,
+        "Fallback/Channel",
+    )
+    .expect("valid event without a System Channel");
+    assert_eq!(parsed.channel, "Fallback/Channel");
+}
+
+#[test]
+fn event_parser_rejects_malformed_xml_declarations_and_comments() {
+    let event = concat!(
+        "<Event><System><EventID>72</EventID>",
+        "<TimeCreated SystemTime='2026-07-16T13:00:00Z'/>",
+        "<Channel>Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin</Channel>",
+        "</System><EventData /></Event>"
+    );
+    let malformed_comment = event.replacen("<Event>", "<Event><!-- bad--comment -->", 1);
+    let invalid = [
+        format!("<?xml?>{event}"),
+        format!("<?XmL?>{event}"),
+        format!("<?xml version='1.0' version='1.0'?>{event}"),
+        format!("<?xml version='1.0' encoding='UTF-8' encoding='UTF-8'?>{event}"),
+        format!("<?xml version='1.0' mode='invalid'?>{event}"),
+        format!("<?xml version='1.0' standalone='maybe'?>{event}"),
+        malformed_comment,
+    ];
+
+    for (index, xml) in invalid.iter().enumerate() {
+        assert!(
+            parse_esp_event_xml(
+                xml,
+                "invalid-xml.evtx",
+                Some(index as u64 + 1),
+                None,
+                "Fallback"
+            )
+            .is_none(),
+            "invalid XML declaration/comment record {index} was accepted"
+        );
+    }
+
+    let valid_declaration =
+        format!("<?xml version='1.0' encoding='UTF-8' standalone='yes'?>{event}");
+    assert!(
+        parse_esp_event_xml(
+            &valid_declaration,
+            "valid-declaration.evtx",
+            Some(99),
+            None,
+            "Fallback"
+        )
+        .is_some(),
+        "a valid XML 1.0 declaration was rejected"
+    );
 }
 
 #[test]
