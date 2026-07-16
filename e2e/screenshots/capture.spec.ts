@@ -102,6 +102,65 @@ function devicePreparationSnapshot(): EspDiagnosticsSnapshot {
       },
     },
   ];
+  if (snapshot.profile) {
+    snapshot.profile = {
+      ...snapshot.profile,
+      devicePreparation: {
+        agentDownloadTimeoutSeconds: 300,
+        pageTimeoutSeconds: 3_600,
+        allowSkipOnFailure: false,
+        allowDiagnostics: true,
+        scriptIds: [],
+        evidence: [],
+      },
+    };
+  }
+  const v2Status = snapshot.workloads[0].status;
+  const v2Timestamp =
+    snapshot.workloads[0].timestamps.lastUpdated ??
+    snapshot.workloads[0].timestamps.firstObserved;
+  snapshot.activity = [
+    {
+      entryId: "activity-device-preparation-v2",
+      timestamp: v2Timestamp,
+      kind: "workload",
+      title: "Device Preparation bootstrap is installing",
+      detail: "Required apps and scripts are being evaluated.",
+      status: v2Status,
+      evidence: [],
+    },
+  ];
+  const rawTemplate = snapshot.rawEvidence[0];
+  snapshot.rawEvidence = [
+    {
+      ...rawTemplate,
+      recordId: "raw-device-preparation-v2",
+      provenance: {
+        sourceKind: "json",
+        sourceArtifactId: "device-preparation-v2",
+        filePath: null,
+        lineNumber: null,
+        recordNumber: 1,
+        registry: null,
+        event: null,
+      },
+      rawValue: {
+        text: "Device Preparation workload bootstrap is in progress",
+      },
+      evidence: [],
+    },
+  ];
+  snapshot.coverage = [
+    {
+      ...snapshot.coverage[0],
+      artifactId: "device-preparation-v2",
+      family: "Device Preparation v2",
+      status: "available",
+      detail: null,
+      evidence: [],
+    },
+  ];
+  snapshot.deliveryOptimization = null;
   snapshot.findings = [];
   snapshot.installerCorrelations = [];
   return snapshot;
@@ -308,7 +367,23 @@ test.describe("repo screenshots", () => {
         animations: "disabled",
       });
 
-      await showEspCapture(page, devicePreparationSnapshot(), "collapsed");
+      const devicePreparation = devicePreparationSnapshot();
+      expect(devicePreparation.profile?.devicePreparation).not.toBeNull();
+      expect(
+        devicePreparation.activity.map((entry) => entry.title),
+      ).not.toEqual(
+        expect.arrayContaining([
+          "VPN installer started",
+          "Endpoint Security failed",
+        ]),
+      );
+      expect(
+        devicePreparation.rawEvidence.every(
+          (record) =>
+            record.provenance.sourceArtifactId === "device-preparation-v2",
+        ),
+      ).toBe(true);
+      await showEspCapture(page, devicePreparation, "collapsed");
       await page.screenshot({
         path: outPath(
           `esp-diagnostics-${viewport.width}x${viewport.height}-device-preparation.png`,
