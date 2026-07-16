@@ -27,17 +27,35 @@ export const ESP_EVIDENCE_DOCK_MAX_HEIGHT = 720;
 export const ESP_EVIDENCE_DOCK_DEFAULT_HEIGHT = 280;
 export const ESP_EVIDENCE_DOCK_MAX_WORKSPACE_RATIO = 0.7;
 export const ESP_EVIDENCE_BOUNDARY_MARKER_LIMIT = 64;
+export const ESP_EVIDENCE_BOUNDARY_DELTA_LIMIT = 32;
 
 export interface EspEvidenceBoundarySource {
   sourceArtifactId: string;
   filePath: string | null;
 }
 
+export type EspEvidenceBoundaryDeltaKind = "removed" | "added" | "changed";
+
+export interface EspEvidenceBoundaryDelta {
+  kind: EspEvidenceBoundaryDeltaKind;
+  recordId: string;
+  previous: EspEvidenceBoundarySource | null;
+  incoming: EspEvidenceBoundarySource | null;
+}
+
 export interface EspEvidenceBoundaryMarker {
   markerId: string;
   kind: "sourceReset";
   emittedAtUtc: string;
-  sources: EspEvidenceBoundarySource[];
+  order: number;
+  attribution: "unknown";
+  observedDeltas: EspEvidenceBoundaryDelta[];
+  omittedDeltaCount: number;
+}
+
+export interface EspEvidenceRecordRow {
+  rowId: string;
+  order: number;
 }
 
 export interface EspDiagnosticsStore {
@@ -55,6 +73,8 @@ export interface EspDiagnosticsStore {
   evidenceDockHeight: number;
   unreadEvidenceCount: number;
   evidenceBoundaryMarkers: EspEvidenceBoundaryMarker[];
+  evidenceRecordRows: Map<string, EspEvidenceRecordRow>;
+  nextEvidenceOrder: number;
   beginAnalysis(requestId: string): void;
   beginLiveStart(requestId: string): void;
   beginStop(sessionId: string): void;
@@ -143,6 +163,13 @@ function graphStateForFreshLocalRun(
   };
 }
 
+function recordsMatch(
+  current: EspRawEvidenceRecord,
+  incoming: EspRawEvidenceRecord,
+): boolean {
+  return JSON.stringify(current) === JSON.stringify(incoming);
+}
+
 function unreadEvidenceDelta(
   current: EspDiagnosticsSnapshot | null,
   incoming: EspDiagnosticsSnapshot,
@@ -152,70 +179,133 @@ function unreadEvidenceDelta(
     return 0;
   }
 
-  const knownRecordIds = new Set(
-    current?.rawEvidence.map((record) => record.recordId) ?? [],
-  );
-  const incomingRecordIds = new Set(
-    incoming.rawEvidence.map((record) => record.recordId),
+  const currentById = new Map(
+    current?.rawEvidence.map((record) => [record.recordId, record]) ?? [],
   );
   let unread = 0;
-  for (const recordId of incomingRecordIds) {
-    if (!knownRecordIds.has(recordId)) unread += 1;
+  for (const incomingRecord of incoming.rawEvidence) {
+    const currentRecord = currentById.get(incomingRecord.recordId);
+    if (!currentRecord || !recordsMatch(currentRecord, incomingRecord)) {
+      unread += 1;
+    }
   }
   return unread;
 }
 
-function recordsMatch(
-  current: EspRawEvidenceRecord,
-  incoming: EspRawEvidenceRecord,
-): boolean {
-  return JSON.stringify(current) === JSON.stringify(incoming);
+function boundarySource(
+  record: EspRawEvidenceRecord,
+): EspEvidenceBoundarySource {
+  return {
+    sourceArtifactId: record.provenance.sourceArtifactId,
+    filePath: record.provenance.filePath,
+  };
 }
 
-function changedEvidenceSources(
+function observedEvidenceDeltas(
   current: EspDiagnosticsSnapshot | null,
   incoming: EspDiagnosticsSnapshot,
-): EspEvidenceBoundarySource[] {
+): Pick<EspEvidenceBoundaryMarker, "observedDeltas" | "omittedDeltaCount"> {
   const currentById = new Map(
     current?.rawEvidence.map((record) => [record.recordId, record]) ?? [],
   );
   const incomingById = new Map(
     incoming.rawEvidence.map((record) => [record.recordId, record]),
   );
-  const changedRecords = [
-    ...(current?.rawEvidence.filter((record) => {
-      const replacement = incomingById.get(record.recordId);
-      return !replacement || !recordsMatch(record, replacement);
-    }) ?? []),
-    ...incoming.rawEvidence.filter((record) => {
-      const previous = currentById.get(record.recordId);
-      return !previous || !recordsMatch(previous, record);
-    }),
-  ];
-  const sources = new Map<string, EspEvidenceBoundarySource>();
-  for (const record of changedRecords) {
-    const source = {
-      sourceArtifactId: record.provenance.sourceArtifactId,
-      filePath: record.provenance.filePath,
-    };
-    sources.set(
-      `${source.sourceArtifactId}\u0000${source.filePath ?? ""}`,
-      source,
-    );
+  const observedDeltas: EspEvidenceBoundaryDelta[] = [];
+  let deltaCount = 0;
+  const observe = (delta: EspEvidenceBoundaryDelta) => {
+    deltaCount += 1;
+    if (observedDeltas.length < ESP_EVIDENCE_BOUNDARY_DELTA_LIMIT) {
+      observedDeltas.push(delta);
+    }
+  };
+
+  for (const previous of current?.rawEvidence ?? []) {
+    const replacement = incomingById.get(previous.recordId);
+    if (!replacement) {
+      observe({
+        kind: "removed",
+        recordId: previous.recordId,
+        previous: boundarySource(previous),
+        incoming: null,
+      });
+    } else if (!recordsMatch(previous, replacement)) {
+      observe({
+        kind: "changed",
+        recordId: previous.recordId,
+        previous: boundarySource(previous),
+        incoming: boundarySource(replacement),
+      });
+    }
   }
-  return [...sources.values()];
+
+  for (const added of incoming.rawEvidence) {
+    if (!currentById.has(added.recordId)) {
+      observe({
+        kind: "added",
+        recordId: added.recordId,
+        previous: null,
+        incoming: boundarySource(added),
+      });
+    }
+  }
+
+  return {
+    observedDeltas,
+    omittedDeltaCount: deltaCount - observedDeltas.length,
+  };
+}
+
+function reconcileEvidenceRecordRows(
+  current: EspDiagnosticsSnapshot | null,
+  incoming: EspDiagnosticsSnapshot,
+  currentRows: Map<string, EspEvidenceRecordRow>,
+  firstAvailableOrder: number,
+): {
+  evidenceRecordRows: Map<string, EspEvidenceRecordRow>;
+  nextEvidenceOrder: number;
+} {
+  const currentById = new Map(
+    current?.rawEvidence.map((record) => [record.recordId, record]) ?? [],
+  );
+  const evidenceRecordRows = new Map<string, EspEvidenceRecordRow>();
+  let nextEvidenceOrder = firstAvailableOrder;
+
+  for (const incomingRecord of incoming.rawEvidence) {
+    const currentRecord = currentById.get(incomingRecord.recordId);
+    const currentRow = currentRows.get(incomingRecord.recordId);
+    if (
+      currentRecord &&
+      currentRow &&
+      recordsMatch(currentRecord, incomingRecord)
+    ) {
+      evidenceRecordRows.set(incomingRecord.recordId, currentRow);
+      continue;
+    }
+
+    evidenceRecordRows.set(incomingRecord.recordId, {
+      rowId: `evidence:${nextEvidenceOrder}:${incomingRecord.recordId}`,
+      order: nextEvidenceOrder,
+    });
+    nextEvidenceOrder += 1;
+  }
+
+  return { evidenceRecordRows, nextEvidenceOrder };
 }
 
 function appendBoundaryMarker(
   markers: EspEvidenceBoundaryMarker[],
   current: EspDiagnosticsSnapshot | null,
   update: EspSessionUpdate,
+  order: number,
 ): EspEvidenceBoundaryMarker[] {
   const marker: EspEvidenceBoundaryMarker = {
     markerId: `source-reset:${update.sessionId}:${update.sequence}`,
     kind: "sourceReset",
     emittedAtUtc: update.emittedAtUtc,
-    sources: changedEvidenceSources(current, update.snapshot),
+    order,
+    attribution: "unknown",
+    ...observedEvidenceDeltas(current, update.snapshot),
   };
   return [...markers, marker].slice(-ESP_EVIDENCE_BOUNDARY_MARKER_LIMIT);
 }
@@ -267,6 +357,8 @@ export const useEspDiagnosticsStore = create<EspDiagnosticsStore>((set) => ({
   evidenceDockHeight: ESP_EVIDENCE_DOCK_DEFAULT_HEIGHT,
   unreadEvidenceCount: 0,
   evidenceBoundaryMarkers: [],
+  evidenceRecordRows: new Map(),
+  nextEvidenceOrder: 0,
 
   beginAnalysis: (requestId) =>
     set((state) => ({
@@ -281,6 +373,8 @@ export const useEspDiagnosticsStore = create<EspDiagnosticsStore>((set) => ({
       graphError: null,
       unreadEvidenceCount: 0,
       evidenceBoundaryMarkers: [],
+      evidenceRecordRows: new Map(),
+      nextEvidenceOrder: 0,
     })),
 
   beginLiveStart: (requestId) =>
@@ -296,6 +390,8 @@ export const useEspDiagnosticsStore = create<EspDiagnosticsStore>((set) => ({
       graphError: null,
       unreadEvidenceCount: 0,
       evidenceBoundaryMarkers: [],
+      evidenceRecordRows: new Map(),
+      nextEvidenceOrder: 0,
     })),
 
   beginStop: (sessionId) =>
@@ -309,6 +405,13 @@ export const useEspDiagnosticsStore = create<EspDiagnosticsStore>((set) => ({
         return state;
       }
 
+      const evidenceRows = reconcileEvidenceRecordRows(
+        state.snapshot,
+        snapshot,
+        state.evidenceRecordRows,
+        state.nextEvidenceOrder,
+      );
+
       return {
         phase: "ready",
         requestId: null,
@@ -317,6 +420,7 @@ export const useEspDiagnosticsStore = create<EspDiagnosticsStore>((set) => ({
         unreadEvidenceCount:
           state.unreadEvidenceCount +
           unreadEvidenceDelta(state.snapshot, snapshot, state.evidenceViewMode),
+        ...evidenceRows,
       };
     }),
 
@@ -337,6 +441,14 @@ export const useEspDiagnosticsStore = create<EspDiagnosticsStore>((set) => ({
       }
 
       const snapshot = withPreservedGraph(state.snapshot, update.snapshot);
+      const isSourceReset = update.reason === "sourceReset";
+      const boundaryOrder = state.nextEvidenceOrder;
+      const evidenceRows = reconcileEvidenceRecordRows(
+        state.snapshot,
+        update.snapshot,
+        state.evidenceRecordRows,
+        isSourceReset ? boundaryOrder + 1 : boundaryOrder,
+      );
       return {
         phase: phaseForSessionUpdate(update),
         requestId: update.requestId,
@@ -356,14 +468,15 @@ export const useEspDiagnosticsStore = create<EspDiagnosticsStore>((set) => ({
             update.snapshot,
             state.evidenceViewMode,
           ),
-        evidenceBoundaryMarkers:
-          update.reason === "sourceReset"
-            ? appendBoundaryMarker(
-                state.evidenceBoundaryMarkers,
-                state.snapshot,
-                update,
-              )
-            : state.evidenceBoundaryMarkers,
+        ...evidenceRows,
+        evidenceBoundaryMarkers: isSourceReset
+          ? appendBoundaryMarker(
+              state.evidenceBoundaryMarkers,
+              state.snapshot,
+              update,
+              boundaryOrder,
+            )
+          : state.evidenceBoundaryMarkers,
       };
     }),
 

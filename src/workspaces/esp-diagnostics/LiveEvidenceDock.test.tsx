@@ -9,6 +9,7 @@ import type { EspDiagnosticsSnapshot, EspRawEvidenceRecord } from "./types";
 
 const virtualizer = vi.hoisted(() => ({
   scrollToIndex: vi.fn(),
+  itemKeys: [] as Array<string | number>,
 }));
 
 class ResizeObserverDouble {
@@ -24,18 +25,29 @@ class ResizeObserverDouble {
 let resizeObservers: ResizeObserverDouble[] = [];
 
 vi.mock("@tanstack/react-virtual", () => ({
-  useVirtualizer: ({ count }: { count: number }) => ({
-    getVirtualItems: () =>
-      Array.from({ length: Math.min(count, 3) }, (_, index) => ({
-        index,
-        key: index,
-        start: index * 32,
-        size: 32,
-      })),
-    getTotalSize: () => count * 32,
-    measureElement: vi.fn(),
-    scrollToIndex: virtualizer.scrollToIndex,
-  }),
+  useVirtualizer: ({
+    count,
+    getItemKey,
+  }: {
+    count: number;
+    getItemKey: (index: number) => string | number;
+  }) => {
+    virtualizer.itemKeys = Array.from({ length: count }, (_, index) =>
+      getItemKey(index),
+    );
+    return {
+      getVirtualItems: () =>
+        Array.from({ length: Math.min(count, 3) }, (_, index) => ({
+          index,
+          key: getItemKey(index),
+          start: index * 32,
+          size: 32,
+        })),
+      getTotalSize: () => count * 32,
+      measureElement: vi.fn(),
+      scrollToIndex: virtualizer.scrollToIndex,
+    };
+  },
 }));
 
 function record(
@@ -162,6 +174,7 @@ beforeEach(() => {
     true,
   );
   virtualizer.scrollToIndex.mockReset();
+  virtualizer.itemKeys = [];
   Object.defineProperty(window, "innerHeight", {
     configurable: true,
     value: 600,
@@ -460,7 +473,7 @@ describe("LiveEvidenceDock", () => {
       "source-reset:session-a:2",
     );
     expect(resetRow).toHaveTextContent("2026-07-15T20:00:42.000Z");
-    expect(resetRow).toHaveTextContent("ime-app-workload");
+    expect(resetRow).toHaveTextContent("Exact source unknown");
     expect(resetRow).toHaveTextContent("Source reset");
     expect(screen.getByText("New generation")).toBeVisible();
 
@@ -468,8 +481,226 @@ describe("LiveEvidenceDock", () => {
     const provenance = screen.getByRole("complementary", {
       name: "Reset boundary provenance",
     });
+    expect(provenance).toHaveTextContent("Exact reset source unavailable");
+    expect(provenance).toHaveTextContent(
+      "Observed raw-record deltas do not identify the reset source",
+    );
+    expect(provenance).toHaveTextContent("Removed");
+    expect(provenance).toHaveTextContent("Added");
     expect(provenance).toHaveTextContent(oldPath);
     expect(provenance).toHaveTextContent(newPath);
+  });
+
+  it("renders a zero-delta reset as unknown without inventing source provenance", () => {
+    const unchanged = snapshot([record("same-record", "Same generation")]);
+    const state = useEspDiagnosticsStore.getState();
+    state.beginLiveStart("live-a");
+    state.applySessionUpdate({
+      sessionId: "session-a",
+      requestId: "live-a",
+      sequence: 1,
+      state: "live",
+      reason: "initialSnapshot",
+      emittedAtUtc: unchanged.generatedAtUtc,
+      snapshot: unchanged,
+    });
+    useEspDiagnosticsStore.getState().applySessionUpdate({
+      sessionId: "session-a",
+      requestId: "live-a",
+      sequence: 2,
+      state: "live",
+      reason: "sourceReset",
+      emittedAtUtc: "2026-07-15T20:00:42.000Z",
+      snapshot: structuredClone(unchanged),
+    });
+
+    render(<LiveEvidenceDock snapshot={unchanged} />);
+    act(() => useEspDiagnosticsStore.getState().setEvidenceViewMode("docked"));
+    const resetRow = screen.getByTestId("live-evidence-reset-row");
+    expect(resetRow).toHaveTextContent("Exact source unknown");
+
+    fireEvent.click(resetRow);
+    const provenance = screen.getByRole("complementary", {
+      name: "Reset boundary provenance",
+    });
+    expect(provenance).toHaveTextContent("Exact reset source unavailable");
+    expect(provenance).toHaveTextContent(
+      "No raw-record changes were observed in this reset update",
+    );
+  });
+
+  it("filters a multi-source reset marker by every observed source without claiming exact attribution", () => {
+    const oldPath = "C:\\Windows\\Temp\\old.log";
+    const newPath = "C:\\Windows\\Temp\\new.log";
+    const unrelatedPath = "C:\\Windows\\Temp\\unrelated.log";
+    const initial = snapshot([
+      record("reset-old", "Old generation", {
+        provenance: {
+          sourceKind: "imeLog",
+          sourceArtifactId: "reset-candidate",
+          filePath: oldPath,
+          lineNumber: 1,
+          recordNumber: null,
+          registry: null,
+          event: null,
+        },
+      }),
+    ]);
+    const replacement = snapshot([
+      record("reset-new", "New generation", {
+        provenance: {
+          sourceKind: "imeLog",
+          sourceArtifactId: "reset-candidate",
+          filePath: newPath,
+          lineNumber: 1,
+          recordNumber: null,
+          registry: null,
+          event: null,
+        },
+      }),
+      record("unrelated-new", "Concurrent evidence", {
+        provenance: {
+          sourceKind: "deploymentLog",
+          sourceArtifactId: "unrelated-source",
+          filePath: unrelatedPath,
+          lineNumber: 1,
+          recordNumber: null,
+          registry: null,
+          event: null,
+        },
+      }),
+    ]);
+    const state = useEspDiagnosticsStore.getState();
+    state.beginLiveStart("live-a");
+    state.applySessionUpdate({
+      sessionId: "session-a",
+      requestId: "live-a",
+      sequence: 1,
+      state: "live",
+      reason: "initialSnapshot",
+      emittedAtUtc: initial.generatedAtUtc,
+      snapshot: initial,
+    });
+    useEspDiagnosticsStore.getState().applySessionUpdate({
+      sessionId: "session-a",
+      requestId: "live-a",
+      sequence: 2,
+      state: "live",
+      reason: "sourceReset",
+      emittedAtUtc: "2026-07-15T20:00:42.000Z",
+      snapshot: replacement,
+    });
+
+    render(<LiveEvidenceDock snapshot={replacement} />);
+    act(() => useEspDiagnosticsStore.getState().setEvidenceViewMode("docked"));
+    fireEvent.change(screen.getByLabelText("Filter live evidence by source"), {
+      target: { value: "unrelated-source" },
+    });
+
+    const resetRow = screen.getByTestId("live-evidence-reset-row");
+    expect(resetRow).toHaveTextContent("Exact source unknown");
+    expect(resetRow).not.toHaveTextContent("unrelated-source");
+    fireEvent.click(resetRow);
+    const provenance = screen.getByRole("complementary", {
+      name: "Reset boundary provenance",
+    });
+    expect(provenance).toHaveTextContent("Exact reset source unavailable");
+    expect(provenance).toHaveTextContent("unrelated-source");
+    expect(provenance).toHaveTextContent(unrelatedPath);
+  });
+
+  it("replaces same-ID row identity, clears stale selection, and interleaves the reset boundary", () => {
+    const stableRecord = record("stable-id", "Stable evidence");
+    const oldRecord = record("same-id", "Old generation");
+    const initial = snapshot([stableRecord, oldRecord]);
+    const replacementRecord = record("same-id", "Replacement generation", {
+      rawValue: { text: "Replacement generation" },
+      provenance: {
+        ...oldRecord.provenance,
+        filePath: "C:\\Windows\\Temp\\replacement.log",
+      },
+    });
+    const replacement = snapshot([stableRecord, replacementRecord]);
+    const latest = snapshot([
+      stableRecord,
+      replacementRecord,
+      record("later-id", "Later evidence"),
+    ]);
+    const state = useEspDiagnosticsStore.getState();
+    state.beginLiveStart("live-a");
+    state.applySessionUpdate({
+      sessionId: "session-a",
+      requestId: "live-a",
+      sequence: 1,
+      state: "live",
+      reason: "initialSnapshot",
+      emittedAtUtc: initial.generatedAtUtc,
+      snapshot: initial,
+    });
+
+    const view = render(<LiveEvidenceDock snapshot={initial} />);
+    act(() => useEspDiagnosticsStore.getState().setEvidenceViewMode("docked"));
+    const oldRow = screen.getByText("Old generation").closest('[role="row"]');
+    if (!oldRow) throw new Error("Expected the old evidence row");
+    const oldRowId = oldRow.getAttribute("data-record-id");
+    fireEvent.click(oldRow);
+    expect(
+      screen.getByRole("complementary", { name: "Raw evidence provenance" }),
+    ).toHaveTextContent("same-id");
+
+    act(() => {
+      useEspDiagnosticsStore.getState().applySessionUpdate({
+        sessionId: "session-a",
+        requestId: "live-a",
+        sequence: 2,
+        state: "live",
+        reason: "sourceReset",
+        emittedAtUtc: "2026-07-15T20:00:42.000Z",
+        snapshot: replacement,
+      });
+      useEspDiagnosticsStore.getState().applySessionUpdate({
+        sessionId: "session-a",
+        requestId: "live-a",
+        sequence: 3,
+        state: "live",
+        reason: "evidenceChanged",
+        emittedAtUtc: "2026-07-15T20:00:43.000Z",
+        snapshot: latest,
+      });
+    });
+    view.rerender(<LiveEvidenceDock snapshot={latest} />);
+
+    const replacementRow = screen
+      .getByText("Replacement generation")
+      .closest('[role="row"]');
+    if (!replacementRow) throw new Error("Expected the replacement row");
+    expect(replacementRow.getAttribute("data-record-id")).not.toBe(oldRowId);
+    expect(
+      screen.queryByRole("complementary", { name: "Raw evidence provenance" }),
+    ).not.toBeInTheDocument();
+    const markerId = "source-reset:session-a:2";
+    const stableKey = virtualizer.itemKeys.find((key) =>
+      String(key).endsWith(":stable-id"),
+    );
+    const replacementKey = virtualizer.itemKeys.find((key) =>
+      String(key).endsWith(":same-id"),
+    );
+    const laterKey = virtualizer.itemKeys.find((key) =>
+      String(key).endsWith(":later-id"),
+    );
+    expect(stableKey).toBeDefined();
+    expect(replacementKey).toBeDefined();
+    expect(laterKey).toBeDefined();
+    expect(virtualizer.itemKeys).toEqual([
+      stableKey,
+      markerId,
+      replacementKey,
+      laterKey,
+    ]);
+    expect(screen.getByTestId("live-evidence-reset-row")).toHaveAttribute(
+      "data-record-id",
+      markerId,
+    );
   });
 });
 

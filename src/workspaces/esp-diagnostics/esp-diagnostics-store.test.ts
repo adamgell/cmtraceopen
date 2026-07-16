@@ -170,6 +170,10 @@ function evidenceBoundaryMarkers() {
   return useEspDiagnosticsStore.getState().evidenceBoundaryMarkers;
 }
 
+function evidenceRecordRows() {
+  return useEspDiagnosticsStore.getState().evidenceRecordRows;
+}
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
   let reject!: (reason?: unknown) => void;
@@ -401,20 +405,19 @@ describe("ESP local session state", () => {
   });
 
   it("counts replacement evidence as unread when rotation keeps the record count constant", () => {
+    const initial = makeSnapshot(["old-a", "old-b"]);
+    const rotated = makeSnapshot(["old-b", "new-c"]);
+    rotated.rawEvidence[0] = structuredClone(initial.rawEvidence[1]);
     const state = useEspDiagnosticsStore.getState();
     state.beginLiveStart("live-a");
     useEspDiagnosticsStore
       .getState()
-      .applySessionUpdate(
-        makeSessionUpdate(1, makeSnapshot(["old-a", "old-b"])),
-      );
+      .applySessionUpdate(makeSessionUpdate(1, initial));
     useEspDiagnosticsStore.getState().markEvidenceRead();
 
     useEspDiagnosticsStore
       .getState()
-      .applySessionUpdate(
-        makeSessionUpdate(2, makeSnapshot(["old-b", "new-c"])),
-      );
+      .applySessionUpdate(makeSessionUpdate(2, rotated));
 
     expect(useEspDiagnosticsStore.getState().unreadEvidenceCount).toBe(1);
   });
@@ -448,18 +451,31 @@ describe("ESP local session state", () => {
         markerId: "source-reset:session-a:2",
         kind: "sourceReset",
         emittedAtUtc: "2026-07-15T20:00:42Z",
-        sources: [
+        order: 1,
+        attribution: "unknown",
+        observedDeltas: [
           {
-            sourceArtifactId: "ime-app-workload",
-            filePath:
-              "C:\\ProgramData\\Microsoft\\IntuneManagementExtension\\Logs\\AppWorkload.log",
+            kind: "removed",
+            recordId: "old-a",
+            previous: {
+              sourceArtifactId: "ime-app-workload",
+              filePath:
+                "C:\\ProgramData\\Microsoft\\IntuneManagementExtension\\Logs\\AppWorkload.log",
+            },
+            incoming: null,
           },
           {
-            sourceArtifactId: "ime-app-workload",
-            filePath:
-              "C:\\ProgramData\\Microsoft\\IntuneManagementExtension\\Logs\\AppWorkload-20260715.log",
+            kind: "added",
+            recordId: "new-b",
+            previous: null,
+            incoming: {
+              sourceArtifactId: "ime-app-workload",
+              filePath:
+                "C:\\ProgramData\\Microsoft\\IntuneManagementExtension\\Logs\\AppWorkload-20260715.log",
+            },
           },
         ],
+        omittedDeltaCount: 0,
       },
     ]);
     expect(useEspDiagnosticsStore.getState().snapshot?.rawEvidence).toEqual(
@@ -474,6 +490,7 @@ describe("ESP local session state", () => {
     ).toBe(false);
 
     const later = makeSnapshot(["new-b", "new-c"]);
+    later.rawEvidence[0] = structuredClone(replacement.rawEvidence[0]);
     useEspDiagnosticsStore
       .getState()
       .applySessionUpdate(makeSessionUpdate(3, later));
@@ -482,6 +499,139 @@ describe("ESP local session state", () => {
     expect(evidenceBoundaryMarkers()[0].markerId).toBe(
       "source-reset:session-a:2",
     );
+    expect(evidenceBoundaryMarkers()[0].order).toBe(1);
+    expect(evidenceRecordRows().get("new-b")).toEqual({
+      rowId: "evidence:2:new-b",
+      order: 2,
+    });
+    expect(evidenceRecordRows().get("new-c")).toEqual({
+      rowId: "evidence:3:new-c",
+      order: 3,
+    });
+  });
+
+  it("counts a changed same-ID reset record as unread and assigns a fresh row generation", () => {
+    const initial = makeSnapshot(["same-id"]);
+    const replacement = makeSnapshot(["same-id"]);
+    replacement.rawEvidence[0].rawValue = { text: "replacement generation" };
+    replacement.rawEvidence[0].provenance.filePath =
+      "C:\\Windows\\Temp\\replacement.log";
+    const state = useEspDiagnosticsStore.getState();
+    state.beginLiveStart("live-a");
+    state.applySessionUpdate(
+      makeSessionUpdate(1, initial, "session-a", {
+        reason: "initialSnapshot",
+      }),
+    );
+    const initialRow = evidenceRecordRows().get("same-id");
+    expect(initialRow).toEqual({
+      rowId: "evidence:0:same-id",
+      order: 0,
+    });
+    useEspDiagnosticsStore.getState().markEvidenceRead();
+
+    useEspDiagnosticsStore.getState().applySessionUpdate(
+      makeSessionUpdate(2, replacement, "session-a", {
+        reason: "sourceReset",
+      }),
+    );
+
+    expect(useEspDiagnosticsStore.getState().unreadEvidenceCount).toBe(1);
+    expect(evidenceRecordRows().get("same-id")).toEqual({
+      rowId: "evidence:2:same-id",
+      order: 2,
+    });
+    expect(evidenceRecordRows().get("same-id")?.rowId).not.toBe(
+      initialRow?.rowId,
+    );
+    expect(evidenceBoundaryMarkers()[0].observedDeltas).toEqual([
+      {
+        kind: "changed",
+        recordId: "same-id",
+        previous: {
+          sourceArtifactId: "ime-app-workload",
+          filePath:
+            "C:\\ProgramData\\Microsoft\\IntuneManagementExtension\\Logs\\IntuneManagementExtension.log",
+        },
+        incoming: {
+          sourceArtifactId: "ime-app-workload",
+          filePath: "C:\\Windows\\Temp\\replacement.log",
+        },
+      },
+    ]);
+  });
+
+  it("records an unattributed zero-delta reset without inventing source provenance", () => {
+    const unchanged = makeSnapshot(["same-id"]);
+    const state = useEspDiagnosticsStore.getState();
+    state.beginLiveStart("live-a");
+    state.applySessionUpdate(
+      makeSessionUpdate(1, unchanged, "session-a", {
+        reason: "initialSnapshot",
+      }),
+    );
+    useEspDiagnosticsStore.getState().markEvidenceRead();
+
+    useEspDiagnosticsStore.getState().applySessionUpdate(
+      makeSessionUpdate(2, structuredClone(unchanged), "session-a", {
+        reason: "sourceReset",
+      }),
+    );
+
+    expect(useEspDiagnosticsStore.getState().unreadEvidenceCount).toBe(0);
+    expect(evidenceBoundaryMarkers()).toEqual([
+      {
+        markerId: "source-reset:session-a:2",
+        kind: "sourceReset",
+        emittedAtUtc: "2026-07-15T20:00:00Z",
+        order: 1,
+        attribution: "unknown",
+        observedDeltas: [],
+        omittedDeltaCount: 0,
+      },
+    ]);
+    expect(evidenceRecordRows().get("same-id")).toEqual({
+      rowId: "evidence:0:same-id",
+      order: 0,
+    });
+  });
+
+  it("bounds observed reset deltas and reports the omitted count", () => {
+    const initial = makeSnapshot(
+      Array.from({ length: 40 }, (_, index) => `old-${index}`),
+    );
+    const replacement = makeSnapshot(
+      Array.from({ length: 40 }, (_, index) => `new-${index}`),
+    );
+    initial.rawEvidence.forEach((record, index) => {
+      record.provenance.sourceArtifactId = `old-source-${index}`;
+    });
+    replacement.rawEvidence.forEach((record, index) => {
+      record.provenance.sourceArtifactId = `new-source-${index}`;
+    });
+    const state = useEspDiagnosticsStore.getState();
+    state.beginLiveStart("live-a");
+    state.applySessionUpdate(
+      makeSessionUpdate(1, initial, "session-a", {
+        reason: "initialSnapshot",
+      }),
+    );
+
+    useEspDiagnosticsStore.getState().applySessionUpdate(
+      makeSessionUpdate(2, replacement, "session-a", {
+        reason: "sourceReset",
+      }),
+    );
+
+    const marker = evidenceBoundaryMarkers()[0];
+    expect(marker.observedDeltas).toHaveLength(32);
+    expect(marker.omittedDeltaCount).toBe(48);
+    expect(marker.observedDeltas[0]).toMatchObject({
+      kind: "removed",
+      recordId: "old-0",
+      previous: { sourceArtifactId: "old-source-0" },
+      incoming: null,
+    });
   });
 
   it("bounds reset-marker history and clears it for every new local run", () => {
@@ -518,6 +668,8 @@ describe("ESP local session state", () => {
 
     useEspDiagnosticsStore.getState().beginLiveStart("live-b");
     expect(evidenceBoundaryMarkers()).toEqual([]);
+    expect(evidenceRecordRows()).toEqual(new Map());
+    expect(useEspDiagnosticsStore.getState().nextEvidenceOrder).toBe(0);
     useEspDiagnosticsStore.getState().applySessionUpdate(
       makeSessionUpdate(1, makeSnapshot(["session-b"]), "session-b", {
         requestId: "live-b",
@@ -528,6 +680,8 @@ describe("ESP local session state", () => {
 
     useEspDiagnosticsStore.getState().beginAnalysis("analysis-a");
     expect(evidenceBoundaryMarkers()).toEqual([]);
+    expect(evidenceRecordRows()).toEqual(new Map());
+    expect(useEspDiagnosticsStore.getState().nextEvidenceOrder).toBe(0);
   });
 
   it("validates the complete session envelope before applying native events", () => {

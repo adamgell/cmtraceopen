@@ -46,6 +46,9 @@ export function LiveEvidenceDock({ snapshot }: LiveEvidenceDockProps) {
   const boundaryMarkers = useEspDiagnosticsStore(
     (state) => state.evidenceBoundaryMarkers,
   );
+  const recordRows = useEspDiagnosticsStore(
+    (state) => state.evidenceRecordRows,
+  );
   const setViewMode = useEspDiagnosticsStore(
     (state) => state.setEvidenceViewMode,
   );
@@ -322,6 +325,7 @@ export function LiveEvidenceDock({ snapshot }: LiveEvidenceDockProps) {
       <LiveEvidenceTable
         snapshot={snapshot}
         boundaryMarkers={boundaryMarkers}
+        recordRows={recordRows}
       />
     </section>
   );

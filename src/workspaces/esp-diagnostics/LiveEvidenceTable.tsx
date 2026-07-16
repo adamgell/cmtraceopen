@@ -5,7 +5,11 @@ import {
   LOG_MONOSPACE_FONT_FAMILY,
   LOG_UI_FONT_FAMILY,
 } from "../../lib/log-accessibility";
-import type { EspEvidenceBoundaryMarker } from "./esp-diagnostics-store";
+import type {
+  EspEvidenceBoundaryMarker,
+  EspEvidenceBoundarySource,
+  EspEvidenceRecordRow,
+} from "./esp-diagnostics-store";
 import type {
   EspDiagnosticsSnapshot,
   EspObservationValue,
@@ -22,6 +26,8 @@ interface LiveEvidenceRowBase {
   severity: LiveEvidenceSeverity;
   component: string;
   message: string;
+  order: number;
+  sourceIds: string[];
 }
 
 interface LiveEvidenceRecordRow extends LiveEvidenceRowBase {
@@ -39,6 +45,7 @@ type LiveEvidenceRow = LiveEvidenceRecordRow | LiveEvidenceBoundaryRow;
 export interface LiveEvidenceTableProps {
   snapshot: EspDiagnosticsSnapshot | null;
   boundaryMarkers?: EspEvidenceBoundaryMarker[];
+  recordRows?: ReadonlyMap<string, EspEvidenceRecordRow>;
 }
 
 function observationValueText(value: EspObservationValue): string {
@@ -92,6 +99,8 @@ function severityForRecord(
 function rowForRecord(
   record: EspRawEvidenceRecord,
   activity: EspTimelineEntry[],
+  recordRow: EspEvidenceRecordRow | undefined,
+  fallbackOrder: number,
 ): LiveEvidenceRecordRow {
   const timeline = timelineForRecord(record, activity);
   const rawMessage = observationValueText(record.rawValue);
@@ -100,7 +109,7 @@ function rowForRecord(
     : "";
   return {
     kind: "evidence",
-    rowId: record.recordId,
+    rowId: recordRow?.rowId ?? record.recordId,
     record,
     timestamp:
       record.sourceTimestamp?.rawText ||
@@ -114,25 +123,51 @@ function rowForRecord(
     ),
     component: timeline?.kind ?? record.provenance.sourceKind,
     message: rawMessage,
+    order: recordRow?.order ?? fallbackOrder,
+    sourceIds: [record.provenance.sourceArtifactId],
   };
 }
 
 function rowForBoundary(
   marker: EspEvidenceBoundaryMarker,
 ): LiveEvidenceBoundaryRow {
-  const source = [
-    ...new Set(marker.sources.map((entry) => entry.sourceArtifactId)),
-  ].join(", ");
+  const sourceIds = [
+    ...new Set(
+      marker.observedDeltas.flatMap((delta) =>
+        [delta.previous, delta.incoming]
+          .filter((source) => source !== null)
+          .map((source) => source.sourceArtifactId),
+      ),
+    ),
+  ].sort();
   return {
     kind: "sourceReset",
     rowId: marker.markerId,
     marker,
     timestamp: marker.emittedAtUtc,
-    source: source || "Unknown source",
+    source: "Exact source unknown",
     severity: "info",
     component: "Source reset",
-    message: "Source reset after rotation or truncation",
+    message: "Source reset boundary observed; exact source unavailable",
+    order: marker.order,
+    sourceIds,
   };
+}
+
+function boundarySourceText(source: EspEvidenceBoundarySource | null): string {
+  if (!source) return "none";
+  return `${source.sourceArtifactId} · ${source.filePath ?? "No file path"}`;
+}
+
+function boundaryDeltaLabel(kind: "removed" | "added" | "changed"): string {
+  switch (kind) {
+    case "removed":
+      return "Removed";
+    case "added":
+      return "Added";
+    case "changed":
+      return "Changed";
+  }
 }
 
 function severityColor(severity: LiveEvidenceSeverity): string {
@@ -166,17 +201,25 @@ function ProvenanceDetails({ row }: { row: LiveEvidenceRow }) {
       >
         <span>Boundary {row.marker.markerId}</span>
         <span>Emitted {row.marker.emittedAtUtc}</span>
-        {row.marker.sources.length > 0 ? (
-          row.marker.sources.map((source) => (
-            <span
-              key={`${source.sourceArtifactId}\u0000${source.filePath ?? ""}`}
-            >
-              {source.sourceArtifactId} · {source.filePath ?? "No file path"}
+        <span>Exact reset source unavailable</span>
+        <span>Observed raw-record deltas do not identify the reset source</span>
+        {row.marker.observedDeltas.length > 0 ? (
+          row.marker.observedDeltas.map((delta) => (
+            <span key={`${delta.kind}\u0000${delta.recordId}`}>
+              {boundaryDeltaLabel(delta.kind)} {delta.recordId} · Previous:{" "}
+              {boundarySourceText(delta.previous)} · Incoming:{" "}
+              {boundarySourceText(delta.incoming)}
             </span>
           ))
         ) : (
-          <span>Source provenance unavailable</span>
+          <span>No raw-record changes were observed in this reset update</span>
         )}
+        {row.marker.omittedDeltaCount > 0 ? (
+          <span>
+            {row.marker.omittedDeltaCount.toLocaleString()} additional observed
+            deltas omitted
+          </span>
+        ) : null}
       </aside>
     );
   }
@@ -231,18 +274,31 @@ function ProvenanceDetails({ row }: { row: LiveEvidenceRow }) {
 export function LiveEvidenceTable({
   snapshot,
   boundaryMarkers = [],
+  recordRows,
 }: LiveEvidenceTableProps) {
   const records = snapshot?.rawEvidence ?? [];
   const activity = snapshot?.activity ?? [];
   const rows = useMemo(
-    () => [
-      ...records.map((record) => rowForRecord(record, activity)),
-      ...boundaryMarkers.map(rowForBoundary),
-    ],
-    [activity, boundaryMarkers, records],
+    () =>
+      [
+        ...records.map((record, index) =>
+          rowForRecord(
+            record,
+            activity,
+            recordRows?.get(record.recordId),
+            index,
+          ),
+        ),
+        ...boundaryMarkers.map(rowForBoundary),
+      ].sort((left, right) =>
+        left.order === right.order
+          ? left.rowId.localeCompare(right.rowId)
+          : left.order - right.order,
+      ),
+    [activity, boundaryMarkers, recordRows, records],
   );
   const sources = useMemo(
-    () => [...new Set(rows.map((row) => row.source))].sort(),
+    () => [...new Set(rows.flatMap((row) => row.sourceIds))].sort(),
     [rows],
   );
   const [sourceFilter, setSourceFilter] = useState("all");
@@ -256,10 +312,18 @@ export function LiveEvidenceTable({
   const filteredRows = useMemo(() => {
     const query = textFilter.trim().toLocaleLowerCase("en-US");
     return rows.filter((row) => {
-      if (sourceFilter !== "all" && row.source !== sourceFilter) return false;
+      if (sourceFilter !== "all" && !row.sourceIds.includes(sourceFilter)) {
+        return false;
+      }
       if (problemsOnly && row.severity === "info") return false;
       if (!query) return true;
-      return [row.timestamp, row.source, row.component, row.message]
+      return [
+        row.timestamp,
+        row.source,
+        ...row.sourceIds,
+        row.component,
+        row.message,
+      ]
         .join(" ")
         .toLocaleLowerCase("en-US")
         .includes(query);
