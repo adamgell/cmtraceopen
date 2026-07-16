@@ -458,7 +458,11 @@ mod windows_impl {
                     if error.invalidates_auth() {
                         return Err(graph_request_error(state, error));
                     }
+                    let allows_single_item_fallback = error.allows_single_item_fallback();
                     errors.push(format!("Batch request failed: {error}"));
+                    if !allows_single_item_fallback {
+                        continue;
+                    }
                     for guid in chunk {
                         match fetch_single_app(&token.token, guid) {
                             Ok(Some(info)) => {

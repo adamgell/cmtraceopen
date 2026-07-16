@@ -104,6 +104,20 @@ impl GraphClientError {
     pub fn invalidates_auth(&self) -> bool {
         self.kind == GraphClientErrorKind::Unauthorized || self.status == Some(401)
     }
+
+    /// Whether a failed `$batch` read may safely be retried as individual GETs.
+    /// Auth, permission, throttle, cancellation, and connectivity failures must
+    /// not fan out or restart an exhausted logical operation.
+    pub fn allows_single_item_fallback(&self) -> bool {
+        !matches!(self.status, Some(401 | 403 | 429 | 503 | 504))
+            && matches!(
+                self.kind,
+                GraphClientErrorKind::NotFound
+                    | GraphClientErrorKind::HttpStatus
+                    | GraphClientErrorKind::ResponseTooLarge
+                    | GraphClientErrorKind::InvalidResponse
+            )
+    }
 }
 
 impl fmt::Display for GraphClientError {
@@ -257,27 +271,27 @@ impl<'a, T: GraphTransport, C: GraphCancellation> GraphClient<'a, T, C> {
 
     /// Execute one bounded Graph request and decode its JSON response.
     ///
-    /// This is used by non-paginated and `$batch` endpoints so every Graph
-    /// call shares the same HTTPS-host, timeout, retry, response-size,
-    /// cancellation, and redacted-error policy.
+    /// This accepts read-only GET requests. Validated `$batch` POSTs use
+    /// [`Self::request_batch_json`] so callers cannot bypass batch policy.
     pub fn request_json<Response: DeserializeOwned>(
         &self,
         mut request: GraphTransportRequest,
     ) -> Result<Response, GraphClientError> {
         let required_scope = sanitize_scope(&request.required_scope);
         request.required_scope = required_scope.clone();
+        if request.method != GraphHttpMethod::Get
+            || request.content_type.is_some()
+            || request.body.is_some()
+        {
+            return Err(GraphClientError::new(
+                GraphClientErrorKind::InvalidResponse,
+                &required_scope,
+            ));
+        }
         self.ensure_not_cancelled(&required_scope)?;
         self.ensure_allowed_url(&request.url, &required_scope)?;
 
-        let response = self.execute_with_retry(&request, &required_scope)?;
-        let request_id = graph_request_id(&response.headers);
-        serde_json::from_slice(&response.body).map_err(|_| {
-            let mut error =
-                GraphClientError::new(GraphClientErrorKind::InvalidResponse, &required_scope);
-            error.status = Some(response.status);
-            error.request_id = request_id;
-            error
-        })
+        self.execute_json_with_retry(&request, &required_scope)
     }
 
     pub fn request_batch_json<Response: DeserializeOwned>(
@@ -293,16 +307,42 @@ impl<'a, T: GraphTransport, C: GraphCancellation> GraphClient<'a, T, C> {
             ));
         }
         let batch = parse_batch_request(&request, &required_scope)?;
-        let envelope: GraphBatchResponseEnvelope = self.request_json(request.clone())?;
+        let (outer_response, initial_attempts) =
+            self.execute_with_retry_count(&request, &required_scope)?;
+        let envelope: GraphBatchResponseEnvelope =
+            decode_json_response(&outer_response, &required_scope)?;
         let mut responses =
             index_batch_responses(envelope.responses, &batch.requests, &required_scope)?;
         let mut items = Vec::with_capacity(batch.requests.len());
+
+        for prioritized_kind in [
+            GraphClientErrorKind::Unauthorized,
+            GraphClientErrorKind::PermissionDenied,
+        ] {
+            for subrequest in &batch.requests {
+                let response = responses
+                    .get(&subrequest.id)
+                    .ok_or_else(|| invalid_batch_response(&required_scope))?;
+                if graph_status_action(response.status, initial_attempts - 1)
+                    == GraphStatusAction::Error(prioritized_kind)
+                {
+                    return Err(GraphClientError::for_status(
+                        prioritized_kind,
+                        response.status,
+                        &response.headers,
+                        &required_scope,
+                    ));
+                }
+            }
+        }
 
         for subrequest in &batch.requests {
             let response = responses
                 .get(&subrequest.id)
                 .ok_or_else(|| invalid_batch_response(&required_scope))?;
-            if let GraphStatusAction::Error(kind) = graph_status_action(response.status, 0) {
+            if let GraphStatusAction::Error(kind) =
+                graph_status_action(response.status, initial_attempts - 1)
+            {
                 if kind != GraphClientErrorKind::NotFound {
                     return Err(GraphClientError::for_status(
                         kind,
@@ -318,7 +358,13 @@ impl<'a, T: GraphTransport, C: GraphCancellation> GraphClient<'a, T, C> {
             let response = responses
                 .remove(&subrequest.id)
                 .ok_or_else(|| invalid_batch_response(&required_scope))?;
-            items.push(self.resolve_batch_item(&request, subrequest, response, &required_scope)?);
+            items.push(self.resolve_batch_item(
+                &request,
+                subrequest,
+                response,
+                initial_attempts,
+                &required_scope,
+            )?);
         }
 
         Ok(items)
@@ -329,9 +375,11 @@ impl<'a, T: GraphTransport, C: GraphCancellation> GraphClient<'a, T, C> {
         request_template: &GraphTransportRequest,
         subrequest: &GraphBatchSubrequest,
         mut response: GraphBatchSubresponse,
+        mut attempts_used: usize,
         required_scope: &str,
     ) -> Result<GraphBatchItem<Response>, GraphClientError> {
-        for attempt in 0..MAX_GRAPH_ATTEMPTS {
+        loop {
+            let attempt = attempts_used - 1;
             match graph_status_action(response.status, attempt) {
                 GraphStatusAction::Success => {
                     let body = response.body.take().ok_or_else(|| {
@@ -356,13 +404,7 @@ impl<'a, T: GraphTransport, C: GraphCancellation> GraphClient<'a, T, C> {
                     return Ok(GraphBatchItem::NotFound);
                 }
                 GraphStatusAction::Retry => {
-                    let delay = retry_delay(&response.headers, attempt);
-                    if !self.cancellation.wait_for_retry(delay) {
-                        return Err(GraphClientError::new(
-                            GraphClientErrorKind::Cancelled,
-                            required_scope,
-                        ));
-                    }
+                    self.wait_for_retry(&response.headers, attempt, required_scope)?;
 
                     let body = serde_json::to_vec(&GraphBatchRequestEnvelope {
                         requests: vec![subrequest.clone()],
@@ -370,15 +412,41 @@ impl<'a, T: GraphTransport, C: GraphCancellation> GraphClient<'a, T, C> {
                     .map_err(|_| invalid_batch_response(required_scope))?;
                     let mut retry_request = request_template.clone();
                     retry_request.body = Some(body);
-                    let envelope: GraphBatchResponseEnvelope = self.request_json(retry_request)?;
-                    let mut retry_responses = index_batch_responses(
-                        envelope.responses,
-                        std::slice::from_ref(subrequest),
-                        required_scope,
-                    )?;
-                    response = retry_responses
-                        .remove(&subrequest.id)
-                        .ok_or_else(|| invalid_batch_response(required_scope))?;
+
+                    loop {
+                        let outer_response = self.execute_once(&retry_request, required_scope)?;
+                        attempts_used += 1;
+                        let attempt = attempts_used - 1;
+                        match graph_status_action(outer_response.status, attempt) {
+                            GraphStatusAction::Success => {
+                                let envelope: GraphBatchResponseEnvelope =
+                                    decode_json_response(&outer_response, required_scope)?;
+                                let mut retry_responses = index_batch_responses(
+                                    envelope.responses,
+                                    std::slice::from_ref(subrequest),
+                                    required_scope,
+                                )?;
+                                response = retry_responses
+                                    .remove(&subrequest.id)
+                                    .ok_or_else(|| invalid_batch_response(required_scope))?;
+                                break;
+                            }
+                            GraphStatusAction::Retry => {
+                                self.wait_for_retry(
+                                    &outer_response.headers,
+                                    attempt,
+                                    required_scope,
+                                )?;
+                            }
+                            GraphStatusAction::Error(kind) => {
+                                return Err(GraphClientError::for_response(
+                                    kind,
+                                    &outer_response,
+                                    required_scope,
+                                ));
+                            }
+                        }
+                    }
                 }
                 GraphStatusAction::Error(kind) => {
                     return Err(GraphClientError::for_status(
@@ -390,11 +458,6 @@ impl<'a, T: GraphTransport, C: GraphCancellation> GraphClient<'a, T, C> {
                 }
             }
         }
-
-        Err(GraphClientError::new(
-            GraphClientErrorKind::RetryExhausted,
-            required_scope,
-        ))
     }
 
     fn execute_with_retry(
@@ -402,41 +465,22 @@ impl<'a, T: GraphTransport, C: GraphCancellation> GraphClient<'a, T, C> {
         request: &GraphTransportRequest,
         required_scope: &str,
     ) -> Result<GraphTransportResponse, GraphClientError> {
-        for attempt in 0..MAX_GRAPH_ATTEMPTS {
-            self.ensure_not_cancelled(required_scope)?;
-            let response = self
-                .transport
-                .execute(request, GRAPH_REQUEST_TIMEOUT)
-                .map_err(|failure| match failure {
-                    GraphTransportFailure::Timeout => {
-                        GraphClientError::new(GraphClientErrorKind::Timeout, required_scope)
-                    }
-                    GraphTransportFailure::Cancelled => {
-                        GraphClientError::new(GraphClientErrorKind::Cancelled, required_scope)
-                    }
-                    GraphTransportFailure::Network => {
-                        GraphClientError::new(GraphClientErrorKind::Transport, required_scope)
-                    }
-                })?;
+        self.execute_with_retry_count(request, required_scope)
+            .map(|(response, _)| response)
+    }
 
-            if response.body.len() > MAX_GRAPH_RESPONSE_BYTES {
-                return Err(GraphClientError::for_response(
-                    GraphClientErrorKind::ResponseTooLarge,
-                    &response,
-                    required_scope,
-                ));
-            }
+    fn execute_with_retry_count(
+        &self,
+        request: &GraphTransportRequest,
+        required_scope: &str,
+    ) -> Result<(GraphTransportResponse, usize), GraphClientError> {
+        for attempt in 0..MAX_GRAPH_ATTEMPTS {
+            let response = self.execute_once(request, required_scope)?;
 
             match graph_status_action(response.status, attempt) {
-                GraphStatusAction::Success => return Ok(response),
+                GraphStatusAction::Success => return Ok((response, attempt + 1)),
                 GraphStatusAction::Retry => {
-                    let delay = retry_delay(&response.headers, attempt);
-                    if !self.cancellation.wait_for_retry(delay) {
-                        return Err(GraphClientError::new(
-                            GraphClientErrorKind::Cancelled,
-                            required_scope,
-                        ));
-                    }
+                    self.wait_for_retry(&response.headers, attempt, required_scope)?;
                 }
                 GraphStatusAction::Error(kind) => {
                     return Err(GraphClientError::for_response(
@@ -452,6 +496,64 @@ impl<'a, T: GraphTransport, C: GraphCancellation> GraphClient<'a, T, C> {
             GraphClientErrorKind::RetryExhausted,
             required_scope,
         ))
+    }
+
+    fn execute_once(
+        &self,
+        request: &GraphTransportRequest,
+        required_scope: &str,
+    ) -> Result<GraphTransportResponse, GraphClientError> {
+        self.ensure_not_cancelled(required_scope)?;
+        let response = self
+            .transport
+            .execute(request, GRAPH_REQUEST_TIMEOUT)
+            .map_err(|failure| match failure {
+                GraphTransportFailure::Timeout => {
+                    GraphClientError::new(GraphClientErrorKind::Timeout, required_scope)
+                }
+                GraphTransportFailure::Cancelled => {
+                    GraphClientError::new(GraphClientErrorKind::Cancelled, required_scope)
+                }
+                GraphTransportFailure::Network => {
+                    GraphClientError::new(GraphClientErrorKind::Transport, required_scope)
+                }
+            })?;
+
+        if response.body.len() > MAX_GRAPH_RESPONSE_BYTES {
+            return Err(GraphClientError::for_response(
+                GraphClientErrorKind::ResponseTooLarge,
+                &response,
+                required_scope,
+            ));
+        }
+
+        Ok(response)
+    }
+
+    fn wait_for_retry(
+        &self,
+        headers: &BTreeMap<String, String>,
+        attempt: usize,
+        required_scope: &str,
+    ) -> Result<(), GraphClientError> {
+        let delay = retry_delay(headers, attempt);
+        if self.cancellation.wait_for_retry(delay) {
+            Ok(())
+        } else {
+            Err(GraphClientError::new(
+                GraphClientErrorKind::Cancelled,
+                required_scope,
+            ))
+        }
+    }
+
+    fn execute_json_with_retry<Response: DeserializeOwned>(
+        &self,
+        request: &GraphTransportRequest,
+        required_scope: &str,
+    ) -> Result<Response, GraphClientError> {
+        let response = self.execute_with_retry(request, required_scope)?;
+        decode_json_response(&response, required_scope)
     }
 
     fn ensure_not_cancelled(&self, required_scope: &str) -> Result<(), GraphClientError> {
@@ -475,6 +577,20 @@ impl<'a, T: GraphTransport, C: GraphCancellation> GraphClient<'a, T, C> {
             ))
         }
     }
+}
+
+fn decode_json_response<Response: DeserializeOwned>(
+    response: &GraphTransportResponse,
+    required_scope: &str,
+) -> Result<Response, GraphClientError> {
+    let request_id = graph_request_id(&response.headers);
+    serde_json::from_slice(&response.body).map_err(|_| {
+        let mut error =
+            GraphClientError::new(GraphClientErrorKind::InvalidResponse, required_scope);
+        error.status = Some(response.status);
+        error.request_id = request_id;
+        error
+    })
 }
 
 fn parse_batch_request(

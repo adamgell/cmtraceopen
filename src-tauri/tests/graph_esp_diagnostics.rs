@@ -4,9 +4,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use app_lib::graph_api::client::{
-    GraphBatchItem, GraphCancellation, GraphClient, GraphClientErrorKind, GraphTransport,
-    GraphTransportFailure, GRAPH_REQUEST_TIMEOUT, MAX_GRAPH_ATTEMPTS, MAX_GRAPH_ITEMS,
-    MAX_GRAPH_PAGES, MAX_GRAPH_RESPONSE_BYTES, MAX_GRAPH_RETRY_DELAY,
+    GraphBatchItem, GraphCancellation, GraphClient, GraphClientError, GraphClientErrorKind,
+    GraphTransport, GraphTransportFailure, GRAPH_REQUEST_TIMEOUT, MAX_GRAPH_ATTEMPTS,
+    MAX_GRAPH_ITEMS, MAX_GRAPH_PAGES, MAX_GRAPH_RESPONSE_BYTES, MAX_GRAPH_RETRY_DELAY,
 };
 use app_lib::graph_api::models::{
     normalize_graph_guid, project_graph_auth_status, GraphAppInfo, GraphAuthCapabilities,
@@ -291,15 +291,19 @@ impl GraphTransport for FakeGraphTransport {
 struct FakeGraphCancellation {
     cancelled: Arc<AtomicBool>,
     waits: Mutex<Vec<Duration>>,
-    cancel_during_wait: bool,
+    cancel_on_wait: Option<usize>,
 }
 
 impl FakeGraphCancellation {
     fn cancelling_during_wait() -> Self {
+        Self::cancelling_on_wait(1)
+    }
+
+    fn cancelling_on_wait(wait_number: usize) -> Self {
         Self {
             cancelled: Arc::new(AtomicBool::new(false)),
             waits: Mutex::new(Vec::new()),
-            cancel_during_wait: true,
+            cancel_on_wait: Some(wait_number),
         }
     }
 }
@@ -310,8 +314,12 @@ impl GraphCancellation for FakeGraphCancellation {
     }
 
     fn wait_for_retry(&self, duration: Duration) -> bool {
-        self.waits.lock().expect("waits lock").push(duration);
-        if self.cancel_during_wait {
+        let wait_number = {
+            let mut waits = self.waits.lock().expect("waits lock");
+            waits.push(duration);
+            waits.len()
+        };
+        if self.cancel_on_wait == Some(wait_number) {
             self.cancelled.store(true, Ordering::SeqCst);
         }
         !self.is_cancelled()
@@ -698,27 +706,17 @@ fn client_passes_a_fixed_timeout_and_sanitizes_transport_failures() {
 }
 
 #[test]
-fn client_executes_bounded_single_and_batch_json_requests() {
+fn client_executes_bounded_single_json_requests() {
     let scope = "DeviceManagementApps.Read.All";
-    let transport = FakeGraphTransport::new(vec![
-        Ok(graph_response(
-            200,
-            serde_json::to_vec(&serde_json::json!({
-                "id": "app-a",
-                "displayName": "Contoso App"
-            }))
-            .expect("single response should serialize"),
-            &[("request-id", "single-request")],
-        )),
-        Ok(graph_response(
-            200,
-            serde_json::to_vec(&serde_json::json!({
-                "responses": [{"id": "0", "status": 404}]
-            }))
-            .expect("batch response should serialize"),
-            &[("request-id", "batch-request")],
-        )),
-    ]);
+    let transport = FakeGraphTransport::new(vec![Ok(graph_response(
+        200,
+        serde_json::to_vec(&serde_json::json!({
+            "id": "app-a",
+            "displayName": "Contoso App"
+        }))
+        .expect("single response should serialize"),
+        &[("request-id", "single-request")],
+    ))]);
     let cancellation = FakeGraphCancellation::default();
     let client = GraphClient::new("graph.microsoft.com", &transport, &cancellation);
 
@@ -734,30 +732,53 @@ fn client_executes_bounded_single_and_batch_json_requests() {
         .expect("single-item request should use the bounded client");
     assert_eq!(single["id"], "app-a");
 
-    let batch_body = br#"{"requests":[{"id":"0","method":"GET","url":"/deviceAppManagement/mobileApps/app-a"}]}"#.to_vec();
-    let batch: serde_json::Value = client
-        .request_json(GraphTransportRequest {
+    let requests = transport.requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].0.method, GraphHttpMethod::Get);
+    assert_eq!(requests[0].1, GRAPH_REQUEST_TIMEOUT);
+}
+
+#[test]
+fn client_rejects_non_read_request_shapes_before_transport() {
+    let requests = [
+        GraphTransportRequest {
+            method: GraphHttpMethod::Post,
+            url: "https://graph.microsoft.com/beta/deviceAppManagement/mobileApps".to_string(),
+            consistency_level: None,
+            content_type: Some("application/json".to_string()),
+            body: Some(b"{}".to_vec()),
+            required_scope: "DeviceManagementApps.Read.All".to_string(),
+        },
+        GraphTransportRequest {
             method: GraphHttpMethod::Post,
             url: "https://graph.microsoft.com/beta/$batch".to_string(),
             consistency_level: None,
             content_type: Some("application/json".to_string()),
-            body: Some(batch_body.clone()),
-            required_scope: scope.to_string(),
-        })
-        .expect("batch request should use the bounded client");
-    assert_eq!(batch["responses"][0]["status"], 404);
+            body: Some(b"{}".to_vec()),
+            required_scope: "DeviceManagementApps.Read.All".to_string(),
+        },
+        GraphTransportRequest {
+            method: GraphHttpMethod::Get,
+            url: "https://graph.microsoft.com/beta/deviceAppManagement/mobileApps".to_string(),
+            consistency_level: None,
+            content_type: Some("application/json".to_string()),
+            body: Some(b"{}".to_vec()),
+            required_scope: "DeviceManagementApps.Read.All".to_string(),
+        },
+    ];
 
-    let requests = transport.requests();
-    assert_eq!(requests.len(), 2);
-    assert_eq!(requests[0].0.method, GraphHttpMethod::Get);
-    assert_eq!(requests[0].1, GRAPH_REQUEST_TIMEOUT);
-    assert_eq!(requests[1].0.method, GraphHttpMethod::Post);
-    assert_eq!(
-        requests[1].0.content_type.as_deref(),
-        Some("application/json")
-    );
-    assert_eq!(requests[1].0.body.as_deref(), Some(batch_body.as_slice()));
-    assert_eq!(requests[1].1, GRAPH_REQUEST_TIMEOUT);
+    for request in requests {
+        let transport = FakeGraphTransport::new(vec![Ok(graph_response(200, b"{}".to_vec(), &[]))]);
+        let cancellation = FakeGraphCancellation::default();
+        let client = GraphClient::new("graph.microsoft.com", &transport, &cancellation);
+
+        let error = client
+            .request_json::<serde_json::Value>(request)
+            .expect_err("generic JSON reads must reject writes and request bodies");
+
+        assert_eq!(error.kind, GraphClientErrorKind::InvalidResponse);
+        assert!(transport.requests().is_empty());
+    }
 }
 
 #[test]
@@ -1003,6 +1024,199 @@ fn client_batch_retry_exhaustion_and_wait_cancellation_are_bounded() {
 }
 
 #[test]
+fn client_batch_mixed_retry_sequence_that_previously_used_thirteen_calls_is_capped_at_four() {
+    let mut responses = vec![Ok(graph_batch_response(serde_json::json!([{
+        "id": "0",
+        "status": 429,
+    }])))];
+    for _ in 0..3 {
+        responses.extend([
+            Ok(graph_response(503, Vec::new(), &[])),
+            Ok(graph_response(503, Vec::new(), &[])),
+            Ok(graph_response(503, Vec::new(), &[])),
+            Ok(graph_batch_response(serde_json::json!([{
+                "id": "0",
+                "status": 429,
+            }]))),
+        ]);
+    }
+    assert_eq!(
+        responses.len(),
+        13,
+        "fixture must model the old amplification"
+    );
+
+    let transport = FakeGraphTransport::new(responses);
+    let cancellation = FakeGraphCancellation::default();
+    let client = GraphClient::new("graph.microsoft.com", &transport, &cancellation);
+    let error = client
+        .request_batch_json::<serde_json::Value>(graph_batch_request(&["0"]))
+        .expect_err("one logical item must exhaust after four physical attempts");
+
+    assert_eq!(error.kind, GraphClientErrorKind::RetryExhausted);
+    assert_eq!(error.status, Some(503));
+    assert_eq!(transport.requests().len(), MAX_GRAPH_ATTEMPTS);
+    assert_eq!(
+        *cancellation.waits.lock().expect("waits lock"),
+        [
+            Duration::from_secs(1),
+            Duration::from_secs(2),
+            Duration::from_secs(4),
+        ]
+    );
+}
+
+#[test]
+fn client_batch_mixed_retry_sequence_that_previously_used_sixteen_calls_is_capped_at_four() {
+    let mut responses = Vec::new();
+    for _ in 0..4 {
+        responses.extend([
+            Ok(graph_response(503, Vec::new(), &[])),
+            Ok(graph_response(503, Vec::new(), &[])),
+            Ok(graph_response(503, Vec::new(), &[])),
+            Ok(graph_batch_response(serde_json::json!([{
+                "id": "0",
+                "status": 429,
+            }]))),
+        ]);
+    }
+    assert_eq!(
+        responses.len(),
+        16,
+        "fixture must model the old amplification"
+    );
+
+    let transport = FakeGraphTransport::new(responses);
+    let cancellation = FakeGraphCancellation::default();
+    let client = GraphClient::new("graph.microsoft.com", &transport, &cancellation);
+    let error = client
+        .request_batch_json::<serde_json::Value>(graph_batch_request(&["0"]))
+        .expect_err("initial outer retries must debit the item's shared budget");
+
+    assert_eq!(error.kind, GraphClientErrorKind::RetryExhausted);
+    assert_eq!(error.status, Some(429));
+    assert_eq!(transport.requests().len(), MAX_GRAPH_ATTEMPTS);
+    assert_eq!(
+        *cancellation.waits.lock().expect("waits lock"),
+        [
+            Duration::from_secs(1),
+            Duration::from_secs(2),
+            Duration::from_secs(4),
+        ]
+    );
+}
+
+#[test]
+fn client_batch_mixed_outer_retry_cancels_on_the_shared_second_wait() {
+    let transport = FakeGraphTransport::new(vec![
+        Ok(graph_batch_response(serde_json::json!([{
+            "id": "0",
+            "status": 429,
+        }]))),
+        Ok(graph_response(503, Vec::new(), &[])),
+        Ok(graph_batch_response(serde_json::json!([{
+            "id": "0",
+            "status": 200,
+            "body": { "id": "must-not-be-requested" },
+        }]))),
+    ]);
+    let cancellation = FakeGraphCancellation::cancelling_on_wait(2);
+    let client = GraphClient::new("graph.microsoft.com", &transport, &cancellation);
+    let error = client
+        .request_batch_json::<serde_json::Value>(graph_batch_request(&["0"]))
+        .expect_err("cancellation must interrupt the mixed-status retry boundary");
+
+    assert_eq!(error.kind, GraphClientErrorKind::Cancelled);
+    assert_eq!(transport.requests().len(), 2);
+    assert_eq!(
+        *cancellation.waits.lock().expect("waits lock"),
+        [Duration::from_secs(1), Duration::from_secs(2)]
+    );
+}
+
+#[test]
+fn client_batch_inner_401_after_outer_retry_uses_shared_budget_and_stops() {
+    let transport = FakeGraphTransport::new(vec![
+        Ok(graph_batch_response(serde_json::json!([{
+            "id": "0",
+            "status": 429,
+        }]))),
+        Ok(graph_response(503, Vec::new(), &[])),
+        Ok(graph_batch_response(serde_json::json!([{
+            "id": "0",
+            "status": 401,
+            "headers": { "request-id": "mixed-auth-request" },
+            "body": { "error": { "message": "mixed-auth-secret" } },
+        }]))),
+        Ok(graph_batch_response(serde_json::json!([{
+            "id": "0",
+            "status": 200,
+            "body": { "id": "must-not-be-requested" },
+        }]))),
+    ]);
+    let cancellation = FakeGraphCancellation::default();
+    let client = GraphClient::new("graph.microsoft.com", &transport, &cancellation);
+    let error = client
+        .request_batch_json::<serde_json::Value>(graph_batch_request(&["0"]))
+        .expect_err("inner 401 must terminate the mixed retry sequence");
+
+    assert_eq!(error.kind, GraphClientErrorKind::Unauthorized);
+    assert_eq!(error.status, Some(401));
+    assert_eq!(error.request_id.as_deref(), Some("mixed-auth-request"));
+    assert!(error.invalidates_auth());
+    assert_eq!(transport.requests().len(), 3);
+    assert_eq!(
+        *cancellation.waits.lock().expect("waits lock"),
+        [Duration::from_secs(1), Duration::from_secs(2)]
+    );
+    assert!(!format!("{error:?} {error}").contains("mixed-auth-secret"));
+}
+
+#[test]
+fn client_batch_inner_401_preempts_exhausted_sibling_after_initial_outer_retries() {
+    let transport = FakeGraphTransport::new(vec![
+        Ok(graph_response(503, Vec::new(), &[])),
+        Ok(graph_response(503, Vec::new(), &[])),
+        Ok(graph_response(503, Vec::new(), &[])),
+        Ok(graph_batch_response(serde_json::json!([
+            {
+                "id": "0",
+                "status": 429,
+                "body": { "error": { "message": "exhausted-secret" } },
+            },
+            {
+                "id": "1",
+                "status": 401,
+                "headers": { "request-id": "preempted-auth-request" },
+                "body": { "error": { "message": "auth-secret" } },
+            }
+        ]))),
+    ]);
+    let cancellation = FakeGraphCancellation::default();
+    let client = GraphClient::new("graph.microsoft.com", &transport, &cancellation);
+    let error = client
+        .request_batch_json::<serde_json::Value>(graph_batch_request(&["0", "1"]))
+        .expect_err("inner 401 must remain authoritative after outer retries");
+
+    assert_eq!(error.kind, GraphClientErrorKind::Unauthorized);
+    assert_eq!(error.status, Some(401));
+    assert_eq!(error.request_id.as_deref(), Some("preempted-auth-request"));
+    assert!(error.invalidates_auth());
+    assert_eq!(transport.requests().len(), MAX_GRAPH_ATTEMPTS);
+    assert_eq!(
+        *cancellation.waits.lock().expect("waits lock"),
+        [
+            Duration::from_secs(1),
+            Duration::from_secs(2),
+            Duration::from_secs(4),
+        ]
+    );
+    let rendered = format!("{error:?} {error}");
+    assert!(!rendered.contains("exhausted-secret"));
+    assert!(!rendered.contains("auth-secret"));
+}
+
+#[test]
 fn client_batch_rejects_malformed_duplicate_and_missing_response_ids_body_free() {
     let cases = vec![
         (
@@ -1087,4 +1301,70 @@ fn oversized_outer_401_still_invalidates_auth_without_weakening_body_cap() {
     let rendered = format!("{error:?} {error}");
     assert!(!rendered.contains("secret-outer-401-body"));
     assert_eq!(transport.requests().len(), 1);
+}
+
+#[test]
+fn client_error_controls_single_item_fallback_without_restarting_retryable_work() {
+    fn request_error(
+        responses: Vec<Result<GraphTransportResponse, GraphTransportFailure>>,
+    ) -> GraphClientError {
+        let transport = FakeGraphTransport::new(responses);
+        let cancellation = FakeGraphCancellation::default();
+        let client = GraphClient::new("graph.microsoft.com", &transport, &cancellation);
+        client
+            .request_json::<serde_json::Value>(GraphTransportRequest {
+                method: GraphHttpMethod::Get,
+                url: "https://graph.microsoft.com/beta/deviceAppManagement/mobileApps/app-a"
+                    .to_string(),
+                consistency_level: None,
+                content_type: None,
+                body: None,
+                required_scope: "DeviceManagementApps.Read.All".to_string(),
+            })
+            .expect_err("fixture must return an error")
+    }
+
+    let retry_exhausted = request_error(
+        (0..MAX_GRAPH_ATTEMPTS)
+            .map(|_| Ok(graph_response(503, Vec::new(), &[])))
+            .collect(),
+    );
+    assert_eq!(retry_exhausted.kind, GraphClientErrorKind::RetryExhausted);
+    assert!(!retry_exhausted.allows_single_item_fallback());
+
+    let permission_denied = request_error(vec![Ok(graph_response(403, Vec::new(), &[]))]);
+    assert_eq!(
+        permission_denied.kind,
+        GraphClientErrorKind::PermissionDenied
+    );
+    assert!(!permission_denied.allows_single_item_fallback());
+
+    let mut oversized_forbidden = vec![b'x'; MAX_GRAPH_RESPONSE_BYTES + 1];
+    oversized_forbidden[..3].copy_from_slice(b"403");
+    let oversized_forbidden =
+        request_error(vec![Ok(graph_response(403, oversized_forbidden, &[]))]);
+    assert_eq!(
+        oversized_forbidden.kind,
+        GraphClientErrorKind::ResponseTooLarge
+    );
+    assert!(!oversized_forbidden.allows_single_item_fallback());
+
+    let transport_failure = request_error(vec![Err(GraphTransportFailure::Network)]);
+    assert_eq!(transport_failure.kind, GraphClientErrorKind::Transport);
+    assert!(!transport_failure.allows_single_item_fallback());
+
+    let invalid_response = request_error(vec![Ok(graph_response(200, b"{".to_vec(), &[]))]);
+    assert_eq!(invalid_response.kind, GraphClientErrorKind::InvalidResponse);
+    assert!(invalid_response.allows_single_item_fallback());
+
+    let missing_batch_endpoint = request_error(vec![Ok(graph_response(404, Vec::new(), &[]))]);
+    assert_eq!(missing_batch_endpoint.kind, GraphClientErrorKind::NotFound);
+    assert!(missing_batch_endpoint.allows_single_item_fallback());
+
+    let batch_specific_http_failure = request_error(vec![Ok(graph_response(500, Vec::new(), &[]))]);
+    assert_eq!(
+        batch_specific_http_failure.kind,
+        GraphClientErrorKind::HttpStatus
+    );
+    assert!(batch_specific_http_failure.allows_single_item_fallback());
 }
