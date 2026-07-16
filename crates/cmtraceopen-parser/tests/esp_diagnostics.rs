@@ -1,5 +1,5 @@
 use cmtraceopen_parser::esp::*;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 fn assert_unit_variants<T: Serialize>(variants: &[T], expected: Value) {
@@ -1086,4 +1086,176 @@ fn models_cover_registration_delivery_optimization_and_findings() {
     assert_eq!(value[0]["eventId"], 306);
     assert_eq!(value[1]["downloadHttpBytes"], 1000);
     assert_eq!(value[1]["transfers"][0]["kind"], "downloadCompleted");
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct NormalizationCases {
+    office: Vec<StatusCase>,
+    classic_esp: Vec<StatusCase>,
+    policy: Vec<StatusCase>,
+    v2: Vec<StatusCase>,
+    unknown_numeric: StatusCase,
+    unknown_string: StatusCase,
+    timestamps: Vec<TimestampCase>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StatusCase {
+    raw: EspRawStatus,
+    normalized: EspNormalizedStatus,
+    display: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TimestampCase {
+    raw: String,
+    explicit_local_offset: Option<String>,
+    kind: EspTimestampKind,
+    original_offset: Option<String>,
+    normalized_utc: Option<String>,
+}
+
+fn normalization_cases() -> NormalizationCases {
+    serde_json::from_str(include_str!("fixtures/esp/normalization-cases.json"))
+        .expect("normalization fixture must be valid")
+}
+
+#[test]
+fn normalization_status_dictionaries_cover_every_known_and_unknown_value() {
+    let cases = normalization_cases();
+
+    for case in cases.office {
+        let normalized = normalize_office_detail_status(case.raw.clone());
+        assert_eq!(normalized.raw, case.raw);
+        assert_eq!(normalized.normalized, case.normalized);
+        assert_eq!(normalized.display, case.display);
+    }
+    for case in cases.classic_esp {
+        let normalized = normalize_classic_esp_status(case.raw.clone());
+        assert_eq!(normalized.raw, case.raw);
+        assert_eq!(normalized.normalized, case.normalized);
+        assert_eq!(normalized.display, case.display);
+    }
+    for case in cases.policy {
+        let normalized = normalize_policy_status(case.raw.clone());
+        assert_eq!(normalized.raw, case.raw);
+        assert_eq!(normalized.normalized, case.normalized);
+        assert_eq!(normalized.display, case.display);
+    }
+    for case in cases.v2 {
+        let normalized = normalize_v2_status(case.raw.clone());
+        assert_eq!(normalized.raw, case.raw);
+        assert_eq!(normalized.normalized, case.normalized);
+        assert_eq!(normalized.display, case.display);
+    }
+
+    let numeric = normalize_classic_esp_status(cases.unknown_numeric.raw.clone());
+    assert_eq!(numeric.raw, cases.unknown_numeric.raw);
+    assert_eq!(numeric.normalized, EspNormalizedStatus::Unknown);
+    assert_eq!(numeric.display, cases.unknown_numeric.display);
+
+    let text = normalize_v2_status(cases.unknown_string.raw.clone());
+    assert_eq!(text.raw, cases.unknown_string.raw);
+    assert_eq!(text.normalized, EspNormalizedStatus::Unknown);
+    assert_eq!(text.display, cases.unknown_string.display);
+}
+
+#[test]
+fn normalization_office_detail_failure_overrides_processed_outer_state() {
+    let normalized =
+        normalize_office_status(EspRawStatus::Number(1), Some(EspRawStatus::Number(60)));
+
+    assert_eq!(normalized.raw, EspRawStatus::Number(1));
+    assert_eq!(normalized.normalized, EspNormalizedStatus::Failed);
+    assert_eq!(normalized.display, "Processed / Enforcement Failed");
+    assert_eq!(
+        normalized.detail,
+        Some(EspStatusDetail {
+            raw: EspRawStatus::Number(60),
+            normalized: EspNormalizedStatus::Failed,
+            display: "Enforcement Failed".to_string(),
+        })
+    );
+}
+
+#[test]
+fn normalization_percent_decoding_and_guid_extraction_are_bounded() {
+    let encoded =
+        "./Device/Vendor/MSFT/App/%7BAAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE%7D+Display%20Name";
+    let decoded = percent_decode_bounded(encoded).expect("bounded valid URI");
+
+    assert_eq!(
+        decoded,
+        "./Device/Vendor/MSFT/App/{AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE}+Display Name"
+    );
+    assert!(decoded.contains("+Display"), "plus must remain a plus");
+    assert_eq!(
+        extract_guid(encoded),
+        Some("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee".to_string())
+    );
+    assert_eq!(
+        extract_guid("./Cert/AAAAAAAA_BBBB_CCCC_DDDD_EEEEEEEEEEEE/Status"),
+        Some("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee".to_string())
+    );
+    assert!(percent_decode_bounded("bad%2").is_err());
+    assert!(percent_decode_bounded("bad%GG").is_err());
+    assert!(percent_decode_bounded(&"a".repeat(MAX_PERCENT_DECODE_INPUT_BYTES + 1)).is_err());
+}
+
+fn oobe_flags(config: &EspOobeConfig) -> [bool; 10] {
+    [
+        config.skip_keyboard,
+        config.enable_patch_download,
+        config.skip_windows_upgrade_ux,
+        config.aad_tpm_required,
+        config.aad_device_authentication,
+        config.tpm_attestation,
+        config.skip_eula,
+        config.skip_oem_registration,
+        config.skip_express_settings,
+        config.disallow_admin,
+    ]
+}
+
+#[test]
+fn normalization_oobe_config_retains_raw_mask_and_decodes_all_ten_bits() {
+    let bits = [1024_u64, 512, 256, 128, 64, 32, 16, 8, 4, 2];
+
+    for (expected_index, bit) in bits.iter().copied().enumerate() {
+        let decoded = decode_oobe_config(bit);
+        assert_eq!(decoded.raw_mask, bit);
+        for (actual_index, enabled) in oobe_flags(&decoded).iter().copied().enumerate() {
+            assert_eq!(
+                enabled,
+                actual_index == expected_index,
+                "bit {bit} decoded the wrong OOBE flag"
+            );
+        }
+    }
+
+    let all = decode_oobe_config(bits.iter().sum());
+    assert_eq!(all.raw_mask, 2046);
+    assert!(oobe_flags(&all).iter().all(|enabled| *enabled));
+}
+
+#[test]
+fn normalization_timestamps_are_pure_and_require_an_explicit_local_offset() {
+    for case in normalization_cases().timestamps {
+        let normalized = normalize_timestamp(&case.raw, case.explicit_local_offset.as_deref());
+        assert_eq!(normalized.raw_text, case.raw);
+        assert_eq!(normalized.kind, case.kind);
+        assert_eq!(normalized.original_offset, case.original_offset);
+        assert_eq!(normalized.normalized_utc, case.normalized_utc);
+    }
+
+    let unspecified = normalize_timestamp("2026-07-15 08:00:00", None);
+    assert_eq!(unspecified.kind, EspTimestampKind::Unspecified);
+    assert_eq!(unspecified.normalized_utc, None);
+
+    let invalid_offset = normalize_timestamp("2026-07-15 08:00:00", Some("EDT"));
+    assert_eq!(invalid_offset.kind, EspTimestampKind::Invalid);
+    assert_eq!(invalid_offset.normalized_utc, None);
 }
