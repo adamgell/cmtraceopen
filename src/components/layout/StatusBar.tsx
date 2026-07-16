@@ -56,7 +56,7 @@ export function WorkspaceStatusBarContent({
   }
 
   return (
-    <Suspense fallback={null}>
+    <Suspense fallback={<>{children}</>}>
       <StatusContent />
     </Suspense>
   );

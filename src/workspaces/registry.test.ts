@@ -287,6 +287,43 @@ describe("registry-driven shell chrome", () => {
       placeholder: "Open...",
     });
   });
+
+  it("keeps legacy status content visible while a workspace status slot is loading", async () => {
+    let resolveStatusContent:
+      | ((module: { default: ComponentType }) => void)
+      | undefined;
+    const DelayedStatusContent = lazy(
+      () =>
+        new Promise<{ default: ComponentType }>((resolve) => {
+          resolveStatusContent = resolve;
+        }),
+    );
+    const workspaceWithDelayedStatus: WorkspaceDefinition = {
+      ...logWorkspace,
+      statusBarContent: DelayedStatusContent,
+    };
+
+    render(
+      createElement(
+        WorkspaceStatusBarContent,
+        {
+          workspace: workspaceWithDelayedStatus,
+          children: createElement("span", null, "Legacy status while loading"),
+        },
+      ),
+    );
+
+    expect(screen.getByText("Legacy status while loading")).toBeInTheDocument();
+
+    await act(async () => {
+      resolveStatusContent?.({
+        default: () => createElement("span", null, "Loaded workspace status"),
+      });
+    });
+
+    expect(await screen.findByText("Loaded workspace status")).toBeInTheDocument();
+    expect(screen.queryByText("Legacy status while loading")).not.toBeInTheDocument();
+  });
 });
 
 describe("ESP workspace registration", () => {
