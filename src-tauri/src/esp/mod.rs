@@ -8,6 +8,7 @@ pub mod event_logs;
 pub mod process;
 pub mod registry;
 pub mod system;
+pub mod tailing;
 
 use serde::{Deserialize, Serialize};
 

@@ -1,14 +1,15 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::fs::{self, File, FileTimes};
+use std::fs::{self, File, FileTimes, OpenOptions};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use app_lib::esp::discovery::{
-    build_runtime_temp_roots, discover_bounded_logs, embedded_known_source_specs, DiscoveryInput,
-    DiscoverySourceOrigin, KnownSourceSpec, DISCOVERY_INTERVAL, MAX_ACTIVE_TAILS,
-    MAX_INITIAL_READ_BYTES, MAX_ROTATIONS_PER_KNOWN_LOG, MAX_SESSION_DURATION,
-    MAX_TEMP_ENTRIES_INSPECTED_PER_ROOT, TEMP_LOOKBACK, UPDATE_DEBOUNCE,
+    build_runtime_temp_roots, discover_bounded_logs, embedded_known_source_specs,
+    DiscoveredLogSource, DiscoveryInput, DiscoverySourceOrigin, KnownSourceSpec,
+    DISCOVERY_INTERVAL, MAX_ACTIVE_TAILS, MAX_INITIAL_READ_BYTES, MAX_ROTATIONS_PER_KNOWN_LOG,
+    MAX_SESSION_DURATION, MAX_TEMP_ENTRIES_INSPECTED_PER_ROOT, TEMP_LOOKBACK, UPDATE_DEBOUNCE,
 };
 use app_lib::esp::event_logs::{
     collect_event_evidence, required_event_id_xpath, EventLogProvider, EventSourceError,
@@ -19,6 +20,9 @@ use app_lib::esp::registry::{
     classify_registry_scope, collect_registry_evidence, RegistryProvider, RegistryReadError,
     RegistrySnapshotKey, RegistryTarget, RegistryValueSnapshot, ESP_REGISTRY_TARGETS,
     MAX_REGISTRY_DEPTH, MAX_REGISTRY_VALUE_BYTES, REGISTRY_READ_ACCESS,
+};
+use app_lib::esp::tailing::{
+    EspTailResetReason, EspTailSet, MAX_SESSION_TAIL_SOURCES, WINDOWS_SHARED_READ_WRITE_DELETE,
 };
 use app_lib::intune::evtx_parser::{
     parse_esp_event_xml, EventLogProperty, ParsedEspEventRecord, MAX_ESP_EVTX_RECORD_BYTES,
@@ -2350,4 +2354,315 @@ fn discovery_has_no_arbitrary_root_or_deep_mode() {
             "bounded discovery exposed forbidden behavior: {forbidden}"
         );
     }
+}
+
+fn tail_source(
+    path: PathBuf,
+    source_id: impl Into<String>,
+    priority: u8,
+    origin: DiscoverySourceOrigin,
+    is_current: bool,
+) -> DiscoveredLogSource {
+    DiscoveredLogSource {
+        path,
+        source_id: source_id.into(),
+        family: "tail-test".to_string(),
+        origin,
+        priority,
+        is_current,
+        modified: Some(SystemTime::now()),
+    }
+}
+
+#[test]
+fn tail_initial_context_is_limited_to_final_eight_mib() {
+    let root = tempdir().expect("tail root");
+    let path = root.path().join("large.log");
+    let mut bytes = b"discarded-marker ".to_vec();
+    bytes.resize(MAX_INITIAL_READ_BYTES as usize + 32, b'x');
+    bytes.extend_from_slice(b"\nretained-tail\n");
+    fs::write(&path, bytes).expect("write large tail fixture");
+
+    let mut tails = EspTailSet::new();
+    let result = tails.reconcile(&[tail_source(
+        path.clone(),
+        "large",
+        0,
+        DiscoverySourceOrigin::CuratedKnown,
+        true,
+    )]);
+
+    assert!(result.failures.is_empty());
+    assert_eq!(result.attachments.len(), 1);
+    let attachment = &result.attachments[0];
+    assert_eq!(attachment.end_offset - attachment.start_offset, 14);
+    assert_eq!(attachment.entries.len(), 1);
+    assert_eq!(attachment.entries[0].message, "retained-tail");
+    assert!(attachment.start_offset > 0);
+}
+
+#[test]
+fn tail_emits_appended_utf8_and_windows_1252_without_partial_records() {
+    let root = tempdir().expect("tail root");
+    let utf8_path = root.path().join("utf8.log");
+    let cp1252_path = root.path().join("cp1252.log");
+    fs::write(&utf8_path, b"initial\n").expect("write utf8 fixture");
+    fs::write(&cp1252_path, b"initial\n").expect("write cp1252 fixture");
+    let mut tails = EspTailSet::new();
+    let started = tails.reconcile(&[
+        tail_source(
+            utf8_path.clone(),
+            "utf8",
+            0,
+            DiscoverySourceOrigin::CuratedKnown,
+            true,
+        ),
+        tail_source(
+            cp1252_path.clone(),
+            "cp1252",
+            1,
+            DiscoverySourceOrigin::CuratedKnown,
+            true,
+        ),
+    ]);
+    assert_eq!(started.attachments.len(), 2);
+
+    OpenOptions::new()
+        .append(true)
+        .open(&utf8_path)
+        .expect("open utf8 fixture")
+        .write_all("caf\u{00e9}\npartial".as_bytes())
+        .expect("append utf8");
+    OpenOptions::new()
+        .append(true)
+        .open(&cp1252_path)
+        .expect("open cp1252 fixture")
+        .write_all(b"caf\xe9\n")
+        .expect("append cp1252");
+
+    let first = tails.poll();
+    assert!(first.failures.is_empty());
+    assert_eq!(first.updates.len(), 2);
+    assert!(first.updates.iter().all(|update| update.entries.len() == 1));
+    assert!(first
+        .updates
+        .iter()
+        .all(|update| update.entries[0].message == "caf\u{00e9}"));
+
+    OpenOptions::new()
+        .append(true)
+        .open(&utf8_path)
+        .expect("reopen utf8 fixture")
+        .write_all(b" complete\n")
+        .expect("finish partial line");
+    let second = tails.poll();
+    assert_eq!(second.updates.len(), 1);
+    assert_eq!(second.updates[0].entries[0].message, "partial complete");
+}
+
+#[test]
+fn tail_distinguishes_truncation_from_file_rotation() {
+    let root = tempdir().expect("tail root");
+    let truncated_path = root.path().join("truncated.log");
+    let rotated_path = root.path().join("rotated.log");
+    fs::write(&truncated_path, b"original content is deliberately long\n")
+        .expect("write truncation fixture");
+    fs::write(&rotated_path, b"old generation\n").expect("write rotation fixture");
+    let mut tails = EspTailSet::new();
+    tails.reconcile(&[
+        tail_source(
+            truncated_path.clone(),
+            "truncated",
+            0,
+            DiscoverySourceOrigin::CuratedKnown,
+            true,
+        ),
+        tail_source(
+            rotated_path.clone(),
+            "rotated",
+            1,
+            DiscoverySourceOrigin::CuratedKnown,
+            true,
+        ),
+    ]);
+
+    fs::write(&truncated_path, b"fresh\n").expect("truncate fixture");
+    fs::rename(&rotated_path, root.path().join("rotated.log.1")).expect("rotate fixture");
+    fs::write(
+        &rotated_path,
+        b"new generation with at least the old length\n",
+    )
+    .expect("write new generation");
+
+    let result = tails.poll();
+    assert!(result.failures.is_empty());
+    assert_eq!(result.updates.len(), 2);
+    let truncated = result
+        .updates
+        .iter()
+        .find(|update| update.path == truncated_path)
+        .expect("truncation update");
+    assert_eq!(truncated.reset_reason, Some(EspTailResetReason::Truncated));
+    assert_eq!(truncated.entries[0].message, "fresh");
+    let rotated = result
+        .updates
+        .iter()
+        .find(|update| update.path == rotated_path)
+        .expect("rotation update");
+    assert_eq!(rotated.reset_reason, Some(EspTailResetReason::Rotated));
+    assert_eq!(
+        rotated.entries[0].message,
+        "new generation with at least the old length"
+    );
+}
+
+#[test]
+fn tail_attaches_sources_once_and_enforces_priority_and_sixteen_tail_cap() {
+    let root = tempdir().expect("tail root");
+    let mut sources = Vec::new();
+    for priority in (0..20u8).rev() {
+        let path = root.path().join(format!("source-{priority:02}.log"));
+        fs::write(&path, format!("source {priority}\n")).expect("write tail source");
+        sources.push(tail_source(
+            path,
+            format!("source-{priority:02}"),
+            priority,
+            DiscoverySourceOrigin::CuratedKnown,
+            true,
+        ));
+    }
+    let rotation_path = root.path().join("known.log.1");
+    fs::write(&rotation_path, b"snapshot only\n").expect("write known rotation");
+    sources.push(tail_source(
+        rotation_path.clone(),
+        "known-rotation",
+        0,
+        DiscoverySourceOrigin::CuratedKnown,
+        false,
+    ));
+    let temp_path = root.path().join("MSI-temp.log");
+    fs::write(&temp_path, b"snapshot only\n").expect("write temp candidate");
+    sources.push(tail_source(
+        temp_path.clone(),
+        "temp",
+        0,
+        DiscoverySourceOrigin::Temp,
+        true,
+    ));
+
+    let mut tails = EspTailSet::new();
+    let first = tails.reconcile(&sources);
+    assert!(first.failures.is_empty());
+    assert_eq!(first.attachments.len(), sources.len());
+    assert!(first
+        .attachments
+        .iter()
+        .any(|attachment| attachment.source.path == rotation_path));
+    assert!(first
+        .attachments
+        .iter()
+        .any(|attachment| attachment.source.path == temp_path));
+    assert_eq!(tails.active_tail_count(), MAX_ACTIVE_TAILS);
+    let active = tails.active_paths();
+    for priority in 0..MAX_ACTIVE_TAILS as u8 {
+        assert!(active
+            .iter()
+            .any(|path| path.ends_with(format!("source-{priority:02}.log"))));
+    }
+    assert!(!active.contains(&rotation_path));
+    assert!(!active.contains(&temp_path));
+
+    let second = tails.reconcile(&sources);
+    assert!(second.attachments.is_empty());
+    assert!(second.failures.is_empty());
+
+    tails.reconcile(&[]);
+    assert_eq!(tails.active_tail_count(), 0);
+    let rediscovered = tails.reconcile(&sources);
+    assert!(rediscovered.attachments.is_empty());
+    assert_eq!(tails.active_tail_count(), MAX_ACTIVE_TAILS);
+}
+
+#[test]
+fn tail_stop_drops_all_owned_state_and_prevents_restart() {
+    let root = tempdir().expect("tail root");
+    let path = root.path().join("stop.log");
+    fs::write(&path, b"initial\n").expect("write stop fixture");
+    let source = tail_source(path, "stop", 0, DiscoverySourceOrigin::ActiveProcess, true);
+    let mut tails = EspTailSet::new();
+    assert_eq!(
+        tails
+            .reconcile(std::slice::from_ref(&source))
+            .attachments
+            .len(),
+        1
+    );
+
+    tails.stop();
+
+    assert!(tails.is_stopped());
+    assert_eq!(tails.active_tail_count(), 0);
+    assert!(tails.poll().updates.is_empty());
+    assert!(tails.reconcile(&[source]).attachments.is_empty());
+}
+
+#[test]
+fn tail_bounds_an_incomplete_record_to_eight_mib() {
+    let root = tempdir().expect("tail root");
+    let path = root.path().join("unterminated.log");
+    fs::write(&path, vec![b'x'; MAX_INITIAL_READ_BYTES as usize])
+        .expect("write unterminated fixture");
+    let mut tails = EspTailSet::new();
+    let started = tails.reconcile(&[tail_source(
+        path.clone(),
+        "unterminated",
+        0,
+        DiscoverySourceOrigin::ActiveProcess,
+        true,
+    )]);
+    assert!(started.failures.is_empty());
+    assert!(started.attachments[0].entries.is_empty());
+
+    OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .expect("open unterminated fixture")
+        .write_all(b"x")
+        .expect("grow unterminated fixture");
+    let result = tails.poll();
+
+    assert!(result.updates.is_empty());
+    assert_eq!(result.failures.len(), 1);
+    assert!(result.failures[0].detail.contains("pending record"));
+}
+
+#[test]
+fn tail_bounds_unique_source_attachments_for_the_session() {
+    let root = tempdir().expect("tail root");
+    let mut sources = Vec::new();
+    for index in 0..=MAX_SESSION_TAIL_SOURCES {
+        let path = root.path().join(format!("MSI-{index:03}.log"));
+        fs::write(&path, b"snapshot\n").expect("write bounded source");
+        sources.push(tail_source(
+            path,
+            format!("bounded-{index:03}"),
+            5,
+            DiscoverySourceOrigin::Temp,
+            true,
+        ));
+    }
+    let mut tails = EspTailSet::new();
+
+    let result = tails.reconcile(&sources);
+
+    assert_eq!(result.attachments.len(), MAX_SESSION_TAIL_SOURCES);
+    assert!(result.source_limit_reached);
+    assert_eq!(tails.active_tail_count(), 0);
+}
+
+#[test]
+fn tail_windows_file_opens_request_read_write_delete_sharing() {
+    assert_eq!(WINDOWS_SHARED_READ_WRITE_DELETE, 0x1 | 0x2 | 0x4);
+    let source = include_str!("../src/esp/tailing.rs");
+    assert!(source.contains("share_mode(WINDOWS_SHARED_READ_WRITE_DELETE)"));
 }
