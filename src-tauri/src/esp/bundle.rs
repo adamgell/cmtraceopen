@@ -33,7 +33,7 @@ use super::archive::{
 use super::discovery::{
     open_verified_regular_file, DiscoveryPathFailureKind, VerifiedFileOpenFailure,
 };
-use super::event_logs::collect_captured_evtx_files;
+use super::event_logs::{collect_captured_evtx_files, EventEvidence};
 use super::live_session::{event_evidence_to_batch, log_entries_to_records};
 use super::system::{delivery_optimization_from_rows, SystemRow};
 
@@ -100,6 +100,12 @@ struct BundleArtifact {
     parse_hints: Vec<String>,
     status: Option<String>,
     observed_at_utc: String,
+}
+
+#[derive(Debug)]
+struct PendingEventArtifact {
+    staged_path: PathBuf,
+    artifact: BundleArtifact,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -320,6 +326,7 @@ pub fn analyze_captured_evidence_at(
     };
     let mut staging =
         BundleStagingArea::new().map_err(|message| BundleError::SourceAccess { message })?;
+    let mut pending_event_artifacts = Vec::new();
 
     for artifact in artifacts {
         if record_count >= MAX_BUNDLE_TOTAL_RECORDS {
@@ -390,6 +397,14 @@ pub fn analyze_captured_evidence_at(
             }
         };
 
+        if classify_artifact(&relative, &artifact) == ArtifactKind::EventLog {
+            pending_event_artifacts.push(PendingEventArtifact {
+                staged_path: staged,
+                artifact,
+            });
+            continue;
+        }
+
         let mut outcome = parse_artifact(&staged, &relative, &artifact);
         let remaining_records = MAX_BUNDLE_TOTAL_RECORDS.saturating_sub(record_count);
         let records_truncated = outcome.records.len() > remaining_records;
@@ -413,6 +428,23 @@ pub fn analyze_captured_evidence_at(
         if records_truncated {
             coverage.push(bundle_record_limit_coverage(observed_at_utc));
             break;
+        }
+    }
+
+    if !pending_event_artifacts.is_empty() {
+        let remaining_records = MAX_BUNDLE_TOTAL_RECORDS.saturating_sub(record_count);
+        if remaining_records == 0 {
+            coverage.push(bundle_record_limit_coverage(observed_at_utc));
+        } else {
+            let (mut event_records, event_coverage) =
+                parse_event_artifacts(&pending_event_artifacts, observed_at_utc);
+            let records_truncated = event_records.len() > remaining_records;
+            event_records.truncate(remaining_records);
+            reducer.ingest_all(event_records);
+            coverage.extend(event_coverage);
+            if records_truncated {
+                coverage.push(bundle_record_limit_coverage(observed_at_utc));
+            }
         }
     }
 
@@ -824,7 +856,9 @@ fn parse_artifact(path: &Path, relative: &Path, artifact: &BundleArtifact) -> Ar
     match kind {
         ArtifactKind::Registry => parse_registry_artifact(path, artifact),
         ArtifactKind::Json => parse_json_artifact(path, artifact),
-        ArtifactKind::EventLog => parse_event_artifact(path, artifact),
+        ArtifactKind::EventLog => {
+            ArtifactParseOutcome::failed("event artifacts must be parsed as a reconciled batch")
+        }
         ArtifactKind::Log => parse_log_artifact(path, artifact),
     }
 }
@@ -1081,28 +1115,92 @@ fn parse_json_artifact(path: &Path, artifact: &BundleArtifact) -> ArtifactParseO
     }
 }
 
-fn parse_event_artifact(path: &Path, artifact: &BundleArtifact) -> ArtifactParseOutcome {
-    match collect_captured_evtx_files(&[path.to_path_buf()], &artifact.observed_at_utc) {
-        Ok(evidence) => {
-            let mut batch = event_evidence_to_batch(evidence, &artifact.observed_at_utc);
-            let source_artifact_id = source_artifact_id(artifact);
-            for record in &mut batch.records {
-                if let EspEvidenceRecord::EventLog(observation) = record {
-                    observation.context.evidence_ref.source_artifact_id =
-                        source_artifact_id.clone();
-                    observation.context.provenance.source_artifact_id = source_artifact_id.clone();
-                    observation.context.provenance.file_path = Some(artifact.relative_path.clone());
+fn parse_event_artifacts(
+    pending_event_artifacts: &[PendingEventArtifact],
+    observed_at_utc: &str,
+) -> (Vec<EspEvidenceRecord>, Vec<EspArtifactCoverage>) {
+    let paths = pending_event_artifacts
+        .iter()
+        .map(|pending| pending.staged_path.clone())
+        .collect::<Vec<_>>();
+    match collect_captured_evtx_files(&paths, observed_at_utc) {
+        Ok(evidence) => normalize_event_batch(evidence, pending_event_artifacts, observed_at_utc),
+        Err(_) => {
+            let mut records = Vec::new();
+            let mut coverage = Vec::new();
+            for pending in pending_event_artifacts {
+                match collect_captured_evtx_files(
+                    std::slice::from_ref(&pending.staged_path),
+                    observed_at_utc,
+                ) {
+                    Ok(evidence) => {
+                        let (artifact_records, artifact_coverage) = normalize_event_batch(
+                            evidence,
+                            std::slice::from_ref(pending),
+                            observed_at_utc,
+                        );
+                        records.extend(artifact_records);
+                        coverage.extend(artifact_coverage);
+                    }
+                    Err(error) => coverage.push(artifact_coverage(
+                        source_artifact_id(&pending.artifact),
+                        pending.artifact.family.clone(),
+                        EspArtifactStatus::ParseFailed,
+                        Some(format!("{error:?}")),
+                        &pending.artifact.observed_at_utc,
+                    )),
                 }
             }
-            ArtifactParseOutcome {
-                records: batch.records,
-                coverage: batch.coverage,
-                status: Some(EspArtifactStatus::Available),
-                detail: None,
-            }
+            (records, coverage)
         }
-        Err(error) => ArtifactParseOutcome::failed(format!("{error:?}")),
     }
+}
+
+fn normalize_event_batch(
+    evidence: EventEvidence,
+    pending_event_artifacts: &[PendingEventArtifact],
+    observed_at_utc: &str,
+) -> (Vec<EspEvidenceRecord>, Vec<EspArtifactCoverage>) {
+    let artifacts_by_staged_path = pending_event_artifacts
+        .iter()
+        .map(|pending| {
+            (
+                normalize_manifest_path_identity(&portable_path(&pending.staged_path)),
+                &pending.artifact,
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    let mut batch = event_evidence_to_batch(evidence, observed_at_utc);
+    batch.records.retain_mut(|record| {
+        let EspEvidenceRecord::EventLog(observation) = record else {
+            return false;
+        };
+        let Some(staged_path) = observation.context.provenance.file_path.as_deref() else {
+            return false;
+        };
+        let identity = normalize_manifest_path_identity(staged_path);
+        let Some(artifact) = artifacts_by_staged_path.get(&identity) else {
+            return false;
+        };
+        let source_artifact_id = source_artifact_id(artifact);
+        observation.context.evidence_ref.source_artifact_id = source_artifact_id.clone();
+        observation.context.provenance.source_artifact_id = source_artifact_id;
+        observation.context.provenance.file_path = Some(artifact.relative_path.clone());
+        observation.context.observed_at_utc = artifact.observed_at_utc.clone();
+        true
+    });
+    batch
+        .coverage
+        .extend(pending_event_artifacts.iter().map(|pending| {
+            artifact_coverage(
+                source_artifact_id(&pending.artifact),
+                pending.artifact.family.clone(),
+                EspArtifactStatus::Available,
+                None,
+                &pending.artifact.observed_at_utc,
+            )
+        }));
+    (batch.records, batch.coverage)
 }
 
 fn parse_log_artifact(path: &Path, artifact: &BundleArtifact) -> ArtifactParseOutcome {
@@ -2101,15 +2199,60 @@ fn artifact_coverage(
 fn deduplicate_coverage(coverage: &mut Vec<EspArtifactCoverage>) {
     let mut by_identity = BTreeMap::new();
     for item in coverage.drain(..) {
-        let key = format!("{}:{:?}", item.artifact_id, item.status);
-        by_identity.insert(key, item);
+        match by_identity.entry(item.artifact_id.clone()) {
+            std::collections::btree_map::Entry::Vacant(entry) => {
+                entry.insert(item);
+            }
+            std::collections::btree_map::Entry::Occupied(mut entry)
+                if coverage_status_priority(&item.status)
+                    > coverage_status_priority(&entry.get().status) =>
+            {
+                entry.insert(item);
+            }
+            std::collections::btree_map::Entry::Occupied(_) => {}
+        }
     }
     coverage.extend(by_identity.into_values());
+}
+
+fn coverage_status_priority(status: &EspArtifactStatus) -> u8 {
+    match status {
+        EspArtifactStatus::Available => 5,
+        EspArtifactStatus::PermissionDenied => 4,
+        EspArtifactStatus::ParseFailed => 3,
+        EspArtifactStatus::Unsupported => 2,
+        EspArtifactStatus::Missing => 1,
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn coverage_reconciliation_prefers_available_over_missing() {
+        let mut coverage = vec![
+            artifact_coverage(
+                "event-log:channel",
+                "event-log",
+                EspArtifactStatus::Missing,
+                Some("first EVTX did not contain the channel".to_string()),
+                "2026-07-16T08:00:00.000Z",
+            ),
+            artifact_coverage(
+                "event-log:channel",
+                "event-log",
+                EspArtifactStatus::Available,
+                None,
+                "2026-07-16T08:00:00.000Z",
+            ),
+        ];
+
+        deduplicate_coverage(&mut coverage);
+
+        assert_eq!(coverage.len(), 1);
+        assert_eq!(coverage[0].status, EspArtifactStatus::Available);
+    }
 
     #[test]
     fn staging_rejects_cumulative_bytes_before_copying_the_next_artifact() {

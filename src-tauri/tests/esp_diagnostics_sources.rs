@@ -5889,6 +5889,14 @@ fn bundle_reads_are_component_safe_bounded_and_handle_pinned() {
 }
 
 #[test]
+fn bundle_event_logs_are_batched_before_channel_coverage_reconciliation() {
+    let bundle_source = include_str!("../src/esp/bundle.rs");
+
+    assert!(bundle_source.contains("parse_event_artifacts(&pending_event_artifacts"));
+    assert!(!bundle_source.contains("collect_captured_evtx_files(&[path.to_path_buf()]"));
+}
+
+#[test]
 fn bundle_manifest_reports_missing_and_malformed_artifacts_without_fallback() {
     let bundle = tempfile::tempdir().expect("bundle tempdir");
     std::fs::create_dir_all(bundle.path().join("evidence")).expect("create evidence folder");
