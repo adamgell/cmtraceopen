@@ -1578,6 +1578,33 @@ fn json_record(
     })
 }
 
+fn json_registry_document_record(
+    source_artifact_id: &str,
+    evidence_id: &str,
+    registry_value_name: &str,
+    json_pointer: &str,
+    value: EspObservationValue,
+    source_timestamp: &str,
+) -> EspEvidenceRecord {
+    let mut record = json_record(
+        source_artifact_id,
+        evidence_id,
+        "ProvisioningProgress",
+        json_pointer,
+        value,
+        source_timestamp,
+    );
+    let EspEvidenceRecord::Json(observation) = &mut record else {
+        unreachable!("json_record always returns a JSON observation");
+    };
+    observation.context.provenance.registry = Some(EspRegistryProvenance {
+        hive: "HKLM".to_string(),
+        key: r"SOFTWARE\Microsoft\Provisioning\Diagnostics\Autopilot".to_string(),
+        value_name: Some(registry_value_name.to_string()),
+    });
+    record
+}
+
 fn event_record(
     source_artifact_id: &str,
     evidence_id: &str,
@@ -4584,4 +4611,198 @@ fn reducer_rereview_delivery_optimization_zero_http_with_nonzero_components_is_u
     let delivery = snapshot.delivery_optimization.as_ref().unwrap();
     assert_eq!(delivery.peer_share_percent, None);
     assert_eq!(delivery.connected_cache_share_percent, None);
+}
+
+#[test]
+fn reducer_review_percent_encoded_office_paths_are_classified_before_detail_correlation() {
+    let office_id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+    let encoded_path = format!(".%2FVendor%2FMSFT%2FOffice%2FInstallation%2F{office_id}");
+    let mut reducer = EspDiagnosticsReducer::new("2026-07-15T18:00:00Z".to_string());
+    reducer.ingest_all(vec![
+        registry_record(
+            "esp-workloads",
+            "office-outer-encoded",
+            r"SOFTWARE\Microsoft\Windows\Autopilot\EnrollmentStatusTracking\ESPTrackingInfo\Diagnostics\ExpectedMSIAppPackages\2026-07-15T12:00:00Z",
+            &encoded_path,
+            EspObservationValue::Integer(1),
+            "2026-07-15T12:00:00Z",
+        ),
+        registry_record(
+            "office-csp",
+            "office-final-encoded",
+            &format!(r"SOFTWARE\Microsoft\OfficeCSP\{office_id}"),
+            "FinalStatus",
+            EspObservationValue::Integer(60),
+            "2026-07-15T12:01:00Z",
+        ),
+    ]);
+
+    let snapshot = reducer.snapshot();
+    let workload = snapshot.workloads.first().unwrap();
+    assert_eq!(workload.kind, EspTrackedKind::Office);
+    assert_eq!(workload.raw_identifier, office_id);
+    assert_eq!(workload.status.normalized, EspNormalizedStatus::Failed);
+}
+
+#[test]
+fn reducer_review_empty_json_identity_values_do_not_classify_scenario() {
+    for (pointer, evidence_id) in [
+        ("/DeploymentProfileName", "blank-profile"),
+        ("/ZtdCorrelationId", "blank-correlation"),
+    ] {
+        let mut reducer = EspDiagnosticsReducer::new("2026-07-15T18:00:00Z".to_string());
+        reducer.ingest(json_record(
+            "autopilot-json",
+            evidence_id,
+            "autopilotProfile",
+            pointer,
+            EspObservationValue::Text(" \t\r\n".to_string()),
+            "2026-07-15T12:00:00Z",
+        ));
+
+        assert_eq!(reducer.snapshot().scenario, EspScenario::Unknown);
+    }
+}
+
+#[test]
+fn reducer_review_malformed_hex_codes_remain_unknown() {
+    let mut reducer = EspDiagnosticsReducer::new("2026-07-15T18:00:00Z".to_string());
+    reducer.ingest_all(vec![
+        json_record(
+            "v2-progress",
+            "v2-invalid-id",
+            "ProvisioningProgress",
+            "/Workloads/0/WorkloadId",
+            EspObservationValue::Text("workload-invalid-code".to_string()),
+            "2026-07-15T12:00:00Z",
+        ),
+        json_record(
+            "v2-progress",
+            "v2-invalid-code",
+            "ProvisioningProgress",
+            "/Workloads/0/ErrorCode",
+            EspObservationValue::Text("0xINVALID".to_string()),
+            "2026-07-15T12:01:00Z",
+        ),
+    ]);
+
+    let snapshot = reducer.snapshot();
+    let code = snapshot.workloads[0].exit_code.as_ref().unwrap();
+    assert_eq!(code.raw, "0xINVALID");
+    assert_eq!(code.decimal, None);
+    assert_eq!(code.hex, None);
+    let activity = snapshot
+        .activity
+        .iter()
+        .find(|entry| entry.evidence[0].evidence_id == "v2-invalid-code")
+        .unwrap();
+    assert_eq!(
+        activity.status.as_ref().unwrap().normalized,
+        EspNormalizedStatus::Unknown
+    );
+}
+
+#[test]
+fn reducer_review_office_details_only_update_latest_matching_session() {
+    let office_id = "11111111-2222-3333-4444-555555555555";
+    let value_name = format!("./Vendor/MSFT/Office/Installation/{office_id}");
+    let mut reducer = EspDiagnosticsReducer::new("2026-07-15T18:00:00Z".to_string());
+    reducer.ingest_all(vec![
+        registry_record(
+            "esp-workloads",
+            "office-old-session",
+            r"SOFTWARE\Microsoft\Windows\Autopilot\EnrollmentStatusTracking\ESPTrackingInfo\Diagnostics\ExpectedMSIAppPackages\2026-07-15T10:00:00Z",
+            &value_name,
+            EspObservationValue::Integer(1),
+            "2026-07-15T10:00:00Z",
+        ),
+        registry_record(
+            "esp-workloads",
+            "office-latest-session",
+            r"SOFTWARE\Microsoft\Windows\Autopilot\EnrollmentStatusTracking\ESPTrackingInfo\Diagnostics\ExpectedMSIAppPackages\2026-07-15T12:00:00Z",
+            &value_name,
+            EspObservationValue::Integer(1),
+            "2026-07-15T12:00:00Z",
+        ),
+        registry_record(
+            "office-csp",
+            "office-latest-detail",
+            &format!(r"SOFTWARE\Microsoft\OfficeCSP\{office_id}"),
+            "FinalStatus",
+            EspObservationValue::Integer(60),
+            "2026-07-15T12:01:00Z",
+        ),
+    ]);
+
+    let snapshot = reducer.snapshot();
+    let mut workloads = snapshot
+        .workloads
+        .iter()
+        .filter(|workload| workload.kind == EspTrackedKind::Office)
+        .collect::<Vec<_>>();
+    workloads.sort_by_key(|workload| workload.timestamps.first_observed.raw_text.clone());
+    assert_eq!(workloads.len(), 2);
+    assert_eq!(
+        workloads[0].status.normalized,
+        EspNormalizedStatus::Processed
+    );
+    assert_eq!(workloads[0].status.detail, None);
+    assert_eq!(workloads[1].status.normalized, EspNormalizedStatus::Failed);
+    assert_eq!(
+        workloads[1].status.detail.as_ref().unwrap().raw,
+        EspRawStatus::Number(60)
+    );
+}
+
+#[test]
+fn reducer_review_v2_document_identity_prevents_cross_document_index_merges() {
+    let mut reducer = EspDiagnosticsReducer::new("2026-07-15T18:00:00Z".to_string());
+    reducer.ingest_all(vec![
+        json_registry_document_record(
+            "captured-autopilot-registry",
+            "document-a-id",
+            "ProvisioningProgressA",
+            "/Workloads/0/WorkloadId",
+            EspObservationValue::Text("workload-a".to_string()),
+            "2026-07-15T10:00:00Z",
+        ),
+        json_registry_document_record(
+            "captured-autopilot-registry",
+            "document-a-state",
+            "ProvisioningProgressA",
+            "/Workloads/0/WorkloadState",
+            EspObservationValue::Integer(1),
+            "2026-07-15T10:01:00Z",
+        ),
+        json_registry_document_record(
+            "captured-autopilot-registry",
+            "document-b-id",
+            "ProvisioningProgressB",
+            "/Workloads/0/WorkloadId",
+            EspObservationValue::Text("workload-b".to_string()),
+            "2026-07-15T11:00:00Z",
+        ),
+        json_registry_document_record(
+            "captured-autopilot-registry",
+            "document-b-state",
+            "ProvisioningProgressB",
+            "/Workloads/0/WorkloadState",
+            EspObservationValue::Integer(4),
+            "2026-07-15T11:01:00Z",
+        ),
+    ]);
+
+    let snapshot = reducer.snapshot();
+    let workload_a = snapshot
+        .workloads
+        .iter()
+        .find(|workload| workload.raw_identifier == "workload-a")
+        .unwrap();
+    let workload_b = snapshot
+        .workloads
+        .iter()
+        .find(|workload| workload.raw_identifier == "workload-b")
+        .unwrap();
+    assert_eq!(workload_a.status.normalized, EspNormalizedStatus::Succeeded);
+    assert_eq!(workload_b.status.normalized, EspNormalizedStatus::Failed);
 }

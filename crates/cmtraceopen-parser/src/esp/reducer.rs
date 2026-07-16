@@ -252,7 +252,7 @@ struct SnapshotProjection {
     activity: Vec<(usize, EspTimelineEntry)>,
     coverage: Vec<EspArtifactCoverage>,
     raw_evidence: Vec<EspRawEvidenceRecord>,
-    v2_workloads: BTreeMap<(String, usize), V2WorkloadAccumulator>,
+    v2_workloads: BTreeMap<(String, String, usize), V2WorkloadAccumulator>,
     platform_scripts: BTreeMap<(String, String), PlatformScriptAccumulator>,
     graph_observations: Vec<EspGraphObservation>,
     office_details: Vec<OfficeDetailObservation>,
@@ -988,6 +988,7 @@ impl SnapshotProjection {
         }
         let key = (
             observation.context.provenance.source_artifact_id.clone(),
+            v2_document_identity(observation),
             index,
         );
         let entry = self
@@ -1303,7 +1304,7 @@ impl SnapshotProjection {
 
     fn finalize_v2_workloads(&mut self) {
         let accumulators = std::mem::take(&mut self.v2_workloads);
-        for ((source, index), entry) in accumulators {
+        for ((source, _document, index), entry) in accumulators {
             let raw_identifier = entry
                 .workload_id
                 .clone()
@@ -1690,62 +1691,84 @@ impl SnapshotProjection {
     }
 
     fn apply_office_details(&mut self) {
-        for index in 0..self.workloads.len() {
-            if self.workloads[index].kind != EspTrackedKind::Office {
+        let mut details_by_identifier: BTreeMap<String, Vec<OfficeDetailObservation>> =
+            BTreeMap::new();
+        for detail in std::mem::take(&mut self.office_details) {
+            details_by_identifier
+                .entry(identifier_match_key(&detail.identifier))
+                .or_default()
+                .push(detail);
+        }
+        for details in details_by_identifier.into_values() {
+            let Some(best) = details.into_iter().max_by(|left, right| {
+                left.is_final
+                    .cmp(&right.is_final)
+                    .then_with(|| {
+                        context_chronology_key(&left.context)
+                            .cmp(&context_chronology_key(&right.context))
+                    })
+                    .then_with(|| left.ordinal.cmp(&right.ordinal))
+            }) else {
                 continue;
-            }
-            let identifier = self.workloads[index].raw_identifier.clone();
-            let best = self
-                .office_details
+            };
+            let matching = self
+                .workloads
                 .iter()
-                .filter(|detail| identifiers_match(&identifier, &detail.identifier))
-                .max_by(|left, right| {
-                    left.is_final
-                        .cmp(&right.is_final)
-                        .then_with(|| {
-                            context_chronology_key(&left.context)
-                                .cmp(&context_chronology_key(&right.context))
-                        })
-                        .then_with(|| left.ordinal.cmp(&right.ordinal))
-                })
-                .cloned();
-            let status = normalize_office_status(
-                self.workloads[index].status.raw.clone(),
-                best.as_ref().map(|detail| detail.raw_status.clone()),
-            );
-            let workload_evidence = self.workloads[index].evidence.clone();
-            if let Some(detail) = &best {
-                let observed = context_timestamp(&detail.context);
-                let timestamps = workload_timestamps(observed, &status.normalized);
-                merge_workload_timestamps(&mut self.workloads[index].timestamps, timestamps);
-                self.workloads[index]
-                    .evidence
-                    .push(detail.context.evidence_ref.clone());
-            }
-            self.workloads[index].status = status.clone();
-
-            if best.is_some() {
-                for (_, activity) in &mut self.activity {
-                    if activity.title == identifier
-                        && activity
-                            .evidence
-                            .iter()
-                            .any(|evidence| workload_evidence.contains(evidence))
+                .enumerate()
+                .filter_map(|(index, workload)| {
+                    if workload.kind != EspTrackedKind::Office
+                        || !identifiers_match(&workload.raw_identifier, &best.identifier)
                     {
-                        activity.status = Some(status.clone());
+                        return None;
                     }
+                    let session = self
+                        .sessions
+                        .iter()
+                        .find(|session| session.session_id == workload.session_id)?;
+                    Some((index, session_chronology(session).to_string()))
+                })
+                .collect::<Vec<_>>();
+            let latest = matching.iter().map(|(_, key)| key).max().cloned();
+            let candidates = matching
+                .iter()
+                .filter(|(_, key)| Some(key) == latest.as_ref())
+                .map(|(index, _)| *index)
+                .collect::<Vec<_>>();
+            let [index] = candidates.as_slice() else {
+                continue;
+            };
+            let identifier = self.workloads[*index].raw_identifier.clone();
+            let status = normalize_office_status(
+                self.workloads[*index].status.raw.clone(),
+                Some(best.raw_status.clone()),
+            );
+            let workload_evidence = self.workloads[*index].evidence.clone();
+            let observed = context_timestamp(&best.context);
+            let timestamps = workload_timestamps(observed, &status.normalized);
+            merge_workload_timestamps(&mut self.workloads[*index].timestamps, timestamps);
+            self.workloads[*index]
+                .evidence
+                .push(best.context.evidence_ref.clone());
+            self.workloads[*index].status = status.clone();
+
+            for (_, activity) in &mut self.activity {
+                if activity.title == identifier
+                    && activity
+                        .evidence
+                        .iter()
+                        .any(|evidence| workload_evidence.contains(evidence))
+                {
+                    activity.status = Some(status.clone());
                 }
             }
-            if let Some(detail) = best {
-                self.push_timeline(
-                    detail.ordinal,
-                    &detail.context,
-                    EspTimelineKind::Workload,
-                    identifier,
-                    Some("Office detailed status".to_string()),
-                    Some(status),
-                );
-            }
+            self.push_timeline(
+                best.ordinal,
+                &best.context,
+                EspTimelineKind::Workload,
+                identifier,
+                Some("Office detailed status".to_string()),
+                Some(status),
+            );
         }
     }
 
@@ -2041,15 +2064,20 @@ fn classify_scenario<'a>(records: impl IntoIterator<Item = &'a EspEvidenceRecord
             }
             EspEvidenceRecord::Json(observation) => {
                 has_v2 |= is_provisioning_progress(observation) || is_page_settings(observation);
+                let has_value = observation_text(&observation.value)
+                    .map(|value| !value.trim().is_empty())
+                    .unwrap_or(false);
                 if observation
                     .json_pointer
                     .eq_ignore_ascii_case("/DeploymentProfileName")
+                    && has_value
                 {
                     has_profile_name = true;
                 }
                 if observation
                     .json_pointer
                     .eq_ignore_ascii_case("/ZtdCorrelationId")
+                    && has_value
                 {
                     has_existing_device_identity = true;
                 }
@@ -2464,13 +2492,11 @@ fn is_classic_family(value: &str) -> bool {
 }
 
 fn classic_workload_kind(family: &str, value_name: &str) -> Option<EspTrackedKind> {
+    let decoded = percent_decode_bounded(value_name).unwrap_or_else(|_| value_name.to_string());
+    let decoded = decoded.to_ascii_lowercase();
     match family.to_ascii_lowercase().as_str() {
         "expectedpolicies" => Some(EspTrackedKind::Policy),
-        "expectedmsiapppackages"
-            if value_name
-                .to_ascii_lowercase()
-                .contains("/office/installation/") =>
-        {
+        "expectedmsiapppackages" if decoded.contains("/office/installation/") => {
             Some(EspTrackedKind::Office)
         }
         "expectedmsiapppackages" => Some(EspTrackedKind::Msi),
@@ -2525,6 +2551,35 @@ fn is_provisioning_progress(observation: &EspJsonObservation) -> bool {
     observation
         .document_type
         .eq_ignore_ascii_case("ProvisioningProgress")
+}
+
+fn v2_document_identity(observation: &EspJsonObservation) -> String {
+    let provenance = &observation.context.provenance;
+    if let Some(registry) = &provenance.registry {
+        return format!(
+            "registry|{}|{}|{}",
+            registry.hive,
+            registry.key,
+            registry.value_name.as_deref().unwrap_or_default()
+        )
+        .to_ascii_lowercase();
+    }
+    if let Some(event) = &provenance.event {
+        return format!(
+            "event|{}|{}|{}",
+            event.channel,
+            event.event_id,
+            event
+                .record_id
+                .map(|record_id| record_id.to_string())
+                .unwrap_or_default()
+        )
+        .to_ascii_lowercase();
+    }
+    if let Some(file_path) = &provenance.file_path {
+        return format!("file|{file_path}|{}", observation.document_type).to_ascii_lowercase();
+    }
+    format!("document|{}", observation.document_type).to_ascii_lowercase()
 }
 
 fn is_enforcement_state_message(observation: &EspJsonObservation) -> bool {
@@ -2956,10 +3011,13 @@ fn normalize_embedded_timestamp(raw: &str) -> EspTimestamp {
 
 fn error_code(raw: &str) -> EspErrorCode {
     if raw.starts_with("0x") || raw.starts_with("0X") {
+        let digits = &raw[2..];
         EspErrorCode {
             raw: raw.to_string(),
             decimal: None,
-            hex: Some(format!("0x{}", raw[2..].to_ascii_uppercase())),
+            hex: u64::from_str_radix(digits, 16)
+                .ok()
+                .map(|_| format!("0x{}", digits.to_ascii_uppercase())),
         }
     } else {
         let decimal = raw.parse::<i64>().ok();
@@ -3126,6 +3184,10 @@ fn identifiers_match(left: &str, right: &str) -> bool {
             (Some(left), Some(right)) => left == right,
             _ => false,
         }
+}
+
+fn identifier_match_key(value: &str) -> String {
+    extract_guid(value).unwrap_or_else(|| value.trim().to_ascii_lowercase())
 }
 
 fn latest_code_occurrence(codes: &[DeferredCodeOccurrence]) -> Option<&DeferredCodeOccurrence> {
