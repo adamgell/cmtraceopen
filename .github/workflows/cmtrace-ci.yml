@@ -107,6 +107,9 @@ jobs:
       - name: Frontend tests
         run: npm run test
 
+      - name: CI bundle output contract tests
+        run: node --test scripts/ci-bundle-outputs.test.mjs
+
       - name: npm security audit
         run: npm audit --audit-level=high
         continue-on-error: true
@@ -201,6 +204,11 @@ jobs:
           key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('Cargo.lock') }}
           restore-keys: ${{ runner.os }}-${{ matrix.target }}-cargo-
 
+      - name: Remove cached bundle outputs
+        env:
+          BUNDLE_ROOT: src-tauri/target/${{ matrix.target }}/release/bundle
+        run: node scripts/ci-bundle-outputs.mjs clean
+
       - name: Install frontend dependencies
         run: npm ci
 
@@ -222,6 +230,11 @@ jobs:
         with:
           projectPath: .
           args: --target ${{ matrix.target }}
+
+      - name: Verify current-version bundle outputs
+        env:
+          BUNDLE_ROOT: src-tauri/target/${{ matrix.target }}/release/bundle
+        run: node scripts/ci-bundle-outputs.mjs verify
 
       - name: Upload artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
