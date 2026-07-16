@@ -28,8 +28,10 @@ fn sid_pattern() -> &'static Regex {
 fn user_profile_path_pattern() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
-        Regex::new(r"(?i)(?P<prefix>(?:^|[\\/])(?:users|documents and settings)[\\/])[^\\/\r\n]+")
-            .expect("user-profile path redaction pattern must compile")
+        Regex::new(
+            r"(?i)(?P<prefix>(?:^|[\\/])(?:users|documents and settings)[\\/])(?P<user>[^\\/\r\n]+)",
+        )
+        .expect("user-profile path redaction pattern must compile")
     })
 }
 
@@ -37,7 +39,7 @@ fn authorization_pattern() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
         Regex::new(
-            r#"(?i)(?P<prefix>(?:--?|/)?authorization(?:\s+|\s*[=:]\s*))(?:basic\s+|bearer\s+|digest\s+|apikey\s+)?(?P<value>"[^"]*"|'[^']*'|[^\s]+)"#,
+            r#"(?i)(?P<prefix>(?:--?|/)?authorization["']?(?:\s*[=:]\s*|\s+))(?:basic\s+|bearer\s+|digest\s+|apikey\s+)?(?P<value>"[^"]*"|'[^']*'|[^\s]+)"#,
         )
         .expect("authorization redaction pattern must compile")
     })
@@ -47,7 +49,7 @@ fn secret_argument_pattern() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
         Regex::new(
-            r#"(?i)(?P<prefix>(?:--?|/)?(?:password|passwd|pwd|secret|client[_-]?secret|api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|token|tenant(?:id)?|entdmid|serial(?:number)?)(?:\s+|\s*[=:]\s*))(?P<value>"[^"]*"|'[^']*'|[^\s]+)"#,
+            r#"(?i)(?P<prefix>(?:--?|/)?(?:password|passwd|pwd|secret|client[_-]?secret|api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|token|tenant(?:id)?|entdmid|serial(?:number)?)["']?(?:\s*[=:]\s*|\s+))(?P<value>"[^"]*"|'[^']*'|[^\s]+)"#,
         )
         .expect("secret argument redaction pattern must compile")
     })
@@ -57,7 +59,7 @@ fn forbidden_raw_content_pattern() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
         Regex::new(
-            r"(?i)(authorization\s*:|(?:access|refresh|id)[_-]?token\s*[:=]|bearer\s+[A-Z0-9._~+/=-]{8,})",
+            r#"(?i)(authorization["']?\s*:|(?:access|refresh|id)[_-]?token["']?\s*[:=]|bearer\s+[A-Z0-9._~+/=-]{8,})"#,
         )
         .expect("forbidden raw-content pattern must compile")
     })
@@ -66,13 +68,14 @@ fn forbidden_raw_content_pattern() -> &'static Regex {
 /// Return a safe copy/export projection without changing the local snapshot.
 ///
 /// Typed sensitive fields are masked, secret-like command arguments are
-/// redacted, SID-bearing structural IDs are consistently pseudonymized, and
-/// source records that could contain credentials, raw Graph responses, or
-/// hardware hashes are omitted completely.
+/// redacted, reference-bearing identifiers are consistently pseudonymized,
+/// and source records that could contain credentials, raw Graph responses,
+/// or hardware hashes are omitted completely.
 pub fn redacted_export_projection(snapshot: &EspDiagnosticsSnapshot) -> EspDiagnosticsSnapshot {
     let mut safe = snapshot.clone();
-    let sid_pseudonyms = collect_sid_pseudonyms(&safe);
-    pseudonymize_sid_references(&mut safe, &sid_pseudonyms);
+    let reference_pseudonyms = collect_reference_pseudonyms(&safe);
+    pseudonymize_sid_references(&mut safe, &reference_pseudonyms.sids);
+    redact_all_evidence_refs(&mut safe, &reference_pseudonyms);
 
     redact_identity(&mut safe.identity);
     if let Some(profile) = &mut safe.profile {
@@ -84,7 +87,7 @@ pub fn redacted_export_projection(snapshot: &EspDiagnosticsSnapshot) -> EspDiagn
         mask_classified(&mut enrollment.entdm_id);
     }
     for session in &mut safe.sessions {
-        pseudonymize_classified_sid(&mut session.user_sid, &sid_pseudonyms);
+        pseudonymize_classified_sid(&mut session.user_sid, &reference_pseudonyms.sids);
     }
     for workload in &mut safe.workloads {
         redact_optional_text(&mut workload.display_name);
@@ -95,7 +98,7 @@ pub fn redacted_export_projection(snapshot: &EspDiagnosticsSnapshot) -> EspDiagn
         for process in &mut correlation.process_observations {
             redact_optional_text(&mut process.sanitized_command_line);
             redact_optional_text(&mut process.referenced_log_path);
-            redact_provenance(&mut process.context.provenance);
+            redact_provenance(&mut process.context.provenance, &reference_pseudonyms);
         }
     }
     for node in &mut safe.node_cache {
@@ -107,7 +110,7 @@ pub fn redacted_export_projection(snapshot: &EspDiagnosticsSnapshot) -> EspDiagn
         registration.message = redact_text(&registration.message);
         redact_status(&mut registration.status);
         for named in &mut registration.named_data {
-            named.value = redact_text(&named.value);
+            redact_named_value(named);
         }
     }
     if let Some(hardware) = &mut safe.hardware {
@@ -131,7 +134,8 @@ pub fn redacted_export_projection(snapshot: &EspDiagnosticsSnapshot) -> EspDiagn
         } else {
             redact_observation_value(&mut record.raw_value);
         }
-        redact_provenance(&mut record.provenance);
+        redact_reference(&mut record.record_id, &reference_pseudonyms);
+        redact_provenance(&mut record.provenance, &reference_pseudonyms);
     }
     if let Some(graph) = &mut safe.graph {
         redact_graph_overlay(graph);
@@ -193,8 +197,17 @@ fn mask_observation_value(value: &mut EspObservationValue) {
     *value = EspObservationValue::Text(REDACTED.to_string());
 }
 
-fn collect_sid_pseudonyms(snapshot: &EspDiagnosticsSnapshot) -> BTreeMap<String, String> {
+#[derive(Default)]
+struct ReferencePseudonyms {
+    sids: BTreeMap<String, String>,
+    emails: BTreeMap<String, String>,
+    profile_users: BTreeMap<String, String>,
+}
+
+fn collect_reference_pseudonyms(snapshot: &EspDiagnosticsSnapshot) -> ReferencePseudonyms {
     let mut sids = BTreeSet::new();
+    let mut emails = BTreeSet::new();
+    let mut profile_users = BTreeSet::new();
     for session in &snapshot.sessions {
         collect_sids(&session.session_id, &mut sids);
         if let Some(user_sid) = &session.user_sid {
@@ -216,10 +229,80 @@ fn collect_sid_pseudonyms(snapshot: &EspDiagnosticsSnapshot) -> BTreeMap<String,
             collect_sids(workload_id, &mut sids);
         }
     }
+    for record in &snapshot.raw_evidence {
+        collect_reference_tokens(
+            &record.record_id,
+            &mut sids,
+            &mut emails,
+            &mut profile_users,
+        );
+        collect_reference_tokens(
+            &record.provenance.source_artifact_id,
+            &mut sids,
+            &mut emails,
+            &mut profile_users,
+        );
+        if let Some(value_name) = record
+            .provenance
+            .registry
+            .as_ref()
+            .and_then(|registry| registry.value_name.as_deref())
+        {
+            collect_reference_tokens(value_name, &mut sids, &mut emails, &mut profile_users);
+        }
+    }
+    for_each_evidence_ref(snapshot, |evidence| {
+        collect_reference_tokens(
+            &evidence.evidence_id,
+            &mut sids,
+            &mut emails,
+            &mut profile_users,
+        );
+        collect_reference_tokens(
+            &evidence.source_artifact_id,
+            &mut sids,
+            &mut emails,
+            &mut profile_users,
+        );
+    });
 
-    sids.into_iter()
+    ReferencePseudonyms {
+        sids: build_pseudonyms(sids, "sid"),
+        emails: build_pseudonyms(emails, "email"),
+        profile_users: build_pseudonyms(profile_users, "user"),
+    }
+}
+
+fn collect_reference_tokens(
+    value: &str,
+    sids: &mut BTreeSet<String>,
+    emails: &mut BTreeSet<String>,
+    profile_users: &mut BTreeSet<String>,
+) {
+    collect_sids(value, sids);
+    emails.extend(
+        email_pattern()
+            .find_iter(value)
+            .map(|matched| matched.as_str().to_ascii_lowercase()),
+    );
+    profile_users.extend(
+        user_profile_path_pattern()
+            .captures_iter(value)
+            .map(|captures| {
+                captures
+                    .name("user")
+                    .expect("user-profile pattern must capture the user component")
+                    .as_str()
+                    .to_ascii_lowercase()
+            }),
+    );
+}
+
+fn build_pseudonyms(values: BTreeSet<String>, kind: &str) -> BTreeMap<String, String> {
+    values
+        .into_iter()
         .enumerate()
-        .map(|(index, sid)| (sid, format!("[redacted-sid-{}]", index + 1)))
+        .map(|(index, value)| (value, format!("[redacted-{kind}-{}]", index + 1)))
         .collect()
 }
 
@@ -276,6 +359,422 @@ fn pseudonymize_sids(value: &mut String, pseudonyms: &BTreeMap<String, String>) 
                 .unwrap_or_else(|| REDACTED.to_string())
         })
         .into_owned();
+}
+
+fn redact_reference(value: &mut String, pseudonyms: &ReferencePseudonyms) {
+    let bounded = bounded_text(value);
+    let redacted = authorization_pattern().replace_all(bounded, "${prefix}[redacted]");
+    let redacted = secret_argument_pattern().replace_all(&redacted, "${prefix}[redacted]");
+    let redacted =
+        user_profile_path_pattern().replace_all(&redacted, |captures: &regex::Captures<'_>| {
+            let user = captures
+                .name("user")
+                .expect("user-profile pattern must capture the user component")
+                .as_str()
+                .to_ascii_lowercase();
+            let pseudonym = pseudonyms
+                .profile_users
+                .get(&user)
+                .map_or(REDACTED, String::as_str);
+            format!("{}{pseudonym}", &captures["prefix"])
+        });
+    let redacted = email_pattern().replace_all(&redacted, |captures: &regex::Captures<'_>| {
+        pseudonyms
+            .emails
+            .get(&captures[0].to_ascii_lowercase())
+            .map_or(REDACTED, String::as_str)
+            .to_string()
+    });
+    let redacted = sid_pattern().replace_all(&redacted, |captures: &regex::Captures<'_>| {
+        pseudonyms
+            .sids
+            .get(&captures[0].to_ascii_uppercase())
+            .map_or(REDACTED, String::as_str)
+            .to_string()
+    });
+    *value = if bounded.len() == value.len() {
+        redacted.into_owned()
+    } else {
+        format!("{redacted}\n{REMOVED_OVERSIZE}")
+    };
+}
+
+fn redact_all_evidence_refs(
+    snapshot: &mut EspDiagnosticsSnapshot,
+    pseudonyms: &ReferencePseudonyms,
+) {
+    for_each_evidence_ref_mut(snapshot, |evidence| {
+        redact_reference(&mut evidence.evidence_id, pseudonyms);
+        redact_reference(&mut evidence.source_artifact_id, pseudonyms);
+    });
+}
+
+fn for_each_evidence_ref(
+    snapshot: &EspDiagnosticsSnapshot,
+    mut visit: impl FnMut(&EspEvidenceRef),
+) {
+    for evidence in &snapshot.identity.evidence {
+        visit(evidence);
+    }
+    if let Some(profile) = &snapshot.profile {
+        for evidence in &profile.evidence {
+            visit(evidence);
+        }
+        if let Some(device_preparation) = &profile.device_preparation {
+            for evidence in &device_preparation.evidence {
+                visit(evidence);
+            }
+        }
+    }
+    for enrollment in &snapshot.enrollments {
+        for evidence in &enrollment.evidence {
+            visit(evidence);
+        }
+    }
+    for session in &snapshot.sessions {
+        for evidence in &session.evidence {
+            visit(evidence);
+        }
+    }
+    for workload in &snapshot.workloads {
+        for evidence in &workload.evidence {
+            visit(evidence);
+        }
+    }
+    for correlation in &snapshot.installer_correlations {
+        for evidence in &correlation.evidence {
+            visit(evidence);
+        }
+        for process in &correlation.process_observations {
+            visit(&process.context.evidence_ref);
+        }
+    }
+    for node in &snapshot.node_cache {
+        for evidence in &node.evidence {
+            visit(evidence);
+        }
+    }
+    for registration in &snapshot.registration_events {
+        for evidence in &registration.evidence {
+            visit(evidence);
+        }
+    }
+    if let Some(delivery) = &snapshot.delivery_optimization {
+        for evidence in &delivery.evidence {
+            visit(evidence);
+        }
+        for transfer in &delivery.transfers {
+            for evidence in &transfer.evidence {
+                visit(evidence);
+            }
+        }
+    }
+    if let Some(hardware) = &snapshot.hardware {
+        for evidence in &hardware.evidence {
+            visit(evidence);
+        }
+    }
+    for activity in &snapshot.activity {
+        for evidence in &activity.evidence {
+            visit(evidence);
+        }
+    }
+    for finding in &snapshot.findings {
+        for evidence in &finding.evidence {
+            visit(evidence);
+        }
+    }
+    for coverage in &snapshot.coverage {
+        for evidence in &coverage.evidence {
+            visit(evidence);
+        }
+    }
+    for record in &snapshot.raw_evidence {
+        for evidence in &record.evidence {
+            visit(evidence);
+        }
+    }
+    if let Some(graph) = &snapshot.graph {
+        if let Some(device_match) = &graph.device_match.data {
+            for evidence in &device_match.evidence {
+                visit(evidence);
+            }
+            if let Some(selected) = &device_match.selected {
+                for evidence in &selected.evidence {
+                    visit(evidence);
+                }
+            }
+            for candidate in &device_match.candidates {
+                for evidence in &candidate.evidence {
+                    visit(evidence);
+                }
+            }
+        }
+        if let Some(identity) = &graph.autopilot_identity.data {
+            for evidence in &identity.evidence {
+                visit(evidence);
+            }
+        }
+        for section in [
+            &graph.deployment_profile,
+            &graph.intended_deployment_profile,
+        ] {
+            if let Some(profile) = &section.data {
+                for evidence in &profile.evidence {
+                    visit(evidence);
+                }
+            }
+        }
+        if let Some(assignments) = &graph.profile_assignments.data {
+            for assignment in assignments {
+                for evidence in &assignment.evidence {
+                    visit(evidence);
+                }
+            }
+        }
+        if let Some(events) = &graph.autopilot_events.data {
+            for event in events {
+                for evidence in &event.evidence {
+                    visit(evidence);
+                }
+                for detail in &event.policy_status_details {
+                    for evidence in &detail.evidence {
+                        visit(evidence);
+                    }
+                }
+            }
+        }
+        if let Some(configuration) = &graph.enrollment_configuration.data {
+            for evidence in &configuration.evidence {
+                visit(evidence);
+            }
+            for assignment in &configuration.assignments {
+                for evidence in &assignment.evidence {
+                    visit(evidence);
+                }
+            }
+        }
+        if let Some(apps) = &graph.apps.data {
+            for app in apps {
+                for evidence in &app.evidence {
+                    visit(evidence);
+                }
+                for assignment in &app.assignments {
+                    for evidence in &assignment.evidence {
+                        visit(evidence);
+                    }
+                }
+            }
+        }
+        if let Some(policies) = &graph.policies.data {
+            for policy in policies {
+                for evidence in &policy.evidence {
+                    visit(evidence);
+                }
+                for assignment in &policy.assignments {
+                    for evidence in &assignment.evidence {
+                        visit(evidence);
+                    }
+                }
+            }
+        }
+        if let Some(scripts) = &graph.scripts.data {
+            for script in scripts {
+                for evidence in &script.evidence {
+                    visit(evidence);
+                }
+                for assignment in &script.assignments {
+                    for evidence in &assignment.evidence {
+                        visit(evidence);
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn for_each_evidence_ref_mut(
+    snapshot: &mut EspDiagnosticsSnapshot,
+    mut visit: impl FnMut(&mut EspEvidenceRef),
+) {
+    for evidence in &mut snapshot.identity.evidence {
+        visit(evidence);
+    }
+    if let Some(profile) = &mut snapshot.profile {
+        for evidence in &mut profile.evidence {
+            visit(evidence);
+        }
+        if let Some(device_preparation) = &mut profile.device_preparation {
+            for evidence in &mut device_preparation.evidence {
+                visit(evidence);
+            }
+        }
+    }
+    for enrollment in &mut snapshot.enrollments {
+        for evidence in &mut enrollment.evidence {
+            visit(evidence);
+        }
+    }
+    for session in &mut snapshot.sessions {
+        for evidence in &mut session.evidence {
+            visit(evidence);
+        }
+    }
+    for workload in &mut snapshot.workloads {
+        for evidence in &mut workload.evidence {
+            visit(evidence);
+        }
+    }
+    for correlation in &mut snapshot.installer_correlations {
+        for evidence in &mut correlation.evidence {
+            visit(evidence);
+        }
+        for process in &mut correlation.process_observations {
+            visit(&mut process.context.evidence_ref);
+        }
+    }
+    for node in &mut snapshot.node_cache {
+        for evidence in &mut node.evidence {
+            visit(evidence);
+        }
+    }
+    for registration in &mut snapshot.registration_events {
+        for evidence in &mut registration.evidence {
+            visit(evidence);
+        }
+    }
+    if let Some(delivery) = &mut snapshot.delivery_optimization {
+        for evidence in &mut delivery.evidence {
+            visit(evidence);
+        }
+        for transfer in &mut delivery.transfers {
+            for evidence in &mut transfer.evidence {
+                visit(evidence);
+            }
+        }
+    }
+    if let Some(hardware) = &mut snapshot.hardware {
+        for evidence in &mut hardware.evidence {
+            visit(evidence);
+        }
+    }
+    for activity in &mut snapshot.activity {
+        for evidence in &mut activity.evidence {
+            visit(evidence);
+        }
+    }
+    for finding in &mut snapshot.findings {
+        for evidence in &mut finding.evidence {
+            visit(evidence);
+        }
+    }
+    for coverage in &mut snapshot.coverage {
+        for evidence in &mut coverage.evidence {
+            visit(evidence);
+        }
+    }
+    for record in &mut snapshot.raw_evidence {
+        for evidence in &mut record.evidence {
+            visit(evidence);
+        }
+    }
+    if let Some(graph) = &mut snapshot.graph {
+        if let Some(device_match) = &mut graph.device_match.data {
+            for evidence in &mut device_match.evidence {
+                visit(evidence);
+            }
+            if let Some(selected) = &mut device_match.selected {
+                for evidence in &mut selected.evidence {
+                    visit(evidence);
+                }
+            }
+            for candidate in &mut device_match.candidates {
+                for evidence in &mut candidate.evidence {
+                    visit(evidence);
+                }
+            }
+        }
+        if let Some(identity) = &mut graph.autopilot_identity.data {
+            for evidence in &mut identity.evidence {
+                visit(evidence);
+            }
+        }
+        for section in [
+            &mut graph.deployment_profile,
+            &mut graph.intended_deployment_profile,
+        ] {
+            if let Some(profile) = &mut section.data {
+                for evidence in &mut profile.evidence {
+                    visit(evidence);
+                }
+            }
+        }
+        if let Some(assignments) = &mut graph.profile_assignments.data {
+            for assignment in assignments {
+                for evidence in &mut assignment.evidence {
+                    visit(evidence);
+                }
+            }
+        }
+        if let Some(events) = &mut graph.autopilot_events.data {
+            for event in events {
+                for evidence in &mut event.evidence {
+                    visit(evidence);
+                }
+                for detail in &mut event.policy_status_details {
+                    for evidence in &mut detail.evidence {
+                        visit(evidence);
+                    }
+                }
+            }
+        }
+        if let Some(configuration) = &mut graph.enrollment_configuration.data {
+            for evidence in &mut configuration.evidence {
+                visit(evidence);
+            }
+            for assignment in &mut configuration.assignments {
+                for evidence in &mut assignment.evidence {
+                    visit(evidence);
+                }
+            }
+        }
+        if let Some(apps) = &mut graph.apps.data {
+            for app in apps {
+                for evidence in &mut app.evidence {
+                    visit(evidence);
+                }
+                for assignment in &mut app.assignments {
+                    for evidence in &mut assignment.evidence {
+                        visit(evidence);
+                    }
+                }
+            }
+        }
+        if let Some(policies) = &mut graph.policies.data {
+            for policy in policies {
+                for evidence in &mut policy.evidence {
+                    visit(evidence);
+                }
+                for assignment in &mut policy.assignments {
+                    for evidence in &mut assignment.evidence {
+                        visit(evidence);
+                    }
+                }
+            }
+        }
+        if let Some(scripts) = &mut graph.scripts.data {
+            for script in scripts {
+                for evidence in &mut script.evidence {
+                    visit(evidence);
+                }
+                for assignment in &mut script.assignments {
+                    for evidence in &mut assignment.evidence {
+                        visit(evidence);
+                    }
+                }
+            }
+        }
+    }
 }
 
 fn redact_optional_text(value: &mut Option<String>) {
@@ -408,23 +907,30 @@ fn forbidden_raw_content(value: &str) -> bool {
     forbidden_raw_content_pattern().is_match(bounded_text(value))
 }
 
-fn redact_provenance(provenance: &mut EspEvidenceProvenance) {
+fn redact_provenance(provenance: &mut EspEvidenceProvenance, pseudonyms: &ReferencePseudonyms) {
+    redact_reference(&mut provenance.source_artifact_id, pseudonyms);
     if let Some(path) = &mut provenance.file_path {
         *path = redact_text(path);
     }
     if let Some(registry) = &mut provenance.registry {
         registry.key = redact_text(&registry.key);
+        if let Some(value_name) = &mut registry.value_name {
+            redact_reference(value_name, pseudonyms);
+        }
     }
     if let Some(event) = &mut provenance.event {
         for named in &mut event.named_data {
-            named.value = if sensitive_value_label(&named.name) || forbidden_raw_label(&named.name)
-            {
-                REDACTED.to_string()
-            } else {
-                redact_text(&named.value)
-            };
+            redact_named_value(named);
         }
     }
+}
+
+fn redact_named_value(named: &mut EspNamedValue) {
+    named.value = if sensitive_value_label(&named.name) || forbidden_raw_label(&named.name) {
+        REDACTED.to_string()
+    } else {
+        redact_text(&named.value)
+    };
 }
 
 fn redact_graph_overlay(graph: &mut EspGraphOverlay) {

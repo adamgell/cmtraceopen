@@ -4446,7 +4446,7 @@ fn assert_finding_contract(
     severity: EspFindingSeverity,
     confidence: EspFindingConfidence,
     recommended_check: &str,
-    expected_evidence_ids: &[&str],
+    expected_evidence: &[(&str, &str)],
     expected_coverage_gap_ids: &[&str],
 ) {
     assert_eq!(finding.finding_id, id);
@@ -4461,9 +4461,12 @@ fn assert_finding_contract(
         finding
             .evidence
             .iter()
-            .map(|evidence| evidence.evidence_id.as_str())
+            .map(|evidence| (
+                evidence.evidence_id.as_str(),
+                evidence.source_artifact_id.as_str(),
+            ))
             .collect::<Vec<_>>(),
-        expected_evidence_ids,
+        expected_evidence,
         "evidence changed for {id}"
     );
     assert_eq!(
@@ -4511,7 +4514,7 @@ fn findings_failed_blocking_app_and_stalled_install_are_evidence_backed() {
         EspFindingSeverity::Blocker,
         EspFindingConfidence::High,
         "Inspect the cited IME or deployment log around the app's final failure.",
-        &["evidence-app-failed"],
+        &[("evidence-app-failed", "artifact-registry")],
         &[],
     );
     assert_finding_contract(
@@ -4520,9 +4523,108 @@ fn findings_failed_blocking_app_and_stalled_install_are_evidence_backed() {
         EspFindingSeverity::Error,
         EspFindingConfidence::High,
         "Compare the cited workload's last update with IME and Delivery Optimization activity.",
-        &["evidence-app-stalled"],
+        &[("evidence-app-stalled", "artifact-registry")],
         &[],
     );
+}
+
+#[test]
+fn findings_ignore_workloads_that_belong_only_to_non_latest_sessions() {
+    let mut snapshot = findings_snapshot();
+    snapshot.sessions = vec![
+        EspSession {
+            session_id: "session-old".to_string(),
+            kind: EspSessionKind::Classic,
+            scope: EspScope::Device,
+            user_sid: None,
+            started_at: Some(timestamp("2026-07-15T11:00:00Z")),
+            ended_at: Some(timestamp("2026-07-15T11:30:00Z")),
+            phase: EspPhase::Failed,
+            is_latest: false,
+            workload_ids: vec![
+                "workload-current".to_string(),
+                "workload-old-stalled".to_string(),
+                "workload-old-policy".to_string(),
+            ],
+            evidence: vec![evidence_ref("session-old")],
+        },
+        EspSession {
+            session_id: "session-current".to_string(),
+            kind: EspSessionKind::Classic,
+            scope: EspScope::Device,
+            user_sid: None,
+            started_at: Some(timestamp("2026-07-15T12:20:00Z")),
+            ended_at: None,
+            phase: EspPhase::DeviceSetup,
+            is_latest: true,
+            workload_ids: vec!["workload-current".to_string()],
+            evidence: vec![evidence_ref("session-current")],
+        },
+    ];
+    let mut old_failed = findings_workload(
+        "old-failed",
+        EspTrackedKind::Win32App,
+        EspNormalizedStatus::Failed,
+        Some(true),
+        "2026-07-15T11:05:00Z",
+    );
+    old_failed.session_id = "session-old".to_string();
+    old_failed.workload_id = "workload-current".to_string();
+    let mut old_stalled = findings_workload(
+        "old-stalled",
+        EspTrackedKind::Msi,
+        EspNormalizedStatus::Installing,
+        Some(false),
+        "2026-07-15T11:05:00Z",
+    );
+    old_stalled.session_id = "session-old".to_string();
+    let mut old_policy = findings_workload(
+        "old-policy",
+        EspTrackedKind::Policy,
+        EspNormalizedStatus::Pending,
+        Some(true),
+        "2026-07-15T11:05:00Z",
+    );
+    old_policy.session_id = "session-old".to_string();
+    let mut current = findings_workload(
+        "current",
+        EspTrackedKind::Win32App,
+        EspNormalizedStatus::Installing,
+        Some(true),
+        "2026-07-15T12:29:00Z",
+    );
+    current.session_id = "session-current".to_string();
+    snapshot.workloads = vec![old_failed, old_stalled, old_policy, current];
+
+    let findings = derive_findings(&snapshot);
+    for stale_id in [
+        "blocking-app-failed",
+        "workload-stalled",
+        "policy-not-processed",
+    ] {
+        assert!(
+            findings
+                .iter()
+                .all(|finding| finding.finding_id != stale_id),
+            "historical workload emitted stale finding {stale_id}: {findings:#?}"
+        );
+    }
+}
+
+#[test]
+fn findings_keep_sessionless_workload_evidence_eligible() {
+    let mut snapshot = findings_snapshot();
+    snapshot.workloads.push(findings_workload(
+        "sessionless-failed",
+        EspTrackedKind::Win32App,
+        EspNormalizedStatus::Failed,
+        Some(true),
+        "2026-07-15T12:29:00Z",
+    ));
+
+    assert!(derive_findings(&snapshot)
+        .iter()
+        .any(|finding| finding.finding_id == "blocking-app-failed"));
 }
 
 #[test]
@@ -4593,7 +4695,10 @@ fn findings_timeout_registration_policy_and_certificate_states_require_exact_evi
         EspFindingSeverity::Blocker,
         EspFindingConfidence::High,
         "Compare the cited ESP session start time with the configured timeout.",
-        &["enrollment-timeout", "session-timeout"],
+        &[
+            ("enrollment-timeout", "artifact-registry"),
+            ("session-timeout", "artifact-registry"),
+        ],
         &[],
     );
     assert_finding_contract(
@@ -4602,7 +4707,7 @@ fn findings_timeout_registration_policy_and_certificate_states_require_exact_evi
         EspFindingSeverity::Error,
         EspFindingConfidence::High,
         "Inspect the cited Device Registration event and its named data.",
-        &["registration-failed"],
+        &[("registration-failed", "artifact-registry")],
         &[],
     );
     assert_finding_contract(
@@ -4611,7 +4716,7 @@ fn findings_timeout_registration_policy_and_certificate_states_require_exact_evi
         EspFindingSeverity::Warning,
         EspFindingConfidence::High,
         "Inspect the cited policy tracking state and enrollment scope.",
-        &["evidence-policy"],
+        &[("evidence-policy", "artifact-registry")],
         &[],
     );
     assert_finding_contract(
@@ -4620,7 +4725,7 @@ fn findings_timeout_registration_policy_and_certificate_states_require_exact_evi
         EspFindingSeverity::Warning,
         EspFindingConfidence::High,
         "Inspect the cited certificate tracking state and enrollment scope.",
-        &["evidence-cert"],
+        &[("evidence-cert", "artifact-registry")],
         &[],
     );
 }
@@ -4687,7 +4792,7 @@ fn findings_coverage_ambiguity_and_malformed_source_are_never_unpinned() {
             status: EspArtifactStatus::PermissionDenied,
             detail: Some("Administrator access is required".to_string()),
             observed_at_utc: "2026-07-15T12:30:00Z".to_string(),
-            evidence: vec![evidence_ref("ime-coverage")],
+            evidence: vec![evidence_ref_from("ime-coverage", "ime-logs")],
         },
         EspArtifactCoverage {
             artifact_id: "page-settings-json".to_string(),
@@ -4695,7 +4800,10 @@ fn findings_coverage_ambiguity_and_malformed_source_are_never_unpinned() {
             status: EspArtifactStatus::ParseFailed,
             detail: Some("invalid JSON".to_string()),
             observed_at_utc: "2026-07-15T12:30:00Z".to_string(),
-            evidence: vec![evidence_ref("malformed-coverage")],
+            evidence: vec![evidence_ref_from(
+                "malformed-coverage",
+                "page-settings-json",
+            )],
         },
     ];
     snapshot
@@ -4717,7 +4825,7 @@ fn findings_coverage_ambiguity_and_malformed_source_are_never_unpinned() {
         EspFindingSeverity::Warning,
         EspFindingConfidence::High,
         "Open the cited IME coverage entry and verify the protected log path is readable.",
-        &["ime-coverage"],
+        &[("ime-coverage", "ime-logs")],
         &["ime-logs"],
     );
     assert_finding_contract(
@@ -4726,7 +4834,7 @@ fn findings_coverage_ambiguity_and_malformed_source_are_never_unpinned() {
         EspFindingSeverity::Warning,
         EspFindingConfidence::High,
         "Review the cited coverage gaps, then relaunch CMTrace Open as administrator if deeper evidence is required.",
-        &["ime-coverage"],
+        &[("ime-coverage", "ime-logs")],
         &["ime-logs"],
     );
     assert_finding_contract(
@@ -4735,7 +4843,7 @@ fn findings_coverage_ambiguity_and_malformed_source_are_never_unpinned() {
         EspFindingSeverity::Warning,
         EspFindingConfidence::Medium,
         "Compare the cited process start time, log path, app ID, and product code with each candidate workload.",
-        &["ambiguous-msi"],
+        &[("ambiguous-msi", "artifact-registry")],
         &[],
     );
     assert_finding_contract(
@@ -4743,9 +4851,13 @@ fn findings_coverage_ambiguity_and_malformed_source_are_never_unpinned() {
         "source-evidence-malformed",
         EspFindingSeverity::Warning,
         EspFindingConfidence::High,
-        "Inspect the cited raw source record and its parse state.",
-        &["malformed-coverage"],
+        "Inspect the cited source coverage and any available raw evidence.",
+        &[("malformed-coverage", "page-settings-json")],
         &["page-settings-json"],
+    );
+    assert_eq!(
+        finding_by_id(&findings, "source-evidence-malformed").summary,
+        "At least one cited diagnostic source failed parsing."
     );
 }
 
@@ -4758,7 +4870,10 @@ fn findings_ime_coverage_uses_explicit_artifact_and_family_identities() {
         status: EspArtifactStatus::Missing,
         detail: Some("not collected".to_string()),
         observed_at_utc: "2026-07-15T12:30:00Z".to_string(),
-        evidence: vec![evidence_ref("full-ime-family")],
+        evidence: vec![evidence_ref_from(
+            "full-ime-family",
+            "management-extension-primary",
+        )],
     });
 
     let finding = finding_by_id(&derive_findings(&snapshot), "ime-evidence-unavailable").clone();
@@ -4766,7 +4881,13 @@ fn findings_ime_coverage_uses_explicit_artifact_and_family_identities() {
         finding.coverage_gap_ids,
         vec!["management-extension-primary"]
     );
-    assert_eq!(finding.evidence[0].evidence_id, "full-ime-family");
+    assert_eq!(
+        (
+            finding.evidence[0].evidence_id.as_str(),
+            finding.evidence[0].source_artifact_id.as_str(),
+        ),
+        ("full-ime-family", "management-extension-primary")
+    );
 
     snapshot.coverage = vec![EspArtifactCoverage {
         artifact_id: "runtime-images".to_string(),
@@ -4895,22 +5016,33 @@ fn findings_completed_session_emits_only_evidence_backed_info() {
         phase: EspPhase::Completed,
         is_latest: true,
         workload_ids: vec!["workload-app-success".to_string()],
-        evidence: vec![evidence_ref("session-completed")],
+        evidence: vec![evidence_ref_from(
+            "session-completed",
+            "esp-session-registry",
+        )],
     });
-    snapshot.workloads.push(findings_workload(
+    let mut successful_workload = findings_workload(
         "app-success",
         EspTrackedKind::Win32App,
         EspNormalizedStatus::Succeeded,
         Some(true),
         "2026-07-15T12:10:00Z",
-    ));
+    );
+    successful_workload.evidence = vec![evidence_ref_from(
+        "evidence-app-success",
+        "esp-session-registry",
+    )];
+    snapshot.workloads.push(successful_workload);
     snapshot.coverage.push(EspArtifactCoverage {
         artifact_id: "esp-session-registry".to_string(),
         family: "ESP session evidence".to_string(),
         status: EspArtifactStatus::Available,
         detail: None,
         observed_at_utc: "2026-07-15T12:10:00Z".to_string(),
-        evidence: vec![evidence_ref("coverage-complete")],
+        evidence: vec![evidence_ref_from(
+            "coverage-complete",
+            "esp-session-registry",
+        )],
     });
 
     let findings = derive_findings(&snapshot);
@@ -4927,7 +5059,10 @@ fn findings_completed_session_emits_only_evidence_backed_info() {
         EspFindingSeverity::Info,
         EspFindingConfidence::High,
         "Review the cited completed session and terminal workload states.",
-        &["evidence-app-success", "session-completed"],
+        &[
+            ("evidence-app-success", "esp-session-registry"),
+            ("session-completed", "esp-session-registry"),
+        ],
         &[],
     );
 }
@@ -4944,7 +5079,10 @@ fn findings_success_requires_observed_declared_workloads_and_relevant_coverage()
         phase: EspPhase::Completed,
         is_latest: true,
         workload_ids,
-        evidence: vec![evidence_ref("session-completed")],
+        evidence: vec![evidence_ref_from(
+            "session-completed",
+            "esp-session-registry",
+        )],
     };
     let available_coverage = || EspArtifactCoverage {
         artifact_id: "esp-session-registry".to_string(),
@@ -4952,7 +5090,10 @@ fn findings_success_requires_observed_declared_workloads_and_relevant_coverage()
         status: EspArtifactStatus::Available,
         detail: None,
         observed_at_utc: "2026-07-15T12:10:00Z".to_string(),
-        evidence: vec![evidence_ref("coverage-complete")],
+        evidence: vec![evidence_ref_from(
+            "coverage-complete",
+            "esp-session-registry",
+        )],
     };
     let has_success = |snapshot: &EspDiagnosticsSnapshot| {
         derive_findings(snapshot)
@@ -4971,13 +5112,18 @@ fn findings_success_requires_observed_declared_workloads_and_relevant_coverage()
     unobserved_declared
         .sessions
         .push(completed_session(vec!["workload-not-observed".to_string()]));
-    unobserved_declared.workloads.push(findings_workload(
+    let mut unrelated_workload = findings_workload(
         "different-success",
         EspTrackedKind::Win32App,
         EspNormalizedStatus::Succeeded,
         Some(true),
         "2026-07-15T12:10:00Z",
-    ));
+    );
+    unrelated_workload.evidence = vec![evidence_ref_from(
+        "evidence-different-success",
+        "esp-session-registry",
+    )];
+    unobserved_declared.workloads.push(unrelated_workload);
     unobserved_declared.coverage.push(available_coverage());
     assert!(!has_success(&unobserved_declared));
 
@@ -4986,13 +5132,18 @@ fn findings_success_requires_observed_declared_workloads_and_relevant_coverage()
     missing_coverage
         .sessions
         .push(completed_session(vec!["workload-app-success".to_string()]));
-    missing_coverage.workloads.push(findings_workload(
+    let mut observed_workload = findings_workload(
         "app-success",
         EspTrackedKind::Win32App,
         EspNormalizedStatus::Succeeded,
         Some(true),
         "2026-07-15T12:10:00Z",
-    ));
+    );
+    observed_workload.evidence = vec![evidence_ref_from(
+        "evidence-app-success",
+        "esp-session-registry",
+    )];
+    missing_coverage.workloads.push(observed_workload);
     let mut gap = available_coverage();
     gap.status = EspArtifactStatus::PermissionDenied;
     missing_coverage.coverage.push(gap);
@@ -5013,15 +5164,23 @@ fn findings_success_ignores_unrelated_optional_coverage_gaps() {
         phase: EspPhase::Completed,
         is_latest: true,
         workload_ids: vec!["workload-app-success".to_string()],
-        evidence: vec![evidence_ref("session-completed")],
+        evidence: vec![evidence_ref_from(
+            "session-completed",
+            "esp-session-registry",
+        )],
     });
-    snapshot.workloads.push(findings_workload(
+    let mut successful_workload = findings_workload(
         "app-success",
         EspTrackedKind::Win32App,
         EspNormalizedStatus::Succeeded,
         Some(true),
         "2026-07-15T12:10:00Z",
-    ));
+    );
+    successful_workload.evidence = vec![evidence_ref_from(
+        "evidence-app-success",
+        "esp-session-registry",
+    )];
+    snapshot.workloads.push(successful_workload);
     snapshot.coverage = vec![
         EspArtifactCoverage {
             artifact_id: "esp-session-registry".to_string(),
@@ -5029,7 +5188,10 @@ fn findings_success_ignores_unrelated_optional_coverage_gaps() {
             status: EspArtifactStatus::Available,
             detail: None,
             observed_at_utc: "2026-07-15T12:10:00Z".to_string(),
-            evidence: vec![evidence_ref("coverage-complete")],
+            evidence: vec![evidence_ref_from(
+                "coverage-complete",
+                "esp-session-registry",
+            )],
         },
         EspArtifactCoverage {
             artifact_id: "optional-patchmypc-logs".to_string(),
@@ -5127,7 +5289,7 @@ fn findings_reducer_snapshot_populates_rules_without_mutating_raw_evidence() {
         status: EspArtifactStatus::Missing,
         detail: Some("not found".to_string()),
         observed_at_utc: "2026-07-15T12:30:00Z".to_string(),
-        evidence: vec![evidence_ref("ime-missing")],
+        evidence: vec![evidence_ref_from("ime-missing", "ime-logs")],
     }));
 
     let snapshot = reducer.snapshot();
@@ -5137,9 +5299,12 @@ fn findings_reducer_snapshot_populates_rules_without_mutating_raw_evidence() {
         finding
             .evidence
             .iter()
-            .map(|evidence| evidence.evidence_id.as_str())
+            .map(|evidence| (
+                evidence.evidence_id.as_str(),
+                evidence.source_artifact_id.as_str(),
+            ))
             .collect::<Vec<_>>(),
-        vec!["ime-missing"]
+        vec![("ime-missing", "ime-logs")]
     );
     assert_eq!(finding.coverage_gap_ids, vec!["ime-logs"]);
 }
@@ -5172,8 +5337,332 @@ fn raw_export_record(
         sensitivity: EspSensitivity::Sensitive,
         parse_state: EspParseState::Raw,
         access_state: EspSourceAccessState::Available,
-        evidence: vec![evidence_ref(id)],
+        evidence: vec![evidence_ref_from(id, source_artifact_id)],
     }
+}
+
+#[test]
+fn redaction_projection_removes_json_quoted_tokens_and_authorization() {
+    let mut snapshot = findings_snapshot();
+    let mut access_token = raw_export_record(
+        "json-secret-one",
+        EspSourceKind::DeploymentLog,
+        "deployment-log",
+        None,
+        r#"{"access_token":"opaque-access-token-value"}"#,
+    );
+    access_token.sensitivity = EspSensitivity::Public;
+    let mut authorization = raw_export_record(
+        "json-secret-two",
+        EspSourceKind::ImeLog,
+        "ime-log",
+        None,
+        r#"{"authorization" : "opaque-authorization-value"}"#,
+    );
+    authorization.sensitivity = EspSensitivity::Public;
+    snapshot.raw_evidence = vec![access_token, authorization];
+
+    assert!(redacted_export_projection(&snapshot)
+        .raw_evidence
+        .is_empty());
+    assert_eq!(snapshot.raw_evidence.len(), 2);
+}
+
+#[test]
+fn redaction_projection_masks_json_quoted_secret_keys() {
+    let mut snapshot = findings_snapshot();
+    let mut api_key = raw_export_record(
+        "json-config",
+        EspSourceKind::DeploymentLog,
+        "deployment-log",
+        None,
+        r#"{"api_key" : "opaque-api-key-value", "state":"safe"}"#,
+    );
+    api_key.sensitivity = EspSensitivity::Public;
+    snapshot.raw_evidence = vec![api_key];
+
+    let safe = redacted_export_projection(&snapshot);
+    let EspObservationValue::Text(value) = &safe.raw_evidence[0].raw_value else {
+        panic!("expected text raw evidence")
+    };
+    assert!(!value.contains("opaque-api-key-value"));
+    assert!(value.contains("[redacted]"));
+    assert!(value.contains("safe"));
+}
+
+#[test]
+fn redaction_projection_masks_registration_named_data_by_label() {
+    let mut snapshot = findings_snapshot();
+    snapshot.registration_events.push(EspRegistrationEvent {
+        event_id: 304,
+        record_id: Some(42),
+        status: status(
+            EspRawStatus::Text("failed".to_string()),
+            EspNormalizedStatus::Failed,
+        ),
+        message: "Device registration failed".to_string(),
+        timestamp: timestamp("2026-07-15T12:00:00Z"),
+        named_data: vec![
+            EspNamedValue {
+                name: "TenantId".to_string(),
+                value: "opaque-tenant-guid".to_string(),
+            },
+            EspNamedValue {
+                name: "AccessToken".to_string(),
+                value: "opaque-registration-token".to_string(),
+            },
+            EspNamedValue {
+                name: "State".to_string(),
+                value: "safe-state".to_string(),
+            },
+        ],
+        evidence: vec![evidence_ref("registration-sensitive")],
+    });
+
+    let safe = redacted_export_projection(&snapshot);
+    assert_eq!(
+        safe.registration_events[0].named_data[0].value,
+        "[redacted]"
+    );
+    assert_eq!(
+        safe.registration_events[0].named_data[1].value,
+        "[redacted]"
+    );
+    assert_eq!(
+        safe.registration_events[0].named_data[2].value,
+        "safe-state"
+    );
+    assert_eq!(
+        snapshot.registration_events[0].named_data[0].value,
+        "opaque-tenant-guid"
+    );
+}
+
+#[test]
+fn redaction_projection_scrubs_raw_metadata_and_all_matching_evidence_references() {
+    let sid = "S-1-5-21-111-222-333-1001";
+    let source_artifact_id = format!("source:{sid}:person@example.test");
+    let evidence_id = format!(r"evidence:{sid}:C:\Users\Adam.Gell\trace.log");
+    let evidence = || evidence_ref_from(&evidence_id, &source_artifact_id);
+    let mut snapshot = findings_snapshot();
+    snapshot.identity.evidence = vec![evidence()];
+    snapshot.profile = Some(EspProfileEvidence {
+        profile_name: None,
+        deployment_profile_id: None,
+        correlation_id: None,
+        tenant_domain: None,
+        tenant_id: None,
+        oobe_config: None,
+        profile_download_time: None,
+        join_mode: None,
+        odj_applied: None,
+        skip_domain_connectivity_check: None,
+        device_preparation: None,
+        evidence: vec![evidence()],
+    });
+    snapshot.sessions.push(EspSession {
+        session_id: format!("session|source|classic:user:{sid}:time|0"),
+        kind: EspSessionKind::Classic,
+        scope: EspScope::User,
+        user_sid: Some(sensitive(sid)),
+        started_at: None,
+        ended_at: None,
+        phase: EspPhase::AccountSetup,
+        is_latest: true,
+        workload_ids: vec![format!("workload|source|classic:user:{sid}:app|0")],
+        evidence: vec![evidence()],
+    });
+    let mut workload = findings_workload(
+        "metadata-reference",
+        EspTrackedKind::Win32App,
+        EspNormalizedStatus::Installing,
+        Some(true),
+        "2026-07-15T12:00:00Z",
+    );
+    workload.workload_id = format!("workload|source|classic:user:{sid}:app|0");
+    workload.session_id = snapshot.sessions[0].session_id.clone();
+    workload.evidence = vec![evidence()];
+    snapshot.workloads.push(workload);
+    let mut process_context = observation_context(&evidence_id);
+    process_context.evidence_ref = evidence();
+    process_context.provenance.source_artifact_id = source_artifact_id.clone();
+    process_context.provenance.file_path =
+        Some(r"C:\Users\Adam.Gell\AppData\Local\Temp\installer-inventory.json".to_string());
+    snapshot
+        .installer_correlations
+        .push(EspInstallerCorrelation {
+            correlation_id: "metadata-correlation".to_string(),
+            workload_id: Some(snapshot.workloads[0].workload_id.clone()),
+            confidence: EspCorrelationConfidence::Exact,
+            reason: "safe exact correlation".to_string(),
+            candidate_workload_ids: vec![],
+            process_observations: vec![EspProcessObservation {
+                context: process_context,
+                pid: 42,
+                process_start_time: timestamp("2026-07-15T12:00:00Z"),
+                parent_pid: None,
+                executable_name: "msiexec.exe".to_string(),
+                sanitized_command_line: None,
+                referenced_log_path: None,
+                app_id: Some("safe-app".to_string()),
+                product_code: None,
+            }],
+            evidence: vec![evidence()],
+        });
+    snapshot.node_cache.push(EspNodeCacheEntry {
+        index: 1,
+        node_uri: "./Vendor/MSFT/Node".to_string(),
+        expected_value: None,
+        sensitivity: EspSensitivity::Public,
+        evidence: vec![evidence()],
+    });
+    snapshot.activity.push(EspTimelineEntry {
+        entry_id: "timeline-safe".to_string(),
+        timestamp: timestamp("2026-07-15T12:00:00Z"),
+        kind: EspTimelineKind::Other,
+        title: "Safe timeline entry".to_string(),
+        detail: None,
+        status: None,
+        evidence: vec![evidence()],
+    });
+    snapshot.findings.push(EspDiagnosticFinding {
+        finding_id: "safe-finding".to_string(),
+        severity: EspFindingSeverity::Info,
+        confidence: EspFindingConfidence::High,
+        title: "Safe finding".to_string(),
+        summary: "Safe summary".to_string(),
+        recommended_checks: vec!["Safe check".to_string()],
+        evidence: vec![evidence()],
+        coverage_gap_ids: vec![],
+    });
+    snapshot.coverage.push(EspArtifactCoverage {
+        artifact_id: "safe-coverage".to_string(),
+        family: "Safe coverage".to_string(),
+        status: EspArtifactStatus::Available,
+        detail: None,
+        observed_at_utc: "2026-07-15T12:00:00Z".to_string(),
+        evidence: vec![evidence()],
+    });
+    let mut graph_app = EspGraphAppRecord {
+        app_id: "safe-app".to_string(),
+        display_name: None,
+        tracked_on_enrollment_status: Some(true),
+        status: None,
+        assignments: vec![],
+        evidence: vec![evidence()],
+    };
+    graph_app.assignments.push(EspGraphAssignment {
+        assignment_id: "safe-assignment".to_string(),
+        target_id: None,
+        filter_id: None,
+        intent: EspGraphAssignmentIntent::Required,
+        target_kind: EspGraphTargetKind::AllDevices,
+        targeting: EspGraphTargeting::Declared,
+        evidence: vec![evidence()],
+    });
+    snapshot.graph = Some(findings_graph_overlay(graph_app));
+
+    let mut raw = raw_export_record(
+        &format!("raw|{source_artifact_id}|{evidence_id}|0"),
+        EspSourceKind::Registry,
+        &source_artifact_id,
+        Some(&format!("Value:{sid}:person@example.test")),
+        "safe-value",
+    );
+    raw.sensitivity = EspSensitivity::Public;
+    raw.provenance.registry.as_mut().unwrap().key = format!(r"SOFTWARE\ProfileList\{sid}");
+    raw.evidence = vec![evidence()];
+    snapshot.raw_evidence = vec![raw];
+    let original = snapshot.clone();
+
+    let safe = redacted_export_projection(&snapshot);
+    let safe_json = serde_json::to_string(&safe).unwrap();
+    assert!(!safe_json.contains(sid));
+    assert!(!safe_json.contains("person@example.test"));
+    assert!(!safe_json.contains("Adam.Gell"));
+
+    let expected = &safe.raw_evidence[0].evidence[0];
+    assert!(expected.evidence_id.contains("[redacted-sid-1]"));
+    assert!(expected.source_artifact_id.contains("[redacted-sid-1]"));
+    for matching in [
+        &safe.identity.evidence[0],
+        &safe.profile.as_ref().unwrap().evidence[0],
+        &safe.sessions[0].evidence[0],
+        &safe.workloads[0].evidence[0],
+        &safe.installer_correlations[0].evidence[0],
+        &safe.installer_correlations[0].process_observations[0]
+            .context
+            .evidence_ref,
+        &safe.node_cache[0].evidence[0],
+        &safe.activity[0].evidence[0],
+        &safe.findings[0].evidence[0],
+        &safe.coverage[0].evidence[0],
+        &safe.graph.as_ref().unwrap().apps.data.as_ref().unwrap()[0].evidence[0],
+        &safe.graph.as_ref().unwrap().apps.data.as_ref().unwrap()[0].assignments[0].evidence[0],
+    ] {
+        assert_eq!(matching, expected);
+    }
+    assert!(safe.raw_evidence[0].record_id.contains("[redacted-sid-1]"));
+    assert_eq!(
+        safe.raw_evidence[0].provenance.source_artifact_id,
+        expected.source_artifact_id
+    );
+    assert_eq!(
+        safe.installer_correlations[0].process_observations[0]
+            .context
+            .provenance
+            .source_artifact_id,
+        expected.source_artifact_id
+    );
+    assert!(safe.raw_evidence[0]
+        .provenance
+        .registry
+        .as_ref()
+        .unwrap()
+        .value_name
+        .as_ref()
+        .unwrap()
+        .contains("[redacted-sid-1]"));
+    assert_eq!(redacted_export_projection(&snapshot), safe);
+    assert_eq!(snapshot, original);
+}
+
+#[test]
+fn redaction_projection_keeps_distinct_email_and_profile_references_distinct() {
+    let mut snapshot = findings_snapshot();
+    snapshot.raw_evidence = [("Alice", "alice@example.test"), ("Bob", "bob@example.test")]
+        .into_iter()
+        .enumerate()
+        .map(|(ordinal, (user, email))| {
+            let source_artifact_id = format!("source:{email}");
+            let evidence_id = format!(r"C:\Users\{user}\trace.log");
+            let mut record = raw_export_record(
+                &format!("raw|{source_artifact_id}|{evidence_id}|{ordinal}"),
+                EspSourceKind::DeploymentLog,
+                &source_artifact_id,
+                None,
+                "safe-value",
+            );
+            record.sensitivity = EspSensitivity::Public;
+            record.evidence = vec![evidence_ref_from(&evidence_id, &source_artifact_id)];
+            record
+        })
+        .collect();
+
+    let safe = redacted_export_projection(&snapshot);
+    assert_ne!(
+        safe.raw_evidence[0].evidence[0].source_artifact_id,
+        safe.raw_evidence[1].evidence[0].source_artifact_id
+    );
+    assert_ne!(
+        safe.raw_evidence[0].evidence[0].evidence_id,
+        safe.raw_evidence[1].evidence[0].evidence_id
+    );
+    let safe_json = serde_json::to_string(&safe).unwrap();
+    for sensitive in ["Alice", "Bob", "alice@example.test", "bob@example.test"] {
+        assert!(!safe_json.contains(sensitive));
+    }
+    assert_eq!(redacted_export_projection(&snapshot), safe);
 }
 
 #[test]

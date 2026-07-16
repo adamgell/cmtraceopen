@@ -35,7 +35,7 @@ fn push_failed_blocking_app(
     snapshot: &EspDiagnosticsSnapshot,
     findings: &mut Vec<EspDiagnosticFinding>,
 ) {
-    let workloads = snapshot.workloads.iter().filter(|workload| {
+    let workloads = current_workloads(snapshot).filter(|workload| {
         workload.blocking == Some(true)
             && is_app_kind(&workload.kind)
             && workload.status.normalized == EspNormalizedStatus::Failed
@@ -63,7 +63,7 @@ fn push_stalled_workload(
     let Some(generated_at) = parse_rfc3339(&snapshot.generated_at_utc) else {
         return;
     };
-    let workloads = snapshot.workloads.iter().filter(|workload| {
+    let workloads = current_workloads(snapshot).filter(|workload| {
         if !matches!(
             workload.status.normalized,
             EspNormalizedStatus::Downloading
@@ -218,9 +218,7 @@ fn push_unprocessed_kind(
     summary: &str,
     check: &str,
 ) {
-    let workloads = snapshot
-        .workloads
-        .iter()
+    let workloads = current_workloads(snapshot)
         .filter(|workload| workload.kind == kind && is_not_processed(&workload.status.normalized));
     let evidence = collect_evidence(workloads.flat_map(|workload| workload.evidence.iter()));
     push_finding(
@@ -394,8 +392,8 @@ fn push_malformed_source(
             EspFindingSeverity::Warning,
             EspFindingConfidence::High,
             "A diagnostic source is malformed",
-            "At least one cited source failed parsing; its raw evidence remains available for inspection.",
-            "Inspect the cited raw source record and its parse state.",
+            "At least one cited diagnostic source failed parsing.",
+            "Inspect the cited source coverage and any available raw evidence.",
             evidence,
             gaps,
         ),
@@ -555,6 +553,28 @@ fn is_successful_terminal_status(status: &EspNormalizedStatus) -> bool {
             | EspNormalizedStatus::Skipped
             | EspNormalizedStatus::Uninstalled
     )
+}
+
+fn current_workloads(snapshot: &EspDiagnosticsSnapshot) -> impl Iterator<Item = &EspWorkload> {
+    let sessionless = snapshot.sessions.is_empty();
+    let latest_session_ids = snapshot
+        .sessions
+        .iter()
+        .filter(|session| session.is_latest)
+        .map(|session| session.session_id.as_str())
+        .collect::<BTreeSet<_>>();
+    let latest_workload_ids = snapshot
+        .sessions
+        .iter()
+        .filter(|session| session.is_latest)
+        .flat_map(|session| session.workload_ids.iter().map(String::as_str))
+        .collect::<BTreeSet<_>>();
+
+    snapshot.workloads.iter().filter(move |workload| {
+        sessionless
+            || (latest_session_ids.contains(workload.session_id.as_str())
+                && latest_workload_ids.contains(workload.workload_id.as_str()))
+    })
 }
 
 fn normalized_timestamp(timestamp: &EspTimestamp) -> Option<DateTime<Utc>> {
