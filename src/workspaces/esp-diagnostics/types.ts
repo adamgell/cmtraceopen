@@ -648,6 +648,16 @@ export interface EspGraphOverlay {
   scripts: GraphSection<EspGraphScriptRecord[]>;
 }
 
+export interface EspGraphPolicyReference {
+  id: string;
+  kind: EspGraphPolicyKind;
+}
+
+export interface EspGraphScriptReference {
+  id: string;
+  kind: EspGraphScriptKind;
+}
+
 export interface EspDiagnosticsSnapshot {
   schemaVersion: number;
   scenario: EspScenario;
@@ -707,8 +717,12 @@ export interface EspGraphRequest {
   identity: EspIdentityEvidence;
   workloadIds: string[];
   selectedManagedDeviceId: string | null;
-  evidenceWindowStartUtc?: string | null;
-  evidenceWindowEndUtc?: string | null;
+  evidenceWindowStartUtc: string | null;
+  evidenceWindowEndUtc: string | null;
+  enrollmentConfigurationIds: string[];
+  appIds: string[];
+  policyReferences: EspGraphPolicyReference[];
+  scriptReferences: EspGraphScriptReference[];
 }
 
 export interface EspRelaunchResult {

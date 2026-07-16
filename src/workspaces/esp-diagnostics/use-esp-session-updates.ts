@@ -12,7 +12,9 @@ import {
 import type {
   EspDiagnosticsSnapshot,
   EspGraphOverlay,
+  EspGraphPolicyKind,
   EspGraphRequest,
+  EspGraphScriptKind,
   EspSessionState,
   EspSessionUpdate,
   EspUpdateReason,
@@ -89,29 +91,133 @@ export function isEspSessionUpdate(value: unknown): value is EspSessionUpdate {
   );
 }
 
+const GRAPH_GUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function normalizeGraphGuid(value: string | null | undefined): string | null {
+  const normalized = value?.trim().toLowerCase() ?? "";
+  return GRAPH_GUID_PATTERN.test(normalized) ? normalized : null;
+}
+
+function sortedReferences<K extends string>(
+  references: Map<string, K>,
+): Array<{ id: string; kind: K }> {
+  return Array.from(references, ([id, kind]) => ({ id, kind })).sort(
+    (left, right) =>
+      left.id.localeCompare(right.id) || left.kind.localeCompare(right.kind),
+  );
+}
+
 function createGraphRequest(
   snapshot: EspDiagnosticsSnapshot,
   requestId: string,
 ): EspGraphRequest {
   const evidenceWindow = getEvidenceWindow(snapshot);
+  const appIds = new Set<string>();
+  const policyReferences = new Map<string, EspGraphPolicyKind>();
+  const scriptReferences = new Map<string, EspGraphScriptKind>();
+  for (const workload of snapshot.workloads) {
+    const id = normalizeGraphGuid(workload.rawIdentifier);
+    if (!id) {
+      continue;
+    }
+    switch (workload.kind) {
+      case "modernApp":
+      case "win32App":
+      case "devicePreparationWorkload":
+        appIds.add(id);
+        break;
+      case "policy":
+        policyReferences.set(id, "deviceConfiguration");
+        break;
+      case "scepCertificate":
+        policyReferences.set(id, "scepCertificate");
+        break;
+      case "platformScript":
+        scriptReferences.set(id, "platformScript");
+        break;
+    }
+  }
+  for (const value of snapshot.profile?.devicePreparation?.scriptIds ?? []) {
+    const id = normalizeGraphGuid(value);
+    if (id) {
+      scriptReferences.set(id, "platformScript");
+    }
+  }
+  const enrollmentConfigurationIds = new Set<string>();
+  const graph = snapshot.graph;
+  if (graph) {
+    for (const section of [
+      graph.deploymentProfile,
+      graph.intendedDeploymentProfile,
+    ]) {
+      for (const value of section.data?.selectedMobileAppIds ?? []) {
+        const id = normalizeGraphGuid(value);
+        if (id) {
+          appIds.add(id);
+        }
+      }
+    }
+    for (const value of graph.enrollmentConfiguration.data
+      ?.selectedMobileAppIds ?? []) {
+      const id = normalizeGraphGuid(value);
+      if (id) {
+        appIds.add(id);
+      }
+    }
+    for (const record of graph.apps.data ?? []) {
+      const id = normalizeGraphGuid(record.appId);
+      if (id) {
+        appIds.add(id);
+      }
+    }
+    const configurationId = normalizeGraphGuid(
+      graph.enrollmentConfiguration.data?.configurationId,
+    );
+    if (configurationId) {
+      enrollmentConfigurationIds.add(configurationId);
+    }
+    for (const event of graph.autopilotEvents.data ?? []) {
+      const id = normalizeGraphGuid(event.enrollmentConfigurationId);
+      if (id) {
+        enrollmentConfigurationIds.add(id);
+      }
+    }
+    for (const record of graph.policies.data ?? []) {
+      const id = normalizeGraphGuid(record.policyId);
+      if (id) {
+        policyReferences.set(id, record.kind);
+      }
+    }
+    for (const record of graph.scripts.data ?? []) {
+      const id = normalizeGraphGuid(record.scriptId);
+      if (id) {
+        scriptReferences.set(id, record.kind);
+      }
+    }
+  }
+  const sortedAppIds = Array.from(appIds).sort();
   return {
     requestId,
     identity: snapshot.identity,
-    workloadIds: Array.from(
-      new Set(
-        snapshot.workloads
-          .map((workload) => workload.rawIdentifier || workload.workloadId)
-          .filter((id) => id.length > 0),
-      ),
+    workloadIds: sortedAppIds,
+    selectedManagedDeviceId: normalizeGraphGuid(
+      graph?.deviceMatch.data?.selected?.managedDeviceId,
     ),
-    selectedManagedDeviceId: null,
     evidenceWindowStartUtc: evidenceWindow?.start ?? null,
     evidenceWindowEndUtc: evidenceWindow?.end ?? null,
+    enrollmentConfigurationIds: Array.from(enrollmentConfigurationIds).sort(),
+    appIds: sortedAppIds,
+    policyReferences: sortedReferences(policyReferences),
+    scriptReferences: sortedReferences(scriptReferences),
   };
 }
 
+const RFC3339_OFFSET_TIMESTAMP_PATTERN =
+  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/i;
+
 function timestampInstant(value: string | null | undefined): number | null {
-  if (!value) {
+  if (!value || !RFC3339_OFFSET_TIMESTAMP_PATTERN.test(value)) {
     return null;
   }
   const instant = Date.parse(value);
@@ -121,9 +227,13 @@ function timestampInstant(value: string | null | undefined): number | null {
 function timestampUtc(
   timestamp: { normalizedUtc: string | null; rawText: string } | null,
 ): string | null {
-  const value = timestamp?.normalizedUtc ?? timestamp?.rawText ?? null;
-  const instant = timestampInstant(value);
-  return instant == null ? null : new Date(instant).toISOString();
+  for (const value of [timestamp?.normalizedUtc, timestamp?.rawText]) {
+    const instant = timestampInstant(value);
+    if (instant != null) {
+      return new Date(instant).toISOString();
+    }
+  }
+  return null;
 }
 
 function getEvidenceWindow(

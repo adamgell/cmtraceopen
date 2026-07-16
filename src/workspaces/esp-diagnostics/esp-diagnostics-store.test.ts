@@ -26,6 +26,7 @@ import type {
   EspGraphOverlay,
   EspGraphRequest,
   EspSessionUpdate,
+  GraphSection,
 } from "./types";
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -99,6 +100,42 @@ function makeSnapshot(
   };
 }
 
+function makeWorkload(
+  kind: EspDiagnosticsSnapshot["workloads"][number]["kind"],
+  rawIdentifier: string,
+  workloadId = `local-${kind}-${rawIdentifier}`,
+): EspDiagnosticsSnapshot["workloads"][number] {
+  return {
+    workloadId,
+    sessionId: "session-a",
+    kind,
+    scope: "device",
+    rawIdentifier,
+    displayName: null,
+    status: {
+      raw: "pending",
+      normalized: "pending",
+      display: "Pending",
+      detail: null,
+    },
+    timestamps: {
+      firstObserved: {
+        rawText: "2026-07-15T18:00:00Z",
+        originalOffset: "Z",
+        normalizedUtc: "2026-07-15T18:00:00Z",
+        kind: "utc",
+      },
+      started: null,
+      ended: null,
+      lastUpdated: null,
+    },
+    exitCode: null,
+    enforcementErrorCode: null,
+    blocking: null,
+    evidence: [],
+  };
+}
+
 function makeOverlay(requestId: string): EspGraphOverlay {
   const skipped = {
     status: "skipped" as const,
@@ -145,6 +182,19 @@ function makeOverlay(requestId: string): EspGraphOverlay {
     apps: skipped,
     policies: skipped,
     scripts: skipped,
+  };
+}
+
+function availableGraphSection<T>(
+  data: T,
+  apiVersion: "v1.0" | "beta" = "beta",
+): GraphSection<T> {
+  return {
+    status: "available",
+    requiredScope: null,
+    apiVersion,
+    data,
+    error: null,
   };
 }
 
@@ -233,6 +283,12 @@ describe("ESP typed command wrappers", () => {
       identity: snapshot.identity,
       workloadIds: [],
       selectedManagedDeviceId: null,
+      evidenceWindowStartUtc: null,
+      evidenceWindowEndUtc: null,
+      enrollmentConfigurationIds: [],
+      appIds: [],
+      policyReferences: [],
+      scriptReferences: [],
     };
     await expect(graphFetchEspDiagnostics(request)).resolves.toBe(overlay);
     await expect(graphCancelEspDiagnostics("graph-a")).resolves.toBeUndefined();
@@ -1097,6 +1153,371 @@ describe("ESP Graph overlay state", () => {
 });
 
 describe("ESP Graph scheduling", () => {
+  it("sends only typed canonical Graph identifiers from local evidence to the provider", async () => {
+    const appA = "11111111-1111-4111-8111-111111111111";
+    const appB = "22222222-2222-4222-8222-222222222222";
+    const msiProductCode = "33333333-3333-4333-8333-333333333333";
+    const officeProduct = "44444444-4444-4444-8444-444444444444";
+    const policy = "55555555-5555-4555-8555-555555555555";
+    const certificate = "66666666-6666-4666-8666-666666666666";
+    const script = "77777777-7777-4777-8777-777777777777";
+    const profileScript = "88888888-8888-4888-8888-888888888888";
+    const deploymentProfile = "99999999-9999-4999-8999-999999999999";
+    const correlation = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const localEnrollment = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+    const fetchGraph = vi.fn(async (request: EspGraphRequest) =>
+      makeOverlay(request.requestId),
+    );
+    const coordinator = createEspGraphCoordinator({
+      fetchGraph,
+      cancelGraph: vi.fn(async () => undefined),
+      createRequestId: () => "graph-local-contract",
+    });
+    const snapshot = makeSnapshot(["local-contract"]);
+    snapshot.workloads = [
+      makeWorkload("win32App", `  ${appA.toUpperCase()}  `),
+      makeWorkload("modernApp", appA),
+      makeWorkload("devicePreparationWorkload", appB),
+      makeWorkload("msi", msiProductCode),
+      makeWorkload("office", officeProduct),
+      makeWorkload("policy", policy),
+      makeWorkload("scepCertificate", certificate),
+      makeWorkload("platformScript", script),
+      makeWorkload("win32App", "not-a-guid"),
+      makeWorkload("policy", "   ", "internal-policy-workload"),
+    ];
+    snapshot.profile = {
+      profileName: "Local profile",
+      deploymentProfileId: deploymentProfile,
+      correlationId: correlation,
+      tenantDomain: null,
+      tenantId: null,
+      oobeConfig: null,
+      profileDownloadTime: null,
+      joinMode: null,
+      odjApplied: null,
+      skipDomainConnectivityCheck: null,
+      devicePreparation: {
+        agentDownloadTimeoutSeconds: null,
+        pageTimeoutSeconds: null,
+        allowSkipOnFailure: null,
+        allowDiagnostics: null,
+        scriptIds: [profileScript, ` ${profileScript.toUpperCase()} `, "bad"],
+        evidence: [],
+      },
+      evidence: [],
+    };
+    snapshot.enrollments = [
+      {
+        enrollmentId: localEnrollment,
+        providerId: deploymentProfile,
+        tenantId: null,
+        userPrincipalName: null,
+        entdmId: null,
+        settings: {
+          deviceEspEnabled: null,
+          userEspEnabled: null,
+          timeoutSeconds: null,
+          blocking: null,
+          allowReset: null,
+          allowRetry: null,
+          continueAnyway: null,
+        },
+        evidence: [],
+      },
+    ];
+    useUiStore.setState({ graphApiEnabled: true, graphApiStatus: "connected" });
+    useEspDiagnosticsStore.getState().beginAnalysis("analysis-local-contract");
+    useEspDiagnosticsStore
+      .getState()
+      .applyAnalysis("analysis-local-contract", snapshot);
+
+    await coordinator.reconcile();
+
+    expect(fetchGraph).toHaveBeenCalledWith({
+      requestId: "graph-local-contract",
+      identity: snapshot.identity,
+      workloadIds: [appA, appB],
+      selectedManagedDeviceId: null,
+      evidenceWindowStartUtc: null,
+      evidenceWindowEndUtc: null,
+      enrollmentConfigurationIds: [],
+      appIds: [appA, appB],
+      policyReferences: [
+        { id: policy, kind: "deviceConfiguration" },
+        { id: certificate, kind: "scepCertificate" },
+      ],
+      scriptReferences: [
+        { id: script, kind: "platformScript" },
+        { id: profileScript, kind: "platformScript" },
+      ],
+    });
+    const request = fetchGraph.mock.calls[0][0] as unknown as Record<
+      string,
+      unknown
+    >;
+    expect(JSON.stringify(request)).not.toContain(msiProductCode);
+    expect(JSON.stringify(request)).not.toContain(officeProduct);
+    expect(JSON.stringify(request)).not.toContain(deploymentProfile);
+    expect(JSON.stringify(request)).not.toContain(correlation);
+    expect(JSON.stringify(request)).not.toContain(localEnrollment);
+    expect(JSON.stringify(request)).not.toContain("internal-policy-workload");
+    coordinator.dispose();
+  });
+
+  it("refines typed references from prior Graph enrollment and profile evidence", async () => {
+    const selectedManagedDevice = "10101010-1010-4010-8010-101010101010";
+    const localApp = "11111111-1111-4111-8111-111111111111";
+    const profileApp = "12121212-1212-4212-8212-121212121212";
+    const intendedProfileApp = "13131313-1313-4313-8313-131313131313";
+    const enrollmentApp = "14141414-1414-4414-8414-141414141414";
+    const remoteApp = "15151515-1515-4515-8515-151515151515";
+    const enrollmentA = "20202020-2020-4020-8020-202020202020";
+    const enrollmentB = "21212121-2121-4121-8121-212121212121";
+    const deviceConfiguration = "30303030-3030-4030-8030-303030303030";
+    const compliance = "31313131-3131-4131-8131-313131313131";
+    const configurationPolicy = "32323232-3232-4232-8232-323232323232";
+    const certificate = "33333333-3333-4333-8333-333333333333";
+    const platformScript = "40404040-4040-4040-8040-404040404040";
+    const remediation = "41414141-4141-4141-8141-414141414141";
+    const localDeploymentProfile = "50505050-5050-4050-8050-505050505050";
+    const localCorrelation = "51515151-5151-4151-8151-515151515151";
+    const overlay = makeOverlay("prior-overlay");
+    overlay.deviceMatch.data!.selected!.managedDeviceId = ` ${selectedManagedDevice.toUpperCase()} `;
+    overlay.deploymentProfile = availableGraphSection({
+      profileId: "60606060-6060-4060-8060-606060606060",
+      displayName: "Assigned profile",
+      joinMode: "entra",
+      selectedMobileAppIds: [profileApp, "not-an-app-id"],
+      evidence: [],
+    });
+    overlay.intendedDeploymentProfile = availableGraphSection({
+      profileId: "61616161-6161-4161-8161-616161616161",
+      displayName: "Intended profile",
+      joinMode: "entra",
+      selectedMobileAppIds: [intendedProfileApp, profileApp.toUpperCase()],
+      evidence: [],
+    });
+    overlay.autopilotEvents = availableGraphSection([
+      {
+        eventId: "event-a",
+        managedDeviceId: selectedManagedDevice,
+        enrollmentConfigurationId: enrollmentA,
+        eventTime: null,
+        deploymentState: {
+          raw: "success",
+          normalized: "succeeded",
+          display: "success",
+          detail: null,
+        },
+        policyStatusDetails: [],
+        evidence: [],
+      },
+      {
+        eventId: "event-b",
+        managedDeviceId: selectedManagedDevice,
+        enrollmentConfigurationId: enrollmentB.toUpperCase(),
+        eventTime: null,
+        deploymentState: {
+          raw: "success",
+          normalized: "succeeded",
+          display: "success",
+          detail: null,
+        },
+        policyStatusDetails: [],
+        evidence: [],
+      },
+      {
+        eventId: "event-invalid",
+        managedDeviceId: selectedManagedDevice,
+        enrollmentConfigurationId: "not-a-configuration-id",
+        eventTime: null,
+        deploymentState: {
+          raw: "unknown",
+          normalized: "unknown",
+          display: "unknown",
+          detail: null,
+        },
+        policyStatusDetails: [],
+        evidence: [],
+      },
+    ]);
+    overlay.enrollmentConfiguration = availableGraphSection({
+      configurationId: enrollmentA.toUpperCase(),
+      displayName: "ESP",
+      showInstallationProgress: true,
+      deviceEspEnabled: null,
+      userEspEnabled: null,
+      disableUserStatusTrackingAfterFirstUser: false,
+      timeoutMinutes: 60,
+      selectedMobileAppIds: [enrollmentApp, profileApp],
+      assignments: [],
+      evidence: [],
+    });
+    overlay.apps = availableGraphSection(
+      [remoteApp, "invalid-app"].map((appId) => ({
+        appId,
+        displayName: null,
+        trackedOnEnrollmentStatus: null,
+        status: null,
+        intentState: {
+          status: "notFound" as const,
+          requiredScope: null,
+          apiVersion: "beta" as const,
+          data: null,
+          error: null,
+        },
+        assignments: [],
+        evidence: [],
+      })),
+      "v1.0",
+    );
+    overlay.policies = availableGraphSection([
+      {
+        policyId: deviceConfiguration,
+        displayName: null,
+        kind: "deviceConfiguration",
+        status: null,
+        assignments: [],
+        evidence: [],
+      },
+      {
+        policyId: compliance,
+        displayName: null,
+        kind: "compliance",
+        status: null,
+        assignments: [],
+        evidence: [],
+      },
+      {
+        policyId: configurationPolicy,
+        displayName: null,
+        kind: "configurationPolicy",
+        status: null,
+        assignments: [],
+        evidence: [],
+      },
+      {
+        policyId: certificate,
+        displayName: null,
+        kind: "scepCertificate",
+        status: null,
+        assignments: [],
+        evidence: [],
+      },
+      {
+        policyId: "invalid-policy",
+        displayName: null,
+        kind: "compliance",
+        status: null,
+        assignments: [],
+        evidence: [],
+      },
+    ]);
+    overlay.scripts = availableGraphSection([
+      {
+        scriptId: platformScript,
+        displayName: null,
+        kind: "platformScript",
+        status: null,
+        assignments: [],
+        evidence: [],
+      },
+      {
+        scriptId: remediation,
+        displayName: null,
+        kind: "remediation",
+        status: null,
+        assignments: [],
+        evidence: [],
+      },
+      {
+        scriptId: "invalid-script",
+        displayName: null,
+        kind: "remediation",
+        status: null,
+        assignments: [],
+        evidence: [],
+      },
+    ]);
+    const snapshot = makeSnapshot(["overlay-contract"]);
+    snapshot.workloads = [
+      makeWorkload("win32App", localApp),
+      makeWorkload("policy", compliance),
+      makeWorkload("platformScript", remediation),
+    ];
+    snapshot.profile = {
+      profileName: "Local profile",
+      deploymentProfileId: localDeploymentProfile,
+      correlationId: localCorrelation,
+      tenantDomain: null,
+      tenantId: null,
+      oobeConfig: null,
+      profileDownloadTime: null,
+      joinMode: null,
+      odjApplied: null,
+      skipDomainConnectivityCheck: null,
+      devicePreparation: null,
+      evidence: [],
+    };
+    snapshot.graph = overlay;
+    const fetchGraph = vi.fn(async (request: EspGraphRequest) =>
+      makeOverlay(request.requestId),
+    );
+    const coordinator = createEspGraphCoordinator({
+      fetchGraph,
+      cancelGraph: vi.fn(async () => undefined),
+      createRequestId: () => "graph-overlay-contract",
+    });
+    useUiStore.setState({ graphApiEnabled: true, graphApiStatus: "connected" });
+    useEspDiagnosticsStore
+      .getState()
+      .beginAnalysis("analysis-overlay-contract");
+    useEspDiagnosticsStore
+      .getState()
+      .applyAnalysis("analysis-overlay-contract", snapshot);
+
+    await coordinator.reconcile();
+
+    expect(fetchGraph).toHaveBeenCalledWith({
+      requestId: "graph-overlay-contract",
+      identity: snapshot.identity,
+      workloadIds: [
+        localApp,
+        profileApp,
+        intendedProfileApp,
+        enrollmentApp,
+        remoteApp,
+      ].sort(),
+      selectedManagedDeviceId: selectedManagedDevice,
+      evidenceWindowStartUtc: null,
+      evidenceWindowEndUtc: null,
+      enrollmentConfigurationIds: [enrollmentA, enrollmentB],
+      appIds: [
+        localApp,
+        profileApp,
+        intendedProfileApp,
+        enrollmentApp,
+        remoteApp,
+      ].sort(),
+      policyReferences: [
+        { id: deviceConfiguration, kind: "deviceConfiguration" },
+        { id: compliance, kind: "compliance" },
+        { id: configurationPolicy, kind: "configurationPolicy" },
+        { id: certificate, kind: "scepCertificate" },
+      ],
+      scriptReferences: [
+        { id: platformScript, kind: "platformScript" },
+        { id: remediation, kind: "remediation" },
+      ],
+    });
+    const serialized = JSON.stringify(fetchGraph.mock.calls[0][0]);
+    expect(serialized).not.toContain(localDeploymentProfile);
+    expect(serialized).not.toContain(localCorrelation);
+    expect(serialized).not.toContain("invalid-");
+    coordinator.dispose();
+  });
+
   it("sends the latest local ESP session window with Graph event requests", async () => {
     const fetchGraph = vi.fn(async (request: EspGraphRequest) =>
       makeOverlay(request.requestId),
@@ -1131,16 +1552,16 @@ describe("ESP Graph scheduling", () => {
         scope: "device",
         userSid: null,
         startedAt: {
-          rawText: "2026-07-15T14:00:00-04:00",
-          originalOffset: "-04:00",
+          rawText: "2026-07-15T14:00:00",
+          originalOffset: null,
           normalizedUtc: "2026-07-15T18:00:00Z",
-          kind: "offset",
+          kind: "unspecified",
         },
         endedAt: {
-          rawText: "2026-07-15T15:00:00-04:00",
-          originalOffset: "-04:00",
+          rawText: "2026-07-15T15:00:00",
+          originalOffset: null,
           normalizedUtc: "2026-07-15T19:00:00Z",
-          kind: "offset",
+          kind: "unspecified",
         },
         phase: "failed",
         isLatest: true,
@@ -1163,6 +1584,128 @@ describe("ESP Graph scheduling", () => {
       }),
     );
     coordinator.dispose();
+  });
+
+  it("never interprets offset-free raw evidence timestamps in the analyst timezone", async () => {
+    vi.stubEnv("TZ", "Pacific/Kiritimati");
+    const fetchGraph = vi.fn(async (request: EspGraphRequest) =>
+      makeOverlay(request.requestId),
+    );
+    const coordinator = createEspGraphCoordinator({
+      fetchGraph,
+      cancelGraph: vi.fn(async () => undefined),
+      createRequestId: () => "graph-offset-free-window",
+    });
+    try {
+      const snapshot = makeSnapshot(["local-offset-free-window"]);
+      snapshot.sessions = [
+        {
+          sessionId: "offset-free",
+          kind: "classic",
+          scope: "device",
+          userSid: null,
+          startedAt: {
+            rawText: "2026-07-15T14:00:00",
+            originalOffset: null,
+            normalizedUtc: null,
+            kind: "unspecified",
+          },
+          endedAt: {
+            rawText: "2026-07-15T15:00:00",
+            originalOffset: null,
+            normalizedUtc: null,
+            kind: "unspecified",
+          },
+          phase: "failed",
+          isLatest: true,
+          workloadIds: [],
+          evidence: [],
+        },
+      ];
+      useUiStore.setState({
+        graphApiEnabled: true,
+        graphApiStatus: "connected",
+      });
+      useEspDiagnosticsStore
+        .getState()
+        .beginAnalysis("analysis-offset-free-window");
+      useEspDiagnosticsStore
+        .getState()
+        .applyAnalysis("analysis-offset-free-window", snapshot);
+
+      await coordinator.reconcile();
+
+      expect(fetchGraph).toHaveBeenCalledWith(
+        expect.objectContaining({
+          evidenceWindowStartUtc: null,
+          evidenceWindowEndUtc: null,
+        }),
+      );
+    } finally {
+      coordinator.dispose();
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("normalizes strict raw RFC3339 offsets independently of the analyst timezone", async () => {
+    vi.stubEnv("TZ", "America/Los_Angeles");
+    const fetchGraph = vi.fn(async (request: EspGraphRequest) =>
+      makeOverlay(request.requestId),
+    );
+    const coordinator = createEspGraphCoordinator({
+      fetchGraph,
+      cancelGraph: vi.fn(async () => undefined),
+      createRequestId: () => "graph-explicit-offset-window",
+    });
+    try {
+      const snapshot = makeSnapshot(["local-explicit-offset-window"]);
+      snapshot.sessions = [
+        {
+          sessionId: "explicit-offset",
+          kind: "classic",
+          scope: "device",
+          userSid: null,
+          startedAt: {
+            rawText: "2026-07-15T14:00:00+05:30",
+            originalOffset: "+05:30",
+            normalizedUtc: "2026-07-15T14:00:00",
+            kind: "offset",
+          },
+          endedAt: {
+            rawText: "2026-07-15T15:00:00+05:30",
+            originalOffset: "+05:30",
+            normalizedUtc: "2026-07-15T15:00:00",
+            kind: "offset",
+          },
+          phase: "failed",
+          isLatest: true,
+          workloadIds: [],
+          evidence: [],
+        },
+      ];
+      useUiStore.setState({
+        graphApiEnabled: true,
+        graphApiStatus: "connected",
+      });
+      useEspDiagnosticsStore
+        .getState()
+        .beginAnalysis("analysis-explicit-offset-window");
+      useEspDiagnosticsStore
+        .getState()
+        .applyAnalysis("analysis-explicit-offset-window", snapshot);
+
+      await coordinator.reconcile();
+
+      expect(fetchGraph).toHaveBeenCalledWith(
+        expect.objectContaining({
+          evidenceWindowStartUtc: "2026-07-15T08:30:00.000Z",
+          evidenceWindowEndUtc: "2026-07-15T09:30:00.000Z",
+        }),
+      );
+    } finally {
+      coordinator.dispose();
+      vi.unstubAllEnvs();
+    }
   });
 
   it("keeps Graph disabled without fetching and removes only the remote overlay", async () => {

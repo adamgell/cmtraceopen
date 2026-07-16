@@ -1647,7 +1647,8 @@ fn script_kind_sort_key(kind: &EspGraphScriptKind) -> (u8, &str) {
 fn graph_status(raw: &str) -> EspStatus {
     let normalized = match raw.trim().to_ascii_lowercase().as_str() {
         "success" | "succeeded" | "installed" | "compliant" => EspNormalizedStatus::Succeeded,
-        "failure" | "failed" | "error" | "noncompliant" => EspNormalizedStatus::Failed,
+        "failure" | "failed" | "fail" | "error" | "scripterror" | "remediationfailed"
+        | "noncompliant" => EspNormalizedStatus::Failed,
         "pending" | "notinstalled" => EspNormalizedStatus::Pending,
         "installing" | "inprogress" => EspNormalizedStatus::InProgress,
         "notapplicable" | "skipped" => EspNormalizedStatus::Skipped,
@@ -1869,4 +1870,43 @@ fn device_identifier_matches(identifier: &str, device: &EspGraphManagedDevice) -
             .serial_number
             .as_ref()
             .is_some_and(|value| text_eq(identifier, &value.value))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::graph_status;
+    use cmtraceopen_parser::esp::EspNormalizedStatus;
+
+    #[test]
+    fn graph_script_status_covers_every_documented_run_state() {
+        let cases = [
+            ("unknown", EspNormalizedStatus::Unknown),
+            ("success", EspNormalizedStatus::Succeeded),
+            ("fail", EspNormalizedStatus::Failed),
+            (" SCRIPTERROR ", EspNormalizedStatus::Failed),
+            ("pending", EspNormalizedStatus::Pending),
+            ("notApplicable", EspNormalizedStatus::Skipped),
+            ("unknownFutureValue", EspNormalizedStatus::Unknown),
+        ];
+
+        for (raw, expected) in cases {
+            assert_eq!(graph_status(raw).normalized, expected, "wire value {raw}");
+        }
+    }
+
+    #[test]
+    fn graph_script_status_covers_every_documented_remediation_state() {
+        let cases = [
+            ("unknown", EspNormalizedStatus::Unknown),
+            ("skipped", EspNormalizedStatus::Skipped),
+            ("success", EspNormalizedStatus::Succeeded),
+            (" remediationFailed ", EspNormalizedStatus::Failed),
+            ("scriptError", EspNormalizedStatus::Failed),
+            ("unknownFutureValue", EspNormalizedStatus::Unknown),
+        ];
+
+        for (raw, expected) in cases {
+            assert_eq!(graph_status(raw).normalized, expected, "wire value {raw}");
+        }
+    }
 }
