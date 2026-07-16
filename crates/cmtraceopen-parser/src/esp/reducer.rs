@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 
+use chrono::{SecondsFormat, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 
 use super::models::*;
@@ -82,9 +83,11 @@ struct SnapshotProjection {
     coverage: Vec<EspArtifactCoverage>,
     raw_evidence: Vec<EspRawEvidenceRecord>,
     v2_workloads: BTreeMap<(String, usize), V2WorkloadAccumulator>,
-    platform_scripts: Vec<(usize, EspRegistryObservation)>,
+    platform_scripts: BTreeMap<(String, String), PlatformScriptAccumulator>,
     graph_observations: Vec<EspGraphObservation>,
     office_details: Vec<OfficeDetailObservation>,
+    msi_details: Vec<MsiDetailObservation>,
+    enforcement_messages: BTreeMap<String, EnforcementMessageAccumulator>,
     deferred_error_codes: Vec<DeferredErrorCode>,
 }
 
@@ -121,9 +124,11 @@ impl SnapshotProjection {
             coverage: Vec::new(),
             raw_evidence: Vec::new(),
             v2_workloads: BTreeMap::new(),
-            platform_scripts: Vec::new(),
+            platform_scripts: BTreeMap::new(),
             graph_observations: Vec::new(),
             office_details: Vec::new(),
+            msi_details: Vec::new(),
+            enforcement_messages: BTreeMap::new(),
             deferred_error_codes: Vec::new(),
         }
     }
@@ -160,14 +165,18 @@ impl SnapshotProjection {
             return;
         }
         if is_platform_script_observation(observation) {
-            self.platform_scripts.push((ordinal, observation.clone()));
+            self.accumulate_platform_script(ordinal, observation);
+            return;
+        }
+        if let Some(detail) = msi_detail_observation(ordinal, observation) {
+            self.msi_details.push(detail);
             return;
         }
         if let Some(detail) = office_detail_observation(ordinal, observation) {
             self.office_details.push(detail);
             return;
         }
-        if let Some(deferred) = deferred_error_code_observation(observation) {
+        if let Some(deferred) = deferred_error_code_observation(ordinal, observation) {
             self.deferred_error_codes.push(deferred);
             return;
         }
@@ -264,6 +273,10 @@ impl SnapshotProjection {
             self.accumulate_v2_workload(ordinal, observation);
             return;
         }
+        if is_enforcement_state_message(observation) {
+            self.accumulate_enforcement_message(ordinal, observation);
+            return;
+        }
 
         let pointer = observation.json_pointer.to_ascii_lowercase();
         if is_page_settings(observation) {
@@ -354,11 +367,15 @@ impl SnapshotProjection {
         if !is_parity_event(observation.event_id) {
             return;
         }
-        let message = observation
-            .message
-            .clone()
+        let odj_state = odj_state_details(observation);
+        let message = odj_state
+            .as_ref()
+            .map(|(message, _)| (*message).to_string())
+            .or_else(|| observation.message.clone())
             .unwrap_or_else(|| event_default_message(observation.event_id).to_string());
-        let normalized = event_normalized_status(observation.event_id);
+        let normalized = odj_state
+            .map(|(_, normalized)| normalized)
+            .unwrap_or_else(|| event_normalized_status(observation.event_id));
         let event_status = text_status(&message, normalized);
         let kind = event_timeline_kind(observation.event_id);
         let title = event_title(observation.event_id, &observation.named_data);
@@ -705,7 +722,11 @@ impl SnapshotProjection {
             escape_component(source),
             escape_component(&workload_identity)
         );
-        let raw_status = observation_raw_status(&observation.value);
+        let raw_status = if kind == EspTrackedKind::Msi {
+            EspRawStatus::Number(0)
+        } else {
+            observation_raw_status(&observation.value)
+        };
         let normalized_status = normalize_for_kind(&kind, raw_status);
         let observed = context_timestamp(&observation.context);
         let timestamps = workload_timestamps(observed.clone(), &normalized_status.normalized);
@@ -800,10 +821,10 @@ impl SnapshotProjection {
             .or_insert_with(|| V2WorkloadAccumulator {
                 workload_id: None,
                 friendly_name: None,
-                started: None,
-                ended: None,
-                exit_code: None,
-                enforcement_error_code: None,
+                started: Vec::new(),
+                ended: Vec::new(),
+                exit_codes: Vec::new(),
+                enforcement_error_codes: Vec::new(),
                 evidence: Vec::new(),
                 observations: Vec::new(),
                 states: Vec::new(),
@@ -818,15 +839,43 @@ impl SnapshotProjection {
                     raw_status: observation_raw_status(&observation.value),
                 });
             }
-            "starttime" => entry.started = timestamp_from_observation_value(&observation.value),
-            "endtime" => entry.ended = timestamp_from_observation_value(&observation.value),
+            "starttime" => {
+                if let Some(timestamp) = timestamp_from_observation_value(&observation.value) {
+                    entry.started.push(V2TimestampOccurrence {
+                        ordinal,
+                        context: observation.context.clone(),
+                        timestamp,
+                    });
+                }
+            }
+            "endtime" => {
+                if let Some(timestamp) = timestamp_from_observation_value(&observation.value) {
+                    entry.ended.push(V2TimestampOccurrence {
+                        ordinal,
+                        context: observation.context.clone(),
+                        timestamp,
+                    });
+                }
+            }
             "errorcode" => {
-                entry.exit_code =
-                    observation_text(&observation.value).map(|value| error_code(&value))
+                if let Some(raw) = observation_text(&observation.value) {
+                    entry.exit_codes.push(DeferredCodeOccurrence {
+                        ordinal,
+                        code: error_code(&raw),
+                        is_enforcement: false,
+                        context: observation.context.clone(),
+                    });
+                }
             }
             "enforcementerrorcode" => {
-                entry.enforcement_error_code =
-                    observation_text(&observation.value).map(|value| error_code(&value))
+                if let Some(raw) = observation_text(&observation.value) {
+                    entry.enforcement_error_codes.push(DeferredCodeOccurrence {
+                        ordinal,
+                        code: error_code(&raw),
+                        is_enforcement: true,
+                        context: observation.context.clone(),
+                    });
+                }
             }
             _ => unreachable!("field was validated above"),
         }
@@ -834,6 +883,115 @@ impl SnapshotProjection {
         entry
             .evidence
             .push(observation.context.evidence_ref.clone());
+    }
+
+    fn accumulate_platform_script(&mut self, ordinal: usize, observation: &EspRegistryObservation) {
+        let raw_identifier =
+            last_path_component(&observation.key).unwrap_or_else(|| observation.value_name.clone());
+        let key = (
+            observation.context.provenance.source_artifact_id.clone(),
+            raw_identifier.clone(),
+        );
+        let entry = self
+            .platform_scripts
+            .entry(key)
+            .or_insert_with(|| PlatformScriptAccumulator {
+                raw_identifier,
+                results: Vec::new(),
+                last_updated: Vec::new(),
+                evidence: Vec::new(),
+            });
+        entry
+            .evidence
+            .push(observation.context.evidence_ref.clone());
+        if observation.value_name.eq_ignore_ascii_case("Result") {
+            entry.results.push((ordinal, observation.clone()));
+        } else if observation
+            .value_name
+            .eq_ignore_ascii_case("LastUpdatedTimeUtc")
+        {
+            if let Some(timestamp) = timestamp_from_observation_value(&observation.value) {
+                entry.last_updated.push(V2TimestampOccurrence {
+                    ordinal,
+                    context: observation.context.clone(),
+                    timestamp,
+                });
+            }
+        }
+    }
+
+    fn accumulate_enforcement_message(&mut self, ordinal: usize, observation: &EspJsonObservation) {
+        let field = observation
+            .json_pointer
+            .split('/')
+            .rfind(|part| !part.is_empty())
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        let key = enforcement_message_group_key(observation);
+        let entry =
+            self.enforcement_messages
+                .entry(key)
+                .or_insert_with(|| EnforcementMessageAccumulator {
+                    identifier: None,
+                    scope: None,
+                    user_sid: None,
+                    codes: Vec::new(),
+                });
+        match field.as_str() {
+            "applicationid" | "appid" | "workloadid" | "policyid" | "id" => {
+                entry.identifier = observation_text(&observation.value)
+            }
+            "usersid" | "sid" => {
+                entry.user_sid = observation_text(&observation.value);
+                entry.scope = Some(EspScope::User);
+            }
+            "scope" => {
+                entry.scope = observation_text(&observation.value).and_then(|value| {
+                    if value.eq_ignore_ascii_case("device") {
+                        Some(EspScope::Device)
+                    } else if value.eq_ignore_ascii_case("user") {
+                        Some(EspScope::User)
+                    } else {
+                        None
+                    }
+                });
+            }
+            "errorcode" | "enforcementerrorcode" | "exitcode" => {
+                if let Some(raw) = observation_text(&observation.value) {
+                    entry.codes.push(DeferredCodeOccurrence {
+                        ordinal,
+                        code: error_code(&raw),
+                        is_enforcement: !field.eq_ignore_ascii_case("exitcode"),
+                        context: observation.context.clone(),
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn push_code_timeline(
+        &mut self,
+        ordinal: usize,
+        context: &EspObservationContext,
+        title: String,
+        code: &EspErrorCode,
+        is_enforcement: bool,
+    ) {
+        let code_kind = if is_enforcement {
+            "Enforcement error code"
+        } else {
+            "Exit code"
+        };
+        let detail = format!("{code_kind} {}", code.raw);
+        self.push_timeline(
+            ordinal,
+            context,
+            EspTimelineKind::Workload,
+            title,
+            Some(detail.clone()),
+            Some(text_status(&detail, error_code_normalized_status(code))),
+        );
     }
 
     fn push_timeline(
@@ -851,6 +1009,29 @@ impl SnapshotProjection {
                 entry_id: stable_timeline_entry_id(context, ordinal),
                 timestamp: context_timestamp(context),
                 kind,
+                title,
+                detail,
+                status,
+                evidence: vec![context.evidence_ref.clone()],
+            },
+        ));
+    }
+
+    fn push_workload_timeline_at(
+        &mut self,
+        ordinal: usize,
+        context: &EspObservationContext,
+        timestamp: EspTimestamp,
+        title: String,
+        detail: Option<String>,
+        status: Option<EspStatus>,
+    ) {
+        self.activity.push((
+            ordinal,
+            EspTimelineEntry {
+                entry_id: stable_timeline_entry_id(context, ordinal),
+                timestamp,
+                kind: EspTimelineKind::Workload,
                 title,
                 detail,
                 status,
@@ -887,6 +1068,8 @@ impl SnapshotProjection {
         self.finalize_v2_workloads();
         self.finalize_platform_scripts();
         self.apply_office_details();
+        self.apply_msi_details();
+        self.finalize_enforcement_messages();
         self.apply_graph_names();
         self.finalize_sessions();
         self.apply_deferred_error_codes();
@@ -958,17 +1141,32 @@ impl SnapshotProjection {
                 })
                 .map(context_timestamp)
                 .unwrap_or_else(|| normalize_timestamp(&self.generated_at_utc, None));
-            let session_started = entry
+            let started = entry
                 .started
-                .clone()
-                .unwrap_or_else(|| first_observed.clone());
+                .iter()
+                .min_by(|left, right| {
+                    timestamp_chronology_key(&left.timestamp)
+                        .cmp(timestamp_chronology_key(&right.timestamp))
+                        .then_with(|| left.ordinal.cmp(&right.ordinal))
+                })
+                .map(|occurrence| occurrence.timestamp.clone());
+            let ended = entry
+                .ended
+                .iter()
+                .max_by(|left, right| {
+                    timestamp_chronology_key(&left.timestamp)
+                        .cmp(timestamp_chronology_key(&right.timestamp))
+                        .then_with(|| left.ordinal.cmp(&right.ordinal))
+                })
+                .map(|occurrence| occurrence.timestamp.clone());
+            let session_started = started.clone().unwrap_or_else(|| first_observed.clone());
             if let Some(session) = self
                 .sessions
                 .iter_mut()
                 .find(|session| session.session_id == session_id)
             {
                 merge_earliest_timestamp(&mut session.started_at, Some(session_started));
-                merge_latest_timestamp(&mut session.ended_at, entry.ended.clone());
+                merge_latest_timestamp(&mut session.ended_at, ended.clone());
                 session.evidence.extend(entry.evidence.clone());
             } else {
                 self.sessions.push(EspSession {
@@ -977,7 +1175,7 @@ impl SnapshotProjection {
                     scope: EspScope::Device,
                     user_sid: None,
                     started_at: Some(session_started),
-                    ended_at: entry.ended.clone(),
+                    ended_at: ended.clone(),
                     phase: EspPhase::DevicePreparation,
                     is_latest: false,
                     workload_ids: Vec::new(),
@@ -992,10 +1190,18 @@ impl SnapshotProjection {
             );
             let timestamps = EspWorkloadTimestamps {
                 first_observed,
-                started: entry.started.clone(),
-                ended: entry.ended.clone(),
+                started,
+                ended,
                 last_updated: latest_state.map(|state| context_timestamp(&state.context)),
             };
+            let title = entry
+                .friendly_name
+                .clone()
+                .unwrap_or_else(|| raw_identifier.clone());
+            let exit_code =
+                latest_code_occurrence(&entry.exit_codes).map(|occurrence| occurrence.code.clone());
+            let enforcement_error_code = latest_code_occurrence(&entry.enforcement_error_codes)
+                .map(|occurrence| occurrence.code.clone());
             self.workloads.push(EspWorkload {
                 workload_id: workload_id.clone(),
                 session_id: session_id.clone(),
@@ -1005,8 +1211,8 @@ impl SnapshotProjection {
                 display_name: entry.friendly_name.clone(),
                 status: normalized_status.clone(),
                 timestamps,
-                exit_code: entry.exit_code,
-                enforcement_error_code: entry.enforcement_error_code,
+                exit_code,
+                enforcement_error_code,
                 blocking: None,
                 evidence: entry.evidence.clone(),
             });
@@ -1022,12 +1228,45 @@ impl SnapshotProjection {
                     state.ordinal,
                     &state.context,
                     EspTimelineKind::Workload,
-                    entry
-                        .friendly_name
-                        .clone()
-                        .unwrap_or_else(|| raw_identifier.clone()),
+                    title.clone(),
                     Some("devicePreparationWorkload".to_string()),
                     Some(normalize_v2_status(state.raw_status)),
+                );
+            }
+            for occurrence in entry.started {
+                self.push_workload_timeline_at(
+                    occurrence.ordinal,
+                    &occurrence.context,
+                    occurrence.timestamp,
+                    title.clone(),
+                    Some("Installation started".to_string()),
+                    Some(text_status(
+                        "Installation started",
+                        EspNormalizedStatus::Installing,
+                    )),
+                );
+            }
+            for occurrence in entry.ended {
+                self.push_workload_timeline_at(
+                    occurrence.ordinal,
+                    &occurrence.context,
+                    occurrence.timestamp,
+                    title.clone(),
+                    Some("Installation ended".to_string()),
+                    Some(normalized_status.clone()),
+                );
+            }
+            for occurrence in entry
+                .exit_codes
+                .into_iter()
+                .chain(entry.enforcement_error_codes)
+            {
+                self.push_code_timeline(
+                    occurrence.ordinal,
+                    &occurrence.context,
+                    title.clone(),
+                    &occurrence.code,
+                    occurrence.is_enforcement,
                 );
             }
         }
@@ -1035,19 +1274,71 @@ impl SnapshotProjection {
 
     fn finalize_platform_scripts(&mut self) {
         let scripts = std::mem::take(&mut self.platform_scripts);
-        for (ordinal, observation) in scripts {
-            let raw_identifier = last_path_component(&observation.key)
-                .unwrap_or_else(|| observation.value_name.clone());
-            let status = text_status_from_observation(&observation.value);
-            let session_id = self
+        for ((source, _), script) in scripts {
+            let Some((_, latest_result)) = script.results.iter().max_by(|left, right| {
+                context_chronology_key(&left.1.context)
+                    .cmp(&context_chronology_key(&right.1.context))
+                    .then_with(|| left.0.cmp(&right.0))
+            }) else {
+                continue;
+            };
+            let status = text_status_from_observation(&latest_result.value);
+            let first_observed = script
+                .results
+                .iter()
+                .map(|(_, observation)| context_timestamp(&observation.context))
+                .chain(
+                    script
+                        .last_updated
+                        .iter()
+                        .map(|occurrence| context_timestamp(&occurrence.context)),
+                )
+                .min_by(|left, right| {
+                    timestamp_chronology_key(left).cmp(timestamp_chronology_key(right))
+                })
+                .unwrap_or_else(|| normalize_timestamp(&self.generated_at_utc, None));
+            let mut timestamps = workload_timestamps(
+                context_timestamp(&script.results[0].1.context),
+                &text_status_from_observation(&script.results[0].1.value).normalized,
+            );
+            for (_, observation) in script.results.iter().skip(1) {
+                let occurrence_status = text_status_from_observation(&observation.value);
+                merge_workload_timestamps(
+                    &mut timestamps,
+                    workload_timestamps(
+                        context_timestamp(&observation.context),
+                        &occurrence_status.normalized,
+                    ),
+                );
+            }
+            timestamps.first_observed = first_observed.clone();
+            for occurrence in &script.last_updated {
+                merge_latest_timestamp(
+                    &mut timestamps.last_updated,
+                    Some(occurrence.timestamp.clone()),
+                );
+            }
+
+            let candidate_sessions = self
                 .sessions
                 .iter()
-                .find(|session| session.kind == EspSessionKind::DevicePreparationV2)
+                .filter(|session| session.kind == EspSessionKind::DevicePreparationV2)
+                .collect::<Vec<_>>();
+            let session_id = candidate_sessions
+                .iter()
+                .copied()
+                .find(|session| {
+                    session
+                        .evidence
+                        .iter()
+                        .any(|evidence| evidence.source_artifact_id == source)
+                })
+                .or_else(|| (candidate_sessions.len() == 1).then(|| candidate_sessions[0]))
                 .map(|session| session.session_id.clone())
                 .unwrap_or_else(|| {
                     format!(
                         "session|{}|devicePreparationV2:device:Policies|0",
-                        escape_component(&observation.context.provenance.source_artifact_id)
+                        escape_component(&source)
                     )
                 });
             if !self
@@ -1060,65 +1351,103 @@ impl SnapshotProjection {
                     kind: EspSessionKind::DevicePreparationV2,
                     scope: EspScope::Device,
                     user_sid: None,
-                    started_at: Some(context_timestamp(&observation.context)),
+                    started_at: Some(first_observed.clone()),
                     ended_at: None,
                     phase: EspPhase::DevicePreparation,
                     is_latest: false,
                     workload_ids: Vec::new(),
-                    evidence: vec![observation.context.evidence_ref.clone()],
+                    evidence: script.evidence.clone(),
                 });
+            } else if let Some(session) = self
+                .sessions
+                .iter_mut()
+                .find(|session| session.session_id == session_id)
+            {
+                merge_earliest_timestamp(&mut session.started_at, Some(first_observed));
+                session.evidence.extend(script.evidence.clone());
             }
             let workload_id = format!(
                 "workload|{}|{}|0",
-                escape_component(&observation.context.provenance.source_artifact_id),
-                escape_component(&format!("platformScript:{raw_identifier}"))
+                escape_component(&source),
+                escape_component(&format!("platformScript:{}", script.raw_identifier))
             );
             self.workloads.push(EspWorkload {
                 workload_id: workload_id.clone(),
                 session_id: session_id.clone(),
                 kind: EspTrackedKind::PlatformScript,
                 scope: EspScope::Device,
-                raw_identifier: raw_identifier.clone(),
+                raw_identifier: script.raw_identifier.clone(),
                 display_name: None,
                 status: status.clone(),
-                timestamps: workload_timestamps(
-                    context_timestamp(&observation.context),
-                    &status.normalized,
-                ),
+                timestamps,
                 exit_code: None,
                 enforcement_error_code: None,
                 blocking: None,
-                evidence: vec![observation.context.evidence_ref.clone()],
+                evidence: script.evidence.clone(),
             });
             if let Some(session) = self
                 .sessions
                 .iter_mut()
                 .find(|session| session.session_id == session_id)
             {
-                session.workload_ids.push(workload_id);
+                if !session.workload_ids.contains(&workload_id) {
+                    session.workload_ids.push(workload_id);
+                }
             }
-            self.push_timeline(
-                ordinal,
-                &observation.context,
-                EspTimelineKind::Workload,
-                raw_identifier,
-                Some("platformScript".to_string()),
-                Some(status),
-            );
+            for (ordinal, observation) in script.results {
+                self.push_timeline(
+                    ordinal,
+                    &observation.context,
+                    EspTimelineKind::Workload,
+                    script.raw_identifier.clone(),
+                    Some("platformScript".to_string()),
+                    Some(text_status_from_observation(&observation.value)),
+                );
+            }
+        }
+    }
+
+    fn finalize_enforcement_messages(&mut self) {
+        let messages = std::mem::take(&mut self.enforcement_messages);
+        for (_, message) in messages {
+            for occurrence in message.codes {
+                self.deferred_error_codes.push(DeferredErrorCode {
+                    identifier: message.identifier.clone(),
+                    explicit_session: None,
+                    scope: message.scope.clone(),
+                    user_sid: message.user_sid.clone(),
+                    kind: Some(EspTrackedKind::DevicePreparationWorkload),
+                    code: occurrence.code,
+                    is_enforcement: occurrence.is_enforcement,
+                    ordinal: occurrence.ordinal,
+                    context: occurrence.context,
+                });
+            }
         }
     }
 
     fn apply_deferred_error_codes(&mut self) {
         for deferred in std::mem::take(&mut self.deferred_error_codes) {
+            let title = deferred
+                .identifier
+                .clone()
+                .unwrap_or_else(|| "Uncorrelated workload".to_string());
+            self.push_code_timeline(
+                deferred.ordinal,
+                &deferred.context,
+                title,
+                &deferred.code,
+                deferred.is_enforcement,
+            );
+            let Some(identifier) = deferred.identifier.as_deref() else {
+                continue;
+            };
             let candidates = self
                 .workloads
                 .iter()
                 .enumerate()
                 .filter_map(|(index, workload)| {
-                    if !identifiers_match(&workload.raw_identifier, &deferred.identifier)
-                        || !workload.evidence.iter().any(|evidence| {
-                            evidence.source_artifact_id == deferred.source_artifact_id
-                        })
+                    if !identifiers_match(&workload.raw_identifier, identifier)
                         || deferred
                             .kind
                             .as_ref()
@@ -1131,8 +1460,9 @@ impl SnapshotProjection {
                         .sessions
                         .iter()
                         .find(|session| session.session_id == workload.session_id)?;
-                    if let Some(explicit_session_id) = &deferred.explicit_session_id {
-                        return (session.session_id == *explicit_session_id).then_some(index);
+                    if let Some(explicit_session) = &deferred.explicit_session {
+                        return deferred_session_matches(session, explicit_session)
+                            .then_some(index);
                     }
                     if !session.is_latest {
                         return None;
@@ -1162,21 +1492,23 @@ impl SnapshotProjection {
                 } else {
                     workload.exit_code = Some(deferred.code);
                 }
-                workload.evidence.push(deferred.evidence);
+                workload
+                    .evidence
+                    .push(deferred.context.evidence_ref.clone());
             }
         }
     }
 
     fn apply_office_details(&mut self) {
-        for workload in self
-            .workloads
-            .iter_mut()
-            .filter(|workload| workload.kind == EspTrackedKind::Office)
-        {
+        for index in 0..self.workloads.len() {
+            if self.workloads[index].kind != EspTrackedKind::Office {
+                continue;
+            }
+            let identifier = self.workloads[index].raw_identifier.clone();
             let best = self
                 .office_details
                 .iter()
-                .filter(|detail| identifiers_match(&workload.raw_identifier, &detail.identifier))
+                .filter(|detail| identifiers_match(&identifier, &detail.identifier))
                 .max_by(|left, right| {
                     left.is_final
                         .cmp(&right.is_final)
@@ -1185,18 +1517,103 @@ impl SnapshotProjection {
                                 .cmp(&context_chronology_key(&right.context))
                         })
                         .then_with(|| left.ordinal.cmp(&right.ordinal))
-                });
+                })
+                .cloned();
             let status = normalize_office_status(
-                workload.status.raw.clone(),
-                best.map(|detail| detail.raw_status.clone()),
+                self.workloads[index].status.raw.clone(),
+                best.as_ref().map(|detail| detail.raw_status.clone()),
             );
-            if let Some(detail) = best {
+            let workload_evidence = self.workloads[index].evidence.clone();
+            if let Some(detail) = &best {
                 let observed = context_timestamp(&detail.context);
                 let timestamps = workload_timestamps(observed, &status.normalized);
-                merge_workload_timestamps(&mut workload.timestamps, timestamps);
+                merge_workload_timestamps(&mut self.workloads[index].timestamps, timestamps);
+                self.workloads[index]
+                    .evidence
+                    .push(detail.context.evidence_ref.clone());
+            }
+            self.workloads[index].status = status.clone();
+
+            if best.is_some() {
+                for (_, activity) in &mut self.activity {
+                    if activity.title == identifier
+                        && activity
+                            .evidence
+                            .iter()
+                            .any(|evidence| workload_evidence.contains(evidence))
+                    {
+                        activity.status = Some(status.clone());
+                    }
+                }
+            }
+            if let Some(detail) = best {
+                self.push_timeline(
+                    detail.ordinal,
+                    &detail.context,
+                    EspTimelineKind::Workload,
+                    identifier,
+                    Some("Office detailed status".to_string()),
+                    Some(status),
+                );
+            }
+        }
+    }
+
+    fn apply_msi_details(&mut self) {
+        for detail in std::mem::take(&mut self.msi_details) {
+            let matching = self
+                .workloads
+                .iter()
+                .enumerate()
+                .filter_map(|(index, workload)| {
+                    if workload.kind != EspTrackedKind::Msi
+                        || !identifiers_match(&workload.raw_identifier, &detail.identifier)
+                        || detail
+                            .scope
+                            .as_ref()
+                            .map(|scope| scope != &workload.scope)
+                            .unwrap_or(false)
+                    {
+                        return None;
+                    }
+                    let session = self
+                        .sessions
+                        .iter()
+                        .find(|session| session.session_id == workload.session_id)?;
+                    if let Some(user_sid) = &detail.user_sid {
+                        if session.user_sid.as_ref().map(|sid| sid.value.as_str())
+                            != Some(user_sid.as_str())
+                        {
+                            return None;
+                        }
+                    }
+                    Some((index, session_chronology(session).to_string()))
+                })
+                .collect::<Vec<_>>();
+            let latest = matching.iter().map(|(_, key)| key).max().cloned();
+            let candidates = matching
+                .iter()
+                .filter(|(_, key)| Some(key) == latest.as_ref())
+                .map(|(index, _)| *index)
+                .collect::<Vec<_>>();
+            let status = normalize_office_detail_status(detail.raw_status.clone());
+            if let [index] = candidates.as_slice() {
+                let workload = &mut self.workloads[*index];
+                merge_workload_timestamps(
+                    &mut workload.timestamps,
+                    workload_timestamps(context_timestamp(&detail.context), &status.normalized),
+                );
+                workload.status = status.clone();
                 workload.evidence.push(detail.context.evidence_ref.clone());
             }
-            workload.status = status;
+            self.push_timeline(
+                detail.ordinal,
+                &detail.context,
+                EspTimelineKind::Workload,
+                detail.identifier,
+                Some("MSI detailed status".to_string()),
+                Some(status),
+            );
         }
     }
 
@@ -1273,15 +1690,17 @@ impl SnapshotProjection {
 
     fn finalize_delivery_optimization(&mut self) {
         if let Some(delivery) = &mut self.delivery_optimization {
-            if delivery.download_http_bytes == 0 {
-                delivery.peer_share_percent = Some(0.0);
-                delivery.connected_cache_share_percent = Some(0.0);
+            let total = u128::from(delivery.download_http_bytes)
+                + u128::from(delivery.download_lan_bytes)
+                + u128::from(delivery.download_cache_host_bytes);
+            if total == 0 {
+                delivery.peer_share_percent = None;
+                delivery.connected_cache_share_percent = None;
             } else {
-                let total = delivery.download_http_bytes as f64;
                 delivery.peer_share_percent =
-                    Some(delivery.download_lan_bytes as f64 / total * 100.0);
+                    Some(delivery.download_lan_bytes as f64 / total as f64 * 100.0);
                 delivery.connected_cache_share_percent =
-                    Some(delivery.download_cache_host_bytes as f64 / total * 100.0);
+                    Some(delivery.download_cache_host_bytes as f64 / total as f64 * 100.0);
             }
         }
     }
@@ -1299,10 +1718,10 @@ struct NodeCacheAccumulator {
 struct V2WorkloadAccumulator {
     workload_id: Option<String>,
     friendly_name: Option<String>,
-    started: Option<EspTimestamp>,
-    ended: Option<EspTimestamp>,
-    exit_code: Option<EspErrorCode>,
-    enforcement_error_code: Option<EspErrorCode>,
+    started: Vec<V2TimestampOccurrence>,
+    ended: Vec<V2TimestampOccurrence>,
+    exit_codes: Vec<DeferredCodeOccurrence>,
+    enforcement_error_codes: Vec<DeferredCodeOccurrence>,
     evidence: Vec<EspEvidenceRef>,
     observations: Vec<EspObservationContext>,
     states: Vec<V2StateOccurrence>,
@@ -1315,7 +1734,22 @@ struct V2StateOccurrence {
     raw_status: EspRawStatus,
 }
 
+#[derive(Debug, Clone)]
+struct V2TimestampOccurrence {
+    ordinal: usize,
+    context: EspObservationContext,
+    timestamp: EspTimestamp,
+}
+
 #[derive(Debug)]
+struct PlatformScriptAccumulator {
+    raw_identifier: String,
+    results: Vec<(usize, EspRegistryObservation)>,
+    last_updated: Vec<V2TimestampOccurrence>,
+    evidence: Vec<EspEvidenceRef>,
+}
+
+#[derive(Debug, Clone)]
 struct OfficeDetailObservation {
     ordinal: usize,
     identifier: String,
@@ -1324,17 +1758,50 @@ struct OfficeDetailObservation {
     context: EspObservationContext,
 }
 
+#[derive(Debug, Clone)]
+struct MsiDetailObservation {
+    ordinal: usize,
+    identifier: String,
+    scope: Option<EspScope>,
+    user_sid: Option<String>,
+    raw_status: EspRawStatus,
+    context: EspObservationContext,
+}
+
+#[derive(Debug)]
+struct EnforcementMessageAccumulator {
+    identifier: Option<String>,
+    scope: Option<EspScope>,
+    user_sid: Option<String>,
+    codes: Vec<DeferredCodeOccurrence>,
+}
+
+#[derive(Debug)]
+struct DeferredCodeOccurrence {
+    ordinal: usize,
+    code: EspErrorCode,
+    is_enforcement: bool,
+    context: EspObservationContext,
+}
+
+#[derive(Debug)]
+struct DeferredSessionIdentity {
+    scope: EspScope,
+    user_sid: Option<String>,
+    raw_time: String,
+}
+
 #[derive(Debug)]
 struct DeferredErrorCode {
-    source_artifact_id: String,
-    identifier: String,
-    explicit_session_id: Option<String>,
+    identifier: Option<String>,
+    explicit_session: Option<DeferredSessionIdentity>,
     scope: Option<EspScope>,
     user_sid: Option<String>,
     kind: Option<EspTrackedKind>,
     code: EspErrorCode,
     is_enforcement: bool,
-    evidence: EspEvidenceRef,
+    ordinal: usize,
+    context: EspObservationContext,
 }
 
 enum EnrollmentUpdate {
@@ -1630,6 +2097,7 @@ fn classic_session_id(source_artifact_id: &str, info: &ClassicSessionInfo) -> St
 }
 
 fn deferred_error_code_observation(
+    ordinal: usize,
     observation: &EspRegistryObservation,
 ) -> Option<DeferredErrorCode> {
     let is_enforcement = if observation
@@ -1644,11 +2112,7 @@ fn deferred_error_code_observation(
     };
     let raw = observation_text(&observation.value)?;
     let identifier = last_path_component(&observation.key)?;
-    let source_artifact_id = observation.context.provenance.source_artifact_id.clone();
     let explicit_session = classic_session_info(observation);
-    let explicit_session_id = explicit_session
-        .as_ref()
-        .map(|info| classic_session_id(&source_artifact_id, info));
     let (scope, user_sid) = if let Some(info) = &explicit_session {
         (Some(info.scope.clone()), info.user_sid.clone())
     } else if let Some(sid) = path_components(&observation.key)
@@ -1675,15 +2139,19 @@ fn deferred_error_code_observation(
         None
     };
     Some(DeferredErrorCode {
-        source_artifact_id,
-        identifier,
-        explicit_session_id,
+        identifier: Some(identifier),
+        explicit_session: explicit_session.map(|info| DeferredSessionIdentity {
+            scope: info.scope,
+            user_sid: info.user_sid,
+            raw_time: info.raw_time,
+        }),
         scope,
         user_sid,
         kind,
         code: error_code(&raw),
         is_enforcement,
-        evidence: observation.context.evidence_ref.clone(),
+        ordinal,
+        context: observation.context.clone(),
     })
 }
 
@@ -1734,6 +2202,43 @@ fn office_detail_observation(
         identifier: percent_decode_bounded(identifier).unwrap_or_else(|_| identifier.clone()),
         raw_status: observation_raw_status(&observation.value),
         is_final,
+        context: observation.context.clone(),
+    })
+}
+
+fn msi_detail_observation(
+    ordinal: usize,
+    observation: &EspRegistryObservation,
+) -> Option<MsiDetailObservation> {
+    if !observation.value_name.eq_ignore_ascii_case("Status") {
+        return None;
+    }
+    let components = path_components(&observation.key);
+    let root = components
+        .iter()
+        .position(|part| part.eq_ignore_ascii_case("EnterpriseDesktopAppManagement"))?;
+    let msi = components
+        .iter()
+        .enumerate()
+        .skip(root + 1)
+        .find(|(_, part)| part.eq_ignore_ascii_case("MSI"))?
+        .0;
+    let identifier = components.get(msi + 1)?.clone();
+    let sid = components
+        .get(msi.saturating_sub(1))
+        .filter(|part| part.to_ascii_uppercase().starts_with("S-"))
+        .cloned();
+    let (scope, user_sid) = match sid {
+        Some(sid) if is_device_scope_sid(&sid) => (Some(EspScope::Device), None),
+        Some(sid) => (Some(EspScope::User), Some(sid)),
+        None => (None, None),
+    };
+    Some(MsiDetailObservation {
+        ordinal,
+        identifier: percent_decode_bounded(&identifier).unwrap_or(identifier),
+        scope,
+        user_sid,
+        raw_status: observation_raw_status(&observation.value),
         context: observation.context.clone(),
     })
 }
@@ -1813,6 +2318,37 @@ fn is_provisioning_progress(observation: &EspJsonObservation) -> bool {
         .eq_ignore_ascii_case("ProvisioningProgress")
 }
 
+fn is_enforcement_state_message(observation: &EspJsonObservation) -> bool {
+    observation
+        .document_type
+        .eq_ignore_ascii_case("EnforcementStateMessage")
+}
+
+fn enforcement_message_group_key(observation: &EspJsonObservation) -> String {
+    let provenance_key = observation
+        .context
+        .provenance
+        .registry
+        .as_ref()
+        .map(|registry| registry.key.as_str())
+        .or(observation.context.provenance.file_path.as_deref())
+        .unwrap_or_default();
+    let components = observation
+        .json_pointer
+        .split('/')
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>();
+    let semantic_field = components
+        .iter()
+        .position(|part| part.eq_ignore_ascii_case("EnforcementStateMessage"))
+        .unwrap_or_else(|| components.len().saturating_sub(1));
+    let record_path = components[..semantic_field].join("/");
+    format!(
+        "{}|{}|{}",
+        observation.context.provenance.source_artifact_id, provenance_key, record_path
+    )
+}
+
 fn is_page_settings(observation: &EspJsonObservation) -> bool {
     observation
         .document_type
@@ -1826,7 +2362,10 @@ fn is_platform_script_observation(observation: &EspRegistryObservation) -> bool 
     let key = observation.key.to_ascii_lowercase();
     key.contains("intunemanagementextension")
         && key.contains("policies")
-        && observation.value_name.eq_ignore_ascii_case("Result")
+        && (observation.value_name.eq_ignore_ascii_case("Result")
+            || observation
+                .value_name
+                .eq_ignore_ascii_case("LastUpdatedTimeUtc"))
 }
 
 fn is_parity_event(event_id: u32) -> bool {
@@ -1854,6 +2393,62 @@ fn event_normalized_status(event_id: u32) -> EspNormalizedStatus {
         1906 => EspNormalizedStatus::Downloaded,
         109 | 110 | 111 | 1920 => EspNormalizedStatus::InProgress,
         _ => EspNormalizedStatus::Unknown,
+    }
+}
+
+fn odj_state_details(
+    observation: &EspEventLogObservation,
+) -> Option<(&'static str, EspNormalizedStatus)> {
+    if !matches!(observation.event_id, 109 | 110) {
+        return None;
+    }
+    let named_data = if observation.named_data.is_empty() {
+        observation
+            .context
+            .provenance
+            .event
+            .as_ref()
+            .map(|event| event.named_data.as_slice())
+            .unwrap_or_default()
+    } else {
+        observation.named_data.as_slice()
+    };
+    let state = named_data
+        .iter()
+        .find(|value| {
+            matches!(
+                value.name.to_ascii_lowercase().as_str(),
+                "state" | "odjstate" | "status"
+            )
+        })
+        .or_else(|| named_data.first())
+        .and_then(|value| value.value.trim().parse::<u8>().ok())
+        .or_else(|| {
+            let message = observation.message.as_deref()?.to_ascii_lowercase();
+            if message.contains("not configured") {
+                Some(0)
+            } else if message.contains("waiting") {
+                Some(1)
+            } else if message.contains("processed") {
+                Some(2)
+            } else if message.contains("timed out") {
+                Some(3)
+            } else {
+                None
+            }
+        })?;
+    match state {
+        0 => Some((
+            "Offline domain join not configured",
+            EspNormalizedStatus::NotStarted,
+        )),
+        1 => Some(("Waiting for ODJ blob", EspNormalizedStatus::InProgress)),
+        2 => Some(("Processed ODJ blob", EspNormalizedStatus::Processed)),
+        3 => Some((
+            "Timed out waiting for ODJ blob or connectivity",
+            EspNormalizedStatus::Failed,
+        )),
+        _ => None,
     }
 }
 
@@ -2119,7 +2714,35 @@ fn observation_bool(value: &EspObservationValue) -> Option<bool> {
 }
 
 fn timestamp_from_observation_value(value: &EspObservationValue) -> Option<EspTimestamp> {
-    observation_text(value).map(|value| normalize_timestamp(&value, None))
+    observation_text(value).map(|value| normalize_embedded_timestamp(&value))
+}
+
+fn normalize_embedded_timestamp(raw: &str) -> EspTimestamp {
+    let unescaped = raw.replace(r"\/", "/");
+    if let Some(inner) = unescaped
+        .strip_prefix("/Date(")
+        .and_then(|value| value.strip_suffix(")/"))
+    {
+        let millis_text = inner
+            .chars()
+            .enumerate()
+            .take_while(|(index, character)| {
+                character.is_ascii_digit() || (*index == 0 && *character == '-')
+            })
+            .map(|(_, character)| character)
+            .collect::<String>();
+        if let Ok(milliseconds) = millis_text.parse::<i64>() {
+            if let Some(timestamp) = Utc.timestamp_millis_opt(milliseconds).single() {
+                return EspTimestamp {
+                    raw_text: raw.to_string(),
+                    original_offset: Some("Z".to_string()),
+                    normalized_utc: Some(timestamp.to_rfc3339_opts(SecondsFormat::Millis, true)),
+                    kind: EspTimestampKind::Utc,
+                };
+            }
+        }
+    }
+    normalize_timestamp(raw, None)
 }
 
 fn error_code(raw: &str) -> EspErrorCode {
@@ -2137,6 +2760,23 @@ fn error_code(raw: &str) -> EspErrorCode {
             decimal,
             hex,
         }
+    }
+}
+
+fn error_code_normalized_status(code: &EspErrorCode) -> EspNormalizedStatus {
+    if code.decimal == Some(0)
+        || code
+            .raw
+            .strip_prefix("0x")
+            .or_else(|| code.raw.strip_prefix("0X"))
+            .and_then(|value| u64::from_str_radix(value, 16).ok())
+            == Some(0)
+    {
+        EspNormalizedStatus::Succeeded
+    } else if code.decimal.is_some() || code.hex.is_some() {
+        EspNormalizedStatus::Failed
+    } else {
+        EspNormalizedStatus::Unknown
     }
 }
 
@@ -2277,6 +2917,29 @@ fn identifiers_match(left: &str, right: &str) -> bool {
             (Some(left), Some(right)) => left == right,
             _ => false,
         }
+}
+
+fn latest_code_occurrence(codes: &[DeferredCodeOccurrence]) -> Option<&DeferredCodeOccurrence> {
+    codes.iter().max_by(|left, right| {
+        context_chronology_key(&left.context)
+            .cmp(&context_chronology_key(&right.context))
+            .then_with(|| left.ordinal.cmp(&right.ordinal))
+    })
+}
+
+fn deferred_session_matches(session: &EspSession, identity: &DeferredSessionIdentity) -> bool {
+    if session.kind != EspSessionKind::Classic || session.scope != identity.scope {
+        return false;
+    }
+    if identity.user_sid.as_deref() != session.user_sid.as_ref().map(|sid| sid.value.as_str()) {
+        return false;
+    }
+    let expected = normalize_timestamp(&identity.raw_time, None);
+    session.started_at.as_ref().is_some_and(|started| {
+        started.raw_text.eq_ignore_ascii_case(&identity.raw_time)
+            || (started.normalized_utc.is_some()
+                && started.normalized_utc == expected.normalized_utc)
+    })
 }
 
 fn synthetic_context(
