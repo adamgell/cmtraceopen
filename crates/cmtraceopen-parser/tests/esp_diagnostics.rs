@@ -2102,3 +2102,896 @@ fn timeline_snapshot_is_deterministic_for_the_same_ordered_evidence() {
         ]
     );
 }
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct EdgeCases {
+    classic_registry: Vec<ParityRegistryCase>,
+    classic_json: Vec<ParityJsonCase>,
+    v2_page_settings: Vec<ParityJsonCase>,
+    node_cache: Vec<ParityNodeCase>,
+    malformed_json: Vec<ParityJsonCase>,
+    v2_states: Vec<ParityStatusCase>,
+    coverage: Vec<ParityCoverageCase>,
+    events: Vec<ParityEventCase>,
+    system_facts: Vec<ParitySystemFactCase>,
+    hardware_hash: Vec<ParityJsonCase>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ParityRegistryCase {
+    source_artifact_id: String,
+    evidence_id: String,
+    key: String,
+    value_name: String,
+    value: EspObservationValue,
+    source_timestamp: String,
+    sensitivity: Option<EspSensitivity>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ParityJsonCase {
+    source_artifact_id: String,
+    evidence_id: String,
+    document_type: String,
+    json_pointer: String,
+    value: EspObservationValue,
+    source_timestamp: String,
+    parse_state: Option<EspParseState>,
+    access_state: Option<EspSourceAccessState>,
+    sensitivity: Option<EspSensitivity>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ParityNodeCase {
+    index: u64,
+    node_uri: String,
+    expected_value: String,
+    source_artifact_id: String,
+    node_evidence_id: String,
+    expected_evidence_id: String,
+    source_timestamp: String,
+    sensitivity: EspSensitivity,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ParityStatusCase {
+    index: usize,
+    raw_identifier: String,
+    raw: EspRawStatus,
+    normalized: EspNormalizedStatus,
+    source_timestamp: String,
+    id_evidence_id: String,
+    state_evidence_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ParityCoverageCase {
+    artifact_id: String,
+    family: String,
+    status: EspArtifactStatus,
+    detail: String,
+    observed_at_utc: String,
+    source_artifact_id: String,
+    evidence_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ParityEventCase {
+    event_id: u32,
+    record_id: u64,
+    source_artifact_id: String,
+    evidence_id: String,
+    channel: String,
+    timestamp: String,
+    message: String,
+    normalized: EspNormalizedStatus,
+    timeline_kind: EspTimelineKind,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ParitySystemFactCase {
+    source_artifact_id: String,
+    evidence_id: String,
+    fact: String,
+    value: String,
+    source_timestamp: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GraphCases {
+    local_workloads: Vec<GraphLocalWorkloadCase>,
+    graph_names: Vec<GraphNameCase>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GraphLocalWorkloadCase {
+    raw_identifier: String,
+    raw_status: i64,
+    evidence_id: String,
+    timestamp: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GraphNameCase {
+    record_id: String,
+    display_name: Option<String>,
+    evidence_id: String,
+    timestamp: String,
+    remote_status: EspNormalizedStatus,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct EquivalenceCases {
+    cases: Vec<EquivalenceCase>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct EquivalenceCase {
+    name: String,
+    live_source_artifact_id: String,
+    captured_source_artifact_id: String,
+    live_evidence_id: String,
+    captured_evidence_id: String,
+    profile_name: String,
+    raw_identifier: String,
+    raw_status: i64,
+    timestamp: String,
+}
+
+fn edge_cases() -> EdgeCases {
+    serde_json::from_str(include_str!("fixtures/esp/edge-cases.json"))
+        .expect("edge-case fixture must be valid")
+}
+
+fn graph_cases() -> GraphCases {
+    serde_json::from_str(include_str!("fixtures/esp/graph-cases.json"))
+        .expect("Graph fixture must be valid")
+}
+
+fn equivalence_cases() -> EquivalenceCases {
+    serde_json::from_str(include_str!("fixtures/esp/bundle-live-equivalence.json"))
+        .expect("equivalence fixture must be valid")
+}
+
+fn parity_registry_record(case: &ParityRegistryCase) -> EspEvidenceRecord {
+    let mut record = registry_record(
+        &case.source_artifact_id,
+        &case.evidence_id,
+        &case.key,
+        &case.value_name,
+        case.value.clone(),
+        &case.source_timestamp,
+    );
+    if let EspEvidenceRecord::Registry(observation) = &mut record {
+        if let Some(sensitivity) = &case.sensitivity {
+            observation.context.sensitivity = sensitivity.clone();
+        }
+    }
+    record
+}
+
+fn parity_json_record(case: &ParityJsonCase) -> EspEvidenceRecord {
+    let mut record = json_record(
+        &case.source_artifact_id,
+        &case.evidence_id,
+        &case.document_type,
+        &case.json_pointer,
+        case.value.clone(),
+        &case.source_timestamp,
+    );
+    if let EspEvidenceRecord::Json(observation) = &mut record {
+        if let Some(parse_state) = &case.parse_state {
+            observation.context.parse_state = parse_state.clone();
+        }
+        if let Some(access_state) = &case.access_state {
+            observation.context.access_state = access_state.clone();
+        }
+        if let Some(sensitivity) = &case.sensitivity {
+            observation.context.sensitivity = sensitivity.clone();
+        }
+    }
+    record
+}
+
+fn parity_event_record(case: &ParityEventCase) -> EspEvidenceRecord {
+    let mut record = event_record(
+        &case.source_artifact_id,
+        &case.evidence_id,
+        case.event_id,
+        case.record_id,
+        &case.timestamp,
+        &case.message,
+    );
+    if let EspEvidenceRecord::EventLog(observation) = &mut record {
+        observation.channel = case.channel.clone();
+        observation.context.provenance.event = Some(EspEventProvenance {
+            channel: case.channel.clone(),
+            event_id: case.event_id,
+            record_id: Some(case.record_id),
+            named_data: vec![],
+        });
+    }
+    record
+}
+
+fn parity_system_record(case: &ParitySystemFactCase) -> EspEvidenceRecord {
+    let fact = match case.fact.as_str() {
+        "osVersion" => EspSystemFact::OsVersion(case.value.clone()),
+        "osBuild" => EspSystemFact::OsBuild(case.value.clone()),
+        "manufacturer" => EspSystemFact::Manufacturer(case.value.clone()),
+        "model" => EspSystemFact::Model(case.value.clone()),
+        "serialNumber" => EspSystemFact::SerialNumber(case.value.clone()),
+        "tpmVersion" => EspSystemFact::TpmVersion(case.value.clone()),
+        unexpected => panic!("unknown system fact {unexpected}"),
+    };
+    let mut context = fixture_context(
+        EspSourceKind::System,
+        &case.source_artifact_id,
+        &case.evidence_id,
+        &case.source_timestamp,
+    );
+    if matches!(fact, EspSystemFact::SerialNumber(_)) {
+        context.sensitivity = EspSensitivity::Sensitive;
+    }
+    EspEvidenceRecord::System(EspSystemObservation { context, fact })
+}
+
+#[test]
+fn reducer_parity_profile_enrollment_and_v2_page_settings_pin_raw_sources_and_sensitivity() {
+    let cases = edge_cases();
+    assert_eq!(
+        cases.classic_registry.len(),
+        15,
+        "classic registry parity rows"
+    );
+    assert_eq!(cases.classic_json.len(), 3, "classic JSON parity rows");
+    assert_eq!(
+        cases.v2_page_settings.len(),
+        5,
+        "v2 page-setting parity rows"
+    );
+
+    let mut classic = EspDiagnosticsReducer::new("2026-07-15T18:00:00Z".to_string());
+    classic.ingest_all(
+        cases
+            .classic_registry
+            .iter()
+            .map(parity_registry_record)
+            .chain(cases.classic_json.iter().map(parity_json_record)),
+    );
+    let snapshot = classic.snapshot();
+    let profile = snapshot.profile.as_ref().expect("classic profile");
+    assert_eq!(snapshot.scenario, EspScenario::AutopilotV1);
+    assert_eq!(profile.profile_name.as_deref(), Some("Corporate Autopilot"));
+    assert_eq!(
+        profile.correlation_id.as_deref(),
+        Some("correlation-classic")
+    );
+    assert_eq!(profile.tenant_id.as_ref().unwrap().value, "tenant-classic");
+    assert_eq!(
+        profile.tenant_id.as_ref().unwrap().sensitivity,
+        EspSensitivity::Sensitive
+    );
+    assert_eq!(profile.oobe_config.as_ref().unwrap().raw_mask, 2046);
+    assert!(oobe_flags(profile.oobe_config.as_ref().unwrap())
+        .iter()
+        .all(|value| *value));
+    assert_eq!(profile.join_mode, Some(EspJoinMode::HybridEntra));
+    assert_eq!(profile.odj_applied, Some(true));
+    assert_eq!(profile.skip_domain_connectivity_check, Some(true));
+    assert_eq!(
+        profile
+            .profile_download_time
+            .as_ref()
+            .unwrap()
+            .normalized_utc
+            .as_deref(),
+        Some("2026-07-15T08:30:00Z")
+    );
+    assert_eq!(
+        snapshot.identity.entdm_id.as_ref().unwrap().value,
+        "entdm-classic"
+    );
+    assert_eq!(
+        snapshot
+            .identity
+            .user_principal_name
+            .as_ref()
+            .unwrap()
+            .sensitivity,
+        EspSensitivity::Sensitive
+    );
+    let enrollment = &snapshot.enrollments[0];
+    assert_eq!(
+        enrollment.enrollment_id,
+        "11111111-1111-1111-1111-111111111111"
+    );
+    assert_eq!(enrollment.provider_id.as_deref(), Some("MS DM Server"));
+    assert_eq!(enrollment.settings.device_esp_enabled, Some(true));
+    assert_eq!(enrollment.settings.user_esp_enabled, Some(true));
+    assert_eq!(enrollment.settings.timeout_seconds, Some(3600));
+    assert_eq!(enrollment.settings.blocking, Some(true));
+    assert_eq!(enrollment.settings.allow_reset, Some(true));
+    assert_eq!(enrollment.settings.allow_retry, Some(true));
+    assert_eq!(enrollment.settings.continue_anyway, Some(false));
+    assert_eq!(
+        snapshot.raw_evidence[0].record_id,
+        "raw|profile-registry|profile-name|0"
+    );
+    assert_eq!(
+        snapshot.raw_evidence[0].raw_value,
+        EspObservationValue::Text("Corporate Autopilot".to_string())
+    );
+    assert_eq!(
+        snapshot.raw_evidence[0]
+            .source_timestamp
+            .as_ref()
+            .unwrap()
+            .normalized_utc
+            .as_deref(),
+        Some("2026-07-15T08:00:00Z")
+    );
+    assert_eq!(
+        snapshot.raw_evidence[2].sensitivity,
+        EspSensitivity::Sensitive
+    );
+    assert_eq!(
+        snapshot.raw_evidence[2].provenance.source_artifact_id,
+        "profile-registry"
+    );
+
+    let mut v2 = EspDiagnosticsReducer::new("2026-07-15T18:00:00Z".to_string());
+    v2.ingest(registry_record(
+        "autopilot-settings",
+        "v2-hint",
+        r"SOFTWARE\Microsoft\Provisioning\AutopilotSettings",
+        "AutopilotDevicePrepHint",
+        EspObservationValue::Text("enabled".to_string()),
+        "2026-07-15T09:00:00Z",
+    ));
+    v2.ingest_all(cases.v2_page_settings.iter().map(parity_json_record));
+    let v2_snapshot = v2.snapshot();
+    let settings = v2_snapshot
+        .profile
+        .as_ref()
+        .unwrap()
+        .device_preparation
+        .as_ref()
+        .unwrap();
+    assert_eq!(
+        v2_snapshot.scenario,
+        EspScenario::AutopilotDevicePreparationV2
+    );
+    assert_eq!(settings.agent_download_timeout_seconds, Some(1800));
+    assert_eq!(settings.page_timeout_seconds, Some(3600));
+    assert_eq!(settings.allow_skip_on_failure, Some(true));
+    assert_eq!(settings.allow_diagnostics, Some(true));
+    assert_eq!(settings.script_ids, vec!["script-v2"]);
+    assert_eq!(
+        v2_snapshot.raw_evidence[1].record_id,
+        "raw|page-settings|page-agent-timeout|1"
+    );
+}
+
+#[test]
+fn reducer_parity_nodecache_malformed_denied_hardware_and_hash_exclusion_are_lossless() {
+    let cases = edge_cases();
+    assert_eq!(cases.node_cache.len(), 3, "NodeCache keys 2, 10, and 42");
+    assert_eq!(
+        cases.malformed_json.len(),
+        3,
+        "three malformed JSON families"
+    );
+    assert_eq!(cases.coverage.len(), 1, "permission-denied coverage row");
+    assert_eq!(cases.system_facts.len(), 6, "safe hardware facts");
+    assert_eq!(cases.hardware_hash.len(), 1, "raw hash exclusion probe");
+
+    let mut records = Vec::new();
+    for node in &cases.node_cache {
+        let key = format!(
+            r"SOFTWARE\Microsoft\Provisioning\NodeCache\CSP\Device\MS DM Server\Nodes\{}",
+            node.index
+        );
+        let mark_sensitive = |mut record: EspEvidenceRecord| {
+            if let EspEvidenceRecord::Registry(observation) = &mut record {
+                observation.context.sensitivity = node.sensitivity.clone();
+            }
+            record
+        };
+        records.push(mark_sensitive(registry_record(
+            &node.source_artifact_id,
+            &node.node_evidence_id,
+            &key,
+            "NodeUri",
+            EspObservationValue::Text(node.node_uri.clone()),
+            &node.source_timestamp,
+        )));
+        records.push(mark_sensitive(registry_record(
+            &node.source_artifact_id,
+            &node.expected_evidence_id,
+            &key,
+            "ExpectedValue",
+            EspObservationValue::Text(node.expected_value.clone()),
+            &node.source_timestamp,
+        )));
+    }
+    records.extend(cases.malformed_json.iter().map(parity_json_record));
+    records.extend(cases.system_facts.iter().map(parity_system_record));
+    records.extend(cases.hardware_hash.iter().map(parity_json_record));
+    records.extend(cases.coverage.iter().map(|case| {
+        EspEvidenceRecord::Coverage(EspArtifactCoverage {
+            artifact_id: case.artifact_id.clone(),
+            family: case.family.clone(),
+            status: case.status.clone(),
+            detail: Some(case.detail.clone()),
+            observed_at_utc: case.observed_at_utc.clone(),
+            evidence: vec![EspEvidenceRef {
+                evidence_id: case.evidence_id.clone(),
+                source_artifact_id: case.source_artifact_id.clone(),
+            }],
+        })
+    }));
+    let mut reducer = EspDiagnosticsReducer::new("2026-07-15T18:00:00Z".to_string());
+    reducer.ingest_all(records);
+    let snapshot = reducer.snapshot();
+
+    assert_eq!(
+        snapshot
+            .node_cache
+            .iter()
+            .map(|entry| entry.index)
+            .collect::<Vec<_>>(),
+        vec![2, 10, 42]
+    );
+    assert_eq!(
+        snapshot.node_cache[0].node_uri,
+        "./Vendor/MSFT/Policy/Config/Node2"
+    );
+    assert_eq!(
+        snapshot.node_cache[1].expected_value.as_deref(),
+        Some("expected-10")
+    );
+    assert_eq!(
+        snapshot.node_cache[2].evidence[1].evidence_id,
+        "node-42-expected"
+    );
+    assert!(snapshot
+        .node_cache
+        .iter()
+        .all(|entry| entry.sensitivity == EspSensitivity::Sensitive));
+    let node_42_raw = snapshot
+        .raw_evidence
+        .iter()
+        .find(|record| record.evidence[0].evidence_id == "node-42-expected")
+        .unwrap();
+    assert_eq!(
+        node_42_raw.record_id,
+        "raw|node-cache-registry|node-42-expected|5"
+    );
+    assert_eq!(
+        node_42_raw.raw_value,
+        EspObservationValue::Text("expected-42".to_string())
+    );
+    assert_eq!(
+        node_42_raw
+            .source_timestamp
+            .as_ref()
+            .unwrap()
+            .normalized_utc
+            .as_deref(),
+        Some("2026-07-15T10:00:42Z")
+    );
+    assert_eq!(node_42_raw.sensitivity, EspSensitivity::Sensitive);
+    let malformed = snapshot
+        .raw_evidence
+        .iter()
+        .filter(|record| record.parse_state == EspParseState::Malformed)
+        .collect::<Vec<_>>();
+    assert_eq!(malformed.len(), 3);
+    assert_eq!(
+        malformed[0].raw_value,
+        EspObservationValue::Text("{bad-page-settings".to_string())
+    );
+    assert_eq!(
+        malformed[0].record_id,
+        "raw|malformed-json|malformed-page-settings|6"
+    );
+    assert_eq!(malformed[1].provenance.source_artifact_id, "malformed-json");
+    assert!(
+        snapshot.workloads.is_empty(),
+        "malformed progress must not fabricate success"
+    );
+    assert_eq!(
+        snapshot.coverage[0].status,
+        EspArtifactStatus::PermissionDenied
+    );
+    assert_eq!(
+        snapshot.coverage[0].evidence[0].source_artifact_id,
+        "protected-registry"
+    );
+    assert_eq!(snapshot.coverage[0].artifact_id, "protected-esp-registry");
+    assert_eq!(snapshot.coverage[0].observed_at_utc, "2026-07-15T12:00:00Z");
+    let coverage_activity = snapshot
+        .activity
+        .iter()
+        .find(|entry| entry.evidence[0].evidence_id == "coverage-denied")
+        .unwrap();
+    assert_eq!(
+        coverage_activity.entry_id,
+        "timeline|protected-registry|coverage-denied|16"
+    );
+    assert_eq!(
+        coverage_activity.timestamp.normalized_utc.as_deref(),
+        Some("2026-07-15T12:00:00Z")
+    );
+    let hardware = snapshot.hardware.as_ref().unwrap();
+    assert_eq!(hardware.os_version.as_deref(), Some("10.0.26100"));
+    assert_eq!(hardware.os_build.as_deref(), Some("26100.4652"));
+    assert_eq!(hardware.manufacturer.as_deref(), Some("Contoso"));
+    assert_eq!(hardware.model.as_deref(), Some("Model 42"));
+    assert_eq!(
+        hardware.serial_number.as_ref().unwrap().sensitivity,
+        EspSensitivity::Sensitive
+    );
+    assert_eq!(hardware.tpm_version.as_deref(), Some("2.0"));
+    let serial_raw = snapshot
+        .raw_evidence
+        .iter()
+        .find(|record| record.evidence[0].evidence_id == "serial")
+        .unwrap();
+    assert_eq!(serial_raw.record_id, "raw|system-facts|serial|13");
+    assert_eq!(serial_raw.sensitivity, EspSensitivity::Sensitive);
+    assert_eq!(
+        serial_raw
+            .source_timestamp
+            .as_ref()
+            .unwrap()
+            .normalized_utc
+            .as_deref(),
+        Some("2026-07-15T14:00:04Z")
+    );
+    let serialized = serde_json::to_string(&snapshot).unwrap();
+    assert!(!serialized.contains("RAW-HARDWARE-HASH-MUST-NOT-APPEAR"));
+    assert!(!serialized.to_ascii_lowercase().contains("hardwarehash"));
+}
+
+#[test]
+fn reducer_parity_all_v2_states_pin_raw_normalized_sources_times_and_stable_ids() {
+    let cases = edge_cases();
+    assert_eq!(
+        cases.v2_states.len(),
+        9,
+        "eight known states plus one unknown"
+    );
+    let mut reducer = EspDiagnosticsReducer::new("2026-07-15T18:00:00Z".to_string());
+    reducer.ingest(registry_record(
+        "autopilot-settings",
+        "v2-hint",
+        r"SOFTWARE\Microsoft\Provisioning\AutopilotSettings",
+        "AutopilotDevicePrepHint",
+        EspObservationValue::Text("enabled".to_string()),
+        "2026-07-15T09:00:00Z",
+    ));
+    for case in &cases.v2_states {
+        reducer.ingest(json_record(
+            "v2-progress",
+            &case.id_evidence_id,
+            "ProvisioningProgress",
+            &format!("/Workloads/{}/WorkloadId", case.index),
+            EspObservationValue::Text(case.raw_identifier.clone()),
+            &case.source_timestamp,
+        ));
+        reducer.ingest(json_record(
+            "v2-progress",
+            &case.state_evidence_id,
+            "ProvisioningProgress",
+            &format!("/Workloads/{}/WorkloadState", case.index),
+            match &case.raw {
+                EspRawStatus::Number(value) => EspObservationValue::Integer(*value),
+                EspRawStatus::Text(value) => EspObservationValue::Text(value.clone()),
+            },
+            &case.source_timestamp,
+        ));
+    }
+    let snapshot = reducer.snapshot();
+    assert_eq!(snapshot.workloads.len(), 9);
+    for (position, case) in cases.v2_states.iter().enumerate() {
+        let workload = &snapshot.workloads[position];
+        assert_eq!(workload.raw_identifier, case.raw_identifier);
+        assert_eq!(workload.status.raw, case.raw);
+        assert_eq!(workload.status.normalized, case.normalized);
+        assert_eq!(
+            workload
+                .timestamps
+                .last_updated
+                .as_ref()
+                .unwrap()
+                .normalized_utc
+                .as_deref(),
+            Some(case.source_timestamp.as_str())
+        );
+        assert_eq!(workload.evidence[0].source_artifact_id, "v2-progress");
+        assert_eq!(workload.evidence[1].evidence_id, case.state_evidence_id);
+        assert_eq!(
+            workload.workload_id,
+            format!(
+                "workload|v2-progress|devicePreparationV2:device:{}:{}|0",
+                case.index, case.raw_identifier
+            )
+        );
+    }
+    let unknown = snapshot.workloads.last().unwrap();
+    assert_eq!(
+        unknown.status.raw,
+        EspRawStatus::Text("FutureState".to_string())
+    );
+    assert_eq!(unknown.status.normalized, EspNormalizedStatus::Unknown);
+    let first_activity = snapshot
+        .activity
+        .iter()
+        .find(|entry| entry.evidence[0].evidence_id == "v2-state-0")
+        .unwrap();
+    assert_eq!(first_activity.entry_id, "timeline|v2-progress|v2-state-0|2");
+    assert_eq!(
+        first_activity.status.as_ref().unwrap().raw,
+        EspRawStatus::Number(0)
+    );
+    assert_eq!(
+        first_activity.timestamp.normalized_utc.as_deref(),
+        Some("2026-07-15T11:00:00Z")
+    );
+    assert!(!matches!(snapshot.phase, EspPhase::Completed));
+}
+
+#[test]
+fn reducer_parity_every_required_event_id_pins_raw_normalized_source_time_and_entry_id() {
+    let cases = edge_cases();
+    assert_eq!(
+        cases
+            .events
+            .iter()
+            .map(|case| case.event_id)
+            .collect::<Vec<_>>(),
+        vec![72, 100, 101, 107, 109, 110, 111, 304, 306, 1905, 1906, 1920, 1922, 1924]
+    );
+    let mut reducer = EspDiagnosticsReducer::new("2026-07-15T18:00:00Z".to_string());
+    reducer.ingest_all(cases.events.iter().map(parity_event_record));
+    let snapshot = reducer.snapshot();
+    assert_eq!(snapshot.activity.len(), 14);
+    for (ordinal, case) in cases.events.iter().enumerate() {
+        let activity = snapshot
+            .activity
+            .iter()
+            .find(|entry| entry.evidence[0].evidence_id == case.evidence_id)
+            .unwrap();
+        assert_eq!(
+            activity.entry_id,
+            format!(
+                "timeline|{}|{}|{ordinal}",
+                case.source_artifact_id, case.evidence_id
+            )
+        );
+        assert_eq!(activity.kind, case.timeline_kind);
+        assert_eq!(activity.timestamp.raw_text, case.timestamp);
+        assert_eq!(
+            activity.timestamp.normalized_utc.as_deref(),
+            Some(case.timestamp.as_str())
+        );
+        assert_eq!(
+            activity.status.as_ref().unwrap().raw,
+            EspRawStatus::Text(case.message.clone())
+        );
+        assert_eq!(
+            activity.status.as_ref().unwrap().normalized,
+            case.normalized
+        );
+        assert_eq!(
+            activity.evidence[0].source_artifact_id,
+            case.source_artifact_id
+        );
+        let raw = snapshot
+            .raw_evidence
+            .iter()
+            .find(|record| record.evidence[0].evidence_id == case.evidence_id)
+            .unwrap();
+        assert_eq!(
+            raw.record_id,
+            format!(
+                "raw|{}|{}|{ordinal}",
+                case.source_artifact_id, case.evidence_id
+            )
+        );
+        assert_eq!(
+            raw.raw_value,
+            EspObservationValue::Text(case.message.clone())
+        );
+        assert_eq!(
+            raw.provenance.event.as_ref().unwrap().event_id,
+            case.event_id
+        );
+    }
+    assert!(snapshot
+        .activity
+        .iter()
+        .any(|entry| entry.evidence[0].evidence_id == "event-304"));
+    assert!(snapshot
+        .activity
+        .iter()
+        .any(|entry| entry.evidence[0].evidence_id == "event-1924"));
+    assert_eq!(
+        snapshot
+            .registration_events
+            .iter()
+            .map(|event| event.event_id)
+            .collect::<Vec<_>>(),
+        vec![101, 304, 306]
+    );
+}
+
+#[test]
+fn reducer_parity_partial_graph_names_never_replace_raw_ids_or_local_status() {
+    let cases = graph_cases();
+    assert_eq!(cases.local_workloads.len(), 3, "three local workloads");
+    assert_eq!(cases.graph_names.len(), 2, "partial Graph coverage");
+    let session_key = r"SOFTWARE\Microsoft\Windows\Autopilot\EnrollmentStatusTracking\ESPTrackingInfo\Diagnostics\Sidecar\2026-07-15T12:00:00Z";
+    let mut reducer = EspDiagnosticsReducer::new("2026-07-15T18:00:00Z".to_string());
+    for case in &cases.local_workloads {
+        reducer.ingest(registry_record(
+            "esp-workloads",
+            &case.evidence_id,
+            session_key,
+            &format!("./Device/Vendor/MSFT/Win32App/{}", case.raw_identifier),
+            EspObservationValue::Integer(case.raw_status),
+            &case.timestamp,
+        ));
+    }
+    for case in &cases.graph_names {
+        reducer.ingest(EspEvidenceRecord::Graph(EspGraphObservation {
+            context: fixture_context(
+                EspSourceKind::Graph,
+                "graph-apps",
+                &case.evidence_id,
+                &case.timestamp,
+            ),
+            section: EspGraphObservationSection::App,
+            api_version: GraphApiVersion::V1_0,
+            record_id: case.record_id.clone(),
+            display_name: case.display_name.clone(),
+            status: Some(status(
+                EspRawStatus::Text("remote".to_string()),
+                case.remote_status.clone(),
+            )),
+        }));
+    }
+    let snapshot = reducer.snapshot();
+    assert_eq!(snapshot.workloads[0].raw_identifier, "app-a");
+    assert_eq!(
+        snapshot.workloads[0].display_name.as_deref(),
+        Some("Contoso App A")
+    );
+    assert_eq!(snapshot.workloads[0].status.raw, EspRawStatus::Number(4));
+    assert_eq!(
+        snapshot.workloads[0].status.normalized,
+        EspNormalizedStatus::Failed
+    );
+    assert_eq!(
+        snapshot.workloads[0].evidence[0].source_artifact_id,
+        "esp-workloads"
+    );
+    assert_eq!(
+        snapshot.workloads[0].evidence[1],
+        EspEvidenceRef {
+            evidence_id: "graph-app-a".to_string(),
+            source_artifact_id: "graph-apps".to_string()
+        }
+    );
+    assert_eq!(snapshot.workloads[1].raw_identifier, "app-b");
+    assert_eq!(snapshot.workloads[1].display_name, None);
+    assert_eq!(snapshot.workloads[2].raw_identifier, "app-c");
+    assert_eq!(snapshot.workloads[2].evidence.len(), 1);
+    assert_eq!(
+        snapshot.raw_evidence[0].record_id,
+        "raw|esp-workloads|local-app-a|0"
+    );
+    assert_eq!(
+        snapshot.raw_evidence[0].raw_value,
+        EspObservationValue::Integer(4)
+    );
+    assert_eq!(
+        snapshot.raw_evidence[0]
+            .source_timestamp
+            .as_ref()
+            .unwrap()
+            .normalized_utc
+            .as_deref(),
+        Some("2026-07-15T15:00:00Z")
+    );
+    assert_eq!(
+        snapshot.raw_evidence[3].record_id,
+        "raw|graph-apps|graph-app-a|3"
+    );
+}
+
+#[test]
+fn reducer_parity_live_and_captured_equivalent_inputs_keep_equal_logic_and_source_specific_ids() {
+    let cases = equivalence_cases();
+    assert_eq!(cases.cases.len(), 1, "live/captured equivalence row");
+    for case in cases.cases {
+        let build = |source: &str, evidence: &str| {
+            let session_key = r"SOFTWARE\Microsoft\Windows\Autopilot\EnrollmentStatusTracking\ESPTrackingInfo\Diagnostics\Sidecar\2026-07-15T12:00:00Z";
+            let mut reducer = EspDiagnosticsReducer::new("2026-07-15T18:00:00Z".to_string());
+            reducer.ingest(registry_record(
+                source,
+                &format!("{evidence}-profile"),
+                r"SOFTWARE\Microsoft\Provisioning\Diagnostics\Autopilot",
+                "DeploymentProfileName",
+                EspObservationValue::Text(case.profile_name.clone()),
+                "2026-07-15T08:00:00Z",
+            ));
+            reducer.ingest(registry_record(
+                source,
+                evidence,
+                session_key,
+                &format!("./Device/Vendor/MSFT/Win32App/{}", case.raw_identifier),
+                EspObservationValue::Integer(case.raw_status),
+                &case.timestamp,
+            ));
+            reducer.snapshot()
+        };
+        let live = build(&case.live_source_artifact_id, &case.live_evidence_id);
+        let captured = build(
+            &case.captured_source_artifact_id,
+            &case.captured_evidence_id,
+        );
+        assert_eq!(live.scenario, captured.scenario, "{} scenario", case.name);
+        assert_eq!(live.phase, captured.phase, "{} phase", case.name);
+        assert_eq!(
+            live.profile.as_ref().unwrap().profile_name,
+            captured.profile.as_ref().unwrap().profile_name
+        );
+        assert_eq!(live.workloads[0].kind, captured.workloads[0].kind);
+        assert_eq!(
+            live.workloads[0].raw_identifier,
+            captured.workloads[0].raw_identifier
+        );
+        assert_eq!(live.workloads[0].status, captured.workloads[0].status);
+        assert_eq!(
+            live.workloads[0].timestamps,
+            captured.workloads[0].timestamps
+        );
+        assert_eq!(
+            live.workloads[0].workload_id,
+            "workload|live-registry|classic:device:2026-07-15T12:00:00Z:win32App:equivalent-app|0"
+        );
+        assert_eq!(captured.workloads[0].workload_id, "workload|captured-registry|classic:device:2026-07-15T12:00:00Z:win32App:equivalent-app|0");
+        assert_eq!(
+            live.raw_evidence[1].record_id,
+            "raw|live-registry|live-workload|1"
+        );
+        assert_eq!(
+            captured.raw_evidence[1].record_id,
+            "raw|captured-registry|captured-workload|1"
+        );
+        assert_eq!(
+            live.activity[0].evidence[0].source_artifact_id,
+            "live-registry"
+        );
+        assert_eq!(
+            captured.activity[0].evidence[0].source_artifact_id,
+            "captured-registry"
+        );
+    }
+}

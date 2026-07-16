@@ -1,0 +1,15 @@
+{
+  "cases": [
+    {
+      "name": "classic-win32-logical-equivalence",
+      "liveSourceArtifactId": "live-registry",
+      "capturedSourceArtifactId": "captured-registry",
+      "liveEvidenceId": "live-workload",
+      "capturedEvidenceId": "captured-workload",
+      "profileName": "Equivalent Profile",
+      "rawIdentifier": "equivalent-app",
+      "rawStatus": 4,
+      "timestamp": "2026-07-15T12:00:00Z"
+    }
+  ]
+}
