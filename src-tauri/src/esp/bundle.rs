@@ -669,7 +669,13 @@ fn read_manifest(
 }
 
 fn normalize_manifest_path_identity(path: &str) -> String {
-    path.trim().replace('\\', "/").to_ascii_lowercase()
+    path.trim()
+        .replace('\\', "/")
+        .split('/')
+        .filter(|component| *component != ".")
+        .collect::<Vec<_>>()
+        .join("/")
+        .to_ascii_lowercase()
 }
 
 fn manifest_gap_coverage(manifest: &Value, observed_at_utc: &str) -> Vec<EspArtifactCoverage> {
@@ -2228,6 +2234,20 @@ fn coverage_status_priority(status: &EspArtifactStatus) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn manifest_path_identity_collapses_slash_case_and_curdir_aliases() {
+        let expected = normalize_manifest_path_identity("evidence/logs/agentexecutor.log");
+
+        assert_eq!(
+            normalize_manifest_path_identity("EVIDENCE\\LOGS\\AgentExecutor.log"),
+            expected
+        );
+        assert_eq!(
+            normalize_manifest_path_identity("./evidence/logs/AgentExecutor.log"),
+            expected
+        );
+    }
 
     #[test]
     fn coverage_reconciliation_prefers_available_over_missing() {

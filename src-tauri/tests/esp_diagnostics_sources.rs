@@ -5800,10 +5800,10 @@ fn bundle_manifest_deduplicates_repeated_paths_before_parsing() {
                 "artifactId": format!("duplicate-{index}"),
                 "category": "logs",
                 "family": "intune-ime",
-                "relativePath": if index % 2 == 0 {
-                    "evidence/logs/AgentExecutor.log"
-                } else {
-                    "evidence\\logs\\AgentExecutor.log"
+                "relativePath": match index % 3 {
+                    0 => "evidence/logs/AgentExecutor.log",
+                    1 => "evidence\\logs\\AgentExecutor.log",
+                    _ => "./evidence/logs/AgentExecutor.log",
                 },
                 "status": "collected"
             })
@@ -5816,14 +5816,9 @@ fn bundle_manifest_deduplicates_repeated_paths_before_parsing() {
             .expect("analyze duplicate-path bundle");
 
     assert_eq!(
-        snapshot
-            .raw_evidence
-            .iter()
-            .filter(|record| record.provenance.file_path.as_deref()
-                == Some("evidence/logs/AgentExecutor.log"))
-            .count(),
+        snapshot.raw_evidence.len(),
         1,
-        "a repeated manifest path must be parsed only once"
+        "slash, case-normalized, and CurDir manifest aliases must be parsed only once"
     );
     assert!(snapshot.coverage.iter().any(|coverage| {
         coverage.artifact_id == "bundle.manifest-duplicate-path"
