@@ -59,6 +59,7 @@ export function GraphApiTab() {
     } else {
       setGraphApiEnabled(false);
       setAuthStatus(null);
+      useUiStore.getState().setGraphApiStatus("idle");
     }
   };
 
@@ -69,13 +70,15 @@ export function GraphApiTab() {
 
   const handleSignIn = async () => {
     setLoading(true);
+    useUiStore.getState().setGraphApiStatus("connecting");
     try {
       const status = await graphAuthenticate();
       setAuthStatus(status);
-      if (status.isAuthenticated) {
-        useUiStore.getState().setGraphApiStatus("connected");
-      }
+      useUiStore
+        .getState()
+        .setGraphApiStatus(status.isAuthenticated ? "connected" : "error");
     } catch (e) {
+      useUiStore.getState().setGraphApiStatus("error");
       setAuthStatus({
         isAuthenticated: false,
         userPrincipalName: null,

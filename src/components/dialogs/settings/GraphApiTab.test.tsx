@@ -138,6 +138,36 @@ describe("GraphApiTab delegated capabilities", () => {
     expect(useUiStore.getState().graphApiStatus).toBe("connected");
   });
 
+  it("clears a stale connected phase when manual authentication is rejected", async () => {
+    useUiStore.setState({ graphApiStatus: "connected" });
+    vi.mocked(graphGetAuthStatus).mockResolvedValue(disconnectedStatus());
+    vi.mocked(graphAuthenticate).mockResolvedValue({
+      ...disconnectedStatus(),
+      error: "Consent was not granted",
+    });
+
+    render(<GraphApiTab />);
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Sign in with Windows" }),
+    );
+
+    await waitFor(() => expect(graphAuthenticate).toHaveBeenCalledOnce());
+    expect(useUiStore.getState().graphApiStatus).toBe("error");
+  });
+
+  it("returns the global connection phase to idle when Graph is disabled", async () => {
+    useUiStore.setState({ graphApiStatus: "connected" });
+    vi.mocked(graphGetAuthStatus).mockResolvedValue(partialStatus(true));
+
+    render(<GraphApiTab />);
+
+    fireEvent.click(await screen.findByRole("checkbox"));
+
+    expect(useUiStore.getState().graphApiEnabled).toBe(false);
+    expect(useUiStore.getState().graphApiStatus).toBe("idle");
+  });
+
   it("clears the global connection phase after manual sign-out", async () => {
     useUiStore.setState({ graphApiStatus: "connected" });
     vi.mocked(graphGetAuthStatus).mockResolvedValue(partialStatus(true));
