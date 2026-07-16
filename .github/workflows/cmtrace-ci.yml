@@ -147,7 +147,7 @@ jobs:
         run: npm run test
 
       - name: CI bundle output contract tests
-        run: node --test scripts/ci-bundle-outputs.test.mjs
+        run: node --test scripts/ci-bundle-outputs.test.mjs scripts/ci-windows-provenance.test.mjs
 
       - name: npm security audit
         run: npm audit --audit-level=high
@@ -275,6 +275,14 @@ jobs:
           BUNDLE_ROOT: src-tauri/target/${{ matrix.target }}/release/bundle
         run: node scripts/ci-bundle-outputs.mjs verify
 
+      - name: Record Windows build provenance
+        if: runner.os == 'Windows'
+        env:
+          RELEASE_ROOT: src-tauri/target/${{ matrix.target }}/release
+          TARGET_TRIPLE: ${{ matrix.target }}
+          SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: node scripts/ci-windows-provenance.mjs
+
       - name: Upload artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -285,4 +293,5 @@ jobs:
             src-tauri/target/${{ matrix.target }}/release/bundle/**/*.dmg
             src-tauri/target/${{ matrix.target }}/release/bundle/**/*.deb
             src-tauri/target/${{ matrix.target }}/release/bundle/**/*.AppImage
+            src-tauri/target/${{ matrix.target }}/release/bundle/provenance/windows-build-provenance.json
           if-no-files-found: warn

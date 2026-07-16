@@ -226,7 +226,7 @@ function assertWorkflowContract(workflowText) {
 
   assert.match(
     workflow,
-    /- name: CI bundle output contract tests\n\s+run: node --test scripts\/ci-bundle-outputs\.test\.mjs/,
+    /- name: CI bundle output contract tests\n\s+run: node --test scripts\/ci-bundle-outputs\.test\.mjs scripts\/ci-windows-provenance\.test\.mjs/,
   );
   assert.match(
     buildJob,
