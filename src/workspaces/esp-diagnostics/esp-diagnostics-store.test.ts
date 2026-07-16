@@ -656,6 +656,29 @@ describe("ESP local session state", () => {
     ).toHaveLength(2);
   });
 
+  it("clears the native session identity when the worker reports an error", () => {
+    useEspDiagnosticsStore.getState().beginLiveStart("live-a");
+    useEspDiagnosticsStore.getState().applySessionUpdate(
+      makeSessionUpdate(0, makeSnapshot([]), "session-a", {
+        state: "starting",
+        reason: "initialSnapshot",
+      }),
+    );
+
+    useEspDiagnosticsStore.getState().applySessionUpdate(
+      makeSessionUpdate(1, makeSnapshot([]), "session-a", {
+        state: "error",
+        reason: "error",
+      }),
+    );
+
+    expect(useEspDiagnosticsStore.getState().phase).toBe("error");
+    expect(useEspDiagnosticsStore.getState().sessionId).toBeNull();
+    expect(useEspDiagnosticsStore.getState().error).toBe(
+      "The live ESP session failed.",
+    );
+  });
+
   it("recovers from local errors on the next request", () => {
     useEspDiagnosticsStore.getState().beginAnalysis("analysis-a");
     useEspDiagnosticsStore.getState().fail("analysis-a", "Unreadable bundle");

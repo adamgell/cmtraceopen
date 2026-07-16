@@ -2810,6 +2810,26 @@ fn discovery_reports_missing_explicit_process_log_with_typed_coverage() {
     assert_eq!(failure.kind, DiscoveryPathFailureKind::Missing);
 }
 
+#[test]
+fn discovery_rejects_unc_process_logs_before_any_filesystem_probe() {
+    let mut input = discovery_input(SystemTime::now());
+    input
+        .active_process_logs
+        .push(PathBuf::from(r"\\server\share\installer.log"));
+
+    let result = discover_bounded_logs(&input);
+
+    assert!(result.sources.is_empty());
+    assert_eq!(result.path_failures.len(), 1);
+    assert_eq!(
+        result.path_failures[0].kind,
+        DiscoveryPathFailureKind::OutsideAllowedRoot
+    );
+    assert!(result.path_failures[0]
+        .detail
+        .contains("local absolute path"));
+}
+
 #[cfg(unix)]
 #[test]
 fn discovery_reports_reparse_explicit_process_log_with_typed_coverage() {
@@ -4120,6 +4140,16 @@ impl EspSessionTail for FakeSessionTail {
 #[derive(Clone, Default)]
 struct RecordingSessionSink {
     updates: Arc<Mutex<Vec<app_lib::esp::session::EspSessionUpdate>>>,
+    include_initial: bool,
+}
+
+impl RecordingSessionSink {
+    fn including_initial() -> Self {
+        Self {
+            include_initial: true,
+            ..Self::default()
+        }
+    }
 }
 
 #[derive(Default)]
@@ -4130,6 +4160,9 @@ struct ReentrantSessionSink {
 
 impl EspSessionEventSink for ReentrantSessionSink {
     fn emit(&self, update: app_lib::esp::session::EspSessionUpdate) -> Result<(), String> {
+        if update.reason == EspUpdateReason::InitialSnapshot {
+            return Ok(());
+        }
         let manager = self
             .manager
             .lock()
@@ -4153,6 +4186,9 @@ impl EspSessionEventSink for ReentrantSessionSink {
 
 impl EspSessionEventSink for RecordingSessionSink {
     fn emit(&self, update: app_lib::esp::session::EspSessionUpdate) -> Result<(), String> {
+        if !self.include_initial && update.reason == EspUpdateReason::InitialSnapshot {
+            return Ok(());
+        }
         self.updates.lock().expect("session updates").push(update);
         Ok(())
     }
@@ -4303,6 +4339,28 @@ fn wait_for_session_updates(sink: &RecordingSessionSink, count: usize) {
     }
 }
 
+fn start_initialized_session(
+    manager: &EspSessionManager,
+    request_id: &str,
+) -> Result<app_lib::esp::session::EspSessionEnvelope, EspSessionError> {
+    let starting = manager.start(request_id)?;
+    assert_eq!(starting.sequence, 0);
+    assert_eq!(starting.state, EspSessionState::Starting);
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        let current = manager.get(&starting.session_id)?;
+        if current.state != EspSessionState::Starting {
+            return Ok(current);
+        }
+        if Instant::now() >= deadline {
+            return Err(EspSessionError::Worker {
+                message: "timed out waiting for test session initialization".to_string(),
+            });
+        }
+        thread::sleep(Duration::from_millis(1));
+    }
+}
+
 fn delayed_process_session_dependencies(
     clock: Arc<SequencedRollbackSessionClock>,
     process: DelayedProcessSessionProvider,
@@ -4392,7 +4450,7 @@ fn run_delayed_process_rollback_session(request_id: &'static str) -> RollbackSes
     ));
 
     let start_manager = Arc::clone(&manager);
-    let start = thread::spawn(move || start_manager.start(request_id));
+    let start = thread::spawn(move || start_initialized_session(&start_manager, request_id));
     initial_call.complete_with_times(
         &clock,
         "2026-07-16T06:30:01.123456789Z",
@@ -4461,7 +4519,9 @@ fn session_start_uses_post_collection_clock_even_without_evidence() {
         ),
     ));
     let start_manager = Arc::clone(&manager);
-    let start = thread::spawn(move || start_manager.start("61616161-6161-4161-8161-616161616161"));
+    let start = thread::spawn(move || {
+        start_initialized_session(&start_manager, "61616161-6161-4161-8161-616161616161")
+    });
 
     delayed_call.complete_with_times(&clock, "2026-07-16T06:30:05Z", "2026-07-16T06:30:05Z");
     let initial = start
@@ -4485,7 +4545,9 @@ fn session_start_and_stop_preserve_pre_collection_high_water_without_evidence() 
         delayed_process_session_dependencies(Arc::clone(&clock), process, sink.clone()),
     ));
     let start_manager = Arc::clone(&manager);
-    let start = thread::spawn(move || start_manager.start("63636363-6363-4363-8363-636363636363"));
+    let start = thread::spawn(move || {
+        start_initialized_session(&start_manager, "63636363-6363-4363-8363-636363636363")
+    });
 
     delayed_call.complete_with_times(&clock, "2026-07-16T06:30:04Z", "2026-07-16T06:29:59Z");
     let initial = start
@@ -4559,8 +4621,7 @@ fn session_refresh_removal_preserves_timestamp_high_water_and_timeout_finding() 
         .with_live_supported_for_tests(true),
     );
 
-    let initial = manager
-        .start("64646464-6464-4464-8464-646464646464")
+    let initial = start_initialized_session(&manager, "64646464-6464-4464-8464-646464646464")
         .expect("start refresh-removal session");
     assert_eq!(initial.sequence, 1);
     assert_eq!(initial.snapshot.generated_at_utc, "2026-07-16T06:30:05Z");
@@ -4608,8 +4669,7 @@ fn session_expiry_preserves_timestamp_high_water_after_wall_clock_rollback() {
         )
         .with_live_supported_for_tests(true),
     );
-    let initial = manager
-        .start("65656565-6565-4565-8565-656565656565")
+    let initial = start_initialized_session(&manager, "65656565-6565-4565-8565-656565656565")
         .expect("start expiry rollback session");
     assert!(initial.snapshot.raw_evidence.is_empty());
     assert_eq!(initial.snapshot.generated_at_utc, "2026-07-16T06:31:05Z");
@@ -4640,8 +4700,7 @@ fn session_tail_only_update_uses_post_poll_utc_without_changing_monotonic_deboun
         tail_factory,
         sink.clone(),
     ));
-    let initial = manager
-        .start("62626262-6262-4262-8262-626262626262")
+    let initial = start_initialized_session(&manager, "62626262-6262-4262-8262-626262626262")
         .expect("start delayed tail session");
 
     thread::sleep(Duration::from_millis(20));
@@ -4688,8 +4747,7 @@ fn session_tail_change_before_debounce_preserves_completion_utc_through_rollback
         )
         .with_live_supported_for_tests(true),
     );
-    let initial = manager
-        .start("66666666-6666-4666-8666-666666666666")
+    let initial = start_initialized_session(&manager, "66666666-6666-4666-8666-666666666666")
         .expect("start pre-debounce tail session");
 
     clock.advance(EARLY_CHANGE, "2026-07-16T06:30:00Z");
@@ -4770,7 +4828,8 @@ fn session_identity_source_boundary_preserves_exact_rejection_counts() {
         )
         .with_live_supported_for_tests(true);
         let manager = EspSessionManager::new(dependencies);
-        let initial = manager.start(request_id).expect("start boundary session");
+        let initial =
+            start_initialized_session(&manager, request_id).expect("start boundary session");
         manager
             .stop(&initial.session_id)
             .expect("stop boundary session");
@@ -4839,8 +4898,7 @@ fn session_keeps_record_identity_across_consecutive_snapshots_with_unrelated_pro
     )
     .with_live_supported_for_tests(true);
     let manager = EspSessionManager::new(dependencies);
-    let initial = manager
-        .start("10101010-1010-4010-8010-101010101010")
+    let initial = start_initialized_session(&manager, "10101010-1010-4010-8010-101010101010")
         .expect("start identity session");
     let initial_id = session_raw_record_id(&initial.snapshot, "stable-event-evidence");
 
@@ -4873,8 +4931,7 @@ fn session_tail_identity_survives_remove_and_reappearance_but_resets_for_a_new_s
     )
     .with_live_supported_for_tests(true);
     let manager = EspSessionManager::new(dependencies);
-    let first_session = manager
-        .start("20202020-2020-4020-8020-202020202020")
+    let first_session = start_initialized_session(&manager, "20202020-2020-4020-8020-202020202020")
         .expect("start first identity session");
     let repeated_record = || {
         session_system_record(
@@ -4935,9 +4992,9 @@ fn session_tail_identity_survives_remove_and_reappearance_but_resets_for_a_new_s
     manager
         .stop(&first_session.session_id)
         .expect("stop first session");
-    let second_session = manager
-        .start("30303030-3030-4030-8030-303030303030")
-        .expect("start second identity session");
+    let second_session =
+        start_initialized_session(&manager, "30303030-3030-4030-8030-303030303030")
+            .expect("start second identity session");
     tails
         .queued
         .lock()
@@ -4972,8 +5029,7 @@ fn session_enforces_one_live_owner_debounces_and_emits_monotonic_sequences() {
         sink.clone(),
     ));
 
-    let initial = manager
-        .start("11111111-1111-4111-8111-111111111111")
+    let initial = start_initialized_session(&manager, "11111111-1111-4111-8111-111111111111")
         .expect("start session");
     assert_eq!(initial.request_id, "11111111-1111-4111-8111-111111111111");
     assert_eq!(initial.sequence, 1);
@@ -5061,8 +5117,7 @@ fn session_refreshes_every_two_seconds_and_preserves_partial_source_coverage() {
         sink.clone(),
     ));
 
-    let initial = manager
-        .start("33333333-3333-4333-8333-333333333333")
+    let initial = start_initialized_session(&manager, "33333333-3333-4333-8333-333333333333")
         .expect("start session");
     assert_eq!(registry_calls.load(Ordering::SeqCst), 1);
     assert_eq!(discovery_calls.load(Ordering::SeqCst), 1);
@@ -5096,8 +5151,7 @@ fn session_expires_at_eight_hours_rejects_late_work_and_allows_a_new_owner() {
         tails.clone(),
         sink.clone(),
     ));
-    let initial = manager
-        .start("44444444-4444-4444-8444-444444444444")
+    let initial = start_initialized_session(&manager, "44444444-4444-4444-8444-444444444444")
         .expect("start session");
 
     clock.advance(MAX_SESSION_DURATION);
@@ -5107,8 +5161,7 @@ fn session_expires_at_eight_hours_rejects_late_work_and_allows_a_new_owner() {
     assert_eq!(expired.state, EspSessionState::Expired);
     assert_eq!(tails.stops.load(Ordering::SeqCst), 1);
 
-    let replacement = manager
-        .start("55555555-5555-4555-8555-555555555555")
+    let replacement = start_initialized_session(&manager, "55555555-5555-4555-8555-555555555555")
         .expect("expired session must release ownership");
     assert_ne!(replacement.session_id, initial.session_id);
     manager
@@ -5159,8 +5212,7 @@ fn session_worker_panic_becomes_terminal_and_does_not_strand_ownership() {
         tails.clone(),
         sink.clone(),
     ));
-    let initial = manager
-        .start("77777777-7777-4777-8777-777777777777")
+    let initial = start_initialized_session(&manager, "77777777-7777-4777-8777-777777777777")
         .expect("start session");
 
     clock.advance(DISCOVERY_INTERVAL);
@@ -5170,8 +5222,7 @@ fn session_worker_panic_becomes_terminal_and_does_not_strand_ownership() {
     assert_eq!(failed.reason, EspUpdateReason::Failed);
     assert_eq!(tails.stops.load(Ordering::SeqCst), 1);
 
-    let replacement = manager
-        .start("88888888-8888-4888-8888-888888888888")
+    let replacement = start_initialized_session(&manager, "88888888-8888-4888-8888-888888888888")
         .expect("failed worker must release ownership");
     assert_ne!(replacement.session_id, initial.session_id);
     manager
@@ -5189,8 +5240,7 @@ fn session_concurrent_stop_callers_never_observe_a_live_post_join_envelope() {
         FakeSessionTailFactory::default(),
         RecordingSessionSink::default(),
     )));
-    let initial = manager
-        .start("99999999-9999-4999-8999-999999999999")
+    let initial = start_initialized_session(&manager, "99999999-9999-4999-8999-999999999999")
         .expect("start session");
     let barrier = Arc::new(Barrier::new(3));
     let callers = (0..2)
@@ -5242,8 +5292,7 @@ fn session_rejects_graph_records_from_every_local_provider_and_tail_batch() {
     .with_live_supported_for_tests(true);
     let manager = EspSessionManager::new(dependencies);
 
-    let initial = manager
-        .start("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
+    let initial = start_initialized_session(&manager, "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
         .expect("start local-only session");
     assert!(initial.snapshot.graph.is_none());
     assert!(initial
@@ -5286,8 +5335,7 @@ fn session_upserts_tail_coverage_by_artifact_instead_of_growing_duplicates() {
         tails.clone(),
         sink.clone(),
     ));
-    let initial = manager
-        .start("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb")
+    let initial = start_initialized_session(&manager, "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb")
         .expect("start session");
 
     for status in [EspArtifactStatus::Missing, EspArtifactStatus::Available] {
@@ -5374,8 +5422,7 @@ fn no_byte_tail_recovery_replaces_transient_session_failure_coverage() {
         tails.clone(),
         sink.clone(),
     ));
-    let initial = manager
-        .start("cccccccc-cccc-4ccc-8ccc-cccccccccccc")
+    let initial = start_initialized_session(&manager, "cccccccc-cccc-4ccc-8ccc-cccccccccccc")
         .expect("start recovery session");
 
     for batch in [failed_batch, recovered_batch] {
@@ -5402,6 +5449,142 @@ fn no_byte_tail_recovery_replaces_transient_session_failure_coverage() {
     assert_eq!(matching[0].status, EspArtifactStatus::Available);
 
     manager.stop(&initial.session_id).expect("stop session");
+}
+
+#[test]
+fn session_publishes_a_stoppable_starting_owner_before_provider_io_completes() {
+    let clock = Arc::new(ManualSessionClock::default());
+    let entered = Arc::new(Barrier::new(2));
+    let release = Arc::new(Barrier::new(2));
+    let blocking = Arc::new(BlockingSessionProvider {
+        calls: Arc::new(AtomicUsize::new(0)),
+        entered: Arc::clone(&entered),
+        release: Arc::clone(&release),
+    });
+    let manager = Arc::new(EspSessionManager::new(
+        EspSessionDependencies::new(
+            clock,
+            blocking,
+            Arc::new(FakeSessionProvider::available("event")),
+            Arc::new(FakeSessionProvider::available("system")),
+            Arc::new(FakeSessionProvider::available("process")),
+            Arc::new(FakeSessionDiscovery::default()),
+            Arc::new(FakeSessionTailFactory::default()),
+            Arc::new(RecordingSessionSink::default()),
+        )
+        .with_live_supported_for_tests(true),
+    ));
+    let (sender, receiver) = mpsc::channel();
+    let starter = {
+        let manager = Arc::clone(&manager);
+        thread::spawn(move || {
+            let _ = sender.send(manager.start("abababab-abab-4bab-8bab-abababababab"));
+        })
+    };
+
+    entered.wait();
+    let early = receiver.recv_timeout(Duration::from_millis(250));
+    let returned_before_release = early.is_ok();
+    release.wait();
+    let starting = early
+        .or_else(|_| receiver.recv_timeout(Duration::from_secs(2)))
+        .expect("start result")
+        .expect("start session");
+    starter.join().expect("starter thread");
+
+    if !returned_before_release {
+        manager.stop(&starting.session_id).expect("cleanup session");
+    }
+    assert!(
+        returned_before_release,
+        "start must return a session ID before provider I/O completes"
+    );
+    assert_eq!(starting.sequence, 0);
+    assert_eq!(starting.state, EspSessionState::Starting);
+
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let live = loop {
+        let current = manager.get(&starting.session_id).expect("active session");
+        if current.state == EspSessionState::Live {
+            break current;
+        }
+        assert!(Instant::now() < deadline, "session did not become live");
+        thread::sleep(Duration::from_millis(5));
+    };
+    assert_eq!(live.sequence, 1);
+    manager.stop(&starting.session_id).expect("stop session");
+}
+
+#[test]
+fn session_stop_cancels_initialization_before_later_providers_or_live_publication() {
+    let clock = Arc::new(ManualSessionClock::default());
+    let entered = Arc::new(Barrier::new(2));
+    let release = Arc::new(Barrier::new(2));
+    let blocking = Arc::new(BlockingSessionProvider {
+        calls: Arc::new(AtomicUsize::new(0)),
+        entered: Arc::clone(&entered),
+        release: Arc::clone(&release),
+    });
+    let later_calls = Arc::new(AtomicUsize::new(0));
+    let later_provider = Arc::new(BlockingSessionProvider {
+        calls: Arc::clone(&later_calls),
+        entered: Arc::new(Barrier::new(1)),
+        release: Arc::new(Barrier::new(1)),
+    });
+    let sink = RecordingSessionSink::including_initial();
+    let manager = Arc::new(EspSessionManager::new(
+        EspSessionDependencies::new(
+            clock,
+            blocking,
+            later_provider,
+            Arc::new(FakeSessionProvider::available("system")),
+            Arc::new(FakeSessionProvider::available("process")),
+            Arc::new(FakeSessionDiscovery::default()),
+            Arc::new(FakeSessionTailFactory::default()),
+            Arc::new(sink.clone()),
+        )
+        .with_live_supported_for_tests(true),
+    ));
+
+    let starting = manager
+        .start("acacacac-acac-4cac-8cac-acacacacacac")
+        .expect("start session");
+    entered.wait();
+    let stopper = {
+        let manager = Arc::clone(&manager);
+        let session_id = starting.session_id.clone();
+        thread::spawn(move || manager.stop(&session_id))
+    };
+    let deadline = Instant::now() + Duration::from_millis(250);
+    let cancellation_published = loop {
+        if manager
+            .get(&starting.session_id)
+            .is_ok_and(|current| current.state == EspSessionState::Stopping)
+        {
+            break true;
+        }
+        if Instant::now() >= deadline {
+            break false;
+        }
+        thread::sleep(Duration::from_millis(1));
+    };
+    release.wait();
+    let stopped = stopper
+        .join()
+        .expect("stopper thread")
+        .expect("stop starting session");
+
+    assert!(
+        cancellation_published,
+        "stop did not cancel the starting owner"
+    );
+    assert_eq!(stopped.state, EspSessionState::Stopped);
+    assert_eq!(stopped.sequence, 1);
+    assert_eq!(later_calls.load(Ordering::SeqCst), 0);
+    let updates = sink.updates.lock().expect("session updates");
+    assert_eq!(updates.len(), 1);
+    assert_eq!(updates[0].state, EspSessionState::Stopped);
+    assert_eq!(updates[0].reason, EspUpdateReason::Stopped);
 }
 
 #[test]
@@ -5475,8 +5658,7 @@ fn session_does_not_hold_snapshot_or_control_locks_during_event_emission() {
     .with_live_supported_for_tests(true);
     let manager = Arc::new(EspSessionManager::new(dependencies));
     *sink.manager.lock().expect("sink manager") = Some(Arc::downgrade(&manager));
-    let initial = manager
-        .start("eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee")
+    let initial = start_initialized_session(&manager, "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee")
         .expect("start session");
 
     tails
@@ -5514,8 +5696,7 @@ fn session_shutdown_cancels_joins_and_rejects_late_callbacks() {
         tails.clone(),
         sink.clone(),
     ));
-    let initial = manager
-        .start("ffffffff-ffff-4fff-8fff-ffffffffffff")
+    let initial = start_initialized_session(&manager, "ffffffff-ffff-4fff-8fff-ffffffffffff")
         .expect("start session");
 
     manager.shutdown().expect("shutdown session manager");

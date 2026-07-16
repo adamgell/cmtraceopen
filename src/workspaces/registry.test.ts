@@ -487,15 +487,25 @@ describe("ESP workspace registration", () => {
 
   it("sends a native-valid UUID when starting live diagnostics", async () => {
     const snapshot = makeChromeSnapshot();
-    vi.mocked(invoke).mockImplementationOnce(async (_command, args) => {
-      const requestId = (args as { requestId: string }).requestId;
-      return {
-        sessionId: "11111111-1111-4111-8111-111111111111",
-        requestId,
-        sequence: 1,
-        state: "live",
-        snapshot,
-      };
+    vi.mocked(invoke).mockImplementation(async (command, args) => {
+      if (command === "get_esp_elevation_state") {
+        return {
+          isElevated: true,
+          restartSupported: true,
+          restrictedSources: [],
+        };
+      }
+      if (command === "start_esp_diagnostics_session") {
+        const requestId = (args as { requestId: string }).requestId;
+        return {
+          sessionId: "11111111-1111-4111-8111-111111111111",
+          requestId,
+          sequence: 0,
+          state: "starting",
+          snapshot,
+        };
+      }
+      throw new Error(`Unexpected IPC command: ${command}`);
     });
     render(createElement(EspDiagnosticsWorkspace));
 
@@ -511,6 +521,9 @@ describe("ESP workspace registration", () => {
         }),
       ),
     );
+    expect(
+      await screen.findByRole("button", { name: "Stop live diagnostics" }),
+    ).toBeEnabled();
   });
 
   it("renders analyzing and error states without discarding the action surface", () => {

@@ -36,6 +36,7 @@ pub enum EspSessionState {
     Stopping,
     Stopped,
     Expired,
+    #[serde(rename = "error")]
     Failed,
 }
 
@@ -48,10 +49,12 @@ impl EspSessionState {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum EspUpdateReason {
+    InitialSnapshot,
     EvidenceChanged,
     DiscoveryRefresh,
     Stopped,
     Expired,
+    #[serde(rename = "error")]
     Failed,
 }
 
@@ -277,16 +280,14 @@ impl EspSessionManager {
         self.reserve(&session_id, request_id)?;
 
         let reading = self.dependencies.clock.now();
-        let mut engine = SessionEngine::initialize(&self.dependencies, &reading);
-        let collection_completed_at_utc = self.dependencies.clock.now().utc;
-        let snapshot = engine.snapshot(&collection_completed_at_utc);
+        let starting_snapshot = EspDiagnosticsReducer::new(reading.utc).snapshot();
         let active = Arc::new(ActiveSession {
             session_id: session_id.clone(),
             request_id: request_id.to_string(),
             published: Mutex::new(PublishedSession {
-                sequence: 1,
-                state: EspSessionState::Live,
-                snapshot: snapshot.clone(),
+                sequence: 0,
+                state: EspSessionState::Starting,
+                snapshot: starting_snapshot.clone(),
             }),
             cancellation: Arc::new(EspCancellation::default()),
             activation: WorkerActivation::default(),
@@ -302,7 +303,7 @@ impl EspSessionManager {
             .spawn(move || {
                 failure_active.activation.wait(&failure_active.cancellation);
                 if catch_unwind(AssertUnwindSafe(|| {
-                    run_worker(engine, worker_active, worker_dependencies);
+                    run_worker(worker_active, worker_dependencies);
                 }))
                 .is_err()
                 {
@@ -352,9 +353,9 @@ impl EspSessionManager {
         Ok(EspSessionEnvelope {
             session_id,
             request_id: request_id.to_string(),
-            sequence: 1,
-            state: EspSessionState::Live,
-            snapshot,
+            sequence: 0,
+            state: EspSessionState::Starting,
+            snapshot: starting_snapshot,
         })
     }
 
@@ -385,6 +386,7 @@ impl EspSessionManager {
         .ok_or(EspSessionError::SessionNotFound)?;
 
         active.cancellation.cancel();
+        active.mark_stopping()?;
         join_active(&active)?;
         let envelope = active.envelope()?;
 
@@ -514,6 +516,17 @@ impl ActiveSession {
             .map(|published| published.state.is_terminal())
             .map_err(state_error)
     }
+
+    fn mark_stopping(&self) -> Result<(), EspSessionError> {
+        let mut published = self.published.lock().map_err(state_error)?;
+        if matches!(
+            published.state,
+            EspSessionState::Starting | EspSessionState::Live
+        ) {
+            published.state = EspSessionState::Stopping;
+        }
+        Ok(())
+    }
 }
 
 struct PublishedSession {
@@ -576,11 +589,25 @@ struct SessionEngine {
 }
 
 impl SessionEngine {
-    fn initialize(dependencies: &EspSessionDependencies, reading: &EspClockReading) -> Self {
-        let provider_records = collect_provider_records(dependencies, &reading.utc);
+    fn initialize(
+        dependencies: &EspSessionDependencies,
+        reading: &EspClockReading,
+        cancellation: &EspCancellation,
+    ) -> Option<Self> {
+        let provider_records = collect_provider_records(dependencies, &reading.utc, cancellation)?;
+        if cancellation.is_cancelled() {
+            return None;
+        }
         let discovery = dependencies.discovery.discover(&reading.utc);
+        if cancellation.is_cancelled() {
+            return None;
+        }
         let mut tail = dependencies.tail_factory.create();
         let tail_batch = tail.reconcile(&discovery.sources, &reading.utc);
+        if cancellation.is_cancelled() {
+            tail.stop();
+            return None;
+        }
         let mut identity_allocator = EspEvidenceIdentityAllocator::new();
         let mut identity_rejections = EspEvidenceIdentityRejectionCounts::default();
         let provider_records = provider_records
@@ -626,7 +653,7 @@ impl SessionEngine {
         };
         engine.apply_tail_batch(tail_batch);
         engine.dirty = false;
-        engine
+        Some(engine)
     }
 
     fn snapshot(&mut self, requested_generated_at_utc: &str) -> EspDiagnosticsSnapshot {
@@ -674,9 +701,22 @@ impl SessionEngine {
         changed
     }
 
-    fn refresh(&mut self, dependencies: &EspSessionDependencies, reading: &EspClockReading) {
+    fn refresh(
+        &mut self,
+        dependencies: &EspSessionDependencies,
+        reading: &EspClockReading,
+        cancellation: &EspCancellation,
+    ) -> bool {
+        let Some(provider_records) =
+            collect_provider_records(dependencies, &reading.utc, cancellation)
+        else {
+            return false;
+        };
+        if cancellation.is_cancelled() {
+            return false;
+        }
         let mut previous = std::mem::take(&mut self.provider_records);
-        self.provider_records = collect_provider_records(dependencies, &reading.utc)
+        self.provider_records = provider_records
             .into_iter()
             .map(|(slot, records)| {
                 (
@@ -691,6 +731,9 @@ impl SessionEngine {
             })
             .collect();
         let discovery = dependencies.discovery.discover(&reading.utc);
+        if cancellation.is_cancelled() {
+            return false;
+        }
         self.discovery_coverage = reconcile_identified_records(
             std::mem::take(&mut self.discovery_coverage),
             discovery
@@ -703,12 +746,16 @@ impl SessionEngine {
         );
         self.sources = discovery.sources;
         let tail_batch = self.tail.reconcile(&self.sources, &reading.utc);
+        if cancellation.is_cancelled() {
+            return false;
+        }
         self.apply_tail_batch(tail_batch);
         self.pending_reason = EspUpdateReason::DiscoveryRefresh;
         self.dirty = true;
         while self.next_refresh <= reading.monotonic {
             self.next_refresh += DISCOVERY_INTERVAL;
         }
+        true
     }
 
     fn apply_tail_batch(&mut self, batch: EspTailEvidenceBatch) -> bool {
@@ -801,11 +848,52 @@ fn coherent_utc_timestamp<'a>(
     coherent
 }
 
-fn run_worker(
-    mut engine: SessionEngine,
-    active: Arc<ActiveSession>,
-    dependencies: EspSessionDependencies,
-) {
+fn run_worker(active: Arc<ActiveSession>, dependencies: EspSessionDependencies) {
+    if active.cancellation.is_cancelled() {
+        publish_current_snapshot(
+            &active,
+            &dependencies,
+            EspSessionState::Stopped,
+            EspUpdateReason::Stopped,
+        );
+        return;
+    }
+
+    let reading = dependencies.clock.now();
+    let Some(mut engine) = SessionEngine::initialize(&dependencies, &reading, &active.cancellation)
+    else {
+        publish_current_snapshot(
+            &active,
+            &dependencies,
+            EspSessionState::Stopped,
+            EspUpdateReason::Stopped,
+        );
+        return;
+    };
+    let collection_completed_at_utc = dependencies.clock.now().utc;
+    engine.advance_utc_high_water_mark(&collection_completed_at_utc);
+    let initial_snapshot = engine.snapshot(&collection_completed_at_utc);
+    if active.cancellation.is_cancelled() {
+        engine.stop_tail();
+        publish(
+            &active,
+            &dependencies,
+            EspSessionState::Stopped,
+            EspUpdateReason::Stopped,
+            initial_snapshot,
+            &collection_completed_at_utc,
+        );
+        return;
+    }
+    publish(
+        &active,
+        &dependencies,
+        EspSessionState::Live,
+        EspUpdateReason::InitialSnapshot,
+        initial_snapshot,
+        &collection_completed_at_utc,
+    );
+
     loop {
         let reading = dependencies.clock.now();
         if reading.monotonic.saturating_sub(engine.started_at) >= MAX_SESSION_DURATION {
@@ -864,10 +952,9 @@ fn run_worker(
 
         let tail_changed = engine.poll_tail(&reading.utc);
         let refresh_due = reading.monotonic >= engine.next_refresh;
-        if refresh_due {
-            engine.refresh(&dependencies, &reading);
-        }
-        if tail_changed || refresh_due {
+        let refreshed =
+            refresh_due && engine.refresh(&dependencies, &reading, &active.cancellation);
+        if tail_changed || refreshed {
             let collection_completed_at_utc = dependencies.clock.now().utc;
             engine.advance_utc_high_water_mark(&collection_completed_at_utc);
         }
@@ -887,6 +974,26 @@ fn run_worker(
             );
         }
     }
+}
+
+fn publish_current_snapshot(
+    active: &ActiveSession,
+    dependencies: &EspSessionDependencies,
+    state: EspSessionState,
+    reason: EspUpdateReason,
+) {
+    let reading = dependencies.clock.now();
+    let Ok(envelope) = active.envelope() else {
+        return;
+    };
+    publish(
+        active,
+        dependencies,
+        state,
+        reason,
+        envelope.snapshot,
+        &reading.utc,
+    );
 }
 
 fn publish(
@@ -926,23 +1033,30 @@ fn publish(
 fn collect_provider_records(
     dependencies: &EspSessionDependencies,
     observed_at_utc: &str,
-) -> BTreeMap<ProviderSlot, Vec<EspEvidenceRecord>> {
-    [
+    cancellation: &EspCancellation,
+) -> Option<BTreeMap<ProviderSlot, Vec<EspEvidenceRecord>>> {
+    let providers = [
         (ProviderSlot::Registry, dependencies.registry.as_ref()),
         (ProviderSlot::EventLogs, dependencies.event_logs.as_ref()),
         (ProviderSlot::System, dependencies.system.as_ref()),
         (ProviderSlot::Process, dependencies.process.as_ref()),
-    ]
-    .into_iter()
-    .map(|(slot, provider)| {
+    ];
+    let mut records = BTreeMap::new();
+    for (slot, provider) in providers {
+        if cancellation.is_cancelled() {
+            return None;
+        }
         let mut batch = provider.collect(observed_at_utc);
+        if cancellation.is_cancelled() {
+            return None;
+        }
         batch.records.retain(is_local_record);
         batch
             .records
             .extend(batch.coverage.into_iter().map(EspEvidenceRecord::Coverage));
-        (slot, batch.records)
-    })
-    .collect()
+        records.insert(slot, batch.records);
+    }
+    Some(records)
 }
 
 fn reconcile_identified_records(
@@ -1140,7 +1254,19 @@ fn worker_error(error: impl std::fmt::Display) -> EspSessionError {
 
 #[cfg(test)]
 mod tests {
-    use super::coherent_utc_timestamp;
+    use super::{coherent_utc_timestamp, EspSessionState, EspUpdateReason};
+
+    #[test]
+    fn failed_session_wire_values_match_the_frontend_error_contract() {
+        assert_eq!(
+            serde_json::to_value(EspSessionState::Failed).expect("serialize failed state"),
+            "error"
+        );
+        assert_eq!(
+            serde_json::to_value(EspUpdateReason::Failed).expect("serialize failed reason"),
+            "error"
+        );
+    }
 
     #[test]
     fn coherent_timestamp_compares_offsets_and_ignores_malformed_evidence_times() {

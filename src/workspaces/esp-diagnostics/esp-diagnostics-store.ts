@@ -537,7 +537,8 @@ export const useEspDiagnosticsStore = create<EspDiagnosticsStore>((set) => ({
         sessionId:
           update.state === "stopped" ||
           update.state === "completed" ||
-          update.state === "expired"
+          update.state === "expired" ||
+          update.state === "error"
             ? null
             : update.sessionId,
         sequence: update.sequence,
