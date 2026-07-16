@@ -49,7 +49,7 @@ fn escaped_json_secret_member_key_pattern() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
         Regex::new(
-            r#"(?i)\\["](?:authorization|hardware[_-]?hash|device[_-]?hardware[_-]?data)\\["][ \t\r\n]*:[ \t\r\n]*"#,
+            r#"(?i)\\["](?:authorization|password|passwd|pwd|secret|client[_-]?secret|api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|auth[_-]?token|bearer[_-]?token|token|tenant(?:id)?|entdmid|serial(?:number)?|hardware[_-]?hash|device[_-]?hardware[_-]?data)\\["][ \t\r\n]*:[ \t\r\n]*"#,
         )
         .expect("escaped JSON secret-member key pattern must compile")
     })
@@ -82,6 +82,16 @@ fn authorization_scheme_and_credential_pattern() -> &'static Regex {
             r#"(?i)(?P<prefix>(?:(?:--?|/)authorization["']?(?:[ \t]*(?:\r?\n[ \t]+)?(?:->|=>)[ \t]*(?:\r?\n[ \t]+)?|\s*[=:]\s*|\s+)|\bauthorization["']?(?:[ \t]*(?:\r?\n[ \t]+)?(?:->|=>)[ \t]*(?:\r?\n[ \t]+)?|\s*[=:]\s*|\s+)))(?:"(?:basic|bearer|digest|apikey)\s+[^"\r\n]+"|'(?:basic|bearer|digest|apikey)\s+[^'\r\n]+'|(?:"(?:basic|bearer|digest|apikey)"|'(?:basic|bearer|digest|apikey)'|(?:basic|bearer|digest|apikey))[ \t]+(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s]+))(?:\r?\n[ \t]+[^\r\n]+)*"#,
         )
         .expect("authorization scheme-and-credential redaction pattern must compile")
+    })
+}
+
+fn standalone_digest_challenge_pattern() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
+        Regex::new(
+            r#"(?i)(?P<prefix>\bdigest)(?:[ \t]+|\r?\n[ \t]+)[A-Z0-9!#$%&'*+.^_`|~-]+[ \t]*=[ \t]*(?:"[^"\r\n]*"|'[^'\r\n]*'|[^,;\s\r\n]+)(?:(?:[ \t]*[,;][ \t]*(?:\r?\n[ \t]+)?|\r?\n[ \t]+)[A-Z0-9!#$%&'*+.^_`|~-]+[ \t]*=[ \t]*(?:"[^"\r\n]*"|'[^'\r\n]*'|[^,;\s\r\n]+))*"#,
+        )
+        .expect("standalone Digest challenge redaction pattern must compile")
     })
 }
 
@@ -322,6 +332,10 @@ pub fn redacted_export_projection(snapshot: &EspDiagnosticsSnapshot) -> EspDiagn
     pseudonymize_sid_references(&mut safe, &reference_pseudonyms.sids);
     redact_all_evidence_refs(&mut safe, &reference_pseudonyms);
 
+    for source in &mut safe.elevation.restricted_sources {
+        redact_reference(source, &reference_pseudonyms);
+    }
+
     redact_identity(&mut safe.identity);
     if let Some(profile) = &mut safe.profile {
         redact_profile(profile);
@@ -368,7 +382,14 @@ pub fn redacted_export_projection(snapshot: &EspDiagnosticsSnapshot) -> EspDiagn
             redact_status(status);
         }
     }
+    for finding in &mut safe.findings {
+        for coverage_gap_id in &mut finding.coverage_gap_ids {
+            redact_reference(coverage_gap_id, &reference_pseudonyms);
+        }
+    }
     for coverage in &mut safe.coverage {
+        redact_reference(&mut coverage.artifact_id, &reference_pseudonyms);
+        redact_reference(&mut coverage.family, &reference_pseudonyms);
         redact_optional_narrative_text(&mut coverage.detail);
     }
     safe.raw_evidence
@@ -453,6 +474,9 @@ fn collect_reference_pseudonyms(snapshot: &EspDiagnosticsSnapshot) -> ReferenceP
     let mut sids = BTreeSet::new();
     let mut emails = BTreeSet::new();
     let mut profile_users = BTreeSet::new();
+    for source in &snapshot.elevation.restricted_sources {
+        collect_reference_tokens(source, &mut sids, &mut emails, &mut profile_users);
+    }
     for session in &snapshot.sessions {
         collect_sids(&session.session_id, &mut sids);
         if let Some(user_sid) = &session.user_sid {
@@ -473,6 +497,20 @@ fn collect_reference_pseudonyms(snapshot: &EspDiagnosticsSnapshot) -> ReferenceP
         for workload_id in &correlation.candidate_workload_ids {
             collect_sids(workload_id, &mut sids);
         }
+    }
+    for finding in &snapshot.findings {
+        for coverage_gap_id in &finding.coverage_gap_ids {
+            collect_reference_tokens(coverage_gap_id, &mut sids, &mut emails, &mut profile_users);
+        }
+    }
+    for coverage in &snapshot.coverage {
+        collect_reference_tokens(
+            &coverage.artifact_id,
+            &mut sids,
+            &mut emails,
+            &mut profile_users,
+        );
+        collect_reference_tokens(&coverage.family, &mut sids, &mut emails, &mut profile_users);
     }
     for record in &snapshot.raw_evidence {
         collect_reference_tokens(
@@ -612,6 +650,8 @@ fn redact_reference(value: &mut String, pseudonyms: &ReferencePseudonyms) {
     let redacted = redact_escaped_json_secret_members(&redacted);
     let redacted =
         authorization_digest_challenge_pattern().replace_all(&redacted, "${prefix}[redacted]");
+    let redacted =
+        standalone_digest_challenge_pattern().replace_all(&redacted, "${prefix} [redacted]");
     let redacted =
         authorization_scheme_and_credential_pattern().replace_all(&redacted, "${prefix}[redacted]");
     let redacted =
@@ -1066,6 +1106,8 @@ fn redact_text_for_context(value: &str, context: TextRedactionContext) -> String
     let redacted =
         authorization_digest_challenge_pattern().replace_all(&redacted, "${prefix}[redacted]");
     let redacted =
+        standalone_digest_challenge_pattern().replace_all(&redacted, "${prefix} [redacted]");
+    let redacted =
         authorization_scheme_and_credential_pattern().replace_all(&redacted, "${prefix}[redacted]");
     let redacted = redact_standalone_authorization_credentials(&redacted, context);
     let redacted = redact_generic_authorization_credentials(&redacted, context);
@@ -1155,6 +1197,7 @@ fn sensitive_value_label(value: &str) -> bool {
             | "usersid"
             | "sid"
             | "aadtenantid"
+            | "azureadtenantid"
             | "tenantid"
             | "tenantdomain"
             | "cloudassignedtenantid"
@@ -1162,6 +1205,7 @@ fn sensitive_value_label(value: &str) -> bool {
             | "entdmid"
             | "serial"
             | "serialnumber"
+            | "deviceserialnumber"
     )
 }
 
@@ -1209,6 +1253,7 @@ fn forbidden_raw_content(value: &str) -> bool {
         || escaped_json_secret_member_key_pattern().is_match(bounded)
         || forbidden_raw_content_pattern().is_match(bounded)
         || authorization_pattern().is_match(bounded)
+        || standalone_digest_challenge_pattern().is_match(bounded)
         || authorization_scheme_and_credential_pattern().is_match(bounded)
         || generic_authorization_scheme_and_credential_pattern().is_match(bounded)
         || standalone_authorization_scheme_pattern().is_match(bounded)

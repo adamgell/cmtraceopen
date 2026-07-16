@@ -9674,3 +9674,322 @@ fn redaction_projection_masks_rfc_digest_params_and_hardware_arrows_folded_befor
     }
     assert_eq!(snapshot, original);
 }
+
+#[test]
+fn redaction_projection_masks_one_layer_escaped_json_token_members_across_public_boundaries() {
+    let mut snapshot = findings_snapshot();
+    snapshot.identity.evidence = vec![evidence_ref_from(
+        r#"neutral {\"access_token\":\"ESCAPED_ACCESS_TOKEN_SENTINEL\"}"#,
+        r#"neutral {\"refresh_token\":\"ESCAPED_REFRESH_TOKEN_SENTINEL\"}"#,
+    )];
+    snapshot.registration_events.push(EspRegistrationEvent {
+        event_id: 304,
+        record_id: Some(56),
+        status: status(
+            EspRawStatus::Text("failed".to_string()),
+            EspNormalizedStatus::Failed,
+        ),
+        message: "Device registration failed".to_string(),
+        timestamp: timestamp("2026-07-15T12:14:00Z"),
+        named_data: vec![
+            EspNamedValue {
+                name: "EscapedTokenEnvelope".to_string(),
+                value: r#"neutral {\"id_token\":\"ESCAPED_NAMED_ID_TOKEN_SENTINEL\"}"#.to_string(),
+            },
+            EspNamedValue {
+                name: "TokenCount".to_string(),
+                value: "41".to_string(),
+            },
+        ],
+        evidence: vec![evidence_ref("registration-escaped-token-member")],
+    });
+
+    let mut event = raw_export_record(
+        "neutral-review7-escaped-token-event",
+        EspSourceKind::EventLog,
+        "neutral-event-source",
+        None,
+        "safe event payload",
+    );
+    event.sensitivity = EspSensitivity::Public;
+    event.provenance.event = Some(EspEventProvenance {
+        channel: "Neutral event channel".to_string(),
+        event_id: 1,
+        record_id: Some(12),
+        named_data: vec![EspNamedValue {
+            name: "EscapedApiEnvelope".to_string(),
+            value: r#"neutral {\"api_key\":\"ESCAPED_EVENT_API_KEY_SENTINEL\"}"#.to_string(),
+        }],
+    });
+    let mut raw = raw_export_record(
+        "neutral-review7-escaped-token-raw",
+        EspSourceKind::DeploymentLog,
+        "neutral-deployment-source",
+        None,
+        r#"{\"access_token\":\"ESCAPED_RAW_ACCESS_TOKEN_SENTINEL\"}"#,
+    );
+    raw.sensitivity = EspSensitivity::Public;
+    snapshot.raw_evidence = vec![event, raw];
+    let original = snapshot.clone();
+
+    let safe = redacted_export_projection(&snapshot);
+    assert_eq!(safe.registration_events[0].named_data[1].value, "41");
+    assert_eq!(
+        safe.raw_evidence
+            .iter()
+            .map(|record| record.record_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["neutral-review7-escaped-token-event"]
+    );
+    let safe_json = serde_json::to_string(&safe).unwrap();
+    for secret in [
+        "ESCAPED_ACCESS_TOKEN_SENTINEL",
+        "ESCAPED_REFRESH_TOKEN_SENTINEL",
+        "ESCAPED_NAMED_ID_TOKEN_SENTINEL",
+        "ESCAPED_EVENT_API_KEY_SENTINEL",
+        "ESCAPED_RAW_ACCESS_TOKEN_SENTINEL",
+    ] {
+        assert!(!safe_json.contains(secret), "safe export leaked {secret}");
+    }
+    assert_eq!(snapshot, original);
+}
+
+#[test]
+fn redaction_projection_masks_complete_standalone_digest_challenges_across_public_boundaries() {
+    let mut snapshot = findings_snapshot();
+    snapshot.identity.evidence = vec![evidence_ref_from(
+        r#"Digest username="DIGEST_EVIDENCE_USER", realm="DIGEST_EVIDENCE_REALM", nonce="DIGEST_EVIDENCE_NONCE""#,
+        r#"Digest username="DIGEST_SOURCE_USER", realm="DIGEST_SOURCE_REALM", nonce="DIGEST_SOURCE_NONCE""#,
+    )];
+    snapshot.registration_events.push(EspRegistrationEvent {
+        event_id: 304,
+        record_id: Some(57),
+        status: status(
+            EspRawStatus::Text("failed".to_string()),
+            EspNormalizedStatus::Failed,
+        ),
+        message: r#"Digest username="DIGEST_MESSAGE_USER", realm="DIGEST_MESSAGE_REALM", nonce="DIGEST_MESSAGE_NONCE""#.to_string(),
+        timestamp: timestamp("2026-07-15T12:15:00Z"),
+        named_data: vec![EspNamedValue {
+            name: "Payload".to_string(),
+            value: r#"Digest username="DIGEST_NAMED_USER", realm="DIGEST_NAMED_REALM", nonce="DIGEST_NAMED_NONCE""#.to_string(),
+        }],
+        evidence: vec![evidence_ref("registration-standalone-digest")],
+    });
+    snapshot.activity.push(EspTimelineEntry {
+        entry_id: "standalone-digest-narrative".to_string(),
+        timestamp: timestamp("2026-07-15T12:15:01Z"),
+        kind: EspTimelineKind::Other,
+        title: r#"Digest username="DIGEST_TITLE_USER", realm="DIGEST_TITLE_REALM", nonce="DIGEST_TITLE_NONCE""#.to_string(),
+        detail: Some(
+            r#"Digest username="DIGEST_DETAIL_USER", realm="DIGEST_DETAIL_REALM", nonce="DIGEST_DETAIL_NONCE""#.to_string(),
+        ),
+        status: None,
+        evidence: vec![evidence_ref("timeline-standalone-digest")],
+    });
+    snapshot.coverage.push(EspArtifactCoverage {
+        artifact_id: "standalone-digest-coverage".to_string(),
+        family: "review".to_string(),
+        status: EspArtifactStatus::Available,
+        detail: Some(
+            r#"Digest username="DIGEST_COVERAGE_USER", realm="DIGEST_COVERAGE_REALM", nonce="DIGEST_COVERAGE_NONCE""#.to_string(),
+        ),
+        observed_at_utc: "2026-07-15T12:15:02Z".to_string(),
+        evidence: vec![],
+    });
+
+    let mut event = raw_export_record(
+        "neutral-review7-standalone-digest-event",
+        EspSourceKind::EventLog,
+        "neutral-event-source",
+        None,
+        "safe event payload",
+    );
+    event.sensitivity = EspSensitivity::Public;
+    event.provenance.event = Some(EspEventProvenance {
+        channel: "Neutral event channel".to_string(),
+        event_id: 1,
+        record_id: Some(13),
+        named_data: vec![EspNamedValue {
+            name: "Envelope".to_string(),
+            value: r#"Digest username="DIGEST_EVENT_USER", realm="DIGEST_EVENT_REALM", nonce="DIGEST_EVENT_NONCE""#.to_string(),
+        }],
+    });
+    let mut raw = raw_export_record(
+        "neutral-review7-standalone-digest-raw",
+        EspSourceKind::DeploymentLog,
+        "neutral-deployment-source",
+        None,
+        r#"Digest username="DIGEST_RAW_USER", realm="DIGEST_RAW_REALM", nonce="DIGEST_RAW_NONCE""#,
+    );
+    raw.sensitivity = EspSensitivity::Public;
+    snapshot.raw_evidence = vec![event, raw];
+    let original = snapshot.clone();
+
+    let safe = redacted_export_projection(&snapshot);
+    assert_eq!(
+        safe.raw_evidence
+            .iter()
+            .map(|record| record.record_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["neutral-review7-standalone-digest-event"]
+    );
+    let safe_json = serde_json::to_string(&safe).unwrap();
+    for secret in [
+        "DIGEST_EVIDENCE_USER",
+        "DIGEST_EVIDENCE_REALM",
+        "DIGEST_EVIDENCE_NONCE",
+        "DIGEST_SOURCE_USER",
+        "DIGEST_SOURCE_REALM",
+        "DIGEST_SOURCE_NONCE",
+        "DIGEST_MESSAGE_USER",
+        "DIGEST_MESSAGE_REALM",
+        "DIGEST_MESSAGE_NONCE",
+        "DIGEST_NAMED_USER",
+        "DIGEST_NAMED_REALM",
+        "DIGEST_NAMED_NONCE",
+        "DIGEST_TITLE_USER",
+        "DIGEST_TITLE_REALM",
+        "DIGEST_TITLE_NONCE",
+        "DIGEST_DETAIL_USER",
+        "DIGEST_DETAIL_REALM",
+        "DIGEST_DETAIL_NONCE",
+        "DIGEST_COVERAGE_USER",
+        "DIGEST_COVERAGE_REALM",
+        "DIGEST_COVERAGE_NONCE",
+        "DIGEST_EVENT_USER",
+        "DIGEST_EVENT_REALM",
+        "DIGEST_EVENT_NONCE",
+        "DIGEST_RAW_USER",
+        "DIGEST_RAW_REALM",
+        "DIGEST_RAW_NONCE",
+    ] {
+        assert!(!safe_json.contains(secret), "safe export leaked {secret}");
+    }
+    assert_eq!(snapshot, original);
+}
+
+#[test]
+fn redaction_projection_sanitizes_production_coverage_and_gap_identifiers() {
+    let artifact_id =
+        "ime-logs|person-review7@example.test|Authorization Bearer COVERAGE_ID_SENTINEL";
+    let restricted_source =
+        r"C:\Users\review7.user\AppData\Local\Temp\Authorization Bearer RESTRICTED_SOURCE_SENTINEL";
+    let mut snapshot = findings_snapshot();
+    snapshot.elevation.is_elevated = false;
+    snapshot.elevation.restricted_sources = vec![restricted_source.to_string()];
+    snapshot.coverage.push(EspArtifactCoverage {
+        artifact_id: artifact_id.to_string(),
+        family: "IntuneManagementExtensionLogs".to_string(),
+        status: EspArtifactStatus::PermissionDenied,
+        detail: Some("Protected log path is unreadable".to_string()),
+        observed_at_utc: "2026-07-15T12:16:00Z".to_string(),
+        evidence: vec![],
+    });
+    snapshot.findings = derive_findings(&snapshot);
+    let original = snapshot.clone();
+
+    let safe = redacted_export_projection(&snapshot);
+    let safe_json = serde_json::to_string(&safe).unwrap();
+    for secret in [
+        "person-review7@example.test",
+        "review7.user",
+        "COVERAGE_ID_SENTINEL",
+        "RESTRICTED_SOURCE_SENTINEL",
+    ] {
+        assert!(!safe_json.contains(secret), "safe export leaked {secret}");
+    }
+
+    let ime = finding_by_id(&safe.findings, "ime-evidence-unavailable");
+    assert_eq!(
+        ime.coverage_gap_ids,
+        vec![safe.coverage[0].artifact_id.clone()]
+    );
+    let non_elevated = finding_by_id(&safe.findings, "non-elevated-coverage-loss");
+    assert_eq!(
+        non_elevated
+            .coverage_gap_ids
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>(),
+        [
+            safe.coverage[0].artifact_id.clone(),
+            safe.elevation.restricted_sources[0].clone(),
+        ]
+        .into_iter()
+        .collect::<BTreeSet<_>>()
+    );
+    assert_eq!(snapshot, original);
+}
+
+#[test]
+fn redaction_projection_masks_device_serial_and_azure_tenant_aliases() {
+    let mut snapshot = findings_snapshot();
+    snapshot.registration_events.push(EspRegistrationEvent {
+        event_id: 304,
+        record_id: Some(58),
+        status: status(
+            EspRawStatus::Text("failed".to_string()),
+            EspNormalizedStatus::Failed,
+        ),
+        message: "Device registration failed".to_string(),
+        timestamp: timestamp("2026-07-15T12:17:00Z"),
+        named_data: vec![
+            EspNamedValue {
+                name: "DeviceSerialNumber".to_string(),
+                value: "NAMED_DEVICE_SERIAL_SENTINEL".to_string(),
+            },
+            EspNamedValue {
+                name: "AzureADTenantID".to_string(),
+                value: "NAMED_AZURE_TENANT_SENTINEL".to_string(),
+            },
+            EspNamedValue {
+                name: "TokenCount".to_string(),
+                value: "43".to_string(),
+            },
+        ],
+        evidence: vec![evidence_ref("registration-sensitive-aliases")],
+    });
+    let mut serial = raw_export_record(
+        "review7-device-serial",
+        EspSourceKind::Registry,
+        "review7-registry-source",
+        Some("DeviceSerialNumber"),
+        "RAW_DEVICE_SERIAL_SENTINEL",
+    );
+    serial.sensitivity = EspSensitivity::Public;
+    let mut tenant = raw_export_record(
+        "review7-azure-tenant",
+        EspSourceKind::Registry,
+        "review7-registry-source",
+        Some("AzureADTenantID"),
+        "RAW_AZURE_TENANT_SENTINEL",
+    );
+    tenant.sensitivity = EspSensitivity::Public;
+    snapshot.raw_evidence = vec![serial, tenant];
+    let original = snapshot.clone();
+
+    let safe = redacted_export_projection(&snapshot);
+    assert_eq!(
+        safe.registration_events[0]
+            .named_data
+            .iter()
+            .map(|value| value.value.as_str())
+            .collect::<Vec<_>>(),
+        vec!["[redacted]", "[redacted]", "43"]
+    );
+    assert!(safe
+        .raw_evidence
+        .iter()
+        .all(|record| { record.raw_value == EspObservationValue::Text("[redacted]".to_string()) }));
+    let safe_json = serde_json::to_string(&safe).unwrap();
+    for secret in [
+        "NAMED_DEVICE_SERIAL_SENTINEL",
+        "NAMED_AZURE_TENANT_SENTINEL",
+        "RAW_DEVICE_SERIAL_SENTINEL",
+        "RAW_AZURE_TENANT_SENTINEL",
+    ] {
+        assert!(!safe_json.contains(secret), "safe export leaked {secret}");
+    }
+    assert_eq!(snapshot, original);
+}
