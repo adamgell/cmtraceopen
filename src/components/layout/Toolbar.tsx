@@ -83,12 +83,12 @@ async function inferPathKind(path: string): Promise<"file" | "folder" | "unknown
   }
 }
 
-export interface OpenKnownSourceCatalogAction
+interface OpenKnownSourceCatalogAction
   extends KnownSourceCatalogActionIds {
   trigger: string;
 }
 
-export interface AppCommandState {
+interface AppCommandState {
   canOpenSources: boolean;
   canOpenKnownSources: boolean;
   canPauseResume: boolean;
@@ -109,7 +109,7 @@ export interface AppCommandState {
   activeView: WorkspaceId;
 }
 
-export interface AppActionHandlers {
+interface AppActionHandlers {
   commandState: AppCommandState;
   openSourceFileDialog: () => Promise<void>;
   openSourceFolderDialog: () => Promise<void>;

@@ -229,13 +229,6 @@ export function AppShell() {
 
         setFilteredIds(new Set(ids));
         lastAppliedSignatureRef.current = signature;
-
-        console.info("[app-shell] applied filter snapshot", {
-          trigger,
-          clauseCount: clauses.length,
-          entryCount: entriesSnapshot.length,
-          matchedCount: ids.length,
-        });
       } catch (err) {
         if (filterRequestIdRef.current !== requestId) {
           return;
