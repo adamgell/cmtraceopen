@@ -2557,7 +2557,7 @@ describe("ESP Graph scheduling", () => {
       snapshot: makeSnapshot(["local-initial"], "same-device"),
     });
 
-    const active = coordinator.refresh("managed-initial");
+    const active = coordinator.refresh(GRAPH_MANAGED_DEVICE_B);
     try {
       coordinator.start();
       useEspDiagnosticsStore.getState().beginAnalysis("analysis-intermediate");
@@ -2586,13 +2586,13 @@ describe("ESP Graph scheduling", () => {
         fetchGraph.mock.calls.map(
           ([request]) => request.selectedManagedDeviceId,
         ),
-      ).toEqual(["managed-initial", null]);
+      ).toEqual([GRAPH_MANAGED_DEVICE_B, null]);
       expect(useEspDiagnosticsStore.getState().snapshot?.graph?.requestId).toBe(
         "graph-final-analysis",
       );
 
       activeOverlay.resolve(
-        makeOverlayWithSelectedDevice("graph-active", "managed-initial"),
+        makeOverlayWithSelectedDevice("graph-active", GRAPH_MANAGED_DEVICE_B),
       );
       await active;
       expect(useEspDiagnosticsStore.getState().snapshot?.graph?.requestId).toBe(
@@ -2600,7 +2600,7 @@ describe("ESP Graph scheduling", () => {
       );
     } finally {
       activeOverlay.resolve(
-        makeOverlayWithSelectedDevice("graph-active", "managed-initial"),
+        makeOverlayWithSelectedDevice("graph-active", GRAPH_MANAGED_DEVICE_B),
       );
       coordinator.dispose();
     }
@@ -2631,7 +2631,7 @@ describe("ESP Graph scheduling", () => {
       snapshot: makeSnapshot(["local-initial"], "same-device"),
     });
 
-    const active = coordinator.refresh("managed-initial");
+    const active = coordinator.refresh(GRAPH_MANAGED_DEVICE_B);
     try {
       coordinator.start();
       useEspDiagnosticsStore.getState().beginAnalysis("analysis-replacement");
@@ -2658,13 +2658,13 @@ describe("ESP Graph scheduling", () => {
         fetchGraph.mock.calls.map(
           ([request]) => request.selectedManagedDeviceId,
         ),
-      ).toEqual(["managed-initial", null]);
+      ).toEqual([GRAPH_MANAGED_DEVICE_B, null]);
       expect(useEspDiagnosticsStore.getState().snapshot?.graph?.requestId).toBe(
         "graph-after-enable",
       );
 
       activeOverlay.resolve(
-        makeOverlayWithSelectedDevice("graph-active", "managed-initial"),
+        makeOverlayWithSelectedDevice("graph-active", GRAPH_MANAGED_DEVICE_B),
       );
       await active;
       expect(useEspDiagnosticsStore.getState().snapshot?.graph?.requestId).toBe(
@@ -2672,7 +2672,7 @@ describe("ESP Graph scheduling", () => {
       );
     } finally {
       activeOverlay.resolve(
-        makeOverlayWithSelectedDevice("graph-active", "managed-initial"),
+        makeOverlayWithSelectedDevice("graph-active", GRAPH_MANAGED_DEVICE_B),
       );
       coordinator.dispose();
     }
