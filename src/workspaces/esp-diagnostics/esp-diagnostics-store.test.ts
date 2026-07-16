@@ -789,6 +789,47 @@ describe("ESP Graph scheduling", () => {
     coordinator.dispose();
   });
 
+  it("deduplicates concurrent reconcile calls with an in-flight cancellation", async () => {
+    const cancellation = deferred<void>();
+    const result = deferred<EspGraphOverlay>();
+    const cancelGraph = vi.fn(() => cancellation.promise);
+    const fetchGraph = vi.fn(() => result.promise);
+    const coordinator = createEspGraphCoordinator({
+      fetchGraph,
+      cancelGraph,
+      createRequestId: () => "graph-new",
+    });
+    useUiStore.setState({ graphApiEnabled: true, graphApiStatus: "connected" });
+    useEspDiagnosticsStore.getState().beginAnalysis("analysis-a");
+    useEspDiagnosticsStore
+      .getState()
+      .applyAnalysis("analysis-a", makeSnapshot(["local-a"]));
+
+    // Simulate a pre-existing in-flight request so cancelCurrentRequest() yields.
+    useEspDiagnosticsStore.setState({
+      graphRequestId: "graph-old",
+      graphPhase: "loading",
+    });
+
+    // Two concurrent reconcile() calls. r1 yields inside cancelCurrentRequest()
+    // (awaiting cancellation.promise). Without the fingerprint claim before the
+    // yield, r2 would also pass the dedup guard and dispatch a second fetch.
+    const r1 = coordinator.reconcile();
+    const r2 = coordinator.reconcile();
+
+    // With the fix, r1 claims the fingerprint synchronously and r2 returns early
+    // without calling cancelCurrentRequest() a second time.
+    expect(cancelGraph).toHaveBeenCalledTimes(1);
+
+    cancellation.resolve();
+    result.resolve(makeOverlay("graph-new"));
+    await Promise.all([r1, r2]);
+
+    // Exactly one fetch should have been dispatched despite two concurrent calls.
+    expect(fetchGraph).toHaveBeenCalledTimes(1);
+    coordinator.dispose();
+  });
+
   it("clears remote data when native Graph cancellation fails", async () => {
     const snapshot = makeSnapshot(["local-a"]);
     useEspDiagnosticsStore.setState({

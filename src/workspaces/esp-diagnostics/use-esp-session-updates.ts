@@ -209,6 +209,11 @@ export function createEspGraphCoordinator(
       }
     }
 
+    // Claim the fingerprint before any await so concurrent invocations see
+    // it immediately and cannot slip through the deduplication guard above.
+    lastRequestedFingerprint = fingerprint;
+    blockedFingerprint = null;
+
     const cancellation = cancelCurrentRequest();
     if (cancellation) {
       await cancellation;
@@ -216,9 +221,6 @@ export function createEspGraphCoordinator(
     if (disposed) {
       return;
     }
-
-    blockedFingerprint = null;
-    lastRequestedFingerprint = fingerprint;
     const requestId = nextRequestId();
     const request = createGraphRequest(snapshot, requestId);
     useEspDiagnosticsStore.getState().beginGraph(requestId);
