@@ -55,6 +55,26 @@ fn secret_argument_pattern() -> &'static Regex {
     })
 }
 
+fn bare_authorization_pattern() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
+        Regex::new(
+            r#"(?i)(?P<prefix>\bauthorization["']?\s+)(?:basic\s+|bearer\s+|digest\s+|apikey\s+)?(?P<value>"[^"]*"|'[^']*'|[^\s]+)"#,
+        )
+        .expect("bare authorization redaction pattern must compile")
+    })
+}
+
+fn bare_secret_argument_pattern() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
+        Regex::new(
+            r#"(?i)(?P<prefix>\b(?P<name>password|passwd|pwd|secret|client[_-]?secret|api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|token|tenant(?:id)?|entdmid|serial(?:number)?)["']?\s+)(?P<value>"[^"]*"|'[^']*'|[^\s]+)"#,
+        )
+        .expect("bare secret-argument redaction pattern must compile")
+    })
+}
+
 fn standalone_bearer_pattern() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
@@ -817,6 +837,7 @@ fn redact_text_for_context(value: &str, context: TextRedactionContext) -> String
     let redacted = authorization_pattern().replace_all(bounded, "${prefix}[redacted]");
     let redacted = secret_argument_pattern().replace_all(&redacted, "${prefix}[redacted]");
     let redacted = redact_standalone_bearer_tokens(&redacted, context);
+    let redacted = redact_bare_secret_arguments(&redacted, context);
     let redacted = user_profile_path_pattern().replace_all(&redacted, "${prefix}[redacted]");
     let redacted = email_pattern().replace_all(&redacted, REDACTED);
     let redacted = sid_pattern().replace_all(&redacted, REDACTED);
@@ -965,6 +986,33 @@ fn redact_standalone_bearer_tokens(value: &str, context: TextRedactionContext) -
             }
         })
         .into_owned()
+}
+
+fn redact_bare_secret_arguments(value: &str, context: TextRedactionContext) -> String {
+    let redacted =
+        bare_authorization_pattern().replace_all(value, |captures: &regex::Captures<'_>| {
+            if bare_argument_is_safe_narrative(context, "authorization", &captures["value"]) {
+                captures[0].to_string()
+            } else {
+                format!("{}[redacted]", &captures["prefix"])
+            }
+        });
+    bare_secret_argument_pattern()
+        .replace_all(&redacted, |captures: &regex::Captures<'_>| {
+            if bare_argument_is_safe_narrative(context, &captures["name"], &captures["value"]) {
+                captures[0].to_string()
+            } else {
+                format!("{}[redacted]", &captures["prefix"])
+            }
+        })
+        .into_owned()
+}
+
+fn bare_argument_is_safe_narrative(context: TextRedactionContext, name: &str, value: &str) -> bool {
+    context == TextRedactionContext::Narrative
+        && !value.starts_with(['"', '\''])
+        && ((name.eq_ignore_ascii_case("authorization") && value.eq_ignore_ascii_case("is"))
+            || (name.eq_ignore_ascii_case("token") && value.eq_ignore_ascii_case("support")))
 }
 
 fn bearer_match_is_safe_narrative(value: &str, captures: &regex::Captures<'_>) -> bool {

@@ -6611,6 +6611,90 @@ fn redaction_projection_preserves_safe_bearer_prose_only_in_typed_narratives() {
 }
 
 #[test]
+fn redaction_projection_masks_bare_whitespace_secret_arguments_without_prose_regressions() {
+    let mut snapshot = findings_snapshot();
+    snapshot.registration_events.push(EspRegistrationEvent {
+        event_id: 304,
+        record_id: Some(42),
+        status: status(
+            EspRawStatus::Text("failed".to_string()),
+            EspNormalizedStatus::Failed,
+        ),
+        message: "Installer reported password hunter2".to_string(),
+        timestamp: timestamp("2026-07-15T12:00:00Z"),
+        named_data: vec![
+            EspNamedValue {
+                name: "Payload".to_string(),
+                value: "password qwertyz".to_string(),
+            },
+            EspNamedValue {
+                name: "AdditionalPayload".to_string(),
+                value: "token abcdefg".to_string(),
+            },
+        ],
+        evidence: vec![evidence_ref("registration-bare-secret-arguments")],
+    });
+    snapshot.activity.push(EspTimelineEntry {
+        entry_id: "authorization-secret".to_string(),
+        timestamp: timestamp("2026-07-15T12:01:00Z"),
+        kind: EspTimelineKind::Other,
+        title: "Authorization Basic qwertyz failed".to_string(),
+        detail: None,
+        status: None,
+        evidence: vec![evidence_ref("timeline-authorization-secret")],
+    });
+    let mut raw_text = raw_export_record(
+        "raw-bare-password",
+        EspSourceKind::DeploymentLog,
+        "deployment-log",
+        None,
+        "password hunter2",
+    );
+    raw_text.sensitivity = EspSensitivity::Public;
+    let mut raw_list = raw_export_record(
+        "raw-bare-token",
+        EspSourceKind::DeploymentLog,
+        "deployment-log",
+        None,
+        "placeholder",
+    );
+    raw_list.sensitivity = EspSensitivity::Public;
+    raw_list.raw_value = EspObservationValue::StringList(vec![
+        "safe list value".to_string(),
+        "token qwertyz".to_string(),
+    ]);
+    snapshot.raw_evidence = vec![raw_text, raw_list];
+    let original = snapshot.clone();
+
+    let safe = redacted_export_projection(&snapshot);
+    assert_eq!(
+        safe.registration_events[0].message,
+        "Installer reported password [redacted]"
+    );
+    assert_eq!(
+        safe.registration_events[0]
+            .named_data
+            .iter()
+            .map(|value| value.value.as_str())
+            .collect::<Vec<_>>(),
+        vec!["password [redacted]", "token [redacted]"]
+    );
+    assert_eq!(safe.activity[0].title, "Authorization [redacted] failed");
+    assert_eq!(
+        safe.raw_evidence[0].raw_value,
+        EspObservationValue::Text("password [redacted]".to_string())
+    );
+    assert_eq!(
+        safe.raw_evidence[1].raw_value,
+        EspObservationValue::StringList(vec![
+            "safe list value".to_string(),
+            "token [redacted]".to_string(),
+        ])
+    );
+    assert_eq!(snapshot, original);
+}
+
+#[test]
 fn redaction_projection_scrubs_raw_metadata_and_all_matching_evidence_references() {
     let sid = "S-1-5-21-111-222-333-1001";
     let source_artifact_id = format!("source:{sid}:person@example.test");
