@@ -9993,3 +9993,368 @@ fn redaction_projection_masks_device_serial_and_azure_tenant_aliases() {
     }
     assert_eq!(snapshot, original);
 }
+
+#[test]
+fn redaction_projection_masks_sensitive_aliases_across_generic_public_boundaries() {
+    let coverage_id = "ime|AzureADTenantID=COVERAGE_AZURE_TENANT_ALIAS";
+    let restricted_source =
+        r#"restricted|{\"DeviceSerialNumber\":\"RESTRICTED_DEVICE_SERIAL_ALIAS\"}"#;
+    let mut snapshot = findings_snapshot();
+    snapshot.elevation.is_elevated = false;
+    snapshot.elevation.restricted_sources = vec![restricted_source.to_string()];
+    snapshot.identity.evidence = vec![evidence_ref_from(
+        r#"evidence|{\"AzureADTenantID\":\"EVIDENCE_AZURE_TENANT_ALIAS\"}"#,
+        r#"source|{"DeviceSerialNumber":"SOURCE_DEVICE_SERIAL_ALIAS"}"#,
+    )];
+    snapshot.registration_events.push(EspRegistrationEvent {
+        event_id: 304,
+        record_id: Some(59),
+        status: status(
+            EspRawStatus::Text("failed".to_string()),
+            EspNormalizedStatus::Failed,
+        ),
+        message: concat!(
+            "AzureADTenantID=REGISTRATION_MESSAGE_TENANT_ALIAS ",
+            "DeviceSerialNumber: REGISTRATION_MESSAGE_SERIAL_ALIAS",
+        )
+        .to_string(),
+        timestamp: timestamp("2026-07-15T12:18:00Z"),
+        named_data: vec![
+            EspNamedValue {
+                name: "AssignedEnvelope".to_string(),
+                value: concat!(
+                    "AADTenantID=ASSIGNED_AAD_TENANT_ALIAS ",
+                    "DeviceSerialNumber: ASSIGNED_DEVICE_SERIAL_ALIAS",
+                )
+                .to_string(),
+            },
+            EspNamedValue {
+                name: "BareEnvelope".to_string(),
+                value: concat!(
+                    "AzureADTenantID BARE_AZURE_TENANT_ALIAS ",
+                    "DeviceSerialNumber BARE_DEVICE_SERIAL_ALIAS",
+                )
+                .to_string(),
+            },
+            EspNamedValue {
+                name: "EscapedJsonEnvelope".to_string(),
+                value: concat!(
+                    r#"{\"AzureADTenantID\":\"ESCAPED_AZURE_TENANT_ALIAS\","#,
+                    r#"\"DeviceSerialNumber\":\"ESCAPED_DEVICE_SERIAL_ALIAS\"}"#,
+                )
+                .to_string(),
+            },
+            EspNamedValue {
+                name: "PlainJsonEnvelope".to_string(),
+                value: concat!(
+                    r#"{"AADTenantID":"PLAIN_AAD_TENANT_ALIAS","#,
+                    r#""DeviceSerialNumber":"PLAIN_DEVICE_SERIAL_ALIAS"}"#,
+                )
+                .to_string(),
+            },
+            EspNamedValue {
+                name: "AzureADTenantIDPolicy".to_string(),
+                value: "keep-safe-alias-control".to_string(),
+            },
+        ],
+        evidence: vec![evidence_ref("registration-sensitive-alias-envelopes")],
+    });
+    snapshot.coverage.push(EspArtifactCoverage {
+        artifact_id: coverage_id.to_string(),
+        family: r#"family|{"DeviceSerialNumber":"COVERAGE_FAMILY_SERIAL_ALIAS"}"#.to_string(),
+        status: EspArtifactStatus::PermissionDenied,
+        detail: Some("Protected source is unavailable".to_string()),
+        observed_at_utc: "2026-07-15T12:18:01Z".to_string(),
+        evidence: vec![],
+    });
+    snapshot.findings.push(EspDiagnosticFinding {
+        finding_id: "sensitive-alias-coverage".to_string(),
+        severity: EspFindingSeverity::Warning,
+        confidence: EspFindingConfidence::High,
+        title: "Sensitive alias coverage".to_string(),
+        summary: "The source inventory has a coverage gap.".to_string(),
+        recommended_checks: vec!["Review the cited coverage gaps.".to_string()],
+        evidence: vec![],
+        coverage_gap_ids: vec![coverage_id.to_string(), restricted_source.to_string()],
+    });
+
+    let mut event = raw_export_record(
+        "neutral-sensitive-alias-event",
+        EspSourceKind::EventLog,
+        "neutral-event-source",
+        None,
+        "safe event payload",
+    );
+    event.sensitivity = EspSensitivity::Public;
+    event.provenance.event = Some(EspEventProvenance {
+        channel: "Neutral event channel".to_string(),
+        event_id: 1,
+        record_id: Some(14),
+        named_data: vec![EspNamedValue {
+            name: "Envelope".to_string(),
+            value: concat!(
+                r#"{\"AzureADTenantID\":\"EVENT_AZURE_TENANT_ALIAS\","#,
+                r#"\"DeviceSerialNumber\":\"EVENT_DEVICE_SERIAL_ALIAS\"}"#,
+            )
+            .to_string(),
+        }],
+    });
+    let mut raw_json = raw_export_record(
+        "neutral-sensitive-alias-json-raw",
+        EspSourceKind::DeploymentLog,
+        "neutral-deployment-source",
+        None,
+        concat!(
+            r#"{\"AzureADTenantID\":\"RAW_JSON_AZURE_TENANT_ALIAS\","#,
+            r#"\"DeviceSerialNumber\":\"RAW_JSON_DEVICE_SERIAL_ALIAS\"}"#,
+        ),
+    );
+    raw_json.sensitivity = EspSensitivity::Public;
+    let mut raw_text = raw_export_record(
+        "neutral-sensitive-alias-text-raw",
+        EspSourceKind::DeploymentLog,
+        "neutral-deployment-source",
+        None,
+        concat!(
+            "AzureADTenantID=RAW_TEXT_AZURE_TENANT_ALIAS ",
+            "DeviceSerialNumber RAW_TEXT_DEVICE_SERIAL_ALIAS",
+        ),
+    );
+    raw_text.sensitivity = EspSensitivity::Public;
+    let mut safe_control = raw_export_record(
+        "neutral-sensitive-alias-safe-control",
+        EspSourceKind::DeploymentLog,
+        "neutral-deployment-source",
+        None,
+        "AzureADTenantIDPolicy=keep-raw-safe-alias-control",
+    );
+    safe_control.sensitivity = EspSensitivity::Public;
+    snapshot.raw_evidence = vec![event, raw_json, raw_text, safe_control];
+    let original = snapshot.clone();
+
+    let safe = redacted_export_projection(&snapshot);
+
+    assert_eq!(
+        safe.registration_events[0].named_data[4].value,
+        "keep-safe-alias-control"
+    );
+    assert_eq!(
+        safe.raw_evidence
+            .iter()
+            .map(|record| record.record_id.as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            "neutral-sensitive-alias-event",
+            "neutral-sensitive-alias-text-raw",
+            "neutral-sensitive-alias-safe-control",
+        ]
+    );
+    assert_eq!(
+        safe.findings[0]
+            .coverage_gap_ids
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>(),
+        [
+            safe.coverage[0].artifact_id.clone(),
+            safe.elevation.restricted_sources[0].clone(),
+        ]
+        .into_iter()
+        .collect::<BTreeSet<_>>()
+    );
+    let safe_json = serde_json::to_string(&safe).unwrap();
+    for secret in [
+        "COVERAGE_AZURE_TENANT_ALIAS",
+        "RESTRICTED_DEVICE_SERIAL_ALIAS",
+        "EVIDENCE_AZURE_TENANT_ALIAS",
+        "SOURCE_DEVICE_SERIAL_ALIAS",
+        "REGISTRATION_MESSAGE_TENANT_ALIAS",
+        "REGISTRATION_MESSAGE_SERIAL_ALIAS",
+        "ASSIGNED_AAD_TENANT_ALIAS",
+        "ASSIGNED_DEVICE_SERIAL_ALIAS",
+        "BARE_AZURE_TENANT_ALIAS",
+        "BARE_DEVICE_SERIAL_ALIAS",
+        "ESCAPED_AZURE_TENANT_ALIAS",
+        "ESCAPED_DEVICE_SERIAL_ALIAS",
+        "PLAIN_AAD_TENANT_ALIAS",
+        "PLAIN_DEVICE_SERIAL_ALIAS",
+        "COVERAGE_FAMILY_SERIAL_ALIAS",
+        "EVENT_AZURE_TENANT_ALIAS",
+        "EVENT_DEVICE_SERIAL_ALIAS",
+        "RAW_JSON_AZURE_TENANT_ALIAS",
+        "RAW_JSON_DEVICE_SERIAL_ALIAS",
+        "RAW_TEXT_AZURE_TENANT_ALIAS",
+        "RAW_TEXT_DEVICE_SERIAL_ALIAS",
+    ] {
+        assert!(!safe_json.contains(secret), "safe export leaked {secret}");
+    }
+    assert!(safe_json.contains("keep-safe-alias-control"));
+    assert!(safe_json.contains("keep-raw-safe-alias-control"));
+    assert_eq!(redacted_export_projection(&safe), safe);
+    assert_eq!(snapshot, original);
+}
+
+#[test]
+fn redaction_projection_masks_escaped_digest_quoted_comma_and_complete_tails() {
+    let standalone = concat!(
+        r#"Digest username=\"STANDALONE_DIGEST_USER\", "#,
+        r#"qop=\"auth,STANDALONE_DIGEST_QOP_TAIL\", "#,
+        r#"nonce=\"STANDALONE_DIGEST_NONCE\""#,
+    );
+    let authorized = concat!(
+        r#"Authorization: Digest realm=\"AUTHORIZED_DIGEST_REALM\", "#,
+        r#"qop=\"auth,AUTHORIZED_DIGEST_QOP_TAIL\", "#,
+        r#"nonce=\"AUTHORIZED_DIGEST_NONCE\""#,
+    );
+    let space_separated = concat!(
+        r#"Digest username=\"SPACE_DIGEST_USER\" "#,
+        r#"realm=\"SPACE_DIGEST_REALM\" nonce=\"SPACE_DIGEST_NONCE\""#,
+    );
+    let mut snapshot = findings_snapshot();
+    snapshot.identity.evidence = vec![evidence_ref_from(standalone, authorized)];
+    snapshot.registration_events.push(EspRegistrationEvent {
+        event_id: 304,
+        record_id: Some(60),
+        status: status(
+            EspRawStatus::Text("failed".to_string()),
+            EspNormalizedStatus::Failed,
+        ),
+        message: standalone.to_string(),
+        timestamp: timestamp("2026-07-15T12:19:00Z"),
+        named_data: vec![EspNamedValue {
+            name: "DigestEnvelope".to_string(),
+            value: space_separated.to_string(),
+        }],
+        evidence: vec![evidence_ref("registration-complete-digest-tail")],
+    });
+    snapshot.coverage.push(EspArtifactCoverage {
+        artifact_id: "digest-tail-coverage".to_string(),
+        family: "review".to_string(),
+        status: EspArtifactStatus::Available,
+        detail: Some(authorized.to_string()),
+        observed_at_utc: "2026-07-15T12:19:01Z".to_string(),
+        evidence: vec![],
+    });
+
+    let mut event = raw_export_record(
+        "neutral-complete-digest-event",
+        EspSourceKind::EventLog,
+        "neutral-event-source",
+        None,
+        "safe event payload",
+    );
+    event.sensitivity = EspSensitivity::Public;
+    event.provenance.event = Some(EspEventProvenance {
+        channel: "Neutral event channel".to_string(),
+        event_id: 1,
+        record_id: Some(15),
+        named_data: vec![EspNamedValue {
+            name: "Envelope".to_string(),
+            value: authorized.to_string(),
+        }],
+    });
+    let mut raw = raw_export_record(
+        "neutral-complete-digest-raw",
+        EspSourceKind::DeploymentLog,
+        "neutral-deployment-source",
+        None,
+        standalone,
+    );
+    raw.sensitivity = EspSensitivity::Public;
+    snapshot.raw_evidence = vec![event, raw];
+    let original = snapshot.clone();
+
+    let safe = redacted_export_projection(&snapshot);
+
+    assert_eq!(
+        safe.raw_evidence
+            .iter()
+            .map(|record| record.record_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["neutral-complete-digest-event"]
+    );
+    let safe_json = serde_json::to_string(&safe).unwrap();
+    for secret in [
+        "STANDALONE_DIGEST_USER",
+        "STANDALONE_DIGEST_QOP_TAIL",
+        "STANDALONE_DIGEST_NONCE",
+        "AUTHORIZED_DIGEST_REALM",
+        "AUTHORIZED_DIGEST_QOP_TAIL",
+        "AUTHORIZED_DIGEST_NONCE",
+        "SPACE_DIGEST_USER",
+        "SPACE_DIGEST_REALM",
+        "SPACE_DIGEST_NONCE",
+    ] {
+        assert!(!safe_json.contains(secret), "safe export leaked {secret}");
+    }
+    assert_eq!(redacted_export_projection(&safe), safe);
+    assert_eq!(snapshot, original);
+}
+
+#[test]
+fn redaction_projection_preserves_safe_digest_key_value_narratives() {
+    let mut snapshot = findings_snapshot();
+    snapshot.registration_events.push(EspRegistrationEvent {
+        event_id: 100,
+        record_id: Some(61),
+        status: status(
+            EspRawStatus::Text("informational".to_string()),
+            EspNormalizedStatus::InProgress,
+        ),
+        message: "Digest algorithm=SHA-256 is supported".to_string(),
+        timestamp: timestamp("2026-07-15T12:20:00Z"),
+        named_data: vec![],
+        evidence: vec![evidence_ref("registration-safe-digest-narrative")],
+    });
+    snapshot.activity.push(EspTimelineEntry {
+        entry_id: "safe-digest-narrative".to_string(),
+        timestamp: timestamp("2026-07-15T12:20:01Z"),
+        kind: EspTimelineKind::Other,
+        title: "Digest algorithm=SHA-256 is supported".to_string(),
+        detail: Some("Digest retry-count=2 remains within policy".to_string()),
+        status: None,
+        evidence: vec![evidence_ref("safe-digest-narrative")],
+    });
+    snapshot.coverage.push(EspArtifactCoverage {
+        artifact_id: "safe-digest-narrative-coverage".to_string(),
+        family: "review".to_string(),
+        status: EspArtifactStatus::Available,
+        detail: Some("Digest algorithm=SHA-256 remains configured".to_string()),
+        observed_at_utc: "2026-07-15T12:20:02Z".to_string(),
+        evidence: vec![],
+    });
+    snapshot.activity.push(EspTimelineEntry {
+        entry_id: "real-digest-challenge-control".to_string(),
+        timestamp: timestamp("2026-07-15T12:20:03Z"),
+        kind: EspTimelineKind::Other,
+        title: "Digest algorithm=SHA-256 nonce=REAL_DIGEST_NONCE_CONTROL".to_string(),
+        detail: None,
+        status: None,
+        evidence: vec![evidence_ref("real-digest-challenge-control")],
+    });
+    let original = snapshot.clone();
+
+    let safe = redacted_export_projection(&snapshot);
+
+    assert_eq!(
+        safe.registration_events[0].message,
+        "Digest algorithm=SHA-256 is supported"
+    );
+    assert_eq!(
+        safe.activity[0].title,
+        "Digest algorithm=SHA-256 is supported"
+    );
+    assert_eq!(
+        safe.activity[0].detail.as_deref(),
+        Some("Digest retry-count=2 remains within policy")
+    );
+    assert_eq!(
+        safe.coverage[0].detail.as_deref(),
+        Some("Digest algorithm=SHA-256 remains configured")
+    );
+    assert!(!serde_json::to_string(&safe)
+        .unwrap()
+        .contains("REAL_DIGEST_NONCE_CONTROL"));
+    assert_eq!(redacted_export_projection(&safe), safe);
+    assert_eq!(snapshot, original);
+}
