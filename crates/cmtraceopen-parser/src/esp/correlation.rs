@@ -7,9 +7,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use chrono::{
-    DateTime, Duration, FixedOffset, NaiveDateTime, SecondsFormat, TimeZone, Timelike, Utc,
-};
+use chrono::{DateTime, Duration, FixedOffset, NaiveDate, SecondsFormat, TimeZone, Utc};
 
 use super::models::{
     EspCorrelationConfidence, EspDeploymentLogObservation, EspEvidenceRef, EspImeObservation,
@@ -158,33 +156,9 @@ fn correlate_one<'a>(
         .flat_map(|samples| samples.iter())
         .map(|process| process.context.evidence_ref.clone())
         .collect::<Vec<_>>();
-    if lineage
+    let process_conflict = lineage
         .iter()
-        .any(|samples| process_samples_conflict(samples))
-    {
-        let candidates = matching_lineage_workloads(&lineage, workload_identifiers);
-        for candidate in &candidates {
-            if let Some(workload) = workloads
-                .iter()
-                .find(|workload| workload.workload_id == *candidate)
-            {
-                evidence.extend(workload.evidence.iter().cloned());
-            }
-        }
-        deduplicate_evidence(&mut evidence);
-        return EspInstallerCorrelation {
-            correlation_id: correlation_id(root_representative),
-            workload_id: None,
-            confidence: EspCorrelationConfidence::Uncorrelated,
-            reason: "conflictingProcessSamples".to_string(),
-            candidate_workload_ids: candidates.into_iter().collect(),
-            process_observations: lineage
-                .iter()
-                .flat_map(|samples| samples.iter().map(|process| (*process).clone()))
-                .collect(),
-            evidence,
-        };
-    }
+        .any(|samples| process_samples_conflict(samples));
     let mut signals: BTreeMap<&'static str, BTreeSet<String>> = BTreeMap::new();
     let mut exact_signal_sets = Vec::new();
     let mut exact_identifier_present = false;
@@ -300,7 +274,14 @@ fn correlate_one<'a>(
             .any(|right| left.is_disjoint(right))
     });
 
-    let (workload_id, confidence, reason, candidates) = if signal_conflict {
+    let (workload_id, confidence, reason, candidates) = if process_conflict {
+        (
+            None,
+            EspCorrelationConfidence::Uncorrelated,
+            "conflictingProcessSamples".to_string(),
+            exact_candidates,
+        )
+    } else if signal_conflict {
         (
             None,
             EspCorrelationConfidence::Uncorrelated,
@@ -385,10 +366,17 @@ fn correlate_one<'a>(
         confidence,
         reason,
         candidate_workload_ids: candidates.into_iter().collect(),
-        process_observations: lineage
-            .iter()
-            .filter_map(|samples| merge_process_samples(samples))
-            .collect(),
+        process_observations: if process_conflict || signal_conflict {
+            lineage
+                .iter()
+                .flat_map(|samples| samples.iter().map(|process| (*process).clone()))
+                .collect()
+        } else {
+            lineage
+                .iter()
+                .filter_map(|samples| merge_process_samples(samples))
+                .collect()
+        },
         evidence,
     }
 }
@@ -557,28 +545,6 @@ fn add_identifier_signal(
     true
 }
 
-fn matching_lineage_workloads(
-    lineage: &[ProcessSamples<'_>],
-    workload_identifiers: &[(&str, BTreeSet<String>)],
-) -> BTreeSet<String> {
-    let mut candidates = BTreeSet::new();
-    for process in lineage.iter().flat_map(|samples| samples.iter().copied()) {
-        for value in [process.app_id.as_deref(), process.product_code.as_deref()]
-            .into_iter()
-            .flatten()
-        {
-            let identifiers = normalized_identifiers(value);
-            candidates.extend(
-                workload_identifiers
-                    .iter()
-                    .filter(|(_, workload_values)| !identifiers.is_disjoint(workload_values))
-                    .map(|(workload_id, _)| (*workload_id).to_string()),
-            );
-        }
-    }
-    candidates
-}
-
 fn has_normalized_identifier(value: &str) -> bool {
     !normalized_identifiers(value).is_empty()
 }
@@ -685,25 +651,25 @@ fn process_start_timestamp(samples: &[&EspProcessObservation]) -> Option<DateTim
 }
 
 fn process_start_value(timestamp: &EspTimestamp) -> Option<DateTime<Utc>> {
-    if timestamp.raw_text.trim().is_empty()
-        || matches!(
-            &timestamp.kind,
-            EspTimestampKind::Invalid | EspTimestampKind::Unspecified
-        )
-    {
+    let raw = timestamp.raw_text.as_str();
+    // Process identity requires the model's lossless raw representation. A
+    // normalized value may already have discarded sub-second or leap carry.
+    if raw.trim().is_empty() {
         return None;
     }
 
-    parse_process_start_raw(&timestamp.raw_text).or_else(|| {
-        timestamp
-            .normalized_utc
-            .as_deref()
-            .and_then(parse_rfc3339_utc)
-    })
-}
-
-fn parse_process_start_raw(raw: &str) -> Option<DateTime<Utc>> {
-    parse_rfc3339_utc(raw).or_else(|| parse_wmi_process_start(raw))
+    match &timestamp.kind {
+        EspTimestampKind::Utc if raw_uses_utc_designator(raw) => parse_rfc3339_utc(raw),
+        EspTimestampKind::Offset if raw_looks_like_wmi_datetime(raw) => {
+            parse_wmi_process_start(raw)
+        }
+        EspTimestampKind::Offset if !raw_uses_utc_designator(raw) => parse_rfc3339_utc(raw),
+        EspTimestampKind::Local
+        | EspTimestampKind::Invalid
+        | EspTimestampKind::Unspecified
+        | EspTimestampKind::Utc
+        | EspTimestampKind::Offset => None,
+    }
 }
 
 fn parse_rfc3339_utc(raw: &str) -> Option<DateTime<Utc>> {
@@ -712,19 +678,57 @@ fn parse_rfc3339_utc(raw: &str) -> Option<DateTime<Utc>> {
         .map(|value| value.with_timezone(&Utc))
 }
 
+fn raw_uses_utc_designator(raw: &str) -> bool {
+    raw.as_bytes()
+        .last()
+        .is_some_and(|value| matches!(value, b'Z' | b'z'))
+}
+
+fn raw_looks_like_wmi_datetime(raw: &str) -> bool {
+    raw.len() == 25 && raw.as_bytes().get(14) == Some(&b'.')
+}
+
 fn parse_wmi_process_start(raw: &str) -> Option<DateTime<Utc>> {
-    if raw.len() != 25 || raw.as_bytes().get(14) != Some(&b'.') {
+    if !raw_looks_like_wmi_datetime(raw) || !raw.is_ascii() {
         return None;
     }
-    let naive = NaiveDateTime::parse_from_str(raw.get(..14)?, "%Y%m%d%H%M%S").ok()?;
-    let microseconds = raw.get(15..21)?.parse::<u32>().ok()?;
-    let naive = naive.with_nanosecond(microseconds.checked_mul(1_000)?)?;
+    let parse_component = |start, end| {
+        let value = raw.get(start..end)?;
+        value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit())
+            .then(|| value.parse::<u32>().ok())
+            .flatten()
+    };
+    let year = parse_component(0, 4)?.try_into().ok()?;
+    let month = parse_component(4, 6)?;
+    let day = parse_component(6, 8)?;
+    let hour = parse_component(8, 10)?;
+    let minute = parse_component(10, 12)?;
+    let second = parse_component(12, 14)?;
+    let microseconds = parse_component(15, 21)?;
+    if second > 60 {
+        return None;
+    }
+    // Chrono represents a leap second as second 59 plus a nanosecond carry.
+    let leap_second_carry = if second == 60 { 1_000_000_000 } else { 0 };
+    let nanoseconds = microseconds
+        .checked_mul(1_000)?
+        .checked_add(leap_second_carry)?;
+    let naive = NaiveDate::from_ymd_opt(year, month, day)?.and_hms_nano_opt(
+        hour,
+        minute,
+        second.min(59),
+        nanoseconds,
+    )?;
     let sign = match raw.as_bytes().get(21)? {
         b'+' => 1,
         b'-' => -1,
         _ => return None,
     };
-    let offset_minutes = raw.get(22..25)?.parse::<i32>().ok()?.checked_mul(sign)?;
+    let offset_minutes = i32::try_from(parse_component(22, 25)?)
+        .ok()?
+        .checked_mul(sign)?;
     let offset = FixedOffset::east_opt(offset_minutes.checked_mul(60)?)?;
     offset
         .from_local_datetime(&naive)
@@ -768,21 +772,73 @@ fn process_samples_conflict(samples: &[&EspProcessObservation]) -> bool {
     normalized_string_conflict(samples, |process| {
         let normalized = normalized_executable_name(&process.executable_name);
         (!normalized.is_empty()).then_some(normalized)
-    }) || normalized_string_conflict(samples, |process| {
-        process
-            .sanitized_command_line
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(str::to_ascii_lowercase)
-    }) || normalized_string_conflict(samples, |process| {
-        process
-            .referenced_log_path
-            .as_deref()
-            .and_then(canonical_installer_log_path)
-    }) || identifier_field_conflict(samples, |process| process.app_id.as_deref())
+    }) || command_line_conflict(samples)
+        || normalized_string_conflict(samples, |process| {
+            process
+                .referenced_log_path
+                .as_deref()
+                .and_then(canonical_installer_log_path)
+        })
+        || identifier_field_conflict(samples, |process| process.app_id.as_deref())
         || identifier_field_conflict(samples, |process| process.product_code.as_deref())
-        || cross_sample_identifier_conflict(samples)
+        || parent_pid_field_conflict(samples)
+}
+
+fn command_line_conflict(samples: &[&EspProcessObservation]) -> bool {
+    samples
+        .iter()
+        .filter_map(|process| process.sanitized_command_line.as_deref())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| {
+            canonical_command_arguments(value).unwrap_or_else(|| vec![value.to_ascii_lowercase()])
+        })
+        .collect::<BTreeSet<_>>()
+        .len()
+        > 1
+}
+
+fn canonical_command_arguments(command_line: &str) -> Option<Vec<String>> {
+    let mut arguments = Vec::new();
+    let mut current = String::new();
+    let mut quoted = false;
+    let mut started = false;
+    let mut previous = None;
+    let mut chars = command_line.chars().peekable();
+
+    while let Some(character) = chars.next() {
+        match character {
+            '"' => {
+                // Backslash-escaped and adjacent quotes require the full CRT
+                // parsing rules. Keep those representations distinct instead
+                // of claiming an equivalence we cannot prove here.
+                if previous == Some('\\') || chars.peek() == Some(&'"') {
+                    return None;
+                }
+                quoted = !quoted;
+                started = true;
+            }
+            character if matches!(character, ' ' | '\t') && !quoted => {
+                if started {
+                    arguments.push(std::mem::take(&mut current));
+                    started = false;
+                }
+            }
+            _ => {
+                current.extend(character.to_lowercase());
+                started = true;
+            }
+        }
+        previous = Some(character);
+    }
+
+    if quoted {
+        return None;
+    }
+    if started {
+        arguments.push(current);
+    }
+    Some(arguments)
 }
 
 fn normalized_string_conflict(
@@ -810,31 +866,13 @@ fn identifier_field_conflict<'a>(
     identifier_sets_conflict(&identifiers)
 }
 
-fn cross_sample_identifier_conflict(samples: &[&EspProcessObservation]) -> bool {
-    for (left_index, left) in samples.iter().enumerate() {
-        let left_identifiers = [left.app_id.as_deref(), left.product_code.as_deref()]
-            .into_iter()
-            .flatten()
-            .map(normalized_identifiers)
-            .filter(|values| !values.is_empty())
-            .collect::<Vec<_>>();
-        for right in samples.iter().skip(left_index + 1) {
-            let right_identifiers = [right.app_id.as_deref(), right.product_code.as_deref()]
-                .into_iter()
-                .flatten()
-                .map(normalized_identifiers)
-                .filter(|values| !values.is_empty())
-                .collect::<Vec<_>>();
-            if left_identifiers.iter().any(|left| {
-                right_identifiers
-                    .iter()
-                    .any(|right| left.is_disjoint(right))
-            }) {
-                return true;
-            }
-        }
-    }
-    false
+fn parent_pid_field_conflict(samples: &[&EspProcessObservation]) -> bool {
+    samples
+        .iter()
+        .filter_map(|process| process.parent_pid)
+        .collect::<BTreeSet<_>>()
+        .len()
+        > 1
 }
 
 fn identifier_sets_conflict(identifiers: &[BTreeSet<String>]) -> bool {
@@ -972,9 +1010,13 @@ fn message_mentions_pid(message: &str, pid: u32) -> bool {
 }
 
 fn deduplicate_evidence(evidence: &mut Vec<EspEvidenceRef>) {
-    let mut seen = BTreeSet::new();
-    evidence
-        .retain(|item| seen.insert((item.source_artifact_id.clone(), item.evidence_id.clone())));
+    evidence.sort_by(|left, right| {
+        (&left.source_artifact_id, &left.evidence_id)
+            .cmp(&(&right.source_artifact_id, &right.evidence_id))
+    });
+    evidence.dedup_by(|left, right| {
+        left.source_artifact_id == right.source_artifact_id && left.evidence_id == right.evidence_id
+    });
 }
 
 fn split_windows_arguments(command_line: &str) -> Vec<String> {
