@@ -711,7 +711,10 @@ export function createEspGraphCoordinator(
         lastRequestedFingerprint = null;
       }
       console.warn("[esp-diagnostics] Graph request ID generation failed", {
-        error: errorMessage(error),
+        error: getSafeErrorMessage(
+          error,
+          "Microsoft Graph request ID generation failed.",
+        ),
       });
       return;
     }

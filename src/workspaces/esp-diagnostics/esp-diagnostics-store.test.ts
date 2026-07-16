@@ -2244,7 +2244,7 @@ describe("ESP Graph scheduling", () => {
     });
 
     try {
-      await coordinator.refresh("managed-from-old-connection");
+      await coordinator.refresh(GRAPH_MANAGED_DEVICE_B);
       coordinator.start();
       useUiStore.setState({ graphApiStatus: "error" });
       await vi.waitFor(() =>
@@ -2260,7 +2260,7 @@ describe("ESP Graph scheduling", () => {
         fetchGraph.mock.calls.map(
           ([request]) => request.selectedManagedDeviceId,
         ),
-      ).toEqual(["managed-from-old-connection", null]);
+      ).toEqual([GRAPH_MANAGED_DEVICE_B, null]);
     } finally {
       coordinator.dispose();
     }
@@ -2773,7 +2773,7 @@ describe("ESP Graph scheduling", () => {
       snapshot: makeSnapshot(["local-initial"], "same-device"),
     });
 
-    const active = coordinator.refresh("managed-initial");
+    const active = coordinator.refresh(GRAPH_MANAGED_DEVICE_B);
     try {
       coordinator.start();
       useEspDiagnosticsStore.getState().beginAnalysis("analysis-replacement");
@@ -2797,13 +2797,13 @@ describe("ESP Graph scheduling", () => {
         fetchGraph.mock.calls.map(
           ([request]) => request.selectedManagedDeviceId,
         ),
-      ).toEqual(["managed-initial", null]);
+      ).toEqual([GRAPH_MANAGED_DEVICE_B, null]);
       expect(useEspDiagnosticsStore.getState().snapshot?.graph?.requestId).toBe(
         "graph-after-reconnect",
       );
     } finally {
       activeOverlay.resolve(
-        makeOverlayWithSelectedDevice("graph-active", "managed-initial"),
+        makeOverlayWithSelectedDevice("graph-active", GRAPH_MANAGED_DEVICE_B),
       );
       await active;
       coordinator.dispose();
@@ -3915,7 +3915,7 @@ describe("ESP Graph scheduling", () => {
       );
       expect(warning).toHaveBeenCalledWith(
         "[esp-diagnostics] Graph request ID generation failed",
-        { error: "Request ID generation failed" },
+        { error: "Microsoft Graph request ID generation failed." },
       );
     } finally {
       coordinator.dispose();
@@ -3942,7 +3942,7 @@ describe("ESP Graph scheduling", () => {
 
     expect(useEspDiagnosticsStore.getState().graphPhase).toBe("error");
     expect(useEspDiagnosticsStore.getState().graphError).toBe(
-      "Synchronous Graph fetch failure",
+      "Microsoft Graph enrichment failed.",
     );
     coordinator.dispose();
     expect(cancelGraph).not.toHaveBeenCalled();
