@@ -251,7 +251,26 @@ export function createEspGraphCoordinator(
       started = true;
       unsubscribeEsp = useEspDiagnosticsStore.subscribe((state, previous) => {
         if (state.snapshot !== previous.snapshot) {
-          void run(false);
+          // When beginAnalysis/beginLiveStart atomically clears both snapshot
+          // and graphRequestId, cancelCurrentRequest() can no longer read the
+          // stale requestId from the store. Detect the transition here using
+          // the previous snapshot and issue the native cancel directly so the
+          // backend can stop the in-flight work. The result will still be
+          // silently dropped by the requestId guard in applyGraphOverlay.
+          if (
+            !state.snapshot &&
+            previous.graphRequestId !== null &&
+            state.graphRequestId === null
+          ) {
+            void cancelGraph(previous.graphRequestId).catch(() => {
+              console.warn(
+                "[esp-diagnostics] orphan Graph cancel failed",
+                { requestId: previous.graphRequestId },
+              );
+            });
+          } else {
+            void run(false);
+          }
         }
       });
       unsubscribeUi = useUiStore.subscribe((state, previous) => {

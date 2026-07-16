@@ -886,4 +886,48 @@ describe("ESP Graph scheduling", () => {
     await activeQuery;
     expect(useEspDiagnosticsStore.getState().snapshot?.graph).toBeNull();
   });
+
+  it("cancels an in-flight native Graph request when beginAnalysis fires (orphan cancel)", async () => {
+    const pending = deferred<EspGraphOverlay>();
+    const fetchGraph = vi.fn(() => pending.promise);
+    const cancelGraph = vi.fn(async () => undefined);
+    useUiStore.setState({ graphApiEnabled: true, graphApiStatus: "connected" });
+    useEspDiagnosticsStore.getState().beginAnalysis("analysis-a");
+    useEspDiagnosticsStore
+      .getState()
+      .applyAnalysis("analysis-a", makeSnapshot(["local-a"]));
+
+    const coordinator = createEspGraphCoordinator({
+      fetchGraph,
+      cancelGraph,
+      createRequestId: () => "graph-in-flight",
+    });
+    coordinator.start();
+
+    // Wait for the initial reconcile to dispatch the fetch
+    await Promise.resolve();
+    expect(fetchGraph).toHaveBeenCalledTimes(1);
+    expect(useEspDiagnosticsStore.getState().graphRequestId).toBe(
+      "graph-in-flight",
+    );
+
+    // A new analysis begins while the Graph fetch is still pending.
+    // beginAnalysis atomically sets graphRequestId: null, so cancelCurrentRequest()
+    // cannot read the old requestId. The coordinator must detect this via
+    // previous.graphRequestId in the subscription callback.
+    useEspDiagnosticsStore.getState().beginAnalysis("analysis-b");
+
+    // Flush the subscription callback
+    await Promise.resolve();
+
+    expect(cancelGraph).toHaveBeenCalledWith("graph-in-flight");
+
+    // The late result is still silently dropped.
+    pending.resolve(makeOverlay("graph-in-flight"));
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    // snapshot was cleared by beginAnalysis("analysis-b")
+    expect(useEspDiagnosticsStore.getState().snapshot).toBeNull();
+
+    coordinator.dispose();
+  });
 });
