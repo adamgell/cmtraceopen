@@ -1,4 +1,10 @@
-import { render, screen, within } from "@testing-library/react";
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   graphAuthenticate,
@@ -41,12 +47,36 @@ const partialStatus = (apps: boolean): GraphAuthStatus =>
     error: null,
   }) as GraphAuthStatus;
 
+const disconnectedStatus = (): GraphAuthStatus => ({
+  isAuthenticated: false,
+  userPrincipalName: null,
+  tenantId: null,
+  grantedScopes: [],
+  missingScopes: [
+    "DeviceManagementManagedDevices.Read.All",
+    "DeviceManagementServiceConfig.Read.All",
+    "DeviceManagementApps.Read.All",
+    "DeviceManagementConfiguration.Read.All",
+    "DeviceManagementScripts.Read.All",
+  ],
+  expiresAt: null,
+  capabilities: {
+    managedDevices: false,
+    serviceConfig: false,
+    apps: false,
+    configuration: false,
+    scripts: false,
+  },
+  error: null,
+});
+
 describe("GraphApiTab delegated capabilities", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     useUiStore.setState({
       currentPlatform: "windows",
       graphApiEnabled: true,
+      graphApiStatus: "idle",
     });
     vi.mocked(graphAuthenticate).mockResolvedValue(partialStatus(true));
     vi.mocked(graphFetchAllApps).mockResolvedValue([]);
@@ -58,9 +88,13 @@ describe("GraphApiTab delegated capabilities", () => {
 
     render(<GraphApiTab />);
 
-    expect(await screen.findByText("Connected with partial permissions")).toBeVisible();
+    expect(
+      await screen.findByText("Connected with partial permissions"),
+    ).toBeVisible();
     expect(screen.getByText("Apps · Available")).toBeVisible();
-    expect(screen.getByText("Managed devices · Missing permission")).toBeVisible();
+    expect(
+      screen.getByText("Managed devices · Missing permission"),
+    ).toBeVisible();
     const capabilities = screen.getByLabelText("Graph delegated capabilities");
     expect(
       within(capabilities).getByText(
@@ -77,10 +111,42 @@ describe("GraphApiTab delegated capabilities", () => {
 
     render(<GraphApiTab />);
 
-    expect(await screen.findByText("Connected with partial permissions")).toBeVisible();
+    expect(
+      await screen.findByText("Connected with partial permissions"),
+    ).toBeVisible();
     expect(
       screen.getByRole("button", { name: "Pre-populate app cache" }),
     ).toBeDisabled();
-    expect(screen.getByText(/App cache requires DeviceManagementApps\.Read\.All/)).toBeVisible();
+    expect(
+      screen.getByText(/App cache requires DeviceManagementApps\.Read\.All/),
+    ).toBeVisible();
+  });
+
+  it("publishes a successful manual connection for first-use ESP enrichment", async () => {
+    vi.mocked(graphGetAuthStatus).mockResolvedValue(disconnectedStatus());
+    vi.mocked(graphAuthenticate).mockResolvedValue(partialStatus(true));
+
+    render(<GraphApiTab />);
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Sign in with Windows" }),
+    );
+
+    expect(
+      await screen.findByText("Connected with partial permissions"),
+    ).toBeVisible();
+    expect(useUiStore.getState().graphApiStatus).toBe("connected");
+  });
+
+  it("clears the global connection phase after manual sign-out", async () => {
+    useUiStore.setState({ graphApiStatus: "connected" });
+    vi.mocked(graphGetAuthStatus).mockResolvedValue(partialStatus(true));
+
+    render(<GraphApiTab />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Sign out" }));
+
+    await waitFor(() => expect(graphSignOut).toHaveBeenCalledOnce());
+    expect(useUiStore.getState().graphApiStatus).toBe("idle");
   });
 });

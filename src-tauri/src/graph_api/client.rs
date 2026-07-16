@@ -11,7 +11,10 @@ use std::time::Duration;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
-use super::models::{GraphHttpMethod, GraphTransportRequest, GraphTransportResponse};
+use super::models::{
+    GraphAppInfo, GraphHttpMethod, GraphResolutionResult, GraphTransportRequest,
+    GraphTransportResponse,
+};
 
 pub const MAX_GRAPH_ATTEMPTS: usize = 4;
 pub const MAX_GRAPH_RETRY_DELAY: Duration = Duration::from_secs(30);
@@ -134,6 +137,50 @@ impl fmt::Display for GraphClientError {
 }
 
 impl std::error::Error for GraphClientError {}
+
+/// Resolve one Graph app chunk without restarting exhausted or retryable work.
+///
+/// The caller supplies the concrete batch and single-item reads so this policy
+/// remains portable while Windows keeps ownership of WAM and HTTP I/O.
+pub fn resolve_app_chunk_with_fallback<Batch, Single>(
+    guids: &[String],
+    fetch_batch: Batch,
+    mut fetch_single: Single,
+) -> Result<GraphResolutionResult, GraphClientError>
+where
+    Batch: FnOnce(&[String]) -> Result<GraphResolutionResult, GraphClientError>,
+    Single: FnMut(&str) -> Result<Option<GraphAppInfo>, GraphClientError>,
+{
+    match fetch_batch(guids) {
+        Ok(result) => Ok(result),
+        Err(error) if error.invalidates_auth() => Err(error),
+        Err(error) => {
+            let allows_single_item_fallback = error.allows_single_item_fallback();
+            let mut result = GraphResolutionResult {
+                resolved: HashMap::new(),
+                not_found: Vec::new(),
+                errors: vec![format!("Batch request failed: {error}")],
+            };
+
+            if !allows_single_item_fallback {
+                return Ok(result);
+            }
+
+            for guid in guids {
+                match fetch_single(guid) {
+                    Ok(Some(info)) => {
+                        result.resolved.insert(guid.clone(), info);
+                    }
+                    Ok(None) => result.not_found.push(guid.clone()),
+                    Err(error) if error.invalidates_auth() => return Err(error),
+                    Err(error) => result.errors.push(format!("{guid}: {error}")),
+                }
+            }
+
+            Ok(result)
+        }
+    }
+}
 
 #[derive(Debug, Deserialize)]
 pub struct GraphPage<T> {

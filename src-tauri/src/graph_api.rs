@@ -19,8 +19,9 @@ mod windows_impl {
     use std::sync::Mutex;
 
     use super::client::{
-        GraphBatchItem, GraphCancellation, GraphClient, GraphClientError, GraphClientErrorKind,
-        GraphTransport, GraphTransportFailure, MAX_GRAPH_RESPONSE_BYTES,
+        resolve_app_chunk_with_fallback, GraphBatchItem, GraphCancellation, GraphClient,
+        GraphClientError, GraphClientErrorKind, GraphTransport, GraphTransportFailure,
+        MAX_GRAPH_RESPONSE_BYTES,
     };
     use super::{
         normalize_graph_guid, project_graph_auth_status, GraphAppInfo, GraphAuthStatus,
@@ -446,39 +447,18 @@ mod windows_impl {
 
         // Graph $batch supports max 20 requests per batch
         for chunk in to_fetch.chunks(20) {
-            match fetch_apps_batch(&token.token, chunk) {
-                Ok(batch_result) => {
-                    for (guid, info) in &batch_result.resolved {
-                        resolved.insert(guid.clone(), info.clone());
-                    }
-                    not_found.extend(batch_result.not_found);
-                    errors.extend(batch_result.errors);
-                }
-                Err(error) => {
-                    if error.invalidates_auth() {
-                        return Err(graph_request_error(state, error));
-                    }
-                    let allows_single_item_fallback = error.allows_single_item_fallback();
-                    errors.push(format!("Batch request failed: {error}"));
-                    if !allows_single_item_fallback {
-                        continue;
-                    }
-                    for guid in chunk {
-                        match fetch_single_app(&token.token, guid) {
-                            Ok(Some(info)) => {
-                                resolved.insert(guid.clone(), info);
-                            }
-                            Ok(None) => not_found.push(guid.clone()),
-                            Err(error) => {
-                                if error.invalidates_auth() {
-                                    return Err(graph_request_error(state, error));
-                                }
-                                errors.push(format!("{guid}: {error}"));
-                            }
-                        }
-                    }
-                }
+            let chunk_result = resolve_app_chunk_with_fallback(
+                chunk,
+                |guids| fetch_apps_batch(&token.token, guids),
+                |guid| fetch_single_app(&token.token, guid),
+            )
+            .map_err(|error| graph_request_error(state, error))?;
+
+            for (guid, info) in chunk_result.resolved {
+                resolved.insert(guid, info);
             }
+            not_found.extend(chunk_result.not_found);
+            errors.extend(chunk_result.errors);
         }
 
         state.cache_apps(&resolved);

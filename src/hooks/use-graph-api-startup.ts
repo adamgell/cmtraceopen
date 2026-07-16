@@ -4,26 +4,56 @@ import { buildGraphRegistryEntries } from "../lib/graph-registry";
 import {
   graphAuthenticate,
   graphFetchAllApps,
+  type GraphAppInfo,
 } from "../lib/commands";
 
-async function connectAndPopulate() {
+type GraphConnectionStatus = "idle" | "connecting" | "connected" | "error";
+
+export interface GraphStartupDependencies {
+  authenticate: typeof graphAuthenticate;
+  fetchAllApps: typeof graphFetchAllApps;
+  mergeApps(apps: GraphAppInfo[]): void;
+  setConnectionStatus(status: GraphConnectionStatus): void;
+}
+
+const defaultDependencies: GraphStartupDependencies = {
+  authenticate: graphAuthenticate,
+  fetchAllApps: graphFetchAllApps,
+  mergeApps: (apps) =>
+    useIntuneStore
+      .getState()
+      .mergeGuidRegistry(buildGraphRegistryEntries(apps)),
+  setConnectionStatus: (status) =>
+    useUiStore.getState().setGraphApiStatus(status),
+};
+
+export async function connectAndPopulate(
+  dependencies: GraphStartupDependencies = defaultDependencies,
+) {
+  dependencies.setConnectionStatus("connecting");
+
+  let status;
   try {
-    useUiStore.getState().setGraphApiStatus("connecting");
-
-    const status = await graphAuthenticate();
-    if (!status.isAuthenticated) {
-      useUiStore.getState().setGraphApiStatus("error");
-      return;
-    }
-
-    const apps = await graphFetchAllApps();
-    if (apps.length > 0) {
-      useIntuneStore.getState().mergeGuidRegistry(buildGraphRegistryEntries(apps));
-    }
-
-    useUiStore.getState().setGraphApiStatus("connected");
+    status = await dependencies.authenticate();
   } catch {
-    useUiStore.getState().setGraphApiStatus("error");
+    dependencies.setConnectionStatus("error");
+    return;
+  }
+  if (!status.isAuthenticated) {
+    dependencies.setConnectionStatus("error");
+    return;
+  }
+
+  dependencies.setConnectionStatus("connected");
+  try {
+    if (status.capabilities.apps) {
+      const apps = await dependencies.fetchAllApps();
+      if (apps.length > 0) {
+        dependencies.mergeApps(apps);
+      }
+    }
+  } catch {
+    // Authentication remains valid when optional app-cache hydration fails.
   }
 }
 

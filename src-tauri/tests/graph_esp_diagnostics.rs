@@ -1,12 +1,14 @@
+use std::cell::Cell;
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use app_lib::graph_api::client::{
-    GraphBatchItem, GraphCancellation, GraphClient, GraphClientError, GraphClientErrorKind,
-    GraphTransport, GraphTransportFailure, GRAPH_REQUEST_TIMEOUT, MAX_GRAPH_ATTEMPTS,
-    MAX_GRAPH_ITEMS, MAX_GRAPH_PAGES, MAX_GRAPH_RESPONSE_BYTES, MAX_GRAPH_RETRY_DELAY,
+    resolve_app_chunk_with_fallback, GraphBatchItem, GraphCancellation, GraphClient,
+    GraphClientError, GraphClientErrorKind, GraphTransport, GraphTransportFailure,
+    GRAPH_REQUEST_TIMEOUT, MAX_GRAPH_ATTEMPTS, MAX_GRAPH_ITEMS, MAX_GRAPH_PAGES,
+    MAX_GRAPH_RESPONSE_BYTES, MAX_GRAPH_RETRY_DELAY,
 };
 use app_lib::graph_api::models::{
     normalize_graph_guid, project_graph_auth_status, GraphAppInfo, GraphAuthCapabilities,
@@ -1367,4 +1369,82 @@ fn client_error_controls_single_item_fallback_without_restarting_retryable_work(
         GraphClientErrorKind::HttpStatus
     );
     assert!(batch_specific_http_failure.allows_single_item_fallback());
+}
+
+#[test]
+fn resolver_caller_does_not_restart_exhausted_batch_work_as_single_reads() {
+    let transport = FakeGraphTransport::new(
+        (0..MAX_GRAPH_ATTEMPTS)
+            .map(|_| Ok(graph_response(503, Vec::new(), &[])))
+            .collect(),
+    );
+    let cancellation = FakeGraphCancellation::default();
+    let client = GraphClient::new("graph.microsoft.com", &transport, &cancellation);
+    let guids = vec!["d85b3f4e-cb9c-4c40-93b4-407457a31a73".to_string()];
+    let single_calls = Cell::new(0);
+
+    let result = resolve_app_chunk_with_fallback(
+        &guids,
+        |_| {
+            client
+                .request_batch_json::<serde_json::Value>(graph_batch_request(&["0"]))
+                .map(|_| GraphResolutionResult {
+                    resolved: Default::default(),
+                    not_found: Vec::new(),
+                    errors: Vec::new(),
+                })
+        },
+        |_| {
+            single_calls.set(single_calls.get() + 1);
+            Ok(None)
+        },
+    )
+    .expect("retry exhaustion should remain a non-auth resolution error");
+
+    assert_eq!(transport.requests().len(), MAX_GRAPH_ATTEMPTS);
+    assert_eq!(single_calls.get(), 0);
+    assert!(result.resolved.is_empty());
+    assert!(result.not_found.is_empty());
+    assert_eq!(result.errors.len(), 1);
+    assert!(result.errors[0].contains("RetryExhausted"));
+}
+
+#[test]
+fn resolver_caller_falls_back_for_malformed_batches_and_preserves_results() {
+    let first_guid = "d85b3f4e-cb9c-4c40-93b4-407457a31a73".to_string();
+    let second_guid = "97b7a3e5-f25b-4ba0-9c25-702e1e845dc7".to_string();
+    let guids = vec![first_guid.clone(), second_guid.clone()];
+    let single_calls = Cell::new(0);
+
+    let result = resolve_app_chunk_with_fallback(
+        &guids,
+        |_| {
+            Err(GraphClientError {
+                kind: GraphClientErrorKind::InvalidResponse,
+                status: Some(200),
+                request_id: None,
+                required_scope: "DeviceManagementApps.Read.All".to_string(),
+            })
+        },
+        |guid| {
+            single_calls.set(single_calls.get() + 1);
+            if guid == first_guid {
+                Ok(Some(GraphAppInfo {
+                    id: guid.to_string(),
+                    display_name: "Contoso App".to_string(),
+                    publisher: None,
+                    odata_type: Some("#microsoft.graph.win32LobApp".to_string()),
+                }))
+            } else {
+                Ok(None)
+            }
+        },
+    )
+    .expect("malformed batches should use bounded single-item fallback");
+
+    assert_eq!(single_calls.get(), 2);
+    assert_eq!(result.resolved[&first_guid].display_name, "Contoso App");
+    assert_eq!(result.not_found, vec![second_guid]);
+    assert_eq!(result.errors.len(), 1);
+    assert!(result.errors[0].contains("InvalidResponse"));
 }

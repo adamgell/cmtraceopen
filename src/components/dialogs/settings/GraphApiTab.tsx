@@ -72,6 +72,9 @@ export function GraphApiTab() {
     try {
       const status = await graphAuthenticate();
       setAuthStatus(status);
+      if (status.isAuthenticated) {
+        useUiStore.getState().setGraphApiStatus("connected");
+      }
     } catch (e) {
       setAuthStatus({
         isAuthenticated: false,
@@ -99,6 +102,7 @@ export function GraphApiTab() {
       await graphSignOut();
       setAuthStatus(null);
       setCachedAppCount(null);
+      useUiStore.getState().setGraphApiStatus("idle");
     } catch {
       // ignore
     }
@@ -113,7 +117,9 @@ export function GraphApiTab() {
       setCachedAppCount(apps.length);
 
       if (apps.length > 0) {
-        useIntuneStore.getState().mergeGuidRegistry(buildGraphRegistryEntries(apps));
+        useIntuneStore
+          .getState()
+          .mergeGuidRegistry(buildGraphRegistryEntries(apps));
       }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -126,7 +132,8 @@ export function GraphApiTab() {
   if (currentPlatform !== "windows") {
     return (
       <div style={{ fontSize: "12px", color: tokens.colorNeutralForeground3 }}>
-        Graph API integration is only available on Windows (Entra-joined devices).
+        Graph API integration is only available on Windows (Entra-joined
+        devices).
       </div>
     );
   }
@@ -182,8 +189,8 @@ export function GraphApiTab() {
             registration required.
           </li>
           <li>
-            Requests only these delegated read permissions (admin consent may
-            be needed on first use):
+            Requests only these delegated read permissions (admin consent may be
+            needed on first use):
             <ul style={{ margin: "2px 0 0", paddingLeft: "16px" }}>
               {GRAPH_CAPABILITY_ROWS.map(([, , scope]) => (
                 <li key={scope}>
@@ -455,9 +462,10 @@ export function GraphApiTab() {
                   <div
                     style={{
                       fontSize: "11px",
-                      color: cachedAppCount > 0
-                        ? tokens.colorPaletteGreenForeground1
-                        : tokens.colorNeutralForeground3,
+                      color:
+                        cachedAppCount > 0
+                          ? tokens.colorPaletteGreenForeground1
+                          : tokens.colorNeutralForeground3,
                     }}
                   >
                     {cachedAppCount > 0
