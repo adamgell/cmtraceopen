@@ -6219,6 +6219,44 @@ fn bundle_registry_json_values_feed_device_preparation_reducer_paths() {
 }
 
 #[test]
+fn bundle_registry_payload_data_cannot_leak_hardware_hash_material() {
+    let bundle = tempfile::tempdir().expect("bundle tempdir");
+    std::fs::create_dir_all(bundle.path().join("evidence/registry"))
+        .expect("create registry folder");
+    std::fs::write(
+        bundle.path().join("evidence/registry/esp.reg"),
+        concat!(
+            "Windows Registry Editor Version 5.00\n\n",
+            "[HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Provisioning\\Diagnostics]\n",
+            "\"Payload\"=\"DeviceHardwareData=BASE64-REGISTRY-SECRET\"\n",
+            "\"SafeSetting\"=\"retained-safe-value\"\n",
+        ),
+    )
+    .expect("write secret-bearing registry fixture");
+    write_bundle_manifest(
+        bundle.path(),
+        serde_json::json!([{
+            "artifactId": "esp-registry-diagnostics",
+            "category": "registry",
+            "family": "autopilot-esp-diagnostics",
+            "relativePath": "evidence/registry/esp.reg",
+            "status": "collected"
+        }]),
+    );
+
+    let snapshot =
+        analyze_captured_evidence_at(bundle.path(), BUNDLE_REQUEST_ID, BUNDLE_OBSERVED_AT)
+            .expect("analyze secret-bearing registry bundle");
+    let serialized = serde_json::to_string(&snapshot).expect("serialize captured snapshot");
+
+    assert!(serialized.contains("retained-safe-value"));
+    assert!(!serialized.contains("BASE64-REGISTRY-SECRET"));
+    assert!(!serialized
+        .to_ascii_lowercase()
+        .contains("devicehardwaredata"));
+}
+
+#[test]
 fn bundle_hardware_and_delivery_json_normalize_without_raw_hardware_hash() {
     let bundle = tempfile::tempdir().expect("bundle tempdir");
     let output = bundle.path().join("evidence/command-output");

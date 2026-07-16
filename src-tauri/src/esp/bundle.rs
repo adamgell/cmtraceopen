@@ -940,6 +940,7 @@ fn registry_records(
             if value.kind == RegistryValueKind::DeleteMarker
                 || contains_hardware_hash(&key_path)
                 || contains_hardware_hash(&value.name)
+                || contains_hardware_hash(&value.data)
             {
                 continue;
             }

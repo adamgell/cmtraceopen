@@ -2281,13 +2281,27 @@ fn raw_observation_value(record: &EspEvidenceRecord) -> EspObservationValue {
 fn is_raw_hardware_hash_record(record: &EspEvidenceRecord) -> bool {
     match record {
         EspEvidenceRecord::Registry(value) => {
-            contains_hardware_hash(&value.key) || contains_hardware_hash(&value.value_name)
+            contains_hardware_hash(&value.key)
+                || contains_hardware_hash(&value.value_name)
+                || observation_value_contains_hardware_hash(&value.value)
         }
         EspEvidenceRecord::Json(value) => {
             contains_hardware_hash(&value.document_type)
                 || contains_hardware_hash(&value.json_pointer)
         }
         _ => false,
+    }
+}
+
+fn observation_value_contains_hardware_hash(value: &EspObservationValue) -> bool {
+    match value {
+        EspObservationValue::Text(value) => contains_hardware_hash(value),
+        EspObservationValue::StringList(values) => {
+            values.iter().any(|value| contains_hardware_hash(value))
+        }
+        EspObservationValue::Integer(_)
+        | EspObservationValue::Unsigned(_)
+        | EspObservationValue::Boolean(_) => false,
     }
 }
 

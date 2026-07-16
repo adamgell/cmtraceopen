@@ -3016,6 +3016,40 @@ fn reducer_parity_nodecache_malformed_denied_hardware_and_hash_exclusion_are_los
 }
 
 #[test]
+fn reducer_drops_hardware_hash_material_hidden_in_generic_registry_value_data() {
+    let mut reducer = EspDiagnosticsReducer::new("2026-07-15T18:00:00Z".to_string());
+    reducer.ingest(registry_record(
+        "captured-registry",
+        "generic-secret-payload",
+        r"SOFTWARE\Microsoft\Provisioning\Diagnostics",
+        "Payload",
+        EspObservationValue::Text("DeviceHardwareData=BASE64-REDUCER-SECRET".to_string()),
+        "2026-07-15T17:00:00Z",
+    ));
+    reducer.ingest(registry_record(
+        "captured-registry",
+        "safe-adjacent-value",
+        r"SOFTWARE\Microsoft\Provisioning\Diagnostics",
+        "SafeSetting",
+        EspObservationValue::Text("retained-safe-value".to_string()),
+        "2026-07-15T17:00:01Z",
+    ));
+
+    let snapshot = reducer.snapshot();
+    let serialized = serde_json::to_string(&snapshot).expect("serialize reducer snapshot");
+
+    assert!(serialized.contains("retained-safe-value"));
+    assert!(!serialized.contains("BASE64-REDUCER-SECRET"));
+    assert!(!serialized
+        .to_ascii_lowercase()
+        .contains("devicehardwaredata"));
+    assert!(snapshot
+        .raw_evidence
+        .iter()
+        .all(|record| { record.evidence[0].evidence_id != "generic-secret-payload" }));
+}
+
+#[test]
 fn reducer_parity_all_v2_states_pin_raw_normalized_sources_times_and_stable_ids() {
     let cases = edge_cases();
     assert_eq!(
