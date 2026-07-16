@@ -328,6 +328,7 @@ impl<T: GraphTransport> EspGraphProvider for EspGraphClientProvider<'_, T> {
         endpoint: &EspGraphEndpoint,
         cancellation: &dyn GraphCancellation,
     ) -> Result<Value, GraphClientError> {
+        validate_esp_endpoint(endpoint, false)?;
         let client = GraphClient::new("graph.microsoft.com", self.transport, cancellation);
         client.request_json(GraphTransportRequest {
             method: GraphHttpMethod::Get,
@@ -344,10 +345,158 @@ impl<T: GraphTransport> EspGraphProvider for EspGraphClientProvider<'_, T> {
         endpoint: &EspGraphEndpoint,
         cancellation: &dyn GraphCancellation,
     ) -> Result<Value, GraphClientError> {
+        validate_esp_endpoint(endpoint, true)?;
         let client = GraphClient::new("graph.microsoft.com", self.transport, cancellation);
         let items = client
             .get_paginated::<Value>(&Self::url(endpoint), endpoint.required_scope.as_str())?;
         Ok(serde_json::json!({ "value": items }))
+    }
+}
+
+fn validate_esp_endpoint(
+    endpoint: &EspGraphEndpoint,
+    collection: bool,
+) -> Result<(), GraphClientError> {
+    let invalid = || {
+        GraphClientError::new(
+            GraphClientErrorKind::InvalidUrl,
+            endpoint.required_scope.as_str(),
+        )
+    };
+    if endpoint.path.len() > 16 * 1024
+        || !endpoint.path.starts_with('/')
+        || endpoint.path.starts_with("//")
+        || endpoint.path.contains('#')
+        || endpoint
+            .path
+            .bytes()
+            .any(|byte| byte.is_ascii_control() || byte.is_ascii_whitespace() || byte == b'\\')
+    {
+        return Err(invalid());
+    }
+    let (resource_path, query) = endpoint
+        .path
+        .split_once('?')
+        .map_or((endpoint.path.as_str(), None), |(path, query)| {
+            (path, Some(query))
+        });
+    if resource_path.contains('%')
+        || resource_path
+            .split('/')
+            .skip(1)
+            .any(|segment| segment.is_empty() || matches!(segment, "." | ".."))
+        || (!collection && query.is_some())
+    {
+        return Err(invalid());
+    }
+    let segments: Vec<&str> = resource_path.split('/').skip(1).collect();
+    let version = if endpoint.api_version == GraphApiVersion::V1_0 {
+        "v1.0"
+    } else if endpoint.api_version == GraphApiVersion::Beta {
+        "beta"
+    } else {
+        return Err(invalid());
+    };
+    if segments.first().copied() != Some(version) {
+        return Err(invalid());
+    }
+    let Some((required_scope, route_is_collection)) = approved_esp_route(&segments) else {
+        return Err(invalid());
+    };
+    if endpoint.required_scope != required_scope || collection != route_is_collection {
+        return Err(invalid());
+    }
+    Ok(())
+}
+
+fn approved_esp_route(segments: &[&str]) -> Option<(&'static str, bool)> {
+    let guid = |value: &str| normalize_graph_guid(value).as_deref() == Some(value);
+    match segments {
+        ["v1.0", "deviceManagement", "managedDevices"] => Some((MANAGED_DEVICES_SCOPE, true)),
+        ["v1.0", "deviceManagement", "managedDevices", id] if guid(id) => {
+            Some((MANAGED_DEVICES_SCOPE, false))
+        }
+        ["beta", "deviceManagement", "autopilotEvents"] => Some((MANAGED_DEVICES_SCOPE, true)),
+        ["beta", "deviceManagement", "autopilotEvents", id, "policyStatusDetails"] if guid(id) => {
+            Some((MANAGED_DEVICES_SCOPE, true))
+        }
+        ["v1.0", "deviceManagement", "windowsAutopilotDeviceIdentities"] => {
+            Some((SERVICE_CONFIG_SCOPE, true))
+        }
+        ["beta", "deviceManagement", "windowsAutopilotDeviceIdentities", id, relation]
+            if guid(id)
+                && matches!(*relation, "deploymentProfile" | "intendedDeploymentProfile") =>
+        {
+            Some((SERVICE_CONFIG_SCOPE, false))
+        }
+        ["beta", "deviceManagement", "windowsAutopilotDeploymentProfiles", id, "assignments"]
+            if guid(id) =>
+        {
+            Some((SERVICE_CONFIG_SCOPE, true))
+        }
+        ["v1.0", "deviceManagement", "deviceEnrollmentConfigurations", id] if guid(id) => {
+            Some((SERVICE_CONFIG_SCOPE, false))
+        }
+        ["beta", "deviceManagement", "deviceEnrollmentConfigurations", id] if guid(id) => {
+            Some((SERVICE_CONFIG_SCOPE, false))
+        }
+        ["v1.0", "deviceManagement", "deviceEnrollmentConfigurations", id, "assignments"]
+            if guid(id) =>
+        {
+            Some((SERVICE_CONFIG_SCOPE, true))
+        }
+        ["v1.0", "deviceAppManagement", "mobileApps", id] if guid(id) => Some((APPS_SCOPE, false)),
+        ["v1.0", "deviceAppManagement", "mobileApps", id, "assignments"] if guid(id) => {
+            Some((APPS_SCOPE, true))
+        }
+        ["beta", "users", id, "mobileAppIntentAndStates"] if guid(id) => {
+            Some((CONFIGURATION_SCOPE, true))
+        }
+        ["v1.0", "deviceManagement", collection, id]
+            if guid(id)
+                && matches!(
+                    *collection,
+                    "deviceConfigurations" | "deviceCompliancePolicies"
+                ) =>
+        {
+            Some((CONFIGURATION_SCOPE, false))
+        }
+        ["v1.0", "deviceManagement", collection, id, suffix]
+            if guid(id)
+                && matches!(
+                    *collection,
+                    "deviceConfigurations" | "deviceCompliancePolicies"
+                )
+                && matches!(*suffix, "assignments" | "deviceStatuses") =>
+        {
+            Some((CONFIGURATION_SCOPE, true))
+        }
+        ["beta", "deviceManagement", "configurationPolicies", id] if guid(id) => {
+            Some((CONFIGURATION_SCOPE, false))
+        }
+        ["beta", "deviceManagement", "configurationPolicies", id, "assignments"] if guid(id) => {
+            Some((CONFIGURATION_SCOPE, true))
+        }
+        ["beta", "deviceManagement", collection, id]
+            if guid(id)
+                && matches!(
+                    *collection,
+                    "deviceManagementScripts" | "deviceHealthScripts"
+                ) =>
+        {
+            Some((SCRIPTS_SCOPE, false))
+        }
+        ["beta", "deviceManagement", collection, id, suffix]
+            if guid(id)
+                && matches!(
+                    *collection,
+                    "deviceManagementScripts" | "deviceHealthScripts"
+                )
+                && matches!(*suffix, "assignments" | "deviceRunStates") =>
+        {
+            Some((SCRIPTS_SCOPE, true))
+        }
+        _ => None,
     }
 }
 

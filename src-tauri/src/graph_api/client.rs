@@ -270,12 +270,17 @@ impl<'a, T: GraphTransport, C: GraphCancellation + ?Sized> GraphClient<'a, T, C>
         initial_url: &str,
         required_scope: &str,
     ) -> Result<Vec<Item>, GraphClientError> {
+        self.ensure_not_cancelled(required_scope)?;
+        let resource_path =
+            graph_resource_path(initial_url, &self.graph_host).ok_or_else(|| {
+                GraphClientError::new(GraphClientErrorKind::InvalidUrl, required_scope)
+            })?;
         let mut url = initial_url.to_string();
         let mut items = Vec::new();
 
         for page_index in 0..MAX_GRAPH_PAGES {
             self.ensure_not_cancelled(required_scope)?;
-            self.ensure_allowed_url(&url, required_scope)?;
+            self.ensure_allowed_resource_url(&url, required_scope, resource_path)?;
 
             let request = GraphTransportRequest {
                 method: GraphHttpMethod::Get,
@@ -316,7 +321,7 @@ impl<'a, T: GraphTransport, C: GraphCancellation + ?Sized> GraphClient<'a, T, C>
             }
 
             self.ensure_not_cancelled(required_scope)?;
-            self.ensure_allowed_url(&next_link, required_scope)?;
+            self.ensure_allowed_resource_url(&next_link, required_scope, resource_path)?;
             url = next_link;
         }
 
@@ -562,7 +567,16 @@ impl<'a, T: GraphTransport, C: GraphCancellation + ?Sized> GraphClient<'a, T, C>
     ) -> Result<GraphTransportResponse, GraphClientError> {
         self.ensure_not_cancelled(required_scope)?;
         let response = self.transport.execute(request, GRAPH_REQUEST_TIMEOUT);
-        self.ensure_not_cancelled(required_scope)?;
+        if self.cancellation.is_cancelled() {
+            let mut error = GraphClientError::new(GraphClientErrorKind::Cancelled, required_scope);
+            if let Ok(response) = &response {
+                if response.status == 401 {
+                    error.status = Some(401);
+                    error.request_id = graph_request_id(&response.headers);
+                }
+            }
+            return Err(error);
+        }
         let response = response.map_err(|failure| match failure {
             GraphTransportFailure::Timeout => {
                 GraphClientError::new(GraphClientErrorKind::Timeout, required_scope)
@@ -632,6 +646,22 @@ impl<'a, T: GraphTransport, C: GraphCancellation + ?Sized> GraphClient<'a, T, C>
                 required_scope,
             ))
         }
+    }
+
+    fn ensure_allowed_resource_url(
+        &self,
+        url: &str,
+        required_scope: &str,
+        resource_path: &str,
+    ) -> Result<(), GraphClientError> {
+        self.ensure_allowed_url(url, required_scope)?;
+        if graph_resource_path(url, &self.graph_host) != Some(resource_path) {
+            return Err(GraphClientError::new(
+                GraphClientErrorKind::InvalidUrl,
+                required_scope,
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -817,6 +847,18 @@ fn is_allowed_graph_url(url: &str, graph_host: &str) -> bool {
         && !authority.contains('@')
         && !authority.contains(':')
         && authority.eq_ignore_ascii_case(graph_host)
+}
+
+fn graph_resource_path<'a>(url: &'a str, graph_host: &str) -> Option<&'a str> {
+    if !is_allowed_graph_url(url, graph_host) {
+        return None;
+    }
+    let remainder = &url[8..];
+    let authority_end = remainder.find(['/', '?']).unwrap_or(remainder.len());
+    remainder[authority_end..]
+        .split('?')
+        .next()
+        .filter(|path| !path.is_empty())
 }
 
 fn is_allowed_graph_batch_url(url: &str, graph_host: &str) -> bool {

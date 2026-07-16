@@ -686,18 +686,118 @@ fn client_cancellation_wins_after_in_flight_timeout() {
 }
 
 #[test]
+fn client_post_transport_cancellation_suppresses_retries_but_preserves_401_invalidation() {
+    let scope = "DeviceManagementApps.Read.All";
+    let cases = vec![
+        (
+            "200",
+            Ok(graph_response(
+                200,
+                graph_page(serde_json::json!([]), None),
+                &[],
+            )),
+            false,
+        ),
+        (
+            "401",
+            Ok(graph_response(
+                401,
+                br#"{"error":{"message":"secret-response-body"}}"#.to_vec(),
+                &[("request-id", "request-safe-401")],
+            )),
+            true,
+        ),
+        (
+            "403",
+            Ok(graph_response(
+                403,
+                br#"{"error":{"message":"secret-response-body"}}"#.to_vec(),
+                &[],
+            )),
+            false,
+        ),
+        (
+            "429",
+            Ok(graph_response(
+                429,
+                br#"{"error":{"message":"secret-response-body"}}"#.to_vec(),
+                &[("retry-after", "1")],
+            )),
+            false,
+        ),
+        (
+            "503",
+            Ok(graph_response(
+                503,
+                br#"{"error":{"message":"secret-response-body"}}"#.to_vec(),
+                &[],
+            )),
+            false,
+        ),
+        ("network", Err(GraphTransportFailure::Network), false),
+        ("timeout", Err(GraphTransportFailure::Timeout), false),
+    ];
+
+    for (label, response, invalidates_auth) in cases {
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let transport =
+            FakeGraphTransport::cancelling_after(vec![response], 1, Arc::clone(&cancelled));
+        let cancellation = FakeGraphCancellation {
+            cancelled,
+            ..Default::default()
+        };
+        let client = GraphClient::new("graph.microsoft.com", &transport, &cancellation);
+
+        let error = client
+            .get_paginated::<serde_json::Value>(
+                "https://graph.microsoft.com/v1.0/deviceAppManagement/mobileApps?secret=query",
+                scope,
+            )
+            .expect_err("post-transport cancellation must win");
+
+        assert_eq!(error.kind, GraphClientErrorKind::Cancelled, "{label}");
+        assert_eq!(error.invalidates_auth(), invalidates_auth, "{label}");
+        assert_eq!(error.status, invalidates_auth.then_some(401), "{label}");
+        assert_eq!(
+            error.request_id.as_deref(),
+            invalidates_auth.then_some("request-safe-401"),
+            "{label}"
+        );
+        assert_eq!(transport.requests().len(), 1, "{label} retried");
+        assert!(
+            cancellation.waits.lock().expect("waits lock").is_empty(),
+            "{label} entered retry wait"
+        );
+        let rendered = format!("{error:?} {error}");
+        assert!(!rendered.contains("secret-response-body"), "{label}");
+        assert!(!rendered.contains("secret=query"), "{label}");
+    }
+}
+
+#[test]
 fn client_rejects_untrusted_next_links_and_enforces_page_item_body_caps() {
     let scope = "DeviceManagementApps.Read.All";
     for next_link in [
         "http://graph.microsoft.com/v1.0/next",
         "https://graph.microsoft.com.evil.example/v1.0/next",
         "https://graph.microsoft.com@evil.example/v1.0/next",
+        "https://graph.microsoft.com/beta/deviceAppManagement/mobileApps?$skiptoken=version-switch",
+        "https://graph.microsoft.com/v1.0/users?$skiptoken=resource-switch",
+        "https://graph.microsoft.com/v1.0/deviceAppManagement/mobileApps/../users?$skiptoken=traversal",
+        "https://graph.microsoft.com/v1.0/deviceAppManagement/mobileApps/%2e%2e/users?$skiptoken=encoded",
     ] {
-        let transport = FakeGraphTransport::new(vec![Ok(graph_response(
-            200,
-            graph_page(serde_json::json!([]), Some(next_link)),
-            &[],
-        ))]);
+        let transport = FakeGraphTransport::new(vec![
+            Ok(graph_response(
+                200,
+                graph_page(serde_json::json!([]), Some(next_link)),
+                &[],
+            )),
+            Ok(graph_response(
+                200,
+                graph_page(serde_json::json!([]), None),
+                &[],
+            )),
+        ]);
         let cancellation = FakeGraphCancellation::default();
         let client = GraphClient::new("graph.microsoft.com", &transport, &cancellation);
         let error = client
@@ -1790,7 +1890,7 @@ mod esp_orchestration_tests {
     use app_lib::graph_api::esp::{
         fetch_esp_graph_overlay, EspGraphClientProvider, EspGraphEndpoint, EspGraphOperationError,
         EspGraphOperationRegistry, EspGraphPolicyReference, EspGraphProvider, EspGraphRequest,
-        EspGraphScriptReference,
+        EspGraphScriptReference, APPS_SCOPE, CONFIGURATION_SCOPE, MANAGED_DEVICES_SCOPE,
     };
     use app_lib::graph_api::models::{GraphTransportRequest, GraphTransportResponse};
     use cmtraceopen_parser::esp::{
@@ -2000,6 +2100,121 @@ mod esp_orchestration_tests {
         ) -> Result<serde_json::Value, GraphClientError> {
             EspGraphClientProvider::new(&FakeEspGraphTransport { provider: self })
                 .get_collection(endpoint, cancellation)
+        }
+    }
+
+    #[test]
+    fn esp_provider_rejects_mismatched_or_unapproved_endpoints_before_transport() {
+        let cases = vec![
+            (
+                "version mismatch",
+                EspGraphEndpoint {
+                    path: "/v1.0/deviceManagement/managedDevices?$top=25".to_string(),
+                    required_scope: MANAGED_DEVICES_SCOPE.to_string(),
+                    api_version: GraphApiVersion::Beta,
+                },
+                true,
+            ),
+            (
+                "scope mismatch",
+                EspGraphEndpoint {
+                    path: "/v1.0/deviceManagement/managedDevices?$top=25".to_string(),
+                    required_scope: APPS_SCOPE.to_string(),
+                    api_version: GraphApiVersion::V1_0,
+                },
+                true,
+            ),
+            (
+                "path traversal",
+                EspGraphEndpoint {
+                    path: "/v1.0/deviceManagement/managedDevices/../users".to_string(),
+                    required_scope: MANAGED_DEVICES_SCOPE.to_string(),
+                    api_version: GraphApiVersion::V1_0,
+                },
+                false,
+            ),
+            (
+                "unapproved resource",
+                EspGraphEndpoint {
+                    path: format!("/v1.0/users/{USER}/messages"),
+                    required_scope: CONFIGURATION_SCOPE.to_string(),
+                    api_version: GraphApiVersion::V1_0,
+                },
+                true,
+            ),
+            (
+                "object used as collection",
+                EspGraphEndpoint {
+                    path: format!("/v1.0/deviceManagement/managedDevices/{MANAGED}"),
+                    required_scope: MANAGED_DEVICES_SCOPE.to_string(),
+                    api_version: GraphApiVersion::V1_0,
+                },
+                true,
+            ),
+        ];
+
+        for (label, endpoint, collection) in cases {
+            let transport = super::FakeGraphTransport::new(vec![Ok(super::graph_response(
+                200,
+                super::graph_page(serde_json::json!([]), None),
+                &[],
+            ))]);
+            let cancellation = super::FakeGraphCancellation::default();
+            let provider = EspGraphClientProvider::new(&transport);
+
+            let error = if collection {
+                provider.get_collection(&endpoint, &cancellation)
+            } else {
+                provider.get(&endpoint, &cancellation)
+            }
+            .expect_err("invalid ESP endpoint must be rejected");
+
+            assert_eq!(error.kind, GraphClientErrorKind::InvalidUrl, "{label}");
+            assert!(transport.requests().is_empty(), "{label} reached transport");
+        }
+    }
+
+    #[test]
+    fn esp_provider_binds_continuations_to_the_original_version_and_collection_path() {
+        let endpoint = EspGraphEndpoint {
+            path: "/v1.0/deviceManagement/managedDevices?$top=25".to_string(),
+            required_scope: MANAGED_DEVICES_SCOPE.to_string(),
+            api_version: GraphApiVersion::V1_0,
+        };
+        for next_link in [
+            format!(
+                "https://graph.microsoft.com/beta/users/{USER}/mobileAppIntentAndStates?$top=100"
+            ),
+            format!("https://graph.microsoft.com/v1.0/users/{USER}/messages?$top=100"),
+            "https://graph.microsoft.com/v1.0/deviceManagement/managedDevices/../users?secret=traversal"
+                .to_string(),
+            "https://graph.microsoft.com/v1.0/deviceManagement/managedDevices/%2e%2e/users?secret=encoded"
+                .to_string(),
+        ] {
+            let transport = super::FakeGraphTransport::new(vec![
+                Ok(super::graph_response(
+                    200,
+                    super::graph_page(serde_json::json!([]), Some(&next_link)),
+                    &[],
+                )),
+                Ok(super::graph_response(
+                    200,
+                    super::graph_page(serde_json::json!([]), None),
+                    &[],
+                )),
+            ]);
+            let cancellation = super::FakeGraphCancellation::default();
+            let provider = EspGraphClientProvider::new(&transport);
+
+            let error = provider
+                .get_collection(&endpoint, &cancellation)
+                .expect_err("collection continuation escaped its approved resource");
+
+            assert_eq!(error.kind, GraphClientErrorKind::InvalidUrl);
+            assert_eq!(transport.requests().len(), 1, "followed {next_link}");
+            let rendered = format!("{error:?} {error}");
+            assert!(!rendered.contains("users"));
+            assert!(!rendered.contains("secret"));
         }
     }
 
