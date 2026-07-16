@@ -1708,6 +1708,124 @@ describe("ESP Graph scheduling", () => {
     }
   });
 
+  it.each([
+    "0000-07-15T14:00:00Z",
+    "2026-00-15T14:00:00Z",
+    "2026-13-15T14:00:00Z",
+    "2026-04-31T14:00:00Z",
+    "2025-02-29T14:00:00Z",
+    "2026-07-15T24:00:00Z",
+    "2026-07-15T14:60:00Z",
+    "2026-07-15T14:00:60Z",
+    "2026-07-15T14:00:00+24:00",
+    "2026-07-15T14:00:00+05:60",
+  ])(
+    "rejects semantically invalid normalized RFC3339 %s and falls back to valid raw evidence",
+    async (invalidNormalizedUtc) => {
+      const fetchGraph = vi.fn(async (request: EspGraphRequest) =>
+        makeOverlay(request.requestId),
+      );
+      const coordinator = createEspGraphCoordinator({
+        fetchGraph,
+        cancelGraph: vi.fn(async () => undefined),
+        createRequestId: () => "graph-invalid-normalized-window",
+      });
+      const snapshot = makeSnapshot(["local-invalid-normalized-window"]);
+      snapshot.sessions = [
+        {
+          sessionId: "invalid-normalized",
+          kind: "classic",
+          scope: "device",
+          userSid: null,
+          startedAt: {
+            rawText: "2026-07-15T14:00:00+05:30",
+            originalOffset: "+05:30",
+            normalizedUtc: invalidNormalizedUtc,
+            kind: "offset",
+          },
+          endedAt: {
+            rawText: "2026-07-15T15:00:00+05:30",
+            originalOffset: "+05:30",
+            normalizedUtc: invalidNormalizedUtc,
+            kind: "offset",
+          },
+          phase: "failed",
+          isLatest: true,
+          workloadIds: [],
+          evidence: [],
+        },
+      ];
+      useUiStore.setState({
+        graphApiEnabled: true,
+        graphApiStatus: "connected",
+      });
+      useEspDiagnosticsStore
+        .getState()
+        .beginAnalysis("analysis-invalid-normalized-window");
+      useEspDiagnosticsStore
+        .getState()
+        .applyAnalysis("analysis-invalid-normalized-window", snapshot);
+
+      await coordinator.reconcile();
+
+      expect(fetchGraph).toHaveBeenCalledWith(
+        expect.objectContaining({
+          evidenceWindowStartUtc: "2026-07-15T08:30:00.000Z",
+          evidenceWindowEndUtc: "2026-07-15T09:30:00.000Z",
+        }),
+      );
+      coordinator.dispose();
+    },
+  );
+
+  it("omits the evidence window when normalized and raw RFC3339 dates are impossible", async () => {
+    const fetchGraph = vi.fn(async (request: EspGraphRequest) =>
+      makeOverlay(request.requestId),
+    );
+    const coordinator = createEspGraphCoordinator({
+      fetchGraph,
+      cancelGraph: vi.fn(async () => undefined),
+      createRequestId: () => "graph-impossible-window",
+    });
+    const snapshot = makeSnapshot(["local-impossible-window"]);
+    snapshot.sessions = [
+      {
+        sessionId: "impossible",
+        kind: "classic",
+        scope: "device",
+        userSid: null,
+        startedAt: {
+          rawText: "2026-02-30T14:00:00+05:30",
+          originalOffset: "+05:30",
+          normalizedUtc: "2026-02-30T08:30:00Z",
+          kind: "offset",
+        },
+        endedAt: null,
+        phase: "failed",
+        isLatest: true,
+        workloadIds: [],
+        evidence: [],
+      },
+    ];
+    useUiStore.setState({ graphApiEnabled: true, graphApiStatus: "connected" });
+    useEspDiagnosticsStore
+      .getState()
+      .beginAnalysis("analysis-impossible-window");
+    useEspDiagnosticsStore
+      .getState()
+      .applyAnalysis("analysis-impossible-window", snapshot);
+
+    await coordinator.reconcile();
+
+    expect(fetchGraph).toHaveBeenCalledWith(
+      expect.objectContaining({
+        evidenceWindowStartUtc: null,
+        evidenceWindowEndUtc: null,
+      }),
+    );
+    coordinator.dispose();
+  });
+
   it("keeps Graph disabled without fetching and removes only the remote overlay", async () => {
     const fetchGraph =
       vi.fn<(request: EspGraphRequest) => Promise<EspGraphOverlay>>();
