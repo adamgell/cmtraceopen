@@ -857,3 +857,65 @@ describe("workload table", () => {
     expect(table).toHaveTextContent("ev-retry-current");
   });
 });
+
+describe("complete single-page evidence composition", () => {
+  it("keeps blockers and workloads before the collapsed evidence families", () => {
+    showSnapshot(makeSnapshot({ findings: [makeFinding()] }));
+    render(<EspDiagnosticsWorkspace />);
+
+    const actionCenter = screen.getByRole("region", { name: "Action center" });
+    const workloads = screen.getByRole("region", { name: "Tracked workloads" });
+    const evidence = screen.getByRole("region", { name: "ESP evidence" });
+
+    expect(
+      actionCenter.compareDocumentPosition(workloads) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      workloads.compareDocumentPosition(evidence) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+
+    for (const sectionTitle of [
+      "Identity and profile",
+      "OOBE flags",
+      "ESP configuration",
+      "Enrollment and sessions",
+      "Apps",
+      "Scripts",
+      "Policies",
+      "Certificates",
+      "Join and registration",
+      "Delivery Optimization",
+      "Hardware",
+      "NodeCache",
+      "Source coverage",
+      "Raw provenance",
+    ]) {
+      expect(within(evidence).getByText(sectionTitle)).toBeInTheDocument();
+    }
+  });
+
+  it("keeps sensitive values masked by default and never reveals restricted values", () => {
+    showSnapshot();
+    render(<EspDiagnosticsWorkspace />);
+
+    const evidence = screen.getByRole("region", { name: "ESP evidence" });
+    expect(evidence).toHaveTextContent("Sensitive values are masked by default");
+    expect(evidence).toHaveTextContent("Copy remains unavailable for restricted values");
+    expect(evidence).toHaveTextContent("Sensitive value · masked");
+    expect(evidence).toHaveTextContent("Restricted value · reveal unavailable");
+    expect(evidence).not.toHaveTextContent("tenant-sensitive");
+    expect(evidence).not.toHaveTextContent("operator@contoso.example");
+
+    fireEvent.click(
+      within(evidence).getByRole("button", { name: "Reveal sensitive values" }),
+    );
+    expect(evidence).toHaveTextContent("tenant-sensitive");
+    expect(evidence).toHaveTextContent("SERIAL-042");
+    expect(evidence).not.toHaveTextContent("operator@contoso.example");
+    expect(
+      within(evidence).getByRole("button", { name: "Mask sensitive values" }),
+    ).toHaveAttribute("aria-pressed", "true");
+  });
+});

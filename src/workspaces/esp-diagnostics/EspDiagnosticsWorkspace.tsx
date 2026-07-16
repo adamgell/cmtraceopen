@@ -13,14 +13,19 @@ import {
 } from "../../lib/commands";
 import { LOG_MONOSPACE_FONT_FAMILY, LOG_UI_FONT_FAMILY } from "../../lib/log-accessibility";
 import { useUiStore } from "../../stores/ui-store";
+import { ActionCenter } from "./ActionCenter";
 import { ElevationBanner } from "./ElevationBanner";
+import { EvidenceSections } from "./EvidenceSections";
 import { useEspDiagnosticsStore } from "./esp-diagnostics-store";
+import { EspPhaseProgress } from "./EspPhaseProgress";
+import { EspWorkloadTable } from "./EspWorkloadTable";
 import { EspWorkspaceHeader } from "./EspWorkspaceHeader";
 import {
   analyzeEspEvidenceSource,
   ESP_EVIDENCE_SOURCE_ERROR,
   resolveEspEvidenceSource,
 } from "./index";
+import { LiveActivity } from "./LiveActivity";
 import { MsiexecStatus } from "./MsiexecStatus";
 
 function createRequestId(prefix: "analysis" | "live"): string {
@@ -205,7 +210,35 @@ export function EspDiagnosticsWorkspace() {
         ) : null}
 
         {snapshot ? (
-          <MsiexecStatus snapshot={snapshot} />
+          <>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fit, minmax(360px, 1fr))",
+                alignItems: "start",
+                gap: 10,
+              }}
+            >
+              <ActionCenter findings={snapshot.findings} />
+              <MsiexecStatus snapshot={snapshot} />
+            </div>
+
+            <EspWorkloadTable snapshot={snapshot} />
+
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fit, minmax(360px, 1fr))",
+                alignItems: "start",
+                gap: 10,
+              }}
+            >
+              <EspPhaseProgress snapshot={snapshot} />
+              <LiveActivity entries={snapshot.activity} />
+            </div>
+
+            <EvidenceSections snapshot={snapshot} />
+          </>
         ) : (
           <section
             aria-label="Diagnostic input status"
