@@ -1690,17 +1690,15 @@ impl SnapshotProjection {
 
     fn finalize_delivery_optimization(&mut self) {
         if let Some(delivery) = &mut self.delivery_optimization {
-            let total = u128::from(delivery.download_http_bytes)
-                + u128::from(delivery.download_lan_bytes)
-                + u128::from(delivery.download_cache_host_bytes);
-            if total == 0 {
+            if delivery.download_http_bytes == 0 {
                 delivery.peer_share_percent = None;
                 delivery.connected_cache_share_percent = None;
             } else {
+                let download_http_bytes = delivery.download_http_bytes as f64;
                 delivery.peer_share_percent =
-                    Some(delivery.download_lan_bytes as f64 / total as f64 * 100.0);
+                    Some(delivery.download_lan_bytes as f64 / download_http_bytes * 100.0);
                 delivery.connected_cache_share_percent =
-                    Some(delivery.download_cache_host_bytes as f64 / total as f64 * 100.0);
+                    Some(delivery.download_cache_host_bytes as f64 / download_http_bytes * 100.0);
             }
         }
     }

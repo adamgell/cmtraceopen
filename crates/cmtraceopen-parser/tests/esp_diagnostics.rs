@@ -2064,10 +2064,10 @@ fn reducer_projects_profile_odj_registration_and_delivery_optimization_evidence(
     let delivery = snapshot.delivery_optimization.as_ref().unwrap();
     assert_eq!(delivery.download_http_bytes, 1000);
     assert_eq!(delivery.download_lan_bytes, 250);
-    assert_eq!(delivery.peer_share_percent, Some(250.0 / 1350.0 * 100.0));
+    assert_eq!(delivery.peer_share_percent, Some(250.0 / 1000.0 * 100.0));
     assert_eq!(
         delivery.connected_cache_share_percent,
-        Some(100.0 / 1350.0 * 100.0)
+        Some(100.0 / 1000.0 * 100.0)
     );
     assert_eq!(
         delivery.transfers[0].transfer_id,
@@ -4291,7 +4291,7 @@ fn timeline_rereview_odj_109_110_payload_states_decode_zero_through_three() {
 }
 
 #[test]
-fn reducer_rereview_delivery_optimization_live_captured_and_zero_totals_match_native_semantics() {
+fn reducer_rereview_delivery_optimization_live_and_captured_use_http_bytes_denominator() {
     let snapshot = |source_kind: EspSourceKind, source: &str, evidence: &str, values| {
         let (http_bytes, lan_bytes, cache_host_bytes) = values;
         let mut reducer = EspDiagnosticsReducer::new("2026-07-15T18:00:00Z".to_string());
@@ -4323,8 +4323,14 @@ fn reducer_rereview_delivery_optimization_live_captured_and_zero_totals_match_na
     );
     let live_delivery = live.delivery_optimization.as_ref().unwrap();
     let captured_delivery = captured.delivery_optimization.as_ref().unwrap();
-    assert_eq!(live_delivery.peer_share_percent, Some(20.0));
-    assert_eq!(live_delivery.connected_cache_share_percent, Some(10.0));
+    assert_eq!(
+        live_delivery.peer_share_percent,
+        Some(200.0 / 700.0 * 100.0)
+    );
+    assert_eq!(
+        live_delivery.connected_cache_share_percent,
+        Some(100.0 / 700.0 * 100.0)
+    );
     assert_eq!(
         live_delivery.peer_share_percent,
         captured_delivery.peer_share_percent
@@ -4333,14 +4339,30 @@ fn reducer_rereview_delivery_optimization_live_captured_and_zero_totals_match_na
         live_delivery.connected_cache_share_percent,
         captured_delivery.connected_cache_share_percent
     );
+}
 
-    let zero = snapshot(
-        EspSourceKind::DeliveryOptimization,
-        "delivery-optimization:live",
-        "do-zero",
-        (0, 0, 0),
-    );
-    let zero_delivery = zero.delivery_optimization.as_ref().unwrap();
-    assert_eq!(zero_delivery.peer_share_percent, None);
-    assert_eq!(zero_delivery.connected_cache_share_percent, None);
+#[test]
+fn reducer_rereview_delivery_optimization_zero_http_with_nonzero_components_is_unavailable() {
+    let mut reducer = EspDiagnosticsReducer::new("2026-07-15T18:00:00Z".to_string());
+    reducer.ingest(EspEvidenceRecord::DeliveryOptimization(
+        EspDeliveryOptimizationObservation {
+            context: fixture_context(
+                EspSourceKind::DeliveryOptimization,
+                "delivery-optimization:live",
+                "do-zero-http",
+                "2026-07-15T12:00:00Z",
+            ),
+            kind: EspDeliveryOptimizationEventKind::DownloadCompleted,
+            content_id: Some("content-a".to_string()),
+            app_id: Some("app-a".to_string()),
+            http_bytes: Some(0),
+            lan_bytes: Some(200),
+            cache_host_bytes: Some(100),
+        },
+    ));
+
+    let snapshot = reducer.snapshot();
+    let delivery = snapshot.delivery_optimization.as_ref().unwrap();
+    assert_eq!(delivery.peer_share_percent, None);
+    assert_eq!(delivery.connected_cache_share_percent, None);
 }
