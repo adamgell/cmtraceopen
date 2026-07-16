@@ -32,6 +32,9 @@ pub const FIXED_PROCESS_ALLOWLIST: &[&str] = &[
     "winget.exe",
 ];
 
+const TRUSTED_DYNAMIC_PROCESS_ANCESTORS: &[&str] =
+    &["IntuneManagementExtension.exe", "AgentExecutor.exe"];
+
 // Registry-derived hints are matched by image basename. Never widen that query to a shared
 // interpreter or host, because an unrelated process with the same basename could expose its
 // command line. Intentionally fixed names above (for example msiexec.exe) remain unaffected.
@@ -141,7 +144,12 @@ pub fn collect_process_evidence<F>(
 where
     F: FnOnce() -> String,
 {
-    let allowlist = process_allowlist(local_installer_names);
+    let fixed_allowlist = fixed_process_allowlist();
+    let local_allowlist = local_process_allowlist(local_installer_names);
+    let allowlist = fixed_allowlist
+        .union(&local_allowlist)
+        .cloned()
+        .collect::<BTreeSet<_>>();
     let allowed_image_names = allowlist.iter().cloned().collect::<Vec<_>>();
     let mut batch = provider.snapshot(
         &allowed_image_names,
@@ -153,12 +161,14 @@ where
     let (access_state, detail) = process_coverage(&batch.completion, partial);
     let retained_snapshots = batch
         .snapshots
-        .into_iter()
+        .iter()
         .filter(|snapshot| {
-            allowlist
-                .iter()
-                .any(|allowed| allowed.eq_ignore_ascii_case(&snapshot.image_name))
+            let image_name = snapshot.image_name.to_ascii_lowercase();
+            fixed_allowlist.contains(&image_name)
+                || (local_allowlist.contains(&image_name)
+                    && has_trusted_dynamic_process_ancestor(snapshot, &batch.snapshots))
         })
+        .cloned()
         .collect::<Vec<_>>();
     let sampled_at_utc = coherent_process_sample_time(&retained_snapshots, completion_time());
     let observations = retained_snapshots
@@ -173,6 +183,22 @@ where
         detail,
         observations,
     }
+}
+
+fn has_trusted_dynamic_process_ancestor(
+    snapshot: &RawProcessSnapshot,
+    snapshots: &[RawProcessSnapshot],
+) -> bool {
+    parent_chain(&snapshot.identity(), snapshots, MAX_PARENT_CHAIN_DEPTH)
+        .into_iter()
+        .any(|ancestor| {
+            snapshots.iter().any(|candidate| {
+                candidate.identity() == ancestor
+                    && TRUSTED_DYNAMIC_PROCESS_ANCESTORS
+                        .iter()
+                        .any(|name| name.eq_ignore_ascii_case(&candidate.image_name))
+            })
+        })
 }
 
 fn coherent_process_sample_time(
@@ -235,6 +261,7 @@ pub fn parent_chain(
 }
 
 struct CommandLineSanitizers {
+    unterminated_hardware_identity: Regex,
     double_quoted_authorization: Regex,
     single_quoted_authorization: Regex,
     parameterized_authorization: Regex,
@@ -252,6 +279,10 @@ struct CommandLineSanitizers {
 fn command_line_sanitizers() -> &'static CommandLineSanitizers {
     static SANITIZERS: OnceLock<CommandLineSanitizers> = OnceLock::new();
     SANITIZERS.get_or_init(|| CommandLineSanitizers {
+        unterminated_hardware_identity: Regex::new(
+            r#"(?i)(^|\s)((?:--?|/)?(?:hardware[-_]?hash|device[-_]?hardware[-_]?data))(\s*(?:=|:)\s*|\s+)(?:\"(?:\\.|[^\"])*$|'(?:\\.|[^'])*$)"#,
+        )
+        .expect("constant unterminated-hardware-identity regex"),
         double_quoted_authorization: Regex::new(
             r#"(?i)(\")((?:--|/)?authorization)(\s*(?:=|:)\s*|\s+)[!#$%&'*+\-.^_`|~a-z0-9]+\s+(?:\\.|[^\"])*\""#,
         )
@@ -306,9 +337,14 @@ fn command_line_sanitizers() -> &'static CommandLineSanitizers {
 pub fn sanitize_command_line(command_line: &str) -> String {
     let sanitizers = command_line_sanitizers();
 
+    // Hardware identity payloads can be very long and may contain argument-like text. If a
+    // quoted value is truncated before its closing quote, fail closed by redacting the rest.
+    let command_line = sanitizers
+        .unterminated_hardware_identity
+        .replace_all(command_line, "$1$2$3[REDACTED]");
     let command_line = sanitizers
         .double_quoted_authorization
-        .replace_all(command_line, "$1$2$3[REDACTED]\"");
+        .replace_all(&command_line, "$1$2$3[REDACTED]\"");
     let command_line = sanitizers
         .single_quoted_authorization
         .replace_all(&command_line, "$1$2$3[REDACTED]'");
@@ -749,19 +785,20 @@ fn is_json_secret_key(key: &str) -> bool {
     )
 }
 
-fn process_allowlist(local_installer_names: &[String]) -> BTreeSet<String> {
-    let mut allowlist = FIXED_PROCESS_ALLOWLIST
+fn fixed_process_allowlist() -> BTreeSet<String> {
+    FIXED_PROCESS_ALLOWLIST
         .iter()
         .map(|name| name.to_ascii_lowercase())
-        .collect::<BTreeSet<_>>();
-    allowlist.extend(
-        local_installer_names
-            .iter()
-            .filter_map(|name| normalize_local_installer_name(name))
-            .take(MAX_LOCAL_INSTALLER_NAMES)
-            .map(|name| name.to_ascii_lowercase()),
-    );
-    allowlist
+        .collect()
+}
+
+fn local_process_allowlist(local_installer_names: &[String]) -> BTreeSet<String> {
+    local_installer_names
+        .iter()
+        .filter_map(|name| normalize_local_installer_name(name))
+        .take(MAX_LOCAL_INSTALLER_NAMES)
+        .map(|name| name.to_ascii_lowercase())
+        .collect()
 }
 
 pub(super) fn normalize_local_installer_name(raw: &str) -> Option<String> {
@@ -1110,6 +1147,41 @@ mod tests {
         );
         assert!(!names.contains(&"notepad.exe"));
         assert!(!names.contains(&"evil.exe"));
+    }
+
+    #[test]
+    fn dynamic_installer_snapshot_requires_trusted_intune_ancestry() {
+        let snapshots = vec![
+            process(20, None, "AgentExecutor.exe", "2026-07-15T13:00:00Z", None),
+            process(
+                30,
+                Some(20),
+                "ContosoSetup.exe",
+                "2026-07-15T13:01:00Z",
+                Some("ContosoSetup.exe /quiet"),
+            ),
+            process(
+                31,
+                None,
+                "ContosoSetup.exe",
+                "2026-07-15T13:02:00Z",
+                Some("ContosoSetup.exe --note unrelated-command-line-sentinel"),
+            ),
+        ];
+
+        let evidence = collect(snapshots, &["ContosoSetup.exe".to_string()]);
+        let identities = evidence
+            .observations
+            .iter()
+            .map(|observation| (observation.pid, observation.executable_name.as_str()))
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            identities,
+            vec![(20, "AgentExecutor.exe"), (30, "ContosoSetup.exe")]
+        );
+        let serialized = serde_json::to_string(&evidence).expect("serialize process evidence");
+        assert!(!serialized.contains("unrelated-command-line-sentinel"));
     }
 
     #[test]
@@ -1500,6 +1572,39 @@ mod tests {
         let safe_neighbors =
             "installer.exe --hardware-hash-mode SHA256 --device-hardware-data-format base64";
         assert_eq!(sanitize_command_line(safe_neighbors), safe_neighbors);
+    }
+
+    #[test]
+    fn unterminated_hardware_identity_quotes_fail_closed_before_serialization() {
+        for option in ["--HardwareHash", "--DeviceHardwareData"] {
+            let raw = format!(
+                "msiexec.exe {option} \"unterminated-hardware-secret \
+                 /L*V C:\\Windows\\Temp\\hardware-secret.log \
+                 /i {{33333333-3333-3333-3333-333333333333}} \
+                 --app-id 44444444-4444-4444-4444-444444444444"
+            );
+            let evidence = collect(
+                vec![process(
+                    54,
+                    Some(20),
+                    "msiexec.exe",
+                    "2026-07-15T13:20:00Z",
+                    Some(&raw),
+                )],
+                &[],
+            );
+            let observation = &evidence.observations[0];
+            let serialized = serde_json::to_string(&evidence).expect("serialize process evidence");
+
+            assert!(serialized.contains("[REDACTED]"));
+            assert!(!serialized.contains("unterminated-hardware-secret"));
+            assert!(!serialized.contains("hardware-secret.log"));
+            assert!(!serialized.contains("33333333-3333-3333-3333-333333333333"));
+            assert!(!serialized.contains("44444444-4444-4444-4444-444444444444"));
+            assert_eq!(observation.referenced_log_path, None);
+            assert_eq!(observation.product_code, None);
+            assert_eq!(observation.app_id, None);
+        }
     }
 
     #[test]

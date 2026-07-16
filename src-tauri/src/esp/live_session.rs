@@ -852,17 +852,12 @@ fn command_executable_name(command_line: &str) -> Option<String> {
     // Arguments can contain executable-looking paths that are not launched by this command.
     // Only the leading executable is trusted as a registry-derived process hint.
     let expression = EXECUTABLE.get_or_init(|| {
-        Regex::new(r#"(?i)^\s*(?:\"([^\"]+\.exe)\"|'([^']+\.exe)'|([^\s\"']+\.exe))(?:\s|$)"#)
+        Regex::new(r#"(?i)^\s*(?:\"([^\"]+\.exe)\"|([^\s\"']+\.exe))(?:\s|$)"#)
             .expect("constant installer executable regex")
     });
     expression
         .captures(command_line)
-        .and_then(|captures| {
-            captures
-                .get(1)
-                .or_else(|| captures.get(2))
-                .or_else(|| captures.get(3))
-        })
+        .and_then(|captures| captures.get(1).or_else(|| captures.get(2)))
         .and_then(|value| normalize_local_installer_name(value.as_str()))
 }
 
@@ -1226,6 +1221,7 @@ mod tests {
                     2,
                     r#"powershell.exe -NoProfile -Command "& 'C:\IME\NestedSetup.exe'""#,
                 ),
+                registry_command_observation(3, r#"'C:\IME\SingleQuotedSetup.exe' /quiet"#),
             ],
             ..RegistryEvidence::default()
         };
@@ -1250,6 +1246,7 @@ mod tests {
         assert!(requested_names.contains(&"contososetup.exe".to_string()));
         assert!(!requested_names.contains(&"notepad.exe".to_string()));
         assert!(!requested_names.contains(&"nestedsetup.exe".to_string()));
+        assert!(!requested_names.contains(&"singlequotedsetup.exe".to_string()));
         assert!(!requested_names.contains(&"powershell.exe".to_string()));
         assert!(batch.records.is_empty());
     }
