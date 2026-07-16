@@ -218,7 +218,9 @@ export function createEspGraphCoordinator(
         await cancellation;
       }
       useEspDiagnosticsStore.getState().clearGraphOverlay();
-      useEspDiagnosticsStore.getState().setGraphUnavailable("graphNotConnected");
+      useEspDiagnosticsStore
+        .getState()
+        .setGraphUnavailable("graphNotConnected");
       blockedFingerprint = fingerprint;
       return;
     }
@@ -255,11 +257,16 @@ export function createEspGraphCoordinator(
     // Release the stale claim, reschedule a run for the current snapshot, and
     // bail out.
     const currentSnapshot = useEspDiagnosticsStore.getState().snapshot;
+    const currentGraphState = useUiStore.getState();
     if (
       !currentSnapshot ||
-      getEspIdentityFingerprint(currentSnapshot) !== fingerprint
+      getEspIdentityFingerprint(currentSnapshot) !== fingerprint ||
+      !currentGraphState.graphApiEnabled ||
+      currentGraphState.graphApiStatus !== "connected"
     ) {
-      lastRequestedFingerprint = null;
+      if (lastRequestedFingerprint === fingerprint) {
+        lastRequestedFingerprint = null;
+      }
       void run(false);
       return;
     }
@@ -271,9 +278,7 @@ export function createEspGraphCoordinator(
     try {
       const overlay = await fetchGraph(request);
       if (!disposed) {
-        useEspDiagnosticsStore
-          .getState()
-          .applyGraphOverlay(requestId, overlay);
+        useEspDiagnosticsStore.getState().applyGraphOverlay(requestId, overlay);
       }
     } catch (error) {
       if (!disposed) {

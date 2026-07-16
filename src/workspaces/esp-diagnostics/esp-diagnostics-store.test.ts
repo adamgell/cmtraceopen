@@ -79,7 +79,8 @@ function makeSnapshot(
       provenance: {
         sourceKind: "imeLog",
         sourceArtifactId: "ime-app-workload",
-        filePath: "C:\\ProgramData\\Microsoft\\IntuneManagementExtension\\Logs\\IntuneManagementExtension.log",
+        filePath:
+          "C:\\ProgramData\\Microsoft\\IntuneManagementExtension\\Logs\\IntuneManagementExtension.log",
         lineNumber: index + 1,
         recordNumber: null,
         registry: null,
@@ -174,7 +175,10 @@ function deferred<T>() {
 
 beforeEach(() => {
   vi.mocked(invoke).mockReset();
-  useEspDiagnosticsStore.setState(useEspDiagnosticsStore.getInitialState(), true);
+  useEspDiagnosticsStore.setState(
+    useEspDiagnosticsStore.getInitialState(),
+    true,
+  );
   useUiStore.setState({
     graphApiEnabled: false,
     graphApiStatus: "idle",
@@ -206,7 +210,9 @@ describe("ESP typed command wrappers", () => {
     );
     await expect(startEspDiagnosticsSession("live-a")).resolves.toBe(envelope);
     await expect(getEspDiagnosticsSession("session-a")).resolves.toBe(envelope);
-    await expect(stopEspDiagnosticsSession("session-a")).resolves.toBeUndefined();
+    await expect(
+      stopEspDiagnosticsSession("session-a"),
+    ).resolves.toBeUndefined();
     await expect(restartEspAsAdministrator()).resolves.toEqual({
       launched: true,
       reason: "launched",
@@ -236,9 +242,9 @@ describe("ESP typed command wrappers", () => {
       "command analyze_esp_evidence not found",
     );
 
-    await expect(
-      analyzeEspEvidence("/bundle", "analysis-a"),
-    ).rejects.toThrow("Restart CMTrace Open");
+    await expect(analyzeEspEvidence("/bundle", "analysis-a")).rejects.toThrow(
+      "Restart CMTrace Open",
+    );
   });
 });
 
@@ -260,9 +266,9 @@ describe("ESP local session state", () => {
       .getState()
       .applyAnalysis("analysis-a", makeSnapshot(["local-a"]));
     expect(useEspDiagnosticsStore.getState().phase).toBe("ready");
-    expect(useEspDiagnosticsStore.getState().snapshot?.rawEvidence[0].recordId).toBe(
-      "local-a",
-    );
+    expect(
+      useEspDiagnosticsStore.getState().snapshot?.rawEvidence[0].recordId,
+    ).toBe("local-a");
   });
 
   it("moves starting to live to stopping to ready and rejects wrong or old updates", () => {
@@ -287,9 +293,9 @@ describe("ESP local session state", () => {
     useEspDiagnosticsStore
       .getState()
       .applySessionUpdate(makeSessionUpdate(0, makeSnapshot(["old"])));
-    expect(useEspDiagnosticsStore.getState().snapshot?.rawEvidence[0].recordId).toBe(
-      "first",
-    );
+    expect(
+      useEspDiagnosticsStore.getState().snapshot?.rawEvidence[0].recordId,
+    ).toBe("first");
 
     useEspDiagnosticsStore.getState().beginStop("session-a");
     expect(useEspDiagnosticsStore.getState().phase).toBe("stopping");
@@ -316,7 +322,9 @@ describe("ESP local session state", () => {
 
     useEspDiagnosticsStore
       .getState()
-      .applySessionUpdate(makeSessionUpdate(0, makeSnapshot(["duplicate-zero"])));
+      .applySessionUpdate(
+        makeSessionUpdate(0, makeSnapshot(["duplicate-zero"])),
+      );
 
     expect(
       useEspDiagnosticsStore.getState().snapshot?.rawEvidence[0].recordId,
@@ -337,7 +345,9 @@ describe("ESP local session state", () => {
 
     expect(useEspDiagnosticsStore.getState().phase).toBe("ready");
     expect(useEspDiagnosticsStore.getState().sessionId).toBeNull();
-    expect(useEspDiagnosticsStore.getState().snapshot?.rawEvidence).toHaveLength(2);
+    expect(
+      useEspDiagnosticsStore.getState().snapshot?.rawEvidence,
+    ).toHaveLength(2);
   });
 
   it("recovers from local errors on the next request", () => {
@@ -373,7 +383,9 @@ describe("ESP local session state", () => {
     useEspDiagnosticsStore.getState().setEvidenceViewMode("docked");
     useEspDiagnosticsStore
       .getState()
-      .applySessionUpdate(makeSessionUpdate(2, makeSnapshot(["one", "two", "three"])));
+      .applySessionUpdate(
+        makeSessionUpdate(2, makeSnapshot(["one", "two", "three"])),
+      );
     expect(useEspDiagnosticsStore.getState().unreadEvidenceCount).toBe(2);
     useEspDiagnosticsStore.getState().markEvidenceRead();
     expect(useEspDiagnosticsStore.getState().unreadEvidenceCount).toBe(0);
@@ -479,9 +491,7 @@ describe("ESP Graph overlay state", () => {
     useEspDiagnosticsStore
       .getState()
       .applyAnalysis("analysis-a", makeSnapshot(["local-a"]));
-    useEspDiagnosticsStore
-      .getState()
-      .beginGraph("graph-unknown-wire-values");
+    useEspDiagnosticsStore.getState().beginGraph("graph-unknown-wire-values");
     useEspDiagnosticsStore
       .getState()
       .applyGraphOverlay("graph-unknown-wire-values", overlay);
@@ -540,9 +550,9 @@ describe("ESP Graph overlay state", () => {
     useEspDiagnosticsStore.getState().beginGraph("graph-b");
     useEspDiagnosticsStore.getState().failGraph("graph-b", "Graph unavailable");
     expect(useEspDiagnosticsStore.getState().graphPhase).toBe("error");
-    expect(useEspDiagnosticsStore.getState().snapshot?.rawEvidence[0].recordId).toBe(
-      "local-a",
-    );
+    expect(
+      useEspDiagnosticsStore.getState().snapshot?.rawEvidence[0].recordId,
+    ).toBe("local-a");
   });
 
   it("does not rewrite a local snapshot when no Graph overlay exists", () => {
@@ -611,15 +621,14 @@ describe("ESP Graph overlay state", () => {
 
 describe("ESP Graph scheduling", () => {
   it("keeps Graph disabled without fetching and removes only the remote overlay", async () => {
-    const fetchGraph = vi.fn<(request: EspGraphRequest) => Promise<EspGraphOverlay>>();
+    const fetchGraph =
+      vi.fn<(request: EspGraphRequest) => Promise<EspGraphOverlay>>();
     const cancelGraph = vi.fn<(requestId: string) => Promise<void>>();
     useEspDiagnosticsStore.getState().beginAnalysis("analysis-a");
-    useEspDiagnosticsStore
-      .getState()
-      .applyAnalysis("analysis-a", {
-        ...makeSnapshot(["local-a"]),
-        graph: makeOverlay("old-overlay"),
-      });
+    useEspDiagnosticsStore.getState().applyAnalysis("analysis-a", {
+      ...makeSnapshot(["local-a"]),
+      graph: makeOverlay("old-overlay"),
+    });
 
     const coordinator = createEspGraphCoordinator({
       fetchGraph,
@@ -631,9 +640,9 @@ describe("ESP Graph scheduling", () => {
     expect(fetchGraph).not.toHaveBeenCalled();
     expect(useEspDiagnosticsStore.getState().graphPhase).toBe("disabled");
     expect(useEspDiagnosticsStore.getState().snapshot?.graph).toBeNull();
-    expect(useEspDiagnosticsStore.getState().snapshot?.rawEvidence[0].recordId).toBe(
-      "local-a",
-    );
+    expect(
+      useEspDiagnosticsStore.getState().snapshot?.rawEvidence[0].recordId,
+    ).toBe("local-a");
     coordinator.dispose();
   });
 
@@ -700,7 +709,10 @@ describe("ESP Graph scheduling", () => {
     useEspDiagnosticsStore
       .getState()
       .applySessionUpdate(
-        makeSessionUpdate(2, makeSnapshot(["live-one", "live-two"], "same-device")),
+        makeSessionUpdate(
+          2,
+          makeSnapshot(["live-one", "live-two"], "same-device"),
+        ),
       );
     await coordinator.reconcile();
 
@@ -780,9 +792,9 @@ describe("ESP Graph scheduling", () => {
     await coordinator.reconcile();
     expect(cancelGraph).toHaveBeenCalledWith("graph-extra");
     expect(useEspDiagnosticsStore.getState().snapshot?.graph).toBeNull();
-    expect(useEspDiagnosticsStore.getState().snapshot?.rawEvidence[0].recordId).toBe(
-      "local-a",
-    );
+    expect(
+      useEspDiagnosticsStore.getState().snapshot?.rawEvidence[0].recordId,
+    ).toBe("local-a");
     third.resolve(makeOverlay("graph-extra"));
     await activeRefresh;
     expect(useEspDiagnosticsStore.getState().snapshot?.graph).toBeNull();
@@ -841,7 +853,10 @@ describe("ESP Graph scheduling", () => {
       graphRequestId: "graph-active",
       graphPhase: "loading",
     });
-    useUiStore.setState({ graphApiEnabled: false, graphApiStatus: "connected" });
+    useUiStore.setState({
+      graphApiEnabled: false,
+      graphApiStatus: "connected",
+    });
     const cancelGraph = vi.fn(async () => {
       throw new Error("Native cancellation unavailable");
     });
@@ -852,9 +867,9 @@ describe("ESP Graph scheduling", () => {
     expect(cancelGraph).toHaveBeenCalledWith("graph-active");
     expect(useEspDiagnosticsStore.getState().graphPhase).toBe("disabled");
     expect(useEspDiagnosticsStore.getState().snapshot?.graph).toBeNull();
-    expect(useEspDiagnosticsStore.getState().snapshot?.rawEvidence[0].recordId).toBe(
-      "local-a",
-    );
+    expect(
+      useEspDiagnosticsStore.getState().snapshot?.rawEvidence[0].recordId,
+    ).toBe("local-a");
     coordinator.dispose();
   });
 
@@ -1050,6 +1065,7 @@ describe("ESP Graph scheduling", () => {
     for (const [request] of fetchGraph.mock.calls) {
       expect(request.identity.deviceName).toBe(snapshotB.identity.deviceName);
     }
+    expect(fetchGraph).toHaveBeenCalledTimes(1);
 
     // Device-B's overlay is ultimately applied to the current snapshot.
     expect(useEspDiagnosticsStore.getState().snapshot?.graph).not.toBeNull();
@@ -1057,6 +1073,35 @@ describe("ESP Graph scheduling", () => {
       useEspDiagnosticsStore.getState().snapshot?.rawEvidence[0].recordId,
     ).toBe("local-b");
 
+    coordinator.dispose();
+  });
+
+  it("does not dispatch a Graph fetch when the option is disabled during a cancellation await", async () => {
+    const cancellation = deferred<void>();
+    const cancelGraph = vi.fn(() => cancellation.promise);
+    const fetchGraph = vi.fn(async (request: EspGraphRequest) =>
+      makeOverlay(request.requestId),
+    );
+
+    useUiStore.setState({ graphApiEnabled: true, graphApiStatus: "connected" });
+    useEspDiagnosticsStore.getState().beginAnalysis("analysis-a");
+    useEspDiagnosticsStore
+      .getState()
+      .applyAnalysis("analysis-a", makeSnapshot(["local-a"]));
+    useEspDiagnosticsStore.setState({
+      graphRequestId: "graph-prior",
+      graphPhase: "loading",
+    });
+
+    const coordinator = createEspGraphCoordinator({ fetchGraph, cancelGraph });
+    const reconcile = coordinator.reconcile();
+    useUiStore.setState({ graphApiEnabled: false });
+    cancellation.resolve();
+    await reconcile;
+    await Promise.resolve();
+
+    expect(fetchGraph).not.toHaveBeenCalled();
+    expect(useEspDiagnosticsStore.getState().graphPhase).toBe("disabled");
     coordinator.dispose();
   });
 });
