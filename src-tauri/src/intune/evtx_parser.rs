@@ -81,10 +81,22 @@ impl ParsedEspEventRecord {
 pub struct ParsedEspEvtxBatch {
     pub records: Vec<ParsedEspEventRecord>,
     pub inspected_records: usize,
+    pub inspection_limit_reached: bool,
     pub truncated: bool,
     pub parse_failure_count: usize,
     pub oversized_record_count: usize,
     pub retained_byte_budget_exhausted: bool,
+}
+
+/// Compatibility projection for callers that need only record-count bounds.
+/// Native acquisition uses `ParsedEspEvtxBatch` to retain the stronger byte,
+/// parse-failure, and oversized-record accounting.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParsedEspEventBatch {
+    pub records: Vec<ParsedEspEventRecord>,
+    pub inspected_records: usize,
+    pub rejected_records: usize,
+    pub inspection_limit_reached: bool,
 }
 
 #[cfg(target_os = "windows")]
@@ -310,7 +322,7 @@ where
 }
 
 pub fn parse_esp_evtx_file(path: &Path) -> Result<Vec<ParsedEspEventRecord>, String> {
-    parse_esp_evtx_file_with(path, parse_esp_evtx_file_bounded)
+    parse_esp_evtx_file_with(path, parse_esp_evtx_file_bounded_with_limits)
 }
 
 fn parse_esp_evtx_file_with<F>(path: &Path, parse: F) -> Result<Vec<ParsedEspEventRecord>, String>
@@ -327,6 +339,26 @@ where
 }
 
 pub fn parse_esp_evtx_file_bounded(
+    path: &Path,
+    inspection_limit: usize,
+) -> Result<ParsedEspEventBatch, String> {
+    parse_esp_evtx_file_bounded_with_limits(
+        path,
+        inspection_limit,
+        MAX_ESP_EVTX_RECORD_BYTES,
+        MAX_ESP_EVTX_BATCH_BYTES,
+    )
+    .map(|batch| ParsedEspEventBatch {
+        records: batch.records,
+        inspected_records: batch.inspected_records,
+        rejected_records: batch
+            .parse_failure_count
+            .saturating_add(batch.oversized_record_count),
+        inspection_limit_reached: batch.inspection_limit_reached,
+    })
+}
+
+pub fn parse_esp_evtx_file_bounded_with_limits(
     path: &Path,
     inspection_limit: usize,
     max_record_bytes: usize,
@@ -356,13 +388,17 @@ fn parse_esp_record_stream<I, E>(
 where
     I: IntoIterator<Item = Result<(String, u64), E>>,
 {
+    let mut record_results = record_results.into_iter();
     let mut records = Vec::new();
     let mut inspected_records = 0;
     let mut parse_failure_count = 0usize;
     let mut oversized_record_count = 0usize;
     let mut retained_bytes = 0usize;
     let mut retained_byte_budget_exhausted = false;
-    for record_result in record_results.into_iter().take(inspection_limit) {
+    for _ in 0..inspection_limit {
+        let Some(record_result) = record_results.next() else {
+            break;
+        };
         inspected_records += 1;
         let Ok((data, event_record_id)) = record_result else {
             parse_failure_count += 1;
@@ -386,14 +422,25 @@ where
         retained_bytes += record_bytes;
         records.push(record);
     }
+    let inspection_limit_reached = if inspection_limit == 0 || inspected_records < inspection_limit
+    {
+        false
+    } else {
+        match record_results.size_hint() {
+            (lower, _) if lower > 0 => true,
+            (_, Some(0)) => false,
+            _ => record_results.next().is_some(),
+        }
+    };
 
     ParsedEspEvtxBatch {
         records,
         inspected_records,
+        inspection_limit_reached,
         truncated: parse_failure_count > 0
             || oversized_record_count > 0
             || retained_byte_budget_exhausted
-            || inspected_records >= inspection_limit,
+            || inspection_limit_reached,
         parse_failure_count,
         oversized_record_count,
         retained_byte_budget_exhausted,
@@ -1686,6 +1733,35 @@ mod tests {
     }
 
     #[test]
+    fn esp_record_stream_distinguishes_exact_capacity_from_more_input() {
+        let exact = (0..3).map(|index| {
+            Ok::<_, &'static str>((esp_record_xml(&format!("exact-{index}")), index as u64))
+        });
+        let exact_batch = parse_esp_record_stream(
+            exact,
+            "exact.evtx",
+            3,
+            MAX_ESP_EVTX_RECORD_BYTES,
+            usize::MAX,
+        );
+        assert_eq!(exact_batch.inspected_records, 3);
+        assert!(!exact_batch.inspection_limit_reached);
+
+        let extra = (0..4).map(|index| {
+            Ok::<_, &'static str>((esp_record_xml(&format!("extra-{index}")), index as u64))
+        });
+        let extra_batch = parse_esp_record_stream(
+            extra,
+            "extra.evtx",
+            3,
+            MAX_ESP_EVTX_RECORD_BYTES,
+            usize::MAX,
+        );
+        assert_eq!(extra_batch.inspected_records, 3);
+        assert!(extra_batch.inspection_limit_reached);
+    }
+
+    #[test]
     fn public_esp_evtx_wrapper_forwards_the_default_record_size_limit() {
         let records = parse_esp_evtx_file_with(
             Path::new("bounded-wrapper.evtx"),
@@ -1697,6 +1773,7 @@ mod tests {
                 Ok(ParsedEspEvtxBatch {
                     records: Vec::new(),
                     inspected_records: 0,
+                    inspection_limit_reached: false,
                     truncated: false,
                     parse_failure_count: 0,
                     oversized_record_count: 0,

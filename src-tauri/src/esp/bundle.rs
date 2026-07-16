@@ -33,7 +33,10 @@ use super::archive::{
 use super::discovery::{
     open_verified_regular_file, DiscoveryPathFailureKind, VerifiedFileOpenFailure,
 };
-use super::event_logs::{collect_captured_evtx_files, EventEvidence};
+use super::event_logs::{
+    collect_captured_evtx_files_bounded, CapturedEventEvidence, CapturedEventFileState,
+    EventEvidence, EventSourceError, MAX_CAPTURED_EVENT_RECORDS_INSPECTED,
+};
 use super::live_session::{event_evidence_to_batch, log_entries_to_records};
 use super::system::{delivery_optimization_from_rows, SystemRow};
 
@@ -436,13 +439,13 @@ pub fn analyze_captured_evidence_at(
         if remaining_records == 0 {
             coverage.push(bundle_record_limit_coverage(observed_at_utc));
         } else {
-            let (mut event_records, event_coverage) =
-                parse_event_artifacts(&pending_event_artifacts, observed_at_utc);
+            let (mut event_records, event_coverage, retention_limit_reached) =
+                parse_event_artifacts(&pending_event_artifacts, observed_at_utc, remaining_records);
             let records_truncated = event_records.len() > remaining_records;
             event_records.truncate(remaining_records);
             reducer.ingest_all(event_records);
             coverage.extend(event_coverage);
-            if records_truncated {
+            if records_truncated || retention_limit_reached {
                 coverage.push(bundle_record_limit_coverage(observed_at_utc));
             }
         }
@@ -1125,41 +1128,110 @@ fn parse_json_artifact(path: &Path, artifact: &BundleArtifact) -> ArtifactParseO
 fn parse_event_artifacts(
     pending_event_artifacts: &[PendingEventArtifact],
     observed_at_utc: &str,
-) -> (Vec<EspEvidenceRecord>, Vec<EspArtifactCoverage>) {
+    remaining_records: usize,
+) -> (Vec<EspEvidenceRecord>, Vec<EspArtifactCoverage>, bool) {
     let paths = pending_event_artifacts
         .iter()
         .map(|pending| pending.staged_path.clone())
         .collect::<Vec<_>>();
-    match collect_captured_evtx_files(&paths, observed_at_utc) {
-        Ok(evidence) => normalize_event_batch(evidence, pending_event_artifacts, observed_at_utc),
-        Err(_) => {
-            let mut records = Vec::new();
-            let mut coverage = Vec::new();
-            for pending in pending_event_artifacts {
-                match collect_captured_evtx_files(
-                    std::slice::from_ref(&pending.staged_path),
-                    observed_at_utc,
-                ) {
-                    Ok(evidence) => {
-                        let (artifact_records, artifact_coverage) = normalize_event_batch(
-                            evidence,
-                            std::slice::from_ref(pending),
-                            observed_at_utc,
-                        );
-                        records.extend(artifact_records);
-                        coverage.extend(artifact_coverage);
-                    }
-                    Err(error) => coverage.push(artifact_coverage(
-                        source_artifact_id(&pending.artifact),
-                        pending.artifact.family.clone(),
-                        EspArtifactStatus::ParseFailed,
-                        Some(format!("{error:?}")),
-                        &pending.artifact.observed_at_utc,
-                    )),
-                }
-            }
-            (records, coverage)
+    let collection = collect_captured_evtx_files_bounded(
+        &paths,
+        observed_at_utc,
+        MAX_CAPTURED_EVENT_RECORDS_INSPECTED,
+        remaining_records,
+    );
+    normalize_event_collection(collection, pending_event_artifacts, observed_at_utc)
+}
+
+fn normalize_event_collection(
+    collection: CapturedEventEvidence,
+    pending_event_artifacts: &[PendingEventArtifact],
+    observed_at_utc: &str,
+) -> (Vec<EspEvidenceRecord>, Vec<EspArtifactCoverage>, bool) {
+    let CapturedEventEvidence {
+        evidence,
+        files,
+        retention_limit_reached,
+        ..
+    } = collection;
+    let (records, mut coverage) =
+        normalize_event_batch(evidence, pending_event_artifacts, observed_at_utc);
+    let artifacts_by_staged_path = pending_event_artifacts
+        .iter()
+        .map(|pending| {
+            (
+                normalize_manifest_path_identity(&portable_path(&pending.staged_path)),
+                &pending.artifact,
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+
+    for file in files {
+        let identity = normalize_manifest_path_identity(&portable_path(&file.path));
+        let Some(artifact) = artifacts_by_staged_path.get(&identity) else {
+            continue;
+        };
+        let (mut status, mut detail) = match file.state {
+            CapturedEventFileState::Available => (EspArtifactStatus::Available, None),
+            CapturedEventFileState::InspectionLimitReached => (
+                EspArtifactStatus::ParseFailed,
+                Some(format!(
+                    "event-log evidence is partial after reaching a bounded inspection limit at {} records",
+                    file.inspected_records
+                )),
+            ),
+            CapturedEventFileState::RetentionLimitReached => (
+                EspArtifactStatus::ParseFailed,
+                Some(
+                    "event-log evidence is partial after reaching a bounded retained-record limit"
+                        .to_string(),
+                ),
+            ),
+            CapturedEventFileState::Failed(error) => event_file_failure(error),
+            CapturedEventFileState::NotInspected => (
+                EspArtifactStatus::ParseFailed,
+                Some(
+                    "event log was not inspected because the bounded event-log inspection budget was exhausted; evidence is partial"
+                        .to_string(),
+                ),
+            ),
+        };
+        if file.rejected_records != 0 {
+            status = EspArtifactStatus::ParseFailed;
+            let record_label = if file.rejected_records == 1 {
+                "record was"
+            } else {
+                "records were"
+            };
+            let rejection_detail = format!(
+                "{} event-log {record_label} rejected as malformed or oversized; evidence is partial",
+                file.rejected_records
+            );
+            detail = Some(match detail {
+                Some(existing) => format!("{existing}; {rejection_detail}"),
+                None => rejection_detail,
+            });
         }
+        coverage.push(artifact_coverage(
+            source_artifact_id(artifact),
+            artifact.family.clone(),
+            status,
+            detail,
+            &artifact.observed_at_utc,
+        ));
+    }
+    (records, coverage, retention_limit_reached)
+}
+
+fn event_file_failure(error: EventSourceError) -> (EspArtifactStatus, Option<String>) {
+    match error {
+        EventSourceError::Missing => (EspArtifactStatus::Missing, None),
+        EventSourceError::PermissionDenied => (
+            EspArtifactStatus::PermissionDenied,
+            Some("captured event log could not be read because access was denied".to_string()),
+        ),
+        EventSourceError::Failed(detail) => (EspArtifactStatus::ParseFailed, Some(detail)),
+        EventSourceError::Unsupported => (EspArtifactStatus::Unsupported, None),
     }
 }
 
@@ -1196,17 +1268,6 @@ fn normalize_event_batch(
         observation.context.observed_at_utc = artifact.observed_at_utc.clone();
         true
     });
-    batch
-        .coverage
-        .extend(pending_event_artifacts.iter().map(|pending| {
-            artifact_coverage(
-                source_artifact_id(&pending.artifact),
-                pending.artifact.family.clone(),
-                EspArtifactStatus::Available,
-                None,
-                &pending.artifact.observed_at_utc,
-            )
-        }));
     (batch.records, batch.coverage)
 }
 
@@ -2234,6 +2295,10 @@ fn coverage_status_priority(status: &EspArtifactStatus) -> u8 {
 
 #[cfg(test)]
 mod tests {
+    use super::super::event_logs::{
+        CapturedEventEvidence, CapturedEventFileOutcome, CapturedEventFileState, EventEvidence,
+        EventSourceError,
+    };
     use super::*;
 
     #[test]
@@ -2273,6 +2338,123 @@ mod tests {
 
         assert_eq!(coverage.len(), 1);
         assert_eq!(coverage[0].status, EspArtifactStatus::Available);
+    }
+
+    #[test]
+    fn captured_event_file_outcomes_preserve_partial_artifact_coverage() {
+        let pending = [
+            ("available.evtx", "available"),
+            ("broken.evtx", "broken"),
+            ("unread.evtx", "unread"),
+        ]
+        .into_iter()
+        .map(|(path, id)| PendingEventArtifact {
+            staged_path: PathBuf::from(path),
+            artifact: BundleArtifact {
+                artifact_id: id.to_string(),
+                family: "event-log".to_string(),
+                category: "event-logs".to_string(),
+                relative_path: format!("evidence/event-logs/{path}"),
+                parse_hints: vec!["evtx".to_string()],
+                status: Some("collected".to_string()),
+                observed_at_utc: "2026-07-16T06:30:00Z".to_string(),
+            },
+        })
+        .collect::<Vec<_>>();
+        let collection = CapturedEventEvidence {
+            evidence: EventEvidence::default(),
+            files: vec![
+                CapturedEventFileOutcome {
+                    path: pending[0].staged_path.clone(),
+                    state: CapturedEventFileState::Available,
+                    inspected_records: 2,
+                    rejected_records: 0,
+                },
+                CapturedEventFileOutcome {
+                    path: pending[1].staged_path.clone(),
+                    state: CapturedEventFileState::Failed(EventSourceError::Failed(
+                        "malformed EVTX".to_string(),
+                    )),
+                    inspected_records: 0,
+                    rejected_records: 0,
+                },
+                CapturedEventFileOutcome {
+                    path: pending[2].staged_path.clone(),
+                    state: CapturedEventFileState::NotInspected,
+                    inspected_records: 0,
+                    rejected_records: 0,
+                },
+            ],
+            inspected_records: 2,
+            retained_records: 0,
+            inspection_limit_reached: true,
+            retention_limit_reached: false,
+        };
+
+        let (_, coverage, retention_limit_reached) =
+            normalize_event_collection(collection, &pending, "2026-07-16T06:30:00Z");
+
+        assert!(!retention_limit_reached);
+        assert!(coverage.iter().any(|item| {
+            item.artifact_id.contains("available") && item.status == EspArtifactStatus::Available
+        }));
+        assert!(coverage.iter().any(|item| {
+            item.artifact_id.contains("broken")
+                && item.status == EspArtifactStatus::ParseFailed
+                && item
+                    .detail
+                    .as_deref()
+                    .is_some_and(|detail| detail.contains("malformed EVTX"))
+        }));
+        assert!(coverage.iter().any(|item| {
+            item.artifact_id.contains("unread")
+                && item.status == EspArtifactStatus::ParseFailed
+                && item
+                    .detail
+                    .as_deref()
+                    .is_some_and(|detail| detail.contains("not inspected"))
+        }));
+    }
+
+    #[test]
+    fn captured_event_rejections_report_partial_artifact_coverage() {
+        let pending = vec![PendingEventArtifact {
+            staged_path: PathBuf::from("rejected.evtx"),
+            artifact: BundleArtifact {
+                artifact_id: "rejected".to_string(),
+                family: "event-log".to_string(),
+                category: "event-logs".to_string(),
+                relative_path: "evidence/event-logs/rejected.evtx".to_string(),
+                parse_hints: vec!["evtx".to_string()],
+                status: Some("collected".to_string()),
+                observed_at_utc: "2026-07-16T06:30:00Z".to_string(),
+            },
+        }];
+        let collection = CapturedEventEvidence {
+            evidence: EventEvidence::default(),
+            files: vec![CapturedEventFileOutcome {
+                path: pending[0].staged_path.clone(),
+                state: CapturedEventFileState::Available,
+                inspected_records: 1,
+                rejected_records: 1,
+            }],
+            inspected_records: 1,
+            retained_records: 0,
+            inspection_limit_reached: false,
+            retention_limit_reached: false,
+        };
+
+        let (_, coverage, _) =
+            normalize_event_collection(collection, &pending, "2026-07-16T06:30:00Z");
+        assert!(coverage.iter().any(|item| {
+            item.artifact_id.contains("rejected")
+                && item.status == EspArtifactStatus::ParseFailed
+                && item.detail.as_deref().is_some_and(|detail| {
+                    detail.contains("1 event-log record")
+                        && detail.contains("malformed or oversized")
+                        && detail.contains("partial")
+                })
+        }));
     }
 
     #[test]

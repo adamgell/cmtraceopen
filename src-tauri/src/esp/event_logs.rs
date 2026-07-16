@@ -14,8 +14,8 @@ use serde::{Deserialize, Serialize};
 use super::process::sanitize_command_line;
 
 use crate::intune::evtx_parser::{
-    parse_esp_evtx_file_bounded, EventLogProperty, ParsedEspEventRecord, ParsedEspEvtxBatch,
-    MAX_ESP_EVTX_RECORD_BYTES,
+    parse_esp_evtx_file_bounded_with_limits, EventLogProperty, ParsedEspEventRecord,
+    ParsedEspEvtxBatch, MAX_ESP_EVTX_RECORD_BYTES,
 };
 
 pub const REQUIRED_EVENT_IDS: &[u32] = &[
@@ -140,6 +140,33 @@ pub struct EventEvidence {
     pub limitations: Vec<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CapturedEventFileState {
+    Available,
+    InspectionLimitReached,
+    RetentionLimitReached,
+    Failed(EventSourceError),
+    NotInspected,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CapturedEventFileOutcome {
+    pub path: PathBuf,
+    pub state: CapturedEventFileState,
+    pub inspected_records: usize,
+    pub rejected_records: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CapturedEventEvidence {
+    pub evidence: EventEvidence,
+    pub files: Vec<CapturedEventFileOutcome>,
+    pub inspected_records: usize,
+    pub retained_records: usize,
+    pub inspection_limit_reached: bool,
+    pub retention_limit_reached: bool,
+}
+
 pub fn collect_event_evidence(
     provider: &impl EventLogProvider,
     observed_at_utc: &str,
@@ -235,7 +262,24 @@ pub fn collect_captured_evtx_files(
         paths,
         observed_at_utc,
         CapturedEventAcquisitionLimits::default(),
-        parse_esp_evtx_file_bounded,
+        parse_esp_evtx_file_bounded_with_limits,
+    )
+}
+
+pub fn collect_captured_evtx_files_bounded(
+    paths: &[PathBuf],
+    observed_at_utc: &str,
+    inspection_limit: usize,
+    retention_limit: usize,
+) -> CapturedEventEvidence {
+    let mut limits = CapturedEventAcquisitionLimits::default();
+    limits.max_inspected_records = limits.max_inspected_records.min(inspection_limit);
+    collect_captured_evtx_files_bounded_with(
+        paths,
+        observed_at_utc,
+        limits,
+        retention_limit,
+        parse_esp_evtx_file_bounded_with_limits,
     )
 }
 
@@ -243,8 +287,28 @@ fn collect_captured_evtx_files_with<F>(
     paths: &[PathBuf],
     observed_at_utc: &str,
     limits: CapturedEventAcquisitionLimits,
-    mut parse_file: F,
+    parse_file: F,
 ) -> Result<EventEvidence, EventSourceError>
+where
+    F: FnMut(&Path, usize, usize, usize) -> Result<ParsedEspEvtxBatch, String>,
+{
+    Ok(collect_captured_evtx_files_bounded_with(
+        paths,
+        observed_at_utc,
+        limits,
+        usize::MAX,
+        parse_file,
+    )
+    .evidence)
+}
+
+fn collect_captured_evtx_files_bounded_with<F>(
+    paths: &[PathBuf],
+    observed_at_utc: &str,
+    limits: CapturedEventAcquisitionLimits,
+    retention_limit: usize,
+    mut parse_file: F,
+) -> CapturedEventEvidence
 where
     F: FnMut(&Path, usize, usize, usize) -> Result<ParsedEspEvtxBatch, String>,
 {
@@ -252,23 +316,41 @@ where
     let mut limitations = Vec::new();
     let mut sorted_paths = paths.to_vec();
     sorted_paths.sort();
-    if sorted_paths.len() > limits.max_files {
-        limitations.push(format!(
-            "Captured EVTX file budget of {} was exhausted.",
-            limits.max_files
-        ));
-    }
+    let mut files = Vec::with_capacity(sorted_paths.len());
+    let mut eligible_records_by_file = HashMap::<String, usize>::new();
+    let mut native_retention_by_file = HashMap::<String, bool>::new();
     let mut inspected_records = 0usize;
+    let mut retained_records = 0usize;
+    let mut inspection_limit_reached = false;
+    let mut retention_limit_reached = false;
     let per_channel_byte_cap = limits
         .max_retained_bytes
         .checked_div(ESP_EVENT_CHANNELS.len())
         .unwrap_or(0);
 
-    for path in sorted_paths.into_iter().take(limits.max_files) {
+    for (index, path) in sorted_paths.into_iter().enumerate() {
+        if index >= limits.max_files {
+            inspection_limit_reached = true;
+            push_unique_limitation(
+                &mut limitations,
+                format!(
+                    "Captured EVTX file budget of {} was exhausted.",
+                    limits.max_files
+                ),
+            );
+            files.push(CapturedEventFileOutcome {
+                path,
+                state: CapturedEventFileState::NotInspected,
+                inspected_records: 0,
+                rejected_records: 0,
+            });
+            continue;
+        }
         let remaining_inspections = limits
             .max_inspected_records
             .saturating_sub(inspected_records);
         if remaining_inspections == 0 {
+            inspection_limit_reached = true;
             push_unique_limitation(
                 &mut limitations,
                 format!(
@@ -276,7 +358,13 @@ where
                     limits.max_inspected_records
                 ),
             );
-            break;
+            files.push(CapturedEventFileOutcome {
+                path,
+                state: CapturedEventFileState::NotInspected,
+                inspected_records: 0,
+                rejected_records: 0,
+            });
+            continue;
         }
         let retained_bytes = records_by_channel.values().fold(0usize, |total, records| {
             total.saturating_add(retained_event_bytes(records))
@@ -297,12 +385,25 @@ where
                         path.display()
                     ),
                 );
+                files.push(CapturedEventFileOutcome {
+                    path,
+                    state: CapturedEventFileState::Failed(EventSourceError::Failed(detail)),
+                    inspected_records: 0,
+                    rejected_records: 0,
+                });
                 continue;
             }
         };
-        inspected_records =
-            inspected_records.saturating_add(batch.inspected_records.min(remaining_inspections));
-        if inspected_records >= limits.max_inspected_records {
+        let file_inspected = batch.inspected_records.min(remaining_inspections);
+        inspected_records = inspected_records.saturating_add(file_inspected);
+        let file_rejected = batch
+            .parse_failure_count
+            .saturating_add(batch.oversized_record_count)
+            .min(file_inspected);
+        let file_inspection_limit_reached =
+            batch.inspection_limit_reached || batch.inspected_records > remaining_inspections;
+        if file_inspection_limit_reached {
+            inspection_limit_reached = true;
             push_unique_limitation(
                 &mut limitations,
                 format!(
@@ -333,6 +434,7 @@ where
             );
         }
         if batch.retained_byte_budget_exhausted {
+            native_retention_by_file.insert(path.to_string_lossy().to_string(), true);
             push_unique_limitation(
                 &mut limitations,
                 format!(
@@ -342,18 +444,34 @@ where
             );
         }
 
-        for record in batch.records {
-            if !ESP_EVENT_CHANNELS.contains(&record.channel.as_str())
-                || REQUIRED_EVENT_IDS.binary_search(&record.event_id).is_err()
-            {
+        let mut file_retention_limit_reached = batch.retained_byte_budget_exhausted;
+        for mut record in batch.records.into_iter().take(file_inspected) {
+            if REQUIRED_EVENT_IDS.binary_search(&record.event_id).is_err() {
                 continue;
             }
-            let channel = record.channel.clone();
-            let records = records_by_channel.entry(channel.clone()).or_default();
+            let Some(channel) = ESP_EVENT_CHANNELS
+                .iter()
+                .find(|channel| record.channel.eq_ignore_ascii_case(channel))
+                .copied()
+            else {
+                continue;
+            };
+            record.channel = channel.to_string();
+            let file_identity = path.to_string_lossy().to_string();
+            let eligible_count = eligible_records_by_file.entry(file_identity).or_insert(0);
+            *eligible_count = eligible_count.saturating_add(1);
+            if retained_records >= retention_limit {
+                retention_limit_reached = true;
+                file_retention_limit_reached = true;
+                continue;
+            }
+            let records = records_by_channel.entry(channel.to_string()).or_default();
+            let retained_before = records.len();
             records.push(record);
             records.sort_by(compare_event_records);
             if records.len() > limits.max_records_per_channel {
                 records.pop();
+                file_retention_limit_reached = true;
                 push_unique_limitation(
                     &mut limitations,
                     format!(
@@ -361,9 +479,11 @@ where
                         limits.max_records_per_channel
                     ),
                 );
+                continue;
             }
             while retained_event_bytes(records) > per_channel_byte_cap {
                 records.pop();
+                file_retention_limit_reached = true;
                 push_unique_limitation(
                     &mut limitations,
                     format!(
@@ -372,9 +492,59 @@ where
                     ),
                 );
             }
+            if records.len() > retained_before {
+                retained_records = retained_records.saturating_add(1);
+            }
         }
+        files.push(CapturedEventFileOutcome {
+            path,
+            state: if file_inspection_limit_reached {
+                CapturedEventFileState::InspectionLimitReached
+            } else if file_retention_limit_reached {
+                CapturedEventFileState::RetentionLimitReached
+            } else {
+                CapturedEventFileState::Available
+            },
+            inspected_records: file_inspected,
+            rejected_records: file_rejected,
+        });
     }
 
+    retained_records = records_by_channel.values().map(Vec::len).sum();
+    let mut retained_records_by_file = HashMap::<String, usize>::new();
+    for record in records_by_channel.values().flatten() {
+        let retained = retained_records_by_file
+            .entry(record.source_file.clone())
+            .or_insert(0);
+        *retained = retained.saturating_add(1);
+    }
+    for file in &mut files {
+        if !matches!(
+            file.state,
+            CapturedEventFileState::Available | CapturedEventFileState::RetentionLimitReached
+        ) {
+            continue;
+        }
+        let identity = file.path.to_string_lossy().to_string();
+        let eligible = eligible_records_by_file
+            .get(&identity)
+            .copied()
+            .unwrap_or(0);
+        let retained = retained_records_by_file
+            .get(&identity)
+            .copied()
+            .unwrap_or(0);
+        file.state = if native_retention_by_file
+            .get(&identity)
+            .copied()
+            .unwrap_or(false)
+            || retained < eligible
+        {
+            CapturedEventFileState::RetentionLimitReached
+        } else {
+            CapturedEventFileState::Available
+        };
+    }
     let provider = CapturedEventLogProvider {
         records_by_channel,
         partial_detail: (!limitations.is_empty()).then(|| limitations.join(" ")),
@@ -383,7 +553,14 @@ where
     for limitation in limitations {
         push_unique_limitation(&mut evidence.limitations, limitation);
     }
-    Ok(evidence)
+    CapturedEventEvidence {
+        evidence,
+        files,
+        inspected_records,
+        retained_records,
+        inspection_limit_reached,
+        retention_limit_reached,
+    }
 }
 
 fn retained_event_bytes(records: &[ParsedEspEventRecord]) -> usize {
@@ -862,6 +1039,7 @@ mod tests {
                 Ok(crate::intune::evtx_parser::ParsedEspEvtxBatch {
                     records,
                     inspected_records: inspection_limit.min(2),
+                    inspection_limit_reached: name == "b.evtx",
                     truncated: name == "b.evtx",
                     parse_failure_count: 0,
                     oversized_record_count: 0,
@@ -917,6 +1095,7 @@ mod tests {
                 Ok(ParsedEspEvtxBatch {
                     records: vec![captured_record(1, "bounded.evtx")],
                     inspected_records: 1,
+                    inspection_limit_reached: false,
                     truncated: false,
                     parse_failure_count: 0,
                     oversized_record_count: 0,
@@ -951,6 +1130,7 @@ mod tests {
                     Ok(ParsedEspEvtxBatch {
                         records: vec![captured_record(1, "a-valid.evtx")],
                         inspected_records: 1,
+                        inspection_limit_reached: false,
                         truncated: false,
                         parse_failure_count: 0,
                         oversized_record_count: 0,
@@ -984,6 +1164,7 @@ mod tests {
                 Ok(ParsedEspEvtxBatch {
                     records: vec![captured_record(1, "partially-malformed.evtx")],
                     inspected_records: 3,
+                    inspection_limit_reached: false,
                     truncated: true,
                     parse_failure_count: 2,
                     oversized_record_count: 0,
@@ -1004,6 +1185,125 @@ mod tests {
                 && detail.contains('2')
                 && detail.contains("could not be parsed")
         }));
+    }
+
+    #[test]
+    fn captured_event_outcomes_share_global_inspection_and_retention_budgets() {
+        let paths = ["first.evtx", "broken.evtx", "second.evtx", "unread.evtx"]
+            .map(PathBuf::from)
+            .to_vec();
+        let calls = RefCell::new(Vec::<(String, usize)>::new());
+        let outcome = collect_captured_evtx_files_bounded_with(
+            &paths,
+            "2026-07-16T06:30:00Z",
+            CapturedEventAcquisitionLimits {
+                max_files: 4,
+                max_inspected_records: 5,
+                max_record_bytes: 1024,
+                max_retained_bytes: usize::MAX,
+                max_records_per_channel: 5,
+            },
+            5,
+            |path, remaining, _max_record_bytes, _remaining_bytes| {
+                let name = path
+                    .file_name()
+                    .and_then(|value| value.to_str())
+                    .expect("fixture file name")
+                    .to_string();
+                calls.borrow_mut().push((name.clone(), remaining));
+                match name.as_str() {
+                    "first.evtx" => Ok(ParsedEspEvtxBatch {
+                        records: (0..3)
+                            .map(|index| captured_record(index, &path.to_string_lossy()))
+                            .collect(),
+                        inspected_records: 3,
+                        truncated: false,
+                        inspection_limit_reached: false,
+                        parse_failure_count: 0,
+                        oversized_record_count: 0,
+                        retained_byte_budget_exhausted: false,
+                    }),
+                    "broken.evtx" => Err("malformed EVTX".to_string()),
+                    "second.evtx" => Ok(ParsedEspEvtxBatch {
+                        records: (3..5)
+                            .map(|index| captured_record(index, &path.to_string_lossy()))
+                            .collect(),
+                        inspected_records: 2,
+                        truncated: true,
+                        inspection_limit_reached: true,
+                        parse_failure_count: 0,
+                        oversized_record_count: 0,
+                        retained_byte_budget_exhausted: false,
+                    }),
+                    _ => panic!("inspection budget must stop before the final file"),
+                }
+            },
+        );
+
+        assert_eq!(
+            calls.into_inner(),
+            vec![
+                ("broken.evtx".to_string(), 5),
+                ("first.evtx".to_string(), 5),
+                ("second.evtx".to_string(), 2),
+            ]
+        );
+        assert_eq!(outcome.inspected_records, 5);
+        assert_eq!(outcome.retained_records, 5);
+        assert!(outcome.inspection_limit_reached);
+        assert_eq!(outcome.evidence.observations.len(), 5);
+        assert!(matches!(
+            outcome.files[0].state,
+            CapturedEventFileState::Failed(EventSourceError::Failed(_))
+        ));
+        assert_eq!(outcome.files[1].state, CapturedEventFileState::Available);
+        assert_eq!(
+            outcome.files[2].state,
+            CapturedEventFileState::InspectionLimitReached
+        );
+        assert_eq!(outcome.files[3].state, CapturedEventFileState::NotInspected);
+    }
+
+    #[test]
+    fn captured_event_outcomes_separate_retention_from_inspection_and_report_rejections() {
+        let path = PathBuf::from("events.evtx");
+        let outcome = collect_captured_evtx_files_bounded_with(
+            std::slice::from_ref(&path),
+            "2026-07-16T06:30:00Z",
+            CapturedEventAcquisitionLimits {
+                max_files: 1,
+                max_inspected_records: 5,
+                max_record_bytes: 1024,
+                max_retained_bytes: usize::MAX,
+                max_records_per_channel: 5,
+            },
+            2,
+            |path, requested, _max_record_bytes, _remaining_bytes| {
+                assert_eq!(requested, 5);
+                Ok(ParsedEspEvtxBatch {
+                    records: (0..4)
+                        .map(|index| captured_record(index, &path.to_string_lossy()))
+                        .collect(),
+                    inspected_records: 5,
+                    truncated: true,
+                    inspection_limit_reached: false,
+                    parse_failure_count: 1,
+                    oversized_record_count: 0,
+                    retained_byte_budget_exhausted: false,
+                })
+            },
+        );
+
+        assert_eq!(outcome.inspected_records, 5);
+        assert_eq!(outcome.retained_records, 2);
+        assert_eq!(outcome.evidence.observations.len(), 2);
+        assert!(!outcome.inspection_limit_reached);
+        assert!(outcome.retention_limit_reached);
+        assert_eq!(outcome.files[0].rejected_records, 1);
+        assert_eq!(
+            outcome.files[0].state,
+            CapturedEventFileState::RetentionLimitReached
+        );
     }
 
     #[test]
