@@ -22,13 +22,23 @@ pub fn derive_findings(snapshot: &EspDiagnosticsSnapshot) -> Vec<EspDiagnosticFi
     push_ime_coverage_gap(snapshot, &mut findings);
     push_non_elevated_coverage_loss(snapshot, &mut findings);
     push_ambiguous_installer(snapshot, &mut findings);
-    // Graph overlays are attached by the frontend after native reduction. A
-    // local/Graph contradiction rule must wait for a parser-owned overlay
-    // reduction path so it cannot become stale or exist only in unit tests.
+    push_local_graph_conflict(snapshot, &mut findings);
     push_malformed_source(snapshot, &mut findings);
     push_successful_completion(snapshot, &mut findings);
 
     findings
+}
+
+/// Return an immutable snapshot projection with the Graph overlay attached and
+/// every finding re-derived from the combined local and remote evidence.
+pub fn attach_graph_overlay(
+    snapshot: &EspDiagnosticsSnapshot,
+    graph: EspGraphOverlay,
+) -> EspDiagnosticsSnapshot {
+    let mut projected = snapshot.clone();
+    projected.graph = Some(graph);
+    projected.findings = derive_findings(&projected);
+    projected
 }
 
 fn push_failed_blocking_app(
@@ -165,10 +175,23 @@ fn push_failed_registration(
     findings: &mut Vec<EspDiagnosticFinding>,
 ) {
     let events = snapshot.registration_events.iter().filter(|event| {
-        event.status.normalized == EspNormalizedStatus::Failed
-            && matches!(event.event_id, 100 | 304 | 1924)
+        event.status.normalized == EspNormalizedStatus::Failed && event.event_id == 304
     });
-    let evidence = collect_evidence(events.flat_map(|event| event.evidence.iter()));
+    let mut evidence = collect_evidence(events.flat_map(|event| event.evidence.iter()));
+    evidence.extend(collect_evidence(
+        snapshot
+            .activity
+            .iter()
+            .filter(|entry| {
+                entry.kind == EspTimelineKind::OfflineDomainJoin
+                    && entry
+                        .status
+                        .as_ref()
+                        .is_some_and(|status| status.normalized == EspNormalizedStatus::Failed)
+            })
+            .flat_map(|entry| entry.evidence.iter()),
+    ));
+    normalize_evidence(&mut evidence);
     push_finding(
         findings,
         finding(
@@ -176,8 +199,8 @@ fn push_failed_registration(
             EspFindingSeverity::Error,
             EspFindingConfidence::High,
             "Device registration or join failed",
-            "A cited device-registration event has an explicit failed status.",
-            "Inspect the cited Device Registration event and its named data.",
+            "A cited device-registration or Offline Domain Join event has an explicit failed status.",
+            "Inspect the cited Device Registration or Offline Domain Join event and its named data.",
             evidence,
             vec![],
         ),
@@ -356,6 +379,119 @@ fn push_ambiguous_installer(
             vec![],
         ),
     );
+}
+
+fn push_local_graph_conflict(
+    snapshot: &EspDiagnosticsSnapshot,
+    findings: &mut Vec<EspDiagnosticFinding>,
+) {
+    let Some(graph) = &snapshot.graph else {
+        return;
+    };
+    let mut evidence = Vec::new();
+
+    if graph.apps.status == GraphSectionStatus::Available {
+        if let Some(apps) = &graph.apps.data {
+            for workload in current_workloads(snapshot).filter(|workload| {
+                !workload.raw_identifier.trim().is_empty() && is_app_kind(&workload.kind)
+            }) {
+                for app in apps
+                    .iter()
+                    .filter(|app| app.app_id.eq_ignore_ascii_case(&workload.raw_identifier))
+                {
+                    extend_status_conflict_evidence(
+                        &mut evidence,
+                        workload,
+                        app.status.as_ref(),
+                        &app.evidence,
+                    );
+                }
+            }
+        }
+    }
+    if graph.policies.status == GraphSectionStatus::Available {
+        if let Some(policies) = &graph.policies.data {
+            for workload in current_workloads(snapshot).filter(|workload| {
+                !workload.raw_identifier.trim().is_empty()
+                    && matches!(
+                        workload.kind,
+                        EspTrackedKind::Policy | EspTrackedKind::ScepCertificate
+                    )
+            }) {
+                for policy in policies.iter().filter(|policy| {
+                    policy
+                        .policy_id
+                        .eq_ignore_ascii_case(&workload.raw_identifier)
+                }) {
+                    extend_status_conflict_evidence(
+                        &mut evidence,
+                        workload,
+                        policy.status.as_ref(),
+                        &policy.evidence,
+                    );
+                }
+            }
+        }
+    }
+    if graph.scripts.status == GraphSectionStatus::Available {
+        if let Some(scripts) = &graph.scripts.data {
+            for workload in current_workloads(snapshot).filter(|workload| {
+                !workload.raw_identifier.trim().is_empty()
+                    && workload.kind == EspTrackedKind::PlatformScript
+            }) {
+                for script in scripts.iter().filter(|script| {
+                    script
+                        .script_id
+                        .eq_ignore_ascii_case(&workload.raw_identifier)
+                }) {
+                    extend_status_conflict_evidence(
+                        &mut evidence,
+                        workload,
+                        script.status.as_ref(),
+                        &script.evidence,
+                    );
+                }
+            }
+        }
+    }
+    normalize_evidence(&mut evidence);
+    push_finding(
+        findings,
+        finding(
+            "local-graph-state-conflict",
+            EspFindingSeverity::Warning,
+            EspFindingConfidence::High,
+            "Local and Intune Graph workload states disagree",
+            "The same exact workload identifier has contradictory explicit terminal states in local evidence and Intune Graph.",
+            "Compare the cited local workload state with the current Intune Graph status.",
+            evidence,
+            vec![],
+        ),
+    );
+}
+
+fn extend_status_conflict_evidence(
+    evidence: &mut Vec<EspEvidenceRef>,
+    workload: &EspWorkload,
+    graph_status: Option<&EspStatus>,
+    graph_evidence: &[EspEvidenceRef],
+) {
+    let Some(graph_status) = graph_status else {
+        return;
+    };
+    if workload.evidence.is_empty()
+        || graph_evidence.is_empty()
+        || !statuses_contradict(&workload.status.normalized, &graph_status.normalized)
+    {
+        return;
+    }
+    evidence.extend(workload.evidence.iter().cloned());
+    evidence.extend(graph_evidence.iter().cloned());
+}
+
+fn statuses_contradict(local: &EspNormalizedStatus, remote: &EspNormalizedStatus) -> bool {
+    (*local == EspNormalizedStatus::Failed && is_successful_terminal_status(remote))
+        || (*remote == EspNormalizedStatus::Failed && is_successful_terminal_status(local))
 }
 
 fn push_malformed_source(

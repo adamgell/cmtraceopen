@@ -4751,7 +4751,7 @@ fn findings_timeout_registration_policy_and_certificate_states_require_exact_evi
         "registration-or-join-failed",
         EspFindingSeverity::Error,
         EspFindingConfidence::High,
-        "Inspect the cited Device Registration event and its named data.",
+        "Inspect the cited Device Registration or Offline Domain Join event and its named data.",
         &[("registration-failed", "artifact-registry")],
         &[],
     );
@@ -4773,6 +4773,98 @@ fn findings_timeout_registration_policy_and_certificate_states_require_exact_evi
         &[("evidence-cert", "artifact-registry")],
         &[],
     );
+}
+
+fn assert_reduced_join_failure(event_id: u32, message: &str, evidence_id: &str, record_id: u64) {
+    let mut reducer = EspDiagnosticsReducer::new("2026-07-15T12:30:00Z".to_string());
+    reducer.ingest(event_record(
+        "device-registration-admin",
+        evidence_id,
+        event_id,
+        record_id,
+        "2026-07-15T12:02:00Z",
+        message,
+    ));
+
+    let snapshot = reducer.snapshot();
+    let activity = snapshot
+        .activity
+        .iter()
+        .find(|entry| entry.evidence[0].evidence_id == evidence_id)
+        .unwrap();
+    assert_eq!(activity.kind, EspTimelineKind::OfflineDomainJoin);
+    assert_eq!(
+        activity.status.as_ref().unwrap().normalized,
+        EspNormalizedStatus::Failed
+    );
+    assert_finding_contract(
+        finding_by_id(&snapshot.findings, "registration-or-join-failed"),
+        "registration-or-join-failed",
+        EspFindingSeverity::Error,
+        EspFindingConfidence::High,
+        "Inspect the cited Device Registration or Offline Domain Join event and its named data.",
+        &[(evidence_id, "device-registration-admin")],
+        &[],
+    );
+}
+
+#[test]
+fn findings_reducer_surfaces_offline_domain_join_connectivity_failure() {
+    assert_reduced_join_failure(
+        100,
+        "Could not establish connectivity",
+        "odj-connectivity-failed",
+        100,
+    );
+}
+
+#[test]
+fn findings_reducer_surfaces_offline_domain_join_timeout_state() {
+    assert_reduced_join_failure(
+        109,
+        "Timed out waiting for ODJ blob or connectivity",
+        "odj-timeout",
+        109,
+    );
+}
+
+#[test]
+fn findings_do_not_misclassify_installation_failure_as_join_failure() {
+    let mut snapshot = findings_snapshot();
+    snapshot.registration_events.push(EspRegistrationEvent {
+        event_id: 1924,
+        record_id: Some(1924),
+        status: status(
+            EspRawStatus::Text("Installation failed".to_string()),
+            EspNormalizedStatus::Failed,
+        ),
+        message: "Installation failed".to_string(),
+        timestamp: timestamp("2026-07-15T12:02:00Z"),
+        named_data: vec![],
+        evidence: vec![evidence_ref_from(
+            "installation-failed",
+            "device-registration-admin",
+        )],
+    });
+
+    assert!(derive_findings(&snapshot)
+        .iter()
+        .all(|finding| finding.finding_id != "registration-or-join-failed"));
+
+    let mut reducer = EspDiagnosticsReducer::new("2026-07-15T12:30:00Z".to_string());
+    reducer.ingest(event_record(
+        "device-registration-admin",
+        "installation-failed",
+        1924,
+        1924,
+        "2026-07-15T12:02:00Z",
+        "Installation failed",
+    ));
+    assert!(reducer
+        .snapshot()
+        .findings
+        .iter()
+        .all(|finding| finding.finding_id != "registration-or-join-failed"));
 }
 
 #[test]
@@ -5015,7 +5107,7 @@ fn findings_graph_overlay(app: EspGraphAppRecord) -> EspGraphOverlay {
 }
 
 #[test]
-fn findings_defer_graph_conflicts_until_overlay_reduction_is_parser_owned() {
+fn findings_report_exact_local_graph_status_conflicts_with_both_sources() {
     let mut snapshot = findings_snapshot();
     snapshot.workloads.push(findings_workload(
         "app-conflict",
@@ -5034,17 +5126,179 @@ fn findings_defer_graph_conflicts_until_overlay_reduction_is_parser_owned() {
             EspNormalizedStatus::Succeeded,
         )),
         assignments: vec![],
-        evidence: vec![evidence_ref("graph-app-succeeded")],
+        evidence: vec![evidence_ref_from("graph-app-succeeded", "graph-apps")],
     };
 
-    assert!(derive_findings(&snapshot)
+    let graph = findings_graph_overlay(graph_app);
+    let original = snapshot.clone();
+    assert!(derive_findings(&original)
+        .iter()
+        .all(|finding| finding.finding_id != "local-graph-state-conflict"));
+    let snapshot = attach_graph_overlay(&snapshot, graph.clone());
+    assert_eq!(original.graph, None);
+    assert!(original
+        .findings
+        .iter()
+        .all(|finding| finding.finding_id != "local-graph-state-conflict"));
+    let finding = finding_by_id(&snapshot.findings, "local-graph-state-conflict").clone();
+    assert_finding_contract(
+        &finding,
+        "local-graph-state-conflict",
+        EspFindingSeverity::Warning,
+        EspFindingConfidence::High,
+        "Compare the cited local workload state with the current Intune Graph status.",
+        &[
+            ("evidence-app-conflict", "artifact-registry"),
+            ("graph-app-succeeded", "graph-apps"),
+        ],
+        &[],
+    );
+
+    let mut unavailable_graph = graph.clone();
+    unavailable_graph.apps.status = GraphSectionStatus::PermissionDenied;
+    let unavailable = attach_graph_overlay(&snapshot, unavailable_graph);
+    assert!(unavailable
+        .findings
         .iter()
         .all(|finding| finding.finding_id != "local-graph-state-conflict"));
 
-    snapshot.graph = Some(findings_graph_overlay(graph_app));
-    assert!(derive_findings(&snapshot)
+    let mut missing_graph_evidence = graph.clone();
+    missing_graph_evidence.apps.data.as_mut().unwrap()[0]
+        .evidence
+        .clear();
+    assert!(attach_graph_overlay(&snapshot, missing_graph_evidence)
+        .findings
         .iter()
         .all(|finding| finding.finding_id != "local-graph-state-conflict"));
+
+    let mut unmatched_graph = graph.clone();
+    unmatched_graph.apps.data.as_mut().unwrap()[0].app_id = "unmatched-app".to_string();
+    assert!(attach_graph_overlay(&snapshot, unmatched_graph)
+        .findings
+        .iter()
+        .all(|finding| finding.finding_id != "local-graph-state-conflict"));
+
+    let mut empty_local_id = snapshot.clone();
+    empty_local_id.workloads[0].raw_identifier.clear();
+    let mut empty_graph_id = graph.clone();
+    empty_graph_id.apps.data.as_mut().unwrap()[0].app_id.clear();
+    assert!(attach_graph_overlay(&empty_local_id, empty_graph_id)
+        .findings
+        .iter()
+        .all(|finding| finding.finding_id != "local-graph-state-conflict"));
+
+    let mut consistent = snapshot.clone();
+    consistent.workloads[0].status.normalized = EspNormalizedStatus::Succeeded;
+    assert!(attach_graph_overlay(&consistent, graph)
+        .findings
+        .iter()
+        .all(|finding| finding.finding_id != "local-graph-state-conflict"));
+}
+
+#[test]
+fn findings_report_policy_certificate_and_script_graph_conflicts() {
+    let mut snapshot = findings_snapshot();
+    snapshot.workloads = vec![
+        findings_workload(
+            "policy-conflict",
+            EspTrackedKind::Policy,
+            EspNormalizedStatus::Failed,
+            Some(true),
+            "2026-07-15T12:29:00Z",
+        ),
+        findings_workload(
+            "scep-conflict",
+            EspTrackedKind::ScepCertificate,
+            EspNormalizedStatus::Failed,
+            Some(true),
+            "2026-07-15T12:29:00Z",
+        ),
+        findings_workload(
+            "script-conflict",
+            EspTrackedKind::PlatformScript,
+            EspNormalizedStatus::Succeeded,
+            Some(true),
+            "2026-07-15T12:29:00Z",
+        ),
+    ];
+    let unrelated_app = EspGraphAppRecord {
+        app_id: "unrelated-app".to_string(),
+        display_name: None,
+        tracked_on_enrollment_status: Some(true),
+        status: Some(status(
+            EspRawStatus::Text("installed".to_string()),
+            EspNormalizedStatus::Succeeded,
+        )),
+        assignments: vec![],
+        evidence: vec![evidence_ref_from("graph-unrelated-app", "graph-apps")],
+    };
+    let mut graph = findings_graph_overlay(unrelated_app);
+    graph.policies = graph_section(
+        GraphSectionStatus::Available,
+        GraphApiVersion::V1_0,
+        Some(vec![
+            EspGraphPolicyRecord {
+                policy_id: "POLICY-CONFLICT".to_string(),
+                display_name: None,
+                kind: EspGraphPolicyKind::DeviceConfiguration,
+                status: Some(status(
+                    EspRawStatus::Text("succeeded".to_string()),
+                    EspNormalizedStatus::Succeeded,
+                )),
+                assignments: vec![],
+                evidence: vec![evidence_ref_from(
+                    "graph-policy-succeeded",
+                    "graph-policies",
+                )],
+            },
+            EspGraphPolicyRecord {
+                policy_id: "scep-conflict".to_string(),
+                display_name: None,
+                kind: EspGraphPolicyKind::ScepCertificate,
+                status: Some(status(
+                    EspRawStatus::Text("processed".to_string()),
+                    EspNormalizedStatus::Processed,
+                )),
+                assignments: vec![],
+                evidence: vec![evidence_ref_from("graph-scep-succeeded", "graph-policies")],
+            },
+        ]),
+        None,
+    );
+    graph.scripts = graph_section(
+        GraphSectionStatus::Available,
+        GraphApiVersion::Beta,
+        Some(vec![EspGraphScriptRecord {
+            script_id: "script-conflict".to_string(),
+            display_name: None,
+            kind: EspGraphScriptKind::PlatformScript,
+            status: Some(status(
+                EspRawStatus::Text("failed".to_string()),
+                EspNormalizedStatus::Failed,
+            )),
+            assignments: vec![],
+            evidence: vec![evidence_ref_from("graph-script-failed", "graph-scripts")],
+        }]),
+        None,
+    );
+    snapshot.graph = Some(graph);
+
+    assert_finding_contract(
+        finding_by_id(&derive_findings(&snapshot), "local-graph-state-conflict"),
+        "local-graph-state-conflict",
+        EspFindingSeverity::Warning,
+        EspFindingConfidence::High,
+        "Compare the cited local workload state with the current Intune Graph status.",
+        &[
+            ("evidence-policy-conflict", "artifact-registry"),
+            ("evidence-scep-conflict", "artifact-registry"),
+            ("evidence-script-conflict", "artifact-registry"),
+            ("graph-policy-succeeded", "graph-policies"),
+            ("graph-scep-succeeded", "graph-policies"),
+            ("graph-script-failed", "graph-scripts"),
+        ],
+        &[],
+    );
 }
 
 #[test]
@@ -5674,14 +5928,248 @@ fn redaction_projection_masks_standalone_bearer_tokens_in_generic_named_data() {
         assert_eq!(values[0].value, "bEaReR [redacted]");
         assert!(values[1].value.contains(r#""payload":"BEARER [redacted]"#));
         assert!(values[1].value.contains(r#""state":"safe""#));
-        assert_eq!(values[2].value, safe_prose);
+        assert_eq!(
+            values[2].value,
+            "Bearer [redacted] is required for this endpoint"
+        );
         assert_eq!(values[3].value, "Bearer [redacted] expires soon");
     }
     assert_eq!(snapshot, original);
 }
 
 #[test]
-fn redaction_projection_removes_bearer_raw_values_without_matching_nearby_prose() {
+fn redaction_projection_masks_short_alphabetic_bearers_across_safe_export_paths() {
+    let short_token = "abcdefgh";
+    let medium_token = "abcdefghijklmnopqrstuvw";
+    let mut snapshot = findings_snapshot();
+    snapshot.registration_events.push(EspRegistrationEvent {
+        event_id: 304,
+        record_id: Some(42),
+        status: status(
+            EspRawStatus::Text("failed".to_string()),
+            EspNormalizedStatus::Failed,
+        ),
+        message: "Device registration failed".to_string(),
+        timestamp: timestamp("2026-07-15T12:00:00Z"),
+        named_data: vec![EspNamedValue {
+            name: "Payload".to_string(),
+            value: format!("Bearer {short_token}"),
+        }],
+        evidence: vec![evidence_ref("registration-short-bearer")],
+    });
+
+    let mut named_value = raw_export_record(
+        "raw-named-bearer",
+        EspSourceKind::EventLog,
+        "event-log",
+        None,
+        "safe raw event payload",
+    );
+    named_value.sensitivity = EspSensitivity::Public;
+    named_value.provenance.event = Some(EspEventProvenance {
+        channel: "Generic event channel".to_string(),
+        event_id: 1,
+        record_id: Some(1),
+        named_data: vec![EspNamedValue {
+            name: "Payload".to_string(),
+            value: format!("Bearer {medium_token}"),
+        }],
+    });
+
+    let mut raw_text = raw_export_record(
+        "raw-text-bearer",
+        EspSourceKind::DeploymentLog,
+        "deployment-log",
+        None,
+        &format!("Bearer {short_token}"),
+    );
+    raw_text.sensitivity = EspSensitivity::Public;
+    let mut raw_list = raw_export_record(
+        "raw-list-bearer",
+        EspSourceKind::DeploymentLog,
+        "deployment-log",
+        None,
+        "placeholder",
+    );
+    raw_list.sensitivity = EspSensitivity::Public;
+    raw_list.raw_value = EspObservationValue::StringList(vec![
+        "safe list value".to_string(),
+        format!("Bearer {medium_token}"),
+    ]);
+    snapshot.raw_evidence = vec![named_value, raw_text, raw_list];
+    let original = snapshot.clone();
+
+    let safe = redacted_export_projection(&snapshot);
+    assert_eq!(
+        safe.registration_events[0].named_data[0].value,
+        "Bearer [redacted]"
+    );
+    assert_eq!(
+        safe.raw_evidence
+            .iter()
+            .map(|record| record.record_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["raw-named-bearer"]
+    );
+    assert_eq!(
+        safe.raw_evidence[0]
+            .provenance
+            .event
+            .as_ref()
+            .unwrap()
+            .named_data[0]
+            .value,
+        "Bearer [redacted]"
+    );
+    let safe_json = serde_json::to_string(&safe).unwrap();
+    assert!(!safe_json.contains(short_token));
+    assert!(!safe_json.contains(medium_token));
+    assert_eq!(snapshot, original);
+}
+
+#[test]
+fn redaction_projection_masks_generic_token_labels_without_matching_token_count() {
+    let mut snapshot = findings_snapshot();
+    snapshot.registration_events.push(EspRegistrationEvent {
+        event_id: 304,
+        record_id: Some(42),
+        status: status(
+            EspRawStatus::Text("failed".to_string()),
+            EspNormalizedStatus::Failed,
+        ),
+        message: "Device registration failed".to_string(),
+        timestamp: timestamp("2026-07-15T12:00:00Z"),
+        named_data: vec![
+            EspNamedValue {
+                name: "Token".to_string(),
+                value: "abcdefgh".to_string(),
+            },
+            EspNamedValue {
+                name: "AuthToken".to_string(),
+                value: "ijklmnop".to_string(),
+            },
+            EspNamedValue {
+                name: "BearerToken".to_string(),
+                value: "qrstuvwx".to_string(),
+            },
+            EspNamedValue {
+                name: "Password".to_string(),
+                value: "passwordvalue".to_string(),
+            },
+            EspNamedValue {
+                name: "ClientSecret".to_string(),
+                value: "clientsecretvalue".to_string(),
+            },
+            EspNamedValue {
+                name: "ApiKey".to_string(),
+                value: "apikeyvalue".to_string(),
+            },
+            EspNamedValue {
+                name: "TokenCount".to_string(),
+                value: "5".to_string(),
+            },
+        ],
+        evidence: vec![evidence_ref("registration-token-labels")],
+    });
+
+    let mut event_token = raw_export_record(
+        "raw-event-token-label",
+        EspSourceKind::EventLog,
+        "event-log",
+        None,
+        "safe raw event payload",
+    );
+    event_token.sensitivity = EspSensitivity::Public;
+    event_token.provenance.event = Some(EspEventProvenance {
+        channel: "Generic event channel".to_string(),
+        event_id: 1,
+        record_id: Some(1),
+        named_data: vec![EspNamedValue {
+            name: "Token".to_string(),
+            value: "abcdefgh".to_string(),
+        }],
+    });
+    let mut registry_auth_token = raw_export_record(
+        "raw-registry-auth-token",
+        EspSourceKind::Registry,
+        "registry",
+        Some("AuthToken"),
+        "ijklmnop",
+    );
+    registry_auth_token.sensitivity = EspSensitivity::Public;
+    let mut registry_client_secret = raw_export_record(
+        "raw-registry-client-secret",
+        EspSourceKind::Registry,
+        "registry",
+        Some("ClientSecret"),
+        "clientsecretvalue",
+    );
+    registry_client_secret.sensitivity = EspSensitivity::Public;
+    let mut registry_api_key = raw_export_record(
+        "raw-registry-api-key",
+        EspSourceKind::Registry,
+        "registry",
+        Some("ApiKey"),
+        "apikeyvalue",
+    );
+    registry_api_key.sensitivity = EspSensitivity::Public;
+    let mut token_count = raw_export_record(
+        "raw-token-count",
+        EspSourceKind::Registry,
+        "registry",
+        Some("TokenCount"),
+        "5",
+    );
+    token_count.sensitivity = EspSensitivity::Public;
+    snapshot.raw_evidence = vec![
+        event_token,
+        registry_auth_token,
+        registry_client_secret,
+        registry_api_key,
+        token_count,
+    ];
+    let original = snapshot.clone();
+
+    let safe = redacted_export_projection(&snapshot);
+    assert_eq!(
+        safe.registration_events[0]
+            .named_data
+            .iter()
+            .map(|value| value.value.as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            "[redacted]",
+            "[redacted]",
+            "[redacted]",
+            "[redacted]",
+            "[redacted]",
+            "[redacted]",
+            "5",
+        ]
+    );
+    assert_eq!(
+        safe.raw_evidence
+            .iter()
+            .map(|record| record.record_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["raw-token-count"]
+    );
+    let safe_json = serde_json::to_string(&safe).unwrap();
+    for credential in [
+        "abcdefgh",
+        "ijklmnop",
+        "qrstuvwx",
+        "passwordvalue",
+        "clientsecretvalue",
+        "apikeyvalue",
+    ] {
+        assert!(!safe_json.contains(credential));
+    }
+    assert_eq!(snapshot, original);
+}
+
+#[test]
+fn redaction_projection_removes_ambiguous_bearer_raw_values_conservatively() {
     let mut token_text = raw_export_record(
         "bearer-token-text",
         EspSourceKind::DeploymentLog,
@@ -5727,21 +6215,7 @@ fn redaction_projection_removes_bearer_raw_values_without_matching_nearby_prose(
     let original = snapshot.clone();
 
     let safe = redacted_export_projection(&snapshot);
-    assert_eq!(
-        safe.raw_evidence
-            .iter()
-            .map(|record| record.record_id.as_str())
-            .collect::<Vec<_>>(),
-        vec!["bearer-prose-text", "bearer-prose-list"]
-    );
-    assert_eq!(
-        safe.raw_evidence[0].raw_value,
-        original.raw_evidence[2].raw_value
-    );
-    assert_eq!(
-        safe.raw_evidence[1].raw_value,
-        original.raw_evidence[3].raw_value
-    );
+    assert!(safe.raw_evidence.is_empty());
     assert_eq!(snapshot, original);
 }
 

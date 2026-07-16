@@ -890,6 +890,20 @@ fn sensitive_value_label(value: &str) -> bool {
 
 fn forbidden_raw_label(value: &str) -> bool {
     let normalized = normalize_label(value);
+    if matches!(
+        normalized.as_str(),
+        "password"
+            | "passwd"
+            | "pwd"
+            | "secret"
+            | "clientsecret"
+            | "apikey"
+            | "token"
+            | "authtoken"
+            | "bearertoken"
+    ) {
+        return true;
+    }
     [
         "authorization",
         "accesstoken",
@@ -914,29 +928,13 @@ fn normalize_label(value: &str) -> String {
 fn forbidden_raw_content(value: &str) -> bool {
     let bounded = bounded_text(value);
     forbidden_raw_content_pattern().is_match(bounded)
-        || standalone_bearer_pattern()
-            .captures_iter(bounded)
-            .any(|captures| likely_bearer_token(&captures["value"]))
+        || standalone_bearer_pattern().is_match(bounded)
 }
 
 fn redact_standalone_bearer_tokens(value: &str) -> String {
     standalone_bearer_pattern()
-        .replace_all(value, |captures: &regex::Captures<'_>| {
-            if likely_bearer_token(&captures["value"]) {
-                format!("{}[redacted]", &captures["prefix"])
-            } else {
-                captures[0].to_string()
-            }
-        })
+        .replace_all(value, "${prefix}[redacted]")
         .into_owned()
-}
-
-fn likely_bearer_token(value: &str) -> bool {
-    let without_sentence_period = value.strip_suffix('.').unwrap_or(value);
-    without_sentence_period.len() >= 24
-        || without_sentence_period.bytes().any(|byte| {
-            byte.is_ascii_digit() || matches!(byte, b'.' | b'_' | b'~' | b'+' | b'/' | b'=' | b'-')
-        })
 }
 
 fn redact_provenance(provenance: &mut EspEvidenceProvenance, pseudonyms: &ReferencePseudonyms) {

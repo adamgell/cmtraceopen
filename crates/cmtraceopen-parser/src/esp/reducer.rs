@@ -2426,14 +2426,14 @@ fn odj_state_details(
         .and_then(|value| value.value.trim().parse::<u8>().ok())
         .or_else(|| {
             let message = observation.message.as_deref()?.to_ascii_lowercase();
-            if message.contains("not configured") {
+            if message.contains("timed out") {
+                Some(3)
+            } else if message.contains("not configured") {
                 Some(0)
             } else if message.contains("waiting") {
                 Some(1)
             } else if message.contains("processed") {
                 Some(2)
-            } else if message.contains("timed out") {
-                Some(3)
             } else {
                 None
             }
