@@ -41,23 +41,26 @@ function makeSnapshot(
     phase: "deviceSetup",
     generatedAtUtc: "2026-07-15T20:00:00Z",
     elevation: {
-      supported: true,
       isElevated: false,
-      error: null,
-      evidenceRefs: [],
+      restartSupported: true,
+      restrictedSources: [],
     },
     identity: {
-      tenantDomain: "contoso.example",
-      tenantId: "tenant-a",
-      correlationId: "correlation-a",
-      entDmId: "entdm-a",
-      userPrincipalName: "user@contoso.example",
-      enrollmentIds: ["enrollment-a"],
+      deviceName: `host-${identitySeed}`,
       managedDeviceId: null,
       entraDeviceId: `entra-${identitySeed}`,
-      serialNumber: `serial-${identitySeed}`,
-      hostName: `host-${identitySeed}`,
-      evidenceRefs: [],
+      entdmId: { value: "entdm-a", sensitivity: "sensitive" },
+      tenantId: { value: "tenant-a", sensitivity: "sensitive" },
+      tenantDomain: { value: "contoso.example", sensitivity: "public" },
+      userPrincipalName: {
+        value: "user@contoso.example",
+        sensitivity: "restricted",
+      },
+      serialNumber: {
+        value: `serial-${identitySeed}`,
+        sensitivity: "sensitive",
+      },
+      evidence: [],
     },
     profile: null,
     enrollments: [],
@@ -72,18 +75,23 @@ function makeSnapshot(
     findings: [],
     coverage: [],
     rawEvidence: evidenceIds.map((id, index) => ({
-      id,
-      sourceKind: "ime",
-      sourceArtifactId: "ime-app-workload",
-      observedAtUtc: `2026-07-15T20:00:0${index}Z`,
+      recordId: id,
+      provenance: {
+        sourceKind: "imeLog",
+        sourceArtifactId: "ime-app-workload",
+        filePath: "C:\\ProgramData\\Microsoft\\IntuneManagementExtension\\Logs\\IntuneManagementExtension.log",
+        lineNumber: index + 1,
+        recordNumber: null,
+        registry: null,
+        event: null,
+      },
       sourceTimestamp: null,
-      originalOffset: null,
-      normalizedTimestampUtc: null,
-      rawValue: `raw-${id}`,
-      sensitivity: "none",
+      observedAtUtc: `2026-07-15T20:00:0${index}Z`,
+      rawValue: { text: `raw-${id}` },
+      sensitivity: "public",
       parseState: "parsed",
       accessState: "available",
-      evidenceRefs: [],
+      evidence: [],
     })),
     graph: null,
   };
@@ -93,37 +101,48 @@ function makeOverlay(requestId: string): EspGraphOverlay {
   const skipped = {
     status: "skipped" as const,
     requiredScope: null,
-    apiVersion: "v1" as const,
+    apiVersion: "v1.0" as const,
     data: null,
     error: null,
   };
 
   return {
     requestId,
-    fetchedAtUtc: "2026-07-15T20:01:00Z",
+    requestedAtUtc: "2026-07-15T20:01:00Z",
     deviceMatch: {
       status: "available",
       requiredScope: "DeviceManagementManagedDevices.Read.All",
-      apiVersion: "v1",
+      apiVersion: "v1.0",
       data: {
-        managedDeviceId: "managed-a",
+        selected: {
+          managedDeviceId: "managed-a",
+          entraDeviceId: "entra-device-a",
+          serialNumber: { value: "serial-device-a", sensitivity: "sensitive" },
+          deviceName: "host-device-a",
+          userId: "user-a",
+          userPrincipalName: {
+            value: "user@contoso.example",
+            sensitivity: "restricted",
+          },
+          tenantId: { value: "tenant-a", sensitivity: "sensitive" },
+          evidence: [],
+        },
+        candidates: [],
         matchBasis: "entraDeviceId",
         confidence: "exact",
-        candidates: [],
-        evidenceRefs: [],
+        evidence: [],
       },
       error: null,
     },
-    managedDevice: skipped,
     autopilotIdentity: skipped,
     deploymentProfile: skipped,
+    intendedDeploymentProfile: skipped,
+    profileAssignments: skipped,
     autopilotEvents: skipped,
-    espConfiguration: skipped,
+    enrollmentConfiguration: skipped,
     apps: skipped,
     policies: skipped,
-    certificates: skipped,
     scripts: skipped,
-    remediations: skipped,
   };
 }
 
@@ -241,7 +260,7 @@ describe("ESP local session state", () => {
       .getState()
       .applyAnalysis("analysis-a", makeSnapshot(["local-a"]));
     expect(useEspDiagnosticsStore.getState().phase).toBe("ready");
-    expect(useEspDiagnosticsStore.getState().snapshot?.rawEvidence[0].id).toBe(
+    expect(useEspDiagnosticsStore.getState().snapshot?.rawEvidence[0].recordId).toBe(
       "local-a",
     );
   });
@@ -268,7 +287,7 @@ describe("ESP local session state", () => {
     useEspDiagnosticsStore
       .getState()
       .applySessionUpdate(makeSessionUpdate(0, makeSnapshot(["old"])));
-    expect(useEspDiagnosticsStore.getState().snapshot?.rawEvidence[0].id).toBe(
+    expect(useEspDiagnosticsStore.getState().snapshot?.rawEvidence[0].recordId).toBe(
       "first",
     );
 
@@ -351,6 +370,59 @@ describe("ESP local session state", () => {
 });
 
 describe("ESP Graph overlay state", () => {
+  it("preserves raw unknown Graph status and API-version wire values", () => {
+    const overlay = makeOverlay("graph-unknown-wire-values");
+    overlay.scripts = {
+      status: "retrying",
+      requiredScope: "DeviceManagementScripts.Read.All",
+      apiVersion: "vNext",
+      data: null,
+      error: null,
+    };
+
+    useEspDiagnosticsStore.getState().beginAnalysis("analysis-a");
+    useEspDiagnosticsStore
+      .getState()
+      .applyAnalysis("analysis-a", makeSnapshot(["local-a"]));
+    useEspDiagnosticsStore
+      .getState()
+      .beginGraph("graph-unknown-wire-values");
+    useEspDiagnosticsStore
+      .getState()
+      .applyGraphOverlay("graph-unknown-wire-values", overlay);
+
+    expect(useEspDiagnosticsStore.getState().snapshot?.graph?.scripts).toEqual(
+      overlay.scripts,
+    );
+  });
+
+  it("classifies the exact Rust Graph sections without reading absent frontend-only keys", () => {
+    const local = makeSnapshot(["local-a"]);
+    const overlay = makeOverlay("graph-a");
+    overlay.profileAssignments = {
+      status: "permissionDenied",
+      requiredScope: "DeviceManagementServiceConfig.Read.All",
+      apiVersion: "beta",
+      data: null,
+      error: {
+        code: "Authorization_RequestDenied",
+        message: "Insufficient privileges",
+        requestId: "graph-a",
+        blockedBy: "consent",
+        retryAfterSeconds: null,
+      },
+    };
+
+    useEspDiagnosticsStore.getState().beginAnalysis("analysis-a");
+    useEspDiagnosticsStore.getState().applyAnalysis("analysis-a", local);
+    useEspDiagnosticsStore.getState().beginGraph("graph-a");
+
+    expect(() =>
+      useEspDiagnosticsStore.getState().applyGraphOverlay("graph-a", overlay),
+    ).not.toThrow();
+    expect(useEspDiagnosticsStore.getState().graphPhase).toBe("partial");
+  });
+
   it("rejects stale Graph responses and preserves the raw local snapshot after failure", () => {
     const local = makeSnapshot(["local-a"]);
     useEspDiagnosticsStore.getState().beginAnalysis("analysis-a");
@@ -373,7 +445,7 @@ describe("ESP Graph overlay state", () => {
     useEspDiagnosticsStore.getState().beginGraph("graph-b");
     useEspDiagnosticsStore.getState().failGraph("graph-b", "Graph unavailable");
     expect(useEspDiagnosticsStore.getState().graphPhase).toBe("error");
-    expect(useEspDiagnosticsStore.getState().snapshot?.rawEvidence[0].id).toBe(
+    expect(useEspDiagnosticsStore.getState().snapshot?.rawEvidence[0].recordId).toBe(
       "local-a",
     );
   });
@@ -413,7 +485,7 @@ describe("ESP Graph scheduling", () => {
     expect(fetchGraph).not.toHaveBeenCalled();
     expect(useEspDiagnosticsStore.getState().graphPhase).toBe("disabled");
     expect(useEspDiagnosticsStore.getState().snapshot?.graph).toBeNull();
-    expect(useEspDiagnosticsStore.getState().snapshot?.rawEvidence[0].id).toBe(
+    expect(useEspDiagnosticsStore.getState().snapshot?.rawEvidence[0].recordId).toBe(
       "local-a",
     );
     coordinator.dispose();
@@ -493,6 +565,37 @@ describe("ESP Graph scheduling", () => {
     coordinator.dispose();
   });
 
+  it("fingerprints classified identity values safely without treating sensitivity as identity", () => {
+    const snapshot = makeSnapshot([], "same-device");
+    const reclassified: EspDiagnosticsSnapshot = {
+      ...snapshot,
+      identity: {
+        ...snapshot.identity,
+        tenantId: { value: "tenant-a", sensitivity: "restricted" },
+        serialNumber: {
+          value: "serial-same-device",
+          sensitivity: "restricted",
+        },
+      },
+    };
+    const unclassified: EspDiagnosticsSnapshot = {
+      ...snapshot,
+      identity: {
+        ...snapshot.identity,
+        entdmId: null,
+        tenantId: null,
+        tenantDomain: null,
+        userPrincipalName: null,
+        serialNumber: null,
+      },
+    };
+
+    expect(getEspIdentityFingerprint(reclassified)).toBe(
+      getEspIdentityFingerprint(snapshot),
+    );
+    expect(() => getEspIdentityFingerprint(unclassified)).not.toThrow();
+  });
+
   it("rejects late refresh results and cancels without sign-out when disabled", async () => {
     const first = deferred<EspGraphOverlay>();
     const second = deferred<EspGraphOverlay>();
@@ -531,7 +634,7 @@ describe("ESP Graph scheduling", () => {
     await coordinator.reconcile();
     expect(cancelGraph).toHaveBeenCalledWith("graph-extra");
     expect(useEspDiagnosticsStore.getState().snapshot?.graph).toBeNull();
-    expect(useEspDiagnosticsStore.getState().snapshot?.rawEvidence[0].id).toBe(
+    expect(useEspDiagnosticsStore.getState().snapshot?.rawEvidence[0].recordId).toBe(
       "local-a",
     );
     third.resolve(makeOverlay("graph-extra"));
@@ -562,7 +665,7 @@ describe("ESP Graph scheduling", () => {
     expect(cancelGraph).toHaveBeenCalledWith("graph-active");
     expect(useEspDiagnosticsStore.getState().graphPhase).toBe("disabled");
     expect(useEspDiagnosticsStore.getState().snapshot?.graph).toBeNull();
-    expect(useEspDiagnosticsStore.getState().snapshot?.rawEvidence[0].id).toBe(
+    expect(useEspDiagnosticsStore.getState().snapshot?.rawEvidence[0].recordId).toBe(
       "local-a",
     );
     coordinator.dispose();

@@ -77,23 +77,23 @@ function makeChromeSnapshot(): EspDiagnosticsSnapshot {
     phase: "deviceSetup",
     generatedAtUtc: "2026-07-15T20:00:00Z",
     elevation: {
-      supported: true,
       isElevated: false,
-      error: null,
-      evidenceRefs: [],
+      restartSupported: true,
+      restrictedSources: [],
     },
     identity: {
-      tenantDomain: "contoso.example",
-      tenantId: "tenant-a",
-      correlationId: "correlation-a",
-      entDmId: "entdm-a",
-      userPrincipalName: "user@contoso.example",
-      enrollmentIds: ["enrollment-a"],
+      deviceName: "host-device-a",
       managedDeviceId: null,
       entraDeviceId: "entra-device-a",
-      serialNumber: "serial-device-a",
-      hostName: "host-device-a",
-      evidenceRefs: [],
+      entdmId: { value: "entdm-a", sensitivity: "sensitive" },
+      tenantId: { value: "tenant-a", sensitivity: "sensitive" },
+      tenantDomain: { value: "contoso.example", sensitivity: "public" },
+      userPrincipalName: {
+        value: "user@contoso.example",
+        sensitivity: "restricted",
+      },
+      serialNumber: { value: "serial-device-a", sensitivity: "sensitive" },
+      evidence: [],
     },
     profile: null,
     enrollments: [],
@@ -109,46 +109,65 @@ function makeChromeSnapshot(): EspDiagnosticsSnapshot {
     coverage: [],
     rawEvidence: [
       {
-        id: "evidence-a",
-        sourceKind: "registry",
-        sourceArtifactId: "registry-device",
+        recordId: "evidence-a",
+        provenance: {
+          sourceKind: "registry",
+          sourceArtifactId: "registry-device",
+          filePath: null,
+          lineNumber: null,
+          recordNumber: null,
+          registry: {
+            hive: "HKLM",
+            key: "SOFTWARE\\Microsoft\\Provisioning\\Diagnostics",
+            valueName: "AutopilotProfile",
+          },
+          event: null,
+        },
+        sourceTimestamp: null,
         observedAtUtc: "2026-07-15T20:00:00Z",
-        sourceTimestamp: null,
-        originalOffset: null,
-        normalizedTimestampUtc: null,
-        rawValue: "registry-value",
-        sensitivity: "none",
+        rawValue: { text: "registry-value" },
+        sensitivity: "public",
         parseState: "parsed",
         accessState: "available",
-        evidenceRefs: [],
+        evidence: [],
       },
       {
-        id: "evidence-b",
-        sourceKind: "ime",
-        sourceArtifactId: "ime-log",
+        recordId: "evidence-b",
+        provenance: {
+          sourceKind: "imeLog",
+          sourceArtifactId: "ime-log",
+          filePath: "C:\\ProgramData\\Microsoft\\IntuneManagementExtension\\Logs\\IntuneManagementExtension.log",
+          lineNumber: 1,
+          recordNumber: null,
+          registry: null,
+          event: null,
+        },
+        sourceTimestamp: null,
         observedAtUtc: "2026-07-15T20:00:01Z",
-        sourceTimestamp: null,
-        originalOffset: null,
-        normalizedTimestampUtc: null,
-        rawValue: "ime-value-a",
-        sensitivity: "none",
+        rawValue: { text: "ime-value-a" },
+        sensitivity: "public",
         parseState: "parsed",
         accessState: "available",
-        evidenceRefs: [],
+        evidence: [],
       },
       {
-        id: "evidence-c",
-        sourceKind: "ime",
-        sourceArtifactId: "ime-log",
-        observedAtUtc: "2026-07-15T20:00:02Z",
+        recordId: "evidence-c",
+        provenance: {
+          sourceKind: "imeLog",
+          sourceArtifactId: "ime-log",
+          filePath: "C:\\ProgramData\\Microsoft\\IntuneManagementExtension\\Logs\\IntuneManagementExtension.log",
+          lineNumber: 2,
+          recordNumber: null,
+          registry: null,
+          event: null,
+        },
         sourceTimestamp: null,
-        originalOffset: null,
-        normalizedTimestampUtc: null,
-        rawValue: "ime-value-b",
-        sensitivity: "none",
+        observedAtUtc: "2026-07-15T20:00:02Z",
+        rawValue: { text: "ime-value-b" },
+        sensitivity: "public",
         parseState: "parsed",
         accessState: "available",
-        evidenceRefs: [],
+        evidence: [],
       },
     ],
     graph: null,
@@ -514,6 +533,26 @@ describe("ESP workspace app chrome", () => {
       });
     });
     expect(screen.getByText("Starting live session")).toBeInTheDocument();
+  });
+
+  it("reports elevated state even when administrator relaunch is unavailable", () => {
+    const snapshot = makeChromeSnapshot();
+    useEspDiagnosticsStore.setState({
+      phase: "ready",
+      snapshot: {
+        ...snapshot,
+        elevation: {
+          ...snapshot.elevation,
+          isElevated: true,
+          restartSupported: false,
+        },
+      },
+    });
+
+    render(createElement(EspStatusBarContent));
+
+    expect(screen.getByText("Elevated")).toBeInTheDocument();
+    expect(screen.queryByText("Elevation unavailable")).not.toBeInTheDocument();
   });
 
   it("registers lazy ESP toolbar and status slots", () => {

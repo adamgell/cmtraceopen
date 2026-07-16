@@ -68,12 +68,14 @@ export interface EspDiagnosticsStore {
 function identityKey(snapshot: EspDiagnosticsSnapshot): string {
   const identity = snapshot.identity;
   return JSON.stringify([
+    identity.deviceName,
     identity.managedDeviceId,
     identity.entraDeviceId,
-    identity.serialNumber,
-    identity.hostName,
-    identity.tenantId,
-    identity.userPrincipalName,
+    identity.entdmId?.value ?? null,
+    identity.tenantId?.value ?? null,
+    identity.tenantDomain?.value ?? null,
+    identity.userPrincipalName?.value ?? null,
+    identity.serialNumber?.value ?? null,
   ]);
 }
 
@@ -94,16 +96,15 @@ function withPreservedGraph(
 function graphOverlayIsPartial(overlay: EspGraphOverlay): boolean {
   return [
     overlay.deviceMatch,
-    overlay.managedDevice,
     overlay.autopilotIdentity,
     overlay.deploymentProfile,
+    overlay.intendedDeploymentProfile,
+    overlay.profileAssignments,
     overlay.autopilotEvents,
-    overlay.espConfiguration,
+    overlay.enrollmentConfiguration,
     overlay.apps,
     overlay.policies,
-    overlay.certificates,
     overlay.scripts,
-    overlay.remediations,
   ].some((section) =>
     ["permissionDenied", "failed", "cancelled"].includes(section.status),
   );

@@ -29,15 +29,17 @@ export function EspStatusBarContent() {
 
   const evidenceCount = snapshot?.rawEvidence.length ?? 0;
   const sourceCount = snapshot
-    ? new Set(snapshot.rawEvidence.map((record) => record.sourceArtifactId)).size
+    ? new Set(
+        snapshot.rawEvidence.map(
+          (record) => record.provenance.sourceArtifactId,
+        ),
+      ).size
     : 0;
   const elevationLabel = !snapshot
     ? "Elevation unknown"
-    : !snapshot.elevation.supported
-      ? "Elevation unavailable"
-      : snapshot.elevation.isElevated
-        ? "Elevated"
-        : "Not elevated";
+    : snapshot.elevation.isElevated
+      ? "Elevated"
+      : "Not elevated";
   const isLive = phase === "live";
 
   return (
@@ -98,7 +100,8 @@ export function EspStatusBarContent() {
         <span
           style={{
             color:
-              snapshot && snapshot.elevation.supported && !snapshot.elevation.isElevated
+              snapshot &&
+              !snapshot.elevation.isElevated
                 ? tokens.colorPaletteYellowForeground2
                 : tokens.colorNeutralForeground2,
           }}

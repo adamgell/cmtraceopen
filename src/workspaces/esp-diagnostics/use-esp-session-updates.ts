@@ -78,12 +78,14 @@ export function getEspIdentityFingerprint(
 ): string {
   const identity = snapshot.identity;
   return JSON.stringify([
+    normalizeIdentityValue(identity.deviceName),
     normalizeIdentityValue(identity.managedDeviceId),
     normalizeIdentityValue(identity.entraDeviceId),
-    normalizeIdentityValue(identity.serialNumber),
-    normalizeIdentityValue(identity.hostName),
-    normalizeIdentityValue(identity.tenantId),
-    normalizeIdentityValue(identity.userPrincipalName),
+    normalizeIdentityValue(identity.entdmId?.value ?? null),
+    normalizeIdentityValue(identity.tenantId?.value ?? null),
+    normalizeIdentityValue(identity.tenantDomain?.value ?? null),
+    normalizeIdentityValue(identity.userPrincipalName?.value ?? null),
+    normalizeIdentityValue(identity.serialNumber?.value ?? null),
   ]);
 }
 
@@ -97,7 +99,7 @@ function createGraphRequest(
     workloadIds: Array.from(
       new Set(
         snapshot.workloads
-          .map((workload) => workload.rawId ?? workload.id)
+          .map((workload) => workload.rawIdentifier || workload.workloadId)
           .filter((id) => id.length > 0),
       ),
     ),
