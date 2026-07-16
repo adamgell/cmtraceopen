@@ -29,7 +29,11 @@
 
 /** Default responses keyed by Tauri command name. */
 const DEFAULT_RESPONSES: Record<string, unknown> = {
-  parse_file: { entries: [], parse_quality: "Unstructured", parser_kind: "PlainText" },
+  parse_file: {
+    entries: [],
+    parse_quality: "Unstructured",
+    parser_kind: "PlainText",
+  },
   get_recent_files: [],
   get_file_info: null,
   tail_file: null,
@@ -48,10 +52,17 @@ const DEFAULT_RESPONSES: Record<string, unknown> = {
     "event-log",
     "sysmon",
     "secureboot",
+    "esp-diagnostics",
   ],
   get_known_log_sources: [],
   get_file_association_prompt_status: "dismissed",
 };
+
+/** Commands the browser fixture must never forward to a real Graph tenant. */
+const REJECTED_COMMANDS = [
+  "graph_fetch_esp_diagnostics",
+  "graph_cancel_esp_diagnostics",
+];
 
 /** Script string injected into the browser page before React loads. */
 export const TAURI_SHIM_SCRIPT = `
@@ -61,6 +72,7 @@ export const TAURI_SHIM_SCRIPT = `
   window.__e2e_ipc_overrides__ = {};
 
   const defaults = ${JSON.stringify(DEFAULT_RESPONSES)};
+  const rejectedCommands = new Set(${JSON.stringify(REJECTED_COMMANDS)});
 
   // IPC bridge URL — set to a live value when the bridge probe succeeds.
   // Commands dispatched before the probe resolves fall back to defaults.
@@ -80,6 +92,7 @@ export const TAURI_SHIM_SCRIPT = `
 
   // Callback registry used by Channel and event listeners
   const callbacks = new Map();
+  const eventListeners = new Map();
   let nextId = 1;
 
   function registerCallback(callback, once) {
@@ -100,15 +113,39 @@ export const TAURI_SHIM_SCRIPT = `
     if (cb) cb(data);
   }
 
+  function unregisterEventListener(event, id) {
+    unregisterCallback(id);
+    const listeners = eventListeners.get(event);
+    if (!listeners) return;
+    listeners.delete(id);
+    if (listeners.size === 0) eventListeners.delete(event);
+  }
+
+  function emitTestEvent(event, payload) {
+    const listeners = Array.from(eventListeners.get(event) || []);
+    for (const id of listeners) {
+      runCallback(id, { event, id, payload });
+    }
+  }
+
   // Handle plugin:event|* commands used by listen()/emit()/unlisten()
   function handleEventPlugin(cmd, args) {
     switch (cmd) {
       case 'plugin:event|listen': {
+        const event = args && args.event;
         const handler = args && args.handler;
+        if (typeof event === 'string' && handler != null) {
+          const listeners = eventListeners.get(event) || new Set();
+          listeners.add(handler);
+          eventListeners.set(event, listeners);
+        }
         return Promise.resolve(handler != null ? handler : 0);
       }
       case 'plugin:event|unlisten':
+        unregisterEventListener(args && args.event, args && args.eventId);
+        return Promise.resolve(null);
       case 'plugin:event|emit':
+        emitTestEvent(args && args.event, args && args.payload);
         return Promise.resolve(null);
       default:
         return Promise.resolve(null);
@@ -137,6 +174,11 @@ export const TAURI_SHIM_SCRIPT = `
       const override = window.__e2e_ipc_overrides__[cmd];
       if (override) return override(args);
 
+      // Full ESP Graph calls are never allowed to escape deterministic fixtures.
+      if (rejectedCommands.has(cmd)) {
+        throw new Error('[tauri-shim] rejected live ESP Graph command: ' + cmd);
+      }
+
       // 2. If the IPC bridge is up, use the real Rust backend
       if (bridgeUrl) {
         try {
@@ -162,9 +204,11 @@ export const TAURI_SHIM_SCRIPT = `
     },
   };
 
+  window.__e2e_emit__ = emitTestEvent;
+
   // Required by @tauri-apps/api/event for listen()/unlisten() cleanup
   window.__TAURI_EVENT_PLUGIN_INTERNALS__ = {
-    unregisterListener: function (_event, id) { unregisterCallback(id); },
+    unregisterListener: function (event, id) { unregisterEventListener(event, id); },
   };
 
   // Stub plugin globals expected by @tauri-apps/plugin-os
