@@ -176,6 +176,10 @@ export function createEspGraphCoordinator(
     });
     pendingOrphanCancellation = cancellation;
     void cancellation.then(() => {
+      if (ownedRequestId === requestId) {
+        ownedRequestId = null;
+      }
+      useEspDiagnosticsStore.getState().cancelGraph(requestId);
       if (pendingOrphanCancellation === cancellation) {
         pendingOrphanCancellation = null;
       }

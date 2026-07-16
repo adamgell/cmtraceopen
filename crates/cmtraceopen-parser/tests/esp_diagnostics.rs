@@ -780,7 +780,7 @@ fn models_graph_overlay_freezes_typed_correlated_sections() {
     );
     assert_eq!(value["profileAssignments"]["status"], "failed");
     assert_eq!(value["autopilotEvents"]["status"], "skipped");
-    assert_eq!(value["autopilotEvents"]["apiVersion"], "notRequested");
+    assert_eq!(value["autopilotEvents"]["apiVersion"], "beta");
     assert_eq!(value["enrollmentConfiguration"]["status"], "cancelled");
     assert_eq!(value["deploymentProfile"]["apiVersion"], "beta");
     assert_eq!(
@@ -5527,60 +5527,70 @@ fn findings_graph_overlay(app: EspGraphAppRecord) -> EspGraphOverlay {
         requested_at_utc: "2026-07-15T12:30:00Z".to_string(),
         device_match: graph_section(
             GraphSectionStatus::Skipped,
+            "DeviceManagementManagedDevices.Read.All",
             GraphApiVersion::V1_0,
             None,
             None,
         ),
         autopilot_identity: graph_section(
             GraphSectionStatus::Skipped,
+            "DeviceManagementServiceConfig.Read.All",
             GraphApiVersion::V1_0,
             None,
             None,
         ),
         deployment_profile: graph_section(
             GraphSectionStatus::Skipped,
+            "DeviceManagementServiceConfig.Read.All",
             GraphApiVersion::Beta,
             None,
             None,
         ),
         intended_deployment_profile: graph_section(
             GraphSectionStatus::Skipped,
+            "DeviceManagementServiceConfig.Read.All",
             GraphApiVersion::Beta,
             None,
             None,
         ),
         profile_assignments: graph_section(
             GraphSectionStatus::Skipped,
+            "DeviceManagementServiceConfig.Read.All",
             GraphApiVersion::Beta,
             None,
             None,
         ),
         autopilot_events: graph_section(
             GraphSectionStatus::Skipped,
+            "DeviceManagementManagedDevices.Read.All",
             GraphApiVersion::Beta,
             None,
             None,
         ),
         enrollment_configuration: graph_section(
             GraphSectionStatus::Skipped,
+            "DeviceManagementServiceConfig.Read.All",
             GraphApiVersion::V1_0,
             None,
             None,
         ),
         apps: graph_section(
             GraphSectionStatus::Available,
+            "DeviceManagementApps.Read.All",
             GraphApiVersion::V1_0,
             Some(vec![app]),
             None,
         ),
         policies: graph_section(
             GraphSectionStatus::Skipped,
+            "DeviceManagementConfiguration.Read.All",
             GraphApiVersion::V1_0,
             None,
             None,
         ),
         scripts: graph_section(
             GraphSectionStatus::Skipped,
+            "DeviceManagementScripts.Read.All",
             GraphApiVersion::Beta,
             None,
             None,
@@ -5850,6 +5860,7 @@ fn findings_report_policy_certificate_and_script_graph_conflicts() {
     let mut graph = findings_graph_overlay(unrelated_app);
     graph.policies = graph_section(
         GraphSectionStatus::Available,
+        "DeviceManagementConfiguration.Read.All",
         GraphApiVersion::V1_0,
         Some(vec![
             EspGraphPolicyRecord {
@@ -5882,6 +5893,7 @@ fn findings_report_policy_certificate_and_script_graph_conflicts() {
     );
     graph.scripts = graph_section(
         GraphSectionStatus::Available,
+        "DeviceManagementScripts.Read.All",
         GraphApiVersion::Beta,
         Some(vec![EspGraphScriptRecord {
             script_id: "script-conflict".to_string(),
