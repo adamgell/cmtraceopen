@@ -3144,6 +3144,174 @@ fn correlation_repair_preserves_case_when_command_tokenization_is_uncertain() {
 }
 
 #[test]
+fn correlation_repair_preserves_trailing_space_inside_uncertain_command() {
+    let workload = correlation_workload(
+        "workload-command-trailing-space",
+        "temporal-only",
+        "2026-07-15T12:00:00Z",
+        "2026-07-15T12:10:00Z",
+    );
+    let mut plain = correlation_process(
+        "process-command-unclosed-plain",
+        7458,
+        None,
+        "msiexec.exe",
+        "2026-07-15T12:02:00Z",
+    );
+    plain.sanitized_command_line = Some("msiexec.exe /i \"Package.msi".to_string());
+    plain.context.source_timestamp = None;
+    plain.context.observed_at_utc = "2026-07-15T12:03:00Z".to_string();
+    let mut trailing_space = correlation_process(
+        "process-command-unclosed-trailing-space",
+        7458,
+        None,
+        "msiexec.exe",
+        "2026-07-15T12:02:00Z",
+    );
+    trailing_space.sanitized_command_line = Some("msiexec.exe /i \"Package.msi ".to_string());
+    trailing_space.context.source_timestamp = None;
+    trailing_space.context.observed_at_utc = "2026-07-15T12:04:00Z".to_string();
+
+    let forward = correlate_installer_processes(
+        std::slice::from_ref(&workload),
+        &[plain.clone(), trailing_space.clone()],
+        &[],
+        &[],
+    );
+    let reverse = correlate_installer_processes(&[workload], &[trailing_space, plain], &[], &[]);
+
+    assert_eq!(forward, reverse);
+    assert_eq!(forward.len(), 1);
+    assert_eq!(forward[0].workload_id, None);
+    assert_eq!(
+        forward[0].confidence,
+        EspCorrelationConfidence::Uncorrelated
+    );
+    assert_eq!(forward[0].reason, "conflictingProcessSamples");
+    assert!(forward[0].candidate_workload_ids.is_empty());
+    assert_eq!(forward[0].process_observations.len(), 2);
+    assert_eq!(
+        forward[0]
+            .evidence
+            .iter()
+            .map(|evidence| evidence.evidence_id.as_str())
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from([
+            "process-command-unclosed-plain",
+            "process-command-unclosed-trailing-space",
+        ])
+    );
+}
+
+#[test]
+fn correlation_repair_keeps_proven_space_tab_equivalence_and_ignores_blank_commands() {
+    let app_id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+    let workload = correlation_workload(
+        "workload-command-space-tab",
+        app_id,
+        "2026-07-15T12:00:00Z",
+        "2026-07-15T12:10:00Z",
+    );
+    let mut canonical = correlation_process(
+        "process-command-canonical",
+        7459,
+        None,
+        "msiexec.exe",
+        "2026-07-15T12:02:00Z",
+    );
+    canonical.app_id = Some(app_id.to_string());
+    canonical.sanitized_command_line = Some("msiexec.exe /i Package.msi".to_string());
+    canonical.context.source_timestamp = None;
+    canonical.context.observed_at_utc = "2026-07-15T12:03:00Z".to_string();
+    let mut surrounded = correlation_process(
+        "process-command-surrounded",
+        7459,
+        None,
+        "msiexec.exe",
+        "2026-07-15T12:02:00Z",
+    );
+    surrounded.sanitized_command_line = Some(" \tmsiexec.exe\t/i\tPackage.msi\t ".to_string());
+    surrounded.context.source_timestamp = None;
+    surrounded.context.observed_at_utc = "2026-07-15T12:04:00Z".to_string();
+    let mut blank = correlation_process(
+        "process-command-blank",
+        7459,
+        None,
+        "msiexec.exe",
+        "2026-07-15T12:02:00Z",
+    );
+    blank.sanitized_command_line = Some(" \t\t ".to_string());
+    blank.context.source_timestamp = None;
+    blank.context.observed_at_utc = "2026-07-15T12:05:00Z".to_string();
+
+    let forward = correlate_installer_processes(
+        std::slice::from_ref(&workload),
+        &[canonical.clone(), surrounded.clone(), blank.clone()],
+        &[],
+        &[],
+    );
+    let reverse =
+        correlate_installer_processes(&[workload], &[blank, surrounded, canonical], &[], &[]);
+
+    assert_eq!(forward, reverse);
+    assert_eq!(forward.len(), 1);
+    assert_eq!(
+        forward[0].workload_id.as_deref(),
+        Some("workload-command-space-tab")
+    );
+    assert_eq!(forward[0].confidence, EspCorrelationConfidence::Exact);
+    assert_eq!(forward[0].reason, "appId");
+    assert_eq!(forward[0].process_observations.len(), 1);
+}
+
+#[test]
+fn correlation_repair_preserves_non_windows_whitespace_in_uncertain_fallback() {
+    let cases = [("newline", "\n"), ("unicode-no-break-space", "\u{a0}")];
+    let mut collapsed = Vec::new();
+
+    for (index, (label, suffix)) in cases.into_iter().enumerate() {
+        let pid = 7460 + u32::try_from(index).expect("probe index fits u32");
+        let mut plain = correlation_process(
+            &format!("process-command-{label}-plain"),
+            pid,
+            None,
+            "msiexec.exe",
+            "2026-07-15T12:02:00Z",
+        );
+        plain.sanitized_command_line = Some("msiexec.exe /i \"Package.msi".to_string());
+        plain.context.source_timestamp = None;
+        plain.context.observed_at_utc = "2026-07-15T12:03:00Z".to_string();
+        let mut suffixed = correlation_process(
+            &format!("process-command-{label}-suffixed"),
+            pid,
+            None,
+            "msiexec.exe",
+            "2026-07-15T12:02:00Z",
+        );
+        suffixed.sanitized_command_line = Some(format!("msiexec.exe /i \"Package.msi{suffix}"));
+        suffixed.context.source_timestamp = None;
+        suffixed.context.observed_at_utc = "2026-07-15T12:04:00Z".to_string();
+
+        let forward =
+            correlate_installer_processes(&[], &[plain.clone(), suffixed.clone()], &[], &[]);
+        let reverse = correlate_installer_processes(&[], &[suffixed, plain], &[], &[]);
+        let preserved = forward == reverse
+            && forward.len() == 1
+            && forward[0].reason == "conflictingProcessSamples"
+            && forward[0].process_observations.len() == 2
+            && forward[0].evidence.len() == 2;
+        if !preserved {
+            collapsed.push((label, forward, reverse));
+        }
+    }
+
+    assert!(
+        collapsed.is_empty(),
+        "uncertain command whitespace collapsed: {collapsed:#?}"
+    );
+}
+
+#[test]
 fn correlation_bounds_parent_cycles_and_is_order_independent() {
     let mut child = correlation_process(
         "cycle-child",

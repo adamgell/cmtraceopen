@@ -807,9 +807,11 @@ fn command_line_conflict(samples: &[&EspProcessObservation]) -> bool {
     samples
         .iter()
         .filter_map(|process| process.sanitized_command_line.as_deref())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(|value| canonical_command_arguments(value).unwrap_or_else(|| vec![value.to_string()]))
+        .filter_map(|value| match canonical_command_arguments(value) {
+            Some(arguments) if arguments.is_empty() => None,
+            Some(arguments) => Some(arguments),
+            None => Some(vec![value.to_string()]),
+        })
         .collect::<BTreeSet<_>>()
         .len()
         > 1
