@@ -1,11 +1,16 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 
+use app_lib::esp::event_logs::{
+    collect_event_evidence, EventLogProvider, EventSourceError, ESP_EVENT_CHANNELS,
+    REQUIRED_EVENT_IDS,
+};
 use app_lib::esp::registry::{
     classify_registry_scope, collect_registry_evidence, RegistryProvider, RegistryReadError,
     RegistrySnapshotKey, RegistryTarget, RegistryValueSnapshot, ESP_REGISTRY_TARGETS,
     MAX_REGISTRY_DEPTH, MAX_REGISTRY_VALUE_BYTES, REGISTRY_READ_ACCESS,
 };
+use app_lib::intune::evtx_parser::{parse_esp_event_xml, EventLogProperty, ParsedEspEventRecord};
 use cmtraceopen_parser::esp::{EspObservationValue, EspScope, EspSourceAccessState, EspSourceKind};
 
 #[derive(Default)]
@@ -298,4 +303,278 @@ fn registry_queries_uninstall_names_only_for_observed_product_codes() {
     assert_eq!(evidence.uninstall_names.len(), 2);
     assert_eq!(evidence.uninstall_names[0].display_name, "Contoso Agent");
     assert_eq!(evidence.uninstall_names[1].display_name, "Contoso Helper");
+}
+
+#[derive(Default)]
+struct FakeEventLogProvider {
+    channels: HashMap<String, Result<Vec<ParsedEspEventRecord>, EventSourceError>>,
+}
+
+impl FakeEventLogProvider {
+    fn with_records(mut self, channel: &str, records: Vec<ParsedEspEventRecord>) -> Self {
+        self.channels.insert(channel.to_string(), Ok(records));
+        self
+    }
+
+    fn with_error(mut self, channel: &str, error: EventSourceError) -> Self {
+        self.channels.insert(channel.to_string(), Err(error));
+        self
+    }
+}
+
+impl EventLogProvider for FakeEventLogProvider {
+    fn read_channel(
+        &self,
+        channel: &str,
+        _record_limit: usize,
+    ) -> Result<Vec<ParsedEspEventRecord>, EventSourceError> {
+        self.channels
+            .get(channel)
+            .cloned()
+            .unwrap_or(Err(EventSourceError::Missing))
+    }
+}
+
+fn parsed_event(
+    channel: &str,
+    event_id: u32,
+    record_id: u64,
+    event_data: Vec<EventLogProperty>,
+) -> ParsedEspEventRecord {
+    ParsedEspEventRecord {
+        channel: channel.to_string(),
+        event_id,
+        record_id: Some(record_id),
+        source_timestamp: "2026-07-15T12:00:00Z".to_string(),
+        event_data,
+        message: Some(format!("raw message for event {event_id}")),
+        source_file: format!("captured/{record_id}.evtx"),
+        raw_xml: format!("<Event><System><EventID>{event_id}</EventID></System></Event>"),
+    }
+}
+
+fn event_property(name: &str, value: &str) -> EventLogProperty {
+    EventLogProperty {
+        name: name.to_string(),
+        value: value.to_string(),
+    }
+}
+
+#[test]
+fn event_required_ids_are_complete_and_stable() {
+    assert_eq!(
+        REQUIRED_EVENT_IDS,
+        &[72, 100, 101, 107, 109, 110, 111, 304, 306, 1905, 1906, 1920, 1922, 1924]
+    );
+}
+
+#[test]
+fn event_parser_retains_ordered_named_properties_and_record_id() {
+    let xml = r#"<Event xmlns='http://schemas.microsoft.com/win/2004/08/events/event'>
+  <System>
+    <EventID>109</EventID>
+    <EventRecordID>808</EventRecordID>
+    <TimeCreated SystemTime='2026-07-15T12:34:56.789Z'/>
+    <Channel>Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin</Channel>
+  </System>
+  <EventData>
+    <Data Name='State'>2</Data>
+    <Data Name='ProductCode'>{AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE}</Data>
+    <Data Name='AppId'>app-guid</Data>
+    <Data Name='PolicyId'>policy-guid</Data>
+    <Data Name='ResultCode'>0x80070005</Data>
+  </EventData>
+  <RenderingInfo><Message>Waiting &amp; processing</Message></RenderingInfo>
+</Event>"#;
+
+    let event = parse_esp_event_xml(xml, "captured/admin.evtx", None, None, "fallback")
+        .expect("parsed ESP event");
+
+    assert_eq!(event.event_id, 109);
+    assert_eq!(event.record_id, Some(808));
+    assert_eq!(event.source_timestamp, "2026-07-15T12:34:56.789Z");
+    assert_eq!(
+        event.event_data,
+        vec![
+            event_property("State", "2"),
+            event_property("ProductCode", "{AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE}"),
+            event_property("AppId", "app-guid"),
+            event_property("PolicyId", "policy-guid"),
+            event_property("ResultCode", "0x80070005"),
+        ]
+    );
+    assert_eq!(event.message.as_deref(), Some("Waiting & processing"));
+
+    let double_quoted_xml = xml.replace('\'', "\"");
+    let double_quoted = parse_esp_event_xml(
+        &double_quoted_xml,
+        "captured/admin.evtx",
+        None,
+        None,
+        "fallback",
+    )
+    .expect("double-quoted EVTX XML");
+    assert_eq!(double_quoted.record_id, Some(808));
+    assert_eq!(double_quoted.event_data, event.event_data);
+}
+
+#[test]
+fn event_collects_all_required_ids_and_deterministic_fields() {
+    let admin_channel = ESP_EVENT_CHANNELS[0];
+    let registration_channel = ESP_EVENT_CHANNELS[1];
+    let admin_records = REQUIRED_EVENT_IDS
+        .iter()
+        .copied()
+        .filter(|event_id| !matches!(event_id, 101 | 304 | 306))
+        .enumerate()
+        .map(|(index, event_id)| {
+            let event_data = match event_id {
+                109 | 110 => vec![event_property("State", "2")],
+                1905 | 1906 | 1920 | 1922 => vec![
+                    event_property("ProductCode", "{PRODUCT-CODE}"),
+                    event_property("AppId", "app-guid"),
+                ],
+                1924 => vec![
+                    event_property("ProductCode", "{PRODUCT-CODE}"),
+                    event_property("ResultCode", "0x80070643"),
+                ],
+                72 => vec![event_property("PolicyId", "policy-guid")],
+                _ => Vec::new(),
+            };
+            parsed_event(admin_channel, event_id, index as u64 + 1, event_data)
+        })
+        .collect::<Vec<_>>();
+    let registration_records = [101, 304, 306]
+        .into_iter()
+        .enumerate()
+        .map(|(index, event_id)| {
+            parsed_event(
+                registration_channel,
+                event_id,
+                index as u64 + 100,
+                Vec::new(),
+            )
+        })
+        .collect::<Vec<_>>();
+    let provider = FakeEventLogProvider::default()
+        .with_records(admin_channel, admin_records)
+        .with_records(registration_channel, registration_records);
+
+    let evidence = collect_event_evidence(&provider, "2026-07-15T13:00:00Z");
+
+    let mut ids = evidence
+        .observations
+        .iter()
+        .map(|event| event.observation.event_id)
+        .collect::<Vec<_>>();
+    ids.sort_unstable();
+    assert_eq!(ids, REQUIRED_EVENT_IDS);
+    for event in &evidence.observations {
+        let provenance = event
+            .observation
+            .context
+            .provenance
+            .event
+            .as_ref()
+            .expect("event provenance for every required ID");
+        assert_eq!(provenance.channel, event.observation.channel);
+        assert_eq!(provenance.event_id, event.observation.event_id);
+        assert_eq!(provenance.record_id, event.observation.record_id);
+        assert_eq!(provenance.named_data, event.observation.named_data);
+    }
+
+    let odj = evidence
+        .observations
+        .iter()
+        .find(|event| event.observation.event_id == 109)
+        .expect("event 109");
+    assert_eq!(odj.fields.state.as_deref(), Some("2"));
+    let msi = evidence
+        .observations
+        .iter()
+        .find(|event| event.observation.event_id == 1905)
+        .expect("event 1905");
+    assert_eq!(msi.fields.product_code.as_deref(), Some("{PRODUCT-CODE}"));
+    assert_eq!(msi.fields.app_id.as_deref(), Some("app-guid"));
+    assert!(evidence
+        .observations
+        .iter()
+        .filter(|event| matches!(event.observation.event_id, 1905 | 1906 | 1920 | 1922 | 1924))
+        .all(|event| event.fields.product_code.as_deref() == Some("{PRODUCT-CODE}")));
+    let enrollment = evidence
+        .observations
+        .iter()
+        .find(|event| event.observation.event_id == 72)
+        .expect("event 72");
+    assert_eq!(enrollment.fields.policy_id.as_deref(), Some("policy-guid"));
+    let failure = evidence
+        .observations
+        .iter()
+        .find(|event| event.observation.event_id == 1924)
+        .expect("event 1924");
+    assert_eq!(failure.fields.result_code.as_deref(), Some("0x80070643"));
+}
+
+#[test]
+fn event_retains_exact_provenance_and_raw_message() {
+    let channel = ESP_EVENT_CHANNELS[0];
+    let record = parsed_event(
+        channel,
+        1924,
+        44,
+        vec![event_property("ResultCode", "0x80070643")],
+    );
+    let provider = FakeEventLogProvider::default()
+        .with_records(channel, vec![record])
+        .with_records(ESP_EVENT_CHANNELS[1], Vec::new());
+
+    let evidence = collect_event_evidence(&provider, "2026-07-15T13:00:00Z");
+
+    let event = &evidence.observations[0].observation;
+    assert_eq!(event.channel, channel);
+    assert_eq!(event.event_id, 1924);
+    assert_eq!(event.record_id, Some(44));
+    assert_eq!(event.message.as_deref(), Some("raw message for event 1924"));
+    assert_eq!(
+        event.context.provenance.file_path.as_deref(),
+        Some("captured/44.evtx")
+    );
+    assert_eq!(event.context.provenance.record_number, Some(44));
+    assert_eq!(
+        event
+            .context
+            .source_timestamp
+            .as_ref()
+            .and_then(|timestamp| timestamp.normalized_utc.as_deref()),
+        Some("2026-07-15T12:00:00Z")
+    );
+    let provenance = event
+        .context
+        .provenance
+        .event
+        .as_ref()
+        .expect("event provenance");
+    assert_eq!(provenance.channel, channel);
+    assert_eq!(provenance.event_id, 1924);
+    assert_eq!(provenance.record_id, Some(44));
+    assert_eq!(provenance.named_data[0].name, "ResultCode");
+}
+
+#[test]
+fn event_distinguishes_missing_channels_from_permission_denied() {
+    let provider = FakeEventLogProvider::default()
+        .with_error(ESP_EVENT_CHANNELS[0], EventSourceError::PermissionDenied)
+        .with_error(ESP_EVENT_CHANNELS[1], EventSourceError::Missing);
+
+    let evidence = collect_event_evidence(&provider, "2026-07-15T13:00:00Z");
+
+    assert_eq!(
+        evidence.channels[0].access_state,
+        EspSourceAccessState::PermissionDenied
+    );
+    assert_eq!(
+        evidence.channels[1].access_state,
+        EspSourceAccessState::Missing
+    );
+    assert!(evidence.observations.is_empty());
 }
