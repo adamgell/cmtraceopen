@@ -173,6 +173,14 @@ pub fn parent_chain(
 }
 
 pub fn sanitize_command_line(command_line: &str) -> String {
+    let double_quoted_authorization = Regex::new(
+        r#"(?i)(\")((?:--|/)?authorization)(\s*(?:=|:)\s*|\s+)(?:bearer|basic|api[-_]?key|digest)\s+(?:\\.|[^\"])*\""#,
+    )
+    .expect("constant double-quoted-authorization regex");
+    let single_quoted_authorization = Regex::new(
+        r#"(?i)(')((?:--|/)?authorization)(\s*(?:=|:)\s*|\s+)(?:bearer|basic|api[-_]?key|digest)\s+(?:\\.|[^'])*'"#,
+    )
+    .expect("constant single-quoted-authorization regex");
     let digest_authorization =
         Regex::new(r#"(?i)(^|\s)((?:--|/)?authorization)(\s*(?:=|:)\s*|\s+)digest\s+.*"#)
             .expect("constant digest-authorization regex");
@@ -183,17 +191,19 @@ pub fn sanitize_command_line(command_line: &str) -> String {
     let bearer = Regex::new(r#"(?i)(bearer\s+)(?:"[^"]*"|'[^']*'|[^\s&"]+)"#)
         .expect("constant bearer regex");
     let named_secret = Regex::new(
-        r#"(?i)(^|\s)((?:--|/)?(?:access[-_]?token|client[-_]?secret|token|password|secret|authorization))(\s*(?:=|:)\s*|\s+)(?:"[^"]*"|'[^']*'|[^\s&"]+)"#,
+        r#"(?i)(^|\s)((?:--|/)?(?:access[-_]?token|client[-_]?secret|api[-_]?key|token|password|secret|authorization))(\s*(?:=|:)\s*|\s+)(?:"[^"]*"|'[^']*'|[^\s&"]+)"#,
     )
     .expect("constant named-secret regex");
     let query_secret = Regex::new(
-        r#"(?i)([?&](?:sig|access[-_]?token|client[-_]?secret|token|password|secret|authorization)=)(?:"[^"]*"|'[^']*'|[^&\s"]+)"#,
+        r#"(?i)([?&](?:sig|access[-_]?token|client[-_]?secret|api[-_]?key|token|password|secret|authorization)=)(?:"[^"]*"|'[^']*'|[^&\s"]+)"#,
     )
     .expect("constant query-secret regex");
 
+    let command_line = double_quoted_authorization.replace_all(command_line, "$1$2$3[REDACTED]\"");
+    let command_line = single_quoted_authorization.replace_all(&command_line, "$1$2$3[REDACTED]'");
     // Digest credentials can contain a comma-separated parameter list, so conservatively
     // redact the rest of the command line once an unquoted Digest authorization value starts.
-    let command_line = digest_authorization.replace_all(command_line, "$1$2$3[REDACTED]");
+    let command_line = digest_authorization.replace_all(&command_line, "$1$2$3[REDACTED]");
     // Authorization schemes are redacted with their credential before the generic named-secret
     // pass can consume only the scheme and leave the credential behind.
     let command_line = authorization_credential.replace_all(&command_line, "$1$2$3[REDACTED]");
@@ -707,6 +717,89 @@ mod tests {
                     "{case} leaked {sentinel}: {sanitized}"
                 );
             }
+            assert!(sanitized.contains("/i {12345678-1234-1234-1234-1234567890AB}"));
+            assert!(sanitized.contains("/L*V C:\\Windows\\Temp\\contoso.log"));
+            assert!(sanitized.contains("[REDACTED]"));
+        }
+    }
+
+    #[test]
+    fn command_line_sanitizer_redacts_quoted_authorization_headers() {
+        let cases: &[(&str, &str, &[&str], &str)] = &[
+            (
+                "basic header",
+                "-H \"Authorization: Basic basic-header-sentinel\"",
+                &["basic-header-sentinel"],
+                "-H \"Authorization: [REDACTED]\"",
+            ),
+            (
+                "api key header",
+                "-H \"Authorization: ApiKey api-key-header-sentinel\"",
+                &["api-key-header-sentinel"],
+                "-H \"Authorization: [REDACTED]\"",
+            ),
+            (
+                "digest header",
+                "-H \"Authorization: Digest username=digest-user-header-sentinel, realm=digest-realm-header-sentinel, response=digest-response-header-sentinel\"",
+                &[
+                    "digest-user-header-sentinel",
+                    "digest-realm-header-sentinel",
+                    "digest-response-header-sentinel",
+                ],
+                "-H \"Authorization: [REDACTED]\"",
+            ),
+            (
+                "bearer header",
+                "-H \"Authorization: Bearer bearer-header-sentinel\"",
+                &["bearer-header-sentinel"],
+                "-H \"Authorization: [REDACTED]\"",
+            ),
+        ];
+
+        for (case, secret_argument, sentinels, expected_header) in cases {
+            let raw = format!(
+                "msiexec.exe /i {{12345678-1234-1234-1234-1234567890AB}} /L*V C:\\Windows\\Temp\\contoso.log {secret_argument}"
+            );
+            let sanitized = sanitize_command_line(&raw);
+
+            for sentinel in *sentinels {
+                assert!(
+                    !sanitized.contains(sentinel),
+                    "{case} leaked {sentinel}: {sanitized}"
+                );
+            }
+            assert!(sanitized.contains(expected_header));
+            assert!(sanitized.contains("/i {12345678-1234-1234-1234-1234567890AB}"));
+            assert!(sanitized.contains("/L*V C:\\Windows\\Temp\\contoso.log"));
+            assert!(sanitized.contains("[REDACTED]"));
+        }
+    }
+
+    #[test]
+    fn command_line_sanitizer_redacts_api_key_option_and_query_variants() {
+        let cases = [
+            ("--api-key hyphen-option-api-key-sentinel", "hyphen-option-api-key-sentinel"),
+            ("--api_key=underscore-option-api-key-sentinel", "underscore-option-api-key-sentinel"),
+            (
+                "https://cache.invalid/content?api-key=hyphen-query-api-key-sentinel&safe=true",
+                "hyphen-query-api-key-sentinel",
+            ),
+            (
+                "https://cache.invalid/content?api_key=\"underscore-query-api-key-sentinel\"&safe=true",
+                "underscore-query-api-key-sentinel",
+            ),
+        ];
+
+        for (secret_argument, sentinel) in cases {
+            let raw = format!(
+                "msiexec.exe /i {{12345678-1234-1234-1234-1234567890AB}} /L*V C:\\Windows\\Temp\\contoso.log {secret_argument}"
+            );
+            let sanitized = sanitize_command_line(&raw);
+
+            assert!(
+                !sanitized.contains(sentinel),
+                "secret leaked for variant {secret_argument}: {sanitized}"
+            );
             assert!(sanitized.contains("/i {12345678-1234-1234-1234-1234567890AB}"));
             assert!(sanitized.contains("/L*V C:\\Windows\\Temp\\contoso.log"));
             assert!(sanitized.contains("[REDACTED]"));
