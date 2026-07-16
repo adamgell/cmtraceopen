@@ -2250,6 +2250,140 @@ describe("ESP Graph scheduling", () => {
     coordinator.dispose();
   });
 
+  it("does not restore a selected overlay when Graph is re-enabled during deferred cancellation", async () => {
+    const activeOverlay = deferred<EspGraphOverlay>();
+    const disableCancellation = deferred<void>();
+    const requestIds = [
+      "graph-selected",
+      "graph-before-disable",
+      "graph-after-enable",
+    ];
+    const fetchGraph = vi
+      .fn<(request: EspGraphRequest) => Promise<EspGraphOverlay>>()
+      .mockImplementationOnce(async (request) =>
+        makeOverlayWithSelectedDevice(
+          request.requestId,
+          request.selectedManagedDeviceId ?? "managed-default",
+        ),
+      )
+      .mockImplementationOnce(() => activeOverlay.promise)
+      .mockImplementationOnce(async (request) =>
+        makeOverlayWithSelectedDevice(
+          request.requestId,
+          request.selectedManagedDeviceId ?? "managed-default",
+        ),
+      );
+    const cancelGraph = vi.fn(() => disableCancellation.promise);
+    const coordinator = createEspGraphCoordinator({
+      fetchGraph,
+      cancelGraph,
+      createRequestId: () => requestIds.shift() ?? "graph-extra",
+    });
+    useUiStore.setState({ graphApiEnabled: true, graphApiStatus: "connected" });
+    useEspDiagnosticsStore.setState({
+      phase: "ready",
+      snapshot: makeSnapshot(["local-a"]),
+    });
+
+    await coordinator.refresh("managed-candidate-b");
+    coordinator.start();
+    const stale = coordinator.refresh();
+    await vi.waitFor(() => expect(fetchGraph).toHaveBeenCalledTimes(2));
+
+    useUiStore.setState({ graphApiEnabled: false });
+    await vi.waitFor(() =>
+      expect(cancelGraph).toHaveBeenCalledWith("graph-before-disable"),
+    );
+    useUiStore.setState({
+      graphApiEnabled: true,
+      graphApiStatus: "connected",
+    });
+
+    disableCancellation.resolve();
+    await vi.waitFor(() => expect(fetchGraph).toHaveBeenCalledTimes(3));
+    activeOverlay.resolve(
+      makeOverlayWithSelectedDevice(
+        "graph-before-disable",
+        "managed-candidate-b",
+      ),
+    );
+    await stale;
+    const selectedManagedDeviceId =
+      fetchGraph.mock.calls[2]?.[0].selectedManagedDeviceId;
+    const appliedRequestId =
+      useEspDiagnosticsStore.getState().snapshot?.graph?.requestId;
+    coordinator.dispose();
+
+    expect(selectedManagedDeviceId).toBeNull();
+    expect(appliedRequestId).toBe("graph-after-enable");
+  });
+
+  it("invalidates a captured selection when a same-identity analysis begins during cancellation", async () => {
+    const activeCancellation = deferred<void>();
+    const orphanCancellation = deferred<void>();
+    const requestIds = ["graph-selected", "graph-replacement"];
+    const fetchGraph = vi.fn(async (request: EspGraphRequest) =>
+      makeOverlayWithSelectedDevice(
+        request.requestId,
+        request.selectedManagedDeviceId ?? "managed-default",
+      ),
+    );
+    const cancelGraph = vi
+      .fn<(requestId: string) => Promise<void>>()
+      .mockImplementationOnce(() => activeCancellation.promise)
+      .mockImplementationOnce(() => orphanCancellation.promise);
+    const coordinator = createEspGraphCoordinator({
+      fetchGraph,
+      cancelGraph,
+      createRequestId: () => requestIds.shift() ?? "graph-extra",
+    });
+    useUiStore.setState({ graphApiEnabled: true, graphApiStatus: "connected" });
+    useEspDiagnosticsStore.setState({
+      phase: "ready",
+      snapshot: makeSnapshot(["local-first"], "same-device"),
+    });
+
+    await coordinator.refresh("managed-candidate-b");
+    coordinator.start();
+    useEspDiagnosticsStore.setState({
+      graphRequestId: "graph-active",
+      graphPhase: "loading",
+    });
+
+    const staleRefresh = coordinator.refresh();
+    useEspDiagnosticsStore.getState().beginAnalysis("analysis-second");
+    useEspDiagnosticsStore
+      .getState()
+      .applyAnalysis(
+        "analysis-second",
+        makeSnapshot(["local-second"], "same-device"),
+      );
+    expect(cancelGraph.mock.calls).toEqual([
+      ["graph-active"],
+      ["graph-active"],
+    ]);
+
+    activeCancellation.resolve();
+    await staleRefresh;
+    const fetchCountBeforeOrphanCancellation = fetchGraph.mock.calls.length;
+
+    orphanCancellation.resolve();
+    await vi.waitFor(() => expect(fetchGraph).toHaveBeenCalledTimes(2));
+    const replacementRequest = fetchGraph.mock.calls[1]?.[0];
+    const appliedRequestId =
+      useEspDiagnosticsStore.getState().snapshot?.graph?.requestId;
+    coordinator.dispose();
+
+    expect(fetchCountBeforeOrphanCancellation).toBe(1);
+    expect(replacementRequest).toEqual(
+      expect.objectContaining({
+        requestId: "graph-replacement",
+        selectedManagedDeviceId: null,
+      }),
+    );
+    expect(appliedRequestId).toBe("graph-replacement");
+  });
+
   it("fetches once per stable local identity for imported and live snapshots", async () => {
     let requestNumber = 0;
     const fetchGraph = vi.fn(async (request: EspGraphRequest) =>
