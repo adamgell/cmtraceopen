@@ -22,8 +22,11 @@ pub const MAX_SYSTEM_ROWS: usize = 64;
 #[cfg(any(target_os = "windows", test))]
 const DELIVERY_OPTIMIZATION_SCRIPT: &str = concat!(
     "$ErrorActionPreference='Stop';try{",
-    "$perf=Get-DeliveryOptimizationPerfSnapThisMonth|Select-Object DownloadHttpBytes,DownloadLanBytes,DownloadCacheHostBytes;",
-    "$events=@(Get-DeliveryOptimizationLog|Where-Object {$_.Function -match '(DownloadStart)|(DownloadCompleted)' -and ($_.Message -like '*.intunewin.bin,*' -or $_.Message -like '*Microsoft Office Click-to-Run*')}|Select-Object -First 64|ForEach-Object {[pscustomobject]@{Function=[string]$_.Function;TimeCreated=$_.TimeCreated.ToUniversalTime().ToString('o');Message=[string]$_.Message}});",
+    "$env:PSModulePath=[System.IO.Path]::Combine($PSHOME,'Modules');",
+    "$deliveryOptimizationModule=[System.IO.Path]::Combine($env:PSModulePath,'DeliveryOptimization','DeliveryOptimization.psd1');",
+    "Microsoft.PowerShell.Core\\Import-Module -Name $deliveryOptimizationModule -Force -ErrorAction Stop;",
+    "$perf=DeliveryOptimization\\Get-DeliveryOptimizationPerfSnapThisMonth|Select-Object DownloadHttpBytes,DownloadLanBytes,DownloadCacheHostBytes;",
+    "$events=@(DeliveryOptimization\\Get-DeliveryOptimizationLog|Where-Object {$_.Function -match '(DownloadStart)|(DownloadCompleted)' -and ($_.Message -like '*.intunewin.bin,*' -or $_.Message -like '*Microsoft Office Click-to-Run*')}|Select-Object -First 64|ForEach-Object {[pscustomobject]@{Function=[string]$_.Function;TimeCreated=$_.TimeCreated.ToUniversalTime().ToString('o');Message=[string]$_.Message}});",
     "[pscustomobject]@{perf=$perf;events=$events}|ConvertTo-Json -Compress -Depth 4;",
     "}catch{[Console]::Error.Write(('CMTRACEOPEN_HRESULT=0x{0:X8}' -f [int]$_.Exception.HResult));exit 1}",
 );
@@ -2267,6 +2270,37 @@ mod tests {
         assert!(DELIVERY_OPTIMIZATION_SCRIPT.contains("DownloadCompleted"));
         assert!(DELIVERY_OPTIMIZATION_SCRIPT.contains("CMTRACEOPEN_HRESULT=0x"));
         assert!(!DELIVERY_OPTIMIZATION_SCRIPT.contains("Get-DeliveryOptimizationStatus"));
+    }
+
+    #[test]
+    fn delivery_optimization_live_script_pins_the_inbox_module_before_invocation() {
+        let trusted_module_root = "$env:PSModulePath=[System.IO.Path]::Combine($PSHOME,'Modules');";
+        let trusted_module_manifest = "$deliveryOptimizationModule=[System.IO.Path]::Combine($env:PSModulePath,'DeliveryOptimization','DeliveryOptimization.psd1');";
+        let trusted_import = "Microsoft.PowerShell.Core\\Import-Module -Name $deliveryOptimizationModule -Force -ErrorAction Stop;";
+        let perf_command = "DeliveryOptimization\\Get-DeliveryOptimizationPerfSnapThisMonth";
+        let log_command = "DeliveryOptimization\\Get-DeliveryOptimizationLog";
+
+        let root_index = DELIVERY_OPTIMIZATION_SCRIPT
+            .find(trusted_module_root)
+            .expect("script must discard inherited module search paths");
+        let manifest_index = DELIVERY_OPTIMIZATION_SCRIPT
+            .find(trusted_module_manifest)
+            .expect("script must build the inbox Delivery Optimization manifest path");
+        let import_index = DELIVERY_OPTIMIZATION_SCRIPT
+            .find(trusted_import)
+            .expect("script must import the inbox Delivery Optimization module explicitly");
+
+        for command in [perf_command, log_command] {
+            let command_index = DELIVERY_OPTIMIZATION_SCRIPT
+                .find(command)
+                .expect("Delivery Optimization commands must be module-qualified");
+            assert!(root_index < manifest_index);
+            assert!(manifest_index < import_index);
+            assert!(import_index < command_index);
+        }
+        assert!(!DELIVERY_OPTIMIZATION_SCRIPT
+            .contains("$perf=Get-DeliveryOptimizationPerfSnapThisMonth"));
+        assert!(!DELIVERY_OPTIMIZATION_SCRIPT.contains("$events=@(Get-DeliveryOptimizationLog"));
     }
 
     #[cfg(unix)]
