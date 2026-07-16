@@ -833,6 +833,21 @@ fn models_graph_unknown_enum_values_round_trip_without_loss() {
 }
 
 #[test]
+fn models_raw_status_preserves_future_json_shapes_without_loss() {
+    for raw in [
+        json!(true),
+        Value::Null,
+        json!({ "future": 1 }),
+        json!([1, "x"]),
+    ] {
+        let decoded: EspRawStatus = serde_json::from_value(raw.clone()).unwrap();
+
+        assert_eq!(decoded, EspRawStatus::Other(raw.clone()));
+        assert_eq!(serde_json::to_value(decoded).unwrap(), raw);
+    }
+}
+
+#[test]
 fn models_sensitive_identifiers_carry_explicit_classification_metadata() {
     let identity = EspIdentityEvidence {
         device_name: Some("DEVICE-1".to_string()),
@@ -2958,6 +2973,7 @@ fn reducer_parity_all_v2_states_pin_raw_normalized_sources_times_and_stable_ids(
             match &case.raw {
                 EspRawStatus::Number(value) => EspObservationValue::Integer(*value),
                 EspRawStatus::Text(value) => EspObservationValue::Text(value.clone()),
+                EspRawStatus::Other(value) => EspObservationValue::Text(value.to_string()),
             },
             &case.source_timestamp,
         ));

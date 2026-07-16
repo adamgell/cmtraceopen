@@ -109,7 +109,13 @@ export type EspGraphPolicyStatusDetailKind = "app" | "policy" | (string & {});
 export type EspDeliveryOptimizationEventKind =
   "downloadStarted" | "downloadCompleted";
 
-export type EspRawStatus = number | string;
+export type EspRawStatus =
+  | number
+  | string
+  | boolean
+  | null
+  | EspRawStatus[]
+  | { [key: string]: EspRawStatus };
 export type EspObservationValue =
   | { text: string }
   | { integer: number }

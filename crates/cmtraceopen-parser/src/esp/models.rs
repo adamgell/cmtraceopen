@@ -320,6 +320,7 @@ raw_preserving_string_enum! {
 pub enum EspRawStatus {
     Number(i64),
     Text(String),
+    Other(serde_json::Value),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

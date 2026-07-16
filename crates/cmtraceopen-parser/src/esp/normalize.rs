@@ -68,6 +68,7 @@ pub fn normalize_v2_status(raw: EspRawStatus) -> EspStatus {
             .ok()
             .and_then(v2_mapping_by_number)
             .or_else(|| v2_mapping_by_name(value.trim())),
+        EspRawStatus::Other(_) => None,
     };
     mapped_status(raw, mapping)
 }
@@ -232,6 +233,7 @@ fn raw_number(raw: &EspRawStatus) -> Option<i64> {
     match raw {
         EspRawStatus::Number(value) => Some(*value),
         EspRawStatus::Text(value) => value.trim().parse().ok(),
+        EspRawStatus::Other(_) => None,
     }
 }
 
@@ -239,6 +241,7 @@ fn raw_display(raw: &EspRawStatus) -> String {
     match raw {
         EspRawStatus::Number(value) => value.to_string(),
         EspRawStatus::Text(value) => value.clone(),
+        EspRawStatus::Other(value) => value.to_string(),
     }
 }
 
