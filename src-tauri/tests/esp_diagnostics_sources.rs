@@ -63,7 +63,7 @@ use cmtraceopen_parser::esp::{
     EspGraphObservation, EspGraphObservationSection, EspHardwareEvidence, EspObservationContext,
     EspObservationValue, EspParseState, EspRegistryObservation, EspRegistryProvenance, EspScope,
     EspSensitivity, EspSourceAccessState, EspSourceKind, EspSystemFact, EspSystemObservation,
-    GraphApiVersion, MAX_EVIDENCE_IDENTITY_SOURCES,
+    GraphApiVersion, MAX_EVIDENCE_IDENTITY_SOURCES, MAX_RETAINED_EVIDENCE_RECORDS,
 };
 use tempfile::tempdir;
 
@@ -6205,6 +6205,7 @@ fn bundle_manifest_deduplicates_repeated_paths_before_parsing() {
 #[test]
 fn bundle_record_intake_is_capped_across_artifacts_before_reduction() {
     const EXPECTED_TOTAL_RECORD_LIMIT: usize = 131_072;
+    const EXPECTED_CAPTURED_COVERAGE_RECORDS: usize = 33;
     let bundle = tempfile::tempdir().expect("bundle tempdir");
     let evidence = bundle.path().join("evidence/json");
     std::fs::create_dir_all(&evidence).expect("create JSON evidence folder");
@@ -6233,7 +6234,11 @@ fn bundle_record_intake_is_capped_across_artifacts_before_reduction() {
         analyze_captured_evidence_at(bundle.path(), BUNDLE_REQUEST_ID, BUNDLE_OBSERVED_AT)
             .expect("analyze cumulatively bounded bundle");
 
-    assert_eq!(snapshot.raw_evidence.len(), EXPECTED_TOTAL_RECORD_LIMIT);
+    assert_eq!(
+        snapshot.raw_evidence.len(),
+        MAX_RETAINED_EVIDENCE_RECORDS - EXPECTED_CAPTURED_COVERAGE_RECORDS,
+        "bundle intake may reach its independent cap, but the reducer must expose only retained evidence"
+    );
     assert!(snapshot.coverage.iter().any(|coverage| {
         coverage.artifact_id == "bundle.intake-record-limit"
             && coverage.status == EspArtifactStatus::ParseFailed
@@ -6242,6 +6247,16 @@ fn bundle_record_intake_is_capped_across_artifacts_before_reduction() {
                 .as_deref()
                 .is_some_and(|detail| detail.contains("partial"))
     }));
+    let retention = snapshot
+        .coverage
+        .iter()
+        .find(|coverage| coverage.artifact_id == "session.evidence-retention")
+        .expect("reducer retention is explicit after the larger bundle intake cap is reached");
+    let expected_discarded = EXPECTED_TOTAL_RECORD_LIMIT + EXPECTED_CAPTURED_COVERAGE_RECORDS
+        - MAX_RETAINED_EVIDENCE_RECORDS;
+    assert!(retention.detail.as_deref().is_some_and(
+        |detail| detail.contains(&format!("{expected_discarded} older or oversized records"))
+    ));
 }
 
 #[test]

@@ -240,6 +240,7 @@ pub struct EspDiagnosticsReducer {
     max_retained_records: usize,
     max_retained_serialized_bytes: usize,
     identity_allocator: EspEvidenceIdentityAllocator,
+    identified_high_watermark_by_source: BTreeMap<String, usize>,
     identity_rejections: EspEvidenceIdentityRejectionCounts,
 }
 
@@ -279,6 +280,7 @@ impl EspDiagnosticsReducer {
             max_retained_records: max_retained_records.max(1),
             max_retained_serialized_bytes: max_retained_serialized_bytes.max(1),
             identity_allocator: EspEvidenceIdentityAllocator::new(),
+            identified_high_watermark_by_source: BTreeMap::new(),
             identity_rejections: EspEvidenceIdentityRejectionCounts::default(),
         }
     }
@@ -286,16 +288,60 @@ impl EspDiagnosticsReducer {
     pub fn ingest(&mut self, record: EspEvidenceRecord) {
         let ordinal = self.next_ordinal;
         self.next_ordinal = self.next_ordinal.saturating_add(1);
+        let serialized_bytes = self.serialized_bytes(&record);
+        if serialized_bytes > self.max_retained_serialized_bytes {
+            self.note_discard(serialized_bytes);
+            return;
+        }
+
+        let source = record_identity_source(&record);
         let occurrence_key = record_occurrence_key(&record);
-        let occurrence_ordinal = if let Some(key) = &occurrence_key {
-            let next = self.next_occurrence_by_key.entry(key.clone()).or_insert(0);
-            let occurrence = *next;
-            *next = next.saturating_add(1);
-            occurrence
+        let occurrence_ordinal = if let Some(key) = occurrence_key.as_ref() {
+            let key_next = self.next_occurrence_by_key.get(key).copied().unwrap_or(0);
+            let identified_floor = match self.identified_high_watermark_by_source.get(&source) {
+                Some(high_watermark) => match high_watermark.checked_add(1) {
+                    Some(next) => next,
+                    None => {
+                        self.note_identity_discard(EspEvidenceIdentityError::OccurrenceOverflow);
+                        return;
+                    }
+                },
+                None => 0,
+            };
+            key_next.max(identified_floor)
         } else {
             ordinal
         };
-        self.retain_record(record, ordinal, occurrence_ordinal, occurrence_key);
+
+        let identified = EspIdentifiedEvidenceRecord::with_occurrence(record, occurrence_ordinal);
+        match self
+            .identity_allocator
+            .try_synchronize_identified(&identified)
+        {
+            Ok(true) => {}
+            Ok(false) => return,
+            Err(error) => {
+                self.note_identity_discard(error);
+                return;
+            }
+        }
+        if let Some(key) = occurrence_key.as_ref() {
+            self.next_occurrence_by_key
+                .insert(key.clone(), occurrence_ordinal.saturating_add(1));
+        }
+        self.retain_record(
+            identified.record,
+            ordinal,
+            occurrence_ordinal,
+            occurrence_key,
+            serialized_bytes,
+        );
+    }
+
+    fn serialized_bytes(&self, record: &EspEvidenceRecord) -> usize {
+        serde_json::to_vec(record)
+            .map(|serialized| serialized.len())
+            .unwrap_or_else(|_| self.max_retained_serialized_bytes.saturating_add(1))
     }
 
     fn retain_record(
@@ -304,14 +350,8 @@ impl EspDiagnosticsReducer {
         ordinal: usize,
         occurrence_ordinal: usize,
         occurrence_key: Option<(String, String)>,
+        serialized_bytes: usize,
     ) {
-        let serialized_bytes = serde_json::to_vec(&record)
-            .map(|serialized| serialized.len())
-            .unwrap_or_else(|_| self.max_retained_serialized_bytes.saturating_add(1));
-        if serialized_bytes > self.max_retained_serialized_bytes {
-            self.note_discard(serialized_bytes);
-            return;
-        }
         if let Some(key) = &occurrence_key {
             let retained_count = self
                 .retained_occurrence_counts
@@ -343,6 +383,7 @@ impl EspDiagnosticsReducer {
             self.retained_serialized_bytes = self
                 .retained_serialized_bytes
                 .saturating_sub(discarded.serialized_bytes);
+            self.release_identity(&discarded.record, discarded.occurrence_ordinal);
             self.release_occurrence_key(discarded.occurrence_key.as_ref());
             self.note_discard(discarded.serialized_bytes);
         }
@@ -356,6 +397,11 @@ impl EspDiagnosticsReducer {
 
     #[doc(hidden)]
     pub fn ingest_identified(&mut self, identified: EspIdentifiedEvidenceRecord) {
+        let serialized_bytes = self.serialized_bytes(identified.record());
+        if serialized_bytes > self.max_retained_serialized_bytes {
+            self.note_discard(serialized_bytes);
+            return;
+        }
         match self
             .identity_allocator
             .try_synchronize_identified(&identified)
@@ -367,6 +413,11 @@ impl EspDiagnosticsReducer {
                 return;
             }
         }
+        let source = record_identity_source(identified.record());
+        self.identified_high_watermark_by_source
+            .entry(source)
+            .and_modify(|watermark| *watermark = (*watermark).max(identified.occurrence_ordinal()))
+            .or_insert(identified.occurrence_ordinal());
         let ordinal = self.next_ordinal;
         self.next_ordinal = self.next_ordinal.saturating_add(1);
         let occurrence_ordinal = identified.occurrence_ordinal();
@@ -376,7 +427,13 @@ impl EspDiagnosticsReducer {
             let next = self.next_occurrence_by_key.entry(key.clone()).or_insert(0);
             *next = (*next).max(occurrence_ordinal.saturating_add(1));
         }
-        self.retain_record(record, ordinal, occurrence_ordinal, occurrence_key);
+        self.retain_record(
+            record,
+            ordinal,
+            occurrence_ordinal,
+            occurrence_key,
+            serialized_bytes,
+        );
     }
 
     #[doc(hidden)]
@@ -451,6 +508,25 @@ impl EspDiagnosticsReducer {
         if remove_key {
             self.retained_occurrence_counts.remove(key);
             self.next_occurrence_by_key.remove(key);
+        }
+    }
+
+    fn release_identity(&mut self, record: &EspEvidenceRecord, occurrence_ordinal: usize) {
+        let source = record_identity_source(record);
+        self.identity_allocator
+            .accepted_identities
+            .remove(&record_identity_key(record, occurrence_ordinal));
+        let source_is_retained = self
+            .identity_allocator
+            .accepted_identities
+            .iter()
+            .any(|identity| identity.source_artifact_id == source);
+        if !source_is_retained
+            && !self
+                .identified_high_watermark_by_source
+                .contains_key(&source)
+        {
+            self.identity_allocator.last_by_source.remove(&source);
         }
     }
 
