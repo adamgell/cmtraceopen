@@ -1,4 +1,5 @@
 use cmtraceopen_parser::esp::*;
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -10,6 +11,13 @@ fn evidence_ref(id: &str) -> EspEvidenceRef {
     EspEvidenceRef {
         evidence_id: id.to_string(),
         source_artifact_id: "artifact-registry".to_string(),
+    }
+}
+
+fn sensitive(value: &str) -> EspClassifiedString {
+    EspClassifiedString {
+        value: value.to_string(),
+        sensitivity: EspSensitivity::Sensitive,
     }
 }
 
@@ -300,7 +308,7 @@ fn models_serialize_camel_case() {
         &[
             EspJoinMode::Entra,
             EspJoinMode::HybridEntra,
-            EspJoinMode::Unknown,
+            EspJoinMode::Unknown("unknown".to_string()),
         ],
         json!(["entra", "hybridEntra", "unknown"]),
     );
@@ -348,7 +356,7 @@ fn models_serialize_camel_case() {
             EspGraphAssignmentIntent::Required,
             EspGraphAssignmentIntent::Available,
             EspGraphAssignmentIntent::Uninstall,
-            EspGraphAssignmentIntent::Unknown,
+            EspGraphAssignmentIntent::Unknown("unknown".to_string()),
         ],
         json!(["required", "available", "uninstall", "unknown"]),
     );
@@ -358,7 +366,7 @@ fn models_serialize_camel_case() {
             EspGraphTargetKind::AllUsers,
             EspGraphTargetKind::Group,
             EspGraphTargetKind::Filter,
-            EspGraphTargetKind::Unknown,
+            EspGraphTargetKind::Unknown("unknown".to_string()),
         ],
         json!(["allDevices", "allUsers", "group", "filter", "unknown"]),
     );
@@ -372,7 +380,7 @@ fn models_serialize_camel_case() {
             EspGraphPolicyKind::Compliance,
             EspGraphPolicyKind::ConfigurationPolicy,
             EspGraphPolicyKind::ScepCertificate,
-            EspGraphPolicyKind::Unknown,
+            EspGraphPolicyKind::Unknown("unknown".to_string()),
         ],
         json!([
             "deviceConfiguration",
@@ -583,6 +591,7 @@ fn models_snapshot_schema_version_and_ordered_collections_are_stable() {
             tenant_id: None,
             tenant_domain: None,
             user_principal_name: None,
+            serial_number: None,
             evidence: vec![evidence_ref("identity-1")],
         },
         profile: None,
@@ -629,11 +638,11 @@ fn models_graph_overlay_freezes_typed_correlated_sections() {
     let managed_device = EspGraphManagedDevice {
         managed_device_id: "managed-1".to_string(),
         entra_device_id: Some("entra-1".to_string()),
-        serial_number: Some("serial-1".to_string()),
+        serial_number: Some(sensitive("serial-1")),
         device_name: Some("DEVICE-1".to_string()),
         user_id: Some("user-1".to_string()),
-        user_principal_name: Some("user@example.test".to_string()),
-        tenant_id: Some("tenant-1".to_string()),
+        user_principal_name: Some(sensitive("user@example.test")),
+        tenant_id: Some(sensitive("tenant-1")),
         evidence: vec![evidence_ref("managed-1")],
     };
     let overlay = EspGraphOverlay {
@@ -662,6 +671,18 @@ fn models_graph_overlay_freezes_typed_correlated_sections() {
             GraphApiVersion::Beta,
             None,
             Some(graph_error("permissionDenied")),
+        ),
+        intended_deployment_profile: graph_section(
+            GraphSectionStatus::Available,
+            GraphApiVersion::Beta,
+            Some(EspGraphDeploymentProfile {
+                profile_id: "intended-profile-1".to_string(),
+                display_name: Some("Intended Profile".to_string()),
+                join_mode: Some(EspJoinMode::Entra),
+                selected_mobile_app_ids: vec![],
+                evidence: vec![evidence_ref("intended-profile-1")],
+            }),
+            None,
         ),
         profile_assignments: graph_section(
             GraphSectionStatus::Failed,
@@ -732,6 +753,10 @@ fn models_graph_overlay_freezes_typed_correlated_sections() {
     assert_eq!(value["deviceMatch"]["status"], "available");
     assert_eq!(value["autopilotIdentity"]["status"], "notFound");
     assert_eq!(value["deploymentProfile"]["status"], "permissionDenied");
+    assert_eq!(
+        value["intendedDeploymentProfile"]["data"]["profileId"],
+        "intended-profile-1"
+    );
     assert_eq!(value["profileAssignments"]["status"], "failed");
     assert_eq!(value["autopilotEvents"]["status"], "skipped");
     assert_eq!(value["enrollmentConfiguration"]["status"], "cancelled");
@@ -746,6 +771,166 @@ fn models_graph_overlay_freezes_typed_correlated_sections() {
     );
 }
 
+fn assert_unknown_string_round_trip<T>(raw: &str, expected: T)
+where
+    T: DeserializeOwned + Serialize + std::fmt::Debug + PartialEq,
+{
+    let encoded = serde_json::to_string(raw).unwrap();
+    let decoded: T = serde_json::from_str(&encoded).unwrap();
+    assert_eq!(decoded, expected);
+    assert_eq!(serde_json::to_string(&decoded).unwrap(), encoded);
+}
+
+#[test]
+fn models_graph_unknown_enum_values_round_trip_without_loss() {
+    assert_unknown_string_round_trip("vNext", GraphApiVersion::Unknown("vNext".to_string()));
+    assert_unknown_string_round_trip(
+        "retrying",
+        GraphSectionStatus::Unknown("retrying".to_string()),
+    );
+    assert_unknown_string_round_trip(
+        "federatedJoin",
+        EspJoinMode::Unknown("federatedJoin".to_string()),
+    );
+    assert_unknown_string_round_trip(
+        "futureIntent",
+        EspGraphAssignmentIntent::Unknown("futureIntent".to_string()),
+    );
+    assert_unknown_string_round_trip(
+        "dynamicTarget",
+        EspGraphTargetKind::Unknown("dynamicTarget".to_string()),
+    );
+    assert_unknown_string_round_trip(
+        "settingsCatalogV3",
+        EspGraphPolicyKind::Unknown("settingsCatalogV3".to_string()),
+    );
+    assert_unknown_string_round_trip(
+        "shellScript",
+        EspGraphScriptKind::Unknown("shellScript".to_string()),
+    );
+    assert_unknown_string_round_trip(
+        "deviceAction",
+        EspGraphObservationSection::Unknown("deviceAction".to_string()),
+    );
+
+    assert_eq!(
+        serde_json::to_string(&EspGraphPolicyStatusDetailKind::App).unwrap(),
+        "\"app\""
+    );
+    assert_eq!(
+        serde_json::to_string(&EspGraphPolicyStatusDetailKind::Policy).unwrap(),
+        "\"policy\""
+    );
+    assert_unknown_string_round_trip(
+        "futureStatusDetail",
+        EspGraphPolicyStatusDetailKind::Unknown("futureStatusDetail".to_string()),
+    );
+}
+
+#[test]
+fn models_sensitive_identifiers_carry_explicit_classification_metadata() {
+    let identity = EspIdentityEvidence {
+        device_name: Some("DEVICE-1".to_string()),
+        managed_device_id: None,
+        entra_device_id: None,
+        entdm_id: Some(sensitive("entdm-1")),
+        tenant_id: Some(sensitive("tenant-1")),
+        tenant_domain: Some(sensitive("example.test")),
+        user_principal_name: Some(sensitive("user@example.test")),
+        serial_number: Some(sensitive("SERIAL-1")),
+        evidence: vec![evidence_ref("identity-sensitive")],
+    };
+    let profile = EspProfileEvidence {
+        profile_name: None,
+        deployment_profile_id: None,
+        correlation_id: None,
+        tenant_domain: Some(sensitive("example.test")),
+        tenant_id: Some(sensitive("tenant-1")),
+        oobe_config: None,
+        profile_download_time: None,
+        join_mode: None,
+        odj_applied: None,
+        skip_domain_connectivity_check: None,
+        device_preparation: None,
+        evidence: vec![evidence_ref("profile-sensitive")],
+    };
+    let enrollment = EspEnrollmentEvidence {
+        enrollment_id: "enrollment-1".to_string(),
+        provider_id: None,
+        tenant_id: Some(sensitive("tenant-1")),
+        user_principal_name: Some(sensitive("user@example.test")),
+        entdm_id: Some(sensitive("entdm-1")),
+        settings: EspEnrollmentSettings {
+            device_esp_enabled: None,
+            user_esp_enabled: None,
+            timeout_seconds: None,
+            blocking: None,
+            allow_reset: None,
+            allow_retry: None,
+            continue_anyway: None,
+        },
+        evidence: vec![evidence_ref("enrollment-sensitive")],
+    };
+    let session = EspSession {
+        session_id: "session-1".to_string(),
+        kind: EspSessionKind::Classic,
+        scope: EspScope::User,
+        user_sid: Some(sensitive("S-1-5-21-1")),
+        started_at: None,
+        ended_at: None,
+        phase: EspPhase::AccountSetup,
+        is_latest: true,
+        workload_ids: vec![],
+        evidence: vec![evidence_ref("session-sensitive")],
+    };
+    let hardware = EspHardwareEvidence {
+        os_version: None,
+        os_build: None,
+        manufacturer: None,
+        model: None,
+        serial_number: Some(sensitive("SERIAL-1")),
+        tpm_version: None,
+        evidence: vec![evidence_ref("hardware-sensitive")],
+    };
+    let managed_device = EspGraphManagedDevice {
+        managed_device_id: "managed-1".to_string(),
+        entra_device_id: None,
+        serial_number: Some(sensitive("SERIAL-1")),
+        device_name: None,
+        user_id: None,
+        user_principal_name: Some(sensitive("user@example.test")),
+        tenant_id: Some(sensitive("tenant-1")),
+        evidence: vec![evidence_ref("managed-sensitive")],
+    };
+    let autopilot_identity = EspGraphAutopilotIdentity {
+        autopilot_device_id: "autopilot-1".to_string(),
+        entra_device_id: None,
+        serial_number: Some(sensitive("SERIAL-1")),
+        deployment_profile_id: None,
+        group_tag: None,
+        evidence: vec![evidence_ref("autopilot-sensitive")],
+    };
+
+    let value = serde_json::to_value((
+        identity,
+        profile,
+        enrollment,
+        session,
+        hardware,
+        managed_device,
+        autopilot_identity,
+    ))
+    .unwrap();
+    assert_eq!(value[0]["userPrincipalName"]["sensitivity"], "sensitive");
+    assert_eq!(value[0]["serialNumber"]["value"], "SERIAL-1");
+    assert_eq!(value[1]["tenantId"]["sensitivity"], "sensitive");
+    assert_eq!(value[2]["entdmId"]["sensitivity"], "sensitive");
+    assert_eq!(value[3]["userSid"]["sensitivity"], "sensitive");
+    assert_eq!(value[4]["serialNumber"]["sensitivity"], "sensitive");
+    assert_eq!(value[5]["tenantId"]["sensitivity"], "sensitive");
+    assert_eq!(value[6]["serialNumber"]["sensitivity"], "sensitive");
+}
+
 #[test]
 fn models_graph_correlated_record_shapes_keep_provenance() {
     let profile = EspGraphDeploymentProfile {
@@ -758,7 +943,7 @@ fn models_graph_correlated_record_shapes_keep_provenance() {
     let autopilot = EspGraphAutopilotIdentity {
         autopilot_device_id: "autopilot-1".to_string(),
         entra_device_id: Some("entra-1".to_string()),
-        serial_number: Some("serial-1".to_string()),
+        serial_number: Some(sensitive("serial-1")),
         deployment_profile_id: Some("profile-1".to_string()),
         group_tag: Some("group-tag".to_string()),
         evidence: vec![evidence_ref("autopilot-1")],
@@ -767,7 +952,7 @@ fn models_graph_correlated_record_shapes_keep_provenance() {
         status_detail_id: "detail-object-1".to_string(),
         related_object_id: None,
         display_name: Some("Policy detail".to_string()),
-        kind: EspGraphPolicyKind::Unknown,
+        kind: EspGraphPolicyStatusDetailKind::Unknown("unknown".to_string()),
         status: status(
             EspRawStatus::Text("futureState".to_string()),
             EspNormalizedStatus::Unknown,
@@ -944,8 +1129,8 @@ fn models_cover_profile_enrollment_sessions_findings_and_safe_hardware() {
         profile_name: Some("Autopilot Profile".to_string()),
         deployment_profile_id: Some("profile-1".to_string()),
         correlation_id: Some("correlation-1".to_string()),
-        tenant_domain: Some("example.test".to_string()),
-        tenant_id: Some("tenant-1".to_string()),
+        tenant_domain: Some(sensitive("example.test")),
+        tenant_id: Some(sensitive("tenant-1")),
         oobe_config: Some(EspOobeConfig {
             raw_mask: 1022,
             skip_keyboard: false,
@@ -976,9 +1161,9 @@ fn models_cover_profile_enrollment_sessions_findings_and_safe_hardware() {
     let enrollment = EspEnrollmentEvidence {
         enrollment_id: "enrollment-1".to_string(),
         provider_id: Some("MS DM Server".to_string()),
-        tenant_id: Some("tenant-1".to_string()),
-        user_principal_name: Some("user@example.test".to_string()),
-        entdm_id: Some("entdm-1".to_string()),
+        tenant_id: Some(sensitive("tenant-1")),
+        user_principal_name: Some(sensitive("user@example.test")),
+        entdm_id: Some(sensitive("entdm-1")),
         settings: EspEnrollmentSettings {
             device_esp_enabled: Some(true),
             user_esp_enabled: Some(true),
@@ -1031,7 +1216,7 @@ fn models_cover_profile_enrollment_sessions_findings_and_safe_hardware() {
         os_build: Some("26100.4652".to_string()),
         manufacturer: Some("Contoso".to_string()),
         model: Some("Model 1".to_string()),
-        serial_number: Some("SERIAL-1".to_string()),
+        serial_number: Some(sensitive("SERIAL-1")),
         tpm_version: Some("2.0".to_string()),
         evidence: vec![evidence_ref("hardware-1")],
     };

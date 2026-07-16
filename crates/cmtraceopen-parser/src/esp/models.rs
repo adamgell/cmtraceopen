@@ -1,4 +1,47 @@
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+macro_rules! raw_preserving_string_enum {
+    (
+        $(#[$meta:meta])*
+        pub enum $name:ident {
+            $($variant:ident => $wire_value:literal),+ $(,)?
+        }
+    ) => {
+        $(#[$meta])*
+        #[derive(Debug, Clone, PartialEq, Eq)]
+        pub enum $name {
+            $($variant,)+
+            Unknown(String),
+        }
+
+        impl Serialize for $name {
+            fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+            where
+                S: Serializer,
+            {
+                let value = match self {
+                    $(Self::$variant => $wire_value,)+
+                    Self::Unknown(raw) => raw.as_str(),
+                };
+
+                serializer.serialize_str(value)
+            }
+        }
+
+        impl<'de> Deserialize<'de> for $name {
+            fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+            where
+                D: Deserializer<'de>,
+            {
+                let raw = String::deserialize(deserializer)?;
+                Ok(match raw.as_str() {
+                    $($wire_value => Self::$variant,)+
+                    _ => Self::Unknown(raw),
+                })
+            }
+        }
+    };
+}
 
 pub const ESP_DIAGNOSTICS_SCHEMA_VERSION: u32 = 1;
 
@@ -112,6 +155,13 @@ pub enum EspSensitivity {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+pub struct EspClassifiedString {
+    pub value: String,
+    pub sensitivity: EspSensitivity,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub enum EspParseState {
     Parsed,
     Raw,
@@ -143,12 +193,11 @@ pub enum EspSessionKind {
     DevicePreparationV2,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub enum EspJoinMode {
-    Entra,
-    HybridEntra,
-    Unknown,
+raw_preserving_string_enum! {
+    pub enum EspJoinMode {
+        Entra => "entra",
+        HybridEntra => "hybridEntra",
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -181,23 +230,21 @@ pub enum EspTimelineKind {
     Other,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub enum EspGraphAssignmentIntent {
-    Required,
-    Available,
-    Uninstall,
-    Unknown,
+raw_preserving_string_enum! {
+    pub enum EspGraphAssignmentIntent {
+        Required => "required",
+        Available => "available",
+        Uninstall => "uninstall",
+    }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub enum EspGraphTargetKind {
-    AllDevices,
-    AllUsers,
-    Group,
-    Filter,
-    Unknown,
+raw_preserving_string_enum! {
+    pub enum EspGraphTargetKind {
+        AllDevices => "allDevices",
+        AllUsers => "allUsers",
+        Group => "group",
+        Filter => "filter",
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -207,33 +254,39 @@ pub enum EspGraphTargeting {
     Effective,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub enum EspGraphPolicyKind {
-    DeviceConfiguration,
-    Compliance,
-    ConfigurationPolicy,
-    ScepCertificate,
-    Unknown,
+raw_preserving_string_enum! {
+    pub enum EspGraphPolicyKind {
+        DeviceConfiguration => "deviceConfiguration",
+        Compliance => "compliance",
+        ConfigurationPolicy => "configurationPolicy",
+        ScepCertificate => "scepCertificate",
+    }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub enum EspGraphScriptKind {
-    PlatformScript,
-    Remediation,
+raw_preserving_string_enum! {
+    pub enum EspGraphScriptKind {
+        PlatformScript => "platformScript",
+        Remediation => "remediation",
+    }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub enum EspGraphObservationSection {
-    ManagedDevice,
-    AutopilotIdentity,
-    DeploymentProfile,
-    EnrollmentConfiguration,
-    App,
-    Policy,
-    Script,
+raw_preserving_string_enum! {
+    pub enum EspGraphObservationSection {
+        ManagedDevice => "managedDevice",
+        AutopilotIdentity => "autopilotIdentity",
+        DeploymentProfile => "deploymentProfile",
+        EnrollmentConfiguration => "enrollmentConfiguration",
+        App => "app",
+        Policy => "policy",
+        Script => "script",
+    }
+}
+
+raw_preserving_string_enum! {
+    pub enum EspGraphPolicyStatusDetailKind {
+        App => "app",
+        Policy => "policy",
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -243,23 +296,22 @@ pub enum EspDeliveryOptimizationEventKind {
     DownloadCompleted,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub enum GraphSectionStatus {
-    Available,
-    NotFound,
-    PermissionDenied,
-    Failed,
-    Skipped,
-    Cancelled,
+raw_preserving_string_enum! {
+    pub enum GraphSectionStatus {
+        Available => "available",
+        NotFound => "notFound",
+        PermissionDenied => "permissionDenied",
+        Failed => "failed",
+        Skipped => "skipped",
+        Cancelled => "cancelled",
+    }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub enum GraphApiVersion {
-    #[serde(rename = "v1.0")]
-    V1_0,
-    #[serde(rename = "beta")]
-    Beta,
+raw_preserving_string_enum! {
+    pub enum GraphApiVersion {
+        V1_0 => "v1.0",
+        Beta => "beta",
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -395,10 +447,11 @@ pub struct EspIdentityEvidence {
     pub device_name: Option<String>,
     pub managed_device_id: Option<String>,
     pub entra_device_id: Option<String>,
-    pub entdm_id: Option<String>,
-    pub tenant_id: Option<String>,
-    pub tenant_domain: Option<String>,
-    pub user_principal_name: Option<String>,
+    pub entdm_id: Option<EspClassifiedString>,
+    pub tenant_id: Option<EspClassifiedString>,
+    pub tenant_domain: Option<EspClassifiedString>,
+    pub user_principal_name: Option<EspClassifiedString>,
+    pub serial_number: Option<EspClassifiedString>,
     pub evidence: Vec<EspEvidenceRef>,
 }
 
@@ -435,8 +488,8 @@ pub struct EspProfileEvidence {
     pub profile_name: Option<String>,
     pub deployment_profile_id: Option<String>,
     pub correlation_id: Option<String>,
-    pub tenant_domain: Option<String>,
-    pub tenant_id: Option<String>,
+    pub tenant_domain: Option<EspClassifiedString>,
+    pub tenant_id: Option<EspClassifiedString>,
     pub oobe_config: Option<EspOobeConfig>,
     pub profile_download_time: Option<EspTimestamp>,
     pub join_mode: Option<EspJoinMode>,
@@ -463,9 +516,9 @@ pub struct EspEnrollmentSettings {
 pub struct EspEnrollmentEvidence {
     pub enrollment_id: String,
     pub provider_id: Option<String>,
-    pub tenant_id: Option<String>,
-    pub user_principal_name: Option<String>,
-    pub entdm_id: Option<String>,
+    pub tenant_id: Option<EspClassifiedString>,
+    pub user_principal_name: Option<EspClassifiedString>,
+    pub entdm_id: Option<EspClassifiedString>,
     pub settings: EspEnrollmentSettings,
     pub evidence: Vec<EspEvidenceRef>,
 }
@@ -476,7 +529,7 @@ pub struct EspSession {
     pub session_id: String,
     pub kind: EspSessionKind,
     pub scope: EspScope,
-    pub user_sid: Option<String>,
+    pub user_sid: Option<EspClassifiedString>,
     pub started_at: Option<EspTimestamp>,
     pub ended_at: Option<EspTimestamp>,
     pub phase: EspPhase,
@@ -563,7 +616,7 @@ pub struct EspHardwareEvidence {
     pub os_build: Option<String>,
     pub manufacturer: Option<String>,
     pub model: Option<String>,
-    pub serial_number: Option<String>,
+    pub serial_number: Option<EspClassifiedString>,
     pub tpm_version: Option<String>,
     pub evidence: Vec<EspEvidenceRef>,
 }
@@ -775,11 +828,11 @@ pub struct GraphSection<T> {
 pub struct EspGraphManagedDevice {
     pub managed_device_id: String,
     pub entra_device_id: Option<String>,
-    pub serial_number: Option<String>,
+    pub serial_number: Option<EspClassifiedString>,
     pub device_name: Option<String>,
     pub user_id: Option<String>,
-    pub user_principal_name: Option<String>,
-    pub tenant_id: Option<String>,
+    pub user_principal_name: Option<EspClassifiedString>,
+    pub tenant_id: Option<EspClassifiedString>,
     pub evidence: Vec<EspEvidenceRef>,
 }
 
@@ -798,7 +851,7 @@ pub struct EspGraphDeviceMatch {
 pub struct EspGraphAutopilotIdentity {
     pub autopilot_device_id: String,
     pub entra_device_id: Option<String>,
-    pub serial_number: Option<String>,
+    pub serial_number: Option<EspClassifiedString>,
     pub deployment_profile_id: Option<String>,
     pub group_tag: Option<String>,
     pub evidence: Vec<EspEvidenceRef>,
@@ -832,7 +885,7 @@ pub struct EspGraphPolicyStatusDetail {
     pub status_detail_id: String,
     pub related_object_id: Option<String>,
     pub display_name: Option<String>,
-    pub kind: EspGraphPolicyKind,
+    pub kind: EspGraphPolicyStatusDetailKind,
     pub status: EspStatus,
     pub correlation_confidence: EspCorrelationConfidence,
     pub evidence: Vec<EspEvidenceRef>,
@@ -903,6 +956,7 @@ pub struct EspGraphOverlay {
     pub device_match: GraphSection<EspGraphDeviceMatch>,
     pub autopilot_identity: GraphSection<EspGraphAutopilotIdentity>,
     pub deployment_profile: GraphSection<EspGraphDeploymentProfile>,
+    pub intended_deployment_profile: GraphSection<EspGraphDeploymentProfile>,
     pub profile_assignments: GraphSection<Vec<EspGraphAssignment>>,
     pub autopilot_events: GraphSection<Vec<EspGraphAutopilotEvent>>,
     pub enrollment_configuration: GraphSection<EspGraphEnrollmentConfiguration>,
