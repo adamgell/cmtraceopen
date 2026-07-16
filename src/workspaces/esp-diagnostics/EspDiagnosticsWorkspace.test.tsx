@@ -1704,6 +1704,22 @@ describe("workload table", () => {
     expect(table).toHaveTextContent("Contoso VPN retry 2");
     expect(table).not.toHaveTextContent("Contoso VPN retry 1");
 
+    const sessionSelector = within(table).getByRole("combobox", {
+      name: "Select enrollment session",
+    });
+    fireEvent.change(sessionSelector, { target: { value: "session-old" } });
+    expect(table).toHaveTextContent("Selected session · 1 of 2 workloads");
+    expect(table).toHaveTextContent("Contoso VPN retry 1");
+    expect(table).not.toHaveTextContent("Contoso VPN retry 2");
+
+    fireEvent.change(sessionSelector, {
+      target: { value: "session-current" },
+    });
+    expect(table).toHaveTextContent("Contoso VPN retry 2");
+    expect(table).not.toHaveTextContent("Contoso VPN retry 1");
+
+    fireEvent.change(sessionSelector, { target: { value: "" } });
+
     fireEvent.click(
       within(table).getByRole("checkbox", { name: "Show all sessions" }),
     );

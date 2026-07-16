@@ -397,8 +397,19 @@ export const ESP_WORKLOAD_WINDOW_SIZE = 80;
 
 export function EspWorkloadTable({ snapshot }: EspWorkloadTableProps) {
   const [showAllSessions, setShowAllSessions] = useState(false);
+  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(
+    null,
+  );
   const [workloadPage, setWorkloadPage] = useState(0);
   const names = useMemo(() => graphNames(snapshot), [snapshot]);
+  const availableSessionIds = useMemo(
+    () => new Set(snapshot.sessions.map((session) => session.sessionId)),
+    [snapshot.sessions],
+  );
+  const effectiveSelectedSessionId =
+    selectedSessionId && availableSessionIds.has(selectedSessionId)
+      ? selectedSessionId
+      : null;
   const latestSessionIds = useMemo(
     () =>
       new Set(
@@ -411,14 +422,20 @@ export function EspWorkloadTable({ snapshot }: EspWorkloadTableProps) {
   const filteredWorkloads = useMemo(
     () =>
       [...snapshot.workloads]
-        .filter(
-          (workload) =>
-            showAllSessions ||
-            latestSessionIds.size === 0 ||
-            latestSessionIds.has(workload.sessionId),
+        .filter((workload) =>
+          effectiveSelectedSessionId
+            ? workload.sessionId === effectiveSelectedSessionId
+            : showAllSessions ||
+              latestSessionIds.size === 0 ||
+              latestSessionIds.has(workload.sessionId),
         )
         .sort(compareWorkloads),
-    [latestSessionIds, showAllSessions, snapshot.workloads],
+    [
+      effectiveSelectedSessionId,
+      latestSessionIds,
+      showAllSessions,
+      snapshot.workloads,
+    ],
   );
   const maximumPage = Math.max(
     0,
@@ -431,9 +448,11 @@ export function EspWorkloadTable({ snapshot }: EspWorkloadTableProps) {
     filteredWorkloads.length,
   );
   const visibleWorkloads = filteredWorkloads.slice(workloadStart, workloadEnd);
-  const countLabel = showAllSessions
-    ? `All sessions · ${filteredWorkloads.length} workloads`
-    : `Latest sessions · ${filteredWorkloads.length} of ${snapshot.workloads.length} workloads`;
+  const countLabel = effectiveSelectedSessionId
+    ? `Selected session · ${filteredWorkloads.length} of ${snapshot.workloads.length} workloads`
+    : showAllSessions
+      ? `All sessions · ${filteredWorkloads.length} workloads`
+      : `Latest sessions · ${filteredWorkloads.length} of ${snapshot.workloads.length} workloads`;
 
   return (
     <section
@@ -452,8 +471,9 @@ export function EspWorkloadTable({ snapshot }: EspWorkloadTableProps) {
           display: "flex",
           alignItems: "center",
           justifyContent: "space-between",
+          flexWrap: "wrap",
           gap: 12,
-          padding: "0 10px",
+          padding: "6px 10px",
           backgroundColor: tokens.colorNeutralBackground3,
         }}
       >
@@ -484,12 +504,54 @@ export function EspWorkloadTable({ snapshot }: EspWorkloadTableProps) {
             Tracked workloads
           </h2>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "flex-end",
+            flexWrap: "wrap",
+            gap: 12,
+          }}
+        >
           <strong
             style={{ fontFamily: LOG_MONOSPACE_FONT_FAMILY, fontSize: 10 }}
           >
             {countLabel}
           </strong>
+          {snapshot.sessions.length > 0 ? (
+            <select
+              aria-label="Select enrollment session"
+              value={effectiveSelectedSessionId ?? ""}
+              onChange={(event) => {
+                const sessionId = event.currentTarget.value || null;
+                setSelectedSessionId(sessionId);
+                if (sessionId) setShowAllSessions(false);
+                setWorkloadPage(0);
+              }}
+              style={{
+                minWidth: 190,
+                maxWidth: 280,
+                height: 25,
+                border: `1px solid ${tokens.colorNeutralStroke1}`,
+                borderRadius: 3,
+                backgroundColor: tokens.colorNeutralBackground1,
+                color: tokens.colorNeutralForeground1,
+                fontFamily: LOG_MONOSPACE_FONT_FAMILY,
+                fontSize: 10,
+              }}
+            >
+              <option value="">Select a session…</option>
+              {snapshot.sessions.map((session) => (
+                <option key={session.sessionId} value={session.sessionId}>
+                  {session.isLatest ? "Latest · " : ""}
+                  {session.scope} ·{" "}
+                  {session.startedAt?.rawText ?? "time unknown"}
+                  {" · "}
+                  {session.sessionId}
+                </option>
+              ))}
+            </select>
+          ) : null}
           <label
             style={{
               display: "inline-flex",
@@ -505,6 +567,7 @@ export function EspWorkloadTable({ snapshot }: EspWorkloadTableProps) {
               checked={showAllSessions}
               onChange={(event) => {
                 setShowAllSessions(event.currentTarget.checked);
+                if (event.currentTarget.checked) setSelectedSessionId(null);
                 setWorkloadPage(0);
               }}
             />
