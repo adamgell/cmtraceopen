@@ -29,6 +29,9 @@ pub struct AppState {
     /// File paths passed as CLI arguments at startup via OS file association.
     /// Consumed (cleared) on first retrieval so they are only processed once.
     pub initial_file_paths: Mutex<Vec<String>>,
+    /// App-owned workspace selected by a validated startup argument.
+    /// Consumed on first retrieval so the launch intent is applied once.
+    pub initial_workspace: Mutex<Option<String>>,
     /// Active unified multi-file timelines keyed by timeline id.
     pub timelines: Mutex<HashMap<String, Timeline>>,
     /// Installed during Tauri setup and taken during application shutdown so
@@ -39,10 +42,18 @@ pub struct AppState {
 
 impl AppState {
     pub fn new(initial_file_paths: Vec<String>) -> Self {
+        Self::with_initial_launch(initial_file_paths, None)
+    }
+
+    pub fn with_initial_launch(
+        initial_file_paths: Vec<String>,
+        initial_workspace: Option<String>,
+    ) -> Self {
         Self {
             open_files: Mutex::new(HashMap::new()),
             tail_sessions: Mutex::new(HashMap::new()),
             initial_file_paths: Mutex::new(initial_file_paths),
+            initial_workspace: Mutex::new(initial_workspace),
             timelines: Mutex::new(HashMap::new()),
             #[cfg(feature = "esp-diagnostics")]
             esp_session_manager: Mutex::new(None),

@@ -71,7 +71,8 @@ async fn handle_connection(mut socket: TcpStream, state: Arc<BridgeState>) {
         "OPTIONS" => ("204 No Content", String::new(), ""),
         "GET" => ("200 OK", r#"{"ok":true}"#.to_string(), "application/json"),
         "POST" => {
-            let body_str = raw.find("\r\n\r\n")
+            let body_str = raw
+                .find("\r\n\r\n")
                 .map(|i| raw[i + 4..].trim_end_matches('\0'))
                 .unwrap_or("");
             let result = dispatch(body_str, &state);
@@ -85,9 +86,7 @@ async fn handle_connection(mut socket: TcpStream, state: Arc<BridgeState>) {
                 Access-Control-Allow-Headers: Content-Type\r\n";
 
     let response = if content_type.is_empty() {
-        format!(
-            "HTTP/1.1 {status_line}\r\n{cors}Content-Length: 0\r\n\r\n"
-        )
+        format!("HTTP/1.1 {status_line}\r\n{cors}Content-Length: 0\r\n\r\n")
     } else {
         format!(
             "HTTP/1.1 {status_line}\r\n{cors}Content-Type: {content_type}\r\nContent-Length: {}\r\n\r\n{body}",
@@ -205,6 +204,10 @@ fn dispatch(body: &str, state: &Arc<BridgeState>) -> String {
 
         "get_initial_file_paths" => {
             ok_json(&Vec::<String>::new())
+        }
+
+        "get_initial_workspace" => {
+            ok_json(&Option::<String>::None)
         }
 
         "get_known_log_sources" => {

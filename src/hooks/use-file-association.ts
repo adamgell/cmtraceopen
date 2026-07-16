@@ -1,29 +1,37 @@
 import { useEffect } from "react";
-import { getInitialFilePaths } from "../lib/commands";
+import { getInitialFilePaths, getInitialWorkspace } from "../lib/commands";
 import { loadPathAsLogSource, loadFilesAsLogSource } from "../lib/log-source";
 import { useFilterStore } from "../stores/filter-store";
 import { useUiStore } from "../stores/ui-store";
 
 /**
- * Hook that handles file paths passed via OS file association at app startup.
+ * Hook that handles validated launch intent at app startup.
  *
  * When the user opens `.log` files with CMTrace Open (e.g. by selecting
  * multiple files and choosing "Open with"), the OS launches the application
  * with the file paths as CLI arguments. This hook retrieves those paths on
- * mount and routes them through the appropriate loading flow — single-file
- * for one path, aggregate merge for multiple.
+ * mount and routes them through the appropriate loading flow — explicit file
+ * opens take precedence, otherwise an administrator relaunch can return to
+ * ESP Diagnostics.
  */
 export function useFileAssociation() {
   const clearFilter = useFilterStore((s) => s.clearFilter);
 
   useEffect(() => {
-    getInitialFilePaths()
-      .then(async (paths) => {
+    Promise.all([getInitialFilePaths(), getInitialWorkspace()])
+      .then(async ([paths, workspace]) => {
         if (paths.length === 0) {
+          if (workspace === "esp-diagnostics") {
+            useUiStore
+              .getState()
+              .ensureWorkspaceVisible("esp-diagnostics", "startup.workspace");
+          }
           return;
         }
 
-        useUiStore.getState().ensureLogViewVisible("file-association.path-open");
+        useUiStore
+          .getState()
+          .ensureLogViewVisible("file-association.path-open");
         clearFilter();
 
         if (paths.length === 1) {
