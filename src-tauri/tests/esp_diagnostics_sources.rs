@@ -50,8 +50,9 @@ use app_lib::esp::session::{
 };
 use app_lib::esp::system::{delivery_optimization_from_rows, SystemEvidence, SystemRow};
 use app_lib::esp::tailing::{
-    EspTailAttachment, EspTailFailure, EspTailReconcileResult, EspTailResetReason, EspTailSet,
-    MAX_DORMANT_TAIL_CURSORS, MAX_SESSION_TAIL_SOURCES, WINDOWS_SHARED_READ_WRITE_DELETE,
+    EspTailAttachment, EspTailFailure, EspTailPollResult, EspTailReconcileResult,
+    EspTailResetReason, EspTailSet, MAX_DORMANT_TAIL_CURSORS, MAX_SESSION_TAIL_SOURCES,
+    WINDOWS_SHARED_READ_WRITE_DELETE,
 };
 use app_lib::intune::evtx_parser::{
     parse_esp_event_xml, EventLogProperty, ParsedEspEventRecord, MAX_ESP_EVTX_RECORD_BYTES,
@@ -3247,6 +3248,38 @@ fn tail_reports_missing_selected_file_with_typed_failure() {
     assert_eq!(result.failures[0].kind, DiscoveryPathFailureKind::Missing);
 }
 
+#[test]
+fn tail_reports_one_time_recovery_when_no_new_bytes_arrive() {
+    let root = tempdir().expect("tail root");
+    let path = root.path().join("recovered.log");
+    let parked = root.path().join("recovered.parked.log");
+    fs::write(&path, b"initial\n").expect("write tail fixture");
+    let source = tail_source(
+        path.clone(),
+        "recovered",
+        0,
+        DiscoverySourceOrigin::ActiveProcess,
+        true,
+    );
+    let mut tails = EspTailSet::new();
+    tails.reconcile(std::slice::from_ref(&source));
+    fs::rename(&path, &parked).expect("temporarily remove selected file");
+
+    let failed = tails.poll();
+    assert_eq!(failed.failures.len(), 1);
+    assert!(failed.recovered_sources.is_empty());
+
+    fs::rename(&parked, &path).expect("restore selected file without changing bytes");
+    let recovered = tails.poll();
+    assert!(recovered.failures.is_empty());
+    assert!(recovered.updates.is_empty());
+    assert_eq!(recovered.recovered_sources.len(), 1);
+    assert_eq!(recovered.recovered_sources[0].source_id, "recovered");
+
+    let steady = tails.poll();
+    assert!(steady.recovered_sources.is_empty());
+}
+
 #[cfg(unix)]
 #[test]
 fn tail_rejects_reparse_replacement_with_typed_failure() {
@@ -4243,6 +4276,87 @@ fn session_upserts_tail_coverage_by_artifact_instead_of_growing_duplicates() {
         .coverage
         .iter()
         .filter(|coverage| coverage.artifact_id == "tail.same-source")
+        .collect::<Vec<_>>();
+    assert_eq!(matching.len(), 1);
+    assert_eq!(matching[0].status, EspArtifactStatus::Available);
+
+    manager.stop(&initial.session_id).expect("stop session");
+}
+
+#[test]
+fn no_byte_tail_recovery_replaces_transient_session_failure_coverage() {
+    let observed_at_utc = "2026-07-16T06:30:00Z";
+    let recovered_at_utc = "2026-07-16T06:30:01Z";
+    let source = DiscoveredLogSource {
+        path: PathBuf::from("/captured/AgentExecutor.log"),
+        source_id: "ime-agent-executor".to_string(),
+        family: "intune-ime".to_string(),
+        origin: DiscoverySourceOrigin::CuratedKnown,
+        priority: 0,
+        is_current: true,
+        modified: None,
+    };
+    let failed_batch = tail_poll_to_batch(
+        EspTailPollResult {
+            failures: vec![EspTailFailure {
+                path: source.path.clone(),
+                source_id: Some(source.source_id.clone()),
+                family: Some(source.family.clone()),
+                kind: DiscoveryPathFailureKind::PermissionDenied,
+                detail: "transient access denied".to_string(),
+            }],
+            ..EspTailPollResult::default()
+        },
+        observed_at_utc,
+    );
+    let recovered_batch = tail_poll_to_batch(
+        EspTailPollResult {
+            recovered_sources: vec![source],
+            ..EspTailPollResult::default()
+        },
+        recovered_at_utc,
+    );
+    assert!(recovered_batch.records.is_empty());
+    assert!(recovered_batch.changed);
+    assert_eq!(recovered_batch.coverage.len(), 1);
+    assert_eq!(
+        recovered_batch.coverage[0].status,
+        EspArtifactStatus::Available
+    );
+
+    let clock = Arc::new(ManualSessionClock::default());
+    let tails = FakeSessionTailFactory::default();
+    let sink = RecordingSessionSink::default();
+    let manager = EspSessionManager::new(session_dependencies(
+        Arc::clone(&clock),
+        FakeSessionProvider::available("registry"),
+        FakeSessionDiscovery::default(),
+        tails.clone(),
+        sink.clone(),
+    ));
+    let initial = manager
+        .start("cccccccc-cccc-4ccc-8ccc-cccccccccccc")
+        .expect("start recovery session");
+
+    for batch in [failed_batch, recovered_batch] {
+        tails.queued.lock().expect("tail queue").push_back(batch);
+        clock.advance(UPDATE_DEBOUNCE);
+        let expected = sink.updates.lock().expect("session updates").len() + 1;
+        wait_for_session_updates(&sink, expected);
+    }
+
+    let update = sink
+        .updates
+        .lock()
+        .expect("session updates")
+        .last()
+        .cloned()
+        .expect("latest recovery update");
+    let matching = update
+        .snapshot
+        .coverage
+        .iter()
+        .filter(|coverage| coverage.artifact_id.contains("ime-agent-executor"))
         .collect::<Vec<_>>();
     assert_eq!(matching.len(), 1);
     assert_eq!(matching[0].status, EspArtifactStatus::Available);

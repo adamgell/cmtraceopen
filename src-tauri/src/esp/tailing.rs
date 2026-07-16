@@ -78,6 +78,7 @@ pub struct EspTailReconcileResult {
 pub struct EspTailPollResult {
     pub updates: Vec<EspTailUpdate>,
     pub failures: Vec<EspTailFailure>,
+    pub recovered_sources: Vec<DiscoveredLogSource>,
 }
 
 #[derive(Debug, Default)]
@@ -85,6 +86,7 @@ pub struct EspTailSet {
     tails: BTreeMap<String, ActiveTail>,
     selected_tail_keys: BTreeSet<String>,
     attached_sources: BTreeMap<String, AttachedSourceState>,
+    failed_tail_keys: BTreeSet<String>,
     stopped: bool,
 }
 
@@ -217,9 +219,18 @@ impl EspTailSet {
                 attached.next_id = attached.next_id.max(next_id);
             }
             match outcome {
-                Ok(Some(update)) => result.updates.push(update),
-                Ok(None) => {}
-                Err(failure) => result.failures.push(failure),
+                Ok(update) => {
+                    if self.failed_tail_keys.remove(&key) {
+                        result.recovered_sources.push(source);
+                    }
+                    if let Some(update) = update {
+                        result.updates.push(update);
+                    }
+                }
+                Err(failure) => {
+                    self.failed_tail_keys.insert(key);
+                    result.failures.push(failure);
+                }
             }
         }
         result
@@ -230,6 +241,7 @@ impl EspTailSet {
         self.tails.clear();
         self.selected_tail_keys.clear();
         self.attached_sources.clear();
+        self.failed_tail_keys.clear();
     }
 
     pub fn is_stopped(&self) -> bool {

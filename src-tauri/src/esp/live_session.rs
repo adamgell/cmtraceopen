@@ -498,6 +498,16 @@ pub fn tail_poll_to_batch(
 ) -> EspTailEvidenceBatch {
     let mut batch = EspTailEvidenceBatch::default();
     let mut sources_by_path = BTreeMap::<String, DiscoveredLogSource>::new();
+    for source in result.recovered_sources {
+        sources_by_path.insert(portable_path_identity(&source.path), source.clone());
+        batch.coverage.push(artifact_coverage(
+            log_artifact_id(&source.source_id, &source.path),
+            source.family,
+            EspArtifactStatus::Available,
+            None,
+            observed_at_utc,
+        ));
+    }
     for update in result.updates {
         sources_by_path.insert(
             portable_path_identity(&update.path),
