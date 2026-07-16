@@ -2532,6 +2532,152 @@ describe("ESP Graph scheduling", () => {
     expect(appliedRequestId).toBe("graph-replacement");
   });
 
+  it("does not carry a refresh waiting on orphan cancellation into a later same-identity analysis", async () => {
+    const activeOverlay = deferred<EspGraphOverlay>();
+    const orphanCancellation = deferred<void>();
+    const requestIds = ["graph-active", "graph-final-analysis"];
+    const fetchGraph = vi
+      .fn<(request: EspGraphRequest) => Promise<EspGraphOverlay>>()
+      .mockImplementationOnce(() => activeOverlay.promise)
+      .mockImplementation(async (request) =>
+        makeOverlayWithSelectedDevice(
+          request.requestId,
+          request.selectedManagedDeviceId ?? "managed-default",
+        ),
+      );
+    const cancelGraph = vi.fn(() => orphanCancellation.promise);
+    const coordinator = createEspGraphCoordinator({
+      fetchGraph,
+      cancelGraph,
+      createRequestId: () => requestIds.shift() ?? "graph-unexpected",
+    });
+    useUiStore.setState({ graphApiEnabled: true, graphApiStatus: "connected" });
+    useEspDiagnosticsStore.setState({
+      phase: "ready",
+      snapshot: makeSnapshot(["local-initial"], "same-device"),
+    });
+
+    const active = coordinator.refresh("managed-initial");
+    try {
+      coordinator.start();
+      useEspDiagnosticsStore.getState().beginAnalysis("analysis-intermediate");
+      useEspDiagnosticsStore
+        .getState()
+        .applyAnalysis(
+          "analysis-intermediate",
+          makeSnapshot(["local-intermediate"], "same-device"),
+        );
+
+      const staleRefresh = coordinator.refresh("managed-must-not-cross");
+      useEspDiagnosticsStore.getState().beginAnalysis("analysis-final");
+      useEspDiagnosticsStore
+        .getState()
+        .applyAnalysis(
+          "analysis-final",
+          makeSnapshot(["local-final"], "same-device"),
+        );
+
+      orphanCancellation.resolve();
+      await staleRefresh;
+      await vi.waitFor(() =>
+        expect(fetchGraph.mock.calls.length).toBeGreaterThanOrEqual(2),
+      );
+      expect(
+        fetchGraph.mock.calls.map(
+          ([request]) => request.selectedManagedDeviceId,
+        ),
+      ).toEqual(["managed-initial", null]);
+      expect(useEspDiagnosticsStore.getState().snapshot?.graph?.requestId).toBe(
+        "graph-final-analysis",
+      );
+
+      activeOverlay.resolve(
+        makeOverlayWithSelectedDevice("graph-active", "managed-initial"),
+      );
+      await active;
+      expect(useEspDiagnosticsStore.getState().snapshot?.graph?.requestId).toBe(
+        "graph-final-analysis",
+      );
+    } finally {
+      activeOverlay.resolve(
+        makeOverlayWithSelectedDevice("graph-active", "managed-initial"),
+      );
+      coordinator.dispose();
+    }
+  });
+
+  it("does not carry a refresh waiting on orphan cancellation across Graph disable and re-enable", async () => {
+    const activeOverlay = deferred<EspGraphOverlay>();
+    const orphanCancellation = deferred<void>();
+    const requestIds = ["graph-active", "graph-after-enable"];
+    const fetchGraph = vi
+      .fn<(request: EspGraphRequest) => Promise<EspGraphOverlay>>()
+      .mockImplementationOnce(() => activeOverlay.promise)
+      .mockImplementation(async (request) =>
+        makeOverlayWithSelectedDevice(
+          request.requestId,
+          request.selectedManagedDeviceId ?? "managed-default",
+        ),
+      );
+    const cancelGraph = vi.fn(() => orphanCancellation.promise);
+    const coordinator = createEspGraphCoordinator({
+      fetchGraph,
+      cancelGraph,
+      createRequestId: () => requestIds.shift() ?? "graph-unexpected",
+    });
+    useUiStore.setState({ graphApiEnabled: true, graphApiStatus: "connected" });
+    useEspDiagnosticsStore.setState({
+      phase: "ready",
+      snapshot: makeSnapshot(["local-initial"], "same-device"),
+    });
+
+    const active = coordinator.refresh("managed-initial");
+    try {
+      coordinator.start();
+      useEspDiagnosticsStore.getState().beginAnalysis("analysis-replacement");
+      useEspDiagnosticsStore
+        .getState()
+        .applyAnalysis(
+          "analysis-replacement",
+          makeSnapshot(["local-replacement"], "same-device"),
+        );
+
+      const staleRefresh = coordinator.refresh("managed-must-not-rehydrate");
+      useUiStore.setState({ graphApiEnabled: false });
+      useUiStore.setState({
+        graphApiEnabled: true,
+        graphApiStatus: "connected",
+      });
+
+      orphanCancellation.resolve();
+      await staleRefresh;
+      await vi.waitFor(() =>
+        expect(fetchGraph.mock.calls.length).toBeGreaterThanOrEqual(2),
+      );
+      expect(
+        fetchGraph.mock.calls.map(
+          ([request]) => request.selectedManagedDeviceId,
+        ),
+      ).toEqual(["managed-initial", null]);
+      expect(useEspDiagnosticsStore.getState().snapshot?.graph?.requestId).toBe(
+        "graph-after-enable",
+      );
+
+      activeOverlay.resolve(
+        makeOverlayWithSelectedDevice("graph-active", "managed-initial"),
+      );
+      await active;
+      expect(useEspDiagnosticsStore.getState().snapshot?.graph?.requestId).toBe(
+        "graph-after-enable",
+      );
+    } finally {
+      activeOverlay.resolve(
+        makeOverlayWithSelectedDevice("graph-active", "managed-initial"),
+      );
+      coordinator.dispose();
+    }
+  });
+
   it("fetches once per stable local identity for imported and live snapshots", async () => {
     let requestNumber = 0;
     const fetchGraph = vi.fn(async (request: EspGraphRequest) =>

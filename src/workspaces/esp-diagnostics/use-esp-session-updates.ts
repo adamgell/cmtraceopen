@@ -390,7 +390,7 @@ export function createEspGraphCoordinator(
   let disposed = false;
   let started = false;
   let operationGeneration = 0;
-  let analysisLifecycleGeneration = 0;
+  let graphLifecycleGeneration = 0;
   let lastRequestedFingerprint: string | null = null;
   let blockedFingerprint: string | null = null;
   let selectedManagedDeviceId: string | null = null;
@@ -503,6 +503,7 @@ export function createEspGraphCoordinator(
     if (disposed) {
       return;
     }
+    const lifecycleGeneration = graphLifecycleGeneration;
 
     const initialSnapshot = useEspDiagnosticsStore.getState().snapshot;
     if (!initialSnapshot) {
@@ -515,7 +516,7 @@ export function createEspGraphCoordinator(
     if (orphanCancellation) {
       await orphanCancellation;
     }
-    if (disposed) {
+    if (disposed || lifecycleGeneration !== graphLifecycleGeneration) {
       return;
     }
 
@@ -536,7 +537,6 @@ export function createEspGraphCoordinator(
     }
 
     const fingerprint = getEspIdentityFingerprint(snapshot);
-    const lifecycleGeneration = analysisLifecycleGeneration;
     if (
       selectedManagedDeviceFingerprint !== null &&
       selectedManagedDeviceFingerprint !== fingerprint
@@ -621,7 +621,7 @@ export function createEspGraphCoordinator(
     if (
       disposed ||
       generation !== operationGeneration ||
-      lifecycleGeneration !== analysisLifecycleGeneration
+      lifecycleGeneration !== graphLifecycleGeneration
     ) {
       return;
     }
@@ -669,7 +669,7 @@ export function createEspGraphCoordinator(
       if (
         !disposed &&
         generation === operationGeneration &&
-        lifecycleGeneration === analysisLifecycleGeneration &&
+        lifecycleGeneration === graphLifecycleGeneration &&
         latestUi.graphApiEnabled &&
         latestUi.graphApiStatus === "connected" &&
         latestSnapshot &&
@@ -698,7 +698,7 @@ export function createEspGraphCoordinator(
       if (
         !disposed &&
         generation === operationGeneration &&
-        lifecycleGeneration === analysisLifecycleGeneration
+        lifecycleGeneration === graphLifecycleGeneration
       ) {
         useEspDiagnosticsStore
           .getState()
@@ -738,7 +738,7 @@ export function createEspGraphCoordinator(
             // long enough to finish native cancellation first.
             lastRequestedFingerprint = null;
             blockedFingerprint = null;
-            analysisLifecycleGeneration += 1;
+            graphLifecycleGeneration += 1;
             if (previous.snapshot) {
               suppressOverlaySelection(previous.snapshot);
             } else {
@@ -761,6 +761,9 @@ export function createEspGraphCoordinator(
           state.graphApiStatus !== previous.graphApiStatus
         ) {
           if (!state.graphApiEnabled) {
+            if (previous.graphApiEnabled) {
+              graphLifecycleGeneration += 1;
+            }
             const snapshot = useEspDiagnosticsStore.getState().snapshot;
             if (snapshot) {
               suppressOverlaySelection(snapshot);
