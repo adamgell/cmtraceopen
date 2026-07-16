@@ -201,8 +201,8 @@ mod windows_impl {
     };
     #[cfg(feature = "esp-diagnostics")]
     use super::esp::{
-        EspGraphEndpoint, EspGraphOperation, EspGraphOperationError, EspGraphOperationRegistry,
-        EspGraphProvider, EspGraphRequest,
+        EspGraphClientProvider, EspGraphEndpoint, EspGraphOperation, EspGraphOperationError,
+        EspGraphOperationRegistry, EspGraphProvider, EspGraphRequest,
     };
     use super::{
         normalize_graph_guid, parse_graph_app_json, parse_graph_app_values,
@@ -622,31 +622,48 @@ mod windows_impl {
     }
 
     #[cfg(feature = "esp-diagnostics")]
-    impl EspGraphProvider for WindowsEspGraphProvider {
-        fn get(
+    impl WindowsEspGraphProvider {
+        fn execute_endpoint(
             &self,
             endpoint: &EspGraphEndpoint,
             cancellation: &dyn GraphCancellation,
+            collection: bool,
         ) -> Result<serde_json::Value, GraphClientError> {
             let transport = UreqGraphTransport {
                 access_token: &self.token.token,
                 deadline: Some(self.deadline),
             };
-            let client = GraphClient::new("graph.microsoft.com", &transport, cancellation);
-            let result = client.request_json::<serde_json::Value>(GraphTransportRequest {
-                method: GraphHttpMethod::Get,
-                url: format!("https://graph.microsoft.com{}", endpoint.path),
-                consistency_level: None,
-                content_type: None,
-                body: None,
-                required_scope: endpoint.required_scope.clone(),
-            });
+            let provider = EspGraphClientProvider::new(&transport);
+            let result = if collection {
+                provider.get_collection(endpoint, cancellation)
+            } else {
+                provider.get(endpoint, cancellation)
+            };
             if let Err(error) = &result {
                 if error.invalidates_auth() {
                     self.state.clear_token_if_generation(self.generation);
                 }
             }
             result
+        }
+    }
+
+    #[cfg(feature = "esp-diagnostics")]
+    impl EspGraphProvider for WindowsEspGraphProvider {
+        fn get(
+            &self,
+            endpoint: &EspGraphEndpoint,
+            cancellation: &dyn GraphCancellation,
+        ) -> Result<serde_json::Value, GraphClientError> {
+            self.execute_endpoint(endpoint, cancellation, false)
+        }
+
+        fn get_collection(
+            &self,
+            endpoint: &EspGraphEndpoint,
+            cancellation: &dyn GraphCancellation,
+        ) -> Result<serde_json::Value, GraphClientError> {
+            self.execute_endpoint(endpoint, cancellation, true)
         }
     }
 

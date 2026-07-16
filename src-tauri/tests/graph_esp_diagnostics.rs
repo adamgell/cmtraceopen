@@ -634,6 +634,58 @@ fn client_cancels_after_final_in_flight_response() {
 }
 
 #[test]
+fn client_cancellation_wins_after_in_flight_network_failure() {
+    let scope = "DeviceManagementApps.Read.All";
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let transport = FakeGraphTransport::cancelling_after(
+        vec![Err(GraphTransportFailure::Network)],
+        1,
+        Arc::clone(&cancelled),
+    );
+    let cancellation = FakeGraphCancellation {
+        cancelled,
+        ..Default::default()
+    };
+    let client = GraphClient::new("graph.microsoft.com", &transport, &cancellation);
+
+    let error = client
+        .get_paginated::<serde_json::Value>(
+            "https://graph.microsoft.com/v1.0/deviceAppManagement/mobileApps",
+            scope,
+        )
+        .expect_err("in-flight cancellation must win over a network failure");
+
+    assert_eq!(error.kind, GraphClientErrorKind::Cancelled);
+    assert_eq!(transport.requests().len(), 1);
+}
+
+#[test]
+fn client_cancellation_wins_after_in_flight_timeout() {
+    let scope = "DeviceManagementApps.Read.All";
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let transport = FakeGraphTransport::cancelling_after(
+        vec![Err(GraphTransportFailure::Timeout)],
+        1,
+        Arc::clone(&cancelled),
+    );
+    let cancellation = FakeGraphCancellation {
+        cancelled,
+        ..Default::default()
+    };
+    let client = GraphClient::new("graph.microsoft.com", &transport, &cancellation);
+
+    let error = client
+        .get_paginated::<serde_json::Value>(
+            "https://graph.microsoft.com/v1.0/deviceAppManagement/mobileApps",
+            scope,
+        )
+        .expect_err("in-flight cancellation must win over a timeout");
+
+    assert_eq!(error.kind, GraphClientErrorKind::Cancelled);
+    assert_eq!(transport.requests().len(), 1);
+}
+
+#[test]
 fn client_rejects_untrusted_next_links_and_enforces_page_item_body_caps() {
     let scope = "DeviceManagementApps.Read.All";
     for next_link in [
@@ -1731,12 +1783,16 @@ mod esp_orchestration_tests {
     use std::sync::{Arc, Barrier, Mutex};
     use std::time::{Duration, Instant};
 
-    use app_lib::graph_api::client::{GraphCancellation, GraphClientError, GraphClientErrorKind};
+    use app_lib::graph_api::client::{
+        GraphCancellation, GraphClientError, GraphClientErrorKind, GraphTransport,
+        GraphTransportFailure,
+    };
     use app_lib::graph_api::esp::{
-        fetch_esp_graph_overlay, EspGraphEndpoint, EspGraphOperationError,
+        fetch_esp_graph_overlay, EspGraphClientProvider, EspGraphEndpoint, EspGraphOperationError,
         EspGraphOperationRegistry, EspGraphPolicyReference, EspGraphProvider, EspGraphRequest,
         EspGraphScriptReference,
     };
+    use app_lib::graph_api::models::{GraphTransportRequest, GraphTransportResponse};
     use cmtraceopen_parser::esp::{
         EspClassifiedString, EspCorrelationConfidence, EspGraphPolicyKind,
         EspGraphPolicyStatusDetailKind, EspGraphScriptKind, EspGraphTargeting, EspIdentityEvidence,
@@ -1840,15 +1896,11 @@ mod esp_orchestration_tests {
             self.cancel_after_call = Some((call, cancelled));
             self
         }
-    }
 
-    impl EspGraphProvider for FakeEspGraphProvider {
-        fn get(
+        fn response_for(
             &self,
             endpoint: &EspGraphEndpoint,
-            cancellation: &dyn GraphCancellation,
         ) -> Result<serde_json::Value, GraphClientError> {
-            assert!(!cancellation.is_cancelled());
             let call = {
                 let mut requests = self.requests.lock().expect("requests lock");
                 requests.push(endpoint.clone());
@@ -1871,6 +1923,83 @@ mod esp_orchestration_tests {
                     .store(true, Ordering::SeqCst);
             }
             response
+        }
+    }
+
+    struct FakeEspGraphTransport<'a> {
+        provider: &'a FakeEspGraphProvider,
+    }
+
+    impl GraphTransport for FakeEspGraphTransport<'_> {
+        fn execute(
+            &self,
+            request: &GraphTransportRequest,
+            _timeout: Duration,
+        ) -> Result<GraphTransportResponse, GraphTransportFailure> {
+            let path = request
+                .url
+                .strip_prefix("https://graph.microsoft.com")
+                .expect("bounded client must pin the Graph host");
+            let endpoint = EspGraphEndpoint {
+                path: path.to_string(),
+                required_scope: request.required_scope.clone(),
+                api_version: if path.starts_with("/beta/") {
+                    GraphApiVersion::Beta
+                } else {
+                    GraphApiVersion::V1_0
+                },
+            };
+            match self.provider.response_for(&endpoint) {
+                Ok(value) => Ok(GraphTransportResponse {
+                    status: 200,
+                    headers: std::collections::BTreeMap::new(),
+                    body: serde_json::to_vec(&value).expect("fixture response should serialize"),
+                }),
+                Err(error) => match error.kind {
+                    GraphClientErrorKind::Cancelled => Err(GraphTransportFailure::Cancelled),
+                    GraphClientErrorKind::Timeout => Err(GraphTransportFailure::Timeout),
+                    GraphClientErrorKind::Transport => Err(GraphTransportFailure::Network),
+                    kind => {
+                        let status = error.status.unwrap_or(match kind {
+                            GraphClientErrorKind::Unauthorized => 401,
+                            GraphClientErrorKind::PermissionDenied => 403,
+                            GraphClientErrorKind::NotFound => 404,
+                            GraphClientErrorKind::RetryExhausted => 503,
+                            GraphClientErrorKind::InvalidResponse => 200,
+                            _ => 500,
+                        });
+                        let mut headers = std::collections::BTreeMap::new();
+                        if let Some(request_id) = error.request_id {
+                            headers.insert("request-id".to_string(), request_id);
+                        }
+                        Ok(GraphTransportResponse {
+                            status,
+                            headers,
+                            body: Vec::new(),
+                        })
+                    }
+                },
+            }
+        }
+    }
+
+    impl EspGraphProvider for FakeEspGraphProvider {
+        fn get(
+            &self,
+            endpoint: &EspGraphEndpoint,
+            cancellation: &dyn GraphCancellation,
+        ) -> Result<serde_json::Value, GraphClientError> {
+            EspGraphClientProvider::new(&FakeEspGraphTransport { provider: self })
+                .get(endpoint, cancellation)
+        }
+
+        fn get_collection(
+            &self,
+            endpoint: &EspGraphEndpoint,
+            cancellation: &dyn GraphCancellation,
+        ) -> Result<serde_json::Value, GraphClientError> {
+            EspGraphClientProvider::new(&FakeEspGraphTransport { provider: self })
+                .get_collection(endpoint, cancellation)
         }
     }
 
@@ -2234,6 +2363,173 @@ mod esp_orchestration_tests {
     }
 
     #[test]
+    fn orchestration_includes_assignment_and_device_statuses_from_later_pages() {
+        let assignment_path =
+            format!("/v1.0/deviceManagement/deviceConfigurations/{POLICY}/assignments");
+        let assignment_next_path = format!("{assignment_path}?$skiptoken=page-2");
+        let assignment_next_url = format!("https://graph.microsoft.com{assignment_next_path}");
+        let status_path =
+            format!("/v1.0/deviceManagement/deviceConfigurations/{POLICY}/deviceStatuses?$top=100");
+        let status_next_path = format!("{status_path}&$skiptoken=page-2");
+        let status_next_url = format!("https://graph.microsoft.com{status_next_path}");
+        let script_status_path = format!(
+            "/beta/deviceManagement/deviceManagementScripts/{SCRIPT}/deviceRunStates?$expand=managedDevice($select=id)&$top=100"
+        );
+        let script_status_next_path = format!("{script_status_path}&$skiptoken=page-2");
+        let script_status_next_url =
+            format!("https://graph.microsoft.com{script_status_next_path}");
+        let later_group = "3273fc57-ff9a-41d2-9bd4-1ceeb1825906";
+        let provider = full_provider()
+            .with(
+                &assignment_path,
+                serde_json::json!({
+                    "value": [],
+                    "@odata.nextLink": assignment_next_url
+                }),
+            )
+            .with(
+                &assignment_next_path,
+                serde_json::json!({"value": [{
+                    "id": "later-assignment",
+                    "intent": "required",
+                    "target": {
+                        "@odata.type": "#microsoft.graph.groupAssignmentTarget",
+                        "groupId": later_group
+                    }
+                }]}),
+            )
+            .with(
+                &status_path,
+                serde_json::json!({
+                    "value": [{
+                        "id": "status-elsewhere",
+                        "deviceDisplayName": "OTHER-DEVICE",
+                        "userPrincipalName": "other@contoso.example",
+                        "status": "compliant"
+                    }],
+                    "@odata.nextLink": status_next_url
+                }),
+            )
+            .with(
+                &status_next_path,
+                serde_json::json!({"value": [{
+                    "id": "status-local",
+                    "deviceDisplayName": "DEVICE-01",
+                    "userPrincipalName": "user@contoso.example",
+                    "status": "error"
+                }]}),
+            )
+            .with(
+                &script_status_path,
+                serde_json::json!({
+                    "value": [{
+                        "id": "run-elsewhere",
+                        "managedDevice": {"id": "5eb3db17-64cf-4b17-b00c-d93d9ec8c31c"},
+                        "runState": "fail"
+                    }],
+                    "@odata.nextLink": script_status_next_url
+                }),
+            )
+            .with(
+                &script_status_next_path,
+                serde_json::json!({"value": [{
+                    "id": "run-local",
+                    "managedDevice": {"id": MANAGED},
+                    "runState": "success"
+                }]}),
+            );
+        let cancellation = super::FakeGraphCancellation::default();
+
+        let overlay =
+            fetch_esp_graph_overlay(&provider, &request(), &cancellation, "2026-07-16T12:00:00Z");
+
+        let policy = &overlay.policies.data.as_ref().expect("policies")[0];
+        assert_eq!(
+            policy.assignments[0].target_id.as_deref(),
+            Some(later_group),
+            "a later-page assignment target must not be silently dropped"
+        );
+        assert_eq!(
+            policy.status.as_ref().map(|status| status.display.as_str()),
+            Some("error"),
+            "the matched device status on a later page must be included"
+        );
+        assert_eq!(
+            overlay.scripts.data.as_ref().expect("scripts")[0]
+                .status
+                .as_ref()
+                .map(|status| status.display.as_str()),
+            Some("success"),
+            "the matched device run state on a later page must be included"
+        );
+        let paths = provider.paths();
+        assert!(paths.contains(&assignment_next_path));
+        assert!(paths.contains(&status_next_path));
+        assert!(paths.contains(&script_status_next_path));
+    }
+
+    #[test]
+    fn orchestration_rejects_an_untrusted_collection_next_link() {
+        let status_path =
+            format!("/v1.0/deviceManagement/deviceConfigurations/{POLICY}/deviceStatuses?$top=100");
+        let provider = full_provider().with(
+            &status_path,
+            serde_json::json!({
+                "value": [],
+                "@odata.nextLink": "https://graph.microsoft.com.evil.example/steal?token=secret"
+            }),
+        );
+        let cancellation = super::FakeGraphCancellation::default();
+
+        let overlay =
+            fetch_esp_graph_overlay(&provider, &request(), &cancellation, "2026-07-16T12:00:00Z");
+
+        assert_eq!(overlay.policies.status, GraphSectionStatus::Failed);
+        let error = overlay.policies.error.as_ref().expect("policy error");
+        assert_eq!(error.code, "InvalidUrl");
+        assert!(!format!("{error:?}").contains("evil.example"));
+        assert!(!format!("{error:?}").contains("secret"));
+    }
+
+    #[test]
+    fn orchestration_rejects_a_collection_that_exceeds_the_page_limit() {
+        let status_path =
+            format!("/v1.0/deviceManagement/deviceConfigurations/{POLICY}/deviceStatuses?$top=100");
+        let mut provider = full_provider();
+        for page_index in 0..super::MAX_GRAPH_PAGES {
+            let path = if page_index == 0 {
+                status_path.clone()
+            } else {
+                format!("{status_path}&$skiptoken=page-{}", page_index + 1)
+            };
+            let next_path = format!("{status_path}&$skiptoken=page-{}", page_index + 2);
+            provider = provider.with(
+                &path,
+                serde_json::json!({
+                    "value": [],
+                    "@odata.nextLink": format!("https://graph.microsoft.com{next_path}")
+                }),
+            );
+        }
+        let cancellation = super::FakeGraphCancellation::default();
+
+        let overlay =
+            fetch_esp_graph_overlay(&provider, &request(), &cancellation, "2026-07-16T12:00:00Z");
+
+        assert_eq!(overlay.policies.status, GraphSectionStatus::Failed);
+        let error = overlay.policies.error.as_ref().expect("policy error");
+        assert_eq!(error.code, "PageLimitExceeded");
+        assert_eq!(
+            provider
+                .paths()
+                .iter()
+                .filter(|path| path.starts_with(&status_path))
+                .count(),
+            super::MAX_GRAPH_PAGES
+        );
+    }
+
+    #[test]
     fn orchestration_ambiguous_weak_device_match_skips_all_dependent_sections() {
         let mut request = request();
         request.identity.managed_device_id = None;
@@ -2403,6 +2699,8 @@ mod esp_orchestration_tests {
     fn orchestration_managed_device_not_found_uses_one_bounded_fallback() {
         let primary = format!("/v1.0/deviceManagement/managedDevices/{MANAGED}");
         let fallback = "/v1.0/deviceManagement/managedDevices?$top=100";
+        let autopilot_path = format!("/v1.0/deviceManagement/windowsAutopilotDeviceIdentities?$filter=azureActiveDirectoryDeviceId%20eq%20'{ENTRA}'&$top=25");
+        let event_path = format!("/beta/deviceManagement/autopilotEvents?$filter=deviceId%20eq%20'{ENTRA}'&$orderby=eventDateTime%20desc&$top=25");
         let cancellation = super::FakeGraphCancellation::default();
         let provider = FakeEspGraphProvider::default()
             .with_error(&primary, GraphClientErrorKind::NotFound)
@@ -2417,12 +2715,27 @@ mod esp_orchestration_tests {
                     "userPrincipalName": "user@contoso.example"
                 }]}),
             )
-            .cancelling_after(2, cancellation.cancelled.clone());
+            .with_error(&autopilot_path, GraphClientErrorKind::NotFound)
+            .with(&event_path, serde_json::json!({"value": []}));
+        let mut request = request();
+        request.workload_ids.clear();
+        request.enrollment_configuration_ids.clear();
+        request.app_ids.clear();
+        request.policy_references.clear();
+        request.script_references.clear();
 
         let overlay =
-            fetch_esp_graph_overlay(&provider, &request(), &cancellation, "2026-07-16T12:00:00Z");
+            fetch_esp_graph_overlay(&provider, &request, &cancellation, "2026-07-16T12:00:00Z");
 
-        assert_eq!(provider.paths(), [primary, fallback.to_string()]);
+        let paths = provider.paths();
+        assert_eq!(paths[0..2], [primary, fallback.to_string()]);
+        assert_eq!(
+            paths
+                .iter()
+                .filter(|path| path.as_str() == fallback)
+                .count(),
+            1
+        );
         assert_eq!(overlay.device_match.status, GraphSectionStatus::Available);
         assert_eq!(
             overlay
@@ -2435,13 +2748,13 @@ mod esp_orchestration_tests {
         );
         assert_eq!(
             overlay.autopilot_identity.status,
-            GraphSectionStatus::Cancelled
+            GraphSectionStatus::NotFound
         );
         assert_eq!(
             overlay.autopilot_events.status,
-            GraphSectionStatus::Cancelled
+            GraphSectionStatus::Available
         );
-        assert_eq!(overlay.apps.status, GraphSectionStatus::Cancelled);
+        assert_eq!(overlay.apps.status, GraphSectionStatus::Skipped);
     }
 
     #[test]
@@ -2503,7 +2816,7 @@ mod esp_orchestration_tests {
     }
 
     #[test]
-    fn orchestration_cancellation_preserves_completed_device_and_cancels_remaining_sections() {
+    fn orchestration_cancellation_after_device_transport_cancels_every_section() {
         let managed_path = format!("/v1.0/deviceManagement/managedDevices/{MANAGED}");
         let cancellation = super::FakeGraphCancellation::default();
         let provider = FakeEspGraphProvider::default()
@@ -2523,7 +2836,7 @@ mod esp_orchestration_tests {
             fetch_esp_graph_overlay(&provider, &request(), &cancellation, "2026-07-16T12:00:00Z");
 
         assert_eq!(provider.paths(), [managed_path]);
-        assert_eq!(overlay.device_match.status, GraphSectionStatus::Available);
+        assert_eq!(overlay.device_match.status, GraphSectionStatus::Cancelled);
         for status in [
             &overlay.autopilot_identity.status,
             &overlay.deployment_profile.status,
@@ -2540,7 +2853,7 @@ mod esp_orchestration_tests {
     }
 
     #[test]
-    fn orchestration_cancellation_during_profile_fetch_cancels_profile_assignments() {
+    fn orchestration_cancellation_after_autopilot_transport_cancels_that_section_and_dependents() {
         let managed_path = format!("/v1.0/deviceManagement/managedDevices/{MANAGED}");
         let autopilot_path = format!("/v1.0/deviceManagement/windowsAutopilotDeviceIdentities?$filter=azureActiveDirectoryDeviceId%20eq%20'{ENTRA}'&$top=25");
         let cancellation = super::FakeGraphCancellation::default();
@@ -2571,7 +2884,7 @@ mod esp_orchestration_tests {
         assert_eq!(overlay.device_match.status, GraphSectionStatus::Available);
         assert_eq!(
             overlay.autopilot_identity.status,
-            GraphSectionStatus::Available
+            GraphSectionStatus::Cancelled
         );
         assert_eq!(
             overlay.deployment_profile.status,

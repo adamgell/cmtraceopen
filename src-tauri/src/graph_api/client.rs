@@ -561,21 +561,19 @@ impl<'a, T: GraphTransport, C: GraphCancellation + ?Sized> GraphClient<'a, T, C>
         required_scope: &str,
     ) -> Result<GraphTransportResponse, GraphClientError> {
         self.ensure_not_cancelled(required_scope)?;
-        let response = self
-            .transport
-            .execute(request, GRAPH_REQUEST_TIMEOUT)
-            .map_err(|failure| match failure {
-                GraphTransportFailure::Timeout => {
-                    GraphClientError::new(GraphClientErrorKind::Timeout, required_scope)
-                }
-                GraphTransportFailure::Cancelled => {
-                    GraphClientError::new(GraphClientErrorKind::Cancelled, required_scope)
-                }
-                GraphTransportFailure::Network => {
-                    GraphClientError::new(GraphClientErrorKind::Transport, required_scope)
-                }
-            })?;
+        let response = self.transport.execute(request, GRAPH_REQUEST_TIMEOUT);
         self.ensure_not_cancelled(required_scope)?;
+        let response = response.map_err(|failure| match failure {
+            GraphTransportFailure::Timeout => {
+                GraphClientError::new(GraphClientErrorKind::Timeout, required_scope)
+            }
+            GraphTransportFailure::Cancelled => {
+                GraphClientError::new(GraphClientErrorKind::Cancelled, required_scope)
+            }
+            GraphTransportFailure::Network => {
+                GraphClientError::new(GraphClientErrorKind::Transport, required_scope)
+            }
+        })?;
 
         if response.body.len() > MAX_GRAPH_RESPONSE_BYTES {
             return Err(GraphClientError::for_response(

@@ -19,9 +19,11 @@ use cmtraceopen_parser::esp::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::client::{GraphCancellation, GraphClientError, GraphClientErrorKind};
+use super::client::{
+    GraphCancellation, GraphClient, GraphClientError, GraphClientErrorKind, GraphTransport,
+};
 use super::correlation::correlate_managed_device;
-use super::normalize_graph_guid;
+use super::{normalize_graph_guid, GraphHttpMethod, GraphTransportRequest};
 
 pub const MANAGED_DEVICES_SCOPE: &str = "DeviceManagementManagedDevices.Read.All";
 pub const SERVICE_CONFIG_SCOPE: &str = "DeviceManagementServiceConfig.Read.All";
@@ -291,6 +293,62 @@ pub trait EspGraphProvider: Send + Sync {
         endpoint: &EspGraphEndpoint,
         cancellation: &dyn GraphCancellation,
     ) -> Result<Value, GraphClientError>;
+
+    /// Return a complete, bounded collection envelope. Implementations must
+    /// reject unsafe continuation URLs and limit exhaustion instead of
+    /// returning a successful first-page subset.
+    fn get_collection(
+        &self,
+        endpoint: &EspGraphEndpoint,
+        cancellation: &dyn GraphCancellation,
+    ) -> Result<Value, GraphClientError>;
+}
+
+/// Token-free adapter from ESP orchestration endpoints to the bounded Graph
+/// client. Concrete platform transports retain ownership of authentication and
+/// HTTP I/O while every collection read shares the client's pagination, URL,
+/// response-size, item-count, retry, and cancellation policy.
+pub struct EspGraphClientProvider<'a, T: GraphTransport> {
+    transport: &'a T,
+}
+
+impl<'a, T: GraphTransport> EspGraphClientProvider<'a, T> {
+    pub fn new(transport: &'a T) -> Self {
+        Self { transport }
+    }
+
+    fn url(endpoint: &EspGraphEndpoint) -> String {
+        format!("https://graph.microsoft.com{}", endpoint.path)
+    }
+}
+
+impl<T: GraphTransport> EspGraphProvider for EspGraphClientProvider<'_, T> {
+    fn get(
+        &self,
+        endpoint: &EspGraphEndpoint,
+        cancellation: &dyn GraphCancellation,
+    ) -> Result<Value, GraphClientError> {
+        let client = GraphClient::new("graph.microsoft.com", self.transport, cancellation);
+        client.request_json(GraphTransportRequest {
+            method: GraphHttpMethod::Get,
+            url: Self::url(endpoint),
+            consistency_level: None,
+            content_type: None,
+            body: None,
+            required_scope: endpoint.required_scope.clone(),
+        })
+    }
+
+    fn get_collection(
+        &self,
+        endpoint: &EspGraphEndpoint,
+        cancellation: &dyn GraphCancellation,
+    ) -> Result<Value, GraphClientError> {
+        let client = GraphClient::new("graph.microsoft.com", self.transport, cancellation);
+        let items = client
+            .get_paginated::<Value>(&Self::url(endpoint), endpoint.required_scope.as_str())?;
+        Ok(serde_json::json!({ "value": items }))
+    }
 }
 
 pub fn fetch_esp_graph_overlay<P: EspGraphProvider>(
@@ -465,7 +523,7 @@ fn cancel_device_dependents(overlay: &mut EspGraphOverlay) {
     overlay.scripts = cancelled_section(SCRIPTS_SCOPE, GraphApiVersion::Beta);
 }
 
-fn managed_device_endpoint(request: &EspGraphRequest) -> EspGraphEndpoint {
+fn managed_device_endpoint(request: &EspGraphRequest) -> (EspGraphEndpoint, bool) {
     let explicit = request
         .selected_managed_device_id
         .as_deref()
@@ -477,31 +535,46 @@ fn managed_device_endpoint(request: &EspGraphRequest) -> EspGraphEndpoint {
                 .as_deref()
                 .and_then(normalize_graph_guid)
         });
-    let path = if let Some(id) = explicit {
-        format!("/v1.0/deviceManagement/managedDevices/{id}")
+    let (path, is_collection) = if let Some(id) = explicit {
+        (format!("/v1.0/deviceManagement/managedDevices/{id}"), false)
     } else if let Some(id) = request
         .identity
         .entra_device_id
         .as_deref()
         .and_then(normalize_graph_guid)
     {
-        format!(
-            "/v1.0/deviceManagement/managedDevices?$filter=azureADDeviceId%20eq%20'{id}'&$top=25"
+        (
+            format!(
+                "/v1.0/deviceManagement/managedDevices?$filter=azureADDeviceId%20eq%20'{id}'&$top=25"
+            ),
+            true,
         )
     } else if let Some(serial) = request.identity.serial_number.as_ref() {
-        format!(
-            "/v1.0/deviceManagement/managedDevices?$filter=serialNumber%20eq%20'{}'&$top=25",
-            encode_odata_string(&serial.value)
+        (
+            format!(
+                "/v1.0/deviceManagement/managedDevices?$filter=serialNumber%20eq%20'{}'&$top=25",
+                encode_odata_string(&serial.value)
+            ),
+            true,
         )
     } else if let Some(name) = request.identity.device_name.as_deref() {
-        format!(
-            "/v1.0/deviceManagement/managedDevices?$filter=deviceName%20eq%20'{}'&$top=25",
-            encode_odata_string(name)
+        (
+            format!(
+                "/v1.0/deviceManagement/managedDevices?$filter=deviceName%20eq%20'{}'&$top=25",
+                encode_odata_string(name)
+            ),
+            true,
         )
     } else {
-        "/v1.0/deviceManagement/managedDevices?$top=100".to_string()
+        (
+            "/v1.0/deviceManagement/managedDevices?$top=100".to_string(),
+            true,
+        )
     };
-    EspGraphEndpoint::new(path, MANAGED_DEVICES_SCOPE, GraphApiVersion::V1_0)
+    (
+        EspGraphEndpoint::new(path, MANAGED_DEVICES_SCOPE, GraphApiVersion::V1_0),
+        is_collection,
+    )
 }
 
 fn fetch_managed_candidates<P: EspGraphProvider>(
@@ -516,8 +589,12 @@ fn fetch_managed_candidates<P: EspGraphProvider>(
             normalize_graph_guid(value).ok_or_else(|| invalid_response(MANAGED_DEVICES_SCOPE))
         })
         .transpose()?;
-    let primary = managed_device_endpoint(request);
-    let primary_result = get(provider, &primary, cancellation)
+    let (primary, primary_is_collection) = managed_device_endpoint(request);
+    let primary_result = if primary_is_collection {
+        get_collection(provider, &primary, cancellation)
+    } else {
+        get(provider, &primary, cancellation)
+    }
         .and_then(|value| parse_managed_devices(&value, MANAGED_DEVICES_SCOPE));
     if let Some(selected) = selected {
         return primary_result.and_then(|candidates| {
@@ -541,7 +618,7 @@ fn fetch_managed_candidates<P: EspGraphProvider>(
                 MANAGED_DEVICES_SCOPE,
                 GraphApiVersion::V1_0,
             );
-            get(provider, &fallback, cancellation)
+            get_collection(provider, &fallback, cancellation)
                 .and_then(|value| parse_managed_devices(&value, MANAGED_DEVICES_SCOPE))
         }
     }
@@ -594,7 +671,7 @@ fn fetch_autopilot_identity<P: EspGraphProvider>(
         "/v1.0/deviceManagement/windowsAutopilotDeviceIdentities?$top=100".to_string()
     };
     let endpoint = EspGraphEndpoint::new(path, SERVICE_CONFIG_SCOPE, GraphApiVersion::V1_0);
-    let result = get(provider, &endpoint, cancellation).and_then(|value| {
+    let result = get_collection(provider, &endpoint, cancellation).and_then(|value| {
         let items = page_items(&value, SERVICE_CONFIG_SCOPE)?;
         let mut matches = Vec::new();
         for item in items {
@@ -701,7 +778,7 @@ fn fetch_profile_assignments<P: EspGraphProvider>(
         SERVICE_CONFIG_SCOPE,
         GraphApiVersion::Beta,
     );
-    match get(provider, &endpoint, cancellation)
+    match get_collection(provider, &endpoint, cancellation)
         .and_then(|value| parse_assignments(&value, SERVICE_CONFIG_SCOPE))
     {
         Ok(assignments) => {
@@ -742,7 +819,7 @@ fn fetch_autopilot_events<P: EspGraphProvider>(
         MANAGED_DEVICES_SCOPE,
         GraphApiVersion::Beta,
     );
-    let value = match get(provider, &endpoint, cancellation) {
+    let value = match get_collection(provider, &endpoint, cancellation) {
         Ok(value) => value,
         Err(error) => {
             return error_section(error, MANAGED_DEVICES_SCOPE, GraphApiVersion::Beta, None)
@@ -803,7 +880,7 @@ fn fetch_autopilot_events<P: EspGraphProvider>(
             MANAGED_DEVICES_SCOPE,
             GraphApiVersion::Beta,
         );
-        match get(provider, &detail_endpoint, cancellation)
+        match get_collection(provider, &detail_endpoint, cancellation)
             .and_then(|value| parse_policy_status_details(&value, MANAGED_DEVICES_SCOPE))
         {
             Ok(details) => newest.policy_status_details = details,
@@ -982,7 +1059,7 @@ fn fetch_enrollment_configuration<P: EspGraphProvider>(
         SERVICE_CONFIG_SCOPE,
         GraphApiVersion::V1_0,
     );
-    configuration.assignments = match get(provider, &assignments_endpoint, cancellation)
+    configuration.assignments = match get_collection(provider, &assignments_endpoint, cancellation)
         .and_then(|value| parse_assignments(&value, SERVICE_CONFIG_SCOPE))
     {
         Ok(assignments) => assignments,
@@ -1112,7 +1189,7 @@ fn fetch_apps<P: EspGraphProvider>(
             APPS_SCOPE,
             GraphApiVersion::V1_0,
         );
-        let assignments = match get(provider, &assignment_endpoint, cancellation)
+        let assignments = match get_collection(provider, &assignment_endpoint, cancellation)
             .and_then(|value| parse_assignments(&value, APPS_SCOPE))
         {
             Ok(assignments) => assignments,
@@ -1154,7 +1231,7 @@ fn fetch_apps<P: EspGraphProvider>(
             CONFIGURATION_SCOPE,
             GraphApiVersion::Beta,
         );
-        match get(provider, &endpoint, cancellation) {
+        match get_collection(provider, &endpoint, cancellation) {
             Ok(value) => {
                 if let Err(error) = apply_app_intent_states(&value, device, &mut records) {
                     set_app_intent_error(&mut records, error);
@@ -1328,7 +1405,7 @@ fn fetch_policies<P: EspGraphProvider>(
             CONFIGURATION_SCOPE,
             version.clone(),
         );
-        let assignments = match get(provider, &assignment_endpoint, cancellation)
+        let assignments = match get_collection(provider, &assignment_endpoint, cancellation)
             .and_then(|value| parse_assignments(&value, CONFIGURATION_SCOPE))
         {
             Ok(assignments) => assignments,
@@ -1340,7 +1417,7 @@ fn fetch_policies<P: EspGraphProvider>(
                 CONFIGURATION_SCOPE,
                 version.clone(),
             );
-            match get(provider, &status_endpoint, cancellation)
+            match get_collection(provider, &status_endpoint, cancellation)
                 .and_then(|value| classic_device_status(&value, device, CONFIGURATION_SCOPE))
             {
                 Ok(status) => status,
@@ -1439,7 +1516,7 @@ fn fetch_scripts<P: EspGraphProvider>(
             SCRIPTS_SCOPE,
             GraphApiVersion::Beta,
         );
-        let assignments = match get(provider, &assignments_endpoint, cancellation)
+        let assignments = match get_collection(provider, &assignments_endpoint, cancellation)
             .and_then(|value| parse_assignments(&value, SCRIPTS_SCOPE))
         {
             Ok(assignments) => assignments,
@@ -1452,7 +1529,7 @@ fn fetch_scripts<P: EspGraphProvider>(
             SCRIPTS_SCOPE,
             GraphApiVersion::Beta,
         );
-        let status = match get(provider, &states_endpoint, cancellation)
+        let status = match get_collection(provider, &states_endpoint, cancellation)
             .and_then(|value| script_device_status(&value, device, &reference.kind, SCRIPTS_SCOPE))
         {
             Ok(status) => status,
@@ -1713,6 +1790,22 @@ fn get<P: EspGraphProvider>(
         });
     }
     provider.get(endpoint, cancellation)
+}
+
+fn get_collection<P: EspGraphProvider>(
+    provider: &P,
+    endpoint: &EspGraphEndpoint,
+    cancellation: &dyn GraphCancellation,
+) -> Result<Value, GraphClientError> {
+    if cancellation.is_cancelled() {
+        return Err(GraphClientError {
+            kind: GraphClientErrorKind::Cancelled,
+            status: None,
+            request_id: None,
+            required_scope: endpoint.required_scope.clone(),
+        });
+    }
+    provider.get_collection(endpoint, cancellation)
 }
 
 fn page_items<'a>(value: &'a Value, scope: &str) -> Result<Vec<&'a Value>, GraphClientError> {
