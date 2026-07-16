@@ -1,3 +1,4 @@
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::OnceLock;
 
 use regex::Regex;
@@ -64,10 +65,13 @@ fn forbidden_raw_content_pattern() -> &'static Regex {
 /// Return a safe copy/export projection without changing the local snapshot.
 ///
 /// Typed sensitive fields are masked, secret-like command arguments are
-/// redacted, and source records that could contain credentials, raw Graph
-/// responses, or hardware hashes are omitted completely.
+/// redacted, SID-bearing structural IDs are consistently pseudonymized, and
+/// source records that could contain credentials, raw Graph responses, or
+/// hardware hashes are omitted completely.
 pub fn redacted_export_projection(snapshot: &EspDiagnosticsSnapshot) -> EspDiagnosticsSnapshot {
     let mut safe = snapshot.clone();
+    let sid_pseudonyms = collect_sid_pseudonyms(&safe);
+    pseudonymize_sid_references(&mut safe, &sid_pseudonyms);
 
     redact_identity(&mut safe.identity);
     if let Some(profile) = &mut safe.profile {
@@ -89,6 +93,7 @@ pub fn redacted_export_projection(snapshot: &EspDiagnosticsSnapshot) -> EspDiagn
         correlation.reason = redact_text(&correlation.reason);
         for process in &mut correlation.process_observations {
             redact_optional_text(&mut process.sanitized_command_line);
+            redact_optional_text(&mut process.referenced_log_path);
             redact_provenance(&mut process.context.provenance);
         }
     }
@@ -187,6 +192,79 @@ fn mask_observation_value(value: &mut EspObservationValue) {
     *value = EspObservationValue::Text(REDACTED.to_string());
 }
 
+fn collect_sid_pseudonyms(snapshot: &EspDiagnosticsSnapshot) -> BTreeMap<String, String> {
+    let mut sids = BTreeSet::new();
+    for session in &snapshot.sessions {
+        collect_sids(&session.session_id, &mut sids);
+        if let Some(user_sid) = &session.user_sid {
+            collect_sids(&user_sid.value, &mut sids);
+        }
+        for workload_id in &session.workload_ids {
+            collect_sids(workload_id, &mut sids);
+        }
+    }
+    for workload in &snapshot.workloads {
+        collect_sids(&workload.workload_id, &mut sids);
+        collect_sids(&workload.session_id, &mut sids);
+    }
+    for correlation in &snapshot.installer_correlations {
+        if let Some(workload_id) = &correlation.workload_id {
+            collect_sids(workload_id, &mut sids);
+        }
+        for workload_id in &correlation.candidate_workload_ids {
+            collect_sids(workload_id, &mut sids);
+        }
+    }
+
+    sids.into_iter()
+        .enumerate()
+        .map(|(index, sid)| (sid, format!("[redacted-sid-{}]", index + 1)))
+        .collect()
+}
+
+fn collect_sids(value: &str, sids: &mut BTreeSet<String>) {
+    sids.extend(
+        sid_pattern()
+            .find_iter(value)
+            .map(|matched| matched.as_str().to_ascii_uppercase()),
+    );
+}
+
+fn pseudonymize_sid_references(
+    snapshot: &mut EspDiagnosticsSnapshot,
+    pseudonyms: &BTreeMap<String, String>,
+) {
+    for session in &mut snapshot.sessions {
+        pseudonymize_sids(&mut session.session_id, pseudonyms);
+        for workload_id in &mut session.workload_ids {
+            pseudonymize_sids(workload_id, pseudonyms);
+        }
+    }
+    for workload in &mut snapshot.workloads {
+        pseudonymize_sids(&mut workload.workload_id, pseudonyms);
+        pseudonymize_sids(&mut workload.session_id, pseudonyms);
+    }
+    for correlation in &mut snapshot.installer_correlations {
+        if let Some(workload_id) = &mut correlation.workload_id {
+            pseudonymize_sids(workload_id, pseudonyms);
+        }
+        for workload_id in &mut correlation.candidate_workload_ids {
+            pseudonymize_sids(workload_id, pseudonyms);
+        }
+    }
+}
+
+fn pseudonymize_sids(value: &mut String, pseudonyms: &BTreeMap<String, String>) {
+    *value = sid_pattern()
+        .replace_all(value, |captures: &regex::Captures<'_>| {
+            pseudonyms
+                .get(&captures[0].to_ascii_uppercase())
+                .cloned()
+                .unwrap_or_else(|| REDACTED.to_string())
+        })
+        .into_owned();
+}
+
 fn redact_optional_text(value: &mut Option<String>) {
     if let Some(value) = value {
         *value = redact_text(value);
@@ -253,12 +331,10 @@ fn raw_record_must_be_removed(record: &EspRawEvidenceRecord) -> bool {
 }
 
 fn raw_record_must_be_masked(record: &EspRawEvidenceRecord) -> bool {
-    if record.provenance.registry.is_none()
-        && matches!(
-            record.sensitivity,
-            EspSensitivity::Sensitive | EspSensitivity::Restricted
-        )
-    {
+    if matches!(
+        record.sensitivity,
+        EspSensitivity::Sensitive | EspSensitivity::Restricted
+    ) {
         return true;
     }
     let Some(registry) = &record.provenance.registry else {

@@ -8,9 +8,13 @@ fn assert_unit_variants<T: Serialize>(variants: &[T], expected: Value) {
 }
 
 fn evidence_ref(id: &str) -> EspEvidenceRef {
+    evidence_ref_from(id, "artifact-registry")
+}
+
+fn evidence_ref_from(id: &str, source_artifact_id: &str) -> EspEvidenceRef {
     EspEvidenceRef {
         evidence_id: id.to_string(),
-        source_artifact_id: "artifact-registry".to_string(),
+        source_artifact_id: source_artifact_id.to_string(),
     }
 }
 
@@ -4927,7 +4931,7 @@ fn findings_completed_session_emits_only_evidence_backed_info() {
 }
 
 #[test]
-fn findings_success_requires_observed_declared_workloads_and_complete_coverage() {
+fn findings_success_requires_observed_declared_workloads_and_relevant_coverage() {
     let completed_session = |workload_ids: Vec<String>| EspSession {
         session_id: "session-completed".to_string(),
         kind: EspSessionKind::Classic,
@@ -4991,6 +4995,56 @@ fn findings_success_requires_observed_declared_workloads_and_complete_coverage()
     gap.status = EspArtifactStatus::PermissionDenied;
     missing_coverage.coverage.push(gap);
     assert!(!has_success(&missing_coverage));
+}
+
+#[test]
+fn findings_success_ignores_unrelated_optional_coverage_gaps() {
+    let mut snapshot = findings_snapshot();
+    snapshot.phase = EspPhase::Completed;
+    snapshot.sessions.push(EspSession {
+        session_id: "session-completed".to_string(),
+        kind: EspSessionKind::Classic,
+        scope: EspScope::Device,
+        user_sid: None,
+        started_at: Some(timestamp("2026-07-15T12:00:00Z")),
+        ended_at: Some(timestamp("2026-07-15T12:10:00Z")),
+        phase: EspPhase::Completed,
+        is_latest: true,
+        workload_ids: vec!["workload-app-success".to_string()],
+        evidence: vec![evidence_ref("session-completed")],
+    });
+    snapshot.workloads.push(findings_workload(
+        "app-success",
+        EspTrackedKind::Win32App,
+        EspNormalizedStatus::Succeeded,
+        Some(true),
+        "2026-07-15T12:10:00Z",
+    ));
+    snapshot.coverage = vec![
+        EspArtifactCoverage {
+            artifact_id: "esp-session-registry".to_string(),
+            family: "ESP session evidence".to_string(),
+            status: EspArtifactStatus::Available,
+            detail: None,
+            observed_at_utc: "2026-07-15T12:10:00Z".to_string(),
+            evidence: vec![evidence_ref("coverage-complete")],
+        },
+        EspArtifactCoverage {
+            artifact_id: "optional-patchmypc-logs".to_string(),
+            family: "Optional software deployment logs".to_string(),
+            status: EspArtifactStatus::Missing,
+            detail: Some("product is not installed".to_string()),
+            observed_at_utc: "2026-07-15T12:10:00Z".to_string(),
+            evidence: vec![evidence_ref_from(
+                "optional-patchmypc-missing",
+                "optional-patchmypc-logs",
+            )],
+        },
+    ];
+
+    assert!(derive_findings(&snapshot)
+        .iter()
+        .any(|finding| finding.finding_id == "esp-completed"));
 }
 
 #[test]
@@ -5116,6 +5170,129 @@ fn redaction_projection_honors_raw_sensitivity_and_scrubs_provenance_paths() {
 }
 
 #[test]
+fn redaction_projection_masks_every_registry_value_variant_when_classified_sensitive() {
+    let variants = vec![
+        EspObservationValue::Text("opaque-text".to_string()),
+        EspObservationValue::StringList(vec!["opaque-a".to_string(), "opaque-b".to_string()]),
+        EspObservationValue::Integer(-42),
+        EspObservationValue::Unsigned(42),
+        EspObservationValue::Boolean(true),
+    ];
+    let mut snapshot = findings_snapshot();
+    snapshot.raw_evidence = variants
+        .iter()
+        .cloned()
+        .enumerate()
+        .map(|(index, raw_value)| {
+            let mut record = raw_export_record(
+                &format!("registry-sensitive-{index}"),
+                EspSourceKind::Registry,
+                "generic-registry-source",
+                Some("OpaqueValue"),
+                "placeholder",
+            );
+            record.raw_value = raw_value;
+            record.sensitivity = if index % 2 == 0 {
+                EspSensitivity::Sensitive
+            } else {
+                EspSensitivity::Restricted
+            };
+            record
+        })
+        .collect();
+
+    let safe = redacted_export_projection(&snapshot);
+
+    assert_eq!(safe.raw_evidence.len(), variants.len());
+    assert!(safe
+        .raw_evidence
+        .iter()
+        .all(|record| { record.raw_value == EspObservationValue::Text("[redacted]".to_string()) }));
+    assert_eq!(
+        snapshot
+            .raw_evidence
+            .iter()
+            .map(|record| record.raw_value.clone())
+            .collect::<Vec<_>>(),
+        variants
+    );
+}
+
+#[test]
+fn redaction_projection_pseudonymizes_reducer_sid_ids_and_preserves_references() {
+    let mut reducer = EspDiagnosticsReducer::new("2026-07-15T18:00:00Z".to_string());
+    reducer.ingest_all(vec![
+        registry_record(
+            "esp-tracking",
+            "user-a",
+            r"SOFTWARE\Microsoft\Windows\Autopilot\EnrollmentStatusTracking\ESPTrackingInfo\Diagnostics\S-1-5-21-100\Sidecar\2026-07-15T13:00:00Z",
+            "app-a",
+            EspObservationValue::Integer(4),
+            "2026-07-15T13:00:00Z",
+        ),
+        registry_record(
+            "esp-tracking",
+            "user-b",
+            r"SOFTWARE\Microsoft\Windows\Autopilot\EnrollmentStatusTracking\ESPTrackingInfo\Diagnostics\S-1-5-21-200\Sidecar\2026-07-15T13:00:00Z",
+            "app-b",
+            EspObservationValue::Integer(4),
+            "2026-07-15T13:00:00Z",
+        ),
+    ]);
+    let mut snapshot = reducer.snapshot();
+    assert_eq!(snapshot.sessions.len(), 2);
+    assert_eq!(snapshot.workloads.len(), 2);
+    snapshot
+        .installer_correlations
+        .push(EspInstallerCorrelation {
+            correlation_id: "correlation-user-apps".to_string(),
+            workload_id: Some(snapshot.workloads[0].workload_id.clone()),
+            confidence: EspCorrelationConfidence::Temporal,
+            reason: "both user apps overlap".to_string(),
+            candidate_workload_ids: vec![snapshot.workloads[1].workload_id.clone()],
+            process_observations: vec![],
+            evidence: vec![evidence_ref("correlation-user-apps")],
+        });
+    let original_json = serde_json::to_string(&snapshot).unwrap();
+
+    let safe = redacted_export_projection(&snapshot);
+    let safe_json = serde_json::to_string(&safe).unwrap();
+
+    assert!(original_json.contains("S-1-5-21-100"));
+    assert!(original_json.contains("S-1-5-21-200"));
+    assert!(!safe_json.contains("S-1-5-21-100"));
+    assert!(!safe_json.contains("S-1-5-21-200"));
+    assert_ne!(safe.sessions[0].session_id, safe.sessions[1].session_id);
+    assert!(safe
+        .sessions
+        .iter()
+        .all(|session| session.session_id.contains("[redacted-sid-")));
+    for session in &safe.sessions {
+        assert!(session.workload_ids.iter().all(|workload_id| safe
+            .workloads
+            .iter()
+            .any(|workload| &workload.workload_id == workload_id)));
+    }
+    for workload in &safe.workloads {
+        assert!(safe
+            .sessions
+            .iter()
+            .any(|session| session.session_id == workload.session_id));
+    }
+    let correlation = &safe.installer_correlations[0];
+    assert_eq!(
+        correlation.workload_id.as_deref(),
+        Some(safe.workloads[0].workload_id.as_str())
+    );
+    assert_eq!(
+        correlation.candidate_workload_ids,
+        vec![safe.workloads[1].workload_id.clone()]
+    );
+    assert_eq!(redacted_export_projection(&snapshot), safe);
+    assert_eq!(serde_json::to_string(&snapshot).unwrap(), original_json);
+}
+
+#[test]
 fn redaction_projection_masks_identity_session_node_cache_hardware_and_command_secrets() {
     let mut snapshot = findings_snapshot();
     let mut process_context = observation_context("process-sensitive");
@@ -5175,7 +5352,9 @@ fn redaction_projection_masks_identity_session_node_cache_hardware_and_command_s
             sanitized_command_line: Some(
                 r#"msiexec /i {11111111-2222-3333-4444-555555555555} /L*V C:\Windows\Temp\install.log --password hunter2 --api-key=topsecret"#.to_string(),
             ),
-            referenced_log_path: Some(r"C:\Windows\Temp\install.log".to_string()),
+            referenced_log_path: Some(
+                r"C:\Users\person@example.test\AppData\Local\Temp\install.log".to_string(),
+            ),
             app_id: Some("app-1".to_string()),
             product_code: Some("{11111111-2222-3333-4444-555555555555}".to_string()),
         }],
@@ -5209,6 +5388,18 @@ fn redaction_projection_masks_identity_session_node_cache_hardware_and_command_s
             .product_code
             .as_deref(),
         Some("{11111111-2222-3333-4444-555555555555}")
+    );
+    assert_eq!(
+        safe.installer_correlations[0].process_observations[0]
+            .referenced_log_path
+            .as_deref(),
+        Some(r"C:\Users\[redacted]\AppData\Local\Temp\install.log")
+    );
+    assert_eq!(
+        snapshot.installer_correlations[0].process_observations[0]
+            .referenced_log_path
+            .as_deref(),
+        Some(r"C:\Users\person@example.test\AppData\Local\Temp\install.log")
     );
     assert!(serde_json::to_string(&snapshot)
         .unwrap()

@@ -406,13 +406,7 @@ fn push_successful_completion(
     snapshot: &EspDiagnosticsSnapshot,
     findings: &mut Vec<EspDiagnosticFinding>,
 ) {
-    if snapshot.phase != EspPhase::Completed
-        || snapshot.coverage.is_empty()
-        || snapshot
-            .coverage
-            .iter()
-            .any(|coverage| coverage.status != EspArtifactStatus::Available)
-    {
+    if snapshot.phase != EspPhase::Completed {
         return;
     }
     let latest_sessions = snapshot
@@ -433,6 +427,11 @@ fn push_successful_completion(
             .iter()
             .flat_map(|session| session.evidence.iter()),
     );
+    let mut supporting_source_ids = evidence
+        .iter()
+        .filter(|evidence| !evidence.source_artifact_id.trim().is_empty())
+        .map(|evidence| evidence.source_artifact_id.clone())
+        .collect::<BTreeSet<_>>();
     for workload_id in latest_sessions
         .iter()
         .flat_map(|session| session.workload_ids.iter())
@@ -447,9 +446,33 @@ fn push_successful_completion(
         if !is_successful_terminal_status(&workload.status.normalized) {
             return;
         }
+        supporting_source_ids.extend(
+            workload
+                .evidence
+                .iter()
+                .filter(|evidence| !evidence.source_artifact_id.trim().is_empty())
+                .map(|evidence| evidence.source_artifact_id.clone()),
+        );
         evidence.extend(workload.evidence.iter().cloned());
     }
     if evidence.is_empty() {
+        return;
+    }
+    let relevant_coverage = snapshot.coverage.iter().filter(|coverage| {
+        supporting_source_ids.contains(&coverage.artifact_id)
+            || coverage
+                .evidence
+                .iter()
+                .any(|evidence| supporting_source_ids.contains(&evidence.source_artifact_id))
+    });
+    let mut observed_relevant_coverage = false;
+    for coverage in relevant_coverage {
+        observed_relevant_coverage = true;
+        if coverage.status != EspArtifactStatus::Available {
+            return;
+        }
+    }
+    if !observed_relevant_coverage {
         return;
     }
     normalize_evidence(&mut evidence);
