@@ -23,6 +23,10 @@ mod cross_profile_tests {
     const EMBEDDED_PROFILE_JSON: &str = include_str!("profile_data.json");
     const TARGETED_README: &str = include_str!("../../../../scripts/collection/README.md");
     const REFERENCE_README: &str = include_str!("../../../../references/collection/README.md");
+    const TARGETED_COLLECTOR_PS1: &str =
+        include_str!("../../../../scripts/collection/Invoke-CmtraceEvidenceCollection.ps1");
+    const REFERENCE_COLLECTOR_PS1: &str =
+        include_str!("../../../../references/collection/Invoke-CmtraceEvidenceCollection.ps1");
 
     #[test]
     fn esp_profile_has_required_registry_families() {
@@ -227,6 +231,34 @@ mod cross_profile_tests {
                 "collection README omits safety contract phrase: {required_phrase}"
             );
         }
+    }
+
+    #[test]
+    fn cross_profile_collectors_preserve_command_parse_hints() {
+        assert_eq!(
+            TARGETED_COLLECTOR_PS1, REFERENCE_COLLECTOR_PS1,
+            "collection scripts drifted"
+        );
+        assert!(TARGETED_COLLECTOR_PS1.contains(
+            "optionalArrays  = @('arguments', 'parseHints')"
+        ));
+        assert!(TARGETED_COLLECTOR_PS1.contains(
+            "$commandParseHints = @(Get-ObjectPropertyValue -InputObject $commandItem -Name 'parseHints' -DefaultValue @())"
+        ));
+        assert!(TARGETED_COLLECTOR_PS1.contains(
+            "if ($commandParseHints.Count -eq 0) { $commandParseHints = @('plain-text') }"
+        ));
+        assert_eq!(
+            TARGETED_COLLECTOR_PS1
+                .matches("-ParseHints $commandParseHints")
+                .count(),
+            3,
+            "missing, collected, and failed command artifacts must use profile hints"
+        );
+        assert!(
+            !TARGETED_COLLECTOR_PS1.contains("-ParseHints @('plain-text')"),
+            "hard-coded command parse hints bypass the profile contract"
+        );
     }
 
     fn assert_required_profile_contract(name: &str, profile: &Value) {

@@ -325,7 +325,7 @@ function Assert-CollectorProfileShape {
         @{
             name            = 'commands'
             requiredStrings = @('id', 'family', 'command', 'fileName')
-            optionalArrays  = @('arguments')
+            optionalArrays  = @('arguments', 'parseHints')
         }
     )
 
@@ -961,6 +961,8 @@ try {
         $relativePath = Join-RelativePath -Left 'evidence/command-output' -Right $commandItem.fileName
         $destinationPath = ConvertTo-PhysicalPath -Root $bundleRoot -RelativePath $relativePath
         $commandInvocationText = Get-CommandInvocationText -CommandItem $commandItem
+        $commandParseHints = @(Get-ObjectPropertyValue -InputObject $commandItem -Name 'parseHints' -DefaultValue @())
+        if ($commandParseHints.Count -eq 0) { $commandParseHints = @('plain-text') }
 
         if ($commandItem.id -eq 'dsregcmd-status') {
             $capture = $deviceContext.dsregStatus.capture
@@ -970,7 +972,7 @@ try {
         }
 
         if (-not $capture.found) {
-            $artifact = New-ArtifactRecord -Category 'command-output' -Family $commandItem.family -RelativePath $relativePath -OriginPath $commandInvocationText -Status 'missing' -ParseHints @('plain-text') -Notes $capture.error
+            $artifact = New-ArtifactRecord -Category 'command-output' -Family $commandItem.family -RelativePath $relativePath -OriginPath $commandInvocationText -Status 'missing' -ParseHints $commandParseHints -Notes $capture.error
             $artifacts.Add($artifact)
             Add-ObservedGap -ObservedGaps $observedGaps -Status 'missing' -Origin $commandItem.command -Reason $capture.error
             continue
@@ -980,11 +982,11 @@ try {
         Write-TextFile -Content $commandText -Path $destinationPath
 
         if ($capture.exitCode -eq 0) {
-            $artifact = New-ArtifactRecord -Category 'command-output' -Family $commandItem.family -RelativePath $relativePath -OriginPath $commandInvocationText -Status 'collected' -ParseHints @('plain-text') -FilePath $destinationPath -Notes $commandItem.notes
+            $artifact = New-ArtifactRecord -Category 'command-output' -Family $commandItem.family -RelativePath $relativePath -OriginPath $commandInvocationText -Status 'collected' -ParseHints $commandParseHints -FilePath $destinationPath -Notes $commandItem.notes
         }
         else {
             $notes = '{0} exited with code {1}.' -f $commandItem.command, $capture.exitCode
-            $artifact = New-ArtifactRecord -Category 'command-output' -Family $commandItem.family -RelativePath $relativePath -OriginPath $commandInvocationText -Status 'failed' -ParseHints @('plain-text') -FilePath $destinationPath -Notes $notes
+            $artifact = New-ArtifactRecord -Category 'command-output' -Family $commandItem.family -RelativePath $relativePath -OriginPath $commandInvocationText -Status 'failed' -ParseHints $commandParseHints -FilePath $destinationPath -Notes $notes
             Add-ObservedGap -ObservedGaps $observedGaps -Status 'failed' -Origin $commandItem.command -Reason $notes
         }
 

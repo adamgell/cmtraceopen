@@ -37,9 +37,18 @@ pub fn run_collection<R: Runtime>(
     let bundle_root = resolve_bundle_root(output_root.as_deref(), &bundle_id)?;
     let evidence_root = bundle_root.join("evidence");
 
-    // Create all subdirectories up front.
-    for subdir in &["logs", "registry", "event-logs", "exports", "command-output"] {
-        fs::create_dir_all(evidence_root.join(subdir)).map_err(crate::error::AppError::Io)?;
+    // The bundle root is exclusive and unpredictable. Keep every evidence
+    // directory exclusive as well so collection never reuses attacker-planted
+    // links, junctions, or reparse points.
+    fs::create_dir(&evidence_root).map_err(crate::error::AppError::Io)?;
+    for subdir in &[
+        "logs",
+        "registry",
+        "event-logs",
+        "exports",
+        "command-output",
+    ] {
+        fs::create_dir(evidence_root.join(subdir)).map_err(crate::error::AppError::Io)?;
     }
 
     // Shared state for concurrent collection.
@@ -140,7 +149,12 @@ fn generate_bundle_id() -> String {
     let hostname = std::env::var("COMPUTERNAME")
         .or_else(|_| std::env::var("HOSTNAME"))
         .unwrap_or_else(|_| "unknown".to_string());
-    format!("CMTRACE-{}-{}", now.format("%Y%m%d-%H%M%S"), hostname)
+    let nonce = uuid::Uuid::new_v4().simple();
+    format!(
+        "CMTRACE-{}-{}-{nonce}",
+        now.format("%Y%m%d-%H%M%S"),
+        hostname
+    )
 }
 
 fn resolve_bundle_root(output_root: Option<&str>, bundle_id: &str) -> Result<PathBuf, crate::error::AppError> {
@@ -158,8 +172,10 @@ fn resolve_bundle_root(output_root: Option<&str>, bundle_id: &str) -> Result<Pat
         }
     };
 
-    let bundle_root = base.join(bundle_id);
-    fs::create_dir_all(&bundle_root).map_err(crate::error::AppError::Io)?;
+    fs::create_dir_all(&base).map_err(crate::error::AppError::Io)?;
+    let canonical_base = base.canonicalize().map_err(crate::error::AppError::Io)?;
+    let bundle_root = canonical_base.join(bundle_id);
+    fs::create_dir(&bundle_root).map_err(crate::error::AppError::Io)?;
 
     Ok(bundle_root)
 }
@@ -213,4 +229,54 @@ fn emit_progress<R: Runtime>(
         total_items,
     };
     let _ = app.emit(COLLECTION_PROGRESS_EVENT, payload);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{generate_bundle_id, resolve_bundle_root};
+    use crate::error::AppError;
+    use std::fs;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn generated_bundle_ids_include_unpredictable_nonce() {
+        let first = generate_bundle_id();
+        let second = generate_bundle_id();
+
+        assert_ne!(
+            first, second,
+            "bundle IDs must not collide within one second"
+        );
+        let nonce = first.rsplit('-').next().expect("bundle nonce");
+        uuid::Uuid::parse_str(nonce).expect("bundle ID ends with a UUID nonce");
+    }
+
+    #[test]
+    fn bundle_root_creation_is_exclusive() {
+        let base = create_temp_dir("collector-exclusive-bundle");
+        let bundle_id = "CMTRACE-existing";
+        fs::create_dir(base.join(bundle_id)).expect("create pre-existing bundle root");
+
+        let error = resolve_bundle_root(Some(base.to_string_lossy().as_ref()), bundle_id)
+            .expect_err("pre-existing bundle root must be rejected");
+        match error {
+            AppError::Io(error) => {
+                assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists)
+            }
+            other => panic!("expected AlreadyExists I/O error, got {other}"),
+        }
+
+        fs::remove_dir_all(&base).expect("remove temp root");
+    }
+
+    fn create_temp_dir(prefix: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time before unix epoch")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("{prefix}-{}-{unique}", std::process::id()));
+        fs::create_dir_all(&path).expect("create temp dir");
+        path
+    }
 }
