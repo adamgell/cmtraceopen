@@ -19,6 +19,9 @@ use super::normalize::extract_guid;
 const TEMPORAL_SLOP: Duration = Duration::minutes(2);
 const MAX_PARENT_CHAIN_DEPTH: usize = 16;
 
+type ProcessIdentity = (u32, String);
+type ProcessSamples<'a> = Vec<&'a EspProcessObservation>;
+
 /// Extracts an MSI-style `/L`, `/L*V`, or generic `/log` target without
 /// executing or expanding the command line.
 pub fn extract_installer_log_path(command_line: &str) -> Option<String> {
@@ -120,29 +123,17 @@ pub fn correlate_installer_processes(
         })
         .collect::<Vec<_>>();
 
-    let mut roots = BTreeMap::<(u32, String), &EspProcessObservation>::new();
-    for process in processes
-        .iter()
-        .filter(|process| is_installer_root(process))
-    {
-        roots
-            .entry(process_identity_key(process))
-            .and_modify(|current| {
-                if process_preference_key(process) > process_preference_key(current) {
-                    *current = process;
-                }
-            })
-            .or_insert(process);
-    }
+    let process_groups = group_process_observations(processes);
 
-    roots
-        .into_values()
+    process_groups
+        .values()
+        .filter(|samples| samples.iter().any(|process| is_installer_root(process)))
         .map(|root| {
             correlate_one(
                 root,
                 workloads,
                 &workload_identifiers,
-                processes,
+                &process_groups,
                 deployment_logs,
                 ime_logs,
             )
@@ -150,57 +141,72 @@ pub fn correlate_installer_processes(
         .collect()
 }
 
-fn correlate_one(
-    root: &EspProcessObservation,
+fn correlate_one<'a>(
+    root: &[&'a EspProcessObservation],
     workloads: &[EspWorkload],
     workload_identifiers: &[(&str, BTreeSet<String>)],
-    processes: &[EspProcessObservation],
+    process_groups: &BTreeMap<ProcessIdentity, ProcessSamples<'a>>,
     deployment_logs: &[EspDeploymentLogObservation],
     ime_logs: &[EspImeObservation],
 ) -> EspInstallerCorrelation {
-    let lineage = process_lineage(root, processes);
+    let lineage = process_lineage(root, process_groups);
+    let root_representative = preferred_process(root).expect("installer root group is non-empty");
     let mut evidence = lineage
         .iter()
+        .flat_map(|samples| samples.iter())
         .map(|process| process.context.evidence_ref.clone())
         .collect::<Vec<_>>();
     let mut signals: BTreeMap<&'static str, BTreeSet<String>> = BTreeMap::new();
+    let mut exact_signal_sets = Vec::new();
     let mut exact_identifier_present = false;
 
-    for (index, process) in lineage.iter().enumerate() {
-        if let Some(app_id) = process.app_id.as_deref() {
-            exact_identifier_present |= add_identifier_signal(
-                if index == 0 { "appId" } else { "parentAppId" },
-                app_id,
-                workload_identifiers,
-                &mut signals,
-            );
-        }
-        if let Some(product_code) = process.product_code.as_deref() {
-            exact_identifier_present |= add_identifier_signal(
-                if index == 0 {
-                    "productCode"
-                } else {
-                    "parentProductCode"
-                },
-                product_code,
-                workload_identifiers,
-                &mut signals,
-            );
+    for (index, samples) in lineage.iter().enumerate() {
+        for process in samples.iter() {
+            if let Some(app_id) = process.app_id.as_deref() {
+                exact_identifier_present |= add_identifier_signal(
+                    if index == 0 { "appId" } else { "parentAppId" },
+                    app_id,
+                    workload_identifiers,
+                    &mut signals,
+                    &mut exact_signal_sets,
+                );
+            }
+            if let Some(product_code) = process.product_code.as_deref() {
+                exact_identifier_present |= add_identifier_signal(
+                    if index == 0 {
+                        "productCode"
+                    } else {
+                        "parentProductCode"
+                    },
+                    product_code,
+                    workload_identifiers,
+                    &mut signals,
+                    &mut exact_signal_sets,
+                );
+            }
         }
     }
 
-    let process_log_path = root
-        .referenced_log_path
-        .as_deref()
-        .and_then(canonical_installer_log_path)
-        .or_else(|| {
-            root.sanitized_command_line
-                .as_deref()
-                .and_then(extract_installer_log_path)
-                .as_deref()
-                .and_then(canonical_installer_log_path)
-        });
-    if let Some(process_log_path) = process_log_path.as_deref() {
+    let mut process_log_paths = BTreeSet::new();
+    for process in root {
+        if let Some(path) = process
+            .referenced_log_path
+            .as_deref()
+            .and_then(canonical_installer_log_path)
+        {
+            process_log_paths.insert(path);
+        }
+        if let Some(path) = process
+            .sanitized_command_line
+            .as_deref()
+            .and_then(extract_installer_log_path)
+            .as_deref()
+            .and_then(canonical_installer_log_path)
+        {
+            process_log_paths.insert(path);
+        }
+    }
+    if !process_log_paths.is_empty() {
         for deployment in deployment_logs {
             let Some(deployment_path) = deployment
                 .log_path
@@ -209,7 +215,7 @@ fn correlate_one(
             else {
                 continue;
             };
-            if deployment_path != process_log_path {
+            if !process_log_paths.contains(&deployment_path) {
                 continue;
             }
             if !observation_within_process_window(root, &deployment.context) {
@@ -222,6 +228,7 @@ fn correlate_one(
                     product_code,
                     workload_identifiers,
                     &mut signals,
+                    &mut exact_signal_sets,
                 );
             }
         }
@@ -231,9 +238,9 @@ fn correlate_one(
         let Some(app_id) = ime.app_id.as_deref() else {
             continue;
         };
-        if !lineage.iter().any(|process| {
-            message_mentions_pid(&ime.message, process.pid)
-                && observation_within_process_window(process, &ime.context)
+        if !lineage.iter().any(|samples| {
+            process_pid(samples).is_some_and(|pid| message_mentions_pid(&ime.message, pid))
+                && observation_within_process_window(samples, &ime.context)
         }) {
             continue;
         }
@@ -242,6 +249,7 @@ fn correlate_one(
             app_id,
             workload_identifiers,
             &mut signals,
+            &mut exact_signal_sets,
         ) {
             continue;
         }
@@ -257,10 +265,10 @@ fn correlate_one(
         .iter()
         .flat_map(|(_, candidates)| candidates.iter().cloned())
         .collect::<BTreeSet<_>>();
-    let signal_conflict = nonempty_signal_sets.iter().any(|(_, left)| {
-        nonempty_signal_sets
+    let signal_conflict = exact_signal_sets.iter().any(|left| {
+        exact_signal_sets
             .iter()
-            .any(|(_, right)| left.is_disjoint(right))
+            .any(|right| left.is_disjoint(right))
     });
 
     let (workload_id, confidence, reason, candidates) = if signal_conflict {
@@ -300,12 +308,16 @@ fn correlate_one(
             exact_candidates,
         )
     } else {
-        let temporal = workloads
-            .iter()
-            .filter(|workload| is_installer_workload(workload))
-            .filter(|workload| workload_contains_process(workload, &root.process_start_time))
-            .map(|workload| workload.workload_id.clone())
-            .collect::<BTreeSet<_>>();
+        let temporal = process_start_timestamp(root)
+            .map(|process_time| {
+                workloads
+                    .iter()
+                    .filter(|workload| is_installer_workload(workload))
+                    .filter(|workload| workload_contains_process(workload, process_time))
+                    .map(|workload| workload.workload_id.clone())
+                    .collect::<BTreeSet<_>>()
+            })
+            .unwrap_or_default();
         match temporal.len() {
             0 => (
                 None,
@@ -339,12 +351,16 @@ fn correlate_one(
     deduplicate_evidence(&mut evidence);
 
     EspInstallerCorrelation {
-        correlation_id: correlation_id(root),
+        correlation_id: correlation_id(root_representative),
         workload_id,
         confidence,
         reason,
         candidate_workload_ids: candidates.into_iter().collect(),
-        process_observations: lineage.into_iter().cloned().collect(),
+        process_observations: lineage
+            .into_iter()
+            .filter_map(preferred_process)
+            .cloned()
+            .collect(),
         evidence,
     }
 }
@@ -397,29 +413,52 @@ fn is_installer_workload(workload: &EspWorkload) -> bool {
     )
 }
 
-fn process_lineage<'a>(
-    root: &'a EspProcessObservation,
-    processes: &'a [EspProcessObservation],
-) -> Vec<&'a EspProcessObservation> {
+fn group_process_observations(
+    processes: &[EspProcessObservation],
+) -> BTreeMap<ProcessIdentity, ProcessSamples<'_>> {
+    let mut groups = BTreeMap::<ProcessIdentity, ProcessSamples<'_>>::new();
+    for process in processes {
+        groups
+            .entry(process_identity_key(process))
+            .or_default()
+            .push(process);
+    }
+    for samples in groups.values_mut() {
+        samples.sort_by_key(|process| process_preference_key(process));
+    }
+    groups
+}
+
+fn process_lineage<'groups, 'process>(
+    root: &'groups [&'process EspProcessObservation],
+    process_groups: &'groups BTreeMap<ProcessIdentity, ProcessSamples<'process>>,
+) -> Vec<&'groups [&'process EspProcessObservation]> {
     let mut lineage = vec![root];
     let mut current = root;
-    let mut visited = BTreeSet::from([process_identity_key(root)]);
+    let Some(root_identity) = process_group_identity(root) else {
+        return lineage;
+    };
+    let mut visited = BTreeSet::from([root_identity]);
 
     for _ in 0..MAX_PARENT_CHAIN_DEPTH {
-        let Some(parent_pid) = current.parent_pid else {
+        let Some(parent_pid) = unique_parent_pid(current) else {
             break;
         };
-        let Some(child_started) = timestamp_value(&current.process_start_time) else {
+        let Some(child_started) = process_start_timestamp(current) else {
             break;
         };
-        let Some(parent) = processes
-            .iter()
-            .filter(|candidate| candidate.pid == parent_pid)
-            .filter_map(|candidate| {
-                let started = timestamp_value(&candidate.process_start_time)?;
-                let sampled = process_sample_timestamp(candidate)?;
-                (started <= child_started && sampled >= lower_slop_bound(child_started))
-                    .then_some((started, process_preference_key(candidate), candidate))
+        let Some(parent) = process_groups
+            .values()
+            .filter(|samples| process_pid(samples.as_slice()) == Some(parent_pid))
+            .filter_map(|samples| {
+                let started = process_start_timestamp(samples)?;
+                let sampled = latest_process_sample_timestamp(samples)?;
+                let representative = preferred_process(samples)?;
+                (started <= child_started && sampled >= child_started).then_some((
+                    started,
+                    process_preference_key(representative),
+                    samples.as_slice(),
+                ))
             })
             .max_by(
                 |(left_started, left_preference, _), (right_started, right_preference, _)| {
@@ -428,11 +467,14 @@ fn process_lineage<'a>(
                         .then_with(|| left_preference.cmp(right_preference))
                 },
             )
-            .map(|(_, _, candidate)| candidate)
+            .map(|(_, _, samples)| samples)
         else {
             break;
         };
-        if !visited.insert(process_identity_key(parent)) {
+        let Some(parent_identity) = process_group_identity(parent) else {
+            break;
+        };
+        if !visited.insert(parent_identity) {
             break;
         }
         lineage.push(parent);
@@ -447,6 +489,7 @@ fn add_identifier_signal(
     value: &str,
     workload_identifiers: &[(&str, BTreeSet<String>)],
     signals: &mut BTreeMap<&'static str, BTreeSet<String>>,
+    exact_signal_sets: &mut Vec<BTreeSet<String>>,
 ) -> bool {
     let identifiers = normalized_identifiers(value);
     if identifiers.is_empty() {
@@ -457,6 +500,9 @@ fn add_identifier_signal(
         .filter(|(_, workload_values)| !identifiers.is_disjoint(workload_values))
         .map(|(workload_id, _)| (*workload_id).to_string())
         .collect::<BTreeSet<_>>();
+    if !matches.is_empty() {
+        exact_signal_sets.push(matches.clone());
+    }
     signals.entry(signal).or_default().extend(matches);
     true
 }
@@ -480,10 +526,7 @@ fn normalized_identifiers(value: &str) -> BTreeSet<String> {
     values
 }
 
-fn workload_contains_process(workload: &EspWorkload, process_time: &EspTimestamp) -> bool {
-    let Some(process_time) = timestamp_value(process_time) else {
-        return false;
-    };
+fn workload_contains_process(workload: &EspWorkload, process_time: DateTime<Utc>) -> bool {
     let Some(first) = timestamp_value(&workload.timestamps.first_observed) else {
         return false;
     };
@@ -522,20 +565,20 @@ fn context_timestamp(context: &EspObservationContext) -> Option<DateTime<Utc>> {
 }
 
 fn observation_within_process_window(
-    process: &EspProcessObservation,
+    samples: &[&EspProcessObservation],
     context: &EspObservationContext,
 ) -> bool {
-    let Some(started) = timestamp_value(&process.process_start_time) else {
+    let Some(started) = process_start_timestamp(samples) else {
         return false;
     };
     let Some(observed) = context_timestamp(context) else {
         return false;
     };
-    let sampled = process_sample_timestamp(process)
-        .filter(|sampled| *sampled >= started)
-        .unwrap_or(started);
+    let Some(sampled) = latest_process_sample_timestamp(samples) else {
+        return false;
+    };
 
-    observed >= lower_slop_bound(started) && observed <= upper_slop_bound(sampled)
+    observed >= started && observed <= sampled
 }
 
 fn lower_slop_bound(value: DateTime<Utc>) -> DateTime<Utc> {
@@ -547,29 +590,84 @@ fn upper_slop_bound(value: DateTime<Utc>) -> DateTime<Utc> {
 }
 
 fn process_sample_timestamp(process: &EspProcessObservation) -> Option<DateTime<Utc>> {
-    DateTime::parse_from_rfc3339(&process.context.observed_at_utc)
-        .ok()
-        .map(|value| value.with_timezone(&Utc))
-        .or_else(|| {
-            process
-                .context
-                .source_timestamp
-                .as_ref()
-                .and_then(timestamp_value)
-        })
+    [
+        DateTime::parse_from_rfc3339(&process.context.observed_at_utc)
+            .ok()
+            .map(|value| value.with_timezone(&Utc)),
+        process
+            .context
+            .source_timestamp
+            .as_ref()
+            .and_then(timestamp_value),
+    ]
+    .into_iter()
+    .flatten()
+    .max()
+}
+
+fn process_start_timestamp(samples: &[&EspProcessObservation]) -> Option<DateTime<Utc>> {
+    samples
+        .iter()
+        .filter_map(|process| timestamp_value(&process.process_start_time))
+        .max()
+}
+
+fn latest_process_sample_timestamp(samples: &[&EspProcessObservation]) -> Option<DateTime<Utc>> {
+    let started = process_start_timestamp(samples)?;
+    samples
+        .iter()
+        .filter_map(|process| process_sample_timestamp(process))
+        .filter(|sampled| *sampled >= started)
+        .max()
+}
+
+fn process_pid(samples: &[&EspProcessObservation]) -> Option<u32> {
+    samples.first().map(|process| process.pid)
+}
+
+fn unique_parent_pid(samples: &[&EspProcessObservation]) -> Option<u32> {
+    let parent_pids = samples
+        .iter()
+        .filter_map(|process| process.parent_pid)
+        .collect::<BTreeSet<_>>();
+    (parent_pids.len() == 1)
+        .then(|| parent_pids.first().copied())
+        .flatten()
+}
+
+fn preferred_process<'a>(
+    samples: &[&'a EspProcessObservation],
+) -> Option<&'a EspProcessObservation> {
+    samples
+        .iter()
+        .copied()
+        .max_by_key(|process| process_preference_key(process))
 }
 
 fn process_preference_key(
     process: &EspProcessObservation,
 ) -> (u8, Option<DateTime<Utc>>, &str, &str) {
     let information = [
-        process.app_id.as_ref(),
-        process.product_code.as_ref(),
-        process.referenced_log_path.as_ref(),
-        process.sanitized_command_line.as_ref(),
+        process
+            .app_id
+            .as_deref()
+            .is_some_and(has_normalized_identifier),
+        process
+            .product_code
+            .as_deref()
+            .is_some_and(has_normalized_identifier),
+        process
+            .referenced_log_path
+            .as_deref()
+            .and_then(canonical_installer_log_path)
+            .is_some(),
+        process
+            .sanitized_command_line
+            .as_deref()
+            .is_some_and(|command_line| !command_line.trim().is_empty()),
     ]
     .into_iter()
-    .flatten()
+    .filter(|meaningful| *meaningful)
     .count() as u8;
     (
         information,
@@ -579,7 +677,11 @@ fn process_preference_key(
     )
 }
 
-fn process_identity_key(process: &EspProcessObservation) -> (u32, String) {
+fn process_group_identity(samples: &[&EspProcessObservation]) -> Option<ProcessIdentity> {
+    samples.first().map(|process| process_identity_key(process))
+}
+
+fn process_identity_key(process: &EspProcessObservation) -> ProcessIdentity {
     (
         process.pid,
         process

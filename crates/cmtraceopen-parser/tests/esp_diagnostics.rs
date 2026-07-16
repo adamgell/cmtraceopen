@@ -1520,6 +1520,485 @@ fn correlation_deduplicates_repeated_samples_by_pid_and_start_time() {
 }
 
 #[test]
+fn correlation_reconciles_conflicting_duplicate_identity_samples() {
+    let app_a = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+    let app_b = "bbbbbbbb-cccc-dddd-eeee-ffffffffffff";
+    let workloads = vec![
+        correlation_workload(
+            "workload-a",
+            app_a,
+            "2026-07-15T12:00:00Z",
+            "2026-07-15T12:10:00Z",
+        ),
+        correlation_workload(
+            "workload-b",
+            app_b,
+            "2026-07-15T12:00:00Z",
+            "2026-07-15T12:10:00Z",
+        ),
+    ];
+    let mut app_sample = correlation_process(
+        "process-sample-app-a",
+        720,
+        None,
+        "msiexec.exe",
+        "2026-07-15T12:02:00Z",
+    );
+    app_sample.app_id = Some(app_a.to_string());
+    app_sample.context.source_timestamp = None;
+    app_sample.context.observed_at_utc = "2026-07-15T12:03:00Z".to_string();
+    let mut product_sample = correlation_process(
+        "process-sample-product-b",
+        720,
+        None,
+        "msiexec.exe",
+        "2026-07-15T12:02:00Z",
+    );
+    product_sample.product_code = Some(app_b.to_string());
+    product_sample.context.source_timestamp = None;
+    product_sample.context.observed_at_utc = "2026-07-15T12:04:00Z".to_string();
+
+    let correlations =
+        correlate_installer_processes(&workloads, &[app_sample, product_sample], &[], &[]);
+
+    assert_eq!(correlations.len(), 1);
+    assert_eq!(correlations[0].workload_id, None);
+    assert_eq!(
+        correlations[0].confidence,
+        EspCorrelationConfidence::Uncorrelated
+    );
+    assert_eq!(correlations[0].reason, "contradictoryExactIdentifiers");
+    assert_eq!(
+        correlations[0].candidate_workload_ids,
+        vec!["workload-a", "workload-b"]
+    );
+    assert_eq!(correlations[0].process_observations.len(), 1);
+    assert!(correlations[0]
+        .evidence
+        .iter()
+        .any(|evidence| evidence.evidence_id == "process-sample-app-a"));
+    assert!(correlations[0]
+        .evidence
+        .iter()
+        .any(|evidence| evidence.evidence_id == "process-sample-product-b"));
+}
+
+#[test]
+fn correlation_duplicate_blank_metadata_never_outranks_exact_identifier() {
+    let app_a = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+    let workload = correlation_workload(
+        "workload-a",
+        app_a,
+        "2026-07-15T12:00:00Z",
+        "2026-07-15T12:10:00Z",
+    );
+    let mut exact = correlation_process(
+        "process-sample-exact",
+        721,
+        None,
+        "msiexec.exe",
+        "2026-07-15T12:02:00Z",
+    );
+    exact.app_id = Some(app_a.to_string());
+    exact.context.source_timestamp = None;
+    exact.context.observed_at_utc = "2026-07-15T12:03:00Z".to_string();
+    let mut blank = correlation_process(
+        "process-sample-blank",
+        721,
+        None,
+        "msiexec.exe",
+        "2026-07-15T12:02:00Z",
+    );
+    blank.app_id = Some(String::new());
+    blank.product_code = Some("   ".to_string());
+    blank.referenced_log_path = Some(String::new());
+    blank.sanitized_command_line = Some(String::new());
+    blank.context.source_timestamp = None;
+    blank.context.observed_at_utc = "2026-07-15T12:04:00Z".to_string();
+
+    let correlations = correlate_installer_processes(&[workload], &[exact, blank], &[], &[]);
+
+    assert_eq!(correlations.len(), 1);
+    assert_eq!(correlations[0].workload_id.as_deref(), Some("workload-a"));
+    assert_eq!(correlations[0].confidence, EspCorrelationConfidence::Exact);
+    assert_eq!(correlations[0].reason, "appId");
+    assert!(correlations[0]
+        .evidence
+        .iter()
+        .any(|evidence| evidence.evidence_id == "process-sample-exact"));
+    assert!(correlations[0]
+        .evidence
+        .iter()
+        .any(|evidence| evidence.evidence_id == "process-sample-blank"));
+}
+
+#[test]
+fn correlation_duplicate_later_sample_extends_proven_lifetime() {
+    let product = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+    let workload = correlation_workload(
+        "workload-a",
+        product,
+        "2026-07-15T12:00:00Z",
+        "2026-07-15T12:12:00Z",
+    );
+    let mut early = correlation_process(
+        "process-sample-early-path",
+        722,
+        None,
+        "msiexec.exe",
+        "2026-07-15T12:00:00Z",
+    );
+    early.referenced_log_path = Some(r"C:\Windows\Temp\install.log".to_string());
+    early.context.source_timestamp = None;
+    early.context.observed_at_utc = "2026-07-15T12:01:00Z".to_string();
+    let mut later = correlation_process(
+        "process-sample-later-sparse",
+        722,
+        None,
+        "msiexec.exe",
+        "2026-07-15T12:00:00Z",
+    );
+    later.context.source_timestamp = None;
+    later.context.observed_at_utc = "2026-07-15T12:10:00Z".to_string();
+    let mut deployment = EspDeploymentLogObservation {
+        context: fixture_context(
+            EspSourceKind::DeploymentLog,
+            "msi-log",
+            "deployment-current-late",
+            "2026-07-15T12:09:00Z",
+        ),
+        component: Some("MsiInstaller".to_string()),
+        message: "Installation is still running".to_string(),
+        product_code: Some(product.to_string()),
+        log_path: Some(r"c:\windows\temp\INSTALL.log".to_string()),
+        status: None,
+    };
+    deployment.context.source_timestamp = None;
+    deployment.context.observed_at_utc = "2026-07-15T12:09:00Z".to_string();
+
+    let correlations =
+        correlate_installer_processes(&[workload], &[early, later], &[deployment], &[]);
+
+    assert_eq!(correlations.len(), 1);
+    assert_eq!(correlations[0].workload_id.as_deref(), Some("workload-a"));
+    assert_eq!(correlations[0].confidence, EspCorrelationConfidence::Exact);
+    assert_eq!(correlations[0].reason, "canonicalLogPath");
+    assert!(correlations[0]
+        .evidence
+        .iter()
+        .any(|evidence| evidence.evidence_id == "deployment-current-late"));
+}
+
+#[test]
+fn correlation_rejects_pre_start_ime_pid_evidence_inside_temporal_slop() {
+    let stale_app = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+    let current_app = "bbbbbbbb-cccc-dddd-eeee-ffffffffffff";
+    let workloads = vec![
+        correlation_workload(
+            "workload-stale",
+            stale_app,
+            "2026-07-15T11:50:00Z",
+            "2026-07-15T11:59:00Z",
+        ),
+        correlation_workload(
+            "workload-current",
+            current_app,
+            "2026-07-15T12:02:00Z",
+            "2026-07-15T12:10:00Z",
+        ),
+    ];
+    let mut process = correlation_process(
+        "process-current-ime",
+        723,
+        None,
+        "msiexec.exe",
+        "2026-07-15T12:02:00Z",
+    );
+    process.context.source_timestamp = None;
+    process.context.observed_at_utc = "2026-07-15T12:03:00Z".to_string();
+    let stale_ime = EspImeObservation {
+        context: fixture_context(
+            EspSourceKind::ImeLog,
+            "ime-log",
+            "ime-pre-start-reused-pid",
+            "2026-07-15T12:01:30Z",
+        ),
+        component: Some("AppWorkload".to_string()),
+        message: "Installer process 723 started".to_string(),
+        app_id: Some(stale_app.to_string()),
+        status: None,
+    };
+
+    let correlations = correlate_installer_processes(&workloads, &[process], &[], &[stale_ime]);
+
+    assert_eq!(
+        correlations[0].workload_id.as_deref(),
+        Some("workload-current")
+    );
+    assert_eq!(
+        correlations[0].confidence,
+        EspCorrelationConfidence::Temporal
+    );
+    assert!(!correlations[0]
+        .evidence
+        .iter()
+        .any(|evidence| evidence.evidence_id == "ime-pre-start-reused-pid"));
+}
+
+#[test]
+fn correlation_rejects_pre_start_reused_log_evidence_inside_temporal_slop() {
+    let stale_product = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+    let current_product = "bbbbbbbb-cccc-dddd-eeee-ffffffffffff";
+    let workloads = vec![
+        correlation_workload(
+            "workload-stale",
+            stale_product,
+            "2026-07-15T11:50:00Z",
+            "2026-07-15T11:59:00Z",
+        ),
+        correlation_workload(
+            "workload-current",
+            current_product,
+            "2026-07-15T12:02:00Z",
+            "2026-07-15T12:10:00Z",
+        ),
+    ];
+    let mut process = correlation_process(
+        "process-current-log-reuse",
+        724,
+        None,
+        "msiexec.exe",
+        "2026-07-15T12:02:00Z",
+    );
+    process.referenced_log_path = Some(r"C:\Windows\Temp\install.log".to_string());
+    process.context.source_timestamp = None;
+    process.context.observed_at_utc = "2026-07-15T12:03:00Z".to_string();
+    let stale_log = EspDeploymentLogObservation {
+        context: fixture_context(
+            EspSourceKind::DeploymentLog,
+            "msi-log",
+            "deployment-pre-start-reused-log",
+            "2026-07-15T12:01:30Z",
+        ),
+        component: Some("MsiInstaller".to_string()),
+        message: "Previous installation completed".to_string(),
+        product_code: Some(stale_product.to_string()),
+        log_path: Some(r"c:\windows\temp\INSTALL.log".to_string()),
+        status: None,
+    };
+
+    let correlations = correlate_installer_processes(&workloads, &[process], &[stale_log], &[]);
+
+    assert_eq!(
+        correlations[0].workload_id.as_deref(),
+        Some("workload-current")
+    );
+    assert_eq!(
+        correlations[0].confidence,
+        EspCorrelationConfidence::Temporal
+    );
+    assert!(!correlations[0]
+        .evidence
+        .iter()
+        .any(|evidence| evidence.evidence_id == "deployment-pre-start-reused-log"));
+}
+
+#[test]
+fn correlation_rejects_post_sample_ime_pid_evidence_inside_temporal_slop() {
+    let stale_app = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+    let current_app = "bbbbbbbb-cccc-dddd-eeee-ffffffffffff";
+    let workloads = vec![
+        correlation_workload(
+            "workload-stale",
+            stale_app,
+            "2026-07-15T11:50:00Z",
+            "2026-07-15T11:59:00Z",
+        ),
+        correlation_workload(
+            "workload-current",
+            current_app,
+            "2026-07-15T12:02:00Z",
+            "2026-07-15T12:10:00Z",
+        ),
+    ];
+    let mut process = correlation_process(
+        "process-current-ime-upper-bound",
+        727,
+        None,
+        "msiexec.exe",
+        "2026-07-15T12:02:00Z",
+    );
+    process.context.source_timestamp = None;
+    process.context.observed_at_utc = "2026-07-15T12:03:00Z".to_string();
+    let stale_ime = EspImeObservation {
+        context: fixture_context(
+            EspSourceKind::ImeLog,
+            "ime-log",
+            "ime-post-sample-reused-pid",
+            "2026-07-15T12:03:30Z",
+        ),
+        component: Some("AppWorkload".to_string()),
+        message: "Installer process 727 started".to_string(),
+        app_id: Some(stale_app.to_string()),
+        status: None,
+    };
+
+    let correlations = correlate_installer_processes(&workloads, &[process], &[], &[stale_ime]);
+
+    assert_eq!(
+        correlations[0].workload_id.as_deref(),
+        Some("workload-current")
+    );
+    assert_eq!(
+        correlations[0].confidence,
+        EspCorrelationConfidence::Temporal
+    );
+    assert!(!correlations[0]
+        .evidence
+        .iter()
+        .any(|evidence| evidence.evidence_id == "ime-post-sample-reused-pid"));
+}
+
+#[test]
+fn correlation_rejects_post_sample_reused_log_evidence_inside_temporal_slop() {
+    let stale_product = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+    let current_product = "bbbbbbbb-cccc-dddd-eeee-ffffffffffff";
+    let workloads = vec![
+        correlation_workload(
+            "workload-stale",
+            stale_product,
+            "2026-07-15T11:50:00Z",
+            "2026-07-15T11:59:00Z",
+        ),
+        correlation_workload(
+            "workload-current",
+            current_product,
+            "2026-07-15T12:02:00Z",
+            "2026-07-15T12:10:00Z",
+        ),
+    ];
+    let mut process = correlation_process(
+        "process-current-log-upper-bound",
+        728,
+        None,
+        "msiexec.exe",
+        "2026-07-15T12:02:00Z",
+    );
+    process.referenced_log_path = Some(r"C:\Windows\Temp\install.log".to_string());
+    process.context.source_timestamp = None;
+    process.context.observed_at_utc = "2026-07-15T12:03:00Z".to_string();
+    let stale_log = EspDeploymentLogObservation {
+        context: fixture_context(
+            EspSourceKind::DeploymentLog,
+            "msi-log",
+            "deployment-post-sample-reused-log",
+            "2026-07-15T12:03:30Z",
+        ),
+        component: Some("MsiInstaller".to_string()),
+        message: "Later installation started".to_string(),
+        product_code: Some(stale_product.to_string()),
+        log_path: Some(r"c:\windows\temp\INSTALL.log".to_string()),
+        status: None,
+    };
+
+    let correlations = correlate_installer_processes(&workloads, &[process], &[stale_log], &[]);
+
+    assert_eq!(
+        correlations[0].workload_id.as_deref(),
+        Some("workload-current")
+    );
+    assert_eq!(
+        correlations[0].confidence,
+        EspCorrelationConfidence::Temporal
+    );
+    assert!(!correlations[0]
+        .evidence
+        .iter()
+        .any(|evidence| evidence.evidence_id == "deployment-post-sample-reused-log"));
+}
+
+#[test]
+fn correlation_rejects_pre_start_parent_sample_inside_temporal_slop() {
+    let stale_app = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+    let current_app = "bbbbbbbb-cccc-dddd-eeee-ffffffffffff";
+    let workloads = vec![
+        correlation_workload(
+            "workload-stale",
+            stale_app,
+            "2026-07-15T11:50:00Z",
+            "2026-07-15T11:59:00Z",
+        ),
+        correlation_workload(
+            "workload-current",
+            current_app,
+            "2026-07-15T12:02:00Z",
+            "2026-07-15T12:10:00Z",
+        ),
+    ];
+    let mut stale_parent = correlation_process(
+        "process-parent-pre-start",
+        100,
+        None,
+        "AgentExecutor.exe",
+        "2026-07-15T10:00:00Z",
+    );
+    stale_parent.app_id = Some(stale_app.to_string());
+    stale_parent.context.source_timestamp = None;
+    stale_parent.context.observed_at_utc = "2026-07-15T12:01:30Z".to_string();
+    let mut child = correlation_process(
+        "process-current-child",
+        725,
+        Some(100),
+        "msiexec.exe",
+        "2026-07-15T12:02:00Z",
+    );
+    child.context.source_timestamp = None;
+    child.context.observed_at_utc = "2026-07-15T12:03:00Z".to_string();
+
+    let correlations = correlate_installer_processes(&workloads, &[stale_parent, child], &[], &[]);
+
+    assert_eq!(
+        correlations[0].workload_id.as_deref(),
+        Some("workload-current")
+    );
+    assert_eq!(
+        correlations[0].confidence,
+        EspCorrelationConfidence::Temporal
+    );
+    assert_eq!(correlations[0].process_observations.len(), 1);
+    assert!(!correlations[0]
+        .evidence
+        .iter()
+        .any(|evidence| evidence.evidence_id == "process-parent-pre-start"));
+}
+
+#[test]
+fn correlation_temporal_slop_includes_exact_two_minute_boundary() {
+    let workload = correlation_workload(
+        "workload-a",
+        "app-a",
+        "2026-07-15T12:00:00Z",
+        "2026-07-15T12:10:00Z",
+    );
+    let process = correlation_process(
+        "process-at-boundary",
+        726,
+        None,
+        r#""C:\Windows\System32\MSIEXEC.EXE""#,
+        "2026-07-15T11:58:00Z",
+    );
+
+    let correlations = correlate_installer_processes(&[workload], &[process], &[], &[]);
+
+    assert_eq!(correlations.len(), 1);
+    assert_eq!(correlations[0].workload_id.as_deref(), Some("workload-a"));
+    assert_eq!(
+        correlations[0].confidence,
+        EspCorrelationConfidence::Temporal
+    );
+}
+
+#[test]
 fn correlation_uses_pid_bound_ime_app_evidence_without_name_inference() {
     let app_a = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
     let workload = correlation_workload(
