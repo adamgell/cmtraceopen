@@ -173,6 +173,13 @@ pub fn parent_chain(
 }
 
 pub fn sanitize_command_line(command_line: &str) -> String {
+    let digest_authorization =
+        Regex::new(r#"(?i)(^|\s)((?:--|/)?authorization)(\s*(?:=|:)\s*|\s+)digest\s+.*"#)
+            .expect("constant digest-authorization regex");
+    let authorization_credential = Regex::new(
+        r#"(?i)(^|\s)((?:--|/)?authorization)(\s*(?:=|:)\s*|\s+)(?:bearer|basic|api[-_]?key)\s+(?:"[^"]*"|'[^']*'|[^\s&"]+)"#,
+    )
+    .expect("constant authorization-credential regex");
     let bearer = Regex::new(r#"(?i)(bearer\s+)(?:"[^"]*"|'[^']*'|[^\s&"]+)"#)
         .expect("constant bearer regex");
     let named_secret = Regex::new(
@@ -180,13 +187,17 @@ pub fn sanitize_command_line(command_line: &str) -> String {
     )
     .expect("constant named-secret regex");
     let query_secret = Regex::new(
-        r#"(?i)([?&](?:sig|access[-_]?token|client[-_]?secret|token|password|secret|authorization)=)[^&\s"]+"#,
+        r#"(?i)([?&](?:sig|access[-_]?token|client[-_]?secret|token|password|secret|authorization)=)(?:"[^"]*"|'[^']*'|[^&\s"]+)"#,
     )
     .expect("constant query-secret regex");
 
-    // Bearer credentials are redacted first so an authorization option cannot consume the
-    // literal scheme while leaving the following credential behind.
-    let command_line = bearer.replace_all(command_line, "$1[REDACTED]");
+    // Digest credentials can contain a comma-separated parameter list, so conservatively
+    // redact the rest of the command line once an unquoted Digest authorization value starts.
+    let command_line = digest_authorization.replace_all(command_line, "$1$2$3[REDACTED]");
+    // Authorization schemes are redacted with their credential before the generic named-secret
+    // pass can consume only the scheme and leave the credential behind.
+    let command_line = authorization_credential.replace_all(&command_line, "$1$2$3[REDACTED]");
+    let command_line = bearer.replace_all(&command_line, "$1[REDACTED]");
     let command_line = named_secret.replace_all(&command_line, "$1$2$3[REDACTED]");
     let command_line = query_secret.replace_all(&command_line, "$1[REDACTED]");
     command_line.into_owned()
@@ -644,6 +655,58 @@ mod tests {
                 !sanitized.contains("s3cr3t"),
                 "secret leaked for variant {secret_argument}: {sanitized}"
             );
+            assert!(sanitized.contains("/i {12345678-1234-1234-1234-1234567890AB}"));
+            assert!(sanitized.contains("/L*V C:\\Windows\\Temp\\contoso.log"));
+            assert!(sanitized.contains("[REDACTED]"));
+        }
+    }
+
+    #[test]
+    fn command_line_sanitizer_redacts_authorization_credentials_and_quoted_query_secrets() {
+        let cases: &[(&str, &str, &[&str])] = &[
+            (
+                "basic authorization",
+                "--authorization Basic basic-credential-sentinel",
+                &["basic-credential-sentinel"],
+            ),
+            (
+                "api key authorization",
+                "Authorization: ApiKey api-key-credential-sentinel",
+                &["api-key-credential-sentinel"],
+            ),
+            (
+                "digest authorization",
+                "Authorization=Digest username=\"digest-user-sentinel\", realm=\"digest-realm-sentinel\", response=\"digest-response-sentinel\"",
+                &[
+                    "digest-user-sentinel",
+                    "digest-realm-sentinel",
+                    "digest-response-sentinel",
+                ],
+            ),
+            (
+                "double-quoted query secret",
+                "https://cache.invalid/content?token=\"quoted-query-secret-sentinel\"&safe=true",
+                &["quoted-query-secret-sentinel"],
+            ),
+            (
+                "single-quoted query secret",
+                "https://cache.invalid/content?access_token='single-quoted-query-secret-sentinel'&safe=true",
+                &["single-quoted-query-secret-sentinel"],
+            ),
+        ];
+
+        for (case, secret_argument, sentinels) in cases {
+            let raw = format!(
+                "msiexec.exe /i {{12345678-1234-1234-1234-1234567890AB}} /L*V C:\\Windows\\Temp\\contoso.log {secret_argument}"
+            );
+            let sanitized = sanitize_command_line(&raw);
+
+            for sentinel in *sentinels {
+                assert!(
+                    !sanitized.contains(sentinel),
+                    "{case} leaked {sentinel}: {sanitized}"
+                );
+            }
             assert!(sanitized.contains("/i {12345678-1234-1234-1234-1234567890AB}"));
             assert!(sanitized.contains("/L*V C:\\Windows\\Temp\\contoso.log"));
             assert!(sanitized.contains("[REDACTED]"));

@@ -354,10 +354,9 @@ pub fn delivery_optimization_from_rows(
     let download_http_bytes = sum("DownloadHttpBytes");
     let download_lan_bytes = sum("DownloadLanBytes");
     let download_cache_host_bytes = sum("DownloadCacheHostBytes");
-    let total = u128::from(download_http_bytes)
-        + u128::from(download_lan_bytes)
-        + u128::from(download_cache_host_bytes);
-    let share = |bytes: u64| (total != 0).then(|| (bytes as f64 / total as f64) * 100.0);
+    let share = |bytes: u64| {
+        (download_http_bytes != 0).then(|| (bytes as f64 / download_http_bytes as f64) * 100.0)
+    };
 
     Some(EspDeliveryOptimizationEvidence {
         download_http_bytes,
@@ -1247,10 +1246,10 @@ mod tests {
     }
 
     #[test]
-    fn delivery_optimization_counters_use_total_download_bytes_as_denominator() {
+    fn delivery_optimization_counters_use_http_bytes_as_denominator() {
         let evidence = delivery_optimization_from_rows(
             &[row(&[
-                ("DownloadHttpBytes", "700"),
+                ("DownloadHttpBytes", "1000"),
                 ("DownloadLanBytes", "200"),
                 ("DownloadCacheHostBytes", "100"),
             ])],
@@ -1258,7 +1257,7 @@ mod tests {
         )
         .expect("counter row");
 
-        assert_eq!(evidence.download_http_bytes, 700);
+        assert_eq!(evidence.download_http_bytes, 1000);
         assert_eq!(evidence.download_lan_bytes, 200);
         assert_eq!(evidence.download_cache_host_bytes, 100);
         assert_eq!(evidence.peer_share_percent, Some(20.0));
@@ -1267,8 +1266,8 @@ mod tests {
         let zero = delivery_optimization_from_rows(
             &[row(&[
                 ("DownloadHttpBytes", "0"),
-                ("DownloadLanBytes", "0"),
-                ("DownloadCacheHostBytes", "0"),
+                ("DownloadLanBytes", "200"),
+                ("DownloadCacheHostBytes", "100"),
             ])],
             "2026-07-15T14:00:00Z",
         )
