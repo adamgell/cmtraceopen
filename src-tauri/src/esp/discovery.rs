@@ -7,7 +7,7 @@
 
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::fs::{self, File, Metadata};
+use std::fs::{self, Metadata, OpenOptions};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
@@ -258,6 +258,17 @@ impl PathInspectionFailure {
             kind,
             detail: format!("{operation} failed: {error}"),
         }
+    }
+
+    fn from_open_io(operation: &str, error: std::io::Error) -> Self {
+        #[cfg(unix)]
+        if error.raw_os_error() == Some(libc::ELOOP) {
+            return Self {
+                kind: DiscoveryPathFailureKind::ReparseRejected,
+                detail: format!("{operation} rejected a symlink or reparse point: {error}"),
+            };
+        }
+        Self::from_io(operation, error)
     }
 
     fn coverage(
@@ -693,6 +704,7 @@ fn collect_temp_candidates(
                 Ok(true) => {}
                 Ok(false) => continue,
                 Err(failure) => {
+                    coverage.entries_rejected += 1;
                     path_failures.push(failure.coverage(
                         &path,
                         Some("bounded-temp-log".to_string()),
@@ -885,8 +897,28 @@ fn is_high_signal_temp_name(file_name: &str) -> bool {
 }
 
 fn has_installer_signature(path: &Path) -> Result<bool, PathInspectionFailure> {
-    let metadata = fs::symlink_metadata(path)
-        .map_err(|error| PathInspectionFailure::from_io("inspect installer signature", error))?;
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT;
+
+        options
+            .share_mode(0x1 | 0x2 | 0x4)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT.0);
+    }
+    let file = options
+        .open(path)
+        .map_err(|error| PathInspectionFailure::from_open_io("open installer signature", error))?;
+    let metadata = file.metadata().map_err(|error| {
+        PathInspectionFailure::from_io("inspect opened installer signature", error)
+    })?;
     if metadata_is_reparse_point(&metadata) {
         return Err(PathInspectionFailure {
             kind: DiscoveryPathFailureKind::ReparseRejected,
@@ -901,8 +933,8 @@ fn has_installer_signature(path: &Path) -> Result<bool, PathInspectionFailure> {
     }
 
     let mut bytes = Vec::new();
-    File::open(path)
-        .and_then(|file| file.take(SIGNATURE_BYTES).read_to_end(&mut bytes))
+    file.take(SIGNATURE_BYTES)
+        .read_to_end(&mut bytes)
         .map_err(|error| PathInspectionFailure::from_io("read installer signature", error))?;
     let text = String::from_utf8_lossy(&bytes).to_ascii_lowercase();
     Ok([

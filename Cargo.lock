@@ -561,6 +561,7 @@ dependencies = [
  "evtx",
  "font-kit",
  "glob",
+ "libc",
  "log",
  "notify",
  "plist",

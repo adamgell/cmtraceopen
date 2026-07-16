@@ -2871,6 +2871,33 @@ fn discovery_has_no_arbitrary_root_or_deep_mode() {
     }
 }
 
+#[cfg(unix)]
+#[test]
+fn temp_discovery_counts_signature_read_failure_as_rejected_path() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let root = tempdir().expect("temp root");
+    let path = root.path().join("candidate.data");
+    fs::write(&path, b"candidate without a high-signal name\n").expect("write candidate");
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o000))
+        .expect("make candidate unreadable");
+    let mut input = discovery_input(SystemTime::now());
+    input.temp_roots.push(root.path().to_path_buf());
+
+    let result = discover_bounded_logs(&input);
+
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
+        .expect("restore candidate permissions");
+    let coverage = result.root_coverage.first().expect("temp coverage");
+    assert_eq!(coverage.entries_inspected, 1);
+    assert_eq!(coverage.entries_rejected, 1);
+    assert_eq!(result.path_failures.len(), 1);
+    assert_eq!(
+        result.path_failures[0].kind,
+        DiscoveryPathFailureKind::PermissionDenied
+    );
+}
+
 fn tail_source(
     path: PathBuf,
     source_id: impl Into<String>,
@@ -3350,6 +3377,80 @@ fn tail_attachment_budget_evicts_deterministically_for_a_later_active_msi_log() 
 }
 
 #[test]
+fn tail_selected_current_source_precedes_snapshot_attachment_budget() {
+    let root = tempdir().expect("tail root");
+    let mut sources = Vec::new();
+    for index in 0..MAX_SESSION_TAIL_SOURCES {
+        let path = root.path().join(format!("rotation-{index:03}.log.1"));
+        fs::write(&path, b"snapshot\n").expect("write snapshot");
+        sources.push(tail_source(
+            path,
+            format!("rotation-{index:03}"),
+            2,
+            DiscoverySourceOrigin::CuratedKnown,
+            false,
+        ));
+    }
+    let current_path = root.path().join("current-configmgr.log");
+    fs::write(&current_path, b"current\n").expect("write current source");
+    sources.push(tail_source(
+        current_path.clone(),
+        "current-configmgr",
+        3,
+        DiscoverySourceOrigin::CuratedKnown,
+        true,
+    ));
+    let mut tails = EspTailSet::new();
+
+    let result = tails.reconcile(&sources);
+
+    assert!(result.source_limit_reached);
+    assert!(result
+        .attachments
+        .iter()
+        .any(|attachment| attachment.source.path == current_path));
+    assert!(tails.active_paths().contains(&current_path));
+}
+
+#[test]
+fn tail_failed_priority_attachment_preserves_existing_budget_entry() {
+    let root = tempdir().expect("tail root");
+    let mut snapshots = Vec::new();
+    for index in 0..MAX_SESSION_TAIL_SOURCES {
+        let path = root.path().join(format!("MSI-{index:03}.log"));
+        fs::write(&path, b"snapshot\n").expect("write bounded snapshot");
+        snapshots.push(tail_source(
+            path,
+            format!("bounded-{index:03}"),
+            5,
+            DiscoverySourceOrigin::Temp,
+            true,
+        ));
+    }
+    let mut tails = EspTailSet::new();
+    assert_eq!(
+        tails.reconcile(&snapshots).attachments.len(),
+        MAX_SESSION_TAIL_SOURCES
+    );
+
+    let missing_path = root.path().join("missing-active-msiexec.log");
+    snapshots.push(tail_source(
+        missing_path.clone(),
+        "missing-active-msiexec",
+        1,
+        DiscoverySourceOrigin::ActiveProcess,
+        true,
+    ));
+    let result = tails.reconcile(&snapshots);
+
+    assert!(result.source_limit_reached);
+    assert_eq!(result.failures.len(), 1);
+    assert_eq!(result.failures[0].path, missing_path);
+    assert!(result.attachments.is_empty());
+    assert!(result.evicted_sources.is_empty());
+}
+
+#[test]
 fn tail_dormant_cursor_cache_is_bounded_and_reattachment_is_an_explicit_reset() {
     let root = tempdir().expect("tail root");
     let modified = SystemTime::UNIX_EPOCH + Duration::from_secs(2_000);
@@ -3399,6 +3500,12 @@ fn tail_dormant_cursor_cache_is_bounded_and_reattachment_is_an_explicit_reset() 
         .attachments
         .iter()
         .all(|attachment| { attachment.reset_reason == Some(EspTailResetReason::Reattached) }));
+    assert_eq!(third.failures.len(), MAX_ACTIVE_TAILS);
+    assert!(third.failures.iter().all(|failure| {
+        failure.kind == DiscoveryPathFailureKind::ResourceLimit
+            && failure.detail.contains("dormant")
+            && failure.detail.contains(&MAX_INITIAL_READ_BYTES.to_string())
+    }));
     assert_eq!(tails.active_tail_count(), MAX_ACTIVE_TAILS);
     assert!(tails.retained_tail_cursor_count() <= MAX_ACTIVE_TAILS + MAX_DORMANT_TAIL_CURSORS);
 }
@@ -5925,4 +6032,17 @@ fn bundle_json_scalar_bound_distinguishes_exact_capacity_from_truncation() {
                 .as_deref()
                 .is_some_and(|detail| detail.contains("4096-record bound"))
     }));
+}
+
+#[test]
+fn signature_and_tail_reads_require_platform_no_follow_flags() {
+    let discovery = include_str!("../src/esp/discovery.rs");
+    let tailing = include_str!("../src/esp/tailing.rs");
+
+    for source in [discovery, tailing] {
+        assert!(source.contains("libc::O_NOFOLLOW"));
+        assert!(source.contains("libc::O_NONBLOCK"));
+        assert!(source.contains("FILE_FLAG_OPEN_REPARSE_POINT"));
+    }
+    assert!(!discovery.contains("File::open(path)"));
 }
