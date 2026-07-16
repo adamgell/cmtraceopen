@@ -11293,3 +11293,155 @@ fn redaction_projection_removes_folded_quoted_credentials_from_public_raw_eviden
     assert_eq!(redacted_export_projection(&safe), safe);
     assert_eq!(snapshot, original);
 }
+
+struct FoldedSchemeSeparatorCase {
+    label: String,
+    payload: String,
+    head_secret: String,
+    tail_secret: String,
+    boundary_control: String,
+}
+
+fn folded_scheme_separator_credential_matrix() -> Vec<FoldedSchemeSeparatorCase> {
+    let schemes = ["Basic", "Bearer", "Digest", "ApiKey", "Negotiate", "NTLM"];
+    let line_endings = [("lf", "\n"), ("crlf", "\r\n")];
+    let forms = [("quoted", true), ("unclosed-quoted", false)];
+    let mut matrix = Vec::new();
+
+    for scheme in schemes {
+        for (line_ending_name, line_ending) in line_endings {
+            let bare_label = format!("{}-{line_ending_name}-bare", scheme.to_ascii_lowercase());
+            let bare_head = format!("{}_HEAD_SECRET", bare_label.to_ascii_uppercase());
+            let bare_tail = format!("{}_TAIL_SECRET", bare_label.to_ascii_uppercase());
+            let bare_boundary = format!("{}_BOUNDARY_CONTROL", bare_label.to_ascii_uppercase());
+            matrix.push(FoldedSchemeSeparatorCase {
+                label: bare_label,
+                payload: format!(
+                    "{scheme}{line_ending} {bare_head}{line_ending}\t{bare_tail}{line_ending}{bare_boundary}"
+                ),
+                head_secret: bare_head,
+                tail_secret: bare_tail,
+                boundary_control: bare_boundary,
+            });
+
+            for (form, closed) in forms {
+                let label = format!("{}-{line_ending_name}-{form}", scheme.to_ascii_lowercase());
+                let head_secret = format!("{}_HEAD_SECRET", label.to_ascii_uppercase());
+                let tail_secret = format!("{}_TAIL_SECRET", label.to_ascii_uppercase());
+                let boundary_control = format!("{}_BOUNDARY_CONTROL", label.to_ascii_uppercase());
+                let closing_quote = if closed { "\"" } else { "" };
+                matrix.push(FoldedSchemeSeparatorCase {
+                    label,
+                    payload: format!(
+                        "{scheme}{line_ending} \"{head_secret}{closing_quote}{line_ending}\t{tail_secret}{line_ending}{boundary_control}"
+                    ),
+                    head_secret,
+                    tail_secret,
+                    boundary_control,
+                });
+            }
+        }
+    }
+
+    matrix
+}
+
+#[test]
+fn redaction_projection_masks_folded_standalone_scheme_separators_on_typed_and_reference_surfaces()
+{
+    let matrix = folded_scheme_separator_credential_matrix();
+    let mut snapshot = findings_snapshot();
+    snapshot.identity.evidence = matrix
+        .iter()
+        .map(|case| evidence_ref_from(&case.payload, &case.payload))
+        .collect();
+    snapshot.activity = matrix
+        .iter()
+        .enumerate()
+        .map(|(index, case)| EspTimelineEntry {
+            entry_id: format!("folded-scheme-separator-{}", case.label),
+            timestamp: timestamp(&format!("2026-07-16T16:{:02}:00Z", index % 60)),
+            kind: EspTimelineKind::Other,
+            title: case.payload.clone(),
+            detail: Some(case.payload.clone()),
+            status: None,
+            evidence: vec![],
+        })
+        .collect();
+    let original = snapshot.clone();
+
+    let safe = redacted_export_projection(&snapshot);
+    let safe_json = serde_json::to_string(&safe).unwrap();
+
+    for (index, case) in matrix.iter().enumerate() {
+        assert!(
+            !safe_json.contains(&case.head_secret) && !safe_json.contains(&case.tail_secret),
+            "folded standalone {} credential leaked: {safe_json}",
+            case.label
+        );
+        let reference = &safe.identity.evidence[index];
+        let activity = &safe.activity[index];
+        for surface in [
+            reference.evidence_id.as_str(),
+            reference.source_artifact_id.as_str(),
+            activity.title.as_str(),
+            activity
+                .detail
+                .as_deref()
+                .expect("matrix activity keeps detail"),
+        ] {
+            assert!(
+                surface.contains(&case.boundary_control),
+                "folded standalone {} consumed the next non-continuation line on a typed or reference surface: {surface}",
+                case.label
+            );
+        }
+    }
+    assert_eq!(redacted_export_projection(&safe), safe);
+    assert_eq!(snapshot, original);
+}
+
+#[test]
+fn redaction_projection_removes_folded_standalone_scheme_separators_from_public_raw_evidence() {
+    let matrix = folded_scheme_separator_credential_matrix();
+    let mut snapshot = findings_snapshot();
+    snapshot.raw_evidence = matrix
+        .iter()
+        .enumerate()
+        .map(|(index, case)| {
+            let mut record = raw_export_record(
+                &format!("folded-scheme-separator-{index}"),
+                EspSourceKind::DeploymentLog,
+                "neutral-folded-scheme-source",
+                None,
+                &case.payload,
+            );
+            record.sensitivity = EspSensitivity::Public;
+            if index % 2 == 1 {
+                record.raw_value = EspObservationValue::StringList(vec![
+                    "safe-list-control".to_string(),
+                    case.payload.clone(),
+                ]);
+            }
+            record
+        })
+        .collect();
+    let original = snapshot.clone();
+
+    let safe = redacted_export_projection(&snapshot);
+    let safe_json = serde_json::to_string(&safe).unwrap();
+
+    assert!(
+        safe.raw_evidence.is_empty(),
+        "folded standalone credentials survived Public raw-evidence classification: {safe_json}"
+    );
+    for case in &matrix {
+        assert!(
+            !safe_json.contains(&case.head_secret) && !safe_json.contains(&case.tail_secret),
+            "folded standalone {} credential leaked from Public raw evidence: {safe_json}",
+            case.label
+        );
+    }
+    assert_eq!(redacted_export_projection(&safe), safe);
+    assert_eq!(snapshot, original);
+}
