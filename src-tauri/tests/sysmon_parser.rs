@@ -233,7 +233,10 @@ fn extract_config_with_service_state_change() {
     let config = extract_config(&events, &summary);
 
     assert!(config.found);
-    assert_eq!(config.sysmon_version.as_deref(), Some("Sysmon version 15.0"));
+    assert_eq!(
+        config.sysmon_version.as_deref(),
+        Some("Sysmon version 15.0")
+    );
 }
 
 #[test]

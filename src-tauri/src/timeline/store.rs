@@ -1,6 +1,6 @@
-use std::collections::HashMap;
 use crate::intune::models::IntuneEvent;
 use crate::timeline::models::*;
+use std::collections::HashMap;
 
 /// Server-side timeline. Holds compact indexes per source and sparse IME event arrays.
 /// Full LogEntry text is NOT retained — it is re-materialized from file offset on demand.
@@ -17,7 +17,11 @@ impl Timeline {
     #[allow(dead_code)]
     pub fn total_entries(&self) -> u64 {
         self.indexes.values().map(|v| v.len() as u64).sum::<u64>()
-            + self.ime_events.values().map(|v| v.len() as u64).sum::<u64>()
+            + self
+                .ime_events
+                .values()
+                .map(|v| v.len() as u64)
+                .sum::<u64>()
     }
 }
 
@@ -29,16 +33,38 @@ mod tests {
     #[test]
     fn total_entries_sums_across_sources() {
         let mut indexes = HashMap::new();
-        indexes.insert(0u16, vec![
-            EntryIndex { timestamp_ms: 1, severity: Severity::Info,
-                source_idx: 0, byte_offset: 0, line_number: 1, signal_flags: 0 },
-            EntryIndex { timestamp_ms: 2, severity: Severity::Error,
-                source_idx: 0, byte_offset: 10, line_number: 2, signal_flags: 1 },
-        ]);
-        indexes.insert(1u16, vec![
-            EntryIndex { timestamp_ms: 3, severity: Severity::Info,
-                source_idx: 1, byte_offset: 0, line_number: 1, signal_flags: 0 },
-        ]);
+        indexes.insert(
+            0u16,
+            vec![
+                EntryIndex {
+                    timestamp_ms: 1,
+                    severity: Severity::Info,
+                    source_idx: 0,
+                    byte_offset: 0,
+                    line_number: 1,
+                    signal_flags: 0,
+                },
+                EntryIndex {
+                    timestamp_ms: 2,
+                    severity: Severity::Error,
+                    source_idx: 0,
+                    byte_offset: 10,
+                    line_number: 2,
+                    signal_flags: 1,
+                },
+            ],
+        );
+        indexes.insert(
+            1u16,
+            vec![EntryIndex {
+                timestamp_ms: 3,
+                severity: Severity::Info,
+                source_idx: 1,
+                byte_offset: 0,
+                line_number: 1,
+                signal_flags: 0,
+            }],
+        );
         let tl = Timeline {
             bundle: TimelineBundle {
                 id: "t1".into(),

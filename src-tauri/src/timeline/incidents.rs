@@ -73,11 +73,7 @@ pub struct Cluster {
 /// Cluster signals using a sliding window. Signals must be sorted by ts_ms.
 /// A new signal is added to the current cluster iff its ts_ms is within
 /// `window_ms` of the cluster's current end time AND its ts_ms - ts_start <= max_span_ms.
-pub fn cluster_signals(
-    signals: &[Signal],
-    window_ms: i64,
-    max_span_ms: i64,
-) -> Vec<Cluster> {
+pub fn cluster_signals(signals: &[Signal], window_ms: i64, max_span_ms: i64) -> Vec<Cluster> {
     let mut out: Vec<Cluster> = Vec::new();
     for s in signals {
         match out.last_mut() {
@@ -477,13 +473,8 @@ mod tests_detect {
         let t = TimelineTunables::default();
         let denied: HashSet<String> = HashSet::new();
 
-        let (signals, incidents) = detect_incidents(
-            &indexes,
-            &HashMap::new(),
-            &t,
-            &denied,
-            &noop_materialize,
-        );
+        let (signals, incidents) =
+            detect_incidents(&indexes, &HashMap::new(), &t, &denied, &noop_materialize);
 
         assert_eq!(signals.len(), 2);
         assert_eq!(incidents.len(), 1);
@@ -516,13 +507,8 @@ mod tests_detect {
         };
         let denied: HashSet<String> = HashSet::new();
 
-        let (_signals, incidents) = detect_incidents(
-            &indexes,
-            &HashMap::new(),
-            &t,
-            &denied,
-            &noop_materialize,
-        );
+        let (_signals, incidents) =
+            detect_incidents(&indexes, &HashMap::new(), &t, &denied, &noop_materialize);
 
         assert_eq!(
             incidents.len(),

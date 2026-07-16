@@ -7,7 +7,7 @@ use serde_json::Value;
 use crate::constants::DEFAULT_BUNDLE_PRIMARY_ENTRY_POINTS;
 use crate::intune::models::{EvidenceBundleArtifactCounts, EvidenceBundleMetadata};
 
-use super::intune::{IME_LOG_PATTERNS, ResolvedIntuneInput};
+use super::intune::{ResolvedIntuneInput, IME_LOG_PATTERNS};
 
 pub(crate) fn describe_path_access_error(path: &Path, error: &std::io::Error) -> String {
     match error.kind() {
@@ -112,7 +112,9 @@ pub(crate) fn collect_directory_log_paths(path: &Path) -> Result<Vec<PathBuf>, S
     Ok(ime_files)
 }
 
-pub(crate) fn resolve_evidence_bundle_input(path: &Path) -> Result<Option<ResolvedIntuneInput>, String> {
+pub(crate) fn resolve_evidence_bundle_input(
+    path: &Path,
+) -> Result<Option<ResolvedIntuneInput>, String> {
     let manifest_path = path.join("manifest.json");
     if !manifest_path.is_file() {
         return Ok(None);

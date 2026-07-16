@@ -11,9 +11,8 @@ use super::sanitize_control_chars;
 use windows::core::{Error, HSTRING, PCWSTR};
 #[cfg(target_os = "windows")]
 use windows::Win32::System::EventLog::{
-    EVT_HANDLE, EvtClose, EvtFormatMessage, EvtFormatMessageEvent, EvtNext,
-    EvtOpenPublisherMetadata, EvtQuery, EvtQueryChannelPath, EvtQueryReverseDirection,
-    EvtRender, EvtRenderEventXml,
+    EvtClose, EvtFormatMessage, EvtFormatMessageEvent, EvtNext, EvtOpenPublisherMetadata, EvtQuery,
+    EvtQueryChannelPath, EvtQueryReverseDirection, EvtRender, EvtRenderEventXml, EVT_HANDLE,
 };
 
 // ── RAII handle wrapper ─────────────────────────────────────────────────────
@@ -96,13 +95,17 @@ pub fn enumerate_channels() -> Result<Vec<EvtxChannelInfo>, String> {
                 // ERROR_INSUFFICIENT_BUFFER — resize and retry
                 buffer.resize(used as usize, 0);
             } else {
-                unsafe { let _ = EvtClose(EVT_HANDLE(raw_handle)); }
+                unsafe {
+                    let _ = EvtClose(EVT_HANDLE(raw_handle));
+                }
                 return Err(format!("EvtNextChannelPath failed: error {err}"));
             }
         }
     }
 
-    unsafe { let _ = EvtClose(EVT_HANDLE(raw_handle)); }
+    unsafe {
+        let _ = EvtClose(EVT_HANDLE(raw_handle));
+    }
 
     channels.sort_by_key(|c| c.name.to_lowercase());
     Ok(channels)
@@ -112,10 +115,7 @@ pub fn enumerate_channels() -> Result<Vec<EvtxChannelInfo>, String> {
 ///
 /// Returns newest events first, capped at `max_events` (default 1000).
 #[cfg(target_os = "windows")]
-pub fn query_channel(
-    channel: &str,
-    max_events: Option<u64>,
-) -> Result<Vec<EvtxRecord>, String> {
+pub fn query_channel(channel: &str, max_events: Option<u64>) -> Result<Vec<EvtxRecord>, String> {
     query_channel_with_progress(channel, max_events, |_, _| {})
 }
 
@@ -153,8 +153,12 @@ pub fn query_channel_with_progress(
             Ok(()) => {}
             Err(e) => {
                 if !is_no_more_items(&e) {
-                    eprintln!("[evtx] EvtNext error: code=0x{:08x} w32={} msg=\"{}\"",
-                        e.code().0 as u32, win32_code(&e), e.message());
+                    eprintln!(
+                        "[evtx] EvtNext error: code=0x{:08x} w32={} msg=\"{}\"",
+                        e.code().0 as u32,
+                        win32_code(&e),
+                        e.message()
+                    );
                 }
                 break;
             }
@@ -167,13 +171,15 @@ pub fn query_channel_with_progress(
         for raw_handle in raw_handles.into_iter().take(returned as usize) {
             if records.len() >= limit {
                 // Close remaining handles we won't use
-                unsafe { let _ = EvtClose(EVT_HANDLE(raw_handle)); }
+                unsafe {
+                    let _ = EvtClose(EVT_HANDLE(raw_handle));
+                }
                 continue;
             }
 
             let event_handle = OwnedEvtHandle::new(EVT_HANDLE(raw_handle));
-            let xml = render_event_xml(event_handle.raw())
-                .map_err(|e| format_error("EvtRender", &e))?;
+            let xml =
+                render_event_xml(event_handle.raw()).map_err(|e| format_error("EvtRender", &e))?;
 
             let provider_name = extract_xml_attr(&xml, "Provider", "Name");
 
@@ -184,8 +190,7 @@ pub fn query_channel_with_progress(
                     .flatten()
             });
 
-            if let Some(record) = parse_xml_to_record(&xml, channel, rendered_message.as_deref())
-            {
+            if let Some(record) = parse_xml_to_record(&xml, channel, rendered_message.as_deref()) {
                 records.push(record);
                 // Report progress every 100 records
                 if records.len() % 100 == 0 {
@@ -193,13 +198,18 @@ pub fn query_channel_with_progress(
                 }
             } else if records.is_empty() {
                 // Log the first unparseable XML so we can debug the format
-                log::warn!("event=evtx_parse_failed channel=\"{channel}\" xml_prefix=\"{}\"",
-                    &xml[..xml.len().min(300)]);
+                log::warn!(
+                    "event=evtx_parse_failed channel=\"{channel}\" xml_prefix=\"{}\"",
+                    &xml[..xml.len().min(300)]
+                );
             }
         }
     }
 
-    log::info!("event=evtx_live_query_done channel=\"{channel}\" records={}", records.len());
+    log::info!(
+        "event=evtx_live_query_done channel=\"{channel}\" records={}",
+        records.len()
+    );
     Ok(records)
 }
 
@@ -220,10 +230,7 @@ pub fn query_channel_with_progress(
 }
 
 #[cfg(not(target_os = "windows"))]
-pub fn query_channel(
-    _channel: &str,
-    _max_events: Option<u64>,
-) -> Result<Vec<EvtxRecord>, String> {
+pub fn query_channel(_channel: &str, _max_events: Option<u64>) -> Result<Vec<EvtxRecord>, String> {
     Err("Live event log queries are only available on Windows.".to_string())
 }
 
@@ -272,10 +279,9 @@ fn format_event_message(
 ) -> Result<Option<String>, Error> {
     if !cache.contains_key(provider_name) {
         let provider = HSTRING::from(provider_name);
-        let metadata =
-            unsafe { EvtOpenPublisherMetadata(None, &provider, PCWSTR::null(), 0, 0) }
-                .ok()
-                .map(OwnedEvtHandle::new);
+        let metadata = unsafe { EvtOpenPublisherMetadata(None, &provider, PCWSTR::null(), 0, 0) }
+            .ok()
+            .map(OwnedEvtHandle::new);
         cache.insert(provider_name.to_string(), metadata);
     }
 
@@ -515,7 +521,10 @@ mod tests {
         println!("Application records: {}", records.len());
         for (i, r) in records.iter().enumerate() {
             println!("--- Record {i} ---");
-            println!("  EventID: {}, Provider: {}, Level: {:?}", r.event_id, r.provider, r.level);
+            println!(
+                "  EventID: {}, Provider: {}, Level: {:?}",
+                r.event_id, r.provider, r.level
+            );
             println!("  Timestamp: {}", r.timestamp);
             println!("  Message: {}", &r.message[..r.message.len().min(100)]);
             println!("  XML prefix: {}", &r.raw_xml[..r.raw_xml.len().min(300)]);

@@ -8,9 +8,9 @@ use std::time::Instant;
 
 use rayon::prelude::*;
 use serde::Serialize;
-use tauri::{async_runtime, AppHandle, Emitter};
 #[cfg(target_os = "windows")]
 use tauri::Manager;
+use tauri::{async_runtime, AppHandle, Emitter};
 
 use crate::intune::download_stats;
 use crate::intune::event_tracker;
@@ -85,24 +85,28 @@ pub async fn analyze_intune_logs(
     let _ = graph_api_enabled;
 
     Ok(async_runtime::spawn_blocking(move || {
-        analyze_intune_logs_blocking(path, request_id, include_live_event_logs, graph_resolved, app)
+        analyze_intune_logs_blocking(
+            path,
+            request_id,
+            include_live_event_logs,
+            graph_resolved,
+            app,
+        )
     })
     .await
-    .map_err(|error| crate::error::AppError::Internal(format!("Intune analysis task failed: {}", error)))??)
+    .map_err(|error| {
+        crate::error::AppError::Internal(format!("Intune analysis task failed: {}", error))
+    })??)
 }
 
 /// Pre-fetch all Intune apps from Graph API and return a guid→name map.
 /// Returns None if auth isn't active or the call fails (non-blocking fallback).
 #[cfg(target_os = "windows")]
-fn try_graph_prefetch(
-    state: &crate::graph_api::GraphAuthState,
-) -> Option<HashMap<String, String>> {
+fn try_graph_prefetch(state: &crate::graph_api::GraphAuthState) -> Option<HashMap<String, String>> {
     match crate::graph_api::fetch_all_apps(state) {
         Ok(apps) => {
-            let map: HashMap<String, String> = apps
-                .into_iter()
-                .map(|a| (a.id, a.display_name))
-                .collect();
+            let map: HashMap<String, String> =
+                apps.into_iter().map(|a| (a.id, a.display_name)).collect();
             if map.is_empty() {
                 None
             } else {
@@ -224,7 +228,10 @@ fn analyze_intune_logs_blocking(
         all_downloads.extend(processed_file.downloads);
         coverage.push(processed_file.coverage);
         all_policy_metadata.extend(
-            processed_file.policy_metadata.into_iter().map(|(k, v)| (k.to_lowercase(), v))
+            processed_file
+                .policy_metadata
+                .into_iter()
+                .map(|(k, v)| (k.to_lowercase(), v)),
         );
     }
 
@@ -235,34 +242,65 @@ fn analyze_intune_logs_blocking(
     let mut missed_events = 0u32;
     let mut missed_downloads = 0u32;
     if !guid_registry.is_empty() {
-        let _ = writeln!(diag_buffer, "event=guid_registry_global entries={}", guid_registry.len());
+        let _ = writeln!(
+            diag_buffer,
+            "event=guid_registry_global entries={}",
+            guid_registry.len()
+        );
         for (guid, entry) in guid_registry.iter() {
-            let _ = writeln!(diag_buffer, "  guid={} name=\"{}\" source={:?}", guid, entry.name, entry.source);
+            let _ = writeln!(
+                diag_buffer,
+                "  guid={} name=\"{}\" source={:?}",
+                guid, entry.name, entry.source
+            );
         }
 
         for event in &mut all_events {
             if let Some(guid) = &event.guid {
                 if let Some(enriched) = guid_registry.enrich_event_name(&event.name, guid) {
-                    let _ = writeln!(diag_buffer, "event=guid_enriched_event old=\"{}\" new=\"{}\" guid={}", event.name, enriched, guid);
+                    let _ = writeln!(
+                        diag_buffer,
+                        "event=guid_enriched_event old=\"{}\" new=\"{}\" guid={}",
+                        event.name, enriched, guid
+                    );
                     event.name = enriched;
                     enriched_events += 1;
                 } else if event.name.ends_with(')') && event.name.contains('(') {
-                    let _ = writeln!(diag_buffer, "event=guid_enrich_miss name=\"{}\" guid={} registry_has={}", event.name, guid, guid_registry.resolve(guid).unwrap_or("NOT_FOUND"));
+                    let _ = writeln!(
+                        diag_buffer,
+                        "event=guid_enrich_miss name=\"{}\" guid={} registry_has={}",
+                        event.name,
+                        guid,
+                        guid_registry.resolve(guid).unwrap_or("NOT_FOUND")
+                    );
                     missed_events += 1;
                 }
             } else if event.name.ends_with(')') && event.name.contains('(') {
-                let _ = writeln!(diag_buffer, "event=guid_enrich_skip_no_guid name=\"{}\"", event.name);
+                let _ = writeln!(
+                    diag_buffer,
+                    "event=guid_enrich_skip_no_guid name=\"{}\"",
+                    event.name
+                );
                 missed_events += 1;
             }
         }
         for dl in &mut all_downloads {
-            if let Some(resolved) = guid_registry.resolve_fallback_name(&dl.name, &dl.content_id)
-            {
-                let _ = writeln!(diag_buffer, "event=guid_enriched_download old=\"{}\" new=\"{}\" guid={}", dl.name, resolved, dl.content_id);
+            if let Some(resolved) = guid_registry.resolve_fallback_name(&dl.name, &dl.content_id) {
+                let _ = writeln!(
+                    diag_buffer,
+                    "event=guid_enriched_download old=\"{}\" new=\"{}\" guid={}",
+                    dl.name, resolved, dl.content_id
+                );
                 dl.name = resolved;
                 enriched_downloads += 1;
             } else if dl.name.starts_with("Download (") || dl.name.starts_with("Download:") {
-                let _ = writeln!(diag_buffer, "event=guid_enrich_miss_download name=\"{}\" guid={} registry_has={}", dl.name, dl.content_id, guid_registry.resolve(&dl.content_id).unwrap_or("NOT_FOUND"));
+                let _ = writeln!(
+                    diag_buffer,
+                    "event=guid_enrich_miss_download name=\"{}\" guid={} registry_has={}",
+                    dl.name,
+                    dl.content_id,
+                    guid_registry.resolve(&dl.content_id).unwrap_or("NOT_FOUND")
+                );
                 missed_downloads += 1;
             }
         }
@@ -272,10 +310,7 @@ fn analyze_intune_logs_blocking(
     if !all_policy_metadata.is_empty() {
         for event in &mut all_events {
             if event.event_type == IntuneEventType::PowerShellScript {
-                let lookup_guid = event
-                    .parent_app_guid
-                    .as_deref()
-                    .or(event.guid.as_deref());
+                let lookup_guid = event.parent_app_guid.as_deref().or(event.guid.as_deref());
                 if let Some(guid) = lookup_guid {
                     if let Some(policy) = all_policy_metadata.get(&guid.to_lowercase()) {
                         // Find the first script-type detection rule with a body
@@ -294,9 +329,19 @@ fn analyze_intune_logs_blocking(
 
     // Append pipeline summary and write diag file (verbose detail to file only, summary to stderr)
     {
-        let _ = writeln!(diag_buffer, "event=pipeline_summary event_count={} download_count={} guid_registry_entries={}", all_events.len(), all_downloads.len(), guid_registry.len());
+        let _ = writeln!(
+            diag_buffer,
+            "event=pipeline_summary event_count={} download_count={} guid_registry_entries={}",
+            all_events.len(),
+            all_downloads.len(),
+            guid_registry.len()
+        );
         for (i, dl) in all_downloads.iter().enumerate() {
-            let _ = writeln!(diag_buffer, "  download[{}] content_id={} name=\"{}\" success={} size={}", i, dl.content_id, dl.name, dl.success, dl.size_bytes);
+            let _ = writeln!(
+                diag_buffer,
+                "  download[{}] content_id={} name=\"{}\" success={} size={}",
+                i, dl.content_id, dl.name, dl.success, dl.size_bytes
+            );
         }
         log::info!(
             "event=guid_enrichment_summary registry={} enriched_events={} missed_events={} enriched_downloads={} missed_downloads={} total_downloads={}",
@@ -366,8 +411,7 @@ fn analyze_intune_logs_blocking(
             failed_scripts: 0,
             log_time_span: None,
         };
-        let mut diagnostics =
-            intune_diagnostics::build_diagnostics(&[], &all_downloads, &summary);
+        let mut diagnostics = intune_diagnostics::build_diagnostics(&[], &all_downloads, &summary);
         let diagnostics_coverage = finalize_coverage(coverage, &[], &all_downloads);
         let repeated_failures = intune_diagnostics::build_repeated_failures(&[]);
 
@@ -435,8 +479,7 @@ fn analyze_intune_logs_blocking(
 
     let events = timeline::build_timeline(all_events);
     let summary = build_summary(&events, &all_downloads);
-    let mut diagnostics =
-        intune_diagnostics::build_diagnostics(&events, &all_downloads, &summary);
+    let mut diagnostics = intune_diagnostics::build_diagnostics(&events, &all_downloads, &summary);
     let diagnostics_coverage = finalize_coverage(coverage, &events, &all_downloads);
     let repeated_failures = intune_diagnostics::build_repeated_failures(&events);
 
@@ -736,10 +779,16 @@ fn analyze_intune_source_file(
             file_guid_registry.len()
         );
         for (guid, entry) in file_guid_registry.iter() {
-            log::debug!("  guid={} name=\"{}\" source={:?}", guid, entry.name, entry.source);
+            log::debug!(
+                "  guid={} name=\"{}\" source={:?}",
+                guid,
+                entry.name,
+                entry.source
+            );
         }
         let file_events = event_tracker::extract_events(&lines, &source_file, &file_guid_registry);
-        let file_downloads = download_stats::extract_downloads(&lines, &source_file, &file_guid_registry);
+        let file_downloads =
+            download_stats::extract_downloads(&lines, &source_file, &file_guid_registry);
         file_policies = policy_parser::extract_policy_metadata(&lines);
         let file_timestamp_bounds = build_timestamp_bounds(&file_events, &file_downloads);
 
@@ -1103,10 +1152,7 @@ fn synthesize_downloads_from_events(events: &[IntuneEvent]) -> Vec<DownloadStat>
         if event.event_type != IntuneEventType::ContentDownload {
             continue;
         }
-        let key = event
-            .guid
-            .clone()
-            .unwrap_or_else(|| event.name.clone());
+        let key = event.guid.clone().unwrap_or_else(|| event.name.clone());
         by_guid.entry(key).or_default().push(event);
     }
 
@@ -1116,10 +1162,7 @@ fn synthesize_downloads_from_events(events: &[IntuneEvent]) -> Vec<DownloadStat>
         let last = group.iter().max_by_key(|e| e.id).unwrap();
         let success = last.status == IntuneStatus::Success;
         let name = last.name.clone();
-        let timestamp = last
-            .start_time
-            .clone()
-            .or_else(|| last.end_time.clone());
+        let timestamp = last.start_time.clone().or_else(|| last.end_time.clone());
 
         let timestamp_epoch = timestamp
             .as_deref()
@@ -1320,9 +1363,7 @@ fn download_signal_rank(state: DownloadSignalState) -> u8 {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        build_summary, build_timestamp_bounds, finalize_coverage, CoverageAccumulator,
-    };
+    use super::{build_summary, build_timestamp_bounds, finalize_coverage, CoverageAccumulator};
     use crate::commands::intune_bundle::collect_input_paths;
     use crate::commands::intune_bundle::resolve_intune_input;
     use crate::commands::intune_diagnostics::{

@@ -202,9 +202,7 @@ fn rule_optin_configured(state: &SecureBootScanState, out: &mut Vec<DiagnosticFi
                 "optin-configured",
                 DiagnosticSeverity::Error,
                 "Managed opt-in registry value is incorrect",
-                &format!(
-                    "ManagedOptIn is set to 0x{v:08X} instead of the required 0x00005944.",
-                ),
+                &format!("ManagedOptIn is set to 0x{v:08X} instead of the required 0x00005944.",),
                 "Correct the ManagedOptIn registry value to 0x00005944. \
                  Check whether a conflicting policy is overwriting it.",
             ));
@@ -374,9 +372,7 @@ fn rule_error_code_present(state: &SecureBootScanState, out: &mut Vec<Diagnostic
                 "error-code-present",
                 DiagnosticSeverity::Error,
                 "Secure Boot certificate update reported an error code",
-                &format!(
-                    "The UEFI CA 2023 update process returned error 0x{code:08X}.",
-                ),
+                &format!("The UEFI CA 2023 update process returned error 0x{code:08X}.",),
                 &format!(
                     "Look up 0x{code:08X} in the Windows error code database. \
                      Common causes include missing payload files, insufficient \
@@ -532,10 +528,7 @@ fn rule_transient_staging_error(state: &SecureBootScanState, out: &mut Vec<Diagn
 }
 
 /// R20 — Payload is missing but WinCS is available (possible alternative path).
-fn rule_missing_payload_with_wincs(
-    state: &SecureBootScanState,
-    out: &mut Vec<DiagnosticFinding>,
-) {
+fn rule_missing_payload_with_wincs(state: &SecureBootScanState, out: &mut Vec<DiagnosticFinding>) {
     let no_payload = !state.payload_folder_exists.unwrap_or(true);
     let wincs = state.wincs_available == Some(true);
 
@@ -596,12 +589,14 @@ mod tests {
         };
         let findings = evaluate_all(&state, SecureBootStage::Stage0, &[]);
         assert!(findings.iter().any(|f| f.rule_id == "secure-boot-enabled"));
-        assert!(findings
-            .iter()
-            .find(|f| f.rule_id == "secure-boot-enabled")
-            .unwrap()
-            .severity
-            == DiagnosticSeverity::Error);
+        assert!(
+            findings
+                .iter()
+                .find(|f| f.rule_id == "secure-boot-enabled")
+                .unwrap()
+                .severity
+                == DiagnosticSeverity::Error
+        );
     }
 
     #[test]
@@ -611,8 +606,7 @@ mod tests {
         let findings = evaluate_all(&state, SecureBootStage::Stage2, &[]);
         assert!(findings
             .iter()
-            .any(|f| f.rule_id == "telemetry-level"
-                && f.severity == DiagnosticSeverity::Error));
+            .any(|f| f.rule_id == "telemetry-level" && f.severity == DiagnosticSeverity::Error));
     }
 
     #[test]
@@ -620,10 +614,12 @@ mod tests {
         let mut state = default_state();
         state.diagtrack_running = Some(false);
         let findings = evaluate_all(&state, SecureBootStage::Stage2, &[]);
-        assert!(findings
-            .iter()
-            .any(|f| f.rule_id == "diagtrack-service"
-                && f.severity == DiagnosticSeverity::Warning));
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.rule_id == "diagtrack-service"
+                    && f.severity == DiagnosticSeverity::Warning)
+        );
     }
 
     #[test]
@@ -644,8 +640,7 @@ mod tests {
         let findings = evaluate_all(&state, SecureBootStage::Stage2, &[]);
         assert!(findings
             .iter()
-            .any(|f| f.rule_id == "bitlocker-escrow"
-                && f.severity == DiagnosticSeverity::Warning));
+            .any(|f| f.rule_id == "bitlocker-escrow" && f.severity == DiagnosticSeverity::Warning));
     }
 
     #[test]
@@ -674,8 +669,7 @@ mod tests {
         let findings = evaluate_all(&state, SecureBootStage::Stage1, &[]);
         assert!(findings
             .iter()
-            .any(|f| f.rule_id == "optin-configured"
-                && f.severity == DiagnosticSeverity::Error));
+            .any(|f| f.rule_id == "optin-configured" && f.severity == DiagnosticSeverity::Error));
     }
 
     #[test]
@@ -685,8 +679,7 @@ mod tests {
         let findings = evaluate_all(&state, SecureBootStage::Stage1, &[]);
         assert!(findings
             .iter()
-            .any(|f| f.rule_id == "optin-configured"
-                && f.severity == DiagnosticSeverity::Error));
+            .any(|f| f.rule_id == "optin-configured" && f.severity == DiagnosticSeverity::Error));
     }
 
     #[test]
@@ -696,8 +689,7 @@ mod tests {
         let findings = evaluate_all(&state, SecureBootStage::Stage2, &[]);
         assert!(findings
             .iter()
-            .any(|f| f.rule_id == "payload-present"
-                && f.severity == DiagnosticSeverity::Error));
+            .any(|f| f.rule_id == "payload-present" && f.severity == DiagnosticSeverity::Error));
     }
 
     #[test]
@@ -712,10 +704,9 @@ mod tests {
         let mut state = default_state();
         state.scheduled_task_exists = Some(false);
         let findings = evaluate_all(&state, SecureBootStage::Stage2, &[]);
-        assert!(findings
-            .iter()
-            .any(|f| f.rule_id == "scheduled-task-health"
-                && f.severity == DiagnosticSeverity::Error));
+        assert!(findings.iter().any(
+            |f| f.rule_id == "scheduled-task-health" && f.severity == DiagnosticSeverity::Error
+        ));
     }
 
     #[test]
@@ -737,8 +728,7 @@ mod tests {
         let findings = evaluate_all(&state, SecureBootStage::Stage2, &[]);
         assert!(findings
             .iter()
-            .any(|f| f.rule_id == "error-code-present"
-                && f.severity == DiagnosticSeverity::Error));
+            .any(|f| f.rule_id == "error-code-present" && f.severity == DiagnosticSeverity::Error));
     }
 
     #[test]
@@ -756,14 +746,13 @@ mod tests {
         let findings = evaluate_all(&state, SecureBootStage::Stage4, &[]);
         assert!(findings
             .iter()
-            .any(|f| f.rule_id == "pending-reboot"
-                && f.severity == DiagnosticSeverity::Warning));
+            .any(|f| f.rule_id == "pending-reboot" && f.severity == DiagnosticSeverity::Warning));
     }
 
     #[test]
     fn stage_stall_warning_at_3() {
-        use chrono::Utc;
         use crate::secureboot::models::{LogSession, LogSource};
+        use chrono::Utc;
 
         let make_session = |stage| LogSession {
             source: LogSource::Detect,
@@ -786,8 +775,8 @@ mod tests {
 
     #[test]
     fn stage_stall_error_at_7() {
-        use chrono::Utc;
         use crate::secureboot::models::{LogSession, LogSource};
+        use chrono::Utc;
 
         let make_session = |stage| LogSession {
             source: LogSource::Detect,
@@ -830,8 +819,7 @@ mod tests {
         let findings = evaluate_all(&state, SecureBootStage::Stage2, &[]);
         assert!(findings
             .iter()
-            .any(|f| f.rule_id == "windows-10-eol"
-                && f.severity == DiagnosticSeverity::Warning));
+            .any(|f| f.rule_id == "windows-10-eol" && f.severity == DiagnosticSeverity::Warning));
     }
 
     #[test]

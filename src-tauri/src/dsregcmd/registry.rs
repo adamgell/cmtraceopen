@@ -55,9 +55,11 @@ pub struct RegistrySnapshotSummary {
 type RegistryKeyMap = HashMap<String, HashMap<String, RegistryValue>>;
 
 pub fn inspect_registry_snapshot_file(path: &Path) -> Option<RegistrySnapshotSummary> {
-    let content = fs::read_to_string(path)
-        .ok()
-        .or_else(|| fs::read(path).ok().and_then(|bytes| decode_reg_content(&bytes)))?;
+    let content = fs::read_to_string(path).ok().or_else(|| {
+        fs::read(path)
+            .ok()
+            .and_then(|bytes| decode_reg_content(&bytes))
+    })?;
     let registry = parse_reg_snapshot(&content);
 
     Some(build_registry_snapshot_summary(&registry))
@@ -87,43 +89,91 @@ pub fn load_whfb_policy_evidence(bundle_path: &Path) -> DsregcmdWhfbPolicyEviden
     evidence.policy_enabled = build_policy_value(
         current_policy_value(&current_registry, "UsePassportForWork"),
         provider_policy_value(&provider_registry, "UsePassportForWork"),
-        machine_policy_value(&hklm_policy_registry, &hklm_microsoft_policy_registry, "UsePassportForWork"),
-        user_policy_value(&hkcu_policy_registry, &hkcu_microsoft_policy_registry, "UsePassportForWork"),
+        machine_policy_value(
+            &hklm_policy_registry,
+            &hklm_microsoft_policy_registry,
+            "UsePassportForWork",
+        ),
+        user_policy_value(
+            &hkcu_policy_registry,
+            &hkcu_microsoft_policy_registry,
+            "UsePassportForWork",
+        ),
         false,
     );
     evidence.post_logon_enabled = build_policy_value(
         current_policy_value(&current_registry, "DisablePostLogonProvisioning"),
         provider_policy_value(&provider_registry, "DisablePostLogonProvisioning"),
-        machine_policy_value(&hklm_policy_registry, &hklm_microsoft_policy_registry, "DisablePostLogonProvisioning"),
-        user_policy_value(&hkcu_policy_registry, &hkcu_microsoft_policy_registry, "DisablePostLogonProvisioning"),
+        machine_policy_value(
+            &hklm_policy_registry,
+            &hklm_microsoft_policy_registry,
+            "DisablePostLogonProvisioning",
+        ),
+        user_policy_value(
+            &hkcu_policy_registry,
+            &hkcu_microsoft_policy_registry,
+            "DisablePostLogonProvisioning",
+        ),
         true,
     );
     evidence.pin_recovery_enabled = build_policy_value(
         current_policy_value(&current_registry, "EnablePinRecovery"),
         provider_policy_value(&provider_registry, "EnablePinRecovery"),
-        machine_policy_value(&hklm_policy_registry, &hklm_microsoft_policy_registry, "EnablePinRecovery"),
-        user_policy_value(&hkcu_policy_registry, &hkcu_microsoft_policy_registry, "EnablePinRecovery"),
+        machine_policy_value(
+            &hklm_policy_registry,
+            &hklm_microsoft_policy_registry,
+            "EnablePinRecovery",
+        ),
+        user_policy_value(
+            &hkcu_policy_registry,
+            &hkcu_microsoft_policy_registry,
+            "EnablePinRecovery",
+        ),
         false,
     );
     evidence.require_security_device = build_policy_value(
         current_policy_value(&current_registry, "RequireSecurityDevice"),
         provider_policy_value(&provider_registry, "RequireSecurityDevice"),
-        machine_policy_value(&hklm_policy_registry, &hklm_microsoft_policy_registry, "RequireSecurityDevice"),
-        user_policy_value(&hkcu_policy_registry, &hkcu_microsoft_policy_registry, "RequireSecurityDevice"),
+        machine_policy_value(
+            &hklm_policy_registry,
+            &hklm_microsoft_policy_registry,
+            "RequireSecurityDevice",
+        ),
+        user_policy_value(
+            &hkcu_policy_registry,
+            &hkcu_microsoft_policy_registry,
+            "RequireSecurityDevice",
+        ),
         false,
     );
     evidence.use_certificate_for_on_prem_auth = build_policy_value(
         current_policy_value(&current_registry, "UseCertificateForOnPremAuth"),
         provider_policy_value(&provider_registry, "UseCertificateForOnPremAuth"),
-        machine_policy_value(&hklm_policy_registry, &hklm_microsoft_policy_registry, "UseCertificateForOnPremAuth"),
-        user_policy_value(&hkcu_policy_registry, &hkcu_microsoft_policy_registry, "UseCertificateForOnPremAuth"),
+        machine_policy_value(
+            &hklm_policy_registry,
+            &hklm_microsoft_policy_registry,
+            "UseCertificateForOnPremAuth",
+        ),
+        user_policy_value(
+            &hkcu_policy_registry,
+            &hkcu_microsoft_policy_registry,
+            "UseCertificateForOnPremAuth",
+        ),
         false,
     );
     evidence.use_cloud_trust_for_on_prem_auth = build_policy_value(
         current_policy_value(&current_registry, "UseCloudTrustForOnPremAuth"),
         provider_policy_value(&provider_registry, "UseCloudTrustForOnPremAuth"),
-        machine_policy_value(&hklm_policy_registry, &hklm_microsoft_policy_registry, "UseCloudTrustForOnPremAuth"),
-        user_policy_value(&hkcu_policy_registry, &hkcu_microsoft_policy_registry, "UseCloudTrustForOnPremAuth"),
+        machine_policy_value(
+            &hklm_policy_registry,
+            &hklm_microsoft_policy_registry,
+            "UseCloudTrustForOnPremAuth",
+        ),
+        user_policy_value(
+            &hkcu_policy_registry,
+            &hkcu_microsoft_policy_registry,
+            "UseCloudTrustForOnPremAuth",
+        ),
         false,
     );
 
@@ -192,9 +242,8 @@ pub fn load_proxy_evidence(bundle_path: &Path) -> Option<DsregcmdProxyEvidence> 
     for (key_path, values) in &conn_registry {
         let lower = key_path.to_ascii_lowercase();
         if lower.contains("\\internet settings\\connections") {
-            evidence.winhttp_proxy =
-                extract_string_value(values, "WinHttpSettings")
-                    .or_else(|| extract_string_value(values, "DefaultConnectionSettings"));
+            evidence.winhttp_proxy = extract_string_value(values, "WinHttpSettings")
+                .or_else(|| extract_string_value(values, "DefaultConnectionSettings"));
             break;
         }
     }
@@ -227,11 +276,11 @@ pub fn load_enrollment_evidence(bundle_path: &Path) -> Option<DsregcmdEnrollment
             continue;
         }
 
-        let guid = key_path
-            .rfind('{')
-            .and_then(|start| {
-                key_path.rfind('}').map(|end| key_path[start..=end].to_string())
-            });
+        let guid = key_path.rfind('{').and_then(|start| {
+            key_path
+                .rfind('}')
+                .map(|end| key_path[start..=end].to_string())
+        });
 
         enrollments.push(DsregcmdEnrollmentEntry {
             guid,
@@ -260,10 +309,7 @@ fn extract_string_value(
     })
 }
 
-fn extract_dword_value(
-    values: &HashMap<String, RegistryValue>,
-    value_name: &str,
-) -> Option<u32> {
+fn extract_dword_value(values: &HashMap<String, RegistryValue>, value_name: &str) -> Option<u32> {
     let key = value_name.to_ascii_lowercase();
     values.get(&key).and_then(|v| match v {
         RegistryValue::Dword(d) => Some(*d),
@@ -285,7 +331,9 @@ fn annotate_missing_policy_evidence(evidence: &mut DsregcmdWhfbPolicyEvidence) {
         evidence.policy_enabled.note = missing_note.clone();
     }
 
-    if evidence.post_logon_enabled.display_value.is_none() && evidence.post_logon_enabled.note.is_none() {
+    if evidence.post_logon_enabled.display_value.is_none()
+        && evidence.post_logon_enabled.note.is_none()
+    {
         evidence.post_logon_enabled.note = missing_note;
     }
 }
@@ -293,7 +341,9 @@ fn annotate_missing_policy_evidence(evidence: &mut DsregcmdWhfbPolicyEvidence) {
 fn registry_file_path(bundle_path: &Path, file_name: &str) -> PathBuf {
     REGISTRY_FOLDER
         .iter()
-        .fold(bundle_path.to_path_buf(), |path, segment| path.join(segment))
+        .fold(bundle_path.to_path_buf(), |path, segment| {
+            path.join(segment)
+        })
         .join(file_name)
 }
 
@@ -341,13 +391,8 @@ fn build_registry_snapshot_summary(registry: &RegistryKeyMap) -> RegistrySnapsho
     keys.sort_by(|left, right| left.0.cmp(right.0));
 
     let key_count = u32::try_from(keys.len()).unwrap_or(u32::MAX);
-    let value_count = u32::try_from(
-        registry
-            .values()
-            .map(|values| values.len())
-            .sum::<usize>(),
-    )
-    .unwrap_or(u32::MAX);
+    let value_count = u32::try_from(registry.values().map(|values| values.len()).sum::<usize>())
+        .unwrap_or(u32::MAX);
 
     let keys = keys
         .into_iter()
@@ -456,9 +501,7 @@ fn policy_value_from_keys(
             return None;
         }
 
-        values
-            .get(&value_name)
-            .and_then(parse_registry_bool)
+        values.get(&value_name).and_then(parse_registry_bool)
     })
 }
 
@@ -537,10 +580,7 @@ fn parse_reg_snapshot(content: &str) -> RegistryKeyMap {
 
     for raw_line in content.lines() {
         let line = raw_line.trim();
-        if line.is_empty()
-            || line.starts_with(';')
-            || line.starts_with("Windows Registry Editor")
-        {
+        if line.is_empty() || line.starts_with(';') || line.starts_with("Windows Registry Editor") {
             continue;
         }
 
@@ -583,7 +623,9 @@ fn parse_registry_value(value: &str) -> Option<RegistryValue> {
     }
 
     if value.starts_with('"') && value.ends_with('"') && value.len() >= 2 {
-        return Some(RegistryValue::String(value[1..value.len() - 1].replace("\\\\", "\\")));
+        return Some(RegistryValue::String(
+            value[1..value.len() - 1].replace("\\\\", "\\"),
+        ));
     }
 
     Some(RegistryValue::String(value.to_string()))
@@ -680,8 +722,8 @@ mod tests {
     #[test]
     fn decodes_utf16le_reg_exports() {
         let utf16 = vec![
-            0xFF, 0xFE, 0x57, 0x00, 0x69, 0x00, 0x6E, 0x00, 0x64, 0x00, 0x6F, 0x00, 0x77,
-            0x00, 0x73, 0x00,
+            0xFF, 0xFE, 0x57, 0x00, 0x69, 0x00, 0x6E, 0x00, 0x64, 0x00, 0x6F, 0x00, 0x77, 0x00,
+            0x73, 0x00,
         ];
         let decoded = decode_reg_content(&utf16).expect("decode utf16 reg export");
         assert_eq!(decoded, "Windows");
@@ -760,7 +802,10 @@ mod tests {
         let evidence = load_os_version_evidence(temp_dir.path()).expect("os version evidence");
         assert_eq!(evidence.current_build.as_deref(), Some("22631"));
         assert_eq!(evidence.display_version.as_deref(), Some("23H2"));
-        assert_eq!(evidence.product_name.as_deref(), Some("Windows 11 Enterprise"));
+        assert_eq!(
+            evidence.product_name.as_deref(),
+            Some("Windows 11 Enterprise")
+        );
         assert_eq!(evidence.ubr, Some(4000));
         assert_eq!(evidence.edition_id.as_deref(), Some("Enterprise"));
     }
@@ -792,7 +837,10 @@ mod tests {
 
         let evidence = load_proxy_evidence(temp_dir.path()).expect("proxy evidence");
         assert_eq!(evidence.proxy_enabled, Some(true));
-        assert_eq!(evidence.proxy_server.as_deref(), Some("http://proxy.contoso.com:8080"));
+        assert_eq!(
+            evidence.proxy_server.as_deref(),
+            Some("http://proxy.contoso.com:8080")
+        );
         assert!(evidence.wpad_detected);
     }
 
@@ -825,7 +873,10 @@ mod tests {
         let evidence = load_enrollment_evidence(temp_dir.path()).expect("enrollment evidence");
         assert_eq!(evidence.enrollment_count, 2);
         assert_eq!(evidence.enrollments.len(), 2);
-        assert!(evidence.enrollments.iter().any(|e| e.upn.as_deref() == Some("user@contoso.com")));
+        assert!(evidence
+            .enrollments
+            .iter()
+            .any(|e| e.upn.as_deref() == Some("user@contoso.com")));
 
         // Verify GUID extraction
         let user_entry = evidence

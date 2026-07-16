@@ -30,7 +30,10 @@ fn ccm_type0_is_success_in_real_psadt_log() {
     let info = count(Severity::Info);
 
     // The one type="0" record maps to Success.
-    assert_eq!(success, 1, "expected exactly one Success entry (the type=\"0\" line)");
+    assert_eq!(
+        success, 1,
+        "expected exactly one Success entry (the type=\"0\" line)"
+    );
 
     // No false positives: the fix must not coerce neutral type="1" (or empty)
     // lines into Success/Warning/Error. Every non-success line here is Info.

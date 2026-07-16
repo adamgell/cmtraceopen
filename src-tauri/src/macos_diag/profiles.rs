@@ -139,19 +139,17 @@ fn parse_system_profiler_plist(data: &[u8]) -> Vec<MacosMdmProfile> {
                 .map(|s| s.to_string())
         };
 
-        let profile_identifier = get_str("spconfigprofile_profile_identifier")
-            .unwrap_or_else(|| "unknown".to_string());
-        let profile_display_name =
-            get_str("_name").unwrap_or_else(|| profile_identifier.clone());
+        let profile_identifier =
+            get_str("spconfigprofile_profile_identifier").unwrap_or_else(|| "unknown".to_string());
+        let profile_display_name = get_str("_name").unwrap_or_else(|| profile_identifier.clone());
 
-        let install_date =
-            get_str("spconfigprofile_install_date").map(|s| extract_iso_date(&s));
+        let install_date = get_str("spconfigprofile_install_date").map(|s| extract_iso_date(&s));
 
         let verification_state = get_str("spconfigprofile_verification_state");
         let description = get_str("spconfigprofile_description");
         let source = get_str("spconfigprofile_install_source");
-        let removal_disallowed = get_str("spconfigprofile_RemovalDisallowed")
-            .map(|s| s.eq_ignore_ascii_case("yes"));
+        let removal_disallowed =
+            get_str("spconfigprofile_RemovalDisallowed").map(|s| s.eq_ignore_ascii_case("yes"));
 
         // Parse payload items from nested _items
         let payloads = dict
@@ -169,10 +167,9 @@ fn parse_system_profiler_plist(data: &[u8]) -> Vec<MacosMdmProfile> {
                         };
                         let payload_type =
                             get_payload_str("_name").unwrap_or_else(|| "unknown".to_string());
-                        let payload_identifier = get_payload_str(
-                            "spconfigprofile_payload_identifier",
-                        )
-                        .unwrap_or_else(|| "unknown".to_string());
+                        let payload_identifier =
+                            get_payload_str("spconfigprofile_payload_identifier")
+                                .unwrap_or_else(|| "unknown".to_string());
                         let payload_version = d
                             .get("spconfigprofile_payload_version")
                             .and_then(|v| v.as_string())
@@ -284,7 +281,9 @@ pub fn list_profiles_impl() -> Result<MacosProfilesResult, crate::error::AppErro
 
 #[cfg(not(target_os = "macos"))]
 pub fn list_profiles_impl() -> Result<MacosProfilesResult, crate::error::AppError> {
-    Err(crate::error::AppError::PlatformUnsupported("macOS Diagnostics is only available on macOS.".to_string()))
+    Err(crate::error::AppError::PlatformUnsupported(
+        "macOS Diagnostics is only available on macOS.".to_string(),
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -300,7 +299,10 @@ mod tests {
         let input = "Enrolled via DEP: Yes\nMDM server: https://manage.microsoft.com/abc\n";
         let status = parse_enrollment_status(input);
         assert!(status.enrolled);
-        assert_eq!(status.mdm_server.as_deref(), Some("https://manage.microsoft.com/abc"));
+        assert_eq!(
+            status.mdm_server.as_deref(),
+            Some("https://manage.microsoft.com/abc")
+        );
         assert_eq!(status.enrollment_type.as_deref(), Some("DEP"));
     }
 
@@ -325,7 +327,10 @@ mod tests {
         let input = "MDM server: https://example.com/mdm\n";
         let status = parse_enrollment_status(input);
         assert!(status.enrolled);
-        assert_eq!(status.mdm_server.as_deref(), Some("https://example.com/mdm"));
+        assert_eq!(
+            status.mdm_server.as_deref(),
+            Some("https://example.com/mdm")
+        );
     }
 
     #[test]

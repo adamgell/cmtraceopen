@@ -107,15 +107,36 @@ fn parse_cmtlog_line(line: &str) -> Option<CmtLogParsed> {
         .unwrap_or(0);
     let thread_display = Some(ccm::format_thread_display(thread));
 
-    let h: u32 = caps.name("h").and_then(|m| m.as_str().parse().ok()).unwrap_or(0);
-    let min: u32 = caps.name("m").and_then(|m| m.as_str().parse().ok()).unwrap_or(0);
-    let s: u32 = caps.name("s").and_then(|m| m.as_str().parse().ok()).unwrap_or(0);
-    let ms: u32 = caps.name("ms").and_then(|m| m.as_str().parse().ok()).unwrap_or(0);
+    let h: u32 = caps
+        .name("h")
+        .and_then(|m| m.as_str().parse().ok())
+        .unwrap_or(0);
+    let min: u32 = caps
+        .name("m")
+        .and_then(|m| m.as_str().parse().ok())
+        .unwrap_or(0);
+    let s: u32 = caps
+        .name("s")
+        .and_then(|m| m.as_str().parse().ok())
+        .unwrap_or(0);
+    let ms: u32 = caps
+        .name("ms")
+        .and_then(|m| m.as_str().parse().ok())
+        .unwrap_or(0);
     let tz_str = caps.name("tz").map(|m| m.as_str()).unwrap_or("0");
     let tz_offset: i32 = tz_str.replace("+-", "-").parse().unwrap_or(0);
-    let mon: u32 = caps.name("mon").and_then(|m| m.as_str().parse().ok()).unwrap_or(1);
-    let day: u32 = caps.name("day").and_then(|m| m.as_str().parse().ok()).unwrap_or(1);
-    let yr: i32 = caps.name("yr").and_then(|m| m.as_str().parse().ok()).unwrap_or(2000);
+    let mon: u32 = caps
+        .name("mon")
+        .and_then(|m| m.as_str().parse().ok())
+        .unwrap_or(1);
+    let day: u32 = caps
+        .name("day")
+        .and_then(|m| m.as_str().parse().ok())
+        .unwrap_or(1);
+    let yr: i32 = caps
+        .name("yr")
+        .and_then(|m| m.as_str().parse().ok())
+        .unwrap_or(2000);
 
     let (timestamp, timestamp_display) =
         ccm::build_timestamp(mon, day, yr, h, min, s, ms, Some(tz_offset));
@@ -299,9 +320,7 @@ pub fn parse_lines(lines: &[&str], file_path: &str) -> (Vec<LogEntry>, u32) {
             }
             _ => {
                 entry.entry_kind = Some(EntryKind::Log);
-                entry.section_name = attrs
-                    .section
-                    .or_else(|| current_section_name.clone());
+                entry.section_name = attrs.section.or_else(|| current_section_name.clone());
                 entry.section_color = current_section_color.clone();
                 entry.whatif = attrs.whatif.map(|v| v == "1");
                 entry.iteration = attrs.iteration;
@@ -379,10 +398,7 @@ mod tests {
         assert_eq!(entries[2].section_name.as_deref(), Some("detection"));
         // Color is inherited from the current section
         assert_eq!(entries[2].section_color.as_deref(), Some("#5b9aff"));
-        assert_eq!(
-            entries[2].tags,
-            Some(vec!["phase:scan".to_string()])
-        );
+        assert_eq!(entries[2].tags, Some(vec!["phase:scan".to_string()]));
     }
 
     #[test]

@@ -35,7 +35,10 @@ pub fn start_tail(
 
     // Stop any existing session for this file
     {
-        let mut sessions = state.tail_sessions.lock().map_err(|e| crate::error::AppError::State(e.to_string()))?;
+        let mut sessions = state
+            .tail_sessions
+            .lock()
+            .map_err(|e| crate::error::AppError::State(e.to_string()))?;
         if let Some(old_session) = sessions.remove(&path_buf) {
             old_session.stop();
         }
@@ -43,11 +46,16 @@ pub fn start_tail(
 
     // Tailing reuses the backend-owned parser selection stored during open_log_file.
     let parser_selection = {
-        let open_files = state.open_files.lock().map_err(|e| crate::error::AppError::State(e.to_string()))?;
+        let open_files = state
+            .open_files
+            .lock()
+            .map_err(|e| crate::error::AppError::State(e.to_string()))?;
         open_files
             .get(&path_buf)
             .map(|f| f.parser_selection.clone())
-            .ok_or_else(|| crate::error::AppError::InvalidInput(format!("file is not open: {}", path)))?
+            .ok_or_else(|| {
+                crate::error::AppError::InvalidInput(format!("file is not open: {}", path))
+            })?
     };
 
     let file_path_for_event = path.clone();
@@ -69,7 +77,10 @@ pub fn start_tail(
         },
     )?;
 
-    let mut sessions = state.tail_sessions.lock().map_err(|e| crate::error::AppError::State(e.to_string()))?;
+    let mut sessions = state
+        .tail_sessions
+        .lock()
+        .map_err(|e| crate::error::AppError::State(e.to_string()))?;
     sessions.insert(path_buf, session);
 
     Ok(())
@@ -79,7 +90,10 @@ pub fn start_tail(
 #[tauri::command]
 pub fn stop_tail(path: String, state: State<'_, AppState>) -> Result<(), crate::error::AppError> {
     let path_buf = PathBuf::from(&path);
-    let mut sessions = state.tail_sessions.lock().map_err(|e| crate::error::AppError::State(e.to_string()))?;
+    let mut sessions = state
+        .tail_sessions
+        .lock()
+        .map_err(|e| crate::error::AppError::State(e.to_string()))?;
     if let Some(session) = sessions.remove(&path_buf) {
         session.stop();
     }
@@ -90,7 +104,10 @@ pub fn stop_tail(path: String, state: State<'_, AppState>) -> Result<(), crate::
 #[tauri::command]
 pub fn pause_tail(path: String, state: State<'_, AppState>) -> Result<(), crate::error::AppError> {
     let path_buf = PathBuf::from(&path);
-    let sessions = state.tail_sessions.lock().map_err(|e| crate::error::AppError::State(e.to_string()))?;
+    let sessions = state
+        .tail_sessions
+        .lock()
+        .map_err(|e| crate::error::AppError::State(e.to_string()))?;
     if let Some(session) = sessions.get(&path_buf) {
         session.set_paused(true);
     }
@@ -101,7 +118,10 @@ pub fn pause_tail(path: String, state: State<'_, AppState>) -> Result<(), crate:
 #[tauri::command]
 pub fn resume_tail(path: String, state: State<'_, AppState>) -> Result<(), crate::error::AppError> {
     let path_buf = PathBuf::from(&path);
-    let sessions = state.tail_sessions.lock().map_err(|e| crate::error::AppError::State(e.to_string()))?;
+    let sessions = state
+        .tail_sessions
+        .lock()
+        .map_err(|e| crate::error::AppError::State(e.to_string()))?;
     if let Some(session) = sessions.get(&path_buf) {
         session.set_paused(false);
     }

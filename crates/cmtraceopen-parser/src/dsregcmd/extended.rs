@@ -11,10 +11,9 @@ pub fn apply_enrollment_cross_reference(result: &mut DsregcmdAnalysisResult) {
     if result.derived.mdm_enrolled.is_some() {
         return;
     }
-    if let (Some(enrollment), Some(tasks)) = (
-        &result.enrollment_evidence,
-        &result.scheduled_task_evidence,
-    ) {
+    if let (Some(enrollment), Some(tasks)) =
+        (&result.enrollment_evidence, &result.scheduled_task_evidence)
+    {
         let confirmed = enrollment.enrollments.iter().any(|e| {
             e.enrollment_state == Some(1)
                 && e.guid.as_ref().is_some_and(|g| {
@@ -129,7 +128,10 @@ pub fn build_extended_diagnostics(
     if let Some(enrollment) = result.enrollment_evidence.as_ref() {
         let is_joined = result.facts.join_state.azure_ad_joined == Some(true);
 
-        if enrollment.enrollment_count == 0 && is_joined && result.derived.mdm_enrolled != Some(true) {
+        if enrollment.enrollment_count == 0
+            && is_joined
+            && result.derived.mdm_enrolled != Some(true)
+        {
             diagnostics.push(issue(
                 "enrollment-missing-on-joined",
                 IntuneDiagnosticSeverity::Warning,
@@ -170,7 +172,10 @@ pub fn build_extended_diagnostics(
             for entry in &enrollment.enrollments {
                 let guid_matched = entry.enrollment_state == Some(1)
                     && entry.guid.as_ref().is_some_and(|g| {
-                        tasks.enterprise_mgmt_guids.iter().any(|t| t.eq_ignore_ascii_case(g))
+                        tasks
+                            .enterprise_mgmt_guids
+                            .iter()
+                            .any(|t| t.eq_ignore_ascii_case(g))
                     });
                 if guid_matched {
                     let guid_display = entry.guid.as_deref().unwrap_or("(unknown)");
@@ -380,33 +385,24 @@ pub fn build_event_log_diagnostics(
         None => return diagnostics,
     };
 
-    let has_join_failures = result
-        .diagnostics
-        .iter()
-        .any(|d| {
-            d.severity == IntuneDiagnosticSeverity::Error
-                && (d.category == "authentication"
-                    || d.category == "join"
-                    || d.category == "configuration")
-        });
+    let has_join_failures = result.diagnostics.iter().any(|d| {
+        d.severity == IntuneDiagnosticSeverity::Error
+            && (d.category == "authentication"
+                || d.category == "join"
+                || d.category == "configuration")
+    });
 
-    let has_tpm_errors = result
-        .diagnostics
-        .iter()
-        .any(|d| d.id.starts_with("tpm-"));
+    let has_tpm_errors = result.diagnostics.iter().any(|d| d.id.starts_with("tpm-"));
 
     // Check for time sync issues near join failures
-    let time_sync_errors = event_log
-        .entries
-        .iter()
-        .any(|e| {
-            let channel_display = e.channel_display.to_ascii_lowercase();
-            let message_lower = e.message.to_ascii_lowercase();
-            (channel_display.contains("time service") || channel_display.contains("system"))
-                && (message_lower.contains("time skew")
-                    || message_lower.contains("time synchronization")
-                    || message_lower.contains("clock"))
-        });
+    let time_sync_errors = event_log.entries.iter().any(|e| {
+        let channel_display = e.channel_display.to_ascii_lowercase();
+        let message_lower = e.message.to_ascii_lowercase();
+        (channel_display.contains("time service") || channel_display.contains("system"))
+            && (message_lower.contains("time skew")
+                || message_lower.contains("time synchronization")
+                || message_lower.contains("clock"))
+    });
 
     if time_sync_errors && has_join_failures {
         diagnostics.push(issue(
@@ -425,17 +421,14 @@ pub fn build_event_log_diagnostics(
     }
 
     // Check for DPAPI failures near TPM errors
-    let dpapi_failures = event_log
-        .entries
-        .iter()
-        .any(|e| {
-            let channel_display = e.channel_display.to_ascii_lowercase();
-            let message_lower = e.message.to_ascii_lowercase();
-            channel_display.contains("dpapi")
-                && (message_lower.contains("failed")
-                    || message_lower.contains("error")
-                    || message_lower.contains("cannot"))
-        });
+    let dpapi_failures = event_log.entries.iter().any(|e| {
+        let channel_display = e.channel_display.to_ascii_lowercase();
+        let message_lower = e.message.to_ascii_lowercase();
+        channel_display.contains("dpapi")
+            && (message_lower.contains("failed")
+                || message_lower.contains("error")
+                || message_lower.contains("cannot"))
+    });
 
     if dpapi_failures && has_tpm_errors {
         diagnostics.push(issue(

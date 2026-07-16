@@ -69,7 +69,8 @@ pub fn collect_dsregcmd_event_logs() -> Option<EventLogAnalysis> {
             Err(error) => {
                 log::error!(
                     "event=dsregcmd_event_log_query_failed channel={} error={}",
-                    channel_path, error
+                    channel_path,
+                    error
                 );
 
                 channel_results.push(EventLogLiveQueryChannelResult {

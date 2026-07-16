@@ -1,8 +1,7 @@
 pub mod burn;
 pub mod cbs;
-pub mod cmtlog;
-pub mod panther;
 pub mod ccm;
+pub mod cmtlog;
 pub mod detect;
 pub mod dhcp;
 pub mod dism;
@@ -11,6 +10,7 @@ pub mod dns_types;
 pub mod iis_w3c;
 pub mod intune_macos;
 pub mod msi;
+pub mod panther;
 pub mod patchmypc_detection;
 pub mod plain;
 pub mod psadt;
@@ -97,21 +97,15 @@ pub fn parse_lines_with_selection(
         crate::models::log_entry::ParserImplementation::PlainText => {
             plain::parse_lines(lines, file_path)
         }
-        crate::models::log_entry::ParserImplementation::Msi => {
-            msi::parse_lines(lines, file_path)
-        }
+        crate::models::log_entry::ParserImplementation::Msi => msi::parse_lines(lines, file_path),
         crate::models::log_entry::ParserImplementation::PsadtLegacy => {
             psadt::parse_lines(lines, file_path)
         }
         crate::models::log_entry::ParserImplementation::IntuneMacOs => {
             intune_macos::parse_lines(lines, file_path)
         }
-        crate::models::log_entry::ParserImplementation::Dhcp => {
-            dhcp::parse_lines(lines, file_path)
-        }
-        crate::models::log_entry::ParserImplementation::Burn => {
-            burn::parse_lines(lines, file_path)
-        }
+        crate::models::log_entry::ParserImplementation::Dhcp => dhcp::parse_lines(lines, file_path),
+        crate::models::log_entry::ParserImplementation::Burn => burn::parse_lines(lines, file_path),
         crate::models::log_entry::ParserImplementation::PatchMyPcDetection => {
             patchmypc_detection::parse_lines(lines, file_path)
         }
@@ -133,14 +127,16 @@ pub fn parse_lines_with_selection(
         crate::models::log_entry::ParserImplementation::CmtLog => {
             cmtlog::parse_lines(lines, file_path)
         }
-        crate::models::log_entry::ParserImplementation::GenericTimestamped => match selection.parser {
-            crate::models::log_entry::ParserKind::Cbs => cbs::parse_lines(lines, file_path),
-            crate::models::log_entry::ParserKind::Dism => dism::parse_lines(lines, file_path),
-            crate::models::log_entry::ParserKind::Panther => {
-                panther::parse_lines(lines, file_path)
+        crate::models::log_entry::ParserImplementation::GenericTimestamped => {
+            match selection.parser {
+                crate::models::log_entry::ParserKind::Cbs => cbs::parse_lines(lines, file_path),
+                crate::models::log_entry::ParserKind::Dism => dism::parse_lines(lines, file_path),
+                crate::models::log_entry::ParserKind::Panther => {
+                    panther::parse_lines(lines, file_path)
+                }
+                _ => timestamped::parse_lines(lines, file_path, selection.date_order),
             }
-            _ => timestamped::parse_lines(lines, file_path, selection.date_order),
-        },
+        }
     };
     annotate_error_code_spans(&mut entries);
     (entries, parse_errors)
@@ -248,7 +244,10 @@ pub fn decode_bytes(bytes: &[u8], encoding: FileEncoding) -> Result<String, Stri
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::log_entry::{ParseQuality, ParserImplementation, ParserKind, ParserProvenance, ParserSpecialization, RecordFraming};
+    use crate::models::log_entry::{
+        ParseQuality, ParserImplementation, ParserKind, ParserProvenance, ParserSpecialization,
+        RecordFraming,
+    };
     use crate::parser::timestamped::DateOrder;
 
     #[test]
@@ -279,11 +278,15 @@ mod tests {
         );
         let lines = ["2024-01-15 08:00:00, Info SP Setup complete"];
 
-        let (entries, parse_errors) = parse_lines_with_selection(&lines, "setupact.log", &selection);
+        let (entries, parse_errors) =
+            parse_lines_with_selection(&lines, "setupact.log", &selection);
 
         assert_eq!(parse_errors, 0);
         assert_eq!(entries.len(), 1);
-        assert_eq!(selection.compatibility_format(), crate::models::log_entry::LogFormat::Timestamped);
+        assert_eq!(
+            selection.compatibility_format(),
+            crate::models::log_entry::LogFormat::Timestamped
+        );
         assert_eq!(entries[0].message, "Setup complete");
         assert_eq!(entries[0].component.as_deref(), Some("SP"));
     }
@@ -308,9 +311,15 @@ mod tests {
 
         assert_eq!(parse_errors, 0);
         assert_eq!(entries.len(), 1);
-        assert_eq!(selection.compatibility_format(), crate::models::log_entry::LogFormat::Timestamped);
+        assert_eq!(
+            selection.compatibility_format(),
+            crate::models::log_entry::LogFormat::Timestamped
+        );
         assert_eq!(entries[0].component.as_deref(), Some("CBS"));
-        assert_eq!(entries[0].message, "Exec: Started servicing\nContinuation detail");
+        assert_eq!(
+            entries[0].message,
+            "Exec: Started servicing\nContinuation detail"
+        );
     }
 
     #[test]
@@ -333,9 +342,15 @@ mod tests {
 
         assert_eq!(parse_errors, 0);
         assert_eq!(entries.len(), 1);
-        assert_eq!(selection.compatibility_format(), crate::models::log_entry::LogFormat::Timestamped);
+        assert_eq!(
+            selection.compatibility_format(),
+            crate::models::log_entry::LogFormat::Timestamped
+        );
         assert_eq!(entries[0].component.as_deref(), Some("DISM"));
-        assert_eq!(entries[0].message, "DISM Package Manager: Retry needed\nExtra context");
+        assert_eq!(
+            entries[0].message,
+            "DISM Package Manager: Retry needed\nExtra context"
+        );
     }
 
     #[test]
@@ -353,13 +368,23 @@ mod tests {
             "{11111111-1111-1111-1111-111111111111}\t2024-01-15 08:00:00:123\t1\tSoftware Update\t3\t{22222222-2222-2222-2222-222222222222}\t0x80240022\tWindows Update Agent\tFailure\tInstallation\tInstallation failed for KB5034123",
         ];
 
-        let (entries, parse_errors) = parse_lines_with_selection(&lines, "ReportingEvents.log", &selection);
+        let (entries, parse_errors) =
+            parse_lines_with_selection(&lines, "ReportingEvents.log", &selection);
 
         assert_eq!(parse_errors, 0);
         assert_eq!(entries.len(), 1);
-        assert_eq!(selection.compatibility_format(), crate::models::log_entry::LogFormat::Timestamped);
-        assert_eq!(entries[0].component.as_deref(), Some("Windows Update Agent"));
-        assert_eq!(entries[0].severity, crate::models::log_entry::Severity::Error);
+        assert_eq!(
+            selection.compatibility_format(),
+            crate::models::log_entry::LogFormat::Timestamped
+        );
+        assert_eq!(
+            entries[0].component.as_deref(),
+            Some("Windows Update Agent")
+        );
+        assert_eq!(
+            entries[0].severity,
+            crate::models::log_entry::Severity::Error
+        );
     }
 
     #[test]
@@ -380,14 +405,19 @@ mod tests {
             r#"]LOG]!><time="11:16:42.3322734" date="3-12-2026" component="HealthScripts" context="" type="1" thread="50" file="">"#,
         ];
 
-        let (entries, parse_errors) = parse_lines_with_selection(&lines, "HealthScripts.log", &selection);
+        let (entries, parse_errors) =
+            parse_lines_with_selection(&lines, "HealthScripts.log", &selection);
 
         assert_eq!(parse_errors, 0);
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].line_number, 1);
         assert_eq!(entries[1].line_number, 2);
-        assert!(entries[1].message.contains("Downloaded profile payload is not valid JSON"));
-        assert!(entries[1].message.contains("At C:\\Windows\\IMECache\\HealthScripts\\script.ps1:457 char:9"));
+        assert!(entries[1]
+            .message
+            .contains("Downloaded profile payload is not valid JSON"));
+        assert!(entries[1]
+            .message
+            .contains("At C:\\Windows\\IMECache\\HealthScripts\\script.ps1:457 char:9"));
     }
 
     #[test]
@@ -412,9 +442,15 @@ mod tests {
         assert_eq!(parsed.total_lines, 3);
         assert_eq!(parsed.parse_errors, 0);
         assert_eq!(parsed.entries.len(), 2);
-        assert_eq!(parsed.entries[0].format, crate::models::log_entry::LogFormat::Ccm);
+        assert_eq!(
+            parsed.entries[0].format,
+            crate::models::log_entry::LogFormat::Ccm
+        );
         assert_eq!(parsed.entries[1].line_number, 2);
-        assert_eq!(parsed.entries[1].severity, crate::models::log_entry::Severity::Error);
+        assert_eq!(
+            parsed.entries[1].severity,
+            crate::models::log_entry::Severity::Error
+        );
         assert!(parsed.entries[1].message.contains("More detail"));
     }
 
@@ -431,8 +467,14 @@ mod tests {
         assert_eq!(parsed.total_lines, 2);
         assert_eq!(parsed.parse_errors, 1);
         assert_eq!(parsed.entries.len(), 2);
-        assert_eq!(parsed.entries[0].format, crate::models::log_entry::LogFormat::Ccm);
-        assert_eq!(parsed.entries[1].format, crate::models::log_entry::LogFormat::Plain);
+        assert_eq!(
+            parsed.entries[0].format,
+            crate::models::log_entry::LogFormat::Ccm
+        );
+        assert_eq!(
+            parsed.entries[1].format,
+            crate::models::log_entry::LogFormat::Plain
+        );
         assert_eq!(parsed.entries[1].line_number, 2);
     }
 
@@ -459,6 +501,9 @@ mod tests {
         assert_eq!(parse_errors, 0);
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].query_name.as_deref(), Some("home.gell.one"));
-        assert_eq!(entries[0].format, crate::models::log_entry::LogFormat::DnsDebug);
+        assert_eq!(
+            entries[0].format,
+            crate::models::log_entry::LogFormat::DnsDebug
+        );
     }
 }

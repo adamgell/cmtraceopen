@@ -39,10 +39,7 @@ pub fn extract_policy_metadata(lines: &[ImeLine]) -> HashMap<String, AppPolicyMe
         }
     }
 
-    log::debug!(
-        "event=policy_extraction_complete count={}",
-        result.len()
-    );
+    log::debug!("event=policy_extraction_complete count={}", result.len());
     result
 }
 
@@ -141,12 +138,11 @@ fn parse_detection_rules(obj: &serde_json::Value) -> Vec<DetectionRuleMetadata> 
         .filter_map(|rule| {
             let detection_type = rule.get("DetectionType")?.as_i64()? as i32;
 
-            let (script_body, enforce_signature_check, run_as_32_bit) =
-                if detection_type == 3 {
-                    parse_script_detection_text(rule)
-                } else {
-                    (None, None, None)
-                };
+            let (script_body, enforce_signature_check, run_as_32_bit) = if detection_type == 3 {
+                parse_script_detection_text(rule)
+            } else {
+                (None, None, None)
+            };
 
             Some(DetectionRuleMetadata {
                 detection_type,
@@ -299,10 +295,7 @@ mod tests {
 
         let rule = &policy.detection_rules[0];
         assert_eq!(rule.detection_type, 3);
-        assert_eq!(
-            rule.script_body.as_deref(),
-            Some("Write-Host 'Detected'")
-        );
+        assert_eq!(rule.script_body.as_deref(), Some("Write-Host 'Detected'"));
         assert_eq!(rule.enforce_signature_check, Some(false));
         assert_eq!(rule.run_as_32_bit, Some(true));
     }
