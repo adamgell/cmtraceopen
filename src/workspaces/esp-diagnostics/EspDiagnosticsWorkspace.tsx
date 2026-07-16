@@ -11,13 +11,17 @@ import {
   startEspDiagnosticsSession,
   stopEspDiagnosticsSession,
 } from "../../lib/commands";
+import { LOG_MONOSPACE_FONT_FAMILY, LOG_UI_FONT_FAMILY } from "../../lib/log-accessibility";
 import { useUiStore } from "../../stores/ui-store";
+import { ElevationBanner } from "./ElevationBanner";
 import { useEspDiagnosticsStore } from "./esp-diagnostics-store";
+import { EspWorkspaceHeader } from "./EspWorkspaceHeader";
 import {
   analyzeEspEvidenceSource,
   ESP_EVIDENCE_SOURCE_ERROR,
   resolveEspEvidenceSource,
 } from "./index";
+import { MsiexecStatus } from "./MsiexecStatus";
 
 function createRequestId(prefix: "analysis" | "live"): string {
   return `esp-${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
@@ -48,19 +52,10 @@ async function analyzePath(
   await analyzeEspEvidenceSource(source, "esp-workspace.import");
 }
 
-const phaseLabels = {
-  idle: "Waiting for evidence",
-  analyzing: "Analyzing captured evidence",
-  starting: "Starting live diagnostics",
-  live: "Live diagnostics running",
-  stopping: "Stopping live diagnostics",
-  ready: "Evidence analysis ready",
-  error: "Evidence analysis failed",
-} as const;
-
 export function EspDiagnosticsWorkspace() {
   const currentPlatform = useUiStore((state) => state.currentPlatform);
   const phase = useEspDiagnosticsStore((state) => state.phase);
+  const graphPhase = useEspDiagnosticsStore((state) => state.graphPhase);
   const sessionId = useEspDiagnosticsStore((state) => state.sessionId);
   const snapshot = useEspDiagnosticsStore((state) => state.snapshot);
   const error = useEspDiagnosticsStore((state) => state.error);
@@ -118,226 +113,161 @@ export function EspDiagnosticsWorkspace() {
     }
   }, []);
 
+  const headerActions = (
+    <>
+      <Button
+        appearance="secondary"
+        size="small"
+        icon={<FolderOpenRegular />}
+        disabled={isBusy || sessionId !== null}
+        onClick={importEvidenceFolder}
+      >
+        Import evidence folder
+      </Button>
+      <Button
+        appearance="secondary"
+        size="small"
+        icon={<DocumentArrowUpRegular />}
+        disabled={isBusy || sessionId !== null}
+        onClick={importCapturedEvidence}
+      >
+        Import captured evidence
+      </Button>
+      {sessionId ? (
+        <Button
+          appearance="primary"
+          size="small"
+          icon={<StopRegular />}
+          disabled={phase === "stopping"}
+          onClick={stopLive}
+        >
+          Stop live diagnostics
+        </Button>
+      ) : (
+        <Button
+          appearance="primary"
+          size="small"
+          icon={<PlayRegular />}
+          disabled={!liveSupported || isBusy}
+          onClick={startLive}
+        >
+          Start live diagnostics
+        </Button>
+      )}
+    </>
+  );
+
   return (
     <main
       aria-labelledby="esp-diagnostics-heading"
       style={{
-        display: "flex",
-        flexDirection: "column",
         width: "100%",
         height: "100%",
         minWidth: 0,
         overflow: "auto",
         color: tokens.colorNeutralForeground1,
         backgroundColor: tokens.colorNeutralBackground2,
+        fontFamily: LOG_UI_FONT_FAMILY,
       }}
     >
-      <header
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          gap: 20,
-          padding: "16px 20px 14px",
-          borderBottom: `1px solid ${tokens.colorNeutralStroke1}`,
-          backgroundColor: tokens.colorNeutralBackground1,
-        }}
-      >
-        <div style={{ minWidth: 0 }}>
-          <div
-            style={{
-              color: tokens.colorNeutralForeground3,
-              fontFamily: tokens.fontFamilyMonospace,
-              fontSize: 10,
-              fontWeight: 700,
-              letterSpacing: "0.12em",
-              textTransform: "uppercase",
-            }}
-          >
-            Enrollment Status Page / Local evidence
-          </div>
-          <h1
-            id="esp-diagnostics-heading"
-            style={{ margin: "3px 0 0", fontSize: 21, lineHeight: 1.2 }}
-          >
-            ESP Diagnostics
-          </h1>
-        </div>
+      <EspWorkspaceHeader
+        snapshot={snapshot}
+        workspacePhase={phase}
+        graphPhase={graphPhase}
+        actions={headerActions}
+      />
 
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <Button
-            appearance="secondary"
-            icon={<FolderOpenRegular />}
-            disabled={isBusy || sessionId !== null}
-            onClick={importEvidenceFolder}
-          >
-            Import evidence folder
-          </Button>
-          <Button
-            appearance="secondary"
-            icon={<DocumentArrowUpRegular />}
-            disabled={isBusy || sessionId !== null}
-            onClick={importCapturedEvidence}
-          >
-            Import captured evidence
-          </Button>
-          {sessionId ? (
-            <Button
-              appearance="primary"
-              icon={<StopRegular />}
-              disabled={phase === "stopping"}
-              onClick={stopLive}
-            >
-              Stop live diagnostics
-            </Button>
-          ) : (
-            <Button
-              appearance="primary"
-              icon={<PlayRegular />}
-              disabled={!liveSupported || isBusy}
-              onClick={startLive}
-            >
-              Start live diagnostics
-            </Button>
-          )}
-        </div>
-      </header>
+      {snapshot ? <ElevationBanner elevation={snapshot.elevation} /> : null}
 
-      <section
-        aria-live="polite"
+      <div
         style={{
-          display: "flex",
-          alignItems: "center",
+          display: "grid",
+          alignContent: "start",
           gap: 10,
-          minHeight: 38,
-          padding: "0 20px",
-          borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
-          backgroundColor:
-            phase === "error"
-              ? tokens.colorPaletteRedBackground1
-              : tokens.colorNeutralBackground3,
-          fontFamily: tokens.fontFamilyMonospace,
-          fontSize: 12,
+          padding: 10,
         }}
       >
-        {isBusy ? <Spinner size="tiny" /> : null}
-        <span style={{ fontWeight: 700 }}>{phaseLabels[phase]}</span>
-        <span style={{ color: tokens.colorNeutralForeground3 }}>
-          {liveSupported
-            ? "Offline analysis + Windows live acquisition"
-            : "Offline analysis available; live acquisition requires Windows"}
-        </span>
-      </section>
-
-      <section
-        style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(4, minmax(140px, 1fr))",
-          gap: 1,
-          borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
-          backgroundColor: tokens.colorNeutralStroke2,
-        }}
-      >
-        {[
-          ["MODE", sessionId ? "LIVE" : snapshot ? "CAPTURED" : "STANDBY"],
-          ["SCENARIO", snapshot?.scenario ?? "Not detected"],
-          ["ESP PHASE", snapshot?.phase ?? "No evidence"],
-          ["RAW RECORDS", String(snapshot?.rawEvidence.length ?? 0)],
-        ].map(([label, value]) => (
+        {error ? (
           <div
-            key={label}
+            role="alert"
             style={{
-              minHeight: 68,
-              padding: "10px 14px",
+              padding: "10px 12px",
+              border: `1px solid ${tokens.colorPaletteRedBorder2}`,
+              borderLeftWidth: 4,
+              backgroundColor: tokens.colorPaletteRedBackground1,
+              color: tokens.colorPaletteRedForeground1,
+              fontSize: 12,
+              fontWeight: 650,
+            }}
+          >
+            {error}
+          </div>
+        ) : null}
+
+        {snapshot ? (
+          <MsiexecStatus snapshot={snapshot} />
+        ) : (
+          <section
+            aria-label="Diagnostic input status"
+            style={{
+              display: "grid",
+              gridTemplateColumns: "auto minmax(0, 1fr)",
+              alignItems: "center",
+              gap: 12,
+              minHeight: 88,
+              padding: "14px 16px",
+              border: `1px solid ${
+                phase === "error"
+                  ? tokens.colorPaletteRedBorder2
+                  : tokens.colorNeutralStroke1
+              }`,
+              borderLeft: `4px solid ${
+                phase === "analyzing" || phase === "starting"
+                  ? tokens.colorBrandStroke1
+                  : tokens.colorNeutralStrokeAccessible
+              }`,
               backgroundColor: tokens.colorNeutralBackground1,
+              boxShadow: tokens.shadow2,
             }}
           >
-            <div
-              style={{
-                color: tokens.colorNeutralForeground3,
-                fontFamily: tokens.fontFamilyMonospace,
-                fontSize: 10,
-                fontWeight: 700,
-                letterSpacing: "0.08em",
-              }}
-            >
-              {label}
-            </div>
-            <div style={{ marginTop: 7, fontSize: 14, fontWeight: 650 }}>
-              {value}
-            </div>
-          </div>
-        ))}
-      </section>
-
-      <section
-        style={{
-          flex: 1,
-          display: "grid",
-          placeItems: "center",
-          minHeight: 240,
-          padding: 32,
-        }}
-      >
-        <div
-          style={{
-            width: "min(720px, 100%)",
-            border: `1px solid ${
-              phase === "error"
-                ? tokens.colorPaletteRedBorder2
-                : tokens.colorNeutralStroke1
-            }`,
-            backgroundColor: tokens.colorNeutralBackground1,
-            boxShadow: tokens.shadow4,
-          }}
-        >
-          <div
-            style={{
-              padding: "10px 14px",
-              borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
-              backgroundColor: tokens.colorNeutralBackground3,
-              fontFamily: tokens.fontFamilyMonospace,
-              fontSize: 11,
-              fontWeight: 700,
-              letterSpacing: "0.05em",
-            }}
-          >
-            DIAGNOSTIC INPUT
-          </div>
-          <div style={{ padding: "20px 22px" }}>
-            {error ? (
+            {isBusy ? <Spinner size="small" /> : null}
+            <div>
               <div
-                role="alert"
                 style={{
-                  color: tokens.colorPaletteRedForeground1,
-                  fontSize: 13,
-                  fontWeight: 600,
+                  color: tokens.colorNeutralForeground3,
+                  fontFamily: LOG_MONOSPACE_FONT_FAMILY,
+                  fontSize: 9,
+                  fontWeight: 700,
+                  letterSpacing: "0.1em",
+                  textTransform: "uppercase",
                 }}
               >
-                {error}
+                Diagnostic input
               </div>
-            ) : snapshot ? (
-              <div style={{ fontSize: 13, lineHeight: 1.6 }}>
-                Local evidence is loaded. The diagnostic cockpit is ready with{" "}
-                <strong>{snapshot.findings.length}</strong> findings across{" "}
-                <strong>{snapshot.coverage.length}</strong> coverage checks.
-              </div>
-            ) : (
+              <strong style={{ display: "block", marginTop: 4, fontSize: 13 }}>
+                {phase === "analyzing"
+                  ? "Reading local artifacts…"
+                  : phase === "starting"
+                    ? "Starting the bounded local collector…"
+                    : "Import captured evidence or start local diagnostics"}
+              </strong>
               <div
                 style={{
+                  marginTop: 3,
                   color: tokens.colorNeutralForeground2,
-                  fontSize: 13,
-                  lineHeight: 1.6,
+                  fontSize: 11,
+                  lineHeight: "16px",
                 }}
               >
-                Import a CMTrace evidence folder, manifest.json, CAB, or ZIP. On
-                Windows, start a read-only live session to watch ESP enrollment
-                state as evidence changes.
+                CMTrace evidence folders, manifest.json, CAB, and ZIP are supported.
+                {liveSupported
+                  ? " Windows live acquisition is read-only."
+                  : " Live acquisition requires Windows."}
               </div>
-            )}
-          </div>
-        </div>
-      </section>
+            </div>
+          </section>
+        )}
+      </div>
     </main>
   );
 }
