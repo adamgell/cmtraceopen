@@ -15,7 +15,9 @@ import { EspDiagnosticsWorkspace } from "./EspDiagnosticsWorkspace";
 import { EspPhaseProgress } from "./EspPhaseProgress";
 import { useEspDiagnosticsStore } from "./esp-diagnostics-store";
 import { EspWorkloadTable } from "./EspWorkloadTable";
+import { GraphEnrichmentPanel } from "./GraphEnrichmentPanel";
 import { LiveActivity } from "./LiveActivity";
+import { createEspGraphCoordinator } from "./use-esp-session-updates";
 import type {
   EspDiagnosticFinding,
   EspDiagnosticsSnapshot,
@@ -492,6 +494,474 @@ describe("ESP diagnostic cockpit frame", () => {
 
     expect(screen.getByText("8m 05s")).toBeInTheDocument();
     expect(screen.queryByText("4m 05s")).not.toBeInTheDocument();
+  });
+});
+
+describe("optional Graph enrichment presentation", () => {
+  function renderGraphPanel(
+    snapshot: EspDiagnosticsSnapshot,
+    controls: {
+      onRefresh?: () => void | Promise<void>;
+      onCancel?: () => void | Promise<void>;
+      onSelectDevice?: (managedDeviceId: string) => void | Promise<void>;
+    } = {},
+  ) {
+    return render(<GraphEnrichmentPanel snapshot={snapshot} {...controls} />);
+  }
+
+  it("keeps disabled and connecting states local-only and requires an explicit refresh after connection", async () => {
+    const onRefresh = vi.fn();
+    const onCancel = vi.fn();
+    const snapshot = makeSnapshot();
+    useUiStore.setState({
+      graphApiEnabled: false,
+      graphApiStatus: "idle",
+    });
+    useEspDiagnosticsStore.setState({
+      snapshot,
+      graphPhase: "disabled",
+      graphUnavailableReason: "graphDisabled",
+    });
+
+    renderGraphPanel(snapshot, { onRefresh, onCancel });
+
+    const panel = screen.getByRole("region", {
+      name: "Microsoft Graph enrichment",
+    });
+    expect(panel).toHaveTextContent("Graph enrichment is off");
+    expect(
+      within(panel).getByRole("button", { name: "Refresh Graph data" }),
+    ).toBeDisabled();
+    expect(within(panel).queryByText("Sign in with Windows")).toBeNull();
+    expect(within(panel).queryByText("Sign out")).toBeNull();
+
+    act(() => {
+      useUiStore.setState({
+        graphApiEnabled: true,
+        graphApiStatus: "connecting",
+      });
+      useEspDiagnosticsStore
+        .getState()
+        .setGraphUnavailable("graphNotConnected");
+    });
+    expect(panel).toHaveTextContent("GraphNotConnected");
+    expect(panel).toHaveTextContent("never opens Windows sign-in");
+    expect(
+      within(panel).getByRole("button", { name: "Refresh Graph data" }),
+    ).toBeDisabled();
+    expect(onRefresh).not.toHaveBeenCalled();
+
+    act(() => {
+      useUiStore.setState({ graphApiStatus: "connected" });
+      useEspDiagnosticsStore.setState({
+        graphPhase: "idle",
+        graphUnavailableReason: null,
+      });
+    });
+    expect(panel).toHaveTextContent("Ready for explicit refresh");
+    fireEvent.click(
+      within(panel).getByRole("button", { name: "Refresh Graph data" }),
+    );
+    expect(onRefresh).toHaveBeenCalledOnce();
+
+    act(() => {
+      useEspDiagnosticsStore.setState({
+        graphPhase: "loading",
+        graphRequestId: "graph-loading",
+      });
+    });
+    fireEvent.click(
+      within(panel).getByRole("button", { name: "Cancel Graph query" }),
+    );
+    expect(onCancel).toHaveBeenCalledOnce();
+  });
+
+  it("shows independent partial, denied, offline, throttled, cancelled, and beta section states", () => {
+    const overlay = makeGraphOverlay(
+      "assignment-only-app",
+      "Assignment-only application",
+    );
+    overlay.deviceMatch = {
+      status: "notFound",
+      requiredScope: "DeviceManagementManagedDevices.Read.All",
+      apiVersion: "v1.0",
+      data: null,
+      error: null,
+    };
+    overlay.autopilotIdentity = {
+      status: "permissionDenied",
+      requiredScope: "DeviceManagementServiceConfig.Read.All",
+      apiVersion: "beta",
+      data: null,
+      error: {
+        code: "Forbidden",
+        message: "Autopilot identity permission is unavailable",
+        requestId: "request-denied",
+        blockedBy: null,
+        retryAfterSeconds: null,
+      },
+    };
+    overlay.deploymentProfile = {
+      status: "failed",
+      requiredScope: "DeviceManagementServiceConfig.Read.All",
+      apiVersion: "beta",
+      data: null,
+      error: {
+        code: "Offline",
+        message: "Microsoft Graph is unreachable",
+        requestId: null,
+        blockedBy: null,
+        retryAfterSeconds: null,
+      },
+    };
+    overlay.profileAssignments = {
+      status: "failed",
+      requiredScope: "DeviceManagementServiceConfig.Read.All",
+      apiVersion: "beta",
+      data: null,
+      error: {
+        code: "TooManyRequests",
+        message: "Microsoft Graph throttled this section",
+        requestId: "request-throttled",
+        blockedBy: null,
+        retryAfterSeconds: 12,
+      },
+    };
+    overlay.apps = {
+      status: "available",
+      requiredScope: "DeviceManagementApps.Read.All",
+      apiVersion: "v1.0",
+      data: [
+        {
+          appId: "assignment-only-app",
+          displayName: "Assignment-only application",
+          trackedOnEnrollmentStatus: false,
+          status: null,
+          assignments: [
+            {
+              assignmentId: "assignment-required",
+              targetId: "group-required",
+              filterId: "filter-required",
+              intent: "required",
+              targetKind: "group",
+              targeting: "declared",
+              evidence: [],
+            },
+          ],
+          evidence: [],
+        },
+        {
+          appId: "app-vpn-raw-guid",
+          displayName: "Contoso VPN from Graph",
+          trackedOnEnrollmentStatus: true,
+          status: {
+            raw: "installing",
+            normalized: "installing",
+            display: "Installing",
+            detail: null,
+          },
+          assignments: [],
+          evidence: [],
+        },
+      ],
+      error: null,
+    };
+    overlay.autopilotEvents = {
+      status: "available",
+      requiredScope: "DeviceManagementServiceConfig.Read.All",
+      apiVersion: "beta",
+      data: [
+        {
+          eventId: "event-policy-status",
+          managedDeviceId: "managed-device-raw-guid",
+          eventTime: timestamp("2026-07-15T20:06:00Z"),
+          deploymentState: {
+            raw: "inProgress",
+            normalized: "inProgress",
+            display: "In progress",
+            detail: null,
+          },
+          policyStatusDetails: [
+            {
+              statusDetailId: "detail-app-vpn",
+              relatedObjectId: "app-vpn-raw-guid",
+              displayName: "Contoso VPN event status",
+              kind: "app",
+              status: {
+                raw: "installing",
+                normalized: "installing",
+                display: "Installing",
+                detail: null,
+              },
+              correlationConfidence: "exact",
+              evidence: [],
+            },
+          ],
+          evidence: [],
+        },
+      ],
+      error: null,
+    };
+    overlay.policies = {
+      status: "permissionDenied",
+      requiredScope: "DeviceManagementConfiguration.Read.All",
+      apiVersion: "v1.0",
+      data: null,
+      error: {
+        code: "Forbidden",
+        message: "Policy permission is unavailable",
+        requestId: "request-policy",
+        blockedBy: null,
+        retryAfterSeconds: null,
+      },
+    };
+    overlay.scripts = {
+      status: "cancelled",
+      requiredScope: "DeviceManagementScripts.Read.All",
+      apiVersion: "beta",
+      data: null,
+      error: {
+        code: "Cancelled",
+        message: "Script query cancelled",
+        requestId: null,
+        blockedBy: null,
+        retryAfterSeconds: null,
+      },
+    };
+    const snapshot = makeSnapshot({ graph: overlay });
+    useUiStore.setState({
+      graphApiEnabled: true,
+      graphApiStatus: "connected",
+    });
+    useEspDiagnosticsStore.setState({
+      snapshot,
+      graphPhase: "partial",
+      graphUnavailableReason: null,
+    });
+
+    renderGraphPanel(snapshot);
+
+    const panel = screen.getByRole("region", {
+      name: "Microsoft Graph enrichment",
+    });
+    expect(panel).toHaveTextContent("Partial enrichment");
+    expect(panel).toHaveTextContent("No managed device match");
+    expect(panel).toHaveTextContent("Permission denied");
+    expect(panel).toHaveTextContent("Microsoft Graph is unreachable");
+    expect(panel).toHaveTextContent("Retry after 12 seconds");
+    expect(panel).toHaveTextContent("Cancelled");
+    expect(within(panel).getAllByText("Beta").length).toBeGreaterThan(0);
+
+    const applications = within(panel).getByRole("article", {
+      name: "Graph section Applications",
+    });
+    expect(applications).toHaveTextContent(
+      "Declared targeting · Required · group · group-required",
+    );
+    expect(applications).toHaveTextContent("Filter · filter-required");
+    expect(applications).toHaveTextContent(
+      "Effective · local ESP tracking observed",
+    );
+    expect(applications).toHaveTextContent(
+      "Effective device status · Installing",
+    );
+    const assignmentOnly = within(applications).getByTestId(
+      "graph-record-assignment-only-app",
+    );
+    expect(assignmentOnly).toHaveTextContent("Declared targeting");
+    expect(assignmentOnly).not.toHaveTextContent("Effective");
+
+    const events = within(panel).getByRole("article", {
+      name: "Graph section Autopilot events",
+    });
+    expect(events).toHaveTextContent(
+      "Effective Autopilot status · Contoso VPN event status · Installing",
+    );
+  });
+
+  it("requires explicit selection for ambiguous managed-device candidates", () => {
+    const onSelectDevice = vi.fn();
+    const overlay = makeGraphOverlay(
+      "app-vpn-raw-guid",
+      "Contoso VPN from Graph",
+    );
+    const candidates = [
+      {
+        managedDeviceId: "managed-candidate-a",
+        entraDeviceId: "entra-candidate-a",
+        serialNumber: null,
+        deviceName: "ESP-LAB-A",
+        userId: null,
+        userPrincipalName: null,
+        tenantId: null,
+        evidence: [],
+      },
+      {
+        managedDeviceId: "managed-candidate-b",
+        entraDeviceId: "entra-candidate-b",
+        serialNumber: null,
+        deviceName: "ESP-LAB-B",
+        userId: null,
+        userPrincipalName: null,
+        tenantId: null,
+        evidence: [],
+      },
+    ];
+    overlay.deviceMatch = {
+      status: "available",
+      requiredScope: "DeviceManagementManagedDevices.Read.All",
+      apiVersion: "v1.0",
+      data: {
+        selected: null,
+        candidates,
+        matchBasis: "serialNumber",
+        confidence: "temporal",
+        evidence: [],
+      },
+      error: null,
+    };
+    const snapshot = makeSnapshot({ graph: overlay });
+    useUiStore.setState({
+      graphApiEnabled: true,
+      graphApiStatus: "connected",
+    });
+    useEspDiagnosticsStore.setState({
+      snapshot,
+      graphPhase: "partial",
+      graphUnavailableReason: null,
+    });
+
+    const view = renderGraphPanel(snapshot, { onSelectDevice });
+
+    const panel = screen.getByRole("region", {
+      name: "Microsoft Graph enrichment",
+    });
+    expect(panel).toHaveTextContent(
+      "Selection is required before dependent queries can continue",
+    );
+    fireEvent.click(
+      within(panel).getByRole("button", {
+        name: "Select Graph device managed-candidate-b",
+      }),
+    );
+    expect(onSelectDevice).toHaveBeenCalledWith("managed-candidate-b");
+
+    overlay.deviceMatch.data = {
+      selected: candidates[1],
+      candidates,
+      matchBasis: "managedDeviceId",
+      confidence: "exact",
+      evidence: [],
+    };
+    const selectedSnapshot = makeSnapshot({ graph: overlay });
+    act(() => {
+      useEspDiagnosticsStore.setState({ snapshot: selectedSnapshot });
+    });
+    view.rerender(
+      <GraphEnrichmentPanel
+        snapshot={selectedSnapshot}
+        onSelectDevice={onSelectDevice}
+      />,
+    );
+    expect(panel).toHaveTextContent("Selected device · ESP-LAB-B");
+    expect(panel).toHaveTextContent("managed-candidate-b");
+  });
+
+  it("sends an explicit candidate through the coordinator request contract", async () => {
+    const snapshot = makeSnapshot();
+    const fetchGraph = vi.fn(async (request) => ({
+      ...makeGraphOverlay("app-vpn-raw-guid", "Contoso VPN from Graph"),
+      requestId: request.requestId,
+    }));
+    useUiStore.setState({
+      graphApiEnabled: true,
+      graphApiStatus: "connected",
+    });
+    useEspDiagnosticsStore.setState({
+      snapshot,
+      graphPhase: "idle",
+      graphUnavailableReason: null,
+    });
+    const coordinator = createEspGraphCoordinator({
+      fetchGraph,
+      cancelGraph: vi.fn(async () => undefined),
+      createRequestId: () => "graph-explicit-candidate",
+    });
+
+    await coordinator.refresh("managed-candidate-b");
+
+    expect(fetchGraph).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requestId: "graph-explicit-candidate",
+        selectedManagedDeviceId: "managed-candidate-b",
+      }),
+    );
+    coordinator.dispose();
+  });
+
+  it("cancels a manual coordinator query and ignores its late overlay", async () => {
+    const snapshot = makeSnapshot();
+    let resolveGraph!: (overlay: EspGraphOverlay) => void;
+    const fetchGraph = vi.fn(
+      () =>
+        new Promise<EspGraphOverlay>((resolve) => {
+          resolveGraph = resolve;
+        }),
+    );
+    const cancelGraph = vi.fn(async () => undefined);
+    useUiStore.setState({
+      graphApiEnabled: true,
+      graphApiStatus: "connected",
+    });
+    useEspDiagnosticsStore.setState({
+      snapshot,
+      graphPhase: "idle",
+      graphUnavailableReason: null,
+    });
+    const coordinator = createEspGraphCoordinator({
+      fetchGraph,
+      cancelGraph,
+      createRequestId: () => "graph-manual-cancel",
+    });
+
+    const pendingRefresh = coordinator.refresh();
+    await waitFor(() => expect(fetchGraph).toHaveBeenCalledOnce());
+    await coordinator.cancel();
+
+    expect(cancelGraph).toHaveBeenCalledWith("graph-manual-cancel");
+    expect(useEspDiagnosticsStore.getState().graphPhase).toBe("cancelled");
+    resolveGraph({
+      ...makeGraphOverlay("app-vpn-raw-guid", "Late Graph name"),
+      requestId: "graph-manual-cancel",
+    });
+    await pendingRefresh;
+    expect(useEspDiagnosticsStore.getState().snapshot?.graph).toBeNull();
+    coordinator.dispose();
+  });
+
+  it("keeps local IDs and evidence visible after a remote query error", () => {
+    const snapshot = makeSnapshot();
+    useUiStore.setState({
+      graphApiEnabled: true,
+      graphApiStatus: "connected",
+    });
+    useEspDiagnosticsStore.setState({
+      phase: "ready",
+      snapshot,
+      graphPhase: "error",
+      graphUnavailableReason: null,
+      graphError: "Microsoft Graph is offline",
+    });
+
+    render(<EspDiagnosticsWorkspace />);
+
+    expect(
+      screen.getByRole("region", { name: "Microsoft Graph enrichment" }),
+    ).toHaveTextContent("Microsoft Graph is offline");
+    expect(
+      screen.getByRole("region", { name: "Tracked workloads" }),
+    ).toHaveTextContent("app-vpn-raw-guid");
+    expect(screen.getByRole("region", { name: "ESP evidence" })).toBeVisible();
   });
 });
 

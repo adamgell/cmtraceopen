@@ -23,6 +23,7 @@ import { useEspDiagnosticsStore } from "./esp-diagnostics-store";
 import { EspPhaseProgress } from "./EspPhaseProgress";
 import { EspWorkloadTable } from "./EspWorkloadTable";
 import { EspWorkspaceHeader } from "./EspWorkspaceHeader";
+import { GraphEnrichmentPanel } from "./GraphEnrichmentPanel";
 import {
   analyzeEspEvidenceSource,
   ESP_EVIDENCE_SOURCE_ERROR,
@@ -227,6 +228,8 @@ export function EspDiagnosticsWorkspace() {
             </div>
 
             <EspWorkloadTable snapshot={snapshot} />
+
+            <GraphEnrichmentPanel snapshot={snapshot} />
 
             <div
               className="esp-cockpit-panel-grid"

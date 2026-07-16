@@ -126,6 +126,7 @@ function sortedReferences<K extends string>(
 function createGraphRequest(
   snapshot: EspDiagnosticsSnapshot,
   requestId: string,
+  selectedManagedDeviceId: string | null = null,
 ): EspGraphRequest {
   const evidenceWindow = getEvidenceWindow(snapshot);
   const appIds = new Set<string>();
@@ -229,9 +230,7 @@ function createGraphRequest(
     requestId,
     identity: snapshot.identity,
     workloadIds: sortedAppIds,
-    selectedManagedDeviceId: normalizeGraphGuid(
-      graph?.deviceMatch.data?.selected?.managedDeviceId,
-    ),
+    selectedManagedDeviceId,
     evidenceWindowStartUtc: evidenceWindow?.start ?? null,
     evidenceWindowEndUtc: evidenceWindow?.end ?? null,
     enrollmentConfigurationIds: Array.from(enrollmentConfigurationIds).sort(),
@@ -376,7 +375,8 @@ export interface EspGraphCoordinatorDependencies {
 
 export interface EspGraphCoordinator {
   reconcile(): Promise<void>;
-  refresh(): Promise<void>;
+  refresh(selectedManagedDeviceId?: string | null): Promise<void>;
+  cancel(): Promise<void>;
   start(): void;
   dispose(): void;
 }
@@ -436,7 +436,10 @@ export function createEspGraphCoordinator(
     });
   };
 
-  const run = async (force: boolean) => {
+  const run = async (
+    force: boolean,
+    selectedManagedDeviceId: string | null = null,
+  ) => {
     if (disposed) {
       return;
     }
@@ -565,7 +568,11 @@ export function createEspGraphCoordinator(
     blockedFingerprint = null;
     lastRequestedFingerprint = fingerprint;
     const requestId = nextRequestId();
-    const request = createGraphRequest(currentSnapshot, requestId);
+    const request = createGraphRequest(
+      currentSnapshot,
+      requestId,
+      selectedManagedDeviceId,
+    );
     ownedRequestId = requestId;
     useEspDiagnosticsStore.getState().beginGraph(requestId, currentFingerprint);
 
@@ -612,7 +619,15 @@ export function createEspGraphCoordinator(
 
   return {
     reconcile: () => run(false),
-    refresh: () => run(true),
+    refresh: (selectedManagedDeviceId = null) =>
+      run(true, selectedManagedDeviceId),
+    cancel: async () => {
+      operationGeneration += 1;
+      const cancellation = cancelCurrentRequest();
+      if (cancellation) {
+        await cancellation;
+      }
+    },
     start: () => {
       if (started || disposed) {
         return;
@@ -668,8 +683,14 @@ export function createEspGraphCoordinator(
 
 let globalGraphCoordinator: EspGraphCoordinator | null = null;
 
-export async function refreshEspGraphData(): Promise<void> {
-  await globalGraphCoordinator?.refresh();
+export async function refreshEspGraphData(
+  selectedManagedDeviceId: string | null = null,
+): Promise<void> {
+  await globalGraphCoordinator?.refresh(selectedManagedDeviceId);
+}
+
+export async function cancelEspGraphData(): Promise<void> {
+  await globalGraphCoordinator?.cancel();
 }
 
 export function useEspSessionUpdates(): void {
