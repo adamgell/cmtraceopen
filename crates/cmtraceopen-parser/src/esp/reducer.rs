@@ -3,6 +3,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use chrono::{SecondsFormat, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 
+use super::correlation::correlate_installer_processes;
 use super::models::*;
 use super::normalize::{
     decode_oobe_config, extract_guid, normalize_classic_esp_status, normalize_office_detail_status,
@@ -607,6 +608,9 @@ struct SnapshotProjection {
     activity: Vec<(usize, EspTimelineEntry)>,
     coverage: Vec<EspArtifactCoverage>,
     raw_evidence: Vec<EspRawEvidenceRecord>,
+    process_observations: Vec<EspProcessObservation>,
+    deployment_log_observations: Vec<EspDeploymentLogObservation>,
+    ime_observations: Vec<EspImeObservation>,
     v2_workloads: BTreeMap<(String, String, usize), V2WorkloadAccumulator>,
     platform_scripts: BTreeMap<(String, String), PlatformScriptAccumulator>,
     graph_observations: Vec<EspGraphObservation>,
@@ -653,6 +657,9 @@ impl SnapshotProjection {
             activity: Vec::new(),
             coverage: Vec::new(),
             raw_evidence: Vec::new(),
+            process_observations: Vec::new(),
+            deployment_log_observations: Vec::new(),
+            ime_observations: Vec::new(),
             v2_workloads: BTreeMap::new(),
             platform_scripts: BTreeMap::new(),
             graph_observations: Vec::new(),
@@ -935,6 +942,7 @@ impl SnapshotProjection {
     }
 
     fn process_ime(&mut self, ordinal: usize, observation: &EspImeObservation) {
+        self.ime_observations.push(observation.clone());
         self.push_timeline(
             ordinal,
             &observation.context,
@@ -950,6 +958,7 @@ impl SnapshotProjection {
         ordinal: usize,
         observation: &EspDeploymentLogObservation,
     ) {
+        self.deployment_log_observations.push(observation.clone());
         self.push_timeline(
             ordinal,
             &observation.context,
@@ -961,6 +970,7 @@ impl SnapshotProjection {
     }
 
     fn process_process(&mut self, ordinal: usize, observation: &EspProcessObservation) {
+        self.process_observations.push(observation.clone());
         self.push_timeline(
             ordinal,
             &observation.context,
@@ -1653,6 +1663,13 @@ impl SnapshotProjection {
         self.apply_deferred_error_codes();
         self.finalize_delivery_optimization();
 
+        let installer_correlations = correlate_installer_processes(
+            &self.workloads,
+            &self.process_observations,
+            &self.deployment_log_observations,
+            &self.ime_observations,
+        );
+
         let phase = snapshot_phase(&self.scenario, &self.sessions);
         let node_cache = self
             .node_cache
@@ -1676,7 +1693,7 @@ impl SnapshotProjection {
             enrollments: self.enrollments,
             sessions: self.sessions,
             workloads: self.workloads,
-            installer_correlations: Vec::new(),
+            installer_correlations,
             node_cache,
             registration_events: self.registration_events,
             delivery_optimization: self.delivery_optimization,
