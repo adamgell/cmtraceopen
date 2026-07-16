@@ -13,8 +13,9 @@ use std::time::{Duration, Instant};
 
 use chrono::{SecondsFormat, Utc};
 use cmtraceopen_parser::esp::{
-    EspArtifactCoverage, EspArtifactStatus, EspDiagnosticsReducer, EspDiagnosticsSnapshot,
-    EspEvidenceIdentityAllocator, EspEvidenceRecord, EspIdentifiedEvidenceRecord,
+    EspArtifactCoverage, EspDiagnosticsReducer, EspDiagnosticsSnapshot,
+    EspEvidenceIdentityAllocator, EspEvidenceIdentityRejectionCounts, EspEvidenceRecord,
+    EspIdentifiedEvidenceRecord,
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -566,7 +567,7 @@ struct SessionEngine {
     tail_records: Vec<EspIdentifiedEvidenceRecord>,
     tail_coverage: Vec<EspIdentifiedEvidenceRecord>,
     identity_allocator: EspEvidenceIdentityAllocator,
-    identity_limit_discards: usize,
+    identity_rejections: EspEvidenceIdentityRejectionCounts,
     sources: Vec<DiscoveredLogSource>,
     tail: Box<dyn EspSessionTail>,
     tail_stopped: bool,
@@ -579,7 +580,7 @@ impl SessionEngine {
         let mut tail = dependencies.tail_factory.create();
         let tail_batch = tail.reconcile(&discovery.sources, &reading.utc);
         let mut identity_allocator = EspEvidenceIdentityAllocator::new();
-        let mut identity_limit_discards = 0;
+        let mut identity_rejections = EspEvidenceIdentityRejectionCounts::default();
         let provider_records = provider_records
             .into_iter()
             .map(|(slot, records)| {
@@ -589,7 +590,7 @@ impl SessionEngine {
                         Vec::new(),
                         records,
                         &mut identity_allocator,
-                        &mut identity_limit_discards,
+                        &mut identity_rejections,
                     ),
                 )
             })
@@ -602,7 +603,7 @@ impl SessionEngine {
                 .map(EspEvidenceRecord::Coverage)
                 .collect(),
             &mut identity_allocator,
-            &mut identity_limit_discards,
+            &mut identity_rejections,
         );
         let mut engine = Self {
             started_at: reading.monotonic,
@@ -615,7 +616,7 @@ impl SessionEngine {
             tail_records: Vec::new(),
             tail_coverage: Vec::new(),
             identity_allocator,
-            identity_limit_discards,
+            identity_rejections,
             sources: discovery.sources,
             tail,
             tail_stopped: false,
@@ -633,12 +634,7 @@ impl SessionEngine {
         reducer.ingest_identified_all(self.discovery_coverage.iter().cloned());
         reducer.ingest_identified_all(self.tail_records.iter().cloned());
         reducer.ingest_identified_all(self.tail_coverage.iter().cloned());
-        if self.identity_limit_discards != 0 {
-            reducer.ingest_identified(EspIdentifiedEvidenceRecord::with_occurrence(
-                identity_limit_coverage(self.identity_limit_discards, generated_at_utc),
-                0,
-            ));
-        }
+        reducer.merge_identity_rejections(self.identity_rejections);
         reducer.snapshot()
     }
 
@@ -660,7 +656,7 @@ impl SessionEngine {
                         previous.remove(&slot).unwrap_or_default(),
                         records,
                         &mut self.identity_allocator,
-                        &mut self.identity_limit_discards,
+                        &mut self.identity_rejections,
                     ),
                 )
             })
@@ -674,7 +670,7 @@ impl SessionEngine {
                 .map(EspEvidenceRecord::Coverage)
                 .collect(),
             &mut self.identity_allocator,
-            &mut self.identity_limit_discards,
+            &mut self.identity_rejections,
         );
         self.sources = discovery.sources;
         let tail_batch = self.tail.reconcile(&self.sources, &reading.utc);
@@ -711,7 +707,7 @@ impl SessionEngine {
             Vec::new(),
             records,
             &mut self.identity_allocator,
-            &mut self.identity_limit_discards,
+            &mut self.identity_rejections,
         ));
         if !coverage.is_empty() {
             let updated_artifacts = coverage
@@ -731,7 +727,7 @@ impl SessionEngine {
                     .map(EspEvidenceRecord::Coverage)
                     .collect(),
                 &mut self.identity_allocator,
-                &mut self.identity_limit_discards,
+                &mut self.identity_rejections,
             ));
             self.tail_coverage = unchanged;
         }
@@ -891,7 +887,7 @@ fn reconcile_identified_records(
     previous: Vec<EspIdentifiedEvidenceRecord>,
     records: Vec<EspEvidenceRecord>,
     allocator: &mut EspEvidenceIdentityAllocator,
-    identity_limit_discards: &mut usize,
+    identity_rejections: &mut EspEvidenceIdentityRejectionCounts,
 ) -> Vec<EspIdentifiedEvidenceRecord> {
     let mut previous_occurrences = BTreeMap::<(String, String), VecDeque<usize>>::new();
     for identified in previous {
@@ -915,8 +911,8 @@ fn reconcile_identified_records(
             }
             match allocator.try_identify(record) {
                 Ok(identified) => Some(identified),
-                Err(_) => {
-                    *identity_limit_discards = identity_limit_discards.saturating_add(1);
+                Err(error) => {
+                    identity_rejections.record(error);
                     None
                 }
             }
@@ -968,19 +964,6 @@ fn coverage_artifact_id(record: &EspEvidenceRecord) -> Option<&str> {
         return None;
     };
     Some(&coverage.artifact_id)
-}
-
-fn identity_limit_coverage(discarded: usize, observed_at_utc: &str) -> EspEvidenceRecord {
-    EspEvidenceRecord::Coverage(EspArtifactCoverage {
-        artifact_id: "session.evidence-identity-limit".to_string(),
-        family: "session-retention".to_string(),
-        status: EspArtifactStatus::ParseFailed,
-        detail: Some(format!(
-            "bounded source-identity tracking discarded {discarded} records after reaching its source limit"
-        )),
-        observed_at_utc: observed_at_utc.to_string(),
-        evidence: Vec::new(),
-    })
 }
 
 fn is_local_record(record: &EspEvidenceRecord) -> bool {

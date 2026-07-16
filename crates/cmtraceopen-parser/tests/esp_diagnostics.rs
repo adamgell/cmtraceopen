@@ -2435,8 +2435,57 @@ fn reducer_mixed_identified_and_normal_ingestion_never_reuses_occurrence() {
 }
 
 #[test]
+fn reducer_reverse_mixed_ingestion_deduplicates_an_already_accepted_identity() {
+    let record = ime_record(
+        "reverse-mixed-ime-provider",
+        "same-evidence",
+        "2026-07-15T12:00:00Z",
+    );
+    let mut reducer = EspDiagnosticsReducer::new("2026-07-15T18:00:00Z".to_string());
+    reducer.ingest(record.clone());
+    reducer.ingest_identified(EspIdentifiedEvidenceRecord::with_occurrence(record, 0));
+
+    assert_eq!(
+        reducer
+            .snapshot()
+            .raw_evidence
+            .into_iter()
+            .map(|record| record.record_id)
+            .collect::<Vec<_>>(),
+        vec!["raw|reverse-mixed-ime-provider|same-evidence|0"]
+    );
+}
+
+#[test]
+fn reducer_repeated_identified_replay_is_idempotent_and_advances_after_high_watermark() {
+    let record = ime_record(
+        "replayed-ime-provider",
+        "same-evidence",
+        "2026-07-15T12:00:00Z",
+    );
+    let identified = EspIdentifiedEvidenceRecord::with_occurrence(record.clone(), 4);
+    let mut reducer = EspDiagnosticsReducer::new("2026-07-15T18:00:00Z".to_string());
+    reducer.ingest_identified(identified.clone());
+    reducer.ingest_identified(identified);
+    reducer.ingest(record);
+
+    assert_eq!(
+        reducer
+            .snapshot()
+            .raw_evidence
+            .into_iter()
+            .map(|record| record.record_id)
+            .collect::<Vec<_>>(),
+        vec![
+            "raw|replayed-ime-provider|same-evidence|4",
+            "raw|replayed-ime-provider|same-evidence|5",
+        ]
+    );
+}
+
+#[test]
 fn reducer_identified_watermark_is_monotonic_across_order_and_repeats() {
-    let final_normal_id = |ordinals: &[usize]| {
+    let retained_ids = |ordinals: &[usize]| {
         let mut reducer = EspDiagnosticsReducer::new("2026-07-15T18:00:00Z".to_string());
         for (index, ordinal) in ordinals.iter().copied().enumerate() {
             reducer.ingest_identified(EspIdentifiedEvidenceRecord::with_occurrence(
@@ -2456,19 +2505,62 @@ fn reducer_identified_watermark_is_monotonic_across_order_and_repeats() {
         reducer
             .snapshot()
             .raw_evidence
-            .last()
-            .expect("normal record is retained")
-            .record_id
-            .clone()
+            .into_iter()
+            .map(|record| record.record_id)
+            .collect::<Vec<_>>()
     };
 
     assert_eq!(
-        final_normal_id(&[5, 2, 5]),
-        "raw|watermark-provider|normal-after-identified|6"
+        retained_ids(&[5, 2, 5]),
+        vec![
+            "raw|watermark-provider|identified-0|5",
+            "raw|watermark-provider|identified-1|2",
+            "raw|watermark-provider|identified-2|5",
+            "raw|watermark-provider|normal-after-identified|6",
+        ]
     );
     assert_eq!(
-        final_normal_id(&[2, 5, 2]),
-        "raw|watermark-provider|normal-after-identified|6"
+        retained_ids(&[2, 5, 2]),
+        vec![
+            "raw|watermark-provider|identified-0|2",
+            "raw|watermark-provider|identified-1|5",
+            "raw|watermark-provider|identified-2|2",
+            "raw|watermark-provider|normal-after-identified|6",
+        ]
+    );
+}
+
+#[test]
+fn reducer_retains_out_of_order_occurrences_for_the_same_evidence() {
+    let record = ime_record(
+        "out-of-order-provider",
+        "same-evidence",
+        "2026-07-15T12:00:00Z",
+    );
+    let mut reducer = EspDiagnosticsReducer::new("2026-07-15T18:00:00Z".to_string());
+    reducer.ingest_identified(EspIdentifiedEvidenceRecord::with_occurrence(
+        record.clone(),
+        5,
+    ));
+    reducer.ingest_identified(EspIdentifiedEvidenceRecord::with_occurrence(record, 2));
+    reducer.ingest(ime_record(
+        "out-of-order-provider",
+        "normal-after-out-of-order",
+        "2026-07-15T12:00:01Z",
+    ));
+
+    assert_eq!(
+        reducer
+            .snapshot()
+            .raw_evidence
+            .into_iter()
+            .map(|record| record.record_id)
+            .collect::<Vec<_>>(),
+        vec![
+            "raw|out-of-order-provider|same-evidence|5",
+            "raw|out-of-order-provider|same-evidence|2",
+            "raw|out-of-order-provider|normal-after-out-of-order|6",
+        ]
     );
 }
 
@@ -2558,6 +2650,48 @@ fn evidence_identity_allocator_bounds_sources_and_keeps_existing_source_counters
     assert_eq!(allocator.tracked_source_count(), 2);
     assert_eq!(first.occurrence_ordinal(), 0);
     assert_eq!(next_existing.occurrence_ordinal(), 1);
+}
+
+#[test]
+fn evidence_identity_allocator_bounds_the_exact_identity_ledger() {
+    let mut allocator = EspEvidenceIdentityAllocator::with_limits(2, 2);
+
+    allocator
+        .try_identify(ime_record("source-a", "first", "2026-07-15T12:00:00Z"))
+        .expect("first identity is tracked");
+    allocator
+        .try_identify(ime_record("source-a", "second", "2026-07-15T12:00:01Z"))
+        .expect("second identity is tracked");
+    assert!(matches!(
+        allocator.try_identify(ime_record("source-a", "third", "2026-07-15T12:00:02Z")),
+        Err(EspEvidenceIdentityError::IdentityLimit)
+    ));
+    assert_eq!(allocator.tracked_source_count(), 1);
+    assert_eq!(allocator.tracked_identity_count(), 2);
+}
+
+#[test]
+fn reducer_merges_typed_identity_rejections_without_synthetic_ingestion() {
+    let mut rejections = EspEvidenceIdentityRejectionCounts::default();
+    rejections.record(EspEvidenceIdentityError::SourceLimit);
+    rejections.record(EspEvidenceIdentityError::IdentityLimit);
+    rejections.record(EspEvidenceIdentityError::IdentityLimit);
+
+    let mut reducer = EspDiagnosticsReducer::new("2026-07-15T18:00:00Z".to_string());
+    reducer.merge_identity_rejections(rejections);
+    let snapshot = reducer.snapshot();
+
+    assert!(snapshot.raw_evidence.is_empty());
+    let coverage = snapshot
+        .coverage
+        .iter()
+        .find(|coverage| coverage.artifact_id == "session.evidence-identity-limit")
+        .expect("merged identity rejections are disclosed");
+    assert_eq!(coverage.status, EspArtifactStatus::ParseFailed);
+    let detail = coverage.detail.as_deref().expect("identity limit detail");
+    assert!(detail.contains("discarded 3 records"), "{detail}");
+    assert!(detail.contains("1 source-limit"), "{detail}");
+    assert!(detail.contains("2 identity-limit"), "{detail}");
 }
 
 #[test]

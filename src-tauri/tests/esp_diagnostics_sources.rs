@@ -63,7 +63,7 @@ use cmtraceopen_parser::esp::{
     EspGraphObservation, EspGraphObservationSection, EspHardwareEvidence, EspObservationContext,
     EspObservationValue, EspParseState, EspRegistryObservation, EspRegistryProvenance, EspScope,
     EspSensitivity, EspSourceAccessState, EspSourceKind, EspSystemFact, EspSystemObservation,
-    GraphApiVersion,
+    GraphApiVersion, MAX_EVIDENCE_IDENTITY_SOURCES,
 };
 use tempfile::tempdir;
 
@@ -3960,6 +3960,70 @@ fn session_raw_record_id(snapshot: &EspDiagnosticsSnapshot, evidence_id: &str) -
         .unwrap_or_else(|| panic!("missing session evidence {evidence_id}"))
         .record_id
         .clone()
+}
+
+#[test]
+fn session_identity_source_boundary_preserves_exact_rejection_counts() {
+    let snapshot_for_source_count = |request_id: &str, source_count: usize| {
+        let clock = Arc::new(ManualSessionClock::default());
+        let empty = empty_session_provider();
+        let records = (0..source_count)
+            .map(|index| {
+                session_system_record(
+                    &format!("identity-boundary-source-{index}"),
+                    &format!("identity-boundary-evidence-{index}"),
+                    "2026-07-16T06:30:00Z",
+                )
+            })
+            .collect();
+        let dependencies = EspSessionDependencies::new(
+            Arc::clone(&clock) as Arc<dyn EspSessionClock>,
+            Arc::new(StaticSessionProvider { records }),
+            empty.clone(),
+            empty.clone(),
+            empty,
+            Arc::new(FakeSessionDiscovery::default()),
+            Arc::new(FakeSessionTailFactory::default()),
+            Arc::new(RecordingSessionSink::default()),
+        )
+        .with_live_supported_for_tests(true);
+        let manager = EspSessionManager::new(dependencies);
+        let initial = manager.start(request_id).expect("start boundary session");
+        manager
+            .stop(&initial.session_id)
+            .expect("stop boundary session");
+        initial.snapshot
+    };
+
+    let at_boundary = snapshot_for_source_count(
+        "40404040-4040-4040-8040-404040404040",
+        MAX_EVIDENCE_IDENTITY_SOURCES,
+    );
+    assert_eq!(
+        at_boundary.raw_evidence.len(),
+        MAX_EVIDENCE_IDENTITY_SOURCES
+    );
+    assert!(at_boundary
+        .coverage
+        .iter()
+        .all(|coverage| coverage.artifact_id != "session.evidence-identity-limit"));
+
+    let beyond_boundary = snapshot_for_source_count(
+        "50505050-5050-4050-8050-505050505050",
+        MAX_EVIDENCE_IDENTITY_SOURCES + 7,
+    );
+    assert_eq!(
+        beyond_boundary.raw_evidence.len(),
+        MAX_EVIDENCE_IDENTITY_SOURCES
+    );
+    let coverage = beyond_boundary
+        .coverage
+        .iter()
+        .find(|coverage| coverage.artifact_id == "session.evidence-identity-limit")
+        .expect("identity rejections are disclosed");
+    let detail = coverage.detail.as_deref().expect("identity limit detail");
+    assert!(detail.contains("discarded 7 records"), "{detail}");
+    assert!(detail.contains("7 source-limit"), "{detail}");
 }
 
 #[test]
