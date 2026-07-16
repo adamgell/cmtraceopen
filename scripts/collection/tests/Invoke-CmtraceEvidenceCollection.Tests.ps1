@@ -1,5 +1,10 @@
 BeforeAll {
     $collectorPath = Join-Path $PSScriptRoot '..' 'Invoke-CmtraceEvidenceCollection.ps1'
+    $stagedProfilePath = Join-Path $PSScriptRoot '..' 'intune-evidence-profile.json'
+    $referenceProfilePath = Join-Path $PSScriptRoot '..' '..' '..' 'references' 'collection' 'intune-evidence-profile.json'
+    $stagedProfileText = Get-Content -LiteralPath $stagedProfilePath -Raw
+    $referenceProfileText = Get-Content -LiteralPath $referenceProfilePath -Raw
+    $stagedProfile = $stagedProfileText | ConvertFrom-Json
     $tokens = $null
     $parseErrors = $null
     $ast = [System.Management.Automation.Language.Parser]::ParseFile(
@@ -61,6 +66,38 @@ BeforeAll {
                 }
             )
         }
+    }
+}
+
+Describe 'Intune evidence profile contracts' {
+    It 'keeps the staged and reference profiles byte-for-byte synchronized' {
+        $stagedProfileText | Should -BeExactly $referenceProfileText
+    }
+
+    It 'does not capture current-user registry paths from the SYSTEM collector context' {
+        $currentUserRegistryItems = @(
+            $stagedProfile.registry |
+                Where-Object { $_.path -match '^(?:HKCU|HKEY_CURRENT_USER)(?:\\|$)' }
+        )
+
+        $currentUserRegistryItems | Should -BeNullOrEmpty
+    }
+
+    It 'serializes an empty Delivery Optimization status query as an array' {
+        $statusCommand = @(
+            $stagedProfile.commands |
+                Where-Object { $_.id -eq 'delivery-optimization-status' }
+        )
+        $statusCommand | Should -HaveCount 1
+
+        $expectedCommand = 'ConvertTo-Json -InputObject @(Get-DeliveryOptimizationStatus | Select-Object FileId,Status,Priority,BytesFromHttp,BytesFromLanPeers,BytesFromInternetPeers,BytesFromCacheServer,BytesFromGroupPeers,BytesTotal,DownloadDuration,PercentPeerCaching) -Compress'
+        $statusCommand[0].arguments[-1] | Should -BeExactly $expectedCommand
+
+        function Get-DeliveryOptimizationStatus {
+            return
+        }
+
+        Invoke-Expression $statusCommand[0].arguments[-1] | Should -BeExactly '[]'
     }
 }
 

@@ -144,25 +144,11 @@
             "notes": "Cloud domain join tenant metadata, including MDM enrollment URL hints that help correlate tenant-scoped policy evidence."
         },
         {
-            "id": "policy-hkcu",
-            "family": "windows-user-policy-hive",
-            "path": "HKCU\\Software\\Policies",
-            "fileName": "hkcu-policies.reg",
-            "notes": "User-scoped Windows policy hive captured alongside dsregcmd evidence for future deterministic policy correlation."
-        },
-        {
             "id": "policy-hklm",
             "family": "windows-machine-policy-hive",
             "path": "HKLM\\Software\\Policies",
             "fileName": "hklm-policies.reg",
             "notes": "Machine-scoped Windows policy hive captured alongside dsregcmd evidence for future deterministic policy correlation."
-        },
-        {
-            "id": "policy-microsoft-hkcu",
-            "family": "windows-user-microsoft-policy-hive",
-            "path": "HKCU\\Software\\Microsoft\\Policies",
-            "fileName": "hkcu-microsoft-policies.reg",
-            "notes": "User-scoped Microsoft policy hive captured for PassportForWork and related policy correlation not covered by the generic Policies export."
         },
         {
             "id": "policy-microsoft-hklm",
@@ -300,7 +286,7 @@
             "arguments": [
                 "-NoProfile",
                 "-Command",
-                "Get-DeliveryOptimizationStatus | Select-Object FileId,Status,Priority,BytesFromHttp,BytesFromLanPeers,BytesFromInternetPeers,BytesFromCacheServer,BytesFromGroupPeers,BytesTotal,DownloadDuration,PercentPeerCaching | ConvertTo-Json -Compress"
+                "ConvertTo-Json -InputObject @(Get-DeliveryOptimizationStatus | Select-Object FileId,Status,Priority,BytesFromHttp,BytesFromLanPeers,BytesFromInternetPeers,BytesFromCacheServer,BytesFromGroupPeers,BytesTotal,DownloadDuration,PercentPeerCaching) -Compress"
             ],
             "fileName": "delivery-optimization-status.json",
             "parseHints": [
