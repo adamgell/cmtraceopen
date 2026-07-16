@@ -110,6 +110,7 @@ impl RegistryValueSnapshot {
 pub struct RegistrySnapshotKey {
     pub relative_key: String,
     pub values: Vec<RegistryValueSnapshot>,
+    pub access_error: Option<RegistryReadError>,
 }
 
 pub trait RegistryProvider {
@@ -137,6 +138,15 @@ pub struct RegistryRootEvidence {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+pub struct RegistryDescendantCoverage {
+    pub hive: String,
+    pub key: String,
+    pub access_state: EspSourceAccessState,
+    pub detail: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct ScopedRegistryObservation {
     pub scope: Option<EspScope>,
     pub observation: EspRegistryObservation,
@@ -153,6 +163,7 @@ pub struct UninstallProductName {
 #[serde(rename_all = "camelCase")]
 pub struct RegistryEvidence {
     pub roots: Vec<RegistryRootEvidence>,
+    pub descendant_coverage: Vec<RegistryDescendantCoverage>,
     pub observations: Vec<ScopedRegistryObservation>,
     pub node_cache: Vec<EspNodeCacheEntry>,
     pub uninstall_names: Vec<UninstallProductName>,
@@ -188,6 +199,9 @@ pub fn collect_registry_evidence(
         }
     }
 
+    evidence
+        .descendant_coverage
+        .sort_by(|left, right| left.key.cmp(&right.key));
     evidence.node_cache.sort_by_key(|entry| entry.index);
     evidence.uninstall_names = lookup_observed_uninstall_names(provider, observed_product_codes);
     evidence
@@ -235,6 +249,17 @@ fn append_tree_observations(
         } else {
             format!("{}\\{}", target.key, entry.relative_key)
         };
+        if let Some(error) = entry.access_error.as_ref() {
+            let (access_state, detail) = access_state_for_error(error.clone());
+            evidence
+                .descendant_coverage
+                .push(RegistryDescendantCoverage {
+                    hive: target.hive.to_string(),
+                    key: full_key.clone(),
+                    access_state,
+                    detail,
+                });
+        }
         let scope = classify_registry_scope(&full_key);
         let mut entry_evidence = Vec::new();
 
@@ -398,7 +423,13 @@ fn root_evidence(
 fn access_state_for_error(error: RegistryReadError) -> (EspSourceAccessState, Option<String>) {
     match error {
         RegistryReadError::Missing => (EspSourceAccessState::Missing, None),
-        RegistryReadError::PermissionDenied => (EspSourceAccessState::PermissionDenied, None),
+        RegistryReadError::PermissionDenied => (
+            EspSourceAccessState::PermissionDenied,
+            Some(
+                "Access denied; restart CMTrace Open as administrator to read this registry key."
+                    .to_string(),
+            ),
+        ),
         RegistryReadError::Failed(detail) => (EspSourceAccessState::Failed, Some(detail)),
         RegistryReadError::Unsupported => (EspSourceAccessState::Unsupported, None),
     }
@@ -483,46 +514,81 @@ fn read_key_bounded(
         return;
     }
 
-    let values = key
-        .enum_values()
-        .filter_map(Result::ok)
-        .filter(|(name, _)| !is_hardware_identity_registry_name(name))
-        .filter(|(_, value)| value.bytes.len() <= MAX_REGISTRY_VALUE_BYTES)
-        .filter_map(|(name, value)| {
-            let size_bytes = value.bytes.len();
-            decode_registry_value(value.vtype.clone() as u32, &value.bytes).map(|value| {
-                RegistryValueSnapshot {
-                    name,
-                    size_bytes,
-                    value,
-                }
-            })
-        })
-        .collect::<Vec<_>>();
+    let mut access_error = None;
+    let mut values = Vec::new();
+    for value_result in key.enum_values() {
+        let (name, value) = match value_result {
+            Ok(value) => value,
+            Err(error) => {
+                record_registry_error(&mut access_error, map_io_error(error));
+                continue;
+            }
+        };
+        if is_hardware_identity_registry_name(&name) || value.bytes.len() > MAX_REGISTRY_VALUE_BYTES
+        {
+            continue;
+        }
+        let size_bytes = value.bytes.len();
+        if let Some(value) = decode_registry_value(value.vtype.clone() as u32, &value.bytes) {
+            values.push(RegistryValueSnapshot {
+                name,
+                size_bytes,
+                value,
+            });
+        }
+    }
+    let entry_index = entries.len();
     entries.push(RegistrySnapshotKey {
         relative_key: relative_key.clone(),
         values,
+        access_error,
     });
 
     if depth >= MAX_REGISTRY_DEPTH {
         return;
     }
 
-    let mut subkeys = key.enum_keys().filter_map(Result::ok).collect::<Vec<_>>();
+    let mut subkeys = Vec::new();
+    for subkey_result in key.enum_keys() {
+        match subkey_result {
+            Ok(name) => subkeys.push(name),
+            Err(error) => {
+                record_registry_error(&mut entries[entry_index].access_error, map_io_error(error))
+            }
+        }
+    }
     subkeys.sort_by_key(|name| name.to_ascii_lowercase());
     for subkey_name in subkeys {
         if is_hardware_identity_registry_name(&subkey_name) {
             continue;
         }
-        let Ok(subkey) = key.open_subkey_with_flags(&subkey_name, access) else {
-            continue;
-        };
         let child_relative_key = if relative_key.is_empty() {
-            subkey_name
+            subkey_name.clone()
         } else {
             format!("{relative_key}\\{subkey_name}")
         };
+        let subkey = match key.open_subkey_with_flags(&subkey_name, access) {
+            Ok(subkey) => subkey,
+            Err(error) => {
+                entries.push(RegistrySnapshotKey {
+                    relative_key: child_relative_key,
+                    values: Vec::new(),
+                    access_error: Some(map_io_error(error)),
+                });
+                continue;
+            }
+        };
         read_key_bounded(&subkey, child_relative_key, depth + 1, access, entries);
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn record_registry_error(slot: &mut Option<RegistryReadError>, error: RegistryReadError) {
+    if slot.is_none()
+        || matches!(error, RegistryReadError::PermissionDenied)
+            && !matches!(slot, Some(RegistryReadError::PermissionDenied))
+    {
+        *slot = Some(error);
     }
 }
 

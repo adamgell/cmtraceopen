@@ -4,15 +4,28 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use cmtraceopen_parser::esp::{
-    EspClassifiedString, EspDeliveryOptimizationEventKind, EspDeliveryOptimizationEvidence,
-    EspDeliveryOptimizationObservation, EspElevationState, EspEvidenceProvenance, EspEvidenceRef,
-    EspHardwareEvidence, EspObservationContext, EspParseState, EspSensitivity,
-    EspSourceAccessState, EspSourceKind, EspSystemFact, EspSystemObservation,
+    normalize_timestamp, EspClassifiedString, EspDeliveryOptimizationEventKind,
+    EspDeliveryOptimizationEvidence, EspDeliveryOptimizationObservation, EspElevationState,
+    EspEvidenceProvenance, EspEvidenceRef, EspHardwareEvidence, EspObservationContext,
+    EspParseState, EspSensitivity, EspSourceAccessState, EspSourceKind, EspSystemFact,
+    EspSystemObservation,
 };
+#[cfg(any(target_os = "windows", test))]
+use regex::Regex;
 use serde::{Deserialize, Serialize};
+#[cfg(any(target_os = "windows", test))]
+use serde_json::Value;
 
 pub const SYSTEM_QUERY_TIMEOUT: Duration = Duration::from_secs(3);
 pub const MAX_SYSTEM_ROWS: usize = 64;
+
+#[cfg(any(target_os = "windows", test))]
+const DELIVERY_OPTIMIZATION_SCRIPT: &str = concat!(
+    "$ErrorActionPreference='Stop';",
+    "$perf=Get-DeliveryOptimizationPerfSnapThisMonth|Select-Object DownloadHttpBytes,DownloadLanBytes,DownloadCacheHostBytes;",
+    "$events=@(Get-DeliveryOptimizationLog|Where-Object {$_.Function -match '(DownloadStart)|(DownloadCompleted)' -and ($_.Message -like '*.intunewin.bin,*' -or $_.Message -like '*Microsoft Office Click-to-Run*')}|Select-Object -First 64|ForEach-Object {[pscustomobject]@{Function=[string]$_.Function;TimeCreated=$_.TimeCreated.ToUniversalTime().ToString('o');Message=[string]$_.Message}});",
+    "[pscustomobject]@{perf=$perf;events=$events}|ConvertTo-Json -Compress -Depth 4",
+);
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "camelCase")]
@@ -338,9 +351,14 @@ pub fn delivery_optimization_from_rows(
 ) -> Option<EspDeliveryOptimizationEvidence> {
     let counter_rows = rows
         .iter()
-        .filter(
-            |row| !matches!(row.get("_Kind"), Some(kind) if kind.eq_ignore_ascii_case("Status")),
-        )
+        .filter(|row| {
+            !matches!(
+                row.get("_Kind"),
+                Some(kind)
+                    if kind.eq_ignore_ascii_case("Status")
+                        || kind.eq_ignore_ascii_case("Event")
+            )
+        })
         .collect::<Vec<_>>();
     if counter_rows.is_empty() {
         return None;
@@ -374,26 +392,33 @@ fn delivery_observations(
     observed_at_utc: &str,
 ) -> Vec<EspDeliveryOptimizationObservation> {
     rows.iter()
-        .filter(|row| matches!(row.get("_Kind"), Some(kind) if kind.eq_ignore_ascii_case("Status")))
+        .filter(|row| matches!(row.get("_Kind"), Some(kind) if kind.eq_ignore_ascii_case("Event")))
+        .filter_map(|row| {
+            let function = row.get("Function")?;
+            let kind = if function.to_ascii_lowercase().contains("downloadcompleted") {
+                EspDeliveryOptimizationEventKind::DownloadCompleted
+            } else if function.to_ascii_lowercase().contains("downloadstart") {
+                EspDeliveryOptimizationEventKind::DownloadStarted
+            } else {
+                return None;
+            };
+            Some((row, kind))
+        })
         .take(MAX_SYSTEM_ROWS)
         .enumerate()
-        .map(|(index, row)| {
-            let completed = row
-                .get("Status")
-                .is_some_and(|status| status.eq_ignore_ascii_case("Complete"));
+        .map(|(index, (row, kind))| {
+            let mut context = observation_context(
+                SystemSource::DeliveryOptimization,
+                index,
+                observed_at_utc,
+                EspSensitivity::Public,
+            );
+            context.source_timestamp = value(Some(row), "TimeCreated")
+                .map(|timestamp| normalize_timestamp(&timestamp, None));
             EspDeliveryOptimizationObservation {
-                context: observation_context(
-                    SystemSource::DeliveryOptimization,
-                    index,
-                    observed_at_utc,
-                    EspSensitivity::Public,
-                ),
-                kind: if completed {
-                    EspDeliveryOptimizationEventKind::DownloadCompleted
-                } else {
-                    EspDeliveryOptimizationEventKind::DownloadStarted
-                },
-                content_id: value(Some(row), "FileId"),
+                context,
+                kind,
+                content_id: value(Some(row), "ContentId"),
                 app_id: value(Some(row), "AppId"),
                 http_bytes: row.get("BytesFromHttp").and_then(|raw| raw.parse().ok()),
                 lan_bytes: row
@@ -405,6 +430,122 @@ fn delivery_observations(
             }
         })
         .collect()
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn parse_delivery_json(output: &[u8], max_rows: usize) -> Result<Vec<SystemRow>, SystemReadError> {
+    let document: Value = serde_json::from_slice(output).map_err(|_| {
+        SystemReadError::Failed("Delivery Optimization JSON was malformed".to_string())
+    })?;
+    let mut rows = Vec::new();
+    if let Some(perf) = document.get("perf").and_then(Value::as_object) {
+        rows.push(json_row(perf, "Perf"));
+    }
+    if let Some(events) = document.get("events") {
+        let records = events
+            .as_array()
+            .map(Vec::as_slice)
+            .unwrap_or_else(|| std::slice::from_ref(events));
+        rows.extend(
+            records
+                .iter()
+                .take(max_rows.saturating_sub(rows.len()))
+                .filter_map(Value::as_object)
+                .filter_map(delivery_event_row),
+        );
+    }
+    rows.truncate(max_rows);
+    Ok(rows)
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn delivery_event_row(values: &serde_json::Map<String, Value>) -> Option<SystemRow> {
+    let function = values.get("Function")?.as_str()?;
+    let lower_function = function.to_ascii_lowercase();
+    if !lower_function.contains("downloadstart") && !lower_function.contains("downloadcompleted") {
+        return None;
+    }
+
+    let message = values.get("Message").and_then(Value::as_str);
+    let content_id = values
+        .get("ContentId")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .or_else(|| message.and_then(extract_delivery_content_id));
+    let app_id = values
+        .get("AppId")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .or_else(|| message.and_then(extract_delivery_app_id));
+
+    let mut row = vec![
+        ("_Kind".to_string(), "Event".to_string()),
+        ("Function".to_string(), function.to_string()),
+    ];
+    if let Some(timestamp) = values.get("TimeCreated").and_then(Value::as_str) {
+        row.push(("TimeCreated".to_string(), timestamp.to_string()));
+    }
+    if let Some(content_id) = content_id.filter(|value| !value.trim().is_empty()) {
+        row.push(("ContentId".to_string(), content_id));
+    }
+    if let Some(app_id) = app_id.filter(|value| !value.trim().is_empty()) {
+        row.push(("AppId".to_string(), app_id));
+    }
+    Some(SystemRow::new(row))
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn extract_delivery_content_id(message: &str) -> Option<String> {
+    let file_id = Regex::new(r"(?i)\bfileid\s*(?::|=)\s*([^,\s]+)")
+        .expect("constant Delivery Optimization file-id regex");
+    let mut content_id = file_id.captures(message)?.get(1)?.as_str();
+    let guid_prefix =
+        Regex::new(r"(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+            .expect("constant Delivery Optimization GUID-prefix regex");
+    if content_id.len() > 37
+        && content_id.as_bytes().get(36) == Some(&b'.')
+        && guid_prefix.is_match(&content_id[..36])
+    {
+        content_id = &content_id[37..];
+    }
+    (!content_id.is_empty()).then(|| content_id.to_string())
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn extract_delivery_app_id(message: &str) -> Option<String> {
+    let labeled_app_id = Regex::new(
+        r"(?i)\bapp(?:lication)?id\s*(?::|=)\s*\{?([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\}?",
+    )
+    .expect("constant Delivery Optimization app-id regex");
+    if let Some(app_id) = labeled_app_id
+        .captures(message)
+        .and_then(|captures| captures.get(1))
+    {
+        return Some(app_id.as_str().to_string());
+    }
+
+    let lower_message = message.to_ascii_lowercase();
+    let marker = ".intunewin.bin,";
+    let marker_index = lower_message.find(marker)?;
+    let guid = Regex::new(r"(?i)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+        .expect("constant Delivery Optimization trailing GUID regex");
+    if let Some(app_id) = guid.find_iter(&message[..marker_index]).last() {
+        return Some(app_id.as_str().to_string());
+    }
+    let tail = &message[marker_index + marker.len()..];
+    guid.find(tail).map(|value| value.as_str().to_string())
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn json_row(values: &serde_json::Map<String, Value>, kind: &str) -> SystemRow {
+    let mut row = vec![("_Kind".to_string(), kind.to_string())];
+    row.extend(values.iter().filter_map(|(name, value)| match value {
+        Value::String(value) => Some((name.clone(), value.clone())),
+        Value::Number(value) => Some((name.clone(), value.to_string())),
+        Value::Bool(value) => Some((name.clone(), value.to_string())),
+        Value::Null | Value::Array(_) | Value::Object(_) => None,
+    }));
+    SystemRow::new(row)
 }
 
 fn value(row: Option<&SystemRow>, name: &str) -> Option<String> {
@@ -475,11 +616,105 @@ fn observation_context(
 }
 
 #[cfg(any(target_os = "windows", test))]
+const SYSTEM_QUERY_CANCELLATION_GRACE: Duration = Duration::from_millis(250);
+
+#[cfg(any(target_os = "windows", test))]
+static SYSTEM_QUERY_WORKER_ACTIVE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(any(target_os = "windows", test))]
+#[derive(Clone)]
+struct SystemQueryCancellation {
+    requested: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    worker_thread: std::sync::Arc<std::sync::Mutex<Option<std::thread::Thread>>>,
+    #[cfg(target_os = "windows")]
+    worker_thread_id: std::sync::Arc<std::sync::atomic::AtomicU32>,
+}
+
+#[cfg(any(target_os = "windows", test))]
+impl SystemQueryCancellation {
+    fn new() -> Self {
+        Self {
+            requested: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            worker_thread: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            #[cfg(target_os = "windows")]
+            worker_thread_id: std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0)),
+        }
+    }
+
+    fn register_worker(&self) {
+        *self
+            .worker_thread
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(std::thread::current());
+        #[cfg(target_os = "windows")]
+        self.worker_thread_id.store(
+            // SAFETY: GetCurrentThreadId has no preconditions and returns the caller's ID.
+            unsafe { windows::Win32::System::Threading::GetCurrentThreadId() },
+            std::sync::atomic::Ordering::Release,
+        );
+    }
+
+    fn clear_worker(&self) {
+        #[cfg(target_os = "windows")]
+        self.worker_thread_id
+            .store(0, std::sync::atomic::Ordering::Release);
+        *self
+            .worker_thread
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+    }
+
+    fn is_cancelled(&self) -> bool {
+        self.requested.load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    fn request_cancel(&self) {
+        self.requested
+            .store(true, std::sync::atomic::Ordering::Release);
+        if let Some(worker) = self
+            .worker_thread
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .as_ref()
+        {
+            worker.unpark();
+        }
+        #[cfg(target_os = "windows")]
+        {
+            let thread_id = self
+                .worker_thread_id
+                .load(std::sync::atomic::Ordering::Acquire);
+            if thread_id != 0 {
+                // SAFETY: the worker enables COM call cancellation before making blocking WMI calls.
+                let _ = unsafe {
+                    windows::Win32::System::Com::CoCancelCall(
+                        thread_id,
+                        SYSTEM_QUERY_CANCELLATION_GRACE.as_millis() as u32,
+                    )
+                };
+            }
+        }
+    }
+}
+
+#[cfg(any(target_os = "windows", test))]
+struct SystemQueryWorkerSlot;
+
+#[cfg(any(target_os = "windows", test))]
+impl Drop for SystemQueryWorkerSlot {
+    fn drop(&mut self) {
+        SYSTEM_QUERY_WORKER_ACTIVE.store(false, std::sync::atomic::Ordering::Release);
+    }
+}
+
+#[cfg(any(target_os = "windows", test))]
 fn run_bounded_system_query<F>(timeout: Duration, work: F) -> SystemQueryBatch
 where
     F: FnOnce(
             std::time::Instant,
             std::sync::Arc<std::sync::Mutex<Vec<SystemRow>>>,
+            SystemQueryCancellation,
         ) -> Result<SystemQueryBatch, SystemReadError>
         + Send
         + 'static,
@@ -490,38 +725,109 @@ where
     let deadline = Instant::now() + timeout;
     let partial_rows = Arc::new(Mutex::new(Vec::new()));
     let worker_rows = Arc::clone(&partial_rows);
+    let cancellation = SystemQueryCancellation::new();
+    let worker_cancellation = cancellation.clone();
     let (sender, receiver) = mpsc::sync_channel(1);
+    if SYSTEM_QUERY_WORKER_ACTIVE
+        .compare_exchange(
+            false,
+            true,
+            std::sync::atomic::Ordering::AcqRel,
+            std::sync::atomic::Ordering::Acquire,
+        )
+        .is_err()
+    {
+        return SystemQueryBatch {
+            rows: Vec::new(),
+            completion: Err(SystemReadError::Failed(
+                "A previous WMI query is still cancelling; no additional worker was started."
+                    .to_string(),
+            )),
+        };
+    }
     let worker = std::thread::Builder::new()
         .name("esp-wmi-query".to_string())
         .spawn(move || {
-            let _ = sender.send(work(deadline, worker_rows));
+            let _slot = SystemQueryWorkerSlot;
+            worker_cancellation.register_worker();
+            let result = work(deadline, worker_rows, worker_cancellation.clone());
+            worker_cancellation.clear_worker();
+            let _ = sender.send(result);
         });
 
-    if let Err(error) = worker {
-        return SystemQueryBatch {
-            rows: Vec::new(),
-            completion: Err(SystemReadError::Failed(format!(
-                "WMI worker could not start: {error}"
-            ))),
-        };
-    }
+    let worker = match worker {
+        Ok(worker) => worker,
+        Err(error) => {
+            SYSTEM_QUERY_WORKER_ACTIVE.store(false, std::sync::atomic::Ordering::Release);
+            return SystemQueryBatch {
+                rows: Vec::new(),
+                completion: Err(SystemReadError::Failed(format!(
+                    "WMI worker could not start: {error}"
+                ))),
+            };
+        }
+    };
 
     let remaining = deadline.saturating_duration_since(Instant::now());
     match receiver.recv_timeout(remaining) {
-        Ok(Ok(batch)) => batch,
-        Ok(Err(error)) => SystemQueryBatch {
-            rows: clone_partial_rows(&partial_rows),
+        Ok(result) => finish_joined_system_query(worker, result, &partial_rows),
+        Err(mpsc::RecvTimeoutError::Timeout) => {
+            cancellation.request_cancel();
+            match receiver.recv_timeout(SYSTEM_QUERY_CANCELLATION_GRACE) {
+                Ok(_) => {
+                    let _ = worker.join();
+                    SystemQueryBatch {
+                        rows: clone_partial_rows(&partial_rows),
+                        completion: Err(SystemReadError::TimedOut),
+                    }
+                }
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    let _ = worker.join();
+                    SystemQueryBatch {
+                        rows: clone_partial_rows(&partial_rows),
+                        completion: Err(SystemReadError::Failed(
+                            "WMI worker stopped during cancellation".to_string(),
+                        )),
+                    }
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => SystemQueryBatch {
+                    rows: clone_partial_rows(&partial_rows),
+                    completion: Err(SystemReadError::Failed(
+                        "WMI query timed out and its worker did not stop within the 250 ms cancellation window; additional WMI queries are paused until cleanup completes."
+                            .to_string(),
+                    )),
+                },
+            }
+        }
+        Err(mpsc::RecvTimeoutError::Disconnected) => {
+            let _ = worker.join();
+            SystemQueryBatch {
+                rows: clone_partial_rows(&partial_rows),
+                completion: Err(SystemReadError::Failed(
+                    "WMI worker stopped before returning a result".to_string(),
+                )),
+            }
+        }
+    }
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn finish_joined_system_query(
+    worker: std::thread::JoinHandle<()>,
+    result: Result<SystemQueryBatch, SystemReadError>,
+    partial_rows: &std::sync::Arc<std::sync::Mutex<Vec<SystemRow>>>,
+) -> SystemQueryBatch {
+    if worker.join().is_err() {
+        return SystemQueryBatch {
+            rows: clone_partial_rows(partial_rows),
+            completion: Err(SystemReadError::Failed("WMI worker panicked".to_string())),
+        };
+    }
+    match result {
+        Ok(batch) => batch,
+        Err(error) => SystemQueryBatch {
+            rows: clone_partial_rows(partial_rows),
             completion: Err(error),
-        },
-        Err(mpsc::RecvTimeoutError::Timeout) => SystemQueryBatch {
-            rows: clone_partial_rows(&partial_rows),
-            completion: Err(SystemReadError::TimedOut),
-        },
-        Err(mpsc::RecvTimeoutError::Disconnected) => SystemQueryBatch {
-            rows: clone_partial_rows(&partial_rows),
-            completion: Err(SystemReadError::Failed(
-                "WMI worker stopped before returning a result".to_string(),
-            )),
         },
     }
 }
@@ -546,8 +852,8 @@ fn powershell_path_from_windows_directory(
 
 pub struct LiveSystemProvider;
 
-#[cfg(target_os = "windows")]
 #[derive(Debug, Clone)]
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub(crate) enum WmiRequest {
     OperatingSystem,
     ComputerSystem,
@@ -555,6 +861,15 @@ pub(crate) enum WmiRequest {
     Tpm,
     ImeService,
     Processes(Vec<String>),
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn finish_wmi_query(request: &WmiRequest, rows: Vec<SystemRow>) -> SystemQueryBatch {
+    if rows.is_empty() && !matches!(request, WmiRequest::Processes(_)) {
+        SystemQueryBatch::missing()
+    } else {
+        SystemQueryBatch::complete(rows)
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -568,15 +883,14 @@ mod windows_provider {
     use std::thread;
     use std::time::{Duration, Instant};
 
-    use serde_json::Value;
     use windows::core::{BSTR, HRESULT, PCWSTR};
     use windows::Win32::Foundation::{CloseHandle, E_ACCESSDENIED, HANDLE, RPC_E_CHANGED_MODE};
     use windows::Win32::Security::{
         GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY,
     };
     use windows::Win32::System::Com::{
-        CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER,
-        COINIT_MULTITHREADED,
+        CoCreateInstance, CoDisableCallCancellation, CoEnableCallCancellation, CoInitializeEx,
+        CoUninitialize, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED,
     };
     use windows::Win32::System::SystemInformation::GetSystemWindowsDirectoryW;
     use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
@@ -588,14 +902,14 @@ mod windows_provider {
     };
 
     use super::{
-        powershell_path_from_windows_directory, run_bounded_system_query, LiveSystemProvider,
-        SystemProvider, SystemQueryBatch, SystemReadError, SystemRow, SystemSource, WmiRequest,
+        finish_wmi_query, parse_delivery_json, powershell_path_from_windows_directory,
+        run_bounded_system_query, LiveSystemProvider, SystemProvider, SystemQueryBatch,
+        SystemQueryCancellation, SystemReadError, SystemRow, SystemSource, WmiRequest,
+        DELIVERY_OPTIMIZATION_SCRIPT,
     };
 
     const MAX_VARIANT_CHARS: usize = 4096;
     const MAX_COMMAND_OUTPUT_BYTES: usize = 1024 * 1024;
-    const DO_SCRIPT: &str = "$ErrorActionPreference='Stop';$perf=Get-DeliveryOptimizationPerfSnapThisMonth|Select-Object DownloadHttpBytes,DownloadLanBytes,DownloadCacheHostBytes;$status=@(Get-DeliveryOptimizationStatus|Select-Object -First 64 FileId,Status,BytesFromHttp,BytesFromLanPeers,BytesFromCacheServer);[pscustomobject]@{perf=$perf;status=$status}|ConvertTo-Json -Compress -Depth 4";
-
     struct HandleGuard(HANDLE);
 
     impl Drop for HandleGuard {
@@ -635,6 +949,25 @@ mod windows_provider {
                 // SAFETY: paired with the successful CoInitializeEx call above.
                 unsafe { CoUninitialize() };
             }
+        }
+    }
+
+    struct ComCallCancellationGuard;
+
+    impl ComCallCancellationGuard {
+        fn enable() -> Result<Self, SystemReadError> {
+            // SAFETY: this enables cancellation only for outgoing COM calls on this worker thread.
+            unsafe { CoEnableCallCancellation(None) }.map_err(|error| {
+                error_from_windows(error, "COM call cancellation could not be enabled")
+            })?;
+            Ok(Self)
+        }
+    }
+
+    impl Drop for ComCallCancellationGuard {
+        fn drop(&mut self) {
+            // SAFETY: paired with CoEnableCallCancellation on the same worker thread.
+            let _ = unsafe { CoDisableCallCancellation(None) };
         }
     }
 
@@ -692,8 +1025,8 @@ mod windows_provider {
         timeout: Duration,
         max_rows: usize,
     ) -> SystemQueryBatch {
-        run_bounded_system_query(timeout, move |deadline, partial_rows| {
-            query_wmi_inner(request, deadline, max_rows, partial_rows)
+        run_bounded_system_query(timeout, move |deadline, partial_rows, cancellation| {
+            query_wmi_inner(request, deadline, max_rows, partial_rows, cancellation)
         })
     }
 
@@ -702,34 +1035,37 @@ mod windows_provider {
         deadline: Instant,
         max_rows: usize,
         partial_rows: Arc<Mutex<Vec<SystemRow>>>,
+        cancellation: SystemQueryCancellation,
     ) -> Result<SystemQueryBatch, SystemReadError> {
-        ensure_before_deadline(deadline)?;
+        ensure_query_active(deadline, &cancellation)?;
         let _com = ComGuard::initialize()?;
-        ensure_before_deadline(deadline)?;
-        let (namespace, query, properties) = wmi_spec(request);
+        let _call_cancellation = ComCallCancellationGuard::enable()?;
+        ensure_query_active(deadline, &cancellation)?;
+        let (namespace, query, properties) = wmi_spec(&request);
         // SAFETY: WbemLocator is a registered in-process COM class and no outer object is used.
         let locator: IWbemLocator =
             unsafe { CoCreateInstance(&WbemLocator, None, CLSCTX_INPROC_SERVER) }
                 .map_err(|error| error_from_windows(error, "WMI locator creation failed"))?;
-        ensure_before_deadline(deadline)?;
+        ensure_query_active(deadline, &cancellation)?;
         let namespace = BSTR::from(namespace);
         let empty = BSTR::new();
         // SAFETY: all BSTR inputs live through the synchronous ConnectServer call.
         let services =
             unsafe { locator.ConnectServer(&namespace, &empty, &empty, &empty, 0, &empty, None) }
                 .map_err(|error| error_from_windows(error, "WMI namespace connection failed"))?;
-        ensure_before_deadline(deadline)?;
+        ensure_query_active(deadline, &cancellation)?;
         let language = BSTR::from("WQL");
         let query = BSTR::from(query.as_str());
         let flags = WBEM_FLAG_FORWARD_ONLY | WBEM_FLAG_RETURN_IMMEDIATELY;
         // SAFETY: query text is selected exclusively from wmi_spec's fixed allowlist.
         let enumerator = unsafe { services.ExecQuery(&language, &query, flags, None) }
             .map_err(|error| error_from_windows(error, "WMI query failed"))?;
-        ensure_before_deadline(deadline)?;
+        ensure_query_active(deadline, &cancellation)?;
 
         let mut rows = Vec::new();
         let cap = max_rows.min(512);
         while rows.len() < cap {
+            ensure_query_active(deadline, &cancellation)?;
             let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
                 return Err(SystemReadError::TimedOut);
@@ -758,15 +1094,14 @@ mod windows_provider {
             }
         }
 
-        if rows.is_empty() {
-            Ok(SystemQueryBatch::missing())
-        } else {
-            Ok(SystemQueryBatch::complete(rows))
-        }
+        Ok(finish_wmi_query(&request, rows))
     }
 
-    fn ensure_before_deadline(deadline: Instant) -> Result<(), SystemReadError> {
-        if Instant::now() >= deadline {
+    fn ensure_query_active(
+        deadline: Instant,
+        cancellation: &SystemQueryCancellation,
+    ) -> Result<(), SystemReadError> {
+        if cancellation.is_cancelled() || Instant::now() >= deadline {
             Err(SystemReadError::TimedOut)
         } else {
             Ok(())
@@ -815,7 +1150,7 @@ mod windows_provider {
         Ok(SystemRow::new(values))
     }
 
-    fn wmi_spec(request: WmiRequest) -> (&'static str, String, &'static [&'static str]) {
+    fn wmi_spec(request: &WmiRequest) -> (&'static str, String, &'static [&'static str]) {
         match request {
             WmiRequest::OperatingSystem => (
                 r"ROOT\CIMV2",
@@ -844,7 +1179,7 @@ mod windows_provider {
             ),
             WmiRequest::Processes(names) => {
                 let conditions = names
-                    .into_iter()
+                    .iter()
                     .take(36)
                     .filter(|name| {
                         name.len() <= 255
@@ -898,7 +1233,7 @@ mod windows_provider {
                 "-ExecutionPolicy",
                 "Bypass",
                 "-Command",
-                DO_SCRIPT,
+                DELIVERY_OPTIMIZATION_SCRIPT,
             ])
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -1025,45 +1360,6 @@ mod windows_provider {
         Ok(powershell)
     }
 
-    fn parse_delivery_json(
-        output: &[u8],
-        max_rows: usize,
-    ) -> Result<Vec<SystemRow>, SystemReadError> {
-        let document: Value = serde_json::from_slice(output).map_err(|_| {
-            SystemReadError::Failed("Delivery Optimization JSON was malformed".to_string())
-        })?;
-        let mut rows = Vec::new();
-        if let Some(perf) = document.get("perf").and_then(Value::as_object) {
-            rows.push(json_row(perf, "Perf"));
-        }
-        if let Some(status) = document.get("status") {
-            let records = status
-                .as_array()
-                .map(Vec::as_slice)
-                .unwrap_or_else(|| std::slice::from_ref(status));
-            rows.extend(
-                records
-                    .iter()
-                    .filter_map(Value::as_object)
-                    .take(max_rows.saturating_sub(rows.len()))
-                    .map(|record| json_row(record, "Status")),
-            );
-        }
-        rows.truncate(max_rows);
-        Ok(rows)
-    }
-
-    fn json_row(values: &serde_json::Map<String, Value>, kind: &str) -> SystemRow {
-        let mut row = vec![("_Kind".to_string(), kind.to_string())];
-        row.extend(values.iter().filter_map(|(name, value)| match value {
-            Value::String(value) => Some((name.clone(), value.clone())),
-            Value::Number(value) => Some((name.clone(), value.to_string())),
-            Value::Bool(value) => Some((name.clone(), value.to_string())),
-            Value::Null | Value::Array(_) | Value::Object(_) => None,
-        }));
-        SystemRow::new(row)
-    }
-
     fn error_from_windows(error: windows::core::Error, context: &str) -> SystemReadError {
         error_from_hresult(error.code(), context)
     }
@@ -1108,7 +1404,8 @@ impl SystemProvider for LiveSystemProvider {
 mod tests {
     use std::collections::BTreeMap;
     use std::path::Path;
-    use std::sync::mpsc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
     use std::time::{Duration, Instant};
 
     use cmtraceopen_parser::esp::{EspSensitivity, EspSourceAccessState, EspSystemFact};
@@ -1277,6 +1574,139 @@ mod tests {
     }
 
     #[test]
+    fn delivery_optimization_uses_only_log_start_and_completion_events() {
+        let rows = [
+            row(&[
+                ("_Kind", "Event"),
+                ("Function", "DownloadStart"),
+                ("ContentId", "content-start"),
+                ("AppId", "11111111-1111-1111-1111-111111111111"),
+                ("TimeCreated", "2026-07-15T13:00:00Z"),
+            ]),
+            row(&[
+                ("_Kind", "Event"),
+                ("Function", "DownloadCompleted"),
+                ("ContentId", "content-complete"),
+                ("AppId", "22222222-2222-2222-2222-222222222222"),
+                ("TimeCreated", "2026-07-15T13:01:00-04:00"),
+            ]),
+            row(&[
+                ("_Kind", "Status"),
+                ("Status", "Error"),
+                ("FileId", "must-not-be-started-error"),
+            ]),
+            row(&[
+                ("_Kind", "Status"),
+                ("Status", "Paused"),
+                ("FileId", "must-not-be-started-paused"),
+            ]),
+        ];
+
+        let observations = delivery_observations(&rows, "2026-07-15T14:00:00Z");
+
+        assert_eq!(observations.len(), 2);
+        assert_eq!(
+            observations[0].kind,
+            EspDeliveryOptimizationEventKind::DownloadStarted
+        );
+        assert_eq!(observations[0].content_id.as_deref(), Some("content-start"));
+        assert_eq!(
+            observations[0].app_id.as_deref(),
+            Some("11111111-1111-1111-1111-111111111111")
+        );
+        assert_eq!(
+            observations[0]
+                .context
+                .source_timestamp
+                .as_ref()
+                .and_then(|timestamp| timestamp.normalized_utc.as_deref()),
+            Some("2026-07-15T13:00:00Z")
+        );
+        assert_eq!(
+            observations[1].kind,
+            EspDeliveryOptimizationEventKind::DownloadCompleted
+        );
+        assert_eq!(
+            observations[1]
+                .context
+                .source_timestamp
+                .as_ref()
+                .and_then(|timestamp| timestamp.normalized_utc.as_deref()),
+            Some("2026-07-15T17:01:00Z")
+        );
+        assert!(observations.iter().all(|observation| {
+            !matches!(
+                observation.content_id.as_deref(),
+                Some("must-not-be-started-error" | "must-not-be-started-paused")
+            )
+        }));
+    }
+
+    #[test]
+    fn delivery_optimization_live_script_uses_log_events_instead_of_status_snapshots() {
+        assert!(DELIVERY_OPTIMIZATION_SCRIPT.contains("Get-DeliveryOptimizationLog"));
+        assert!(DELIVERY_OPTIMIZATION_SCRIPT.contains("DownloadStart"));
+        assert!(DELIVERY_OPTIMIZATION_SCRIPT.contains("DownloadCompleted"));
+        assert!(!DELIVERY_OPTIMIZATION_SCRIPT.contains("Get-DeliveryOptimizationStatus"));
+    }
+
+    #[test]
+    fn delivery_optimization_json_extracts_content_app_and_source_time() {
+        let output = br#"{
+            "perf": {
+                "DownloadHttpBytes": 1000,
+                "DownloadLanBytes": 200,
+                "DownloadCacheHostBytes": 100
+            },
+            "events": [
+                {
+                    "Function": "CService::DownloadStart",
+                    "TimeCreated": "2026-07-15T13:00:00Z",
+                    "Message": "fileId: aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa.content-start, 11111111-1111-1111-1111-111111111111.intunewin.bin, downloading"
+                },
+                {
+                    "Function": "CService::DownloadCompleted",
+                    "TimeCreated": "2026-07-15T13:01:00-04:00",
+                    "Message": "Microsoft Office Click-to-Run fileId = bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb.office-file-42, completed"
+                },
+                {
+                    "Function": "DownloadPaused",
+                    "TimeCreated": "2026-07-15T13:02:00Z",
+                    "Message": "fileId: must-not-be-emitted, paused"
+                }
+            ]
+        }"#;
+
+        let rows = parse_delivery_json(output, MAX_SYSTEM_ROWS).expect("production-shaped JSON");
+        assert_eq!(rows.len(), 3);
+        let counters = delivery_optimization_from_rows(&rows, "2026-07-15T14:00:00Z")
+            .expect("performance counters");
+        assert_eq!(counters.download_http_bytes, 1000);
+        assert_eq!(counters.peer_share_percent, Some(20.0));
+
+        let observations = delivery_observations(&rows, "2026-07-15T14:00:00Z");
+        assert_eq!(observations.len(), 2);
+        assert_eq!(observations[0].content_id.as_deref(), Some("content-start"));
+        assert_eq!(
+            observations[0].app_id.as_deref(),
+            Some("11111111-1111-1111-1111-111111111111")
+        );
+        assert_eq!(
+            observations[1].content_id.as_deref(),
+            Some("office-file-42")
+        );
+        assert_eq!(observations[1].app_id, None);
+        assert_eq!(
+            observations[1]
+                .context
+                .source_timestamp
+                .as_ref()
+                .and_then(|timestamp| timestamp.normalized_utc.as_deref()),
+            Some("2026-07-15T17:01:00Z")
+        );
+    }
+
+    #[test]
     fn timed_out_source_retains_partial_rows_and_other_successful_sources() {
         let provider = FakeSystemProvider::new(Ok(true))
             .with(
@@ -1306,23 +1736,48 @@ mod tests {
     }
 
     #[test]
-    fn bounded_worker_times_out_when_setup_blocks_before_producing_rows() {
-        let (release_sender, release_receiver) = mpsc::channel();
-        let started_at = Instant::now();
+    fn bounded_worker_cancels_and_joins_timed_out_work() {
+        let active_workers = Arc::new(AtomicUsize::new(0));
+        let exited_workers = Arc::new(AtomicUsize::new(0));
 
-        let batch = run_bounded_system_query(Duration::from_millis(25), move |_, _| {
-            let _ = release_receiver.recv();
-            Ok(SystemQueryBatch::missing())
-        });
+        for _ in 0..3 {
+            let active_for_worker = Arc::clone(&active_workers);
+            let exited_for_worker = Arc::clone(&exited_workers);
+            let started_at = Instant::now();
+            let batch =
+                run_bounded_system_query(Duration::from_millis(25), move |_, _, cancellation| {
+                    active_for_worker.fetch_add(1, Ordering::SeqCst);
+                    while !cancellation.is_cancelled() {
+                        std::thread::park_timeout(Duration::from_millis(1));
+                    }
+                    active_for_worker.fetch_sub(1, Ordering::SeqCst);
+                    exited_for_worker.fetch_add(1, Ordering::SeqCst);
+                    Err(SystemReadError::TimedOut)
+                });
 
-        let elapsed = started_at.elapsed();
-        assert!(
-            elapsed < Duration::from_millis(500),
-            "blocked setup escaped the outer timeout: {elapsed:?}"
+            let elapsed = started_at.elapsed();
+            assert!(
+                elapsed < Duration::from_millis(500),
+                "blocked setup escaped the outer timeout: {elapsed:?}"
+            );
+            assert!(batch.rows.is_empty());
+            assert_eq!(batch.completion, Err(SystemReadError::TimedOut));
+            assert_eq!(active_workers.load(Ordering::SeqCst), 0);
+        }
+
+        assert_eq!(exited_workers.load(Ordering::SeqCst), 3);
+    }
+
+    #[test]
+    fn successful_empty_process_query_is_available_not_missing() {
+        let process_batch = finish_wmi_query(
+            &WmiRequest::Processes(vec!["msiexec.exe".to_string()]),
+            Vec::new(),
         );
-        assert!(batch.rows.is_empty());
-        assert_eq!(batch.completion, Err(SystemReadError::TimedOut));
-        let _ = release_sender.send(());
+        assert_eq!(process_batch, SystemQueryBatch::complete(Vec::new()));
+
+        let missing_service = finish_wmi_query(&WmiRequest::ImeService, Vec::new());
+        assert_eq!(missing_service, SystemQueryBatch::missing());
     }
 
     #[test]

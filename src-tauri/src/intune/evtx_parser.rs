@@ -259,29 +259,32 @@ pub fn parse_evtx_file(path: &Path, id_offset: u64) -> Result<Vec<EventLogEntry>
 /// Parse a captured EVTX file into ESP records while preserving EventData order
 /// and Windows record IDs. XML is used because object-shaped JSON cannot retain
 /// duplicate EventData names and may reorder properties.
+fn collect_bounded_records<I, T, E, U, F>(records: I, parse: F) -> Vec<U>
+where
+    I: IntoIterator<Item = Result<T, E>>,
+    F: FnMut(T) -> Option<U>,
+{
+    records
+        .into_iter()
+        .take(MAX_ENTRIES_PER_FILE)
+        .filter_map(Result::ok)
+        .filter_map(parse)
+        .collect()
+}
+
 pub fn parse_esp_evtx_file(path: &Path) -> Result<Vec<ParsedEspEventRecord>, String> {
     let mut parser = EvtxParser::from_path(path)
         .map_err(|error| format!("Failed to open EVTX file {}: {error}", path.display()))?;
     let source_file = path.to_string_lossy().to_string();
-    let mut records = Vec::new();
-
-    for record_result in parser.records() {
-        if records.len() >= MAX_ENTRIES_PER_FILE {
-            break;
-        }
-        let Ok(record) = record_result else {
-            continue;
-        };
-        if let Some(record) = parse_esp_event_xml(
+    let records = collect_bounded_records(parser.records(), |record| {
+        parse_esp_event_xml(
             &record.data,
             &source_file,
             Some(record.event_record_id),
             None,
             "Unknown",
-        ) {
-            records.push(record);
-        }
-    }
+        )
+    });
 
     Ok(records)
 }
@@ -1228,7 +1231,32 @@ pub fn build_corroboration_evidence(
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
+
     use super::*;
+
+    #[test]
+    fn evtx_record_limit_bounds_inspection_before_skipping_malformed_records() {
+        let inspected = Cell::new(0_usize);
+        let valid_tail_parsed = Cell::new(false);
+        let input = (0..=MAX_ENTRIES_PER_FILE).map(|index| {
+            inspected.set(inspected.get() + 1);
+            if index == MAX_ENTRIES_PER_FILE {
+                Ok(index)
+            } else {
+                Err(())
+            }
+        });
+
+        let records = collect_bounded_records(input, |index| {
+            valid_tail_parsed.set(true);
+            Some(index)
+        });
+
+        assert_eq!(inspected.get(), MAX_ENTRIES_PER_FILE);
+        assert!(!valid_tail_parsed.get());
+        assert!(records.is_empty());
+    }
 
     #[test]
     fn channel_from_string_maps_known_channels() {

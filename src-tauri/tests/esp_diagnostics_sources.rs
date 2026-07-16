@@ -71,6 +71,7 @@ fn snapshot_key(relative_key: &str, values: Vec<RegistryValueSnapshot>) -> Regis
     RegistrySnapshotKey {
         relative_key: relative_key.to_string(),
         values,
+        access_error: None,
     }
 }
 
@@ -289,6 +290,65 @@ fn registry_distinguishes_missing_and_permission_denied_per_root() {
         evidence.roots[1].access_state,
         EspSourceAccessState::PermissionDenied
     );
+}
+
+#[test]
+fn registry_preserves_descendant_failures_while_root_remains_available() {
+    let target = &ESP_REGISTRY_TARGETS[0];
+    let provider = FakeRegistryProvider::default().with_tree(
+        target.key,
+        vec![
+            snapshot_key(
+                "Readable",
+                vec![RegistryValueSnapshot::text("TenantDomain", "contoso.com")],
+            ),
+            RegistrySnapshotKey {
+                relative_key: "Restricted".to_string(),
+                values: Vec::new(),
+                access_error: Some(RegistryReadError::PermissionDenied),
+            },
+            RegistrySnapshotKey {
+                relative_key: "Broken".to_string(),
+                values: Vec::new(),
+                access_error: Some(RegistryReadError::Failed(
+                    "subkey enumeration failed".to_string(),
+                )),
+            },
+        ],
+    );
+
+    let evidence = collect_registry_evidence(&provider, &[], "2026-07-15T12:00:00Z");
+
+    assert_eq!(
+        evidence.roots[0].access_state,
+        EspSourceAccessState::Available
+    );
+    assert_eq!(evidence.observations.len(), 1);
+    assert_eq!(evidence.descendant_coverage.len(), 2);
+    assert_eq!(
+        evidence.descendant_coverage[0].key,
+        format!("{}\\Broken", target.key)
+    );
+    assert_eq!(
+        evidence.descendant_coverage[0].access_state,
+        EspSourceAccessState::Failed
+    );
+    assert!(evidence.descendant_coverage[0]
+        .detail
+        .as_deref()
+        .is_some_and(|detail| detail.contains("subkey enumeration failed")));
+    assert_eq!(
+        evidence.descendant_coverage[1].key,
+        format!("{}\\Restricted", target.key)
+    );
+    assert_eq!(
+        evidence.descendant_coverage[1].access_state,
+        EspSourceAccessState::PermissionDenied
+    );
+    assert!(evidence.descendant_coverage[1]
+        .detail
+        .as_deref()
+        .is_some_and(|detail| detail.to_ascii_lowercase().contains("administrator")));
 }
 
 #[test]

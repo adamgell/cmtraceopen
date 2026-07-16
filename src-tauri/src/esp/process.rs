@@ -294,7 +294,7 @@ fn extract_app_id(command_line: &str) -> Option<String> {
 }
 
 fn extract_log_path(command_line: &str) -> Option<String> {
-    let regex = Regex::new(r#"(?i)(?:^|\s)/l[*+!voicewarmupx]*\s+(?:"([^"]+)"|(\S+))"#)
+    let regex = Regex::new(r#"(?i)(?:^|\s)/(?:log|l[*+!voicewarmupx]*)\s+(?:"([^"]+)"|(\S+))"#)
         .expect("constant MSI log-path regex");
     regex.captures(command_line).and_then(|captures| {
         captures
@@ -639,6 +639,55 @@ mod tests {
             observation.referenced_log_path.as_deref(),
             Some(r"C:\Windows\Temp\contoso.log")
         );
+    }
+
+    #[test]
+    fn command_line_log_switch_variants_preserve_canonical_path_and_sanitization() {
+        let cases = [
+            (
+                r#"/log "C:\Windows\Temp\quoted installer.log""#,
+                r"C:\Windows\Temp\quoted installer.log",
+            ),
+            (
+                r"/log C:\Windows\Temp\unquoted.log",
+                r"C:\Windows\Temp\unquoted.log",
+            ),
+            (
+                r#"/LoG "C:\Windows\Temp\Mixed Case.log""#,
+                r"C:\Windows\Temp\Mixed Case.log",
+            ),
+        ];
+
+        for (log_argument, expected_path) in cases {
+            let raw = format!(
+                "msiexec.exe /i {{12345678-1234-1234-1234-1234567890AB}} {log_argument} --token log-secret-sentinel"
+            );
+            let evidence = collect(
+                vec![process(
+                    51,
+                    Some(20),
+                    "msiexec.exe",
+                    "2026-07-15T13:20:00Z",
+                    Some(&raw),
+                )],
+                &[],
+            );
+            let observation = &evidence.observations[0];
+
+            assert_eq!(
+                observation.referenced_log_path.as_deref(),
+                Some(expected_path),
+                "failed to extract {log_argument}"
+            );
+            let sanitized = observation
+                .sanitized_command_line
+                .as_deref()
+                .expect("sanitized command line");
+            assert!(!sanitized.contains("log-secret-sentinel"));
+            assert!(sanitized.contains("[REDACTED]"));
+            assert!(sanitized.contains("/i {12345678-1234-1234-1234-1234567890AB}"));
+            assert!(sanitized.contains(expected_path));
+        }
     }
 
     #[test]
