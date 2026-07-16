@@ -3521,4 +3521,30 @@ describe("ESP Graph scheduling", () => {
     expect(useEspDiagnosticsStore.getState().graphPhase).toBe("disabled");
     coordinator.dispose();
   });
+
+  it("preserves normalized missing-command guidance through the default Graph coordinator", async () => {
+    vi.mocked(invoke).mockRejectedValueOnce(
+      "command graph_fetch_esp_diagnostics not found",
+    );
+    useUiStore.setState({ graphApiEnabled: true, graphApiStatus: "connected" });
+    useEspDiagnosticsStore.getState().beginAnalysis("analysis-missing-command");
+    useEspDiagnosticsStore
+      .getState()
+      .applyAnalysis(
+        "analysis-missing-command",
+        makeSnapshot(["local-missing-command"]),
+      );
+    const coordinator = createEspGraphCoordinator({
+      createRequestId: () => "graph-missing-command",
+    });
+
+    await coordinator.reconcile();
+
+    expect(useEspDiagnosticsStore.getState()).toMatchObject({
+      graphPhase: "error",
+      graphError:
+        "The running desktop backend does not expose 'graph_fetch_esp_diagnostics'. Restart CMTrace Open so the frontend and Tauri backend are on the same build.",
+    });
+    coordinator.dispose();
+  });
 });

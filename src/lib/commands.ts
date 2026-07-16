@@ -47,6 +47,8 @@ export interface UpdatePolicy {
   updateChecksDisabledByPolicy: boolean;
 }
 
+const normalizedCommandErrorMessages = new WeakMap<Error, string>();
+
 export function getSafeErrorMessage(
   error: unknown,
   fallback = "The operation failed.",
@@ -55,9 +57,16 @@ export function getSafeErrorMessage(
     return error.trim() || fallback;
   }
 
-  // Unknown object and function rejections may be hostile Proxies. Even
-  // seemingly passive brand or descriptor checks can invoke user-controlled
-  // traps, so only primitive strings are safe to consume at this boundary.
+  if (
+    (typeof error === "object" && error !== null) ||
+    typeof error === "function"
+  ) {
+    // Unknown objects and functions may be hostile Proxies. Exact-identity
+    // WeakMap lookup is the only trusted object channel and cannot invoke
+    // Proxy traps.
+    return normalizedCommandErrorMessages.get(error as Error) ?? fallback;
+  }
+
   return fallback;
 }
 
@@ -68,13 +77,14 @@ function normalizeCommandInvokeError(commandName: string, error: unknown): Error
   );
   const missingCommandPattern = new RegExp(`command\\s+${commandName}\\s+not found`, "i");
 
+  let normalizedMessage = message;
   if (missingCommandPattern.test(message)) {
-    return new Error(
-      `The running desktop backend does not expose '${commandName}'. Restart CMTrace Open so the frontend and Tauri backend are on the same build.`
-    );
+    normalizedMessage = `The running desktop backend does not expose '${commandName}'. Restart CMTrace Open so the frontend and Tauri backend are on the same build.`;
   }
 
-  return new Error(message);
+  const normalizedError = new Error(normalizedMessage);
+  normalizedCommandErrorMessages.set(normalizedError, normalizedMessage);
+  return normalizedError;
 }
 
 async function invokeCommand<T>(commandName: string, args?: Record<string, unknown>): Promise<T> {

@@ -160,6 +160,29 @@ describe("command rejection sanitization", () => {
 });
 
 describe("getSafeErrorMessage", () => {
+  it("preserves a trusted normalized message across repeated reads and message mutation", async () => {
+    vi.mocked(invoke).mockRejectedValueOnce("  safe transport failure  ");
+
+    const error = await captureRejection(graphGetAuthStatus());
+
+    expect(error).toBeInstanceOf(Error);
+    expect(getSafeErrorMessage(error, "safe fallback")).toBe(
+      "safe transport failure",
+    );
+    expect(getSafeErrorMessage(error, "safe fallback")).toBe(
+      "safe transport failure",
+    );
+
+    (error as Error).message = "mutated-message-secret";
+
+    expect(getSafeErrorMessage(error, "safe fallback")).toBe(
+      "safe transport failure",
+    );
+    expect(getSafeErrorMessage(error, "safe fallback")).not.toContain(
+      "mutated-message-secret",
+    );
+  });
+
   it.each([
     ["ordinary Error", new Error("ordinary-error-secret")],
     [
@@ -192,6 +215,62 @@ describe("getSafeErrorMessage", () => {
       "safe fallback",
     );
     expect(messageReads).toBe(0);
+  });
+
+  it("falls back for an arbitrary hostile Proxy without invoking any traps", () => {
+    let trapReads = 0;
+    const rejection = new Proxy(new Error("proxy-message-secret"), {
+      get() {
+        trapReads += 1;
+        throw new Error("get-trap-secret");
+      },
+      getOwnPropertyDescriptor() {
+        trapReads += 1;
+        throw new Error("descriptor-trap-secret");
+      },
+      getPrototypeOf() {
+        trapReads += 1;
+        throw new Error("prototype-trap-secret");
+      },
+      ownKeys() {
+        trapReads += 1;
+        throw new Error("own-keys-trap-secret");
+      },
+    });
+
+    expect(getSafeErrorMessage(rejection, "safe fallback")).toBe(
+      "safe fallback",
+    );
+    expect(trapReads).toBe(0);
+  });
+
+  it("does not trust a hostile Proxy that wraps a trusted normalized Error", async () => {
+    vi.mocked(invoke).mockRejectedValueOnce("trusted transport failure");
+    const trustedError = await captureRejection(graphGetAuthStatus());
+    expect(trustedError).toBeInstanceOf(Error);
+
+    let trapReads = 0;
+    const wrapped = new Proxy(trustedError as Error, {
+      get() {
+        trapReads += 1;
+        throw new Error("get-trap-secret");
+      },
+      getOwnPropertyDescriptor() {
+        trapReads += 1;
+        throw new Error("descriptor-trap-secret");
+      },
+      getPrototypeOf() {
+        trapReads += 1;
+        throw new Error("prototype-trap-secret");
+      },
+      ownKeys() {
+        trapReads += 1;
+        throw new Error("own-keys-trap-secret");
+      },
+    });
+
+    expect(getSafeErrorMessage(wrapped, "safe fallback")).toBe("safe fallback");
+    expect(trapReads).toBe(0);
   });
 
   it("preserves trimmed primitive strings only", () => {
