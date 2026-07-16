@@ -389,6 +389,40 @@ describe("ESP local session state", () => {
         snapshot: { ...update.snapshot, identity: null },
       }),
     ).toBe(false);
+
+    expect(
+      isEspSessionUpdate({
+        ...update,
+        snapshot: { ...update.snapshot, workloads: [null] },
+      }),
+    ).toBe(false);
+    expect(
+      isEspSessionUpdate({
+        ...update,
+        snapshot: {
+          ...update.snapshot,
+          workloads: [{ workloadId: "workload-a", rawIdentifier: 42 }],
+        },
+      }),
+    ).toBe(false);
+    expect(
+      isEspSessionUpdate({
+        ...update,
+        snapshot: {
+          ...update.snapshot,
+          rawEvidence: ["not-an-evidence-record"],
+        },
+      }),
+    ).toBe(false);
+    expect(
+      isEspSessionUpdate({
+        ...update,
+        snapshot: {
+          ...update.snapshot,
+          rawEvidence: [{ provenance: { sourceArtifactId: null } }],
+        },
+      }),
+    ).toBe(false);
   });
 });
 

@@ -44,6 +44,23 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
+function isSessionWorkload(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    typeof value.workloadId === "string" &&
+    typeof value.rawIdentifier === "string"
+  );
+}
+
+function isSessionRawEvidence(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    typeof value.recordId === "string" &&
+    isRecord(value.provenance) &&
+    typeof value.provenance.sourceArtifactId === "string"
+  );
+}
+
 export function isEspSessionUpdate(value: unknown): value is EspSessionUpdate {
   if (
     !isRecord(value) ||
@@ -69,7 +86,9 @@ export function isEspSessionUpdate(value: unknown): value is EspSessionUpdate {
     typeof value.snapshot.schemaVersion === "number" &&
     typeof value.snapshot.generatedAtUtc === "string" &&
     Array.isArray(value.snapshot.workloads) &&
-    Array.isArray(value.snapshot.rawEvidence)
+    value.snapshot.workloads.every(isSessionWorkload) &&
+    Array.isArray(value.snapshot.rawEvidence) &&
+    value.snapshot.rawEvidence.every(isSessionRawEvidence)
   );
 }
 
