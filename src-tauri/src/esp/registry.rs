@@ -400,11 +400,7 @@ fn registry_sensitivity(key: &str, value_name: &str) -> EspSensitivity {
     if path_sensitivity != EspSensitivity::Public {
         return path_sensitivity;
     }
-    let value_name = value_name.to_ascii_lowercase();
-    if ["upn", "sid", "tenant", "entdmid", "serial"]
-        .iter()
-        .any(|marker| value_name.contains(marker))
-    {
+    if is_sensitive_registry_field_name(value_name) {
         EspSensitivity::Sensitive
     } else {
         EspSensitivity::Public
@@ -415,14 +411,11 @@ fn registry_path_sensitivity(key: &str) -> EspSensitivity {
     let components = key.split('\\').collect::<Vec<_>>();
     if components
         .iter()
-        .any(|component| registry_component_has_prefix(component, "nodecache"))
+        .any(|component| normalize_registry_field_name(component) == "nodecache")
     {
         EspSensitivity::Restricted
     } else if components.iter().any(|component| {
-        is_windows_sid_component(component)
-            || ["upn", "sid", "tenant", "entdmid", "serial"]
-                .iter()
-                .any(|marker| registry_component_has_prefix(component, marker))
+        is_windows_sid_component(component) || is_sensitive_registry_field_name(component)
     }) {
         EspSensitivity::Sensitive
     } else {
@@ -430,24 +423,32 @@ fn registry_path_sensitivity(key: &str) -> EspSensitivity {
     }
 }
 
-fn registry_component_has_prefix(component: &str, marker: &str) -> bool {
-    let Some(prefix) = component.get(..marker.len()) else {
-        return false;
-    };
-    if !prefix.eq_ignore_ascii_case(marker) {
-        return false;
-    }
-    match component
-        .get(marker.len()..)
-        .and_then(|suffix| suffix.chars().next())
-    {
-        None => true,
-        Some(boundary) => {
-            !boundary.is_ascii_alphanumeric()
-                || boundary.is_ascii_uppercase()
-                || boundary.is_ascii_digit()
-        }
-    }
+fn is_sensitive_registry_field_name(value: &str) -> bool {
+    matches!(
+        normalize_registry_field_name(value).as_str(),
+        "upn"
+            | "userprincipalname"
+            | "sid"
+            | "usersid"
+            | "tenant"
+            | "tenantid"
+            | "tenantdomain"
+            | "aadtenantid"
+            | "aadtenantdomain"
+            | "cloudassignedtenantid"
+            | "cloudassignedtenantdomain"
+            | "entdmid"
+            | "serial"
+            | "serialnumber"
+    )
+}
+
+fn normalize_registry_field_name(value: &str) -> String {
+    value
+        .chars()
+        .filter(|character| character.is_ascii_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
 }
 
 fn is_windows_sid_component(component: &str) -> bool {
@@ -456,15 +457,47 @@ fn is_windows_sid_component(component: &str) -> bool {
         .next()
         .is_some_and(|prefix| prefix.eq_ignore_ascii_case("s"))
         || fields.next() != Some("1")
-        || fields.next() != Some("5")
     {
         return false;
     }
+    let Some(identifier_authority) = fields.next() else {
+        return false;
+    };
+    if !is_sid_identifier_authority(identifier_authority) {
+        return false;
+    }
     let subauthorities = fields.collect::<Vec<_>>();
-    !subauthorities.is_empty()
+    (1..=15).contains(&subauthorities.len())
         && subauthorities
             .iter()
-            .all(|field| field.parse::<u32>().is_ok())
+            .all(|field| is_sid_subauthority(field))
+}
+
+fn is_sid_identifier_authority(value: &str) -> bool {
+    const MAX_IDENTIFIER_AUTHORITY: u64 = 0xFFFF_FFFF_FFFF;
+
+    if let Some(hex) = value
+        .strip_prefix("0x")
+        .or_else(|| value.strip_prefix("0X"))
+    {
+        return !hex.is_empty()
+            && hex.len() <= 12
+            && hex.chars().all(|character| character.is_ascii_hexdigit())
+            && u64::from_str_radix(hex, 16)
+                .is_ok_and(|authority| authority <= MAX_IDENTIFIER_AUTHORITY);
+    }
+
+    !value.is_empty()
+        && value.chars().all(|character| character.is_ascii_digit())
+        && value
+            .parse::<u64>()
+            .is_ok_and(|authority| authority <= MAX_IDENTIFIER_AUTHORITY)
+}
+
+fn is_sid_subauthority(value: &str) -> bool {
+    !value.is_empty()
+        && value.chars().all(|character| character.is_ascii_digit())
+        && value.parse::<u32>().is_ok()
 }
 
 fn root_evidence(
@@ -831,30 +864,108 @@ mod tests {
     }
 
     #[test]
-    fn registry_path_sensitivity_uses_sid_and_field_boundaries() {
-        assert_eq!(
-            registry_path_sensitivity(
-                r"SOFTWARE\Microsoft\Windows\Autopilot\User\S-1-5-21-111-222-333-1001\Readable"
-            ),
-            EspSensitivity::Sensitive
-        );
-        assert_eq!(
-            registry_path_sensitivity(
-                r"SOFTWARE\Microsoft\Windows\Autopilot\User\S-1-5-not-numeric\Readable"
-            ),
-            EspSensitivity::Public
-        );
-        assert_eq!(
-            registry_path_sensitivity(r"SOFTWARE\Microsoft\Windows\Autopilot\Outside\Readable"),
-            EspSensitivity::Public
-        );
-        assert_eq!(
-            registry_path_sensitivity(r"SOFTWARE\Microsoft\Windows\Autopilot\NotASid\Readable"),
-            EspSensitivity::Public
-        );
-        assert_eq!(
-            registry_path_sensitivity(r"SOFTWARE\Microsoft\Windows\Autopilot\TenantId\Readable"),
-            EspSensitivity::Sensitive
-        );
+    fn registry_path_sensitivity_accepts_complete_sid_grammar() {
+        for sid in [
+            "S-1-5-21-111-222-333-1001",
+            "S-1-12-1-111-222-333",
+            "S-1-15-2-1",
+            "S-1-16-12288",
+            "S-1-281474976710655-1",
+            "S-1-0x100000000-1",
+            "S-1-0XFFFFFFFFFFFF-1",
+        ] {
+            assert_eq!(
+                registry_path_sensitivity(&format!(
+                    r"SOFTWARE\Microsoft\Windows\Autopilot\User\{sid}\Readable"
+                )),
+                EspSensitivity::Sensitive,
+                "valid SID component was not classified as sensitive: {sid}"
+            );
+        }
+
+        for near_miss in [
+            "S-1-5",
+            "S-2-5-1",
+            "S-1-0x-1",
+            "S-1-0x1000000000000-1",
+            "S-1-281474976710656-1",
+            "S-1-5-4294967296",
+            "S-1-5-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1",
+            "S-1-5-not-numeric",
+            "prefix-S-1-5-21",
+        ] {
+            assert_eq!(
+                registry_path_sensitivity(&format!(
+                    r"SOFTWARE\Microsoft\Windows\Autopilot\User\{near_miss}\Readable"
+                )),
+                EspSensitivity::Public,
+                "near-miss SID component was classified as sensitive: {near_miss}"
+            );
+        }
+    }
+
+    #[test]
+    fn registry_path_sensitivity_uses_case_insensitive_semantic_field_names() {
+        for field in [
+            "TenantId",
+            "tenantid",
+            "TENANTID",
+            "tenant-id",
+            "UserSID",
+            "user_sid",
+            "CloudAssignedTenantId",
+            "cloud-assigned-tenant-domain",
+            "AADTenantId",
+            "UserPrincipalName",
+            "EntDMID",
+            "SerialNumber",
+        ] {
+            assert_eq!(
+                registry_path_sensitivity(&format!(
+                    r"SOFTWARE\Microsoft\Windows\Autopilot\{field}\Readable"
+                )),
+                EspSensitivity::Sensitive,
+                "documented sensitive field was not classified as sensitive: {field}"
+            );
+        }
+
+        for ordinary in ["Outside", "NotASid", "Presidential", "SerializationMode"] {
+            assert_eq!(
+                registry_path_sensitivity(&format!(
+                    r"SOFTWARE\Microsoft\Windows\Autopilot\{ordinary}\Readable"
+                )),
+                EspSensitivity::Public,
+                "ordinary path component was classified as sensitive: {ordinary}"
+            );
+        }
+    }
+
+    #[test]
+    fn registry_value_name_sensitivity_rejects_substring_false_positives() {
+        let public_key = r"SOFTWARE\Microsoft\Windows\Autopilot\Readable";
+        for field in [
+            "UPN",
+            "UserPrincipalName",
+            "UserSID",
+            "tenantid",
+            "CloudAssignedTenantId",
+            "TenantDomain",
+            "EntDMID",
+            "SerialNumber",
+        ] {
+            assert_eq!(
+                registry_sensitivity(public_key, field),
+                EspSensitivity::Sensitive,
+                "documented sensitive value name was not classified as sensitive: {field}"
+            );
+        }
+
+        for ordinary in ["Outside", "NotASid", "Presidential", "SerializationMode"] {
+            assert_eq!(
+                registry_sensitivity(public_key, ordinary),
+                EspSensitivity::Public,
+                "ordinary value name was classified as sensitive: {ordinary}"
+            );
+        }
     }
 }
