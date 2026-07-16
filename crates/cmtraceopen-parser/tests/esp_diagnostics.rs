@@ -1182,6 +1182,94 @@ fn correlation_extracts_quoted_unquoted_and_mixed_case_installer_log_switches() 
 }
 
 #[test]
+fn correlation_recognizes_full_path_and_extensionless_msiexec_images() {
+    let workload = correlation_workload(
+        "workload-a",
+        "app-a",
+        "2026-07-15T12:00:00Z",
+        "2026-07-15T12:10:00Z",
+    );
+    let full_path = correlation_process(
+        "process-full-path",
+        710,
+        None,
+        r"C:\Windows\System32\MSIEXEC.EXE",
+        "2026-07-15T12:02:00Z",
+    );
+    let extensionless = correlation_process(
+        "process-extensionless",
+        711,
+        None,
+        "msiexec",
+        "2026-07-15T12:03:00Z",
+    );
+
+    let correlations =
+        correlate_installer_processes(&[workload], &[full_path, extensionless], &[], &[]);
+
+    assert_eq!(correlations.len(), 2);
+    assert!(correlations.iter().all(|correlation| {
+        correlation.workload_id.as_deref() == Some("workload-a")
+            && correlation.confidence == EspCorrelationConfidence::Temporal
+    }));
+}
+
+#[test]
+fn correlation_never_promotes_full_path_ime_agents_to_installer_roots() {
+    let mut agent = correlation_process(
+        "process-agent-only",
+        712,
+        None,
+        r"C:\Program Files (x86)\Microsoft Intune Management Extension\AgentExecutor.exe",
+        "2026-07-15T12:02:00Z",
+    );
+    agent.referenced_log_path = Some(r"C:\Windows\Temp\agent.log".to_string());
+    agent.product_code = Some("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee".to_string());
+
+    let correlations = correlate_installer_processes(&[], &[agent], &[], &[]);
+
+    assert!(correlations.is_empty());
+}
+
+#[test]
+fn correlation_ignores_blank_exact_identifiers_and_empty_path_metadata() {
+    let workload = correlation_workload(
+        "workload-a",
+        "app-a",
+        "2026-07-15T12:00:00Z",
+        "2026-07-15T12:10:00Z",
+    );
+    let mut msi = correlation_process(
+        "process-msi-blank-id",
+        713,
+        None,
+        "msiexec.exe",
+        "2026-07-15T12:02:00Z",
+    );
+    msi.app_id = Some("   ".to_string());
+    msi.product_code = Some("".to_string());
+    let mut unrelated = correlation_process(
+        "process-unrelated-empty-metadata",
+        714,
+        None,
+        "notepad.exe",
+        "2026-07-15T12:02:00Z",
+    );
+    unrelated.product_code = Some("  ".to_string());
+    unrelated.referenced_log_path = Some("".to_string());
+
+    let correlations = correlate_installer_processes(&[workload], &[unrelated, msi], &[], &[]);
+
+    assert_eq!(correlations.len(), 1);
+    assert_eq!(correlations[0].workload_id.as_deref(), Some("workload-a"));
+    assert_eq!(
+        correlations[0].confidence,
+        EspCorrelationConfidence::Temporal
+    );
+    assert_eq!(correlations[0].reason, "singleTemporalCandidate");
+}
+
+#[test]
 fn correlation_prefers_consistent_exact_app_product_and_canonical_log_evidence() {
     let app_a = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
     let app_b = "bbbbbbbb-cccc-dddd-eeee-ffffffffffff";
@@ -1334,6 +1422,100 @@ fn correlation_parent_chain_is_guarded_by_process_start_identity() {
             .map(|process| process.context.evidence_ref.evidence_id.as_str())
             .collect::<Vec<_>>(),
         vec!["process-msi", "process-agent", "process-ime"]
+    );
+}
+
+#[test]
+fn correlation_parent_chain_rejects_a_stale_sample_with_a_reused_parent_pid() {
+    let stale_app = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+    let current_app = "bbbbbbbb-cccc-dddd-eeee-ffffffffffff";
+    let stale_workload = correlation_workload(
+        "workload-stale",
+        stale_app,
+        "2026-07-15T09:55:00Z",
+        "2026-07-15T10:10:00Z",
+    );
+    let current_workload = correlation_workload(
+        "workload-current",
+        current_app,
+        "2026-07-15T11:58:00Z",
+        "2026-07-15T12:10:00Z",
+    );
+    let mut stale_parent = correlation_process(
+        "process-stale-parent",
+        100,
+        None,
+        "AgentExecutor.exe",
+        "2026-07-15T10:00:00Z",
+    );
+    stale_parent.app_id = Some(stale_app.to_string());
+    stale_parent.context.source_timestamp = None;
+    stale_parent.context.observed_at_utc = "2026-07-15T10:05:00Z".to_string();
+    let child = correlation_process(
+        "process-current-child",
+        701,
+        Some(100),
+        "msiexec.exe",
+        "2026-07-15T12:02:00Z",
+    );
+
+    let correlations = correlate_installer_processes(
+        &[stale_workload, current_workload],
+        &[stale_parent, child],
+        &[],
+        &[],
+    );
+
+    assert_eq!(
+        correlations[0].workload_id.as_deref(),
+        Some("workload-current")
+    );
+    assert_eq!(
+        correlations[0].confidence,
+        EspCorrelationConfidence::Temporal
+    );
+    assert_eq!(correlations[0].process_observations.len(), 1);
+}
+
+#[test]
+fn correlation_deduplicates_repeated_samples_by_pid_and_start_time() {
+    let app_a = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+    let workload = correlation_workload(
+        "workload-a",
+        app_a,
+        "2026-07-15T11:58:00Z",
+        "2026-07-15T12:10:00Z",
+    );
+    let mut informative = correlation_process(
+        "process-sample-informative",
+        701,
+        None,
+        "msiexec.exe",
+        "2026-07-15T12:02:00Z",
+    );
+    informative.app_id = Some(app_a.to_string());
+    informative.context.source_timestamp = None;
+    informative.context.observed_at_utc = "2026-07-15T12:03:00Z".to_string();
+    let mut later_sparse = correlation_process(
+        "process-sample-later",
+        701,
+        None,
+        "msiexec.exe",
+        "2026-07-15T12:02:00Z",
+    );
+    later_sparse.context.source_timestamp = None;
+    later_sparse.context.observed_at_utc = "2026-07-15T12:04:00Z".to_string();
+
+    let correlations =
+        correlate_installer_processes(&[workload], &[later_sparse, informative], &[], &[]);
+
+    assert_eq!(correlations.len(), 1);
+    assert_eq!(correlations[0].workload_id.as_deref(), Some("workload-a"));
+    assert_eq!(correlations[0].confidence, EspCorrelationConfidence::Exact);
+    assert_eq!(correlations[0].process_observations.len(), 1);
+    assert_eq!(
+        correlations[0].correlation_id,
+        "installer|701|2026-07-15T12:02:00Z"
     );
 }
 

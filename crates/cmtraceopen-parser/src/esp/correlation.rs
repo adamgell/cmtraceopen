@@ -120,14 +120,23 @@ pub fn correlate_installer_processes(
         })
         .collect::<Vec<_>>();
 
-    let mut roots = processes
+    let mut roots = BTreeMap::<(u32, String), &EspProcessObservation>::new();
+    for process in processes
         .iter()
         .filter(|process| is_installer_root(process))
-        .collect::<Vec<_>>();
-    roots.sort_by_key(|process| process_identity_key(process));
+    {
+        roots
+            .entry(process_identity_key(process))
+            .and_modify(|current| {
+                if process_preference_key(process) > process_preference_key(current) {
+                    *current = process;
+                }
+            })
+            .or_insert(process);
+    }
 
     roots
-        .into_iter()
+        .into_values()
         .map(|root| {
             correlate_one(
                 root,
@@ -159,8 +168,7 @@ fn correlate_one(
 
     for (index, process) in lineage.iter().enumerate() {
         if let Some(app_id) = process.app_id.as_deref() {
-            exact_identifier_present = true;
-            add_identifier_signal(
+            exact_identifier_present |= add_identifier_signal(
                 if index == 0 { "appId" } else { "parentAppId" },
                 app_id,
                 workload_identifiers,
@@ -168,8 +176,7 @@ fn correlate_one(
             );
         }
         if let Some(product_code) = process.product_code.as_deref() {
-            exact_identifier_present = true;
-            add_identifier_signal(
+            exact_identifier_present |= add_identifier_signal(
                 if index == 0 {
                     "productCode"
                 } else {
@@ -210,8 +217,7 @@ fn correlate_one(
             }
             evidence.push(deployment.context.evidence_ref.clone());
             if let Some(product_code) = deployment.product_code.as_deref() {
-                exact_identifier_present = true;
-                add_identifier_signal(
+                exact_identifier_present |= add_identifier_signal(
                     "canonicalLogPath",
                     product_code,
                     workload_identifiers,
@@ -231,14 +237,16 @@ fn correlate_one(
         }) {
             continue;
         }
-        exact_identifier_present = true;
-        evidence.push(ime.context.evidence_ref.clone());
-        add_identifier_signal(
+        if !add_identifier_signal(
             "imeProcessAppId",
             app_id,
             workload_identifiers,
             &mut signals,
-        );
+        ) {
+            continue;
+        }
+        exact_identifier_present = true;
+        evidence.push(ime.context.evidence_ref.clone());
     }
 
     let nonempty_signal_sets = signals
@@ -342,18 +350,40 @@ fn correlate_one(
 }
 
 fn is_installer_root(process: &EspProcessObservation) -> bool {
-    let executable = process.executable_name.to_ascii_lowercase();
-    matches!(executable.as_str(), "msiexec.exe" | "winget.exe")
-        || process.product_code.is_some()
-        || (!matches!(
-            executable.as_str(),
-            "intunemanagementextension.exe" | "agentexecutor.exe"
-        ) && (process.referenced_log_path.is_some()
+    let executable = normalized_executable_name(&process.executable_name);
+    if matches!(
+        executable.as_str(),
+        "intunemanagementextension" | "agentexecutor"
+    ) {
+        return false;
+    }
+
+    matches!(executable.as_str(), "msiexec" | "winget")
+        || process
+            .product_code
+            .as_deref()
+            .is_some_and(has_normalized_identifier)
+        || (process
+            .referenced_log_path
+            .as_deref()
+            .and_then(canonical_installer_log_path)
+            .is_some()
             || process
                 .sanitized_command_line
                 .as_deref()
                 .and_then(extract_installer_log_path)
-                .is_some()))
+                .is_some())
+}
+
+fn normalized_executable_name(executable: &str) -> String {
+    let name = executable
+        .trim()
+        .trim_matches(['"', '\''])
+        .rsplit(['\\', '/'])
+        .next()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    name.strip_suffix(".exe").unwrap_or(&name).to_string()
 }
 
 fn is_installer_workload(workload: &EspWorkload) -> bool {
@@ -387,10 +417,18 @@ fn process_lineage<'a>(
             .filter(|candidate| candidate.pid == parent_pid)
             .filter_map(|candidate| {
                 let started = timestamp_value(&candidate.process_start_time)?;
-                (started <= child_started).then_some((started, candidate))
+                let sampled = process_sample_timestamp(candidate)?;
+                (started <= child_started && sampled >= lower_slop_bound(child_started))
+                    .then_some((started, process_preference_key(candidate), candidate))
             })
-            .max_by(|(left, _), (right, _)| left.cmp(right))
-            .map(|(_, candidate)| candidate)
+            .max_by(
+                |(left_started, left_preference, _), (right_started, right_preference, _)| {
+                    left_started
+                        .cmp(right_started)
+                        .then_with(|| left_preference.cmp(right_preference))
+                },
+            )
+            .map(|(_, _, candidate)| candidate)
         else {
             break;
         };
@@ -409,14 +447,22 @@ fn add_identifier_signal(
     value: &str,
     workload_identifiers: &[(&str, BTreeSet<String>)],
     signals: &mut BTreeMap<&'static str, BTreeSet<String>>,
-) {
+) -> bool {
     let identifiers = normalized_identifiers(value);
+    if identifiers.is_empty() {
+        return false;
+    }
     let matches = workload_identifiers
         .iter()
         .filter(|(_, workload_values)| !identifiers.is_disjoint(workload_values))
         .map(|(workload_id, _)| (*workload_id).to_string())
         .collect::<BTreeSet<_>>();
     signals.entry(signal).or_default().extend(matches);
+    true
+}
+
+fn has_normalized_identifier(value: &str) -> bool {
+    !normalized_identifiers(value).is_empty()
 }
 
 fn normalized_identifiers(value: &str) -> BTreeSet<String> {
@@ -451,7 +497,7 @@ fn workload_contains_process(workload: &EspWorkload, process_time: &EspTimestamp
     .filter_map(timestamp_value)
     .max()
     .unwrap_or(first);
-    process_time >= first - TEMPORAL_SLOP && process_time <= last + TEMPORAL_SLOP
+    process_time >= lower_slop_bound(first) && process_time <= upper_slop_bound(last)
 }
 
 fn timestamp_value(timestamp: &EspTimestamp) -> Option<DateTime<Utc>> {
@@ -485,11 +531,52 @@ fn observation_within_process_window(
     let Some(observed) = context_timestamp(context) else {
         return false;
     };
-    let sampled = context_timestamp(&process.context)
+    let sampled = process_sample_timestamp(process)
         .filter(|sampled| *sampled >= started)
         .unwrap_or(started);
 
-    observed >= started - TEMPORAL_SLOP && observed <= sampled + TEMPORAL_SLOP
+    observed >= lower_slop_bound(started) && observed <= upper_slop_bound(sampled)
+}
+
+fn lower_slop_bound(value: DateTime<Utc>) -> DateTime<Utc> {
+    value.checked_sub_signed(TEMPORAL_SLOP).unwrap_or(value)
+}
+
+fn upper_slop_bound(value: DateTime<Utc>) -> DateTime<Utc> {
+    value.checked_add_signed(TEMPORAL_SLOP).unwrap_or(value)
+}
+
+fn process_sample_timestamp(process: &EspProcessObservation) -> Option<DateTime<Utc>> {
+    DateTime::parse_from_rfc3339(&process.context.observed_at_utc)
+        .ok()
+        .map(|value| value.with_timezone(&Utc))
+        .or_else(|| {
+            process
+                .context
+                .source_timestamp
+                .as_ref()
+                .and_then(timestamp_value)
+        })
+}
+
+fn process_preference_key(
+    process: &EspProcessObservation,
+) -> (u8, Option<DateTime<Utc>>, &str, &str) {
+    let information = [
+        process.app_id.as_ref(),
+        process.product_code.as_ref(),
+        process.referenced_log_path.as_ref(),
+        process.sanitized_command_line.as_ref(),
+    ]
+    .into_iter()
+    .flatten()
+    .count() as u8;
+    (
+        information,
+        process_sample_timestamp(process),
+        process.context.provenance.source_artifact_id.as_str(),
+        process.context.evidence_ref.evidence_id.as_str(),
+    )
 }
 
 fn process_identity_key(process: &EspProcessObservation) -> (u32, String) {
@@ -505,9 +592,7 @@ fn process_identity_key(process: &EspProcessObservation) -> (u32, String) {
 
 fn correlation_id(process: &EspProcessObservation) -> String {
     format!(
-        "installer|{}|{}|{}|{}",
-        escape_component(&process.context.provenance.source_artifact_id),
-        escape_component(&process.context.evidence_ref.evidence_id),
+        "installer|{}|{}",
         process.pid,
         escape_component(
             process
