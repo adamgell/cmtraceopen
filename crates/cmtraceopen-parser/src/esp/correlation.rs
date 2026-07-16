@@ -11,11 +11,12 @@ use chrono::{DateTime, Duration, Utc};
 
 use super::models::{
     EspCorrelationConfidence, EspDeploymentLogObservation, EspEvidenceRef, EspImeObservation,
-    EspInstallerCorrelation, EspProcessObservation, EspTimestamp, EspWorkload,
+    EspInstallerCorrelation, EspObservationContext, EspProcessObservation, EspTimestamp,
+    EspWorkload,
 };
 use super::normalize::extract_guid;
 
-const TEMPORAL_SLOP: Duration = Duration::minutes(5);
+const TEMPORAL_SLOP: Duration = Duration::minutes(2);
 const MAX_PARENT_CHAIN_DEPTH: usize = 16;
 
 /// Extracts an MSI-style `/L`, `/L*V`, or generic `/log` target without
@@ -204,6 +205,9 @@ fn correlate_one(
             if deployment_path != process_log_path {
                 continue;
             }
+            if !observation_within_process_window(root, &deployment.context) {
+                continue;
+            }
             evidence.push(deployment.context.evidence_ref.clone());
             if let Some(product_code) = deployment.product_code.as_deref() {
                 exact_identifier_present = true;
@@ -217,18 +221,14 @@ fn correlate_one(
         }
     }
 
-    let lineage_pids = lineage
-        .iter()
-        .map(|process| process.pid)
-        .collect::<Vec<_>>();
     for ime in ime_logs {
         let Some(app_id) = ime.app_id.as_deref() else {
             continue;
         };
-        if !lineage_pids
-            .iter()
-            .any(|pid| message_mentions_pid(&ime.message, *pid))
-        {
+        if !lineage.iter().any(|process| {
+            message_mentions_pid(&ime.message, process.pid)
+                && observation_within_process_window(process, &ime.context)
+        }) {
             continue;
         }
         exact_identifier_present = true;
@@ -463,6 +463,35 @@ fn timestamp_value(timestamp: &EspTimestamp) -> Option<DateTime<Utc>> {
         .map(|value| value.with_timezone(&Utc))
 }
 
+fn context_timestamp(context: &EspObservationContext) -> Option<DateTime<Utc>> {
+    context
+        .source_timestamp
+        .as_ref()
+        .and_then(timestamp_value)
+        .or_else(|| {
+            DateTime::parse_from_rfc3339(&context.observed_at_utc)
+                .ok()
+                .map(|value| value.with_timezone(&Utc))
+        })
+}
+
+fn observation_within_process_window(
+    process: &EspProcessObservation,
+    context: &EspObservationContext,
+) -> bool {
+    let Some(started) = timestamp_value(&process.process_start_time) else {
+        return false;
+    };
+    let Some(observed) = context_timestamp(context) else {
+        return false;
+    };
+    let sampled = context_timestamp(&process.context)
+        .filter(|sampled| *sampled >= started)
+        .unwrap_or(started);
+
+    observed >= started - TEMPORAL_SLOP && observed <= sampled + TEMPORAL_SLOP
+}
+
 fn process_identity_key(process: &EspProcessObservation) -> (u32, String) {
     (
         process.pid,
@@ -492,9 +521,21 @@ fn correlation_id(process: &EspProcessObservation) -> String {
 
 fn message_mentions_pid(message: &str, pid: u32) -> bool {
     let target = pid.to_string();
-    message
-        .split(|character: char| !character.is_ascii_digit())
-        .any(|value| value == target)
+    let tokens = message
+        .split(|character: char| !character.is_ascii_alphanumeric())
+        .filter(|value| !value.is_empty())
+        .collect::<Vec<_>>();
+
+    tokens.windows(2).any(|window| {
+        (window[0].eq_ignore_ascii_case("pid")
+            || window[0].eq_ignore_ascii_case("process")
+            || window[0].eq_ignore_ascii_case("processid"))
+            && window[1] == target
+    }) || tokens.windows(3).any(|window| {
+        window[0].eq_ignore_ascii_case("process")
+            && window[1].eq_ignore_ascii_case("id")
+            && window[2] == target
+    })
 }
 
 fn deduplicate_evidence(evidence: &mut Vec<EspEvidenceRef>) {
@@ -510,7 +551,10 @@ fn split_windows_arguments(command_line: &str) -> Vec<String> {
     let mut chars = command_line.chars().peekable();
     while let Some(character) = chars.next() {
         match character {
-            '"' => quoted = !quoted,
+            '"' => {
+                quoted = !quoted;
+                current.push(character);
+            }
             '\\' if chars.peek() == Some(&'"') => {
                 chars.next();
                 current.push('"');
@@ -539,9 +583,17 @@ fn parse_log_switch(argument: &str) -> Option<Option<String>> {
         return Some(Some(value[4..].to_string()));
     }
 
-    let separator = value.find(['=', ':']);
+    let separator = value.find(['=', ':', '"', '\'']);
     let (switch, attached) = separator
-        .map(|index| (&value[..index], Some(value[index + 1..].to_string())))
+        .map(|index| {
+            let separator = value.as_bytes()[index];
+            let path_start = if matches!(separator, b'"' | b'\'') {
+                index
+            } else {
+                index + 1
+            };
+            (&value[..index], Some(value[path_start..].to_string()))
+        })
         .unwrap_or((value, None));
     let mut characters = switch.chars();
     if !characters
