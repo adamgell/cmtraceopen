@@ -6749,6 +6749,216 @@ fn redaction_projection_masks_bare_credentials_in_references_and_provenance() {
 }
 
 #[test]
+fn redaction_projection_masks_token_aliases_and_basic_credentials_across_arbitrary_fields() {
+    let mut snapshot = findings_snapshot();
+    snapshot.identity.evidence = vec![
+        evidence_ref_from("AuthToken Q", r#"BearerToken "Z""#),
+        evidence_ref_from("Basic 'Y'", "safe-basic-source"),
+    ];
+    snapshot.registration_events.push(EspRegistrationEvent {
+        event_id: 304,
+        record_id: Some(42),
+        status: status(
+            EspRawStatus::Text("failed".to_string()),
+            EspNormalizedStatus::Failed,
+        ),
+        message: "Device registration failed".to_string(),
+        timestamp: timestamp("2026-07-15T12:00:00Z"),
+        named_data: vec![
+            EspNamedValue {
+                name: "Payload".to_string(),
+                value: r#"AuthToken "A""#.to_string(),
+            },
+            EspNamedValue {
+                name: "AlternatePayload".to_string(),
+                value: "BearerToken B".to_string(),
+            },
+            EspNamedValue {
+                name: "BasicPayload".to_string(),
+                value: "Basic 'C'".to_string(),
+            },
+            EspNamedValue {
+                name: "TokenCount".to_string(),
+                value: "5".to_string(),
+            },
+        ],
+        evidence: vec![evidence_ref("registration-token-aliases")],
+    });
+
+    let mut raw_event = raw_export_record(
+        "safe-event-record",
+        EspSourceKind::EventLog,
+        "safe-event-source",
+        None,
+        "safe raw event payload",
+    );
+    raw_event.sensitivity = EspSensitivity::Public;
+    raw_event.provenance.source_artifact_id = "BearerToken J".to_string();
+    raw_event.provenance.event = Some(EspEventProvenance {
+        channel: "Generic event channel".to_string(),
+        event_id: 1,
+        record_id: Some(1),
+        named_data: vec![
+            EspNamedValue {
+                name: "Payload".to_string(),
+                value: "AuthToken D".to_string(),
+            },
+            EspNamedValue {
+                name: "AlternatePayload".to_string(),
+                value: "BearerToken 'E'".to_string(),
+            },
+            EspNamedValue {
+                name: "BasicPayload".to_string(),
+                value: r#"Basic "F""#.to_string(),
+            },
+            EspNamedValue {
+                name: "TokenCount".to_string(),
+                value: "7".to_string(),
+            },
+        ],
+    });
+    let mut raw_text = raw_export_record(
+        "raw-auth-token",
+        EspSourceKind::DeploymentLog,
+        "deployment-log",
+        None,
+        "AuthToken G",
+    );
+    raw_text.sensitivity = EspSensitivity::Public;
+    let mut raw_list = raw_export_record(
+        "raw-bearer-token-and-basic",
+        EspSourceKind::DeploymentLog,
+        "deployment-log",
+        None,
+        "placeholder",
+    );
+    raw_list.sensitivity = EspSensitivity::Public;
+    raw_list.raw_value = EspObservationValue::StringList(vec![
+        "safe list value".to_string(),
+        "BearerToken 'H'".to_string(),
+        r#"Basic "I""#.to_string(),
+    ]);
+    snapshot.raw_evidence = vec![raw_event, raw_text, raw_list];
+    let original = snapshot.clone();
+
+    let safe = redacted_export_projection(&snapshot);
+    assert_eq!(
+        safe.identity.evidence[0].evidence_id,
+        "AuthToken [redacted]"
+    );
+    assert_eq!(
+        safe.identity.evidence[0].source_artifact_id,
+        "BearerToken [redacted]"
+    );
+    assert_eq!(safe.identity.evidence[1].evidence_id, "Basic [redacted]");
+    assert_eq!(
+        safe.registration_events[0]
+            .named_data
+            .iter()
+            .map(|value| value.value.as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            "AuthToken [redacted]",
+            "BearerToken [redacted]",
+            "Basic [redacted]",
+            "5",
+        ]
+    );
+    assert_eq!(
+        safe.raw_evidence
+            .iter()
+            .map(|record| record.record_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["safe-event-record"]
+    );
+    assert_eq!(
+        safe.raw_evidence[0].provenance.source_artifact_id,
+        "BearerToken [redacted]"
+    );
+    assert_eq!(
+        safe.raw_evidence[0]
+            .provenance
+            .event
+            .as_ref()
+            .unwrap()
+            .named_data
+            .iter()
+            .map(|value| value.value.as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            "AuthToken [redacted]",
+            "BearerToken [redacted]",
+            "Basic [redacted]",
+            "7",
+        ]
+    );
+    let safe_json = serde_json::to_string(&safe).unwrap();
+    for credential in [
+        "AuthToken Q",
+        r#"BearerToken "Z""#,
+        "Basic 'Y'",
+        r#"AuthToken "A""#,
+        "BearerToken B",
+        "Basic 'C'",
+        "AuthToken D",
+        "BearerToken 'E'",
+        r#"Basic "F""#,
+        "AuthToken G",
+        "BearerToken 'H'",
+        r#"Basic "I""#,
+        "BearerToken J",
+    ] {
+        assert!(
+            !safe_json.contains(credential),
+            "safe export leaked {credential}"
+        );
+    }
+    assert_eq!(snapshot, original);
+}
+
+#[test]
+fn redaction_projection_preserves_typed_basic_authentication_prose() {
+    let mut snapshot = findings_snapshot();
+    snapshot.registration_events.push(EspRegistrationEvent {
+        event_id: 304,
+        record_id: Some(42),
+        status: status(
+            EspRawStatus::Text("failed".to_string()),
+            EspNormalizedStatus::Failed,
+        ),
+        message: "Basic authentication is configured".to_string(),
+        timestamp: timestamp("2026-07-15T12:00:00Z"),
+        named_data: vec![],
+        evidence: vec![evidence_ref("registration-basic-auth-prose")],
+    });
+    snapshot.activity.push(EspTimelineEntry {
+        entry_id: "basic-auth-prose".to_string(),
+        timestamp: timestamp("2026-07-15T12:01:00Z"),
+        kind: EspTimelineKind::Other,
+        title: "Basic authorization is required".to_string(),
+        detail: Some("Basic scheme negotiation was retried".to_string()),
+        status: None,
+        evidence: vec![evidence_ref("timeline-basic-auth-prose")],
+    });
+    let original = snapshot.clone();
+
+    let safe = redacted_export_projection(&snapshot);
+    assert_eq!(
+        safe.registration_events.last().unwrap().message,
+        "Basic authentication is configured"
+    );
+    assert_eq!(
+        safe.activity.last().unwrap().title,
+        "Basic authorization is required"
+    );
+    assert_eq!(
+        safe.activity.last().unwrap().detail.as_deref(),
+        Some("Basic scheme negotiation was retried")
+    );
+    assert_eq!(snapshot, original);
+}
+
+#[test]
 fn redaction_projection_preserves_ordinary_secret_words_in_typed_narratives() {
     let mut snapshot = findings_snapshot();
     let mut registration_status = status(
@@ -6871,6 +7081,79 @@ fn redaction_projection_removes_whitespace_basic_authorization_raw_records() {
     assert!(redacted_export_projection(&snapshot)
         .raw_evidence
         .is_empty());
+    assert_eq!(snapshot, original);
+}
+
+#[test]
+fn redaction_projection_removes_quoted_and_assignment_authorization_forms() {
+    let mut snapshot = findings_snapshot();
+    for (index, scheme) in ["Basic", "Digest", "ApiKey", "Bearer"]
+        .into_iter()
+        .enumerate()
+    {
+        snapshot.identity.evidence.push(evidence_ref_from(
+            &format!(r#"Authorization "{scheme}" "{scheme}-double-reference-secret""#),
+            &format!("Authorization '{scheme}' '{scheme}-single-reference-secret'"),
+        ));
+
+        let mut assignment = raw_export_record(
+            &format!("raw-{index}-assignment"),
+            EspSourceKind::DeploymentLog,
+            "deployment-log",
+            None,
+            &format!("Authorization={scheme} Q"),
+        );
+        assignment.sensitivity = EspSensitivity::Public;
+        snapshot.raw_evidence.push(assignment);
+
+        let mut combined_quote = raw_export_record(
+            &format!("raw-{index}-combined-quote"),
+            EspSourceKind::DeploymentLog,
+            "deployment-log",
+            None,
+            &format!(r#"Authorization="{scheme} {scheme}-combined-secret""#),
+        );
+        combined_quote.sensitivity = EspSensitivity::Public;
+        snapshot.raw_evidence.push(combined_quote);
+
+        let mut quoted_forms = raw_export_record(
+            &format!("raw-{index}-quoted-forms"),
+            EspSourceKind::DeploymentLog,
+            "deployment-log",
+            None,
+            "placeholder",
+        );
+        quoted_forms.sensitivity = EspSensitivity::Public;
+        quoted_forms.raw_value = EspObservationValue::StringList(vec![
+            "safe list value".to_string(),
+            format!("Authorization '{scheme} {scheme}-single-combined-secret'"),
+            format!(r#"Authorization "{scheme}" "{scheme}-double-secret""#),
+            format!("Authorization '{scheme}' '{scheme}-single-secret'"),
+        ]);
+        snapshot.raw_evidence.push(quoted_forms);
+    }
+    let original = snapshot.clone();
+
+    let safe = redacted_export_projection(&snapshot);
+    assert!(safe.raw_evidence.is_empty());
+    for evidence in &safe.identity.evidence {
+        assert_eq!(evidence.evidence_id, "Authorization [redacted]");
+        assert_eq!(evidence.source_artifact_id, "Authorization [redacted]");
+    }
+    let safe_json = serde_json::to_string(&safe).unwrap();
+    for secret_fragment in [
+        "double-reference-secret",
+        "single-reference-secret",
+        "combined-secret",
+        "single-combined-secret",
+        "double-secret",
+        "single-secret",
+    ] {
+        assert!(
+            !safe_json.contains(secret_fragment),
+            "safe export leaked {secret_fragment}"
+        );
+    }
     assert_eq!(snapshot, original);
 }
 
@@ -7573,4 +7856,69 @@ fn redaction_projection_removes_tokens_authorization_graph_bodies_and_hardware_h
         );
     }
     assert_eq!(snapshot.raw_evidence.len(), 8);
+}
+
+#[test]
+fn redaction_projection_removes_device_hardware_data_from_every_raw_boundary() {
+    let mut safe_control = raw_export_record(
+        "raw-safe-control",
+        EspSourceKind::DeploymentLog,
+        "deployment-log",
+        None,
+        "safe control value",
+    );
+    safe_control.sensitivity = EspSensitivity::Public;
+
+    let mut registry = raw_export_record(
+        "raw-registry-hardware-data",
+        EspSourceKind::Registry,
+        "autopilot-registry",
+        Some("DeviceHardwareData"),
+        "REGISTRY-DEVICE-HARDWARE-SECRET",
+    );
+    registry.sensitivity = EspSensitivity::Public;
+
+    let mut json = raw_export_record(
+        "raw-json-hardware-data",
+        EspSourceKind::Json,
+        "autopilot-json:/DeviceHardwareData",
+        None,
+        "JSON-DEVICE-HARDWARE-SECRET",
+    );
+    json.sensitivity = EspSensitivity::Public;
+
+    let mut raw = raw_export_record(
+        "DeviceHardwareData",
+        EspSourceKind::DeploymentLog,
+        "deployment-log",
+        None,
+        "RAW-DEVICE-HARDWARE-SECRET",
+    );
+    raw.sensitivity = EspSensitivity::Public;
+
+    let mut snapshot = findings_snapshot();
+    snapshot.raw_evidence = vec![safe_control, registry, json, raw];
+    let original = snapshot.clone();
+
+    let safe = redacted_export_projection(&snapshot);
+    assert_eq!(
+        safe.raw_evidence
+            .iter()
+            .map(|record| record.record_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["raw-safe-control"]
+    );
+    let safe_json = serde_json::to_string(&safe).unwrap();
+    for forbidden in [
+        "DeviceHardwareData",
+        "REGISTRY-DEVICE-HARDWARE-SECRET",
+        "JSON-DEVICE-HARDWARE-SECRET",
+        "RAW-DEVICE-HARDWARE-SECRET",
+    ] {
+        assert!(
+            !safe_json.contains(forbidden),
+            "safe export leaked {forbidden}"
+        );
+    }
+    assert_eq!(snapshot, original);
 }
