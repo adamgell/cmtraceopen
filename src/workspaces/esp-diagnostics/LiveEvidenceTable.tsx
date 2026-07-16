@@ -81,9 +81,9 @@ function rowForRecord(
 ): LiveEvidenceRow {
   const timeline = timelineForRecord(record, activity);
   const rawMessage = observationValueText(record.rawValue);
-  const message = timeline
-    ? `${timeline.title}${timeline.detail ? ` — ${timeline.detail}` : ""}`
-    : rawMessage;
+  const normalizedContext = timeline
+    ? `${timeline.title} ${timeline.detail ?? ""}`
+    : "";
   return {
     record,
     timestamp:
@@ -91,9 +91,13 @@ function rowForRecord(
       record.sourceTimestamp?.normalizedUtc ||
       record.observedAtUtc,
     source: record.provenance.sourceArtifactId,
-    severity: severityForRecord(record, `${message} ${rawMessage}`, timeline),
+    severity: severityForRecord(
+      record,
+      `${normalizedContext} ${rawMessage}`,
+      timeline,
+    ),
     component: timeline?.kind ?? record.provenance.sourceKind,
-    message,
+    message: rawMessage,
   };
 }
 

@@ -167,6 +167,12 @@ describe("LiveEvidenceDock", () => {
       screen.queryByRole("region", { name: "Live evidence and logs" }),
     ).not.toBeInTheDocument();
     expect(useEspDiagnosticsStore.getState().evidenceDockHeight).toBe(420);
+
+    act(() => useEspDiagnosticsStore.getState().setEvidenceViewMode("docked"));
+    fireEvent.click(screen.getByRole("button", { name: "Close live logs" }));
+    expect(
+      screen.queryByRole("region", { name: "Live evidence and logs" }),
+    ).not.toBeInTheDocument();
   });
 
   it("reclamps a retained dock height when the workspace shrinks and preserves it across remounts", () => {
@@ -312,6 +318,45 @@ describe("LiveEvidenceTable", () => {
     expect(details).toHaveTextContent("AppWorkload.log");
     expect(details).toHaveTextContent("Line 1");
     expect(details).toHaveTextContent("record-1");
+  });
+
+  it("keeps local raw log text verbatim when normalized timeline evidence exists", () => {
+    useEspDiagnosticsStore.getState().setEvidenceViewMode("docked");
+    const rawLine = "<![LOG[Raw MSI line: property VALUE=unchanged]LOG]!>";
+    const evidence = snapshot([record("record-1", rawLine)]);
+    evidence.activity = [
+      {
+        entryId: "activity-1",
+        timestamp: {
+          rawText: "2026-07-15T20:00:00.000Z",
+          originalOffset: "+00:00",
+          normalizedUtc: "2026-07-15T20:00:00.000Z",
+          kind: "utc",
+        },
+        kind: "workload",
+        title: "Normalized installer failure",
+        detail: "Friendly summary",
+        status: {
+          raw: "failed",
+          normalized: "failed",
+          display: "Failed",
+          detail: null,
+        },
+        evidence: [
+          {
+            evidenceId: "record-1",
+            sourceArtifactId: "ime-app-workload",
+          },
+        ],
+      },
+    ];
+
+    render(<LiveEvidenceDock snapshot={evidence} />);
+
+    expect(screen.getByText(rawLine)).toBeVisible();
+    expect(
+      screen.queryByText("Normalized installer failure"),
+    ).not.toBeInTheDocument();
   });
 
   it("pauses visual follow away from the bottom without pausing collection", () => {
