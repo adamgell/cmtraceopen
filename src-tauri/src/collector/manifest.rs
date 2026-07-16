@@ -32,6 +32,49 @@ pub fn write_manifest(
         })
         .collect();
 
+    let collected_utc = now.to_rfc3339();
+    let mut artifacts: Vec<serde_json::Value> = results
+        .iter()
+        .flat_map(|result| {
+            result.files.iter().filter_map(|file| {
+                let relative_path = canonical_root_relative_path(bundle_root, &file.relative_path)?;
+                Some(json!({
+                    "artifactId": result.id,
+                    "category": result.category,
+                    "family": result.family,
+                    "relativePath": relative_path,
+                    "originPath": file.origin_path,
+                    "collectedUtc": collected_utc,
+                    "status": "collected",
+                    "parseHints": result.parse_hints,
+                    "bytesCopied": file.bytes_copied,
+                    "notes": result.notes,
+                }))
+            })
+        })
+        .collect();
+    artifacts.sort_by(|left, right| {
+        let left_path = left
+            .get("relativePath")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        let right_path = right
+            .get("relativePath")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        let left_id = left
+            .get("artifactId")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        let right_id = right
+            .get("artifactId")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        left_path
+            .cmp(right_path)
+            .then_with(|| left_id.cmp(right_id))
+    });
+
     let manifest = json!({
         "bundle": {
             "bundleId": bundle_id,
@@ -61,7 +104,7 @@ pub fn write_manifest(
                 "gaps": gaps,
             },
         },
-        "artifacts": [],
+        "artifacts": artifacts,
         "intakeHints": {
             "notesPath": "notes.md",
             "evidenceRoot": "evidence",
@@ -145,4 +188,25 @@ fn hostname() -> String {
     std::env::var("COMPUTERNAME")
         .or_else(|_| std::env::var("HOSTNAME"))
         .unwrap_or_else(|_| "unknown".to_string())
+}
+
+fn canonical_root_relative_path(bundle_root: &Path, relative_path: &str) -> Option<String> {
+    let relative_path = Path::new(relative_path);
+    if relative_path.is_absolute() {
+        return None;
+    }
+
+    let canonical_root = bundle_root.canonicalize().ok()?;
+    let canonical_file = bundle_root.join(relative_path).canonicalize().ok()?;
+    if !canonical_file.is_file() || !canonical_file.starts_with(&canonical_root) {
+        return None;
+    }
+
+    Some(
+        canonical_file
+            .strip_prefix(&canonical_root)
+            .ok()?
+            .to_string_lossy()
+            .replace('\\', "/"),
+    )
 }

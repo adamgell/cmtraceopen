@@ -441,3 +441,81 @@ pub(crate) fn is_ime_related_log_file(path: &Path) -> bool {
         })
         .unwrap_or(false)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::collect_input_paths;
+    use crate::collector::artifacts::{collect_logs, CollectorContext};
+    use crate::collector::manifest::write_manifest;
+    use crate::collector::types::{ArtifactCounts, CollectionProfile, LogCollectionItem};
+    use std::fs;
+    use std::path::PathBuf;
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::{Arc, Mutex};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn nested_built_in_intune_logs_resolve_from_manifest() {
+        let bundle_dir = create_temp_dir("intune-bundle-nested-built-in");
+        let source_dir = bundle_dir.join("source");
+        fs::create_dir_all(&source_dir).expect("create source dir");
+        let source_path = source_dir.join("IntuneManagementExtension.log");
+        fs::write(&source_path, "IME log").expect("write source log");
+
+        let results = Arc::new(Mutex::new(Vec::new()));
+        let context = CollectorContext {
+            bundle_evidence_root: bundle_dir.join("evidence"),
+            completed: Arc::new(AtomicUsize::new(0)),
+            results: Arc::clone(&results),
+        };
+        collect_logs(
+            &[LogCollectionItem {
+                id: "ime-log".to_string(),
+                family: "intune-ime".to_string(),
+                parse_hints: vec!["intune-ime".to_string(), "cmtrace".to_string()],
+                source_pattern: source_path.to_string_lossy().to_string(),
+                destination_folder: "logs/ime/nested".to_string(),
+                notes: "Nested IME log".to_string(),
+            }],
+            &context,
+        );
+        let collected = results.lock().expect("collector results").clone();
+        write_manifest(
+            &bundle_dir,
+            "CMTRACE-TEST",
+            &CollectionProfile::embedded(),
+            &collected,
+            &ArtifactCounts {
+                collected: 1,
+                missing: 0,
+                failed: 0,
+                total: 1,
+            },
+            5,
+        )
+        .expect("write manifest");
+
+        let expected = bundle_dir
+            .join("evidence")
+            .join("logs")
+            .join("ime")
+            .join("nested")
+            .join("IntuneManagementExtension.log");
+        assert_eq!(
+            collect_input_paths(&bundle_dir).expect("resolve bundle"),
+            vec![expected]
+        );
+
+        fs::remove_dir_all(&bundle_dir).expect("remove temp bundle dir");
+    }
+
+    fn create_temp_dir(prefix: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time before unix epoch")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("{prefix}-{unique}"));
+        fs::create_dir_all(&path).expect("create temp dir");
+        path
+    }
+}
