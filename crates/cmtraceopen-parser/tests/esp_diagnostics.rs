@@ -89,6 +89,16 @@ fn graph_section<T>(
     }
 }
 
+fn not_requested_intent_state() -> GraphSection<EspStatus> {
+    graph_section(
+        GraphSectionStatus::Skipped,
+        "DeviceManagementConfiguration.Read.All",
+        GraphApiVersion::NotRequested,
+        None,
+        None,
+    )
+}
+
 fn graph_error(code: &str) -> GraphSectionError {
     GraphSectionError {
         code: code.to_string(),
@@ -1129,10 +1139,7 @@ fn correlation_workload(
         scope: EspScope::Device,
         raw_identifier: raw_identifier.to_string(),
         display_name: None,
-        status: status(
-            EspRawStatus::Number(2),
-            EspNormalizedStatus::Installing,
-        ),
+        status: status(EspRawStatus::Number(2), EspNormalizedStatus::Installing),
         timestamps: EspWorkloadTimestamps {
             first_observed: timestamp(first_observed),
             started: Some(timestamp(first_observed)),
@@ -1295,8 +1302,18 @@ fn correlation_prefers_consistent_exact_app_product_and_canonical_log_evidence()
     let app_a = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
     let app_b = "bbbbbbbb-cccc-dddd-eeee-ffffffffffff";
     let workloads = vec![
-        correlation_workload("workload-a", app_a, "2026-07-15T12:00:00Z", "2026-07-15T12:10:00Z"),
-        correlation_workload("workload-b", app_b, "2026-07-15T12:00:00Z", "2026-07-15T12:10:00Z"),
+        correlation_workload(
+            "workload-a",
+            app_a,
+            "2026-07-15T12:00:00Z",
+            "2026-07-15T12:10:00Z",
+        ),
+        correlation_workload(
+            "workload-b",
+            app_b,
+            "2026-07-15T12:00:00Z",
+            "2026-07-15T12:10:00Z",
+        ),
     ];
     let mut process = correlation_process(
         "process-msi-a",
@@ -1358,8 +1375,18 @@ fn correlation_preserves_conflict_instead_of_overriding_exact_identifiers_with_t
     let app_a = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
     let app_b = "bbbbbbbb-cccc-dddd-eeee-ffffffffffff";
     let workloads = vec![
-        correlation_workload("workload-a", app_a, "2026-07-15T12:00:00Z", "2026-07-15T12:10:00Z"),
-        correlation_workload("workload-b", app_b, "2026-07-15T12:00:00Z", "2026-07-15T12:10:00Z"),
+        correlation_workload(
+            "workload-a",
+            app_a,
+            "2026-07-15T12:00:00Z",
+            "2026-07-15T12:10:00Z",
+        ),
+        correlation_workload(
+            "workload-b",
+            app_b,
+            "2026-07-15T12:00:00Z",
+            "2026-07-15T12:10:00Z",
+        ),
     ];
     let mut process = correlation_process(
         "process-conflict",
@@ -1391,8 +1418,18 @@ fn correlation_parent_chain_is_guarded_by_process_start_identity() {
     let app_a = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
     let app_b = "bbbbbbbb-cccc-dddd-eeee-ffffffffffff";
     let workloads = vec![
-        correlation_workload("workload-a", app_a, "2026-07-15T12:00:00Z", "2026-07-15T12:10:00Z"),
-        correlation_workload("workload-b", app_b, "2026-07-15T12:00:00Z", "2026-07-15T12:10:00Z"),
+        correlation_workload(
+            "workload-a",
+            app_a,
+            "2026-07-15T12:00:00Z",
+            "2026-07-15T12:10:00Z",
+        ),
+        correlation_workload(
+            "workload-b",
+            app_b,
+            "2026-07-15T12:00:00Z",
+            "2026-07-15T12:10:00Z",
+        ),
     ];
     let mut ime = correlation_process(
         "process-ime",
@@ -1425,12 +1462,8 @@ fn correlation_parent_chain_is_guarded_by_process_start_identity() {
         "2026-07-15T12:02:00Z",
     );
 
-    let correlations = correlate_installer_processes(
-        &workloads,
-        &[reused_future, msi, agent, ime],
-        &[],
-        &[],
-    );
+    let correlations =
+        correlate_installer_processes(&workloads, &[reused_future, msi, agent, ime], &[], &[]);
 
     assert_eq!(correlations.len(), 1);
     assert_eq!(correlations[0].workload_id.as_deref(), Some("workload-a"));
@@ -7362,6 +7395,7 @@ fn findings_report_exact_local_graph_status_conflicts_with_both_sources() {
             EspRawStatus::Text("installed".to_string()),
             EspNormalizedStatus::Succeeded,
         )),
+        intent_state: not_requested_intent_state(),
         assignments: vec![],
         evidence: vec![evidence_ref_from("graph-app-succeeded", "graph-apps")],
     };
@@ -7487,6 +7521,7 @@ fn findings_report_cancelled_success_terminal_conflicts_in_both_directions() {
                 EspRawStatus::Text(format!("graph-status-{case_index}")),
                 graph_status,
             )),
+            intent_state: not_requested_intent_state(),
             assignments: vec![],
             evidence: vec![evidence_ref_from(&graph_evidence_id, "graph-apps")],
         };
@@ -7548,6 +7583,7 @@ fn findings_do_not_report_noncontradictory_cancelled_graph_pairs() {
                 EspRawStatus::Text(format!("graph-status-{case_index}")),
                 graph_status,
             )),
+            intent_state: not_requested_intent_state(),
             assignments: vec![],
             evidence: vec![evidence_ref_from(
                 &format!("graph-cancelled-consistent-{case_index}"),
@@ -7599,6 +7635,7 @@ fn findings_report_policy_certificate_and_script_graph_conflicts() {
             EspRawStatus::Text("installed".to_string()),
             EspNormalizedStatus::Succeeded,
         )),
+        intent_state: not_requested_intent_state(),
         assignments: vec![],
         evidence: vec![evidence_ref_from("graph-unrelated-app", "graph-apps")],
     };
@@ -8802,6 +8839,7 @@ fn redaction_projection_preserves_safe_bearer_prose_only_in_typed_narratives() {
         display_name: None,
         tracked_on_enrollment_status: Some(true),
         status: None,
+        intent_state: not_requested_intent_state(),
         assignments: vec![],
         evidence: vec![evidence_ref_from("graph-safe-prose-app", "graph-apps")],
     });
@@ -9241,6 +9279,7 @@ fn redaction_projection_preserves_ordinary_secret_words_in_typed_narratives() {
         display_name: None,
         tracked_on_enrollment_status: Some(true),
         status: None,
+        intent_state: not_requested_intent_state(),
         assignments: vec![],
         evidence: vec![evidence_ref_from(
             "graph-safe-secret-prose-app",
@@ -10139,6 +10178,7 @@ fn redaction_projection_scrubs_raw_metadata_and_all_matching_evidence_references
         display_name: None,
         tracked_on_enrollment_status: Some(true),
         status: None,
+        intent_state: not_requested_intent_state(),
         assignments: vec![],
         evidence: vec![evidence()],
     };
