@@ -40,6 +40,16 @@ impl VersionedGuidCache {
         }
     }
 
+    fn replace_all(
+        &mut self,
+        generation: u64,
+        apps: std::collections::HashMap<String, GraphAppInfo>,
+    ) {
+        if self.generation == generation {
+            self.apps = apps;
+        }
+    }
+
     fn reset_to(&mut self, generation: u64) {
         if generation <= self.generation {
             return;
@@ -155,6 +165,13 @@ mod windows_impl {
 
         fn cache_apps(&self, generation: u64, apps: &HashMap<String, GraphAppInfo>) {
             self.guid_cache.lock().unwrap().insert_all(generation, apps);
+        }
+
+        fn replace_apps(&self, generation: u64, apps: HashMap<String, GraphAppInfo>) {
+            self.guid_cache
+                .lock()
+                .unwrap()
+                .replace_all(generation, apps);
         }
     }
 
@@ -606,7 +623,7 @@ mod windows_impl {
 
         let cache_map: HashMap<String, GraphAppInfo> =
             all.iter().map(|a| (a.id.clone(), a.clone())).collect();
-        state.cache_apps(generation, &cache_map);
+        state.replace_apps(generation, cache_map);
 
         Ok(all)
     }
@@ -783,5 +800,33 @@ mod tests {
             cache.get(8, "app-b").map(|app| app.display_name),
             Some("Tenant B".to_string())
         );
+    }
+
+    #[test]
+    fn graph_guid_cache_full_snapshot_replaces_same_generation_entries() {
+        let mut cache = VersionedGuidCache::default();
+        cache.reset_to(7);
+        cache.insert_all(
+            7,
+            &HashMap::from([("app-stale".to_string(), app("app-stale", "Old name"))]),
+        );
+
+        cache.replace_all(
+            7,
+            HashMap::from([("app-current".to_string(), app("app-current", "Current"))]),
+        );
+
+        assert!(cache.get(7, "app-stale").is_none());
+        assert_eq!(
+            cache.get(7, "app-current").map(|app| app.display_name),
+            Some("Current".to_string())
+        );
+
+        cache.replace_all(
+            6,
+            HashMap::from([("app-wrong".to_string(), app("app-wrong", "Wrong tenant"))]),
+        );
+        assert!(cache.get(7, "app-wrong").is_none());
+        assert!(cache.get(7, "app-current").is_some());
     }
 }

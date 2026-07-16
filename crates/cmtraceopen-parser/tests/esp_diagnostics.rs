@@ -75,13 +75,14 @@ fn status(raw: EspRawStatus, normalized: EspNormalizedStatus) -> EspStatus {
 
 fn graph_section<T>(
     status: GraphSectionStatus,
+    required_scope: &str,
     api_version: GraphApiVersion,
     data: Option<T>,
     error: Option<GraphSectionError>,
 ) -> GraphSection<T> {
     GraphSection {
         status,
-        required_scope: Some("DeviceManagementManagedDevices.Read.All".to_string()),
+        required_scope: Some(required_scope.to_string()),
         api_version,
         data,
         error,
@@ -660,6 +661,7 @@ fn models_graph_overlay_freezes_typed_correlated_sections() {
         requested_at_utc: "2026-07-15T12:00:00Z".to_string(),
         device_match: graph_section(
             GraphSectionStatus::Available,
+            "DeviceManagementManagedDevices.Read.All",
             GraphApiVersion::V1_0,
             Some(EspGraphDeviceMatch {
                 selected: Some(managed_device.clone()),
@@ -672,18 +674,21 @@ fn models_graph_overlay_freezes_typed_correlated_sections() {
         ),
         autopilot_identity: graph_section(
             GraphSectionStatus::NotFound,
+            "DeviceManagementServiceConfig.Read.All",
             GraphApiVersion::V1_0,
             None,
             None,
         ),
         deployment_profile: graph_section(
             GraphSectionStatus::PermissionDenied,
+            "DeviceManagementServiceConfig.Read.All",
             GraphApiVersion::Beta,
             None,
             Some(graph_error("permissionDenied")),
         ),
         intended_deployment_profile: graph_section(
             GraphSectionStatus::Available,
+            "DeviceManagementServiceConfig.Read.All",
             GraphApiVersion::Beta,
             Some(EspGraphDeploymentProfile {
                 profile_id: "intended-profile-1".to_string(),
@@ -696,13 +701,15 @@ fn models_graph_overlay_freezes_typed_correlated_sections() {
         ),
         profile_assignments: graph_section(
             GraphSectionStatus::Failed,
+            "DeviceManagementServiceConfig.Read.All",
             GraphApiVersion::Beta,
             None,
             Some(graph_error("transportFailure")),
         ),
         autopilot_events: graph_section(
             GraphSectionStatus::Skipped,
-            GraphApiVersion::NotRequested,
+            "DeviceManagementManagedDevices.Read.All",
+            GraphApiVersion::Beta,
             None,
             Some(GraphSectionError {
                 blocked_by: Some("deviceMatch".to_string()),
@@ -711,12 +718,14 @@ fn models_graph_overlay_freezes_typed_correlated_sections() {
         ),
         enrollment_configuration: graph_section(
             GraphSectionStatus::Cancelled,
+            "DeviceManagementServiceConfig.Read.All",
             GraphApiVersion::V1_0,
             None,
             Some(graph_error("cancelled")),
         ),
         apps: graph_section(
             GraphSectionStatus::Available,
+            "DeviceManagementApps.Read.All",
             GraphApiVersion::V1_0,
             Some(vec![EspGraphAppRecord {
                 app_id: "app-1".to_string(),
@@ -733,6 +742,7 @@ fn models_graph_overlay_freezes_typed_correlated_sections() {
         ),
         policies: graph_section(
             GraphSectionStatus::Available,
+            "DeviceManagementConfiguration.Read.All",
             GraphApiVersion::V1_0,
             Some(vec![EspGraphPolicyRecord {
                 policy_id: "policy-1".to_string(),
@@ -746,6 +756,7 @@ fn models_graph_overlay_freezes_typed_correlated_sections() {
         ),
         scripts: graph_section(
             GraphSectionStatus::Available,
+            "DeviceManagementScripts.Read.All",
             GraphApiVersion::Beta,
             Some(vec![EspGraphScriptRecord {
                 script_id: "script-1".to_string(),
@@ -779,6 +790,38 @@ fn models_graph_overlay_freezes_typed_correlated_sections() {
     assert_eq!(
         value["profileAssignments"]["error"]["requestId"],
         "request-1"
+    );
+    assert_eq!(
+        value["deviceMatch"]["requiredScope"],
+        "DeviceManagementManagedDevices.Read.All"
+    );
+    for section in [
+        "autopilotIdentity",
+        "deploymentProfile",
+        "intendedDeploymentProfile",
+        "profileAssignments",
+        "enrollmentConfiguration",
+    ] {
+        assert_eq!(
+            value[section]["requiredScope"], "DeviceManagementServiceConfig.Read.All",
+            "wrong scope for {section}"
+        );
+    }
+    assert_eq!(
+        value["autopilotEvents"]["requiredScope"],
+        "DeviceManagementManagedDevices.Read.All"
+    );
+    assert_eq!(
+        value["apps"]["requiredScope"],
+        "DeviceManagementApps.Read.All"
+    );
+    assert_eq!(
+        value["policies"]["requiredScope"],
+        "DeviceManagementConfiguration.Read.All"
+    );
+    assert_eq!(
+        value["scripts"]["requiredScope"],
+        "DeviceManagementScripts.Read.All"
     );
 }
 
