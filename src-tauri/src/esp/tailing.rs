@@ -52,8 +52,18 @@ pub struct EspTailUpdate {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EspTailFailure {
     pub path: PathBuf,
+    pub source_id: Option<String>,
+    pub family: Option<String>,
     pub kind: DiscoveryPathFailureKind,
     pub detail: String,
+}
+
+impl EspTailFailure {
+    fn with_source(mut self, source: &DiscoveredLogSource) -> Self {
+        self.source_id = Some(source.source_id.clone());
+        self.family = Some(source.family.clone());
+        self
+    }
 }
 
 #[derive(Debug, Default)]
@@ -175,7 +185,7 @@ impl EspTailSet {
                 result.source_limit_reached = true;
                 continue;
             }
-            match read_initial(&source.path) {
+            match read_initial(&source.path).map_err(|failure| failure.with_source(&source)) {
                 Ok(initial) => {
                     let next_id = next_entry_id(&initial.entries);
                     let attachment = attachment_from_initial(source.clone(), &initial, None);
@@ -200,7 +210,8 @@ impl EspTailSet {
             let Some(tail) = self.tails.get_mut(&key) else {
                 continue;
             };
-            let outcome = tail.poll();
+            let source = tail.source.clone();
+            let outcome = tail.poll().map_err(|failure| failure.with_source(&source));
             let next_id = tail.next_id;
             if let Some(attached) = self.attached_sources.get_mut(&key) {
                 attached.next_id = attached.next_id.max(next_id);
@@ -282,6 +293,8 @@ impl EspTailSet {
             if let Some(tail) = self.tails.remove(&key) {
                 result.failures.push(EspTailFailure {
                     path: tail.source.path.clone(),
+                    source_id: Some(tail.source.source_id.clone()),
+                    family: Some(tail.source.family.clone()),
                     kind: DiscoveryPathFailureKind::ResourceLimit,
                     detail: format!(
                         "dormant tail cursor exceeded the bounded {MAX_DORMANT_TAIL_CURSORS}-cursor cache; reattachment retains only the final {MAX_INITIAL_READ_BYTES} bytes, so older bytes written while dormant may be omitted"
@@ -359,7 +372,7 @@ struct ActiveTail {
 
 impl ActiveTail {
     fn attach(source: DiscoveredLogSource) -> Result<(Self, EspTailAttachment), EspTailFailure> {
-        let initial = read_initial(&source.path)?;
+        let initial = read_initial(&source.path).map_err(|failure| failure.with_source(&source))?;
         let attachment = attachment_from_initial(source.clone(), &initial, None);
         let next_id = next_entry_id(&initial.entries);
         let next_line = initial
@@ -388,7 +401,7 @@ impl ActiveTail {
         source: DiscoveredLogSource,
         previous_next_id: u64,
     ) -> Result<(Self, EspTailAttachment), EspTailFailure> {
-        let initial = read_initial(&source.path)?;
+        let initial = read_initial(&source.path).map_err(|failure| failure.with_source(&source))?;
         let mut entries = initial.entries.clone();
         let mut next_id = previous_next_id;
         let mut next_line = 1;
@@ -450,6 +463,8 @@ impl ActiveTail {
             self.pending_bytes.clear();
             return Err(EspTailFailure {
                 path: self.source.path.clone(),
+                source_id: Some(self.source.source_id.clone()),
+                family: Some(self.source.family.clone()),
                 kind: DiscoveryPathFailureKind::ResourceLimit,
                 detail: format!(
                     "pending record exceeded the {MAX_INITIAL_READ_BYTES}-byte tail limit"
@@ -770,6 +785,8 @@ fn complete_unmatched_tail_len(text: &str) -> usize {
 fn open_tail_file(path: &Path) -> Result<File, EspTailFailure> {
     open_verified_regular_file(path).map_err(|failure| EspTailFailure {
         path: path.to_path_buf(),
+        source_id: None,
+        family: None,
         kind: failure.kind,
         detail: format!("open verified tail failed: {}", failure.detail),
     })
@@ -835,6 +852,8 @@ fn tail_failure(path: &Path, operation: &str, error: std::io::Error) -> EspTailF
     };
     EspTailFailure {
         path: path.to_path_buf(),
+        source_id: None,
+        family: None,
         kind,
         detail: format!("{operation} failed: {error}"),
     }

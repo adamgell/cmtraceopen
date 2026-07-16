@@ -21,11 +21,12 @@ use app_lib::esp::bundle::{
 use app_lib::esp::discovery::default_known_source_specs;
 use app_lib::esp::discovery::{
     build_runtime_temp_roots, discover_bounded_logs, embedded_known_source_specs,
-    DiscoveredLogSource, DiscoveryInput, DiscoveryPathFailureKind, DiscoveryRootKind,
-    DiscoveryRootState, DiscoverySourceOrigin, KnownSourceSpec, DISCOVERY_INTERVAL,
-    MAX_ACTIVE_TAILS, MAX_INITIAL_READ_BYTES, MAX_KNOWN_ENTRIES_PROBED_PER_ROOT,
-    MAX_ROTATIONS_PER_KNOWN_LOG, MAX_SESSION_DURATION, MAX_TEMP_ENTRIES_INSPECTED_PER_ROOT,
-    MAX_TEMP_ENTRIES_PROBED_PER_ROOT, TEMP_LOOKBACK, UPDATE_DEBOUNCE,
+    DiscoveredLogSource, DiscoveryInput, DiscoveryPathFailure, DiscoveryPathFailureKind,
+    DiscoveryResult, DiscoveryRootKind, DiscoveryRootState, DiscoverySourceOrigin,
+    KnownSourceSpec, DISCOVERY_INTERVAL, MAX_ACTIVE_TAILS, MAX_INITIAL_READ_BYTES,
+    MAX_KNOWN_ENTRIES_PROBED_PER_ROOT, MAX_ROTATIONS_PER_KNOWN_LOG, MAX_SESSION_DURATION,
+    MAX_TEMP_ENTRIES_INSPECTED_PER_ROOT, MAX_TEMP_ENTRIES_PROBED_PER_ROOT, TEMP_LOOKBACK,
+    UPDATE_DEBOUNCE,
 };
 use app_lib::esp::event_logs::{
     collect_event_evidence, required_event_id_xpath, EventLogProvider, EventSourceError,
@@ -49,8 +50,8 @@ use app_lib::esp::session::{
 };
 use app_lib::esp::system::{delivery_optimization_from_rows, SystemEvidence, SystemRow};
 use app_lib::esp::tailing::{
-    EspTailResetReason, EspTailSet, MAX_DORMANT_TAIL_CURSORS, MAX_SESSION_TAIL_SOURCES,
-    WINDOWS_SHARED_READ_WRITE_DELETE,
+    EspTailAttachment, EspTailFailure, EspTailReconcileResult, EspTailResetReason, EspTailSet,
+    MAX_DORMANT_TAIL_CURSORS, MAX_SESSION_TAIL_SOURCES, WINDOWS_SHARED_READ_WRITE_DELETE,
 };
 use app_lib::intune::evtx_parser::{
     parse_esp_event_xml, EventLogProperty, ParsedEspEventRecord, MAX_ESP_EVTX_RECORD_BYTES,
@@ -4479,6 +4480,138 @@ fn live_session_adapters_preserve_native_records_coverage_and_tail_reset_identit
     let reset_batch = tail_poll_to_batch(tails.poll(), observed_at_utc);
     assert_eq!(reset_batch.replace_artifact_ids, vec![artifact_id]);
     assert_eq!(reset_batch.records.len(), 1);
+}
+
+#[test]
+fn live_session_adapters_preserve_bounded_path_reset_eviction_and_family_semantics() {
+    let observed_at_utc = "2026-07-16T06:30:00Z";
+    let rejected_path = PathBuf::from("/captured/limited/AppWorkload.log");
+    let discovery_batch = discovery_result_to_batch(
+        DiscoveryResult {
+            path_failures: vec![DiscoveryPathFailure {
+                path: rejected_path.clone(),
+                source_id: Some("ime-current".to_string()),
+                origin: DiscoverySourceOrigin::CuratedKnown,
+                kind: DiscoveryPathFailureKind::ResourceLimit,
+                detail: "bounded discovery omitted older matching evidence".to_string(),
+            }],
+            path_failures_truncated: true,
+            ..DiscoveryResult::default()
+        },
+        observed_at_utc,
+    );
+    assert!(discovery_batch.coverage.iter().any(|coverage| {
+        coverage.artifact_id.contains("ime-current")
+            && coverage.status == EspArtifactStatus::ParseFailed
+            && coverage
+                .detail
+                .as_deref()
+                .is_some_and(|detail| detail.contains("bounded") && detail.contains("partial"))
+    }));
+    assert!(discovery_batch.coverage.iter().any(|coverage| {
+        coverage.artifact_id == "discovery.path-failure-limit"
+            && coverage.status == EspArtifactStatus::ParseFailed
+    }));
+
+    let reset_source = DiscoveredLogSource {
+        path: rejected_path.clone(),
+        source_id: "ime-current".to_string(),
+        family: "intune-ime".to_string(),
+        origin: DiscoverySourceOrigin::CuratedKnown,
+        priority: 0,
+        is_current: true,
+        modified: None,
+    };
+    let evicted_source = DiscoveredLogSource {
+        path: PathBuf::from("/captured/limited/execmgr.log"),
+        source_id: "configmgr-execmgr".to_string(),
+        family: "configmgr".to_string(),
+        origin: DiscoverySourceOrigin::CuratedKnown,
+        priority: 1,
+        is_current: true,
+        modified: None,
+    };
+    let tail_batch = tail_reconcile_to_batch(
+        EspTailReconcileResult {
+            attachments: vec![EspTailAttachment {
+                source: reset_source.clone(),
+                start_offset: 0,
+                end_offset: 0,
+                entries: Vec::new(),
+                reset_reason: Some(EspTailResetReason::Reattached),
+            }],
+            failures: vec![EspTailFailure {
+                path: rejected_path,
+                source_id: Some("ime-current".to_string()),
+                family: Some("intune-ime".to_string()),
+                kind: DiscoveryPathFailureKind::ResourceLimit,
+                detail: "dormant cursor eviction made retained evidence partial".to_string(),
+            }],
+            evicted_sources: vec![evicted_source],
+            source_limit_reached: true,
+        },
+        observed_at_utc,
+    );
+    let reset_artifact_id = tail_batch
+        .coverage
+        .iter()
+        .find(|coverage| {
+            coverage.family == "intune-ime"
+                && coverage.status == EspArtifactStatus::Available
+        })
+        .expect("reset source coverage")
+        .artifact_id
+        .clone();
+    assert!(tail_batch
+        .replace_artifact_ids
+        .iter()
+        .any(|artifact_id| artifact_id == &reset_artifact_id));
+    assert!(tail_batch.coverage.iter().any(|coverage| {
+        coverage.family == "intune-ime"
+            && coverage.status == EspArtifactStatus::ParseFailed
+            && coverage
+                .detail
+                .as_deref()
+                .is_some_and(|detail| detail.contains("partial"))
+    }));
+    assert!(tail_batch.coverage.iter().any(|coverage| {
+        coverage.family == "configmgr"
+            && coverage.status == EspArtifactStatus::ParseFailed
+            && coverage
+                .detail
+                .as_deref()
+                .is_some_and(|detail| detail.contains("evicted"))
+    }));
+    assert!(tail_batch.replace_artifact_ids.len() >= 2);
+}
+
+#[test]
+fn tail_failure_coverage_keeps_the_failed_sources_identity_and_family() {
+    let observed_at_utc = "2026-07-16T06:30:00Z";
+    let root = tempdir().expect("tail failure root");
+    let canonical_root = fs::canonicalize(root.path()).expect("canonical tail failure root");
+    let source = DiscoveredLogSource {
+        path: canonical_root.join("missing-execmgr.log"),
+        source_id: "configmgr-execmgr".to_string(),
+        family: "configmgr".to_string(),
+        origin: DiscoverySourceOrigin::CuratedKnown,
+        priority: 0,
+        is_current: true,
+        modified: None,
+    };
+    let mut tails = EspTailSet::new();
+
+    let batch = tail_reconcile_to_batch(tails.reconcile(&[source]), observed_at_utc);
+
+    assert!(
+        batch.coverage.iter().any(|coverage| {
+            coverage.artifact_id.contains("configmgr-execmgr")
+                && coverage.family == "configmgr"
+                && coverage.status == EspArtifactStatus::Missing
+        }),
+        "tail failure coverage: {:#?}",
+        batch.coverage
+    );
 }
 
 #[test]

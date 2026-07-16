@@ -21,8 +21,8 @@ use sha2::{Digest, Sha256};
 use crate::models::log_entry::LogEntry;
 
 use super::discovery::{
-    discover_bounded_logs, runtime_discovery_input, DiscoveryResult, DiscoveryRootKind,
-    DiscoveryRootState,
+    discover_bounded_logs, runtime_discovery_input, DiscoveredLogSource, DiscoveryPathFailureKind,
+    DiscoveryResult, DiscoveryRootKind, DiscoveryRootState, DiscoverySourceOrigin,
 };
 use super::event_logs::{collect_live_event_evidence, EventEvidence, EventSourceError};
 use super::process::{collect_process_evidence, LiveProcessProvider, ProcessEvidence};
@@ -368,7 +368,7 @@ pub fn discovery_result_to_batch(
     result: DiscoveryResult,
     observed_at_utc: &str,
 ) -> EspDiscoveryBatch {
-    let coverage = result
+    let mut coverage = result
         .root_coverage
         .into_iter()
         .enumerate()
@@ -390,7 +390,35 @@ pub fn discovery_result_to_batch(
                 observed_at_utc,
             )
         })
-        .collect();
+        .collect::<Vec<_>>();
+    coverage.extend(result.path_failures.into_iter().map(|failure| {
+        let identity = failure
+            .source_id
+            .as_deref()
+            .unwrap_or("unidentified-source");
+        let mut detail = failure.detail;
+        if failure.kind == DiscoveryPathFailureKind::ResourceLimit
+            && !detail.to_ascii_lowercase().contains("partial")
+        {
+            detail = format!("bounded discovery evidence is partial: {detail}");
+        }
+        artifact_coverage(
+            log_artifact_id(identity, &failure.path),
+            discovery_failure_family(failure.origin),
+            status_for_path_failure(failure.kind),
+            Some(detail),
+            observed_at_utc,
+        )
+    }));
+    if result.path_failures_truncated {
+        coverage.push(artifact_coverage(
+            "discovery.path-failure-limit",
+            "discovery",
+            EspArtifactStatus::ParseFailed,
+            Some("bounded discovery path-failure coverage is partial".to_string()),
+            observed_at_utc,
+        ));
+    }
     EspDiscoveryBatch {
         sources: result.sources,
         coverage,
@@ -402,8 +430,21 @@ pub fn tail_reconcile_to_batch(
     observed_at_utc: &str,
 ) -> EspTailEvidenceBatch {
     let mut batch = EspTailEvidenceBatch::default();
+    let mut sources_by_path = BTreeMap::<String, DiscoveredLogSource>::new();
+    for attachment in &result.attachments {
+        sources_by_path.insert(
+            portable_path_identity(&attachment.source.path),
+            attachment.source.clone(),
+        );
+    }
+    for source in &result.evicted_sources {
+        sources_by_path.insert(portable_path_identity(&source.path), source.clone());
+    }
     for attachment in result.attachments {
         let artifact_id = log_artifact_id(&attachment.source.source_id, &attachment.source.path);
+        if attachment.reset_reason.is_some() {
+            batch.replace_artifact_ids.push(artifact_id.clone());
+        }
         batch.coverage.push(artifact_coverage(
             artifact_id,
             attachment.source.family.clone(),
@@ -419,7 +460,23 @@ pub fn tail_reconcile_to_batch(
             observed_at_utc,
         ));
     }
-    append_tail_failures(&mut batch, result.failures, observed_at_utc);
+    for source in result.evicted_sources {
+        let artifact_id = log_artifact_id(&source.source_id, &source.path);
+        batch.replace_artifact_ids.push(artifact_id.clone());
+        batch.coverage.push(artifact_coverage(
+            artifact_id,
+            source.family,
+            EspArtifactStatus::ParseFailed,
+            Some("tail source was evicted by the bounded session attachment policy".to_string()),
+            observed_at_utc,
+        ));
+    }
+    append_tail_failures(
+        &mut batch,
+        result.failures,
+        &sources_by_path,
+        observed_at_utc,
+    );
     if result.source_limit_reached {
         batch.coverage.push(artifact_coverage(
             "tail.session-source-limit",
@@ -440,7 +497,20 @@ pub fn tail_poll_to_batch(
     observed_at_utc: &str,
 ) -> EspTailEvidenceBatch {
     let mut batch = EspTailEvidenceBatch::default();
+    let mut sources_by_path = BTreeMap::<String, DiscoveredLogSource>::new();
     for update in result.updates {
+        sources_by_path.insert(
+            portable_path_identity(&update.path),
+            DiscoveredLogSource {
+                path: update.path.clone(),
+                source_id: update.source_id.clone(),
+                family: update.family.clone(),
+                origin: DiscoverySourceOrigin::CuratedKnown,
+                priority: 0,
+                is_current: true,
+                modified: None,
+            },
+        );
         let artifact_id = log_artifact_id(&update.source_id, &update.path);
         if update.reset_reason.is_some() {
             batch.replace_artifact_ids.push(artifact_id);
@@ -453,7 +523,12 @@ pub fn tail_poll_to_batch(
             observed_at_utc,
         ));
     }
-    append_tail_failures(&mut batch, result.failures, observed_at_utc);
+    append_tail_failures(
+        &mut batch,
+        result.failures,
+        &sources_by_path,
+        observed_at_utc,
+    );
     batch.changed = !batch.records.is_empty()
         || !batch.coverage.is_empty()
         || !batch.replace_artifact_ids.is_empty();
@@ -463,17 +538,67 @@ pub fn tail_poll_to_batch(
 fn append_tail_failures(
     batch: &mut EspTailEvidenceBatch,
     failures: Vec<EspTailFailure>,
+    sources_by_path: &BTreeMap<String, DiscoveredLogSource>,
     observed_at_utc: &str,
 ) {
     batch.coverage.extend(failures.into_iter().map(|failure| {
+        let source = sources_by_path.get(&portable_path_identity(&failure.path));
+        let source_id = failure
+            .source_id
+            .as_deref()
+            .or_else(|| source.map(|source| source.source_id.as_str()))
+            .unwrap_or("tail-failure");
+        let family = failure
+            .family
+            .as_deref()
+            .or_else(|| source.map(|source| source.family.as_str()))
+            .unwrap_or("deployment-log");
+        let mut detail = failure.detail;
+        if failure.kind == DiscoveryPathFailureKind::ResourceLimit
+            && !detail.to_ascii_lowercase().contains("partial")
+        {
+            detail = format!("bounded tail evidence is partial: {detail}");
+        }
         artifact_coverage(
-            log_artifact_id("tail-failure", &failure.path),
-            "deployment-log",
-            EspArtifactStatus::ParseFailed,
-            Some(failure.detail),
+            log_artifact_id(source_id, &failure.path),
+            family,
+            status_for_path_failure(failure.kind),
+            Some(detail),
             observed_at_utc,
         )
     }));
+}
+
+fn portable_path_identity(path: &Path) -> String {
+    let identity = path.to_string_lossy().replace('\\', "/");
+    if cfg!(target_os = "windows") {
+        identity.to_ascii_lowercase()
+    } else {
+        identity
+    }
+}
+
+fn discovery_failure_family(origin: DiscoverySourceOrigin) -> &'static str {
+    match origin {
+        DiscoverySourceOrigin::EmbeddedKnown | DiscoverySourceOrigin::CuratedKnown => {
+            "discovery-known"
+        }
+        DiscoverySourceOrigin::Temp => "discovery-temp",
+        DiscoverySourceOrigin::ActiveProcess => "discovery-process",
+    }
+}
+
+fn status_for_path_failure(kind: DiscoveryPathFailureKind) -> EspArtifactStatus {
+    match kind {
+        DiscoveryPathFailureKind::Missing => EspArtifactStatus::Missing,
+        DiscoveryPathFailureKind::PermissionDenied => EspArtifactStatus::PermissionDenied,
+        DiscoveryPathFailureKind::ReparseRejected
+        | DiscoveryPathFailureKind::OutsideAllowedRoot
+        | DiscoveryPathFailureKind::NotRegularFile => EspArtifactStatus::Unsupported,
+        DiscoveryPathFailureKind::ResourceLimit | DiscoveryPathFailureKind::Failed => {
+            EspArtifactStatus::ParseFailed
+        }
+    }
 }
 
 pub(crate) fn log_entries_to_records(
