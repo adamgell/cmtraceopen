@@ -343,6 +343,9 @@ pub enum EspSystemFact {
     SerialNumber(String),
     TpmVersion(String),
     Hostname(String),
+    EntraDeviceId(String),
+    TenantId(String),
+    JoinMode(EspJoinMode),
     Elevation(EspElevationState),
 }
 

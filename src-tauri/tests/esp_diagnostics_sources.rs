@@ -6229,6 +6229,57 @@ fn bundle_drops_hardware_hash_records_from_any_captured_log_before_reduction() {
 }
 
 #[test]
+fn bundle_dsregcmd_status_populates_captured_identity_and_join_facts() {
+    let bundle = tempfile::tempdir().expect("bundle tempdir");
+    let output = bundle.path().join("evidence/command-output");
+    std::fs::create_dir_all(&output).expect("create command output folder");
+    std::fs::write(
+        output.join("dsregcmd-status.txt"),
+        concat!(
+            "+----------------------------------------------------------------------+\n",
+            "| Device State                                                         |\n",
+            "+----------------------------------------------------------------------+\n",
+            "             AzureAdJoined : YES\n",
+            "          EnterpriseJoined : NO\n",
+            "              DomainJoined : YES\n",
+            "                Device Name : CAPTURED-DEVICE\n",
+            "                   DeviceId : 11111111-2222-4333-8444-555555555555\n",
+            "                   TenantId : aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee\n",
+        ),
+    )
+    .expect("write dsregcmd fixture");
+    write_bundle_manifest(
+        bundle.path(),
+        serde_json::json!([{
+            "artifactId": "dsregcmd-status",
+            "category": "command-output",
+            "family": "diagnostic-command",
+            "relativePath": "evidence/command-output/dsregcmd-status.txt",
+            "status": "collected"
+        }]),
+    );
+
+    let snapshot =
+        analyze_captured_evidence_at(bundle.path(), BUNDLE_REQUEST_ID, BUNDLE_OBSERVED_AT)
+            .expect("analyze captured dsregcmd status");
+    let value = serde_json::to_value(&snapshot).expect("serialize captured snapshot");
+
+    assert_eq!(value["identity"]["deviceName"], "CAPTURED-DEVICE");
+    assert_eq!(
+        value["identity"]["entraDeviceId"],
+        "11111111-2222-4333-8444-555555555555"
+    );
+    assert_eq!(
+        value["identity"]["tenantId"]["value"],
+        "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+    );
+    assert_eq!(value["profile"]["joinMode"], "hybridEntra");
+    assert!(snapshot.identity.evidence.iter().all(|evidence| {
+        evidence.source_artifact_id.starts_with("bundle:dsregcmd-status:")
+    }));
+}
+
+#[test]
 fn bundle_analyzes_manifest_first_zip_inputs_through_scoped_extraction() {
     let source = tempfile::tempdir().expect("archive source tempdir");
     let archive = source.path().join("captured.zip");

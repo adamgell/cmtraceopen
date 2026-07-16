@@ -12,9 +12,9 @@ use chrono::{SecondsFormat, Utc};
 use cmtraceopen_parser::esp::{
     EspArtifactCoverage, EspArtifactStatus, EspDiagnosticsReducer, EspDiagnosticsSnapshot,
     EspEvidenceProvenance, EspEvidenceRecord, EspEvidenceRef, EspJsonObservation,
-    EspObservationContext, EspObservationValue, EspParseState, EspRegistryObservation,
-    EspRegistryProvenance, EspSensitivity, EspSourceAccessState, EspSourceKind, EspSystemFact,
-    EspSystemObservation,
+    EspJoinMode, EspObservationContext, EspObservationValue, EspParseState,
+    EspRegistryObservation, EspRegistryProvenance, EspSensitivity, EspSourceAccessState,
+    EspSourceKind, EspSystemFact, EspSystemObservation,
 };
 use cmtraceopen_parser::parser::registry::{RegistryParseResult, RegistryValue, RegistryValueKind};
 use serde::Serialize;
@@ -907,13 +907,19 @@ fn parse_log_artifact(path: &Path, artifact: &BundleArtifact) -> ArtifactParseOu
                     .map(|serialized| !contains_hardware_hash(&serialized))
                     .unwrap_or(false)
             });
-            let records = log_entries_to_records(
+            let source_artifact_id = source_artifact_id(artifact);
+            let mut records = dsregcmd_system_records(
+                &result.entries,
+                artifact,
+                &source_artifact_id,
+            );
+            records.extend(log_entries_to_records(
                 Path::new(&artifact.relative_path),
-                &source_artifact_id(artifact),
+                &source_artifact_id,
                 &artifact.family,
                 result.entries,
                 &artifact.observed_at_utc,
-            );
+            ));
             ArtifactParseOutcome {
                 records,
                 coverage: Vec::new(),
@@ -938,6 +944,90 @@ fn parse_log_artifact(path: &Path, artifact: &BundleArtifact) -> ArtifactParseOu
         }
         Err(error) => ArtifactParseOutcome::failed(error),
     }
+}
+
+fn dsregcmd_system_records(
+    entries: &[crate::models::log_entry::LogEntry],
+    artifact: &BundleArtifact,
+    source_artifact_id: &str,
+) -> Vec<EspEvidenceRecord> {
+    if !semantic_identity(artifact).contains("dsregcmd-status") {
+        return Vec::new();
+    }
+    let mut values = BTreeMap::new();
+    for entry in entries {
+        let Some((name, value)) = entry.message.split_once(':') else {
+            continue;
+        };
+        let name = normalize_semantic(name);
+        let value = value.trim();
+        if !value.is_empty() {
+            values.entry(name).or_insert_with(|| value.to_string());
+        }
+    }
+
+    let mut facts = Vec::<(EspSystemFact, EspSensitivity)>::new();
+    if let Some(value) = values.get("devicename") {
+        facts.push((EspSystemFact::Hostname(value.clone()), EspSensitivity::Public));
+    }
+    if let Some(value) = values.get("deviceid") {
+        facts.push((
+            EspSystemFact::EntraDeviceId(value.clone()),
+            EspSensitivity::Public,
+        ));
+    }
+    if let Some(value) = values.get("tenantid") {
+        facts.push((
+            EspSystemFact::TenantId(value.clone()),
+            EspSensitivity::Sensitive,
+        ));
+    }
+    let azure_ad_joined = values
+        .get("azureadjoined")
+        .is_some_and(|value| value.eq_ignore_ascii_case("yes"));
+    let domain_joined = values
+        .get("domainjoined")
+        .is_some_and(|value| value.eq_ignore_ascii_case("yes"));
+    if azure_ad_joined {
+        facts.push((
+            EspSystemFact::JoinMode(if domain_joined {
+                EspJoinMode::HybridEntra
+            } else {
+                EspJoinMode::Entra
+            }),
+            EspSensitivity::Public,
+        ));
+    }
+
+    facts
+        .into_iter()
+        .enumerate()
+        .map(|(index, (fact, sensitivity))| {
+            EspEvidenceRecord::System(EspSystemObservation {
+                context: EspObservationContext {
+                    evidence_ref: EspEvidenceRef {
+                        evidence_id: format!("{source_artifact_id}:dsregcmd:{index}"),
+                        source_artifact_id: source_artifact_id.to_string(),
+                    },
+                    provenance: EspEvidenceProvenance {
+                        source_kind: EspSourceKind::System,
+                        source_artifact_id: source_artifact_id.to_string(),
+                        file_path: Some(artifact.relative_path.clone()),
+                        line_number: None,
+                        record_number: Some(index as u64),
+                        registry: None,
+                        event: None,
+                    },
+                    source_timestamp: None,
+                    observed_at_utc: artifact.observed_at_utc.clone(),
+                    sensitivity,
+                    parse_state: EspParseState::Parsed,
+                    access_state: EspSourceAccessState::Available,
+                },
+                fact,
+            })
+        })
+        .collect()
 }
 
 #[allow(clippy::too_many_arguments)]

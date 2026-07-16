@@ -627,6 +627,22 @@ impl SnapshotProjection {
                     .evidence
                     .push(observation.context.evidence_ref.clone());
             }
+            EspSystemFact::EntraDeviceId(value) => {
+                self.identity.entra_device_id = Some(value.clone());
+                self.identity
+                    .evidence
+                    .push(observation.context.evidence_ref.clone());
+            }
+            EspSystemFact::TenantId(value) => {
+                let classified = sensitive_string(value.clone());
+                self.identity.tenant_id = Some(classified.clone());
+                self.ensure_profile().tenant_id = Some(classified);
+                self.add_identity_and_profile_evidence(&observation.context.evidence_ref);
+            }
+            EspSystemFact::JoinMode(value) => {
+                self.ensure_profile().join_mode = Some(value.clone());
+                self.add_profile_evidence(&observation.context.evidence_ref);
+            }
             EspSystemFact::OsVersion(value) => {
                 self.ensure_hardware().os_version = Some(value.clone())
             }
@@ -3277,7 +3293,14 @@ fn system_fact_value(fact: &EspSystemFact) -> EspObservationValue {
         | EspSystemFact::Model(value)
         | EspSystemFact::SerialNumber(value)
         | EspSystemFact::TpmVersion(value)
-        | EspSystemFact::Hostname(value) => EspObservationValue::Text(value.clone()),
+        | EspSystemFact::Hostname(value)
+        | EspSystemFact::EntraDeviceId(value)
+        | EspSystemFact::TenantId(value) => EspObservationValue::Text(value.clone()),
+        EspSystemFact::JoinMode(value) => EspObservationValue::Text(match value {
+            EspJoinMode::Entra => "entra".to_string(),
+            EspJoinMode::HybridEntra => "hybridEntra".to_string(),
+            EspJoinMode::Unknown(value) => value.clone(),
+        }),
         EspSystemFact::Elevation(value) => EspObservationValue::Boolean(value.is_elevated),
     }
 }
