@@ -3720,6 +3720,234 @@ describe("ESP Graph scheduling", () => {
     }
   });
 
+  it("keeps a replacement with a reused request ID owned after the older fetch settles", async () => {
+    const olderOverlay = deferred<EspGraphOverlay>();
+    const newerOverlay = deferred<EspGraphOverlay>();
+    const fetchGraph = vi
+      .fn<(request: EspGraphRequest) => Promise<EspGraphOverlay>>()
+      .mockImplementationOnce(() => olderOverlay.promise)
+      .mockImplementationOnce(() => newerOverlay.promise);
+    const cancelGraph = vi.fn(async () => undefined);
+    const coordinator = createEspGraphCoordinator({
+      fetchGraph,
+      cancelGraph,
+      createRequestId: () => "graph-reused",
+    });
+    useUiStore.setState({ graphApiEnabled: true, graphApiStatus: "connected" });
+    useEspDiagnosticsStore.setState({
+      phase: "ready",
+      snapshot: makeSnapshot(["local-reused"]),
+    });
+
+    const olderRun = coordinator.refresh();
+    const newerRun = coordinator.refresh();
+    await vi.waitFor(() => expect(fetchGraph).toHaveBeenCalledTimes(2));
+
+    try {
+      expect(cancelGraph).toHaveBeenCalledTimes(1);
+      expect(cancelGraph).toHaveBeenLastCalledWith("graph-reused");
+
+      olderOverlay.resolve(makeOverlay("graph-reused"));
+      await olderRun;
+      await coordinator.cancel();
+
+      expect(cancelGraph).toHaveBeenCalledTimes(2);
+      expect(cancelGraph).toHaveBeenLastCalledWith("graph-reused");
+      expect(useEspDiagnosticsStore.getState().graphPhase).toBe("cancelled");
+    } finally {
+      newerOverlay.resolve(makeOverlay("graph-reused"));
+      await newerRun;
+      coordinator.dispose();
+    }
+  });
+
+  it("cancels each coordinator's hidden private request when analysis resets", async () => {
+    const firstOverlay = deferred<EspGraphOverlay>();
+    const secondOverlay = deferred<EspGraphOverlay>();
+    const firstCancelGraph = vi.fn(async () => undefined);
+    const secondCancelGraph = vi.fn(async () => undefined);
+    const firstCoordinator = createEspGraphCoordinator({
+      fetchGraph: vi.fn(() => firstOverlay.promise),
+      cancelGraph: firstCancelGraph,
+      createRequestId: () => "graph-first-private",
+    });
+    const secondCoordinator = createEspGraphCoordinator({
+      fetchGraph: vi.fn(() => secondOverlay.promise),
+      cancelGraph: secondCancelGraph,
+      createRequestId: () => "graph-second-visible",
+    });
+    useUiStore.setState({ graphApiEnabled: true, graphApiStatus: "connected" });
+    useEspDiagnosticsStore.setState({
+      phase: "ready",
+      snapshot: makeSnapshot(["local-overlap"]),
+    });
+
+    const firstRun = firstCoordinator.refresh();
+    const secondRun = secondCoordinator.refresh();
+    firstCoordinator.start();
+    secondCoordinator.start();
+    expect(useEspDiagnosticsStore.getState().graphRequestId).toBe(
+      "graph-second-visible",
+    );
+
+    try {
+      useEspDiagnosticsStore.getState().beginAnalysis("analysis-replacement");
+      await vi.waitFor(() => expect(firstCancelGraph).toHaveBeenCalledOnce());
+      await vi.waitFor(() => expect(secondCancelGraph).toHaveBeenCalledOnce());
+
+      expect(firstCancelGraph).toHaveBeenCalledWith("graph-first-private");
+      expect(secondCancelGraph).toHaveBeenCalledWith("graph-second-visible");
+    } finally {
+      firstOverlay.resolve(makeOverlay("graph-first-private"));
+      secondOverlay.resolve(makeOverlay("graph-second-visible"));
+      await Promise.all([firstRun, secondRun]);
+      firstCoordinator.dispose();
+      secondCoordinator.dispose();
+    }
+  });
+
+  it("contains a synchronous native cancellation failure during dispose", async () => {
+    const pending = deferred<EspGraphOverlay>();
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const cancelGraph = vi.fn<() => Promise<void>>(() => {
+      throw new Error("Synchronous native cancellation failure");
+    });
+    const coordinator = createEspGraphCoordinator({
+      fetchGraph: vi.fn(() => pending.promise),
+      cancelGraph,
+      createRequestId: () => "graph-sync-dispose",
+    });
+    useUiStore.setState({ graphApiEnabled: true, graphApiStatus: "connected" });
+    useEspDiagnosticsStore.setState({
+      phase: "ready",
+      snapshot: makeSnapshot(["local-sync-dispose"]),
+    });
+    const active = coordinator.refresh();
+
+    try {
+      expect(() => coordinator.dispose()).not.toThrow();
+      await vi.waitFor(() =>
+        expect(useEspDiagnosticsStore.getState().graphPhase).toBe("cancelled"),
+      );
+      expect(cancelGraph).toHaveBeenCalledOnce();
+      expect(warning).toHaveBeenCalledWith(
+        "[esp-diagnostics] native Graph cancellation failed",
+        { requestId: "graph-sync-dispose" },
+      );
+    } finally {
+      pending.resolve(makeOverlay("graph-sync-dispose"));
+      await active;
+      warning.mockRestore();
+    }
+  });
+
+  it("contains a synchronous native cancellation failure during analysis reset", async () => {
+    const pending = deferred<EspGraphOverlay>();
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const cancelGraph = vi
+      .fn<() => Promise<void>>()
+      .mockImplementationOnce(() => {
+        throw new Error("Synchronous orphan cancellation failure");
+      })
+      .mockResolvedValue(undefined);
+    const coordinator = createEspGraphCoordinator({
+      fetchGraph: vi.fn(() => pending.promise),
+      cancelGraph,
+      createRequestId: () => "graph-sync-reset",
+    });
+    useUiStore.setState({ graphApiEnabled: true, graphApiStatus: "connected" });
+    useEspDiagnosticsStore.setState({
+      phase: "ready",
+      snapshot: makeSnapshot(["local-sync-reset"]),
+    });
+    const active = coordinator.refresh();
+    coordinator.start();
+
+    try {
+      expect(() =>
+        useEspDiagnosticsStore.getState().beginAnalysis("analysis-replacement"),
+      ).not.toThrow();
+      await vi.waitFor(() => expect(cancelGraph).toHaveBeenCalledOnce());
+      expect(warning).toHaveBeenCalledWith(
+        "[esp-diagnostics] orphan Graph cancel failed",
+        { requestId: "graph-sync-reset" },
+      );
+    } finally {
+      coordinator.dispose();
+      pending.resolve(makeOverlay("graph-sync-reset"));
+      await active;
+      warning.mockRestore();
+    }
+  });
+
+  it("reconciles again after synchronous request ID generation fails", async () => {
+    let requestIdAttempt = 0;
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const fetchGraph = vi.fn(async (request: EspGraphRequest) =>
+      makeOverlay(request.requestId),
+    );
+    const coordinator = createEspGraphCoordinator({
+      fetchGraph,
+      cancelGraph: vi.fn(async () => undefined),
+      createRequestId: () => {
+        requestIdAttempt += 1;
+        if (requestIdAttempt === 1) {
+          throw new Error("Request ID generation failed");
+        }
+        return "graph-generator-recovered";
+      },
+    });
+    useUiStore.setState({ graphApiEnabled: true, graphApiStatus: "connected" });
+    useEspDiagnosticsStore.setState({
+      phase: "ready",
+      snapshot: makeSnapshot(["local-generator"]),
+    });
+
+    try {
+      await expect(coordinator.reconcile()).resolves.toBeUndefined();
+      expect(fetchGraph).not.toHaveBeenCalled();
+
+      await coordinator.reconcile();
+
+      expect(fetchGraph).toHaveBeenCalledOnce();
+      expect(useEspDiagnosticsStore.getState().snapshot?.graph?.requestId).toBe(
+        "graph-generator-recovered",
+      );
+      expect(warning).toHaveBeenCalledWith(
+        "[esp-diagnostics] Graph request ID generation failed",
+        { error: "Request ID generation failed" },
+      );
+    } finally {
+      coordinator.dispose();
+      warning.mockRestore();
+    }
+  });
+
+  it("continues to contain synchronous Graph fetch failures", async () => {
+    const cancelGraph = vi.fn(async () => undefined);
+    const coordinator = createEspGraphCoordinator({
+      fetchGraph: vi.fn(() => {
+        throw new Error("Synchronous Graph fetch failure");
+      }),
+      cancelGraph,
+      createRequestId: () => "graph-sync-fetch",
+    });
+    useUiStore.setState({ graphApiEnabled: true, graphApiStatus: "connected" });
+    useEspDiagnosticsStore.setState({
+      phase: "ready",
+      snapshot: makeSnapshot(["local-sync-fetch"]),
+    });
+
+    await expect(coordinator.refresh()).resolves.toBeUndefined();
+
+    expect(useEspDiagnosticsStore.getState().graphPhase).toBe("error");
+    expect(useEspDiagnosticsStore.getState().graphError).toBe(
+      "Synchronous Graph fetch failure",
+    );
+    coordinator.dispose();
+    expect(cancelGraph).not.toHaveBeenCalled();
+  });
+
   it("cancels an in-flight native Graph request when beginAnalysis fires (orphan cancel)", async () => {
     const pending = deferred<EspGraphOverlay>();
     const fetchGraph = vi.fn(() => pending.promise);

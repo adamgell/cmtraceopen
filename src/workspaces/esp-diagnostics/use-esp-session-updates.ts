@@ -379,6 +379,10 @@ export interface EspGraphCoordinator {
   dispose(): void;
 }
 
+interface OwnedGraphRequest {
+  requestId: string;
+}
+
 export function createEspGraphCoordinator(
   dependencies: Partial<EspGraphCoordinatorDependencies> = {},
 ): EspGraphCoordinator {
@@ -394,9 +398,9 @@ export function createEspGraphCoordinator(
   let selectedManagedDeviceId: string | null = null;
   let selectedManagedDeviceFingerprint: string | null = null;
   let suppressedOverlaySelectionFingerprint: string | null = null;
-  let pendingOrphanCancellation: Promise<void> | null = null;
-  const ownedRequestIds = new Set<string>();
-  const requestCancellations = new Map<string, Promise<void>>();
+  const ownedRequests = new Set<OwnedGraphRequest>();
+  const requestCancellations = new Map<OwnedGraphRequest, Promise<void>>();
+  const pendingOrphanCancellations = new Set<Promise<void>>();
   let unsubscribeEsp: (() => void) | null = null;
   let unsubscribeUi: (() => void) | null = null;
 
@@ -457,43 +461,59 @@ export function createEspGraphCoordinator(
   };
 
   const cancelOwnedRequest = (
-    requestId: string,
+    ownership: OwnedGraphRequest,
     warning: string,
   ): Promise<void> | null => {
-    if (!ownedRequestIds.has(requestId)) {
+    if (!ownedRequests.has(ownership)) {
       return null;
     }
-    const existingCancellation = requestCancellations.get(requestId);
+    const existingCancellation = requestCancellations.get(ownership);
     if (existingCancellation) {
       return existingCancellation;
     }
 
-    const finishCancellation = () => {
-      ownedRequestIds.delete(requestId);
-      useEspDiagnosticsStore.getState().cancelGraph(requestId);
-      if (requestCancellations.get(requestId) === cancellation) {
-        requestCancellations.delete(requestId);
+    let resolveCancellation!: () => void;
+    const cancellation = new Promise<void>((resolve) => {
+      resolveCancellation = resolve;
+    });
+    requestCancellations.set(ownership, cancellation);
+
+    let finished = false;
+    const finishCancellation = (failed: boolean) => {
+      if (finished) {
+        return;
       }
+      finished = true;
+      if (failed) {
+        console.warn(warning, { requestId: ownership.requestId });
+      }
+      ownedRequests.delete(ownership);
+      useEspDiagnosticsStore.getState().cancelGraph(ownership.requestId);
+      if (requestCancellations.get(ownership) === cancellation) {
+        requestCancellations.delete(ownership);
+      }
+      resolveCancellation();
     };
-    const cancellation = cancelGraph(requestId).then(
-      () => {
-        finishCancellation();
-      },
-      () => {
-        console.warn(warning, { requestId });
-        finishCancellation();
-      },
-    );
-    requestCancellations.set(requestId, cancellation);
+    try {
+      void cancelGraph(ownership.requestId).then(
+        () => {
+          finishCancellation(false);
+        },
+        () => {
+          finishCancellation(true);
+        },
+      );
+    } catch {
+      finishCancellation(true);
+    }
     return cancellation;
   };
 
-  const cancelCurrentRequest = (): Promise<void> | null => {
-    const cancellations = Array.from(ownedRequestIds, (requestId) =>
-      cancelOwnedRequest(
-        requestId,
-        "[esp-diagnostics] native Graph cancellation failed",
-      ),
+  const cancelCurrentRequest = (
+    warning = "[esp-diagnostics] native Graph cancellation failed",
+  ): Promise<void> | null => {
+    const cancellations = Array.from(ownedRequests, (ownership) =>
+      cancelOwnedRequest(ownership, warning),
     ).filter((cancellation): cancellation is Promise<void> => !!cancellation);
     if (cancellations.length === 0) {
       return null;
@@ -504,19 +524,16 @@ export function createEspGraphCoordinator(
     return Promise.all(cancellations).then(() => undefined);
   };
 
-  const cancelOrphanedRequest = (requestId: string): void => {
-    const cancellation = cancelOwnedRequest(
-      requestId,
+  const cancelOrphanedRequests = (): void => {
+    const cancellation = cancelCurrentRequest(
       "[esp-diagnostics] orphan Graph cancel failed",
     );
     if (!cancellation) {
       return;
     }
-    pendingOrphanCancellation = cancellation;
+    pendingOrphanCancellations.add(cancellation);
     void cancellation.then(() => {
-      if (pendingOrphanCancellation === cancellation) {
-        pendingOrphanCancellation = null;
-      }
+      pendingOrphanCancellations.delete(cancellation);
     });
   };
 
@@ -536,9 +553,13 @@ export function createEspGraphCoordinator(
       suppressOverlaySelection(initialSnapshot);
     }
 
-    const orphanCancellation = pendingOrphanCancellation;
-    if (orphanCancellation) {
-      await orphanCancellation;
+    while (pendingOrphanCancellations.size > 0) {
+      const cancellations = Array.from(pendingOrphanCancellations);
+      if (cancellations.length === 1) {
+        await cancellations[0];
+      } else {
+        await Promise.all(cancellations);
+      }
     }
     if (disposed || lifecycleGeneration !== graphLifecycleGeneration) {
       return;
@@ -677,13 +698,30 @@ export function createEspGraphCoordinator(
     const currentFingerprint = getEspIdentityFingerprint(currentSnapshot);
     blockedFingerprint = null;
     lastRequestedFingerprint = fingerprint;
-    const requestId = nextRequestId();
+    let requestId: string;
+    try {
+      requestId = nextRequestId();
+    } catch (error) {
+      if (
+        !disposed &&
+        generation === operationGeneration &&
+        lifecycleGeneration === graphLifecycleGeneration &&
+        lastRequestedFingerprint === fingerprint
+      ) {
+        lastRequestedFingerprint = null;
+      }
+      console.warn("[esp-diagnostics] Graph request ID generation failed", {
+        error: errorMessage(error),
+      });
+      return;
+    }
     const request = createGraphRequest(
       currentSnapshot,
       requestId,
       requestSelectedManagedDeviceId,
     );
-    ownedRequestIds.add(requestId);
+    const ownership: OwnedGraphRequest = { requestId };
+    ownedRequests.add(ownership);
     useEspDiagnosticsStore.getState().beginGraph(requestId, currentFingerprint);
 
     try {
@@ -732,7 +770,7 @@ export function createEspGraphCoordinator(
           );
       }
     } finally {
-      ownedRequestIds.delete(requestId);
+      ownedRequests.delete(ownership);
     }
   };
 
@@ -759,8 +797,8 @@ export function createEspGraphCoordinator(
           if (!state.snapshot) {
             // A replacement analysis is a new enrichment lifecycle even when
             // it describes the same device. Release both fingerprint guards
-            // before its snapshot arrives, and preserve the old request ID
-            // long enough to finish native cancellation first.
+            // before its snapshot arrives, and cancel every request privately
+            // owned by this coordinator before replacement enrichment begins.
             lastRequestedFingerprint = null;
             blockedFingerprint = null;
             graphLifecycleGeneration += 1;
@@ -769,12 +807,7 @@ export function createEspGraphCoordinator(
             } else {
               clearSelectedManagedDevice();
             }
-            if (
-              previous.graphRequestId !== null &&
-              state.graphRequestId === null
-            ) {
-              cancelOrphanedRequest(previous.graphRequestId);
-            }
+            cancelOrphanedRequests();
             return;
           }
           void run(false);
