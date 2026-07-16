@@ -222,7 +222,7 @@ fn command_line_sanitizers() -> &'static CommandLineSanitizers {
         )
         .expect("constant authorization-credential regex"),
         standalone_basic_credential: Regex::new(
-            r#"(?i)(^|\s)(basic)(\s+)([a-z0-9+/]+={0,2})(\s|$)"#,
+            r#"(?i)(^|\s)(basic)(\s+)("[a-z0-9+/]+={0,2}"|'[a-z0-9+/]+={0,2}'|[a-z0-9+/]+={0,2})(\s|$)"#,
         )
         .expect("constant standalone-Basic-credential regex"),
         bearer: Regex::new(
@@ -242,7 +242,7 @@ fn command_line_sanitizers() -> &'static CommandLineSanitizers {
         )
         .expect("constant JSON-secret regex"),
         escaped_json_secret: Regex::new(
-            r#"(?i)(\\"(?:access[-_]?token|refresh[-_]?token|id[-_]?token|auth[-_]?token|bearer[-_]?token|client[-_]?secret|app[-_]?secret|api[-_]?key|token|password|secret|authorization)\\"\s*:\s*\\")(?:\\\\|[^\\"])*(\\")"#,
+            r#"(?i)(\\"(?:access[-_]?token|refresh[-_]?token|id[-_]?token|auth[-_]?token|bearer[-_]?token|client[-_]?secret|app[-_]?secret|api[-_]?key|token|password|secret|authorization)\\"\s*:\s*\\")(?:(?:\\\\)+\\"|\\\\|[^\\"])*(\\")"#,
         )
         .expect("constant escaped-JSON-secret regex"),
     })
@@ -283,8 +283,13 @@ pub fn sanitize_command_line(command_line: &str) -> String {
     let command_line = sanitizers.standalone_basic_credential.replace_all(
         &command_line,
         |captures: &regex::Captures<'_>| {
+            let credential =
+                captures[4].trim_matches(|character| character == '"' || character == '\'');
             let is_basic_credential = base64::engine::general_purpose::STANDARD
-                .decode(captures[4].as_bytes())
+                .decode(credential.as_bytes())
+                .or_else(|_| {
+                    base64::engine::general_purpose::STANDARD_NO_PAD.decode(credential.as_bytes())
+                })
                 .is_ok_and(|decoded| decoded.contains(&b':'));
             if is_basic_credential {
                 format!(
@@ -302,7 +307,10 @@ pub fn sanitize_command_line(command_line: &str) -> String {
             .replace_all(&command_line, |captures: &regex::Captures<'_>| {
                 let credential =
                     captures[2].trim_matches(|character| character == '"' || character == '\'');
-                if credential.eq_ignore_ascii_case("authentication") {
+                let narrative_word = credential.trim_end_matches(|character| {
+                    matches!(character, ',' | '.' | ';' | ':' | '!' | '?')
+                });
+                if narrative_word.eq_ignore_ascii_case("authentication") {
                     captures[0].to_string()
                 } else {
                     format!("{}[REDACTED]", &captures[1])

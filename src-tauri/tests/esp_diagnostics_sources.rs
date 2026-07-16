@@ -5,12 +5,15 @@ use app_lib::esp::event_logs::{
     collect_event_evidence, required_event_id_xpath, EventLogProvider, EventSourceError,
     ESP_EVENT_CHANNELS, MAX_ESP_EVENT_RECORDS_PER_CHANNEL, REQUIRED_EVENT_IDS,
 };
+use app_lib::esp::process::sanitize_command_line;
 use app_lib::esp::registry::{
     classify_registry_scope, collect_registry_evidence, RegistryProvider, RegistryReadError,
     RegistrySnapshotKey, RegistryTarget, RegistryValueSnapshot, ESP_REGISTRY_TARGETS,
     MAX_REGISTRY_DEPTH, MAX_REGISTRY_VALUE_BYTES, REGISTRY_READ_ACCESS,
 };
-use app_lib::intune::evtx_parser::{parse_esp_event_xml, EventLogProperty, ParsedEspEventRecord};
+use app_lib::intune::evtx_parser::{
+    parse_esp_event_xml, EventLogProperty, ParsedEspEventRecord, MAX_ESP_EVTX_RECORD_BYTES,
+};
 use cmtraceopen_parser::esp::{
     EspObservationValue, EspScope, EspSensitivity, EspSourceAccessState, EspSourceKind,
 };
@@ -751,6 +754,134 @@ fn event_parser_keeps_self_closing_data_separate_from_the_following_property() {
             event_property("Empty", ""),
             event_property("ResultCode", "0x80070005"),
         ]
+    );
+}
+
+#[test]
+fn command_line_sanitizer_redacts_complete_escaped_json_secrets_with_escaped_quotes() {
+    for raw in [
+        r#"installer.exe --payload {\"refresh_token\":\"prefix\\\"quoted-secret-suffix\",\"safe\":\"keep-escaped-json-control\"}"#,
+        r#"installer.exe --payload {\"password\":\"prefix\\\\\\\"quoted-password-suffix\",\"safe\":\"keep-escaped-json-control\"}"#,
+    ] {
+        let sanitized = sanitize_command_line(raw);
+
+        assert!(
+            !sanitized.contains("secret-suffix") && !sanitized.contains("password-suffix"),
+            "escaped JSON secret suffix leaked: {sanitized}"
+        );
+        assert!(sanitized.contains(r#"\"[REDACTED]\""#));
+        assert!(sanitized.contains(r#"\"safe\":\"keep-escaped-json-control\""#));
+    }
+}
+
+#[test]
+fn command_line_sanitizer_redacts_quoted_and_unpadded_basic_credentials() {
+    for credential in ["Zm9vOmJhcg", "\"Zm9vOmJhcg==\""] {
+        let raw =
+            format!("installer.exe Basic {credential} /i {{12345678-1234-1234-1234-1234567890AB}}");
+        let sanitized = sanitize_command_line(&raw);
+
+        assert!(
+            !sanitized.contains("Zm9vOmJhcg"),
+            "Basic credential leaked: {sanitized}"
+        );
+        assert!(sanitized.contains("Basic [REDACTED]"));
+        assert!(sanitized.contains("/i {12345678-1234-1234-1234-1234567890AB}"));
+    }
+
+    for narrative in [
+        "Basic c2FmZS1uYXJyYXRpdmU= authentication is supported",
+        "Basic \"c2FmZS1uYXJyYXRpdmU=\" authentication is supported",
+    ] {
+        assert_eq!(sanitize_command_line(narrative), narrative);
+    }
+}
+
+#[test]
+fn command_line_sanitizer_preserves_punctuated_bearer_authentication_narratives() {
+    for narrative in [
+        "The Bearer authentication, mode is supported",
+        "The Bearer authentication. Next step",
+        "The Bearer authentication; mode is supported",
+    ] {
+        assert_eq!(sanitize_command_line(narrative), narrative);
+    }
+
+    let credential = "Bearer authentication-token-secret";
+    let sanitized = sanitize_command_line(credential);
+    assert_eq!(sanitized, "Bearer [REDACTED]");
+    assert!(!sanitized.contains("authentication-token-secret"));
+}
+
+#[test]
+fn event_parser_rejects_malformed_nesting_and_accepts_empty_self_closing_event_data() {
+    let malformed = concat!(
+        "<Event><System><EventID>72</EventID>",
+        "<TimeCreated SystemTime='2026-07-16T13:00:00Z'/>",
+        "<Channel>Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin</Channel>",
+        "<EventData></EventData></Event>"
+    );
+    assert!(
+        parse_esp_event_xml(malformed, "malformed.evtx", Some(1), None, "Unknown").is_none(),
+        "malformed System/EventData nesting was accepted"
+    );
+
+    for event_data in ["<EventData />", "<EventData/>"] {
+        let valid = format!(
+            concat!(
+                "<Event><System><EventID>72</EventID>",
+                "<TimeCreated SystemTime='2026-07-16T13:00:00Z'/>",
+                "<Channel>Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin</Channel>",
+                "</System>{}</Event>"
+            ),
+            event_data,
+        );
+        let parsed = parse_esp_event_xml(&valid, "empty.evtx", Some(2), None, "Unknown")
+            .expect("valid self-closing EventData");
+        assert!(parsed.event_data.is_empty());
+    }
+}
+
+#[test]
+fn event_parser_enforces_public_record_size_and_nesting_bounds() {
+    let bounded_event = |nested_elements: usize, payload: &str| {
+        format!(
+            concat!(
+                "<Event><System><EventID>72</EventID>",
+                "<TimeCreated SystemTime='2026-07-16T13:00:00Z'/>",
+                "<Channel>Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin</Channel>",
+                "</System><EventData><Data Name='Payload'>{}</Data></EventData>{}{}</Event>"
+            ),
+            payload,
+            "<Node>".repeat(nested_elements),
+            "</Node>".repeat(nested_elements),
+        )
+    };
+
+    let at_depth_limit = bounded_event(63, "bounded");
+    assert!(
+        parse_esp_event_xml(&at_depth_limit, "bounded.evtx", Some(1), None, "Unknown").is_some(),
+        "the documented nesting boundary should remain usable"
+    );
+
+    let above_depth_limit = bounded_event(64, "too-deep");
+    assert!(
+        parse_esp_event_xml(
+            &above_depth_limit,
+            "too-deep.evtx",
+            Some(2),
+            None,
+            "Unknown"
+        )
+        .is_none(),
+        "XML nesting above the streaming validator limit was accepted"
+    );
+
+    let oversized = bounded_event(0, &"x".repeat(MAX_ESP_EVTX_RECORD_BYTES));
+    assert!(oversized.len() > MAX_ESP_EVTX_RECORD_BYTES);
+    assert!(
+        parse_esp_event_xml(&oversized, "oversized.evtx", Some(3), None, "Unknown").is_none(),
+        "public XML parsing bypassed the per-record byte limit"
     );
 }
 

@@ -3,6 +3,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use evtx::EvtxParser;
+use quick_xml::events::{BytesStart, Event};
+use quick_xml::Reader;
 #[cfg(target_os = "windows")]
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -27,6 +29,7 @@ use crate::intune::models::{
 const MAX_ENTRIES_PER_FILE: usize = 50_000;
 pub const MAX_ESP_EVTX_RECORD_BYTES: usize = 512 * 1024;
 pub const MAX_ESP_EVTX_BATCH_BYTES: usize = 32 * 1024 * 1024;
+const MAX_ESP_XML_NESTING_DEPTH: usize = 64;
 #[cfg(target_os = "windows")]
 const MAX_LIVE_ENTRIES_PER_CHANNEL: usize = 200;
 
@@ -405,7 +408,7 @@ pub fn parse_esp_event_xml(
     rendered_message: Option<String>,
     fallback_channel: &str,
 ) -> Option<ParsedEspEventRecord> {
-    if !xml.trim_end().ends_with("</Event>") {
+    if !has_valid_bounded_event_xml_structure(xml) {
         return None;
     }
     let event_id = xml_element_text(xml, "EventID")?
@@ -441,12 +444,98 @@ pub fn parse_esp_event_xml(
     })
 }
 
+fn has_valid_bounded_event_xml_structure(xml: &str) -> bool {
+    if xml.len() > MAX_ESP_EVTX_RECORD_BYTES {
+        return false;
+    }
+
+    let mut reader = Reader::from_str(xml);
+    reader.config_mut().check_end_names = true;
+    let mut depth = 0usize;
+    let mut root_seen = false;
+    let mut root_closed = false;
+    let mut declaration_seen = false;
+
+    loop {
+        let event = match reader.read_event() {
+            Ok(event) => event,
+            Err(_) => return false,
+        };
+        match event {
+            Event::Start(start) => {
+                if root_closed || !has_valid_xml_attributes(&start) {
+                    return false;
+                }
+                if depth == 0 {
+                    if root_seen || start.name().as_ref() != b"Event" {
+                        return false;
+                    }
+                    root_seen = true;
+                }
+                depth = match depth.checked_add(1) {
+                    Some(depth) if depth <= MAX_ESP_XML_NESTING_DEPTH => depth,
+                    _ => return false,
+                };
+            }
+            Event::Empty(start) => {
+                if root_closed || !has_valid_xml_attributes(&start) {
+                    return false;
+                }
+                if depth == 0 {
+                    if root_seen || start.name().as_ref() != b"Event" {
+                        return false;
+                    }
+                    root_seen = true;
+                    root_closed = true;
+                }
+            }
+            Event::End(_) => {
+                if depth == 0 {
+                    return false;
+                }
+                depth -= 1;
+                if depth == 0 {
+                    root_closed = true;
+                }
+            }
+            Event::Text(text) => {
+                if depth == 0 && !text.iter().all(u8::is_ascii_whitespace) {
+                    return false;
+                }
+            }
+            Event::CData(_) | Event::GeneralRef(_) if depth == 0 => return false,
+            Event::Decl(_) => {
+                if declaration_seen || root_seen {
+                    return false;
+                }
+                declaration_seen = true;
+            }
+            Event::DocType(_) => return false,
+            Event::Eof => return root_seen && root_closed && depth == 0,
+            Event::CData(_) | Event::GeneralRef(_) | Event::Comment(_) | Event::PI(_) => {}
+        }
+    }
+}
+
+fn has_valid_xml_attributes(start: &BytesStart<'_>) -> bool {
+    let mut attributes = start.attributes();
+    attributes
+        .with_checks(true)
+        .all(|attribute| attribute.is_ok())
+}
+
 fn ordered_event_data(xml: &str) -> Option<Vec<EventLogProperty>> {
     let Some(event_data_start) = xml.find("<EventData") else {
         return Some(Vec::new());
     };
-    let event_data_end_offset = xml[event_data_start..].find("</EventData>")?;
-    let event_data = &xml[event_data_start..event_data_start + event_data_end_offset];
+    let opening_tag_end = event_data_start + xml[event_data_start..].find('>')?;
+    let opening_tag = &xml[event_data_start..=opening_tag_end];
+    if opening_tag.trim_end_matches('>').trim_end().ends_with('/') {
+        return Some(Vec::new());
+    }
+    let content_start = opening_tag_end + 1;
+    let event_data_end_offset = xml[content_start..].find("</EventData>")?;
+    let event_data = &xml[content_start..content_start + event_data_end_offset];
     let mut properties = Vec::new();
     let mut cursor = 0;
 
