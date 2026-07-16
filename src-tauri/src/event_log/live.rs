@@ -343,7 +343,7 @@ fn parse_xml_to_record(
     // Use rendered message if available, otherwise build summary from EventData.
     // Sanitize to strip control characters that would show as unexpected glyphs.
     let message = rendered_message
-        .map(|s| sanitize_control_chars(s))
+        .map(sanitize_control_chars)
         .unwrap_or_else(|| build_event_data_summary(&event_data));
 
     Some(EvtxRecord {
