@@ -658,12 +658,18 @@ fn process_start_value(timestamp: &EspTimestamp) -> Option<DateTime<Utc>> {
         return None;
     }
 
+    // Native process snapshots classify any concrete zero offset as Utc.
+    // RFC 3339 -00:00 means the offset is unknown, so it cannot prove identity.
     match &timestamp.kind {
-        EspTimestampKind::Utc if raw_uses_utc_designator(raw) => parse_rfc3339_utc(raw),
+        EspTimestampKind::Utc if raw_uses_utc_designator(raw) || raw.ends_with("+00:00") => {
+            parse_rfc3339_utc(raw)
+        }
         EspTimestampKind::Offset if raw_looks_like_wmi_datetime(raw) => {
             parse_wmi_process_start(raw)
         }
-        EspTimestampKind::Offset if !raw_uses_utc_designator(raw) => parse_rfc3339_utc(raw),
+        EspTimestampKind::Offset if !raw_uses_utc_designator(raw) && !raw.ends_with("-00:00") => {
+            parse_rfc3339_utc(raw)
+        }
         EspTimestampKind::Local
         | EspTimestampKind::Invalid
         | EspTimestampKind::Unspecified

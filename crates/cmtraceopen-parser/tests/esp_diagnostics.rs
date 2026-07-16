@@ -2076,6 +2076,56 @@ fn correlation_rejects_processes_without_a_valid_start_identity() {
 }
 
 #[test]
+fn correlation_accepts_native_utc_kind_with_a_known_zero_offset() {
+    let mut process = correlation_process(
+        "process-known-zero-offset",
+        7320,
+        None,
+        "msiexec.exe",
+        "2026-07-15T12:00:00Z",
+    );
+    process.process_start_time = timestamp_parts(
+        "2026-07-15T12:00:00+00:00",
+        Some("2026-07-15T12:00:00Z"),
+        EspTimestampKind::Utc,
+    );
+    process.context.source_timestamp = None;
+    process.context.observed_at_utc = "2026-07-15T12:01:00Z".to_string();
+
+    let correlations = correlate_installer_processes(&[], &[process], &[], &[]);
+
+    assert_eq!(correlations.len(), 1);
+    assert_eq!(
+        correlations[0].correlation_id,
+        "installer|7320|2026-07-15T12:00:00Z"
+    );
+}
+
+#[test]
+fn correlation_rejects_unknown_negative_zero_offset_for_every_rfc_kind() {
+    for kind in [EspTimestampKind::Utc, EspTimestampKind::Offset] {
+        let mut process = correlation_process(
+            "process-unknown-zero-offset",
+            7320,
+            None,
+            "msiexec.exe",
+            "2026-07-15T12:00:00Z",
+        );
+        process.process_start_time = timestamp_parts(
+            "2026-07-15T12:00:00-00:00",
+            Some("2026-07-15T12:00:00Z"),
+            kind.clone(),
+        );
+        process.context.source_timestamp = None;
+        process.context.observed_at_utc = "2026-07-15T12:01:00Z".to_string();
+
+        let correlations = correlate_installer_processes(&[], &[process], &[], &[]);
+
+        assert!(correlations.is_empty(), "accepted {kind:?} -00:00 start");
+    }
+}
+
+#[test]
 fn correlation_repair_rejects_malformed_or_inconsistent_raw_start_identity() {
     let mut accepted = Vec::new();
     for (label, start) in [

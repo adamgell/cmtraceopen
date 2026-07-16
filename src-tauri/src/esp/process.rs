@@ -111,6 +111,7 @@ pub fn collect_process_evidence(
         PROCESS_QUERY_TIMEOUT,
         MAX_PROCESS_RECORDS,
     );
+    let observed_at_utc = process_observation_time_at_completion(observed_at_utc);
     batch.snapshots.truncate(MAX_PROCESS_RECORDS);
     let partial = !batch.snapshots.is_empty();
     let (access_state, detail) = process_coverage(&batch.completion, partial);
@@ -124,7 +125,7 @@ pub fn collect_process_evidence(
                 .any(|allowed| allowed.eq_ignore_ascii_case(&snapshot.image_name))
         })
         .enumerate()
-        .map(|(index, snapshot)| process_observation(snapshot, index, observed_at_utc))
+        .map(|(index, snapshot)| process_observation(snapshot, index, &observed_at_utc))
         .collect();
 
     ProcessEvidence {
@@ -132,6 +133,18 @@ pub fn collect_process_evidence(
         detail,
         observations,
     }
+}
+
+fn process_observation_time_at_completion(collection_started_at_utc: &str) -> String {
+    // Session polling starts before the bounded process query. Stamp the sample
+    // after it returns so a process born during the query is not pre-dated.
+    let completed_at = Utc::now();
+    let observed_at = DateTime::parse_from_rfc3339(collection_started_at_utc)
+        .ok()
+        .map(|value| value.with_timezone(&Utc))
+        .filter(|started_at| *started_at > completed_at)
+        .unwrap_or(completed_at);
+    observed_at.to_rfc3339_opts(SecondsFormat::Nanos, true)
 }
 
 pub fn parent_chain(
@@ -903,7 +916,9 @@ mod tests {
     use std::cell::RefCell;
     use std::time::Duration;
 
-    use cmtraceopen_parser::esp::EspSourceAccessState;
+    use cmtraceopen_parser::esp::{
+        correlate_installer_processes, EspSourceAccessState, EspTimestampKind,
+    };
 
     use super::*;
 
@@ -938,6 +953,28 @@ mod tests {
         ) -> ProcessSnapshotBatch {
             *self.requested_names.borrow_mut() = allowed_image_names.to_vec();
             ProcessSnapshotBatch::complete(Vec::new())
+        }
+    }
+
+    struct DelayedBirthProcessProvider;
+
+    impl ProcessProvider for DelayedBirthProcessProvider {
+        fn snapshot(
+            &self,
+            _allowed_image_names: &[String],
+            timeout: Duration,
+            max_records: usize,
+        ) -> ProcessSnapshotBatch {
+            assert_eq!(timeout, PROCESS_QUERY_TIMEOUT);
+            assert_eq!(max_records, MAX_PROCESS_RECORDS);
+            std::thread::sleep(Duration::from_millis(25));
+            ProcessSnapshotBatch::complete(vec![RawProcessSnapshot {
+                pid: 45,
+                parent_pid: None,
+                image_name: "msiexec.exe".to_string(),
+                start_time_utc: Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true),
+                command_line: None,
+            }])
         }
     }
 
@@ -1050,6 +1087,73 @@ mod tests {
         let after = process(42, None, "msiexec.exe", "2026-07-15T14:00:00Z", None);
         assert_ne!(before.identity(), after.identity());
         assert_eq!(before.identity().pid, after.identity().pid);
+    }
+
+    #[test]
+    fn native_known_zero_offset_process_start_survives_parser_correlation() {
+        let evidence = collect(
+            vec![process(
+                43,
+                None,
+                "msiexec.exe",
+                "2026-07-15T13:00:00+00:00",
+                None,
+            )],
+            &[],
+        );
+        let observation = &evidence.observations[0];
+
+        assert_eq!(observation.process_start_time.kind, EspTimestampKind::Utc);
+        let correlations =
+            correlate_installer_processes(&[], std::slice::from_ref(observation), &[], &[]);
+        assert_eq!(correlations.len(), 1);
+        assert_eq!(
+            correlations[0].correlation_id,
+            "installer|43|2026-07-15T13:00:00Z"
+        );
+    }
+
+    #[test]
+    fn native_unknown_negative_zero_offset_process_start_stays_uncorrelated() {
+        let evidence = collect(
+            vec![process(
+                44,
+                None,
+                "msiexec.exe",
+                "2026-07-15T13:00:00-00:00",
+                None,
+            )],
+            &[],
+        );
+        let observation = &evidence.observations[0];
+
+        assert_eq!(observation.process_start_time.kind, EspTimestampKind::Utc);
+        assert!(
+            correlate_installer_processes(&[], std::slice::from_ref(observation), &[], &[],)
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn process_born_during_snapshot_query_keeps_a_correlatable_sample_time() {
+        let captured_before_query = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+
+        let evidence =
+            collect_process_evidence(&DelayedBirthProcessProvider, &[], &captured_before_query);
+        let observation = &evidence.observations[0];
+        let started = DateTime::parse_from_rfc3339(&observation.process_start_time.raw_text)
+            .expect("process start time");
+        let sampled = DateTime::parse_from_rfc3339(&observation.context.observed_at_utc)
+            .expect("process sample time");
+
+        assert!(
+            sampled >= started,
+            "sampled {sampled} before start {started}"
+        );
+        assert_eq!(
+            correlate_installer_processes(&[], std::slice::from_ref(observation), &[], &[],).len(),
+            1
+        );
     }
 
     #[test]
