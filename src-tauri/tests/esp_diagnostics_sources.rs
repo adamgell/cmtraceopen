@@ -969,7 +969,7 @@ fn command_line_sanitizer_stops_at_terminal_escaped_json_object_boundaries() {
 }
 
 #[test]
-fn command_line_sanitizer_fails_closed_on_unterminated_escaped_secret_and_keeps_scanning() {
+fn command_line_sanitizer_fails_closed_on_unterminated_escaped_secret_suffixes() {
     for raw in [
         r#"installer.exe --payload {\"password\":\"unterminated-one-layer-at-eof"#,
         r#"installer.exe --payload {\\\"password\\\":\\\"unterminated-two-layer-at-eof"#,
@@ -1007,16 +1007,10 @@ fn command_line_sanitizer_fails_closed_on_unterminated_escaped_secret_and_keeps_
                 "malformed escaped JSON leaked {secret}: {sanitized}"
             );
         }
-        assert!(
-            sanitized.contains("--keep-real-arg yes"),
-            "malformed secret redaction consumed a real argument: {sanitized}"
-        );
-        assert!(
-            sanitized.contains("keep-one-layer-safe")
-                || sanitized.contains("keep-cross-layer-safe"),
-            "following safe member was lost: {sanitized}"
-        );
-        assert!(sanitized.matches("[REDACTED]").count() >= 2);
+        assert!(!sanitized.contains("--keep-real-arg yes"));
+        assert!(!sanitized.contains("keep-one-layer-safe"));
+        assert!(!sanitized.contains("keep-cross-layer-safe"));
+        assert!(sanitized.ends_with("[REDACTED]"));
     }
 }
 
@@ -1029,7 +1023,8 @@ fn command_line_sanitizer_fails_closed_on_ambiguous_wider_quote_at_end_of_scan()
     let sanitized = sanitize_command_line(one_layer);
     assert!(!sanitized.contains("one-layer-secret-prefix"));
     assert!(!sanitized.contains("one-layer-visible-secret-suffix"));
-    assert!(sanitized.contains(" --keep-real-arg yes"));
+    assert!(!sanitized.contains(" --keep-real-arg yes"));
+    assert!(sanitized.ends_with("[REDACTED]"));
 
     let twice_layer_wider_quote = format!("{}\"", "\\".repeat(7));
     let twice_layer = [
@@ -1041,7 +1036,8 @@ fn command_line_sanitizer_fails_closed_on_ambiguous_wider_quote_at_end_of_scan()
     let sanitized = sanitize_command_line(&twice_layer);
     assert!(!sanitized.contains("twice-layer-secret-prefix"));
     assert!(!sanitized.contains("twice-layer-visible-secret-suffix"));
-    assert!(sanitized.contains(" --keep-real-arg yes"));
+    assert!(!sanitized.contains(" --keep-real-arg yes"));
+    assert!(sanitized.ends_with("[REDACTED]"));
 }
 
 #[test]
@@ -1054,7 +1050,8 @@ fn command_line_sanitizer_does_not_trust_option_shaped_ambiguous_secret_suffixes
             "exact review seed leaked {secret}: {sanitized}"
         );
     }
-    assert!(sanitized.contains(" --keep-real-arg yes"));
+    assert!(!sanitized.contains(" --keep-real-arg yes"));
+    assert!(sanitized.ends_with("[REDACTED]"));
 
     let one_layer_wider_quote = format!("{}\"", "\\".repeat(3));
     let twice_layer_wider_quote = format!("{}\"", "\\".repeat(7));
@@ -1079,16 +1076,14 @@ fn command_line_sanitizer_does_not_trust_option_shaped_ambiguous_secret_suffixes
                     "ambiguous suffix leaked {secret} for {secret_option}: {sanitized}"
                 );
             }
-            assert!(
-                sanitized.contains(" --keep-real-arg yes"),
-                "later proven option was consumed for {secret_option}: {sanitized}"
-            );
+            assert!(!sanitized.contains(" --keep-real-arg yes"));
+            assert!(sanitized.ends_with("[REDACTED]"));
         }
     }
 }
 
 #[test]
-fn command_line_sanitizer_requires_a_non_sensitive_option_after_ambiguous_secret_suffixes() {
+fn command_line_sanitizer_fails_closed_regardless_of_ambiguous_option_order() {
     let quote = |width: usize| format!("{}\"", "\\".repeat(width));
 
     for (value_width, closer_width) in [(1, 3), (1, 7), (3, 7)] {
@@ -1099,34 +1094,12 @@ fn command_line_sanitizer_requires_a_non_sensitive_option_after_ambiguous_secret
         );
 
         for secret_option in ["-STILL_SECRET", "--STILL_SECRET", "/STILL_SECRET"] {
-            for (suffix, keeps_first_safe, keeps_second_safe) in [
-                (format!(" {secret_option} SECRET_VALUE"), false, false),
-                (
-                    format!(
-                        " {secret_option} SECRET_VALUE --keep-real-arg yes --other-real-arg two"
-                    ),
-                    true,
-                    true,
-                ),
-                (
-                    format!(" --keep-real-arg yes {secret_option} SECRET_VALUE"),
-                    false,
-                    false,
-                ),
-                (
-                    format!(
-                        " --keep-real-arg yes {secret_option} SECRET_VALUE --other-real-arg two"
-                    ),
-                    false,
-                    true,
-                ),
-                (
-                    format!(
-                        " --keep-real-arg yes --other-real-arg two {secret_option} SECRET_VALUE"
-                    ),
-                    false,
-                    false,
-                ),
+            for suffix in [
+                format!(" {secret_option} SECRET_VALUE"),
+                format!(" {secret_option} SECRET_VALUE --keep-real-arg yes --other-real-arg two"),
+                format!(" --keep-real-arg yes {secret_option} SECRET_VALUE"),
+                format!(" --keep-real-arg yes {secret_option} SECRET_VALUE --other-real-arg two"),
+                format!(" --keep-real-arg yes --other-real-arg two {secret_option} SECRET_VALUE"),
             ] {
                 let sanitized = sanitize_command_line(&format!("{prefix}{suffix}"));
                 for secret in ["PREFIX_SECRET", "STILL_SECRET", "SECRET_VALUE"] {
@@ -1135,16 +1108,9 @@ fn command_line_sanitizer_requires_a_non_sensitive_option_after_ambiguous_secret
                         "wider-close suffix leaked {secret} for {value_width}/{closer_width} {secret_option}: {sanitized}"
                     );
                 }
-                assert_eq!(
-                    sanitized.contains("--keep-real-arg yes"),
-                    keeps_first_safe,
-                    "wider-close option ordering chose an unsafe boundary for {value_width}/{closer_width} {secret_option}: {sanitized}"
-                );
-                assert_eq!(
-                    sanitized.contains("--other-real-arg two"),
-                    keeps_second_safe,
-                    "wider-close option ordering lost the final safe boundary for {value_width}/{closer_width} {secret_option}: {sanitized}"
-                );
+                assert!(!sanitized.contains("--keep-real-arg yes"));
+                assert!(!sanitized.contains("--other-real-arg two"));
+                assert!(sanitized.ends_with("[REDACTED]"));
             }
         }
     }
@@ -1156,34 +1122,12 @@ fn command_line_sanitizer_requires_a_non_sensitive_option_after_ambiguous_secret
         );
 
         for secret_option in ["-STILL_SECRET", "--STILL_SECRET", "/STILL_SECRET"] {
-            for (suffix, keeps_first_safe, keeps_second_safe) in [
-                (format!(" {secret_option} SECRET_VALUE"), false, false),
-                (
-                    format!(
-                        " {secret_option} SECRET_VALUE --keep-real-arg yes --other-real-arg two"
-                    ),
-                    true,
-                    true,
-                ),
-                (
-                    format!(" --keep-real-arg yes {secret_option} SECRET_VALUE"),
-                    false,
-                    false,
-                ),
-                (
-                    format!(
-                        " --keep-real-arg yes {secret_option} SECRET_VALUE --other-real-arg two"
-                    ),
-                    false,
-                    true,
-                ),
-                (
-                    format!(
-                        " --keep-real-arg yes --other-real-arg two {secret_option} SECRET_VALUE"
-                    ),
-                    false,
-                    false,
-                ),
+            for suffix in [
+                format!(" {secret_option} SECRET_VALUE"),
+                format!(" {secret_option} SECRET_VALUE --keep-real-arg yes --other-real-arg two"),
+                format!(" --keep-real-arg yes {secret_option} SECRET_VALUE"),
+                format!(" --keep-real-arg yes {secret_option} SECRET_VALUE --other-real-arg two"),
+                format!(" --keep-real-arg yes --other-real-arg two {secret_option} SECRET_VALUE"),
             ] {
                 let sanitized = sanitize_command_line(&format!("{prefix}{suffix}"));
                 for secret in ["PREFIX_SECRET", "STILL_SECRET", "SECRET_VALUE"] {
@@ -1192,15 +1136,60 @@ fn command_line_sanitizer_requires_a_non_sensitive_option_after_ambiguous_secret
                         "raw-close suffix leaked {secret} for width {value_width} {secret_option}: {sanitized}"
                     );
                 }
-                assert_eq!(
-                    sanitized.contains("--keep-real-arg yes"),
-                    keeps_first_safe,
-                    "raw-close option ordering chose an unsafe boundary for width {value_width} {secret_option}: {sanitized}"
+                assert!(!sanitized.contains("--keep-real-arg yes"));
+                assert!(!sanitized.contains("--other-real-arg two"));
+                assert!(sanitized.ends_with("[REDACTED]"));
+            }
+        }
+    }
+}
+
+#[test]
+fn command_line_sanitizer_never_uses_option_names_to_end_malformed_secret_values() {
+    let quote = |width: usize| format!("{}\"", "\\".repeat(width));
+    let aliases = [
+        "-opaque-fragment",
+        "--pass",
+        "/auth",
+        "--private-key",
+        "/subscription-key",
+        "--päss",
+        "--opaque.fragment",
+    ];
+    let separators = [" ", "=", ":"];
+
+    let mut prefixes = Vec::new();
+    for value_width in [1, 3, 7] {
+        let member_quote = quote(value_width);
+        prefixes.push(format!(
+            "installer.exe --payload {{{member_quote}password{member_quote}:{member_quote}PREFIX_SECRET}}"
+        ));
+    }
+    for (value_width, closer_width) in [(1, 3), (1, 7), (3, 7)] {
+        let member_quote = quote(value_width);
+        let wider_quote = quote(closer_width);
+        prefixes.push(format!(
+            "installer.exe --payload {{{member_quote}password{member_quote}:{member_quote}PREFIX_SECRET{wider_quote}}}"
+        ));
+    }
+
+    for prefix in prefixes {
+        for alias in aliases {
+            for separator in separators {
+                let raw = format!(
+                    "{prefix} {alias}{separator}SECRET_VALUE --keep-real-arg KEEP_AFTER_SECRET"
                 );
-                assert_eq!(
-                    sanitized.contains("--other-real-arg two"),
-                    keeps_second_safe,
-                    "raw-close option ordering lost the final safe boundary for width {value_width} {secret_option}: {sanitized}"
+                let sanitized = sanitize_command_line(&raw);
+
+                for secret in ["PREFIX_SECRET", "SECRET_VALUE", "KEEP_AFTER_SECRET"] {
+                    assert!(
+                        !sanitized.contains(secret),
+                        "malformed secret leaked {secret} for {alias}{separator}: {sanitized}"
+                    );
+                }
+                assert!(
+                    sanitized.ends_with("[REDACTED]"),
+                    "ambiguous malformed suffix did not fail closed for {alias}{separator}: {sanitized}"
                 );
             }
         }
@@ -1208,13 +1197,14 @@ fn command_line_sanitizer_requires_a_non_sensitive_option_after_ambiguous_secret
 }
 
 #[test]
-fn command_line_sanitizer_redacts_raw_closer_suffix_before_single_dash_option() {
+fn command_line_sanitizer_fails_closed_after_raw_closer_suffix() {
     let exact_review_seed =
         r#"{\"password\":\"PREFIX_SECRET}VISIBLE_SECRET_SUFFIX -keep-real-arg yes"#;
     let sanitized = sanitize_command_line(exact_review_seed);
     assert!(!sanitized.contains("PREFIX_SECRET"));
     assert!(!sanitized.contains("VISIBLE_SECRET_SUFFIX"));
-    assert!(sanitized.contains(" -keep-real-arg yes"));
+    assert!(!sanitized.contains(" -keep-real-arg yes"));
+    assert!(sanitized.ends_with("[REDACTED]"));
 
     let neighboring_members = concat!(
         r#"{\"password\":\"PREFIX_SECRET}VISIBLE_SECRET_SUFFIX -keep-real-arg yes {"#,
@@ -1232,8 +1222,9 @@ fn command_line_sanitizer_redacts_raw_closer_suffix_before_single_dash_option() 
             "raw closer variant leaked {secret}: {sanitized}"
         );
     }
-    assert!(sanitized.contains(" -keep-real-arg yes"));
-    assert!(sanitized.contains(r#"\"safe.name\":\"KEEP_SAFE_MEMBER\""#));
+    assert!(!sanitized.contains(" -keep-real-arg yes"));
+    assert!(!sanitized.contains(r#"\"safe.name\":\"KEEP_SAFE_MEMBER\""#));
+    assert!(sanitized.ends_with("[REDACTED]"));
 }
 
 #[test]
@@ -1271,7 +1262,7 @@ fn command_line_sanitizer_fails_closed_on_sensitive_key_value_escape_width_misma
 }
 
 #[test]
-fn command_line_sanitizer_preserves_single_dash_option_after_malformed_value() {
+fn command_line_sanitizer_fails_closed_before_single_dash_option() {
     let raw = concat!(
         r#"installer.exe --malformed {\"password\":\"malformed-single-dash-secret} "#,
         r#"-keep-real-arg yes --following {\"refresh_token\":\"following-single-dash-secret\","#,
@@ -1281,12 +1272,9 @@ fn command_line_sanitizer_preserves_single_dash_option_after_malformed_value() {
 
     assert!(!sanitized.contains("malformed-single-dash-secret"));
     assert!(!sanitized.contains("following-single-dash-secret"));
-    assert!(
-        sanitized.contains("-keep-real-arg yes"),
-        "malformed secret consumed a single-dash option: {sanitized}"
-    );
-    assert!(sanitized.contains(r#"\"safe.name\":\"keep-single-dash-safe\""#));
-    assert!(sanitized.matches("[REDACTED]").count() >= 2);
+    assert!(!sanitized.contains("-keep-real-arg yes"));
+    assert!(!sanitized.contains(r#"\"safe.name\":\"keep-single-dash-safe\""#));
+    assert!(sanitized.ends_with("[REDACTED]"));
 }
 
 #[test]
