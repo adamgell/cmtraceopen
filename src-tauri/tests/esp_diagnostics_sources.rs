@@ -14,8 +14,8 @@ use app_lib::esp::archive::{
     MAX_ARCHIVE_FILE_BYTES, MAX_ARCHIVE_TOTAL_UNCOMPRESSED_BYTES,
 };
 use app_lib::esp::bundle::{
-    analyze_captured_evidence_at, BundleError, MAX_JSON_SCALAR_RECORDS, MAX_LEGACY_BUNDLE_DEPTH,
-    MAX_LEGACY_BUNDLE_ENTRIES,
+    analyze_captured_evidence_at, BundleError, MAX_BUNDLE_TOTAL_RECORDS, MAX_JSON_SCALAR_RECORDS,
+    MAX_LEGACY_BUNDLE_DEPTH, MAX_LEGACY_BUNDLE_ENTRIES,
 };
 #[cfg(target_os = "windows")]
 use app_lib::esp::discovery::default_known_source_specs;
@@ -6257,6 +6257,67 @@ fn bundle_record_intake_is_capped_across_artifacts_before_reduction() {
     assert!(retention.detail.as_deref().is_some_and(
         |detail| detail.contains(&format!("{expected_discarded} older or oversized records"))
     ));
+}
+
+#[test]
+fn bundle_record_limit_reports_pending_evtx_as_not_inspected() {
+    let bundle = tempfile::tempdir().expect("bundle tempdir");
+    let event_path = "evidence/00-pending.evtx";
+    std::fs::create_dir_all(bundle.path().join("evidence/json"))
+        .expect("create bundle evidence folders");
+    std::fs::write(
+        bundle.path().join(event_path),
+        b"must not be opened as EVTX after the bundle record budget is exhausted",
+    )
+    .expect("write pending EVTX sentinel");
+
+    let values = (0..MAX_JSON_SCALAR_RECORDS)
+        .map(|index| index as u64)
+        .collect::<Vec<_>>();
+    let bytes = serde_json::to_vec(&values).expect("serialize bounded JSON fixture");
+    let mut artifacts = vec![serde_json::json!({
+        "artifactId": "pending-event",
+        "category": "event-logs",
+        "family": "event-log",
+        "relativePath": event_path,
+        "status": "collected",
+        "parseHints": ["evtx"]
+    })];
+    artifacts.extend(
+        (0..(MAX_BUNDLE_TOTAL_RECORDS / MAX_JSON_SCALAR_RECORDS)).map(|index| {
+            let relative_path = format!("evidence/json/profile-{index:02}.json");
+            std::fs::write(bundle.path().join(&relative_path), &bytes)
+                .expect("write bounded JSON artifact");
+            serde_json::json!({
+                "artifactId": format!("profile-{index:02}"),
+                "category": "exports",
+                "family": "autopilot-profile-json",
+                "relativePath": relative_path,
+                "status": "collected",
+                "parseHints": ["json", "autopilot"]
+            })
+        }),
+    );
+    write_bundle_manifest(bundle.path(), serde_json::Value::Array(artifacts));
+
+    let snapshot =
+        analyze_captured_evidence_at(bundle.path(), BUNDLE_REQUEST_ID, BUNDLE_OBSERVED_AT)
+            .expect("analyze record-budget-exhausted bundle");
+
+    let event_coverage = snapshot
+        .coverage
+        .iter()
+        .find(|coverage| coverage.artifact_id.starts_with("bundle:pending-event:"))
+        .expect("pending EVTX retains manifest-specific coverage");
+    assert_eq!(event_coverage.family, "event-log");
+    assert_eq!(event_coverage.status, EspArtifactStatus::ParseFailed);
+    assert!(event_coverage.detail.as_deref().is_some_and(|detail| {
+        detail.contains("not inspected") && detail.contains("bounded bundle record budget")
+    }));
+    assert!(snapshot.coverage.iter().any(|coverage| {
+        coverage.artifact_id == "bundle.intake-record-limit"
+            && coverage.status == EspArtifactStatus::ParseFailed
+    }));
 }
 
 #[test]

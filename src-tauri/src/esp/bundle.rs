@@ -437,6 +437,17 @@ pub fn analyze_captured_evidence_at(
     if !pending_event_artifacts.is_empty() {
         let remaining_records = MAX_BUNDLE_TOTAL_RECORDS.saturating_sub(record_count);
         if remaining_records == 0 {
+            coverage.extend(pending_event_artifacts.iter().map(|pending| {
+                artifact_coverage(
+                    source_artifact_id(&pending.artifact),
+                    pending.artifact.family.clone(),
+                    EspArtifactStatus::ParseFailed,
+                    Some(format!(
+                        "event log was not inspected because the bounded bundle record budget of {MAX_BUNDLE_TOTAL_RECORDS} records was exhausted; evidence is partial"
+                    )),
+                    &pending.artifact.observed_at_utc,
+                )
+            }));
             coverage.push(bundle_record_limit_coverage(observed_at_utc));
         } else {
             let (mut event_records, event_coverage, retention_limit_reached) =
