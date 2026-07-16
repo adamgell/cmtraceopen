@@ -4,6 +4,10 @@
 //! concrete HTTP implementation remain Windows-only and user-opt-in.
 
 pub mod client;
+#[cfg(feature = "esp-diagnostics")]
+pub mod correlation;
+#[cfg(feature = "esp-diagnostics")]
+pub mod esp;
 pub mod models;
 
 pub use models::{

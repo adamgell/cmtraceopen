@@ -432,12 +432,14 @@ const policyStatusDetail = fields({
   displayName: nullable(string),
   kind: string,
   status,
+  trackedOnEnrollmentStatus: nullable(boolean),
   correlationConfidence: values("exact", "strong", "temporal", "uncorrelated"),
   evidence: evidenceRefs,
 });
 const autopilotEvent = fields({
   eventId: string,
   managedDeviceId: nullable(string),
+  enrollmentConfigurationId: nullable(string),
   eventTime: nullable(timestamp),
   deploymentState: status,
   policyStatusDetails: array(policyStatusDetail),

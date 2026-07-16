@@ -892,6 +892,8 @@ pub struct EspGraphPolicyStatusDetail {
     pub display_name: Option<String>,
     pub kind: EspGraphPolicyStatusDetailKind,
     pub status: EspStatus,
+    #[serde(default)]
+    pub tracked_on_enrollment_status: Option<bool>,
     pub correlation_confidence: EspCorrelationConfidence,
     pub evidence: Vec<EspEvidenceRef>,
 }
@@ -901,6 +903,8 @@ pub struct EspGraphPolicyStatusDetail {
 pub struct EspGraphAutopilotEvent {
     pub event_id: String,
     pub managed_device_id: Option<String>,
+    #[serde(default)]
+    pub enrollment_configuration_id: Option<String>,
     pub event_time: Option<EspTimestamp>,
     pub deployment_state: EspStatus,
     pub policy_status_details: Vec<EspGraphPolicyStatusDetail>,

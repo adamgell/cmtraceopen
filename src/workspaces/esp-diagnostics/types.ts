@@ -577,6 +577,7 @@ export interface EspGraphPolicyStatusDetail {
   displayName: string | null;
   kind: EspGraphPolicyStatusDetailKind;
   status: EspStatus;
+  trackedOnEnrollmentStatus: boolean | null;
   correlationConfidence: EspCorrelationConfidence;
   evidence: EspEvidenceRef[];
 }
@@ -584,6 +585,7 @@ export interface EspGraphPolicyStatusDetail {
 export interface EspGraphAutopilotEvent {
   eventId: string;
   managedDeviceId: string | null;
+  enrollmentConfigurationId: string | null;
   eventTime: EspTimestamp | null;
   deploymentState: EspStatus;
   policyStatusDetails: EspGraphPolicyStatusDetail[];

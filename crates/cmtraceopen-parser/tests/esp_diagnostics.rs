@@ -1026,12 +1026,14 @@ fn models_graph_correlated_record_shapes_keep_provenance() {
             EspRawStatus::Text("futureState".to_string()),
             EspNormalizedStatus::Unknown,
         ),
+        tracked_on_enrollment_status: Some(true),
         correlation_confidence: EspCorrelationConfidence::Uncorrelated,
         evidence: vec![evidence_ref("detail-1")],
     };
     let event = EspGraphAutopilotEvent {
         event_id: "event-1".to_string(),
         managed_device_id: Some("managed-1".to_string()),
+        enrollment_configuration_id: Some("enrollment-1".to_string()),
         event_time: Some(timestamp("2026-07-15T12:00:00Z")),
         deployment_state: status(
             EspRawStatus::Text("futureState".to_string()),
