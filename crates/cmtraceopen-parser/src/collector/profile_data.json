@@ -1,6 +1,6 @@
 {
     "profileName": "cmtrace-full-diagnostics-v1",
-    "profileVersion": "1.0.0",
+    "profileVersion": "1.1.0",
     "logs": [
         {
             "id": "ime-logs",
@@ -1023,7 +1023,17 @@
             "sourcePath": "%SystemRoot%\\Provisioning\\Diagnostics\\AutopilotDDSZTDFile.json",
             "destinationFolder": "exports",
             "fileName": "AutopilotDDSZTDFile.json",
+            "parseHints": ["json", "autopilot"],
             "notes": "Autopilot DDS profile JSON."
+        },
+        {
+            "id": "autopilot-dds-ztd-wmansvc",
+            "family": "autopilot",
+            "sourcePath": "%SystemRoot%\\ServiceState\\wmansvc\\AutopilotDDSZTDFile.json",
+            "destinationFolder": "exports/autopilot",
+            "fileName": "AutopilotDDSZTDFile.json",
+            "parseHints": ["json", "autopilot"],
+            "notes": "Exact Autopilot DDS profile JSON location used by wmansvc during OOBE."
         },
         {
             "id": "ndes-connector-config",
@@ -1171,19 +1181,21 @@
             "id": "delivery-optimization-status",
             "family": "delivery-optimization",
             "command": "powershell.exe",
-            "arguments": ["-NoProfile", "-Command", "Get-DeliveryOptimizationStatus | Format-List *"],
-            "fileName": "delivery-optimization-status.txt",
+            "arguments": ["-NoProfile", "-Command", "Get-DeliveryOptimizationStatus | Select-Object FileId,Status,Priority,BytesFromHttp,BytesFromLanPeers,BytesFromInternetPeers,BytesFromCacheServer,BytesFromGroupPeers,BytesTotal,DownloadDuration,PercentPeerCaching | ConvertTo-Json -Compress"],
+            "fileName": "delivery-optimization-status.json",
             "timeoutSecs": 30,
-            "notes": "Delivery Optimization session and peer status."
+            "parseHints": ["json", "delivery-optimization"],
+            "notes": "Field-filtered Delivery Optimization session and peer counters without source URLs."
         },
         {
             "id": "delivery-optimization-perf-snap",
             "family": "delivery-optimization",
             "command": "powershell.exe",
-            "arguments": ["-NoProfile", "-Command", "Get-DeliveryOptimizationPerfSnap | Format-List *"],
-            "fileName": "delivery-optimization-perf-snap.txt",
+            "arguments": ["-NoProfile", "-Command", "Get-DeliveryOptimizationPerfSnapThisMonth | Select-Object DownloadHttpBytes,DownloadLanBytes,DownloadInternetBytes,DownloadCacheHostBytes,UploadLanBytes,UploadInternetBytes,FilesDownloaded,FilesUploaded | ConvertTo-Json -Compress"],
+            "fileName": "delivery-optimization-perf-snap.json",
             "timeoutSecs": 30,
-            "notes": "Delivery Optimization performance snapshot."
+            "parseHints": ["json", "delivery-optimization"],
+            "notes": "Field-filtered monthly Delivery Optimization transfer counters."
         },
         {
             "id": "services-list",
@@ -1285,15 +1297,6 @@
             "notes": "Certificate authority configuration."
         },
         {
-            "id": "delivery-optimization-log",
-            "family": "delivery-optimization",
-            "command": "powershell.exe",
-            "arguments": ["-NoProfile", "-Command", "Get-DeliveryOptimizationLog"],
-            "fileName": "delivery-optimization-log.txt",
-            "timeoutSecs": 60,
-            "notes": "Full Delivery Optimization log."
-        },
-        {
             "id": "appx-info",
             "family": "general",
             "command": "powershell.exe",
@@ -1321,13 +1324,34 @@
             "notes": "File system filter manager drivers (EPM-related)."
         },
         {
-            "id": "basic-system-info",
-            "family": "general",
+            "id": "esp-os-facts",
+            "family": "esp-hardware",
             "command": "powershell.exe",
-            "arguments": ["-NoProfile", "-Command", "Get-CimInstance Win32_OperatingSystem | Format-List *; Get-CimInstance Win32_ComputerSystem | Format-List *; Get-CimInstance Win32_BIOS | Format-List *"],
-            "fileName": "basic-system-info.txt",
+            "arguments": ["-NoProfile", "-Command", "Get-CimInstance Win32_OperatingSystem | Select-Object Caption,Version,BuildNumber,OSArchitecture,LastBootUpTime | ConvertTo-Json -Compress"],
+            "fileName": "esp-os-facts.json",
             "timeoutSecs": 30,
-            "notes": "Basic system information (OS, hardware, BIOS)."
+            "parseHints": ["json", "esp-hardware"],
+            "notes": "Structured OS version and build facts for ESP troubleshooting."
+        },
+        {
+            "id": "esp-hardware-facts",
+            "family": "esp-hardware",
+            "command": "powershell.exe",
+            "arguments": ["-NoProfile", "-Command", "$computer = Get-CimInstance Win32_ComputerSystem; $bios = Get-CimInstance Win32_BIOS; [pscustomobject]@{ Manufacturer = $computer.Manufacturer; Model = $computer.Model; SerialNumber = $bios.SerialNumber; TotalPhysicalMemory = $computer.TotalPhysicalMemory } | ConvertTo-Json -Compress"],
+            "fileName": "esp-hardware-facts.json",
+            "timeoutSecs": 30,
+            "parseHints": ["json", "esp-hardware"],
+            "notes": "Structured manufacturer, model, serial, and memory facts; raw hardware hash is excluded."
+        },
+        {
+            "id": "esp-tpm-facts",
+            "family": "esp-hardware",
+            "command": "powershell.exe",
+            "arguments": ["-NoProfile", "-Command", "Get-Tpm | Select-Object TpmPresent,TpmReady,TpmEnabled,TpmActivated,ManufacturerIdTxt,ManufacturerVersion,ManagedAuthLevel,OwnerClearDisabled,AutoProvisioning | ConvertTo-Json -Compress"],
+            "fileName": "esp-tpm-facts.json",
+            "timeoutSecs": 30,
+            "parseHints": ["json", "esp-hardware"],
+            "notes": "Structured TPM readiness and version facts without raw hardware hash material."
         },
         {
             "id": "secureboot-task-status",

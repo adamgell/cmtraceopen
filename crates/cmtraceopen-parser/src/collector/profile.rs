@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use crate::collector::types::CollectionProfile;
 
 const EMBEDDED_PROFILE_JSON: &str = include_str!("profile_data.json");
@@ -5,8 +7,13 @@ const EMBEDDED_PROFILE_JSON: &str = include_str!("profile_data.json");
 impl CollectionProfile {
     /// Load the embedded collection profile compiled into the binary.
     pub fn embedded() -> CollectionProfile {
-        serde_json::from_str(EMBEDDED_PROFILE_JSON)
-            .expect("embedded collection profile JSON must be valid")
+        let profile: CollectionProfile = serde_json::from_str(EMBEDDED_PROFILE_JSON)
+            .expect("embedded collection profile JSON must be valid");
+        assert!(
+            profile.has_unique_artifact_ids(),
+            "embedded collection profile artifact IDs must be unique"
+        );
+        profile
     }
 
     /// Total number of individual collection items across all categories.
@@ -25,6 +32,22 @@ impl CollectionProfile {
         self.event_logs.retain(|item| families.contains(&item.family));
         self.exports.retain(|item| families.contains(&item.family));
         self.commands.retain(|item| families.contains(&item.family));
+    }
+
+    /// IDs are a bundle-wide contract, so uniqueness spans every category.
+    pub fn artifact_ids(&self) -> impl Iterator<Item = &str> {
+        self.logs
+            .iter()
+            .map(|item| item.id.as_str())
+            .chain(self.registry.iter().map(|item| item.id.as_str()))
+            .chain(self.event_logs.iter().map(|item| item.id.as_str()))
+            .chain(self.exports.iter().map(|item| item.id.as_str()))
+            .chain(self.commands.iter().map(|item| item.id.as_str()))
+    }
+
+    pub fn has_unique_artifact_ids(&self) -> bool {
+        let mut seen = HashSet::new();
+        self.artifact_ids().all(|id| seen.insert(id))
     }
 }
 
