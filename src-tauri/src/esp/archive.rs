@@ -402,9 +402,19 @@ fn preflight_zip_entry_count(reader: &mut File) -> Result<(), ArchiveError> {
         ));
     };
     let absolute_eocd = file_len - search_len as u64 + relative_eocd as u64;
+    let disk_number = read_u16_le(&tail, relative_eocd + 4).expect("validated EOCD");
+    let central_directory_disk = read_u16_le(&tail, relative_eocd + 6).expect("validated EOCD");
     let entries_on_disk = read_u16_le(&tail, relative_eocd + 8).expect("validated EOCD");
     let total_entries = read_u16_le(&tail, relative_eocd + 10).expect("validated EOCD");
-    let count = if entries_on_disk == u16::MAX || total_entries == u16::MAX {
+    let central_directory_size = read_u32_le(&tail, relative_eocd + 12).expect("validated EOCD");
+    let central_directory_offset = read_u32_le(&tail, relative_eocd + 16).expect("validated EOCD");
+    let uses_zip64_sentinel = disk_number == u16::MAX
+        || central_directory_disk == u16::MAX
+        || entries_on_disk == u16::MAX
+        || total_entries == u16::MAX
+        || central_directory_size == u32::MAX
+        || central_directory_offset == u32::MAX;
+    let count = if uses_zip64_sentinel {
         preflight_zip64_entry_count(reader, absolute_eocd)?
     } else {
         usize::from(total_entries.max(entries_on_disk))
