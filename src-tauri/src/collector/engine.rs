@@ -144,11 +144,33 @@ pub fn run_collection<R: Runtime>(
     })
 }
 
+const MAX_BUNDLE_HOSTNAME_CHARS: usize = 64;
+
+fn sanitize_bundle_hostname(hostname: &str) -> String {
+    let sanitized = hostname
+        .chars()
+        .take(MAX_BUNDLE_HOSTNAME_CHARS)
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '-' | '_') {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    if sanitized.is_empty() {
+        "unknown".to_string()
+    } else {
+        sanitized
+    }
+}
+
 fn generate_bundle_id() -> String {
     let now = chrono::Utc::now();
     let hostname = std::env::var("COMPUTERNAME")
         .or_else(|_| std::env::var("HOSTNAME"))
         .unwrap_or_else(|_| "unknown".to_string());
+    let hostname = sanitize_bundle_hostname(&hostname);
     let nonce = uuid::Uuid::new_v4().simple();
     format!(
         "CMTRACE-{}-{}-{nonce}",
@@ -233,7 +255,7 @@ fn emit_progress<R: Runtime>(
 
 #[cfg(test)]
 mod tests {
-    use super::{generate_bundle_id, resolve_bundle_root};
+    use super::{generate_bundle_id, resolve_bundle_root, sanitize_bundle_hostname};
     use crate::error::AppError;
     use std::fs;
     use std::path::PathBuf;
@@ -250,6 +272,19 @@ mod tests {
         );
         let nonce = first.rsplit('-').next().expect("bundle nonce");
         uuid::Uuid::parse_str(nonce).expect("bundle ID ends with a UUID nonce");
+    }
+
+    #[test]
+    fn bundle_hostname_is_a_bounded_safe_path_component() {
+        let sanitized = sanitize_bundle_hostname(r"..\..\outside/host name:?");
+
+        assert_eq!(sanitized, "______outside_host_name__");
+        assert!(sanitized
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_')));
+        assert_eq!(sanitize_bundle_hostname("HOST-01_lab"), "HOST-01_lab");
+        assert_eq!(sanitize_bundle_hostname(""), "unknown");
+        assert_eq!(sanitize_bundle_hostname(&"a".repeat(1_000)).len(), 64);
     }
 
     #[test]

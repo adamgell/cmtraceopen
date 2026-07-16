@@ -328,6 +328,9 @@ function Assert-CollectorProfileShape {
             optionalArrays  = @('arguments', 'parseHints')
         }
     )
+    $artifactIds = [System.Collections.Generic.Dictionary[string, string]]::new(
+        [System.StringComparer]::OrdinalIgnoreCase
+    )
 
     foreach ($sectionDefinition in $sectionDefinitions) {
         $sectionName = [string]$sectionDefinition.name
@@ -344,6 +347,12 @@ function Assert-CollectorProfileShape {
             foreach ($propertyName in @($sectionDefinition.requiredStrings)) {
                 Assert-ProfileRequiredString -InputObject $item -Name $propertyName -Context $itemContext -Path $Path
             }
+
+            $artifactId = ([string](Get-ObjectPropertyValue -InputObject $item -Name 'id')).Trim()
+            if ($artifactIds.ContainsKey($artifactId)) {
+                throw ('Collector profile is invalid: {0}. duplicate artifact id "{1}" was first declared at {2} and repeated at {3}.' -f $Path, $artifactId, $artifactIds[$artifactId], $itemContext)
+            }
+            $artifactIds.Add($artifactId, $itemContext)
 
             foreach ($propertyName in @($sectionDefinition.optionalArrays)) {
                 $propertyValue = Get-ObjectPropertyValue -InputObject $item -Name $propertyName
