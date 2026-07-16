@@ -8,7 +8,6 @@ pub mod error;
 pub use cmtraceopen_parser::error_db;
 #[cfg(feature = "event-log")]
 pub mod event_log;
-#[cfg(target_os = "windows")]
 pub mod graph_api;
 pub mod intune;
 #[cfg(debug_assertions)]
