@@ -33,6 +33,9 @@ import type {
   EspWorkload,
 } from "./types";
 
+const GRAPH_MANAGED_DEVICE_A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+const GRAPH_MANAGED_DEVICE_B = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+
 function timestamp(rawText: string) {
   return {
     rawText,
@@ -824,7 +827,7 @@ describe("optional Graph enrichment presentation", () => {
     );
     const candidates = [
       {
-        managedDeviceId: "managed-candidate-a",
+        managedDeviceId: GRAPH_MANAGED_DEVICE_A,
         entraDeviceId: "entra-candidate-a",
         serialNumber: null,
         deviceName: "ESP-LAB-A",
@@ -834,7 +837,7 @@ describe("optional Graph enrichment presentation", () => {
         evidence: [],
       },
       {
-        managedDeviceId: "managed-candidate-b",
+        managedDeviceId: GRAPH_MANAGED_DEVICE_B,
         entraDeviceId: "entra-candidate-b",
         serialNumber: null,
         deviceName: "ESP-LAB-B",
@@ -878,10 +881,10 @@ describe("optional Graph enrichment presentation", () => {
     );
     fireEvent.click(
       within(panel).getByRole("button", {
-        name: "Select Graph device managed-candidate-b",
+        name: `Select Graph device ${GRAPH_MANAGED_DEVICE_B}`,
       }),
     );
-    expect(onSelectDevice).toHaveBeenCalledWith("managed-candidate-b");
+    expect(onSelectDevice).toHaveBeenCalledWith(GRAPH_MANAGED_DEVICE_B);
 
     overlay.deviceMatch.data = {
       selected: candidates[1],
@@ -901,7 +904,7 @@ describe("optional Graph enrichment presentation", () => {
       />,
     );
     expect(panel).toHaveTextContent("Selected device · ESP-LAB-B");
-    expect(panel).toHaveTextContent("managed-candidate-b");
+    expect(panel).toHaveTextContent(GRAPH_MANAGED_DEVICE_B);
   });
 
   it("sends an explicit candidate through the coordinator request contract", async () => {
@@ -925,12 +928,12 @@ describe("optional Graph enrichment presentation", () => {
       createRequestId: () => "graph-explicit-candidate",
     });
 
-    await coordinator.refresh("managed-candidate-b");
+    await coordinator.refresh(GRAPH_MANAGED_DEVICE_B);
 
     expect(fetchGraph).toHaveBeenCalledWith(
       expect.objectContaining({
         requestId: "graph-explicit-candidate",
-        selectedManagedDeviceId: "managed-candidate-b",
+        selectedManagedDeviceId: GRAPH_MANAGED_DEVICE_B,
       }),
     );
     coordinator.dispose();

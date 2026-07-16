@@ -33,6 +33,10 @@ vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
 }));
 
+const GRAPH_MANAGED_DEVICE_DEFAULT =
+  "10101010-1010-4010-8010-101010101010";
+const GRAPH_MANAGED_DEVICE_B = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+
 function makeSnapshot(
   evidenceIds: string[] = [],
   identitySeed = "device-a",
@@ -154,7 +158,7 @@ function makeOverlay(requestId: string): EspGraphOverlay {
       apiVersion: "v1.0",
       data: {
         selected: {
-          managedDeviceId: "managed-a",
+          managedDeviceId: GRAPH_MANAGED_DEVICE_DEFAULT,
           entraDeviceId: "entra-device-a",
           serialNumber: { value: "serial-device-a", sensitivity: "sensitive" },
           deviceName: "host-device-a",
@@ -2047,12 +2051,12 @@ describe("ESP Graph scheduling", () => {
       snapshot: makeSnapshot(["local-a"]),
     });
 
-    await coordinator.refresh("managed-candidate-b");
+    await coordinator.refresh(GRAPH_MANAGED_DEVICE_B);
     await coordinator.refresh();
 
     expect(
       fetchGraph.mock.calls.map(([request]) => request.selectedManagedDeviceId),
-    ).toEqual(["managed-candidate-b", "managed-candidate-b"]);
+    ).toEqual([GRAPH_MANAGED_DEVICE_B, GRAPH_MANAGED_DEVICE_B]);
     coordinator.dispose();
   });
 
@@ -2076,7 +2080,7 @@ describe("ESP Graph scheduling", () => {
         ...snapshot,
         graph: makeOverlayWithSelectedDevice(
           "graph-existing",
-          "managed-candidate-b",
+          GRAPH_MANAGED_DEVICE_B,
         ),
       },
     });
@@ -2085,7 +2089,7 @@ describe("ESP Graph scheduling", () => {
 
     expect(fetchGraph).toHaveBeenCalledWith(
       expect.objectContaining({
-        selectedManagedDeviceId: "managed-candidate-b",
+        selectedManagedDeviceId: GRAPH_MANAGED_DEVICE_B,
       }),
     );
     coordinator.dispose();
@@ -2110,7 +2114,7 @@ describe("ESP Graph scheduling", () => {
       snapshot: makeSnapshot(["local-a"], "device-a"),
     });
 
-    await coordinator.refresh("managed-candidate-b");
+    await coordinator.refresh(GRAPH_MANAGED_DEVICE_B);
     useEspDiagnosticsStore.setState({
       snapshot: makeSnapshot(["local-b"], "device-b"),
     });
@@ -2118,7 +2122,7 @@ describe("ESP Graph scheduling", () => {
 
     expect(
       fetchGraph.mock.calls.map(([request]) => request.selectedManagedDeviceId),
-    ).toEqual(["managed-candidate-b", null]);
+    ).toEqual([GRAPH_MANAGED_DEVICE_B, null]);
     coordinator.dispose();
   });
 
@@ -2144,7 +2148,7 @@ describe("ESP Graph scheduling", () => {
         makeSnapshot(["local-first"], "same-device"),
       );
 
-    await coordinator.refresh("managed-candidate-b");
+    await coordinator.refresh(GRAPH_MANAGED_DEVICE_B);
     useEspDiagnosticsStore.getState().beginAnalysis("analysis-second");
     await coordinator.reconcile();
     useEspDiagnosticsStore
@@ -2157,7 +2161,7 @@ describe("ESP Graph scheduling", () => {
 
     expect(
       fetchGraph.mock.calls.map(([request]) => request.selectedManagedDeviceId),
-    ).toEqual(["managed-candidate-b", null]);
+    ).toEqual([GRAPH_MANAGED_DEVICE_B, null]);
     coordinator.dispose();
   });
 
@@ -2185,19 +2189,19 @@ describe("ESP Graph scheduling", () => {
       snapshot: makeSnapshot(["local-a"]),
     });
 
-    const cancelled = coordinator.refresh("managed-candidate-b");
+    const cancelled = coordinator.refresh(GRAPH_MANAGED_DEVICE_B);
     expect(fetchGraph).toHaveBeenCalledTimes(1);
     await coordinator.cancel();
     await coordinator.refresh();
     lateOverlay.resolve(
-      makeOverlayWithSelectedDevice("graph-cancelled", "managed-candidate-b"),
+      makeOverlayWithSelectedDevice("graph-cancelled", GRAPH_MANAGED_DEVICE_B),
     );
     await cancelled;
 
     expect(cancelGraph).toHaveBeenCalledWith("graph-cancelled");
     expect(
       fetchGraph.mock.calls.map(([request]) => request.selectedManagedDeviceId),
-    ).toEqual(["managed-candidate-b", "managed-candidate-b"]);
+    ).toEqual([GRAPH_MANAGED_DEVICE_B, GRAPH_MANAGED_DEVICE_B]);
     expect(useEspDiagnosticsStore.getState().snapshot?.graph?.requestId).toBe(
       "graph-after-cancel",
     );
@@ -2228,7 +2232,7 @@ describe("ESP Graph scheduling", () => {
       snapshot: makeSnapshot(["local-a"]),
     });
 
-    const stale = coordinator.refresh("managed-candidate-b");
+    const stale = coordinator.refresh(GRAPH_MANAGED_DEVICE_B);
     expect(fetchGraph).toHaveBeenCalledTimes(1);
     useUiStore.setState({ graphApiEnabled: false });
     await coordinator.reconcile();
@@ -2237,7 +2241,7 @@ describe("ESP Graph scheduling", () => {
     lateOverlay.resolve(
       makeOverlayWithSelectedDevice(
         "graph-before-disable",
-        "managed-candidate-b",
+        GRAPH_MANAGED_DEVICE_B,
       ),
     );
     await stale;
@@ -2285,7 +2289,7 @@ describe("ESP Graph scheduling", () => {
       snapshot: makeSnapshot(["local-a"]),
     });
 
-    await coordinator.refresh("managed-candidate-b");
+    await coordinator.refresh(GRAPH_MANAGED_DEVICE_B);
     coordinator.start();
     const stale = coordinator.refresh();
     await vi.waitFor(() => expect(fetchGraph).toHaveBeenCalledTimes(2));
@@ -2304,7 +2308,7 @@ describe("ESP Graph scheduling", () => {
     activeOverlay.resolve(
       makeOverlayWithSelectedDevice(
         "graph-before-disable",
-        "managed-candidate-b",
+        GRAPH_MANAGED_DEVICE_B,
       ),
     );
     await stale;
@@ -2343,7 +2347,7 @@ describe("ESP Graph scheduling", () => {
       snapshot: makeSnapshot(["local-first"], "same-device"),
     });
 
-    await coordinator.refresh("managed-candidate-b");
+    await coordinator.refresh(GRAPH_MANAGED_DEVICE_B);
     coordinator.start();
     useEspDiagnosticsStore.setState({
       graphRequestId: "graph-active",

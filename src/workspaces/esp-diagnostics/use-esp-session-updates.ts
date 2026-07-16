@@ -230,7 +230,7 @@ function createGraphRequest(
     requestId,
     identity: snapshot.identity,
     workloadIds: sortedAppIds,
-    selectedManagedDeviceId,
+    selectedManagedDeviceId: normalizeGraphGuid(selectedManagedDeviceId),
     evidenceWindowStartUtc: evidenceWindow?.start ?? null,
     evidenceWindowEndUtc: evidenceWindow?.end ?? null,
     enrollmentConfigurationIds: Array.from(enrollmentConfigurationIds).sort(),
