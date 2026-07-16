@@ -409,9 +409,14 @@ export function GraphEnrichmentPanel({
 
   const invokeControl = (operation: () => void | Promise<void>) => {
     setControlError(null);
-    void Promise.resolve(operation()).catch((error: unknown) => {
+    const reportError = (error: unknown) => {
       setControlError(error instanceof Error ? error.message : String(error));
-    });
+    };
+    try {
+      void Promise.resolve(operation()).catch(reportError);
+    } catch (error) {
+      reportError(error);
+    }
   };
   const refresh = onRefresh ?? (() => refreshEspGraphData());
   const cancel = onCancel ?? cancelEspGraphData;

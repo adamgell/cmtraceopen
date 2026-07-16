@@ -716,6 +716,9 @@ export function createEspGraphCoordinator(
     reconcile: () => run(false),
     refresh: (selectedManagedDeviceId) => run(true, selectedManagedDeviceId),
     cancel: async () => {
+      if (disposed) {
+        return;
+      }
       operationGeneration += 1;
       const cancellation = cancelCurrentRequest();
       if (cancellation) {
@@ -758,10 +761,12 @@ export function createEspGraphCoordinator(
           state.graphApiEnabled !== previous.graphApiEnabled ||
           state.graphApiStatus !== previous.graphApiStatus
         ) {
-          if (!state.graphApiEnabled) {
-            if (previous.graphApiEnabled) {
-              graphLifecycleGeneration += 1;
-            }
+          const disabled = previous.graphApiEnabled && !state.graphApiEnabled;
+          const leftConnected =
+            previous.graphApiStatus === "connected" &&
+            state.graphApiStatus !== "connected";
+          if (disabled || leftConnected) {
+            graphLifecycleGeneration += 1;
             const snapshot = useEspDiagnosticsStore.getState().snapshot;
             if (snapshot) {
               suppressOverlaySelection(snapshot);

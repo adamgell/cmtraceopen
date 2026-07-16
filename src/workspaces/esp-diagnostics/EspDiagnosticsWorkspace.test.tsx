@@ -638,6 +638,115 @@ describe("optional Graph enrichment presentation", () => {
     expect(onCancel).toHaveBeenCalledOnce();
   });
 
+  it.each([
+    [
+      "synchronous",
+      () => {
+        throw new Error("Graph refresh failed");
+      },
+    ],
+    ["asynchronous", () => Promise.reject(new Error("Graph refresh failed"))],
+  ])("renders the same alert for %s Refresh failures", async (_, onRefresh) => {
+    const snapshot = makeSnapshot();
+    useUiStore.setState({
+      graphApiEnabled: true,
+      graphApiStatus: "connected",
+    });
+    useEspDiagnosticsStore.setState({
+      snapshot,
+      graphPhase: "idle",
+      graphUnavailableReason: null,
+    });
+    renderGraphPanel(snapshot, { onRefresh });
+
+    fireEvent.click(screen.getByRole("button", { name: "Refresh Graph data" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Graph refresh failed",
+    );
+  });
+
+  it("contains synchronous Cancel failures in the shared control alert", async () => {
+    const snapshot = makeSnapshot();
+    useUiStore.setState({
+      graphApiEnabled: true,
+      graphApiStatus: "connected",
+    });
+    useEspDiagnosticsStore.setState({
+      snapshot,
+      graphPhase: "loading",
+      graphRequestId: "graph-loading",
+      graphUnavailableReason: null,
+    });
+    renderGraphPanel(snapshot, {
+      onCancel: () => {
+        throw new Error("Graph cancel failed");
+      },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel Graph query" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Graph cancel failed",
+    );
+  });
+
+  it("contains synchronous device-selection failures in the shared control alert", async () => {
+    const overlay = makeGraphOverlay(
+      "app-vpn-raw-guid",
+      "Contoso VPN from Graph",
+    );
+    overlay.deviceMatch = {
+      status: "available",
+      requiredScope: "DeviceManagementManagedDevices.Read.All",
+      apiVersion: "v1.0",
+      data: {
+        selected: null,
+        candidates: [
+          {
+            managedDeviceId: "managed-candidate-a",
+            entraDeviceId: "entra-candidate-a",
+            serialNumber: null,
+            deviceName: "ESP-LAB-A",
+            userId: null,
+            userPrincipalName: null,
+            tenantId: null,
+            evidence: [],
+          },
+        ],
+        matchBasis: "serialNumber",
+        confidence: "temporal",
+        evidence: [],
+      },
+      error: null,
+    };
+    const snapshot = makeSnapshot({ graph: overlay });
+    useUiStore.setState({
+      graphApiEnabled: true,
+      graphApiStatus: "connected",
+    });
+    useEspDiagnosticsStore.setState({
+      snapshot,
+      graphPhase: "partial",
+      graphUnavailableReason: null,
+    });
+    renderGraphPanel(snapshot, {
+      onSelectDevice: () => {
+        throw new Error("Graph selection failed");
+      },
+    });
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Select Graph device managed-candidate-a",
+      }),
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Graph selection failed",
+    );
+  });
+
   it("shows independent partial, denied, offline, throttled, cancelled, and beta section states", () => {
     const overlay = makeGraphOverlay(
       "assignment-only-app",

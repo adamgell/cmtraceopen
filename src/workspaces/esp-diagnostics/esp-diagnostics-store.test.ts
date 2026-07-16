@@ -2216,6 +2216,48 @@ describe("ESP Graph scheduling", () => {
     coordinator.dispose();
   });
 
+  it("clears an explicit selection when the connected WAM generation ends", async () => {
+    const requestIds = ["graph-before-error", "graph-after-reconnect"];
+    const fetchGraph = vi.fn(async (request: EspGraphRequest) =>
+      makeOverlayWithSelectedDevice(
+        request.requestId,
+        request.selectedManagedDeviceId ?? "managed-default",
+      ),
+    );
+    const coordinator = createEspGraphCoordinator({
+      fetchGraph,
+      cancelGraph: vi.fn(async () => undefined),
+      createRequestId: () => requestIds.shift() ?? "graph-unexpected",
+    });
+    useUiStore.setState({ graphApiEnabled: true, graphApiStatus: "connected" });
+    useEspDiagnosticsStore.setState({
+      phase: "ready",
+      snapshot: makeSnapshot(["local-a"], "same-device"),
+    });
+
+    try {
+      await coordinator.refresh("managed-from-old-connection");
+      coordinator.start();
+      useUiStore.setState({ graphApiStatus: "error" });
+      await vi.waitFor(() =>
+        expect(useEspDiagnosticsStore.getState().graphUnavailableReason).toBe(
+          "graphNotConnected",
+        ),
+      );
+
+      useUiStore.setState({ graphApiStatus: "connected" });
+      await coordinator.refresh();
+
+      expect(
+        fetchGraph.mock.calls.map(
+          ([request]) => request.selectedManagedDeviceId,
+        ),
+      ).toEqual(["managed-from-old-connection", null]);
+    } finally {
+      coordinator.dispose();
+    }
+  });
+
   it("reuses the current overlay selection when reconciling the same identity", async () => {
     const snapshot = makeSnapshot(["local-a"]);
     const fetchGraph = vi.fn(async (request: EspGraphRequest) =>
@@ -2645,6 +2687,7 @@ describe("ESP Graph scheduling", () => {
 
     const active = coordinator.refresh(GRAPH_MANAGED_DEVICE_B);
     try {
+      await vi.waitFor(() => expect(fetchGraph).toHaveBeenCalledTimes(1));
       coordinator.start();
       useEspDiagnosticsStore.getState().beginAnalysis("analysis-replacement");
       useEspDiagnosticsStore
@@ -2686,6 +2729,68 @@ describe("ESP Graph scheduling", () => {
       activeOverlay.resolve(
         makeOverlayWithSelectedDevice("graph-active", GRAPH_MANAGED_DEVICE_B),
       );
+      coordinator.dispose();
+    }
+  });
+
+  it("invalidates an explicit refresh waiting on orphan cancellation when the WAM generation changes", async () => {
+    const activeOverlay = deferred<EspGraphOverlay>();
+    const orphanCancellation = deferred<void>();
+    const requestIds = ["graph-active", "graph-after-reconnect"];
+    const fetchGraph = vi
+      .fn<(request: EspGraphRequest) => Promise<EspGraphOverlay>>()
+      .mockImplementationOnce(() => activeOverlay.promise)
+      .mockImplementation(async (request) =>
+        makeOverlayWithSelectedDevice(
+          request.requestId,
+          request.selectedManagedDeviceId ?? "managed-default",
+        ),
+      );
+    const cancelGraph = vi.fn(() => orphanCancellation.promise);
+    const coordinator = createEspGraphCoordinator({
+      fetchGraph,
+      cancelGraph,
+      createRequestId: () => requestIds.shift() ?? "graph-unexpected",
+    });
+    useUiStore.setState({ graphApiEnabled: true, graphApiStatus: "connected" });
+    useEspDiagnosticsStore.setState({
+      phase: "ready",
+      snapshot: makeSnapshot(["local-initial"], "same-device"),
+    });
+
+    const active = coordinator.refresh("managed-initial");
+    try {
+      coordinator.start();
+      useEspDiagnosticsStore.getState().beginAnalysis("analysis-replacement");
+      useEspDiagnosticsStore
+        .getState()
+        .applyAnalysis(
+          "analysis-replacement",
+          makeSnapshot(["local-replacement"], "same-device"),
+        );
+
+      const staleRefresh = coordinator.refresh("managed-must-not-cross");
+      useUiStore.setState({ graphApiStatus: "error" });
+      useUiStore.setState({ graphApiStatus: "connected" });
+
+      orphanCancellation.resolve();
+      await staleRefresh;
+      await vi.waitFor(() =>
+        expect(fetchGraph.mock.calls.length).toBeGreaterThanOrEqual(2),
+      );
+      expect(
+        fetchGraph.mock.calls.map(
+          ([request]) => request.selectedManagedDeviceId,
+        ),
+      ).toEqual(["managed-initial", null]);
+      expect(useEspDiagnosticsStore.getState().snapshot?.graph?.requestId).toBe(
+        "graph-after-reconnect",
+      );
+    } finally {
+      activeOverlay.resolve(
+        makeOverlayWithSelectedDevice("graph-active", "managed-initial"),
+      );
+      await active;
       coordinator.dispose();
     }
   });
@@ -3317,6 +3422,58 @@ describe("ESP Graph scheduling", () => {
     pending.resolve(makeOverlay("graph-dispose"));
     await activeQuery;
     expect(useEspDiagnosticsStore.getState().snapshot?.graph).toBeNull();
+  });
+
+  it("keeps repeated lifecycle calls on a disposed coordinator isolated from active work", async () => {
+    const staleCancelGraph = vi.fn(async () => undefined);
+    const staleCoordinator = createEspGraphCoordinator({
+      fetchGraph: vi.fn(async (request: EspGraphRequest) =>
+        makeOverlay(request.requestId),
+      ),
+      cancelGraph: staleCancelGraph,
+      createRequestId: () => "graph-stale-owner",
+    });
+
+    staleCoordinator.start();
+    staleCoordinator.start();
+    staleCoordinator.dispose();
+    staleCoordinator.dispose();
+    staleCoordinator.start();
+
+    const activeOverlay = deferred<EspGraphOverlay>();
+    const activeCancelGraph = vi.fn(async () => undefined);
+    const activeCoordinator = createEspGraphCoordinator({
+      fetchGraph: vi.fn(() => activeOverlay.promise),
+      cancelGraph: activeCancelGraph,
+      createRequestId: () => "graph-active-owner",
+    });
+    useUiStore.setState({ graphApiEnabled: true, graphApiStatus: "connected" });
+    useEspDiagnosticsStore.setState({
+      phase: "ready",
+      snapshot: makeSnapshot(["local-active"], "active-device"),
+    });
+
+    const active = activeCoordinator.refresh();
+    try {
+      await vi.waitFor(() =>
+        expect(useEspDiagnosticsStore.getState().graphRequestId).toBe(
+          "graph-active-owner",
+        ),
+      );
+      await staleCoordinator.cancel();
+      await staleCoordinator.cancel();
+
+      expect(staleCancelGraph).not.toHaveBeenCalled();
+      expect(activeCancelGraph).not.toHaveBeenCalled();
+      expect(useEspDiagnosticsStore.getState().graphRequestId).toBe(
+        "graph-active-owner",
+      );
+      expect(useEspDiagnosticsStore.getState().graphPhase).toBe("loading");
+    } finally {
+      activeOverlay.resolve(makeOverlay("graph-active-owner"));
+      await active;
+      activeCoordinator.dispose();
+    }
   });
 
   it("cancels an in-flight native Graph request when beginAnalysis fires (orphan cancel)", async () => {
