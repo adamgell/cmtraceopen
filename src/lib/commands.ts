@@ -46,16 +46,43 @@ export interface UpdatePolicy {
   updateChecksDisabledByPolicy: boolean;
 }
 
-function getInvokeErrorMessage(error: unknown): string {
+export function getSafeErrorMessage(
+  error: unknown,
+  fallback = "The operation failed.",
+): string {
   if (error instanceof Error) {
-    return error.message;
+    return error.message.trim() || fallback;
   }
 
-  return String(error);
+  if (typeof error === "string") {
+    return error.trim() || fallback;
+  }
+
+  if (typeof error === "object" && error !== null) {
+    const message = Object.getOwnPropertyDescriptor(error, "message")?.value;
+    if (typeof message === "string" && message.trim()) {
+      // Tauri may reject with a structured object. Only surface its message;
+      // sibling response-body and token fields must never reach the UI.
+      return message.trim();
+    }
+  }
+
+  if (
+    typeof error === "number" ||
+    typeof error === "boolean" ||
+    typeof error === "bigint"
+  ) {
+    return String(error);
+  }
+
+  return fallback;
 }
 
 function normalizeCommandInvokeError(commandName: string, error: unknown): Error {
-  const message = getInvokeErrorMessage(error);
+  const message = getSafeErrorMessage(
+    error,
+    `Command '${commandName}' failed.`,
+  );
   const missingCommandPattern = new RegExp(`command\\s+${commandName}\\s+not found`, "i");
 
   if (missingCommandPattern.test(message)) {

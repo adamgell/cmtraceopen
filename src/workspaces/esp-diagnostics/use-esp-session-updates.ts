@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import {
+  getSafeErrorMessage,
   graphCancelEspDiagnostics,
   graphFetchEspDiagnostics,
 } from "../../lib/commands";
@@ -99,13 +100,27 @@ function normalizeGraphGuid(value: string | null | undefined): string | null {
   return GRAPH_GUID_PATTERN.test(normalized) ? normalized : null;
 }
 
+type GraphReferenceKinds<K extends string> = Map<string, Set<K>>;
+
+function addReference<K extends string>(
+  references: GraphReferenceKinds<K>,
+  id: string,
+  kind: K,
+): void {
+  const kinds = references.get(id) ?? new Set<K>();
+  kinds.add(kind);
+  references.set(id, kinds);
+}
+
 function sortedReferences<K extends string>(
-  references: Map<string, K>,
+  references: GraphReferenceKinds<K>,
 ): Array<{ id: string; kind: K }> {
-  return Array.from(references, ([id, kind]) => ({ id, kind })).sort(
-    (left, right) =>
-      left.id.localeCompare(right.id) || left.kind.localeCompare(right.kind),
-  );
+  return Array.from(references)
+    .flatMap(([id, kinds]) => Array.from(kinds, (kind) => ({ id, kind })))
+    .sort(
+      (left, right) =>
+        left.id.localeCompare(right.id) || left.kind.localeCompare(right.kind),
+    );
 }
 
 function createGraphRequest(
@@ -114,8 +129,8 @@ function createGraphRequest(
 ): EspGraphRequest {
   const evidenceWindow = getEvidenceWindow(snapshot);
   const appIds = new Set<string>();
-  const policyReferences = new Map<string, EspGraphPolicyKind>();
-  const scriptReferences = new Map<string, EspGraphScriptKind>();
+  const policyReferences: GraphReferenceKinds<EspGraphPolicyKind> = new Map();
+  const scriptReferences: GraphReferenceKinds<EspGraphScriptKind> = new Map();
   for (const workload of snapshot.workloads) {
     const id = normalizeGraphGuid(workload.rawIdentifier);
     if (!id) {
@@ -128,20 +143,20 @@ function createGraphRequest(
         appIds.add(id);
         break;
       case "policy":
-        policyReferences.set(id, "deviceConfiguration");
+        addReference(policyReferences, id, "deviceConfiguration");
         break;
       case "scepCertificate":
-        policyReferences.set(id, "scepCertificate");
+        addReference(policyReferences, id, "scepCertificate");
         break;
       case "platformScript":
-        scriptReferences.set(id, "platformScript");
+        addReference(scriptReferences, id, "platformScript");
         break;
     }
   }
   for (const value of snapshot.profile?.devicePreparation?.scriptIds ?? []) {
     const id = normalizeGraphGuid(value);
     if (id) {
-      scriptReferences.set(id, "platformScript");
+      addReference(scriptReferences, id, "platformScript");
     }
   }
   const enrollmentConfigurationIds = new Set<string>();
@@ -183,17 +198,30 @@ function createGraphRequest(
         enrollmentConfigurationIds.add(id);
       }
     }
+    const graphPolicyReferences: GraphReferenceKinds<EspGraphPolicyKind> =
+      new Map();
     for (const record of graph.policies.data ?? []) {
       const id = normalizeGraphGuid(record.policyId);
       if (id) {
-        policyReferences.set(id, record.kind);
+        addReference(graphPolicyReferences, id, record.kind);
       }
     }
+    const graphScriptReferences: GraphReferenceKinds<EspGraphScriptKind> =
+      new Map();
     for (const record of graph.scripts.data ?? []) {
       const id = normalizeGraphGuid(record.scriptId);
       if (id) {
-        scriptReferences.set(id, record.kind);
+        addReference(graphScriptReferences, id, record.kind);
       }
+    }
+    // Graph object IDs are collection-scoped, so preserve unique (id, kind)
+    // pairs. A prior Graph overlay is authoritative for IDs whose collection
+    // was already resolved and replaces locally inferred generic kinds.
+    for (const [id, kinds] of graphPolicyReferences) {
+      policyReferences.set(id, kinds);
+    }
+    for (const [id, kinds] of graphScriptReferences) {
+      scriptReferences.set(id, kinds);
     }
   }
   const sortedAppIds = Array.from(appIds).sort();
@@ -244,6 +272,7 @@ function timestampInstant(value: string | null | undefined): number | null {
   const offsetHour = match[8] == null ? 0 : Number(match[8]);
   const offsetMinute = match[9] == null ? 0 : Number(match[9]);
   if (
+    match[7].toLowerCase() === "-00:00" ||
     year < 1 ||
     month < 1 ||
     month > 12 ||
@@ -264,6 +293,14 @@ function timestampInstant(value: string | null | undefined): number | null {
 function timestampUtc(
   timestamp: { normalizedUtc: string | null; rawText: string } | null,
 ): string | null {
+  const rawMatch = timestamp
+    ? RFC3339_OFFSET_TIMESTAMP_PATTERN.exec(timestamp.rawText)
+    : null;
+  if (rawMatch?.[7].toLowerCase() === "-00:00") {
+    // RFC 3339 uses -00:00 to say the local offset is unknown. A derived
+    // normalized value cannot turn that source evidence into an exact instant.
+    return null;
+  }
   for (const value of [timestamp?.normalizedUtc, timestamp?.rawText]) {
     const instant = timestampInstant(value);
     if (instant != null) {
@@ -329,10 +366,6 @@ function createRequestId(): string {
     return `esp-graph-${crypto.randomUUID()}`;
   }
   return `esp-graph-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 export interface EspGraphCoordinatorDependencies {
@@ -548,13 +581,27 @@ export function createEspGraphCoordinator(
         latestSnapshot &&
         getEspIdentityFingerprint(latestSnapshot) === currentFingerprint
       ) {
-        useEspDiagnosticsStore.getState().applyGraphOverlay(requestId, overlay);
+        if (overlay.requestId !== requestId) {
+          useEspDiagnosticsStore
+            .getState()
+            .failGraph(
+              requestId,
+              "Microsoft Graph returned data for a different request. Refresh Graph data to try again.",
+            );
+        } else {
+          useEspDiagnosticsStore
+            .getState()
+            .applyGraphOverlay(requestId, overlay);
+        }
       }
     } catch (error) {
       if (!disposed && generation === operationGeneration) {
         useEspDiagnosticsStore
           .getState()
-          .failGraph(requestId, errorMessage(error));
+          .failGraph(
+            requestId,
+            getSafeErrorMessage(error, "Microsoft Graph enrichment failed."),
+          );
       }
     } finally {
       if (ownedRequestId === requestId) {

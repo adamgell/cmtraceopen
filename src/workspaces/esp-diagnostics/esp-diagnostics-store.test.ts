@@ -313,6 +313,38 @@ describe("ESP typed command wrappers", () => {
       "Restart CMTrace Open",
     );
   });
+
+  it("preserves only the safe message from structured command errors", async () => {
+    const snapshot = makeSnapshot(["structured-command-error"]);
+    const request: EspGraphRequest = {
+      requestId: "graph-structured-error",
+      identity: snapshot.identity,
+      workloadIds: [],
+      selectedManagedDeviceId: null,
+      evidenceWindowStartUtc: null,
+      evidenceWindowEndUtc: null,
+      enrollmentConfigurationIds: [],
+      appIds: [],
+      policyReferences: [],
+      scriptReferences: [],
+    };
+    vi.mocked(invoke).mockRejectedValueOnce({
+      message: "Microsoft Graph transport is unavailable.",
+      body: "Bearer body-secret",
+      token: "token-secret",
+    });
+
+    const error = await graphFetchEspDiagnostics(request).catch(
+      (caught: unknown) => caught,
+    );
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toBe(
+      "Microsoft Graph transport is unavailable.",
+    );
+    expect((error as Error).message).not.toContain("body-secret");
+    expect((error as Error).message).not.toContain("token-secret");
+  });
 });
 
 describe("ESP local session state", () => {
@@ -1265,6 +1297,51 @@ describe("ESP Graph scheduling", () => {
     coordinator.dispose();
   });
 
+  it.each([
+    ["policy", "scepCertificate"],
+    ["scepCertificate", "policy"],
+  ] as const)(
+    "preserves conflicting policy kinds for one canonical ID in %s-first evidence",
+    async (firstKind, secondKind) => {
+      const sharedId = "abababab-abab-4bab-8bab-abababababab";
+      const fetchGraph = vi.fn(async (request: EspGraphRequest) =>
+        makeOverlay(request.requestId),
+      );
+      const coordinator = createEspGraphCoordinator({
+        fetchGraph,
+        cancelGraph: vi.fn(async () => undefined),
+        createRequestId: () => `graph-${firstKind}-first`,
+      });
+      const snapshot = makeSnapshot([`local-${firstKind}-first`]);
+      snapshot.workloads = [
+        makeWorkload(firstKind, sharedId, `workload-${firstKind}`),
+        makeWorkload(secondKind, sharedId, `workload-${secondKind}`),
+      ];
+      useUiStore.setState({
+        graphApiEnabled: true,
+        graphApiStatus: "connected",
+      });
+      useEspDiagnosticsStore
+        .getState()
+        .beginAnalysis(`analysis-${firstKind}-first`);
+      useEspDiagnosticsStore
+        .getState()
+        .applyAnalysis(`analysis-${firstKind}-first`, snapshot);
+
+      await coordinator.reconcile();
+
+      expect(fetchGraph).toHaveBeenCalledWith(
+        expect.objectContaining({
+          policyReferences: [
+            { id: sharedId, kind: "deviceConfiguration" },
+            { id: sharedId, kind: "scepCertificate" },
+          ],
+        }),
+      );
+      coordinator.dispose();
+    },
+  );
+
   it("refines typed references from prior Graph enrollment and profile evidence", async () => {
     const selectedManagedDevice = "10101010-1010-4010-8010-101010101010";
     const localApp = "11111111-1111-4111-8111-111111111111";
@@ -1719,6 +1796,7 @@ describe("ESP Graph scheduling", () => {
     "2026-07-15T14:00:60Z",
     "2026-07-15T14:00:00+24:00",
     "2026-07-15T14:00:00+05:60",
+    "2026-07-15T14:00:00-00:00",
   ])(
     "rejects semantically invalid normalized RFC3339 %s and falls back to valid raw evidence",
     async (invalidNormalizedUtc) => {
@@ -1777,6 +1855,54 @@ describe("ESP Graph scheduling", () => {
       coordinator.dispose();
     },
   );
+
+  it("omits an evidence window whose only claimed offset is RFC3339 unknown local offset", async () => {
+    const fetchGraph = vi.fn(async (request: EspGraphRequest) =>
+      makeOverlay(request.requestId),
+    );
+    const coordinator = createEspGraphCoordinator({
+      fetchGraph,
+      cancelGraph: vi.fn(async () => undefined),
+      createRequestId: () => "graph-unknown-offset-window",
+    });
+    const snapshot = makeSnapshot(["local-unknown-offset-window"]);
+    snapshot.sessions = [
+      {
+        sessionId: "unknown-offset",
+        kind: "classic",
+        scope: "device",
+        userSid: null,
+        startedAt: {
+          rawText: "2026-07-15T14:00:00-00:00",
+          originalOffset: "-00:00",
+          normalizedUtc: "2026-07-15T14:00:00Z",
+          kind: "offset",
+        },
+        endedAt: null,
+        phase: "failed",
+        isLatest: true,
+        workloadIds: [],
+        evidence: [],
+      },
+    ];
+    useUiStore.setState({ graphApiEnabled: true, graphApiStatus: "connected" });
+    useEspDiagnosticsStore
+      .getState()
+      .beginAnalysis("analysis-unknown-offset-window");
+    useEspDiagnosticsStore
+      .getState()
+      .applyAnalysis("analysis-unknown-offset-window", snapshot);
+
+    await coordinator.reconcile();
+
+    expect(fetchGraph).toHaveBeenCalledWith(
+      expect.objectContaining({
+        evidenceWindowStartUtc: null,
+        evidenceWindowEndUtc: null,
+      }),
+    );
+    coordinator.dispose();
+  });
 
   it("omits the evidence window when normalized and raw RFC3339 dates are impossible", async () => {
     const fetchGraph = vi.fn(async (request: EspGraphRequest) =>
@@ -2001,6 +2127,148 @@ describe("ESP Graph scheduling", () => {
     );
     expect(useEspDiagnosticsStore.getState().snapshot?.graph?.requestId).toBe(
       "graph-newest",
+    );
+    coordinator.dispose();
+  });
+
+  it("settles an owned request when the provider returns a different embedded request ID", async () => {
+    const fetchGraph = vi.fn(async () => makeOverlay("graph-foreign-owner"));
+    const coordinator = createEspGraphCoordinator({
+      fetchGraph,
+      cancelGraph: vi.fn(async () => undefined),
+      createRequestId: () => "graph-expected-owner",
+    });
+    useUiStore.setState({ graphApiEnabled: true, graphApiStatus: "connected" });
+    useEspDiagnosticsStore.getState().beginAnalysis("analysis-owner-mismatch");
+    useEspDiagnosticsStore
+      .getState()
+      .applyAnalysis(
+        "analysis-owner-mismatch",
+        makeSnapshot(["local-owner-mismatch"]),
+      );
+
+    await coordinator.reconcile();
+
+    expect(useEspDiagnosticsStore.getState()).toMatchObject({
+      graphRequestId: null,
+      graphPhase: "error",
+      graphError:
+        "Microsoft Graph returned data for a different request. Refresh Graph data to try again.",
+    });
+    expect(useEspDiagnosticsStore.getState().snapshot?.graph).toBeNull();
+    coordinator.dispose();
+  });
+
+  it("does not let a stale wrong-owner response settle its replacement request", async () => {
+    const stale = deferred<EspGraphOverlay>();
+    const replacement = deferred<EspGraphOverlay>();
+    const fetchGraph = vi
+      .fn<(request: EspGraphRequest) => Promise<EspGraphOverlay>>()
+      .mockImplementationOnce(() => stale.promise)
+      .mockImplementationOnce(() => replacement.promise);
+    const ids = ["graph-stale-owner", "graph-current-owner"];
+    const coordinator = createEspGraphCoordinator({
+      fetchGraph,
+      cancelGraph: vi.fn(async () => undefined),
+      createRequestId: () => ids.shift() ?? "graph-unexpected",
+    });
+    useUiStore.setState({ graphApiEnabled: true, graphApiStatus: "connected" });
+    useEspDiagnosticsStore.getState().beginAnalysis("analysis-owner-race");
+    useEspDiagnosticsStore
+      .getState()
+      .applyAnalysis("analysis-owner-race", makeSnapshot(["local-owner-race"]));
+
+    const staleRun = coordinator.reconcile();
+    const replacementRun = coordinator.refresh();
+    await vi.waitFor(() => expect(fetchGraph).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() =>
+      expect(useEspDiagnosticsStore.getState().graphRequestId).toBe(
+        "graph-current-owner",
+      ),
+    );
+    stale.resolve(makeOverlay("graph-foreign-owner"));
+    await staleRun;
+
+    expect(useEspDiagnosticsStore.getState()).toMatchObject({
+      graphRequestId: "graph-current-owner",
+      graphPhase: "loading",
+      graphError: null,
+    });
+
+    replacement.resolve(makeOverlay("graph-current-owner"));
+    await replacementRun;
+    expect(useEspDiagnosticsStore.getState().snapshot?.graph?.requestId).toBe(
+      "graph-current-owner",
+    );
+    coordinator.dispose();
+  });
+
+  it("ignores a late wrong-owner response after Graph is disabled", async () => {
+    const pending = deferred<EspGraphOverlay>();
+    const coordinator = createEspGraphCoordinator({
+      fetchGraph: vi.fn(() => pending.promise),
+      cancelGraph: vi.fn(async () => undefined),
+      createRequestId: () => "graph-disabled-owner",
+    });
+    useUiStore.setState({ graphApiEnabled: true, graphApiStatus: "connected" });
+    useEspDiagnosticsStore.getState().beginAnalysis("analysis-disabled-owner");
+    useEspDiagnosticsStore
+      .getState()
+      .applyAnalysis(
+        "analysis-disabled-owner",
+        makeSnapshot(["local-disabled-owner"]),
+      );
+
+    const active = coordinator.reconcile();
+    useUiStore.setState({ graphApiEnabled: false });
+    await coordinator.reconcile();
+    pending.resolve(makeOverlay("graph-foreign-owner"));
+    await active;
+
+    expect(useEspDiagnosticsStore.getState()).toMatchObject({
+      graphRequestId: null,
+      graphPhase: "disabled",
+      graphError: null,
+    });
+    expect(useEspDiagnosticsStore.getState().snapshot?.graph).toBeNull();
+    coordinator.dispose();
+  });
+
+  it("preserves only the safe message from structured coordinator errors", async () => {
+    const coordinator = createEspGraphCoordinator({
+      fetchGraph: vi.fn(async () => {
+        throw {
+          message: "Microsoft Graph consent is required.",
+          body: "Bearer coordinator-body-secret",
+          token: "coordinator-token-secret",
+        };
+      }),
+      cancelGraph: vi.fn(async () => undefined),
+      createRequestId: () => "graph-structured-coordinator-error",
+    });
+    useUiStore.setState({ graphApiEnabled: true, graphApiStatus: "connected" });
+    useEspDiagnosticsStore
+      .getState()
+      .beginAnalysis("analysis-structured-coordinator-error");
+    useEspDiagnosticsStore
+      .getState()
+      .applyAnalysis(
+        "analysis-structured-coordinator-error",
+        makeSnapshot(["local-structured-coordinator-error"]),
+      );
+
+    await coordinator.reconcile();
+
+    expect(useEspDiagnosticsStore.getState()).toMatchObject({
+      graphRequestId: null,
+      graphPhase: "error",
+      graphError: "Microsoft Graph consent is required.",
+    });
+    expect(useEspDiagnosticsStore.getState().graphError).not.toContain(
+      "coordinator-body-secret",
+    );
+    expect(useEspDiagnosticsStore.getState().graphError).not.toContain(
+      "coordinator-token-secret",
     );
     coordinator.dispose();
   });
