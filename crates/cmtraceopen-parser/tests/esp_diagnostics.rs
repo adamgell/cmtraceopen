@@ -2407,6 +2407,138 @@ fn reducer_keeps_ids_source_local_when_unrelated_provider_order_changes() {
 }
 
 #[test]
+fn reducer_mixed_identified_and_normal_ingestion_never_reuses_occurrence() {
+    let record = ime_record(
+        "mixed-ime-provider",
+        "same-evidence",
+        "2026-07-15T12:00:00Z",
+    );
+    let mut reducer = EspDiagnosticsReducer::new("2026-07-15T18:00:00Z".to_string());
+    reducer.ingest_identified(EspIdentifiedEvidenceRecord::with_occurrence(
+        record.clone(),
+        0,
+    ));
+    reducer.ingest(record);
+
+    assert_eq!(
+        reducer
+            .snapshot()
+            .raw_evidence
+            .into_iter()
+            .map(|record| record.record_id)
+            .collect::<Vec<_>>(),
+        vec![
+            "raw|mixed-ime-provider|same-evidence|0",
+            "raw|mixed-ime-provider|same-evidence|1",
+        ]
+    );
+}
+
+#[test]
+fn reducer_identified_watermark_is_monotonic_across_order_and_repeats() {
+    let final_normal_id = |ordinals: &[usize]| {
+        let mut reducer = EspDiagnosticsReducer::new("2026-07-15T18:00:00Z".to_string());
+        for (index, ordinal) in ordinals.iter().copied().enumerate() {
+            reducer.ingest_identified(EspIdentifiedEvidenceRecord::with_occurrence(
+                ime_record(
+                    "watermark-provider",
+                    &format!("identified-{index}"),
+                    "2026-07-15T12:00:00Z",
+                ),
+                ordinal,
+            ));
+        }
+        reducer.ingest(ime_record(
+            "watermark-provider",
+            "normal-after-identified",
+            "2026-07-15T12:00:01Z",
+        ));
+        reducer
+            .snapshot()
+            .raw_evidence
+            .last()
+            .expect("normal record is retained")
+            .record_id
+            .clone()
+    };
+
+    assert_eq!(
+        final_normal_id(&[5, 2, 5]),
+        "raw|watermark-provider|normal-after-identified|6"
+    );
+    assert_eq!(
+        final_normal_id(&[2, 5, 2]),
+        "raw|watermark-provider|normal-after-identified|6"
+    );
+}
+
+#[test]
+fn reducer_identified_max_occurrence_exhausts_source_without_reuse() {
+    let mut reducer = EspDiagnosticsReducer::new("2026-07-15T18:00:00Z".to_string());
+    reducer.ingest_identified(EspIdentifiedEvidenceRecord::with_occurrence(
+        ime_record(
+            "overflow-provider",
+            "identified-max",
+            "2026-07-15T12:00:00Z",
+        ),
+        usize::MAX,
+    ));
+    reducer.ingest(ime_record(
+        "overflow-provider",
+        "normal-after-max",
+        "2026-07-15T12:00:01Z",
+    ));
+
+    let snapshot = reducer.snapshot();
+    assert_eq!(snapshot.raw_evidence.len(), 1);
+    assert_eq!(
+        snapshot.raw_evidence[0].record_id,
+        format!("raw|overflow-provider|identified-max|{}", usize::MAX)
+    );
+    let coverage = snapshot
+        .coverage
+        .iter()
+        .find(|coverage| coverage.artifact_id == "session.evidence-identity-limit")
+        .expect("identity overflow is disclosed");
+    assert_eq!(coverage.status, EspArtifactStatus::ParseFailed);
+    assert!(coverage
+        .detail
+        .as_deref()
+        .is_some_and(|detail| detail.contains("occurrence-overflow")));
+}
+
+#[test]
+fn reducer_identified_sources_respect_allocator_cap_with_explicit_coverage() {
+    let mut reducer = EspDiagnosticsReducer::new("2026-07-15T18:00:00Z".to_string());
+    for index in 0..=MAX_EVIDENCE_IDENTITY_SOURCES {
+        reducer.ingest_identified(EspIdentifiedEvidenceRecord::with_occurrence(
+            registry_record(
+                &format!("identified-source-{index}"),
+                "identified-cap-record",
+                r"SOFTWARE\Contoso\IdentityCap",
+                "IgnoredIdentityCapValue",
+                EspObservationValue::Integer(index as i64),
+                "2026-07-15T12:00:00Z",
+            ),
+            0,
+        ));
+    }
+
+    let snapshot = reducer.snapshot();
+    assert_eq!(snapshot.raw_evidence.len(), MAX_EVIDENCE_IDENTITY_SOURCES);
+    let coverage = snapshot
+        .coverage
+        .iter()
+        .find(|coverage| coverage.artifact_id == "session.evidence-identity-limit")
+        .expect("identified source cap is disclosed");
+    assert_eq!(coverage.status, EspArtifactStatus::ParseFailed);
+    assert!(coverage
+        .detail
+        .as_deref()
+        .is_some_and(|detail| detail.contains("source-limit")));
+}
+
+#[test]
 fn evidence_identity_allocator_bounds_sources_and_keeps_existing_source_counters() {
     let mut allocator = EspEvidenceIdentityAllocator::with_source_limit(2);
 

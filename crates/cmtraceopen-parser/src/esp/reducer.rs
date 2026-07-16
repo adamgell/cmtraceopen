@@ -19,6 +19,9 @@ pub const MAX_EVIDENCE_IDENTITY_SOURCES: usize = 25_000;
 const RETENTION_COVERAGE_ARTIFACT_ID: &str = "session.evidence-retention";
 const RETENTION_COVERAGE_FAMILY: &str = "session-retention";
 const RETENTION_COVERAGE_ORDINAL: usize = usize::MAX;
+const IDENTITY_COVERAGE_ARTIFACT_ID: &str = "session.evidence-identity-limit";
+const IDENTITY_COVERAGE_FAMILY: &str = "session-retention";
+const IDENTITY_COVERAGE_ORDINAL: usize = usize::MAX - 1;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", content = "record", rename_all = "camelCase")]
@@ -67,8 +70,15 @@ impl EspIdentifiedEvidenceRecord {
 #[doc(hidden)]
 #[derive(Debug, Clone)]
 pub struct EspEvidenceIdentityAllocator {
-    next_by_source: BTreeMap<String, usize>,
+    last_by_source: BTreeMap<String, usize>,
     max_sources: usize,
+}
+
+#[doc(hidden)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EspEvidenceIdentityError {
+    SourceLimit,
+    OccurrenceOverflow,
 }
 
 impl Default for EspEvidenceIdentityAllocator {
@@ -85,7 +95,7 @@ impl EspEvidenceIdentityAllocator {
     #[doc(hidden)]
     pub fn with_source_limit(max_sources: usize) -> Self {
         Self {
-            next_by_source: BTreeMap::new(),
+            last_by_source: BTreeMap::new(),
             max_sources: max_sources.max(1),
         }
     }
@@ -93,28 +103,45 @@ impl EspEvidenceIdentityAllocator {
     pub fn try_identify(
         &mut self,
         record: EspEvidenceRecord,
-    ) -> Result<EspIdentifiedEvidenceRecord, Box<EspEvidenceRecord>> {
+    ) -> Result<EspIdentifiedEvidenceRecord, EspEvidenceIdentityError> {
         let source = record_identity_source(&record);
-        if !self.next_by_source.contains_key(&source)
-            && self.next_by_source.len() >= self.max_sources
-        {
-            return Err(Box::new(record));
+        if let Some(last) = self.last_by_source.get_mut(&source) {
+            let occurrence_ordinal = last
+                .checked_add(1)
+                .ok_or(EspEvidenceIdentityError::OccurrenceOverflow)?;
+            *last = occurrence_ordinal;
+            return Ok(EspIdentifiedEvidenceRecord::with_occurrence(
+                record,
+                occurrence_ordinal,
+            ));
         }
-        let next = self.next_by_source.entry(source).or_insert(0);
-        let occurrence_ordinal = *next;
-        let Some(following) = next.checked_add(1) else {
-            return Err(Box::new(record));
-        };
-        *next = following;
-        Ok(EspIdentifiedEvidenceRecord::with_occurrence(
-            record,
-            occurrence_ordinal,
-        ))
+        if self.last_by_source.len() >= self.max_sources {
+            return Err(EspEvidenceIdentityError::SourceLimit);
+        }
+        self.last_by_source.insert(source, 0);
+        Ok(EspIdentifiedEvidenceRecord::with_occurrence(record, 0))
+    }
+
+    fn try_synchronize_identified(
+        &mut self,
+        identified: &EspIdentifiedEvidenceRecord,
+    ) -> Result<(), EspEvidenceIdentityError> {
+        let source = record_identity_source(identified.record());
+        if let Some(last) = self.last_by_source.get_mut(&source) {
+            *last = (*last).max(identified.occurrence_ordinal());
+            return Ok(());
+        }
+        if self.last_by_source.len() >= self.max_sources {
+            return Err(EspEvidenceIdentityError::SourceLimit);
+        }
+        self.last_by_source
+            .insert(source, identified.occurrence_ordinal());
+        Ok(())
     }
 
     #[doc(hidden)]
     pub fn tracked_source_count(&self) -> usize {
-        self.next_by_source.len()
+        self.last_by_source.len()
     }
 }
 
@@ -130,6 +157,9 @@ pub struct EspDiagnosticsReducer {
     discarded_serialized_bytes: usize,
     max_retained_records: usize,
     max_retained_serialized_bytes: usize,
+    identity_allocator: EspEvidenceIdentityAllocator,
+    identity_source_limit_discards: usize,
+    identity_occurrence_overflow_discards: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -167,6 +197,9 @@ impl EspDiagnosticsReducer {
             discarded_serialized_bytes: 0,
             max_retained_records: max_retained_records.max(1),
             max_retained_serialized_bytes: max_retained_serialized_bytes.max(1),
+            identity_allocator: EspEvidenceIdentityAllocator::new(),
+            identity_source_limit_discards: 0,
+            identity_occurrence_overflow_discards: 0,
         }
     }
 
@@ -243,6 +276,13 @@ impl EspDiagnosticsReducer {
 
     #[doc(hidden)]
     pub fn ingest_identified(&mut self, identified: EspIdentifiedEvidenceRecord) {
+        if let Err(error) = self
+            .identity_allocator
+            .try_synchronize_identified(&identified)
+        {
+            self.note_identity_discard(error);
+            return;
+        }
         let ordinal = self.next_ordinal;
         self.next_ordinal = self.next_ordinal.saturating_add(1);
         let occurrence_ordinal = identified.occurrence_ordinal();
@@ -293,6 +333,12 @@ impl EspDiagnosticsReducer {
                 .insert(RETENTION_COVERAGE_ORDINAL, 0);
             projection.process_coverage(RETENTION_COVERAGE_ORDINAL, coverage);
         }
+        if let Some(coverage) = self.identity_limit_coverage() {
+            projection
+                .occurrence_ordinals
+                .insert(IDENTITY_COVERAGE_ORDINAL, 0);
+            projection.process_coverage(IDENTITY_COVERAGE_ORDINAL, coverage);
+        }
         projection.finish()
     }
 
@@ -339,6 +385,39 @@ impl EspDiagnosticsReducer {
             observed_at_utc: self.generated_at_utc.clone(),
             evidence: Vec::new(),
         })
+    }
+
+    fn identity_limit_coverage(&self) -> Option<EspArtifactCoverage> {
+        let discarded = self
+            .identity_source_limit_discards
+            .saturating_add(self.identity_occurrence_overflow_discards);
+        (discarded != 0).then(|| EspArtifactCoverage {
+            artifact_id: IDENTITY_COVERAGE_ARTIFACT_ID.to_string(),
+            family: IDENTITY_COVERAGE_FAMILY.to_string(),
+            status: EspArtifactStatus::ParseFailed,
+            detail: Some(format!(
+                "bounded source-identity tracking discarded {discarded} {} ({} source-limit; {} occurrence-overflow) with a maximum of {} tracked sources",
+                if discarded == 1 { "record" } else { "records" },
+                self.identity_source_limit_discards,
+                self.identity_occurrence_overflow_discards,
+                MAX_EVIDENCE_IDENTITY_SOURCES,
+            )),
+            observed_at_utc: self.generated_at_utc.clone(),
+            evidence: Vec::new(),
+        })
+    }
+
+    fn note_identity_discard(&mut self, error: EspEvidenceIdentityError) {
+        match error {
+            EspEvidenceIdentityError::SourceLimit => {
+                self.identity_source_limit_discards =
+                    self.identity_source_limit_discards.saturating_add(1);
+            }
+            EspEvidenceIdentityError::OccurrenceOverflow => {
+                self.identity_occurrence_overflow_discards =
+                    self.identity_occurrence_overflow_discards.saturating_add(1);
+            }
+        }
     }
 }
 
