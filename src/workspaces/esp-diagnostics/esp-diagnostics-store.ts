@@ -131,6 +131,16 @@ function withPreservedGraph(
   };
 }
 
+function identityChanged(
+  current: EspDiagnosticsSnapshot | null,
+  incoming: EspDiagnosticsSnapshot,
+): boolean {
+  return (
+    current !== null &&
+    getEspIdentityFingerprint(current) !== getEspIdentityFingerprint(incoming)
+  );
+}
+
 function graphOverlayIsPartial(overlay: EspGraphOverlay): boolean {
   return [
     overlay.deviceMatch,
@@ -418,6 +428,13 @@ export const useEspDiagnosticsStore = create<EspDiagnosticsStore>((set) => ({
         state.evidenceRecordRows,
         state.nextEvidenceOrder,
       );
+      const graphIdentityState = identityChanged(state.snapshot, snapshot)
+        ? {
+            graphRequestId: null,
+            ...graphStateForFreshLocalRun(state),
+            graphError: null,
+          }
+        : {};
 
       return {
         phase: "ready",
@@ -427,6 +444,7 @@ export const useEspDiagnosticsStore = create<EspDiagnosticsStore>((set) => ({
         unreadEvidenceCount:
           state.unreadEvidenceCount +
           unreadEvidenceDelta(state.snapshot, snapshot, state.evidenceViewMode),
+        ...graphIdentityState,
         ...evidenceRows,
       };
     }),
@@ -452,6 +470,16 @@ export const useEspDiagnosticsStore = create<EspDiagnosticsStore>((set) => ({
       }
 
       const snapshot = withPreservedGraph(state.snapshot, update.snapshot);
+      const graphIdentityState = identityChanged(
+        state.snapshot,
+        update.snapshot,
+      )
+        ? {
+            graphRequestId: null,
+            ...graphStateForFreshLocalRun(state),
+            graphError: null,
+          }
+        : {};
       const isSourceReset = update.reason === "sourceReset";
       const boundaryOrder = state.nextEvidenceOrder;
       const evidenceRows = reconcileEvidenceRecordRows(
@@ -479,6 +507,7 @@ export const useEspDiagnosticsStore = create<EspDiagnosticsStore>((set) => ({
             update.snapshot,
             state.evidenceViewMode,
           ),
+        ...graphIdentityState,
         ...evidenceRows,
         evidenceBoundaryMarkers: isSourceReset
           ? appendBoundaryMarker(
@@ -575,6 +604,9 @@ export const useEspDiagnosticsStore = create<EspDiagnosticsStore>((set) => ({
 
   setEvidenceDockHeight: (height, workspaceHeight) =>
     set((state) => {
+      if (!Number.isFinite(height)) {
+        return state;
+      }
       const evidenceDockHeight = Math.max(
         ESP_EVIDENCE_DOCK_MIN_HEIGHT,
         Math.min(

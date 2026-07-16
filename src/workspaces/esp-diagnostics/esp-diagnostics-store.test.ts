@@ -422,6 +422,20 @@ describe("ESP local session state", () => {
     expect(useEspDiagnosticsStore.getState().unreadEvidenceCount).toBe(0);
   });
 
+  it("ignores non-finite evidence dock heights", () => {
+    const state = useEspDiagnosticsStore.getState();
+    state.setEvidenceDockHeight(420);
+
+    for (const height of [
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+      Number.NEGATIVE_INFINITY,
+    ]) {
+      useEspDiagnosticsStore.getState().setEvidenceDockHeight(height, 800);
+      expect(useEspDiagnosticsStore.getState().evidenceDockHeight).toBe(420);
+    }
+  });
+
   it("counts replacement evidence as unread when rotation keeps the record count constant", () => {
     const initial = makeSnapshot(["old-a", "old-b"]);
     const rotated = makeSnapshot(["old-b", "new-c"]);
@@ -750,6 +764,32 @@ describe("ESP local session state", () => {
 });
 
 describe("ESP Graph overlay state", () => {
+  it("invalidates a pending Graph request when live identity changes", () => {
+    useEspDiagnosticsStore.getState().beginLiveStart("live-a");
+    useEspDiagnosticsStore
+      .getState()
+      .applySessionUpdate(
+        makeSessionUpdate(1, makeSnapshot(["device-a"], "device-a")),
+      );
+    useEspDiagnosticsStore.getState().beginGraph("graph-device-a");
+
+    useEspDiagnosticsStore
+      .getState()
+      .applySessionUpdate(
+        makeSessionUpdate(2, makeSnapshot(["device-b"], "device-b")),
+      );
+
+    expect(useEspDiagnosticsStore.getState().graphRequestId).toBeNull();
+    expect(useEspDiagnosticsStore.getState().graphPhase).toBe("idle");
+    useEspDiagnosticsStore
+      .getState()
+      .applyGraphOverlay("graph-device-a", makeOverlay("graph-device-a"));
+    expect(useEspDiagnosticsStore.getState().snapshot?.graph).toBeNull();
+    expect(
+      useEspDiagnosticsStore.getState().snapshot?.identity.deviceName,
+    ).toBe("host-device-b");
+  });
+
   it("preserves disabled Graph availability when analysis fails before producing a snapshot", () => {
     useEspDiagnosticsStore.getState().setGraphUnavailable("graphDisabled");
 
