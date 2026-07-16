@@ -20,7 +20,8 @@ fn email_pattern() -> &'static Regex {
 fn sid_pattern() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
-        Regex::new(r"(?i)\bS-\d(?:-\d+){2,15}\b").expect("SID redaction pattern must compile")
+        Regex::new(r"(?i)\bS-1-(?:0x[0-9A-F]{1,12}|\d{1,10})(?:-\d{1,10}){1,15}\b")
+            .expect("SID redaction pattern must compile")
     })
 }
 
@@ -83,7 +84,7 @@ pub fn redacted_export_projection(snapshot: &EspDiagnosticsSnapshot) -> EspDiagn
         mask_classified(&mut enrollment.entdm_id);
     }
     for session in &mut safe.sessions {
-        mask_classified(&mut session.user_sid);
+        pseudonymize_classified_sid(&mut session.user_sid, &sid_pseudonyms);
     }
     for workload in &mut safe.workloads {
         redact_optional_text(&mut workload.display_name);
@@ -251,6 +252,18 @@ fn pseudonymize_sid_references(
         for workload_id in &mut correlation.candidate_workload_ids {
             pseudonymize_sids(workload_id, pseudonyms);
         }
+    }
+}
+
+fn pseudonymize_classified_sid(
+    value: &mut Option<EspClassifiedString>,
+    pseudonyms: &BTreeMap<String, String>,
+) {
+    if let Some(value) = value {
+        value.value = pseudonyms
+            .get(&value.value.to_ascii_uppercase())
+            .cloned()
+            .unwrap_or_else(|| REDACTED.to_string());
     }
 }
 

@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use cmtraceopen_parser::esp::*;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -5048,6 +5050,75 @@ fn findings_success_ignores_unrelated_optional_coverage_gaps() {
 }
 
 #[test]
+fn findings_success_requires_available_coverage_for_every_supporting_source() {
+    let completed_session =
+        |session_id: &str, workload_id: &str, source_artifact_id: &str| EspSession {
+            session_id: session_id.to_string(),
+            kind: EspSessionKind::Classic,
+            scope: EspScope::Device,
+            user_sid: None,
+            started_at: Some(timestamp("2026-07-15T12:00:00Z")),
+            ended_at: Some(timestamp("2026-07-15T12:10:00Z")),
+            phase: EspPhase::Completed,
+            is_latest: true,
+            workload_ids: vec![workload_id.to_string()],
+            evidence: vec![evidence_ref_from(
+                &format!("evidence-{session_id}"),
+                source_artifact_id,
+            )],
+        };
+    let successful_workload = |workload_id: &str, session_id: &str, source_artifact_id: &str| {
+        let mut workload = findings_workload(
+            workload_id,
+            EspTrackedKind::Win32App,
+            EspNormalizedStatus::Succeeded,
+            Some(true),
+            "2026-07-15T12:10:00Z",
+        );
+        workload.workload_id = workload_id.to_string();
+        workload.session_id = session_id.to_string();
+        workload.evidence = vec![evidence_ref_from(
+            &format!("evidence-{workload_id}"),
+            source_artifact_id,
+        )];
+        workload
+    };
+    let available_coverage = |source_artifact_id: &str| EspArtifactCoverage {
+        artifact_id: source_artifact_id.to_string(),
+        family: "ESP supporting evidence".to_string(),
+        status: EspArtifactStatus::Available,
+        detail: None,
+        observed_at_utc: "2026-07-15T12:10:00Z".to_string(),
+        evidence: vec![evidence_ref_from(
+            &format!("coverage-{source_artifact_id}"),
+            source_artifact_id,
+        )],
+    };
+    let has_success = |snapshot: &EspDiagnosticsSnapshot| {
+        derive_findings(snapshot)
+            .iter()
+            .any(|finding| finding.finding_id == "esp-completed")
+    };
+
+    let mut snapshot = findings_snapshot();
+    snapshot.phase = EspPhase::Completed;
+    snapshot.sessions = vec![
+        completed_session("session-a", "workload-a", "source-a"),
+        completed_session("session-b", "workload-b", "source-b"),
+    ];
+    snapshot.workloads = vec![
+        successful_workload("workload-a", "session-a", "source-a"),
+        successful_workload("workload-b", "session-b", "source-b"),
+    ];
+    snapshot.coverage = vec![available_coverage("source-a")];
+
+    assert!(!has_success(&snapshot));
+
+    snapshot.coverage.push(available_coverage("source-b"));
+    assert!(has_success(&snapshot));
+}
+
+#[test]
 fn findings_reducer_snapshot_populates_rules_without_mutating_raw_evidence() {
     let mut reducer = EspDiagnosticsReducer::new("2026-07-15T12:30:00Z".to_string());
     reducer.ingest(EspEvidenceRecord::Coverage(EspArtifactCoverage {
@@ -5219,6 +5290,73 @@ fn redaction_projection_masks_every_registry_value_variant_when_classified_sensi
 }
 
 #[test]
+fn redaction_projection_pseudonymizes_full_valid_windows_sid_grammar() {
+    let sid_hex_authority = "S-1-0x28651FE848-12-72-9-110";
+    let sid_twelve_hex_authority = "S-1-0x0028651FE848-12-72-9-110";
+    let sid_max_subauthorities = "S-1-5-1-2-3-4-5-6-7-8-9-10-11-12-13-14-15";
+    let mut snapshot = findings_snapshot();
+
+    for (ordinal, sid) in [
+        sid_hex_authority,
+        sid_twelve_hex_authority,
+        sid_max_subauthorities,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let session_id = format!("session|source|classic:user:{sid}:time|0");
+        let workload_id = format!("workload|source|classic:user:{sid}:app|0");
+        snapshot.sessions.push(EspSession {
+            session_id: session_id.clone(),
+            kind: EspSessionKind::Classic,
+            scope: EspScope::User,
+            user_sid: Some(sensitive(sid)),
+            started_at: Some(timestamp("2026-07-15T12:00:00Z")),
+            ended_at: None,
+            phase: EspPhase::AccountSetup,
+            is_latest: true,
+            workload_ids: vec![workload_id.clone()],
+            evidence: vec![evidence_ref(&format!("session-sid-{ordinal}"))],
+        });
+        let mut workload = findings_workload(
+            &format!("sid-{ordinal}"),
+            EspTrackedKind::Win32App,
+            EspNormalizedStatus::Installing,
+            Some(true),
+            "2026-07-15T12:00:00Z",
+        );
+        workload.workload_id = workload_id;
+        workload.session_id = session_id;
+        snapshot.workloads.push(workload);
+    }
+    snapshot
+        .installer_correlations
+        .push(EspInstallerCorrelation {
+            correlation_id: "correlation-valid-sids".to_string(),
+            workload_id: Some(snapshot.workloads[0].workload_id.clone()),
+            confidence: EspCorrelationConfidence::Temporal,
+            reason: "valid SID references".to_string(),
+            candidate_workload_ids: vec![snapshot.workloads[1].workload_id.clone()],
+            process_observations: vec![],
+            evidence: vec![evidence_ref("correlation-valid-sids")],
+        });
+    let original = snapshot.clone();
+
+    let safe = redacted_export_projection(&snapshot);
+    let safe_json = serde_json::to_string(&safe).unwrap();
+
+    assert!(!safe_json.contains(sid_hex_authority));
+    assert!(!safe_json.contains(sid_twelve_hex_authority));
+    assert!(!safe_json.contains(sid_max_subauthorities));
+    assert!(!safe_json.contains("0x28651FE848"));
+    assert!(!safe.sessions[2].session_id.ends_with("-15:time|0"));
+    assert!(safe.sessions[0].session_id.contains("[redacted-sid-2]"));
+    assert!(safe.sessions[1].session_id.contains("[redacted-sid-1]"));
+    assert!(safe.sessions[2].session_id.contains("[redacted-sid-3]"));
+    assert_eq!(snapshot, original);
+}
+
+#[test]
 fn redaction_projection_pseudonymizes_reducer_sid_ids_and_preserves_references() {
     let mut reducer = EspDiagnosticsReducer::new("2026-07-15T18:00:00Z".to_string());
     reducer.ingest_all(vec![
@@ -5267,6 +5405,20 @@ fn redaction_projection_pseudonymizes_reducer_sid_ids_and_preserves_references()
         .sessions
         .iter()
         .all(|session| session.session_id.contains("[redacted-sid-")));
+    let exported_user_sids = safe
+        .sessions
+        .iter()
+        .map(|session| session.user_sid.as_ref().unwrap().value.as_str())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        exported_user_sids,
+        BTreeSet::from(["[redacted-sid-1]", "[redacted-sid-2]"])
+    );
+    for session in &safe.sessions {
+        assert!(session
+            .session_id
+            .contains(&session.user_sid.as_ref().unwrap().value));
+    }
     for session in &safe.sessions {
         assert!(session.workload_ids.iter().all(|workload_id| safe
             .workloads

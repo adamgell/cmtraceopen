@@ -458,22 +458,25 @@ fn push_successful_completion(
     if evidence.is_empty() {
         return;
     }
-    let relevant_coverage = snapshot.coverage.iter().filter(|coverage| {
-        supporting_source_ids.contains(&coverage.artifact_id)
-            || coverage
-                .evidence
-                .iter()
-                .any(|evidence| supporting_source_ids.contains(&evidence.source_artifact_id))
-    });
-    let mut observed_relevant_coverage = false;
-    for coverage in relevant_coverage {
-        observed_relevant_coverage = true;
-        if coverage.status != EspArtifactStatus::Available {
+    if supporting_source_ids.is_empty() {
+        return;
+    }
+    for source_artifact_id in supporting_source_ids {
+        let mut relevant_coverage = snapshot.coverage.iter().filter(|coverage| {
+            coverage.artifact_id == source_artifact_id
+                || coverage
+                    .evidence
+                    .iter()
+                    .any(|evidence| evidence.source_artifact_id == source_artifact_id)
+        });
+        let Some(first_coverage) = relevant_coverage.next() else {
+            return;
+        };
+        if first_coverage.status != EspArtifactStatus::Available
+            || relevant_coverage.any(|coverage| coverage.status != EspArtifactStatus::Available)
+        {
             return;
         }
-    }
-    if !observed_relevant_coverage {
-        return;
     }
     normalize_evidence(&mut evidence);
     push_finding(
