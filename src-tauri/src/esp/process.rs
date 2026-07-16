@@ -191,11 +191,11 @@ pub fn sanitize_command_line(command_line: &str) -> String {
     let bearer = Regex::new(r#"(?i)(bearer\s+)(?:"[^"]*"|'[^']*'|[^\s&"]+)"#)
         .expect("constant bearer regex");
     let named_secret = Regex::new(
-        r#"(?i)(^|\s)((?:--|/)?(?:access[-_]?token|client[-_]?secret|api[-_]?key|token|password|secret|authorization))(\s*(?:=|:)\s*|\s+)(?:"[^"]*"|'[^']*'|[^\s&"]+)"#,
+        r#"(?i)(^|\s)((?:--|/)?(?:access[-_]?token|bearer[-_]?token|client[-_]?secret|app[-_]?secret|api[-_]?key|token|password|secret|authorization))(\s*(?:=|:)\s*|\s+)(?:"[^"]*"|'[^']*'|[^\s&"]+)"#,
     )
     .expect("constant named-secret regex");
     let query_secret = Regex::new(
-        r#"(?i)([?&](?:sig|access[-_]?token|client[-_]?secret|api[-_]?key|token|password|secret|authorization)=)(?:"[^"]*"|'[^']*'|[^&\s"]+)"#,
+        r#"(?i)([?&](?:sig|access[-_]?token|bearer[-_]?token|client[-_]?secret|app[-_]?secret|api[-_]?key|token|password|secret|authorization)=)(?:"[^"]*"|'[^']*'|[^&\s"]+)"#,
     )
     .expect("constant query-secret regex");
 
@@ -853,6 +853,55 @@ mod tests {
             assert!(sanitized.contains("/L*V C:\\Windows\\Temp\\contoso.log"));
             assert!(sanitized.contains("[REDACTED]"));
         }
+    }
+
+    #[test]
+    fn command_line_sanitizer_redacts_app_secret_and_bearer_token_names_only() {
+        let secret_cases = [
+            (
+                "--app-secret direct-app-secret-sentinel",
+                "direct-app-secret-sentinel",
+            ),
+            (
+                "--APP_SECRET=underscore-app-secret-sentinel",
+                "underscore-app-secret-sentinel",
+            ),
+            (
+                "/Bearer-Token bearer-token-option-sentinel",
+                "bearer-token-option-sentinel",
+            ),
+            (
+                "BEARER_TOKEN=bearer-token-assignment-sentinel",
+                "bearer-token-assignment-sentinel",
+            ),
+            (
+                "https://cache.invalid/content?app_secret=query-app-secret-sentinel&safe=true",
+                "query-app-secret-sentinel",
+            ),
+            (
+                "https://cache.invalid/content?safe=true&bearer-token=query-bearer-token-sentinel",
+                "query-bearer-token-sentinel",
+            ),
+        ];
+
+        for (secret_argument, sentinel) in secret_cases {
+            let raw = format!(
+                "msiexec.exe /i {{12345678-1234-1234-1234-1234567890AB}} /L*V C:\\Windows\\Temp\\contoso.log {secret_argument}"
+            );
+            let sanitized = sanitize_command_line(&raw);
+
+            assert!(
+                !sanitized.contains(sentinel),
+                "secret leaked for variant {secret_argument}: {sanitized}"
+            );
+            assert!(sanitized.contains("/i {12345678-1234-1234-1234-1234567890AB}"));
+            assert!(sanitized.contains("/L*V C:\\Windows\\Temp\\contoso.log"));
+            assert!(sanitized.contains("[REDACTED]"));
+        }
+
+        let safe_neighbors =
+            "msiexec.exe --app-secret-mode keep-app-secret-mode --bearer-token-cache keep-bearer-token-cache";
+        assert_eq!(sanitize_command_line(safe_neighbors), safe_neighbors);
     }
 
     #[test]

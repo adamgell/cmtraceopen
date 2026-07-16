@@ -234,6 +234,68 @@ fn registry_excludes_hardware_hash_keys_and_values_before_evidence_is_created() 
 }
 
 #[test]
+fn registry_excludes_node_cache_hardware_payloads_identified_by_node_uri() {
+    let target = ESP_REGISTRY_TARGETS
+        .iter()
+        .find(|target| target.key.ends_with(r"NodeCache\CSP"))
+        .expect("NodeCache target");
+    let provider = FakeRegistryProvider::default().with_tree(
+        target.key,
+        vec![
+            snapshot_key(
+                "1",
+                vec![
+                    RegistryValueSnapshot::text("NodeURI", "./DevDetail/Ext/Device-Hardware_Data"),
+                    RegistryValueSnapshot::text(
+                        "ExpectedValue",
+                        "raw-device-hardware-data-sentinel",
+                    ),
+                ],
+            ),
+            snapshot_key(
+                "2",
+                vec![
+                    RegistryValueSnapshot::text(
+                        "NodeURI",
+                        "./Vendor/MSFT/Policy/Config/Contoso/SafeSetting",
+                    ),
+                    RegistryValueSnapshot::text("ExpectedValue", "safe-neighbor-value"),
+                ],
+            ),
+            snapshot_key(
+                "3",
+                vec![
+                    RegistryValueSnapshot::text("NodeURI", "./Vendor/MSFT/Autopilot/HARDWARE_HASH"),
+                    RegistryValueSnapshot::text("ExpectedValue", "raw-hardware-hash-sentinel"),
+                ],
+            ),
+        ],
+    );
+
+    let evidence = collect_registry_evidence(&provider, &[], "2026-07-15T12:00:00Z");
+    let serialized = serde_json::to_string(&evidence).expect("serialize registry evidence");
+
+    assert_eq!(evidence.node_cache.len(), 1);
+    assert_eq!(evidence.node_cache[0].index, 2);
+    assert_eq!(
+        evidence.node_cache[0].expected_value.as_deref(),
+        Some("safe-neighbor-value")
+    );
+    assert!(serialized.contains("safe-neighbor-value"));
+    for forbidden in [
+        "raw-device-hardware-data-sentinel",
+        "raw-hardware-hash-sentinel",
+        "Device-Hardware_Data",
+        "HARDWARE_HASH",
+    ] {
+        assert!(
+            !serialized.contains(forbidden),
+            "NodeCache hardware identity material leaked through {forbidden}"
+        );
+    }
+}
+
+#[test]
 fn registry_orders_numeric_node_cache_entries_without_stopping_at_gaps() {
     let target = ESP_REGISTRY_TARGETS
         .iter()

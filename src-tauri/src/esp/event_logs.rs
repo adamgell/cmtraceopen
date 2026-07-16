@@ -252,16 +252,39 @@ fn deterministic_fields(
 }
 
 fn event_sensitivity(event_data: &[EventLogProperty]) -> EspSensitivity {
-    if event_data.iter().any(|property| {
-        let name = property.name.to_ascii_lowercase();
-        ["upn", "sid", "tenant", "entdmid", "serial"]
-            .iter()
-            .any(|marker| name.contains(marker))
-    }) {
+    if event_data
+        .iter()
+        .any(|property| is_sensitive_event_field_name(&property.name))
+    {
         EspSensitivity::Sensitive
     } else {
         EspSensitivity::Public
     }
+}
+
+fn is_sensitive_event_field_name(value: &str) -> bool {
+    let normalized = value
+        .chars()
+        .filter(|character| character.is_ascii_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect::<String>();
+    matches!(
+        normalized.as_str(),
+        "upn"
+            | "userprincipalname"
+            | "sid"
+            | "usersid"
+            | "tenant"
+            | "tenantid"
+            | "tenantdomain"
+            | "aadtenantid"
+            | "aadtenantdomain"
+            | "cloudassignedtenantid"
+            | "cloudassignedtenantdomain"
+            | "entdmid"
+            | "serial"
+            | "serialnumber"
+    )
 }
 
 fn access_state_for_error(error: EventSourceError) -> (EspSourceAccessState, Option<String>) {
@@ -363,5 +386,46 @@ fn classify_live_error(detail: &str) -> EventSourceError {
         EventSourceError::Missing
     } else {
         EventSourceError::Failed(detail.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn property(name: &str) -> EventLogProperty {
+        EventLogProperty {
+            name: name.to_string(),
+            value: "sensitive-value-sentinel".to_string(),
+        }
+    }
+
+    #[test]
+    fn event_sensitivity_uses_exact_documented_field_names() {
+        for sensitive in [
+            "UserPrincipalName",
+            "user-principal-name",
+            "UPN",
+            "UserSID",
+            "user_sid",
+            "TenantId",
+            "CloudAssignedTenantDomain",
+            "EntDMID",
+            "SerialNumber",
+        ] {
+            assert_eq!(
+                event_sensitivity(&[property(sensitive)]),
+                EspSensitivity::Sensitive,
+                "documented event field was not classified as sensitive: {sensitive}"
+            );
+        }
+
+        for ordinary in ["Outside", "NotASid", "Presidential", "SerializationMode"] {
+            assert_eq!(
+                event_sensitivity(&[property(ordinary)]),
+                EspSensitivity::Public,
+                "ordinary event field was classified as sensitive: {ordinary}"
+            );
+        }
     }
 }

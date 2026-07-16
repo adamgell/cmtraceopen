@@ -241,6 +241,7 @@ fn append_tree_observations(
     for (entry_index, entry) in entries.into_iter().enumerate() {
         if registry_depth(&entry.relative_key) > MAX_REGISTRY_DEPTH
             || is_hardware_identity_registry_name(&entry.relative_key)
+            || node_cache_target && node_cache_contains_hardware_identity(&entry)
         {
             continue;
         }
@@ -393,6 +394,18 @@ fn is_hardware_identity_registry_name(value: &str) -> bool {
         .flat_map(char::to_lowercase)
         .collect::<String>();
     normalized.contains("hardwarehash") || normalized.contains("devicehardwaredata")
+}
+
+fn node_cache_contains_hardware_identity(entry: &RegistrySnapshotKey) -> bool {
+    entry.values.iter().any(|value| match &value.value {
+        EspObservationValue::Text(value) => is_hardware_identity_registry_name(value),
+        EspObservationValue::StringList(values) => values
+            .iter()
+            .any(|value| is_hardware_identity_registry_name(value)),
+        EspObservationValue::Integer(_)
+        | EspObservationValue::Unsigned(_)
+        | EspObservationValue::Boolean(_) => false,
+    })
 }
 
 fn registry_sensitivity(key: &str, value_name: &str) -> EspSensitivity {
