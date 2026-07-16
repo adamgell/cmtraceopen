@@ -106,6 +106,10 @@ plist = "1"
 tauri = { version = "2", features = ["test"] }
 
 [[test]]
+name = "esp_diagnostics_sources"
+required-features = ["esp-diagnostics"]
+
+[[test]]
 name = "sysmon_parser"
 required-features = ["sysmon"]
 

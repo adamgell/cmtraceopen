@@ -5299,8 +5299,8 @@ fn session_upserts_tail_coverage_by_artifact_instead_of_growing_duplicates() {
                 coverage: vec![session_coverage("tail.same-source", status)],
                 ..EspTailEvidenceBatch::default()
             });
-        clock.advance(UPDATE_DEBOUNCE);
         let expected = sink.updates.lock().expect("session updates").len() + 1;
+        clock.advance(UPDATE_DEBOUNCE);
         wait_for_session_updates(&sink, expected);
     }
 
