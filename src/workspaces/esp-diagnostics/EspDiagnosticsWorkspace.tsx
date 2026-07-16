@@ -11,7 +11,10 @@ import {
   startEspDiagnosticsSession,
   stopEspDiagnosticsSession,
 } from "../../lib/commands";
-import { LOG_MONOSPACE_FONT_FAMILY, LOG_UI_FONT_FAMILY } from "../../lib/log-accessibility";
+import {
+  LOG_MONOSPACE_FONT_FAMILY,
+  LOG_UI_FONT_FAMILY,
+} from "../../lib/log-accessibility";
 import { useUiStore } from "../../stores/ui-store";
 import { ActionCenter } from "./ActionCenter";
 import { ElevationBanner } from "./ElevationBanner";
@@ -37,9 +40,11 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function normalizeSelection(selection: string | string[] | null): string | null {
+function normalizeSelection(
+  selection: string | string[] | null,
+): string | null {
   if (!selection) return null;
-  return Array.isArray(selection) ? selection[0] ?? null : selection;
+  return Array.isArray(selection) ? (selection[0] ?? null) : selection;
 }
 
 async function analyzePath(
@@ -72,9 +77,7 @@ export function EspDiagnosticsWorkspace() {
     const path = normalizeSelection(
       await open({
         multiple: false,
-        filters: [
-          { name: "ESP evidence", extensions: ["json", "cab", "zip"] },
-        ],
+        filters: [{ name: "ESP evidence", extensions: ["json", "cab", "zip"] }],
       }),
     );
     if (path) await analyzePath(path, "file");
@@ -294,7 +297,8 @@ export function EspDiagnosticsWorkspace() {
                   lineHeight: "16px",
                 }}
               >
-                CMTrace evidence folders, manifest.json, CAB, and ZIP are supported.
+                CMTrace evidence folders, manifest.json, CAB, and ZIP are
+                supported.
                 {liveSupported
                   ? " Windows live acquisition is read-only."
                   : " Live acquisition requires Windows."}

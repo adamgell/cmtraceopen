@@ -1,8 +1,7 @@
 export const ESP_EVIDENCE_NAVIGATION_EVENT = "esp-evidence-navigation";
 
 export type EspEvidenceNavigationTarget =
-  | { kind: "evidence"; id: string }
-  | { kind: "coverage"; id: string };
+  { kind: "evidence"; id: string } | { kind: "coverage"; id: string };
 
 export function requestEspEvidenceNavigation(
   target: EspEvidenceNavigationTarget,

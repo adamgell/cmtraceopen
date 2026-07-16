@@ -408,9 +408,9 @@ describe("ESP evidence view model", () => {
       "source-coverage",
       "raw-provenance",
     ]);
-    expect(viewModel.sections.every((section) => section.items.length > 0)).toBe(
-      true,
-    );
+    expect(
+      viewModel.sections.every((section) => section.items.length > 0),
+    ).toBe(true);
   });
 
   it("preserves raw IDs while treating Graph names as additive labels", () => {
@@ -499,8 +499,7 @@ describe("ESP evidence view model", () => {
       ],
     });
     const sections = buildEspEvidenceViewModel(empty).sections;
-    const byId = (id: string) =>
-      sections.find((section) => section.id === id);
+    const byId = (id: string) => sections.find((section) => section.id === id);
 
     expect(byId("scripts")).toMatchObject({
       sourceState: "permissionDenied",
@@ -514,7 +513,9 @@ describe("ESP evidence view model", () => {
     });
     expect(byId("certificates")).toMatchObject({
       sourceState: "notObserved",
-      sourceNote: expect.stringContaining("No certificate records were observed"),
+      sourceNote: expect.stringContaining(
+        "No certificate records were observed",
+      ),
       items: [],
     });
     expect(sections).toHaveLength(14);
@@ -530,9 +531,9 @@ describe("ESP evidence view model", () => {
         kind: "offset" as const,
       },
     };
-    const raw = buildEspEvidenceViewModel(snapshot({ rawEvidence: [record] })).sections.find(
-      (section) => section.id === "raw-provenance",
-    );
+    const raw = buildEspEvidenceViewModel(
+      snapshot({ rawEvidence: [record] }),
+    ).sections.find((section) => section.id === "raw-provenance");
 
     expect(raw?.items[0]).toMatchObject({
       id: "raw-record-17",
@@ -717,9 +718,7 @@ describe("ESP evidence view model", () => {
         }),
       ]),
     );
-    expect(
-      revealedSection("raw-provenance")?.items[0].fields,
-    ).toEqual(
+    expect(revealedSection("raw-provenance")?.items[0].fields).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           label: "Event data · UserPrincipalName",
@@ -823,8 +822,7 @@ describe("ESP evidence view model", () => {
     expect(
       sections
         .find((section) => section.id === "join-registration")
-        ?.items.find((candidate) => candidate.id === "join-profile")
-        ?.fields,
+        ?.items.find((candidate) => candidate.id === "join-profile")?.fields,
     ).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -905,7 +903,9 @@ describe("ESP evidence view model", () => {
     expect(new Set(first).size).toBe(3);
     expect(first).toEqual(second);
     expect(first.every((id) => id.includes("mdm-events"))).toBe(true);
-    expect(first.filter((id) => id.includes("ev-registration-b"))).toHaveLength(2);
+    expect(first.filter((id) => id.includes("ev-registration-b"))).toHaveLength(
+      2,
+    );
   });
 
   it("keeps partial source coverage visible when normalized records also exist", () => {

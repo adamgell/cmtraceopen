@@ -1,7 +1,10 @@
 import { useMemo, useState } from "react";
 import { Button, tokens } from "@fluentui/react-components";
 import { LinkRegular, PulseRegular } from "@fluentui/react-icons";
-import { LOG_MONOSPACE_FONT_FAMILY, LOG_UI_FONT_FAMILY } from "../../lib/log-accessibility";
+import {
+  LOG_MONOSPACE_FONT_FAMILY,
+  LOG_UI_FONT_FAMILY,
+} from "../../lib/log-accessibility";
 import { requestEspEvidenceNavigation } from "./evidence-navigation";
 import type { EspTimelineEntry } from "./types";
 
@@ -11,7 +14,10 @@ function timestampValue(entry: EspTimelineEntry): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-function compareEntries(left: EspTimelineEntry, right: EspTimelineEntry): number {
+function compareEntries(
+  left: EspTimelineEntry,
+  right: EspTimelineEntry,
+): number {
   const leftTimestamp = timestampValue(left);
   const rightTimestamp = timestampValue(right);
   if (leftTimestamp !== null && rightTimestamp !== null) {
@@ -65,7 +71,10 @@ export function LiveActivity({ entries }: LiveActivityProps) {
     () => [...entries].sort(compareEntries),
     [entries],
   );
-  const maximumStart = Math.max(0, orderedEntries.length - ESP_ACTIVITY_WINDOW_SIZE);
+  const maximumStart = Math.max(
+    0,
+    orderedEntries.length - ESP_ACTIVITY_WINDOW_SIZE,
+  );
   const safeStart = Math.min(windowStart, maximumStart);
   const visibleEntries = orderedEntries.slice(
     safeStart,
@@ -158,7 +167,12 @@ export function LiveActivity({ entries }: LiveActivityProps) {
               }}
             >
               <span>
-                Showing {safeStart + 1}–{Math.min(safeStart + ESP_ACTIVITY_WINDOW_SIZE, orderedEntries.length)} of {orderedEntries.length} occurrences
+                Showing {safeStart + 1}–
+                {Math.min(
+                  safeStart + ESP_ACTIVITY_WINDOW_SIZE,
+                  orderedEntries.length,
+                )}{" "}
+                of {orderedEntries.length} occurrences
               </span>
               <span style={{ display: "inline-flex", gap: 5 }}>
                 <Button
@@ -177,7 +191,10 @@ export function LiveActivity({ entries }: LiveActivityProps) {
                   disabled={safeStart >= maximumStart}
                   onClick={() =>
                     setWindowStart((current) =>
-                      Math.min(maximumStart, current + ESP_ACTIVITY_WINDOW_SIZE),
+                      Math.min(
+                        maximumStart,
+                        current + ESP_ACTIVITY_WINDOW_SIZE,
+                      ),
                     )
                   }
                 >
@@ -187,105 +204,105 @@ export function LiveActivity({ entries }: LiveActivityProps) {
             </div>
           ) : null}
           <ol style={{ margin: 0, padding: 0, listStyle: "none" }}>
-          {visibleEntries.map((entry) => (
-            <li
-              key={entry.entryId}
-              data-testid="esp-activity-entry"
-              style={{
-                display: "grid",
-                gridTemplateColumns: "58px 86px minmax(0, 1fr) auto",
-                alignItems: "start",
-                gap: 8,
-                padding: "7px 9px",
-                borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
-              }}
-            >
-              <time
-                dateTime={entry.timestamp.normalizedUtc ?? undefined}
+            {visibleEntries.map((entry) => (
+              <li
+                key={entry.entryId}
+                data-testid="esp-activity-entry"
                 style={{
-                  color: tokens.colorNeutralForeground3,
-                  fontFamily: LOG_MONOSPACE_FONT_FAMILY,
-                  fontSize: 10,
-                  lineHeight: "14px",
+                  display: "grid",
+                  gridTemplateColumns: "58px 86px minmax(0, 1fr) auto",
+                  alignItems: "start",
+                  gap: 8,
+                  padding: "7px 9px",
+                  borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
                 }}
               >
-                {timeLabel(entry)}
-              </time>
-              <span
-                style={{
-                  color: tokens.colorBrandForeground1,
-                  fontFamily: LOG_MONOSPACE_FONT_FAMILY,
-                  fontSize: 10,
-                  fontWeight: 700,
-                  lineHeight: "14px",
-                  textTransform: "uppercase",
-                }}
-              >
-                {kindLabel(entry.kind)}
-              </span>
-              <div style={{ minWidth: 0 }}>
-                <div
+                <time
+                  dateTime={entry.timestamp.normalizedUtc ?? undefined}
                   style={{
-                    display: "flex",
-                    alignItems: "baseline",
-                    gap: 6,
-                    fontFamily: LOG_UI_FONT_FAMILY,
-                    fontSize: 11,
-                    fontWeight: 650,
+                    color: tokens.colorNeutralForeground3,
+                    fontFamily: LOG_MONOSPACE_FONT_FAMILY,
+                    fontSize: 10,
                     lineHeight: "14px",
                   }}
                 >
-                  <span>{entry.title}</span>
-                  {entry.status ? (
-                    <span
-                      style={{
-                        color: tokens.colorNeutralForeground3,
-                        fontFamily: LOG_MONOSPACE_FONT_FAMILY,
-                        fontSize: 10,
-                      }}
-                    >
-                      {entry.status.display}
-                    </span>
-                  ) : null}
-                </div>
-                {entry.detail ? (
+                  {timeLabel(entry)}
+                </time>
+                <span
+                  style={{
+                    color: tokens.colorBrandForeground1,
+                    fontFamily: LOG_MONOSPACE_FONT_FAMILY,
+                    fontSize: 10,
+                    fontWeight: 700,
+                    lineHeight: "14px",
+                    textTransform: "uppercase",
+                  }}
+                >
+                  {kindLabel(entry.kind)}
+                </span>
+                <div style={{ minWidth: 0 }}>
                   <div
                     style={{
-                      marginTop: 1,
-                      overflow: "hidden",
-                      color: tokens.colorNeutralForeground3,
-                      fontSize: 10,
-                      lineHeight: "13px",
-                      textOverflow: "ellipsis",
-                      whiteSpace: "nowrap",
+                      display: "flex",
+                      alignItems: "baseline",
+                      gap: 6,
+                      fontFamily: LOG_UI_FONT_FAMILY,
+                      fontSize: 11,
+                      fontWeight: 650,
+                      lineHeight: "14px",
                     }}
-                    title={entry.detail}
                   >
-                    {entry.detail}
+                    <span>{entry.title}</span>
+                    {entry.status ? (
+                      <span
+                        style={{
+                          color: tokens.colorNeutralForeground3,
+                          fontFamily: LOG_MONOSPACE_FONT_FAMILY,
+                          fontSize: 10,
+                        }}
+                      >
+                        {entry.status.display}
+                      </span>
+                    ) : null}
                   </div>
-                ) : null}
-              </div>
-              <div style={{ display: "flex", gap: 5 }}>
-                {entry.evidence.map((reference) => (
-                  <a
-                    key={reference.evidenceId}
-                    href={`#evidence-${reference.evidenceId}`}
-                    onClick={() =>
-                      requestEspEvidenceNavigation({
-                        kind: "evidence",
-                        id: reference.evidenceId,
-                      })
-                    }
-                    aria-label={`Open evidence ${reference.evidenceId}`}
-                    title={`${reference.sourceArtifactId} · ${reference.evidenceId}`}
-                    style={{ color: tokens.colorBrandForegroundLink }}
-                  >
-                    <LinkRegular aria-hidden="true" />
-                  </a>
-                ))}
-              </div>
-            </li>
-          ))}
+                  {entry.detail ? (
+                    <div
+                      style={{
+                        marginTop: 1,
+                        overflow: "hidden",
+                        color: tokens.colorNeutralForeground3,
+                        fontSize: 10,
+                        lineHeight: "13px",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                      }}
+                      title={entry.detail}
+                    >
+                      {entry.detail}
+                    </div>
+                  ) : null}
+                </div>
+                <div style={{ display: "flex", gap: 5 }}>
+                  {entry.evidence.map((reference) => (
+                    <a
+                      key={reference.evidenceId}
+                      href={`#evidence-${reference.evidenceId}`}
+                      onClick={() =>
+                        requestEspEvidenceNavigation({
+                          kind: "evidence",
+                          id: reference.evidenceId,
+                        })
+                      }
+                      aria-label={`Open evidence ${reference.evidenceId}`}
+                      title={`${reference.sourceArtifactId} · ${reference.evidenceId}`}
+                      style={{ color: tokens.colorBrandForegroundLink }}
+                    >
+                      <LinkRegular aria-hidden="true" />
+                    </a>
+                  ))}
+                </div>
+              </li>
+            ))}
           </ol>
         </>
       )}

@@ -48,7 +48,8 @@ function unnormalizedTimestamp(
     rawText,
     originalOffset,
     normalizedUtc: null,
-    kind: originalOffset === null ? ("unspecified" as const) : ("offset" as const),
+    kind:
+      originalOffset === null ? ("unspecified" as const) : ("offset" as const),
   };
 }
 
@@ -292,10 +293,7 @@ function makeFinding(): EspDiagnosticFinding {
   };
 }
 
-function makeActivity(
-  entryId: string,
-  observedAt: string,
-): EspTimelineEntry {
+function makeActivity(entryId: string, observedAt: string): EspTimelineEntry {
   return {
     entryId,
     timestamp: timestamp(observedAt),
@@ -323,13 +321,16 @@ function makeRawRecord(
     provenance: {
       sourceKind: "imeLog",
       sourceArtifactId: "ime-app-workload",
-      filePath: "C:\\ProgramData\\Microsoft\\IntuneManagementExtension\\Logs\\IntuneManagementExtension.log",
+      filePath:
+        "C:\\ProgramData\\Microsoft\\IntuneManagementExtension\\Logs\\IntuneManagementExtension.log",
       lineNumber: index + 1,
       recordNumber: index,
       registry: null,
       event: null,
     },
-    sourceTimestamp: timestamp(`2026-07-15T20:07:${String(index % 60).padStart(2, "0")}Z`),
+    sourceTimestamp: timestamp(
+      `2026-07-15T20:07:${String(index % 60).padStart(2, "0")}Z`,
+    ),
     observedAtUtc: `2026-07-15T20:07:${String(index % 60).padStart(2, "0")}Z`,
     rawValue: { text: `Raw record ${index}` },
     sensitivity: "public",
@@ -400,7 +401,10 @@ function showSnapshot(
 
 beforeEach(() => {
   vi.mocked(invoke).mockReset();
-  useEspDiagnosticsStore.setState(useEspDiagnosticsStore.getInitialState(), true);
+  useEspDiagnosticsStore.setState(
+    useEspDiagnosticsStore.getInitialState(),
+    true,
+  );
   useUiStore.setState({ currentPlatform: "windows" });
 });
 
@@ -455,13 +459,17 @@ describe("ESP diagnostic cockpit frame", () => {
     expect(screen.getByText("Device setup")).toBeInTheDocument();
     expect(screen.getByText("8m 05s")).toBeInTheDocument();
     expect(screen.getByText("2 / 3 sources")).toBeInTheDocument();
-    expect(screen.getByText("Partial", { selector: "strong" })).toBeInTheDocument();
+    expect(
+      screen.getByText("Partial", { selector: "strong" }),
+    ).toBeInTheDocument();
 
     act(() => {
       useEspDiagnosticsStore.setState({ phase: "ready", graphPhase: "ready" });
     });
     expect(screen.getByText("Analysis ready")).toBeInTheDocument();
-    expect(screen.getByText("Connected", { selector: "strong" })).toBeInTheDocument();
+    expect(
+      screen.getByText("Connected", { selector: "strong" }),
+    ).toBeInTheDocument();
   });
 
   it("computes elapsed time deterministically across multiple latest sessions", () => {
@@ -511,7 +519,9 @@ describe("ESP elevation recommendation", () => {
     expect(recommendation).toHaveTextContent(
       "SYSTEM profile temporary installer logs",
     );
-    expect(screen.getByText("Standard user", { selector: "strong" })).toBeInTheDocument();
+    expect(
+      screen.getByText("Standard user", { selector: "strong" }),
+    ).toBeInTheDocument();
 
     fireEvent.click(
       screen.getByRole("button", { name: "Restart as administrator" }),
@@ -522,7 +532,9 @@ describe("ESP elevation recommendation", () => {
         undefined,
       ),
     );
-    expect(screen.getByText("Administrator restart requested.")).toBeInTheDocument();
+    expect(
+      screen.getByText("Administrator restart requested."),
+    ).toBeInTheDocument();
   });
 
   it("keeps the recommendation persistent when relaunch is unsupported", () => {
@@ -545,7 +557,9 @@ describe("ESP elevation recommendation", () => {
         "Close CMTrace Open and relaunch it explicitly as administrator.",
       ),
     ).toBeInTheDocument();
-    expect(screen.getByText("Protected process command lines")).toBeInTheDocument();
+    expect(
+      screen.getByText("Protected process command lines"),
+    ).toBeInTheDocument();
   });
 
   it("reports full administrator coverage without showing a recommendation", () => {
@@ -560,7 +574,9 @@ describe("ESP elevation recommendation", () => {
     );
     render(<EspDiagnosticsWorkspace />);
 
-    expect(screen.getByText("Elevated", { selector: "strong" })).toBeInTheDocument();
+    expect(
+      screen.getByText("Elevated", { selector: "strong" }),
+    ).toBeInTheDocument();
     expect(
       screen.queryByRole("region", {
         name: "Administrator coverage recommendation",
@@ -595,9 +611,7 @@ describe("current MSIEXEC activity", () => {
     expect(installer).toHaveTextContent("Parent PID 4120");
     expect(installer).toHaveTextContent("TOKEN=[REDACTED]");
     expect(installer).not.toHaveTextContent("super-secret");
-    expect(installer).toHaveTextContent(
-      "C:\\Windows\\Temp\\ContosoVPN.log",
-    );
+    expect(installer).toHaveTextContent("C:\\Windows\\Temp\\ContosoVPN.log");
     expect(
       screen.getByRole("link", { name: "Open evidence ev-msi-1" }),
     ).toHaveAttribute("href", "#evidence-ev-msi-1");
@@ -674,7 +688,10 @@ describe("scenario-aware phase progress", () => {
   it("keeps classic ESP and Device Preparation phase rules visibly distinct", () => {
     const view = render(
       <EspPhaseProgress
-        snapshot={makeSnapshot({ scenario: "autopilotV1", phase: "deviceSetup" })}
+        snapshot={makeSnapshot({
+          scenario: "autopilotV1",
+          phase: "deviceSetup",
+        })}
       />,
     );
 
@@ -818,7 +835,7 @@ describe("independent live activity", () => {
         />
         <EspWorkloadTable
           snapshot={{
-          ...first,
+            ...first,
           }}
         />
       </>,
@@ -827,9 +844,9 @@ describe("independent live activity", () => {
       within(activity).getAllByText("Installer retry observed"),
     ).toHaveLength(2);
     expect(
-      within(screen.getByRole("region", { name: "Tracked workloads" })).getByText(
-        "Workload row persists",
-      ),
+      within(
+        screen.getByRole("region", { name: "Tracked workloads" }),
+      ).getByText("Workload row persists"),
     ).toBeInTheDocument();
   });
 
@@ -882,7 +899,10 @@ describe("independent live activity", () => {
             sessions: [
               {
                 ...makeSnapshot().sessions[0],
-                workloadIds: [rawWorkload.workloadId, normalizedWorkload.workloadId],
+                workloadIds: [
+                  rawWorkload.workloadId,
+                  normalizedWorkload.workloadId,
+                ],
               },
             ],
           })}
@@ -926,9 +946,7 @@ describe("workload table", () => {
       },
     );
     render(
-      <EspWorkloadTable
-        snapshot={makeSnapshot({ workloads: [workload] })}
-      />,
+      <EspWorkloadTable snapshot={makeSnapshot({ workloads: [workload] })} />,
     );
 
     const row = screen.getByRole("row", { name: /nested-failure/i });
@@ -953,42 +971,52 @@ describe("workload table", () => {
       "devicePreparationWorkload",
     ];
     const workloads = workloadStateLabels.map(([state, display], index) =>
-      makeWorkload(`state-${index}`, kinds[index % kinds.length], state, display, {
-        scope: index % 2 === 0 ? "device" : "user",
-        rawIdentifier: index === 0 ? "graph-app-raw-guid" : `raw-state-${index}`,
-        displayName:
-          index === 0
-            ? "Contoso VPN local name"
-            : state === "unknown"
-              ? null
-              : `${kinds[index % kinds.length]} workload ${index}`,
-        blocking: state === "unknown" ? null : index % 2 === 0,
-        exitCode:
-          index === 0
-            ? { raw: "1603", decimal: 1603, hex: "0x00000643" }
-            : null,
-        enforcementErrorCode:
-          index === 0
-            ? {
-                raw: "-2016330855",
-                decimal: -2016330855,
-                hex: "0x87D30019",
-              }
-            : null,
-      }),
+      makeWorkload(
+        `state-${index}`,
+        kinds[index % kinds.length],
+        state,
+        display,
+        {
+          scope: index % 2 === 0 ? "device" : "user",
+          rawIdentifier:
+            index === 0 ? "graph-app-raw-guid" : `raw-state-${index}`,
+          displayName:
+            index === 0
+              ? "Contoso VPN local name"
+              : state === "unknown"
+                ? null
+                : `${kinds[index % kinds.length]} workload ${index}`,
+          blocking: state === "unknown" ? null : index % 2 === 0,
+          exitCode:
+            index === 0
+              ? { raw: "1603", decimal: 1603, hex: "0x00000643" }
+              : null,
+          enforcementErrorCode:
+            index === 0
+              ? {
+                  raw: "-2016330855",
+                  decimal: -2016330855,
+                  hex: "0x87D30019",
+                }
+              : null,
+        },
+      ),
     );
     render(
       <EspWorkloadTable
         snapshot={makeSnapshot({
-        installerCorrelations: [],
-        workloads,
-        sessions: [
-          {
-            ...makeSnapshot().sessions[0],
-            workloadIds: workloads.map((workload) => workload.workloadId),
-          },
-        ],
-        graph: makeGraphOverlay("graph-app-raw-guid", "Contoso VPN Graph name"),
+          installerCorrelations: [],
+          workloads,
+          sessions: [
+            {
+              ...makeSnapshot().sessions[0],
+              workloadIds: workloads.map((workload) => workload.workloadId),
+            },
+          ],
+          graph: makeGraphOverlay(
+            "graph-app-raw-guid",
+            "Contoso VPN Graph name",
+          ),
         })}
       />,
     );
@@ -1022,23 +1050,17 @@ describe("workload table", () => {
   });
 
   it("defaults to latest sessions, preserves retry rows, and sorts all sessions chronologically", () => {
-    const oldRetry = makeWorkload(
-      "retry-old",
-      "win32App",
-      "failed",
-      "Failed",
-      {
-        sessionId: "session-old",
-        rawIdentifier: "same-app-raw-guid",
-        displayName: "Contoso VPN retry 1",
-        timestamps: {
-          firstObserved: timestamp("2026-07-15T19:00:00Z"),
-          started: timestamp("2026-07-15T19:01:00Z"),
-          ended: timestamp("2026-07-15T19:02:00Z"),
-          lastUpdated: timestamp("2026-07-15T19:02:00Z"),
-        },
+    const oldRetry = makeWorkload("retry-old", "win32App", "failed", "Failed", {
+      sessionId: "session-old",
+      rawIdentifier: "same-app-raw-guid",
+      displayName: "Contoso VPN retry 1",
+      timestamps: {
+        firstObserved: timestamp("2026-07-15T19:00:00Z"),
+        started: timestamp("2026-07-15T19:01:00Z"),
+        ended: timestamp("2026-07-15T19:02:00Z"),
+        lastUpdated: timestamp("2026-07-15T19:02:00Z"),
       },
-    );
+    });
     const currentRetry = makeWorkload(
       "retry-current",
       "win32App",
@@ -1059,22 +1081,22 @@ describe("workload table", () => {
     render(
       <EspWorkloadTable
         snapshot={makeSnapshot({
-        installerCorrelations: [],
-        sessions: [
-          {
-            ...makeSnapshot().sessions[0],
-            sessionId: "session-old",
-            isLatest: false,
-            workloadIds: [oldRetry.workloadId],
-          },
-          {
-            ...makeSnapshot().sessions[0],
-            sessionId: "session-current",
-            isLatest: true,
-            workloadIds: [currentRetry.workloadId],
-          },
-        ],
-        workloads: [currentRetry, oldRetry],
+          installerCorrelations: [],
+          sessions: [
+            {
+              ...makeSnapshot().sessions[0],
+              sessionId: "session-old",
+              isLatest: false,
+              workloadIds: [oldRetry.workloadId],
+            },
+            {
+              ...makeSnapshot().sessions[0],
+              sessionId: "session-current",
+              isLatest: true,
+              workloadIds: [currentRetry.workloadId],
+            },
+          ],
+          workloads: [currentRetry, oldRetry],
         })}
       />,
     );
@@ -1099,10 +1121,14 @@ describe("workload table", () => {
       rowText.findIndex((text) => text.includes("retry 2")),
     );
     expect(within(table).getAllByText("View full values")).toHaveLength(2);
-    expect(within(table).queryAllByTestId("esp-workload-full-values")).toHaveLength(0);
+    expect(
+      within(table).queryAllByTestId("esp-workload-full-values"),
+    ).toHaveLength(0);
 
     fireEvent.click(within(table).getAllByText("View full values")[0]);
-    expect(within(table).getAllByTestId("esp-workload-full-values")).toHaveLength(1);
+    expect(
+      within(table).getAllByTestId("esp-workload-full-values"),
+    ).toHaveLength(1);
     expect(table).toHaveTextContent("ev-retry-old");
   });
 
@@ -1151,11 +1177,15 @@ describe("workload table", () => {
               ...makeSnapshot().sessions[0],
               sessionId: "session-old",
               isLatest: false,
-              workloadIds: historicWorkloads.map((workload) => workload.workloadId),
+              workloadIds: historicWorkloads.map(
+                (workload) => workload.workloadId,
+              ),
             },
             {
               ...makeSnapshot().sessions[0],
-              workloadIds: currentWorkloads.map((workload) => workload.workloadId),
+              workloadIds: currentWorkloads.map(
+                (workload) => workload.workloadId,
+              ),
             },
           ],
           workloads: [...currentWorkloads, ...historicWorkloads],
@@ -1166,19 +1196,27 @@ describe("workload table", () => {
     const table = screen.getByRole("region", { name: "Tracked workloads" });
     expect(table).toHaveTextContent("Showing 1–80 of 130 workloads");
     expect(within(table).getAllByTestId("esp-workload-row")).toHaveLength(80);
-    expect(within(table).queryAllByTestId("esp-workload-full-values")).toHaveLength(0);
+    expect(
+      within(table).queryAllByTestId("esp-workload-full-values"),
+    ).toHaveLength(0);
     expect(table).not.toHaveTextContent("Current workload 129");
 
-    fireEvent.click(within(table).getByRole("button", { name: "Next workloads" }));
+    fireEvent.click(
+      within(table).getByRole("button", { name: "Next workloads" }),
+    );
     expect(table).toHaveTextContent("Showing 81–130 of 130 workloads");
     const lastCurrentRow = within(table).getByRole("row", {
       name: /Current workload 129/i,
     });
     fireEvent.click(within(lastCurrentRow).getByText("View full values"));
-    expect(within(table).getAllByTestId("esp-workload-full-values")).toHaveLength(1);
+    expect(
+      within(table).getAllByTestId("esp-workload-full-values"),
+    ).toHaveLength(1);
     expect(lastCurrentRow).toHaveTextContent("ev-current-129");
     fireEvent.click(within(lastCurrentRow).getByText("View full values"));
-    expect(within(table).queryAllByTestId("esp-workload-full-values")).toHaveLength(0);
+    expect(
+      within(table).queryAllByTestId("esp-workload-full-values"),
+    ).toHaveLength(0);
 
     fireEvent.click(
       within(table).getByRole("checkbox", { name: "Show all sessions" }),
@@ -1188,8 +1226,12 @@ describe("workload table", () => {
     expect(table).toHaveTextContent("Historic workload 000");
     expect(within(table).getAllByTestId("esp-workload-row")).toHaveLength(80);
 
-    fireEvent.click(within(table).getByRole("button", { name: "Next workloads" }));
-    fireEvent.click(within(table).getByRole("button", { name: "Next workloads" }));
+    fireEvent.click(
+      within(table).getByRole("button", { name: "Next workloads" }),
+    );
+    fireEvent.click(
+      within(table).getByRole("button", { name: "Next workloads" }),
+    );
     expect(table).toHaveTextContent("Showing 161–205 of 205 workloads");
     expect(table).toHaveTextContent("Current workload 129");
     expect(within(table).getAllByTestId("esp-workload-row")).toHaveLength(45);
@@ -1239,8 +1281,12 @@ describe("complete single-page evidence composition", () => {
     render(<EspDiagnosticsWorkspace />);
 
     const evidence = screen.getByRole("region", { name: "ESP evidence" });
-    expect(evidence).toHaveTextContent("Sensitive values are masked by default");
-    expect(evidence).toHaveTextContent("Copy remains unavailable for restricted values");
+    expect(evidence).toHaveTextContent(
+      "Sensitive values are masked by default",
+    );
+    expect(evidence).toHaveTextContent(
+      "Copy remains unavailable for restricted values",
+    );
 
     fireEvent.click(within(evidence).getByText("Identity and profile"));
     expect(evidence).toHaveTextContent("Sensitive value · masked");
@@ -1264,17 +1310,24 @@ describe("complete single-page evidence composition", () => {
 
     const evidence = screen.getByRole("region", { name: "ESP evidence" });
     expect(evidence).not.toHaveTextContent("managed-device-raw-guid");
-    expect(within(evidence).queryAllByTestId("esp-evidence-item")).toHaveLength(0);
+    expect(within(evidence).queryAllByTestId("esp-evidence-item")).toHaveLength(
+      0,
+    );
 
     fireEvent.click(within(evidence).getByText("Identity and profile"));
 
     expect(evidence).toHaveTextContent("managed-device-raw-guid");
-    expect(within(evidence).getAllByTestId("esp-evidence-item").length).toBeGreaterThan(0);
+    expect(
+      within(evidence).getAllByTestId("esp-evidence-item").length,
+    ).toBeGreaterThan(0);
   });
 
   it("bounds high-volume activity and raw-evidence DOM across live snapshot updates", () => {
     const activity = Array.from({ length: 600 }, (_, index) =>
-      makeActivity(`bulk-${index}`, `2026-07-15T20:${String(index % 60).padStart(2, "0")}:00Z`),
+      makeActivity(
+        `bulk-${index}`,
+        `2026-07-15T20:${String(index % 60).padStart(2, "0")}:00Z`,
+      ),
     );
     const rawEvidence = Array.from({ length: 600 }, (_, index) =>
       makeRawRecord(index),
@@ -1286,8 +1339,12 @@ describe("complete single-page evidence composition", () => {
     const live = screen.getByRole("region", { name: "Live activity" });
     const evidence = screen.getByRole("region", { name: "ESP evidence" });
     expect(live).toHaveTextContent("600 occurrences");
-    expect(within(live).getAllByTestId("esp-activity-entry").length).toBeLessThanOrEqual(80);
-    expect(within(evidence).queryAllByTestId("esp-evidence-item")).toHaveLength(0);
+    expect(
+      within(live).getAllByTestId("esp-activity-entry").length,
+    ).toBeLessThanOrEqual(80);
+    expect(within(evidence).queryAllByTestId("esp-evidence-item")).toHaveLength(
+      0,
+    );
 
     fireEvent.click(within(evidence).getByText("Raw provenance"));
     const rawDisclosure = within(evidence)
@@ -1304,21 +1361,30 @@ describe("complete single-page evidence composition", () => {
       useEspDiagnosticsStore.setState({
         snapshot: {
           ...initial,
-          activity: [...activity, makeActivity("bulk-600", "2026-07-15T21:00:00Z")],
+          activity: [
+            ...activity,
+            makeActivity("bulk-600", "2026-07-15T21:00:00Z"),
+          ],
           rawEvidence: [...rawEvidence, makeRawRecord(600)],
         },
       });
     });
 
     expect(live).toHaveTextContent("601 occurrences");
-    expect(within(live).getAllByTestId("esp-activity-entry").length).toBeLessThanOrEqual(80);
+    expect(
+      within(live).getAllByTestId("esp-activity-entry").length,
+    ).toBeLessThanOrEqual(80);
     expect(rawDisclosure).toHaveTextContent("601 records");
     expect(
       within(rawDisclosure as HTMLElement).getAllByTestId("esp-evidence-item")
         .length,
     ).toBeLessThanOrEqual(80);
-    expect(useEspDiagnosticsStore.getState().snapshot?.activity).toHaveLength(601);
-    expect(useEspDiagnosticsStore.getState().snapshot?.rawEvidence).toHaveLength(601);
+    expect(useEspDiagnosticsStore.getState().snapshot?.activity).toHaveLength(
+      601,
+    );
+    expect(
+      useEspDiagnosticsStore.getState().snapshot?.rawEvidence,
+    ).toHaveLength(601);
   });
 
   it("navigates duplicate evidence references to one canonical raw target", async () => {
@@ -1336,7 +1402,10 @@ describe("complete single-page evidence composition", () => {
       "Failed",
       {
         evidence: [
-          { evidenceId: sharedEvidenceId, sourceArtifactId: "ime-app-workload" },
+          {
+            evidenceId: sharedEvidenceId,
+            sourceArtifactId: "ime-app-workload",
+          },
         ],
       },
     );
@@ -1349,7 +1418,9 @@ describe("complete single-page evidence composition", () => {
     );
     render(<EspDiagnosticsWorkspace />);
 
-    expect(document.querySelectorAll(`#evidence-${sharedEvidenceId}`)).toHaveLength(0);
+    expect(
+      document.querySelectorAll(`#evidence-${sharedEvidenceId}`),
+    ).toHaveLength(0);
     fireEvent.click(
       within(screen.getByRole("region", { name: "Action center" })).getByRole(
         "link",
@@ -1358,13 +1429,17 @@ describe("complete single-page evidence composition", () => {
     );
 
     await waitFor(() =>
-      expect(document.querySelectorAll(`#evidence-${sharedEvidenceId}`)).toHaveLength(1),
+      expect(
+        document.querySelectorAll(`#evidence-${sharedEvidenceId}`),
+      ).toHaveLength(1),
     );
     const target = document.getElementById(`evidence-${sharedEvidenceId}`);
     expect(target).not.toBeNull();
     expect(target).toHaveFocus();
     expect(target?.closest("details")).toHaveAttribute("open");
-    expect(target?.closest('[data-evidence-item-id="raw-record-1"]')).not.toBeNull();
+    expect(
+      target?.closest('[data-evidence-item-id="raw-record-1"]'),
+    ).not.toBeNull();
     const ids = Array.from(document.querySelectorAll<HTMLElement>("[id]"))
       .map((element) => element.id)
       .filter(Boolean);
@@ -1385,13 +1460,17 @@ describe("complete single-page evidence composition", () => {
     );
 
     await waitFor(() =>
-      expect(document.getElementById("evidence-ev-process-8044")).not.toBeNull(),
+      expect(
+        document.getElementById("evidence-ev-process-8044"),
+      ).not.toBeNull(),
     );
     const target = document.getElementById("evidence-ev-process-8044");
     expect(target).toHaveFocus();
     expect(target?.closest("details")).toHaveAttribute("open");
     expect(
-      target?.closest('[data-evidence-item-id="reference-only-ev-process-8044"]'),
+      target?.closest(
+        '[data-evidence-item-id="reference-only-ev-process-8044"]',
+      ),
     ).toHaveTextContent("Raw record not included in this snapshot");
   });
 
@@ -1407,14 +1486,18 @@ describe("complete single-page evidence composition", () => {
     );
 
     await waitFor(() =>
-      expect(document.getElementById("coverage-coverage-system-temp")).not.toBeNull(),
+      expect(
+        document.getElementById("coverage-coverage-system-temp"),
+      ).not.toBeNull(),
     );
     const target = document.getElementById("coverage-coverage-system-temp");
     expect(target).toHaveFocus();
     expect(target?.closest("details")).toHaveAttribute("open");
     expect(target).toHaveTextContent("Referenced coverage gap");
     expect(target).toHaveTextContent("no source coverage record was included");
-    expect(document.querySelectorAll("#coverage-coverage-system-temp")).toHaveLength(1);
+    expect(
+      document.querySelectorAll("#coverage-coverage-system-temp"),
+    ).toHaveLength(1);
   });
 
   it("keeps duplicate null-record registration events unique and navigable", async () => {
@@ -1473,7 +1556,9 @@ describe("complete single-page evidence composition", () => {
     );
 
     await waitFor(() =>
-      expect(document.getElementById("evidence-ev-registration-b")).not.toBeNull(),
+      expect(
+        document.getElementById("evidence-ev-registration-b"),
+      ).not.toBeNull(),
     );
     const target = document.getElementById("evidence-ev-registration-b");
     expect(target).toHaveFocus();
@@ -1482,12 +1567,17 @@ describe("complete single-page evidence composition", () => {
       target?.closest('[data-evidence-item-id^="registration-75-"]'),
     ).toHaveTextContent("Second registration occurrence");
     const registrationItems = Array.from(
-      target?.closest("details")?.querySelectorAll<HTMLElement>(
-        '[data-evidence-item-id^="registration-75-"]',
-      ) ?? [],
+      target
+        ?.closest("details")
+        ?.querySelectorAll<HTMLElement>(
+          '[data-evidence-item-id^="registration-75-"]',
+        ) ?? [],
     );
     expect(registrationItems).toHaveLength(2);
-    expect(new Set(registrationItems.map((item) => item.dataset.evidenceItemId)).size).toBe(2);
+    expect(
+      new Set(registrationItems.map((item) => item.dataset.evidenceItemId))
+        .size,
+    ).toBe(2);
   });
 
   it("exposes responsive panel and installer reflow hooks", () => {
@@ -1495,7 +1585,9 @@ describe("complete single-page evidence composition", () => {
     render(<EspDiagnosticsWorkspace />);
 
     expect(screen.getByRole("main")).toHaveClass("esp-diagnostics-workspace");
-    expect(document.querySelectorAll(".esp-cockpit-panel-grid")).toHaveLength(2);
+    expect(document.querySelectorAll(".esp-cockpit-panel-grid")).toHaveLength(
+      2,
+    );
 
     const installer = screen.getByRole("region", {
       name: "What MSIEXEC is doing now",

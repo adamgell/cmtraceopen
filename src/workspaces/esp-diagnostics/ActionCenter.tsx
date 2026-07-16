@@ -7,7 +7,10 @@ import {
   ShieldErrorRegular,
   WarningRegular,
 } from "@fluentui/react-icons";
-import { LOG_MONOSPACE_FONT_FAMILY, LOG_UI_FONT_FAMILY } from "../../lib/log-accessibility";
+import {
+  LOG_MONOSPACE_FONT_FAMILY,
+  LOG_UI_FONT_FAMILY,
+} from "../../lib/log-accessibility";
 import { requestEspEvidenceNavigation } from "./evidence-navigation";
 import type {
   EspDiagnosticFinding,

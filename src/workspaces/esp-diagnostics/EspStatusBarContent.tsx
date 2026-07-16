@@ -100,8 +100,7 @@ export function EspStatusBarContent() {
         <span
           style={{
             color:
-              snapshot &&
-              !snapshot.elevation.isElevated
+              snapshot && !snapshot.elevation.isElevated
                 ? tokens.colorPaletteYellowForeground2
                 : tokens.colorNeutralForeground2,
           }}

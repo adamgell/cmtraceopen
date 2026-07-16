@@ -15,9 +15,7 @@ export const ESP_EVIDENCE_DISCLOSURE_POLICY =
   "Sensitive values are masked by default. Reveal applies only to this view and never reveals restricted values. Copy remains unavailable for restricted values.";
 
 export type EspEvidenceSourceState =
-  | EspArtifactStatus
-  | "partial"
-  | "notObserved";
+  EspArtifactStatus | "partial" | "notObserved";
 
 export interface EspEvidenceFieldViewModel {
   label: string;
@@ -85,12 +83,12 @@ function hasDevicePreparationEvidence(
 ): boolean {
   return Boolean(
     value &&
-      (value.agentDownloadTimeoutSeconds !== null ||
-        value.pageTimeoutSeconds !== null ||
-        value.allowSkipOnFailure !== null ||
-        value.allowDiagnostics !== null ||
-        value.scriptIds.length > 0 ||
-        value.evidence.length > 0),
+    (value.agentDownloadTimeoutSeconds !== null ||
+      value.pageTimeoutSeconds !== null ||
+      value.allowSkipOnFailure !== null ||
+      value.allowDiagnostics !== null ||
+      value.scriptIds.length > 0 ||
+      value.evidence.length > 0),
   );
 }
 
@@ -221,7 +219,10 @@ function workloadItem(
       field("Scope", workload.scope),
       field("Session", workload.sessionId),
       field("Blocking", displayBoolean(workload.blocking)),
-      field("First observed", displayTimestamp(workload.timestamps.firstObserved)),
+      field(
+        "First observed",
+        displayTimestamp(workload.timestamps.firstObserved),
+      ),
     ],
     {
       graphName: graphNameForWorkload(snapshot, workload),
@@ -338,7 +339,10 @@ export function buildEspEvidenceViewModel(
           "local-identity",
           identity.deviceName ?? "Local device identity",
           [
-            field("Managed device ID", displayNullable(identity.managedDeviceId)),
+            field(
+              "Managed device ID",
+              displayNullable(identity.managedDeviceId),
+            ),
             field("Entra device ID", displayNullable(identity.entraDeviceId)),
             field(
               "EntDM ID",
@@ -388,7 +392,10 @@ export function buildEspEvidenceViewModel(
             profile.tenantId?.sensitivity ?? "public",
           ),
           field("Join mode", displayNullable(profile.joinMode)),
-          field("Profile downloaded", displayTimestamp(profile.profileDownloadTime)),
+          field(
+            "Profile downloaded",
+            displayTimestamp(profile.profileDownloadTime),
+          ),
         ],
         { rawId: profile.deploymentProfileId, evidence: profile.evidence },
       ),
@@ -398,18 +405,35 @@ export function buildEspEvidenceViewModel(
   const oobe = profile?.oobeConfig;
   const oobeItems = oobe
     ? [
-        item("oobe-mask", `OOBE mask ${oobe.rawMask}`, [
-          field("Skip keyboard", displayBoolean(oobe.skipKeyboard)),
-          field("Patch download", displayBoolean(oobe.enablePatchDownload)),
-          field("Skip Windows upgrade UX", displayBoolean(oobe.skipWindowsUpgradeUx)),
-          field("Entra TPM required", displayBoolean(oobe.aadTpmRequired)),
-          field("Entra device authentication", displayBoolean(oobe.aadDeviceAuthentication)),
-          field("TPM attestation", displayBoolean(oobe.tpmAttestation)),
-          field("Skip EULA", displayBoolean(oobe.skipEula)),
-          field("Skip OEM registration", displayBoolean(oobe.skipOemRegistration)),
-          field("Skip express settings", displayBoolean(oobe.skipExpressSettings)),
-          field("Disallow local admin", displayBoolean(oobe.disallowAdmin)),
-        ], { evidence: profile?.evidence ?? [] }),
+        item(
+          "oobe-mask",
+          `OOBE mask ${oobe.rawMask}`,
+          [
+            field("Skip keyboard", displayBoolean(oobe.skipKeyboard)),
+            field("Patch download", displayBoolean(oobe.enablePatchDownload)),
+            field(
+              "Skip Windows upgrade UX",
+              displayBoolean(oobe.skipWindowsUpgradeUx),
+            ),
+            field("Entra TPM required", displayBoolean(oobe.aadTpmRequired)),
+            field(
+              "Entra device authentication",
+              displayBoolean(oobe.aadDeviceAuthentication),
+            ),
+            field("TPM attestation", displayBoolean(oobe.tpmAttestation)),
+            field("Skip EULA", displayBoolean(oobe.skipEula)),
+            field(
+              "Skip OEM registration",
+              displayBoolean(oobe.skipOemRegistration),
+            ),
+            field(
+              "Skip express settings",
+              displayBoolean(oobe.skipExpressSettings),
+            ),
+            field("Disallow local admin", displayBoolean(oobe.disallowAdmin)),
+          ],
+          { evidence: profile?.evidence ?? [] },
+        ),
       ]
     : [];
 
@@ -420,13 +444,30 @@ export function buildEspEvidenceViewModel(
   ) {
     const configuration = profile.devicePreparation;
     configurationItems.push(
-      item("device-preparation-config", "Device Preparation configuration", [
-        field("Agent timeout (seconds)", displayNullable(configuration.agentDownloadTimeoutSeconds)),
-        field("Page timeout (seconds)", displayNullable(configuration.pageTimeoutSeconds)),
-        field("Allow skip on failure", displayBoolean(configuration.allowSkipOnFailure)),
-        field("Allow diagnostics", displayBoolean(configuration.allowDiagnostics)),
-        field("Script IDs", configuration.scriptIds.join(", ") || "None"),
-      ], { evidence: configuration.evidence }),
+      item(
+        "device-preparation-config",
+        "Device Preparation configuration",
+        [
+          field(
+            "Agent timeout (seconds)",
+            displayNullable(configuration.agentDownloadTimeoutSeconds),
+          ),
+          field(
+            "Page timeout (seconds)",
+            displayNullable(configuration.pageTimeoutSeconds),
+          ),
+          field(
+            "Allow skip on failure",
+            displayBoolean(configuration.allowSkipOnFailure),
+          ),
+          field(
+            "Allow diagnostics",
+            displayBoolean(configuration.allowDiagnostics),
+          ),
+          field("Script IDs", configuration.scriptIds.join(", ") || "None"),
+        ],
+        { evidence: configuration.evidence },
+      ),
     );
   }
   configurationItems.push(
@@ -435,13 +476,22 @@ export function buildEspEvidenceViewModel(
         `esp-settings-${enrollment.enrollmentId}`,
         "Enrollment Status Page settings",
         [
-          field("Device ESP", displayBoolean(enrollment.settings.deviceEspEnabled)),
+          field(
+            "Device ESP",
+            displayBoolean(enrollment.settings.deviceEspEnabled),
+          ),
           field("User ESP", displayBoolean(enrollment.settings.userEspEnabled)),
-          field("Timeout (seconds)", displayNullable(enrollment.settings.timeoutSeconds)),
+          field(
+            "Timeout (seconds)",
+            displayNullable(enrollment.settings.timeoutSeconds),
+          ),
           field("Blocking", displayBoolean(enrollment.settings.blocking)),
           field("Allow reset", displayBoolean(enrollment.settings.allowReset)),
           field("Allow retry", displayBoolean(enrollment.settings.allowRetry)),
-          field("Continue anyway", displayBoolean(enrollment.settings.continueAnyway)),
+          field(
+            "Continue anyway",
+            displayBoolean(enrollment.settings.continueAnyway),
+          ),
         ],
         { rawId: enrollment.enrollmentId, evidence: enrollment.evidence },
       ),
@@ -499,11 +549,22 @@ export function buildEspEvidenceViewModel(
   const joinItems: EspEvidenceItemViewModel[] = [];
   if (profile) {
     joinItems.push(
-      item("join-profile", "Profile join intent", [
-        field("Join mode", displayNullable(profile.joinMode)),
-        field("Offline domain join applied", displayBoolean(profile.odjApplied)),
-        field("Skip domain connectivity check", displayBoolean(profile.skipDomainConnectivityCheck)),
-      ], { rawId: profile.deploymentProfileId, evidence: profile.evidence }),
+      item(
+        "join-profile",
+        "Profile join intent",
+        [
+          field("Join mode", displayNullable(profile.joinMode)),
+          field(
+            "Offline domain join applied",
+            displayBoolean(profile.odjApplied),
+          ),
+          field(
+            "Skip domain connectivity check",
+            displayBoolean(profile.skipDomainConnectivityCheck),
+          ),
+        ],
+        { rawId: profile.deploymentProfileId, evidence: profile.evidence },
+      ),
     );
   }
   const registrationOccurrences = new Map<string, number>();
@@ -542,14 +603,39 @@ export function buildEspEvidenceViewModel(
 
   const deliveryItems = snapshot.deliveryOptimization
     ? [
-        item("delivery-optimization-summary", "Delivery Optimization summary", [
-          field("HTTP bytes", String(snapshot.deliveryOptimization.downloadHttpBytes)),
-          field("LAN peer bytes", String(snapshot.deliveryOptimization.downloadLanBytes)),
-          field("Connected Cache bytes", String(snapshot.deliveryOptimization.downloadCacheHostBytes)),
-          field("Peer share", displayNullable(snapshot.deliveryOptimization.peerSharePercent)),
-          field("Connected Cache share", displayNullable(snapshot.deliveryOptimization.connectedCacheSharePercent)),
-          field("Transfers", String(snapshot.deliveryOptimization.transfers.length)),
-        ], { evidence: snapshot.deliveryOptimization.evidence }),
+        item(
+          "delivery-optimization-summary",
+          "Delivery Optimization summary",
+          [
+            field(
+              "HTTP bytes",
+              String(snapshot.deliveryOptimization.downloadHttpBytes),
+            ),
+            field(
+              "LAN peer bytes",
+              String(snapshot.deliveryOptimization.downloadLanBytes),
+            ),
+            field(
+              "Connected Cache bytes",
+              String(snapshot.deliveryOptimization.downloadCacheHostBytes),
+            ),
+            field(
+              "Peer share",
+              displayNullable(snapshot.deliveryOptimization.peerSharePercent),
+            ),
+            field(
+              "Connected Cache share",
+              displayNullable(
+                snapshot.deliveryOptimization.connectedCacheSharePercent,
+              ),
+            ),
+            field(
+              "Transfers",
+              String(snapshot.deliveryOptimization.transfers.length),
+            ),
+          ],
+          { evidence: snapshot.deliveryOptimization.evidence },
+        ),
         ...snapshot.deliveryOptimization.transfers.map((transfer) =>
           item(
             `delivery-transfer-${transfer.transferId}`,
@@ -571,18 +657,29 @@ export function buildEspEvidenceViewModel(
 
   const hardwareItems = snapshot.hardware
     ? [
-        item("hardware-summary", "Hardware and operating system", [
-          field("OS version", displayNullable(snapshot.hardware.osVersion)),
-          field("OS build", displayNullable(snapshot.hardware.osBuild)),
-          field("Manufacturer", displayNullable(snapshot.hardware.manufacturer)),
-          field("Model", displayNullable(snapshot.hardware.model)),
-          field("TPM version", displayNullable(snapshot.hardware.tpmVersion)),
-          field(
-            "Serial number",
-            displayClassified(snapshot.hardware.serialNumber, revealSensitive),
-            snapshot.hardware.serialNumber?.sensitivity ?? "public",
-          ),
-        ], { evidence: snapshot.hardware.evidence }),
+        item(
+          "hardware-summary",
+          "Hardware and operating system",
+          [
+            field("OS version", displayNullable(snapshot.hardware.osVersion)),
+            field("OS build", displayNullable(snapshot.hardware.osBuild)),
+            field(
+              "Manufacturer",
+              displayNullable(snapshot.hardware.manufacturer),
+            ),
+            field("Model", displayNullable(snapshot.hardware.model)),
+            field("TPM version", displayNullable(snapshot.hardware.tpmVersion)),
+            field(
+              "Serial number",
+              displayClassified(
+                snapshot.hardware.serialNumber,
+                revealSensitive,
+              ),
+              snapshot.hardware.serialNumber?.sensitivity ?? "public",
+            ),
+          ],
+          { evidence: snapshot.hardware.evidence },
+        ),
       ]
     : [];
 
@@ -593,7 +690,11 @@ export function buildEspEvidenceViewModel(
       [
         field(
           "Expected value",
-          displayValue(entry.expectedValue ?? "Unknown", entry.sensitivity, revealSensitive),
+          displayValue(
+            entry.expectedValue ?? "Unknown",
+            entry.sensitivity,
+            revealSensitive,
+          ),
           entry.sensitivity,
         ),
       ],
@@ -715,7 +816,8 @@ export function buildEspEvidenceViewModel(
     {
       id: "identity-profile",
       title: "Identity and profile",
-      description: "Local identity, deployment profile, and immutable identifiers.",
+      description:
+        "Local identity, deployment profile, and immutable identifiers.",
       emptyNoun: "identity or profile",
       coverageTerms: ["identity", "profile", "autopilot"],
       items: identityItems,
@@ -739,7 +841,8 @@ export function buildEspEvidenceViewModel(
     {
       id: "enrollment-sessions",
       title: "Enrollment and sessions",
-      description: "Enrollment providers plus device and user session attempts.",
+      description:
+        "Enrollment providers plus device and user session attempts.",
       emptyNoun: "enrollment or session",
       coverageTerms: ["enrollment", "session", "esp"],
       items: enrollmentItems,
@@ -750,7 +853,12 @@ export function buildEspEvidenceViewModel(
       description: "MSI, Microsoft 365, modern, and Win32 app evidence.",
       emptyNoun: "app workload",
       coverageTerms: ["app", "ime"],
-      items: workloadsOfKinds(snapshot, ["msi", "office", "modernApp", "win32App"]),
+      items: workloadsOfKinds(snapshot, [
+        "msi",
+        "office",
+        "modernApp",
+        "win32App",
+      ]),
     },
     {
       id: "scripts",
@@ -779,7 +887,8 @@ export function buildEspEvidenceViewModel(
     {
       id: "join-registration",
       title: "Join and registration",
-      description: "Join intent, offline-domain-join state, and registration events.",
+      description:
+        "Join intent, offline-domain-join state, and registration events.",
       emptyNoun: "join or registration",
       coverageTerms: ["join", "registration", "mdm event"],
       items: joinItems,
@@ -795,7 +904,8 @@ export function buildEspEvidenceViewModel(
     {
       id: "hardware",
       title: "Hardware",
-      description: "Safe hardware and operating-system facts; hardware hash is excluded.",
+      description:
+        "Safe hardware and operating-system facts; hardware hash is excluded.",
       emptyNoun: "hardware",
       coverageTerms: ["hardware", "system"],
       items: hardwareItems,
@@ -803,7 +913,8 @@ export function buildEspEvidenceViewModel(
     {
       id: "node-cache",
       title: "NodeCache",
-      description: "Raw NodeCache indices, URIs, and classified expected values.",
+      description:
+        "Raw NodeCache indices, URIs, and classified expected values.",
       emptyNoun: "NodeCache",
       coverageTerms: ["nodecache", "registry"],
       items: nodeCacheItems,
@@ -811,7 +922,8 @@ export function buildEspEvidenceViewModel(
     {
       id: "source-coverage",
       title: "Source coverage",
-      description: "Collected, missing, denied, failed, and unsupported source families.",
+      description:
+        "Collected, missing, denied, failed, and unsupported source families.",
       emptyNoun: "source coverage",
       coverageTerms: ["coverage"],
       items: coverageItems,
@@ -819,7 +931,8 @@ export function buildEspEvidenceViewModel(
     {
       id: "raw-provenance",
       title: "Raw provenance",
-      description: "Raw records with stable IDs, origin, access, parse state, and sensitivity.",
+      description:
+        "Raw records with stable IDs, origin, access, parse state, and sensitivity.",
       emptyNoun: "raw provenance",
       coverageTerms: ["raw", "evidence"],
       items: rawItems,
@@ -886,7 +999,9 @@ export function buildEspEvidenceViewModel(
       if (referenceOnlyItems.length > 0) {
         notes.push(
           `${referenceOnlyItems.length} linked evidence ${
-            referenceOnlyItems.length === 1 ? "reference has" : "references have"
+            referenceOnlyItems.length === 1
+              ? "reference has"
+              : "references have"
           } no raw or normalized record in this snapshot`,
         );
       }

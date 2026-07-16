@@ -1,5 +1,8 @@
 import { tokens } from "@fluentui/react-components";
-import { LOG_MONOSPACE_FONT_FAMILY, LOG_UI_FONT_FAMILY } from "../../lib/log-accessibility";
+import {
+  LOG_MONOSPACE_FONT_FAMILY,
+  LOG_UI_FONT_FAMILY,
+} from "../../lib/log-accessibility";
 import type { EspDiagnosticsSnapshot, EspPhase } from "./types";
 
 type StepState = "Complete" | "Current" | "Pending" | "Failed" | "Unknown";
@@ -115,9 +118,7 @@ export function EspPhaseProgress({ snapshot }: EspPhaseProgressProps) {
   const isDevicePreparationV2 =
     snapshot.scenario === "autopilotDevicePreparationV2" ||
     latestSession?.kind === "devicePreparationV2";
-  const steps = isDevicePreparationV2
-    ? devicePreparationSteps
-    : classicSteps;
+  const steps = isDevicePreparationV2 ? devicePreparationSteps : classicSteps;
   const failureObserved = snapshot.phase === "failed";
   const explicitFailurePhase = failureObserved
     ? latestSession?.phase === "devicePreparation" ||

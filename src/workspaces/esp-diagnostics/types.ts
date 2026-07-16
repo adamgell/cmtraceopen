@@ -45,24 +45,13 @@ export type EspNormalizedStatus =
   | "unknown";
 
 export type EspArtifactStatus =
-  | "available"
-  | "missing"
-  | "permissionDenied"
-  | "parseFailed"
-  | "unsupported";
+  "available" | "missing" | "permissionDenied" | "parseFailed" | "unsupported";
 
 export type EspCorrelationConfidence =
-  | "exact"
-  | "strong"
-  | "temporal"
-  | "uncorrelated";
+  "exact" | "strong" | "temporal" | "uncorrelated";
 
 export type EspTimestampKind =
-  | "utc"
-  | "offset"
-  | "local"
-  | "unspecified"
-  | "invalid";
+  "utc" | "offset" | "local" | "unspecified" | "invalid";
 
 export type EspSourceKind =
   | "registry"
@@ -79,11 +68,7 @@ export type EspSourceKind =
 export type EspSensitivity = "public" | "sensitive" | "restricted";
 export type EspParseState = "parsed" | "raw" | "malformed" | "unsupported";
 export type EspSourceAccessState =
-  | "available"
-  | "missing"
-  | "permissionDenied"
-  | "failed"
-  | "unsupported";
+  "available" | "missing" | "permissionDenied" | "failed" | "unsupported";
 export type EspScope = "device" | "user";
 export type EspSessionKind = "classic" | "devicePreparationV2";
 export type EspJoinMode = "entra" | "hybridEntra" | (string & {});
@@ -99,16 +84,9 @@ export type EspTimelineKind =
   | "process"
   | "other";
 export type EspGraphAssignmentIntent =
-  | "required"
-  | "available"
-  | "uninstall"
-  | (string & {});
+  "required" | "available" | "uninstall" | (string & {});
 export type EspGraphTargetKind =
-  | "allDevices"
-  | "allUsers"
-  | "group"
-  | "filter"
-  | (string & {});
+  "allDevices" | "allUsers" | "group" | "filter" | (string & {});
 export type EspGraphTargeting = "declared" | "effective";
 export type EspGraphPolicyKind =
   | "deviceConfiguration"
@@ -117,9 +95,7 @@ export type EspGraphPolicyKind =
   | "scepCertificate"
   | (string & {});
 export type EspGraphScriptKind =
-  | "platformScript"
-  | "remediation"
-  | (string & {});
+  "platformScript" | "remediation" | (string & {});
 export type EspGraphObservationSection =
   | "managedDevice"
   | "autopilotIdentity"
@@ -129,13 +105,9 @@ export type EspGraphObservationSection =
   | "policy"
   | "script"
   | (string & {});
-export type EspGraphPolicyStatusDetailKind =
-  | "app"
-  | "policy"
-  | (string & {});
+export type EspGraphPolicyStatusDetailKind = "app" | "policy" | (string & {});
 export type EspDeliveryOptimizationEventKind =
-  | "downloadStarted"
-  | "downloadCompleted";
+  "downloadStarted" | "downloadCompleted";
 
 export type EspRawStatus = number | string;
 export type EspObservationValue =
@@ -498,8 +470,7 @@ export interface EspDeliveryOptimizationObservation {
 }
 
 type RawPreservingString<Known extends string> =
-  | Known
-  | (string & Record<never, never>);
+  Known | (string & Record<never, never>);
 
 export type GraphApiVersion = RawPreservingString<"v1.0" | "beta">;
 export type GraphSectionStatus = RawPreservingString<

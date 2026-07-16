@@ -1,6 +1,9 @@
 import type { ReactNode } from "react";
 import { tokens } from "@fluentui/react-components";
-import { LOG_MONOSPACE_FONT_FAMILY, LOG_UI_FONT_FAMILY } from "../../lib/log-accessibility";
+import {
+  LOG_MONOSPACE_FONT_FAMILY,
+  LOG_UI_FONT_FAMILY,
+} from "../../lib/log-accessibility";
 import type {
   EspDiagnosticsStore,
   EspGraphPhase,
@@ -50,8 +53,11 @@ const graphStateLabels: Record<EspGraphPhase, string> = {
 function elapsedLabel(snapshot: EspDiagnosticsSnapshot | null): string {
   if (!snapshot) return "Not available";
 
-  const latestSessions = snapshot.sessions.filter((session) => session.isLatest);
-  const candidates = latestSessions.length > 0 ? latestSessions : snapshot.sessions;
+  const latestSessions = snapshot.sessions.filter(
+    (session) => session.isLatest,
+  );
+  const candidates =
+    latestSessions.length > 0 ? latestSessions : snapshot.sessions;
   const currentSession = [...candidates].sort((left, right) => {
     const leftStart = Date.parse(
       left.startedAt?.normalizedUtc ?? left.startedAt?.rawText ?? "",
@@ -59,9 +65,15 @@ function elapsedLabel(snapshot: EspDiagnosticsSnapshot | null): string {
     const rightStart = Date.parse(
       right.startedAt?.normalizedUtc ?? right.startedAt?.rawText ?? "",
     );
-    const leftValue = Number.isFinite(leftStart) ? leftStart : Number.MAX_SAFE_INTEGER;
-    const rightValue = Number.isFinite(rightStart) ? rightStart : Number.MAX_SAFE_INTEGER;
-    return leftValue - rightValue || left.sessionId.localeCompare(right.sessionId);
+    const leftValue = Number.isFinite(leftStart)
+      ? leftStart
+      : Number.MAX_SAFE_INTEGER;
+    const rightValue = Number.isFinite(rightStart)
+      ? rightStart
+      : Number.MAX_SAFE_INTEGER;
+    return (
+      leftValue - rightValue || left.sessionId.localeCompare(right.sessionId)
+    );
   })[0];
   const startedAt = currentSession?.startedAt?.normalizedUtc;
   if (!startedAt) return "Not available";
@@ -267,7 +279,9 @@ export function EspWorkspaceHeader({
         <Metric
           label="Local state"
           value={localStateLabels[workspacePhase]}
-          detail={workspacePhase === "live" ? "Event stream attached" : undefined}
+          detail={
+            workspacePhase === "live" ? "Event stream attached" : undefined
+          }
           accent={workspacePhase === "live"}
         />
         <Metric label="Graph" value={graphStateLabels[graphPhase]} />

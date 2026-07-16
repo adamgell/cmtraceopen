@@ -1,7 +1,10 @@
 import { useMemo, useState } from "react";
 import { Button, tokens } from "@fluentui/react-components";
 import { LinkRegular } from "@fluentui/react-icons";
-import { LOG_MONOSPACE_FONT_FAMILY, LOG_UI_FONT_FAMILY } from "../../lib/log-accessibility";
+import {
+  LOG_MONOSPACE_FONT_FAMILY,
+  LOG_UI_FONT_FAMILY,
+} from "../../lib/log-accessibility";
 import { requestEspEvidenceNavigation } from "./evidence-navigation";
 import type {
   EspDiagnosticsSnapshot,
@@ -220,9 +223,7 @@ function WorkloadRow({ workload, graphName }: WorkloadRowProps) {
             lineHeight: "14px",
           }}
         >
-          <span aria-hidden="true">
-            {statusGlyph(effectiveStatus)}
-          </span>
+          <span aria-hidden="true">{statusGlyph(effectiveStatus)}</span>
           <span>{workload.status.display}</span>
         </div>
         {workload.status.detail ? (
@@ -335,7 +336,9 @@ function WorkloadRow({ workload, graphName }: WorkloadRowProps) {
             >
               <div>Workload · {workload.workloadId}</div>
               <div>Session · {workload.sessionId}</div>
-              <div>First observed · {workload.timestamps.firstObserved.rawText}</div>
+              <div>
+                First observed · {workload.timestamps.firstObserved.rawText}
+              </div>
               {workload.evidence.map((reference) => (
                 <a
                   key={reference.evidenceId}
@@ -463,7 +466,9 @@ export function EspWorkloadTable({ snapshot }: EspWorkloadTableProps) {
           </h2>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          <strong style={{ fontFamily: LOG_MONOSPACE_FONT_FAMILY, fontSize: 10 }}>
+          <strong
+            style={{ fontFamily: LOG_MONOSPACE_FONT_FAMILY, fontSize: 10 }}
+          >
             {countLabel}
           </strong>
           <label
@@ -503,7 +508,8 @@ export function EspWorkloadTable({ snapshot }: EspWorkloadTableProps) {
           }}
         >
           <span>
-            Showing {workloadStart + 1}–{workloadEnd} of {filteredWorkloads.length} workloads
+            Showing {workloadStart + 1}–{workloadEnd} of{" "}
+            {filteredWorkloads.length} workloads
           </span>
           <span style={{ display: "inline-flex", gap: 5 }}>
             <Button
@@ -547,11 +553,21 @@ export function EspWorkloadTable({ snapshot }: EspWorkloadTableProps) {
                 textTransform: "uppercase",
               }}
             >
-              <th scope="col" style={{ padding: "5px 9px" }}>Workload / raw ID</th>
-              <th scope="col" style={{ padding: "5px 9px" }}>Type / scope</th>
-              <th scope="col" style={{ padding: "5px 9px" }}>State</th>
-              <th scope="col" style={{ padding: "5px 9px" }}>Exit / enforcement</th>
-              <th scope="col" style={{ padding: "5px 9px" }}>Evidence</th>
+              <th scope="col" style={{ padding: "5px 9px" }}>
+                Workload / raw ID
+              </th>
+              <th scope="col" style={{ padding: "5px 9px" }}>
+                Type / scope
+              </th>
+              <th scope="col" style={{ padding: "5px 9px" }}>
+                State
+              </th>
+              <th scope="col" style={{ padding: "5px 9px" }}>
+                Exit / enforcement
+              </th>
+              <th scope="col" style={{ padding: "5px 9px" }}>
+                Evidence
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -566,7 +582,8 @@ export function EspWorkloadTable({ snapshot }: EspWorkloadTableProps) {
                     textAlign: "center",
                   }}
                 >
-                  No workload records were observed for the selected session view.
+                  No workload records were observed for the selected session
+                  view.
                 </td>
               </tr>
             ) : (

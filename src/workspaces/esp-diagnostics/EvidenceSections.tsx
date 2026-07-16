@@ -408,7 +408,7 @@ export function EvidenceSections({ snapshot }: EvidenceSectionsProps) {
       const target = (event as CustomEvent<EspEvidenceNavigationTarget>).detail;
       const destination =
         target.kind === "evidence"
-          ? canonicalTargets.get(target.id) ?? null
+          ? (canonicalTargets.get(target.id) ?? null)
           : {
               sectionId: "source-coverage",
               itemId: `coverage-${target.id}`,
@@ -418,7 +418,8 @@ export function EvidenceSections({ snapshot }: EvidenceSectionsProps) {
         (candidate) => candidate.id === destination.sectionId,
       );
       const itemIndex =
-        section?.items.findIndex((item) => item.id === destination.itemId) ?? -1;
+        section?.items.findIndex((item) => item.id === destination.itemId) ??
+        -1;
       if (!section || itemIndex < 0) return;
 
       setOpenSections((current) => {
@@ -521,11 +522,19 @@ export function EvidenceSections({ snapshot }: EvidenceSectionsProps) {
           aria-pressed={revealSensitive}
           onClick={() => setRevealSensitive((current) => !current)}
         >
-          {revealSensitive ? "Mask sensitive values" : "Reveal sensitive values"}
+          {revealSensitive
+            ? "Mask sensitive values"
+            : "Reveal sensitive values"}
         </Button>
       </div>
 
-      <div style={{ display: "grid", gap: 1, backgroundColor: tokens.colorNeutralStroke2 }}>
+      <div
+        style={{
+          display: "grid",
+          gap: 1,
+          backgroundColor: tokens.colorNeutralStroke2,
+        }}
+      >
         {viewModel.sections.map((section) => (
           <details
             key={section.id}
@@ -546,7 +555,8 @@ export function EvidenceSections({ snapshot }: EvidenceSectionsProps) {
               }}
               style={{
                 display: "grid",
-                gridTemplateColumns: "minmax(170px, 0.7fr) minmax(240px, 1.3fr) auto",
+                gridTemplateColumns:
+                  "minmax(170px, 0.7fr) minmax(240px, 1.3fr) auto",
                 alignItems: "center",
                 gap: 12,
                 minHeight: 36,
@@ -555,7 +565,9 @@ export function EvidenceSections({ snapshot }: EvidenceSectionsProps) {
                 fontFamily: LOG_UI_FONT_FAMILY,
               }}
             >
-              <span style={{ fontSize: 11, fontWeight: 650 }}>{section.title}</span>
+              <span style={{ fontSize: 11, fontWeight: 650 }}>
+                {section.title}
+              </span>
               <span
                 style={{
                   color: tokens.colorNeutralForeground2,

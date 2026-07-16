@@ -1,8 +1,5 @@
 import { lazy } from "react";
-import {
-  analyzeEspEvidence,
-  inspectPathKind,
-} from "../../lib/commands";
+import { analyzeEspEvidence, inspectPathKind } from "../../lib/commands";
 import { useUiStore } from "../../stores/ui-store";
 import type { LogSource, PlatformKind } from "../../types/log";
 import type { WorkspaceDefinition } from "../types";
@@ -107,9 +104,7 @@ export const espDiagnosticsWorkspace: WorkspaceDefinition = {
     infoPane: false,
     knownSources: false,
   },
-  fileFilters: [
-    { name: "ESP evidence", extensions: ["json", "cab", "zip"] },
-  ],
+  fileFilters: [{ name: "ESP evidence", extensions: ["json", "cab", "zip"] }],
   actionLabels: {
     file: "Import captured evidence...",
     folder: "Import evidence folder...",

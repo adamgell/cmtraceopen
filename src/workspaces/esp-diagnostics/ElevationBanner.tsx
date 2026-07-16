@@ -1,8 +1,14 @@
 import { useState } from "react";
 import { Button, tokens } from "@fluentui/react-components";
-import { ShieldArrowRightRegular, WarningShieldRegular } from "@fluentui/react-icons";
+import {
+  ShieldArrowRightRegular,
+  WarningShieldRegular,
+} from "@fluentui/react-icons";
 import { restartEspAsAdministrator } from "../../lib/commands";
-import { LOG_MONOSPACE_FONT_FAMILY, LOG_UI_FONT_FAMILY } from "../../lib/log-accessibility";
+import {
+  LOG_MONOSPACE_FONT_FAMILY,
+  LOG_UI_FONT_FAMILY,
+} from "../../lib/log-accessibility";
 import type { EspElevationState } from "./types";
 
 interface ElevationBannerProps {
@@ -65,7 +71,8 @@ export function ElevationBanner({ elevation }: ElevationBannerProps) {
       />
       <div style={{ minWidth: 0, fontFamily: LOG_UI_FONT_FAMILY }}>
         <div style={{ fontSize: 12, fontWeight: 650, lineHeight: "17px" }}>
-          Administrator access recommended · Coverage impact: {coverageStatement}
+          Administrator access recommended · Coverage impact:{" "}
+          {coverageStatement}
         </div>
         {restrictedCount > 0 ? (
           <ul
