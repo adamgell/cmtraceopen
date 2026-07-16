@@ -59,7 +59,7 @@ fn bare_authorization_pattern() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
         Regex::new(
-            r#"(?i)(?P<prefix>\bauthorization["']?\s+)(?:basic\s+|bearer\s+|digest\s+|apikey\s+)?(?P<value>"[^"]*"|'[^']*'|[^\s]+)"#,
+            r#"(?i)(?P<prefix>\bauthorization["']?\s+)(?:(?P<scheme>basic|bearer|digest|apikey)\s+)?(?P<value>"[^"]*"|'[^']*'|[^\s]+)"#,
         )
         .expect("bare authorization redaction pattern must compile")
     })
@@ -394,6 +394,7 @@ fn redact_reference(value: &mut String, pseudonyms: &ReferencePseudonyms) {
     let redacted = authorization_pattern().replace_all(bounded, "${prefix}[redacted]");
     let redacted = secret_argument_pattern().replace_all(&redacted, "${prefix}[redacted]");
     let redacted = redact_standalone_bearer_tokens(&redacted, TextRedactionContext::Arbitrary);
+    let redacted = redact_bare_secret_arguments(&redacted, TextRedactionContext::Arbitrary);
     let redacted =
         user_profile_path_pattern().replace_all(&redacted, |captures: &regex::Captures<'_>| {
             let user = captures
@@ -972,6 +973,9 @@ fn forbidden_raw_content(value: &str) -> bool {
     let bounded = bounded_text(value);
     forbidden_raw_content_pattern().is_match(bounded)
         || standalone_bearer_pattern().is_match(bounded)
+        || bare_authorization_pattern()
+            .captures_iter(bounded)
+            .any(|captures| captures.name("scheme").is_some())
 }
 
 fn redact_standalone_bearer_tokens(value: &str, context: TextRedactionContext) -> String {
@@ -1009,10 +1013,52 @@ fn redact_bare_secret_arguments(value: &str, context: TextRedactionContext) -> S
 }
 
 fn bare_argument_is_safe_narrative(context: TextRedactionContext, name: &str, value: &str) -> bool {
-    context == TextRedactionContext::Narrative
-        && !value.starts_with(['"', '\''])
-        && ((name.eq_ignore_ascii_case("authorization") && value.eq_ignore_ascii_case("is"))
-            || (name.eq_ignore_ascii_case("token") && value.eq_ignore_ascii_case("support")))
+    if context != TextRedactionContext::Narrative || value.starts_with(['"', '\'']) {
+        return false;
+    }
+
+    let name = normalize_label(name);
+    let value = value
+        .trim_end_matches(['.', ',', ':', ';', '!', '?'])
+        .to_ascii_lowercase();
+    if matches!(value.as_str(), "is" | "was" | "remains") {
+        return true;
+    }
+
+    match name.as_str() {
+        "authorization" => matches!(value.as_str(), "header" | "policy" | "status"),
+        "password" | "passwd" | "pwd" => matches!(
+            value.as_str(),
+            "policy"
+                | "policies"
+                | "requirement"
+                | "requirements"
+                | "reset"
+                | "expiration"
+                | "expiry"
+        ),
+        "secret" | "clientsecret" => matches!(
+            value.as_str(),
+            "management" | "retrieval" | "rotation" | "storage"
+        ),
+        "token" | "accesstoken" | "refreshtoken" | "idtoken" => matches!(
+            value.as_str(),
+            "acquisition"
+                | "cache"
+                | "expiration"
+                | "expiry"
+                | "refresh"
+                | "request"
+                | "status"
+                | "support"
+                | "validation"
+        ),
+        "tenant" => matches!(value.as_str(), "configuration" | "discovery" | "id"),
+        "tenantid" | "entdmid" => value == "missing",
+        "serial" => value == "number",
+        "serialnumber" => value == "missing",
+        _ => false,
+    }
 }
 
 fn bearer_match_is_safe_narrative(value: &str, captures: &regex::Captures<'_>) -> bool {

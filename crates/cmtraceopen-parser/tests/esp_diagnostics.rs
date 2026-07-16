@@ -6695,6 +6695,186 @@ fn redaction_projection_masks_bare_whitespace_secret_arguments_without_prose_reg
 }
 
 #[test]
+fn redaction_projection_masks_bare_credentials_in_references_and_provenance() {
+    let mut snapshot = findings_snapshot();
+    snapshot.identity.evidence = vec![evidence_ref_from(
+        "Authorization Basic evidence-secret",
+        "password artifact-secret",
+    )];
+
+    let mut raw = raw_export_record(
+        "token record-secret",
+        EspSourceKind::DeploymentLog,
+        "password provenance-secret",
+        None,
+        "safe raw payload",
+    );
+    raw.sensitivity = EspSensitivity::Public;
+    raw.evidence = vec![evidence_ref_from(
+        "Authorization Basic raw-evidence-secret",
+        "token raw-source-secret",
+    )];
+    snapshot.raw_evidence = vec![raw];
+    let original = snapshot.clone();
+
+    let safe = redacted_export_projection(&snapshot);
+    let safe_json = serde_json::to_string(&safe).unwrap();
+    for credential in [
+        "evidence-secret",
+        "artifact-secret",
+        "record-secret",
+        "provenance-secret",
+        "raw-evidence-secret",
+        "raw-source-secret",
+    ] {
+        assert!(
+            !safe_json.contains(credential),
+            "safe export leaked bare reference credential {credential}"
+        );
+    }
+    assert_eq!(
+        safe.identity.evidence[0].evidence_id,
+        "Authorization [redacted]"
+    );
+    assert_eq!(
+        safe.identity.evidence[0].source_artifact_id,
+        "password [redacted]"
+    );
+    assert_eq!(safe.raw_evidence[0].record_id, "token [redacted]");
+    assert_eq!(
+        safe.raw_evidence[0].provenance.source_artifact_id,
+        "password [redacted]"
+    );
+    assert_eq!(snapshot, original);
+}
+
+#[test]
+fn redaction_projection_preserves_ordinary_secret_words_in_typed_narratives() {
+    let mut snapshot = findings_snapshot();
+    let mut registration_status = status(
+        EspRawStatus::Text("failed".to_string()),
+        EspNormalizedStatus::Failed,
+    );
+    registration_status.display = "Token acquisition failed".to_string();
+    registration_status.detail = Some(EspStatusDetail {
+        raw: EspRawStatus::Text("failed".to_string()),
+        normalized: EspNormalizedStatus::Failed,
+        display: "Authorization remains required".to_string(),
+    });
+    snapshot.registration_events.push(EspRegistrationEvent {
+        event_id: 304,
+        record_id: Some(42),
+        status: registration_status,
+        message: "Device password policy is configured".to_string(),
+        timestamp: timestamp("2026-07-15T12:00:00Z"),
+        named_data: vec![],
+        evidence: vec![evidence_ref("registration-safe-secret-prose")],
+    });
+    snapshot.activity.push(EspTimelineEntry {
+        entry_id: "safe-secret-prose".to_string(),
+        timestamp: timestamp("2026-07-15T12:01:00Z"),
+        kind: EspTimelineKind::Other,
+        title: "Serial number is unavailable".to_string(),
+        detail: Some("Secret retrieval failed".to_string()),
+        status: None,
+        evidence: vec![evidence_ref("timeline-safe-secret-prose")],
+    });
+    snapshot.coverage.push(EspArtifactCoverage {
+        artifact_id: "safe-secret-prose".to_string(),
+        family: "Safe prose".to_string(),
+        status: EspArtifactStatus::Available,
+        detail: Some("Tenant ID is missing".to_string()),
+        observed_at_utc: "2026-07-15T12:02:00Z".to_string(),
+        evidence: vec![evidence_ref("coverage-safe-secret-prose")],
+    });
+    let mut graph = findings_graph_overlay(EspGraphAppRecord {
+        app_id: "safe-secret-prose-app".to_string(),
+        display_name: None,
+        tracked_on_enrollment_status: Some(true),
+        status: None,
+        assignments: vec![],
+        evidence: vec![evidence_ref_from(
+            "graph-safe-secret-prose-app",
+            "graph-apps",
+        )],
+    });
+    graph.device_match.error = Some(GraphSectionError {
+        code: "safeProse".to_string(),
+        message: "Password policy evaluation failed".to_string(),
+        request_id: None,
+        blocked_by: None,
+        retry_after_seconds: None,
+    });
+    snapshot.graph = Some(graph);
+    let original = snapshot.clone();
+
+    let safe = redacted_export_projection(&snapshot);
+    let registration = safe.registration_events.last().unwrap();
+    assert_eq!(registration.message, "Device password policy is configured");
+    assert_eq!(registration.status.display, "Token acquisition failed");
+    assert_eq!(
+        registration.status.detail.as_ref().unwrap().display,
+        "Authorization remains required"
+    );
+    assert_eq!(
+        safe.activity.last().unwrap().title,
+        "Serial number is unavailable"
+    );
+    assert_eq!(
+        safe.activity.last().unwrap().detail.as_deref(),
+        Some("Secret retrieval failed")
+    );
+    assert_eq!(
+        safe.coverage.last().unwrap().detail.as_deref(),
+        Some("Tenant ID is missing")
+    );
+    assert_eq!(
+        safe.graph
+            .as_ref()
+            .unwrap()
+            .device_match
+            .error
+            .as_ref()
+            .unwrap()
+            .message,
+        "Password policy evaluation failed"
+    );
+    assert_eq!(snapshot, original);
+}
+
+#[test]
+fn redaction_projection_removes_whitespace_basic_authorization_raw_records() {
+    let mut raw_text = raw_export_record(
+        "raw-basic-text",
+        EspSourceKind::DeploymentLog,
+        "deployment-log",
+        None,
+        "Authorization Basic Q",
+    );
+    raw_text.sensitivity = EspSensitivity::Public;
+    let mut raw_list = raw_export_record(
+        "raw-basic-list",
+        EspSourceKind::DeploymentLog,
+        "deployment-log",
+        None,
+        "placeholder",
+    );
+    raw_list.sensitivity = EspSensitivity::Public;
+    raw_list.raw_value = EspObservationValue::StringList(vec![
+        "safe list value".to_string(),
+        "Authorization Basic qwertyz".to_string(),
+    ]);
+    let mut snapshot = findings_snapshot();
+    snapshot.raw_evidence = vec![raw_text, raw_list];
+    let original = snapshot.clone();
+
+    assert!(redacted_export_projection(&snapshot)
+        .raw_evidence
+        .is_empty());
+    assert_eq!(snapshot, original);
+}
+
+#[test]
 fn redaction_projection_scrubs_raw_metadata_and_all_matching_evidence_references() {
     let sid = "S-1-5-21-111-222-333-1001";
     let source_artifact_id = format!("source:{sid}:person@example.test");
