@@ -941,17 +941,23 @@ mod tests {
         inspect_evidence_artifact, inspect_evidence_bundle,
         EvidenceArtifactIntakeKind,
     };
+    #[cfg(feature = "collector")]
     use crate::collector::artifacts::{collect_logs, CollectorContext};
+    #[cfg(feature = "collector")]
     use crate::collector::manifest::write_manifest;
+    #[cfg(feature = "collector")]
     use crate::collector::types::{
         ArtifactCounts, ArtifactResult, ArtifactStatus, CollectionProfile, LogCollectionItem,
     };
     use std::fs;
     use std::path::PathBuf;
+    #[cfg(feature = "collector")]
     use std::sync::atomic::AtomicUsize;
+    #[cfg(feature = "collector")]
     use std::sync::{Arc, Mutex};
     use std::time::{SystemTime, UNIX_EPOCH};
 
+    #[cfg(feature = "collector")]
     #[test]
     fn collector_manifest_serializes_each_globbed_file() {
         let bundle_dir = create_temp_dir("bundle-ops-collected-files");
@@ -1016,6 +1022,7 @@ mod tests {
         fs::remove_dir_all(&bundle_dir).expect("remove temp bundle dir");
     }
 
+    #[cfg(feature = "collector")]
     #[test]
     fn manifest_artifacts_are_sorted_and_root_relative() {
         let bundle_dir = create_temp_dir("bundle-ops-manifest-order");
