@@ -980,4 +980,83 @@ describe("ESP Graph scheduling", () => {
     );
     coordinator.dispose();
   });
+
+  it("does not dispatch a stale-device fetch when snapshot identity changes during a cancellation await", async () => {
+    // This test reproduces a race where:
+    //   1. An old run claims fingerprint-A and awaits cancelCurrentRequest()
+    //      for a prior in-flight request.
+    //   2. While awaiting, a new analysis for device-B fires. The subscription
+    //      resets lastRequestedFingerprint → null, and a new run (r2) starts
+    //      for device-B, claiming fingerprint-B.
+    //   3. The old run resumes with a stale snapshot (device-A). Because
+    //      lastRequestedFingerprint is now fingerprint-B, the stale fingerprint-A
+    //      passes the dedup guard. Without the re-validation fix the old run
+    //      would cancel r2's correct fetch and dispatch a device-A fetch whose
+    //      overlay would be applied to the current device-B snapshot.
+    const snapshotA = makeSnapshot(["local-a"], "device-a");
+    const snapshotB = makeSnapshot(["local-b"], "device-b");
+
+    const cancellation = deferred<void>();
+    // Every cancelGraph call returns the same deferred so both the
+    // cancelCurrentRequest() in the old run and the orphan cancel from the
+    // subscription resolve together when cancellation.resolve() fires.
+    const cancelGraph = vi.fn(() => cancellation.promise);
+    const fetchGraph = vi.fn(async (request: EspGraphRequest) =>
+      makeOverlay(request.requestId),
+    );
+    let idSeq = 0;
+
+    useUiStore.setState({ graphApiEnabled: true, graphApiStatus: "connected" });
+    useEspDiagnosticsStore.getState().beginAnalysis("analysis-a");
+    useEspDiagnosticsStore.getState().applyAnalysis("analysis-a", snapshotA);
+
+    // Inject a prior in-flight request so cancelCurrentRequest() will yield.
+    useEspDiagnosticsStore.setState({
+      graphRequestId: "graph-prior",
+      graphPhase: "loading",
+    });
+
+    const coordinator = createEspGraphCoordinator({
+      fetchGraph,
+      cancelGraph,
+      createRequestId: () => `graph-${++idSeq}`,
+    });
+
+    // Old run starts. It claims fingerprint-A and blocks in cancelCurrentRequest().
+    const r1 = coordinator.reconcile();
+
+    // Switch to a different device while r1 is blocked.
+    // beginAnalysis clears graphRequestId → null; applyAnalysis sets snapshotB.
+    // The subscription resets lastRequestedFingerprint → null, detects the
+    // orphan, and triggers a new run (r2) for snapshotB that awaits the same
+    // cancellation deferred via pendingOrphanCancellation.
+    useEspDiagnosticsStore.getState().beginAnalysis("analysis-b");
+    useEspDiagnosticsStore.getState().applyAnalysis("analysis-b", snapshotB);
+
+    // Flush subscription callbacks so r2 is scheduled and awaiting the orphan.
+    await Promise.resolve();
+
+    // Resolve the shared cancellation deferred. Both r1 (awaiting the prior
+    // request cancel) and r2 (awaiting the orphan cancel) unblock together.
+    cancellation.resolve();
+    await r1;
+
+    // Flush r2 and the rescheduled run spawned by the re-validation fix.
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+    // The fix ensures the old run detects the identity mismatch after the
+    // cancellation await and returns without dispatching a device-A fetch.
+    // Every fetch that was dispatched should be for device-B.
+    for (const [request] of fetchGraph.mock.calls) {
+      expect(request.identity.deviceName).toBe(snapshotB.identity.deviceName);
+    }
+
+    // Device-B's overlay is ultimately applied to the current snapshot.
+    expect(useEspDiagnosticsStore.getState().snapshot?.graph).not.toBeNull();
+    expect(
+      useEspDiagnosticsStore.getState().snapshot?.rawEvidence[0].recordId,
+    ).toBe("local-b");
+
+    coordinator.dispose();
+  });
 });

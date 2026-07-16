@@ -244,8 +244,28 @@ export function createEspGraphCoordinator(
     if (disposed) {
       return;
     }
+
+    // Re-read the snapshot after the cancellation await: the store snapshot
+    // may have changed identity while we yielded (e.g. a new analysis for a
+    // different device fired and a concurrent run claimed a new fingerprint).
+    // If the identity has changed, the stale fingerprint-A claim would pass
+    // the dedup guard (lastRequestedFingerprint is now fingerprint-B) and
+    // could cancel the concurrent run's correct fetch and dispatch a fetch for
+    // the wrong device whose overlay would then be applied to the new snapshot.
+    // Release the stale claim, reschedule a run for the current snapshot, and
+    // bail out.
+    const currentSnapshot = useEspDiagnosticsStore.getState().snapshot;
+    if (
+      !currentSnapshot ||
+      getEspIdentityFingerprint(currentSnapshot) !== fingerprint
+    ) {
+      lastRequestedFingerprint = null;
+      void run(false);
+      return;
+    }
+
     const requestId = nextRequestId();
-    const request = createGraphRequest(snapshot, requestId);
+    const request = createGraphRequest(currentSnapshot, requestId);
     useEspDiagnosticsStore.getState().beginGraph(requestId);
 
     try {
