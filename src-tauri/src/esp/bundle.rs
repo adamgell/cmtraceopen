@@ -190,6 +190,34 @@ struct BundleStagingArea {
     input_limit: u64,
 }
 
+fn copy_staged_artifact_exact<R, W>(
+    source: R,
+    output: &mut W,
+    relative: &Path,
+    source_size: u64,
+) -> Result<u64, ArtifactStageFailure>
+where
+    R: Read,
+    W: Write,
+{
+    let mut bounded_source = source.take(source_size.saturating_add(1));
+    let written = std::io::copy(&mut bounded_source, output)
+        .map_err(|error| ArtifactStageFailure::failed(error.to_string()))?;
+    if written > source_size {
+        return Err(ArtifactStageFailure::failed(format!(
+            "{} grew beyond its {source_size}-byte verified size while being staged",
+            relative.display()
+        )));
+    }
+    if written < source_size {
+        return Err(ArtifactStageFailure::failed(format!(
+            "{} was truncated while being staged: verified size was {source_size} bytes, but the source ended after {written} bytes",
+            relative.display()
+        )));
+    }
+    Ok(written)
+}
+
 impl BundleStagingArea {
     fn new() -> Result<Self, String> {
         Self::new_with_input_limit(MAX_BUNDLE_TOTAL_INPUT_BYTES)
@@ -249,15 +277,7 @@ impl BundleStagingArea {
             .write(true)
             .open(&staged_path)
             .map_err(|error| ArtifactStageFailure::failed(error.to_string()))?;
-        let mut bounded_source = source.take(source_size.saturating_add(1));
-        let written = std::io::copy(&mut bounded_source, &mut output)
-            .map_err(|error| ArtifactStageFailure::failed(error.to_string()))?;
-        if written > source_size {
-            return Err(ArtifactStageFailure::failed(format!(
-                "{} grew beyond its {source_size}-byte verified size while being staged",
-                relative.display()
-            )));
-        }
+        let written = copy_staged_artifact_exact(source, &mut output, relative, source_size)?;
         output
             .flush()
             .map_err(|error| ArtifactStageFailure::failed(error.to_string()))?;
@@ -2486,6 +2506,26 @@ mod tests {
         assert!(failure.cumulative_limit);
         assert_eq!(staging.staged_bytes, 4);
         assert_eq!(staging.staged_files, 1);
+    }
+
+    #[test]
+    fn staging_copy_rejects_source_that_ends_before_its_verified_size() {
+        let mut source = std::io::Cursor::new(b"1234");
+        let mut output = Vec::new();
+
+        let failure = copy_staged_artifact_exact(
+            &mut source,
+            &mut output,
+            Path::new("evidence/truncated.log"),
+            8,
+        )
+        .expect_err("short copy must not be accepted as a complete staged artifact");
+
+        assert_eq!(failure.status, EspArtifactStatus::ParseFailed);
+        assert!(!failure.cumulative_limit);
+        assert!(failure.detail.contains("evidence/truncated.log"));
+        assert!(failure.detail.contains("verified size was 8 bytes"));
+        assert!(failure.detail.contains("ended after 4 bytes"));
     }
 
     #[cfg(unix)]
