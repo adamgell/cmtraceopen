@@ -7,6 +7,7 @@ pub mod discovery;
 pub mod event_logs;
 pub mod process;
 pub mod registry;
+pub mod session;
 pub mod system;
 pub mod tailing;
 

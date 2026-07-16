@@ -1,9 +1,12 @@
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::fs::{self, File, FileTimes, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{mpsc, Arc, Barrier, Condvar, Mutex, Weak};
+use std::thread;
+use std::time::{Duration, Instant, SystemTime};
 
 #[cfg(target_os = "windows")]
 use app_lib::esp::discovery::default_known_source_specs;
@@ -12,8 +15,8 @@ use app_lib::esp::discovery::{
     DiscoveredLogSource, DiscoveryInput, DiscoveryRootKind, DiscoveryRootState,
     DiscoverySourceOrigin, KnownSourceSpec, DISCOVERY_INTERVAL, MAX_ACTIVE_TAILS,
     MAX_INITIAL_READ_BYTES, MAX_KNOWN_ENTRIES_PROBED_PER_ROOT, MAX_ROTATIONS_PER_KNOWN_LOG,
-    MAX_SESSION_DURATION, MAX_TEMP_ENTRIES_INSPECTED_PER_ROOT,
-    MAX_TEMP_ENTRIES_PROBED_PER_ROOT, TEMP_LOOKBACK, UPDATE_DEBOUNCE,
+    MAX_SESSION_DURATION, MAX_TEMP_ENTRIES_INSPECTED_PER_ROOT, MAX_TEMP_ENTRIES_PROBED_PER_ROOT,
+    TEMP_LOOKBACK, UPDATE_DEBOUNCE,
 };
 use app_lib::esp::event_logs::{
     collect_event_evidence, required_event_id_xpath, EventLogProvider, EventSourceError,
@@ -25,6 +28,12 @@ use app_lib::esp::registry::{
     RegistrySnapshotKey, RegistryTarget, RegistryValueSnapshot, ESP_REGISTRY_TARGETS,
     MAX_REGISTRY_DEPTH, MAX_REGISTRY_VALUE_BYTES, REGISTRY_READ_ACCESS,
 };
+use app_lib::esp::session::{
+    EspCancellation, EspClockReading, EspDiscoveryBatch, EspDiscoveryProvider, EspEvidenceProvider,
+    EspProviderBatch, EspSessionClock, EspSessionDependencies, EspSessionError,
+    EspSessionEventSink, EspSessionManager, EspSessionState, EspSessionTail, EspSessionTailFactory,
+    EspTailEvidenceBatch, EspUpdateReason,
+};
 use app_lib::esp::tailing::{
     EspTailResetReason, EspTailSet, MAX_SESSION_TAIL_SOURCES, WINDOWS_SHARED_READ_WRITE_DELETE,
 };
@@ -32,7 +41,10 @@ use app_lib::intune::evtx_parser::{
     parse_esp_event_xml, EventLogProperty, ParsedEspEventRecord, MAX_ESP_EVTX_RECORD_BYTES,
 };
 use cmtraceopen_parser::esp::{
-    EspObservationValue, EspScope, EspSensitivity, EspSourceAccessState, EspSourceKind,
+    EspArtifactCoverage, EspArtifactStatus, EspEvidenceProvenance, EspEvidenceRecord,
+    EspEvidenceRef, EspGraphObservation, EspGraphObservationSection, EspObservationContext,
+    EspObservationValue, EspParseState, EspScope, EspSensitivity, EspSourceAccessState,
+    EspSourceKind, EspSystemFact, EspSystemObservation, GraphApiVersion,
 };
 use tempfile::tempdir;
 
@@ -3067,4 +3079,786 @@ fn tail_windows_file_opens_request_read_write_delete_sharing() {
     assert_eq!(WINDOWS_SHARED_READ_WRITE_DELETE, 0x1 | 0x2 | 0x4);
     let source = include_str!("../src/esp/tailing.rs");
     assert!(source.contains("share_mode(WINDOWS_SHARED_READ_WRITE_DELETE)"));
+}
+
+#[derive(Default)]
+struct ManualSessionClock {
+    elapsed: Mutex<Duration>,
+    changed: Condvar,
+}
+
+impl ManualSessionClock {
+    fn advance(&self, duration: Duration) {
+        let mut elapsed = self.elapsed.lock().expect("manual clock");
+        *elapsed += duration;
+        self.changed.notify_all();
+    }
+}
+
+impl EspSessionClock for ManualSessionClock {
+    fn now(&self) -> EspClockReading {
+        EspClockReading {
+            monotonic: *self.elapsed.lock().expect("manual clock"),
+            utc: "2026-07-16T06:30:00Z".to_string(),
+        }
+    }
+
+    fn wait(&self, cancellation: &EspCancellation, _duration: Duration) {
+        if cancellation.is_cancelled() {
+            return;
+        }
+        let elapsed = self.elapsed.lock().expect("manual clock");
+        let _ = self
+            .changed
+            .wait_timeout(elapsed, Duration::from_millis(5))
+            .expect("manual clock wait");
+    }
+}
+
+#[derive(Clone)]
+struct FakeSessionProvider {
+    artifact_id: &'static str,
+    calls: Arc<AtomicUsize>,
+    coverage: Vec<EspArtifactCoverage>,
+    panic_on_call: Option<usize>,
+}
+
+impl FakeSessionProvider {
+    fn available(artifact_id: &'static str) -> Self {
+        Self {
+            artifact_id,
+            calls: Arc::new(AtomicUsize::new(0)),
+            coverage: Vec::new(),
+            panic_on_call: None,
+        }
+    }
+
+    fn with_coverage(mut self, coverage: EspArtifactCoverage) -> Self {
+        self.coverage.push(coverage);
+        self
+    }
+
+    fn panics_on_call(mut self, call: usize) -> Self {
+        self.panic_on_call = Some(call);
+        self
+    }
+}
+
+impl EspEvidenceProvider for FakeSessionProvider {
+    fn collect(&self, observed_at_utc: &str) -> EspProviderBatch {
+        let call = self.calls.fetch_add(1, Ordering::SeqCst) + 1;
+        assert_ne!(self.panic_on_call, Some(call), "fake provider panic");
+        EspProviderBatch {
+            records: vec![session_system_record(
+                self.artifact_id,
+                &format!("{}-{call}", self.artifact_id),
+                observed_at_utc,
+            )],
+            coverage: self.coverage.clone(),
+        }
+    }
+}
+
+#[derive(Clone)]
+struct StaticSessionProvider {
+    records: Vec<EspEvidenceRecord>,
+}
+
+#[derive(Clone)]
+struct BlockingSessionProvider {
+    calls: Arc<AtomicUsize>,
+    entered: Arc<Barrier>,
+    release: Arc<Barrier>,
+}
+
+impl EspEvidenceProvider for BlockingSessionProvider {
+    fn collect(&self, observed_at_utc: &str) -> EspProviderBatch {
+        if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
+            self.entered.wait();
+            self.release.wait();
+        }
+        EspProviderBatch {
+            records: vec![session_system_record(
+                "blocking-provider",
+                "blocking-provider-evidence",
+                observed_at_utc,
+            )],
+            coverage: Vec::new(),
+        }
+    }
+}
+
+impl EspEvidenceProvider for StaticSessionProvider {
+    fn collect(&self, _observed_at_utc: &str) -> EspProviderBatch {
+        EspProviderBatch {
+            records: self.records.clone(),
+            coverage: Vec::new(),
+        }
+    }
+}
+
+#[derive(Clone, Default)]
+struct FakeSessionDiscovery {
+    calls: Arc<AtomicUsize>,
+}
+
+impl EspDiscoveryProvider for FakeSessionDiscovery {
+    fn discover(&self, _observed_at_utc: &str) -> EspDiscoveryBatch {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        EspDiscoveryBatch::default()
+    }
+}
+
+#[derive(Clone, Default)]
+struct FakeSessionTailFactory {
+    queued: Arc<Mutex<VecDeque<EspTailEvidenceBatch>>>,
+    reconciles: Arc<AtomicUsize>,
+    stops: Arc<AtomicUsize>,
+}
+
+impl EspSessionTailFactory for FakeSessionTailFactory {
+    fn create(&self) -> Box<dyn EspSessionTail> {
+        Box::new(FakeSessionTail {
+            queued: Arc::clone(&self.queued),
+            reconciles: Arc::clone(&self.reconciles),
+            stops: Arc::clone(&self.stops),
+        })
+    }
+}
+
+struct FakeSessionTail {
+    queued: Arc<Mutex<VecDeque<EspTailEvidenceBatch>>>,
+    reconciles: Arc<AtomicUsize>,
+    stops: Arc<AtomicUsize>,
+}
+
+impl EspSessionTail for FakeSessionTail {
+    fn reconcile(
+        &mut self,
+        _sources: &[DiscoveredLogSource],
+        _observed_at_utc: &str,
+    ) -> EspTailEvidenceBatch {
+        self.reconciles.fetch_add(1, Ordering::SeqCst);
+        EspTailEvidenceBatch::default()
+    }
+
+    fn poll(&mut self, _observed_at_utc: &str) -> EspTailEvidenceBatch {
+        self.queued
+            .lock()
+            .expect("tail queue")
+            .pop_front()
+            .unwrap_or_default()
+    }
+
+    fn stop(&mut self) {
+        self.stops.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+#[derive(Clone, Default)]
+struct RecordingSessionSink {
+    updates: Arc<Mutex<Vec<app_lib::esp::session::EspSessionUpdate>>>,
+}
+
+#[derive(Default)]
+struct ReentrantSessionSink {
+    manager: Mutex<Option<Weak<EspSessionManager>>>,
+    callbacks: Mutex<Vec<bool>>,
+}
+
+impl EspSessionEventSink for ReentrantSessionSink {
+    fn emit(&self, update: app_lib::esp::session::EspSessionUpdate) -> Result<(), String> {
+        let manager = self
+            .manager
+            .lock()
+            .map_err(|error| error.to_string())?
+            .as_ref()
+            .and_then(Weak::upgrade)
+            .ok_or_else(|| "session manager unavailable".to_string())?;
+        let (sender, receiver) = mpsc::channel();
+        thread::spawn(move || {
+            let _ = sender.send(manager.get(&update.session_id));
+        });
+        let completed_without_waiting_for_emit =
+            receiver.recv_timeout(Duration::from_millis(250)).is_ok();
+        self.callbacks
+            .lock()
+            .map_err(|error| error.to_string())?
+            .push(completed_without_waiting_for_emit);
+        Ok(())
+    }
+}
+
+impl EspSessionEventSink for RecordingSessionSink {
+    fn emit(&self, update: app_lib::esp::session::EspSessionUpdate) -> Result<(), String> {
+        self.updates.lock().expect("session updates").push(update);
+        Ok(())
+    }
+}
+
+fn session_system_record(
+    artifact_id: &str,
+    evidence_id: &str,
+    observed_at_utc: &str,
+) -> EspEvidenceRecord {
+    let evidence_ref = EspEvidenceRef {
+        evidence_id: evidence_id.to_string(),
+        source_artifact_id: artifact_id.to_string(),
+    };
+    EspEvidenceRecord::System(EspSystemObservation {
+        context: EspObservationContext {
+            evidence_ref: evidence_ref.clone(),
+            provenance: EspEvidenceProvenance {
+                source_kind: EspSourceKind::System,
+                source_artifact_id: artifact_id.to_string(),
+                file_path: None,
+                line_number: None,
+                record_number: None,
+                registry: None,
+                event: None,
+            },
+            source_timestamp: None,
+            observed_at_utc: observed_at_utc.to_string(),
+            sensitivity: EspSensitivity::Public,
+            parse_state: EspParseState::Parsed,
+            access_state: EspSourceAccessState::Available,
+        },
+        fact: EspSystemFact::Hostname(evidence_ref.evidence_id),
+    })
+}
+
+fn session_graph_record(observed_at_utc: &str) -> EspEvidenceRecord {
+    let evidence_ref = EspEvidenceRef {
+        evidence_id: "forbidden-local-graph".to_string(),
+        source_artifact_id: "graph.managed-device".to_string(),
+    };
+    EspEvidenceRecord::Graph(EspGraphObservation {
+        context: EspObservationContext {
+            evidence_ref: evidence_ref.clone(),
+            provenance: EspEvidenceProvenance {
+                source_kind: EspSourceKind::Graph,
+                source_artifact_id: evidence_ref.source_artifact_id.clone(),
+                file_path: None,
+                line_number: None,
+                record_number: None,
+                registry: None,
+                event: None,
+            },
+            source_timestamp: None,
+            observed_at_utc: observed_at_utc.to_string(),
+            sensitivity: EspSensitivity::Public,
+            parse_state: EspParseState::Parsed,
+            access_state: EspSourceAccessState::Available,
+        },
+        section: EspGraphObservationSection::ManagedDevice,
+        api_version: GraphApiVersion::V1_0,
+        record_id: "managed-device-id".to_string(),
+        display_name: Some("Graph-only name".to_string()),
+        status: None,
+    })
+}
+
+fn session_coverage(artifact_id: &str, status: EspArtifactStatus) -> EspArtifactCoverage {
+    EspArtifactCoverage {
+        artifact_id: artifact_id.to_string(),
+        family: "test-source".to_string(),
+        status,
+        detail: Some("partial source evidence".to_string()),
+        observed_at_utc: "2026-07-16T06:30:00Z".to_string(),
+        evidence: vec![],
+    }
+}
+
+fn session_dependencies(
+    clock: Arc<ManualSessionClock>,
+    registry: FakeSessionProvider,
+    discovery: FakeSessionDiscovery,
+    tails: FakeSessionTailFactory,
+    sink: RecordingSessionSink,
+) -> EspSessionDependencies {
+    EspSessionDependencies::new(
+        clock,
+        Arc::new(registry),
+        Arc::new(FakeSessionProvider::available("event")),
+        Arc::new(FakeSessionProvider::available("system")),
+        Arc::new(FakeSessionProvider::available("process")),
+        Arc::new(discovery),
+        Arc::new(tails),
+        Arc::new(sink),
+    )
+    .with_live_supported_for_tests(true)
+}
+
+fn wait_for_session_updates(sink: &RecordingSessionSink, count: usize) {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while sink.updates.lock().expect("session updates").len() < count {
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for update {count}"
+        );
+        thread::sleep(Duration::from_millis(5));
+    }
+}
+
+#[test]
+fn session_enforces_one_live_owner_debounces_and_emits_monotonic_sequences() {
+    let clock = Arc::new(ManualSessionClock::default());
+    let discovery = FakeSessionDiscovery::default();
+    let tails = FakeSessionTailFactory::default();
+    let sink = RecordingSessionSink::default();
+    let manager = EspSessionManager::new(session_dependencies(
+        Arc::clone(&clock),
+        FakeSessionProvider::available("registry"),
+        discovery,
+        tails.clone(),
+        sink.clone(),
+    ));
+
+    let initial = manager
+        .start("11111111-1111-4111-8111-111111111111")
+        .expect("start session");
+    assert_eq!(initial.request_id, "11111111-1111-4111-8111-111111111111");
+    assert_eq!(initial.sequence, 1);
+    assert_eq!(initial.state, EspSessionState::Live);
+    assert!(initial.snapshot.graph.is_none());
+    assert_eq!(tails.reconciles.load(Ordering::SeqCst), 1);
+
+    let conflict = manager
+        .start("22222222-2222-4222-8222-222222222222")
+        .expect_err("second live session must conflict");
+    assert_eq!(
+        conflict,
+        EspSessionError::SessionConflict {
+            existing_session_id: initial.session_id.clone(),
+        }
+    );
+
+    tails
+        .queued
+        .lock()
+        .expect("tail queue")
+        .push_back(EspTailEvidenceBatch {
+            records: vec![session_system_record(
+                "tail-source",
+                "tail-update-1",
+                "2026-07-16T06:30:01Z",
+            )],
+            ..EspTailEvidenceBatch::default()
+        });
+    clock.advance(Duration::from_millis(50));
+    thread::sleep(Duration::from_millis(20));
+    assert!(sink.updates.lock().expect("session updates").is_empty());
+    clock.advance(Duration::from_millis(199));
+    thread::sleep(Duration::from_millis(20));
+    assert!(sink.updates.lock().expect("session updates").is_empty());
+    clock.advance(Duration::from_millis(1));
+    wait_for_session_updates(&sink, 1);
+
+    let update = sink.updates.lock().expect("session updates")[0].clone();
+    assert_eq!(update.sequence, 2);
+    assert_eq!(update.reason, EspUpdateReason::EvidenceChanged);
+    assert!(update
+        .snapshot
+        .raw_evidence
+        .iter()
+        .any(|record| record.evidence[0].evidence_id == "tail-update-1"));
+
+    let stopped = manager.stop(&initial.session_id).expect("stop and join");
+    assert_eq!(stopped.state, EspSessionState::Stopped);
+    assert_eq!(stopped.sequence, 3);
+    wait_for_session_updates(&sink, 2);
+    assert_eq!(
+        sink.updates
+            .lock()
+            .expect("session updates")
+            .iter()
+            .map(|update| update.sequence)
+            .collect::<Vec<_>>(),
+        vec![2, 3]
+    );
+    assert_eq!(tails.stops.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        manager.get(&initial.session_id),
+        Err(EspSessionError::SessionNotFound)
+    );
+}
+
+#[test]
+fn session_refreshes_every_two_seconds_and_preserves_partial_source_coverage() {
+    let clock = Arc::new(ManualSessionClock::default());
+    let registry = FakeSessionProvider::available("registry").with_coverage(session_coverage(
+        "registry-protected",
+        EspArtifactStatus::PermissionDenied,
+    ));
+    let registry_calls = Arc::clone(&registry.calls);
+    let discovery = FakeSessionDiscovery::default();
+    let discovery_calls = Arc::clone(&discovery.calls);
+    let tails = FakeSessionTailFactory::default();
+    let sink = RecordingSessionSink::default();
+    let manager = EspSessionManager::new(session_dependencies(
+        Arc::clone(&clock),
+        registry,
+        discovery,
+        tails,
+        sink.clone(),
+    ));
+
+    let initial = manager
+        .start("33333333-3333-4333-8333-333333333333")
+        .expect("start session");
+    assert_eq!(registry_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(discovery_calls.load(Ordering::SeqCst), 1);
+    assert!(initial.snapshot.coverage.iter().any(|coverage| {
+        coverage.artifact_id == "registry-protected"
+            && coverage.status == EspArtifactStatus::PermissionDenied
+    }));
+
+    clock.advance(Duration::from_millis(1_999));
+    thread::sleep(Duration::from_millis(20));
+    assert_eq!(registry_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(discovery_calls.load(Ordering::SeqCst), 1);
+    clock.advance(Duration::from_millis(1));
+    wait_for_session_updates(&sink, 1);
+    assert_eq!(registry_calls.load(Ordering::SeqCst), 2);
+    assert_eq!(discovery_calls.load(Ordering::SeqCst), 2);
+    assert_eq!(sink.updates.lock().expect("session updates")[0].sequence, 2);
+
+    manager.stop(&initial.session_id).expect("stop session");
+}
+
+#[test]
+fn session_expires_at_eight_hours_rejects_late_work_and_allows_a_new_owner() {
+    let clock = Arc::new(ManualSessionClock::default());
+    let tails = FakeSessionTailFactory::default();
+    let sink = RecordingSessionSink::default();
+    let manager = EspSessionManager::new(session_dependencies(
+        Arc::clone(&clock),
+        FakeSessionProvider::available("registry"),
+        FakeSessionDiscovery::default(),
+        tails.clone(),
+        sink.clone(),
+    ));
+    let initial = manager
+        .start("44444444-4444-4444-8444-444444444444")
+        .expect("start session");
+
+    clock.advance(MAX_SESSION_DURATION);
+    wait_for_session_updates(&sink, 1);
+    let expired = sink.updates.lock().expect("session updates")[0].clone();
+    assert_eq!(expired.reason, EspUpdateReason::Expired);
+    assert_eq!(expired.state, EspSessionState::Expired);
+    assert_eq!(tails.stops.load(Ordering::SeqCst), 1);
+
+    let replacement = manager
+        .start("55555555-5555-4555-8555-555555555555")
+        .expect("expired session must release ownership");
+    assert_ne!(replacement.session_id, initial.session_id);
+    manager
+        .stop(&replacement.session_id)
+        .expect("stop replacement");
+    let emitted_after_stop = sink.updates.lock().expect("session updates").len();
+    clock.advance(Duration::from_secs(10));
+    thread::sleep(Duration::from_millis(20));
+    assert_eq!(
+        sink.updates.lock().expect("session updates").len(),
+        emitted_after_stop,
+        "joined sessions must reject callbacks after stop"
+    );
+}
+
+#[test]
+fn session_validates_ids_and_reports_typed_unsupported_platform() {
+    let clock = Arc::new(ManualSessionClock::default());
+    let dependencies = session_dependencies(
+        clock,
+        FakeSessionProvider::available("registry"),
+        FakeSessionDiscovery::default(),
+        FakeSessionTailFactory::default(),
+        RecordingSessionSink::default(),
+    )
+    .with_live_supported_for_tests(false);
+    let manager = EspSessionManager::new(dependencies);
+
+    assert_eq!(
+        manager.start("not-a-uuid"),
+        Err(EspSessionError::InvalidRequestId)
+    );
+    assert_eq!(
+        manager.start("66666666-6666-4666-8666-666666666666"),
+        Err(EspSessionError::UnsupportedPlatform)
+    );
+}
+
+#[test]
+fn session_worker_panic_becomes_terminal_and_does_not_strand_ownership() {
+    let clock = Arc::new(ManualSessionClock::default());
+    let tails = FakeSessionTailFactory::default();
+    let sink = RecordingSessionSink::default();
+    let manager = EspSessionManager::new(session_dependencies(
+        Arc::clone(&clock),
+        FakeSessionProvider::available("registry").panics_on_call(2),
+        FakeSessionDiscovery::default(),
+        tails.clone(),
+        sink.clone(),
+    ));
+    let initial = manager
+        .start("77777777-7777-4777-8777-777777777777")
+        .expect("start session");
+
+    clock.advance(DISCOVERY_INTERVAL);
+    wait_for_session_updates(&sink, 1);
+    let failed = sink.updates.lock().expect("session updates")[0].clone();
+    assert_eq!(failed.state, EspSessionState::Failed);
+    assert_eq!(failed.reason, EspUpdateReason::Failed);
+    assert_eq!(tails.stops.load(Ordering::SeqCst), 1);
+
+    let replacement = manager
+        .start("88888888-8888-4888-8888-888888888888")
+        .expect("failed worker must release ownership");
+    assert_ne!(replacement.session_id, initial.session_id);
+    manager
+        .stop(&replacement.session_id)
+        .expect("stop replacement");
+}
+
+#[test]
+fn session_concurrent_stop_callers_never_observe_a_live_post_join_envelope() {
+    let clock = Arc::new(ManualSessionClock::default());
+    let manager = Arc::new(EspSessionManager::new(session_dependencies(
+        clock,
+        FakeSessionProvider::available("registry"),
+        FakeSessionDiscovery::default(),
+        FakeSessionTailFactory::default(),
+        RecordingSessionSink::default(),
+    )));
+    let initial = manager
+        .start("99999999-9999-4999-8999-999999999999")
+        .expect("start session");
+    let barrier = Arc::new(Barrier::new(3));
+    let callers = (0..2)
+        .map(|_| {
+            let manager = Arc::clone(&manager);
+            let barrier = Arc::clone(&barrier);
+            let session_id = initial.session_id.clone();
+            thread::spawn(move || {
+                barrier.wait();
+                manager.stop(&session_id)
+            })
+        })
+        .collect::<Vec<_>>();
+    barrier.wait();
+    let results = callers
+        .into_iter()
+        .map(|caller| caller.join().expect("stop caller"))
+        .collect::<Vec<_>>();
+
+    assert!(results.iter().any(|result| {
+        matches!(result, Ok(envelope) if envelope.state == EspSessionState::Stopped)
+    }));
+    assert!(results.iter().all(|result| {
+        matches!(
+            result,
+            Ok(envelope) if envelope.state == EspSessionState::Stopped
+        ) || matches!(result, Err(EspSessionError::SessionNotFound))
+    }));
+}
+
+#[test]
+fn session_rejects_graph_records_from_every_local_provider_and_tail_batch() {
+    let clock = Arc::new(ManualSessionClock::default());
+    let tails = FakeSessionTailFactory::default();
+    let sink = RecordingSessionSink::default();
+    let graph_provider = Arc::new(StaticSessionProvider {
+        records: vec![session_graph_record("2026-07-16T06:30:00Z")],
+    });
+    let dependencies = EspSessionDependencies::new(
+        Arc::clone(&clock) as Arc<dyn EspSessionClock>,
+        graph_provider.clone(),
+        graph_provider.clone(),
+        graph_provider.clone(),
+        graph_provider,
+        Arc::new(FakeSessionDiscovery::default()),
+        Arc::new(tails.clone()),
+        Arc::new(sink.clone()),
+    )
+    .with_live_supported_for_tests(true);
+    let manager = EspSessionManager::new(dependencies);
+
+    let initial = manager
+        .start("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
+        .expect("start local-only session");
+    assert!(initial.snapshot.graph.is_none());
+    assert!(initial
+        .snapshot
+        .raw_evidence
+        .iter()
+        .all(|record| record.provenance.source_kind != EspSourceKind::Graph));
+
+    tails
+        .queued
+        .lock()
+        .expect("tail queue")
+        .push_back(EspTailEvidenceBatch {
+            records: vec![session_graph_record("2026-07-16T06:30:01Z")],
+            ..EspTailEvidenceBatch::default()
+        });
+    clock.advance(UPDATE_DEBOUNCE);
+    thread::sleep(Duration::from_millis(20));
+    assert!(sink.updates.lock().expect("session updates").is_empty());
+    let current = manager.get(&initial.session_id).expect("current session");
+    assert!(current.snapshot.graph.is_none());
+    assert!(current
+        .snapshot
+        .raw_evidence
+        .iter()
+        .all(|record| record.provenance.source_kind != EspSourceKind::Graph));
+
+    manager.stop(&initial.session_id).expect("stop session");
+}
+
+#[test]
+fn session_upserts_tail_coverage_by_artifact_instead_of_growing_duplicates() {
+    let clock = Arc::new(ManualSessionClock::default());
+    let tails = FakeSessionTailFactory::default();
+    let sink = RecordingSessionSink::default();
+    let manager = EspSessionManager::new(session_dependencies(
+        Arc::clone(&clock),
+        FakeSessionProvider::available("registry"),
+        FakeSessionDiscovery::default(),
+        tails.clone(),
+        sink.clone(),
+    ));
+    let initial = manager
+        .start("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb")
+        .expect("start session");
+
+    for status in [EspArtifactStatus::Missing, EspArtifactStatus::Available] {
+        tails
+            .queued
+            .lock()
+            .expect("tail queue")
+            .push_back(EspTailEvidenceBatch {
+                coverage: vec![session_coverage("tail.same-source", status)],
+                ..EspTailEvidenceBatch::default()
+            });
+        clock.advance(UPDATE_DEBOUNCE);
+        let expected = sink.updates.lock().expect("session updates").len() + 1;
+        wait_for_session_updates(&sink, expected);
+    }
+
+    let update = sink
+        .updates
+        .lock()
+        .expect("session updates")
+        .last()
+        .cloned()
+        .expect("latest update");
+    let matching = update
+        .snapshot
+        .coverage
+        .iter()
+        .filter(|coverage| coverage.artifact_id == "tail.same-source")
+        .collect::<Vec<_>>();
+    assert_eq!(matching.len(), 1);
+    assert_eq!(matching[0].status, EspArtifactStatus::Available);
+
+    manager.stop(&initial.session_id).expect("stop session");
+}
+
+#[test]
+fn session_does_not_hold_the_control_lock_during_provider_io() {
+    let clock = Arc::new(ManualSessionClock::default());
+    let entered = Arc::new(Barrier::new(2));
+    let release = Arc::new(Barrier::new(2));
+    let blocking = Arc::new(BlockingSessionProvider {
+        calls: Arc::new(AtomicUsize::new(0)),
+        entered: Arc::clone(&entered),
+        release: Arc::clone(&release),
+    });
+    let manager = Arc::new(EspSessionManager::new(
+        EspSessionDependencies::new(
+            clock,
+            blocking,
+            Arc::new(FakeSessionProvider::available("event")),
+            Arc::new(FakeSessionProvider::available("system")),
+            Arc::new(FakeSessionProvider::available("process")),
+            Arc::new(FakeSessionDiscovery::default()),
+            Arc::new(FakeSessionTailFactory::default()),
+            Arc::new(RecordingSessionSink::default()),
+        )
+        .with_live_supported_for_tests(true),
+    ));
+
+    let starter = {
+        let manager = Arc::clone(&manager);
+        thread::spawn(move || manager.start("cccccccc-cccc-4ccc-8ccc-cccccccccccc"))
+    };
+    entered.wait();
+
+    let (sender, receiver) = mpsc::channel();
+    let contender = {
+        let manager = Arc::clone(&manager);
+        thread::spawn(move || {
+            let result = manager.start("dddddddd-dddd-4ddd-8ddd-dddddddddddd");
+            let _ = sender.send(result);
+        })
+    };
+    let conflict = receiver
+        .recv_timeout(Duration::from_millis(250))
+        .expect("session conflict must not wait for provider I/O")
+        .expect_err("reserved session must conflict");
+    assert!(matches!(conflict, EspSessionError::SessionConflict { .. }));
+
+    release.wait();
+    let started = starter
+        .join()
+        .expect("starter thread")
+        .expect("first session");
+    contender.join().expect("contender thread");
+    manager.stop(&started.session_id).expect("stop session");
+}
+
+#[test]
+fn session_does_not_hold_snapshot_or_control_locks_during_event_emission() {
+    let clock = Arc::new(ManualSessionClock::default());
+    let tails = FakeSessionTailFactory::default();
+    let sink = Arc::new(ReentrantSessionSink::default());
+    let dependencies = EspSessionDependencies::new(
+        Arc::clone(&clock) as Arc<dyn EspSessionClock>,
+        Arc::new(FakeSessionProvider::available("registry")),
+        Arc::new(FakeSessionProvider::available("event")),
+        Arc::new(FakeSessionProvider::available("system")),
+        Arc::new(FakeSessionProvider::available("process")),
+        Arc::new(FakeSessionDiscovery::default()),
+        Arc::new(tails.clone()),
+        sink.clone(),
+    )
+    .with_live_supported_for_tests(true);
+    let manager = Arc::new(EspSessionManager::new(dependencies));
+    *sink.manager.lock().expect("sink manager") = Some(Arc::downgrade(&manager));
+    let initial = manager
+        .start("eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee")
+        .expect("start session");
+
+    tails
+        .queued
+        .lock()
+        .expect("tail queue")
+        .push_back(EspTailEvidenceBatch {
+            records: vec![session_system_record(
+                "tail-source",
+                "reentrant-emission",
+                "2026-07-16T06:30:01Z",
+            )],
+            ..EspTailEvidenceBatch::default()
+        });
+    clock.advance(UPDATE_DEBOUNCE);
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while sink.callbacks.lock().expect("callbacks").is_empty() {
+        assert!(Instant::now() < deadline, "timed out waiting for callback");
+        thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(*sink.callbacks.lock().expect("callbacks"), vec![true]);
+
+    manager.stop(&initial.session_id).expect("stop session");
 }
