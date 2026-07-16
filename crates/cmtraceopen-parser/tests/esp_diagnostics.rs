@@ -2288,6 +2288,190 @@ fn correlation_keeps_wmi_fractional_process_starts_as_lossless_identities() {
 }
 
 #[test]
+fn correlation_repair_rejects_nonzero_rfc3339_precision_beyond_nanoseconds() {
+    let mut utc = correlation_process(
+        "process-excess-fraction-utc",
+        7352,
+        None,
+        "msiexec.exe",
+        "2026-07-15T12:00:00Z",
+    );
+    utc.process_start_time = timestamp_parts(
+        "2026-07-15T12:00:00.0000000001Z",
+        Some("2026-07-15T12:00:00Z"),
+        EspTimestampKind::Utc,
+    );
+    utc.sanitized_command_line = Some("msiexec.exe /i invalid-utc.msi".to_string());
+    utc.context.source_timestamp = None;
+    utc.context.observed_at_utc = "2026-07-15T12:00:01Z".to_string();
+    let mut offset = correlation_process(
+        "process-excess-fraction-offset",
+        7352,
+        None,
+        "msiexec.exe",
+        "2026-07-15T12:00:00Z",
+    );
+    offset.process_start_time = timestamp_parts(
+        "2026-07-15T08:00:00.0000000002-04:00",
+        Some("2026-07-15T12:00:00Z"),
+        EspTimestampKind::Offset,
+    );
+    offset.sanitized_command_line = Some("msiexec.exe /i invalid-offset.msi".to_string());
+    offset.context.source_timestamp = None;
+    offset.context.observed_at_utc = "2026-07-15T12:00:02Z".to_string();
+    let mut control = correlation_process(
+        "process-excess-fraction-dmtf-control",
+        7352,
+        None,
+        "msiexec.exe",
+        "2026-07-15T12:00:00Z",
+    );
+    control.process_start_time = timestamp_parts(
+        "20260715120000.000000+000",
+        Some("2026-07-15T12:00:00Z"),
+        EspTimestampKind::Offset,
+    );
+    control.sanitized_command_line = Some("msiexec.exe /i control.msi".to_string());
+    control.context.source_timestamp = None;
+    control.context.observed_at_utc = "2026-07-15T12:00:03Z".to_string();
+
+    let forward = correlate_installer_processes(
+        &[],
+        &[utc.clone(), offset.clone(), control.clone()],
+        &[],
+        &[],
+    );
+    let reverse = correlate_installer_processes(&[], &[control, offset, utc], &[], &[]);
+
+    assert_eq!(forward, reverse);
+    assert_eq!(forward.len(), 1);
+    assert_eq!(
+        forward[0].correlation_id,
+        "installer|7352|2026-07-15T12:00:00Z"
+    );
+    assert_eq!(forward[0].process_observations.len(), 1);
+    assert_eq!(
+        forward[0].process_observations[0]
+            .context
+            .evidence_ref
+            .evidence_id,
+        "process-excess-fraction-dmtf-control"
+    );
+    assert_eq!(forward[0].evidence.len(), 1);
+    assert_eq!(
+        forward[0].evidence[0].evidence_id,
+        "process-excess-fraction-dmtf-control"
+    );
+}
+
+#[test]
+fn correlation_repair_canonicalizes_rfc3339_trailing_zero_precision_across_offsets() {
+    let starts = [
+        (
+            "process-trailing-zero-utc",
+            "2026-07-15T12:00:00.100000000000Z",
+            EspTimestampKind::Utc,
+        ),
+        (
+            "process-trailing-zero-offset",
+            "2026-07-15T08:00:00.1000000000-04:00",
+            EspTimestampKind::Offset,
+        ),
+    ];
+    let processes = starts
+        .into_iter()
+        .enumerate()
+        .map(|(index, (evidence_id, raw, kind))| {
+            let mut process = correlation_process(
+                evidence_id,
+                7353,
+                None,
+                "msiexec.exe",
+                "2026-07-15T12:00:00Z",
+            );
+            process.process_start_time =
+                timestamp_parts(raw, Some("2026-07-15T12:00:00.100Z"), kind);
+            process.context.source_timestamp = None;
+            process.context.observed_at_utc = format!("2026-07-15T12:00:0{}Z", index + 1);
+            process
+        })
+        .collect::<Vec<_>>();
+
+    let forward = correlate_installer_processes(&[], &processes, &[], &[]);
+    let reverse = correlate_installer_processes(
+        &[],
+        &processes.iter().cloned().rev().collect::<Vec<_>>(),
+        &[],
+        &[],
+    );
+
+    assert_eq!(forward, reverse);
+    assert_eq!(forward.len(), 1);
+    assert_eq!(
+        forward[0].correlation_id,
+        "installer|7353|2026-07-15T12:00:00.100Z"
+    );
+    assert_eq!(forward[0].process_observations.len(), 1);
+    assert_eq!(forward[0].evidence.len(), 2);
+}
+
+#[test]
+fn correlation_repair_canonicalizes_trailing_zero_leap_fraction_with_dmtf() {
+    let starts = [
+        (
+            "process-trailing-zero-leap-utc",
+            "2016-12-31T23:59:60.1234560000Z",
+            EspTimestampKind::Utc,
+        ),
+        (
+            "process-trailing-zero-leap-offset",
+            "2016-12-31T18:59:60.123456000000-05:00",
+            EspTimestampKind::Offset,
+        ),
+        (
+            "process-trailing-zero-leap-dmtf",
+            "20161231235960.123456+000",
+            EspTimestampKind::Offset,
+        ),
+    ];
+    let processes = starts
+        .into_iter()
+        .enumerate()
+        .map(|(index, (evidence_id, raw, kind))| {
+            let mut process = correlation_process(
+                evidence_id,
+                7354,
+                None,
+                "msiexec.exe",
+                "2016-12-31T23:59:59Z",
+            );
+            process.process_start_time =
+                timestamp_parts(raw, Some("2016-12-31T23:59:60.123456Z"), kind);
+            process.context.source_timestamp = None;
+            process.context.observed_at_utc = format!("2017-01-01T00:00:0{}Z", index + 1);
+            process
+        })
+        .collect::<Vec<_>>();
+
+    let forward = correlate_installer_processes(&[], &processes, &[], &[]);
+    let reverse = correlate_installer_processes(
+        &[],
+        &processes.iter().cloned().rev().collect::<Vec<_>>(),
+        &[],
+        &[],
+    );
+
+    assert_eq!(forward, reverse);
+    assert_eq!(forward.len(), 1);
+    assert_eq!(
+        forward[0].correlation_id,
+        "installer|7354|2016-12-31T23:59:60.123456Z"
+    );
+    assert_eq!(forward[0].process_observations.len(), 1);
+    assert_eq!(forward[0].evidence.len(), 3);
+}
+
+#[test]
 fn correlation_repair_canonicalizes_equivalent_rfc_and_dmtf_leap_seconds() {
     let mut rfc = correlation_process(
         "process-rfc-leap-second",
@@ -2832,7 +3016,7 @@ fn correlation_repair_normalizes_only_harmless_command_rendering_differences() {
         "2026-07-15T12:02:00Z",
     );
     quoted.app_id = Some(app_id.to_string());
-    quoted.sanitized_command_line = Some(r#"MSIEXEC.EXE /L*V "C:\Temp\App.log""#.to_string());
+    quoted.sanitized_command_line = Some(r#"msiexec.exe /l*v "C:\Temp\App.log""#.to_string());
     quoted.referenced_log_path = Some(r"C:\Temp\App.log".to_string());
     quoted.context.source_timestamp = None;
     quoted.context.observed_at_utc = "2026-07-15T12:03:00Z".to_string();
@@ -2862,6 +3046,101 @@ fn correlation_repair_normalizes_only_harmless_command_rendering_differences() {
     assert_eq!(forward[0].confidence, EspCorrelationConfidence::Exact);
     assert_ne!(forward[0].reason, "conflictingProcessSamples");
     assert_eq!(forward[0].process_observations.len(), 1);
+}
+
+#[test]
+fn correlation_repair_preserves_case_sensitive_command_values_as_conflicts() {
+    let workload = correlation_workload(
+        "workload-command-case",
+        "temporal-only",
+        "2026-07-15T12:00:00Z",
+        "2026-07-15T12:10:00Z",
+    );
+    let mut upper = correlation_process(
+        "process-command-value-upper",
+        7456,
+        None,
+        "msiexec.exe",
+        "2026-07-15T12:02:00Z",
+    );
+    upper.sanitized_command_line = Some("msiexec.exe /i package.msi LICENSEKEY=AbC123".to_string());
+    upper.context.source_timestamp = None;
+    upper.context.observed_at_utc = "2026-07-15T12:03:00Z".to_string();
+    let mut lower = correlation_process(
+        "process-command-value-lower",
+        7456,
+        None,
+        "msiexec.exe",
+        "2026-07-15T12:02:00Z",
+    );
+    lower.sanitized_command_line = Some("msiexec.exe /i package.msi LICENSEKEY=abc123".to_string());
+    lower.context.source_timestamp = None;
+    lower.context.observed_at_utc = "2026-07-15T12:04:00Z".to_string();
+
+    let forward = correlate_installer_processes(
+        std::slice::from_ref(&workload),
+        &[upper.clone(), lower.clone()],
+        &[],
+        &[],
+    );
+    let reverse = correlate_installer_processes(&[workload], &[lower, upper], &[], &[]);
+
+    assert_eq!(forward, reverse);
+    assert_eq!(forward.len(), 1);
+    assert_eq!(forward[0].workload_id, None);
+    assert_eq!(
+        forward[0].confidence,
+        EspCorrelationConfidence::Uncorrelated
+    );
+    assert_eq!(forward[0].reason, "conflictingProcessSamples");
+    assert!(forward[0].candidate_workload_ids.is_empty());
+    assert_eq!(forward[0].process_observations.len(), 2);
+}
+
+#[test]
+fn correlation_repair_preserves_case_when_command_tokenization_is_uncertain() {
+    let workload = correlation_workload(
+        "workload-command-fallback",
+        "temporal-only",
+        "2026-07-15T12:00:00Z",
+        "2026-07-15T12:10:00Z",
+    );
+    let mut upper = correlation_process(
+        "process-command-fallback-upper",
+        7457,
+        None,
+        "msiexec.exe",
+        "2026-07-15T12:02:00Z",
+    );
+    upper.sanitized_command_line =
+        Some("msiexec.exe /i package.msi LICENSEKEY=\"AbC123".to_string());
+    upper.context.source_timestamp = None;
+    upper.context.observed_at_utc = "2026-07-15T12:03:00Z".to_string();
+    let mut lower = correlation_process(
+        "process-command-fallback-lower",
+        7457,
+        None,
+        "msiexec.exe",
+        "2026-07-15T12:02:00Z",
+    );
+    lower.sanitized_command_line =
+        Some("msiexec.exe /i package.msi LICENSEKEY=\"abc123".to_string());
+    lower.context.source_timestamp = None;
+    lower.context.observed_at_utc = "2026-07-15T12:04:00Z".to_string();
+
+    let forward = correlate_installer_processes(
+        std::slice::from_ref(&workload),
+        &[upper.clone(), lower.clone()],
+        &[],
+        &[],
+    );
+    let reverse = correlate_installer_processes(&[workload], &[lower, upper], &[], &[]);
+
+    assert_eq!(forward, reverse);
+    assert_eq!(forward.len(), 1);
+    assert_eq!(forward[0].workload_id, None);
+    assert_eq!(forward[0].reason, "conflictingProcessSamples");
+    assert_eq!(forward[0].process_observations.len(), 2);
 }
 
 #[test]

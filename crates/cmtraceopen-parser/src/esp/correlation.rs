@@ -673,9 +673,28 @@ fn process_start_value(timestamp: &EspTimestamp) -> Option<DateTime<Utc>> {
 }
 
 fn parse_rfc3339_utc(raw: &str) -> Option<DateTime<Utc>> {
+    if !rfc3339_fraction_is_representable(raw) {
+        return None;
+    }
     DateTime::parse_from_rfc3339(raw)
         .ok()
         .map(|value| value.with_timezone(&Utc))
+}
+
+fn rfc3339_fraction_is_representable(raw: &str) -> bool {
+    let bytes = raw.as_bytes();
+    if bytes.get(19) != Some(&b'.') {
+        return true;
+    }
+
+    // Chrono stores nanoseconds but accepts longer RFC 3339 fractions by
+    // truncating them. Extra zeroes are exact; any other excess digit would
+    // collapse a distinct process start into the same identity.
+    bytes[20..]
+        .iter()
+        .take_while(|byte| byte.is_ascii_digit())
+        .skip(9)
+        .all(|byte| *byte == b'0')
 }
 
 fn raw_uses_utc_designator(raw: &str) -> bool {
@@ -790,9 +809,7 @@ fn command_line_conflict(samples: &[&EspProcessObservation]) -> bool {
         .filter_map(|process| process.sanitized_command_line.as_deref())
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .map(|value| {
-            canonical_command_arguments(value).unwrap_or_else(|| vec![value.to_ascii_lowercase()])
-        })
+        .map(|value| canonical_command_arguments(value).unwrap_or_else(|| vec![value.to_string()]))
         .collect::<BTreeSet<_>>()
         .len()
         > 1
@@ -825,7 +842,7 @@ fn canonical_command_arguments(command_line: &str) -> Option<Vec<String>> {
                 }
             }
             _ => {
-                current.extend(character.to_lowercase());
+                current.push(character);
                 started = true;
             }
         }
