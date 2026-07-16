@@ -7,13 +7,7 @@ import type {
 } from "./types";
 
 export type EspWorkspacePhase =
-  | "idle"
-  | "analyzing"
-  | "starting"
-  | "live"
-  | "stopping"
-  | "ready"
-  | "error";
+  "idle" | "analyzing" | "starting" | "live" | "stopping" | "ready" | "error";
 
 export type EspEvidenceViewMode = "collapsed" | "docked" | "full";
 export type EspGraphPhase =
@@ -26,9 +20,7 @@ export type EspGraphPhase =
   | "error"
   | "cancelled";
 export type EspGraphUnavailableReason =
-  | "graphDisabled"
-  | "graphNotConnected"
-  | "unsupportedPlatform";
+  "graphDisabled" | "graphNotConnected" | "unsupportedPlatform";
 
 const espGraphOwnershipLeaseBrand: unique symbol = Symbol(
   "espGraphOwnershipLease",
@@ -36,6 +28,12 @@ const espGraphOwnershipLeaseBrand: unique symbol = Symbol(
 
 export interface EspGraphOwnershipLease {
   readonly [espGraphOwnershipLeaseBrand]: true;
+}
+
+export function createEspGraphOwnershipLease(): EspGraphOwnershipLease {
+  return Object.freeze({
+    [espGraphOwnershipLeaseBrand]: true as const,
+  });
 }
 
 export const ESP_EVIDENCE_DOCK_MIN_HEIGHT = 180;
@@ -103,8 +101,9 @@ export interface EspDiagnosticsStore {
   fail(requestId: string, error: string): void;
   beginGraph(
     requestId: string,
+    ownershipLease: EspGraphOwnershipLease,
     identityFingerprint?: string,
-  ): EspGraphOwnershipLease;
+  ): void;
   applyGraphOverlay(
     requestId: string,
     ownershipLease: EspGraphOwnershipLease,
@@ -576,10 +575,7 @@ export const useEspDiagnosticsStore = create<EspDiagnosticsStore>((set) => ({
       };
     }),
 
-  beginGraph: (requestId, identityFingerprint) => {
-    const ownershipLease: EspGraphOwnershipLease = Object.freeze({
-      [espGraphOwnershipLeaseBrand]: true as const,
-    });
+  beginGraph: (requestId, ownershipLease, identityFingerprint) => {
     set((state) => ({
       graphRequestId: requestId,
       graphRequestLease: ownershipLease,
@@ -590,7 +586,6 @@ export const useEspDiagnosticsStore = create<EspDiagnosticsStore>((set) => ({
       graphUnavailableReason: null,
       graphError: null,
     }));
-    return ownershipLease;
   },
 
   applyGraphOverlay: (requestId, ownershipLease, overlay) =>

@@ -14,6 +14,7 @@ import {
 } from "../../lib/commands";
 import { useUiStore } from "../../stores/ui-store";
 import {
+  createEspGraphOwnershipLease,
   ESP_EVIDENCE_BOUNDARY_MARKER_LIMIT,
   ESP_EVIDENCE_DOCK_MAX_HEIGHT,
   ESP_EVIDENCE_DOCK_MIN_HEIGHT,
@@ -258,6 +259,14 @@ function deferred<T>() {
     reject = rejectPromise;
   });
   return { promise, resolve, reject };
+}
+
+function beginGraphForTest(requestId: string, identityFingerprint?: string) {
+  const ownershipLease = createEspGraphOwnershipLease();
+  useEspDiagnosticsStore
+    .getState()
+    .beginGraph(requestId, ownershipLease, identityFingerprint);
+  return ownershipLease;
 }
 
 beforeEach(() => {
@@ -1101,9 +1110,7 @@ describe("ESP Graph overlay state", () => {
       .applySessionUpdate(
         makeSessionUpdate(1, makeSnapshot(["device-a"], "device-a")),
       );
-    const ownershipLease = useEspDiagnosticsStore
-      .getState()
-      .beginGraph("graph-device-a");
+    const ownershipLease = beginGraphForTest("graph-device-a");
 
     useEspDiagnosticsStore
       .getState()
@@ -1232,9 +1239,7 @@ describe("ESP Graph overlay state", () => {
     useEspDiagnosticsStore
       .getState()
       .applyAnalysis("analysis-a", makeSnapshot(["local-a"]));
-    const ownershipLease = useEspDiagnosticsStore
-      .getState()
-      .beginGraph("graph-unknown-wire-values");
+    const ownershipLease = beginGraphForTest("graph-unknown-wire-values");
     useEspDiagnosticsStore
       .getState()
       .applyGraphOverlay("graph-unknown-wire-values", ownershipLease, overlay);
@@ -1250,9 +1255,7 @@ describe("ESP Graph overlay state", () => {
     useEspDiagnosticsStore
       .getState()
       .applyAnalysis("analysis-a", makeSnapshot(["local-a"]));
-    const ownershipLease = useEspDiagnosticsStore
-      .getState()
-      .beginGraph("graph-active");
+    const ownershipLease = beginGraphForTest("graph-active");
 
     useEspDiagnosticsStore
       .getState()
@@ -1274,12 +1277,8 @@ describe("ESP Graph overlay state", () => {
     useEspDiagnosticsStore
       .getState()
       .applyAnalysis("analysis-a", makeSnapshot(["local-a"]));
-    const staleLease = useEspDiagnosticsStore
-      .getState()
-      .beginGraph("graph-reused-lease");
-    const activeLease = useEspDiagnosticsStore
-      .getState()
-      .beginGraph("graph-reused-lease");
+    const staleLease = beginGraphForTest("graph-reused-lease");
+    const activeLease = beginGraphForTest("graph-reused-lease");
 
     expect(staleLease).toBeDefined();
     expect(activeLease).toBeDefined();
@@ -1306,12 +1305,8 @@ describe("ESP Graph overlay state", () => {
   });
 
   it("rejects a late same-ID failure from a replaced ownership lease", () => {
-    const staleLease = useEspDiagnosticsStore
-      .getState()
-      .beginGraph("graph-reused-lease");
-    const activeLease = useEspDiagnosticsStore
-      .getState()
-      .beginGraph("graph-reused-lease");
+    const staleLease = beginGraphForTest("graph-reused-lease");
+    const activeLease = beginGraphForTest("graph-reused-lease");
 
     expect(staleLease).toBeDefined();
     expect(activeLease).toBeDefined();
@@ -1331,12 +1326,8 @@ describe("ESP Graph overlay state", () => {
   });
 
   it("rejects a late same-ID cancellation from a replaced ownership lease", () => {
-    const staleLease = useEspDiagnosticsStore
-      .getState()
-      .beginGraph("graph-reused-lease");
-    const activeLease = useEspDiagnosticsStore
-      .getState()
-      .beginGraph("graph-reused-lease");
+    const staleLease = beginGraphForTest("graph-reused-lease");
+    const activeLease = beginGraphForTest("graph-reused-lease");
 
     expect(staleLease).toBeDefined();
     expect(activeLease).toBeDefined();
@@ -1372,9 +1363,7 @@ describe("ESP Graph overlay state", () => {
 
     useEspDiagnosticsStore.getState().beginAnalysis("analysis-a");
     useEspDiagnosticsStore.getState().applyAnalysis("analysis-a", local);
-    const ownershipLease = useEspDiagnosticsStore
-      .getState()
-      .beginGraph("graph-a");
+    const ownershipLease = beginGraphForTest("graph-a");
 
     expect(() =>
       useEspDiagnosticsStore
@@ -1389,7 +1378,7 @@ describe("ESP Graph overlay state", () => {
     useEspDiagnosticsStore.getState().beginAnalysis("analysis-a");
     useEspDiagnosticsStore.getState().applyAnalysis("analysis-a", local);
 
-    const graphALease = useEspDiagnosticsStore.getState().beginGraph("graph-a");
+    const graphALease = beginGraphForTest("graph-a");
     useEspDiagnosticsStore
       .getState()
       .applyGraphOverlay(
@@ -1407,7 +1396,7 @@ describe("ESP Graph overlay state", () => {
       "graph-a",
     );
 
-    const graphBLease = useEspDiagnosticsStore.getState().beginGraph("graph-b");
+    const graphBLease = beginGraphForTest("graph-b");
     useEspDiagnosticsStore
       .getState()
       .failGraph("graph-b", graphBLease, "Graph unavailable");
@@ -3304,9 +3293,10 @@ describe("ESP Graph scheduling", () => {
   it("does not attach an overlay to a different identity than its request", () => {
     const requested = makeSnapshot(["local-y"], "device-y");
     useEspDiagnosticsStore.setState({ phase: "ready", snapshot: requested });
-    const ownershipLease = useEspDiagnosticsStore
-      .getState()
-      .beginGraph("graph-y", getEspIdentityFingerprint(requested));
+    const ownershipLease = beginGraphForTest(
+      "graph-y",
+      getEspIdentityFingerprint(requested),
+    );
 
     useEspDiagnosticsStore.setState({
       snapshot: makeSnapshot(["local-z"], "device-z"),
@@ -4453,5 +4443,350 @@ describe("ESP Graph scheduling", () => {
         "The running desktop backend does not expose 'graph_fetch_esp_diagnostics'. Restart CMTrace Open so the frontend and Tauri backend are on the same build.",
     });
     coordinator.dispose();
+  });
+});
+
+describe("ESP Graph publication reentrancy", () => {
+  it("does not dispatch after beginAnalysis reenters Graph publication", async () => {
+    const pendingOverlay = deferred<EspGraphOverlay>();
+    const fetchGraph = vi.fn(() => pendingOverlay.promise);
+    const cancelGraph = vi.fn(async () => undefined);
+    const coordinator = createEspGraphCoordinator({
+      fetchGraph,
+      cancelGraph,
+      createRequestId: () => "graph-reentrant-analysis",
+    });
+    useUiStore.setState({ graphApiEnabled: false, graphApiStatus: "idle" });
+    useEspDiagnosticsStore.setState({
+      phase: "ready",
+      snapshot: makeSnapshot(["local-reentrant-analysis"]),
+    });
+    coordinator.start();
+
+    let resetTriggered = false;
+    const unsubscribe = useEspDiagnosticsStore.subscribe((state, previous) => {
+      if (
+        !resetTriggered &&
+        state.graphRequestLease !== null &&
+        state.graphRequestLease !== previous.graphRequestLease
+      ) {
+        resetTriggered = true;
+        useEspDiagnosticsStore
+          .getState()
+          .beginAnalysis("analysis-reentrant-replacement");
+      }
+    });
+
+    try {
+      useUiStore.setState({
+        graphApiEnabled: true,
+        graphApiStatus: "connected",
+      });
+      await vi.waitFor(() => expect(resetTriggered).toBe(true));
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+      expect(fetchGraph).not.toHaveBeenCalled();
+      expect(cancelGraph).toHaveBeenCalledOnce();
+      expect(useEspDiagnosticsStore.getState().phase).toBe("analyzing");
+      expect(useEspDiagnosticsStore.getState().graphRequestId).toBeNull();
+      expect(useEspDiagnosticsStore.getState().graphRequestLease).toBeNull();
+    } finally {
+      unsubscribe();
+      coordinator.dispose();
+      pendingOverlay.resolve(makeOverlay("graph-reentrant-analysis"));
+      await Promise.resolve();
+    }
+  });
+
+  it("does not dispatch after cancel reenters Graph publication", async () => {
+    const fetchGraph = vi.fn(async (request: EspGraphRequest) =>
+      makeOverlay(request.requestId),
+    );
+    const cancelGraph = vi.fn(async () => undefined);
+    const coordinator = createEspGraphCoordinator({
+      fetchGraph,
+      cancelGraph,
+      createRequestId: () => "graph-reentrant-cancel",
+    });
+    useUiStore.setState({ graphApiEnabled: true, graphApiStatus: "connected" });
+    useEspDiagnosticsStore.setState({
+      phase: "ready",
+      snapshot: makeSnapshot(["local-reentrant-cancel"]),
+    });
+
+    let cancelTriggered = false;
+    let cancellation = Promise.resolve();
+    const unsubscribe = useEspDiagnosticsStore.subscribe((state, previous) => {
+      if (
+        !cancelTriggered &&
+        state.graphRequestLease !== null &&
+        state.graphRequestLease !== previous.graphRequestLease
+      ) {
+        cancelTriggered = true;
+        cancellation = coordinator.cancel();
+      }
+    });
+
+    try {
+      await coordinator.refresh();
+      await cancellation;
+
+      expect(cancelTriggered).toBe(true);
+      expect(fetchGraph).not.toHaveBeenCalled();
+      expect(cancelGraph).toHaveBeenCalledOnce();
+      expect(useEspDiagnosticsStore.getState().graphPhase).toBe("cancelled");
+      expect(useEspDiagnosticsStore.getState().graphRequestId).toBeNull();
+      expect(useEspDiagnosticsStore.getState().graphRequestLease).toBeNull();
+    } finally {
+      unsubscribe();
+      coordinator.dispose();
+    }
+  });
+
+  it("does not dispatch after dispose reenters Graph publication", async () => {
+    const fetchGraph = vi.fn(async (request: EspGraphRequest) =>
+      makeOverlay(request.requestId),
+    );
+    const cancelGraph = vi.fn(async () => undefined);
+    const coordinator = createEspGraphCoordinator({
+      fetchGraph,
+      cancelGraph,
+      createRequestId: () => "graph-reentrant-dispose",
+    });
+    useUiStore.setState({ graphApiEnabled: true, graphApiStatus: "connected" });
+    useEspDiagnosticsStore.setState({
+      phase: "ready",
+      snapshot: makeSnapshot(["local-reentrant-dispose"]),
+    });
+
+    let disposeTriggered = false;
+    const unsubscribe = useEspDiagnosticsStore.subscribe((state, previous) => {
+      if (
+        !disposeTriggered &&
+        state.graphRequestLease !== null &&
+        state.graphRequestLease !== previous.graphRequestLease
+      ) {
+        disposeTriggered = true;
+        coordinator.dispose();
+      }
+    });
+
+    try {
+      await coordinator.refresh();
+
+      expect(disposeTriggered).toBe(true);
+      expect(fetchGraph).not.toHaveBeenCalled();
+      expect(cancelGraph).toHaveBeenCalledOnce();
+      expect(useEspDiagnosticsStore.getState().graphPhase).toBe("cancelled");
+      expect(useEspDiagnosticsStore.getState().graphRequestId).toBeNull();
+      expect(useEspDiagnosticsStore.getState().graphRequestLease).toBeNull();
+    } finally {
+      unsubscribe();
+      coordinator.dispose();
+    }
+  });
+
+  it("does not dispatch after identity replacement reenters Graph publication", async () => {
+    const fetchGraph = vi.fn(async (request: EspGraphRequest) =>
+      makeOverlay(request.requestId),
+    );
+    const cancelGraph = vi.fn(async () => undefined);
+    const coordinator = createEspGraphCoordinator({
+      fetchGraph,
+      cancelGraph,
+      createRequestId: () => "graph-reentrant-identity",
+    });
+    useUiStore.setState({ graphApiEnabled: true, graphApiStatus: "connected" });
+    useEspDiagnosticsStore.setState({
+      phase: "ready",
+      snapshot: makeSnapshot(["local-identity-a"], "identity-a"),
+    });
+
+    let identityReplaced = false;
+    const unsubscribe = useEspDiagnosticsStore.subscribe((state, previous) => {
+      if (
+        !identityReplaced &&
+        state.graphRequestLease !== null &&
+        state.graphRequestLease !== previous.graphRequestLease
+      ) {
+        identityReplaced = true;
+        useEspDiagnosticsStore.setState({
+          snapshot: makeSnapshot(["local-identity-b"], "identity-b"),
+        });
+      }
+    });
+
+    try {
+      await coordinator.refresh();
+
+      expect(identityReplaced).toBe(true);
+      expect(fetchGraph).not.toHaveBeenCalled();
+      expect(cancelGraph).not.toHaveBeenCalled();
+      expect(useEspDiagnosticsStore.getState().graphPhase).toBe("cancelled");
+      expect(useEspDiagnosticsStore.getState().graphRequestId).toBeNull();
+      expect(useEspDiagnosticsStore.getState().graphRequestLease).toBeNull();
+      expect(
+        useEspDiagnosticsStore.getState().snapshot?.identity.deviceName,
+      ).toBe("host-identity-b");
+    } finally {
+      unsubscribe();
+      coordinator.dispose();
+    }
+  });
+
+  it.each([
+    {
+      transition: "WAM status error",
+      update: { graphApiStatus: "error" as const },
+    },
+    {
+      transition: "Graph disable",
+      update: { graphApiEnabled: false },
+    },
+  ])(
+    "does not dispatch after $transition reenters Graph publication",
+    async ({ update }) => {
+      const fetchGraph = vi.fn(async (request: EspGraphRequest) =>
+        makeOverlay(request.requestId),
+      );
+      const cancelGraph = vi.fn(async () => undefined);
+      const coordinator = createEspGraphCoordinator({
+        fetchGraph,
+        cancelGraph,
+        createRequestId: () => "graph-reentrant-wam",
+      });
+      useUiStore.setState({
+        graphApiEnabled: true,
+        graphApiStatus: "connected",
+      });
+      useEspDiagnosticsStore.setState({
+        phase: "ready",
+        snapshot: makeSnapshot(["local-reentrant-wam"]),
+      });
+
+      let disconnected = false;
+      const unsubscribe = useEspDiagnosticsStore.subscribe(
+        (state, previous) => {
+          if (
+            !disconnected &&
+            state.graphRequestLease !== null &&
+            state.graphRequestLease !== previous.graphRequestLease
+          ) {
+            disconnected = true;
+            useUiStore.setState(update);
+          }
+        },
+      );
+
+      try {
+        await coordinator.refresh();
+
+        expect(disconnected).toBe(true);
+        expect(fetchGraph).not.toHaveBeenCalled();
+        expect(cancelGraph).not.toHaveBeenCalled();
+        expect(useEspDiagnosticsStore.getState().graphPhase).toBe("cancelled");
+        expect(useEspDiagnosticsStore.getState().graphRequestId).toBeNull();
+        expect(useEspDiagnosticsStore.getState().graphRequestLease).toBeNull();
+      } finally {
+        unsubscribe();
+        coordinator.dispose();
+      }
+    },
+  );
+
+  it("keeps a cross-coordinator overwrite active without dispatching the superseded owner", async () => {
+    const firstOverlay = deferred<EspGraphOverlay>();
+    const secondOverlay = deferred<EspGraphOverlay>();
+    const firstFetchGraph = vi.fn(() => firstOverlay.promise);
+    const secondFetchGraph = vi.fn(() => secondOverlay.promise);
+    const firstCancelGraph = vi.fn(async () => undefined);
+    const secondCancelGraph = vi.fn(async () => undefined);
+    const first = createEspGraphCoordinator({
+      fetchGraph: firstFetchGraph,
+      cancelGraph: firstCancelGraph,
+      createRequestId: () => "graph-reentrant-cross-owner",
+    });
+    const second = createEspGraphCoordinator({
+      fetchGraph: secondFetchGraph,
+      cancelGraph: secondCancelGraph,
+      createRequestId: () => "graph-reentrant-cross-owner",
+    });
+    useUiStore.setState({ graphApiEnabled: true, graphApiStatus: "connected" });
+    useEspDiagnosticsStore.setState({
+      phase: "ready",
+      snapshot: makeSnapshot(["local-reentrant-cross-owner"]),
+    });
+
+    let overwriteTriggered = false;
+    let firstPublishedLease =
+      useEspDiagnosticsStore.getState().graphRequestLease;
+    let secondRun: Promise<void> | null = null;
+    const unsubscribe = useEspDiagnosticsStore.subscribe((state, previous) => {
+      if (
+        !overwriteTriggered &&
+        state.graphRequestLease !== null &&
+        state.graphRequestLease !== previous.graphRequestLease
+      ) {
+        overwriteTriggered = true;
+        firstPublishedLease = state.graphRequestLease;
+        secondRun = second.refresh();
+      }
+    });
+
+    const firstRun = first.refresh();
+    try {
+      await vi.waitFor(() => expect(secondFetchGraph).toHaveBeenCalledOnce());
+
+      expect(overwriteTriggered).toBe(true);
+      expect(firstFetchGraph).not.toHaveBeenCalled();
+      expect(firstCancelGraph).not.toHaveBeenCalled();
+      expect(secondCancelGraph).not.toHaveBeenCalled();
+      expect(useEspDiagnosticsStore.getState().graphRequestId).toBe(
+        "graph-reentrant-cross-owner",
+      );
+      expect(useEspDiagnosticsStore.getState().graphRequestLease).not.toBe(
+        firstPublishedLease,
+      );
+
+      secondOverlay.resolve(makeOverlay("graph-reentrant-cross-owner"));
+      await secondRun;
+      await firstRun;
+      expect(useEspDiagnosticsStore.getState().snapshot?.graph?.requestId).toBe(
+        "graph-reentrant-cross-owner",
+      );
+    } finally {
+      unsubscribe();
+      firstOverlay.resolve(makeOverlay("graph-reentrant-cross-owner"));
+      secondOverlay.resolve(makeOverlay("graph-reentrant-cross-owner"));
+      await Promise.all([firstRun, secondRun]);
+      first.dispose();
+      second.dispose();
+    }
+  });
+
+  it("dispatches and releases ownership when publication remains current", async () => {
+    const fetchGraph = vi.fn(async (request: EspGraphRequest) =>
+      makeOverlay(request.requestId),
+    );
+    const cancelGraph = vi.fn(async () => undefined);
+    const coordinator = createEspGraphCoordinator({
+      fetchGraph,
+      cancelGraph,
+      createRequestId: () => "graph-publication-control",
+    });
+    useUiStore.setState({ graphApiEnabled: true, graphApiStatus: "connected" });
+    useEspDiagnosticsStore.setState({
+      phase: "ready",
+      snapshot: makeSnapshot(["local-publication-control"]),
+    });
+
+    await coordinator.refresh();
+    coordinator.dispose();
+
+    expect(fetchGraph).toHaveBeenCalledOnce();
+    expect(cancelGraph).not.toHaveBeenCalled();
+    expect(useEspDiagnosticsStore.getState().graphPhase).toBe("ready");
+    expect(useEspDiagnosticsStore.getState().graphRequestId).toBeNull();
+    expect(useEspDiagnosticsStore.getState().graphRequestLease).toBeNull();
   });
 });

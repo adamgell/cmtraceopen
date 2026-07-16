@@ -8,6 +8,7 @@ import {
 import { createUuidRequestId } from "../../lib/uuid-request-id";
 import { useUiStore } from "../../stores/ui-store";
 import {
+  createEspGraphOwnershipLease,
   getEspIdentityFingerprint,
   type EspGraphOwnershipLease,
   useEspDiagnosticsStore,
@@ -528,6 +529,22 @@ export function createEspGraphCoordinator(
     return Promise.all(cancellations).then(() => undefined);
   };
 
+  const releaseUndispatchedOwnership = async (
+    ownership: OwnedGraphRequest,
+  ): Promise<void> => {
+    const cancellation = requestCancellations.get(ownership);
+    if (cancellation) {
+      await cancellation;
+      return;
+    }
+    if (!ownedRequests.delete(ownership)) {
+      return;
+    }
+    useEspDiagnosticsStore
+      .getState()
+      .cancelGraph(ownership.requestId, ownership.ownershipLease);
+  };
+
   const cancelOrphanedRequests = (): void => {
     const cancellation = cancelCurrentRequest(
       "[esp-diagnostics] orphan Graph cancel failed",
@@ -727,11 +744,31 @@ export function createEspGraphCoordinator(
       requestId,
       requestSelectedManagedDeviceId,
     );
-    const ownershipLease = useEspDiagnosticsStore
-      .getState()
-      .beginGraph(requestId, currentFingerprint);
+    const ownershipLease = createEspGraphOwnershipLease();
     const ownership: OwnedGraphRequest = { requestId, ownershipLease };
     ownedRequests.add(ownership);
+    useEspDiagnosticsStore
+      .getState()
+      .beginGraph(requestId, ownershipLease, currentFingerprint);
+
+    const publishedGraphState = useEspDiagnosticsStore.getState();
+    const publishedUiState = useUiStore.getState();
+    if (
+      disposed ||
+      generation !== operationGeneration ||
+      lifecycleGeneration !== graphLifecycleGeneration ||
+      !ownedRequests.has(ownership) ||
+      publishedGraphState.graphRequestId !== requestId ||
+      publishedGraphState.graphRequestLease !== ownershipLease ||
+      !publishedGraphState.snapshot ||
+      getEspIdentityFingerprint(publishedGraphState.snapshot) !==
+        currentFingerprint ||
+      !publishedUiState.graphApiEnabled ||
+      publishedUiState.graphApiStatus !== "connected"
+    ) {
+      await releaseUndispatchedOwnership(ownership);
+      return;
+    }
 
     try {
       const overlay = await fetchGraph(request);
