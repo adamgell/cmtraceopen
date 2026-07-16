@@ -4,6 +4,7 @@ import {
   ESP_EVIDENCE_DOCK_DEFAULT_HEIGHT,
   useEspDiagnosticsStore,
 } from "./esp-diagnostics-store";
+import { EspToolbarAction } from "./EspToolbarAction";
 import { LiveEvidenceDock } from "./LiveEvidenceDock";
 import type {
   EspDiagnosticsSnapshot,
@@ -203,6 +204,99 @@ afterEach(() => {
 });
 
 describe("LiveEvidenceDock", () => {
+  it("returns focus to the persistent live-log trigger when Close collapses the focused dock", () => {
+    useEspDiagnosticsStore.getState().setEvidenceViewMode("docked");
+    render(
+      <>
+        <EspToolbarAction />
+        <LiveEvidenceDock snapshot={snapshot(baseRecords)} />
+      </>,
+    );
+
+    const closeButton = screen.getByRole("button", {
+      name: "Close live logs",
+    });
+    closeButton.focus();
+    expect(closeButton).toHaveFocus();
+
+    fireEvent.click(closeButton);
+
+    expect(
+      screen.queryByRole("region", { name: "Live evidence and logs" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /^Open live logs,/ }),
+    ).toHaveFocus();
+  });
+
+  it("collapses a focused full-page dock with Escape and returns focus to the trigger", () => {
+    useEspDiagnosticsStore.getState().setEvidenceViewMode("full");
+    render(
+      <>
+        <EspToolbarAction />
+        <LiveEvidenceDock snapshot={snapshot(baseRecords)} />
+      </>,
+    );
+
+    const restoreButton = screen.getByRole("button", {
+      name: "Restore docked live logs",
+    });
+    restoreButton.focus();
+
+    fireEvent.keyDown(restoreButton, { key: "Escape" });
+
+    expect(
+      screen.queryByRole("region", { name: "Live evidence and logs" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /^Open live logs,/ }),
+    ).toHaveFocus();
+  });
+
+  it("does not steal focus when another control collapses the dock", () => {
+    useEspDiagnosticsStore.getState().setEvidenceViewMode("docked");
+    render(
+      <>
+        <button type="button">Outside control</button>
+        <EspToolbarAction />
+        <LiveEvidenceDock snapshot={snapshot(baseRecords)} />
+      </>,
+    );
+
+    const outsideControl = screen.getByRole("button", {
+      name: "Outside control",
+    });
+    outsideControl.focus();
+
+    act(() =>
+      useEspDiagnosticsStore.getState().setEvidenceViewMode("collapsed"),
+    );
+
+    expect(outsideControl).toHaveFocus();
+    expect(
+      screen.queryByRole("region", { name: "Live evidence and logs" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("keeps focus on the persistent trigger when it hides the dock", () => {
+    useEspDiagnosticsStore.getState().setEvidenceViewMode("docked");
+    render(
+      <>
+        <EspToolbarAction />
+        <LiveEvidenceDock snapshot={snapshot(baseRecords)} />
+      </>,
+    );
+
+    const trigger = screen.getByRole("button", { name: /^Hide live logs,/ });
+    trigger.focus();
+    fireEvent.click(trigger);
+
+    expect(trigger).toHaveFocus();
+    expect(
+      screen.queryByRole("region", { name: "Live evidence and logs" }),
+    ).not.toBeInTheDocument();
+  });
+
   it("starts collapsed, resizes accessibly, expands, restores, and collapses", () => {
     render(<LiveEvidenceDock snapshot={snapshot(baseRecords)} />);
     expect(

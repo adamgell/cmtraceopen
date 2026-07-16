@@ -1,5 +1,6 @@
 import { Button, tokens } from "@fluentui/react-components";
 import { useEspDiagnosticsStore } from "./esp-diagnostics-store";
+import { ESP_LIVE_EVIDENCE_TRIGGER_ID } from "./live-evidence-focus";
 
 function liveStateLabel(phase: string): string {
   switch (phase) {
@@ -51,6 +52,7 @@ export function EspToolbarAction() {
 
   return (
     <Button
+      id={ESP_LIVE_EVIDENCE_TRIGGER_ID}
       appearance="primary"
       size="small"
       aria-label={accessibleLabel}
