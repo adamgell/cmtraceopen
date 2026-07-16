@@ -4371,6 +4371,77 @@ fn archive_preflights_zip64_entry_count_before_constructing_the_parser() {
 }
 
 #[test]
+fn archive_preflights_zip64_count_when_classic_offset_is_sentinel() {
+    let source = tempfile::tempdir().expect("source tempdir");
+    let archive_path = source.path().join("too-many-offset-sentinel.zip");
+    let names = (0..=MAX_ARCHIVE_ENTRIES)
+        .map(|index| format!("logs/{index:03}.log"))
+        .collect::<Vec<_>>();
+    let entries = names
+        .iter()
+        .map(|name| (name.as_str(), b"".as_slice()))
+        .collect::<Vec<_>>();
+    write_test_zip(&archive_path, &entries);
+
+    let mut original = std::fs::read(&archive_path).expect("read ZIP fixture");
+    let eocd = find_last_signature(&original, [0x50, 0x4b, 0x05, 0x06]);
+
+    // Make reaching ZipArchive::new observable: a correct preflight must reject
+    // the ZIP64 count before the parser encounters this malformed final entry.
+    let mut central = read_u32(&original, eocd + 16) as usize;
+    for _ in 0..MAX_ARCHIVE_ENTRIES {
+        let name_len = u16::from_le_bytes(
+            original[central + 28..central + 30]
+                .try_into()
+                .expect("central name length"),
+        );
+        let extra_len = u16::from_le_bytes(
+            original[central + 30..central + 32]
+                .try_into()
+                .expect("central extra length"),
+        );
+        let comment_len = u16::from_le_bytes(
+            original[central + 32..central + 34]
+                .try_into()
+                .expect("central comment length"),
+        );
+        central += 46 + usize::from(name_len) + usize::from(extra_len) + usize::from(comment_len);
+    }
+    original[central..central + 4].copy_from_slice(b"BAD!");
+
+    let mut bytes = original[..eocd].to_vec();
+    let zip64_eocd_offset = bytes.len() as u64;
+    append_u32(&mut bytes, 0x0606_4b50);
+    append_u64(&mut bytes, 44);
+    append_u16(&mut bytes, 45);
+    append_u16(&mut bytes, 45);
+    append_u32(&mut bytes, 0);
+    append_u32(&mut bytes, 0);
+    append_u64(&mut bytes, (MAX_ARCHIVE_ENTRIES + 1) as u64);
+    append_u64(&mut bytes, (MAX_ARCHIVE_ENTRIES + 1) as u64);
+    append_u64(&mut bytes, read_u32(&original, eocd + 12) as u64);
+    append_u64(&mut bytes, read_u32(&original, eocd + 16) as u64);
+    append_u32(&mut bytes, 0x0706_4b50);
+    append_u32(&mut bytes, 0);
+    append_u64(&mut bytes, zip64_eocd_offset);
+    append_u32(&mut bytes, 1);
+    let classic_eocd = bytes.len();
+    bytes.extend_from_slice(&original[eocd..]);
+    patch_u16(&mut bytes, classic_eocd + 8, 1);
+    patch_u16(&mut bytes, classic_eocd + 10, 1);
+    patch_u32(&mut bytes, classic_eocd + 16, u32::MAX);
+    std::fs::write(&archive_path, bytes).expect("patch ZIP64 fixture");
+
+    assert!(matches!(
+        extract_captured_archive(&archive_path),
+        Err(ArchiveError::EntryCountExceeded {
+            count,
+            maximum: MAX_ARCHIVE_ENTRIES,
+        }) if count == MAX_ARCHIVE_ENTRIES + 1
+    ));
+}
+
+#[test]
 fn archive_preflights_cab_entry_count_before_constructing_the_parser() {
     let source = tempfile::tempdir().expect("source tempdir");
     let archive_path = source.path().join("too-many.cab");
