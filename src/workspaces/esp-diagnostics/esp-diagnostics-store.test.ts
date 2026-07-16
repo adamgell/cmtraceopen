@@ -300,6 +300,29 @@ describe("ESP local session state", () => {
     expect(useEspDiagnosticsStore.getState().sessionId).toBeNull();
   });
 
+  it("accepts sequence zero exactly once as the initial live update", () => {
+    useEspDiagnosticsStore.getState().beginLiveStart("live-a");
+
+    useEspDiagnosticsStore
+      .getState()
+      .applySessionUpdate(makeSessionUpdate(0, makeSnapshot(["initial-zero"])));
+
+    expect(useEspDiagnosticsStore.getState().phase).toBe("live");
+    expect(useEspDiagnosticsStore.getState().sessionId).toBe("session-a");
+    expect(useEspDiagnosticsStore.getState().sequence).toBe(0);
+    expect(
+      useEspDiagnosticsStore.getState().snapshot?.rawEvidence[0].recordId,
+    ).toBe("initial-zero");
+
+    useEspDiagnosticsStore
+      .getState()
+      .applySessionUpdate(makeSessionUpdate(0, makeSnapshot(["duplicate-zero"])));
+
+    expect(
+      useEspDiagnosticsStore.getState().snapshot?.rawEvidence[0].recordId,
+    ).toBe("initial-zero");
+  });
+
   it("clears the native session identity when live collection expires", () => {
     useEspDiagnosticsStore.getState().beginLiveStart("live-a");
     useEspDiagnosticsStore

@@ -227,7 +227,10 @@ export const useEspDiagnosticsStore = create<EspDiagnosticsStore>((set) => ({
       if (!isInitialUpdate && state.sessionId !== update.sessionId) {
         return state;
       }
-      if (update.sequence <= state.sequence) {
+      if (
+        update.sequence < state.sequence ||
+        (!isInitialUpdate && update.sequence === state.sequence)
+      ) {
         return state;
       }
 

@@ -42,7 +42,10 @@ export interface WorkspaceDefinition {
   platforms: PlatformKind[] | "all";
   /** Lazy-loaded main workspace component. */
   component: LazyExoticComponent<ComponentType>;
-  /** Lazy-loaded sidebar component. Omit for no sidebar. */
+  /**
+   * Lazy-loaded sidebar component. Omit to use the default LogSidebar.
+   * Set capabilities.sidebar to false to render no sidebar.
+   */
   sidebar?: LazyExoticComponent<ComponentType>;
   /** Lazy-loaded workspace-specific toolbar action. */
   toolbarAction?: LazyExoticComponent<ComponentType>;

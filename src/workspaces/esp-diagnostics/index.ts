@@ -26,7 +26,7 @@ function pathFromSource(source: LogSource): string {
 }
 
 function isSupportedEvidenceFile(path: string): boolean {
-  const fileName = path.split(/[\\/]/).pop()?.toLocaleLowerCase() ?? "";
+  const fileName = path.split(/[\\/]/).pop()?.toLowerCase() ?? "";
   return (
     fileName === "manifest.json" ||
     fileName.endsWith(".cab") ||

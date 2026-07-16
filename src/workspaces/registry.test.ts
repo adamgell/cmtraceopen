@@ -379,6 +379,24 @@ describe("ESP workspace registration", () => {
     ).toBeNull();
   });
 
+  it("uses locale-independent case folding for evidence extensions", () => {
+    const localeLower = vi
+      .spyOn(String.prototype, "toLocaleLowerCase")
+      .mockReturnValue("evidence.zıp");
+
+    try {
+      expect(
+        resolveEspEvidenceSource({
+          kind: "file",
+          path: "/captures/EVIDENCE.ZIP",
+        }),
+      ).toBe("/captures/EVIDENCE.ZIP");
+      expect(localeLower).not.toHaveBeenCalled();
+    } finally {
+      localeLower.mockRestore();
+    }
+  });
+
   it("rejects an unsupported file selected from the workspace import action", async () => {
     vi.mocked(open).mockResolvedValueOnce("/captures/random.json");
     render(createElement(EspDiagnosticsWorkspace));
