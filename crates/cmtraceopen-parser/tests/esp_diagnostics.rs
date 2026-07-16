@@ -10358,3 +10358,565 @@ fn redaction_projection_preserves_safe_digest_key_value_narratives() {
     assert_eq!(redacted_export_projection(&safe), safe);
     assert_eq!(snapshot, original);
 }
+
+#[test]
+fn redaction_projection_masks_literal_and_serialized_credentials_across_public_boundaries() {
+    let credential_payloads = [
+        (
+            "literal-bearer",
+            r#"Bearer "LITERAL_BEARER_HEAD LITERAL_BEARER_TAIL_SECRET""#,
+        ),
+        (
+            "escaped-bearer",
+            r#"Bearer \"ESCAPED_BEARER_HEAD ESCAPED_BEARER_TAIL_SECRET\""#,
+        ),
+        (
+            "twice-escaped-bearer",
+            r#"Bearer \\\"TWICE_BEARER_HEAD TWICE_BEARER_TAIL_SECRET\\\""#,
+        ),
+        (
+            "literal-basic",
+            r#"Basic "LITERAL_BASIC_HEAD LITERAL_BASIC_TAIL_SECRET""#,
+        ),
+        (
+            "escaped-basic",
+            r#"Basic \"ESCAPED_BASIC_HEAD ESCAPED_BASIC_TAIL_SECRET\""#,
+        ),
+        (
+            "twice-escaped-basic",
+            r#"Basic \\\"TWICE_BASIC_HEAD TWICE_BASIC_TAIL_SECRET\\\""#,
+        ),
+        (
+            "literal-authorization",
+            r#"Authorization: Bearer "LITERAL_AUTH_HEAD LITERAL_AUTH_TAIL_SECRET""#,
+        ),
+        (
+            "escaped-authorization",
+            r#"Authorization: Bearer \"ESCAPED_AUTH_HEAD ESCAPED_AUTH_TAIL_SECRET\""#,
+        ),
+        (
+            "twice-escaped-authorization",
+            r#"Authorization: Basic \\\"TWICE_AUTH_HEAD TWICE_AUTH_TAIL_SECRET\\\""#,
+        ),
+    ];
+    let identity_payloads = [
+        (
+            "literal-aad-tenant",
+            r#"AADTenantID="LITERAL_AAD_HEAD LITERAL_AAD_TAIL_SECRET""#,
+        ),
+        (
+            "escaped-azure-tenant",
+            r#"AzureADTenantID=\"ESCAPED_AZURE_HEAD ESCAPED_AZURE_TAIL_SECRET\""#,
+        ),
+        (
+            "twice-escaped-device-serial",
+            r#"DeviceSerialNumber \\\"TWICE_SERIAL_HEAD TWICE_SERIAL_TAIL_SECRET\\\""#,
+        ),
+    ];
+    let all_payloads = credential_payloads
+        .iter()
+        .chain(identity_payloads.iter())
+        .copied()
+        .collect::<Vec<_>>();
+    let combined = all_payloads
+        .iter()
+        .map(|(_, payload)| *payload)
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let mut snapshot = findings_snapshot();
+    snapshot.identity.evidence = all_payloads
+        .iter()
+        .map(|(id, payload)| evidence_ref_from(&format!("{id}|{payload}"), payload))
+        .collect();
+    snapshot.registration_events.push(EspRegistrationEvent {
+        event_id: 304,
+        record_id: Some(62),
+        status: status(
+            EspRawStatus::Text("failed".to_string()),
+            EspNormalizedStatus::Failed,
+        ),
+        message: combined.clone(),
+        timestamp: timestamp("2026-07-16T10:00:00Z"),
+        named_data: all_payloads
+            .iter()
+            .map(|(id, payload)| EspNamedValue {
+                name: format!("Envelope-{id}"),
+                value: (*payload).to_string(),
+            })
+            .collect(),
+        evidence: vec![evidence_ref("registration-serialized-credential-matrix")],
+    });
+    snapshot.activity.push(EspTimelineEntry {
+        entry_id: "serialized-credential-matrix".to_string(),
+        timestamp: timestamp("2026-07-16T10:00:01Z"),
+        kind: EspTimelineKind::Other,
+        title: combined.clone(),
+        detail: Some(combined.clone()),
+        status: None,
+        evidence: vec![evidence_ref("timeline-serialized-credential-matrix")],
+    });
+    snapshot.coverage = all_payloads
+        .iter()
+        .map(|(id, payload)| EspArtifactCoverage {
+            artifact_id: format!("{id}|{payload}"),
+            family: (*payload).to_string(),
+            status: EspArtifactStatus::Available,
+            detail: Some((*payload).to_string()),
+            observed_at_utc: "2026-07-16T10:00:02Z".to_string(),
+            evidence: vec![],
+        })
+        .collect();
+
+    let mut event = raw_export_record(
+        "serialized-credential-event",
+        EspSourceKind::EventLog,
+        "neutral-event-source",
+        None,
+        "safe event payload",
+    );
+    event.sensitivity = EspSensitivity::Public;
+    event.provenance.event = Some(EspEventProvenance {
+        channel: "Neutral event channel".to_string(),
+        event_id: 1,
+        record_id: Some(16),
+        named_data: all_payloads
+            .iter()
+            .map(|(id, payload)| EspNamedValue {
+                name: format!("Envelope-{id}"),
+                value: (*payload).to_string(),
+            })
+            .collect(),
+    });
+    let raw_credentials = credential_payloads.iter().map(|(id, payload)| {
+        let mut record = raw_export_record(
+            &format!("credential-{id}"),
+            EspSourceKind::DeploymentLog,
+            "neutral-deployment-source",
+            None,
+            payload,
+        );
+        record.sensitivity = EspSensitivity::Public;
+        record
+    });
+    let raw_identities = identity_payloads.iter().map(|(id, payload)| {
+        let mut record = raw_export_record(
+            &format!("identity-{id}"),
+            EspSourceKind::DeploymentLog,
+            "neutral-deployment-source",
+            None,
+            payload,
+        );
+        record.sensitivity = EspSensitivity::Public;
+        record
+    });
+    snapshot.raw_evidence = std::iter::once(event)
+        .chain(raw_credentials)
+        .chain(raw_identities)
+        .collect();
+    let original = snapshot.clone();
+
+    let safe = redacted_export_projection(&snapshot);
+    let safe_json = serde_json::to_string(&safe).unwrap();
+    let secrets = [
+        "LITERAL_BEARER_TAIL_SECRET",
+        "ESCAPED_BEARER_TAIL_SECRET",
+        "TWICE_BEARER_TAIL_SECRET",
+        "LITERAL_BASIC_TAIL_SECRET",
+        "ESCAPED_BASIC_TAIL_SECRET",
+        "TWICE_BASIC_TAIL_SECRET",
+        "LITERAL_AUTH_TAIL_SECRET",
+        "ESCAPED_AUTH_TAIL_SECRET",
+        "TWICE_AUTH_TAIL_SECRET",
+        "LITERAL_AAD_TAIL_SECRET",
+        "ESCAPED_AZURE_TAIL_SECRET",
+        "TWICE_SERIAL_TAIL_SECRET",
+    ];
+    let leaked = secrets
+        .iter()
+        .copied()
+        .filter(|secret| safe_json.contains(secret))
+        .collect::<Vec<_>>();
+    let retained_credential_raw = safe
+        .raw_evidence
+        .iter()
+        .map(|record| record.record_id.as_str())
+        .filter(|record_id| record_id.starts_with("credential-"))
+        .collect::<Vec<_>>();
+    assert!(
+        leaked.is_empty() && retained_credential_raw.is_empty(),
+        "serialized credential matrix leaked {leaked:?}; retained Public credential records {retained_credential_raw:?}"
+    );
+    assert_eq!(redacted_export_projection(&safe), safe);
+    assert_eq!(snapshot, original);
+}
+
+#[test]
+fn redaction_projection_normalizes_existing_separator_aliases_without_prefix_overreach() {
+    let aliases = [
+        "tenant_id",
+        "tenant-id",
+        "entdm_id",
+        "entdm-id",
+        "serial_number",
+        "serial-number",
+    ];
+    let mut payloads = Vec::new();
+    let mut secrets = Vec::new();
+    for (index, alias) in aliases.iter().enumerate() {
+        let secret = format!("SEPARATOR_ALIAS_SECRET_{index}");
+        secrets.push(secret.clone());
+        payloads.extend([
+            format!("{alias}={secret}"),
+            format!("{alias} {secret}"),
+            format!(r#"{{"{alias}":"{secret}"}}"#),
+            format!(r#"{{\"{alias}\":\"{secret}\"}}"#),
+        ]);
+    }
+    let safe_controls = [
+        "tenant_id_policy=KEEP_TENANT_ID_POLICY_CONTROL",
+        "entdm_id_state=KEEP_ENTDM_ID_STATE_CONTROL",
+        "serial_number_policy=KEEP_SERIAL_NUMBER_POLICY_CONTROL",
+    ];
+    let combined = payloads.join("\n");
+    let mut snapshot = findings_snapshot();
+    snapshot.identity.evidence = payloads
+        .iter()
+        .enumerate()
+        .map(|(index, payload)| evidence_ref_from(&format!("alias-{index}|{payload}"), payload))
+        .collect();
+    snapshot.registration_events.push(EspRegistrationEvent {
+        event_id: 304,
+        record_id: Some(63),
+        status: status(
+            EspRawStatus::Text("failed".to_string()),
+            EspNormalizedStatus::Failed,
+        ),
+        message: combined.clone(),
+        timestamp: timestamp("2026-07-16T10:01:00Z"),
+        named_data: payloads
+            .iter()
+            .enumerate()
+            .map(|(index, payload)| EspNamedValue {
+                name: format!("Envelope-{index}"),
+                value: payload.clone(),
+            })
+            .chain(
+                safe_controls
+                    .iter()
+                    .enumerate()
+                    .map(|(index, payload)| EspNamedValue {
+                        name: format!("SafeControl-{index}"),
+                        value: (*payload).to_string(),
+                    }),
+            )
+            .collect(),
+        evidence: vec![evidence_ref("registration-separator-alias-matrix")],
+    });
+    snapshot.coverage = payloads
+        .iter()
+        .enumerate()
+        .map(|(index, payload)| EspArtifactCoverage {
+            artifact_id: format!("alias-{index}|{payload}"),
+            family: payload.clone(),
+            status: EspArtifactStatus::Available,
+            detail: Some(payload.clone()),
+            observed_at_utc: "2026-07-16T10:01:01Z".to_string(),
+            evidence: vec![],
+        })
+        .collect();
+    snapshot.raw_evidence = payloads
+        .iter()
+        .enumerate()
+        .map(|(index, payload)| {
+            let mut record = raw_export_record(
+                &format!("separator-alias-{index}"),
+                EspSourceKind::DeploymentLog,
+                "neutral-deployment-source",
+                None,
+                payload,
+            );
+            record.sensitivity = EspSensitivity::Public;
+            record
+        })
+        .chain(safe_controls.iter().enumerate().map(|(index, payload)| {
+            let mut record = raw_export_record(
+                &format!("separator-control-{index}"),
+                EspSourceKind::DeploymentLog,
+                "neutral-deployment-source",
+                None,
+                payload,
+            );
+            record.sensitivity = EspSensitivity::Public;
+            record
+        }))
+        .collect();
+    let original = snapshot.clone();
+
+    let safe = redacted_export_projection(&snapshot);
+    let safe_json = serde_json::to_string(&safe).unwrap();
+    let leaked = secrets
+        .iter()
+        .map(String::as_str)
+        .filter(|secret| safe_json.contains(secret))
+        .collect::<Vec<_>>();
+    let missing_controls = [
+        "KEEP_TENANT_ID_POLICY_CONTROL",
+        "KEEP_ENTDM_ID_STATE_CONTROL",
+        "KEEP_SERIAL_NUMBER_POLICY_CONTROL",
+    ]
+    .into_iter()
+    .filter(|control| !safe_json.contains(control))
+    .collect::<Vec<_>>();
+    assert!(
+        leaked.is_empty() && missing_controls.is_empty(),
+        "separator aliases leaked {leaked:?}; safe prefix controls removed {missing_controls:?}"
+    );
+    assert_eq!(redacted_export_projection(&safe), safe);
+    assert_eq!(snapshot, original);
+}
+
+#[test]
+fn redaction_projection_fails_closed_for_complete_digest_tails_and_serialization_layers() {
+    let digest_payloads = [
+        concat!(
+            r#"Digest username="LITERAL_DIGEST_USER", "#,
+            r#"qop="auth,LITERAL_DIGEST_QOP_TAIL", "#,
+            r#"nonce="LITERAL_DIGEST_NONCE""#,
+        ),
+        concat!(
+            r#"Digest username=\"ESCAPED_DIGEST_USER\", "#,
+            r#"qop=\"auth,ESCAPED_DIGEST_QOP_TAIL\", "#,
+            r#"nonce=\"ESCAPED_DIGEST_NONCE\""#,
+        ),
+        concat!(
+            r#"Digest username=\\\"TWICE_DIGEST_USER\\\", "#,
+            r#"qop=\\\"auth,TWICE_DIGEST_QOP_TAIL\\\", "#,
+            r#"nonce=\\\"TWICE_DIGEST_NONCE\\\""#,
+        ),
+        concat!(
+            r#"Digest username=\"KNOWN_DIGEST_USER\" "#,
+            "opaque UNKNOWN_DIGEST_TAIL_SECRET ",
+            "nonce=LATE_DIGEST_NONCE_SECRET",
+        ),
+        concat!(
+            r#"Authorization: Digest realm=\\\"TWICE_AUTH_DIGEST_REALM\\\", "#,
+            r#"qop=\\\"auth,TWICE_AUTH_DIGEST_QOP_TAIL\\\", "#,
+            r#"nonce=\\\"TWICE_AUTH_DIGEST_NONCE\\\""#,
+        ),
+    ];
+    let combined = digest_payloads.join("\n");
+    let mut snapshot = findings_snapshot();
+    snapshot.identity.evidence = digest_payloads
+        .iter()
+        .enumerate()
+        .map(|(index, payload)| evidence_ref_from(&format!("digest-{index}|{payload}"), payload))
+        .collect();
+    snapshot.registration_events.push(EspRegistrationEvent {
+        event_id: 304,
+        record_id: Some(64),
+        status: status(
+            EspRawStatus::Text("failed".to_string()),
+            EspNormalizedStatus::Failed,
+        ),
+        message: combined.clone(),
+        timestamp: timestamp("2026-07-16T10:02:00Z"),
+        named_data: digest_payloads
+            .iter()
+            .enumerate()
+            .map(|(index, payload)| EspNamedValue {
+                name: format!("DigestEnvelope-{index}"),
+                value: (*payload).to_string(),
+            })
+            .collect(),
+        evidence: vec![evidence_ref("registration-complete-digest-matrix")],
+    });
+    snapshot.activity.push(EspTimelineEntry {
+        entry_id: "complete-digest-matrix".to_string(),
+        timestamp: timestamp("2026-07-16T10:02:01Z"),
+        kind: EspTimelineKind::Other,
+        title: combined.clone(),
+        detail: Some(combined.clone()),
+        status: None,
+        evidence: vec![evidence_ref("timeline-complete-digest-matrix")],
+    });
+    snapshot.coverage = digest_payloads
+        .iter()
+        .enumerate()
+        .map(|(index, payload)| EspArtifactCoverage {
+            artifact_id: format!("digest-{index}|{payload}"),
+            family: (*payload).to_string(),
+            status: EspArtifactStatus::Available,
+            detail: Some((*payload).to_string()),
+            observed_at_utc: "2026-07-16T10:02:02Z".to_string(),
+            evidence: vec![],
+        })
+        .collect();
+    let mut event = raw_export_record(
+        "complete-digest-event",
+        EspSourceKind::EventLog,
+        "neutral-event-source",
+        None,
+        "safe event payload",
+    );
+    event.sensitivity = EspSensitivity::Public;
+    event.provenance.event = Some(EspEventProvenance {
+        channel: "Neutral event channel".to_string(),
+        event_id: 1,
+        record_id: Some(17),
+        named_data: digest_payloads
+            .iter()
+            .enumerate()
+            .map(|(index, payload)| EspNamedValue {
+                name: format!("DigestEnvelope-{index}"),
+                value: (*payload).to_string(),
+            })
+            .collect(),
+    });
+    snapshot.raw_evidence = std::iter::once(event)
+        .chain(digest_payloads.iter().enumerate().map(|(index, payload)| {
+            let mut record = raw_export_record(
+                &format!("digest-raw-{index}"),
+                EspSourceKind::DeploymentLog,
+                "neutral-deployment-source",
+                None,
+                payload,
+            );
+            record.sensitivity = EspSensitivity::Public;
+            record
+        }))
+        .collect();
+    let original = snapshot.clone();
+
+    let safe = redacted_export_projection(&snapshot);
+    let safe_json = serde_json::to_string(&safe).unwrap();
+    let secrets = [
+        "LITERAL_DIGEST_USER",
+        "LITERAL_DIGEST_QOP_TAIL",
+        "LITERAL_DIGEST_NONCE",
+        "ESCAPED_DIGEST_USER",
+        "ESCAPED_DIGEST_QOP_TAIL",
+        "ESCAPED_DIGEST_NONCE",
+        "TWICE_DIGEST_USER",
+        "TWICE_DIGEST_QOP_TAIL",
+        "TWICE_DIGEST_NONCE",
+        "KNOWN_DIGEST_USER",
+        "UNKNOWN_DIGEST_TAIL_SECRET",
+        "LATE_DIGEST_NONCE_SECRET",
+        "TWICE_AUTH_DIGEST_REALM",
+        "TWICE_AUTH_DIGEST_QOP_TAIL",
+        "TWICE_AUTH_DIGEST_NONCE",
+    ];
+    let leaked = secrets
+        .iter()
+        .copied()
+        .filter(|secret| safe_json.contains(secret))
+        .collect::<Vec<_>>();
+    let retained_raw = safe
+        .raw_evidence
+        .iter()
+        .map(|record| record.record_id.as_str())
+        .filter(|record_id| record_id.starts_with("digest-raw-"))
+        .collect::<Vec<_>>();
+    assert!(
+        leaked.is_empty() && retained_raw.is_empty(),
+        "complete Digest matrix leaked {leaked:?}; retained Public Digest records {retained_raw:?}"
+    );
+    assert_eq!(redacted_export_projection(&safe), safe);
+    assert_eq!(snapshot, original);
+}
+
+#[test]
+fn redaction_projection_safe_digest_prose_rejects_late_credential_parameters() {
+    let safe_algorithm = "Digest algorithm=SHA-256 is supported";
+    let safe_retry = "Digest retry-count=2 remains within policy";
+    let smuggled_nonce =
+        "Digest algorithm=SHA-256 is supported, nonce=SAFE_PROSE_NONCE_TAIL_SECRET";
+    let smuggled_username =
+        "Digest retry-count=2 remains within policy; username=SAFE_PROSE_USERNAME_TAIL_SECRET";
+    let smuggled_colon =
+        "Digest algorithm=SHA-256 remains configured; nonce: SAFE_PROSE_COLON_TAIL_SECRET";
+    let mut snapshot = findings_snapshot();
+    snapshot.registration_events = vec![
+        EspRegistrationEvent {
+            event_id: 100,
+            record_id: Some(65),
+            status: status(
+                EspRawStatus::Text("informational".to_string()),
+                EspNormalizedStatus::InProgress,
+            ),
+            message: safe_algorithm.to_string(),
+            timestamp: timestamp("2026-07-16T10:03:00Z"),
+            named_data: vec![],
+            evidence: vec![evidence_ref("registration-safe-digest-algorithm")],
+        },
+        EspRegistrationEvent {
+            event_id: 100,
+            record_id: Some(66),
+            status: status(
+                EspRawStatus::Text("informational".to_string()),
+                EspNormalizedStatus::InProgress,
+            ),
+            message: smuggled_nonce.to_string(),
+            timestamp: timestamp("2026-07-16T10:03:01Z"),
+            named_data: vec![],
+            evidence: vec![evidence_ref("registration-smuggled-digest-nonce")],
+        },
+    ];
+    snapshot.activity = vec![
+        EspTimelineEntry {
+            entry_id: "safe-digest-retry".to_string(),
+            timestamp: timestamp("2026-07-16T10:03:02Z"),
+            kind: EspTimelineKind::Other,
+            title: safe_retry.to_string(),
+            detail: Some(safe_algorithm.to_string()),
+            status: None,
+            evidence: vec![evidence_ref("timeline-safe-digest-retry")],
+        },
+        EspTimelineEntry {
+            entry_id: "smuggled-digest-username".to_string(),
+            timestamp: timestamp("2026-07-16T10:03:03Z"),
+            kind: EspTimelineKind::Other,
+            title: smuggled_username.to_string(),
+            detail: Some(smuggled_nonce.to_string()),
+            status: None,
+            evidence: vec![evidence_ref("timeline-smuggled-digest-username")],
+        },
+        EspTimelineEntry {
+            entry_id: "smuggled-digest-colon".to_string(),
+            timestamp: timestamp("2026-07-16T10:03:04Z"),
+            kind: EspTimelineKind::Other,
+            title: smuggled_colon.to_string(),
+            detail: None,
+            status: None,
+            evidence: vec![evidence_ref("timeline-smuggled-digest-colon")],
+        },
+    ];
+    snapshot.coverage.push(EspArtifactCoverage {
+        artifact_id: "safe-digest-anti-smuggling".to_string(),
+        family: "review".to_string(),
+        status: EspArtifactStatus::Available,
+        detail: Some(smuggled_username.to_string()),
+        observed_at_utc: "2026-07-16T10:03:04Z".to_string(),
+        evidence: vec![],
+    });
+    let original = snapshot.clone();
+
+    let safe = redacted_export_projection(&snapshot);
+    assert_eq!(safe.registration_events[0].message, safe_algorithm);
+    assert_eq!(safe.activity[0].title, safe_retry);
+    assert_eq!(safe.activity[0].detail.as_deref(), Some(safe_algorithm));
+    let safe_json = serde_json::to_string(&safe).unwrap();
+    for secret in [
+        "SAFE_PROSE_NONCE_TAIL_SECRET",
+        "SAFE_PROSE_USERNAME_TAIL_SECRET",
+        "SAFE_PROSE_COLON_TAIL_SECRET",
+    ] {
+        assert!(
+            !safe_json.contains(secret),
+            "safe Digest prose leaked {secret}"
+        );
+    }
+    assert_eq!(redacted_export_projection(&safe), safe);
+    assert_eq!(snapshot, original);
+}
