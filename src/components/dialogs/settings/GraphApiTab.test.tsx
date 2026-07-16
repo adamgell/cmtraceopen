@@ -1,4 +1,5 @@
 import {
+  act,
   fireEvent,
   render,
   screen,
@@ -106,6 +107,18 @@ describe("GraphApiTab delegated capabilities", () => {
     ).toBeEnabled();
   });
 
+  it("publishes an existing authenticated status after settings refresh", async () => {
+    useUiStore.setState({ graphApiStatus: "idle" });
+    vi.mocked(graphGetAuthStatus).mockResolvedValue(partialStatus(true));
+
+    render(<GraphApiTab />);
+
+    expect(
+      await screen.findByText("Connected with partial permissions"),
+    ).toBeVisible();
+    expect(useUiStore.getState().graphApiStatus).toBe("connected");
+  });
+
   it("disables app enrichment when the token lacks app-read capability", async () => {
     vi.mocked(graphGetAuthStatus).mockResolvedValue(partialStatus(false));
 
@@ -163,6 +176,27 @@ describe("GraphApiTab delegated capabilities", () => {
     render(<GraphApiTab />);
 
     fireEvent.click(await screen.findByRole("checkbox"));
+
+    expect(useUiStore.getState().graphApiEnabled).toBe(false);
+    expect(useUiStore.getState().graphApiStatus).toBe("idle");
+  });
+
+  it("does not restore connected state when a refresh finishes after Graph is disabled", async () => {
+    let resolveStatus!: (status: GraphAuthStatus) => void;
+    vi.mocked(graphGetAuthStatus).mockReturnValue(
+      new Promise((resolve) => {
+        resolveStatus = resolve;
+      }),
+    );
+
+    render(<GraphApiTab />);
+
+    await waitFor(() => expect(graphGetAuthStatus).toHaveBeenCalledOnce());
+    fireEvent.click(screen.getByRole("checkbox"));
+    await act(async () => {
+      resolveStatus(partialStatus(true));
+      await Promise.resolve();
+    });
 
     expect(useUiStore.getState().graphApiEnabled).toBe(false);
     expect(useUiStore.getState().graphApiStatus).toBe("idle");

@@ -43,9 +43,21 @@ export function GraphApiTab() {
     if (!graphApiEnabled) return;
     try {
       const status = await graphGetAuthStatus();
+      if (!useUiStore.getState().graphApiEnabled) return;
       setAuthStatus(status);
+      useUiStore
+        .getState()
+        .setGraphApiStatus(
+          status.isAuthenticated
+            ? "connected"
+            : status.error
+              ? "error"
+              : "idle",
+        );
     } catch {
-      // Command may not exist on non-Windows
+      if (useUiStore.getState().graphApiEnabled) {
+        useUiStore.getState().setGraphApiStatus("error");
+      }
     }
   }, [graphApiEnabled]);
 
