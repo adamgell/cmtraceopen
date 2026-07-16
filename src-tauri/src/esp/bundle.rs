@@ -5,7 +5,8 @@
 //! process, discovery, or system facts from the analyst machine.
 
 use std::collections::{BTreeMap, VecDeque};
-use std::fs;
+use std::fs::{self, File, OpenOptions};
+use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
 
 use chrono::{SecondsFormat, Utc};
@@ -21,10 +22,17 @@ use cmtraceopen_parser::parser::registry::{RegistryParseResult, RegistryValue, R
 use serde::Serialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
+use tempfile::TempDir;
 use thiserror::Error;
 use uuid::Uuid;
 
-use super::archive::{extract_captured_archive, ExtractedArchive, MAX_ARCHIVE_FILE_BYTES};
+use super::archive::{
+    extract_captured_archive, ExtractedArchive, MAX_ARCHIVE_FILE_BYTES,
+    MAX_ARCHIVE_TOTAL_UNCOMPRESSED_BYTES,
+};
+use super::discovery::{
+    open_verified_regular_file, DiscoveryPathFailureKind, VerifiedFileOpenFailure,
+};
 use super::event_logs::collect_captured_evtx_files;
 use super::live_session::{event_evidence_to_batch, log_entries_to_records};
 use super::system::{delivery_optimization_from_rows, SystemRow};
@@ -39,6 +47,8 @@ pub const MAX_JSON_DEPTH: usize = 32;
 pub const MAX_REGISTRY_RECORDS: usize = 8192;
 pub const MAX_LOG_RECORDS_PER_ARTIFACT: usize = 65_536;
 pub const MAX_DELIVERY_STATUS_RECORDS: usize = 64;
+pub const MAX_BUNDLE_TOTAL_INPUT_BYTES: u64 = MAX_ARCHIVE_TOTAL_UNCOMPRESSED_BYTES;
+pub const MAX_BUNDLE_TOTAL_RECORDS: usize = 131_072;
 
 const SUPPORTED_MANIFEST_EXTENSIONS: &[&str] = &["evtx", "json", "log", "reg", "txt", "xml"];
 const LEGACY_JSON_BASENAMES: &[&str] = &[
@@ -119,6 +129,135 @@ impl ArtifactParseOutcome {
     }
 }
 
+#[derive(Debug)]
+struct ArtifactStageFailure {
+    status: EspArtifactStatus,
+    detail: String,
+    cumulative_limit: bool,
+}
+
+impl ArtifactStageFailure {
+    fn from_verified(failure: VerifiedFileOpenFailure) -> Self {
+        let status = match failure.kind {
+            DiscoveryPathFailureKind::Missing => EspArtifactStatus::Missing,
+            DiscoveryPathFailureKind::PermissionDenied => EspArtifactStatus::PermissionDenied,
+            DiscoveryPathFailureKind::ReparseRejected
+            | DiscoveryPathFailureKind::OutsideAllowedRoot
+            | DiscoveryPathFailureKind::NotRegularFile => EspArtifactStatus::Unsupported,
+            DiscoveryPathFailureKind::ResourceLimit | DiscoveryPathFailureKind::Failed => {
+                EspArtifactStatus::ParseFailed
+            }
+        };
+        Self {
+            status,
+            detail: failure.detail,
+            cumulative_limit: false,
+        }
+    }
+
+    fn failed(detail: impl Into<String>) -> Self {
+        Self {
+            status: EspArtifactStatus::ParseFailed,
+            detail: detail.into(),
+            cumulative_limit: false,
+        }
+    }
+
+    fn cumulative_limit(detail: impl Into<String>) -> Self {
+        Self {
+            status: EspArtifactStatus::ParseFailed,
+            detail: detail.into(),
+            cumulative_limit: true,
+        }
+    }
+}
+
+#[derive(Debug)]
+struct BundleStagingArea {
+    temp_dir: TempDir,
+    next_stage_index: usize,
+    staged_files: usize,
+    staged_bytes: u64,
+    input_limit: u64,
+}
+
+impl BundleStagingArea {
+    fn new() -> Result<Self, String> {
+        Self::new_with_input_limit(MAX_BUNDLE_TOTAL_INPUT_BYTES)
+    }
+
+    fn new_with_input_limit(input_limit: u64) -> Result<Self, String> {
+        let temp_dir = tempfile::Builder::new()
+            .prefix("cmtraceopen-esp-intake-")
+            .tempdir()
+            .map_err(|error| format!("could not create bounded intake staging: {error}"))?;
+        Ok(Self {
+            temp_dir,
+            next_stage_index: 0,
+            staged_files: 0,
+            staged_bytes: 0,
+            input_limit,
+        })
+    }
+
+    fn stage(&mut self, root: &Path, relative: &Path) -> Result<PathBuf, ArtifactStageFailure> {
+        let source_path = root.join(relative);
+        let source = open_verified_regular_file(&source_path)
+            .map_err(ArtifactStageFailure::from_verified)?;
+        let source_size = source
+            .metadata()
+            .map_err(|error| ArtifactStageFailure::failed(error.to_string()))?
+            .len();
+        if source_size > MAX_ARCHIVE_FILE_BYTES {
+            return Err(ArtifactStageFailure::failed(format!(
+                "{} is {source_size} bytes; per-artifact maximum is {MAX_ARCHIVE_FILE_BYTES}",
+                relative.display()
+            )));
+        }
+        let remaining = self.input_limit.saturating_sub(self.staged_bytes);
+        if source_size > remaining {
+            return Err(ArtifactStageFailure::cumulative_limit(format!(
+                "bounded bundle intake is partial: {} would exceed the {}-byte cumulative input limit",
+                relative.display(),
+                self.input_limit
+            )));
+        }
+
+        let stage_index = self.next_stage_index;
+        self.next_stage_index = self.next_stage_index.saturating_add(1);
+        let stage_directory = self
+            .temp_dir
+            .path()
+            .join(format!("artifact-{stage_index:03}"));
+        fs::create_dir(&stage_directory)
+            .map_err(|error| ArtifactStageFailure::failed(error.to_string()))?;
+        let file_name = relative.file_name().ok_or_else(|| {
+            ArtifactStageFailure::failed("artifact path does not contain a file name")
+        })?;
+        let staged_path = stage_directory.join(file_name);
+        let mut output = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&staged_path)
+            .map_err(|error| ArtifactStageFailure::failed(error.to_string()))?;
+        let mut bounded_source = source.take(source_size.saturating_add(1));
+        let written = std::io::copy(&mut bounded_source, &mut output)
+            .map_err(|error| ArtifactStageFailure::failed(error.to_string()))?;
+        if written > source_size {
+            return Err(ArtifactStageFailure::failed(format!(
+                "{} grew beyond its {source_size}-byte verified size while being staged",
+                relative.display()
+            )));
+        }
+        output
+            .flush()
+            .map_err(|error| ArtifactStageFailure::failed(error.to_string()))?;
+        self.staged_bytes = self.staged_bytes.saturating_add(written);
+        self.staged_files = self.staged_files.saturating_add(1);
+        Ok(staged_path)
+    }
+}
+
 pub fn analyze_captured_evidence(
     path: &Path,
     request_id: &str,
@@ -142,11 +281,12 @@ pub fn analyze_captured_evidence_at(
             message: format!("{} ({error})", owner.root().display()),
         })?;
 
-    let mut records = Vec::new();
+    let mut reducer = EspDiagnosticsReducer::new(observed_at_utc.to_string());
+    let mut record_count = 0_usize;
     let mut coverage = Vec::new();
     let manifest_path = root.join("manifest.json");
-    let artifacts = if manifest_path.exists() {
-        match read_manifest(&root, &manifest_path, observed_at_utc) {
+    let artifacts = match open_verified_regular_file(&manifest_path) {
+        Ok(manifest_file) => match read_manifest(manifest_file, &manifest_path, observed_at_utc) {
             Ok((artifacts, manifest_coverage)) => {
                 coverage.extend(manifest_coverage);
                 artifacts
@@ -161,14 +301,31 @@ pub fn analyze_captured_evidence_at(
                 ));
                 Vec::new()
             }
+        },
+        Err(failure) if failure.kind == DiscoveryPathFailureKind::Missing => {
+            let (artifacts, legacy_coverage) = resolve_legacy_artifacts(&root, observed_at_utc);
+            coverage.extend(legacy_coverage);
+            artifacts
         }
-    } else {
-        let (artifacts, legacy_coverage) = resolve_legacy_artifacts(&root, observed_at_utc);
-        coverage.extend(legacy_coverage);
-        artifacts
+        Err(failure) => {
+            coverage.push(artifact_coverage(
+                "bundle.manifest",
+                "manifest",
+                status_for_verified_open_failure(failure.kind),
+                Some(failure.detail),
+                observed_at_utc,
+            ));
+            Vec::new()
+        }
     };
+    let mut staging =
+        BundleStagingArea::new().map_err(|message| BundleError::SourceAccess { message })?;
 
     for artifact in artifacts {
+        if record_count >= MAX_BUNDLE_TOTAL_RECORDS {
+            coverage.push(bundle_record_limit_coverage(observed_at_utc));
+            break;
+        }
         let source_artifact_id = source_artifact_id(&artifact);
         if let Some(status) = artifact.status.as_deref().and_then(manifest_status) {
             if status != EspArtifactStatus::Available {
@@ -196,31 +353,6 @@ pub fn analyze_captured_evidence_at(
                 continue;
             }
         };
-        let candidate = root.join(&relative);
-        let resolved = match resolve_contained_file(&root, &candidate) {
-            Ok(Some(path)) => path,
-            Ok(None) => {
-                coverage.push(artifact_coverage(
-                    source_artifact_id,
-                    artifact.family,
-                    EspArtifactStatus::Missing,
-                    Some("manifest artifact is not present in the selected bundle".to_string()),
-                    &artifact.observed_at_utc,
-                ));
-                continue;
-            }
-            Err(detail) => {
-                coverage.push(artifact_coverage(
-                    source_artifact_id,
-                    artifact.family,
-                    EspArtifactStatus::Unsupported,
-                    Some(detail),
-                    &artifact.observed_at_utc,
-                ));
-                continue;
-            }
-        };
-
         if !supported_manifest_artifact(&relative, &artifact) {
             coverage.push(artifact_coverage(
                 source_artifact_id,
@@ -232,9 +364,45 @@ pub fn analyze_captured_evidence_at(
             continue;
         }
 
-        let outcome = parse_artifact(&resolved, &relative, &artifact);
-        records.extend(outcome.records);
+        let staged = match staging.stage(&root, &relative) {
+            Ok(staged) => staged,
+            Err(failure) => {
+                coverage.push(artifact_coverage(
+                    source_artifact_id,
+                    artifact.family,
+                    failure.status,
+                    Some(failure.detail),
+                    &artifact.observed_at_utc,
+                ));
+                if failure.cumulative_limit {
+                    coverage.push(artifact_coverage(
+                        "bundle.intake-byte-limit",
+                        "bundle-intake",
+                        EspArtifactStatus::ParseFailed,
+                        Some(format!(
+                            "bounded bundle intake is partial after reaching the {MAX_BUNDLE_TOTAL_INPUT_BYTES}-byte cumulative input limit"
+                        )),
+                        observed_at_utc,
+                    ));
+                    break;
+                }
+                continue;
+            }
+        };
+
+        let mut outcome = parse_artifact(&staged, &relative, &artifact);
+        let remaining_records = MAX_BUNDLE_TOTAL_RECORDS.saturating_sub(record_count);
+        let records_truncated = outcome.records.len() > remaining_records;
+        outcome.records.truncate(remaining_records);
+        record_count = record_count.saturating_add(outcome.records.len());
+        reducer.ingest_all(outcome.records);
         coverage.extend(outcome.coverage);
+        if records_truncated {
+            outcome.status = Some(EspArtifactStatus::ParseFailed);
+            outcome.detail = Some(format!(
+                "bounded bundle evidence is partial: cumulative intake stopped at the {MAX_BUNDLE_TOTAL_RECORDS}-record limit"
+            ));
+        }
         coverage.push(artifact_coverage(
             source_artifact_id,
             artifact.family,
@@ -242,13 +410,40 @@ pub fn analyze_captured_evidence_at(
             outcome.detail,
             &artifact.observed_at_utc,
         ));
+        if records_truncated {
+            coverage.push(bundle_record_limit_coverage(observed_at_utc));
+            break;
+        }
     }
 
     deduplicate_coverage(&mut coverage);
-    let mut reducer = EspDiagnosticsReducer::new(observed_at_utc.to_string());
-    reducer.ingest_all(records);
     reducer.ingest_all(coverage.into_iter().map(EspEvidenceRecord::Coverage));
     Ok(reducer.snapshot())
+}
+
+fn bundle_record_limit_coverage(observed_at_utc: &str) -> EspArtifactCoverage {
+    artifact_coverage(
+        "bundle.intake-record-limit",
+        "bundle-intake",
+        EspArtifactStatus::ParseFailed,
+        Some(format!(
+            "bounded bundle evidence is partial: cumulative intake stopped at the {MAX_BUNDLE_TOTAL_RECORDS}-record limit"
+        )),
+        observed_at_utc,
+    )
+}
+
+fn status_for_verified_open_failure(kind: DiscoveryPathFailureKind) -> EspArtifactStatus {
+    match kind {
+        DiscoveryPathFailureKind::Missing => EspArtifactStatus::Missing,
+        DiscoveryPathFailureKind::PermissionDenied => EspArtifactStatus::PermissionDenied,
+        DiscoveryPathFailureKind::ReparseRejected
+        | DiscoveryPathFailureKind::OutsideAllowedRoot
+        | DiscoveryPathFailureKind::NotRegularFile => EspArtifactStatus::Unsupported,
+        DiscoveryPathFailureKind::ResourceLimit | DiscoveryPathFailureKind::Failed => {
+            EspArtifactStatus::ParseFailed
+        }
+    }
 }
 
 fn open_bundle_root(path: &Path) -> Result<BundleRootOwner, BundleError> {
@@ -299,13 +494,11 @@ fn open_bundle_root(path: &Path) -> Result<BundleRootOwner, BundleError> {
 }
 
 fn read_manifest(
-    root: &Path,
+    manifest_file: File,
     manifest_path: &Path,
     observed_at_utc: &str,
 ) -> Result<(Vec<BundleArtifact>, Vec<EspArtifactCoverage>), String> {
-    let manifest_path = resolve_contained_file(root, manifest_path)?
-        .ok_or_else(|| "manifest.json disappeared before it could be read".to_string())?;
-    let bytes = read_bounded_file(&manifest_path, MAX_BUNDLE_MANIFEST_BYTES)?;
+    let bytes = read_bounded_reader(manifest_file, manifest_path, MAX_BUNDLE_MANIFEST_BYTES)?;
     let manifest: Value = serde_json::from_slice(&bytes)
         .map_err(|error| format!("manifest.json is malformed: {error}"))?;
     let mut coverage = manifest_gap_coverage(&manifest, observed_at_utc);
@@ -418,7 +611,33 @@ fn read_manifest(
             .cmp(&right.relative_path)
             .then_with(|| left.artifact_id.cmp(&right.artifact_id))
     });
+    let mut unique_by_path = BTreeMap::new();
+    let mut duplicate_paths = 0_usize;
+    for artifact in artifacts {
+        let identity = normalize_manifest_path_identity(&artifact.relative_path);
+        if unique_by_path.contains_key(&identity) {
+            duplicate_paths = duplicate_paths.saturating_add(1);
+            continue;
+        }
+        unique_by_path.insert(identity, artifact);
+    }
+    if duplicate_paths != 0 {
+        coverage.push(artifact_coverage(
+            "bundle.manifest-duplicate-path",
+            "manifest",
+            EspArtifactStatus::ParseFailed,
+            Some(format!(
+                "manifest contained {duplicate_paths} duplicate artifact paths; duplicates were ignored before staging or parsing"
+            )),
+            manifest_observed,
+        ));
+    }
+    let artifacts = unique_by_path.into_values().collect();
     Ok((artifacts, coverage))
+}
+
+fn normalize_manifest_path_identity(path: &str) -> String {
+    path.trim().replace('\\', "/").to_ascii_lowercase()
 }
 
 fn manifest_gap_coverage(manifest: &Value, observed_at_utc: &str) -> Vec<EspArtifactCoverage> {
@@ -611,25 +830,19 @@ fn parse_artifact(path: &Path, relative: &Path, artifact: &BundleArtifact) -> Ar
 }
 
 fn parse_registry_artifact(path: &Path, artifact: &BundleArtifact) -> ArtifactParseOutcome {
-    let path_text = path.to_string_lossy().into_owned();
-    let metadata = match fs::metadata(path) {
-        Ok(metadata) => metadata,
-        Err(error) => return ArtifactParseOutcome::failed(error.to_string()),
+    let bytes = match read_bounded_file(path, MAX_ARCHIVE_FILE_BYTES) {
+        Ok(bytes) => bytes,
+        Err(error) => return ArtifactParseOutcome::failed(error),
     };
-    if metadata.len() > MAX_ARCHIVE_FILE_BYTES {
-        return ArtifactParseOutcome::failed(format!(
-            "registry artifact is {} bytes; maximum is {MAX_ARCHIVE_FILE_BYTES}",
-            metadata.len()
-        ));
-    }
-    let content = match crate::parser::read_file_content(&path_text) {
+    let content = match crate::parser::decode_bytes(&bytes, crate::parser::detect_encoding(&bytes))
+    {
         Ok(content) => content,
         Err(error) => return ArtifactParseOutcome::failed(error),
     };
     let parsed = cmtraceopen_parser::parser::registry::parse_registry_content(
         &content,
         &artifact.relative_path,
-        metadata.len(),
+        bytes.len() as u64,
     );
     let (mut records, registry_truncated) = registry_records(&parsed, artifact);
     let (embedded_json, json_truncated) = registry_embedded_json_records(&parsed, artifact);
@@ -893,60 +1106,52 @@ fn parse_event_artifact(path: &Path, artifact: &BundleArtifact) -> ArtifactParse
 }
 
 fn parse_log_artifact(path: &Path, artifact: &BundleArtifact) -> ArtifactParseOutcome {
-    let metadata = match fs::metadata(path) {
-        Ok(metadata) => metadata,
-        Err(error) => return ArtifactParseOutcome::failed(error.to_string()),
+    let bytes = match read_bounded_file(path, MAX_ARCHIVE_FILE_BYTES) {
+        Ok(bytes) => bytes,
+        Err(error) => return ArtifactParseOutcome::failed(error),
     };
-    if metadata.len() > MAX_ARCHIVE_FILE_BYTES {
-        return ArtifactParseOutcome::failed(format!(
-            "text artifact is {} bytes; maximum is {MAX_ARCHIVE_FILE_BYTES}",
-            metadata.len()
-        ));
-    }
-    let path_text = path.to_string_lossy().into_owned();
-    match crate::parser::parse_file(&path_text) {
-        Ok((mut result, _)) => {
-            let parse_errors = result.parse_errors;
-            let records_truncated = result.entries.len() > MAX_LOG_RECORDS_PER_ARTIFACT;
-            result.entries.truncate(MAX_LOG_RECORDS_PER_ARTIFACT);
-            result.entries.retain(|entry| {
-                serde_json::to_string(entry)
-                    .map(|serialized| !contains_hardware_hash(&serialized))
-                    .unwrap_or(false)
-            });
-            let source_artifact_id = source_artifact_id(artifact);
-            let mut records =
-                dsregcmd_system_records(&result.entries, artifact, &source_artifact_id);
-            records.extend(log_entries_to_records(
-                Path::new(&artifact.relative_path),
-                &source_artifact_id,
-                &artifact.family,
-                result.entries,
-                &artifact.observed_at_utc,
-            ));
-            ArtifactParseOutcome {
-                records,
-                coverage: Vec::new(),
-                status: Some(if parse_errors != 0 || records_truncated {
-                    EspArtifactStatus::ParseFailed
-                } else {
-                    EspArtifactStatus::Available
-                }),
-                detail: match (parse_errors, records_truncated) {
-                    (0, false) => None,
-                    (errors, false) => {
-                        Some(format!("text parser reported {errors} malformed records"))
-                    }
-                    (0, true) => Some(format!(
-                        "text intake stopped at the {MAX_LOG_RECORDS_PER_ARTIFACT}-record bound"
-                    )),
-                    (errors, true) => Some(format!(
-                        "text parser reported {errors} malformed records and intake stopped at the {MAX_LOG_RECORDS_PER_ARTIFACT}-record bound"
-                    )),
-                },
-            }
-        }
-        Err(error) => ArtifactParseOutcome::failed(error),
+    let content = match crate::parser::decode_bytes(&bytes, crate::parser::detect_encoding(&bytes))
+    {
+        Ok(content) => content,
+        Err(error) => return ArtifactParseOutcome::failed(error),
+    };
+    let (mut result, _) =
+        crate::parser::parse_content(&content, &artifact.relative_path, bytes.len() as u64);
+    let parse_errors = result.parse_errors;
+    let records_truncated = result.entries.len() > MAX_LOG_RECORDS_PER_ARTIFACT;
+    result.entries.truncate(MAX_LOG_RECORDS_PER_ARTIFACT);
+    result.entries.retain(|entry| {
+        serde_json::to_string(entry)
+            .map(|serialized| !contains_hardware_hash(&serialized))
+            .unwrap_or(false)
+    });
+    let source_artifact_id = source_artifact_id(artifact);
+    let mut records = dsregcmd_system_records(&result.entries, artifact, &source_artifact_id);
+    records.extend(log_entries_to_records(
+        Path::new(&artifact.relative_path),
+        &source_artifact_id,
+        &artifact.family,
+        result.entries,
+        &artifact.observed_at_utc,
+    ));
+    ArtifactParseOutcome {
+        records,
+        coverage: Vec::new(),
+        status: Some(if parse_errors != 0 || records_truncated {
+            EspArtifactStatus::ParseFailed
+        } else {
+            EspArtifactStatus::Available
+        }),
+        detail: match (parse_errors, records_truncated) {
+            (0, false) => None,
+            (errors, false) => Some(format!("text parser reported {errors} malformed records")),
+            (0, true) => Some(format!(
+                "text intake stopped at the {MAX_LOG_RECORDS_PER_ARTIFACT}-record bound"
+            )),
+            (errors, true) => Some(format!(
+                "text parser reported {errors} malformed records and intake stopped at the {MAX_LOG_RECORDS_PER_ARTIFACT}-record bound"
+            )),
+        },
     }
 }
 
@@ -1777,36 +1982,25 @@ fn safe_relative_path(raw: &str) -> Option<PathBuf> {
     Some(path)
 }
 
-fn resolve_contained_file(root: &Path, candidate: &Path) -> Result<Option<PathBuf>, String> {
-    let metadata = match fs::symlink_metadata(candidate) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(error.to_string()),
-    };
-    if metadata.file_type().is_symlink() || !metadata.is_file() {
-        return Err(
-            "artifact is not a regular file or is a symbolic link/reparse point".to_string(),
-        );
-    }
-    let canonical = candidate
-        .canonicalize()
-        .map_err(|error| error.to_string())?;
-    if !canonical.starts_with(root) {
-        return Err("artifact resolves outside the canonical bundle root".to_string());
-    }
-    Ok(Some(canonical))
+fn read_bounded_file(path: &Path, maximum: u64) -> Result<Vec<u8>, String> {
+    let file = File::open(path).map_err(|error| error.to_string())?;
+    read_bounded_reader(file, path, maximum)
 }
 
-fn read_bounded_file(path: &Path, maximum: u64) -> Result<Vec<u8>, String> {
-    let metadata = fs::metadata(path).map_err(|error| error.to_string())?;
-    if metadata.len() > maximum {
+fn read_bounded_reader(file: File, path: &Path, maximum: u64) -> Result<Vec<u8>, String> {
+    let size = file.metadata().map_err(|error| error.to_string())?.len();
+    if size > maximum {
         return Err(format!(
             "{} is {} bytes; maximum is {maximum}",
             path.display(),
-            metadata.len()
+            size
         ));
     }
-    let bytes = fs::read(path).map_err(|error| error.to_string())?;
+    let allocation = usize::try_from(size.min(maximum)).unwrap_or(usize::MAX);
+    let mut bytes = Vec::with_capacity(allocation);
+    file.take(maximum.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(|error| error.to_string())?;
     if bytes.len() as u64 > maximum {
         return Err(format!(
             "{} grew beyond the {maximum}-byte bound while being read",
@@ -1911,4 +2105,57 @@ fn deduplicate_coverage(coverage: &mut Vec<EspArtifactCoverage>) {
         by_identity.insert(key, item);
     }
     coverage.extend(by_identity.into_values());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn staging_rejects_cumulative_bytes_before_copying_the_next_artifact() {
+        let root = tempfile::tempdir().expect("bundle root");
+        fs::write(root.path().join("first.log"), b"1234").expect("write first artifact");
+        fs::write(root.path().join("second.log"), b"5678").expect("write second artifact");
+        let root = root.path().canonicalize().expect("canonical bundle root");
+        let mut staging = BundleStagingArea::new_with_input_limit(6).expect("staging area");
+
+        staging
+            .stage(&root, Path::new("first.log"))
+            .expect("stage first artifact");
+        let failure = staging
+            .stage(&root, Path::new("second.log"))
+            .expect_err("second artifact must exceed the cumulative budget");
+
+        assert!(failure.cumulative_limit);
+        assert_eq!(staging.staged_bytes, 4);
+        assert_eq!(staging.staged_files, 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn staging_rejects_a_parent_replaced_with_an_outside_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().expect("bundle root");
+        let approved_parent = root.path().join("evidence");
+        fs::create_dir(&approved_parent).expect("create approved parent");
+        fs::write(approved_parent.join("selected.log"), b"approved")
+            .expect("write approved artifact");
+        let canonical_root = root.path().canonicalize().expect("canonical bundle root");
+        let outside = tempfile::tempdir().expect("outside root");
+        fs::write(outside.path().join("selected.log"), b"outside-secret")
+            .expect("write outside artifact");
+        fs::rename(&approved_parent, root.path().join("evidence-original"))
+            .expect("move approved parent");
+        symlink(outside.path(), &approved_parent).expect("replace parent with symlink");
+        let mut staging = BundleStagingArea::new().expect("staging area");
+
+        let failure = staging
+            .stage(&canonical_root, Path::new("evidence/selected.log"))
+            .expect_err("replaced parent must not expose outside bytes");
+
+        assert_eq!(failure.status, EspArtifactStatus::Unsupported);
+        assert_eq!(staging.staged_bytes, 0);
+        assert_eq!(staging.staged_files, 0);
+    }
 }

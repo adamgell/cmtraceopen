@@ -5785,6 +5785,110 @@ fn bundle_manifest_identity_and_family_drive_nested_sparse_intake() {
 }
 
 #[test]
+fn bundle_manifest_deduplicates_repeated_paths_before_parsing() {
+    let bundle = tempfile::tempdir().expect("bundle tempdir");
+    let logs = bundle.path().join("evidence/logs");
+    std::fs::create_dir_all(&logs).expect("create logs folder");
+    std::fs::write(
+        logs.join("AgentExecutor.log"),
+        b"<![LOG[One bounded record]LOG]!><time=\"08:00:00.000+000\" date=\"07-16-2026\" component=\"AgentExecutor\" context=\"\" type=\"1\" thread=\"1\" file=\"\">",
+    )
+    .expect("write shared log fixture");
+    let artifacts = (0..512)
+        .map(|index| {
+            serde_json::json!({
+                "artifactId": format!("duplicate-{index}"),
+                "category": "logs",
+                "family": "intune-ime",
+                "relativePath": if index % 2 == 0 {
+                    "evidence/logs/AgentExecutor.log"
+                } else {
+                    "evidence\\logs\\AgentExecutor.log"
+                },
+                "status": "collected"
+            })
+        })
+        .collect::<Vec<_>>();
+    write_bundle_manifest(bundle.path(), serde_json::Value::Array(artifacts));
+
+    let snapshot =
+        analyze_captured_evidence_at(bundle.path(), BUNDLE_REQUEST_ID, BUNDLE_OBSERVED_AT)
+            .expect("analyze duplicate-path bundle");
+
+    assert_eq!(
+        snapshot
+            .raw_evidence
+            .iter()
+            .filter(|record| record.provenance.file_path.as_deref()
+                == Some("evidence/logs/AgentExecutor.log"))
+            .count(),
+        1,
+        "a repeated manifest path must be parsed only once"
+    );
+    assert!(snapshot.coverage.iter().any(|coverage| {
+        coverage.artifact_id == "bundle.manifest-duplicate-path"
+            && coverage.status == EspArtifactStatus::ParseFailed
+            && coverage
+                .detail
+                .as_deref()
+                .is_some_and(|detail| detail.contains("511 duplicate"))
+    }));
+}
+
+#[test]
+fn bundle_record_intake_is_capped_across_artifacts_before_reduction() {
+    const EXPECTED_TOTAL_RECORD_LIMIT: usize = 131_072;
+    let bundle = tempfile::tempdir().expect("bundle tempdir");
+    let evidence = bundle.path().join("evidence/json");
+    std::fs::create_dir_all(&evidence).expect("create JSON evidence folder");
+    let values = (0..MAX_JSON_SCALAR_RECORDS)
+        .map(|index| index as u64)
+        .collect::<Vec<_>>();
+    let bytes = serde_json::to_vec(&values).expect("serialize bounded JSON fixture");
+    let artifacts = (0..33)
+        .map(|index| {
+            let relative_path = format!("evidence/json/profile-{index:02}.json");
+            std::fs::write(bundle.path().join(&relative_path), &bytes)
+                .expect("write bounded JSON artifact");
+            serde_json::json!({
+                "artifactId": format!("profile-{index:02}"),
+                "category": "exports",
+                "family": "autopilot-profile-json",
+                "relativePath": relative_path,
+                "status": "collected",
+                "parseHints": ["json", "autopilot"]
+            })
+        })
+        .collect::<Vec<_>>();
+    write_bundle_manifest(bundle.path(), serde_json::Value::Array(artifacts));
+
+    let snapshot =
+        analyze_captured_evidence_at(bundle.path(), BUNDLE_REQUEST_ID, BUNDLE_OBSERVED_AT)
+            .expect("analyze cumulatively bounded bundle");
+
+    assert_eq!(snapshot.raw_evidence.len(), EXPECTED_TOTAL_RECORD_LIMIT);
+    assert!(snapshot.coverage.iter().any(|coverage| {
+        coverage.artifact_id == "bundle.intake-record-limit"
+            && coverage.status == EspArtifactStatus::ParseFailed
+            && coverage
+                .detail
+                .as_deref()
+                .is_some_and(|detail| detail.contains("partial"))
+    }));
+}
+
+#[test]
+fn bundle_reads_are_component_safe_bounded_and_handle_pinned() {
+    let bundle_source = include_str!("../src/esp/bundle.rs");
+
+    assert!(bundle_source.contains("open_verified_regular_file"));
+    assert!(bundle_source.contains("MAX_BUNDLE_TOTAL_INPUT_BYTES"));
+    assert!(bundle_source.contains(".take("));
+    assert!(!bundle_source.contains("resolve_contained_file"));
+    assert!(!bundle_source.contains("fs::read("));
+}
+
+#[test]
 fn bundle_manifest_reports_missing_and_malformed_artifacts_without_fallback() {
     let bundle = tempfile::tempdir().expect("bundle tempdir");
     std::fs::create_dir_all(bundle.path().join("evidence")).expect("create evidence folder");
