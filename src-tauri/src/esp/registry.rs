@@ -141,6 +141,7 @@ pub struct RegistryRootEvidence {
 pub struct RegistryDescendantCoverage {
     pub hive: String,
     pub key: String,
+    pub sensitivity: EspSensitivity,
     pub access_state: EspSourceAccessState,
     pub detail: Option<String>,
 }
@@ -256,6 +257,7 @@ fn append_tree_observations(
                 .push(RegistryDescendantCoverage {
                     hive: target.hive.to_string(),
                     key: full_key.clone(),
+                    sensitivity: registry_path_sensitivity(&full_key),
                     access_state,
                     detail,
                 });
@@ -394,17 +396,51 @@ fn is_hardware_identity_registry_name(value: &str) -> bool {
 }
 
 fn registry_sensitivity(key: &str, value_name: &str) -> EspSensitivity {
-    let combined = format!("{key}\\{value_name}").to_ascii_lowercase();
-    if combined.contains("nodecache") {
-        EspSensitivity::Restricted
-    } else if ["upn", "sid", "tenant", "entdmid", "serial"]
+    let path_sensitivity = registry_path_sensitivity(key);
+    if path_sensitivity != EspSensitivity::Public {
+        return path_sensitivity;
+    }
+    let value_name = value_name.to_ascii_lowercase();
+    if ["upn", "sid", "tenant", "entdmid", "serial"]
         .iter()
-        .any(|marker| combined.contains(marker))
+        .any(|marker| value_name.contains(marker))
     {
         EspSensitivity::Sensitive
     } else {
         EspSensitivity::Public
     }
+}
+
+fn registry_path_sensitivity(key: &str) -> EspSensitivity {
+    let normalized = key.to_ascii_lowercase();
+    if normalized.contains("nodecache") {
+        EspSensitivity::Restricted
+    } else if key.split('\\').any(is_windows_sid_component)
+        || ["upn", "sid", "tenant", "entdmid", "serial"]
+            .iter()
+            .any(|marker| normalized.contains(marker))
+    {
+        EspSensitivity::Sensitive
+    } else {
+        EspSensitivity::Public
+    }
+}
+
+fn is_windows_sid_component(component: &str) -> bool {
+    let mut fields = component.split('-');
+    if !fields
+        .next()
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("s"))
+        || fields.next() != Some("1")
+        || fields.next() != Some("5")
+    {
+        return false;
+    }
+    let subauthorities = fields.collect::<Vec<_>>();
+    !subauthorities.is_empty()
+        && subauthorities
+            .iter()
+            .all(|field| field.parse::<u32>().is_ok())
 }
 
 fn root_evidence(

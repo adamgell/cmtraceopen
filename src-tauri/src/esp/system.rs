@@ -619,8 +619,10 @@ fn observation_context(
 const SYSTEM_QUERY_CANCELLATION_GRACE: Duration = Duration::from_millis(250);
 
 #[cfg(any(target_os = "windows", test))]
-static SYSTEM_QUERY_WORKER_ACTIVE: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
+const SYSTEM_QUERY_COM_CANCEL_TIMEOUT_SECONDS: u32 = 1;
+
+#[cfg(any(target_os = "windows", test))]
+const SYSTEM_QUERY_WORKER_COUNT: usize = 4;
 
 #[cfg(any(target_os = "windows", test))]
 #[derive(Clone)]
@@ -690,7 +692,7 @@ impl SystemQueryCancellation {
                 let _ = unsafe {
                     windows::Win32::System::Com::CoCancelCall(
                         thread_id,
-                        SYSTEM_QUERY_CANCELLATION_GRACE.as_millis() as u32,
+                        SYSTEM_QUERY_COM_CANCEL_TIMEOUT_SECONDS,
                     )
                 };
             }
@@ -699,12 +701,181 @@ impl SystemQueryCancellation {
 }
 
 #[cfg(any(target_os = "windows", test))]
-struct SystemQueryWorkerSlot;
+type SystemQueryWork = Box<
+    dyn FnOnce(
+            std::time::Instant,
+            std::sync::Arc<std::sync::Mutex<Vec<SystemRow>>>,
+            SystemQueryCancellation,
+        ) -> Result<SystemQueryBatch, SystemReadError>
+        + Send,
+>;
 
 #[cfg(any(target_os = "windows", test))]
-impl Drop for SystemQueryWorkerSlot {
+struct SystemQueryJob {
+    deadline: std::time::Instant,
+    partial_rows: std::sync::Arc<std::sync::Mutex<Vec<SystemRow>>>,
+    cancellation: SystemQueryCancellation,
+    work: SystemQueryWork,
+    result_sender: std::sync::mpsc::SyncSender<Result<SystemQueryBatch, SystemReadError>>,
+    caller_finished: std::sync::mpsc::Receiver<()>,
+}
+
+#[cfg(any(target_os = "windows", test))]
+struct SystemQueryCallerCompletion {
+    sender: std::sync::mpsc::Sender<()>,
+}
+
+#[cfg(any(target_os = "windows", test))]
+impl Drop for SystemQueryCallerCompletion {
     fn drop(&mut self) {
-        SYSTEM_QUERY_WORKER_ACTIVE.store(false, std::sync::atomic::Ordering::Release);
+        let _ = self.sender.send(());
+    }
+}
+
+#[cfg(any(target_os = "windows", test))]
+enum SystemQueryWorkerMessage {
+    Run(SystemQueryJob),
+    Shutdown,
+}
+
+#[cfg(any(target_os = "windows", test))]
+struct SystemQueryWorker {
+    sender: std::sync::mpsc::SyncSender<SystemQueryWorkerMessage>,
+    busy: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+#[cfg(any(target_os = "windows", test))]
+struct SystemQueryWorkerPool {
+    workers: Vec<SystemQueryWorker>,
+    handles: std::sync::Mutex<Vec<std::thread::JoinHandle<()>>>,
+}
+
+#[cfg(any(target_os = "windows", test))]
+impl SystemQueryWorkerPool {
+    fn start(worker_count: usize) -> Result<Self, String> {
+        if worker_count == 0 {
+            return Err("WMI worker pool must contain at least one worker".to_string());
+        }
+
+        let mut workers = Vec::with_capacity(worker_count);
+        let mut handles = Vec::with_capacity(worker_count);
+        for index in 0..worker_count {
+            let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+            let busy = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let worker_busy = std::sync::Arc::clone(&busy);
+            let handle = std::thread::Builder::new()
+                .name(format!("esp-wmi-query-{index}"))
+                .spawn(move || {
+                    while let Ok(message) = receiver.recv() {
+                        let SystemQueryWorkerMessage::Run(job) = message else {
+                            break;
+                        };
+                        job.cancellation.register_worker();
+                        let worker_cancellation = job.cancellation.clone();
+                        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            (job.work)(job.deadline, job.partial_rows, worker_cancellation)
+                        }))
+                        .unwrap_or_else(|_| {
+                            Err(SystemReadError::Failed("WMI worker panicked".to_string()))
+                        });
+                        job.cancellation.clear_worker();
+                        let _ = job.result_sender.send(result);
+                        // Do not reuse this COM thread until CoCancelCall and the caller's
+                        // bounded cleanup window have both finished.
+                        let _ = job.caller_finished.recv();
+                        worker_busy.store(false, std::sync::atomic::Ordering::Release);
+                    }
+                    worker_busy.store(false, std::sync::atomic::Ordering::Release);
+                });
+            match handle {
+                Ok(handle) => {
+                    workers.push(SystemQueryWorker { sender, busy });
+                    handles.push(handle);
+                }
+                Err(error) => {
+                    drop(sender);
+                    let partial_pool = Self {
+                        workers,
+                        handles: std::sync::Mutex::new(handles),
+                    };
+                    drop(partial_pool);
+                    return Err(format!("WMI worker pool could not start: {error}"));
+                }
+            }
+        }
+
+        Ok(Self {
+            workers,
+            handles: std::sync::Mutex::new(handles),
+        })
+    }
+
+    fn dispatch(&self, mut job: SystemQueryJob) -> Result<(), SystemQueryJob> {
+        for worker in &self.workers {
+            if worker
+                .busy
+                .compare_exchange(
+                    false,
+                    true,
+                    std::sync::atomic::Ordering::AcqRel,
+                    std::sync::atomic::Ordering::Acquire,
+                )
+                .is_err()
+            {
+                continue;
+            }
+            match worker.sender.send(SystemQueryWorkerMessage::Run(job)) {
+                Ok(()) => return Ok(()),
+                Err(std::sync::mpsc::SendError(SystemQueryWorkerMessage::Run(returned))) => {
+                    worker
+                        .busy
+                        .store(false, std::sync::atomic::Ordering::Release);
+                    job = returned;
+                }
+                Err(std::sync::mpsc::SendError(SystemQueryWorkerMessage::Shutdown)) => {
+                    unreachable!("dispatch only sends query jobs")
+                }
+            }
+        }
+        Err(job)
+    }
+
+    #[cfg(test)]
+    fn owned_worker_count(&self) -> usize {
+        self.handles
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .len()
+    }
+
+    #[cfg(test)]
+    fn busy_worker_count(&self) -> usize {
+        self.workers
+            .iter()
+            .filter(|worker| worker.busy.load(std::sync::atomic::Ordering::Acquire))
+            .count()
+    }
+
+    fn shutdown_and_join(&self) -> usize {
+        for worker in &self.workers {
+            let _ = worker.sender.send(SystemQueryWorkerMessage::Shutdown);
+        }
+        let mut handles = self
+            .handles
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let joined = handles.len();
+        for handle in handles.drain(..) {
+            let _ = handle.join();
+        }
+        joined
+    }
+}
+
+#[cfg(any(target_os = "windows", test))]
+impl Drop for SystemQueryWorkerPool {
+    fn drop(&mut self) {
+        self.shutdown_and_join();
     }
 }
 
@@ -719,110 +890,104 @@ where
         + Send
         + 'static,
 {
+    static WORKER_POOL: std::sync::OnceLock<Result<SystemQueryWorkerPool, String>> =
+        std::sync::OnceLock::new();
+
+    let pool =
+        match WORKER_POOL.get_or_init(|| SystemQueryWorkerPool::start(SYSTEM_QUERY_WORKER_COUNT)) {
+            Ok(pool) => pool,
+            Err(error) => {
+                return SystemQueryBatch {
+                    rows: Vec::new(),
+                    completion: Err(SystemReadError::Failed(error.clone())),
+                }
+            }
+        };
+    run_bounded_system_query_with_pool(pool, timeout, work)
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn run_bounded_system_query_with_pool<F>(
+    pool: &SystemQueryWorkerPool,
+    timeout: Duration,
+    work: F,
+) -> SystemQueryBatch
+where
+    F: FnOnce(
+            std::time::Instant,
+            std::sync::Arc<std::sync::Mutex<Vec<SystemRow>>>,
+            SystemQueryCancellation,
+        ) -> Result<SystemQueryBatch, SystemReadError>
+        + Send
+        + 'static,
+{
     use std::sync::{mpsc, Arc, Mutex};
     use std::time::Instant;
 
     let deadline = Instant::now() + timeout;
     let partial_rows = Arc::new(Mutex::new(Vec::new()));
-    let worker_rows = Arc::clone(&partial_rows);
     let cancellation = SystemQueryCancellation::new();
-    let worker_cancellation = cancellation.clone();
     let (sender, receiver) = mpsc::sync_channel(1);
-    if SYSTEM_QUERY_WORKER_ACTIVE
-        .compare_exchange(
-            false,
-            true,
-            std::sync::atomic::Ordering::AcqRel,
-            std::sync::atomic::Ordering::Acquire,
-        )
-        .is_err()
-    {
+    let (caller_finished_sender, caller_finished) = mpsc::channel();
+    let _caller_completion = SystemQueryCallerCompletion {
+        sender: caller_finished_sender,
+    };
+    let job = SystemQueryJob {
+        deadline,
+        partial_rows: Arc::clone(&partial_rows),
+        cancellation: cancellation.clone(),
+        work: Box::new(work),
+        result_sender: sender,
+        caller_finished,
+    };
+    if pool.dispatch(job).is_err() {
         return SystemQueryBatch {
             rows: Vec::new(),
             completion: Err(SystemReadError::Failed(
-                "A previous WMI query is still cancelling; no additional worker was started."
-                    .to_string(),
+                "All bounded WMI workers are busy; this query was not started.".to_string(),
             )),
         };
     }
-    let worker = std::thread::Builder::new()
-        .name("esp-wmi-query".to_string())
-        .spawn(move || {
-            let _slot = SystemQueryWorkerSlot;
-            worker_cancellation.register_worker();
-            let result = work(deadline, worker_rows, worker_cancellation.clone());
-            worker_cancellation.clear_worker();
-            let _ = sender.send(result);
-        });
-
-    let worker = match worker {
-        Ok(worker) => worker,
-        Err(error) => {
-            SYSTEM_QUERY_WORKER_ACTIVE.store(false, std::sync::atomic::Ordering::Release);
-            return SystemQueryBatch {
-                rows: Vec::new(),
-                completion: Err(SystemReadError::Failed(format!(
-                    "WMI worker could not start: {error}"
-                ))),
-            };
-        }
-    };
 
     let remaining = deadline.saturating_duration_since(Instant::now());
     match receiver.recv_timeout(remaining) {
-        Ok(result) => finish_joined_system_query(worker, result, &partial_rows),
+        Ok(result) => finish_system_query_result(result, &partial_rows),
         Err(mpsc::RecvTimeoutError::Timeout) => {
             cancellation.request_cancel();
             match receiver.recv_timeout(SYSTEM_QUERY_CANCELLATION_GRACE) {
-                Ok(_) => {
-                    let _ = worker.join();
-                    SystemQueryBatch {
-                        rows: clone_partial_rows(&partial_rows),
-                        completion: Err(SystemReadError::TimedOut),
-                    }
-                }
-                Err(mpsc::RecvTimeoutError::Disconnected) => {
-                    let _ = worker.join();
-                    SystemQueryBatch {
-                        rows: clone_partial_rows(&partial_rows),
-                        completion: Err(SystemReadError::Failed(
-                            "WMI worker stopped during cancellation".to_string(),
-                        )),
-                    }
-                }
+                Ok(_) => SystemQueryBatch {
+                    rows: clone_partial_rows(&partial_rows),
+                    completion: Err(SystemReadError::TimedOut),
+                },
+                Err(mpsc::RecvTimeoutError::Disconnected) => SystemQueryBatch {
+                    rows: clone_partial_rows(&partial_rows),
+                    completion: Err(SystemReadError::Failed(
+                        "WMI worker stopped during cancellation".to_string(),
+                    )),
+                },
                 Err(mpsc::RecvTimeoutError::Timeout) => SystemQueryBatch {
                     rows: clone_partial_rows(&partial_rows),
                     completion: Err(SystemReadError::Failed(
-                        "WMI query timed out and its worker did not stop within the 250 ms cancellation window; additional WMI queries are paused until cleanup completes."
+                        "WMI query timed out and its worker did not stop within the 250 ms cancellation window; the worker remains owned by the bounded WMI pool while later queries continue."
                             .to_string(),
                     )),
                 },
             }
         }
-        Err(mpsc::RecvTimeoutError::Disconnected) => {
-            let _ = worker.join();
-            SystemQueryBatch {
-                rows: clone_partial_rows(&partial_rows),
-                completion: Err(SystemReadError::Failed(
-                    "WMI worker stopped before returning a result".to_string(),
-                )),
-            }
-        }
+        Err(mpsc::RecvTimeoutError::Disconnected) => SystemQueryBatch {
+            rows: clone_partial_rows(&partial_rows),
+            completion: Err(SystemReadError::Failed(
+                "WMI worker stopped before returning a result".to_string(),
+            )),
+        },
     }
 }
 
 #[cfg(any(target_os = "windows", test))]
-fn finish_joined_system_query(
-    worker: std::thread::JoinHandle<()>,
+fn finish_system_query_result(
     result: Result<SystemQueryBatch, SystemReadError>,
     partial_rows: &std::sync::Arc<std::sync::Mutex<Vec<SystemRow>>>,
 ) -> SystemQueryBatch {
-    if worker.join().is_err() {
-        return SystemQueryBatch {
-            rows: clone_partial_rows(partial_rows),
-            completion: Err(SystemReadError::Failed("WMI worker panicked".to_string())),
-        };
-    }
     match result {
         Ok(batch) => batch,
         Err(error) => SystemQueryBatch {
@@ -1766,6 +1931,128 @@ mod tests {
         }
 
         assert_eq!(exited_workers.load(Ordering::SeqCst), 3);
+    }
+
+    #[test]
+    fn com_cancellation_timeout_is_expressed_in_seconds() {
+        assert_eq!(SYSTEM_QUERY_COM_CANCEL_TIMEOUT_SECONDS, 1);
+        assert_ne!(
+            SYSTEM_QUERY_COM_CANCEL_TIMEOUT_SECONDS,
+            SYSTEM_QUERY_CANCELLATION_GRACE.as_millis() as u32
+        );
+    }
+
+    #[test]
+    fn bounded_pool_allows_overlapping_healthy_queries() {
+        let pool = Arc::new(SystemQueryWorkerPool::start(2).expect("start bounded test pool"));
+        let (started_sender, started_receiver) = std::sync::mpsc::sync_channel(1);
+        let (release_sender, release_receiver) = std::sync::mpsc::sync_channel(1);
+        let first_pool = Arc::clone(&pool);
+        let first = std::thread::spawn(move || {
+            run_bounded_system_query_with_pool(
+                &first_pool,
+                Duration::from_secs(1),
+                move |_, _, _| {
+                    started_sender.send(()).expect("signal first query");
+                    release_receiver.recv().expect("release first query");
+                    Ok(SystemQueryBatch::complete(Vec::new()))
+                },
+            )
+        });
+        started_receiver
+            .recv_timeout(Duration::from_secs(1))
+            .expect("first query reached worker");
+
+        let second =
+            run_bounded_system_query_with_pool(&pool, Duration::from_secs(1), |_, _, _| {
+                Ok(SystemQueryBatch::complete(Vec::new()))
+            });
+        release_sender.send(()).expect("release first query");
+        let first = first.join().expect("first caller joins");
+
+        assert_eq!(first, SystemQueryBatch::complete(Vec::new()));
+        assert_eq!(second, SystemQueryBatch::complete(Vec::new()));
+        assert_eq!(pool.shutdown_and_join(), 2);
+    }
+
+    #[test]
+    fn stuck_worker_remains_owned_while_later_query_completes() {
+        let pool = SystemQueryWorkerPool::start(2).expect("start bounded test pool");
+        let (release_sender, release_receiver) = std::sync::mpsc::sync_channel(1);
+        let started_at = Instant::now();
+        let stuck =
+            run_bounded_system_query_with_pool(&pool, Duration::from_millis(10), move |_, _, _| {
+                release_receiver.recv().expect("release stuck COM seam");
+                Ok(SystemQueryBatch::complete(Vec::new()))
+            });
+
+        assert!(
+            started_at.elapsed() < Duration::from_secs(1),
+            "uncooperative worker blocked bounded collection"
+        );
+        assert!(matches!(
+            stuck.completion,
+            Err(SystemReadError::Failed(ref detail))
+                if detail.contains("remains owned by the bounded WMI pool")
+        ));
+        assert_eq!(pool.owned_worker_count(), 2);
+        assert_eq!(pool.busy_worker_count(), 1);
+
+        let healthy =
+            run_bounded_system_query_with_pool(&pool, Duration::from_secs(1), |_, _, _| {
+                Ok(SystemQueryBatch::complete(Vec::new()))
+            });
+        assert_eq!(healthy, SystemQueryBatch::complete(Vec::new()));
+
+        release_sender.send(()).expect("release stuck COM seam");
+        let cleanup_deadline = Instant::now() + Duration::from_secs(1);
+        while pool.busy_worker_count() != 0 && Instant::now() < cleanup_deadline {
+            std::thread::yield_now();
+        }
+        assert_eq!(pool.busy_worker_count(), 0);
+        assert_eq!(pool.shutdown_and_join(), 2);
+    }
+
+    #[test]
+    fn worker_slot_is_not_reused_before_cancelling_caller_finishes() {
+        let pool = SystemQueryWorkerPool::start(1).expect("start bounded test pool");
+        let (result_sender, result_receiver) = std::sync::mpsc::sync_channel(1);
+        let (caller_finished_sender, caller_finished) = std::sync::mpsc::channel();
+        let job = SystemQueryJob {
+            deadline: Instant::now() + Duration::from_secs(1),
+            partial_rows: Arc::new(std::sync::Mutex::new(Vec::new())),
+            cancellation: SystemQueryCancellation::new(),
+            work: Box::new(|_, _, _| Ok(SystemQueryBatch::complete(Vec::new()))),
+            result_sender,
+            caller_finished,
+        };
+        assert!(pool.dispatch(job).is_ok());
+        assert_eq!(
+            result_receiver
+                .recv_timeout(Duration::from_secs(1))
+                .expect("worker result"),
+            Ok(SystemQueryBatch::complete(Vec::new()))
+        );
+
+        assert_eq!(pool.busy_worker_count(), 1);
+        let blocked =
+            run_bounded_system_query_with_pool(&pool, Duration::from_millis(25), |_, _, _| {
+                Ok(SystemQueryBatch::complete(Vec::new()))
+            });
+        assert!(matches!(
+            blocked.completion,
+            Err(SystemReadError::Failed(ref detail)) if detail.contains("workers are busy")
+        ));
+
+        caller_finished_sender
+            .send(())
+            .expect("finish cancelling caller");
+        let cleanup_deadline = Instant::now() + Duration::from_secs(1);
+        while pool.busy_worker_count() != 0 && Instant::now() < cleanup_deadline {
+            std::thread::yield_now();
+        }
+        assert_eq!(pool.busy_worker_count(), 0);
+        assert_eq!(pool.shutdown_and_join(), 1);
     }
 
     #[test]

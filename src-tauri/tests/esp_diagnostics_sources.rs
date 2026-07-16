@@ -11,7 +11,9 @@ use app_lib::esp::registry::{
     MAX_REGISTRY_DEPTH, MAX_REGISTRY_VALUE_BYTES, REGISTRY_READ_ACCESS,
 };
 use app_lib::intune::evtx_parser::{parse_esp_event_xml, EventLogProperty, ParsedEspEventRecord};
-use cmtraceopen_parser::esp::{EspObservationValue, EspScope, EspSourceAccessState, EspSourceKind};
+use cmtraceopen_parser::esp::{
+    EspObservationValue, EspScope, EspSensitivity, EspSourceAccessState, EspSourceKind,
+};
 
 #[derive(Default)]
 struct FakeRegistryProvider {
@@ -302,8 +304,18 @@ fn registry_preserves_descendant_failures_while_root_remains_available() {
                 "Readable",
                 vec![RegistryValueSnapshot::text("TenantDomain", "contoso.com")],
             ),
+            snapshot_key(
+                r"User\S-1-5-21-111111111-222222222-333333333-1001\Readable",
+                vec![RegistryValueSnapshot::integer("Status", 3)],
+            ),
             RegistrySnapshotKey {
                 relative_key: "Restricted".to_string(),
+                values: Vec::new(),
+                access_error: Some(RegistryReadError::PermissionDenied),
+            },
+            RegistrySnapshotKey {
+                relative_key: r"User\S-1-5-21-111111111-222222222-333333333-1001\Restricted"
+                    .to_string(),
                 values: Vec::new(),
                 access_error: Some(RegistryReadError::PermissionDenied),
             },
@@ -323,8 +335,17 @@ fn registry_preserves_descendant_failures_while_root_remains_available() {
         evidence.roots[0].access_state,
         EspSourceAccessState::Available
     );
-    assert_eq!(evidence.observations.len(), 1);
-    assert_eq!(evidence.descendant_coverage.len(), 2);
+    assert_eq!(evidence.observations.len(), 2);
+    let sid_observation = evidence
+        .observations
+        .iter()
+        .find(|observation| observation.observation.key.contains("S-1-5-21-"))
+        .expect("readable SID observation");
+    assert_eq!(
+        sid_observation.observation.context.sensitivity,
+        EspSensitivity::Sensitive
+    );
+    assert_eq!(evidence.descendant_coverage.len(), 3);
     assert_eq!(
         evidence.descendant_coverage[0].key,
         format!("{}\\Broken", target.key)
@@ -332,6 +353,10 @@ fn registry_preserves_descendant_failures_while_root_remains_available() {
     assert_eq!(
         evidence.descendant_coverage[0].access_state,
         EspSourceAccessState::Failed
+    );
+    assert_eq!(
+        evidence.descendant_coverage[0].sensitivity,
+        EspSensitivity::Public
     );
     assert!(evidence.descendant_coverage[0]
         .detail
@@ -345,7 +370,30 @@ fn registry_preserves_descendant_failures_while_root_remains_available() {
         evidence.descendant_coverage[1].access_state,
         EspSourceAccessState::PermissionDenied
     );
+    assert_eq!(
+        evidence.descendant_coverage[1].sensitivity,
+        EspSensitivity::Public
+    );
     assert!(evidence.descendant_coverage[1]
+        .detail
+        .as_deref()
+        .is_some_and(|detail| detail.to_ascii_lowercase().contains("administrator")));
+    assert_eq!(
+        evidence.descendant_coverage[2].key,
+        format!(
+            r"{}\User\S-1-5-21-111111111-222222222-333333333-1001\Restricted",
+            target.key
+        )
+    );
+    assert_eq!(
+        evidence.descendant_coverage[2].access_state,
+        EspSourceAccessState::PermissionDenied
+    );
+    assert_eq!(
+        evidence.descendant_coverage[2].sensitivity,
+        EspSensitivity::Sensitive
+    );
+    assert!(evidence.descendant_coverage[2]
         .detail
         .as_deref()
         .is_some_and(|detail| detail.to_ascii_lowercase().contains("administrator")));
