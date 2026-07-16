@@ -119,6 +119,25 @@ function graphOverlayIsPartial(overlay: EspGraphOverlay): boolean {
   );
 }
 
+function graphStateForFreshLocalRun(
+  state: Pick<
+    EspDiagnosticsStore,
+    "graphPhase" | "graphUnavailableReason"
+  >,
+): Pick<EspDiagnosticsStore, "graphPhase" | "graphUnavailableReason"> {
+  if (state.graphPhase === "disabled" || state.graphPhase === "unavailable") {
+    return {
+      graphPhase: state.graphPhase,
+      graphUnavailableReason: state.graphUnavailableReason,
+    };
+  }
+
+  return {
+    graphPhase: "idle",
+    graphUnavailableReason: null,
+  };
+}
+
 function unreadEvidenceDelta(
   current: EspDiagnosticsSnapshot | null,
   incoming: EspDiagnosticsSnapshot,
@@ -167,7 +186,7 @@ export const useEspDiagnosticsStore = create<EspDiagnosticsStore>((set) => ({
   unreadEvidenceCount: 0,
 
   beginAnalysis: (requestId) =>
-    set({
+    set((state) => ({
       phase: "analyzing",
       requestId,
       sessionId: null,
@@ -175,14 +194,13 @@ export const useEspDiagnosticsStore = create<EspDiagnosticsStore>((set) => ({
       snapshot: null,
       error: null,
       graphRequestId: null,
-      graphPhase: "idle",
-      graphUnavailableReason: null,
+      ...graphStateForFreshLocalRun(state),
       graphError: null,
       unreadEvidenceCount: 0,
-    }),
+    })),
 
   beginLiveStart: (requestId) =>
-    set({
+    set((state) => ({
       phase: "starting",
       requestId,
       sessionId: null,
@@ -190,11 +208,10 @@ export const useEspDiagnosticsStore = create<EspDiagnosticsStore>((set) => ({
       snapshot: null,
       error: null,
       graphRequestId: null,
-      graphPhase: "idle",
-      graphUnavailableReason: null,
+      ...graphStateForFreshLocalRun(state),
       graphError: null,
       unreadEvidenceCount: 0,
-    }),
+    })),
 
   beginStop: (sessionId) =>
     set((state) =>

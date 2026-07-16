@@ -427,6 +427,44 @@ describe("ESP local session state", () => {
 });
 
 describe("ESP Graph overlay state", () => {
+  it("preserves disabled Graph availability when analysis fails before producing a snapshot", () => {
+    useEspDiagnosticsStore.getState().setGraphUnavailable("graphDisabled");
+
+    useEspDiagnosticsStore.getState().beginAnalysis("analysis-a");
+
+    expect(useEspDiagnosticsStore.getState().graphPhase).toBe("disabled");
+    expect(useEspDiagnosticsStore.getState().graphUnavailableReason).toBe(
+      "graphDisabled",
+    );
+
+    useEspDiagnosticsStore.getState().fail("analysis-a", "Import failed");
+
+    expect(useEspDiagnosticsStore.getState().snapshot).toBeNull();
+    expect(useEspDiagnosticsStore.getState().graphPhase).toBe("disabled");
+    expect(useEspDiagnosticsStore.getState().graphUnavailableReason).toBe(
+      "graphDisabled",
+    );
+  });
+
+  it("preserves not-connected Graph availability when live start fails before its first snapshot", () => {
+    useEspDiagnosticsStore.getState().setGraphUnavailable("graphNotConnected");
+
+    useEspDiagnosticsStore.getState().beginLiveStart("live-a");
+
+    expect(useEspDiagnosticsStore.getState().graphPhase).toBe("unavailable");
+    expect(useEspDiagnosticsStore.getState().graphUnavailableReason).toBe(
+      "graphNotConnected",
+    );
+
+    useEspDiagnosticsStore.getState().fail("live-a", "Live start failed");
+
+    expect(useEspDiagnosticsStore.getState().snapshot).toBeNull();
+    expect(useEspDiagnosticsStore.getState().graphPhase).toBe("unavailable");
+    expect(useEspDiagnosticsStore.getState().graphUnavailableReason).toBe(
+      "graphNotConnected",
+    );
+  });
+
   it("preserves raw unknown Graph status and API-version wire values", () => {
     const overlay = makeOverlay("graph-unknown-wire-values");
     overlay.scripts = {
