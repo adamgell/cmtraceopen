@@ -18,7 +18,7 @@ tauri-build = { version = "2", features = [] }
 
 [features]
 default = ["full"]
-full = ["collector", "deployment", "dsregcmd", "event-log", "intune-diagnostics", "macos-diag", "secureboot", "sysmon"]
+full = ["collector", "deployment", "dsregcmd", "esp-diagnostics", "event-log", "intune-diagnostics", "macos-diag", "secureboot", "sysmon"]
 sysmon = ["dep:evtx"]
 event-log = ["dep:evtx"]
 collector = []
@@ -72,11 +72,13 @@ windows = { version = "0.62", features = [
     "Win32_Security",
     "Win32_System_Com",
     "Win32_System_Ole",
+    "Win32_System_Registry",
     "Win32_System_SystemInformation",
     "Win32_System_Threading",
     "Win32_System_Variant",
     "Win32_System_Wmi",
     "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
     "Security_Authentication_Web_Core",
     "Security_Credentials",
     "Foundation",

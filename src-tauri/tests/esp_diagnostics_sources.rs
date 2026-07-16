@@ -22,6 +22,10 @@ use app_lib::esp::event_logs::{
     collect_event_evidence, required_event_id_xpath, EventLogProvider, EventSourceError,
     ESP_EVENT_CHANNELS, MAX_ESP_EVENT_RECORDS_PER_CHANNEL, REQUIRED_EVENT_IDS,
 };
+use app_lib::esp::live_session::{
+    discovery_result_to_batch, event_evidence_to_batch, registry_evidence_to_batch,
+    tail_poll_to_batch, tail_reconcile_to_batch,
+};
 use app_lib::esp::process::sanitize_command_line;
 use app_lib::esp::registry::{
     classify_registry_scope, collect_registry_evidence, RegistryProvider, RegistryReadError,
@@ -34,6 +38,7 @@ use app_lib::esp::session::{
     EspSessionEventSink, EspSessionManager, EspSessionState, EspSessionTail, EspSessionTailFactory,
     EspTailEvidenceBatch, EspUpdateReason,
 };
+use app_lib::esp::system::{delivery_optimization_from_rows, SystemEvidence, SystemRow};
 use app_lib::esp::tailing::{
     EspTailResetReason, EspTailSet, MAX_SESSION_TAIL_SOURCES, WINDOWS_SHARED_READ_WRITE_DELETE,
 };
@@ -41,10 +46,11 @@ use app_lib::intune::evtx_parser::{
     parse_esp_event_xml, EventLogProperty, ParsedEspEventRecord, MAX_ESP_EVTX_RECORD_BYTES,
 };
 use cmtraceopen_parser::esp::{
-    EspArtifactCoverage, EspArtifactStatus, EspEvidenceProvenance, EspEvidenceRecord,
-    EspEvidenceRef, EspGraphObservation, EspGraphObservationSection, EspObservationContext,
-    EspObservationValue, EspParseState, EspScope, EspSensitivity, EspSourceAccessState,
-    EspSourceKind, EspSystemFact, EspSystemObservation, GraphApiVersion,
+    EspArtifactCoverage, EspArtifactStatus, EspDiagnosticsReducer, EspElevationState,
+    EspEvidenceProvenance, EspEvidenceRecord, EspEvidenceRef, EspGraphObservation,
+    EspGraphObservationSection, EspHardwareEvidence, EspObservationContext, EspObservationValue,
+    EspParseState, EspScope, EspSensitivity, EspSourceAccessState, EspSourceKind, EspSystemFact,
+    EspSystemObservation, GraphApiVersion,
 };
 use tempfile::tempdir;
 
@@ -3861,4 +3867,359 @@ fn session_does_not_hold_snapshot_or_control_locks_during_event_emission() {
     assert_eq!(*sink.callbacks.lock().expect("callbacks"), vec![true]);
 
     manager.stop(&initial.session_id).expect("stop session");
+}
+
+#[test]
+fn session_shutdown_cancels_joins_and_rejects_late_callbacks() {
+    let clock = Arc::new(ManualSessionClock::default());
+    let tails = FakeSessionTailFactory::default();
+    let sink = RecordingSessionSink::default();
+    let manager = EspSessionManager::new(session_dependencies(
+        Arc::clone(&clock),
+        FakeSessionProvider::available("registry"),
+        FakeSessionDiscovery::default(),
+        tails.clone(),
+        sink.clone(),
+    ));
+    let initial = manager
+        .start("ffffffff-ffff-4fff-8fff-ffffffffffff")
+        .expect("start session");
+
+    manager.shutdown().expect("shutdown session manager");
+    assert_eq!(tails.stops.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        manager.get(&initial.session_id),
+        Err(EspSessionError::SessionNotFound)
+    );
+    let emitted = sink.updates.lock().expect("updates").len();
+    clock.advance(Duration::from_secs(10));
+    thread::sleep(Duration::from_millis(20));
+    assert_eq!(sink.updates.lock().expect("updates").len(), emitted);
+}
+
+#[test]
+fn live_session_adapters_preserve_native_records_coverage_and_tail_reset_identity() {
+    let observed_at_utc = "2026-07-16T06:30:00Z";
+    let registry = collect_registry_evidence(
+        &FakeRegistryProvider::default().with_tree(
+            ESP_REGISTRY_TARGETS[0].key,
+            vec![snapshot_key(
+                "",
+                vec![RegistryValueSnapshot::text(
+                    "CloudAssignedTenantDomain",
+                    "contoso.com",
+                )],
+            )],
+        ),
+        &[],
+        observed_at_utc,
+    );
+    let registry_batch = registry_evidence_to_batch(registry, observed_at_utc);
+    assert!(registry_batch
+        .records
+        .iter()
+        .any(|record| matches!(record, EspEvidenceRecord::Registry(_))));
+    assert!(registry_batch.coverage.iter().any(|coverage| {
+        coverage.status == EspArtifactStatus::Available
+            && coverage.artifact_id.contains(ESP_REGISTRY_TARGETS[0].key)
+    }));
+    assert!(registry_batch
+        .coverage
+        .iter()
+        .any(|coverage| coverage.status == EspArtifactStatus::Missing));
+
+    let events = collect_event_evidence(
+        &FakeEventLogProvider::default().with_records(
+            ESP_EVENT_CHANNELS[0],
+            vec![parsed_event(
+                ESP_EVENT_CHANNELS[0],
+                109,
+                1,
+                vec![EventLogProperty {
+                    name: "Status".to_string(),
+                    value: "0".to_string(),
+                }],
+            )],
+        ),
+        observed_at_utc,
+    );
+    let event_batch = event_evidence_to_batch(events, observed_at_utc);
+    assert!(event_batch
+        .records
+        .iter()
+        .any(|record| matches!(record, EspEvidenceRecord::EventLog(_))));
+    assert!(event_batch.coverage.iter().any(|coverage| {
+        coverage.artifact_id.contains(ESP_EVENT_CHANNELS[0])
+            && coverage.status == EspArtifactStatus::Available
+    }));
+
+    let missing_root = tempdir().expect("temp root").path().join("missing");
+    let discovery = discover_bounded_logs(&DiscoveryInput {
+        known_sources: vec![],
+        temp_roots: vec![missing_root],
+        active_process_logs: vec![],
+        now: SystemTime::now(),
+    });
+    let discovery_batch = discovery_result_to_batch(discovery, observed_at_utc);
+    assert!(discovery_batch.sources.is_empty());
+    assert_eq!(discovery_batch.coverage.len(), 1);
+    assert_eq!(
+        discovery_batch.coverage[0].status,
+        EspArtifactStatus::Missing
+    );
+
+    let root = tempdir().expect("tail root");
+    let path = root.path().join("AppWorkload.log");
+    fs::write(
+        &path,
+        "<![LOG[Initial app evidence]LOG]!><time=\"10:00:00.000+000\" date=\"07-16-2026\" component=\"AppWorkload\" context=\"\" type=\"1\" thread=\"1\" file=\"\">\n",
+    )
+    .expect("write initial tail");
+    let source = tail_source(
+        path.clone(),
+        "ime-current",
+        0,
+        DiscoverySourceOrigin::EmbeddedKnown,
+        true,
+    );
+    let mut tails = EspTailSet::new();
+    let initial_batch = tail_reconcile_to_batch(tails.reconcile(&[source]), observed_at_utc);
+    assert_eq!(initial_batch.records.len(), 1);
+    let artifact_id = initial_batch
+        .records
+        .first()
+        .and_then(record_artifact_for_test)
+        .expect("tail artifact")
+        .to_string();
+
+    fs::rename(&path, root.path().join("AppWorkload.log.1")).expect("rotate tail");
+    fs::write(
+        &path,
+        "<![LOG[Replacement app evidence]LOG]!><time=\"10:01:00.000+000\" date=\"07-16-2026\" component=\"AppWorkload\" context=\"\" type=\"1\" thread=\"1\" file=\"\">\n",
+    )
+    .expect("replace tail");
+    let reset_batch = tail_poll_to_batch(tails.poll(), observed_at_utc);
+    assert_eq!(reset_batch.replace_artifact_ids, vec![artifact_id]);
+    assert_eq!(reset_batch.records.len(), 1);
+}
+
+#[test]
+fn live_session_system_adapter_preserves_delivery_counters_without_transfer_events() {
+    let observed_at_utc = "2026-07-16T06:30:00Z";
+    let summary = delivery_optimization_from_rows(
+        &[SystemRow::new([
+            ("DownloadHttpBytes", "1000"),
+            ("DownloadLanBytes", "250"),
+            ("DownloadCacheHostBytes", "500"),
+        ])],
+        observed_at_utc,
+    )
+    .expect("Delivery Optimization counters");
+    let batch = app_lib::esp::live_session::system_evidence_to_batch(
+        SystemEvidence {
+            elevation: EspElevationState {
+                is_elevated: false,
+                restart_supported: true,
+                restricted_sources: Vec::new(),
+            },
+            hostname: None,
+            hardware: EspHardwareEvidence {
+                os_version: None,
+                os_build: None,
+                manufacturer: None,
+                model: None,
+                serial_number: None,
+                tpm_version: None,
+                evidence: Vec::new(),
+            },
+            ime_service: None,
+            delivery_optimization: Some(summary),
+            delivery_optimization_observations: Vec::new(),
+            observations: Vec::new(),
+            coverage: Vec::new(),
+        },
+        observed_at_utc,
+    );
+    let mut reducer = EspDiagnosticsReducer::new(observed_at_utc.to_string());
+    reducer.ingest_all(batch.records);
+    let snapshot = reducer.snapshot();
+    let delivery = snapshot
+        .delivery_optimization
+        .expect("counter-only Delivery Optimization evidence");
+    assert_eq!(delivery.download_http_bytes, 1000);
+    assert_eq!(delivery.download_lan_bytes, 250);
+    assert_eq!(delivery.download_cache_host_bytes, 500);
+    assert_eq!(delivery.peer_share_percent, Some(25.0));
+    assert_eq!(delivery.connected_cache_share_percent, Some(50.0));
+    assert!(delivery.transfers.is_empty());
+}
+
+fn record_artifact_for_test(record: &EspEvidenceRecord) -> Option<&str> {
+    match record {
+        EspEvidenceRecord::Ime(value) => Some(&value.context.provenance.source_artifact_id),
+        EspEvidenceRecord::DeploymentLog(value) => {
+            Some(&value.context.provenance.source_artifact_id)
+        }
+        _ => None,
+    }
+}
+
+#[derive(Clone)]
+struct FakeRelaunchProvider {
+    supported: bool,
+    elevated: Result<bool, String>,
+    executable: Result<PathBuf, String>,
+    arguments: Vec<String>,
+    launch_result: Result<(), app_lib::esp::relaunch::EspElevationLaunchError>,
+    requests: Arc<Mutex<Vec<app_lib::esp::relaunch::EspRelaunchRequest>>>,
+}
+
+impl app_lib::esp::relaunch::EspRelaunchProvider for FakeRelaunchProvider {
+    fn platform_supported(&self) -> bool {
+        self.supported
+    }
+
+    fn is_elevated(&self) -> Result<bool, String> {
+        self.elevated.clone()
+    }
+
+    fn current_executable(&self) -> Result<PathBuf, String> {
+        self.executable.clone()
+    }
+
+    fn startup_arguments(&self) -> Vec<String> {
+        self.arguments.clone()
+    }
+
+    fn launch_elevated(
+        &self,
+        request: &app_lib::esp::relaunch::EspRelaunchRequest,
+    ) -> Result<(), app_lib::esp::relaunch::EspElevationLaunchError> {
+        self.requests.lock().unwrap().push(request.clone());
+        self.launch_result.clone()
+    }
+}
+
+fn fake_relauncher() -> FakeRelaunchProvider {
+    FakeRelaunchProvider {
+        supported: true,
+        elevated: Ok(false),
+        executable: Ok(PathBuf::from(
+            r"C:\Program Files\CMTrace Open\cmtrace-open.exe",
+        )),
+        arguments: Vec::new(),
+        launch_result: Ok(()),
+        requests: Arc::new(Mutex::new(Vec::new())),
+    }
+}
+
+#[test]
+fn relaunch_already_elevated_never_starts_a_child() {
+    let provider = FakeRelaunchProvider {
+        elevated: Ok(true),
+        ..fake_relauncher()
+    };
+    let result = app_lib::esp::relaunch::restart_with_provider(&provider).unwrap();
+    assert!(!result.launched);
+    assert_eq!(
+        result.reason,
+        app_lib::esp::relaunch::EspRelaunchReason::AlreadyElevated
+    );
+    assert!(provider.requests.lock().unwrap().is_empty());
+}
+
+#[test]
+fn relaunch_uses_runas_and_forwards_only_the_canonical_workspace_flag() {
+    let provider = FakeRelaunchProvider {
+        arguments: vec![
+            "--workspace".to_string(),
+            "esp-diagnostics".to_string(),
+            "--unknown-flag".to_string(),
+            r"C:\Users\Person\Desktop\evidence.zip".to_string(),
+        ],
+        ..fake_relauncher()
+    };
+    let result = app_lib::esp::relaunch::restart_with_provider(&provider).unwrap();
+    assert!(result.launched);
+    assert_eq!(
+        result.reason,
+        app_lib::esp::relaunch::EspRelaunchReason::Launched
+    );
+    let requests = provider.requests.lock().unwrap();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].verb, "runas");
+    assert_eq!(requests[0].arguments, vec!["--workspace=esp-diagnostics"]);
+    assert_eq!(requests[0].parameters, "--workspace=esp-diagnostics");
+    assert!(requests[0].close_process_handle);
+}
+
+#[test]
+fn relaunch_rejects_nul_and_secret_bearing_arguments_without_echoing_them() {
+    for unsafe_argument in [
+        "--workspace=esp-diagnostics\0ignored",
+        "--access-token=secret",
+    ] {
+        let provider = FakeRelaunchProvider {
+            arguments: vec![unsafe_argument.to_string()],
+            ..fake_relauncher()
+        };
+        let error = app_lib::esp::relaunch::restart_with_provider(&provider).unwrap_err();
+        assert_eq!(
+            error,
+            app_lib::esp::relaunch::EspRelaunchError::UnsafeArgument
+        );
+        assert!(!error.to_string().contains(unsafe_argument));
+        assert!(provider.requests.lock().unwrap().is_empty());
+    }
+}
+
+#[test]
+fn relaunch_cancel_failure_and_unsupported_are_typed_without_false_success() {
+    let cancelled = FakeRelaunchProvider {
+        launch_result: Err(app_lib::esp::relaunch::EspElevationLaunchError::Cancelled),
+        ..fake_relauncher()
+    };
+    let cancelled_result = app_lib::esp::relaunch::restart_with_provider(&cancelled).unwrap();
+    assert_eq!(
+        cancelled_result.reason,
+        app_lib::esp::relaunch::EspRelaunchReason::ElevationCancelled
+    );
+    assert!(!cancelled_result.launched);
+
+    let failed = FakeRelaunchProvider {
+        launch_result: Err(app_lib::esp::relaunch::EspElevationLaunchError::Failed(
+            "ShellExecuteExW failed".to_string(),
+        )),
+        ..fake_relauncher()
+    };
+    assert!(matches!(
+        app_lib::esp::relaunch::restart_with_provider(&failed),
+        Err(app_lib::esp::relaunch::EspRelaunchError::LaunchFailed { .. })
+    ));
+
+    let unsupported = FakeRelaunchProvider {
+        supported: false,
+        elevated: Err("must not probe".to_string()),
+        ..fake_relauncher()
+    };
+    let unsupported_result = app_lib::esp::relaunch::restart_with_provider(&unsupported).unwrap();
+    assert_eq!(
+        unsupported_result.reason,
+        app_lib::esp::relaunch::EspRelaunchReason::UnsupportedPlatform
+    );
+    assert!(!unsupported_result.launched);
+    assert!(unsupported.requests.lock().unwrap().is_empty());
+}
+
+#[test]
+fn relaunch_windows_argument_quoting_handles_spaces_quotes_and_backslashes() {
+    assert_eq!(
+        app_lib::esp::relaunch::build_windows_parameter_line(&[
+            "plain".to_string(),
+            "two words".to_string(),
+            "quote\"inside".to_string(),
+            r"trailing\".to_string(),
+        ]),
+        r#"plain "two words" "quote\"inside" trailing\"#
+    );
 }

@@ -18,6 +18,8 @@ pub mod intune_bundle;
 pub mod intune_diagnostics;
 pub mod app_config;
 pub mod dns_dhcp;
+#[cfg(feature = "esp-diagnostics")]
+pub mod esp_diagnostics;
 #[cfg(target_os = "windows")]
 pub mod graph_api;
 pub mod known_sources;

@@ -397,6 +397,23 @@ impl EspSessionManager {
         Ok(envelope)
     }
 
+    /// Cancels and joins any active worker without requiring a caller-owned
+    /// session ID. Application shutdown uses this path before the runtime and
+    /// event sink are torn down.
+    pub fn shutdown(&self) -> Result<(), EspSessionError> {
+        let active = {
+            let mut control = self.control.lock().map_err(state_error)?;
+            control.reservation = None;
+            control.active.take()
+        };
+        if let Some(active) = active {
+            active.cancellation.cancel();
+            active.activation.release();
+            join_active(&active)?;
+        }
+        Ok(())
+    }
+
     fn reserve(&self, session_id: &str, request_id: &str) -> Result<(), EspSessionError> {
         loop {
             let stale = {
@@ -449,6 +466,7 @@ impl Drop for EspSessionManager {
             .and_then(|control| control.active.take());
         if let Some(active) = active {
             active.cancellation.cancel();
+            active.activation.release();
             let _ = join_active(&active);
         }
     }
@@ -815,6 +833,7 @@ fn record_artifact_id(record: &EspEvidenceRecord) -> Option<&str> {
         }
         EspEvidenceRecord::Process(value) => Some(&value.context.provenance.source_artifact_id),
         EspEvidenceRecord::System(value) => Some(&value.context.provenance.source_artifact_id),
+        EspEvidenceRecord::DeliveryOptimizationSummary(_) => None,
         EspEvidenceRecord::DeliveryOptimization(value) => {
             Some(&value.context.provenance.source_artifact_id)
         }

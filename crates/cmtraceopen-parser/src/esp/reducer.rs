@@ -29,6 +29,7 @@ pub enum EspEvidenceRecord {
     DeploymentLog(EspDeploymentLogObservation),
     Process(EspProcessObservation),
     System(EspSystemObservation),
+    DeliveryOptimizationSummary(EspDeliveryOptimizationEvidence),
     DeliveryOptimization(EspDeliveryOptimizationObservation),
     Graph(EspGraphObservation),
     Coverage(EspArtifactCoverage),
@@ -324,6 +325,9 @@ impl SnapshotProjection {
             }
             EspEvidenceRecord::Process(observation) => self.process_process(ordinal, observation),
             EspEvidenceRecord::System(observation) => self.process_system(observation),
+            EspEvidenceRecord::DeliveryOptimizationSummary(summary) => {
+                self.process_delivery_optimization_summary(summary)
+            }
             EspEvidenceRecord::DeliveryOptimization(observation) => {
                 self.process_delivery_optimization(ordinal, observation)
             }
@@ -698,6 +702,19 @@ impl SnapshotProjection {
             Some(detail.to_string()),
             Some(text_status(detail, status)),
         );
+    }
+
+    fn process_delivery_optimization_summary(&mut self, summary: &EspDeliveryOptimizationEvidence) {
+        let delivery = self
+            .delivery_optimization
+            .get_or_insert_with(empty_delivery_optimization);
+        delivery.download_http_bytes = summary.download_http_bytes;
+        delivery.download_lan_bytes = summary.download_lan_bytes;
+        delivery.download_cache_host_bytes = summary.download_cache_host_bytes;
+        delivery.peer_share_percent = summary.peer_share_percent;
+        delivery.connected_cache_share_percent = summary.connected_cache_share_percent;
+        delivery.transfers.extend(summary.transfers.iter().cloned());
+        delivery.evidence.extend(summary.evidence.iter().cloned());
     }
 
     fn process_coverage(&mut self, ordinal: usize, coverage: EspArtifactCoverage) {
@@ -2133,6 +2150,7 @@ fn record_context(record: &EspEvidenceRecord) -> Option<&EspObservationContext> 
         EspEvidenceRecord::DeploymentLog(value) => Some(&value.context),
         EspEvidenceRecord::Process(value) => Some(&value.context),
         EspEvidenceRecord::System(value) => Some(&value.context),
+        EspEvidenceRecord::DeliveryOptimizationSummary(_) => None,
         EspEvidenceRecord::DeliveryOptimization(value) => Some(&value.context),
         EspEvidenceRecord::Graph(value) => Some(&value.context),
         EspEvidenceRecord::Coverage(_) => None,
@@ -2200,6 +2218,13 @@ fn raw_observation_value(record: &EspEvidenceRecord) -> EspObservationValue {
             value.sanitized_command_line.clone().unwrap_or_default(),
         ]),
         EspEvidenceRecord::System(value) => system_fact_value(&value.fact),
+        EspEvidenceRecord::DeliveryOptimizationSummary(value) => {
+            EspObservationValue::StringList(vec![
+                format!("httpBytes={}", value.download_http_bytes),
+                format!("lanBytes={}", value.download_lan_bytes),
+                format!("cacheHostBytes={}", value.download_cache_host_bytes),
+            ])
+        }
         EspEvidenceRecord::DeliveryOptimization(value) => EspObservationValue::StringList(vec![
             format!("kind={:?}", value.kind),
             format!("contentId={}", value.content_id.clone().unwrap_or_default()),

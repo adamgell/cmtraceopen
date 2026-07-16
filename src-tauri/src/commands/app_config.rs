@@ -65,6 +65,10 @@ pub fn get_available_workspaces() -> Vec<&'static str> {
         workspaces.push("new-intune");
     }
 
+    if cfg!(feature = "esp-diagnostics") {
+        workspaces.push("esp-diagnostics");
+    }
+
     if cfg!(feature = "dsregcmd") {
         workspaces.push("dsregcmd");
     }
@@ -97,7 +101,7 @@ pub fn get_available_workspaces() -> Vec<&'static str> {
 
 #[cfg(test)]
 mod tests {
-    use super::is_truthy_policy_value;
+    use super::{get_available_workspaces, is_truthy_policy_value};
 
     #[test]
     fn truthy_policy_values_disable_update_checks() {
@@ -114,5 +118,13 @@ mod tests {
                 "{value} should not be truthy"
             );
         }
+    }
+
+    #[test]
+    fn esp_workspace_availability_matches_the_build_feature() {
+        assert_eq!(
+            get_available_workspaces().contains(&"esp-diagnostics"),
+            cfg!(feature = "esp-diagnostics")
+        );
     }
 }

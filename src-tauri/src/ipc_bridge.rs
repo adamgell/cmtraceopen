@@ -169,6 +169,25 @@ fn dispatch(body: &str, state: &Arc<BridgeState>) -> String {
             ok_json(&crate::commands::app_config::get_available_workspaces())
         }
 
+        #[cfg(feature = "esp-diagnostics")]
+        "get_esp_diagnostics_capability" => {
+            ok_json(&crate::esp::acquisition_capability())
+        }
+
+        #[cfg(feature = "esp-diagnostics")]
+        "graph_fetch_esp_diagnostics" | "graph_cancel_esp_diagnostics" => {
+            err_json("ESP Graph commands are unavailable through the debug IPC bridge")
+        }
+
+        #[cfg(feature = "esp-diagnostics")]
+        "analyze_esp_evidence"
+        | "start_esp_diagnostics_session"
+        | "get_esp_diagnostics_session"
+        | "stop_esp_diagnostics_session"
+        | "restart_esp_as_administrator" => err_json(
+            "ESP native commands require the Tauri runtime and are unavailable through the debug IPC bridge",
+        ),
+
         "get_file_association_prompt_status" => {
             // Match the real command's response shape so the frontend can
             // safely read `isAssociated` etc. in dev/browser mode.
@@ -248,4 +267,35 @@ fn ok_json<T: serde::Serialize>(value: &T) -> String {
 
 fn err_json(msg: &str) -> String {
     serde_json::json!({ "error": msg }).to_string()
+}
+
+#[cfg(all(test, feature = "esp-diagnostics"))]
+mod tests {
+    use super::{dispatch, BridgeState};
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex};
+
+    fn state() -> Arc<BridgeState> {
+        Arc::new(BridgeState {
+            open_files: Mutex::new(HashMap::new()),
+        })
+    }
+
+    #[test]
+    fn debug_bridge_explicitly_rejects_esp_graph_commands() {
+        for command in [
+            "graph_fetch_esp_diagnostics",
+            "graph_cancel_esp_diagnostics",
+        ] {
+            let response = dispatch(
+                &serde_json::json!({ "cmd": command, "args": {} }).to_string(),
+                &state(),
+            );
+            let value: serde_json::Value = serde_json::from_str(&response).unwrap();
+            assert_eq!(
+                value["error"],
+                "ESP Graph commands are unavailable through the debug IPC bridge"
+            );
+        }
+    }
 }

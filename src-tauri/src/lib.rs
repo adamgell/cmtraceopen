@@ -67,7 +67,7 @@ pub fn run() {
     #[cfg(desktop)]
     let builder = builder.plugin(tauri_plugin_window_state::Builder::default().build());
 
-    builder
+    let app = builder
         // Persistent file logging (issue #193): the backend already uses the
         // `log` facade throughout, but no logger backend was ever registered so
         // those messages went nowhere. Write to the OS app-log dir with a size
@@ -90,6 +90,7 @@ pub fn run() {
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_process::init())
+        .manage(AppState::new(initial_file_paths))
         .setup(|app| {
             #[cfg(desktop)]
             app.handle()
@@ -110,6 +111,9 @@ pub fn run() {
                 app.manage(commands::timeline::TimelineRuntimeMap::new());
             }
 
+            #[cfg(feature = "esp-diagnostics")]
+            commands::esp_diagnostics::initialize_esp_session_manager(app.handle())?;
+
             // Auto-open DevTools in debug builds
             #[cfg(all(debug_assertions, desktop))]
             {
@@ -126,13 +130,22 @@ pub fn run() {
 
             Ok(())
         })
-        .manage(AppState::new(initial_file_paths))
         .invoke_handler(tauri::generate_handler![
             commands::file_association::get_file_association_prompt_status,
             commands::file_association::associate_log_files_with_app,
             commands::file_association::set_file_association_prompt_suppressed,
             commands::app_config::get_available_workspaces,
             commands::app_config::get_update_policy,
+            #[cfg(feature = "esp-diagnostics")]
+            commands::esp_diagnostics::get_esp_diagnostics_capability,
+            #[cfg(feature = "esp-diagnostics")]
+            commands::esp_diagnostics::start_esp_diagnostics_session,
+            #[cfg(feature = "esp-diagnostics")]
+            commands::esp_diagnostics::get_esp_diagnostics_session,
+            #[cfg(feature = "esp-diagnostics")]
+            commands::esp_diagnostics::stop_esp_diagnostics_session,
+            #[cfg(feature = "esp-diagnostics")]
+            commands::esp_diagnostics::restart_esp_as_administrator,
             commands::dns_dhcp::check_dns_logging_status,
             commands::dns_dhcp::enable_dns_debug_logging,
             commands::dns_dhcp::collect_dns_dhcp_from_domain,
@@ -224,6 +237,22 @@ pub fn run() {
             commands::timeline::query_timeline_entries_cmd,
             commands::timeline::update_timeline_tunables_cmd,
         ])
-        .run(tauri::generate_context!())
+        .build(tauri::generate_context!())
         .expect("error while running tauri application");
+
+    #[cfg(feature = "esp-diagnostics")]
+    app.run(|app_handle, event| {
+        if matches!(
+            event,
+            tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit
+        ) {
+            if let Err(error) = commands::esp_diagnostics::shutdown_esp_session_manager(app_handle)
+            {
+                log::error!("ESP diagnostics shutdown failed: {error}");
+            }
+        }
+    });
+
+    #[cfg(not(feature = "esp-diagnostics"))]
+    app.run(|_, _| {});
 }

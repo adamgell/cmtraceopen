@@ -40,6 +40,7 @@ pub struct EspTailAttachment {
 pub struct EspTailUpdate {
     pub path: PathBuf,
     pub source_id: String,
+    pub family: String,
     pub entries: Vec<LogEntry>,
     pub reset_reason: Option<EspTailResetReason>,
 }
@@ -321,6 +322,7 @@ impl ActiveTail {
         Ok(Some(EspTailUpdate {
             path: self.source.path.clone(),
             source_id: self.source.source_id.clone(),
+            family: self.source.family.clone(),
             entries,
             reset_reason: None,
         }))
@@ -343,6 +345,7 @@ impl ActiveTail {
         Ok(Some(EspTailUpdate {
             path: self.source.path.clone(),
             source_id: self.source.source_id.clone(),
+            family: self.source.family.clone(),
             entries,
             reset_reason: Some(reason),
         }))
