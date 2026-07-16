@@ -486,11 +486,140 @@
         "displayName": "Contoso Device Preparation bootstrap",
         "normalizedStatus": "inProgress",
         "displayStatus": "In progress"
-      }
+      },
+      "mixedWorkloads": [
+        {
+          "workloadId": "workload-v2-bootstrap",
+          "kind": "devicePreparationWorkload",
+          "rawIdentifier": "99999999-9999-4999-8999-999999999999",
+          "displayName": "Contoso Device Preparation bootstrap",
+          "normalizedStatus": "inProgress",
+          "displayStatus": "In progress"
+        },
+        {
+          "workloadId": "workload-v2-script",
+          "kind": "platformScript",
+          "rawIdentifier": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
+          "displayName": "Contoso device readiness script",
+          "normalizedStatus": "pending",
+          "displayStatus": "Pending"
+        },
+        {
+          "workloadId": "workload-v2-certificate",
+          "kind": "scepCertificate",
+          "rawIdentifier": "bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb",
+          "displayName": "Contoso device certificate",
+          "normalizedStatus": "pending",
+          "displayStatus": "Pending"
+        }
+      ]
+    },
+    "ambiguousMsi": {
+      "correlationId": "corr-ambiguous-sampled",
+      "workloadId": null,
+      "confidence": "uncorrelated",
+      "reason": "Two active workloads overlap the sampled installer window.",
+      "candidateWorkloadIds": ["workload-vpn", "workload-security"],
+      "processObservations": [
+        {
+          "context": {
+            "evidenceRef": {
+              "evidenceId": "ev-process-9055",
+              "sourceArtifactId": "process-sample"
+            },
+            "provenance": {
+              "sourceKind": "process",
+              "sourceArtifactId": "process-sample",
+              "filePath": null,
+              "lineNumber": null,
+              "recordNumber": 9055,
+              "registry": null,
+              "event": null
+            },
+            "sourceTimestamp": {
+              "rawText": "2026-07-15T20:07:40Z",
+              "originalOffset": "+00:00",
+              "normalizedUtc": "2026-07-15T20:07:40Z",
+              "kind": "utc"
+            },
+            "observedAtUtc": "2026-07-15T20:07:40Z",
+            "sensitivity": "sensitive",
+            "parseState": "parsed",
+            "accessState": "available"
+          },
+          "pid": 9055,
+          "processStartTime": {
+            "rawText": "2026-07-15T20:07:35Z",
+            "originalOffset": "+00:00",
+            "normalizedUtc": "2026-07-15T20:07:35Z",
+            "kind": "utc"
+          },
+          "parentPid": 4120,
+          "executableName": "msiexec.exe",
+          "sanitizedCommandLine": "msiexec.exe /i unknown.msi /L*V C:\\Windows\\Temp\\ambiguous-install.log",
+          "referencedLogPath": "C:\\Windows\\Temp\\ambiguous-install.log",
+          "appId": null,
+          "productCode": null
+        }
+      ],
+      "evidence": [
+        {
+          "evidenceId": "ev-process-9055",
+          "sourceArtifactId": "process-sample"
+        }
+      ]
     },
     "sparseBundle": {
       "scenario": "espOnly",
       "phase": "unknown",
+      "elevation": {
+        "isElevated": true,
+        "restartSupported": true,
+        "restrictedSources": []
+      },
+      "sessions": [],
+      "workloads": [],
+      "installerCorrelations": [],
+      "activity": [
+        {
+          "entryId": "activity-sparse-profile",
+          "timestamp": {
+            "rawText": "2026-07-15T20:08:00Z",
+            "originalOffset": "+00:00",
+            "normalizedUtc": "2026-07-15T20:08:00Z",
+            "kind": "utc"
+          },
+          "kind": "profileDownload",
+          "title": "Captured Autopilot profile was analyzed",
+          "detail": "IME text logs were not included in this evidence bundle.",
+          "status": null,
+          "evidence": [
+            {
+              "evidenceId": "ev-captured-profile",
+              "sourceArtifactId": "captured-profile"
+            }
+          ]
+        }
+      ],
+      "findings": [
+        {
+          "findingId": "finding-sparse-ime-missing",
+          "severity": "info",
+          "confidence": "high",
+          "title": "IME text logs were not included",
+          "summary": "The captured Autopilot profile remains useful, but application enforcement history is unavailable.",
+          "recommendedChecks": [
+            "Capture the bounded Intune Management Extension log folder when it is available."
+          ],
+          "evidence": [
+            {
+              "evidenceId": "ev-captured-profile",
+              "sourceArtifactId": "captured-profile"
+            }
+          ],
+          "coverageGapIds": ["ime-logs"]
+        }
+      ],
       "coverage": [
         {
           "artifactId": "captured-profile",
@@ -507,6 +636,39 @@
           "detail": "No IME text logs were present in the captured bundle",
           "observedAtUtc": "2026-07-15T20:08:00Z",
           "evidence": []
+        }
+      ],
+      "rawEvidence": [
+        {
+          "recordId": "raw-captured-profile",
+          "provenance": {
+            "sourceKind": "json",
+            "sourceArtifactId": "captured-profile",
+            "filePath": "AutopilotConfigurationFile.json",
+            "lineNumber": null,
+            "recordNumber": 1,
+            "registry": null,
+            "event": null
+          },
+          "sourceTimestamp": {
+            "rawText": "2026-07-15T20:08:00Z",
+            "originalOffset": "+00:00",
+            "normalizedUtc": "2026-07-15T20:08:00Z",
+            "kind": "utc"
+          },
+          "observedAtUtc": "2026-07-15T20:08:00Z",
+          "rawValue": {
+            "text": "Captured Autopilot profile remains available"
+          },
+          "sensitivity": "public",
+          "parseState": "parsed",
+          "accessState": "available",
+          "evidence": [
+            {
+              "evidenceId": "ev-captured-profile",
+              "sourceArtifactId": "captured-profile"
+            }
+          ]
         }
       ]
     }

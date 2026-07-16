@@ -3,14 +3,115 @@ import espFixture from "./fixtures/demo/esp-diagnostics.json" with { type: "json
 import type {
   EspDiagnosticsSnapshot,
   EspGraphOverlay,
+  EspInstallerCorrelation,
 } from "../src/workspaces/esp-diagnostics/types";
 
 const baseSnapshot =
   espFixture.baseSnapshot as unknown as EspDiagnosticsSnapshot;
 const fullGraph = espFixture.graph.full as unknown as EspGraphOverlay;
+const partialGraph = espFixture.graph.partial as unknown as EspGraphOverlay;
+
+const fixtureVariants = espFixture.variants as unknown as {
+  elevatedLiveInstall: Partial<EspDiagnosticsSnapshot>;
+  devicePreparationV2: {
+    scenario: EspDiagnosticsSnapshot["scenario"];
+    phase: EspDiagnosticsSnapshot["phase"];
+    mixedWorkloads: Array<{
+      workloadId: string;
+      kind: EspDiagnosticsSnapshot["workloads"][number]["kind"];
+      rawIdentifier: string;
+      displayName: string;
+      normalizedStatus: EspDiagnosticsSnapshot["workloads"][number]["status"]["normalized"];
+      displayStatus: string;
+    }>;
+  };
+  ambiguousMsi: EspInstallerCorrelation;
+  sparseBundle: Partial<EspDiagnosticsSnapshot>;
+};
+
+const evidenceSections = [
+  ["identity-profile", "Identity and profile"],
+  ["oobe-flags", "OOBE flags"],
+  ["esp-configuration", "ESP configuration"],
+  ["enrollment-sessions", "Enrollment and sessions"],
+  ["apps", "Apps"],
+  ["scripts", "Scripts"],
+  ["policies", "Policies"],
+  ["certificates", "Certificates"],
+  ["join-registration", "Join and registration"],
+  ["delivery-optimization", "Delivery Optimization"],
+  ["hardware", "Hardware"],
+  ["node-cache", "NodeCache"],
+  ["source-coverage", "Source coverage"],
+  ["raw-provenance", "Raw provenance"],
+] as const;
 
 function cloneSnapshot(): EspDiagnosticsSnapshot {
   return structuredClone(baseSnapshot);
+}
+
+function devicePreparationSnapshot(): EspDiagnosticsSnapshot {
+  const snapshot = cloneSnapshot();
+  const variant = fixtureVariants.devicePreparationV2;
+  const template = snapshot.workloads[0];
+  if (!template) throw new Error("missing deterministic workload template");
+
+  snapshot.scenario = variant.scenario;
+  snapshot.phase = variant.phase;
+  snapshot.elevation = {
+    isElevated: true,
+    restartSupported: true,
+    restrictedSources: [],
+  };
+  snapshot.sessions = [
+    {
+      ...snapshot.sessions[0],
+      kind: "devicePreparationV2",
+      phase: "devicePreparation",
+      workloadIds: variant.mixedWorkloads.map(
+        (workload) => workload.workloadId,
+      ),
+    },
+  ];
+  snapshot.workloads = variant.mixedWorkloads.map((workload) => ({
+    ...template,
+    workloadId: workload.workloadId,
+    kind: workload.kind,
+    rawIdentifier: workload.rawIdentifier,
+    displayName: workload.displayName,
+    status: {
+      ...template.status,
+      raw: workload.normalizedStatus,
+      normalized: workload.normalizedStatus,
+      display: workload.displayStatus,
+    },
+    evidence: [],
+  }));
+  snapshot.installerCorrelations = [];
+  snapshot.findings = [];
+  if (snapshot.profile) {
+    snapshot.profile = {
+      ...snapshot.profile,
+      devicePreparation: {
+        agentDownloadTimeoutSeconds: 300,
+        pageTimeoutSeconds: 3_600,
+        allowSkipOnFailure: false,
+        allowDiagnostics: true,
+        scriptIds: variant.mixedWorkloads
+          .filter((workload) => workload.kind === "platformScript")
+          .map((workload) => workload.rawIdentifier),
+        evidence: [],
+      },
+    };
+  }
+  return snapshot;
+}
+
+function sparseBundleSnapshot(): EspDiagnosticsSnapshot {
+  return Object.assign(
+    cloneSnapshot(),
+    structuredClone(fixtureVariants.sparseBundle),
+  );
 }
 
 async function dismissSplash(
@@ -114,6 +215,134 @@ test.describe("ESP Diagnostics workspace", () => {
     ).toBeVisible();
   });
 
+  test("applies live phase and activity updates without replacing the workspace", async ({
+    page,
+  }) => {
+    await page.goto("/");
+    await dismissSplash(page);
+    await openEspWorkspace(page);
+    await showLiveSnapshot(page);
+
+    const progress = page.getByRole("region", { name: "ESP phase progress" });
+    await expect(progress).toContainText("Device setup · Current");
+
+    await page.evaluate(async () => {
+      const { useEspDiagnosticsStore } =
+        await import("/src/workspaces/esp-diagnostics/esp-diagnostics-store.ts");
+      const state = useEspDiagnosticsStore.getState();
+      if (!state.snapshot) throw new Error("missing e2e ESP snapshot");
+      const next = structuredClone(state.snapshot);
+      next.generatedAtUtc = "2026-07-15T20:09:30Z";
+      next.phase = "accountSetup";
+      next.sessions = next.sessions.map((session) =>
+        session.isLatest ? { ...session, phase: "accountSetup" } : session,
+      );
+      next.activity = [
+        {
+          ...next.activity[0],
+          entryId: "activity-account-setup",
+          timestamp: {
+            rawText: "2026-07-15T20:09:30Z",
+            originalOffset: "+00:00",
+            normalizedUtc: "2026-07-15T20:09:30Z",
+            kind: "utc",
+          },
+          title: "Account setup workload evaluation started",
+          detail: "The live session advanced without remounting the workspace.",
+        },
+        ...next.activity,
+      ];
+      state.applySessionUpdate({
+        sessionId: "session-live",
+        requestId: "e2e-live",
+        sequence: 2,
+        state: "live",
+        reason: "evidenceChanged",
+        emittedAtUtc: next.generatedAtUtc,
+        snapshot: next,
+      });
+    });
+
+    await expect(progress).toContainText("Device setup · Complete");
+    await expect(progress).toContainText("Account setup · Current");
+    await expect(
+      page.getByRole("region", { name: "Live activity" }),
+    ).toContainText("Account setup workload evaluation started");
+    await expect(page.getByText("Live session", { exact: true })).toBeVisible();
+  });
+
+  test("drills an actionable finding into canonical evidence and exposes every evidence section", async ({
+    page,
+  }) => {
+    await page.goto("/");
+    await dismissSplash(page);
+    await openEspWorkspace(page);
+    await showLiveSnapshot(page);
+
+    for (const [sectionId, title] of evidenceSections) {
+      const summary = page.locator(
+        `#esp-evidence-section-${sectionId} > summary`,
+      );
+      await expect(summary).toContainText(title);
+    }
+
+    await page
+      .getByRole("link", { name: "Open evidence ev-workload-security" })
+      .first()
+      .click();
+    await expect(page.locator("#esp-evidence-section-apps")).toHaveAttribute(
+      "open",
+      "",
+    );
+    const canonicalEvidence = page.locator("#evidence-ev-workload-security");
+    await expect(canonicalEvidence).toBeVisible();
+    await expect(canonicalEvidence).toBeFocused();
+  });
+
+  test("renders a sampled ambiguous MSIEXEC correlation without guessing a workload", async ({
+    page,
+  }) => {
+    const snapshot = cloneSnapshot();
+    snapshot.installerCorrelations = [
+      structuredClone(fixtureVariants.ambiguousMsi),
+    ];
+
+    await page.goto("/");
+    await dismissSplash(page);
+    await openEspWorkspace(page);
+    await showLiveSnapshot(page, snapshot);
+
+    const msiexec = page.getByRole("region", {
+      name: "What MSIEXEC is doing now",
+    });
+    await expect(msiexec).toContainText("PID 9055");
+    await expect(msiexec).toContainText("Ambiguous — 2 candidates");
+    await expect(msiexec).toContainText(
+      "Two active workloads overlap the sampled installer window.",
+    );
+    await expect(msiexec).toContainText("Unknown installer workload");
+  });
+
+  test("presents Device Preparation phases with mixed workload kinds", async ({
+    page,
+  }) => {
+    await page.goto("/");
+    await dismissSplash(page);
+    await openEspWorkspace(page);
+    await showLiveSnapshot(page, devicePreparationSnapshot());
+
+    await expect(page.getByLabel("ESP session summary")).toContainText(
+      "Autopilot Device Preparation",
+    );
+    const progress = page.getByRole("region", { name: "ESP phase progress" });
+    await expect(progress).toContainText("Device Preparation phases");
+    await expect(progress).toContainText("Agent bootstrap · Current");
+    const workloads = page.getByRole("region", { name: "Tracked workloads" });
+    await expect(workloads).toContainText("Device Preparation workload");
+    await expect(workloads).toContainText("Platform script");
+    await expect(workloads).toContainText("SCEP certificate");
+  });
+
   test("keeps live evidence collapsed, collecting, resizable, full-page, filterable, and persistent", async ({
     page,
   }) => {
@@ -202,6 +431,7 @@ test.describe("ESP Diagnostics workspace", () => {
     await expect(
       page.getByRole("button", { name: /4 evidence records, 1 unread/ }),
     ).toBeVisible();
+    await expect(page.getByText("Live session", { exact: true })).toBeVisible();
 
     await page.getByRole("button", { name: /^Open live logs,/ }).click();
     await expect(
@@ -243,6 +473,44 @@ test.describe("ESP Diagnostics workspace", () => {
         name: "Administrator coverage recommendation",
       }),
     ).toHaveCount(0);
+  });
+
+  test("keeps a sparse ESP-only bundle useful when IME text logs are absent", async ({
+    page,
+  }) => {
+    const imported = sparseBundleSnapshot();
+
+    await page.goto("/");
+    await dismissSplash(page);
+    await page.evaluate((snapshot) => {
+      window.__e2e_ipc_overrides__["plugin:dialog|open"] = () =>
+        "C:\\Evidence\\esp-sparse-demo.zip";
+      window.__e2e_ipc_overrides__["analyze_esp_evidence"] = () => snapshot;
+    }, imported);
+    await openEspWorkspace(page);
+
+    await page
+      .getByRole("button", { name: "Import captured evidence" })
+      .click();
+    await expect(page.getByText("ESP only")).toBeVisible();
+    await expect(
+      page.getByText("No workload records were observed"),
+    ).toBeVisible();
+
+    await page
+      .locator("#esp-evidence-section-source-coverage > summary")
+      .click();
+    const coverage = page.locator("#esp-evidence-section-source-coverage");
+    await expect(coverage).toContainText("Autopilot profile JSON");
+    await expect(coverage).toContainText("IME logs");
+    await expect(coverage).toContainText("No IME text logs were present");
+
+    await page
+      .locator("#esp-evidence-section-raw-provenance > summary")
+      .click();
+    await expect(
+      page.getByText("Captured Autopilot profile remains available"),
+    ).toBeVisible();
   });
 
   test("starts and stops a live session through the typed IPC contract", async ({
@@ -320,6 +588,41 @@ test.describe("ESP Diagnostics workspace", () => {
         .first(),
     ).toBeVisible();
     await expect(page.getByText("Graph ready")).toBeVisible();
+  });
+
+  test("preserves local findings and raw IDs when Graph enrichment is partial", async ({
+    page,
+  }) => {
+    await page.goto("/");
+    await dismissSplash(page);
+    await openEspWorkspace(page);
+    await showLiveSnapshot(page);
+
+    await page.evaluate(async (overlay) => {
+      const { useEspDiagnosticsStore } =
+        await import("/src/workspaces/esp-diagnostics/esp-diagnostics-store.ts");
+      const store = useEspDiagnosticsStore.getState();
+      store.beginGraph(overlay.requestId);
+      store.applyGraphOverlay(overlay.requestId, overlay);
+    }, partialGraph);
+
+    await expect(page.getByText("Graph partial")).toBeVisible();
+    await expect(
+      page.getByText("Required security application is blocking ESP"),
+    ).toBeVisible();
+    await expect(
+      page
+        .getByText("66666666-6666-4666-8666-666666666666", {
+          exact: true,
+        })
+        .first(),
+    ).toBeVisible();
+    await page.getByRole("button", { name: /^Open live logs,/ }).click();
+    await expect(
+      page.getByText(
+        "Win32 app enforcement started for 66666666-6666-4666-8666-666666666666",
+      ),
+    ).toBeVisible();
   });
 
   test("rejects accidental live Graph IPC when no explicit fixture is installed", async ({
