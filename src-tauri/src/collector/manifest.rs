@@ -45,7 +45,7 @@ pub fn write_manifest(
                     "relativePath": relative_path,
                     "originPath": file.origin_path,
                     "collectedUtc": collected_utc,
-                    "status": "collected",
+                    "status": artifact_status_name(&result.status),
                     "parseHints": result.parse_hints,
                     "bytesCopied": file.bytes_copied,
                     "notes": result.notes,
@@ -190,6 +190,14 @@ fn hostname() -> String {
         .unwrap_or_else(|_| "unknown".to_string())
 }
 
+fn artifact_status_name(status: &ArtifactStatus) -> &'static str {
+    match status {
+        ArtifactStatus::Collected => "collected",
+        ArtifactStatus::Missing => "missing",
+        ArtifactStatus::Failed => "failed",
+    }
+}
+
 fn canonical_root_relative_path(
     bundle_root: &Path,
     relative_path: &str,
@@ -296,6 +304,54 @@ mod tests {
             "error must identify the omitted collected file: {error}"
         );
         assert!(!bundle_root.join("manifest.json").exists());
+        fs::remove_dir_all(bundle_root).expect("remove temp bundle root");
+    }
+
+    #[test]
+    fn write_manifest_preserves_failed_status_for_a_copied_file() {
+        let bundle_root = temp_bundle_root("manifest-failed-copied-file");
+        let relative_path = "evidence/command-output/failed.json";
+        let copied_path = bundle_root.join(relative_path);
+        fs::create_dir_all(copied_path.parent().expect("copied file parent"))
+            .expect("create copied file parent");
+        fs::write(&copied_path, "{\"partial\":true}").expect("write copied file");
+        let result = ArtifactResult {
+            id: "failed-command".to_string(),
+            category: "command".to_string(),
+            family: "system".to_string(),
+            parse_hints: vec!["json".to_string()],
+            notes: Some("output exists despite failed command".to_string()),
+            status: ArtifactStatus::Failed,
+            files: vec![CollectedArtifactFile {
+                relative_path: relative_path.to_string(),
+                origin_path: None,
+                bytes_copied: 16,
+            }],
+            error: Some("command exited with code 1".to_string()),
+        };
+
+        write_manifest(
+            &bundle_root,
+            "CMTRACE-TEST",
+            &CollectionProfile::embedded(),
+            &[result],
+            &ArtifactCounts {
+                collected: 0,
+                missing: 0,
+                failed: 1,
+                total: 1,
+            },
+            5,
+        )
+        .expect("write manifest with failed copied file");
+
+        let manifest: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(bundle_root.join("manifest.json")).expect("read manifest"),
+        )
+        .expect("parse manifest");
+        assert_eq!(manifest["artifacts"][0]["relativePath"], relative_path);
+        assert_eq!(manifest["artifacts"][0]["status"], "failed");
+        assert_eq!(manifest["collection"]["results"]["gaps"][0]["status"], "Failed");
         fs::remove_dir_all(bundle_root).expect("remove temp bundle root");
     }
 
