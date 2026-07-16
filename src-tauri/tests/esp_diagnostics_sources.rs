@@ -1021,6 +1021,83 @@ fn command_line_sanitizer_fails_closed_on_unterminated_escaped_secret_and_keeps_
 }
 
 #[test]
+fn command_line_sanitizer_fails_closed_on_ambiguous_wider_quote_at_end_of_scan() {
+    let one_layer = concat!(
+        r#"installer.exe --payload {\"password\":\"one-layer-secret-prefix\\\"}"#,
+        r#"one-layer-visible-secret-suffix --keep-real-arg yes"#,
+    );
+    let sanitized = sanitize_command_line(one_layer);
+    assert!(!sanitized.contains("one-layer-secret-prefix"));
+    assert!(!sanitized.contains("one-layer-visible-secret-suffix"));
+    assert!(sanitized.contains("--keep-real-arg yes"));
+
+    let twice_layer_wider_quote = format!("{}\"", "\\".repeat(7));
+    let twice_layer = [
+        r#"installer.exe --payload {\\\"password\\\":\\\"twice-layer-secret-prefix"#,
+        twice_layer_wider_quote.as_str(),
+        r#"}twice-layer-visible-secret-suffix --keep-real-arg yes"#,
+    ]
+    .concat();
+    let sanitized = sanitize_command_line(&twice_layer);
+    assert!(!sanitized.contains("twice-layer-secret-prefix"));
+    assert!(!sanitized.contains("twice-layer-visible-secret-suffix"));
+    assert!(sanitized.contains("--keep-real-arg yes"));
+}
+
+#[test]
+fn command_line_sanitizer_fails_closed_on_sensitive_key_value_escape_width_mismatch() {
+    for (raw, secret, safe_value) in [
+        (
+            concat!(
+                r#"installer.exe --payload {\"password\":\\\"key-one-value-two-secret\\\","#,
+                r#"\"safe.name\":\"keep-key-one-value-two-safe\"} --keep-real-arg yes"#,
+            ),
+            "key-one-value-two-secret",
+            "keep-key-one-value-two-safe",
+        ),
+        (
+            concat!(
+                r#"installer.exe --payload {\\\"password\\\":\"key-two-value-one-secret\","#,
+                r#"\\\"safe.name\\\":\\\"keep-key-two-value-one-safe\\\"} --keep-real-arg yes"#,
+            ),
+            "key-two-value-one-secret",
+            "keep-key-two-value-one-safe",
+        ),
+    ] {
+        let sanitized = sanitize_command_line(raw);
+        assert!(
+            !sanitized.contains(secret),
+            "escape-width mismatch leaked {secret}: {sanitized}"
+        );
+        assert!(
+            sanitized.contains(safe_value),
+            "escape-width mismatch consumed safe data: {sanitized}"
+        );
+        assert!(sanitized.contains("safe.name"));
+        assert!(sanitized.contains("--keep-real-arg yes"));
+    }
+}
+
+#[test]
+fn command_line_sanitizer_preserves_single_dash_option_after_malformed_value() {
+    let raw = concat!(
+        r#"installer.exe --malformed {\"password\":\"malformed-single-dash-secret} "#,
+        r#"-keep-real-arg yes --following {\"refresh_token\":\"following-single-dash-secret\","#,
+        r#"\"safe.name\":\"keep-single-dash-safe\"}"#,
+    );
+    let sanitized = sanitize_command_line(raw);
+
+    assert!(!sanitized.contains("malformed-single-dash-secret"));
+    assert!(!sanitized.contains("following-single-dash-secret"));
+    assert!(
+        sanitized.contains("-keep-real-arg yes"),
+        "malformed secret consumed a single-dash option: {sanitized}"
+    );
+    assert!(sanitized.contains(r#"\"safe.name\":\"keep-single-dash-safe\""#));
+    assert!(sanitized.matches("[REDACTED]").count() >= 2);
+}
+
+#[test]
 fn command_line_sanitizer_redacts_escaped_secret_aliases_with_safe_punctuation() {
     for raw in [
         concat!(
