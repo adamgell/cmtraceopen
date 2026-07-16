@@ -547,7 +547,7 @@ fn contains_sensitive_identity_text(value: &str) -> bool {
     IDENTITY_TEXT
         .get_or_init(|| {
             regex::Regex::new(
-                r"(?i)(?:[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}|(?:^|[^a-z0-9])s-1-(?:0x[0-9a-f]{1,12}|[0-9]{1,10})(?:-[0-9]{1,10}){1,15}(?:$|[^0-9])|(?:^|[^a-z0-9])(?:upn|user[ _-]*principal[ _-]*name|user[ _-]*sid|tenant[ _-]*(?:id|domain)|ent[ _-]*dm[ _-]*id|serial[ _-]*(?:number|no))(?:$|[^a-z0-9]))",
+                r"(?i)(?:[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}|(?:^|[^a-z0-9])s-1-(?:0x[0-9a-f]{1,12}|[0-9]{1,10})(?:-[0-9]{1,10}){1,15}(?:$|[^0-9])|(?:^|[^a-z0-9])(?:(?:azure[ _-]*ad|aad)[ _-]*tenant[ _-]*id|device[ _-]*serial[ _-]*(?:number|no)|upn|user[ _-]*principal[ _-]*name|user[ _-]*sid|tenant[ _-]*(?:id|domain)|ent[ _-]*dm[ _-]*id|serial[ _-]*(?:number|no))(?:$|[^a-z0-9]))",
             )
             .expect("constant event identity regex")
         })

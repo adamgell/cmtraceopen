@@ -405,6 +405,9 @@ pub fn parse_esp_event_xml(
     rendered_message: Option<String>,
     fallback_channel: &str,
 ) -> Option<ParsedEspEventRecord> {
+    if !xml.trim_end().ends_with("</Event>") {
+        return None;
+    }
     let event_id = xml_element_text(xml, "EventID")?
         .trim()
         .parse::<u32>()
@@ -424,26 +427,25 @@ pub fn parse_esp_event_xml(
                 .map(|value| decode_esp_xml_text(value.trim()))
                 .filter(|value| !value.is_empty())
         });
+    let event_data = ordered_event_data(xml)?;
 
     Some(ParsedEspEventRecord {
         channel,
         event_id,
         record_id,
         source_timestamp,
-        event_data: ordered_event_data(xml),
+        event_data,
         message,
         source_file: source_file.to_string(),
         raw_xml: xml.to_string(),
     })
 }
 
-fn ordered_event_data(xml: &str) -> Vec<EventLogProperty> {
+fn ordered_event_data(xml: &str) -> Option<Vec<EventLogProperty>> {
     let Some(event_data_start) = xml.find("<EventData") else {
-        return Vec::new();
+        return Some(Vec::new());
     };
-    let Some(event_data_end_offset) = xml[event_data_start..].find("</EventData>") else {
-        return Vec::new();
-    };
+    let event_data_end_offset = xml[event_data_start..].find("</EventData>")?;
     let event_data = &xml[event_data_start..event_data_start + event_data_end_offset];
     let mut properties = Vec::new();
     let mut cursor = 0;
@@ -451,16 +453,12 @@ fn ordered_event_data(xml: &str) -> Vec<EventLogProperty> {
     while let Some(tag_offset) = event_data[cursor..].find("<Data") {
         let tag_start = cursor + tag_offset;
         let after_name = tag_start + "<Data".len();
-        let Some(next_character) = event_data[after_name..].chars().next() else {
-            break;
-        };
+        let next_character = event_data[after_name..].chars().next()?;
         if !next_character.is_ascii_whitespace() && next_character != '>' && next_character != '/' {
             cursor = after_name;
             continue;
         }
-        let Some(tag_end_offset) = event_data[tag_start..].find('>') else {
-            break;
-        };
+        let tag_end_offset = event_data[tag_start..].find('>')?;
         let tag_end = tag_start + tag_end_offset;
         let attributes = &event_data[after_name..tag_end];
         let name = xml_attribute(attributes, "Name")
@@ -473,16 +471,14 @@ fn ordered_event_data(xml: &str) -> Vec<EventLogProperty> {
             cursor = tag_end + 1;
             continue;
         }
-        let Some(value_end_offset) = event_data[tag_end + 1..].find("</Data>") else {
-            break;
-        };
+        let value_end_offset = event_data[tag_end + 1..].find("</Data>")?;
         let value_end = tag_end + 1 + value_end_offset;
         let value = decode_esp_xml_text(event_data[tag_end + 1..value_end].trim());
         properties.push(EventLogProperty { name, value });
         cursor = value_end + "</Data>".len();
     }
 
-    properties
+    Some(properties)
 }
 
 fn xml_element_text<'a>(xml: &'a str, element: &str) -> Option<&'a str> {
@@ -1498,6 +1494,58 @@ mod tests {
         assert_eq!(batch.records.len(), 1);
         assert_eq!(batch.records[0].record_id, Some(1));
         assert_eq!(batch.parse_failure_count, 2);
+        assert!(batch.truncated);
+    }
+
+    #[test]
+    fn esp_record_stream_counts_truncated_event_data_as_an_xml_parse_failure() {
+        let valid_xml = esp_record_xml("valid");
+        let truncated_xml = concat!(
+            "<Event><System><EventID>72</EventID>",
+            "<TimeCreated SystemTime='2026-07-16T13:00:00Z'/>",
+            "<Channel>Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin</Channel>",
+            "</System><EventData><Data Name='Payload'>unterminated</Event>"
+        );
+        let input = vec![
+            Ok::<_, &'static str>((valid_xml, 1)),
+            Ok((truncated_xml.to_string(), 2)),
+        ];
+
+        let batch = parse_esp_record_stream(
+            input,
+            "truncated-stream.evtx",
+            10,
+            MAX_ESP_EVTX_RECORD_BYTES,
+            usize::MAX,
+        );
+
+        assert_eq!(batch.inspected_records, 2);
+        assert_eq!(batch.records.len(), 1);
+        assert_eq!(batch.records[0].record_id, Some(1));
+        assert_eq!(batch.parse_failure_count, 1);
+        assert!(batch.truncated);
+    }
+
+    #[test]
+    fn esp_record_stream_counts_a_truncated_event_envelope_as_an_xml_parse_failure() {
+        let truncated_xml = concat!(
+            "<Event><System><EventID>72</EventID>",
+            "<TimeCreated SystemTime='2026-07-16T13:00:00Z'/>",
+            "<Channel>Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin</Channel>",
+            "</System>"
+        );
+        let input = vec![Ok::<_, &'static str>((truncated_xml.to_string(), 1))];
+
+        let batch = parse_esp_record_stream(
+            input,
+            "truncated-envelope.evtx",
+            10,
+            MAX_ESP_EVTX_RECORD_BYTES,
+            usize::MAX,
+        );
+
+        assert!(batch.records.is_empty());
+        assert_eq!(batch.parse_failure_count, 1);
         assert!(batch.truncated);
     }
 

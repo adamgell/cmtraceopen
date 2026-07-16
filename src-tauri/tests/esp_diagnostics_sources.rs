@@ -867,6 +867,62 @@ fn event_identity_aliases_and_full_windows_sid_grammar_are_always_sensitive() {
 }
 
 #[test]
+fn event_identity_aliases_inside_unstructured_values_are_always_sensitive() {
+    for (index, value) in [
+        "AzureADTenantID=aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        "DeviceSerialNumber=DVC-739185",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let channel = ESP_EVENT_CHANNELS[0];
+        let record = parsed_event(
+            channel,
+            72,
+            1_100 + index as u64,
+            vec![event_property("Payload", value)],
+        );
+        let provider = FakeEventLogProvider::default()
+            .with_records(channel, vec![record])
+            .with_records(ESP_EVENT_CHANNELS[1], Vec::new());
+
+        let evidence = collect_event_evidence(&provider, "2026-07-16T13:00:00Z");
+
+        assert_eq!(
+            evidence.observations[0].observation.context.sensitivity,
+            EspSensitivity::Sensitive,
+            "unstructured identity value was published as Public: {value}"
+        );
+    }
+}
+
+#[test]
+fn event_identity_aliases_inside_unstructured_messages_are_always_sensitive() {
+    for (index, message) in [
+        "AzureADTenantID=aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        "DeviceSerialNumber=DVC-739185",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let channel = ESP_EVENT_CHANNELS[0];
+        let mut record = parsed_event(channel, 72, 1_200 + index as u64, Vec::new());
+        record.message = Some(message.to_string());
+        let provider = FakeEventLogProvider::default()
+            .with_records(channel, vec![record])
+            .with_records(ESP_EVENT_CHANNELS[1], Vec::new());
+
+        let evidence = collect_event_evidence(&provider, "2026-07-16T13:00:00Z");
+
+        assert_eq!(
+            evidence.observations[0].observation.context.sensitivity,
+            EspSensitivity::Sensitive,
+            "unstructured identity message was published as Public: {message}"
+        );
+    }
+}
+
+#[test]
 fn event_hardware_redaction_preserves_positional_field_indexes() {
     let channel = ESP_EVENT_CHANNELS[0];
     let record = parsed_event(
