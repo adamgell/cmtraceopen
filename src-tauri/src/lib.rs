@@ -6,6 +6,8 @@ mod constants;
 pub mod dsregcmd;
 pub mod error;
 pub use cmtraceopen_parser::error_db;
+#[cfg(feature = "esp-diagnostics")]
+pub mod esp;
 #[cfg(feature = "event-log")]
 pub mod event_log;
 #[cfg(target_os = "windows")]
