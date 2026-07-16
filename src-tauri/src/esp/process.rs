@@ -264,6 +264,7 @@ struct CommandLineSanitizers {
     unterminated_hardware_identity: Regex,
     double_quoted_authorization: Regex,
     single_quoted_authorization: Regex,
+    quoted_authorization_redaction_end: Regex,
     parameterized_authorization: Regex,
     standalone_digest_challenge: Regex,
     digest_secret_parameter: Regex,
@@ -272,7 +273,9 @@ struct CommandLineSanitizers {
     standalone_basic_credential: Regex,
     bearer: Regex,
     named_secret: Regex,
+    named_secret_argument_prefix: Regex,
     query_secret: Regex,
+    query_secret_argument_prefix: Regex,
     json_secret: Regex,
 }
 
@@ -291,6 +294,10 @@ fn command_line_sanitizers() -> &'static CommandLineSanitizers {
             r#"(?i)(')((?:--|/)?authorization)(\s*(?:=|:)\s*|\s+)[!#$%&'*+\-.^_`|~a-z0-9]+\s+(?:\\.|[^'])*'"#,
         )
         .expect("constant single-quoted-authorization regex"),
+        quoted_authorization_redaction_end: Regex::new(
+            r#"(?i)(?:"(?:--|/)?authorization(?:\s*(?:=|:)\s*|\s+)\[REDACTED\]"|'(?:--|/)?authorization(?:\s*(?:=|:)\s*|\s+)\[REDACTED\]')"#,
+        )
+        .expect("constant quoted-authorization-redaction-end regex"),
         parameterized_authorization: Regex::new(
             r#"(?i)(^|\s)((?:--|/)?authorization)(\s*(?:=|:)\s*|\s+)[!#$%&'*+\-.^_`|~a-z0-9]+\s+[!#$%&'*+\-.^_`|~a-z0-9]+\s*=\s*(?:"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|[^\s,]+)(?:(?:\s*,\s*[!#$%&'*+\-.^_`|~a-z0-9]+|\s+[!#$%&'*+.^_`|~a-z0-9][!#$%&'*+\-.^_`|~a-z0-9]*)\s*=\s*(?:"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|[^\s,]+))*(?:\s+[!#$%&'*+.^_`|~a-z0-9][^\s]*)*"#,
         )
@@ -312,21 +319,29 @@ fn command_line_sanitizers() -> &'static CommandLineSanitizers {
         )
         .expect("constant authorization-credential regex"),
         standalone_basic_credential: Regex::new(
-            r#"(?i)(^|\s)(basic)(\s+)("[a-z0-9+/]+={0,2}"|'[a-z0-9+/]+={0,2}'|[a-z0-9+/]+={0,2})(\s|[.,;:!?)\]}]|$)"#,
+            r#"(?i)(^|\s)(basic)(\s+)((?:"[a-z0-9+/]+={0,2}"|'[a-z0-9+/]+={0,2}'|[a-z0-9+/]+={0,2})+)(\s|[.,;:!?)\]}]|$)"#,
         )
         .expect("constant standalone-Basic-credential regex"),
         bearer: Regex::new(
-            r#"(?i)(bearer\s+)("(?:\\.|[^"])*"|'(?:\\.|[^'])*'|[^\s&"]+)"#,
+            r#"(?i)(bearer\s+)("(?:\\.|[^"])*"(?:[^\s&"]+|"(?:\\.|[^"])*")*|'(?:\\.|[^'])*'(?:[^\s&']+|'(?:\\.|[^'])*')*|[^\s&"]+)"#,
         )
         .expect("constant bearer regex"),
         named_secret: Regex::new(
             r#"(?i)(^|\s)((?:--?|/)?(?:access[-_]?token|refresh[-_]?token|id[-_]?token|auth[-_]?token|bearer[-_]?token|client[-_]?secret|app[-_]?secret|api[-_]?key|hardware[-_]?hash|device[-_]?hardware[-_]?data|token|password|secret|authorization))(\s*(?:=|:)\s*|\s+)(?:"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|[^\s&"]+)"#,
         )
         .expect("constant named-secret regex"),
+        named_secret_argument_prefix: Regex::new(
+            r#"(?i)(^|\s)((?:--?|/)?(?:access[-_]?token|refresh[-_]?token|id[-_]?token|auth[-_]?token|bearer[-_]?token|client[-_]?secret|app[-_]?secret|api[-_]?key|hardware[-_]?hash|device[-_]?hardware[-_]?data|token|password|secret|authorization))(\s*(?:=|:)\s*|\s+)"#,
+        )
+        .expect("constant named-secret-argument-prefix regex"),
         query_secret: Regex::new(
             r#"(?i)([?&](?:sig|access[-_]?token|refresh[-_]?token|id[-_]?token|auth[-_]?token|bearer[-_]?token|client[-_]?secret|app[-_]?secret|api[-_]?key|hardware[-_]?hash|device[-_]?hardware[-_]?data|token|password|secret|authorization)=)(?:"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|[^&\s"]+)"#,
         )
         .expect("constant query-secret regex"),
+        query_secret_argument_prefix: Regex::new(
+            r#"(?i)[?&](?:sig|access[-_]?token|refresh[-_]?token|id[-_]?token|auth[-_]?token|bearer[-_]?token|client[-_]?secret|app[-_]?secret|api[-_]?key|hardware[-_]?hash|device[-_]?hardware[-_]?data|token|password|secret|authorization)="#,
+        )
+        .expect("constant query-secret-argument-prefix regex"),
         json_secret: Regex::new(
             r#"(?i)("(?:access[-_]?token|refresh[-_]?token|id[-_]?token|auth[-_]?token|bearer[-_]?token|client[-_]?secret|app[-_]?secret|api[-_]?key|hardware[-_]?hash|device[-_]?hardware[-_]?data|token|password|secret|authorization)"\s*:\s*")(?:\\.|[^"])*(\")"#,
         )
@@ -348,6 +363,10 @@ pub fn sanitize_command_line(command_line: &str) -> String {
     let command_line = sanitizers
         .single_quoted_authorization
         .replace_all(&command_line, "$1$2$3[REDACTED]'");
+    let command_line = consume_adjacent_redacted_fragments(
+        &command_line,
+        &sanitizers.quoted_authorization_redaction_end,
+    );
     let command_line = sanitizers
         .parameterized_authorization
         .replace_all(&command_line, "$1$2$3[REDACTED]");
@@ -374,8 +393,10 @@ pub fn sanitize_command_line(command_line: &str) -> String {
     let command_line = sanitizers.standalone_basic_credential.replace_all(
         &command_line,
         |captures: &regex::Captures<'_>| {
-            let credential =
-                captures[4].trim_matches(|character| character == '"' || character == '\'');
+            let credential = captures[4]
+                .chars()
+                .filter(|character| *character != '"' && *character != '\'')
+                .collect::<String>();
             let is_basic_credential = base64::engine::general_purpose::STANDARD
                 .decode(credential.as_bytes())
                 .or_else(|_| {
@@ -415,13 +436,123 @@ pub fn sanitize_command_line(command_line: &str) -> String {
     let command_line = sanitizers
         .named_secret
         .replace_all(&command_line, "$1$2$3[REDACTED]");
+    let command_line = redact_secret_argument_fragments(
+        &command_line,
+        &sanitizers.named_secret_argument_prefix,
+        false,
+    );
     let command_line = sanitizers
         .query_secret
         .replace_all(&command_line, "$1[REDACTED]");
+    let command_line = redact_secret_argument_fragments(
+        &command_line,
+        &sanitizers.query_secret_argument_prefix,
+        true,
+    );
     let command_line = sanitizers
         .json_secret
         .replace_all(&command_line, "$1[REDACTED]$2");
     redact_escaped_json_secrets(&command_line)
+}
+
+fn redact_secret_argument_fragments(
+    command_line: &str,
+    prefix: &Regex,
+    stop_at_ampersand: bool,
+) -> String {
+    let mut sanitized = String::with_capacity(command_line.len());
+    let mut copied_through = 0;
+    let mut search_from = 0;
+
+    while search_from < command_line.len() {
+        let Some(prefix_match) = prefix.find_at(command_line, search_from) else {
+            break;
+        };
+        let value_start = prefix_match.end();
+        let value_end = secret_argument_end(command_line, value_start, stop_at_ampersand);
+        if value_end == value_start {
+            search_from = value_start;
+            if search_from == command_line.len() {
+                break;
+            }
+            continue;
+        }
+
+        sanitized.push_str(&command_line[copied_through..value_start]);
+        sanitized.push_str("[REDACTED]");
+        copied_through = value_end;
+        search_from = value_end;
+    }
+
+    sanitized.push_str(&command_line[copied_through..]);
+    sanitized
+}
+
+fn consume_adjacent_redacted_fragments(command_line: &str, redaction_end: &Regex) -> String {
+    let mut sanitized = String::with_capacity(command_line.len());
+    let mut copied_through = 0;
+    let mut search_from = 0;
+
+    while search_from < command_line.len() {
+        let Some(redacted_match) = redaction_end.find_at(command_line, search_from) else {
+            break;
+        };
+        let suffix_start = redacted_match.end();
+        let suffix_end = secret_argument_end(command_line, suffix_start, false);
+        if suffix_end == suffix_start {
+            search_from = suffix_start;
+            if search_from == command_line.len() {
+                break;
+            }
+            continue;
+        }
+
+        sanitized.push_str(&command_line[copied_through..suffix_start]);
+        copied_through = suffix_end;
+        search_from = suffix_end;
+    }
+
+    sanitized.push_str(&command_line[copied_through..]);
+    sanitized
+}
+
+// Windows joins adjacent quoted and unquoted fragments into one argument. Track double-quote
+// state (including backslash parity) so a sensitive value is consumed to its real argument
+// boundary; an unmatched quote deliberately consumes the remaining command line.
+fn secret_argument_end(command_line: &str, value_start: usize, stop_at_ampersand: bool) -> usize {
+    let bytes = command_line.as_bytes();
+    let mut index = value_start;
+    let mut in_double_quotes = false;
+
+    while index < bytes.len() {
+        let byte = bytes[index];
+        if !in_double_quotes
+            && (matches!(byte, b' ' | b'\t' | b'\r' | b'\n') || (stop_at_ampersand && byte == b'&'))
+        {
+            break;
+        }
+
+        if byte == b'\\' {
+            let slash_start = index;
+            while index < bytes.len() && bytes[index] == b'\\' {
+                index += 1;
+            }
+            if index < bytes.len() && bytes[index] == b'"' {
+                if (index - slash_start) % 2 == 0 {
+                    in_double_quotes = !in_double_quotes;
+                }
+                index += 1;
+            }
+            continue;
+        }
+
+        if byte == b'"' {
+            in_double_quotes = !in_double_quotes;
+        }
+        index += 1;
+    }
+
+    index
 }
 
 fn redact_escaped_json_secrets(command_line: &str) -> String {
@@ -1604,6 +1735,109 @@ mod tests {
             assert_eq!(observation.referenced_log_path, None);
             assert_eq!(observation.product_code, None);
             assert_eq!(observation.app_id, None);
+        }
+    }
+
+    #[test]
+    fn adjacent_windows_hardware_identity_fragments_are_fully_redacted_before_serialization() {
+        for option in ["--HardwareHash", "--DeviceHardwareData"] {
+            let raw = format!(
+                r#"msiexec.exe {option}="prefix-hardware-secret"suffix-hardware-secret /L*V C:\Windows\Temp\safe-installer.log"#
+            );
+            let evidence = collect(
+                vec![process(
+                    55,
+                    Some(20),
+                    "msiexec.exe",
+                    "2026-07-15T13:20:00Z",
+                    Some(&raw),
+                )],
+                &[],
+            );
+            let observation = &evidence.observations[0];
+            let serialized = serde_json::to_string(&evidence).expect("serialize process evidence");
+
+            assert!(serialized.contains("[REDACTED]"));
+            assert!(!serialized.contains("prefix-hardware-secret"));
+            assert!(!serialized.contains("suffix-hardware-secret"));
+            assert_eq!(
+                observation.referenced_log_path.as_deref(),
+                Some(r"C:\Windows\Temp\safe-installer.log")
+            );
+        }
+    }
+
+    #[test]
+    fn adjacent_windows_named_and_query_secret_fragments_are_fully_redacted() {
+        let cases = [
+            (
+                r#"--token="prefix-token-secret"suffix-token-secret --mode keep-option"#,
+                ["prefix-token-secret", "suffix-token-secret"],
+                "keep-option",
+            ),
+            (
+                r#"https://cache.invalid/content?token="prefix-query-secret"suffix-query-secret&safe=keep-query"#,
+                ["prefix-query-secret", "suffix-query-secret"],
+                "keep-query",
+            ),
+        ];
+
+        for (secret_argument, sentinels, safe_sentinel) in cases {
+            let raw = format!("msiexec.exe {secret_argument}");
+            let evidence = collect(
+                vec![process(
+                    56,
+                    Some(20),
+                    "msiexec.exe",
+                    "2026-07-15T13:20:00Z",
+                    Some(&raw),
+                )],
+                &[],
+            );
+            let serialized = serde_json::to_string(&evidence).expect("serialize process evidence");
+
+            assert!(serialized.contains("[REDACTED]"));
+            for sentinel in sentinels {
+                assert!(
+                    !serialized.contains(sentinel),
+                    "adjacent fragment leaked {sentinel}: {serialized}"
+                );
+            }
+            assert!(serialized.contains(safe_sentinel));
+        }
+    }
+
+    #[test]
+    fn adjacent_authorization_credential_fragments_are_fully_redacted() {
+        let cases = [
+            (
+                r#"Bearer "prefix-bearer-secret"suffix-bearer-secret --mode keep-bearer"#,
+                ["prefix-bearer-secret", "suffix-bearer-secret"],
+                "keep-bearer",
+            ),
+            (
+                r#"Basic "dXNlcjpwYXNz"d29yZA== --mode keep-basic"#,
+                ["dXNlcjpwYXNz", "d29yZA=="],
+                "keep-basic",
+            ),
+            (
+                r#""Authorization: Bearer prefix-header-secret"suffix-header-secret --mode keep-header"#,
+                ["prefix-header-secret", "suffix-header-secret"],
+                "keep-header",
+            ),
+        ];
+
+        for (secret_argument, sentinels, safe_sentinel) in cases {
+            let sanitized = sanitize_command_line(secret_argument);
+
+            assert!(sanitized.contains("[REDACTED]"));
+            for sentinel in sentinels {
+                assert!(
+                    !sanitized.contains(sentinel),
+                    "adjacent authorization fragment leaked {sentinel}: {sanitized}"
+                );
+            }
+            assert!(sanitized.contains(safe_sentinel));
         }
     }
 
