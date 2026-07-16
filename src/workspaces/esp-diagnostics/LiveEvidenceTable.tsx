@@ -86,16 +86,18 @@ function timelineForRecord(
   record: EspRawEvidenceRecord,
   timelineIndex: TimelineEvidenceIndex,
 ): EspTimelineEntry | undefined {
-  const sourceIndex = timelineIndex.get(record.provenance.sourceArtifactId);
-  if (!sourceIndex) return undefined;
-
-  const evidenceIds = new Set([
-    record.recordId,
-    ...record.evidence.map((reference) => reference.evidenceId),
-  ]);
+  const references = [
+    {
+      sourceArtifactId: record.provenance.sourceArtifactId,
+      evidenceId: record.recordId,
+    },
+    ...record.evidence,
+  ];
   let earliest: IndexedTimelineEntry | undefined;
-  for (const evidenceId of evidenceIds) {
-    const candidate = sourceIndex.get(evidenceId);
+  for (const reference of references) {
+    const candidate = timelineIndex
+      .get(reference.sourceArtifactId)
+      ?.get(reference.evidenceId);
     if (
       candidate &&
       (!earliest || candidate.activityIndex < earliest.activityIndex)

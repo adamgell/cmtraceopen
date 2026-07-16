@@ -884,6 +884,55 @@ describe("LiveEvidenceTable", () => {
     expect(evidenceReads).toBeLessThanOrEqual(entryCount * 2);
   });
 
+  it("resolves timeline context through each evidence reference's own source", () => {
+    useEspDiagnosticsStore.getState().setEvidenceViewMode("docked");
+    const crossSourceRecord = record(
+      "cross-source-record",
+      "Captured record completed",
+      {
+        evidence: [
+          {
+            evidenceId: "event-evidence",
+            sourceArtifactId: "mdm-events",
+          },
+        ],
+      },
+    );
+    const evidence = snapshot([crossSourceRecord]);
+    evidence.activity = [
+      {
+        entryId: "timeline|mdm-events|event-evidence|0",
+        timestamp: {
+          rawText: "2026-07-15T20:00:00.000Z",
+          originalOffset: "+00:00",
+          normalizedUtc: "2026-07-15T20:00:00.000Z",
+          kind: "utc",
+        },
+        kind: "registration",
+        title: "Registration failed",
+        detail: null,
+        status: {
+          raw: "failed",
+          normalized: "failed",
+          display: "Failed",
+          detail: null,
+        },
+        evidence: [
+          {
+            evidenceId: "event-evidence",
+            sourceArtifactId: "mdm-events",
+          },
+        ],
+      },
+    ];
+
+    render(<LiveEvidenceDock snapshot={evidence} />);
+
+    const row = screen.getByTestId("live-evidence-row");
+    expect(row).toHaveTextContent(/error/i);
+    expect(row).toHaveTextContent(/registration/i);
+  });
+
   it("keeps local raw log text verbatim when normalized timeline evidence exists", () => {
     useEspDiagnosticsStore.getState().setEvidenceViewMode("docked");
     const rawLine = "  <![LOG[Raw  MSI\tline:\nproperty VALUE=unchanged]LOG]!>";
