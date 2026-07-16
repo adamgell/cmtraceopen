@@ -15,6 +15,7 @@ import {
   LOG_MONOSPACE_FONT_FAMILY,
   LOG_UI_FONT_FAMILY,
 } from "../../lib/log-accessibility";
+import { createUuidRequestId } from "../../lib/uuid-request-id";
 import { useUiStore } from "../../stores/ui-store";
 import { ActionCenter } from "./ActionCenter";
 import { ElevationBanner } from "./ElevationBanner";
@@ -32,10 +33,6 @@ import {
 import { LiveActivity } from "./LiveActivity";
 import { MsiexecStatus } from "./MsiexecStatus";
 import "./esp-diagnostics.css";
-
-function createRequestId(prefix: "analysis" | "live"): string {
-  return `esp-${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-}
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -91,7 +88,7 @@ export function EspDiagnosticsWorkspace() {
   }, []);
 
   const startLive = useCallback(async () => {
-    const requestId = createRequestId("live");
+    const requestId = createUuidRequestId();
     const store = useEspDiagnosticsStore.getState();
     store.beginLiveStart(requestId);
 

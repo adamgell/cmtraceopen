@@ -70,6 +70,8 @@ const TestToolbarAction = lazy(async () => ({
 const TestStatusContent = lazy(async () => ({
   default: () => createElement("span", null, "Workspace status content"),
 }));
+const UUID_REQUEST_ID =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 function makeChromeSnapshot(): EspDiagnosticsSnapshot {
   return {
@@ -464,6 +466,51 @@ describe("ESP workspace registration", () => {
       screen.getByRole("button", { name: "Start live diagnostics" }),
     ).toBeEnabled();
     expect(screen.getByText("Waiting for evidence")).toBeInTheDocument();
+  });
+
+  it("sends a native-valid UUID when analyzing captured evidence", async () => {
+    vi.mocked(invoke).mockResolvedValueOnce(makeChromeSnapshot());
+
+    await espDiagnosticsWorkspace.onOpenSource!(
+      { kind: "file", path: "/captures/manifest.json" },
+      "toolbar.open-file",
+    );
+
+    expect(vi.mocked(invoke)).toHaveBeenCalledWith(
+      "analyze_esp_evidence",
+      expect.objectContaining({
+        path: "/captures/manifest.json",
+        requestId: expect.stringMatching(UUID_REQUEST_ID),
+      }),
+    );
+  });
+
+  it("sends a native-valid UUID when starting live diagnostics", async () => {
+    const snapshot = makeChromeSnapshot();
+    vi.mocked(invoke).mockImplementationOnce(async (_command, args) => {
+      const requestId = (args as { requestId: string }).requestId;
+      return {
+        sessionId: "11111111-1111-4111-8111-111111111111",
+        requestId,
+        sequence: 1,
+        state: "live",
+        snapshot,
+      };
+    });
+    render(createElement(EspDiagnosticsWorkspace));
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Start live diagnostics" }),
+    );
+
+    await waitFor(() =>
+      expect(vi.mocked(invoke)).toHaveBeenCalledWith(
+        "start_esp_diagnostics_session",
+        expect.objectContaining({
+          requestId: expect.stringMatching(UUID_REQUEST_ID),
+        }),
+      ),
+    );
   });
 
   it("renders analyzing and error states without discarding the action surface", () => {

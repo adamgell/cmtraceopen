@@ -1,5 +1,6 @@
 import { lazy } from "react";
 import { analyzeEspEvidence, inspectPathKind } from "../../lib/commands";
+import { createUuidRequestId } from "../../lib/uuid-request-id";
 import { useUiStore } from "../../stores/ui-store";
 import type { LogSource, PlatformKind } from "../../types/log";
 import type { WorkspaceDefinition } from "../types";
@@ -9,10 +10,6 @@ export const ESP_EVIDENCE_SOURCE_ERROR =
   "ESP Diagnostics accepts CMTrace evidence folders, manifest.json, CAB, or ZIP sources.";
 export const ESP_LIVE_IMPORT_ERROR =
   "Stop live diagnostics before importing captured evidence.";
-
-function createAnalysisRequestId(): string {
-  return `esp-analysis-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-}
 
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -63,7 +60,7 @@ export async function analyzeEspEvidenceSource(
   }
 
   useUiStore.getState().ensureWorkspaceVisible("esp-diagnostics", trigger);
-  const requestId = createAnalysisRequestId();
+  const requestId = createUuidRequestId();
   const store = useEspDiagnosticsStore.getState();
   store.beginAnalysis(requestId);
 

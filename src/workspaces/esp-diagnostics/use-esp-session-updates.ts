@@ -5,6 +5,7 @@ import {
   graphCancelEspDiagnostics,
   graphFetchEspDiagnostics,
 } from "../../lib/commands";
+import { createUuidRequestId } from "../../lib/uuid-request-id";
 import { useUiStore } from "../../stores/ui-store";
 import {
   getEspIdentityFingerprint,
@@ -361,10 +362,7 @@ function getEvidenceWindow(
 }
 
 function createRequestId(): string {
-  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
-    return `esp-graph-${crypto.randomUUID()}`;
-  }
-  return `esp-graph-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  return createUuidRequestId();
 }
 
 export interface EspGraphCoordinatorDependencies {
