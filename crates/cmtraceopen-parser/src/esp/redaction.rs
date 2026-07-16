@@ -107,22 +107,23 @@ fn standalone_digest_challenge_pattern() -> &'static Regex {
     })
 }
 
-fn safe_digest_parameter_sequence_pattern() -> &'static Regex {
+fn safe_digest_narrative_pattern() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
-        let parameter = r#"(?:algorithm[ \t]*=[ \t]*(?:md5(?:-sess)?|sha-256(?:-sess)?|sha-512-256(?:-sess)?)|retry-count[ \t]*=[ \t]*[0-9]+)"#;
-        Regex::new(&format!(
-            r#"(?i)^{parameter}(?:(?:[ \t]*[,;][ \t]*|[ \t]+){parameter})*$"#,
-        ))
-        .expect("safe Digest parameter-sequence pattern must compile")
+        Regex::new(
+            r#"(?i)^digest[ \t]+(?:algorithm[ \t]*=[ \t]*(?:md5(?:-sess)?|sha-256(?:-sess)?|sha-512-256(?:-sess)?)[ \t]+(?:is|was|remains)[ \t]+(?:supported|configured)|retry-count[ \t]*=[ \t]*[0-9]+[ \t]+(?:is|was|remains)[ \t]+within[ \t]+policy)(?:[.!?])?$"#,
+        )
+        .expect("safe Digest narrative pattern must compile")
     })
 }
 
-fn safe_digest_narrative_tail_pattern() -> &'static Regex {
+fn safe_authorization_narrative_pattern() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
-        Regex::new(r#"(?i)^[ \t]+(?:is|was|remains)(?:[ \t]+[A-Z0-9_-]+)*(?:[.!?])?$"#)
-            .expect("safe Digest narrative-tail pattern must compile")
+        Regex::new(
+            r#"(?i)^(?:(?:basic|bearer|digest|apikey|negotiate|ntlm)[ \t]+(?:authentication[ \t]+(?:is[ \t]+configured|remains[ \t]+available)|authorization[ \t]+is[ \t]+required|scheme[ \t]+negotiation[ \t]+was[ \t]+retried|token[ \t]+support[ \t]+is[ \t]+enabled)|authorization[ \t]+(?:is[ \t]+required|remains[ \t]+required|policy[ \t]+is[ \t]+enforced|status[ \t]+remains[ \t]+available))(?:[.!?])?$"#,
+        )
+        .expect("safe authorization narrative pattern must compile")
     })
 }
 
@@ -170,10 +171,123 @@ fn standalone_authorization_scheme_pattern() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
         Regex::new(
-            r#"(?i)(?P<prefix>\b(?P<scheme>basic|bearer|digest|apikey|negotiate|ntlm)[ \t]+)(?:\\+"[^"\r\n]*"|\\+'[^'\r\n]*'|"(?P<double_quoted>[^"\r\n]+)"|'(?P<single_quoted>[^'\r\n]+)'|(?P<bare>[A-Z0-9._~+/=-]+))(?:\r?\n[ \t]+[^\r\n]+)*"#,
+            r#"(?i)(?P<prefix>\b(?P<scheme>basic|bearer|digest|apikey|negotiate|ntlm)[ \t]+)(?:\\+"[^"\r\n]*"|\\+'[^'\r\n]*'|"(?P<double_quoted>[^"\r\n]+)"|'(?P<single_quoted>[^'\r\n]+)'|(?P<bare>[A-Z0-9._~+/=-]+))(?P<tail>[^\r\n]*)(?:\r?\n[ \t]+[^\r\n]+)*"#,
         )
         .expect("standalone authorization-scheme redaction pattern must compile")
     })
+}
+
+fn quoted_authorization_credential_start_pattern() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
+        Regex::new(
+            r#"(?i)(?P<prefix>(?:\b(?:basic|bearer|digest|apikey|negotiate|ntlm)[ \t]+|(?:(?:--?|/)authorization["']?(?:[ \t]*(?:\r?\n[ \t]+)?(?:->|=>)[ \t]*(?:\r?\n[ \t]+)?|\s*[=:]\s*|\s+)|\bauthorization["']?(?:[ \t]*(?:\r?\n[ \t]+)?(?:->|=>)[ \t]*(?:\r?\n[ \t]+)?|\s*[=:]\s*|\s+))(?:(?:basic|bearer|digest|apikey|negotiate|ntlm)[ \t]+)?))(?P<opening>\\*["'])"#,
+        )
+        .expect("quoted authorization-credential start pattern must compile")
+    })
+}
+
+fn redact_quoted_authorization_credentials(value: &str) -> String {
+    let pattern = quoted_authorization_credential_start_pattern();
+    let mut redacted = String::with_capacity(value.len());
+    let mut cursor = 0;
+
+    while let Some(captures) = pattern.captures_at(value, cursor) {
+        let prefix = captures
+            .name("prefix")
+            .expect("quoted authorization pattern must capture the prefix");
+        let opening = captures
+            .name("opening")
+            .expect("quoted authorization pattern must capture the opening delimiter");
+        let first_credential_end =
+            serialized_quoted_credential_end(value, opening.start(), opening.end());
+        let mut credential_end = first_credential_end;
+        let mut has_adjacent_quoted_segment = false;
+
+        loop {
+            let next_non_space = value.as_bytes()[credential_end..]
+                .iter()
+                .position(|byte| !matches!(byte, b' ' | b'\t'))
+                .map_or(value.len(), |offset| credential_end + offset);
+            let Some((next_opening_start, next_opening_end)) =
+                serialized_quote_opening_at(value, next_non_space)
+            else {
+                break;
+            };
+            has_adjacent_quoted_segment = true;
+            credential_end =
+                serialized_quoted_credential_end(value, next_opening_start, next_opening_end);
+        }
+
+        if !has_adjacent_quoted_segment
+            && serialized_quoted_credential_is_redacted(
+                value,
+                opening.start(),
+                opening.end(),
+                first_credential_end,
+            )
+        {
+            redacted.push_str(&value[cursor..first_credential_end]);
+        } else {
+            redacted.push_str(&value[cursor..prefix.end()]);
+            redacted.push_str(REDACTED);
+        }
+        cursor = credential_end;
+    }
+
+    redacted.push_str(&value[cursor..]);
+    redacted
+}
+
+fn serialized_quote_opening_at(value: &str, start: usize) -> Option<(usize, usize)> {
+    let bytes = value.as_bytes();
+    if start >= bytes.len() || matches!(bytes[start], b'\r' | b'\n') {
+        return None;
+    }
+    let mut quote_index = start;
+    while quote_index < bytes.len() && bytes[quote_index] == b'\\' {
+        quote_index += 1;
+    }
+    (quote_index < bytes.len() && matches!(bytes[quote_index], b'"' | b'\''))
+        .then_some((start, quote_index + 1))
+}
+
+fn serialized_quoted_credential_is_redacted(
+    value: &str,
+    opening_start: usize,
+    opening_end: usize,
+    credential_end: usize,
+) -> bool {
+    let delimiter_bytes = opening_end - opening_start;
+    if credential_end < opening_end + delimiter_bytes {
+        return false;
+    }
+    let closing_start = credential_end - delimiter_bytes;
+    value[opening_start..opening_end] == value[closing_start..credential_end]
+        && value[opening_end..closing_start] == *REDACTED
+}
+
+fn serialized_quoted_credential_end(
+    value: &str,
+    opening_start: usize,
+    opening_end: usize,
+) -> usize {
+    let bytes = value.as_bytes();
+    let quote = bytes[opening_end - 1];
+    let delimiter_backslashes = opening_end - opening_start - 1;
+    let line_end = bytes[opening_end..]
+        .iter()
+        .position(|byte| matches!(byte, b'\r' | b'\n'))
+        .map_or(bytes.len(), |offset| opening_end + offset);
+
+    for index in opening_end..line_end {
+        if bytes[index] == quote && preceding_backslash_count(bytes, index) == delimiter_backslashes
+        {
+            return index + 1;
+        }
+    }
+
+    line_end
 }
 
 fn redact_escaped_json_secret_members(value: &str) -> String {
@@ -679,6 +793,7 @@ fn redact_reference(value: &mut String, pseudonyms: &ReferencePseudonyms) {
     let bounded = bounded_text(value);
     let redacted = redact_plain_json_secret_members(bounded);
     let redacted = redact_escaped_json_secret_members(&redacted);
+    let redacted = redact_quoted_authorization_credentials(&redacted);
     let redacted =
         authorization_digest_challenge_pattern().replace_all(&redacted, "${prefix}[redacted]");
     let redacted = redact_standalone_digest_challenges(&redacted, TextRedactionContext::Arbitrary);
@@ -1136,18 +1251,11 @@ fn redact_standalone_digest_challenges(value: &str, context: TextRedactionContex
 }
 
 fn standalone_digest_match_is_safe_narrative(value: &str, captures: &regex::Captures<'_>) -> bool {
-    let Some(parameters) = captures.name("parameters") else {
-        return false;
-    };
-    if !safe_digest_parameter_sequence_pattern().is_match(parameters.as_str()) {
-        return false;
-    }
-
     let Some(matched) = captures.get(0) else {
         return false;
     };
-    let tail = captures.name("tail").map_or("", |tail| tail.as_str());
-    safe_digest_narrative_tail_pattern().is_match(tail) && value[matched.end()..].is_empty()
+    safe_digest_narrative_pattern().is_match(matched.as_str().trim())
+        && value[matched.end()..].is_empty()
 }
 
 fn redact_text(value: &str) -> String {
@@ -1162,6 +1270,7 @@ fn redact_text_for_context(value: &str, context: TextRedactionContext) -> String
     let bounded = bounded_text(value);
     let redacted = redact_plain_json_secret_members(bounded);
     let redacted = redact_escaped_json_secret_members(&redacted);
+    let redacted = redact_quoted_authorization_credentials(&redacted);
     let redacted =
         authorization_digest_challenge_pattern().replace_all(&redacted, "${prefix}[redacted]");
     let redacted = redact_standalone_digest_challenges(&redacted, context);
@@ -1345,7 +1454,11 @@ fn redact_assigned_value(captures: &regex::Captures<'_>) -> String {
 fn redact_generic_authorization_credentials(value: &str, context: TextRedactionContext) -> String {
     generic_authorization_scheme_and_credential_pattern()
         .replace_all(value, |captures: &regex::Captures<'_>| {
-            if bare_argument_is_safe_narrative(context, "authorization", &captures["scheme"]) {
+            if context == TextRedactionContext::Narrative
+                && captures.get(0).is_some_and(|matched| {
+                    safe_authorization_narrative_pattern().is_match(matched.as_str().trim())
+                })
+            {
                 captures[0].to_string()
             } else {
                 format!("{}[redacted]", &captures["prefix"])
@@ -1361,11 +1474,15 @@ fn redact_standalone_authorization_credentials(
     standalone_authorization_scheme_pattern()
         .replace_all(value, |captures: &regex::Captures<'_>| {
             if context == TextRedactionContext::Narrative
-                && authorization_scheme_match_is_safe_narrative(value, captures)
+                && authorization_scheme_match_is_safe_narrative(captures)
             {
                 captures[0].to_string()
-            } else {
+            } else if context == TextRedactionContext::Narrative
+                && authorization_scheme_match_starts_narrative_clause(captures)
+            {
                 format!("{}[redacted]", &captures["prefix"])
+            } else {
+                format!("{}[redacted]{}", &captures["prefix"], &captures["tail"])
             }
         })
         .into_owned()
@@ -1442,38 +1559,31 @@ fn bare_argument_is_safe_narrative(context: TextRedactionContext, name: &str, va
     }
 }
 
-fn authorization_scheme_match_is_safe_narrative(
-    value: &str,
-    captures: &regex::Captures<'_>,
-) -> bool {
+fn authorization_scheme_match_is_safe_narrative(captures: &regex::Captures<'_>) -> bool {
     // Arbitrary evidence never reaches this exception. Parser-owned narrative
-    // fields preserve only these exact prose shapes; quoted, terminal, and
-    // unrecognized values remain credentials and are redacted.
-    let Some(candidate) = captures.name("bare") else {
-        return false;
-    };
+    // fields preserve only complete known prose clauses; quoted, extended, and
+    // unrecognized values remain credentials and are redacted with their tails.
     let Some(matched) = captures.get(0) else {
         return false;
     };
-    let remainder = &value[matched.end()..];
-    let continuation = remainder.trim_start_matches([' ', '\t']);
-    if continuation.len() == remainder.len() || continuation.is_empty() {
+    let clause = matched.as_str().trim();
+    safe_authorization_narrative_pattern().is_match(clause)
+        || safe_digest_narrative_pattern().is_match(clause)
+}
+
+fn authorization_scheme_match_starts_narrative_clause(captures: &regex::Captures<'_>) -> bool {
+    let Some(candidate) = captures.name("bare") else {
         return false;
-    }
-    let next_word = continuation
+    };
+    let next_word = captures["tail"]
+        .trim_start_matches([' ', '\t'])
         .split(|character: char| !character.is_ascii_alphabetic())
         .next()
         .unwrap_or_default();
-    let safe_digest_parameter = captures
-        .name("scheme")
-        .is_some_and(|scheme| scheme.as_str().eq_ignore_ascii_case("digest"))
-        && safe_digest_parameter_sequence_pattern().is_match(candidate.as_str())
-        && safe_digest_narrative_tail_pattern().is_match(remainder);
-    safe_digest_parameter
-        || (candidate.as_str().eq_ignore_ascii_case("authentication")
-            && (next_word.eq_ignore_ascii_case("is") || next_word.eq_ignore_ascii_case("remains")))
+    (candidate.as_str().eq_ignore_ascii_case("authentication")
+        && (next_word.eq_ignore_ascii_case("is") || next_word.eq_ignore_ascii_case("remains")))
         || (candidate.as_str().eq_ignore_ascii_case("authorization")
-            && next_word.eq_ignore_ascii_case("is"))
+            && (next_word.eq_ignore_ascii_case("is") || next_word.eq_ignore_ascii_case("remains")))
         || (candidate.as_str().eq_ignore_ascii_case("scheme")
             && next_word.eq_ignore_ascii_case("negotiation"))
         || (candidate.as_str().eq_ignore_ascii_case("token")

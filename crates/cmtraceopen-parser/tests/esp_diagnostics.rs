@@ -10920,3 +10920,204 @@ fn redaction_projection_safe_digest_prose_rejects_late_credential_parameters() {
     assert_eq!(redacted_export_projection(&safe), safe);
     assert_eq!(snapshot, original);
 }
+
+#[test]
+fn redaction_projection_masks_nested_inner_quotes_at_every_serialization_layer() {
+    let payloads = [
+        (
+            "bearer-literal",
+            r#"Bearer "HEAD \"INNER\" BEARER_LITERAL_NESTED_TAIL_SECRET""#,
+            "BEARER_LITERAL_NESTED_TAIL_SECRET",
+        ),
+        (
+            "bearer-escaped",
+            r#"Bearer \"HEAD \\\"INNER\\\" BEARER_ESCAPED_NESTED_TAIL_SECRET\""#,
+            "BEARER_ESCAPED_NESTED_TAIL_SECRET",
+        ),
+        (
+            "bearer-twice",
+            r#"Bearer \\\"HEAD \\\\\\\"INNER\\\\\\\" BEARER_TWICE_NESTED_TAIL_SECRET\\\""#,
+            "BEARER_TWICE_NESTED_TAIL_SECRET",
+        ),
+        (
+            "basic-literal",
+            r#"Basic "HEAD \"INNER\" BASIC_LITERAL_NESTED_TAIL_SECRET""#,
+            "BASIC_LITERAL_NESTED_TAIL_SECRET",
+        ),
+        (
+            "basic-escaped",
+            r#"Basic \"HEAD \\\"INNER\\\" BASIC_ESCAPED_NESTED_TAIL_SECRET\""#,
+            "BASIC_ESCAPED_NESTED_TAIL_SECRET",
+        ),
+        (
+            "basic-twice",
+            r#"Basic \\\"HEAD \\\\\\\"INNER\\\\\\\" BASIC_TWICE_NESTED_TAIL_SECRET\\\""#,
+            "BASIC_TWICE_NESTED_TAIL_SECRET",
+        ),
+        (
+            "authorization-literal",
+            r#"Authorization: Bearer "HEAD \"INNER\" AUTH_LITERAL_NESTED_TAIL_SECRET""#,
+            "AUTH_LITERAL_NESTED_TAIL_SECRET",
+        ),
+        (
+            "authorization-escaped",
+            r#"Authorization: Basic \"HEAD \\\"INNER\\\" AUTH_ESCAPED_NESTED_TAIL_SECRET\""#,
+            "AUTH_ESCAPED_NESTED_TAIL_SECRET",
+        ),
+        (
+            "authorization-twice",
+            r#"Authorization: Bearer \\\"HEAD \\\\\\\"INNER\\\\\\\" AUTH_TWICE_NESTED_TAIL_SECRET\\\""#,
+            "AUTH_TWICE_NESTED_TAIL_SECRET",
+        ),
+    ];
+    let mut snapshot = findings_snapshot();
+    snapshot.identity.evidence = payloads
+        .iter()
+        .map(|(label, payload, _)| evidence_ref_from(&format!("{label}|{payload}"), payload))
+        .collect();
+    snapshot.activity = payloads
+        .iter()
+        .enumerate()
+        .map(|(index, (label, payload, _))| EspTimelineEntry {
+            entry_id: format!("nested-quote-{label}"),
+            timestamp: timestamp(&format!("2026-07-16T11:{index:02}:00Z")),
+            kind: EspTimelineKind::Other,
+            title: (*payload).to_string(),
+            detail: Some((*payload).to_string()),
+            status: None,
+            evidence: vec![evidence_ref_from(
+                &format!("timeline-{label}|{payload}"),
+                payload,
+            )],
+        })
+        .collect();
+    let original = snapshot.clone();
+
+    let safe = redacted_export_projection(&snapshot);
+    let safe_json = serde_json::to_string(&safe).unwrap();
+
+    for (label, _, secret) in payloads {
+        assert!(
+            !safe_json.contains(secret),
+            "nested {label} credential leaked from the public projection: {safe_json}"
+        );
+    }
+    assert_eq!(redacted_export_projection(&safe), safe);
+    assert_eq!(snapshot, original);
+}
+
+#[test]
+fn redaction_projection_rejects_complete_tail_smuggling_after_safe_prose_prefixes() {
+    let base64_credential = "QmFzaWM6QkFTSUNfU0FGRV9CQVNFNjRfU01VR0dMRV9TRUNSRVQ=";
+    let payloads = [
+        (
+            "digest-space-nonce",
+            "Digest algorithm=SHA-256 is supported nonce DIGEST_SPACE_NONCE_SECRET",
+            "DIGEST_SPACE_NONCE_SECRET",
+        ),
+        (
+            "digest-space-username",
+            "Digest retry-count=2 remains within policy username DIGEST_SPACE_USERNAME_SECRET",
+            "DIGEST_SPACE_USERNAME_SECRET",
+        ),
+        (
+            "bearer-quoted",
+            r#"Bearer authentication is "BEARER_SAFE_QUOTED_SECRET WITH_TAIL""#,
+            "BEARER_SAFE_QUOTED_SECRET",
+        ),
+        (
+            "bearer-jwt",
+            "Bearer token support is eyJhbGciOiJIUzI1NiJ9.BEARER_SAFE_JWT_SECRET.signature",
+            "BEARER_SAFE_JWT_SECRET",
+        ),
+        (
+            "bearer-late-nonce",
+            "Bearer authentication remains available nonce BEARER_SAFE_LATE_NONCE_SECRET",
+            "BEARER_SAFE_LATE_NONCE_SECRET",
+        ),
+        (
+            "basic-base64",
+            "Basic authorization is QmFzaWM6QkFTSUNfU0FGRV9CQVNFNjRfU01VR0dMRV9TRUNSRVQ=",
+            base64_credential,
+        ),
+        (
+            "basic-late-credential",
+            "Basic scheme negotiation was retried credential BASIC_SAFE_LATE_CREDENTIAL_SECRET",
+            "BASIC_SAFE_LATE_CREDENTIAL_SECRET",
+        ),
+        (
+            "authorization-custom",
+            "Authorization policy is Custom+V1 AUTH_SAFE_CUSTOM_SECRET",
+            "AUTH_SAFE_CUSTOM_SECRET",
+        ),
+        (
+            "authorization-quoted",
+            r#"Authorization status is "AUTH_SAFE_QUOTED_SECRET WITH_TAIL""#,
+            "AUTH_SAFE_QUOTED_SECRET",
+        ),
+        (
+            "authorization-late-credential",
+            "Authorization policy remains enforced credential AUTH_SAFE_LATE_CREDENTIAL_SECRET",
+            "AUTH_SAFE_LATE_CREDENTIAL_SECRET",
+        ),
+    ];
+    let positive_controls = [
+        "Digest algorithm=SHA-256 is supported",
+        "Digest retry-count=2 remains within policy",
+        "Bearer authentication is configured",
+        "Bearer token support is enabled",
+        "Basic authorization is required",
+        "Basic scheme negotiation was retried",
+        "Authorization policy is enforced",
+        "Authorization status remains available",
+    ];
+    let mut snapshot = findings_snapshot();
+    snapshot.activity = payloads
+        .iter()
+        .enumerate()
+        .map(|(index, (label, payload, _))| EspTimelineEntry {
+            entry_id: format!("safe-prose-smuggling-{label}"),
+            timestamp: timestamp(&format!("2026-07-16T12:{index:02}:00Z")),
+            kind: EspTimelineKind::Other,
+            title: (*payload).to_string(),
+            detail: Some((*payload).to_string()),
+            status: None,
+            evidence: vec![],
+        })
+        .chain(
+            positive_controls
+                .iter()
+                .enumerate()
+                .map(|(index, control)| EspTimelineEntry {
+                    entry_id: format!("safe-prose-positive-control-{index}"),
+                    timestamp: timestamp(&format!("2026-07-16T13:{index:02}:00Z")),
+                    kind: EspTimelineKind::Other,
+                    title: (*control).to_string(),
+                    detail: Some((*control).to_string()),
+                    status: None,
+                    evidence: vec![],
+                }),
+        )
+        .collect();
+    let original = snapshot.clone();
+
+    let safe = redacted_export_projection(&snapshot);
+    let safe_json = serde_json::to_string(&safe).unwrap();
+
+    for (label, _, secret) in payloads {
+        assert!(
+            !safe_json.contains(secret),
+            "{label} credential survived a safe-prose prefix: {safe_json}"
+        );
+    }
+    let positive_start = safe.activity.len() - positive_controls.len();
+    for (index, control) in positive_controls.into_iter().enumerate() {
+        assert_eq!(safe.activity[positive_start + index].title, control);
+        assert_eq!(
+            safe.activity[positive_start + index].detail.as_deref(),
+            Some(control)
+        );
+    }
+    assert_eq!(redacted_export_projection(&safe), safe);
+    assert_eq!(snapshot, original);
+}
