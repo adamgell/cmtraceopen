@@ -45,6 +45,16 @@ function timestamp(rawText: string) {
   };
 }
 
+function notRequestedGraphStatus() {
+  return {
+    status: "skipped" as const,
+    requiredScope: null,
+    apiVersion: "notRequested" as const,
+    data: null,
+    error: null,
+  };
+}
+
 function unnormalizedTimestamp(
   rawText: string,
   originalOffset: string | null = null,
@@ -373,6 +383,7 @@ function makeGraphOverlay(appId: string, displayName: string): EspGraphOverlay {
           displayName,
           trackedOnEnrollmentStatus: true,
           status: null,
+          intentState: notRequestedGraphStatus(),
           assignments: [],
           evidence: [],
         },
@@ -640,6 +651,7 @@ describe("optional Graph enrichment presentation", () => {
           displayName: "Assignment-only application",
           trackedOnEnrollmentStatus: false,
           status: null,
+          intentState: notRequestedGraphStatus(),
           assignments: [
             {
               assignmentId: "assignment-required",
@@ -663,6 +675,7 @@ describe("optional Graph enrichment presentation", () => {
             display: "Installing",
             detail: null,
           },
+          intentState: notRequestedGraphStatus(),
           assignments: [],
           evidence: [],
         },
@@ -677,6 +690,7 @@ describe("optional Graph enrichment presentation", () => {
         {
           eventId: "event-policy-status",
           managedDeviceId: "managed-device-raw-guid",
+          enrollmentConfigurationId: null,
           eventTime: timestamp("2026-07-15T20:06:00Z"),
           deploymentState: {
             raw: "inProgress",
@@ -690,6 +704,7 @@ describe("optional Graph enrichment presentation", () => {
               relatedObjectId: "app-vpn-raw-guid",
               displayName: "Contoso VPN event status",
               kind: "app",
+              trackedOnEnrollmentStatus: true,
               status: {
                 raw: "installing",
                 normalized: "installing",

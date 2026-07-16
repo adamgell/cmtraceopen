@@ -46,6 +46,7 @@ function graphOverlay(): EspGraphOverlay {
           displayName: "Graph VPN name",
           trackedOnEnrollmentStatus: true,
           status: null,
+          intentState: skipped,
           assignments: [],
           evidence: [],
         },
