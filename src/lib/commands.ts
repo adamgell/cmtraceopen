@@ -17,6 +17,13 @@ import type {
   DsregcmdCaptureResult,
   DsregcmdResolvedSource,
 } from "../workspaces/dsregcmd/types";
+import type {
+  EspDiagnosticsSnapshot,
+  EspGraphOverlay,
+  EspGraphRequest,
+  EspRelaunchResult,
+  EspSessionEnvelope,
+} from "../workspaces/esp-diagnostics/types";
 
 export interface FileAssociationPromptStatus {
   supported: boolean;
@@ -354,6 +361,58 @@ export async function collectDiagnostics(
     outputRoot: outputRoot ?? null,
     enabledFamilies: enabledFamilies ?? null,
   });
+}
+
+// --- ESP Diagnostics ---
+
+export async function analyzeEspEvidence(
+  path: string,
+  requestId: string,
+): Promise<EspDiagnosticsSnapshot> {
+  return invokeCommand<EspDiagnosticsSnapshot>("analyze_esp_evidence", {
+    path,
+    requestId,
+  });
+}
+
+export async function startEspDiagnosticsSession(
+  requestId: string,
+): Promise<EspSessionEnvelope> {
+  return invokeCommand<EspSessionEnvelope>("start_esp_diagnostics_session", {
+    requestId,
+  });
+}
+
+export async function getEspDiagnosticsSession(
+  sessionId: string,
+): Promise<EspSessionEnvelope> {
+  return invokeCommand<EspSessionEnvelope>("get_esp_diagnostics_session", {
+    sessionId,
+  });
+}
+
+export async function stopEspDiagnosticsSession(
+  sessionId: string,
+): Promise<void> {
+  return invokeCommand<void>("stop_esp_diagnostics_session", { sessionId });
+}
+
+export async function restartEspAsAdministrator(): Promise<EspRelaunchResult> {
+  return invokeCommand<EspRelaunchResult>("restart_esp_as_administrator");
+}
+
+export async function graphFetchEspDiagnostics(
+  request: EspGraphRequest,
+): Promise<EspGraphOverlay> {
+  return invokeCommand<EspGraphOverlay>("graph_fetch_esp_diagnostics", {
+    request,
+  });
+}
+
+export async function graphCancelEspDiagnostics(
+  requestId: string,
+): Promise<void> {
+  return invokeCommand<void>("graph_cancel_esp_diagnostics", { requestId });
 }
 
 // --- Graph API (Windows only, opt-in) ---
