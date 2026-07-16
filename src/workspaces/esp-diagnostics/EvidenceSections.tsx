@@ -459,6 +459,7 @@ export function EvidenceSections({ snapshot }: EvidenceSectionsProps) {
 
   return (
     <section
+      className="esp-evidence-sections"
       role="region"
       aria-labelledby="esp-evidence-heading"
       style={{
@@ -544,6 +545,7 @@ export function EvidenceSections({ snapshot }: EvidenceSectionsProps) {
             style={{ backgroundColor: tokens.colorNeutralBackground1 }}
           >
             <summary
+              className="esp-evidence-summary"
               onClick={(event) => {
                 event.preventDefault();
                 setOpenSections((current) => {
@@ -555,8 +557,6 @@ export function EvidenceSections({ snapshot }: EvidenceSectionsProps) {
               }}
               style={{
                 display: "grid",
-                gridTemplateColumns:
-                  "minmax(170px, 0.7fr) minmax(240px, 1.3fr) auto",
                 alignItems: "center",
                 gap: 12,
                 minHeight: 36,

@@ -12,6 +12,17 @@
   container-type: inline-size;
 }
 
+.esp-evidence-sections {
+  container-type: inline-size;
+}
+
+.esp-evidence-summary {
+  grid-template-columns:
+    minmax(170px, 0.7fr)
+    minmax(240px, 1.3fr)
+    auto;
+}
+
 .esp-msi-row {
   min-width: 0;
   grid-template-columns:
@@ -25,6 +36,16 @@
 }
 
 @container (max-width: 680px) {
+  .esp-evidence-summary {
+    grid-template-columns: minmax(0, 1fr);
+    align-items: start !important;
+  }
+
+  .esp-evidence-summary > :last-child {
+    justify-content: flex-start !important;
+    white-space: normal !important;
+  }
+
   .esp-msi-row {
     grid-template-columns: minmax(0, 1fr);
   }

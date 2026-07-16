@@ -1623,6 +1623,11 @@ describe("complete single-page evidence composition", () => {
     expect(row).toHaveClass("esp-msi-row");
     expect(row.querySelectorAll(":scope > .esp-msi-cell")).toHaveLength(3);
     expect(row.querySelector(".esp-msi-log-path")).not.toBeNull();
+
+    const evidence = screen.getByRole("region", { name: "ESP evidence" });
+    expect(
+      evidence.querySelectorAll("summary.esp-evidence-summary"),
+    ).not.toHaveLength(0);
   });
 
   it("does not render diagnostic labels below ten pixels", () => {
