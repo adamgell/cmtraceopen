@@ -1,6 +1,15 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::fs::{self, File, FileTimes};
+use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime};
 
+use app_lib::esp::discovery::{
+    build_runtime_temp_roots, discover_bounded_logs, embedded_known_source_specs, DiscoveryInput,
+    DiscoverySourceOrigin, KnownSourceSpec, DISCOVERY_INTERVAL, MAX_ACTIVE_TAILS,
+    MAX_INITIAL_READ_BYTES, MAX_ROTATIONS_PER_KNOWN_LOG, MAX_SESSION_DURATION,
+    MAX_TEMP_ENTRIES_INSPECTED_PER_ROOT, TEMP_LOOKBACK, UPDATE_DEBOUNCE,
+};
 use app_lib::esp::event_logs::{
     collect_event_evidence, required_event_id_xpath, EventLogProvider, EventSourceError,
     ESP_EVENT_CHANNELS, MAX_ESP_EVENT_RECORDS_PER_CHANNEL, REQUIRED_EVENT_IDS,
@@ -17,6 +26,7 @@ use app_lib::intune::evtx_parser::{
 use cmtraceopen_parser::esp::{
     EspObservationValue, EspScope, EspSensitivity, EspSourceAccessState, EspSourceKind,
 };
+use tempfile::tempdir;
 
 #[derive(Default)]
 struct FakeRegistryProvider {
@@ -2029,4 +2039,315 @@ fn event_distinguishes_missing_channels_from_permission_denied() {
         EspSourceAccessState::Missing
     );
     assert!(evidence.observations.is_empty());
+}
+
+fn write_discovery_file(path: &Path, bytes: &[u8], modified: SystemTime) {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).expect("create discovery fixture parent");
+    }
+    fs::write(path, bytes).expect("write discovery fixture");
+    File::options()
+        .write(true)
+        .open(path)
+        .expect("open discovery fixture")
+        .set_times(FileTimes::new().set_modified(modified))
+        .expect("set discovery fixture time");
+}
+
+fn discovery_input(now: SystemTime) -> DiscoveryInput {
+    DiscoveryInput {
+        known_sources: Vec::new(),
+        temp_roots: Vec::new(),
+        active_process_logs: Vec::new(),
+        now,
+    }
+}
+
+#[test]
+fn discovery_uses_embedded_known_source_families_and_fixed_limits() {
+    let specs = embedded_known_source_specs();
+    for family in [
+        "intune-ime",
+        "configmgr",
+        "msi",
+        "panther",
+        "windows-update",
+        "wpm",
+    ] {
+        assert!(
+            specs.iter().any(|spec| spec.family == family),
+            "embedded deployment discovery omitted {family}"
+        );
+    }
+
+    assert_eq!(MAX_ROTATIONS_PER_KNOWN_LOG, 3);
+    assert_eq!(MAX_TEMP_ENTRIES_INSPECTED_PER_ROOT, 128);
+    assert_eq!(MAX_ACTIVE_TAILS, 16);
+    assert_eq!(MAX_INITIAL_READ_BYTES, 8 * 1024 * 1024);
+    assert_eq!(TEMP_LOOKBACK, Duration::from_secs(30 * 60));
+    assert_eq!(DISCOVERY_INTERVAL, Duration::from_secs(2));
+    assert_eq!(UPDATE_DEBOUNCE, Duration::from_millis(250));
+    assert_eq!(MAX_SESSION_DURATION, Duration::from_secs(8 * 60 * 60));
+}
+
+#[test]
+fn discovery_builds_only_the_fixed_runtime_temp_roots() {
+    let roots = build_runtime_temp_roots(
+        Path::new("C:/Windows"),
+        Some(Path::new("C:/Users/current/AppData/Local/Temp")),
+        &[
+            PathBuf::from("C:/Users/alice"),
+            PathBuf::from("C:/Users/bob"),
+        ],
+    );
+
+    assert_eq!(
+        roots,
+        vec![
+            PathBuf::from("C:/Windows/Temp"),
+            PathBuf::from("C:/Windows/System32/config/systemprofile/AppData/Local/Temp"),
+            PathBuf::from("C:/Users/current/AppData/Local/Temp"),
+            PathBuf::from("C:/Users/alice/AppData/Local/Temp"),
+            PathBuf::from("C:/Users/bob/AppData/Local/Temp"),
+        ]
+    );
+}
+
+#[test]
+fn temp_discovery_is_non_recursive() {
+    let temp = tempdir().expect("temp root");
+    let now = SystemTime::now();
+    let top = temp.path().join("MSI-top.log");
+    let nested = temp.path().join("nested/MSI-hidden.log");
+    write_discovery_file(&top, b"top", now);
+    write_discovery_file(&nested, b"nested", now);
+    let mut input = discovery_input(now);
+    input.temp_roots.push(temp.path().to_path_buf());
+
+    let result = discover_bounded_logs(&input);
+
+    assert!(result.sources.iter().any(|source| source.path == top));
+    assert!(!result.sources.iter().any(|source| source.path == nested));
+}
+
+#[test]
+fn temp_discovery_inspects_only_128_newest_entries() {
+    let temp = tempdir().expect("temp root");
+    let now = SystemTime::now();
+    for index in 0..130u64 {
+        write_discovery_file(
+            &temp.path().join(format!("MSI-{index:03}.log")),
+            b"candidate",
+            now - Duration::from_secs(index),
+        );
+    }
+    let mut input = discovery_input(now);
+    input.temp_roots.push(temp.path().to_path_buf());
+
+    let result = discover_bounded_logs(&input);
+
+    assert_eq!(result.temp_entries_inspected, 128);
+    assert_eq!(result.sources.len(), 128);
+    assert!(result
+        .sources
+        .iter()
+        .any(|source| source.path.ends_with("MSI-000.log")));
+    assert!(!result
+        .sources
+        .iter()
+        .any(|source| source.path.ends_with("MSI-129.log")));
+}
+
+#[test]
+fn temp_discovery_excludes_files_older_than_30_minutes() {
+    let temp = tempdir().expect("temp root");
+    let now = SystemTime::now();
+    let recent = temp.path().join("MSI-recent.log");
+    let old = temp.path().join("MSI-old.log");
+    write_discovery_file(&recent, b"recent", now - TEMP_LOOKBACK);
+    write_discovery_file(&old, b"old", now - TEMP_LOOKBACK - Duration::from_secs(1));
+    let mut input = discovery_input(now);
+    input.temp_roots.push(temp.path().to_path_buf());
+
+    let result = discover_bounded_logs(&input);
+
+    assert!(result.sources.iter().any(|source| source.path == recent));
+    assert!(!result.sources.iter().any(|source| source.path == old));
+}
+
+#[test]
+fn discovery_caps_rotations_at_three_per_stem_and_keeps_current_first() {
+    let root = tempdir().expect("known root");
+    let now = SystemTime::now();
+    for (index, suffix) in ["", ".1", ".2", ".3", ".4"].into_iter().enumerate() {
+        write_discovery_file(
+            &root.path().join(format!("AppWorkload.log{suffix}")),
+            b"known",
+            now - Duration::from_secs(index as u64),
+        );
+    }
+    let mut input = discovery_input(now);
+    input.known_sources.push(KnownSourceSpec::folder(
+        "ime-logs",
+        "intune-ime",
+        root.path(),
+        ["AppWorkload.log*"],
+    ));
+
+    let result = discover_bounded_logs(&input);
+    let workload = result
+        .sources
+        .iter()
+        .filter(|source| {
+            source
+                .path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("AppWorkload.log"))
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(workload.len(), MAX_ROTATIONS_PER_KNOWN_LOG);
+    assert_eq!(
+        workload[0].path.file_name().and_then(|name| name.to_str()),
+        Some("AppWorkload.log")
+    );
+}
+
+#[test]
+fn discovery_prioritizes_current_ime_before_rotations_process_and_temp_logs() {
+    let root = tempdir().expect("discovery root");
+    let now = SystemTime::now();
+    let current = root.path().join("AppWorkload.log");
+    let rotation = root.path().join("AppWorkload.log.1");
+    let process = root.path().join("custom-process.data");
+    let temp_log = root.path().join("MSI-temp.log");
+    write_discovery_file(&current, b"current", now - Duration::from_secs(5));
+    write_discovery_file(&rotation, b"rotation", now);
+    write_discovery_file(&process, b"process", now);
+    write_discovery_file(&temp_log, b"temp", now);
+    let mut input = discovery_input(now);
+    input.known_sources.push(KnownSourceSpec::folder(
+        "ime-logs",
+        "intune-ime",
+        root.path(),
+        ["AppWorkload.log*"],
+    ));
+    input.temp_roots.push(root.path().to_path_buf());
+    input.active_process_logs.push(process.clone());
+
+    let result = discover_bounded_logs(&input);
+
+    assert_eq!(result.sources[0].path, current);
+    assert_eq!(result.sources[1].path, rotation);
+    assert_eq!(result.sources[2].path, process);
+    assert_eq!(
+        result.sources.last().map(|source| &source.path),
+        Some(&temp_log)
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn discovery_rejects_symlink_escape() {
+    use std::os::unix::fs::symlink;
+
+    let root = tempdir().expect("temp root");
+    let outside = tempdir().expect("outside root");
+    let now = SystemTime::now();
+    let target = outside.path().join("MSI-escape.log");
+    write_discovery_file(&target, b"outside", now);
+    let link = root.path().join("MSI-link.log");
+    symlink(&target, &link).expect("create escape symlink");
+    let mut input = discovery_input(now);
+    input.temp_roots.push(root.path().to_path_buf());
+
+    let result = discover_bounded_logs(&input);
+
+    assert!(result.sources.is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn discovery_rejects_symlink_root_escape() {
+    use std::os::unix::fs::symlink;
+
+    let container = tempdir().expect("root container");
+    let outside = tempdir().expect("outside root");
+    let now = SystemTime::now();
+    let target = outside.path().join("MSI-escaped-root.log");
+    write_discovery_file(&target, b"outside", now);
+    let linked_root = container.path().join("linked-temp");
+    symlink(outside.path(), &linked_root).expect("create root symlink");
+    let mut input = discovery_input(now);
+    input.temp_roots.push(linked_root);
+
+    let result = discover_bounded_logs(&input);
+
+    assert!(result.sources.is_empty());
+    assert_eq!(result.temp_entries_inspected, 0);
+}
+
+#[test]
+fn discovery_accepts_msi_signature_in_first_4k_only() {
+    let temp = tempdir().expect("temp root");
+    let now = SystemTime::now();
+    let signed = temp.path().join("opaque.bin");
+    let late = temp.path().join("late.bin");
+    write_discovery_file(
+        &signed,
+        b"=== Verbose logging started: Windows Installer transaction",
+        now,
+    );
+    let mut late_bytes = vec![b'x'; 4_096];
+    late_bytes.extend_from_slice(b"Windows Installer");
+    write_discovery_file(&late, &late_bytes, now);
+    let mut input = discovery_input(now);
+    input.temp_roots.push(temp.path().to_path_buf());
+
+    let result = discover_bounded_logs(&input);
+
+    assert!(result.sources.iter().any(|source| source.path == signed));
+    assert!(!result.sources.iter().any(|source| source.path == late));
+}
+
+#[test]
+fn discovery_accepts_explicit_running_process_log_outside_temp_lookback() {
+    let root = tempdir().expect("process root");
+    let now = SystemTime::now();
+    let process_log = root.path().join("custom-output.data");
+    write_discovery_file(
+        &process_log,
+        b"not otherwise recognizable",
+        now - Duration::from_secs(24 * 60 * 60),
+    );
+    let mut input = discovery_input(now);
+    input.active_process_logs.push(process_log.clone());
+
+    let result = discover_bounded_logs(&input);
+
+    let source = result
+        .sources
+        .iter()
+        .find(|source| source.path == process_log)
+        .expect("active process log");
+    assert_eq!(source.origin, DiscoverySourceOrigin::ActiveProcess);
+}
+
+#[test]
+fn discovery_has_no_arbitrary_root_or_deep_mode() {
+    let source = include_str!("../src/esp/discovery.rs");
+    for forbidden in [
+        "WalkDir",
+        "walkdir",
+        "follow_links",
+        "deep_scan",
+        "deepScan",
+        "arbitrary_root",
+    ] {
+        assert!(
+            !source.contains(forbidden),
+            "bounded discovery exposed forbidden behavior: {forbidden}"
+        );
+    }
 }

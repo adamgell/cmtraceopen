@@ -3,6 +3,7 @@
 //! Offline evidence normalization is portable. Live acquisition is exposed only
 //! where the operating system provides the required Windows evidence sources.
 
+pub mod discovery;
 pub mod event_logs;
 pub mod process;
 pub mod registry;
