@@ -11,6 +11,22 @@ import {
 import { useIntuneStore } from "../../../workspaces/intune/intune-store";
 import { buildGraphRegistryEntries } from "../../../lib/graph-registry";
 
+const GRAPH_CAPABILITY_ROWS = [
+  [
+    "Managed devices",
+    "managedDevices",
+    "DeviceManagementManagedDevices.Read.All",
+  ],
+  [
+    "Service configuration",
+    "serviceConfig",
+    "DeviceManagementServiceConfig.Read.All",
+  ],
+  ["Apps", "apps", "DeviceManagementApps.Read.All"],
+  ["Configuration", "configuration", "DeviceManagementConfiguration.Read.All"],
+  ["Scripts", "scripts", "DeviceManagementScripts.Read.All"],
+] as const;
+
 export function GraphApiTab() {
   const graphApiEnabled = useUiStore((state) => state.graphApiEnabled);
   const setGraphApiEnabled = useUiStore((state) => state.setGraphApiEnabled);
@@ -61,6 +77,16 @@ export function GraphApiTab() {
         isAuthenticated: false,
         userPrincipalName: null,
         tenantId: null,
+        grantedScopes: [],
+        missingScopes: GRAPH_CAPABILITY_ROWS.map(([, , scope]) => scope),
+        expiresAt: null,
+        capabilities: {
+          managedDevices: false,
+          serviceConfig: false,
+          apps: false,
+          configuration: false,
+          scripts: false,
+        },
         error: e instanceof Error ? e.message : String(e),
       });
     } finally {
@@ -156,8 +182,15 @@ export function GraphApiTab() {
             registration required.
           </li>
           <li>
-            Requires <code>DeviceManagementApps.Read.All</code> delegated
-            permission (admin consent may be needed on first use).
+            Requests only these delegated read permissions (admin consent may
+            be needed on first use):
+            <ul style={{ margin: "2px 0 0", paddingLeft: "16px" }}>
+              {GRAPH_CAPABILITY_ROWS.map(([, , scope]) => (
+                <li key={scope}>
+                  <code>{scope}</code>
+                </li>
+              ))}
+            </ul>
           </li>
         </ul>
       </div>
@@ -297,7 +330,11 @@ export function GraphApiTab() {
                       display: "inline-block",
                     }}
                   />
-                  <span>Connected</span>
+                  <span>
+                    {authStatus.missingScopes.length > 0
+                      ? "Connected with partial permissions"
+                      : "Connected"}
+                  </span>
                 </div>
                 {authStatus.userPrincipalName && (
                   <div
@@ -322,6 +359,40 @@ export function GraphApiTab() {
                   </div>
                 )}
                 <div
+                  aria-label="Graph delegated capabilities"
+                  style={{
+                    display: "grid",
+                    gap: "4px",
+                    marginBottom: "8px",
+                    color: tokens.colorNeutralForeground2,
+                    fontSize: "11px",
+                  }}
+                >
+                  {GRAPH_CAPABILITY_ROWS.map(([label, capability, scope]) => {
+                    const available = authStatus.capabilities[capability];
+                    return (
+                      <div key={scope}>
+                        <span
+                          style={{
+                            color: available
+                              ? tokens.colorPaletteGreenForeground1
+                              : tokens.colorPaletteYellowForeground2,
+                            fontWeight: 600,
+                          }}
+                        >
+                          {label} ·{" "}
+                          {available ? "Available" : "Missing permission"}
+                        </span>
+                        {!available && (
+                          <span style={{ fontFamily: "monospace" }}>
+                            {` — ${scope}`}
+                          </span>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+                <div
                   style={{
                     display: "flex",
                     alignItems: "center",
@@ -332,7 +403,7 @@ export function GraphApiTab() {
                   <button
                     type="button"
                     onClick={handlePrePopulateCache}
-                    disabled={cacheLoading}
+                    disabled={cacheLoading || !authStatus.capabilities.apps}
                     style={{
                       padding: "4px 12px",
                       fontSize: "12px",
@@ -340,8 +411,13 @@ export function GraphApiTab() {
                       backgroundColor: tokens.colorBrandBackground,
                       color: tokens.colorNeutralForegroundOnBrand,
                       borderRadius: "4px",
-                      cursor: cacheLoading ? "wait" : "pointer",
-                      opacity: cacheLoading ? 0.7 : 1,
+                      cursor: cacheLoading
+                        ? "wait"
+                        : authStatus.capabilities.apps
+                          ? "pointer"
+                          : "not-allowed",
+                      opacity:
+                        cacheLoading || !authStatus.capabilities.apps ? 0.7 : 1,
                     }}
                   >
                     {cacheLoading
@@ -364,6 +440,17 @@ export function GraphApiTab() {
                     Sign out
                   </button>
                 </div>
+                {!authStatus.capabilities.apps && (
+                  <div
+                    style={{
+                      fontSize: "11px",
+                      color: tokens.colorPaletteYellowForeground2,
+                      marginTop: "6px",
+                    }}
+                  >
+                    App cache requires DeviceManagementApps.Read.All.
+                  </div>
+                )}
                 {cachedAppCount != null && (
                   <div
                     style={{

@@ -417,10 +417,22 @@ export async function graphCancelEspDiagnostics(
 
 // --- Graph API (Windows only, opt-in) ---
 
+export interface GraphAuthCapabilities {
+  managedDevices: boolean;
+  serviceConfig: boolean;
+  apps: boolean;
+  configuration: boolean;
+  scripts: boolean;
+}
+
 export interface GraphAuthStatus {
   isAuthenticated: boolean;
   userPrincipalName: string | null;
   tenantId: string | null;
+  grantedScopes: string[];
+  missingScopes: string[];
+  expiresAt: number | null;
+  capabilities: GraphAuthCapabilities;
   error: string | null;
 }
 
