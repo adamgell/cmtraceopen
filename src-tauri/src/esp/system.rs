@@ -624,6 +624,12 @@ const SYSTEM_QUERY_COM_CANCEL_TIMEOUT_SECONDS: u32 = 1;
 #[cfg(any(target_os = "windows", test))]
 const SYSTEM_QUERY_WORKER_COUNT: usize = 4;
 
+#[cfg(test)]
+const SYSTEM_QUERY_MAX_OWNED_WORKERS: usize = 64;
+
+#[cfg(all(target_os = "windows", not(test)))]
+const SYSTEM_QUERY_MAX_OWNED_WORKERS: usize = 16;
+
 #[cfg(any(target_os = "windows", test))]
 #[derive(Clone)]
 struct SystemQueryCancellation {
@@ -739,80 +745,272 @@ enum SystemQueryWorkerMessage {
 }
 
 #[cfg(any(target_os = "windows", test))]
+struct SystemQueryWorkerReaper {
+    max_workers: usize,
+    owned_workers: std::sync::atomic::AtomicUsize,
+    quarantined: std::sync::Mutex<Vec<std::thread::JoinHandle<()>>>,
+}
+
+#[cfg(any(target_os = "windows", test))]
+impl SystemQueryWorkerReaper {
+    fn new(max_workers: usize) -> Self {
+        Self {
+            max_workers,
+            owned_workers: std::sync::atomic::AtomicUsize::new(0),
+            quarantined: std::sync::Mutex::new(Vec::with_capacity(max_workers)),
+        }
+    }
+
+    fn try_reserve_worker(&self) -> bool {
+        self.reap_finished();
+        let mut owned = self
+            .owned_workers
+            .load(std::sync::atomic::Ordering::Acquire);
+        loop {
+            if owned >= self.max_workers {
+                return false;
+            }
+            match self.owned_workers.compare_exchange_weak(
+                owned,
+                owned + 1,
+                std::sync::atomic::Ordering::AcqRel,
+                std::sync::atomic::Ordering::Acquire,
+            ) {
+                Ok(_) => return true,
+                Err(actual) => owned = actual,
+            }
+        }
+    }
+
+    fn release_worker(&self) {
+        let previous = self
+            .owned_workers
+            .fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
+        debug_assert!(previous > 0, "WMI worker ownership underflow");
+    }
+
+    fn adopt(&self, handle: std::thread::JoinHandle<()>) {
+        self.reap_finished();
+        self.quarantined
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .push(handle);
+    }
+
+    fn reap_finished(&self) {
+        let finished = {
+            let mut quarantined = self
+                .quarantined
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let mut finished = Vec::new();
+            let mut index = 0;
+            while index < quarantined.len() {
+                if quarantined[index].is_finished() {
+                    finished.push(quarantined.swap_remove(index));
+                } else {
+                    index += 1;
+                }
+            }
+            finished
+        };
+        for handle in finished {
+            let _ = handle.join();
+            self.release_worker();
+        }
+    }
+
+    #[cfg(test)]
+    fn owned_worker_count(&self) -> usize {
+        self.reap_finished();
+        self.owned_workers
+            .load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    #[cfg(test)]
+    fn quarantined_worker_count(&self) -> usize {
+        self.reap_finished();
+        self.quarantined
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .len()
+    }
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn system_query_worker_reaper() -> &'static SystemQueryWorkerReaper {
+    static REAPER: std::sync::OnceLock<SystemQueryWorkerReaper> = std::sync::OnceLock::new();
+    REAPER.get_or_init(|| SystemQueryWorkerReaper::new(SYSTEM_QUERY_MAX_OWNED_WORKERS))
+}
+
+#[cfg(any(target_os = "windows", test))]
+struct OwnedSystemQueryWorkerHandle {
+    handle: Option<std::thread::JoinHandle<()>>,
+    reaper: &'static SystemQueryWorkerReaper,
+}
+
+#[cfg(any(target_os = "windows", test))]
+impl OwnedSystemQueryWorkerHandle {
+    fn new(handle: std::thread::JoinHandle<()>, reaper: &'static SystemQueryWorkerReaper) -> Self {
+        Self {
+            handle: Some(handle),
+            reaper,
+        }
+    }
+
+    fn transfer_to_reaper(mut self) {
+        if let Some(handle) = self.handle.take() {
+            self.reaper.adopt(handle);
+        }
+    }
+
+    #[cfg(test)]
+    fn join(mut self) {
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+            self.reaper.release_worker();
+        }
+    }
+}
+
+#[cfg(any(target_os = "windows", test))]
+impl Drop for OwnedSystemQueryWorkerHandle {
+    fn drop(&mut self) {
+        if let Some(handle) = self.handle.take() {
+            self.reaper.adopt(handle);
+        }
+    }
+}
+
+#[cfg(any(target_os = "windows", test))]
 struct SystemQueryWorker {
+    id: u64,
     sender: std::sync::mpsc::SyncSender<SystemQueryWorkerMessage>,
     busy: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    handle: OwnedSystemQueryWorkerHandle,
+}
+
+#[cfg(any(target_os = "windows", test))]
+struct SystemQueryWorkerPoolState {
+    workers: Vec<SystemQueryWorker>,
+    next_worker_id: u64,
 }
 
 #[cfg(any(target_os = "windows", test))]
 struct SystemQueryWorkerPool {
-    workers: Vec<SystemQueryWorker>,
-    handles: std::sync::Mutex<Vec<std::thread::JoinHandle<()>>>,
+    desired_worker_count: usize,
+    reaper: &'static SystemQueryWorkerReaper,
+    state: std::sync::Mutex<SystemQueryWorkerPoolState>,
 }
 
 #[cfg(any(target_os = "windows", test))]
 impl SystemQueryWorkerPool {
     fn start(worker_count: usize) -> Result<Self, String> {
+        Self::start_with_reaper(worker_count, system_query_worker_reaper())
+    }
+
+    fn start_with_reaper(
+        worker_count: usize,
+        reaper: &'static SystemQueryWorkerReaper,
+    ) -> Result<Self, String> {
         if worker_count == 0 {
             return Err("WMI worker pool must contain at least one worker".to_string());
         }
 
         let mut workers = Vec::with_capacity(worker_count);
-        let mut handles = Vec::with_capacity(worker_count);
         for index in 0..worker_count {
-            let (sender, receiver) = std::sync::mpsc::sync_channel(1);
-            let busy = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-            let worker_busy = std::sync::Arc::clone(&busy);
-            let handle = std::thread::Builder::new()
-                .name(format!("esp-wmi-query-{index}"))
-                .spawn(move || {
-                    while let Ok(message) = receiver.recv() {
-                        let SystemQueryWorkerMessage::Run(job) = message else {
-                            break;
-                        };
-                        job.cancellation.register_worker();
-                        let worker_cancellation = job.cancellation.clone();
-                        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                            (job.work)(job.deadline, job.partial_rows, worker_cancellation)
-                        }))
-                        .unwrap_or_else(|_| {
-                            Err(SystemReadError::Failed("WMI worker panicked".to_string()))
-                        });
-                        job.cancellation.clear_worker();
-                        let _ = job.result_sender.send(result);
-                        // Do not reuse this COM thread until CoCancelCall and the caller's
-                        // bounded cleanup window have both finished.
-                        let _ = job.caller_finished.recv();
-                        worker_busy.store(false, std::sync::atomic::Ordering::Release);
-                    }
-                    worker_busy.store(false, std::sync::atomic::Ordering::Release);
-                });
-            match handle {
-                Ok(handle) => {
-                    workers.push(SystemQueryWorker { sender, busy });
-                    handles.push(handle);
-                }
+            match Self::spawn_worker(index as u64, reaper) {
+                Ok(worker) => workers.push(worker),
                 Err(error) => {
-                    drop(sender);
-                    let partial_pool = Self {
-                        workers,
-                        handles: std::sync::Mutex::new(handles),
-                    };
-                    drop(partial_pool);
-                    return Err(format!("WMI worker pool could not start: {error}"));
+                    for worker in workers {
+                        Self::transfer_worker_to_reaper(worker, true);
+                    }
+                    return Err(error);
                 }
             }
         }
 
         Ok(Self {
-            workers,
-            handles: std::sync::Mutex::new(handles),
+            desired_worker_count: worker_count,
+            reaper,
+            state: std::sync::Mutex::new(SystemQueryWorkerPoolState {
+                workers,
+                next_worker_id: worker_count as u64,
+            }),
         })
     }
 
-    fn dispatch(&self, mut job: SystemQueryJob) -> Result<(), SystemQueryJob> {
-        for worker in &self.workers {
-            if worker
+    fn spawn_worker(
+        id: u64,
+        reaper: &'static SystemQueryWorkerReaper,
+    ) -> Result<SystemQueryWorker, String> {
+        if !reaper.try_reserve_worker() {
+            return Err(format!(
+                "WMI worker ownership ceiling of {} reached; the bounded circuit breaker is open until a quarantined worker exits.",
+                reaper.max_workers
+            ));
+        }
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        let busy = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let worker_busy = std::sync::Arc::clone(&busy);
+        let handle = std::thread::Builder::new()
+            .name(format!("esp-wmi-query-{id}"))
+            .spawn(move || {
+                while let Ok(message) = receiver.recv() {
+                    let SystemQueryWorkerMessage::Run(job) = message else {
+                        break;
+                    };
+                    job.cancellation.register_worker();
+                    let worker_cancellation = job.cancellation.clone();
+                    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        (job.work)(job.deadline, job.partial_rows, worker_cancellation)
+                    }))
+                    .unwrap_or_else(|_| {
+                        Err(SystemReadError::Failed("WMI worker panicked".to_string()))
+                    });
+                    job.cancellation.clear_worker();
+                    let _ = job.result_sender.send(result);
+                    // Do not reuse this COM thread until CoCancelCall and the caller's
+                    // bounded cleanup window have both finished.
+                    let _ = job.caller_finished.recv();
+                    worker_busy.store(false, std::sync::atomic::Ordering::Release);
+                }
+                worker_busy.store(false, std::sync::atomic::Ordering::Release);
+            });
+        match handle {
+            Ok(handle) => Ok(SystemQueryWorker {
+                id,
+                sender,
+                busy,
+                handle: OwnedSystemQueryWorkerHandle::new(handle, reaper),
+            }),
+            Err(error) => {
+                reaper.release_worker();
+                Err(format!("WMI worker pool could not start: {error}"))
+            }
+        }
+    }
+
+    fn replenish_locked(&self, state: &mut SystemQueryWorkerPoolState) -> Result<(), String> {
+        self.reaper.reap_finished();
+        while state.workers.len() < self.desired_worker_count {
+            let id = state.next_worker_id;
+            let worker = Self::spawn_worker(id, self.reaper)?;
+            state.next_worker_id = state.next_worker_id.saturating_add(1);
+            state.workers.push(worker);
+        }
+        Ok(())
+    }
+
+    fn dispatch(&self, mut job: SystemQueryJob) -> Result<u64, String> {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut capacity_error = self.replenish_locked(&mut state).err();
+        let mut index = 0;
+        while index < state.workers.len() {
+            if state.workers[index]
                 .busy
                 .compare_exchange(
                     false,
@@ -822,51 +1020,97 @@ impl SystemQueryWorkerPool {
                 )
                 .is_err()
             {
+                index += 1;
                 continue;
             }
-            match worker.sender.send(SystemQueryWorkerMessage::Run(job)) {
-                Ok(()) => return Ok(()),
+            let worker_id = state.workers[index].id;
+            match state.workers[index]
+                .sender
+                .send(SystemQueryWorkerMessage::Run(job))
+            {
+                Ok(()) => return Ok(worker_id),
                 Err(std::sync::mpsc::SendError(SystemQueryWorkerMessage::Run(returned))) => {
-                    worker
+                    state.workers[index]
                         .busy
                         .store(false, std::sync::atomic::Ordering::Release);
                     job = returned;
+                    let worker = state.workers.swap_remove(index);
+                    Self::transfer_worker_to_reaper(worker, false);
+                    if let Err(error) = self.replenish_locked(&mut state) {
+                        capacity_error = Some(error);
+                    }
                 }
                 Err(std::sync::mpsc::SendError(SystemQueryWorkerMessage::Shutdown)) => {
                     unreachable!("dispatch only sends query jobs")
                 }
             }
         }
-        Err(job)
+        Err(capacity_error.unwrap_or_else(|| {
+            "All bounded WMI workers are busy; this query was not started.".to_string()
+        }))
+    }
+
+    fn quarantine(&self, worker_id: u64) -> Result<(), String> {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let Some(index) = state
+            .workers
+            .iter()
+            .position(|worker| worker.id == worker_id)
+        else {
+            return Ok(());
+        };
+        let worker = state.workers.swap_remove(index);
+        Self::transfer_worker_to_reaper(worker, false);
+        self.replenish_locked(&mut state)
+    }
+
+    fn transfer_worker_to_reaper(worker: SystemQueryWorker, request_shutdown: bool) {
+        let SystemQueryWorker { sender, handle, .. } = worker;
+        if request_shutdown {
+            let _ = sender.try_send(SystemQueryWorkerMessage::Shutdown);
+        }
+        drop(sender);
+        handle.transfer_to_reaper();
     }
 
     #[cfg(test)]
     fn owned_worker_count(&self) -> usize {
-        self.handles
+        self.state
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .workers
             .len()
     }
 
     #[cfg(test)]
     fn busy_worker_count(&self) -> usize {
-        self.workers
+        self.state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .workers
             .iter()
             .filter(|worker| worker.busy.load(std::sync::atomic::Ordering::Acquire))
             .count()
     }
 
+    #[cfg(test)]
     fn shutdown_and_join(&self) -> usize {
-        for worker in &self.workers {
-            let _ = worker.sender.send(SystemQueryWorkerMessage::Shutdown);
-        }
-        let mut handles = self
-            .handles
+        let workers = self
+            .state
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let joined = handles.len();
-        for handle in handles.drain(..) {
-            let _ = handle.join();
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .workers
+            .drain(..)
+            .collect::<Vec<_>>();
+        let joined = workers.len();
+        for worker in workers {
+            let SystemQueryWorker { sender, handle, .. } = worker;
+            let _ = sender.send(SystemQueryWorkerMessage::Shutdown);
+            drop(sender);
+            handle.join();
         }
         joined
     }
@@ -875,7 +1119,13 @@ impl SystemQueryWorkerPool {
 #[cfg(any(target_os = "windows", test))]
 impl Drop for SystemQueryWorkerPool {
     fn drop(&mut self) {
-        self.shutdown_and_join();
+        let state = self
+            .state
+            .get_mut()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        for worker in state.workers.drain(..) {
+            Self::transfer_worker_to_reaper(worker, true);
+        }
     }
 }
 
@@ -940,14 +1190,15 @@ where
         result_sender: sender,
         caller_finished,
     };
-    if pool.dispatch(job).is_err() {
-        return SystemQueryBatch {
-            rows: Vec::new(),
-            completion: Err(SystemReadError::Failed(
-                "All bounded WMI workers are busy; this query was not started.".to_string(),
-            )),
-        };
-    }
+    let worker_id = match pool.dispatch(job) {
+        Ok(worker_id) => worker_id,
+        Err(detail) => {
+            return SystemQueryBatch {
+                rows: Vec::new(),
+                completion: Err(SystemReadError::Failed(detail)),
+            }
+        }
+    };
 
     let remaining = deadline.saturating_duration_since(Instant::now());
     match receiver.recv_timeout(remaining) {
@@ -955,31 +1206,43 @@ where
         Err(mpsc::RecvTimeoutError::Timeout) => {
             cancellation.request_cancel();
             match receiver.recv_timeout(SYSTEM_QUERY_CANCELLATION_GRACE) {
-                Ok(_) => SystemQueryBatch {
-                    rows: clone_partial_rows(&partial_rows),
+                Ok(result) => SystemQueryBatch {
+                    rows: merge_system_query_rows(result, &partial_rows),
                     completion: Err(SystemReadError::TimedOut),
                 },
-                Err(mpsc::RecvTimeoutError::Disconnected) => SystemQueryBatch {
-                    rows: clone_partial_rows(&partial_rows),
-                    completion: Err(SystemReadError::Failed(
-                        "WMI worker stopped during cancellation".to_string(),
-                    )),
-                },
-                Err(mpsc::RecvTimeoutError::Timeout) => SystemQueryBatch {
-                    rows: clone_partial_rows(&partial_rows),
-                    completion: Err(SystemReadError::Failed(
-                        "WMI query timed out and its worker did not stop within the 250 ms cancellation window; the worker remains owned by the bounded WMI pool while later queries continue."
-                            .to_string(),
-                    )),
-                },
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    let _ = pool.quarantine(worker_id);
+                    SystemQueryBatch {
+                        rows: clone_partial_rows(&partial_rows),
+                        completion: Err(SystemReadError::Failed(
+                            "WMI worker stopped during cancellation".to_string(),
+                        )),
+                    }
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    let replacement_error = pool.quarantine(worker_id).err();
+                    let mut detail = "WMI query timed out and its worker did not stop within the 250 ms cancellation window; the worker remains owned by the bounded WMI pool reaper while a replacement worker continues later queries."
+                        .to_string();
+                    if let Some(error) = replacement_error {
+                        detail.push(' ');
+                        detail.push_str(&error);
+                    }
+                    SystemQueryBatch {
+                        rows: clone_partial_rows(&partial_rows),
+                        completion: Err(SystemReadError::Failed(detail)),
+                    }
+                }
             }
         }
-        Err(mpsc::RecvTimeoutError::Disconnected) => SystemQueryBatch {
-            rows: clone_partial_rows(&partial_rows),
-            completion: Err(SystemReadError::Failed(
-                "WMI worker stopped before returning a result".to_string(),
-            )),
-        },
+        Err(mpsc::RecvTimeoutError::Disconnected) => {
+            let _ = pool.quarantine(worker_id);
+            SystemQueryBatch {
+                rows: clone_partial_rows(&partial_rows),
+                completion: Err(SystemReadError::Failed(
+                    "WMI worker stopped before returning a result".to_string(),
+                )),
+            }
+        }
     }
 }
 
@@ -995,6 +1258,20 @@ fn finish_system_query_result(
             completion: Err(error),
         },
     }
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn merge_system_query_rows(
+    result: Result<SystemQueryBatch, SystemReadError>,
+    partial_rows: &std::sync::Arc<std::sync::Mutex<Vec<SystemRow>>>,
+) -> Vec<SystemRow> {
+    let mut rows = clone_partial_rows(partial_rows);
+    for row in finish_system_query_result(result, partial_rows).rows {
+        if !rows.contains(&row) {
+            rows.push(row);
+        }
+    }
+    rows
 }
 
 #[cfg(any(target_os = "windows", test))]
@@ -1977,7 +2254,9 @@ mod tests {
 
     #[test]
     fn stuck_worker_remains_owned_while_later_query_completes() {
-        let pool = SystemQueryWorkerPool::start(2).expect("start bounded test pool");
+        let reaper = Box::leak(Box::new(SystemQueryWorkerReaper::new(8)));
+        let pool = SystemQueryWorkerPool::start_with_reaper(2, reaper)
+            .expect("start isolated bounded test pool");
         let (release_sender, release_receiver) = std::sync::mpsc::sync_channel(1);
         let started_at = Instant::now();
         let stuck =
@@ -1996,7 +2275,9 @@ mod tests {
                 if detail.contains("remains owned by the bounded WMI pool")
         ));
         assert_eq!(pool.owned_worker_count(), 2);
-        assert_eq!(pool.busy_worker_count(), 1);
+        assert_eq!(pool.busy_worker_count(), 0);
+        assert_eq!(reaper.owned_worker_count(), 3);
+        assert_eq!(reaper.quarantined_worker_count(), 1);
 
         let healthy =
             run_bounded_system_query_with_pool(&pool, Duration::from_secs(1), |_, _, _| {
@@ -2005,12 +2286,318 @@ mod tests {
         assert_eq!(healthy, SystemQueryBatch::complete(Vec::new()));
 
         release_sender.send(()).expect("release stuck COM seam");
+        assert_eq!(pool.shutdown_and_join(), 2);
+        let cleanup_deadline = Instant::now() + Duration::from_secs(1);
+        while reaper.owned_worker_count() != 0 && Instant::now() < cleanup_deadline {
+            std::thread::yield_now();
+        }
+        assert_eq!(reaper.owned_worker_count(), 0);
+    }
+
+    #[test]
+    fn four_uncooperative_timeouts_do_not_poison_healthy_capacity() {
+        let pool = SystemQueryWorkerPool::start(4).expect("start bounded test pool");
+        let mut releases = Vec::new();
+        let mut timed_out = Vec::new();
+
+        for _ in 0..4 {
+            let (release_sender, release_receiver) = std::sync::mpsc::sync_channel(1);
+            releases.push(release_sender);
+            timed_out.push(run_bounded_system_query_with_pool(
+                &pool,
+                Duration::from_millis(10),
+                move |_, _, _| {
+                    release_receiver
+                        .recv()
+                        .expect("release uncooperative WMI seam");
+                    Ok(SystemQueryBatch::complete(Vec::new()))
+                },
+            ));
+        }
+
+        let healthy =
+            run_bounded_system_query_with_pool(&pool, Duration::from_secs(1), |_, _, _| {
+                Ok(SystemQueryBatch::complete(vec![row(&[(
+                    "Source",
+                    "healthy-after-four-timeouts",
+                )])]))
+            });
+
+        for release in releases {
+            release.send(()).expect("release uncooperative WMI seam");
+        }
         let cleanup_deadline = Instant::now() + Duration::from_secs(1);
         while pool.busy_worker_count() != 0 && Instant::now() < cleanup_deadline {
             std::thread::yield_now();
         }
-        assert_eq!(pool.busy_worker_count(), 0);
-        assert_eq!(pool.shutdown_and_join(), 2);
+        let joined = pool.shutdown_and_join();
+
+        assert!(timed_out.iter().all(|batch| matches!(
+            batch.completion,
+            Err(SystemReadError::Failed(ref detail))
+                if detail.contains("remains owned by the bounded WMI pool")
+        )));
+        assert_eq!(
+            healthy,
+            SystemQueryBatch::complete(vec![row(&[("Source", "healthy-after-four-timeouts")])])
+        );
+        assert_eq!(joined, 4);
+    }
+
+    #[test]
+    fn reaper_ceiling_opens_and_recovers_the_bounded_circuit_breaker() {
+        let reaper = Box::leak(Box::new(SystemQueryWorkerReaper::new(2)));
+        let pool = SystemQueryWorkerPool::start_with_reaper(1, reaper)
+            .expect("start isolated bounded test pool");
+        let mut releases = Vec::new();
+        let mut timed_out = Vec::new();
+
+        for _ in 0..2 {
+            let (release_sender, release_receiver) = std::sync::mpsc::sync_channel(1);
+            releases.push(release_sender);
+            timed_out.push(run_bounded_system_query_with_pool(
+                &pool,
+                Duration::from_millis(10),
+                move |_, _, _| {
+                    release_receiver
+                        .recv()
+                        .expect("release uncooperative WMI seam");
+                    Ok(SystemQueryBatch::complete(Vec::new()))
+                },
+            ));
+        }
+
+        let circuit_open =
+            run_bounded_system_query_with_pool(&pool, Duration::from_secs(1), |_, _, _| {
+                Ok(SystemQueryBatch::complete(Vec::new()))
+            });
+
+        assert!(matches!(
+            timed_out[0].completion,
+            Err(SystemReadError::Failed(ref detail))
+                if detail.contains("replacement worker continues")
+        ));
+        assert!(matches!(
+            timed_out[1].completion,
+            Err(SystemReadError::Failed(ref detail))
+                if detail.contains("bounded circuit breaker is open")
+        ));
+        assert!(matches!(
+            circuit_open.completion,
+            Err(SystemReadError::Failed(ref detail))
+                if detail.contains("bounded circuit breaker is open")
+        ));
+        assert_eq!(reaper.owned_worker_count(), 2);
+        assert_eq!(reaper.quarantined_worker_count(), 2);
+        assert_eq!(pool.owned_worker_count(), 0);
+
+        for release in releases {
+            release.send(()).expect("release uncooperative WMI seam");
+        }
+        let cleanup_deadline = Instant::now() + Duration::from_secs(1);
+        while reaper.owned_worker_count() != 0 && Instant::now() < cleanup_deadline {
+            std::thread::yield_now();
+        }
+        assert_eq!(reaper.owned_worker_count(), 0);
+
+        let recovered =
+            run_bounded_system_query_with_pool(&pool, Duration::from_secs(1), |_, _, _| {
+                Ok(SystemQueryBatch::complete(vec![row(&[(
+                    "Source",
+                    "recovered-after-reap",
+                )])]))
+            });
+        assert_eq!(
+            recovered,
+            SystemQueryBatch::complete(vec![row(&[("Source", "recovered-after-reap")])])
+        );
+        assert_eq!(pool.shutdown_and_join(), 1);
+        assert_eq!(reaper.owned_worker_count(), 0);
+    }
+
+    #[test]
+    fn ownership_ceiling_preserves_remaining_healthy_capacity() {
+        let reaper = Box::leak(Box::new(SystemQueryWorkerReaper::new(3)));
+        let pool = SystemQueryWorkerPool::start_with_reaper(2, reaper)
+            .expect("start isolated bounded test pool");
+        let mut releases = Vec::new();
+
+        for _ in 0..2 {
+            let (release_sender, release_receiver) = std::sync::mpsc::sync_channel(1);
+            releases.push(release_sender);
+            let timed_out = run_bounded_system_query_with_pool(
+                &pool,
+                Duration::from_millis(10),
+                move |_, _, _| {
+                    release_receiver
+                        .recv()
+                        .expect("release uncooperative WMI seam");
+                    Ok(SystemQueryBatch::complete(Vec::new()))
+                },
+            );
+            assert!(matches!(
+                timed_out.completion,
+                Err(SystemReadError::Failed(ref detail))
+                    if detail.contains("remains owned by the bounded WMI pool")
+            ));
+        }
+
+        assert_eq!(reaper.owned_worker_count(), 3);
+        assert_eq!(reaper.quarantined_worker_count(), 2);
+        assert_eq!(pool.owned_worker_count(), 1);
+
+        let healthy =
+            run_bounded_system_query_with_pool(&pool, Duration::from_secs(1), |_, _, _| {
+                Ok(SystemQueryBatch::complete(vec![row(&[(
+                    "Source",
+                    "healthy-at-ownership-ceiling",
+                )])]))
+            });
+        assert_eq!(
+            healthy,
+            SystemQueryBatch::complete(vec![row(&[("Source", "healthy-at-ownership-ceiling")])])
+        );
+
+        for release in releases {
+            release.send(()).expect("release uncooperative WMI seam");
+        }
+        assert_eq!(pool.shutdown_and_join(), 1);
+        let cleanup_deadline = Instant::now() + Duration::from_secs(1);
+        while reaper.owned_worker_count() != 0 && Instant::now() < cleanup_deadline {
+            std::thread::yield_now();
+        }
+        assert_eq!(reaper.owned_worker_count(), 0);
+    }
+
+    #[test]
+    fn dropping_pool_with_unreleased_work_returns_within_bound() {
+        let pool = SystemQueryWorkerPool::start(1).expect("start bounded test pool");
+        let (started_sender, started_receiver) = std::sync::mpsc::sync_channel(1);
+        let (release_sender, release_receiver) = std::sync::mpsc::sync_channel(1);
+        let (result_sender, result_receiver) = std::sync::mpsc::sync_channel(1);
+        let (caller_finished_sender, caller_finished) = std::sync::mpsc::channel();
+        let job = SystemQueryJob {
+            deadline: Instant::now() + Duration::from_secs(1),
+            partial_rows: Arc::new(std::sync::Mutex::new(Vec::new())),
+            cancellation: SystemQueryCancellation::new(),
+            work: Box::new(move |_, _, _| {
+                started_sender.send(()).expect("signal stuck worker");
+                release_receiver.recv().expect("release stuck worker");
+                Ok(SystemQueryBatch::complete(Vec::new()))
+            }),
+            result_sender,
+            caller_finished,
+        };
+        assert!(pool.dispatch(job).is_ok());
+        started_receiver
+            .recv_timeout(Duration::from_secs(1))
+            .expect("worker started");
+
+        let (drop_finished_sender, drop_finished_receiver) = std::sync::mpsc::sync_channel(1);
+        let drop_thread = std::thread::spawn(move || {
+            drop(pool);
+            drop_finished_sender.send(()).expect("signal pool drop");
+        });
+        let returned_within_bound = drop_finished_receiver
+            .recv_timeout(Duration::from_millis(100))
+            .is_ok();
+
+        release_sender.send(()).expect("release stuck worker");
+        caller_finished_sender
+            .send(())
+            .expect("acknowledge caller completion");
+        result_receiver
+            .recv_timeout(Duration::from_secs(1))
+            .expect("worker result after release")
+            .expect("worker completion");
+        if !returned_within_bound {
+            drop_finished_receiver
+                .recv_timeout(Duration::from_secs(1))
+                .expect("pool drop completes after cleanup");
+        }
+        drop_thread.join().expect("drop thread joins");
+
+        assert!(
+            returned_within_bound,
+            "pool Drop blocked on an unreleased worker instead of transferring ownership"
+        );
+    }
+
+    #[test]
+    fn dropped_pool_transfers_unfinished_handle_to_bounded_reaper() {
+        let reaper = Box::leak(Box::new(SystemQueryWorkerReaper::new(4)));
+        let pool = SystemQueryWorkerPool::start_with_reaper(1, reaper)
+            .expect("start isolated bounded test pool");
+        let (started_sender, started_receiver) = std::sync::mpsc::sync_channel(1);
+        let (release_sender, release_receiver) = std::sync::mpsc::sync_channel(1);
+        let (result_sender, result_receiver) = std::sync::mpsc::sync_channel(1);
+        let (caller_finished_sender, caller_finished) = std::sync::mpsc::channel();
+        let job = SystemQueryJob {
+            deadline: Instant::now() + Duration::from_secs(1),
+            partial_rows: Arc::new(std::sync::Mutex::new(Vec::new())),
+            cancellation: SystemQueryCancellation::new(),
+            work: Box::new(move |_, _, _| {
+                started_sender.send(()).expect("signal stuck worker");
+                release_receiver.recv().expect("release stuck worker");
+                Ok(SystemQueryBatch::complete(Vec::new()))
+            }),
+            result_sender,
+            caller_finished,
+        };
+        assert!(pool.dispatch(job).is_ok());
+        started_receiver
+            .recv_timeout(Duration::from_secs(1))
+            .expect("worker started");
+
+        drop(pool);
+
+        assert_eq!(reaper.owned_worker_count(), 1);
+        assert_eq!(reaper.quarantined_worker_count(), 1);
+
+        release_sender.send(()).expect("release stuck worker");
+        caller_finished_sender
+            .send(())
+            .expect("acknowledge caller completion");
+        result_receiver
+            .recv_timeout(Duration::from_secs(1))
+            .expect("worker result after release")
+            .expect("worker completion");
+        let cleanup_deadline = Instant::now() + Duration::from_secs(1);
+        while reaper.owned_worker_count() != 0 && Instant::now() < cleanup_deadline {
+            std::thread::yield_now();
+        }
+        assert_eq!(reaper.owned_worker_count(), 0);
+    }
+
+    #[test]
+    fn timeout_grace_preserves_result_and_shared_partial_rows_without_duplicates() {
+        let pool = SystemQueryWorkerPool::start(1).expect("start bounded test pool");
+        let shared_row = row(&[("Source", "shared-partial")]);
+        let result_only_row = row(&[("Source", "result-only")]);
+        let shared_for_worker = shared_row.clone();
+        let result_for_worker = result_only_row.clone();
+
+        let batch = run_bounded_system_query_with_pool(
+            &pool,
+            Duration::from_millis(10),
+            move |_, partial_rows, cancellation| {
+                partial_rows
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .push(shared_for_worker.clone());
+                while !cancellation.is_cancelled() {
+                    std::thread::park_timeout(Duration::from_millis(1));
+                }
+                Ok(SystemQueryBatch::complete(vec![
+                    shared_for_worker,
+                    result_for_worker,
+                ]))
+            },
+        );
+
+        assert_eq!(batch.rows, vec![shared_row, result_only_row]);
+        assert_eq!(batch.completion, Err(SystemReadError::TimedOut));
+        assert_eq!(pool.shutdown_and_join(), 1);
     }
 
     #[test]

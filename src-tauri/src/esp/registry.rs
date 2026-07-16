@@ -412,17 +412,41 @@ fn registry_sensitivity(key: &str, value_name: &str) -> EspSensitivity {
 }
 
 fn registry_path_sensitivity(key: &str) -> EspSensitivity {
-    let normalized = key.to_ascii_lowercase();
-    if normalized.contains("nodecache") {
-        EspSensitivity::Restricted
-    } else if key.split('\\').any(is_windows_sid_component)
-        || ["upn", "sid", "tenant", "entdmid", "serial"]
-            .iter()
-            .any(|marker| normalized.contains(marker))
+    let components = key.split('\\').collect::<Vec<_>>();
+    if components
+        .iter()
+        .any(|component| registry_component_has_prefix(component, "nodecache"))
     {
+        EspSensitivity::Restricted
+    } else if components.iter().any(|component| {
+        is_windows_sid_component(component)
+            || ["upn", "sid", "tenant", "entdmid", "serial"]
+                .iter()
+                .any(|marker| registry_component_has_prefix(component, marker))
+    }) {
         EspSensitivity::Sensitive
     } else {
         EspSensitivity::Public
+    }
+}
+
+fn registry_component_has_prefix(component: &str, marker: &str) -> bool {
+    let Some(prefix) = component.get(..marker.len()) else {
+        return false;
+    };
+    if !prefix.eq_ignore_ascii_case(marker) {
+        return false;
+    }
+    match component
+        .get(marker.len()..)
+        .and_then(|suffix| suffix.chars().next())
+    {
+        None => true,
+        Some(boundary) => {
+            !boundary.is_ascii_alphanumeric()
+                || boundary.is_ascii_uppercase()
+                || boundary.is_ascii_digit()
+        }
     }
 }
 
@@ -803,6 +827,34 @@ mod tests {
         assert_eq!(
             decode_registry_value(3, &vec![0xab; MAX_REGISTRY_VALUE_BYTES + 1]),
             None
+        );
+    }
+
+    #[test]
+    fn registry_path_sensitivity_uses_sid_and_field_boundaries() {
+        assert_eq!(
+            registry_path_sensitivity(
+                r"SOFTWARE\Microsoft\Windows\Autopilot\User\S-1-5-21-111-222-333-1001\Readable"
+            ),
+            EspSensitivity::Sensitive
+        );
+        assert_eq!(
+            registry_path_sensitivity(
+                r"SOFTWARE\Microsoft\Windows\Autopilot\User\S-1-5-not-numeric\Readable"
+            ),
+            EspSensitivity::Public
+        );
+        assert_eq!(
+            registry_path_sensitivity(r"SOFTWARE\Microsoft\Windows\Autopilot\Outside\Readable"),
+            EspSensitivity::Public
+        );
+        assert_eq!(
+            registry_path_sensitivity(r"SOFTWARE\Microsoft\Windows\Autopilot\NotASid\Readable"),
+            EspSensitivity::Public
+        );
+        assert_eq!(
+            registry_path_sensitivity(r"SOFTWARE\Microsoft\Windows\Autopilot\TenantId\Readable"),
+            EspSensitivity::Sensitive
         );
     }
 }
