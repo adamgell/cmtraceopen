@@ -575,6 +575,7 @@ impl<'a, T: GraphTransport, C: GraphCancellation + ?Sized> GraphClient<'a, T, C>
                     GraphClientError::new(GraphClientErrorKind::Transport, required_scope)
                 }
             })?;
+        self.ensure_not_cancelled(required_scope)?;
 
         if response.body.len() > MAX_GRAPH_RESPONSE_BYTES {
             return Err(GraphClientError::for_response(

@@ -604,6 +604,36 @@ fn client_cancels_before_requests_during_retry_and_before_pagination() {
 }
 
 #[test]
+fn client_cancels_after_final_in_flight_response() {
+    let scope = "DeviceManagementApps.Read.All";
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let transport = FakeGraphTransport::cancelling_after(
+        vec![Ok(graph_response(
+            200,
+            graph_page(serde_json::json!([]), None),
+            &[],
+        ))],
+        1,
+        Arc::clone(&cancelled),
+    );
+    let cancellation = FakeGraphCancellation {
+        cancelled,
+        ..Default::default()
+    };
+    let client = GraphClient::new("graph.microsoft.com", &transport, &cancellation);
+
+    let error = client
+        .get_paginated::<serde_json::Value>(
+            "https://graph.microsoft.com/v1.0/deviceAppManagement/mobileApps",
+            scope,
+        )
+        .expect_err("final in-flight cancellation should stop");
+
+    assert_eq!(error.kind, GraphClientErrorKind::Cancelled);
+    assert_eq!(transport.requests().len(), 1);
+}
+
+#[test]
 fn client_rejects_untrusted_next_links_and_enforces_page_item_body_caps() {
     let scope = "DeviceManagementApps.Read.All";
     for next_link in [
