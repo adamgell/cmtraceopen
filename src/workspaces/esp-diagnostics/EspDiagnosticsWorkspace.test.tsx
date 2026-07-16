@@ -1,14 +1,31 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { invoke } from "@tauri-apps/api/core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useUiStore } from "../../stores/ui-store";
+import { ActionCenter } from "./ActionCenter";
 import { EspDiagnosticsWorkspace } from "./EspDiagnosticsWorkspace";
+import { EspPhaseProgress } from "./EspPhaseProgress";
 import { useEspDiagnosticsStore } from "./esp-diagnostics-store";
+import { EspWorkloadTable } from "./EspWorkloadTable";
+import { LiveActivity } from "./LiveActivity";
 import type {
+  EspDiagnosticFinding,
   EspDiagnosticsSnapshot,
+  EspGraphOverlay,
   EspInstallerCorrelation,
+  EspNormalizedStatus,
   EspProcessObservation,
   EspScenario,
+  EspTimelineEntry,
+  EspTrackedKind,
+  EspWorkload,
 } from "./types";
 
 function timestamp(rawText: string) {
@@ -181,6 +198,143 @@ function makeSnapshot(
     rawEvidence: [],
     graph: null,
     ...overrides,
+  };
+}
+
+const workloadStateLabels: Array<[EspNormalizedStatus, string]> = [
+  ["notStarted", "Not started"],
+  ["notInstalled", "Not installed"],
+  ["initialized", "Initialized"],
+  ["pending", "Pending"],
+  ["downloading", "Downloading"],
+  ["downloaded", "Downloaded"],
+  ["installing", "Installing"],
+  ["inProgress", "In progress"],
+  ["processed", "Processed"],
+  ["succeeded", "Succeeded"],
+  ["failed", "Failed"],
+  ["skipped", "Skipped"],
+  ["uninstalled", "Uninstalled"],
+  ["rebootRequired", "Reboot required"],
+  ["cancelled", "Cancelled"],
+  ["unknown", "Unknown (wire-status-99)"],
+];
+
+function makeWorkload(
+  workloadId: string,
+  kind: EspTrackedKind,
+  normalized: EspNormalizedStatus,
+  display: string,
+  overrides: Partial<EspWorkload> = {},
+): EspWorkload {
+  return {
+    workloadId,
+    sessionId: "session-current",
+    kind,
+    scope: "device",
+    rawIdentifier: `raw-${workloadId}`,
+    displayName: `${kind} ${workloadId}`,
+    status: {
+      raw: normalized === "unknown" ? "wire-status-99" : normalized,
+      normalized,
+      display,
+      detail: null,
+    },
+    timestamps: {
+      firstObserved: timestamp("2026-07-15T20:05:00Z"),
+      started: null,
+      ended: null,
+      lastUpdated: timestamp("2026-07-15T20:08:00Z"),
+    },
+    exitCode: null,
+    enforcementErrorCode: null,
+    blocking: true,
+    evidence: [
+      {
+        evidenceId: `ev-${workloadId}`,
+        sourceArtifactId: "ime-app-workload",
+      },
+    ],
+    ...overrides,
+  };
+}
+
+function makeFinding(): EspDiagnosticFinding {
+  return {
+    findingId: "finding-blocker",
+    severity: "blocker",
+    confidence: "high",
+    title: "Required Win32 application is still failing",
+    summary: "Exit code 1603 has repeated during the active device phase.",
+    recommendedChecks: [
+      "Inspect the referenced MSI log around Return value 3.",
+      "Verify the requirement and detection rules in Intune.",
+    ],
+    evidence: [
+      { evidenceId: "ev-finding-1", sourceArtifactId: "ime-app-workload" },
+    ],
+    coverageGapIds: ["coverage-system-temp"],
+  };
+}
+
+function makeActivity(
+  entryId: string,
+  observedAt: string,
+): EspTimelineEntry {
+  return {
+    entryId,
+    timestamp: timestamp(observedAt),
+    kind: "workload",
+    title: "Installer retry observed",
+    detail: `Occurrence ${entryId}`,
+    status: {
+      raw: 3,
+      normalized: "installing",
+      display: "Installing",
+      detail: null,
+    },
+    evidence: [
+      { evidenceId: `ev-${entryId}`, sourceArtifactId: "ime-app-workload" },
+    ],
+  };
+}
+
+function makeGraphOverlay(appId: string, displayName: string): EspGraphOverlay {
+  const skipped = {
+    status: "skipped" as const,
+    requiredScope: null,
+    apiVersion: "v1.0" as const,
+    data: null,
+    error: null,
+  };
+  return {
+    requestId: "graph-panel",
+    requestedAtUtc: "2026-07-15T20:08:00Z",
+    deviceMatch: skipped,
+    autopilotIdentity: skipped,
+    deploymentProfile: skipped,
+    intendedDeploymentProfile: skipped,
+    profileAssignments: skipped,
+    autopilotEvents: skipped,
+    enrollmentConfiguration: skipped,
+    apps: {
+      status: "available",
+      requiredScope: "DeviceManagementApps.Read.All",
+      apiVersion: "v1.0",
+      data: [
+        {
+          appId,
+          displayName,
+          trackedOnEnrollmentStatus: true,
+          status: null,
+          assignments: [],
+          evidence: [],
+        },
+      ],
+      error: null,
+    },
+    policies: skipped,
+    scripts: skipped,
   };
 }
 
@@ -426,5 +580,280 @@ describe("current MSIEXEC activity", () => {
     expect(screen.getByText("Temporal match")).toBeInTheDocument();
     expect(screen.getByText("Ambiguous — 2 candidates")).toBeInTheDocument();
     expect(screen.getAllByText("No active MSI log referenced")).toHaveLength(2);
+  });
+});
+
+describe("actionable read-only findings", () => {
+  it("shows severity, confidence, recommended checks, provenance, and no remediation controls", () => {
+    render(<ActionCenter findings={[makeFinding()]} />);
+
+    const actionCenter = screen.getByRole("region", { name: "Action center" });
+    expect(actionCenter).toHaveTextContent("Blocker · High confidence");
+    expect(actionCenter).toHaveTextContent(
+      "Required Win32 application is still failing",
+    );
+    expect(actionCenter).toHaveTextContent(
+      "Inspect the referenced MSI log around Return value 3.",
+    );
+    expect(actionCenter).toHaveTextContent(
+      "Verify the requirement and detection rules in Intune.",
+    );
+    expect(
+      within(actionCenter).getByRole("link", {
+        name: "Open evidence ev-finding-1",
+      }),
+    ).toHaveAttribute("href", "#evidence-ev-finding-1");
+    expect(actionCenter).toHaveTextContent("coverage-system-temp");
+    expect(within(actionCenter).queryByRole("button")).not.toBeInTheDocument();
+  });
+});
+
+describe("scenario-aware phase progress", () => {
+  it("keeps classic ESP and Device Preparation phase rules visibly distinct", () => {
+    const view = render(
+      <EspPhaseProgress
+        snapshot={makeSnapshot({ scenario: "autopilotV1", phase: "deviceSetup" })}
+      />,
+    );
+
+    const progress = screen.getByRole("region", { name: "ESP phase progress" });
+    expect(progress).toHaveTextContent("Classic ESP phases");
+    expect(progress).toHaveTextContent("Device setup · Current");
+    expect(progress).toHaveTextContent("Account setup · Pending");
+
+    view.rerender(
+      <EspPhaseProgress
+        snapshot={makeSnapshot({
+          scenario: "autopilotDevicePreparationV2",
+          phase: "devicePreparation",
+          sessions: [
+            {
+              ...makeSnapshot().sessions[0],
+              kind: "devicePreparationV2",
+              phase: "devicePreparation",
+            },
+          ],
+        })}
+      />,
+    );
+    expect(progress).toHaveTextContent("Device Preparation phases");
+    expect(progress).toHaveTextContent("Agent bootstrap · Current");
+    expect(progress).not.toHaveTextContent("Classic ESP phases");
+  });
+});
+
+describe("independent live activity", () => {
+  it("retains repeated occurrences and updates without replacing workload state", () => {
+    const workload = makeWorkload(
+      "persistent-row",
+      "win32App",
+      "installing",
+      "Installing",
+      { displayName: "Workload row persists" },
+    );
+    const first = makeSnapshot({
+      installerCorrelations: [],
+      workloads: [workload],
+      activity: [makeActivity("activity-a", "2026-07-15T20:07:00Z")],
+    });
+    const view = render(
+      <>
+        <LiveActivity entries={first.activity} />
+        <EspWorkloadTable snapshot={first} />
+      </>,
+    );
+
+    const activity = screen.getByRole("region", { name: "Live activity" });
+    expect(
+      within(activity).getAllByText("Installer retry observed"),
+    ).toHaveLength(1);
+
+    view.rerender(
+      <>
+        <LiveActivity
+          entries={[
+            makeActivity("activity-a", "2026-07-15T20:07:00Z"),
+            makeActivity("activity-b", "2026-07-15T20:07:30Z"),
+          ]}
+        />
+        <EspWorkloadTable
+          snapshot={{
+          ...first,
+          }}
+        />
+      </>,
+    );
+    expect(
+      within(activity).getAllByText("Installer retry observed"),
+    ).toHaveLength(2);
+    expect(
+      within(screen.getByRole("region", { name: "Tracked workloads" })).getByText(
+        "Workload row persists",
+      ),
+    ).toBeInTheDocument();
+  });
+});
+
+describe("workload table", () => {
+  it("renders every workload kind and wire state with scope, codes, unknowns, and additive Graph names", () => {
+    const kinds: EspTrackedKind[] = [
+      "msi",
+      "office",
+      "modernApp",
+      "win32App",
+      "policy",
+      "scepCertificate",
+      "platformScript",
+      "devicePreparationWorkload",
+    ];
+    const workloads = workloadStateLabels.map(([state, display], index) =>
+      makeWorkload(`state-${index}`, kinds[index % kinds.length], state, display, {
+        scope: index % 2 === 0 ? "device" : "user",
+        rawIdentifier: index === 0 ? "graph-app-raw-guid" : `raw-state-${index}`,
+        displayName:
+          index === 0
+            ? "Contoso VPN local name"
+            : state === "unknown"
+              ? null
+              : `${kinds[index % kinds.length]} workload ${index}`,
+        blocking: state === "unknown" ? null : index % 2 === 0,
+        exitCode:
+          index === 0
+            ? { raw: "1603", decimal: 1603, hex: "0x00000643" }
+            : null,
+        enforcementErrorCode:
+          index === 0
+            ? {
+                raw: "-2016330855",
+                decimal: -2016330855,
+                hex: "0x87D30019",
+              }
+            : null,
+      }),
+    );
+    render(
+      <EspWorkloadTable
+        snapshot={makeSnapshot({
+        installerCorrelations: [],
+        workloads,
+        sessions: [
+          {
+            ...makeSnapshot().sessions[0],
+            workloadIds: workloads.map((workload) => workload.workloadId),
+          },
+        ],
+        graph: makeGraphOverlay("graph-app-raw-guid", "Contoso VPN Graph name"),
+        })}
+      />,
+    );
+
+    const table = screen.getByRole("region", { name: "Tracked workloads" });
+    for (const label of [
+      "MSI",
+      "Microsoft 365 Apps",
+      "Modern app",
+      "Win32 app",
+      "Policy",
+      "SCEP certificate",
+      "Platform script",
+      "Device Preparation workload",
+    ]) {
+      expect(within(table).getAllByText(label).length).toBeGreaterThan(0);
+    }
+    for (const [, label] of workloadStateLabels) {
+      expect(within(table).getAllByText(label).length).toBeGreaterThan(0);
+    }
+    expect(table).toHaveTextContent("Contoso VPN local name");
+    expect(table).toHaveTextContent("Graph · Contoso VPN Graph name");
+    expect(table).toHaveTextContent("graph-app-raw-guid");
+    expect(table).toHaveTextContent("Device scope");
+    expect(table).toHaveTextContent("User scope");
+    expect(table).toHaveTextContent("1603 · 0x00000643");
+    expect(table).toHaveTextContent("-2016330855 · 0x87D30019");
+    expect(table).toHaveTextContent("Blocking unknown");
+    expect(table).toHaveTextContent("Exit code unknown");
+    expect(table).toHaveTextContent("Enforcement code unknown");
+  });
+
+  it("defaults to latest sessions, preserves retry rows, and sorts all sessions chronologically", () => {
+    const oldRetry = makeWorkload(
+      "retry-old",
+      "win32App",
+      "failed",
+      "Failed",
+      {
+        sessionId: "session-old",
+        rawIdentifier: "same-app-raw-guid",
+        displayName: "Contoso VPN retry 1",
+        timestamps: {
+          firstObserved: timestamp("2026-07-15T19:00:00Z"),
+          started: timestamp("2026-07-15T19:01:00Z"),
+          ended: timestamp("2026-07-15T19:02:00Z"),
+          lastUpdated: timestamp("2026-07-15T19:02:00Z"),
+        },
+      },
+    );
+    const currentRetry = makeWorkload(
+      "retry-current",
+      "win32App",
+      "installing",
+      "Installing",
+      {
+        sessionId: "session-current",
+        rawIdentifier: "same-app-raw-guid",
+        displayName: "Contoso VPN retry 2",
+        timestamps: {
+          firstObserved: timestamp("2026-07-15T20:05:00Z"),
+          started: timestamp("2026-07-15T20:06:00Z"),
+          ended: null,
+          lastUpdated: timestamp("2026-07-15T20:08:00Z"),
+        },
+      },
+    );
+    render(
+      <EspWorkloadTable
+        snapshot={makeSnapshot({
+        installerCorrelations: [],
+        sessions: [
+          {
+            ...makeSnapshot().sessions[0],
+            sessionId: "session-old",
+            isLatest: false,
+            workloadIds: [oldRetry.workloadId],
+          },
+          {
+            ...makeSnapshot().sessions[0],
+            sessionId: "session-current",
+            isLatest: true,
+            workloadIds: [currentRetry.workloadId],
+          },
+        ],
+        workloads: [currentRetry, oldRetry],
+        })}
+      />,
+    );
+
+    const table = screen.getByRole("region", { name: "Tracked workloads" });
+    expect(table).toHaveTextContent("Latest sessions · 1 of 2 workloads");
+    expect(table).toHaveTextContent("Contoso VPN retry 2");
+    expect(table).not.toHaveTextContent("Contoso VPN retry 1");
+
+    fireEvent.click(
+      within(table).getByRole("checkbox", { name: "Show all sessions" }),
+    );
+    expect(table).toHaveTextContent("All sessions · 2 workloads");
+    expect(table).toHaveTextContent("Contoso VPN retry 1");
+    expect(table).toHaveTextContent("Contoso VPN retry 2");
+    expect(within(table).getAllByText("same-app-raw-guid")).toHaveLength(2);
+
+    const rowText = within(table)
+      .getAllByRole("row")
+      .map((row) => row.textContent ?? "");
+    expect(rowText.findIndex((text) => text.includes("retry 1"))).toBeLessThan(
+      rowText.findIndex((text) => text.includes("retry 2")),
+    );
+    expect(within(table).getAllByText("View full values")).toHaveLength(2);
+    expect(table).toHaveTextContent("ev-retry-old");
+    expect(table).toHaveTextContent("ev-retry-current");
   });
 });
