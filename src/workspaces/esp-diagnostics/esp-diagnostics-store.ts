@@ -6,13 +6,7 @@ import type {
 } from "./types";
 
 export type EspWorkspacePhase =
-  | "idle"
-  | "analyzing"
-  | "starting"
-  | "live"
-  | "stopping"
-  | "ready"
-  | "error";
+  "idle" | "analyzing" | "starting" | "live" | "stopping" | "ready" | "error";
 
 export type EspEvidenceViewMode = "collapsed" | "docked" | "full";
 export type EspGraphPhase =
@@ -25,9 +19,7 @@ export type EspGraphPhase =
   | "error"
   | "cancelled";
 export type EspGraphUnavailableReason =
-  | "graphDisabled"
-  | "graphNotConnected"
-  | "unsupportedPlatform";
+  "graphDisabled" | "graphNotConnected" | "unsupportedPlatform";
 
 export const ESP_EVIDENCE_DOCK_MIN_HEIGHT = 180;
 export const ESP_EVIDENCE_DOCK_MAX_HEIGHT = 720;
@@ -121,10 +113,7 @@ function graphOverlayIsPartial(overlay: EspGraphOverlay): boolean {
 }
 
 function graphStateForFreshLocalRun(
-  state: Pick<
-    EspDiagnosticsStore,
-    "graphPhase" | "graphUnavailableReason"
-  >,
+  state: Pick<EspDiagnosticsStore, "graphPhase" | "graphUnavailableReason">,
 ): Pick<EspDiagnosticsStore, "graphPhase" | "graphUnavailableReason"> {
   if (state.graphPhase === "disabled" || state.graphPhase === "unavailable") {
     return {
@@ -148,10 +137,17 @@ function unreadEvidenceDelta(
     return 0;
   }
 
-  return Math.max(
-    0,
-    incoming.rawEvidence.length - (current?.rawEvidence.length ?? 0),
+  const knownRecordIds = new Set(
+    current?.rawEvidence.map((record) => record.recordId) ?? [],
   );
+  const incomingRecordIds = new Set(
+    incoming.rawEvidence.map((record) => record.recordId),
+  );
+  let unread = 0;
+  for (const recordId of incomingRecordIds) {
+    if (!knownRecordIds.has(recordId)) unread += 1;
+  }
+  return unread;
 }
 
 function phaseForSessionUpdate(update: EspSessionUpdate): EspWorkspacePhase {
@@ -179,7 +175,9 @@ export function getEspEvidenceDockMaxHeight(workspaceHeight?: number): number {
     ESP_EVIDENCE_DOCK_MIN_HEIGHT,
     Math.min(
       ESP_EVIDENCE_DOCK_MAX_HEIGHT,
-      Math.floor(Math.max(0, workspaceHeight) * ESP_EVIDENCE_DOCK_MAX_WORKSPACE_RATIO),
+      Math.floor(
+        Math.max(0, workspaceHeight) * ESP_EVIDENCE_DOCK_MAX_WORKSPACE_RATIO,
+      ),
     ),
   );
 }
@@ -277,8 +275,7 @@ export const useEspDiagnosticsStore = create<EspDiagnosticsStore>((set) => ({
             : update.sessionId,
         sequence: update.sequence,
         snapshot,
-        error:
-          update.state === "error" ? "The live ESP session failed." : null,
+        error: update.state === "error" ? "The live ESP session failed." : null,
         unreadEvidenceCount:
           state.unreadEvidenceCount +
           unreadEvidenceDelta(
@@ -375,7 +372,10 @@ export const useEspDiagnosticsStore = create<EspDiagnosticsStore>((set) => ({
     set((state) => {
       const evidenceDockHeight = Math.max(
         ESP_EVIDENCE_DOCK_MIN_HEIGHT,
-        Math.min(getEspEvidenceDockMaxHeight(workspaceHeight), Math.round(height)),
+        Math.min(
+          getEspEvidenceDockMaxHeight(workspaceHeight),
+          Math.round(height),
+        ),
       );
       return evidenceDockHeight === state.evidenceDockHeight
         ? state

@@ -52,6 +52,14 @@ export function LiveEvidenceDock({ snapshot }: LiveEvidenceDockProps) {
     (state) => state.markEvidenceRead,
   );
   const dockRef = useRef<HTMLElement>(null);
+  const stopPointerResizeRef = useRef<(() => void) | null>(null);
+
+  useEffect(
+    () => () => {
+      stopPointerResizeRef.current?.();
+    },
+    [],
+  );
 
   useEffect(() => {
     if (viewMode !== "collapsed") markEvidenceRead();
@@ -110,6 +118,7 @@ export function LiveEvidenceDock({ snapshot }: LiveEvidenceDockProps) {
 
   const startPointerResize = (event: PointerEvent<HTMLDivElement>) => {
     event.preventDefault();
+    stopPointerResizeRef.current?.();
     const startY = event.clientY;
     const startHeight = dockHeight;
     const availableHeight = workspaceHeight(dockRef.current);
@@ -120,17 +129,24 @@ export function LiveEvidenceDock({ snapshot }: LiveEvidenceDockProps) {
         return;
       setDockHeight(startHeight + startY - moveEvent.clientY, availableHeight);
     };
-    const stop = (upEvent: globalThis.PointerEvent) => {
-      if (pointerId && upEvent.pointerId && upEvent.pointerId !== pointerId)
-        return;
+    const cleanup = () => {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", stop);
       window.removeEventListener("pointercancel", stop);
+      if (stopPointerResizeRef.current === cleanup) {
+        stopPointerResizeRef.current = null;
+      }
+    };
+    const stop = (upEvent: globalThis.PointerEvent) => {
+      if (pointerId && upEvent.pointerId && upEvent.pointerId !== pointerId)
+        return;
+      cleanup();
     };
 
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", stop);
     window.addEventListener("pointercancel", stop);
+    stopPointerResizeRef.current = cleanup;
   };
 
   return (

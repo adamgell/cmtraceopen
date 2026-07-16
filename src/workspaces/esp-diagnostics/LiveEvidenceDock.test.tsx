@@ -228,6 +228,22 @@ describe("LiveEvidenceDock", () => {
     });
   });
 
+  it("removes an active pointer resize listener when the dock unmounts", () => {
+    useEspDiagnosticsStore.getState().setEvidenceViewMode("docked");
+    const view = render(<LiveEvidenceDock snapshot={snapshot(baseRecords)} />);
+    const separator = screen.getByRole("separator", {
+      name: "Resize live evidence and logs",
+    });
+
+    fireEvent.pointerDown(separator, { clientY: 500, pointerId: 1 });
+    view.unmount();
+    fireEvent.pointerMove(window, { clientY: 100, pointerId: 1 });
+
+    expect(useEspDiagnosticsStore.getState().evidenceDockHeight).toBe(
+      ESP_EVIDENCE_DOCK_DEFAULT_HEIGHT,
+    );
+  });
+
   it("keeps collecting while hidden and clears unread state only after opening", () => {
     const first = snapshot(baseRecords.slice(0, 1));
     const second = snapshot(baseRecords.slice(0, 3));

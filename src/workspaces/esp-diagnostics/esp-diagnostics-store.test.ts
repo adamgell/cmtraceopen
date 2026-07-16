@@ -393,6 +393,25 @@ describe("ESP local session state", () => {
     expect(useEspDiagnosticsStore.getState().unreadEvidenceCount).toBe(0);
   });
 
+  it("counts replacement evidence as unread when rotation keeps the record count constant", () => {
+    const state = useEspDiagnosticsStore.getState();
+    state.beginLiveStart("live-a");
+    useEspDiagnosticsStore
+      .getState()
+      .applySessionUpdate(
+        makeSessionUpdate(1, makeSnapshot(["old-a", "old-b"])),
+      );
+    useEspDiagnosticsStore.getState().markEvidenceRead();
+
+    useEspDiagnosticsStore
+      .getState()
+      .applySessionUpdate(
+        makeSessionUpdate(2, makeSnapshot(["old-b", "new-c"])),
+      );
+
+    expect(useEspDiagnosticsStore.getState().unreadEvidenceCount).toBe(1);
+  });
+
   it("validates the complete session envelope before applying native events", () => {
     const update = makeSessionUpdate(1, makeSnapshot(["local-a"]));
     expect(isEspSessionUpdate(update)).toBe(true);
