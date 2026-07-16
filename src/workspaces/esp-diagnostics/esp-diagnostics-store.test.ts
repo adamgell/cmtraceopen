@@ -39,8 +39,7 @@ vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
 }));
 
-const GRAPH_MANAGED_DEVICE_DEFAULT =
-  "10101010-1010-4010-8010-101010101010";
+const GRAPH_MANAGED_DEVICE_DEFAULT = "10101010-1010-4010-8010-101010101010";
 const GRAPH_MANAGED_DEVICE_B = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 
 vi.mock("@tauri-apps/api/event", () => ({
@@ -1210,11 +1209,7 @@ describe("ESP Graph overlay state", () => {
 
     useEspDiagnosticsStore
       .getState()
-      .applyGraphOverlay(
-        "graph-app-intent-partial",
-        ownershipLease,
-        overlay,
-      );
+      .applyGraphOverlay("graph-app-intent-partial", ownershipLease, overlay);
 
     expect(useEspDiagnosticsStore.getState().graphPhase).toBe("partial");
     expect(

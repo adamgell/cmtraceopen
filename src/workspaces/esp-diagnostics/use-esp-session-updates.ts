@@ -794,11 +794,7 @@ export function createEspGraphCoordinator(
         } else {
           useEspDiagnosticsStore
             .getState()
-            .applyGraphOverlay(
-              requestId,
-              ownership.ownershipLease,
-              overlay,
-            );
+            .applyGraphOverlay(requestId, ownership.ownershipLease, overlay);
           if (
             suppressedOverlaySelectionFingerprint === currentFingerprint &&
             useEspDiagnosticsStore.getState().snapshot?.graph === overlay
