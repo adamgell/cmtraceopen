@@ -797,16 +797,18 @@ fn process_observation(
         .command_line
         .as_deref()
         .filter(|command_line| !command_line.trim().is_empty());
+    let sanitized_command_line = command_line.map(sanitize_command_line);
+    let safe_command_line = sanitized_command_line.as_deref();
     EspProcessObservation {
         context: process_context(index, observed_at_utc),
         pid: snapshot.pid,
         process_start_time: process_timestamp(&snapshot.start_time_utc),
         parent_pid: snapshot.parent_pid,
         executable_name: snapshot.image_name,
-        sanitized_command_line: command_line.map(sanitize_command_line),
-        referenced_log_path: command_line.and_then(extract_log_path),
-        app_id: command_line.and_then(extract_app_id),
-        product_code: command_line.and_then(extract_product_code),
+        referenced_log_path: safe_command_line.and_then(extract_log_path),
+        app_id: safe_command_line.and_then(extract_app_id),
+        product_code: safe_command_line.and_then(extract_product_code),
+        sanitized_command_line,
     }
 }
 
@@ -1426,6 +1428,35 @@ mod tests {
         assert!(!serialized.contains("device-hardware-data-raw-secret"));
         assert!(serialized.matches("[REDACTED]").count() >= 2);
         assert!(serialized.contains("contoso.log"));
+    }
+
+    #[test]
+    fn hardware_identity_payload_cannot_seed_derived_installer_references() {
+        let raw = concat!(
+            "msiexec.exe --DeviceHardwareData \"opaque-hardware-payload ",
+            "/L*V C:\\Windows\\Temp\\hardware-payload-secret.log ",
+            "/i {11111111-1111-1111-1111-111111111111} ",
+            "--app-id 22222222-2222-2222-2222-222222222222\""
+        );
+        let evidence = collect(
+            vec![process(
+                53,
+                Some(20),
+                "msiexec.exe",
+                "2026-07-15T13:20:00Z",
+                Some(raw),
+            )],
+            &[],
+        );
+        let observation = &evidence.observations[0];
+
+        assert_eq!(observation.referenced_log_path, None);
+        assert_eq!(observation.product_code, None);
+        assert_eq!(observation.app_id, None);
+        let serialized = serde_json::to_string(&evidence).expect("serialize process evidence");
+        assert!(!serialized.contains("hardware-payload-secret"));
+        assert!(!serialized.contains("11111111-1111-1111-1111-111111111111"));
+        assert!(!serialized.contains("22222222-2222-2222-2222-222222222222"));
     }
 
     #[test]
