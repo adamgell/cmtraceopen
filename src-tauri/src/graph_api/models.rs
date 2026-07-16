@@ -29,6 +29,15 @@ const GRAPH_URL_AUDIENCE: &str = "https://graph.microsoft.com";
 const GRAPH_APP_ID_AUDIENCE: &str = "00000003-0000-0000-c000-000000000000";
 const MAX_ACCESS_TOKEN_BYTES: usize = 64 * 1024;
 
+/// Normalize an Intune object identifier before it is interpolated into a
+/// Microsoft Graph path. Rejecting every non-UUID form keeps log-derived or
+/// IPC-supplied values from changing the endpoint path or query.
+pub fn normalize_graph_guid(value: &str) -> Option<String> {
+    uuid::Uuid::parse_str(value.trim())
+        .ok()
+        .map(|guid| guid.hyphenated().to_string().to_ascii_lowercase())
+}
+
 /// Delegated Intune read capabilities projected from the access token's
 /// short-name `scp` claim. These flags are UX/cache hints; Graph 401/403
 /// responses remain the authorization truth.

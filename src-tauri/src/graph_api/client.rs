@@ -68,7 +68,7 @@ pub struct GraphClientError {
 }
 
 impl GraphClientError {
-    fn new(kind: GraphClientErrorKind, required_scope: &str) -> Self {
+    pub(super) fn new(kind: GraphClientErrorKind, required_scope: &str) -> Self {
         Self {
             kind,
             status: None,
@@ -144,7 +144,15 @@ impl<'a, T: GraphTransport, C: GraphCancellation> GraphClient<'a, T, C> {
             self.ensure_not_cancelled(required_scope)?;
             self.ensure_allowed_url(&url, required_scope)?;
 
-            let response = self.execute_with_retry(&url, required_scope)?;
+            let request = GraphTransportRequest {
+                method: GraphHttpMethod::Get,
+                url: url.clone(),
+                consistency_level: Some("eventual".to_string()),
+                content_type: None,
+                body: None,
+                required_scope: sanitize_scope(required_scope),
+            };
+            let response = self.execute_with_retry(&request, required_scope)?;
             let request_id = graph_request_id(&response.headers);
             let page: GraphPage<Item> = serde_json::from_slice(&response.body).map_err(|_| {
                 let mut error =
@@ -185,25 +193,41 @@ impl<'a, T: GraphTransport, C: GraphCancellation> GraphClient<'a, T, C> {
         ))
     }
 
+    /// Execute one bounded Graph request and decode its JSON response.
+    ///
+    /// This is used by non-paginated and `$batch` endpoints so every Graph
+    /// call shares the same HTTPS-host, timeout, retry, response-size,
+    /// cancellation, and redacted-error policy.
+    pub fn request_json<Response: DeserializeOwned>(
+        &self,
+        mut request: GraphTransportRequest,
+    ) -> Result<Response, GraphClientError> {
+        let required_scope = sanitize_scope(&request.required_scope);
+        request.required_scope = required_scope.clone();
+        self.ensure_not_cancelled(&required_scope)?;
+        self.ensure_allowed_url(&request.url, &required_scope)?;
+
+        let response = self.execute_with_retry(&request, &required_scope)?;
+        let request_id = graph_request_id(&response.headers);
+        serde_json::from_slice(&response.body).map_err(|_| {
+            let mut error =
+                GraphClientError::new(GraphClientErrorKind::InvalidResponse, &required_scope);
+            error.status = Some(response.status);
+            error.request_id = request_id;
+            error
+        })
+    }
+
     fn execute_with_retry(
         &self,
-        url: &str,
+        request: &GraphTransportRequest,
         required_scope: &str,
     ) -> Result<GraphTransportResponse, GraphClientError> {
-        let request = GraphTransportRequest {
-            method: GraphHttpMethod::Get,
-            url: url.to_string(),
-            consistency_level: Some("eventual".to_string()),
-            content_type: None,
-            body: None,
-            required_scope: sanitize_scope(required_scope),
-        };
-
         for attempt in 0..MAX_GRAPH_ATTEMPTS {
             self.ensure_not_cancelled(required_scope)?;
             let response = self
                 .transport
-                .execute(&request, GRAPH_REQUEST_TIMEOUT)
+                .execute(request, GRAPH_REQUEST_TIMEOUT)
                 .map_err(|failure| match failure {
                     GraphTransportFailure::Timeout => {
                         GraphClientError::new(GraphClientErrorKind::Timeout, required_scope)

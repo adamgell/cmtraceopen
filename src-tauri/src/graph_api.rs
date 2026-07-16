@@ -7,24 +7,25 @@ pub mod client;
 pub mod models;
 
 pub use models::{
-    project_graph_auth_status, GraphAppInfo, GraphAuthCapabilities, GraphAuthStatus,
-    GraphHttpMethod, GraphResolutionResult, GraphTransportRequest, GraphTransportResponse,
-    GRAPH_DELEGATED_SCOPES, GRAPH_SCOPE_REQUEST,
+    normalize_graph_guid, project_graph_auth_status, GraphAppInfo, GraphAuthCapabilities,
+    GraphAuthStatus, GraphHttpMethod, GraphResolutionResult, GraphTransportRequest,
+    GraphTransportResponse, GRAPH_DELEGATED_SCOPES, GRAPH_SCOPE_REQUEST,
 };
 
 #[cfg(target_os = "windows")]
 mod windows_impl {
-    use std::collections::{BTreeMap, HashMap};
+    use std::collections::{BTreeMap, HashMap, HashSet};
     use std::io::Read;
     use std::sync::Mutex;
 
     use super::client::{
-        GraphCancellation, GraphClient, GraphTransport, GraphTransportFailure,
-        MAX_GRAPH_RESPONSE_BYTES,
+        GraphCancellation, GraphClient, GraphClientError, GraphClientErrorKind, GraphTransport,
+        GraphTransportFailure, MAX_GRAPH_RESPONSE_BYTES,
     };
     use super::{
-        project_graph_auth_status, GraphAppInfo, GraphAuthStatus, GraphHttpMethod,
-        GraphResolutionResult, GraphTransportRequest, GraphTransportResponse, GRAPH_SCOPE_REQUEST,
+        normalize_graph_guid, project_graph_auth_status, GraphAppInfo, GraphAuthStatus,
+        GraphHttpMethod, GraphResolutionResult, GraphTransportRequest, GraphTransportResponse,
+        GRAPH_SCOPE_REQUEST,
     };
     use crate::error::AppError;
 
@@ -224,6 +225,7 @@ mod windows_impl {
     // ── Graph API calls ─────────────────────────────────────────────────────────
 
     const GRAPH_BETA_BASE: &str = "https://graph.microsoft.com/beta";
+    const MAX_GRAPH_RESOLUTION_IDS: usize = 5_000;
 
     struct UreqGraphTransport<'a> {
         access_token: &'a str,
@@ -332,18 +334,6 @@ mod windows_impl {
         })
     }
 
-    /// Helper: parse a ureq response body as JSON.
-    fn read_json(
-        response: ureq::http::Response<ureq::Body>,
-    ) -> Result<serde_json::Value, AppError> {
-        let body = response
-            .into_body()
-            .read_to_string()
-            .map_err(|e| AppError::Internal(format!("Failed to read response body: {e}")))?;
-        serde_json::from_str(&body)
-            .map_err(|e| AppError::Internal(format!("Failed to parse JSON: {e}")))
-    }
-
     /// Helper: extract a GraphAppInfo from a JSON object.
     fn parse_app_json(item: &serde_json::Value) -> Option<GraphAppInfo> {
         let id = item.get("id").and_then(|v| v.as_str())?;
@@ -362,12 +352,11 @@ mod windows_impl {
         })
     }
 
-    fn make_agent() -> ureq::Agent {
-        ureq::Agent::config_builder()
-            .timeout_recv_body(Some(std::time::Duration::from_secs(30)))
-            .timeout_send_body(Some(std::time::Duration::from_secs(10)))
-            .build()
-            .new_agent()
+    fn graph_request_error(state: &GraphAuthState, error: GraphClientError) -> AppError {
+        if error.invalidates_auth() {
+            state.clear_token();
+        }
+        AppError::Internal(error.to_string())
     }
 
     /// Authenticate with Graph API via WAM. Returns current auth status.
@@ -412,32 +401,48 @@ mod windows_impl {
         state: &GraphAuthState,
         guids: &[String],
     ) -> Result<GraphResolutionResult, AppError> {
+        if guids.len() > MAX_GRAPH_RESOLUTION_IDS {
+            return Err(AppError::Internal(format!(
+                "Graph app resolution is limited to {MAX_GRAPH_RESOLUTION_IDS} identifiers."
+            )));
+        }
         let token = state
             .get_valid_token()
             .ok_or_else(|| AppError::Internal("Not authenticated. Please sign in first.".into()))?;
 
         let mut resolved: HashMap<String, GraphAppInfo> = HashMap::new();
         let mut to_fetch: Vec<String> = Vec::new();
+        let mut queued = HashSet::new();
+        let mut invalid_identifiers = 0_usize;
 
         for guid in guids {
-            let normalized = guid.to_lowercase();
+            let Some(normalized) = normalize_graph_guid(guid) else {
+                invalid_identifiers += 1;
+                continue;
+            };
             if let Some(cached) = state.get_cached_app(&normalized) {
                 resolved.insert(normalized, cached);
-            } else {
+            } else if queued.insert(normalized.clone()) {
                 to_fetch.push(normalized);
             }
+        }
+
+        let mut errors = Vec::new();
+        if invalid_identifiers > 0 {
+            errors.push(format!(
+                "Skipped {invalid_identifiers} invalid app identifier(s)."
+            ));
         }
 
         if to_fetch.is_empty() {
             return Ok(GraphResolutionResult {
                 resolved,
                 not_found: vec![],
-                errors: vec![],
+                errors,
             });
         }
 
         let mut not_found = Vec::new();
-        let mut errors = Vec::new();
 
         // Graph $batch supports max 20 requests per batch
         for chunk in to_fetch.chunks(20) {
@@ -449,15 +454,23 @@ mod windows_impl {
                     not_found.extend(batch_result.not_found);
                     errors.extend(batch_result.errors);
                 }
-                Err(e) => {
-                    errors.push(format!("Batch request failed: {e}"));
+                Err(error) => {
+                    if error.invalidates_auth() {
+                        return Err(graph_request_error(state, error));
+                    }
+                    errors.push(format!("Batch request failed: {error}"));
                     for guid in chunk {
                         match fetch_single_app(&token.token, guid) {
                             Ok(Some(info)) => {
                                 resolved.insert(guid.clone(), info);
                             }
                             Ok(None) => not_found.push(guid.clone()),
-                            Err(e) => errors.push(format!("{guid}: {e}")),
+                            Err(error) => {
+                                if error.invalidates_auth() {
+                                    return Err(graph_request_error(state, error));
+                                }
+                                errors.push(format!("{guid}: {error}"));
+                            }
                         }
                     }
                 }
@@ -482,14 +495,17 @@ mod windows_impl {
         let mut all: Vec<GraphAppInfo> = Vec::new();
 
         // Win32/LOB/Store apps
-        all.extend(fetch_paginated(
-            &token.token,
-            &format!(
-                "{GRAPH_BETA_BASE}/deviceAppManagement/mobileApps?$select=id,displayName,publisher"
-            ),
-            None,
-            "DeviceManagementApps.Read.All",
-        )?);
+        all.extend(
+            fetch_paginated(
+                &token.token,
+                &format!(
+                    "{GRAPH_BETA_BASE}/deviceAppManagement/mobileApps?$select=id,displayName,publisher"
+                ),
+                None,
+                "DeviceManagementApps.Read.All",
+            )
+            .map_err(|error| graph_request_error(state, error))?,
+        );
 
         // Proactive Remediations (Health Scripts)
         match fetch_paginated(
@@ -499,7 +515,10 @@ mod windows_impl {
         "DeviceManagementScripts.Read.All",
     ) {
         Ok(items) => all.extend(items),
-        Err(e) => log::warn!("event=graph_skip_health_scripts error=\"{e}\""),
+        Err(error) if error.invalidates_auth() => {
+            return Err(graph_request_error(state, error));
+        }
+        Err(error) => log::warn!("event=graph_skip_health_scripts error=\"{error}\""),
     }
 
         // Platform scripts (PowerShell scripts deployed via Intune)
@@ -512,7 +531,12 @@ mod windows_impl {
             "DeviceManagementScripts.Read.All",
         ) {
             Ok(items) => all.extend(items),
-            Err(e) => log::warn!("event=graph_skip_device_scripts error=\"{e}\""),
+            Err(error) if error.invalidates_auth() => {
+                return Err(graph_request_error(state, error));
+            }
+            Err(error) => {
+                log::warn!("event=graph_skip_device_scripts error=\"{error}\"");
+            }
         }
 
         // Shell scripts (macOS)
@@ -525,7 +549,10 @@ mod windows_impl {
             "DeviceManagementScripts.Read.All",
         ) {
             Ok(items) => all.extend(items),
-            Err(e) => log::warn!("event=graph_skip_shell_scripts error=\"{e}\""),
+            Err(error) if error.invalidates_auth() => {
+                return Err(graph_request_error(state, error));
+            }
+            Err(error) => log::warn!("event=graph_skip_shell_scripts error=\"{error}\""),
         }
 
         let cache_map: HashMap<String, GraphAppInfo> =
@@ -542,15 +569,13 @@ mod windows_impl {
         initial_url: &str,
         default_type: Option<&str>,
         required_scope: &str,
-    ) -> Result<Vec<GraphAppInfo>, AppError> {
+    ) -> Result<Vec<GraphAppInfo>, GraphClientError> {
         let transport = UreqGraphTransport {
             access_token: token,
         };
         let cancellation = NoGraphCancellation;
         let client = GraphClient::new("graph.microsoft.com", &transport, &cancellation);
-        let values = client
-            .get_paginated::<serde_json::Value>(initial_url, required_scope)
-            .map_err(|error| AppError::Internal(error.to_string()))?;
+        let values = client.get_paginated::<serde_json::Value>(initial_url, required_scope)?;
 
         Ok(values
             .iter()
@@ -566,7 +591,10 @@ mod windows_impl {
 
     // ── Internal helpers ────────────────────────────────────────────────────────
 
-    fn fetch_apps_batch(token: &str, guids: &[String]) -> Result<GraphResolutionResult, AppError> {
+    fn fetch_apps_batch(
+        token: &str,
+        guids: &[String],
+    ) -> Result<GraphResolutionResult, GraphClientError> {
         let requests: Vec<serde_json::Value> = guids
         .iter()
         .enumerate()
@@ -580,18 +608,25 @@ mod windows_impl {
         .collect();
 
         let batch_body = serde_json::json!({ "requests": requests });
-        let body_str = serde_json::to_string(&batch_body)
-            .map_err(|e| AppError::Internal(format!("JSON serialize failed: {e}")))?;
-
-        let agent = make_agent();
-        let response = agent
-            .post(&format!("{GRAPH_BETA_BASE}/$batch"))
-            .header("Authorization", &format!("Bearer {token}"))
-            .content_type("application/json")
-            .send(&body_str)
-            .map_err(|e| AppError::Internal(format!("Graph batch request failed: {e}")))?;
-
-        let body = read_json(response)?;
+        let body_bytes = serde_json::to_vec(&batch_body).map_err(|_| {
+            GraphClientError::new(
+                GraphClientErrorKind::InvalidResponse,
+                "DeviceManagementApps.Read.All",
+            )
+        })?;
+        let transport = UreqGraphTransport {
+            access_token: token,
+        };
+        let cancellation = NoGraphCancellation;
+        let client = GraphClient::new("graph.microsoft.com", &transport, &cancellation);
+        let body: serde_json::Value = client.request_json(GraphTransportRequest {
+            method: GraphHttpMethod::Post,
+            url: format!("{GRAPH_BETA_BASE}/$batch"),
+            consistency_level: None,
+            content_type: Some("application/json".to_string()),
+            body: Some(body_bytes),
+            required_scope: "DeviceManagementApps.Read.All".to_string(),
+        })?;
 
         let mut resolved = HashMap::new();
         let mut not_found = Vec::new();
@@ -613,13 +648,7 @@ mod windows_impl {
                 } else if status == 404 {
                     not_found.push(guid);
                 } else {
-                    let msg = resp
-                        .get("body")
-                        .and_then(|b| b.get("error"))
-                        .and_then(|e| e.get("message"))
-                        .and_then(|m| m.as_str())
-                        .unwrap_or("Unknown error");
-                    errors.push(format!("{guid}: HTTP {status} - {msg}"));
+                    errors.push(format!("{guid}: HTTP {status}"));
                 }
             }
         }
@@ -631,23 +660,28 @@ mod windows_impl {
         })
     }
 
-    fn fetch_single_app(token: &str, guid: &str) -> Result<Option<GraphAppInfo>, AppError> {
-        let agent = make_agent();
+    fn fetch_single_app(token: &str, guid: &str) -> Result<Option<GraphAppInfo>, GraphClientError> {
         let url = format!(
         "{GRAPH_BETA_BASE}/deviceAppManagement/mobileApps/{guid}?$select=id,displayName,publisher"
     );
+        let transport = UreqGraphTransport {
+            access_token: token,
+        };
+        let cancellation = NoGraphCancellation;
+        let client = GraphClient::new("graph.microsoft.com", &transport, &cancellation);
+        let request = GraphTransportRequest {
+            method: GraphHttpMethod::Get,
+            url,
+            consistency_level: None,
+            content_type: None,
+            body: None,
+            required_scope: "DeviceManagementApps.Read.All".to_string(),
+        };
 
-        match agent
-            .get(&url)
-            .header("Authorization", &format!("Bearer {token}"))
-            .call()
-        {
-            Ok(response) => {
-                let body = read_json(response)?;
-                Ok(parse_app_json(&body))
-            }
-            Err(ureq::Error::StatusCode(404)) => Ok(None),
-            Err(e) => Err(AppError::Internal(format!("Graph request failed: {e}"))),
+        match client.request_json::<serde_json::Value>(request) {
+            Ok(body) => Ok(parse_app_json(&body)),
+            Err(error) if error.kind == GraphClientErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error),
         }
     }
 }

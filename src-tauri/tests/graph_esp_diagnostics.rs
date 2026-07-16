@@ -9,9 +9,9 @@ use app_lib::graph_api::client::{
     MAX_GRAPH_RESPONSE_BYTES, MAX_GRAPH_RETRY_DELAY,
 };
 use app_lib::graph_api::models::{
-    project_graph_auth_status, GraphAppInfo, GraphAuthCapabilities, GraphAuthStatus,
-    GraphHttpMethod, GraphResolutionResult, GraphTransportRequest, GraphTransportResponse,
-    GRAPH_DELEGATED_SCOPES, GRAPH_SCOPE_REQUEST,
+    normalize_graph_guid, project_graph_auth_status, GraphAppInfo, GraphAuthCapabilities,
+    GraphAuthStatus, GraphHttpMethod, GraphResolutionResult, GraphTransportRequest,
+    GraphTransportResponse, GRAPH_DELEGATED_SCOPES, GRAPH_SCOPE_REQUEST,
 };
 use base64::Engine;
 use serde::Deserialize;
@@ -204,6 +204,23 @@ fn graph_auth_status_rejects_expired_malformed_audience_and_tenant_claims() {
         Some("tenant-a"),
         "TenantMismatch",
     );
+}
+
+#[test]
+fn graph_identifier_normalization_rejects_non_guid_paths_and_queries() {
+    assert_eq!(
+        normalize_graph_guid("{D85B3F4E-CB9C-4C40-93B4-407457A31A73}").as_deref(),
+        Some("d85b3f4e-cb9c-4c40-93b4-407457a31a73")
+    );
+    for invalid in [
+        "",
+        "not-a-guid",
+        "../../users",
+        "d85b3f4e-cb9c-4c40-93b4-407457a31a73?$select=secret",
+        "d85b3f4e-cb9c-4c40-93b4-407457a31a73/assignments",
+    ] {
+        assert_eq!(normalize_graph_guid(invalid), None, "accepted {invalid:?}");
+    }
 }
 
 struct FakeGraphTransport {
@@ -643,4 +660,67 @@ fn client_passes_a_fixed_timeout_and_sanitizes_transport_failures() {
     assert_eq!(transport.requests()[0].1, GRAPH_REQUEST_TIMEOUT);
     let rendered = format!("{error:?} {error}");
     assert!(!rendered.contains("secret=token"));
+}
+
+#[test]
+fn client_executes_bounded_single_and_batch_json_requests() {
+    let scope = "DeviceManagementApps.Read.All";
+    let transport = FakeGraphTransport::new(vec![
+        Ok(graph_response(
+            200,
+            serde_json::to_vec(&serde_json::json!({
+                "id": "app-a",
+                "displayName": "Contoso App"
+            }))
+            .expect("single response should serialize"),
+            &[("request-id", "single-request")],
+        )),
+        Ok(graph_response(
+            200,
+            serde_json::to_vec(&serde_json::json!({
+                "responses": [{"id": "0", "status": 404}]
+            }))
+            .expect("batch response should serialize"),
+            &[("request-id", "batch-request")],
+        )),
+    ]);
+    let cancellation = FakeGraphCancellation::default();
+    let client = GraphClient::new("graph.microsoft.com", &transport, &cancellation);
+
+    let single: serde_json::Value = client
+        .request_json(GraphTransportRequest {
+            method: GraphHttpMethod::Get,
+            url: "https://graph.microsoft.com/beta/deviceAppManagement/mobileApps/app-a?$select=id,displayName".to_string(),
+            consistency_level: None,
+            content_type: None,
+            body: None,
+            required_scope: scope.to_string(),
+        })
+        .expect("single-item request should use the bounded client");
+    assert_eq!(single["id"], "app-a");
+
+    let batch_body = br#"{"requests":[{"id":"0","method":"GET","url":"/deviceAppManagement/mobileApps/app-a"}]}"#.to_vec();
+    let batch: serde_json::Value = client
+        .request_json(GraphTransportRequest {
+            method: GraphHttpMethod::Post,
+            url: "https://graph.microsoft.com/beta/$batch".to_string(),
+            consistency_level: None,
+            content_type: Some("application/json".to_string()),
+            body: Some(batch_body.clone()),
+            required_scope: scope.to_string(),
+        })
+        .expect("batch request should use the bounded client");
+    assert_eq!(batch["responses"][0]["status"], 404);
+
+    let requests = transport.requests();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[0].0.method, GraphHttpMethod::Get);
+    assert_eq!(requests[0].1, GRAPH_REQUEST_TIMEOUT);
+    assert_eq!(requests[1].0.method, GraphHttpMethod::Post);
+    assert_eq!(
+        requests[1].0.content_type.as_deref(),
+        Some("application/json")
+    );
+    assert_eq!(requests[1].0.body.as_deref(), Some(batch_body.as_slice()));
+    assert_eq!(requests[1].1, GRAPH_REQUEST_TIMEOUT);
 }
