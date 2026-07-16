@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use cmtraceopen_parser::esp::{
     normalize_timestamp, EspEventLogObservation, EspEventProvenance, EspEvidenceProvenance,
@@ -9,6 +10,8 @@ use cmtraceopen_parser::esp::{
     EspSourceAccessState, EspSourceKind,
 };
 use serde::{Deserialize, Serialize};
+
+use super::process::sanitize_command_line;
 
 use crate::intune::evtx_parser::{
     parse_esp_evtx_file_bounded, EventLogProperty, ParsedEspEventRecord, ParsedEspEvtxBatch,
@@ -275,12 +278,23 @@ where
             );
             break;
         }
-        let batch = parse_file(
+        let batch = match parse_file(
             path.as_path(),
             remaining_inspections,
             limits.max_record_bytes,
-        )
-        .map_err(EventSourceError::Failed)?;
+        ) {
+            Ok(batch) => batch,
+            Err(detail) => {
+                push_unique_limitation(
+                    &mut limitations,
+                    format!(
+                        "Captured EVTX file {} could not be read: {detail}",
+                        path.display()
+                    ),
+                );
+                continue;
+            }
+        };
         inspected_records =
             inspected_records.saturating_add(batch.inspected_records.min(remaining_inspections));
         if batch.truncated || inspected_records >= limits.max_inspected_records {
@@ -371,29 +385,55 @@ fn normalize_record(
     record_index: usize,
     observed_at_utc: &str,
 ) -> EventEvidenceObservation {
-    let named_data = record
-        .event_data
+    let ParsedEspEventRecord {
+        channel,
+        event_id,
+        record_id,
+        source_timestamp,
+        event_data,
+        message,
+        source_file,
+        raw_xml: _,
+    } = record;
+    let event_data = event_data
+        .into_iter()
+        .map(|mut property| {
+            if contains_hardware_identity_marker(&property.name)
+                || contains_hardware_identity_marker(&property.value)
+            {
+                property.name = "Redacted".to_string();
+                property.value = "[REDACTED]".to_string();
+            } else {
+                property.value = sanitize_command_line(&property.value);
+            }
+            property
+        })
+        .collect::<Vec<_>>();
+    let message = message.and_then(|message| {
+        (!contains_hardware_identity_marker(&message)).then(|| sanitize_command_line(&message))
+    });
+    let named_data = event_data
         .iter()
         .map(|property| EspNamedValue {
             name: property.name.clone(),
             value: property.value.clone(),
         })
         .collect::<Vec<_>>();
-    let source_artifact_id = record.source_file.clone();
+    let source_artifact_id = source_file.clone();
     let evidence_ref = EspEvidenceRef {
         evidence_id: format!(
             "esp-event-{channel_index}-{}-{}",
-            record.record_id.unwrap_or(record_index as u64),
-            record.event_id
+            record_id.unwrap_or(record_index as u64),
+            event_id
         ),
         source_artifact_id: source_artifact_id.clone(),
     };
-    let sensitivity = event_sensitivity(&record.event_data);
-    let fields = deterministic_fields(record.event_id, &record.event_data);
+    let sensitivity = event_sensitivity(&event_data, message.as_deref());
+    let fields = deterministic_fields(event_id, &event_data);
     let event_provenance = EspEventProvenance {
-        channel: record.channel.clone(),
-        event_id: record.event_id,
-        record_id: record.record_id,
+        channel: channel.clone(),
+        event_id,
+        record_id,
         named_data: named_data.clone(),
     };
 
@@ -404,23 +444,23 @@ fn normalize_record(
                 provenance: EspEvidenceProvenance {
                     source_kind: EspSourceKind::EventLog,
                     source_artifact_id,
-                    file_path: Some(record.source_file),
+                    file_path: Some(source_file),
                     line_number: None,
-                    record_number: record.record_id,
+                    record_number: record_id,
                     registry: None,
                     event: Some(event_provenance),
                 },
-                source_timestamp: Some(normalize_timestamp(&record.source_timestamp, None)),
+                source_timestamp: Some(normalize_timestamp(&source_timestamp, None)),
                 observed_at_utc: observed_at_utc.to_string(),
                 sensitivity,
                 parse_state: EspParseState::Parsed,
                 access_state: EspSourceAccessState::Available,
             },
-            channel: record.channel,
-            event_id: record.event_id,
-            record_id: record.record_id,
+            channel,
+            event_id,
+            record_id,
             named_data,
-            message: record.message,
+            message,
         },
         fields,
     }
@@ -457,15 +497,37 @@ fn deterministic_fields(
     }
 }
 
-fn event_sensitivity(event_data: &[EventLogProperty]) -> EspSensitivity {
-    if event_data
-        .iter()
-        .any(|property| is_sensitive_event_field_name(&property.name))
+fn event_sensitivity(event_data: &[EventLogProperty], message: Option<&str>) -> EspSensitivity {
+    if event_data.iter().any(|property| {
+        is_sensitive_event_field_name(&property.name)
+            || contains_sensitive_identity_text(&property.value)
+    }) || message.is_some_and(contains_sensitive_identity_text)
     {
         EspSensitivity::Sensitive
     } else {
         EspSensitivity::Public
     }
+}
+
+fn contains_hardware_identity_marker(value: &str) -> bool {
+    let normalized = value
+        .chars()
+        .filter(|character| character.is_ascii_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect::<String>();
+    normalized.contains("hardwarehash") || normalized.contains("devicehardwaredata")
+}
+
+fn contains_sensitive_identity_text(value: &str) -> bool {
+    static IDENTITY_TEXT: OnceLock<regex::Regex> = OnceLock::new();
+    IDENTITY_TEXT
+        .get_or_init(|| {
+            regex::Regex::new(
+                r"(?i)(?:[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}|(?:^|[^a-z0-9])s-1-(?:[0-9]+-){1,14}[0-9]+(?:$|[^0-9])|(?:^|[^a-z0-9])(?:upn|user[ _-]*principal[ _-]*name|user[ _-]*sid|tenant[ _-]*(?:id|domain)|ent[ _-]*dm[ _-]*id|serial[ _-]*(?:number|no))(?:$|[^a-z0-9]))",
+            )
+            .expect("constant event identity regex")
+        })
+        .is_match(value)
 }
 
 fn is_sensitive_event_field_name(value: &str) -> bool {
@@ -831,6 +893,40 @@ mod tests {
     }
 
     #[test]
+    fn captured_event_acquisition_preserves_valid_files_when_a_later_file_fails() {
+        let evidence = collect_captured_evtx_files_with(
+            &[
+                PathBuf::from("a-valid.evtx"),
+                PathBuf::from("b-malformed.evtx"),
+            ],
+            "2026-07-16T12:01:00Z",
+            CapturedEventAcquisitionLimits::default(),
+            |path, _inspection_limit, _max_record_bytes| {
+                if path.ends_with("a-valid.evtx") {
+                    Ok(ParsedEspEvtxBatch {
+                        records: vec![captured_record(1, "a-valid.evtx")],
+                        inspected_records: 1,
+                        truncated: false,
+                    })
+                } else {
+                    Err("malformed EVTX sentinel".to_string())
+                }
+            },
+        )
+        .expect("a malformed file must not erase earlier valid evidence");
+
+        assert_eq!(evidence.observations.len(), 1);
+        assert_eq!(evidence.observations[0].observation.record_id, Some(1));
+        assert_eq!(
+            evidence.channels[0].access_state,
+            EspSourceAccessState::Failed
+        );
+        assert!(evidence.limitations.iter().any(|detail| {
+            detail.contains("b-malformed.evtx") && detail.contains("malformed EVTX sentinel")
+        }));
+    }
+
+    #[test]
     fn event_sensitivity_uses_exact_documented_field_names() {
         for sensitive in [
             "UserPrincipalName",
@@ -844,7 +940,7 @@ mod tests {
             "SerialNumber",
         ] {
             assert_eq!(
-                event_sensitivity(&[property(sensitive)]),
+                event_sensitivity(&[property(sensitive)], None),
                 EspSensitivity::Sensitive,
                 "documented event field was not classified as sensitive: {sensitive}"
             );
@@ -852,7 +948,7 @@ mod tests {
 
         for ordinary in ["Outside", "NotASid", "Presidential", "SerializationMode"] {
             assert_eq!(
-                event_sensitivity(&[property(ordinary)]),
+                event_sensitivity(&[property(ordinary)], None),
                 EspSensitivity::Public,
                 "ordinary event field was classified as sensitive: {ordinary}"
             );

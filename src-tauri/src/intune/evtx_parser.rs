@@ -12,14 +12,16 @@ use std::sync::OnceLock;
 
 #[cfg(target_os = "windows")]
 use crate::intune::eventlog_win32;
+#[cfg(target_os = "windows")]
+use crate::intune::models::EventLogLiveQueryChannelResult;
+#[cfg(any(target_os = "windows", test))]
+use crate::intune::models::EventLogLiveQueryStatus;
 use crate::intune::models::{
     EventLogAnalysis, EventLogAnalysisSource, EventLogChannel, EventLogChannelSummary,
     EventLogCorrelationKind, EventLogCorrelationLink, EventLogEntry, EventLogLiveQueryMetadata,
     EventLogSeverity, EvidenceBundleMetadata, IntuneDiagnosticInsight, IntuneEvent,
     IntuneEventType, IntuneStatus, IntuneTimestampBounds,
 };
-#[cfg(target_os = "windows")]
-use crate::intune::models::{EventLogLiveQueryChannelResult, EventLogLiveQueryStatus};
 
 /// Maximum entries to parse from a single .evtx file to prevent memory issues.
 const MAX_ENTRIES_PER_FILE: usize = 50_000;
@@ -282,7 +284,14 @@ where
 }
 
 pub fn parse_esp_evtx_file(path: &Path) -> Result<Vec<ParsedEspEventRecord>, String> {
-    parse_esp_evtx_file_bounded(path, MAX_ENTRIES_PER_FILE, usize::MAX).map(|batch| batch.records)
+    parse_esp_evtx_file_with(path, parse_esp_evtx_file_bounded)
+}
+
+fn parse_esp_evtx_file_with<F>(path: &Path, parse: F) -> Result<Vec<ParsedEspEventRecord>, String>
+where
+    F: FnOnce(&Path, usize, usize) -> Result<ParsedEspEvtxBatch, String>,
+{
+    parse(path, MAX_ENTRIES_PER_FILE, MAX_ESP_EVTX_RECORD_BYTES).map(|batch| batch.records)
 }
 
 pub fn parse_esp_evtx_file_bounded(
@@ -382,7 +391,7 @@ fn ordered_event_data(xml: &str) -> Vec<EventLogProperty> {
         let Some(next_character) = event_data[after_name..].chars().next() else {
             break;
         };
-        if !next_character.is_ascii_whitespace() && next_character != '>' {
+        if !next_character.is_ascii_whitespace() && next_character != '>' && next_character != '/' {
             cursor = after_name;
             continue;
         }
@@ -390,13 +399,21 @@ fn ordered_event_data(xml: &str) -> Vec<EventLogProperty> {
             break;
         };
         let tag_end = tag_start + tag_end_offset;
+        let attributes = &event_data[after_name..tag_end];
+        let name = xml_attribute(attributes, "Name")
+            .unwrap_or_else(|| format!("Data[{}]", properties.len()));
+        if attributes.trim_end().ends_with('/') {
+            properties.push(EventLogProperty {
+                name,
+                value: String::new(),
+            });
+            cursor = tag_end + 1;
+            continue;
+        }
         let Some(value_end_offset) = event_data[tag_end + 1..].find("</Data>") else {
             break;
         };
         let value_end = tag_end + 1 + value_end_offset;
-        let attributes = &event_data[after_name..tag_end];
-        let name = xml_attribute(attributes, "Name")
-            .unwrap_or_else(|| format!("Data[{}]", properties.len()));
         let value = decode_esp_xml_text(event_data[tag_end + 1..value_end].trim());
         properties.push(EventLogProperty { name, value });
         cursor = value_end + "</Data>".len();
@@ -577,12 +594,10 @@ pub fn parse_live_event_logs() -> Option<EventLogAnalysis> {
             match eventlog_win32::query_live_channel(channel, MAX_LIVE_ENTRIES_PER_CHANNEL) {
                 Ok(result) => {
                     let channel_enum = EventLogChannel::from_channel_string(&result.channel_path);
-                    let entry_count = result.records.len() as u32;
-                    let status = if entry_count == 0 {
-                        EventLogLiveQueryStatus::Empty
-                    } else {
-                        EventLogLiveQueryStatus::Success
-                    };
+                    let (status, entry_count, error_message) = live_channel_outcome(
+                        result.records.len() as u32,
+                        result.partial_detail.as_deref(),
+                    );
 
                     live_channels.push(EventLogLiveQueryChannelResult {
                         channel: channel_enum.clone(),
@@ -591,7 +606,7 @@ pub fn parse_live_event_logs() -> Option<EventLogAnalysis> {
                         source_file: result.source_file.clone(),
                         status,
                         entry_count,
-                        error_message: None,
+                        error_message,
                     });
 
                     for record in result.records {
@@ -647,6 +662,26 @@ pub fn parse_live_event_logs() -> Option<EventLogAnalysis> {
     {
         None
     }
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn live_channel_outcome(
+    entry_count: u32,
+    partial_detail: Option<&str>,
+) -> (EventLogLiveQueryStatus, u32, Option<String>) {
+    if let Some(detail) = partial_detail {
+        return (
+            EventLogLiveQueryStatus::Failed,
+            entry_count,
+            Some(detail.to_string()),
+        );
+    }
+    let status = if entry_count == 0 {
+        EventLogLiveQueryStatus::Empty
+    } else {
+        EventLogLiveQueryStatus::Success
+    };
+    (status, entry_count, None)
 }
 
 pub(crate) fn build_event_log_analysis(
@@ -1293,6 +1328,26 @@ mod tests {
     }
 
     #[test]
+    fn public_esp_evtx_wrapper_forwards_the_default_record_size_limit() {
+        let records = parse_esp_evtx_file_with(
+            Path::new("bounded-wrapper.evtx"),
+            |path, inspection_limit, max_record_bytes| {
+                assert_eq!(path, Path::new("bounded-wrapper.evtx"));
+                assert_eq!(inspection_limit, MAX_ENTRIES_PER_FILE);
+                assert_eq!(max_record_bytes, MAX_ESP_EVTX_RECORD_BYTES);
+                Ok(ParsedEspEvtxBatch {
+                    records: Vec::new(),
+                    inspected_records: 0,
+                    truncated: false,
+                })
+            },
+        )
+        .expect("bounded public wrapper");
+
+        assert!(records.is_empty());
+    }
+
+    #[test]
     fn channel_from_string_maps_known_channels() {
         assert_eq!(
             EventLogChannel::from_channel_string(
@@ -1380,6 +1435,27 @@ mod tests {
     fn build_event_log_correlations_returns_empty_for_no_entries() {
         let links = build_event_log_correlations(&[], &[], &[]);
         assert!(links.is_empty());
+    }
+
+    #[test]
+    fn live_channel_partial_detail_is_non_success_without_discarding_the_entry_count() {
+        let partial_detail = "Windows Event Log channel exceeded its byte budget";
+
+        let (status, retained_entry_count, error_message) =
+            live_channel_outcome(7, Some(partial_detail));
+
+        assert_eq!(status, EventLogLiveQueryStatus::Failed);
+        assert_eq!(retained_entry_count, 7);
+        assert_eq!(error_message.as_deref(), Some(partial_detail));
+
+        assert_eq!(
+            live_channel_outcome(1, None),
+            (EventLogLiveQueryStatus::Success, 1, None)
+        );
+        assert_eq!(
+            live_channel_outcome(0, None),
+            (EventLogLiveQueryStatus::Empty, 0, None)
+        );
     }
 
     #[cfg(target_os = "windows")]

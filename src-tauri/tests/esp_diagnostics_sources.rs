@@ -728,6 +728,142 @@ fn event_parser_retains_ordered_named_properties_and_record_id() {
 }
 
 #[test]
+fn event_parser_keeps_self_closing_data_separate_from_the_following_property() {
+    let xml = r#"<Event xmlns='http://schemas.microsoft.com/win/2004/08/events/event'>
+  <System>
+    <EventID>72</EventID>
+    <EventRecordID>909</EventRecordID>
+    <TimeCreated SystemTime='2026-07-15T12:34:56.789Z'/>
+    <Channel>Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin</Channel>
+  </System>
+  <EventData>
+    <Data Name='Empty'/>
+    <Data Name='ResultCode'>0x80070005</Data>
+  </EventData>
+</Event>"#;
+
+    let event = parse_esp_event_xml(xml, "captured/admin.evtx", None, None, "fallback")
+        .expect("parsed ESP event");
+
+    assert_eq!(
+        event.event_data,
+        vec![
+            event_property("Empty", ""),
+            event_property("ResultCode", "0x80070005"),
+        ]
+    );
+}
+
+#[test]
+fn event_ingestion_excludes_hardware_identity_redacts_authorization_and_marks_identity_payloads() {
+    let channel = ESP_EVENT_CHANNELS[0];
+    let mut record = parsed_event(
+        channel,
+        72,
+        909,
+        vec![
+            event_property("DeviceHardwareData", "raw-hardware-hash-sentinel"),
+            event_property(
+                "Payload",
+                concat!(
+                    "user=alice@example.com Authorization: Custom-V1 realm=public, ",
+                    "response=event-authorization-secret-sentinel"
+                ),
+            ),
+            event_property("Data[2]", "S-1-5-21-111111111-222222222-333333333-1001"),
+            event_property(
+                "Data[3]",
+                r#"{"Authorization":"Bearer json-authorization-secret-sentinel","safe":"keep-json-event-control"}"#,
+            ),
+        ],
+    );
+    record.message = Some(
+        concat!(
+            "TenantId=aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee ",
+            "Authorization: ApiKey message-authorization-secret-sentinel"
+        )
+        .to_string(),
+    );
+    let provider = FakeEventLogProvider::default()
+        .with_records(channel, vec![record])
+        .with_records(ESP_EVENT_CHANNELS[1], Vec::new());
+
+    let evidence = collect_event_evidence(&provider, "2026-07-15T13:00:00Z");
+
+    assert_eq!(evidence.observations.len(), 1);
+    let observation = &evidence.observations[0].observation;
+    assert_eq!(observation.context.sensitivity, EspSensitivity::Sensitive);
+    assert!(observation
+        .named_data
+        .iter()
+        .all(|property| property.name != "DeviceHardwareData"));
+    assert!(observation
+        .named_data
+        .iter()
+        .any(|property| property.value.contains("alice@example.com")));
+    assert!(observation.named_data.iter().any(|property| property
+        .value
+        .contains("S-1-5-21-111111111-222222222-333333333-1001")));
+    assert!(observation
+        .message
+        .as_deref()
+        .is_some_and(|message| message.contains("TenantId=aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")));
+
+    let serialized = serde_json::to_string(&evidence).expect("serialize event evidence");
+    for forbidden in [
+        "DeviceHardwareData",
+        "raw-hardware-hash-sentinel",
+        "event-authorization-secret-sentinel",
+        "message-authorization-secret-sentinel",
+        "json-authorization-secret-sentinel",
+    ] {
+        assert!(
+            !serialized.contains(forbidden),
+            "event evidence leaked forbidden source material {forbidden}: {serialized}"
+        );
+    }
+    for retained_identity in [
+        "alice@example.com",
+        "S-1-5-21-111111111-222222222-333333333-1001",
+        "TenantId=aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        "keep-json-event-control",
+    ] {
+        assert!(
+            serialized.contains(retained_identity),
+            "sensitive raw provenance was not retained: {retained_identity}"
+        );
+    }
+}
+
+#[test]
+fn event_hardware_redaction_preserves_positional_field_indexes() {
+    let channel = ESP_EVENT_CHANNELS[0];
+    let record = parsed_event(
+        channel,
+        1924,
+        910,
+        vec![
+            event_property("Data[0]", "unrelated"),
+            event_property("DeviceHardwareData", "raw-hardware-hash-sentinel"),
+            event_property("Data[2]", "{AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE}"),
+        ],
+    );
+    let provider = FakeEventLogProvider::default()
+        .with_records(channel, vec![record])
+        .with_records(ESP_EVENT_CHANNELS[1], Vec::new());
+
+    let evidence = collect_event_evidence(&provider, "2026-07-15T13:00:00Z");
+
+    assert_eq!(
+        evidence.observations[0].fields.product_code.as_deref(),
+        Some("{AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE}")
+    );
+    let serialized = serde_json::to_string(&evidence).expect("serialize event evidence");
+    assert!(!serialized.contains("raw-hardware-hash-sentinel"));
+    assert!(!serialized.contains("DeviceHardwareData"));
+}
+
+#[test]
 fn event_collects_all_required_ids_and_deterministic_fields() {
     let admin_channel = ESP_EVENT_CHANNELS[0];
     let registration_channel = ESP_EVENT_CHANNELS[1];

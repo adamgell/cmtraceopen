@@ -1,6 +1,7 @@
 //! Bounded process observations for ESP and allowlisted installer activity.
 
 use std::collections::BTreeSet;
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use chrono::{DateTime, FixedOffset, NaiveDateTime, SecondsFormat, TimeZone, Utc};
@@ -172,44 +173,92 @@ pub fn parent_chain(
     chain
 }
 
-pub fn sanitize_command_line(command_line: &str) -> String {
-    let double_quoted_authorization = Regex::new(
-        r#"(?i)(\")((?:--|/)?authorization)(\s*(?:=|:)\s*|\s+)[!#$%&'*+\-.^_`|~a-z0-9]+\s+(?:\\.|[^\"])*\""#,
-    )
-    .expect("constant double-quoted-authorization regex");
-    let single_quoted_authorization = Regex::new(
-        r#"(?i)(')((?:--|/)?authorization)(\s*(?:=|:)\s*|\s+)[!#$%&'*+\-.^_`|~a-z0-9]+\s+(?:\\.|[^'])*'"#,
-    )
-    .expect("constant single-quoted-authorization regex");
-    let digest_authorization =
-        Regex::new(r#"(?i)(^|\s)((?:--|/)?authorization)(\s*(?:=|:)\s*|\s+)digest\s+.*"#)
-            .expect("constant digest-authorization regex");
-    let authorization_credential = Regex::new(
-        r#"(?i)(^|\s)((?:--|/)?authorization)(\s*(?:=|:)\s*|\s+)[!#$%&'*+\-.^_`|~a-z0-9]+\s+(?:"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|[^\s&"]+)"#,
-    )
-    .expect("constant authorization-credential regex");
-    let bearer = Regex::new(r#"(?i)(bearer\s+)(?:"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|[^\s&"]+)"#)
-        .expect("constant bearer regex");
-    let named_secret = Regex::new(
-        r#"(?i)(^|\s)((?:--|/)?(?:access[-_]?token|bearer[-_]?token|client[-_]?secret|app[-_]?secret|api[-_]?key|token|password|secret|authorization))(\s*(?:=|:)\s*|\s+)(?:"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|[^\s&"]+)"#,
-    )
-    .expect("constant named-secret regex");
-    let query_secret = Regex::new(
-        r#"(?i)([?&](?:sig|access[-_]?token|bearer[-_]?token|client[-_]?secret|app[-_]?secret|api[-_]?key|token|password|secret|authorization)=)(?:"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|[^&\s"]+)"#,
-    )
-    .expect("constant query-secret regex");
+struct CommandLineSanitizers {
+    double_quoted_authorization: Regex,
+    single_quoted_authorization: Regex,
+    parameterized_authorization: Regex,
+    digest_authorization: Regex,
+    authorization_credential: Regex,
+    bearer: Regex,
+    named_secret: Regex,
+    query_secret: Regex,
+    json_secret: Regex,
+}
 
-    let command_line = double_quoted_authorization.replace_all(command_line, "$1$2$3[REDACTED]\"");
-    let command_line = single_quoted_authorization.replace_all(&command_line, "$1$2$3[REDACTED]'");
+fn command_line_sanitizers() -> &'static CommandLineSanitizers {
+    static SANITIZERS: OnceLock<CommandLineSanitizers> = OnceLock::new();
+    SANITIZERS.get_or_init(|| CommandLineSanitizers {
+        double_quoted_authorization: Regex::new(
+            r#"(?i)(\")((?:--|/)?authorization)(\s*(?:=|:)\s*|\s+)[!#$%&'*+\-.^_`|~a-z0-9]+\s+(?:\\.|[^\"])*\""#,
+        )
+        .expect("constant double-quoted-authorization regex"),
+        single_quoted_authorization: Regex::new(
+            r#"(?i)(')((?:--|/)?authorization)(\s*(?:=|:)\s*|\s+)[!#$%&'*+\-.^_`|~a-z0-9]+\s+(?:\\.|[^'])*'"#,
+        )
+        .expect("constant single-quoted-authorization regex"),
+        parameterized_authorization: Regex::new(
+            r#"(?i)(^|\s)((?:--|/)?authorization)(\s*(?:=|:)\s*|\s+)[!#$%&'*+\-.^_`|~a-z0-9]+\s+[!#$%&'*+\-.^_`|~a-z0-9]+\s*=\s*(?:"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|[^\s,]+)(?:\s*,\s*[!#$%&'*+\-.^_`|~a-z0-9]+\s*=\s*(?:"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|[^\s,]+))*"#,
+        )
+        .expect("constant parameterized-authorization regex"),
+        digest_authorization: Regex::new(
+            r#"(?i)(^|\s)((?:--|/)?authorization)(\s*(?:=|:)\s*|\s+)digest\s+.*"#,
+        )
+        .expect("constant digest-authorization regex"),
+        authorization_credential: Regex::new(
+            r#"(?i)(^|\s)((?:--|/)?authorization)(\s*(?:=|:)\s*|\s+)[!#$%&'*+\-.^_`|~a-z0-9]+\s+(?:"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|[^\s&"]+)"#,
+        )
+        .expect("constant authorization-credential regex"),
+        bearer: Regex::new(
+            r#"(?i)(bearer\s+)(?:"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|[^\s&"]+)"#,
+        )
+        .expect("constant bearer regex"),
+        named_secret: Regex::new(
+            r#"(?i)(^|\s)((?:--|/)?(?:access[-_]?token|bearer[-_]?token|client[-_]?secret|app[-_]?secret|api[-_]?key|token|password|secret|authorization))(\s*(?:=|:)\s*|\s+)(?:"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|[^\s&"]+)"#,
+        )
+        .expect("constant named-secret regex"),
+        query_secret: Regex::new(
+            r#"(?i)([?&](?:sig|access[-_]?token|bearer[-_]?token|client[-_]?secret|app[-_]?secret|api[-_]?key|token|password|secret|authorization)=)(?:"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|[^&\s"]+)"#,
+        )
+        .expect("constant query-secret regex"),
+        json_secret: Regex::new(
+            r#"(?i)("(?:access[-_]?token|bearer[-_]?token|client[-_]?secret|app[-_]?secret|api[-_]?key|token|password|secret|authorization)"\s*:\s*")(?:\\.|[^"])*(\")"#,
+        )
+        .expect("constant JSON-secret regex"),
+    })
+}
+
+pub fn sanitize_command_line(command_line: &str) -> String {
+    let sanitizers = command_line_sanitizers();
+
+    let command_line = sanitizers
+        .double_quoted_authorization
+        .replace_all(command_line, "$1$2$3[REDACTED]\"");
+    let command_line = sanitizers
+        .single_quoted_authorization
+        .replace_all(&command_line, "$1$2$3[REDACTED]'");
+    let command_line = sanitizers
+        .parameterized_authorization
+        .replace_all(&command_line, "$1$2$3[REDACTED]");
     // Digest credentials can contain a comma-separated parameter list, so conservatively
     // redact the rest of the command line once an unquoted Digest authorization value starts.
-    let command_line = digest_authorization.replace_all(&command_line, "$1$2$3[REDACTED]");
+    let command_line = sanitizers
+        .digest_authorization
+        .replace_all(&command_line, "$1$2$3[REDACTED]");
     // Authorization schemes are redacted with their credential before the generic named-secret
     // pass can consume only the scheme and leave the credential behind.
-    let command_line = authorization_credential.replace_all(&command_line, "$1$2$3[REDACTED]");
-    let command_line = bearer.replace_all(&command_line, "$1[REDACTED]");
-    let command_line = named_secret.replace_all(&command_line, "$1$2$3[REDACTED]");
-    let command_line = query_secret.replace_all(&command_line, "$1[REDACTED]");
+    let command_line = sanitizers
+        .authorization_credential
+        .replace_all(&command_line, "$1$2$3[REDACTED]");
+    let command_line = sanitizers.bearer.replace_all(&command_line, "$1[REDACTED]");
+    let command_line = sanitizers
+        .named_secret
+        .replace_all(&command_line, "$1$2$3[REDACTED]");
+    let command_line = sanitizers
+        .query_secret
+        .replace_all(&command_line, "$1[REDACTED]");
+    let command_line = sanitizers
+        .json_secret
+        .replace_all(&command_line, "$1[REDACTED]$2");
     command_line.into_owned()
 }
 
@@ -895,6 +944,44 @@ mod tests {
             assert!(sanitized.contains("/i {12345678-1234-1234-1234-1234567890AB}"));
             assert!(sanitized.contains("/L*V C:\\Windows\\Temp\\contoso.log"));
         }
+    }
+
+    #[test]
+    fn command_line_sanitizer_redacts_every_unknown_authorization_parameter() {
+        let raw = concat!(
+            "installer.exe Authorization: Custom-V1 realm=public, ",
+            "response=multi-param-auth-secret-sentinel ",
+            "/i {12345678-1234-1234-1234-1234567890AB} ",
+            "/L*V C:\\Windows\\Temp\\contoso.log --response keep-this-positive-control"
+        );
+
+        let sanitized = sanitize_command_line(raw);
+
+        assert!(!sanitized.contains("multi-param-auth-secret-sentinel"));
+        assert!(!sanitized.contains("realm=public"));
+        assert!(sanitized.contains("Authorization: [REDACTED]"));
+        assert!(sanitized.contains("/i {12345678-1234-1234-1234-1234567890AB}"));
+        assert!(sanitized.contains("/L*V C:\\Windows\\Temp\\contoso.log"));
+        assert!(sanitized.contains("--response keep-this-positive-control"));
+
+        let safe_neighbor =
+            "installer.exe --authorization-mode Custom-V1 response=keep-this-safe-neighbor";
+        assert_eq!(sanitize_command_line(safe_neighbor), safe_neighbor);
+    }
+
+    #[test]
+    fn command_line_sanitizer_redacts_json_authorization_values() {
+        let raw = concat!(
+            r#"installer.exe --payload {"Authorization":"Custom-V1 json-auth-secret-sentinel","safe":"keep-this-json-control"} "#,
+            "/i {12345678-1234-1234-1234-1234567890AB}"
+        );
+
+        let sanitized = sanitize_command_line(raw);
+
+        assert!(!sanitized.contains("json-auth-secret-sentinel"));
+        assert!(sanitized.contains(r#""Authorization":"[REDACTED]""#));
+        assert!(sanitized.contains(r#""safe":"keep-this-json-control""#));
+        assert!(sanitized.contains("/i {12345678-1234-1234-1234-1234567890AB}"));
     }
 
     #[test]
