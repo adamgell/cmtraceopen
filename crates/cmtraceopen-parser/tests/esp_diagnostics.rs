@@ -1612,8 +1612,17 @@ fn correlation_reconciles_conflicting_duplicate_identity_samples() {
     product_sample.context.source_timestamp = None;
     product_sample.context.observed_at_utc = "2026-07-15T12:04:00Z".to_string();
 
-    let correlations =
-        correlate_installer_processes(&workloads, &[app_sample, product_sample], &[], &[]);
+    let forward = correlate_installer_processes(
+        &workloads,
+        &[app_sample.clone(), product_sample.clone()],
+        &[],
+        &[],
+    );
+    let reverse =
+        correlate_installer_processes(&workloads, &[product_sample, app_sample], &[], &[]);
+
+    assert_eq!(forward, reverse);
+    let correlations = forward;
 
     assert_eq!(correlations.len(), 1);
     assert_eq!(correlations[0].workload_id, None);
@@ -1627,6 +1636,16 @@ fn correlation_reconciles_conflicting_duplicate_identity_samples() {
         vec!["workload-a", "workload-b"]
     );
     assert_eq!(correlations[0].process_observations.len(), 1);
+    assert_eq!(
+        correlations[0].process_observations[0].app_id.as_deref(),
+        Some(app_a)
+    );
+    assert_eq!(
+        correlations[0].process_observations[0]
+            .product_code
+            .as_deref(),
+        Some(app_b)
+    );
     assert!(correlations[0]
         .evidence
         .iter()
@@ -1741,6 +1760,109 @@ fn correlation_duplicate_later_sample_extends_proven_lifetime() {
         .evidence
         .iter()
         .any(|evidence| evidence.evidence_id == "deployment-current-late"));
+}
+
+#[test]
+fn correlation_merges_complementary_duplicate_samples_with_latest_liveness() {
+    let app_id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+    let workload = correlation_workload(
+        "workload-a",
+        app_id,
+        "2026-07-15T12:00:00Z",
+        "2026-07-15T12:12:00Z",
+    );
+    let mut identifier = correlation_process(
+        "process-merge-identifier",
+        729,
+        None,
+        "msiexec.exe",
+        "2026-07-15T12:02:00Z",
+    );
+    identifier.app_id = Some(app_id.to_string());
+    identifier.context.source_timestamp = None;
+    identifier.context.observed_at_utc = "2026-07-15T12:03:00Z".to_string();
+    let mut log_path = correlation_process(
+        "process-merge-log-path",
+        729,
+        None,
+        "msiexec.exe",
+        "2026-07-15T12:02:00Z",
+    );
+    log_path.product_code = Some(app_id.to_string());
+    log_path.referenced_log_path = Some(r"C:\Windows\Temp\install.log".to_string());
+    log_path.context.source_timestamp = None;
+    log_path.context.observed_at_utc = "2026-07-15T12:04:00Z".to_string();
+    let mut latest = correlation_process(
+        "process-merge-latest",
+        729,
+        None,
+        "msiexec.exe",
+        "2026-07-15T12:02:00Z",
+    );
+    latest.context.source_timestamp = None;
+    latest.context.observed_at_utc = "2026-07-15T12:10:00Z".to_string();
+    let mut deployment = EspDeploymentLogObservation {
+        context: fixture_context(
+            EspSourceKind::DeploymentLog,
+            "msi-log",
+            "deployment-merge-late",
+            "2026-07-15T12:09:00Z",
+        ),
+        component: Some("MsiInstaller".to_string()),
+        message: "Installation is still running".to_string(),
+        product_code: Some(app_id.to_string()),
+        log_path: Some(r"c:\windows\temp\INSTALL.log".to_string()),
+        status: None,
+    };
+    deployment.context.source_timestamp = None;
+    deployment.context.observed_at_utc = "2026-07-15T12:09:00Z".to_string();
+
+    let forward = correlate_installer_processes(
+        std::slice::from_ref(&workload),
+        &[identifier.clone(), log_path.clone(), latest.clone()],
+        std::slice::from_ref(&deployment),
+        &[],
+    );
+    let reverse = correlate_installer_processes(
+        &[workload],
+        &[latest, log_path, identifier],
+        &[deployment],
+        &[],
+    );
+
+    assert_eq!(forward, reverse);
+    assert_eq!(forward.len(), 1);
+    assert_eq!(
+        forward[0].correlation_id,
+        "installer|729|2026-07-15T12:02:00Z"
+    );
+    assert_eq!(forward[0].workload_id.as_deref(), Some("workload-a"));
+    assert_eq!(forward[0].confidence, EspCorrelationConfidence::Exact);
+    assert_eq!(forward[0].process_observations.len(), 1);
+    let process = &forward[0].process_observations[0];
+    assert_eq!(process.app_id.as_deref(), Some(app_id));
+    assert_eq!(process.product_code.as_deref(), Some(app_id));
+    assert_eq!(
+        process.referenced_log_path.as_deref(),
+        Some(r"C:\Windows\Temp\install.log")
+    );
+    assert_eq!(process.context.observed_at_utc, "2026-07-15T12:10:00Z");
+    assert!(forward[0]
+        .evidence
+        .iter()
+        .any(|evidence| evidence.evidence_id == "process-merge-identifier"));
+    assert!(forward[0]
+        .evidence
+        .iter()
+        .any(|evidence| evidence.evidence_id == "process-merge-log-path"));
+    assert!(forward[0]
+        .evidence
+        .iter()
+        .any(|evidence| evidence.evidence_id == "process-merge-latest"));
+    assert!(forward[0]
+        .evidence
+        .iter()
+        .any(|evidence| evidence.evidence_id == "deployment-merge-late"));
 }
 
 #[test]
@@ -2024,6 +2146,123 @@ fn correlation_rejects_pre_start_parent_sample_inside_temporal_slop() {
         .evidence
         .iter()
         .any(|evidence| evidence.evidence_id == "process-parent-pre-start"));
+}
+
+#[test]
+fn correlation_filters_parent_samples_to_the_child_identity_lifetime() {
+    let stale_app = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+    let current_app = "bbbbbbbb-cccc-dddd-eeee-ffffffffffff";
+    let workloads = vec![
+        correlation_workload(
+            "workload-stale",
+            stale_app,
+            "2026-07-15T11:50:00Z",
+            "2026-07-15T11:59:00Z",
+        ),
+        correlation_workload(
+            "workload-current",
+            current_app,
+            "2026-07-15T12:02:00Z",
+            "2026-07-15T12:10:00Z",
+        ),
+    ];
+    let mut parent_at_start = correlation_process(
+        "process-parent-at-child-start",
+        100,
+        None,
+        "AgentExecutor.exe",
+        "2026-07-15T10:00:00Z",
+    );
+    parent_at_start.context.source_timestamp = None;
+    parent_at_start.context.observed_at_utc = "2026-07-15T12:02:00Z".to_string();
+    let mut parent_after_latest = correlation_process(
+        "process-parent-after-child-latest",
+        100,
+        None,
+        "AgentExecutor.exe",
+        "2026-07-15T10:00:00Z",
+    );
+    parent_after_latest.app_id = Some(stale_app.to_string());
+    parent_after_latest.referenced_log_path = Some(r"C:\Windows\Temp\stale-parent.log".to_string());
+    parent_after_latest.context.source_timestamp = None;
+    parent_after_latest.context.observed_at_utc = "2026-07-15T12:04:00Z".to_string();
+    let mut child = correlation_process(
+        "process-current-child-parent-window",
+        730,
+        Some(100),
+        "msiexec.exe",
+        "2026-07-15T12:02:00Z",
+    );
+    child.context.source_timestamp = None;
+    child.context.observed_at_utc = "2026-07-15T12:03:00Z".to_string();
+
+    let correlations = correlate_installer_processes(
+        &workloads,
+        &[parent_after_latest, child, parent_at_start],
+        &[],
+        &[],
+    );
+
+    assert_eq!(correlations.len(), 1);
+    assert_eq!(
+        correlations[0].workload_id.as_deref(),
+        Some("workload-current")
+    );
+    assert_eq!(
+        correlations[0].confidence,
+        EspCorrelationConfidence::Temporal
+    );
+    assert_eq!(correlations[0].process_observations.len(), 2);
+    assert!(correlations[0]
+        .process_observations
+        .iter()
+        .all(|process| process.referenced_log_path.is_none()));
+    assert!(correlations[0]
+        .evidence
+        .iter()
+        .any(|evidence| evidence.evidence_id == "process-parent-at-child-start"));
+    assert!(!correlations[0]
+        .evidence
+        .iter()
+        .any(|evidence| evidence.evidence_id == "process-parent-after-child-latest"));
+}
+
+#[test]
+fn correlation_parent_window_includes_the_child_latest_sample_boundary() {
+    let app_id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+    let workload = correlation_workload(
+        "workload-a",
+        app_id,
+        "2026-07-15T12:00:00Z",
+        "2026-07-15T12:10:00Z",
+    );
+    let mut parent = correlation_process(
+        "process-parent-at-child-latest",
+        100,
+        None,
+        "AgentExecutor.exe",
+        "2026-07-15T10:00:00Z",
+    );
+    parent.app_id = Some(app_id.to_string());
+    parent.context.source_timestamp = None;
+    parent.context.observed_at_utc = "2026-07-15T12:03:00Z".to_string();
+    let mut child = correlation_process(
+        "process-child-latest-boundary",
+        731,
+        Some(100),
+        "msiexec.exe",
+        "2026-07-15T12:02:00Z",
+    );
+    child.context.source_timestamp = None;
+    child.context.observed_at_utc = "2026-07-15T12:03:00Z".to_string();
+
+    let correlations = correlate_installer_processes(&[workload], &[parent, child], &[], &[]);
+
+    assert_eq!(correlations.len(), 1);
+    assert_eq!(correlations[0].workload_id.as_deref(), Some("workload-a"));
+    assert_eq!(correlations[0].confidence, EspCorrelationConfidence::Exact);
+    assert_eq!(correlations[0].reason, "parentAppId");
+    assert_eq!(correlations[0].process_observations.len(), 2);
 }
 
 #[test]

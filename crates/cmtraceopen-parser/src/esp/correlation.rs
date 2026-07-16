@@ -7,7 +7,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Duration, SecondsFormat, Utc};
 
 use super::models::{
     EspCorrelationConfidence, EspDeploymentLogObservation, EspEvidenceRef, EspImeObservation,
@@ -357,9 +357,8 @@ fn correlate_one<'a>(
         reason,
         candidate_workload_ids: candidates.into_iter().collect(),
         process_observations: lineage
-            .into_iter()
-            .filter_map(preferred_process)
-            .cloned()
+            .iter()
+            .filter_map(|samples| merge_process_samples(samples))
             .collect(),
         evidence,
     }
@@ -429,22 +428,27 @@ fn group_process_observations(
     groups
 }
 
-fn process_lineage<'groups, 'process>(
-    root: &'groups [&'process EspProcessObservation],
-    process_groups: &'groups BTreeMap<ProcessIdentity, ProcessSamples<'process>>,
-) -> Vec<&'groups [&'process EspProcessObservation]> {
-    let mut lineage = vec![root];
-    let mut current = root;
+fn process_lineage<'process>(
+    root: &[&'process EspProcessObservation],
+    process_groups: &BTreeMap<ProcessIdentity, ProcessSamples<'process>>,
+) -> Vec<ProcessSamples<'process>> {
+    let mut lineage = vec![root.to_vec()];
     let Some(root_identity) = process_group_identity(root) else {
         return lineage;
     };
     let mut visited = BTreeSet::from([root_identity]);
 
     for _ in 0..MAX_PARENT_CHAIN_DEPTH {
+        let Some(current) = lineage.last() else {
+            break;
+        };
         let Some(parent_pid) = unique_parent_pid(current) else {
             break;
         };
         let Some(child_started) = process_start_timestamp(current) else {
+            break;
+        };
+        let Some(child_sampled) = latest_process_sample_timestamp(current) else {
             break;
         };
         let Some(parent) = process_groups
@@ -452,33 +456,41 @@ fn process_lineage<'groups, 'process>(
             .filter(|samples| process_pid(samples.as_slice()) == Some(parent_pid))
             .filter_map(|samples| {
                 let started = process_start_timestamp(samples)?;
-                let sampled = latest_process_sample_timestamp(samples)?;
-                let representative = preferred_process(samples)?;
-                (started <= child_started && sampled >= child_started).then_some((
-                    started,
-                    process_preference_key(representative),
-                    samples.as_slice(),
-                ))
+                if started > child_started {
+                    return None;
+                }
+                let in_window = samples
+                    .iter()
+                    .copied()
+                    .filter(|process| {
+                        process_sample_timestamp(process).is_some_and(|sampled| {
+                            sampled >= child_started && sampled <= child_sampled
+                        })
+                    })
+                    .collect::<ProcessSamples<'process>>();
+                (!in_window.is_empty()).then_some((started, in_window))
             })
-            .max_by(
-                |(left_started, left_preference, _), (right_started, right_preference, _)| {
-                    left_started
-                        .cmp(right_started)
-                        .then_with(|| left_preference.cmp(right_preference))
-                },
-            )
-            .map(|(_, _, samples)| samples)
+            .max_by(|(left_started, left), (right_started, right)| {
+                left_started
+                    .cmp(right_started)
+                    .then_with(|| {
+                        preferred_process(left)
+                            .map(process_preference_key)
+                            .cmp(&preferred_process(right).map(process_preference_key))
+                    })
+                    .then_with(|| process_group_identity(left).cmp(&process_group_identity(right)))
+            })
+            .map(|(_, samples)| samples)
         else {
             break;
         };
-        let Some(parent_identity) = process_group_identity(parent) else {
+        let Some(parent_identity) = process_group_identity(&parent) else {
             break;
         };
         if !visited.insert(parent_identity) {
             break;
         }
         lineage.push(parent);
-        current = parent;
     }
 
     lineage
@@ -642,6 +654,62 @@ fn preferred_process<'a>(
         .iter()
         .copied()
         .max_by_key(|process| process_preference_key(process))
+}
+
+fn merge_process_samples(samples: &[&EspProcessObservation]) -> Option<EspProcessObservation> {
+    let latest = samples.iter().copied().max_by(|left, right| {
+        process_sample_timestamp(left)
+            .cmp(&process_sample_timestamp(right))
+            .then_with(|| process_preference_key(left).cmp(&process_preference_key(right)))
+    })?;
+    let mut merged = latest.clone();
+    merged.parent_pid = unique_parent_pid(samples);
+    merged.executable_name =
+        merged_process_string(samples, |process| Some(process.executable_name.as_str()))
+            .unwrap_or_default();
+    merged.sanitized_command_line =
+        merged_process_string(samples, |process| process.sanitized_command_line.as_deref());
+    merged.referenced_log_path =
+        merged_process_string(samples, |process| process.referenced_log_path.as_deref());
+    merged.app_id = merged_process_string(samples, |process| process.app_id.as_deref());
+    merged.product_code = merged_process_string(samples, |process| process.product_code.as_deref());
+    if let Some(sampled) = latest_process_sample_timestamp(samples) {
+        merged.context.observed_at_utc = sampled.to_rfc3339_opts(SecondsFormat::AutoSi, true);
+    }
+    Some(merged)
+}
+
+fn merged_process_string<'a>(
+    samples: &[&'a EspProcessObservation],
+    value: impl Fn(&'a EspProcessObservation) -> Option<&'a str>,
+) -> Option<String> {
+    samples
+        .iter()
+        .copied()
+        .filter(|process| value(process).is_some_and(|value| !value.trim().is_empty()))
+        .max_by(|left, right| {
+            process_sample_timestamp(left)
+                .cmp(&process_sample_timestamp(right))
+                .then_with(|| {
+                    value(left)
+                        .map(str::to_ascii_lowercase)
+                        .cmp(&value(right).map(str::to_ascii_lowercase))
+                })
+                .then_with(|| {
+                    left.context
+                        .provenance
+                        .source_artifact_id
+                        .cmp(&right.context.provenance.source_artifact_id)
+                })
+                .then_with(|| {
+                    left.context
+                        .evidence_ref
+                        .evidence_id
+                        .cmp(&right.context.evidence_ref.evidence_id)
+                })
+        })
+        .and_then(value)
+        .map(str::to_string)
 }
 
 fn process_preference_key(
