@@ -12,6 +12,43 @@ pub use models::{
     GraphTransportResponse, GRAPH_DELEGATED_SCOPES, GRAPH_SCOPE_REQUEST,
 };
 
+#[cfg(any(target_os = "windows", test))]
+#[derive(Default)]
+struct VersionedGuidCache {
+    generation: u64,
+    apps: std::collections::HashMap<String, GraphAppInfo>,
+}
+
+#[cfg(any(target_os = "windows", test))]
+impl VersionedGuidCache {
+    fn get(&self, generation: u64, guid: &str) -> Option<GraphAppInfo> {
+        (self.generation == generation)
+            .then(|| self.apps.get(guid).cloned())
+            .flatten()
+    }
+
+    fn insert_all(
+        &mut self,
+        generation: u64,
+        apps: &std::collections::HashMap<String, GraphAppInfo>,
+    ) {
+        if self.generation != generation {
+            return;
+        }
+        for (key, app) in apps {
+            self.apps.insert(key.clone(), app.clone());
+        }
+    }
+
+    fn reset_to(&mut self, generation: u64) {
+        if generation <= self.generation {
+            return;
+        }
+        self.generation = generation;
+        self.apps.clear();
+    }
+}
+
 #[cfg(target_os = "windows")]
 mod windows_impl {
     use std::collections::{BTreeMap, HashMap, HashSet};
@@ -26,7 +63,7 @@ mod windows_impl {
     use super::{
         normalize_graph_guid, project_graph_auth_status, GraphAppInfo, GraphAuthStatus,
         GraphHttpMethod, GraphResolutionResult, GraphTransportRequest, GraphTransportResponse,
-        GRAPH_SCOPE_REQUEST,
+        VersionedGuidCache, GRAPH_SCOPE_REQUEST,
     };
     use crate::error::AppError;
 
@@ -36,14 +73,20 @@ mod windows_impl {
 
     #[derive(Default)]
     pub struct GraphAuthState {
-        access_token: Mutex<Option<CachedToken>>,
-        guid_cache: Mutex<HashMap<String, GraphAppInfo>>,
+        access_token: Mutex<CachedTokenSlot>,
+        guid_cache: Mutex<VersionedGuidCache>,
     }
 
     #[derive(Clone)]
     struct CachedToken {
         token: String,
         status: GraphAuthStatus,
+    }
+
+    #[derive(Default)]
+    struct CachedTokenSlot {
+        generation: u64,
+        token: Option<CachedToken>,
     }
 
     fn unix_now() -> u64 {
@@ -58,37 +101,60 @@ mod windows_impl {
             Self::default()
         }
 
-        fn get_valid_token(&self) -> Option<CachedToken> {
+        fn get_valid_token(&self) -> Option<(CachedToken, u64)> {
             let mut guard = self.access_token.lock().unwrap();
             let is_valid = guard
+                .token
                 .as_ref()
                 .and_then(|token| token.status.expires_at)
                 .is_some_and(|expires_at| expires_at > unix_now());
             if is_valid {
-                guard.clone()
+                guard.token.clone().map(|token| (token, guard.generation))
             } else {
-                *guard = None;
+                let had_token = guard.token.take().is_some();
+                if had_token {
+                    guard.generation = guard
+                        .generation
+                        .checked_add(1)
+                        .expect("Graph auth generation exhausted");
+                    let generation = guard.generation;
+                    drop(guard);
+                    self.guid_cache.lock().unwrap().reset_to(generation);
+                }
                 None
             }
         }
 
         fn set_token(&self, token: CachedToken) {
-            *self.access_token.lock().unwrap() = Some(token);
+            let mut guard = self.access_token.lock().unwrap();
+            guard.generation = guard
+                .generation
+                .checked_add(1)
+                .expect("Graph auth generation exhausted");
+            guard.token = Some(token);
+            let generation = guard.generation;
+            drop(guard);
+            self.guid_cache.lock().unwrap().reset_to(generation);
         }
 
         fn clear_token(&self) {
-            *self.access_token.lock().unwrap() = None;
+            let mut guard = self.access_token.lock().unwrap();
+            guard.generation = guard
+                .generation
+                .checked_add(1)
+                .expect("Graph auth generation exhausted");
+            guard.token = None;
+            let generation = guard.generation;
+            drop(guard);
+            self.guid_cache.lock().unwrap().reset_to(generation);
         }
 
-        fn get_cached_app(&self, guid: &str) -> Option<GraphAppInfo> {
-            self.guid_cache.lock().unwrap().get(guid).cloned()
+        fn get_cached_app(&self, generation: u64, guid: &str) -> Option<GraphAppInfo> {
+            self.guid_cache.lock().unwrap().get(generation, guid)
         }
 
-        fn cache_apps(&self, apps: &HashMap<String, GraphAppInfo>) {
-            let mut cache = self.guid_cache.lock().unwrap();
-            for (k, v) in apps {
-                cache.insert(k.clone(), v.clone());
-            }
+        fn cache_apps(&self, generation: u64, apps: &HashMap<String, GraphAppInfo>) {
+            self.guid_cache.lock().unwrap().insert_all(generation, apps);
         }
     }
 
@@ -366,7 +432,7 @@ mod windows_impl {
         state: &GraphAuthState,
         hwnd_raw: isize,
     ) -> Result<GraphAuthStatus, AppError> {
-        if let Some(cached) = state.get_valid_token() {
+        if let Some((cached, _)) = state.get_valid_token() {
             return Ok(cached.status);
         }
 
@@ -386,7 +452,7 @@ mod windows_impl {
     /// Get current auth status without triggering a new auth flow.
     pub fn get_auth_status(state: &GraphAuthState) -> GraphAuthStatus {
         match state.get_valid_token() {
-            Some(cached) => cached.status,
+            Some((cached, _)) => cached.status,
             None => GraphAuthStatus::disconnected(None),
         }
     }
@@ -394,7 +460,6 @@ mod windows_impl {
     /// Sign out — clear cached token and GUID cache.
     pub fn sign_out(state: &GraphAuthState) {
         state.clear_token();
-        *state.guid_cache.lock().unwrap() = HashMap::new();
     }
 
     /// Resolve a batch of GUIDs to app display names via Graph API.
@@ -407,7 +472,7 @@ mod windows_impl {
                 "Graph app resolution is limited to {MAX_GRAPH_RESOLUTION_IDS} identifiers."
             )));
         }
-        let token = state
+        let (token, generation) = state
             .get_valid_token()
             .ok_or_else(|| AppError::Internal("Not authenticated. Please sign in first.".into()))?;
 
@@ -421,7 +486,7 @@ mod windows_impl {
                 invalid_identifiers += 1;
                 continue;
             };
-            if let Some(cached) = state.get_cached_app(&normalized) {
+            if let Some(cached) = state.get_cached_app(generation, &normalized) {
                 resolved.insert(normalized, cached);
             } else if queued.insert(normalized.clone()) {
                 to_fetch.push(normalized);
@@ -461,7 +526,7 @@ mod windows_impl {
             errors.extend(chunk_result.errors);
         }
 
-        state.cache_apps(&resolved);
+        state.cache_apps(generation, &resolved);
 
         Ok(GraphResolutionResult {
             resolved,
@@ -472,7 +537,7 @@ mod windows_impl {
 
     /// Fetch all Intune apps, scripts, and remediations for pre-populating the cache.
     pub fn fetch_all_apps(state: &GraphAuthState) -> Result<Vec<GraphAppInfo>, AppError> {
-        let token = state
+        let (token, generation) = state
             .get_valid_token()
             .ok_or_else(|| AppError::Internal("Not authenticated. Please sign in first.".into()))?;
 
@@ -541,7 +606,7 @@ mod windows_impl {
 
         let cache_map: HashMap<String, GraphAppInfo> =
             all.iter().map(|a| (a.id.clone(), a.clone())).collect();
-        state.cache_apps(&cache_map);
+        state.cache_apps(generation, &cache_map);
 
         Ok(all)
     }
@@ -671,3 +736,52 @@ mod windows_impl {
 
 #[cfg(target_os = "windows")]
 pub use windows_impl::*;
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use super::{GraphAppInfo, VersionedGuidCache};
+
+    fn app(id: &str, name: &str) -> GraphAppInfo {
+        GraphAppInfo {
+            id: id.to_string(),
+            display_name: name.to_string(),
+            publisher: None,
+            odata_type: None,
+        }
+    }
+
+    #[test]
+    fn graph_guid_cache_rejects_stale_results_across_auth_generations() {
+        let mut cache = VersionedGuidCache::default();
+        cache.reset_to(7);
+        cache.insert_all(
+            7,
+            &HashMap::from([("app-a".to_string(), app("app-a", "Tenant A"))]),
+        );
+        assert_eq!(
+            cache.get(7, "app-a").map(|app| app.display_name),
+            Some("Tenant A".to_string())
+        );
+
+        cache.reset_to(8);
+        assert!(cache.get(8, "app-a").is_none());
+
+        cache.insert_all(
+            7,
+            &HashMap::from([("app-stale".to_string(), app("app-stale", "Stale tenant"))]),
+        );
+        assert!(cache.get(8, "app-stale").is_none());
+
+        cache.insert_all(
+            8,
+            &HashMap::from([("app-b".to_string(), app("app-b", "Tenant B"))]),
+        );
+        cache.reset_to(7);
+        assert_eq!(
+            cache.get(8, "app-b").map(|app| app.display_name),
+            Some("Tenant B".to_string())
+        );
+    }
+}
