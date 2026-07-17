@@ -798,7 +798,8 @@ fn uninstall_name_observation(
 
 #[cfg(any(target_os = "windows", test))]
 fn installer_names_from_registry(evidence: &RegistryEvidence) -> BTreeSet<String> {
-    evidence
+    let mut installer_names = BTreeSet::new();
+    for name in evidence
         .observations
         .iter()
         .filter(|value| {
@@ -809,8 +810,13 @@ fn installer_names_from_registry(evidence: &RegistryEvidence) -> BTreeSet<String
         .filter(|value| installer_command_value_name(&value.observation.value_name))
         .flat_map(|value| observation_strings(&value.observation.value))
         .filter_map(command_executable_name)
-        .take(MAX_LIVE_HINTS)
-        .collect()
+    {
+        installer_names.insert(name);
+        if installer_names.len() == MAX_LIVE_HINTS {
+            break;
+        }
+    }
+    installer_names
 }
 
 #[cfg(any(target_os = "windows", test))]
@@ -1249,5 +1255,26 @@ mod tests {
         assert!(!requested_names.contains(&"singlequotedsetup.exe".to_string()));
         assert!(!requested_names.contains(&"powershell.exe".to_string()));
         assert!(batch.records.is_empty());
+    }
+
+    #[test]
+    fn registry_installer_hint_cap_applies_after_deduplication() {
+        let mut observations = (0..MAX_LIVE_HINTS)
+            .map(|index| registry_command_observation(index, "RepeatedSetup.exe /quiet"))
+            .collect::<Vec<_>>();
+        observations.push(registry_command_observation(
+            MAX_LIVE_HINTS,
+            "LateUniqueSetup.exe /quiet",
+        ));
+        let evidence = RegistryEvidence {
+            observations,
+            ..RegistryEvidence::default()
+        };
+
+        let installer_names = installer_names_from_registry(&evidence);
+
+        assert_eq!(installer_names.len(), 2);
+        assert!(installer_names.contains("RepeatedSetup.exe"));
+        assert!(installer_names.contains("LateUniqueSetup.exe"));
     }
 }

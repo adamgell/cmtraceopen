@@ -157,8 +157,6 @@ where
         MAX_PROCESS_RECORDS,
     );
     batch.snapshots.truncate(MAX_PROCESS_RECORDS);
-    let partial = !batch.snapshots.is_empty();
-    let (access_state, detail) = process_coverage(&batch.completion, partial);
     let retained_snapshots = batch
         .snapshots
         .iter()
@@ -170,6 +168,8 @@ where
         })
         .cloned()
         .collect::<Vec<_>>();
+    let partial = !retained_snapshots.is_empty();
+    let (access_state, detail) = process_coverage(&batch.completion, partial);
     let sampled_at_utc = coherent_process_sample_time(&retained_snapshots, completion_time());
     let observations = retained_snapshots
         .into_iter()
@@ -281,6 +281,7 @@ struct CommandLineSanitizers {
     query_secret: Regex,
     query_secret_argument_prefix: Regex,
     json_secret: Regex,
+    json_secret_key_prefix: Regex,
 }
 
 fn command_line_sanitizers() -> &'static CommandLineSanitizers {
@@ -291,11 +292,11 @@ fn command_line_sanitizers() -> &'static CommandLineSanitizers {
         )
         .expect("constant unterminated-hardware-identity regex"),
         unterminated_double_quoted_authorization_header: Regex::new(
-            r#"(?i)(^|\s)(\")((?:--|/)?authorization)(\s*(?:=|:)\s*|\s+)(?:\\.|[^\"])*$"#,
+            r#"(?i)(\")((?:--|/)?authorization)(\s*(?:=|:)\s*|\s+)(?:\\.|[^\"])*$"#,
         )
         .expect("constant unterminated-double-quoted-authorization-header regex"),
         unterminated_single_quoted_authorization_header: Regex::new(
-            r#"(?i)(^|\s)(')((?:--|/)?authorization)(\s*(?:=|:)\s*|\s+)(?:\\.|[^'])*$"#,
+            r#"(?i)(')((?:--|/)?authorization)(\s*(?:=|:)\s*|\s+)(?:\\.|[^'])*$"#,
         )
         .expect("constant unterminated-single-quoted-authorization-header regex"),
         unterminated_authorization_credential: Regex::new(
@@ -366,6 +367,10 @@ fn command_line_sanitizers() -> &'static CommandLineSanitizers {
             r#"(?i)("(?:access[-_]?token|refresh[-_]?token|id[-_]?token|auth[-_]?token|bearer[-_]?token|client[-_]?secret|app[-_]?secret|api[-_]?key|hardware[-_]?hash|device[-_]?hardware[-_]?data|token|password|secret|authorization)"\s*:\s*")(?:\\.|[^"])*(\")"#,
         )
         .expect("constant JSON-secret regex"),
+        json_secret_key_prefix: Regex::new(
+            r#"(?i)(?:(?:\\+)?\"(?:access[-_]?token|refresh[-_]?token|id[-_]?token|auth[-_]?token|bearer[-_]?token|client[-_]?secret|app[-_]?secret|api[-_]?key|hardware[-_]?hash|device[-_]?hardware[-_]?data|token|password|secret|authorization)(?:\\+)?\"\s*:\s*)"#,
+        )
+        .expect("constant JSON-secret-key-prefix regex"),
     })
 }
 
@@ -415,10 +420,17 @@ fn sanitize_json_command_value(value: &mut serde_json::Value) -> bool {
 }
 
 fn sanitize_raw_command_line(command_line: &str) -> String {
+    let command_line = redact_fully_quoted_arguments(command_line);
+    sanitize_raw_command_line_core(&command_line)
+}
+
+fn sanitize_raw_command_line_core(command_line: &str) -> String {
     let sanitizers = command_line_sanitizers();
     // Redact escaped JSON members before raw quote handling so their structural terminators
     // cannot be mistaken for unterminated Windows arguments.
     let command_line = redact_escaped_json_secrets(command_line);
+    let command_line = redact_embedded_json_secrets(&command_line);
+    let command_line = fail_closed_unstructured_json_secrets(&command_line);
 
     // Hardware identity payloads can be very long and may contain argument-like text. If a
     // quoted value is truncated before its closing quote, fail closed by redacting the rest.
@@ -427,10 +439,10 @@ fn sanitize_raw_command_line(command_line: &str) -> String {
         .replace_all(&command_line, "$1$2$3[REDACTED]");
     let command_line = sanitizers
         .unterminated_double_quoted_authorization_header
-        .replace_all(&command_line, "$1$2$3$4[REDACTED]");
+        .replace_all(&command_line, "$1$2$3[REDACTED]");
     let command_line = sanitizers
         .unterminated_single_quoted_authorization_header
-        .replace_all(&command_line, "$1$2$3$4[REDACTED]");
+        .replace_all(&command_line, "$1$2$3[REDACTED]");
     let command_line = sanitizers
         .unterminated_authorization_credential
         .replace_all(&command_line, "$1$2$3[REDACTED]");
@@ -535,6 +547,229 @@ fn sanitize_raw_command_line(command_line: &str) -> String {
         .json_secret
         .replace_all(&command_line, "$1[REDACTED]$2");
     command_line.into_owned()
+}
+
+fn redact_fully_quoted_arguments(command_line: &str) -> String {
+    let bytes = command_line.as_bytes();
+    let mut output = String::with_capacity(command_line.len());
+    let mut copied_through = 0usize;
+    let mut cursor = 0usize;
+    let mut changed = false;
+
+    while cursor < bytes.len() {
+        let quote = bytes[cursor];
+        let is_argument_start = cursor == 0 || bytes[cursor - 1].is_ascii_whitespace();
+        if !is_argument_start || !matches!(quote, b'"' | b'\'') {
+            cursor += 1;
+            continue;
+        }
+
+        let inner_start = cursor + 1;
+        let closing_quote = find_matching_argument_quote(bytes, inner_start, quote);
+        let inner_end = closing_quote.unwrap_or(bytes.len());
+        let inner = &command_line[inner_start..inner_end];
+        let sanitized_inner = sanitize_complete_quoted_argument(inner);
+        if sanitized_inner != inner {
+            output.push_str(&command_line[copied_through..inner_start]);
+            output.push_str(&sanitized_inner);
+            copied_through = inner_end;
+            changed = true;
+        }
+
+        cursor = closing_quote.map_or(bytes.len(), |closing_quote| closing_quote + 1);
+    }
+
+    if !changed {
+        command_line.to_string()
+    } else {
+        output.push_str(&command_line[copied_through..]);
+        output
+    }
+}
+
+fn find_matching_argument_quote(bytes: &[u8], start: usize, quote: u8) -> Option<usize> {
+    let mut cursor = start;
+    while cursor < bytes.len() {
+        if bytes[cursor] == quote {
+            let mut slash_start = cursor;
+            while slash_start > start && bytes[slash_start - 1] == b'\\' {
+                slash_start -= 1;
+            }
+            if (cursor - slash_start) % 2 == 0 {
+                return Some(cursor);
+            }
+        }
+        cursor += 1;
+    }
+    None
+}
+
+fn sanitize_complete_quoted_argument(argument: &str) -> String {
+    let prefix = &command_line_sanitizers().named_secret_argument_prefix;
+    if let Some(prefix_match) = prefix.find(argument) {
+        if prefix_match.start() == 0 && prefix_match.end() < argument.len() {
+            return format!("{}[REDACTED]", &argument[..prefix_match.end()]);
+        }
+    }
+    sanitize_raw_command_line_core(argument)
+}
+
+const MAX_EMBEDDED_JSON_ESCAPE_LAYERS: usize = 3;
+const MAX_EMBEDDED_JSON_NESTING: usize = 128;
+
+fn redact_embedded_json_secrets(command_line: &str) -> String {
+    let mut output = String::with_capacity(command_line.len());
+    let mut copied_through = 0usize;
+    let mut search_from = 0usize;
+    let mut changed = false;
+
+    while search_from < command_line.len() {
+        let Some(relative_start) = command_line[search_from..].find(['{', '[']) else {
+            break;
+        };
+        let start = search_from + relative_start;
+        let Some(end) = embedded_json_container_end(command_line.as_bytes(), start) else {
+            search_from = start + 1;
+            continue;
+        };
+        let Some((mut value, escape_layers)) =
+            decode_embedded_json_container(&command_line[start..end])
+        else {
+            search_from = start + 1;
+            continue;
+        };
+
+        if sanitize_json_command_value(&mut value) {
+            output.push_str(&command_line[copied_through..start]);
+            output.push_str(&encode_embedded_json_container(&value, escape_layers));
+            copied_through = end;
+            changed = true;
+        }
+        search_from = end;
+    }
+
+    if !changed {
+        command_line.to_string()
+    } else {
+        output.push_str(&command_line[copied_through..]);
+        output
+    }
+}
+
+fn embedded_json_container_end(bytes: &[u8], start: usize) -> Option<usize> {
+    let first_closer = match bytes.get(start) {
+        Some(b'{') => b'}',
+        Some(b'[') => b']',
+        _ => return None,
+    };
+    let mut stack = vec![first_closer];
+    let mut cursor = start + 1;
+    let mut in_string = false;
+    let mut quote_width: Option<usize> = None;
+
+    while cursor < bytes.len() {
+        if bytes[cursor] == b'"' {
+            let mut slash_start = cursor;
+            while slash_start > start && bytes[slash_start - 1] == b'\\' {
+                slash_start -= 1;
+            }
+            let width = cursor - slash_start;
+            match quote_width {
+                None => {
+                    quote_width = Some(width);
+                    in_string = true;
+                }
+                Some(expected_width) if width == expected_width => {
+                    in_string = !in_string;
+                }
+                _ => {}
+            }
+            cursor += 1;
+            continue;
+        }
+
+        if !in_string {
+            match bytes[cursor] {
+                b'{' | b'[' => {
+                    if stack.len() == MAX_EMBEDDED_JSON_NESTING {
+                        return None;
+                    }
+                    stack.push(if bytes[cursor] == b'{' { b'}' } else { b']' });
+                }
+                b'}' | b']' => {
+                    if stack.pop() != Some(bytes[cursor]) {
+                        return None;
+                    }
+                    if stack.is_empty() {
+                        return Some(cursor + 1);
+                    }
+                }
+                _ => {}
+            }
+        }
+        cursor += 1;
+    }
+    None
+}
+
+fn decode_embedded_json_container(container: &str) -> Option<(serde_json::Value, usize)> {
+    let mut decoded = container.to_string();
+    for escape_layers in 0..=MAX_EMBEDDED_JSON_ESCAPE_LAYERS {
+        if let Ok(value) = serde_json::from_str::<serde_json::Value>(&decoded) {
+            return Some((value, escape_layers));
+        }
+        if escape_layers == MAX_EMBEDDED_JSON_ESCAPE_LAYERS {
+            break;
+        }
+        decoded = serde_json::from_str::<String>(&format!("\"{decoded}\"")).ok()?;
+    }
+    None
+}
+
+fn encode_embedded_json_container(value: &serde_json::Value, escape_layers: usize) -> String {
+    let mut encoded =
+        serde_json::to_string(value).expect("serializing a sanitized JSON value cannot fail");
+    for _ in 0..escape_layers {
+        let wrapped =
+            serde_json::to_string(&encoded).expect("serializing a JSON string cannot fail");
+        encoded = wrapped[1..wrapped.len() - 1].to_string();
+    }
+    encoded
+}
+
+fn fail_closed_unstructured_json_secrets(command_line: &str) -> String {
+    let prefix = &command_line_sanitizers().json_secret_key_prefix;
+    let mut search_from = 0usize;
+
+    while let Some(prefix_match) = prefix.find_at(command_line, search_from) {
+        let value_start = prefix_match.end();
+        if let Some(redacted_end) = encoded_redacted_json_string_end(command_line, value_start) {
+            search_from = redacted_end;
+            continue;
+        }
+        return format!("{}[REDACTED]", &command_line[..value_start]);
+    }
+    command_line.to_string()
+}
+
+fn encoded_redacted_json_string_end(command_line: &str, start: usize) -> Option<usize> {
+    let bytes = command_line.as_bytes();
+    let mut quote = start;
+    while bytes.get(quote) == Some(&b'\\') {
+        quote += 1;
+    }
+    if bytes.get(quote) != Some(&b'"') {
+        return None;
+    }
+
+    let delimiter = &command_line[start..=quote];
+    let value_start = quote + 1;
+    let value_end = value_start + "[REDACTED]".len();
+    (command_line.get(value_start..value_end) == Some("[REDACTED]")
+        && command_line
+            .get(value_end..)
+            .is_some_and(|suffix| suffix.starts_with(delimiter)))
+    .then_some(value_end + delimiter.len())
 }
 
 fn redact_secret_argument_fragments(
@@ -1038,12 +1273,18 @@ fn fixed_process_allowlist() -> BTreeSet<String> {
 }
 
 fn local_process_allowlist(local_installer_names: &[String]) -> BTreeSet<String> {
-    local_installer_names
+    let mut allowlist = BTreeSet::new();
+    for name in local_installer_names
         .iter()
         .filter_map(|name| normalize_local_installer_name(name))
-        .take(MAX_LOCAL_INSTALLER_NAMES)
         .map(|name| name.to_ascii_lowercase())
-        .collect()
+    {
+        allowlist.insert(name);
+        if allowlist.len() == MAX_LOCAL_INSTALLER_NAMES {
+            break;
+        }
+    }
+    allowlist
 }
 
 pub(super) fn normalize_local_installer_name(raw: &str) -> Option<String> {
@@ -1392,6 +1633,26 @@ mod tests {
         );
         assert!(!names.contains(&"notepad.exe"));
         assert!(!names.contains(&"evil.exe"));
+    }
+
+    #[test]
+    fn local_installer_name_cap_applies_after_deduplication() {
+        let mut local_installers = (0..MAX_LOCAL_INSTALLER_NAMES)
+            .map(|index| {
+                if index % 2 == 0 {
+                    r"C:\IME\RepeatedSetup.EXE".to_string()
+                } else {
+                    "repeatedsetup.exe".to_string()
+                }
+            })
+            .collect::<Vec<_>>();
+        local_installers.push("LateUniqueSetup.exe".to_string());
+
+        let allowlist = local_process_allowlist(&local_installers);
+
+        assert_eq!(allowlist.len(), 2);
+        assert!(allowlist.contains("repeatedsetup.exe"));
+        assert!(allowlist.contains("lateuniquesetup.exe"));
     }
 
     #[test]
@@ -2003,6 +2264,31 @@ mod tests {
                 &["json-header-secret"],
                 "keep-authorization-sibling",
             ),
+            (
+                r#"{"command":"\"--token=whole-arg-secret\"","safe":"keep-whole-named-sibling"}"#,
+                &["whole-arg-secret"],
+                "keep-whole-named-sibling",
+            ),
+            (
+                r#"{"command":"\"--token=whole argument secret\"","safe":"keep-spaced-whole-named-sibling"}"#,
+                &["whole argument secret"],
+                "keep-spaced-whole-named-sibling",
+            ),
+            (
+                r#"{"command":"\"Basic dXNlcjpwYXNzd29yZA==\"","safe":"keep-whole-basic-sibling"}"#,
+                &["dXNlcjpwYXNzd29yZA=="],
+                "keep-whole-basic-sibling",
+            ),
+            (
+                r#"{"command":"--header=\"Authorization: Bearer json-attached-primary json-attached-tail","safe":"keep-json-attached-sibling"}"#,
+                &["json-attached-primary", "json-attached-tail"],
+                "keep-json-attached-sibling",
+            ),
+            (
+                r#"{"command":"--header='Authorization: Custom json-single-primary json-single-tail","safe":"keep-json-single-sibling"}"#,
+                &["json-single-primary", "json-single-tail"],
+                "keep-json-single-sibling",
+            ),
         ];
 
         for (raw, sentinels, safe_sentinel) in cases {
@@ -2025,6 +2311,23 @@ mod tests {
     }
 
     #[test]
+    fn valid_json_whole_argument_secret_wrappers_preserve_safe_siblings() {
+        let raw = r#"{"argv":["\"--client-secret=whole-named-secret\"","\"Basic dXNlcjpwYXNz\"","'--password=whole-single-secret'","'Basic dXNlcjpwYXNz'","--safe"],"safe":"keep-sibling"}"#;
+        let sanitized = sanitize_command_line(raw);
+
+        for secret in ["whole-named-secret", "whole-single-secret", "dXNlcjpwYXNz"] {
+            assert!(
+                !sanitized.contains(secret),
+                "whole argument secret leaked {secret}: {sanitized}"
+            );
+        }
+        assert!(sanitized.contains("--safe"));
+        assert!(sanitized.contains("keep-sibling"));
+        serde_json::from_str::<serde_json::Value>(&sanitized)
+            .expect("sanitized argv container remains valid JSON");
+    }
+
+    #[test]
     fn unterminated_quoted_sensitive_schemes_fail_closed() {
         let cases: &[(&str, &[&str])] = &[
             (
@@ -2038,6 +2341,22 @@ mod tests {
             (
                 r#"-H "Authorization: Bearer unterminated-header-secret tail-secret"#,
                 &["unterminated-header-secret", "tail-secret"],
+            ),
+            (
+                r#"--header="Authorization: Bearer attached-double-primary attached-double-tail"#,
+                &["attached-double-primary", "attached-double-tail"],
+            ),
+            (
+                "--header='Authorization: Custom attached-single-primary attached-single-tail",
+                &["attached-single-primary", "attached-single-tail"],
+            ),
+            (
+                r#"-H"Authorization: Bearer short-double-primary short-double-tail"#,
+                &["short-double-primary", "short-double-tail"],
+            ),
+            (
+                "-H'Authorization: Custom short-single-primary short-single-tail",
+                &["short-single-primary", "short-single-tail"],
             ),
             (
                 r#"Bearer "unterminated-bearer-secret tail-secret"#,
@@ -2064,6 +2383,110 @@ mod tests {
                     "unterminated credential leaked {sentinel}: {sanitized}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn embedded_json_non_string_secret_values_are_structurally_redacted() {
+        let cases: &[(&str, &[&str], &[&str])] = &[
+            (
+                r#"installer.exe --payload {"HardwareHash":123456789,"safe":"keep-number-sibling"} --mode keep-number-tail"#,
+                &["123456789"],
+                &["keep-number-sibling", "keep-number-tail"],
+            ),
+            (
+                r#"installer.exe --payload {"DeviceHardwareData":{"opaque":"structured-secret"},"safe":"keep-object-sibling"} --mode keep-object-tail"#,
+                &["structured-secret", r#""opaque""#],
+                &["keep-object-sibling", "keep-object-tail"],
+            ),
+            (
+                r#"installer.exe --payload {"DeviceHardwareData":[1,true,null,{"blob":"array-secret"}],"safe":"keep-array-sibling"} --mode keep-array-tail"#,
+                &["array-secret", r#""blob""#],
+                &["keep-array-sibling", "keep-array-tail"],
+            ),
+            (
+                r#"installer.exe --payload {\"HardwareHash\":[1,{\"blob\":\"escaped-structured-secret\"}],\"safe\":true} --mode keep-escaped-tail"#,
+                &["escaped-structured-secret", r#"{\"blob\""#],
+                &[r#"\"safe\":true"#, "keep-escaped-tail"],
+            ),
+        ];
+
+        for (raw, secret_sentinels, safe_sentinels) in cases {
+            let sanitized = sanitize_command_line(raw);
+
+            assert!(sanitized.contains("[REDACTED]"));
+            for sentinel in *secret_sentinels {
+                assert!(
+                    !sanitized.contains(sentinel),
+                    "embedded JSON secret leaked {sentinel}: {sanitized}"
+                );
+            }
+            for sentinel in *safe_sentinels {
+                assert!(
+                    sanitized.contains(sentinel),
+                    "embedded JSON redaction consumed {sentinel}: {sanitized}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn malformed_embedded_json_secret_values_fail_closed() {
+        let cases: &[(&str, &[&str])] = &[
+            (
+                r#"installer.exe --payload {"DeviceHardwareData":{"opaque":"malformed-secret" --mode ambiguous-tail"#,
+                &["malformed-secret", "ambiguous-tail"],
+            ),
+            (
+                r#"installer.exe --payload {\"HardwareHash\":[1,{\"blob\":\"escaped-malformed-secret\"} --mode escaped-ambiguous-tail"#,
+                &["escaped-malformed-secret", "escaped-ambiguous-tail"],
+            ),
+        ];
+
+        for (raw, sentinels) in cases {
+            let sanitized = sanitize_command_line(raw);
+
+            assert!(sanitized.contains("[REDACTED]"));
+            for sentinel in *sentinels {
+                assert!(
+                    !sanitized.contains(sentinel),
+                    "malformed embedded JSON leaked {sentinel}: {sanitized}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn attached_closed_authorization_headers_preserve_following_arguments() {
+        let cases = [
+            (
+                r#"curl.exe --header="Authorization: Bearer attached-closed-secret" --url keep-double-url"#,
+                "attached-closed-secret",
+                "keep-double-url",
+            ),
+            (
+                r#"curl.exe -H"Authorization: Basic dXNlcjpwYXNz" --url keep-short-url"#,
+                "dXNlcjpwYXNz",
+                "keep-short-url",
+            ),
+            (
+                "curl.exe --header='Authorization: Negotiate attached-single-secret' --url keep-single-url",
+                "attached-single-secret",
+                "keep-single-url",
+            ),
+        ];
+
+        for (raw, secret, safe) in cases {
+            let sanitized = sanitize_command_line(raw);
+
+            assert!(
+                !sanitized.contains(secret),
+                "closed attached header leaked {secret}: {sanitized}"
+            );
+            assert!(
+                sanitized.contains(safe),
+                "closed attached header consumed {safe}: {sanitized}"
+            );
         }
     }
 
@@ -2607,6 +3030,31 @@ mod tests {
             evidence.detail.as_deref(),
             Some("process query timed out after partial results")
         );
+    }
+
+    #[test]
+    fn timed_out_batch_is_not_partial_when_only_untrusted_dynamic_snapshots_were_returned() {
+        let provider = FakeProcessProvider {
+            batch: ProcessSnapshotBatch {
+                snapshots: vec![process(
+                    404,
+                    None,
+                    "UntrustedSetup.exe",
+                    "2026-07-15T13:20:00Z",
+                    Some("UntrustedSetup.exe --secret must-not-be-observed"),
+                )],
+                completion: Err(ProcessReadError::TimedOut),
+            },
+        };
+
+        let evidence =
+            collect_process_evidence(&provider, &["UntrustedSetup.exe".to_string()], || {
+                "2026-07-15T14:00:00Z".to_string()
+            });
+
+        assert!(evidence.observations.is_empty());
+        assert_eq!(evidence.access_state, EspSourceAccessState::Failed);
+        assert_eq!(evidence.detail.as_deref(), Some("process query timed out"));
     }
 
     #[test]
