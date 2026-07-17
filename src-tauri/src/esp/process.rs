@@ -262,6 +262,10 @@ pub fn parent_chain(
 
 struct CommandLineSanitizers {
     unterminated_hardware_identity: Regex,
+    unterminated_double_quoted_authorization_header: Regex,
+    unterminated_single_quoted_authorization_header: Regex,
+    unterminated_authorization_credential: Regex,
+    unterminated_standalone_credential: Regex,
     double_quoted_authorization: Regex,
     single_quoted_authorization: Regex,
     quoted_authorization_redaction_end: Regex,
@@ -286,6 +290,22 @@ fn command_line_sanitizers() -> &'static CommandLineSanitizers {
             r#"(?i)(^|\s)((?:--?|/)?(?:hardware[-_]?hash|device[-_]?hardware[-_]?data))(\s*(?:=|:)\s*|\s+)(?:\"(?:\\.|[^\"])*$|'(?:\\.|[^'])*$)"#,
         )
         .expect("constant unterminated-hardware-identity regex"),
+        unterminated_double_quoted_authorization_header: Regex::new(
+            r#"(?i)(^|\s)(\")((?:--|/)?authorization)(\s*(?:=|:)\s*|\s+)(?:\\.|[^\"])*$"#,
+        )
+        .expect("constant unterminated-double-quoted-authorization-header regex"),
+        unterminated_single_quoted_authorization_header: Regex::new(
+            r#"(?i)(^|\s)(')((?:--|/)?authorization)(\s*(?:=|:)\s*|\s+)(?:\\.|[^'])*$"#,
+        )
+        .expect("constant unterminated-single-quoted-authorization-header regex"),
+        unterminated_authorization_credential: Regex::new(
+            r#"(?i)(^|\s|["'])((?:--|/)?authorization)(\s*(?:=|:)\s*|\s+)(?:[!#$%&'*+\-.^_\x60|~a-z0-9]+\s+)?(?:\"(?:\\.|[^\"])*$|'(?:\\.|[^'])*$)"#,
+        )
+        .expect("constant unterminated-authorization-credential regex"),
+        unterminated_standalone_credential: Regex::new(
+            r#"(?i)(^|\s)(bearer|basic)(\s+)(?:\"(?:\\.|[^\"])*$|'(?:\\.|[^'])*$)"#,
+        )
+        .expect("constant unterminated-standalone-credential regex"),
         double_quoted_authorization: Regex::new(
             r#"(?i)(\")((?:--|/)?authorization)(\s*(?:=|:)\s*|\s+)[!#$%&'*+\-.^_`|~a-z0-9]+\s+(?:\\.|[^\"])*\""#,
         )
@@ -350,14 +370,73 @@ fn command_line_sanitizers() -> &'static CommandLineSanitizers {
 }
 
 pub fn sanitize_command_line(command_line: &str) -> String {
+    if let Ok(mut value) = serde_json::from_str::<serde_json::Value>(command_line) {
+        if sanitize_json_command_value(&mut value) {
+            return serde_json::to_string(&value)
+                .expect("serializing a sanitized JSON value cannot fail");
+        }
+        return command_line.to_string();
+    }
+
+    sanitize_raw_command_line(command_line)
+}
+
+fn sanitize_json_command_value(value: &mut serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::Object(members) => {
+            let mut changed = false;
+            for (key, value) in members {
+                if is_json_secret_key(key) {
+                    let redacted = serde_json::Value::String("[REDACTED]".to_string());
+                    if *value != redacted {
+                        *value = redacted;
+                        changed = true;
+                    }
+                } else {
+                    changed |= sanitize_json_command_value(value);
+                }
+            }
+            changed
+        }
+        serde_json::Value::Array(values) => values.iter_mut().fold(false, |changed, value| {
+            sanitize_json_command_value(value) || changed
+        }),
+        serde_json::Value::String(text) => {
+            let sanitized = sanitize_raw_command_line(text);
+            if sanitized == *text {
+                false
+            } else {
+                *text = sanitized;
+                true
+            }
+        }
+        _ => false,
+    }
+}
+
+fn sanitize_raw_command_line(command_line: &str) -> String {
     let sanitizers = command_line_sanitizers();
-    let source_is_json = serde_json::from_str::<serde_json::Value>(command_line).is_ok();
+    // Redact escaped JSON members before raw quote handling so their structural terminators
+    // cannot be mistaken for unterminated Windows arguments.
+    let command_line = redact_escaped_json_secrets(command_line);
 
     // Hardware identity payloads can be very long and may contain argument-like text. If a
     // quoted value is truncated before its closing quote, fail closed by redacting the rest.
     let command_line = sanitizers
         .unterminated_hardware_identity
-        .replace_all(command_line, "$1$2$3[REDACTED]");
+        .replace_all(&command_line, "$1$2$3[REDACTED]");
+    let command_line = sanitizers
+        .unterminated_double_quoted_authorization_header
+        .replace_all(&command_line, "$1$2$3$4[REDACTED]");
+    let command_line = sanitizers
+        .unterminated_single_quoted_authorization_header
+        .replace_all(&command_line, "$1$2$3$4[REDACTED]");
+    let command_line = sanitizers
+        .unterminated_authorization_credential
+        .replace_all(&command_line, "$1$2$3[REDACTED]");
+    let command_line = sanitizers
+        .unterminated_standalone_credential
+        .replace_all(&command_line, "$1$2$3[REDACTED]");
     let command_line = sanitizers
         .double_quoted_authorization
         .replace_all(&command_line, "$1$2$3[REDACTED]\"");
@@ -438,7 +517,7 @@ pub fn sanitize_command_line(command_line: &str) -> String {
         &command_line,
         &sanitizers.named_secret_argument_prefix,
         false,
-        source_is_json,
+        false,
     );
     let command_line = sanitizers
         .named_secret
@@ -447,7 +526,7 @@ pub fn sanitize_command_line(command_line: &str) -> String {
         &command_line,
         &sanitizers.query_secret_argument_prefix,
         true,
-        source_is_json,
+        false,
     );
     let command_line = sanitizers
         .query_secret
@@ -455,7 +534,7 @@ pub fn sanitize_command_line(command_line: &str) -> String {
     let command_line = sanitizers
         .json_secret
         .replace_all(&command_line, "$1[REDACTED]$2");
-    redact_escaped_json_secrets(&command_line)
+    command_line.into_owned()
 }
 
 fn redact_secret_argument_fragments(
@@ -1878,16 +1957,51 @@ mod tests {
 
     #[test]
     fn named_secret_arguments_inside_valid_json_preserve_safe_siblings() {
-        let cases = [
+        let cases: &[(&str, &[&str], &str)] = &[
             (
                 r#"{"command":"installer --token=embedded-token-secret","safe":"keep-json-sibling"}"#,
-                &["embedded-token-secret"][..],
+                &["embedded-token-secret"],
                 "keep-json-sibling",
             ),
             (
                 r#"{"command":"installer --token=\"prefix-json-token-secret\"suffix-json-token-secret","safe":"keep-escaped-json-sibling"}"#,
-                &["prefix-json-token-secret", "suffix-json-token-secret"][..],
+                &["prefix-json-token-secret", "suffix-json-token-secret"],
                 "keep-escaped-json-sibling",
+            ),
+            (
+                r#"{"command":"--token=start-token-secret","safe":"keep-start-sibling"}"#,
+                &["start-token-secret"],
+                "keep-start-sibling",
+            ),
+            (
+                r#"{"command":"--token=\"quoted named secret\" --mode keep-named","safe":"keep-named-sibling"}"#,
+                &["quoted named secret"],
+                "keep-named-sibling",
+            ),
+            (
+                r#"{"nested":{"command":"--DeviceHardwareData=\"quoted hardware secret\" --mode keep-hardware"},"safe":"keep-hardware-sibling"}"#,
+                &["quoted hardware secret"],
+                "keep-hardware-sibling",
+            ),
+            (
+                r#"{"commands":["https://cache.invalid/content?token=\"quoted query secret\"&safe=keep-query"],"safe":"keep-query-sibling"}"#,
+                &["quoted query secret"],
+                "keep-query-sibling",
+            ),
+            (
+                r#"{"command":"Bearer \"quoted bearer secret\" --mode keep-bearer","safe":"keep-bearer-sibling"}"#,
+                &["quoted bearer secret"],
+                "keep-bearer-sibling",
+            ),
+            (
+                r#"{"command":"Basic \"dXNlcjpwYXNzd29yZA==\" --mode keep-basic","safe":"keep-basic-sibling"}"#,
+                &["dXNlcjpwYXNzd29yZA=="],
+                "keep-basic-sibling",
+            ),
+            (
+                r#"{"command":"-H \"Authorization: Bearer json-header-secret\" --mode keep-header","safe":"keep-authorization-sibling"}"#,
+                &["json-header-secret"],
+                "keep-authorization-sibling",
             ),
         ];
 
@@ -1895,7 +2009,7 @@ mod tests {
             serde_json::from_str::<serde_json::Value>(raw).expect("valid source JSON");
             let sanitized = sanitize_command_line(raw);
 
-            for sentinel in sentinels {
+            for sentinel in *sentinels {
                 assert!(
                     !sanitized.contains(sentinel),
                     "JSON command secret leaked {sentinel}: {sanitized}"
@@ -1907,6 +2021,49 @@ mod tests {
             );
             serde_json::from_str::<serde_json::Value>(&sanitized)
                 .expect("sanitized command container remains valid JSON");
+        }
+    }
+
+    #[test]
+    fn unterminated_quoted_sensitive_schemes_fail_closed() {
+        let cases: &[(&str, &[&str])] = &[
+            (
+                r#"Authorization: Bearer "unterminated-authorization-secret tail-secret"#,
+                &["unterminated-authorization-secret", "tail-secret"],
+            ),
+            (
+                "Authorization: Custom 'unterminated-custom-secret tail-secret",
+                &["unterminated-custom-secret", "tail-secret"],
+            ),
+            (
+                r#"-H "Authorization: Bearer unterminated-header-secret tail-secret"#,
+                &["unterminated-header-secret", "tail-secret"],
+            ),
+            (
+                r#"Bearer "unterminated-bearer-secret tail-secret"#,
+                &["unterminated-bearer-secret", "tail-secret"],
+            ),
+            (
+                "Bearer 'unterminated-single-bearer-secret tail-secret",
+                &["unterminated-single-bearer-secret", "tail-secret"],
+            ),
+            (r#"Basic "dXNlcjpwYXNzd29yZA=="#, &["dXNlcjpwYXNzd29yZA=="]),
+            ("Basic 'dXNlcjpwYXNzd29yZA==", &["dXNlcjpwYXNzd29yZA=="]),
+        ];
+
+        for (raw, sentinels) in cases {
+            let sanitized = sanitize_command_line(raw);
+
+            assert!(
+                sanitized.contains("[REDACTED]"),
+                "unterminated credential was not redacted: {sanitized}"
+            );
+            for sentinel in *sentinels {
+                assert!(
+                    !sanitized.contains(sentinel),
+                    "unterminated credential leaked {sentinel}: {sanitized}"
+                );
+            }
         }
     }
 
