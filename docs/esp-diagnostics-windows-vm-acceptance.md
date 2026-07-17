@@ -466,17 +466,20 @@ $Etl = Join-Path $Evidence "graph-$CaptureId.etl"
 $Pcap = Join-Path $Evidence "graph-$CaptureId.pcapng"
 $StatusBeforePath = Join-Path $Evidence "pktmon-status-before-$CaptureId.txt"
 $StatusAfterPath = Join-Path $Evidence "pktmon-status-after-$CaptureId.txt"
+$StatusRetryPath = Join-Path $Evidence "pktmon-status-after-retry-$CaptureId.txt"
 $FiltersBeforePath = Join-Path $Evidence "pktmon-filters-before-$CaptureId.txt"
 $FiltersAfterPath = Join-Path $Evidence "pktmon-filters-after-$CaptureId.txt"
+$StopAttemptPath = Join-Path $Evidence "pktmon-stop-attempt-$CaptureId.txt"
+$StopRetryPath = Join-Path $Evidence "pktmon-stop-retry-$CaptureId.txt"
 $CaptureStartedByThisRun = $false
-$StopFailed = $false
+$EvidenceWriteFailures = @()
 
 if (-not (Test-Path -LiteralPath $Evidence -PathType Container)) {
     throw "Restricted evidence directory does not exist: $Evidence"
 }
 foreach ($OutputPath in @(
-    $Etl, $Pcap, $StatusBeforePath, $StatusAfterPath,
-    $FiltersBeforePath, $FiltersAfterPath
+    $Etl, $Pcap, $StatusBeforePath, $StatusAfterPath, $StatusRetryPath,
+    $FiltersBeforePath, $FiltersAfterPath, $StopAttemptPath, $StopRetryPath
 )) {
     if (Test-Path -LiteralPath $OutputPath) {
         throw "Packet evidence output already exists: $OutputPath"
@@ -508,23 +511,79 @@ try {
 }
 finally {
     if ($CaptureStartedByThisRun) {
-        & pktmon stop
-        if ($LASTEXITCODE -ne 0) { $StopFailed = $true }
+        $StopOutput = & pktmon stop 2>&1
+        $StopExit = $LASTEXITCODE
+        $StopOutput | Out-Host
+        try {
+            $StopOutput | Set-Content -LiteralPath $StopAttemptPath -ErrorAction Stop
+        }
+        catch {
+            $EvidenceWriteFailures += "initial stop output: $($_.Exception.Message)"
+        }
+
+        # Status verification remains inside finally so an error in the capture body cannot
+        # bypass termination checks and leave sensitive acquisition running.
+        $StatusAfter = & pktmon status 2>&1
+        $StatusAfterExit = $LASTEXITCODE
+        $StatusAfter | Out-Host
+        try {
+            $StatusAfter | Set-Content -LiteralPath $StatusAfterPath -ErrorAction Stop
+        }
+        catch {
+            $EvidenceWriteFailures += "post-stop status: $($_.Exception.Message)"
+        }
+        if ($StatusAfterExit -ne 0) {
+            throw "Capture state is unknown because pktmon status failed after stop ($StatusAfterExit). Immediately shut down or revert this disposable VM; do not continue and do not issue an unverified stop."
+        }
+
+        $StoppedConfirmation = Read-Host 'Review the displayed post-stop status. Type INACTIVE only if capture is stopped'
+        if ($StoppedConfirmation -cne 'INACTIVE') {
+            $RetryConfirmation = Read-Host 'Type RETRY-OWNED only if this runbook capture is still active and no other operator or tool could have replaced it; otherwise immediately shut down or revert the VM'
+            if ($RetryConfirmation -cne 'RETRY-OWNED') {
+                throw 'Runbook-owned capture termination was not established. Immediately shut down or revert this disposable VM; do not continue or issue a later generic pktmon stop.'
+            }
+
+            $RetryOutput = & pktmon stop 2>&1
+            $RetryExit = $LASTEXITCODE
+            $RetryOutput | Out-Host
+            try {
+                $RetryOutput | Set-Content -LiteralPath $StopRetryPath -ErrorAction Stop
+            }
+            catch {
+                $EvidenceWriteFailures += "retry stop output: $($_.Exception.Message)"
+            }
+
+            $StatusRetry = & pktmon status 2>&1
+            $StatusRetryExit = $LASTEXITCODE
+            $StatusRetry | Out-Host
+            try {
+                $StatusRetry | Set-Content -LiteralPath $StatusRetryPath -ErrorAction Stop
+            }
+            catch {
+                $EvidenceWriteFailures += "post-retry status: $($_.Exception.Message)"
+            }
+            if ($StatusRetryExit -ne 0) {
+                throw "Capture state is unknown because pktmon status failed after the ownership-safe retry ($StatusRetryExit). Immediately shut down or revert this disposable VM."
+            }
+            $RetryStoppedConfirmation = Read-Host 'Review the displayed post-retry status. Type INACTIVE only if capture is stopped'
+            if ($RetryStoppedConfirmation -cne 'INACTIVE') {
+                throw 'Capture remains active or ambiguous after the ownership-safe retry. Immediately shut down or revert this disposable VM; do not continue or issue another stop.'
+            }
+            if ($RetryExit -ne 0) {
+                Write-Warning "pktmon retry returned $RetryExit, but the displayed status was independently confirmed inactive. Record the command failure in the acceptance result."
+            }
+        }
+        if ($StopExit -ne 0) {
+            Write-Warning "pktmon stop returned $StopExit. The workflow continued only after displayed status was independently confirmed inactive. Record the command failure in the acceptance result."
+        }
+        if ($EvidenceWriteFailures.Count -ne 0) {
+            throw "Capture is confirmed inactive, but required packet evidence could not be saved: $($EvidenceWriteFailures -join '; ')"
+        }
     }
 }
-if ($StopFailed) { throw 'The runbook-owned pktmon capture did not stop cleanly.' }
 
 & pktmon etl2pcap $Etl --out $Pcap
 if ($LASTEXITCODE -ne 0) { throw "pktmon etl2pcap failed: $LASTEXITCODE" }
-
-$StatusAfter = & pktmon status 2>&1
-$StatusAfterExit = $LASTEXITCODE
-$StatusAfter | Set-Content -LiteralPath $StatusAfterPath -ErrorAction Stop
-if ($StatusAfterExit -ne 0) { throw "pktmon status failed after capture: $StatusAfterExit" }
-$StoppedConfirmation = Read-Host 'After reviewing the saved post-capture status, type INACTIVE only if capture is stopped'
-if ($StoppedConfirmation -cne 'INACTIVE') {
-    throw 'Post-capture inactive state was not established; do not stop any later or unowned capture.'
-}
 
 $FiltersAfter = & pktmon filter list 2>&1
 $FiltersAfterExit = $LASTEXITCODE
@@ -557,7 +616,7 @@ Capture at least: elevated/collapsed, docked logs, full-page logs, non-elevated 
 4. Remove canary logs, rotated files, sanitized fixture copies, shadow module, and marker.
 5. Confirm no `cmtrace-open-esp-archive-*` or `cmtraceopen-esp-intake-*` directory remains.
 6. Close CMTrace Open and verify the process and its acquisition children exit.
-7. Stop only a ProcMon capture owned by this test. Verify the runbook-owned pktmon capture is already inactive from its saved post-capture status; never issue a later `pktmon stop`, because that could stop an unrelated capture. Retain restricted evidence according to policy.
+7. Stop only a ProcMon capture owned by this test. The packet block must have ended with a displayed and saved `INACTIVE` confirmation. If it did not, stop acceptance and immediately shut down or revert the disposable VM; do not proceed through generic cleanup. After confirmed termination, never issue a later `pktmon stop`, because that could stop an unrelated capture. Retain restricted evidence according to policy.
 8. Revert the disposable post-enrollment snapshot.
 
 Any remediation, tenant write, installer retry, MDM sync, unexpected diagnostic-root write, token disclosure, unrelated process-command-line capture, unsafe path traversal, or post-stop acquisition is an immediate acceptance failure.
