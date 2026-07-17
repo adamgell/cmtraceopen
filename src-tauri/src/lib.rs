@@ -79,73 +79,6 @@ fn parse_initial_launch_arguments(
     launch
 }
 
-#[cfg(test)]
-mod startup_argument_tests {
-    use super::parse_initial_launch_arguments;
-
-    fn strings(arguments: &[&str]) -> Vec<String> {
-        arguments
-            .iter()
-            .map(|argument| argument.to_string())
-            .collect()
-    }
-
-    #[cfg(feature = "esp-diagnostics")]
-    #[test]
-    fn esp_workspace_equals_argument_routes_without_becoming_a_file_path() {
-        let launch = parse_initial_launch_arguments(strings(&["--workspace=esp-diagnostics"]));
-
-        assert_eq!(launch.workspace.as_deref(), Some("esp-diagnostics"));
-        assert!(launch.file_paths.is_empty());
-    }
-
-    #[cfg(feature = "esp-diagnostics")]
-    #[test]
-    fn esp_workspace_split_argument_consumes_its_value_and_keeps_real_paths() {
-        let launch = parse_initial_launch_arguments(strings(&[
-            "--workspace",
-            "esp-diagnostics",
-            r"C:\Windows\Temp\ime.log",
-        ]));
-
-        assert_eq!(launch.workspace.as_deref(), Some("esp-diagnostics"));
-        assert_eq!(launch.file_paths, [r"C:\Windows\Temp\ime.log"]);
-    }
-
-    #[test]
-    fn unapproved_workspace_values_are_neither_routed_nor_opened_as_files() {
-        let launch = parse_initial_launch_arguments(strings(&[
-            "--workspace",
-            "future-workspace",
-            r"C:\Logs\real.log",
-        ]));
-
-        assert_eq!(launch.workspace, None);
-        assert_eq!(launch.file_paths, [r"C:\Logs\real.log"]);
-    }
-
-    #[cfg(feature = "esp-diagnostics")]
-    #[test]
-    fn legacy_esp_alias_is_accepted_case_insensitively() {
-        let launch = parse_initial_launch_arguments(strings(&["--ESP-DIAGNOSTICS"]));
-
-        assert_eq!(launch.workspace.as_deref(), Some("esp-diagnostics"));
-        assert!(launch.file_paths.is_empty());
-    }
-
-    #[cfg(not(feature = "esp-diagnostics"))]
-    #[test]
-    fn esp_workspace_argument_is_ignored_when_the_feature_is_not_built() {
-        let launch = parse_initial_launch_arguments(strings(&[
-            "--workspace=esp-diagnostics",
-            r"C:\Logs\real.log",
-        ]));
-
-        assert_eq!(launch.workspace, None);
-        assert_eq!(launch.file_paths, [r"C:\Logs\real.log"]);
-    }
-}
-
 // Keep the ESP Graph commands in one handler fragment so the production app
 // and the registration-level test exercise the same generated Tauri routes.
 macro_rules! app_invoke_handler {
@@ -376,13 +309,81 @@ pub fn run() {
     app.run(|_, _| {});
 }
 
-#[cfg(all(test, feature = "esp-diagnostics", not(target_os = "windows")))]
+#[cfg(test)]
 mod tests {
+    use super::parse_initial_launch_arguments;
+
+    fn strings(arguments: &[&str]) -> Vec<String> {
+        arguments
+            .iter()
+            .map(|argument| argument.to_string())
+            .collect()
+    }
+
+    #[cfg(feature = "esp-diagnostics")]
+    #[test]
+    fn esp_workspace_equals_argument_routes_without_becoming_a_file_path() {
+        let launch = parse_initial_launch_arguments(strings(&["--workspace=esp-diagnostics"]));
+
+        assert_eq!(launch.workspace.as_deref(), Some("esp-diagnostics"));
+        assert!(launch.file_paths.is_empty());
+    }
+
+    #[cfg(feature = "esp-diagnostics")]
+    #[test]
+    fn esp_workspace_split_argument_consumes_its_value_and_keeps_real_paths() {
+        let launch = parse_initial_launch_arguments(strings(&[
+            "--workspace",
+            "esp-diagnostics",
+            r"C:\Windows\Temp\ime.log",
+        ]));
+
+        assert_eq!(launch.workspace.as_deref(), Some("esp-diagnostics"));
+        assert_eq!(launch.file_paths, [r"C:\Windows\Temp\ime.log"]);
+    }
+
+    #[test]
+    fn unapproved_workspace_values_are_neither_routed_nor_opened_as_files() {
+        let launch = parse_initial_launch_arguments(strings(&[
+            "--workspace",
+            "future-workspace",
+            r"C:\Logs\real.log",
+        ]));
+
+        assert_eq!(launch.workspace, None);
+        assert_eq!(launch.file_paths, [r"C:\Logs\real.log"]);
+    }
+
+    #[cfg(feature = "esp-diagnostics")]
+    #[test]
+    fn legacy_esp_alias_is_accepted_case_insensitively() {
+        let launch = parse_initial_launch_arguments(strings(&["--ESP-DIAGNOSTICS"]));
+
+        assert_eq!(launch.workspace.as_deref(), Some("esp-diagnostics"));
+        assert!(launch.file_paths.is_empty());
+    }
+
+    #[cfg(not(feature = "esp-diagnostics"))]
+    #[test]
+    fn esp_workspace_argument_is_ignored_when_the_feature_is_not_built() {
+        let launch = parse_initial_launch_arguments(strings(&[
+            "--workspace=esp-diagnostics",
+            r"C:\Logs\real.log",
+        ]));
+
+        assert_eq!(launch.workspace, None);
+        assert_eq!(launch.file_paths, [r"C:\Logs\real.log"]);
+    }
+
+    #[cfg(all(feature = "esp-diagnostics", not(target_os = "windows")))]
     use cmtraceopen_parser::esp::EspIdentityEvidence;
+    #[cfg(all(feature = "esp-diagnostics", not(target_os = "windows")))]
     use tauri::test::{get_ipc_response, mock_builder, mock_context, noop_assets, INVOKE_KEY};
 
+    #[cfg(all(feature = "esp-diagnostics", not(target_os = "windows")))]
     use crate::graph_api::esp::EspGraphRequest;
 
+    #[cfg(all(feature = "esp-diagnostics", not(target_os = "windows")))]
     fn invoke_request(command: &str, body: serde_json::Value) -> tauri::webview::InvokeRequest {
         tauri::webview::InvokeRequest {
             cmd: command.into(),
@@ -395,6 +396,7 @@ mod tests {
         }
     }
 
+    #[cfg(all(feature = "esp-diagnostics", not(target_os = "windows")))]
     fn graph_request() -> EspGraphRequest {
         EspGraphRequest {
             request_id: "550e8400-e29b-41d4-a716-446655440000".to_string(),
@@ -420,6 +422,7 @@ mod tests {
         }
     }
 
+    #[cfg(all(feature = "esp-diagnostics", not(target_os = "windows")))]
     #[test]
     fn esp_graph_tauri_commands_are_registered() {
         let app = mock_builder()

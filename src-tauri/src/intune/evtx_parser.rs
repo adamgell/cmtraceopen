@@ -368,9 +368,11 @@ pub fn parse_esp_evtx_file_bounded_with_limits(
         .map_err(|error| format!("Failed to open EVTX file {}: {error}", path.display()))?;
     let source_file = path.to_string_lossy().to_string();
     Ok(parse_esp_record_stream(
-        parser
-            .records()
-            .map(|result| result.map(|record| (record.data, record.event_record_id))),
+        parser.records().map(|result| {
+            result
+                .map(|record| (record.data, record.event_record_id))
+                .map_err(|_| ())
+        }),
         &source_file,
         inspection_limit,
         max_record_bytes,

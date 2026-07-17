@@ -403,9 +403,13 @@ fn sanitize_json_command_value(value: &mut serde_json::Value) -> bool {
             }
             changed
         }
-        serde_json::Value::Array(values) => values.iter_mut().fold(false, |changed, value| {
-            sanitize_json_command_value(value) || changed
-        }),
+        serde_json::Value::Array(values) => {
+            let mut changed = false;
+            for value in values {
+                changed |= sanitize_json_command_value(value);
+            }
+            changed
+        }
         serde_json::Value::String(text) => {
             let sanitized = sanitize_raw_command_line(text);
             if sanitized == *text {
