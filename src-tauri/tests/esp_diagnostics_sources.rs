@@ -44,7 +44,7 @@ use app_lib::esp::registry::{
 };
 use app_lib::esp::session::{
     EspCancellation, EspClockReading, EspDiscoveryBatch, EspDiscoveryProvider, EspEvidenceProvider,
-    EspProviderBatch, EspSessionClock, EspSessionDependencies, EspSessionError,
+    EspProviderBatch, EspSessionClock, EspSessionDependencies, EspSessionEnvelope, EspSessionError,
     EspSessionEventSink, EspSessionLifecycleProbe, EspSessionManager, EspSessionState,
     EspSessionTail, EspSessionTailFactory, EspSessionUpdate, EspTailEvidenceBatch, EspUpdateReason,
 };
@@ -3888,6 +3888,79 @@ struct OrderedPublicationSink {
     order: Arc<Mutex<Vec<&'static str>>>,
 }
 
+#[derive(Clone)]
+struct ShutdownOwnershipProbe {
+    waiting_for_publication: SessionTestSignal,
+}
+
+impl EspSessionLifecycleProbe for ShutdownOwnershipProbe {
+    fn cancellation_transition_waiting_for_publication(&self) {
+        self.waiting_for_publication.signal();
+    }
+}
+
+struct BlockingShutdownSink {
+    manager: Mutex<Option<Weak<EspSessionManager>>>,
+    shutdown_waiting_for_publication: SessionTestSignal,
+    delivery_entered: SessionTestSignal,
+    reentrant_get_completed: SessionTestSignal,
+    release_delivery: SessionTestSignal,
+    delivery_finished: SessionTestSignal,
+    intercepted_delivery: AtomicBool,
+    reentrant_get: Mutex<Option<Result<EspSessionEnvelope, EspSessionError>>>,
+    updates: Mutex<Vec<EspSessionUpdate>>,
+}
+
+impl BlockingShutdownSink {
+    fn new(shutdown_waiting_for_publication: SessionTestSignal) -> Self {
+        Self {
+            manager: Mutex::new(None),
+            shutdown_waiting_for_publication,
+            delivery_entered: SessionTestSignal::new(),
+            reentrant_get_completed: SessionTestSignal::new(),
+            release_delivery: SessionTestSignal::new(),
+            delivery_finished: SessionTestSignal::new(),
+            intercepted_delivery: AtomicBool::new(false),
+            reentrant_get: Mutex::new(None),
+            updates: Mutex::new(Vec::new()),
+        }
+    }
+}
+
+impl EspSessionEventSink for BlockingShutdownSink {
+    fn emit(&self, update: EspSessionUpdate) -> Result<(), String> {
+        if update.state == EspSessionState::Live
+            && update.reason == EspUpdateReason::InitialSnapshot
+            && !self.intercepted_delivery.swap(true, Ordering::SeqCst)
+        {
+            self.delivery_entered.signal();
+            self.shutdown_waiting_for_publication
+                .wait("shutdown publication wait");
+            let reentrant_get = self
+                .manager
+                .lock()
+                .map_err(|error| error.to_string())?
+                .as_ref()
+                .and_then(Weak::upgrade)
+                .ok_or_else(|| "session manager unavailable".to_string())?
+                .get(&update.session_id);
+            *self
+                .reentrant_get
+                .lock()
+                .map_err(|error| error.to_string())? = Some(reentrant_get);
+            self.reentrant_get_completed.signal();
+            self.release_delivery
+                .wait("blocked shutdown delivery release");
+            self.delivery_finished.signal();
+        }
+        self.updates
+            .lock()
+            .map_err(|error| error.to_string())?
+            .push(update);
+        Ok(())
+    }
+}
+
 impl EspSessionEventSink for OrderedPublicationSink {
     fn emit(&self, update: EspSessionUpdate) -> Result<(), String> {
         if update.state == EspSessionState::Live
@@ -5951,6 +6024,103 @@ fn session_shutdown_linearizes_cancellation_with_publication_commit_and_delivery
         Err(EspSessionError::SessionNotFound)
     );
     assert_publication_linearized(&probe, &sink);
+}
+
+#[test]
+fn session_shutdown_retains_owner_and_rejects_start_while_delivery_is_blocked() {
+    let clock = Arc::new(ManualSessionClock::default());
+    let tails = FakeSessionTailFactory::default();
+    let waiting_for_publication = SessionTestSignal::new();
+    let probe = Arc::new(ShutdownOwnershipProbe {
+        waiting_for_publication: waiting_for_publication.clone(),
+    });
+    let sink = Arc::new(BlockingShutdownSink::new(waiting_for_publication));
+    let manager = Arc::new(EspSessionManager::new(
+        EspSessionDependencies::new(
+            clock,
+            Arc::new(FakeSessionProvider::available("registry")),
+            Arc::new(FakeSessionProvider::available("event")),
+            Arc::new(FakeSessionProvider::available("system")),
+            Arc::new(FakeSessionProvider::available("process")),
+            Arc::new(FakeSessionDiscovery::default()),
+            Arc::new(tails.clone()),
+            sink.clone(),
+        )
+        .with_live_supported_for_tests(true)
+        .with_lifecycle_probe_for_tests(probe.clone()),
+    ));
+    *sink.manager.lock().expect("blocking sink manager") = Some(Arc::downgrade(&manager));
+    let starting = manager
+        .start("c1c1c1c1-c1c1-41c1-81c1-c1c1c1c1c1c1")
+        .expect("start blocked-delivery session");
+    sink.delivery_entered.wait("blocked Live delivery");
+
+    let shutdown = {
+        let manager = Arc::clone(&manager);
+        thread::spawn(move || manager.shutdown())
+    };
+    probe
+        .waiting_for_publication
+        .wait("shutdown waiting for blocked delivery");
+    sink.reentrant_get_completed
+        .wait("delivery-time reentrant get");
+    let concurrent_start = manager.start("c2c2c2c2-c2c2-42c2-82c2-c2c2c2c2c2c2");
+    let reentrant_get_succeeded = sink
+        .reentrant_get
+        .lock()
+        .expect("delivery-time reentrant get result")
+        .as_ref()
+        .is_some_and(Result::is_ok);
+    sink.release_delivery.signal();
+    shutdown
+        .join()
+        .expect("shutdown thread")
+        .expect("shutdown blocked-delivery session");
+
+    let replacement_owner_after_shutdown = concurrent_start
+        .as_ref()
+        .ok()
+        .is_some_and(|session| manager.get(&session.session_id).is_ok());
+    let start_rejected_for_shutdown = matches!(
+        &concurrent_start,
+        Err(EspSessionError::State { message }) if message.contains("shutting down")
+    );
+    let old_owner_removed_after_join = matches!(
+        manager.get(&starting.session_id),
+        Err(EspSessionError::SessionNotFound)
+    );
+    let worker_joined_before_return = sink.delivery_finished.is_signaled();
+    let tail_stopped_before_return = tails.stops.load(Ordering::SeqCst) == 1;
+
+    if let Ok(replacement) = &concurrent_start {
+        manager
+            .stop(&replacement.session_id)
+            .expect("cleanup replacement session");
+    }
+
+    let mut violations = Vec::new();
+    if !reentrant_get_succeeded {
+        violations.push("delivery-time reentrant get lost the old owner");
+    }
+    if !start_rejected_for_shutdown {
+        violations.push("concurrent start was not rejected as shutting down");
+    }
+    if replacement_owner_after_shutdown {
+        violations.push("shutdown returned with a replacement worker still active");
+    }
+    if !old_owner_removed_after_join {
+        violations.push("shutdown did not remove the old owner after joining it");
+    }
+    if !worker_joined_before_return || !tail_stopped_before_return {
+        violations.push("shutdown returned before the old worker finished");
+    }
+    assert!(
+        violations.is_empty(),
+        "shutdown ownership was not retained: {violations:?}; concurrent_start={concurrent_start:?}; reentrant_get={:?}",
+        sink.reentrant_get
+            .lock()
+            .expect("delivery-time reentrant get result")
+    );
 }
 
 #[test]

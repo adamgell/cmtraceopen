@@ -295,6 +295,7 @@ impl EspSessionDependencies {
 
 pub struct EspSessionManager {
     dependencies: EspSessionDependencies,
+    start_shutdown_gate: Mutex<()>,
     control: Mutex<SessionControl>,
 }
 
@@ -302,6 +303,7 @@ impl EspSessionManager {
     pub fn new(dependencies: EspSessionDependencies) -> Self {
         Self {
             dependencies,
+            start_shutdown_gate: Mutex::new(()),
             control: Mutex::new(SessionControl::default()),
         }
     }
@@ -311,6 +313,7 @@ impl EspSessionManager {
         if !self.dependencies.live_supported {
             return Err(EspSessionError::UnsupportedPlatform);
         }
+        let _start_guard = self.start_shutdown_gate.lock().map_err(state_error)?;
 
         let session_id = Uuid::new_v4().to_string();
         self.reserve(&session_id, request_id)?;
@@ -369,18 +372,24 @@ impl EspSessionManager {
         }
 
         let mut control = self.control.lock().map_err(state_error)?;
-        if control
-            .reservation
-            .as_ref()
-            .map_or(true, |reservation| reservation.session_id != session_id)
+        let shutting_down = control.shutting_down;
+        if shutting_down
+            || control
+                .reservation
+                .as_ref()
+                .map_or(true, |reservation| reservation.session_id != session_id)
         {
             active.cancellation.cancel();
             active.activation.release();
             drop(control);
             join_active(&active)?;
-            return Err(EspSessionError::State {
-                message: "session reservation was lost before activation".to_string(),
-            });
+            return if shutting_down {
+                Err(shutting_down_error())
+            } else {
+                Err(EspSessionError::State {
+                    message: "session reservation was lost before activation".to_string(),
+                })
+            };
         }
         control.reservation = None;
         control.active = Some(Arc::clone(&active));
@@ -443,14 +452,26 @@ impl EspSessionManager {
     /// event sink are torn down.
     pub fn shutdown(&self) -> Result<(), EspSessionError> {
         let active = {
+            let _shutdown_guard = self.start_shutdown_gate.lock().map_err(state_error)?;
             let mut control = self.control.lock().map_err(state_error)?;
+            control.shutting_down = true;
             control.reservation = None;
-            control.active.take()
+            control.active.clone()
         };
-        if let Some(active) = active {
+        if let Some(active) = &active {
             active.cancel_and_mark_stopping(&self.dependencies)?;
             active.activation.release();
-            join_active(&active)?;
+            join_active(active)?;
+        }
+        let mut control = self.control.lock().map_err(state_error)?;
+        if let Some(active) = active {
+            if control
+                .active
+                .as_ref()
+                .is_some_and(|candidate| Arc::ptr_eq(candidate, &active))
+            {
+                control.active = None;
+            }
         }
         Ok(())
     }
@@ -459,6 +480,9 @@ impl EspSessionManager {
         loop {
             let stale = {
                 let mut control = self.control.lock().map_err(state_error)?;
+                if control.shutting_down {
+                    return Err(shutting_down_error());
+                }
                 if let Some(reservation) = &control.reservation {
                     return Err(EspSessionError::SessionConflict {
                         existing_session_id: reservation.session_id.clone(),
@@ -517,6 +541,7 @@ impl Drop for EspSessionManager {
 struct SessionControl {
     reservation: Option<SessionReservation>,
     active: Option<Arc<ActiveSession>>,
+    shutting_down: bool,
 }
 
 struct SessionReservation {
@@ -1344,6 +1369,12 @@ impl WorkerJoin {
 fn state_error(error: impl std::fmt::Display) -> EspSessionError {
     EspSessionError::State {
         message: error.to_string(),
+    }
+}
+
+fn shutting_down_error() -> EspSessionError {
+    EspSessionError::State {
+        message: "ESP diagnostics session manager is shutting down".to_string(),
     }
 }
 
