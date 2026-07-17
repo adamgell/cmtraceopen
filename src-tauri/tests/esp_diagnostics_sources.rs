@@ -4658,10 +4658,18 @@ fn start_initialized_session(
     manager: &EspSessionManager,
     request_id: &str,
 ) -> Result<app_lib::esp::session::EspSessionEnvelope, EspSessionError> {
+    start_initialized_session_with_timeout(manager, request_id, Duration::from_secs(2))
+}
+
+fn start_initialized_session_with_timeout(
+    manager: &EspSessionManager,
+    request_id: &str,
+    timeout: Duration,
+) -> Result<app_lib::esp::session::EspSessionEnvelope, EspSessionError> {
     let starting = manager.start(request_id)?;
     assert_eq!(starting.sequence, 0);
     assert_eq!(starting.state, EspSessionState::Starting);
-    let deadline = Instant::now() + Duration::from_secs(2);
+    let deadline = Instant::now() + timeout;
     loop {
         let current = manager.get(&starting.session_id)?;
         if current.state != EspSessionState::Starting {
@@ -5143,8 +5151,11 @@ fn session_identity_source_boundary_preserves_exact_rejection_counts() {
         )
         .with_live_supported_for_tests(true);
         let manager = EspSessionManager::new(dependencies);
+        // Reducing 25,000 distinct identities is intentionally much heavier than
+        // the lifecycle tests that use the default two-second initialization bound.
         let initial =
-            start_initialized_session(&manager, request_id).expect("start boundary session");
+            start_initialized_session_with_timeout(&manager, request_id, Duration::from_secs(10))
+                .expect("start boundary session");
         manager
             .stop(&initial.session_id)
             .expect("stop boundary session");
