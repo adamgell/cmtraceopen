@@ -7,7 +7,7 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex, TryLockError};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -211,6 +211,28 @@ pub trait EspSessionEventSink: Send + Sync {
     fn emit(&self, update: EspSessionUpdate) -> Result<(), String>;
 }
 
+#[cfg(debug_assertions)]
+#[doc(hidden)]
+pub trait EspSessionLifecycleProbe: Send + Sync {
+    fn before_cancellation_request(&self) {}
+
+    fn before_cancellation_transition_lock(&self) {}
+
+    fn cancellation_transition_waiting_for_publication(&self) {}
+
+    fn after_cancellation_transition(&self, _state: &EspSessionState) {}
+
+    fn after_publish_cancellation_sample(
+        &self,
+        _state: &EspSessionState,
+        _reason: &EspUpdateReason,
+        _cancellation: &EspCancellation,
+    ) {
+    }
+
+    fn before_update_delivery(&self, _update: &EspSessionUpdate) {}
+}
+
 #[derive(Clone)]
 pub struct EspSessionDependencies {
     clock: Arc<dyn EspSessionClock>,
@@ -222,6 +244,8 @@ pub struct EspSessionDependencies {
     tail_factory: Arc<dyn EspSessionTailFactory>,
     sink: Arc<dyn EspSessionEventSink>,
     live_supported: bool,
+    #[cfg(debug_assertions)]
+    lifecycle_probe: Option<Arc<dyn EspSessionLifecycleProbe>>,
 }
 
 impl EspSessionDependencies {
@@ -246,6 +270,8 @@ impl EspSessionDependencies {
             tail_factory,
             sink,
             live_supported: cfg!(target_os = "windows"),
+            #[cfg(debug_assertions)]
+            lifecycle_probe: None,
         }
     }
 
@@ -253,6 +279,16 @@ impl EspSessionDependencies {
     #[doc(hidden)]
     pub fn with_live_supported_for_tests(mut self, live_supported: bool) -> Self {
         self.live_supported = live_supported;
+        self
+    }
+
+    #[cfg(debug_assertions)]
+    #[doc(hidden)]
+    pub fn with_lifecycle_probe_for_tests(
+        mut self,
+        lifecycle_probe: Arc<dyn EspSessionLifecycleProbe>,
+    ) -> Self {
+        self.lifecycle_probe = Some(lifecycle_probe);
         self
     }
 }
@@ -289,6 +325,7 @@ impl EspSessionManager {
                 state: EspSessionState::Starting,
                 snapshot: starting_snapshot.clone(),
             }),
+            publication_gate: Mutex::new(()),
             cancellation: Arc::new(EspCancellation::default()),
             activation: WorkerActivation::default(),
             worker: WorkerJoin::default(),
@@ -385,8 +422,7 @@ impl EspSessionManager {
         }
         .ok_or(EspSessionError::SessionNotFound)?;
 
-        active.cancellation.cancel();
-        active.mark_stopping()?;
+        active.cancel_and_mark_stopping(&self.dependencies)?;
         join_active(&active)?;
         let envelope = active.envelope()?;
 
@@ -412,7 +448,7 @@ impl EspSessionManager {
             control.active.take()
         };
         if let Some(active) = active {
-            active.cancellation.cancel();
+            active.cancel_and_mark_stopping(&self.dependencies)?;
             active.activation.release();
             join_active(&active)?;
         }
@@ -493,6 +529,7 @@ struct ActiveSession {
     session_id: String,
     request_id: String,
     published: Mutex<PublishedSession>,
+    publication_gate: Mutex<()>,
     cancellation: Arc<EspCancellation>,
     activation: WorkerActivation,
     worker: WorkerJoin,
@@ -517,13 +554,42 @@ impl ActiveSession {
             .map_err(state_error)
     }
 
-    fn mark_stopping(&self) -> Result<(), EspSessionError> {
+    fn cancel_and_mark_stopping(
+        &self,
+        _dependencies: &EspSessionDependencies,
+    ) -> Result<(), EspSessionError> {
+        #[cfg(debug_assertions)]
+        if let Some(probe) = &_dependencies.lifecycle_probe {
+            probe.before_cancellation_request();
+            probe.before_cancellation_transition_lock();
+        }
+        let _publication_guard = match self.publication_gate.try_lock() {
+            Ok(guard) => guard,
+            Err(TryLockError::WouldBlock) => {
+                #[cfg(debug_assertions)]
+                if let Some(probe) = &_dependencies.lifecycle_probe {
+                    probe.cancellation_transition_waiting_for_publication();
+                }
+                self.publication_gate
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner())
+            }
+            Err(TryLockError::Poisoned(error)) => error.into_inner(),
+        };
         let mut published = self.published.lock().map_err(state_error)?;
+        self.cancellation.cancel();
         if matches!(
             published.state,
             EspSessionState::Starting | EspSessionState::Live
         ) {
             published.state = EspSessionState::Stopping;
+        }
+        #[cfg(debug_assertions)]
+        let state = published.state.clone();
+        drop(published);
+        #[cfg(debug_assertions)]
+        if let Some(probe) = &_dependencies.lifecycle_probe {
+            probe.after_cancellation_transition(&state);
         }
         Ok(())
     }
@@ -1017,6 +1083,10 @@ fn publish(
     snapshot: EspDiagnosticsSnapshot,
     emitted_at_utc: &str,
 ) {
+    let _publication_guard = active
+        .publication_gate
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let emitted_at_utc = coherent_utc_timestamp(
         emitted_at_utc,
         std::iter::once(snapshot.generated_at_utc.as_str()),
@@ -1030,6 +1100,10 @@ fn publish(
         }
         let cancellation_wins = active.cancellation.is_cancelled()
             || matches!(published.state, EspSessionState::Stopping);
+        #[cfg(debug_assertions)]
+        if let Some(probe) = &dependencies.lifecycle_probe {
+            probe.after_publish_cancellation_sample(&state, &reason, &active.cancellation);
+        }
         let (state, reason) = if cancellation_wins && state != EspSessionState::Stopped {
             (EspSessionState::Stopped, EspUpdateReason::Stopped)
         } else {
@@ -1048,6 +1122,10 @@ fn publish(
             snapshot,
         }
     };
+    #[cfg(debug_assertions)]
+    if let Some(probe) = &dependencies.lifecycle_probe {
+        probe.before_update_delivery(&update);
+    }
     if let Err(error) = dependencies.sink.emit(update) {
         log::warn!("failed to emit ESP session update: {error}");
     }

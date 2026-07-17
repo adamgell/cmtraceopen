@@ -3,7 +3,7 @@ use std::collections::{HashMap, VecDeque};
 use std::fs::{self, File, FileTimes, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Barrier, Condvar, Mutex, Weak};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
@@ -45,8 +45,8 @@ use app_lib::esp::registry::{
 use app_lib::esp::session::{
     EspCancellation, EspClockReading, EspDiscoveryBatch, EspDiscoveryProvider, EspEvidenceProvider,
     EspProviderBatch, EspSessionClock, EspSessionDependencies, EspSessionError,
-    EspSessionEventSink, EspSessionManager, EspSessionState, EspSessionTail, EspSessionTailFactory,
-    EspTailEvidenceBatch, EspUpdateReason,
+    EspSessionEventSink, EspSessionLifecycleProbe, EspSessionManager, EspSessionState,
+    EspSessionTail, EspSessionTailFactory, EspSessionUpdate, EspTailEvidenceBatch, EspUpdateReason,
 };
 use app_lib::esp::system::{delivery_optimization_from_rows, SystemEvidence, SystemRow};
 use app_lib::esp::tailing::{
@@ -3762,6 +3762,215 @@ impl SessionTestSignal {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PublicationDeliveryCheckpoint {
+    CancellationTransitionCompleted,
+    CancellationTransitionWaitingForPublication,
+}
+
+struct PublicationLinearizationProbe {
+    publication_sampled: SessionTestSignal,
+    cancellation_transition_lock_requested: SessionTestSignal,
+    delivery_checkpoint: (Mutex<Option<PublicationDeliveryCheckpoint>>, Condvar),
+    intercepted_sample: AtomicBool,
+    intercepted_delivery: AtomicBool,
+    cancellation_visible_before_commit: AtomicBool,
+    transition_states: Mutex<Vec<EspSessionState>>,
+    order: Arc<Mutex<Vec<&'static str>>>,
+}
+
+impl PublicationLinearizationProbe {
+    fn new(order: Arc<Mutex<Vec<&'static str>>>) -> Self {
+        Self {
+            publication_sampled: SessionTestSignal::new(),
+            cancellation_transition_lock_requested: SessionTestSignal::new(),
+            delivery_checkpoint: (Mutex::new(None), Condvar::new()),
+            intercepted_sample: AtomicBool::new(false),
+            intercepted_delivery: AtomicBool::new(false),
+            cancellation_visible_before_commit: AtomicBool::new(false),
+            transition_states: Mutex::new(Vec::new()),
+            order,
+        }
+    }
+
+    fn signal_delivery_checkpoint(&self, checkpoint: PublicationDeliveryCheckpoint) {
+        let mut current = self
+            .delivery_checkpoint
+            .0
+            .lock()
+            .expect("publication delivery checkpoint");
+        if current.is_none() {
+            *current = Some(checkpoint);
+            self.delivery_checkpoint.1.notify_all();
+        }
+    }
+
+    fn wait_for_delivery_checkpoint(&self) {
+        let current = self
+            .delivery_checkpoint
+            .0
+            .lock()
+            .expect("publication delivery checkpoint");
+        let (current, _) = self
+            .delivery_checkpoint
+            .1
+            .wait_timeout_while(current, Duration::from_secs(2), |value| value.is_none())
+            .expect("publication delivery checkpoint wait");
+        assert!(
+            current.is_some(),
+            "timed out waiting for cancellation transition or publication serialization"
+        );
+    }
+}
+
+impl EspSessionLifecycleProbe for PublicationLinearizationProbe {
+    fn before_cancellation_request(&self) {
+        self.publication_sampled
+            .wait("publication cancellation sample");
+    }
+
+    fn before_cancellation_transition_lock(&self) {
+        self.cancellation_transition_lock_requested.signal();
+    }
+
+    fn cancellation_transition_waiting_for_publication(&self) {
+        self.signal_delivery_checkpoint(
+            PublicationDeliveryCheckpoint::CancellationTransitionWaitingForPublication,
+        );
+    }
+
+    fn after_cancellation_transition(&self, state: &EspSessionState) {
+        self.transition_states
+            .lock()
+            .expect("cancellation transition states")
+            .push(state.clone());
+        self.order
+            .lock()
+            .expect("publication order")
+            .push("stopping-transition");
+        self.signal_delivery_checkpoint(
+            PublicationDeliveryCheckpoint::CancellationTransitionCompleted,
+        );
+    }
+
+    fn after_publish_cancellation_sample(
+        &self,
+        state: &EspSessionState,
+        reason: &EspUpdateReason,
+        cancellation: &EspCancellation,
+    ) {
+        if *state != EspSessionState::Live
+            || *reason != EspUpdateReason::InitialSnapshot
+            || self.intercepted_sample.swap(true, Ordering::SeqCst)
+        {
+            return;
+        }
+        self.publication_sampled.signal();
+        self.cancellation_transition_lock_requested
+            .wait("cancellation transition lock request");
+        self.cancellation_visible_before_commit
+            .store(cancellation.is_cancelled(), Ordering::SeqCst);
+    }
+
+    fn before_update_delivery(&self, update: &EspSessionUpdate) {
+        if update.state == EspSessionState::Live
+            && update.reason == EspUpdateReason::InitialSnapshot
+            && !self.intercepted_delivery.swap(true, Ordering::SeqCst)
+        {
+            self.wait_for_delivery_checkpoint();
+        }
+    }
+}
+
+#[derive(Clone)]
+struct OrderedPublicationSink {
+    updates: Arc<Mutex<Vec<EspSessionUpdate>>>,
+    order: Arc<Mutex<Vec<&'static str>>>,
+}
+
+impl EspSessionEventSink for OrderedPublicationSink {
+    fn emit(&self, update: EspSessionUpdate) -> Result<(), String> {
+        if update.state == EspSessionState::Live
+            && update.reason == EspUpdateReason::InitialSnapshot
+        {
+            self.order
+                .lock()
+                .map_err(|error| error.to_string())?
+                .push("live-delivery");
+        }
+        self.updates
+            .lock()
+            .map_err(|error| error.to_string())?
+            .push(update);
+        Ok(())
+    }
+}
+
+fn publication_linearization_fixture() -> (
+    EspSessionManager,
+    Arc<PublicationLinearizationProbe>,
+    OrderedPublicationSink,
+) {
+    let order = Arc::new(Mutex::new(Vec::new()));
+    let probe = Arc::new(PublicationLinearizationProbe::new(Arc::clone(&order)));
+    let sink = OrderedPublicationSink {
+        updates: Arc::new(Mutex::new(Vec::new())),
+        order,
+    };
+    let manager = EspSessionManager::new(
+        EspSessionDependencies::new(
+            Arc::new(ManualSessionClock::default()),
+            Arc::new(FakeSessionProvider::available("registry")),
+            Arc::new(FakeSessionProvider::available("event")),
+            Arc::new(FakeSessionProvider::available("system")),
+            Arc::new(FakeSessionProvider::available("process")),
+            Arc::new(FakeSessionDiscovery::default()),
+            Arc::new(FakeSessionTailFactory::default()),
+            Arc::new(sink.clone()),
+        )
+        .with_live_supported_for_tests(true)
+        .with_lifecycle_probe_for_tests(probe.clone()),
+    );
+    (manager, probe, sink)
+}
+
+fn assert_publication_linearized(
+    probe: &PublicationLinearizationProbe,
+    sink: &OrderedPublicationSink,
+) {
+    let observed_order = probe.order.lock().expect("publication order").clone();
+    let transition_states = probe
+        .transition_states
+        .lock()
+        .expect("cancellation transition states")
+        .clone();
+    let mut violations = Vec::new();
+    if probe
+        .cancellation_visible_before_commit
+        .load(Ordering::SeqCst)
+    {
+        violations.push("cancellation became visible after publication sampled but before commit");
+    }
+    if transition_states != [EspSessionState::Stopping] {
+        violations.push("cancellation transition did not atomically publish Stopping");
+    }
+    let live_delivery = observed_order
+        .iter()
+        .position(|entry| *entry == "live-delivery");
+    let stopping_transition = observed_order
+        .iter()
+        .position(|entry| *entry == "stopping-transition");
+    if !matches!((live_delivery, stopping_transition), (Some(live), Some(stopping)) if live < stopping)
+    {
+        violations.push("Live was delivered after the cancellation transition");
+    }
+    assert!(
+        violations.is_empty(),
+        "publication was not linearized: {violations:?}; order={observed_order:?}; transitions={transition_states:?}; updates={:?}",
+        sink.updates.lock().expect("publication updates")
+    );
+}
+
 #[derive(Clone)]
 struct DelayedProcessCall {
     entered: SessionTestSignal,
@@ -5709,6 +5918,39 @@ fn session_stop_during_tail_poll_never_publishes_live_after_stopping() {
         updates.last().map(|update| &update.state),
         Some(&EspSessionState::Stopped)
     );
+}
+
+#[test]
+fn session_stop_linearizes_cancellation_with_publication_commit_and_delivery() {
+    let (manager, probe, sink) = publication_linearization_fixture();
+    let starting = manager
+        .start("afafafaf-afaf-4faf-8faf-afafafafafaf")
+        .expect("start publication-race session");
+
+    let stopped = manager
+        .stop(&starting.session_id)
+        .expect("stop publication-race session");
+
+    assert_eq!(stopped.state, EspSessionState::Stopped);
+    assert_publication_linearized(&probe, &sink);
+}
+
+#[test]
+fn session_shutdown_linearizes_cancellation_with_publication_commit_and_delivery() {
+    let (manager, probe, sink) = publication_linearization_fixture();
+    let starting = manager
+        .start("b0b0b0b0-b0b0-40b0-80b0-b0b0b0b0b0b0")
+        .expect("start shutdown publication-race session");
+
+    manager
+        .shutdown()
+        .expect("shutdown publication-race session");
+
+    assert_eq!(
+        manager.get(&starting.session_id),
+        Err(EspSessionError::SessionNotFound)
+    );
+    assert_publication_linearized(&probe, &sink);
 }
 
 #[test]
