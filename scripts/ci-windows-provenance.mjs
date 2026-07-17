@@ -10,12 +10,33 @@ import {
   realpathSync,
   renameSync,
   rmSync,
-  statSync,
   writeFileSync,
 } from "node:fs";
 import { extname, isAbsolute, relative, resolve, sep } from "node:path";
 
 const OUTPUT_RELATIVE_PATH = ["provenance", "windows-build-provenance.json"];
+const TAURI_BUNDLE_MARKER_PREFIX = Buffer.from(
+  "__TAURI_BUNDLE_TYPE_VAR_",
+  "ascii",
+);
+const TAURI_STANDALONE_MARKER = Buffer.from(
+  "__TAURI_BUNDLE_TYPE_VAR_UNK",
+  "ascii",
+);
+const WINDOWS_BUNDLE_TYPES = [
+  {
+    directory: "msi",
+    extension: ".msi",
+    bundleType: "msi",
+    marker: Buffer.from("MSI", "ascii"),
+  },
+  {
+    directory: "nsis",
+    extension: ".exe",
+    bundleType: "nsis",
+    marker: Buffer.from("NSS", "ascii"),
+  },
+];
 
 function fail(message) {
   console.error(message);
@@ -87,12 +108,15 @@ function expectedVersion() {
   return packageJson.version;
 }
 
-function hashFile(path) {
-  const bytes = readFileSync(path);
+function hashBytes(bytes) {
   return {
-    bytes: statSync(path).size,
+    bytes: bytes.length,
     sha256: createHash("sha256").update(bytes).digest("hex"),
   };
+}
+
+function hashFile(path) {
+  return hashBytes(readFileSync(path));
 }
 
 function evidenceForFile(path, displayPath) {
@@ -103,7 +127,77 @@ function evidenceForFile(path, displayPath) {
   return { path: displayPath, ...hashFile(path) };
 }
 
-function collectInstallers(bundleRoot, current = bundleRoot, installers = []) {
+function locateStandaloneBundleMarker(executableBytes) {
+  const markerOffset = executableBytes.indexOf(TAURI_STANDALONE_MARKER);
+  const duplicateOffset =
+    markerOffset < 0
+      ? -1
+      : executableBytes.indexOf(
+          TAURI_STANDALONE_MARKER,
+          markerOffset + TAURI_STANDALONE_MARKER.length,
+        );
+  if (markerOffset < 0 || duplicateOffset >= 0) {
+    throw new Error(
+      "Windows release executable must contain exactly one Tauri standalone bundle marker",
+    );
+  }
+  return markerOffset;
+}
+
+function expectedInstalledExecutableEvidence(
+  executableBytes,
+  markerOffset,
+  bundleSpec,
+) {
+  const installedBytes = Buffer.from(executableBytes);
+  bundleSpec.marker.copy(
+    installedBytes,
+    markerOffset + TAURI_BUNDLE_MARKER_PREFIX.length,
+  );
+  return {
+    path: "cmtrace-open.exe",
+    ...hashBytes(installedBytes),
+    derivation: "tauriBundleTypeMarkerV1",
+  };
+}
+
+function bundleSpecForInstaller(displayPath) {
+  const pathParts = displayPath.split("/");
+  const extension = extname(displayPath).toLowerCase();
+  const bundleSpec = WINDOWS_BUNDLE_TYPES.find(
+    (candidate) =>
+      pathParts.length === 2 &&
+      pathParts[0] === candidate.directory &&
+      extension === candidate.extension,
+  );
+  if (!bundleSpec) {
+    throw new Error(
+      `Windows installer must use a canonical Windows bundle path: ${displayPath}`,
+    );
+  }
+  return bundleSpec;
+}
+
+function installerEvidence(path, displayPath, executableBytes, markerOffset) {
+  const bundleSpec = bundleSpecForInstaller(displayPath);
+  return {
+    ...evidenceForFile(path, displayPath),
+    bundleType: bundleSpec.bundleType,
+    expectedInstalledExecutable: expectedInstalledExecutableEvidence(
+      executableBytes,
+      markerOffset,
+      bundleSpec,
+    ),
+  };
+}
+
+function collectInstallers(
+  bundleRoot,
+  executableBytes,
+  markerOffset,
+  current = bundleRoot,
+  installers = [],
+) {
   for (const entry of readdirSync(current, { withFileTypes: true })) {
     const path = resolve(current, entry.name);
     if (entry.isSymbolicLink()) {
@@ -112,13 +206,20 @@ function collectInstallers(bundleRoot, current = bundleRoot, installers = []) {
       );
     }
     if (entry.isDirectory()) {
-      collectInstallers(bundleRoot, path, installers);
+      collectInstallers(
+        bundleRoot,
+        executableBytes,
+        markerOffset,
+        path,
+        installers,
+      );
       continue;
     }
     const extension = extname(entry.name).toLowerCase();
     if (entry.isFile() && (extension === ".msi" || extension === ".exe")) {
+      const displayPath = relative(bundleRoot, path).split(sep).join("/");
       installers.push(
-        evidenceForFile(path, relative(bundleRoot, path).split(sep).join("/")),
+        installerEvidence(path, displayPath, executableBytes, markerOffset),
       );
     }
   }
@@ -169,20 +270,34 @@ try {
   if (!existsSync(executablePath)) {
     throw new Error("Windows release executable is missing");
   }
-  const installers = collectInstallers(bundleRoot).sort((left, right) =>
-    left.path.localeCompare(right.path),
+  const executableEntry = assertNoSymlink(
+    executablePath,
+    "Windows release executable",
   );
+  if (!executableEntry.isFile()) {
+    throw new Error("Windows release executable must be a regular file");
+  }
+  const executableBytes = readFileSync(executablePath);
+  const markerOffset = locateStandaloneBundleMarker(executableBytes);
+  const installers = collectInstallers(
+    bundleRoot,
+    executableBytes,
+    markerOffset,
+  ).sort((left, right) => left.path.localeCompare(right.path));
   if (installers.length === 0) {
     throw new Error("No Windows installer packages were found");
   }
 
   const manifest = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     sourceCommit,
     buildCommit,
     target,
     packageVersion: expectedVersion(),
-    releaseExecutable: evidenceForFile(executablePath, "cmtrace-open.exe"),
+    releaseExecutable: {
+      path: "cmtrace-open.exe",
+      ...hashBytes(executableBytes),
+    },
     installers,
   };
   const outputPath = writeManifest(bundleRoot, manifest);

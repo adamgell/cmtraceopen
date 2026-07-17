@@ -20,10 +20,23 @@ const scriptPath = fileURLToPath(
 const workflowPath = fileURLToPath(
   new URL("../.github/workflows/cmtrace-ci.yml", import.meta.url),
 );
+const runbookPath = fileURLToPath(
+  new URL("../docs/esp-diagnostics-windows-vm-acceptance.md", import.meta.url),
+);
 
 const SOURCE_COMMIT = "a".repeat(40);
 const BUILD_COMMIT = "b".repeat(40);
 const TARGET = "x86_64-pc-windows-msvc";
+const TAURI_BUNDLE_MARKER_PREFIX = "__TAURI_BUNDLE_TYPE_VAR_";
+const TAURI_STANDALONE_MARKER = `${TAURI_BUNDLE_MARKER_PREFIX}UNK`;
+
+function stampBundleType(executable, marker) {
+  const stamped = Buffer.from(executable);
+  const offset = stamped.indexOf(TAURI_STANDALONE_MARKER);
+  assert.notEqual(offset, -1, "fixture must contain the standalone marker");
+  stamped.write(marker, offset + TAURI_BUNDLE_MARKER_PREFIX.length, "ascii");
+  return stamped;
+}
 
 function writeFixture(path, contents) {
   mkdirSync(dirname(path), { recursive: true });
@@ -64,7 +77,11 @@ function run(root, releaseRoot, environment = {}) {
 
 test("writes exact-head Windows executable and installer provenance", (t) => {
   const { bundleRoot, releaseRoot, root } = createWorkspace(t);
-  const executable = Buffer.from("exact release executable");
+  const executable = Buffer.from(
+    `exact release executable ${TAURI_STANDALONE_MARKER} suffix`,
+  );
+  const msiExecutable = stampBundleType(executable, "MSI");
+  const nsisExecutable = stampBundleType(executable, "NSS");
   const msi = Buffer.from("exact msi package");
   const nsis = Buffer.from("exact nsis package");
   writeFixture(join(releaseRoot, "cmtrace-open.exe"), executable);
@@ -87,7 +104,7 @@ test("writes exact-head Windows executable and installer provenance", (t) => {
   );
   const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
   assert.deepEqual(manifest, {
-    schemaVersion: 1,
+    schemaVersion: 2,
     sourceCommit: SOURCE_COMMIT,
     buildCommit: BUILD_COMMIT,
     target: TARGET,
@@ -102,14 +119,77 @@ test("writes exact-head Windows executable and installer provenance", (t) => {
         path: "msi/CMTrace Open_1.4.0_x64_en-US.msi",
         bytes: msi.length,
         sha256: sha256(msi),
+        bundleType: "msi",
+        expectedInstalledExecutable: {
+          path: "cmtrace-open.exe",
+          bytes: msiExecutable.length,
+          sha256: sha256(msiExecutable),
+          derivation: "tauriBundleTypeMarkerV1",
+        },
       },
       {
         path: "nsis/CMTrace Open_1.4.0_x64-setup.exe",
         bytes: nsis.length,
         sha256: sha256(nsis),
+        bundleType: "nsis",
+        expectedInstalledExecutable: {
+          path: "cmtrace-open.exe",
+          bytes: nsisExecutable.length,
+          sha256: sha256(nsisExecutable),
+          derivation: "tauriBundleTypeMarkerV1",
+        },
       },
     ],
   });
+});
+
+test("rejects installer extensions outside their canonical bundle directories", (t) => {
+  for (const relativePath of [
+    ["msi", "CMTrace Open_1.4.0_x64-setup.exe"],
+    ["nsis", "CMTrace Open_1.4.0_x64_en-US.msi"],
+    ["CMTrace Open_1.4.0_x64_en-US.msi"],
+  ]) {
+    const { bundleRoot, releaseRoot, root } = createWorkspace(t);
+    writeFixture(
+      join(releaseRoot, "cmtrace-open.exe"),
+      `release ${TAURI_STANDALONE_MARKER}`,
+    );
+    writeFixture(join(bundleRoot, ...relativePath), "installer");
+
+    const result = run(root, releaseRoot);
+
+    assert.notEqual(result.status, 0, relativePath.join("/"));
+    assert.match(result.stderr, /canonical Windows bundle path/i);
+  }
+});
+
+test("fails closed unless the standalone executable has exactly one Tauri marker", (t) => {
+  for (const [label, executable] of [
+    ["missing", Buffer.from("release executable without a marker")],
+    [
+      "duplicate",
+      Buffer.from(`${TAURI_STANDALONE_MARKER}${TAURI_STANDALONE_MARKER}`),
+    ],
+  ]) {
+    const { bundleRoot, releaseRoot, root } = createWorkspace(t);
+    writeFixture(join(releaseRoot, "cmtrace-open.exe"), executable);
+    writeFixture(
+      join(bundleRoot, "msi", "CMTrace Open_1.4.0_x64_en-US.msi"),
+      "msi",
+    );
+
+    const result = run(root, releaseRoot);
+
+    assert.notEqual(result.status, 0, label);
+    assert.match(result.stderr, /exactly one.*Tauri.*marker/i, label);
+    assert.equal(
+      existsSync(
+        join(bundleRoot, "provenance", "windows-build-provenance.json"),
+      ),
+      false,
+      label,
+    );
+  }
 });
 
 test("fails closed when the release executable is missing", (t) => {
@@ -178,5 +258,30 @@ test("workflow records provenance after package verification and uploads it", ()
   assert.match(
     workflow,
     /src-tauri\/target\/\$\{\{ matrix\.target \}\}\/release\/bundle\/provenance\/windows-build-provenance\.json/,
+  );
+});
+
+test("Windows acceptance selects one schema-v2 installer by hash", () => {
+  const runbook = readFileSync(runbookPath, "utf8").replace(/\r\n?/g, "\n");
+
+  assert.match(runbook, /\$Provenance\.schemaVersion -ne 2/);
+  assert.match(
+    runbook,
+    /\$_\.sha256 -eq \$ActualInstallerSha256\.ToLowerInvariant\(\)/,
+  );
+  assert.match(runbook, /\$InstallerMatches\.Count -ne 1/);
+  assert.match(runbook, /Unsupported installer extension/);
+  assert.match(
+    runbook,
+    /\$SelectedInstaller\.expectedInstalledExecutable\.sha256/,
+  );
+  assert.match(
+    runbook,
+    /\$SelectedInstaller\.expectedInstalledExecutable\.bytes/,
+  );
+  assert.match(runbook, /tauriBundleTypeMarkerV1/);
+  assert.match(
+    runbook,
+    /must not be used as their expected installed-file hash/,
   );
 });

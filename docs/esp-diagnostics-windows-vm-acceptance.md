@@ -25,7 +25,7 @@ Fill this table from the exact-head GitHub workflow and transferred package. A b
 | Installer filename and SHA-256 | `TBD` |
 | Installer Authenticode status and signer | `TBD` |
 | MSI ProductVersion, ProductCode, and UpgradeCode, or NSIS ProductVersion | `TBD` |
-| Expected installed executable SHA-256 from exact-head provenance | `TBD` |
+| Expected installed executable bytes and SHA-256 from the selected installer provenance entry | `TBD` |
 | Installed executable path and actual SHA-256 | `TBD` |
 | This runbook commit | `TBD` |
 | Tester, VM, Windows build, and UTC start | `TBD` |
@@ -35,16 +35,48 @@ On the VM:
 ```powershell
 $Installer = '<transferred exact-head MSI or NSIS package>'
 $ExpectedInstallerSha256 = '<value from exact-head CI evidence>'
+$ProvenancePath = '<transferred provenance/windows-build-provenance.json>'
+$InstallerItem = Get-Item -LiteralPath $Installer
 $ActualInstallerSha256 = (Get-FileHash -LiteralPath $Installer -Algorithm SHA256).Hash
 if ($ActualInstallerSha256 -ne $ExpectedInstallerSha256) {
     throw "Installer hash mismatch: $ActualInstallerSha256"
+}
+
+$Provenance = Get-Content -LiteralPath $ProvenancePath -Raw |
+    ConvertFrom-Json
+if ($Provenance.schemaVersion -ne 2) {
+    throw "Unsupported Windows provenance schema: $($Provenance.schemaVersion)"
+}
+$InstallerMatches = @($Provenance.installers | Where-Object {
+    $_.sha256 -eq $ActualInstallerSha256.ToLowerInvariant()
+})
+if ($InstallerMatches.Count -ne 1) {
+    throw "Expected exactly one provenance installer match; found $($InstallerMatches.Count)"
+}
+$SelectedInstaller = $InstallerMatches[0]
+if ([int64]$SelectedInstaller.bytes -ne $InstallerItem.Length) {
+    throw 'Installer size does not match its provenance entry.'
+}
+$ExpectedBundleType = if ($InstallerItem.Extension -ieq '.msi') {
+    'msi'
+}
+elseif ($InstallerItem.Extension -ieq '.exe') {
+    'nsis'
+}
+else {
+    throw "Unsupported installer extension: $($InstallerItem.Extension)"
+}
+if ($SelectedInstaller.bundleType -ne $ExpectedBundleType) {
+    throw "Installer bundle type mismatch: $($SelectedInstaller.bundleType)"
+}
+if ($SelectedInstaller.expectedInstalledExecutable.derivation -ne 'tauriBundleTypeMarkerV1') {
+    throw 'Unsupported installed-executable provenance derivation.'
 }
 
 Get-AuthenticodeSignature -LiteralPath $Installer |
     Select-Object Status, StatusMessage,
         @{Name='Signer';Expression={$_.SignerCertificate.Subject}}
 
-$InstallerItem = Get-Item -LiteralPath $Installer
 if ($InstallerItem.Extension -ieq '.msi') {
     $WindowsInstaller = New-Object -ComObject WindowsInstaller.Installer
     $Database = $WindowsInstaller.GetType().InvokeMember(
@@ -93,16 +125,21 @@ else {
 
 # Set after installation.
 $Exe = '<installed Full CMTrace Open executable>'
-$ExpectedExeSha256 = '<sha256 from provenance/windows-build-provenance.json>'
+$ExpectedExeSha256 = [string]$SelectedInstaller.expectedInstalledExecutable.sha256
+$ExpectedExeBytes = [int64]$SelectedInstaller.expectedInstalledExecutable.bytes
+$ExeItem = Get-Item -LiteralPath $Exe
+if ($ExeItem.Length -ne $ExpectedExeBytes) {
+    throw "Installed executable size mismatch: $($ExeItem.Length)"
+}
 $ActualExeSha256 = (Get-FileHash -LiteralPath $Exe -Algorithm SHA256).Hash
 if ($ActualExeSha256 -ne $ExpectedExeSha256) {
     throw "Installed executable hash mismatch: $ActualExeSha256"
 }
-(Get-Item -LiteralPath $Exe).VersionInfo |
+$ExeItem.VersionInfo |
     Select-Object FileVersion, ProductVersion
 ```
 
-Record an unsigned CI package as unsigned; never describe it as signed. The artifact must include `provenance/windows-build-provenance.json`. On a pull request, `sourceCommit` is the exact pushed branch head while `buildCommit` is GitHub's tested synthetic merge commit; on a main-branch push they are the same. Record both, verify that the workflow run belongs to that source head, and make the target, release-executable hash, installer hash, and installed executable hash agree. Separately record the MSI/NSIS properties from the transferred package and confirm its ProductVersion matches the manifest's `packageVersion`; ProductCode and UpgradeCode are local package metadata, not fields claimed by the provenance manifest. A missing or ambiguous provenance file blocks acceptance even if the displayed product version is correct.
+Record an unsigned CI package as unsigned; never describe it as signed. The artifact must include `provenance/windows-build-provenance.json`. On a pull request, `sourceCommit` is the exact pushed branch head while `buildCommit` is GitHub's tested synthetic merge commit; on a main-branch push they are the same. Record both and verify that the workflow run belongs to that source head. Select exactly one `installers[]` entry by the already-verified installer SHA-256, require its size and `bundleType` to match the transferred package, and compare the installed executable with that same entry's `expectedInstalledExecutable` size and SHA-256. That expectation is derived fail-closed from the exact standalone executable by applying Tauri's installer-specific bundle marker and is labeled `tauriBundleTypeMarkerV1`. The top-level `releaseExecutable` describes the standalone `UNK`-stamped Tauri build output; it intentionally differs from the MSI (`MSI`) and NSIS (`NSS`) installed executables and must not be used as their expected installed-file hash. Separately record the MSI/NSIS properties from the transferred package and confirm its ProductVersion matches the manifest's `packageVersion`; ProductCode and UpgradeCode are local package metadata, not fields claimed by the provenance manifest. A missing, schema-v1, or ambiguous provenance file blocks acceptance even if the displayed product version is correct.
 
 ### Tools under test
 
