@@ -245,6 +245,15 @@ impl BundleStagingArea {
             .metadata()
             .map_err(|error| ArtifactStageFailure::failed(error.to_string()))?
             .len();
+        self.stage_opened_artifact(source, relative, source_size)
+    }
+
+    fn stage_opened_artifact<R: Read>(
+        &mut self,
+        source: R,
+        relative: &Path,
+        source_size: u64,
+    ) -> Result<PathBuf, ArtifactStageFailure> {
         if source_size > MAX_ARCHIVE_FILE_BYTES {
             return Err(ArtifactStageFailure::failed(format!(
                 "{} is {source_size} bytes; per-artifact maximum is {MAX_ARCHIVE_FILE_BYTES}",
@@ -262,25 +271,44 @@ impl BundleStagingArea {
 
         let stage_index = self.next_stage_index;
         self.next_stage_index = self.next_stage_index.saturating_add(1);
+        let file_name = relative.file_name().ok_or_else(|| {
+            ArtifactStageFailure::failed("artifact path does not contain a file name")
+        })?;
         let stage_directory = self
             .temp_dir
             .path()
             .join(format!("artifact-{stage_index:03}"));
         fs::create_dir(&stage_directory)
             .map_err(|error| ArtifactStageFailure::failed(error.to_string()))?;
-        let file_name = relative.file_name().ok_or_else(|| {
-            ArtifactStageFailure::failed("artifact path does not contain a file name")
-        })?;
         let staged_path = stage_directory.join(file_name);
-        let mut output = OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .open(&staged_path)
-            .map_err(|error| ArtifactStageFailure::failed(error.to_string()))?;
-        let written = copy_staged_artifact_exact(source, &mut output, relative, source_size)?;
-        output
-            .flush()
-            .map_err(|error| ArtifactStageFailure::failed(error.to_string()))?;
+        let staged: Result<u64, ArtifactStageFailure> = (|| {
+            let mut output = OpenOptions::new()
+                .create_new(true)
+                .write(true)
+                .open(&staged_path)
+                .map_err(|error| ArtifactStageFailure::failed(error.to_string()))?;
+            let written = copy_staged_artifact_exact(source, &mut output, relative, source_size)?;
+            output
+                .flush()
+                .map_err(|error| ArtifactStageFailure::failed(error.to_string()))?;
+            Ok(written)
+        })();
+        let written = match staged {
+            Ok(written) => written,
+            Err(mut failure) => {
+                if let Err(cleanup_error) = fs::remove_dir_all(&stage_directory) {
+                    if cleanup_error.kind() != std::io::ErrorKind::NotFound {
+                        self.staged_bytes = self.input_limit;
+                        failure.cumulative_limit = true;
+                        failure.detail = format!(
+                            "{}; failed staging residue could not be removed ({cleanup_error}), so bounded intake stopped",
+                            failure.detail
+                        );
+                    }
+                }
+                return Err(failure);
+            }
+        };
         self.staged_bytes = self.staged_bytes.saturating_add(written);
         self.staged_files = self.staged_files.saturating_add(1);
         Ok(staged_path)
@@ -2526,6 +2554,39 @@ mod tests {
         assert!(failure.detail.contains("evidence/truncated.log"));
         assert!(failure.detail.contains("verified size was 8 bytes"));
         assert!(failure.detail.contains("ended after 4 bytes"));
+    }
+
+    #[test]
+    fn failed_staging_copies_leave_no_residue_or_uncharged_budget() {
+        let root = tempfile::tempdir().expect("bundle root");
+        fs::write(root.path().join("valid.log"), b"123456").expect("write valid artifact");
+        let root = root.path().canonicalize().expect("canonical bundle root");
+        let mut staging = BundleStagingArea::new_with_input_limit(8).expect("staging area");
+
+        for (name, bytes, verified_size) in [
+            ("truncated.log", b"1234".as_slice(), 8),
+            ("grown.log", b"12345".as_slice(), 4),
+        ] {
+            staging
+                .stage_opened_artifact(std::io::Cursor::new(bytes), Path::new(name), verified_size)
+                .expect_err("unstable source must not become a staged artifact");
+
+            assert_eq!(staging.staged_bytes, 0);
+            assert_eq!(staging.staged_files, 0);
+            assert_eq!(
+                fs::read_dir(staging.temp_dir.path())
+                    .expect("read staging root")
+                    .count(),
+                0,
+                "failed copy must not leave staged residue"
+            );
+        }
+
+        staging
+            .stage(&root, Path::new("valid.log"))
+            .expect("failed copies must not consume the valid artifact budget");
+        assert_eq!(staging.staged_bytes, 6);
+        assert_eq!(staging.staged_files, 1);
     }
 
     #[cfg(unix)]
