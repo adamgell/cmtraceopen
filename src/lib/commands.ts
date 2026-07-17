@@ -8,7 +8,11 @@ import type {
   ParseResult,
   WorkspaceId,
 } from "../types/log";
-import type { EvidenceArtifactPreview, EvidenceBundleDetails, EvidenceArtifactIntakeKind } from "../types/evidence";
+import type {
+  EvidenceArtifactPreview,
+  EvidenceBundleDetails,
+  EvidenceArtifactIntakeKind,
+} from "../types/evidence";
 import type { RegistryParseResult } from "../types/registry";
 import type { IntuneAnalysisResult } from "../workspaces/intune/types";
 import type { SysmonAnalysisResult } from "../workspaces/sysmon/types";
@@ -70,12 +74,18 @@ export function getSafeErrorMessage(
   return fallback;
 }
 
-function normalizeCommandInvokeError(commandName: string, error: unknown): Error {
+function normalizeCommandInvokeError(
+  commandName: string,
+  error: unknown,
+): Error {
   const message = getSafeErrorMessage(
     error,
     `Command '${commandName}' failed.`,
   );
-  const missingCommandPattern = new RegExp(`command\\s+${commandName}\\s+not found`, "i");
+  const missingCommandPattern = new RegExp(
+    `command\\s+${commandName}\\s+not found`,
+    "i",
+  );
 
   let normalizedMessage = message;
   if (missingCommandPattern.test(message)) {
@@ -87,7 +97,10 @@ function normalizeCommandInvokeError(commandName: string, error: unknown): Error
   return normalizedError;
 }
 
-async function invokeCommand<T>(commandName: string, args?: Record<string, unknown>): Promise<T> {
+async function invokeCommand<T>(
+  commandName: string,
+  args?: Record<string, unknown>,
+): Promise<T> {
   try {
     return await invoke<T>(commandName, args);
   } catch (error) {
@@ -105,20 +118,24 @@ export async function parseFilesBatch(paths: string[]): Promise<ParseResult[]> {
   return invokeCommand<ParseResult[]>("parse_files_batch", { paths });
 }
 
-export async function listLogFolder(path: string): Promise<FolderListingResult> {
+export async function listLogFolder(
+  path: string,
+): Promise<FolderListingResult> {
   return invokeCommand<FolderListingResult>("list_log_folder", { path });
 }
 
 export async function inspectEvidenceBundle(
-  path: string
+  path: string,
 ): Promise<EvidenceBundleDetails> {
-  return invokeCommand<EvidenceBundleDetails>("inspect_evidence_bundle", { path });
+  return invokeCommand<EvidenceBundleDetails>("inspect_evidence_bundle", {
+    path,
+  });
 }
 
 export async function inspectEvidenceArtifact(
   path: string,
   intakeKind: EvidenceArtifactIntakeKind,
-  originPath?: string | null
+  originPath?: string | null,
 ): Promise<EvidenceArtifactPreview> {
   return invokeCommand<EvidenceArtifactPreview>("inspect_evidence_artifact", {
     path,
@@ -127,7 +144,9 @@ export async function inspectEvidenceArtifact(
   });
 }
 
-export async function parseRegistryFile(path: string): Promise<RegistryParseResult> {
+export async function parseRegistryFile(
+  path: string,
+): Promise<RegistryParseResult> {
   return invokeCommand<RegistryParseResult>("parse_registry_file", { path });
 }
 
@@ -135,7 +154,9 @@ export async function getKnownLogSources(): Promise<KnownSourceMetadata[]> {
   return invokeCommand<KnownSourceMetadata[]>("get_known_log_sources");
 }
 
-export async function openLogSourceFile(source: LogSource): Promise<ParseResult> {
+export async function openLogSourceFile(
+  source: LogSource,
+): Promise<ParseResult> {
   if (source.kind === "file") {
     return openLogFile(source.path);
   }
@@ -145,12 +166,12 @@ export async function openLogSourceFile(source: LogSource): Promise<ParseResult>
   }
 
   throw new Error(
-    `Source kind '${source.kind}' does not resolve to a single file path.`
+    `Source kind '${source.kind}' does not resolve to a single file path.`,
   );
 }
 
 export async function listLogSourceFolder(
-  source: LogSource
+  source: LogSource,
 ): Promise<FolderListingResult> {
   if (source.kind === "folder") {
     return listLogFolder(source.path);
@@ -161,18 +182,20 @@ export async function listLogSourceFolder(
   }
 
   throw new Error(
-    `Source kind '${source.kind}' does not resolve to a folder path.`
+    `Source kind '${source.kind}' does not resolve to a folder path.`,
   );
 }
 
 export async function openLogFolderAggregate(
-  path: string
+  path: string,
 ): Promise<AggregateParseResult> {
-  return invokeCommand<AggregateParseResult>("open_log_folder_aggregate", { path });
+  return invokeCommand<AggregateParseResult>("open_log_folder_aggregate", {
+    path,
+  });
 }
 
 export async function openLogSourceFolderAggregate(
-  source: LogSource
+  source: LogSource,
 ): Promise<AggregateParseResult> {
   if (source.kind === "folder") {
     return openLogFolderAggregate(source.path);
@@ -183,7 +206,7 @@ export async function openLogSourceFolderAggregate(
   }
 
   throw new Error(
-    `Source kind '${source.kind}' does not resolve to a folder path.`
+    `Source kind '${source.kind}' does not resolve to a folder path.`,
   );
 }
 
@@ -192,9 +215,15 @@ export async function startTail(
   format: LogFormat,
   byteOffset: number,
   nextId: number,
-  nextLine: number
+  nextLine: number,
 ): Promise<void> {
-  return invokeCommand<void>("start_tail", { path, format, byteOffset, nextId, nextLine });
+  return invokeCommand<void>("start_tail", {
+    path,
+    format,
+    byteOffset,
+    nextId,
+    nextLine,
+  });
 }
 
 export async function stopTail(path: string): Promise<void> {
@@ -212,7 +241,7 @@ export async function resumeTail(path: string): Promise<void> {
 export async function analyzeIntuneLogs(
   path: string,
   requestId: string,
-  options?: AnalyzeIntuneLogsOptions & { graphApiEnabled?: boolean }
+  options?: AnalyzeIntuneLogsOptions & { graphApiEnabled?: boolean },
 ): Promise<IntuneAnalysisResult> {
   return invokeCommand<IntuneAnalysisResult>("analyze_intune_logs", {
     path,
@@ -225,7 +254,7 @@ export async function analyzeIntuneLogs(
 export async function analyzeSysmonLogs(
   path: string,
   requestId: string,
-  options?: { includeLiveEventLogs?: boolean }
+  options?: { includeLiveEventLogs?: boolean },
 ): Promise<SysmonAnalysisResult> {
   return invokeCommand<SysmonAnalysisResult>("analyze_sysmon_logs", {
     path,
@@ -236,7 +265,7 @@ export async function analyzeSysmonLogs(
 
 export async function analyzeDsregcmd(
   input: string,
-  bundlePath?: string | null
+  bundlePath?: string | null,
 ): Promise<DsregcmdAnalysisResult> {
   return invokeCommand<DsregcmdAnalysisResult>("analyze_dsregcmd", {
     input,
@@ -249,21 +278,23 @@ export async function captureDsregcmd(): Promise<DsregcmdCaptureResult> {
 }
 
 export async function inspectPathKind(
-  path: string
+  path: string,
 ): Promise<"file" | "folder" | "unknown"> {
-  return invokeCommand<"file" | "folder" | "unknown">("inspect_path_kind", { path });
+  return invokeCommand<"file" | "folder" | "unknown">("inspect_path_kind", {
+    path,
+  });
 }
 
 export async function writeTextOutputFile(
   path: string,
-  contents: string
+  contents: string,
 ): Promise<void> {
   return invokeCommand<void>("write_text_output_file", { path, contents });
 }
 
 export async function loadDsregcmdSource(
   kind: "file" | "folder",
-  path: string
+  path: string,
 ): Promise<DsregcmdResolvedSource> {
   return invokeCommand<DsregcmdResolvedSource>("load_dsregcmd_source", {
     kind,
@@ -273,6 +304,10 @@ export async function loadDsregcmdSource(
 
 export async function getInitialFilePaths(): Promise<string[]> {
   return invokeCommand<string[]>("get_initial_file_paths");
+}
+
+export async function getInitialWorkspace(): Promise<WorkspaceId | null> {
+  return invokeCommand<WorkspaceId | null>("get_initial_workspace");
 }
 
 export async function getAvailableWorkspaces(): Promise<WorkspaceId[]> {
@@ -327,15 +362,20 @@ export async function collectDnsDhcpFromDomain(
   outputRoot?: string,
   servers?: string[],
 ): Promise<DnsDhcpCollectionResult> {
-  return invokeCommand<DnsDhcpCollectionResult>("collect_dns_dhcp_from_domain", {
-    requestId,
-    outputRoot: outputRoot ?? null,
-    servers: servers ?? null,
-  });
+  return invokeCommand<DnsDhcpCollectionResult>(
+    "collect_dns_dhcp_from_domain",
+    {
+      requestId,
+      outputRoot: outputRoot ?? null,
+      servers: servers ?? null,
+    },
+  );
 }
 
 export async function getFileAssociationPromptStatus(): Promise<FileAssociationPromptStatus> {
-  return invokeCommand<FileAssociationPromptStatus>("get_file_association_prompt_status");
+  return invokeCommand<FileAssociationPromptStatus>(
+    "get_file_association_prompt_status",
+  );
 }
 
 export async function associateLogFilesWithApp(): Promise<void> {
@@ -343,13 +383,17 @@ export async function associateLogFilesWithApp(): Promise<void> {
 }
 
 export async function setFileAssociationPromptSuppressed(
-  suppressed: boolean
+  suppressed: boolean,
 ): Promise<void> {
-  return invokeCommand<void>("set_file_association_prompt_suppressed", { suppressed });
+  return invokeCommand<void>("set_file_association_prompt_suppressed", {
+    suppressed,
+  });
 }
 
 export async function getSystemDateTimePreferences(): Promise<SystemDateTimePreferences> {
-  return invokeCommand<SystemDateTimePreferences>("get_system_date_time_preferences");
+  return invokeCommand<SystemDateTimePreferences>(
+    "get_system_date_time_preferences",
+  );
 }
 
 // --- Diagnostics Collection ---
@@ -485,7 +529,9 @@ export async function graphSignOut(): Promise<void> {
   return invokeCommand<void>("graph_sign_out");
 }
 
-export async function graphResolveGuids(guids: string[]): Promise<GraphResolutionResult> {
+export async function graphResolveGuids(
+  guids: string[],
+): Promise<GraphResolutionResult> {
   return invokeCommand<GraphResolutionResult>("graph_resolve_guids", { guids });
 }
 
@@ -526,18 +572,26 @@ export async function macosListPackages(): Promise<MacosPackagesResult> {
   return invokeCommand<MacosPackagesResult>("macos_list_packages");
 }
 
-export async function macosGetPackageInfo(packageId: string): Promise<MacosPackageInfo> {
-  return invokeCommand<MacosPackageInfo>("macos_get_package_info", { packageId });
+export async function macosGetPackageInfo(
+  packageId: string,
+): Promise<MacosPackageInfo> {
+  return invokeCommand<MacosPackageInfo>("macos_get_package_info", {
+    packageId,
+  });
 }
 
-export async function macosGetPackageFiles(packageId: string): Promise<MacosPackageFiles> {
-  return invokeCommand<MacosPackageFiles>("macos_get_package_files", { packageId });
+export async function macosGetPackageFiles(
+  packageId: string,
+): Promise<MacosPackageFiles> {
+  return invokeCommand<MacosPackageFiles>("macos_get_package_files", {
+    packageId,
+  });
 }
 
 export async function macosQueryUnifiedLog(
   presetId: string,
   timeRangeMinutes: number,
-  resultCap: number
+  resultCap: number,
 ): Promise<MacosUnifiedLogResult> {
   const now = new Date();
   const start = new Date(now.getTime() - timeRangeMinutes * 60 * 1000);
@@ -556,7 +610,7 @@ export async function macosQueryUnifiedLog(
 import type { SecureBootAnalysisResult } from "../workspaces/secureboot/types";
 
 export async function analyzeSecureBoot(
-  path?: string | null
+  path?: string | null,
 ): Promise<SecureBootAnalysisResult> {
   return invokeCommand<SecureBootAnalysisResult>("analyze_secureboot", {
     path: path ?? null,
@@ -568,12 +622,15 @@ export async function rescanSecureBoot(): Promise<SecureBootAnalysisResult> {
 }
 
 export async function runSecureBootDetection(): Promise<SecureBootAnalysisResult> {
-  return invokeCommand<SecureBootAnalysisResult>("run_secureboot_detection", {});
+  return invokeCommand<SecureBootAnalysisResult>(
+    "run_secureboot_detection",
+    {},
+  );
 }
 
 export async function runSecureBootRemediation(): Promise<SecureBootAnalysisResult> {
   return invokeCommand<SecureBootAnalysisResult>(
     "run_secureboot_remediation",
-    {}
+    {},
   );
 }

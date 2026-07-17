@@ -10,7 +10,8 @@ pub struct SystemDateTimePreferences {
 }
 
 #[tauri::command]
-pub fn get_system_date_time_preferences() -> Result<SystemDateTimePreferences, crate::error::AppError> {
+pub fn get_system_date_time_preferences(
+) -> Result<SystemDateTimePreferences, crate::error::AppError> {
     #[cfg(target_os = "windows")]
     {
         use winreg::enums::HKEY_CURRENT_USER;
@@ -25,14 +26,22 @@ pub fn get_system_date_time_preferences() -> Result<SystemDateTimePreferences, c
                 ))
             })?;
 
-        let date_pattern: String = key
-            .get_value("sShortDate")
-            .map_err(|error| crate::error::AppError::Internal(format!("failed to read Windows short date format: {}", error)))?;
+        let date_pattern: String = key.get_value("sShortDate").map_err(|error| {
+            crate::error::AppError::Internal(format!(
+                "failed to read Windows short date format: {}",
+                error
+            ))
+        })?;
 
         let time_pattern: String = key
             .get_value("sTimeFormat")
             .or_else(|_| key.get_value("sShortTime"))
-            .map_err(|error| crate::error::AppError::Internal(format!("failed to read Windows time format: {}", error)))?;
+            .map_err(|error| {
+                crate::error::AppError::Internal(format!(
+                    "failed to read Windows time format: {}",
+                    error
+                ))
+            })?;
 
         let am_designator = key
             .get_value::<String, _>("s1159")

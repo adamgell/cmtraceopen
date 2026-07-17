@@ -54,10 +54,13 @@ pub async fn evtx_query_channels(
                 let app_ref = &app;
                 let ch_name = channel.clone();
                 match super::live::query_channel_with_progress(channel, max_events, |fetched, _| {
-                    let _ = app_ref.emit("evtx-query-progress", EvtxQueryProgress {
-                        channel: ch_name.clone(),
-                        fetched,
-                    });
+                    let _ = app_ref.emit(
+                        "evtx-query-progress",
+                        EvtxQueryProgress {
+                            channel: ch_name.clone(),
+                            fetched,
+                        },
+                    );
                 }) {
                     Ok(records) => {
                         channel_infos.push(super::models::EvtxChannelInfo {
@@ -68,7 +71,11 @@ pub async fn evtx_query_channels(
                         all_records.extend(records);
                     }
                     Err(e) => {
-                        log::warn!("event=evtx_channel_query_error channel=\"{}\" error=\"{}\"", channel, e);
+                        log::warn!(
+                            "event=evtx_channel_query_error channel=\"{}\" error=\"{}\"",
+                            channel,
+                            e
+                        );
                         error_messages.push(format!("{}: {}", channel, e));
                         // Still include channel in results with 0 events so frontend knows it was attempted
                         channel_infos.push(super::models::EvtxChannelInfo {

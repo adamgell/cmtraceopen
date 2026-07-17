@@ -20,6 +20,7 @@ import {
   getEspEvidenceDockMaxHeight,
   useEspDiagnosticsStore,
 } from "./esp-diagnostics-store";
+import { focusEspLiveEvidenceTrigger } from "./live-evidence-focus";
 import { LiveEvidenceTable } from "./LiveEvidenceTable";
 import type { EspDiagnosticsSnapshot } from "./types";
 
@@ -173,12 +174,27 @@ export function LiveEvidenceDock({ snapshot }: LiveEvidenceDockProps) {
     stopPointerResizeRef.current = cleanup;
   };
 
+  const collapseDock = () => {
+    if (dockRef.current?.contains(document.activeElement)) {
+      focusEspLiveEvidenceTrigger();
+    }
+    setViewMode("collapsed");
+  };
+
+  const collapseDockFromKeyboard = (event: KeyboardEvent<HTMLElement>) => {
+    if (event.key !== "Escape") return;
+    event.preventDefault();
+    event.stopPropagation();
+    collapseDock();
+  };
+
   return (
     <section
       ref={dockRef}
       role="region"
       aria-label="Live evidence and logs"
       data-view-mode={viewMode}
+      onKeyDownCapture={collapseDockFromKeyboard}
       style={{
         position: isFull ? "absolute" : "relative",
         inset: isFull ? 0 : undefined,
@@ -324,7 +340,7 @@ export function LiveEvidenceDock({ snapshot }: LiveEvidenceDockProps) {
             appearance="subtle"
             icon={<DismissRegular />}
             aria-label="Close live logs"
-            onClick={() => setViewMode("collapsed")}
+            onClick={collapseDock}
           />
         </div>
       </header>

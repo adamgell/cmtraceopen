@@ -4,6 +4,7 @@ import {
   ESP_EVIDENCE_DOCK_DEFAULT_HEIGHT,
   useEspDiagnosticsStore,
 } from "./esp-diagnostics-store";
+import { EspToolbarAction } from "./EspToolbarAction";
 import { LiveEvidenceDock } from "./LiveEvidenceDock";
 import type {
   EspDiagnosticsSnapshot,
@@ -203,6 +204,99 @@ afterEach(() => {
 });
 
 describe("LiveEvidenceDock", () => {
+  it("returns focus to the persistent live-log trigger when Close collapses the focused dock", () => {
+    useEspDiagnosticsStore.getState().setEvidenceViewMode("docked");
+    render(
+      <>
+        <EspToolbarAction />
+        <LiveEvidenceDock snapshot={snapshot(baseRecords)} />
+      </>,
+    );
+
+    const closeButton = screen.getByRole("button", {
+      name: "Close live logs",
+    });
+    closeButton.focus();
+    expect(closeButton).toHaveFocus();
+
+    fireEvent.click(closeButton);
+
+    expect(
+      screen.queryByRole("region", { name: "Live evidence and logs" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /^Open live logs,/ }),
+    ).toHaveFocus();
+  });
+
+  it("collapses a focused full-page dock with Escape and returns focus to the trigger", () => {
+    useEspDiagnosticsStore.getState().setEvidenceViewMode("full");
+    render(
+      <>
+        <EspToolbarAction />
+        <LiveEvidenceDock snapshot={snapshot(baseRecords)} />
+      </>,
+    );
+
+    const restoreButton = screen.getByRole("button", {
+      name: "Restore docked live logs",
+    });
+    restoreButton.focus();
+
+    fireEvent.keyDown(restoreButton, { key: "Escape" });
+
+    expect(
+      screen.queryByRole("region", { name: "Live evidence and logs" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /^Open live logs,/ }),
+    ).toHaveFocus();
+  });
+
+  it("does not steal focus when another control collapses the dock", () => {
+    useEspDiagnosticsStore.getState().setEvidenceViewMode("docked");
+    render(
+      <>
+        <button type="button">Outside control</button>
+        <EspToolbarAction />
+        <LiveEvidenceDock snapshot={snapshot(baseRecords)} />
+      </>,
+    );
+
+    const outsideControl = screen.getByRole("button", {
+      name: "Outside control",
+    });
+    outsideControl.focus();
+
+    act(() =>
+      useEspDiagnosticsStore.getState().setEvidenceViewMode("collapsed"),
+    );
+
+    expect(outsideControl).toHaveFocus();
+    expect(
+      screen.queryByRole("region", { name: "Live evidence and logs" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("keeps focus on the persistent trigger when it hides the dock", () => {
+    useEspDiagnosticsStore.getState().setEvidenceViewMode("docked");
+    render(
+      <>
+        <EspToolbarAction />
+        <LiveEvidenceDock snapshot={snapshot(baseRecords)} />
+      </>,
+    );
+
+    const trigger = screen.getByRole("button", { name: /^Hide live logs,/ });
+    trigger.focus();
+    fireEvent.click(trigger);
+
+    expect(trigger).toHaveFocus();
+    expect(
+      screen.queryByRole("region", { name: "Live evidence and logs" }),
+    ).not.toBeInTheDocument();
+  });
+
   it("starts collapsed, resizes accessibly, expands, restores, and collapses", () => {
     render(<LiveEvidenceDock snapshot={snapshot(baseRecords)} />);
     expect(
@@ -975,6 +1069,85 @@ describe("LiveEvidenceTable", () => {
     expect(
       screen.queryByText("Normalized installer failure"),
     ).not.toBeInTheDocument();
+  });
+
+  it("masks sensitive raw messages while leaving public log text verbatim", () => {
+    useEspDiagnosticsStore.getState().setEvidenceViewMode("docked");
+    const publicLine = "  Public  log\ttext stays unchanged  ";
+    const sensitiveLine = "operator@contoso.example tenant-secret-value";
+    render(
+      <LiveEvidenceDock
+        snapshot={snapshot([
+          record("public-record", publicLine),
+          record("sensitive-record", sensitiveLine, {
+            sensitivity: "sensitive",
+          }),
+        ])}
+      />,
+    );
+
+    const publicMessage = screen
+      .getAllByRole("cell")
+      .find((cell) => cell.getAttribute("title") === publicLine);
+    if (!publicMessage) throw new Error("Expected the public raw message cell");
+    expect(publicMessage.textContent).toBe(publicLine);
+    expect(publicMessage).toHaveStyle({ whiteSpace: "pre" });
+
+    const maskedMessage = screen.getByText("Sensitive value · masked");
+    expect(maskedMessage).toBeVisible();
+    expect(maskedMessage).toHaveAttribute("title", "Sensitive value · masked");
+    expect(screen.queryByText(sensitiveLine)).not.toBeInTheDocument();
+    expect(
+      screen
+        .getAllByRole("cell")
+        .some((cell) => cell.getAttribute("title") === sensitiveLine),
+    ).toBe(false);
+  });
+
+  it("retains linked evidence semantics and provenance after masking a sensitive message", () => {
+    useEspDiagnosticsStore.getState().setEvidenceViewMode("docked");
+    const linkedReference = {
+      evidenceId: "linked-sensitive-evidence",
+      sourceArtifactId: "mdm-events",
+    };
+    const evidence = snapshot([
+      record("sensitive-linked-record", "fatal tenant-secret-value", {
+        sensitivity: "sensitive",
+        evidence: [linkedReference],
+      }),
+    ]);
+    evidence.activity = [
+      {
+        entryId: "linked-activity",
+        timestamp: {
+          rawText: "2026-07-15T20:00:00.000Z",
+          originalOffset: "+00:00",
+          normalizedUtc: "2026-07-15T20:00:00.000Z",
+          kind: "utc",
+        },
+        kind: "registration",
+        title: "Linked registration evidence",
+        detail: null,
+        status: null,
+        evidence: [linkedReference],
+      },
+    ];
+
+    render(<LiveEvidenceDock snapshot={evidence} />);
+
+    const row = screen.getByTestId("live-evidence-row");
+    expect(row).toHaveTextContent("Sensitive value · masked");
+    expect(row).not.toHaveTextContent("tenant-secret-value");
+    expect(row).toHaveTextContent(/error/i);
+    expect(row).toHaveTextContent(/registration/i);
+
+    fireEvent.click(row);
+    const provenance = screen.getByRole("complementary", {
+      name: "Raw evidence provenance",
+    });
+    expect(provenance).toHaveTextContent("sensitive-linked-record");
+    expect(provenance).toHaveTextContent("AppWorkload.log");
+    expect(provenance).toHaveTextContent("Sensitivity sensitive");
   });
 
   it("pauses visual follow away from the bottom without pausing collection", () => {

@@ -445,7 +445,10 @@ mod tests {
         writeln!(file, "16/01/2024 09:30:00 Follow-up entry").expect("should append log line");
         drop(file);
 
-        let entries = reader.read_new_entries().expect("tail read should succeed").entries;
+        let entries = reader
+            .read_new_entries()
+            .expect("tail read should succeed")
+            .entries;
 
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].format, LogFormat::Timestamped);

@@ -501,6 +501,17 @@ pub fn discover_bounded_logs(input: &DiscoveryInput) -> DiscoveryResult {
     }
 
     for path in &input.active_process_logs {
+        if !is_local_absolute_process_log(path) {
+            path_failures.push(DiscoveryPathFailure {
+                path: path.clone(),
+                source_id: Some("active-process-log".to_string()),
+                origin: DiscoverySourceOrigin::ActiveProcess,
+                kind: DiscoveryPathFailureKind::OutsideAllowedRoot,
+                detail: "active installer logs must use a local absolute path; network, device, and relative paths are not probed"
+                    .to_string(),
+            });
+            continue;
+        }
         match safe_regular_file(path, None) {
             Ok((safe_path, metadata)) => candidates.push(candidate(
                 safe_path,
@@ -556,6 +567,19 @@ pub fn discover_bounded_logs(input: &DiscoveryInput) -> DiscoveryResult {
         path_failures: path_failures.failures,
         path_failures_truncated: path_failures.truncated,
     }
+}
+
+fn is_local_absolute_process_log(path: &Path) -> bool {
+    if !cfg!(target_os = "windows") {
+        return path.is_absolute();
+    }
+
+    let value = path.to_string_lossy();
+    let bytes = value.as_bytes();
+    bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && matches!(bytes[2], b'\\' | b'/')
 }
 
 fn collect_known_candidates(

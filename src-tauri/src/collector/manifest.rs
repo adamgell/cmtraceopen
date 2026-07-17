@@ -119,10 +119,10 @@ pub fn write_manifest(
     });
 
     let manifest_path = bundle_root.join("manifest.json");
-    let json_str = serde_json::to_string_pretty(&manifest)
-        .map_err(|e| crate::error::AppError::Internal(format!("failed to serialize manifest: {e}")))?;
-    fs::write(&manifest_path, json_str)
-        .map_err(crate::error::AppError::Io)?;
+    let json_str = serde_json::to_string_pretty(&manifest).map_err(|e| {
+        crate::error::AppError::Internal(format!("failed to serialize manifest: {e}"))
+    })?;
+    fs::write(&manifest_path, json_str).map_err(crate::error::AppError::Io)?;
 
     Ok(())
 }
@@ -138,7 +138,7 @@ pub fn write_notes(
     let hostname = hostname();
 
     let notes = format!(
-"# Evidence Collection Notes
+        "# Evidence Collection Notes
 
 - **Collected by:** CMTrace Open (Rust collector)
 - **Profile:** {} v{}
@@ -178,8 +178,7 @@ evidence/
     );
 
     let notes_path = bundle_root.join("notes.md");
-    fs::write(&notes_path, notes)
-        .map_err(crate::error::AppError::Io)?;
+    fs::write(&notes_path, notes).map_err(crate::error::AppError::Io)?;
 
     Ok(())
 }

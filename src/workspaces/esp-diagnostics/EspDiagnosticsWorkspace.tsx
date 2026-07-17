@@ -8,6 +8,7 @@ import {
 } from "@fluentui/react-icons";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
+  getEspDiagnosticsSession,
   getEspElevationState,
   startEspDiagnosticsSession,
   stopEspDiagnosticsSession,
@@ -33,8 +34,14 @@ import {
 } from "./index";
 import { LiveActivity } from "./LiveActivity";
 import { MsiexecStatus } from "./MsiexecStatus";
-import type { EspElevationState } from "./types";
+import type {
+  EspElevationState,
+  EspSessionState,
+  EspUpdateReason,
+} from "./types";
 import "./esp-diagnostics.css";
+
+const STARTING_SESSION_POLL_INTERVAL_MS = 100;
 
 const ELEVATION_PROBE_FALLBACK: EspElevationState = {
   isElevated: false,
@@ -55,6 +62,64 @@ function validElevationState(value: unknown): value is EspElevationState {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function updateReasonForSessionState(state: EspSessionState): EspUpdateReason {
+  switch (state) {
+    case "stopped":
+    case "completed":
+      return "stopped";
+    case "expired":
+      return "expired";
+    case "error":
+      return "error";
+    case "starting":
+    case "live":
+    case "stopping":
+      return "initialSnapshot";
+  }
+}
+
+function ownsStartingSession(requestId: string, sessionId: string): boolean {
+  const state = useEspDiagnosticsStore.getState();
+  return (
+    state.phase === "starting" &&
+    state.requestId === requestId &&
+    state.sessionId === sessionId
+  );
+}
+
+async function recoverStartingSession(
+  requestId: string,
+  sessionId: string,
+): Promise<void> {
+  while (ownsStartingSession(requestId, sessionId)) {
+    try {
+      const envelope = await getEspDiagnosticsSession(sessionId);
+      const store = useEspDiagnosticsStore.getState();
+      if (store.requestId !== requestId || store.sessionId !== sessionId) {
+        return;
+      }
+      store.applySessionUpdate({
+        ...envelope,
+        reason: updateReasonForSessionState(envelope.state),
+        emittedAtUtc: envelope.snapshot.generatedAtUtc,
+      });
+      if (envelope.state !== "starting") {
+        return;
+      }
+    } catch {
+      // A registered event listener can still complete startup. Retry only
+      // while this exact session remains the current Starting owner.
+    }
+
+    if (!ownsStartingSession(requestId, sessionId)) {
+      return;
+    }
+    await new Promise<void>((resolve) => {
+      window.setTimeout(resolve, STARTING_SESSION_POLL_INTERVAL_MS);
+    });
+  }
 }
 
 function normalizeSelection(
@@ -144,6 +209,9 @@ export function EspDiagnosticsWorkspace() {
         reason: "initialSnapshot",
         emittedAtUtc: envelope.snapshot.generatedAtUtc,
       });
+      if (envelope.state === "starting") {
+        void recoverStartingSession(requestId, envelope.sessionId);
+      }
     } catch (error) {
       store.fail(requestId, errorMessage(error));
     }

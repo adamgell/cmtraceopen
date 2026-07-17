@@ -16,6 +16,7 @@ import type {
   EspRawEvidenceRecord,
   EspTimelineEntry,
 } from "./types";
+import { displayEvidenceValue } from "./esp-view-model";
 
 type LiveEvidenceSeverity = "error" | "warning" | "info";
 
@@ -139,6 +140,11 @@ function rowForRecord(
 ): LiveEvidenceRecordRow {
   const timeline = timelineForRecord(record, timelineIndex);
   const rawMessage = observationValueText(record.rawValue);
+  const displayMessage = displayEvidenceValue(
+    rawMessage,
+    record.sensitivity,
+    false,
+  );
   const normalizedContext = timeline
     ? `${timeline.title} ${timeline.detail ?? ""}`
     : "";
@@ -157,7 +163,7 @@ function rowForRecord(
       timeline,
     ),
     component: timeline?.kind ?? record.provenance.sourceKind,
-    message: rawMessage,
+    message: displayMessage,
     order: recordRow?.order ?? fallbackOrder,
     sourceIds: [record.provenance.sourceArtifactId],
   };

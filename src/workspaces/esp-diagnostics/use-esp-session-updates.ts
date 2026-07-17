@@ -40,6 +40,7 @@ const SESSION_STATES = new Set<EspSessionState>([
 const UPDATE_REASONS = new Set<EspUpdateReason>([
   "initialSnapshot",
   "evidenceChanged",
+  "discoveryRefresh",
   "sourceAttached",
   "sourceReset",
   "stopped",

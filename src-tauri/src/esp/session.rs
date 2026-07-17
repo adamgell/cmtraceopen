@@ -7,7 +7,7 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex, TryLockError};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -36,6 +36,7 @@ pub enum EspSessionState {
     Stopping,
     Stopped,
     Expired,
+    #[serde(rename = "error")]
     Failed,
 }
 
@@ -48,10 +49,12 @@ impl EspSessionState {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum EspUpdateReason {
+    InitialSnapshot,
     EvidenceChanged,
     DiscoveryRefresh,
     Stopped,
     Expired,
+    #[serde(rename = "error")]
     Failed,
 }
 
@@ -208,6 +211,28 @@ pub trait EspSessionEventSink: Send + Sync {
     fn emit(&self, update: EspSessionUpdate) -> Result<(), String>;
 }
 
+#[cfg(debug_assertions)]
+#[doc(hidden)]
+pub trait EspSessionLifecycleProbe: Send + Sync {
+    fn before_cancellation_request(&self) {}
+
+    fn before_cancellation_transition_lock(&self) {}
+
+    fn cancellation_transition_waiting_for_publication(&self) {}
+
+    fn after_cancellation_transition(&self, _state: &EspSessionState) {}
+
+    fn after_publish_cancellation_sample(
+        &self,
+        _state: &EspSessionState,
+        _reason: &EspUpdateReason,
+        _cancellation: &EspCancellation,
+    ) {
+    }
+
+    fn before_update_delivery(&self, _update: &EspSessionUpdate) {}
+}
+
 #[derive(Clone)]
 pub struct EspSessionDependencies {
     clock: Arc<dyn EspSessionClock>,
@@ -219,6 +244,8 @@ pub struct EspSessionDependencies {
     tail_factory: Arc<dyn EspSessionTailFactory>,
     sink: Arc<dyn EspSessionEventSink>,
     live_supported: bool,
+    #[cfg(debug_assertions)]
+    lifecycle_probe: Option<Arc<dyn EspSessionLifecycleProbe>>,
 }
 
 impl EspSessionDependencies {
@@ -243,6 +270,8 @@ impl EspSessionDependencies {
             tail_factory,
             sink,
             live_supported: cfg!(target_os = "windows"),
+            #[cfg(debug_assertions)]
+            lifecycle_probe: None,
         }
     }
 
@@ -252,10 +281,21 @@ impl EspSessionDependencies {
         self.live_supported = live_supported;
         self
     }
+
+    #[cfg(debug_assertions)]
+    #[doc(hidden)]
+    pub fn with_lifecycle_probe_for_tests(
+        mut self,
+        lifecycle_probe: Arc<dyn EspSessionLifecycleProbe>,
+    ) -> Self {
+        self.lifecycle_probe = Some(lifecycle_probe);
+        self
+    }
 }
 
 pub struct EspSessionManager {
     dependencies: EspSessionDependencies,
+    start_shutdown_gate: Mutex<()>,
     control: Mutex<SessionControl>,
 }
 
@@ -263,6 +303,7 @@ impl EspSessionManager {
     pub fn new(dependencies: EspSessionDependencies) -> Self {
         Self {
             dependencies,
+            start_shutdown_gate: Mutex::new(()),
             control: Mutex::new(SessionControl::default()),
         }
     }
@@ -272,22 +313,22 @@ impl EspSessionManager {
         if !self.dependencies.live_supported {
             return Err(EspSessionError::UnsupportedPlatform);
         }
+        let _start_guard = self.start_shutdown_gate.lock().map_err(state_error)?;
 
         let session_id = Uuid::new_v4().to_string();
         self.reserve(&session_id, request_id)?;
 
         let reading = self.dependencies.clock.now();
-        let mut engine = SessionEngine::initialize(&self.dependencies, &reading);
-        let collection_completed_at_utc = self.dependencies.clock.now().utc;
-        let snapshot = engine.snapshot(&collection_completed_at_utc);
+        let starting_snapshot = EspDiagnosticsReducer::new(reading.utc).snapshot();
         let active = Arc::new(ActiveSession {
             session_id: session_id.clone(),
             request_id: request_id.to_string(),
             published: Mutex::new(PublishedSession {
-                sequence: 1,
-                state: EspSessionState::Live,
-                snapshot: snapshot.clone(),
+                sequence: 0,
+                state: EspSessionState::Starting,
+                snapshot: starting_snapshot.clone(),
             }),
+            publication_gate: Mutex::new(()),
             cancellation: Arc::new(EspCancellation::default()),
             activation: WorkerActivation::default(),
             worker: WorkerJoin::default(),
@@ -302,7 +343,7 @@ impl EspSessionManager {
             .spawn(move || {
                 failure_active.activation.wait(&failure_active.cancellation);
                 if catch_unwind(AssertUnwindSafe(|| {
-                    run_worker(engine, worker_active, worker_dependencies);
+                    run_worker(worker_active, worker_dependencies);
                 }))
                 .is_err()
                 {
@@ -331,18 +372,24 @@ impl EspSessionManager {
         }
 
         let mut control = self.control.lock().map_err(state_error)?;
-        if control
-            .reservation
-            .as_ref()
-            .map_or(true, |reservation| reservation.session_id != session_id)
+        let shutting_down = control.shutting_down;
+        if shutting_down
+            || control
+                .reservation
+                .as_ref()
+                .map_or(true, |reservation| reservation.session_id != session_id)
         {
             active.cancellation.cancel();
             active.activation.release();
             drop(control);
             join_active(&active)?;
-            return Err(EspSessionError::State {
-                message: "session reservation was lost before activation".to_string(),
-            });
+            return if shutting_down {
+                Err(shutting_down_error())
+            } else {
+                Err(EspSessionError::State {
+                    message: "session reservation was lost before activation".to_string(),
+                })
+            };
         }
         control.reservation = None;
         control.active = Some(Arc::clone(&active));
@@ -352,9 +399,9 @@ impl EspSessionManager {
         Ok(EspSessionEnvelope {
             session_id,
             request_id: request_id.to_string(),
-            sequence: 1,
-            state: EspSessionState::Live,
-            snapshot,
+            sequence: 0,
+            state: EspSessionState::Starting,
+            snapshot: starting_snapshot,
         })
     }
 
@@ -384,7 +431,7 @@ impl EspSessionManager {
         }
         .ok_or(EspSessionError::SessionNotFound)?;
 
-        active.cancellation.cancel();
+        active.cancel_and_mark_stopping(&self.dependencies)?;
         join_active(&active)?;
         let envelope = active.envelope()?;
 
@@ -405,14 +452,26 @@ impl EspSessionManager {
     /// event sink are torn down.
     pub fn shutdown(&self) -> Result<(), EspSessionError> {
         let active = {
+            let _shutdown_guard = self.start_shutdown_gate.lock().map_err(state_error)?;
             let mut control = self.control.lock().map_err(state_error)?;
+            control.shutting_down = true;
             control.reservation = None;
-            control.active.take()
+            control.active.clone()
         };
-        if let Some(active) = active {
-            active.cancellation.cancel();
+        if let Some(active) = &active {
+            active.cancel_and_mark_stopping(&self.dependencies)?;
             active.activation.release();
-            join_active(&active)?;
+            join_active(active)?;
+        }
+        let mut control = self.control.lock().map_err(state_error)?;
+        if let Some(active) = active {
+            if control
+                .active
+                .as_ref()
+                .is_some_and(|candidate| Arc::ptr_eq(candidate, &active))
+            {
+                control.active = None;
+            }
         }
         Ok(())
     }
@@ -421,6 +480,9 @@ impl EspSessionManager {
         loop {
             let stale = {
                 let mut control = self.control.lock().map_err(state_error)?;
+                if control.shutting_down {
+                    return Err(shutting_down_error());
+                }
                 if let Some(reservation) = &control.reservation {
                     return Err(EspSessionError::SessionConflict {
                         existing_session_id: reservation.session_id.clone(),
@@ -479,6 +541,7 @@ impl Drop for EspSessionManager {
 struct SessionControl {
     reservation: Option<SessionReservation>,
     active: Option<Arc<ActiveSession>>,
+    shutting_down: bool,
 }
 
 struct SessionReservation {
@@ -491,6 +554,7 @@ struct ActiveSession {
     session_id: String,
     request_id: String,
     published: Mutex<PublishedSession>,
+    publication_gate: Mutex<()>,
     cancellation: Arc<EspCancellation>,
     activation: WorkerActivation,
     worker: WorkerJoin,
@@ -513,6 +577,46 @@ impl ActiveSession {
             .lock()
             .map(|published| published.state.is_terminal())
             .map_err(state_error)
+    }
+
+    fn cancel_and_mark_stopping(
+        &self,
+        _dependencies: &EspSessionDependencies,
+    ) -> Result<(), EspSessionError> {
+        #[cfg(debug_assertions)]
+        if let Some(probe) = &_dependencies.lifecycle_probe {
+            probe.before_cancellation_request();
+            probe.before_cancellation_transition_lock();
+        }
+        let _publication_guard = match self.publication_gate.try_lock() {
+            Ok(guard) => guard,
+            Err(TryLockError::WouldBlock) => {
+                #[cfg(debug_assertions)]
+                if let Some(probe) = &_dependencies.lifecycle_probe {
+                    probe.cancellation_transition_waiting_for_publication();
+                }
+                self.publication_gate
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner())
+            }
+            Err(TryLockError::Poisoned(error)) => error.into_inner(),
+        };
+        let mut published = self.published.lock().map_err(state_error)?;
+        self.cancellation.cancel();
+        if matches!(
+            published.state,
+            EspSessionState::Starting | EspSessionState::Live
+        ) {
+            published.state = EspSessionState::Stopping;
+        }
+        #[cfg(debug_assertions)]
+        let state = published.state.clone();
+        drop(published);
+        #[cfg(debug_assertions)]
+        if let Some(probe) = &_dependencies.lifecycle_probe {
+            probe.after_cancellation_transition(&state);
+        }
+        Ok(())
     }
 }
 
@@ -576,11 +680,25 @@ struct SessionEngine {
 }
 
 impl SessionEngine {
-    fn initialize(dependencies: &EspSessionDependencies, reading: &EspClockReading) -> Self {
-        let provider_records = collect_provider_records(dependencies, &reading.utc);
+    fn initialize(
+        dependencies: &EspSessionDependencies,
+        reading: &EspClockReading,
+        cancellation: &EspCancellation,
+    ) -> Option<Self> {
+        let provider_records = collect_provider_records(dependencies, &reading.utc, cancellation)?;
+        if cancellation.is_cancelled() {
+            return None;
+        }
         let discovery = dependencies.discovery.discover(&reading.utc);
+        if cancellation.is_cancelled() {
+            return None;
+        }
         let mut tail = dependencies.tail_factory.create();
         let tail_batch = tail.reconcile(&discovery.sources, &reading.utc);
+        if cancellation.is_cancelled() {
+            tail.stop();
+            return None;
+        }
         let mut identity_allocator = EspEvidenceIdentityAllocator::new();
         let mut identity_rejections = EspEvidenceIdentityRejectionCounts::default();
         let provider_records = provider_records
@@ -626,7 +744,7 @@ impl SessionEngine {
         };
         engine.apply_tail_batch(tail_batch);
         engine.dirty = false;
-        engine
+        Some(engine)
     }
 
     fn snapshot(&mut self, requested_generated_at_utc: &str) -> EspDiagnosticsSnapshot {
@@ -674,9 +792,22 @@ impl SessionEngine {
         changed
     }
 
-    fn refresh(&mut self, dependencies: &EspSessionDependencies, reading: &EspClockReading) {
+    fn refresh(
+        &mut self,
+        dependencies: &EspSessionDependencies,
+        reading: &EspClockReading,
+        cancellation: &EspCancellation,
+    ) -> bool {
+        let Some(provider_records) =
+            collect_provider_records(dependencies, &reading.utc, cancellation)
+        else {
+            return false;
+        };
+        if cancellation.is_cancelled() {
+            return false;
+        }
         let mut previous = std::mem::take(&mut self.provider_records);
-        self.provider_records = collect_provider_records(dependencies, &reading.utc)
+        self.provider_records = provider_records
             .into_iter()
             .map(|(slot, records)| {
                 (
@@ -691,6 +822,9 @@ impl SessionEngine {
             })
             .collect();
         let discovery = dependencies.discovery.discover(&reading.utc);
+        if cancellation.is_cancelled() {
+            return false;
+        }
         self.discovery_coverage = reconcile_identified_records(
             std::mem::take(&mut self.discovery_coverage),
             discovery
@@ -703,12 +837,16 @@ impl SessionEngine {
         );
         self.sources = discovery.sources;
         let tail_batch = self.tail.reconcile(&self.sources, &reading.utc);
+        if cancellation.is_cancelled() {
+            return false;
+        }
         self.apply_tail_batch(tail_batch);
         self.pending_reason = EspUpdateReason::DiscoveryRefresh;
         self.dirty = true;
         while self.next_refresh <= reading.monotonic {
             self.next_refresh += DISCOVERY_INTERVAL;
         }
+        true
     }
 
     fn apply_tail_batch(&mut self, batch: EspTailEvidenceBatch) -> bool {
@@ -801,11 +939,52 @@ fn coherent_utc_timestamp<'a>(
     coherent
 }
 
-fn run_worker(
-    mut engine: SessionEngine,
-    active: Arc<ActiveSession>,
-    dependencies: EspSessionDependencies,
-) {
+fn run_worker(active: Arc<ActiveSession>, dependencies: EspSessionDependencies) {
+    if active.cancellation.is_cancelled() {
+        publish_current_snapshot(
+            &active,
+            &dependencies,
+            EspSessionState::Stopped,
+            EspUpdateReason::Stopped,
+        );
+        return;
+    }
+
+    let reading = dependencies.clock.now();
+    let Some(mut engine) = SessionEngine::initialize(&dependencies, &reading, &active.cancellation)
+    else {
+        publish_current_snapshot(
+            &active,
+            &dependencies,
+            EspSessionState::Stopped,
+            EspUpdateReason::Stopped,
+        );
+        return;
+    };
+    let collection_completed_at_utc = dependencies.clock.now().utc;
+    engine.advance_utc_high_water_mark(&collection_completed_at_utc);
+    let initial_snapshot = engine.snapshot(&collection_completed_at_utc);
+    if active.cancellation.is_cancelled() {
+        engine.stop_tail();
+        publish(
+            &active,
+            &dependencies,
+            EspSessionState::Stopped,
+            EspUpdateReason::Stopped,
+            initial_snapshot,
+            &collection_completed_at_utc,
+        );
+        return;
+    }
+    publish(
+        &active,
+        &dependencies,
+        EspSessionState::Live,
+        EspUpdateReason::InitialSnapshot,
+        initial_snapshot,
+        &collection_completed_at_utc,
+    );
+
     loop {
         let reading = dependencies.clock.now();
         if reading.monotonic.saturating_sub(engine.started_at) >= MAX_SESSION_DURATION {
@@ -864,10 +1043,22 @@ fn run_worker(
 
         let tail_changed = engine.poll_tail(&reading.utc);
         let refresh_due = reading.monotonic >= engine.next_refresh;
-        if refresh_due {
-            engine.refresh(&dependencies, &reading);
+        let refreshed =
+            refresh_due && engine.refresh(&dependencies, &reading, &active.cancellation);
+        if active.cancellation.is_cancelled() {
+            let stopped_at = dependencies.clock.now();
+            engine.stop_tail();
+            publish(
+                &active,
+                &dependencies,
+                EspSessionState::Stopped,
+                EspUpdateReason::Stopped,
+                engine.snapshot(&stopped_at.utc),
+                &stopped_at.utc,
+            );
+            return;
         }
-        if tail_changed || refresh_due {
+        if tail_changed || refreshed {
             let collection_completed_at_utc = dependencies.clock.now().utc;
             engine.advance_utc_high_water_mark(&collection_completed_at_utc);
         }
@@ -889,6 +1080,26 @@ fn run_worker(
     }
 }
 
+fn publish_current_snapshot(
+    active: &ActiveSession,
+    dependencies: &EspSessionDependencies,
+    state: EspSessionState,
+    reason: EspUpdateReason,
+) {
+    let reading = dependencies.clock.now();
+    let Ok(envelope) = active.envelope() else {
+        return;
+    };
+    publish(
+        active,
+        dependencies,
+        state,
+        reason,
+        envelope.snapshot,
+        &reading.utc,
+    );
+}
+
 fn publish(
     active: &ActiveSession,
     dependencies: &EspSessionDependencies,
@@ -897,6 +1108,10 @@ fn publish(
     snapshot: EspDiagnosticsSnapshot,
     emitted_at_utc: &str,
 ) {
+    let _publication_guard = active
+        .publication_gate
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let emitted_at_utc = coherent_utc_timestamp(
         emitted_at_utc,
         std::iter::once(snapshot.generated_at_utc.as_str()),
@@ -904,6 +1119,20 @@ fn publish(
     let update = {
         let Ok(mut published) = active.published.lock() else {
             return;
+        };
+        if published.state.is_terminal() {
+            return;
+        }
+        let cancellation_wins = active.cancellation.is_cancelled()
+            || matches!(published.state, EspSessionState::Stopping);
+        #[cfg(debug_assertions)]
+        if let Some(probe) = &dependencies.lifecycle_probe {
+            probe.after_publish_cancellation_sample(&state, &reason, &active.cancellation);
+        }
+        let (state, reason) = if cancellation_wins && state != EspSessionState::Stopped {
+            (EspSessionState::Stopped, EspUpdateReason::Stopped)
+        } else {
+            (state, reason)
         };
         published.sequence = published.sequence.saturating_add(1);
         published.state = state.clone();
@@ -918,6 +1147,10 @@ fn publish(
             snapshot,
         }
     };
+    #[cfg(debug_assertions)]
+    if let Some(probe) = &dependencies.lifecycle_probe {
+        probe.before_update_delivery(&update);
+    }
     if let Err(error) = dependencies.sink.emit(update) {
         log::warn!("failed to emit ESP session update: {error}");
     }
@@ -926,23 +1159,30 @@ fn publish(
 fn collect_provider_records(
     dependencies: &EspSessionDependencies,
     observed_at_utc: &str,
-) -> BTreeMap<ProviderSlot, Vec<EspEvidenceRecord>> {
-    [
+    cancellation: &EspCancellation,
+) -> Option<BTreeMap<ProviderSlot, Vec<EspEvidenceRecord>>> {
+    let providers = [
         (ProviderSlot::Registry, dependencies.registry.as_ref()),
         (ProviderSlot::EventLogs, dependencies.event_logs.as_ref()),
         (ProviderSlot::System, dependencies.system.as_ref()),
         (ProviderSlot::Process, dependencies.process.as_ref()),
-    ]
-    .into_iter()
-    .map(|(slot, provider)| {
+    ];
+    let mut records = BTreeMap::new();
+    for (slot, provider) in providers {
+        if cancellation.is_cancelled() {
+            return None;
+        }
         let mut batch = provider.collect(observed_at_utc);
+        if cancellation.is_cancelled() {
+            return None;
+        }
         batch.records.retain(is_local_record);
         batch
             .records
             .extend(batch.coverage.into_iter().map(EspEvidenceRecord::Coverage));
-        (slot, batch.records)
-    })
-    .collect()
+        records.insert(slot, batch.records);
+    }
+    Some(records)
 }
 
 fn reconcile_identified_records(
@@ -1132,6 +1372,12 @@ fn state_error(error: impl std::fmt::Display) -> EspSessionError {
     }
 }
 
+fn shutting_down_error() -> EspSessionError {
+    EspSessionError::State {
+        message: "ESP diagnostics session manager is shutting down".to_string(),
+    }
+}
+
 fn worker_error(error: impl std::fmt::Display) -> EspSessionError {
     EspSessionError::Worker {
         message: error.to_string(),
@@ -1140,7 +1386,19 @@ fn worker_error(error: impl std::fmt::Display) -> EspSessionError {
 
 #[cfg(test)]
 mod tests {
-    use super::coherent_utc_timestamp;
+    use super::{coherent_utc_timestamp, EspSessionState, EspUpdateReason};
+
+    #[test]
+    fn failed_session_wire_values_match_the_frontend_error_contract() {
+        assert_eq!(
+            serde_json::to_value(EspSessionState::Failed).expect("serialize failed state"),
+            "error"
+        );
+        assert_eq!(
+            serde_json::to_value(EspUpdateReason::Failed).expect("serialize failed reason"),
+            "error"
+        );
+    }
 
     #[test]
     fn coherent_timestamp_compares_offsets_and_ignores_malformed_evidence_times() {

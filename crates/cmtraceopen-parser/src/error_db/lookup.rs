@@ -9,9 +9,7 @@ use std::sync::OnceLock;
 /// Provides O(1) lookup instead of linear scan over the array.
 fn code_map() -> &'static HashMap<u32, &'static ErrorCode> {
     static CELL: OnceLock<HashMap<u32, &'static ErrorCode>> = OnceLock::new();
-    CELL.get_or_init(|| {
-    ERROR_CODES.iter().map(|ec| (ec.code, ec)).collect()
-})
+    CELL.get_or_init(|| ERROR_CODES.iter().map(|ec| (ec.code, ec)).collect())
 }
 
 /// Look up an error code with HRESULT decomposition.
@@ -277,7 +275,7 @@ mod tests {
 
     #[test]
     fn test_error_codes_have_categories() {
-        use super::super::codes::{ERROR_CODES, ErrorCategory};
+        use super::super::codes::{ErrorCategory, ERROR_CODES};
         let intune_count = ERROR_CODES
             .iter()
             .filter(|ec| matches!(ec.category, ErrorCategory::Intune))

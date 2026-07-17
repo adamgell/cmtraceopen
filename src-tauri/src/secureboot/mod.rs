@@ -20,8 +20,7 @@ use models::{DataSource, SecureBootAnalysisResult, SecureBootScanState};
 pub fn analyze(path: Option<&str>) -> Result<SecureBootAnalysisResult, crate::error::AppError> {
     if let Some(log_path) = path {
         // --- Log-import path ---------------------------------------------------
-        let content = std::fs::read_to_string(log_path)
-            .map_err(crate::error::AppError::Io)?;
+        let content = std::fs::read_to_string(log_path).map_err(crate::error::AppError::Io)?;
 
         let (sessions, timeline) = log_parser::parse_log(&content);
         let stage = stage::determine_stage_from_log(&sessions);

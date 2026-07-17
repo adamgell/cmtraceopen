@@ -9,13 +9,13 @@ use serde_json::Value;
 #[cfg(target_os = "windows")]
 use std::sync::OnceLock;
 
-#[cfg(target_os = "windows")]
-use crate::intune::eventlog_win32;
 use super::models::{
     RankedItem, SecuritySummary, SysmonConfig, SysmonDashboardData, SysmonEvent, SysmonEventType,
     SysmonEventTypeCount, SysmonSeverity, SysmonSummary, TimeBucket,
 };
 use super::sanitize_control_chars;
+#[cfg(target_os = "windows")]
+use crate::intune::eventlog_win32;
 
 /// Maximum entries to pull from the live Windows Event Log.
 #[cfg(target_os = "windows")]
@@ -274,7 +274,10 @@ pub fn build_summary(
                 // for this event. String-only events can still update earliest/latest
                 // even when other events had numeric timestamps.
                 let ts = event.timestamp.as_str();
-                if earliest_ts.as_deref().map_or(true, |existing| ts < existing) {
+                if earliest_ts
+                    .as_deref()
+                    .map_or(true, |existing| ts < existing)
+                {
                     earliest_ts = Some(event.timestamp.clone());
                 }
                 if latest_ts.as_deref().map_or(true, |existing| ts > existing) {
@@ -326,9 +329,8 @@ pub fn extract_config(events: &[SysmonEvent], summary: &SysmonSummary) -> Sysmon
     // Look for ServiceStateChange events (ID 4) — they contain version info
     for event in events {
         match event.event_id {
-            16
-                if last_config_change.is_none()
-                    || event.timestamp.as_str() > last_config_change.as_deref().unwrap_or("") =>
+            16 if last_config_change.is_none()
+                || event.timestamp.as_str() > last_config_change.as_deref().unwrap_or("") =>
             {
                 // ConfigChange: contains Configuration, ConfigurationFileHash
                 last_config_change = Some(event.timestamp.clone());
@@ -380,7 +382,8 @@ pub fn extract_config(events: &[SysmonEvent], summary: &SysmonSummary) -> Sysmon
         }
     }
 
-    let found = last_config_change.is_some() || hash_algorithms.is_some() || sysmon_version.is_some();
+    let found =
+        last_config_change.is_some() || hash_algorithms.is_some() || sysmon_version.is_some();
 
     SysmonConfig {
         schema_version,
@@ -605,14 +608,9 @@ fn parse_timestamp_ms(ts: &str) -> Option<i64> {
         .or_else(|| {
             // Handle timestamps like "2024-04-28T22:08:22.025812200Z" that may have
             // extra precision beyond what RFC 3339 strictly allows
-            chrono::NaiveDateTime::parse_from_str(
-                ts.trim_end_matches('Z'),
-                "%Y-%m-%dT%H:%M:%S%.f",
-            )
-            .ok()
-            .map(|ndt| {
-                ndt.and_utc().fixed_offset()
-            })
+            chrono::NaiveDateTime::parse_from_str(ts.trim_end_matches('Z'), "%Y-%m-%dT%H:%M:%S%.f")
+                .ok()
+                .map(|ndt| ndt.and_utc().fixed_offset())
         })
         .map(|dt| dt.timestamp_millis())
 }
@@ -625,29 +623,25 @@ fn get_data_str(event_data: &Value, key: &str) -> Option<String> {
     };
     // Strip control characters (e.g. \r, \0) that render as unexpected glyphs.
     let sanitized = sanitize_control_chars(&raw);
-    if sanitized.is_empty() { None } else { Some(sanitized) }
+    if sanitized.is_empty() {
+        None
+    } else {
+        Some(sanitized)
+    }
 }
 
 fn get_data_u32(event_data: &Value, key: &str) -> Option<u32> {
     event_data[key]
         .as_u64()
         .map(|n| n as u32)
-        .or_else(|| {
-            event_data[key]
-                .as_str()
-                .and_then(|s| s.parse().ok())
-        })
+        .or_else(|| event_data[key].as_str().and_then(|s| s.parse().ok()))
 }
 
 fn get_data_u16(event_data: &Value, key: &str) -> Option<u16> {
     event_data[key]
         .as_u64()
         .map(|n| n as u16)
-        .or_else(|| {
-            event_data[key]
-                .as_str()
-                .and_then(|s| s.parse().ok())
-        })
+        .or_else(|| event_data[key].as_str().and_then(|s| s.parse().ok()))
 }
 
 /// Derive severity from event ID.
@@ -682,7 +676,11 @@ fn build_message(event_id: u32, event_type: &SysmonEventType, event_data: &Value
             let dst_port = event_data["DestinationPort"]
                 .as_u64()
                 .map(|p| p.to_string())
-                .or_else(|| event_data["DestinationPort"].as_str().map(|s| s.to_string()))
+                .or_else(|| {
+                    event_data["DestinationPort"]
+                        .as_str()
+                        .map(|s| s.to_string())
+                })
                 .unwrap_or_else(|| "?".to_string());
             let proto = event_data["Protocol"].as_str().unwrap_or("?");
             format!("{image} → {dst_ip}:{dst_port} ({proto})")
@@ -782,8 +780,7 @@ fn live_provider_re() -> &'static Regex {
 fn live_event_id_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
-        Regex::new(r"<EventID(?:\s[^>]*)?>(\d+)</EventID>")
-            .expect("event id regex must compile")
+        Regex::new(r"<EventID(?:\s[^>]*)?>(\d+)</EventID>").expect("event id regex must compile")
     })
 }
 #[cfg(target_os = "windows")]
@@ -805,8 +802,7 @@ fn live_computer_re() -> &'static Regex {
 fn live_record_id_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
-        Regex::new(r"<EventRecordID>(\d+)</EventRecordID>")
-            .expect("record id regex must compile")
+        Regex::new(r"<EventRecordID>(\d+)</EventRecordID>").expect("record id regex must compile")
     })
 }
 
@@ -880,8 +876,7 @@ pub fn parse_sysmon_live_events() -> Result<Vec<SysmonEvent>, String> {
         };
         let timestamp_ms = parse_timestamp_ms(&timestamp);
 
-        let computer = extract_xml_value(xml, live_computer_re())
-            .map(|v| decode_xml_text(&v));
+        let computer = extract_xml_value(xml, live_computer_re()).map(|v| decode_xml_text(&v));
 
         let record_id = extract_xml_value(xml, live_record_id_re())
             .and_then(|v| v.parse::<u64>().ok())
@@ -894,24 +889,22 @@ pub fn parse_sysmon_live_events() -> Result<Vec<SysmonEvent>, String> {
         let rule_name = extract_event_data_field(xml, "RuleName");
         let utc_time = extract_event_data_field(xml, "UtcTime");
         let process_guid = extract_event_data_field(xml, "ProcessGuid");
-        let process_id = extract_event_data_field(xml, "ProcessId")
-            .and_then(|v| v.parse().ok());
+        let process_id = extract_event_data_field(xml, "ProcessId").and_then(|v| v.parse().ok());
         let image = extract_event_data_field(xml, "Image");
         let command_line = extract_event_data_field(xml, "CommandLine");
         let user = extract_event_data_field(xml, "User");
         let hashes = extract_event_data_field(xml, "Hashes");
         let parent_image = extract_event_data_field(xml, "ParentImage");
         let parent_command_line = extract_event_data_field(xml, "ParentCommandLine");
-        let parent_process_id = extract_event_data_field(xml, "ParentProcessId")
-            .and_then(|v| v.parse().ok());
+        let parent_process_id =
+            extract_event_data_field(xml, "ParentProcessId").and_then(|v| v.parse().ok());
         let target_filename = extract_event_data_field(xml, "TargetFilename");
         let protocol = extract_event_data_field(xml, "Protocol");
         let source_ip = extract_event_data_field(xml, "SourceIp");
-        let source_port = extract_event_data_field(xml, "SourcePort")
-            .and_then(|v| v.parse().ok());
+        let source_port = extract_event_data_field(xml, "SourcePort").and_then(|v| v.parse().ok());
         let destination_ip = extract_event_data_field(xml, "DestinationIp");
-        let destination_port = extract_event_data_field(xml, "DestinationPort")
-            .and_then(|v| v.parse().ok());
+        let destination_port =
+            extract_event_data_field(xml, "DestinationPort").and_then(|v| v.parse().ok());
         let destination_hostname = extract_event_data_field(xml, "DestinationHostname");
         let target_object = extract_event_data_field(xml, "TargetObject");
         let details = extract_event_data_field(xml, "Details");
@@ -1093,11 +1086,23 @@ mod tests {
 
     #[test]
     fn test_event_type_mapping() {
-        assert_eq!(SysmonEventType::from_event_id(1), SysmonEventType::ProcessCreate);
-        assert_eq!(SysmonEventType::from_event_id(3), SysmonEventType::NetworkConnect);
-        assert_eq!(SysmonEventType::from_event_id(22), SysmonEventType::DnsQuery);
+        assert_eq!(
+            SysmonEventType::from_event_id(1),
+            SysmonEventType::ProcessCreate
+        );
+        assert_eq!(
+            SysmonEventType::from_event_id(3),
+            SysmonEventType::NetworkConnect
+        );
+        assert_eq!(
+            SysmonEventType::from_event_id(22),
+            SysmonEventType::DnsQuery
+        );
         assert_eq!(SysmonEventType::from_event_id(255), SysmonEventType::Error);
-        assert_eq!(SysmonEventType::from_event_id(999), SysmonEventType::Unknown);
+        assert_eq!(
+            SysmonEventType::from_event_id(999),
+            SysmonEventType::Unknown
+        );
     }
 
     #[test]

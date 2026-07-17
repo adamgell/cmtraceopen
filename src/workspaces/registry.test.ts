@@ -485,17 +485,38 @@ describe("ESP workspace registration", () => {
     );
   });
 
-  it("sends a native-valid UUID when starting live diagnostics", async () => {
+  it("polls a starting session until live when the initial event was missed", async () => {
     const snapshot = makeChromeSnapshot();
-    vi.mocked(invoke).mockImplementationOnce(async (_command, args) => {
-      const requestId = (args as { requestId: string }).requestId;
-      return {
-        sessionId: "11111111-1111-4111-8111-111111111111",
-        requestId,
-        sequence: 1,
-        state: "live",
-        snapshot,
-      };
+    let sessionReads = 0;
+    vi.mocked(invoke).mockImplementation(async (command, args) => {
+      if (command === "get_esp_elevation_state") {
+        return {
+          isElevated: true,
+          restartSupported: true,
+          restrictedSources: [],
+        };
+      }
+      if (command === "start_esp_diagnostics_session") {
+        const requestId = (args as { requestId: string }).requestId;
+        return {
+          sessionId: "11111111-1111-4111-8111-111111111111",
+          requestId,
+          sequence: 0,
+          state: "starting",
+          snapshot,
+        };
+      }
+      if (command === "get_esp_diagnostics_session") {
+        sessionReads += 1;
+        return {
+          sessionId: "11111111-1111-4111-8111-111111111111",
+          requestId: useEspDiagnosticsStore.getState().requestId,
+          sequence: sessionReads === 1 ? 0 : 1,
+          state: sessionReads === 1 ? "starting" : "live",
+          snapshot,
+        };
+      }
+      throw new Error(`Unexpected IPC command: ${command}`);
     });
     render(createElement(EspDiagnosticsWorkspace));
 
@@ -511,6 +532,12 @@ describe("ESP workspace registration", () => {
         }),
       ),
     );
+    expect(
+      await screen.findByRole("button", { name: "Stop live diagnostics" }),
+    ).toBeEnabled();
+    await waitFor(() => expect(sessionReads).toBe(2));
+    expect(useEspDiagnosticsStore.getState().phase).toBe("live");
+    expect(useEspDiagnosticsStore.getState().sequence).toBe(1);
   });
 
   it("renders analyzing and error states without discarding the action surface", () => {

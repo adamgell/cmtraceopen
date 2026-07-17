@@ -2,8 +2,8 @@ use chrono::{DateTime, Local, LocalResult, NaiveDateTime, TimeZone, Utc};
 use regex::Regex;
 
 use crate::dsregcmd::models::{
-    DsregcmdCaptureConfidence, DsregcmdDerived, DsregcmdDiagnosticInsight,
-    DsregcmdDiagnosticPhase, DsregcmdFacts, DsregcmdJoinType,
+    DsregcmdCaptureConfidence, DsregcmdDerived, DsregcmdDiagnosticInsight, DsregcmdDiagnosticPhase,
+    DsregcmdFacts, DsregcmdJoinType,
 };
 use crate::intune::models::IntuneDiagnosticSeverity;
 use std::sync::OnceLock;
@@ -216,7 +216,9 @@ fn derive_dominant_phase(facts: &DsregcmdFacts) -> DsregcmdDiagnosticPhase {
         return DsregcmdDiagnosticPhase::Join;
     }
 
-    if facts.sso_state.azure_ad_prt == Some(false) || facts.sso_state.azure_ad_prt_update_time.is_some() {
+    if facts.sso_state.azure_ad_prt == Some(false)
+        || facts.sso_state.azure_ad_prt_update_time.is_some()
+    {
         return DsregcmdDiagnosticPhase::PostJoin;
     }
 
@@ -264,7 +266,10 @@ fn derive_capture_confidence(
         .as_deref()
         .and_then(parse_dsregcmd_timestamp)
     {
-        let age_minutes = Utc::now().signed_duration_since(client_time).num_minutes().abs();
+        let age_minutes = Utc::now()
+            .signed_duration_since(client_time)
+            .num_minutes()
+            .abs();
         if age_minutes <= 15
             && facts.user_state.session_is_not_remote == Some(true)
             && !matches!(facts.diagnostics.user_context.as_deref(), Some(context) if context.eq_ignore_ascii_case("SYSTEM"))
@@ -421,8 +426,14 @@ pub(super) fn is_failure_text(field: &Option<String>) -> bool {
 
 pub(super) fn render_phase_code_evidence(facts: &DsregcmdFacts, code: &str) -> String {
     let sources = [
-        ("Client ErrorCode", facts.registration.client_error_code.as_deref()),
-        ("Attempt Status", facts.diagnostics.attempt_status.as_deref()),
+        (
+            "Client ErrorCode",
+            facts.registration.client_error_code.as_deref(),
+        ),
+        (
+            "Attempt Status",
+            facts.diagnostics.attempt_status.as_deref(),
+        ),
         ("HTTP Error", facts.diagnostics.http_error.as_deref()),
         (
             "Token Acquisition Test",
@@ -432,7 +443,10 @@ pub(super) fn render_phase_code_evidence(facts: &DsregcmdFacts, code: &str) -> S
 
     for (label, value) in sources {
         if let Some(value) = value {
-            if value.to_ascii_lowercase().contains(&code.to_ascii_lowercase()) {
+            if value
+                .to_ascii_lowercase()
+                .contains(&code.to_ascii_lowercase())
+            {
                 return format!("{label}: {value}");
             }
         }

@@ -223,7 +223,10 @@ mod tests {
 
     #[test]
     fn test_decode_wire_format() {
-        assert_eq!(decode_query_name("(4)home(4)gell(3)one(0)"), "home.gell.one");
+        assert_eq!(
+            decode_query_name("(4)home(4)gell(3)one(0)"),
+            "home.gell.one"
+        );
     }
 
     #[test]

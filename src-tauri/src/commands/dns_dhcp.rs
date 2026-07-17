@@ -80,7 +80,8 @@ fn check_dns_logging_status_windows() -> DnsLoggingStatus {
         .args([
             "query",
             r"HKLM\SYSTEM\CurrentControlSet\Services\DNS\Parameters",
-            "/v", "LogLevel",
+            "/v",
+            "LogLevel",
         ])
         .output();
 
@@ -107,7 +108,8 @@ fn check_dns_logging_status_windows() -> DnsLoggingStatus {
         .args([
             "query",
             r"HKLM\SYSTEM\CurrentControlSet\Services\DNS\Parameters",
-            "/v", "LogFilePath",
+            "/v",
+            "LogFilePath",
         ])
         .output();
 
@@ -269,12 +271,16 @@ fn collect_dns_dhcp_blocking(
         let desktop = std::env::var("USERPROFILE")
             .map(|p| PathBuf::from(p).join("Desktop"))
             .unwrap_or_else(|_| PathBuf::from("C:\\Users\\Public\\Desktop"));
-        desktop.join("DnsDhcpCollection").to_string_lossy().to_string()
+        desktop
+            .join("DnsDhcpCollection")
+            .to_string_lossy()
+            .to_string()
     });
     let timestamp = chrono::Local::now().format("%Y%m%d-%H%M%S").to_string();
     let bundle_dir = PathBuf::from(&root).join(format!("dns-dhcp-{}", timestamp));
-    fs::create_dir_all(&bundle_dir)
-        .map_err(|e| crate::error::AppError::Internal(format!("Failed to create output dir: {e}")))?;
+    fs::create_dir_all(&bundle_dir).map_err(|e| {
+        crate::error::AppError::Internal(format!("Failed to create output dir: {e}"))
+    })?;
 
     let mut all_results = Vec::new();
     let mut total_files: u32 = 0;
@@ -308,7 +314,9 @@ fn collect_dns_dhcp_blocking(
         let unc_base = format!("\\\\{}\\C$\\Windows\\System32", server);
         if !Path::new(&unc_base).exists() {
             result.status = "unreachable".to_string();
-            result.errors.push(format!("Cannot access \\\\{}\\C$ admin share", server));
+            result
+                .errors
+                .push(format!("Cannot access \\\\{}\\C$ admin share", server));
             all_results.push(result);
             continue;
         }
@@ -328,7 +336,9 @@ fn collect_dns_dhcp_blocking(
                         log::info!("Copied DNS debug log from {} ({} bytes)", server, bytes);
                     }
                     Err(e) => {
-                        result.errors.push(format!("Failed to copy DNS debug log: {e}"));
+                        result
+                            .errors
+                            .push(format!("Failed to copy DNS debug log: {e}"));
                     }
                 }
                 break;
@@ -361,17 +371,24 @@ fn collect_dns_dhcp_blocking(
                     let stderr = String::from_utf8_lossy(&o.stderr);
                     let msg = stderr.trim();
                     if !msg.is_empty() {
-                        result.errors.push(format!("wevtutil export DNS audit: {msg}"));
+                        result
+                            .errors
+                            .push(format!("wevtutil export DNS audit: {msg}"));
                     }
                 }
                 Err(e) => {
-                    result.errors.push(format!("Failed to run wevtutil for DNS audit: {e}"));
+                    result
+                        .errors
+                        .push(format!("Failed to run wevtutil for DNS audit: {e}"));
                 }
             }
         } else {
             // Remote server: try UNC copy (may fail if file is locked)
             let evtx_paths = [
-                format!("{}\\winevt\\Logs\\Microsoft-Windows-DNSServer%4Audit.evtx", unc_base),
+                format!(
+                    "{}\\winevt\\Logs\\Microsoft-Windows-DNSServer%4Audit.evtx",
+                    unc_base
+                ),
                 format!("{}\\winevt\\Logs\\DNS Server.evtx", unc_base),
             ];
             for evtx_path in &evtx_paths {
@@ -387,7 +404,9 @@ fn collect_dns_dhcp_blocking(
                                 .file_name()
                                 .unwrap_or_default()
                                 .to_string_lossy();
-                            result.errors.push(format!("Failed to copy {file_name}: {e}"));
+                            result
+                                .errors
+                                .push(format!("Failed to copy {file_name}: {e}"));
                         }
                     }
                 }

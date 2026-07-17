@@ -151,10 +151,7 @@ fn section_entry_parsed_with_color() {
         result.entries[1].section_name.as_deref(),
         Some("Detection Phase")
     );
-    assert_eq!(
-        result.entries[1].section_color.as_deref(),
-        Some("#5b9aff")
-    );
+    assert_eq!(result.entries[1].section_color.as_deref(), Some("#5b9aff"));
 }
 
 // Test 4: Iteration entry parsed with EntryKind::Iteration and iteration string
@@ -165,10 +162,7 @@ fn iteration_entry_parsed_correctly() {
     assert_eq!(result.entries[4].entry_kind, "Some(Iteration)");
     assert_eq!(result.entries[4].iteration.as_deref(), Some("1/3"));
     // Iteration has its own explicit color
-    assert_eq!(
-        result.entries[4].section_color.as_deref(),
-        Some("#a78bfa")
-    );
+    assert_eq!(result.entries[4].section_color.as_deref(), Some("#a78bfa"));
 }
 
 // Test 5: Regular entries have EntryKind::Log with section_name propagated
@@ -178,22 +172,13 @@ fn regular_entries_have_section_propagated() {
 
     // Entry 2 (index 2): "Scanning policy files" — has explicit section="detection"
     assert_eq!(result.entries[2].entry_kind, "Some(Log)");
-    assert_eq!(
-        result.entries[2].section_name.as_deref(),
-        Some("detection")
-    );
+    assert_eq!(result.entries[2].section_name.as_deref(), Some("detection"));
     // Section color is inherited from the current section
-    assert_eq!(
-        result.entries[2].section_color.as_deref(),
-        Some("#5b9aff")
-    );
+    assert_eq!(result.entries[2].section_color.as_deref(), Some("#5b9aff"));
 
     // Entry 5 (index 5): "Processing policy contoso.xml" — has explicit section="detection"
     assert_eq!(result.entries[5].entry_kind, "Some(Log)");
-    assert_eq!(
-        result.entries[5].section_name.as_deref(),
-        Some("detection")
-    );
+    assert_eq!(result.entries[5].section_name.as_deref(), Some("detection"));
     assert_eq!(result.entries[5].iteration.as_deref(), Some("1/3"));
 }
 

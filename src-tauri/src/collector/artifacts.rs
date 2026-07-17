@@ -398,7 +398,10 @@ pub fn copy_exports(items: &[FileExportItem], ctx: &CollectorContext) {
             let source_path = Path::new(&source);
             if source_path.is_file() {
                 let dest_name = item.file_name.as_deref().unwrap_or_else(|| {
-                    source_path.file_name().and_then(|n| n.to_str()).unwrap_or("unknown")
+                    source_path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("unknown")
                 });
                 let dest_path = dest_dir.join(dest_name);
                 match secure_copy_file(ctx, source_path, &dest_path) {
@@ -878,11 +881,16 @@ fn collected_file(
 /// Resolve a binary from System32. Mirrors the pattern in `dsregcmd.rs`.
 fn resolve_system32_binary(file_name: &str) -> Result<PathBuf, crate::error::AppError> {
     let Some(windir) = std::env::var_os("WINDIR") else {
-        return Err(crate::error::AppError::PlatformUnsupported("WINDIR is not set; could not resolve the Windows system path.".to_string()));
+        return Err(crate::error::AppError::PlatformUnsupported(
+            "WINDIR is not set; could not resolve the Windows system path.".to_string(),
+        ));
     };
     let path = PathBuf::from(windir).join("System32").join(file_name);
     if !path.is_file() {
-        return Err(crate::error::AppError::Internal(format!("Expected system binary not found at '{}'.", path.display())));
+        return Err(crate::error::AppError::Internal(format!(
+            "Expected system binary not found at '{}'.",
+            path.display()
+        )));
     }
     Ok(path)
 }

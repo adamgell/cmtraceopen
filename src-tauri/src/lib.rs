@@ -35,18 +35,115 @@ use graph_api::GraphAuthState;
 #[cfg(target_os = "windows")]
 use tauri::Manager;
 
-/// Returns all non-flag CLI arguments as potential file paths.
+const ESP_STARTUP_WORKSPACE: &str = "esp-diagnostics";
+
+#[derive(Debug, Default, PartialEq, Eq)]
+struct InitialLaunchArguments {
+    file_paths: Vec<String>,
+    workspace: Option<String>,
+}
+
+/// Parses app-owned startup options separately from positional file paths.
 ///
-/// When the OS opens the application via a file association (e.g. double-clicking
-/// a `.log` file), the file path is passed as a positional argument.
-/// Multiple files can be passed (e.g. `cmtraceopen file1.log file2.log`).
-/// Flags (arguments starting with `-`) are skipped so that internal Tauri or
-/// platform arguments do not get misidentified as file paths.
-fn get_initial_file_paths_from_args() -> Vec<String> {
-    std::env::args()
-        .skip(1)
-        .filter(|arg| !arg.starts_with('-'))
-        .collect()
+/// The elevation flow emits an exact workspace option so the replacement
+/// process returns to ESP Diagnostics. Split workspace values are consumed
+/// even when unsupported so they can never be mistaken for file paths.
+fn parse_initial_launch_arguments(
+    arguments: impl IntoIterator<Item = String>,
+) -> InitialLaunchArguments {
+    let mut launch = InitialLaunchArguments::default();
+    let mut arguments = arguments.into_iter();
+
+    while let Some(argument) = arguments.next() {
+        if argument.eq_ignore_ascii_case("--workspace") {
+            if let Some(value) = arguments.next() {
+                if cfg!(feature = "esp-diagnostics")
+                    && value.eq_ignore_ascii_case(ESP_STARTUP_WORKSPACE)
+                {
+                    launch.workspace = Some(ESP_STARTUP_WORKSPACE.to_string());
+                }
+            }
+            continue;
+        }
+
+        if cfg!(feature = "esp-diagnostics")
+            && (argument.eq_ignore_ascii_case("--workspace=esp-diagnostics")
+                || argument.eq_ignore_ascii_case("--esp-diagnostics"))
+        {
+            launch.workspace = Some(ESP_STARTUP_WORKSPACE.to_string());
+        } else if !argument.starts_with('-') {
+            launch.file_paths.push(argument);
+        }
+    }
+
+    launch
+}
+
+#[cfg(test)]
+mod startup_argument_tests {
+    use super::parse_initial_launch_arguments;
+
+    fn strings(arguments: &[&str]) -> Vec<String> {
+        arguments
+            .iter()
+            .map(|argument| argument.to_string())
+            .collect()
+    }
+
+    #[cfg(feature = "esp-diagnostics")]
+    #[test]
+    fn esp_workspace_equals_argument_routes_without_becoming_a_file_path() {
+        let launch = parse_initial_launch_arguments(strings(&["--workspace=esp-diagnostics"]));
+
+        assert_eq!(launch.workspace.as_deref(), Some("esp-diagnostics"));
+        assert!(launch.file_paths.is_empty());
+    }
+
+    #[cfg(feature = "esp-diagnostics")]
+    #[test]
+    fn esp_workspace_split_argument_consumes_its_value_and_keeps_real_paths() {
+        let launch = parse_initial_launch_arguments(strings(&[
+            "--workspace",
+            "esp-diagnostics",
+            r"C:\Windows\Temp\ime.log",
+        ]));
+
+        assert_eq!(launch.workspace.as_deref(), Some("esp-diagnostics"));
+        assert_eq!(launch.file_paths, [r"C:\Windows\Temp\ime.log"]);
+    }
+
+    #[test]
+    fn unapproved_workspace_values_are_neither_routed_nor_opened_as_files() {
+        let launch = parse_initial_launch_arguments(strings(&[
+            "--workspace",
+            "future-workspace",
+            r"C:\Logs\real.log",
+        ]));
+
+        assert_eq!(launch.workspace, None);
+        assert_eq!(launch.file_paths, [r"C:\Logs\real.log"]);
+    }
+
+    #[cfg(feature = "esp-diagnostics")]
+    #[test]
+    fn legacy_esp_alias_is_accepted_case_insensitively() {
+        let launch = parse_initial_launch_arguments(strings(&["--ESP-DIAGNOSTICS"]));
+
+        assert_eq!(launch.workspace.as_deref(), Some("esp-diagnostics"));
+        assert!(launch.file_paths.is_empty());
+    }
+
+    #[cfg(not(feature = "esp-diagnostics"))]
+    #[test]
+    fn esp_workspace_argument_is_ignored_when_the_feature_is_not_built() {
+        let launch = parse_initial_launch_arguments(strings(&[
+            "--workspace=esp-diagnostics",
+            r"C:\Logs\real.log",
+        ]));
+
+        assert_eq!(launch.workspace, None);
+        assert_eq!(launch.file_paths, [r"C:\Logs\real.log"]);
+    }
 }
 
 // Keep the ESP Graph commands in one handler fragment so the production app
@@ -65,7 +162,7 @@ macro_rules! app_invoke_handler {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let initial_file_paths = get_initial_file_paths_from_args();
+    let initial_launch = parse_initial_launch_arguments(std::env::args().skip(1));
 
     // Route panics to the persistent log so a hard crash (e.g. the reported
     // out-of-memory failure) leaves a line users can attach to a report.
@@ -104,7 +201,10 @@ pub fn run() {
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_process::init())
-        .manage(AppState::new(initial_file_paths))
+        .manage(AppState::with_initial_launch(
+            initial_launch.file_paths,
+            initial_launch.workspace,
+        ))
         .setup(|app| {
             #[cfg(desktop)]
             app.handle()
@@ -174,6 +274,7 @@ pub fn run() {
             commands::file_ops::inspect_path_kind,
             commands::file_ops::write_text_output_file,
             commands::file_ops::get_initial_file_paths,
+            commands::file_ops::get_initial_workspace,
             commands::file_ops::compute_file_hash,
             commands::bundle_ops::inspect_evidence_bundle,
             commands::bundle_ops::inspect_evidence_artifact,

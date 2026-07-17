@@ -18,11 +18,11 @@ fn detection_re() -> &'static Regex {
     CELL.get_or_init(|| {
         Regex::new(concat!(
             r"^(\d{2}/\d{2}/\d{4}\s+\d{2}:\d{2}:\d{2})", // timestamp
-            r"~\[([^\]]*)\]",                               // ~[app info]
-            r"~\[Found:(True|False)\]",                     // ~[Found:T/F]
-            r"~\[Purpose:([^\]]*)\]",                       // ~[Purpose:...]
-            r"(?:~\[Context:([^\]]*)\])?",                  // ~[Context:...] (optional)
-            r"(?:~\[Hive:([^\]]*)\])?",                     // ~[Hive:...] (optional)
+            r"~\[([^\]]*)\]",                            // ~[app info]
+            r"~\[Found:(True|False)\]",                  // ~[Found:T/F]
+            r"~\[Purpose:([^\]]*)\]",                    // ~[Purpose:...]
+            r"(?:~\[Context:([^\]]*)\])?",               // ~[Context:...] (optional)
+            r"(?:~\[Hive:([^\]]*)\])?",                  // ~[Hive:...] (optional)
         ))
         .expect("PatchMyPC detection regex must compile")
     })
@@ -61,27 +61,21 @@ pub fn parse_lines(lines: &[&str], file_path: &str) -> (Vec<LogEntry>, u32) {
             };
 
             // Parse timestamp: MM/DD/YYYY HH:MM:SS
-            let timestamp =
-                chrono::NaiveDateTime::parse_from_str(ts_str, "%m/%d/%Y %H:%M:%S")
-                    .ok()
-                    .map(|dt| dt.and_utc().timestamp_millis());
+            let timestamp = chrono::NaiveDateTime::parse_from_str(ts_str, "%m/%d/%Y %H:%M:%S")
+                .ok()
+                .map(|dt| dt.and_utc().timestamp_millis());
 
             let timestamp_display = Some(ts_str.to_string());
 
             // Build a readable message
-            let message = format!(
-                "[{}] {} — Found:{}",
-                purpose, app_info, found
-            );
+            let message = format!("[{}] {} — Found:{}", purpose, app_info, found);
 
             let component = Some("PatchMyPC".to_string());
 
             // Extract hostname from context (strip trailing "$)" if present)
-            let host_name = context.as_ref().map(|c| {
-                c.trim_end_matches(')')
-                    .trim_end_matches('$')
-                    .to_string()
-            });
+            let host_name = context
+                .as_ref()
+                .map(|c| c.trim_end_matches(')').trim_end_matches('$').to_string());
 
             entries.push(LogEntry {
                 id,
