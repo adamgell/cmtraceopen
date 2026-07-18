@@ -13,7 +13,7 @@ use app_lib::graph_api::client::{
 use app_lib::graph_api::models::{
     normalize_graph_guid, project_graph_auth_status, GraphAppInfo, GraphAuthCapabilities,
     GraphAuthStatus, GraphHttpMethod, GraphResolutionResult, GraphTransportRequest,
-    GraphTransportResponse, GRAPH_DELEGATED_SCOPES, GRAPH_SCOPE_REQUEST,
+    GraphTransportResponse, GRAPH_DELEGATED_SCOPES, GRAPH_SCOPE_REQUEST, GRAPH_WAM_REQUEST,
 };
 use base64::Engine;
 use serde::Deserialize;
@@ -101,16 +101,26 @@ fn platform_boundary_transport_dtos_round_trip_off_windows() {
 }
 
 #[test]
-fn graph_auth_status_reports_full_and_app_only_capabilities() {
+fn graph_wam_scope_request_uses_short_delegated_permissions() {
     assert_eq!(
         GRAPH_SCOPE_REQUEST,
-        "https://graph.microsoft.com/DeviceManagementManagedDevices.Read.All \
-https://graph.microsoft.com/DeviceManagementServiceConfig.Read.All \
-https://graph.microsoft.com/DeviceManagementApps.Read.All \
-https://graph.microsoft.com/DeviceManagementConfiguration.Read.All \
-https://graph.microsoft.com/DeviceManagementScripts.Read.All"
+        "DeviceManagementManagedDevices.Read.All \
+DeviceManagementServiceConfig.Read.All \
+DeviceManagementApps.Read.All \
+DeviceManagementConfiguration.Read.All \
+DeviceManagementScripts.Read.All"
     );
+}
 
+#[test]
+fn graph_wam_request_targets_microsoft_graph_resource() {
+    assert_eq!(GRAPH_WAM_REQUEST.scope, GRAPH_SCOPE_REQUEST);
+    assert_eq!(GRAPH_WAM_REQUEST.resource_property, "resource");
+    assert_eq!(GRAPH_WAM_REQUEST.resource, "https://graph.microsoft.com");
+}
+
+#[test]
+fn graph_auth_status_reports_full_and_app_only_capabilities() {
     let full = unsigned_token(serde_json::json!({
         "aud": "https://graph.microsoft.com",
         "tid": "tenant-a",

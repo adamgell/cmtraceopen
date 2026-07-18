@@ -192,7 +192,7 @@ PID and process start time form the process identity so PID reuse cannot merge o
 
 ## Graph contract
 
-The existing WAM provider, public client, HWND-parented interaction, and in-memory token cache remain the only authentication mechanism. The workspace never silently initiates authentication. Consent uses a WAM v2 scope request with the five fully qualified Graph scope names and no resource property; capability display uses their short `scp` values. Unsigned token claims are only decoded/sanity-checked for cache and UX, while Graph 401/403 responses remain authoritative.
+The existing WAM provider, public client, HWND-parented interaction, and in-memory token cache remain the only authentication mechanism. The workspace never silently initiates authentication. The raw Entra WAM request uses the five short delegated Graph scope names and the required `resource=https://graph.microsoft.com` property; capability display uses the returned short `scp` values. Unsigned token claims are only decoded/sanity-checked for cache and UX, while Graph 401/403 responses remain authoritative.
 
 Requested delegated read scopes:
 

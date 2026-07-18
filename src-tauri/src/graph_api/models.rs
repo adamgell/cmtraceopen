@@ -18,14 +18,27 @@ pub const GRAPH_DELEGATED_SCOPES: [&str; 5] = [
 ];
 
 pub const GRAPH_SCOPE_REQUEST: &str = concat!(
-    "https://graph.microsoft.com/DeviceManagementManagedDevices.Read.All ",
-    "https://graph.microsoft.com/DeviceManagementServiceConfig.Read.All ",
-    "https://graph.microsoft.com/DeviceManagementApps.Read.All ",
-    "https://graph.microsoft.com/DeviceManagementConfiguration.Read.All ",
-    "https://graph.microsoft.com/DeviceManagementScripts.Read.All"
+    "DeviceManagementManagedDevices.Read.All ",
+    "DeviceManagementServiceConfig.Read.All ",
+    "DeviceManagementApps.Read.All ",
+    "DeviceManagementConfiguration.Read.All ",
+    "DeviceManagementScripts.Read.All"
 );
 
-const GRAPH_URL_AUDIENCE: &str = "https://graph.microsoft.com";
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GraphWamRequestContract {
+    pub scope: &'static str,
+    pub resource_property: &'static str,
+    pub resource: &'static str,
+}
+
+pub const GRAPH_WAM_REQUEST: GraphWamRequestContract = GraphWamRequestContract {
+    scope: GRAPH_SCOPE_REQUEST,
+    resource_property: "resource",
+    resource: "https://graph.microsoft.com",
+};
+
+const GRAPH_URL_AUDIENCE: &str = GRAPH_WAM_REQUEST.resource;
 const GRAPH_APP_ID_AUDIENCE: &str = "00000003-0000-0000-c000-000000000000";
 const MAX_ACCESS_TOKEN_BYTES: usize = 64 * 1024;
 

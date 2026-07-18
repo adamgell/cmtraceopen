@@ -13,7 +13,8 @@ pub mod models;
 pub use models::{
     normalize_graph_guid, project_graph_auth_status, GraphAppInfo, GraphAuthCapabilities,
     GraphAuthStatus, GraphHttpMethod, GraphResolutionResult, GraphTransportRequest,
-    GraphTransportResponse, GRAPH_DELEGATED_SCOPES, GRAPH_SCOPE_REQUEST,
+    GraphTransportResponse, GraphWamRequestContract, GRAPH_DELEGATED_SCOPES, GRAPH_SCOPE_REQUEST,
+    GRAPH_WAM_REQUEST,
 };
 
 #[cfg(any(target_os = "windows", test))]
@@ -208,7 +209,7 @@ mod windows_impl {
         normalize_graph_guid, parse_graph_app_json, parse_graph_app_values,
         project_graph_auth_status, receive_before_deadline, DeadlineReceiveError, GraphAppInfo,
         GraphAuthStatus, GraphHttpMethod, GraphResolutionResult, GraphTransportRequest,
-        GraphTransportResponse, VersionedAuthSlot, VersionedGuidCache, GRAPH_SCOPE_REQUEST,
+        GraphTransportResponse, VersionedAuthSlot, VersionedGuidCache, GRAPH_WAM_REQUEST,
     };
     use crate::error::AppError;
 
@@ -457,12 +458,21 @@ mod windows_impl {
                 .map_err(|e| AppError::Internal(format!("WAM provider lookup failed: {e}")))?;
             let provider = wait_for_operation(&provider_operation, deadline, "provider lookup")?;
 
-            // WAM v2 scope model: request only the five delegated Intune read
-            // capabilities and do not attach a v1 `resource` property.
-            let scope = HSTRING::from(GRAPH_SCOPE_REQUEST);
+            // The raw Entra WAM provider uses short delegated scope names plus
+            // an explicit Graph resource. Without the resource property WAM can
+            // report Success while returning an empty token.
+            let scope = HSTRING::from(GRAPH_WAM_REQUEST.scope);
             let client_id = HSTRING::from(GRAPH_POWERSHELL_CLIENT_ID);
             let request = WebTokenRequest::Create(&provider, &scope, &client_id)
                 .map_err(|e| AppError::Internal(format!("WAM request creation failed: {e}")))?;
+            request
+                .Properties()
+                .map_err(|e| AppError::Internal(format!("WAM properties failed: {e}")))?
+                .Insert(
+                    &HSTRING::from(GRAPH_WAM_REQUEST.resource_property),
+                    &HSTRING::from(GRAPH_WAM_REQUEST.resource),
+                )
+                .map_err(|e| AppError::Internal(format!("WAM set resource failed: {e}")))?;
 
             // Use the COM interop interface to pass our HWND
             let interop: IWebAuthenticationCoreManagerInterop =

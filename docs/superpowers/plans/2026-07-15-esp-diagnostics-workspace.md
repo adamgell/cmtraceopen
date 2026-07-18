@@ -1364,14 +1364,15 @@ DeviceManagementConfiguration.Read.All
 DeviceManagementScripts.Read.All
 ```
 
-The WAM v2 acquisition request uses the space-separated fully qualified forms and does not send a `resource` property:
+The raw Entra WAM acquisition request uses the space-separated short names and sends the required `resource=https://graph.microsoft.com` property:
 
 ```text
-https://graph.microsoft.com/DeviceManagementManagedDevices.Read.All
-https://graph.microsoft.com/DeviceManagementServiceConfig.Read.All
-https://graph.microsoft.com/DeviceManagementApps.Read.All
-https://graph.microsoft.com/DeviceManagementConfiguration.Read.All
-https://graph.microsoft.com/DeviceManagementScripts.Read.All
+DeviceManagementManagedDevices.Read.All
+DeviceManagementServiceConfig.Read.All
+DeviceManagementApps.Read.All
+DeviceManagementConfiguration.Read.All
+DeviceManagementScripts.Read.All
+resource=https://graph.microsoft.com
 ```
 
 Capability matching uses the short names returned in `scp`.
@@ -1379,26 +1380,27 @@ Capability matching uses the short names returned in `scp`.
 - [x] **Step 2: Confirm current status lacks capabilities**
 
 ```bash
-cargo test -p cmtrace-open --all-features graph_auth_status_reports_capabilities -- --nocapture
+cargo test -p cmtrace-open --all-features --test graph_esp_diagnostics graph_auth_status_reports_full_and_app_only_capabilities -- --exact --nocapture
 npm test -- src/components/dialogs/settings/GraphApiTab.test.tsx
 ```
 
-Expected: fail because current WAM resource-mode status does not report scope claims/capabilities.
+Expected: fail because current WAM status does not report scope claims/capabilities; the request-contract regression test must also pin the short scope names and required Graph resource property.
 
 - [x] **Step 3: Preserve WAM while making permission use explicit**
 
 Keep the existing provider, public client ID, HWND-parented interaction, and memory-only cache. Decode and sanity-check unsigned `scp`, `aud`, `tid`, and `exp` only for expiry/cache/capability UX; Microsoft Graph 401/403 responses remain the authorization truth. Accept `aud` values `https://graph.microsoft.com` and `00000003-0000-0000-c000-000000000000`, derive expiry from `exp`, and remove the current fixed 50-minute fallback. Remove token-bearing `Debug` behavior. Continue current app-name enrichment when only app-read capability exists.
 
-The existing empty-scope/resource-mode request may remain only as a compatibility path for inspecting already-granted tokens and current app-name behavior. It must never be represented as capable of requesting the five-scope consent set.
+The Graph resource property is mandatory for this raw Entra WAM path. Request the five declared permissions as short scope names, then derive effective capabilities only from the returned `scp` claim; never infer consent from the request itself.
 
 - [ ] **Step 4: Add the public-client release gate**
 
-On a Windows test device, make one interactive WAM v2 request with the exact five fully qualified scopes and inspect the resulting short `scp` values. This live public-client feasibility result is a prerequisite to Task 11; mocked CI cannot establish consent. If the existing client cannot request/consent to the set, surface `UnsupportedClientScopeSet` with the missing scopes and stop for an explicit authentication-client decision—do not replace authentication or broaden permissions silently.
+On a Windows test device, make one interactive raw Entra WAM request with the exact five short scopes plus `resource=https://graph.microsoft.com` and inspect the resulting short `scp` values. This live public-client feasibility result is a prerequisite to Task 11; mocked CI cannot establish consent. If the existing client cannot request/consent to the set, surface `UnsupportedClientScopeSet` with the missing scopes and stop for an explicit authentication-client decision—do not replace authentication or broaden permissions silently.
 
 - [ ] **Step 5: Verify and commit**
 
 ```bash
-cargo test -p cmtrace-open --all-features graph_auth_
+cargo test -p cmtrace-open --all-features --test graph_esp_diagnostics graph_auth_ -- --nocapture
+cargo test -p cmtrace-open --all-features --test graph_esp_diagnostics graph_wam_ -- --nocapture
 npm test -- src/components/dialogs/settings/GraphApiTab.test.tsx
 npx tsc --noEmit
 git add src-tauri/src/graph_api.rs src-tauri/src/commands/graph_api.rs src/lib/commands.ts src/components/dialogs/settings/GraphApiTab.tsx src/components/dialogs/settings/GraphApiTab.test.tsx
@@ -1958,7 +1960,7 @@ Document the workspace, elevation recommendation, bounded discovery limits, no d
 
 Any implementation difference requires an explicit rationale in the spec before release. Do not change the done-definition to match missing code.
 
-**Validation-sequencing drift:** No functional contract drift has been identified. Graph orchestration and UX proceeded against portable models and fake transports before the planned live WAM public-client feasibility gate could run. The exact five-scope WAM v2 request without a resource property is implemented and cross-compiled, but live consent and `scp` evidence remain required in Phase 15F. Fixture-driven Playwright app-shell captures are not accepted as native Windows Tauri visual evidence. Parallel worktrees also split or folded some planned commit boundaries without changing the done-definition.
+**Validation-sequencing drift:** Graph orchestration and UX proceeded against portable models and fake transports before the planned live WAM public-client feasibility gate could run. Live Windows evidence on 2026-07-18 falsified the no-resource request assumption: WAM reported `Success` but returned an empty token. The corrected raw Entra WAM contract uses the five short scope names plus `resource=https://graph.microsoft.com`; live consent and `scp` evidence still remain required in Phase 15F. Fixture-driven Playwright app-shell captures are not accepted as native Windows Tauri visual evidence. Parallel worktrees also split or folded some planned commit boundaries without changing the done-definition.
 
 - [x] **Step 3: Run documentation link/path checks and commit**
 
@@ -2070,7 +2072,7 @@ Exercise zero, one, and multiple concurrent `msiexec` processes. Confirm exact l
 
 - [ ] **Step 4: Graph states**
 
-First prove that the existing public client makes a WAM v2 request for the five fully qualified scopes without a resource property and receives all five short names in `scp`; record the client ID, tenant, consent result, and redacted capability output. Then exercise Graph disabled, connecting-at-start/no queue, manual refresh after connection, disable-during-query/no sign-out, full consent, app-only/partial consent, denied section, expired token, offline, cancellation, ambiguous device, and beta unknown value. Compare the selected managed device, Autopilot event/profile, profile assignments, ESP configuration, and app status against the Intune portal.
+First prove that the existing public client makes a raw Entra WAM request for the five short scopes with `resource=https://graph.microsoft.com` and receives all five short names in `scp`; record the client ID, tenant, consent result, and redacted capability output. Then exercise Graph disabled, connecting-at-start/no queue, manual refresh after connection, disable-during-query/no sign-out, full consent, app-only/partial consent, denied section, expired token, offline, cancellation, ambiguous device, and beta unknown value. Compare the selected managed device, Autopilot event/profile, profile assignments, ESP configuration, and app status against the Intune portal.
 
 - [ ] **Step 5: Read-only audit**
 
@@ -2148,7 +2150,7 @@ Commit any final verified fixes with scoped messages. Do not merge, push, or ope
 - [x] All diagnostic registry access is read-only and scoped.
 - [x] All Graph ESP requests are read-only and use only the five declared delegated read scopes.
 - [x] The existing WAM flow is reused; no second login, app secret, or bearer-token input exists.
-- [ ] WAM v2 requests exactly the five fully qualified delegated scopes with no resource property; short `scp` capability evidence is recorded on Windows.
+- [ ] Raw Entra WAM requests exactly the five short delegated scopes with `resource=https://graph.microsoft.com`; short `scp` capability evidence is recorded on Windows.
 - [x] Tokens remain memory-only and redacted from `Debug`, IPC, logs, screenshots, copy, and export.
 - [x] Graph host, pagination, item, response-size, timeout, retry, and cancellation limits are enforced.
 - [x] CAB/ZIP entry count, size, path, type, and extraction-root limits are enforced.
@@ -2166,7 +2168,7 @@ Commit any final verified fixes with scoped messages. Do not merge, push, or ope
 - [x] Confirm no unfinished-marker comments, placeholder UI, fake production data, or deferred parity category remains.
 - [x] Confirm `esp-diagnostics`, `EspDiagnosticsSnapshot`, `EspSessionUpdate`, and `GraphSection<T>` naming is consistent across Rust and TypeScript.
 - [x] Confirm Graph-off local behavior is independently complete.
-- [x] Confirm the hydrated frontend setting, WAM v2 feasibility gate, cancellation, and connection-race behavior are explicit.
+- [x] Confirm the hydrated frontend setting, raw Entra WAM short-scope plus Graph-resource feasibility gate, cancellation, and connection-race behavior are explicit.
 - [x] Confirm live-session cleanup, stale request handling, and race tests are explicit.
 - [x] Confirm the plan does not copy unsafe PowerShell behaviors.
 - [x] Confirm the final gates include TypeScript, all Rust tests/clippy, Vitest, Playwright, lite/full builds, Windows CI/live verification, privacy, and read-only audit.

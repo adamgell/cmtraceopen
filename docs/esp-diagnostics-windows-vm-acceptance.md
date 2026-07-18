@@ -478,7 +478,7 @@ Local diagnostics are mandatory. Graph enrichment is conditional on the existing
 | 401/403, if naturally observed | 401 invalidates once; 403 is isolated to its section. |
 | Missing scope, offline, throttled, ambiguous device, beta unknown | Record only if naturally observed or exercised in an isolated test tenant; otherwise `not exercised`. |
 
-Static review evidence must additionally distinguish the existing persisted-option startup connection from ESP behavior, and show five fully qualified v2 scopes, no WAM resource property, GET-only ESP Graph operations, bounded retry/pagination/body limits, and token/authorization-header redaction.
+Static review evidence must additionally distinguish the existing persisted-option startup connection from ESP behavior, and show five short delegated scopes with the required `resource=https://graph.microsoft.com` WAM property, GET-only ESP Graph operations, bounded retry/pagination/body limits, and token/authorization-header redaction.
 
 Compare enriched values read-only with the Intune portal and record `match`, `mismatch`, `not found`, or `not exercised` for managed device, Autopilot identity/group tag, profile, declared assignments and filters, Autopilot events, ESP configuration, apps, scripts, and policy state. Declared targeting must never be presented as effective group membership or proof that an app blocks ESP.
 
