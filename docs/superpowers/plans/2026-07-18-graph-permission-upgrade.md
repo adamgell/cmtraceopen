@@ -250,16 +250,21 @@ Add a Windows-only command beside `graph_authenticate`:
 ```rust
 #[tauri::command]
 #[cfg(target_os = "windows")]
-pub fn graph_request_missing_permissions(
+pub async fn graph_request_missing_permissions(
     app: tauri::AppHandle,
     state: tauri::State<'_, GraphAuthState>,
 ) -> CmdResult<GraphPermissionUpgradeResult> {
     let hwnd = get_main_hwnd(&app)?;
-    graph_api::request_missing_permissions(&state, hwnd)
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        graph_api::request_missing_permissions_on_initialized_worker(&state, hwnd)
+    })
+    .await
+    .map_err(|error| AppError::Internal(format!("GraphPermissionTaskFailed: {error}")))?
 }
 ```
 
-Register it in the production invoke handler under the same Windows cfg. Add its name to the development bridge's explicit protected-command rejection list so the bridge never returns a misleading null result and never forwards caller-supplied scopes.
+The initialized-worker helper must balance `RoInitialize(RO_INIT_MULTITHREADED)` with `RoUninitialize` before and after WAM on the blocking thread. Register the command in the production invoke handler under the same Windows cfg. Add its name to the development bridge's explicit protected-command rejection list so the bridge never returns a misleading null result and never forwards caller-supplied scopes.
 
 - [ ] **Step 3: Add the frontend token-free wrapper**
 
@@ -341,9 +346,9 @@ Extend `GraphAction` with `permissions`; reuse `beginGraphAction`, `finishGraphA
 Add local permission feedback with success, warning, and error tones. Use deterministic copy:
 
 - Upgraded: `Permissions updated. Additional Graph capabilities are now available.`
-- Unchanged: `No additional permissions were granted. A tenant administrator may need to approve the remaining permissions.`
+- Unchanged: `No additional permissions were granted. A tenant administrator may need to approve the missing permissions.`
 - Cancelled: `Permission request cancelled. Your existing Graph permissions are unchanged.`
-- Denied: `Consent was not granted. Your existing Graph permissions remain available. A tenant administrator may need to approve the remaining permissions.`
+- Denied: `Consent was not granted. Your existing Graph permissions remain available. A tenant administrator may need to approve the missing permissions.`
 - Failed: `Windows could not complete the permission request. Your existing Graph permissions remain available.`
 - Stale: `The permission request was superseded by a newer Graph connection change.`
 
@@ -401,7 +406,7 @@ Expected: the tests pass after mocks explicitly pin zero upgrade calls and no pr
 
 - [ ] **Step 2: Update user and Windows acceptance documentation**
 
-Document that Settings can explicitly open WAM to request the fixed remaining declared permissions. Add Windows rows for partial-button visibility, HWND parenting, upgraded, unchanged/admin-consent-needed, cancelled, denied, retained old capabilities, restart with no prompt, token-free IPC/logging, and no arbitrary scope input. Qualify README text that previously implied no later sign-in surface could ever open.
+Document that Settings can explicitly open WAM to re-request the complete fixed five-permission union. Add Windows rows for partial-button visibility, HWND parenting, upgraded, unchanged/admin-consent-needed, cancelled, denied, retained old capabilities, restart with no prompt, token-free IPC/logging, and no arbitrary scope input. Qualify README text that previously implied no later sign-in surface could ever open.
 
 Add an Unreleased changelog entry for the user-triggered, non-destructive upgrade.
 

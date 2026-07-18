@@ -108,6 +108,30 @@ fn graph_permission_upgrade_result_is_a_token_free_three_field_contract() {
 }
 
 #[test]
+fn graph_permission_upgrade_command_runs_wam_on_an_initialized_blocking_worker() {
+    let command_source = include_str!("../src/commands/graph_api.rs");
+    let command_start = command_source
+        .find("pub async fn graph_request_missing_permissions")
+        .expect("permission command must be async");
+    let command_tail = &command_source[command_start..];
+    let command_end = command_tail
+        .find("#[tauri::command]")
+        .unwrap_or(command_tail.len());
+    let command = &command_tail[..command_end];
+
+    assert!(command.contains("state.inner().clone()"));
+    assert!(command.contains("tauri::async_runtime::spawn_blocking"));
+    assert!(command.contains("graph_api::request_missing_permissions_on_initialized_worker"));
+
+    let graph_source = include_str!("../src/graph_api.rs");
+    assert!(graph_source.contains("RoInitialize(RO_INIT_MULTITHREADED)"));
+    assert!(graph_source.contains("RoUninitialize()"));
+    assert!(graph_source.contains("pub fn request_missing_permissions_on_initialized_worker"));
+    assert!(graph_source.contains("wam::acquire_token_on_initialized_worker"));
+    assert!(graph_source.contains("match wam::acquire_token(hwnd_raw)"));
+}
+
+#[test]
 fn graph_permission_strict_declared_scope_superset_is_an_upgrade() {
     let current = graph_permission_status(
         true,

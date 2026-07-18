@@ -47,12 +47,17 @@ pub fn graph_authenticate(
 
 #[tauri::command]
 #[cfg(target_os = "windows")]
-pub fn graph_request_missing_permissions(
+pub async fn graph_request_missing_permissions(
     app: tauri::AppHandle,
     state: tauri::State<'_, GraphAuthState>,
 ) -> CmdResult<GraphPermissionUpgradeResult> {
     let hwnd = get_main_hwnd(&app)?;
-    graph_api::request_missing_permissions(&state, hwnd)
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        graph_api::request_missing_permissions_on_initialized_worker(&state, hwnd)
+    })
+    .await
+    .map_err(|error| AppError::Internal(format!("GraphPermissionTaskFailed: {error}")))?
 }
 
 #[tauri::command]

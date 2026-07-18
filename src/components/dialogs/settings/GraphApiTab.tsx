@@ -1,4 +1,10 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import {
+  useState,
+  useEffect,
+  useCallback,
+  useRef,
+  useSyncExternalStore,
+} from "react";
 import { tokens } from "@fluentui/react-components";
 import { useUiStore } from "../../../stores/ui-store";
 import {
@@ -34,11 +40,11 @@ const PERMISSION_NOTICE_COPY: Record<GraphPermissionUpgradeOutcome, string> = {
   upgraded:
     "Permissions updated. Additional Graph capabilities are now available.",
   unchanged:
-    "No additional permissions were granted. A tenant administrator may need to approve the remaining permissions.",
+    "No additional permissions were granted. A tenant administrator may need to approve the missing permissions.",
   cancelled:
     "Permission request cancelled. Your existing Graph permissions are unchanged.",
   denied:
-    "Consent was not granted. Your existing Graph permissions remain available. A tenant administrator may need to approve the remaining permissions.",
+    "Consent was not granted. Your existing Graph permissions remain available. A tenant administrator may need to approve the missing permissions.",
   failed:
     "Windows could not complete the permission request. Your existing Graph permissions remain available.",
   stale:
@@ -48,9 +54,103 @@ const PERMISSION_NOTICE_COPY: Record<GraphPermissionUpgradeOutcome, string> = {
 type GraphAction = "signIn" | "signOut" | "cache" | "permissions";
 type PermissionNoticeTone = "success" | "warning" | "error";
 
+interface SharedGraphAction {
+  action: GraphAction;
+  generation: number;
+  statusAtStart: GraphAuthStatus | null;
+}
+
+let graphActionGeneration = 0;
+let sharedGraphAction: SharedGraphAction | null = null;
+const graphActionSubscribers = new Set<() => void>();
+
+function notifyGraphActionSubscribers() {
+  for (const subscriber of graphActionSubscribers) {
+    subscriber();
+  }
+}
+
+function subscribeGraphAction(subscriber: () => void) {
+  graphActionSubscribers.add(subscriber);
+  return () => graphActionSubscribers.delete(subscriber);
+}
+
+function getSharedGraphAction() {
+  return sharedGraphAction;
+}
+
+function beginSharedGraphAction(
+  action: GraphAction,
+  statusAtStart: GraphAuthStatus | null,
+): number | null {
+  if (sharedGraphAction !== null) return null;
+  graphActionGeneration += 1;
+  sharedGraphAction = {
+    action,
+    generation: graphActionGeneration,
+    statusAtStart,
+  };
+  notifyGraphActionSubscribers();
+  return graphActionGeneration;
+}
+
+function isCurrentSharedGraphAction(generation: number) {
+  return (
+    sharedGraphAction?.generation === generation &&
+    graphActionGeneration === generation &&
+    useUiStore.getState().graphApiEnabled
+  );
+}
+
+function finishSharedGraphAction(action: GraphAction, generation: number) {
+  if (
+    sharedGraphAction?.action !== action ||
+    sharedGraphAction.generation !== generation ||
+    graphActionGeneration !== generation
+  ) {
+    return;
+  }
+  sharedGraphAction = null;
+  notifyGraphActionSubscribers();
+}
+
+function invalidateSharedGraphActions() {
+  graphActionGeneration += 1;
+  sharedGraphAction = null;
+  notifyGraphActionSubscribers();
+}
+
 interface PermissionNotice {
   tone: PermissionNoticeTone;
   message: string;
+}
+
+const GRAPH_DISCONNECTED_RECONCILIATION_NOTICE: PermissionNotice = {
+  tone: "error",
+  message:
+    "Microsoft Graph is no longer connected. Sign in again to request permissions.",
+};
+
+const GRAPH_COMPLETE_RECONCILIATION_NOTICE: PermissionNotice = {
+  tone: "success",
+  message: "Microsoft Graph permissions are already up to date.",
+};
+
+const GRAPH_FAILED_PERMISSION_NOTICE: PermissionNotice = {
+  tone: "error",
+  message: PERMISSION_NOTICE_COPY.failed,
+};
+
+function buildPermissionReconciliationNotice(
+  status: GraphAuthStatus,
+): PermissionNotice {
+  if (!status.isAuthenticated) {
+    return GRAPH_DISCONNECTED_RECONCILIATION_NOTICE;
+  }
+  if (status.missingScopes.length === 0) {
+    return GRAPH_COMPLETE_RECONCILIATION_NOTICE;
+  }
+  return GRAPH_FAILED_PERMISSION_NOTICE;
 }
 
 function buildPermissionNotice(
@@ -89,59 +189,75 @@ export function GraphApiTab() {
   const currentPlatform = useUiStore((state) => state.currentPlatform);
 
   const [authStatus, setAuthStatus] = useState<GraphAuthStatus | null>(null);
-  const [activeAction, setActiveAction] = useState<GraphAction | null>(null);
   const [cachedAppCount, setCachedAppCount] = useState<number | null>(null);
   const [cacheError, setCacheError] = useState<string | null>(null);
   const [permissionNotice, setPermissionNotice] =
     useState<PermissionNotice | null>(null);
   const [showConfirmEnable, setShowConfirmEnable] = useState(false);
-  const graphOperationGeneration = useRef(0);
-  const activeActionRef = useRef<GraphAction | null>(null);
+  const activeSharedAction = useSyncExternalStore(
+    subscribeGraphAction,
+    getSharedGraphAction,
+    getSharedGraphAction,
+  );
+  const mountedRef = useRef(true);
+  const localRefreshGeneration = useRef(0);
+  const skipNextSettledActionRefresh = useRef(false);
+  const activeAction = activeSharedAction?.action ?? null;
+  const displayedAuthStatus =
+    authStatus ?? activeSharedAction?.statusAtStart ?? null;
   const loading = activeAction === "signIn";
   const cacheLoading = activeAction === "cache";
   const permissionsLoading = activeAction === "permissions";
   const graphActionBusy = activeAction !== null;
 
-  const isCurrentGraphOperation = useCallback((generation: number) => {
-    return (
-      generation === graphOperationGeneration.current &&
-      useUiStore.getState().graphApiEnabled
-    );
+  const isCurrentMountedGraphAction = useCallback((generation: number) => {
+    return mountedRef.current && isCurrentSharedGraphAction(generation);
+  }, []);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      localRefreshGeneration.current += 1;
+    };
   }, []);
 
   const refreshStatus = useCallback(async () => {
-    if (!graphApiEnabled || activeActionRef.current !== null) return;
-    const generation = ++graphOperationGeneration.current;
+    if (!graphApiEnabled || activeAction !== null) return;
+    if (skipNextSettledActionRefresh.current) {
+      skipNextSettledActionRefresh.current = false;
+      return;
+    }
+    const localGeneration = ++localRefreshGeneration.current;
+    const actionGenerationAtStart = graphActionGeneration;
+    const isCurrentRefresh = () =>
+      mountedRef.current &&
+      localGeneration === localRefreshGeneration.current &&
+      actionGenerationAtStart === graphActionGeneration &&
+      sharedGraphAction === null &&
+      useUiStore.getState().graphApiEnabled;
     try {
       const status = await graphGetAuthStatus();
-      if (!isCurrentGraphOperation(generation)) return;
+      if (!isCurrentRefresh()) return;
       setAuthStatus(status);
       useUiStore.getState().setGraphApiStatus(graphApiPhaseFromStatus(status));
     } catch {
-      if (isCurrentGraphOperation(generation)) {
+      if (isCurrentRefresh()) {
         useUiStore.getState().setGraphApiStatus("error");
       }
     }
-  }, [graphApiEnabled, isCurrentGraphOperation]);
+  }, [activeAction, graphApiEnabled]);
 
   useEffect(() => {
     refreshStatus();
   }, [refreshStatus]);
 
-  useEffect(() => {
-    return () => {
-      graphOperationGeneration.current += 1;
-      activeActionRef.current = null;
-    };
-  }, []);
-
   const handleToggle = (checked: boolean) => {
     if (checked) {
       setShowConfirmEnable(true);
     } else {
-      graphOperationGeneration.current += 1;
-      activeActionRef.current = null;
-      setActiveAction(null);
+      invalidateSharedGraphActions();
+      localRefreshGeneration.current += 1;
       setGraphApiEnabled(false);
       setAuthStatus(null);
       setCachedAppCount(null);
@@ -157,22 +273,14 @@ export function GraphApiTab() {
   };
 
   const beginGraphAction = (action: GraphAction): number | null => {
-    if (activeActionRef.current !== null) {
-      return null;
-    }
-    activeActionRef.current = action;
-    setActiveAction(action);
-    return ++graphOperationGeneration.current;
+    return beginSharedGraphAction(action, displayedAuthStatus);
   };
 
   const finishGraphAction = (action: GraphAction, generation: number) => {
-    if (
-      isCurrentGraphOperation(generation) &&
-      activeActionRef.current === action
-    ) {
-      activeActionRef.current = null;
-      setActiveAction(null);
+    if (mountedRef.current && isCurrentSharedGraphAction(generation)) {
+      skipNextSettledActionRefresh.current = true;
     }
+    finishSharedGraphAction(action, generation);
   };
 
   const handleSignIn = async () => {
@@ -182,15 +290,16 @@ export function GraphApiTab() {
     useUiStore.getState().setGraphApiStatus("connecting");
     try {
       const status = await graphAuthenticate();
-      if (!isCurrentGraphOperation(generation)) return;
-      setAuthStatus(status);
+      if (!isCurrentSharedGraphAction(generation)) return;
       useUiStore
         .getState()
         .setGraphApiStatus(status.isAuthenticated ? "connected" : "error");
+      if (isCurrentMountedGraphAction(generation)) {
+        setAuthStatus(status);
+      }
     } catch (e) {
-      if (!isCurrentGraphOperation(generation)) return;
-      useUiStore.getState().setGraphApiStatus("error");
-      setAuthStatus({
+      if (!isCurrentSharedGraphAction(generation)) return;
+      const status: GraphAuthStatus = {
         isAuthenticated: false,
         userPrincipalName: null,
         tenantId: null,
@@ -205,7 +314,11 @@ export function GraphApiTab() {
           scripts: false,
         },
         error: e instanceof Error ? e.message : String(e),
-      });
+      };
+      useUiStore.getState().setGraphApiStatus("error");
+      if (isCurrentMountedGraphAction(generation)) {
+        setAuthStatus(status);
+      }
     } finally {
       finishGraphAction("signIn", generation);
     }
@@ -216,11 +329,13 @@ export function GraphApiTab() {
     if (generation === null) return;
     try {
       await graphSignOut();
-      if (!isCurrentGraphOperation(generation)) return;
-      setAuthStatus(null);
-      setCachedAppCount(null);
-      setPermissionNotice(null);
+      if (!isCurrentSharedGraphAction(generation)) return;
       useUiStore.getState().setGraphApiStatus("idle");
+      if (isCurrentMountedGraphAction(generation)) {
+        setAuthStatus(null);
+        setCachedAppCount(null);
+        setPermissionNotice(null);
+      }
     } catch {
       // ignore
     } finally {
@@ -234,18 +349,31 @@ export function GraphApiTab() {
     setPermissionNotice(null);
     try {
       const result = await graphRequestMissingPermissions();
-      if (!isCurrentGraphOperation(generation)) return;
-      setAuthStatus(result.status);
-      setPermissionNotice(buildPermissionNotice(result));
+      if (!isCurrentSharedGraphAction(generation)) return;
       useUiStore
         .getState()
         .setGraphApiStatus(graphApiPhaseFromStatus(result.status));
+      if (isCurrentMountedGraphAction(generation)) {
+        setAuthStatus(result.status);
+        setPermissionNotice(buildPermissionNotice(result));
+      }
     } catch {
-      if (!isCurrentGraphOperation(generation)) return;
-      setPermissionNotice({
-        tone: "error",
-        message: PERMISSION_NOTICE_COPY.failed,
-      });
+      if (!isCurrentSharedGraphAction(generation)) return;
+      try {
+        const status = await graphGetAuthStatus();
+        if (!isCurrentSharedGraphAction(generation)) return;
+        useUiStore
+          .getState()
+          .setGraphApiStatus(graphApiPhaseFromStatus(status));
+        if (isCurrentMountedGraphAction(generation)) {
+          setAuthStatus(status);
+          setPermissionNotice(buildPermissionReconciliationNotice(status));
+        }
+      } catch {
+        if (isCurrentMountedGraphAction(generation)) {
+          setPermissionNotice(GRAPH_FAILED_PERMISSION_NOTICE);
+        }
+      }
     } finally {
       finishGraphAction("permissions", generation);
     }
@@ -258,7 +386,7 @@ export function GraphApiTab() {
     setCachedAppCount(null);
     try {
       const apps = await graphFetchAllApps();
-      if (!isCurrentGraphOperation(generation)) return;
+      if (!isCurrentMountedGraphAction(generation)) return;
       setCachedAppCount(apps.length);
 
       if (apps.length > 0) {
@@ -267,7 +395,7 @@ export function GraphApiTab() {
           .mergeGuidRegistry(buildGraphRegistryEntries(apps));
       }
     } catch (e) {
-      if (!isCurrentGraphOperation(generation)) return;
+      if (!isCurrentMountedGraphAction(generation)) return;
       const msg = e instanceof Error ? e.message : String(e);
       setCacheError(msg);
     } finally {
@@ -464,7 +592,7 @@ export function GraphApiTab() {
               Connection Status
             </div>
 
-            {authStatus?.isAuthenticated ? (
+            {displayedAuthStatus?.isAuthenticated ? (
               <div>
                 <div
                   style={{
@@ -484,22 +612,22 @@ export function GraphApiTab() {
                     }}
                   />
                   <span>
-                    {authStatus.missingScopes.length > 0
+                    {displayedAuthStatus.missingScopes.length > 0
                       ? "Connected with partial permissions"
                       : "Connected"}
                   </span>
                 </div>
-                {authStatus.userPrincipalName && (
+                {displayedAuthStatus.userPrincipalName && (
                   <div
                     style={{
                       color: tokens.colorNeutralForeground3,
                       marginBottom: "4px",
                     }}
                   >
-                    Signed in as: {authStatus.userPrincipalName}
+                    Signed in as: {displayedAuthStatus.userPrincipalName}
                   </div>
                 )}
-                {authStatus.tenantId && (
+                {displayedAuthStatus.tenantId && (
                   <div
                     style={{
                       color: tokens.colorNeutralForeground3,
@@ -508,7 +636,7 @@ export function GraphApiTab() {
                       fontSize: "11px",
                     }}
                   >
-                    Tenant: {authStatus.tenantId}
+                    Tenant: {displayedAuthStatus.tenantId}
                   </div>
                 )}
                 <div
@@ -522,7 +650,8 @@ export function GraphApiTab() {
                   }}
                 >
                   {GRAPH_CAPABILITY_ROWS.map(([label, capability, scope]) => {
-                    const available = authStatus.capabilities[capability];
+                    const available =
+                      displayedAuthStatus.capabilities[capability];
                     return (
                       <div key={scope}>
                         <span
@@ -554,7 +683,7 @@ export function GraphApiTab() {
                     marginBottom: cachedAppCount != null ? "8px" : "0",
                   }}
                 >
-                  {authStatus.missingScopes.length > 0 && (
+                  {displayedAuthStatus.missingScopes.length > 0 && (
                     <button
                       type="button"
                       onClick={handleRequestMissingPermissions}
@@ -582,7 +711,9 @@ export function GraphApiTab() {
                   <button
                     type="button"
                     onClick={handlePrePopulateCache}
-                    disabled={graphActionBusy || !authStatus.capabilities.apps}
+                    disabled={
+                      graphActionBusy || !displayedAuthStatus.capabilities.apps
+                    }
                     style={{
                       padding: "4px 12px",
                       fontSize: "12px",
@@ -592,11 +723,13 @@ export function GraphApiTab() {
                       borderRadius: "4px",
                       cursor: cacheLoading
                         ? "wait"
-                        : graphActionBusy || !authStatus.capabilities.apps
+                        : graphActionBusy ||
+                            !displayedAuthStatus.capabilities.apps
                           ? "not-allowed"
                           : "pointer",
                       opacity:
-                        graphActionBusy || !authStatus.capabilities.apps
+                        graphActionBusy ||
+                        !displayedAuthStatus.capabilities.apps
                           ? 0.7
                           : 1,
                     }}
@@ -623,7 +756,7 @@ export function GraphApiTab() {
                     Sign out
                   </button>
                 </div>
-                {!authStatus.capabilities.apps && (
+                {!displayedAuthStatus.capabilities.apps && (
                   <div
                     style={{
                       fontSize: "11px",
@@ -682,7 +815,7 @@ export function GraphApiTab() {
                   />
                   <span>Not connected</span>
                 </div>
-                {authStatus?.error && (
+                {displayedAuthStatus?.error && (
                   <div
                     style={{
                       color: tokens.colorPaletteRedForeground1,
@@ -690,7 +823,7 @@ export function GraphApiTab() {
                       fontSize: "11px",
                     }}
                   >
-                    {authStatus.error}
+                    {displayedAuthStatus.error}
                   </div>
                 )}
                 <button

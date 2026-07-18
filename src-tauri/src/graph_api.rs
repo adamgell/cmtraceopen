@@ -18,6 +18,23 @@ pub use models::{
 };
 
 #[cfg(any(target_os = "windows", test))]
+fn is_wam_consent_denial(error_code: Option<u32>, error_message: Option<&str>) -> bool {
+    const USER_DECLINED_CONSENT_CODE: u32 = 65_004;
+    const DENIAL_IDENTIFIERS: [&str; 3] = ["AADSTS65004", "UserDeclinedConsent", "access_denied"];
+
+    error_code == Some(USER_DECLINED_CONSENT_CODE)
+        || error_message.is_some_and(|message| {
+            message
+                .split(|character: char| !(character.is_ascii_alphanumeric() || character == '_'))
+                .any(|identifier| {
+                    DENIAL_IDENTIFIERS
+                        .iter()
+                        .any(|expected| identifier.eq_ignore_ascii_case(expected))
+                })
+        })
+}
+
+#[cfg(any(target_os = "windows", test))]
 #[derive(Default)]
 struct VersionedGuidCache {
     generation: u64,
@@ -244,9 +261,12 @@ mod windows_impl {
 
     enum WamAcquisitionFailure {
         Cancelled,
-        Denied,
+        Denied(AppError),
         Failed(AppError),
     }
+
+    const WAM_USER_INTERACTION_REQUIRED_MESSAGE: &str =
+        "Interactive authentication required. Please sign in to Windows with your Entra ID account first.";
 
     impl From<AppError> for WamAcquisitionFailure {
         fn from(error: AppError) -> Self {
@@ -260,20 +280,27 @@ mod windows_impl {
                 Self::Cancelled => {
                     AppError::Internal("Authentication was cancelled by user.".into())
                 }
-                Self::Denied => AppError::Internal(
-                    "Interactive authentication required. Please sign in to Windows with your Entra ID account first."
-                        .into(),
-                ),
-                Self::Failed(error) => error,
+                Self::Denied(error) | Self::Failed(error) => error,
             }
         }
     }
 
-    fn wam_provider_status_failure(error_message: Option<String>) -> WamAcquisitionFailure {
+    fn wam_provider_legacy_error(error_message: Option<String>) -> AppError {
         let error_message = error_message.unwrap_or_else(|| "Unknown WAM error".to_string());
-        WamAcquisitionFailure::Failed(AppError::Internal(format!(
-            "WAM authentication failed: {error_message}"
-        )))
+        AppError::Internal(format!("WAM authentication failed: {error_message}"))
+    }
+
+    fn wam_provider_status_failure(
+        error_code: Option<u32>,
+        error_message: Option<String>,
+    ) -> WamAcquisitionFailure {
+        let denied = super::is_wam_consent_denial(error_code, error_message.as_deref());
+        let legacy_error = wam_provider_legacy_error(error_message);
+        if denied {
+            WamAcquisitionFailure::Denied(legacy_error)
+        } else {
+            WamAcquisitionFailure::Failed(legacy_error)
+        }
     }
 
     fn unix_now() -> u64 {
@@ -440,11 +467,31 @@ mod windows_impl {
             WebTokenRequestStatus,
         };
         use windows::Win32::Foundation::HWND;
-        use windows::Win32::System::WinRT::IWebAuthenticationCoreManagerInterop;
+        use windows::Win32::System::WinRT::{
+            IWebAuthenticationCoreManagerInterop, RoInitialize, RoUninitialize,
+            RO_INIT_MULTITHREADED,
+        };
         use windows_future::{AsyncOperationCompletedHandler, IAsyncOperation};
 
         const GRAPH_WAM_ACQUISITION_TIMEOUT: std::time::Duration =
             std::time::Duration::from_secs(120);
+
+        struct WinRtApartment;
+
+        impl WinRtApartment {
+            fn initialize() -> Result<Self, AppError> {
+                unsafe { RoInitialize(RO_INIT_MULTITHREADED) }.map_err(|error| {
+                    AppError::Internal(format!("WAM worker WinRT initialization failed: {error}"))
+                })?;
+                Ok(Self)
+            }
+        }
+
+        impl Drop for WinRtApartment {
+            fn drop(&mut self) {
+                unsafe { RoUninitialize() };
+            }
+        }
 
         fn wait_for_operation<T>(
             operation: &IAsyncOperation<T>,
@@ -488,6 +535,13 @@ mod windows_impl {
         /// Desktop (Win32) apps don't have a CoreWindow, so we must use
         /// `IWebAuthenticationCoreManagerInterop::RequestTokenForWindowAsync`
         /// with an explicit HWND instead of the UWP `RequestTokenAsync`.
+        pub fn acquire_token_on_initialized_worker(
+            hwnd_raw: isize,
+        ) -> Result<CachedToken, WamAcquisitionFailure> {
+            let _apartment = WinRtApartment::initialize()?;
+            acquire_token(hwnd_raw)
+        }
+
         pub fn acquire_token(hwnd_raw: isize) -> Result<CachedToken, WamAcquisitionFailure> {
             let hwnd = HWND(hwnd_raw as *mut _);
             let deadline = std::time::Instant::now() + GRAPH_WAM_ACQUISITION_TIMEOUT;
@@ -588,7 +642,19 @@ mod windows_impl {
                 }
                 WebTokenRequestStatus::UserCancel => Err(WamAcquisitionFailure::Cancelled),
                 WebTokenRequestStatus::UserInteractionRequired => {
-                    Err(WamAcquisitionFailure::Denied)
+                    Err(WamAcquisitionFailure::Denied(AppError::Internal(
+                        WAM_USER_INTERACTION_REQUIRED_MESSAGE.into(),
+                    )))
+                }
+                WebTokenRequestStatus::ProviderError => {
+                    let provider_error = result.ResponseError().ok();
+                    let error_code = provider_error
+                        .as_ref()
+                        .and_then(|error| error.ErrorCode().ok());
+                    let error_message = provider_error
+                        .and_then(|error| error.ErrorMessage().ok())
+                        .map(|message| message.to_string());
+                    Err(wam_provider_status_failure(error_code, error_message))
                 }
                 _ => {
                     let error_message = result
@@ -596,7 +662,9 @@ mod windows_impl {
                         .ok()
                         .and_then(|error| error.ErrorMessage().ok())
                         .map(|message| message.to_string());
-                    Err(wam_provider_status_failure(error_message))
+                    Err(WamAcquisitionFailure::Failed(wam_provider_legacy_error(
+                        error_message,
+                    )))
                 }
             }
         }
@@ -847,7 +915,7 @@ mod windows_impl {
     }
 
     const GRAPH_PERMISSION_DENIED_MESSAGE: &str =
-        "Consent was not granted. Your existing Graph permissions remain available.";
+        "Consent was not granted. Your existing Graph permissions remain available. A tenant administrator may need to approve the missing permissions.";
     const GRAPH_PERMISSION_FAILED_MESSAGE: &str =
         "Windows could not complete the permission request. Your existing Graph permissions remain available.";
     const GRAPH_PERMISSION_STALE_MESSAGE: &str =
@@ -904,7 +972,7 @@ mod windows_impl {
                     None,
                 ));
             }
-            Err(WamAcquisitionFailure::Denied) => {
+            Err(WamAcquisitionFailure::Denied(_)) => {
                 return Ok(retained_permission_upgrade_result(
                     state,
                     generation,
@@ -991,11 +1059,13 @@ mod windows_impl {
         }
     }
 
-    pub fn request_missing_permissions(
+    pub fn request_missing_permissions_on_initialized_worker(
         state: &GraphAuthState,
         hwnd_raw: isize,
     ) -> Result<GraphPermissionUpgradeResult, AppError> {
-        request_missing_permissions_with(state, || wam::acquire_token(hwnd_raw))
+        request_missing_permissions_with(state, || {
+            wam::acquire_token_on_initialized_worker(hwnd_raw)
+        })
     }
 
     /// Get current auth status without triggering a new auth flow.
@@ -1536,12 +1606,23 @@ mod windows_impl {
         }
 
         #[test]
-        fn graph_permission_upgrade_denial_retains_original_token() {
-            assert_acquisition_failure_retains_current(
-                WamAcquisitionFailure::Denied,
-                GraphPermissionUpgradeOutcome::Denied,
-                true,
-            );
+        fn graph_permission_upgrade_denial_retains_original_token_and_sanitizes_provider_text() {
+            let raw_provider_text = "AADSTS65004: UserDeclinedConsent access_denied";
+            let state = seed_partial_state();
+            let before = stored_token_and_generation(&state);
+
+            let result = request_missing_permissions_with(&state, || {
+                Err(WamAcquisitionFailure::Denied(AppError::Internal(
+                    raw_provider_text.to_string(),
+                )))
+            })
+            .expect("provider denial is a structured outcome");
+
+            assert_eq!(result.outcome, GraphPermissionUpgradeOutcome::Denied);
+            assert!(result.message.is_some());
+            assert!(!format!("{result:?}").contains(raw_provider_text));
+            assert_eq!(result.status, current_auth_status(&state));
+            assert_eq!(stored_token_and_generation(&state), before);
         }
 
         #[test]
@@ -1568,18 +1649,53 @@ mod windows_impl {
         #[test]
         fn graph_permission_upgrade_provider_status_failure_preserves_legacy_initial_auth_detail() {
             let raw_provider_text = "provider-specific failure";
-            let error = wam_provider_status_failure(Some(raw_provider_text.to_string()))
+            let error = wam_provider_status_failure(None, Some(raw_provider_text.to_string()))
                 .into_initial_auth_error();
             assert_eq!(
                 error.to_string(),
                 format!("WAM authentication failed: {raw_provider_text}")
             );
 
-            let fallback = wam_provider_status_failure(None).into_initial_auth_error();
+            let fallback = wam_provider_status_failure(None, None).into_initial_auth_error();
             assert_eq!(
                 fallback.to_string(),
                 "WAM authentication failed: Unknown WAM error"
             );
+        }
+
+        #[test]
+        fn graph_permission_upgrade_provider_denial_is_reachable_and_preserves_legacy_detail() {
+            let raw_provider_text = "AADSTS65004: UserDeclinedConsent; OAuth error=access_denied";
+            let failure =
+                wam_provider_status_failure(Some(65_004), Some(raw_provider_text.to_string()));
+            assert!(matches!(&failure, WamAcquisitionFailure::Denied(_)));
+
+            let error = failure.into_initial_auth_error();
+            assert_eq!(
+                error.to_string(),
+                format!("WAM authentication failed: {raw_provider_text}")
+            );
+        }
+
+        #[test]
+        fn graph_permission_upgrade_user_interaction_required_preserves_legacy_guidance() {
+            let failure = WamAcquisitionFailure::Denied(AppError::Internal(
+                WAM_USER_INTERACTION_REQUIRED_MESSAGE.into(),
+            ));
+
+            assert_eq!(
+                failure.into_initial_auth_error().to_string(),
+                "Interactive authentication required. Please sign in to Windows with your Entra ID account first."
+            );
+        }
+
+        #[test]
+        fn graph_permission_upgrade_unrelated_provider_failure_stays_failed() {
+            let failure = wam_provider_status_failure(
+                Some(65_005),
+                Some("AADSTS65005: MisconfiguredApplication".to_string()),
+            );
+            assert!(matches!(failure, WamAcquisitionFailure::Failed(_)));
         }
 
         #[test]
@@ -1800,6 +1916,40 @@ mod tests {
     const APP_A: &str = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
     const APP_B: &str = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
     const APP_SCOPE: &str = "DeviceManagementApps.Read.All";
+
+    #[test]
+    fn graph_permission_upgrade_recognizes_documented_consent_denial_markers() {
+        for (error_code, message) in [
+            (Some(65_004), None),
+            (None, Some("AADSTS65004: user declined consent")),
+            (None, Some("provider=UserDeclinedConsent")),
+            (None, Some("error=access_denied&error_subcode=cancel")),
+            (None, Some("aadsts65004: USERDECLINEDCONSENT")),
+            (None, Some("ERROR=ACCESS_DENIED")),
+        ] {
+            assert!(
+                super::is_wam_consent_denial(error_code, message),
+                "documented denial was not recognized: {error_code:?} {message:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn graph_permission_upgrade_rejects_denial_near_misses_and_unrelated_failures() {
+        for (error_code, message) in [
+            (None, None),
+            (Some(65_005), Some("AADSTS65005: MisconfiguredApplication")),
+            (None, Some("AADSTS650040")),
+            (None, Some("NotUserDeclinedConsent")),
+            (None, Some("access_denied_suffix")),
+            (None, Some("prefixaccess_denied")),
+        ] {
+            assert!(
+                !super::is_wam_consent_denial(error_code, message),
+                "near miss was classified as a denial: {error_code:?} {message:?}"
+            );
+        }
+    }
 
     #[test]
     fn deadline_receiver_distinguishes_ready_timeout_and_disconnect() {
