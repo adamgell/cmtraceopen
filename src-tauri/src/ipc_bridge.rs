@@ -183,6 +183,10 @@ fn dispatch(body: &str, state: &Arc<BridgeState>) -> String {
             err_json("ESP Graph commands are unavailable through the debug IPC bridge")
         }
 
+        "graph_request_missing_permissions" => {
+            err_json("Graph permission upgrade is unavailable through the debug IPC bridge")
+        }
+
         #[cfg(feature = "esp-diagnostics")]
         "analyze_esp_evidence"
         | "start_esp_diagnostics_session"
@@ -304,6 +308,34 @@ mod tests {
                 value["error"],
                 "ESP Graph commands are unavailable through the debug IPC bridge"
             );
+        }
+    }
+
+    #[test]
+    fn debug_bridge_rejects_graph_permission_upgrade_with_or_without_caller_scopes() {
+        for args in [
+            serde_json::json!({}),
+            serde_json::json!({
+                "scopes": [
+                    "DeviceManagementManagedDevices.ReadWrite.All",
+                    "https://attacker.example/.default"
+                ]
+            }),
+        ] {
+            let response = dispatch(
+                &serde_json::json!({
+                    "cmd": "graph_request_missing_permissions",
+                    "args": args
+                })
+                .to_string(),
+                &state(),
+            );
+            let value: serde_json::Value = serde_json::from_str(&response).unwrap();
+            assert_eq!(
+                value["error"],
+                "Graph permission upgrade is unavailable through the debug IPC bridge"
+            );
+            assert!(value.get("result").is_none());
         }
     }
 }

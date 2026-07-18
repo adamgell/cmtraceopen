@@ -5,6 +5,8 @@ use crate::error::{AppError, CmdResult};
 #[cfg(all(feature = "esp-diagnostics", target_os = "windows"))]
 use crate::graph_api::esp::EspGraphRequest;
 #[cfg(target_os = "windows")]
+use crate::graph_api::models::GraphPermissionUpgradeResult;
+#[cfg(target_os = "windows")]
 use crate::graph_api::{
     self, GraphAppInfo, GraphAuthState, GraphAuthStatus, GraphResolutionResult,
 };
@@ -41,6 +43,16 @@ pub fn graph_authenticate(
 ) -> CmdResult<GraphAuthStatus> {
     let hwnd = get_main_hwnd(&app)?;
     graph_api::authenticate(&state, hwnd)
+}
+
+#[tauri::command]
+#[cfg(target_os = "windows")]
+pub fn graph_request_missing_permissions(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, GraphAuthState>,
+) -> CmdResult<GraphPermissionUpgradeResult> {
+    let hwnd = get_main_hwnd(&app)?;
+    graph_api::request_missing_permissions(&state, hwnd)
 }
 
 #[tauri::command]

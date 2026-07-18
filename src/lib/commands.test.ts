@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import {
   getSafeErrorMessage,
   graphGetAuthStatus,
+  graphRequestMissingPermissions,
   openLogFile,
 } from "./commands";
 
@@ -67,6 +68,41 @@ function makeHostileErrorProxy(secretPrefix: string): {
 
 beforeEach(() => {
   vi.mocked(invoke).mockReset();
+});
+
+describe("Graph permission upgrade IPC boundary", () => {
+  it("invokes the zero-argument native permission upgrade command", async () => {
+    const result = {
+      outcome: "upgraded",
+      status: {
+        isAuthenticated: true,
+        userPrincipalName: "admin@contoso.com",
+        tenantId: "tenant-1",
+        grantedScopes: ["DeviceManagementManagedDevices.Read.All"],
+        missingScopes: [],
+        expiresAt: 1_800_000_000,
+        capabilities: {
+          managedDevices: true,
+          serviceConfig: false,
+          apps: false,
+          configuration: false,
+          scripts: false,
+        },
+        error: null,
+      },
+      message: null,
+    };
+    vi.mocked(invoke).mockResolvedValueOnce(result);
+
+    await expect(graphRequestMissingPermissions()).resolves.toBe(result);
+
+    expect(invoke).toHaveBeenCalledTimes(1);
+    expect(invoke).toHaveBeenNthCalledWith(
+      1,
+      "graph_request_missing_permissions",
+      undefined,
+    );
+  });
 });
 
 describe("command rejection sanitization", () => {

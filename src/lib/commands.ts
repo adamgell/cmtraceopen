@@ -504,6 +504,15 @@ export interface GraphAuthStatus {
   error: string | null;
 }
 
+export type GraphPermissionUpgradeOutcome =
+  "upgraded" | "unchanged" | "cancelled" | "denied" | "failed" | "stale";
+
+export interface GraphPermissionUpgradeResult {
+  outcome: GraphPermissionUpgradeOutcome;
+  status: GraphAuthStatus;
+  message: string | null;
+}
+
 export interface GraphAppInfo {
   id: string;
   displayName: string;
@@ -519,6 +528,12 @@ export interface GraphResolutionResult {
 
 export async function graphAuthenticate(): Promise<GraphAuthStatus> {
   return invokeCommand<GraphAuthStatus>("graph_authenticate");
+}
+
+export async function graphRequestMissingPermissions(): Promise<GraphPermissionUpgradeResult> {
+  return invokeCommand<GraphPermissionUpgradeResult>(
+    "graph_request_missing_permissions",
+  );
 }
 
 export async function graphGetAuthStatus(): Promise<GraphAuthStatus> {

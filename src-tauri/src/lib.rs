@@ -265,6 +265,8 @@ pub fn run() {
             #[cfg(target_os = "windows")]
             commands::graph_api::graph_authenticate,
             #[cfg(target_os = "windows")]
+            commands::graph_api::graph_request_missing_permissions,
+            #[cfg(target_os = "windows")]
             commands::graph_api::graph_get_auth_status,
             #[cfg(target_os = "windows")]
             commands::graph_api::graph_sign_out,
