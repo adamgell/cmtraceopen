@@ -1515,6 +1515,92 @@ describe("ESP Graph overlay state", () => {
 });
 
 describe("ESP Graph scheduling", () => {
+  it("refreshes through ESP fetch and cancel IPC without requesting missing permissions", async () => {
+    const firstOverlay = deferred<EspGraphOverlay>();
+    const requestMissingPermissions = vi.fn(async () => undefined);
+    let fetchCount = 0;
+    vi.mocked(invoke).mockImplementation(async (command, args) => {
+      if (command === "graph_request_missing_permissions") {
+        return requestMissingPermissions();
+      }
+      if (command === "graph_cancel_esp_diagnostics") {
+        return undefined;
+      }
+      if (command === "graph_fetch_esp_diagnostics") {
+        const request = (args as { request: EspGraphRequest }).request;
+        fetchCount += 1;
+        if (fetchCount === 1) {
+          return firstOverlay.promise;
+        }
+        return makeOverlay(request.requestId);
+      }
+      throw new Error(`Unexpected IPC command: ${command}`);
+    });
+    useUiStore.setState({
+      graphApiEnabled: true,
+      graphApiStatus: "connected",
+    });
+    useEspDiagnosticsStore.setState({
+      phase: "ready",
+      snapshot: makeSnapshot(["local-explicit-only"], "explicit-only"),
+    });
+    let requestIndex = 0;
+    const requestIds = ["graph-refresh-first", "graph-refresh-second"];
+    const coordinator = createEspGraphCoordinator({
+      createRequestId: () => {
+        const requestId = requestIds[requestIndex];
+        requestIndex += 1;
+        if (!requestId) {
+          throw new Error("Unexpected extra Graph request");
+        }
+        return requestId;
+      },
+    });
+    const firstRefresh = coordinator.refresh();
+
+    try {
+      await vi.waitFor(() =>
+        expect(vi.mocked(invoke)).toHaveBeenCalledWith(
+          "graph_fetch_esp_diagnostics",
+          expect.objectContaining({
+            request: expect.objectContaining({
+              requestId: "graph-refresh-first",
+            }),
+          }),
+        ),
+      );
+
+      await coordinator.refresh();
+      firstOverlay.resolve(makeOverlay("graph-refresh-first"));
+      await firstRefresh;
+
+      expect(vi.mocked(invoke).mock.calls.map(([command]) => command)).toEqual([
+        "graph_fetch_esp_diagnostics",
+        "graph_cancel_esp_diagnostics",
+        "graph_fetch_esp_diagnostics",
+      ]);
+      expect(vi.mocked(invoke)).toHaveBeenNthCalledWith(
+        2,
+        "graph_cancel_esp_diagnostics",
+        { requestId: "graph-refresh-first" },
+      );
+      expect(vi.mocked(invoke)).toHaveBeenNthCalledWith(
+        3,
+        "graph_fetch_esp_diagnostics",
+        expect.objectContaining({
+          request: expect.objectContaining({
+            requestId: "graph-refresh-second",
+          }),
+        }),
+      );
+      expect(requestMissingPermissions).not.toHaveBeenCalled();
+    } finally {
+      firstOverlay.resolve(makeOverlay("graph-refresh-first"));
+      await firstRefresh;
+      coordinator.dispose();
+    }
+  });
+
   it("sends only typed canonical Graph identifiers from local evidence to the provider", async () => {
     const appA = "11111111-1111-4111-8111-111111111111";
     const appB = "22222222-2222-4222-8222-222222222222";

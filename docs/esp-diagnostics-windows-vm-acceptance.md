@@ -447,7 +447,7 @@ No new directory may remain after success, failure, or cancellation. The truncat
 
 ## Optional Graph/WAM acceptance
 
-Local diagnostics are mandatory. Graph enrichment is conditional on the existing option being enabled and an explicit user sign-in. When Graph is disabled or unavailable, raw local logs and identifiers must remain usable as-is.
+Local diagnostics are mandatory. Graph enrichment is conditional on the existing option being enabled and an explicit user sign-in. An authenticated partial connection may also use the explicit **Request missing permissions** action in Settings; that action may open WAM for the fixed declared permission union, but ESP startup and refresh never invoke it. When Graph is disabled or unavailable, raw local logs and identifiers must remain usable as-is.
 
 ### Prerequisites
 
@@ -458,9 +458,13 @@ Local diagnostics are mandatory. Graph enrichment is conditional on the existing
   - `DeviceManagementApps.Read.All`;
   - `DeviceManagementConfiguration.Read.All`;
   - `DeviceManagementScripts.Read.All`;
+- written authorization for an isolated, non-production test tenant and disposable test account before exercising consent, denial, or administrator-consent paths; production tenants and real customer accounts are out of scope, and unavailable cases must be recorded as `not exercised`;
 - tenant consent and the signed-in account's Intune read roles must be sufficient for the sections being tested;
+- the native five-scope union is the only permission input: neither the frontend command nor any IPC caller may provide scope names;
 - capability display may infer short names from the `scp` claim, but the token itself must remain memory-only and must never appear in evidence;
 - Graph 401/403 responses, not decoded claims, are authoritative.
+
+Record live results only from the authorized isolated tenant. Automated or static evidence may support a row, but it must not be reported as live Windows acceptance.
 
 ### State matrix
 
@@ -469,7 +473,15 @@ Local diagnostics are mandatory. Graph enrichment is conditional on the existing
 | Graph option off, current session and cold start | Local evidence only; no WAM prompt, Graph request, warning, or loss of raw IDs. |
 | Enable option in the current Settings session | The confirmation enables Graph and reads cached status; opening ESP or starting/refreshing local diagnostics does not itself initiate WAM. |
 | Explicit **Sign in with Windows** | HWND-parented WAM interaction; five capability rows; no token display. |
+| Authenticated partial status in Settings | The missing declared permissions are listed and **Request missing permissions** is visible. The button is absent for disconnected or complete status. Merely opening or refreshing Settings does not invoke it. |
+| Click **Request missing permissions** | Exactly one zero-argument `graph_request_missing_permissions` call; other Graph actions remain locked while it runs; any WAM window is parented to CMTrace Open; no ESP fetch is started. |
+| Permission upgrade succeeds | Returned capabilities are a strict superset, every previously working capability remains available, the capability rows update without sign-out, and the button disappears only when no declared permission remains missing. |
+| Permission result is unchanged or administrator consent is required | The partial connection and all previously working capabilities remain active. Settings explains that no permission changed and that tenant administrator consent may be required; it does not claim to grant administrator consent. |
+| Permission request is cancelled, denied, or fails | The partial connection and all previously working capabilities remain active; the inline outcome is sanitized, no automatic retry or second WAM interaction occurs, and status is not changed to disconnected. |
+| Any consent, denial, or administrator-consent exercise | Use only the pre-authorized isolated test tenant and disposable account. If that boundary or required consent setup is unavailable, record `not exercised`; do not use a production tenant or customer identity. |
+| ESP Graph refresh while permissions are partial | ESP invokes only its fetch/cancel commands as needed. It never invokes `graph_request_missing_permissions`, never opens WAM, and preserves local evidence plus the sections allowed by the retained capabilities. |
 | Cold start with the option already persisted on | The existing application startup flow may call WAM before ESP opens. Record whether cached credentials complete silently or WAM becomes interactive; attribute this to startup, not ESP. |
+| Restart after an upgrade, unchanged, cancelled, or denied result | With otherwise valid cached credentials, no permission-upgrade prompt appears. The new action never runs automatically on restart; any separate interaction from the pre-existing startup authentication path must be recorded and attributed separately. |
 | Startup authentication unavailable or cancelled | ESP shows `GraphNotConnected`; it does not queue enrichment or open a second WAM interaction. |
 | Connected, before refresh | Existing local session remains unchanged; enrichment does not start automatically. |
 | Explicit refresh | Progress followed by complete or section-level partial result; local evidence remains. |
@@ -477,8 +489,10 @@ Local diagnostics are mandatory. Graph enrichment is conditional on the existing
 | Disable during refresh | Overlay cancels/clears; local evidence remains; WAM is not signed out. |
 | 401/403, if naturally observed | 401 invalidates once; 403 is isolated to its section. |
 | Missing scope, offline, throttled, ambiguous device, beta unknown | Record only if naturally observed or exercised in an isolated test tenant; otherwise `not exercised`. |
+| Permission-upgrade IPC and log inspection | IPC exposes only the structured outcome, sanitized message, and projected status. Application logs, IPC payloads, evidence, screenshots, and exports contain no access token, authorization header, raw provider payload, or account-object internals. |
+| Caller attempts to supply `scopes` or another permission list | The production command has no caller-supplied permission argument and builds the complete five-scope union natively with `resource=https://graph.microsoft.com`; the development bridge rejects the protected command instead of forwarding input. |
 
-Static review evidence must additionally distinguish the existing persisted-option startup connection from ESP behavior, and show five short delegated scopes with the required `resource=https://graph.microsoft.com` WAM property, GET-only ESP Graph operations, bounded retry/pagination/body limits, and token/authorization-header redaction.
+Static review evidence must additionally distinguish the existing persisted-option startup connection, the Settings-only permission action, and ESP behavior. It must show the fixed five short delegated-scope union with the required `resource=https://graph.microsoft.com` WAM property, no caller-controlled scope input, GET-only ESP Graph operations, bounded retry/pagination/body limits, zero upgrade calls from startup/ESP refresh, and token/authorization-header redaction.
 
 Compare enriched values read-only with the Intune portal and record `match`, `mismatch`, `not found`, or `not exercised` for managed device, Autopilot identity/group tag, profile, declared assignments and filters, Autopilot events, ESP configuration, apps, scripts, and policy state. Declared targeting must never be presented as effective group membership or proof that an app blocks ESP.
 

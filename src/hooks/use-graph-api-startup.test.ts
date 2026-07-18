@@ -1,5 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
+import { invoke } from "@tauri-apps/api/core";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GraphAuthStatus } from "../lib/commands";
+import { useUiStore } from "../stores/ui-store";
 import {
   connectAndPopulate,
   type GraphStartupDependencies,
@@ -27,7 +29,37 @@ const partialStatusWithoutApps = (): GraphAuthStatus => ({
   error: null,
 });
 
+beforeEach(() => {
+  vi.mocked(invoke).mockReset();
+  useUiStore.setState({
+    graphApiEnabled: false,
+    graphApiStatus: "idle",
+  });
+});
+
 describe("Graph API persisted startup", () => {
+  it("authenticates a persisted partial connection without requesting missing permissions", async () => {
+    const requestMissingPermissions = vi.fn(async () => undefined);
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "graph_authenticate") {
+        return partialStatusWithoutApps();
+      }
+      if (command === "graph_request_missing_permissions") {
+        return requestMissingPermissions();
+      }
+      throw new Error(`Unexpected IPC command: ${command}`);
+    });
+    useUiStore.setState({ graphApiEnabled: true });
+
+    await connectAndPopulate();
+
+    expect(vi.mocked(invoke).mock.calls).toEqual([
+      ["graph_authenticate", undefined],
+    ]);
+    expect(requestMissingPermissions).not.toHaveBeenCalled();
+    expect(useUiStore.getState().graphApiStatus).toBe("connected");
+  });
+
   it("keeps partial authentication connected without requesting the missing Apps capability", async () => {
     const dependencies: GraphStartupDependencies = {
       authenticate: vi.fn().mockResolvedValue(partialStatusWithoutApps()),
