@@ -11,9 +11,11 @@ use app_lib::graph_api::client::{
     MAX_GRAPH_RESPONSE_BYTES, MAX_GRAPH_RETRY_DELAY,
 };
 use app_lib::graph_api::models::{
-    normalize_graph_guid, project_graph_auth_status, GraphAppInfo, GraphAuthCapabilities,
-    GraphAuthStatus, GraphHttpMethod, GraphResolutionResult, GraphTransportRequest,
-    GraphTransportResponse, GRAPH_DELEGATED_SCOPES, GRAPH_SCOPE_REQUEST, GRAPH_WAM_REQUEST,
+    classify_graph_permission_candidate, normalize_graph_guid, project_graph_auth_status,
+    GraphAppInfo, GraphAuthCapabilities, GraphAuthStatus, GraphHttpMethod,
+    GraphPermissionCandidateDecision, GraphPermissionUpgradeOutcome, GraphPermissionUpgradeResult,
+    GraphResolutionResult, GraphTransportRequest, GraphTransportResponse, GRAPH_DELEGATED_SCOPES,
+    GRAPH_SCOPE_REQUEST, GRAPH_WAM_REQUEST,
 };
 use base64::Engine;
 use serde::Deserialize;
@@ -29,6 +31,273 @@ fn unsigned_token(claims: serde_json::Value) -> String {
                 .as_slice()
         )
     )
+}
+
+fn graph_permission_status(
+    is_authenticated: bool,
+    user_principal_name: Option<&str>,
+    tenant_id: Option<&str>,
+    granted_scopes: &[&str],
+) -> GraphAuthStatus {
+    GraphAuthStatus {
+        is_authenticated,
+        user_principal_name: user_principal_name.map(str::to_string),
+        tenant_id: tenant_id.map(str::to_string),
+        granted_scopes: granted_scopes
+            .iter()
+            .map(|scope| (*scope).to_string())
+            .collect(),
+        missing_scopes: GRAPH_DELEGATED_SCOPES
+            .iter()
+            .filter(|required| {
+                !granted_scopes
+                    .iter()
+                    .any(|scope| scope.eq_ignore_ascii_case(required))
+            })
+            .map(|scope| (*scope).to_string())
+            .collect(),
+        expires_at: Some(2_000_000_000),
+        capabilities: GraphAuthCapabilities::default(),
+        error: None,
+    }
+}
+
+#[test]
+fn graph_permission_upgrade_outcomes_serialize_to_camel_case_wire_values() {
+    for (outcome, expected) in [
+        (GraphPermissionUpgradeOutcome::Upgraded, "\"upgraded\""),
+        (GraphPermissionUpgradeOutcome::Unchanged, "\"unchanged\""),
+        (GraphPermissionUpgradeOutcome::Cancelled, "\"cancelled\""),
+        (GraphPermissionUpgradeOutcome::Denied, "\"denied\""),
+        (GraphPermissionUpgradeOutcome::Failed, "\"failed\""),
+        (GraphPermissionUpgradeOutcome::Stale, "\"stale\""),
+    ] {
+        assert_eq!(
+            serde_json::to_string(&outcome).expect("outcome should serialize"),
+            expected
+        );
+    }
+}
+
+#[test]
+fn graph_permission_upgrade_result_is_a_token_free_three_field_contract() {
+    let result = GraphPermissionUpgradeResult {
+        outcome: GraphPermissionUpgradeOutcome::Unchanged,
+        status: graph_permission_status(
+            true,
+            Some("user@contoso.example"),
+            Some("tenant-a"),
+            &[GRAPH_DELEGATED_SCOPES[0]],
+        ),
+        message: Some("Administrator consent is still required.".to_string()),
+    };
+
+    let json = serde_json::to_value(&result).expect("result should serialize");
+    let fields = json.as_object().expect("result should be an object");
+    assert_eq!(fields.len(), 3);
+    assert!(fields.contains_key("outcome"));
+    assert!(fields.contains_key("status"));
+    assert!(fields.contains_key("message"));
+
+    let json_text = json.to_string();
+    let debug_text = format!("{result:?}");
+    for forbidden in ["accessToken", "access_token", "Bearer"] {
+        assert!(!json_text.contains(forbidden), "JSON leaked {forbidden}");
+        assert!(!debug_text.contains(forbidden), "Debug leaked {forbidden}");
+    }
+}
+
+#[test]
+fn graph_permission_strict_declared_scope_superset_is_an_upgrade() {
+    let current = graph_permission_status(
+        true,
+        Some("user@contoso.example"),
+        Some("tenant-a"),
+        &[GRAPH_DELEGATED_SCOPES[0]],
+    );
+    let candidate = graph_permission_status(
+        true,
+        Some("user@contoso.example"),
+        Some("tenant-a"),
+        &[GRAPH_DELEGATED_SCOPES[0], GRAPH_DELEGATED_SCOPES[1]],
+    );
+
+    assert_eq!(
+        classify_graph_permission_candidate(&current, &candidate),
+        GraphPermissionCandidateDecision::Upgrade
+    );
+}
+
+#[test]
+fn graph_permission_equal_declared_scope_sets_are_unchanged() {
+    let current = graph_permission_status(
+        true,
+        Some("user@contoso.example"),
+        Some("tenant-a"),
+        &[GRAPH_DELEGATED_SCOPES[0], GRAPH_DELEGATED_SCOPES[2]],
+    );
+    let candidate = graph_permission_status(
+        true,
+        Some("user@contoso.example"),
+        Some("tenant-a"),
+        &[GRAPH_DELEGATED_SCOPES[2], GRAPH_DELEGATED_SCOPES[0]],
+    );
+
+    assert_eq!(
+        classify_graph_permission_candidate(&current, &candidate),
+        GraphPermissionCandidateDecision::Unchanged
+    );
+}
+
+#[test]
+fn graph_permission_declared_scope_subset_is_rejected_as_a_regression() {
+    let current = graph_permission_status(
+        true,
+        Some("user@contoso.example"),
+        Some("tenant-a"),
+        &[GRAPH_DELEGATED_SCOPES[0], GRAPH_DELEGATED_SCOPES[1]],
+    );
+    let candidate = graph_permission_status(
+        true,
+        Some("user@contoso.example"),
+        Some("tenant-a"),
+        &[GRAPH_DELEGATED_SCOPES[0]],
+    );
+
+    assert_eq!(
+        classify_graph_permission_candidate(&current, &candidate),
+        GraphPermissionCandidateDecision::ScopeRegression
+    );
+}
+
+#[test]
+fn graph_permission_tenant_and_account_changes_win_over_scope_upgrade() {
+    let current = graph_permission_status(
+        true,
+        Some("user@contoso.example"),
+        Some("tenant-a"),
+        &[GRAPH_DELEGATED_SCOPES[0]],
+    );
+    let different_tenant = graph_permission_status(
+        true,
+        Some("user@contoso.example"),
+        Some("tenant-b"),
+        &[GRAPH_DELEGATED_SCOPES[0], GRAPH_DELEGATED_SCOPES[1]],
+    );
+    let different_account = graph_permission_status(
+        true,
+        Some("other@contoso.example"),
+        Some("tenant-a"),
+        &[GRAPH_DELEGATED_SCOPES[0], GRAPH_DELEGATED_SCOPES[1]],
+    );
+
+    assert_eq!(
+        classify_graph_permission_candidate(&current, &different_tenant),
+        GraphPermissionCandidateDecision::TenantMismatch
+    );
+    assert_eq!(
+        classify_graph_permission_candidate(&current, &different_account),
+        GraphPermissionCandidateDecision::AccountMismatch
+    );
+}
+
+#[test]
+fn graph_permission_tenant_upn_and_declared_scopes_compare_case_insensitively() {
+    let current = graph_permission_status(
+        true,
+        Some("User@Contoso.Example"),
+        Some("Tenant-A"),
+        &["devicemanagementmanageddevices.read.all"],
+    );
+    let candidate = graph_permission_status(
+        true,
+        Some("USER@CONTOSO.EXAMPLE"),
+        Some("TENANT-A"),
+        &[
+            "DEVICEMANAGEMENTMANAGEDDEVICES.READ.ALL",
+            "devicemanagementserviceconfig.read.all",
+        ],
+    );
+
+    assert_eq!(
+        classify_graph_permission_candidate(&current, &candidate),
+        GraphPermissionCandidateDecision::Upgrade
+    );
+}
+
+#[test]
+fn graph_permission_missing_upn_does_not_invent_an_account_mismatch() {
+    let current_without_upn =
+        graph_permission_status(true, None, Some("tenant-a"), &[GRAPH_DELEGATED_SCOPES[0]]);
+    let current_with_upn = graph_permission_status(
+        true,
+        Some("user@contoso.example"),
+        Some("tenant-a"),
+        &[GRAPH_DELEGATED_SCOPES[0]],
+    );
+    let candidate_without_upn = graph_permission_status(
+        true,
+        None,
+        Some("tenant-a"),
+        &[GRAPH_DELEGATED_SCOPES[0], GRAPH_DELEGATED_SCOPES[1]],
+    );
+    let candidate_with_upn = graph_permission_status(
+        true,
+        Some("user@contoso.example"),
+        Some("tenant-a"),
+        &[GRAPH_DELEGATED_SCOPES[0], GRAPH_DELEGATED_SCOPES[1]],
+    );
+
+    assert_eq!(
+        classify_graph_permission_candidate(&current_without_upn, &candidate_with_upn),
+        GraphPermissionCandidateDecision::Upgrade
+    );
+    assert_eq!(
+        classify_graph_permission_candidate(&current_with_upn, &candidate_without_upn),
+        GraphPermissionCandidateDecision::Upgrade
+    );
+}
+
+#[test]
+fn graph_permission_ignores_scopes_outside_the_fixed_declared_set() {
+    let current = graph_permission_status(
+        true,
+        Some("user@contoso.example"),
+        Some("tenant-a"),
+        &[GRAPH_DELEGATED_SCOPES[0], "User.Read"],
+    );
+    let candidate = graph_permission_status(
+        true,
+        Some("user@contoso.example"),
+        Some("tenant-a"),
+        &[GRAPH_DELEGATED_SCOPES[0], "Mail.Read"],
+    );
+
+    assert_eq!(
+        classify_graph_permission_candidate(&current, &candidate),
+        GraphPermissionCandidateDecision::Unchanged
+    );
+}
+
+#[test]
+fn graph_permission_unauthenticated_candidate_is_invalid() {
+    let current = graph_permission_status(
+        true,
+        Some("user@contoso.example"),
+        Some("tenant-a"),
+        &[GRAPH_DELEGATED_SCOPES[0]],
+    );
+    let candidate = graph_permission_status(
+        false,
+        Some("user@contoso.example"),
+        Some("tenant-a"),
+        &[GRAPH_DELEGATED_SCOPES[0], GRAPH_DELEGATED_SCOPES[1]],
+    );
+
+    assert_eq!(
+        classify_graph_permission_candidate(&current, &candidate),
+        GraphPermissionCandidateDecision::InvalidCandidate
+    );
 }
 
 #[test]

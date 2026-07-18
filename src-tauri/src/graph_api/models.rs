@@ -106,6 +106,85 @@ pub struct GraphAuthStatus {
     pub error: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum GraphPermissionUpgradeOutcome {
+    Upgraded,
+    Unchanged,
+    Cancelled,
+    Denied,
+    Failed,
+    Stale,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct GraphPermissionUpgradeResult {
+    pub outcome: GraphPermissionUpgradeOutcome,
+    pub status: GraphAuthStatus,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GraphPermissionCandidateDecision {
+    Upgrade,
+    Unchanged,
+    InvalidCandidate,
+    AccountMismatch,
+    TenantMismatch,
+    ScopeRegression,
+}
+
+pub fn classify_graph_permission_candidate(
+    current: &GraphAuthStatus,
+    candidate: &GraphAuthStatus,
+) -> GraphPermissionCandidateDecision {
+    if !candidate.is_authenticated {
+        return GraphPermissionCandidateDecision::InvalidCandidate;
+    }
+
+    let tenant_matches = match (current.tenant_id.as_deref(), candidate.tenant_id.as_deref()) {
+        (Some(current), Some(candidate)) => current.eq_ignore_ascii_case(candidate),
+        (None, None) => true,
+        _ => false,
+    };
+    if !tenant_matches {
+        return GraphPermissionCandidateDecision::TenantMismatch;
+    }
+
+    if let (Some(current), Some(candidate)) = (
+        current.user_principal_name.as_deref(),
+        candidate.user_principal_name.as_deref(),
+    ) {
+        if !current.eq_ignore_ascii_case(candidate) {
+            return GraphPermissionCandidateDecision::AccountMismatch;
+        }
+    }
+
+    let declared_scopes = |status: &GraphAuthStatus| {
+        GRAPH_DELEGATED_SCOPES
+            .iter()
+            .copied()
+            .filter(|required| {
+                status
+                    .granted_scopes
+                    .iter()
+                    .any(|scope| scope.eq_ignore_ascii_case(required))
+            })
+            .collect::<std::collections::BTreeSet<_>>()
+    };
+    let current_scopes = declared_scopes(current);
+    let candidate_scopes = declared_scopes(candidate);
+
+    if !candidate_scopes.is_superset(&current_scopes) {
+        GraphPermissionCandidateDecision::ScopeRegression
+    } else if candidate_scopes.len() > current_scopes.len() {
+        GraphPermissionCandidateDecision::Upgrade
+    } else {
+        GraphPermissionCandidateDecision::Unchanged
+    }
+}
+
 impl GraphAuthStatus {
     pub fn disconnected(error: Option<String>) -> Self {
         Self {
