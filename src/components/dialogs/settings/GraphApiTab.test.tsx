@@ -668,6 +668,62 @@ describe("GraphApiTab delegated capabilities", () => {
     ).toBeVisible();
   });
 
+  it("invalidates a pending permission request when the Settings tab unmounts", async () => {
+    const staleRequest = deferred<GraphPermissionUpgradeResult>();
+    const currentAuthentication = deferred<GraphAuthStatus>();
+    vi.mocked(graphGetAuthStatus)
+      .mockResolvedValueOnce(partialStatus(true))
+      .mockResolvedValueOnce(disconnectedStatus());
+    vi.mocked(graphRequestMissingPermissions).mockReturnValue(
+      staleRequest.promise,
+    );
+    vi.mocked(graphAuthenticate).mockReturnValue(currentAuthentication.promise);
+
+    const firstTab = render(<GraphApiTab />);
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Request missing permissions",
+      }),
+    );
+    await waitFor(() =>
+      expect(graphRequestMissingPermissions).toHaveBeenCalledOnce(),
+    );
+    firstTab.unmount();
+
+    render(<GraphApiTab />);
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Sign in with Windows" }),
+    );
+    await waitFor(() => expect(graphAuthenticate).toHaveBeenCalledOnce());
+    expect(useUiStore.getState().graphApiStatus).toBe("connecting");
+
+    await act(async () => {
+      staleRequest.resolve(permissionResult("upgraded", fullStatus()));
+      await staleRequest.promise;
+    });
+
+    expect(useUiStore.getState().graphApiStatus).toBe("connecting");
+    expect(screen.getByText("Not connected")).toBeVisible();
+    expect(
+      screen.queryByLabelText("Graph delegated capabilities"),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Signing in..." }),
+    ).toBeDisabled();
+
+    await act(async () => {
+      currentAuthentication.resolve(partialStatus(true));
+      await currentAuthentication.promise;
+    });
+    expect(
+      await screen.findByText("Connected with partial permissions"),
+    ).toBeVisible();
+  });
+
   it("publishes an existing authenticated status after settings refresh", async () => {
     useUiStore.setState({ graphApiStatus: "idle" });
     vi.mocked(graphGetAuthStatus).mockResolvedValue(partialStatus(true));

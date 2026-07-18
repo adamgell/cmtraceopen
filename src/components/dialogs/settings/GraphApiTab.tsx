@@ -128,6 +128,13 @@ export function GraphApiTab() {
     refreshStatus();
   }, [refreshStatus]);
 
+  useEffect(() => {
+    return () => {
+      graphOperationGeneration.current += 1;
+      activeActionRef.current = null;
+    };
+  }, []);
+
   const handleToggle = (checked: boolean) => {
     if (checked) {
       setShowConfirmEnable(true);
