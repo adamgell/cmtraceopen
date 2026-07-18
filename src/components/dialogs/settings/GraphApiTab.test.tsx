@@ -11,8 +11,11 @@ import {
   graphAuthenticate,
   graphFetchAllApps,
   graphGetAuthStatus,
+  graphRequestMissingPermissions,
   graphSignOut,
   type GraphAuthStatus,
+  type GraphPermissionUpgradeOutcome,
+  type GraphPermissionUpgradeResult,
 } from "../../../lib/commands";
 import { useUiStore } from "../../../stores/ui-store";
 import { useIntuneStore } from "../../../workspaces/intune/intune-store";
@@ -22,8 +25,17 @@ vi.mock("../../../lib/commands", () => ({
   graphAuthenticate: vi.fn(),
   graphFetchAllApps: vi.fn(),
   graphGetAuthStatus: vi.fn(),
+  graphRequestMissingPermissions: vi.fn(),
   graphSignOut: vi.fn(),
 }));
+
+const GRAPH_SCOPES = [
+  "DeviceManagementManagedDevices.Read.All",
+  "DeviceManagementServiceConfig.Read.All",
+  "DeviceManagementApps.Read.All",
+  "DeviceManagementConfiguration.Read.All",
+  "DeviceManagementScripts.Read.All",
+];
 
 const partialStatus = (apps: boolean): GraphAuthStatus =>
   ({
@@ -72,6 +84,25 @@ const disconnectedStatus = (): GraphAuthStatus => ({
   error: null,
 });
 
+const fullStatus = (): GraphAuthStatus => ({
+  ...partialStatus(true),
+  grantedScopes: GRAPH_SCOPES,
+  missingScopes: [],
+  capabilities: {
+    managedDevices: true,
+    serviceConfig: true,
+    apps: true,
+    configuration: true,
+    scripts: true,
+  },
+});
+
+const permissionResult = (
+  outcome: GraphPermissionUpgradeOutcome,
+  status: GraphAuthStatus = partialStatus(true),
+  message: string | null = null,
+): GraphPermissionUpgradeResult => ({ outcome, status, message });
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((resolvePromise) => {
@@ -82,7 +113,7 @@ function deferred<T>() {
 
 describe("GraphApiTab delegated capabilities", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
     useUiStore.setState({
       currentPlatform: "windows",
       graphApiEnabled: true,
@@ -91,6 +122,9 @@ describe("GraphApiTab delegated capabilities", () => {
     useIntuneStore.setState({ guidRegistry: {} });
     vi.mocked(graphAuthenticate).mockResolvedValue(partialStatus(true));
     vi.mocked(graphFetchAllApps).mockResolvedValue([]);
+    vi.mocked(graphRequestMissingPermissions).mockResolvedValue(
+      permissionResult("unchanged"),
+    );
     vi.mocked(graphSignOut).mockResolvedValue();
   });
 
@@ -115,6 +149,523 @@ describe("GraphApiTab delegated capabilities", () => {
     expect(
       screen.getByRole("button", { name: "Pre-populate app cache" }),
     ).toBeEnabled();
+    expect(
+      screen.getByRole("button", { name: "Request missing permissions" }),
+    ).toBeEnabled();
+    expect(
+      screen.getAllByRole("button").map((button) => button.textContent),
+    ).toEqual([
+      "Request missing permissions",
+      "Pre-populate app cache",
+      "Sign out",
+    ]);
+    expect(graphRequestMissingPermissions).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { name: "full", status: fullStatus(), label: "Connected" },
+    {
+      name: "disconnected",
+      status: disconnectedStatus(),
+      label: "Not connected",
+    },
+  ])(
+    "hides the permission action for a $name status",
+    async ({ status, label }) => {
+      vi.mocked(graphGetAuthStatus).mockResolvedValue(status);
+
+      render(<GraphApiTab />);
+
+      expect(await screen.findByText(label)).toBeVisible();
+      expect(
+        screen.queryByRole("button", { name: "Request missing permissions" }),
+      ).not.toBeInTheDocument();
+      expect(graphRequestMissingPermissions).not.toHaveBeenCalled();
+    },
+  );
+
+  it("requests permissions once and locks authenticated Graph actions while WAM is pending", async () => {
+    const request = deferred<GraphPermissionUpgradeResult>();
+    vi.mocked(graphGetAuthStatus).mockResolvedValue(partialStatus(true));
+    vi.mocked(graphRequestMissingPermissions).mockReturnValue(request.promise);
+
+    render(<GraphApiTab />);
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Request missing permissions",
+      }),
+    );
+
+    await waitFor(() =>
+      expect(graphRequestMissingPermissions).toHaveBeenCalledOnce(),
+    );
+    const requestingButton = screen.getByRole("button", {
+      name: "Requesting permissions...",
+    });
+    expect(requestingButton).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "Pre-populate app cache" }),
+    ).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Sign out" })).toBeDisabled();
+    expect(screen.getByRole("checkbox")).toBeEnabled();
+    expect(useUiStore.getState().graphApiStatus).toBe("connected");
+
+    fireEvent.click(requestingButton);
+    expect(graphRequestMissingPermissions).toHaveBeenCalledOnce();
+
+    await act(async () => {
+      request.resolve(permissionResult("unchanged"));
+      await request.promise;
+    });
+  });
+
+  it("keeps initial sign-in locked while its Graph action is pending", async () => {
+    const authentication = deferred<GraphAuthStatus>();
+    vi.mocked(graphGetAuthStatus).mockResolvedValue(disconnectedStatus());
+    vi.mocked(graphAuthenticate).mockReturnValue(authentication.promise);
+
+    render(<GraphApiTab />);
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Sign in with Windows" }),
+    );
+
+    expect(
+      await screen.findByRole("button", { name: "Signing in..." }),
+    ).toBeDisabled();
+    expect(graphRequestMissingPermissions).not.toHaveBeenCalled();
+
+    await act(async () => {
+      authentication.resolve(partialStatus(true));
+      await authentication.promise;
+    });
+  });
+
+  it("publishes a full permission upgrade and removes the permission action", async () => {
+    vi.mocked(graphGetAuthStatus).mockResolvedValue(partialStatus(false));
+    vi.mocked(graphRequestMissingPermissions).mockResolvedValue(
+      permissionResult("upgraded", fullStatus()),
+    );
+
+    render(<GraphApiTab />);
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Request missing permissions",
+      }),
+    );
+
+    expect(
+      await screen.findByRole("status", {
+        name: "Permissions updated. Additional Graph capabilities are now available.",
+      }),
+    ).toBeVisible();
+    expect(screen.getByText("Managed devices · Available")).toBeVisible();
+    expect(screen.getByText("Scripts · Available")).toBeVisible();
+    expect(screen.getByText("Connected")).toBeVisible();
+    expect(
+      screen.queryByRole("button", { name: "Request missing permissions" }),
+    ).not.toBeInTheDocument();
+    expect(useUiStore.getState().graphApiStatus).toBe("connected");
+  });
+
+  it("publishes an improved partial upgrade and keeps the permission action", async () => {
+    vi.mocked(graphGetAuthStatus).mockResolvedValue(partialStatus(false));
+    vi.mocked(graphRequestMissingPermissions).mockResolvedValue(
+      permissionResult("upgraded", partialStatus(true)),
+    );
+
+    render(<GraphApiTab />);
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Request missing permissions",
+      }),
+    );
+
+    expect(
+      await screen.findByRole("status", {
+        name: "Permissions updated. Additional Graph capabilities are now available.",
+      }),
+    ).toBeVisible();
+    expect(screen.getByText("Apps · Available")).toBeVisible();
+    expect(
+      screen.getByText("Managed devices · Missing permission"),
+    ).toBeVisible();
+    expect(
+      screen.getByRole("button", { name: "Request missing permissions" }),
+    ).toBeEnabled();
+    expect(useUiStore.getState().graphApiStatus).toBe("connected");
+  });
+
+  it.each([
+    {
+      outcome: "unchanged" as const,
+      role: "status" as const,
+      guidance:
+        "No additional permissions were granted. A tenant administrator may need to approve the remaining permissions.",
+    },
+    {
+      outcome: "cancelled" as const,
+      role: "status" as const,
+      guidance:
+        "Permission request cancelled. Your existing Graph permissions are unchanged.",
+    },
+    {
+      outcome: "denied" as const,
+      role: "alert" as const,
+      guidance:
+        "Consent was not granted. Your existing Graph permissions remain available. A tenant administrator may need to approve the remaining permissions.",
+    },
+    {
+      outcome: "failed" as const,
+      role: "alert" as const,
+      guidance:
+        "Windows could not complete the permission request. Your existing Graph permissions remain available.",
+    },
+  ])(
+    "retains the partial connection and shows exact $outcome guidance",
+    async ({ outcome, role, guidance }) => {
+      vi.mocked(graphGetAuthStatus).mockResolvedValue(partialStatus(true));
+      vi.mocked(graphRequestMissingPermissions).mockResolvedValue(
+        permissionResult(outcome),
+      );
+
+      render(<GraphApiTab />);
+
+      fireEvent.click(
+        await screen.findByRole("button", {
+          name: "Request missing permissions",
+        }),
+      );
+
+      expect(await screen.findByRole(role, { name: guidance })).toBeVisible();
+      expect(
+        screen.getByText("Connected with partial permissions"),
+      ).toBeVisible();
+      expect(screen.getByText("Apps · Available")).toBeVisible();
+      expect(
+        screen.getByRole("button", { name: "Request missing permissions" }),
+      ).toBeEnabled();
+      expect(useUiStore.getState().graphApiStatus).toBe("connected");
+    },
+  );
+
+  it("shows deterministic stale guidance for a current structured stale result", async () => {
+    vi.mocked(graphGetAuthStatus).mockResolvedValue(partialStatus(true));
+    vi.mocked(graphRequestMissingPermissions).mockResolvedValue(
+      permissionResult("stale"),
+    );
+
+    render(<GraphApiTab />);
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Request missing permissions",
+      }),
+    );
+
+    expect(
+      await screen.findByRole("alert", {
+        name: "The permission request was superseded by a newer Graph connection change.",
+      }),
+    ).toBeVisible();
+    expect(
+      screen.getByText("Connected with partial permissions"),
+    ).toBeVisible();
+    expect(useUiStore.getState().graphApiStatus).toBe("connected");
+  });
+
+  it("publishes the authoritative disconnected status from a structured stale result", async () => {
+    vi.mocked(graphGetAuthStatus).mockResolvedValue(partialStatus(true));
+    vi.mocked(graphRequestMissingPermissions).mockResolvedValue(
+      permissionResult("stale", disconnectedStatus()),
+    );
+
+    render(<GraphApiTab />);
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Request missing permissions",
+      }),
+    );
+
+    expect(
+      await screen.findByRole("alert", {
+        name: "The permission request was superseded by a newer Graph connection change.",
+      }),
+    ).toBeVisible();
+    expect(screen.getByText("Not connected")).toBeVisible();
+    expect(useUiStore.getState().graphApiStatus).toBe("idle");
+  });
+
+  it.each(["denied", "failed", "stale"] as const)(
+    "prefers non-empty sanitized native guidance for %s results",
+    async (outcome) => {
+      const nativeGuidance = `Sanitized native ${outcome} guidance.`;
+      vi.mocked(graphGetAuthStatus).mockResolvedValue(partialStatus(true));
+      vi.mocked(graphRequestMissingPermissions).mockResolvedValue(
+        permissionResult(outcome, partialStatus(true), nativeGuidance),
+      );
+
+      render(<GraphApiTab />);
+
+      fireEvent.click(
+        await screen.findByRole("button", {
+          name: "Request missing permissions",
+        }),
+      );
+
+      expect(
+        await screen.findByRole("alert", { name: nativeGuidance }),
+      ).toBeVisible();
+      expect(useUiStore.getState().graphApiStatus).toBe("connected");
+    },
+  );
+
+  it("uses sanitized fallback copy when the permission command rejects", async () => {
+    vi.mocked(graphGetAuthStatus).mockResolvedValue(partialStatus(true));
+    vi.mocked(graphRequestMissingPermissions).mockRejectedValue(
+      new Error("secret-token-shaped provider payload"),
+    );
+
+    render(<GraphApiTab />);
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Request missing permissions",
+      }),
+    );
+
+    expect(
+      await screen.findByRole("alert", {
+        name: "Windows could not complete the permission request. Your existing Graph permissions remain available.",
+      }),
+    ).toBeVisible();
+    expect(
+      screen.queryByText("secret-token-shaped provider payload"),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByText("Connected with partial permissions"),
+    ).toBeVisible();
+    expect(useUiStore.getState().graphApiStatus).toBe("connected");
+  });
+
+  it("retains permission guidance during app cache hydration", async () => {
+    const apps = deferred<Awaited<ReturnType<typeof graphFetchAllApps>>>();
+    vi.mocked(graphGetAuthStatus).mockResolvedValue(partialStatus(true));
+    vi.mocked(graphRequestMissingPermissions).mockResolvedValue(
+      permissionResult("unchanged"),
+    );
+    vi.mocked(graphFetchAllApps).mockReturnValue(apps.promise);
+
+    render(<GraphApiTab />);
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Request missing permissions",
+      }),
+    );
+    const guidance = await screen.findByRole("status", {
+      name: "No additional permissions were granted. A tenant administrator may need to approve the remaining permissions.",
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Pre-populate app cache" }),
+    );
+
+    expect(guidance).toBeVisible();
+    expect(
+      screen.getByRole("button", { name: "Fetching apps..." }),
+    ).toBeDisabled();
+
+    await act(async () => {
+      apps.resolve([]);
+      await apps.promise;
+    });
+    expect(guidance).toBeVisible();
+  });
+
+  it("clears permission guidance when Graph is disabled", async () => {
+    vi.mocked(graphGetAuthStatus).mockResolvedValue(partialStatus(true));
+    vi.mocked(graphRequestMissingPermissions).mockResolvedValue(
+      permissionResult("unchanged"),
+    );
+
+    render(<GraphApiTab />);
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Request missing permissions",
+      }),
+    );
+    expect(
+      await screen.findByRole("status", {
+        name: "No additional permissions were granted. A tenant administrator may need to approve the remaining permissions.",
+      }),
+    ).toBeVisible();
+
+    fireEvent.click(screen.getByRole("checkbox"));
+    fireEvent.click(screen.getByRole("checkbox"));
+    fireEvent.click(
+      screen.getByRole("button", { name: "I understand, enable it" }),
+    );
+
+    expect(
+      await screen.findByText("Connected with partial permissions"),
+    ).toBeVisible();
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  });
+
+  it("clears permission guidance when a fresh initial sign-in begins", async () => {
+    const authentication = deferred<GraphAuthStatus>();
+    vi.mocked(graphGetAuthStatus).mockResolvedValue(partialStatus(true));
+    vi.mocked(graphRequestMissingPermissions).mockResolvedValue(
+      permissionResult("stale", disconnectedStatus()),
+    );
+    vi.mocked(graphAuthenticate).mockReturnValue(authentication.promise);
+
+    render(<GraphApiTab />);
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Request missing permissions",
+      }),
+    );
+    expect(
+      await screen.findByRole("alert", {
+        name: "The permission request was superseded by a newer Graph connection change.",
+      }),
+    ).toBeVisible();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Sign in with Windows" }),
+    );
+
+    expect(
+      screen.getByRole("button", { name: "Signing in..." }),
+    ).toBeDisabled();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+
+    await act(async () => {
+      authentication.resolve(partialStatus(true));
+      await authentication.promise;
+    });
+  });
+
+  it("clears permission guidance only after sign-out succeeds", async () => {
+    const signOut = deferred<void>();
+    vi.mocked(graphGetAuthStatus).mockResolvedValue(partialStatus(true));
+    vi.mocked(graphRequestMissingPermissions).mockResolvedValue(
+      permissionResult("unchanged"),
+    );
+    vi.mocked(graphSignOut).mockReturnValue(signOut.promise);
+
+    render(<GraphApiTab />);
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Request missing permissions",
+      }),
+    );
+    const guidance = await screen.findByRole("status", {
+      name: "No additional permissions were granted. A tenant administrator may need to approve the remaining permissions.",
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Sign out" }));
+
+    expect(guidance).toBeVisible();
+
+    await act(async () => {
+      signOut.resolve();
+      await signOut.promise;
+    });
+    expect(screen.getByText("Not connected")).toBeVisible();
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  });
+
+  it("suppresses a permission result that settles after Graph is disabled", async () => {
+    const request = deferred<GraphPermissionUpgradeResult>();
+    vi.mocked(graphGetAuthStatus).mockResolvedValue(partialStatus(true));
+    vi.mocked(graphRequestMissingPermissions).mockReturnValue(request.promise);
+
+    render(<GraphApiTab />);
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Request missing permissions",
+      }),
+    );
+    await waitFor(() =>
+      expect(graphRequestMissingPermissions).toHaveBeenCalledOnce(),
+    );
+    fireEvent.click(screen.getByRole("checkbox"));
+
+    await act(async () => {
+      request.resolve(permissionResult("upgraded", fullStatus()));
+      await request.promise;
+    });
+
+    expect(useUiStore.getState().graphApiEnabled).toBe(false);
+    expect(useUiStore.getState().graphApiStatus).toBe("idle");
+    expect(
+      screen.queryByText(
+        "Permissions updated. Additional Graph capabilities are now available.",
+      ),
+    ).not.toBeInTheDocument();
+  });
+
+  it("does not let a stale permission result overwrite a newer frontend operation", async () => {
+    const staleRequest = deferred<GraphPermissionUpgradeResult>();
+    const currentAuthentication = deferred<GraphAuthStatus>();
+    vi.mocked(graphGetAuthStatus)
+      .mockResolvedValueOnce(partialStatus(true))
+      .mockResolvedValueOnce(disconnectedStatus());
+    vi.mocked(graphRequestMissingPermissions).mockReturnValue(
+      staleRequest.promise,
+    );
+    vi.mocked(graphAuthenticate).mockReturnValue(currentAuthentication.promise);
+
+    render(<GraphApiTab />);
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Request missing permissions",
+      }),
+    );
+    await waitFor(() =>
+      expect(graphRequestMissingPermissions).toHaveBeenCalledOnce(),
+    );
+    fireEvent.click(screen.getByRole("checkbox"));
+    fireEvent.click(screen.getByRole("checkbox"));
+    fireEvent.click(
+      screen.getByRole("button", { name: "I understand, enable it" }),
+    );
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Sign in with Windows" }),
+    );
+    await waitFor(() => expect(graphAuthenticate).toHaveBeenCalledOnce());
+
+    await act(async () => {
+      staleRequest.resolve(permissionResult("upgraded", fullStatus()));
+      await staleRequest.promise;
+    });
+
+    expect(
+      screen.getByRole("button", { name: "Signing in..." }),
+    ).toBeDisabled();
+    expect(
+      screen.queryByText(
+        "Permissions updated. Additional Graph capabilities are now available.",
+      ),
+    ).not.toBeInTheDocument();
+
+    await act(async () => {
+      currentAuthentication.resolve(partialStatus(true));
+      await currentAuthentication.promise;
+    });
+    expect(
+      await screen.findByText("Connected with partial permissions"),
+    ).toBeVisible();
   });
 
   it("publishes an existing authenticated status after settings refresh", async () => {

@@ -4,9 +4,12 @@ import { useUiStore } from "../../../stores/ui-store";
 import {
   graphAuthenticate,
   graphGetAuthStatus,
+  graphRequestMissingPermissions,
   graphSignOut,
   graphFetchAllApps,
   type GraphAuthStatus,
+  type GraphPermissionUpgradeOutcome,
+  type GraphPermissionUpgradeResult,
 } from "../../../lib/commands";
 import { useIntuneStore } from "../../../workspaces/intune/intune-store";
 import { buildGraphRegistryEntries } from "../../../lib/graph-registry";
@@ -27,7 +30,58 @@ const GRAPH_CAPABILITY_ROWS = [
   ["Scripts", "scripts", "DeviceManagementScripts.Read.All"],
 ] as const;
 
-type GraphAction = "signIn" | "signOut" | "cache";
+const PERMISSION_NOTICE_COPY: Record<GraphPermissionUpgradeOutcome, string> = {
+  upgraded:
+    "Permissions updated. Additional Graph capabilities are now available.",
+  unchanged:
+    "No additional permissions were granted. A tenant administrator may need to approve the remaining permissions.",
+  cancelled:
+    "Permission request cancelled. Your existing Graph permissions are unchanged.",
+  denied:
+    "Consent was not granted. Your existing Graph permissions remain available. A tenant administrator may need to approve the remaining permissions.",
+  failed:
+    "Windows could not complete the permission request. Your existing Graph permissions remain available.",
+  stale:
+    "The permission request was superseded by a newer Graph connection change.",
+};
+
+type GraphAction = "signIn" | "signOut" | "cache" | "permissions";
+type PermissionNoticeTone = "success" | "warning" | "error";
+
+interface PermissionNotice {
+  tone: PermissionNoticeTone;
+  message: string;
+}
+
+function buildPermissionNotice(
+  result: GraphPermissionUpgradeResult,
+): PermissionNotice {
+  const tone: PermissionNoticeTone =
+    result.outcome === "upgraded"
+      ? "success"
+      : result.outcome === "unchanged" || result.outcome === "cancelled"
+        ? "warning"
+        : "error";
+  const nativeMessage = result.message?.trim();
+  const useNativeMessage =
+    result.outcome === "denied" ||
+    result.outcome === "failed" ||
+    result.outcome === "stale";
+
+  return {
+    tone,
+    message:
+      useNativeMessage && nativeMessage
+        ? nativeMessage
+        : PERMISSION_NOTICE_COPY[result.outcome],
+  };
+}
+
+function graphApiPhaseFromStatus(
+  status: GraphAuthStatus,
+): "connected" | "error" | "idle" {
+  return status.isAuthenticated ? "connected" : status.error ? "error" : "idle";
+}
 
 export function GraphApiTab() {
   const graphApiEnabled = useUiStore((state) => state.graphApiEnabled);
@@ -38,11 +92,14 @@ export function GraphApiTab() {
   const [activeAction, setActiveAction] = useState<GraphAction | null>(null);
   const [cachedAppCount, setCachedAppCount] = useState<number | null>(null);
   const [cacheError, setCacheError] = useState<string | null>(null);
+  const [permissionNotice, setPermissionNotice] =
+    useState<PermissionNotice | null>(null);
   const [showConfirmEnable, setShowConfirmEnable] = useState(false);
   const graphOperationGeneration = useRef(0);
   const activeActionRef = useRef<GraphAction | null>(null);
   const loading = activeAction === "signIn";
   const cacheLoading = activeAction === "cache";
+  const permissionsLoading = activeAction === "permissions";
   const graphActionBusy = activeAction !== null;
 
   const isCurrentGraphOperation = useCallback((generation: number) => {
@@ -59,15 +116,7 @@ export function GraphApiTab() {
       const status = await graphGetAuthStatus();
       if (!isCurrentGraphOperation(generation)) return;
       setAuthStatus(status);
-      useUiStore
-        .getState()
-        .setGraphApiStatus(
-          status.isAuthenticated
-            ? "connected"
-            : status.error
-              ? "error"
-              : "idle",
-        );
+      useUiStore.getState().setGraphApiStatus(graphApiPhaseFromStatus(status));
     } catch {
       if (isCurrentGraphOperation(generation)) {
         useUiStore.getState().setGraphApiStatus("error");
@@ -90,6 +139,7 @@ export function GraphApiTab() {
       setAuthStatus(null);
       setCachedAppCount(null);
       setCacheError(null);
+      setPermissionNotice(null);
       useUiStore.getState().setGraphApiStatus("idle");
     }
   };
@@ -121,6 +171,7 @@ export function GraphApiTab() {
   const handleSignIn = async () => {
     const generation = beginGraphAction("signIn");
     if (generation === null) return;
+    setPermissionNotice(null);
     useUiStore.getState().setGraphApiStatus("connecting");
     try {
       const status = await graphAuthenticate();
@@ -161,11 +212,35 @@ export function GraphApiTab() {
       if (!isCurrentGraphOperation(generation)) return;
       setAuthStatus(null);
       setCachedAppCount(null);
+      setPermissionNotice(null);
       useUiStore.getState().setGraphApiStatus("idle");
     } catch {
       // ignore
     } finally {
       finishGraphAction("signOut", generation);
+    }
+  };
+
+  const handleRequestMissingPermissions = async () => {
+    const generation = beginGraphAction("permissions");
+    if (generation === null) return;
+    setPermissionNotice(null);
+    try {
+      const result = await graphRequestMissingPermissions();
+      if (!isCurrentGraphOperation(generation)) return;
+      setAuthStatus(result.status);
+      setPermissionNotice(buildPermissionNotice(result));
+      useUiStore
+        .getState()
+        .setGraphApiStatus(graphApiPhaseFromStatus(result.status));
+    } catch {
+      if (!isCurrentGraphOperation(generation)) return;
+      setPermissionNotice({
+        tone: "error",
+        message: PERMISSION_NOTICE_COPY.failed,
+      });
+    } finally {
+      finishGraphAction("permissions", generation);
     }
   };
 
@@ -467,10 +542,36 @@ export function GraphApiTab() {
                   style={{
                     display: "flex",
                     alignItems: "center",
+                    flexWrap: "wrap",
                     gap: "8px",
                     marginBottom: cachedAppCount != null ? "8px" : "0",
                   }}
                 >
+                  {authStatus.missingScopes.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={handleRequestMissingPermissions}
+                      disabled={graphActionBusy}
+                      style={{
+                        padding: "4px 12px",
+                        fontSize: "12px",
+                        border: `1px solid ${tokens.colorBrandStroke1}`,
+                        backgroundColor: tokens.colorBrandBackground,
+                        color: tokens.colorNeutralForegroundOnBrand,
+                        borderRadius: "4px",
+                        cursor: permissionsLoading
+                          ? "wait"
+                          : graphActionBusy
+                            ? "not-allowed"
+                            : "pointer",
+                        opacity: graphActionBusy ? 0.7 : 1,
+                      }}
+                    >
+                      {permissionsLoading
+                        ? "Requesting permissions..."
+                        : "Request missing permissions"}
+                    </button>
+                  )}
                   <button
                     type="button"
                     onClick={handlePrePopulateCache}
@@ -478,15 +579,15 @@ export function GraphApiTab() {
                     style={{
                       padding: "4px 12px",
                       fontSize: "12px",
-                      border: `1px solid ${tokens.colorBrandStroke1}`,
-                      backgroundColor: tokens.colorBrandBackground,
-                      color: tokens.colorNeutralForegroundOnBrand,
+                      border: `1px solid ${tokens.colorNeutralStroke1}`,
+                      backgroundColor: "transparent",
+                      color: tokens.colorNeutralForeground2,
                       borderRadius: "4px",
-                      cursor: graphActionBusy
+                      cursor: cacheLoading
                         ? "wait"
-                        : authStatus.capabilities.apps
-                          ? "pointer"
-                          : "not-allowed",
+                        : graphActionBusy || !authStatus.capabilities.apps
+                          ? "not-allowed"
+                          : "pointer",
                       opacity:
                         graphActionBusy || !authStatus.capabilities.apps
                           ? 0.7
@@ -602,6 +703,40 @@ export function GraphApiTab() {
                 >
                   {loading ? "Signing in..." : "Sign in with Windows"}
                 </button>
+              </div>
+            )}
+            {permissionNotice && (
+              <div
+                role={permissionNotice.tone === "error" ? "alert" : "status"}
+                aria-label={permissionNotice.message}
+                style={{
+                  marginTop: "8px",
+                  padding: "7px 9px",
+                  borderRadius: "4px",
+                  border: `1px solid ${
+                    permissionNotice.tone === "success"
+                      ? tokens.colorPaletteGreenBorder1
+                      : permissionNotice.tone === "warning"
+                        ? tokens.colorPaletteYellowBorder1
+                        : tokens.colorPaletteRedBorder1
+                  }`,
+                  backgroundColor:
+                    permissionNotice.tone === "success"
+                      ? tokens.colorPaletteGreenBackground1
+                      : permissionNotice.tone === "warning"
+                        ? tokens.colorPaletteYellowBackground1
+                        : tokens.colorPaletteRedBackground1,
+                  color:
+                    permissionNotice.tone === "success"
+                      ? tokens.colorPaletteGreenForeground1
+                      : permissionNotice.tone === "warning"
+                        ? tokens.colorPaletteYellowForeground2
+                        : tokens.colorPaletteRedForeground1,
+                  fontSize: "11px",
+                  lineHeight: 1.5,
+                }}
+              >
+                {permissionNotice.message}
               </div>
             )}
           </div>
