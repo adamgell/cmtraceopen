@@ -227,6 +227,8 @@ mod windows_impl {
         guid_cache: Mutex<VersionedGuidCache>,
         #[cfg(feature = "esp-diagnostics")]
         esp_operations: EspGraphOperationRegistry,
+        #[cfg(test)]
+        dependent_generation_advances: std::sync::atomic::AtomicUsize,
     }
 
     #[derive(Clone, Default)]
@@ -265,6 +267,13 @@ mod windows_impl {
                 Self::Failed(error) => error,
             }
         }
+    }
+
+    fn wam_provider_status_failure(error_message: Option<String>) -> WamAcquisitionFailure {
+        let error_message = error_message.unwrap_or_else(|| "Unknown WAM error".to_string());
+        WamAcquisitionFailure::Failed(AppError::Internal(format!(
+            "WAM authentication failed: {error_message}"
+        )))
     }
 
     fn unix_now() -> u64 {
@@ -357,6 +366,10 @@ mod windows_impl {
         /// so a new token generation cannot become observable before operation
         /// ownership is ready for that same generation.
         fn advance_dependent_generation(&self, generation: u64) {
+            #[cfg(test)]
+            self.inner
+                .dependent_generation_advances
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             #[cfg(feature = "esp-diagnostics")]
             self.inner.esp_operations.advance_generation(generation);
             self.inner.guid_cache.lock().unwrap().reset_to(generation);
@@ -577,14 +590,14 @@ mod windows_impl {
                 WebTokenRequestStatus::UserInteractionRequired => {
                     Err(WamAcquisitionFailure::Denied)
                 }
-                WebTokenRequestStatus::AccountSwitch
-                | WebTokenRequestStatus::AccountProviderNotAvailable
-                | WebTokenRequestStatus::ProviderError => Err(WamAcquisitionFailure::Failed(
-                    AppError::Internal("WAM authentication failed.".into()),
-                )),
-                _ => Err(WamAcquisitionFailure::Failed(AppError::Internal(
-                    "WAM authentication failed.".into(),
-                ))),
+                _ => {
+                    let error_message = result
+                        .ResponseError()
+                        .ok()
+                        .and_then(|error| error.ErrorMessage().ok())
+                        .map(|message| message.to_string());
+                    Err(wam_provider_status_failure(error_message))
+                }
             }
         }
     }
@@ -1396,6 +1409,10 @@ mod windows_impl {
         fn graph_permission_upgrade_strict_superset_replaces_token_and_advances_once() {
             let state = seed_partial_state();
             let (_, before_generation) = stored_token_and_generation(&state);
+            let before_dependent_advances = state
+                .inner
+                .dependent_generation_advances
+                .load(std::sync::atomic::Ordering::Relaxed);
             let candidate = token(
                 CANDIDATE_TOKEN,
                 "user@contoso.example",
@@ -1418,6 +1435,13 @@ mod windows_impl {
             assert_eq!(
                 stored_token_and_generation(&state),
                 (CANDIDATE_TOKEN.to_string(), before_generation + 1)
+            );
+            assert_eq!(
+                state
+                    .inner
+                    .dependent_generation_advances
+                    .load(std::sync::atomic::Ordering::Relaxed),
+                before_dependent_advances + 1
             );
         }
 
@@ -1539,6 +1563,23 @@ mod windows_impl {
             assert!(!format!("{result:?}").contains(raw_provider_text));
             assert_eq!(result.status, current_auth_status(&state));
             assert_eq!(stored_token_and_generation(&state), before);
+        }
+
+        #[test]
+        fn graph_permission_upgrade_provider_status_failure_preserves_legacy_initial_auth_detail() {
+            let raw_provider_text = "provider-specific failure";
+            let error = wam_provider_status_failure(Some(raw_provider_text.to_string()))
+                .into_initial_auth_error();
+            assert_eq!(
+                error.to_string(),
+                format!("WAM authentication failed: {raw_provider_text}")
+            );
+
+            let fallback = wam_provider_status_failure(None).into_initial_auth_error();
+            assert_eq!(
+                fallback.to_string(),
+                "WAM authentication failed: Unknown WAM error"
+            );
         }
 
         #[test]
