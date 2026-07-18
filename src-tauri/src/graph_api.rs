@@ -205,6 +205,10 @@ mod windows_impl {
         EspGraphClientProvider, EspGraphEndpoint, EspGraphOperation, EspGraphOperationError,
         EspGraphOperationRegistry, EspGraphProvider, EspGraphRequest,
     };
+    use super::models::{
+        classify_graph_permission_candidate, GraphPermissionCandidateDecision,
+        GraphPermissionUpgradeOutcome, GraphPermissionUpgradeResult,
+    };
     use super::{
         normalize_graph_guid, parse_graph_app_json, parse_graph_app_values,
         project_graph_auth_status, receive_before_deadline, DeadlineReceiveError, GraphAppInfo,
@@ -234,6 +238,33 @@ mod windows_impl {
     struct CachedToken {
         token: String,
         status: GraphAuthStatus,
+    }
+
+    enum WamAcquisitionFailure {
+        Cancelled,
+        Denied,
+        Failed(AppError),
+    }
+
+    impl From<AppError> for WamAcquisitionFailure {
+        fn from(error: AppError) -> Self {
+            Self::Failed(error)
+        }
+    }
+
+    impl WamAcquisitionFailure {
+        fn into_initial_auth_error(self) -> AppError {
+            match self {
+                Self::Cancelled => {
+                    AppError::Internal("Authentication was cancelled by user.".into())
+                }
+                Self::Denied => AppError::Internal(
+                    "Interactive authentication required. Please sign in to Windows with your Entra ID account first."
+                        .into(),
+                ),
+                Self::Failed(error) => error,
+            }
+        }
     }
 
     fn unix_now() -> u64 {
@@ -444,7 +475,7 @@ mod windows_impl {
         /// Desktop (Win32) apps don't have a CoreWindow, so we must use
         /// `IWebAuthenticationCoreManagerInterop::RequestTokenForWindowAsync`
         /// with an explicit HWND instead of the UWP `RequestTokenAsync`.
-        pub fn acquire_token(hwnd_raw: isize) -> Result<CachedToken, AppError> {
+        pub fn acquire_token(hwnd_raw: isize) -> Result<CachedToken, WamAcquisitionFailure> {
             let hwnd = HWND(hwnd_raw as *mut _);
             let deadline = std::time::Instant::now() + GRAPH_WAM_ACQUISITION_TIMEOUT;
 
@@ -508,7 +539,8 @@ mod windows_impl {
                             "WAM returned Success but the access token is empty. \
                              The delegated scope request did not return usable credentials."
                                 .into(),
-                        ));
+                        )
+                        .into());
                     }
 
                     let upn = response
@@ -535,28 +567,24 @@ mod windows_impl {
                                 .error
                                 .clone()
                                 .unwrap_or_else(|| "InvalidWamToken".to_string()),
-                        ));
+                        )
+                        .into());
                     }
 
                     Ok(CachedToken { token, status })
                 }
-                WebTokenRequestStatus::UserCancel => Err(AppError::Internal(
-                    "Authentication was cancelled by user.".into(),
-                )),
-                WebTokenRequestStatus::UserInteractionRequired => Err(AppError::Internal(
-                    "Interactive authentication required. Please sign in to Windows with your Entra ID account first.".into(),
-                )),
-                _ => {
-                    let error_msg = result
-                        .ResponseError()
-                        .ok()
-                        .and_then(|e| e.ErrorMessage().ok())
-                        .map(|s| s.to_string())
-                        .unwrap_or_else(|| "Unknown WAM error".to_string());
-                    Err(AppError::Internal(format!(
-                        "WAM authentication failed: {error_msg}"
-                    )))
+                WebTokenRequestStatus::UserCancel => Err(WamAcquisitionFailure::Cancelled),
+                WebTokenRequestStatus::UserInteractionRequired => {
+                    Err(WamAcquisitionFailure::Denied)
                 }
+                WebTokenRequestStatus::AccountSwitch
+                | WebTokenRequestStatus::AccountProviderNotAvailable
+                | WebTokenRequestStatus::ProviderError => Err(WamAcquisitionFailure::Failed(
+                    AppError::Internal("WAM authentication failed.".into()),
+                )),
+                _ => Err(WamAcquisitionFailure::Failed(AppError::Internal(
+                    "WAM authentication failed.".into(),
+                ))),
             }
         }
     }
@@ -805,6 +833,120 @@ mod windows_impl {
             .unwrap_or_else(|| GraphAuthStatus::disconnected(None))
     }
 
+    const GRAPH_PERMISSION_DENIED_MESSAGE: &str =
+        "Consent was not granted. Your existing Graph permissions remain available.";
+    const GRAPH_PERMISSION_FAILED_MESSAGE: &str =
+        "Windows could not complete the permission request. Your existing Graph permissions remain available.";
+    const GRAPH_PERMISSION_STALE_MESSAGE: &str =
+        "The permission request was superseded by a newer Graph connection change.";
+
+    fn retained_permission_upgrade_result(
+        state: &GraphAuthState,
+        expected_generation: u64,
+        outcome: GraphPermissionUpgradeOutcome,
+        message: Option<&'static str>,
+    ) -> GraphPermissionUpgradeResult {
+        let (token, generation) = state.get_valid_token_snapshot();
+        let status = token
+            .map(|cached| cached.status)
+            .unwrap_or_else(|| GraphAuthStatus::disconnected(None));
+        if generation == expected_generation {
+            GraphPermissionUpgradeResult {
+                outcome,
+                status,
+                message: message.map(str::to_string),
+            }
+        } else {
+            GraphPermissionUpgradeResult {
+                outcome: GraphPermissionUpgradeOutcome::Stale,
+                status,
+                message: Some(GRAPH_PERMISSION_STALE_MESSAGE.to_string()),
+            }
+        }
+    }
+
+    fn request_missing_permissions_with<F>(
+        state: &GraphAuthState,
+        acquire: F,
+    ) -> Result<GraphPermissionUpgradeResult, AppError>
+    where
+        F: FnOnce() -> Result<CachedToken, WamAcquisitionFailure>,
+    {
+        let (current, generation) = state.get_valid_token().ok_or_else(|| {
+            AppError::InvalidInput("Microsoft Graph is not connected.".to_string())
+        })?;
+        if current.status.missing_scopes.is_empty() {
+            return Err(AppError::InvalidInput(
+                "No Microsoft Graph permissions are missing.".to_string(),
+            ));
+        }
+
+        let candidate = match acquire() {
+            Ok(candidate) => candidate,
+            Err(WamAcquisitionFailure::Cancelled) => {
+                return Ok(retained_permission_upgrade_result(
+                    state,
+                    generation,
+                    GraphPermissionUpgradeOutcome::Cancelled,
+                    None,
+                ));
+            }
+            Err(WamAcquisitionFailure::Denied) => {
+                return Ok(retained_permission_upgrade_result(
+                    state,
+                    generation,
+                    GraphPermissionUpgradeOutcome::Denied,
+                    Some(GRAPH_PERMISSION_DENIED_MESSAGE),
+                ));
+            }
+            Err(WamAcquisitionFailure::Failed(_)) => {
+                return Ok(retained_permission_upgrade_result(
+                    state,
+                    generation,
+                    GraphPermissionUpgradeOutcome::Failed,
+                    Some(GRAPH_PERMISSION_FAILED_MESSAGE),
+                ));
+            }
+        };
+
+        match classify_graph_permission_candidate(&current.status, &candidate.status) {
+            GraphPermissionCandidateDecision::Upgrade => {
+                let status = candidate.status.clone();
+                if state.set_token_if_generation(generation, candidate) {
+                    Ok(GraphPermissionUpgradeResult {
+                        outcome: GraphPermissionUpgradeOutcome::Upgraded,
+                        status,
+                        message: None,
+                    })
+                } else {
+                    Ok(retained_permission_upgrade_result(
+                        state,
+                        generation,
+                        GraphPermissionUpgradeOutcome::Stale,
+                        Some(GRAPH_PERMISSION_STALE_MESSAGE),
+                    ))
+                }
+            }
+            GraphPermissionCandidateDecision::Unchanged => Ok(retained_permission_upgrade_result(
+                state,
+                generation,
+                GraphPermissionUpgradeOutcome::Unchanged,
+                None,
+            )),
+            GraphPermissionCandidateDecision::InvalidCandidate
+            | GraphPermissionCandidateDecision::AccountMismatch
+            | GraphPermissionCandidateDecision::TenantMismatch
+            | GraphPermissionCandidateDecision::ScopeRegression => {
+                Ok(retained_permission_upgrade_result(
+                    state,
+                    generation,
+                    GraphPermissionUpgradeOutcome::Failed,
+                    Some(GRAPH_PERMISSION_FAILED_MESSAGE),
+                ))
+            }
+        }
+    }
+
     /// Authenticate with Graph API via WAM. Returns current auth status.
     /// `hwnd_raw` is the native window handle for the WAM dialog.
     pub fn authenticate(
@@ -825,14 +967,22 @@ mod windows_impl {
                     Ok(current_auth_status(state))
                 }
             }
-            Err(e) => {
+            Err(failure) => {
+                let error = failure.into_initial_auth_error();
                 if state.clear_token_if_generation(expected_generation) {
-                    Ok(GraphAuthStatus::disconnected(Some(e.to_string())))
+                    Ok(GraphAuthStatus::disconnected(Some(error.to_string())))
                 } else {
                     Ok(current_auth_status(state))
                 }
             }
         }
+    }
+
+    pub fn request_missing_permissions(
+        state: &GraphAuthState,
+        hwnd_raw: isize,
+    ) -> Result<GraphPermissionUpgradeResult, AppError> {
+        request_missing_permissions_with(state, || wam::acquire_token(hwnd_raw))
     }
 
     /// Get current auth status without triggering a new auth flow.
@@ -1103,6 +1253,412 @@ mod windows_impl {
             }
             Err(error) if error.kind == GraphClientErrorKind::NotFound => Ok(None),
             Err(error) => Err(error),
+        }
+    }
+
+    #[cfg(test)]
+    mod permission_upgrade_tests {
+        use std::cell::Cell;
+
+        use super::super::models::GraphPermissionUpgradeOutcome;
+        use super::super::{GraphAuthCapabilities, GRAPH_DELEGATED_SCOPES};
+        use super::*;
+
+        const ORIGINAL_TOKEN: &str = "original-memory-only-token";
+        const CANDIDATE_TOKEN: &str = "candidate-memory-only-token";
+        const NEWER_TOKEN: &str = "newer-memory-only-token";
+
+        fn status(
+            is_authenticated: bool,
+            upn: Option<&str>,
+            tenant: Option<&str>,
+            granted_scopes: &[&str],
+        ) -> GraphAuthStatus {
+            GraphAuthStatus {
+                is_authenticated,
+                user_principal_name: upn.map(str::to_string),
+                tenant_id: tenant.map(str::to_string),
+                granted_scopes: granted_scopes
+                    .iter()
+                    .map(|scope| (*scope).to_string())
+                    .collect(),
+                missing_scopes: GRAPH_DELEGATED_SCOPES
+                    .iter()
+                    .filter(|required| {
+                        !granted_scopes
+                            .iter()
+                            .any(|scope| scope.eq_ignore_ascii_case(required))
+                    })
+                    .map(|scope| (*scope).to_string())
+                    .collect(),
+                expires_at: Some(unix_now() + 3_600),
+                capabilities: GraphAuthCapabilities::default(),
+                error: None,
+            }
+        }
+
+        fn token(value: &str, upn: &str, tenant: &str, granted_scopes: &[&str]) -> CachedToken {
+            CachedToken {
+                token: value.to_string(),
+                status: status(true, Some(upn), Some(tenant), granted_scopes),
+            }
+        }
+
+        fn seed_partial_state() -> GraphAuthState {
+            let state = GraphAuthState::new();
+            assert!(state.set_token_if_generation(
+                0,
+                token(
+                    ORIGINAL_TOKEN,
+                    "user@contoso.example",
+                    "tenant-a",
+                    &[GRAPH_DELEGATED_SCOPES[0]],
+                ),
+            ));
+            state
+        }
+
+        fn stored_token_and_generation(state: &GraphAuthState) -> (String, u64) {
+            let guard = state.inner.access_token.lock().unwrap();
+            let cached = guard.value.as_ref().expect("cached token");
+            (cached.token.clone(), guard.generation)
+        }
+
+        fn assert_rejected_candidate_retains_current(candidate: CachedToken) {
+            let state = seed_partial_state();
+            let before = stored_token_and_generation(&state);
+
+            let result = request_missing_permissions_with(&state, || Ok(candidate))
+                .expect("candidate rejection is a structured outcome");
+
+            assert_eq!(result.outcome, GraphPermissionUpgradeOutcome::Failed);
+            assert!(result.message.is_some());
+            assert_eq!(result.status, current_auth_status(&state));
+            assert_eq!(stored_token_and_generation(&state), before);
+            assert!(!format!("{result:?}").contains(CANDIDATE_TOKEN));
+        }
+
+        fn assert_acquisition_failure_retains_current(
+            failure: WamAcquisitionFailure,
+            expected_outcome: GraphPermissionUpgradeOutcome,
+            expects_message: bool,
+        ) {
+            let state = seed_partial_state();
+            let before = stored_token_and_generation(&state);
+
+            let result = request_missing_permissions_with(&state, || Err(failure))
+                .expect("acquisition failure is a structured outcome");
+
+            assert_eq!(result.outcome, expected_outcome);
+            assert_eq!(result.message.is_some(), expects_message);
+            assert_eq!(result.status, current_auth_status(&state));
+            assert_eq!(stored_token_and_generation(&state), before);
+        }
+
+        #[test]
+        fn graph_permission_upgrade_disconnected_precondition_does_not_invoke_wam() {
+            let state = GraphAuthState::new();
+            let calls = Cell::new(0);
+
+            let result = request_missing_permissions_with(&state, || {
+                calls.set(calls.get() + 1);
+                unreachable!("disconnected precondition must stop before WAM")
+            });
+
+            assert!(result.is_err());
+            assert_eq!(calls.get(), 0);
+        }
+
+        #[test]
+        fn graph_permission_upgrade_complete_precondition_does_not_invoke_wam() {
+            let state = GraphAuthState::new();
+            assert!(state.set_token_if_generation(
+                0,
+                token(
+                    ORIGINAL_TOKEN,
+                    "user@contoso.example",
+                    "tenant-a",
+                    &GRAPH_DELEGATED_SCOPES,
+                ),
+            ));
+            let calls = Cell::new(0);
+
+            let result = request_missing_permissions_with(&state, || {
+                calls.set(calls.get() + 1);
+                unreachable!("complete precondition must stop before WAM")
+            });
+
+            assert!(result.is_err());
+            assert_eq!(calls.get(), 0);
+        }
+
+        #[test]
+        fn graph_permission_upgrade_strict_superset_replaces_token_and_advances_once() {
+            let state = seed_partial_state();
+            let (_, before_generation) = stored_token_and_generation(&state);
+            let candidate = token(
+                CANDIDATE_TOKEN,
+                "user@contoso.example",
+                "tenant-a",
+                &[GRAPH_DELEGATED_SCOPES[0], GRAPH_DELEGATED_SCOPES[1]],
+            );
+            let expected_status = candidate.status.clone();
+            let calls = Cell::new(0);
+
+            let result = request_missing_permissions_with(&state, || {
+                calls.set(calls.get() + 1);
+                Ok(candidate)
+            })
+            .expect("strict superset upgrade");
+
+            assert_eq!(calls.get(), 1);
+            assert_eq!(result.outcome, GraphPermissionUpgradeOutcome::Upgraded);
+            assert_eq!(result.status, expected_status);
+            assert!(result.message.is_none());
+            assert_eq!(
+                stored_token_and_generation(&state),
+                (CANDIDATE_TOKEN.to_string(), before_generation + 1)
+            );
+        }
+
+        #[test]
+        fn graph_permission_upgrade_equal_scopes_retain_original_token_and_generation() {
+            let state = seed_partial_state();
+            let before = stored_token_and_generation(&state);
+            let candidate = token(
+                CANDIDATE_TOKEN,
+                "USER@CONTOSO.EXAMPLE",
+                "TENANT-A",
+                &[GRAPH_DELEGATED_SCOPES[0]],
+            );
+
+            let result = request_missing_permissions_with(&state, || Ok(candidate))
+                .expect("equal scopes are unchanged");
+
+            assert_eq!(result.outcome, GraphPermissionUpgradeOutcome::Unchanged);
+            assert!(result.message.is_none());
+            assert_eq!(result.status, current_auth_status(&state));
+            assert_eq!(stored_token_and_generation(&state), before);
+        }
+
+        #[test]
+        fn graph_permission_upgrade_scope_subset_retains_original_token() {
+            let state = seed_partial_state();
+            assert!(state.set_token_if_generation(
+                1,
+                token(
+                    ORIGINAL_TOKEN,
+                    "user@contoso.example",
+                    "tenant-a",
+                    &[GRAPH_DELEGATED_SCOPES[0], GRAPH_DELEGATED_SCOPES[1]],
+                ),
+            ));
+            let before = stored_token_and_generation(&state);
+            let candidate = token(
+                CANDIDATE_TOKEN,
+                "user@contoso.example",
+                "tenant-a",
+                &[GRAPH_DELEGATED_SCOPES[0]],
+            );
+
+            let result = request_missing_permissions_with(&state, || Ok(candidate))
+                .expect("scope regression is a structured failure");
+
+            assert_eq!(result.outcome, GraphPermissionUpgradeOutcome::Failed);
+            assert_eq!(result.status, current_auth_status(&state));
+            assert_eq!(stored_token_and_generation(&state), before);
+        }
+
+        #[test]
+        fn graph_permission_upgrade_account_mismatch_retains_original_token() {
+            assert_rejected_candidate_retains_current(token(
+                CANDIDATE_TOKEN,
+                "other@contoso.example",
+                "tenant-a",
+                &[GRAPH_DELEGATED_SCOPES[0], GRAPH_DELEGATED_SCOPES[1]],
+            ));
+        }
+
+        #[test]
+        fn graph_permission_upgrade_tenant_mismatch_retains_original_token() {
+            assert_rejected_candidate_retains_current(token(
+                CANDIDATE_TOKEN,
+                "user@contoso.example",
+                "tenant-b",
+                &[GRAPH_DELEGATED_SCOPES[0], GRAPH_DELEGATED_SCOPES[1]],
+            ));
+        }
+
+        #[test]
+        fn graph_permission_upgrade_invalid_candidate_retains_original_token() {
+            assert_rejected_candidate_retains_current(CachedToken {
+                token: CANDIDATE_TOKEN.to_string(),
+                status: status(
+                    false,
+                    Some("user@contoso.example"),
+                    Some("tenant-a"),
+                    &[GRAPH_DELEGATED_SCOPES[0], GRAPH_DELEGATED_SCOPES[1]],
+                ),
+            });
+        }
+
+        #[test]
+        fn graph_permission_upgrade_cancellation_retains_original_token() {
+            assert_acquisition_failure_retains_current(
+                WamAcquisitionFailure::Cancelled,
+                GraphPermissionUpgradeOutcome::Cancelled,
+                false,
+            );
+        }
+
+        #[test]
+        fn graph_permission_upgrade_denial_retains_original_token() {
+            assert_acquisition_failure_retains_current(
+                WamAcquisitionFailure::Denied,
+                GraphPermissionUpgradeOutcome::Denied,
+                true,
+            );
+        }
+
+        #[test]
+        fn graph_permission_upgrade_provider_failure_retains_original_token_and_sanitizes_message()
+        {
+            let raw_provider_text = "raw-provider-sensitive-text";
+            let state = seed_partial_state();
+            let before = stored_token_and_generation(&state);
+
+            let result = request_missing_permissions_with(&state, || {
+                Err(WamAcquisitionFailure::Failed(AppError::Internal(
+                    raw_provider_text.to_string(),
+                )))
+            })
+            .expect("provider failure is a structured outcome");
+
+            assert_eq!(result.outcome, GraphPermissionUpgradeOutcome::Failed);
+            assert!(result.message.is_some());
+            assert!(!format!("{result:?}").contains(raw_provider_text));
+            assert_eq!(result.status, current_auth_status(&state));
+            assert_eq!(stored_token_and_generation(&state), before);
+        }
+
+        #[test]
+        fn graph_permission_upgrade_newer_sign_out_prevents_stale_candidate_replacement() {
+            let state = seed_partial_state();
+            let candidate = token(
+                CANDIDATE_TOKEN,
+                "user@contoso.example",
+                "tenant-a",
+                &[GRAPH_DELEGATED_SCOPES[0], GRAPH_DELEGATED_SCOPES[1]],
+            );
+
+            let result = request_missing_permissions_with(&state, || {
+                state.clear_token();
+                Ok(candidate)
+            })
+            .expect("stale candidate is a structured outcome");
+
+            assert_eq!(result.outcome, GraphPermissionUpgradeOutcome::Stale);
+            assert!(!result.status.is_authenticated);
+            assert!(result.message.is_some());
+            let guard = state.inner.access_token.lock().unwrap();
+            assert!(guard.value.is_none());
+            assert_eq!(guard.generation, 2);
+        }
+
+        #[test]
+        fn graph_permission_upgrade_newer_auth_prevents_stale_candidate_replacement() {
+            let state = seed_partial_state();
+            let candidate = token(
+                CANDIDATE_TOKEN,
+                "user@contoso.example",
+                "tenant-a",
+                &[GRAPH_DELEGATED_SCOPES[0], GRAPH_DELEGATED_SCOPES[1]],
+            );
+            let newer = token(
+                NEWER_TOKEN,
+                "newer@contoso.example",
+                "tenant-a",
+                &[GRAPH_DELEGATED_SCOPES[0]],
+            );
+            let newer_status = newer.status.clone();
+
+            let result = request_missing_permissions_with(&state, || {
+                assert!(state.set_token_if_generation(1, newer));
+                Ok(candidate)
+            })
+            .expect("newer authentication wins");
+
+            assert_eq!(result.outcome, GraphPermissionUpgradeOutcome::Stale);
+            assert_eq!(result.status, newer_status);
+            assert_eq!(
+                stored_token_and_generation(&state),
+                (NEWER_TOKEN.to_string(), 2)
+            );
+        }
+
+        #[test]
+        fn graph_permission_upgrade_stale_failure_returns_current_authoritative_status() {
+            let state = seed_partial_state();
+            let newer = token(
+                NEWER_TOKEN,
+                "newer@contoso.example",
+                "tenant-a",
+                &[GRAPH_DELEGATED_SCOPES[0]],
+            );
+            let newer_status = newer.status.clone();
+
+            let result = request_missing_permissions_with(&state, || {
+                assert!(state.set_token_if_generation(1, newer));
+                Err(WamAcquisitionFailure::Failed(AppError::Internal(
+                    "raw-provider-sensitive-text".to_string(),
+                )))
+            })
+            .expect("stale failure is a structured outcome");
+
+            assert_eq!(result.outcome, GraphPermissionUpgradeOutcome::Stale);
+            assert_eq!(result.status, newer_status);
+            assert!(!format!("{result:?}").contains("raw-provider-sensitive-text"));
+        }
+
+        #[cfg(feature = "esp-diagnostics")]
+        #[test]
+        fn graph_permission_upgrade_success_clears_guid_cache_and_cancels_older_esp_work() {
+            let state = seed_partial_state();
+            let (_, generation) = stored_token_and_generation(&state);
+            state.cache_apps(
+                generation,
+                &HashMap::from([(
+                    "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa".to_string(),
+                    GraphAppInfo {
+                        id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa".to_string(),
+                        display_name: "Cached app".to_string(),
+                        publisher: None,
+                        odata_type: None,
+                    },
+                )]),
+            );
+            let operation = state
+                .inner
+                .esp_operations
+                .begin("30000000-0000-4000-8000-000000000010", generation)
+                .expect("ESP operation");
+            assert!(!operation.is_cancelled());
+
+            let result = request_missing_permissions_with(&state, || {
+                Ok(token(
+                    CANDIDATE_TOKEN,
+                    "user@contoso.example",
+                    "tenant-a",
+                    &[GRAPH_DELEGATED_SCOPES[0], GRAPH_DELEGATED_SCOPES[1]],
+                ))
+            })
+            .expect("strict superset upgrade");
+
+            assert_eq!(result.outcome, GraphPermissionUpgradeOutcome::Upgraded);
+            assert!(operation.is_cancelled());
+            let cache = state.inner.guid_cache.lock().unwrap();
+            assert_eq!(cache.generation, generation + 1);
+            assert!(cache.apps.is_empty());
         }
     }
 
