@@ -10,7 +10,7 @@ import { save } from "@tauri-apps/plugin-dialog";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { useDsregcmdStore } from "./dsregcmd-store";
 import { DsregcmdEventLogSurface } from "./DsregcmdEventLogSurface";
-import { useAppActions } from "../../components/layout/Toolbar";
+import { useAppActions } from "../../hooks/use-app-actions";
 import { writeTextOutputFile } from "../../lib/commands";
 import {
   formatBool,

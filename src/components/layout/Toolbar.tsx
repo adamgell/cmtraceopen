@@ -36,9 +36,6 @@ import {
 } from "../../lib/log-source";
 import { matchesAnyPattern } from "../../lib/glob";
 
-export { useAppActions };
-export type { AppActionHandlers, AppCommandState } from "../../hooks/use-app-actions";
-
 export function WorkspaceToolbarAction({
   workspace,
 }: {
