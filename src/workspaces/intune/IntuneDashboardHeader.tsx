@@ -2,7 +2,7 @@ import { useMemo } from "react";
 import { tokens } from "@fluentui/react-components";
 import { LOG_UI_FONT_FAMILY } from "../../lib/log-accessibility";
 import { useIntuneStore } from "./intune-store";
-import { useAppActions } from "../../components/layout/Toolbar";
+import { useAppActions } from "../../hooks/use-app-actions";
 import { buildSourceFamilySummary } from "./intune-dashboard-utils";
 
 export function IntuneDashboardHeader() {
