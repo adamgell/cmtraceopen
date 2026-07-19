@@ -13,8 +13,9 @@ pub mod models;
 pub use models::{
     normalize_graph_guid, project_graph_auth_status, GraphAppInfo, GraphAuthCapabilities,
     GraphAuthStatus, GraphHttpMethod, GraphResolutionResult, GraphTransportRequest,
-    GraphTransportResponse, GraphWamRequestContract, GRAPH_DELEGATED_SCOPES, GRAPH_SCOPE_REQUEST,
-    GRAPH_WAM_REQUEST,
+    GraphTransportResponse, GraphWamPermissionRequestContract, GraphWamRequestContract,
+    GRAPH_DELEGATED_SCOPES, GRAPH_SCOPE_REQUEST, GRAPH_WAM_PERMISSION_REQUEST,
+    GRAPH_WAM_PERMISSION_SCOPE_REQUEST, GRAPH_WAM_REQUEST,
 };
 
 #[cfg(any(target_os = "windows", test))]
@@ -230,7 +231,8 @@ mod windows_impl {
         normalize_graph_guid, parse_graph_app_json, parse_graph_app_values,
         project_graph_auth_status, receive_before_deadline, DeadlineReceiveError, GraphAppInfo,
         GraphAuthStatus, GraphHttpMethod, GraphResolutionResult, GraphTransportRequest,
-        GraphTransportResponse, VersionedAuthSlot, VersionedGuidCache, GRAPH_WAM_REQUEST,
+        GraphTransportResponse, VersionedAuthSlot, VersionedGuidCache,
+        GRAPH_WAM_PERMISSION_REQUEST, GRAPH_WAM_REQUEST,
     };
     use crate::error::AppError;
 
@@ -463,8 +465,8 @@ mod windows_impl {
 
         use windows::core::{factory, RuntimeType, HSTRING};
         use windows::Security::Authentication::Web::Core::{
-            WebAuthenticationCoreManager, WebTokenRequest, WebTokenRequestResult,
-            WebTokenRequestStatus,
+            WebAuthenticationCoreManager, WebTokenRequest, WebTokenRequestPromptType,
+            WebTokenRequestResult, WebTokenRequestStatus,
         };
         use windows::Win32::Foundation::HWND;
         use windows::Win32::System::WinRT::{
@@ -475,6 +477,12 @@ mod windows_impl {
 
         const GRAPH_WAM_ACQUISITION_TIMEOUT: std::time::Duration =
             std::time::Duration::from_secs(120);
+
+        #[derive(Clone, Copy)]
+        enum WamRequestMode {
+            InitialConnect,
+            PermissionConsent,
+        }
 
         struct WinRtApartment;
 
@@ -535,14 +543,21 @@ mod windows_impl {
         /// Desktop (Win32) apps don't have a CoreWindow, so we must use
         /// `IWebAuthenticationCoreManagerInterop::RequestTokenForWindowAsync`
         /// with an explicit HWND instead of the UWP `RequestTokenAsync`.
-        pub fn acquire_token_on_initialized_worker(
+        pub fn acquire_permission_consent_token_on_initialized_worker(
             hwnd_raw: isize,
         ) -> Result<CachedToken, WamAcquisitionFailure> {
             let _apartment = WinRtApartment::initialize()?;
-            acquire_token(hwnd_raw)
+            acquire_token_with_request(hwnd_raw, WamRequestMode::PermissionConsent)
         }
 
         pub fn acquire_token(hwnd_raw: isize) -> Result<CachedToken, WamAcquisitionFailure> {
+            acquire_token_with_request(hwnd_raw, WamRequestMode::InitialConnect)
+        }
+
+        fn acquire_token_with_request(
+            hwnd_raw: isize,
+            request_mode: WamRequestMode,
+        ) -> Result<CachedToken, WamAcquisitionFailure> {
             let hwnd = HWND(hwnd_raw as *mut _);
             let deadline = std::time::Instant::now() + GRAPH_WAM_ACQUISITION_TIMEOUT;
 
@@ -556,21 +571,56 @@ mod windows_impl {
                 .map_err(|e| AppError::Internal(format!("WAM provider lookup failed: {e}")))?;
             let provider = wait_for_operation(&provider_operation, deadline, "provider lookup")?;
 
-            // The raw Entra WAM provider uses short delegated scope names plus
-            // an explicit Graph resource. Without the resource property WAM can
-            // report Success while returning an empty token.
-            let scope = HSTRING::from(GRAPH_WAM_REQUEST.scope);
             let client_id = HSTRING::from(GRAPH_POWERSHELL_CLIENT_ID);
-            let request = WebTokenRequest::Create(&provider, &scope, &client_id)
-                .map_err(|e| AppError::Internal(format!("WAM request creation failed: {e}")))?;
-            request
+            let request = match request_mode {
+                WamRequestMode::PermissionConsent => {
+                    let scope = HSTRING::from(GRAPH_WAM_PERMISSION_REQUEST.scope);
+                    if GRAPH_WAM_PERMISSION_REQUEST.force_authentication {
+                        WebTokenRequest::CreateWithPromptType(
+                            &provider,
+                            &scope,
+                            &client_id,
+                            WebTokenRequestPromptType::ForceAuthentication,
+                        )
+                    } else {
+                        WebTokenRequest::Create(&provider, &scope, &client_id)
+                    }
+                }
+                WamRequestMode::InitialConnect => {
+                    let scope = HSTRING::from(GRAPH_WAM_REQUEST.scope);
+                    WebTokenRequest::Create(&provider, &scope, &client_id)
+                }
+            }
+            .map_err(|e| AppError::Internal(format!("WAM request creation failed: {e}")))?;
+
+            let properties = request
                 .Properties()
-                .map_err(|e| AppError::Internal(format!("WAM properties failed: {e}")))?
-                .Insert(
-                    &HSTRING::from(GRAPH_WAM_REQUEST.resource_property),
-                    &HSTRING::from(GRAPH_WAM_REQUEST.resource),
-                )
-                .map_err(|e| AppError::Internal(format!("WAM set resource failed: {e}")))?;
+                .map_err(|e| AppError::Internal(format!("WAM properties failed: {e}")))?;
+            match request_mode {
+                WamRequestMode::PermissionConsent => {
+                    // The explicit permission action mirrors MSAL's Entra WAM
+                    // v2 consent shape. In particular, it must not attach the
+                    // v1 `resource` property or WAM may reuse the cached token.
+                    for &(name, value) in GRAPH_WAM_PERMISSION_REQUEST.properties {
+                        properties
+                            .Insert(&HSTRING::from(name), &HSTRING::from(value))
+                            .map_err(|e| {
+                                AppError::Internal(format!("WAM set consent property failed: {e}"))
+                            })?;
+                    }
+                }
+                WamRequestMode::InitialConnect => {
+                    // Preserve the established initial-connect contract.
+                    // Without this resource property the legacy/default request
+                    // can report Success while returning an empty token.
+                    properties
+                        .Insert(
+                            &HSTRING::from(GRAPH_WAM_REQUEST.resource_property),
+                            &HSTRING::from(GRAPH_WAM_REQUEST.resource),
+                        )
+                        .map_err(|e| AppError::Internal(format!("WAM set resource failed: {e}")))?;
+                }
+            }
 
             // Use the COM interop interface to pass our HWND
             let interop: IWebAuthenticationCoreManagerInterop =
@@ -1064,7 +1114,7 @@ mod windows_impl {
         hwnd_raw: isize,
     ) -> Result<GraphPermissionUpgradeResult, AppError> {
         request_missing_permissions_with(state, || {
-            wam::acquire_token_on_initialized_worker(hwnd_raw)
+            wam::acquire_permission_consent_token_on_initialized_worker(hwnd_raw)
         })
     }
 

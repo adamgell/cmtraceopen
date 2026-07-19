@@ -37,7 +37,7 @@ The native allowlist remains the single source of truth:
 4. `DeviceManagementConfiguration.Read.All`
 5. `DeviceManagementScripts.Read.All`
 
-Every permission-upgrade attempt re-requests this complete union as short delegated scope names with `resource=https://graph.microsoft.com`. It does not request only the currently missing scope because replacing the bearer token with a narrower token could remove capabilities that already work.
+Every permission-upgrade attempt re-requests this complete union as short delegated scope names through the Entra WAM v2 compatibility path. The interactive request also includes the standard `openid`, `profile`, and `offline_access` identity/session scopes that MSAL adds to public-client requests; it does not add another Graph data permission. Unlike the established initial-connect request, the upgrade request must not send `resource=https://graph.microsoft.com`, because that legacy resource contract can return the already-cached partial token without evaluating incremental consent. It does not request only the currently missing Graph scope because replacing the bearer token with a narrower token could remove capabilities that already work.
 
 Future versions may extend the native allowlist through a separately reviewed permission change. When that happens, existing tokens will naturally report the newly absent scope in `missingScopes`, and the same user-triggered action can request the then-current complete allowlist. No arbitrary or dynamically supplied permission is permitted.
 
@@ -49,7 +49,7 @@ Clicking it:
 
 1. Locks the other Graph actions for the duration of the request.
 2. Changes the label to **Requesting permissions...**.
-3. Starts the existing HWND-parented WAM request for the full native permission set. Windows may show consent or account interaction when necessary.
+3. Starts an HWND-parented, explicitly interactive WAM v2 consent request for the full native permission set. The button must reach an approval/denial or administrator-approval surface instead of accepting the cached partial resource token as the result.
 4. Refreshes the displayed account, tenant, capability rows, and missing-scope list from the returned status.
 
 Expected outcomes:
@@ -70,8 +70,8 @@ The command:
 
 1. Requires a valid cached token with at least one missing declared permission.
 2. Snapshots the current auth generation and partial status without clearing them.
-3. Builds the WAM request exclusively from `GRAPH_WAM_REQUEST` in native code.
-4. Acquires a candidate token through the existing HWND-parented WAM path using the default prompt semantics. It does not use forced authentication merely to request consent.
+3. Builds the WAM request exclusively from `GRAPH_WAM_PERMISSION_REQUEST` in native code. The request uses `WebTokenRequestPromptType::ForceAuthentication` together with `wam_compat=2.0`, `prompt=consent`, the `/common` interactive authority workaround, and no `resource` property. Force authentication alone is not treated as consent; the paired provider prompt is required.
+4. Acquires a candidate token through the existing HWND-parented interop call while leaving the established default/resource initial-connect request unchanged.
 5. Projects and validates its audience, expiry, tenant, and delegated capabilities using the existing token-status projection.
 6. Rejects an unexpected tenant change. If both the old and new status contain a user principal name, it also rejects an account change.
 7. Requires the candidate's granted declared scopes to be a superset of the existing granted declared scopes. A strict superset is an upgrade; an equal set is unchanged; a subset is rejected.
@@ -79,7 +79,7 @@ The command:
 
 A successful replacement uses the existing generation transition so stale ESP Graph work is invalidated and the GUID cache is reset consistently. Expected consent outcomes return a structured, token-free result containing the retained or upgraded `GraphAuthStatus`, an outcome code, and an optional sanitized message. Unexpected command/IPC failures remain ordinary command errors.
 
-The current `graph_authenticate` path remains responsible for establishing the initial connection. It may continue returning a valid cached token without opening WAM. The new command deliberately bypasses that cached-token short circuit only after the user clicks the upgrade action.
+The current `graph_authenticate` path remains responsible for establishing the initial connection. It may continue returning a valid cached token without opening WAM and retains its existing `resource=https://graph.microsoft.com` contract. The new command deliberately uses the separate v2 consent contract only after the user clicks the upgrade action.
 
 ## Safety and privacy
 
@@ -95,7 +95,7 @@ The current `graph_authenticate` path remains responsible for establishing the i
 
 ### Native and portable tests
 
-- The upgrade request uses the fixed five-scope union and Graph resource property.
+- The upgrade request uses the fixed five-Graph-scope union plus standard OIDC identity/session scopes through the explicit v2 consent contract, with no Graph `resource` property.
 - No command argument can supply arbitrary scopes.
 - A strict capability superset replaces the cached token and advances dependent state exactly once.
 - An equal capability set returns unchanged and retains the existing token.

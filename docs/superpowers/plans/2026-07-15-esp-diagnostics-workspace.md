@@ -1364,7 +1364,7 @@ DeviceManagementConfiguration.Read.All
 DeviceManagementScripts.Read.All
 ```
 
-The raw Entra WAM acquisition request uses the space-separated short names and sends the required `resource=https://graph.microsoft.com` property:
+The initial/default raw Entra WAM acquisition request uses the space-separated short names and sends the required `resource=https://graph.microsoft.com` property:
 
 ```text
 DeviceManagementManagedDevices.Read.All
@@ -1390,11 +1390,11 @@ Expected: fail because current WAM status does not report scope claims/capabilit
 
 Keep the existing provider, public client ID, HWND-parented interaction, and memory-only cache. Decode and sanity-check unsigned `scp`, `aud`, `tid`, and `exp` only for expiry/cache/capability UX; Microsoft Graph 401/403 responses remain the authorization truth. Accept `aud` values `https://graph.microsoft.com` and `00000003-0000-0000-c000-000000000000`, derive expiry from `exp`, and remove the current fixed 50-minute fallback. Remove token-bearing `Debug` behavior. Continue current app-name enrichment when only app-read capability exists.
 
-The Graph resource property is mandatory for this raw Entra WAM path. Request the five declared permissions as short scope names, then derive effective capabilities only from the returned `scp` claim; never infer consent from the request itself.
+The Graph resource property is mandatory for the established initial/default raw Entra WAM path. Request the five declared permissions as short scope names, then derive effective capabilities only from the returned `scp` claim; never infer consent from the request itself. A later explicit permission-upgrade action is a distinct WAM v2 consent path and must not reuse this resource property.
 
 - [ ] **Step 4: Add the public-client release gate**
 
-On a Windows test device, make one interactive raw Entra WAM request with the exact five short scopes plus `resource=https://graph.microsoft.com` and inspect the resulting short `scp` values. This live public-client feasibility result is a prerequisite to Task 11; mocked CI cannot establish consent. If the existing client cannot request/consent to the set, surface `UnsupportedClientScopeSet` with the missing scopes and stop for an explicit authentication-client decision—do not replace authentication or broaden permissions silently.
+On a Windows test device, prove both contracts independently: initial/default acquisition with the exact five short scopes plus `resource=https://graph.microsoft.com`, and the explicit Settings permission action with the five fixed Graph scopes, standard OIDC identity/session scopes, `ForceAuthentication` paired with `wam_compat=2.0` and `prompt=consent`, an explicit interactive authority, and no `resource`. Inspect the resulting short `scp` values. This live public-client feasibility result is a prerequisite to Task 11; mocked CI cannot establish consent. If the existing client cannot request/consent to the set, surface `UnsupportedClientScopeSet` with the missing scopes and stop for an explicit authentication-client decision—do not replace authentication or broaden Graph data permissions silently.
 
 - [ ] **Step 5: Verify and commit**
 
@@ -1960,7 +1960,7 @@ Document the workspace, elevation recommendation, bounded discovery limits, no d
 
 Any implementation difference requires an explicit rationale in the spec before release. Do not change the done-definition to match missing code.
 
-**Validation-sequencing drift:** Graph orchestration and UX proceeded against portable models and fake transports before the planned live WAM public-client feasibility gate could run. Live Windows evidence on 2026-07-18 falsified the no-resource request assumption: WAM reported `Success` but returned an empty token. The corrected raw Entra WAM contract uses the five short scope names plus `resource=https://graph.microsoft.com`; live consent and `scp` evidence still remain required in Phase 15F. Fixture-driven Playwright app-shell captures are not accepted as native Windows Tauri visual evidence. Parallel worktrees also split or folded some planned commit boundaries without changing the done-definition.
+**Validation-sequencing drift:** Graph orchestration and UX proceeded against portable models and fake transports before the planned live WAM public-client feasibility gate could run. The first live Windows check on 2026-07-18 falsified the no-resource initial-connect assumption: WAM reported `Success` but returned an empty token, so initial/default acquisition retained the five short scope names plus `resource=https://graph.microsoft.com`. The later partial-session check falsified reuse of that same default/resource request for permission upgrade: clicking returned the cached partial token without showing consent. The explicit action now has a separate MSAL-compatible WAM v2 consent contract; live approval/denial and five-scope `scp` evidence still remain required in Phase 15F. Fixture-driven Playwright app-shell captures are not accepted as native Windows Tauri visual evidence. Parallel worktrees also split or folded some planned commit boundaries without changing the done-definition.
 
 - [x] **Step 3: Run documentation link/path checks and commit**
 
@@ -2072,7 +2072,7 @@ Exercise zero, one, and multiple concurrent `msiexec` processes. Confirm exact l
 
 - [ ] **Step 4: Graph states**
 
-First prove that the existing public client makes a raw Entra WAM request for the five short scopes with `resource=https://graph.microsoft.com` and receives all five short names in `scp`; record the client ID, tenant, consent result, and redacted capability output. Then exercise Graph disabled, connecting-at-start/no queue, manual refresh after connection, disable-during-query/no sign-out, full consent, app-only/partial consent, denied section, expired token, offline, cancellation, ambiguous device, and beta unknown value. Compare the selected managed device, Autopilot event/profile, profile assignments, ESP configuration, and app status against the Intune portal.
+First prove that the existing public client completes initial/default acquisition for the five short Graph scopes with `resource=https://graph.microsoft.com`. Then, from a partial session, prove the explicit Settings action opens the WAM v2 approval/denial or administrator-approval surface and returns all five short names in `scp`; record the client ID, tenant, consent result, and redacted capability output. Then exercise Graph disabled, connecting-at-start/no queue, manual refresh after connection, disable-during-query/no sign-out, full consent, app-only/partial consent, denied section, expired token, offline, cancellation, ambiguous device, and beta unknown value. Compare the selected managed device, Autopilot event/profile, profile assignments, ESP configuration, and app status against the Intune portal.
 
 - [ ] **Step 5: Read-only audit**
 
@@ -2150,7 +2150,7 @@ Commit any final verified fixes with scoped messages. Do not merge, push, or ope
 - [x] All diagnostic registry access is read-only and scoped.
 - [x] All Graph ESP requests are read-only and use only the five declared delegated read scopes.
 - [x] The existing WAM flow is reused; no second login, app secret, or bearer-token input exists.
-- [ ] Raw Entra WAM requests exactly the five short delegated scopes with `resource=https://graph.microsoft.com`; short `scp` capability evidence is recorded on Windows.
+- [ ] Initial/default raw Entra WAM uses the five short delegated scopes with `resource=https://graph.microsoft.com`; the explicit permission action uses the fixed v2 consent contract with no `resource`; short `scp` capability evidence is recorded on Windows.
 - [x] Tokens remain memory-only and redacted from `Debug`, IPC, logs, screenshots, copy, and export.
 - [x] Graph host, pagination, item, response-size, timeout, retry, and cancellation limits are enforced.
 - [x] CAB/ZIP entry count, size, path, type, and extraction-root limits are enforced.
