@@ -23,6 +23,7 @@ import {
 } from "../stores/ui-store";
 import type { LogSource } from "../types/log";
 import { useDsregcmdStore } from "../workspaces/dsregcmd/dsregcmd-store";
+import { useEspDiagnosticsStore } from "../workspaces/esp-diagnostics/esp-diagnostics-store";
 import { useIntuneStore } from "../workspaces/intune/intune-store";
 import { getWorkspace } from "../workspaces/registry";
 import { useSysmonStore } from "../workspaces/sysmon/sysmon-store";
@@ -55,7 +56,17 @@ function resolveRefreshSource(
 }
 
 function toNativeMenuLabel(label: string): string {
-  return label.replace(/\.\.\.$/, "…");
+  const normalizedLabel = label.replace(/\.\.\.$/, "…");
+
+  if (normalizedLabel === "Open file…") {
+    return "Open File…";
+  }
+
+  if (normalizedLabel === "Open folder…") {
+    return "Open Folder…";
+  }
+
+  return normalizedLabel;
 }
 
 async function inferPathKind(
@@ -165,6 +176,8 @@ export function useAppActions(): AppActionHandlers {
   const dsregcmdBundlePath = useDsregcmdStore(
     (state) => state.sourceContext.bundlePath,
   );
+  const espPhase = useEspDiagnosticsStore((state) => state.phase);
+  const espSessionId = useEspDiagnosticsStore((state) => state.sessionId);
   const sysmonIsAnalyzing = useSysmonStore((state) => state.isAnalyzing);
   const sysmonSourcePath = useSysmonStore((state) => state.sourcePath);
 
@@ -208,11 +221,24 @@ export function useAppActions(): AppActionHandlers {
     () => resolveRefreshSource(activeSource, openFilePath),
     [activeSource, openFilePath],
   );
+  const isEspSourceCommandBusy =
+    espSessionId !== null ||
+    espPhase === "analyzing" ||
+    espPhase === "starting" ||
+    espPhase === "live" ||
+    espPhase === "stopping";
   const isSourceCommandBusy =
-    isLoading ||
-    intuneIsAnalyzing ||
-    dsregcmdIsAnalyzing ||
-    sysmonIsAnalyzing;
+    activeWorkspace === "log"
+      ? isLoading
+      : isIntuneWorkspace(activeWorkspace)
+        ? intuneIsAnalyzing
+        : activeWorkspace === "dsregcmd"
+          ? dsregcmdIsAnalyzing
+          : activeWorkspace === "sysmon"
+            ? sysmonIsAnalyzing
+            : activeWorkspace === "esp-diagnostics"
+              ? isEspSourceCommandBusy
+              : false;
 
   const commandState = useMemo<AppCommandState>(() => {
     const workspace = getWorkspace(activeWorkspace);
@@ -241,11 +267,13 @@ export function useAppActions(): AppActionHandlers {
         !isFiltering,
       canRefresh:
         !isSourceCommandBusy &&
-        (activeWorkspace === "dsregcmd"
-          ? dsregcmdSource !== null
-          : activeWorkspace === "sysmon"
-            ? sysmonSourcePath !== null
-            : refreshSource !== null),
+        (activeWorkspace === "log"
+          ? refreshSource !== null
+          : activeWorkspace === "dsregcmd"
+            ? dsregcmdSource !== null
+            : activeWorkspace === "sysmon"
+              ? sysmonSourcePath !== null
+              : false),
       canToggleSidebar,
       canToggleDetailsPane,
       canToggleInfoPane,
@@ -258,16 +286,18 @@ export function useAppActions(): AppActionHandlers {
             : activeWorkspace === "dsregcmd"
               ? dsregcmdBundlePath !== null
               : false,
-      canSaveSession: activeWorkspace !== "log" || openTabCount > 0,
+      canSaveSession: openTabCount > 0,
       canCollectDiagnostics: collectionProgress === null,
       isLoading: isSourceCommandBusy,
       isPaused,
       hasActiveSource:
-        activeWorkspace === "dsregcmd"
-          ? dsregcmdSource !== null
-          : activeWorkspace === "sysmon"
-            ? sysmonSourcePath !== null
-            : refreshSource !== null,
+        activeWorkspace === "log"
+          ? refreshSource !== null
+          : activeWorkspace === "dsregcmd"
+            ? dsregcmdSource !== null
+            : activeWorkspace === "sysmon"
+              ? sysmonSourcePath !== null
+              : false,
       isSidebarVisible: canToggleSidebar && !sidebarCollapsed,
       isDetailsVisible: canToggleDetailsPane && showDetails,
       isInfoPaneVisible: canToggleInfoPane && showInfoPane,
@@ -635,15 +665,7 @@ export function useAppActions(): AppActionHandlers {
       return;
     }
 
-    if (!refreshSource) {
-      return;
-    }
-
-    if (isIntuneWorkspace(activeWorkspace)) {
-      await getWorkspace(activeWorkspace).onOpenSource!(
-        refreshSource,
-        "app-actions.refresh",
-      );
+    if (activeWorkspace !== "log" || !refreshSource) {
       return;
     }
 

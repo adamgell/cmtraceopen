@@ -5,6 +5,10 @@ import { useLogStore } from "../stores/log-store";
 import { useUiStore } from "../stores/ui-store";
 import type { LogEntry } from "../types/log";
 import { useDsregcmdStore } from "../workspaces/dsregcmd/dsregcmd-store";
+import {
+  type EspWorkspacePhase,
+  useEspDiagnosticsStore,
+} from "../workspaces/esp-diagnostics/esp-diagnostics-store";
 import { useIntuneStore } from "../workspaces/intune/intune-store";
 import { useSysmonStore } from "../workspaces/sysmon/sysmon-store";
 import { useAppActions } from "./use-app-actions";
@@ -34,6 +38,10 @@ describe("useAppActions", () => {
     useFilterStore.getState().clearFilter();
     useIntuneStore.getState().clear();
     useDsregcmdStore.getState().clear();
+    useEspDiagnosticsStore.setState(
+      useEspDiagnosticsStore.getInitialState(),
+      true,
+    );
     useSysmonStore.getState().clear();
     useUiStore.setState({
       activeWorkspace: "log",
@@ -68,8 +76,8 @@ describe("useAppActions", () => {
       isSidebarVisible: true,
       isDetailsVisible: true,
       isInfoPaneVisible: true,
-      openFileLabel: "Open file…",
-      openFolderLabel: "Open folder…",
+      openFileLabel: "Open File…",
+      openFolderLabel: "Open Folder…",
     });
 
     const initialFontSize = useUiStore.getState().logListFontSize;
@@ -119,6 +127,132 @@ describe("useAppActions", () => {
     expect(useUiStore.getState().showDetails).toBe(true);
     expect(useUiStore.getState().showInfoPane).toBe(true);
     expect(useUiStore.getState().logListFontSize).toBe(initialFontSize);
+  });
+
+  it.each<{
+    phase: EspWorkspacePhase;
+    sessionId: string | null;
+    canOpenSources: boolean;
+  }>([
+    { phase: "idle", sessionId: null, canOpenSources: true },
+    { phase: "ready", sessionId: null, canOpenSources: true },
+    { phase: "error", sessionId: null, canOpenSources: true },
+    { phase: "analyzing", sessionId: null, canOpenSources: false },
+    { phase: "starting", sessionId: null, canOpenSources: false },
+    { phase: "live", sessionId: null, canOpenSources: false },
+    { phase: "stopping", sessionId: null, canOpenSources: false },
+    { phase: "idle", sessionId: "session-1", canOpenSources: false },
+    { phase: "ready", sessionId: "session-1", canOpenSources: false },
+  ])(
+    "sets ESP source availability for $phase with session $sessionId",
+    ({ phase, sessionId, canOpenSources }) => {
+      useUiStore.setState({
+        activeWorkspace: "esp-diagnostics",
+        activeView: "esp-diagnostics",
+      });
+      useEspDiagnosticsStore.setState({
+        phase,
+        sessionId,
+        graphPhase: "loading",
+      });
+
+      const { result } = renderHook(() => useAppActions());
+
+      expect(result.current.commandState.canOpenSources).toBe(canOpenSources);
+      expect(result.current.commandState.isLoading).toBe(!canOpenSources);
+    },
+  );
+
+  it("does not let background workspace activity disable source commands", () => {
+    useIntuneStore.setState({ isAnalyzing: true });
+    useEspDiagnosticsStore.setState({ phase: "live", sessionId: "session-1" });
+    useUiStore.setState({
+      activeWorkspace: "log",
+      activeView: "log",
+    });
+
+    const { result } = renderHook(() => useAppActions());
+
+    expect(result.current.commandState.canOpenSources).toBe(true);
+    expect(result.current.commandState.isLoading).toBe(false);
+  });
+
+  it("does not expose a stale Log refresh source in unsupported workspaces", async () => {
+    useLogStore
+      .getState()
+      .setActiveSource({ kind: "file", path: "/stale.log" });
+    const { result } = renderHook(() => useAppActions());
+
+    const unsupportedWorkspaces = [
+      "intune",
+      "new-intune",
+      "esp-diagnostics",
+      "timeline",
+      "event-log",
+      "deployment",
+      "secureboot",
+      "dns-dhcp",
+      "macos-diag",
+    ] as const;
+
+    for (const workspace of unsupportedWorkspaces) {
+      act(() => {
+        useUiStore.setState({
+          activeWorkspace: workspace,
+          activeView: workspace,
+        });
+      });
+      expect(result.current.commandState.canRefresh).toBe(false);
+    }
+
+    await act(async () => {
+      await result.current.refreshActiveSource();
+    });
+    expect(useUiStore.getState().activeWorkspace).toBe("macos-diag");
+  });
+
+  it("enables Refresh only for supported workspaces with their own source", () => {
+    const { result } = renderHook(() => useAppActions());
+
+    expect(result.current.commandState.canRefresh).toBe(false);
+    act(() => {
+      useLogStore
+        .getState()
+        .setActiveSource({ kind: "file", path: "/test.log" });
+    });
+    expect(result.current.commandState.canRefresh).toBe(true);
+
+    act(() => {
+      useUiStore.setState({
+        activeWorkspace: "dsregcmd",
+        activeView: "dsregcmd",
+      });
+    });
+    expect(result.current.commandState.canRefresh).toBe(false);
+
+    const dsregcmdSourceContext = useDsregcmdStore.getState().sourceContext;
+    act(() => {
+      useDsregcmdStore.setState({
+        sourceContext: {
+          ...dsregcmdSourceContext,
+          source: { kind: "file", path: "C:\\dsregcmd.txt" },
+        },
+      });
+    });
+    expect(result.current.commandState.canRefresh).toBe(true);
+
+    act(() => {
+      useUiStore.setState({
+        activeWorkspace: "sysmon",
+        activeView: "sysmon",
+      });
+    });
+    expect(result.current.commandState.canRefresh).toBe(false);
+
+    act(() => {
+      useSysmonStore.setState({ sourcePath: "C:\\sysmon.evtx" });
+    });
+    expect(result.current.commandState.canRefresh).toBe(true);
   });
 
   it("opens Find without a session and otherwise navigates matches", () => {
@@ -177,6 +311,11 @@ describe("useAppActions", () => {
       });
     });
     expect(result.current.commandState.canShowEvidenceBundle).toBe(false);
+    expect(result.current.commandState.canSaveSession).toBe(false);
+
+    act(() => {
+      useUiStore.getState().openTab("C:\\test.log", "test.log");
+    });
     expect(result.current.commandState.canSaveSession).toBe(true);
 
     act(() => {
