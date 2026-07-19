@@ -188,11 +188,13 @@ pub fn request_missing_permissions(
     state: &GraphAuthState,
     hwnd_raw: isize,
 ) -> Result<GraphPermissionUpgradeResult, AppError> {
-    request_missing_permissions_with(state, || wam::acquire_token(hwnd_raw))
+    request_missing_permissions_with(state, || {
+        wam::acquire_permission_consent_token_on_initialized_worker(hwnd_raw)
+    })
 }
 ```
 
-This must reuse `GRAPH_WAM_REQUEST`; it must not accept a scope parameter and must not force credential re-entry merely to request consent.
+Live Windows evidence falsified reuse of `GRAPH_WAM_REQUEST`: the default/resource request returned the cached partial token without showing consent. The explicit action must instead use the fixed native `GRAPH_WAM_PERMISSION_REQUEST`: `ForceAuthentication` paired with `wam_compat=2.0` and `prompt=consent`, the interactive `/common` authority workaround, and no `resource` property. The established initial-connect path remains unchanged. No scope parameter may cross IPC.
 
 - [ ] **Step 5: Run native focused gates**
 
