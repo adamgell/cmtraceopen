@@ -1,7 +1,9 @@
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
-use serde::Serialize;
-use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu, HELP_SUBMENU_ID};
+use serde::{Deserialize, Serialize};
+use tauri::menu::{
+    CheckMenuItem, Menu, MenuItem, MenuItemKind, PredefinedMenuItem, Submenu, HELP_SUBMENU_ID,
+};
 use tauri::{AppHandle, Emitter, Runtime};
 
 use crate::commands::app_config::get_available_workspaces;
@@ -341,6 +343,16 @@ fn workspace_groups(
         .collect()
 }
 
+fn visible_workspace_descriptors(
+    platform: MenuPlatform,
+    available_workspaces: &[&str],
+) -> Vec<&'static WorkspaceDescriptor> {
+    workspace_groups(platform, available_workspaces)
+        .into_iter()
+        .flat_map(|group| group.workspaces)
+        .collect()
+}
+
 fn top_level_menu_order(platform: MenuPlatform) -> &'static [&'static str] {
     if platform == MenuPlatform::Macos {
         MAC_TOP_LEVEL_ORDER
@@ -433,6 +445,98 @@ pub struct AppMenuActionPayload {
     pub trigger: String,
     pub source_id: Option<String>,
     pub target_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AppMenuState {
+    pub active_workspace: String,
+    pub open_file_label: String,
+    pub open_folder_label: String,
+    pub can_open_sources: bool,
+    pub can_open_known_sources: bool,
+    pub can_find: bool,
+    pub has_find_session: bool,
+    pub can_filter: bool,
+    pub can_pause_resume: bool,
+    pub is_paused: bool,
+    pub can_refresh: bool,
+    pub can_toggle_sidebar: bool,
+    pub is_sidebar_visible: bool,
+    pub can_toggle_details_pane: bool,
+    pub is_details_visible: bool,
+    pub can_toggle_info_pane: bool,
+    pub is_info_pane_visible: bool,
+    pub can_adjust_text_size: bool,
+    pub can_show_evidence_bundle: bool,
+    pub can_save_session: bool,
+    pub can_collect_diagnostics: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MenuUpdateKind {
+    Normal,
+    Submenu,
+    Check,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct MenuItemUpdate {
+    id: String,
+    kind: MenuUpdateKind,
+    text: Option<String>,
+    enabled: bool,
+    checked: Option<bool>,
+    optional: bool,
+}
+
+impl MenuItemUpdate {
+    fn normal(id: &str, enabled: bool) -> Self {
+        Self {
+            id: id.to_string(),
+            kind: MenuUpdateKind::Normal,
+            text: None,
+            enabled,
+            checked: None,
+            optional: false,
+        }
+    }
+
+    fn normal_with_text(id: &str, text: impl Into<String>, enabled: bool) -> Self {
+        Self {
+            text: Some(text.into()),
+            ..Self::normal(id, enabled)
+        }
+    }
+
+    fn optional_normal(id: &str, enabled: bool) -> Self {
+        Self {
+            optional: true,
+            ..Self::normal(id, enabled)
+        }
+    }
+
+    fn submenu(id: &str, enabled: bool) -> Self {
+        Self {
+            id: id.to_string(),
+            kind: MenuUpdateKind::Submenu,
+            text: None,
+            enabled,
+            checked: None,
+            optional: false,
+        }
+    }
+
+    fn check(id: impl Into<String>, enabled: bool, checked: bool, optional: bool) -> Self {
+        Self {
+            id: id.into(),
+            kind: MenuUpdateKind::Check,
+            text: None,
+            enabled,
+            checked: Some(checked),
+            optional,
+        }
+    }
 }
 
 fn normal_item<R: Runtime>(
@@ -767,6 +871,344 @@ pub fn build_app_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> 
     Ok(menu)
 }
 
+fn workspace_menu_updates(
+    active_workspace: &str,
+    platform: MenuPlatform,
+    available_workspaces: &[&str],
+) -> Result<Vec<MenuItemUpdate>, String> {
+    let visible_workspaces = visible_workspace_descriptors(platform, available_workspaces);
+    if !visible_workspaces
+        .iter()
+        .any(|workspace| workspace.id == active_workspace)
+    {
+        return Err(format!(
+            "active workspace '{active_workspace}' is not available in this build"
+        ));
+    }
+
+    Ok(visible_workspaces
+        .into_iter()
+        .map(|workspace| {
+            let checked = workspace.id == active_workspace;
+            MenuItemUpdate::check(
+                format!("{WORKSPACE_MENU_ID_PREFIX}{}", workspace.id),
+                true,
+                checked,
+                !checked,
+            )
+        })
+        .collect())
+}
+
+fn app_menu_updates(
+    state: &AppMenuState,
+    platform: MenuPlatform,
+    available_workspaces: &[&str],
+) -> Result<Vec<MenuItemUpdate>, String> {
+    let mut updates = vec![
+        MenuItemUpdate::normal_with_text(
+            MENU_ID_FILE_OPEN_LOG_FILE,
+            &state.open_file_label,
+            state.can_open_sources,
+        ),
+        MenuItemUpdate::normal_with_text(
+            MENU_ID_FILE_OPEN_LOG_FOLDER,
+            &state.open_folder_label,
+            state.can_open_sources,
+        ),
+        MenuItemUpdate::submenu(MENU_ID_FILE_KNOWN_SOURCES, state.can_open_known_sources),
+        MenuItemUpdate::normal(MENU_ID_FILE_SAVE_SESSION, state.can_save_session),
+        MenuItemUpdate::normal(MENU_ID_EDIT_FIND, state.can_find),
+        // F3 opens Find when no session exists, so navigation follows Find capability.
+        MenuItemUpdate::normal(MENU_ID_EDIT_FIND_NEXT, state.can_find),
+        MenuItemUpdate::normal(MENU_ID_EDIT_FIND_PREVIOUS, state.can_find),
+        MenuItemUpdate::normal(MENU_ID_EDIT_FILTER, state.can_filter),
+        MenuItemUpdate::check(
+            MENU_ID_VIEW_TOGGLE_SIDEBAR,
+            state.can_toggle_sidebar,
+            state.is_sidebar_visible,
+            false,
+        ),
+        MenuItemUpdate::check(
+            MENU_ID_WINDOW_TOGGLE_DETAILS,
+            state.can_toggle_details_pane,
+            state.is_details_visible,
+            false,
+        ),
+        MenuItemUpdate::check(
+            MENU_ID_WINDOW_TOGGLE_INFO,
+            state.can_toggle_info_pane,
+            state.is_info_pane_visible,
+            false,
+        ),
+        MenuItemUpdate::normal_with_text(
+            MENU_ID_VIEW_TOGGLE_PAUSE,
+            if state.is_paused {
+                "Resume Live Updates"
+            } else {
+                "Pause Live Updates"
+            },
+            state.can_pause_resume,
+        ),
+        MenuItemUpdate::normal(MENU_ID_VIEW_REFRESH, state.can_refresh),
+        MenuItemUpdate::submenu(MENU_ID_VIEW_TEXT_SIZE, state.can_adjust_text_size),
+        MenuItemUpdate::normal(MENU_ID_VIEW_TEXT_SIZE_INCREASE, state.can_adjust_text_size),
+        MenuItemUpdate::normal(MENU_ID_VIEW_TEXT_SIZE_DECREASE, state.can_adjust_text_size),
+        MenuItemUpdate::normal(MENU_ID_VIEW_TEXT_SIZE_RESET, state.can_adjust_text_size),
+        MenuItemUpdate::normal(MENU_ID_TOOLS_BUNDLE_SUMMARY, state.can_show_evidence_bundle),
+        MenuItemUpdate::optional_normal(
+            MENU_ID_TOOLS_COLLECT_DIAGNOSTICS,
+            state.can_collect_diagnostics,
+        ),
+    ];
+    updates.extend(workspace_menu_updates(
+        &state.active_workspace,
+        platform,
+        available_workspaces,
+    )?);
+    Ok(updates)
+}
+
+fn index_menu_items<R: Runtime>(
+    items: Vec<MenuItemKind<R>>,
+    index: &mut HashMap<String, MenuItemKind<R>>,
+) -> Result<(), String> {
+    for item in items {
+        if let MenuItemKind::Submenu(submenu) = &item {
+            let children = submenu.items().map_err(|error| {
+                format!(
+                    "failed to enumerate submenu '{}': {error}",
+                    submenu.id().as_ref()
+                )
+            })?;
+            index_menu_items(children, index)?;
+        }
+
+        if matches!(&item, MenuItemKind::Predefined(_) | MenuItemKind::Icon(_)) {
+            continue;
+        }
+
+        let id = item.id().as_ref().to_string();
+        if index.insert(id.clone(), item).is_some() {
+            return Err(format!("duplicate native menu item id '{id}'"));
+        }
+    }
+
+    Ok(())
+}
+
+fn app_menu_index<R: Runtime>(
+    app: &AppHandle<R>,
+) -> Result<HashMap<String, MenuItemKind<R>>, String> {
+    let menu = app
+        .menu()
+        .ok_or_else(|| "application menu is not installed".to_string())?;
+    let items = menu
+        .items()
+        .map_err(|error| format!("failed to enumerate application menu: {error}"))?;
+    let mut index = HashMap::new();
+    index_menu_items(items, &mut index)?;
+    Ok(index)
+}
+
+fn item_matches_update<R: Runtime>(item: &MenuItemKind<R>, update: &MenuItemUpdate) -> bool {
+    matches!(
+        (item, update.kind),
+        (MenuItemKind::MenuItem(_), MenuUpdateKind::Normal)
+            | (MenuItemKind::Submenu(_), MenuUpdateKind::Submenu)
+            | (MenuItemKind::Check(_), MenuUpdateKind::Check)
+    )
+}
+
+struct MenuItemSnapshot<R: Runtime> {
+    item: MenuItemKind<R>,
+    text: String,
+    enabled: bool,
+    checked: Option<bool>,
+}
+
+fn snapshot_menu_item<R: Runtime>(item: &MenuItemKind<R>) -> Result<MenuItemSnapshot<R>, String> {
+    let (text, enabled, checked) = match item {
+        MenuItemKind::MenuItem(item) => (
+            item.text().map_err(|error| error.to_string())?,
+            item.is_enabled().map_err(|error| error.to_string())?,
+            None,
+        ),
+        MenuItemKind::Submenu(item) => (
+            item.text().map_err(|error| error.to_string())?,
+            item.is_enabled().map_err(|error| error.to_string())?,
+            None,
+        ),
+        MenuItemKind::Check(item) => (
+            item.text().map_err(|error| error.to_string())?,
+            item.is_enabled().map_err(|error| error.to_string())?,
+            Some(item.is_checked().map_err(|error| error.to_string())?),
+        ),
+        _ => {
+            return Err(format!(
+                "unsupported menu item kind for '{}'",
+                item.id().as_ref()
+            ))
+        }
+    };
+
+    Ok(MenuItemSnapshot {
+        item: item.clone(),
+        text,
+        enabled,
+        checked,
+    })
+}
+
+fn apply_menu_update<R: Runtime>(
+    item: &MenuItemKind<R>,
+    update: &MenuItemUpdate,
+) -> Result<(), String> {
+    match item {
+        MenuItemKind::MenuItem(item) => {
+            if let Some(text) = &update.text {
+                item.set_text(text).map_err(|error| error.to_string())?;
+            }
+            item.set_enabled(update.enabled)
+                .map_err(|error| error.to_string())
+        }
+        MenuItemKind::Submenu(item) => {
+            if let Some(text) = &update.text {
+                item.set_text(text).map_err(|error| error.to_string())?;
+            }
+            item.set_enabled(update.enabled)
+                .map_err(|error| error.to_string())
+        }
+        MenuItemKind::Check(item) => {
+            if let Some(text) = &update.text {
+                item.set_text(text).map_err(|error| error.to_string())?;
+            }
+            item.set_enabled(update.enabled)
+                .map_err(|error| error.to_string())?;
+            item.set_checked(
+                update
+                    .checked
+                    .ok_or_else(|| format!("check update '{}' has no checked state", update.id))?,
+            )
+            .map_err(|error| error.to_string())
+        }
+        _ => Err(format!("unsupported menu item kind for '{}'", update.id)),
+    }
+}
+
+fn restore_menu_item<R: Runtime>(snapshot: &MenuItemSnapshot<R>) -> Result<(), String> {
+    match &snapshot.item {
+        MenuItemKind::MenuItem(item) => {
+            item.set_text(&snapshot.text)
+                .map_err(|error| error.to_string())?;
+            item.set_enabled(snapshot.enabled)
+                .map_err(|error| error.to_string())
+        }
+        MenuItemKind::Submenu(item) => {
+            item.set_text(&snapshot.text)
+                .map_err(|error| error.to_string())?;
+            item.set_enabled(snapshot.enabled)
+                .map_err(|error| error.to_string())
+        }
+        MenuItemKind::Check(item) => {
+            item.set_text(&snapshot.text)
+                .map_err(|error| error.to_string())?;
+            item.set_enabled(snapshot.enabled)
+                .map_err(|error| error.to_string())?;
+            item.set_checked(snapshot.checked.ok_or_else(|| {
+                format!(
+                    "check snapshot '{}' has no checked state",
+                    item.id().as_ref()
+                )
+            })?)
+            .map_err(|error| error.to_string())
+        }
+        _ => Err(format!(
+            "unsupported menu item kind for '{}'",
+            snapshot.item.id().as_ref()
+        )),
+    }
+}
+
+fn apply_menu_updates<R: Runtime>(
+    index: &HashMap<String, MenuItemKind<R>>,
+    updates: Vec<MenuItemUpdate>,
+) -> Result<(), String> {
+    let mut planned = Vec::new();
+
+    for update in updates {
+        let Some(item) = index.get(&update.id) else {
+            if update.optional {
+                continue;
+            }
+            return Err(format!("native menu item '{}' is missing", update.id));
+        };
+
+        if !item_matches_update(item, &update) {
+            return Err(format!(
+                "native menu item '{}' has the wrong item kind",
+                update.id
+            ));
+        }
+
+        let snapshot = snapshot_menu_item(item)
+            .map_err(|error| format!("failed to snapshot '{}': {error}", update.id))?;
+        planned.push((update, snapshot));
+    }
+
+    for applied_index in 0..planned.len() {
+        let (update, snapshot) = &planned[applied_index];
+        if let Err(error) = apply_menu_update(&snapshot.item, update) {
+            for (rollback_update, rollback_snapshot) in planned[..=applied_index].iter().rev() {
+                if let Err(rollback_error) = restore_menu_item(rollback_snapshot) {
+                    log::error!(
+                        "failed to roll back native menu item '{}': {rollback_error}",
+                        rollback_update.id
+                    );
+                }
+            }
+            return Err(format!(
+                "failed to update native menu item '{}': {error}",
+                update.id
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn sync_app_menu_state_impl<R: Runtime>(
+    app: &AppHandle<R>,
+    state: &AppMenuState,
+) -> Result<(), String> {
+    let index = app_menu_index(app)?;
+    let available_workspaces = get_available_workspaces();
+    let updates = app_menu_updates(state, MenuPlatform::current(), &available_workspaces)?;
+    apply_menu_updates(&index, updates)
+}
+
+#[tauri::command]
+pub fn sync_app_menu_state<R: Runtime>(
+    app: AppHandle<R>,
+    state: AppMenuState,
+) -> Result<(), String> {
+    sync_app_menu_state_impl(&app, &state)
+}
+
+fn repair_workspace_checks<R: Runtime>(
+    app: &AppHandle<R>,
+    active_workspace: &str,
+) -> Result<(), String> {
+    let index = app_menu_index(app)?;
+    let available_workspaces = get_available_workspaces();
+    let updates = workspace_menu_updates(
+        active_workspace,
+        MenuPlatform::current(),
+        &available_workspaces,
+    )?;
+    apply_menu_updates(&index, updates)
+}
+
 /// A source entry extracted from the catalog for menu building.
 #[derive(Clone)]
 struct SourceMenuItem {
@@ -935,6 +1377,14 @@ pub fn handle_menu_event<R: Runtime>(app: &AppHandle<R>, menu_id: &str) {
         return;
     };
 
+    if payload.action == "switch_workspace" {
+        if let Some(target_id) = payload.target_id.as_deref() {
+            if let Err(error) = repair_workspace_checks(app, target_id) {
+                log::warn!("failed to repair workspace menu checks for '{target_id}': {error}");
+            }
+        }
+    }
+
     if let Err(error) = app.emit(MENU_EVENT_APP_ACTION, payload) {
         log::error!("failed to emit app menu action event: {error}");
     }
@@ -1028,6 +1478,39 @@ mod tests {
                 )
             })
             .collect()
+    }
+
+    fn sample_menu_state() -> AppMenuState {
+        AppMenuState {
+            active_workspace: "log".to_string(),
+            open_file_label: "Open file…".to_string(),
+            open_folder_label: "Open folder…".to_string(),
+            can_open_sources: true,
+            can_open_known_sources: true,
+            can_find: true,
+            has_find_session: false,
+            can_filter: true,
+            can_pause_resume: true,
+            is_paused: false,
+            can_refresh: true,
+            can_toggle_sidebar: true,
+            is_sidebar_visible: true,
+            can_toggle_details_pane: true,
+            is_details_visible: true,
+            can_toggle_info_pane: true,
+            is_info_pane_visible: true,
+            can_adjust_text_size: true,
+            can_show_evidence_bundle: false,
+            can_save_session: false,
+            can_collect_diagnostics: true,
+        }
+    }
+
+    fn update_by_id<'a>(updates: &'a [MenuItemUpdate], id: &str) -> &'a MenuItemUpdate {
+        updates
+            .iter()
+            .find(|update| update.id == id)
+            .unwrap_or_else(|| panic!("missing update for {id}"))
     }
 
     #[test]
@@ -1229,6 +1712,104 @@ mod tests {
     fn workspace_groups_omit_empty_groups_in_reduced_builds() {
         let groups = workspace_groups(MenuPlatform::Linux, &["log", "timeline"]);
         assert_eq!(group_ids(&groups), [("Analysis", vec!["log", "timeline"])]);
+    }
+
+    #[test]
+    fn menu_state_deserializes_the_frontend_camel_case_contract() {
+        let state: AppMenuState = serde_json::from_value(serde_json::json!({
+            "activeWorkspace": "log",
+            "openFileLabel": "Open file…",
+            "openFolderLabel": "Open folder…",
+            "canOpenSources": true,
+            "canOpenKnownSources": true,
+            "canFind": true,
+            "hasFindSession": false,
+            "canFilter": true,
+            "canPauseResume": true,
+            "isPaused": false,
+            "canRefresh": true,
+            "canToggleSidebar": true,
+            "isSidebarVisible": true,
+            "canToggleDetailsPane": true,
+            "isDetailsVisible": true,
+            "canToggleInfoPane": true,
+            "isInfoPaneVisible": true,
+            "canAdjustTextSize": true,
+            "canShowEvidenceBundle": false,
+            "canSaveSession": false,
+            "canCollectDiagnostics": true
+        }))
+        .unwrap();
+
+        assert_eq!(state, sample_menu_state());
+    }
+
+    #[test]
+    fn menu_state_projects_dynamic_labels_capabilities_and_pause_text() {
+        let mut state = sample_menu_state();
+        state.open_file_label = "Import captured evidence…".to_string();
+        state.open_folder_label = "Import evidence folder…".to_string();
+        state.can_open_sources = false;
+        state.can_open_known_sources = false;
+        state.has_find_session = false;
+        state.is_paused = true;
+        state.can_adjust_text_size = false;
+        state.can_collect_diagnostics = false;
+
+        let updates =
+            app_menu_updates(&state, MenuPlatform::Windows, &all_workspace_ids()).unwrap();
+
+        let open_file = update_by_id(&updates, MENU_ID_FILE_OPEN_LOG_FILE);
+        assert_eq!(open_file.text.as_deref(), Some("Import captured evidence…"));
+        assert!(!open_file.enabled);
+        assert!(!update_by_id(&updates, MENU_ID_FILE_KNOWN_SOURCES).enabled);
+        assert!(update_by_id(&updates, MENU_ID_EDIT_FIND_NEXT).enabled);
+        assert_eq!(
+            update_by_id(&updates, MENU_ID_VIEW_TOGGLE_PAUSE)
+                .text
+                .as_deref(),
+            Some("Resume Live Updates")
+        );
+        assert!(!update_by_id(&updates, MENU_ID_VIEW_TEXT_SIZE).enabled);
+        assert!(!update_by_id(&updates, MENU_ID_VIEW_TEXT_SIZE_INCREASE).enabled);
+        let collector = update_by_id(&updates, MENU_ID_TOOLS_COLLECT_DIAGNOSTICS);
+        assert!(collector.optional);
+        assert!(!collector.enabled);
+    }
+
+    #[test]
+    fn workspace_updates_have_exactly_one_active_check() {
+        let mut state = sample_menu_state();
+        state.active_workspace = "esp-diagnostics".to_string();
+        let updates =
+            app_menu_updates(&state, MenuPlatform::Windows, &all_workspace_ids()).unwrap();
+        let checked = updates
+            .iter()
+            .filter(|update| {
+                update.id.starts_with(WORKSPACE_MENU_ID_PREFIX) && update.checked == Some(true)
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(checked.len(), 1);
+        assert_eq!(checked[0].id, "workspace.esp-diagnostics");
+        assert!(!checked[0].optional);
+    }
+
+    #[test]
+    fn workspace_updates_reject_unknown_platform_or_feature_absent_targets() {
+        assert!(
+            workspace_menu_updates("not-real", MenuPlatform::Windows, &all_workspace_ids())
+                .is_err()
+        );
+        assert!(
+            workspace_menu_updates("sysmon", MenuPlatform::Macos, &all_workspace_ids()).is_err()
+        );
+        assert!(workspace_menu_updates(
+            "esp-diagnostics",
+            MenuPlatform::Windows,
+            &["log", "timeline"]
+        )
+        .is_err());
     }
 
     #[test]

@@ -203,7 +203,13 @@ export function useKeyboard() {
         return;
       }
 
-      if (ctrl && event.key.toLowerCase() === "h") {
+      const isDetailsShortcut =
+        event.key.toLowerCase() === "h" &&
+        (event.ctrlKey ||
+          (event.metaKey &&
+            useUiStore.getState().currentPlatform !== "macos"));
+
+      if (isDetailsShortcut) {
         event.preventDefault();
         toggleDetailsPane();
         return;
