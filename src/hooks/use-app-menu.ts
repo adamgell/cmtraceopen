@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { useAppActions } from "../components/layout/Toolbar";
+import { useAppActions } from "./use-app-actions";
 import { useUiStore } from "../stores/ui-store";
 
 const MENU_EVENT_APP_ACTION = "app-menu-action";
@@ -20,6 +20,8 @@ export function useAppMenu() {
     openSourceFolderDialog,
     openKnownSourceCatalogAction,
     showFindBar,
+    findNext,
+    findPrevious,
     showFilterDialog,
     showErrorLookupDialog,
     showEvidenceBundleDialog,
@@ -27,8 +29,12 @@ export function useAppMenu() {
     showSettingsDialog,
     togglePauseResume,
     refreshActiveSource,
+    toggleSidebar,
     toggleDetailsPane,
     toggleInfoPane,
+    increaseLogListTextSize,
+    decreaseLogListTextSize,
+    resetLogListTextSize,
   } = useAppActions();
 
   useEffect(() => {
@@ -50,6 +56,12 @@ export function useAppMenu() {
           case "show_find":
             showFindBar();
             return;
+          case "find_next":
+            findNext("native-menu.find-next");
+            return;
+          case "find_previous":
+            findPrevious("native-menu.find-previous");
+            return;
           case "show_filter":
             showFilterDialog();
             return;
@@ -65,11 +77,23 @@ export function useAppMenu() {
           case "refresh":
             await refreshActiveSource();
             return;
+          case "toggle_sidebar":
+            toggleSidebar();
+            return;
           case "toggle_details":
             toggleDetailsPane();
             return;
           case "toggle_info_pane":
             toggleInfoPane();
+            return;
+          case "increase_text_size":
+            increaseLogListTextSize();
+            return;
+          case "decrease_text_size":
+            decreaseLogListTextSize();
+            return;
+          case "reset_text_size":
+            resetLogListTextSize();
             return;
           case "show_about":
             showAboutDialog();
@@ -179,10 +203,15 @@ export function useAppMenu() {
         });
     };
   }, [
+    decreaseLogListTextSize,
+    findNext,
+    findPrevious,
+    increaseLogListTextSize,
     openKnownSourceCatalogAction,
     openSourceFileDialog,
     openSourceFolderDialog,
     refreshActiveSource,
+    resetLogListTextSize,
     showSettingsDialog,
     showAboutDialog,
     showErrorLookupDialog,
@@ -192,5 +221,6 @@ export function useAppMenu() {
     toggleDetailsPane,
     toggleInfoPane,
     togglePauseResume,
+    toggleSidebar,
   ]);
 }

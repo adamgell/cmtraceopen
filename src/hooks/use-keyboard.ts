@@ -3,7 +3,7 @@ import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { useLogStore } from "../stores/log-store";
 import { useUiStore } from "../stores/ui-store";
 import { useFilterStore } from "../stores/filter-store";
-import { useAppActions } from "../components/layout/Toolbar";
+import { useAppActions } from "./use-app-actions";
 import { formatLogEntryTimestamp } from "../lib/date-time-format";
 
 function isTypingTarget(target: EventTarget | null): boolean {
@@ -105,7 +105,6 @@ function navigateSelection(key: string): boolean {
  *   F5      → Refresh
  */
 export function useKeyboard() {
-  const activeView = useUiStore((state) => state.activeView);
   const showFindBarOpen = useUiStore((state) => state.showFindBar);
   const showFilterDialogOpen = useUiStore((state) => state.showFilterDialog);
   const showErrorLookupDialogOpen = useUiStore(
@@ -122,8 +121,11 @@ export function useKeyboard() {
     (state) => state.showFileAssociationPrompt
   );
   const {
+    commandState,
     openSourceFileDialog,
     showFindBar,
+    findNext,
+    findPrevious,
     showFilterDialog,
     showErrorLookupDialog,
     increaseLogListTextSize,
@@ -131,6 +133,7 @@ export function useKeyboard() {
     resetLogListTextSize,
     togglePauseResume,
     refreshActiveSource,
+    toggleSidebar,
     toggleDetailsPane,
     dismissTransientDialogs,
   } = useAppActions();
@@ -148,7 +151,7 @@ export function useKeyboard() {
         showEvidenceBundleDialogOpen ||
         showFileAssociationPromptOpen;
 
-      if (ctrl && !isInput && activeView === "log") {
+      if (ctrl && !isInput && commandState.canAdjustTextSize) {
         const normalizedKey = event.key.toLowerCase();
 
         if (normalizedKey === "=" || event.key === "+") {
@@ -185,19 +188,12 @@ export function useKeyboard() {
       if (event.key === "F3" && !isInput) {
         event.preventDefault();
 
-        const logState = useLogStore.getState();
-
-        if (!logState.hasFindSession()) {
-          showFindBar();
-          return;
-        }
-
         if (event.shiftKey) {
-          logState.findPrevious("keyboard.shift-f3");
+          findPrevious("keyboard.shift-f3");
           return;
         }
 
-        logState.findNext("keyboard.f3");
+        findNext("keyboard.f3");
         return;
       }
 
@@ -232,7 +228,7 @@ export function useKeyboard() {
       // Ctrl+B: toggle sidebar
       if (ctrl && event.key.toLowerCase() === "b") {
         event.preventDefault();
-        useUiStore.getState().toggleSidebar();
+        toggleSidebar();
         return;
       }
 
@@ -305,9 +301,11 @@ export function useKeyboard() {
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [
-    activeView,
+    commandState.canAdjustTextSize,
     decreaseLogListTextSize,
     dismissTransientDialogs,
+    findNext,
+    findPrevious,
     increaseLogListTextSize,
     openSourceFileDialog,
     refreshActiveSource,
@@ -324,5 +322,6 @@ export function useKeyboard() {
     showFindBarOpen,
     toggleDetailsPane,
     togglePauseResume,
+    toggleSidebar,
   ]);
 }
