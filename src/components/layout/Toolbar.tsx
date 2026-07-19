@@ -120,7 +120,6 @@ interface AppActionHandlers {
     action: OpenKnownSourceCatalogAction
   ) => Promise<void>;
   openKnownSourceById: (sourceId: string, trigger: string) => Promise<void>;
-  openKnownSourcePresetByMenuId: (presetMenuId: string) => Promise<void>;
   pasteDsregcmdSource: () => Promise<void>;
   captureDsregcmdSource: () => Promise<void>;
   showFindBar: () => void;
@@ -419,16 +418,6 @@ export function useAppActions(): AppActionHandlers {
     [openKnownSourceCatalogAction]
   );
 
-  const openKnownSourcePresetByMenuId = useCallback(
-    async (presetMenuId: string) => {
-      await openKnownSourceCatalogAction({
-        presetMenuId,
-        trigger: "native-menu.log-preset-selected",
-      });
-    },
-    [openKnownSourceCatalogAction]
-  );
-
   const pasteDsregcmdSource = useCallback(async () => {
     if (isSourceCommandBusy) {
       return;
@@ -591,7 +580,6 @@ export function useAppActions(): AppActionHandlers {
     openPathForActiveWorkspace,
     openKnownSourceCatalogAction,
     openKnownSourceById,
-    openKnownSourcePresetByMenuId,
     pasteDsregcmdSource,
     captureDsregcmdSource,
     showFindBar,

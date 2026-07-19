@@ -39,8 +39,6 @@ export function useAppMenu() {
         return;
       }
 
-      console.info("[app-menu] handling native menu action", { payload });
-
       try {
         switch (payload.action) {
           case "open_log_file_dialog":
