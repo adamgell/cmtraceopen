@@ -7857,6 +7857,78 @@ fn timeline_rereview_office_detail_failure_replaces_outer_success_semantics() {
 }
 
 #[test]
+fn reducer_review_multiple_office_groups_backpatch_activity_statuses_independently() {
+    // Characterization guard for the apply_office_details refactor: several
+    // distinct Office identifier groups must each back-patch their own outer
+    // tracking activity entry and emit a detailed-status timeline entry. This is
+    // a no-behavior-change refactor, so the golden statuses below must hold both
+    // before and after the O(groups * activity_len) full scan is removed.
+    const TRACKING_ROOT: &str =
+        r"registry:HKLM\SOFTWARE\Microsoft\Windows\Autopilot\EnrollmentStatusTracking";
+    const OFFICE_ROOT: &str = r"registry:HKLM\SOFTWARE\Microsoft\OfficeCSP";
+    let groups = [
+        ("11111111-1111-1111-1111-111111111111", 70, EspNormalizedStatus::Succeeded),
+        ("22222222-2222-2222-2222-222222222222", 60, EspNormalizedStatus::Failed),
+        ("33333333-3333-3333-3333-333333333333", 40, EspNormalizedStatus::Downloaded),
+    ];
+    let mut reducer = EspDiagnosticsReducer::new("2026-07-15T18:00:00Z".to_string());
+    let mut records = Vec::new();
+    for (ordinal, (office_id, detail_code, _)) in groups.iter().enumerate() {
+        records.push(registry_record(
+            TRACKING_ROOT,
+            &format!("office-outer-{ordinal}"),
+            &format!(
+                r"SOFTWARE\Microsoft\Windows\Autopilot\EnrollmentStatusTracking\ESPTrackingInfo\Diagnostics\ExpectedMSIAppPackages\2026-07-15T12:0{ordinal}:00Z"
+            ),
+            &format!("./Vendor/MSFT/Office/Installation/{office_id}"),
+            EspObservationValue::Integer(1),
+            &format!("2026-07-15T12:0{ordinal}:00Z"),
+        ));
+        records.push(registry_record(
+            OFFICE_ROOT,
+            &format!("office-detail-{ordinal}"),
+            &format!(
+                r"SOFTWARE\Microsoft\OfficeCSP\{}",
+                office_id.to_ascii_uppercase()
+            ),
+            "FinalStatus",
+            EspObservationValue::Integer(*detail_code),
+            &format!("2026-07-15T12:0{ordinal}:30Z"),
+        ));
+    }
+    reducer.ingest_all(records);
+
+    let snapshot = reducer.snapshot();
+    for (ordinal, (office_id, _, expected)) in groups.iter().enumerate() {
+        // The pushed "Office detailed status" entry carries the detail status.
+        assert!(
+            snapshot.activity.iter().any(|entry| {
+                entry.title == *office_id
+                    && entry.evidence[0].evidence_id == format!("office-detail-{ordinal}")
+                    && entry.status.as_ref().map(|status| &status.normalized) == Some(expected)
+            }),
+            "missing detailed-status entry for {office_id}"
+        );
+        // The pre-existing outer tracking entry must be back-patched in place.
+        assert!(
+            snapshot.activity.iter().any(|entry| {
+                entry.title == *office_id
+                    && entry.evidence[0].evidence_id == format!("office-outer-{ordinal}")
+                    && entry.status.as_ref().map(|status| &status.normalized) == Some(expected)
+            }),
+            "outer tracking entry for {office_id} was not back-patched"
+        );
+        // Each group's workload resolves to the matching detail status only.
+        let workload = snapshot
+            .workloads
+            .iter()
+            .find(|workload| workload.raw_identifier == *office_id)
+            .unwrap_or_else(|| panic!("missing workload for {office_id}"));
+        assert_eq!(&workload.status.normalized, expected);
+    }
+}
+
+#[test]
 fn timeline_rereview_v2_dotnet_dates_drive_start_and_terminal_entries() {
     let source = r"registry:HKLM\SOFTWARE\Microsoft\Windows\Autopilot\EnrollmentStatusTracking";
     let mut reducer = EspDiagnosticsReducer::new("2026-07-15T18:00:00Z".to_string());
@@ -9950,7 +10022,10 @@ fn redaction_projection_removes_json_quoted_tokens_and_authorization() {
 }
 
 #[test]
-fn redaction_projection_masks_json_quoted_secret_keys() {
+fn redaction_projection_removes_json_quoted_secret_keys() {
+    // A public raw record whose JSON carries a credential-bearing member key
+    // (e.g. api_key) now fails closed and is dropped entirely, matching the
+    // container-aware secret handling for authorization/access_token members.
     let mut snapshot = findings_snapshot();
     let mut api_key = raw_export_record(
         "json-config",
@@ -9963,12 +10038,110 @@ fn redaction_projection_masks_json_quoted_secret_keys() {
     snapshot.raw_evidence = vec![api_key];
 
     let safe = redacted_export_projection(&snapshot);
+    assert!(safe.raw_evidence.is_empty());
+    let safe_json = serde_json::to_string(&safe).unwrap();
+    assert!(!safe_json.contains("opaque-api-key-value"));
+    assert_eq!(snapshot.raw_evidence.len(), 1);
+}
+
+#[test]
+fn redaction_projection_removes_json_object_secret_values() {
+    // Object/array-valued secret members previously leaked everything after the
+    // first whitespace because the bare value matcher stops at a space. The
+    // container-aware secret handling must now drop the whole record.
+    let mut snapshot = findings_snapshot();
+    let mut client_secret = raw_export_record(
+        "json-client-secret",
+        EspSourceKind::DeploymentLog,
+        "deployment-log",
+        None,
+        r#"{"clientSecret": {"keyId": "k1", "value": "THE-REAL-CLIENT-SECRET"}}"#,
+    );
+    client_secret.sensitivity = EspSensitivity::Public;
+    let mut password = raw_export_record(
+        "json-password",
+        EspSourceKind::ImeLog,
+        "ime-log",
+        None,
+        r#"{"password": {"plain": "REAL-PW"}}"#,
+    );
+    password.sensitivity = EspSensitivity::Public;
+    snapshot.raw_evidence = vec![client_secret, password];
+
+    let safe = redacted_export_projection(&snapshot);
+    let safe_json = serde_json::to_string(&safe).unwrap();
+    assert!(safe.raw_evidence.is_empty());
+    assert!(!safe_json.contains("THE-REAL-CLIENT-SECRET"));
+    assert!(!safe_json.contains("REAL-PW"));
+    assert_eq!(snapshot.raw_evidence.len(), 2);
+}
+
+#[test]
+fn redaction_projection_masks_ip_and_mac_addresses_in_public_raw_evidence() {
+    let mut snapshot = findings_snapshot();
+    let mut network = raw_export_record(
+        "network-addresses",
+        EspSourceKind::DeploymentLog,
+        "deployment-log",
+        None,
+        "client 192.168.1.100 via 2001:db8:85a3::8a2e:370:7334 nic 00:1A:2B:3C:4D:5E connected",
+    );
+    network.sensitivity = EspSensitivity::Public;
+    snapshot.raw_evidence = vec![network];
+
+    let safe = redacted_export_projection(&snapshot);
     let EspObservationValue::Text(value) = &safe.raw_evidence[0].raw_value else {
         panic!("expected text raw evidence")
     };
-    assert!(!value.contains("opaque-api-key-value"));
+    assert!(!value.contains("192.168.1.100"), "IPv4 leaked: {value}");
+    assert!(
+        !value.contains("2001:db8:85a3::8a2e:370:7334"),
+        "IPv6 leaked: {value}"
+    );
+    assert!(!value.contains("00:1A:2B:3C:4D:5E"), "MAC leaked: {value}");
     assert!(value.contains("[redacted]"));
-    assert!(value.contains("safe"));
+    // Surrounding narrative is preserved.
+    assert!(value.contains("client") && value.contains("connected"));
+}
+
+#[test]
+fn redaction_projection_masks_azure_sas_and_account_key_credentials() {
+    let mut snapshot = findings_snapshot();
+    snapshot.registration_events.push(EspRegistrationEvent {
+        event_id: 300,
+        record_id: Some(7),
+        status: status(
+            EspRawStatus::Text("ok".to_string()),
+            EspNormalizedStatus::Succeeded,
+        ),
+        message: "downloading from https://acct.blob.core.windows.net/c/pkg.intunewin?sv=2021-06-08&sig=Zx9AbCdEf0%3D&sp=r using AccountKey=abcDEF123+/== and SharedAccessSignature=sv=2021&sig=AbC%3D".to_string(),
+        timestamp: timestamp("2026-07-15T12:00:00Z"),
+        named_data: vec![],
+        evidence: vec![evidence_ref("sas-message")],
+    });
+    // A raw record carrying the same SAS URL must fail closed and drop entirely.
+    let mut raw_sas = raw_export_record(
+        "raw-sas-url",
+        EspSourceKind::DeploymentLog,
+        "deployment-log",
+        None,
+        "GET https://acct.blob.core.windows.net/c/pkg.intunewin?sv=2021-06-08&sig=Zx9AbCdEf0%3D",
+    );
+    raw_sas.sensitivity = EspSensitivity::Public;
+    snapshot.raw_evidence = vec![raw_sas];
+
+    let safe = redacted_export_projection(&snapshot);
+    let safe_json = serde_json::to_string(&safe).unwrap();
+    // Credential values are redacted everywhere they appear.
+    assert!(!safe_json.contains("Zx9AbCdEf0"), "SAS sig leaked");
+    assert!(!safe_json.contains("abcDEF123"), "AccountKey leaked");
+    assert!(!safe_json.contains("AbC%3D"), "SharedAccessSignature sig leaked");
+    // The credential-bearing raw record failed closed.
+    assert!(safe.raw_evidence.is_empty());
+    // Non-secret URL context survives in the narrative message.
+    assert!(safe_json.contains("sv=2021-06-08"));
+    assert!(safe_json.contains("sp=r"));
+    assert!(safe_json.contains("acct.blob.core.windows.net"));
 }
 
 #[test]

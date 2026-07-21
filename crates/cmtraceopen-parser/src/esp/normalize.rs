@@ -339,6 +339,9 @@ fn decimal_pair(first: u8, second: u8) -> Option<i32> {
 }
 
 fn format_utc(value: DateTime<Utc>) -> String {
+    // AutoSi is the single canonical `normalized_utc` serialization across the
+    // ESP pipeline (mirrored by reducer.rs and correlation.rs) so that equal
+    // instants always render to byte-identical RFC 3339 strings.
     value.to_rfc3339_opts(SecondsFormat::AutoSi, true)
 }
 

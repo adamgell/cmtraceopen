@@ -9,7 +9,7 @@ const REDACTED: &str = "[redacted]";
 const REMOVED_OVERSIZE: &str = "[redacted: oversized text omitted]";
 const MAX_REDACTION_INPUT_BYTES: usize = 256 * 1024;
 const SECRET_LABEL_PATTERN: &str = r#"(?:authorization|password|passwd|pwd|secret|client[_-]?secret|api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|auth[_-]?token|bearer[_-]?token|token|tenant(?:[_-]?id)?|(?:aad|azure[_-]?ad)[_-]?tenant[_-]?id|entdm(?:[_-]?id)?|serial(?:[_-]?number)?|device[_-]?serial(?:[_-]?number)?|hardware[_-]?hash|device[_-]?hardware[_-]?data)"#;
-const JSON_CONTAINER_SECRET_LABEL_PATTERN: &str = r#"(?:authorization|tenant[_-]?id|(?:aad|azure[_-]?ad)[_-]?tenant[_-]?id|entdm[_-]?id|serial[_-]?number|device[_-]?serial(?:[_-]?number)?|hardware[_-]?hash|device[_-]?hardware[_-]?data)"#;
+const JSON_CONTAINER_SECRET_LABEL_PATTERN: &str = r#"(?:authorization|password|passwd|pwd|client[_-]?secret|secret|api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|auth[_-]?token|bearer[_-]?token|token|tenant[_-]?id|(?:aad|azure[_-]?ad)[_-]?tenant[_-]?id|entdm[_-]?id|serial[_-]?number|device[_-]?serial(?:[_-]?number)?|hardware[_-]?hash|device[_-]?hardware[_-]?data)"#;
 const QUOTED_OR_BARE_VALUE_PATTERN: &str =
     r#"(?:\\+"[^"\r\n]*"|\\+'[^'\r\n]*'|"[^"\r\n]*"|'[^'\r\n]*'|[^\s]+)"#;
 const DIGEST_VALUE_PATTERN: &str =
@@ -495,9 +495,53 @@ fn forbidden_raw_content_pattern() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
         Regex::new(
-            r#"(?i)(authorization["']?\s*[:=]|(?:access[_-]?token|refresh[_-]?token|id[_-]?token|auth[_-]?token|bearer[_-]?token|hardware[_-]?hash|device[_-]?hardware[_-]?data)["']?\s*(?:[:=]|\s)|token["']?\s*[:=])"#,
+            r#"(?i)(authorization["']?\s*[:=]|(?:access[_-]?token|refresh[_-]?token|id[_-]?token|auth[_-]?token|bearer[_-]?token|hardware[_-]?hash|device[_-]?hardware[_-]?data)["']?\s*(?:[:=]|\s)|(?:password|passwd|pwd|client[_-]?secret|secret|api[_-]?key|token)["']?\s*[:=]|\b(?:sig|skoid|sharedaccesssignature|accountkey)\s*=)"#,
         )
             .expect("forbidden raw-content pattern must compile")
+    })
+}
+
+fn azure_storage_credential_pattern() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
+        // Redacts the credential value of Azure Storage SAS/shared-key forms
+        // (`sig=`, `skoid=`, `SharedAccessSignature=`, `AccountKey=`) while
+        // leaving the surrounding URL/context and non-secret params intact.
+        Regex::new(
+            r#"(?i)(?P<prefix>\b(?:sig|skoid|sharedaccesssignature|accountkey)=)(?P<value>[^&\s;]+)"#,
+        )
+        .expect("Azure storage credential redaction pattern must compile")
+    })
+}
+
+fn ipv4_address_pattern() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
+        Regex::new(
+            r"\b(?:(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\b",
+        )
+        .expect("IPv4 redaction pattern must compile")
+    })
+}
+
+fn ipv6_address_pattern() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
+        // Conservative, greedy IPv6 matcher: a fully-expanded 8-group address or
+        // any `::`-compressed form. The greedy quantifiers consume the whole
+        // address so `replace_all` never leaves a trailing fragment un-redacted.
+        Regex::new(
+            r"(?i)\b(?:(?:[0-9a-f]{1,4}:){7}[0-9a-f]{1,4}|(?:[0-9a-f]{1,4}:)+:(?:[0-9a-f]{1,4}(?::[0-9a-f]{1,4})*)?|::(?:[0-9a-f]{1,4}(?::[0-9a-f]{1,4})*)?)\b",
+        )
+        .expect("IPv6 redaction pattern must compile")
+    })
+}
+
+fn mac_address_pattern() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
+        Regex::new(r"(?i)\b(?:[0-9a-f]{2}[:-]){5}[0-9a-f]{2}\b")
+            .expect("MAC address redaction pattern must compile")
     })
 }
 
@@ -1320,6 +1364,16 @@ fn redact_text_for_context(value: &str, context: TextRedactionContext) -> String
     let redacted = user_profile_path_pattern().replace_all(&redacted, "${prefix}[redacted]");
     let redacted = email_pattern().replace_all(&redacted, REDACTED);
     let redacted = sid_pattern().replace_all(&redacted, REDACTED);
+    // Redact Azure Storage SAS / shared-key credentials, then network
+    // identifiers. These run after the SID pass so a SID is fully masked before
+    // the MAC matcher could pick up decimal sub-authority pairs inside it, and
+    // IPv4 runs before IPv6 so an IPv4-mapped IPv6 address cannot leak its dotted
+    // tail.
+    let redacted =
+        azure_storage_credential_pattern().replace_all(&redacted, "${prefix}[redacted]");
+    let redacted = ipv4_address_pattern().replace_all(&redacted, REDACTED);
+    let redacted = mac_address_pattern().replace_all(&redacted, REDACTED);
+    let redacted = ipv6_address_pattern().replace_all(&redacted, REDACTED);
     if bounded.len() == value.len() {
         redacted.into_owned()
     } else {

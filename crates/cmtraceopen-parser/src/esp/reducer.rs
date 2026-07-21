@@ -2117,6 +2117,19 @@ impl SnapshotProjection {
                 .or_default()
                 .push(detail);
         }
+        // Index activity entries by title so the per-group status back-patch no
+        // longer rescans the whole (growing) `activity` vector for every Office
+        // identifier group — previously O(groups * activity_len). The map is
+        // maintained incrementally as `push_timeline` appends entries, so a
+        // later group still observes the entries pushed by earlier groups,
+        // preserving the original full-scan semantics byte-for-byte.
+        let mut activity_indices_by_title: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+        for (position, (_, activity)) in self.activity.iter().enumerate() {
+            activity_indices_by_title
+                .entry(activity.title.clone())
+                .or_default()
+                .push(position);
+        }
         for details in details_by_identifier.into_values() {
             let Some(best) = details.into_iter().max_by(|left, right| {
                 left.is_final
@@ -2169,24 +2182,34 @@ impl SnapshotProjection {
                 .push(best.context.evidence_ref.clone());
             self.workloads[*index].status = status.clone();
 
-            for (_, activity) in &mut self.activity {
-                if activity.title == identifier
-                    && activity
+            if let Some(activity_indices) = activity_indices_by_title.get(&identifier) {
+                for &activity_index in activity_indices {
+                    let (_, activity) = &mut self.activity[activity_index];
+                    if activity
                         .evidence
                         .iter()
                         .any(|evidence| workload_evidence.contains(evidence))
-                {
-                    activity.status = Some(status.clone());
+                    {
+                        activity.status = Some(status.clone());
+                    }
                 }
             }
+            // `push_timeline` appends exactly one entry titled `identifier`;
+            // register its index so subsequent groups can back-patch it just as
+            // the previous whole-vector scan would have.
+            let pushed_index = self.activity.len();
             self.push_timeline(
                 best.ordinal,
                 &best.context,
                 EspTimelineKind::Workload,
-                identifier,
+                identifier.clone(),
                 Some("Office detailed status".to_string()),
                 Some(status),
             );
+            activity_indices_by_title
+                .entry(identifier)
+                .or_default()
+                .push(pushed_index);
         }
     }
 
@@ -3483,7 +3506,10 @@ fn normalize_embedded_timestamp(raw: &str) -> EspTimestamp {
                 return EspTimestamp {
                     raw_text: raw.to_string(),
                     original_offset: Some("Z".to_string()),
-                    normalized_utc: Some(timestamp.to_rfc3339_opts(SecondsFormat::Millis, true)),
+                    // Standardize on AutoSi like every other `normalized_utc`
+                    // producer (see normalize.rs::format_utc) so equal instants
+                    // serialize to identical strings regardless of source.
+                    normalized_utc: Some(timestamp.to_rfc3339_opts(SecondsFormat::AutoSi, true)),
                     kind: EspTimestampKind::Utc,
                 };
             }
