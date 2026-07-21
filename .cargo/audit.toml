@@ -7,10 +7,18 @@
 # that preserves the application's dependency and MSRV contracts:
 #
 # * quick-xml <0.41 comes in via `plist` (a Tauri dependency, all platforms),
-#   `wayland-scanner` build tooling on Linux, and `evtx` 0.8.5. The evtx
-#   production path only writes/escapes XML; its Reader/attributes use is
-#   test-only, so neither quick-xml advisory has a known reachable evtx path.
-#   The package-level audit cannot express that call-path distinction.
+#   `wayland-scanner` build tooling on Linux, and `evtx` 0.8.5. It is now ALSO a
+#   first-party dependency (src-tauri/Cargo.toml intune-diagnostics feature, in
+#   the default full feature): its Reader + attributes API parses untrusted
+#   .evtx-derived XML in production (src-tauri/src/intune/evtx_parser.rs). That
+#   use is NOT test-only. RUSTSEC-2026-0194 (duplicate-attribute O(n^2) CPU DoS)
+#   stays reachable in principle, but is bounded by layered mitigations applied
+#   before/around parsing: the 512KB per-record cap (MAX_ESP_EVTX_RECORD_BYTES),
+#   the legal-XML-char prefilter, the 64-level nesting cap, a 256-attribute
+#   per-element cap that bounds the quadratic, and the 50k-entry / 32MB-batch
+#   caps. RUSTSEC-2026-0195 (NsReader allocation DoS) has no reachable path
+#   because evtx_parser uses Reader, never NsReader. The package-level audit
+#   cannot express those call-path and bounds distinctions.
 # * glib 0.18 (RUSTSEC-2024-0429) is fixed in glib 0.20, but Tauri v2 pins the
 #   gtk-rs 0.18 stack on Linux (gtk 0.18 requires glib ^0.18); it clears only
 #   once Tauri adopts gtk-rs 0.20.
@@ -23,6 +31,6 @@
 [advisories]
 ignore = [
     "RUSTSEC-2024-0429", # glib: VariantStrIter unsoundness, fixed in glib 0.20; blocked by Tauri's gtk-rs 0.18 pin (Tauri Linux)
-    "RUSTSEC-2026-0194", # quick-xml <0.41: duplicate-attribute CPU DoS; evtx Reader use is test-only (also plist/Tauri, wayland-scanner)
-    "RUSTSEC-2026-0195", # quick-xml <0.41: NsReader allocation DoS; evtx does not use NsReader (also plist/Tauri, wayland-scanner)
+    "RUSTSEC-2026-0194", # quick-xml <0.41: duplicate-attribute O(n^2) CPU DoS; reachable via evtx_parser Reader/attributes on untrusted .evtx XML but bounded by 512KB per-record, legal-XML-char prefilter, 64-level nesting, 256-attribute per-element cap, and 50k-entry / 32MB-batch caps (also plist/Tauri, wayland-scanner)
+    "RUSTSEC-2026-0195", # quick-xml <0.41: NsReader allocation DoS; evtx_parser uses Reader, never NsReader, so no reachable path (also plist/Tauri, wayland-scanner)
 ]

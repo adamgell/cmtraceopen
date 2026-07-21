@@ -3087,6 +3087,48 @@ fn tail_distinguishes_truncation_from_file_rotation() {
 }
 
 #[test]
+fn tail_detects_in_place_copytruncate_that_regrows_past_the_old_offset() {
+    let root = tempdir().expect("tail root");
+    let path = root.path().join("copytruncate.log");
+    // A long original so `byte_offset` sits well past the anchor window.
+    let original: String = (0..24).map(|_| "old-content-line\n").collect();
+    fs::write(&path, original.as_bytes()).expect("write copytruncate fixture");
+    let path = canonical_discovery_path(&path);
+
+    let mut tails = EspTailSet::new();
+    let initial = tails.reconcile(&[tail_source(
+        path.clone(),
+        "copytruncate",
+        0,
+        DiscoverySourceOrigin::CuratedKnown,
+        true,
+    )]);
+    assert!(initial.failures.is_empty());
+
+    // Truncate the same inode in place and regrow it past the old length with
+    // entirely different content before the next poll (classic copytruncate).
+    // Identity is unchanged and the file is longer, so identity and size checks
+    // would treat the rewritten bytes as an append.
+    let replacement: String = (0..30).map(|_| "copytruncate-line\n").collect();
+    assert!(replacement.len() >= original.len());
+    fs::write(&path, replacement.as_bytes()).expect("copytruncate fixture in place");
+
+    let result = tails.poll();
+    assert!(result.failures.is_empty());
+    assert_eq!(result.updates.len(), 1);
+    let update = &result.updates[0];
+    assert_eq!(update.path, path);
+    assert_eq!(update.reset_reason, Some(EspTailResetReason::Truncated));
+    // Re-read from the start of the new content, not a stale mid-stream offset.
+    assert_eq!(update.entries.len(), 30);
+    assert_eq!(update.entries[0].message, "copytruncate-line");
+    assert!(update
+        .entries
+        .iter()
+        .all(|entry| entry.message == "copytruncate-line"));
+}
+
+#[test]
 fn tail_reads_bytes_appended_while_source_is_temporarily_deselected() {
     let root = tempdir().expect("tail root");
     let path = root.path().join("temporarily-deselected.log");

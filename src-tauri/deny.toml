@@ -1,8 +1,11 @@
 [advisories]
-# These unresolved advisories are in transitive Tauri/evtx dependencies. The
-# quick-xml package also enters through evtx 0.8.5, but evtx only writes/escapes
-# XML in production; its Reader/attributes use is test-only and it never uses
-# NsReader. Keep these package-level exceptions scoped to their existing IDs.
+# Most of these unresolved advisories are in transitive Tauri/evtx dependencies.
+# The quick-xml advisories are different: quick-xml is now ALSO a first-party
+# dependency (src-tauri/Cargo.toml intune-diagnostics feature, in the default
+# full feature), and its Reader + attributes API parses untrusted .evtx-derived
+# XML in production (src-tauri/src/intune/evtx_parser.rs). That use is NOT
+# test-only. The continued suppression is justified by the layered mitigations
+# applied before and around parsing, spelled out on the per-ID lines below.
 # RUSTSEC-2026-0009 is not ignored: the workspace path-patches time 0.3.36 with
 # the upstream recursion limit and tests its exact boundary.
 ignore = [
@@ -26,8 +29,8 @@ ignore = [
     "RUSTSEC-2025-0081", # gtk-related (Tauri Linux)
     "RUSTSEC-2025-0098", # gtk-related (Tauri Linux)
     "RUSTSEC-2025-0100", # gtk-related (Tauri Linux)
-    "RUSTSEC-2026-0194", # quick-xml duplicate-attribute CPU DoS; evtx Reader use is test-only (also plist/Tauri, wayland-scanner)
-    "RUSTSEC-2026-0195", # quick-xml NsReader allocation DoS; evtx has no NsReader use (also plist/Tauri, wayland-scanner)
+    "RUSTSEC-2026-0194", # quick-xml duplicate-attribute O(n^2) CPU DoS; reachable via evtx_parser Reader/attributes on untrusted .evtx XML but bounded by layered caps: 512KB per-record (MAX_ESP_EVTX_RECORD_BYTES), legal-XML-char prefilter, 64-level nesting cap, 256-attribute per-element cap bounding the quadratic, and 50k-entry / 32MB-batch caps (also plist/Tauri, wayland-scanner)
+    "RUSTSEC-2026-0195", # quick-xml NsReader allocation DoS; evtx_parser uses Reader, never NsReader, so no reachable path (also plist/Tauri, wayland-scanner)
 ]
 
 [licenses]

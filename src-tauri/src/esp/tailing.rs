@@ -24,6 +24,14 @@ const IME_RECORD_ATTRS_START: &str = "]LOG]!><";
 pub const MAX_SESSION_TAIL_SOURCES: usize = 512;
 pub const MAX_DORMANT_TAIL_CURSORS: usize = MAX_ACTIVE_TAILS;
 
+/// Bytes of the already-consumed region retained as a continuity anchor. On
+/// each poll the tail re-reads the bytes ending at `byte_offset` and compares
+/// them against this anchor. A plain append leaves those trailing bytes intact,
+/// but an in-place truncate-and-regrow (copytruncate: same inode, rewritten
+/// past the old offset before the next poll) replaces them, so a mismatch
+/// reveals a reset that identity and length checks alone would miss.
+const CONSUMED_ANCHOR_BYTES: usize = 64;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EspTailResetReason {
     Truncated,
@@ -374,6 +382,7 @@ struct ActiveTail {
     source: DiscoveredLogSource,
     byte_offset: u64,
     identity: Option<FileIdentity>,
+    consumed_anchor: Vec<u8>,
     encoding: TailEncoding,
     pending_bytes: Vec<u8>,
     pending_text: String,
@@ -398,6 +407,7 @@ impl ActiveTail {
                 source,
                 byte_offset: initial.end_offset,
                 identity: initial.identity,
+                consumed_anchor: initial.consumed_anchor,
                 encoding: initial.encoding,
                 pending_bytes: initial.pending_bytes,
                 pending_text: initial.pending_text,
@@ -430,6 +440,7 @@ impl ActiveTail {
                 source,
                 byte_offset: initial.end_offset,
                 identity: initial.identity,
+                consumed_anchor: initial.consumed_anchor,
                 encoding: initial.encoding,
                 pending_bytes: initial.pending_bytes,
                 pending_text: initial.pending_text,
@@ -453,6 +464,13 @@ impl ActiveTail {
         if metadata.len() < self.byte_offset {
             return self.reset(EspTailResetReason::Truncated);
         }
+        // Same inode and no shrink still permits an in-place truncate-and-regrow
+        // (copytruncate) that rewrites the consumed region past the old offset.
+        // Re-read the anchor bytes ending at `byte_offset`; a mismatch means the
+        // bytes we already emitted were replaced, so re-read from the start.
+        if !self.consumed_region_is_continuous(&mut file)? {
+            return self.reset(EspTailResetReason::Truncated);
+        }
         if metadata.len() == self.byte_offset {
             return Ok(None);
         }
@@ -465,6 +483,7 @@ impl ActiveTail {
             .map_err(|error| tail_failure(&self.source.path, "read", error))?;
         self.byte_offset = self.byte_offset.saturating_add(read_len);
         self.identity = current_identity;
+        self.extend_consumed_anchor(&bytes);
 
         let decoded = decode_incremental(&mut self.encoding, &mut self.pending_bytes, bytes);
         let mut text = std::mem::take(&mut self.pending_text);
@@ -514,6 +533,7 @@ impl ActiveTail {
         let initial = read_initial(&self.source.path)?;
         self.byte_offset = initial.end_offset;
         self.identity = initial.identity;
+        self.consumed_anchor = initial.consumed_anchor;
         self.encoding = initial.encoding;
         self.pending_bytes = initial.pending_bytes;
         self.pending_text = initial.pending_text;
@@ -528,6 +548,36 @@ impl ActiveTail {
             entries,
             reset_reason: Some(reason),
         }))
+    }
+
+    /// Confirm the bytes already consumed still end with the retained anchor.
+    /// The caller guarantees `metadata.len() >= self.byte_offset`, so the anchor
+    /// region always exists on disk; a mismatch means the file was rewritten in
+    /// place (copytruncate) rather than appended to.
+    fn consumed_region_is_continuous(&self, file: &mut File) -> Result<bool, EspTailFailure> {
+        if self.consumed_anchor.is_empty() || self.byte_offset == 0 {
+            return Ok(true);
+        }
+        let anchor_len = self.consumed_anchor.len() as u64;
+        let anchor_start = self.byte_offset.saturating_sub(anchor_len);
+        file.seek(SeekFrom::Start(anchor_start))
+            .map_err(|error| tail_failure(&self.source.path, "seek continuity anchor", error))?;
+        let mut current = vec![0; self.consumed_anchor.len()];
+        file.read_exact(&mut current)
+            .map_err(|error| tail_failure(&self.source.path, "read continuity anchor", error))?;
+        Ok(current == self.consumed_anchor)
+    }
+
+    /// Advance the continuity anchor to the final `CONSUMED_ANCHOR_BYTES` bytes
+    /// ending at the new `byte_offset` after appended bytes are consumed.
+    fn extend_consumed_anchor(&mut self, appended: &[u8]) {
+        let mut combined = std::mem::take(&mut self.consumed_anchor);
+        combined.extend_from_slice(appended);
+        let overflow = combined.len().saturating_sub(CONSUMED_ANCHOR_BYTES);
+        if overflow > 0 {
+            combined.drain(..overflow);
+        }
+        self.consumed_anchor = combined;
     }
 }
 
@@ -567,6 +617,7 @@ struct InitialTailState {
     start_offset: u64,
     end_offset: u64,
     identity: Option<FileIdentity>,
+    consumed_anchor: Vec<u8>,
     encoding: TailEncoding,
     pending_bytes: Vec<u8>,
     pending_text: String,
@@ -602,6 +653,10 @@ fn read_initial(path: &Path) -> Result<InitialTailState, EspTailFailure> {
         bytes.drain(..dropped);
         start_offset = start_offset.saturating_add(dropped as u64);
     }
+    // Anchor on the raw trailing bytes ending at `end_offset`. Capture before
+    // decoding, which consumes `bytes` and may drop a dangling UTF-16 byte the
+    // on-disk continuity check still needs to see.
+    let consumed_anchor = capture_consumed_anchor(&bytes);
     let (encoding, decoded, pending_bytes) = decode_initial(hint, bytes);
     let path_text = path.to_string_lossy();
     let parser_selection = parser::detect::detect_parser(&path_text, &decoded);
@@ -616,12 +671,21 @@ fn read_initial(path: &Path) -> Result<InitialTailState, EspTailFailure> {
         start_offset,
         end_offset,
         identity,
+        consumed_anchor,
         encoding,
         pending_bytes,
         pending_text,
         parser_selection,
         entries,
     })
+}
+
+/// Retain the final `CONSUMED_ANCHOR_BYTES` raw bytes of the consumed region as
+/// a continuity anchor. The slice ends at the file's current `end_offset`, so a
+/// later poll can re-read the same on-disk window and detect an in-place rewrite.
+fn capture_consumed_anchor(consumed: &[u8]) -> Vec<u8> {
+    let start = consumed.len().saturating_sub(CONSUMED_ANCHOR_BYTES);
+    consumed[start..].to_vec()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

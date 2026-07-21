@@ -19,7 +19,7 @@ pub fn write_manifest(
     let now = Utc::now();
     let hostname = hostname();
 
-    let gaps: Vec<serde_json::Value> = results
+    let mut gaps: Vec<serde_json::Value> = results
         .iter()
         .filter(|r| !matches!(r.status, ArtifactStatus::Collected))
         .map(|r| {
@@ -31,6 +31,29 @@ pub fn write_manifest(
             })
         })
         .collect();
+    // `results` is populated concurrently, so sort gaps for a deterministic
+    // manifest, mirroring the explicit ordering applied to `artifacts` below.
+    gaps.sort_by(|left, right| {
+        let left_id = left
+            .get("artifactId")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        let right_id = right
+            .get("artifactId")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        let left_category = left
+            .get("category")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        let right_category = right
+            .get("category")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        left_id
+            .cmp(right_id)
+            .then_with(|| left_category.cmp(right_category))
+    });
 
     let collected_utc = now.to_rfc3339();
     let mut artifacts: Vec<serde_json::Value> = results
@@ -355,6 +378,73 @@ mod tests {
             "Failed"
         );
         fs::remove_dir_all(bundle_root).expect("remove temp bundle root");
+    }
+
+    #[test]
+    fn write_manifest_emits_gaps_in_a_deterministic_order() {
+        let alpha = ArtifactResult {
+            id: "alpha-artifact".to_string(),
+            category: "logs".to_string(),
+            family: "intune-ime".to_string(),
+            parse_hints: Vec::new(),
+            notes: None,
+            status: ArtifactStatus::Missing,
+            files: Vec::new(),
+            error: None,
+        };
+        let zeta = ArtifactResult {
+            id: "zeta-artifact".to_string(),
+            category: "command".to_string(),
+            family: "system".to_string(),
+            parse_hints: Vec::new(),
+            notes: None,
+            status: ArtifactStatus::Failed,
+            files: Vec::new(),
+            error: Some("command exited with code 1".to_string()),
+        };
+
+        // The concurrent collectors can populate `results` in any order, so the
+        // emitted gaps must not depend on insertion order.
+        let forward = serialized_gaps(&[alpha.clone(), zeta.clone()]);
+        let reversed = serialized_gaps(&[zeta, alpha]);
+
+        assert_eq!(
+            forward, reversed,
+            "gap order must not depend on artifact insertion order"
+        );
+        let ids: Vec<&str> = forward
+            .iter()
+            .map(|gap| gap["artifactId"].as_str().expect("gap artifactId"))
+            .collect();
+        assert_eq!(ids, ["alpha-artifact", "zeta-artifact"]);
+    }
+
+    fn serialized_gaps(results: &[ArtifactResult]) -> Vec<serde_json::Value> {
+        let bundle_root = temp_bundle_root("manifest-gap-order");
+        write_manifest(
+            &bundle_root,
+            "CMTRACE-TEST",
+            &CollectionProfile::embedded(),
+            results,
+            &ArtifactCounts {
+                collected: 0,
+                missing: 1,
+                failed: 1,
+                total: 2,
+            },
+            5,
+        )
+        .expect("write manifest with gaps");
+        let manifest: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(bundle_root.join("manifest.json")).expect("read manifest"),
+        )
+        .expect("parse manifest");
+        let gaps = manifest["collection"]["results"]["gaps"]
+            .as_array()
+            .expect("gaps array")
+            .clone();
+        fs::remove_dir_all(bundle_root).expect("remove temp bundle root");
+        gaps
     }
 
     fn temp_bundle_root(prefix: &str) -> PathBuf {

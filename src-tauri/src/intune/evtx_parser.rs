@@ -32,6 +32,11 @@ const MAX_ENTRIES_PER_FILE: usize = 50_000;
 pub const MAX_ESP_EVTX_RECORD_BYTES: usize = 512 * 1024;
 pub const MAX_ESP_EVTX_BATCH_BYTES: usize = 32 * 1024 * 1024;
 const MAX_ESP_XML_NESTING_DEPTH: usize = 64;
+/// Reject any element carrying more attributes than a real EVTX element ever
+/// has. quick-xml's duplicate-attribute check (enabled via `with_checks(true)`)
+/// is O(n^2) in the attribute count (RUSTSEC-2026-0194); this per-element cap
+/// bounds that quadratic so it cannot blow up even within one 512KB record.
+const MAX_ESP_XML_ATTRIBUTES_PER_ELEMENT: usize = 256;
 #[cfg(target_os = "windows")]
 const MAX_LIVE_ENTRIES_PER_CHANNEL: usize = 200;
 
@@ -601,8 +606,13 @@ fn has_valid_xml_declaration(declaration: &BytesDecl<'_>, decoder: Decoder) -> b
     let declaration = BytesStart::from_content(content, b"xml".len());
     let mut attributes = declaration.attributes();
     let mut stage = 0u8;
+    let mut count = 0usize;
 
     for attribute in attributes.with_checks(true) {
+        count += 1;
+        if count > MAX_ESP_XML_ATTRIBUTES_PER_ELEMENT {
+            return false;
+        }
         let Ok(attribute) = attribute else {
             return false;
         };
@@ -648,13 +658,25 @@ fn is_valid_xml_reference(reference: &BytesRef<'_>) -> bool {
 
 fn has_valid_xml_attributes(start: &BytesStart<'_>, decoder: Decoder) -> bool {
     let mut attributes = start.attributes();
-    attributes.with_checks(true).all(|attribute| {
-        attribute.is_ok_and(|attribute| {
-            attribute
-                .decode_and_unescape_value(decoder)
-                .is_ok_and(|value| value.chars().all(is_legal_xml_10_character))
-        })
-    })
+    let mut count = 0usize;
+    for attribute in attributes.with_checks(true) {
+        // Bail before the cap so quick-xml's O(n^2) duplicate-attribute check
+        // (RUSTSEC-2026-0194) only ever runs over a bounded attribute count.
+        count += 1;
+        if count > MAX_ESP_XML_ATTRIBUTES_PER_ELEMENT {
+            return false;
+        }
+        let Ok(attribute) = attribute else {
+            return false;
+        };
+        let Ok(value) = attribute.decode_and_unescape_value(decoder) else {
+            return false;
+        };
+        if !value.chars().all(is_legal_xml_10_character) {
+            return false;
+        }
+    }
+    true
 }
 
 fn ordered_event_data(xml: &str) -> Option<Vec<EventLogProperty>> {
@@ -1705,6 +1727,37 @@ mod tests {
         format!(
             "<Event><System><EventID>72</EventID><TimeCreated SystemTime='2026-07-16T13:00:00Z'/><Channel>Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin</Channel></System><EventData><Data Name='Payload'>{payload}</Data></EventData></Event>"
         )
+    }
+
+    fn esp_record_xml_with_root_attributes(count: usize) -> String {
+        let attributes: String = (0..count).map(|index| format!(" a{index}='1'")).collect();
+        format!(
+            "<Event{attributes}><System><EventID>72</EventID><TimeCreated SystemTime='2026-07-16T13:00:00Z'/><Channel>Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin</Channel></System><EventData><Data Name='Payload'>ok</Data></EventData></Event>"
+        )
+    }
+
+    #[test]
+    fn esp_event_xml_rejects_elements_exceeding_the_attribute_count_cap() {
+        // A normal element carrying a handful of attributes still parses.
+        let normal = esp_record_xml_with_root_attributes(4);
+        assert!(
+            parse_esp_event_xml(&normal, "attr-cap.evtx", Some(1), None, "Unknown").is_some(),
+            "an element with a few attributes must still parse"
+        );
+
+        // More than the per-element cap is rejected before quick-xml's O(n^2)
+        // duplicate-attribute check (RUSTSEC-2026-0194) can blow up.
+        let oversized =
+            esp_record_xml_with_root_attributes(MAX_ESP_XML_ATTRIBUTES_PER_ELEMENT + 1);
+        let started = std::time::Instant::now();
+        assert!(
+            parse_esp_event_xml(&oversized, "attr-cap.evtx", Some(1), None, "Unknown").is_none(),
+            "an element exceeding the attribute-count cap must be rejected as invalid"
+        );
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(1),
+            "the attribute-count cap must reject without a pathological slowdown"
+        );
     }
 
     fn retained_record_bytes(record: &ParsedEspEventRecord) -> usize {

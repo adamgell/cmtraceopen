@@ -251,7 +251,9 @@ fn compute_counts(results: &[ArtifactResult]) -> ArtifactCounts {
 }
 
 fn compute_gaps(results: &[ArtifactResult]) -> Vec<CollectionGap> {
-    results
+    // `results` is aggregated from concurrent collectors, so sort the returned
+    // gaps for a stable order that matches the deterministic manifest.
+    let mut gaps: Vec<CollectionGap> = results
         .iter()
         .filter(|r| !matches!(r.status, ArtifactStatus::Collected))
         .map(|r| CollectionGap {
@@ -259,7 +261,13 @@ fn compute_gaps(results: &[ArtifactResult]) -> Vec<CollectionGap> {
             category: r.category.clone(),
             reason: r.error.clone().unwrap_or_else(|| format!("{:?}", r.status)),
         })
-        .collect()
+        .collect();
+    gaps.sort_by(|left, right| {
+        left.artifact_id
+            .cmp(&right.artifact_id)
+            .then_with(|| left.category.cmp(&right.category))
+    });
+    gaps
 }
 
 fn emit_progress<R: Runtime>(

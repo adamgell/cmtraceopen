@@ -72,6 +72,10 @@ fn run_bounded_command(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    // Every bounded ESP subprocess is spawned here, so hide the console window
+    // at this choke point to keep console tools (powershell.exe, etc.) from
+    // flashing a window when ESP diagnostics start. No-op off Windows.
+    crate::process_util::apply_hidden_window(&mut command);
     let mut child = match command.spawn() {
         Ok(child) => child,
         Err(error) if error.kind() == ErrorKind::NotFound => return Err(SystemReadError::Missing),
@@ -2365,6 +2369,27 @@ mod tests {
 
         assert_eq!(error, SystemReadError::TimedOut);
         assert!(started.elapsed() < Duration::from_secs(1));
+    }
+
+    #[test]
+    fn bounded_commands_hide_the_console_window_before_spawning() {
+        // Every bounded ESP subprocess must route through the CREATE_NO_WINDOW
+        // choke point so no console window flashes when ESP diagnostics start.
+        // The flag is a no-op off Windows, so assert structurally that the spawn
+        // path applies it: the real call at the spawn site must precede the
+        // child spawn, so the earliest `apply_hidden_window` in this file wins
+        // over this test's own literal (which appears after `command.spawn()`).
+        let source = include_str!("system.rs");
+        let hide_index = source
+            .find("apply_hidden_window(&mut command)")
+            .expect("run_bounded_command must hide the console window before spawning");
+        let spawn_index = source
+            .find("command.spawn()")
+            .expect("run_bounded_command spawns the child via command.spawn()");
+        assert!(
+            hide_index < spawn_index,
+            "apply_hidden_window must run before command.spawn()"
+        );
     }
 
     #[test]
