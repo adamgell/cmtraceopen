@@ -1639,13 +1639,19 @@ mod windows_provider {
         fn elevation(&self) -> Result<bool, SystemReadError> {
             let mut token = HANDLE::default();
             // SAFETY: token points to valid writable storage and is closed by HandleGuard.
-            unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) }
-                .map_err(|error| error_from_windows(error, "process token query failed"))?;
+            if let Err(error) =
+                unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) }
+            {
+                // A silent probe failure makes the app wrongly report "Standard user"
+                // even when elevated; surface the exact Win32 error to the app log.
+                log::warn!("ESP elevation probe: OpenProcessToken failed: {error:?}");
+                return Err(error_from_windows(error, "process token query failed"));
+            }
             let _token = HandleGuard(token);
             let mut elevation = TOKEN_ELEVATION::default();
             let mut returned = 0_u32;
             // SAFETY: elevation is valid writable TOKEN_ELEVATION storage of the declared size.
-            unsafe {
+            if let Err(error) = unsafe {
                 GetTokenInformation(
                     token,
                     TokenElevation,
@@ -1653,8 +1659,19 @@ mod windows_provider {
                     std::mem::size_of::<TOKEN_ELEVATION>() as u32,
                     &mut returned,
                 )
+            } {
+                log::warn!(
+                    "ESP elevation probe: GetTokenInformation(TokenElevation) failed: {error:?}"
+                );
+                return Err(error_from_windows(error, "token elevation query failed"));
             }
-            .map_err(|error| error_from_windows(error, "token elevation query failed"))?;
+            if elevation.TokenIsElevated == 0 {
+                // Not an error, but log the anomalous case so a wrongly-unelevated
+                // reading on an actually-elevated process is diagnosable.
+                log::warn!(
+                    "ESP elevation probe: token reports not elevated (TokenIsElevated=0, returned_len={returned})"
+                );
+            }
             Ok(elevation.TokenIsElevated != 0)
         }
 
