@@ -404,8 +404,15 @@ fn sanitize_json_command_value(value: &mut serde_json::Value) -> bool {
             changed
         }
         serde_json::Value::Array(values) => {
-            let mut changed = false;
-            for value in values {
+            // Secrets can be split across adjacent array elements
+            // (e.g. `["--password", "hunter2"]` or
+            // `["Authorization: Bearer", "<token>"]`). Element-by-element
+            // sanitization never sees the flag and its value together, so run a
+            // cross-element pass on the ORIGINAL strings first — before
+            // per-element sanitization rewrites the prefix element and hides the
+            // adjacency from the value redactors.
+            let mut changed = redact_cross_element_string_secrets(values);
+            for value in values.iter_mut() {
                 changed |= sanitize_json_command_value(value);
             }
             changed
@@ -421,6 +428,39 @@ fn sanitize_json_command_value(value: &mut serde_json::Value) -> bool {
         }
         _ => false,
     }
+}
+
+/// Redact secrets that are split across adjacent string elements of a JSON
+/// array. A secret flag or header prefix in element `N`
+/// (`"--password"`, `"--client-secret"`, `"Authorization: Bearer"`, ...)
+/// governs the value in element `N + 1`. Because the structural pass sanitizes
+/// each element in isolation, the adjacency-aware raw redactors never see the
+/// pair together and the value survives. Here we space-join each consecutive
+/// pair, run the raw sanitizer, and if the second element's content was
+/// consumed by a redaction that crossed the boundary, replace that element with
+/// `[REDACTED]`.
+fn redact_cross_element_string_secrets(values: &mut [serde_json::Value]) -> bool {
+    let mut changed = false;
+    for index in 0..values.len().saturating_sub(1) {
+        let (Some(prefix), Some(candidate)) =
+            (values[index].as_str(), values[index + 1].as_str())
+        else {
+            continue;
+        };
+        if candidate.is_empty() {
+            continue;
+        }
+
+        let joined = format!("{prefix} {candidate}");
+        let sanitized = sanitize_raw_command_line(&joined);
+        // The value survived if it still appears verbatim; if the boundary-
+        // spanning redaction consumed it, redact the whole value element.
+        if sanitized != joined && !sanitized.contains(candidate) {
+            values[index + 1] = serde_json::Value::String("[REDACTED]".to_string());
+            changed = true;
+        }
+    }
+    changed
 }
 
 fn sanitize_raw_command_line(command_line: &str) -> String {
@@ -2308,6 +2348,48 @@ mod tests {
             assert!(
                 sanitized.contains(safe_sentinel),
                 "safe JSON sibling was consumed: {sanitized}"
+            );
+            serde_json::from_str::<serde_json::Value>(&sanitized)
+                .expect("sanitized command container remains valid JSON");
+        }
+    }
+
+    #[test]
+    fn secrets_split_across_json_array_elements_are_redacted() {
+        // A secret flag/header prefix in one array element with its value in the
+        // next element must not survive. Element-by-element sanitization never
+        // sees the pair together; the cross-element pass closes that gap.
+        let cases: &[(&str, &[&str], &str)] = &[
+            (
+                r#"{"process":"agentexecutor.exe","args":["--password","hunter2"]}"#,
+                &["hunter2"],
+                "agentexecutor.exe",
+            ),
+            (
+                r#"["Authorization: Bearer","SECRET-TOKEN-VALUE"]"#,
+                &["SECRET-TOKEN-VALUE"],
+                "Authorization",
+            ),
+            (
+                r#"{"args":["--client-secret","split-client-secret-value","--mode","keep-mode"]}"#,
+                &["split-client-secret-value"],
+                "keep-mode",
+            ),
+        ];
+
+        for (raw, leaked, preserved) in cases {
+            serde_json::from_str::<serde_json::Value>(raw).expect("valid source JSON");
+            let sanitized = sanitize_command_line(raw);
+
+            for secret in *leaked {
+                assert!(
+                    !sanitized.contains(secret),
+                    "split JSON array secret leaked {secret}: {sanitized}"
+                );
+            }
+            assert!(
+                sanitized.contains(preserved),
+                "safe token was consumed: {sanitized}"
             );
             serde_json::from_str::<serde_json::Value>(&sanitized)
                 .expect("sanitized command container remains valid JSON");

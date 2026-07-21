@@ -250,6 +250,52 @@ fn launch_elevated_native(_request: &EspRelaunchRequest) -> Result<(), EspElevat
     ))
 }
 
+/// Resolve the working directory the elevated child should start in.
+///
+/// Returns the executable's parent (the verified app install directory)
+/// wide-encoded and NUL-terminated. If the executable has no parent, falls
+/// back to the Windows system directory. Both are trusted, non-attacker-
+/// writable locations, so the elevated process never inherits the caller's
+/// (untrusted) working directory — closing a DLL-planting elevation-of-
+/// privilege lever where a name-resolved DLL in an attacker-writable cwd would
+/// otherwise load elevated.
+#[cfg(target_os = "windows")]
+fn elevated_working_directory(exe: &std::path::Path) -> Vec<u16> {
+    use std::iter::once;
+    use std::os::windows::ffi::OsStrExt;
+
+    if let Some(parent) = exe
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        return parent.as_os_str().encode_wide().chain(once(0)).collect();
+    }
+
+    windows_system_directory()
+}
+
+/// The Windows system directory (e.g. `C:\Windows\System32`) wide-encoded and
+/// NUL-terminated, used as a trusted fallback working directory.
+#[cfg(target_os = "windows")]
+fn windows_system_directory() -> Vec<u16> {
+    use windows::Win32::System::SystemInformation::GetSystemDirectoryW;
+
+    // MAX_PATH-sized buffer; GetSystemDirectoryW returns the length written
+    // (excluding the terminator) on success, or 0 on failure.
+    let mut buffer = [0u16; 260];
+    let length = unsafe { GetSystemDirectoryW(Some(&mut buffer)) } as usize;
+    if length == 0 || length >= buffer.len() {
+        // Last-resort fixed path; still a trusted, non-attacker-writable dir.
+        return "C:\\Windows\\System32\0".encode_utf16().collect();
+    }
+
+    buffer[..length]
+        .iter()
+        .copied()
+        .chain(std::iter::once(0))
+        .collect()
+}
+
 #[cfg(target_os = "windows")]
 fn launch_elevated_native(request: &EspRelaunchRequest) -> Result<(), EspElevationLaunchError> {
     use std::ffi::OsStr;
@@ -275,12 +321,16 @@ fn launch_elevated_native(request: &EspRelaunchRequest) -> Result<(), EspElevati
         .encode_wide()
         .chain(once(0))
         .collect::<Vec<_>>();
+    // Pin the elevated child's working directory to the trusted install dir.
+    // This buffer must outlive the ShellExecuteExW call, like the others.
+    let directory = elevated_working_directory(&request.executable);
     let mut execute = SHELLEXECUTEINFOW {
         cbSize: std::mem::size_of::<SHELLEXECUTEINFOW>() as u32,
         fMask: SEE_MASK_NOCLOSEPROCESS,
         lpVerb: PCWSTR(verb.as_ptr()),
         lpFile: PCWSTR(executable.as_ptr()),
         lpParameters: PCWSTR(parameters.as_ptr()),
+        lpDirectory: PCWSTR(directory.as_ptr()),
         nShow: SW_SHOWNORMAL.0,
         ..Default::default()
     };
@@ -298,4 +348,41 @@ fn launch_elevated_native(request: &EspRelaunchRequest) -> Result<(), EspElevati
         }
     }
     Ok(())
+}
+
+#[cfg(all(test, target_os = "windows"))]
+mod windows_relaunch_tests {
+    use super::*;
+    use std::iter::once;
+    use std::os::windows::ffi::OsStrExt;
+    use std::path::Path;
+
+    #[test]
+    fn elevated_working_directory_pins_the_executable_parent() {
+        let exe = Path::new(r"C:\Program Files\CMTrace Open\cmtrace-open.exe");
+        let expected: Vec<u16> = Path::new(r"C:\Program Files\CMTrace Open")
+            .as_os_str()
+            .encode_wide()
+            .chain(once(0))
+            .collect();
+
+        let directory = elevated_working_directory(exe);
+
+        assert_eq!(directory, expected);
+        // The pointer handed to SHELLEXECUTEINFOW.lpDirectory must be non-null
+        // (non-empty) and the wide string NUL-terminated.
+        assert_eq!(directory.last(), Some(&0));
+        assert!(directory.len() > 1);
+    }
+
+    #[test]
+    fn elevated_working_directory_falls_back_to_system_dir_without_parent() {
+        // A bare filename has an empty parent, so the trusted system directory
+        // is used instead of leaving the working directory NULL (which would
+        // inherit the caller's untrusted cwd).
+        let directory = elevated_working_directory(Path::new("cmtrace-open.exe"));
+
+        assert_eq!(directory.last(), Some(&0));
+        assert!(directory.len() > 1, "fallback directory must be non-empty");
+    }
 }

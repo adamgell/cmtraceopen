@@ -1410,6 +1410,10 @@ mod windows_impl {
             GraphAuthStatus {
                 is_authenticated,
                 user_principal_name: upn.map(str::to_string),
+                // Same-account fixtures share one authoritative `oid`; the
+                // account-mismatch cases below diverge on the UPN secondary
+                // signal instead.
+                object_id: Some("00000000-0000-0000-0000-0000000000a1".to_string()),
                 tenant_id: tenant.map(str::to_string),
                 granted_scopes: granted_scopes
                     .iter()
@@ -1905,6 +1909,7 @@ mod windows_impl {
                 status: GraphAuthStatus {
                     is_authenticated: true,
                     user_principal_name: Some("user@contoso.example".to_string()),
+                    object_id: Some("00000000-0000-0000-0000-0000000000a1".to_string()),
                     tenant_id: Some("tenant-a".to_string()),
                     granted_scopes: Vec::new(),
                     missing_scopes: Vec::new(),

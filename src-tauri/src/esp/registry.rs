@@ -10,6 +10,8 @@ use cmtraceopen_parser::esp::{
 };
 use serde::{Deserialize, Serialize};
 
+use super::event_logs::contains_sensitive_identity_text;
+
 /// `KEY_READ | KEY_WOW64_64KEY` from the Windows registry API.
 pub const REGISTRY_READ_ACCESS: u32 = 0x0002_0019 | 0x0000_0100;
 pub const MAX_REGISTRY_DEPTH: usize = 8;
@@ -572,7 +574,7 @@ fn append_tree_observations(
                 source_artifact_id: source_artifact_id.clone(),
             };
             entry_evidence.push(evidence_ref.clone());
-            let sensitivity = registry_sensitivity(&full_key, &value.name);
+            let sensitivity = registry_sensitivity(&full_key, &value.name, &value.value);
             let observation = EspRegistryObservation {
                 context: EspObservationContext {
                     evidence_ref,
@@ -741,15 +743,33 @@ fn node_cache_contains_hardware_identity(entry: &RegistrySnapshotKey) -> bool {
     })
 }
 
-fn registry_sensitivity(key: &str, value_name: &str) -> EspSensitivity {
+fn registry_sensitivity(key: &str, value_name: &str, value: &EspObservationValue) -> EspSensitivity {
     let path_sensitivity = registry_path_sensitivity(key);
     if path_sensitivity != EspSensitivity::Public {
         return path_sensitivity;
     }
     if is_sensitive_registry_field_name(value_name) {
-        EspSensitivity::Sensitive
-    } else {
-        EspSensitivity::Public
+        return EspSensitivity::Sensitive;
+    }
+    // The key path and value-NAME allowlist alone miss identity content embedded
+    // in the value DATA (e.g. a UPN/SID/serial in `CloudAssignedDeviceName`,
+    // whose name is not in the allowlist). Content-scan the data with the same
+    // detector the event-log path uses before releasing the value as Public.
+    if registry_value_contains_sensitive_identity(value) {
+        return EspSensitivity::Sensitive;
+    }
+    EspSensitivity::Public
+}
+
+fn registry_value_contains_sensitive_identity(value: &EspObservationValue) -> bool {
+    match value {
+        EspObservationValue::Text(text) => contains_sensitive_identity_text(text),
+        EspObservationValue::StringList(values) => values
+            .iter()
+            .any(|value| contains_sensitive_identity_text(value)),
+        EspObservationValue::Integer(_)
+        | EspObservationValue::Unsigned(_)
+        | EspObservationValue::Boolean(_) => false,
     }
 }
 
@@ -1759,6 +1779,8 @@ mod tests {
     #[test]
     fn registry_value_name_sensitivity_rejects_substring_false_positives() {
         let public_key = r"SOFTWARE\Microsoft\Windows\Autopilot\Readable";
+        // Benign data so this test isolates value-NAME classification.
+        let benign = EspObservationValue::Text("ordinary-value".to_string());
         for field in [
             "UPN",
             "UserPrincipalName",
@@ -1770,7 +1792,7 @@ mod tests {
             "SerialNumber",
         ] {
             assert_eq!(
-                registry_sensitivity(public_key, field),
+                registry_sensitivity(public_key, field, &benign),
                 EspSensitivity::Sensitive,
                 "documented sensitive value name was not classified as sensitive: {field}"
             );
@@ -1778,10 +1800,45 @@ mod tests {
 
         for ordinary in ["Outside", "NotASid", "Presidential", "SerializationMode"] {
             assert_eq!(
-                registry_sensitivity(public_key, ordinary),
+                registry_sensitivity(public_key, ordinary, &benign),
                 EspSensitivity::Public,
                 "ordinary value name was classified as sensitive: {ordinary}"
             );
         }
+    }
+
+    #[test]
+    fn registry_value_data_identity_content_escalates_to_sensitive() {
+        // A value whose NAME is not in the allowlist and whose key path is
+        // public, but whose DATA embeds identity content (UPN/SID), must be
+        // classified Sensitive. The name/path allowlist alone would leak it as
+        // Public and export it in plaintext.
+        let public_key = r"SOFTWARE\Microsoft\Windows\Autopilot\Readable";
+
+        let upn_in_device_name =
+            EspObservationValue::Text("alice@contoso.onmicrosoft.com".to_string());
+        assert_eq!(
+            registry_sensitivity(public_key, "CloudAssignedDeviceName", &upn_in_device_name),
+            EspSensitivity::Sensitive,
+            "UPN embedded in value data must escalate to Sensitive"
+        );
+
+        let sid_in_list = EspObservationValue::StringList(vec![
+            "keep-me".to_string(),
+            "S-1-5-21-1004336348-1177238915-682003330-512".to_string(),
+        ]);
+        assert_eq!(
+            registry_sensitivity(public_key, "AssignedAccounts", &sid_in_list),
+            EspSensitivity::Sensitive,
+            "SID embedded in a value's string list must escalate to Sensitive"
+        );
+
+        // Benign data under the same public name/path stays Public.
+        let benign = EspObservationValue::Text("DESKTOP-READY".to_string());
+        assert_eq!(
+            registry_sensitivity(public_key, "CloudAssignedDeviceName", &benign),
+            EspSensitivity::Public,
+            "benign value data must remain Public"
+        );
     }
 }

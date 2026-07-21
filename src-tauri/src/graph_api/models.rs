@@ -135,6 +135,11 @@ impl GraphAuthCapabilities {
 pub struct GraphAuthStatus {
     pub is_authenticated: bool,
     pub user_principal_name: Option<String>,
+    /// Authoritative account identity from the token's `oid` (object id) claim.
+    /// Unlike the optional WAM `UserName`, this is always present in an
+    /// authenticated Entra token and is the trusted key for same-account checks
+    /// during a consent upgrade.
+    pub object_id: Option<String>,
     pub tenant_id: Option<String>,
     pub granted_scopes: Vec<String>,
     pub missing_scopes: Vec<String>,
@@ -189,6 +194,23 @@ pub fn classify_graph_permission_candidate(
         return GraphPermissionCandidateDecision::TenantMismatch;
     }
 
+    // Authoritative account check: bind identity to the token's `oid` claim,
+    // which is always present in an authenticated token. Fail closed when the
+    // object id is absent or unverifiable on either side so a same-tenant,
+    // different-account token can never replace the connected token — even when
+    // the optional WAM `UserName` (UPN) is missing for federated/guest accounts.
+    let account_matches = match (
+        current.object_id.as_deref(),
+        candidate.object_id.as_deref(),
+    ) {
+        (Some(current_oid), Some(candidate_oid)) => current_oid.eq_ignore_ascii_case(candidate_oid),
+        _ => false,
+    };
+    if !account_matches {
+        return GraphPermissionCandidateDecision::AccountMismatch;
+    }
+
+    // Secondary signal: when both UPNs are known they must also agree.
     if let (Some(current), Some(candidate)) = (
         current.user_principal_name.as_deref(),
         candidate.user_principal_name.as_deref(),
@@ -227,6 +249,7 @@ impl GraphAuthStatus {
         Self {
             is_authenticated: false,
             user_principal_name: None,
+            object_id: None,
             tenant_id: None,
             granted_scopes: Vec::new(),
             missing_scopes: GRAPH_DELEGATED_SCOPES
@@ -309,6 +332,16 @@ pub fn project_graph_auth_status(
         return reject("TenantMismatch");
     }
 
+    // Authoritative account identity. Present in every authenticated Entra
+    // token; parsed alongside `tid` and used to gate same-account consent
+    // upgrades. Absence does not reject the token here (Graph 401/403 remain
+    // authoritative) but does fail the upgrade check closed.
+    let object_id = claims
+        .get("oid")
+        .and_then(serde_json::Value::as_str)
+        .filter(|oid| !oid.is_empty())
+        .map(str::to_string);
+
     let Some(scope_claim) = claims.get("scp").and_then(serde_json::Value::as_str) else {
         return reject("MissingScopeClaim");
     };
@@ -336,6 +369,7 @@ pub fn project_graph_auth_status(
     GraphAuthStatus {
         is_authenticated: true,
         user_principal_name: user_principal_name.map(str::to_string),
+        object_id,
         tenant_id: Some(token_tenant_id.to_string()),
         granted_scopes,
         missing_scopes,

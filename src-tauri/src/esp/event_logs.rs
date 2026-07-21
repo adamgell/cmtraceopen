@@ -719,7 +719,11 @@ fn contains_hardware_identity_marker(value: &str) -> bool {
     normalized.contains("hardwarehash") || normalized.contains("devicehardwaredata")
 }
 
-fn contains_sensitive_identity_text(value: &str) -> bool {
+/// Detect identity content (email/UPN, Windows SID, tenant/serial/entdm
+/// keywords) embedded in free text. Shared with registry sensitivity
+/// classification so both event-log and registry evidence scan value DATA, not
+/// just field names, with a single source of truth for the regex.
+pub(crate) fn contains_sensitive_identity_text(value: &str) -> bool {
     static IDENTITY_TEXT: OnceLock<regex::Regex> = OnceLock::new();
     IDENTITY_TEXT
         .get_or_init(|| {

@@ -41,15 +41,37 @@ fn source_section<'a>(source: &'a str, start: &str, end: &str) -> &'a str {
     &tail[..end_index]
 }
 
+/// Shared object id (`oid`) used by same-account permission fixtures. The
+/// upgrade classifier binds account identity to this authoritative claim, so
+/// fixtures that model one account must agree on it.
+const SHARED_ACCOUNT_OID: &str = "00000000-0000-0000-0000-0000000000a1";
+
 fn graph_permission_status(
     is_authenticated: bool,
     user_principal_name: Option<&str>,
     tenant_id: Option<&str>,
     granted_scopes: &[&str],
 ) -> GraphAuthStatus {
+    graph_permission_status_with_oid(
+        is_authenticated,
+        user_principal_name,
+        Some(SHARED_ACCOUNT_OID),
+        tenant_id,
+        granted_scopes,
+    )
+}
+
+fn graph_permission_status_with_oid(
+    is_authenticated: bool,
+    user_principal_name: Option<&str>,
+    object_id: Option<&str>,
+    tenant_id: Option<&str>,
+    granted_scopes: &[&str],
+) -> GraphAuthStatus {
     GraphAuthStatus {
         is_authenticated,
         user_principal_name: user_principal_name.map(str::to_string),
+        object_id: object_id.map(str::to_string),
         tenant_id: tenant_id.map(str::to_string),
         granted_scopes: granted_scopes
             .iter()
@@ -305,9 +327,10 @@ fn graph_permission_tenant_and_account_changes_win_over_scope_upgrade() {
         Some("tenant-b"),
         &[GRAPH_DELEGATED_SCOPES[0], GRAPH_DELEGATED_SCOPES[1]],
     );
-    let different_account = graph_permission_status(
+    let different_account = graph_permission_status_with_oid(
         true,
         Some("other@contoso.example"),
+        Some("00000000-0000-0000-0000-0000000000b2"),
         Some("tenant-a"),
         &[GRAPH_DELEGATED_SCOPES[0], GRAPH_DELEGATED_SCOPES[1]],
     );
@@ -320,6 +343,78 @@ fn graph_permission_tenant_and_account_changes_win_over_scope_upgrade() {
         classify_graph_permission_candidate(&current, &different_account),
         GraphPermissionCandidateDecision::AccountMismatch
     );
+}
+
+#[test]
+fn graph_permission_same_tenant_different_object_id_is_rejected_even_without_upn() {
+    // A same-tenant, DIFFERENT-account token whose WAM UserName is missing
+    // (federated/guest → `UserName()` returns Err, so UPN is None) must not be
+    // able to replace the connected token. The authoritative `oid` differs.
+    let current = graph_permission_status_with_oid(
+        true,
+        Some("alice@contoso.example"),
+        Some("OID-ALICE"),
+        Some("tenant-a"),
+        &[GRAPH_DELEGATED_SCOPES[0]],
+    );
+    let bob_without_wam_name = graph_permission_status_with_oid(
+        true,
+        None,
+        Some("OID-BOB"),
+        Some("tenant-a"),
+        &[GRAPH_DELEGATED_SCOPES[0], GRAPH_DELEGATED_SCOPES[1]],
+    );
+
+    assert_eq!(
+        classify_graph_permission_candidate(&current, &bob_without_wam_name),
+        GraphPermissionCandidateDecision::AccountMismatch
+    );
+
+    // Same account (same `oid`, case-insensitive) and same tenant with a scope
+    // superset is still a legitimate upgrade.
+    let alice_superset = graph_permission_status_with_oid(
+        true,
+        Some("alice@contoso.example"),
+        Some("oid-alice"),
+        Some("tenant-a"),
+        &[GRAPH_DELEGATED_SCOPES[0], GRAPH_DELEGATED_SCOPES[1]],
+    );
+    assert_eq!(
+        classify_graph_permission_candidate(&current, &alice_superset),
+        GraphPermissionCandidateDecision::Upgrade
+    );
+
+    // Fail closed: an absent/unverifiable `oid` on either side is a mismatch.
+    let current_without_oid = graph_permission_status_with_oid(
+        true,
+        Some("alice@contoso.example"),
+        None,
+        Some("tenant-a"),
+        &[GRAPH_DELEGATED_SCOPES[0]],
+    );
+    assert_eq!(
+        classify_graph_permission_candidate(&current_without_oid, &alice_superset),
+        GraphPermissionCandidateDecision::AccountMismatch
+    );
+}
+
+#[test]
+fn graph_auth_status_projects_object_id_from_oid_claim() {
+    let token = unsigned_token(serde_json::json!({
+        "aud": "https://graph.microsoft.com",
+        "tid": "tenant-a",
+        "oid": "OID-ALICE",
+        "exp": 2_000_000_000_u64,
+        "scp": GRAPH_DELEGATED_SCOPES.join(" "),
+    }));
+    let status = project_graph_auth_status(
+        &token,
+        Some("alice@contoso.example"),
+        Some("tenant-a"),
+        1_900_000_000,
+    );
+    assert!(status.is_authenticated);
+    assert_eq!(status.object_id.as_deref(), Some("OID-ALICE"));
 }
 
 #[test]
@@ -458,6 +553,7 @@ fn platform_boundary_transport_dtos_round_trip_off_windows() {
     let status = GraphAuthStatus {
         is_authenticated: true,
         user_principal_name: Some("user@contoso.example".to_string()),
+        object_id: Some("00000000-0000-0000-0000-0000000000a1".to_string()),
         tenant_id: Some("tenant-a".to_string()),
         granted_scopes: GRAPH_DELEGATED_SCOPES
             .iter()
