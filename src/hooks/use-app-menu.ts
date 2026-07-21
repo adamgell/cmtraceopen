@@ -1,9 +1,14 @@
-import { useEffect } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { useAppActions } from "../components/layout/Toolbar";
-import { useUiStore } from "../stores/ui-store";
+import { getAvailableWorkspaces, useUiStore } from "../stores/ui-store";
+import type { WorkspaceId } from "../types/log";
+import { useAppActions, type AppCommandState } from "./use-app-actions";
 
 const MENU_EVENT_APP_ACTION = "app-menu-action";
+
+let appMenuSyncQueue: Promise<void> = Promise.resolve();
+let appMenuSyncWarningShown = false;
 
 interface AppMenuActionPayload {
   version: number;
@@ -12,14 +17,68 @@ interface AppMenuActionPayload {
   category: string;
   trigger: string;
   source_id: string | null;
+  target_id: string | null;
+}
+
+interface AppMenuState {
+  activeWorkspace: WorkspaceId;
+  openFileLabel: string;
+  openFolderLabel: string;
+  canOpenSources: boolean;
+  canOpenKnownSources: boolean;
+  canFind: boolean;
+  hasFindSession: boolean;
+  canFilter: boolean;
+  canPauseResume: boolean;
+  isPaused: boolean;
+  canRefresh: boolean;
+  canToggleSidebar: boolean;
+  isSidebarVisible: boolean;
+  canToggleDetailsPane: boolean;
+  isDetailsVisible: boolean;
+  canToggleInfoPane: boolean;
+  isInfoPaneVisible: boolean;
+  canAdjustTextSize: boolean;
+  canShowEvidenceBundle: boolean;
+  canSaveSession: boolean;
+  canCollectDiagnostics: boolean;
+}
+
+function projectMenuState(commandState: AppCommandState): AppMenuState {
+  return {
+    activeWorkspace: commandState.activeWorkspace,
+    openFileLabel: commandState.openFileLabel,
+    openFolderLabel: commandState.openFolderLabel,
+    canOpenSources: commandState.canOpenSources,
+    canOpenKnownSources: commandState.canOpenKnownSources,
+    canFind: commandState.canFind,
+    hasFindSession: commandState.hasFindSession,
+    canFilter: commandState.canFilter,
+    canPauseResume: commandState.canPauseResume,
+    isPaused: commandState.isPaused,
+    canRefresh: commandState.canRefresh,
+    canToggleSidebar: commandState.canToggleSidebar,
+    isSidebarVisible: commandState.isSidebarVisible,
+    canToggleDetailsPane: commandState.canToggleDetailsPane,
+    isDetailsVisible: commandState.isDetailsVisible,
+    canToggleInfoPane: commandState.canToggleInfoPane,
+    isInfoPaneVisible: commandState.isInfoPaneVisible,
+    canAdjustTextSize: commandState.canAdjustTextSize,
+    canShowEvidenceBundle: commandState.canShowEvidenceBundle,
+    canSaveSession: commandState.canSaveSession,
+    canCollectDiagnostics: commandState.canCollectDiagnostics,
+  };
 }
 
 export function useAppMenu() {
   const {
+    commandState,
     openSourceFileDialog,
     openSourceFolderDialog,
     openKnownSourceCatalogAction,
     showFindBar,
+    findNext,
+    findPrevious,
     showFilterDialog,
     showErrorLookupDialog,
     showEvidenceBundleDialog,
@@ -27,9 +86,79 @@ export function useAppMenu() {
     showSettingsDialog,
     togglePauseResume,
     refreshActiveSource,
+    toggleSidebar,
     toggleDetailsPane,
     toggleInfoPane,
+    increaseLogListTextSize,
+    decreaseLogListTextSize,
+    resetLogListTextSize,
+    switchWorkspace,
   } = useAppActions();
+
+  const menuState = useMemo(
+    () => projectMenuState(commandState),
+    [
+      commandState.activeWorkspace,
+      commandState.canAdjustTextSize,
+      commandState.canCollectDiagnostics,
+      commandState.canFilter,
+      commandState.canFind,
+      commandState.canOpenKnownSources,
+      commandState.canOpenSources,
+      commandState.canPauseResume,
+      commandState.canRefresh,
+      commandState.canSaveSession,
+      commandState.canShowEvidenceBundle,
+      commandState.canToggleDetailsPane,
+      commandState.canToggleInfoPane,
+      commandState.canToggleSidebar,
+      commandState.hasFindSession,
+      commandState.isDetailsVisible,
+      commandState.isInfoPaneVisible,
+      commandState.isPaused,
+      commandState.isSidebarVisible,
+      commandState.openFileLabel,
+      commandState.openFolderLabel,
+    ],
+  );
+  const latestMenuStateRef = useRef(menuState);
+  const syncActiveRef = useRef(true);
+  latestMenuStateRef.current = menuState;
+
+  const enqueueMenuSync = useCallback((state: AppMenuState): Promise<void> => {
+    const nextSync = appMenuSyncQueue.then(async () => {
+      if (!syncActiveRef.current) {
+        return;
+      }
+
+      try {
+        await invoke("sync_app_menu_state", { state });
+        appMenuSyncWarningShown = false;
+      } catch (error) {
+        if (!appMenuSyncWarningShown) {
+          console.warn("[app-menu] failed to synchronize native menu state", {
+            error,
+          });
+          appMenuSyncWarningShown = true;
+        }
+      }
+    });
+
+    appMenuSyncQueue = nextSync;
+    return nextSync;
+  }, []);
+
+  useEffect(() => {
+    syncActiveRef.current = true;
+
+    return () => {
+      syncActiveRef.current = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    void enqueueMenuSync(menuState);
+  }, [enqueueMenuSync, menuState]);
 
   useEffect(() => {
     let disposed = false;
@@ -38,8 +167,6 @@ export function useAppMenu() {
       if (disposed) {
         return;
       }
-
-      console.info("[app-menu] handling native menu action", { payload });
 
       try {
         switch (payload.action) {
@@ -51,6 +178,12 @@ export function useAppMenu() {
             return;
           case "show_find":
             showFindBar();
+            return;
+          case "find_next":
+            findNext("native-menu.find-next");
+            return;
+          case "find_previous":
+            findPrevious("native-menu.find-previous");
             return;
           case "show_filter":
             showFilterDialog();
@@ -67,11 +200,23 @@ export function useAppMenu() {
           case "refresh":
             await refreshActiveSource();
             return;
+          case "toggle_sidebar":
+            toggleSidebar();
+            return;
           case "toggle_details":
             toggleDetailsPane();
             return;
           case "toggle_info_pane":
             toggleInfoPane();
+            return;
+          case "increase_text_size":
+            increaseLogListTextSize();
+            return;
+          case "decrease_text_size":
+            decreaseLogListTextSize();
+            return;
+          case "reset_text_size":
+            resetLogListTextSize();
             return;
           case "show_about":
             showAboutDialog();
@@ -96,6 +241,29 @@ export function useAppMenu() {
           case "open_session": {
             const { openSessionDialog } = await import("../lib/session-restore");
             await openSessionDialog();
+            return;
+          }
+          case "switch_workspace": {
+            const { currentPlatform, enabledWorkspaces } =
+              useUiStore.getState();
+            const targetWorkspace = getAvailableWorkspaces(
+              currentPlatform,
+              enabledWorkspaces,
+            ).find((workspace) => workspace === payload.target_id);
+
+            if (!targetWorkspace) {
+              console.warn(
+                "[app-menu] rejected unavailable workspace target",
+                { payload, currentPlatform },
+              );
+              void enqueueMenuSync(latestMenuStateRef.current);
+              return;
+            }
+
+            switchWorkspace(
+              targetWorkspace,
+              payload.trigger || "native-menu.workspace",
+            );
             return;
           }
           case "open_known_source": {
@@ -181,18 +349,26 @@ export function useAppMenu() {
         });
     };
   }, [
+    decreaseLogListTextSize,
+    enqueueMenuSync,
+    findNext,
+    findPrevious,
+    increaseLogListTextSize,
     openKnownSourceCatalogAction,
     openSourceFileDialog,
     openSourceFolderDialog,
     refreshActiveSource,
+    resetLogListTextSize,
     showSettingsDialog,
     showAboutDialog,
     showErrorLookupDialog,
     showEvidenceBundleDialog,
     showFilterDialog,
     showFindBar,
+    switchWorkspace,
     toggleDetailsPane,
     toggleInfoPane,
     togglePauseResume,
+    toggleSidebar,
   ]);
 }

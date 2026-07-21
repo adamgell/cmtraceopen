@@ -1,6 +1,6 @@
 import { tokens } from "@fluentui/react-components";
 import { useDsregcmdStore } from "./dsregcmd-store";
-import { useAppActions } from "../../components/layout/Toolbar";
+import { useAppActions } from "../../hooks/use-app-actions";
 import {
   EmptyState,
   SectionHeader,

@@ -18,7 +18,7 @@ export async function saveSession(): Promise<string | null> {
   const filterState = useFilterStore.getState();
 
   const openTabs = uiState.openTabs;
-  if (openTabs.length === 0 && uiState.activeWorkspace === "log") {
+  if (openTabs.length === 0) {
     return null;
   }
 
