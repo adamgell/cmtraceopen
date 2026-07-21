@@ -9,7 +9,12 @@ import type {
   EspGraphPhase,
   EspWorkspacePhase,
 } from "./esp-diagnostics-store";
-import type { EspDiagnosticsSnapshot, EspPhase, EspScenario } from "./types";
+import type {
+  EspDiagnosticsSnapshot,
+  EspElevationState,
+  EspPhase,
+  EspScenario,
+} from "./types";
 
 const scenarioLabels: Record<EspScenario, string> = {
   unknown: "Scenario not detected",
@@ -181,6 +186,7 @@ function Metric({ label, value, detail, accent = false }: MetricProps) {
 
 interface EspWorkspaceHeaderProps {
   snapshot: EspDiagnosticsSnapshot | null;
+  elevation: EspElevationState | null;
   workspacePhase: EspDiagnosticsStore["phase"];
   graphPhase: EspDiagnosticsStore["graphPhase"];
   actions: ReactNode;
@@ -188,6 +194,7 @@ interface EspWorkspaceHeaderProps {
 
 export function EspWorkspaceHeader({
   snapshot,
+  elevation,
   workspacePhase,
   graphPhase,
   actions,
@@ -198,9 +205,9 @@ export function EspWorkspaceHeader({
   const espPhase = snapshot
     ? espPhaseLabels[snapshot.phase]
     : "No evidence loaded";
-  const elevation = !snapshot
+  const elevationLabel = !elevation
     ? "Unknown"
-    : snapshot.elevation.isElevated
+    : elevation.isElevated
       ? "Elevated"
       : "Standard user";
 
@@ -285,7 +292,7 @@ export function EspWorkspaceHeader({
           accent={workspacePhase === "live"}
         />
         <Metric label="Graph" value={graphStateLabels[graphPhase]} />
-        <Metric label="Administrator" value={elevation} />
+        <Metric label="Administrator" value={elevationLabel} />
       </div>
     </header>
   );

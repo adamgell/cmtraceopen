@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import type {
   EspDiagnosticsSnapshot,
+  EspElevationState,
   EspGraphOverlay,
   EspRawEvidenceRecord,
   EspSessionUpdate,
@@ -78,6 +79,11 @@ export interface EspDiagnosticsStore {
   sessionId: string | null;
   sequence: number;
   snapshot: EspDiagnosticsSnapshot | null;
+  // Authoritative process elevation from the standalone get_esp_elevation_state
+  // probe. Elevation is constant for the process lifetime, so this is the
+  // source of truth for the UI regardless of whether/when the (collected-later)
+  // snapshot has reduced its own elevation fact.
+  elevationProbe: EspElevationState | null;
   error: string | null;
   // The public ID is observational; exact run ownership is this opaque lease.
   graphRequestId: string | null;
@@ -121,6 +127,7 @@ export interface EspDiagnosticsStore {
   setEvidenceDockHeight(height: number, workspaceHeight?: number): void;
   markEvidenceRead(): void;
   clearStoppedSession(sessionId: string): void;
+  setElevationProbe(elevation: EspElevationState | null): void;
 }
 
 function normalizeIdentityValue(value: string | null): string {
@@ -394,6 +401,7 @@ export const useEspDiagnosticsStore = create<EspDiagnosticsStore>((set) => ({
   sessionId: null,
   sequence: 0,
   snapshot: null,
+  elevationProbe: null,
   error: null,
   graphRequestId: null,
   graphRequestLease: null,
@@ -691,6 +699,8 @@ export const useEspDiagnosticsStore = create<EspDiagnosticsStore>((set) => ({
     }),
 
   markEvidenceRead: () => set({ unreadEvidenceCount: 0 }),
+
+  setElevationProbe: (elevationProbe) => set({ elevationProbe }),
 
   clearStoppedSession: (sessionId) =>
     set((state) => {

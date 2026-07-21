@@ -1183,9 +1183,16 @@ describe("optional Graph enrichment presentation", () => {
 
 describe("ESP elevation recommendation", () => {
   it("lists exact restricted evidence, states the numeric coverage impact, and invokes explicit relaunch", async () => {
-    vi.mocked(invoke).mockResolvedValueOnce({
-      launched: true,
-      reason: "launched",
+    // The workspace now always probes get_esp_elevation_state on mount, so route
+    // the mock by command name instead of relying on call order.
+    vi.mocked(invoke).mockImplementation(async (cmd) => {
+      if (cmd === "get_esp_elevation_state") {
+        return { isElevated: false, restartSupported: true, restrictedSources: [] };
+      }
+      if (cmd === "restart_esp_as_administrator") {
+        return { launched: true, reason: "launched" };
+      }
+      return undefined;
     });
     showSnapshot();
     render(<EspDiagnosticsWorkspace />);
@@ -1267,6 +1274,42 @@ describe("ESP elevation recommendation", () => {
       screen.queryByRole("region", {
         name: "Administrator coverage recommendation",
       }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("trusts the standalone elevation probe when a stalled snapshot still reports not elevated", async () => {
+    // Repro of the Windows-on-ARM report: the process is elevated, but the live
+    // session stalled before reducing its elevation fact, so the snapshot still
+    // holds the reducer default (not elevated). The authoritative probe wins.
+    vi.mocked(invoke).mockImplementation(async (cmd) => {
+      if (cmd === "get_esp_elevation_state") {
+        return { isElevated: true, restartSupported: true, restrictedSources: [] };
+      }
+      return undefined;
+    });
+    showSnapshot(
+      makeSnapshot({
+        elevation: {
+          isElevated: false,
+          restartSupported: true,
+          restrictedSources: ["HKLM Enrollment Status Tracking registry"],
+        },
+      }),
+    );
+    render(<EspDiagnosticsWorkspace />);
+
+    await waitFor(() =>
+      expect(
+        screen.getByText("Elevated", { selector: "strong" }),
+      ).toBeInTheDocument(),
+    );
+    expect(
+      screen.queryByRole("region", {
+        name: "Administrator coverage recommendation",
+      }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Restart as administrator" }),
     ).not.toBeInTheDocument();
   });
 });

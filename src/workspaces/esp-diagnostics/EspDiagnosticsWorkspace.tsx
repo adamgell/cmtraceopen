@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect } from "react";
 import { Button, Spinner, tokens } from "@fluentui/react-components";
 import {
   DocumentArrowUpRegular,
@@ -151,26 +151,51 @@ export function EspDiagnosticsWorkspace() {
   const snapshot = useEspDiagnosticsStore((state) => state.snapshot);
   const error = useEspDiagnosticsStore((state) => state.error);
   const graphError = useEspDiagnosticsStore((state) => state.graphError);
-  const [entryElevation, setEntryElevation] =
-    useState<EspElevationState | null>(null);
+  const elevationProbe = useEspDiagnosticsStore((state) => state.elevationProbe);
+  const setElevationProbe = useEspDiagnosticsStore(
+    (state) => state.setElevationProbe,
+  );
   const liveSupported = currentPlatform === "windows";
   const isBusy = ["analyzing", "starting", "stopping"].includes(phase);
-  const effectiveElevation = snapshot?.elevation ?? entryElevation;
+  // Elevation is a constant property of the running process. The standalone
+  // probe and the (collected-later) snapshot both derive from the same process
+  // token, and neither can falsely report "elevated" -- so treat the process as
+  // elevated if EITHER source confirms it. This fixes the case where the
+  // snapshot still holds its default "not elevated" because a live session
+  // stalled before reducing the elevation fact, without regressing when only
+  // one source is available. Restricted-source coverage is only discovered
+  // during collection, so keep the snapshot's list when present.
+  const effectiveElevation: EspElevationState | null =
+    elevationProbe || snapshot
+      ? {
+          isElevated:
+            (elevationProbe?.isElevated ?? false) ||
+            (snapshot?.elevation.isElevated ?? false),
+          restartSupported:
+            elevationProbe?.restartSupported ??
+            snapshot?.elevation.restartSupported ??
+            true,
+          restrictedSources:
+            snapshot?.elevation.restrictedSources ??
+            elevationProbe?.restrictedSources ??
+            [],
+        }
+      : null;
 
   useEffect(() => {
-    if (currentPlatform !== "windows" || snapshot) {
-      setEntryElevation(null);
+    if (currentPlatform !== "windows") {
+      setElevationProbe(null);
       return;
     }
 
     let disposed = false;
     const applyFallback = () => {
-      if (!disposed) setEntryElevation(ELEVATION_PROBE_FALLBACK);
+      if (!disposed) setElevationProbe(ELEVATION_PROBE_FALLBACK);
     };
     void getEspElevationState()
       .then((elevation) => {
         if (disposed) return;
-        setEntryElevation(
+        setElevationProbe(
           validElevationState(elevation) ? elevation : ELEVATION_PROBE_FALLBACK,
         );
       })
@@ -178,7 +203,7 @@ export function EspDiagnosticsWorkspace() {
     return () => {
       disposed = true;
     };
-  }, [currentPlatform, snapshot]);
+  }, [currentPlatform, setElevationProbe]);
 
   const importCapturedEvidence = useCallback(async () => {
     const path = normalizeSelection(
@@ -292,6 +317,7 @@ export function EspDiagnosticsWorkspace() {
     >
       <EspWorkspaceHeader
         snapshot={snapshot}
+        elevation={effectiveElevation}
         workspacePhase={phase}
         graphPhase={graphPhase}
         actions={headerActions}

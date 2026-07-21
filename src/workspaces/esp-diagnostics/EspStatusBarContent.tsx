@@ -25,6 +25,7 @@ const graphLabels = {
 export function EspStatusBarContent() {
   const phase = useEspDiagnosticsStore((state) => state.phase);
   const snapshot = useEspDiagnosticsStore((state) => state.snapshot);
+  const elevationProbe = useEspDiagnosticsStore((state) => state.elevationProbe);
   const graphPhase = useEspDiagnosticsStore((state) => state.graphPhase);
 
   const evidenceCount = snapshot?.rawEvidence.length ?? 0;
@@ -35,9 +36,16 @@ export function EspStatusBarContent() {
         ),
       ).size
     : 0;
-  const elevationLabel = !snapshot
+  // Treat the process as elevated if either the authoritative standalone probe
+  // or the collected snapshot confirms it (the snapshot stays "not elevated"
+  // until evidence collection reduces the elevation fact).
+  const hasElevationInfo = elevationProbe != null || snapshot != null;
+  const isElevated =
+    (elevationProbe?.isElevated ?? false) ||
+    (snapshot?.elevation.isElevated ?? false);
+  const elevationLabel = !hasElevationInfo
     ? "Elevation unknown"
-    : snapshot.elevation.isElevated
+    : isElevated
       ? "Elevated"
       : "Not elevated";
   const isLive = phase === "live";
@@ -100,7 +108,7 @@ export function EspStatusBarContent() {
         <span
           style={{
             color:
-              snapshot && !snapshot.elevation.isElevated
+              hasElevationInfo && !isElevated
                 ? tokens.colorPaletteYellowForeground2
                 : tokens.colorNeutralForeground2,
           }}
