@@ -1,5 +1,7 @@
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useUiStore } from "../../stores/ui-store";
+import { DEFAULT_LOG_LIST_FONT_SIZE } from "../../lib/log-accessibility";
 import {
   ESP_EVIDENCE_DOCK_DEFAULT_HEIGHT,
   useEspDiagnosticsStore,
@@ -1217,5 +1219,23 @@ describe("LiveEvidenceTable", () => {
     expect(
       screen.getByRole("complementary", { name: "Raw evidence provenance" }),
     ).toHaveTextContent("record-1");
+  });
+
+  it("scales evidence rows with the accessibility font-size control", () => {
+    useEspDiagnosticsStore.getState().setEvidenceViewMode("docked");
+    useUiStore.setState({ logListFontSize: 11 });
+    render(<LiveEvidenceDock snapshot={snapshot(baseRecords)} />);
+
+    const table = screen.getByRole("table", { name: "Live evidence records" });
+    const smallFontSize = Number.parseFloat(table.style.fontSize);
+
+    act(() => useUiStore.setState({ logListFontSize: 20 }));
+    const largeFontSize = Number.parseFloat(table.style.fontSize);
+
+    expect(Number.isFinite(smallFontSize)).toBe(true);
+    expect(Number.isFinite(largeFontSize)).toBe(true);
+    expect(largeFontSize).toBeGreaterThan(smallFontSize);
+
+    useUiStore.setState({ logListFontSize: DEFAULT_LOG_LIST_FONT_SIZE });
   });
 });

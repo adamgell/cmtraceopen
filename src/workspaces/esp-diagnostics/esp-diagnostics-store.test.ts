@@ -359,7 +359,7 @@ describe("ESP typed command wrappers", () => {
     );
   });
 
-  it("falls back for structured command errors without leaking fields", async () => {
+  it("surfaces a structured command error message without leaking sibling fields", async () => {
     const snapshot = makeSnapshot(["structured-command-error"]);
     const request: EspGraphRequest = {
       requestId: "graph-structured-error",
@@ -384,8 +384,10 @@ describe("ESP typed command wrappers", () => {
     );
 
     expect(error).toBeInstanceOf(Error);
+    // The precise backend reason (a plain-data-object `message`) now reaches
+    // the UI, while sibling fields such as body/token are never read.
     expect((error as Error).message).toBe(
-      "Command 'graph_fetch_esp_diagnostics' failed.",
+      "Microsoft Graph transport is unavailable.",
     );
     expect((error as Error).message).not.toContain("body-secret");
     expect((error as Error).message).not.toContain("token-secret");
@@ -1515,6 +1517,45 @@ describe("ESP Graph overlay state", () => {
 });
 
 describe("ESP Graph scheduling", () => {
+  it("fails a malformed Graph overlay through the wire validator instead of applying it", async () => {
+    const malformedOverlay = makeOverlay("graph-malformed-overlay");
+    // Backend/schema drift: a required section is missing from the overlay.
+    delete (malformedOverlay as Partial<EspGraphOverlay>).deviceMatch;
+    const fetchGraph = vi.fn(async () => malformedOverlay);
+    const cancelGraph = vi.fn(async () => undefined);
+    const coordinator = createEspGraphCoordinator({
+      fetchGraph,
+      cancelGraph,
+      createRequestId: () => "graph-malformed-overlay",
+    });
+    useUiStore.setState({
+      graphApiEnabled: true,
+      graphApiStatus: "connected",
+    });
+    useEspDiagnosticsStore.setState({
+      phase: "ready",
+      snapshot: makeSnapshot(["local-malformed-overlay"], "malformed-overlay"),
+    });
+
+    const applyGraphOverlay = vi
+      .spyOn(useEspDiagnosticsStore.getState(), "applyGraphOverlay")
+      .mockImplementation(() => undefined);
+    const failGraph = vi.spyOn(useEspDiagnosticsStore.getState(), "failGraph");
+
+    await expect(coordinator.reconcile()).resolves.toBeUndefined();
+
+    expect(fetchGraph).toHaveBeenCalledTimes(1);
+    expect(applyGraphOverlay).not.toHaveBeenCalled();
+    expect(failGraph).toHaveBeenCalledTimes(1);
+    expect(failGraph.mock.calls[0][0]).toBe("graph-malformed-overlay");
+    expect(useEspDiagnosticsStore.getState().graphPhase).toBe("error");
+    expect(useEspDiagnosticsStore.getState().snapshot?.graph).toBeNull();
+
+    applyGraphOverlay.mockRestore();
+    failGraph.mockRestore();
+    coordinator.dispose();
+  });
+
   it("refreshes through ESP fetch and cancel IPC without requesting missing permissions", async () => {
     const firstOverlay = deferred<EspGraphOverlay>();
     const requestMissingPermissions = vi.fn(async () => undefined);
@@ -3277,7 +3318,7 @@ describe("ESP Graph scheduling", () => {
     coordinator.dispose();
   });
 
-  it("falls back for structured coordinator errors without leaking fields", async () => {
+  it("surfaces a structured coordinator error message without leaking fields", async () => {
     const coordinator = createEspGraphCoordinator({
       fetchGraph: vi.fn(async () => {
         throw {
@@ -3302,10 +3343,12 @@ describe("ESP Graph scheduling", () => {
 
     await coordinator.reconcile();
 
+    // The plain-data-object rejection's `message` now reaches the UI, while the
+    // sensitive sibling fields (body/token) are never read.
     expect(useEspDiagnosticsStore.getState()).toMatchObject({
       graphRequestId: null,
       graphPhase: "error",
-      graphError: "Microsoft Graph enrichment failed.",
+      graphError: "Microsoft Graph consent is required.",
     });
     expect(useEspDiagnosticsStore.getState().graphError).not.toContain(
       "coordinator-body-secret",

@@ -9,6 +9,7 @@ import {
 import { invoke } from "@tauri-apps/api/core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useUiStore } from "../../stores/ui-store";
+import { DEFAULT_LOG_LIST_FONT_SIZE } from "../../lib/log-accessibility";
 import { ActionCenter } from "./ActionCenter";
 import { EvidenceSections } from "./EvidenceSections";
 import { EspDiagnosticsWorkspace } from "./EspDiagnosticsWorkspace";
@@ -421,7 +422,10 @@ beforeEach(() => {
     useEspDiagnosticsStore.getInitialState(),
     true,
   );
-  useUiStore.setState({ currentPlatform: "windows" });
+  useUiStore.setState({
+    currentPlatform: "windows",
+    logListFontSize: DEFAULT_LOG_LIST_FONT_SIZE,
+  });
 });
 
 describe("ESP diagnostic cockpit frame", () => {
@@ -1627,6 +1631,22 @@ describe("independent live activity", () => {
 });
 
 describe("workload table", () => {
+  it("scales workload cells with the accessibility font-size control", () => {
+    useUiStore.setState({ logListFontSize: 11 });
+    render(<EspWorkloadTable snapshot={makeSnapshot()} />);
+
+    const statusSmall = screen.getByTestId("esp-workload-effective-status");
+    const small = Number.parseFloat(statusSmall.style.fontSize);
+
+    act(() => useUiStore.setState({ logListFontSize: 20 }));
+    const statusLarge = screen.getByTestId("esp-workload-effective-status");
+    const large = Number.parseFloat(statusLarge.style.fontSize);
+
+    expect(Number.isFinite(small)).toBe(true);
+    expect(Number.isFinite(large)).toBe(true);
+    expect(large).toBeGreaterThan(small);
+  });
+
   it("uses nested status detail for visual severity and shows both wire statuses", () => {
     const workload = makeWorkload(
       "nested-failure",
@@ -2026,6 +2046,29 @@ describe("complete single-page evidence composition", () => {
     expect(
       within(evidence).getByRole("button", { name: "Mask sensitive values" }),
     ).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("scales evidence item text with the accessibility font-size control", () => {
+    useUiStore.setState({ logListFontSize: 11 });
+    render(<EvidenceSections snapshot={makeSnapshot()} />);
+
+    const evidence = screen.getByRole("region", { name: "ESP evidence" });
+    fireEvent.click(within(evidence).getByText("Identity and profile"));
+
+    const readTitleFontSize = () => {
+      const item = within(evidence).getAllByTestId("esp-evidence-item")[0];
+      const title = item.querySelector("strong");
+      if (!title) throw new Error("Expected an evidence item title");
+      return Number.parseFloat((title as HTMLElement).style.fontSize);
+    };
+
+    const small = readTitleFontSize();
+    act(() => useUiStore.setState({ logListFontSize: 20 }));
+    const large = readTitleFontSize();
+
+    expect(Number.isFinite(small)).toBe(true);
+    expect(Number.isFinite(large)).toBe(true);
+    expect(large).toBeGreaterThan(small);
   });
 
   it("does not mount evidence item bodies until their disclosure is opened", () => {

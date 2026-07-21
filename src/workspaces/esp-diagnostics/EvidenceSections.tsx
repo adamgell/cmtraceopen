@@ -9,7 +9,9 @@ import {
 import {
   LOG_MONOSPACE_FONT_FAMILY,
   LOG_UI_FONT_FAMILY,
+  getLogListMetrics,
 } from "../../lib/log-accessibility";
+import { useUiStore } from "../../stores/ui-store";
 import {
   buildEspEvidenceViewModel,
   type EspEvidenceItemViewModel,
@@ -34,6 +36,38 @@ interface CanonicalEvidenceTarget {
 }
 
 type CanonicalEvidenceTargets = Map<string, CanonicalEvidenceTarget>;
+
+interface EvidenceFontMetrics {
+  /** Dense value/label text — one tier below the standard log row (10px at the default). */
+  body: number;
+  /** Slightly emphasized text such as section titles (11px at the default). */
+  strong: number;
+  /** Evidence item titles (12px at the default). */
+  title: number;
+  /** Section headings, matched to the standard log row size (13px at the default). */
+  heading: number;
+}
+
+/**
+ * Derives the evidence surface's font tiers from the shared accessibility
+ * font-size control so every dense row tracks `logListFontSize` while keeping
+ * its compact CMTrace layout. Unitless line heights at the call sites let the
+ * vertical rhythm scale with the font without clipping at larger sizes.
+ */
+function getEvidenceFontMetrics(logListFontSize: number): EvidenceFontMetrics {
+  const { fontSize } = getLogListMetrics(logListFontSize);
+  return {
+    body: Math.max(9, fontSize - 3),
+    strong: Math.max(10, fontSize - 2),
+    title: Math.max(11, fontSize - 1),
+    heading: fontSize,
+  };
+}
+
+function useEvidenceFontMetrics(): EvidenceFontMetrics {
+  const logListFontSize = useUiStore((s) => s.logListFontSize);
+  return useMemo(() => getEvidenceFontMetrics(logListFontSize), [logListFontSize]);
+}
 
 function sourceStateLabel(state: EspEvidenceSourceState): string {
   switch (state) {
@@ -92,10 +126,12 @@ function EvidenceReferences({
   item,
   sectionId,
   canonicalTargets,
+  fontSize,
 }: {
   item: EspEvidenceItemViewModel;
   sectionId: string;
   canonicalTargets: CanonicalEvidenceTargets;
+  fontSize: number;
 }) {
   if (item.evidence.length === 0) return null;
   const references = item.evidence.filter(
@@ -131,8 +167,8 @@ function EvidenceReferences({
               backgroundColor: tokens.colorNeutralBackground3,
               color: tokens.colorNeutralForeground2,
               fontFamily: LOG_MONOSPACE_FONT_FAMILY,
-              fontSize: 10,
-              lineHeight: "13px",
+              fontSize,
+              lineHeight: 1.3,
             }}
           >
             {reference.sourceArtifactId} · {reference.evidenceId}
@@ -152,6 +188,7 @@ function EvidenceItem({
   sectionId: string;
   canonicalTargets: CanonicalEvidenceTargets;
 }) {
+  const fonts = useEvidenceFontMetrics();
   const coverageTarget = item.id.startsWith("coverage-");
   return (
     <article
@@ -180,8 +217,8 @@ function EvidenceItem({
             minWidth: 0,
             overflow: "hidden",
             fontFamily: LOG_UI_FONT_FAMILY,
-            fontSize: 12,
-            lineHeight: "16px",
+            fontSize: fonts.title,
+            lineHeight: 1.3,
             textOverflow: "ellipsis",
             whiteSpace: "nowrap",
           }}
@@ -197,8 +234,8 @@ function EvidenceItem({
               overflow: "hidden",
               color: tokens.colorNeutralForeground2,
               fontFamily: LOG_MONOSPACE_FONT_FAMILY,
-              fontSize: 10,
-              lineHeight: "13px",
+              fontSize: fonts.body,
+              lineHeight: 1.3,
               textOverflow: "ellipsis",
               whiteSpace: "nowrap",
             }}
@@ -213,9 +250,9 @@ function EvidenceItem({
           style={{
             marginTop: 2,
             color: tokens.colorBrandForeground1,
-            fontSize: 10,
+            fontSize: fonts.body,
             fontWeight: 650,
-            lineHeight: "14px",
+            lineHeight: 1.4,
           }}
         >
           Microsoft Graph · {item.graphName}
@@ -235,10 +272,10 @@ function EvidenceItem({
               style={{
                 color: tokens.colorNeutralForeground3,
                 fontFamily: LOG_MONOSPACE_FONT_FAMILY,
-                fontSize: 10,
+                fontSize: fonts.body,
                 fontWeight: 700,
                 letterSpacing: "0.06em",
-                lineHeight: "11px",
+                lineHeight: 1.1,
                 textTransform: "uppercase",
               }}
             >
@@ -258,9 +295,9 @@ function EvidenceItem({
                   field.sensitivity === "public"
                     ? LOG_UI_FONT_FAMILY
                     : LOG_MONOSPACE_FONT_FAMILY,
-                fontSize: 10,
+                fontSize: fonts.body,
                 fontWeight: field.sensitivity === "public" ? 500 : 650,
-                lineHeight: "14px",
+                lineHeight: 1.4,
               }}
             >
               {field.value}
@@ -272,6 +309,7 @@ function EvidenceItem({
         item={item}
         sectionId={sectionId}
         canonicalTargets={canonicalTargets}
+        fontSize={fonts.body}
       />
     </article>
   );
@@ -288,6 +326,7 @@ function EvidenceSectionBody({
   canonicalTargets: CanonicalEvidenceTargets;
   onPageChange(page: number): void;
 }) {
+  const fonts = useEvidenceFontMetrics();
   const maximumPage = Math.max(
     0,
     Math.ceil(section.items.length / ESP_EVIDENCE_ITEM_WINDOW_SIZE) - 1,
@@ -315,9 +354,9 @@ function EvidenceSectionBody({
         style={{
           color: sourceStateColor(section.sourceState),
           fontFamily: LOG_MONOSPACE_FONT_FAMILY,
-          fontSize: 10,
+          fontSize: fonts.body,
           fontWeight: 650,
-          lineHeight: "13px",
+          lineHeight: 1.3,
         }}
       >
         {sourceStateLabel(section.sourceState)} · {section.sourceNote}
@@ -330,7 +369,7 @@ function EvidenceSectionBody({
             justifyContent: "space-between",
             gap: 8,
             color: tokens.colorNeutralForeground2,
-            fontSize: 10,
+            fontSize: fonts.body,
           }}
         >
           <span>
@@ -367,6 +406,7 @@ function EvidenceSectionBody({
 }
 
 export function EvidenceSections({ snapshot }: EvidenceSectionsProps) {
+  const fonts = useEvidenceFontMetrics();
   const [revealSensitive, setRevealSensitive] = useState(false);
   const [openSections, setOpenSections] = useState<Set<string>>(
     () => new Set(),
@@ -485,10 +525,10 @@ export function EvidenceSections({ snapshot }: EvidenceSectionsProps) {
             style={{
               color: tokens.colorBrandForeground1,
               fontFamily: LOG_MONOSPACE_FONT_FAMILY,
-              fontSize: 10,
+              fontSize: fonts.body,
               fontWeight: 700,
               letterSpacing: "0.12em",
-              lineHeight: "11px",
+              lineHeight: 1.1,
               textTransform: "uppercase",
             }}
           >
@@ -499,9 +539,9 @@ export function EvidenceSections({ snapshot }: EvidenceSectionsProps) {
             style={{
               margin: "1px 0 0",
               fontFamily: LOG_UI_FONT_FAMILY,
-              fontSize: 13,
+              fontSize: fonts.heading,
               fontWeight: 650,
-              lineHeight: "17px",
+              lineHeight: 1.3,
             }}
           >
             ESP evidence
@@ -510,8 +550,8 @@ export function EvidenceSections({ snapshot }: EvidenceSectionsProps) {
             style={{
               margin: "2px 0 0",
               color: tokens.colorNeutralForeground2,
-              fontSize: 10,
-              lineHeight: "14px",
+              fontSize: fonts.body,
+              lineHeight: 1.4,
             }}
           >
             {viewModel.disclosurePolicy}
@@ -565,14 +605,14 @@ export function EvidenceSections({ snapshot }: EvidenceSectionsProps) {
                 fontFamily: LOG_UI_FONT_FAMILY,
               }}
             >
-              <span style={{ fontSize: 11, fontWeight: 650 }}>
+              <span style={{ fontSize: fonts.strong, fontWeight: 650 }}>
                 {section.title}
               </span>
               <span
                 style={{
                   color: tokens.colorNeutralForeground2,
-                  fontSize: 10,
-                  lineHeight: "14px",
+                  fontSize: fonts.body,
+                  lineHeight: 1.4,
                 }}
               >
                 {section.description}
@@ -584,9 +624,9 @@ export function EvidenceSections({ snapshot }: EvidenceSectionsProps) {
                   justifyContent: "flex-end",
                   gap: 4,
                   color: sourceStateColor(section.sourceState),
-                  fontSize: 10,
+                  fontSize: fonts.body,
                   fontWeight: 700,
-                  lineHeight: "13px",
+                  lineHeight: 1.3,
                   textTransform: "uppercase",
                   whiteSpace: "nowrap",
                 }}

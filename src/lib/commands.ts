@@ -53,6 +53,98 @@ export interface UpdatePolicy {
 
 const normalizedCommandErrorMessages = new WeakMap<Error, string>();
 
+/**
+ * True only for plain data objects — those whose prototype is `Object.prototype`
+ * or `null`. Serialized Rust command errors (e.g. `{ kind, path, message }`)
+ * arrive this way, whereas class instances (`Error`, custom classes) do not and
+ * must keep falling back. The prototype probe is wrapped so a hostile Proxy that
+ * traps `getPrototypeOf` and throws is contained rather than allowed to escape.
+ */
+function isPlainDataObject(error: object): boolean {
+  let prototype: unknown;
+  try {
+    prototype = Object.getPrototypeOf(error);
+  } catch {
+    return false;
+  }
+  return prototype === Object.prototype || prototype === null;
+}
+
+/**
+ * Reads an own string DATA property without ever invoking a getter.
+ *
+ * Accessor descriptors (a `get`/`set`) are ignored outright, so a hostile
+ * `message` getter is never called. A forged data descriptor — e.g. a Proxy
+ * `getOwnPropertyDescriptor` trap that fabricates a value — is rejected unless a
+ * direct read of the same own property agrees; a genuine plain data object
+ * always agrees, and the direct read cannot trigger a getter because accessor
+ * descriptors were already discarded.
+ */
+function readOwnStringData(error: object, key: string): string | null {
+  let descriptor: PropertyDescriptor | undefined;
+  try {
+    descriptor = Object.getOwnPropertyDescriptor(error, key);
+  } catch {
+    return null;
+  }
+  if (
+    !descriptor ||
+    typeof descriptor.get === "function" ||
+    typeof descriptor.set === "function"
+  ) {
+    return null;
+  }
+  const value = descriptor.value;
+  if (typeof value !== "string") {
+    return null;
+  }
+  let directValue: unknown;
+  try {
+    directValue = (error as Record<string, unknown>)[key];
+  } catch {
+    return null;
+  }
+  if (directValue !== value) {
+    return null;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+/** Turns a Rust error `kind` identifier (e.g. `sourceNotFound`) into a readable phrase. */
+function humanizeErrorKind(kind: string): string {
+  const spaced = kind
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (spaced.length === 0) {
+    return kind;
+  }
+  return spaced.charAt(0).toUpperCase() + spaced.slice(1).toLowerCase();
+}
+
+/**
+ * Extracts the backend reason from a plain-data-object rejection (serialized
+ * Rust enum error), preferring `message` and otherwise deriving it from `kind`.
+ * Returns null for anything that is not a plain data object so the caller keeps
+ * the safe fallback.
+ */
+function getPlainDataErrorMessage(error: object): string | null {
+  if (!isPlainDataObject(error)) {
+    return null;
+  }
+  const message = readOwnStringData(error, "message");
+  if (message !== null) {
+    return message;
+  }
+  const kind = readOwnStringData(error, "kind");
+  if (kind !== null) {
+    return humanizeErrorKind(kind);
+  }
+  return null;
+}
+
 export function getSafeErrorMessage(
   error: unknown,
   fallback = "The operation failed.",
@@ -65,10 +157,26 @@ export function getSafeErrorMessage(
     (typeof error === "object" && error !== null) ||
     typeof error === "function"
   ) {
-    // Unknown objects and functions may be hostile Proxies. Exact-identity
-    // WeakMap lookup is the only trusted object channel and cannot invoke
-    // Proxy traps.
-    return normalizedCommandErrorMessages.get(error as Error) ?? fallback;
+    // Trusted, self-normalized command errors are recorded by exact identity;
+    // this WeakMap channel cannot invoke Proxy traps.
+    const trusted = normalizedCommandErrorMessages.get(error as Error);
+    if (trusted !== undefined) {
+      return trusted;
+    }
+
+    // Serialized Rust command errors arrive as plain data objects. Surface their
+    // precise reason while keeping the hostile-Proxy protection intact: only
+    // plain-prototype objects are inspected, no getter is ever invoked, and a
+    // forged descriptor value is rejected. Class instances, functions, Proxies,
+    // and accessor-only objects fall through to the safe fallback.
+    if (typeof error === "object") {
+      const plainMessage = getPlainDataErrorMessage(error);
+      if (plainMessage !== null) {
+        return plainMessage;
+      }
+    }
+
+    return fallback;
   }
 
   return fallback;

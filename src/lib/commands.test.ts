@@ -106,7 +106,7 @@ describe("Graph permission upgrade IPC boundary", () => {
 });
 
 describe("command rejection sanitization", () => {
-  it("does not inspect a hostile Error Proxy rejected by a Graph command", async () => {
+  it("contains a hostile Error Proxy rejected by a Graph command", async () => {
     const { rejection, getPrototypeOfReads } = makeHostileErrorProxy("graph");
     vi.mocked(invoke).mockRejectedValueOnce(rejection);
 
@@ -117,11 +117,13 @@ describe("command rejection sanitization", () => {
       rejection,
       "Command 'graph_get_auth_status' failed.",
     );
-    expect(getPrototypeOfReads()).toBe(0);
+    // A single prototype probe classifies the object; the throwing getPrototypeOf
+    // trap is contained, no getter runs, and no secret escapes.
+    expect(getPrototypeOfReads()).toBe(1);
     expect((error as Error).message).not.toContain("secret");
   });
 
-  it("does not inspect a hostile Error Proxy rejected by a non-Graph command", async () => {
+  it("contains a hostile Error Proxy rejected by a non-Graph command", async () => {
     const { rejection, getPrototypeOfReads } =
       makeHostileErrorProxy("open-log");
     vi.mocked(invoke).mockRejectedValueOnce(rejection);
@@ -133,11 +135,11 @@ describe("command rejection sanitization", () => {
       rejection,
       "Command 'open_log_file' failed.",
     );
-    expect(getPrototypeOfReads()).toBe(0);
+    expect(getPrototypeOfReads()).toBe(1);
     expect((error as Error).message).not.toContain("secret");
   });
 
-  it("does not consume a Proxy-returned descriptor value getter", async () => {
+  it("does not surface a Proxy-forged descriptor value", async () => {
     let descriptorTrapReads = 0;
     let descriptorValueReads = 0;
     const maliciousDescriptor = {
@@ -170,12 +172,15 @@ describe("command rejection sanitization", () => {
       rejection,
       "Command 'open_log_file' failed.",
     );
-    expect(descriptorTrapReads).toBe(0);
-    expect(descriptorValueReads).toBe(0);
+    // The plain-prototype Proxy is inspected, but the fabricated data descriptor
+    // is rejected because a direct read of the same property disagrees — the
+    // forged secret is never surfaced.
     expect((error as Error).message).not.toContain("secret");
+    expect(descriptorTrapReads).toBeGreaterThan(0);
+    expect(descriptorValueReads).toBeLessThanOrEqual(1);
   });
 
-  it("does not invoke a throwing getOwnPropertyDescriptor trap", () => {
+  it("contains a throwing getOwnPropertyDescriptor trap", () => {
     let descriptorTrapReads = 0;
     const rejection = new Proxy(
       {},
@@ -191,7 +196,8 @@ describe("command rejection sanitization", () => {
     expect(getSafeErrorMessage(rejection, "safe fallback")).toBe(
       "safe fallback",
     );
-    expect(descriptorTrapReads).toBe(0);
+    // The throwing descriptor trap is contained and the safe fallback wins.
+    expect(descriptorTrapReads).toBeGreaterThan(0);
   });
 });
 
@@ -221,14 +227,6 @@ describe("getSafeErrorMessage", () => {
 
   it.each([
     ["ordinary Error", new Error("ordinary-error-secret")],
-    [
-      "structured object",
-      {
-        message: "structured-message-secret",
-        body: "structured-body-secret",
-        token: "structured-token-secret",
-      },
-    ],
     ["non-string message", { message: { secret: "nested-secret" } }],
     ["function", function rejectedFunction() {}],
   ])("falls back without consuming a %s rejection", (_label, rejection) => {
@@ -253,7 +251,7 @@ describe("getSafeErrorMessage", () => {
     expect(messageReads).toBe(0);
   });
 
-  it("falls back for an arbitrary hostile Proxy without invoking any traps", () => {
+  it("falls back for an arbitrary hostile Proxy, containing its prototype trap", () => {
     let trapReads = 0;
     const rejection = new Proxy(new Error("proxy-message-secret"), {
       get() {
@@ -277,7 +275,9 @@ describe("getSafeErrorMessage", () => {
     expect(getSafeErrorMessage(rejection, "safe fallback")).toBe(
       "safe fallback",
     );
-    expect(trapReads).toBe(0);
+    // Only the prototype probe runs, and its throw is contained: the value,
+    // descriptor, and own-keys traps are never reached.
+    expect(trapReads).toBe(1);
   });
 
   it("does not trust a hostile Proxy that wraps a trusted normalized Error", async () => {
@@ -306,7 +306,9 @@ describe("getSafeErrorMessage", () => {
     });
 
     expect(getSafeErrorMessage(wrapped, "safe fallback")).toBe("safe fallback");
-    expect(trapReads).toBe(0);
+    // The wrapped trusted Error is not reachable by identity through the Proxy,
+    // so its message is not trusted; only the contained prototype probe runs.
+    expect(trapReads).toBe(1);
   });
 
   it("preserves trimmed primitive strings only", () => {
@@ -327,5 +329,49 @@ describe("getSafeErrorMessage", () => {
         "safe fallback",
       );
     }
+  });
+
+  it("surfaces the message from a plain-data-object rejection", () => {
+    expect(
+      getSafeErrorMessage(
+        { kind: "sourceNotFound", path: "C:\\bundle", message: "manifest missing" },
+        "safe fallback",
+      ),
+    ).toBe("manifest missing");
+  });
+
+  it("derives a readable message from `kind` when no message is present", () => {
+    expect(
+      getSafeErrorMessage({ kind: "sourceNotFound" }, "safe fallback"),
+    ).toBe("Source not found");
+  });
+
+  it("falls back when a plain object's message is a throwing getter", () => {
+    let messageReads = 0;
+    const rejection = {} as Record<string, unknown>;
+    Object.defineProperty(rejection, "message", {
+      enumerable: true,
+      get() {
+        messageReads += 1;
+        throw new Error("message-getter-secret");
+      },
+    });
+
+    // The accessor `message` is ignored — never invoked — so the safe fallback
+    // wins and no getter runs.
+    expect(getSafeErrorMessage(rejection, "safe fallback")).toBe(
+      "safe fallback",
+    );
+    expect(messageReads).toBe(0);
+  });
+
+  it("falls back for a class instance even when it carries a message", () => {
+    class BackendFailure {
+      message = "class-instance-secret";
+    }
+
+    expect(getSafeErrorMessage(new BackendFailure(), "safe fallback")).toBe(
+      "safe fallback",
+    );
   });
 });

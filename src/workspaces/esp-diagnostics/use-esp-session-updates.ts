@@ -23,7 +23,10 @@ import type {
   EspSessionUpdate,
   EspUpdateReason,
 } from "./types";
-import { isEspDiagnosticsSnapshot } from "./esp-wire-validation";
+import {
+  isEspDiagnosticsSnapshot,
+  isEspGraphOverlay,
+} from "./esp-wire-validation";
 
 export const ESP_SESSION_UPDATE_EVENT = "esp-diagnostics-session-update";
 export { getEspIdentityFingerprint } from "./esp-diagnostics-store";
@@ -773,6 +776,20 @@ export function createEspGraphCoordinator(
 
     try {
       const overlay = await fetchGraph(request);
+      // Gate the overlay on the wire validator before it reaches the store,
+      // mirroring how the session-update listener gates on
+      // isEspDiagnosticsSnapshot. On backend/schema drift applyGraphOverlay
+      // would otherwise dereference undefined sections and throw.
+      if (!isEspGraphOverlay(overlay)) {
+        useEspDiagnosticsStore
+          .getState()
+          .failGraph(
+            requestId,
+            ownership.ownershipLease,
+            "Microsoft Graph returned malformed data. Refresh Graph data to try again.",
+          );
+        return;
+      }
       const latestSnapshot = useEspDiagnosticsStore.getState().snapshot;
       const latestUi = useUiStore.getState();
       if (

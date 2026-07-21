@@ -4,7 +4,9 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   LOG_MONOSPACE_FONT_FAMILY,
   LOG_UI_FONT_FAMILY,
+  getLogListMetrics,
 } from "../../lib/log-accessibility";
+import { useUiStore } from "../../stores/ui-store";
 import type {
   EspEvidenceBoundaryMarker,
   EspEvidenceBoundarySource,
@@ -222,7 +224,15 @@ function severityColor(severity: LiveEvidenceSeverity): string {
   }
 }
 
-function ProvenanceDetails({ row }: { row: LiveEvidenceRow }) {
+function ProvenanceDetails({
+  row,
+  fontSize,
+  lineHeight,
+}: {
+  row: LiveEvidenceRow;
+  fontSize: number;
+  lineHeight: number;
+}) {
   if (row.kind === "sourceReset") {
     return (
       <aside
@@ -236,8 +246,8 @@ function ProvenanceDetails({ row }: { row: LiveEvidenceRow }) {
           backgroundColor: tokens.colorNeutralBackground3,
           color: tokens.colorNeutralForeground2,
           fontFamily: LOG_MONOSPACE_FONT_FAMILY,
-          fontSize: 10,
-          lineHeight: "15px",
+          fontSize,
+          lineHeight: `${lineHeight}px`,
         }}
       >
         <span>Boundary {row.marker.markerId}</span>
@@ -278,8 +288,8 @@ function ProvenanceDetails({ row }: { row: LiveEvidenceRow }) {
         backgroundColor: tokens.colorNeutralBackground3,
         color: tokens.colorNeutralForeground2,
         fontFamily: LOG_MONOSPACE_FONT_FAMILY,
-        fontSize: 10,
-        lineHeight: "15px",
+        fontSize,
+        lineHeight: `${lineHeight}px`,
       }}
     >
       <span>Record {record.recordId}</span>
@@ -319,6 +329,19 @@ export function LiveEvidenceTable({
 }: LiveEvidenceTableProps) {
   const records = snapshot?.rawEvidence ?? [];
   const activity = snapshot?.activity ?? [];
+  const logListFontSize = useUiStore((s) => s.logListFontSize);
+  const metrics = useMemo(
+    () => getLogListMetrics(logListFontSize),
+    [logListFontSize],
+  );
+  // The dense evidence grid sits one tier below the standard log row so the
+  // compact CMTrace layout is preserved, while still tracking the accessibility
+  // font-size control. Per-row chrome (borders + vertical padding) is fixed, so
+  // only the line height scales with the font.
+  const bodyFontSize = Math.max(9, metrics.fontSize - 3);
+  const rowLineHeight = Math.max(15, Math.round(bodyFontSize * 1.5));
+  const rowHeight = rowLineHeight + 17;
+  const headerMinHeight = rowLineHeight + 12;
   const rows = useMemo(() => {
     const timelineIndex = indexTimelineEvidence(activity);
     return [
@@ -386,7 +409,7 @@ export function LiveEvidenceTable({
   const virtualizer = useVirtualizer({
     count: filteredRows.length,
     getScrollElement: () => scrollerRef.current,
-    estimateSize: () => 32,
+    estimateSize: () => rowHeight,
     overscan: 10,
     getItemKey: (index) => filteredRows[index]?.rowId ?? index,
   });
@@ -532,7 +555,8 @@ export function LiveEvidenceTable({
             minWidth: 900,
             color: "#e8ecef",
             fontFamily: LOG_MONOSPACE_FONT_FAMILY,
-            fontSize: 10,
+            fontSize: bodyFontSize,
+            lineHeight: `${rowLineHeight}px`,
           }}
         >
           <div
@@ -545,13 +569,13 @@ export function LiveEvidenceTable({
               display: "grid",
               gridTemplateColumns:
                 "190px minmax(150px, 0.8fr) 78px 120px minmax(360px, 2fr)",
-              minHeight: 27,
+              minHeight: headerMinHeight,
               alignItems: "center",
               borderBottom: "1px solid #394148",
               backgroundColor: "#1b2024",
               color: "#b9c2c9",
               fontFamily: LOG_UI_FONT_FAMILY,
-              fontSize: 10,
+              fontSize: bodyFontSize,
               fontWeight: 700,
               letterSpacing: "0.04em",
               textTransform: "uppercase",
@@ -676,7 +700,13 @@ export function LiveEvidenceTable({
         </div>
       </div>
 
-      {selectedRow ? <ProvenanceDetails row={selectedRow} /> : null}
+      {selectedRow ? (
+        <ProvenanceDetails
+          row={selectedRow}
+          fontSize={bodyFontSize}
+          lineHeight={rowLineHeight}
+        />
+      ) : null}
     </div>
   );
 }
