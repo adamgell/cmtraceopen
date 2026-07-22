@@ -1151,6 +1151,14 @@ fn publish(
     if let Some(probe) = &dependencies.lifecycle_probe {
         probe.before_update_delivery(&update);
     }
+    log::info!(
+        "ESP emit: state={:?} seq={} reason={:?} evidence={} coverage={}",
+        update.state,
+        update.sequence,
+        update.reason,
+        update.snapshot.raw_evidence.len(),
+        update.snapshot.coverage.len()
+    );
     if let Err(error) = dependencies.sink.emit(update) {
         log::warn!("failed to emit ESP session update: {error}");
     }
@@ -1172,7 +1180,13 @@ fn collect_provider_records(
         if cancellation.is_cancelled() {
             return None;
         }
+        log::info!("ESP collect: provider {slot:?} starting");
         let mut batch = provider.collect(observed_at_utc);
+        log::info!(
+            "ESP collect: provider {slot:?} finished ({} records, {} coverage)",
+            batch.records.len(),
+            batch.coverage.len()
+        );
         if cancellation.is_cancelled() {
             return None;
         }
