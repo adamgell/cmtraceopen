@@ -1151,13 +1151,25 @@ fn publish(
     if let Some(probe) = &dependencies.lifecycle_probe {
         probe.before_update_delivery(&update);
     }
+    let snap = &update.snapshot;
     log::info!(
-        "ESP emit: state={:?} seq={} reason={:?} evidence={} coverage={}",
+        "ESP emit: state={:?} seq={} reason={:?} scenario={:?} phase={:?} \
+         sessions={} workloads={} enrollments={} regEvents={} nodeCache={} \
+         activity={} findings={} rawEvidence={} coverage={}",
         update.state,
         update.sequence,
         update.reason,
-        update.snapshot.raw_evidence.len(),
-        update.snapshot.coverage.len()
+        snap.scenario,
+        snap.phase,
+        snap.sessions.len(),
+        snap.workloads.len(),
+        snap.enrollments.len(),
+        snap.registration_events.len(),
+        snap.node_cache.len(),
+        snap.activity.len(),
+        snap.findings.len(),
+        snap.raw_evidence.len(),
+        snap.coverage.len()
     );
     if let Err(error) = dependencies.sink.emit(update) {
         log::warn!("failed to emit ESP session update: {error}");
