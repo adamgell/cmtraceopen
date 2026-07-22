@@ -1067,7 +1067,9 @@ describe("LiveEvidenceTable", () => {
       .find((cell) => cell.getAttribute("title") === rawLine);
     if (!message) throw new Error("Expected the raw evidence message cell");
     expect(message.textContent).toBe(rawLine);
-    expect(message).toHaveStyle({ whiteSpace: "pre" });
+    // pre-wrap preserves the exact whitespace/newlines verbatim like pre, but
+    // also wraps long/unbreakable tokens so they cannot overrun the column.
+    expect(message).toHaveStyle({ whiteSpace: "pre-wrap" });
     expect(
       screen.queryByText("Normalized installer failure"),
     ).not.toBeInTheDocument();
@@ -1093,7 +1095,7 @@ describe("LiveEvidenceTable", () => {
       .find((cell) => cell.getAttribute("title") === publicLine);
     if (!publicMessage) throw new Error("Expected the public raw message cell");
     expect(publicMessage.textContent).toBe(publicLine);
-    expect(publicMessage).toHaveStyle({ whiteSpace: "pre" });
+    expect(publicMessage).toHaveStyle({ whiteSpace: "pre-wrap" });
 
     const maskedMessage = screen.getByText("Sensitive value · masked");
     expect(maskedMessage).toBeVisible();

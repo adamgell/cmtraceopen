@@ -687,8 +687,14 @@ export function LiveEvidenceTable({
                       minWidth: 0,
                       overflow: "hidden",
                       padding: "0 8px",
-                      textOverflow: "ellipsis",
-                      whiteSpace: "pre",
+                      // Preserve the message's own line breaks, but wrap long
+                      // lines and break unbreakable tokens (e.g. base64/JWT
+                      // hashes in Win32App workload logs) so they cannot overrun
+                      // the column. The virtualizer measures element height, so
+                      // rows resize to fit the wrapped content.
+                      whiteSpace: "pre-wrap",
+                      overflowWrap: "anywhere",
+                      wordBreak: "break-word",
                     }}
                   >
                     {row.message}
