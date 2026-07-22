@@ -71,3 +71,32 @@ pub fn get_system_date_time_preferences(
         })
     }
 }
+
+/// Pin (or unpin) the main window as always-on-top and keep the Window menu's
+/// checkbox in sync with the applied state. The frontend ui-store persists the
+/// preference and re-applies it on startup, so this command is the single point
+/// that actually touches the window and the menu.
+#[tauri::command]
+pub fn set_always_on_top<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    enabled: bool,
+) -> Result<(), crate::error::AppError> {
+    use tauri::menu::MenuItemKind;
+    use tauri::Manager;
+
+    if let Some(window) = app.get_webview_window("main") {
+        window.set_always_on_top(enabled).map_err(|error| {
+            crate::error::AppError::Internal(format!("failed to set always-on-top: {error}"))
+        })?;
+    }
+
+    if let Some(menu) = app.menu() {
+        if let Some(MenuItemKind::Check(item)) =
+            menu.get(crate::menu::MENU_ID_WINDOW_ALWAYS_ON_TOP)
+        {
+            let _ = item.set_checked(enabled);
+        }
+    }
+
+    Ok(())
+}

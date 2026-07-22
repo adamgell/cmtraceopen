@@ -27,6 +27,27 @@ describe("ui-store", () => {
     });
   });
 
+  describe("always on top", () => {
+    it("defaults to off", () => {
+      expect(useUiStore.getInitialState().alwaysOnTop).toBe(false);
+    });
+
+    it("toggles the preference", () => {
+      useUiStore.getState().setAlwaysOnTop(true);
+      expect(useUiStore.getState().alwaysOnTop).toBe(true);
+      useUiStore.getState().setAlwaysOnTop(false);
+      expect(useUiStore.getState().alwaysOnTop).toBe(false);
+    });
+
+    it("persists the preference so it survives a restart", () => {
+      useUiStore.getState().setAlwaysOnTop(true);
+      const persisted = JSON.parse(
+        localStorage.getItem("cmtraceopen-ui-preferences") ?? "{}",
+      );
+      expect(persisted.state?.alwaysOnTop).toBe(true);
+    });
+  });
+
   describe("persisted preferences", () => {
     it("finishes hydration when no preferences have been stored yet", async () => {
       await useUiStore.persist.clearStorage();

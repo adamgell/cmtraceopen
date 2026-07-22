@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use serde::Serialize;
-use tauri::menu::{Menu, MenuItem, Submenu};
+use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::{AppHandle, Emitter, Runtime};
 
 use crate::commands::known_sources::{build_known_log_sources, KnownSourceGroupingMetadata};
@@ -26,6 +26,7 @@ pub const MENU_ID_TOOLS_COLLECT_DIAGNOSTICS: &str = "tools.collect_diagnostics";
 
 pub const MENU_ID_WINDOW_TOGGLE_DETAILS: &str = "window.toggle.details";
 pub const MENU_ID_WINDOW_TOGGLE_INFO: &str = "window.toggle.info";
+pub const MENU_ID_WINDOW_ALWAYS_ON_TOP: &str = "window.always_on_top";
 pub const MENU_ID_WINDOW_SETTINGS: &str = "window.settings";
 pub const MENU_ID_HELP_CHECK_FOR_UPDATES: &str = "help.check_for_updates";
 pub const MENU_ID_HELP_ABOUT: &str = "help.about";
@@ -148,6 +149,17 @@ pub fn build_app_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> 
         true,
         None::<&str>,
     )?;
+    // Checkable; the persisted preference is re-applied on startup via the
+    // set_always_on_top command, which also keeps this checkmark in sync.
+    let always_on_top = CheckMenuItem::with_id(
+        app,
+        MENU_ID_WINDOW_ALWAYS_ON_TOP,
+        "Always on Top",
+        true,
+        false,
+        None::<&str>,
+    )?;
+    let window_separator = PredefinedMenuItem::separator(app)?;
     let settings = MenuItem::with_id(
         app,
         MENU_ID_WINDOW_SETTINGS,
@@ -204,7 +216,13 @@ pub fn build_app_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> 
         app,
         "Window",
         true,
-        &[&toggle_details, &toggle_info, &settings],
+        &[
+            &toggle_details,
+            &toggle_info,
+            &window_separator,
+            &always_on_top,
+            &settings,
+        ],
     )?;
     let help_menu = Submenu::with_items(app, "Help", true, &[&check_for_updates, &about])?;
 
@@ -523,6 +541,14 @@ fn payload_for_menu_id(menu_id: &str) -> Option<AppMenuActionPayload> {
             version: 1,
             menu_id: MENU_ID_WINDOW_TOGGLE_INFO.to_string(),
             action: "toggle_info_pane".to_string(),
+            category: "window".to_string(),
+            trigger: "menu".to_string(),
+            source_id: None,
+        },
+        MENU_ID_WINDOW_ALWAYS_ON_TOP => AppMenuActionPayload {
+            version: 1,
+            menu_id: MENU_ID_WINDOW_ALWAYS_ON_TOP.to_string(),
+            action: "toggle_always_on_top".to_string(),
             category: "window".to_string(),
             trigger: "menu".to_string(),
             source_id: None,

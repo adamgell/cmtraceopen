@@ -214,6 +214,7 @@ pub fn run() {
             commands::known_sources::get_known_log_sources,
             commands::registry_ops::parse_registry_file,
             commands::system_preferences::get_system_date_time_preferences,
+            commands::system_preferences::set_always_on_top,
             commands::parsing::start_tail,
             commands::parsing::stop_tail,
             commands::parsing::pause_tail,
