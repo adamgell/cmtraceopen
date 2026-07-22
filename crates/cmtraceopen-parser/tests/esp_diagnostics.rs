@@ -5782,16 +5782,17 @@ fn reducer_identified_max_occurrence_exhausts_source_without_reuse() {
 }
 
 #[test]
-fn reducer_identified_sources_respect_allocator_cap_with_explicit_coverage() {
+fn reducer_identified_stream_sources_respect_allocator_cap_with_explicit_coverage() {
+    // Only stream evidence (the unbounded raw-log tail) is subject to the source
+    // ledger cap; structured evidence is exempt (see the allocator tests above).
+    // Saturate the ledger with stream sources and confirm the cap is enforced and
+    // disclosed as coverage.
     let mut reducer = EspDiagnosticsReducer::new("2026-07-15T18:00:00Z".to_string());
     for index in 0..=MAX_EVIDENCE_IDENTITY_SOURCES {
         reducer.ingest_identified(EspIdentifiedEvidenceRecord::with_occurrence(
-            registry_record(
+            ime_record(
                 &format!("identified-source-{index}"),
                 "identified-cap-record",
-                r"SOFTWARE\Contoso\IdentityCap",
-                "IgnoredIdentityCapValue",
-                EspObservationValue::Integer(index as i64),
                 "2026-07-15T12:00:00Z",
             ),
             0,
@@ -5850,6 +5851,73 @@ fn evidence_identity_allocator_bounds_the_exact_identity_ledger() {
     ));
     assert_eq!(allocator.tracked_source_count(), 1);
     assert_eq!(allocator.tracked_identity_count(), 2);
+}
+
+#[test]
+fn evidence_identity_allocator_admits_structured_evidence_past_a_saturated_identity_ledger() {
+    // The persistent per-session allocator is dominated by the unbounded raw-log
+    // tail (stream evidence). Structured ESP evidence -- the registry that forms
+    // sessions, workloads, and enrollment state -- is bounded by the device and is
+    // exactly what the live view exists to surface, so a stream-saturated ledger
+    // must never starve it. Regression for a live ESP stalling at phase=NotStarted,
+    // sessions=0, workloads=0 while the tail exhausts the identity budget.
+    let mut allocator = EspEvidenceIdentityAllocator::with_limits(2, 2);
+
+    allocator
+        .try_identify(ime_record("tail", "line-1", "2026-07-15T12:00:00Z"))
+        .expect("first stream identity is tracked");
+    allocator
+        .try_identify(ime_record("tail", "line-2", "2026-07-15T12:00:01Z"))
+        .expect("second stream identity is tracked");
+    // Further stream evidence is genuinely rejected -- the ledger is saturated.
+    assert!(matches!(
+        allocator.try_identify(ime_record("tail", "line-3", "2026-07-15T12:00:02Z")),
+        Err(EspEvidenceIdentityError::IdentityLimit)
+    ));
+
+    // A late-arriving structured session record must still be admitted.
+    let session = allocator
+        .try_identify(registry_record(
+            "esp-tracking",
+            "classic-session",
+            r"SOFTWARE\Microsoft\Windows\Autopilot\EnrollmentStatusTracking\ESPTrackingInfo\Diagnostics\Sidecar\2026-07-15T09:00:00Z",
+            "./Device/Vendor/MSFT/Win32App/classic-app",
+            EspObservationValue::Integer(4),
+            "2026-07-15T09:00:00Z",
+        ))
+        .expect("structured evidence bypasses the stream-saturated identity ledger");
+    assert_eq!(session.occurrence_ordinal(), 0);
+}
+
+#[test]
+fn evidence_identity_allocator_admits_structured_evidence_past_a_saturated_source_ledger() {
+    // As above, but the stream saturates the source ledger rather than the identity
+    // ledger. A structured registry record from a brand-new source must still be
+    // admitted even though the source budget is exhausted by the tail.
+    let mut allocator = EspEvidenceIdentityAllocator::with_source_limit(2);
+
+    allocator
+        .try_identify(ime_record("tail-a", "line-1", "2026-07-15T12:00:00Z"))
+        .expect("first stream source is tracked");
+    allocator
+        .try_identify(ime_record("tail-b", "line-2", "2026-07-15T12:00:01Z"))
+        .expect("second stream source is tracked");
+    // A third stream source is genuinely rejected -- the source ledger is full.
+    assert!(matches!(
+        allocator.try_identify(ime_record("tail-c", "line-3", "2026-07-15T12:00:02Z")),
+        Err(EspEvidenceIdentityError::SourceLimit)
+    ));
+
+    allocator
+        .try_identify(registry_record(
+            "esp-tracking",
+            "classic-session",
+            r"SOFTWARE\Microsoft\Windows\Autopilot\EnrollmentStatusTracking\ESPTrackingInfo\Diagnostics\Sidecar\2026-07-15T09:00:00Z",
+            "./Device/Vendor/MSFT/Win32App/classic-app",
+            EspObservationValue::Integer(4),
+            "2026-07-15T09:00:00Z",
+        ))
+        .expect("structured evidence bypasses the stream-saturated source ledger");
 }
 
 #[test]

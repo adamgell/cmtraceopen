@@ -177,11 +177,23 @@ impl EspEvidenceIdentityAllocator {
         record: EspEvidenceRecord,
     ) -> Result<EspIdentifiedEvidenceRecord, EspEvidenceIdentityError> {
         let source = record_identity_source(&record);
+        // Only the unbounded raw-log tail (stream evidence) is subject to the source
+        // and identity ledger caps. Structured ESP evidence -- registry and JSON
+        // observations that form sessions, workloads, and enrollment state -- is
+        // bounded by the device's registry and is precisely what the live view exists
+        // to surface, so it must never be rejected because the stream exhausted the
+        // budget. Without this, a long-running live session's persistent allocator
+        // saturates on tail lines and drops the late-arriving structured records,
+        // leaving the reduction stuck at phase=NotStarted/sessions=0/workloads=0 while
+        // a fresh restart of the same evidence reduces cleanly. The reducer's
+        // record-count/byte retention (which evicts stream evidence first) remains the
+        // ultimate memory backstop.
+        let enforce_caps = is_stream_evidence(&record);
         if let Some(last) = self.last_by_source.get(&source) {
             let occurrence_ordinal = last
                 .checked_add(1)
                 .ok_or(EspEvidenceIdentityError::OccurrenceOverflow)?;
-            if self.accepted_identities.len() >= self.max_identities {
+            if enforce_caps && self.accepted_identities.len() >= self.max_identities {
                 return Err(EspEvidenceIdentityError::IdentityLimit);
             }
             self.accepted_identities
@@ -192,10 +204,10 @@ impl EspEvidenceIdentityAllocator {
                 occurrence_ordinal,
             ));
         }
-        if self.last_by_source.len() >= self.max_sources {
+        if enforce_caps && self.last_by_source.len() >= self.max_sources {
             return Err(EspEvidenceIdentityError::SourceLimit);
         }
-        if self.accepted_identities.len() >= self.max_identities {
+        if enforce_caps && self.accepted_identities.len() >= self.max_identities {
             return Err(EspEvidenceIdentityError::IdentityLimit);
         }
         self.accepted_identities
@@ -213,12 +225,17 @@ impl EspEvidenceIdentityAllocator {
         if self.accepted_identities.contains(&identity) {
             return Ok(false);
         }
-        if !self.last_by_source.contains_key(&source)
+        // Structured evidence is exempt from the ledger caps for the same reason as in
+        // `try_identify`: only the unbounded stream tail is capped, so re-synchronizing
+        // an already-admitted structured record can never be rejected here.
+        let enforce_caps = is_stream_evidence(identified.record());
+        if enforce_caps
+            && !self.last_by_source.contains_key(&source)
             && self.last_by_source.len() >= self.max_sources
         {
             return Err(EspEvidenceIdentityError::SourceLimit);
         }
-        if self.accepted_identities.len() >= self.max_identities {
+        if enforce_caps && self.accepted_identities.len() >= self.max_identities {
             return Err(EspEvidenceIdentityError::IdentityLimit);
         }
         self.accepted_identities.insert(identity);
