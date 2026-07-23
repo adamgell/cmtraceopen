@@ -628,13 +628,21 @@ impl EspDiagnosticsReducer {
 }
 
 fn is_stream_evidence(record: &EspEvidenceRecord) -> bool {
+    // "Stream" evidence is the unbounded, high-volume material (log tails, event
+    // records, DO/Graph polling) that retention may evict first and that the
+    // per-session identity ledger caps. `System` facts are deliberately NOT here:
+    // there are only a handful per poll (hostname, serial, Entra device id, tenant,
+    // elevation, OS/hardware), they reconcile to stable identities across polls, and
+    // they are the ONLY source of the reduced device identity. Treating them as
+    // evictable stream let them be dropped under raw-log pressure, which emptied the
+    // identity and made Graph device correlation fail ("Blocked by deviceMatch") even
+    // once the device was managed. Keep them protected like registry/JSON evidence.
     matches!(
         record,
         EspEvidenceRecord::EventLog(_)
             | EspEvidenceRecord::Ime(_)
             | EspEvidenceRecord::DeploymentLog(_)
             | EspEvidenceRecord::Process(_)
-            | EspEvidenceRecord::System(_)
             | EspEvidenceRecord::DeliveryOptimization(_)
             | EspEvidenceRecord::Graph(_)
     )

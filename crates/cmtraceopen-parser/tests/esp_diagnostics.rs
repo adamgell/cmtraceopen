@@ -5922,10 +5922,10 @@ fn evidence_identity_allocator_admits_structured_evidence_past_a_saturated_sourc
 
 #[test]
 fn reducer_preserves_elevation_when_the_system_record_is_evicted() {
-    // Elevation rides on a `System` record, which is stream evidence and thus among the
-    // first evicted under retention pressure. The reduced snapshot must still report the
-    // real elevation (captured at ingest) so an actually-elevated capture never fires the
-    // spurious "not elevated" finding.
+    // System facts are no longer evictable stream evidence, but retention can still
+    // drop the oldest record when the retained set is ALL non-stream and over cap.
+    // The durable elevation capture must survive even that fallback eviction, so an
+    // actually-elevated capture never fires the spurious "not elevated" finding.
     let mut reducer = EspDiagnosticsReducer::with_retention_limits(
         "2026-07-15T18:00:00Z".to_string(),
         2,
@@ -5944,11 +5944,16 @@ fn reducer_preserves_elevation_when_the_system_record_is_evicted() {
             restricted_sources: vec!["system.bios".to_string()],
         }),
     }));
-    // Flood with stream evidence so the elevation System record is evicted first.
+    // Flood with other non-stream (registry) evidence so retention exceeds its cap.
+    // With no stream evidence to shed, eviction drops the oldest record -- including
+    // this elevation System record -- and the durable capture must still preserve it.
     for index in 0..4 {
-        reducer.ingest(ime_record(
-            "tail",
-            &format!("line-{index}"),
+        reducer.ingest(registry_record(
+            "benign",
+            &format!("benign-{index}"),
+            r"SOFTWARE\Contoso\Benign",
+            "Value",
+            EspObservationValue::Integer(index as i64),
             "2026-07-15T12:00:01Z",
         ));
     }
@@ -5966,6 +5971,51 @@ fn reducer_preserves_elevation_when_the_system_record_is_evicted() {
         snapshot.elevation.restricted_sources,
         vec!["system.bios".to_string()]
     );
+}
+
+#[test]
+fn reducer_preserves_device_identity_when_stream_evidence_floods_retention() {
+    // The reduced device identity (name / serial / Entra id) comes only from bounded
+    // System facts. Those must survive retention pressure from the high-volume raw-log
+    // tail; otherwise the identity is empty and Graph device correlation can never
+    // match, leaving every downstream Graph section "Blocked by deviceMatch" even once
+    // the device is managed.
+    let mut reducer = EspDiagnosticsReducer::with_retention_limits(
+        "2026-07-15T18:00:00Z".to_string(),
+        3,
+        64 * 1024 * 1024,
+    );
+    reducer.ingest(EspEvidenceRecord::System(EspSystemObservation {
+        context: fixture_context(
+            EspSourceKind::System,
+            "system-provider",
+            "hostname",
+            "2026-07-15T12:00:00Z",
+        ),
+        fact: EspSystemFact::Hostname("DEVICE-1".to_string()),
+    }));
+    reducer.ingest(EspEvidenceRecord::System(EspSystemObservation {
+        context: fixture_context(
+            EspSourceKind::System,
+            "system-provider",
+            "serial",
+            "2026-07-15T12:00:00Z",
+        ),
+        fact: EspSystemFact::SerialNumber("SN-1234567".to_string()),
+    }));
+    // Flood with stream (IME tail) evidence so retention must evict; the bounded
+    // System identity facts must be shed last (i.e. never), not first.
+    for index in 0..8 {
+        reducer.ingest(ime_record(
+            "tail",
+            &format!("line-{index}"),
+            "2026-07-15T12:00:01Z",
+        ));
+    }
+
+    let snapshot = reducer.snapshot();
+    assert_eq!(snapshot.identity.device_name.as_deref(), Some("DEVICE-1"));
+    assert!(snapshot.identity.serial_number.is_some());
 }
 
 #[test]
