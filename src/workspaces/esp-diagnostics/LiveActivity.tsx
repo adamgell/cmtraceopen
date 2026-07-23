@@ -252,7 +252,15 @@ export function LiveActivity({ entries }: LiveActivityProps) {
                       lineHeight: "14px",
                     }}
                   >
-                    <span>{entry.title}</span>
+                    <span
+                      style={{
+                        minWidth: 0,
+                        overflowWrap: "anywhere",
+                        wordBreak: "break-word",
+                      }}
+                    >
+                      {entry.title}
+                    </span>
                     {entry.status ? (
                       <span
                         style={{
