@@ -107,6 +107,18 @@ function normalizeGraphGuid(value: string | null | undefined): string | null {
   return GRAPH_GUID_PATTERN.test(normalized) ? normalized : null;
 }
 
+// A classic workload's raw identifier is decorated (e.g. `Win32App_<guid>_1`),
+// so the embedded object GUID must be extracted rather than whole-string matched
+// like normalizeGraphGuid does. Identifiers that carry no GUID (Store package
+// names, empty policy ids) yield null and are skipped, as before.
+const EMBEDDED_GRAPH_GUID_PATTERN =
+  /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
+
+function extractGraphGuid(value: string | null | undefined): string | null {
+  const match = EMBEDDED_GRAPH_GUID_PATTERN.exec(value ?? "");
+  return match ? match[0].toLowerCase() : null;
+}
+
 type GraphReferenceKinds<K extends string> = Map<string, Set<K>>;
 
 function addReference<K extends string>(
@@ -140,7 +152,7 @@ function createGraphRequest(
   const policyReferences: GraphReferenceKinds<EspGraphPolicyKind> = new Map();
   const scriptReferences: GraphReferenceKinds<EspGraphScriptKind> = new Map();
   for (const workload of snapshot.workloads) {
-    const id = normalizeGraphGuid(workload.rawIdentifier);
+    const id = extractGraphGuid(workload.rawIdentifier);
     if (!id) {
       continue;
     }

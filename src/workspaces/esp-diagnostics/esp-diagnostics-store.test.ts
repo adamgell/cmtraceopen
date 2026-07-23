@@ -1799,6 +1799,40 @@ describe("ESP Graph scheduling", () => {
     },
   );
 
+  it("extracts the embedded GUID from a decorated Win32 app identifier", async () => {
+    // Real Win32 app workloads carry a decorated raw identifier
+    // (`Win32App_<guid>_1`), never a bare GUID. The request builder must extract
+    // the embedded object GUID so the backend can fetch the Applications
+    // section; otherwise it is skipped with `referencedAppIds` and no Graph app
+    // names ever resolve (workload table + Action Center stay on the raw id).
+    const app = "a7c420db-0fa1-4c26-aca5-467e1a4dee73";
+    const fetchGraph = vi.fn(async (request: EspGraphRequest) =>
+      makeOverlay(request.requestId),
+    );
+    const coordinator = createEspGraphCoordinator({
+      fetchGraph,
+      cancelGraph: vi.fn(async () => undefined),
+      createRequestId: () => "graph-decorated-app",
+    });
+    const snapshot = makeSnapshot(["decorated-app"]);
+    snapshot.workloads = [makeWorkload("win32App", `Win32App_${app}_1`)];
+    useUiStore.setState({ graphApiEnabled: true, graphApiStatus: "connected" });
+    useEspDiagnosticsStore.getState().beginAnalysis("analysis-decorated-app");
+    useEspDiagnosticsStore
+      .getState()
+      .applyAnalysis("analysis-decorated-app", snapshot);
+
+    await coordinator.reconcile();
+
+    expect(fetchGraph).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workloadIds: [app],
+        appIds: [app],
+      }),
+    );
+    coordinator.dispose();
+  });
+
   it("refines typed references from prior Graph enrollment and profile evidence", async () => {
     const selectedManagedDevice = "10101010-1010-4010-8010-101010101010";
     const localApp = "11111111-1111-4111-8111-111111111111";
