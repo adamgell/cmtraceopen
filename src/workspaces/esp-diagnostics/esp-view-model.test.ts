@@ -42,7 +42,7 @@ function graphOverlay(): EspGraphOverlay {
       apiVersion: "v1.0",
       data: [
         {
-          appId: "app-raw-guid",
+          appId: "5d49307b-a1a2-4fe6-a58c-368c67ac0b03",
           displayName: "Graph VPN name",
           trackedOnEnrollmentStatus: true,
           status: null,
@@ -235,7 +235,7 @@ function snapshot(
         sessionId: "session-device-raw-guid",
         kind: "win32App",
         scope: "device",
-        rawIdentifier: "app-raw-guid",
+        rawIdentifier: "Win32App_5d49307b-a1a2-4fe6-a58c-368c67ac0b03_1",
         displayName: "Local VPN name",
         status: {
           raw: 3,
@@ -423,7 +423,7 @@ describe("ESP evidence view model", () => {
     expect(apps?.items[0]).toMatchObject({
       title: "Local VPN name",
       graphName: "Graph VPN name",
-      rawId: "app-raw-guid",
+      rawId: "Win32App_5d49307b-a1a2-4fe6-a58c-368c67ac0b03_1",
     });
     expect(scripts?.items[0]).toMatchObject({
       graphName: "Graph bootstrap name",
@@ -440,7 +440,7 @@ describe("ESP evidence view model", () => {
     expect(withoutGraph?.items[0]).toMatchObject({
       title: "Local VPN name",
       graphName: null,
-      rawId: "app-raw-guid",
+      rawId: "Win32App_5d49307b-a1a2-4fe6-a58c-368c67ac0b03_1",
     });
   });
 

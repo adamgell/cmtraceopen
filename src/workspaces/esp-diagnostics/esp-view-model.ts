@@ -171,6 +171,22 @@ function item(
   };
 }
 
+const WORKLOAD_GUID_RE =
+  /[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/;
+
+/**
+ * Match a Graph record id to a workload's raw identifier. The classic workload
+ * identifier is a decorated form (e.g. `Win32App_<guid>_1`) while the Graph app id
+ * is the bare GUID, so an exact === never matches. Compare case-insensitively and,
+ * failing that, by the embedded GUID -- mirroring the backend's identifiers_match.
+ */
+function graphIdentifierMatches(recordId: string, rawIdentifier: string): boolean {
+  if (recordId.toLowerCase() === rawIdentifier.toLowerCase()) return true;
+  const recordGuid = WORKLOAD_GUID_RE.exec(recordId)?.[0].toLowerCase();
+  const workloadGuid = WORKLOAD_GUID_RE.exec(rawIdentifier)?.[0].toLowerCase();
+  return recordGuid !== undefined && recordGuid === workloadGuid;
+}
+
 function graphNameForWorkload(
   snapshot: EspDiagnosticsSnapshot,
   workload: EspWorkload,
@@ -178,22 +194,22 @@ function graphNameForWorkload(
   if (!snapshot.graph) return null;
   if (["msi", "office", "modernApp", "win32App"].includes(workload.kind)) {
     return (
-      snapshot.graph.apps.data?.find(
-        (record) => record.appId === workload.rawIdentifier,
+      snapshot.graph.apps.data?.find((record) =>
+        graphIdentifierMatches(record.appId, workload.rawIdentifier),
       )?.displayName ?? null
     );
   }
   if (workload.kind === "platformScript") {
     return (
-      snapshot.graph.scripts.data?.find(
-        (record) => record.scriptId === workload.rawIdentifier,
+      snapshot.graph.scripts.data?.find((record) =>
+        graphIdentifierMatches(record.scriptId, workload.rawIdentifier),
       )?.displayName ?? null
     );
   }
   if (["policy", "scepCertificate"].includes(workload.kind)) {
     return (
-      snapshot.graph.policies.data?.find(
-        (record) => record.policyId === workload.rawIdentifier,
+      snapshot.graph.policies.data?.find((record) =>
+        graphIdentifierMatches(record.policyId, workload.rawIdentifier),
       )?.displayName ?? null
     );
   }
