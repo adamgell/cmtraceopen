@@ -61,7 +61,8 @@ use chrono::DateTime;
 use cmtraceopen_parser::esp::{
     EspArtifactCoverage, EspArtifactStatus, EspDiagnosticsReducer, EspDiagnosticsSnapshot,
     EspElevationState, EspEvidenceProvenance, EspEvidenceRecord, EspEvidenceRef,
-    EspGraphObservation, EspGraphObservationSection, EspHardwareEvidence, EspObservationContext,
+    EspGraphObservation, EspGraphObservationSection, EspHardwareEvidence, EspImeObservation,
+    EspObservationContext,
     EspObservationValue, EspParseState, EspProcessObservation, EspRegistryObservation,
     EspRegistryProvenance, EspScope, EspSensitivity, EspSourceAccessState, EspSourceKind,
     EspSystemFact, EspSystemObservation, EspTimestamp, EspTimestampKind, GraphApiVersion,
@@ -4563,6 +4564,43 @@ fn session_system_record(
     })
 }
 
+// IME evidence is stream evidence and is therefore subject to the identity-source
+// cap (unlike System/registry, which are bounded and exempt). Used by the identity
+// source-boundary test to exercise the cap.
+fn session_ime_record(
+    artifact_id: &str,
+    evidence_id: &str,
+    observed_at_utc: &str,
+) -> EspEvidenceRecord {
+    let evidence_ref = EspEvidenceRef {
+        evidence_id: evidence_id.to_string(),
+        source_artifact_id: artifact_id.to_string(),
+    };
+    EspEvidenceRecord::Ime(EspImeObservation {
+        context: EspObservationContext {
+            evidence_ref,
+            provenance: EspEvidenceProvenance {
+                source_kind: EspSourceKind::ImeLog,
+                source_artifact_id: artifact_id.to_string(),
+                file_path: None,
+                line_number: None,
+                record_number: None,
+                registry: None,
+                event: None,
+            },
+            source_timestamp: None,
+            observed_at_utc: observed_at_utc.to_string(),
+            sensitivity: EspSensitivity::Public,
+            parse_state: EspParseState::Parsed,
+            access_state: EspSourceAccessState::Available,
+        },
+        component: None,
+        message: "identity boundary".to_string(),
+        app_id: None,
+        status: None,
+    })
+}
+
 fn session_registry_record(
     artifact_id: &str,
     evidence_id: &str,
@@ -5174,7 +5212,7 @@ fn session_identity_source_boundary_preserves_exact_rejection_counts() {
         let empty = empty_session_provider();
         let records = (0..source_count)
             .map(|index| {
-                session_system_record(
+                session_ime_record(
                     &format!("identity-boundary-source-{index}"),
                     &format!("identity-boundary-evidence-{index}"),
                     "2026-07-16T06:30:00Z",
