@@ -274,6 +274,7 @@ pub struct EspDiagnosticsReducer {
     identified_high_watermark_by_source: BTreeMap<String, usize>,
     identity_rejections: EspEvidenceIdentityRejectionCounts,
     captured_elevation: Option<EspElevationState>,
+    captured_app_names: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone)]
@@ -315,6 +316,7 @@ impl EspDiagnosticsReducer {
             identified_high_watermark_by_source: BTreeMap::new(),
             identity_rejections: EspEvidenceIdentityRejectionCounts::default(),
             captured_elevation: None,
+            captured_app_names: BTreeMap::new(),
         }
     }
 
@@ -395,6 +397,26 @@ impl EspDiagnosticsReducer {
         if let EspEvidenceRecord::System(observation) = &record {
             if let EspSystemFact::Elevation(elevation) = &observation.fact {
                 self.captured_elevation = Some(elevation.clone());
+            }
+        }
+        // Capture the app's friendly name from IME evidence at ingest, before retention
+        // can evict the (high-volume, stream) IME line. The classic workload registry
+        // only knows GUIDs and Graph naming is usually unavailable during ESP, so this
+        // durable GUID -> name map is the only way to show real app names live even after
+        // the naming log lines are shed. Keyed by normalized GUID to match workload ids.
+        if let EspEvidenceRecord::Ime(observation) = &record {
+            if let Some(app_id) = observation
+                .app_id
+                .clone()
+                .or_else(|| extract_app_id(&observation.message))
+            {
+                if let Some(guid) = extract_guid(&app_id) {
+                    if let Some(name) = extract_app_name(&observation.message) {
+                        if !is_fallback_name(&name) {
+                            self.captured_app_names.insert(guid, name);
+                        }
+                    }
+                }
             }
         }
         if let Some(key) = &occurrence_key {
@@ -535,7 +557,30 @@ impl EspDiagnosticsReducer {
         if let Some(elevation) = &self.captured_elevation {
             projection.elevation = elevation.clone();
         }
-        projection.finish()
+        let mut snapshot = projection.finish();
+        self.apply_captured_app_names(&mut snapshot);
+        snapshot
+    }
+
+    /// Fill any workload the registry/Graph left unnamed with the friendly name captured
+    /// from IME evidence at ingest (see `retain_record`). Graph names are applied in
+    /// `finish` and win; this only fills a still-`None` display name, and survives IME
+    /// eviction because the map is built at ingest rather than from retained records.
+    fn apply_captured_app_names(&self, snapshot: &mut EspDiagnosticsSnapshot) {
+        if self.captured_app_names.is_empty() {
+            return;
+        }
+        for workload in snapshot
+            .workloads
+            .iter_mut()
+            .filter(|workload| workload.display_name.is_none())
+        {
+            if let Some(guid) = extract_guid(&workload.raw_identifier) {
+                if let Some(name) = self.captured_app_names.get(&guid) {
+                    workload.display_name = Some(name.clone());
+                }
+            }
+        }
     }
 
     fn note_discard(&mut self, serialized_bytes: usize) {
@@ -1715,7 +1760,6 @@ impl SnapshotProjection {
         self.apply_office_details();
         self.apply_msi_details();
         self.finalize_enforcement_messages();
-        self.apply_local_names();
         self.apply_graph_names();
         self.finalize_sessions();
         self.apply_deferred_error_codes();
@@ -2314,47 +2358,6 @@ impl SnapshotProjection {
                 Some("MSI detailed status".to_string()),
                 Some(status),
             );
-        }
-    }
-
-    fn apply_local_names(&mut self) {
-        // The classic EnrollmentStatusTracking registry identifies workloads only by
-        // GUID; the app's friendly name normally comes from Microsoft Graph
-        // enrichment, which is optional and usually unavailable during a live ESP (no
-        // managed-device match yet). Intune's own IME logs -- already tailed as
-        // evidence -- carry that friendly name, so derive a local GUID -> name map
-        // from them and fill any workload the registry left unnamed. This runs before
-        // apply_graph_names and only fills a `None` display_name, so an authoritative
-        // Graph name still wins when available.
-        let mut local_names: BTreeMap<String, String> = BTreeMap::new();
-        for observation in &self.ime_observations {
-            let Some(app_id) = observation
-                .app_id
-                .clone()
-                .or_else(|| extract_app_id(&observation.message))
-            else {
-                continue;
-            };
-            if let Some(name) = extract_app_name(&observation.message) {
-                if !is_fallback_name(&name) {
-                    local_names.insert(app_id, name);
-                }
-            }
-        }
-        if local_names.is_empty() {
-            return;
-        }
-        for workload in self
-            .workloads
-            .iter_mut()
-            .filter(|workload| workload.display_name.is_none())
-        {
-            if let Some((_, name)) = local_names
-                .iter()
-                .find(|(app_id, _)| identifiers_match(&workload.raw_identifier, app_id))
-            {
-                workload.display_name = Some(name.clone());
-            }
         }
     }
 
