@@ -2413,3 +2413,188 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod overlay_tests {
+    //! End-to-end `fetch_esp_graph_overlay` coverage driven by a canned provider
+    //! (no network). Locks the Rust contract behind a frontend bug: when the ESP
+    //! request references app ids, the Applications section must fetch and resolve
+    //! their display names; when it references none, the section is deliberately
+    //! skipped with `referencedAppIds` rather than fetched or errored.
+
+    use super::*;
+    use cmtraceopen_parser::esp::{EspIdentityEvidence, GraphSectionStatus};
+
+    // Deterministic lowercase GUIDs so `normalize_graph_guid` is an identity and
+    // the paths built by production code match the fake's routing exactly.
+    const DEVICE_GUID: &str = "3f2504e0-4f89-41d3-9a0c-0305e82c3301";
+    const APP_GUID: &str = "a7c420db-0fa1-4c26-aca5-467e1a4dee73";
+
+    /// Trivial cancellation token that is never cancelled and never waits.
+    struct NeverCancelled;
+
+    impl GraphCancellation for NeverCancelled {
+        fn is_cancelled(&self) -> bool {
+            false
+        }
+
+        fn wait_for_retry(&self, _duration: std::time::Duration) -> bool {
+            true
+        }
+    }
+
+    /// Canned provider that models the exact JSON Microsoft Graph returns for the
+    /// handful of endpoints the overlay touches once a device is selected. Any
+    /// unexpected path yields `NotFound` so a routing gap fails the test loudly.
+    struct FakeProvider {
+        app_display_name: Option<String>,
+    }
+
+    impl FakeProvider {
+        fn managed_device_path() -> String {
+            format!("/v1.0/deviceManagement/managedDevices/{DEVICE_GUID}")
+        }
+
+        fn app_path() -> String {
+            format!("/v1.0/deviceAppManagement/mobileApps/{APP_GUID}")
+        }
+
+        fn app_assignments_path() -> String {
+            format!("/v1.0/deviceAppManagement/mobileApps/{APP_GUID}/assignments")
+        }
+
+        fn not_found(endpoint: &EspGraphEndpoint) -> GraphClientError {
+            GraphClientError {
+                kind: GraphClientErrorKind::NotFound,
+                status: None,
+                request_id: None,
+                required_scope: endpoint.required_scope.clone(),
+            }
+        }
+    }
+
+    impl EspGraphProvider for FakeProvider {
+        fn get(
+            &self,
+            endpoint: &EspGraphEndpoint,
+            _cancellation: &dyn GraphCancellation,
+        ) -> Result<Value, GraphClientError> {
+            if endpoint.path == Self::managed_device_path() {
+                // Single managed device: no Entra/serial keeps the Autopilot
+                // identity lookup on the unfiltered path; null userId skips the
+                // per-user mobileAppIntentAndStates fetch inside fetch_apps.
+                return Ok(serde_json::json!({
+                    "id": DEVICE_GUID,
+                    "deviceName": "ESP-TEST-01",
+                    "userId": null,
+                }));
+            }
+            if endpoint.path == Self::app_path() {
+                // The `id` MUST echo the requested GUID or fetch_apps rejects it.
+                return Ok(match &self.app_display_name {
+                    Some(name) => serde_json::json!({ "id": APP_GUID, "displayName": name }),
+                    None => serde_json::json!({ "id": APP_GUID }),
+                });
+            }
+            Err(Self::not_found(endpoint))
+        }
+
+        fn get_collection(
+            &self,
+            endpoint: &EspGraphEndpoint,
+            _cancellation: &dyn GraphCancellation,
+        ) -> Result<Value, GraphClientError> {
+            // Autopilot identity lookup and app assignments both resolve to empty
+            // collections, which is enough to reach and exercise fetch_apps.
+            if endpoint.path == "/v1.0/deviceManagement/windowsAutopilotDeviceIdentities?$top=100"
+                || endpoint.path == Self::app_assignments_path()
+            {
+                return Ok(serde_json::json!({ "value": [] }));
+            }
+            Err(Self::not_found(endpoint))
+        }
+    }
+
+    /// Request whose selected managed device id forces a deterministic, exact
+    /// correlation. Evidence window, enrollment configs, policy and script
+    /// references are all empty so those sections skip before any network call,
+    /// isolating the Applications section under test.
+    fn base_request() -> EspGraphRequest {
+        EspGraphRequest {
+            request_id: "esp-graph-overlay-test".to_string(),
+            identity: EspIdentityEvidence {
+                device_name: None,
+                managed_device_id: None,
+                entra_device_id: None,
+                entdm_id: None,
+                tenant_id: None,
+                tenant_domain: None,
+                user_principal_name: None,
+                serial_number: None,
+                evidence: Vec::new(),
+            },
+            workload_ids: Vec::new(),
+            selected_managed_device_id: Some(DEVICE_GUID.to_string()),
+            evidence_window_start_utc: None,
+            evidence_window_end_utc: None,
+            enrollment_configuration_ids: Vec::new(),
+            app_ids: Vec::new(),
+            policy_references: Vec::new(),
+            script_references: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn fetch_apps_resolves_display_name_when_request_carries_app_ids() {
+        // Bug guard: the overlay carried referenced app ids but the Applications
+        // section never fetched mobileApps/{id}, so display names stayed empty.
+        // With an app id present the section must be Available and carry the
+        // resolved display name keyed to the requested GUID.
+        let provider = FakeProvider {
+            app_display_name: Some("Contoso VPN".to_string()),
+        };
+        let mut request = base_request();
+        request.app_ids = vec![APP_GUID.to_string()];
+
+        let overlay = fetch_esp_graph_overlay(
+            &provider,
+            &request,
+            &NeverCancelled,
+            "2026-01-01T00:00:00Z",
+        );
+
+        assert_eq!(overlay.device_match.status, GraphSectionStatus::Available);
+        assert_eq!(overlay.apps.status, GraphSectionStatus::Available);
+        let apps = overlay.apps.data.expect("apps section must carry data");
+        assert_eq!(apps.len(), 1, "exactly one referenced app resolves");
+        assert_eq!(apps[0].app_id, APP_GUID);
+        assert_eq!(apps[0].display_name.as_deref(), Some("Contoso VPN"));
+    }
+
+    #[test]
+    fn fetch_apps_skips_when_no_referenced_app_ids() {
+        // Bug guard: with no referenced app ids the section must be deliberately
+        // skipped with blockedBy = referencedAppIds -- never fetched, never
+        // reported as an error -- so the frontend can show "not requested".
+        let provider = FakeProvider {
+            app_display_name: None,
+        };
+        let request = base_request(); // app_ids and workload_ids left empty
+
+        let overlay = fetch_esp_graph_overlay(
+            &provider,
+            &request,
+            &NeverCancelled,
+            "2026-01-01T00:00:00Z",
+        );
+
+        assert_eq!(overlay.device_match.status, GraphSectionStatus::Available);
+        assert_eq!(overlay.apps.status, GraphSectionStatus::Skipped);
+        assert_eq!(overlay.apps.data, None);
+        let error = overlay
+            .apps
+            .error
+            .expect("a skipped section records why it was skipped");
+        assert_eq!(error.blocked_by.as_deref(), Some("referencedAppIds"));
+    }
+}
