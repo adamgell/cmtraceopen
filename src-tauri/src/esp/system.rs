@@ -1554,7 +1554,8 @@ mod windows_provider {
     };
     use windows::Win32::System::Com::{
         CoCreateInstance, CoDisableCallCancellation, CoEnableCallCancellation, CoInitializeEx,
-        CoUninitialize, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED,
+        CoSetProxyBlanket, CoUninitialize, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, EOAC_NONE,
+        RPC_C_AUTHN_LEVEL_CALL, RPC_C_IMP_LEVEL_IMPERSONATE,
     };
     use windows::Win32::System::SystemInformation::GetSystemWindowsDirectoryW;
     use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
@@ -1734,6 +1735,31 @@ mod windows_provider {
         let services =
             unsafe { locator.ConnectServer(&namespace, &empty, &empty, &empty, 0, &empty, None) }
                 .map_err(|error| error_from_windows(error, "WMI namespace connection failed"))?;
+        ensure_query_active(deadline, &cancellation)?;
+        // Raise the WMI proxy's impersonation level to IMPERSONATE. Without this the
+        // provider refuses protected reads -- notably Win32_Process.CommandLine of
+        // SYSTEM-owned installer processes (msiexec / IME) during ESP -- and returns
+        // WBEM_E_ACCESS_DENIED even from an elevated process, which surfaced as a bare
+        // "process PermissionDenied" coverage gap and an empty installer sampler.
+        // RPC_C_AUTHN_WINNT (10) and RPC_C_AUTHZ_NONE (0) are passed as literals to
+        // avoid pulling in the Win32_System_Rpc feature for two plain u32 constants.
+        const RPC_C_AUTHN_WINNT: u32 = 10;
+        const RPC_C_AUTHZ_NONE: u32 = 0;
+        // SAFETY: `services` is a live in-proc WMI proxy from ConnectServer; the null
+        // principal name and absent auth identity request the process's own identity.
+        unsafe {
+            CoSetProxyBlanket(
+                &services,
+                RPC_C_AUTHN_WINNT,
+                RPC_C_AUTHZ_NONE,
+                PCWSTR::null(),
+                RPC_C_AUTHN_LEVEL_CALL,
+                RPC_C_IMP_LEVEL_IMPERSONATE,
+                None,
+                EOAC_NONE,
+            )
+        }
+        .map_err(|error| error_from_windows(error, "WMI proxy security could not be set"))?;
         ensure_query_active(deadline, &cancellation)?;
         let language = BSTR::from("WQL");
         let query = BSTR::from(query.as_str());
