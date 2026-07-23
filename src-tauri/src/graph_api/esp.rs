@@ -566,22 +566,6 @@ pub fn fetch_esp_graph_overlay<P: EspGraphProvider>(
     };
 
     let candidate_count = candidates.len();
-    // Capture candidate identifiers before correlate consumes them, so a populated-but-
-    // unmatched identity can be diagnosed (stale/missing managed-device record vs a
-    // parse gap). Logged only on the user's own device.
-    let candidate_summary = candidates
-        .iter()
-        .take(10)
-        .map(|candidate| {
-            format!(
-                "{{entra={:?} serial={:?} name={:?}}}",
-                candidate.entra_device_id.as_deref(),
-                candidate.serial_number.as_ref().map(|serial| serial.value.as_str()),
-                candidate.device_name.as_deref(),
-            )
-        })
-        .collect::<Vec<_>>()
-        .join(", ");
     let device_match = correlate_managed_device(
         &request.identity,
         request.selected_managed_device_id.as_deref(),
@@ -590,10 +574,10 @@ pub fn fetch_esp_graph_overlay<P: EspGraphProvider>(
     let selected = device_match.selected.clone();
     // Diagnose "Blocked by deviceMatch": distinguish an empty local identity (nothing
     // to correlate on) from an ambiguous match (candidates present but not uniquely
-    // selected).
+    // selected). Field presence only -- no identity or candidate values are logged.
     log::info!(
         "ESP graph deviceMatch: rawCandidates={} matched={} selected={} basis={:?} confidence={:?} \
-         identity=[name:{} serial:{} entra:{} managed:{}] localEntra={:?} candidates=[{}]",
+         identity=[name:{} serial:{} entra:{} managed:{}]",
         candidate_count,
         device_match.candidates.len(),
         selected.is_some(),
@@ -603,8 +587,6 @@ pub fn fetch_esp_graph_overlay<P: EspGraphProvider>(
         request.identity.serial_number.is_some(),
         request.identity.entra_device_id.is_some(),
         request.identity.managed_device_id.is_some(),
-        request.identity.entra_device_id.as_deref(),
-        candidate_summary,
     );
     overlay.device_match =
         available_section(MANAGED_DEVICES_SCOPE, GraphApiVersion::V1_0, device_match);
