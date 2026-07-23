@@ -78,6 +78,8 @@ winreg = "0.56"
 # application's declared Rust 1.77.2 floor and exercise it in Windows CI.
 windows = { version = "=0.61.3", features = [
     "Win32_Foundation",
+    "Win32_NetworkManagement_NetManagement",
+    "Win32_Security_Cryptography",
     "Win32_Security_Authorization",
     "Win32_System_EventLog",
     "Win32_Storage_FileSystem",

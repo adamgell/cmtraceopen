@@ -348,10 +348,25 @@ impl SystemQueryBatch {
     }
 }
 
+/// Entra (Azure AD) join facts read via NetGetAadJoinInformation. The Entra device
+/// id here is the Graph `azureADDeviceId`, which is the reliable key for correlating
+/// the local device to its Intune managed-device record.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AadJoinInfo {
+    pub entra_device_id: Option<String>,
+    pub tenant_id: Option<String>,
+}
+
 pub trait SystemProvider {
     fn elevation(&self) -> Result<bool, SystemReadError>;
 
     fn query(&self, source: SystemSource, timeout: Duration, max_rows: usize) -> SystemQueryBatch;
+
+    /// Entra join info (device id + tenant). Defaults to empty so non-Windows builds
+    /// and test fakes need not implement it; only LiveSystemProvider overrides it.
+    fn aad_join_info(&self) -> AadJoinInfo {
+        AadJoinInfo::default()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -427,6 +442,7 @@ pub fn collect_system_evidence(
     observed_at_utc: &str,
 ) -> SystemEvidence {
     let (mut elevation, elevation_coverage) = elevation_from_probe(provider.elevation());
+    let aad = provider.aad_join_info();
     let mut rows_by_source = BTreeMap::new();
     let mut coverage = vec![elevation_coverage];
 
@@ -518,6 +534,14 @@ pub fn collect_system_evidence(
         (
             SystemSource::Tpm,
             tpm_version.map(EspSystemFact::TpmVersion),
+        ),
+        (
+            SystemSource::ComputerSystem,
+            aad.entra_device_id.map(EspSystemFact::EntraDeviceId),
+        ),
+        (
+            SystemSource::ComputerSystem,
+            aad.tenant_id.map(EspSystemFact::TenantId),
         ),
         (
             SystemSource::Elevation,
@@ -1557,6 +1581,9 @@ mod windows_provider {
         CoSetProxyBlanket, CoUninitialize, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, EOAC_NONE,
         RPC_C_AUTHN_LEVEL_CALL, RPC_C_IMP_LEVEL_IMPERSONATE,
     };
+    use windows::Win32::NetworkManagement::NetManagement::{
+        NetFreeAadJoinInformation, NetGetAadJoinInformation,
+    };
     use windows::Win32::System::SystemInformation::GetSystemWindowsDirectoryW;
     use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
     use windows::Win32::System::Variant::{VariantClear, VariantToString, VARIANT};
@@ -1569,7 +1596,7 @@ mod windows_provider {
     use super::{
         classify_delivery_command_failure, finish_wmi_query, parse_delivery_json,
         powershell_path_from_windows_directory, run_bounded_command, run_bounded_system_query,
-        LiveSystemProvider, SystemProvider, SystemQueryBatch, SystemQueryCancellation,
+        AadJoinInfo, LiveSystemProvider, SystemProvider, SystemQueryBatch, SystemQueryCancellation,
         SystemReadError, SystemRow, SystemSource, WmiRequest, DELIVERY_OPTIMIZATION_SCRIPT,
         MAX_COMMAND_ERROR_BYTES, MAX_COMMAND_OUTPUT_BYTES,
     };
@@ -1674,6 +1701,36 @@ mod windows_provider {
                 );
             }
             Ok(elevation.TokenIsElevated != 0)
+        }
+
+        fn aad_join_info(&self) -> AadJoinInfo {
+            // NetGetAadJoinInformation is what dsregcmd reads: it returns the Entra
+            // device id (Graph azureADDeviceId) and tenant id, the reliable keys for
+            // correlating this device to its Intune managed-device record. Passing a
+            // null tenant asks for the primary Entra join.
+            // SAFETY: the returned DSREG_JOIN_INFO is owned by us until we free it with
+            // NetFreeAadJoinInformation; its PWSTR fields are valid null-terminated wide
+            // strings for that lifetime.
+            unsafe {
+                let ptr = match NetGetAadJoinInformation(PCWSTR::null()) {
+                    Ok(ptr) if !ptr.is_null() => ptr,
+                    _ => return AadJoinInfo::default(),
+                };
+                let read = |value: windows::core::PWSTR| {
+                    value
+                        .to_string()
+                        .ok()
+                        .map(|value| value.trim().to_string())
+                        .filter(|value| !value.is_empty())
+                };
+                let info = &*ptr;
+                let join = AadJoinInfo {
+                    entra_device_id: read(info.pszDeviceId),
+                    tenant_id: read(info.pszTenantId),
+                };
+                NetFreeAadJoinInformation(Some(ptr as *const _));
+                join
+            }
         }
 
         fn query(
