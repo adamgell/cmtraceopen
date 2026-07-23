@@ -813,6 +813,19 @@ export function createEspGraphCoordinator(
           useEspDiagnosticsStore
             .getState()
             .applyGraphOverlay(requestId, ownership.ownershipLease, overlay);
+          // Only a resolved managed-device match marks this identity's enrichment
+          // as "done". If the device is not yet a managed device (deviceMatch
+          // unresolved -> downstream sections "Blocked by deviceMatch"), release the
+          // fingerprint claim so the next live-session poll re-queries and the match
+          // is picked up in real time as the device enrolls mid-ESP. The in-flight
+          // claim above still protects a running query from being cancelled, and the
+          // re-query uses the silent cached-token path (never interactive auth).
+          if (
+            lastRequestedFingerprint === currentFingerprint &&
+            !overlay.deviceMatch.data?.selected
+          ) {
+            lastRequestedFingerprint = null;
+          }
           if (
             suppressedOverlaySelectionFingerprint === currentFingerprint &&
             useEspDiagnosticsStore.getState().snapshot?.graph === overlay
