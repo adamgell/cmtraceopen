@@ -45,25 +45,65 @@ fn push_failed_blocking_app(
     snapshot: &EspDiagnosticsSnapshot,
     findings: &mut Vec<EspDiagnosticFinding>,
 ) {
-    let workloads = current_workloads(snapshot).filter(|workload| {
-        workload.blocking == Some(true)
-            && is_app_kind(&workload.kind)
-            && workload.status.normalized == EspNormalizedStatus::Failed
-    });
-    let evidence = collect_evidence(workloads.flat_map(|workload| workload.evidence.iter()));
+    let failed = current_workloads(snapshot)
+        .filter(|workload| {
+            is_app_kind(&workload.kind)
+                && workload.status.normalized == EspNormalizedStatus::Failed
+                // `blocking` is frequently unknown (None) in the reduced evidence, so
+                // requiring Some(true) hid real ESP-blocking failures. Surface any failed
+                // app UNLESS it is explicitly non-blocking.
+                && workload.blocking != Some(false)
+        })
+        .collect::<Vec<_>>();
+    if failed.is_empty() {
+        return;
+    }
+    let summary = format!(
+        "{} failed during setup: {}.",
+        if failed.len() == 1 {
+            "An application"
+        } else {
+            "Applications"
+        },
+        failed_app_labels(&failed),
+    );
+    let evidence = collect_evidence(failed.iter().flat_map(|workload| workload.evidence.iter()));
     push_finding(
         findings,
         finding(
             "blocking-app-failed",
             EspFindingSeverity::Blocker,
             EspFindingConfidence::High,
-            "A blocking application failed",
-            "At least one application explicitly marked as blocking reached a failed state.",
-            "Inspect the cited IME or deployment log around the app's final failure.",
+            "An application failed during setup",
+            &summary,
+            "Inspect the named app's cited IME or deployment log around its final failure for the exit/enforcement code.",
             evidence,
             vec![],
         ),
     );
+}
+
+/// Comma-joined, de-duplicated labels for failed app workloads: the friendly name
+/// when known, otherwise the raw identifier, capped so the summary stays readable.
+fn failed_app_labels(workloads: &[&EspWorkload]) -> String {
+    const MAX_LABELS: usize = 6;
+    let mut labels: Vec<String> = Vec::new();
+    for workload in workloads {
+        let label = workload
+            .display_name
+            .clone()
+            .unwrap_or_else(|| workload.raw_identifier.clone());
+        if !labels.contains(&label) {
+            labels.push(label);
+        }
+    }
+    let extra = labels.len().saturating_sub(MAX_LABELS);
+    labels.truncate(MAX_LABELS);
+    let mut joined = labels.join(", ");
+    if extra > 0 {
+        joined.push_str(&format!(" (+{extra} more)"));
+    }
+    joined
 }
 
 fn push_stalled_workload(

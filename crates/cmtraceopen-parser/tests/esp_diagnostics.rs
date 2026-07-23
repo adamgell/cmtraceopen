@@ -8815,7 +8815,7 @@ fn findings_failed_blocking_app_and_stalled_install_are_evidence_backed() {
         "blocking-app-failed",
         EspFindingSeverity::Blocker,
         EspFindingConfidence::High,
-        "Inspect the cited IME or deployment log around the app's final failure.",
+        "Inspect the named app's cited IME or deployment log around its final failure for the exit/enforcement code.",
         &[("evidence-app-failed", "artifact-registry")],
         &[],
     );
@@ -8827,6 +8827,31 @@ fn findings_failed_blocking_app_and_stalled_install_are_evidence_backed() {
         "Compare the cited workload's last update with IME and Delivery Optimization activity.",
         &[("evidence-app-stalled", "artifact-registry")],
         &[],
+    );
+}
+
+#[test]
+fn findings_surface_failed_app_even_when_blocking_is_unknown() {
+    // Real ESP evidence frequently leaves `blocking` unknown (None). A failed app must
+    // still surface in the Action Center (named) rather than being silently dropped
+    // because it was not explicitly marked blocking.
+    let mut snapshot = findings_snapshot();
+    snapshot.workloads = vec![findings_workload(
+        "app-failed",
+        EspTrackedKind::Win32App,
+        EspNormalizedStatus::Failed,
+        None,
+        "2026-07-15T12:29:00Z",
+    )];
+
+    let findings = derive_findings(&snapshot);
+    let finding = finding_by_id(&findings, "blocking-app-failed");
+    assert_eq!(finding.severity, EspFindingSeverity::Blocker);
+    // The summary names the failed workload rather than a generic message.
+    assert!(
+        finding.summary.contains("app-failed"),
+        "summary should name the failed app: {}",
+        finding.summary
     );
 }
 
