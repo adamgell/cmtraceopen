@@ -1,17 +1,21 @@
 import { useCallback, useEffect } from "react";
 import { Button, Spinner, tokens } from "@fluentui/react-components";
 import {
+  ArrowDownloadRegular,
+  ArrowUploadRegular,
   DocumentArrowUpRegular,
   FolderOpenRegular,
   PlayRegular,
   StopRegular,
 } from "@fluentui/react-icons";
-import { open } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
+import { readTextFile } from "@tauri-apps/plugin-fs";
 import {
   getEspDiagnosticsSession,
   getEspElevationState,
   startEspDiagnosticsSession,
   stopEspDiagnosticsSession,
+  writeTextOutputFile,
 } from "../../lib/commands";
 import {
   LOG_MONOSPACE_FONT_FAMILY,
@@ -27,6 +31,11 @@ import { useEspDiagnosticsStore } from "./esp-diagnostics-store";
 import { EspPhaseProgress } from "./EspPhaseProgress";
 import { EspWorkloadTable } from "./EspWorkloadTable";
 import { EspWorkspaceHeader } from "./EspWorkspaceHeader";
+import {
+  buildEspSessionCapture,
+  parseEspSessionCapture,
+  serializeEspSessionCapture,
+} from "./esp-session-capture";
 import { GraphEnrichmentPanel } from "./GraphEnrichmentPanel";
 import {
   analyzeEspEvidenceSource,
@@ -258,6 +267,57 @@ export function EspDiagnosticsWorkspace() {
     }
   }, []);
 
+  const exportSession = useCallback(async () => {
+    const current = useEspDiagnosticsStore.getState().snapshot;
+    if (!current) return;
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const destination = await save({
+      title: "Export ESP session",
+      defaultPath: `esp-session-${stamp}.json`,
+      filters: [{ name: "ESP session capture", extensions: ["json"] }],
+    });
+    if (!destination) return;
+    try {
+      const capture = buildEspSessionCapture(current, {
+        capturedAtUtc: new Date().toISOString(),
+      });
+      await writeTextOutputFile(
+        destination,
+        serializeEspSessionCapture(capture),
+      );
+    } catch (error) {
+      useEspDiagnosticsStore
+        .getState()
+        .rejectAnalysisInput(
+          `Could not export the ESP session: ${errorMessage(error)}`,
+        );
+    }
+  }, []);
+
+  const openSession = useCallback(async () => {
+    const path = normalizeSelection(
+      await open({
+        multiple: false,
+        filters: [{ name: "ESP session capture", extensions: ["json"] }],
+      }),
+    );
+    if (!path) return;
+    const store = useEspDiagnosticsStore.getState();
+    let text: string;
+    try {
+      text = await readTextFile(path);
+    } catch (error) {
+      store.rejectAnalysisInput(`Could not read ${path}: ${errorMessage(error)}`);
+      return;
+    }
+    const parsed = parseEspSessionCapture(text);
+    if (!parsed.ok) {
+      store.rejectAnalysisInput(parsed.error);
+      return;
+    }
+    store.loadReplaySession(parsed.snapshot);
+  }, []);
+
   const headerActions = (
     <>
       <Button
@@ -277,6 +337,24 @@ export function EspDiagnosticsWorkspace() {
         onClick={importCapturedEvidence}
       >
         Import captured evidence
+      </Button>
+      <Button
+        appearance="secondary"
+        size="small"
+        icon={<ArrowUploadRegular />}
+        disabled={isBusy || sessionId !== null}
+        onClick={openSession}
+      >
+        Open session
+      </Button>
+      <Button
+        appearance="secondary"
+        size="small"
+        icon={<ArrowDownloadRegular />}
+        disabled={!snapshot}
+        onClick={exportSession}
+      >
+        Export session
       </Button>
       {sessionId ? (
         <Button

@@ -79,6 +79,10 @@ export interface EspDiagnosticsStore {
   sessionId: string | null;
   sequence: number;
   snapshot: EspDiagnosticsSnapshot | null;
+  // True when the current snapshot was loaded from a capture file rather than
+  // collected live/from a bundle. A replay is inert: the Graph coordinator must
+  // not re-fetch (it would query for the wrong device) or clear its overlay.
+  isReplaySession: boolean;
   // Authoritative process elevation from the standalone get_esp_elevation_state
   // probe. Elevation is constant for the process lifetime, so this is the
   // source of truth for the UI regardless of whether/when the (collected-later)
@@ -103,6 +107,7 @@ export interface EspDiagnosticsStore {
   beginLiveStart(requestId: string): void;
   beginStop(sessionId: string): void;
   applyAnalysis(requestId: string, snapshot: EspDiagnosticsSnapshot): void;
+  loadReplaySession(snapshot: EspDiagnosticsSnapshot): void;
   applySessionUpdate(update: EspSessionUpdate): void;
   fail(requestId: string, error: string): void;
   beginGraph(
@@ -401,6 +406,7 @@ export const useEspDiagnosticsStore = create<EspDiagnosticsStore>((set) => ({
   sessionId: null,
   sequence: 0,
   snapshot: null,
+  isReplaySession: false,
   elevationProbe: null,
   error: null,
   graphRequestId: null,
@@ -423,6 +429,7 @@ export const useEspDiagnosticsStore = create<EspDiagnosticsStore>((set) => ({
       sessionId: null,
       sequence: 0,
       snapshot: null,
+      isReplaySession: false,
       error: null,
       graphRequestId: null,
       graphRequestLease: null,
@@ -448,6 +455,7 @@ export const useEspDiagnosticsStore = create<EspDiagnosticsStore>((set) => ({
       sessionId: null,
       sequence: 0,
       snapshot: null,
+      isReplaySession: false,
       error: null,
       graphRequestId: null,
       graphRequestLease: null,
@@ -496,6 +504,41 @@ export const useEspDiagnosticsStore = create<EspDiagnosticsStore>((set) => ({
           unreadEvidenceDelta(state.snapshot, snapshot, state.evidenceViewMode),
         ...graphIdentityState,
         ...evidenceRows,
+      };
+    }),
+
+  loadReplaySession: (snapshot) =>
+    set(() => {
+      const { evidenceRecordRows, nextEvidenceOrder } =
+        reconcileEvidenceRecordRows(null, snapshot, new Map(), 0);
+      // The captured overlay is authoritative and static, so drive the Graph
+      // pill straight from it (the coordinator that normally owns graphPhase is
+      // told to skip replay sessions). No overlay -> the capture predates or
+      // omitted enrichment, shown as disabled rather than a live "off".
+      const overlay = snapshot.graph;
+      const graphPhase: EspGraphPhase = overlay
+        ? graphOverlayIsPartial(overlay)
+          ? "partial"
+          : "ready"
+        : "disabled";
+      return {
+        phase: "ready",
+        requestId: null,
+        sessionId: null,
+        sequence: 0,
+        isReplaySession: true,
+        snapshot,
+        error: null,
+        graphRequestId: null,
+        graphRequestLease: null,
+        graphRequestFingerprint: null,
+        graphPhase,
+        graphUnavailableReason: overlay ? null : "graphDisabled",
+        graphError: null,
+        unreadEvidenceCount: 0,
+        evidenceBoundaryMarkers: [],
+        evidenceRecordRows,
+        nextEvidenceOrder,
       };
     }),
 

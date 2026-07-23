@@ -581,6 +581,13 @@ export function createEspGraphCoordinator(
     if (disposed) {
       return;
     }
+    // A replayed capture is inert. It describes some other device, so fetching
+    // Graph for the local identity would be wrong, and the offline path below
+    // (graph disabled -> clearGraphOverlay) would erase the very overlay being
+    // replayed. Leave it exactly as loadReplaySession set it.
+    if (useEspDiagnosticsStore.getState().isReplaySession) {
+      return;
+    }
     const lifecycleGeneration = graphLifecycleGeneration;
 
     const initialSnapshot = useEspDiagnosticsStore.getState().snapshot;

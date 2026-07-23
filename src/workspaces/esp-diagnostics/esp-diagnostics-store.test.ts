@@ -1799,6 +1799,47 @@ describe("ESP Graph scheduling", () => {
     },
   );
 
+  it("loadReplaySession marks the session inert and drives the Graph pill from the overlay", () => {
+    const snapshot = makeSnapshot(["replay"]);
+    snapshot.graph = makeOverlay("captured-overlay");
+    useEspDiagnosticsStore.getState().loadReplaySession(snapshot);
+    const state = useEspDiagnosticsStore.getState();
+    expect(state.isReplaySession).toBe(true);
+    expect(state.phase).toBe("ready");
+    expect(state.snapshot).toBe(snapshot);
+    expect(["ready", "partial"]).toContain(state.graphPhase);
+
+    const bare = makeSnapshot(["replay-bare"]);
+    useEspDiagnosticsStore.getState().loadReplaySession(bare);
+    expect(useEspDiagnosticsStore.getState().graphPhase).toBe("disabled");
+  });
+
+  it("does not re-fetch or wipe a replayed capture's overlay when Graph is offline", async () => {
+    const fetchGraph = vi.fn(async (request: EspGraphRequest) =>
+      makeOverlay(request.requestId),
+    );
+    const coordinator = createEspGraphCoordinator({
+      fetchGraph,
+      cancelGraph: vi.fn(async () => undefined),
+      createRequestId: () => "graph-replay-should-not-run",
+    });
+    // Offline: without the replay guard the coordinator's disabled path would
+    // clearGraphOverlay and erase the captured overlay we are replaying.
+    useUiStore.setState({ graphApiEnabled: false });
+    const snapshot = makeSnapshot(["replay-coordinator"]);
+    snapshot.graph = makeOverlay("captured-overlay");
+    useEspDiagnosticsStore.getState().loadReplaySession(snapshot);
+
+    coordinator.start();
+    await coordinator.reconcile();
+
+    expect(fetchGraph).not.toHaveBeenCalled();
+    expect(useEspDiagnosticsStore.getState().snapshot?.graph).toEqual(
+      snapshot.graph,
+    );
+    coordinator.dispose();
+  });
+
   it("extracts the embedded GUID from a decorated Win32 app identifier", async () => {
     // Real Win32 app workloads carry a decorated raw identifier
     // (`Win32App_<guid>_1`), never a bare GUID. The request builder must extract
