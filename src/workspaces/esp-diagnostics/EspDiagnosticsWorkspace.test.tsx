@@ -1390,7 +1390,7 @@ describe("current MSIEXEC activity", () => {
 
 describe("actionable read-only findings", () => {
   it("shows severity, confidence, recommended checks, provenance, and no remediation controls", () => {
-    render(<ActionCenter findings={[makeFinding()]} />);
+    render(<ActionCenter findings={[makeFinding()]} graphNames={new Map()} />);
 
     const actionCenter = screen.getByRole("region", { name: "Action center" });
     expect(actionCenter).toHaveTextContent("Blocker · High confidence");
@@ -1410,6 +1410,25 @@ describe("actionable read-only findings", () => {
     ).toHaveAttribute("href", "#evidence-ev-finding-1");
     expect(actionCenter).toHaveTextContent("coverage-system-temp");
     expect(within(actionCenter).queryByRole("button")).not.toBeInTheDocument();
+  });
+
+  it("resolves workload GUID identifiers in finding text to Graph names", () => {
+    const finding: EspDiagnosticFinding = {
+      ...makeFinding(),
+      findingId: "blocking-app-failed",
+      summary:
+        "Applications failed during setup: Win32App_5d49307b-a1a2-4fe6-a58c-368c67ac0b03_1.",
+    };
+    const graphNames = new Map([
+      ["5d49307b-a1a2-4fe6-a58c-368c67ac0b03", "Company Portal"],
+    ]);
+    render(<ActionCenter findings={[finding]} graphNames={graphNames} />);
+
+    const actionCenter = screen.getByRole("region", { name: "Action center" });
+    expect(actionCenter).toHaveTextContent(
+      "Applications failed during setup: Company Portal.",
+    );
+    expect(actionCenter).not.toHaveTextContent("Win32App_5d49307b");
   });
 });
 

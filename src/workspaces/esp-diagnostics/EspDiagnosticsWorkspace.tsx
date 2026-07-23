@@ -20,6 +20,7 @@ import {
 import { createUuidRequestId } from "../../lib/uuid-request-id";
 import { useUiStore } from "../../stores/ui-store";
 import { ActionCenter } from "./ActionCenter";
+import { buildEspGraphNameMap } from "./esp-graph-names";
 import { ElevationBanner } from "./ElevationBanner";
 import { EvidenceSections } from "./EvidenceSections";
 import { useEspDiagnosticsStore } from "./esp-diagnostics-store";
@@ -381,7 +382,10 @@ export function EspDiagnosticsWorkspace() {
                 gap: 10,
               }}
             >
-              <ActionCenter findings={snapshot.findings} />
+              <ActionCenter
+                findings={snapshot.findings}
+                graphNames={buildEspGraphNameMap(snapshot)}
+              />
               <MsiexecStatus snapshot={snapshot} />
             </div>
 

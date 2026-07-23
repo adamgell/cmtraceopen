@@ -7,6 +7,7 @@ import {
   getLogListMetrics,
 } from "../../lib/log-accessibility";
 import { useUiStore } from "../../stores/ui-store";
+import { buildEspGraphNameMap, lookupEspGraphName } from "./esp-graph-names";
 import { requestEspEvidenceNavigation } from "./evidence-navigation";
 import type {
   EspDiagnosticsSnapshot,
@@ -122,37 +123,6 @@ function compareWorkloads(left: EspWorkload, right: EspWorkload): number {
   return left.workloadId.localeCompare(right.workloadId);
 }
 
-const WORKLOAD_GUID_RE =
-  /[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/;
-
-function graphNames(snapshot: EspDiagnosticsSnapshot): Map<string, string> {
-  const names = new Map<string, string>();
-  // Key by both the raw Graph id and the embedded GUID: a Graph app id is the bare
-  // GUID while a classic workload identifier is a decorated form (e.g.
-  // `Win32App_<guid>_1`), so a bare-id lookup would never hit.
-  const add = (id: string, displayName: string | null | undefined) => {
-    if (!displayName) return;
-    names.set(id.toLowerCase(), displayName);
-    const guid = WORKLOAD_GUID_RE.exec(id)?.[0].toLowerCase();
-    if (guid) names.set(guid, displayName);
-  };
-  for (const app of snapshot.graph?.apps.data ?? []) add(app.appId, app.displayName);
-  for (const policy of snapshot.graph?.policies.data ?? [])
-    add(policy.policyId, policy.displayName);
-  for (const script of snapshot.graph?.scripts.data ?? [])
-    add(script.scriptId, script.displayName);
-  return names;
-}
-
-function lookupGraphName(
-  names: Map<string, string>,
-  rawIdentifier: string,
-): string | undefined {
-  const direct = names.get(rawIdentifier.toLowerCase());
-  if (direct) return direct;
-  const guid = WORKLOAD_GUID_RE.exec(rawIdentifier)?.[0].toLowerCase();
-  return guid ? names.get(guid) : undefined;
-}
 
 interface WorkloadRowProps {
   workload: EspWorkload;
@@ -440,7 +410,7 @@ export function EspWorkloadTable({ snapshot }: EspWorkloadTableProps) {
     null,
   );
   const [workloadPage, setWorkloadPage] = useState(0);
-  const names = useMemo(() => graphNames(snapshot), [snapshot]);
+  const names = useMemo(() => buildEspGraphNameMap(snapshot), [snapshot]);
   const availableSessionIds = useMemo(
     () => new Set(snapshot.sessions.map((session) => session.sessionId)),
     [snapshot.sessions],
@@ -712,7 +682,7 @@ export function EspWorkloadTable({ snapshot }: EspWorkloadTableProps) {
                 <WorkloadRow
                   key={workload.workloadId}
                   workload={workload}
-                  graphName={lookupGraphName(names, workload.rawIdentifier)}
+                  graphName={lookupEspGraphName(names, workload.rawIdentifier)}
                   bodyFontSize={bodyFontSize}
                   strongFontSize={strongFontSize}
                 />
