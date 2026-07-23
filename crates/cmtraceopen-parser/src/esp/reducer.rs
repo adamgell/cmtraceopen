@@ -272,6 +272,7 @@ pub struct EspDiagnosticsReducer {
     identity_allocator: EspEvidenceIdentityAllocator,
     identified_high_watermark_by_source: BTreeMap<String, usize>,
     identity_rejections: EspEvidenceIdentityRejectionCounts,
+    captured_elevation: Option<EspElevationState>,
 }
 
 #[derive(Debug, Clone)]
@@ -312,6 +313,7 @@ impl EspDiagnosticsReducer {
             identity_allocator: EspEvidenceIdentityAllocator::new(),
             identified_high_watermark_by_source: BTreeMap::new(),
             identity_rejections: EspEvidenceIdentityRejectionCounts::default(),
+            captured_elevation: None,
         }
     }
 
@@ -382,6 +384,18 @@ impl EspDiagnosticsReducer {
         occurrence_key: Option<(String, String)>,
         serialized_bytes: usize,
     ) {
+        // The current-process elevation is a single authoritative fact, but it rides on
+        // a `System` record that `is_stream_evidence` treats as evictable. Under evidence
+        // pressure that record is dropped from the retained set before projection, which
+        // left `snapshot.elevation` at its default `false` and fired a spurious
+        // "not elevated" finding on an actually-elevated capture. Capture the elevation
+        // here, before any eviction, so the projection reflects the real elevation
+        // regardless of retention (covers live and imported evidence alike).
+        if let EspEvidenceRecord::System(observation) = &record {
+            if let EspSystemFact::Elevation(elevation) = &observation.fact {
+                self.captured_elevation = Some(elevation.clone());
+            }
+        }
         if let Some(key) = &occurrence_key {
             let retained_count = self
                 .retained_occurrence_counts
@@ -514,6 +528,11 @@ impl EspDiagnosticsReducer {
                 .occurrence_ordinals
                 .insert(IDENTITY_COVERAGE_ORDINAL, 0);
             projection.process_coverage(IDENTITY_COVERAGE_ORDINAL, coverage);
+        }
+        // Elevation is authoritative from ingest (see `retain_record`) and must not be
+        // lost when the underlying `System` record is evicted from the retained set.
+        if let Some(elevation) = &self.captured_elevation {
+            projection.elevation = elevation.clone();
         }
         projection.finish()
     }

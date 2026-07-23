@@ -5921,6 +5921,54 @@ fn evidence_identity_allocator_admits_structured_evidence_past_a_saturated_sourc
 }
 
 #[test]
+fn reducer_preserves_elevation_when_the_system_record_is_evicted() {
+    // Elevation rides on a `System` record, which is stream evidence and thus among the
+    // first evicted under retention pressure. The reduced snapshot must still report the
+    // real elevation (captured at ingest) so an actually-elevated capture never fires the
+    // spurious "not elevated" finding.
+    let mut reducer = EspDiagnosticsReducer::with_retention_limits(
+        "2026-07-15T18:00:00Z".to_string(),
+        2,
+        64 * 1024 * 1024,
+    );
+    reducer.ingest(EspEvidenceRecord::System(EspSystemObservation {
+        context: fixture_context(
+            EspSourceKind::System,
+            "system-provider",
+            "elevation",
+            "2026-07-15T12:00:00Z",
+        ),
+        fact: EspSystemFact::Elevation(EspElevationState {
+            is_elevated: true,
+            restart_supported: true,
+            restricted_sources: vec!["system.bios".to_string()],
+        }),
+    }));
+    // Flood with stream evidence so the elevation System record is evicted first.
+    for index in 0..4 {
+        reducer.ingest(ime_record(
+            "tail",
+            &format!("line-{index}"),
+            "2026-07-15T12:00:01Z",
+        ));
+    }
+
+    let snapshot = reducer.snapshot();
+    // The elevation record no longer survives in the retained (raw) evidence...
+    assert!(!snapshot
+        .raw_evidence
+        .iter()
+        .any(|record| record.evidence.first().is_some_and(|e| e.evidence_id == "elevation")));
+    // ...but the reduced elevation is still authoritative and fully preserved.
+    assert!(snapshot.elevation.is_elevated);
+    assert!(snapshot.elevation.restart_supported);
+    assert_eq!(
+        snapshot.elevation.restricted_sources,
+        vec!["system.bios".to_string()]
+    );
+}
+
+#[test]
 fn reducer_merges_typed_identity_rejections_without_synthetic_ingestion() {
     let mut rejections = EspEvidenceIdentityRejectionCounts::default();
     rejections.record(EspEvidenceIdentityError::SourceLimit);
