@@ -2,6 +2,7 @@ import type {
   EspDiagnosticsSnapshot,
   EspGraphAppRecord,
   EspGraphOverlay,
+  EspSession,
   EspWorkload,
   GraphSection,
 } from "./types";
@@ -105,6 +106,24 @@ export function makeEspWorkload(
     exitCode: null,
     enforcementErrorCode: null,
     blocking: null,
+    evidence: [],
+    ...overrides,
+  };
+}
+
+export function makeEspSession(
+  overrides: Partial<EspSession> = {},
+): EspSession {
+  return {
+    sessionId: "session-1",
+    kind: "classic",
+    scope: "device",
+    userSid: null,
+    startedAt: null,
+    endedAt: null,
+    phase: "deviceSetup",
+    isLatest: true,
+    workloadIds: [],
     evidence: [],
     ...overrides,
   };

@@ -2,6 +2,29 @@
   container-type: inline-size;
 }
 
+/* Live "now" readout: a soft pulse marks a streaming session at a glance. */
+@keyframes esp-now-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.3;
+    transform: scale(0.72);
+  }
+}
+
+.esp-now-pulse-dot {
+  animation: esp-now-pulse 1.4s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .esp-now-pulse-dot {
+    animation: none;
+  }
+}
+
 .esp-cockpit-panel-grid {
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr));
 }

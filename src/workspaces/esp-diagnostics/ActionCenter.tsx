@@ -11,12 +11,17 @@ import {
   LOG_MONOSPACE_FONT_FAMILY,
   LOG_UI_FONT_FAMILY,
 } from "../../lib/log-accessibility";
+import { deriveEspCurrentTask } from "./esp-current-task";
 import { resolveEspIdentifiers } from "./esp-graph-names";
+import { EspNowStatus } from "./EspNowStatus";
 import { requestEspEvidenceNavigation } from "./evidence-navigation";
 import type {
   EspDiagnosticFinding,
   EspFindingConfidence,
   EspFindingSeverity,
+  EspPhase,
+  EspSession,
+  EspWorkload,
 } from "./types";
 
 const severityOrder: Record<EspFindingSeverity, number> = {
@@ -243,9 +248,22 @@ function Finding({ finding, graphNames }: FindingProps) {
 interface ActionCenterProps {
   findings: EspDiagnosticFinding[];
   graphNames: Map<string, string>;
+  // Live-task readout inputs. Optional so a findings-only render (tests) is
+  // unchanged; the "now" hero only appears once a phase is supplied.
+  workloads?: EspWorkload[];
+  sessions?: EspSession[];
+  phase?: EspPhase;
+  isLive?: boolean;
 }
 
-export function ActionCenter({ findings, graphNames }: ActionCenterProps) {
+export function ActionCenter({
+  findings,
+  graphNames,
+  workloads,
+  sessions,
+  phase,
+  isLive,
+}: ActionCenterProps) {
   const orderedFindings = [...findings].sort(
     (left, right) =>
       severityOrder[left.severity] - severityOrder[right.severity] ||
@@ -267,6 +285,15 @@ export function ActionCenter({ findings, graphNames }: ActionCenterProps) {
         boxShadow: tokens.shadow2,
       }}
     >
+      {phase !== undefined ? (
+        <EspNowStatus
+          task={deriveEspCurrentTask(workloads ?? [], sessions ?? [], phase)}
+          phase={phase}
+          graphNames={graphNames}
+          isLive={isLive ?? false}
+        />
+      ) : null}
+
       <div
         style={{
           minHeight: 36,
@@ -275,6 +302,10 @@ export function ActionCenter({ findings, graphNames }: ActionCenterProps) {
           justifyContent: "space-between",
           gap: 8,
           padding: "0 10px",
+          borderTop:
+            phase !== undefined
+              ? `1px solid ${tokens.colorNeutralStroke2}`
+              : "none",
           borderLeft: `3px solid ${
             blockerCount > 0
               ? tokens.colorPaletteRedBorderActive

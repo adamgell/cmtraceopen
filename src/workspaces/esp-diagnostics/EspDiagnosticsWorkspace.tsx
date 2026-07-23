@@ -463,6 +463,10 @@ export function EspDiagnosticsWorkspace() {
               <ActionCenter
                 findings={snapshot.findings}
                 graphNames={buildEspGraphNameMap(snapshot)}
+                workloads={snapshot.workloads}
+                sessions={snapshot.sessions}
+                phase={snapshot.phase}
+                isLive={sessionId !== null}
               />
               <MsiexecStatus snapshot={snapshot} />
             </div>
