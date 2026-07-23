@@ -565,12 +565,29 @@ pub fn fetch_esp_graph_overlay<P: EspGraphProvider>(
         }
     };
 
+    let candidate_count = candidates.len();
     let device_match = correlate_managed_device(
         &request.identity,
         request.selected_managed_device_id.as_deref(),
         candidates,
     );
     let selected = device_match.selected.clone();
+    // Diagnose "Blocked by deviceMatch": distinguish an empty local identity (nothing
+    // to correlate on) from an ambiguous match (candidates present but not uniquely
+    // selected). Field presence only -- no identity values are logged.
+    log::info!(
+        "ESP graph deviceMatch: rawCandidates={} matched={} selected={} basis={:?} confidence={:?} \
+         identity=[name:{} serial:{} entra:{} managed:{}]",
+        candidate_count,
+        device_match.candidates.len(),
+        selected.is_some(),
+        device_match.match_basis,
+        device_match.confidence,
+        request.identity.device_name.is_some(),
+        request.identity.serial_number.is_some(),
+        request.identity.entra_device_id.is_some(),
+        request.identity.managed_device_id.is_some(),
+    );
     overlay.device_match =
         available_section(MANAGED_DEVICES_SCOPE, GraphApiVersion::V1_0, device_match);
     let Some(device) = selected else {
