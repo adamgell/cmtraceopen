@@ -1,4 +1,4 @@
-import { useCallback, useEffect } from "react";
+import { useCallback, useEffect, useMemo } from "react";
 import { Button, Spinner, tokens } from "@fluentui/react-components";
 import {
   ArrowDownloadRegular,
@@ -164,6 +164,12 @@ export function EspDiagnosticsWorkspace() {
   const elevationProbe = useEspDiagnosticsStore((state) => state.elevationProbe);
   const setElevationProbe = useEspDiagnosticsStore(
     (state) => state.setElevationProbe,
+  );
+  // One shared GUID -> friendly-name map (Graph names, then known workload
+  // names) so every panel rewrites identifiers to readable names identically.
+  const graphNames = useMemo(
+    () => (snapshot ? buildEspGraphNameMap(snapshot) : new Map<string, string>()),
+    [snapshot],
   );
   const liveSupported = currentPlatform === "windows";
   const isBusy = ["analyzing", "starting", "stopping"].includes(phase);
@@ -462,7 +468,7 @@ export function EspDiagnosticsWorkspace() {
             >
               <ActionCenter
                 findings={snapshot.findings}
-                graphNames={buildEspGraphNameMap(snapshot)}
+                graphNames={graphNames}
                 workloads={snapshot.workloads}
                 sessions={snapshot.sessions}
                 phase={snapshot.phase}
@@ -484,7 +490,10 @@ export function EspDiagnosticsWorkspace() {
               }}
             >
               <EspPhaseProgress snapshot={snapshot} />
-              <LiveActivity entries={snapshot.activity} />
+              <LiveActivity
+                entries={snapshot.activity}
+                graphNames={graphNames}
+              />
             </div>
 
             <EvidenceSections snapshot={snapshot} />

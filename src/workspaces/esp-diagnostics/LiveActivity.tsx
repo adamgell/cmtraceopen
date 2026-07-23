@@ -5,6 +5,7 @@ import {
   LOG_MONOSPACE_FONT_FAMILY,
   LOG_UI_FONT_FAMILY,
 } from "../../lib/log-accessibility";
+import { resolveEspIdentifiers } from "./esp-graph-names";
 import { requestEspEvidenceNavigation } from "./evidence-navigation";
 import type { EspTimelineEntry } from "./types";
 
@@ -61,11 +62,19 @@ function kindLabel(kind: EspTimelineEntry["kind"]): string {
 
 interface LiveActivityProps {
   entries: EspTimelineEntry[];
+  // Optional so pagination-only renders need no map; resolveEspIdentifiers
+  // no-ops on an empty map, so identifiers pass through unchanged.
+  graphNames?: Map<string, string>;
 }
 
 export const ESP_ACTIVITY_WINDOW_SIZE = 80;
 
-export function LiveActivity({ entries }: LiveActivityProps) {
+const EMPTY_NAME_MAP = new Map<string, string>();
+
+export function LiveActivity({
+  entries,
+  graphNames = EMPTY_NAME_MAP,
+}: LiveActivityProps) {
   const [windowStart, setWindowStart] = useState(0);
   const orderedEntries = useMemo(
     () => [...entries].sort(compareEntries),
@@ -259,7 +268,7 @@ export function LiveActivity({ entries }: LiveActivityProps) {
                         wordBreak: "break-word",
                       }}
                     >
-                      {entry.title}
+                      {resolveEspIdentifiers(entry.title, graphNames)}
                     </span>
                     {entry.status ? (
                       <span
@@ -284,9 +293,9 @@ export function LiveActivity({ entries }: LiveActivityProps) {
                         textOverflow: "ellipsis",
                         whiteSpace: "nowrap",
                       }}
-                      title={entry.detail}
+                      title={resolveEspIdentifiers(entry.detail, graphNames)}
                     >
-                      {entry.detail}
+                      {resolveEspIdentifiers(entry.detail, graphNames)}
                     </div>
                   ) : null}
                 </div>

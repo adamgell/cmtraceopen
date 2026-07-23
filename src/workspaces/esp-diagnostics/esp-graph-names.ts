@@ -29,6 +29,15 @@ export function buildEspGraphNameMap(
     add(policy.policyId, policy.displayName);
   for (const script of snapshot.graph?.scripts.data ?? [])
     add(script.scriptId, script.displayName);
+  // Fall back to reduced workload display names (local/IME-derived) for objects
+  // Graph did not return, keyed by the GUID embedded in the decorated raw
+  // identifier so a bare `Win32App_<guid>_1` token still resolves. Graph names
+  // added above are authoritative and are never overwritten here.
+  for (const workload of snapshot.workloads) {
+    if (!workload.displayName) continue;
+    const guid = WORKLOAD_GUID_RE.exec(workload.rawIdentifier)?.[0]?.toLowerCase();
+    if (guid && !names.has(guid)) names.set(guid, workload.displayName);
+  }
   return names;
 }
 
