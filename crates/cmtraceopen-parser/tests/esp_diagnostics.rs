@@ -5969,6 +5969,46 @@ fn reducer_preserves_elevation_when_the_system_record_is_evicted() {
 }
 
 #[test]
+fn reducer_names_classic_workloads_from_local_ime_evidence_without_graph() {
+    // A classic Win32 app is tracked only by GUID in EnrollmentStatusTracking, so
+    // without Microsoft Graph enrichment its workload has no display name ("Local
+    // name unavailable"). The tailed IME logs carry the friendly name locally, so the
+    // reduced workload should surface it even with Graph disabled/unavailable.
+    let app_guid = "a1b2c3d4-1111-2222-3333-444455556666";
+    let mut reducer = EspDiagnosticsReducer::new("2026-07-15T18:00:00Z".to_string());
+    reducer.ingest_all([
+        registry_record(
+            "esp-tracking",
+            "classic-workload",
+            r"SOFTWARE\Microsoft\Windows\Autopilot\EnrollmentStatusTracking\ESPTrackingInfo\Diagnostics\Sidecar\2026-07-15T09:00:00Z",
+            &format!("./Device/Vendor/MSFT/Win32App/{app_guid}"),
+            EspObservationValue::Integer(1),
+            "2026-07-15T09:00:00Z",
+        ),
+        EspEvidenceRecord::Ime(EspImeObservation {
+            context: fixture_context(
+                EspSourceKind::ImeLog,
+                "ime",
+                "ime-1",
+                "2026-07-15T09:01:00Z",
+            ),
+            component: Some("AppWorkload".to_string()),
+            message: format!(r#"{{"ApplicationName":"Company Portal","AppId":"{app_guid}"}}"#),
+            app_id: Some(app_guid.to_string()),
+            status: None,
+        }),
+    ]);
+
+    let snapshot = reducer.snapshot();
+    let workload = snapshot
+        .workloads
+        .iter()
+        .find(|workload| workload.kind == EspTrackedKind::Win32App)
+        .expect("classic Win32 app workload is reduced");
+    assert_eq!(workload.display_name.as_deref(), Some("Company Portal"));
+}
+
+#[test]
 fn reducer_merges_typed_identity_rejections_without_synthetic_ingestion() {
     let mut rejections = EspEvidenceIdentityRejectionCounts::default();
     rejections.record(EspEvidenceIdentityError::SourceLimit);

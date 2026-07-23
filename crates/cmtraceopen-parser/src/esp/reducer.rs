@@ -12,6 +12,7 @@ use super::normalize::{
 };
 use super::rules::derive_findings;
 use super::timeline::{sort_timeline_entries, stable_record_id, stable_timeline_entry_id};
+use crate::intune::guid_registry::{extract_app_id, extract_app_name, is_fallback_name};
 
 pub const MAX_RETAINED_EVIDENCE_RECORDS: usize = 25_000;
 pub const MAX_RETAINED_EVIDENCE_SERIALIZED_BYTES: usize = 32 * 1024 * 1024;
@@ -1706,6 +1707,7 @@ impl SnapshotProjection {
         self.apply_office_details();
         self.apply_msi_details();
         self.finalize_enforcement_messages();
+        self.apply_local_names();
         self.apply_graph_names();
         self.finalize_sessions();
         self.apply_deferred_error_codes();
@@ -2304,6 +2306,47 @@ impl SnapshotProjection {
                 Some("MSI detailed status".to_string()),
                 Some(status),
             );
+        }
+    }
+
+    fn apply_local_names(&mut self) {
+        // The classic EnrollmentStatusTracking registry identifies workloads only by
+        // GUID; the app's friendly name normally comes from Microsoft Graph
+        // enrichment, which is optional and usually unavailable during a live ESP (no
+        // managed-device match yet). Intune's own IME logs -- already tailed as
+        // evidence -- carry that friendly name, so derive a local GUID -> name map
+        // from them and fill any workload the registry left unnamed. This runs before
+        // apply_graph_names and only fills a `None` display_name, so an authoritative
+        // Graph name still wins when available.
+        let mut local_names: BTreeMap<String, String> = BTreeMap::new();
+        for observation in &self.ime_observations {
+            let Some(app_id) = observation
+                .app_id
+                .clone()
+                .or_else(|| extract_app_id(&observation.message))
+            else {
+                continue;
+            };
+            if let Some(name) = extract_app_name(&observation.message) {
+                if !is_fallback_name(&name) {
+                    local_names.insert(app_id, name);
+                }
+            }
+        }
+        if local_names.is_empty() {
+            return;
+        }
+        for workload in self
+            .workloads
+            .iter_mut()
+            .filter(|workload| workload.display_name.is_none())
+        {
+            if let Some((_, name)) = local_names
+                .iter()
+                .find(|(app_id, _)| identifiers_match(&workload.raw_identifier, app_id))
+            {
+                workload.display_name = Some(name.clone());
+            }
         }
     }
 
