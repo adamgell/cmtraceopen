@@ -73,6 +73,25 @@ function mostRecent(workloads: EspWorkload[]): EspWorkload | null {
   );
 }
 
+/**
+ * Failed Win32 app workloads in the latest session -- the ones whose raw
+ * identifier is the Sidecar key name the flip remediation targets.
+ */
+export function failedEspApps(
+  workloads: EspWorkload[],
+  sessions: EspSession[],
+): EspWorkload[] {
+  const latest =
+    sessions.find((session) => session.isLatest) ??
+    sessions[sessions.length - 1];
+  return workloads.filter(
+    (workload) =>
+      (!latest || workload.sessionId === latest.sessionId) &&
+      workload.kind === "win32App" &&
+      workload.status.normalized === "failed",
+  );
+}
+
 export function deriveEspCurrentTask(
   workloads: EspWorkload[],
   sessions: EspSession[],

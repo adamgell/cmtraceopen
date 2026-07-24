@@ -15,6 +15,9 @@ use crate::esp::live_session::native_session_dependencies;
 use crate::esp::relaunch::{
     restart_with_provider, EspRelaunchError, EspRelaunchResult, NativeEspRelaunchProvider,
 };
+use crate::esp::remediation::{
+    flip_app_installed, restore_app_state, EspAppFlipBackup, EspAppFlipResult,
+};
 use crate::esp::session::{
     EspSessionEnvelope, EspSessionError, EspSessionEventSink, EspSessionManager, EspSessionUpdate,
     ESP_SESSION_UPDATE_EVENT,
@@ -114,6 +117,26 @@ pub async fn restart_esp_as_administrator(
         app.exit(0);
     }
     Ok(result)
+}
+
+/// Force a failed ESP-tracked app past the Enrollment Status Page by flipping its
+/// Sidecar InstallationState 4 -> 3 and clearing ErrorHresult. WRITES to HKLM
+/// (Windows-only, requires elevation). Returns the prior values as a backup so the
+/// change can be undone. Does not install the app.
+#[tauri::command]
+pub async fn esp_flip_app_installed(app_id: String) -> Result<EspAppFlipResult, String> {
+    tauri::async_runtime::spawn_blocking(move || flip_app_installed(&app_id))
+        .await
+        .map_err(|error| format!("ESP flip task failed: {error}"))?
+}
+
+/// Restore an app's Sidecar tracking values from a backup returned by
+/// `esp_flip_app_installed`. WRITES to HKLM (Windows-only, requires elevation).
+#[tauri::command]
+pub async fn esp_restore_app_state(backup: EspAppFlipBackup) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || restore_app_state(&backup))
+        .await
+        .map_err(|error| format!("ESP restore task failed: {error}"))?
 }
 
 fn runtime_join_error(error: impl std::fmt::Display) -> EspSessionError {

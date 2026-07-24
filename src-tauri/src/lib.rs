@@ -197,6 +197,10 @@ pub fn run() {
             commands::esp_diagnostics::stop_esp_diagnostics_session,
             #[cfg(feature = "esp-diagnostics")]
             commands::esp_diagnostics::restart_esp_as_administrator,
+            #[cfg(feature = "esp-diagnostics")]
+            commands::esp_diagnostics::esp_flip_app_installed,
+            #[cfg(feature = "esp-diagnostics")]
+            commands::esp_diagnostics::esp_restore_app_state,
             commands::dns_dhcp::check_dns_logging_status,
             commands::dns_dhcp::enable_dns_debug_logging,
             commands::dns_dhcp::collect_dns_dhcp_from_domain,

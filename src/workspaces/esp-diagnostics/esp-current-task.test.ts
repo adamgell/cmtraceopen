@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { deriveEspCurrentTask } from "./esp-current-task";
+import { deriveEspCurrentTask, failedEspApps } from "./esp-current-task";
 import { makeEspSession, makeEspWorkload } from "./esp-session-fixtures";
 import type { EspNormalizedStatus } from "./types";
 
@@ -116,6 +116,21 @@ describe("deriveEspCurrentTask", () => {
     const task = deriveEspCurrentTask([], sessions, "deviceSetup");
     expect(task.state).toBe("idle");
     expect(task.stats.total).toBe(0);
+  });
+
+  it("failedEspApps returns only failed win32 apps in the latest session", () => {
+    const apps = failedEspApps(
+      [
+        wl("failed", { id: "citrix" }),
+        wl("succeeded", { id: "ok" }),
+        wl("failed", { id: "stale", session: "old" }),
+      ],
+      [
+        makeEspSession({ sessionId: "old", isLatest: false }),
+        makeEspSession({ sessionId: "s1", isLatest: true }),
+      ],
+    );
+    expect(apps.map((app) => app.workloadId)).toEqual(["citrix"]);
   });
 
   it("scopes counts to the latest session", () => {

@@ -11,6 +11,7 @@ pub mod live_session;
 pub mod process;
 pub mod registry;
 pub mod relaunch;
+pub mod remediation;
 pub mod session;
 pub mod system;
 pub mod tailing;

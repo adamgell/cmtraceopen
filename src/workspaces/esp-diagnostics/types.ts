@@ -734,3 +734,17 @@ export interface EspRelaunchResult {
     | "elevationCancelled"
     | "unsupportedPlatform";
 }
+
+// Prior Sidecar values captured before a flip, used to undo it. A null field
+// means the value did not exist and should be deleted on restore.
+export interface EspAppFlipBackup {
+  appId: string;
+  installationState: number | null;
+  errorHresult: number | null;
+}
+
+export interface EspAppFlipResult {
+  appId: string;
+  installationState: number;
+  backup: EspAppFlipBackup;
+}

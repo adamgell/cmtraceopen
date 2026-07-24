@@ -24,6 +24,8 @@ import {
 import { createUuidRequestId } from "../../lib/uuid-request-id";
 import { useUiStore } from "../../stores/ui-store";
 import { ActionCenter } from "./ActionCenter";
+import { EspActions } from "./EspActions";
+import { failedEspApps } from "./esp-current-task";
 import { buildEspGraphNameMap } from "./esp-graph-names";
 import { ElevationBanner } from "./ElevationBanner";
 import { EvidenceSections } from "./EvidenceSections";
@@ -182,6 +184,9 @@ export function EspDiagnosticsWorkspace() {
   const phase = useEspDiagnosticsStore((state) => state.phase);
   const graphPhase = useEspDiagnosticsStore((state) => state.graphPhase);
   const sessionId = useEspDiagnosticsStore((state) => state.sessionId);
+  const isReplaySession = useEspDiagnosticsStore(
+    (state) => state.isReplaySession,
+  );
   const snapshot = useEspDiagnosticsStore((state) => state.snapshot);
   const error = useEspDiagnosticsStore((state) => state.error);
   const graphError = useEspDiagnosticsStore((state) => state.graphError);
@@ -195,6 +200,13 @@ export function EspDiagnosticsWorkspace() {
     () => (snapshot ? buildEspGraphNameMap(snapshot) : new Map<string, string>()),
     [snapshot],
   );
+  // Write-actions (flip a failed app) target THIS device's live registry, so they
+  // apply only to a local, non-replayed session on Windows.
+  const failedApps = useMemo(
+    () => (snapshot ? failedEspApps(snapshot.workloads, snapshot.sessions) : []),
+    [snapshot],
+  );
+  const actionsAvailable = currentPlatform === "windows" && !isReplaySession;
   const liveSupported = currentPlatform === "windows";
   const isBusy = ["analyzing", "starting", "stopping"].includes(phase);
   // Elevation is a constant property of the running process. The standalone
@@ -500,6 +512,14 @@ export function EspDiagnosticsWorkspace() {
               />
               <MsiexecStatus snapshot={snapshot} />
             </div>
+
+            {actionsAvailable && failedApps.length > 0 ? (
+              <EspActions
+                failedApps={failedApps}
+                graphNames={graphNames}
+                elevated={effectiveElevation?.isElevated ?? false}
+              />
+            ) : null}
 
             <EspWorkloadTable snapshot={snapshot} />
 

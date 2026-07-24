@@ -22,6 +22,8 @@ import type {
   DsregcmdResolvedSource,
 } from "../workspaces/dsregcmd/types";
 import type {
+  EspAppFlipBackup,
+  EspAppFlipResult,
   EspDiagnosticsSnapshot,
   EspElevationState,
   EspGraphOverlay,
@@ -583,6 +585,18 @@ export async function graphFetchEspDiagnostics(
   return invokeCommand<EspGraphOverlay>("graph_fetch_esp_diagnostics", {
     request,
   });
+}
+
+export async function espFlipAppInstalled(
+  appId: string,
+): Promise<EspAppFlipResult> {
+  return invokeCommand<EspAppFlipResult>("esp_flip_app_installed", { appId });
+}
+
+export async function espRestoreAppState(
+  backup: EspAppFlipBackup,
+): Promise<void> {
+  return invokeCommand<void>("esp_restore_app_state", { backup });
 }
 
 export async function graphCancelEspDiagnostics(
