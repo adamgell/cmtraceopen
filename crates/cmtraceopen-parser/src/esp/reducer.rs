@@ -720,6 +720,7 @@ struct SnapshotProjection {
     msi_details: Vec<MsiDetailObservation>,
     enforcement_messages: BTreeMap<String, EnforcementMessageAccumulator>,
     deferred_error_codes: Vec<DeferredErrorCode>,
+    sidecar_app_states: Vec<SidecarAppStateObservation>,
 }
 
 impl SnapshotProjection {
@@ -769,6 +770,7 @@ impl SnapshotProjection {
             msi_details: Vec::new(),
             enforcement_messages: BTreeMap::new(),
             deferred_error_codes: Vec::new(),
+            sidecar_app_states: Vec::new(),
         }
     }
 
@@ -820,6 +822,10 @@ impl SnapshotProjection {
         }
         if let Some(deferred) = deferred_error_code_observation(ordinal, observation) {
             self.deferred_error_codes.push(deferred);
+            return;
+        }
+        if let Some(sidecar) = sidecar_app_state_observation(ordinal, observation) {
+            self.sidecar_app_states.push(sidecar);
             return;
         }
         if let Some(session_info) = classic_session_info(observation) {
@@ -1763,6 +1769,7 @@ impl SnapshotProjection {
         self.apply_graph_names();
         self.finalize_sessions();
         self.apply_deferred_error_codes();
+        self.apply_sidecar_app_states();
         self.finalize_delivery_optimization();
 
         let installer_correlations = correlate_installer_processes(
@@ -2198,6 +2205,109 @@ impl SnapshotProjection {
         }
     }
 
+    /// Overrides a Win32 app workload to `Failed` when the per-app Sidecar
+    /// tracking node reports a terminal failure. The workload status is built
+    /// from an OMA-DM diagnostics node (a mid-state number), which can lag the
+    /// authoritative per-app `InstallationState`/`ErrorHresult` under
+    /// `...\Setup\Apps\Tracking\Sidecar\<app>`. Without this, a device whose ESP
+    /// has errored still shows the app as installing.
+    fn apply_sidecar_app_states(&mut self) {
+        struct GroupedSidecarState {
+            identifier: String,
+            installation_state: Option<u64>,
+            error_hresult: Option<u32>,
+            // Context of the observation that best evidences the failure: the
+            // `ErrorHresult` reading when present (it carries the code we
+            // surface), otherwise the `InstallationState` reading.
+            error_evidence: Option<(usize, EspObservationContext)>,
+            state_evidence: Option<(usize, EspObservationContext)>,
+        }
+
+        let mut grouped: BTreeMap<String, GroupedSidecarState> = BTreeMap::new();
+        for observation in std::mem::take(&mut self.sidecar_app_states) {
+            let entry = grouped
+                .entry(identifier_match_key(&observation.identifier))
+                .or_insert_with(|| GroupedSidecarState {
+                    identifier: observation.identifier.clone(),
+                    installation_state: None,
+                    error_hresult: None,
+                    error_evidence: None,
+                    state_evidence: None,
+                });
+            match observation.field {
+                SidecarAppField::InstallationState => {
+                    entry.installation_state = Some(observation.value);
+                    entry.state_evidence = Some((observation.ordinal, observation.context));
+                }
+                SidecarAppField::ErrorHresult => {
+                    entry.error_hresult = Some(observation.value as u32);
+                    entry.error_evidence = Some((observation.ordinal, observation.context));
+                }
+            }
+        }
+
+        for group in grouped.into_values() {
+            // `InstallationState == 4` is FAILED; a present, non-zero
+            // `ErrorHresult` is also a failure even if the state lags behind.
+            let failed = group.installation_state == Some(4)
+                || group.error_hresult.is_some_and(|code| code != 0);
+            if !failed {
+                continue;
+            }
+            let Some((_ordinal, context)) = group.error_evidence.or(group.state_evidence) else {
+                continue;
+            };
+            let candidates = self
+                .workloads
+                .iter()
+                .enumerate()
+                .filter_map(|(index, workload)| {
+                    if !identifiers_match(&workload.raw_identifier, &group.identifier) {
+                        return None;
+                    }
+                    let session = self
+                        .sessions
+                        .iter()
+                        .find(|session| session.session_id == workload.session_id)?;
+                    session.is_latest.then_some(index)
+                })
+                .collect::<Vec<_>>();
+            let [index] = candidates.as_slice() else {
+                continue;
+            };
+            let index = *index;
+            // Recency guard, mirroring `process_classic_workload`: only override
+            // when the failure observation is at least as recent as the
+            // workload's last update, so a genuinely-later success is preserved.
+            let observed = context_timestamp(&context);
+            let replace_status = self.workloads[index]
+                .timestamps
+                .last_updated
+                .as_ref()
+                .map(|current| {
+                    timestamp_chronology_key(&observed) >= timestamp_chronology_key(current)
+                })
+                .unwrap_or(true);
+            if !replace_status {
+                continue;
+            }
+            let workload = &mut self.workloads[index];
+            workload.status = EspStatus {
+                raw: group
+                    .installation_state
+                    .map(|state| EspRawStatus::Number(state as i64))
+                    .unwrap_or_else(|| EspRawStatus::Text("Failed".to_string())),
+                normalized: EspNormalizedStatus::Failed,
+                display: "Failed".to_string(),
+                detail: None,
+            };
+            if let Some(code) = group.error_hresult.filter(|code| *code != 0) {
+                workload.enforcement_error_code = Some(error_code(&code.to_string()));
+            }
+            workload.evidence.push(context.evidence_ref.clone());
+        }
+    }
+
     fn apply_office_details(&mut self) {
         let mut details_by_identifier: BTreeMap<String, Vec<OfficeDetailObservation>> =
             BTreeMap::new();
@@ -2531,6 +2641,25 @@ struct DeferredSessionIdentity {
     scope: EspScope,
     user_sid: Option<String>,
     raw_time: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SidecarAppField {
+    InstallationState,
+    ErrorHresult,
+}
+
+/// A single per-app Sidecar tracking reading (`InstallationState` or
+/// `ErrorHresult`) buffered from a `...\Setup\Apps\Tracking\Sidecar\<app>`
+/// registry node, to be applied against the matched workload after workloads
+/// are built.
+#[derive(Debug)]
+struct SidecarAppStateObservation {
+    identifier: String,
+    field: SidecarAppField,
+    value: u64,
+    ordinal: usize,
+    context: EspObservationContext,
 }
 
 #[derive(Debug)]
@@ -2983,6 +3112,42 @@ fn deferred_error_code_observation(
         kind,
         code: error_code(&raw),
         is_enforcement,
+        ordinal,
+        context: observation.context.clone(),
+    })
+}
+
+/// Recognizes a per-app Sidecar tracking reading under an app-tracking node
+/// (`...\Setup\Apps\Tracking\Sidecar\<app>`). These carry the authoritative
+/// terminal `InstallationState` (4 = FAILED) and `ErrorHresult`, which the
+/// OMA-DM diagnostics status node does not reflect.
+fn sidecar_app_state_observation(
+    ordinal: usize,
+    observation: &EspRegistryObservation,
+) -> Option<SidecarAppStateObservation> {
+    let field = if observation.value_name.eq_ignore_ascii_case("InstallationState") {
+        SidecarAppField::InstallationState
+    } else if observation.value_name.eq_ignore_ascii_case("ErrorHresult") {
+        SidecarAppField::ErrorHresult
+    } else {
+        return None;
+    };
+    let components = path_components(&observation.key);
+    let is_app_tracking_node = components
+        .iter()
+        .any(|part| part.eq_ignore_ascii_case("Apps"))
+        && components
+            .iter()
+            .any(|part| part.eq_ignore_ascii_case("Tracking"));
+    if !is_app_tracking_node {
+        return None;
+    }
+    let identifier = last_path_component(&observation.key)?;
+    let value = observation_u64(&observation.value)?;
+    Some(SidecarAppStateObservation {
+        identifier,
+        field,
+        value,
         ordinal,
         context: observation.context.clone(),
     })

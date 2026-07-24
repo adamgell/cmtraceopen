@@ -6059,6 +6059,107 @@ fn reducer_names_classic_workloads_from_local_ime_evidence_without_graph() {
 }
 
 #[test]
+fn reducer_overrides_win32_workload_to_failed_from_sidecar_installation_state() {
+    // Regression (real capture): a Win32 app whose OMA-DM diagnostics status
+    // node still reports a mid-state (2 = Downloading/Installing -> InProgress)
+    // but whose authoritative per-app Sidecar tracking node has terminally
+    // FAILED (InstallationState=4) with an ErrorHresult must surface as Failed
+    // with the decoded HRESULT, not as "installing".
+    let app_guid = "431bae97-f077-4f2d-9102-78ed781451e9";
+    let app_node = format!("Win32App_{app_guid}_1");
+    let sidecar_key = format!(
+        r"SOFTWARE\Microsoft\Windows\Autopilot\EnrollmentStatusTracking\Device\Setup\Apps\Tracking\Sidecar\{app_node}"
+    );
+    let mut reducer = EspDiagnosticsReducer::new("2026-07-15T18:00:00Z".to_string());
+    reducer.ingest_all([
+        // (a) OMA-DM diagnostics status node -> InProgress (mid-state 2).
+        registry_record(
+            "esp-tracking",
+            "diag-status",
+            r"SOFTWARE\Microsoft\Windows\Autopilot\EnrollmentStatusTracking\ESPTrackingInfo\Diagnostics\Sidecar\2026-07-15T09:00:00Z",
+            &format!("./Device/Vendor/MSFT/Win32App/{app_node}"),
+            EspObservationValue::Integer(2),
+            "2026-07-15T09:00:00Z",
+        ),
+        // (b) Authoritative per-app Sidecar tracking node -> FAILED (state 4).
+        registry_record(
+            "esp-tracking",
+            "sidecar-state",
+            &sidecar_key,
+            "InstallationState",
+            EspObservationValue::Unsigned(4),
+            "2026-07-15T10:00:00Z",
+        ),
+        // (b) ...with the failing HRESULT 0x80079C69 (decimal 2147982441).
+        registry_record(
+            "esp-tracking",
+            "sidecar-error",
+            &sidecar_key,
+            "ErrorHresult",
+            EspObservationValue::Unsigned(2147982441),
+            "2026-07-15T10:00:00Z",
+        ),
+    ]);
+
+    let snapshot = reducer.snapshot();
+    let workload = snapshot
+        .workloads
+        .iter()
+        .find(|workload| {
+            workload.kind == EspTrackedKind::Win32App && workload.raw_identifier.contains(app_guid)
+        })
+        .expect("classic Win32 app workload is reduced");
+    assert_eq!(workload.status.normalized, EspNormalizedStatus::Failed);
+    let code = workload
+        .enforcement_error_code
+        .as_ref()
+        .expect("failed Win32 app carries the Sidecar HRESULT");
+    assert_eq!(code.decimal, Some(2147982441));
+    assert_eq!(code.hex.as_deref(), Some("0x80079C69"));
+}
+
+#[test]
+fn reducer_keeps_non_failed_win32_workload_from_sidecar_installation_state() {
+    // A Sidecar tracking node reporting InstallationState=3 (Installed) with no
+    // ErrorHresult must NOT be forced to Failed: only terminal failures override.
+    let app_guid = "9f3c2f10-2222-4444-8888-abcdef012345";
+    let app_node = format!("Win32App_{app_guid}_1");
+    let mut reducer = EspDiagnosticsReducer::new("2026-07-15T18:00:00Z".to_string());
+    reducer.ingest_all([
+        registry_record(
+            "esp-tracking",
+            "diag-status",
+            r"SOFTWARE\Microsoft\Windows\Autopilot\EnrollmentStatusTracking\ESPTrackingInfo\Diagnostics\Sidecar\2026-07-15T09:00:00Z",
+            &format!("./Device/Vendor/MSFT/Win32App/{app_node}"),
+            EspObservationValue::Integer(2),
+            "2026-07-15T09:00:00Z",
+        ),
+        registry_record(
+            "esp-tracking",
+            "sidecar-state",
+            &format!(
+                r"SOFTWARE\Microsoft\Windows\Autopilot\EnrollmentStatusTracking\Device\Setup\Apps\Tracking\Sidecar\{app_node}"
+            ),
+            "InstallationState",
+            EspObservationValue::Unsigned(3),
+            "2026-07-15T10:00:00Z",
+        ),
+    ]);
+
+    let snapshot = reducer.snapshot();
+    let workload = snapshot
+        .workloads
+        .iter()
+        .find(|workload| {
+            workload.kind == EspTrackedKind::Win32App && workload.raw_identifier.contains(app_guid)
+        })
+        .expect("classic Win32 app workload is reduced");
+    assert_ne!(workload.status.normalized, EspNormalizedStatus::Failed);
+    assert_eq!(workload.status.normalized, EspNormalizedStatus::InProgress);
+    assert!(workload.enforcement_error_code.is_none());
+}
+
+#[test]
 fn reducer_merges_typed_identity_rejections_without_synthetic_ingestion() {
     let mut rejections = EspEvidenceIdentityRejectionCounts::default();
     rejections.record(EspEvidenceIdentityError::SourceLimit);
