@@ -95,6 +95,66 @@ function effectiveNormalizedStatus(status: EspStatus): EspNormalizedStatus {
     : status.normalized;
 }
 
+type WorkloadStatusFilter =
+  | "all"
+  | "failed"
+  | "running"
+  | "installed"
+  | "queued";
+
+// Coarse category for the filter chips, aligned with the current-task hero so the
+// counts agree across the workspace.
+function workloadCategory(
+  status: EspNormalizedStatus,
+): Exclude<WorkloadStatusFilter, "all"> | "other" {
+  switch (status) {
+    case "failed":
+    case "cancelled":
+      return "failed";
+    case "downloading":
+    case "downloaded":
+    case "installing":
+    case "inProgress":
+      return "running";
+    case "succeeded":
+    case "processed":
+    case "skipped":
+    case "uninstalled":
+    case "rebootRequired":
+      return "installed";
+    case "notStarted":
+    case "notInstalled":
+    case "initialized":
+    case "pending":
+      return "queued";
+    case "unknown":
+      return "other";
+  }
+}
+
+function workloadMatchesQuery(
+  workload: EspWorkload,
+  graphName: string | undefined,
+  query: string,
+): boolean {
+  const haystack = [
+    workload.displayName,
+    graphName,
+    workload.rawIdentifier,
+    kindLabels[workload.kind],
+    workload.status.display,
+    workload.status.detail?.display,
+    workload.exitCode?.raw,
+    workload.exitCode?.hex,
+    workload.enforcementErrorCode?.raw,
+    workload.enforcementErrorCode?.hex,
+  ]
+    .filter((part): part is string => Boolean(part))
+    .join(" ")
+    .toLowerCase();
+  return haystack.includes(query);
+}
+
 function formatCode(code: EspErrorCode | null, absentLabel: string): string {
   if (!code) return absentLabel;
   return code.hex ? `${code.raw} · ${code.hex}` : code.raw;
@@ -410,6 +470,8 @@ export function EspWorkloadTable({ snapshot }: EspWorkloadTableProps) {
     null,
   );
   const [workloadPage, setWorkloadPage] = useState(0);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState<WorkloadStatusFilter>("all");
   const names = useMemo(() => buildEspGraphNameMap(snapshot), [snapshot]);
   const availableSessionIds = useMemo(
     () => new Set(snapshot.sessions.map((session) => session.sessionId)),
@@ -428,23 +490,91 @@ export function EspWorkloadTable({ snapshot }: EspWorkloadTableProps) {
       ),
     [snapshot.sessions],
   );
-  const filteredWorkloads = useMemo(
+  const sessionWorkloads = useMemo(
     () =>
-      [...snapshot.workloads]
-        .filter((workload) =>
-          effectiveSelectedSessionId
-            ? workload.sessionId === effectiveSelectedSessionId
-            : showAllSessions ||
-              latestSessionIds.size === 0 ||
-              latestSessionIds.has(workload.sessionId),
-        )
-        .sort(compareWorkloads),
+      snapshot.workloads.filter((workload) =>
+        effectiveSelectedSessionId
+          ? workload.sessionId === effectiveSelectedSessionId
+          : showAllSessions ||
+            latestSessionIds.size === 0 ||
+            latestSessionIds.has(workload.sessionId),
+      ),
     [
       effectiveSelectedSessionId,
       latestSessionIds,
       showAllSessions,
       snapshot.workloads,
     ],
+  );
+  const categoryCounts = useMemo(() => {
+    const counts = { failed: 0, running: 0, installed: 0, queued: 0 };
+    for (const workload of sessionWorkloads) {
+      const category = workloadCategory(
+        effectiveNormalizedStatus(workload.status),
+      );
+      if (category !== "other") counts[category] += 1;
+    }
+    return counts;
+  }, [sessionWorkloads]);
+  const filteredWorkloads = useMemo(() => {
+    const query = searchQuery.trim().toLowerCase();
+    return sessionWorkloads
+      .filter(
+        (workload) =>
+          statusFilter === "all" ||
+          workloadCategory(effectiveNormalizedStatus(workload.status)) ===
+            statusFilter,
+      )
+      .filter(
+        (workload) =>
+          !query ||
+          workloadMatchesQuery(
+            workload,
+            lookupEspGraphName(names, workload.rawIdentifier),
+            query,
+          ),
+      )
+      .sort(compareWorkloads);
+  }, [names, searchQuery, sessionWorkloads, statusFilter]);
+  const allChips: {
+    key: WorkloadStatusFilter;
+    label: string;
+    count: number;
+    color: string;
+  }[] = [
+    {
+      key: "all",
+      label: "All",
+      count: sessionWorkloads.length,
+      color: tokens.colorNeutralForeground1,
+    },
+    {
+      key: "failed",
+      label: "Failed",
+      count: categoryCounts.failed,
+      color: tokens.colorPaletteRedForeground1,
+    },
+    {
+      key: "running",
+      label: "Running",
+      count: categoryCounts.running,
+      color: tokens.colorBrandForeground1,
+    },
+    {
+      key: "installed",
+      label: "Installed",
+      count: categoryCounts.installed,
+      color: tokens.colorPaletteGreenForeground1,
+    },
+    {
+      key: "queued",
+      label: "Queued",
+      count: categoryCounts.queued,
+      color: tokens.colorNeutralForeground2,
+    },
+  ];
+  const statusChips = allChips.filter(
+    (chip) => chip.key === "all" || chip.count > 0 || chip.key === statusFilter,
   );
   const maximumPage = Math.max(
     0,
@@ -458,10 +588,10 @@ export function EspWorkloadTable({ snapshot }: EspWorkloadTableProps) {
   );
   const visibleWorkloads = filteredWorkloads.slice(workloadStart, workloadEnd);
   const countLabel = effectiveSelectedSessionId
-    ? `Selected session · ${filteredWorkloads.length} of ${snapshot.workloads.length} workloads`
+    ? `Selected session · ${sessionWorkloads.length} of ${snapshot.workloads.length} workloads`
     : showAllSessions
-      ? `All sessions · ${filteredWorkloads.length} workloads`
-      : `Latest sessions · ${filteredWorkloads.length} of ${snapshot.workloads.length} workloads`;
+      ? `All sessions · ${sessionWorkloads.length} workloads`
+      : `Latest sessions · ${sessionWorkloads.length} of ${snapshot.workloads.length} workloads`;
 
   return (
     <section
@@ -585,6 +715,80 @@ export function EspWorkloadTable({ snapshot }: EspWorkloadTableProps) {
         </div>
       </div>
 
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          flexWrap: "wrap",
+          gap: 8,
+          padding: "6px 10px",
+          borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
+        }}
+      >
+        <input
+          type="search"
+          aria-label="Search workloads"
+          placeholder="Search name, id, status, or code…"
+          value={searchQuery}
+          onChange={(event) => {
+            setSearchQuery(event.currentTarget.value);
+            setWorkloadPage(0);
+          }}
+          style={{
+            flex: "1 1 200px",
+            minWidth: 160,
+            height: 25,
+            padding: "0 8px",
+            border: `1px solid ${tokens.colorNeutralStroke1}`,
+            borderRadius: 3,
+            backgroundColor: tokens.colorNeutralBackground1,
+            color: tokens.colorNeutralForeground1,
+            fontFamily: LOG_UI_FONT_FAMILY,
+            fontSize: bodyFontSize,
+          }}
+        />
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
+          {statusChips.map((chip) => {
+            const active = statusFilter === chip.key;
+            return (
+              <button
+                key={chip.key}
+                type="button"
+                aria-pressed={active}
+                onClick={() => {
+                  setStatusFilter(chip.key);
+                  setWorkloadPage(0);
+                }}
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 5,
+                  height: 23,
+                  padding: "0 9px",
+                  cursor: "pointer",
+                  border: `1px solid ${
+                    active ? chip.color : tokens.colorNeutralStroke1
+                  }`,
+                  borderRadius: 12,
+                  backgroundColor: active
+                    ? tokens.colorNeutralBackground1Selected
+                    : tokens.colorNeutralBackground1,
+                  color: chip.color,
+                  fontFamily: LOG_MONOSPACE_FONT_FAMILY,
+                  fontSize: bodyFontSize,
+                  fontWeight: 700,
+                }}
+              >
+                {chip.label}{" "}
+                <span style={{ color: tokens.colorNeutralForeground3 }}>
+                  {chip.count}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
       {filteredWorkloads.length > ESP_WORKLOAD_WINDOW_SIZE ? (
         <div
           style={{
@@ -673,8 +877,9 @@ export function EspWorkloadTable({ snapshot }: EspWorkloadTableProps) {
                     textAlign: "center",
                   }}
                 >
-                  No workload records were observed for the selected session
-                  view.
+                  {sessionWorkloads.length === 0
+                    ? "No workload records were observed for the selected session view."
+                    : "No workloads match the current search or filter."}
                 </td>
               </tr>
             ) : (
