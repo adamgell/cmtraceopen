@@ -10,6 +10,7 @@ import {
   makeEspAppsSection,
   makeEspGraphApp,
   makeEspGraphOverlay,
+  makeEspRawEvidence,
   makeEspSnapshot,
   makeEspWorkload,
 } from "./esp-session-fixtures";
@@ -36,6 +37,20 @@ describe("esp session capture", () => {
     expect(parsed.snapshot.graph?.apps.data?.[0]?.displayName).toBe(
       "Contoso VPN",
     );
+  });
+
+  it("round-trips raw evidence carrying a FILETIME QWORD above safe-integer range", () => {
+    // Regression: every real device has registry QWORDs (ChannelExpiryTime,
+    // CreationTime...) that exceed Number.MAX_SAFE_INTEGER, so a strict
+    // safe-integer guard rejected the whole snapshot on load.
+    const snapshot = makeEspSnapshot({
+      rawEvidence: [makeEspRawEvidence({ rawValue: { unsigned: 134319134940000000 } })],
+    });
+    const capture = buildEspSessionCapture(snapshot, {
+      capturedAtUtc: "2026-07-23T21:30:00Z",
+    });
+    const parsed = parseEspSessionCapture(serializeEspSessionCapture(capture));
+    expect(parsed.ok).toBe(true);
   });
 
   it("accepts a bare snapshot with no capture envelope", () => {

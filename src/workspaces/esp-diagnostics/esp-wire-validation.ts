@@ -13,6 +13,15 @@ const integer: Guard = (value) =>
   typeof value === "number" && Number.isSafeInteger(value);
 const unsignedInteger: Guard = (value) =>
   typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+// Raw registry QWORD observation values (FILETIMEs, large counters) legitimately
+// exceed JS safe-integer range, so accept any integer-valued number for those
+// display-only raw values -- otherwise a real capture (which always carries such
+// values) fails to round-trip. The stricter guards above stay for structural
+// counts (event ids, record numbers, masks).
+const looseInteger: Guard = (value) =>
+  typeof value === "number" && Number.isInteger(value);
+const looseUnsignedInteger: Guard = (value) =>
+  typeof value === "number" && Number.isInteger(value) && value >= 0;
 const boolean: Guard = (value) => typeof value === "boolean";
 const nullable =
   (guard: Guard): Guard =>
@@ -361,8 +370,8 @@ const coverage = fields({
 const observationValue: Guard = (value) => {
   if (!record(value) || Object.keys(value).length !== 1) return false;
   if (hasOwn(value, "text")) return string(value.text);
-  if (hasOwn(value, "integer")) return integer(value.integer);
-  if (hasOwn(value, "unsigned")) return unsignedInteger(value.unsigned);
+  if (hasOwn(value, "integer")) return looseInteger(value.integer);
+  if (hasOwn(value, "unsigned")) return looseUnsignedInteger(value.unsigned);
   if (hasOwn(value, "boolean")) return boolean(value.boolean);
   return hasOwn(value, "stringList") && array(string)(value.stringList);
 };

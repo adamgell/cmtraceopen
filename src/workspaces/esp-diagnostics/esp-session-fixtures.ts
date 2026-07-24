@@ -111,6 +111,36 @@ export function makeEspWorkload(
   };
 }
 
+export function makeEspRawEvidence(
+  overrides: Partial<EspDiagnosticsSnapshot["rawEvidence"][number]> = {},
+): EspDiagnosticsSnapshot["rawEvidence"][number] {
+  return {
+    recordId: "raw-1",
+    provenance: {
+      sourceKind: "registry",
+      sourceArtifactId: "registry:HKLM\\SOFTWARE\\Microsoft\\Enrollments",
+      filePath: null,
+      lineNumber: null,
+      recordNumber: null,
+      registry: {
+        hive: "HKLM",
+        key: "SOFTWARE\\Microsoft\\Enrollments\\X\\Push",
+        valueName: "ChannelExpiryTime",
+      },
+      event: null,
+    },
+    sourceTimestamp: null,
+    observedAtUtc: "2026-07-23T21:00:00Z",
+    // A real Windows FILETIME QWORD -- above Number.MAX_SAFE_INTEGER.
+    rawValue: { unsigned: 134319134940000000 },
+    sensitivity: "public",
+    parseState: "parsed",
+    accessState: "available",
+    evidence: [],
+    ...overrides,
+  };
+}
+
 export function makeEspSession(
   overrides: Partial<EspSession> = {},
 ): EspSession {
