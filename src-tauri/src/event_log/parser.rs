@@ -60,7 +60,11 @@ pub fn parse_evtx_files(paths: &[String]) -> Result<EvtxParseResult, String> {
                 all_records.extend(records);
             }
             Err(e) => {
-                log::warn!("event=evtx_parse_error file=\"{}\" error=\"{}\"", path_str, e);
+                log::warn!(
+                    "event=evtx_parse_error file=\"{}\" error=\"{}\"",
+                    path_str,
+                    e
+                );
                 parse_errors += 1;
             }
         }
@@ -128,20 +132,14 @@ fn parse_single_file(path: &Path) -> Result<(Vec<EvtxRecord>, u32), String> {
             .unwrap_or("Unknown")
             .to_string();
 
-        let channel = system["Channel"]
-            .as_str()
-            .unwrap_or("Unknown")
-            .to_string();
+        let channel = system["Channel"].as_str().unwrap_or("Unknown").to_string();
 
         let event_id = extract_event_id(system);
 
         let level = system["Level"].as_u64().unwrap_or(0) as u8;
         let evtx_level = EvtxLevel::from_level_value(level);
 
-        let computer = system["Computer"]
-            .as_str()
-            .unwrap_or("Unknown")
-            .to_string();
+        let computer = system["Computer"].as_str().unwrap_or("Unknown").to_string();
 
         let timestamp_str = system["TimeCreated"]["#attributes"]["SystemTime"]
             .as_str()
@@ -275,14 +273,22 @@ mod tests {
         });
         let fields = extract_event_data(&json);
         assert_eq!(fields.len(), 2);
-        assert!(fields.iter().any(|f| f.name == "SubjectUserName" && f.value == "SYSTEM"));
+        assert!(fields
+            .iter()
+            .any(|f| f.name == "SubjectUserName" && f.value == "SYSTEM"));
     }
 
     #[test]
     fn test_build_message() {
         let fields = vec![
-            EvtxField { name: "Key1".into(), value: "Val1".into() },
-            EvtxField { name: "Key2".into(), value: "Val2".into() },
+            EvtxField {
+                name: "Key1".into(),
+                value: "Val1".into(),
+            },
+            EvtxField {
+                name: "Key2".into(),
+                value: "Val2".into(),
+            },
         ];
         let msg = build_message(&fields);
         assert_eq!(msg, "Key1: Val1; Key2: Val2");

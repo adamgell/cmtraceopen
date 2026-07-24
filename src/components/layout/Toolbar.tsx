@@ -1,4 +1,5 @@
 import {
+  Suspense,
   useCallback,
   useEffect,
   useMemo,
@@ -35,6 +36,7 @@ import { useDsregcmdStore } from "../../workspaces/dsregcmd/dsregcmd-store";
 import { useSysmonStore } from "../../workspaces/sysmon/sysmon-store";
 import { isIntuneWorkspace, getAvailableWorkspaces, type WorkspaceId, type PlatformId, useUiStore } from "../../stores/ui-store";
 import { getWorkspace } from "../../workspaces/registry";
+import type { WorkspaceDefinition } from "../../workspaces/types";
 import { ThemePicker } from "./ThemePicker";
 import {
   getKnownSourceMetadataById,
@@ -83,12 +85,12 @@ async function inferPathKind(path: string): Promise<"file" | "folder" | "unknown
   }
 }
 
-export interface OpenKnownSourceCatalogAction
+interface OpenKnownSourceCatalogAction
   extends KnownSourceCatalogActionIds {
   trigger: string;
 }
 
-export interface AppCommandState {
+interface AppCommandState {
   canOpenSources: boolean;
   canOpenKnownSources: boolean;
   canPauseResume: boolean;
@@ -109,7 +111,7 @@ export interface AppCommandState {
   activeView: WorkspaceId;
 }
 
-export interface AppActionHandlers {
+interface AppActionHandlers {
   commandState: AppCommandState;
   openSourceFileDialog: () => Promise<void>;
   openSourceFolderDialog: () => Promise<void>;
@@ -609,6 +611,23 @@ export function useAppActions(): AppActionHandlers {
   };
 }
 
+export function WorkspaceToolbarAction({
+  workspace,
+}: {
+  workspace: WorkspaceDefinition;
+}) {
+  const ToolbarAction = workspace.toolbarAction;
+  if (!ToolbarAction) {
+    return null;
+  }
+
+  return (
+    <Suspense fallback={null}>
+      <ToolbarAction />
+    </Suspense>
+  );
+}
+
 export function Toolbar() {
   const highlightText = useLogStore((s) => s.highlightText);
   const setHighlightText = useLogStore((s) => s.setHighlightText);
@@ -1016,6 +1035,8 @@ export function Toolbar() {
           </Dropdown>
         </>
       )}
+
+      <WorkspaceToolbarAction workspace={getWorkspace(activeView)} />
 
       <div style={{ flex: 1 }} />
 

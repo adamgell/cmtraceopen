@@ -22,18 +22,18 @@ use std::sync::OnceLock;
 fn ccm_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
-    Regex::new(concat!(
-        r#"<!\[LOG\[(?P<msg>[\s\S]*?)\]LOG\]!>"#,
-        r#"<time="(?P<h>\d{1,2}):(?P<m>\d{1,2}):(?P<s>\d{1,2})\.(?P<ms>\d+)(?P<tz>[+-]*\d+)""#,
-        r#"\s+date="(?P<mon>\d{1,2})-(?P<day>\d{1,2})-(?P<yr>\d{4})""#,
-        r#"\s+component="(?P<comp>[^"]*)""#,
-        r#"\s+context="[^"]*""#,
-        r#"\s+type="(?P<typ>\d)?""#,
-        r#"\s+thread="(?P<thr>\d+)?""#,
-        r#"(?:\s+file="(?P<file>[^"]*)")?>"#,
-    ))
-    .expect("CCM regex must compile")
-})
+        Regex::new(concat!(
+            r#"<!\[LOG\[(?P<msg>[\s\S]*?)\]LOG\]!>"#,
+            r#"<time="(?P<h>\d{1,2}):(?P<m>\d{1,2}):(?P<s>\d{1,2})\.(?P<ms>\d+)(?P<tz>[+-]*\d+)""#,
+            r#"\s+date="(?P<mon>\d{1,2})-(?P<day>\d{1,2})-(?P<yr>\d{4})""#,
+            r#"\s+component="(?P<comp>[^"]*)""#,
+            r#"\s+context="[^"]*""#,
+            r#"\s+type="(?P<typ>\d)?""#,
+            r#"\s+thread="(?P<thr>\d+)?""#,
+            r#"(?:\s+file="(?P<file>[^"]*)")?>"#,
+        ))
+        .expect("CCM regex must compile")
+    })
 }
 
 /// Parse a single CCM-format log line.
@@ -65,7 +65,10 @@ pub(crate) fn truncate_subsecond_to_millis(value: &str) -> Option<u32> {
 
 /// Convert a naive local datetime + optional timezone offset (in minutes) to UTC epoch millis.
 /// Falls back to treating naive as UTC if the offset is invalid or overflows.
-pub(crate) fn naive_to_utc_millis(naive: chrono::NaiveDateTime, offset_minutes: Option<i32>) -> i64 {
+pub(crate) fn naive_to_utc_millis(
+    naive: chrono::NaiveDateTime,
+    offset_minutes: Option<i32>,
+) -> i64 {
     if let Some(offset_minutes) = offset_minutes {
         offset_minutes
             .checked_mul(60)
@@ -136,7 +139,9 @@ pub fn parse_content(
     specialization: Option<ParserSpecialization>,
 ) -> (Vec<LogEntry>, u32) {
     match specialization {
-        Some(ParserSpecialization::Ime) => crate::intune::ime_parser::parse_ime_entries(content, file_path),
+        Some(ParserSpecialization::Ime) => {
+            crate::intune::ime_parser::parse_ime_entries(content, file_path)
+        }
         None => parse_content_multiline(content, file_path),
     }
 }
@@ -637,16 +642,37 @@ mod tests {
     #[test]
     fn test_severity_from_type_field_mapping() {
         // Explicit CCM type values map directly.
-        assert_eq!(severity_from_type_field(Some(0), "anything"), Severity::Success);
-        assert_eq!(severity_from_type_field(Some(1), "anything"), Severity::Info);
-        assert_eq!(severity_from_type_field(Some(2), "anything"), Severity::Warning);
-        assert_eq!(severity_from_type_field(Some(3), "anything"), Severity::Error);
+        assert_eq!(
+            severity_from_type_field(Some(0), "anything"),
+            Severity::Success
+        );
+        assert_eq!(
+            severity_from_type_field(Some(1), "anything"),
+            Severity::Info
+        );
+        assert_eq!(
+            severity_from_type_field(Some(2), "anything"),
+            Severity::Warning
+        );
+        assert_eq!(
+            severity_from_type_field(Some(3), "anything"),
+            Severity::Error
+        );
         // Unknown numeric type falls back to Info.
-        assert_eq!(severity_from_type_field(Some(99), "anything"), Severity::Info);
+        assert_eq!(
+            severity_from_type_field(Some(99), "anything"),
+            Severity::Info
+        );
         // Absent type infers from message text — a neutral message must NOT
         // be coerced to Success (the latent unwrap_or(0) bug).
-        assert_eq!(severity_from_type_field(None, "Performing install steps"), Severity::Info);
-        assert_eq!(severity_from_type_field(None, "Operation failed"), Severity::Error);
+        assert_eq!(
+            severity_from_type_field(None, "Performing install steps"),
+            Severity::Info
+        );
+        assert_eq!(
+            severity_from_type_field(None, "Operation failed"),
+            Severity::Error
+        );
     }
 
     #[test]
@@ -689,8 +715,12 @@ mod tests {
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].format, LogFormat::Ccm);
         assert_eq!(entries[1].line_number, 2);
-        assert!(entries[1].message.contains("Downloaded profile payload is not valid JSON"));
-        assert!(entries[1].message.contains("At C:\\Windows\\IMECache\\HealthScripts\\script.ps1:457 char:9"));
+        assert!(entries[1]
+            .message
+            .contains("Downloaded profile payload is not valid JSON"));
+        assert!(entries[1]
+            .message
+            .contains("At C:\\Windows\\IMECache\\HealthScripts\\script.ps1:457 char:9"));
     }
 
     #[test]
@@ -729,7 +759,11 @@ mod tests {
             .unwrap()
             .and_utc()
             .timestamp_millis();
-        assert_eq!(ts, Some(expected_utc), "extreme offset should fall back to UTC");
+        assert_eq!(
+            ts,
+            Some(expected_utc),
+            "extreme offset should fall back to UTC"
+        );
         assert!(display.is_some(), "display should always be present");
     }
 }

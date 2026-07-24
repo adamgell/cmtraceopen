@@ -26,7 +26,11 @@ fn bench_intune_pipeline(c: &mut Criterion) {
     validate_fixture(&fixture, &source_file, &content);
 
     let lines = app_lib::intune::ime_parser::parse_ime_content(&content);
-    let events = app_lib::intune::event_tracker::extract_events(&lines, &source_file, &app_lib::intune::guid_registry::GuidRegistry::new());
+    let events = app_lib::intune::event_tracker::extract_events(
+        &lines,
+        &source_file,
+        &app_lib::intune::guid_registry::GuidRegistry::new(),
+    );
 
     let mut group = c.benchmark_group("intune_pipeline");
 
@@ -37,7 +41,11 @@ fn bench_intune_pipeline(c: &mut Criterion) {
             b.iter(|| {
                 let content = fs::read_to_string(black_box(&fixture_path))
                     .expect("benchmark fixture should be readable");
-                assert_eq!(content.len(), fixture.file_size_bytes, "Expected benchmark read phase to load the full fixture");
+                assert_eq!(
+                    content.len(),
+                    fixture.file_size_bytes,
+                    "Expected benchmark read phase to load the full fixture"
+                );
                 black_box(content)
             });
         },
@@ -49,7 +57,11 @@ fn bench_intune_pipeline(c: &mut Criterion) {
         |b| {
             b.iter(|| {
                 let lines = app_lib::intune::ime_parser::parse_ime_content(black_box(&content));
-                assert_eq!(lines.len(), fixture.logical_record_count, "Expected IME parse to emit one logical record per synthetic line");
+                assert_eq!(
+                    lines.len(),
+                    fixture.logical_record_count,
+                    "Expected IME parse to emit one logical record per synthetic line"
+                );
                 black_box(lines)
             });
         },
@@ -66,7 +78,11 @@ fn bench_intune_pipeline(c: &mut Criterion) {
                     black_box(&source_file),
                     &registry,
                 );
-                assert_eq!(events.len(), fixture.expected_event_count, "Expected one paired content-download event per app");
+                assert_eq!(
+                    events.len(),
+                    fixture.expected_event_count,
+                    "Expected one paired content-download event per app"
+                );
                 black_box(events)
             });
         },
@@ -80,7 +96,11 @@ fn bench_intune_pipeline(c: &mut Criterion) {
                 || events.clone(),
                 |events| {
                     let timeline = app_lib::intune::timeline::build_timeline(events);
-                    assert_eq!(timeline.len(), fixture.expected_timeline_count, "Expected timeline to preserve one event per app after deduplication");
+                    assert_eq!(
+                        timeline.len(),
+                        fixture.expected_timeline_count,
+                        "Expected timeline to preserve one event per app after deduplication"
+                    );
                     black_box(timeline)
                 },
                 BatchSize::LargeInput,
@@ -99,7 +119,11 @@ fn bench_intune_pipeline(c: &mut Criterion) {
                     black_box(&source_file),
                     &dl_registry,
                 );
-                assert_eq!(downloads.len(), fixture.expected_download_count, "Expected one download summary per app");
+                assert_eq!(
+                    downloads.len(),
+                    fixture.expected_download_count,
+                    "Expected one download summary per app"
+                );
                 black_box(downloads)
             });
         },
@@ -112,19 +136,47 @@ fn bench_intune_pipeline(c: &mut Criterion) {
             b.iter(|| {
                 let content = fs::read_to_string(black_box(&fixture_path))
                     .expect("benchmark fixture should be readable");
-                assert_eq!(content.len(), fixture.file_size_bytes, "Expected benchmark total phase to load the full fixture");
+                assert_eq!(
+                    content.len(),
+                    fixture.file_size_bytes,
+                    "Expected benchmark total phase to load the full fixture"
+                );
 
                 let lines = app_lib::intune::ime_parser::parse_ime_content(&content);
-                assert_eq!(lines.len(), fixture.logical_record_count, "Expected IME parse to emit one logical record per synthetic line");
+                assert_eq!(
+                    lines.len(),
+                    fixture.logical_record_count,
+                    "Expected IME parse to emit one logical record per synthetic line"
+                );
 
-                let events = app_lib::intune::event_tracker::extract_events(&lines, &source_file, &app_lib::intune::guid_registry::GuidRegistry::new());
-                assert_eq!(events.len(), fixture.expected_event_count, "Expected one paired content-download event per app");
+                let events = app_lib::intune::event_tracker::extract_events(
+                    &lines,
+                    &source_file,
+                    &app_lib::intune::guid_registry::GuidRegistry::new(),
+                );
+                assert_eq!(
+                    events.len(),
+                    fixture.expected_event_count,
+                    "Expected one paired content-download event per app"
+                );
 
                 let timeline = app_lib::intune::timeline::build_timeline(events);
-                assert_eq!(timeline.len(), fixture.expected_timeline_count, "Expected timeline to preserve one event per app after deduplication");
+                assert_eq!(
+                    timeline.len(),
+                    fixture.expected_timeline_count,
+                    "Expected timeline to preserve one event per app after deduplication"
+                );
 
-                let downloads = app_lib::intune::download_stats::extract_downloads(&lines, &source_file, &app_lib::intune::guid_registry::GuidRegistry::new());
-                assert_eq!(downloads.len(), fixture.expected_download_count, "Expected one download summary per app");
+                let downloads = app_lib::intune::download_stats::extract_downloads(
+                    &lines,
+                    &source_file,
+                    &app_lib::intune::guid_registry::GuidRegistry::new(),
+                );
+                assert_eq!(
+                    downloads.len(),
+                    fixture.expected_download_count,
+                    "Expected one download summary per app"
+                );
 
                 black_box((timeline, downloads))
             });
@@ -135,19 +187,47 @@ fn bench_intune_pipeline(c: &mut Criterion) {
 }
 
 fn validate_fixture(fixture: &common::IntuneBenchFixture, source_file: &str, content: &str) {
-    assert_eq!(content.len(), fixture.file_size_bytes, "Expected synthetic IME benchmark fixture size to remain stable");
+    assert_eq!(
+        content.len(),
+        fixture.file_size_bytes,
+        "Expected synthetic IME benchmark fixture size to remain stable"
+    );
 
     let lines = app_lib::intune::ime_parser::parse_ime_content(content);
-    assert_eq!(lines.len(), fixture.logical_record_count, "Expected all synthetic IME logical records to parse");
+    assert_eq!(
+        lines.len(),
+        fixture.logical_record_count,
+        "Expected all synthetic IME logical records to parse"
+    );
 
-    let events = app_lib::intune::event_tracker::extract_events(&lines, source_file, &app_lib::intune::guid_registry::GuidRegistry::new());
-    assert_eq!(events.len(), fixture.expected_event_count, "Expected one paired content-download event per app");
+    let events = app_lib::intune::event_tracker::extract_events(
+        &lines,
+        source_file,
+        &app_lib::intune::guid_registry::GuidRegistry::new(),
+    );
+    assert_eq!(
+        events.len(),
+        fixture.expected_event_count,
+        "Expected one paired content-download event per app"
+    );
 
     let timeline = app_lib::intune::timeline::build_timeline(events);
-    assert_eq!(timeline.len(), fixture.expected_timeline_count, "Expected timeline deduplication to preserve one event per app");
+    assert_eq!(
+        timeline.len(),
+        fixture.expected_timeline_count,
+        "Expected timeline deduplication to preserve one event per app"
+    );
 
-    let downloads = app_lib::intune::download_stats::extract_downloads(&lines, source_file, &app_lib::intune::guid_registry::GuidRegistry::new());
-    assert_eq!(downloads.len(), fixture.expected_download_count, "Expected one download summary per app");
+    let downloads = app_lib::intune::download_stats::extract_downloads(
+        &lines,
+        source_file,
+        &app_lib::intune::guid_registry::GuidRegistry::new(),
+    );
+    assert_eq!(
+        downloads.len(),
+        fixture.expected_download_count,
+        "Expected one download summary per app"
+    );
 }
 
 criterion_group! {

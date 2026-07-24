@@ -1,0 +1,27 @@
+{
+  "fullExpectedPaths": [
+    "/v1.0/deviceManagement/managedDevices/8c5a1ea3-bd82-454c-a19c-45dffcb10ef8",
+    "/v1.0/deviceManagement/windowsAutopilotDeviceIdentities?$filter=azureActiveDirectoryDeviceId%20eq%20'cf016a06-56ea-4f34-a7a7-8d744fa14b87'&$top=25",
+    "/beta/deviceManagement/windowsAutopilotDeviceIdentities/3d44df13-3098-4aed-a138-a7f965666f84/deploymentProfile",
+    "/beta/deviceManagement/windowsAutopilotDeviceIdentities/3d44df13-3098-4aed-a138-a7f965666f84/intendedDeploymentProfile",
+    "/beta/deviceManagement/windowsAutopilotDeploymentProfiles/943414e8-5674-41d3-b107-ff932c9cd2ea/assignments",
+    "/beta/deviceManagement/autopilotEvents?$filter=deviceId%20eq%20'cf016a06-56ea-4f34-a7a7-8d744fa14b87'&$orderby=eventDateTime%20desc&$top=25",
+    "/beta/deviceManagement/autopilotEvents/44c09b28-edb7-4983-ad29-3b12b6b003a7/policyStatusDetails",
+    "/v1.0/deviceManagement/deviceEnrollmentConfigurations/8dc9a8ca-0b02-4c87-9562-390807e808db",
+    "/v1.0/deviceManagement/deviceEnrollmentConfigurations/8dc9a8ca-0b02-4c87-9562-390807e808db/assignments",
+    "/v1.0/deviceAppManagement/mobileApps/f0a66d99-5eeb-4abc-8cac-5a96b70293ae",
+    "/v1.0/deviceAppManagement/mobileApps/f0a66d99-5eeb-4abc-8cac-5a96b70293ae/assignments",
+    "/beta/users/b63ca3f8-cd07-4ef5-824f-1f923df54ea7/mobileAppIntentAndStates?$top=100",
+    "/v1.0/deviceManagement/deviceConfigurations/d329d4b4-5acc-4ff2-a5b5-8457cadf2a7f",
+    "/v1.0/deviceManagement/deviceConfigurations/d329d4b4-5acc-4ff2-a5b5-8457cadf2a7f/assignments",
+    "/v1.0/deviceManagement/deviceConfigurations/d329d4b4-5acc-4ff2-a5b5-8457cadf2a7f/deviceStatuses?$top=100",
+    "/beta/deviceManagement/deviceManagementScripts/c2d8ffcb-b328-40c0-b87c-5cb862337d01",
+    "/beta/deviceManagement/deviceManagementScripts/c2d8ffcb-b328-40c0-b87c-5cb862337d01/assignments",
+    "/beta/deviceManagement/deviceManagementScripts/c2d8ffcb-b328-40c0-b87c-5cb862337d01/deviceRunStates?$expand=managedDevice($select=id)&$top=100"
+  ],
+  "forbiddenPathFragments": [
+    "memberOf",
+    "groups/",
+    "f3b25704-c28a-4bc6-b7e1-10410f0f3958/mobileApps"
+  ]
+}

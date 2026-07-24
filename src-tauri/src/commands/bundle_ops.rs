@@ -8,10 +8,12 @@ use crate::constants::DEFAULT_BUNDLE_PRIMARY_ENTRY_POINTS;
 #[cfg(feature = "dsregcmd")]
 use crate::dsregcmd::registry::{inspect_registry_snapshot_file, RegistrySnapshotSummary};
 use crate::intune::models::{EvidenceBundleArtifactCounts, EvidenceBundleMetadata};
-use crate::models::log_entry::{ParseQuality, ParserKind, ParserSelectionInfo, ParserSpecialization};
+use crate::models::log_entry::{
+    ParseQuality, ParserKind, ParserSelectionInfo, ParserSpecialization,
+};
 use crate::parser;
 
-use super::file_ops::{normalize_path_string, metadata_modified_unix_ms, FolderEntry};
+use super::file_ops::{metadata_modified_unix_ms, normalize_path_string, FolderEntry};
 
 #[cfg(not(feature = "dsregcmd"))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -166,9 +168,7 @@ pub struct EvidenceArtifactPreview {
 
 /// File extensions that are binary / non-parseable as text logs.
 /// These are skipped during recursive bundle collection.
-const BINARY_EXTENSIONS: &[&str] = &[
-    "etl", "dat", "zip", "cab", "tmp", "dir", "que", "evtx",
-];
+const BINARY_EXTENSIONS: &[&str] = &["etl", "dat", "zip", "cab", "tmp", "dir", "que", "evtx"];
 
 /// Maximum file size (in bytes) to include in batch aggregate parsing.
 /// Files larger than this are still listed in the sidebar but excluded from
@@ -179,7 +179,9 @@ const BUNDLE_BATCH_MAX_FILE_SIZE: u64 = 50 * 1024 * 1024; // 50 MB
 // ── Tauri Commands ──────────────────────────────────────────────────────
 
 #[tauri::command]
-pub fn inspect_evidence_bundle(path: String) -> Result<EvidenceBundleDetails, crate::error::AppError> {
+pub fn inspect_evidence_bundle(
+    path: String,
+) -> Result<EvidenceBundleDetails, crate::error::AppError> {
     inspect_evidence_bundle_details(Path::new(&path))
 }
 
@@ -250,7 +252,10 @@ pub(crate) fn collect_files_recursive(root: &Path) -> Vec<FolderEntry> {
 
             // Skip known binary extensions
             if let Some(ext) = entry_path.extension().and_then(|e| e.to_str()) {
-                if BINARY_EXTENSIONS.iter().any(|b| b.eq_ignore_ascii_case(ext)) {
+                if BINARY_EXTENSIONS
+                    .iter()
+                    .any(|b| b.eq_ignore_ascii_case(ext))
+                {
                     skipped_binary += 1;
                     log::debug!(
                         "event=collect_files_recursive_skip reason=binary_extension path=\"{}\"",
@@ -372,13 +377,21 @@ pub(crate) fn detect_evidence_bundle_metadata(path: &Path) -> Option<EvidenceBun
 
 // ── Private helpers ─────────────────────────────────────────────────────
 
-fn inspect_evidence_bundle_details(path: &Path) -> Result<EvidenceBundleDetails, crate::error::AppError> {
+fn inspect_evidence_bundle_details(
+    path: &Path,
+) -> Result<EvidenceBundleDetails, crate::error::AppError> {
     if !path.exists() {
-        return Err(crate::error::AppError::InvalidInput(format!("bundle path does not exist: {}", path.display())));
+        return Err(crate::error::AppError::InvalidInput(format!(
+            "bundle path does not exist: {}",
+            path.display()
+        )));
     }
 
     if !path.is_dir() {
-        return Err(crate::error::AppError::InvalidInput(format!("bundle path is not a folder: {}", path.display())));
+        return Err(crate::error::AppError::InvalidInput(format!(
+            "bundle path is not a folder: {}",
+            path.display()
+        )));
     }
 
     let manifest_path = path.join("manifest.json");
@@ -389,12 +402,21 @@ fn inspect_evidence_bundle_details(path: &Path) -> Result<EvidenceBundleDetails,
         )));
     }
 
-    let manifest_content = fs::read_to_string(&manifest_path)
-        .map_err(crate::error::AppError::Io)?;
-    let manifest = serde_json::from_str::<Value>(&manifest_content)
-        .map_err(|error| crate::error::AppError::Internal(format!("failed to parse {}: {}", manifest_path.display(), error)))?;
-    let metadata = detect_evidence_bundle_metadata(path)
-        .ok_or_else(|| crate::error::AppError::Internal(format!("{} is not a recognized evidence bundle", path.display())))?;
+    let manifest_content =
+        fs::read_to_string(&manifest_path).map_err(crate::error::AppError::Io)?;
+    let manifest = serde_json::from_str::<Value>(&manifest_content).map_err(|error| {
+        crate::error::AppError::Internal(format!(
+            "failed to parse {}: {}",
+            manifest_path.display(),
+            error
+        ))
+    })?;
+    let metadata = detect_evidence_bundle_metadata(path).ok_or_else(|| {
+        crate::error::AppError::Internal(format!(
+            "{} is not a recognized evidence bundle",
+            path.display()
+        ))
+    })?;
 
     let artifacts = json_value_at(&manifest, &["artifacts"])
         .and_then(Value::as_array)
@@ -439,7 +461,7 @@ fn parse_evidence_artifact_record(
     value: &Value,
 ) -> Option<EvidenceArtifactRecord> {
     let relative_path = json_string_at(value, &["relativePath"])?;
-    let absolute_path = resolve_bundle_hint_path(bundle_root, Some(relative_path.as_str()));
+    let absolute_path = resolve_bundle_artifact_path(bundle_root, &relative_path);
     let exists_on_disk = absolute_path.as_ref().is_some_and(|path| path.exists());
     let category = json_string_at(value, &["category"]).unwrap_or_else(|| "unknown".to_string());
     let family = json_string_at(value, &["family"]);
@@ -559,11 +581,17 @@ fn inspect_evidence_artifact_preview(
     origin_path: Option<String>,
 ) -> Result<EvidenceArtifactPreview, crate::error::AppError> {
     if !path.exists() {
-        return Err(crate::error::AppError::InvalidInput(format!("artifact path does not exist: {}", path.display())));
+        return Err(crate::error::AppError::InvalidInput(format!(
+            "artifact path does not exist: {}",
+            path.display()
+        )));
     }
 
     if !path.is_file() {
-        return Err(crate::error::AppError::InvalidInput(format!("artifact path is not a file: {}", path.display())));
+        return Err(crate::error::AppError::InvalidInput(format!(
+            "artifact path is not a file: {}",
+            path.display()
+        )));
     }
 
     match intake_kind {
@@ -872,6 +900,34 @@ fn resolve_bundle_hint_path(bundle_root: &Path, raw_path: Option<&str>) -> Optio
     }
 }
 
+fn resolve_bundle_artifact_path(bundle_root: &Path, relative_path: &str) -> Option<PathBuf> {
+    let relative_path = Path::new(relative_path.trim());
+    if relative_path.as_os_str().is_empty()
+        || relative_path.is_absolute()
+        || relative_path.components().any(|component| {
+            matches!(
+                component,
+                std::path::Component::ParentDir
+                    | std::path::Component::RootDir
+                    | std::path::Component::Prefix(_)
+            )
+        })
+    {
+        return None;
+    }
+
+    let candidate = bundle_root.join(relative_path);
+    if candidate.exists() {
+        let canonical_root = bundle_root.canonicalize().ok()?;
+        let canonical_candidate = candidate.canonicalize().ok()?;
+        if !canonical_candidate.starts_with(&canonical_root) {
+            return None;
+        }
+    }
+
+    Some(candidate)
+}
+
 fn json_value_at<'a>(value: &'a Value, path: &[&str]) -> Option<&'a Value> {
     let mut current = value;
     for segment in path {
@@ -909,13 +965,237 @@ fn json_string_array_at(value: &Value, path: &[&str]) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        inspect_evidence_artifact, inspect_evidence_bundle,
-        EvidenceArtifactIntakeKind,
+    use super::{inspect_evidence_artifact, inspect_evidence_bundle, EvidenceArtifactIntakeKind};
+    #[cfg(feature = "collector")]
+    use crate::collector::artifacts::{collect_logs, CollectorContext};
+    #[cfg(feature = "collector")]
+    use crate::collector::manifest::write_manifest;
+    #[cfg(feature = "collector")]
+    use crate::collector::types::{
+        ArtifactCounts, ArtifactResult, ArtifactStatus, CollectionProfile, LogCollectionItem,
     };
     use std::fs;
     use std::path::PathBuf;
+    #[cfg(feature = "collector")]
+    use std::sync::atomic::AtomicUsize;
+    #[cfg(feature = "collector")]
+    use std::sync::{Arc, Mutex};
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[cfg(feature = "collector")]
+    #[test]
+    fn collector_manifest_serializes_each_globbed_file() {
+        let bundle_dir = create_temp_dir("bundle-ops-collected-files");
+        let source_dir = bundle_dir.join("source");
+        fs::create_dir_all(&source_dir).expect("create source dir");
+        fs::write(source_dir.join("first.log"), "first").expect("write first log");
+        fs::write(source_dir.join("second.log"), "second").expect("write second log");
+
+        let results = Arc::new(Mutex::new(Vec::new()));
+        let context = CollectorContext {
+            bundle_evidence_root: bundle_dir.join("evidence"),
+            completed: Arc::new(AtomicUsize::new(0)),
+            results: Arc::clone(&results),
+        };
+        collect_logs(
+            &[LogCollectionItem {
+                id: "ime-glob".to_string(),
+                family: "intune-ime".to_string(),
+                parse_hints: vec!["intune-ime".to_string(), "cmtrace".to_string()],
+                source_pattern: source_dir.join("*.log").to_string_lossy().to_string(),
+                destination_folder: "logs/ime".to_string(),
+                notes: "IME glob".to_string(),
+            }],
+            &context,
+        );
+        let collected = results.lock().expect("collector results").clone();
+        write_manifest(
+            &bundle_dir,
+            "CMTRACE-TEST",
+            &CollectionProfile::embedded(),
+            &collected,
+            &ArtifactCounts {
+                collected: 1,
+                missing: 0,
+                failed: 0,
+                total: 1,
+            },
+            5,
+        )
+        .expect("write manifest");
+
+        let manifest: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(bundle_dir.join("manifest.json")).expect("read manifest"),
+        )
+        .expect("parse manifest");
+        let artifacts = manifest["artifacts"].as_array().expect("artifacts array");
+        assert_eq!(artifacts.len(), 2);
+        assert_eq!(artifacts[0]["relativePath"], "evidence/logs/ime/first.log");
+        assert_eq!(artifacts[1]["relativePath"], "evidence/logs/ime/second.log");
+        assert_eq!(artifacts[0]["artifactId"], "ime-glob");
+        assert_eq!(artifacts[0]["family"], "intune-ime");
+        assert_eq!(
+            artifacts[0]["parseHints"],
+            serde_json::json!(["intune-ime", "cmtrace"])
+        );
+        assert_eq!(artifacts[0]["bytesCopied"], 5);
+        assert_eq!(
+            artifacts[0]["originPath"],
+            source_dir.join("first.log").to_string_lossy().as_ref()
+        );
+
+        fs::remove_dir_all(&bundle_dir).expect("remove temp bundle dir");
+    }
+
+    #[cfg(feature = "collector")]
+    #[test]
+    fn manifest_artifacts_are_sorted_and_root_relative() {
+        let bundle_dir = create_temp_dir("bundle-ops-manifest-order");
+        let log_dir = bundle_dir.join("evidence").join("logs");
+        fs::create_dir_all(&log_dir).expect("create logs dir");
+        let z_path = log_dir.join("z.log");
+        let a_path = log_dir.join("a.log");
+        fs::write(&z_path, "z").expect("write z log");
+        fs::write(&a_path, "a").expect("write a log");
+        let results = vec![
+            ArtifactResult {
+                id: "artifact-z".to_string(),
+                category: "logs".to_string(),
+                family: "intune-ime".to_string(),
+                parse_hints: vec!["cmtrace".to_string()],
+                notes: Some("z log".to_string()),
+                status: ArtifactStatus::Collected,
+                files: vec![crate::collector::types::CollectedArtifactFile {
+                    relative_path: "evidence/logs/z.log".to_string(),
+                    origin_path: Some("C:\\Windows\\Temp\\z.log".to_string()),
+                    bytes_copied: 1,
+                }],
+                error: None,
+            },
+            ArtifactResult {
+                id: "artifact-b".to_string(),
+                category: "logs".to_string(),
+                family: "intune-ime".to_string(),
+                parse_hints: vec!["cmtrace".to_string()],
+                notes: Some("a log".to_string()),
+                status: ArtifactStatus::Collected,
+                files: vec![crate::collector::types::CollectedArtifactFile {
+                    relative_path: "evidence/logs/a.log".to_string(),
+                    origin_path: Some("C:\\Windows\\Temp\\a.log".to_string()),
+                    bytes_copied: 1,
+                }],
+                error: None,
+            },
+            ArtifactResult {
+                id: "artifact-a".to_string(),
+                category: "logs".to_string(),
+                family: "intune-ime".to_string(),
+                parse_hints: vec!["cmtrace".to_string()],
+                notes: Some("same a log".to_string()),
+                status: ArtifactStatus::Collected,
+                files: vec![crate::collector::types::CollectedArtifactFile {
+                    relative_path: "evidence/logs/a.log".to_string(),
+                    origin_path: Some("C:\\Windows\\Temp\\same-a.log".to_string()),
+                    bytes_copied: 1,
+                }],
+                error: None,
+            },
+            ArtifactResult {
+                id: "missing-artifact".to_string(),
+                category: "logs".to_string(),
+                family: "intune-ime".to_string(),
+                parse_hints: Vec::new(),
+                notes: Some("missing log".to_string()),
+                status: ArtifactStatus::Missing,
+                files: Vec::new(),
+                error: Some("not found".to_string()),
+            },
+        ];
+        write_manifest(
+            &bundle_dir,
+            "CMTRACE-TEST",
+            &CollectionProfile::embedded(),
+            &results,
+            &ArtifactCounts {
+                collected: 3,
+                missing: 1,
+                failed: 0,
+                total: 4,
+            },
+            5,
+        )
+        .expect("write manifest");
+
+        let manifest: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(bundle_dir.join("manifest.json")).expect("read manifest"),
+        )
+        .expect("parse manifest");
+        let artifact_order: Vec<(&str, &str)> = manifest["artifacts"]
+            .as_array()
+            .expect("artifacts array")
+            .iter()
+            .map(|artifact| {
+                (
+                    artifact["relativePath"].as_str().expect("relative path"),
+                    artifact["artifactId"].as_str().expect("artifact id"),
+                )
+            })
+            .collect();
+        assert_eq!(
+            artifact_order,
+            vec![
+                ("evidence/logs/a.log", "artifact-a"),
+                ("evidence/logs/a.log", "artifact-b"),
+                ("evidence/logs/z.log", "artifact-z"),
+            ]
+        );
+        assert!(artifact_order
+            .iter()
+            .all(|(path, _)| !PathBuf::from(path).is_absolute()));
+        assert_eq!(
+            manifest["collection"]["results"]["gaps"]
+                .as_array()
+                .map(Vec::len),
+            Some(1)
+        );
+
+        fs::remove_dir_all(&bundle_dir).expect("remove temp bundle dir");
+    }
+
+    #[test]
+    fn artifact_relative_path_cannot_escape_bundle_root() {
+        let bundle_dir = create_temp_dir("bundle-ops-artifact-traversal");
+        let outside_path = bundle_dir.with_extension("outside.log");
+        fs::write(&outside_path, "outside").expect("write outside log");
+        fs::write(bundle_dir.join("notes.md"), "bundle notes").expect("write notes");
+        let mut manifest: serde_json::Value =
+            serde_json::from_str(sample_bundle_manifest()).expect("parse sample manifest");
+        manifest["artifacts"][0]["relativePath"] = serde_json::Value::String(format!(
+            "../{}",
+            outside_path
+                .file_name()
+                .expect("outside file name")
+                .to_string_lossy()
+        ));
+        fs::write(
+            bundle_dir.join("manifest.json"),
+            serde_json::to_string_pretty(&manifest).expect("serialize manifest"),
+        )
+        .expect("write manifest");
+
+        let details = inspect_evidence_bundle(bundle_dir.to_string_lossy().to_string())
+            .expect("inspect bundle");
+        let escaped = details
+            .artifacts
+            .iter()
+            .find(|artifact| artifact.artifact_id.as_deref() == Some("ime-log"))
+            .expect("escaped artifact record");
+        assert!(escaped.absolute_path.is_none());
+        assert!(!escaped.exists_on_disk);
+
+        fs::remove_file(&outside_path).expect("remove outside log");
+        fs::remove_dir_all(&bundle_dir).expect("remove temp bundle dir");
+    }
 
     #[test]
     fn inspect_evidence_bundle_returns_inventory_and_notes_preview() {

@@ -1,0 +1,67 @@
+{
+  "office": [
+    { "raw": 0, "normalized": "notStarted", "display": "None" },
+    { "raw": 10, "normalized": "initialized", "display": "Initialized" },
+    { "raw": 20, "normalized": "downloading", "display": "Download In Progress" },
+    { "raw": 25, "normalized": "pending", "display": "Pending Download Retry" },
+    { "raw": 30, "normalized": "failed", "display": "Download Failed" },
+    { "raw": 40, "normalized": "downloaded", "display": "Download Completed" },
+    { "raw": 48, "normalized": "pending", "display": "Pending User Session" },
+    { "raw": 50, "normalized": "installing", "display": "Enforcement In Progress" },
+    { "raw": 55, "normalized": "pending", "display": "Pending Enforcement Retry" },
+    { "raw": 60, "normalized": "failed", "display": "Enforcement Failed" },
+    { "raw": 70, "normalized": "succeeded", "display": "Success / Enforcement Completed" }
+  ],
+  "classicEsp": [
+    { "raw": 1, "normalized": "notInstalled", "display": "Not Installed" },
+    { "raw": 2, "normalized": "inProgress", "display": "Downloading / Installing" },
+    { "raw": 3, "normalized": "succeeded", "display": "Success / Installed" },
+    { "raw": 4, "normalized": "failed", "display": "Error / Failed" }
+  ],
+  "policy": [
+    { "raw": 0, "normalized": "notStarted", "display": "Not Processed" },
+    { "raw": 1, "normalized": "processed", "display": "Processed" }
+  ],
+  "v2": [
+    { "raw": "NotStarted", "normalized": "notStarted", "display": "NotStarted" },
+    { "raw": "Completed", "normalized": "succeeded", "display": "Completed" },
+    { "raw": "Skipped", "normalized": "skipped", "display": "Skipped" },
+    { "raw": "Uninstalled", "normalized": "uninstalled", "display": "Uninstalled" },
+    { "raw": "Failed", "normalized": "failed", "display": "Failed" },
+    { "raw": "InProgress", "normalized": "inProgress", "display": "InProgress" },
+    { "raw": "RebootRequired", "normalized": "rebootRequired", "display": "RebootRequired" },
+    { "raw": "Cancelled", "normalized": "cancelled", "display": "Cancelled" }
+  ],
+  "unknownNumeric": { "raw": 999, "normalized": "unknown", "display": "999" },
+  "unknownString": { "raw": "FutureState", "normalized": "unknown", "display": "FutureState" },
+  "timestamps": [
+    {
+      "raw": "2026-07-15T12:00:00Z",
+      "explicitLocalOffset": null,
+      "kind": "utc",
+      "originalOffset": "Z",
+      "normalizedUtc": "2026-07-15T12:00:00Z"
+    },
+    {
+      "raw": "2026-07-15T08:00:00-04:00",
+      "explicitLocalOffset": null,
+      "kind": "offset",
+      "originalOffset": "-04:00",
+      "normalizedUtc": "2026-07-15T12:00:00Z"
+    },
+    {
+      "raw": "2026-07-15 08:00:00",
+      "explicitLocalOffset": "-04:00",
+      "kind": "local",
+      "originalOffset": "-04:00",
+      "normalizedUtc": "2026-07-15T12:00:00Z"
+    },
+    {
+      "raw": "2026-07-15 08:00:00",
+      "explicitLocalOffset": null,
+      "kind": "unspecified",
+      "originalOffset": null,
+      "normalizedUtc": null
+    }
+  ]
+}

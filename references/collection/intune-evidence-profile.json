@@ -1,6 +1,6 @@
 {
     "profileName": "intune-windows-endpoint-v1",
-    "profileVersion": "1.3.0",
+    "profileVersion": "1.4.0",
     "logs": [
         {
             "id": "ime-logs",
@@ -64,14 +64,14 @@
             "family": "mdm-enrollment",
             "path": "HKLM\\SOFTWARE\\Microsoft\\Enrollments",
             "fileName": "mdm-enrollments.reg",
-            "notes": "Enrollment state and tenant-scoped enrollment metadata."
+            "notes": "Enrollment state and tenant-scoped enrollment metadata, including child FirstSync state."
         },
         {
-            "id": "omadm-accounts",
-            "family": "omadm-account-state",
-            "path": "HKLM\\SOFTWARE\\Microsoft\\Provisioning\\OMADM\\Accounts",
-            "fileName": "omadm-accounts.reg",
-            "notes": "OMA-DM account configuration and MDM account identifiers."
+            "id": "omadm-state",
+            "family": "omadm-state",
+            "path": "HKLM\\SOFTWARE\\Microsoft\\Provisioning\\OMADM",
+            "fileName": "omadm-state.reg",
+            "notes": "OMA-DM account, SyncML, and enrollment processing state from one bounded parent export."
         },
         {
             "id": "autopilot-diagnostics",
@@ -95,25 +95,25 @@
             "notes": "Current device PolicyManager state relevant to MDM troubleshooting."
         },
         {
+            "id": "policymanager-providers",
+            "family": "policymanager-provider-state",
+            "path": "HKLM\\SOFTWARE\\Microsoft\\PolicyManager\\Providers",
+            "fileName": "policymanager-providers.reg",
+            "notes": "Provider-delivered PolicyManager state used to compare intended values against the current effective device policy."
+        },
+        {
             "id": "autopilot-esp-diagnostics",
             "family": "autopilot-esp-diagnostics",
-            "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\Autopilot\\EnrollmentStatusTracking\\ESPTrackingInfo\\Diagnostics",
+            "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\Autopilot\\EnrollmentStatusTracking",
             "fileName": "autopilot-esp-diagnostics.reg",
-            "notes": "Enrollment Status Page tracking diagnostics used by Autopilot troubleshooting."
+            "notes": "Enrollment Status Page tracking state and diagnostics used by Autopilot troubleshooting."
         },
         {
             "id": "ime-state",
             "family": "intune-management-extension-state",
             "path": "HKLM\\SOFTWARE\\Microsoft\\IntuneManagementExtension",
             "fileName": "intune-management-extension.reg",
-            "notes": "IME service and local Intune management extension state."
-        },
-        {
-            "id": "ime-win32apps",
-            "family": "intune-management-extension-win32apps",
-            "path": "HKLM\\SOFTWARE\\Microsoft\\IntuneManagementExtension\\Win32Apps",
-            "fileName": "intune-management-extension-win32apps.reg",
-            "notes": "Win32 app and Autopilot Device Preparation workload state, including provisioning progress and enforcement metadata."
+            "notes": "IME service and local state, including child Win32Apps enforcement and provisioning metadata."
         },
         {
             "id": "provisioning-nodecache-csp",
@@ -123,11 +123,39 @@
             "notes": "Provisioning CSP node cache that helps reconstruct OMA-DM and enrollment processing state."
         },
         {
-            "id": "omadm-syncml-odjapplied",
-            "family": "omadm-syncml-odj-state",
-            "path": "HKLM\\SOFTWARE\\Microsoft\\Provisioning\\OMADM\\SyncML\\ODJApplied",
-            "fileName": "omadm-syncml-odjapplied.reg",
-            "notes": "Hybrid join offline domain join application marker referenced during Autopilot and ODJ troubleshooting."
+            "id": "enterprise-desktop-app-mgmt",
+            "family": "mdm-app-management",
+            "path": "HKLM\\SOFTWARE\\Microsoft\\EnterpriseDesktopAppManagement",
+            "fileName": "enterprise-desktop-app-management.reg",
+            "notes": "Enterprise desktop app management state used to correlate MDM application deployment progress."
+        },
+        {
+            "id": "office-csp",
+            "family": "office-csp",
+            "path": "HKLM\\SOFTWARE\\Microsoft\\OfficeCSP",
+            "fileName": "office-csp.reg",
+            "notes": "Office CSP configuration and deployment state."
+        },
+        {
+            "id": "cloud-domain-join-tenantinfo",
+            "family": "cloud-domain-join-tenantinfo",
+            "path": "HKLM\\SYSTEM\\CurrentControlSet\\Control\\CloudDomainJoin\\TenantInfo",
+            "fileName": "cloud-domain-join-tenantinfo.reg",
+            "notes": "Cloud domain join tenant metadata, including MDM enrollment URL hints that help correlate tenant-scoped policy evidence."
+        },
+        {
+            "id": "policy-hklm",
+            "family": "windows-machine-policy-hive",
+            "path": "HKLM\\Software\\Policies",
+            "fileName": "hklm-policies.reg",
+            "notes": "Machine-scoped Windows policy hive captured alongside dsregcmd evidence for future deterministic policy correlation."
+        },
+        {
+            "id": "policy-microsoft-hklm",
+            "family": "windows-machine-microsoft-policy-hive",
+            "path": "HKLM\\Software\\Microsoft\\Policies",
+            "fileName": "hklm-microsoft-policies.reg",
+            "notes": "Machine-scoped Microsoft policy hive captured for PassportForWork and related policy correlation not covered by the generic Policies export."
         }
     ],
     "eventLogs": [
@@ -226,6 +254,18 @@
                 "autopilot"
             ],
             "notes": "Autopilot DDS profile JSON used during OOBE and provisioning diagnostics when present on the live device."
+        },
+        {
+            "id": "autopilot-dds-ztd-wmansvc",
+            "family": "autopilot-profile-json",
+            "sourcePath": "%WINDIR%\\ServiceState\\wmansvc\\AutopilotDDSZTDFile.json",
+            "destinationFolder": "evidence/exports/autopilot",
+            "fileName": "AutopilotDDSZTDFile.json",
+            "parseHints": [
+                "json",
+                "autopilot"
+            ],
+            "notes": "Exact Autopilot DDS profile JSON location used by wmansvc during OOBE."
         }
     ],
     "commands": [
@@ -246,10 +286,14 @@
             "arguments": [
                 "-NoProfile",
                 "-Command",
-                "Get-DeliveryOptimizationStatus | Format-List *"
+                "ConvertTo-Json -InputObject @(Get-DeliveryOptimizationStatus | Select-Object FileId,Status,Priority,BytesFromHttp,BytesFromLanPeers,BytesFromInternetPeers,BytesFromCacheServer,BytesFromGroupPeers,BytesTotal,DownloadDuration,PercentPeerCaching) -Compress"
             ],
-            "fileName": "delivery-optimization-status.txt",
-            "notes": "Captures current Delivery Optimization session and peer status using the built-in PowerShell cmdlet."
+            "fileName": "delivery-optimization-status.json",
+            "parseHints": [
+                "json",
+                "delivery-optimization"
+            ],
+            "notes": "Captures field-filtered Delivery Optimization session and peer counters without source URLs."
         },
         {
             "id": "delivery-optimization-perf-snap",
@@ -258,10 +302,62 @@
             "arguments": [
                 "-NoProfile",
                 "-Command",
-                "Get-DeliveryOptimizationPerfSnap | Format-List *"
+                "Get-DeliveryOptimizationPerfSnapThisMonth | Select-Object DownloadHttpBytes,DownloadLanBytes,DownloadInternetBytes,DownloadCacheHostBytes,UploadLanBytes,UploadInternetBytes,FilesDownloaded,FilesUploaded | ConvertTo-Json -Compress"
             ],
-            "fileName": "delivery-optimization-perf-snap.txt",
-            "notes": "Captures a Delivery Optimization performance snapshot for current bandwidth and cache usage evidence."
+            "fileName": "delivery-optimization-perf-snap.json",
+            "parseHints": [
+                "json",
+                "delivery-optimization"
+            ],
+            "notes": "Captures field-filtered monthly Delivery Optimization transfer counters."
+        },
+        {
+            "id": "esp-os-facts",
+            "family": "esp-hardware",
+            "command": "powershell.exe",
+            "arguments": [
+                "-NoProfile",
+                "-Command",
+                "Get-CimInstance Win32_OperatingSystem | Select-Object Caption,Version,BuildNumber,OSArchitecture,LastBootUpTime | ConvertTo-Json -Compress"
+            ],
+            "fileName": "esp-os-facts.json",
+            "parseHints": [
+                "json",
+                "esp-hardware"
+            ],
+            "notes": "Captures structured OS version and build facts for ESP troubleshooting."
+        },
+        {
+            "id": "esp-hardware-facts",
+            "family": "esp-hardware",
+            "command": "powershell.exe",
+            "arguments": [
+                "-NoProfile",
+                "-Command",
+                "$computer = Get-CimInstance Win32_ComputerSystem; $bios = Get-CimInstance Win32_BIOS; [pscustomobject]@{ Manufacturer = $computer.Manufacturer; Model = $computer.Model; SerialNumber = $bios.SerialNumber; TotalPhysicalMemory = $computer.TotalPhysicalMemory } | ConvertTo-Json -Compress"
+            ],
+            "fileName": "esp-hardware-facts.json",
+            "parseHints": [
+                "json",
+                "esp-hardware"
+            ],
+            "notes": "Captures structured manufacturer, model, serial, and memory facts without enrollment hash material."
+        },
+        {
+            "id": "esp-tpm-facts",
+            "family": "esp-hardware",
+            "command": "powershell.exe",
+            "arguments": [
+                "-NoProfile",
+                "-Command",
+                "Get-Tpm | Select-Object TpmPresent,TpmReady,TpmEnabled,TpmActivated,ManufacturerIdTxt,ManufacturerVersion,ManagedAuthLevel,OwnerClearDisabled,AutoProvisioning | ConvertTo-Json -Compress"
+            ],
+            "fileName": "esp-tpm-facts.json",
+            "parseHints": [
+                "json",
+                "esp-hardware"
+            ],
+            "notes": "Captures structured TPM readiness and version facts without enrollment hash material."
         }
     ]
 }

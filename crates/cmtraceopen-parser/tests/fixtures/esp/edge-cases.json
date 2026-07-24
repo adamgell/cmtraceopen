@@ -1,0 +1,316 @@
+{
+  "classicRegistry": [
+    {
+      "sourceArtifactId": "profile-registry",
+      "evidenceId": "profile-name",
+      "key": "SOFTWARE\\Microsoft\\Provisioning\\Diagnostics\\Autopilot",
+      "valueName": "DeploymentProfileName",
+      "value": { "text": "Corporate Autopilot" },
+      "sourceTimestamp": "2026-07-15T08:00:00Z"
+    },
+    {
+      "sourceArtifactId": "profile-registry",
+      "evidenceId": "tenant-domain",
+      "key": "SOFTWARE\\Microsoft\\Provisioning\\Diagnostics\\Autopilot",
+      "valueName": "CloudAssignedTenantDomain",
+      "value": { "text": "example.test" },
+      "sourceTimestamp": "2026-07-15T08:00:01Z",
+      "sensitivity": "sensitive"
+    },
+    {
+      "sourceArtifactId": "profile-registry",
+      "evidenceId": "tenant-id",
+      "key": "SOFTWARE\\Microsoft\\Provisioning\\Diagnostics\\Autopilot",
+      "valueName": "CloudAssignedTenantId",
+      "value": { "text": "tenant-classic" },
+      "sourceTimestamp": "2026-07-15T08:00:02Z",
+      "sensitivity": "sensitive"
+    },
+    {
+      "sourceArtifactId": "profile-registry",
+      "evidenceId": "correlation-id",
+      "key": "SOFTWARE\\Microsoft\\Provisioning\\Diagnostics\\Autopilot",
+      "valueName": "ZtdCorrelationId",
+      "value": { "text": "correlation-classic" },
+      "sourceTimestamp": "2026-07-15T08:00:03Z"
+    },
+    {
+      "sourceArtifactId": "profile-registry",
+      "evidenceId": "oobe-mask",
+      "key": "SOFTWARE\\Microsoft\\Provisioning\\Diagnostics\\Autopilot",
+      "valueName": "CloudAssignedOobeConfig",
+      "value": { "unsigned": 2046 },
+      "sourceTimestamp": "2026-07-15T08:00:04Z"
+    },
+    {
+      "sourceArtifactId": "profile-registry",
+      "evidenceId": "entdm-id",
+      "key": "SOFTWARE\\Microsoft\\Provisioning\\Diagnostics\\Autopilot\\EstablishedCorrelations",
+      "valueName": "EntDMID",
+      "value": { "text": "entdm-classic" },
+      "sourceTimestamp": "2026-07-15T08:00:05Z",
+      "sensitivity": "sensitive"
+    },
+    {
+      "sourceArtifactId": "profile-registry",
+      "evidenceId": "identity-upn",
+      "key": "SOFTWARE\\Microsoft\\Provisioning\\Diagnostics\\Autopilot",
+      "valueName": "UPN",
+      "value": { "text": "user@example.test" },
+      "sourceTimestamp": "2026-07-15T08:00:06Z",
+      "sensitivity": "sensitive"
+    },
+    {
+      "sourceArtifactId": "enrollment-registry",
+      "evidenceId": "enrollment-provider",
+      "key": "SOFTWARE\\Microsoft\\Enrollments\\11111111-1111-1111-1111-111111111111",
+      "valueName": "ProviderID",
+      "value": { "text": "MS DM Server" },
+      "sourceTimestamp": "2026-07-15T08:10:00Z"
+    },
+    {
+      "sourceArtifactId": "enrollment-registry",
+      "evidenceId": "enrollment-tenant",
+      "key": "SOFTWARE\\Microsoft\\Enrollments\\11111111-1111-1111-1111-111111111111",
+      "valueName": "AADTenantID",
+      "value": { "text": "tenant-classic" },
+      "sourceTimestamp": "2026-07-15T08:10:01Z",
+      "sensitivity": "sensitive"
+    },
+    {
+      "sourceArtifactId": "enrollment-registry",
+      "evidenceId": "enrollment-upn",
+      "key": "SOFTWARE\\Microsoft\\Enrollments\\11111111-1111-1111-1111-111111111111",
+      "valueName": "UPN",
+      "value": { "text": "user@example.test" },
+      "sourceTimestamp": "2026-07-15T08:10:02Z",
+      "sensitivity": "sensitive"
+    },
+    {
+      "sourceArtifactId": "enrollment-registry",
+      "evidenceId": "device-esp-enabled",
+      "key": "SOFTWARE\\Microsoft\\Enrollments\\11111111-1111-1111-1111-111111111111\\FirstSync",
+      "valueName": "SkipDeviceStatusPage",
+      "value": { "integer": 0 },
+      "sourceTimestamp": "2026-07-15T08:10:03Z"
+    },
+    {
+      "sourceArtifactId": "enrollment-registry",
+      "evidenceId": "user-esp-enabled",
+      "key": "SOFTWARE\\Microsoft\\Enrollments\\11111111-1111-1111-1111-111111111111\\FirstSync",
+      "valueName": "SkipUserStatusPage",
+      "value": { "integer": 0 },
+      "sourceTimestamp": "2026-07-15T08:10:04Z"
+    },
+    {
+      "sourceArtifactId": "enrollment-registry",
+      "evidenceId": "esp-timeout",
+      "key": "SOFTWARE\\Microsoft\\Enrollments\\11111111-1111-1111-1111-111111111111\\FirstSync",
+      "valueName": "SyncFailureTimeout",
+      "value": { "unsigned": 3600 },
+      "sourceTimestamp": "2026-07-15T08:10:05Z"
+    },
+    {
+      "sourceArtifactId": "enrollment-registry",
+      "evidenceId": "esp-blocking-options",
+      "key": "SOFTWARE\\Microsoft\\Enrollments\\11111111-1111-1111-1111-111111111111\\FirstSync",
+      "valueName": "BlockInStatusPage",
+      "value": { "unsigned": 3 },
+      "sourceTimestamp": "2026-07-15T08:10:06Z"
+    },
+    {
+      "sourceArtifactId": "odj-registry",
+      "evidenceId": "odj-applied",
+      "key": "SOFTWARE\\Microsoft\\Provisioning\\OMADM\\SyncML",
+      "valueName": "ODJApplied",
+      "value": { "boolean": true },
+      "sourceTimestamp": "2026-07-15T08:31:00Z"
+    }
+  ],
+  "classicJson": [
+    {
+      "sourceArtifactId": "autopilot-profile-json",
+      "evidenceId": "profile-download",
+      "documentType": "AutopilotProfile",
+      "jsonPointer": "/PolicyDownloadDate",
+      "value": { "text": "2026-07-15T08:30:00Z" },
+      "sourceTimestamp": "2026-07-15T08:30:00Z"
+    },
+    {
+      "sourceArtifactId": "autopilot-profile-json",
+      "evidenceId": "join-mode",
+      "documentType": "AutopilotProfile",
+      "jsonPointer": "/CloudAssignedDomainJoinMethod",
+      "value": { "integer": 1 },
+      "sourceTimestamp": "2026-07-15T08:30:01Z"
+    },
+    {
+      "sourceArtifactId": "autopilot-profile-json",
+      "evidenceId": "skip-connectivity",
+      "documentType": "AutopilotProfile",
+      "jsonPointer": "/HybridJoinSkipDCConnectivityCheck",
+      "value": { "boolean": true },
+      "sourceTimestamp": "2026-07-15T08:30:02Z"
+    }
+  ],
+  "v2PageSettings": [
+    {
+      "sourceArtifactId": "page-settings",
+      "evidenceId": "page-agent-timeout",
+      "documentType": "PageSettings",
+      "jsonPointer": "/AgentDownloadTimeoutSeconds",
+      "value": { "unsigned": 1800 },
+      "sourceTimestamp": "2026-07-15T09:00:01Z"
+    },
+    {
+      "sourceArtifactId": "page-settings",
+      "evidenceId": "page-timeout",
+      "documentType": "PageSettings",
+      "jsonPointer": "/PageTimeoutSeconds",
+      "value": { "unsigned": 3600 },
+      "sourceTimestamp": "2026-07-15T09:00:02Z"
+    },
+    {
+      "sourceArtifactId": "page-settings",
+      "evidenceId": "page-skip",
+      "documentType": "PageSettings",
+      "jsonPointer": "/AllowSkipOnFailure",
+      "value": { "boolean": true },
+      "sourceTimestamp": "2026-07-15T09:00:03Z"
+    },
+    {
+      "sourceArtifactId": "page-settings",
+      "evidenceId": "page-diagnostics",
+      "documentType": "PageSettings",
+      "jsonPointer": "/AllowDiagnostics",
+      "value": { "boolean": true },
+      "sourceTimestamp": "2026-07-15T09:00:04Z"
+    },
+    {
+      "sourceArtifactId": "page-settings",
+      "evidenceId": "page-script",
+      "documentType": "PageSettings",
+      "jsonPointer": "/Scripts/0",
+      "value": { "text": "script-v2" },
+      "sourceTimestamp": "2026-07-15T09:00:05Z"
+    }
+  ],
+  "nodeCache": [
+    {
+      "index": 2,
+      "nodeUri": "./Vendor/MSFT/Policy/Config/Node2",
+      "expectedValue": "expected-2",
+      "sourceArtifactId": "node-cache-registry",
+      "nodeEvidenceId": "node-2-uri",
+      "expectedEvidenceId": "node-2-expected",
+      "sourceTimestamp": "2026-07-15T10:00:02Z",
+      "sensitivity": "sensitive"
+    },
+    {
+      "index": 10,
+      "nodeUri": "./Vendor/MSFT/Policy/Config/Node10",
+      "expectedValue": "expected-10",
+      "sourceArtifactId": "node-cache-registry",
+      "nodeEvidenceId": "node-10-uri",
+      "expectedEvidenceId": "node-10-expected",
+      "sourceTimestamp": "2026-07-15T10:00:10Z",
+      "sensitivity": "sensitive"
+    },
+    {
+      "index": 42,
+      "nodeUri": "./Vendor/MSFT/Policy/Config/Node42",
+      "expectedValue": "expected-42",
+      "sourceArtifactId": "node-cache-registry",
+      "nodeEvidenceId": "node-42-uri",
+      "expectedEvidenceId": "node-42-expected",
+      "sourceTimestamp": "2026-07-15T10:00:42Z",
+      "sensitivity": "sensitive"
+    }
+  ],
+  "malformedJson": [
+    {
+      "sourceArtifactId": "malformed-json",
+      "evidenceId": "malformed-page-settings",
+      "documentType": "PageSettings",
+      "jsonPointer": "/",
+      "value": { "text": "{bad-page-settings" },
+      "sourceTimestamp": "2026-07-15T10:10:00Z",
+      "parseState": "malformed"
+    },
+    {
+      "sourceArtifactId": "malformed-json",
+      "evidenceId": "malformed-provisioning-progress",
+      "documentType": "ProvisioningProgress",
+      "jsonPointer": "/",
+      "value": { "text": "{bad-provisioning-progress" },
+      "sourceTimestamp": "2026-07-15T10:10:01Z",
+      "parseState": "malformed"
+    },
+    {
+      "sourceArtifactId": "malformed-json",
+      "evidenceId": "malformed-enforcement",
+      "documentType": "EnforcementStateMessage",
+      "jsonPointer": "/",
+      "value": { "text": "{bad-enforcement" },
+      "sourceTimestamp": "2026-07-15T10:10:02Z",
+      "parseState": "malformed"
+    }
+  ],
+  "v2States": [
+    { "index": 0, "rawIdentifier": "v2-not-started", "raw": 0, "normalized": "notStarted", "sourceTimestamp": "2026-07-15T11:00:00Z", "idEvidenceId": "v2-id-0", "stateEvidenceId": "v2-state-0" },
+    { "index": 1, "rawIdentifier": "v2-completed", "raw": 1, "normalized": "succeeded", "sourceTimestamp": "2026-07-15T11:01:00Z", "idEvidenceId": "v2-id-1", "stateEvidenceId": "v2-state-1" },
+    { "index": 2, "rawIdentifier": "v2-skipped", "raw": 2, "normalized": "skipped", "sourceTimestamp": "2026-07-15T11:02:00Z", "idEvidenceId": "v2-id-2", "stateEvidenceId": "v2-state-2" },
+    { "index": 3, "rawIdentifier": "v2-uninstalled", "raw": 3, "normalized": "uninstalled", "sourceTimestamp": "2026-07-15T11:03:00Z", "idEvidenceId": "v2-id-3", "stateEvidenceId": "v2-state-3" },
+    { "index": 4, "rawIdentifier": "v2-failed", "raw": 4, "normalized": "failed", "sourceTimestamp": "2026-07-15T11:04:00Z", "idEvidenceId": "v2-id-4", "stateEvidenceId": "v2-state-4" },
+    { "index": 5, "rawIdentifier": "v2-in-progress", "raw": 5, "normalized": "inProgress", "sourceTimestamp": "2026-07-15T11:05:00Z", "idEvidenceId": "v2-id-5", "stateEvidenceId": "v2-state-5" },
+    { "index": 6, "rawIdentifier": "v2-reboot", "raw": 6, "normalized": "rebootRequired", "sourceTimestamp": "2026-07-15T11:06:00Z", "idEvidenceId": "v2-id-6", "stateEvidenceId": "v2-state-6" },
+    { "index": 7, "rawIdentifier": "v2-cancelled", "raw": 7, "normalized": "cancelled", "sourceTimestamp": "2026-07-15T11:07:00Z", "idEvidenceId": "v2-id-7", "stateEvidenceId": "v2-state-7" },
+    { "index": 8, "rawIdentifier": "v2-unknown", "raw": "FutureState", "normalized": "unknown", "sourceTimestamp": "2026-07-15T11:08:00Z", "idEvidenceId": "v2-id-8", "stateEvidenceId": "v2-state-8" }
+  ],
+  "coverage": [
+    {
+      "artifactId": "protected-esp-registry",
+      "family": "esp-registry",
+      "status": "permissionDenied",
+      "detail": "Access denied without elevation",
+      "observedAtUtc": "2026-07-15T12:00:00Z",
+      "sourceArtifactId": "protected-registry",
+      "evidenceId": "coverage-denied"
+    }
+  ],
+  "events": [
+    { "eventId": 72, "recordId": 1000, "sourceArtifactId": "event-log", "evidenceId": "event-72", "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin", "timestamp": "2026-07-15T13:00:00Z", "message": "MDM enrollment", "normalized": "processed", "timelineKind": "registration" },
+    { "eventId": 100, "recordId": 1001, "sourceArtifactId": "event-log", "evidenceId": "event-100", "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin", "timestamp": "2026-07-15T13:01:00Z", "message": "Could not establish connectivity", "normalized": "failed", "timelineKind": "offlineDomainJoin" },
+    { "eventId": 101, "recordId": 1002, "sourceArtifactId": "event-log", "evidenceId": "event-101", "channel": "Microsoft-Windows-User Device Registration/Admin", "timestamp": "2026-07-15T13:02:00Z", "message": "SCP discovery successful", "normalized": "processed", "timelineKind": "registration" },
+    { "eventId": 107, "recordId": 1003, "sourceArtifactId": "event-log", "evidenceId": "event-107", "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin", "timestamp": "2026-07-15T13:03:00Z", "message": "Successfully applied ODJ blob", "normalized": "succeeded", "timelineKind": "offlineDomainJoin" },
+    { "eventId": 109, "recordId": 1004, "sourceArtifactId": "event-log", "evidenceId": "event-109", "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin", "timestamp": "2026-07-15T13:04:00Z", "message": "Waiting for ODJ blob", "normalized": "inProgress", "timelineKind": "offlineDomainJoin" },
+    { "eventId": 110, "recordId": 1005, "sourceArtifactId": "event-log", "evidenceId": "event-110", "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin", "timestamp": "2026-07-15T13:05:00Z", "message": "Processed ODJ blob", "normalized": "processed", "timelineKind": "offlineDomainJoin" },
+    { "eventId": 111, "recordId": 1006, "sourceArtifactId": "event-log", "evidenceId": "event-111", "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin", "timestamp": "2026-07-15T13:06:00Z", "message": "Starting wait for ODJ blob", "normalized": "inProgress", "timelineKind": "offlineDomainJoin" },
+    { "eventId": 304, "recordId": 1007, "sourceArtifactId": "event-log", "evidenceId": "event-304", "channel": "Microsoft-Windows-User Device Registration/Admin", "timestamp": "2026-07-15T13:07:00Z", "message": "Hybrid AADJ device registration failed", "normalized": "failed", "timelineKind": "registration" },
+    { "eventId": 306, "recordId": 1008, "sourceArtifactId": "event-log", "evidenceId": "event-306", "channel": "Microsoft-Windows-User Device Registration/Admin", "timestamp": "2026-07-15T13:08:00Z", "message": "Hybrid AADJ device registration succeeded", "normalized": "succeeded", "timelineKind": "registration" },
+    { "eventId": 1905, "recordId": 1009, "sourceArtifactId": "event-log", "evidenceId": "event-1905", "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin", "timestamp": "2026-07-15T13:09:00Z", "message": "Download started", "normalized": "downloading", "timelineKind": "workload" },
+    { "eventId": 1906, "recordId": 1010, "sourceArtifactId": "event-log", "evidenceId": "event-1906", "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin", "timestamp": "2026-07-15T13:10:00Z", "message": "Download finished", "normalized": "downloaded", "timelineKind": "workload" },
+    { "eventId": 1920, "recordId": 1011, "sourceArtifactId": "event-log", "evidenceId": "event-1920", "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin", "timestamp": "2026-07-15T13:11:00Z", "message": "Installation started", "normalized": "inProgress", "timelineKind": "workload" },
+    { "eventId": 1922, "recordId": 1012, "sourceArtifactId": "event-log", "evidenceId": "event-1922", "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin", "timestamp": "2026-07-15T13:12:00Z", "message": "Installation finished", "normalized": "succeeded", "timelineKind": "workload" },
+    { "eventId": 1924, "recordId": 1013, "sourceArtifactId": "event-log", "evidenceId": "event-1924", "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin", "timestamp": "2026-07-15T13:13:00Z", "message": "Installation failed", "normalized": "failed", "timelineKind": "workload" }
+  ],
+  "systemFacts": [
+    { "sourceArtifactId": "system-facts", "evidenceId": "os-version", "fact": "osVersion", "value": "10.0.26100", "sourceTimestamp": "2026-07-15T14:00:00Z" },
+    { "sourceArtifactId": "system-facts", "evidenceId": "os-build", "fact": "osBuild", "value": "26100.4652", "sourceTimestamp": "2026-07-15T14:00:01Z" },
+    { "sourceArtifactId": "system-facts", "evidenceId": "manufacturer", "fact": "manufacturer", "value": "Contoso", "sourceTimestamp": "2026-07-15T14:00:02Z" },
+    { "sourceArtifactId": "system-facts", "evidenceId": "model", "fact": "model", "value": "Model 42", "sourceTimestamp": "2026-07-15T14:00:03Z" },
+    { "sourceArtifactId": "system-facts", "evidenceId": "serial", "fact": "serialNumber", "value": "SERIAL-42", "sourceTimestamp": "2026-07-15T14:00:04Z" },
+    { "sourceArtifactId": "system-facts", "evidenceId": "tpm", "fact": "tpmVersion", "value": "2.0", "sourceTimestamp": "2026-07-15T14:00:05Z" }
+  ],
+  "hardwareHash": [
+    {
+      "sourceArtifactId": "hardware-hash-csv",
+      "evidenceId": "raw-hardware-hash",
+      "documentType": "HardwareHash",
+      "jsonPointer": "/Hardware Hash",
+      "value": { "text": "RAW-HARDWARE-HASH-MUST-NOT-APPEAR" },
+      "sourceTimestamp": "2026-07-15T14:00:06Z",
+      "sensitivity": "restricted"
+    }
+  ]
+}

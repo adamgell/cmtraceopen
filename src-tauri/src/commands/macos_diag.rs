@@ -26,12 +26,16 @@ pub fn macos_list_packages() -> Result<MacosPackagesResult, crate::error::AppErr
 }
 
 #[tauri::command]
-pub fn macos_get_package_info(package_id: String) -> Result<MacosPackageInfo, crate::error::AppError> {
+pub fn macos_get_package_info(
+    package_id: String,
+) -> Result<MacosPackageInfo, crate::error::AppError> {
     crate::macos_diag::packages::get_package_info_impl(&package_id)
 }
 
 #[tauri::command]
-pub fn macos_get_package_files(package_id: String) -> Result<MacosPackageFiles, crate::error::AppError> {
+pub fn macos_get_package_files(
+    package_id: String,
+) -> Result<MacosPackageFiles, crate::error::AppError> {
     crate::macos_diag::packages::get_package_files_impl(&package_id)
 }
 
@@ -44,11 +48,7 @@ pub fn macos_query_unified_log(
     // Clamp result_cap to a reasonable range to avoid excessive resource usage
     let capped = result_cap.unwrap_or(5000).clamp(1, 50_000);
 
-    crate::macos_diag::unified_log::query_unified_log_impl(
-        &preset_id,
-        time_range,
-        capped,
-    )
+    crate::macos_diag::unified_log::query_unified_log_impl(&preset_id, time_range, capped)
 }
 
 #[tauri::command]
@@ -58,12 +58,16 @@ pub fn macos_open_system_settings() -> Result<(), crate::error::AppError> {
         std::process::Command::new("open")
             .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles")
             .spawn()
-            .map_err(|e| crate::error::AppError::Internal(format!("Failed to open System Settings: {}", e)))?;
+            .map_err(|e| {
+                crate::error::AppError::Internal(format!("Failed to open System Settings: {}", e))
+            })?;
         Ok(())
     }
     #[cfg(not(target_os = "macos"))]
     {
-        Err(crate::error::AppError::PlatformUnsupported("Opening System Settings is only available on macOS.".to_string()))
+        Err(crate::error::AppError::PlatformUnsupported(
+            "Opening System Settings is only available on macOS.".to_string(),
+        ))
     }
 }
 
@@ -115,5 +119,7 @@ fn macos_scan_intune_logs_impl() -> Result<MacosIntuneLogScanResult, crate::erro
 
 #[cfg(not(target_os = "macos"))]
 fn macos_scan_intune_logs_impl() -> Result<MacosIntuneLogScanResult, crate::error::AppError> {
-    Err(crate::error::AppError::PlatformUnsupported("macOS Diagnostics is only available on macOS.".to_string()))
+    Err(crate::error::AppError::PlatformUnsupported(
+        "macOS Diagnostics is only available on macOS.".to_string(),
+    ))
 }

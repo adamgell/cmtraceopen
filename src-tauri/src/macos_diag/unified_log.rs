@@ -99,12 +99,7 @@ pub fn parse_ndjson_log_entries(
         let process = json
             .get("processImagePath")
             .and_then(|v| v.as_str())
-            .map(|path| {
-                path.rsplit('/')
-                    .next()
-                    .unwrap_or(path)
-                    .to_string()
-            })
+            .map(|path| path.rsplit('/').next().unwrap_or(path).to_string())
             .unwrap_or_default();
 
         let subsystem = json
@@ -166,10 +161,9 @@ pub fn query_unified_log_impl(
     use std::process::Command;
 
     let presets = get_presets();
-    let preset = presets
-        .iter()
-        .find(|p| p.id == preset_id)
-        .ok_or_else(|| crate::error::AppError::InvalidInput(format!("Unknown preset ID: '{}'", preset_id)))?;
+    let preset = presets.iter().find(|p| p.id == preset_id).ok_or_else(|| {
+        crate::error::AppError::InvalidInput(format!("Unknown preset ID: '{}'", preset_id))
+    })?;
 
     log::info!(
         "Querying unified log with preset '{}', cap={}",
@@ -195,9 +189,7 @@ pub fn query_unified_log_impl(
         }
     };
 
-    let output = cmd
-        .output()
-        .map_err(crate::error::AppError::Io)?;
+    let output = cmd.output().map_err(crate::error::AppError::Io)?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -224,7 +216,9 @@ pub fn query_unified_log_impl(
     _time_range: Option<MacosUnifiedLogTimeRange>,
     _result_cap: usize,
 ) -> Result<MacosUnifiedLogResult, crate::error::AppError> {
-    Err(crate::error::AppError::PlatformUnsupported("macOS Diagnostics is only available on macOS.".to_string()))
+    Err(crate::error::AppError::PlatformUnsupported(
+        "macOS Diagnostics is only available on macOS.".to_string(),
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -257,7 +251,10 @@ mod tests {
         assert_eq!(entries[0].level, "Default");
         assert_eq!(entries[0].message, "Processing command");
         assert_eq!(entries[0].pid, Some(1234));
-        assert_eq!(entries[0].subsystem.as_deref(), Some("com.apple.ManagedClient"));
+        assert_eq!(
+            entries[0].subsystem.as_deref(),
+            Some("com.apple.ManagedClient")
+        );
 
         assert_eq!(entries[1].process, "profiles");
         assert_eq!(entries[1].level, "Error");

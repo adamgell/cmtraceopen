@@ -75,11 +75,14 @@ pub async fn query_timeline_entries_cmd(
         .get(&id)
         .ok_or(TimelineError::NotFound { id: id.clone() })?;
     let filter_set: Option<HashSet<u16>> = source_filter.map(|v| v.into_iter().collect());
-    let ctx = QueryContext {
-        timeline,
-        runtimes,
-    };
-    Ok(q_entries(&ctx, range_ms, filter_set.as_ref(), offset, limit))
+    let ctx = QueryContext { timeline, runtimes };
+    Ok(q_entries(
+        &ctx,
+        range_ms,
+        filter_set.as_ref(),
+        offset,
+        limit,
+    ))
 }
 
 #[tauri::command]
@@ -111,10 +114,7 @@ pub async fn query_incident_details_cmd(
     let runtimes = rts
         .get(&id)
         .ok_or(TimelineError::NotFound { id: id.clone() })?;
-    let ctx = QueryContext {
-        timeline,
-        runtimes,
-    };
+    let ctx = QueryContext { timeline, runtimes };
     q_incident(&ctx, incident_id).ok_or(TimelineError::NotFound {
         id: format!("incident:{}", incident_id),
     })
@@ -157,10 +157,7 @@ pub async fn update_timeline_tunables_cmd(
 }
 
 #[tauri::command]
-pub async fn close_timeline_cmd(
-    app: AppHandle,
-    id: String,
-) -> Result<(), TimelineError> {
+pub async fn close_timeline_cmd(app: AppHandle, id: String) -> Result<(), TimelineError> {
     let state: State<AppState> = app.state();
     let rt_state: State<TimelineRuntimeMap> = app.state();
     state.timelines.lock().unwrap().remove(&id);

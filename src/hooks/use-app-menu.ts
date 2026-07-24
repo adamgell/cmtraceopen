@@ -73,6 +73,13 @@ export function useAppMenu() {
           case "toggle_info_pane":
             toggleInfoPane();
             return;
+          case "toggle_always_on_top": {
+            const next = !useUiStore.getState().alwaysOnTop;
+            useUiStore.getState().setAlwaysOnTop(next);
+            const { invoke } = await import("@tauri-apps/api/core");
+            await invoke("set_always_on_top", { enabled: next });
+            return;
+          }
           case "show_about":
             showAboutDialog();
             return;
@@ -195,4 +202,27 @@ export function useAppMenu() {
     toggleInfoPane,
     togglePauseResume,
   ]);
+
+  // Apply the persisted "Always on Top" preference once on startup, which also
+  // syncs the native Window-menu checkmark to the restored state.
+  useEffect(() => {
+    let disposed = false;
+    void (async () => {
+      try {
+        const { invoke } = await import("@tauri-apps/api/core");
+        if (disposed) return;
+        await invoke("set_always_on_top", {
+          enabled: useUiStore.getState().alwaysOnTop,
+        });
+      } catch (error) {
+        console.error(
+          "[app-menu] failed to apply always-on-top on startup",
+          error,
+        );
+      }
+    })();
+    return () => {
+      disposed = true;
+    };
+  }, []);
 }

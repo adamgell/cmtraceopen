@@ -1,0 +1,65 @@
+{
+  "cases": [
+    {
+      "name": "unknown",
+      "expectedScenario": "unknown",
+      "records": []
+    },
+    {
+      "name": "autopilot-v1",
+      "expectedScenario": "autopilotV1",
+      "records": [
+        {
+          "sourceArtifactId": "autopilot-registry",
+          "evidenceId": "profile-name-v1",
+          "key": "SOFTWARE\\Microsoft\\Provisioning\\Diagnostics\\Autopilot",
+          "valueName": "DeploymentProfileName",
+          "value": { "text": "Corporate Autopilot" },
+          "sourceTimestamp": "2026-07-15T08:00:00Z"
+        }
+      ]
+    },
+    {
+      "name": "existing-device-json",
+      "expectedScenario": "existingDeviceJson",
+      "records": [
+        {
+          "sourceArtifactId": "autopilot-registry",
+          "evidenceId": "existing-correlation",
+          "key": "SOFTWARE\\Microsoft\\Provisioning\\Diagnostics\\Autopilot",
+          "valueName": "ZtdCorrelationId",
+          "value": { "text": "existing-device-correlation" },
+          "sourceTimestamp": "2026-07-15T08:00:00Z"
+        }
+      ]
+    },
+    {
+      "name": "esp-only-without-ime-logs",
+      "expectedScenario": "espOnly",
+      "records": [
+        {
+          "sourceArtifactId": "enrollment-registry",
+          "evidenceId": "esp-first-sync",
+          "key": "SOFTWARE\\Microsoft\\Enrollments\\11111111-1111-1111-1111-111111111111\\FirstSync",
+          "valueName": "SkipDeviceStatusPage",
+          "value": { "integer": 0 },
+          "sourceTimestamp": "2026-07-15T08:00:00Z"
+        }
+      ]
+    },
+    {
+      "name": "autopilot-device-preparation-v2",
+      "expectedScenario": "autopilotDevicePreparationV2",
+      "records": [
+        {
+          "sourceArtifactId": "autopilot-settings",
+          "evidenceId": "device-preparation-hint",
+          "key": "SOFTWARE\\Microsoft\\Provisioning\\AutopilotSettings",
+          "valueName": "AutopilotDevicePrepHint",
+          "value": { "text": "enabled" },
+          "sourceTimestamp": "2026-07-15T08:00:00Z"
+        }
+      ]
+    }
+  ]
+}

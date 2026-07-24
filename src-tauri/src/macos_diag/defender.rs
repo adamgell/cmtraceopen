@@ -116,13 +116,11 @@ pub fn inspect_defender_impl() -> Result<MacosDefenderResult, crate::error::AppE
     };
 
     // --- Log files ---
-    let log_files: Vec<MacosLogFileEntry> =
-        scan_log_directory("/Library/Logs/Microsoft/mdatp/");
+    let log_files: Vec<MacosLogFileEntry> = scan_log_directory("/Library/Logs/Microsoft/mdatp/");
 
     // --- Diagnostic files ---
-    let diag_files: Vec<MacosLogFileEntry> = scan_log_directory(
-        "/Library/Application Support/Microsoft/Defender/wdavdiag/",
-    );
+    let diag_files: Vec<MacosLogFileEntry> =
+        scan_log_directory("/Library/Application Support/Microsoft/Defender/wdavdiag/");
 
     Ok(MacosDefenderResult {
         health,
@@ -133,7 +131,9 @@ pub fn inspect_defender_impl() -> Result<MacosDefenderResult, crate::error::AppE
 
 #[cfg(not(target_os = "macos"))]
 pub fn inspect_defender_impl() -> Result<MacosDefenderResult, crate::error::AppError> {
-    Err(crate::error::AppError::PlatformUnsupported("macOS Diagnostics is only available on macOS.".to_string()))
+    Err(crate::error::AppError::PlatformUnsupported(
+        "macOS Diagnostics is only available on macOS.".to_string(),
+    ))
 }
 
 // ---------------------------------------------------------------------------

@@ -4,6 +4,22 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **ESP Diagnostics workspace**: Added a dedicated, full-width, no-sidebar workspace for read-only troubleshooting of Windows Autopilot Enrollment Status Page, Autopilot Device Preparation, and software deployment failures. It combines scenario/phase progress, actionable evidence-backed findings, workload state, enrollment/profile/registry/event evidence, Delivery Optimization, coverage gaps, and a live **What MSIEXEC is doing now** sampler on one page. Live Windows sessions continue collecting while the log surface is collapsed or another workspace is active; captured CMTrace Open evidence folders, manifests, CABs, and ZIPs are also supported.
+- **Bounded live deployment evidence**: Added curated IME, ConfigMgr, Patch My PC, PSAppDeployToolkit, installer, and shallow high-signal temporary-log discovery with rotation/truncation handling and explicit retention limits. The live-log surface is collapsed by default, vertically resizable when docked, expandable to the full workspace, and available from a prominent **Open live logs** app-chrome action. No deep-scan or full-drive route is provided.
+- **Optional ESP Microsoft Graph enrichment**: When the existing Graph option is enabled and its WAM connection is already authenticated, the workspace can add managed-device, Autopilot profile/event, ESP configuration, app, policy, certificate, platform-script, and remediation context while preserving raw local IDs. Per-section permission, offline, throttled, skipped, beta, partial, cancelled, and ambiguous-device states remain visible; connecting never queues work or opens a second sign-in flow.
+- **User-triggered Graph permission upgrade**: Settings now offers **Request missing permissions** for an authenticated partial WAM connection. One explicit click re-requests the fixed five delegated read permissions; successful candidates can add capabilities without removing working ones. Unchanged, cancelled, denied, or failed outcomes retain the existing in-memory partial connection, while a stale outcome leaves the newer authoritative authentication state untouched. Startup and ESP refresh never initiate the upgrade, and tokens remain excluded from IPC and logs.
+
+### Changed
+
+- **Administrator coverage guidance and retained sessions**: ESP Diagnostics now checks elevation on workspace entry, recommends administrator access before collection when needed, and offers an explicit administrator restart on supported Windows builds. Non-elevated sessions remain usable but identify the protected registry, event-log, process-command-line, SYSTEM-temp, and user-temp evidence that could not be read. Every device and user enrollment session remains available through latest, all-session, and individual-session views.
+
+### Security
+
+- **Read-only ESP and Graph boundary**: ESP Diagnostics performs registry queries, event/process observation, bounded file reads/tailing, archive inspection, and read-only Graph GETs (including bounded `$batch` POSTs whose subrequests are GET-only). It does not sync MDM, retry/install software, control services, import registry files, run remediation, or mutate Intune. Graph uses the existing memory-only WAM token path and five delegated read scopes; authorization headers and raw response bodies are not logged.
+- **ESP evidence privacy and archive limits**: Sensitive identity/NodeCache fields are classified and masked by default, installer command lines are sanitized before IPC/logging, raw hardware hashes are excluded from normal surfaces, and CAB/ZIP inputs enforce entry, size, path, type, and extraction-root limits with cleanup.
+
 ## [1.4.0] - 2026-07-13
 
 ### Added

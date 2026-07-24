@@ -5,3 +5,7 @@
 
 # Real-world log fixtures are byte-sensitive (UTF-8 BOM + CRLF); never normalize them.
 src-tauri/tests/fixtures/** -text
+
+# Keep the security-backported crate byte-for-byte comparable with its
+# published source; upstream rustdoc lines include intentional trailing spaces.
+vendor/time-0.3.36/** -text whitespace=-blank-at-eol

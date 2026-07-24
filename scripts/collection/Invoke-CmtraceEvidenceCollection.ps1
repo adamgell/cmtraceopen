@@ -325,8 +325,11 @@ function Assert-CollectorProfileShape {
         @{
             name            = 'commands'
             requiredStrings = @('id', 'family', 'command', 'fileName')
-            optionalArrays  = @('arguments')
+            optionalArrays  = @('arguments', 'parseHints')
         }
+    )
+    $artifactIds = [System.Collections.Generic.Dictionary[string, string]]::new(
+        [System.StringComparer]::OrdinalIgnoreCase
     )
 
     foreach ($sectionDefinition in $sectionDefinitions) {
@@ -344,6 +347,12 @@ function Assert-CollectorProfileShape {
             foreach ($propertyName in @($sectionDefinition.requiredStrings)) {
                 Assert-ProfileRequiredString -InputObject $item -Name $propertyName -Context $itemContext -Path $Path
             }
+
+            $artifactId = ([string](Get-ObjectPropertyValue -InputObject $item -Name 'id')).Trim()
+            if ($artifactIds.ContainsKey($artifactId)) {
+                throw ('Collector profile is invalid: {0}. duplicate artifact id "{1}" was first declared at {2} and repeated at {3}.' -f $Path, $artifactId, $artifactIds[$artifactId], $itemContext)
+            }
+            $artifactIds.Add($artifactId, $itemContext)
 
             foreach ($propertyName in @($sectionDefinition.optionalArrays)) {
                 $propertyValue = Get-ObjectPropertyValue -InputObject $item -Name $propertyName
@@ -961,6 +970,8 @@ try {
         $relativePath = Join-RelativePath -Left 'evidence/command-output' -Right $commandItem.fileName
         $destinationPath = ConvertTo-PhysicalPath -Root $bundleRoot -RelativePath $relativePath
         $commandInvocationText = Get-CommandInvocationText -CommandItem $commandItem
+        $commandParseHints = @(Get-ObjectPropertyValue -InputObject $commandItem -Name 'parseHints' -DefaultValue @())
+        if ($commandParseHints.Count -eq 0) { $commandParseHints = @('plain-text') }
 
         if ($commandItem.id -eq 'dsregcmd-status') {
             $capture = $deviceContext.dsregStatus.capture
@@ -970,7 +981,7 @@ try {
         }
 
         if (-not $capture.found) {
-            $artifact = New-ArtifactRecord -Category 'command-output' -Family $commandItem.family -RelativePath $relativePath -OriginPath $commandInvocationText -Status 'missing' -ParseHints @('plain-text') -Notes $capture.error
+            $artifact = New-ArtifactRecord -Category 'command-output' -Family $commandItem.family -RelativePath $relativePath -OriginPath $commandInvocationText -Status 'missing' -ParseHints $commandParseHints -Notes $capture.error
             $artifacts.Add($artifact)
             Add-ObservedGap -ObservedGaps $observedGaps -Status 'missing' -Origin $commandItem.command -Reason $capture.error
             continue
@@ -980,11 +991,11 @@ try {
         Write-TextFile -Content $commandText -Path $destinationPath
 
         if ($capture.exitCode -eq 0) {
-            $artifact = New-ArtifactRecord -Category 'command-output' -Family $commandItem.family -RelativePath $relativePath -OriginPath $commandInvocationText -Status 'collected' -ParseHints @('plain-text') -FilePath $destinationPath -Notes $commandItem.notes
+            $artifact = New-ArtifactRecord -Category 'command-output' -Family $commandItem.family -RelativePath $relativePath -OriginPath $commandInvocationText -Status 'collected' -ParseHints $commandParseHints -FilePath $destinationPath -Notes $commandItem.notes
         }
         else {
             $notes = '{0} exited with code {1}.' -f $commandItem.command, $capture.exitCode
-            $artifact = New-ArtifactRecord -Category 'command-output' -Family $commandItem.family -RelativePath $relativePath -OriginPath $commandInvocationText -Status 'failed' -ParseHints @('plain-text') -FilePath $destinationPath -Notes $notes
+            $artifact = New-ArtifactRecord -Category 'command-output' -Family $commandItem.family -RelativePath $relativePath -OriginPath $commandInvocationText -Status 'failed' -ParseHints $commandParseHints -FilePath $destinationPath -Notes $notes
             Add-ObservedGap -ObservedGaps $observedGaps -Status 'failed' -Origin $commandItem.command -Reason $notes
         }
 

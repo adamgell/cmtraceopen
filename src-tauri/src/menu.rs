@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use serde::Serialize;
-use tauri::menu::{Menu, MenuItem, Submenu};
+use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::{AppHandle, Emitter, Runtime};
 
 use crate::commands::known_sources::{build_known_log_sources, KnownSourceGroupingMetadata};
@@ -26,6 +26,7 @@ pub const MENU_ID_TOOLS_COLLECT_DIAGNOSTICS: &str = "tools.collect_diagnostics";
 
 pub const MENU_ID_WINDOW_TOGGLE_DETAILS: &str = "window.toggle.details";
 pub const MENU_ID_WINDOW_TOGGLE_INFO: &str = "window.toggle.info";
+pub const MENU_ID_WINDOW_ALWAYS_ON_TOP: &str = "window.always_on_top";
 pub const MENU_ID_WINDOW_SETTINGS: &str = "window.settings";
 pub const MENU_ID_HELP_CHECK_FOR_UPDATES: &str = "help.check_for_updates";
 pub const MENU_ID_HELP_ABOUT: &str = "help.about";
@@ -50,8 +51,13 @@ pub struct AppMenuActionPayload {
 }
 
 pub fn build_app_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
-    let open_log_file =
-        MenuItem::with_id(app, MENU_ID_FILE_OPEN_LOG_FILE, "Open Log File...", true, None::<&str>)?;
+    let open_log_file = MenuItem::with_id(
+        app,
+        MENU_ID_FILE_OPEN_LOG_FILE,
+        "Open Log File...",
+        true,
+        None::<&str>,
+    )?;
     let open_log_folder = MenuItem::with_id(
         app,
         MENU_ID_FILE_OPEN_LOG_FOLDER,
@@ -143,6 +149,17 @@ pub fn build_app_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> 
         true,
         None::<&str>,
     )?;
+    // Checkable; the persisted preference is re-applied on startup via the
+    // set_always_on_top command, which also keeps this checkmark in sync.
+    let always_on_top = CheckMenuItem::with_id(
+        app,
+        MENU_ID_WINDOW_ALWAYS_ON_TOP,
+        "Always on Top",
+        true,
+        false,
+        None::<&str>,
+    )?;
+    let window_separator = PredefinedMenuItem::separator(app)?;
     let settings = MenuItem::with_id(
         app,
         MENU_ID_WINDOW_SETTINGS,
@@ -177,9 +194,24 @@ pub fn build_app_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> 
     )?;
     let edit_menu = Submenu::with_items(app, "Edit", true, &[&find, &filter])?;
     #[cfg(all(target_os = "windows", feature = "collector"))]
-    let tools_menu = Submenu::with_items(app, "Tools", true, &[&error_lookup, &bundle_summary, &guid_registry, &collect_diagnostics])?;
+    let tools_menu = Submenu::with_items(
+        app,
+        "Tools",
+        true,
+        &[
+            &error_lookup,
+            &bundle_summary,
+            &guid_registry,
+            &collect_diagnostics,
+        ],
+    )?;
     #[cfg(any(not(target_os = "windows"), not(feature = "collector")))]
-    let tools_menu = Submenu::with_items(app, "Tools", true, &[&error_lookup, &bundle_summary, &guid_registry])?;
+    let tools_menu = Submenu::with_items(
+        app,
+        "Tools",
+        true,
+        &[&error_lookup, &bundle_summary, &guid_registry],
+    )?;
     let window_menu = Submenu::with_items(
         app,
         "Window",
@@ -187,12 +219,23 @@ pub fn build_app_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> 
         &[
             &toggle_details,
             &toggle_info,
+            &window_separator,
+            &always_on_top,
             &settings,
         ],
     )?;
     let help_menu = Submenu::with_items(app, "Help", true, &[&check_for_updates, &about])?;
 
-    Menu::with_items(app, &[&file_menu, &edit_menu, &tools_menu, &window_menu, &help_menu])
+    Menu::with_items(
+        app,
+        &[
+            &file_menu,
+            &edit_menu,
+            &tools_menu,
+            &window_menu,
+            &help_menu,
+        ],
+    )
 }
 
 /// A source entry extracted from the catalog for menu building.
@@ -300,8 +343,10 @@ fn build_known_sources_submenu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<
             }
 
             let item_refs: Vec<&MenuItem<R>> = menu_items.iter().collect();
-            let items_as_refs: Vec<&dyn tauri::menu::IsMenuItem<R>> =
-                item_refs.iter().map(|item| *item as &dyn tauri::menu::IsMenuItem<R>).collect();
+            let items_as_refs: Vec<&dyn tauri::menu::IsMenuItem<R>> = item_refs
+                .iter()
+                .map(|item| *item as &dyn tauri::menu::IsMenuItem<R>)
+                .collect();
 
             group_submenus.push(Submenu::with_items(
                 app,
@@ -311,8 +356,10 @@ fn build_known_sources_submenu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<
             )?);
         }
 
-        let submenu_refs: Vec<&dyn tauri::menu::IsMenuItem<R>> =
-            group_submenus.iter().map(|s| s as &dyn tauri::menu::IsMenuItem<R>).collect();
+        let submenu_refs: Vec<&dyn tauri::menu::IsMenuItem<R>> = group_submenus
+            .iter()
+            .map(|s| s as &dyn tauri::menu::IsMenuItem<R>)
+            .collect();
 
         top_level_items.push(Submenu::with_items(
             app,
@@ -334,8 +381,10 @@ fn build_known_sources_submenu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<
         )?);
     }
 
-    let mut all_items: Vec<&dyn tauri::menu::IsMenuItem<R>> =
-        top_level_items.iter().map(|s| s as &dyn tauri::menu::IsMenuItem<R>).collect();
+    let mut all_items: Vec<&dyn tauri::menu::IsMenuItem<R>> = top_level_items
+        .iter()
+        .map(|s| s as &dyn tauri::menu::IsMenuItem<R>)
+        .collect();
     for item in &ungrouped_menu_items {
         all_items.push(item as &dyn tauri::menu::IsMenuItem<R>);
     }
@@ -492,6 +541,14 @@ fn payload_for_menu_id(menu_id: &str) -> Option<AppMenuActionPayload> {
             version: 1,
             menu_id: MENU_ID_WINDOW_TOGGLE_INFO.to_string(),
             action: "toggle_info_pane".to_string(),
+            category: "window".to_string(),
+            trigger: "menu".to_string(),
+            source_id: None,
+        },
+        MENU_ID_WINDOW_ALWAYS_ON_TOP => AppMenuActionPayload {
+            version: 1,
+            menu_id: MENU_ID_WINDOW_ALWAYS_ON_TOP.to_string(),
+            action: "toggle_always_on_top".to_string(),
             category: "window".to_string(),
             trigger: "menu".to_string(),
             source_id: None,

@@ -6,9 +6,10 @@ mod constants;
 pub mod dsregcmd;
 pub mod error;
 pub use cmtraceopen_parser::error_db;
+#[cfg(feature = "esp-diagnostics")]
+pub mod esp;
 #[cfg(feature = "event-log")]
 pub mod event_log;
-#[cfg(target_os = "windows")]
 pub mod graph_api;
 pub mod intune;
 #[cfg(debug_assertions)]
@@ -34,23 +35,67 @@ use graph_api::GraphAuthState;
 #[cfg(target_os = "windows")]
 use tauri::Manager;
 
-/// Returns all non-flag CLI arguments as potential file paths.
+const ESP_STARTUP_WORKSPACE: &str = "esp-diagnostics";
+
+#[derive(Debug, Default, PartialEq, Eq)]
+struct InitialLaunchArguments {
+    file_paths: Vec<String>,
+    workspace: Option<String>,
+}
+
+/// Parses app-owned startup options separately from positional file paths.
 ///
-/// When the OS opens the application via a file association (e.g. double-clicking
-/// a `.log` file), the file path is passed as a positional argument.
-/// Multiple files can be passed (e.g. `cmtraceopen file1.log file2.log`).
-/// Flags (arguments starting with `-`) are skipped so that internal Tauri or
-/// platform arguments do not get misidentified as file paths.
-fn get_initial_file_paths_from_args() -> Vec<String> {
-    std::env::args()
-        .skip(1)
-        .filter(|arg| !arg.starts_with('-'))
-        .collect()
+/// The elevation flow emits an exact workspace option so the replacement
+/// process returns to ESP Diagnostics. Split workspace values are consumed
+/// even when unsupported so they can never be mistaken for file paths.
+fn parse_initial_launch_arguments(
+    arguments: impl IntoIterator<Item = String>,
+) -> InitialLaunchArguments {
+    let mut launch = InitialLaunchArguments::default();
+    let mut arguments = arguments.into_iter();
+
+    while let Some(argument) = arguments.next() {
+        if argument.eq_ignore_ascii_case("--workspace") {
+            if let Some(value) = arguments.next() {
+                if cfg!(feature = "esp-diagnostics")
+                    && value.eq_ignore_ascii_case(ESP_STARTUP_WORKSPACE)
+                {
+                    launch.workspace = Some(ESP_STARTUP_WORKSPACE.to_string());
+                }
+            }
+            continue;
+        }
+
+        if cfg!(feature = "esp-diagnostics")
+            && (argument.eq_ignore_ascii_case("--workspace=esp-diagnostics")
+                || argument.eq_ignore_ascii_case("--esp-diagnostics"))
+        {
+            launch.workspace = Some(ESP_STARTUP_WORKSPACE.to_string());
+        } else if !argument.starts_with('-') {
+            launch.file_paths.push(argument);
+        }
+    }
+
+    launch
+}
+
+// Keep the ESP Graph commands in one handler fragment so the production app
+// and the registration-level test exercise the same generated Tauri routes.
+macro_rules! app_invoke_handler {
+    ($($command:tt)*) => {
+        tauri::generate_handler![
+            $($command)*
+            #[cfg(feature = "esp-diagnostics")]
+            $crate::commands::graph_api::graph_fetch_esp_diagnostics,
+            #[cfg(feature = "esp-diagnostics")]
+            $crate::commands::graph_api::graph_cancel_esp_diagnostics,
+        ]
+    };
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let initial_file_paths = get_initial_file_paths_from_args();
+    let initial_launch = parse_initial_launch_arguments(std::env::args().skip(1));
 
     // Route panics to the persistent log so a hard crash (e.g. the reported
     // out-of-memory failure) leaves a line users can attach to a report.
@@ -66,7 +111,7 @@ pub fn run() {
     #[cfg(desktop)]
     let builder = builder.plugin(tauri_plugin_window_state::Builder::default().build());
 
-    builder
+    let app = builder
         // Persistent file logging (issue #193): the backend already uses the
         // `log` facade throughout, but no logger backend was ever registered so
         // those messages went nowhere. Write to the OS app-log dir with a size
@@ -89,6 +134,10 @@ pub fn run() {
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_process::init())
+        .manage(AppState::with_initial_launch(
+            initial_launch.file_paths,
+            initial_launch.workspace,
+        ))
         .setup(|app| {
             #[cfg(desktop)]
             app.handle()
@@ -109,6 +158,9 @@ pub fn run() {
                 app.manage(commands::timeline::TimelineRuntimeMap::new());
             }
 
+            #[cfg(feature = "esp-diagnostics")]
+            commands::esp_diagnostics::initialize_esp_session_manager(app.handle())?;
+
             // Auto-open DevTools in debug builds
             #[cfg(all(debug_assertions, desktop))]
             {
@@ -125,13 +177,30 @@ pub fn run() {
 
             Ok(())
         })
-        .manage(AppState::new(initial_file_paths))
-        .invoke_handler(tauri::generate_handler![
+        .invoke_handler(app_invoke_handler![
             commands::file_association::get_file_association_prompt_status,
             commands::file_association::associate_log_files_with_app,
             commands::file_association::set_file_association_prompt_suppressed,
             commands::app_config::get_available_workspaces,
             commands::app_config::get_update_policy,
+            #[cfg(feature = "esp-diagnostics")]
+            commands::esp_diagnostics::get_esp_diagnostics_capability,
+            #[cfg(feature = "esp-diagnostics")]
+            commands::esp_diagnostics::get_esp_elevation_state,
+            #[cfg(feature = "esp-diagnostics")]
+            commands::esp_diagnostics::analyze_esp_evidence,
+            #[cfg(feature = "esp-diagnostics")]
+            commands::esp_diagnostics::start_esp_diagnostics_session,
+            #[cfg(feature = "esp-diagnostics")]
+            commands::esp_diagnostics::get_esp_diagnostics_session,
+            #[cfg(feature = "esp-diagnostics")]
+            commands::esp_diagnostics::stop_esp_diagnostics_session,
+            #[cfg(feature = "esp-diagnostics")]
+            commands::esp_diagnostics::restart_esp_as_administrator,
+            #[cfg(feature = "esp-diagnostics")]
+            commands::esp_diagnostics::esp_flip_app_installed,
+            #[cfg(feature = "esp-diagnostics")]
+            commands::esp_diagnostics::esp_restore_app_state,
             commands::dns_dhcp::check_dns_logging_status,
             commands::dns_dhcp::enable_dns_debug_logging,
             commands::dns_dhcp::collect_dns_dhcp_from_domain,
@@ -142,12 +211,14 @@ pub fn run() {
             commands::file_ops::inspect_path_kind,
             commands::file_ops::write_text_output_file,
             commands::file_ops::get_initial_file_paths,
+            commands::file_ops::get_initial_workspace,
             commands::file_ops::compute_file_hash,
             commands::bundle_ops::inspect_evidence_bundle,
             commands::bundle_ops::inspect_evidence_artifact,
             commands::known_sources::get_known_log_sources,
             commands::registry_ops::parse_registry_file,
             commands::system_preferences::get_system_date_time_preferences,
+            commands::system_preferences::set_always_on_top,
             commands::parsing::start_tail,
             commands::parsing::stop_tail,
             commands::parsing::pause_tail,
@@ -199,6 +270,8 @@ pub fn run() {
             #[cfg(target_os = "windows")]
             commands::graph_api::graph_authenticate,
             #[cfg(target_os = "windows")]
+            commands::graph_api::graph_request_missing_permissions,
+            #[cfg(target_os = "windows")]
             commands::graph_api::graph_get_auth_status,
             #[cfg(target_os = "windows")]
             commands::graph_api::graph_sign_out,
@@ -223,6 +296,174 @@ pub fn run() {
             commands::timeline::query_timeline_entries_cmd,
             commands::timeline::update_timeline_tunables_cmd,
         ])
-        .run(tauri::generate_context!())
+        .build(tauri::generate_context!())
         .expect("error while running tauri application");
+
+    #[cfg(feature = "esp-diagnostics")]
+    app.run(|app_handle, event| {
+        if matches!(
+            event,
+            tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit
+        ) {
+            if let Err(error) = commands::esp_diagnostics::shutdown_esp_session_manager(app_handle)
+            {
+                log::error!("ESP diagnostics shutdown failed: {error}");
+            }
+        }
+    });
+
+    #[cfg(not(feature = "esp-diagnostics"))]
+    app.run(|_, _| {});
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_initial_launch_arguments;
+
+    fn strings(arguments: &[&str]) -> Vec<String> {
+        arguments
+            .iter()
+            .map(|argument| argument.to_string())
+            .collect()
+    }
+
+    #[cfg(feature = "esp-diagnostics")]
+    #[test]
+    fn esp_workspace_equals_argument_routes_without_becoming_a_file_path() {
+        let launch = parse_initial_launch_arguments(strings(&["--workspace=esp-diagnostics"]));
+
+        assert_eq!(launch.workspace.as_deref(), Some("esp-diagnostics"));
+        assert!(launch.file_paths.is_empty());
+    }
+
+    #[cfg(feature = "esp-diagnostics")]
+    #[test]
+    fn esp_workspace_split_argument_consumes_its_value_and_keeps_real_paths() {
+        let launch = parse_initial_launch_arguments(strings(&[
+            "--workspace",
+            "esp-diagnostics",
+            r"C:\Windows\Temp\ime.log",
+        ]));
+
+        assert_eq!(launch.workspace.as_deref(), Some("esp-diagnostics"));
+        assert_eq!(launch.file_paths, [r"C:\Windows\Temp\ime.log"]);
+    }
+
+    #[test]
+    fn unapproved_workspace_values_are_neither_routed_nor_opened_as_files() {
+        let launch = parse_initial_launch_arguments(strings(&[
+            "--workspace",
+            "future-workspace",
+            r"C:\Logs\real.log",
+        ]));
+
+        assert_eq!(launch.workspace, None);
+        assert_eq!(launch.file_paths, [r"C:\Logs\real.log"]);
+    }
+
+    #[cfg(feature = "esp-diagnostics")]
+    #[test]
+    fn legacy_esp_alias_is_accepted_case_insensitively() {
+        let launch = parse_initial_launch_arguments(strings(&["--ESP-DIAGNOSTICS"]));
+
+        assert_eq!(launch.workspace.as_deref(), Some("esp-diagnostics"));
+        assert!(launch.file_paths.is_empty());
+    }
+
+    #[cfg(not(feature = "esp-diagnostics"))]
+    #[test]
+    fn esp_workspace_argument_is_ignored_when_the_feature_is_not_built() {
+        let launch = parse_initial_launch_arguments(strings(&[
+            "--workspace=esp-diagnostics",
+            r"C:\Logs\real.log",
+        ]));
+
+        assert_eq!(launch.workspace, None);
+        assert_eq!(launch.file_paths, [r"C:\Logs\real.log"]);
+    }
+
+    #[cfg(all(feature = "esp-diagnostics", not(target_os = "windows")))]
+    use cmtraceopen_parser::esp::EspIdentityEvidence;
+    #[cfg(all(feature = "esp-diagnostics", not(target_os = "windows")))]
+    use tauri::test::{get_ipc_response, mock_builder, mock_context, noop_assets, INVOKE_KEY};
+
+    #[cfg(all(feature = "esp-diagnostics", not(target_os = "windows")))]
+    use crate::graph_api::esp::EspGraphRequest;
+
+    #[cfg(all(feature = "esp-diagnostics", not(target_os = "windows")))]
+    fn invoke_request(command: &str, body: serde_json::Value) -> tauri::webview::InvokeRequest {
+        tauri::webview::InvokeRequest {
+            cmd: command.into(),
+            callback: tauri::ipc::CallbackFn(0),
+            error: tauri::ipc::CallbackFn(1),
+            url: "tauri://localhost".parse().expect("test origin"),
+            body: tauri::ipc::InvokeBody::Json(body),
+            headers: Default::default(),
+            invoke_key: INVOKE_KEY.to_string(),
+        }
+    }
+
+    #[cfg(all(feature = "esp-diagnostics", not(target_os = "windows")))]
+    fn graph_request() -> EspGraphRequest {
+        EspGraphRequest {
+            request_id: "550e8400-e29b-41d4-a716-446655440000".to_string(),
+            identity: EspIdentityEvidence {
+                device_name: Some("DEVICE-01".to_string()),
+                managed_device_id: None,
+                entra_device_id: None,
+                entdm_id: None,
+                tenant_id: None,
+                tenant_domain: None,
+                user_principal_name: None,
+                serial_number: None,
+                evidence: Vec::new(),
+            },
+            workload_ids: Vec::new(),
+            selected_managed_device_id: None,
+            evidence_window_start_utc: None,
+            evidence_window_end_utc: None,
+            enrollment_configuration_ids: Vec::new(),
+            app_ids: Vec::new(),
+            policy_references: Vec::new(),
+            script_references: Vec::new(),
+        }
+    }
+
+    #[cfg(all(feature = "esp-diagnostics", not(target_os = "windows")))]
+    #[test]
+    fn esp_graph_tauri_commands_are_registered() {
+        let app = mock_builder()
+            .invoke_handler(app_invoke_handler![])
+            .build(mock_context(noop_assets()))
+            .expect("mock app");
+        let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .expect("mock webview");
+
+        let fetch_error = get_ipc_response(
+            &webview,
+            invoke_request(
+                "graph_fetch_esp_diagnostics",
+                serde_json::json!({ "request": graph_request() }),
+            ),
+        )
+        .expect_err("Graph ESP is unavailable off Windows");
+        let cancel_error = get_ipc_response(
+            &webview,
+            invoke_request(
+                "graph_cancel_esp_diagnostics",
+                serde_json::json!({ "requestId": "550e8400-e29b-41d4-a716-446655440000" }),
+            ),
+        )
+        .expect_err("Graph ESP is unavailable off Windows");
+
+        for error in [fetch_error, cancel_error] {
+            let rendered = error.to_string();
+            assert!(
+                rendered.contains("GraphEspDiagnostics"),
+                "registered command must return its typed platform error, got: {rendered}"
+            );
+            assert!(!rendered.to_ascii_lowercase().contains("not found"));
+        }
+    }
 }

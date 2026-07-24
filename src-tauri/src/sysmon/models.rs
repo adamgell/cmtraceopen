@@ -142,7 +142,6 @@ pub struct SysmonEvent {
     pub record_id: u64,
 
     // --- Common Sysmon fields (populated per event type) ---
-
     /// RuleName from configuration match.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rule_name: Option<String>,
@@ -178,13 +177,11 @@ pub struct SysmonEvent {
     pub parent_process_id: Option<u32>,
 
     // --- File events ---
-
     /// Target file path (FileCreate, FileDelete, etc.).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target_filename: Option<String>,
 
     // --- Network events ---
-
     /// Protocol (tcp/udp).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub protocol: Option<String>,
@@ -205,7 +202,6 @@ pub struct SysmonEvent {
     pub destination_hostname: Option<String>,
 
     // --- Registry events ---
-
     /// Registry target object path.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target_object: Option<String>,
@@ -214,7 +210,6 @@ pub struct SysmonEvent {
     pub details: Option<String>,
 
     // --- DNS events ---
-
     /// DNS query name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub query_name: Option<String>,
@@ -223,7 +218,6 @@ pub struct SysmonEvent {
     pub query_results: Option<String>,
 
     // --- Process access ---
-
     /// Source image for ProcessAccess.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_image: Option<String>,

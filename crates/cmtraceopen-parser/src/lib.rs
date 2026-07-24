@@ -10,6 +10,7 @@
 pub mod collector;
 pub mod dsregcmd;
 pub mod error_db;
+pub mod esp;
 pub mod intune;
 pub mod models;
 pub mod parser;

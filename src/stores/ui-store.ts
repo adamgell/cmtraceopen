@@ -139,6 +139,8 @@ interface UiState {
   /** Error code string to pre-populate in the Error Lookup dialog on next open. Consumed and cleared by the dialog. */
   lookupErrorCode: string | null;
   currentPlatform: PlatformId;
+  // Pin the main window above other windows. Persisted; re-applied on startup.
+  alwaysOnTop: boolean;
   enabledWorkspaces: WorkspaceId[] | null;
   collectionProgress: CollectionProgressState | null;
   collectionResult: CollectionResult | null;
@@ -153,6 +155,7 @@ interface UiState {
 
   setActiveWorkspace: (workspace: WorkspaceId) => void;
   setCurrentPlatform: (platform: PlatformId) => void;
+  setAlwaysOnTop: (enabled: boolean) => void;
   setEnabledWorkspaces: (workspaces: WorkspaceId[] | null) => void;
   setActiveView: (view: AppView) => void;
   ensureWorkspaceVisible: (workspace: WorkspaceId, trigger: string) => void;
@@ -288,6 +291,7 @@ export const useUiStore = create<UiState>()(
       focusedErrorCode: null,
       lookupErrorCode: null,
       currentPlatform: "windows" as PlatformId,
+      alwaysOnTop: false,
       enabledWorkspaces: null,
       autoUpdateEnabled: false,
       defaultShowInfoPane: true,
@@ -301,6 +305,7 @@ export const useUiStore = create<UiState>()(
       graphApiStatus: "idle",
 
       setCurrentPlatform: (platform) => set({ currentPlatform: platform }),
+      setAlwaysOnTop: (alwaysOnTop) => set({ alwaysOnTop }),
       setEnabledWorkspaces: (workspaces) => {
         const nextWorkspaces =
           workspaces && workspaces.length > 0
@@ -605,11 +610,12 @@ export const useUiStore = create<UiState>()(
         autoUpdateEnabled: state.autoUpdateEnabled,
         defaultShowInfoPane: state.defaultShowInfoPane,
         confirmTabClose: state.confirmTabClose,
+        alwaysOnTop: state.alwaysOnTop,
         graphApiEnabled: state.graphApiEnabled,
         recentSessions: state.recentSessions,
       }),
       merge: (persistedState, currentState) => {
-        const raw = persistedState as Partial<UiState> & {
+        const raw = (persistedState ?? {}) as Partial<UiState> & {
           logSeverityPaletteMode?: string;
         };
 

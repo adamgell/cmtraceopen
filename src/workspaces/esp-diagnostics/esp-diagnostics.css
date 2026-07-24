@@ -1,0 +1,103 @@
+.esp-diagnostics-workspace {
+  container-type: inline-size;
+}
+
+/* Jump targets stop below the sticky section nav (the top heading goes flush). */
+.esp-diagnostics-workspace :is(
+    #esp-action-center-heading,
+    #esp-actions-heading,
+    #esp-workloads-heading,
+    #esp-graph-enrichment-heading,
+    #esp-phase-progress-heading,
+    #esp-live-activity-heading,
+    #esp-evidence-heading
+  ) {
+  scroll-margin-top: 44px;
+}
+
+/* Live "now" readout: a soft pulse marks a streaming session at a glance. */
+@keyframes esp-now-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.3;
+    transform: scale(0.72);
+  }
+}
+
+.esp-now-pulse-dot {
+  animation: esp-now-pulse 1.4s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .esp-now-pulse-dot {
+    animation: none;
+  }
+}
+
+.esp-cockpit-panel-grid {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr));
+}
+
+.esp-msi-status {
+  min-width: 0;
+  overflow: hidden;
+  container-type: inline-size;
+}
+
+.esp-evidence-sections {
+  container-type: inline-size;
+}
+
+.esp-evidence-summary {
+  grid-template-columns:
+    minmax(170px, 0.7fr)
+    minmax(240px, 1.3fr)
+    auto;
+}
+
+.esp-msi-row {
+  min-width: 0;
+  grid-template-columns:
+    minmax(160px, 0.8fr)
+    minmax(220px, 1.5fr)
+    minmax(150px, 0.9fr);
+}
+
+.esp-msi-cell {
+  min-width: 0;
+}
+
+@container (max-width: 680px) {
+  .esp-evidence-summary {
+    grid-template-columns: minmax(0, 1fr);
+    align-items: start !important;
+  }
+
+  .esp-evidence-summary > :last-child {
+    justify-content: flex-start !important;
+    white-space: normal !important;
+  }
+
+  .esp-msi-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .esp-msi-cell {
+    border-right: 0 !important;
+    border-bottom: 1px solid var(--colorNeutralStroke2);
+  }
+
+  .esp-msi-cell:last-child {
+    border-bottom: 0;
+  }
+
+  .esp-msi-log-path {
+    overflow-wrap: anywhere !important;
+    text-overflow: clip !important;
+    white-space: normal !important;
+  }
+}

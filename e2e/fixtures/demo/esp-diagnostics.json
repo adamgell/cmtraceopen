@@ -1,0 +1,903 @@
+{
+  "baseSnapshot": {
+    "schemaVersion": 1,
+    "scenario": "autopilotV1",
+    "phase": "deviceSetup",
+    "generatedAtUtc": "2026-07-15T20:08:05Z",
+    "elevation": {
+      "isElevated": false,
+      "restartSupported": true,
+      "restrictedSources": [
+        "Enrollment Status Tracking registry",
+        "SYSTEM temporary installer logs"
+      ]
+    },
+    "identity": {
+      "deviceName": "ESP-LAB-042",
+      "managedDeviceId": "11111111-1111-4111-8111-111111111111",
+      "entraDeviceId": "22222222-2222-4222-8222-222222222222",
+      "entdmId": { "value": "entdm-demo-042", "sensitivity": "sensitive" },
+      "tenantId": {
+        "value": "33333333-3333-4333-8333-333333333333",
+        "sensitivity": "sensitive"
+      },
+      "tenantDomain": { "value": "contoso.example", "sensitivity": "public" },
+      "userPrincipalName": {
+        "value": "operator@contoso.example",
+        "sensitivity": "restricted"
+      },
+      "serialNumber": {
+        "value": "DEMO-SERIAL-042",
+        "sensitivity": "sensitive"
+      },
+      "evidence": []
+    },
+    "profile": {
+      "profileName": "Contoso Autopilot Standard",
+      "deploymentProfileId": "44444444-4444-4444-8444-444444444444",
+      "correlationId": "55555555-5555-4555-8555-555555555555",
+      "tenantDomain": { "value": "contoso.example", "sensitivity": "public" },
+      "tenantId": {
+        "value": "33333333-3333-4333-8333-333333333333",
+        "sensitivity": "sensitive"
+      },
+      "oobeConfig": {
+        "rawMask": 1024,
+        "skipKeyboard": false,
+        "enablePatchDownload": true,
+        "skipWindowsUpgradeUx": false,
+        "aadTpmRequired": true,
+        "aadDeviceAuthentication": true,
+        "tpmAttestation": true,
+        "skipEula": true,
+        "skipOemRegistration": true,
+        "skipExpressSettings": true,
+        "disallowAdmin": false
+      },
+      "profileDownloadTime": {
+        "rawText": "2026-07-15T19:55:00Z",
+        "originalOffset": "+00:00",
+        "normalizedUtc": "2026-07-15T19:55:00Z",
+        "kind": "utc"
+      },
+      "joinMode": "entra",
+      "odjApplied": false,
+      "skipDomainConnectivityCheck": false,
+      "devicePreparation": null,
+      "evidence": []
+    },
+    "enrollments": [],
+    "sessions": [
+      {
+        "sessionId": "session-current",
+        "kind": "classic",
+        "scope": "device",
+        "userSid": null,
+        "startedAt": {
+          "rawText": "2026-07-15T20:00:00Z",
+          "originalOffset": "+00:00",
+          "normalizedUtc": "2026-07-15T20:00:00Z",
+          "kind": "utc"
+        },
+        "endedAt": null,
+        "phase": "deviceSetup",
+        "isLatest": true,
+        "workloadIds": ["workload-vpn", "workload-security"],
+        "evidence": []
+      }
+    ],
+    "workloads": [
+      {
+        "workloadId": "workload-vpn",
+        "sessionId": "session-current",
+        "kind": "win32App",
+        "scope": "device",
+        "rawIdentifier": "66666666-6666-4666-8666-666666666666",
+        "displayName": null,
+        "status": {
+          "raw": 3,
+          "normalized": "installing",
+          "display": "Installing",
+          "detail": null
+        },
+        "timestamps": {
+          "firstObserved": {
+            "rawText": "2026-07-15T20:05:00Z",
+            "originalOffset": "+00:00",
+            "normalizedUtc": "2026-07-15T20:05:00Z",
+            "kind": "utc"
+          },
+          "started": {
+            "rawText": "2026-07-15T20:07:15Z",
+            "originalOffset": "+00:00",
+            "normalizedUtc": "2026-07-15T20:07:15Z",
+            "kind": "utc"
+          },
+          "ended": null,
+          "lastUpdated": {
+            "rawText": "2026-07-15T20:08:00Z",
+            "originalOffset": "+00:00",
+            "normalizedUtc": "2026-07-15T20:08:00Z",
+            "kind": "utc"
+          }
+        },
+        "exitCode": null,
+        "enforcementErrorCode": null,
+        "blocking": true,
+        "evidence": [
+          {
+            "evidenceId": "ev-workload-vpn",
+            "sourceArtifactId": "ime-app-workload"
+          }
+        ]
+      },
+      {
+        "workloadId": "workload-security",
+        "sessionId": "session-current",
+        "kind": "win32App",
+        "scope": "device",
+        "rawIdentifier": "77777777-7777-4777-8777-777777777777",
+        "displayName": "Contoso Endpoint Security",
+        "status": {
+          "raw": 4,
+          "normalized": "failed",
+          "display": "Failed",
+          "detail": null
+        },
+        "timestamps": {
+          "firstObserved": {
+            "rawText": "2026-07-15T20:02:00Z",
+            "originalOffset": "+00:00",
+            "normalizedUtc": "2026-07-15T20:02:00Z",
+            "kind": "utc"
+          },
+          "started": {
+            "rawText": "2026-07-15T20:03:00Z",
+            "originalOffset": "+00:00",
+            "normalizedUtc": "2026-07-15T20:03:00Z",
+            "kind": "utc"
+          },
+          "ended": {
+            "rawText": "2026-07-15T20:04:00Z",
+            "originalOffset": "+00:00",
+            "normalizedUtc": "2026-07-15T20:04:00Z",
+            "kind": "utc"
+          },
+          "lastUpdated": {
+            "rawText": "2026-07-15T20:04:00Z",
+            "originalOffset": "+00:00",
+            "normalizedUtc": "2026-07-15T20:04:00Z",
+            "kind": "utc"
+          }
+        },
+        "exitCode": { "raw": "1603", "decimal": 1603, "hex": "0x00000643" },
+        "enforcementErrorCode": {
+          "raw": "0x80070643",
+          "decimal": -2147023293,
+          "hex": "0x80070643"
+        },
+        "blocking": true,
+        "evidence": [
+          {
+            "evidenceId": "ev-workload-security",
+            "sourceArtifactId": "ime-app-workload"
+          }
+        ]
+      }
+    ],
+    "installerCorrelations": [
+      {
+        "correlationId": "corr-exact",
+        "workloadId": "workload-vpn",
+        "confidence": "exact",
+        "reason": "MSI log path and product code match the active workload.",
+        "candidateWorkloadIds": ["workload-vpn"],
+        "processObservations": [
+          {
+            "context": {
+              "evidenceRef": {
+                "evidenceId": "ev-process-8044",
+                "sourceArtifactId": "process-sample"
+              },
+              "provenance": {
+                "sourceKind": "process",
+                "sourceArtifactId": "process-sample",
+                "filePath": null,
+                "lineNumber": null,
+                "recordNumber": 8044,
+                "registry": null,
+                "event": null
+              },
+              "sourceTimestamp": {
+                "rawText": "2026-07-15T20:07:30Z",
+                "originalOffset": "+00:00",
+                "normalizedUtc": "2026-07-15T20:07:30Z",
+                "kind": "utc"
+              },
+              "observedAtUtc": "2026-07-15T20:07:30Z",
+              "sensitivity": "sensitive",
+              "parseState": "parsed",
+              "accessState": "available"
+            },
+            "pid": 8044,
+            "processStartTime": {
+              "rawText": "2026-07-15T20:07:15Z",
+              "originalOffset": "+00:00",
+              "normalizedUtc": "2026-07-15T20:07:15Z",
+              "kind": "utc"
+            },
+            "parentPid": 4120,
+            "executableName": "msiexec.exe",
+            "sanitizedCommandLine": "msiexec.exe /i ContosoVPN.msi TOKEN=[redacted] /L*V C:\\Windows\\Temp\\ContosoVPN.log",
+            "referencedLogPath": "C:\\Windows\\Temp\\ContosoVPN.log",
+            "appId": "66666666-6666-4666-8666-666666666666",
+            "productCode": "{88888888-8888-4888-8888-888888888888}"
+          }
+        ],
+        "evidence": [
+          {
+            "evidenceId": "ev-process-8044",
+            "sourceArtifactId": "process-sample"
+          }
+        ]
+      },
+      {
+        "correlationId": "corr-ambiguous",
+        "workloadId": null,
+        "confidence": "uncorrelated",
+        "reason": "Two active workloads overlap the installer window.",
+        "candidateWorkloadIds": ["workload-vpn", "workload-security"],
+        "processObservations": [],
+        "evidence": []
+      }
+    ],
+    "nodeCache": [],
+    "registrationEvents": [],
+    "deliveryOptimization": {
+      "downloadHttpBytes": 104857600,
+      "downloadLanBytes": 31457280,
+      "downloadCacheHostBytes": 10485760,
+      "peerSharePercent": 30,
+      "connectedCacheSharePercent": 10,
+      "transfers": [],
+      "evidence": []
+    },
+    "hardware": {
+      "osVersion": "Windows 11 Enterprise",
+      "osBuild": "26100.4652",
+      "manufacturer": "Contoso Hardware",
+      "model": "Virtual Laptop 15",
+      "serialNumber": {
+        "value": "DEMO-SERIAL-042",
+        "sensitivity": "sensitive"
+      },
+      "tpmVersion": "2.0",
+      "evidence": []
+    },
+    "activity": [
+      {
+        "entryId": "activity-install-start",
+        "timestamp": {
+          "rawText": "2026-07-15T20:07:15Z",
+          "originalOffset": "+00:00",
+          "normalizedUtc": "2026-07-15T20:07:15Z",
+          "kind": "utc"
+        },
+        "kind": "workload",
+        "title": "VPN installer started",
+        "detail": "PID 8044 is writing ContosoVPN.log",
+        "status": {
+          "raw": 3,
+          "normalized": "installing",
+          "display": "Installing",
+          "detail": null
+        },
+        "evidence": [
+          {
+            "evidenceId": "ev-process-8044",
+            "sourceArtifactId": "process-sample"
+          }
+        ]
+      },
+      {
+        "entryId": "activity-failure",
+        "timestamp": {
+          "rawText": "2026-07-15T20:04:00Z",
+          "originalOffset": "+00:00",
+          "normalizedUtc": "2026-07-15T20:04:00Z",
+          "kind": "utc"
+        },
+        "kind": "workload",
+        "title": "Endpoint Security failed",
+        "detail": "Installer returned 1603",
+        "status": {
+          "raw": 4,
+          "normalized": "failed",
+          "display": "Failed",
+          "detail": null
+        },
+        "evidence": [
+          {
+            "evidenceId": "ev-workload-security",
+            "sourceArtifactId": "ime-app-workload"
+          }
+        ]
+      }
+    ],
+    "findings": [
+      {
+        "findingId": "finding-security-failed",
+        "severity": "blocker",
+        "confidence": "high",
+        "title": "Required security application is blocking ESP",
+        "summary": "The active device phase retains a failed required app with installer exit code 1603.",
+        "recommendedChecks": [
+          "Open the referenced MSI log around Return value 3.",
+          "Verify the application's requirement and detection rules in Intune."
+        ],
+        "evidence": [
+          {
+            "evidenceId": "ev-workload-security",
+            "sourceArtifactId": "ime-app-workload"
+          }
+        ],
+        "coverageGapIds": ["esp-registry"]
+      }
+    ],
+    "coverage": [
+      {
+        "artifactId": "ime-app-workload",
+        "family": "IME workload logs",
+        "status": "available",
+        "detail": null,
+        "observedAtUtc": "2026-07-15T20:08:00Z",
+        "evidence": []
+      },
+      {
+        "artifactId": "esp-registry",
+        "family": "ESP registry",
+        "status": "permissionDenied",
+        "detail": "Administrator rights required",
+        "observedAtUtc": "2026-07-15T20:08:00Z",
+        "evidence": []
+      },
+      {
+        "artifactId": "mdm-events",
+        "family": "MDM event log",
+        "status": "available",
+        "detail": null,
+        "observedAtUtc": "2026-07-15T20:08:00Z",
+        "evidence": []
+      }
+    ],
+    "rawEvidence": [
+      {
+        "recordId": "raw-ime-1",
+        "provenance": {
+          "sourceKind": "imeLog",
+          "sourceArtifactId": "ime-app-workload",
+          "filePath": "C:\\ProgramData\\Microsoft\\IntuneManagementExtension\\Logs\\AppWorkload.log",
+          "lineNumber": 1044,
+          "recordNumber": 1044,
+          "registry": null,
+          "event": null
+        },
+        "sourceTimestamp": {
+          "rawText": "2026-07-15T20:07:15Z",
+          "originalOffset": "+00:00",
+          "normalizedUtc": "2026-07-15T20:07:15Z",
+          "kind": "utc"
+        },
+        "observedAtUtc": "2026-07-15T20:07:15Z",
+        "rawValue": {
+          "text": "Win32 app enforcement started for 66666666-6666-4666-8666-666666666666"
+        },
+        "sensitivity": "public",
+        "parseState": "parsed",
+        "accessState": "available",
+        "evidence": [
+          {
+            "evidenceId": "ev-workload-vpn",
+            "sourceArtifactId": "ime-app-workload"
+          }
+        ]
+      },
+      {
+        "recordId": "raw-msi-1",
+        "provenance": {
+          "sourceKind": "deploymentLog",
+          "sourceArtifactId": "msi-contoso-vpn",
+          "filePath": "C:\\Windows\\Temp\\ContosoVPN.log",
+          "lineNumber": 380,
+          "recordNumber": 380,
+          "registry": null,
+          "event": null
+        },
+        "sourceTimestamp": {
+          "rawText": "2026-07-15T20:07:45Z",
+          "originalOffset": "+00:00",
+          "normalizedUtc": "2026-07-15T20:07:45Z",
+          "kind": "utc"
+        },
+        "observedAtUtc": "2026-07-15T20:07:45Z",
+        "rawValue": { "text": "MSI action InstallFiles returned success" },
+        "sensitivity": "public",
+        "parseState": "parsed",
+        "accessState": "available",
+        "evidence": [
+          { "evidenceId": "ev-msi-1", "sourceArtifactId": "msi-contoso-vpn" }
+        ]
+      },
+      {
+        "recordId": "raw-event-1",
+        "provenance": {
+          "sourceKind": "eventLog",
+          "sourceArtifactId": "mdm-events",
+          "filePath": null,
+          "lineNumber": null,
+          "recordNumber": 1905,
+          "registry": null,
+          "event": {
+            "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin",
+            "eventId": 1905,
+            "recordId": 91,
+            "namedData": []
+          }
+        },
+        "sourceTimestamp": {
+          "rawText": "2026-07-15T20:06:00Z",
+          "originalOffset": "+00:00",
+          "normalizedUtc": "2026-07-15T20:06:00Z",
+          "kind": "utc"
+        },
+        "observedAtUtc": "2026-07-15T20:06:00Z",
+        "rawValue": {
+          "text": "Enrollment Status Page device setup tracking is active"
+        },
+        "sensitivity": "public",
+        "parseState": "parsed",
+        "accessState": "available",
+        "evidence": [
+          { "evidenceId": "ev-event-1905", "sourceArtifactId": "mdm-events" }
+        ]
+      }
+    ],
+    "graph": null
+  },
+  "variants": {
+    "elevatedLiveInstall": {
+      "scenario": "autopilotV1",
+      "phase": "deviceSetup",
+      "elevation": {
+        "isElevated": true,
+        "restartSupported": true,
+        "restrictedSources": []
+      }
+    },
+    "devicePreparationV2": {
+      "scenario": "autopilotDevicePreparationV2",
+      "phase": "devicePreparation",
+      "sessionKind": "devicePreparationV2",
+      "workload": {
+        "workloadId": "workload-v2-bootstrap",
+        "kind": "devicePreparationWorkload",
+        "rawIdentifier": "99999999-9999-4999-8999-999999999999",
+        "displayName": "Contoso Device Preparation bootstrap",
+        "normalizedStatus": "inProgress",
+        "displayStatus": "In progress"
+      },
+      "mixedWorkloads": [
+        {
+          "workloadId": "workload-v2-bootstrap",
+          "kind": "devicePreparationWorkload",
+          "rawIdentifier": "99999999-9999-4999-8999-999999999999",
+          "displayName": "Contoso Device Preparation bootstrap",
+          "normalizedStatus": "inProgress",
+          "displayStatus": "In progress"
+        },
+        {
+          "workloadId": "workload-v2-script",
+          "kind": "platformScript",
+          "rawIdentifier": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
+          "displayName": "Contoso device readiness script",
+          "normalizedStatus": "pending",
+          "displayStatus": "Pending"
+        },
+        {
+          "workloadId": "workload-v2-certificate",
+          "kind": "scepCertificate",
+          "rawIdentifier": "bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb",
+          "displayName": "Contoso device certificate",
+          "normalizedStatus": "pending",
+          "displayStatus": "Pending"
+        }
+      ]
+    },
+    "ambiguousMsi": {
+      "correlationId": "corr-ambiguous-sampled",
+      "workloadId": null,
+      "confidence": "uncorrelated",
+      "reason": "Two active workloads overlap the sampled installer window.",
+      "candidateWorkloadIds": ["workload-vpn", "workload-security"],
+      "processObservations": [
+        {
+          "context": {
+            "evidenceRef": {
+              "evidenceId": "ev-process-9055",
+              "sourceArtifactId": "process-sample"
+            },
+            "provenance": {
+              "sourceKind": "process",
+              "sourceArtifactId": "process-sample",
+              "filePath": null,
+              "lineNumber": null,
+              "recordNumber": 9055,
+              "registry": null,
+              "event": null
+            },
+            "sourceTimestamp": {
+              "rawText": "2026-07-15T20:07:40Z",
+              "originalOffset": "+00:00",
+              "normalizedUtc": "2026-07-15T20:07:40Z",
+              "kind": "utc"
+            },
+            "observedAtUtc": "2026-07-15T20:07:40Z",
+            "sensitivity": "sensitive",
+            "parseState": "parsed",
+            "accessState": "available"
+          },
+          "pid": 9055,
+          "processStartTime": {
+            "rawText": "2026-07-15T20:07:35Z",
+            "originalOffset": "+00:00",
+            "normalizedUtc": "2026-07-15T20:07:35Z",
+            "kind": "utc"
+          },
+          "parentPid": 4120,
+          "executableName": "msiexec.exe",
+          "sanitizedCommandLine": "msiexec.exe /i unknown.msi /L*V C:\\Windows\\Temp\\ambiguous-install.log",
+          "referencedLogPath": "C:\\Windows\\Temp\\ambiguous-install.log",
+          "appId": null,
+          "productCode": null
+        }
+      ],
+      "evidence": [
+        {
+          "evidenceId": "ev-process-9055",
+          "sourceArtifactId": "process-sample"
+        }
+      ]
+    },
+    "sparseBundle": {
+      "scenario": "espOnly",
+      "phase": "unknown",
+      "elevation": {
+        "isElevated": true,
+        "restartSupported": true,
+        "restrictedSources": []
+      },
+      "sessions": [],
+      "workloads": [],
+      "installerCorrelations": [],
+      "activity": [
+        {
+          "entryId": "activity-sparse-profile",
+          "timestamp": {
+            "rawText": "2026-07-15T20:08:00Z",
+            "originalOffset": "+00:00",
+            "normalizedUtc": "2026-07-15T20:08:00Z",
+            "kind": "utc"
+          },
+          "kind": "profileDownload",
+          "title": "Captured Autopilot profile was analyzed",
+          "detail": "IME text logs were not included in this evidence bundle.",
+          "status": null,
+          "evidence": [
+            {
+              "evidenceId": "ev-captured-profile",
+              "sourceArtifactId": "captured-profile"
+            }
+          ]
+        }
+      ],
+      "findings": [
+        {
+          "findingId": "finding-sparse-ime-missing",
+          "severity": "info",
+          "confidence": "high",
+          "title": "IME text logs were not included",
+          "summary": "The captured Autopilot profile remains useful, but application enforcement history is unavailable.",
+          "recommendedChecks": [
+            "Capture the bounded Intune Management Extension log folder when it is available."
+          ],
+          "evidence": [
+            {
+              "evidenceId": "ev-captured-profile",
+              "sourceArtifactId": "captured-profile"
+            }
+          ],
+          "coverageGapIds": ["ime-logs"]
+        }
+      ],
+      "coverage": [
+        {
+          "artifactId": "captured-profile",
+          "family": "Autopilot profile JSON",
+          "status": "available",
+          "detail": null,
+          "observedAtUtc": "2026-07-15T20:08:00Z",
+          "evidence": []
+        },
+        {
+          "artifactId": "ime-logs",
+          "family": "IME logs",
+          "status": "missing",
+          "detail": "No IME text logs were present in the captured bundle",
+          "observedAtUtc": "2026-07-15T20:08:00Z",
+          "evidence": []
+        }
+      ],
+      "rawEvidence": [
+        {
+          "recordId": "raw-captured-profile",
+          "provenance": {
+            "sourceKind": "json",
+            "sourceArtifactId": "captured-profile",
+            "filePath": "AutopilotConfigurationFile.json",
+            "lineNumber": null,
+            "recordNumber": 1,
+            "registry": null,
+            "event": null
+          },
+          "sourceTimestamp": {
+            "rawText": "2026-07-15T20:08:00Z",
+            "originalOffset": "+00:00",
+            "normalizedUtc": "2026-07-15T20:08:00Z",
+            "kind": "utc"
+          },
+          "observedAtUtc": "2026-07-15T20:08:00Z",
+          "rawValue": {
+            "text": "Captured Autopilot profile remains available"
+          },
+          "sensitivity": "public",
+          "parseState": "parsed",
+          "accessState": "available",
+          "evidence": [
+            {
+              "evidenceId": "ev-captured-profile",
+              "sourceArtifactId": "captured-profile"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "graph": {
+    "full": {
+      "requestId": "graph-full",
+      "requestedAtUtc": "2026-07-15T20:08:10Z",
+      "deviceMatch": {
+        "status": "available",
+        "requiredScope": "DeviceManagementManagedDevices.Read.All",
+        "apiVersion": "v1.0",
+        "data": {
+          "selected": {
+            "managedDeviceId": "11111111-1111-4111-8111-111111111111",
+            "entraDeviceId": "22222222-2222-4222-8222-222222222222",
+            "serialNumber": {
+              "value": "DEMO-SERIAL-042",
+              "sensitivity": "sensitive"
+            },
+            "deviceName": "ESP-LAB-042",
+            "userId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+            "userPrincipalName": {
+              "value": "operator@contoso.example",
+              "sensitivity": "restricted"
+            },
+            "tenantId": {
+              "value": "33333333-3333-4333-8333-333333333333",
+              "sensitivity": "sensitive"
+            },
+            "evidence": []
+          },
+          "candidates": [],
+          "matchBasis": "managedDeviceId",
+          "confidence": "exact",
+          "evidence": []
+        },
+        "error": null
+      },
+      "autopilotIdentity": {
+        "status": "skipped",
+        "requiredScope": null,
+        "apiVersion": "notRequested",
+        "data": null,
+        "error": null
+      },
+      "deploymentProfile": {
+        "status": "skipped",
+        "requiredScope": null,
+        "apiVersion": "notRequested",
+        "data": null,
+        "error": null
+      },
+      "intendedDeploymentProfile": {
+        "status": "skipped",
+        "requiredScope": null,
+        "apiVersion": "notRequested",
+        "data": null,
+        "error": null
+      },
+      "profileAssignments": {
+        "status": "skipped",
+        "requiredScope": null,
+        "apiVersion": "notRequested",
+        "data": null,
+        "error": null
+      },
+      "autopilotEvents": {
+        "status": "skipped",
+        "requiredScope": null,
+        "apiVersion": "notRequested",
+        "data": null,
+        "error": null
+      },
+      "enrollmentConfiguration": {
+        "status": "skipped",
+        "requiredScope": null,
+        "apiVersion": "notRequested",
+        "data": null,
+        "error": null
+      },
+      "apps": {
+        "status": "available",
+        "requiredScope": "DeviceManagementApps.Read.All",
+        "apiVersion": "v1.0",
+        "data": [
+          {
+            "appId": "66666666-6666-4666-8666-666666666666",
+            "displayName": "Contoso VPN Client from Graph",
+            "trackedOnEnrollmentStatus": true,
+            "status": null,
+            "intentState": {
+              "status": "skipped",
+              "requiredScope": null,
+              "apiVersion": "notRequested",
+              "data": null,
+              "error": null
+            },
+            "assignments": [],
+            "evidence": []
+          }
+        ],
+        "error": null
+      },
+      "policies": {
+        "status": "skipped",
+        "requiredScope": null,
+        "apiVersion": "notRequested",
+        "data": null,
+        "error": null
+      },
+      "scripts": {
+        "status": "skipped",
+        "requiredScope": null,
+        "apiVersion": "notRequested",
+        "data": null,
+        "error": null
+      }
+    },
+    "partial": {
+      "requestId": "graph-partial",
+      "requestedAtUtc": "2026-07-15T20:08:10Z",
+      "deviceMatch": {
+        "status": "notFound",
+        "requiredScope": "DeviceManagementManagedDevices.Read.All",
+        "apiVersion": "v1.0",
+        "data": null,
+        "error": null
+      },
+      "autopilotIdentity": {
+        "status": "permissionDenied",
+        "requiredScope": "DeviceManagementServiceConfig.Read.All",
+        "apiVersion": "beta",
+        "data": null,
+        "error": {
+          "code": "Forbidden",
+          "message": "Required delegated scope is unavailable",
+          "requestId": "graph-demo-request",
+          "blockedBy": null,
+          "retryAfterSeconds": null
+        }
+      },
+      "deploymentProfile": {
+        "status": "skipped",
+        "requiredScope": null,
+        "apiVersion": "notRequested",
+        "data": null,
+        "error": {
+          "code": "Skipped",
+          "message": "No device match",
+          "requestId": null,
+          "blockedBy": "deviceMatch",
+          "retryAfterSeconds": null
+        }
+      },
+      "intendedDeploymentProfile": {
+        "status": "skipped",
+        "requiredScope": null,
+        "apiVersion": "notRequested",
+        "data": null,
+        "error": null
+      },
+      "profileAssignments": {
+        "status": "skipped",
+        "requiredScope": null,
+        "apiVersion": "notRequested",
+        "data": null,
+        "error": null
+      },
+      "autopilotEvents": {
+        "status": "failed",
+        "requiredScope": "DeviceManagementServiceConfig.Read.All",
+        "apiVersion": "beta",
+        "data": null,
+        "error": {
+          "code": "Offline",
+          "message": "Microsoft Graph is unreachable",
+          "requestId": null,
+          "blockedBy": null,
+          "retryAfterSeconds": null
+        }
+      },
+      "enrollmentConfiguration": {
+        "status": "skipped",
+        "requiredScope": null,
+        "apiVersion": "notRequested",
+        "data": null,
+        "error": null
+      },
+      "apps": {
+        "status": "available",
+        "requiredScope": "DeviceManagementApps.Read.All",
+        "apiVersion": "v1.0",
+        "data": [],
+        "error": null
+      },
+      "policies": {
+        "status": "permissionDenied",
+        "requiredScope": "DeviceManagementConfiguration.Read.All",
+        "apiVersion": "v1.0",
+        "data": null,
+        "error": {
+          "code": "Forbidden",
+          "message": "Configuration read scope is unavailable",
+          "requestId": "graph-demo-request",
+          "blockedBy": null,
+          "retryAfterSeconds": null
+        }
+      },
+      "scripts": {
+        "status": "cancelled",
+        "requiredScope": "DeviceManagementScripts.Read.All",
+        "apiVersion": "beta",
+        "data": null,
+        "error": {
+          "code": "Cancelled",
+          "message": "Query cancelled",
+          "requestId": null,
+          "blockedBy": null,
+          "retryAfterSeconds": null
+        }
+      }
+    }
+  },
+  "rotationUpdate": {
+    "sessionId": "session-live",
+    "requestId": "e2e-live",
+    "sequence": 2,
+    "state": "live",
+    "reason": "sourceReset",
+    "emittedAtUtc": "2026-07-15T20:09:00Z"
+  }
+}
