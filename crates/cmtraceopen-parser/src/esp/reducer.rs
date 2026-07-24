@@ -2291,6 +2291,7 @@ impl SnapshotProjection {
             if !replace_status {
                 continue;
             }
+            let session_id = self.workloads[index].session_id.clone();
             let workload = &mut self.workloads[index];
             workload.status = EspStatus {
                 raw: group
@@ -2305,6 +2306,17 @@ impl SnapshotProjection {
                 workload.enforcement_error_code = Some(error_code(&code.to_string()));
             }
             workload.evidence.push(context.evidence_ref.clone());
+            // finalize_sessions computed the session (and thus overall) phase
+            // before this override ran, so mark the owning latest session failed
+            // to match its own rule: any failed workload -> session failed ->
+            // snapshot phase Failed.
+            if let Some(session) = self
+                .sessions
+                .iter_mut()
+                .find(|session| session.session_id == session_id)
+            {
+                session.phase = EspPhase::Failed;
+            }
         }
     }
 

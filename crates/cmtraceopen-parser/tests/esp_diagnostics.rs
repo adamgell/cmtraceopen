@@ -6116,6 +6116,9 @@ fn reducer_overrides_win32_workload_to_failed_from_sidecar_installation_state() 
         .expect("failed Win32 app carries the Sidecar HRESULT");
     assert_eq!(code.decimal, Some(2147982441));
     assert_eq!(code.hex.as_deref(), Some("0x80079C69"));
+    // The failure propagates to the session and overall phase, matching the
+    // device's "Device Setup: Error" -- not just the individual workload.
+    assert_eq!(snapshot.phase, EspPhase::Failed);
 }
 
 #[test]
@@ -6157,6 +6160,7 @@ fn reducer_keeps_non_failed_win32_workload_from_sidecar_installation_state() {
     assert_ne!(workload.status.normalized, EspNormalizedStatus::Failed);
     assert_eq!(workload.status.normalized, EspNormalizedStatus::InProgress);
     assert!(workload.enforcement_error_code.is_none());
+    assert_ne!(snapshot.phase, EspPhase::Failed);
 }
 
 #[test]
