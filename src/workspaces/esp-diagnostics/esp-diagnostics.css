@@ -2,6 +2,19 @@
   container-type: inline-size;
 }
 
+/* Jump targets stop below the sticky section nav (the top heading goes flush). */
+.esp-diagnostics-workspace :is(
+    #esp-action-center-heading,
+    #esp-actions-heading,
+    #esp-workloads-heading,
+    #esp-graph-enrichment-heading,
+    #esp-phase-progress-heading,
+    #esp-live-activity-heading,
+    #esp-evidence-heading
+  ) {
+  scroll-margin-top: 44px;
+}
+
 /* Live "now" readout: a soft pulse marks a streaming session at a glance. */
 @keyframes esp-now-pulse {
   0%,

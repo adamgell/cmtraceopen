@@ -25,6 +25,7 @@ import { createUuidRequestId } from "../../lib/uuid-request-id";
 import { useUiStore } from "../../stores/ui-store";
 import { ActionCenter } from "./ActionCenter";
 import { EspActions } from "./EspActions";
+import { EspSectionNav } from "./EspSectionNav";
 import { failedEspApps } from "./esp-current-task";
 import { buildEspGraphNameMap } from "./esp-graph-names";
 import { ElevationBanner } from "./ElevationBanner";
@@ -206,7 +207,22 @@ export function EspDiagnosticsWorkspace() {
     () => (snapshot ? failedEspApps(snapshot.workloads, snapshot.sessions) : []),
     [snapshot],
   );
-  const actionsAvailable = currentPlatform === "windows" && !isReplaySession;
+  const showActions =
+    currentPlatform === "windows" && !isReplaySession && failedApps.length > 0;
+  const navSections = useMemo(
+    () => [
+      { id: "esp-action-center-heading", label: "Action center" },
+      ...(showActions
+        ? [{ id: "esp-actions-heading", label: "Actions" }]
+        : []),
+      { id: "esp-workloads-heading", label: "Workloads" },
+      { id: "esp-graph-enrichment-heading", label: "Graph" },
+      { id: "esp-phase-progress-heading", label: "Phases" },
+      { id: "esp-live-activity-heading", label: "Timeline" },
+      { id: "esp-evidence-heading", label: "Evidence" },
+    ],
+    [showActions],
+  );
   const liveSupported = currentPlatform === "windows";
   const isBusy = ["analyzing", "starting", "stopping"].includes(phase);
   // Elevation is a constant property of the running process. The standalone
@@ -448,6 +464,8 @@ export function EspDiagnosticsWorkspace() {
         <ElevationBanner elevation={effectiveElevation} />
       ) : null}
 
+      {snapshot ? <EspSectionNav sections={navSections} /> : null}
+
       <div
         style={{
           display: "grid",
@@ -513,7 +531,7 @@ export function EspDiagnosticsWorkspace() {
               <MsiexecStatus snapshot={snapshot} />
             </div>
 
-            {actionsAvailable && failedApps.length > 0 ? (
+            {showActions ? (
               <EspActions
                 failedApps={failedApps}
                 graphNames={graphNames}
