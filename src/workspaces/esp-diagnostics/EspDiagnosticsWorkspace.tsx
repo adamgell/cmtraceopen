@@ -153,6 +153,30 @@ async function analyzePath(
   await analyzeEspEvidenceSource(source, "esp-workspace.import");
 }
 
+// A `.json` reached via "Import captured evidence" can be either a manifest.json
+// evidence bundle OR an exported ESP session capture. Detect the capture and
+// replay it directly; otherwise hand the path to the bundle analyzer. Without
+// this, feeding a session capture to the importer runs the bundle analyzer and
+// yields an empty "0 evidence" analysis.
+async function importCapturedFile(path: string): Promise<void> {
+  if (path.toLowerCase().endsWith(".json")) {
+    const store = useEspDiagnosticsStore.getState();
+    let text: string;
+    try {
+      text = await readTextFile(path);
+    } catch (error) {
+      store.rejectAnalysisInput(`Could not read ${path}: ${errorMessage(error)}`);
+      return;
+    }
+    const parsed = parseEspSessionCapture(text);
+    if (parsed.ok) {
+      store.loadReplaySession(parsed.snapshot);
+      return;
+    }
+  }
+  await analyzePath(path, "file");
+}
+
 export function EspDiagnosticsWorkspace() {
   const currentPlatform = useUiStore((state) => state.currentPlatform);
   const phase = useEspDiagnosticsStore((state) => state.phase);
@@ -228,7 +252,7 @@ export function EspDiagnosticsWorkspace() {
         filters: [{ name: "ESP evidence", extensions: ["json", "cab", "zip"] }],
       }),
     );
-    if (path) await analyzePath(path, "file");
+    if (path) await importCapturedFile(path);
   }, []);
 
   const importEvidenceFolder = useCallback(async () => {
