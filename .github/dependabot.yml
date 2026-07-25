@@ -13,9 +13,9 @@ updates:
         dependency-type: "production"
     open-pull-requests-limit: 10
 
-  # Rust crate dependencies
+  # Rust crate dependencies — the workspace Cargo.lock lives at the repo root
   - package-ecosystem: "cargo"
-    directory: "/src-tauri"
+    directory: "/"
     schedule:
       interval: "weekly"
       day: "monday"

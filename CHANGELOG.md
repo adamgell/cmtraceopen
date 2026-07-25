@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Build & CI
+
+- **Pin the last floating action refs (#274)**: `download-metrics.yml` was the only workflow still referencing actions by mutable tag (`actions/checkout@v7`, `actions/setup-node@v7`); every other call site in the repo is SHA-pinned with a `# vX.Y.Z` trailer, and `.github/dependabot.yml` documents the github-actions ecosystem as "proposes SHA pin updates when new versions release". It is also the least safe place to keep a floating ref rather than the most harmless: the workflow runs unattended on a `17 0 * * *` cron with `permissions: contents: write`, passes `GITHUB_TOKEN` into the collector, and pushes commits to the `download-metrics` branch — and it is covered by no required status check, so a failure surfaces silently. Both steps are now pinned to the same SHAs the rest of the repo uses. These two tags were also the sole reason Dependabot titled the recent action bumps "from 4 to 7" (it reports the lowest version present in the repo).
+- **Point Dependabot's cargo ecosystem at the workspace root (#274)**: The cargo entry in `.github/dependabot.yml` was still set to `directory: "/src-tauri"`, but #240 moved the workspace lockfile to the repo root — there is no `src-tauri/Cargo.lock`. As a result Dependabot had opened no cargo pull requests since that move, so Rust dependencies never self-healed while npm-side bumps kept arriving weekly. Now set to `/`.
+
+### Dependencies
+
+- **Rust**: `tauri-plugin-dialog` 2.7.1 → 2.7.2 (#274), realigning the Rust half with the npm half bumped in #272. 2.7.2 is an Android-only fix (`MaterialAlertDialogBuilder`) with no effect on this app's targets, but the two halves are kept in lockstep by convention — and the frontend suite cannot detect plugin drift at all, since `src/test-setup.ts` mocks `@tauri-apps/plugin-dialog` wholesale.
+- **Frontend (production)**: `@fluentui/react-components` 9.74.3 → 9.74.4, `@fluentui/react-charts` 9.3.21 → 9.3.22, `@tanstack/react-virtual` 3.14.6 → 3.14.7, `@tauri-apps/plugin-dialog` 2.7.1 → 2.7.2 (#272). The only functional change in the group is `@tanstack/virtual-core` 3.17.4 → 3.17.5, which clamps `scrollOffset` at a lower bound of 0 and resets the deferred iOS scroll adjustment inside `scrollToOffset`/`scrollToIndex` (upstream TanStack/virtual #1229, #1233) — an upstream bugfix that lands in the log list's tail-follow and jump-to-entry paths.
+- **Frontend (dev)**: `@testing-library/jest-dom` 6.9.1 → 7.0.0 and `vite` 8.1.4 → 8.1.5 (#271). jest-dom 7 promotes `@testing-library/dom` to a required peer (satisfied at 10.4.1) and raises its declared minimum Node to 22, while CI pins Node 20; the published bundle uses no Node 22-only APIs and the full suite passes, so this is a supportability note rather than a break.
+- **GitHub Actions**: `actions/setup-node` 6.4.0 → 7.0.0 (#270), `actions/checkout` 7.0.0 → 7.0.1 (#268), `taiki-e/install-action` 2.83.2 → 2.84.0 (#269). Despite Dependabot's "from 4 to 7" titles, `main` was already SHA-pinned to checkout v7.0.0 everywhere except `download-metrics.yml`, so the checkout change is a patch across ten steps: v7.0.1 escapes the credentials-file path before `git config --unset` (actions/checkout #2530), which matters on the Windows signing jobs where that path contains backslashes. Neither major alters any action input — the entire `action.yml` delta from checkout v4 to v7.0.1 is `using: node20` → `node24` — and the v7.0.0 fork-PR restriction does not apply, as no workflow here triggers on `pull_request_target` or `workflow_run`.
+
 ## [1.4.0] - 2026-07-13
 
 ### Added
