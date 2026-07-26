@@ -2,7 +2,7 @@ import { tokens } from "@fluentui/react-components";
 import type { LogEntry, ErrorCodeSpan, Severity } from "../../types/log";
 import type { Marker, MarkerCategory } from "../../types/markers";
 import type { LogSeverityPalette } from "../../lib/constants";
-import type { ColumnDefinition } from "../../lib/column-config";
+import { ROW_MARKER_WIDTH, type ColumnDefinition } from "../../lib/column-config";
 import { formatLogEntryTimestamp } from "../../lib/date-time-format";
 import { LOG_UI_FONT_FAMILY } from "../../lib/log-accessibility";
 
@@ -314,7 +314,7 @@ export const LogRow = memo(function LogRow({
       style={{
         ...style,
         display: "grid",
-        gridTemplateColumns: `20px ${gridTemplateColumns}`,
+        gridTemplateColumns: `${ROW_MARKER_WIDTH}px ${gridTemplateColumns}`,
         cursor: "pointer",
         borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
         fontSize: `${listFontSize}px`,
