@@ -116,7 +116,7 @@ Format detection (`detect.rs`) samples the first lines of a file to auto-select 
 ## Prerequisites
 
 - Node.js 18+ (v20 LTS recommended)
-- Rust 1.77.2+ (MSVC toolchain on Windows)
+- Rust 1.88+ (MSVC toolchain on Windows)
 - Windows: Visual Studio Build Tools with C++ workload + Windows SDK + WebView2 Runtime
 - Automated Windows setup: `powershell -ExecutionPolicy Bypass -File .\scripts\Install-CMTraceOpenBuildPrereqs.ps1`
 

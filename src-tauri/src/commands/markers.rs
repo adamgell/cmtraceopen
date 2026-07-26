@@ -1,3 +1,4 @@
+use std::fmt::Write as _;
 use std::fs;
 
 use serde::{Deserialize, Serialize};
@@ -43,7 +44,16 @@ pub struct MarkerFile {
 fn hash_file_path(file_path: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(file_path.as_bytes());
-    format!("{:x}", hasher.finalize())
+    // Formatted byte-by-byte rather than with `{:x}`: sha2 0.11 returns a
+    // hybrid-array `Array`, which (unlike generic-array) has no `LowerHex` impl.
+    // Output is byte-identical to the old `{:x}`, so existing marker keys survive.
+    hasher
+        .finalize()
+        .iter()
+        .fold(String::with_capacity(64), |mut acc, byte| {
+            let _ = write!(acc, "{byte:02x}");
+            acc
+        })
 }
 
 /// Resolve the path `markers/<hash>.json` inside the app data directory.
@@ -110,4 +120,34 @@ pub fn delete_markers(file_path: String, app: AppHandle) -> Result<(), AppError>
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `hash_file_path` names the on-disk marker file, so its output is a storage
+    /// key: any change to the encoding orphans every marker a user has saved.
+    /// This pins the exact lowercase, zero-padded, 64-char form that `{:x}`
+    /// produced before the sha2 0.11 / hybrid-array migration.
+    #[test]
+    fn hash_file_path_encoding_is_stable() {
+        assert_eq!(
+            hash_file_path(r"C:\logs\test.log"),
+            "2a6f96d670395f2b2072bedc3553e06131f7887b9f943e3971496d0c3f1b1240"
+        );
+    }
+
+    #[test]
+    fn hash_file_path_pads_leading_zero_nibble() {
+        // "marker-5" hashes to a digest whose first byte is 0x0b. Formatting per
+        // byte with `{:x}` instead of `{:02x}` would emit "b" for that byte and
+        // yield a 63-char string, so this pins the zero padding.
+        let hash = hash_file_path("marker-5");
+        assert_eq!(hash.len(), 64);
+        assert_eq!(
+            hash,
+            "0b58d27bafce39bac0c607e45047a13f95f4ff3d443d447472b9c00a23840d64"
+        );
+    }
 }

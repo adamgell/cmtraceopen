@@ -384,7 +384,7 @@ fn plain_json_container_end(bytes: &[u8], start: usize) -> usize {
     let mut in_string = false;
 
     for index in start..bytes.len() {
-        if bytes[index] == b'"' && preceding_backslash_count(bytes, index) % 2 == 0 {
+        if bytes[index] == b'"' && preceding_backslash_count(bytes, index).is_multiple_of(2) {
             in_string = !in_string;
             continue;
         }
@@ -444,7 +444,7 @@ fn json_string_end(bytes: &[u8], start: usize) -> usize {
             continue;
         }
         let slash_count = preceding_backslash_count(bytes, index);
-        if slash_count % 2 == 0 {
+        if slash_count.is_multiple_of(2) {
             return index + 1;
         }
     }

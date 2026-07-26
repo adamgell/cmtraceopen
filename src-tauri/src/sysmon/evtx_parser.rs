@@ -261,11 +261,11 @@ pub fn build_summary(
 
         if !event.timestamp.is_empty() {
             if let Some(ms) = event.timestamp_ms {
-                if earliest_ms.map_or(true, |existing| ms < existing) {
+                if earliest_ms.is_none_or(|existing| ms < existing) {
                     earliest_ms = Some(ms);
                     earliest_ts = Some(event.timestamp.clone());
                 }
-                if latest_ms.map_or(true, |existing| ms > existing) {
+                if latest_ms.is_none_or(|existing| ms > existing) {
                     latest_ms = Some(ms);
                     latest_ts = Some(event.timestamp.clone());
                 }
@@ -276,11 +276,11 @@ pub fn build_summary(
                 let ts = event.timestamp.as_str();
                 if earliest_ts
                     .as_deref()
-                    .map_or(true, |existing| ts < existing)
+                    .is_none_or(|existing| ts < existing)
                 {
                     earliest_ts = Some(event.timestamp.clone());
                 }
-                if latest_ts.as_deref().map_or(true, |existing| ts > existing) {
+                if latest_ts.as_deref().is_none_or(|existing| ts > existing) {
                     latest_ts = Some(event.timestamp.clone());
                 }
             }

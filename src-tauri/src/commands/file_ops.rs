@@ -529,6 +529,7 @@ pub struct FileHashResult {
 #[tauri::command]
 pub fn compute_file_hash(path: String) -> Result<FileHashResult, crate::error::AppError> {
     use sha2::{Digest, Sha256};
+    use std::fmt::Write as _;
     use std::io::Read;
 
     let mut file = std::fs::File::open(&path).map_err(crate::error::AppError::Io)?;
@@ -546,7 +547,13 @@ pub fn compute_file_hash(path: String) -> Result<FileHashResult, crate::error::A
         hasher.update(&buffer[..bytes_read]);
     }
 
-    let hash = format!("sha256:{:x}", hasher.finalize());
+    // Formatted byte-by-byte rather than with `{:x}`: sha2 0.11 returns a
+    // hybrid-array `Array`, which (unlike generic-array) has no `LowerHex` impl.
+    // Output is byte-identical to the old `{:x}`.
+    let mut hash = String::from("sha256:");
+    for byte in hasher.finalize() {
+        let _ = write!(&mut hash, "{byte:02x}");
+    }
     Ok(FileHashResult { hash, size_bytes })
 }
 

@@ -266,8 +266,7 @@ mod tests {
     fn test_parse_ndjson_log_entries_capped() {
         let line = r#"{"timestamp":"2024-01-01 00:00:00.000000-0000","processImagePath":"/usr/bin/test","messageType":"Info","eventMessage":"msg","processID":1}"#;
         // Create 10 lines
-        let input = std::iter::repeat(line)
-            .take(10)
+        let input = std::iter::repeat_n(line, 10)
             .collect::<Vec<_>>()
             .join("\n");
 

@@ -186,15 +186,15 @@ fn quote_windows_argument(argument: &str) -> String {
             continue;
         }
         if character == '"' {
-            quoted.extend(std::iter::repeat('\\').take(backslashes * 2 + 1));
+            quoted.extend(std::iter::repeat_n('\\', backslashes * 2 + 1));
             quoted.push('"');
         } else {
-            quoted.extend(std::iter::repeat('\\').take(backslashes));
+            quoted.extend(std::iter::repeat_n('\\', backslashes));
             quoted.push(character);
         }
         backslashes = 0;
     }
-    quoted.extend(std::iter::repeat('\\').take(backslashes * 2));
+    quoted.extend(std::iter::repeat_n('\\', backslashes * 2));
     quoted.push('"');
     quoted
 }

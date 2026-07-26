@@ -122,7 +122,7 @@ impl GuidRegistry {
         let dominated = self
             .entries
             .get(&guid)
-            .map_or(true, |existing| source > existing.source);
+            .is_none_or(|existing| source > existing.source);
         if dominated {
             self.entries.insert(guid, GuidEntry { name, source });
         }

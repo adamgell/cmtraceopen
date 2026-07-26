@@ -377,7 +377,7 @@ impl EspSessionManager {
             || control
                 .reservation
                 .as_ref()
-                .map_or(true, |reservation| reservation.session_id != session_id)
+                .is_none_or(|reservation| reservation.session_id != session_id)
         {
             active.cancellation.cancel();
             active.activation.release();
@@ -864,10 +864,10 @@ impl SessionEngine {
         let replacements = replace_artifact_ids.into_iter().collect::<BTreeSet<_>>();
         if !replacements.is_empty() {
             self.tail_records.retain(|record| {
-                record_artifact_id(record.record()).map_or(true, |id| !replacements.contains(id))
+                record_artifact_id(record.record()).is_none_or(|id| !replacements.contains(id))
             });
             self.tail_coverage.retain(|record| {
-                coverage_artifact_id(record.record()).map_or(true, |id| !replacements.contains(id))
+                coverage_artifact_id(record.record()).is_none_or(|id| !replacements.contains(id))
             });
         }
         self.tail_records.extend(reconcile_identified_records(
@@ -931,7 +931,7 @@ fn coherent_utc_timestamp<'a>(
         else {
             continue;
         };
-        if latest.map_or(true, |current| observed > current) {
+        if latest.is_none_or(|current| observed > current) {
             coherent = observed.to_rfc3339_opts(SecondsFormat::AutoSi, true);
             latest = Some(observed);
         }

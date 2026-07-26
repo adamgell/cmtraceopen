@@ -2,7 +2,9 @@
 members = ["src-tauri", "crates/cmtraceopen-parser"]
 resolver = "2"
 
-# time 0.3.47 fixes RUSTSEC-2026-0009 but requires Rust 1.88. Keep the
-# workspace's Rust 1.77.2 contract with the documented upstream backport.
+# time 0.3.47 fixes RUSTSEC-2026-0009 but requires Rust 1.88, which the old
+# 1.77.2 floor could not meet -- hence this vendored backport. The floor is now
+# 1.88, so this patch (and the `time = "=0.3.36"` pin in src-tauri) is no longer
+# required and can be dropped in favour of upstream 0.3.47 as a follow-up.
 [patch.crates-io]
 time = { path = "vendor/time-0.3.36" }
