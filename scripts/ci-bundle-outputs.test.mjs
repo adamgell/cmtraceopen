@@ -20,6 +20,26 @@ const scriptPath = fileURLToPath(
 const workflowPath = fileURLToPath(
   new URL("../.github/workflows/cmtrace-ci.yml", import.meta.url),
 );
+const appManifestPath = fileURLToPath(
+  new URL("../src-tauri/Cargo.toml", import.meta.url),
+);
+
+/**
+ * The MSRV is declared in src-tauri/Cargo.toml; CI must pin the same version.
+ * Reading it here rather than hardcoding keeps this contract honest across
+ * bumps -- the test asserts manifest/CI agreement, not one frozen number.
+ */
+function declaredMsrv() {
+  const manifest = readFileSync(appManifestPath, "utf8");
+  const match = manifest.match(/^rust-version\s*=\s*"([^"]+)"/m);
+  assert.ok(match, "src-tauri/Cargo.toml must declare rust-version");
+  return match[1];
+}
+
+/** Escape a version string for safe use inside a RegExp. */
+function reEscape(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
 
 function createBundleWorkspace(t) {
   const root = mkdtempSync(join(tmpdir(), "cmtrace-ci-bundle-"));
@@ -255,9 +275,10 @@ function assertMsrvWorkflowContract(workflowText) {
     msrvJob,
     /- name: Install system dependencies\n\s+if: runner\.os == 'Linux'/,
   );
+  const msrv = declaredMsrv();
   const orderedSteps = [
     "- name: Install system dependencies",
-    "- name: Setup Rust 1.77.2",
+    `- name: Setup Rust ${msrv}`,
     "- name: Cache Rust dependencies",
     "- name: Rust MSRV check",
   ];
@@ -269,17 +290,24 @@ function assertMsrvWorkflowContract(workflowText) {
     previousIndex = index;
   }
 
+  const v = reEscape(msrv);
   assert.match(
     msrvJob,
-    /- name: Setup Rust 1\.77\.2[\s\S]*?uses: dtolnay\/rust-toolchain@[0-9a-f]{40}[\s\S]*?toolchain: "1\.77\.2"/,
+    new RegExp(
+      `- name: Setup Rust ${v}[\\s\\S]*?uses: dtolnay/rust-toolchain@[0-9a-f]{40}[\\s\\S]*?toolchain: "${v}"`,
+    ),
   );
   assert.match(
     msrvJob,
-    /- name: Cache Rust dependencies[\s\S]*?src-tauri\/target\/[\s\S]*?key: \$\{\{ runner\.os \}\}-cargo-msrv-1\.77\.2-\$\{\{ hashFiles\('Cargo\.lock'\) \}\}/,
+    new RegExp(
+      `- name: Cache Rust dependencies[\\s\\S]*?src-tauri/target/[\\s\\S]*?key: \\$\\{\\{ runner\\.os \\}\\}-cargo-msrv-${v}-\\$\\{\\{ hashFiles\\('Cargo\\.lock'\\) \\}\\}`,
+    ),
   );
   assert.match(
     msrvJob,
-    /- name: Rust MSRV check\n\s+run: cargo \+1\.77\.2 check --workspace --all-features --locked/,
+    new RegExp(
+      `- name: Rust MSRV check\\n\\s+run: cargo \\+${v} check --workspace --all-features --locked`,
+    ),
   );
 }
 
@@ -293,7 +321,7 @@ test("CI bundle workflow contract accepts CRLF line endings", () => {
   assert.doesNotThrow(() => assertWorkflowContract(workflow));
 });
 
-test("CI enforces the declared Rust 1.77.2 MSRV", () => {
+test("CI enforces the MSRV declared in src-tauri/Cargo.toml", () => {
   assertMsrvWorkflowContract(readFileSync(workflowPath, "utf8"));
 });
 

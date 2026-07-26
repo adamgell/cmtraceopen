@@ -13,7 +13,7 @@ limit from upstream commit
 That commit is the fix released in `time` 0.3.47 for RUSTSEC-2026-0009.
 
 The fixed upstream release requires Rust 1.88.0, while CMTrace Open's locked
-compiler contract is Rust 1.77.2. The root `[patch.crates-io]` override and the
+compiler contract is Rust 1.88 (was 1.77.2 when this backport was created). The root `[patch.crates-io]` override and the
 exact `=0.3.36` requirement preserve that contract without ignoring the
 advisory. `src-tauri/tests/security_dependencies.rs` verifies the upstream
 boundary: 31 nested RFC 2822 comments parse and 32 are rejected.
@@ -25,7 +25,7 @@ of these checks:
 1. Keep the source diff against crates.io 0.3.36 limited to the documented
    upstream backport.
 2. Run `cargo test -p cmtrace-open --test security_dependencies`.
-3. Run `cargo +1.77.2 check --workspace --all-features --locked`.
+3. Run `cargo +1.88 check --workspace --all-features --locked`.
 4. Run `cargo audit` and `cd src-tauri && cargo deny check` to ensure no
    vulnerable registry copy of `time` re-enters the dependency graph.
 

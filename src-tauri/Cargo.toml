@@ -51,8 +51,9 @@ notify = "8"
 tokio = { version = "1", features = ["fs", "io-util", "sync", "rt", "net"] }
 rayon = "1.10"
 font-kit = "0.14"
-# evtx 0.12 uses Cargo's 2024 edition, which Cargo 1.77.2 cannot parse.
-# Keep this exact pin aligned with the declared MSRV and its CI check.
+# evtx 0.12 uses Cargo's 2024 edition, which Cargo 1.77.2 could not parse.
+# The MSRV is now 1.88, so this exact pin is no longer MSRV-mandated; it is
+# retained deliberately and can be revisited separately.
 evtx = { version = "=0.8.5", optional = true }
 quick-xml = { version = "0.38", optional = true }
 glob = "0.3"
@@ -63,7 +64,8 @@ anyhow = "1"
 zip = { version = "=2.4.2", default-features = false, features = ["deflate"], optional = true }
 cab = { version = "=0.6.0", optional = true }
 # This exact requirement makes Cargo select the security-backported path patch
-# in the workspace root instead of a newer release that exceeds Rust 1.77.2.
+# in the workspace root. With the MSRV now at 1.88, upstream time 0.3.47 (which
+# carries the real RUSTSEC-2026-0009 fix) is reachable -- see the root Cargo.toml.
 time = { version = "=0.3.36", default-features = false, features = ["parsing"] }
 
 [target.'cfg(unix)'.dependencies]
@@ -74,8 +76,8 @@ plist = { version = "1", optional = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 winreg = "0.56"
-# windows 0.62 raises its MSRV to Rust 1.82. Keep the 0.61 line for the
-# application's declared Rust 1.77.2 floor and exercise it in Windows CI.
+# windows 0.62 raises its MSRV to Rust 1.82, which the old 1.77.2 floor barred.
+# The floor is now 1.88; the 0.61 pin is kept for now and exercised in Windows CI.
 windows = { version = "=0.61.3", features = [
     "Win32_Foundation",
     "Win32_NetworkManagement_NetManagement",
@@ -100,8 +102,8 @@ windows = { version = "=0.61.3", features = [
     "Win32_System_WinRT",
 ] }
 windows-future = "=0.2.1"
-# ureq 3.3 uses Cargo's 2024 edition and requires Rust 1.85.
-# Keep this exact pin aligned with the declared Rust 1.77.2 MSRV.
+# ureq 3.3 uses Cargo's 2024 edition and requires Rust 1.85, which the old
+# 1.77.2 floor barred. The floor is now 1.88; this pin is kept for now.
 ureq = "=3.2.0"
 
 [target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]

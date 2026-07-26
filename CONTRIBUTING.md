@@ -5,7 +5,7 @@ Thanks for your interest in contributing. This guide covers development setup, b
 ## Prerequisites
 
 - [Node.js](https://nodejs.org/) v18+ (v20 LTS recommended)
-- [Rust](https://www.rust-lang.org/tools/install) 1.77.2+ (MSVC toolchain on Windows)
+- [Rust](https://www.rust-lang.org/tools/install) 1.88+ (MSVC toolchain on Windows)
 - [Tauri v2 prerequisites](https://v2.tauri.app/start/prerequisites/)
 
 ### Windows-specific
