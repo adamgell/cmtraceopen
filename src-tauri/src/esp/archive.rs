@@ -1013,7 +1013,7 @@ fn decode_registry_text(bytes: &[u8]) -> Result<String, ArchiveError> {
 }
 
 fn decode_utf16(bytes: &[u8], little_endian: bool) -> Result<String, ArchiveError> {
-    if bytes.len() % 2 != 0 {
+    if !bytes.len().is_multiple_of(2) {
         return Err(ArchiveError::InvalidEvidence {
             detail: "registry export contains an odd number of UTF-16 bytes".to_string(),
         });

@@ -639,7 +639,7 @@ fn find_matching_argument_quote(bytes: &[u8], start: usize, quote: u8) -> Option
             while slash_start > start && bytes[slash_start - 1] == b'\\' {
                 slash_start -= 1;
             }
-            if (cursor - slash_start) % 2 == 0 {
+            if (cursor - slash_start).is_multiple_of(2) {
                 return Some(cursor);
             }
         }
@@ -921,7 +921,7 @@ fn secret_argument_end(
                 index += 1;
             }
             if index < bytes.len() && bytes[index] == b'"' {
-                if !in_single_quotes && (index - slash_start) % 2 == 0 {
+                if !in_single_quotes && (index - slash_start).is_multiple_of(2) {
                     in_double_quotes = !in_double_quotes;
                 }
                 index += 1;

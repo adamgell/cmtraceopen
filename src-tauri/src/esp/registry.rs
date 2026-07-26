@@ -1168,7 +1168,7 @@ fn decode_registry_value(value_type: u32, bytes: &[u8]) -> Option<EspObservation
 
 #[cfg(any(target_os = "windows", test))]
 fn decode_utf16_units(bytes: &[u8]) -> Option<Vec<u16>> {
-    if bytes.len() % 2 != 0 {
+    if !bytes.len().is_multiple_of(2) {
         return None;
     }
     Some(

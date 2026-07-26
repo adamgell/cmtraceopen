@@ -7977,7 +7977,7 @@ fn bundle_manifest_reports_missing_and_malformed_artifacts_without_fallback() {
             .provenance
             .file_path
             .as_deref()
-            .map_or(true, |path| !path.ends_with("unlisted.log"))
+            .is_none_or(|path| !path.ends_with("unlisted.log"))
     }));
 }
 
@@ -8043,7 +8043,7 @@ fn bundle_legacy_fallback_is_depth_extension_and_basename_allowlisted() {
         Some("Legacy Profile")
     );
     assert!(snapshot.raw_evidence.iter().all(|record| {
-        record.provenance.file_path.as_deref().map_or(true, |path| {
+        record.provenance.file_path.as_deref().is_none_or(|path| {
             !path.ends_with("arbitrary.json") && !path.ends_with("ignored.exe")
         })
     }));
