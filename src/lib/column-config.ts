@@ -492,11 +492,53 @@ export function calcAutoFitWidth(
   );
 }
 
+/**
+ * Width `columnId` may occupy if the row is to fit `containerWidth` without
+ * overflowing horizontally: the container minus every other visible column's
+ * effective width (override, else default) — mirroring how
+ * `buildGridTemplateColumns` sizes the grid.
+ *
+ * Returns null when the container has not been measured yet (0 during the first
+ * paint, or in jsdom), so callers can fall back to unclamped behaviour rather
+ * than collapsing the column to nothing.
+ */
+export function getAvailableColumnWidth(
+  columns: ColumnDefinition[],
+  columnId: ColumnId,
+  containerWidth: number,
+  widthOverrides?: Record<string, number>,
+  reservedWidth = 0
+): number | null {
+  if (!Number.isFinite(containerWidth) || containerWidth <= 0) return null;
+  let othersWidth = 0;
+  let found = false;
+  for (const col of columns) {
+    if (col.id === columnId) {
+      found = true;
+      continue;
+    }
+    othersWidth += widthOverrides?.[col.id] ?? col.defaultWidth;
+  }
+  if (!found) return null;
+  return containerWidth - othersWidth - reservedWidth;
+}
+
+/**
+ * @param fit Fit-to-window bounds (#254). When supplied, the column is sized to
+ *   the space actually available rather than to its content, which means it may
+ *   also *shrink* below `defaultWidth` — necessary because the default widths
+ *   alone already overflow a typical container (e.g. 528px of fixed columns plus
+ *   a 600px message column needs 1128px, but the list is ~1000px at a 1440px
+ *   window). `minWidth` floors the result so the column stays legible; if the
+ *   available space is below that floor a scrollbar is unavoidable and the
+ *   floor wins. Omit to keep the historical grow-only behaviour.
+ */
 export function getAutoExpandedColumnWidth(
   currentWidth: number | undefined,
   autoFitWidth: number,
   defaultWidth: number,
-  lastAutoWidth: number | null
+  lastAutoWidth: number | null,
+  fit: { available: number; minWidth: number } | null = null
 ): number | null {
   // When a width already exists before this session auto-sizes the column,
   // treat it as a user-owned override (persisted manual resize or fit action).
@@ -513,7 +555,18 @@ export function getAutoExpandedColumnWidth(
   }
 
   const baselineWidth = currentWidth ?? defaultWidth;
-  return autoFitWidth > baselineWidth ? autoFitWidth : null;
+
+  if (fit === null) {
+    return autoFitWidth > baselineWidth ? autoFitWidth : null;
+  }
+
+  // Never wider than the content needs, never wider than the space left, never
+  // narrower than the column's own minimum.
+  const targetWidth = Math.max(
+    fit.minWidth,
+    Math.min(autoFitWidth, fit.available)
+  );
+  return targetWidth === baselineWidth ? null : targetWidth;
 }
 
 export function applyColumnOrder(
@@ -553,6 +606,14 @@ export function getVisibleColumns(
  * Build a CSS grid-template-columns string from visible column definitions.
  * Uses width overrides from user preferences when available, otherwise defaults.
  */
+/**
+ * Leading grid track reserved for the row marker gutter. The log row and the
+ * header both prepend it to `buildGridTemplateColumns`, so any calculation of
+ * "how wide is a row" must include it — see getAvailableColumnWidth's
+ * `reservedWidth`.
+ */
+export const ROW_MARKER_WIDTH = 20;
+
 export function buildGridTemplateColumns(
   columns: ColumnDefinition[],
   widthOverrides?: Record<string, number>

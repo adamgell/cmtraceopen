@@ -33,6 +33,8 @@ import {
   getColumnDef,
   calcAutoFitWidth,
   getAutoExpandedColumnWidth,
+  getAvailableColumnWidth,
+  ROW_MARKER_WIDTH,
   type ColumnId,
   type ColumnDefinition,
 } from "../../lib/column-config";
@@ -639,11 +641,28 @@ export function LogListView({ dataSource }: { dataSource?: LogListDataSource } =
         contentFont,
         headerFont
       );
+      // Clamp to what is left after the other visible columns, so opening a log
+      // never introduces a horizontal scrollbar on its own (#254). When the
+      // container is unmeasured this is null and the width stays unclamped.
+      // Widths are read fresh rather than from the effect closure so a resize
+      // of another column between open and this timer is accounted for without
+      // adding the whole map to the dependency array (which would re-run the
+      // effect on every width write it performs).
+      const availableWidth = getAvailableColumnWidth(
+        visibleColumns,
+        "message",
+        parentRef.current?.clientWidth ?? 0,
+        useUiStore.getState().columnWidths,
+        ROW_MARKER_WIDTH
+      );
       const nextWidth = getAutoExpandedColumnWidth(
         columnWidths.message,
         autoFitWidth,
         messageCol.defaultWidth,
-        autoSizedMessageWidthRef.current
+        autoSizedMessageWidthRef.current,
+        availableWidth === null
+          ? null
+          : { available: availableWidth, minWidth: messageCol.minWidth }
       );
 
       if (nextWidth === null) return;
@@ -661,6 +680,7 @@ export function LogListView({ dataSource }: { dataSource?: LogListDataSource } =
     autoSizeSourcePath,
     setColumnWidth,
     sourceOpenMode,
+    visibleColumns,
   ]);
 
   const visibleErrorCount = useMemo(() => {
@@ -768,7 +788,7 @@ export function LogListView({ dataSource }: { dataSource?: LogListDataSource } =
       <div
         style={{
           display: "grid",
-          gridTemplateColumns: `20px ${gridTemplateColumns}`,
+          gridTemplateColumns: `${ROW_MARKER_WIDTH}px ${gridTemplateColumns}`,
           backgroundColor: tokens.colorNeutralBackground4,
           borderBottom: `2px solid ${tokens.colorNeutralStroke2}`,
           fontSize: `${listMetrics.headerFontSize}px`,
