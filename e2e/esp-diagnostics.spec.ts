@@ -202,7 +202,12 @@ test.describe("ESP Diagnostics workspace", () => {
     await expect(
       page.getByText("Required security application is blocking ESP"),
     ).toBeVisible();
-    await expect(page.getByText("Contoso Endpoint Security")).toBeVisible();
+    // Scoped to the evidence heading's title attribute: the app name also
+    // appears in the "Force ESP past a failed app" control and in a
+    // "Graph · <name>" attribution line, so a bare getByText is ambiguous.
+    await expect(
+      page.getByTitle("Contoso Endpoint Security", { exact: true }),
+    ).toBeVisible();
     await expect(
       page.getByRole("region", { name: "Live activity" }),
     ).toContainText("VPN installer started");
@@ -509,7 +514,9 @@ test.describe("ESP Diagnostics workspace", () => {
       .getByRole("button", { name: "Import captured evidence" })
       .click();
     await expect(page.getByText("ESP only")).toBeVisible();
-    await expect(page.getByText("Contoso Endpoint Security")).toBeVisible();
+    await expect(
+      page.getByTitle("Contoso Endpoint Security", { exact: true }),
+    ).toBeVisible();
     await expect(
       page.getByRole("region", {
         name: "Administrator coverage recommendation",
@@ -647,8 +654,13 @@ test.describe("ESP Diagnostics workspace", () => {
     await openEspWorkspace(page);
     await analyzeWithConnectedGraph(page, cloneSnapshot());
 
+    // The Graph record itself, not the evidence heading or the live-task line
+    // that also echo the friendly name -- this test is specifically about Graph
+    // supplying it alongside the raw local id asserted below.
     await expect(
-      page.getByText("Contoso VPN Client from Graph", { exact: true }),
+      page
+        .getByTestId("graph-record-66666666-6666-4666-8666-666666666666")
+        .getByText("Contoso VPN Client from Graph", { exact: true }),
     ).toBeVisible();
     await expect(
       page
