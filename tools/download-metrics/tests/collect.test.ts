@@ -140,6 +140,52 @@ describe("deterministic download collection", () => {
     await expectMissing(join(root, "reports"));
   });
 
+  it("never records assets from a draft release", async () => {
+    // cmtrace-release.yml sets releaseDraft: true, so a stable release exists
+    // as a draft with its assets already uploaded until someone publishes it.
+    // The workflow's GITHUB_TOKEN makes those drafts visible to the API, so an
+    // unfiltered run attributes real download counts to an unpublished release.
+    const root = await temporaryRoot();
+    const output = join(root, "output");
+    const draftRelease: GitHubRelease = {
+      id: 16,
+      tag_name: "v1.5.0",
+      name: "CMTrace Open 1.5.0",
+      published_at: "2026-07-14T00:00:00Z",
+      prerelease: false,
+      draft: true,
+      assets: [asset(104, "CMTrace-Open_1.5.0_x64-setup.exe", 999)],
+    };
+
+    const result = await collectDownloads({
+      outputDirectory: output,
+      fetcher: fetcherFor([
+        ...releases({ portable: 12, setup: 8, manifest: 30 }),
+        draftRelease,
+      ]),
+      clock,
+      repositoryRoot: join(root, "source-repository"),
+    });
+
+    const snapshot = JSON.parse(
+      await readFile(result.paths.snapshot, "utf8"),
+    ) as Snapshot;
+    expect(snapshot.assets).toHaveLength(3);
+    expect(snapshot.assets.some((entry) => entry.releaseTag === "v1.5.0")).toBe(
+      false,
+    );
+    expect(snapshot.assets.some((entry) => entry.assetId === 104)).toBe(false);
+
+    const csv = await readFile(join(output, "reports/latest-assets.csv"), "utf8");
+    expect(csv).not.toContain("v1.5.0");
+
+    // The draft's 999 downloads must not inflate any delivery role.
+    const summary = JSON.parse(
+      await readFile(join(output, "reports/summary.json"), "utf8"),
+    );
+    expect(summary["mixed-manual-update"]).toEqual({ cumulative: 8, delta: 0 });
+  });
+
   it("uses the prior latest report by default and emits real deltas", async () => {
     const root = await temporaryRoot();
     const output = join(root, "output");
