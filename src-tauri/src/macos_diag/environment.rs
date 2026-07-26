@@ -1,7 +1,7 @@
 use super::models::MacosDiagEnvironment;
+use super::models::MacosLogFileEntry;
 #[cfg(target_os = "macos")]
 use super::models::{FdaStatus, MacosDiagDirectoryStatus, MacosDiagToolAvailability};
-use super::models::MacosLogFileEntry;
 use std::path::Path;
 use std::time::UNIX_EPOCH;
 
@@ -128,19 +128,18 @@ pub fn scan_environment_impl() -> Result<MacosDiagEnvironment, crate::error::App
     };
 
     // --- Full Disk Access check ---
-    let full_disk_access = match std::fs::metadata(
-        "/Library/Application Support/com.apple.TCC/TCC.db",
-    ) {
-        Ok(_) => FdaStatus::Granted,
-        Err(e) => {
-            let raw = e.raw_os_error();
-            if e.kind() == std::io::ErrorKind::PermissionDenied || raw == Some(1) {
-                FdaStatus::NotGranted
-            } else {
-                FdaStatus::Unknown
+    let full_disk_access =
+        match std::fs::metadata("/Library/Application Support/com.apple.TCC/TCC.db") {
+            Ok(_) => FdaStatus::Granted,
+            Err(e) => {
+                let raw = e.raw_os_error();
+                if e.kind() == std::io::ErrorKind::PermissionDenied || raw == Some(1) {
+                    FdaStatus::NotGranted
+                } else {
+                    FdaStatus::Unknown
+                }
             }
-        }
-    };
+        };
 
     // --- Tool availability ---
     let tool_available = |name: &str| -> bool {
@@ -167,9 +166,7 @@ pub fn scan_environment_impl() -> Result<MacosDiagEnvironment, crate::error::App
         company_portal_logs: dir_exists("~/Library/Logs/CompanyPortal/"),
         intune_scripts_logs: dir_exists("/Library/Logs/Microsoft/IntuneScripts/"),
         defender_logs: dir_exists("/Library/Logs/Microsoft/mdatp/"),
-        defender_diag: dir_exists(
-            "/Library/Application Support/Microsoft/Defender/wdavdiag/",
-        ),
+        defender_diag: dir_exists("/Library/Application Support/Microsoft/Defender/wdavdiag/"),
     };
 
     // --- Build summary ---
@@ -211,7 +208,9 @@ pub fn scan_environment_impl() -> Result<MacosDiagEnvironment, crate::error::App
 
 #[cfg(not(target_os = "macos"))]
 pub fn scan_environment_impl() -> Result<MacosDiagEnvironment, crate::error::AppError> {
-    Err(crate::error::AppError::PlatformUnsupported("macOS Diagnostics is only available on macOS.".to_string()))
+    Err(crate::error::AppError::PlatformUnsupported(
+        "macOS Diagnostics is only available on macOS.".to_string(),
+    ))
 }
 
 // ---------------------------------------------------------------------------

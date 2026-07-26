@@ -62,10 +62,7 @@ fn marker_file_path(app: &AppHandle, file_path: &str) -> Result<std::path::PathB
 
 /// Load persisted markers for a file. Returns `None` if no marker file exists.
 #[tauri::command]
-pub fn load_markers(
-    file_path: String,
-    app: AppHandle,
-) -> Result<Option<MarkerFile>, AppError> {
+pub fn load_markers(file_path: String, app: AppHandle) -> Result<Option<MarkerFile>, AppError> {
     let path = marker_file_path(&app, &file_path)?;
 
     if !path.exists() {

@@ -37,17 +37,34 @@ pub fn run_collection<R: Runtime>(
     let bundle_root = resolve_bundle_root(output_root.as_deref(), &bundle_id)?;
     let evidence_root = bundle_root.join("evidence");
 
-    // Create all subdirectories up front.
-    for subdir in &["logs", "registry", "event-logs", "exports", "command-output"] {
-        fs::create_dir_all(evidence_root.join(subdir)).map_err(crate::error::AppError::Io)?;
+    // The bundle root is exclusive and unpredictable. Keep every evidence
+    // directory exclusive as well so collection never reuses attacker-planted
+    // links, junctions, or reparse points.
+    fs::create_dir(&evidence_root).map_err(crate::error::AppError::Io)?;
+    for subdir in &[
+        "logs",
+        "registry",
+        "event-logs",
+        "exports",
+        "command-output",
+    ] {
+        fs::create_dir(evidence_root.join(subdir)).map_err(crate::error::AppError::Io)?;
     }
 
     // Shared state for concurrent collection.
     let completed = Arc::new(AtomicUsize::new(0));
-    let results: Arc<Mutex<Vec<ArtifactResult>>> = Arc::new(Mutex::new(Vec::with_capacity(total_items)));
+    let results: Arc<Mutex<Vec<ArtifactResult>>> =
+        Arc::new(Mutex::new(Vec::with_capacity(total_items)));
 
     // Emit initial progress.
-    emit_progress(&app, &request_id, 0, total_items, "Starting collection...", None);
+    emit_progress(
+        &app,
+        &request_id,
+        0,
+        total_items,
+        "Starting collection...",
+        None,
+    );
 
     // Run all 5 categories concurrently.
     let ctx_logs = CollectorContext {
@@ -120,11 +137,25 @@ pub fn run_collection<R: Runtime>(
     let duration_ms = start.elapsed().as_millis() as u64;
 
     // Write manifest and notes.
-    manifest::write_manifest(&bundle_root, &bundle_id, &profile, &all_results, &counts, duration_ms)?;
+    manifest::write_manifest(
+        &bundle_root,
+        &bundle_id,
+        &profile,
+        &all_results,
+        &counts,
+        duration_ms,
+    )?;
     manifest::write_notes(&bundle_root, &profile, &counts, duration_ms)?;
 
     // Final progress event.
-    emit_progress(&app, &request_id, total_items, total_items, "Collection complete.", None);
+    emit_progress(
+        &app,
+        &request_id,
+        total_items,
+        total_items,
+        "Collection complete.",
+        None,
+    );
 
     Ok(CollectionResult {
         bundle_path: bundle_root.to_string_lossy().into_owned(),
@@ -135,15 +166,45 @@ pub fn run_collection<R: Runtime>(
     })
 }
 
+const MAX_BUNDLE_HOSTNAME_CHARS: usize = 64;
+
+fn sanitize_bundle_hostname(hostname: &str) -> String {
+    let sanitized = hostname
+        .chars()
+        .take(MAX_BUNDLE_HOSTNAME_CHARS)
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '-' | '_') {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    if sanitized.is_empty() {
+        "unknown".to_string()
+    } else {
+        sanitized
+    }
+}
+
 fn generate_bundle_id() -> String {
     let now = chrono::Utc::now();
     let hostname = std::env::var("COMPUTERNAME")
         .or_else(|_| std::env::var("HOSTNAME"))
         .unwrap_or_else(|_| "unknown".to_string());
-    format!("CMTRACE-{}-{}", now.format("%Y%m%d-%H%M%S"), hostname)
+    let hostname = sanitize_bundle_hostname(&hostname);
+    let nonce = uuid::Uuid::new_v4().simple();
+    format!(
+        "CMTRACE-{}-{}-{nonce}",
+        now.format("%Y%m%d-%H%M%S"),
+        hostname
+    )
 }
 
-fn resolve_bundle_root(output_root: Option<&str>, bundle_id: &str) -> Result<PathBuf, crate::error::AppError> {
+fn resolve_bundle_root(
+    output_root: Option<&str>,
+    bundle_id: &str,
+) -> Result<PathBuf, crate::error::AppError> {
     let base = match output_root {
         Some(root) => PathBuf::from(root),
         None => {
@@ -154,12 +215,16 @@ fn resolve_bundle_root(output_root: Option<&str>, bundle_id: &str) -> Result<Pat
                     // Fallback to temp directory on non-Windows or if ProgramData is unset.
                     std::env::temp_dir().to_string_lossy().into_owned()
                 });
-            PathBuf::from(program_data).join("CmtraceOpen").join("Evidence")
+            PathBuf::from(program_data)
+                .join("CmtraceOpen")
+                .join("Evidence")
         }
     };
 
-    let bundle_root = base.join(bundle_id);
-    fs::create_dir_all(&bundle_root).map_err(crate::error::AppError::Io)?;
+    fs::create_dir_all(&base).map_err(crate::error::AppError::Io)?;
+    let canonical_base = base.canonicalize().map_err(crate::error::AppError::Io)?;
+    let bundle_root = canonical_base.join(bundle_id);
+    fs::create_dir(&bundle_root).map_err(crate::error::AppError::Io)?;
 
     Ok(bundle_root)
 }
@@ -186,7 +251,9 @@ fn compute_counts(results: &[ArtifactResult]) -> ArtifactCounts {
 }
 
 fn compute_gaps(results: &[ArtifactResult]) -> Vec<CollectionGap> {
-    results
+    // `results` is aggregated from concurrent collectors, so sort the returned
+    // gaps for a stable order that matches the deterministic manifest.
+    let mut gaps: Vec<CollectionGap> = results
         .iter()
         .filter(|r| !matches!(r.status, ArtifactStatus::Collected))
         .map(|r| CollectionGap {
@@ -194,7 +261,13 @@ fn compute_gaps(results: &[ArtifactResult]) -> Vec<CollectionGap> {
             category: r.category.clone(),
             reason: r.error.clone().unwrap_or_else(|| format!("{:?}", r.status)),
         })
-        .collect()
+        .collect();
+    gaps.sort_by(|left, right| {
+        left.artifact_id
+            .cmp(&right.artifact_id)
+            .then_with(|| left.category.cmp(&right.category))
+    });
+    gaps
 }
 
 fn emit_progress<R: Runtime>(
@@ -213,4 +286,67 @@ fn emit_progress<R: Runtime>(
         total_items,
     };
     let _ = app.emit(COLLECTION_PROGRESS_EVENT, payload);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{generate_bundle_id, resolve_bundle_root, sanitize_bundle_hostname};
+    use crate::error::AppError;
+    use std::fs;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn generated_bundle_ids_include_unpredictable_nonce() {
+        let first = generate_bundle_id();
+        let second = generate_bundle_id();
+
+        assert_ne!(
+            first, second,
+            "bundle IDs must not collide within one second"
+        );
+        let nonce = first.rsplit('-').next().expect("bundle nonce");
+        uuid::Uuid::parse_str(nonce).expect("bundle ID ends with a UUID nonce");
+    }
+
+    #[test]
+    fn bundle_hostname_is_a_bounded_safe_path_component() {
+        let sanitized = sanitize_bundle_hostname(r"..\..\outside/host name:?");
+
+        assert_eq!(sanitized, "______outside_host_name__");
+        assert!(sanitized
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_')));
+        assert_eq!(sanitize_bundle_hostname("HOST-01_lab"), "HOST-01_lab");
+        assert_eq!(sanitize_bundle_hostname(""), "unknown");
+        assert_eq!(sanitize_bundle_hostname(&"a".repeat(1_000)).len(), 64);
+    }
+
+    #[test]
+    fn bundle_root_creation_is_exclusive() {
+        let base = create_temp_dir("collector-exclusive-bundle");
+        let bundle_id = "CMTRACE-existing";
+        fs::create_dir(base.join(bundle_id)).expect("create pre-existing bundle root");
+
+        let error = resolve_bundle_root(Some(base.to_string_lossy().as_ref()), bundle_id)
+            .expect_err("pre-existing bundle root must be rejected");
+        match error {
+            AppError::Io(error) => {
+                assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists)
+            }
+            other => panic!("expected AlreadyExists I/O error, got {other}"),
+        }
+
+        fs::remove_dir_all(&base).expect("remove temp root");
+    }
+
+    fn create_temp_dir(prefix: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time before unix epoch")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("{prefix}-{}-{unique}", std::process::id()));
+        fs::create_dir_all(&path).expect("create temp dir");
+        path
+    }
 }

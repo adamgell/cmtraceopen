@@ -333,8 +333,8 @@ mod tests {
             op: FilterOp::Contains,
             value: "not-a-date".into(),
         }];
-        let compiled = compile_clauses(&clauses)
-            .expect("substring op should not require parseable value");
+        let compiled =
+            compile_clauses(&clauses).expect("substring op should not require parseable value");
 
         assert!(compiled[0].timestamp_target.is_none());
     }

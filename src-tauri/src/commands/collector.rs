@@ -48,5 +48,7 @@ async fn collect_diagnostics_impl(
     _enabled_families: Option<Vec<String>>,
     _app: AppHandle,
 ) -> Result<CollectionResult, crate::error::AppError> {
-    Err(crate::error::AppError::PlatformUnsupported("Diagnostics collection is only supported on Windows.".to_string()))
+    Err(crate::error::AppError::PlatformUnsupported(
+        "Diagnostics collection is only supported on Windows.".to_string(),
+    ))
 }

@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use crate::collector::types::CollectionProfile;
 
 const EMBEDDED_PROFILE_JSON: &str = include_str!("profile_data.json");
@@ -5,8 +7,13 @@ const EMBEDDED_PROFILE_JSON: &str = include_str!("profile_data.json");
 impl CollectionProfile {
     /// Load the embedded collection profile compiled into the binary.
     pub fn embedded() -> CollectionProfile {
-        serde_json::from_str(EMBEDDED_PROFILE_JSON)
-            .expect("embedded collection profile JSON must be valid")
+        let profile: CollectionProfile = serde_json::from_str(EMBEDDED_PROFILE_JSON)
+            .expect("embedded collection profile JSON must be valid");
+        assert!(
+            profile.has_unique_artifact_ids(),
+            "embedded collection profile artifact IDs must be unique"
+        );
+        profile
     }
 
     /// Total number of individual collection items across all categories.
@@ -22,9 +29,26 @@ impl CollectionProfile {
     pub fn filter_by_families(&mut self, families: &[String]) {
         self.logs.retain(|item| families.contains(&item.family));
         self.registry.retain(|item| families.contains(&item.family));
-        self.event_logs.retain(|item| families.contains(&item.family));
+        self.event_logs
+            .retain(|item| families.contains(&item.family));
         self.exports.retain(|item| families.contains(&item.family));
         self.commands.retain(|item| families.contains(&item.family));
+    }
+
+    /// IDs are a bundle-wide contract, so uniqueness spans every category.
+    pub fn artifact_ids(&self) -> impl Iterator<Item = &str> {
+        self.logs
+            .iter()
+            .map(|item| item.id.as_str())
+            .chain(self.registry.iter().map(|item| item.id.as_str()))
+            .chain(self.event_logs.iter().map(|item| item.id.as_str()))
+            .chain(self.exports.iter().map(|item| item.id.as_str()))
+            .chain(self.commands.iter().map(|item| item.id.as_str()))
+    }
+
+    pub fn has_unique_artifact_ids(&self) -> bool {
+        let mut seen = HashSet::new();
+        self.artifact_ids().all(|id| seen.insert(id))
     }
 }
 
@@ -62,18 +86,36 @@ mod tests {
 
         profile.filter_by_families(&["general".to_string(), "networking".to_string()]);
 
-        assert!(profile.total_items() > 0, "should have some items for general+networking");
-        assert!(profile.total_items() < original_total, "should be fewer items than full profile");
+        assert!(
+            profile.total_items() > 0,
+            "should have some items for general+networking"
+        );
+        assert!(
+            profile.total_items() < original_total,
+            "should be fewer items than full profile"
+        );
 
         // Verify every remaining item belongs to an allowed family.
         for item in &profile.logs {
-            assert!(item.family == "general" || item.family == "networking", "unexpected log family: {}", item.family);
+            assert!(
+                item.family == "general" || item.family == "networking",
+                "unexpected log family: {}",
+                item.family
+            );
         }
         for item in &profile.registry {
-            assert!(item.family == "general" || item.family == "networking", "unexpected registry family: {}", item.family);
+            assert!(
+                item.family == "general" || item.family == "networking",
+                "unexpected registry family: {}",
+                item.family
+            );
         }
         for item in &profile.commands {
-            assert!(item.family == "general" || item.family == "networking", "unexpected command family: {}", item.family);
+            assert!(
+                item.family == "general" || item.family == "networking",
+                "unexpected command family: {}",
+                item.family
+            );
         }
     }
 

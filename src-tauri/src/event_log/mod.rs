@@ -45,7 +45,10 @@ mod tests {
 
     #[test]
     fn preserves_tabs_and_newlines() {
-        assert_eq!(sanitize_control_chars("col1\tcol2\nrow2"), "col1\tcol2\nrow2");
+        assert_eq!(
+            sanitize_control_chars("col1\tcol2\nrow2"),
+            "col1\tcol2\nrow2"
+        );
     }
 
     #[test]

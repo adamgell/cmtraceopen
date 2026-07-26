@@ -16,6 +16,15 @@ This folder contains a dependency-light PowerShell collector for building a loca
 - No Azure PowerShell modules.
 - No external dependencies beyond built-in PowerShell cmdlets and native Windows tools such as `reg.exe`, `wevtutil.exe`, and `dsregcmd.exe`.
 
+## Safety and privacy contract
+
+- Evidence capture is read-only with respect to Windows, Intune, Autopilot, and application state. The collector copies or exports existing evidence and writes only its own bundle, transcript, staging, and bootstrap state; it does not remediate settings or change device configuration.
+- Registry exports, logs, event records, and diagnostic command output can contain sensitive fields such as tenant, user, device, application, and network identifiers. Treat the local bundle, zip, and upload destination as sensitive support data.
+- The raw hardware hash is excluded from normal collection and analysis. The profile does not request `DeviceHardwareData`, decode an enrollment hash, or write the hash into the bundle.
+- Structured hardware output is limited to bounded OS, manufacturer, model, serial, memory, and TPM readiness/version fields.
+- Parent registry exports intentionally avoid duplicate child archives: `Enrollments` includes `FirstSync`, and `IntuneManagementExtension` includes `Win32Apps`.
+- Collection stays within the curated profile and known high-value locations; it does not perform a deep or unbounded drive scan.
+
 ## Pre-requirments
 
 - The detection, bootstrap, and remediation path is compatible with Windows PowerShell 5.1 and can run before PowerShell 7 is installed.
@@ -124,10 +133,13 @@ The resulting zip is created beside the bundle root.
 - Autopilot and enrollment-adjacent registry coverage includes these roots when present:
   - `HKLM\SOFTWARE\Microsoft\Provisioning\Diagnostics\Autopilot`
   - `HKLM\SOFTWARE\Microsoft\Provisioning\AutopilotSettings`
-  - `HKLM\SOFTWARE\Microsoft\Windows\Autopilot\EnrollmentStatusTracking\ESPTrackingInfo\Diagnostics`
-  - `HKLM\SOFTWARE\Microsoft\IntuneManagementExtension\Win32Apps`
+  - `HKLM\SOFTWARE\Microsoft\Provisioning\OMADM`
   - `HKLM\SOFTWARE\Microsoft\Provisioning\NodeCache\CSP`
-  - `HKLM\SOFTWARE\Microsoft\Provisioning\OMADM\SyncML\ODJApplied`
+  - `HKLM\SOFTWARE\Microsoft\Windows\Autopilot\EnrollmentStatusTracking`
+  - `HKLM\SOFTWARE\Microsoft\Enrollments`
+  - `HKLM\SOFTWARE\Microsoft\EnterpriseDesktopAppManagement`
+  - `HKLM\SOFTWARE\Microsoft\OfficeCSP`
+  - `HKLM\SOFTWARE\Microsoft\IntuneManagementExtension`
 - The curated event channel set currently includes:
   - `Microsoft-Windows-AAD/Operational`
   - `Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin`
@@ -139,10 +151,11 @@ The resulting zip is created beside the bundle root.
   - `Microsoft-Windows-Shell-Core/Operational`
   - `Microsoft-Windows-Time-Service/Operational`
   - `Microsoft-Windows-User Device Registration/Admin`
-- Targeted file exports include `AutoPilotConfigurationFile.json`, JSON staged under `C:\Windows\ServiceState\Autopilot`, existing `C:\Users\Public\Documents\MDMDiagnostics` output, and `AutopilotDDSZTDFile.json` when present.
+- Targeted file exports include `AutoPilotConfigurationFile.json`, JSON staged under `C:\Windows\ServiceState\Autopilot`, the exact `C:\Windows\ServiceState\wmansvc\AutopilotDDSZTDFile.json` path, existing `C:\Users\Public\Documents\MDMDiagnostics` output, and the provisioning diagnostics `AutopilotDDSZTDFile.json` when present.
 - The collector runs `MdmDiagnosticsTool.exe` during collection and harvests the generated `MDMDiagReport.zip` back into the same bundle so fresh diagnostics land beside any pre-existing `MDMDiagnostics` output.
-- Delivery Optimization command capture currently includes `Get-DeliveryOptimizationStatus` and `Get-DeliveryOptimizationPerfSnap` snapshots.
-- Enrollment `FirstSync` is not exported separately because the `Enrollments` export already covers that state, and `EstablishedCorrelations` is not duplicated because the Autopilot diagnostics export already includes it.
+- Delivery Optimization command capture uses field-filtered JSON from `Get-DeliveryOptimizationStatus` and `Get-DeliveryOptimizationPerfSnapThisMonth`; source URLs and unbounded object fields are not collected.
+- Structured JSON command output records bounded OS, hardware, and TPM facts without collecting the raw hardware hash.
+- Enrollment `FirstSync` is not exported separately because the `Enrollments` parent export already covers that state. `Win32Apps` is not exported separately because the `IntuneManagementExtension` parent export already covers its enforcement and provisioning state. `EstablishedCorrelations` is not duplicated because the Autopilot diagnostics export already includes it.
 - The profile can be adjusted later without changing app code.
 
 ## Operational notes

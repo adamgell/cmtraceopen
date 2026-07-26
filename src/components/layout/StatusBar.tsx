@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { Suspense, useMemo, type ReactNode } from "react";
 import { Badge, Spinner, tokens } from "@fluentui/react-components";
 import { LOG_UI_FONT_FAMILY } from "../../lib/log-accessibility";
 import { getBaseName } from "../../lib/file-paths";
@@ -24,6 +24,8 @@ import { useDeploymentStore } from "../../workspaces/deployment/deployment-store
 import { useSysmonStore } from "../../workspaces/sysmon/sysmon-store";
 import { useEvtxStore } from "../../workspaces/event-log/evtx-store";
 import { useSecureBootStore } from "../../workspaces/secureboot/secureboot-store";
+import { getWorkspace } from "../../workspaces/registry";
+import type { WorkspaceDefinition } from "../../workspaces/types";
 
 interface SeverityCounts {
   errors: number;
@@ -39,6 +41,25 @@ function formatSeverityCounts(counts: SeverityCounts): string {
   if (counts.info > 0) parts.push(`${counts.info} info`);
   if (counts.success > 0) parts.push(`${counts.success} success`);
   return parts.join(", ");
+}
+
+export function WorkspaceStatusBarContent({
+  workspace,
+  children,
+}: {
+  workspace: WorkspaceDefinition;
+  children: ReactNode;
+}) {
+  const StatusContent = workspace.statusBarContent;
+  if (!StatusContent) {
+    return <>{children}</>;
+  }
+
+  return (
+    <Suspense fallback={<>{children}</>}>
+      <StatusContent />
+    </Suspense>
+  );
 }
 
 export function StatusBar() {
@@ -494,26 +515,28 @@ export function StatusBar() {
         gap: "10px",
       }}
     >
-      <div
-        style={{
-          minWidth: 0,
-          display: "flex",
-          alignItems: "center",
-          gap: "8px",
-          overflow: "hidden",
-        }}
-      >
-        <Badge appearance="outline" color="brand">
-          {activeViewLabel}
-        </Badge>
-        <span
-          title={leftStatusText}
-          style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
-        >
-          {leftStatusText}
-        </span>
-      </div>
-      <div style={{ display: "flex", alignItems: "center", gap: "10px", flexShrink: 0 }}>
+      <WorkspaceStatusBarContent workspace={getWorkspace(activeView)}>
+        <>
+          <div
+            style={{
+              minWidth: 0,
+              display: "flex",
+              alignItems: "center",
+              gap: "8px",
+              overflow: "hidden",
+            }}
+          >
+            <Badge appearance="outline" color="brand">
+              {activeViewLabel}
+            </Badge>
+            <span
+              title={leftStatusText}
+              style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+            >
+              {leftStatusText}
+            </span>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: "10px", flexShrink: 0 }}>
         {graphApiStatus !== "idle" && (
           <span
             style={{
@@ -568,7 +591,9 @@ export function StatusBar() {
         >
           {rightStatusText}
         </span>
-      </div>
+          </div>
+        </>
+      </WorkspaceStatusBarContent>
     </div>
   );
 }

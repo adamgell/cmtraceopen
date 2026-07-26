@@ -20,12 +20,12 @@ use std::sync::OnceLock;
 fn meta_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
-    Regex::new(concat!(
-        r#"<(\d{1,2})-(\d{1,2})-(\d{4})\s+(\d{1,2}):(\d{1,2}):(\d{1,2})\.(\d+)([+-]?\d+)>"#,
-        r#"(?:<thread=(\d+)(?:\s*\(0x[0-9a-fA-F]+\))?>)?"#,
-    ))
-    .expect("Simple metadata regex must compile")
-})
+        Regex::new(concat!(
+            r#"<(\d{1,2})-(\d{1,2})-(\d{4})\s+(\d{1,2}):(\d{1,2}):(\d{1,2})\.(\d+)([+-]?\d+)>"#,
+            r#"(?:<thread=(\d+)(?:\s*\(0x[0-9a-fA-F]+\))?>)?"#,
+        ))
+        .expect("Simple metadata regex must compile")
+    })
 }
 
 /// Parse a single simple-format log line.
@@ -57,9 +57,7 @@ fn parse_line(line: &str) -> Option<SimpleParsed> {
     let tz: i32 = caps.get(8)?.as_str().parse().ok()?;
 
     // Thread is optional (captured by the combined regex)
-    let thread = caps
-        .get(9)
-        .and_then(|m| m.as_str().parse::<u32>().ok());
+    let thread = caps.get(9).and_then(|m| m.as_str().parse::<u32>().ok());
 
     let (timestamp, timestamp_display) = build_timestamp(mon, day, yr, h, m, s, ms, Some(tz));
 

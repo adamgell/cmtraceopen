@@ -6,9 +6,7 @@
 // `registry` stays in src-tauri because it reads `.reg` hive files from disk
 // (native-only).
 
-pub use cmtraceopen_parser::dsregcmd::{
-    derive, extended, models, parser, rules,
-};
+pub use cmtraceopen_parser::dsregcmd::{derive, extended, models, parser, rules};
 
 // Native-only (stay in src-tauri):
 //   connectivity  - uses ureq for HTTPS probes + process_util for nltest/powershell

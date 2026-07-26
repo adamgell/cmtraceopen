@@ -21,6 +21,8 @@ pub struct CollectionProfile {
 pub struct LogCollectionItem {
     pub id: String,
     pub family: String,
+    #[serde(default)]
+    pub parse_hints: Vec<String>,
     pub source_pattern: String,
     pub destination_folder: String,
     pub notes: String,
@@ -31,6 +33,8 @@ pub struct LogCollectionItem {
 pub struct RegistryCollectionItem {
     pub id: String,
     pub family: String,
+    #[serde(default)]
+    pub parse_hints: Vec<String>,
     pub path: String,
     pub file_name: String,
     pub notes: String,
@@ -41,6 +45,8 @@ pub struct RegistryCollectionItem {
 pub struct EventLogCollectionItem {
     pub id: String,
     pub family: String,
+    #[serde(default)]
+    pub parse_hints: Vec<String>,
     pub source_pattern: String,
     pub destination_folder: String,
     pub notes: String,
@@ -51,6 +57,8 @@ pub struct EventLogCollectionItem {
 pub struct FileExportItem {
     pub id: String,
     pub family: String,
+    #[serde(default)]
+    pub parse_hints: Vec<String>,
     pub source_path: String,
     pub destination_folder: String,
     pub file_name: Option<String>,
@@ -62,6 +70,8 @@ pub struct FileExportItem {
 pub struct CommandCollectionItem {
     pub id: String,
     pub family: String,
+    #[serde(default)]
+    pub parse_hints: Vec<String>,
     pub command: String,
     pub arguments: Vec<String>,
     pub file_name: String,
@@ -120,13 +130,23 @@ pub struct CollectionProgressPayload {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct CollectedArtifactFile {
+    pub relative_path: String,
+    pub origin_path: Option<String>,
+    pub bytes_copied: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ArtifactResult {
     pub id: String,
     pub category: String,
+    pub family: String,
+    pub parse_hints: Vec<String>,
+    pub notes: Option<String>,
     pub status: ArtifactStatus,
-    pub file_path: Option<String>,
+    pub files: Vec<CollectedArtifactFile>,
     pub error: Option<String>,
-    pub bytes_copied: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize)]

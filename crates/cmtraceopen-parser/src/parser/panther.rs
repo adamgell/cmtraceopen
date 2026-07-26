@@ -7,32 +7,35 @@ use std::sync::OnceLock;
 fn panther_prefix_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
-    Regex::new(r"^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2},").expect("panther_prefix_re: date-time prefix pattern must compile")
-})
+        Regex::new(r"^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2},")
+            .expect("panther_prefix_re: date-time prefix pattern must compile")
+    })
 }
 
 /// Matches a bracketed executable tag at the start of the message, e.g. `[SetupPlatform.exe]`.
 fn exe_tag_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
-    Regex::new(r"^\[([^\]]+\.[Ee][Xx][Ee])\]\s*").expect("exe_tag_re: bracketed executable tag pattern must compile")
-})
+        Regex::new(r"^\[([^\]]+\.[Ee][Xx][Ee])\]\s*")
+            .expect("exe_tag_re: bracketed executable tag pattern must compile")
+    })
 }
 
 /// Matches C++ class::method patterns, e.g. `CSetupManager::GetWuIdFromRegistry(13192):`.
 fn class_method_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
-    Regex::new(r"^([A-Z][A-Za-z0-9_]*(?:::[A-Za-z_]\w*)+)(?:\(\d+\))?:\s*").expect("class_method_re: C++ class::method pattern must compile")
-})
+        Regex::new(r"^([A-Z][A-Za-z0-9_]*(?:::[A-Za-z_]\w*)+)(?:\(\d+\))?:\s*")
+            .expect("class_method_re: C++ class::method pattern must compile")
+    })
 }
 
 /// Matches DISM-style thread IDs embedded in the message, e.g. `PID=1452 TID=776`.
 fn tid_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
-    Regex::new(r"TID=(\d+)").expect("tid_re: DISM thread ID pattern must compile")
-})
+        Regex::new(r"TID=(\d+)").expect("tid_re: DISM thread ID pattern must compile")
+    })
 }
 
 /// Matches a primary result/error/status code, e.g.:
@@ -40,24 +43,27 @@ fn tid_re() -> &'static Regex {
 fn result_code_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
-    Regex::new(r"(?:Result\s*=|Error:|Status:)\s*(0x[0-9A-Fa-f]+)").expect("result_code_re: result/error/status hex code pattern must compile")
-})
+        Regex::new(r"(?:Result\s*=|Error:|Status:)\s*(0x[0-9A-Fa-f]+)")
+            .expect("result_code_re: result/error/status hex code pattern must compile")
+    })
 }
 
 /// Matches a GetLastError annotation, e.g. `[gle=0x00000002]`.
 fn gle_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
-    Regex::new(r"\[gle=(0x[0-9A-Fa-f]+)\]").expect("gle_re: GetLastError code pattern must compile")
-})
+        Regex::new(r"\[gle=(0x[0-9A-Fa-f]+)\]")
+            .expect("gle_re: GetLastError code pattern must compile")
+    })
 }
 
 /// Matches the current setup phase, e.g. `CurrentSetupPhase [SetupPhaseInstall]`.
 fn setup_phase_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
-    Regex::new(r"CurrentSetupPhase\s+\[([A-Za-z0-9]+)\]").expect("setup_phase_re: setup phase pattern must compile")
-})
+        Regex::new(r"CurrentSetupPhase\s+\[([A-Za-z0-9]+)\]")
+            .expect("setup_phase_re: setup phase pattern must compile")
+    })
 }
 
 /// Matches an operation being executed or completed, e.g.:
@@ -66,8 +72,9 @@ fn setup_phase_re() -> &'static Regex {
 fn operation_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
-    Regex::new(r"(?:Executing operation|Operation completed successfully):\s*(.+)").expect("operation_re: operation execution/completion pattern must compile")
-})
+        Regex::new(r"(?:Executing operation|Operation completed successfully):\s*(.+)")
+            .expect("operation_re: operation execution/completion pattern must compile")
+    })
 }
 
 fn panther_header_re() -> &'static Regex {
@@ -157,7 +164,6 @@ fn parse_header(line: &str, file_path: &str) -> Option<LogEntry> {
 }
 
 fn build_entry_from_caps(caps: &regex::Captures<'_>, file_path: &str) -> Option<LogEntry> {
-
     let year: i32 = caps.get(1)?.as_str().parse().ok()?;
     let month: u32 = caps.get(2)?.as_str().parse().ok()?;
     let day: u32 = caps.get(3)?.as_str().parse().ok()?;
@@ -215,15 +221,15 @@ fn build_entry_from_caps(caps: &regex::Captures<'_>, file_path: &str) -> Option<
         server_port: None,
         username: None,
         win32_status: None,
-                    query_name: None,
-                    query_type: None,
-                    response_code: None,
-                    dns_direction: None,
-                    dns_protocol: None,
-                    source_ip: None,
-                    dns_flags: None,
-                    dns_event_id: None,
-                    zone_name: None,
+        query_name: None,
+        query_type: None,
+        response_code: None,
+        dns_direction: None,
+        dns_protocol: None,
+        source_ip: None,
+        dns_flags: None,
+        dns_event_id: None,
+        zone_name: None,
         entry_kind: None,
         whatif: None,
         section_name: None,
@@ -298,7 +304,11 @@ fn severity_from_level(level: &str, message: &str) -> Severity {
     }
 }
 
-fn flush_pending(entries: &mut Vec<LogEntry>, pending: &mut Option<PendingEntry>, next_id: &mut u64) {
+fn flush_pending(
+    entries: &mut Vec<LogEntry>,
+    pending: &mut Option<PendingEntry>,
+    next_id: &mut u64,
+) {
     if let Some(mut pending_entry) = pending.take() {
         pending_entry.entry.id = *next_id;
         pending_entry.entry.line_number = pending_entry.start_line;
@@ -342,15 +352,15 @@ fn fallback_entry(id: u64, line_number: u32, line: &str, file_path: &str) -> Log
         server_port: None,
         username: None,
         win32_status: None,
-                    query_name: None,
-                    query_type: None,
-                    response_code: None,
-                    dns_direction: None,
-                    dns_protocol: None,
-                    source_ip: None,
-                    dns_flags: None,
-                    dns_event_id: None,
-                    zone_name: None,
+        query_name: None,
+        query_type: None,
+        response_code: None,
+        dns_direction: None,
+        dns_protocol: None,
+        source_ip: None,
+        dns_flags: None,
+        dns_event_id: None,
+        zone_name: None,
         entry_kind: None,
         whatif: None,
         section_name: None,
@@ -386,7 +396,10 @@ mod tests {
         assert_eq!(parse_errors, 0);
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].component.as_deref(), Some("MIG"));
-        assert_eq!(entries[0].message, "[0x080489] Gather started\nAdditional migration detail\n    indented continuation");
+        assert_eq!(
+            entries[0].message,
+            "[0x080489] Gather started\nAdditional migration detail\n    indented continuation"
+        );
         assert_eq!(entries[0].line_number, 1);
         assert_eq!(entries[1].severity, Severity::Warning);
     }
@@ -415,7 +428,8 @@ mod tests {
 
     #[test]
     fn test_parse_lines_handles_missing_component() {
-        let lines = ["2024-01-15 08:00:08, Error                  Gather failed. Last error: 0x00000000"];
+        let lines =
+            ["2024-01-15 08:00:08, Error                  Gather failed. Last error: 0x00000000"];
 
         let (entries, parse_errors) = parse_lines(&lines, "C:/Windows/Panther/setupact.log");
 
@@ -427,20 +441,15 @@ mod tests {
 
     #[test]
     fn test_exe_tag_extracted_as_source_file_and_component_fallback() {
-        let lines =
-            ["2024-01-15 08:00:00, Error                  [SetupPlatform.exe] System disks found"];
+        let lines = [
+            "2024-01-15 08:00:00, Error                  [SetupPlatform.exe] System disks found",
+        ];
 
         let (entries, _) = parse_lines(&lines, "C:/Windows/Panther/setuperr.log");
 
         assert_eq!(entries.len(), 1);
-        assert_eq!(
-            entries[0].source_file.as_deref(),
-            Some("SetupPlatform.exe")
-        );
-        assert_eq!(
-            entries[0].component.as_deref(),
-            Some("SetupPlatform")
-        );
+        assert_eq!(entries[0].source_file.as_deref(), Some("SetupPlatform.exe"));
+        assert_eq!(entries[0].component.as_deref(), Some("SetupPlatform"));
         assert_eq!(entries[0].message, "System disks found");
     }
 
@@ -489,7 +498,8 @@ mod tests {
 
     #[test]
     fn test_perf_severity_mapped_to_info() {
-        let lines = ["2024-01-15 08:00:00, Perf                   SP     Timing checkpoint reached"];
+        let lines =
+            ["2024-01-15 08:00:00, Perf                   SP     Timing checkpoint reached"];
 
         let (entries, _) = parse_lines(&lines, "C:/Windows/Panther/setupact.log");
 

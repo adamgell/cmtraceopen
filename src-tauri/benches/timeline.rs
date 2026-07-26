@@ -31,13 +31,7 @@ fn bench_detect(c: &mut Criterion) {
         let t = TimelineTunables::default();
         c.bench_with_input(BenchmarkId::new("detect_incidents", n), &idx, |b, idx| {
             b.iter(|| {
-                let _ = detect_incidents(
-                    idx,
-                    &HashMap::new(),
-                    &t,
-                    &HashSet::new(),
-                    &|_, _| None,
-                );
+                let _ = detect_incidents(idx, &HashMap::new(), &t, &HashSet::new(), &|_, _| None);
             })
         });
     }

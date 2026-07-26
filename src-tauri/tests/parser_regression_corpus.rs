@@ -183,7 +183,10 @@ fn panther_mixed_fixture_preserves_fallback_segments() {
     assert_eq!(parsed.parse_errors, 1);
     assert_eq!(parsed.entries.len(), 4);
     assert_eq!(parsed.entries[0].message, "orphan preamble");
-    assert_eq!(parsed.entries[1].message, "Setup started\ncontinuation detail");
+    assert_eq!(
+        parsed.entries[1].message,
+        "Setup started\ncontinuation detail"
+    );
     assert_eq!(parsed.entries[2].message, "malformed header");
     assert_eq!(parsed.entries[2].component.as_deref(), Some("SP"));
     assert_eq!(parsed.entries[3].component.as_deref(), Some("SP"));
@@ -250,7 +253,10 @@ fn cbs_mixed_fixture_preserves_fallback_segments() {
     assert_eq!(parsed.parse_errors, 1);
     assert_eq!(parsed.entries.len(), 4);
     assert_eq!(parsed.entries[0].message, "orphan preamble");
-    assert_eq!(parsed.entries[1].message, "Exec: Processing package\nContinuation detail");
+    assert_eq!(
+        parsed.entries[1].message,
+        "Exec: Processing package\nContinuation detail"
+    );
     assert_eq!(parsed.entries[2].message, "malformed header");
     assert_eq!(parsed.entries[2].component.as_deref(), Some("CBS"));
     assert_eq!(parsed.entries[3].component.as_deref(), Some("CSI"));
@@ -349,9 +355,16 @@ fn cbs_mixed_components_fixture_parses_dism_and_other_components() {
         "Timestamped",
     );
     assert_eq!(parsed.total_lines, 10);
-    assert_eq!(parsed.parse_errors, 0, "all lines should parse as structured entries");
+    assert_eq!(
+        parsed.parse_errors, 0,
+        "all lines should parse as structured entries"
+    );
     // 9 header lines, 1 continuation => 9 entries
-    assert_eq!(parsed.entries.len(), 9, "CSI multi-line record merges continuation into 1 entry");
+    assert_eq!(
+        parsed.entries.len(),
+        9,
+        "CSI multi-line record merges continuation into 1 entry"
+    );
     // CBS lines
     assert_eq!(parsed.entries[0].component.as_deref(), Some("CBS"));
     assert_eq!(parsed.entries[1].component.as_deref(), Some("CBS"));
@@ -360,7 +373,9 @@ fn cbs_mixed_components_fixture_parses_dism_and_other_components() {
     assert_eq!(parsed.entries[3].component.as_deref(), Some("DISM"));
     // CSI multi-line entry (line 5 + continuation at line 6)
     assert_eq!(parsed.entries[4].component.as_deref(), Some("CSI"));
-    assert!(parsed.entries[4].message.contains("Component: amd64_microsoft-windows-servicingstack"));
+    assert!(parsed.entries[4]
+        .message
+        .contains("Component: amd64_microsoft-windows-servicingstack"));
     // DPX, CMIV components
     assert_eq!(parsed.entries[5].component.as_deref(), Some("DPX"));
     assert_eq!(parsed.entries[5].severity, "Warning");
@@ -394,7 +409,10 @@ fn dism_mixed_components_fixture_parses_cbs_and_other_components() {
         "Timestamped",
     );
     assert_eq!(parsed.total_lines, 8);
-    assert_eq!(parsed.parse_errors, 0, "all lines should parse as structured entries");
+    assert_eq!(
+        parsed.parse_errors, 0,
+        "all lines should parse as structured entries"
+    );
     // DISM lines
     assert_eq!(parsed.entries[0].component.as_deref(), Some("DISM"));
     assert_eq!(parsed.entries[1].component.as_deref(), Some("DISM"));
@@ -438,7 +456,10 @@ fn reporting_events_clean_fixture_detects_and_parses_rows() {
     assert_eq!(parsed.total_lines, 2);
     assert_eq!(parsed.parse_errors, 0);
     assert_eq!(parsed.entries.len(), 2);
-    assert_eq!(parsed.entries[0].component.as_deref(), Some("Windows Update Agent"));
+    assert_eq!(
+        parsed.entries[0].component.as_deref(),
+        Some("Windows Update Agent")
+    );
     assert_eq!(
         parsed.entries[0].timestamp_display.as_deref(),
         Some("2024-01-15 08:00:00.123")
@@ -512,7 +533,10 @@ fn ime_multiline_fixture_detects_and_parses_logical_records() {
     assert_eq!(parsed.entries[0].line_number, 1);
     assert_eq!(parsed.entries[1].line_number, 2);
     assert_eq!(parsed.entries[0].format, "Ccm");
-    assert_eq!(parsed.entries[1].component.as_deref(), Some("HealthScripts"));
+    assert_eq!(
+        parsed.entries[1].component.as_deref(),
+        Some("HealthScripts")
+    );
     assert_eq!(
         parsed.entries[1].timestamp_display.as_deref(),
         Some("03-12-2026 11:16:42.332")
@@ -554,7 +578,9 @@ fn ime_sparse_fixture_preserves_truncated_tail_as_plain_entry() {
     assert_eq!(parsed.entries[1].line_number, 3);
     assert_eq!(parsed.entries[2].line_number, 4);
     assert_eq!(parsed.entries[2].format, "Plain");
-    assert!(parsed.entries[2].message.contains("Set MdmDeviceCertificate"));
+    assert!(parsed.entries[2]
+        .message
+        .contains("Set MdmDeviceCertificate"));
 }
 
 #[test]
@@ -643,7 +669,9 @@ fn ime_appworkload_temp_fixture_detects_and_parses_logical_records() {
     assert_eq!(parsed.entries[0].line_number, 1);
     assert_eq!(parsed.entries[1].line_number, 3);
     assert_eq!(parsed.entries[0].component.as_deref(), Some("AppWorkload"));
-    assert!(parsed.entries[0].message.contains("ApplicationName\\\":\\\"Contoso App"));
+    assert!(parsed.entries[0]
+        .message
+        .contains("ApplicationName\\\":\\\"Contoso App"));
     assert!(parsed.entries[1]
         .message
         .contains("Download completed successfully."));
@@ -653,9 +681,11 @@ fn ime_appworkload_temp_fixture_detects_and_parses_logical_records() {
 fn test_dns_debug_basic_fixture_detection() {
     let fixture = TempLogFixture::new(
         "DNSServer_debug.log",
-        &std::fs::read_to_string(
-            concat!(env!("CARGO_MANIFEST_DIR"), "/tests/corpus/dns_debug/clean/basic.log")
-        ).expect("read fixture"),
+        &std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/corpus/dns_debug/clean/basic.log"
+        ))
+        .expect("read fixture"),
     );
     let snapshot = fixture.detect();
     assert_eq!(snapshot.parser, "DnsDebug");
@@ -666,9 +696,11 @@ fn test_dns_debug_basic_fixture_detection() {
 fn test_dns_debug_basic_fixture_parse() {
     let fixture = TempLogFixture::new(
         "DNSServer_debug.log",
-        &std::fs::read_to_string(
-            concat!(env!("CARGO_MANIFEST_DIR"), "/tests/corpus/dns_debug/clean/basic.log")
-        ).expect("read fixture"),
+        &std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/corpus/dns_debug/clean/basic.log"
+        ))
+        .expect("read fixture"),
     );
     let parsed = fixture.parse();
     assert_eq!(parsed.selection.parser, "DnsDebug");
@@ -681,14 +713,16 @@ fn test_dns_debug_basic_fixture_parse() {
 fn test_dns_debug_rcodes_fixture_severity() {
     let fixture = TempLogFixture::new(
         "dns.log",
-        &std::fs::read_to_string(
-            concat!(env!("CARGO_MANIFEST_DIR"), "/tests/corpus/dns_debug/mixed/rcodes.log")
-        ).expect("read fixture"),
+        &std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/corpus/dns_debug/mixed/rcodes.log"
+        ))
+        .expect("read fixture"),
     );
     let parsed = fixture.parse();
     assert_eq!(parsed.entries.len(), 4);
-    assert_eq!(parsed.entries[0].severity, "Info");     // NOERROR query
-    assert_eq!(parsed.entries[1].severity, "Info");     // NOERROR response
-    assert_eq!(parsed.entries[2].severity, "Warning");  // NXDOMAIN
-    assert_eq!(parsed.entries[3].severity, "Error");    // SERVFAIL
+    assert_eq!(parsed.entries[0].severity, "Info"); // NOERROR query
+    assert_eq!(parsed.entries[1].severity, "Info"); // NOERROR response
+    assert_eq!(parsed.entries[2].severity, "Warning"); // NXDOMAIN
+    assert_eq!(parsed.entries[3].severity, "Error"); // SERVFAIL
 }

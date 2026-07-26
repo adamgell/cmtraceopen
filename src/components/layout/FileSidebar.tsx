@@ -20,7 +20,7 @@ import {
 } from "../../stores/log-store";
 import type { FolderEntry, LogSource } from "../../types/log";
 import { useUiStore, type WorkspaceId } from "../../stores/ui-store";
-import { useAppActions } from "./Toolbar";
+import { useAppActions } from "../../hooks/use-app-actions";
 import {
   EmptyState,
   SectionHeader,

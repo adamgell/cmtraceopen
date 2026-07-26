@@ -14,7 +14,8 @@ fn cached_fonts() -> &'static SystemFontList {
         let mut families = source.all_families().unwrap_or_default();
         families.sort_unstable_by_key(|a| a.to_ascii_lowercase());
         families.dedup();
-        families.retain(|name| !name.starts_with('.') && !name.starts_with('#') && !name.is_empty());
+        families
+            .retain(|name| !name.starts_with('.') && !name.starts_with('#') && !name.is_empty());
         SystemFontList { families }
     })
 }

@@ -8,6 +8,7 @@ import { dsregcmdWorkspace } from "./dsregcmd";
 import { macosDiagWorkspace } from "./macos-diag";
 import { deploymentWorkspace } from "./deployment";
 import { eventLogWorkspace } from "./event-log";
+import { espDiagnosticsWorkspace } from "./esp-diagnostics";
 import { sysmonWorkspace } from "./sysmon";
 import { securebootWorkspace } from "./secureboot";
 import { timelineWorkspace } from "./timeline";
@@ -21,6 +22,7 @@ const ALL_WORKSPACES: WorkspaceDefinition[] = [
   macosDiagWorkspace,
   deploymentWorkspace,
   eventLogWorkspace,
+  espDiagnosticsWorkspace,
   sysmonWorkspace,
   securebootWorkspace,
   timelineWorkspace,

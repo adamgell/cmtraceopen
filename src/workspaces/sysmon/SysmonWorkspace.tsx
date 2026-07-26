@@ -4,7 +4,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { useSysmonStore, type SysmonWorkspaceTab } from "./sysmon-store";
 import { useUiStore } from "../../stores/ui-store";
 import { analyzeSysmonLogs } from "../../lib/commands";
-import { useAppActions } from "../../components/layout/Toolbar";
+import { useAppActions } from "../../hooks/use-app-actions";
 import { SysmonEventTable } from "./SysmonEventTable";
 import { SysmonSummaryView } from "./SysmonSummaryView";
 import { SysmonConfigView } from "./SysmonConfigView";

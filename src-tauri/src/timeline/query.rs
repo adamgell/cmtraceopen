@@ -36,11 +36,7 @@ pub fn materialize_log_entry(
 }
 
 /// Materialize just the message text — cheap path for GUID scanning.
-pub fn materialize_msg(
-    path: &Path,
-    parser: &ResolvedParser,
-    ei: &EntryIndex,
-) -> Option<String> {
+pub fn materialize_msg(path: &Path, parser: &ResolvedParser, ei: &EntryIndex) -> Option<String> {
     materialize_log_entry(path, parser, ei).map(|e| e.message)
 }
 
@@ -216,10 +212,7 @@ pub struct IncidentDetail {
     pub per_source_signal_counts: std::collections::HashMap<String, u32>,
 }
 
-pub fn query_incident_details(
-    ctx: &QueryContext<'_>,
-    incident_id: u32,
-) -> Option<IncidentDetail> {
+pub fn query_incident_details(ctx: &QueryContext<'_>, incident_id: u32) -> Option<IncidentDetail> {
     let incident = ctx
         .timeline
         .bundle

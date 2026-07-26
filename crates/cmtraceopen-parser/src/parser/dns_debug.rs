@@ -63,11 +63,7 @@ pub fn matches_dns_debug_record(line: &str) -> bool {
 /// Uses `LogicalRecord` framing: a PACKET line starts a new record,
 /// subsequent non-PACKET lines (detail sections) append to it.
 /// Header lines (before the first PACKET) and blank lines are skipped.
-pub fn parse_lines(
-    lines: &[&str],
-    file_path: &str,
-    date_order: DateOrder,
-) -> (Vec<LogEntry>, u32) {
+pub fn parse_lines(lines: &[&str], file_path: &str, date_order: DateOrder) -> (Vec<LogEntry>, u32) {
     let mut entries = Vec::with_capacity(lines.len() / 2);
     let mut parse_errors: u32 = 0;
     let mut next_id: u64 = 0;
@@ -106,8 +102,7 @@ pub fn parse_lines(
                     // Append port to source_ip
                     if let Some(ref ip) = pending_entry.entry.source_ip {
                         if !ip.contains(':') {
-                            pending_entry.entry.source_ip =
-                                Some(format!("{}:{}", ip, port));
+                            pending_entry.entry.source_ip = Some(format!("{}:{}", ip, port));
                         }
                     }
                 }
@@ -366,11 +361,7 @@ fn parse_time_component(s: &str) -> (u32, u32, u32) {
     let is_am = upper.contains("AM");
 
     // Strip AM/PM
-    let time_only = upper
-        .replace("AM", "")
-        .replace("PM", "")
-        .trim()
-        .to_string();
+    let time_only = upper.replace("AM", "").replace("PM", "").trim().to_string();
 
     let parts: Vec<&str> = time_only.split(':').collect();
     if parts.len() < 3 {
@@ -410,14 +401,14 @@ mod tests {
             "DNS Server log file creation at 4/11/2026 3:29:00 PM"
         ));
         assert!(!matches_dns_debug_record("Log file wrap:"));
-        assert!(!matches_dns_debug_record("Message logging key (for packets - other items use a subset):"));
+        assert!(!matches_dns_debug_record(
+            "Message logging key (for packets - other items use a subset):"
+        ));
     }
 
     #[test]
     fn test_does_not_match_detail_line() {
-        assert!(!matches_dns_debug_record(
-            "  Socket = 884"
-        ));
+        assert!(!matches_dns_debug_record("  Socket = 884"));
         assert!(!matches_dns_debug_record(
             "  Remote addr 127.0.0.1, port 54159"
         ));
@@ -514,10 +505,7 @@ mod tests {
         let (entries, _) = parse_lines(&line_refs, "dns.log", DateOrder::MonthFirst);
 
         assert_eq!(entries[0].thread, Some(660));
-        assert_eq!(
-            entries[0].thread_display.as_deref(),
-            Some("660 (0x0294)")
-        );
+        assert_eq!(entries[0].thread_display.as_deref(), Some("660 (0x0294)"));
     }
 
     #[test]

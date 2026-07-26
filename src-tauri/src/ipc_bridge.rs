@@ -71,7 +71,8 @@ async fn handle_connection(mut socket: TcpStream, state: Arc<BridgeState>) {
         "OPTIONS" => ("204 No Content", String::new(), ""),
         "GET" => ("200 OK", r#"{"ok":true}"#.to_string(), "application/json"),
         "POST" => {
-            let body_str = raw.find("\r\n\r\n")
+            let body_str = raw
+                .find("\r\n\r\n")
                 .map(|i| raw[i + 4..].trim_end_matches('\0'))
                 .unwrap_or("");
             let result = dispatch(body_str, &state);
@@ -85,9 +86,7 @@ async fn handle_connection(mut socket: TcpStream, state: Arc<BridgeState>) {
                 Access-Control-Allow-Headers: Content-Type\r\n";
 
     let response = if content_type.is_empty() {
-        format!(
-            "HTTP/1.1 {status_line}\r\n{cors}Content-Length: 0\r\n\r\n"
-        )
+        format!("HTTP/1.1 {status_line}\r\n{cors}Content-Length: 0\r\n\r\n")
     } else {
         format!(
             "HTTP/1.1 {status_line}\r\n{cors}Content-Type: {content_type}\r\nContent-Length: {}\r\n\r\n{body}",
@@ -169,6 +168,34 @@ fn dispatch(body: &str, state: &Arc<BridgeState>) -> String {
             ok_json(&crate::commands::app_config::get_available_workspaces())
         }
 
+        #[cfg(feature = "esp-diagnostics")]
+        "get_esp_diagnostics_capability" => {
+            ok_json(&crate::esp::acquisition_capability())
+        }
+
+        #[cfg(feature = "esp-diagnostics")]
+        "get_esp_elevation_state" => {
+            ok_json(&crate::esp::system::current_elevation_state())
+        }
+
+        #[cfg(feature = "esp-diagnostics")]
+        "graph_fetch_esp_diagnostics" | "graph_cancel_esp_diagnostics" => {
+            err_json("ESP Graph commands are unavailable through the debug IPC bridge")
+        }
+
+        "graph_request_missing_permissions" => {
+            err_json("Graph permission upgrade is unavailable through the debug IPC bridge")
+        }
+
+        #[cfg(feature = "esp-diagnostics")]
+        "analyze_esp_evidence"
+        | "start_esp_diagnostics_session"
+        | "get_esp_diagnostics_session"
+        | "stop_esp_diagnostics_session"
+        | "restart_esp_as_administrator" => err_json(
+            "ESP native commands require the Tauri runtime and are unavailable through the debug IPC bridge",
+        ),
+
         "get_file_association_prompt_status" => {
             // Match the real command's response shape so the frontend can
             // safely read `isAssociated` etc. in dev/browser mode.
@@ -181,6 +208,10 @@ fn dispatch(body: &str, state: &Arc<BridgeState>) -> String {
 
         "get_initial_file_paths" => {
             ok_json(&Vec::<String>::new())
+        }
+
+        "get_initial_workspace" => {
+            ok_json(&Option::<String>::None)
         }
 
         "get_known_log_sources" => {
@@ -248,4 +279,63 @@ fn ok_json<T: serde::Serialize>(value: &T) -> String {
 
 fn err_json(msg: &str) -> String {
     serde_json::json!({ "error": msg }).to_string()
+}
+
+#[cfg(all(test, feature = "esp-diagnostics"))]
+mod tests {
+    use super::{dispatch, BridgeState};
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex};
+
+    fn state() -> Arc<BridgeState> {
+        Arc::new(BridgeState {
+            open_files: Mutex::new(HashMap::new()),
+        })
+    }
+
+    #[test]
+    fn debug_bridge_explicitly_rejects_esp_graph_commands() {
+        for command in [
+            "graph_fetch_esp_diagnostics",
+            "graph_cancel_esp_diagnostics",
+        ] {
+            let response = dispatch(
+                &serde_json::json!({ "cmd": command, "args": {} }).to_string(),
+                &state(),
+            );
+            let value: serde_json::Value = serde_json::from_str(&response).unwrap();
+            assert_eq!(
+                value["error"],
+                "ESP Graph commands are unavailable through the debug IPC bridge"
+            );
+        }
+    }
+
+    #[test]
+    fn debug_bridge_rejects_graph_permission_upgrade_with_or_without_caller_scopes() {
+        for args in [
+            serde_json::json!({}),
+            serde_json::json!({
+                "scopes": [
+                    "DeviceManagementManagedDevices.ReadWrite.All",
+                    "https://attacker.example/.default"
+                ]
+            }),
+        ] {
+            let response = dispatch(
+                &serde_json::json!({
+                    "cmd": "graph_request_missing_permissions",
+                    "args": args
+                })
+                .to_string(),
+                &state(),
+            );
+            let value: serde_json::Value = serde_json::from_str(&response).unwrap();
+            assert_eq!(
+                value["error"],
+                "Graph permission upgrade is unavailable through the debug IPC bridge"
+            );
+            assert!(value.get("result").is_none());
+        }
+    }
 }

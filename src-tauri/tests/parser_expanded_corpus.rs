@@ -37,8 +37,7 @@ impl TempLogFixture {
     fn parse(&self) -> common::ParsedFixture {
         let file_size = fs::metadata(&self.path).expect("metadata").len();
         let path_str = self.path.to_string_lossy().to_string();
-        let (result, selection) =
-            app_lib::parser::parse_file(&path_str).expect("should parse");
+        let (result, selection) = app_lib::parser::parse_file(&path_str).expect("should parse");
 
         common::ParsedFixture {
             selection: snapshot(&selection),
@@ -105,13 +104,21 @@ fn ccm_clean_fixture_detects_and_parses() {
 fn ccm_malformed_truncated_recovers_gracefully() {
     let parsed = parse_fixture("ccm/malformed/truncated.log");
     // Should parse what it can and not panic
-    assert!(parsed.entries.len() >= 2, "should recover at least 2 entries");
+    assert!(
+        parsed.entries.len() >= 2,
+        "should recover at least 2 entries"
+    );
     // First well-formed entry is always parsed correctly
     assert_eq!(parsed.entries[0].message, "Complete record here");
     // The multi-line parser now captures the truncated record along with subsequent
     // content as a single raw entry rather than skipping it — verify it contains
     // the expected text fragments so we know nothing was silently dropped.
-    let all_messages: String = parsed.entries.iter().map(|e| e.message.as_str()).collect::<Vec<_>>().join("\n");
+    let all_messages: String = parsed
+        .entries
+        .iter()
+        .map(|e| e.message.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
     assert!(
         all_messages.contains("truncated"),
         "should include the truncated record text, got: {all_messages}"
@@ -126,12 +133,20 @@ fn ccm_malformed_truncated_recovers_gracefully() {
 fn ccm_malformed_broken_timestamp_still_parses() {
     let parsed = parse_fixture("ccm/malformed/broken_timestamp.log");
     // Should still parse all 4 lines even with bad timestamps
-    assert!(parsed.entries.len() >= 2, "should parse despite bad timestamps");
+    assert!(
+        parsed.entries.len() >= 2,
+        "should parse despite bad timestamps"
+    );
     // First well-formed entry is always parsed correctly
     assert_eq!(parsed.entries[0].message, "Good timestamp");
     // The multi-line parser now captures malformed-timestamp lines as raw entries
     // rather than skipping them — verify all expected messages are present somewhere.
-    let all_messages: String = parsed.entries.iter().map(|e| e.message.as_str()).collect::<Vec<_>>().join("\n");
+    let all_messages: String = parsed
+        .entries
+        .iter()
+        .map(|e| e.message.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
     assert!(
         all_messages.contains("Bad time field"),
         "should include bad-time-field line, got: {all_messages}"
@@ -157,7 +172,11 @@ fn simple_clean_fixture_detects_and_parses() {
     assert_eq!(detected.implementation, "Simple");
 
     let parsed = parse_fixture("simple/clean/basic.log");
-    assert!(!parsed.entries.is_empty(), "should parse at least 1 entry, got {}", parsed.entries.len());
+    assert!(
+        !parsed.entries.is_empty(),
+        "should parse at least 1 entry, got {}",
+        parsed.entries.len()
+    );
     assert_eq!(parsed.entries[0].component.as_deref(), Some("CcmExec"));
 }
 
@@ -191,7 +210,10 @@ fn plain_text_fallback_for_unstructured_content() {
     let parsed = parse_fixture("plain/unstructured.txt");
     assert_eq!(parsed.entries.len(), 4);
     assert_eq!(parsed.parse_errors, 0);
-    assert_eq!(parsed.entries[0].message, "This is a plain text log file with no structured format.");
+    assert_eq!(
+        parsed.entries[0].message,
+        "This is a plain text log file with no structured format."
+    );
     assert_eq!(parsed.entries[3].message, "Final line of the file.");
 }
 

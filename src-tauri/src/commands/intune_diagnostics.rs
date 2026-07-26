@@ -10,7 +10,7 @@ use crate::intune::models::{
 };
 use crate::intune::timeline;
 
-use super::intune::{TimestampCandidate, update_timestamp_candidate};
+use super::intune::{update_timestamp_candidate, TimestampCandidate};
 
 #[derive(Debug, Clone)]
 struct FailureReason {

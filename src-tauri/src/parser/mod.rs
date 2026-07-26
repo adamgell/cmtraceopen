@@ -53,18 +53,14 @@ pub fn parse_file(path: &str) -> Result<(ParseResult, ResolvedParser), String> {
                     let selection = ResolvedParser::dns_audit();
                     return Ok((result, selection));
                 }
-                return Err(
-                    "This EVTX file does not contain DNS audit events. \
+                return Err("This EVTX file does not contain DNS audit events. \
                      Try opening it in the Sysmon workspace instead."
-                        .to_string(),
-                );
+                    .to_string());
             }
             #[cfg(not(feature = "event-log"))]
-            return Err(
-                "EVTX event log files require the 'event-log' feature. \
+            return Err("EVTX event log files require the 'event-log' feature. \
                  This build does not include EVTX support."
-                    .to_string(),
-            );
+                .to_string());
         }
     }
 

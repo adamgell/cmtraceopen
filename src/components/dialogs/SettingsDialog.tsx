@@ -33,6 +33,7 @@ interface SettingsDialogProps {
 export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
   const currentPlatform = useUiStore((state) => state.currentPlatform);
   const dialogRef = useRef<HTMLDivElement | null>(null);
+  const tabRefs = useRef<(HTMLButtonElement | null)[]>([]);
   const previouslyFocusedElementRef = useRef<HTMLElement | null>(null);
   const [activeTab, setActiveTab] = useState<SettingsTabId>("appearance");
 
@@ -82,6 +83,7 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
 
     e.preventDefault();
     setActiveTab(tabIds[newIndex]);
+    tabRefs.current[newIndex]?.focus();
   };
 
   const renderTabContent = () => {
@@ -210,12 +212,16 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
             marginBottom: "16px",
           }}
         >
-          {visibleTabs.map((tab) => (
+          {visibleTabs.map((tab, index) => (
             <button
               type="button"
               key={tab.id}
+              ref={(element) => {
+                tabRefs.current[index] = element;
+              }}
               role="tab"
               aria-selected={activeTab === tab.id}
+              tabIndex={activeTab === tab.id ? 0 : -1}
               onClick={() => setActiveTab(tab.id)}
               style={{
                 padding: "6px 12px",

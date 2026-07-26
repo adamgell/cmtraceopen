@@ -24,6 +24,7 @@ import { UpdateDialog } from "../dialogs/UpdateDialog";
 import { MergeTabsDialog } from "../dialogs/MergeTabsDialog";
 import { DiffConfigDialog } from "../dialogs/DiffConfigDialog";
 import { getWorkspace } from "../../workspaces/registry";
+import type { WorkspaceDefinition } from "../../workspaces/types";
 import { RegistryViewer } from "../registry-view/RegistryViewer";
 import type { FilterClause } from "../dialogs/FilterDialog";
 import type { LogEntry } from "../../types/log";
@@ -42,6 +43,7 @@ import { useCollectionProgressListener } from "../../hooks/use-collection-progre
 import { useParseProgressListener } from "../../hooks/use-parse-progress-listener";
 import { useUpdateChecker } from "../../hooks/use-update-checker";
 import { QuickStatsPanel } from "../panels/QuickStatsPanel";
+import { useEspSessionUpdates } from "../../workspaces/esp-diagnostics/use-esp-session-updates";
 
 function buildFilterRunSignature(
   entries: LogEntry[],
@@ -55,6 +57,21 @@ function buildFilterRunSignature(
     .join("|");
 
   return `${clauseSignature}:${entriesRevision}:${entries.length}:${lastId}:${lastLineNumber}`;
+}
+
+export function shouldRenderWorkspaceSidebar(
+  workspace: WorkspaceDefinition,
+): boolean {
+  return workspace.capabilities?.sidebar !== false;
+}
+
+/**
+ * App-lifetime ESP subscriptions live outside workspace routing so changing
+ * views cannot stop collection or detach the native session listener.
+ */
+export function GlobalWorkspaceListeners() {
+  useEspSessionUpdates();
+  return null;
 }
 
 export function AppShell() {
@@ -229,13 +246,6 @@ export function AppShell() {
 
         setFilteredIds(new Set(ids));
         lastAppliedSignatureRef.current = signature;
-
-        console.info("[app-shell] applied filter snapshot", {
-          trigger,
-          clauseCount: clauses.length,
-          entryCount: entriesSnapshot.length,
-          matchedCount: ids.length,
-        });
       } catch (err) {
         if (filterRequestIdRef.current !== requestId) {
           return;
@@ -428,11 +438,36 @@ export function AppShell() {
     // All other workspaces: registry lookup with lazy loading
     const workspace = getWorkspace(activeView);
     const WorkspaceComponent = workspace.component;
+    const WorkspaceDock = workspace.dock;
     return (
-      <div style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column" }}>
-        <Suspense fallback={null}>
-          <WorkspaceComponent />
-        </Suspense>
+      <div
+        style={{
+          position: "relative",
+          flex: 1,
+          minHeight: 0,
+          overflow: "hidden",
+          display: "flex",
+          flexDirection: "column",
+        }}
+      >
+        <div
+          style={{
+            flex: 1,
+            minHeight: 0,
+            overflow: "hidden",
+            display: "flex",
+            flexDirection: "column",
+          }}
+        >
+          <Suspense fallback={null}>
+            <WorkspaceComponent />
+          </Suspense>
+        </div>
+        {WorkspaceDock ? (
+          <Suspense fallback={null}>
+            <WorkspaceDock />
+          </Suspense>
+        ) : null}
       </div>
     );
   };
@@ -447,6 +482,7 @@ export function AppShell() {
         backgroundColor: tokens.colorNeutralBackground3,
       }}
     >
+      <GlobalWorkspaceListeners />
       <Toolbar />
       {getWorkspace(activeView).capabilities?.tabStrip && <TabStrip />}
       {showFindBar && getWorkspace(activeView).capabilities?.findBar && (
@@ -461,7 +497,7 @@ export function AppShell() {
           backgroundColor: tokens.colorNeutralBackground2,
         }}
       >
-        {activeView !== "event-log" && (
+        {shouldRenderWorkspaceSidebar(getWorkspace(activeView)) && (
           sidebarCollapsed ? (
             <div
               style={{

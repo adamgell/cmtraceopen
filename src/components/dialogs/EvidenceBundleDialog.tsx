@@ -7,7 +7,7 @@ import { useLogStore } from "../../stores/log-store";
 import { isIntuneWorkspace, useUiStore } from "../../stores/ui-store";
 import { formatDisplayDateTime } from "../../lib/date-time-format";
 import { getBaseName, getDirectoryName } from "../../lib/file-paths";
-import { useAppActions } from "../layout/Toolbar";
+import { useAppActions } from "../../hooks/use-app-actions";
 import type {
   EvidenceArtifactRecord,
   EvidenceArtifactPreview,

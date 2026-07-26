@@ -161,10 +161,7 @@ mod tests {
             make_detect_session(Some(SecureBootStage::Stage1)),
             make_detect_session(Some(SecureBootStage::Stage3)),
         ];
-        assert_eq!(
-            determine_stage_from_log(&sessions),
-            SecureBootStage::Stage3
-        );
+        assert_eq!(determine_stage_from_log(&sessions), SecureBootStage::Stage3);
     }
 
     #[test]
@@ -173,10 +170,7 @@ mod tests {
             make_detect_session(Some(SecureBootStage::Stage2)),
             make_detect_session(None),
         ];
-        assert_eq!(
-            determine_stage_from_log(&sessions),
-            SecureBootStage::Stage2
-        );
+        assert_eq!(determine_stage_from_log(&sessions), SecureBootStage::Stage2);
     }
 
     #[test]

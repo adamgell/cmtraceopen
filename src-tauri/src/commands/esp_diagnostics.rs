@@ -1,0 +1,171 @@
+//! Thin Tauri IPC surface for local-only ESP diagnostic sessions.
+//!
+//! Optional Graph enrichment is intentionally not part of this manager. The
+//! existing authenticated Graph/WAM coordinator runs separately in the
+//! frontend and overlays its result only when the user has enabled Graph.
+
+use std::path::Path;
+use std::sync::Arc;
+
+use cmtraceopen_parser::esp::{EspDiagnosticsSnapshot, EspElevationState};
+use tauri::{AppHandle, Emitter, Manager, State};
+
+use crate::esp::bundle::{analyze_captured_evidence, BundleError};
+use crate::esp::live_session::native_session_dependencies;
+use crate::esp::relaunch::{
+    restart_with_provider, EspRelaunchError, EspRelaunchResult, NativeEspRelaunchProvider,
+};
+use crate::esp::remediation::{
+    flip_app_installed, restore_app_state, EspAppFlipBackup, EspAppFlipResult,
+};
+use crate::esp::session::{
+    EspSessionEnvelope, EspSessionError, EspSessionEventSink, EspSessionManager, EspSessionUpdate,
+    ESP_SESSION_UPDATE_EVENT,
+};
+use crate::esp::system::current_elevation_state;
+use crate::esp::{acquisition_capability, EspAcquisitionCapability};
+use crate::state::app_state::AppState;
+
+struct TauriEspSessionEventSink {
+    app: AppHandle,
+}
+
+impl EspSessionEventSink for TauriEspSessionEventSink {
+    fn emit(&self, update: EspSessionUpdate) -> Result<(), String> {
+        self.app
+            .emit(ESP_SESSION_UPDATE_EVENT, update)
+            .map_err(|error| error.to_string())
+    }
+}
+
+pub fn initialize_esp_session_manager(app: &AppHandle) -> Result<(), EspSessionError> {
+    let sink = Arc::new(TauriEspSessionEventSink { app: app.clone() });
+    let manager = Arc::new(EspSessionManager::new(native_session_dependencies(sink)));
+    app.state::<AppState>().install_esp_session_manager(manager)
+}
+
+pub fn shutdown_esp_session_manager(app: &AppHandle) -> Result<(), EspSessionError> {
+    app.state::<AppState>().shutdown_esp_session_manager()
+}
+
+#[tauri::command]
+pub fn get_esp_diagnostics_capability() -> EspAcquisitionCapability {
+    acquisition_capability()
+}
+
+#[tauri::command]
+pub fn get_esp_elevation_state() -> EspElevationState {
+    current_elevation_state()
+}
+
+#[tauri::command]
+pub async fn analyze_esp_evidence(
+    path: String,
+    request_id: String,
+) -> Result<EspDiagnosticsSnapshot, BundleError> {
+    tauri::async_runtime::spawn_blocking(move || {
+        analyze_captured_evidence(Path::new(&path), &request_id)
+    })
+    .await
+    .map_err(|error| BundleError::SourceAccess {
+        message: format!("captured ESP analysis task failed: {error}"),
+    })?
+}
+
+#[tauri::command]
+pub async fn start_esp_diagnostics_session(
+    request_id: String,
+    state: State<'_, AppState>,
+) -> Result<EspSessionEnvelope, EspSessionError> {
+    let manager = state.esp_session_manager()?;
+    tauri::async_runtime::spawn_blocking(move || manager.start(&request_id))
+        .await
+        .map_err(runtime_join_error)?
+}
+
+#[tauri::command]
+pub fn get_esp_diagnostics_session(
+    session_id: String,
+    state: State<'_, AppState>,
+) -> Result<EspSessionEnvelope, EspSessionError> {
+    state.esp_session_manager()?.get(&session_id)
+}
+
+#[tauri::command]
+pub async fn stop_esp_diagnostics_session(
+    session_id: String,
+    state: State<'_, AppState>,
+) -> Result<(), EspSessionError> {
+    let manager = state.esp_session_manager()?;
+    tauri::async_runtime::spawn_blocking(move || manager.stop(&session_id).map(|_| ()))
+        .await
+        .map_err(runtime_join_error)?
+}
+
+#[tauri::command]
+pub async fn restart_esp_as_administrator(
+    app: AppHandle,
+) -> Result<EspRelaunchResult, EspRelaunchError> {
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        restart_with_provider(&NativeEspRelaunchProvider)
+    })
+    .await
+    .map_err(|_| EspRelaunchError::LaunchFailed {
+        message: "administrator restart task failed".to_string(),
+    })??;
+    if result.launched {
+        app.exit(0);
+    }
+    Ok(result)
+}
+
+/// Force a failed ESP-tracked app past the Enrollment Status Page by flipping its
+/// Sidecar InstallationState 4 -> 3 and clearing ErrorHresult. WRITES to HKLM
+/// (Windows-only, requires elevation). Returns the prior values as a backup so the
+/// change can be undone. Does not install the app.
+#[tauri::command]
+pub async fn esp_flip_app_installed(app_id: String) -> Result<EspAppFlipResult, String> {
+    tauri::async_runtime::spawn_blocking(move || flip_app_installed(&app_id))
+        .await
+        .map_err(|error| format!("ESP flip task failed: {error}"))?
+}
+
+/// Restore an app's Sidecar tracking values from a backup returned by
+/// `esp_flip_app_installed`. WRITES to HKLM (Windows-only, requires elevation).
+#[tauri::command]
+pub async fn esp_restore_app_state(backup: EspAppFlipBackup) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || restore_app_state(&backup))
+        .await
+        .map_err(|error| format!("ESP restore task failed: {error}"))?
+}
+
+fn runtime_join_error(error: impl std::fmt::Display) -> EspSessionError {
+    EspSessionError::Worker {
+        message: format!("ESP diagnostics blocking task failed: {error}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{get_esp_diagnostics_capability, get_esp_elevation_state};
+
+    #[test]
+    fn capability_command_reports_portable_offline_and_platform_live_support() {
+        let capability = get_esp_diagnostics_capability();
+        assert!(capability.offline_analysis_supported);
+        assert_eq!(
+            capability.live_acquisition_supported,
+            cfg!(target_os = "windows")
+        );
+        assert_eq!(
+            capability.live_acquisition_detail.is_none(),
+            cfg!(target_os = "windows")
+        );
+    }
+
+    #[test]
+    fn elevation_command_reports_platform_restart_capability() {
+        let elevation = get_esp_elevation_state();
+        assert_eq!(elevation.restart_supported, cfg!(target_os = "windows"));
+    }
+}

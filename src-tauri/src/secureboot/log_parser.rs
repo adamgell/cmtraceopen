@@ -24,16 +24,13 @@ fn log_line_re() -> &'static Regex {
 fn stage_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
-        Regex::new(r"(?:NON-COMPLIANT|COMPLIANT)\s*-\s*Stage\s+(\d)")
-            .expect("valid stage regex")
+        Regex::new(r"(?:NON-COMPLIANT|COMPLIANT)\s*-\s*Stage\s+(\d)").expect("valid stage regex")
     })
 }
 
 fn error_code_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
-    CELL.get_or_init(|| {
-        Regex::new(r"0x[0-9A-Fa-f]{4,8}").expect("valid error code regex")
-    })
+    CELL.get_or_init(|| Regex::new(r"0x[0-9A-Fa-f]{4,8}").expect("valid error code regex"))
 }
 
 // ---------------------------------------------------------------------------
@@ -100,9 +97,7 @@ fn extract_stage(message: &str) -> Option<SecureBootStage> {
 }
 
 fn extract_error_code(message: &str) -> Option<String> {
-    error_code_re()
-        .find(message)
-        .map(|m| m.as_str().to_owned())
+    error_code_re().find(message).map(|m| m.as_str().to_owned())
 }
 
 /// Parse a single log line into a `TimelineEntry`, returning `None` if the
@@ -145,10 +140,7 @@ fn parse_line(line: &str) -> Option<TimelineEntry> {
 /// chronological timeline and `sessions` groups entries by
 /// STARTED/COMPLETED boundaries.
 pub fn parse_log(content: &str) -> (Vec<LogSession>, Vec<TimelineEntry>) {
-    let all_entries: Vec<TimelineEntry> = content
-        .lines()
-        .filter_map(parse_line)
-        .collect();
+    let all_entries: Vec<TimelineEntry> = content.lines().filter_map(parse_line).collect();
 
     let sessions = build_sessions(&all_entries);
 

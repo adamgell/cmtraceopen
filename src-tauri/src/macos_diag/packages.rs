@@ -122,7 +122,10 @@ pub fn list_packages_impl() -> Result<MacosPackagesResult, crate::error::AppErro
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(crate::error::AppError::Internal(format!("pkgutil --pkgs failed: {}", stderr)));
+        return Err(crate::error::AppError::Internal(format!(
+            "pkgutil --pkgs failed: {}",
+            stderr
+        )));
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -199,7 +202,9 @@ pub fn get_package_info_impl(package_id: &str) -> Result<MacosPackageInfo, crate
 }
 
 #[cfg(target_os = "macos")]
-pub fn get_package_files_impl(package_id: &str) -> Result<MacosPackageFiles, crate::error::AppError> {
+pub fn get_package_files_impl(
+    package_id: &str,
+) -> Result<MacosPackageFiles, crate::error::AppError> {
     use std::process::Command;
 
     validate_package_id(package_id)?;
@@ -229,17 +234,27 @@ pub fn get_package_files_impl(package_id: &str) -> Result<MacosPackageFiles, cra
 
 #[cfg(not(target_os = "macos"))]
 pub fn list_packages_impl() -> Result<MacosPackagesResult, crate::error::AppError> {
-    Err(crate::error::AppError::PlatformUnsupported("macOS Diagnostics is only available on macOS.".to_string()))
+    Err(crate::error::AppError::PlatformUnsupported(
+        "macOS Diagnostics is only available on macOS.".to_string(),
+    ))
 }
 
 #[cfg(not(target_os = "macos"))]
-pub fn get_package_info_impl(_package_id: &str) -> Result<MacosPackageInfo, crate::error::AppError> {
-    Err(crate::error::AppError::PlatformUnsupported("macOS Diagnostics is only available on macOS.".to_string()))
+pub fn get_package_info_impl(
+    _package_id: &str,
+) -> Result<MacosPackageInfo, crate::error::AppError> {
+    Err(crate::error::AppError::PlatformUnsupported(
+        "macOS Diagnostics is only available on macOS.".to_string(),
+    ))
 }
 
 #[cfg(not(target_os = "macos"))]
-pub fn get_package_files_impl(_package_id: &str) -> Result<MacosPackageFiles, crate::error::AppError> {
-    Err(crate::error::AppError::PlatformUnsupported("macOS Diagnostics is only available on macOS.".to_string()))
+pub fn get_package_files_impl(
+    _package_id: &str,
+) -> Result<MacosPackageFiles, crate::error::AppError> {
+    Err(crate::error::AppError::PlatformUnsupported(
+        "macOS Diagnostics is only available on macOS.".to_string(),
+    ))
 }
 
 // ---------------------------------------------------------------------------

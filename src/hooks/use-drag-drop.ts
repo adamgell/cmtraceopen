@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
-import { useAppActions } from "../components/layout/Toolbar";
+import { useAppActions } from "./use-app-actions";
 import { loadFilesAsLogSource } from "../lib/log-source";
 import { useUiStore } from "../stores/ui-store";
 

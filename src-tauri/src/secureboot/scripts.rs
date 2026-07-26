@@ -1,11 +1,9 @@
 use super::models::ScriptExecutionResult;
 use crate::error::AppError;
 
-const DETECT_SCRIPT: &str =
-    include_str!("scripts/Detect-SecureBootCertificateUpdate.ps1");
+const DETECT_SCRIPT: &str = include_str!("scripts/Detect-SecureBootCertificateUpdate.ps1");
 
-const REMEDIATE_SCRIPT: &str =
-    include_str!("scripts/Remediate-SecureBootCertificateUpdate.ps1");
+const REMEDIATE_SCRIPT: &str = include_str!("scripts/Remediate-SecureBootCertificateUpdate.ps1");
 
 /// Run the Secure Boot certificate **detection** script.
 ///

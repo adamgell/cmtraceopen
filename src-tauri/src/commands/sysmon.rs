@@ -158,7 +158,11 @@ fn analyze_sysmon_blocking(
                             Some((events, 0u64))
                         }
                         Err(e) => {
-                            log::warn!("event=sysmon_file_error file=\"{}\" error=\"{}\"", file_path.display(), e);
+                            log::warn!(
+                                "event=sysmon_file_error file=\"{}\" error=\"{}\"",
+                                file_path.display(),
+                                e
+                            );
                             let done = completed.fetch_add(1, Ordering::Relaxed) + 1;
                             let _ = app.emit(
                                 SYSMON_ANALYSIS_PROGRESS_EVENT,
@@ -239,12 +243,11 @@ fn analyze_sysmon_blocking(
     // Sort by timestamp_ms when available, falling back to timestamp and then record_id for stable ordering
     all_events.sort_by(|a, b| {
         match (a.timestamp_ms, b.timestamp_ms) {
-            (Some(ta), Some(tb)) => ta
-                .cmp(&tb)
-                .then_with(|| a.record_id.cmp(&b.record_id)),
-            (Some(_), None) => std::cmp::Ordering::Less,    // nulls last
-            (None, Some(_)) => std::cmp::Ordering::Greater,  // nulls last
-            (None, None) => a.timestamp
+            (Some(ta), Some(tb)) => ta.cmp(&tb).then_with(|| a.record_id.cmp(&b.record_id)),
+            (Some(_), None) => std::cmp::Ordering::Less, // nulls last
+            (None, Some(_)) => std::cmp::Ordering::Greater, // nulls last
+            (None, None) => a
+                .timestamp
                 .cmp(&b.timestamp)
                 .then_with(|| a.record_id.cmp(&b.record_id)),
         }
@@ -264,7 +267,11 @@ fn analyze_sysmon_blocking(
     // Build dashboard aggregations
     let dashboard = evtx_parser::build_dashboard_data(&all_events);
 
-    let total_source_count = if include_live_event_logs { total_files + 1 } else { total_files };
+    let total_source_count = if include_live_event_logs {
+        total_files + 1
+    } else {
+        total_files
+    };
 
     // Emit: complete
     let _ = app.emit(
@@ -272,7 +279,11 @@ fn analyze_sysmon_blocking(
         SysmonAnalysisProgress {
             request_id: request_id.clone(),
             stage: "complete",
-            message: format!("Analysis complete: {} events from {} source(s)", all_events.len(), total_source_count),
+            message: format!(
+                "Analysis complete: {} events from {} source(s)",
+                all_events.len(),
+                total_source_count
+            ),
             completed_files: total_source_count,
             total_files: total_source_count,
         },

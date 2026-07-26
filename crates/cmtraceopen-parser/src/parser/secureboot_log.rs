@@ -21,10 +21,10 @@ fn secureboot_log_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
         Regex::new(concat!(
-            r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})", // timestamp
-            r" \[(\w+)\]",                                // [SCRIPTNAME]
-            r" \[(INFO|WARNING|ERROR|SUCCESS|SYSTEM)\]",  // [LEVEL]
-            r" (.*)",                                      // message
+            r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})",   // timestamp
+            r" \[(\w+)\]",                               // [SCRIPTNAME]
+            r" \[(INFO|WARNING|ERROR|SUCCESS|SYSTEM)\]", // [LEVEL]
+            r" (.*)",                                    // message
         ))
         .expect("SecureBoot log regex must compile")
     })
@@ -59,14 +59,16 @@ pub fn parse_lines(lines: &[&str], file_path: &str) -> (Vec<LogEntry>, u32) {
             let ts_str = caps.get(1).unwrap().as_str();
             let script_name = caps.get(2).unwrap().as_str();
             let level = caps.get(3).unwrap().as_str();
-            let message = caps.get(4).map(|m| m.as_str().to_string()).unwrap_or_default();
+            let message = caps
+                .get(4)
+                .map(|m| m.as_str().to_string())
+                .unwrap_or_default();
 
             let severity = severity_from_level(level);
 
-            let timestamp =
-                chrono::NaiveDateTime::parse_from_str(ts_str, "%Y-%m-%d %H:%M:%S")
-                    .ok()
-                    .map(|dt| dt.and_utc().timestamp_millis());
+            let timestamp = chrono::NaiveDateTime::parse_from_str(ts_str, "%Y-%m-%d %H:%M:%S")
+                .ok()
+                .map(|dt| dt.and_utc().timestamp_millis());
 
             let timestamp_display = Some(format!("{}.000", ts_str));
 
@@ -186,9 +188,8 @@ mod tests {
 
     #[test]
     fn test_parse_info_line() {
-        let lines = vec![
-            "2026-04-07 11:25:47 [DETECT] [INFO] ========== DETECTION STARTED ==========",
-        ];
+        let lines =
+            vec!["2026-04-07 11:25:47 [DETECT] [INFO] ========== DETECTION STARTED =========="];
         let (entries, errors) = parse_lines(&lines, "SecureBootCertificateUpdate.log");
         assert_eq!(errors, 0);
         assert_eq!(entries.len(), 1);
@@ -214,9 +215,7 @@ mod tests {
 
     #[test]
     fn test_parse_success_line() {
-        let lines = vec![
-            "2026-04-07 11:25:48 [DETECT] [SUCCESS] Secure Boot is ENABLED",
-        ];
+        let lines = vec!["2026-04-07 11:25:48 [DETECT] [SUCCESS] Secure Boot is ENABLED"];
         let (entries, errors) = parse_lines(&lines, "SecureBootCertificateUpdate.log");
         assert_eq!(errors, 0);
         assert_eq!(entries[0].severity, Severity::Info);
@@ -225,9 +224,7 @@ mod tests {
 
     #[test]
     fn test_parse_error_line() {
-        let lines = vec![
-            "2026-04-07 11:25:48 [REMEDIATE] [ERROR] Failed to set registry value",
-        ];
+        let lines = vec!["2026-04-07 11:25:48 [REMEDIATE] [ERROR] Failed to set registry value"];
         let (entries, errors) = parse_lines(&lines, "SecureBootCertificateUpdate.log");
         assert_eq!(errors, 0);
         assert_eq!(entries[0].severity, Severity::Error);

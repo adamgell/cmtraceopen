@@ -76,7 +76,9 @@ mod tests_classify {
         std::fs::write(dir.path().join("AgentExecutor.log"), b"hello\n").unwrap();
         std::fs::write(dir.path().join("IntuneManagementExtension.log"), b"hi\n").unwrap();
         let out = classify_folder(dir.path());
-        assert!(out.iter().any(|c| matches!(c, ClassifiedSource::ImeLogsFolder(_))));
+        assert!(out
+            .iter()
+            .any(|c| matches!(c, ClassifiedSource::ImeLogsFolder(_))));
         assert_eq!(
             out.iter()
                 .filter(|c| matches!(c, ClassifiedSource::LogFile(_)))
@@ -266,8 +268,8 @@ fn parse_to_index(
     anyhow::Error,
 > {
     let path_str = path.to_string_lossy().to_string();
-    let (parse_result, parser) = crate::parser::parse_file(&path_str)
-        .map_err(|e| anyhow::anyhow!("parse_file: {}", e))?;
+    let (parse_result, parser) =
+        crate::parser::parse_file(&path_str).map_err(|e| anyhow::anyhow!("parse_file: {}", e))?;
 
     // Re-read the raw bytes so we can compute per-line byte offsets.
     // The byte offset for line N (1-based) is offsets[N - 1]. offsets[0] is 0.

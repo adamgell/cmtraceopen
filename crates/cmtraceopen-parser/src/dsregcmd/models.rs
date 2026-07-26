@@ -376,7 +376,8 @@ mod tests {
     #[test]
     fn join_type_serializes_with_pascal_case_variants() {
         assert_eq!(
-            serde_json::to_string(&DsregcmdJoinType::HybridEntraIdJoined).expect("serialize join type"),
+            serde_json::to_string(&DsregcmdJoinType::HybridEntraIdJoined)
+                .expect("serialize join type"),
             "\"HybridEntraIdJoined\""
         );
         assert_eq!(

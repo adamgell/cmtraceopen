@@ -27,6 +27,38 @@ describe("ui-store", () => {
     });
   });
 
+  describe("always on top", () => {
+    it("defaults to off", () => {
+      expect(useUiStore.getInitialState().alwaysOnTop).toBe(false);
+    });
+
+    it("toggles the preference", () => {
+      useUiStore.getState().setAlwaysOnTop(true);
+      expect(useUiStore.getState().alwaysOnTop).toBe(true);
+      useUiStore.getState().setAlwaysOnTop(false);
+      expect(useUiStore.getState().alwaysOnTop).toBe(false);
+    });
+
+    it("persists the preference so it survives a restart", () => {
+      useUiStore.getState().setAlwaysOnTop(true);
+      const persisted = JSON.parse(
+        localStorage.getItem("cmtraceopen-ui-preferences") ?? "{}",
+      );
+      expect(persisted.state?.alwaysOnTop).toBe(true);
+    });
+  });
+
+  describe("persisted preferences", () => {
+    it("finishes hydration when no preferences have been stored yet", async () => {
+      await useUiStore.persist.clearStorage();
+
+      await useUiStore.persist.rehydrate();
+
+      expect(useUiStore.persist.hasHydrated()).toBe(true);
+      expect(useUiStore.getState().activeView).toBe("log");
+    });
+  });
+
   describe("font size controls", () => {
     it("increases log list font size", () => {
       const initial = useUiStore.getState().logListFontSize;
@@ -203,6 +235,15 @@ describe("getAvailableWorkspaces", () => {
   it("filters workspaces to the backend-enabled set", () => {
     const workspaces = getAvailableWorkspaces("windows", ["log"]);
     expect(workspaces).toEqual(["log"]);
+  });
+
+  it("falls back to log when the backend disables the active workspace", () => {
+    useUiStore.getState().setActiveView("intune");
+
+    useUiStore.getState().setEnabledWorkspaces(["log"]);
+
+    expect(useUiStore.getState().activeWorkspace).toBe("log");
+    expect(useUiStore.getState().activeView).toBe("log");
   });
 });
 

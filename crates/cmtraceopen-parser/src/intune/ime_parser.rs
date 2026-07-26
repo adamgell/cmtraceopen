@@ -19,9 +19,9 @@ pub struct ImeLine {
 fn ime_record_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
-    Regex::new(r#"<!\[LOG\[(?P<msg>[\s\S]*?)\]LOG\]!><(?P<attrs>[^>]*)>"#)
-        .expect("IME record regex must compile")
-})
+        Regex::new(r#"<!\[LOG\[(?P<msg>[\s\S]*?)\]LOG\]!><(?P<attrs>[^>]*)>"#)
+            .expect("IME record regex must compile")
+    })
 }
 
 /// Regex for simple timestamped log lines (fallback format):
@@ -29,9 +29,9 @@ fn ime_record_re() -> &'static Regex {
 fn simple_ts_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
-    Regex::new(r#"^(?P<ts>\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}[\.\d]*)\s+(?P<msg>.+)$"#)
-        .expect("IME fallback timestamp regex must compile")
-})
+        Regex::new(r#"^(?P<ts>\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}[\.\d]*)\s+(?P<msg>.+)$"#)
+            .expect("IME fallback timestamp regex must compile")
+    })
 }
 
 #[derive(Debug, Clone)]
@@ -85,40 +85,40 @@ pub fn parse_ime_entries(content: &str, file_path: &str) -> (Vec<LogEntry>, u32)
             file_path: file_path.to_string(),
             timezone_offset: entry.timezone_offset,
             error_code_spans: Vec::new(),
-                    ip_address: None,
-                    host_name: None,
-                    mac_address: None,
-                    result_code: None,
-                    gle_code: None,
-                    setup_phase: None,
-                    operation_name: None,
-                    http_method: None,
-                    uri_stem: None,
-                    uri_query: None,
-                    status_code: None,
-                    sub_status: None,
-                    time_taken_ms: None,
-                    client_ip: None,
-                    server_ip: None,
-                    user_agent: None,
-                    server_port: None,
-                    username: None,
-                    win32_status: None,
-                    query_name: None,
-                    query_type: None,
-                    response_code: None,
-                    dns_direction: None,
-                    dns_protocol: None,
-                    source_ip: None,
-                    dns_flags: None,
-                    dns_event_id: None,
-                    zone_name: None,
-                    entry_kind: None,
-                    whatif: None,
-                    section_name: None,
-                    section_color: None,
-                    iteration: None,
-                    tags: None,
+            ip_address: None,
+            host_name: None,
+            mac_address: None,
+            result_code: None,
+            gle_code: None,
+            setup_phase: None,
+            operation_name: None,
+            http_method: None,
+            uri_stem: None,
+            uri_query: None,
+            status_code: None,
+            sub_status: None,
+            time_taken_ms: None,
+            client_ip: None,
+            server_ip: None,
+            user_agent: None,
+            server_port: None,
+            username: None,
+            win32_status: None,
+            query_name: None,
+            query_type: None,
+            response_code: None,
+            dns_direction: None,
+            dns_protocol: None,
+            source_ip: None,
+            dns_flags: None,
+            dns_event_id: None,
+            zone_name: None,
+            entry_kind: None,
+            whatif: None,
+            section_name: None,
+            section_color: None,
+            iteration: None,
+            tags: None,
         })
         .collect();
 
@@ -314,7 +314,8 @@ fn parse_attributes(attrs: &str) -> ParsedImeAttrs<'_> {
     parsed
 }
 
-#[expect(clippy::type_complexity, reason = "tuple return avoids extra struct for internal parsing")]
+// The tuple return avoids an extra struct for internal parsing.
+#[allow(clippy::type_complexity)]
 fn parse_timestamp_fields(
     date: Option<&str>,
     time: Option<&str>,
@@ -370,7 +371,8 @@ fn parse_timestamp_fields(
     )
 }
 
-#[expect(clippy::too_many_arguments, reason = "timestamp construction keeps calendar fields explicit")]
+// Timestamp construction keeps calendar fields explicit.
+#[allow(clippy::too_many_arguments)]
 fn build_utc_timestamp(
     month: u32,
     day: u32,
@@ -749,7 +751,10 @@ mod tests {
     fn test_build_utc_timestamp_extreme_offset_falls_back() {
         // Extreme offset should fall back to UTC-as-local, not return None
         let result = super::build_utc_timestamp(1, 1, 2024, 10, 0, 0, 0, Some(99999));
-        assert!(result.is_some(), "extreme offset should fall back, not return None");
+        assert!(
+            result.is_some(),
+            "extreme offset should fall back, not return None"
+        );
         assert_eq!(result.unwrap(), "2024-01-01T10:00:00.000Z");
     }
 

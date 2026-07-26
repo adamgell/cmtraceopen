@@ -13,7 +13,10 @@ const FIXTURE_PATH: &str = concat!(
 #[test]
 fn test_real_dns_audit_evtx() {
     if !Path::new(FIXTURE_PATH).exists() {
-        eprintln!("Skipping: real DNS audit EVTX fixture not found at {}", FIXTURE_PATH);
+        eprintln!(
+            "Skipping: real DNS audit EVTX fixture not found at {}",
+            FIXTURE_PATH
+        );
         return;
     }
 
@@ -29,11 +32,15 @@ fn test_real_dns_audit_evtx() {
 
     assert_eq!(format!("{:?}", selection.parser), "DnsAudit");
     assert_eq!(format!("{:?}", result.format_detected), "DnsAudit");
-    assert!(!result.entries.is_empty(), "Should have parsed entries, got 0");
+    assert!(
+        !result.entries.is_empty(),
+        "Should have parsed entries, got 0"
+    );
     assert_eq!(result.parse_errors, 0, "Should have zero parse errors");
 
     // Collect event IDs
-    let mut event_id_counts: std::collections::HashMap<u32, usize> = std::collections::HashMap::new();
+    let mut event_id_counts: std::collections::HashMap<u32, usize> =
+        std::collections::HashMap::new();
     for entry in &result.entries {
         if let Some(eid) = entry.dns_event_id {
             *event_id_counts.entry(eid).or_insert(0) += 1;
@@ -44,26 +51,56 @@ fn test_real_dns_audit_evtx() {
     let first = &result.entries[0];
     assert!(first.dns_event_id.is_some(), "Should have dns_event_id");
     assert!(first.timestamp.is_some(), "Should have timestamp");
-    assert!(first.timestamp_display.is_some(), "Should have timestamp_display");
+    assert!(
+        first.timestamp_display.is_some(),
+        "Should have timestamp_display"
+    );
     assert_eq!(first.component.as_deref(), Some("DNSServer"));
     assert_eq!(format!("{:?}", first.format), "DnsAudit");
 
     // Severity check — should have at least some non-Info entries
-    let info_count = result.entries.iter().filter(|e| format!("{:?}", e.severity) == "Info").count();
-    let warn_count = result.entries.iter().filter(|e| format!("{:?}", e.severity) == "Warning").count();
-    let err_count = result.entries.iter().filter(|e| format!("{:?}", e.severity) == "Error").count();
+    let info_count = result
+        .entries
+        .iter()
+        .filter(|e| format!("{:?}", e.severity) == "Info")
+        .count();
+    let warn_count = result
+        .entries
+        .iter()
+        .filter(|e| format!("{:?}", e.severity) == "Warning")
+        .count();
+    let err_count = result
+        .entries
+        .iter()
+        .filter(|e| format!("{:?}", e.severity) == "Error")
+        .count();
 
     // Check entries with DNS-specific fields
-    let with_query_name = result.entries.iter().filter(|e| e.query_name.is_some()).count();
-    let with_zone = result.entries.iter().filter(|e| e.zone_name.is_some()).count();
-    let with_query_type = result.entries.iter().filter(|e| e.query_type.is_some()).count();
+    let with_query_name = result
+        .entries
+        .iter()
+        .filter(|e| e.query_name.is_some())
+        .count();
+    let with_zone = result
+        .entries
+        .iter()
+        .filter(|e| e.zone_name.is_some())
+        .count();
+    let with_query_type = result
+        .entries
+        .iter()
+        .filter(|e| e.query_type.is_some())
+        .count();
 
     // Print summary
     eprintln!("--- Real DNS Audit EVTX Results ---");
     eprintln!("Total records: {}", result.total_lines);
     eprintln!("Entries parsed: {}", result.entries.len());
     eprintln!("Parse errors: {}", result.parse_errors);
-    eprintln!("Severity: Info={} Warning={} Error={}", info_count, warn_count, err_count);
+    eprintln!(
+        "Severity: Info={} Warning={} Error={}",
+        info_count, warn_count, err_count
+    );
     eprintln!("With query_name: {}", with_query_name);
     eprintln!("With zone_name: {}", with_zone);
     eprintln!("With query_type: {}", with_query_type);

@@ -8,7 +8,11 @@ import type {
   ParseResult,
   WorkspaceId,
 } from "../types/log";
-import type { EvidenceArtifactPreview, EvidenceBundleDetails, EvidenceArtifactIntakeKind } from "../types/evidence";
+import type {
+  EvidenceArtifactPreview,
+  EvidenceBundleDetails,
+  EvidenceArtifactIntakeKind,
+} from "../types/evidence";
 import type { RegistryParseResult } from "../types/registry";
 import type { IntuneAnalysisResult } from "../workspaces/intune/types";
 import type { SysmonAnalysisResult } from "../workspaces/sysmon/types";
@@ -17,6 +21,16 @@ import type {
   DsregcmdCaptureResult,
   DsregcmdResolvedSource,
 } from "../workspaces/dsregcmd/types";
+import type {
+  EspAppFlipBackup,
+  EspAppFlipResult,
+  EspDiagnosticsSnapshot,
+  EspElevationState,
+  EspGraphOverlay,
+  EspGraphRequest,
+  EspRelaunchResult,
+  EspSessionEnvelope,
+} from "../workspaces/esp-diagnostics/types";
 
 export interface FileAssociationPromptStatus {
   supported: boolean;
@@ -39,28 +53,164 @@ export interface UpdatePolicy {
   updateChecksDisabledByPolicy: boolean;
 }
 
-function getInvokeErrorMessage(error: unknown): string {
-  if (error instanceof Error) {
-    return error.message;
-  }
+const normalizedCommandErrorMessages = new WeakMap<Error, string>();
 
-  return String(error);
+/**
+ * True only for plain data objects — those whose prototype is `Object.prototype`
+ * or `null`. Serialized Rust command errors (e.g. `{ kind, path, message }`)
+ * arrive this way, whereas class instances (`Error`, custom classes) do not and
+ * must keep falling back. The prototype probe is wrapped so a hostile Proxy that
+ * traps `getPrototypeOf` and throws is contained rather than allowed to escape.
+ */
+function isPlainDataObject(error: object): boolean {
+  let prototype: unknown;
+  try {
+    prototype = Object.getPrototypeOf(error);
+  } catch {
+    return false;
+  }
+  return prototype === Object.prototype || prototype === null;
 }
 
-function normalizeCommandInvokeError(commandName: string, error: unknown): Error {
-  const message = getInvokeErrorMessage(error);
-  const missingCommandPattern = new RegExp(`command\\s+${commandName}\\s+not found`, "i");
+/**
+ * Reads an own string DATA property without ever invoking a getter.
+ *
+ * Accessor descriptors (a `get`/`set`) are ignored outright, so a hostile
+ * `message` getter is never called. A forged data descriptor — e.g. a Proxy
+ * `getOwnPropertyDescriptor` trap that fabricates a value — is rejected unless a
+ * direct read of the same own property agrees; a genuine plain data object
+ * always agrees, and the direct read cannot trigger a getter because accessor
+ * descriptors were already discarded.
+ */
+function readOwnStringData(error: object, key: string): string | null {
+  let descriptor: PropertyDescriptor | undefined;
+  try {
+    descriptor = Object.getOwnPropertyDescriptor(error, key);
+  } catch {
+    return null;
+  }
+  if (
+    !descriptor ||
+    typeof descriptor.get === "function" ||
+    typeof descriptor.set === "function"
+  ) {
+    return null;
+  }
+  const value = descriptor.value;
+  if (typeof value !== "string") {
+    return null;
+  }
+  let directValue: unknown;
+  try {
+    directValue = (error as Record<string, unknown>)[key];
+  } catch {
+    return null;
+  }
+  if (directValue !== value) {
+    return null;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
 
+/** Turns a Rust error `kind` identifier (e.g. `sourceNotFound`) into a readable phrase. */
+function humanizeErrorKind(kind: string): string {
+  const spaced = kind
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (spaced.length === 0) {
+    return kind;
+  }
+  return spaced.charAt(0).toUpperCase() + spaced.slice(1).toLowerCase();
+}
+
+/**
+ * Extracts the backend reason from a plain-data-object rejection (serialized
+ * Rust enum error), preferring `message` and otherwise deriving it from `kind`.
+ * Returns null for anything that is not a plain data object so the caller keeps
+ * the safe fallback.
+ */
+function getPlainDataErrorMessage(error: object): string | null {
+  if (!isPlainDataObject(error)) {
+    return null;
+  }
+  const message = readOwnStringData(error, "message");
+  if (message !== null) {
+    return message;
+  }
+  const kind = readOwnStringData(error, "kind");
+  if (kind !== null) {
+    return humanizeErrorKind(kind);
+  }
+  return null;
+}
+
+export function getSafeErrorMessage(
+  error: unknown,
+  fallback = "The operation failed.",
+): string {
+  if (typeof error === "string") {
+    return error.trim() || fallback;
+  }
+
+  if (
+    (typeof error === "object" && error !== null) ||
+    typeof error === "function"
+  ) {
+    // Trusted, self-normalized command errors are recorded by exact identity;
+    // this WeakMap channel cannot invoke Proxy traps.
+    const trusted = normalizedCommandErrorMessages.get(error as Error);
+    if (trusted !== undefined) {
+      return trusted;
+    }
+
+    // Serialized Rust command errors arrive as plain data objects. Surface their
+    // precise reason while keeping the hostile-Proxy protection intact: only
+    // plain-prototype objects are inspected, no getter is ever invoked, and a
+    // forged descriptor value is rejected. Class instances, functions, Proxies,
+    // and accessor-only objects fall through to the safe fallback.
+    if (typeof error === "object") {
+      const plainMessage = getPlainDataErrorMessage(error);
+      if (plainMessage !== null) {
+        return plainMessage;
+      }
+    }
+
+    return fallback;
+  }
+
+  return fallback;
+}
+
+function normalizeCommandInvokeError(
+  commandName: string,
+  error: unknown,
+): Error {
+  const message = getSafeErrorMessage(
+    error,
+    `Command '${commandName}' failed.`,
+  );
+  const missingCommandPattern = new RegExp(
+    `command\\s+${commandName}\\s+not found`,
+    "i",
+  );
+
+  let normalizedMessage = message;
   if (missingCommandPattern.test(message)) {
-    return new Error(
-      `The running desktop backend does not expose '${commandName}'. Restart CMTrace Open so the frontend and Tauri backend are on the same build.`
-    );
+    normalizedMessage = `The running desktop backend does not expose '${commandName}'. Restart CMTrace Open so the frontend and Tauri backend are on the same build.`;
   }
 
-  return error instanceof Error ? error : new Error(message);
+  const normalizedError = new Error(normalizedMessage);
+  normalizedCommandErrorMessages.set(normalizedError, normalizedMessage);
+  return normalizedError;
 }
 
-async function invokeCommand<T>(commandName: string, args?: Record<string, unknown>): Promise<T> {
+async function invokeCommand<T>(
+  commandName: string,
+  args?: Record<string, unknown>,
+): Promise<T> {
   try {
     return await invoke<T>(commandName, args);
   } catch (error) {
@@ -78,20 +228,24 @@ export async function parseFilesBatch(paths: string[]): Promise<ParseResult[]> {
   return invokeCommand<ParseResult[]>("parse_files_batch", { paths });
 }
 
-export async function listLogFolder(path: string): Promise<FolderListingResult> {
+export async function listLogFolder(
+  path: string,
+): Promise<FolderListingResult> {
   return invokeCommand<FolderListingResult>("list_log_folder", { path });
 }
 
 export async function inspectEvidenceBundle(
-  path: string
+  path: string,
 ): Promise<EvidenceBundleDetails> {
-  return invokeCommand<EvidenceBundleDetails>("inspect_evidence_bundle", { path });
+  return invokeCommand<EvidenceBundleDetails>("inspect_evidence_bundle", {
+    path,
+  });
 }
 
 export async function inspectEvidenceArtifact(
   path: string,
   intakeKind: EvidenceArtifactIntakeKind,
-  originPath?: string | null
+  originPath?: string | null,
 ): Promise<EvidenceArtifactPreview> {
   return invokeCommand<EvidenceArtifactPreview>("inspect_evidence_artifact", {
     path,
@@ -100,7 +254,9 @@ export async function inspectEvidenceArtifact(
   });
 }
 
-export async function parseRegistryFile(path: string): Promise<RegistryParseResult> {
+export async function parseRegistryFile(
+  path: string,
+): Promise<RegistryParseResult> {
   return invokeCommand<RegistryParseResult>("parse_registry_file", { path });
 }
 
@@ -108,7 +264,9 @@ export async function getKnownLogSources(): Promise<KnownSourceMetadata[]> {
   return invokeCommand<KnownSourceMetadata[]>("get_known_log_sources");
 }
 
-export async function openLogSourceFile(source: LogSource): Promise<ParseResult> {
+export async function openLogSourceFile(
+  source: LogSource,
+): Promise<ParseResult> {
   if (source.kind === "file") {
     return openLogFile(source.path);
   }
@@ -118,12 +276,12 @@ export async function openLogSourceFile(source: LogSource): Promise<ParseResult>
   }
 
   throw new Error(
-    `Source kind '${source.kind}' does not resolve to a single file path.`
+    `Source kind '${source.kind}' does not resolve to a single file path.`,
   );
 }
 
 export async function listLogSourceFolder(
-  source: LogSource
+  source: LogSource,
 ): Promise<FolderListingResult> {
   if (source.kind === "folder") {
     return listLogFolder(source.path);
@@ -134,18 +292,20 @@ export async function listLogSourceFolder(
   }
 
   throw new Error(
-    `Source kind '${source.kind}' does not resolve to a folder path.`
+    `Source kind '${source.kind}' does not resolve to a folder path.`,
   );
 }
 
 export async function openLogFolderAggregate(
-  path: string
+  path: string,
 ): Promise<AggregateParseResult> {
-  return invokeCommand<AggregateParseResult>("open_log_folder_aggregate", { path });
+  return invokeCommand<AggregateParseResult>("open_log_folder_aggregate", {
+    path,
+  });
 }
 
 export async function openLogSourceFolderAggregate(
-  source: LogSource
+  source: LogSource,
 ): Promise<AggregateParseResult> {
   if (source.kind === "folder") {
     return openLogFolderAggregate(source.path);
@@ -156,7 +316,7 @@ export async function openLogSourceFolderAggregate(
   }
 
   throw new Error(
-    `Source kind '${source.kind}' does not resolve to a folder path.`
+    `Source kind '${source.kind}' does not resolve to a folder path.`,
   );
 }
 
@@ -165,9 +325,15 @@ export async function startTail(
   format: LogFormat,
   byteOffset: number,
   nextId: number,
-  nextLine: number
+  nextLine: number,
 ): Promise<void> {
-  return invokeCommand<void>("start_tail", { path, format, byteOffset, nextId, nextLine });
+  return invokeCommand<void>("start_tail", {
+    path,
+    format,
+    byteOffset,
+    nextId,
+    nextLine,
+  });
 }
 
 export async function stopTail(path: string): Promise<void> {
@@ -185,7 +351,7 @@ export async function resumeTail(path: string): Promise<void> {
 export async function analyzeIntuneLogs(
   path: string,
   requestId: string,
-  options?: AnalyzeIntuneLogsOptions & { graphApiEnabled?: boolean }
+  options?: AnalyzeIntuneLogsOptions & { graphApiEnabled?: boolean },
 ): Promise<IntuneAnalysisResult> {
   return invokeCommand<IntuneAnalysisResult>("analyze_intune_logs", {
     path,
@@ -198,7 +364,7 @@ export async function analyzeIntuneLogs(
 export async function analyzeSysmonLogs(
   path: string,
   requestId: string,
-  options?: { includeLiveEventLogs?: boolean }
+  options?: { includeLiveEventLogs?: boolean },
 ): Promise<SysmonAnalysisResult> {
   return invokeCommand<SysmonAnalysisResult>("analyze_sysmon_logs", {
     path,
@@ -209,7 +375,7 @@ export async function analyzeSysmonLogs(
 
 export async function analyzeDsregcmd(
   input: string,
-  bundlePath?: string | null
+  bundlePath?: string | null,
 ): Promise<DsregcmdAnalysisResult> {
   return invokeCommand<DsregcmdAnalysisResult>("analyze_dsregcmd", {
     input,
@@ -222,21 +388,23 @@ export async function captureDsregcmd(): Promise<DsregcmdCaptureResult> {
 }
 
 export async function inspectPathKind(
-  path: string
+  path: string,
 ): Promise<"file" | "folder" | "unknown"> {
-  return invokeCommand<"file" | "folder" | "unknown">("inspect_path_kind", { path });
+  return invokeCommand<"file" | "folder" | "unknown">("inspect_path_kind", {
+    path,
+  });
 }
 
 export async function writeTextOutputFile(
   path: string,
-  contents: string
+  contents: string,
 ): Promise<void> {
   return invokeCommand<void>("write_text_output_file", { path, contents });
 }
 
 export async function loadDsregcmdSource(
   kind: "file" | "folder",
-  path: string
+  path: string,
 ): Promise<DsregcmdResolvedSource> {
   return invokeCommand<DsregcmdResolvedSource>("load_dsregcmd_source", {
     kind,
@@ -246,6 +414,10 @@ export async function loadDsregcmdSource(
 
 export async function getInitialFilePaths(): Promise<string[]> {
   return invokeCommand<string[]>("get_initial_file_paths");
+}
+
+export async function getInitialWorkspace(): Promise<WorkspaceId | null> {
+  return invokeCommand<WorkspaceId | null>("get_initial_workspace");
 }
 
 export async function getAvailableWorkspaces(): Promise<WorkspaceId[]> {
@@ -300,15 +472,20 @@ export async function collectDnsDhcpFromDomain(
   outputRoot?: string,
   servers?: string[],
 ): Promise<DnsDhcpCollectionResult> {
-  return invokeCommand<DnsDhcpCollectionResult>("collect_dns_dhcp_from_domain", {
-    requestId,
-    outputRoot: outputRoot ?? null,
-    servers: servers ?? null,
-  });
+  return invokeCommand<DnsDhcpCollectionResult>(
+    "collect_dns_dhcp_from_domain",
+    {
+      requestId,
+      outputRoot: outputRoot ?? null,
+      servers: servers ?? null,
+    },
+  );
 }
 
 export async function getFileAssociationPromptStatus(): Promise<FileAssociationPromptStatus> {
-  return invokeCommand<FileAssociationPromptStatus>("get_file_association_prompt_status");
+  return invokeCommand<FileAssociationPromptStatus>(
+    "get_file_association_prompt_status",
+  );
 }
 
 export async function associateLogFilesWithApp(): Promise<void> {
@@ -316,13 +493,17 @@ export async function associateLogFilesWithApp(): Promise<void> {
 }
 
 export async function setFileAssociationPromptSuppressed(
-  suppressed: boolean
+  suppressed: boolean,
 ): Promise<void> {
-  return invokeCommand<void>("set_file_association_prompt_suppressed", { suppressed });
+  return invokeCommand<void>("set_file_association_prompt_suppressed", {
+    suppressed,
+  });
 }
 
 export async function getSystemDateTimePreferences(): Promise<SystemDateTimePreferences> {
-  return invokeCommand<SystemDateTimePreferences>("get_system_date_time_preferences");
+  return invokeCommand<SystemDateTimePreferences>(
+    "get_system_date_time_preferences",
+  );
 }
 
 // --- Diagnostics Collection ---
@@ -356,13 +537,102 @@ export async function collectDiagnostics(
   });
 }
 
+// --- ESP Diagnostics ---
+
+export async function getEspElevationState(): Promise<EspElevationState> {
+  return invokeCommand<EspElevationState>("get_esp_elevation_state");
+}
+
+export async function analyzeEspEvidence(
+  path: string,
+  requestId: string,
+): Promise<EspDiagnosticsSnapshot> {
+  return invokeCommand<EspDiagnosticsSnapshot>("analyze_esp_evidence", {
+    path,
+    requestId,
+  });
+}
+
+export async function startEspDiagnosticsSession(
+  requestId: string,
+): Promise<EspSessionEnvelope> {
+  return invokeCommand<EspSessionEnvelope>("start_esp_diagnostics_session", {
+    requestId,
+  });
+}
+
+export async function getEspDiagnosticsSession(
+  sessionId: string,
+): Promise<EspSessionEnvelope> {
+  return invokeCommand<EspSessionEnvelope>("get_esp_diagnostics_session", {
+    sessionId,
+  });
+}
+
+export async function stopEspDiagnosticsSession(
+  sessionId: string,
+): Promise<void> {
+  return invokeCommand<void>("stop_esp_diagnostics_session", { sessionId });
+}
+
+export async function restartEspAsAdministrator(): Promise<EspRelaunchResult> {
+  return invokeCommand<EspRelaunchResult>("restart_esp_as_administrator");
+}
+
+export async function graphFetchEspDiagnostics(
+  request: EspGraphRequest,
+): Promise<EspGraphOverlay> {
+  return invokeCommand<EspGraphOverlay>("graph_fetch_esp_diagnostics", {
+    request,
+  });
+}
+
+export async function espFlipAppInstalled(
+  appId: string,
+): Promise<EspAppFlipResult> {
+  return invokeCommand<EspAppFlipResult>("esp_flip_app_installed", { appId });
+}
+
+export async function espRestoreAppState(
+  backup: EspAppFlipBackup,
+): Promise<void> {
+  return invokeCommand<void>("esp_restore_app_state", { backup });
+}
+
+export async function graphCancelEspDiagnostics(
+  requestId: string,
+): Promise<void> {
+  return invokeCommand<void>("graph_cancel_esp_diagnostics", { requestId });
+}
+
 // --- Graph API (Windows only, opt-in) ---
+
+export interface GraphAuthCapabilities {
+  managedDevices: boolean;
+  serviceConfig: boolean;
+  apps: boolean;
+  configuration: boolean;
+  scripts: boolean;
+}
 
 export interface GraphAuthStatus {
   isAuthenticated: boolean;
   userPrincipalName: string | null;
   tenantId: string | null;
+  grantedScopes: string[];
+  missingScopes: string[];
+  expiresAt: number | null;
+  capabilities: GraphAuthCapabilities;
   error: string | null;
+}
+
+export type GraphPermissionUpgradeOutcome =
+  "upgraded" | "unchanged" | "cancelled" | "denied" | "failed" | "stale";
+
+export interface GraphPermissionUpgradeResult {
+  outcome: GraphPermissionUpgradeOutcome;
+  status: GraphAuthStatus;
+  message: string | null;
 }
 
 export interface GraphAppInfo {
@@ -382,6 +652,12 @@ export async function graphAuthenticate(): Promise<GraphAuthStatus> {
   return invokeCommand<GraphAuthStatus>("graph_authenticate");
 }
 
+export async function graphRequestMissingPermissions(): Promise<GraphPermissionUpgradeResult> {
+  return invokeCommand<GraphPermissionUpgradeResult>(
+    "graph_request_missing_permissions",
+  );
+}
+
 export async function graphGetAuthStatus(): Promise<GraphAuthStatus> {
   return invokeCommand<GraphAuthStatus>("graph_get_auth_status");
 }
@@ -390,7 +666,9 @@ export async function graphSignOut(): Promise<void> {
   return invokeCommand<void>("graph_sign_out");
 }
 
-export async function graphResolveGuids(guids: string[]): Promise<GraphResolutionResult> {
+export async function graphResolveGuids(
+  guids: string[],
+): Promise<GraphResolutionResult> {
   return invokeCommand<GraphResolutionResult>("graph_resolve_guids", { guids });
 }
 
@@ -431,18 +709,26 @@ export async function macosListPackages(): Promise<MacosPackagesResult> {
   return invokeCommand<MacosPackagesResult>("macos_list_packages");
 }
 
-export async function macosGetPackageInfo(packageId: string): Promise<MacosPackageInfo> {
-  return invokeCommand<MacosPackageInfo>("macos_get_package_info", { packageId });
+export async function macosGetPackageInfo(
+  packageId: string,
+): Promise<MacosPackageInfo> {
+  return invokeCommand<MacosPackageInfo>("macos_get_package_info", {
+    packageId,
+  });
 }
 
-export async function macosGetPackageFiles(packageId: string): Promise<MacosPackageFiles> {
-  return invokeCommand<MacosPackageFiles>("macos_get_package_files", { packageId });
+export async function macosGetPackageFiles(
+  packageId: string,
+): Promise<MacosPackageFiles> {
+  return invokeCommand<MacosPackageFiles>("macos_get_package_files", {
+    packageId,
+  });
 }
 
 export async function macosQueryUnifiedLog(
   presetId: string,
   timeRangeMinutes: number,
-  resultCap: number
+  resultCap: number,
 ): Promise<MacosUnifiedLogResult> {
   const now = new Date();
   const start = new Date(now.getTime() - timeRangeMinutes * 60 * 1000);
@@ -461,7 +747,7 @@ export async function macosQueryUnifiedLog(
 import type { SecureBootAnalysisResult } from "../workspaces/secureboot/types";
 
 export async function analyzeSecureBoot(
-  path?: string | null
+  path?: string | null,
 ): Promise<SecureBootAnalysisResult> {
   return invokeCommand<SecureBootAnalysisResult>("analyze_secureboot", {
     path: path ?? null,
@@ -473,12 +759,15 @@ export async function rescanSecureBoot(): Promise<SecureBootAnalysisResult> {
 }
 
 export async function runSecureBootDetection(): Promise<SecureBootAnalysisResult> {
-  return invokeCommand<SecureBootAnalysisResult>("run_secureboot_detection", {});
+  return invokeCommand<SecureBootAnalysisResult>(
+    "run_secureboot_detection",
+    {},
+  );
 }
 
 export async function runSecureBootRemediation(): Promise<SecureBootAnalysisResult> {
   return invokeCommand<SecureBootAnalysisResult>(
     "run_secureboot_remediation",
-    {}
+    {},
   );
 }

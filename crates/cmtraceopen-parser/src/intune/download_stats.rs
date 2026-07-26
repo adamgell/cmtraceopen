@@ -25,18 +25,21 @@ fn download_ignore_re() -> &'static Regex {
 fn size_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
-    Regex::new(r#"(?i)(?:content\s+)?size[:\s]+([\d.]+)\s*(bytes|kb|mb|gb)"#).unwrap()
-})
+        Regex::new(r#"(?i)(?:content\s+)?size[:\s]+([\d.]+)\s*(bytes|kb|mb|gb)"#).unwrap()
+    })
 }
 fn speed_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
-    Regex::new(r#"(?i)(?:speed|rate)[:\s]+([\d.]+)\s*(bytes?/s|kb/s|mb/s|bps|kbps|mbps)"#).unwrap()
-})
+        Regex::new(r#"(?i)(?:speed|rate)[:\s]+([\d.]+)\s*(bytes?/s|kb/s|mb/s|bps|kbps|mbps)"#)
+            .unwrap()
+    })
 }
 fn do_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
-    CELL.get_or_init(|| Regex::new(r#"(?i)(?:delivery\s+optimization|DO)[:\s]+([\d.]+)\s*%"#).unwrap())
+    CELL.get_or_init(|| {
+        Regex::new(r#"(?i)(?:delivery\s+optimization|DO)[:\s]+([\d.]+)\s*%"#).unwrap()
+    })
 }
 fn content_id_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
@@ -65,29 +68,29 @@ fn download_failed_re() -> &'static Regex {
 fn download_start_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
-    Regex::new(
+        Regex::new(
         r#"(?i)(?:starting|beginning|queued|requesting|resuming).*(?:download|content\s+download)"#,
     )
     .unwrap()
-})
+    })
 }
 fn download_progress_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
-    Regex::new(
-        r#"(?i)(?:bytes\s+downloaded|downloading|download\s+progress|delivery\s+optimization)"#,
-    )
-    .unwrap()
-})
+        Regex::new(
+            r#"(?i)(?:bytes\s+downloaded|downloading|download\s+progress|delivery\s+optimization)"#,
+        )
+        .unwrap()
+    })
 }
 fn download_stall_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
-    Regex::new(
+        Regex::new(
         r#"(?i)(?:stalled|not\s+progressing|no\s+progress|timed?\s*out|timeout|retry\s+exhausted)"#,
     )
     .unwrap()
-})
+    })
 }
 fn appworkload_retry_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
@@ -98,11 +101,11 @@ fn appworkload_retry_re() -> &'static Regex {
 fn duration_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
-    Regex::new(
+        Regex::new(
         r#"(?i)(?:duration|took|elapsed)[:\s]+([\d.]+)\s*(s(?:ec(?:ond)?s?)?|m(?:in(?:ute)?s?)?)"#,
     )
     .unwrap()
-})
+    })
 }
 
 pub fn extract_downloads(
@@ -220,7 +223,10 @@ pub fn extract_downloads(
                 do_percentage: partial.do_percentage.unwrap_or(0.0),
                 duration_secs: partial.duration_secs.unwrap_or(0.0),
                 success: false,
-                timestamp_epoch: ts.as_deref().and_then(parse_timestamp).map(|dt| dt.and_utc().timestamp_millis()),
+                timestamp_epoch: ts
+                    .as_deref()
+                    .and_then(parse_timestamp)
+                    .map(|dt| dt.and_utc().timestamp_millis()),
                 timestamp: ts,
             });
         }
@@ -491,7 +497,10 @@ fn finalize_download(
         do_percentage: partial.do_percentage.unwrap_or(0.0),
         duration_secs: partial.duration_secs.unwrap_or(0.0),
         success,
-        timestamp_epoch: ts.as_deref().and_then(parse_timestamp).map(|dt| dt.and_utc().timestamp_millis()),
+        timestamp_epoch: ts
+            .as_deref()
+            .and_then(parse_timestamp)
+            .map(|dt| dt.and_utc().timestamp_millis()),
         timestamp: ts,
     })
 }
@@ -606,7 +615,11 @@ mod tests {
             component: None,
         }];
 
-        let downloads = extract_downloads(&lines, "C:/Logs/IntuneManagementExtension.log", &empty_registry());
+        let downloads = extract_downloads(
+            &lines,
+            "C:/Logs/IntuneManagementExtension.log",
+            &empty_registry(),
+        );
         assert!(downloads.is_empty());
     }
 
@@ -673,7 +686,10 @@ mod tests {
 
         let downloads = extract_downloads(&lines, "C:/Logs/AppWorkload.log", &empty_registry());
         assert_eq!(downloads.len(), 1);
-        assert!(downloads[0].timestamp_epoch.is_some(), "timestamp_epoch should be populated");
+        assert!(
+            downloads[0].timestamp_epoch.is_some(),
+            "timestamp_epoch should be populated"
+        );
     }
 
     #[test]

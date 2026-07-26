@@ -483,7 +483,10 @@ mod tests {
             \"Path\"=hex(2):73,00,79,00,73,00,00,00\n";
 
         let result = parse_registry_content(content, "test.reg", 100);
-        assert_eq!(result.keys[0].values[0].kind, RegistryValueKind::ExpandString);
+        assert_eq!(
+            result.keys[0].values[0].kind,
+            RegistryValueKind::ExpandString
+        );
         assert_eq!(result.keys[0].values[0].data, "sys");
     }
 
@@ -500,7 +503,10 @@ mod tests {
         let result = parse_registry_content(content, "test.reg", 100);
         assert_eq!(result.total_keys, 2);
         assert!(result.keys[0].is_delete);
-        assert_eq!(result.keys[1].values[0].kind, RegistryValueKind::DeleteMarker);
+        assert_eq!(
+            result.keys[1].values[0].kind,
+            RegistryValueKind::DeleteMarker
+        );
     }
 
     #[test]
@@ -522,7 +528,10 @@ mod tests {
             \"Multi\"=hex(7):41,00,42,00,00,00,43,00,44,00,00,00,00,00\n";
 
         let result = parse_registry_content(content, "test.reg", 100);
-        assert_eq!(result.keys[0].values[0].kind, RegistryValueKind::MultiString);
+        assert_eq!(
+            result.keys[0].values[0].kind,
+            RegistryValueKind::MultiString
+        );
         assert_eq!(result.keys[0].values[0].data, "AB | CD");
     }
 

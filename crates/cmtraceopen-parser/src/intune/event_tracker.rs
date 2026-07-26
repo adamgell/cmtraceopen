@@ -33,8 +33,11 @@ fn win32_guid_re() -> &'static Regex {
 fn for_app_guid_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
-    Regex::new(r#"(?i)for\s+app\s+([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})"#).unwrap()
-})
+        Regex::new(
+            r#"(?i)for\s+app\s+([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})"#,
+        )
+        .unwrap()
+    })
 }
 fn winget_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
@@ -125,20 +128,14 @@ fn appworkload_success_re() -> &'static Regex {
 fn sidecar_script_start_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
-    Regex::new(
-        r#"(?i)start\s+detectionmanager\s+sidecarscriptdetectionmanager"#,
-    )
-    .unwrap()
-})
+        Regex::new(r#"(?i)start\s+detectionmanager\s+sidecarscriptdetectionmanager"#).unwrap()
+    })
 }
 fn sidecar_script_complete_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
-    Regex::new(
-        r#"(?i)completed\s+detectionmanager\s+sidecarscriptdetectionmanager"#,
-    )
-    .unwrap()
-})
+        Regex::new(r#"(?i)completed\s+detectionmanager\s+sidecarscriptdetectionmanager"#).unwrap()
+    })
 }
 fn sidecar_script_mid_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
@@ -151,9 +148,7 @@ fn sidecar_script_mid_re() -> &'static Regex {
 }
 fn sidecar_exitcode_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
-    CELL.get_or_init(|| {
-    Regex::new(r#"(?i)powershell\s+exitcode:\s*(\d+)"#).unwrap()
-})
+    CELL.get_or_init(|| Regex::new(r#"(?i)powershell\s+exitcode:\s*(\d+)"#).unwrap())
 }
 fn policy_eval_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
@@ -570,9 +565,8 @@ fn extract_appworkload_event(
     }
 
     // Determine event type from flags
-    let is_sidecar = flags.sidecar_script_start
-        || flags.sidecar_script_complete
-        || flags.sidecar_script_mid;
+    let is_sidecar =
+        flags.sidecar_script_start || flags.sidecar_script_complete || flags.sidecar_script_mid;
 
     let event_type = if flags.winget_token || flags.winget {
         IntuneEventType::WinGetApp

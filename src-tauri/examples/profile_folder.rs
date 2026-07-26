@@ -60,9 +60,15 @@ fn main() {
     }
 
     println!("\n---");
-    println!("Total: {total_entries} entries, {:.1} MB", total_bytes as f64 / 1024.0 / 1024.0);
+    println!(
+        "Total: {total_entries} entries, {:.1} MB",
+        total_bytes as f64 / 1024.0 / 1024.0
+    );
     println!("Parse time: {total_parse_ms:.0} ms");
-    println!("Throughput: {:.0} MB/s", (total_bytes as f64 / 1024.0 / 1024.0) / (total_parse_ms / 1000.0));
+    println!(
+        "Throughput: {:.0} MB/s",
+        (total_bytes as f64 / 1024.0 / 1024.0) / (total_parse_ms / 1000.0)
+    );
 
     // Now test serialization overhead
     println!("\n--- Serialization overhead ---");
@@ -75,9 +81,7 @@ fn main() {
     let ser_ms = start.elapsed().as_secs_f64() * 1000.0;
     let json_mb = json.len() as f64 / 1024.0 / 1024.0;
 
-    println!(
-        "Serialize {entry_count} entries: {ser_ms:.1} ms, {json_mb:.1} MB JSON"
-    );
+    println!("Serialize {entry_count} entries: {ser_ms:.1} ms, {json_mb:.1} MB JSON");
 
     let start = Instant::now();
     let _: serde_json::Value = serde_json::from_str(&json).unwrap();

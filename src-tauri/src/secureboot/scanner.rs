@@ -48,7 +48,10 @@ fn read_registry(state: &mut SecureBootScanState) {
         r"SYSTEM\CurrentControlSet\Control\SecureBoot\State",
         KEY_READ,
     ) {
-        state.secure_boot_enabled = key.get_value::<u32, _>("UEFISecureBootEnabled").ok().map(|v| v != 0);
+        state.secure_boot_enabled = key
+            .get_value::<u32, _>("UEFISecureBootEnabled")
+            .ok()
+            .map(|v| v != 0);
     }
 
     // --- HKLM\SYSTEM\CurrentControlSet\Control\Secureboot ----------------------
@@ -63,9 +66,7 @@ fn read_registry(state: &mut SecureBootScanState) {
     // --- HKLM\...\SecureBoot\Servicing ------------------------------------------
     let servicing_key_path = r"SYSTEM\CurrentControlSet\Control\SecureBoot\Servicing";
     if let Ok(key) = hklm.open_subkey_with_flags(servicing_key_path, KEY_READ) {
-        state.uefi_ca2023_capable = key
-            .get_value::<u32, _>("WindowsUEFICA2023Capable")
-            .ok();
+        state.uefi_ca2023_capable = key.get_value::<u32, _>("WindowsUEFICA2023Capable").ok();
     }
 
     // --- HKLM\...\SecureBoot\Servicing\DeviceAttributes -------------------------
@@ -96,9 +97,7 @@ fn read_registry(state: &mut SecureBootScanState) {
     }
 
     // --- HKLM\SOFTWARE\Mindcore\Secureboot ---------------------------------------
-    if let Ok(key) =
-        hklm.open_subkey_with_flags(r"SOFTWARE\Mindcore\Secureboot", KEY_READ)
-    {
+    if let Ok(key) = hklm.open_subkey_with_flags(r"SOFTWARE\Mindcore\Secureboot", KEY_READ) {
         state.managed_opt_in_date = key.get_value::<String, _>("ManagedOptInDate").ok();
     }
 
@@ -271,8 +270,9 @@ fn run_powershell_checks(state: &mut SecureBootScanState) {
         state.scheduled_task_exists = Some(true);
         if let Ok(val) = serde_json::from_str::<serde_json::Value>(&json) {
             state.scheduled_task_last_run = val["LastRunTime"].as_str().map(|s| s.to_string());
-            state.scheduled_task_last_result =
-                val["LastTaskResult"].as_u64().map(|n| format!("{:#010x}", n));
+            state.scheduled_task_last_result = val["LastTaskResult"]
+                .as_u64()
+                .map(|n| format!("{:#010x}", n));
         }
     } else {
         state.scheduled_task_exists = Some(false);
@@ -299,15 +299,12 @@ fn run_powershell_checks(state: &mut SecureBootScanState) {
                 state.bitlocker_protection_on = val["ProtectionStatus"]
                     .as_str()
                     .map(|s| s.eq_ignore_ascii_case("On"));
-                state.bitlocker_encryption_status = val["EncryptionPercentage"]
-                    .as_str()
-                    .map(|s| s.to_string());
+                state.bitlocker_encryption_status =
+                    val["EncryptionPercentage"].as_str().map(|s| s.to_string());
                 if let Some(protectors) = val["KeyProtector"].as_array() {
                     state.bitlocker_key_protectors = protectors
                         .iter()
-                        .filter_map(|p| {
-                            p["KeyProtectorType"].as_str().map(|s| s.to_string())
-                        })
+                        .filter_map(|p| p["KeyProtectorType"].as_str().map(|s| s.to_string()))
                         .collect();
                 }
             }
@@ -326,9 +323,9 @@ fn run_powershell_checks(state: &mut SecureBootScanState) {
     }
 
     // Device/computer name
-    if let Some(json) = run_powershell(
-        r#"[PSCustomObject]@{Name=$env:COMPUTERNAME}|ConvertTo-Json -Compress"#,
-    ) {
+    if let Some(json) =
+        run_powershell(r#"[PSCustomObject]@{Name=$env:COMPUTERNAME}|ConvertTo-Json -Compress"#)
+    {
         if let Ok(val) = serde_json::from_str::<serde_json::Value>(&json) {
             state.device_name = val["Name"].as_str().map(|s| s.to_string());
         }

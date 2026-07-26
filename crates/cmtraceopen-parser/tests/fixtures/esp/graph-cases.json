@@ -1,0 +1,11 @@
+{
+  "localWorkloads": [
+    { "rawIdentifier": "app-a", "rawStatus": 4, "evidenceId": "local-app-a", "timestamp": "2026-07-15T15:00:00Z" },
+    { "rawIdentifier": "app-b", "rawStatus": 3, "evidenceId": "local-app-b", "timestamp": "2026-07-15T15:00:01Z" },
+    { "rawIdentifier": "app-c", "rawStatus": 2, "evidenceId": "local-app-c", "timestamp": "2026-07-15T15:00:02Z" }
+  ],
+  "graphNames": [
+    { "recordId": "app-a", "displayName": "Contoso App A", "evidenceId": "graph-app-a", "timestamp": "2026-07-15T15:01:00Z", "remoteStatus": "succeeded" },
+    { "recordId": "app-b", "displayName": null, "evidenceId": "graph-app-b", "timestamp": "2026-07-15T15:01:01Z", "remoteStatus": "failed" }
+  ]
+}
