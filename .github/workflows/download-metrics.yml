@@ -39,13 +39,19 @@ jobs:
       - name: Open dedicated metrics worktree
         shell: bash
         run: |
+          # Kept OUTSIDE the repository: the collector owns its output directory
+          # and replaces reports/ within it, so it rejects any path at or below
+          # the repository root (see safeOutputDirectory in src/collect.ts).
+          worktree="${RUNNER_TEMP}/metrics-worktree"
+          git worktree prune
+          rm -rf "${worktree}"
           if git ls-remote --exit-code --heads origin refs/heads/download-metrics >/dev/null 2>&1; then
             git fetch origin refs/heads/download-metrics:refs/remotes/origin/download-metrics
-            git worktree add --detach metrics-worktree origin/download-metrics
+            git worktree add --detach "${worktree}" origin/download-metrics
           else
-            git worktree add --detach metrics-worktree HEAD
-            git -C metrics-worktree switch --orphan download-metrics
-            git -C metrics-worktree rm -rf --ignore-unmatch .
+            git worktree add --detach "${worktree}" HEAD
+            git -C "${worktree}" switch --orphan download-metrics
+            git -C "${worktree}" rm -rf --ignore-unmatch .
           fi
 
       - name: Collect cumulative asset counters
@@ -54,7 +60,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
-          metrics_root="${GITHUB_WORKSPACE}/metrics-worktree"
+          metrics_root="${RUNNER_TEMP}/metrics-worktree"
           args=(--output "${metrics_root}")
           if [[ -f "${metrics_root}/reports/latest-assets.json" ]]; then
             args+=(--previous "${metrics_root}/reports/latest-assets.json")
@@ -64,11 +70,12 @@ jobs:
       - name: Commit and update only download-metrics
         shell: bash
         run: |
-          git -C metrics-worktree config user.name "github-actions[bot]"
-          git -C metrics-worktree config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git -C metrics-worktree add -- snapshots reports
-          if git -C metrics-worktree diff --cached --quiet; then
+          worktree="${RUNNER_TEMP}/metrics-worktree"
+          git -C "${worktree}" config user.name "github-actions[bot]"
+          git -C "${worktree}" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git -C "${worktree}" add -- snapshots reports
+          if git -C "${worktree}" diff --cached --quiet; then
             exit 0
           fi
-          git -C metrics-worktree commit -m "chore: snapshot release download metrics"
-          git -C metrics-worktree push origin HEAD:download-metrics
+          git -C "${worktree}" commit -m "chore: snapshot release download metrics"
+          git -C "${worktree}" push origin HEAD:download-metrics

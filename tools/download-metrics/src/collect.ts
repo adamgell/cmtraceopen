@@ -100,11 +100,37 @@ async function safeOutputDirectory(
   const output = await canonicalPath(outputDirectory);
   const root = await canonicalPath(repositoryRoot);
   const gitDirectory = await canonicalPath(join(repositoryRoot, ".git"));
-  if (output === root || isAtOrBelow(output, gitDirectory)) {
+
+  // Checked before the repository-root rule so a .git that lives outside the
+  // working tree (symlinked, or a linked worktree's gitdir) still reports the
+  // reason that actually applies.
+  if (isAtOrBelow(output, gitDirectory)) {
     throw new Error(
-      "Unsafe output directory: repository root and .git paths are not allowed",
+      `Unsafe output directory: ${output} is inside the repository's .git directory`,
     );
   }
+
+  // publishAtomically replaces <output>/reports and removes its own staging and
+  // backup paths under <output>, so the collector must own that directory
+  // outright. Anything at or below the repository root is off limits, not just
+  // the root itself.
+  if (isAtOrBelow(output, root)) {
+    throw new Error(
+      `Unsafe output directory: ${output} is at or below the repository root ${root}; ` +
+        "use a dedicated directory outside the repository",
+    );
+  }
+
+  // The mirror case, which is the more destructive one: an ancestor of the
+  // repository (--output .., ~, or /) would put the collector's rm -rf of
+  // reports/ beside unrelated files.
+  if (isAtOrBelow(root, output)) {
+    throw new Error(
+      `Unsafe output directory: ${output} contains the repository root ${root}; ` +
+        "use a dedicated directory that does not enclose the repository",
+    );
+  }
+
   return output;
 }
 
