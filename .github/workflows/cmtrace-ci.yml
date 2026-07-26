@@ -86,13 +86,13 @@ jobs:
         run: cargo audit
 
   msrv:
-    name: Rust MSRV (1.77.2 / ${{ matrix.os }})
+    name: Rust MSRV (1.88 / ${{ matrix.os }})
     strategy:
       matrix:
         os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install system dependencies
         if: runner.os == 'Linux'
@@ -105,10 +105,10 @@ jobs:
             librsvg2-dev \
             patchelf
 
-      - name: Setup Rust 1.77.2
+      - name: Setup Rust 1.88
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
         with:
-          toolchain: "1.77.2"
+          toolchain: "1.88"
 
       - name: Cache Rust dependencies
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -118,11 +118,11 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             src-tauri/target/
-          key: ${{ runner.os }}-cargo-msrv-1.77.2-${{ hashFiles('Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-msrv-1.77.2-
+          key: ${{ runner.os }}-cargo-msrv-1.88-${{ hashFiles('Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-msrv-1.88-
 
       - name: Rust MSRV check
-        run: cargo +1.77.2 check --workspace --all-features --locked
+        run: cargo +1.88 check --workspace --all-features --locked
 
   frontend:
     name: TypeScript Check
@@ -157,7 +157,7 @@ jobs:
     name: ESP Diagnostics (Windows)
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable

@@ -7,7 +7,7 @@ description = "Open-source CMTrace log viewer with Intune diagnostics"
 authors = ["Adam Gell"]
 license = "MIT"
 edition = "2021"
-rust-version = "1.77.2"
+rust-version = "1.88"
 
 [lib]
 name = "app_lib"
