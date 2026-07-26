@@ -23,8 +23,9 @@
 #   gtk-rs 0.18 stack on Linux (gtk 0.18 requires glib ^0.18); it clears only
 #   once Tauri adopts gtk-rs 0.20.
 #
-# RUSTSEC-2026-0009 is not ignored. time 0.3.36 is patched locally with the
-# upstream recursion limit; see vendor/time-0.3.36/CMTRACEOPEN-BACKPORT.md and
+# RUSTSEC-2026-0009 is not ignored. time now resolves from crates.io at >= 0.3.47,
+# which carries the upstream recursion limit (and the GHSA-r6v5-fh4h-64xc stack
+# exhaustion fix). Its exact boundary is pinned by
 # src-tauri/tests/security_dependencies.rs.
 #
 # Keep this list in sync with the corresponding entries in src-tauri/deny.toml.

@@ -63,10 +63,11 @@ uuid = { version = "1", features = ["v4"] }
 anyhow = "1"
 zip = { version = "=2.4.2", default-features = false, features = ["deflate"], optional = true }
 cab = { version = "=0.6.0", optional = true }
-# This exact requirement makes Cargo select the security-backported path patch
-# in the workspace root. With the MSRV now at 1.88, upstream time 0.3.47 (which
-# carries the real RUSTSEC-2026-0009 fix) is reachable -- see the root Cargo.toml.
-time = { version = "=0.3.36", default-features = false, features = ["parsing"] }
+# Floor, not an exact pin: 0.3.47 carries the fixes for RUSTSEC-2026-0009 and
+# GHSA-r6v5-fh4h-64xc (stack exhaustion). Declared directly -- despite the code
+# using only std::time -- so the whole graph (cab, cookie, plist, simplelog,
+# tauri-plugin-log, tauri-plugin-updater) is held at or above the patched release.
+time = { version = "0.3.47", default-features = false, features = ["parsing"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
