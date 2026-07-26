@@ -3,7 +3,10 @@ import { describe, expect, it, vi } from "vitest";
 import { listReleases } from "../src/github";
 import type { GitHubRelease } from "../src/types";
 
-const release = (id: number): GitHubRelease => ({
+const release = (
+  id: number,
+  overrides: Partial<GitHubRelease> = {},
+): GitHubRelease => ({
   id,
   tag_name: `v${id}`,
   name: `Release ${id}`,
@@ -22,7 +25,17 @@ const release = (id: number): GitHubRelease => ({
       browser_download_url: `https://github.com/adamgell/cmtraceopen/releases/download/v${id}/asset-${id}.exe`,
     },
   ],
+  ...overrides,
 });
+
+const jsonPages = (pages: GitHubRelease[][]) =>
+  vi.fn(
+    async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      new Response(JSON.stringify(pages.shift()), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+  );
 
 describe("GitHub release pagination", () => {
   it("requests full pages until GitHub returns an empty page", async () => {
@@ -91,5 +104,59 @@ describe("GitHub release pagination", () => {
     await expect(listReleases(fetcher)).rejects.toThrow(
       "GitHub releases request failed on page 1: 403 Forbidden",
     );
+  });
+});
+
+describe("draft release exclusion", () => {
+  it("omits draft releases while keeping published ones", async () => {
+    // cmtrace-release.yml sets releaseDraft: true, so every stable release
+    // exists as a draft with its assets already uploaded until a human
+    // publishes it. An authenticated token sees those drafts.
+    const published = release(1);
+    const draft = release(2, { draft: true });
+
+    const result = await listReleases(jsonPages([[published, draft]]));
+
+    expect(result).toEqual([published]);
+  });
+
+  it("keeps prereleases, which are the published nightly channel", async () => {
+    const stable = release(1);
+    const nightly = release(2, { prerelease: true });
+
+    const result = await listReleases(jsonPages([[stable, nightly]]));
+
+    expect(result).toEqual([stable, nightly]);
+  });
+
+  it("does not let a draft on a full page terminate pagination early", async () => {
+    // Regression guard for the tempting one-line fix. Filtering before the
+    // short-page check makes this first page look like 99 < PER_PAGE, so the
+    // loop would return after one request and silently drop page two.
+    const first = Array.from({ length: 100 }, (_, index) =>
+      index === 50 ? release(index + 1, { draft: true }) : release(index + 1),
+    );
+    const second = [release(101)];
+    const fetcher = jsonPages([first, second]);
+
+    const result = await listReleases(fetcher);
+
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(result).toHaveLength(100);
+    expect(result.some((entry) => entry.draft)).toBe(false);
+    expect(result.at(-1)?.id).toBe(101);
+  });
+
+  it("keeps paginating when an entire full page is drafts", async () => {
+    const first = Array.from({ length: 100 }, (_, index) =>
+      release(index + 1, { draft: true }),
+    );
+    const second = [release(101)];
+    const fetcher = jsonPages([first, second]);
+
+    const result = await listReleases(fetcher);
+
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(result).toEqual([release(101)]);
   });
 });

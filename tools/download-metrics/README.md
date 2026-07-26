@@ -8,7 +8,14 @@ conversion measurements.
 ## Local use
 
 Use Node.js 22 or newer, install the locked dependencies, and choose a dedicated
-output directory outside this repository root and its `.git` directory:
+output directory that is fully outside this repository. The collector owns that
+directory — it replaces `reports/` inside it and removes its own staging and
+backup paths — so it rejects any path at or below the repository root (not just
+the root itself), any path inside `.git`, and any path that *contains* the
+repository, such as `..` or your home directory. Symlinks are resolved before
+the check, so a link pointing back into the repository is rejected too. Draft
+releases are excluded from every snapshot; prereleases (the nightly channel) are
+included.
 
 ```bash
 npm ci

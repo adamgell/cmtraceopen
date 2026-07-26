@@ -140,6 +140,52 @@ describe("deterministic download collection", () => {
     await expectMissing(join(root, "reports"));
   });
 
+  it("never records assets from a draft release", async () => {
+    // cmtrace-release.yml sets releaseDraft: true, so a stable release exists
+    // as a draft with its assets already uploaded until someone publishes it.
+    // The workflow's GITHUB_TOKEN makes those drafts visible to the API, so an
+    // unfiltered run attributes real download counts to an unpublished release.
+    const root = await temporaryRoot();
+    const output = join(root, "output");
+    const draftRelease: GitHubRelease = {
+      id: 16,
+      tag_name: "v1.5.0",
+      name: "CMTrace Open 1.5.0",
+      published_at: "2026-07-14T00:00:00Z",
+      prerelease: false,
+      draft: true,
+      assets: [asset(104, "CMTrace-Open_1.5.0_x64-setup.exe", 999)],
+    };
+
+    const result = await collectDownloads({
+      outputDirectory: output,
+      fetcher: fetcherFor([
+        ...releases({ portable: 12, setup: 8, manifest: 30 }),
+        draftRelease,
+      ]),
+      clock,
+      repositoryRoot: join(root, "source-repository"),
+    });
+
+    const snapshot = JSON.parse(
+      await readFile(result.paths.snapshot, "utf8"),
+    ) as Snapshot;
+    expect(snapshot.assets).toHaveLength(3);
+    expect(snapshot.assets.some((entry) => entry.releaseTag === "v1.5.0")).toBe(
+      false,
+    );
+    expect(snapshot.assets.some((entry) => entry.assetId === 104)).toBe(false);
+
+    const csv = await readFile(join(output, "reports/latest-assets.csv"), "utf8");
+    expect(csv).not.toContain("v1.5.0");
+
+    // The draft's 999 downloads must not inflate any delivery role.
+    const summary = JSON.parse(
+      await readFile(join(output, "reports/summary.json"), "utf8"),
+    );
+    expect(summary["mixed-manual-update"]).toEqual({ cumulative: 8, delta: 0 });
+  });
+
   it("uses the prior latest report by default and emits real deltas", async () => {
     const root = await temporaryRoot();
     const output = join(root, "output");
@@ -168,17 +214,27 @@ describe("deterministic download collection", () => {
 });
 
 describe("collector safety and failure behavior", () => {
-  it.each(["repository root", ".git", ".git descendant"])(
+  it.each<[string, (repositoryRoot: string) => string]>([
+    ["repository root", (repositoryRoot) => repositoryRoot],
+    [".git", (repositoryRoot) => join(repositoryRoot, ".git")],
+    [".git descendant", (repositoryRoot) => join(repositoryRoot, ".git", "objects")],
+    // The reported case in #264: a plain repository descendant was accepted.
+    ["repository descendant", (repositoryRoot) => join(repositoryRoot, "reports")],
+    [
+      "nested repository descendant",
+      (repositoryRoot) => join(repositoryRoot, "tools", "download-metrics", "out"),
+    ],
+    // publishAtomically would rm -rf <output>/reports beside the repository.
+    ["repository parent", (repositoryRoot) => dirname(repositoryRoot)],
+  ])(
     "rejects the %s as an output directory without writing",
-    async (kind) => {
+    async (_kind, toOutput) => {
       const root = await temporaryRoot();
       const repositoryRoot = join(root, "repository");
-      const output =
-        kind === "repository root"
-          ? repositoryRoot
-          : kind === ".git"
-            ? join(repositoryRoot, ".git")
-            : join(repositoryRoot, ".git", "objects");
+      // Created so the expectMissing assertions below are meaningful rather
+      // than passing vacuously against a directory that never existed.
+      await mkdir(repositoryRoot, { recursive: true });
+      const output = toOutput(repositoryRoot);
 
       await expect(
         collectDownloads({
@@ -188,9 +244,48 @@ describe("collector safety and failure behavior", () => {
           repositoryRoot,
         }),
       ).rejects.toThrow("Unsafe output directory");
-      await expectMissing(output);
+      await expectMissing(join(output, "reports"));
+      await expectMissing(join(repositoryRoot, "snapshots"));
     },
   );
+
+  it("rejects an output symlink that resolves to a repository descendant", async () => {
+    const root = await temporaryRoot();
+    const repositoryRoot = join(root, "repository");
+    const insideRepo = join(repositoryRoot, "metrics");
+    const outputLink = join(root, "descendant-link");
+    await mkdir(insideRepo, { recursive: true });
+    await symlink(insideRepo, outputLink);
+
+    await expect(
+      collectDownloads({
+        outputDirectory: outputLink,
+        fetcher: fetcherFor([]),
+        clock,
+        repositoryRoot,
+      }),
+    ).rejects.toThrow("is at or below the repository root");
+    await expectMissing(join(insideRepo, "reports"));
+  });
+
+  it("accepts a sibling directory whose name merely prefixes the repository", async () => {
+    // Guards the containment test against a startsWith-style regression:
+    // "<root>/repository-metrics" is not inside "<root>/repository".
+    const root = await temporaryRoot();
+    const repositoryRoot = join(root, "repository");
+    const output = join(root, "repository-metrics");
+    await mkdir(repositoryRoot, { recursive: true });
+
+    const result = await collectDownloads({
+      outputDirectory: output,
+      fetcher: fetcherFor(releases({ portable: 12, setup: 8, manifest: 30 })),
+      clock,
+      repositoryRoot,
+    });
+
+    expect(result.paths.snapshot.startsWith(output)).toBe(true);
+    await expectMissing(join(repositoryRoot, "reports"));
+  });
 
   it("rejects an output symlink that resolves inside .git", async () => {
     const root = await temporaryRoot();
@@ -348,14 +443,23 @@ describe("dedicated download-metrics workflow", () => {
     expect(workflow).toContain("npm run check");
     expect(workflow).toContain("metrics-worktree");
     expect(workflow).toContain(
-      "git -C metrics-worktree rm -rf --ignore-unmatch .",
+      'git -C "${worktree}" rm -rf --ignore-unmatch .',
     );
-    expect(workflow).toContain("git -C metrics-worktree add -- snapshots reports");
+    expect(workflow).toContain('git -C "${worktree}" add -- snapshots reports');
     expect(workflow).toContain(
-      "git -C metrics-worktree push origin HEAD:download-metrics",
+      'git -C "${worktree}" push origin HEAD:download-metrics',
     );
     expect(workflow).not.toMatch(/git push[^\n]*\bmain\b/);
     expect(workflow.match(/push origin/g)).toHaveLength(1);
+
+    // The worktree must stay outside the repository: safeOutputDirectory now
+    // rejects any output at or below the repository root, so siting it under
+    // the workspace would fail the nightly run. Matching the variable rather
+    // than a literal path catches ${GITHUB_WORKSPACE}, $GITHUB_WORKSPACE and
+    // ${{ github.workspace }} alike.
+    expect(workflow).toContain('worktree="${RUNNER_TEMP}/metrics-worktree"');
+    expect(workflow).toContain('metrics_root="${RUNNER_TEMP}/metrics-worktree"');
+    expect(workflow).not.toMatch(/GITHUB_WORKSPACE|github\.workspace/);
   });
 
   it("documents local use, baseline semantics, direct traffic, and inactive status", async () => {

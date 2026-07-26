@@ -36,7 +36,14 @@ export async function listReleases(
     const pageReleases = (await response.json()) as GitHubRelease[];
     releases.push(...pageReleases);
     if (pageReleases.length < PER_PAGE) {
-      return releases;
+      // Drafts are excluded here, at the single exit, rather than before the
+      // short-page check above. That check is the loop's ONLY termination
+      // signal, and it is a statement about the server's page size -- filtering
+      // first would silently repurpose it as "fewer than PER_PAGE survived my
+      // filter", so one draft on a full page would end pagination early and
+      // drop every later release. Prereleases are kept: they are the published
+      // nightly channel (see SnapshotAsset.prerelease and the CSV column).
+      return releases.filter((release) => !release.draft);
     }
   }
 }
