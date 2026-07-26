@@ -6,8 +6,8 @@
 # XML in production (src-tauri/src/intune/evtx_parser.rs). That use is NOT
 # test-only. The continued suppression is justified by the layered mitigations
 # applied before and around parsing, spelled out on the per-ID lines below.
-# RUSTSEC-2026-0009 is not ignored: the workspace path-patches time 0.3.36 with
-# the upstream recursion limit and tests its exact boundary.
+# RUSTSEC-2026-0009 is not ignored: time resolves from crates.io at >= 0.3.47,
+# which carries the upstream recursion limit, and its exact boundary is tested.
 ignore = [
     "RUSTSEC-2021-0153", # encoding: unmaintained (via evtx crate)
     "RUSTSEC-2024-0370", # proc-macro-error: unmaintained (via Tauri)
