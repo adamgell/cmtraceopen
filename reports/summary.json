@@ -1,15 +1,15 @@
 {
   "manual-only": {
-    "cumulative": 24419,
-    "delta": 69
+    "cumulative": 24540,
+    "delta": 121
   },
   "mixed-manual-update": {
-    "cumulative": 2080,
-    "delta": 6
+    "cumulative": 2085,
+    "delta": 5
   },
   "updater-only": {
-    "cumulative": 13039,
-    "delta": 8
+    "cumulative": 13042,
+    "delta": 3
   },
   "supporting-file": {
     "cumulative": 13,
