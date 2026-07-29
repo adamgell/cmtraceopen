@@ -862,7 +862,7 @@ fn is_reserved_windows_component(component: &str) -> bool {
             })
 }
 
-fn zip_entry_kind(entry: &zip::read::ZipFile<'_>) -> ArchiveEntryKind {
+fn zip_entry_kind<R: Read>(entry: &zip::read::ZipFile<'_, R>) -> ArchiveEntryKind {
     let unix_file_type = entry.unix_mode().map(|mode| mode & 0o170000);
     if unix_file_type == Some(0o120000) {
         return ArchiveEntryKind::Symlink;
