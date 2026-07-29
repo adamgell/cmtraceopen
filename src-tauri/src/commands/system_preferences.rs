@@ -109,9 +109,11 @@ pub fn set_always_on_top<R: tauri::Runtime>(
         window.set_always_on_top(enabled).map_err(|error| {
             crate::error::AppError::Internal(format!("failed to set always-on-top: {error}"))
         })?;
+        // Only mirror state the window actually accepted; a stale mirror would
+        // make the interactive-auth guard drop a pin that is not set, or leave
+        // one set that buries the broker dialog.
+        ALWAYS_ON_TOP.store(enabled, Ordering::Relaxed);
     }
-
-    ALWAYS_ON_TOP.store(enabled, Ordering::Relaxed);
 
     if let Some(menu) = app.menu() {
         if let Some(MenuItemKind::Check(item)) =

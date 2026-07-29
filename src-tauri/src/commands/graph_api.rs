@@ -44,7 +44,14 @@ impl InteractiveAuthWindow {
 
         let restore_always_on_top = crate::commands::system_preferences::always_on_top_enabled();
         if restore_always_on_top {
-            let _ = window.set_always_on_top(false);
+            // Failing to unpin is fatal for this flow: proceeding would raise
+            // the dialog behind a window the user cannot interact with, which
+            // is the very bug this guard exists to prevent.
+            window.set_always_on_top(false).map_err(|error| {
+                AppError::Internal(format!(
+                    "Failed to suspend always-on-top for the sign-in dialog: {error}"
+                ))
+            })?;
             crate::commands::system_preferences::remember_always_on_top(false);
         }
 
@@ -68,8 +75,10 @@ impl InteractiveAuthWindow {
 #[cfg(target_os = "windows")]
 impl Drop for InteractiveAuthWindow {
     fn drop(&mut self) {
-        if self.restore_always_on_top {
-            let _ = self.window.set_always_on_top(true);
+        // Drop cannot report failure, so keep the mirror on whatever the window
+        // ended up in: if re-pinning fails (a closed window, say), the pin is
+        // genuinely off and the mirror must say so.
+        if self.restore_always_on_top && self.window.set_always_on_top(true).is_ok() {
             crate::commands::system_preferences::remember_always_on_top(true);
         }
     }
