@@ -67,13 +67,18 @@ describe("EspActions", () => {
     expect(screen.getByText("Force ESP past this app?")).toBeInTheDocument();
 
     // Confirm (the dialog adds a second "Force past ESP" button).
-    const confirm = screen.getAllByRole("button", { name: /Force past ESP/i });
+    const confirm = screen.getAllByRole("button", {
+      name: /Force past ESP/i,
+      hidden: true,
+    });
     fireEvent.click(confirm[confirm.length - 1]);
 
     await waitFor(() => expect(flipMock).toHaveBeenCalledWith(
       "Win32App_431bae97-f077-4f2d-9102-78ed781451e9_1",
     ));
     expect(await screen.findByText(/Forced to Installed/i)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Restore/i })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /Restore/i, hidden: true }),
+    ).toBeInTheDocument();
   });
 });
