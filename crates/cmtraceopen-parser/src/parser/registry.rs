@@ -298,18 +298,20 @@ fn parse_value_line(
         });
     }
 
-    // Other hex(N): types — treat as binary
-    if full_data.starts_with("hex(") {
-        if let Some(colon_pos) = full_data.find("):") {
-            let hex_bytes_str = &full_data[colon_pos + 2..];
-            let bytes = parse_hex_bytes(hex_bytes_str)?;
-            return Ok(RegistryValue {
-                name,
-                kind: RegistryValueKind::Binary,
-                data: format_hex_display(&bytes),
-                line_number,
-            });
+    // Other syntactically valid hex(N) types retain their bytes as REG_NONE.
+    if let Some(typed_hex) = full_data.strip_prefix("hex(") {
+        let (type_tag, hex_bytes_str) =
+            typed_hex.split_once("):").ok_or(RegistryValueParseError)?;
+        if type_tag.is_empty() || !type_tag.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err(RegistryValueParseError);
         }
+        let bytes = parse_hex_bytes(hex_bytes_str)?;
+        return Ok(RegistryValue {
+            name,
+            kind: RegistryValueKind::None,
+            data: format_hex_display(&bytes),
+            line_number,
+        });
     }
 
     // Unrecognized format
@@ -637,5 +639,32 @@ mod tests {
         let result = parse_registry_content(content, "short-qword.reg", content.len() as u64);
         assert_eq!(result.total_values, 0);
         assert_eq!(result.parse_errors, 1);
+    }
+
+    #[test]
+    fn unsupported_typed_hex_is_preserved_as_none_when_valid() {
+        let content = concat!(
+            "Windows Registry Editor Version 5.00\n\n",
+            "[HKEY_LOCAL_MACHINE\\SOFTWARE\\CMTraceOpenTest]\n",
+            "\"ResourceList\"=hex(8):01,02,03,04\n",
+        );
+        let result = parse_registry_content(content, "typed-hex.reg", content.len() as u64);
+        assert_eq!(result.total_values, 1);
+        assert_eq!(result.parse_errors, 0);
+        assert_eq!(result.keys[0].values[0].kind, RegistryValueKind::None);
+        assert_eq!(result.keys[0].values[0].data, "01 02 03 04");
+    }
+
+    #[test]
+    fn unsupported_typed_hex_requires_a_valid_type_tag() {
+        let content = concat!(
+            "Windows Registry Editor Version 5.00\n\n",
+            "[HKEY_LOCAL_MACHINE\\SOFTWARE\\CMTraceOpenTest]\n",
+            "\"BadTag\"=hex(foo):01,02\n",
+            "\"MissingDelimiter\"=hex(8)01,02\n",
+        );
+        let result = parse_registry_content(content, "bad-tag.reg", content.len() as u64);
+        assert_eq!(result.total_values, 0);
+        assert_eq!(result.parse_errors, 2);
     }
 }
