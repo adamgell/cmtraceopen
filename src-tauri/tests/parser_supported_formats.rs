@@ -463,3 +463,104 @@ fn specialization_contract_ime() {
         .contains("Invoke-RestMethod -Method Post"));
     assert_eq!(result.entries[1].line_number, 2);
 }
+
+#[test]
+fn plain_ids_are_contiguous_across_blank_lines() {
+    let lines = ["first", "", "third"];
+    let (entries, errors) = app_lib::parser::plain::parse_lines(&lines, "plain.log");
+    assert_eq!(errors, 0);
+    assert_eq!(
+        entries.iter().map(|entry| entry.id).collect::<Vec<_>>(),
+        vec![0, 1]
+    );
+    assert_eq!(
+        entries
+            .iter()
+            .map(|entry| entry.line_number)
+            .collect::<Vec<_>>(),
+        vec![1, 3]
+    );
+}
+
+fn utf16_bytes(content: &str, little_endian: bool) -> Vec<u8> {
+    let mut bytes = if little_endian {
+        vec![0xFF, 0xFE]
+    } else {
+        vec![0xFE, 0xFF]
+    };
+    for unit in content.encode_utf16() {
+        let encoded = if little_endian {
+            unit.to_le_bytes()
+        } else {
+            unit.to_be_bytes()
+        };
+        bytes.extend_from_slice(&encoded);
+    }
+    bytes
+}
+
+#[test]
+fn encoding_boms_and_windows_1252_decode_at_file_boundary() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let cases = [
+        (
+            "utf8.log",
+            b"\xEF\xBB\xBFutf8 message".to_vec(),
+            "utf8 message",
+        ),
+        (
+            "utf16le.log",
+            utf16_bytes("little endian", true),
+            "little endian",
+        ),
+        (
+            "utf16be.log",
+            utf16_bytes("big endian", false),
+            "big endian",
+        ),
+        (
+            "windows1252.log",
+            b"caf\xE9 message".to_vec(),
+            "caf\u{e9} message",
+        ),
+    ];
+
+    for (name, bytes, expected_message) in cases {
+        let path = temp.path().join(name);
+        std::fs::write(&path, &bytes).expect("write encoded fixture");
+        let (result, selection) =
+            app_lib::parser::parse_file(&path.to_string_lossy()).expect("parse encoded fixture");
+        assert_eq!(selection.parser, ParserKind::Plain, "{name}");
+        assert_eq!(result.entries[0].message, expected_message, "{name}");
+        assert_eq!(result.file_size, bytes.len() as u64, "{name}");
+        assert_eq!(result.byte_offset, bytes.len() as u64, "{name}");
+    }
+}
+
+#[test]
+fn encoding_utf16le_registry_reaches_dedicated_parser_without_data_loss() {
+    let content = concat!(
+        "Windows Registry Editor Version 5.00\r\n\r\n",
+        "[HKEY_LOCAL_MACHINE\\SOFTWARE\\CMTraceOpenTest]\r\n",
+        "\"Enabled\"=dword:00000001\r\n",
+    );
+    let bytes = utf16_bytes(content, true);
+    let temp = tempfile::tempdir().expect("temp dir");
+    let path = temp.path().join("contract.reg");
+    std::fs::write(&path, &bytes).expect("write UTF-16LE Registry fixture");
+
+    let decoded =
+        app_lib::parser::read_file_content(&path.to_string_lossy()).expect("decode Registry file");
+    let result = app_lib::parser::registry::parse_registry_content(
+        &decoded,
+        &path.to_string_lossy(),
+        bytes.len() as u64,
+    );
+
+    assert_eq!(result.file_size, bytes.len() as u64);
+    assert_eq!(result.total_keys, 1);
+    assert_eq!(result.total_values, 1);
+    assert_eq!(result.parse_errors, 0);
+    assert_eq!(result.keys[0].values[0].name, "Enabled");
+    assert_eq!(result.keys[0].values[0].data, "0x00000001 (1)");
+}
