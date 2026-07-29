@@ -100,16 +100,16 @@ pub async fn graph_request_missing_permissions(
     app: tauri::AppHandle,
     state: tauri::State<'_, GraphAuthState>,
 ) -> CmdResult<GraphPermissionUpgradeResult> {
+    // The guard is held across the await and restores the pin on scope exit,
+    // including the `?` early return below.
     let window = InteractiveAuthWindow::acquire(&app)?;
     let hwnd = window.hwnd();
     let state = state.inner().clone();
-    let result = tauri::async_runtime::spawn_blocking(move || {
+    tauri::async_runtime::spawn_blocking(move || {
         graph_api::request_missing_permissions_on_initialized_worker(&state, hwnd)
     })
     .await
-    .map_err(|error| AppError::Internal(format!("GraphPermissionTaskFailed: {error}")));
-    drop(window);
-    result?
+    .map_err(|error| AppError::Internal(format!("GraphPermissionTaskFailed: {error}")))?
 }
 
 #[tauri::command]

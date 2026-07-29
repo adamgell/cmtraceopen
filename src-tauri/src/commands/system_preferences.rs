@@ -10,14 +10,14 @@ static ALWAYS_ON_TOP: AtomicBool = AtomicBool::new(false);
 
 /// Whether the main window is currently pinned always-on-top.
 #[cfg(target_os = "windows")]
-pub fn always_on_top_enabled() -> bool {
+pub(crate) fn always_on_top_enabled() -> bool {
     ALWAYS_ON_TOP.load(Ordering::Relaxed)
 }
 
 /// Record the always-on-top state without going through the command (used when
 /// a native dialog temporarily suspends and then restores the pin).
 #[cfg(target_os = "windows")]
-pub fn remember_always_on_top(enabled: bool) {
+pub(crate) fn remember_always_on_top(enabled: bool) {
     ALWAYS_ON_TOP.store(enabled, Ordering::Relaxed);
 }
 
