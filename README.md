@@ -94,7 +94,7 @@ Both editions read the same log formats and share the same viewer, so a log you 
 - **Severity color coding** — Errors (red), Warnings (yellow), Info (default)
 - **Find and Filter** — Ctrl+F search with F3 navigation; filter by message, component, thread, or timestamp
 - **Text highlighting** — configurable keyword highlighting
-- **Error code lookup** — 120+ embedded Windows, SCCM, and Intune error codes
+- **Error code lookup** — 700+ embedded Windows, Windows Update, BITS, ConfigMgr, Intune, MSI, and PSADT error codes
 - **Flexible input** — open files, folders, drag and drop, or use built-in source presets
 - **File association** — set as default `.log` file handler on Windows
 

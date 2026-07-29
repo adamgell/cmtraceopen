@@ -97,7 +97,7 @@ Communication uses Tauri's `invoke()` (frontend to backend) and `emit()` (backen
 | `parser/` | Log format auto-detection and parsing (CCM, simple, CBS, DISM, Panther, plain text) |
 | `intune/` | IME diagnostics pipeline: event tracking, timeline, download stats, EVTX parsing |
 | `dsregcmd/` | Device registration analysis: output parsing, diagnostic rules, registry hives |
-| `error_db/` | Embedded error code database (120+ Windows/SCCM/Intune codes) |
+| `error_db/` | Embedded error code database (700+ Windows/SCCM/Intune/MSI codes) |
 | `models/` | Shared types: `LogEntry`, `ParseResult`, `FilterCriteria` |
 | `state/` | `AppState` (Mutex-wrapped) — tracks open files, tail sessions |
 | `watcher/` | File watching and real-time tailing via `notify` crate |
