@@ -143,6 +143,20 @@ pub fn run() {
             app.handle()
                 .plugin(tauri_plugin_updater::Builder::new().build())?;
 
+            {
+                use tauri::Manager as _;
+
+                let config_dir = app
+                    .path()
+                    .app_config_dir()
+                    .unwrap_or_else(|_| std::path::PathBuf::from("."));
+
+                app.manage(commands::recent_entries::RecentEntriesState::load(
+                    config_dir,
+                    &commands::app_config::get_available_workspaces(),
+                ));
+            }
+
             let native_menu = menu::build_app_menu(app.handle())?;
             app.set_menu(native_menu)?;
 

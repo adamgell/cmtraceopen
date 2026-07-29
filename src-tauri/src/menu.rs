@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 use tauri::menu::{
@@ -8,6 +9,7 @@ use tauri::{AppHandle, Emitter, Runtime};
 
 use crate::commands::app_config::get_available_workspaces;
 use crate::commands::known_sources::{build_known_log_sources, KnownSourceGroupingMetadata};
+use crate::commands::recent_entries::{RecentEntriesState, RecentEntry};
 
 pub const MENU_EVENT_APP_ACTION: &str = "app-menu-action";
 
@@ -21,6 +23,8 @@ const MENU_ID_TOOLS: &str = "tools.menu";
 pub const MENU_ID_FILE_OPEN_LOG_FILE: &str = "file.open_log_file";
 pub const MENU_ID_FILE_OPEN_LOG_FOLDER: &str = "file.open_log_folder";
 pub const MENU_ID_FILE_KNOWN_SOURCES: &str = "file.known_sources";
+pub const MENU_ID_FILE_RECENT: &str = "file.recent";
+pub const MENU_ID_FILE_RECENT_CLEAR: &str = "file.recent.clear";
 pub const MENU_ID_FILE_NEW_TIMELINE: &str = "file.new_timeline";
 pub const MENU_ID_FILE_NEW_TIMELINE_FROM_FOLDER: &str = "file.new_timeline_from_folder";
 pub const MENU_ID_FILE_NEW_EMPTY_TIMELINE: &str = "file.new_empty_timeline";
@@ -54,6 +58,8 @@ pub const MENU_ID_HELP_CHECK_FOR_UPDATES: &str = "help.check_for_updates";
 pub const MENU_ID_HELP_ABOUT: &str = "help.about";
 
 const KNOWN_SOURCE_MENU_ID_PREFIX: &str = "known-source.";
+const RECENT_MENU_ID_PREFIX: &str = "recent.";
+const RECENT_UNAVAILABLE_MENU_ID: &str = "recent.unavailable";
 const WORKSPACE_MENU_ID_PREFIX: &str = "workspace.";
 const MENU_SEPARATOR: &str = "__separator__";
 const PREDEFINED_HIDE: &str = "__hide__";
@@ -82,6 +88,7 @@ const FILE_ORDER: &[&str] = &[
     MENU_ID_FILE_OPEN_LOG_FILE,
     MENU_ID_FILE_OPEN_LOG_FOLDER,
     MENU_ID_FILE_KNOWN_SOURCES,
+    MENU_ID_FILE_RECENT,
     MENU_SEPARATOR,
     MENU_ID_FILE_NEW_TIMELINE,
     MENU_SEPARATOR,
@@ -94,6 +101,7 @@ const FILE_ORDER_MAC: &[&str] = &[
     MENU_ID_FILE_OPEN_LOG_FILE,
     MENU_ID_FILE_OPEN_LOG_FOLDER,
     MENU_ID_FILE_KNOWN_SOURCES,
+    MENU_ID_FILE_RECENT,
     MENU_SEPARATOR,
     MENU_ID_FILE_NEW_TIMELINE,
     MENU_SEPARATOR,
@@ -568,6 +576,7 @@ fn build_file_menu<R: Runtime>(
     let open_file = normal_item(app, MENU_ID_FILE_OPEN_LOG_FILE, "Open File…", platform)?;
     let open_folder = normal_item(app, MENU_ID_FILE_OPEN_LOG_FOLDER, "Open Folder…", platform)?;
     let known_sources = build_known_sources_submenu(app)?;
+    let recent = build_recent_submenu(app, &recent_entries_for_menu(app))?;
 
     let new_timeline_from_folder = normal_item(
         app,
@@ -602,6 +611,7 @@ fn build_file_menu<R: Runtime>(
             MENU_ID_FILE_OPEN_LOG_FILE => submenu.append(&open_file)?,
             MENU_ID_FILE_OPEN_LOG_FOLDER => submenu.append(&open_folder)?,
             MENU_ID_FILE_KNOWN_SOURCES => submenu.append(&known_sources)?,
+            MENU_ID_FILE_RECENT => submenu.append(&recent)?,
             MENU_ID_FILE_NEW_TIMELINE => submenu.append(&new_timeline)?,
             MENU_ID_FILE_OPEN_SESSION => submenu.append(&open_session)?,
             MENU_ID_FILE_SAVE_SESSION => submenu.append(&save_session)?,
@@ -1223,6 +1233,94 @@ fn repair_workspace_checks<R: Runtime>(
     apply_menu_updates(&index, updates)
 }
 
+fn workspace_label(id: &str) -> &'static str {
+    workspace_descriptor(id)
+        .map(|descriptor| descriptor.label)
+        .unwrap_or("Unknown Workspace")
+}
+
+/// `{name} — {parent} ({Workspace})`. Native menu items carry no tooltip, so
+/// the parent folder is what disambiguates same-named logs across bundles.
+fn recent_entry_label(entry: &RecentEntry) -> String {
+    let path = Path::new(&entry.path);
+
+    let name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| entry.path.clone());
+
+    let parent = path
+        .parent()
+        .and_then(|parent| parent.file_name())
+        .map(|parent| parent.to_string_lossy().into_owned())
+        .filter(|parent| !parent.is_empty());
+
+    let workspace = workspace_label(&entry.workspace);
+
+    match parent {
+        Some(parent) => format!("{name} — {parent} ({workspace})"),
+        None => format!("{name} ({workspace})"),
+    }
+}
+
+fn recent_entries_for_menu<R: Runtime>(app: &AppHandle<R>) -> Vec<RecentEntry> {
+    use tauri::Manager as _;
+
+    app.try_state::<RecentEntriesState>()
+        .map(|state| state.snapshot())
+        .unwrap_or_default()
+}
+
+fn recent_submenu_items<R: Runtime>(
+    app: &AppHandle<R>,
+    entries: &[RecentEntry],
+) -> tauri::Result<Vec<Box<dyn tauri::menu::IsMenuItem<R>>>> {
+    if entries.is_empty() {
+        let placeholder = MenuItem::with_id(
+            app,
+            RECENT_UNAVAILABLE_MENU_ID,
+            "No recent files",
+            false,
+            None::<&str>,
+        )?;
+        return Ok(vec![Box::new(placeholder)]);
+    }
+
+    let mut items: Vec<Box<dyn tauri::menu::IsMenuItem<R>>> = Vec::new();
+
+    for (index, entry) in entries.iter().enumerate() {
+        items.push(Box::new(MenuItem::with_id(
+            app,
+            format!("{RECENT_MENU_ID_PREFIX}{index}"),
+            recent_entry_label(entry),
+            true,
+            None::<&str>,
+        )?));
+    }
+
+    items.push(Box::new(PredefinedMenuItem::separator(app)?));
+    items.push(Box::new(MenuItem::with_id(
+        app,
+        MENU_ID_FILE_RECENT_CLEAR,
+        "Clear Recent",
+        true,
+        None::<&str>,
+    )?));
+
+    Ok(items)
+}
+
+fn build_recent_submenu<R: Runtime>(
+    app: &AppHandle<R>,
+    entries: &[RecentEntry],
+) -> tauri::Result<Submenu<R>> {
+    let items = recent_submenu_items(app, entries)?;
+    let refs: Vec<&dyn tauri::menu::IsMenuItem<R>> =
+        items.iter().map(|item| item.as_ref()).collect();
+
+    Submenu::with_id_and_items(app, MENU_ID_FILE_RECENT, "Recent", !entries.is_empty(), &refs)
+}
+
 /// A source entry extracted from the catalog for menu building.
 #[derive(Clone)]
 struct SourceMenuItem {
@@ -1471,6 +1569,7 @@ fn payload_for_menu_id(menu_id: &str) -> Option<AppMenuActionPayload> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands::recent_entries::RecentEntryKind;
 
     fn all_workspace_ids() -> Vec<&'static str> {
         WORKSPACE_DESCRIPTORS
@@ -1924,5 +2023,74 @@ mod tests {
         assert!(payload_for_menu_id("workspace.not-real").is_none());
         assert!(payload_for_menu_id(MENU_ID_FILE_KNOWN_SOURCES).is_none());
         assert!(payload_for_menu_id("not.a.menu.id").is_none());
+    }
+
+    #[test]
+    fn recent_submenu_appears_after_known_sources_on_every_platform() {
+        for order in [FILE_ORDER, FILE_ORDER_MAC] {
+            let known = order
+                .iter()
+                .position(|id| *id == MENU_ID_FILE_KNOWN_SOURCES)
+                .expect("known sources present");
+            let recent = order
+                .iter()
+                .position(|id| *id == MENU_ID_FILE_RECENT)
+                .expect("recent present");
+            assert_eq!(recent, known + 1);
+        }
+    }
+
+    #[test]
+    fn recent_label_includes_name_parent_and_workspace() {
+        let entry = RecentEntry {
+            path: "/evidence/IME/IntuneManagementExtension.log".to_string(),
+            kind: RecentEntryKind::File,
+            workspace: "intune".to_string(),
+            opened_at_unix_ms: 0,
+        };
+
+        assert_eq!(
+            recent_entry_label(&entry),
+            "IntuneManagementExtension.log — IME (Intune Diagnostics)"
+        );
+    }
+
+    #[test]
+    fn recent_label_for_folder_uses_folder_and_its_parent() {
+        let entry = RecentEntry {
+            path: "/evidence/bundle-01/IME".to_string(),
+            kind: RecentEntryKind::Folder,
+            workspace: "log".to_string(),
+            opened_at_unix_ms: 0,
+        };
+
+        assert_eq!(
+            recent_entry_label(&entry),
+            "IME — bundle-01 (Log Explorer)"
+        );
+    }
+
+    #[test]
+    fn recent_label_drops_parent_segment_when_there_is_no_parent() {
+        let entry = RecentEntry {
+            path: "/only.log".to_string(),
+            kind: RecentEntryKind::File,
+            workspace: "log".to_string(),
+            opened_at_unix_ms: 0,
+        };
+
+        assert_eq!(recent_entry_label(&entry), "only.log (Log Explorer)");
+    }
+
+    #[test]
+    fn recent_label_falls_back_when_the_workspace_is_unknown() {
+        let entry = RecentEntry {
+            path: "/a/b.log".to_string(),
+            kind: RecentEntryKind::File,
+            workspace: "not-a-workspace".to_string(),
+            opened_at_unix_ms: 0,
+        };
+
+        assert!(recent_entry_label(&entry).ends_with("(Unknown Workspace)"));
     }
 }
