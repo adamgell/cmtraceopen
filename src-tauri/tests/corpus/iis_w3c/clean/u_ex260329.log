@@ -1,0 +1,5 @@
+#Software: Microsoft Internet Information Services 10.0
+#Version: 1.0
+#Fields: date time s-ip cs-method cs-uri-stem cs-uri-query s-port cs-username c-ip cs(User-Agent) sc-status sc-substatus sc-win32-status time-taken
+2026-03-29 18:48:23 10.0.0.5 GET /default.htm - 443 - 203.0.113.10 Agent/1.0 200 0 0 12
+2026-03-29 18:48:24 10.0.0.5 POST /api/devices id=42 443 EXAMPLE\operator 203.0.113.11 Agent/1.1 404 7 2 35

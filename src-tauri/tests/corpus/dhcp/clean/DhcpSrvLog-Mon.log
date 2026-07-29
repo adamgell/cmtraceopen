@@ -1,0 +1,3 @@
+Microsoft DHCP Service Activity Log
+11,07/29/26,09:20:00,Renew,192.0.2.10,device.example.test,001122334455,,1,0,,,,0x00,client,,,,0
+31,07/29/26,09:20:01,DNS Update Failed,2001:db8::10,device-v6.example.test,001122334466,,2,0,6,,,,,,,,,9560
