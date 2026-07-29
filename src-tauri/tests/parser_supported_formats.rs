@@ -564,3 +564,34 @@ fn encoding_utf16le_registry_reaches_dedicated_parser_without_data_loss() {
     assert_eq!(result.keys[0].values[0].name, "Enabled");
     assert_eq!(result.keys[0].values[0].data, "0x00000001 (1)");
 }
+
+#[test]
+fn psadt_success_is_success_severity() {
+    let lines = [
+        "[2026-07-29 09:00:01.200] [Install] [Start-ADTMsiProcess] [Success] :: Installation complete",
+    ];
+    let (entries, errors) = app_lib::parser::psadt::parse_lines(&lines, "Deploy-Application.log");
+    assert_eq!(errors, 0);
+    assert_eq!(entries[0].severity, Severity::Success);
+}
+
+#[test]
+fn secureboot_success_is_success_severity() {
+    let lines = ["2026-07-29 09:50:01 [DETECT] [SUCCESS] Secure Boot is enabled"];
+    let (entries, errors) =
+        app_lib::parser::secureboot_log::parse_lines(&lines, "SecureBootCertificateUpdate.log");
+    assert_eq!(errors, 0);
+    assert_eq!(entries[0].severity, Severity::Success);
+}
+
+#[test]
+fn secureboot_invalid_timestamp_is_preserved_as_parse_error() {
+    let invalid = "2026-13-40 25:61:61 [DETECT] [INFO] impossible timestamp";
+    let (entries, errors) =
+        app_lib::parser::secureboot_log::parse_lines(&[invalid], "SecureBootCertificateUpdate.log");
+    assert_eq!(errors, 1);
+    assert_eq!(entries[0].message, invalid);
+    assert_eq!(entries[0].format, LogFormat::Plain);
+    assert!(entries[0].timestamp.is_none());
+    assert!(entries[0].timestamp_display.is_none());
+}
