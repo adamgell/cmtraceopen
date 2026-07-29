@@ -97,7 +97,7 @@ pub const MENU_ID_FILE_RECENT_CLEAR: &str = "file.recent.clear";
 const RECENT_MENU_ID_PREFIX: &str = "recent.";
 ```
 
-Individual entries use ids `recent.0` through `recent.9`.
+Individual entries use ids `recent.{index}.{hash}`, where `{hash}` is 8 lowercase hex chars of a `DefaultHasher` digest over the entry's normalized path and workspace. Position alone is not a safe key: a stale-but-in-range index would silently open a different file than the one clicked, which is reachable both from concurrent pushes and from `prune` shifting indices. The hash is recomputed at click time and compared before anything is emitted.
 
 `FILE_ORDER` and `FILE_ORDER_MAC` both gain `MENU_ID_FILE_RECENT` directly after `MENU_ID_FILE_KNOWN_SOURCES`, matching how `Open Known Source` is composed today.
 
@@ -106,7 +106,7 @@ Individual entries use ids `recent.0` through `recent.9`.
 - Empty list: a single disabled item `No recent files`, with the `Recent` submenu itself disabled. This mirrors the existing `known-source.unavailable` placeholder pattern.
 - Non-empty: one item per entry, then a separator, then `Clear Recent`.
 
-`rebuild_recent_submenu(app)` drains the live submenu using `Submenu::items()` and `Submenu::remove_at()`, then appends freshly built items.
+`rebuild_recent_submenu(app)` drains the live submenu with `while submenu.remove_at(0)?.is_some() {}`, then appends freshly built items. Note that Tauri wraps muda here: `tauri::menu::Submenu::remove_at` returns `Result<Option<MenuItemKind>>`, not muda's bare `Option`.
 
 The fixed-slot alternative — pre-creating ten items and updating their text through the existing `sync_app_menu_state` path — was rejected. muda 0.19.3 `MenuItem` exposes `set_text` and `set_enabled` but **no `set_visible`**, so unused slots would remain permanently visible as disabled placeholder rows.
 
@@ -117,14 +117,14 @@ The fixed-slot alternative — pre-creating ten items and updating their text th
 `{name} — {parent} ({Workspace})`, for example:
 
 ```
-IntuneManagementExtension.log — IME (Intune)
+IntuneManagementExtension.log — IME (Intune Diagnostics)
 ```
 
-Folders use the folder's own name and its parent. A path with no parent (a drive root) drops the `— parent` segment. The workspace label reuses the existing `native_label()` already used to build the Workspace menu.
+Folders use the folder's own name and its parent. A path with no parent (a drive root) drops the `— parent` segment. The workspace label comes from `WorkspaceDescriptor.label` (`Log Explorer`, `Intune Diagnostics`, …). It is **not** `WorkspaceGroup::native_label()`, which returns group names like `Analysis`.
 
 ### Stale-entry pruning
 
-Pruning runs on load and on every rebuild, **off the main thread**, before the main-thread hop.
+Pruning runs on load and on each push/clear, **off the main thread**, before the main-thread hop. It deliberately does not run inside the rebuild closure: that body executes on the main thread, where a `metadata()` call against a dead UNC share would stall the UI.
 
 For each entry, call `std::fs::metadata(path)`:
 
@@ -149,7 +149,7 @@ It is called **after a successful load**, never on attempt, so failed opens do n
 
 ### Reopening
 
-`handle_menu_event` resolves a `recent.<n>` id against the state and enriches the payload before emitting. `AppMenuActionPayload` gains two fields:
+`handle_menu_event` resolves a `recent.{index}.{hash}` id against the state, verifies the hash, and enriches the payload before emitting. On a hash mismatch or an out-of-range index it logs, re-queues a rebuild to repair the stale row, and returns without emitting. `AppMenuActionPayload` gains three fields:
 
 ```rust
 #[serde(skip_serializing_if = "Option::is_none")]
@@ -158,9 +158,9 @@ path: Option<String>,
 workspace: Option<String>,
 ```
 
-They are populated only for recent actions. A stale index (the list changed between menu build and click) logs a warning and no-ops.
+They are populated only for recent actions. A stale or mismatched id logs a warning, triggers a self-repairing rebuild, and no-ops.
 
-`payload_for_menu_id` stays a pure function: it maps `recent.<n>` to action `open_recent_entry` with `target_id = <n>`, and `handle_menu_event` fills in `path` and `workspace` from state. `file.recent.clear` maps to action `clear_recent_entries`.
+`payload_for_menu_id` stays a pure function: it maps `recent.{index}.{hash}` to action `open_recent_entry` with `target_id = {index}` (the bare index, so the wire contract carries no hash), and `handle_menu_event` fills in `path`, `workspace`, and `kind` from state. `file.recent.clear` maps to action `clear_recent_entries`. A malformed id fails closed — no payload, no emit.
 
 A new `open_recent_entry` case in `src/hooks/use-app-menu.ts` switches the workspace if it differs from the active one, then calls `openSourceForWorkspace` with the reconstructed `LogSource`. A `clear_recent_entries` case invokes the clear command.
 
@@ -179,7 +179,8 @@ User opens a path
   → run_on_main_thread: rebuild_recent_submenu
 
 User clicks File > Recent > entry
-  → handle_menu_event resolves recent.<n> → RecentEntry
+  → handle_menu_event parses recent.{index}.{hash}, verifies hash vs entries[index]
+  → on mismatch: log, re-queue rebuild, no emit
   → emit app-menu-action { action: "open_recent_entry", path, workspace }
   → use-app-menu: switchWorkspace if needed
   → openSourceForWorkspace({ kind, path }, "menu.recent", workspace)
@@ -214,7 +215,10 @@ User clicks File > Recent > entry
 - `push_recent_entry` rejects an unknown workspace string and leaves the list untouched.
 - Label formatting: file, folder, and a path with no parent.
 - `FILE_ORDER` and `FILE_ORDER_MAC` both contain `MENU_ID_FILE_RECENT` in the expected position.
-- `payload_for_menu_id("recent.3")` and `payload_for_menu_id("file.recent.clear")`.
+- `payload_for_menu_id` for an id built via `recent_menu_id(...)`, and for `file.recent.clear`.
+- `parse_recent_menu_id` rejects `recent.`, `recent.unavailable`, `recent.3` (no hash), and `recent..abc`.
+- `enrich_recent_payload` returns false on unparsable id, out-of-range index, and hash mismatch.
+- `payload_for_menu_id(MENU_ID_FILE_RECENT)` yields `None` (the container id is a prefix of `file.recent.clear`).
 
 ### Frontend
 

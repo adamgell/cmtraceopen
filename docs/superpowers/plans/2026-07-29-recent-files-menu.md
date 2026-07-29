@@ -1468,7 +1468,7 @@ Append these inside the `describe("useAppMenu", ...)` block:
 
     await emitMenuAction({
       action: "open_recent_entry",
-      menu_id: "recent.2",
+      menu_id: "recent.2.a1b2c3d4",
       category: "file",
       target_id: "2",
       path: "/evidence/IME/IntuneManagementExtension.log",
@@ -1491,7 +1491,7 @@ Append these inside the `describe("useAppMenu", ...)` block:
 
     await emitMenuAction({
       action: "open_recent_entry",
-      menu_id: "recent.2",
+      menu_id: "recent.2.a1b2c3d4",
       category: "file",
       target_id: "2",
     });
@@ -1513,7 +1513,7 @@ Append these inside the `describe("useAppMenu", ...)` block:
 
     await emitMenuAction({
       action: "open_recent_entry",
-      menu_id: "recent.0",
+      menu_id: "recent.0.a1b2c3d4",
       category: "file",
       target_id: "0",
       path: "/evidence/sysmon.evtx",
