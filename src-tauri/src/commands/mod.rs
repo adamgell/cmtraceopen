@@ -27,6 +27,7 @@ pub mod known_sources;
 pub mod macos_diag;
 pub mod markers;
 pub mod parsing;
+pub mod recent_entries;
 pub mod registry_ops;
 pub mod reveal;
 #[cfg(feature = "secureboot")]
