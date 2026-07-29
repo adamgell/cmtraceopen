@@ -112,12 +112,18 @@ pub fn parse_registry_content(
 
         // Value line — only valid inside a key
         if let Some(ref mut key) = current_key {
-            if let Some(value) = parse_value_line(trimmed, (i + 1) as u32, &lines, &mut i) {
-                total_values += 1;
-                key.values.push(value);
-            } else {
-                parse_errors += 1;
-                i += 1;
+            let start_index = i;
+            match parse_value_line(trimmed, (i + 1) as u32, &lines, &mut i) {
+                Ok(value) => {
+                    total_values += 1;
+                    key.values.push(value);
+                }
+                Err(_) => {
+                    parse_errors += 1;
+                    if i <= start_index {
+                        i = start_index + 1;
+                    }
+                }
             }
         } else {
             parse_errors += 1;
@@ -142,6 +148,9 @@ pub fn parse_registry_content(
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RegistryValueParseError;
+
 /// Parse a value line, consuming continuation lines for hex data.
 /// Advances `line_idx` past any consumed continuation lines.
 fn parse_value_line(
@@ -149,22 +158,22 @@ fn parse_value_line(
     line_number: u32,
     all_lines: &[&str],
     line_idx: &mut usize,
-) -> Option<RegistryValue> {
+) -> Result<RegistryValue, RegistryValueParseError> {
     // Default value: @=<data>
     let (name, data_str) = if let Some(stripped) = first_line.strip_prefix("@=") {
         ("(Default)".to_string(), stripped)
     } else if first_line.starts_with('"') {
         // "name"=<data> or "name"=-
-        let closing_quote = find_closing_quote(first_line, 1)?;
+        let closing_quote = find_closing_quote(first_line, 1).ok_or(RegistryValueParseError)?;
         let name = unescape_reg_string(&first_line[1..closing_quote]);
         let after = first_line[closing_quote + 1..].trim_start();
         if !after.starts_with('=') {
-            return None;
+            return Err(RegistryValueParseError);
         }
         let data_str = after[1..].trim_start();
         (name, data_str)
     } else {
-        return None;
+        return Err(RegistryValueParseError);
     };
 
     // Collect full data string, joining continuation lines
@@ -179,7 +188,7 @@ fn parse_value_line(
             full_data.push_str(cont);
             *line_idx += 1;
         } else {
-            break;
+            return Err(RegistryValueParseError);
         }
     }
 
@@ -187,7 +196,7 @@ fn parse_value_line(
 
     // Delete marker
     if full_data == "-" {
-        return Some(RegistryValue {
+        return Ok(RegistryValue {
             name,
             kind: RegistryValueKind::DeleteMarker,
             data: "(value deleted)".to_string(),
@@ -197,12 +206,12 @@ fn parse_value_line(
 
     // String value: "..."
     if full_data.starts_with('"') && full_data.len() >= 2 {
-        let inner = if let Some(close) = find_closing_quote(full_data, 1) {
-            unescape_reg_string(&full_data[1..close])
-        } else {
-            full_data[1..].to_string()
-        };
-        return Some(RegistryValue {
+        let close = find_closing_quote(full_data, 1).ok_or(RegistryValueParseError)?;
+        if !full_data[close + 1..].trim().is_empty() {
+            return Err(RegistryValueParseError);
+        }
+        let inner = unescape_reg_string(&full_data[1..close]);
+        return Ok(RegistryValue {
             name,
             kind: RegistryValueKind::String,
             data: inner,
@@ -212,8 +221,15 @@ fn parse_value_line(
 
     // DWORD: dword:XXXXXXXX
     if let Some(hex_str) = full_data.strip_prefix("dword:") {
-        let value = u32::from_str_radix(hex_str.trim(), 16).unwrap_or(0);
-        return Some(RegistryValue {
+        let hex_str = hex_str.trim();
+        if hex_str.is_empty()
+            || hex_str.len() > 8
+            || !hex_str.bytes().all(|byte| byte.is_ascii_hexdigit())
+        {
+            return Err(RegistryValueParseError);
+        }
+        let value = u32::from_str_radix(hex_str, 16).map_err(|_| RegistryValueParseError)?;
+        return Ok(RegistryValue {
             name,
             kind: RegistryValueKind::Dword,
             data: format!("0x{:08x} ({})", value, value),
@@ -223,9 +239,12 @@ fn parse_value_line(
 
     // hex(b): QWORD
     if let Some(hex_bytes_str) = full_data.strip_prefix("hex(b):") {
-        let bytes = parse_hex_bytes(hex_bytes_str);
+        let bytes = parse_hex_bytes(hex_bytes_str)?;
+        if bytes.len() != 8 {
+            return Err(RegistryValueParseError);
+        }
         let value = bytes_to_qword(&bytes);
-        return Some(RegistryValue {
+        return Ok(RegistryValue {
             name,
             kind: RegistryValueKind::Qword,
             data: format!("0x{:016x} ({})", value, value),
@@ -235,9 +254,9 @@ fn parse_value_line(
 
     // hex(2): REG_EXPAND_SZ (UTF-16LE encoded)
     if let Some(hex_bytes_str) = full_data.strip_prefix("hex(2):") {
-        let bytes = parse_hex_bytes(hex_bytes_str);
+        let bytes = parse_hex_bytes(hex_bytes_str)?;
         let decoded = decode_utf16le_bytes(&bytes);
-        return Some(RegistryValue {
+        return Ok(RegistryValue {
             name,
             kind: RegistryValueKind::ExpandString,
             data: decoded,
@@ -247,9 +266,9 @@ fn parse_value_line(
 
     // hex(7): REG_MULTI_SZ (UTF-16LE encoded, null-separated)
     if let Some(hex_bytes_str) = full_data.strip_prefix("hex(7):") {
-        let bytes = parse_hex_bytes(hex_bytes_str);
+        let bytes = parse_hex_bytes(hex_bytes_str)?;
         let decoded = decode_utf16le_multi_string(&bytes);
-        return Some(RegistryValue {
+        return Ok(RegistryValue {
             name,
             kind: RegistryValueKind::MultiString,
             data: decoded,
@@ -259,8 +278,8 @@ fn parse_value_line(
 
     // hex(0): REG_NONE
     if let Some(hex_bytes_str) = full_data.strip_prefix("hex(0):") {
-        let bytes = parse_hex_bytes(hex_bytes_str);
-        return Some(RegistryValue {
+        let bytes = parse_hex_bytes(hex_bytes_str)?;
+        return Ok(RegistryValue {
             name,
             kind: RegistryValueKind::None,
             data: format_hex_display(&bytes),
@@ -270,8 +289,8 @@ fn parse_value_line(
 
     // hex: REG_BINARY
     if let Some(hex_bytes_str) = full_data.strip_prefix("hex:") {
-        let bytes = parse_hex_bytes(hex_bytes_str);
-        return Some(RegistryValue {
+        let bytes = parse_hex_bytes(hex_bytes_str)?;
+        return Ok(RegistryValue {
             name,
             kind: RegistryValueKind::Binary,
             data: format_hex_display(&bytes),
@@ -283,8 +302,8 @@ fn parse_value_line(
     if full_data.starts_with("hex(") {
         if let Some(colon_pos) = full_data.find("):") {
             let hex_bytes_str = &full_data[colon_pos + 2..];
-            let bytes = parse_hex_bytes(hex_bytes_str);
-            return Some(RegistryValue {
+            let bytes = parse_hex_bytes(hex_bytes_str)?;
+            return Ok(RegistryValue {
                 name,
                 kind: RegistryValueKind::Binary,
                 data: format_hex_display(&bytes),
@@ -294,7 +313,7 @@ fn parse_value_line(
     }
 
     // Unrecognized format
-    Some(RegistryValue {
+    Ok(RegistryValue {
         name,
         kind: RegistryValueKind::String,
         data: full_data.to_string(),
@@ -343,15 +362,18 @@ fn unescape_reg_string(s: &str) -> String {
 }
 
 /// Parse comma-separated hex bytes like "01,00,04,80".
-fn parse_hex_bytes(s: &str) -> Vec<u8> {
+fn parse_hex_bytes(s: &str) -> Result<Vec<u8>, RegistryValueParseError> {
+    if s.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+
     s.split(',')
-        .filter_map(|b| {
-            let trimmed = b.trim();
-            if trimmed.is_empty() {
-                None
-            } else {
-                u8::from_str_radix(trimmed, 16).ok()
+        .map(|token| {
+            let token = token.trim();
+            if token.len() != 2 || !token.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                return Err(RegistryValueParseError);
             }
+            u8::from_str_radix(token, 16).map_err(|_| RegistryValueParseError)
         })
         .collect()
 }
@@ -568,5 +590,52 @@ mod tests {
         assert_eq!(result.total_keys, 0);
         assert_eq!(result.total_values, 0);
         assert_eq!(result.parse_errors, 0);
+    }
+
+    #[test]
+    fn malformed_values_increment_errors_without_fabricating_zeroes() {
+        let content = concat!(
+            "Windows Registry Editor Version 5.00\n\n",
+            "[HKEY_LOCAL_MACHINE\\SOFTWARE\\CMTraceOpenTest]\n",
+            "\"BadDword\"=dword:nothex\n",
+            "\"BadBinary\"=hex:01,GG,03\n",
+            "\"BadString\"=\"unterminated\n",
+            "\"BadContinuation\"=hex:01,02,\\\n",
+        );
+        let result = parse_registry_content(content, "bad.reg", content.len() as u64);
+        assert_eq!(result.total_keys, 1);
+        assert_eq!(result.total_values, 0);
+        assert_eq!(result.parse_errors, 4);
+    }
+
+    #[test]
+    fn valid_zero_and_empty_values_remain_valid() {
+        let content = concat!(
+            "Windows Registry Editor Version 5.00\n\n",
+            "[HKEY_LOCAL_MACHINE\\SOFTWARE\\CMTraceOpenTest]\n",
+            "\"ZeroDword\"=dword:00000000\n",
+            "\"ZeroQword\"=hex(b):00,00,00,00,00,00,00,00\n",
+            "\"EmptyBinary\"=hex:\n",
+            "\"EmptyString\"=\"\"\n",
+        );
+        let result = parse_registry_content(content, "zero.reg", content.len() as u64);
+        assert_eq!(result.total_values, 4);
+        assert_eq!(result.parse_errors, 0);
+        assert_eq!(result.keys[0].values[0].data, "0x00000000 (0)");
+        assert_eq!(result.keys[0].values[1].data, "0x0000000000000000 (0)");
+        assert_eq!(result.keys[0].values[2].data, "(zero-length binary value)");
+        assert_eq!(result.keys[0].values[3].data, "");
+    }
+
+    #[test]
+    fn qword_requires_exactly_eight_bytes() {
+        let content = concat!(
+            "Windows Registry Editor Version 5.00\n\n",
+            "[HKEY_LOCAL_MACHINE\\SOFTWARE\\CMTraceOpenTest]\n",
+            "\"ShortQword\"=hex(b):01,02,03,04\n",
+        );
+        let result = parse_registry_content(content, "short-qword.reg", content.len() as u64);
+        assert_eq!(result.total_values, 0);
+        assert_eq!(result.parse_errors, 1);
     }
 }
