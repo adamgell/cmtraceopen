@@ -225,6 +225,41 @@ impl RecentEntriesState {
     }
 }
 
+use tauri::{AppHandle, Runtime, State};
+
+use crate::commands::app_config::get_available_workspaces;
+
+#[tauri::command]
+pub fn push_recent_entry<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, RecentEntriesState>,
+    path: String,
+    kind: RecentEntryKind,
+    workspace: String,
+) -> Result<(), String> {
+    let available = get_available_workspaces();
+    validate_workspace(&workspace, &available)?;
+
+    state.push(RecentEntry {
+        path,
+        kind,
+        workspace,
+        opened_at_unix_ms: now_unix_ms(),
+    })?;
+    state.prune(&available)?;
+
+    crate::menu::rebuild_recent_submenu(&app)
+}
+
+#[tauri::command]
+pub fn clear_recent_entries<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, RecentEntriesState>,
+) -> Result<(), String> {
+    state.clear()?;
+    crate::menu::rebuild_recent_submenu(&app)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

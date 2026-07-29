@@ -197,6 +197,8 @@ pub fn run() {
             commands::file_association::set_file_association_prompt_suppressed,
             commands::app_config::get_available_workspaces,
             commands::app_config::get_update_policy,
+            commands::recent_entries::push_recent_entry,
+            commands::recent_entries::clear_recent_entries,
             menu::sync_app_menu_state,
             #[cfg(feature = "esp-diagnostics")]
             commands::esp_diagnostics::get_esp_diagnostics_capability,

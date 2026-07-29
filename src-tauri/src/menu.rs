@@ -9,7 +9,7 @@ use tauri::{AppHandle, Emitter, Runtime};
 
 use crate::commands::app_config::get_available_workspaces;
 use crate::commands::known_sources::{build_known_log_sources, KnownSourceGroupingMetadata};
-use crate::commands::recent_entries::{RecentEntriesState, RecentEntry};
+use crate::commands::recent_entries::{RecentEntriesState, RecentEntry, RecentEntryKind};
 
 pub const MENU_EVENT_APP_ACTION: &str = "app-menu-action";
 
@@ -455,6 +455,12 @@ pub struct AppMenuActionPayload {
     pub trigger: String,
     pub source_id: Option<String>,
     pub target_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
@@ -1321,6 +1327,52 @@ fn build_recent_submenu<R: Runtime>(
     Submenu::with_id_and_items(app, MENU_ID_FILE_RECENT, "Recent", !entries.is_empty(), &refs)
 }
 
+/// Tear down and repopulate the Recent submenu.
+///
+/// muda's `MenuItem` exposes `set_text`/`set_enabled` but no `set_visible`, so
+/// updating fixed slots would leave permanent placeholder rows. Menu mutation
+/// is main-thread-only on macOS and Tauri commands run off-thread, hence the
+/// `run_on_main_thread` hop.
+pub fn rebuild_recent_submenu<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+    let entries = recent_entries_for_menu(app);
+    let handle = app.clone();
+
+    app.run_on_main_thread(move || {
+        if let Err(error) = rebuild_recent_submenu_on_main(&handle, &entries) {
+            log::error!("[menu] failed to rebuild Recent submenu: {error}");
+        }
+    })
+    .map_err(|error| error.to_string())
+}
+
+fn rebuild_recent_submenu_on_main<R: Runtime>(
+    app: &AppHandle<R>,
+    entries: &[RecentEntry],
+) -> Result<(), String> {
+    let index = app_menu_index(app)?;
+
+    let Some(MenuItemKind::Submenu(submenu)) = index.get(MENU_ID_FILE_RECENT) else {
+        return Err("Recent submenu is missing from the application menu".to_string());
+    };
+
+    while submenu
+        .remove_at(0)
+        .map_err(|error| error.to_string())?
+        .is_some()
+    {}
+
+    let items = recent_submenu_items(app, entries).map_err(|error| error.to_string())?;
+    for item in &items {
+        submenu
+            .append(item.as_ref())
+            .map_err(|error| error.to_string())?;
+    }
+
+    submenu
+        .set_enabled(!entries.is_empty())
+        .map_err(|error| error.to_string())
+}
+
 /// A source entry extracted from the catalog for menu building.
 #[derive(Clone)]
 struct SourceMenuItem {
@@ -1484,10 +1536,37 @@ pub fn handle_menu_event<R: Runtime>(app: &AppHandle<R>, menu_id: &str) {
         return;
     }
 
-    let Some(payload) = payload_for_menu_id(menu_id) else {
+    let Some(mut payload) = payload_for_menu_id(menu_id) else {
         log::warn!("[menu] unrecognized menu_id: {menu_id}");
         return;
     };
+
+    if payload.action == "open_recent_entry" {
+        let Some(index) = payload
+            .target_id
+            .as_deref()
+            .and_then(|value| value.parse::<usize>().ok())
+        else {
+            log::warn!("[menu] open_recent_entry without a usable index: {menu_id}");
+            return;
+        };
+
+        let entries = recent_entries_for_menu(app);
+        let Some(entry) = entries.get(index) else {
+            log::warn!("[menu] stale recent entry index {index}");
+            return;
+        };
+
+        payload.path = Some(entry.path.clone());
+        payload.workspace = Some(entry.workspace.clone());
+        payload.kind = Some(
+            match entry.kind {
+                RecentEntryKind::File => "file",
+                RecentEntryKind::Folder => "folder",
+            }
+            .to_string(),
+        );
+    }
 
     if payload.action == "switch_workspace" {
         if let Some(target_id) = payload.target_id.as_deref() {
@@ -1511,6 +1590,9 @@ fn base_payload(menu_id: &str, action: &str, category: &str) -> AppMenuActionPay
         trigger: "menu".to_string(),
         source_id: None,
         target_id: None,
+        path: None,
+        workspace: None,
+        kind: None,
     }
 }
 
@@ -1530,6 +1612,21 @@ fn payload_for_menu_id(menu_id: &str) -> Option<AppMenuActionPayload> {
 
         let mut payload = base_payload(menu_id, "switch_workspace", "workspace");
         payload.target_id = Some(workspace_id.to_string());
+        return Some(payload);
+    }
+
+    if menu_id == MENU_ID_FILE_RECENT_CLEAR {
+        return Some(base_payload(menu_id, "clear_recent_entries", "file"));
+    }
+
+    if let Some(index) = menu_id.strip_prefix(RECENT_MENU_ID_PREFIX) {
+        // Rejects the "recent.unavailable" placeholder, which shares the prefix.
+        if index.parse::<usize>().is_err() {
+            return None;
+        }
+
+        let mut payload = base_payload(menu_id, "open_recent_entry", "file");
+        payload.target_id = Some(index.to_string());
         return Some(payload);
     }
 
@@ -1569,7 +1666,6 @@ fn payload_for_menu_id(menu_id: &str) -> Option<AppMenuActionPayload> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::recent_entries::RecentEntryKind;
 
     fn all_workspace_ids() -> Vec<&'static str> {
         WORKSPACE_DESCRIPTORS
@@ -2092,5 +2188,25 @@ mod tests {
         };
 
         assert!(recent_entry_label(&entry).ends_with("(Unknown Workspace)"));
+    }
+
+    #[test]
+    fn recent_entry_menu_id_maps_to_open_recent_entry() {
+        let payload = payload_for_menu_id("recent.3").expect("payload");
+        assert_eq!(payload.action, "open_recent_entry");
+        assert_eq!(payload.category, "file");
+        assert_eq!(payload.target_id.as_deref(), Some("3"));
+    }
+
+    #[test]
+    fn recent_placeholder_menu_id_produces_no_payload() {
+        assert!(payload_for_menu_id(RECENT_UNAVAILABLE_MENU_ID).is_none());
+    }
+
+    #[test]
+    fn recent_clear_menu_id_maps_to_clear_recent_entries() {
+        let payload = payload_for_menu_id(MENU_ID_FILE_RECENT_CLEAR).expect("payload");
+        assert_eq!(payload.action, "clear_recent_entries");
+        assert_eq!(payload.category, "file");
     }
 }
