@@ -3,8 +3,19 @@ name = "cmtraceopen-parser"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.88"
-description = "Pure-Rust log-format parser, error-code database, and entry models for CMTrace Open. Targets native and wasm32."
+authors = ["Adam Gell"]
+description = "Parse ConfigMgr/SCCM, Intune, CBS, DISM, Panther, MSI, and PSADT logs with format auto-detection, severity classification, and Windows error-code lookup. Pure Rust, no I/O, native + wasm32."
 license = "MIT"
+repository = "https://github.com/adamgell/cmtraceopen"
+homepage = "https://cmtraceopen.com"
+documentation = "https://docs.rs/cmtraceopen-parser"
+readme = "README.md"
+keywords = ["cmtrace", "sccm", "intune", "log-parser", "configmgr"]
+categories = [
+    "parser-implementations",
+    "development-tools::debugging",
+    "os::windows-apis",
+]
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
