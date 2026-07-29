@@ -13,25 +13,65 @@ use crate::graph_api::{
 #[cfg(feature = "esp-diagnostics")]
 use cmtraceopen_parser::esp::EspGraphOverlay;
 
-/// Get the HWND of the main Tauri window for WAM dialog parenting.
+/// Owns the main window for the duration of an interactive WAM sign-in.
+///
+/// The account-picker dialog belongs to the Entra broker process. Windows
+/// parents it to the HWND we hand over — which disables our window while it is
+/// up — but cross-process ownership does not make it topmost, and the broker
+/// cannot steal the foreground on its own. Left alone, the dialog is drawn
+/// behind an always-on-top main window that the user then cannot move or
+/// dismiss. So for the length of the call we drop the always-on-top pin, hand
+/// the broker permission to foreground itself, and restore the pin on drop.
 #[cfg(target_os = "windows")]
-fn get_main_hwnd(app: &tauri::AppHandle) -> Result<isize, AppError> {
-    let window = app
-        .get_webview_window("main")
-        .ok_or_else(|| AppError::Internal("No main window found".into()))?;
+struct InteractiveAuthWindow {
+    window: tauri::WebviewWindow,
+    hwnd: isize,
+    restore_always_on_top: bool,
+}
 
-    #[cfg(target_os = "windows")]
-    {
+#[cfg(target_os = "windows")]
+impl InteractiveAuthWindow {
+    fn acquire(app: &tauri::AppHandle) -> Result<Self, AppError> {
+        use windows::Win32::UI::WindowsAndMessaging::{AllowSetForegroundWindow, ASFW_ANY};
+
+        let window = app
+            .get_webview_window("main")
+            .ok_or_else(|| AppError::Internal("No main window found".into()))?;
         let hwnd = window
             .hwnd()
-            .map_err(|e| AppError::Internal(format!("Failed to get HWND: {e}")))?;
-        Ok(hwnd.0 as isize)
+            .map_err(|e| AppError::Internal(format!("Failed to get HWND: {e}")))?
+            .0 as isize;
+
+        let restore_always_on_top = crate::commands::system_preferences::always_on_top_enabled();
+        if restore_always_on_top {
+            let _ = window.set_always_on_top(false);
+            crate::commands::system_preferences::remember_always_on_top(false);
+        }
+
+        // Let the broker process bring its dialog to the foreground; without
+        // this the foreground lock keeps it behind us even unpinned.
+        let _ = unsafe { AllowSetForegroundWindow(ASFW_ANY) };
+        let _ = window.set_focus();
+
+        Ok(Self {
+            window,
+            hwnd,
+            restore_always_on_top,
+        })
     }
 
-    #[cfg(not(target_os = "windows"))]
-    {
-        let _ = window;
-        Ok(0)
+    fn hwnd(&self) -> isize {
+        self.hwnd
+    }
+}
+
+#[cfg(target_os = "windows")]
+impl Drop for InteractiveAuthWindow {
+    fn drop(&mut self) {
+        if self.restore_always_on_top {
+            let _ = self.window.set_always_on_top(true);
+            crate::commands::system_preferences::remember_always_on_top(true);
+        }
     }
 }
 
@@ -41,8 +81,8 @@ pub fn graph_authenticate(
     app: tauri::AppHandle,
     state: tauri::State<'_, GraphAuthState>,
 ) -> CmdResult<GraphAuthStatus> {
-    let hwnd = get_main_hwnd(&app)?;
-    graph_api::authenticate(&state, hwnd)
+    let window = InteractiveAuthWindow::acquire(&app)?;
+    graph_api::authenticate(&state, window.hwnd())
 }
 
 #[tauri::command]
@@ -51,13 +91,16 @@ pub async fn graph_request_missing_permissions(
     app: tauri::AppHandle,
     state: tauri::State<'_, GraphAuthState>,
 ) -> CmdResult<GraphPermissionUpgradeResult> {
-    let hwnd = get_main_hwnd(&app)?;
+    let window = InteractiveAuthWindow::acquire(&app)?;
+    let hwnd = window.hwnd();
     let state = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
+    let result = tauri::async_runtime::spawn_blocking(move || {
         graph_api::request_missing_permissions_on_initialized_worker(&state, hwnd)
     })
     .await
-    .map_err(|error| AppError::Internal(format!("GraphPermissionTaskFailed: {error}")))?
+    .map_err(|error| AppError::Internal(format!("GraphPermissionTaskFailed: {error}")));
+    drop(window);
+    result?
 }
 
 #[tauri::command]
