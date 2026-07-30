@@ -1,0 +1,1 @@
+<![LOG[SYNTHETIC FIXTURE policy Gate C: Report failed terminal AssignmentId={20202020-2020-2020-2020-202020202020} PolicyId={b3b3b3b3-b3b3-b3b3-b3b3-b3b3b3b3b3b3} Result=0x80000007]LOG]!><time="11:00:05.000+000" date="7-30-2026" component="StateMessage" context="" type="3" thread="2" file="synthetic.cc:1">

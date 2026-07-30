@@ -1,0 +1,2 @@
+<![LOG[SYNTHETIC FIXTURE policy download failure: Request succeeded AssignmentId={13131313-1313-1313-1313-131313131313} PolicyId={acacacac-acac-acac-acac-acacacacacac}]LOG]!><time="03:00:00.000+000" date="7-30-2026" component="PolicyAgent" context="" type="1" thread="1" file="synthetic.cc:1">
+<![LOG[Download failed terminal AssignmentId={13131313-1313-1313-1313-131313131313} PolicyId={acacacac-acac-acac-acac-acacacacacac} Result=0x80000002]LOG]!><time="03:00:01.000+000" date="7-30-2026" component="PolicyAgent" context="" type="3" thread="1" file="synthetic.cc:2">

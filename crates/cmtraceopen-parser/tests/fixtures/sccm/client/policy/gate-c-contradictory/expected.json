@@ -1,0 +1,86 @@
+{
+  "contractState": "proposedPending318",
+  "workflow": "policy",
+  "scenario": "gate-c-contradictory",
+  "gate": "C",
+  "stateChain": ["request","download","persist","schedule","evaluate","report"],
+  "analysisContract": {"independentReducer":true,"consumesOtherReducerOutput":false,"crossSideCorrelationPerformed":false},
+  "extractionProfile": {"selectionState":"selected","profileId":"policy-client-5.00.test-v1","sourceVersionPrefix":"5.00.TEST.","keyKinds":["assignmentId","policyId"],"validatedArtifactFamilies":["client-policy-agent","client-policy-state"]},
+  "reorderedInputDeterministic": true,
+  "coverage": [{"logicalArtifactId":"client-policy-agent","state":"captured"},{"logicalArtifactId":"client-policy-state","state":"captured"}],
+  "artifactProvenance": [
+    {"artifactId":"policy-gate-c-agent-current","encoding":"utf-8","byteLimit":4096,"limitApplied":false},
+    {"artifactId":"policy-gate-c-scheduler-current","encoding":"utf-8","byteLimit":4096,"limitApplied":false},
+    {"artifactId":"policy-gate-c-evaluate-current","encoding":"utf-8","byteLimit":4096,"limitApplied":false},
+    {"artifactId":"policy-gate-c-report-current","encoding":"utf-8","byteLimit":4096,"limitApplied":false}
+  ],
+  "transactions": [
+    {
+      "transactionId": "policy:assignment:19191919-1919-1919-1919-191919191919",
+      "key": {"assignmentId":"19191919-1919-1919-1919-191919191919","policyId":"b2b2b2b2-b2b2-b2b2-b2b2-b2b2b2b2b2b2","confidence":"exact","extractionProfileId":"policy-client-5.00.test-v1"},
+      "phase": "evaluate",
+      "state": "contradictory",
+      "lastSuccessfulPhase": "schedule",
+      "classification": "contradictoryEvidence",
+      "confidence": "low",
+      "confidenceCeiling": "low",
+      "coverageGapArtifactIds": [],
+      "nextArtifact": {"logicalArtifactId":"client-policy-state","reason":"Recapture bounded CIAgent evidence to resolve the same-instant evaluation contradiction."},
+      "evidence": [
+        {"artifactId":"policy-gate-c-agent-current","startLine":1,"endLine":3},
+        {"artifactId":"policy-gate-c-evaluate-current","startLine":1,"endLine":2},
+        {"artifactId":"policy-gate-c-scheduler-current","startLine":1,"endLine":1}
+      ]
+    },
+    {
+      "transactionId": "policy:assignment:20202020-2020-2020-2020-202020202020",
+      "key": {"assignmentId":"20202020-2020-2020-2020-202020202020","policyId":"b3b3b3b3-b3b3-b3b3-b3b3-b3b3b3b3b3b3","confidence":"exact","extractionProfileId":"policy-client-5.00.test-v1"},
+      "phase": "report",
+      "state": "failed",
+      "lastSuccessfulPhase": "evaluate",
+      "classification": "confirmedFailure",
+      "confidence": "high",
+      "confidenceCeiling": "high",
+      "coverageGapArtifactIds": [],
+      "nextArtifact": null,
+      "evidence": [
+        {"artifactId":"policy-gate-c-agent-current","startLine":4,"endLine":6},
+        {"artifactId":"policy-gate-c-evaluate-current","startLine":3,"endLine":3},
+        {"artifactId":"policy-gate-c-report-current","startLine":1,"endLine":1},
+        {"artifactId":"policy-gate-c-scheduler-current","startLine":2,"endLine":2}
+      ]
+    }
+  ],
+  "sourceLocalObservations": [],
+  "findings": [
+    {
+      "findingId": "finding:gate-c-a-contradictory",
+      "subjectId": "policy:assignment:19191919-1919-1919-1919-191919191919",
+      "class": "contradictoryEvidence",
+      "phase": "evaluate",
+      "lastSuccessfulPhase": "schedule",
+      "confidence": "low",
+      "confidenceCeiling": "low",
+      "nextArtifact": {"logicalArtifactId":"client-policy-state","reason":"Recapture bounded CIAgent evidence to resolve the same-instant evaluation contradiction."},
+      "evidence": [{"artifactId":"policy-gate-c-evaluate-current","startLine":1,"endLine":2}]
+    },
+    {
+      "findingId": "finding:gate-c-b-reporting-failure",
+      "subjectId": "policy:assignment:20202020-2020-2020-2020-202020202020",
+      "class": "confirmedFailure",
+      "phase": "report",
+      "lastSuccessfulPhase": "evaluate",
+      "confidence": "high",
+      "confidenceCeiling": "high",
+      "nextArtifact": null,
+      "evidence": [{"artifactId":"policy-gate-c-report-current","startLine":1,"endLine":1}]
+    }
+  ],
+  "contradictionContract": {
+    "sameTimestampSameKeyRemainsContradictory": true,
+    "sameMinuteDifferentKeysRemainSeparate": true,
+    "inputOrderCannotResolveCrossArtifactTie": true
+  },
+  "correlationHandoff": {"issue":"#333","performed":false},
+  "prohibitedClaims": ["management point or server root cause","cross-side correlation or #333 conclusion","device-wide transaction merging"]
+}

@@ -1,0 +1,11 @@
+{
+  "sccmManifestVersion": 1,
+  "proposalOnly": true,
+  "syntheticFixture": true,
+  "bundle": {"role":"client","workflow":"policy","captureHost":"LAB-CLIENT-01","siteCode":"CONTOSO","artifactOrder":"designOnlyCatalog.entryId,pathFingerprint,rotationRank,originalBasename,artifactId","rotationOrder":"current,lo,numeric-ascending,timestamp-ascending"},
+  "artifacts": [
+    {"artifactId":"policy-incomplete-agent-current","designOnlyCatalog":{"entryId":"client-policy-agent","groupMemberships":["client-policy-agent"]},"role":"client","kind":"ccmLog","captureState":"captured","encoding":"utf-8","collectionLimit":{"byteLimit":4096,"limitApplied":false},"originalBasename":"PolicyAgent.log","sanitizedSourcePath":"SYNTHETIC://root-a/CCM/Logs/PolicyAgent.log","pathFingerprint":"synthetic:policy-incomplete-agent","rotation":{"kind":"current","fragmentComplete":true},"sourceVersion":"5.00.TEST.0000","capturedUtc":"2026-07-30T10:00:04Z","bytesCopied":791,"relativePath":"evidence/client-policy-agent/current/PolicyAgent.log"},
+    {"artifactId":"policy-incomplete-scheduler-current","designOnlyCatalog":{"entryId":"client-policy-agent","groupMemberships":["client-policy-agent"]},"role":"client","kind":"ccmLog","captureState":"captured","encoding":"utf-8","collectionLimit":{"byteLimit":4096,"limitApplied":false},"originalBasename":"Scheduler.log","sanitizedSourcePath":"SYNTHETIC://root-a/CCM/Logs/Scheduler.log","pathFingerprint":"synthetic:policy-incomplete-scheduler","rotation":{"kind":"current","fragmentComplete":true},"sourceVersion":"5.00.TEST.0000","capturedUtc":"2026-07-30T10:00:04Z","bytesCopied":287,"relativePath":"evidence/client-policy-agent/current/Scheduler.log"},
+    {"artifactId":"policy-incomplete-state-absent","designOnlyCatalog":{"entryId":"client-policy-state","groupMemberships":["client-policy-state"]},"role":"client","kind":"ccmLog","captureState":"absent","originalBasename":"CIAgent.log","sanitizedSourcePath":null,"pathFingerprint":null,"rotation":{"kind":"current","fragmentComplete":false},"sourceVersion":null,"capturedUtc":"2026-07-30T10:00:05Z","bytesCopied":0,"relativePath":null}
+  ]
+}

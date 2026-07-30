@@ -1,0 +1,1 @@
+<![LOG[SYNTHETIC FIXTURE policy evaluation failure: Evaluate failed terminal AssignmentId={16161616-1616-1616-1616-161616161616} PolicyId={afafafaf-afaf-afaf-afaf-afafafafafaf} Result=0x80000004]LOG]!><time="06:00:04.000+000" date="7-30-2026" component="CIAgent" context="" type="3" thread="1" file="synthetic.cc:1">

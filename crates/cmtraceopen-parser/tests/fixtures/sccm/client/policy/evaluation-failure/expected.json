@@ -1,0 +1,46 @@
+{
+  "contractState": "proposedPending318",
+  "workflow": "policy",
+  "scenario": "evaluation-failure",
+  "stateChain": ["request","download","persist","schedule","evaluate","report"],
+  "analysisContract": {"independentReducer":true,"consumesOtherReducerOutput":false,"crossSideCorrelationPerformed":false},
+  "extractionProfile": {"selectionState":"selected","profileId":"policy-client-5.00.test-v1","sourceVersionPrefix":"5.00.TEST.","keyKinds":["assignmentId","policyId"],"validatedArtifactFamilies":["client-policy-agent","client-policy-state"]},
+  "reorderedInputDeterministic": true,
+  "coverage": [{"logicalArtifactId":"client-policy-agent","state":"captured"},{"logicalArtifactId":"client-policy-state","state":"captured"}],
+  "artifactProvenance": [
+    {"artifactId":"policy-evaluation-agent-current","encoding":"utf-8","byteLimit":4096,"limitApplied":false},
+    {"artifactId":"policy-evaluation-scheduler-current","encoding":"utf-8","byteLimit":4096,"limitApplied":false},
+    {"artifactId":"policy-evaluation-state-current","encoding":"utf-8","byteLimit":4096,"limitApplied":false}
+  ],
+  "transactions": [{
+    "transactionId": "policy:assignment:16161616-1616-1616-1616-161616161616",
+    "key": {"assignmentId":"16161616-1616-1616-1616-161616161616","policyId":"afafafaf-afaf-afaf-afaf-afafafafafaf","confidence":"exact","extractionProfileId":"policy-client-5.00.test-v1"},
+    "phase": "evaluate",
+    "state": "failed",
+    "lastSuccessfulPhase": "schedule",
+    "classification": "confirmedFailure",
+    "confidence": "high",
+    "confidenceCeiling": "high",
+    "coverageGapArtifactIds": [],
+    "nextArtifact": null,
+    "evidence": [
+      {"artifactId":"policy-evaluation-agent-current","startLine":1,"endLine":3},
+      {"artifactId":"policy-evaluation-scheduler-current","startLine":1,"endLine":1},
+      {"artifactId":"policy-evaluation-state-current","startLine":1,"endLine":1}
+    ]
+  }],
+  "sourceLocalObservations": [],
+  "findings": [{
+    "findingId": "finding:policy-evaluation-failure",
+    "subjectId": "policy:assignment:16161616-1616-1616-1616-161616161616",
+    "class": "confirmedFailure",
+    "phase": "evaluate",
+    "lastSuccessfulPhase": "schedule",
+    "confidence": "high",
+    "confidenceCeiling": "high",
+    "nextArtifact": null,
+    "evidence": [{"artifactId":"policy-evaluation-state-current","startLine":1,"endLine":1}]
+  }],
+  "correlationHandoff": {"issue":"#333","performed":false},
+  "prohibitedClaims": ["management point or server root cause","cross-side correlation or #333 conclusion","device-wide transaction merging"]
+}

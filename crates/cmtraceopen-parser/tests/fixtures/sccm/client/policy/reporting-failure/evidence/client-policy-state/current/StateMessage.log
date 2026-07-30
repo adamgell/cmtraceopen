@@ -1,0 +1,1 @@
+<![LOG[SYNTHETIC FIXTURE policy reporting failure: Report failed terminal AssignmentId={17171717-1717-1717-1717-171717171717} PolicyId={b0b0b0b0-b0b0-b0b0-b0b0-b0b0b0b0b0b0} Result=0x80000005]LOG]!><time="07:00:05.000+000" date="7-30-2026" component="StateMessage" context="" type="3" thread="1" file="synthetic.cc:1">

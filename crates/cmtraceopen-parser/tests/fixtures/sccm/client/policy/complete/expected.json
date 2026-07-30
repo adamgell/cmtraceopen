@@ -1,0 +1,46 @@
+{
+  "contractState": "proposedPending318",
+  "workflow": "policy",
+  "scenario": "complete",
+  "stateChain": ["request","download","persist","schedule","evaluate","report"],
+  "analysisContract": {"independentReducer":true,"consumesOtherReducerOutput":false,"crossSideCorrelationPerformed":false},
+  "extractionProfile": {"selectionState":"selected","profileId":"policy-client-5.00.test-v1","sourceVersionPrefix":"5.00.TEST.","keyKinds":["assignmentId","policyId"],"validatedArtifactFamilies":["client-policy-agent","client-policy-state"]},
+  "reorderedInputDeterministic": true,
+  "coverage": [{"logicalArtifactId":"client-policy-agent","state":"captured"},{"logicalArtifactId":"client-policy-state","state":"captured"}],
+  "artifactProvenance": [
+    {"artifactId":"policy-complete-agent-current","encoding":"utf-8","byteLimit":4096,"limitApplied":false},
+    {"artifactId":"policy-complete-scheduler-current","encoding":"utf-8","byteLimit":4096,"limitApplied":false},
+    {"artifactId":"policy-complete-evaluate-current","encoding":"utf-8","byteLimit":4096,"limitApplied":false},
+    {"artifactId":"policy-complete-report-current","encoding":"utf-8","byteLimit":4096,"limitApplied":false}
+  ],
+  "transactions": [{
+    "transactionId": "policy:assignment:11111111-1111-1111-1111-111111111111",
+    "key": {"assignmentId":"11111111-1111-1111-1111-111111111111","policyId":"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa","confidence":"exact","extractionProfileId":"policy-client-5.00.test-v1"},
+    "phase": "report",
+    "state": "succeeded",
+    "lastSuccessfulPhase": "report",
+    "classification": "success",
+    "confidence": "high",
+    "confidenceCeiling": "high",
+    "coverageGapArtifactIds": [],
+    "nextArtifact": null,
+    "evidence": [
+      {"artifactId":"policy-complete-agent-current","startLine":1,"endLine":4},
+      {"artifactId":"policy-complete-evaluate-current","startLine":1,"endLine":1},
+      {"artifactId":"policy-complete-report-current","startLine":1,"endLine":1},
+      {"artifactId":"policy-complete-scheduler-current","startLine":1,"endLine":1}
+    ]
+  }],
+  "sourceLocalObservations": [],
+  "findings": [],
+  "recovery": {
+    "phase": "download",
+    "sameExactKey": true,
+    "laterTerminalSuccess": true,
+    "recoveryProven": true,
+    "failureEvidence": {"artifactId":"policy-complete-agent-current","startLine":2,"endLine":2},
+    "successEvidence": {"artifactId":"policy-complete-agent-current","startLine":3,"endLine":3}
+  },
+  "correlationHandoff": {"issue":"#333","performed":false},
+  "prohibitedClaims": ["management point or server root cause","cross-side correlation or #333 conclusion","device-wide transaction merging"]
+}
