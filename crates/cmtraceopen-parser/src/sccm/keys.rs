@@ -246,12 +246,14 @@ fn find_candidates(message: &str) -> Vec<KeyCandidate<'_>> {
         .flat_map(|pattern| {
             pattern.regex.captures_iter(message).filter_map(|captures| {
                 let value = captures.name("value")?;
+                let raw_end = candidate_token_end(message, value.end());
+                let raw = &message[value.start()..raw_end];
                 let start = message[..value.start()].encode_utf16().count();
                 Some(KeyCandidate {
                     kind: pattern.kind.clone(),
-                    raw: value.as_str(),
+                    raw,
                     start,
-                    end: start + value.as_str().encode_utf16().count(),
+                    end: start + raw.encode_utf16().count(),
                 })
             })
         })
@@ -271,6 +273,19 @@ fn find_candidates(message: &str) -> Vec<KeyCandidate<'_>> {
             && right.end == left.end
     });
     candidates
+}
+
+fn candidate_token_end(message: &str, captured_end: usize) -> usize {
+    message[captured_end..]
+        .char_indices()
+        .find_map(|(offset, character)| {
+            is_key_token_boundary(character).then_some(captured_end + offset)
+        })
+        .unwrap_or(message.len())
+}
+
+fn is_key_token_boundary(character: char) -> bool {
+    character.is_whitespace() || matches!(character, ',' | ';' | '&')
 }
 
 fn gap_for(

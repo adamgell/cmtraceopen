@@ -474,6 +474,131 @@ fn key_extraction_rejects_truncated_prefixes_from_invalid_structured_values() {
 }
 
 #[test]
+fn key_extraction_requires_a_full_token_boundary_for_every_declared_kind() {
+    let cases = [
+        (
+            SccmCorrelationKeyKind::AssignmentId,
+            "assignment id={ABCDEFAB-0000-0000-0000-000000000001}}",
+            "{ABCDEFAB-0000-0000-0000-000000000001}}",
+        ),
+        (
+            SccmCorrelationKeyKind::ClientGuid,
+            "client guid=GUID:{ABCDEFAB-0000-0000-0000-000000000002}/continued",
+            "GUID:{ABCDEFAB-0000-0000-0000-000000000002}/continued",
+        ),
+        (
+            SccmCorrelationKeyKind::PackageId,
+            "package id=LAB00001é",
+            "LAB00001é",
+        ),
+        (
+            SccmCorrelationKeyKind::ContentId,
+            "content id=ContentABC/continued",
+            "ContentABC/continued",
+        ),
+        (
+            SccmCorrelationKeyKind::SiteCode,
+            "site code=LAB:continued",
+            "LAB:continued",
+        ),
+        (
+            SccmCorrelationKeyKind::ServerHost,
+            "server host=mp01.lab.localé",
+            "mp01.lab.localé",
+        ),
+        (
+            SccmCorrelationKeyKind::CiId,
+            "ci id=42+continued",
+            "42+continued",
+        ),
+        (
+            SccmCorrelationKeyKind::UpdateId,
+            "update id={ABCDEFAB-0000-0000-0000-000000000003}:continued",
+            "{ABCDEFAB-0000-0000-0000-000000000003}:continued",
+        ),
+        (
+            SccmCorrelationKeyKind::KbId,
+            "kb id=KB5034441/continued",
+            "KB5034441/continued",
+        ),
+        (
+            SccmCorrelationKeyKind::BitsJobId,
+            "bits job id={ABCDEFAB-0000-0000-0000-000000000004}+continued",
+            "{ABCDEFAB-0000-0000-0000-000000000004}+continued",
+        ),
+        (
+            SccmCorrelationKeyKind::TaskSequenceExecutionId,
+            "task sequence execution id={ABCDEFAB-0000-0000-0000-000000000005}}",
+            "{ABCDEFAB-0000-0000-0000-000000000005}}",
+        ),
+        (
+            SccmCorrelationKeyKind::RequestId,
+            "request id={ABCDEFAB-0000-0000-0000-000000000006}/continued",
+            "{ABCDEFAB-0000-0000-0000-000000000006}/continued",
+        ),
+        (
+            SccmCorrelationKeyKind::TopicId,
+            "topic id={ABCDEFAB-0000-0000-0000-000000000007}:continued",
+            "{ABCDEFAB-0000-0000-0000-000000000007}:continued",
+        ),
+        (
+            SccmCorrelationKeyKind::StateMessageId,
+            "state message id=71é",
+            "71é",
+        ),
+    ];
+    let profile = SccmExtractionProfile::for_version(Some("5.00.9128.1007"));
+    let mut violations = Vec::new();
+
+    for (expected_kind, message, expected_raw) in cases {
+        let evidence = evidence_with_message(message);
+        let first = extract_keys(&evidence, &profile);
+        let second = extract_keys(&evidence, &profile);
+
+        assert_eq!(first, second, "{message}");
+        let malformed = first
+            .gaps
+            .iter()
+            .filter(|gap| gap.kind == SccmExtractionGapKind::MalformedCandidate)
+            .map(|gap| (gap.candidate_kind.clone(), gap.candidate_raw.as_deref()))
+            .collect::<Vec<_>>();
+        if !first.keys.is_empty() || malformed != vec![(Some(expected_kind), Some(expected_raw))] {
+            violations.push(format!("{message}: {first:?}"));
+        }
+    }
+
+    assert!(
+        violations.is_empty(),
+        "truncated key prefixes were admitted:\n{}",
+        violations.join("\n")
+    );
+}
+
+#[test]
+fn key_extraction_accepts_the_declared_full_token_boundaries() {
+    let profile = SccmExtractionProfile::for_version(Some("5.00.9128.1007"));
+
+    for message in [
+        "package id=LAB00001",
+        "package id=LAB00001 next",
+        "package id=LAB00001\nnext",
+        "package id=LAB00001,next",
+        "package id=LAB00001;next",
+        "package id=LAB00001&next",
+    ] {
+        let result = extract_keys(&evidence_with_message(message), &profile);
+
+        assert_eq!(result.keys.len(), 1, "{message:?}");
+        assert_eq!(result.keys[0].raw, "LAB00001", "{message:?}");
+        assert_eq!(result.keys[0].confidence, SccmKeyConfidence::Low);
+        assert!(result
+            .gaps
+            .iter()
+            .all(|gap| gap.kind != SccmExtractionGapKind::MalformedCandidate));
+    }
+}
+
+#[test]
 fn key_profile_single_observed_version_stays_experimental_and_low_confidence() {
     let profile = SccmExtractionProfile::for_version(Some("5.00.9128.1007"));
     let evidence = evidence_with_message(
