@@ -1,0 +1,56 @@
+{
+  "contractState": "proposedPending318And335",
+  "workflow": "managementPoint",
+  "scenario": "registration-failure",
+  "stateChain": ["receiveRequest","authenticate","registerOrIdentify","resolveLocationOrPolicy","respond","recordOutcome"],
+  "analysisContract": {"independentReducer":true,"consumesClientOutput":false,"consumesSiteCoreOutput":false,"crossSideCorrelationPerformed":false},
+  "extractionProfile": {"selectionState":"selected","profileId":"mp-server-5.00.test-v1","sourceVersionPrefix":"5.00.TEST.","validatedArtifactFamilies":["server-mp-auth","server-mp-policy"],"validatedRole":"managementPoint"},
+  "topology": {"role":"managementPoint","captureHostHandle":"safe:mp:lab-mp-01","siteCode":"LAB"},
+  "roleAssessment": {"roleObserved":true,"roleAbsentInferred":false,"missingDefaultPathInterpretation":"sourceCoverageOnly"},
+  "reorderedInputDeterministic": true,
+  "programGateCoverage": ["confirmedTerminal"],
+  "coverage": [{"logicalArtifactId":"server-mp-auth","state":"captured","requiredness":"required"}],
+  "artifactProvenance": [
+    {"artifactId":"mp-registration-auth-current","captureState":"captured","role":"managementPoint","producer":"MP_GetAuth","pathFingerprint":"synthetic:registration-auth","pathProvenance":"configuredSynthetic","sourceVersion":"5.00.TEST.0000","collectedUtc":"2026-07-30T03:00:05Z","encoding":"utf-8","byteLimit":4096,"limitApplied":false},
+    {"artifactId":"mp-registration-manager-current","captureState":"captured","role":"managementPoint","producer":"MP_RegistrationManager","pathFingerprint":"synthetic:registration-manager","pathProvenance":"configuredSynthetic","sourceVersion":"5.00.TEST.0000","collectedUtc":"2026-07-30T03:00:05Z","encoding":"utf-8","byteLimit":4096,"limitApplied":false}
+  ],
+  "primaryTransactionId": "mp:request:28333333-3333-3333-3333-333333333333",
+  "transactions": [{
+    "transactionId": "mp:request:28333333-3333-3333-3333-333333333333",
+    "key": {"keyProfileKind":"requestClientTopology","requestId":"28333333-3333-3333-3333-333333333333","policyId":null,"clientHandle":"safe:client:mp-registration-03","siteCode":"LAB","managementPointHostHandle":"safe:mp:lab-mp-01","confidence":"exact","extractionProfileId":"mp-server-5.00.test-v1"},
+    "topologyCompatibility": "exact",
+    "observationKeyBinding": {"mode":"inheritImmutableParentTransactionKey","observationKeyFieldAllowed":false,"overrideAllowed":false},
+    "phase": "registerOrIdentify",
+    "state": "failed",
+    "lastSuccessfulPhase": "authenticate",
+    "classification": "confirmedFailure",
+    "confidence": "high",
+    "confidenceCeiling": "high",
+    "coverageGapArtifactIds": [],
+    "nextArtifact": null,
+    "evidence": [
+      {"artifactId":"mp-registration-auth-current","startLine":1,"endLine":2},
+      {"artifactId":"mp-registration-manager-current","startLine":1,"endLine":1}
+    ],
+    "observations": [
+      {"observationId":"observation:registration:01-receive","phase":"receiveRequest","state":"succeeded","classification":"success","timestamp":{"original":"7-30-2026 03:00:00.000+000","offsetMinutes":0,"utc":"2026-07-30T03:00:00.000Z"},"evidence":[{"artifactId":"mp-registration-auth-current","startLine":1,"endLine":1}]},
+      {"observationId":"observation:registration:02-authenticate","phase":"authenticate","state":"succeeded","classification":"success","timestamp":{"original":"7-30-2026 03:00:01.000+000","offsetMinutes":0,"utc":"2026-07-30T03:00:01.000Z"},"evidence":[{"artifactId":"mp-registration-auth-current","startLine":2,"endLine":2}]},
+      {"observationId":"observation:registration:03-failed","phase":"registerOrIdentify","state":"failed","classification":"confirmedFailure","timestamp":{"original":"7-30-2026 03:00:02.000+000","offsetMinutes":0,"utc":"2026-07-30T03:00:02.000Z"},"evidence":[{"artifactId":"mp-registration-manager-current","startLine":1,"endLine":1}]}
+    ]
+  }],
+  "sourceLocalObservations": [],
+  "contextFacts": [],
+  "findings": [{
+    "findingId": "finding:mp-registration-failure",
+    "subjectId": "mp:request:28333333-3333-3333-3333-333333333333",
+    "class": "confirmedFailure",
+    "phase": "registerOrIdentify",
+    "lastSuccessfulPhase": "authenticate",
+    "confidence": "high",
+    "confidenceCeiling": "high",
+    "nextArtifact": null,
+    "evidence": [{"artifactId":"mp-registration-manager-current","startLine":1,"endLine":1}]
+  }],
+  "correlationHandoff": {"issue":"#333","performed":false,"timeOnlyEligible":false,"counterpartReadyKeyKinds":["requestId","policyId","clientSafeHandle","siteCode","managementPointHostHandle"]},
+  "prohibitedClaims": ["arbitrary IIS tree required for analysis","client-side root cause or impact","cross-side correlation or #333 conclusion","management-point role absence from a missing default path","time-only or proximity-only transaction joining"]
+}

@@ -1,0 +1,52 @@
+{
+  "contractState": "proposedPending318And335",
+  "workflow": "managementPoint",
+  "scenario": "incomplete",
+  "stateChain": ["receiveRequest","authenticate","registerOrIdentify","resolveLocationOrPolicy","respond","recordOutcome"],
+  "analysisContract": {"independentReducer":true,"consumesClientOutput":false,"consumesSiteCoreOutput":false,"crossSideCorrelationPerformed":false},
+  "extractionProfile": {"selectionState":"selected","profileId":"mp-server-5.00.test-v1","sourceVersionPrefix":"5.00.TEST.","validatedArtifactFamilies":["server-mp-auth","server-mp-policy"],"validatedRole":"managementPoint"},
+  "topology": {"role":"managementPoint","captureHostHandle":"safe:mp:lab-mp-01","siteCode":"LAB"},
+  "roleAssessment": {"roleObserved":true,"roleAbsentInferred":false,"missingDefaultPathInterpretation":"sourceCoverageOnly"},
+  "reorderedInputDeterministic": true,
+  "programGateCoverage": ["incomplete"],
+  "coverage": [
+    {"logicalArtifactId":"server-mp-auth","state":"captured","requiredness":"required"},
+    {"logicalArtifactId":"server-mp-policy","state":"absent","requiredness":"required"}
+  ],
+  "artifactProvenance": [
+    {"artifactId":"mp-incomplete-auth-current","captureState":"captured","role":"managementPoint","producer":"MP_GetAuth","pathFingerprint":"synthetic:incomplete-auth","pathProvenance":"configuredSynthetic","sourceVersion":"5.00.TEST.0000","collectedUtc":"2026-07-30T07:00:05Z","encoding":"utf-8","byteLimit":4096,"limitApplied":false},
+    {"artifactId":"mp-incomplete-policy-absent","captureState":"absent","role":"managementPoint","producer":"MP_GetPolicy","pathFingerprint":"synthetic:incomplete-policy-configured","pathProvenance":"configuredSynthetic","sourceVersion":"5.00.TEST.0000","collectedUtc":"2026-07-30T07:00:05Z","encoding":null,"byteLimit":null,"limitApplied":null},
+    {"artifactId":"mp-incomplete-registration-current","captureState":"captured","role":"managementPoint","producer":"MP_CliReg","pathFingerprint":"synthetic:incomplete-registration","pathProvenance":"configuredSynthetic","sourceVersion":"5.00.TEST.0000","collectedUtc":"2026-07-30T07:00:05Z","encoding":"utf-8","byteLimit":4096,"limitApplied":false}
+  ],
+  "primaryTransactionId": "mp:request:28777777-7777-7777-7777-777777777777",
+  "transactions": [{
+    "transactionId": "mp:request:28777777-7777-7777-7777-777777777777",
+    "key": {"keyProfileKind":"requestClientTopology","requestId":"28777777-7777-7777-7777-777777777777","policyId":null,"clientHandle":"safe:client:mp-incomplete-07","siteCode":"LAB","managementPointHostHandle":"safe:mp:lab-mp-01","confidence":"exact","extractionProfileId":"mp-server-5.00.test-v1"},
+    "topologyCompatibility": "exact",
+    "observationKeyBinding": {"mode":"inheritImmutableParentTransactionKey","observationKeyFieldAllowed":false,"overrideAllowed":false},
+    "phase": "registerOrIdentify",
+    "state": "incomplete",
+    "lastSuccessfulPhase": "registerOrIdentify",
+    "classification": "insufficientEvidence",
+    "confidence": "medium",
+    "confidenceCeiling": "medium",
+    "coverageGapArtifactIds": ["server-mp-policy"],
+    "nextArtifact": {"logicalArtifactId":"server-mp-policy","reason":"Capture bounded MP_Location or MP_GetPolicy evidence before evaluating later phases."},
+    "evidence": [
+      {"artifactId":"mp-incomplete-auth-current","startLine":1,"endLine":2},
+      {"artifactId":"mp-incomplete-registration-current","startLine":1,"endLine":1}
+    ],
+    "observations": [
+      {"observationId":"observation:incomplete:01-receive","phase":"receiveRequest","state":"succeeded","classification":"success","timestamp":{"original":"7-30-2026 07:00:00.000+000","offsetMinutes":0,"utc":"2026-07-30T07:00:00.000Z"},"evidence":[{"artifactId":"mp-incomplete-auth-current","startLine":1,"endLine":1}]},
+      {"observationId":"observation:incomplete:02-authenticate","phase":"authenticate","state":"succeeded","classification":"success","timestamp":{"original":"7-30-2026 07:00:01.000+000","offsetMinutes":0,"utc":"2026-07-30T07:00:01.000Z"},"evidence":[{"artifactId":"mp-incomplete-auth-current","startLine":2,"endLine":2}]},
+      {"observationId":"observation:incomplete:03-register","phase":"registerOrIdentify","state":"succeeded","classification":"success","timestamp":{"original":"7-30-2026 07:00:02.000+000","offsetMinutes":0,"utc":"2026-07-30T07:00:02.000Z"},"evidence":[{"artifactId":"mp-incomplete-registration-current","startLine":1,"endLine":1}]}
+    ]
+  }],
+  "sourceLocalObservations": [],
+  "contextFacts": [],
+  "findings": [
+    {"findingId":"finding:mp-incomplete","subjectId":"mp:request:28777777-7777-7777-7777-777777777777","class":"insufficientEvidence","phase":"registerOrIdentify","lastSuccessfulPhase":"registerOrIdentify","confidence":"medium","confidenceCeiling":"medium","nextArtifact":{"logicalArtifactId":"server-mp-policy","reason":"Capture bounded MP_Location or MP_GetPolicy evidence before evaluating later phases."},"evidence":[{"artifactId":"mp-incomplete-registration-current","startLine":1,"endLine":1}]}
+  ],
+  "correlationHandoff": {"issue":"#333","performed":false,"timeOnlyEligible":false,"counterpartReadyKeyKinds":["requestId","policyId","clientSafeHandle","siteCode","managementPointHostHandle"]},
+  "prohibitedClaims": ["arbitrary IIS tree required for analysis","client-side root cause or impact","cross-side correlation or #333 conclusion","management-point role absence from a missing default path","time-only or proximity-only transaction joining"]
+}

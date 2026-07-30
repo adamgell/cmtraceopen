@@ -1,0 +1,39 @@
+{
+  "sccmManifestVersion": 1,
+  "proposalOnly": true,
+  "syntheticFixture": true,
+  "bundle": {
+    "bundleRole": "server",
+    "workflow": "managementPoint",
+    "artifactOrder": "role,designOnlyCatalog.entryId,pathFingerprint,rotationRank,originalBasename,artifactId",
+    "rotationOrder": "current,lo,numeric-ascending,timestamp-ascending"
+  },
+  "topology": {
+    "captureHost": "LAB-MP01",
+    "rolesObserved": ["managementPoint"],
+    "siteCode": "LAB",
+    "managementPointHostHandle": "safe:mp:lab-mp-01"
+  },
+  "artifacts": [
+    {
+      "artifactId": "mp-auth-failure-current",
+      "designOnlyCatalog": {"entryId":"server-mp-auth","groupMemberships":["server-mp-auth"]},
+      "role": "managementPoint",
+      "producer": "MP_GetAuth",
+      "sourceKind": "ccmLog",
+      "captureState": "captured",
+      "configuredPath": true,
+      "pathProvenance": "configuredSynthetic",
+      "originalBasename": "MP_GetAuth.log",
+      "sanitizedSourcePath": "SYNTHETIC://configured-root/MP/Logs/MP_GetAuth.log",
+      "pathFingerprint": "synthetic:auth-failure",
+      "rotation": {"kind":"current","lineageId":"mp-auth-failure","fragmentComplete":true},
+      "sourceVersion": "5.00.TEST.0000",
+      "collectedUtc": "2026-07-30T02:00:05Z",
+      "encoding": "utf-8",
+      "collectionLimit": {"byteLimit":4096,"limitApplied":false},
+      "bytesCopied": 654,
+      "relativePath": "evidence/server-mp-auth/current/MP_GetAuth.log"
+    }
+  ]
+}

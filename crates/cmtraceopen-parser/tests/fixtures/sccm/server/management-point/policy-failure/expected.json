@@ -1,0 +1,110 @@
+{
+  "contractState": "proposedPending318And335",
+  "workflow": "managementPoint",
+  "scenario": "policy-failure",
+  "stateChain": ["receiveRequest","authenticate","registerOrIdentify","resolveLocationOrPolicy","respond","recordOutcome"],
+  "analysisContract": {"independentReducer":true,"consumesClientOutput":false,"consumesSiteCoreOutput":false,"crossSideCorrelationPerformed":false},
+  "extractionProfile": {"selectionState":"selected","profileId":"mp-server-5.00.test-v1","sourceVersionPrefix":"5.00.TEST.","validatedArtifactFamilies":["server-mp-auth","server-mp-policy"],"validatedRole":"managementPoint"},
+  "topology": {"role":"managementPoint","captureHostHandle":"safe:mp:lab-mp-01","siteCode":"LAB"},
+  "roleAssessment": {"roleObserved":true,"roleAbsentInferred":false,"missingDefaultPathInterpretation":"sourceCoverageOnly"},
+  "reorderedInputDeterministic": true,
+  "programGateCoverage": ["confirmedTerminal","contradictory"],
+  "coverage": [
+    {"logicalArtifactId":"server-mp-auth","state":"captured","requiredness":"required"},
+    {"logicalArtifactId":"server-mp-policy","state":"captured","requiredness":"required"}
+  ],
+  "artifactProvenance": [
+    {"artifactId":"mp-policy-auth-current","captureState":"captured","role":"managementPoint","producer":"MP_GetAuth","pathFingerprint":"synthetic:policy-auth","pathProvenance":"configuredSynthetic","sourceVersion":"5.00.TEST.0000","collectedUtc":"2026-07-30T05:10:10Z","encoding":"utf-8","byteLimit":4096,"limitApplied":false},
+    {"artifactId":"mp-policy-registration-current","captureState":"captured","role":"managementPoint","producer":"MP_CliReg","pathFingerprint":"synthetic:policy-registration","pathProvenance":"configuredSynthetic","sourceVersion":"5.00.TEST.0000","collectedUtc":"2026-07-30T05:10:10Z","encoding":"utf-8","byteLimit":4096,"limitApplied":false},
+    {"artifactId":"mp-policy-response-current","captureState":"captured","role":"managementPoint","producer":"MP_GetPolicy","pathFingerprint":"synthetic:policy-response","pathProvenance":"configuredSynthetic","sourceVersion":"5.00.TEST.0000","collectedUtc":"2026-07-30T05:10:10Z","encoding":"utf-8","byteLimit":4096,"limitApplied":false}
+  ],
+  "primaryTransactionId": "mp:request:28555555-5555-5555-5555-555555555555",
+  "transactions": [
+    {
+      "transactionId": "mp:request:28555555-5555-5555-5555-555555555555",
+      "key": {"keyProfileKind":"requestPolicyClientTopology","requestId":"28555555-5555-5555-5555-555555555555","policyId":"a8555555-5555-5555-5555-555555555555","clientHandle":"safe:client:mp-policy-primary-05","siteCode":"LAB","managementPointHostHandle":"safe:mp:lab-mp-01","confidence":"exact","extractionProfileId":"mp-server-5.00.test-v1"},
+      "topologyCompatibility": "exact",
+      "observationKeyBinding": {"mode":"inheritImmutableParentTransactionKey","observationKeyFieldAllowed":false,"overrideAllowed":false},
+      "phase": "respond",
+      "state": "failed",
+      "lastSuccessfulPhase": "resolveLocationOrPolicy",
+      "classification": "confirmedFailure",
+      "confidence": "high",
+      "confidenceCeiling": "high",
+      "coverageGapArtifactIds": [],
+      "nextArtifact": null,
+      "evidence": [
+        {"artifactId":"mp-policy-auth-current","startLine":1,"endLine":2},
+        {"artifactId":"mp-policy-registration-current","startLine":1,"endLine":1},
+        {"artifactId":"mp-policy-response-current","startLine":1,"endLine":2}
+      ],
+      "observations": [
+        {"observationId":"observation:policy-primary:01-receive","phase":"receiveRequest","state":"succeeded","classification":"success","timestamp":{"original":"7-30-2026 05:00:00.000+000","offsetMinutes":0,"utc":"2026-07-30T05:00:00.000Z"},"evidence":[{"artifactId":"mp-policy-auth-current","startLine":1,"endLine":1}]},
+        {"observationId":"observation:policy-primary:02-authenticate","phase":"authenticate","state":"succeeded","classification":"success","timestamp":{"original":"7-30-2026 05:00:01.000+000","offsetMinutes":0,"utc":"2026-07-30T05:00:01.000Z"},"evidence":[{"artifactId":"mp-policy-auth-current","startLine":2,"endLine":2}]},
+        {"observationId":"observation:policy-primary:03-register","phase":"registerOrIdentify","state":"succeeded","classification":"success","timestamp":{"original":"7-30-2026 05:00:02.000+000","offsetMinutes":0,"utc":"2026-07-30T05:00:02.000Z"},"evidence":[{"artifactId":"mp-policy-registration-current","startLine":1,"endLine":1}]},
+        {"observationId":"observation:policy-primary:04-resolve","phase":"resolveLocationOrPolicy","state":"succeeded","classification":"success","timestamp":{"original":"7-30-2026 05:00:03.000+000","offsetMinutes":0,"utc":"2026-07-30T05:00:03.000Z"},"evidence":[{"artifactId":"mp-policy-response-current","startLine":1,"endLine":1}]},
+        {"observationId":"observation:policy-primary:05-failed","phase":"respond","state":"failed","classification":"confirmedFailure","timestamp":{"original":"7-30-2026 05:00:04.000+000","offsetMinutes":0,"utc":"2026-07-30T05:00:04.000Z"},"evidence":[{"artifactId":"mp-policy-response-current","startLine":2,"endLine":2}]}
+      ]
+    },
+    {
+      "transactionId": "mp:request:28555556-5555-5555-5555-555555555556",
+      "key": {"keyProfileKind":"requestPolicyClientTopology","requestId":"28555556-5555-5555-5555-555555555556","policyId":"a8555556-5555-5555-5555-555555555556","clientHandle":"safe:client:mp-policy-control-05","siteCode":"LAB","managementPointHostHandle":"safe:mp:lab-mp-01","confidence":"exact","extractionProfileId":"mp-server-5.00.test-v1"},
+      "topologyCompatibility": "exact",
+      "observationKeyBinding": {"mode":"inheritImmutableParentTransactionKey","observationKeyFieldAllowed":false,"overrideAllowed":false},
+      "phase": "respond",
+      "state": "contradictory",
+      "lastSuccessfulPhase": "resolveLocationOrPolicy",
+      "classification": "contradictoryEvidence",
+      "confidence": "low",
+      "confidenceCeiling": "low",
+      "coverageGapArtifactIds": [],
+      "nextArtifact": {"logicalArtifactId":"server-mp-policy","reason":"Recapture bounded MP_GetPolicy evidence to resolve the same-instant response contradiction."},
+      "evidence": [
+        {"artifactId":"mp-policy-auth-current","startLine":3,"endLine":4},
+        {"artifactId":"mp-policy-registration-current","startLine":2,"endLine":2},
+        {"artifactId":"mp-policy-response-current","startLine":3,"endLine":5}
+      ],
+      "observations": [
+        {"observationId":"observation:policy-control:01-receive","phase":"receiveRequest","state":"succeeded","classification":"success","timestamp":{"original":"7-30-2026 05:10:00.000+000","offsetMinutes":0,"utc":"2026-07-30T05:10:00.000Z"},"evidence":[{"artifactId":"mp-policy-auth-current","startLine":3,"endLine":3}]},
+        {"observationId":"observation:policy-control:02-authenticate","phase":"authenticate","state":"succeeded","classification":"success","timestamp":{"original":"7-30-2026 05:10:01.000+000","offsetMinutes":0,"utc":"2026-07-30T05:10:01.000Z"},"evidence":[{"artifactId":"mp-policy-auth-current","startLine":4,"endLine":4}]},
+        {"observationId":"observation:policy-control:03-register","phase":"registerOrIdentify","state":"succeeded","classification":"success","timestamp":{"original":"7-30-2026 05:10:02.000+000","offsetMinutes":0,"utc":"2026-07-30T05:10:02.000Z"},"evidence":[{"artifactId":"mp-policy-registration-current","startLine":2,"endLine":2}]},
+        {"observationId":"observation:policy-control:04-resolve","phase":"resolveLocationOrPolicy","state":"succeeded","classification":"success","timestamp":{"original":"7-30-2026 05:10:03.000+000","offsetMinutes":0,"utc":"2026-07-30T05:10:03.000Z"},"evidence":[{"artifactId":"mp-policy-response-current","startLine":3,"endLine":3}]},
+        {"observationId":"observation:policy-control:05-respond-success","phase":"respond","state":"succeeded","classification":"success","timestamp":{"original":"7-30-2026 05:10:04.000+000","offsetMinutes":0,"utc":"2026-07-30T05:10:04.000Z"},"evidence":[{"artifactId":"mp-policy-response-current","startLine":4,"endLine":4}]},
+        {"observationId":"observation:policy-control:06-respond-failure","phase":"respond","state":"failed","classification":"confirmedFailure","timestamp":{"original":"7-30-2026 05:10:04.000+000","offsetMinutes":0,"utc":"2026-07-30T05:10:04.000Z"},"evidence":[{"artifactId":"mp-policy-response-current","startLine":5,"endLine":5}]}
+      ]
+    }
+  ],
+  "sourceLocalObservations": [],
+  "contextFacts": [],
+  "findings": [
+    {
+      "findingId": "finding:mp-policy-control-contradictory",
+      "subjectId": "mp:request:28555556-5555-5555-5555-555555555556",
+      "class": "contradictoryEvidence",
+      "phase": "respond",
+      "lastSuccessfulPhase": "resolveLocationOrPolicy",
+      "confidence": "low",
+      "confidenceCeiling": "low",
+      "nextArtifact": {"logicalArtifactId":"server-mp-policy","reason":"Recapture bounded MP_GetPolicy evidence to resolve the same-instant response contradiction."},
+      "evidence": [{"artifactId":"mp-policy-response-current","startLine":4,"endLine":5}]
+    },
+    {
+      "findingId": "finding:mp-policy-primary-failure",
+      "subjectId": "mp:request:28555555-5555-5555-5555-555555555555",
+      "class": "confirmedFailure",
+      "phase": "respond",
+      "lastSuccessfulPhase": "resolveLocationOrPolicy",
+      "confidence": "high",
+      "confidenceCeiling": "high",
+      "nextArtifact": null,
+      "evidence": [{"artifactId":"mp-policy-response-current","startLine":2,"endLine":2}]
+    }
+  ],
+  "gateControls": {
+    "contradictoryTransactionId": "mp:request:28555556-5555-5555-5555-555555555556",
+    "primaryFindingId": "finding:mp-policy-primary-failure",
+    "controlCannotUpgradePrimary": true
+  },
+  "correlationHandoff": {"issue":"#333","performed":false,"timeOnlyEligible":false,"counterpartReadyKeyKinds":["requestId","policyId","clientSafeHandle","siteCode","managementPointHostHandle"]},
+  "prohibitedClaims": ["arbitrary IIS tree required for analysis","client-side root cause or impact","cross-side correlation or #333 conclusion","management-point role absence from a missing default path","time-only or proximity-only transaction joining"]
+}

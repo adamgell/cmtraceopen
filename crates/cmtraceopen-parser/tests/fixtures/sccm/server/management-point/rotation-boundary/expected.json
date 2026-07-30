@@ -1,0 +1,34 @@
+{
+  "contractState": "proposedPending318And335",
+  "workflow": "managementPoint",
+  "scenario": "rotation-boundary",
+  "stateChain": ["receiveRequest","authenticate","registerOrIdentify","resolveLocationOrPolicy","respond","recordOutcome"],
+  "analysisContract": {"independentReducer":true,"consumesClientOutput":false,"consumesSiteCoreOutput":false,"crossSideCorrelationPerformed":false},
+  "extractionProfile": {"selectionState":"unvalidatedVersion","profileId":null,"sourceVersionPrefix":null,"validatedArtifactFamilies":[],"validatedRole":"managementPoint"},
+  "topology": {"role":"managementPoint","captureHostHandle":"safe:mp:lab-mp-01","siteCode":"LAB"},
+  "roleAssessment": {"roleObserved":true,"roleAbsentInferred":false,"missingDefaultPathInterpretation":"sourceCoverageOnly"},
+  "reorderedInputDeterministic": true,
+  "programGateCoverage": ["malformed","rotation"],
+  "coverage": [
+    {"logicalArtifactId":"server-mp-auth","state":"captured","requiredness":"required"}
+  ],
+  "artifactProvenance": [
+    {"artifactId":"mp-rotation-current-fragment","captureState":"captured","role":"managementPoint","producer":"MP_GetAuth","pathFingerprint":"synthetic:rotation-auth-root","pathProvenance":"configuredSynthetic","sourceVersion":"5.00.TEST.0000","collectedUtc":"2026-07-30T09:00:10Z","encoding":"utf-8","byteLimit":4096,"limitApplied":false},
+    {"artifactId":"mp-rotation-lo-fragment","captureState":"captured","role":"managementPoint","producer":"MP_GetAuth","pathFingerprint":"synthetic:rotation-auth-root","pathProvenance":"configuredSynthetic","sourceVersion":"5.00.TEST.0000","collectedUtc":"2026-07-30T09:00:10Z","encoding":"utf-8","byteLimit":4096,"limitApplied":false},
+    {"artifactId":"mp-rotation-numbered-malformed","captureState":"captured","role":"managementPoint","producer":"MP_GetAuth","pathFingerprint":"synthetic:rotation-auth-root","pathProvenance":"configuredSynthetic","sourceVersion":"5.00.UNKNOWN.0000","collectedUtc":"2026-07-30T09:00:10Z","encoding":"utf-8","byteLimit":4096,"limitApplied":false}
+  ],
+  "primaryTransactionId": null,
+  "transactions": [],
+  "sourceLocalObservations": [
+    {"observationId":"observation:rotation-fragments","key":null,"keyConfidence":"none","classification":"insufficientEvidence","phase":"receiveRequest","lastSuccessfulPhase":null,"confidence":"low","confidenceCeiling":"low","correlationEligible":false,"borrowedKeys":false,"fragmentOnly":true,"nextArtifact":{"logicalArtifactId":"server-mp-auth","reason":"Collect a complete bounded record; physical rotation fragments are coverage-only."},"evidence":[{"artifactId":"mp-rotation-current-fragment","startLine":1,"endLine":1},{"artifactId":"mp-rotation-lo-fragment","startLine":1,"endLine":1}]},
+    {"observationId":"observation:rotation-malformed","key":null,"keyConfidence":"none","classification":"lowConfidenceSymptom","phase":"receiveRequest","lastSuccessfulPhase":null,"confidence":"low","confidenceCeiling":"low","correlationEligible":false,"borrowedKeys":false,"profileSelectionState":"unvalidatedVersion","malformedKey":true,"nextArtifact":{"logicalArtifactId":"server-mp-auth","reason":"Collect a supported-version record containing a complete exact request key."},"evidence":[{"artifactId":"mp-rotation-numbered-malformed","startLine":1,"endLine":1}]}
+  ],
+  "contextFacts": [],
+  "findings": [
+    {"findingId":"finding:mp-rotation-fragments","subjectId":"observation:rotation-fragments","class":"insufficientEvidence","phase":"receiveRequest","lastSuccessfulPhase":null,"confidence":"low","confidenceCeiling":"low","nextArtifact":{"logicalArtifactId":"server-mp-auth","reason":"Collect a complete bounded record; physical rotation fragments are coverage-only."},"evidence":[{"artifactId":"mp-rotation-current-fragment","startLine":1,"endLine":1},{"artifactId":"mp-rotation-lo-fragment","startLine":1,"endLine":1}]},
+    {"findingId":"finding:mp-rotation-malformed","subjectId":"observation:rotation-malformed","class":"lowConfidenceSymptom","phase":"receiveRequest","lastSuccessfulPhase":null,"confidence":"low","confidenceCeiling":"low","nextArtifact":{"logicalArtifactId":"server-mp-auth","reason":"Collect a supported-version record containing a complete exact request key."},"evidence":[{"artifactId":"mp-rotation-numbered-malformed","startLine":1,"endLine":1}]}
+  ],
+  "adjacentKeyBorrowingAllowed": false,
+  "correlationHandoff": {"issue":"#333","performed":false,"timeOnlyEligible":false,"counterpartReadyKeyKinds":["requestId","policyId","clientSafeHandle","siteCode","managementPointHostHandle"]},
+  "prohibitedClaims": ["arbitrary IIS tree required for analysis","client-side root cause or impact","cross-side correlation or #333 conclusion","management-point role absence from a missing default path","time-only or proximity-only transaction joining"]
+}

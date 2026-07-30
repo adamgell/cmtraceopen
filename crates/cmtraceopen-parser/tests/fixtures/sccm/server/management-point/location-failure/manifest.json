@@ -1,0 +1,79 @@
+{
+  "sccmManifestVersion": 1,
+  "proposalOnly": true,
+  "syntheticFixture": true,
+  "bundle": {
+    "bundleRole": "server",
+    "workflow": "managementPoint",
+    "artifactOrder": "role,designOnlyCatalog.entryId,pathFingerprint,rotationRank,originalBasename,artifactId",
+    "rotationOrder": "current,lo,numeric-ascending,timestamp-ascending"
+  },
+  "topology": {
+    "captureHost": "LAB-MP01",
+    "rolesObserved": ["managementPoint"],
+    "siteCode": "LAB",
+    "managementPointHostHandle": "safe:mp:lab-mp-01"
+  },
+  "artifacts": [
+    {
+      "artifactId": "mp-location-auth-current",
+      "designOnlyCatalog": {"entryId":"server-mp-auth","groupMemberships":["server-mp-auth"]},
+      "role": "managementPoint",
+      "producer": "MP_GetAuth",
+      "sourceKind": "ccmLog",
+      "captureState": "captured",
+      "configuredPath": true,
+      "pathProvenance": "configuredSynthetic",
+      "originalBasename": "MP_GetAuth.log",
+      "sanitizedSourcePath": "SYNTHETIC://configured-root/MP/Logs/MP_GetAuth.log",
+      "pathFingerprint": "synthetic:location-auth",
+      "rotation": {"kind":"current","lineageId":"mp-location-auth","fragmentComplete":true},
+      "sourceVersion": "5.00.TEST.0000",
+      "collectedUtc": "2026-07-30T04:00:06Z",
+      "encoding": "utf-8",
+      "collectionLimit": {"byteLimit":4096,"limitApplied":false},
+      "bytesCopied": 642,
+      "relativePath": "evidence/server-mp-auth/current/MP_GetAuth.log"
+    },
+    {
+      "artifactId": "mp-location-registration-current",
+      "designOnlyCatalog": {"entryId":"server-mp-auth","groupMemberships":["server-mp-auth"]},
+      "role": "managementPoint",
+      "producer": "MP_CliReg",
+      "sourceKind": "ccmLog",
+      "captureState": "captured",
+      "configuredPath": true,
+      "pathProvenance": "configuredSynthetic",
+      "originalBasename": "MP_CliReg.log",
+      "sanitizedSourcePath": "SYNTHETIC://configured-root/MP/Logs/MP_CliReg.log",
+      "pathFingerprint": "synthetic:location-registration",
+      "rotation": {"kind":"current","lineageId":"mp-location-registration","fragmentComplete":true},
+      "sourceVersion": "5.00.TEST.0000",
+      "collectedUtc": "2026-07-30T04:00:06Z",
+      "encoding": "utf-8",
+      "collectionLimit": {"byteLimit":4096,"limitApplied":false},
+      "bytesCopied": 354,
+      "relativePath": "evidence/server-mp-auth/current/MP_CliReg.log"
+    },
+    {
+      "artifactId": "mp-location-policy-current",
+      "designOnlyCatalog": {"entryId":"server-mp-policy","groupMemberships":["server-mp-policy"]},
+      "role": "managementPoint",
+      "producer": "MP_Location",
+      "sourceKind": "ccmLog",
+      "captureState": "captured",
+      "configuredPath": true,
+      "pathProvenance": "configuredSynthetic",
+      "originalBasename": "MP_Location.log",
+      "sanitizedSourcePath": "SYNTHETIC://configured-root/MP/Logs/MP_Location.log",
+      "pathFingerprint": "synthetic:location-policy",
+      "rotation": {"kind":"current","lineageId":"mp-location-policy","fragmentComplete":true},
+      "sourceVersion": "5.00.TEST.0000",
+      "collectedUtc": "2026-07-30T04:00:06Z",
+      "encoding": "utf-8",
+      "collectionLimit": {"byteLimit":4096,"limitApplied":false},
+      "bytesCopied": 372,
+      "relativePath": "evidence/server-mp-policy/current/MP_Location.log"
+    }
+  ]
+}
