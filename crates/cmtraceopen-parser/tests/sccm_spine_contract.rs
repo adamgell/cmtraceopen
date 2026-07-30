@@ -1,10 +1,25 @@
 use cmtraceopen_parser::models::log_entry::{LogFormat, ParserKind};
 use cmtraceopen_parser::parser::detect::detect_parser;
 use cmtraceopen_parser::sccm::{
-    classify_artifact_name, declared_source_catalog, SccmArtifact, SccmArtifactFamily,
-    SccmCoverageState, SccmFindingClass, SccmRole, SccmRotation, SccmUnknownRotation,
-    SCCM_DIAGNOSTICS_SCHEMA_VERSION,
+    classify_artifact_name, declared_source_catalog, normalize_ccm_artifact, SccmArtifact,
+    SccmArtifactFamily, SccmCoverageState, SccmFindingClass, SccmRole, SccmRotation,
+    SccmTimeOrderingState, SccmUnknownRotation, SCCM_DIAGNOSTICS_SCHEMA_VERSION,
 };
+
+fn client_policy_artifact() -> SccmArtifact {
+    SccmArtifact {
+        artifact_id: "client-policy-agent".into(),
+        display_name: "PolicyAgent.log".into(),
+        original_path: Some(r"C:\Windows\CCM\Logs\PolicyAgent.log".into()),
+        host: Some("LAB-CLIENT-01".into()),
+        role: SccmRole::Client,
+        configmgr_version: Some("5.00.9128.1007".into()),
+        collected_at_utc: Some("2026-07-30T15:00:00Z".into()),
+        rotation: SccmRotation::Current,
+        coverage: SccmCoverageState::Captured,
+        encoding: Some("utf-8".into()),
+    }
+}
 
 #[test]
 fn sccm_contract_is_public_and_versioned() {
@@ -87,6 +102,94 @@ fn public_ccm_record_without_offset_keeps_legacy_projection() {
     assert_eq!(entries[0].format, LogFormat::Ccm);
     assert!(entries[0].timestamp.is_some());
     assert_eq!(entries[0].timezone_offset, Some(0));
+}
+
+#[test]
+fn evidence_uses_one_logical_record_and_normalized_utc_ordering() {
+    let text = include_str!("fixtures/sccm/spine/multiline-policy.log");
+    let evidence = normalize_ccm_artifact(client_policy_artifact(), text);
+
+    assert_eq!(evidence.len(), 1);
+    assert_eq!(evidence[0].evidence_id, "client-policy-agent:1-2");
+    assert_eq!(evidence[0].reference.entry_id, "client-policy-agent:1-2");
+    assert_eq!(evidence[0].reference.artifact_id, "client-policy-agent");
+    assert_eq!(evidence[0].reference.line_start, Some(1));
+    assert_eq!(evidence[0].reference.line_end, Some(2));
+    assert_eq!(
+        evidence[0].ccm_source_file.as_deref(),
+        Some("policyagent.cpp")
+    );
+    assert_eq!(
+        evidence[0].timestamp.original_display.as_deref(),
+        Some("07-30-2026 10:00:00.000")
+    );
+    assert_eq!(evidence[0].timestamp.offset_minutes, Some(-240));
+    assert_eq!(
+        evidence[0].timestamp.ordering_state,
+        SccmTimeOrderingState::NormalizedUtc
+    );
+    assert!(evidence[0].timestamp.utc_millis.is_some());
+}
+
+#[test]
+fn evidence_missing_or_invalid_time_provenance_is_not_comparable() {
+    let cases = [
+        (
+            r#"<![LOG[No source offset]LOG]!><time="10:00:00.000" date="07-30-2026" component="PolicyAgent" context="" type="1" thread="42" file="policyagent.cpp">"#,
+            SccmTimeOrderingState::OffsetMissing,
+            None,
+        ),
+        (
+            r#"<![LOG[Invalid source offset]LOG]!><time="10:00:00.000+99999" date="07-30-2026" component="PolicyAgent" context="" type="1" thread="42" file="policyagent.cpp">"#,
+            SccmTimeOrderingState::OffsetInvalid,
+            Some(99999),
+        ),
+        (
+            r#"<![LOG[Invalid local date]LOG]!><time="10:00:00.000-240" date="13-40-2026" component="PolicyAgent" context="" type="1" thread="42" file="policyagent.cpp">"#,
+            SccmTimeOrderingState::TimestampMissing,
+            Some(-240),
+        ),
+    ];
+
+    for (text, expected_state, expected_offset) in cases {
+        let evidence = normalize_ccm_artifact(client_policy_artifact(), text);
+        assert_eq!(evidence.len(), 1, "{expected_state:?}");
+        assert_eq!(
+            evidence[0].timestamp.ordering_state, expected_state,
+            "{text}"
+        );
+        assert_eq!(evidence[0].timestamp.offset_minutes, expected_offset);
+        assert_eq!(evidence[0].timestamp.utc_millis, None);
+    }
+}
+
+#[test]
+fn evidence_export_is_deterministic_redacted_and_non_mutating() {
+    let text = include_str!("fixtures/sccm/spine/multiline-policy.log");
+    let first = normalize_ccm_artifact(client_policy_artifact(), text);
+    let before_export = first.clone();
+    let first_json = serde_json::to_string(&first).unwrap();
+    let second = normalize_ccm_artifact(client_policy_artifact(), text);
+
+    assert_eq!(first, before_export);
+    assert_eq!(first, second);
+    assert!(!first_json.contains(r"NT AUTHORITY\\SYSTEM"));
+    assert!(!first_json.contains(r"C:\\Windows\\CCM\\Logs"));
+    let handle = first[0]
+        .execution_context
+        .as_ref()
+        .expect("non-empty raw context receives a redacted handle");
+    assert_eq!(handle.scheme, "sccm-context-fnv1a64-v1");
+    assert_eq!(handle.value.len(), 16);
+
+    let alternate = r#"<![LOG[Synthetic user context]LOG]!><time="10:00:00.000-240" date="07-30-2026" component="PolicyAgent" context="LAB\SyntheticUser" type="1" thread="42" file="policyagent.cpp">"#;
+    let alternate_evidence = normalize_ccm_artifact(client_policy_artifact(), alternate);
+    let alternate_json = serde_json::to_string(&alternate_evidence).unwrap();
+    assert!(!alternate_json.contains(r"LAB\\SyntheticUser"));
+    assert_ne!(
+        alternate_evidence[0].execution_context,
+        first[0].execution_context
+    );
 }
 
 #[test]
