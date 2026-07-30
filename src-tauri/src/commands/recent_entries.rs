@@ -290,13 +290,23 @@ pub fn push_recent_entry<R: Runtime>(
     let available = get_available_workspaces();
     validate_workspace(&workspace, &available)?;
 
-    state.push(RecentEntry {
+    // Both of these update the in-memory list before persisting, so a write
+    // failure (disk full, read-only config dir) still leaves the session's
+    // list correct. Warn and carry on rather than returning early: aborting
+    // here would skip the rebuild and leave the menu showing stale entries
+    // that disagree with state we already changed.
+    if let Err(error) = state.push(RecentEntry {
         path,
         kind,
         workspace,
         opened_at_unix_ms: now_unix_ms(),
-    })?;
-    state.prune(&available)?;
+    }) {
+        log::warn!("[recent] failed to persist after push: {error}");
+    }
+
+    if let Err(error) = state.prune(&available) {
+        log::warn!("[recent] failed to persist after prune: {error}");
+    }
 
     crate::menu::rebuild_recent_submenu(&app)
 }
@@ -306,7 +316,13 @@ pub fn clear_recent_entries<R: Runtime>(
     app: AppHandle<R>,
     state: State<'_, RecentEntriesState>,
 ) -> Result<(), String> {
-    state.clear()?;
+    // The in-memory list is emptied before the write, so rebuild even if
+    // persisting failed — otherwise the menu keeps offering entries the
+    // session no longer has.
+    if let Err(error) = state.clear() {
+        log::warn!("[recent] failed to persist after clear: {error}");
+    }
+
     crate::menu::rebuild_recent_submenu(&app)
 }
 

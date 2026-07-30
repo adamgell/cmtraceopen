@@ -153,7 +153,8 @@ pub fn run() {
                 // session without leaving strays behind.
                 let config_dir = app.path().app_config_dir().unwrap_or_else(|error| {
                     log::warn!(
-                        "[recent] no app config dir ({error}); recents will not survive a restart"
+                        "[recent] no app config dir ({error}); storing recents under the \
+                         temp directory instead, where the OS may clear them at any time"
                     );
                     std::env::temp_dir().join("cmtrace-open")
                 });
