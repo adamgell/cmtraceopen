@@ -21,7 +21,7 @@
 - Analyze only complete logical records. A partial first/last rotation record, malformed record, unknown profile version, or invalid timestamp offset may create a coverage/parse gap or low-confidence symptom, never a terminal role diagnosis.
 - Findings name the last evidenced good hop and a bounded next artifact request. An error-looking server record alone cannot establish a root cause for a client.
 - The new SCCM Server dev environment is a validation source, not a blocker. Parser/corpus work proceeds against synthetic inputs. Native acceptance remains pending until the lab is authorized and exercised.
-- Never commit live site names, host names, users, domain names, certificates, URLs, database names, package IDs, client identifiers, credentials, or customer logs. Use LAB-CM01, LAB-MP01, LAB-DP01, CONTOSO, and synthetic keys.
+- Never commit live site names, host names, users, domain names, certificates, URLs, database names, package IDs, client identifiers, credentials, or customer logs. Use LAB-CM01, LAB-MP01, LAB-DP01, the three-character site code LAB, and synthetic keys.
 
 ---
 
@@ -100,7 +100,7 @@ The server manifest needs enough information to interpret evidence without query
   "topology": {
     "captureHost": "LAB-CM01",
     "rolesObserved": ["siteServer", "managementPoint"],
-    "siteCode": "CONTOSO"
+    "siteCode": "LAB"
   },
   "artifacts": [{
     "artifactId": "server-mp-get-policy",

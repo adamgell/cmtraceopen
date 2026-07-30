@@ -4,7 +4,7 @@
   "proposalOnly": true,
   "privacy": { "synthetic": true, "rawPaths": "redacted" },
   "bundleRole": "server",
-  "topology": { "captureHost": "LAB-CM01", "siteCode": "CONTOSO", "rolesObserved": ["siteServer"] },
+  "topology": { "captureHost": "LAB-CM01", "siteCode": "LAB", "rolesObserved": ["siteServer"] },
   "artifacts": [
     { "artifactId": "dp-distribution-absent-candidate", "producerRole": "siteServer", "producerHostHandle": "synthetic:host:site-01", "workflowSubject": { "role": "distributionPoint", "basis": "incidentScopeOnly" }, "sourceId": "server-dp-distribution", "sourceKind": "ccmLog", "sourceVersion": "5.00.TEST", "originalPath": "REDACTED_DEFAULT_DP_CANDIDATE", "originalBasename": "distmgr.log", "configuredPathProvenance": { "state": "defaultCandidate", "pathFingerprint": "synthetic:path:dp-default" }, "rotation": { "kind": "current", "lineageId": "dp-distribution-default" }, "captureState": "absent", "collectedUtc": "2026-07-30T00:04:00Z", "relativePath": null, "bytesCopied": 0 }
   ]

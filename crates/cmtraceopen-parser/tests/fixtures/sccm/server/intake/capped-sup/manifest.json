@@ -4,7 +4,7 @@
   "proposalOnly": true,
   "privacy": { "synthetic": true, "rawPaths": "redacted" },
   "bundleRole": "server",
-  "topology": { "captureHost": "LAB-CM01", "siteCode": "CONTOSO", "rolesObserved": ["siteServer"] },
+  "topology": { "captureHost": "LAB-CM01", "siteCode": "LAB", "rolesObserved": ["siteServer"] },
   "artifacts": [
     { "artifactId": "sup-sync-capped", "producerRole": "siteServer", "producerHostHandle": "synthetic:host:site-01", "workflowSubject": { "role": "softwareUpdatePoint", "instanceHandle": "synthetic:subject:sup-01" }, "sourceId": "server-sup-sync", "sourceKind": "ccmLog", "sourceVersion": "5.00.TEST", "originalPath": "REDACTED_SITE_SUP_CONTROL_ROOT", "originalBasename": "wsyncmgr.log", "configuredPathProvenance": { "state": "configured", "pathFingerprint": "synthetic:path:site-sup-control" }, "rotation": { "kind": "current", "lineageId": "sup-sync-cap" }, "captureState": "capped", "encoding": "utf-8", "collectionLimit": { "byteLimit": 64, "limitApplied": true }, "bytesCopied": 64, "truncated": true, "fragmentComplete": false, "collectedUtc": "2026-07-30T00:06:00Z", "relativePath": "evidence/sccm/server/site-server/server-sup-sync/subject-software-update-point/instance-17eae15500d8968f/root-b11afca548220198/current/wsyncmgr.log" }
   ]

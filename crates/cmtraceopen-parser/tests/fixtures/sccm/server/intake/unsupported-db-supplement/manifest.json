@@ -4,7 +4,7 @@
   "proposalOnly": true,
   "privacy": { "synthetic": true, "rawPaths": "redacted" },
   "bundleRole": "server",
-  "topology": { "captureHost": "LAB-CM01", "siteCode": "CONTOSO", "rolesObserved": ["siteServer"] },
+  "topology": { "captureHost": "LAB-CM01", "siteCode": "LAB", "rolesObserved": ["siteServer"] },
   "artifacts": [
     { "artifactId": "unknown-db-export", "producerRole": "unclassified", "producerHostHandle": null, "sourceId": "unknown-db-supplement", "sourceKind": "unknown", "sourceVersion": "5.00.TEST", "originalPath": "REDACTED_UNSUPPORTED_EXPORT", "originalBasename": "synthetic-db-export.txt", "configuredPathProvenance": { "state": "supplied", "pathFingerprint": "synthetic:path:unsupported-db" }, "rotation": { "kind": "none", "lineageId": "unknown-db-export" }, "captureState": "unsupported", "unsupportedReason": "no approved server source contract", "collectedUtc": "2026-07-30T00:08:00Z", "relativePath": null, "bytesCopied": 0 }
   ]

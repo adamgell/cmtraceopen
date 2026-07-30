@@ -169,10 +169,10 @@ Deferred native tests must make the write/privacy boundaries observable:
   provider-defined, then none. Timestamped values sort ascending by valid
   `YYYYMMDD-HHMMSS`; numbered values sort by descending integer; remaining
   ties use lineage ID, basename, capture state, relative path, and artifact ID
-  in binary-stable lexical order. Canonical spellings are `.log.lo_`, `.log.N`,
-  and `.log.YYYYMMDD-HHMMSS`. This is serialization order only: intended
-  lineage/record chronology is evaluated separately and is never inferred from
-  array position.
+  in binary-stable lexical order. Canonical spellings are replacement-extension
+  `.lo_`, numbered `.log.N`, and `.log.YYYYMMDD-HHMMSS`. This is serialization
+  order only: intended lineage/record chronology is evaluated separately and
+  is never inferred from array position.
 - For every admitted complete record, its authoritative UTC instant is derived
   only from a syntactically valid date/time/offset and must be less than or
   equal to `collectedUtc` with zero synthetic tolerance. A timestamped

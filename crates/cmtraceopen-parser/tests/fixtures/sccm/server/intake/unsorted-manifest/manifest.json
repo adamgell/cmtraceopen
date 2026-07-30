@@ -4,7 +4,7 @@
   "proposalOnly": true,
   "privacy": { "synthetic": true, "rawPaths": "redacted" },
   "bundleRole": "server",
-  "topology": { "captureHost": "LAB-CM01", "siteCode": "CONTOSO", "rolesObserved": ["siteServer", "managementPoint"] },
+  "topology": { "captureHost": "LAB-CM01", "siteCode": "LAB", "rolesObserved": ["siteServer", "managementPoint"] },
   "inputOrderIsDeliberatelyUnsorted": true,
   "artifacts": [
     { "artifactId": "z-site-status", "producerRole": "siteServer", "producerHostHandle": "synthetic:host:site-01", "sourceId": "server-status", "sourceKind": "ccmLog", "sourceVersion": "5.00.TEST", "originalPath": "REDACTED_SITE_ROOT_B", "originalBasename": "statmgr.log", "configuredPathProvenance": { "state": "configured", "pathFingerprint": "synthetic:path:z-site" }, "rotation": { "kind": "current", "lineageId": "site-status-z" }, "captureState": "captured", "encoding": "utf-8", "collectionLimit": { "byteLimit": 4096, "limitApplied": false }, "collectedUtc": "2026-07-30T00:09:00Z", "relativePath": "evidence/sccm/server/site-server/server-status/current/statmgr.log", "bytesCopied": 167 },
