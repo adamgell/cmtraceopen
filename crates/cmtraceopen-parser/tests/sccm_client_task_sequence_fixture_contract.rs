@@ -857,31 +857,52 @@ fn validate_contract(
         let evidence_refs = transaction["evidence"]
             .as_array()
             .ok_or_else(|| format!("{transaction_id}: evidence is not an array"))?;
-        let mut cited_text = String::new();
+        let key_needles = key
+            .iter()
+            .filter(|(field, _)| {
+                !matches!(
+                    field.as_str(),
+                    "keyProfileKind" | "confidence" | "extractionProfileId"
+                )
+            })
+            .map(|(field, value)| {
+                value
+                    .as_str()
+                    .map(|value| format!("{field}={value}"))
+                    .ok_or_else(|| format!("{transaction_id}: key {field} is not a string"))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut cited_record_texts = Vec::new();
         for evidence_ref in evidence_refs {
-            cited_text.push_str(&evidence_text(
-                scenario_root,
-                &artifacts_by_id,
-                evidence_ref,
-            )?);
-            cited_text.push('\n');
-        }
-        for (field, value) in key {
-            if matches!(
-                field.as_str(),
-                "keyProfileKind" | "confidence" | "extractionProfileId"
-            ) {
-                continue;
-            }
-            let value = value
-                .as_str()
-                .ok_or_else(|| format!("{transaction_id}: key {field} is not a string"))?;
-            let needle = format!("{field}={value}");
-            if !cited_text.contains(&needle) {
+            let artifact = manifest_artifact(&artifacts_by_id, evidence_ref)?;
+            let start_line = evidence_ref["startLine"]
+                .as_u64()
+                .ok_or_else(|| format!("{transaction_id}: evidence startLine is missing"))?
+                as u32;
+            let end_line = evidence_ref["endLine"]
+                .as_u64()
+                .ok_or_else(|| format!("{transaction_id}: evidence endLine is missing"))?
+                as u32;
+            let normalized = normalized_evidence(scenario_root, artifact)?;
+            if !normalized.iter().any(|item| {
+                item.reference.line_start == Some(start_line)
+                    && item.reference.line_end == Some(end_line)
+            }) {
                 return Err(format!(
-                    "{transaction_id}: key {field} is not bound to cited evidence ({needle})"
+                    "{transaction_id}: cited evidence is not one complete CCM record"
                 ));
             }
+
+            let record_text = evidence_text(scenario_root, &artifacts_by_id, evidence_ref)?;
+            if let Some(missing_needle) = key_needles
+                .iter()
+                .find(|needle| !record_text.contains(needle.as_str()))
+            {
+                return Err(format!(
+                    "{transaction_id}: declared key fields do not co-occur in cited complete CCM record ({missing_needle})"
+                ));
+            }
+            cited_record_texts.push(record_text);
         }
 
         let phase = transaction["phase"]
@@ -896,8 +917,10 @@ fn validate_contract(
         if !STATE_CHAIN.contains(&phase)
             || !STATE_CHAIN.contains(&last_successful_phase)
             || !["inProgress", "blockedOrDeferred", "failed", "succeeded"].contains(&state)
-            || !cited_text.contains(&format!("phase={phase}"))
-            || !cited_text.contains(&format!("state={state}"))
+            || !cited_record_texts.iter().any(|record_text| {
+                record_text.contains(&format!("phase={phase}"))
+                    && record_text.contains(&format!("state={state}"))
+            })
         {
             return Err(format!(
                 "{transaction_id}: phase/state semantics are not bound to cited evidence"
@@ -915,6 +938,14 @@ fn validate_contract(
             let artifact = artifacts_by_id
                 .get(artifact_id)
                 .ok_or_else(|| format!("{transaction_id}: unknown path artifact {artifact_id}"))?;
+            if !evidence_refs
+                .iter()
+                .any(|evidence_ref| evidence_ref["artifactId"] == artifact_id)
+            {
+                return Err(format!(
+                    "{transaction_id}: path artifact {artifact_id} is not key-bound cited evidence"
+                ));
+            }
             if path_item["pathClass"] != artifact["pathClass"]
                 || path_item["relocationOrdinal"] != artifact["relocationOrdinal"]
             {
@@ -939,6 +970,14 @@ fn validate_contract(
 
         let timestamp = &transaction["timestampProvenance"];
         let ordering_ref = &transaction["orderingEvidence"];
+        if !evidence_refs
+            .iter()
+            .any(|evidence_ref| evidence_ref == ordering_ref)
+        {
+            return Err(format!(
+                "{transaction_id}: ordering evidence is not key-bound transaction evidence"
+            ));
+        }
         let artifact = manifest_artifact(&artifacts_by_id, ordering_ref)?;
         let normalized = normalized_evidence(scenario_root, artifact)?;
         let start_line = ordering_ref["startLine"]
@@ -1008,6 +1047,14 @@ fn validate_contract(
             if transaction["state"] != "failed" || transaction["terminalEvidence"].is_null() {
                 return Err(format!(
                     "{transaction_id}: confirmed failure lacks terminal evidence"
+                ));
+            }
+            if !evidence_refs
+                .iter()
+                .any(|evidence_ref| evidence_ref == &transaction["terminalEvidence"])
+            {
+                return Err(format!(
+                    "{transaction_id}: terminal evidence is not key-bound transaction evidence"
                 ));
             }
             let terminal_text = evidence_text(
@@ -1629,6 +1676,19 @@ fn adversarial_contract_mutations_fail_closed() {
     let error = validate_contract("winpe", &winpe_root, &manifest, &expected)
         .expect_err("phase must bind to cited CCM evidence");
     assert!(error.contains("phase/state"), "{error}");
+
+    let unrelated_root = task_sequence_root().join("unrelated-runs");
+    let manifest = read_json(&unrelated_root.join("manifest.json"));
+    let mut expected = read_json(&unrelated_root.join("expected.json"));
+    let run_b_evidence = expected["transactions"][1]["evidence"][0].clone();
+    expected["transactions"][0]["evidence"]
+        .as_array_mut()
+        .expect("run A evidence is an array")
+        .push(run_b_evidence);
+    expected["transactions"][0]["key"]["advertisementId"] = Value::String("LAB20308".to_owned());
+    let error = validate_contract("unrelated-runs", &unrelated_root, &manifest, &expected)
+        .expect_err("one exact key cannot be pooled across unrelated complete records");
+    assert!(error.contains("co-occur"), "{error}");
 
     let completed_root = task_sequence_root().join("completed");
     let manifest = read_json(&completed_root.join("manifest.json"));

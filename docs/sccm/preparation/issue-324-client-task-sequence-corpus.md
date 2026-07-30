@@ -81,8 +81,10 @@ An exact synthetic transaction key contains all of:
 4. `runContext`.
 
 Every field must be present in the transaction's cited evidence under the
-recognized profile. Filename, path, timestamp, display name, component, or
-ingestion order are forbidden join fields.
+recognized profile. All four fields must co-occur in each cited complete CCM
+record used to assemble the transaction; values cannot be pooled across
+records. Filename, path, timestamp, display name, component, or ingestion order
+are forbidden join fields.
 
 The `unrelated-runs` scenario gives two records the exact same normalized
 timestamp. Their exact execution IDs, advertisement IDs, run contexts,
@@ -204,6 +206,7 @@ unique transaction, observation, finding, and provenance IDs.
 Adversarial mutations prove the contract rejects:
 
 - expected output that upgrades absent coverage to captured;
+- a declared exact key assembled from fields in two unrelated complete records;
 - an execution ID not present in the cited evidence;
 - a normalized timestamp not produced by the cited CCM record;
 - two artifact IDs that alias one physical evidence path;
