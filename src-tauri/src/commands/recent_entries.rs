@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -196,41 +197,81 @@ impl RecentEntriesState {
     }
 
     pub fn push(&self, entry: RecentEntry) -> Result<(), String> {
-        let mut entries = self
-            .entries
-            .lock()
-            .map_err(|error| format!("recent entries lock poisoned: {error}"))?;
-        push_entry(&mut entries, entry);
-        save_entries(&self.config_dir, &entries)
+        let to_persist = {
+            let mut entries = self
+                .entries
+                .lock()
+                .map_err(|error| format!("recent entries lock poisoned: {error}"))?;
+            push_entry(&mut entries, entry);
+            entries.clone()
+        };
+
+        // Persist outside the lock: `handle_menu_event` calls `snapshot()` on
+        // the main thread, so holding the guard across file I/O would stall
+        // the UI for as long as the write takes.
+        save_entries(&self.config_dir, &to_persist)
     }
 
+    /// Drop entries that are provably gone, without holding the lock across
+    /// the existence checks.
+    ///
+    /// `prune_entries` calls `metadata()`, which can block for a long time on
+    /// an unreachable network path. Holding the guard across that would freeze
+    /// any main-thread `snapshot()` (a Recent click) for the same duration, so
+    /// the checks run against a copy. Because a push can land while they run,
+    /// the result is applied as a *removal set* rather than by overwriting the
+    /// list — otherwise the entry the user just opened would be clobbered by a
+    /// stale snapshot.
     pub fn prune(&self, available_workspaces: &[&str]) -> Result<(), String> {
-        let mut entries = self
-            .entries
-            .lock()
-            .map_err(|error| format!("recent entries lock poisoned: {error}"))?;
+        let before = self.snapshot();
+        if before.is_empty() {
+            return Ok(());
+        }
 
-        let pruned = prune_entries(
-            entries.clone(),
+        let kept = prune_entries(
+            before.clone(),
             available_workspaces,
             Instant::now() + PRUNE_BUDGET,
         );
 
-        if pruned == *entries {
+        if kept.len() == before.len() {
             return Ok(());
         }
 
-        *entries = pruned;
-        save_entries(&self.config_dir, &entries)
+        let survivors: HashSet<(String, String)> = kept
+            .iter()
+            .map(|entry| (normalize_path(&entry.path), entry.workspace.clone()))
+            .collect();
+        let dropped: HashSet<(String, String)> = before
+            .iter()
+            .map(|entry| (normalize_path(&entry.path), entry.workspace.clone()))
+            .filter(|key| !survivors.contains(key))
+            .collect();
+
+        let to_persist = {
+            let mut entries = self
+                .entries
+                .lock()
+                .map_err(|error| format!("recent entries lock poisoned: {error}"))?;
+            entries.retain(|entry| {
+                !dropped.contains(&(normalize_path(&entry.path), entry.workspace.clone()))
+            });
+            entries.clone()
+        };
+
+        save_entries(&self.config_dir, &to_persist)
     }
 
     pub fn clear(&self) -> Result<(), String> {
-        let mut entries = self
-            .entries
-            .lock()
-            .map_err(|error| format!("recent entries lock poisoned: {error}"))?;
-        entries.clear();
-        save_entries(&self.config_dir, &entries)
+        {
+            let mut entries = self
+                .entries
+                .lock()
+                .map_err(|error| format!("recent entries lock poisoned: {error}"))?;
+            entries.clear();
+        }
+
+        save_entries(&self.config_dir, &[])
     }
 }
 
@@ -402,6 +443,58 @@ mod tests {
     fn validate_workspace_rejects_unknown_ids() {
         assert!(validate_workspace("log", &["log", "intune"]).is_ok());
         assert!(validate_workspace("not-a-workspace", &["log", "intune"]).is_err());
+    }
+
+    #[test]
+    fn state_prune_drops_missing_entries_and_persists() {
+        let dir = tempdir().expect("tempdir");
+        let present = dir.path().join("present.log");
+        std::fs::write(&present, "line").expect("write");
+
+        let state = RecentEntriesState::load(dir.path().to_path_buf(), &["log"]);
+        state
+            .push(entry(present.to_str().expect("utf8 path"), "log"))
+            .expect("push present");
+        state
+            .push(entry("/definitely/missing.log", "log"))
+            .expect("push missing");
+
+        state.prune(&["log"]).expect("prune");
+
+        let remaining = state.snapshot();
+        assert_eq!(remaining.len(), 1);
+        assert!(remaining[0].path.ends_with("present.log"));
+        assert_eq!(load_entries(dir.path()).len(), 1);
+    }
+
+    #[test]
+    fn state_prune_keeps_an_entry_pushed_while_it_was_running() {
+        // prune() checks existence against a snapshot taken before it releases
+        // the lock. Applying the result as a removal set (rather than writing
+        // the stale snapshot back) is what keeps a concurrent push alive.
+        let dir = tempdir().expect("tempdir");
+        let present = dir.path().join("present.log");
+        std::fs::write(&present, "line").expect("write");
+
+        let state = RecentEntriesState::load(dir.path().to_path_buf(), &["log"]);
+        state
+            .push(entry("/definitely/missing.log", "log"))
+            .expect("push missing");
+
+        // Stand in for "a push landed during the metadata() calls".
+        let before = state.snapshot();
+        state
+            .push(entry(present.to_str().expect("utf8 path"), "log"))
+            .expect("push during prune");
+
+        let kept = prune_entries(before, &["log"], Instant::now() + Duration::from_secs(1));
+        assert!(kept.is_empty(), "the pre-push snapshot prunes to nothing");
+
+        state.prune(&["log"]).expect("prune");
+
+        let remaining = state.snapshot();
+        assert_eq!(remaining.len(), 1, "the concurrent push must survive");
+        assert!(remaining[0].path.ends_with("present.log"));
     }
 
     #[test]

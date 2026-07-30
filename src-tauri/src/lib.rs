@@ -146,10 +146,17 @@ pub fn run() {
             {
                 use tauri::Manager as _;
 
-                let config_dir = app
-                    .path()
-                    .app_config_dir()
-                    .unwrap_or_else(|_| std::path::PathBuf::from("."));
+                // Never fall back to the current directory: that would drop a
+                // recent-entries.json into wherever the app happened to be
+                // launched from, or fail noisily in a read-only install dir.
+                // A temp subdirectory keeps the feature working for the
+                // session without leaving strays behind.
+                let config_dir = app.path().app_config_dir().unwrap_or_else(|error| {
+                    log::warn!(
+                        "[recent] no app config dir ({error}); recents will not survive a restart"
+                    );
+                    std::env::temp_dir().join("cmtrace-open")
+                });
 
                 app.manage(commands::recent_entries::RecentEntriesState::load(
                     config_dir,
