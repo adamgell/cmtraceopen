@@ -37,8 +37,14 @@ pub struct JamfDirectoryStatus {
     pub connect_user_logs: bool,
 }
 
+// Adjacently tagged so data-carrying variants cross IPC as
+// `{"type":"policyId","value":"332"}` and unit variants as
+// `{"type":"recurringCheckIn"}` — matching the discriminated unions in
+// `src/workspaces/macos-jamf/types.ts`. Serde's default external tagging
+// would emit a bare string / `{"policyId":"332"}`, which the frontend
+// cannot read (it switches on `.type`).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
+#[serde(tag = "type", content = "value", rename_all = "camelCase")]
 pub enum JamfPolicyTrigger {
     RecurringCheckIn,
     Event(String),
@@ -50,8 +56,9 @@ pub enum JamfPolicyTrigger {
     Other(String),
 }
 
+// Adjacently tagged — see the note on `JamfPolicyTrigger`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
+#[serde(tag = "type", content = "value", rename_all = "camelCase")]
 pub enum JamfPolicyResult {
     Success,
     Failure(String),
