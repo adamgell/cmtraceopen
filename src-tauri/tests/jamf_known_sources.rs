@@ -1,4 +1,8 @@
-use app_lib::commands::known_sources::{build_known_log_sources, KnownSourceMetadata};
+use app_lib::commands::known_sources::build_known_log_sources;
+// Only the macOS assertions name this type; importing it unconditionally trips
+// `-D warnings` on every other target.
+#[cfg(target_os = "macos")]
+use app_lib::commands::known_sources::KnownSourceMetadata;
 
 #[cfg(target_os = "macos")]
 fn jamf_sources(all: &[KnownSourceMetadata]) -> Vec<&KnownSourceMetadata> {
