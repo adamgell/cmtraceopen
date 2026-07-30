@@ -2,7 +2,7 @@
   "sccmManifestVersion": 1,
   "proposalOnly": true,
   "syntheticFixture": true,
-  "bundle": {"role":"client","captureHost":"LAB-CLIENT-01","siteCode":"CONTOSO","artifactOrder":"designOnlyCatalog.entryId,pathFingerprint,rotationRank,originalBasename,artifactId","rotationOrder":"current,lo,numeric-ascending,timestamp-ascending"},
+  "bundle": {"role":"client","captureHost":"LAB-CLIENT-01","siteCode":"LAB","artifactOrder":"designOnlyCatalog.entryId,pathFingerprint,rotationRank,originalBasename,artifactId","rotationOrder":"current,lo,numeric-ascending,timestamp-ascending"},
   "artifacts": [
     {"artifactId":"fixture-missing-app-enforce-current","designOnlyCatalog":{"entryId":"client-app-enforce","groupMemberships":["client-app-enforce"]},"role":"client","kind":"ccmLog","captureState":"absent","originalBasename":"AppEnforce.log","sanitizedSourcePath":null,"pathFingerprint":null,"rotation":{"kind":"current","fragmentComplete":false},"sourceVersion":null,"capturedUtc":"2026-07-30T00:04:00Z","bytesCopied":0,"relativePath":null},
     {"artifactId":"fixture-missing-app-intent-current","designOnlyCatalog":{"entryId":"client-app-intent","groupMemberships":["client-app-intent"]},"role":"client","kind":"ccmLog","captureState":"absent","originalBasename":"AppIntentEval.log","sanitizedSourcePath":null,"pathFingerprint":null,"rotation":{"kind":"current","fragmentComplete":false},"sourceVersion":null,"capturedUtc":"2026-07-30T00:04:01Z","bytesCopied":0,"relativePath":null},

@@ -5,7 +5,7 @@
   "bundle": {
     "role": "client",
     "captureHost": "LAB-CLIENT-01",
-    "siteCode": "CONTOSO",
+    "siteCode": "LAB",
     "artifactOrder": "designOnlyCatalog.entryId,pathFingerprint,rotationRank,originalBasename,artifactId",
     "rotationOrder": "current,lo,numeric-ascending,timestamp-ascending"
   },
