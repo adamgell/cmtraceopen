@@ -5,7 +5,7 @@
   "stateChain": ["receiveRequest","authenticate","registerOrIdentify","resolveLocationOrPolicy","respond","recordOutcome"],
   "analysisContract": {"independentReducer":true,"consumesClientOutput":false,"consumesSiteCoreOutput":false,"crossSideCorrelationPerformed":false},
   "extractionProfile": {"selectionState":"unvalidatedVersion","profileId":null,"sourceVersionPrefix":null,"validatedArtifactFamilies":[],"validatedRole":"managementPoint"},
-  "topology": {"role":"managementPoint","captureHostHandle":"safe:mp:lab-mp-01","siteCode":"CONTOSO"},
+  "topology": {"role":"managementPoint","captureHostHandle":"safe:mp:lab-mp-01","siteCode":"LAB"},
   "roleAssessment": {"roleObserved":true,"roleAbsentInferred":false,"missingDefaultPathInterpretation":"sourceCoverageOnly"},
   "reorderedInputDeterministic": true,
   "programGateCoverage": ["malformed","rotation"],

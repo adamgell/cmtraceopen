@@ -11,7 +11,7 @@
   "topology": {
     "captureHost": "LAB-MP01",
     "rolesObserved": ["managementPoint"],
-    "siteCode": "CONTOSO",
+    "siteCode": "LAB",
     "managementPointHostHandle": "safe:mp:lab-mp-01"
   },
   "artifacts": [
@@ -50,7 +50,7 @@
       "collectedUtc": "2026-07-30T08:00:05Z",
       "encoding": "utf-8",
       "collectionLimit": {"byteLimit":4096,"limitApplied":false},
-      "bytesCopied": 406,
+      "bytesCopied": 402,
       "relativePath": "evidence/server-mp-policy/current/MP_GetPolicy.log"
     }
   ]

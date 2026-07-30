@@ -11,7 +11,7 @@
   "topology": {
     "captureHost": "LAB-MP01",
     "rolesObserved": ["managementPoint"],
-    "siteCode": "CONTOSO",
+    "siteCode": "LAB",
     "managementPointHostHandle": "safe:mp:lab-mp-01"
   },
   "artifacts": [
@@ -32,7 +32,7 @@
       "collectedUtc": "2026-07-30T04:00:06Z",
       "encoding": "utf-8",
       "collectionLimit": {"byteLimit":4096,"limitApplied":false},
-      "bytesCopied": 650,
+      "bytesCopied": 642,
       "relativePath": "evidence/server-mp-auth/current/MP_GetAuth.log"
     },
     {
@@ -52,7 +52,7 @@
       "collectedUtc": "2026-07-30T04:00:06Z",
       "encoding": "utf-8",
       "collectionLimit": {"byteLimit":4096,"limitApplied":false},
-      "bytesCopied": 358,
+      "bytesCopied": 354,
       "relativePath": "evidence/server-mp-auth/current/MP_CliReg.log"
     },
     {
@@ -72,7 +72,7 @@
       "collectedUtc": "2026-07-30T04:00:06Z",
       "encoding": "utf-8",
       "collectionLimit": {"byteLimit":4096,"limitApplied":false},
-      "bytesCopied": 376,
+      "bytesCopied": 372,
       "relativePath": "evidence/server-mp-policy/current/MP_Location.log"
     }
   ]

@@ -69,6 +69,13 @@ The source producer, captured artifact basename, and CCM `file=` code-origin
 attribute are three distinct provenance fields. None may be substituted for
 another.
 
+Microsoft's [Configuration Manager log-file
+contract](https://learn.microsoft.com/en-us/intune/configmgr/core/plan-design/hierarchy/about-log-files)
+specifies that standard rollover replaces the active `.log` suffix with
+`.lo_`. For example, `MP_GetAuth.log` rolls to `MP_GetAuth.lo_`; the rollover
+is not named `MP_GetAuth.log.lo_`. A physical manifest must retain that
+observed basename exactly.
+
 ## Physical artifact, topology, and path provenance
 
 Every manifest represents a synthetic server bundle with:
@@ -76,7 +83,7 @@ Every manifest represents a synthetic server bundle with:
 - `bundleRole: server` and `workflow: managementPoint`;
 - observed role `managementPoint`;
 - synthetic capture host `LAB-MP01`;
-- synthetic site label `CONTOSO`;
+- synthetic site label `LAB`;
 - public correlation-safe MP handle `safe:mp:lab-mp-01`;
 - a corpus-unique physical `artifactId`;
 - exactly one design-only catalog group membership;
@@ -87,6 +94,12 @@ Every manifest represents a synthetic server bundle with:
 - explicit capture state, ConfigMgr profile label, collection time, encoding,
   byte limit, and exact copied byte count; and
 - a collision-safe relative evidence path.
+
+`LAB` also satisfies Microsoft's [site-code
+contract](https://learn.microsoft.com/en-us/intune/configmgr/core/servers/deploy/install/setup-wizard-central-primary):
+an exact ConfigMgr site code is three alphanumeric characters from `A` through
+`Z` and `0` through `9`. The profile validator applies `^[A-Z0-9]{3}$` to
+every exact topology and transaction-key claim.
 
 `Captured`, `Absent`, `AccessDenied`, `Capped`, `Skipped`, `Unsupported`, and
 `ParseFailed` remain distinct. A noncapture has zero bytes and no invented
@@ -216,7 +229,7 @@ field names.
 
 ## Privacy limits
 
-The corpus uses only deterministic synthetic values: `LAB-MP01`, `CONTOSO`,
+The corpus uses only deterministic synthetic values: `LAB-MP01`, `LAB`,
 synthetic UUIDs, correlation-safe handles, and `SYNTHETIC://` path handles.
 It contains no customer logs, real hosts, domains, users, SIDs, URLs,
 certificates, database names, credentials, package identifiers, or raw client

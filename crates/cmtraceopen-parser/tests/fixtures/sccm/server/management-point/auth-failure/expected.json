@@ -5,7 +5,7 @@
   "stateChain": ["receiveRequest","authenticate","registerOrIdentify","resolveLocationOrPolicy","respond","recordOutcome"],
   "analysisContract": {"independentReducer":true,"consumesClientOutput":false,"consumesSiteCoreOutput":false,"crossSideCorrelationPerformed":false},
   "extractionProfile": {"selectionState":"selected","profileId":"mp-server-5.00.test-v1","sourceVersionPrefix":"5.00.TEST.","validatedArtifactFamilies":["server-mp-auth","server-mp-policy"],"validatedRole":"managementPoint"},
-  "topology": {"role":"managementPoint","captureHostHandle":"safe:mp:lab-mp-01","siteCode":"CONTOSO"},
+  "topology": {"role":"managementPoint","captureHostHandle":"safe:mp:lab-mp-01","siteCode":"LAB"},
   "roleAssessment": {"roleObserved":true,"roleAbsentInferred":false,"missingDefaultPathInterpretation":"sourceCoverageOnly"},
   "reorderedInputDeterministic": true,
   "programGateCoverage": ["confirmedTerminal"],
@@ -16,7 +16,7 @@
   "primaryTransactionId": "mp:request:28222222-2222-2222-2222-222222222222",
   "transactions": [{
     "transactionId": "mp:request:28222222-2222-2222-2222-222222222222",
-    "key": {"keyProfileKind":"requestClientTopology","requestId":"28222222-2222-2222-2222-222222222222","policyId":null,"clientHandle":"safe:client:mp-auth-02","siteCode":"CONTOSO","managementPointHostHandle":"safe:mp:lab-mp-01","confidence":"exact","extractionProfileId":"mp-server-5.00.test-v1"},
+    "key": {"keyProfileKind":"requestClientTopology","requestId":"28222222-2222-2222-2222-222222222222","policyId":null,"clientHandle":"safe:client:mp-auth-02","siteCode":"LAB","managementPointHostHandle":"safe:mp:lab-mp-01","confidence":"exact","extractionProfileId":"mp-server-5.00.test-v1"},
     "topologyCompatibility": "exact",
     "phase": "authenticate",
     "state": "failed",

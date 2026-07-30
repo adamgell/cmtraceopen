@@ -11,7 +11,7 @@
   "topology": {
     "captureHost": "LAB-MP01",
     "rolesObserved": ["managementPoint"],
-    "siteCode": "CONTOSO",
+    "siteCode": "LAB",
     "managementPointHostHandle": "safe:mp:lab-mp-01"
   },
   "artifacts": [
@@ -44,16 +44,16 @@
       "captureState": "captured",
       "configuredPath": true,
       "pathProvenance": "configuredSynthetic",
-      "originalBasename": "MP_GetAuth.log.lo_",
-      "sanitizedSourcePath": "SYNTHETIC://configured-root/MP/Logs/MP_GetAuth.log.lo_",
+      "originalBasename": "MP_GetAuth.lo_",
+      "sanitizedSourcePath": "SYNTHETIC://configured-root/MP/Logs/MP_GetAuth.lo_",
       "pathFingerprint": "synthetic:rotation-auth-root",
       "rotation": {"kind":"lo","lineageId":"mp-rotation-split","fragmentComplete":false},
       "sourceVersion": "5.00.TEST.0000",
       "collectedUtc": "2026-07-30T09:00:10Z",
       "encoding": "utf-8",
       "collectionLimit": {"byteLimit":4096,"limitApplied":false},
-      "bytesCopied": 140,
-      "relativePath": "evidence/server-mp-auth/lo/MP_GetAuth.log.lo_"
+      "bytesCopied": 136,
+      "relativePath": "evidence/server-mp-auth/lo/MP_GetAuth.lo_"
     },
     {
       "artifactId": "mp-rotation-numbered-malformed",
@@ -72,7 +72,7 @@
       "collectedUtc": "2026-07-30T09:00:10Z",
       "encoding": "utf-8",
       "collectionLimit": {"byteLimit":4096,"limitApplied":false},
-      "bytesCopied": 323,
+      "bytesCopied": 319,
       "relativePath": "evidence/server-mp-auth/numbered-2/MP_GetAuth.log.2"
     }
   ]
