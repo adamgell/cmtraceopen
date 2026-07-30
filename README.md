@@ -47,6 +47,23 @@ Build status and nightly downloads are shown on the [CMTrace Open build page](ht
 
 All releases are signed. The Windows executable is code-signed and the macOS app is notarized.
 
+On macOS you can install with Homebrew instead:
+
+```bash
+brew install --cask cmtrace-open
+```
+
+Apple Silicon only: the macOS build is arm64, so Homebrew refuses the install on an Intel Mac rather than falling back to Rosetta. The cask is staged in this repository at [`Casks/cmtrace-open.rb`](Casks/cmtrace-open.rb) and is pending acceptance into [homebrew-cask](https://github.com/Homebrew/homebrew-cask); the command works once that lands. See [Casks/README.md](Casks/README.md) for the submission and version-bump process.
+
+On Windows you can install with [Scoop](https://scoop.sh) instead:
+
+```powershell
+scoop bucket add cmtraceopen https://github.com/adamgell/cmtraceopen
+scoop install cmtrace
+```
+
+x64 and arm64, portable: Scoop drops the single-file executable in its own directory, so no installer runs and nothing lands in Program Files. Use `scoop install cmtrace-lite` for the Lite edition. This repository doubles as its own Scoop bucket: the manifests are in [`bucket/`](bucket/) and a release workflow bumps them. Submission to [ScoopInstaller/Extras](https://github.com/ScoopInstaller/Extras), which removes the `scoop bucket add` step, is still pending. See [bucket/README.md](bucket/README.md) for that process and for how the manifests stay current.
+
 Startup update checks are disabled by default. Users can opt in from Settings > Updates. Managed Windows deployments can force-disable all app update checks with either installer:
 
 ```powershell
