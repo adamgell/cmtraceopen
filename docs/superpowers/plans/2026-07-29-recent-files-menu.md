@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add a `File > Recent` submenu listing up to 10 recently opened paths, each tagged with the workspace that opened it, so the user can reopen prior evidence in one click.
+**Goal:** Add a `File > Recent` submenu listing up to 10 recently opened paths, each tagged with the workspace that opened it, so the user can reopen prior evidence in one click. As shipped, recording covers the workspaces that report open failures (`log`, `dsregcmd`) — see `RECORDABLE_WORKSPACES` in `src/hooks/use-app-actions.ts`.
 
 **Architecture:** The Rust backend owns the list — it persists to `{app_config_dir}/recent-entries.json` and is loaded into a `RecentEntriesState` before the native menu is built, so the menu is correct on first paint. The frontend records a path after each successful open and reacts to `open_recent_entry` / `clear_recent_entries` menu events. The submenu is torn down and rebuilt at runtime (muda's `MenuItem` has no `set_visible`, so fixed slots would leave permanent placeholder rows).
 

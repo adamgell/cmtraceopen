@@ -11,8 +11,13 @@ pub const MAX_RECENT_ENTRIES: usize = 10;
 const RECENT_ENTRIES_FILE: &str = "recent-entries.json";
 const RECENT_ENTRIES_VERSION: u8 = 1;
 
-/// Whole-batch budget for existence checks. `std::fs` has no per-call
-/// timeout, so an unreachable network path is bounded here instead.
+/// Budget for the existence-check batch. Once it is spent, the remaining
+/// entries are kept unchecked.
+///
+/// This caps how many `metadata()` calls a prune makes, not how long any one
+/// of them takes: `std::fs` offers no per-call timeout, so a single call
+/// against an unreachable network path can still block for as long as the OS
+/// takes to give up. Pruning therefore runs off the main thread.
 const PRUNE_BUDGET: Duration = Duration::from_secs(1);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -74,6 +79,10 @@ pub fn push_entry(entries: &mut Vec<RecentEntry>, entry: RecentEntry) {
 /// Drop entries that are provably gone or belong to a workspace this build
 /// does not have. Absence of proof is not proof of absence: any error other
 /// than `NotFound` keeps the entry.
+///
+/// `deadline` bounds how many entries get an existence check, not how long an
+/// individual check may block. Everything still unchecked when it passes is
+/// kept.
 pub fn prune_entries(
     entries: Vec<RecentEntry>,
     available_workspaces: &[&str],

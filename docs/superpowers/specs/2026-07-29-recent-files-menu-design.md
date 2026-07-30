@@ -10,11 +10,11 @@ Add a **Recent** submenu to the native File menu, positioned directly after `Ope
 
 ## Goals
 
-- Record every file and folder the user successfully opens, in any workspace, tagged with that workspace.
+- Record every file and folder the user successfully opens in a workspace that reports open failures, tagged with that workspace. In practice that is `log` and `dsregcmd` — see the scope decision below.
 - Show those entries in a native `File > Recent` submenu with labels that disambiguate same-named logs from different bundles.
 - Reopen an entry into the workspace it came from, switching workspaces when necessary.
 - Persist across restarts, independently of frontend `localStorage`.
-- Never show an entry that is known not to work, and never let a dead network path wedge the menu or the UI thread.
+- Never show an entry that is known not to work, and keep existence checks off the main thread so a dead network path cannot wedge the UI.
 
 ## Non-goals
 
@@ -28,7 +28,7 @@ Add a **Recent** submenu to the native File menu, positioned directly after `Ope
 
 | Decision | Choice |
 |---|---|
-| Scope | Any path opened in any workspace, tagged with that workspace |
+| Scope | Paths opened in a workspace that reports open failures (`log`, `dsregcmd`), tagged with that workspace |
 | Surface | Native File menu only |
 | Ownership | Rust-owned JSON in the app config dir |
 | Stale entries | Existence-checked at build time, missing entries dropped |
@@ -134,11 +134,20 @@ For each entry, call `std::fs::metadata(path)`:
 
 Entries whose `workspace` is not present in `get_available_workspaces()` are dropped. This handles a `recent-entries.json` carrying a Sysmon entry onto macOS.
 
-`std::fs` has no per-call timeout, so the batch runs against a **whole-batch budget of 1 second**. Any entry unresolved when the budget expires is kept. A dead UNC share can therefore delay a rebuild by at most a second and can never wedge the menu or the UI thread.
+`std::fs` has no per-call timeout, so the batch runs against a **budget of 1 second**. That budget caps how many entries get checked, not how long a single `metadata()` call may block — one call against a dead UNC share can still hang for as long as the OS takes to give up. Any entry unchecked when the budget expires is kept. Pruning therefore runs off the main thread, which is what keeps a hung call from wedging the UI.
 
 If pruning changed the list, the result is persisted.
 
 ### Recording
+
+Recording is restricted to workspaces whose open path actually reports failure —
+`log` (which returns a boolean) and `dsregcmd` (which rethrows). Every other
+workspace's `onOpenSource` catches the error, writes it into its own store, and
+resolves normally, so a failed open is indistinguishable from a successful one
+and recording would list files that never opened. The allowlist lives in
+`RECORDABLE_WORKSPACES` in `src/hooks/use-app-actions.ts`. Making those
+workspaces rethrow would be the fuller fix, but it is outside this feature's
+blast radius.
 
 New `src/lib/recent-entries.ts` exporting `recordRecentEntry(source, workspace)`. It invokes `push_recent_entry` for `kind: "file"` and `kind: "folder"` sources only; `kind: "known"` is skipped. The call is fire-and-forget and logs `console.warn` on failure, so a broken recents file can never break opening a log.
 

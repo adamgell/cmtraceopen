@@ -97,7 +97,7 @@ interface TestMenuPayload {
   source_id: string | null;
   target_id: string | null;
   path?: string;
-  workspace?: string;
+  workspace?: WorkspaceId;
   kind?: "file" | "folder";
 }
 
