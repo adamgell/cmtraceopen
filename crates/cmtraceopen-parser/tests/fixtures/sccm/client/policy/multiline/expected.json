@@ -4,7 +4,7 @@
   "scenario": "multiline",
   "stateChain": ["request","download","persist","schedule","evaluate","report"],
   "analysisContract": {"independentReducer":true,"consumesOtherReducerOutput":false,"crossSideCorrelationPerformed":false},
-  "extractionProfile": {"selectionState":"selected","profileId":"policy-client-5.00.test-v1","sourceVersionPrefix":"5.00.TEST.","keyKinds":["assignmentId","policyId"],"validatedArtifactFamilies":["client-policy-agent","client-policy-state"]},
+  "extractionProfile": {"selectionState":"selected","profileId":"policy-client-5.00.test-v1","sourceVersionPrefix":"5.00.TEST.","keyKinds":["assignmentId","policyId","requestId","clientSafeHandle","siteCode","managementPointHostHandle"],"validatedArtifactFamilies":["client-policy-agent","client-policy-state"]},
   "reorderedInputDeterministic": true,
   "coverage": [{"logicalArtifactId":"client-policy-agent","state":"captured"},{"logicalArtifactId":"client-policy-state","state":"captured"}],
   "artifactProvenance": [
@@ -15,7 +15,8 @@
   ],
   "transactions": [{
     "transactionId": "policy:assignment:24242424-2424-2424-2424-242424242424",
-    "key": {"assignmentId":"24242424-2424-2424-2424-242424242424","policyId":"b6b6b6b6-b6b6-b6b6-b6b6-b6b6b6b6b6b6","confidence":"exact","extractionProfileId":"policy-client-5.00.test-v1"},
+    "key": {"keyProfileKind":"requestPolicyClientTopology","assignmentId":"24242424-2424-2424-2424-242424242424","policyId":"b6b6b6b6-b6b6-b6b6-b6b6-b6b6b6b6b6b6","requestId":"27242424-2424-2424-2424-242424242424","clientHandle":"safe:client:policy-24","siteCode":"LAB","managementPointHostHandle":"safe:mp:lab-mp-01","managementPointEvidenceKind":"selected","confidence":"exact","extractionProfileId":"policy-client-5.00.test-v1"},
+    "counterpartReadyFact": {"phase":"request","extractionProfileId":"policy-client-5.00.test-v1","evidence":{"artifactId":"policy-multiline-agent-current","startLine":1,"endLine":2}},
     "phase": "report",
     "state": "succeeded",
     "lastSuccessfulPhase": "report",
@@ -39,6 +40,6 @@
     "logicalRecordCount": 1,
     "physicalLineCount": 2
   },
-  "correlationHandoff": {"issue":"#333","performed":false},
+  "correlationHandoff": {"issue":"#333","performed":false,"timeOnlyEligible":false,"topologyCompatibilityEvaluated":false,"topologyMismatchOwner":"#333","bundleCaptureHostUsedAsManagementPointEvidence":false,"counterpartReadyKeyKinds":["requestId","policyId","clientSafeHandle","siteCode","managementPointHostHandle"],"emittedCounterpartReadyFact":true},
   "prohibitedClaims": ["management point or server root cause","cross-side correlation or #333 conclusion","device-wide transaction merging"]
 }

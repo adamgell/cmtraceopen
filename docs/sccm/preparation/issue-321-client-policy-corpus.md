@@ -44,7 +44,7 @@ cannot prove success or failure.
 
 | Catalog entry | Physical basenames used here | Policy responsibility |
 | --- | --- | --- |
-| `client-policy-agent` | `PolicyAgent.log`, `Scheduler.log`, supported `PolicyAgent.log.lo_` rotation | Request, Download, Persist, Schedule |
+| `client-policy-agent` | `PolicyAgent.log`, `Scheduler.log`, supported `PolicyAgent.lo_` rollover | Request, Download, Persist, Schedule |
 | `client-policy-state` | `CIAgent.log`, `StateMessage.log` | Evaluate, Report |
 | `client-location` | absent `ClientLocation.log` only in request-auth coverage | Bounded missing client-side context; no policy phase and no MP conclusion |
 
@@ -74,11 +74,16 @@ The selected preparation profile is
 `5.00.TEST.` and the declared policy source families. This is not a claim about
 an observed production ConfigMgr version.
 
-A keyed transaction requires both normalized `assignmentId` and `policyId`
-UUIDs extracted as `exact` under that profile. Filename, component, message
-proximity, and timestamp alone never create a transaction. An unvalidated
-version, malformed key, or rotation-split key remains a source-local
-observation with:
+A keyed transaction requires normalized `assignmentId` and `policyId` UUIDs
+extracted as `exact` under that profile. When a complete profile-recognized
+Request record directly supplies them, its counterpart-ready fact also carries
+an exact `requestId`, correlation-safe client handle, three-character
+`siteCode`, selected/observed management-point host handle, selection kind, and
+the Request evidence reference. These optional fields remain absent when the
+source cannot prove them. Filename, bundle capture host, component, message
+proximity, and timestamp alone never create or fill a transaction key. An
+unvalidated version, malformed key, or rotation-split key remains a
+source-local observation with:
 
 - no transaction key;
 - `keyConfidence: none`;
@@ -135,9 +140,9 @@ The repaired corpus contains 14 scenarios, 41 artifacts (39 captured and 2
 noncapture), 39 evidence files, 69 complete CCM records, 2 deliberately
 incomplete rotation fragments, 14 exact transactions, 12 nonsuccess findings,
 and 2 keyless source-local observations. The 39 evidence files total exactly
-19,310 bytes. The focused byte coordinator's path-and-artifact-qualified
+21,396 bytes. The focused byte coordinator's path-and-artifact-qualified
 aggregate SHA-256 is
-`7b6ccd0693cce1d10643ba95ff6d284f4b5593eb9784269babc2f1217b570dd2`.
+`15acfe9cf467b64a2ebcb0896a6e8e6cb12400e37eb448ec8de6200938e0d387`.
 
 ## Expected-output preparation labels
 
@@ -164,19 +169,31 @@ they are not proposed final public field names.
 ## Privacy and evidence limits
 
 All host/site/path/version/key values are deterministic synthetic labels.
-Allowed identities are `LAB-CLIENT-01`, `CONTOSO`, synthetic UUIDs, and
-`SYNTHETIC://` opaque path handles. Fixtures contain no customer path,
-hostname, user, SID, tenant, token, certificate, serial, deployment name, or
-copied production log text. Error-looking codes are synthetic workflow facts,
-not external error-database conclusions.
+Declared ConfigMgr site codes are exactly three alphanumeric characters.
+Allowed identities are `LAB-CLIENT-01`, the synthetic site code `LAB`,
+correlation-safe handles such as `safe:client:policy-11` and
+`safe:mp:lab-mp-01`, synthetic UUIDs, and `SYNTHETIC://` opaque path handles.
+Fixtures contain no customer path, hostname, user, SID, tenant, token,
+certificate, serial, deployment name, or copied production log text.
+Error-looking codes are synthetic workflow facts, not external error-database
+conclusions.
 
 ## #333 handoff
 
-#321 may expose exact, profile-qualified assignment/policy keys, client-side
-phase, resolved ordering provenance, and evidence references. That is the
-entire handoff. #333 must independently require compatible server evidence,
-topology, ordering, and coverage before correlating policy-to-MP behavior.
-This corpus performs no cross-side matching and makes no server claim.
+#321 exposes exact, profile-qualified assignment/policy keys and, only when a
+recognized Request record directly proves them, request ID, correlation-safe
+client handle, three-character site code, selected/observed MP host handle,
+client-side phase, ordering provenance, and evidence references. The declared
+counterpart-ready key kinds are `requestId`, `policyId`, `clientSafeHandle`,
+`siteCode`, and `managementPointHostHandle`. Missing or unvalidated Request
+evidence emits no counterpart-ready fact; neither `LAB-CLIENT-01` nor capture
+time may be repurposed as MP-selection evidence.
+
+#333 owns topology compatibility and the adversarial exact-key/different-site
+or different-MP classification. It must independently require compatible
+server evidence, topology, ordering, and coverage before correlating
+policy-to-MP behavior. This corpus performs no topology match, cross-side
+matching, or server claim.
 
 ## Replay and acceptance gates
 

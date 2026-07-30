@@ -4,7 +4,7 @@
   "scenario": "rotation-split",
   "stateChain": ["request","download","persist","schedule","evaluate","report"],
   "analysisContract": {"independentReducer":true,"consumesOtherReducerOutput":false,"crossSideCorrelationPerformed":false},
-  "extractionProfile": {"selectionState":"selected","profileId":"policy-client-5.00.test-v1","sourceVersionPrefix":"5.00.TEST.","keyKinds":["assignmentId","policyId"],"validatedArtifactFamilies":["client-policy-agent"]},
+  "extractionProfile": {"selectionState":"selected","profileId":"policy-client-5.00.test-v1","sourceVersionPrefix":"5.00.TEST.","keyKinds":["assignmentId","policyId","requestId","clientSafeHandle","siteCode","managementPointHostHandle"],"validatedArtifactFamilies":["client-policy-agent"]},
   "reorderedInputDeterministic": true,
   "coverage": [{"logicalArtifactId":"client-policy-agent","state":"captured","fragmentCount":2,"completeLogicalRecordCount":0}],
   "artifactProvenance": [
@@ -43,6 +43,6 @@
       {"artifactId":"policy-rotation-lo","startLine":1,"endLine":1}
     ]
   }],
-  "correlationHandoff": {"issue":"#333","performed":false},
+  "correlationHandoff": {"issue":"#333","performed":false,"timeOnlyEligible":false,"topologyCompatibilityEvaluated":false,"topologyMismatchOwner":"#333","bundleCaptureHostUsedAsManagementPointEvidence":false,"counterpartReadyKeyKinds":["requestId","policyId","clientSafeHandle","siteCode","managementPointHostHandle"],"emittedCounterpartReadyFact":false},
   "prohibitedClaims": ["management point or server root cause","cross-side correlation or #333 conclusion","device-wide transaction merging"]
 }

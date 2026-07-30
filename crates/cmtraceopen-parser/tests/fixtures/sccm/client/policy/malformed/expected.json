@@ -34,6 +34,6 @@
     "nextArtifact": {"logicalArtifactId":"client-policy-agent","reason":"Capture bounded policy-agent evidence under a validated ConfigMgr version profile with a complete exact key."},
     "evidence": [{"artifactId":"policy-malformed-agent-current","startLine":1,"endLine":1}]
   }],
-  "correlationHandoff": {"issue":"#333","performed":false},
+  "correlationHandoff": {"issue":"#333","performed":false,"timeOnlyEligible":false,"topologyCompatibilityEvaluated":false,"topologyMismatchOwner":"#333","bundleCaptureHostUsedAsManagementPointEvidence":false,"counterpartReadyKeyKinds":["requestId","policyId","clientSafeHandle","siteCode","managementPointHostHandle"],"emittedCounterpartReadyFact":false},
   "prohibitedClaims": ["management point or server root cause","cross-side correlation or #333 conclusion","device-wide transaction merging"]
 }

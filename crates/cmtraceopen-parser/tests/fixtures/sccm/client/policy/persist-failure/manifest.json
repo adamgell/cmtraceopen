@@ -2,8 +2,8 @@
   "sccmManifestVersion": 1,
   "proposalOnly": true,
   "syntheticFixture": true,
-  "bundle": {"role":"client","workflow":"policy","captureHost":"LAB-CLIENT-01","siteCode":"CONTOSO","artifactOrder":"designOnlyCatalog.entryId,pathFingerprint,rotationRank,originalBasename,artifactId","rotationOrder":"current,lo,numeric-ascending,timestamp-ascending"},
+  "bundle": {"role":"client","workflow":"policy","captureHost":"LAB-CLIENT-01","siteCode":"LAB","artifactOrder":"designOnlyCatalog.entryId,pathFingerprint,rotationRank,originalBasename,artifactId","rotationOrder":"current,lo,numeric-ascending,timestamp-ascending"},
   "artifacts": [
-    {"artifactId":"policy-persist-agent-current","designOnlyCatalog":{"entryId":"client-policy-agent","groupMemberships":["client-policy-agent"]},"role":"client","kind":"ccmLog","captureState":"captured","encoding":"utf-8","collectionLimit":{"byteLimit":4096,"limitApplied":false},"originalBasename":"PolicyAgent.log","sanitizedSourcePath":"SYNTHETIC://root-a/CCM/Logs/PolicyAgent.log","pathFingerprint":"synthetic:policy-persist-agent","rotation":{"kind":"current","fragmentComplete":true},"sourceVersion":"5.00.TEST.0000","capturedUtc":"2026-07-30T04:00:03Z","bytesCopied":820,"relativePath":"evidence/client-policy-agent/current/PolicyAgent.log"}
+    {"artifactId":"policy-persist-agent-current","designOnlyCatalog":{"entryId":"client-policy-agent","groupMemberships":["client-policy-agent"]},"role":"client","kind":"ccmLog","captureState":"captured","encoding":"utf-8","collectionLimit":{"byteLimit":4096,"limitApplied":false},"originalBasename":"PolicyAgent.log","sanitizedSourcePath":"SYNTHETIC://root-a/CCM/Logs/PolicyAgent.log","pathFingerprint":"synthetic:policy-persist-agent","rotation":{"kind":"current","fragmentComplete":true},"sourceVersion":"5.00.TEST.0000","capturedUtc":"2026-07-30T04:00:03Z","bytesCopied":969,"relativePath":"evidence/client-policy-agent/current/PolicyAgent.log"}
   ]
 }

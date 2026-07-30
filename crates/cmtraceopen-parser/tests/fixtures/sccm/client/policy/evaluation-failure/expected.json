@@ -4,7 +4,7 @@
   "scenario": "evaluation-failure",
   "stateChain": ["request","download","persist","schedule","evaluate","report"],
   "analysisContract": {"independentReducer":true,"consumesOtherReducerOutput":false,"crossSideCorrelationPerformed":false},
-  "extractionProfile": {"selectionState":"selected","profileId":"policy-client-5.00.test-v1","sourceVersionPrefix":"5.00.TEST.","keyKinds":["assignmentId","policyId"],"validatedArtifactFamilies":["client-policy-agent","client-policy-state"]},
+  "extractionProfile": {"selectionState":"selected","profileId":"policy-client-5.00.test-v1","sourceVersionPrefix":"5.00.TEST.","keyKinds":["assignmentId","policyId","requestId","clientSafeHandle","siteCode","managementPointHostHandle"],"validatedArtifactFamilies":["client-policy-agent","client-policy-state"]},
   "reorderedInputDeterministic": true,
   "coverage": [{"logicalArtifactId":"client-policy-agent","state":"captured"},{"logicalArtifactId":"client-policy-state","state":"captured"}],
   "artifactProvenance": [
@@ -14,7 +14,8 @@
   ],
   "transactions": [{
     "transactionId": "policy:assignment:16161616-1616-1616-1616-161616161616",
-    "key": {"assignmentId":"16161616-1616-1616-1616-161616161616","policyId":"afafafaf-afaf-afaf-afaf-afafafafafaf","confidence":"exact","extractionProfileId":"policy-client-5.00.test-v1"},
+    "key": {"keyProfileKind":"requestPolicyClientTopology","assignmentId":"16161616-1616-1616-1616-161616161616","policyId":"afafafaf-afaf-afaf-afaf-afafafafafaf","requestId":"27161616-1616-1616-1616-161616161616","clientHandle":"safe:client:policy-16","siteCode":"LAB","managementPointHostHandle":"safe:mp:lab-mp-01","managementPointEvidenceKind":"selected","confidence":"exact","extractionProfileId":"policy-client-5.00.test-v1"},
+    "counterpartReadyFact": {"phase":"request","extractionProfileId":"policy-client-5.00.test-v1","evidence":{"artifactId":"policy-evaluation-agent-current","startLine":1,"endLine":1}},
     "phase": "evaluate",
     "state": "failed",
     "lastSuccessfulPhase": "schedule",
@@ -41,6 +42,6 @@
     "nextArtifact": null,
     "evidence": [{"artifactId":"policy-evaluation-state-current","startLine":1,"endLine":1}]
   }],
-  "correlationHandoff": {"issue":"#333","performed":false},
+  "correlationHandoff": {"issue":"#333","performed":false,"timeOnlyEligible":false,"topologyCompatibilityEvaluated":false,"topologyMismatchOwner":"#333","bundleCaptureHostUsedAsManagementPointEvidence":false,"counterpartReadyKeyKinds":["requestId","policyId","clientSafeHandle","siteCode","managementPointHostHandle"],"emittedCounterpartReadyFact":true},
   "prohibitedClaims": ["management point or server root cause","cross-side correlation or #333 conclusion","device-wide transaction merging"]
 }

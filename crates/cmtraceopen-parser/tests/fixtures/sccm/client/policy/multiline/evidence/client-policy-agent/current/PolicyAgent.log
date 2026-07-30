@@ -1,4 +1,4 @@
 <![LOG[SYNTHETIC FIXTURE policy multiline: Request succeeded
-AssignmentId={24242424-2424-2424-2424-242424242424} PolicyId={b6b6b6b6-b6b6-b6b6-b6b6-b6b6b6b6b6b6}]LOG]!><time="13:00:00.000+000" date="7-30-2026" component="PolicyAgent" context="" type="1" thread="1" file="synthetic.cc:1">
+AssignmentId={24242424-2424-2424-2424-242424242424} PolicyId={b6b6b6b6-b6b6-b6b6-b6b6-b6b6b6b6b6b6} RequestId={27242424-2424-2424-2424-242424242424} ClientHandle=safe:client:policy-24 SiteCode=LAB SelectedManagementPointHostHandle=safe:mp:lab-mp-01]LOG]!><time="13:00:00.000+000" date="7-30-2026" component="PolicyAgent" context="" type="1" thread="1" file="synthetic.cc:1">
 <![LOG[Download succeeded AssignmentId={24242424-2424-2424-2424-242424242424} PolicyId={b6b6b6b6-b6b6-b6b6-b6b6-b6b6b6b6b6b6}]LOG]!><time="13:00:01.000+000" date="7-30-2026" component="PolicyAgent" context="" type="1" thread="1" file="synthetic.cc:2">
 <![LOG[Persist succeeded AssignmentId={24242424-2424-2424-2424-242424242424} PolicyId={b6b6b6b6-b6b6-b6b6-b6b6-b6b6b6b6b6b6}]LOG]!><time="13:00:02.000+000" date="7-30-2026" component="PolicyAgent" context="" type="1" thread="1" file="synthetic.cc:3">

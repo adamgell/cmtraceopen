@@ -4,7 +4,7 @@
   "scenario": "recovery",
   "stateChain": ["request","download","persist","schedule","evaluate","report"],
   "analysisContract": {"independentReducer":true,"consumesOtherReducerOutput":false,"crossSideCorrelationPerformed":false},
-  "extractionProfile": {"selectionState":"selected","profileId":"policy-client-5.00.test-v1","sourceVersionPrefix":"5.00.TEST.","keyKinds":["assignmentId","policyId"],"validatedArtifactFamilies":["client-policy-agent","client-policy-state"]},
+  "extractionProfile": {"selectionState":"selected","profileId":"policy-client-5.00.test-v1","sourceVersionPrefix":"5.00.TEST.","keyKinds":["assignmentId","policyId","requestId","clientSafeHandle","siteCode","managementPointHostHandle"],"validatedArtifactFamilies":["client-policy-agent","client-policy-state"]},
   "reorderedInputDeterministic": true,
   "coverage": [{"logicalArtifactId":"client-policy-agent","state":"captured"},{"logicalArtifactId":"client-policy-state","state":"captured"}],
   "artifactProvenance": [
@@ -15,7 +15,8 @@
   ],
   "transactions": [{
     "transactionId": "policy:assignment:23232323-2323-2323-2323-232323232323",
-    "key": {"assignmentId":"23232323-2323-2323-2323-232323232323","policyId":"b5b5b5b5-b5b5-b5b5-b5b5-b5b5b5b5b5b5","confidence":"exact","extractionProfileId":"policy-client-5.00.test-v1"},
+    "key": {"keyProfileKind":"requestPolicyClientTopology","assignmentId":"23232323-2323-2323-2323-232323232323","policyId":"b5b5b5b5-b5b5-b5b5-b5b5-b5b5b5b5b5b5","requestId":"27232323-2323-2323-2323-232323232323","clientHandle":"safe:client:policy-23","siteCode":"LAB","managementPointHostHandle":"safe:mp:lab-mp-01","managementPointEvidenceKind":"selected","confidence":"exact","extractionProfileId":"policy-client-5.00.test-v1"},
+    "counterpartReadyFact": {"phase":"request","extractionProfileId":"policy-client-5.00.test-v1","evidence":{"artifactId":"policy-recovery-agent-current","startLine":1,"endLine":1}},
     "phase": "report",
     "state": "succeeded",
     "lastSuccessfulPhase": "report",
@@ -41,6 +42,6 @@
     "failureEvidence": {"artifactId":"policy-recovery-agent-current","startLine":2,"endLine":2},
     "successEvidence": {"artifactId":"policy-recovery-agent-current","startLine":3,"endLine":3}
   },
-  "correlationHandoff": {"issue":"#333","performed":false},
+  "correlationHandoff": {"issue":"#333","performed":false,"timeOnlyEligible":false,"topologyCompatibilityEvaluated":false,"topologyMismatchOwner":"#333","bundleCaptureHostUsedAsManagementPointEvidence":false,"counterpartReadyKeyKinds":["requestId","policyId","clientSafeHandle","siteCode","managementPointHostHandle"],"emittedCounterpartReadyFact":true},
   "prohibitedClaims": ["management point or server root cause","cross-side correlation or #333 conclusion","device-wide transaction merging"]
 }
