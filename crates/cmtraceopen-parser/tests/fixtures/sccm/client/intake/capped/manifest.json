@@ -2,8 +2,8 @@
   "sccmManifestVersion": 1,
   "proposalOnly": true,
   "syntheticFixture": true,
-  "bundle": {"role":"client","captureHost":"LAB-CLIENT-01","siteCode":"CONTOSO","artifactOrder":"logicalArtifactId,pathFingerprint,rotationRank,originalBasename","rotationOrder":"current,lo,numeric-ascending,timestamp-ascending"},
+  "bundle": {"role":"client","captureHost":"LAB-CLIENT-01","siteCode":"CONTOSO","artifactOrder":"designOnlyCatalog.entryId,pathFingerprint,rotationRank,originalBasename,artifactId","rotationOrder":"current,lo,numeric-ascending,timestamp-ascending"},
   "artifacts": [
-    {"artifactId":"client-content","role":"client","kind":"ccmLog","captureState":"capped","originalBasename":"DataTransferService.log","sanitizedSourcePath":"SYNTHETIC://root-a/CCM/Logs/DataTransferService.log","pathFingerprint":"synthetic-content-capped","rotation":{"kind":"current","fragmentComplete":false},"sourceVersion":"5.00.TEST.0000","capturedUtc":"2026-07-30T00:03:00Z","bytesCopied":128,"relativePath":"evidence/client-content/current/DataTransferService.log"}
+    {"artifactId":"fixture-capped-content-root-a-current","designOnlyCatalog":{"entryId":"client-content","groupMemberships":["client-content"]},"role":"client","kind":"ccmLog","captureState":"capped","originalBasename":"DataTransferService.log","sanitizedSourcePath":"SYNTHETIC://root-a/CCM/Logs/DataTransferService.log","pathFingerprint":"synthetic-content-capped","rotation":{"kind":"current","fragmentComplete":false},"sourceVersion":"5.00.TEST.0000","capturedUtc":"2026-07-30T00:03:00Z","bytesCopied":128,"relativePath":"evidence/client-content/current/DataTransferService.log"}
   ]
 }

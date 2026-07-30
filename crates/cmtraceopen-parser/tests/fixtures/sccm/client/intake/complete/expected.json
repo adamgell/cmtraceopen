@@ -15,5 +15,13 @@
     {"logicalArtifactId":"client-updates","state":"captured"},
     {"logicalArtifactId":"client-windows-update-supplemental","state":"captured"}
   ],
+  "physicalArtifactAssertions": [
+    {
+      "artifactId": "fixture-complete-location-services-root-a-current",
+      "catalogEntryId": "client-location-services-shared",
+      "groupMemberships": ["client-content", "client-location"],
+      "physicalCaptureCount": 1
+    }
+  ],
   "requests": []
 }

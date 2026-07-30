@@ -17,19 +17,20 @@ not a reinterpretation of a generic failure.
 
 ## Bounded client source catalog
 
-| Logical source | Allowed basenames | Workflow consumer | Default requiredness | Rotations |
-| --- | --- | --- | --- | --- |
-| `client-ccmsetup` | `ccmsetup.log`, `client.msi.log` | health | incident core | current, `.lo_`, numbered, timestamped when explicitly captured |
-| `client-evaluation` | `CcmEval.log`, `CcmExec.log`, `CcmRestart.log` | health | incident core | same |
-| `client-identity` | `ClientIDManagerStartup.log` | health | incident core | same |
-| `client-location` | `ClientLocation.log`, `LocationServices.log`, `CcmMessaging.log` | health, deployment | incident core | same |
-| `client-policy-agent` | `PolicyAgent.log`, `PolicyAgentProvider.log`, `PolicyEvaluator.log`, `Scheduler.log` | policy | policy bundle | same |
-| `client-policy-state` | `CIAgent.log`, `CIDownloader.log`, `StateMessage.log`, `StatusAgent.log` | policy | policy bundle | same |
-| `client-app-intent` | `AppIntentEval.log`, `AppDiscovery.log` | deployment | deployment bundle | same |
-| `client-app-enforce` | `AppEnforce.log`, `ExecMgr.log` | deployment | deployment bundle | same |
-| `client-content` | `CAS.log`, `ContentTransferManager.log`, `DataTransferService.log`, `LocationServices.log` | deployment | deployment bundle | same |
-| `client-updates` | `ScanAgent.log`, `WUAHandler.log`, `UpdatesDeployment.log`, `UpdatesHandler.log`, `UpdatesStore.log` | updates | update bundle | same |
-| `client-windows-update-supplemental` | `ReportingEvents.log`, explicitly captured CBS/DISM export | updates | optional supplemental | declared separately only |
+| Catalog entry | Allowed basenames | Stable group memberships | Workflow consumer | Default requiredness | Rotations |
+| --- | --- | --- | --- | --- | --- |
+| `client-ccmsetup` | `ccmsetup.log`, `client.msi.log` | `client-ccmsetup` | health | incident core | current, `.lo_`, numbered, timestamped when explicitly captured |
+| `client-evaluation` | `CcmEval.log`, `CcmExec.log`, `CcmRestart.log` | `client-evaluation` | health | incident core | same |
+| `client-identity` | `ClientIDManagerStartup.log` | `client-identity` | health | incident core | same |
+| `client-location` | `ClientLocation.log`, `CcmMessaging.log` | `client-location` | health | incident core | same |
+| `client-location-services-shared` | `LocationServices.log` | `client-content`, `client-location` | health, deployment | incident core | same |
+| `client-policy-agent` | `PolicyAgent.log`, `PolicyAgentProvider.log`, `PolicyEvaluator.log`, `Scheduler.log` | `client-policy-agent` | policy | policy bundle | same |
+| `client-policy-state` | `CIAgent.log`, `CIDownloader.log`, `StateMessage.log`, `StatusAgent.log` | `client-policy-state` | policy | policy bundle | same |
+| `client-app-intent` | `AppIntentEval.log`, `AppDiscovery.log` | `client-app-intent` | deployment | deployment bundle | same |
+| `client-app-enforce` | `AppEnforce.log`, `ExecMgr.log` | `client-app-enforce` | deployment | deployment bundle | same |
+| `client-content` | `CAS.log`, `ContentTransferManager.log`, `DataTransferService.log` | `client-content` | deployment | deployment bundle | same |
+| `client-updates` | `ScanAgent.log`, `WUAHandler.log`, `UpdatesDeployment.log`, `UpdatesHandler.log`, `UpdatesStore.log` | `client-updates` | updates | update bundle | same |
+| `client-windows-update-supplemental` | `ReportingEvents.log`, explicitly captured CBS/DISM export | `client-windows-update-supplemental` | updates | optional supplemental | declared separately only |
 
 `ccmsetup` is separate from operational CCM logs. A basename is eligible only
 when a declared source, client role/provenance, and supported rotation agree;
@@ -37,6 +38,19 @@ it cannot be classified by pathname or extension alone. `CustomVendorHook.log`
 and `PolicyAgent.log.backup` remain unsupported. Current source candidates are
 native concerns only: `%WINDIR%\\CCM\\Logs`, `%WINDIR%\\ccmsetup\\Logs`, and
 explicitly configured roots. Pure intake must never reconstruct a path.
+
+Catalog matching is set-valued and single-capture. A physical candidate is
+matched once by client role/provenance, exact declared basename, and supported
+rotation to exactly one catalog entry. That entry supplies an already-sorted,
+immutable set of logical group memberships. The collector creates one stable
+physical artifact identity from the configured-root handle/path fingerprint,
+basename, and rotation lineage, then the intake projection references that same
+artifact from each membership; it does not copy or reclassify the file.
+Consequently `LocationServices.log` is captured once through
+`client-location-services-shared` and contributes to both `client-content` and
+`client-location`. Catalog validation must reject a basename/role/rotation
+tuple owned by more than one entry, rather than selecting the first matching
+row. Input or catalog iteration order therefore cannot change classification.
 
 ## Proposed manifest v1 adapter
 
@@ -55,11 +69,15 @@ than being guessed.
     "role": "client",
     "captureHost": "LAB-CLIENT-01",
     "siteCode": "CONTOSO",
-    "artifactOrder": "logicalArtifactId,pathFingerprint,rotationRank,originalBasename",
+    "artifactOrder": "designOnlyCatalog.entryId,pathFingerprint,rotationRank,originalBasename,artifactId",
     "rotationOrder": "current,lo,numeric-ascending,timestamp-ascending"
   },
   "artifacts": [{
-    "artifactId": "client-app-enforce",
+    "artifactId": "fixture-app-enforce-root-a-current",
+    "designOnlyCatalog": {
+      "entryId": "client-app-enforce",
+      "groupMemberships": ["client-app-enforce"]
+    },
     "role": "client",
     "kind": "ccmLog",
     "captureState": "captured",
@@ -74,6 +92,12 @@ than being guessed.
   }]
 }
 ```
+
+`designOnlyCatalog.entryId` and `designOnlyCatalog.groupMemberships` are
+fixture-design labels, not proposed final #318 field names. They make the
+single-capture/multi-consumer invariant reviewable until #318 provides the
+actual representation. `artifactId` denotes one physical candidate/fragment
+record and must be unique within a bundle; it is not a logical group ID.
 
 Capture states in this proposed SCCM extension are `captured`, `absent`,
 `accessDenied`, `capped`, `skipped`, `unsafePath`, `unsupported`, and
@@ -95,14 +119,16 @@ filesystem access, globbing in the pure crate, or redefinition of CCM.
 
 ## Determinism, collision, and rotation rules
 
-- Sort manifest artifacts by logical artifact ID, normalized path fingerprint,
-  rotation rank, then original basename. Expected arrays use stable IDs.
+- Sort manifest artifacts by catalog entry ID, normalized path fingerprint,
+  rotation rank, original basename, then physical artifact ID. Group memberships
+  are sorted independently. Expected coverage arrays use stable logical IDs.
 - Use the declared `current, lo, numeric ascending, timestamp ascending`
   capture order. Parsing may later use valid normalized timestamps for evidence
   order; it may not infer a cross-artifact relationship from rotation order.
-- Store each fragment under its logical source and fragment identity. Same
-  basenames from distinct allowed roots receive distinct fingerprints and paths;
-  neither overwrites the other.
+- Store each fragment under its catalog entry and physical identity. Same
+  basenames from distinct allowed roots receive distinct artifact IDs,
+  fingerprints, and relative paths; neither overwrites nor merges into the
+  other by basename.
 - `.lo_`, `.N`, and a documented timestamp suffix are rotations only of an
   explicit allowed basename. `.backup` and arbitrary suffixes are unsupported.
 - A rotation split at either logical-record boundary carries
@@ -117,7 +143,8 @@ filesystem access, globbing in the pure crate, or redefinition of CCM.
 | Scenario | Primary assertion | Conservative result |
 | --- | --- | --- |
 | `complete` | Every curated group is captured with an explicitly synthetic record. | Baseline intake coverage only; no workflow diagnosis. |
-| `rotations` | Current, `.lo_`, and `.2` `AppEnforce` fragments group together, in declared order, with two roots retained separately. | Captured group; no collision or inferred deployment state. |
+| `rotations` | Current, `.lo_`, and `.2` `AppEnforce` fragments group together in declared order. | Captured group; no inferred deployment state. |
+| `collision` | Two current `AppEnforce.log` candidates from distinct roots retain unique IDs, fingerprints, and paths. | Both physical artifacts survive; basename does not overwrite or merge them. |
 | `missing-root` | No configured client root was discovered. | Every curated source is absent coverage; never “client not installed.” |
 | `access-denied` | `client-policy-agent` has denied access while all other represented sources remain distinct. | Policy readiness requests only `client-policy-agent`; no policy failure. |
 | `capped` | `client-content` retains a capped tail containing error-looking text. | Deployment readiness is insufficient; tail cannot establish a terminal condition. |
@@ -125,7 +152,7 @@ filesystem access, globbing in the pure crate, or redefinition of CCM.
 | `unsafe-path` (design-only) | A reparse/symlink escapes an allow-listed root. | Reject capture, record `unsafePath`, and request a safe configured root. |
 | `legacy-mapping` (design-only) | Generic legacy `collected`/`missing` have explicit client provenance; `failed` has none. | Map only the first two; retain `legacyUnknownDetail` for failed. |
 
-The five committed fixture directories are intentionally the smallest corpus
+The six committed fixture directories are intentionally the smallest corpus
 for first intake tests. `skipped`, `unsafe-path`, and `legacy-mapping` remain
 test-design cases until #318 publishes compatible public types and a native
 test-double boundary; they must be added before #319 reaches its exit gate.
@@ -146,9 +173,11 @@ separate acceptance gate.
   deployment name, or customer log line is permitted.
 - All timestamps, byte counts, and record text are fixed. Evidence is minimal,
   deterministic, and has no semantic assertion beyond stated coverage.
-- Each manifest has `proposalOnly: true` and `syntheticFixture: true`; each
-  evidence file begins with `# SYNTHETIC FIXTURE`. A production collector must
-  not treat these markers as a real SCCM file format.
+- Each manifest has `proposalOnly: true` and `syntheticFixture: true`. The first
+  line of every evidence file contains the literal `SYNTHETIC FIXTURE`: CCM
+  fixtures place it inside the first CCM record, while non-CCM supplemental
+  fixtures use it as plain text. A production collector must not treat the
+  marker as a real SCCM file format.
 - `expected.json` asserts explicit coverage and requests. Its `contractState`
   is `proposedPending318`, so no fixture suggests that interface names, enum
   spellings, or schema fields are final.

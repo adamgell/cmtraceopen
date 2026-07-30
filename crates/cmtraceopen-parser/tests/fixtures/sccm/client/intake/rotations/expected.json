@@ -4,5 +4,5 @@
   "workflowDiagnosisExpected": false,
   "coverage": [{"logicalArtifactId":"client-app-enforce","state":"captured","fragmentCount":3,"rotationOrder":["current","lo","numbered:2"],"distinctPathFingerprints":3}],
   "requests": [],
-  "assertions": ["Same basename fragments retain their path fingerprints.", "No phase, key, or finding is inferred from rotation grouping alone."]
+  "assertions": ["Each rotation fragment retains its physical artifact ID and path fingerprint.", "No phase, key, or finding is inferred from rotation grouping alone."]
 }

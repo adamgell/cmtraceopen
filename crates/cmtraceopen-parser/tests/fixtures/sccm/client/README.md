@@ -13,8 +13,11 @@ provenance. Never replace these files with a copied client log. No user, SID,
 tenant, certificate, token, serial, production deployment name, customer host,
 or real source path may be committed.
 
-`complete` covers all first-pass catalog groups. `rotations` proves declared
-current/`.lo_`/numbered grouping and same-basename root separation.
+`complete` covers all first-pass catalog groups and represents
+`LocationServices.log` once with stable `client-content` and `client-location`
+memberships. `rotations` proves declared current/`.lo_`/numbered grouping.
+`collision` proves two current `AppEnforce.log` files from distinct roots keep
+unique physical IDs, fingerprints, and collision-safe relative paths.
 `missing-root`, `access-denied`, and `capped` prove coverage behavior only;
 their evidence must not form workflow findings. `skipped`, `unsafe-path`, and
 legacy generic-manifest mapping are intentionally documented test designs in
@@ -25,3 +28,10 @@ remain `proposedPending318` until an implementation maps this design to the
 published spine schema. Replay after #318: deserialize via its public reader,
 assert coverage directly, reorder artifacts and compare normalized output, and
 never interpret capped/split tail text as a phase or terminal diagnosis.
+
+Every manifest artifact has one physical `artifactId` and a
+`designOnlyCatalog` object containing one catalog entry plus sorted logical
+group memberships. These are preparation labels, not final #318 field names.
+The first line of every evidence file must contain the literal
+`SYNTHETIC FIXTURE`; CCM files put it inside the first CCM record and the plain
+supplemental fixture uses it directly.
