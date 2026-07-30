@@ -1,0 +1,1 @@
+<![LOG[SYNTHETIC FIXTURE policy malformed: Request AssignmentId={NOT-A-UUID} PolicyId={MISSING} under unvalidated version]LOG]!><time="09:00:00.000+000" date="7-30-2026" component="PolicyAgent" context="" type="2" thread="1" file="synthetic.cc:1">

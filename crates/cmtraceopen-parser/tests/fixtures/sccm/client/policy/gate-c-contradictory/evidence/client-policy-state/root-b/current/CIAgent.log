@@ -1,0 +1,1 @@
+<![LOG[SYNTHETIC FIXTURE policy Gate C source B: Evaluate failed terminal AssignmentId={19191919-1919-1919-1919-191919191919} PolicyId={b2b2b2b2-b2b2-b2b2-b2b2-b2b2b2b2b2b2} Result=0x80000006]LOG]!><time="11:00:04.000+000" date="7-30-2026" component="CIAgent" context="" type="3" thread="1" file="synthetic.cc:1">
