@@ -4,6 +4,21 @@ use crate::macos_diag::models::MacosMdmProfile;
 
 const JAMF_PAYLOAD_TYPE_PREFIXES: &[&str] = &["com.jamfsoftware.", "com.jamf."];
 
+/// True when either the payload *type* or the payload *identifier* is a JAMF
+/// one.
+///
+/// `MacosMdmPayload::payload_type` comes from the plist's `_name`, which
+/// `system_profiler` populates with the *Apple* payload type — a JAMF-deployed
+/// PPPC payload reports `com.apple.TCC.configuration-profile-policy`. The JAMF
+/// identity lives in `payload_identifier`
+/// (e.g. `com.jamfsoftware.tcc.management`), so matching on the type alone
+/// matched nothing at all on a real managed host.
+fn payload_is_jamf(payload: &crate::macos_diag::models::MacosMdmPayload) -> bool {
+    JAMF_PAYLOAD_TYPE_PREFIXES.iter().any(|prefix| {
+        payload.payload_type.starts_with(prefix) || payload.payload_identifier.starts_with(prefix)
+    })
+}
+
 pub fn filter_jamf_profiles_impl(
     all_profiles: Vec<MacosMdmProfile>,
     expected_org: Option<&str>,
@@ -27,9 +42,5 @@ fn matches_jamf(profile: &MacosMdmProfile, expected_org: Option<&str>) -> bool {
             }
         }
     }
-    profile.payloads.iter().any(|p| {
-        JAMF_PAYLOAD_TYPE_PREFIXES
-            .iter()
-            .any(|prefix| p.payload_type.starts_with(prefix))
-    })
+    profile.payloads.iter().any(payload_is_jamf)
 }
