@@ -42,15 +42,18 @@ profile. A positive fact entering a phase can become the last successful
 phase. An error observed while attempting a phase does not make that phase a
 success. Consequently:
 
-- a terminal component failure after `ComponentWork` leaves
-  `ComponentWork` as the last success;
+- a terminal component failure after `ComponentWork` (serialized
+  `componentWork`) leaves `componentWork` as the last success;
 - a terminal status-processing failure after a positive processing-start fact
-  leaves `StatusOrStateProcessing` as the last success;
-- a profile-recognized `SC_INBOX_BACKLOG` leaves `ComponentWork` as the last
-  success and deterministically yields `BlockedOrDeferred`; it remains
-  non-terminal and never becomes a root-cause finding;
-- a later recovery reaches `HealthyOrTerminal` only for the same exact
-  transaction key and usable source-local ordering; and
+  leaves `StatusOrStateProcessing` (serialized `statusOrStateProcessing`) as
+  the last success;
+- a profile-recognized `SC_INBOX_BACKLOG` leaves `ComponentWork` (serialized
+  `componentWork`) as the last success and deterministically yields
+  `BlockedOrDeferred`; it remains non-terminal and never becomes a root-cause
+  finding;
+- a later recovery reaches `HealthyOrTerminal` (serialized
+  `healthyOrTerminal`) only for the same exact transaction key and usable
+  source-local ordering; and
 - a split or malformed rotation contributes a parse/coverage gap, never a
   phase or terminal fact.
 
@@ -64,11 +67,13 @@ version.
 A transaction key is the exact tuple:
 
 ```text
-(profile id, profile version, site handle, component id, work-item id)
+(profile id, profile version, siteCode, component id, work-item id)
 ```
 
-The profile must validate both the component ID and the status ID before a fact
-can advance the state machine. Version 1 admits these synthetic component IDs:
+`siteCode` is the manifest field’s privacy-safe synthetic site identifier; the
+key does not substitute an inferred path, role, or display label. The profile
+must validate both the component ID and the status ID before a fact can advance
+the state machine. Version 1 admits these synthetic component IDs:
 
 - `SMS_EXECUTIVE`
 - `SMS_DISTRIBUTION_MANAGER`
