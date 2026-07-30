@@ -53,16 +53,32 @@ pub fn now_unix_ms() -> i64 {
 /// Build the dedup key for a path. The original string is what gets stored
 /// and displayed; only comparison uses this normalized form.
 pub fn normalize_path(path: &str) -> String {
-    let trimmed = path.trim_end_matches(['/', '\\']);
-    let trimmed = if trimmed.is_empty() { path } else { trimmed };
+    // Only treat backslash as a separator on Windows. Elsewhere it is a legal
+    // filename character, so trimming it would collapse `dir/weird\` and
+    // `dir/weird` into one key.
+    #[cfg(windows)]
+    const SEPARATORS: &[char] = &['/', '\\'];
+    #[cfg(not(windows))]
+    const SEPARATORS: &[char] = &['/'];
+
+    let trimmed = path.trim_end_matches(SEPARATORS);
+
+    // Roots keep their separator. `/` would otherwise normalize to the empty
+    // string, and on Windows `C:\` would become `C:` — which means the
+    // drive-relative current directory, not the drive root.
+    let normalized = if trimmed.is_empty() || trimmed.ends_with(':') {
+        path
+    } else {
+        trimmed
+    };
 
     #[cfg(windows)]
     {
-        trimmed.to_lowercase()
+        normalized.to_lowercase()
     }
     #[cfg(not(windows))]
     {
-        trimmed.to_string()
+        normalized.to_string()
     }
 }
 
@@ -405,6 +421,24 @@ mod tests {
     #[test]
     fn normalize_keeps_root_paths_intact() {
         assert!(!normalize_path("/").is_empty());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn normalize_keeps_a_drive_root_distinct_from_the_drive() {
+        // `C:` is the drive-relative current directory, not the drive root, so
+        // trimming the separator away would merge two different locations.
+        assert_ne!(normalize_path(r"C:\"), normalize_path("C:"));
+        assert_eq!(normalize_path(r"C:\"), r"c:\");
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn normalize_leaves_a_trailing_backslash_alone_off_windows() {
+        // Backslash is a legal filename character outside Windows, so it must
+        // not be treated as a separator.
+        assert_ne!(normalize_path("/dir/weird\\"), normalize_path("/dir/weird"));
+        assert_eq!(normalize_path("/dir/weird\\"), "/dir/weird\\");
     }
 
     #[cfg(windows)]
