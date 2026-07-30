@@ -1,9 +1,10 @@
 use cmtraceopen_parser::models::log_entry::{LogFormat, ParserKind};
 use cmtraceopen_parser::parser::detect::detect_parser;
 use cmtraceopen_parser::sccm::{
-    classify_artifact_name, declared_source_catalog, normalize_ccm_artifact, SccmArtifact,
-    SccmArtifactFamily, SccmCoverageState, SccmFindingClass, SccmRole, SccmRotation,
-    SccmTimeOrderingState, SccmUnknownRotation, SCCM_DIAGNOSTICS_SCHEMA_VERSION,
+    classify_artifact_name, declared_source_catalog, extract_signals, normalize_ccm_artifact,
+    SccmArtifact, SccmArtifactFamily, SccmCoverageState, SccmFindingClass, SccmRole, SccmRotation,
+    SccmSignal, SccmSignalKind, SccmTimeOrderingState, SccmUnknownRotation,
+    SCCM_DIAGNOSTICS_SCHEMA_VERSION,
 };
 
 fn client_policy_artifact() -> SccmArtifact {
@@ -103,6 +104,148 @@ fn public_ccm_single_line_projection_matches_line_parser() {
         serde_json::to_vec(&content_entries).unwrap(),
         serde_json::to_vec(&line_entries).unwrap()
     );
+}
+
+#[test]
+fn signal_extractor_preserves_known_hresult_and_error_db_metadata() {
+    let signals = extract_signals("Download failed with hr=0x80070005");
+
+    assert_eq!(signals.len(), 1);
+    assert_eq!(signals[0].kind, SccmSignalKind::HResult);
+    assert_eq!(signals[0].raw, "0x80070005");
+    assert_eq!(signals[0].numeric, Some(0x80070005));
+    assert!(signals[0].error_description.is_some());
+    assert!(signals[0].error_category.is_some());
+}
+
+#[test]
+fn signal_extractor_preserves_unknown_exit_and_gle_values() {
+    let signals = extract_signals("exit code 1603; [gle=0xDEADBEEF]; status=71");
+
+    assert_eq!(
+        signals
+            .iter()
+            .map(|signal| (&signal.kind, signal.raw.as_str()))
+            .collect::<Vec<_>>(),
+        vec![
+            (&SccmSignalKind::ExitCode, "1603"),
+            (&SccmSignalKind::Gle, "0xDEADBEEF"),
+            (&SccmSignalKind::Status, "71"),
+        ]
+    );
+    assert!(signals
+        .iter()
+        .all(|signal| signal.error_description.is_none() || !signal.raw.is_empty()));
+    assert!(signals[0].error_description.is_some());
+    assert_eq!(signals[1].numeric, Some(0xDEADBEEF));
+    assert_eq!(signals[1].error_description, None);
+    assert_eq!(signals[1].error_category, None);
+}
+
+#[test]
+fn signal_extractor_does_not_enrich_decimal_values_as_unprefixed_hex() {
+    let signals = extract_signals("status=80004005");
+
+    assert_eq!(signals.len(), 1);
+    assert_eq!(signals[0].kind, SccmSignalKind::Status);
+    assert_eq!(signals[0].raw, "80004005");
+    assert_eq!(signals[0].numeric, Some(80_004_005));
+    assert_eq!(signals[0].error_description, None);
+    assert_eq!(signals[0].error_category, None);
+}
+
+#[test]
+fn signal_extractor_supports_only_the_declared_structured_forms() {
+    let signals = extract_signals(
+        "HRESULT 0x80004005; exitCode = 1618; return code 3010; \
+         unstructured 0x80070005; id={80070005-1111-2222-3333-444444444444}",
+    );
+
+    assert_eq!(
+        signals
+            .iter()
+            .map(|signal| (&signal.kind, signal.raw.as_str()))
+            .collect::<Vec<_>>(),
+        vec![
+            (&SccmSignalKind::HResult, "0x80004005"),
+            (&SccmSignalKind::ExitCode, "1618"),
+            (&SccmSignalKind::ReturnCode, "3010"),
+        ]
+    );
+}
+
+#[test]
+fn signal_extractor_uses_utf16_spans_and_preserves_repeated_tokens() {
+    let message = "😀 hr=0x80070005 then hr=0x80070005";
+    let signals = extract_signals(message);
+
+    assert_eq!(signals.len(), 2);
+    assert_eq!(signals[0].raw, signals[1].raw);
+    assert_ne!(
+        (signals[0].start, signals[0].end),
+        (signals[1].start, signals[1].end)
+    );
+    assert_eq!((signals[0].start, signals[0].end), (6, 16));
+    assert_eq!(
+        message
+            .encode_utf16()
+            .skip(signals[0].start)
+            .take(signals[0].end - signals[0].start)
+            .collect::<Vec<_>>(),
+        "0x80070005".encode_utf16().collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn signal_extractor_is_deterministic_and_serializes_camel_case() {
+    let message = "HRESULT 0x80004005; status=4294967296";
+    let first = extract_signals(message);
+    let second = extract_signals(message);
+
+    assert_eq!(first, second);
+    assert_eq!(first[1].raw, "4294967296");
+    assert_eq!(first[1].numeric, None);
+    assert_eq!(first[1].error_description, None);
+
+    let json = serde_json::to_value(&first).unwrap();
+    assert_eq!(json[0]["kind"], "hResult");
+    assert_eq!(json[0]["raw"], "0x80004005");
+    assert!(json[0]["errorDescription"].is_string());
+    assert!(json[0]["errorCategory"].is_string());
+    assert!(json[0]["start"].is_number());
+    assert!(json[0]["end"].is_number());
+    assert_eq!(
+        json,
+        serde_json::json!([
+            {
+                "kind": "hResult",
+                "raw": "0x80004005",
+                "numeric": 2_147_500_037_u32,
+                "start": 8,
+                "end": 18,
+                "errorDescription": "E_FAIL - Unspecified failure",
+                "errorCategory": "Windows"
+            },
+            {
+                "kind": "status",
+                "raw": "4294967296",
+                "numeric": null,
+                "start": 27,
+                "end": 37,
+                "errorDescription": null,
+                "errorCategory": null
+            }
+        ])
+    );
+
+    let decoded: Vec<SccmSignal> = serde_json::from_value(json.clone()).unwrap();
+    assert_eq!(decoded, first);
+    assert_eq!(serde_json::to_value(&decoded).unwrap(), json);
+
+    let kind_json = serde_json::to_string(&SccmSignalKind::Gle).unwrap();
+    assert_eq!(kind_json, r#""gle""#);
+    let decoded_kind: SccmSignalKind = serde_json::from_str(&kind_json).unwrap();
+    assert_eq!(decoded_kind, SccmSignalKind::Gle);
 }
 
 #[test]
