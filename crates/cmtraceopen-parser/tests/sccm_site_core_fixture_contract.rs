@@ -110,6 +110,10 @@ fn artifact_storage_failures(scenario_dir: &std::path::Path, artifact: &Value) -
                 "{state} artifact {artifact_id} must record zero bytesCopied"
             ));
         }
+    } else {
+        failures.push(format!(
+            "artifact {artifact_id} has missing or unknown captureState {state:?}"
+        ));
     }
 
     failures
@@ -121,6 +125,7 @@ fn site_core_uses_canonical_rotation_and_coverage_contracts() {
     assert_eq!(manifests.len(), 9, "site-core scenario matrix changed");
 
     let mut failures = Vec::new();
+    let mut artifacts_seen = 0;
     let mut physical_artifacts = 0;
     for (scenario, manifest) in &manifests {
         let site_code = manifest["topology"]["siteCode"]
@@ -140,6 +145,7 @@ fn site_core_uses_canonical_rotation_and_coverage_contracts() {
             .as_array()
             .expect("site-core artifacts are an array")
         {
+            artifacts_seen += 1;
             if matches!(
                 artifact["captureState"].as_str(),
                 Some("captured" | "capped")
@@ -158,6 +164,7 @@ fn site_core_uses_canonical_rotation_and_coverage_contracts() {
             );
         }
     }
+    assert_eq!(artifacts_seen, 18, "site-core artifact matrix changed");
     assert_eq!(
         physical_artifacts, 14,
         "site-core physical artifact matrix changed"
@@ -293,5 +300,25 @@ fn nonphysical_states_cannot_claim_files_or_complete_fragments() {
             2,
             "{state} physical storage"
         );
+    }
+}
+
+#[test]
+fn missing_and_unknown_capture_states_fail_closed() {
+    let scenario_dir = site_core_root().join("healthy");
+    for artifact in [
+        serde_json::json!({
+            "artifactId": "missing-state",
+            "relativePath": null,
+            "bytesCopied": 0
+        }),
+        serde_json::json!({
+            "artifactId": "misspelled-state",
+            "captureState": "caputred",
+            "relativePath": null,
+            "bytesCopied": 0
+        }),
+    ] {
+        assert_eq!(artifact_storage_failures(&scenario_dir, &artifact).len(), 1);
     }
 }
