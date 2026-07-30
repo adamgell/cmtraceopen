@@ -1,0 +1,9 @@
+{
+  "sccmManifestVersion": 1,
+  "privacy": { "synthetic": true, "rawPaths": "redacted" },
+  "bundleRole": "server",
+  "topology": { "captureHost": "LAB-CM01", "siteCode": "CONTOSO", "rolesObserved": ["siteServer"] },
+  "artifacts": [
+    { "artifactId": "unknown-db-export", "role": "unclassified", "sourceId": "unknown-db-supplement", "sourceKind": "unknown", "sourceVersion": "5.00.TEST", "originalPath": "REDACTED_UNSUPPORTED_EXPORT", "originalBasename": "synthetic-db-export.txt", "configuredPathProvenance": { "state": "supplied", "pathFingerprint": "synthetic:path:unsupported-db" }, "rotation": { "kind": "none", "lineageId": "unknown-db-export" }, "captureState": "unsupported", "unsupportedReason": "no approved server source contract", "collectedUtc": "2026-07-30T00:08:00Z", "relativePath": "evidence/sccm/server/unclassified/unknown-db-supplement/current/synthetic-db-export.txt", "bytesCopied": 32 }
+  ]
+}

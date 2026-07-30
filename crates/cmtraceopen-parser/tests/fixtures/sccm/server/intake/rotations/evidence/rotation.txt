@@ -1,0 +1,1 @@
+SYNTHETIC: rotation members are intentionally minimal; only lineage and unique paths are asserted.

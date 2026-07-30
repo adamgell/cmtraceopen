@@ -1,0 +1,7 @@
+{
+  "pre318ExpectedVersion": 1,
+  "coverage": [{ "role": "distributionPoint", "sourceId": "server-dp-distribution", "state": "absent", "gap": "candidate absent only" }],
+  "rolesObserved": ["siteServer"],
+  "roleHealthFinding": "none",
+  "forbiddenConclusion": "distribution point broken or absent"
+}

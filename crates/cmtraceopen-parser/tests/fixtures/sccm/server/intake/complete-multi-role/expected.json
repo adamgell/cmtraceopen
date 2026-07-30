@@ -1,0 +1,12 @@
+{
+  "pre318ExpectedVersion": 1,
+  "privacy": "synthetic",
+  "canonicalArtifactIds": ["dp-dist-current", "mp-policy-current", "sitecomp-current", "sup-sync-current"],
+  "coverage": [
+    { "role": "distributionPoint", "sourceId": "server-dp-distribution", "state": "captured" },
+    { "role": "managementPoint", "sourceId": "server-mp-policy", "state": "captured" },
+    { "role": "siteServer", "sourceId": "server-sitecomp", "state": "captured" },
+    { "role": "softwareUpdatePoint", "sourceId": "server-sup-sync", "state": "captured" }
+  ],
+  "roleHealthFinding": "none"
+}

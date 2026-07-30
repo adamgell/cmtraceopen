@@ -1,0 +1,7 @@
+{
+  "pre318ExpectedVersion": 1,
+  "retainedUnclassifiedArtifactIds": ["unknown-db-export"],
+  "coverage": [{ "role": "unclassified", "sourceId": "unknown-db-supplement", "state": "unsupported" }],
+  "eligibleForRoleReducer": false,
+  "databaseOrRoleFinding": "none"
+}

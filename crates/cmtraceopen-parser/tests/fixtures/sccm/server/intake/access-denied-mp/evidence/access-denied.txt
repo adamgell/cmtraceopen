@@ -1,0 +1,1 @@
+SYNTHETIC: collector received access denied before reading the catalogued MP policy source.

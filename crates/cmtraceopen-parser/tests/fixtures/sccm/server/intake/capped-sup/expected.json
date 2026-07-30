@@ -1,0 +1,6 @@
+{
+  "pre318ExpectedVersion": 1,
+  "coverage": [{ "role": "softwareUpdatePoint", "sourceId": "server-sup-sync", "state": "capped", "truncated": true }],
+  "terminalSoftwareUpdatePointHealth": false,
+  "nextArtifactRequest": "bounded recapture of server-sup-sync with a cap sufficient for complete logical records"
+}

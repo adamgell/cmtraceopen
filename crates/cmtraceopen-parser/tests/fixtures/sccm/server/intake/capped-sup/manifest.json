@@ -1,0 +1,9 @@
+{
+  "sccmManifestVersion": 1,
+  "privacy": { "synthetic": true, "rawPaths": "redacted" },
+  "bundleRole": "server",
+  "topology": { "captureHost": "LAB-CM01", "siteCode": "CONTOSO", "rolesObserved": ["softwareUpdatePoint"] },
+  "artifacts": [
+    { "artifactId": "sup-sync-capped", "role": "softwareUpdatePoint", "sourceId": "server-sup-sync", "sourceKind": "ccmLog", "sourceVersion": "5.00.TEST", "originalPath": "REDACTED_SUP_ROOT", "originalBasename": "wsyncmgr.log", "configuredPathProvenance": { "state": "configured", "pathFingerprint": "synthetic:path:sup-default" }, "rotation": { "kind": "current", "lineageId": "sup-sync-cap" }, "captureState": "capped", "byteLimit": 64, "bytesCopied": 64, "truncated": true, "collectedUtc": "2026-07-30T00:06:00Z", "relativePath": "evidence/sccm/server/software-update-point/server-sup-sync/current/wsyncmgr.log" }
+  ]
+}

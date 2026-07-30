@@ -1,0 +1,1 @@
+SYNTHETIC: one captured record per declared role group; content intentionally omitted from intake fixture.

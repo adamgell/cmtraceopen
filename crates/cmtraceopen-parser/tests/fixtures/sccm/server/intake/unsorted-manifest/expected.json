@@ -1,0 +1,11 @@
+{
+  "pre318ExpectedVersion": 1,
+  "canonicalArtifactIds": ["a-mp-policy", "b-sitecomp", "z-site-status"],
+  "normalizedOutputByteIdenticalWhenReordered": true,
+  "deterministicEvidenceIds": "pending #318 deterministic evidence contract",
+  "coverage": [
+    { "role": "managementPoint", "sourceId": "server-mp-policy", "state": "captured" },
+    { "role": "siteServer", "sourceId": "server-sitecomp", "state": "captured" },
+    { "role": "siteServer", "sourceId": "server-status", "state": "captured" }
+  ]
+}

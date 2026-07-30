@@ -1,0 +1,9 @@
+{
+  "sccmManifestVersion": 1,
+  "privacy": { "synthetic": true, "rawPaths": "redacted" },
+  "bundleRole": "server",
+  "topology": { "captureHost": "LAB-MP01", "siteCode": "CONTOSO", "rolesObserved": ["managementPoint"] },
+  "artifacts": [
+    { "artifactId": "mp-policy-access-denied", "role": "managementPoint", "sourceId": "server-mp-policy", "sourceKind": "ccmLog", "sourceVersion": "5.00.TEST", "originalPath": "REDACTED_MP_ROOT", "originalBasename": "MP_GetPolicy.log", "configuredPathProvenance": { "state": "configured", "pathFingerprint": "synthetic:path:mp-default" }, "rotation": { "kind": "current", "lineageId": "mp-policy-access" }, "captureState": "accessDenied", "collectionDetail": "synthetic permission denial", "collectedUtc": "2026-07-30T00:05:00Z", "relativePath": "evidence/sccm/server/management-point/server-mp-policy/current/MP_GetPolicy.log", "bytesCopied": 0 }
+  ]
+}

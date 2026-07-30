@@ -1,0 +1,6 @@
+{
+  "pre318ExpectedVersion": 1,
+  "coverage": [{ "role": "managementPoint", "sourceId": "server-mp-iis", "state": "skipped", "requiredness": "optionalSupplemental" }],
+  "requiredSourceFailure": false,
+  "roleHealthFinding": "none"
+}

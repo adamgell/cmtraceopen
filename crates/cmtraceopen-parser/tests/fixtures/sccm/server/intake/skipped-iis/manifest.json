@@ -1,0 +1,9 @@
+{
+  "sccmManifestVersion": 1,
+  "privacy": { "synthetic": true, "rawPaths": "redacted" },
+  "bundleRole": "server",
+  "topology": { "captureHost": "LAB-MP01", "siteCode": "CONTOSO", "rolesObserved": ["managementPoint"] },
+  "artifacts": [
+    { "artifactId": "mp-iis-skipped", "role": "managementPoint", "sourceId": "server-mp-iis", "sourceKind": "iisW3c", "sourceVersion": "5.00.TEST", "originalPath": "REDACTED_IIS_EXPORT", "originalBasename": "u_ex_synthetic.log", "configuredPathProvenance": { "state": "notRequested", "pathFingerprint": "synthetic:path:iis-not-requested" }, "rotation": { "kind": "providerDefined", "lineageId": "mp-iis-supplement" }, "captureState": "skipped", "skipReason": "optional supplemental source not requested", "collectedUtc": "2026-07-30T00:07:00Z", "relativePath": "evidence/sccm/server/management-point/server-mp-iis/skipped/u_ex_synthetic.log", "bytesCopied": 0 }
+  ]
+}
