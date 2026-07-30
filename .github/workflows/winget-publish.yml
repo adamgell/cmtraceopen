@@ -86,7 +86,26 @@ jobs:
             -ManifestDirectory "${{ steps.generate.outputs.output_dir }}" `
             -MetadataPath ./.github/winget/locale-metadata.yaml
 
+      # The patched manifest is echoed so a workflow_dispatch run is a complete
+      # rehearsal: it proves komac's --output-directory layout, the patch script,
+      # and the resulting manifest are all correct without touching winget-pkgs.
+      - name: Show patched manifest
+        shell: pwsh
+        run: |
+          $manifest = Get-ChildItem -Path "${{ steps.generate.outputs.output_dir }}" -Recurse -Filter '*.locale.en-US.yaml' -File |
+            Select-Object -First 1
+          if (-not $manifest) { throw "No locale manifest found after patching" }
+
+          Write-Host "::group::$($manifest.Name)"
+          Get-Content -LiteralPath $manifest.FullName -Raw | Write-Host
+          Write-Host "::endgroup::"
+
+      # Only a published release submits. workflow_dispatch is a rehearsal, which
+      # is what its own input description ("Release tag to test") always implied,
+      # and submitting from a manual run would open a duplicate pull request on
+      # microsoft/winget-pkgs for a version that is already published.
       - name: Submit to winget-pkgs
+        if: github.event_name == 'release'
         shell: pwsh
         env:
           GITHUB_TOKEN: ${{ secrets.WINGET_PAT }}
