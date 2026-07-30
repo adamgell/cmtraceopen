@@ -34,18 +34,24 @@ pub fn parse_policy_log_impl(path: &Path) -> Result<JamfPolicyLogResult, AppErro
 
     let mut reader = BufReader::new(file);
     let mut events: Vec<JamfPolicyEvent> = Vec::new();
+    let mut pids: Vec<u32> = Vec::new();
     let mut total_lines = 0usize;
     let mut unparsed = 0usize;
 
     crate::jamf::text::for_each_line(&mut reader, |offset, line| {
         total_lines += 1;
         match parse_line(line, offset, reference_year) {
-            Some(ev) => events.push(ev),
+            Some((ev, pid)) => {
+                events.push(ev);
+                pids.push(pid);
+            }
             None => unparsed += 1,
         }
     })?;
 
     fix_year_wrap(&mut events);
+    // After the year fix, so durations are computed from final timestamps.
+    compute_durations(&mut events, &pids);
 
     Ok(JamfPolicyLogResult {
         events,
@@ -65,7 +71,9 @@ fn reference_year_for(path: &Path) -> i32 {
         .unwrap_or_else(|| Utc::now().year())
 }
 
-fn parse_line(line: &str, offset: u64, year: i32) -> Option<JamfPolicyEvent> {
+/// Returns the event plus the emitting `jamf` PID, which is not part of the
+/// wire type but identifies the invocation an event belongs to.
+fn parse_line(line: &str, offset: u64, year: i32) -> Option<(JamfPolicyEvent, u32)> {
     let caps = line_regex().captures(line)?;
     let mon = month_to_num(caps.name("mon")?.as_str())?;
     let day: u32 = caps.name("day")?.as_str().parse().ok()?;
@@ -73,20 +81,85 @@ fn parse_line(line: &str, offset: u64, year: i32) -> Option<JamfPolicyEvent> {
     let date = NaiveDate::from_ymd_opt(year, mon, day)?;
     let dt = NaiveDateTime::new(date, time);
     let ts = local_naive_to_utc(dt);
+    let pid: u32 = caps.name("pid")?.as_str().parse().ok()?;
 
     let msg = caps.name("msg")?.as_str();
     let (trigger, policy_id, policy_name, result) = classify(msg);
 
-    Some(JamfPolicyEvent {
-        timestamp: ts,
-        trigger,
-        policy_id,
-        policy_name,
-        result,
-        duration_ms: None,
-        raw_line_offset: offset,
-        raw_line: line.to_string(),
-    })
+    Some((
+        JamfPolicyEvent {
+            timestamp: ts,
+            trigger,
+            policy_id,
+            policy_name,
+            result,
+            duration_ms: None,
+            raw_line_offset: offset,
+            raw_line: line.to_string(),
+        },
+        pid,
+    ))
+}
+
+/// Fills in `duration_ms` for each `Executing Policy` event.
+///
+/// jamf.log has no policy-completion marker, but each `jamf` invocation runs
+/// under one PID and a check-in may execute several policies in sequence. So a
+/// policy's elapsed time is measured from its `Executing Policy` line to the
+/// next policy started by the same PID, or — for the last one — to that
+/// invocation's final line.
+///
+/// This is the invocation's own elapsed time, not a figure JAMF reports: work
+/// that trails the final policy (inventory submission, launchd cleanup) lands in
+/// that policy's total. It is an upper bound, which is the useful direction for
+/// "what is making check-ins slow".
+fn compute_durations(events: &mut [JamfPolicyEvent], pids: &[u32]) {
+    debug_assert_eq!(events.len(), pids.len());
+
+    // Computed up front so the scan can borrow `events` immutably.
+    let mut durations: Vec<Option<u64>> = vec![None; events.len()];
+
+    for (i, (event, pid)) in events.iter().zip(pids).enumerate() {
+        if !is_policy_execution(event) {
+            continue;
+        }
+        let start = event.timestamp;
+
+        let mut end = None;
+        for (later, later_pid) in events.iter().zip(pids).skip(i + 1) {
+            if later_pid != pid {
+                // Another invocation's line: syslog interleaves concurrent jamf
+                // processes, so this does not end the run.
+                continue;
+            }
+            // PIDs are recycled. Without a bound, a policy could be paired with
+            // an unrelated invocation weeks later and report a duration of days.
+            if later.timestamp - start > MAX_INVOCATION {
+                break;
+            }
+            end = Some(later.timestamp);
+            if is_policy_execution(later) {
+                // The next policy in this run bounds the current one.
+                break;
+            }
+        }
+
+        durations[i] = end.and_then(|e| (e - start).num_milliseconds().try_into().ok());
+    }
+
+    for (event, duration) in events.iter_mut().zip(durations) {
+        event.duration_ms = duration;
+    }
+}
+
+/// Longest span attributed to one `jamf` invocation. Policies do legitimately
+/// run for a long time — an hour-plus inventory run appears in real logs — but
+/// beyond this a shared PID is far likelier to be a recycled one than a single
+/// process still working.
+const MAX_INVOCATION: chrono::TimeDelta = chrono::TimeDelta::hours(12);
+
+fn is_policy_execution(event: &JamfPolicyEvent) -> bool {
+    matches!(&event.trigger, JamfPolicyTrigger::Other(kind) if kind == "execute")
 }
 
 fn month_to_num(s: &str) -> Option<u32> {

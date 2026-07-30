@@ -26,6 +26,23 @@ function describeTrigger(t: JamfPolicyTrigger): string {
   }
 }
 
+// Backend timestamps are UTC instants; render them in the reader's zone.
+function formatTimestamp(iso: string): string {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? iso : d.toLocaleString();
+}
+
+// Only policy executions carry an elapsed time — see compute_durations in
+// src-tauri/src/jamf/policy_log.rs for what it measures.
+function formatDuration(ms: number | null): string {
+  if (ms == null) return "-";
+  if (ms < 1000) return `${ms} ms`;
+  const seconds = ms / 1000;
+  if (seconds < 60) return `${seconds.toFixed(1)} s`;
+  const minutes = Math.floor(seconds / 60);
+  return `${minutes}m ${Math.round(seconds % 60)}s`;
+}
+
 function describeResult(e: JamfPolicyEvent): string {
   switch (e.result.type) {
     case "success":    return "Success";
@@ -95,15 +112,17 @@ function Table({ events }: { events: JamfPolicyEvent[] }) {
           <th align="left">Trigger</th>
           <th align="left">Policy</th>
           <th align="left">Result</th>
+          <th align="right">Elapsed</th>
         </tr>
       </thead>
       <tbody>
         {events.map((e, i) => (
           <tr key={`${e.rawLineOffset}-${i}`}>
-            <td>{e.timestamp}</td>
+            <td>{formatTimestamp(e.timestamp)}</td>
             <td>{describeTrigger(e.trigger)}</td>
             <td>{e.policyName ?? e.policyId ?? "-"}</td>
             <td>{describeResult(e)}</td>
+            <td align="right">{formatDuration(e.durationMs)}</td>
           </tr>
         ))}
       </tbody>
