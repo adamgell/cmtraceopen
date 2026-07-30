@@ -97,13 +97,13 @@ pub const MENU_ID_FILE_RECENT_CLEAR: &str = "file.recent.clear";
 const RECENT_MENU_ID_PREFIX: &str = "recent.";
 ```
 
-Individual entries use ids `recent.{index}.{hash}`, where `{hash}` is 8 lowercase hex chars of a `DefaultHasher` digest over the entry's normalized path and workspace. Position alone is not a safe key: a stale-but-in-range index would silently open a different file than the one clicked, which is reachable both from concurrent pushes and from `prune` shifting indices. The hash is recomputed at click time and compared before anything is emitted.
+Individual entries use ids `recent.{index}.{hash}`, where `{hash}` is the full 64-bit `DefaultHasher` digest over the entry's normalized path and workspace, as 16 lowercase hex chars. Position alone is not a safe key: a stale-but-in-range index would silently open a different file than the one clicked, which is reachable both from concurrent pushes and from `prune` shifting indices. The hash is recomputed at click time and compared before anything is emitted.
 
 `FILE_ORDER` and `FILE_ORDER_MAC` both gain `MENU_ID_FILE_RECENT` directly after `MENU_ID_FILE_KNOWN_SOURCES`, matching how `Open Known Source` is composed today.
 
 `build_recent_submenu(app, entries)`:
 
-- Empty list: a single disabled item `No recent files`, with the `Recent` submenu itself disabled. This mirrors the existing `known-source.unavailable` placeholder pattern.
+- Empty list: a single disabled item `No recent files`. The `Recent` submenu itself stays **enabled**, matching the sibling `Open Known Source` submenu — a disabled submenu cannot be opened, which would make the placeholder unreachable and leave the user with a greyed-out entry that explains nothing.
 - Non-empty: one item per entry, then a separator, then `Clear Recent`.
 
 `rebuild_recent_submenu(app)` drains the live submenu with `while submenu.remove_at(0)?.is_some() {}`, then appends freshly built items. Note that Tauri wraps muda here: `tauri::menu::Submenu::remove_at` returns `Result<Option<MenuItemKind>>`, not muda's bare `Option`.

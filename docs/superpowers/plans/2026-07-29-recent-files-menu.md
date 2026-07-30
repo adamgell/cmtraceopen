@@ -1646,13 +1646,13 @@ npm run app:dev
 ```
 
 Verify, in order:
-1. `File > Recent` shows `No recent files` and is greyed out on a clean profile.
+1. `File > Recent` opens on a clean profile and shows a single greyed-out `No recent files` row. The submenu itself must stay openable.
 2. Open a log via `File > Open File…`; `File > Recent` now lists it as `{name} — {parent} (Log Explorer)`.
 3. Open a second, different log; it appears above the first.
 4. Reopen the first log; it moves back to the top and is not duplicated.
 5. Quit and relaunch; both entries are still there.
 6. Delete one of the files on disk, then open any log to force a rebuild; the deleted entry disappears.
-7. `File > Recent > Clear Recent` empties the submenu and greys it out.
+7. `File > Recent > Clear Recent` empties the submenu back to the greyed-out `No recent files` row, with the submenu still openable.
 8. Switch to another workspace, open a folder there, and confirm the entry is tagged with that workspace and reopening it switches back.
 
 - [ ] **Step 9: Commit**

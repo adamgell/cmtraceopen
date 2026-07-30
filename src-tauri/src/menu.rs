@@ -1365,7 +1365,11 @@ fn build_recent_submenu<R: Runtime>(
     let refs: Vec<&dyn tauri::menu::IsMenuItem<R>> =
         items.iter().map(|item| item.as_ref()).collect();
 
-    Submenu::with_id_and_items(app, MENU_ID_FILE_RECENT, "Recent", !entries.is_empty(), &refs)
+    // Stays enabled even when empty, matching the sibling `Open Known Source`
+    // submenu. A disabled submenu cannot be opened on any platform, which
+    // would make the "No recent files" row unreachable and leave the user with
+    // a greyed-out entry that explains nothing.
+    Submenu::with_id_and_items(app, MENU_ID_FILE_RECENT, "Recent", true, &refs)
 }
 
 /// Tear down and repopulate the Recent submenu.
@@ -1409,9 +1413,11 @@ fn rebuild_recent_submenu_on_main<R: Runtime>(
             .map_err(|error| error.to_string())?;
     }
 
-    submenu
-        .set_enabled(!entries.is_empty())
-        .map_err(|error| error.to_string())
+    // Always enabled, for the same reason as `build_recent_submenu`: the
+    // placeholder row has to stay reachable when the list empties out. This
+    // also means a clear cannot leave the submenu permanently unopenable if a
+    // later append fails.
+    submenu.set_enabled(true).map_err(|error| error.to_string())
 }
 
 /// A source entry extracted from the catalog for menu building.
