@@ -108,6 +108,32 @@ fn resolve_home(path: &str) -> String {
     path.to_string()
 }
 
+/// Probes Full Disk Access by attempting to stat the TCC database, which is
+/// only reachable by a process holding FDA.
+///
+/// Shared with the JAMF workspace so both report the same thing from the same
+/// signal.
+#[cfg(target_os = "macos")]
+pub fn detect_full_disk_access() -> FdaStatus {
+    match std::fs::metadata("/Library/Application Support/com.apple.TCC/TCC.db") {
+        Ok(_) => FdaStatus::Granted,
+        Err(e) => {
+            let raw = e.raw_os_error();
+            if e.kind() == std::io::ErrorKind::PermissionDenied || raw == Some(1) {
+                FdaStatus::NotGranted
+            } else {
+                FdaStatus::Unknown
+            }
+        }
+    }
+}
+
+/// FDA is a macOS concept; elsewhere there is nothing to report.
+#[cfg(not(target_os = "macos"))]
+pub fn detect_full_disk_access() -> FdaStatus {
+    FdaStatus::Unknown
+}
+
 // ---------------------------------------------------------------------------
 // macOS implementation
 // ---------------------------------------------------------------------------
@@ -128,18 +154,7 @@ pub fn scan_environment_impl() -> Result<MacosDiagEnvironment, crate::error::App
     };
 
     // --- Full Disk Access check ---
-    let full_disk_access =
-        match std::fs::metadata("/Library/Application Support/com.apple.TCC/TCC.db") {
-            Ok(_) => FdaStatus::Granted,
-            Err(e) => {
-                let raw = e.raw_os_error();
-                if e.kind() == std::io::ErrorKind::PermissionDenied || raw == Some(1) {
-                    FdaStatus::NotGranted
-                } else {
-                    FdaStatus::Unknown
-                }
-            }
-        };
+    let full_disk_access = detect_full_disk_access();
 
     // --- Tool availability ---
     let tool_available = |name: &str| -> bool {

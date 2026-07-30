@@ -12,9 +12,16 @@ export function MacosJamfProfilesTab() {
   const begin = useJamfStore((s) => s.beginLoad);
   const finish = useJamfStore((s) => s.finishLoad);
   const fail = useJamfStore((s) => s.failLoad);
-  const orgFromEnv = useJamfStore((s) => s.environment.data?.mdmOrganization ?? null);
+  const mdmOrg = useJamfStore((s) => s.environment.data?.mdmOrganization ?? null);
+  const jamfInstalled = useJamfStore((s) => s.environment.data?.jamfInstalled ?? false);
   const envStatus = useJamfStore((s) => s.environment.status);
   const [selected, setSelected] = useState<MacosMdmProfile | null>(null);
+
+  // The MDM organization matches every profile that MDM deployed, which is the
+  // right answer only when the MDM in question is JAMF. On a Mac managed by
+  // something else it would relabel that vendor's profiles as JAMF-deployed, so
+  // fall back to JAMF-specific payload matching alone.
+  const orgFromEnv = jamfInstalled ? mdmOrg : null;
 
   const reload = async () => {
     begin("profiles");

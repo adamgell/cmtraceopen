@@ -5,7 +5,6 @@ use std::time::{Duration, Instant};
 use crate::error::AppError;
 use crate::jamf::models::{JamfDirectoryStatus, JamfEnvironment};
 use crate::jamf::paths;
-use crate::macos_diag::models::FdaStatus;
 
 const JAMF_VERSION_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -103,6 +102,9 @@ pub fn collect_environment_impl() -> Result<JamfEnvironment, AppError> {
         None
     };
 
+    let (mdm_profile_present, mdm_organization) = read_mdm_identity();
+    let fda_status = crate::macos_diag::environment::detect_full_disk_access();
+
     let summary = build_summary(
         jamf_installed,
         &jamf_version,
@@ -115,15 +117,51 @@ pub fn collect_environment_impl() -> Result<JamfEnvironment, AppError> {
         jamf_version,
         jss_url,
         last_check_in,
-        mdm_profile_present: false, // Filled in Task 1.5 wiring.
-        mdm_organization: None,
+        mdm_profile_present,
+        mdm_organization,
         jamf_connect_installed,
         jamf_connect_version,
         jamf_connect_idp,
-        fda_status: FdaStatus::Unknown,
+        fda_status,
         directories,
         summary,
     })
+}
+
+/// Payload type carried by the MDM enrollment profile itself.
+const MDM_PAYLOAD_TYPE: &str = "com.apple.mdm";
+
+/// Reports whether an MDM profile is installed and which organization issued it.
+///
+/// The organization is the one on the enrollment profile — the tenant that owns
+/// the JAMF instance, which is also the value stamped on the profiles it
+/// deploys. That makes it the right `expected_organization` for
+/// [`crate::jamf::profiles::filter_jamf_profiles_impl`], which otherwise can
+/// only recognize profiles whose payloads are JAMF-specific.
+///
+/// Never fails: profile enumeration is unavailable off macOS and can be denied
+/// at runtime, and neither is a reason for the whole environment probe to error.
+fn read_mdm_identity() -> (bool, Option<String>) {
+    let result = match crate::macos_diag::profiles::list_profiles_impl() {
+        Ok(r) => r,
+        Err(e) => {
+            log::debug!("MDM profile enumeration unavailable: {e:?}");
+            return (false, None);
+        }
+    };
+
+    let mdm_profile = result.profiles.iter().find(|p| {
+        p.payloads.iter().any(|payload| {
+            payload.payload_type == MDM_PAYLOAD_TYPE
+                || payload.payload_identifier == MDM_PAYLOAD_TYPE
+        })
+    });
+
+    // `profiles status -type enrollment` still reports enrollment even when the
+    // profile list is empty, so treat either signal as present.
+    let present = mdm_profile.is_some() || result.enrollment_status.enrolled;
+    let organization = mdm_profile.and_then(|p| p.profile_organization.clone());
+    (present, organization)
 }
 
 fn scan_directories() -> JamfDirectoryStatus {

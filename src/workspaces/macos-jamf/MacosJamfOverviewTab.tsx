@@ -5,6 +5,14 @@ function formatBool(b: boolean) {
   return b ? "Yes" : "No";
 }
 
+// The backend sends a UTC instant; show it in the reader's own zone rather than
+// printing a raw ISO string that looks like local time but is not.
+function formatTimestamp(iso: string | null): string {
+  if (!iso) return "-";
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? iso : d.toLocaleString();
+}
+
 export function MacosJamfOverviewTab() {
   const env = useJamfStore((s) => s.environment.data);
   const status = useJamfStore((s) => s.environment.status);
@@ -23,7 +31,8 @@ export function MacosJamfOverviewTab() {
           <div>Binary: {formatBool(env.jamfInstalled)}</div>
           <div>Version: {env.jamfVersion ?? "-"}</div>
           <div>JSS URL: {env.jssUrl ?? "-"}</div>
-          <div>Last check-in: {env.lastCheckIn ?? "-"}</div>
+          <div>Last check-in: {formatTimestamp(env.lastCheckIn)}</div>
+          <div>MDM profile: {formatBool(env.mdmProfilePresent)}</div>
           <div>MDM org: {env.mdmOrganization ?? "-"}</div>
         </Body1>
       </Card>
