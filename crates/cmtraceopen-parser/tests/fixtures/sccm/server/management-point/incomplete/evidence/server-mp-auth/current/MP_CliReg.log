@@ -1,0 +1,1 @@
+<![LOG[SYNTHETIC FIXTURE MP incomplete: Register or identify succeeded RequestId={28777777-7777-7777-7777-777777777777} ClientHandle={safe:client:mp-incomplete-07} SiteCode={CONTOSO} MPHandle={safe:mp:lab-mp-01}]LOG]!><time="07:00:02.000+000" date="7-30-2026" component="MP_CliReg" context="" type="1" thread="702" file="synthetic-mp-registration.cc:1">

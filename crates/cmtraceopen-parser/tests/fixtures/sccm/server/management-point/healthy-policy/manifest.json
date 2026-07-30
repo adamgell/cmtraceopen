@@ -1,0 +1,79 @@
+{
+  "sccmManifestVersion": 1,
+  "proposalOnly": true,
+  "syntheticFixture": true,
+  "bundle": {
+    "bundleRole": "server",
+    "workflow": "managementPoint",
+    "artifactOrder": "role,designOnlyCatalog.entryId,pathFingerprint,rotationRank,originalBasename,artifactId",
+    "rotationOrder": "current,lo,numeric-ascending,timestamp-ascending"
+  },
+  "topology": {
+    "captureHost": "LAB-MP01",
+    "rolesObserved": ["managementPoint"],
+    "siteCode": "CONTOSO",
+    "managementPointHostHandle": "safe:mp:lab-mp-01"
+  },
+  "artifacts": [
+    {
+      "artifactId": "mp-healthy-auth-current",
+      "designOnlyCatalog": {"entryId":"server-mp-auth","groupMemberships":["server-mp-auth"]},
+      "role": "managementPoint",
+      "producer": "MP_GetAuth",
+      "sourceKind": "ccmLog",
+      "captureState": "captured",
+      "configuredPath": true,
+      "pathProvenance": "configuredSynthetic",
+      "originalBasename": "MP_GetAuth.log",
+      "sanitizedSourcePath": "SYNTHETIC://configured-root/MP/Logs/MP_GetAuth.log",
+      "pathFingerprint": "synthetic:healthy-auth",
+      "rotation": {"kind":"current","lineageId":"mp-healthy-auth","fragmentComplete":true},
+      "sourceVersion": "5.00.TEST.0000",
+      "collectedUtc": "2026-07-30T01:00:10Z",
+      "encoding": "utf-8",
+      "collectionLimit": {"byteLimit":4096,"limitApplied":false},
+      "bytesCopied": 742,
+      "relativePath": "evidence/server-mp-auth/current/MP_GetAuth.log"
+    },
+    {
+      "artifactId": "mp-healthy-registration-current",
+      "designOnlyCatalog": {"entryId":"server-mp-auth","groupMemberships":["server-mp-auth"]},
+      "role": "managementPoint",
+      "producer": "MP_CliReg",
+      "sourceKind": "ccmLog",
+      "captureState": "captured",
+      "configuredPath": true,
+      "pathProvenance": "configuredSynthetic",
+      "originalBasename": "MP_CliReg.log",
+      "sanitizedSourcePath": "SYNTHETIC://configured-root/MP/Logs/MP_CliReg.log",
+      "pathFingerprint": "synthetic:healthy-registration",
+      "rotation": {"kind":"current","lineageId":"mp-healthy-registration","fragmentComplete":true},
+      "sourceVersion": "5.00.TEST.0000",
+      "collectedUtc": "2026-07-30T01:00:10Z",
+      "encoding": "utf-8",
+      "collectionLimit": {"byteLimit":4096,"limitApplied":false},
+      "bytesCopied": 403,
+      "relativePath": "evidence/server-mp-auth/current/MP_CliReg.log"
+    },
+    {
+      "artifactId": "mp-healthy-policy-current",
+      "designOnlyCatalog": {"entryId":"server-mp-policy","groupMemberships":["server-mp-policy"]},
+      "role": "managementPoint",
+      "producer": "MP_GetPolicy",
+      "sourceKind": "ccmLog",
+      "captureState": "captured",
+      "configuredPath": true,
+      "pathProvenance": "configuredSynthetic",
+      "originalBasename": "MP_GetPolicy.log",
+      "sanitizedSourcePath": "SYNTHETIC://configured-root/MP/Logs/MP_GetPolicy.log",
+      "pathFingerprint": "synthetic:healthy-policy",
+      "rotation": {"kind":"current","lineageId":"mp-healthy-policy","fragmentComplete":true},
+      "sourceVersion": "5.00.TEST.0000",
+      "collectedUtc": "2026-07-30T01:00:10Z",
+      "encoding": "utf-8",
+      "collectionLimit": {"byteLimit":4096,"limitApplied":false},
+      "bytesCopied": 1478,
+      "relativePath": "evidence/server-mp-policy/current/MP_GetPolicy.log"
+    }
+  ]
+}

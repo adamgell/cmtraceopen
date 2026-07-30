@@ -1,0 +1,1 @@
+<![LOG[SYNTHETIC FIXTURE MP location failure: Resolve location failed terminal RequestId={28444444-4444-4444-4444-444444444444} ClientHandle={safe:client:mp-location-04} SiteCode={CONTOSO} MPHandle={safe:mp:lab-mp-01} Result=0x80010003]LOG]!><time="04:00:03.000+000" date="7-30-2026" component="MP_Location" context="" type="3" thread="403" file="synthetic-mp-location.cc:1">

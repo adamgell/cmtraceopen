@@ -1,0 +1,79 @@
+{
+  "sccmManifestVersion": 1,
+  "proposalOnly": true,
+  "syntheticFixture": true,
+  "bundle": {
+    "bundleRole": "server",
+    "workflow": "managementPoint",
+    "artifactOrder": "role,designOnlyCatalog.entryId,pathFingerprint,rotationRank,originalBasename,artifactId",
+    "rotationOrder": "current,lo,numeric-ascending,timestamp-ascending"
+  },
+  "topology": {
+    "captureHost": "LAB-MP01",
+    "rolesObserved": ["managementPoint"],
+    "siteCode": "CONTOSO",
+    "managementPointHostHandle": "safe:mp:lab-mp-01"
+  },
+  "artifacts": [
+    {
+      "artifactId": "mp-rotation-current-fragment",
+      "designOnlyCatalog": {"entryId":"server-mp-auth","groupMemberships":["server-mp-auth"]},
+      "role": "managementPoint",
+      "producer": "MP_GetAuth",
+      "sourceKind": "ccmLog",
+      "captureState": "captured",
+      "configuredPath": true,
+      "pathProvenance": "configuredSynthetic",
+      "originalBasename": "MP_GetAuth.log",
+      "sanitizedSourcePath": "SYNTHETIC://configured-root/MP/Logs/MP_GetAuth.log",
+      "pathFingerprint": "synthetic:rotation-auth-root",
+      "rotation": {"kind":"current","lineageId":"mp-rotation-split","fragmentComplete":false},
+      "sourceVersion": "5.00.TEST.0000",
+      "collectedUtc": "2026-07-30T09:00:10Z",
+      "encoding": "utf-8",
+      "collectionLimit": {"byteLimit":4096,"limitApplied":false},
+      "bytesCopied": 147,
+      "relativePath": "evidence/server-mp-auth/current/MP_GetAuth.log"
+    },
+    {
+      "artifactId": "mp-rotation-lo-fragment",
+      "designOnlyCatalog": {"entryId":"server-mp-auth","groupMemberships":["server-mp-auth"]},
+      "role": "managementPoint",
+      "producer": "MP_GetAuth",
+      "sourceKind": "ccmLog",
+      "captureState": "captured",
+      "configuredPath": true,
+      "pathProvenance": "configuredSynthetic",
+      "originalBasename": "MP_GetAuth.log.lo_",
+      "sanitizedSourcePath": "SYNTHETIC://configured-root/MP/Logs/MP_GetAuth.log.lo_",
+      "pathFingerprint": "synthetic:rotation-auth-root",
+      "rotation": {"kind":"lo","lineageId":"mp-rotation-split","fragmentComplete":false},
+      "sourceVersion": "5.00.TEST.0000",
+      "collectedUtc": "2026-07-30T09:00:10Z",
+      "encoding": "utf-8",
+      "collectionLimit": {"byteLimit":4096,"limitApplied":false},
+      "bytesCopied": 140,
+      "relativePath": "evidence/server-mp-auth/lo/MP_GetAuth.log.lo_"
+    },
+    {
+      "artifactId": "mp-rotation-numbered-malformed",
+      "designOnlyCatalog": {"entryId":"server-mp-auth","groupMemberships":["server-mp-auth"]},
+      "role": "managementPoint",
+      "producer": "MP_GetAuth",
+      "sourceKind": "ccmLog",
+      "captureState": "captured",
+      "configuredPath": true,
+      "pathProvenance": "configuredSynthetic",
+      "originalBasename": "MP_GetAuth.log.2",
+      "sanitizedSourcePath": "SYNTHETIC://configured-root/MP/Logs/MP_GetAuth.log.2",
+      "pathFingerprint": "synthetic:rotation-auth-root",
+      "rotation": {"kind":"numbered","value":2,"lineageId":"mp-rotation-malformed","fragmentComplete":true},
+      "sourceVersion": "5.00.UNKNOWN.0000",
+      "collectedUtc": "2026-07-30T09:00:10Z",
+      "encoding": "utf-8",
+      "collectionLimit": {"byteLimit":4096,"limitApplied":false},
+      "bytesCopied": 323,
+      "relativePath": "evidence/server-mp-auth/numbered-2/MP_GetAuth.log.2"
+    }
+  ]
+}

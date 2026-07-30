@@ -1,0 +1,55 @@
+{
+  "contractState": "proposedPending318And335",
+  "workflow": "managementPoint",
+  "scenario": "healthy-policy",
+  "stateChain": ["receiveRequest","authenticate","registerOrIdentify","resolveLocationOrPolicy","respond","recordOutcome"],
+  "analysisContract": {"independentReducer":true,"consumesClientOutput":false,"consumesSiteCoreOutput":false,"crossSideCorrelationPerformed":false},
+  "extractionProfile": {"selectionState":"selected","profileId":"mp-server-5.00.test-v1","sourceVersionPrefix":"5.00.TEST.","validatedArtifactFamilies":["server-mp-auth","server-mp-policy"],"validatedRole":"managementPoint"},
+  "topology": {"role":"managementPoint","captureHostHandle":"safe:mp:lab-mp-01","siteCode":"CONTOSO"},
+  "roleAssessment": {"roleObserved":true,"roleAbsentInferred":false,"missingDefaultPathInterpretation":"sourceCoverageOnly"},
+  "reorderedInputDeterministic": true,
+  "programGateCoverage": ["blockedOrDeferred","completed"],
+  "coverage": [
+    {"logicalArtifactId":"server-mp-auth","state":"captured","requiredness":"required"},
+    {"logicalArtifactId":"server-mp-policy","state":"captured","requiredness":"required"}
+  ],
+  "artifactProvenance": [
+    {"artifactId":"mp-healthy-auth-current","captureState":"captured","role":"managementPoint","producer":"MP_GetAuth","pathFingerprint":"synthetic:healthy-auth","pathProvenance":"configuredSynthetic","sourceVersion":"5.00.TEST.0000","collectedUtc":"2026-07-30T01:00:10Z","encoding":"utf-8","byteLimit":4096,"limitApplied":false},
+    {"artifactId":"mp-healthy-policy-current","captureState":"captured","role":"managementPoint","producer":"MP_GetPolicy","pathFingerprint":"synthetic:healthy-policy","pathProvenance":"configuredSynthetic","sourceVersion":"5.00.TEST.0000","collectedUtc":"2026-07-30T01:00:10Z","encoding":"utf-8","byteLimit":4096,"limitApplied":false},
+    {"artifactId":"mp-healthy-registration-current","captureState":"captured","role":"managementPoint","producer":"MP_CliReg","pathFingerprint":"synthetic:healthy-registration","pathProvenance":"configuredSynthetic","sourceVersion":"5.00.TEST.0000","collectedUtc":"2026-07-30T01:00:10Z","encoding":"utf-8","byteLimit":4096,"limitApplied":false}
+  ],
+  "primaryTransactionId": "mp:request:28111111-1111-1111-1111-111111111111",
+  "transactions": [{
+    "transactionId": "mp:request:28111111-1111-1111-1111-111111111111",
+    "key": {"keyProfileKind":"requestPolicyClientTopology","requestId":"28111111-1111-1111-1111-111111111111","policyId":"a8111111-1111-1111-1111-111111111111","clientHandle":"safe:client:mp-healthy-01","siteCode":"CONTOSO","managementPointHostHandle":"safe:mp:lab-mp-01","confidence":"exact","extractionProfileId":"mp-server-5.00.test-v1"},
+    "topologyCompatibility": "exact",
+    "phase": "recordOutcome",
+    "state": "succeeded",
+    "lastSuccessfulPhase": "recordOutcome",
+    "classification": "success",
+    "confidence": "high",
+    "confidenceCeiling": "high",
+    "coverageGapArtifactIds": [],
+    "nextArtifact": null,
+    "evidence": [
+      {"artifactId":"mp-healthy-auth-current","startLine":1,"endLine":2},
+      {"artifactId":"mp-healthy-policy-current","startLine":1,"endLine":4},
+      {"artifactId":"mp-healthy-registration-current","startLine":1,"endLine":1}
+    ],
+    "observations": [
+      {"observationId":"observation:healthy:01-receive","phase":"receiveRequest","state":"succeeded","classification":"success","timestamp":{"original":"7-30-2026 01:00:00.000+000","offsetMinutes":0,"utc":"2026-07-30T01:00:00.000Z"},"evidence":[{"artifactId":"mp-healthy-auth-current","startLine":1,"endLine":1}]},
+      {"observationId":"observation:healthy:02-authenticate","phase":"authenticate","state":"succeeded","classification":"success","timestamp":{"original":"7-30-2026 01:00:01.000+000","offsetMinutes":0,"utc":"2026-07-30T01:00:01.000Z"},"evidence":[{"artifactId":"mp-healthy-auth-current","startLine":2,"endLine":2}]},
+      {"observationId":"observation:healthy:03-register","phase":"registerOrIdentify","state":"succeeded","classification":"success","timestamp":{"original":"7-30-2026 01:00:02.000+000","offsetMinutes":0,"utc":"2026-07-30T01:00:02.000Z"},"evidence":[{"artifactId":"mp-healthy-registration-current","startLine":1,"endLine":1}]},
+      {"observationId":"observation:healthy:04-resolve","phase":"resolveLocationOrPolicy","state":"succeeded","classification":"success","timestamp":{"original":"7-30-2026 01:00:03.000+000","offsetMinutes":0,"utc":"2026-07-30T01:00:03.000Z"},"evidence":[{"artifactId":"mp-healthy-policy-current","startLine":1,"endLine":1}]},
+      {"observationId":"observation:healthy:05-respond-deferred","phase":"respond","state":"deferred","classification":"blockedOrDeferred","timestamp":{"original":"7-30-2026 01:00:04.000+000","offsetMinutes":0,"utc":"2026-07-30T01:00:04.000Z"},"evidence":[{"artifactId":"mp-healthy-policy-current","startLine":2,"endLine":2}]},
+      {"observationId":"observation:healthy:06-respond-succeeded","phase":"respond","state":"succeeded","classification":"success","timestamp":{"original":"7-30-2026 01:00:05.000+000","offsetMinutes":0,"utc":"2026-07-30T01:00:05.000Z"},"evidence":[{"artifactId":"mp-healthy-policy-current","startLine":3,"endLine":3}]},
+      {"observationId":"observation:healthy:07-outcome","phase":"recordOutcome","state":"succeeded","classification":"success","timestamp":{"original":"7-30-2026 01:00:06.000+000","offsetMinutes":0,"utc":"2026-07-30T01:00:06.000Z"},"evidence":[{"artifactId":"mp-healthy-policy-current","startLine":4,"endLine":4}]}
+    ]
+  }],
+  "sourceLocalObservations": [],
+  "contextFacts": [],
+  "findings": [],
+  "gateControls": {"blockedOrDeferredObservationId":"observation:healthy:05-respond-deferred","laterSameKeySuccess":true},
+  "correlationHandoff": {"issue":"#333","performed":false,"timeOnlyEligible":false,"counterpartReadyKeyKinds":["requestId","policyId","clientSafeHandle","siteCode","managementPointHostHandle"]},
+  "prohibitedClaims": ["arbitrary IIS tree required for analysis","client-side root cause or impact","cross-side correlation or #333 conclusion","management-point role absence from a missing default path","time-only or proximity-only transaction joining"]
+}
