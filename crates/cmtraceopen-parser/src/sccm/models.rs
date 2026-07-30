@@ -2,6 +2,7 @@ use serde::ser::{Error as _, SerializeStruct};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 
+use super::catalog::SccmArtifactFamily;
 use super::rotation::{is_canonical_rotation_number, is_canonical_rotation_timestamp};
 
 pub const SCCM_DIAGNOSTICS_SCHEMA_VERSION: u32 = 1;
@@ -142,6 +143,93 @@ pub struct SccmEvidence {
     pub message: String,
     pub timestamp: SccmTimestamp,
     pub execution_context: Option<SccmSensitiveHandle>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SccmCorrelationKeyKind {
+    AssignmentId,
+    ClientGuid,
+    PackageId,
+    ContentId,
+    SiteCode,
+    ServerHost,
+    CiId,
+    UpdateId,
+    KbId,
+    BitsJobId,
+    TaskSequenceExecutionId,
+    RequestId,
+    TopicId,
+    StateMessageId,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SccmKeyConfidence {
+    Low,
+    Strong,
+    Exact,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SccmCorrelationKey {
+    pub kind: SccmCorrelationKeyKind,
+    pub raw: String,
+    pub normalized: String,
+    pub confidence: SccmKeyConfidence,
+    pub extraction_profile_id: Option<String>,
+    pub evidence: Option<SccmEvidenceRef>,
+    pub start: Option<usize>,
+    pub end: Option<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SccmExtractionProfileMaturity {
+    Unvalidated,
+    Experimental,
+    Stable,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SccmExtractionProfile {
+    pub profile_id: String,
+    pub configmgr_version_prefixes: Vec<String>,
+    pub validated_artifact_families: Vec<SccmArtifactFamily>,
+    pub selected_configmgr_version: Option<String>,
+    pub maturity: SccmExtractionProfileMaturity,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SccmExtractionGapKind {
+    MissingVersion,
+    UnvalidatedVersion,
+    UnvalidatedProfile,
+    ExperimentalProfile,
+    MalformedCandidate,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SccmExtractionGap {
+    pub kind: SccmExtractionGapKind,
+    pub profile_id: String,
+    pub selected_configmgr_version: Option<String>,
+    pub candidate_kind: Option<SccmCorrelationKeyKind>,
+    pub candidate_raw: Option<String>,
+    pub evidence: SccmEvidenceRef,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SccmKeyExtractionResult {
+    pub profile_id: String,
+    pub keys: Vec<SccmCorrelationKey>,
+    pub gaps: Vec<SccmExtractionGap>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
