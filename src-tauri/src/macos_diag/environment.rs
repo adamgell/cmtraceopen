@@ -1,7 +1,10 @@
 use super::models::MacosDiagEnvironment;
 use super::models::MacosLogFileEntry;
+// detect_full_disk_access has an arm on every target, so this one cannot be
+// macOS-gated alongside the rest.
+use super::models::FdaStatus;
 #[cfg(target_os = "macos")]
-use super::models::{FdaStatus, MacosDiagDirectoryStatus, MacosDiagToolAvailability};
+use super::models::{MacosDiagDirectoryStatus, MacosDiagToolAvailability};
 use std::path::Path;
 use std::time::UNIX_EPOCH;
 
