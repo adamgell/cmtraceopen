@@ -359,8 +359,6 @@ fn catalog_rotation_grammar_accepts_only_canonical_suffixes() {
         ("AppEnforce.log", SccmRotation::Current),
         ("AppEnforce.lo_", SccmRotation::LoUnderscore),
         ("AppEnforce.LO_", SccmRotation::LoUnderscore),
-        ("AppEnforce.log.lo_", SccmRotation::LoUnderscore),
-        ("AppEnforce.LOG.LO_", SccmRotation::LoUnderscore),
         ("AppEnforce.log.3", SccmRotation::Numbered(3)),
         (
             "AppEnforce.log.20260730-150000",
@@ -380,6 +378,8 @@ fn catalog_rotation_grammar_accepts_only_canonical_suffixes() {
     }
 
     let rejected = [
+        ("AppEnforce.log.lo_", ".lo_"),
+        ("AppEnforce.LOG.LO_", ".LO_"),
         ("AppEnforce.log.0", ".0"),
         ("AppEnforce.log.03", ".03"),
         ("AppEnforce.log.4294967296", ".4294967296"),

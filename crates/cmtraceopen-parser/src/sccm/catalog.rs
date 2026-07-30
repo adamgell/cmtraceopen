@@ -470,10 +470,7 @@ impl<'a> ParsedArtifactName<'a> {
 
         if let Some(separator) = lowercase.rfind(".log.") {
             let suffix = &name[separator + ".log.".len()..];
-            let lowercase_suffix = &lowercase[separator + ".log.".len()..];
-            let rotation = if lowercase_suffix == "lo_" {
-                Some(SccmRotation::LoUnderscore)
-            } else if let Some(number) = parse_canonical_rotation_number(suffix) {
+            let rotation = if let Some(number) = parse_canonical_rotation_number(suffix) {
                 Some(SccmRotation::Numbered(number))
             } else if is_canonical_rotation_timestamp(suffix) {
                 Some(SccmRotation::Timestamped(suffix.to_string()))
