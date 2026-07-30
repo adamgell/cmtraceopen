@@ -1,3 +1,5 @@
+#![cfg(feature = "macos-diag")]
+
 use std::path::Path;
 
 use app_lib::jamf::models::{JamfPolicyResult, JamfPolicyTrigger};

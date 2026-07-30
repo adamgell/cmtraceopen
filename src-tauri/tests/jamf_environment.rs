@@ -1,3 +1,5 @@
+#![cfg(feature = "macos-diag")]
+
 use app_lib::jamf::detect::collect_environment_impl;
 
 #[test]

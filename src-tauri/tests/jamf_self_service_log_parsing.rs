@@ -1,3 +1,5 @@
+#![cfg(feature = "macos-diag")]
+
 use std::path::Path;
 
 use app_lib::jamf::self_service::parse_self_service_log_impl;
