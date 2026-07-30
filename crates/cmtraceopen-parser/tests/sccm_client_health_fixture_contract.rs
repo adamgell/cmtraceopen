@@ -244,6 +244,125 @@ fn client_health_site_contract_pins_exact_lab_evidence() {
     );
 }
 
+fn client_health_rotation_contract_failures(manifest: &Value) -> Vec<String> {
+    const EXPECTED_RELATIVE_PATH: &str = "evidence/client-ccmsetup/lo/ccmsetup.lo_";
+    const EXPECTED_SANITIZED_PATH: &str = "SYNTHETIC://root-a/ccmsetup/Logs/ccmsetup.lo_";
+
+    let mut failures = Vec::new();
+    let Some(artifacts) = manifest["artifacts"].as_array() else {
+        return vec!["rotation-boundary: artifacts must be an array".to_owned()];
+    };
+    let Some(rollover) = artifacts
+        .iter()
+        .find(|artifact| artifact["rotation"]["kind"] == "lo")
+    else {
+        return vec!["rotation-boundary: .lo_ artifact is missing".to_owned()];
+    };
+
+    match rollover["originalBasename"].as_str() {
+        Some("ccmsetup.lo_") => {}
+        Some(basename) => failures.push(format!(
+            "rotation-boundary: originalBasename must equal ccmsetup.lo_, got {basename}"
+        )),
+        None => failures.push(
+            "rotation-boundary: originalBasename must equal ccmsetup.lo_, got null".to_owned(),
+        ),
+    }
+
+    let relative_path = rollover["relativePath"].as_str();
+    match relative_path {
+        Some(EXPECTED_RELATIVE_PATH) => {}
+        Some(relative_path) => failures.push(format!(
+            "rotation-boundary: relativePath must equal {EXPECTED_RELATIVE_PATH}, got {relative_path}"
+        )),
+        None => failures.push(format!(
+            "rotation-boundary: relativePath must equal {EXPECTED_RELATIVE_PATH}, got null"
+        )),
+    }
+
+    match rollover["sanitizedSourcePath"].as_str() {
+        Some(EXPECTED_SANITIZED_PATH) => {}
+        Some(sanitized_path) => failures.push(format!(
+            "rotation-boundary: sanitizedSourcePath must equal {EXPECTED_SANITIZED_PATH}, got {sanitized_path}"
+        )),
+        None => failures.push(format!(
+            "rotation-boundary: sanitizedSourcePath must equal {EXPECTED_SANITIZED_PATH}, got null"
+        )),
+    }
+
+    if relative_path == Some(EXPECTED_RELATIVE_PATH) {
+        let fixture_path = client_health_root()
+            .join("rotation-boundary")
+            .join(EXPECTED_RELATIVE_PATH);
+        if !fixture_path.is_file() {
+            failures.push(format!(
+                "rotation-boundary: manifest path does not resolve to a fixture: {}",
+                fixture_path.display()
+            ));
+        } else {
+            let actual_bytes = std::fs::metadata(&fixture_path)
+                .expect("rollover fixture metadata is readable")
+                .len();
+            match rollover["bytesCopied"].as_u64() {
+                Some(bytes_copied) if bytes_copied == actual_bytes => {}
+                Some(bytes_copied) => failures.push(format!(
+                    "rotation-boundary: bytesCopied {bytes_copied} does not match fixture length {actual_bytes}"
+                )),
+                None => failures.push(
+                    "rotation-boundary: captured rollover must record bytesCopied".to_owned(),
+                ),
+            }
+        }
+    }
+
+    failures
+}
+
+#[test]
+fn client_health_rotation_contract_pins_full_paths() {
+    let manifests = client_health_manifests();
+    let rotations = manifests
+        .iter()
+        .find(|(scenario, _)| scenario == "rotation-boundary")
+        .map(|(_, manifest)| manifest)
+        .expect("client health has a rotation-boundary scenario");
+    assert!(
+        client_health_rotation_contract_failures(rotations).is_empty(),
+        "canonical client health rotation fixture satisfies the exact path contract"
+    );
+
+    let mut wrong_relative_path = rotations.clone();
+    let rollover = wrong_relative_path["artifacts"]
+        .as_array_mut()
+        .expect("rotation artifacts are an array")
+        .iter_mut()
+        .find(|artifact| artifact["rotation"]["kind"] == "lo")
+        .expect("rotation corpus has a .lo_ artifact");
+    rollover["relativePath"] = Value::String("evidence/other/ccmsetup.lo_".to_owned());
+    assert!(
+        client_health_rotation_contract_failures(&wrong_relative_path)
+            .iter()
+            .any(|failure| failure.contains("relativePath must equal")),
+        "a filename-matching but layout-changing relative path must fail closed"
+    );
+
+    let mut wrong_provenance = rotations.clone();
+    let rollover = wrong_provenance["artifacts"]
+        .as_array_mut()
+        .expect("rotation artifacts are an array")
+        .iter_mut()
+        .find(|artifact| artifact["rotation"]["kind"] == "lo")
+        .expect("rotation corpus has a .lo_ artifact");
+    rollover["sanitizedSourcePath"] =
+        Value::String("SYNTHETIC://different-root/ccmsetup.lo_".to_owned());
+    assert!(
+        client_health_rotation_contract_failures(&wrong_provenance)
+            .iter()
+            .any(|failure| failure.contains("sanitizedSourcePath must equal")),
+        "a filename-matching but provenance-changing source path must fail closed"
+    );
+}
+
 #[test]
 fn client_health_uses_canonical_site_and_rotation_contracts() {
     let manifests = client_health_manifests();
@@ -270,59 +389,7 @@ fn client_health_uses_canonical_site_and_rotation_contracts() {
         .find(|(scenario, _)| scenario == "rotation-boundary")
         .map(|(_, manifest)| manifest)
         .expect("client health has a rotation-boundary scenario");
-    let rollover = rotations["artifacts"]
-        .as_array()
-        .expect("rotation artifacts are an array")
-        .iter()
-        .find(|artifact| artifact["rotation"]["kind"] == "lo")
-        .expect("rotation corpus has a .lo_ artifact");
-
-    let basename = rollover["originalBasename"]
-        .as_str()
-        .expect("rollover artifact has an original basename");
-    if basename != "ccmsetup.lo_" {
-        failures.push(format!(
-            "rotation-boundary: standard ConfigMgr rollover basename must be ccmsetup.lo_, got {basename}"
-        ));
-    }
-
-    let relative_path = rollover["relativePath"]
-        .as_str()
-        .expect("captured rollover has a relative path");
-    if !relative_path.ends_with("/ccmsetup.lo_") {
-        failures.push(format!(
-            "rotation-boundary: rollover relativePath must end in /ccmsetup.lo_, got {relative_path}"
-        ));
-    }
-    let sanitized_path = rollover["sanitizedSourcePath"]
-        .as_str()
-        .expect("rollover artifact has sanitized provenance");
-    if !sanitized_path.ends_with("/ccmsetup.lo_") {
-        failures.push(format!(
-            "rotation-boundary: sanitizedSourcePath must end in /ccmsetup.lo_, got {sanitized_path}"
-        ));
-    }
-    let fixture_path = client_health_root()
-        .join("rotation-boundary")
-        .join(relative_path);
-    if !fixture_path.is_file() {
-        failures.push(format!(
-            "rotation-boundary: manifest path does not resolve to a fixture: {}",
-            fixture_path.display()
-        ));
-    } else {
-        let bytes_copied = rollover["bytesCopied"]
-            .as_u64()
-            .expect("captured rollover records bytesCopied");
-        let actual_bytes = std::fs::metadata(&fixture_path)
-            .expect("rollover fixture metadata is readable")
-            .len();
-        if bytes_copied != actual_bytes {
-            failures.push(format!(
-                "rotation-boundary: bytesCopied {bytes_copied} does not match fixture length {actual_bytes}"
-            ));
-        }
-    }
+    failures.extend(client_health_rotation_contract_failures(rotations));
 
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
