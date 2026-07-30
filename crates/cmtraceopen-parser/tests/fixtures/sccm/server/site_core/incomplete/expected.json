@@ -68,6 +68,7 @@
       "state": "capped",
       "diagnosticMeaning": "coverageOnly",
       "evidence": {
+        "artifactId": "incomplete-sitecomp-capped",
         "entryId": "incomplete-sitecomp-capped:3-3",
         "lineStart": 3,
         "lineEnd": 3,

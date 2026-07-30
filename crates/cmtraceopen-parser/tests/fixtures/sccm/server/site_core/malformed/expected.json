@@ -52,6 +52,7 @@
       "state": "parseFailed",
       "diagnosticMeaning": "coverageOnly",
       "evidence": {
+        "artifactId": "malformed-statmgr-current",
         "entryId": "malformed-statmgr-current:1-1",
         "lineStart": 1,
         "lineEnd": 1,

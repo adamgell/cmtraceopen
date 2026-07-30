@@ -62,6 +62,7 @@
       "state": "parseFailed",
       "diagnosticMeaning": "coverageOnly",
       "evidence": {
+        "artifactId": "rotation-boundary-sitecomp-current",
         "entryId": "rotation-boundary-sitecomp-current:1-1",
         "lineStart": 1,
         "lineEnd": 1
@@ -72,6 +73,7 @@
       "state": "parseFailed",
       "diagnosticMeaning": "coverageOnly",
       "evidence": {
+        "artifactId": "rotation-boundary-sitecomp-lo",
         "entryId": "rotation-boundary-sitecomp-lo:1-1",
         "lineStart": 1,
         "lineEnd": 1

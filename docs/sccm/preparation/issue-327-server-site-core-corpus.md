@@ -46,9 +46,9 @@ success. Consequently:
   `ComponentWork` as the last success;
 - a terminal status-processing failure after a positive processing-start fact
   leaves `StatusOrStateProcessing` as the last success;
-- a backlog leaves `ComponentWork` as the last success and remains
-  `BlockedOrDeferred` or a low-confidence symptom until a recognized terminal
-  fact exists;
+- a profile-recognized `SC_INBOX_BACKLOG` leaves `ComponentWork` as the last
+  success and deterministically yields `BlockedOrDeferred`; it remains
+  non-terminal and never becomes a root-cause finding;
 - a later recovery reaches `HealthyOrTerminal` only for the same exact
   transaction key and usable source-local ordering; and
 - a split or malformed rotation contributes a parse/coverage gap, never a
@@ -94,8 +94,9 @@ result.
 
 `ConfirmedFailure` with `High` confidence requires a complete,
 profile-recognized, source-specific terminal fact with the exact transaction
-key. A backlog is non-terminal. A generic error is non-terminal. Missing
-downstream evidence is non-terminal.
+key. `SC_INBOX_BACKLOG` is always `BlockedOrDeferred`, never terminal or a
+root-cause finding. Low-confidence `Symptom` is reserved for generic or
+unrecognized errors. Missing downstream evidence is non-terminal.
 
 Recovery requires all of the following:
 
@@ -117,6 +118,9 @@ shape:
 - `sccmManifestVersion` is `1`;
 - `bundleRole` is `server`;
 - topology records only synthetic capture host, observed role, and site code;
+- every `artifactId` is non-empty and unique within its scenario
+  manifest/bundle. It is authoritative for physical evidence, coverage
+  references, and deterministic artifact ordering;
 - artifacts retain artifact ID, role, source group/kind, redacted original
   path, basename, configured-path observation, rotation, capture state,
   synthetic source version, collection time, encoding, relative path, and
@@ -128,7 +132,8 @@ shape:
   whether its capture state is `captured` or `capped`; capture success never
   implies parse completeness;
 - `absent`, `accessDenied`, `skipped`, `unsupported`, and `parseFailed`
-  artifacts have no relative path and zero copied bytes; and
+  artifacts have no relative path, zero copied bytes, and no physical
+  line-ranged evidence; and
 - artifacts are sorted by `artifactId`.
 
 This preparation corpus does not make the manifest fields a public Rust API.
@@ -143,16 +148,23 @@ Each `expected.json` uses `expectedContractVersion: 1` and records:
 - zero or more component-keyed results;
 - state and last-success semantics;
 - `findingClass` and confidence ceiling;
-- exact evidence references using artifact ID plus physical line range;
-- explicit coverage gaps;
+- exact physical evidence references using artifact ID plus physical line
+  range;
+- explicit coverage-only references that may contain only the artifact ID;
 - an exact, bounded next-artifact request or an empty request list;
 - unlinked observations where applicable;
 - deterministic result/evidence/request ordering; and
 - prohibited client-impact, absent-role, and cross-side causal claims.
 
-Evidence references never use a basename as artifact identity. The manifest
-artifact ID and physical line range are authoritative. Logical entry IDs use
-the fixture-stable form `<artifactId>:<lineStart>-<lineEnd>`.
+Evidence references never use a basename as artifact identity. Every physical
+reference contains its own manifest `artifactId` plus exact `lineStart` and
+`lineEnd`; logical entry IDs use the fixture-stable form
+`<artifactId>:<lineStart>-<lineEnd>`. Coverage-only references may stop at the
+manifest `artifactId`. An artifact whose manifest `captureState` is `absent`,
+`accessDenied`, `skipped`, `unsupported`, or `parseFailed` cannot carry
+physical lines. A physically present capped or malformed fragment may be cited
+by exact lines inside a coverage gap, but it remains coverage/nonterminal
+evidence.
 
 ## Scenario matrix
 
@@ -210,11 +222,15 @@ When #318 and #335 are reviewed, the production test for each scenario must:
 4. compare the serialized reducer result to `expected.json`;
 5. rerun after reversing input artifact order and require byte-identical
    normalized output;
-6. validate every cited artifact and line range;
-7. prove `ConfirmedFailure` / `High` always cites its terminal record;
-8. prove coverage states do not become success or failure facts;
-9. prove every expected evidence reference with
+6. prove manifest artifact IDs are unique within the scenario/bundle and are
+   the authoritative deterministic ordering key;
+7. validate every physical evidence reference by exact artifact ID and line
+   range while permitting artifact-ID-only coverage references;
+8. prove nonphysical capture states never carry physical evidence;
+9. prove `ConfirmedFailure` / `High` always cites its terminal record;
+10. prove coverage states do not become success or failure facts;
+11. prove every expected evidence reference with
    `completeLogicalRecord: false` maps to a manifest artifact with
    `rotation.fragmentComplete: false`; and
-10. prove no client-impact, downstream-role-absence, or cross-side causal claim
+12. prove no client-impact, downstream-role-absence, or cross-side causal claim
    escapes the role-local analyzer.
