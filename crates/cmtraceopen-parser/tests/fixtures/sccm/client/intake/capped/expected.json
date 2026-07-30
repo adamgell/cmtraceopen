@@ -1,0 +1,8 @@
+{
+  "contractState": "proposedPending318",
+  "scenario": "capped",
+  "workflowDiagnosisExpected": false,
+  "coverage": [{"logicalArtifactId":"client-content","state":"capped","fragmentComplete":false}],
+  "requests": [{"logicalArtifactId":"client-content","reason":"Recapture the bounded content group with sufficient approved limits."}],
+  "prohibitedClaims": ["content transfer terminal failure", "distribution point failure"]
+}

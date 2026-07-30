@@ -1,0 +1,10 @@
+{
+  "contractState": "proposedPending318",
+  "scenario": "missing-root",
+  "workflowDiagnosisExpected": false,
+  "coverage": [
+    {"logicalArtifactId":"client-app-enforce","state":"absent"},{"logicalArtifactId":"client-app-intent","state":"absent"},{"logicalArtifactId":"client-ccmsetup","state":"absent"},{"logicalArtifactId":"client-content","state":"absent"},{"logicalArtifactId":"client-evaluation","state":"absent"},{"logicalArtifactId":"client-identity","state":"absent"},{"logicalArtifactId":"client-location","state":"absent"},{"logicalArtifactId":"client-policy-agent","state":"absent"},{"logicalArtifactId":"client-policy-state","state":"absent"},{"logicalArtifactId":"client-updates","state":"absent"},{"logicalArtifactId":"client-windows-update-supplemental","state":"absent"}
+  ],
+  "requests": [{"kind":"intakeCoverage","reason":"No configured client root was discovered."}],
+  "prohibitedClaims": ["client not installed", "client healthy", "client failing"]
+}

@@ -1,0 +1,19 @@
+{
+  "contractState": "proposedPending318",
+  "scenario": "complete",
+  "workflowDiagnosisExpected": false,
+  "coverage": [
+    {"logicalArtifactId":"client-app-enforce","state":"captured"},
+    {"logicalArtifactId":"client-app-intent","state":"captured"},
+    {"logicalArtifactId":"client-ccmsetup","state":"captured"},
+    {"logicalArtifactId":"client-content","state":"captured"},
+    {"logicalArtifactId":"client-evaluation","state":"captured"},
+    {"logicalArtifactId":"client-identity","state":"captured"},
+    {"logicalArtifactId":"client-location","state":"captured"},
+    {"logicalArtifactId":"client-policy-agent","state":"captured"},
+    {"logicalArtifactId":"client-policy-state","state":"captured"},
+    {"logicalArtifactId":"client-updates","state":"captured"},
+    {"logicalArtifactId":"client-windows-update-supplemental","state":"captured"}
+  ],
+  "requests": []
+}

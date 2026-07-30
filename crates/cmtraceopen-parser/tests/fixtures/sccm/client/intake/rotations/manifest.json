@@ -1,0 +1,11 @@
+{
+  "sccmManifestVersion": 1,
+  "proposalOnly": true,
+  "syntheticFixture": true,
+  "bundle": {"role":"client","captureHost":"LAB-CLIENT-01","siteCode":"CONTOSO","artifactOrder":"logicalArtifactId,pathFingerprint,rotationRank,originalBasename","rotationOrder":"current,lo,numeric-ascending,timestamp-ascending"},
+  "artifacts": [
+    {"artifactId":"client-app-enforce","role":"client","kind":"ccmLog","captureState":"captured","originalBasename":"AppEnforce.log","sanitizedSourcePath":"SYNTHETIC://root-a/CCM/Logs/AppEnforce.log","pathFingerprint":"synthetic-root-a-current","rotation":{"kind":"current","fragmentComplete":true},"sourceVersion":"5.00.TEST.0000","capturedUtc":"2026-07-30T00:01:02Z","bytesCopied":128,"relativePath":"evidence/client-app-enforce/current/AppEnforce.log"},
+    {"artifactId":"client-app-enforce","role":"client","kind":"ccmLog","captureState":"captured","originalBasename":"AppEnforce.log.lo_","sanitizedSourcePath":"SYNTHETIC://root-a/CCM/Logs/AppEnforce.log.lo_","pathFingerprint":"synthetic-root-a-lo","rotation":{"kind":"lo","fragmentComplete":true},"sourceVersion":"5.00.TEST.0000","capturedUtc":"2026-07-30T00:01:01Z","bytesCopied":128,"relativePath":"evidence/client-app-enforce/lo/AppEnforce.log.lo_"},
+    {"artifactId":"client-app-enforce","role":"client","kind":"ccmLog","captureState":"captured","originalBasename":"AppEnforce.log.2","sanitizedSourcePath":"SYNTHETIC://root-b/CCM/Logs/AppEnforce.log.2","pathFingerprint":"synthetic-root-b-numbered-2","rotation":{"kind":"numbered","number":2,"fragmentComplete":true},"sourceVersion":"5.00.TEST.0000","capturedUtc":"2026-07-30T00:01:00Z","bytesCopied":128,"relativePath":"evidence/client-app-enforce/numbered-2/AppEnforce.log.2"}
+  ]
+}
