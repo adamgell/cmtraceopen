@@ -18,6 +18,9 @@ interface AppMenuActionPayload {
   trigger: string;
   source_id: string | null;
   target_id: string | null;
+  path?: string;
+  workspace?: WorkspaceId;
+  kind?: "file" | "folder";
 }
 
 interface AppMenuState {
@@ -93,6 +96,7 @@ export function useAppMenu() {
     decreaseLogListTextSize,
     resetLogListTextSize,
     switchWorkspace,
+    openRecentEntry,
   } = useAppActions();
 
   const menuState = useMemo(
@@ -272,6 +276,47 @@ export function useAppMenu() {
             );
             return;
           }
+          case "open_recent_entry": {
+            const { path, workspace, kind } = payload;
+
+            if (!path || !workspace || !kind) {
+              console.warn(
+                "[app-menu] open_recent_entry missing resolved fields",
+                { payload },
+              );
+              return;
+            }
+
+            const { currentPlatform, enabledWorkspaces } =
+              useUiStore.getState();
+            const targetWorkspace = getAvailableWorkspaces(
+              currentPlatform,
+              enabledWorkspaces,
+            ).find((available) => available === workspace);
+
+            if (!targetWorkspace) {
+              console.warn("[app-menu] rejected unavailable recent workspace", {
+                payload,
+                currentPlatform,
+              });
+              return;
+            }
+
+            await openRecentEntry(
+              path,
+              kind,
+              targetWorkspace,
+              payload.trigger || "native-menu.recent",
+            );
+            return;
+          }
+          case "clear_recent_entries": {
+            const { clearRecentEntries } = await import(
+              "../lib/recent-entries"
+            );
+            await clearRecentEntries();
+            return;
+          }
           case "open_known_source": {
             if (payload.source_id) {
               await openKnownSourceCatalogAction({
@@ -361,6 +406,7 @@ export function useAppMenu() {
     findPrevious,
     increaseLogListTextSize,
     openKnownSourceCatalogAction,
+    openRecentEntry,
     openSourceFileDialog,
     openSourceFolderDialog,
     refreshActiveSource,

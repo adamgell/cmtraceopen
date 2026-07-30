@@ -1,4 +1,7 @@
+use std::collections::hash_map::DefaultHasher;
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::hash::{Hash, Hasher};
+use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 use tauri::menu::{
@@ -8,6 +11,9 @@ use tauri::{AppHandle, Emitter, Runtime};
 
 use crate::commands::app_config::get_available_workspaces;
 use crate::commands::known_sources::{build_known_log_sources, KnownSourceGroupingMetadata};
+use crate::commands::recent_entries::{
+    normalize_path, RecentEntriesState, RecentEntry, RecentEntryKind,
+};
 
 pub const MENU_EVENT_APP_ACTION: &str = "app-menu-action";
 
@@ -21,6 +27,8 @@ const MENU_ID_TOOLS: &str = "tools.menu";
 pub const MENU_ID_FILE_OPEN_LOG_FILE: &str = "file.open_log_file";
 pub const MENU_ID_FILE_OPEN_LOG_FOLDER: &str = "file.open_log_folder";
 pub const MENU_ID_FILE_KNOWN_SOURCES: &str = "file.known_sources";
+pub const MENU_ID_FILE_RECENT: &str = "file.recent";
+pub const MENU_ID_FILE_RECENT_CLEAR: &str = "file.recent.clear";
 pub const MENU_ID_FILE_NEW_TIMELINE: &str = "file.new_timeline";
 pub const MENU_ID_FILE_NEW_TIMELINE_FROM_FOLDER: &str = "file.new_timeline_from_folder";
 pub const MENU_ID_FILE_NEW_EMPTY_TIMELINE: &str = "file.new_empty_timeline";
@@ -54,6 +62,8 @@ pub const MENU_ID_HELP_CHECK_FOR_UPDATES: &str = "help.check_for_updates";
 pub const MENU_ID_HELP_ABOUT: &str = "help.about";
 
 const KNOWN_SOURCE_MENU_ID_PREFIX: &str = "known-source.";
+const RECENT_MENU_ID_PREFIX: &str = "recent.";
+const RECENT_UNAVAILABLE_MENU_ID: &str = "recent.unavailable";
 const WORKSPACE_MENU_ID_PREFIX: &str = "workspace.";
 const MENU_SEPARATOR: &str = "__separator__";
 const PREDEFINED_HIDE: &str = "__hide__";
@@ -82,6 +92,7 @@ const FILE_ORDER: &[&str] = &[
     MENU_ID_FILE_OPEN_LOG_FILE,
     MENU_ID_FILE_OPEN_LOG_FOLDER,
     MENU_ID_FILE_KNOWN_SOURCES,
+    MENU_ID_FILE_RECENT,
     MENU_SEPARATOR,
     MENU_ID_FILE_NEW_TIMELINE,
     MENU_SEPARATOR,
@@ -94,6 +105,7 @@ const FILE_ORDER_MAC: &[&str] = &[
     MENU_ID_FILE_OPEN_LOG_FILE,
     MENU_ID_FILE_OPEN_LOG_FOLDER,
     MENU_ID_FILE_KNOWN_SOURCES,
+    MENU_ID_FILE_RECENT,
     MENU_SEPARATOR,
     MENU_ID_FILE_NEW_TIMELINE,
     MENU_SEPARATOR,
@@ -447,6 +459,12 @@ pub struct AppMenuActionPayload {
     pub trigger: String,
     pub source_id: Option<String>,
     pub target_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
@@ -568,6 +586,7 @@ fn build_file_menu<R: Runtime>(
     let open_file = normal_item(app, MENU_ID_FILE_OPEN_LOG_FILE, "Open File…", platform)?;
     let open_folder = normal_item(app, MENU_ID_FILE_OPEN_LOG_FOLDER, "Open Folder…", platform)?;
     let known_sources = build_known_sources_submenu(app)?;
+    let recent = build_recent_submenu(app, &recent_entries_for_menu(app))?;
 
     let new_timeline_from_folder = normal_item(
         app,
@@ -602,6 +621,7 @@ fn build_file_menu<R: Runtime>(
             MENU_ID_FILE_OPEN_LOG_FILE => submenu.append(&open_file)?,
             MENU_ID_FILE_OPEN_LOG_FOLDER => submenu.append(&open_folder)?,
             MENU_ID_FILE_KNOWN_SOURCES => submenu.append(&known_sources)?,
+            MENU_ID_FILE_RECENT => submenu.append(&recent)?,
             MENU_ID_FILE_NEW_TIMELINE => submenu.append(&new_timeline)?,
             MENU_ID_FILE_OPEN_SESSION => submenu.append(&open_session)?,
             MENU_ID_FILE_SAVE_SESSION => submenu.append(&save_session)?,
@@ -1223,6 +1243,183 @@ fn repair_workspace_checks<R: Runtime>(
     apply_menu_updates(&index, updates)
 }
 
+fn workspace_label(id: &str) -> &'static str {
+    workspace_descriptor(id)
+        .map(|descriptor| descriptor.label)
+        .unwrap_or("Unknown Workspace")
+}
+
+/// `{name} — {parent} ({Workspace})`. Native menu items carry no tooltip, so
+/// the parent folder is what disambiguates same-named logs across bundles.
+fn recent_entry_label(entry: &RecentEntry) -> String {
+    let path = Path::new(&entry.path);
+
+    let name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| entry.path.clone());
+
+    let parent = path
+        .parent()
+        .and_then(|parent| parent.file_name())
+        .map(|parent| parent.to_string_lossy().into_owned())
+        .filter(|parent| !parent.is_empty());
+
+    let workspace = workspace_label(&entry.workspace);
+
+    match parent {
+        Some(parent) => format!("{name} — {parent} ({workspace})"),
+        None => format!("{name} ({workspace})"),
+    }
+}
+
+fn recent_entries_for_menu<R: Runtime>(app: &AppHandle<R>) -> Vec<RecentEntry> {
+    use tauri::Manager as _;
+
+    app.try_state::<RecentEntriesState>()
+        .map(|state| state.snapshot())
+        .unwrap_or_default()
+}
+
+/// 16 lowercase hex chars derived from the entry's dedup key (normalized path
+/// + workspace).
+///
+/// The full 64-bit digest is kept rather than truncated: a collision would
+/// defeat the stale-row check in `enrich_recent_payload` and reopen the wrong
+/// entry, and the id is never shown to the user, so there is nothing to gain
+/// from a shorter one.
+///
+/// `DefaultHasher` is not stable across Rust releases, which is fine here: the
+/// hash is generated by `recent_menu_id` and verified by
+/// `enrich_recent_payload` within a single process run, and is never persisted.
+fn recent_entry_hash(entry: &RecentEntry) -> String {
+    let mut hasher = DefaultHasher::new();
+    normalize_path(&entry.path).hash(&mut hasher);
+    entry.workspace.hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
+}
+
+/// Menu id for a Recent entry: `recent.{index}.{hash}`. The index alone is
+/// not a safe identity — entries can shift between menu build and click
+/// (concurrent pushes, or a prune dropping an earlier row) — so the hash lets
+/// `enrich_recent_payload` detect a stale index before acting on it.
+fn recent_menu_id(index: usize, entry: &RecentEntry) -> String {
+    format!("{RECENT_MENU_ID_PREFIX}{index}.{}", recent_entry_hash(entry))
+}
+
+/// Inverse of `recent_menu_id`: splits `recent.{index}.{hash}` into its parts.
+/// Returns `None` for anything that isn't that exact shape, including the
+/// `recent.unavailable` placeholder and a bare `recent.` (neither has a
+/// numeric index followed by a `.`).
+fn parse_recent_menu_id(menu_id: &str) -> Option<(usize, String)> {
+    let rest = menu_id.strip_prefix(RECENT_MENU_ID_PREFIX)?;
+    let (index, hash) = rest.split_once('.')?;
+    let index = index.parse::<usize>().ok()?;
+    Some((index, hash.to_string()))
+}
+
+fn recent_submenu_items<R: Runtime>(
+    app: &AppHandle<R>,
+    entries: &[RecentEntry],
+) -> tauri::Result<Vec<Box<dyn tauri::menu::IsMenuItem<R>>>> {
+    if entries.is_empty() {
+        let placeholder = MenuItem::with_id(
+            app,
+            RECENT_UNAVAILABLE_MENU_ID,
+            "No recent files",
+            false,
+            None::<&str>,
+        )?;
+        return Ok(vec![Box::new(placeholder)]);
+    }
+
+    let mut items: Vec<Box<dyn tauri::menu::IsMenuItem<R>>> = Vec::new();
+
+    for (index, entry) in entries.iter().enumerate() {
+        items.push(Box::new(MenuItem::with_id(
+            app,
+            recent_menu_id(index, entry),
+            recent_entry_label(entry),
+            true,
+            None::<&str>,
+        )?));
+    }
+
+    items.push(Box::new(PredefinedMenuItem::separator(app)?));
+    items.push(Box::new(MenuItem::with_id(
+        app,
+        MENU_ID_FILE_RECENT_CLEAR,
+        "Clear Recent",
+        true,
+        None::<&str>,
+    )?));
+
+    Ok(items)
+}
+
+fn build_recent_submenu<R: Runtime>(
+    app: &AppHandle<R>,
+    entries: &[RecentEntry],
+) -> tauri::Result<Submenu<R>> {
+    let items = recent_submenu_items(app, entries)?;
+    let refs: Vec<&dyn tauri::menu::IsMenuItem<R>> =
+        items.iter().map(|item| item.as_ref()).collect();
+
+    // Stays enabled even when empty, matching the sibling `Open Known Source`
+    // submenu. A disabled submenu cannot be opened on any platform, which
+    // would make the "No recent files" row unreachable and leave the user with
+    // a greyed-out entry that explains nothing.
+    Submenu::with_id_and_items(app, MENU_ID_FILE_RECENT, "Recent", true, &refs)
+}
+
+/// Tear down and repopulate the Recent submenu.
+///
+/// muda's `MenuItem` exposes `set_text`/`set_enabled` but no `set_visible`, so
+/// updating fixed slots would leave permanent placeholder rows. Menu mutation
+/// is main-thread-only on macOS and Tauri commands run off-thread, hence the
+/// `run_on_main_thread` hop.
+pub fn rebuild_recent_submenu<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+    let entries = recent_entries_for_menu(app);
+    let handle = app.clone();
+
+    app.run_on_main_thread(move || {
+        if let Err(error) = rebuild_recent_submenu_on_main(&handle, &entries) {
+            log::error!("[menu] failed to rebuild Recent submenu: {error}");
+        }
+    })
+    .map_err(|error| error.to_string())
+}
+
+fn rebuild_recent_submenu_on_main<R: Runtime>(
+    app: &AppHandle<R>,
+    entries: &[RecentEntry],
+) -> Result<(), String> {
+    let index = app_menu_index(app)?;
+
+    let Some(MenuItemKind::Submenu(submenu)) = index.get(MENU_ID_FILE_RECENT) else {
+        return Err("Recent submenu is missing from the application menu".to_string());
+    };
+
+    while submenu
+        .remove_at(0)
+        .map_err(|error| error.to_string())?
+        .is_some()
+    {}
+
+    let items = recent_submenu_items(app, entries).map_err(|error| error.to_string())?;
+    for item in &items {
+        submenu
+            .append(item.as_ref())
+            .map_err(|error| error.to_string())?;
+    }
+
+    // Always enabled, for the same reason as `build_recent_submenu`: the
+    // placeholder row has to stay reachable when the list empties out. This
+    // also means a clear cannot leave the submenu permanently unopenable if a
+    // later append fails.
+    submenu.set_enabled(true).map_err(|error| error.to_string())
+}
+
 /// A source entry extracted from the catalog for menu building.
 #[derive(Clone)]
 struct SourceMenuItem {
@@ -1386,10 +1583,20 @@ pub fn handle_menu_event<R: Runtime>(app: &AppHandle<R>, menu_id: &str) {
         return;
     }
 
-    let Some(payload) = payload_for_menu_id(menu_id) else {
+    let Some(mut payload) = payload_for_menu_id(menu_id) else {
         log::warn!("[menu] unrecognized menu_id: {menu_id}");
         return;
     };
+
+    if payload.action == "open_recent_entry"
+        && !enrich_recent_payload(&mut payload, &recent_entries_for_menu(app))
+    {
+        log::warn!("[menu] stale recent entry for menu_id: {menu_id}");
+        if let Err(error) = rebuild_recent_submenu(app) {
+            log::error!("[menu] failed to repair stale Recent submenu: {error}");
+        }
+        return;
+    }
 
     if payload.action == "switch_workspace" {
         if let Some(target_id) = payload.target_id.as_deref() {
@@ -1413,7 +1620,42 @@ fn base_payload(menu_id: &str, action: &str, category: &str) -> AppMenuActionPay
         trigger: "menu".to_string(),
         source_id: None,
         target_id: None,
+        path: None,
+        workspace: None,
+        kind: None,
     }
+}
+
+/// Fills in `path`/`workspace`/`kind` for an `open_recent_entry` payload by
+/// looking up the entry the click targeted and verifying it's still the same
+/// entry that produced the menu id (index + hash of the normalized path and
+/// workspace). Returns `false` when the id doesn't parse, the index is out of
+/// range, or the hash no longer matches — meaning the row went stale between
+/// menu build and click and the caller must not emit an action for it.
+fn enrich_recent_payload(payload: &mut AppMenuActionPayload, entries: &[RecentEntry]) -> bool {
+    let Some((index, hash)) = parse_recent_menu_id(&payload.menu_id) else {
+        return false;
+    };
+
+    let Some(entry) = entries.get(index) else {
+        return false;
+    };
+
+    if recent_entry_hash(entry) != hash {
+        return false;
+    }
+
+    payload.path = Some(entry.path.clone());
+    payload.workspace = Some(entry.workspace.clone());
+    payload.kind = Some(
+        match entry.kind {
+            RecentEntryKind::File => "file",
+            RecentEntryKind::Folder => "folder",
+        }
+        .to_string(),
+    );
+
+    true
 }
 
 fn payload_for_menu_id(menu_id: &str) -> Option<AppMenuActionPayload> {
@@ -1432,6 +1674,18 @@ fn payload_for_menu_id(menu_id: &str) -> Option<AppMenuActionPayload> {
 
         let mut payload = base_payload(menu_id, "switch_workspace", "workspace");
         payload.target_id = Some(workspace_id.to_string());
+        return Some(payload);
+    }
+
+    if menu_id == MENU_ID_FILE_RECENT_CLEAR {
+        return Some(base_payload(menu_id, "clear_recent_entries", "file"));
+    }
+
+    // Rejects the "recent.unavailable" placeholder, which shares the prefix
+    // but has no `.{hash}` suffix and so fails to parse.
+    if let Some((index, _hash)) = parse_recent_menu_id(menu_id) {
+        let mut payload = base_payload(menu_id, "open_recent_entry", "file");
+        payload.target_id = Some(index.to_string());
         return Some(payload);
     }
 
@@ -1896,6 +2150,9 @@ mod tests {
             assert_eq!(payload.category, category);
             assert_eq!(payload.source_id, None);
             assert_eq!(payload.target_id, None);
+            assert_eq!(payload.path, None);
+            assert_eq!(payload.workspace, None);
+            assert_eq!(payload.kind, None);
         }
     }
 
@@ -1906,6 +2163,9 @@ mod tests {
         assert_eq!(payload.category, "workspace");
         assert_eq!(payload.source_id, None);
         assert_eq!(payload.target_id.as_deref(), Some("esp-diagnostics"));
+        assert_eq!(payload.path, None);
+        assert_eq!(payload.workspace, None);
+        assert_eq!(payload.kind, None);
     }
 
     #[test]
@@ -1915,6 +2175,9 @@ mod tests {
         assert_eq!(payload.category, "known_source");
         assert_eq!(payload.source_id.as_deref(), Some("intune-ime"));
         assert_eq!(payload.target_id, None);
+        assert_eq!(payload.path, None);
+        assert_eq!(payload.workspace, None);
+        assert_eq!(payload.kind, None);
     }
 
     #[test]
@@ -1923,6 +2186,277 @@ mod tests {
         assert!(payload_for_menu_id("workspace.group.analysis").is_none());
         assert!(payload_for_menu_id("workspace.not-real").is_none());
         assert!(payload_for_menu_id(MENU_ID_FILE_KNOWN_SOURCES).is_none());
+        assert!(payload_for_menu_id(MENU_ID_FILE_RECENT).is_none());
         assert!(payload_for_menu_id("not.a.menu.id").is_none());
+    }
+
+    #[test]
+    fn recent_submenu_appears_after_known_sources_on_every_platform() {
+        for order in [FILE_ORDER, FILE_ORDER_MAC] {
+            let known = order
+                .iter()
+                .position(|id| *id == MENU_ID_FILE_KNOWN_SOURCES)
+                .expect("known sources present");
+            let recent = order
+                .iter()
+                .position(|id| *id == MENU_ID_FILE_RECENT)
+                .expect("recent present");
+            assert_eq!(recent, known + 1);
+        }
+    }
+
+    #[test]
+    fn recent_label_includes_name_parent_and_workspace() {
+        let entry = RecentEntry {
+            path: "/evidence/IME/IntuneManagementExtension.log".to_string(),
+            kind: RecentEntryKind::File,
+            workspace: "intune".to_string(),
+            opened_at_unix_ms: 0,
+        };
+
+        assert_eq!(
+            recent_entry_label(&entry),
+            "IntuneManagementExtension.log — IME (Intune Diagnostics)"
+        );
+    }
+
+    #[test]
+    fn recent_label_for_folder_uses_folder_and_its_parent() {
+        let entry = RecentEntry {
+            path: "/evidence/bundle-01/IME".to_string(),
+            kind: RecentEntryKind::Folder,
+            workspace: "log".to_string(),
+            opened_at_unix_ms: 0,
+        };
+
+        assert_eq!(
+            recent_entry_label(&entry),
+            "IME — bundle-01 (Log Explorer)"
+        );
+    }
+
+    #[test]
+    fn recent_label_drops_parent_segment_when_there_is_no_parent() {
+        let entry = RecentEntry {
+            path: "/only.log".to_string(),
+            kind: RecentEntryKind::File,
+            workspace: "log".to_string(),
+            opened_at_unix_ms: 0,
+        };
+
+        assert_eq!(recent_entry_label(&entry), "only.log (Log Explorer)");
+    }
+
+    #[test]
+    fn recent_label_falls_back_when_the_workspace_is_unknown() {
+        let entry = RecentEntry {
+            path: "/a/b.log".to_string(),
+            kind: RecentEntryKind::File,
+            workspace: "not-a-workspace".to_string(),
+            opened_at_unix_ms: 0,
+        };
+
+        assert!(recent_entry_label(&entry).ends_with("(Unknown Workspace)"));
+    }
+
+    #[test]
+    fn recent_entry_hash_keeps_the_full_64_bit_digest() {
+        // A truncated hash raises the odds of a collision, which would defeat
+        // the stale-row check and reopen the wrong entry.
+        let entry = RecentEntry {
+            path: "/evidence/a.log".to_string(),
+            kind: RecentEntryKind::File,
+            workspace: "log".to_string(),
+            opened_at_unix_ms: 0,
+        };
+
+        let hash = recent_entry_hash(&entry);
+
+        assert_eq!(hash.len(), 16, "expected a full 64-bit digest");
+        assert!(
+            hash.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
+            "expected lowercase hex, got {hash}"
+        );
+    }
+
+    #[test]
+    fn recent_entry_hash_distinguishes_workspace_from_path() {
+        let file = |path: &str, workspace: &str| RecentEntry {
+            path: path.to_string(),
+            kind: RecentEntryKind::File,
+            workspace: workspace.to_string(),
+            opened_at_unix_ms: 0,
+        };
+
+        assert_ne!(
+            recent_entry_hash(&file("/a.log", "log")),
+            recent_entry_hash(&file("/a.log", "dsregcmd")),
+            "same path in two workspaces must not share an id"
+        );
+        assert_ne!(
+            recent_entry_hash(&file("/a.log", "log")),
+            recent_entry_hash(&file("/b.log", "log")),
+        );
+    }
+
+    #[test]
+    fn recent_entry_menu_id_maps_to_open_recent_entry() {
+        let entry = RecentEntry {
+            path: "/evidence/a.log".to_string(),
+            kind: RecentEntryKind::File,
+            workspace: "log".to_string(),
+            opened_at_unix_ms: 0,
+        };
+        let menu_id = recent_menu_id(3, &entry);
+
+        let payload = payload_for_menu_id(&menu_id).expect("payload");
+        assert_eq!(payload.action, "open_recent_entry");
+        assert_eq!(payload.category, "file");
+        assert_eq!(payload.target_id.as_deref(), Some("3"));
+        // payload_for_menu_id is pure: enrichment is enrich_recent_payload's job.
+        assert_eq!(payload.path, None);
+        assert_eq!(payload.workspace, None);
+        assert_eq!(payload.kind, None);
+    }
+
+    #[test]
+    fn recent_placeholder_menu_id_produces_no_payload() {
+        assert!(payload_for_menu_id(RECENT_UNAVAILABLE_MENU_ID).is_none());
+    }
+
+    #[test]
+    fn recent_clear_menu_id_maps_to_clear_recent_entries() {
+        let payload = payload_for_menu_id(MENU_ID_FILE_RECENT_CLEAR).expect("payload");
+        assert_eq!(payload.action, "clear_recent_entries");
+        assert_eq!(payload.category, "file");
+        assert_eq!(payload.path, None);
+        assert_eq!(payload.workspace, None);
+        assert_eq!(payload.kind, None);
+    }
+
+    #[test]
+    fn recent_menu_id_round_trips_through_parse_recent_menu_id() {
+        let entry = RecentEntry {
+            path: "/evidence/a.log".to_string(),
+            kind: RecentEntryKind::File,
+            workspace: "log".to_string(),
+            opened_at_unix_ms: 0,
+        };
+        let menu_id = recent_menu_id(2, &entry);
+
+        let (index, hash) = parse_recent_menu_id(&menu_id).expect("parses");
+        assert_eq!(index, 2);
+        assert_eq!(hash, recent_entry_hash(&entry));
+    }
+
+    #[test]
+    fn parse_recent_menu_id_rejects_the_placeholder_and_a_bare_prefix() {
+        assert!(parse_recent_menu_id(RECENT_UNAVAILABLE_MENU_ID).is_none());
+        assert!(parse_recent_menu_id(RECENT_MENU_ID_PREFIX).is_none());
+        assert!(parse_recent_menu_id("recent.3").is_none());
+        assert!(parse_recent_menu_id("not.a.recent.id").is_none());
+    }
+
+    #[test]
+    fn enrich_recent_payload_populates_path_workspace_and_kind_for_a_matching_file_entry() {
+        let entries = vec![RecentEntry {
+            path: "/evidence/IME/IntuneManagementExtension.log".to_string(),
+            kind: RecentEntryKind::File,
+            workspace: "intune".to_string(),
+            opened_at_unix_ms: 0,
+        }];
+
+        let menu_id = recent_menu_id(0, &entries[0]);
+        let mut payload = base_payload(&menu_id, "open_recent_entry", "file");
+        payload.target_id = Some("0".to_string());
+
+        assert!(enrich_recent_payload(&mut payload, &entries));
+        assert_eq!(
+            payload.path.as_deref(),
+            Some("/evidence/IME/IntuneManagementExtension.log")
+        );
+        assert_eq!(payload.workspace.as_deref(), Some("intune"));
+        assert_eq!(payload.kind.as_deref(), Some("file"));
+    }
+
+    #[test]
+    fn enrich_recent_payload_maps_folder_kind_to_folder() {
+        let entries = vec![RecentEntry {
+            path: "/evidence/bundle-01/IME".to_string(),
+            kind: RecentEntryKind::Folder,
+            workspace: "log".to_string(),
+            opened_at_unix_ms: 0,
+        }];
+
+        let menu_id = recent_menu_id(0, &entries[0]);
+        let mut payload = base_payload(&menu_id, "open_recent_entry", "file");
+        payload.target_id = Some("0".to_string());
+
+        assert!(enrich_recent_payload(&mut payload, &entries));
+        assert_eq!(payload.kind.as_deref(), Some("folder"));
+    }
+
+    #[test]
+    fn enrich_recent_payload_rejects_an_out_of_range_index() {
+        let entries = vec![RecentEntry {
+            path: "/evidence/a.log".to_string(),
+            kind: RecentEntryKind::File,
+            workspace: "log".to_string(),
+            opened_at_unix_ms: 0,
+        }];
+
+        let mut payload = base_payload("recent.5.deadbeef", "open_recent_entry", "file");
+        payload.target_id = Some("5".to_string());
+
+        assert!(!enrich_recent_payload(&mut payload, &entries));
+        assert_eq!(payload.path, None);
+        assert_eq!(payload.workspace, None);
+        assert_eq!(payload.kind, None);
+    }
+
+    #[test]
+    fn enrich_recent_payload_rejects_an_unparsable_menu_id() {
+        let entries = vec![RecentEntry {
+            path: "/evidence/a.log".to_string(),
+            kind: RecentEntryKind::File,
+            workspace: "log".to_string(),
+            opened_at_unix_ms: 0,
+        }];
+
+        let mut placeholder_payload =
+            base_payload(RECENT_UNAVAILABLE_MENU_ID, "open_recent_entry", "file");
+        assert!(!enrich_recent_payload(&mut placeholder_payload, &entries));
+
+        let mut legacy_format_payload = base_payload("recent.0", "open_recent_entry", "file");
+        assert!(!enrich_recent_payload(&mut legacy_format_payload, &entries));
+    }
+
+    #[test]
+    fn enrich_recent_payload_rejects_a_stale_index_whose_hash_no_longer_matches() {
+        let original = RecentEntry {
+            path: "/evidence/a.log".to_string(),
+            kind: RecentEntryKind::File,
+            workspace: "log".to_string(),
+            opened_at_unix_ms: 0,
+        };
+        let menu_id = recent_menu_id(0, &original);
+
+        // Entry 0 has since been replaced by a different file at the same
+        // index (e.g. a concurrent push, or a prune that dropped an older
+        // row) — same shape, same index, different identity.
+        let shifted = vec![RecentEntry {
+            path: "/evidence/different.log".to_string(),
+            kind: RecentEntryKind::File,
+            workspace: "log".to_string(),
+            opened_at_unix_ms: 0,
+        }];
+
+        let mut payload = base_payload(&menu_id, "open_recent_entry", "file");
+        payload.target_id = Some("0".to_string());
+
+        assert!(!enrich_recent_payload(&mut payload, &shifted));
+        assert_eq!(payload.path, None);
+        assert_eq!(payload.workspace, None);
+        assert_eq!(payload.kind, None);
     }
 }

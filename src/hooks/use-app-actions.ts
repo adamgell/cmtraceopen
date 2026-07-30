@@ -14,6 +14,7 @@ import {
   resolveKnownSourceIdFromCatalogAction,
   type KnownSourceCatalogActionIds,
 } from "../lib/log-source";
+import { recordRecentPath, recordRecentSource } from "../lib/recent-entries";
 import { useFilterStore } from "../stores/filter-store";
 import { useLogStore } from "../stores/log-store";
 import {
@@ -67,6 +68,25 @@ function toNativeMenuLabel(label: string): string {
   }
 
   return normalizedLabel;
+}
+
+/**
+ * Workspaces whose open path actually reports failure, and are therefore the
+ * only ones safe to record into the Recent menu.
+ *
+ * `log` goes through `loadLogWorkspaceSource`, which returns a boolean, and
+ * `dsregcmd` rethrows after failing. Every other workspace's `onOpenSource`
+ * catches the error, writes it into its own store, and resolves normally — so
+ * from here a failed open is indistinguishable from a successful one, and
+ * recording would put files that never opened into Recent.
+ */
+const RECORDABLE_WORKSPACES: ReadonlySet<WorkspaceId> = new Set<WorkspaceId>([
+  "log",
+  "dsregcmd",
+]);
+
+function isRecordableWorkspace(workspace: WorkspaceId): boolean {
+  return RECORDABLE_WORKSPACES.has(workspace);
 }
 
 async function inferPathKind(
@@ -142,6 +162,12 @@ export interface AppActionHandlers {
   toggleInfoPane: () => void;
   switchWorkspace: (workspace: WorkspaceId, trigger: string) => void;
   dismissTransientDialogs: (trigger: string) => void;
+  openRecentEntry: (
+    path: string,
+    kind: "file" | "folder",
+    workspace: WorkspaceId,
+    trigger: string,
+  ) => Promise<void>;
 }
 
 export function useAppActions(): AppActionHandlers {
@@ -338,7 +364,7 @@ export function useAppActions(): AppActionHandlers {
   ]);
 
   const loadLogWorkspaceSource = useCallback(
-    async (source: LogSource, trigger: string) => {
+    async (source: LogSource, trigger: string): Promise<boolean> => {
       const currentWorkspace = useUiStore.getState().activeWorkspace;
       if (currentWorkspace !== "deployment") {
         useUiStore.getState().ensureLogViewVisible(trigger);
@@ -347,12 +373,14 @@ export function useAppActions(): AppActionHandlers {
 
       try {
         await loadLogSource(source);
+        return true;
       } catch (error) {
         console.error("[app-actions] failed to load source", {
           source,
           trigger,
           error,
         });
+        return false;
       }
     },
     [],
@@ -361,10 +389,15 @@ export function useAppActions(): AppActionHandlers {
   const openSourceForWorkspace = useCallback(
     async (source: LogSource, trigger: string, workspace: WorkspaceId) => {
       const workspaceDefinition = getWorkspace(workspace);
+
       if (workspaceDefinition.onOpenSource) {
         await workspaceDefinition.onOpenSource(source, trigger);
-      } else {
-        await loadLogWorkspaceSource(source, trigger);
+      } else if (!(await loadLogWorkspaceSource(source, trigger))) {
+        return;
+      }
+
+      if (isRecordableWorkspace(workspace)) {
+        void recordRecentSource(source, workspace);
       }
     },
     [loadLogWorkspaceSource],
@@ -377,6 +410,7 @@ export function useAppActions(): AppActionHandlers {
           .getState()
           .ensureWorkspaceVisible("dsregcmd", "drag-drop.path-open");
         await analyzeDsregcmdPath(path, { fallbackToFolder: true });
+        void recordRecentPath(path, "dsregcmd");
         return;
       }
 
@@ -406,6 +440,9 @@ export function useAppActions(): AppActionHandlers {
       await loadPathAsLogSource(path, {
         fallbackToFolder: true,
       });
+      if (isRecordableWorkspace(activeWorkspace)) {
+        void recordRecentPath(path, activeWorkspace);
+      }
     },
     [activeWorkspace],
   );
@@ -708,6 +745,22 @@ export function useAppActions(): AppActionHandlers {
     [],
   );
 
+  const openRecentEntry = useCallback(
+    async (
+      path: string,
+      kind: "file" | "folder",
+      workspace: WorkspaceId,
+      trigger: string,
+    ) => {
+      if (workspace !== activeWorkspace) {
+        useUiStore.getState().ensureWorkspaceVisible(workspace, trigger);
+      }
+
+      await openSourceForWorkspace({ kind, path }, trigger, workspace);
+    },
+    [activeWorkspace, openSourceForWorkspace],
+  );
+
   const dismissTransientDialogs = useCallback((trigger: string) => {
     useUiStore.getState().closeTransientDialogs(trigger);
   }, []);
@@ -739,5 +792,6 @@ export function useAppActions(): AppActionHandlers {
     toggleInfoPane,
     switchWorkspace,
     dismissTransientDialogs,
+    openRecentEntry,
   };
 }

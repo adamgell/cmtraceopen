@@ -143,6 +143,28 @@ pub fn run() {
             app.handle()
                 .plugin(tauri_plugin_updater::Builder::new().build())?;
 
+            {
+                use tauri::Manager as _;
+
+                // Never fall back to the current directory: that would drop a
+                // recent-entries.json into wherever the app happened to be
+                // launched from, or fail noisily in a read-only install dir.
+                // A temp subdirectory keeps the feature working for the
+                // session without leaving strays behind.
+                let config_dir = app.path().app_config_dir().unwrap_or_else(|error| {
+                    log::warn!(
+                        "[recent] no app config dir ({error}); storing recents under the \
+                         temp directory instead, where the OS may clear them at any time"
+                    );
+                    std::env::temp_dir().join("cmtrace-open")
+                });
+
+                app.manage(commands::recent_entries::RecentEntriesState::load(
+                    config_dir,
+                    &commands::app_config::get_available_workspaces(),
+                ));
+            }
+
             let native_menu = menu::build_app_menu(app.handle())?;
             app.set_menu(native_menu)?;
 
@@ -183,6 +205,8 @@ pub fn run() {
             commands::file_association::set_file_association_prompt_suppressed,
             commands::app_config::get_available_workspaces,
             commands::app_config::get_update_policy,
+            commands::recent_entries::push_recent_entry,
+            commands::recent_entries::clear_recent_entries,
             menu::sync_app_menu_state,
             #[cfg(feature = "esp-diagnostics")]
             commands::esp_diagnostics::get_esp_diagnostics_capability,
