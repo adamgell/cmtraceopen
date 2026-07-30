@@ -3,8 +3,9 @@ use cmtraceopen_parser::{
     models::log_entry::LogFormat,
     parser::{parse_content_with_selection, ResolvedParser},
     sccm::{
-        normalize_ccm_artifact, SccmArtifact, SccmCoverageState, SccmEvidence, SccmRole,
-        SccmRotation, SccmTimeOrderingState,
+        extract_keys, normalize_ccm_artifact, SccmArtifact, SccmCoverageState, SccmEvidence,
+        SccmExtractionGapKind, SccmExtractionProfile, SccmKeyConfidence, SccmRole, SccmRotation,
+        SccmTimeOrderingState, SCCM_EXPERIMENTAL_KEY_PROFILE_ID,
     },
 };
 use serde_json::Value;
@@ -1138,6 +1139,42 @@ fn conservative_outcome_failures(scenario: &str, expected: &Value) -> Vec<String
     failures
 }
 
+fn experimental_profile_causality_failures(expected: &Value) -> Vec<String> {
+    let mut failures = Vec::new();
+    let profile_id = expected["extractionProfile"]["profileId"].as_str();
+    for transaction in expected["transactions"].as_array().into_iter().flatten() {
+        let uses_experimental_profile = profile_id == Some(SCCM_EXPERIMENTAL_KEY_PROFILE_ID)
+            || transaction["key"]["extractionProfileId"] == SCCM_EXPERIMENTAL_KEY_PROFILE_ID;
+        if uses_experimental_profile
+            && (transaction["key"]["confidence"] != "low"
+                || transaction["confidence"] != "low"
+                || transaction["confidenceCeiling"] != "low"
+                || transaction["classification"] == "confirmedFailure")
+        {
+            failures.push(
+                "experimental Low key profile cannot establish causal transaction confidence"
+                    .to_owned(),
+            );
+        }
+    }
+    for fact in expected["correlationHandoff"]["counterpartReadyFacts"]
+        .as_array()
+        .into_iter()
+        .flatten()
+    {
+        let uses_experimental_profile = profile_id == Some(SCCM_EXPERIMENTAL_KEY_PROFILE_ID)
+            || fact["extractionProfileId"] == SCCM_EXPERIMENTAL_KEY_PROFILE_ID;
+        if uses_experimental_profile
+            && (fact["keyConfidence"] != "low" || fact["correlationEligible"] != false)
+        {
+            failures.push(
+                "experimental Low key profile cannot emit a correlation-eligible fact".to_owned(),
+            );
+        }
+    }
+    failures
+}
+
 fn manifest_artifact_kind_failures(artifact: &Value) -> Vec<String> {
     let artifact_id = artifact["artifactId"].as_str().unwrap_or("<missing>");
     let group = artifact["designOnlyCatalog"]["entryId"].as_str();
@@ -1407,6 +1444,7 @@ fn manifest_expected_binding_failures(
     }
     failures.extend(finding_binding_failures(scenario, expected));
     failures.extend(conservative_outcome_failures(scenario, expected));
+    failures.extend(experimental_profile_causality_failures(expected));
     failures
 }
 
@@ -2381,4 +2419,41 @@ fn software_update_fixture_contract_rejects_review_adversarial_mutations() {
         &failures_for("no-sup", &nonphysical_fragment, &no_sup_expected),
         "nonphysical rotation fragmentComplete",
     );
+}
+
+#[test]
+fn software_update_fixture_never_elevates_experimental_low_keys_to_causal_confidence() {
+    let scenario_dir = updates_root().join("success");
+    let manifest = read_json(&scenario_dir.join("manifest.json"));
+    let expected = read_json(&scenario_dir.join("expected.json"));
+    let (index, failures) = evidence_index(&scenario_dir, &manifest);
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+    let evidence = index["updates-success-01-scan"]
+        .complete_ccm_records
+        .first()
+        .expect("success scan supplies one complete CCM record");
+    let result = extract_keys(
+        evidence,
+        &SccmExtractionProfile::for_version(Some("5.00.9128.1007")),
+    );
+    assert!(!result.keys.is_empty());
+    assert!(result
+        .keys
+        .iter()
+        .all(|key| key.confidence == SccmKeyConfidence::Low));
+    assert!(result
+        .gaps
+        .iter()
+        .any(|gap| gap.kind == SccmExtractionGapKind::ExperimentalProfile));
+
+    let mut elevated = expected;
+    elevated["extractionProfile"]["profileId"] =
+        Value::String(SCCM_EXPERIMENTAL_KEY_PROFILE_ID.to_owned());
+    elevated["transactions"][0]["key"]["extractionProfileId"] =
+        Value::String(SCCM_EXPERIMENTAL_KEY_PROFILE_ID.to_owned());
+    elevated["correlationHandoff"]["counterpartReadyFacts"][0]["extractionProfileId"] =
+        Value::String(SCCM_EXPERIMENTAL_KEY_PROFILE_ID.to_owned());
+    assert!(experimental_profile_causality_failures(&elevated)
+        .iter()
+        .any(|failure| failure.contains("experimental Low key profile")));
 }

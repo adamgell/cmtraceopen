@@ -18,6 +18,8 @@ Every scenario contains:
 review labels rather than a speculative public API. The future reducer must be
 independently callable and consume normalized update evidence directly. It may
 not require policy, deployment, health, correlation, or server reducer output.
+The shared `sccm-keys-5.00.9128-experimental-v1` profile remains Low confidence
+and cannot be promoted into an exact transaction or correlation-ready fact.
 
 ## Synthetic-data boundary
 

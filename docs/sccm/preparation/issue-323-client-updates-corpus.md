@@ -69,6 +69,10 @@ The only selected preparation profile is
 `5.00.TEST.` and the declared update artifacts. It makes no claim about a
 production ConfigMgr build.
 
+The shared `sccm-keys-5.00.9128-experimental-v1` profile remains Low confidence.
+This corpus cannot promote its keys to an exact/terminal transaction or emit a
+correlation-eligible counterpart fact from them.
+
 A transaction or counterpart-ready fact requires profile-validated exact
 values:
 
