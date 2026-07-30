@@ -140,6 +140,55 @@ fn connect_accepts_zulu_and_numeric_offsets() {
 }
 
 #[test]
+fn a_file_with_no_newlines_does_not_grow_unbounded() {
+    // A binary blob or wrong file picked by a glob has no delimiter at all.
+    // read_until would pull the whole thing into one line; the cap keeps a
+    // single record bounded while still consuming the file.
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(b"Wed Apr 29 13:23:04 host jamf[1]: Executing Policy ");
+    bytes.extend(std::iter::repeat_n(b'A', 512 * 1024));
+    let path = write_temp("policy_no_newline.log", &bytes);
+
+    let result = parse_policy_log_impl(&path).expect("parse");
+    assert_eq!(result.total_lines, 1);
+    for event in &result.events {
+        assert!(
+            event.raw_line.len() < 128 * 1024,
+            "retained line should be capped, got {} bytes",
+            event.raw_line.len()
+        );
+    }
+
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn an_over_long_line_does_not_disturb_later_offsets() {
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(b"Wed Apr 29 13:23:04 host jamf[1]: Executing Policy Huge ");
+    bytes.extend(std::iter::repeat_n(b'B', 128 * 1024));
+    bytes.push(b'\n');
+    bytes.extend_from_slice(b"Wed Apr 29 13:23:05 host jamf[1]: Executing Policy After\n");
+    let path = write_temp("policy_long_then_short.log", &bytes);
+
+    let result = parse_policy_log_impl(&path).expect("parse");
+    assert_eq!(result.total_lines, 2);
+
+    let last = result.events.last().expect("second event");
+    assert_eq!(last.policy_name.as_deref(), Some("After"));
+
+    // The short line following an over-long one must still be locatable.
+    let raw = std::fs::read(&path).expect("read back");
+    let start = last.raw_line_offset as usize;
+    assert!(
+        raw[start..].starts_with(b"Wed Apr 29 13:23:05"),
+        "offset must survive a truncated predecessor"
+    );
+
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
 fn missing_files_are_not_errors_except_for_the_policy_log() {
     // Self Service / Connect may legitimately be absent; jamf.log going missing
     // is a condition worth surfacing.

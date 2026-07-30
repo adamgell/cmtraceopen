@@ -45,23 +45,78 @@ where
     let mut buf: Vec<u8> = Vec::with_capacity(256);
     loop {
         buf.clear();
-        let n = match reader.read_until(b'\n', &mut buf) {
-            Ok(n) => n,
-            // A partially written line can surface as Interrupted; retrying is
-            // correct and matches std's own convention.
-            Err(ref e) if e.kind() == ErrorKind::Interrupted => continue,
+        let (consumed, truncated) = match read_capped_line(reader, &mut buf) {
+            Ok(v) => v,
             Err(e) => return Err(AppError::Io(e)),
         };
-        if n == 0 {
+        if consumed == 0 {
             return Ok(());
         }
         let line_start = offset;
-        offset += n as u64;
+        offset += consumed;
 
         let mut end = buf.len();
         while end > 0 && (buf[end - 1] == b'\n' || buf[end - 1] == b'\r') {
             end -= 1;
         }
-        visit(line_start, &decode_line(&buf[..end]));
+        let mut text = decode_line(&buf[..end]);
+        if truncated {
+            text.push_str(TRUNCATION_MARKER);
+        }
+        visit(line_start, &text);
+    }
+}
+
+/// Appended to any line clipped at [`MAX_LINE_BYTES`], so a truncated record is
+/// visibly truncated rather than quietly wrong.
+const TRUNCATION_MARKER: &str = "…[truncated]";
+
+/// Upper bound on a single retained log line. Real `jamf.log` records are well
+/// under a kilobyte; anything past this is a corrupt or binary file rather than
+/// a record worth keeping whole.
+const MAX_LINE_BYTES: usize = 64 * 1024;
+
+/// Reads one newline-terminated record into `buf`, keeping at most
+/// [`MAX_LINE_BYTES`] of it.
+///
+/// `BufRead::read_until` grows its buffer to the next delimiter, so a file with
+/// no newline at all — a truncated binary blob, a wrong file picked by a
+/// glob — would be pulled into memory whole. Cap the retained bytes and drain
+/// the rest, so the offset arithmetic still reflects true file positions.
+///
+/// Returns `(bytes_consumed_from_the_file, was_truncated)`.
+fn read_capped_line<R: BufRead>(reader: &mut R, buf: &mut Vec<u8>) -> std::io::Result<(u64, bool)> {
+    let mut consumed: u64 = 0;
+    let mut truncated = false;
+    loop {
+        let available = match reader.fill_buf() {
+            Ok(b) => b,
+            Err(ref e) if e.kind() == ErrorKind::Interrupted => continue,
+            Err(e) => return Err(e),
+        };
+        if available.is_empty() {
+            return Ok((consumed, truncated));
+        }
+        let (chunk, done) = match available.iter().position(|b| *b == b'\n') {
+            Some(i) => (&available[..=i], true),
+            None => (available, false),
+        };
+        let take = chunk.len();
+
+        let room = MAX_LINE_BYTES.saturating_sub(buf.len());
+        if room == 0 {
+            truncated = true;
+        } else if take > room {
+            buf.extend_from_slice(&chunk[..room]);
+            truncated = true;
+        } else {
+            buf.extend_from_slice(chunk);
+        }
+
+        reader.consume(take);
+        consumed += take as u64;
+        if done {
+            return Ok((consumed, truncated));
+        }
     }
 }
