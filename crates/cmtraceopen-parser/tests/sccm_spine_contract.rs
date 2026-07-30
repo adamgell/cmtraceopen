@@ -121,6 +121,59 @@ fn serde_known_rotation_tags_reject_malformed_shapes() {
 }
 
 #[test]
+fn serde_known_rotation_values_reject_noncanonical_values() {
+    for noncanonical in [
+        r#"{"kind":"numbered","value":0}"#,
+        r#"{"kind":"timestamped","value":""}"#,
+        r#"{"kind":"timestamped","value":"20260730-15000"}"#,
+        r#"{"kind":"timestamped","value":"20260730-1500000"}"#,
+        r#"{"kind":"timestamped","value":"2026073A-150000"}"#,
+        r#"{"kind":"timestamped","value":"20260730_150000"}"#,
+        r#"{"kind":"timestamped","value":"20260229-150000"}"#,
+        r#"{"kind":"timestamped","value":"20260730-240000"}"#,
+        r#"{"kind":"timestamped","value":"20260730-156000"}"#,
+        r#"{"kind":"timestamped","value":"20260730-150060"}"#,
+        r#"{"kind":"timestamped","value":"20260730-150000Z"}"#,
+    ] {
+        assert!(
+            serde_json::from_str::<SccmRotation>(noncanonical).is_err(),
+            "accepted noncanonical known rotation: {noncanonical}"
+        );
+    }
+}
+
+#[test]
+fn serde_known_rotation_values_fail_closed_on_serialize() {
+    for rotation in [
+        SccmRotation::Numbered(0),
+        SccmRotation::Timestamped("20260730_150000".into()),
+        SccmRotation::Timestamped("20260229-150000".into()),
+        SccmRotation::Timestamped("20260730-150060".into()),
+    ] {
+        assert!(
+            serde_json::to_string(&rotation).is_err(),
+            "serialized noncanonical known rotation: {rotation:?}"
+        );
+    }
+}
+
+#[test]
+fn serde_canonical_rotation_values_round_trip() {
+    for rotation in [
+        SccmRotation::Numbered(1),
+        SccmRotation::Numbered(u32::MAX),
+        SccmRotation::Timestamped("20240229-000000".into()),
+        SccmRotation::Timestamped("20261231-235959".into()),
+    ] {
+        let json = serde_json::to_string(&rotation).unwrap();
+        assert_eq!(
+            serde_json::from_str::<SccmRotation>(&json).unwrap(),
+            rotation
+        );
+    }
+}
+
+#[test]
 fn artifact_round_trip_preserves_capture_and_rotation_provenance() {
     let artifact = SccmArtifact {
         artifact_id: "client-content-transfer".into(),
@@ -316,7 +369,12 @@ fn catalog_rotation_grammar_accepts_only_canonical_suffixes() {
         ("AppEnforce.lo_", ".lo_"),
         ("AppEnforce.log.0", ".0"),
         ("AppEnforce.log.03", ".03"),
+        ("AppEnforce.log.4294967296", ".4294967296"),
         ("AppEnforce.log.backup", ".backup"),
+        ("AppEnforce.log.20260730_150000", ".20260730_150000"),
+        ("AppEnforce.log.20260229-150000", ".20260229-150000"),
+        ("AppEnforce.log.20260730-240000", ".20260730-240000"),
+        ("AppEnforce.log.20260730-150000Z", ".20260730-150000Z"),
         ("AppEnforce.log.20261340-996099", ".20261340-996099"),
     ];
     for (name, raw_suffix) in rejected {

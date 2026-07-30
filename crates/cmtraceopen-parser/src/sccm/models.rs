@@ -1,6 +1,8 @@
-use serde::ser::SerializeStruct;
+use serde::ser::{Error as _, SerializeStruct};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
+
+use super::rotation::{is_canonical_rotation_number, is_canonical_rotation_timestamp};
 
 pub const SCCM_DIAGNOSTICS_SCHEMA_VERSION: u32 = 1;
 
@@ -115,6 +117,20 @@ impl Serialize for SccmRotation {
     where
         S: Serializer,
     {
+        match self {
+            Self::Numbered(value) if !is_canonical_rotation_number(*value) => {
+                return Err(S::Error::custom(
+                    "numbered rotation value must be a nonzero u32",
+                ));
+            }
+            Self::Timestamped(value) if !is_canonical_rotation_timestamp(value) => {
+                return Err(S::Error::custom(
+                    "timestamped rotation value must use canonical YYYYMMDD-HHMMSS",
+                ));
+            }
+            _ => {}
+        }
+
         let field_count = match self {
             Self::Current | Self::LoUnderscore => 1,
             Self::Numbered(_) | Self::Timestamped(_) => 2,
@@ -183,6 +199,11 @@ impl<'de> Deserialize<'de> for SccmRotation {
                     .ok_or_else(|| {
                         serde::de::Error::custom("numbered rotation value must be a u32")
                     })?;
+                if !is_canonical_rotation_number(number) {
+                    return Err(serde::de::Error::custom(
+                        "numbered rotation value must be a nonzero u32",
+                    ));
+                }
                 Ok(Self::Numbered(number))
             }
             "timestamped" => {
@@ -191,6 +212,11 @@ impl<'de> Deserialize<'de> for SccmRotation {
                     .ok_or_else(|| {
                         serde::de::Error::custom("timestamped rotation value must be a string")
                     })?;
+                if !is_canonical_rotation_timestamp(&timestamp) {
+                    return Err(serde::de::Error::custom(
+                        "timestamped rotation value must use canonical YYYYMMDD-HHMMSS",
+                    ));
+                }
                 Ok(Self::Timestamped(timestamp))
             }
             _ => Ok(Self::Unknown(SccmUnknownRotation { kind, value })),

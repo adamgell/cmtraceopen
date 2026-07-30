@@ -1,7 +1,7 @@
-use chrono::NaiveDateTime;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 
+use super::rotation::{is_canonical_rotation_timestamp, parse_canonical_rotation_number};
 use super::{SccmRole, SccmRotation, SccmUnknownRotation};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -473,8 +473,8 @@ impl<'a> ParsedArtifactName<'a> {
             let lowercase_suffix = &lowercase[separator + ".log.".len()..];
             let rotation = if lowercase_suffix == "lo_" {
                 Some(SccmRotation::LoUnderscore)
-            } else if is_canonical_rotation_number(suffix) {
-                suffix.parse::<u32>().ok().map(SccmRotation::Numbered)
+            } else if let Some(number) = parse_canonical_rotation_number(suffix) {
+                Some(SccmRotation::Numbered(number))
             } else if is_canonical_rotation_timestamp(suffix) {
                 Some(SccmRotation::Timestamped(suffix.to_string()))
             } else {
@@ -518,22 +518,6 @@ impl<'a> ParsedArtifactName<'a> {
             rotation_supported: false,
         }
     }
-}
-
-fn is_canonical_rotation_number(value: &str) -> bool {
-    value
-        .as_bytes()
-        .first()
-        .is_some_and(|first| first.is_ascii_digit() && *first != b'0')
-        && value.bytes().all(|byte| byte.is_ascii_digit())
-        && value.parse::<u32>().is_ok()
-}
-
-/// Timestamped rotations use exactly `YYYYMMDD-HHMMSS` in the artifact filename.
-fn is_canonical_rotation_timestamp(value: &str) -> bool {
-    value.len() == "YYYYMMDD-HHMMSS".len()
-        && NaiveDateTime::parse_from_str(value, "%Y%m%d-%H%M%S")
-            .is_ok_and(|timestamp| timestamp.format("%Y%m%d-%H%M%S").to_string() == value)
 }
 
 fn unknown_filename_suffix(raw_suffix: &str) -> SccmRotation {
