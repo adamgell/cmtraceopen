@@ -19,6 +19,7 @@
     "transactionId": "mp:request:28333333-3333-3333-3333-333333333333",
     "key": {"keyProfileKind":"requestClientTopology","requestId":"28333333-3333-3333-3333-333333333333","policyId":null,"clientHandle":"safe:client:mp-registration-03","siteCode":"LAB","managementPointHostHandle":"safe:mp:lab-mp-01","confidence":"exact","extractionProfileId":"mp-server-5.00.test-v1"},
     "topologyCompatibility": "exact",
+    "observationKeyBinding": {"mode":"inheritImmutableParentTransactionKey","observationKeyFieldAllowed":false,"overrideAllowed":false},
     "phase": "registerOrIdentify",
     "state": "failed",
     "lastSuccessfulPhase": "authenticate",

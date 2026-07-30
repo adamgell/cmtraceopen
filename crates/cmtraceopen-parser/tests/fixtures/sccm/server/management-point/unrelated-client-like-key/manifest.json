@@ -27,7 +27,7 @@
       "originalBasename": "MP_GetAuth.log",
       "sanitizedSourcePath": "SYNTHETIC://configured-root/MP/Logs/MP_GetAuth.log",
       "pathFingerprint": "synthetic:unrelated-auth-configured",
-      "rotation": {"kind":"current","lineageId":"mp-unrelated-auth","fragmentComplete":true},
+      "rotation": {"kind":"current","lineageId":"mp-unrelated-auth"},
       "sourceVersion": "5.00.TEST.0000",
       "collectedUtc": "2026-07-30T08:00:05Z",
       "bytesCopied": 0,

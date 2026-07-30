@@ -23,6 +23,7 @@
     "transactionId": "mp:request:28111111-1111-1111-1111-111111111111",
     "key": {"keyProfileKind":"requestPolicyClientTopology","requestId":"28111111-1111-1111-1111-111111111111","policyId":"a8111111-1111-1111-1111-111111111111","clientHandle":"safe:client:mp-healthy-01","siteCode":"LAB","managementPointHostHandle":"safe:mp:lab-mp-01","confidence":"exact","extractionProfileId":"mp-server-5.00.test-v1"},
     "topologyCompatibility": "exact",
+    "observationKeyBinding": {"mode":"inheritImmutableParentTransactionKey","observationKeyFieldAllowed":false,"overrideAllowed":false},
     "phase": "recordOutcome",
     "state": "succeeded",
     "lastSuccessfulPhase": "recordOutcome",

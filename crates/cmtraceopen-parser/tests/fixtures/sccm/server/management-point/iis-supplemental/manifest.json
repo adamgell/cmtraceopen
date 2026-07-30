@@ -67,7 +67,7 @@
       "originalBasename": "u_ex260730.log",
       "sanitizedSourcePath": null,
       "pathFingerprint": "synthetic:iis-optional-not-requested",
-      "rotation": {"kind":"current","lineageId":"mp-iis-optional","fragmentComplete":true},
+      "rotation": {"kind":"current","lineageId":"mp-iis-optional"},
       "sourceVersion": "IIS.TEST.0000",
       "collectedUtc": "2026-07-30T06:00:10Z",
       "bytesCopied": 0,

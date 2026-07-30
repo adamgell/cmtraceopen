@@ -103,7 +103,10 @@ every exact topology and transaction-key claim.
 
 `Captured`, `Absent`, `AccessDenied`, `Capped`, `Skipped`, `Unsupported`, and
 `ParseFailed` remain distinct. A noncapture has zero bytes and no invented
-encoding or collection-limit result.
+encoding or collection-limit result. Its rotation kind and lineage retain the
+candidate's deterministic identity, but `fragmentComplete` is omitted because
+no physical fragment exists. Only a captured or capped physical artifact may
+declare fragment completeness.
 
 The manifest records an observed MP role independently from source coverage.
 An absent candidate or missing default path is a source gap only. It never
@@ -144,7 +147,15 @@ Two phase-appropriate exact key shapes are allowed:
    handle, site code, and MP host handle. `policyId` is explicitly null.
 2. `requestPolicyClientTopology`: the same values plus an exact policy UUID.
 
-Every fact in an exact transaction repeats the complete selected key shape.
+Every source fact admitted to an exact transaction repeats the complete
+selected key shape. In the expected-output labels, `transaction.key` is the
+single authoritative key and every contained observation declares
+`observationKeyBinding.mode: inheritImmutableParentTransactionKey`. An
+observation has no independent `key` field and cannot override, borrow, or
+conflict with its immutable parent key. Its one cited source line must repeat
+every parent-key token, so a phase fact remains counterpart-ready for Issue
+`#333` without duplicating the serialized key.
+
 An assignment-looking token, raw client-looking token, message neighborhood,
 same host label, component, or timestamp is insufficient. Unknown versions,
 malformed keys, physical fragments, and incompatible client-style tokens
@@ -212,6 +223,8 @@ Each `expected.json` declares:
 - observed role/topology without a default-path inference;
 - physical artifact provenance and source-group coverage;
 - transactions and observations with deterministic IDs;
+- immutable parent-transaction key inheritance for every exact observation,
+  with observation-level key fields and overrides forbidden;
 - original timestamp, offset, normalized UTC, producer, and exact evidence
   ranges;
 - phase, state, last successful phase, classification, confidence, and
@@ -271,15 +284,16 @@ must record the lab ConfigMgr version, observed role topology, configured path
 provenance, capture time zone, synthetic scenario, byte limits, and redaction
 procedure. macOS parser proof is not native role discovery or capture proof.
 
-## #333 contractual handoff
+## Issue #333 contractual handoff
 
-#328 may expose exact profile-qualified request/policy keys, a correlation-safe
-client handle, site and MP topology handles, role-local phases, source ordering
-provenance, and evidence references. That is the entire handoff.
+Issue `#328` may expose exact profile-qualified request/policy keys, a
+correlation-safe client handle, site and MP topology handles, role-local
+phases, source ordering provenance, and evidence references. That is the
+entire handoff.
 
-#333 must independently require compatible #321 keys, compatible role
-topology, usable timestamp offsets whenever ordering is asserted, sufficient
-counterpart coverage, and terminal/corroborating facts. A time-only,
-filename-only, error-code-only, client-ID-looking, or same-host join is never a
-high-confidence cause. This corpus performs no link and makes no client-side
-claim.
+Issue `#333` must independently require compatible keys from Issue `#321`,
+compatible role topology, usable timestamp offsets whenever ordering is
+asserted, sufficient counterpart coverage, and terminal/corroborating facts.
+A time-only, filename-only, error-code-only, client-ID-looking, or same-host
+join is never a high-confidence cause. This corpus performs no link and makes
+no client-side claim.

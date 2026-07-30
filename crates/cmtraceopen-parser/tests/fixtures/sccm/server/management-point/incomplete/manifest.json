@@ -67,7 +67,7 @@
       "originalBasename": "MP_GetPolicy.log",
       "sanitizedSourcePath": "SYNTHETIC://configured-root/MP/Logs/MP_GetPolicy.log",
       "pathFingerprint": "synthetic:incomplete-policy-configured",
-      "rotation": {"kind":"current","lineageId":"mp-incomplete-policy","fragmentComplete":true},
+      "rotation": {"kind":"current","lineageId":"mp-incomplete-policy"},
       "sourceVersion": "5.00.TEST.0000",
       "collectedUtc": "2026-07-30T07:00:05Z",
       "bytesCopied": 0,
