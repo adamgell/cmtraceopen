@@ -1,9 +1,11 @@
 {
   "sccmManifestVersion": 1,
+  "syntheticFixture": true,
+  "proposalOnly": true,
   "privacy": { "synthetic": true, "rawPaths": "redacted" },
   "bundleRole": "server",
   "topology": { "captureHost": "LAB-MP01", "siteCode": "CONTOSO", "rolesObserved": ["managementPoint"] },
   "artifacts": [
-    { "artifactId": "mp-policy-configured", "role": "managementPoint", "sourceId": "server-mp-policy", "sourceKind": "ccmLog", "sourceVersion": "5.00.TEST", "originalPath": "REDACTED_CONFIGURED_NONDEFAULT_ROOT", "originalBasename": "MP_GetPolicy.log", "configuredPathProvenance": { "state": "configured", "pathClass": "nonDefault", "pathFingerprint": "synthetic:path:mp-configured-a" }, "defaultCandidateState": "absentCandidateOnly", "rotation": { "kind": "current", "lineageId": "mp-policy-configured" }, "captureState": "captured", "collectedUtc": "2026-07-30T00:01:00Z", "relativePath": "evidence/sccm/server/management-point/server-mp-policy/current/MP_GetPolicy.log", "bytesCopied": 64 }
+    { "artifactId": "mp-policy-configured", "role": "managementPoint", "sourceId": "server-mp-policy", "sourceKind": "ccmLog", "sourceVersion": "5.00.TEST", "originalPath": "REDACTED_CONFIGURED_NONDEFAULT_ROOT", "originalBasename": "MP_GetPolicy.log", "configuredPathProvenance": { "state": "configured", "pathClass": "nonDefault", "pathFingerprint": "synthetic:path:mp-configured-a" }, "defaultCandidateState": "absentCandidateOnly", "rotation": { "kind": "current", "lineageId": "mp-policy-configured" }, "captureState": "captured", "collectedUtc": "2026-07-30T00:01:00Z", "relativePath": "evidence/sccm/server/management-point/server-mp-policy/current/MP_GetPolicy.log", "bytesCopied": 183 }
   ]
 }

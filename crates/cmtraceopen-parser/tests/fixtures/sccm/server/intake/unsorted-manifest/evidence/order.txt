@@ -1,1 +1,0 @@
-SYNTHETIC: artifact list order is deliberately noncanonical to test deterministic intake ordering.

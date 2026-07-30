@@ -1,0 +1,2 @@
+<![LOG[SYNTHETIC FIXTURE request begins
+and completes in the same logical record]LOG]!><time="10:03:04.000+000" date="07-30-2026" component="mp_getpolicy" context="" type="1" thread="1" file="synthetic.cc">

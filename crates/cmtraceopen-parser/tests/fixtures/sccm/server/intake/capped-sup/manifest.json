@@ -1,5 +1,7 @@
 {
   "sccmManifestVersion": 1,
+  "syntheticFixture": true,
+  "proposalOnly": true,
   "privacy": { "synthetic": true, "rawPaths": "redacted" },
   "bundleRole": "server",
   "topology": { "captureHost": "LAB-CM01", "siteCode": "CONTOSO", "rolesObserved": ["softwareUpdatePoint"] },

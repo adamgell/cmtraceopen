@@ -8,15 +8,19 @@ synthetic, deterministic, and privacy-safe:
   `CONTOSO`;
 - raw source paths are replaced by `REDACTED_*` markers;
 - configured roots use deterministic opaque `synthetic:path:*` fingerprints;
+- every manifest declares `syntheticFixture: true` and `proposalOnly: true`;
 - evidence contains no customer host, user, site, domain, identifier,
   credential, certificate, URL, database name, or client key.
 
-Each scenario has `manifest.json`, a minimal `evidence/` file, and
-`expected.json`. Manifest artifact IDs and relative paths must be unique;
-expected source lists are canonicalized by role, source ID, path fingerprint,
-rotation order, basename, then artifact ID. The expected data documents only
-intake classification/coverage and never a role-health or client-causality
-finding.
+Each scenario has `manifest.json` and `expected.json`. `Captured` and `Capped`
+artifacts also have minimal evidence at the exact bundle-relative path named by
+their manifest. `Absent`, `AccessDenied`, `Skipped`, and `Unsupported`
+artifacts have a null/omitted `relativePath`, zero `bytesCopied`, and no
+evidence placeholder. Manifest artifact IDs and non-null relative paths must be
+unique; expected source lists are canonicalized by role, source ID, path
+fingerprint, rotation order, basename, then artifact ID. The expected data
+documents only intake classification/coverage and never a role-health or
+client-causality finding.
 
 The current preparation shape is provisional:
 
@@ -27,6 +31,28 @@ The current preparation shape is provisional:
   broken role.
 - An unsupported source remains retained manifest evidence but is ineligible
   for a role reducer. A capped/malformed rotation cannot yield terminal health.
+
+## Preparation validation
+
+Validation must parse every JSON file and then walk every manifest artifact:
+
+- `Captured`/`Capped`: `relativePath` is non-null, resolves beneath its
+  scenario directory, contains a `SYNTHETIC` marker, and its file byte length
+  equals `bytesCopied`.
+- Complete captured records use all required CCM attributes (`time`, `date`,
+  `component`, `context`, `type`, `thread`, and `file`) and contain
+  `SYNTHETIC FIXTURE` inside the first record message. The deliberately capped
+  partial is marked non-parseable in expected data.
+- `Absent`/`AccessDenied`/`Skipped`/`Unsupported`: `relativePath` is null or
+  omitted and `bytesCopied` is zero.
+- Every file beneath a scenario's `evidence/` tree is referenced by exactly one
+  artifact. This rejects stale flat placeholders and unmanifested captures.
+- Canonical artifact ordering, unique artifact IDs/paths, topology privacy
+  markers, top-level synthetic/proposal markers, redacted original paths, and
+  `synthetic:path:*` fingerprints remain stable.
+
+The preparation report records the JSON/Node validation coverage and result.
+These checks remain non-compiling until #318 freezes the shared Rust contract.
 
 See `docs/sccm/preparation/issue-335-server-intake.md` for the source catalog,
 native capture-adapter design, matrix, and exact #318 dependency decisions.

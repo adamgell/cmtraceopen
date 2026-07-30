@@ -38,10 +38,14 @@ The synthetic manifests use a stable, intentionally provisional JSON shape.
 `sccmManifestVersion: 1` is the proposed server manifest version; actual
 serde field names and tolerant-reader behavior are deferred to #318.
 
+- `syntheticFixture: true` and `proposalOnly: true` make the committed safety
+  and pre-#318 schema boundary machine-readable.
 - `topology.rolesObserved` is a list of observed facts, never path guesses.
 - Each artifact retains `role`, `sourceId`, `configuredPathProvenance`,
-  `originalBasename`, `rotation`, `captureState`, `relativePath`, byte/count
-  provenance, and collection time. `artifactId` is unique per captured file.
+  `originalBasename`, `rotation`, `captureState`, nullable `relativePath`,
+  byte/count provenance, and collection time. `Captured`/`Capped` paths resolve
+  to exact fixture files; non-captured states have no path. `artifactId` is
+  unique per captured file.
 - `originalPath` is always a privacy marker in committed fixtures. The opaque
   `pathFingerprint` distinguishes configured roots without publishing them.
 - `rotation.lineageId` joins current and rotated members of a source only; it
@@ -78,7 +82,9 @@ serde field names and tolerant-reader behavior are deferred to #318.
   normalized output and deterministic evidence IDs once #318 supplies them.
 - The preparation rotation order is oldest timestamped member, descending
   numbered member, `.lo_`, then current; #318 may replace this only with a
-  documented stable shared ordering. The `rotations` fixture locks this intent.
+  documented stable shared ordering. Canonical spellings are `.log.lo_`,
+  `.log.N`, and `.log.YYYYMMDD-HHMMSS`; the `rotations` fixture locks this
+  intent with valid calendar/time fields.
 - Missing required evidence yields a role-scoped coverage gap and a minimal
   next artifact request. It does not yield a role-health finding.
 - `AccessDenied`, `Capped`, `Skipped`, `Unsupported`, and `ParseFailed` are
@@ -95,7 +101,7 @@ serde field names and tolerant-reader behavior are deferred to #318.
 | `complete-multi-role` | Site/MP/DP/SUP source groups captured with declared topology | all listed groups covered; no health conclusion |
 | `configured-nondefault-path` | observed MP configured root has opaque non-default provenance | source retained; absent default remains candidate-only |
 | `rotations` | current, `.lo_`, numbered, timestamped files share lineage | unique collision-safe artifacts in stable rotation order |
-| `multiline` | two physical lines form one complete CCM record | one logical evidence record with full `40-41` range |
+| `multiline` | two physical lines form one complete CCM record | one logical evidence record with full `1-2` range |
 | `absent-dp` | DP candidate absent and no observed DP role | DP coverage gap; never `DP broken` |
 | `access-denied-mp` | MP policy candidate cannot be read | access coverage plus bounded reread request; no terminal MP result |
 | `capped-sup` | SUP log is retained only to a byte cap | capped coverage and no terminal SUP health conclusion |
