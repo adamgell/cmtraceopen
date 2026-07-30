@@ -1,12 +1,13 @@
 use std::fs;
-use std::io::{BufRead, BufReader};
+use std::io::BufReader;
 use std::path::Path;
 
-use chrono::{NaiveDateTime, TimeZone, Utc};
+use chrono::NaiveDateTime;
 use regex::Regex;
 
 use crate::error::AppError;
 use crate::jamf::models::JamfSelfServiceEvent;
+use crate::jamf::time::local_naive_to_utc;
 
 fn line_regex() -> &'static Regex {
     use std::sync::OnceLock;
@@ -42,11 +43,12 @@ pub fn parse_self_service_log_impl(path: &Path) -> Result<Vec<JamfSelfServiceEve
         Err(e) => return Err(AppError::Io(e)),
     };
     let mut events = Vec::new();
-    for line in BufReader::new(file).lines().map_while(Result::ok) {
-        if let Some(ev) = parse_line(&line) {
+    let mut reader = BufReader::new(file);
+    crate::jamf::text::for_each_line(&mut reader, |_offset, line| {
+        if let Some(ev) = parse_line(line) {
             events.push(ev);
         }
-    }
+    })?;
     Ok(events)
 }
 
@@ -57,7 +59,7 @@ fn parse_line(line: &str) -> Option<JamfSelfServiceEvent> {
     let rest = caps.name("rest")?.as_str();
 
     let ts = NaiveDateTime::parse_from_str(ts_raw, "%Y-%m-%d %H:%M:%S").ok()?;
-    let timestamp = Utc.from_utc_datetime(&ts);
+    let timestamp = local_naive_to_utc(ts);
 
     let item_name = item_regex()
         .captures(rest)

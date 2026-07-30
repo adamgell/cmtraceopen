@@ -1,5 +1,5 @@
 use std::fs;
-use std::io::{BufRead, BufReader, Seek};
+use std::io::BufReader;
 use std::path::Path;
 
 use chrono::{DateTime, Datelike, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Timelike, Utc};
@@ -9,6 +9,7 @@ use crate::error::AppError;
 use crate::jamf::models::{
     JamfPolicyEvent, JamfPolicyLogResult, JamfPolicyResult, JamfPolicyTrigger,
 };
+use crate::jamf::time::local_naive_to_utc;
 
 // Line shape (verified from real JAMF Pro 11 host):
 //   Wed Apr 29 13:23:04 LT-APLFVFHWEYHQ6L7 jamf[92532]: Executing Policy Google Chrome Installer
@@ -36,22 +37,13 @@ pub fn parse_policy_log_impl(path: &Path) -> Result<JamfPolicyLogResult, AppErro
     let mut total_lines = 0usize;
     let mut unparsed = 0usize;
 
-    let mut line = String::new();
-    loop {
-        let offset = reader.stream_position().map_err(AppError::Io)?;
-        line.clear();
-        let n = reader.read_line(&mut line).map_err(AppError::Io)?;
-        if n == 0 {
-            break;
-        }
+    crate::jamf::text::for_each_line(&mut reader, |offset, line| {
         total_lines += 1;
-        let trimmed = line.trim_end_matches(['\r', '\n']);
-
-        match parse_line(trimmed, offset, reference_year) {
+        match parse_line(line, offset, reference_year) {
             Some(ev) => events.push(ev),
             None => unparsed += 1,
         }
-    }
+    })?;
 
     fix_year_wrap(&mut events);
 
@@ -80,7 +72,7 @@ fn parse_line(line: &str, offset: u64, year: i32) -> Option<JamfPolicyEvent> {
     let time = NaiveTime::parse_from_str(caps.name("time")?.as_str(), "%H:%M:%S").ok()?;
     let date = NaiveDate::from_ymd_opt(year, mon, day)?;
     let dt = NaiveDateTime::new(date, time);
-    let ts = Utc.from_utc_datetime(&dt);
+    let ts = local_naive_to_utc(dt);
 
     let msg = caps.name("msg")?.as_str();
     let (trigger, policy_id, policy_name, result) = classify(msg);

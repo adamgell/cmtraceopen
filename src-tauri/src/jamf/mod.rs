@@ -1,5 +1,7 @@
 pub mod models;
 pub mod paths;
+pub mod text;
+pub mod time;
 pub mod detect;
 pub mod policy_log;
 pub mod self_service;

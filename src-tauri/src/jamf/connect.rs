@@ -1,5 +1,5 @@
 use std::fs;
-use std::io::{BufRead, BufReader};
+use std::io::BufReader;
 use std::path::Path;
 
 use chrono::{DateTime, Utc};
@@ -43,11 +43,12 @@ pub fn parse_connect_log_impl(path: &Path) -> Result<Vec<JamfConnectEvent>, AppE
         Err(e) => return Err(AppError::Io(e)),
     };
     let mut events = Vec::new();
-    for line in BufReader::new(file).lines().map_while(Result::ok) {
-        if let Some(ev) = parse_line(&line) {
+    let mut reader = BufReader::new(file);
+    crate::jamf::text::for_each_line(&mut reader, |_offset, line| {
+        if let Some(ev) = parse_line(line) {
             events.push(ev);
         }
-    }
+    })?;
     Ok(events)
 }
 
@@ -77,17 +78,19 @@ fn parse_line(line: &str) -> Option<JamfConnectEvent> {
     })
 }
 
+/// Accepts `2026-04-29T09:12:03+0000`, `...+00:00` and `...Z`.
+///
+/// chrono's `%z` does not accept the RFC 3339 `Z` designator, so a Zulu
+/// timestamp silently failed to parse and the whole line was dropped — the
+/// previous code documented `Z` as supported but discarded it. Normalize `Z` to
+/// an explicit numeric offset before parsing.
 fn parse_timestamp(raw: &str) -> Option<DateTime<Utc>> {
-    // Accept "2026-04-29T09:12:03+0000" and "2026-04-29T09:12:03Z".
-    // If no timezone marker is present, default to UTC.
-    let has_tz =
-        raw.ends_with('Z') || raw.contains('+') || raw.matches('-').count() >= 3;
-    let normalized = if has_tz {
-        raw.to_string()
-    } else {
-        format!("{raw}+0000")
+    let normalized = match raw.strip_suffix(['Z', 'z']) {
+        Some(head) => format!("{head}+0000"),
+        None => raw.to_string(),
     };
-    DateTime::parse_from_str(&normalized, "%Y-%m-%dT%H:%M:%S%z")
+    // `%#z` accepts both `+0000` and `+00:00`.
+    DateTime::parse_from_str(&normalized, "%Y-%m-%dT%H:%M:%S%#z")
         .ok()
         .map(|dt| dt.with_timezone(&Utc))
 }
