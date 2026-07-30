@@ -39,7 +39,7 @@
       "sourceGroup": "server-sitecomp",
       "sourceKind": "ccmLog",
       "originalPath": "REDACTED",
-      "originalBasename": "sitecomp.log.lo_",
+      "originalBasename": "sitecomp.lo_",
       "configuredPath": true,
       "rotation": {
         "kind": "loUnderscore",
@@ -50,7 +50,7 @@
       "sourceVersion": "5.00.TEST",
       "collectedUtc": "2026-07-30T15:01:00Z",
       "encoding": "utf-8",
-      "relativePath": "evidence/sccm/server/site-core/sitecomp/lo_/sitecomp.log.lo_",
+      "relativePath": "evidence/sccm/server/site-core/sitecomp/lo_/sitecomp.lo_",
       "bytesCopied": 196
     }
   ]
