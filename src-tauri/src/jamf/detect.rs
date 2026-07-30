@@ -1,5 +1,6 @@
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Output};
+use std::sync::mpsc;
 use std::time::Duration;
 
 use crate::error::AppError;
@@ -7,9 +8,36 @@ use crate::jamf::models::{JamfDirectoryStatus, JamfEnvironment};
 use crate::jamf::paths;
 use crate::macos_diag::models::FdaStatus;
 
-// TODO(jamf-detect): enforce in read_jamf_version once we wrap Command in a timeout.
-#[allow(dead_code)]
 const JAMF_VERSION_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Runs a command, giving up after `timeout`.
+///
+/// `/usr/local/bin/jamf` talks to the JSS, so it can block for a long time on a
+/// degraded network — and this runs inside a Tauri command, where blocking
+/// stalls the caller. The work happens on a helper thread so a wedged process
+/// cannot hold the IPC call open; if it times out we abandon the thread rather
+/// than leaving a half-read pipe, which is the safer trade for a read-only
+/// diagnostic.
+fn output_with_timeout(program: &str, args: &[&str], timeout: Duration) -> Option<Output> {
+    let (tx, rx) = mpsc::channel();
+    let program = program.to_string();
+    let args: Vec<String> = args.iter().map(|s| (*s).to_string()).collect();
+    let spawn_program = program.clone();
+    std::thread::spawn(move || {
+        let _ = tx.send(Command::new(&spawn_program).args(&args).output());
+    });
+    match rx.recv_timeout(timeout) {
+        Ok(Ok(output)) => Some(output),
+        Ok(Err(e)) => {
+            log::warn!("failed to run {program:?}: {e}");
+            None
+        }
+        Err(_) => {
+            log::warn!("{program:?} exceeded {timeout:?}; abandoning");
+            None
+        }
+    }
+}
 
 pub fn collect_environment_impl() -> Result<JamfEnvironment, AppError> {
     let jamf_installed = Path::new(paths::JAMF_BINARY).is_file();
@@ -38,7 +66,12 @@ pub fn collect_environment_impl() -> Result<JamfEnvironment, AppError> {
         None
     };
     let jss_url = read_jss_url();
-    let jamf_connect_installed = Path::new(paths::JAMF_CONNECT_APP).is_dir();
+    // The menu-bar app is not always deployed to /Applications even where the
+    // JAMF Connect package (JCDaemon + login plugin) is installed, so treat the
+    // system support directory as evidence too — otherwise the workspace
+    // reports "not detected" on a host that is plainly configured for it.
+    let jamf_connect_installed = paths::jamf_connect_app_dir().is_some()
+        || Path::new(paths::JAMF_CONNECT_APP_SUPPORT).is_dir();
     let jamf_connect_version = if jamf_connect_installed {
         read_jamf_connect_version()
     } else {
@@ -86,10 +119,7 @@ fn scan_directories() -> JamfDirectoryStatus {
 }
 
 fn read_jamf_version() -> Option<String> {
-    let output = Command::new(paths::JAMF_BINARY)
-        .arg("version")
-        .output()
-        .ok()?;
+    let output = output_with_timeout(paths::JAMF_BINARY, &["version"], JAMF_VERSION_TIMEOUT)?;
     if !output.status.success() {
         return None;
     }
@@ -126,15 +156,26 @@ fn read_jamf_connect_version() -> Option<String> {
 }
 
 fn read_jamf_connect_idp() -> Option<String> {
-    let output = Command::new("/usr/libexec/PlistBuddy")
-        .args(["-c", "Print :OIDCProvider", paths::JAMF_CONNECT_PLIST])
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
+    for (plist, key) in paths::JAMF_CONNECT_IDP_SOURCES {
+        if !Path::new(plist).is_file() {
+            continue;
+        }
+        let output = match Command::new("/usr/libexec/PlistBuddy")
+            .args(["-c", &format!("Print :{key}"), plist])
+            .output()
+        {
+            Ok(o) => o,
+            Err(_) => continue,
+        };
+        if !output.status.success() {
+            continue;
+        }
+        let v = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if !v.is_empty() {
+            return Some(v);
+        }
     }
-    let v = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if v.is_empty() { None } else { Some(v) }
+    None
 }
 
 fn build_summary(
