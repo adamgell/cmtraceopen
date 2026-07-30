@@ -25,9 +25,10 @@ turning either file into a DP- or SUP-produced artifact.
 | --- | --- | --- | --- | --- | --- |
 | `server-sitecomp` | `sitecomp.log`, `hman.log` | `siteServer` | site core | CCM | current + rotations; #327 |
 | `server-status` | `statmgr.log`, `statesys.log` | `siteServer` | site status | CCM | current + rotations; #327 |
-| `server-mp-auth` | `MP_GetAuth.log` | `siteServer` | management point | CCM | current + rotations; #328 |
+| `server-mp-auth` | `MP_GetAuth.log` | observed MP/site-system producer | management point | CCM | current + rotations; retain observed placement; #328 |
 | `server-mp-auth` | `MP_CliReg.log`, `MP_RegistrationManager.log` | observed MP/site-system producer | management point | CCM | current + rotations; native placement must be retained; #328 |
-| `server-mp-policy` | `MP_GetPolicy.log`, `MP_Location.log`, `mpcontrol.log` | observed MP producer | management point | CCM | current + rotations; native placement still requires validation; #328 |
+| `server-mp-policy` | `MP_GetPolicy.log`, `MP_Location.log` | observed MP/site-system producer | management point | CCM | current + rotations; retain observed placement; #328 |
+| `server-mp-policy` | `mpcontrol.log` | `siteServer` | management point | CCM | current + rotations; #328 |
 | `server-mp-iis` | explicitly captured W3C export | observed IIS site-system producer | management point | IIS W3C | optional, scoped; #328 |
 | `server-dp-distribution` | `distmgr.log`, `PkgXferMgr.log` | `siteServer` | distribution point/content | CCM | current + rotations; #329 |
 | `server-dp-distribution` | `SMSDPProv.log` | observed DP producer | distribution point/content | CCM | current + rotations; #329 |
@@ -50,6 +51,13 @@ identity, co-located roles, or version-specific placement. Native discovery
 must retain the observed producer topology and record unresolved placement
 rather than broadening an allowed producer set.
 
+The same reference separates MP/site-system-produced `MP_GetAuth.log`,
+`MP_GetPolicy.log`, and `MP_Location.log` candidates from the
+site-server-produced `mpcontrol.log`. They are deliberately separate catalog
+rows. A co-located or otherwise ambiguous deployment retains its observed
+producer handle plus unresolved placement provenance until native Windows
+validation; basename or workflow ownership never resolves that ambiguity.
+
 An overlapping basename or workflow subject is never enough to infer a server
 source or producer role. Artifacts with undeclared source IDs, basenames,
 rotations, or producer combinations remain `Unsupported`/unclassified evidence
@@ -67,21 +75,39 @@ serde field names and tolerant-reader behavior are deferred to #318.
 - Each artifact retains `producerRole`, a privacy-safe producer host handle,
   optional `workflowSubject`, `sourceId`, `configuredPathProvenance`,
   `originalBasename`, `rotation`, `captureState`, nullable `relativePath`,
-  byte/count provenance, and collection time. `artifactId` is unique across
-  every manifest artifact, including non-captured states.
+  byte/count provenance, and collection time. Within one manifest/bundle,
+  `artifactId` is unique across every artifact, including non-captured states.
+  Reusing the same deterministic ID in an independent bundle is valid; there
+  is no corpus-global namespace.
+- `artifactId` is derived from the canonical producer role/host, source,
+  workflow-subject role/instance, path fingerprint, basename, and rotation
+  identity. Discovery position, task completion order, and a mutable counter
+  are never inputs. A duplicate canonical identity or ID inside one manifest
+  is rejected before any evidence write.
 - Every `Captured`/`Capped` artifact carries explicit `encoding` and
   `collectionLimit` (`byteLimit`, `limitApplied`) provenance. A completed
   capture models its policy even when the limit was not reached. Non-captured
   artifacts omit these fields unless a future contract explicitly represents
   them as unavailable/null.
+- Capture limits apply inclusively to raw file bytes before decoding. A capped
+  artifact is the exact prefix of the source through byte `byteLimit`; the
+  collector neither decodes first nor splits, repairs, or replaces bytes to
+  form text. It records `bytesCopied == file size == byteLimit`,
+  `truncated: true`, and `fragmentComplete: false`.
 - `originalPath` is always a privacy marker in committed fixtures. The opaque
   `pathFingerprint` distinguishes configured roots without publishing them.
 - `rotation.lineageId` joins current and rotated members of a source only; it
   is not a cross-role identifier. `relativePath` includes producer/source and,
-  when needed, workflow-subject and deterministic opaque configured-root
-  segments so colliding basenames cannot overwrite or merge.
+  when needed, deterministic workflow-subject instance and configured-root
+  discriminators so colliding basenames cannot overwrite or merge. The
+  preparation key segment is the first 16 lowercase hexadecimal characters of
+  SHA-256 over the UTF-8 NFC approved opaque handle; duplicate destinations
+  are rejected during preflight rather than disambiguated by discovery order.
 - Evidence retains `artifactId`, a full logical `lineRange`, and a synthetic
-  text payload. The future normalizer must frame before extraction.
+  text payload. Evidence payloads are raw and bundle-internal. Any public
+  evidence projection and any derived field must pass the #318 redaction
+  boundary and may retain only approved opaque handles/statuses. The future
+  normalizer must frame before extraction.
 
 ## Native capture adapter design (deferred implementation)
 
@@ -90,42 +116,70 @@ serde field names and tolerant-reader behavior are deferred to #318.
    be added as a candidate but may not create `rolesObserved`.
 2. The engine selects only catalogued roles/sources, canonicalizes each path,
    rejects reparse/symlink escapes outside the allow-listed configured root,
-   and enforces per-source file and byte caps.
-3. Capture writes collision-safe paths. If a logical source/basename is
-   collected from more than one configured root or instance, the writer must
-   include the deterministic opaque root/instance segment before rotation, for
-   example
-   `evidence/sccm/server/management-point/server-mp-policy/root-7d4a9c2e/current/MP_GetPolicy.log`.
-   The raw path must not be recoverable from that segment. Two roots remain two
-   artifact IDs/evidence references and cannot overwrite or normalize-merge.
-   Partial copies remain `Capped`; they do not become success.
-4. The writer projects server fields into a versioned manifest without changing
+   and enforces per-source file and inclusive raw-byte caps. The byte count and
+   prefix copy occur before text decoding; the collector never repairs a
+   truncated encoding boundary.
+3. Before opening any destination, capture canonicalizes every artifact
+   identity, workflow-subject/root collision key, and final bundle-relative
+   path for the full batch. Duplicate identity/path preflight fails the batch.
+   Each accepted destination is created atomically with create-new/no-overwrite
+   semantics; a concurrent or pre-existing path is an explicit capture error,
+   never a replacement.
+4. Collision-safe paths include deterministic opaque subject-instance and
+   configured-root segments when either can vary, for example
+   `evidence/sccm/server/site-server/server-sup-sync/subject-software-update-point/instance-17eae15500d8968f/root-b11afca548220198/current/wsyncmgr.log`.
+   The raw path or instance value must not be recoverable from those segments.
+   Two roots or instances remain distinct IDs/evidence references and cannot
+   overwrite or normalize-merge. Partial copies remain `Capped`; they do not
+   become success.
+5. The writer projects server fields into a versioned manifest without changing
    generic `ArtifactStatus`. Access, cap, skipped, unsupported, absent, and
-   parse failure stay distinct. A public export redacts raw host/path values
-   while retaining source/producer/workflow-subject/rotation and approved
-   opaque handles.
-5. Native acceptance needs Windows CI temp-path tests plus an authorized SCCM
+   parse failure stay distinct. Raw evidence stays internal to the bundle. A
+   public export runs both evidence and derived values through #318 redaction,
+   removes raw host/path/content values, and retains only
+   source/producer/workflow-subject/rotation, approved opaque handles, and
+   allowed statuses.
+6. Native acceptance needs Windows CI temp-path tests plus an authorized SCCM
    lab. The lab is not a prerequisite for parser corpus work and is currently
    pending; this package makes no live-capture claim.
+
+Deferred native tests must make the write/privacy boundaries observable:
+
+- a fake batch with colliding roots/instances must fail during preflight with
+  zero destination files created; a pre-existing destination must remain
+  byte-identical after atomic create-new fails;
+- a capped source whose next byte crosses a decoding boundary must retain the
+  exact raw prefix and size without replacement/repair before the parser sees
+  it; and
+- a protected bundle may contain sentinel raw host/path/evidence/derived
+  values, but its serialized public projection must contain none of those
+  sentinels while preserving only the expected approved opaque
+  handles/statuses.
 
 ## Intake assessment rules
 
 - Classify by `(producer role/topology, source ID/basename, supported rotation,
   provenance)`, not filename, workflow subject, or default path alone.
-- Stable-normalize artifacts by producer role/host handle, source ID, workflow
-  subject role/instance, path fingerprint, rotation order, basename, then
-  artifact ID. Reordered input must produce byte-identical normalized output
-  and deterministic evidence IDs once #318 supplies them.
-- The preparation rotation order is oldest timestamped member, descending
-  numbered member, `.lo_`, then current; #318 may replace this only with a
-  documented stable shared ordering. Canonical spellings are `.log.lo_`,
-  `.log.N`, and `.log.YYYYMMDD-HHMMSS`; the `rotations` fixture locks this
-  intent with valid calendar/time fields.
-- A complete record's parsed UTC instant must be less than or equal to its
-  `collectedUtc`. Timestamped rotation filename/value and record time must
-  agree and preserve the intended chronology. Only a syntactically valid
-  offset may be normalized; invalid/unknown offsets are explicit coverage
-  gaps and never receive an invented UTC instant.
+- Stable-normalize artifacts by producer role/host handle, source ID,
+  workflow-subject role/instance/basis, path fingerprint, explicit rotation
+  family rank, within-family value, lineage ID, basename, capture state,
+  relative path, then artifact ID. Equality through the final ID is a rejected
+  duplicate identity, so no input-order tie remains.
+- Rotation family rank is timestamped, numbered, `.lo_`, current,
+  provider-defined, then none. Timestamped values sort ascending by valid
+  `YYYYMMDD-HHMMSS`; numbered values sort by descending integer; remaining
+  ties use lineage ID, basename, capture state, relative path, and artifact ID
+  in binary-stable lexical order. Canonical spellings are `.log.lo_`, `.log.N`,
+  and `.log.YYYYMMDD-HHMMSS`. This is serialization order only: intended
+  lineage/record chronology is evaluated separately and is never inferred from
+  array position.
+- For every admitted complete record, its authoritative UTC instant is derived
+  only from a syntactically valid date/time/offset and must be less than or
+  equal to `collectedUtc` with zero synthetic tolerance. A timestamped
+  rotation's filename/value instant must be less than or equal to the earliest
+  admitted record instant in that member. Invalid/unknown offsets are
+  non-comparable coverage gaps: they receive no invented UTC, reordering, or
+  correlation.
 - Missing required evidence yields a role-scoped coverage gap and a minimal
   next artifact request. It does not yield a role-health finding.
 - `AccessDenied`, `Capped`, `Skipped`, `Unsupported`, and `ParseFailed` are

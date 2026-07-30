@@ -6,13 +6,15 @@
     "sameBasename": "MP_GetPolicy.log",
     "distinctPathFingerprints": true,
     "distinctOpaqueRootSegments": true,
+    "destinationsPrecomputed": true,
+    "atomicCreateNoOverwrite": true,
     "neitherOverwritten": true,
     "notMerged": true,
     "normalizedArtifactCount": 2,
     "exactReferencesResolve": true
   },
   "artifactProvenance": [
-    { "artifactId": "mp-policy-root-a-current", "encoding": "utf-8", "byteLimit": 4096, "limitApplied": false },
-    { "artifactId": "mp-policy-root-b-current", "encoding": "utf-8", "byteLimit": 4096, "limitApplied": false }
+    { "artifactId": "mp-policy-root-a-current", "encoding": "utf-8", "byteLimit": 4096, "limitApplied": false, "bytesCopied": 173 },
+    { "artifactId": "mp-policy-root-b-current", "encoding": "utf-8", "byteLimit": 4096, "limitApplied": false, "bytesCopied": 172 }
   ]
 }

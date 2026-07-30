@@ -16,12 +16,21 @@ Each scenario has `manifest.json` and `expected.json`. `Captured` and `Capped`
 artifacts also have minimal evidence at the exact bundle-relative path named by
 their manifest. `Absent`, `AccessDenied`, `Skipped`, and `Unsupported`
 artifacts have a null/omitted `relativePath`, zero `bytesCopied`, and no
-evidence placeholder. Artifact IDs are unique across every manifest artifact,
-captured or non-captured; non-null relative paths are also unique. Expected
-source lists are canonicalized by producer role/host, source ID, workflow
-subject, path fingerprint, rotation order, basename, then artifact ID. The
-expected data documents only intake classification/coverage and never a
-role-health or client-causality finding.
+evidence placeholder. Artifact IDs are unique across every artifact in one
+manifest/bundle, captured or non-captured; repeats across independent bundles
+are permitted. IDs derive from canonical producer/source/subject/path/
+basename/rotation identity, never discovery order. Non-null relative paths are
+also unique inside a bundle. Expected source lists use producer role/host,
+source ID, workflow subject, path fingerprint, explicit rotation family/value,
+lineage, basename, state, relative path, and artifact ID as a total order. This
+serialization order does not imply record chronology. The expected data
+documents only intake classification/coverage and never a role-health or
+client-causality finding.
+
+Evidence payloads are raw and bundle-internal. Public/exported evidence and
+derived values must cross the #318 redaction boundary; they may retain only
+approved opaque handles and statuses, never raw paths, hosts, identifiers, or
+unredacted content.
 
 The current preparation shape is provisional:
 
@@ -43,27 +52,51 @@ Validation must parse every JSON file and then walk every manifest artifact:
 - Every captured/capped artifact carries deterministic `encoding` and
   `collectionLimit` provenance; expected data repeats those assertions.
   Non-captured states omit those fields.
+- A byte limit is inclusive and applies to raw source bytes before decoding.
+  A capped file is the exact prefix through `byteLimit`, without decode-first
+  splitting, repair, or replacement; its raw file size and `bytesCopied` both
+  equal the limit, with `truncated: true` and `fragmentComplete: false`.
 - Complete captured records use all required CCM attributes (`time`, `date`,
   `component`, `context`, `type`, `thread`, and `file`) and contain
   `SYNTHETIC FIXTURE` inside the first record message. The deliberately capped
-  partial is marked non-parseable in expected data.
+  partial starts with a CCM prefix, contains the same marker, lacks terminal
+  framing, and produces zero complete/successful CCM records.
 - `Absent`/`AccessDenied`/`Skipped`/`Unsupported`: `relativePath` is null or
   omitted and `bytesCopied` is zero.
 - Every file beneath a scenario's `evidence/` tree is referenced by exactly one
   artifact. This rejects stale flat placeholders and unmanifested captures.
-- Complete record timestamps never exceed `collectedUtc`; timestamped rotation
-  names/values match their record instant. Unknown/invalid offsets remain
-  coverage gaps rather than receiving invented UTC.
+- Every admitted record with a valid offset has one authoritative normalized
+  UTC instant that never exceeds `collectedUtc` (zero synthetic tolerance).
+  A timestamped rotation filename/value is no later than that member's
+  earliest admitted record. Unknown/invalid offsets are non-comparable
+  coverage gaps: they are never assigned an invented UTC, reordered, or
+  correlated.
 - Producer role/host topology is distinct from optional workflow subject.
-  Known site-server control logs cannot be relabeled as DP/SUP producers.
+  `MP_GetAuth.log`, `MP_GetPolicy.log`, and `MP_Location.log` retain observed
+  MP/site-system placement; site-server-produced `mpcontrol.log` is a separate
+  catalog row. Ambiguous/co-located placement remains unresolved pending
+  native validation. Known site-server DP/SUP control logs cannot be relabeled
+  as DP/SUP producers.
 - The configured-root collision scenario has two same-basename artifacts with
   distinct fingerprints, opaque root segments, IDs, contents, and references.
-- Canonical artifact ordering, unique artifact IDs/paths, topology privacy
-  markers, top-level synthetic/proposal markers, redacted original paths, and
-  `synthetic:path:*` fingerprints remain stable.
+  The capped SUP path also carries deterministic subject-instance and root
+  discriminators. All identity keys/destinations are precomputed before
+  writes; destinations use atomic create/no-overwrite, and roots/instances
+  never normalize-merge.
+- Rotation rank is timestamped, numbered, `.lo_`, current, provider-defined,
+  then none; timestamps ascend, numbers descend, and lineage/basename/state/
+  relative-path/artifact-ID tie-breakers make reordering deterministic.
+- Canonical artifact ordering, manifest-scoped unique IDs/paths, topology
+  privacy markers, top-level synthetic/proposal markers, redacted original
+  paths, and `synthetic:path:*` fingerprints remain stable.
 
-The preparation report records the JSON/Node validation coverage and result.
-These checks remain non-compiling until #318 freezes the shared Rust contract.
+The local exact-byte coordinator parses all 22 JSON files, pressure-tests
+within-manifest duplicate rejection and cross-bundle ID reuse, precomputes
+identity/destination collisions, walks exact references/no-orphans, checks
+privacy/producer/chronology/total-order contracts, and validates raw byte
+counts before decoding. The ignored preparation report records its exact
+command and result. These checks remain independent of the future #318 Rust
+intake target.
 
 See `docs/sccm/preparation/issue-335-server-intake.md` for the source catalog,
 native capture-adapter design, matrix, and exact #318 dependency decisions.

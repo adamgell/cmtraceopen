@@ -2,6 +2,9 @@
   "pre318ExpectedVersion": 1,
   "canonicalArtifactIds": ["a-mp-policy", "b-sitecomp", "z-site-status"],
   "normalizedOutputByteIdenticalWhenReordered": true,
+  "artifactIdDerivationIgnoresDiscoveryOrder": true,
+  "artifactIdUniquenessScope": "manifest",
+  "crossBundleArtifactIdReuseAllowed": true,
   "deterministicEvidenceIds": "pending #318 deterministic evidence contract",
   "coverage": [
     { "producerRole": "managementPoint", "sourceId": "server-mp-policy", "state": "captured" },
