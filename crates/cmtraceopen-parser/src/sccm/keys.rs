@@ -245,6 +245,10 @@ fn find_candidates(message: &str) -> Vec<KeyCandidate<'_>> {
         .iter()
         .flat_map(|pattern| {
             pattern.regex.captures_iter(message).filter_map(|captures| {
+                let matched = captures.get(0)?;
+                if !is_key_label_start(message, matched.start()) {
+                    return None;
+                }
                 let value = captures.name("value")?;
                 let raw_end = candidate_token_end(message, value.end());
                 let raw = &message[value.start()..raw_end];
@@ -273,6 +277,14 @@ fn find_candidates(message: &str) -> Vec<KeyCandidate<'_>> {
             && right.end == left.end
     });
     candidates
+}
+
+fn is_key_label_start(message: &str, label_start: usize) -> bool {
+    label_start == 0
+        || message[..label_start]
+            .chars()
+            .next_back()
+            .is_some_and(is_key_token_boundary)
 }
 
 fn candidate_token_end(message: &str, captured_end: usize) -> usize {

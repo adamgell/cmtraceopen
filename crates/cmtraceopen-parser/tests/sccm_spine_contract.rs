@@ -575,22 +575,161 @@ fn key_extraction_requires_a_full_token_boundary_for_every_declared_kind() {
 }
 
 #[test]
+fn key_extraction_rejects_every_label_inside_a_preceding_malformed_token() {
+    let second_labels = [
+        (
+            SccmCorrelationKeyKind::AssignmentId,
+            "assignment id={ABCDEFAB-0000-0000-0000-000000000001}",
+        ),
+        (
+            SccmCorrelationKeyKind::ClientGuid,
+            "client guid=GUID:{ABCDEFAB-0000-0000-0000-000000000002}",
+        ),
+        (SccmCorrelationKeyKind::PackageId, "package id=LAB00002"),
+        (SccmCorrelationKeyKind::ContentId, "content id=ContentABC"),
+        (SccmCorrelationKeyKind::SiteCode, "site code=LAB"),
+        (
+            SccmCorrelationKeyKind::ServerHost,
+            "server host=mp01.lab.local",
+        ),
+        (SccmCorrelationKeyKind::CiId, "ci id=42"),
+        (
+            SccmCorrelationKeyKind::UpdateId,
+            "update id={ABCDEFAB-0000-0000-0000-000000000003}",
+        ),
+        (SccmCorrelationKeyKind::KbId, "kb id=KB5034441"),
+        (
+            SccmCorrelationKeyKind::BitsJobId,
+            "bits job id={ABCDEFAB-0000-0000-0000-000000000004}",
+        ),
+        (
+            SccmCorrelationKeyKind::TaskSequenceExecutionId,
+            "task sequence execution id={ABCDEFAB-0000-0000-0000-000000000005}",
+        ),
+        (
+            SccmCorrelationKeyKind::RequestId,
+            "request id={ABCDEFAB-0000-0000-0000-000000000006}",
+        ),
+        (
+            SccmCorrelationKeyKind::TopicId,
+            "topic id={ABCDEFAB-0000-0000-0000-000000000007}",
+        ),
+        (
+            SccmCorrelationKeyKind::StateMessageId,
+            "state message id=71",
+        ),
+    ];
+    let forbidden_delimiters = ["/", ":", "+"];
+    let profile = SccmExtractionProfile::for_version(Some("5.00.9128.1007"));
+    let mut violations = Vec::new();
+
+    for (index, (second_kind, second_label)) in second_labels.into_iter().enumerate() {
+        let delimiter = forbidden_delimiters[index % forbidden_delimiters.len()];
+        let message = format!("package id=LAB00001{delimiter}{second_label}");
+        let malformed_raw = format!(
+            "LAB00001{delimiter}{}",
+            second_label.split_whitespace().next().unwrap()
+        );
+        let evidence = evidence_with_message(&message);
+        let first = extract_keys(&evidence, &profile);
+        let second = extract_keys(&evidence, &profile);
+        let malformed = first
+            .gaps
+            .iter()
+            .filter(|gap| gap.kind == SccmExtractionGapKind::MalformedCandidate)
+            .map(|gap| {
+                (
+                    gap.candidate_kind.clone(),
+                    gap.candidate_raw.as_deref(),
+                    gap.evidence.clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let expected_malformed = vec![(
+            Some(SccmCorrelationKeyKind::PackageId),
+            Some(malformed_raw.as_str()),
+            evidence.reference.clone(),
+        )];
+
+        if first != second || !first.keys.is_empty() || malformed != expected_malformed {
+            violations.push(format!("{second_kind:?}: {message}: {first:?}"));
+        }
+    }
+
+    for (message, malformed_kind, malformed_raw) in [
+        (
+            "assignment id={ABCDEFAB-0000-0000-0000-000000000001}}content id=ContentABC",
+            SccmCorrelationKeyKind::AssignmentId,
+            "{ABCDEFAB-0000-0000-0000-000000000001}}content",
+        ),
+        (
+            "package id=LAB00001écontent id=ContentABC",
+            SccmCorrelationKeyKind::PackageId,
+            "LAB00001écontent",
+        ),
+    ] {
+        let result = extract_keys(&evidence_with_message(message), &profile);
+        let malformed = result
+            .gaps
+            .iter()
+            .find(|gap| gap.kind == SccmExtractionGapKind::MalformedCandidate);
+        if !result.keys.is_empty()
+            || malformed.and_then(|gap| gap.candidate_kind.clone()) != Some(malformed_kind)
+            || malformed.and_then(|gap| gap.candidate_raw.as_deref()) != Some(malformed_raw)
+        {
+            violations.push(format!("{message}: {result:?}"));
+        }
+    }
+
+    let unvalidated_evidence = evidence_with_message("package id=LAB00001/content id=ContentABC");
+    let unvalidated = extract_keys(
+        &unvalidated_evidence,
+        &SccmExtractionProfile::for_version(Some("unobserved-version")),
+    );
+    if !unvalidated.keys.is_empty()
+        || unvalidated.gaps.len() != 1
+        || unvalidated.gaps[0].kind != SccmExtractionGapKind::UnvalidatedVersion
+        || unvalidated.gaps[0].candidate_kind != Some(SccmCorrelationKeyKind::PackageId)
+        || unvalidated.gaps[0].candidate_raw.as_deref() != Some("LAB00001/content")
+        || unvalidated.gaps[0].evidence != unvalidated_evidence.reference
+    {
+        violations.push(format!("unvalidated profile: {unvalidated:?}"));
+    }
+
+    assert!(
+        violations.is_empty(),
+        "labels escaped from malformed tokens:\n{}",
+        violations.join("\n")
+    );
+}
+
+#[test]
 fn key_extraction_accepts_the_declared_full_token_boundaries() {
     let profile = SccmExtractionProfile::for_version(Some("5.00.9128.1007"));
 
-    for message in [
-        "package id=LAB00001",
-        "package id=LAB00001 next",
-        "package id=LAB00001\nnext",
-        "package id=LAB00001,next",
-        "package id=LAB00001;next",
-        "package id=LAB00001&next",
-    ] {
-        let result = extract_keys(&evidence_with_message(message), &profile);
+    for separator in [" ", "\n", "\t", ",", ";", "&"] {
+        let message = format!("😀 package id=LAB00001{separator}content id=ContentABC");
+        let result = extract_keys(&evidence_with_message(&message), &profile);
 
-        assert_eq!(result.keys.len(), 1, "{message:?}");
+        assert_eq!(result.keys.len(), 2, "{message:?}");
+        assert_eq!(result.keys[0].kind, SccmCorrelationKeyKind::PackageId);
         assert_eq!(result.keys[0].raw, "LAB00001", "{message:?}");
-        assert_eq!(result.keys[0].confidence, SccmKeyConfidence::Low);
+        assert_eq!(result.keys[1].kind, SccmCorrelationKeyKind::ContentId);
+        assert_eq!(result.keys[1].raw, "ContentABC", "{message:?}");
+        assert!(result
+            .keys
+            .iter()
+            .all(|key| key.confidence == SccmKeyConfidence::Low));
+        for key in &result.keys {
+            let byte_start = message.find(&key.raw).unwrap();
+            let expected_start = message[..byte_start].encode_utf16().count();
+            assert_eq!(key.start, Some(expected_start), "{message:?}");
+            assert_eq!(
+                key.end,
+                Some(expected_start + key.raw.encode_utf16().count()),
+                "{message:?}"
+            );
+        }
         assert!(result
             .gaps
             .iter()
