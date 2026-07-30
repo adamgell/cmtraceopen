@@ -99,6 +99,17 @@ json.dump(overlay, sys.stdout)
 '
 )
 
+# ── Write config overlay to a temp file ────────────────────────────────────
+# `tauri build --config` expects a file path, not an inline JSON string.
+CONFIG_FILE=$(mktemp "${TMPDIR:-/tmp}/cmtrace_tauri_conf_XXXXXX.json")
+printf '%s' "${CONFIG_OVERLAY}" > "${CONFIG_FILE}"
+
+# Determine build profile (release unless --debug is in the forwarded args).
+BUILD_PROFILE="release"
+for arg in "$@"; do
+    [[ "$arg" == "--debug" ]] && BUILD_PROFILE="debug"
+done
+
 # ── Echo plan ──────────────────────────────────────────────────────────────
 echo "──────────────────────────────────────────────────────────────────"
 echo "  CMTrace Open: signed macOS build"
@@ -112,8 +123,14 @@ echo "────────────────────────�
 # Tauri reads APPLE_API_KEY*, APPLE_ID/PASSWORD/TEAM_ID directly from the
 # environment for notarization. We pass the signing identity via --config
 # so it overrides the on-disk default of "-".
+
+# Capture a reference timestamp immediately before the build so the
+# soft-fail artifact-freshness check can use BSD-compatible `find -newer`.
+BUILD_STAMP=$(mktemp "${TMPDIR:-/tmp}/cmtrace_build_stamp_XXXXXX")
+trap 'rm -f "${CONFIG_FILE}" "${BUILD_STAMP}"' EXIT
+
 set +e
-npx tauri build --config "${CONFIG_OVERLAY}" "$@"
+npx tauri build --config "${CONFIG_FILE}" "$@"
 TAURI_EXIT=$?
 set -e
 
@@ -125,17 +142,30 @@ set -e
 # the deliverables this script cares about; updater-bundle signing is only
 # relevant if you're publishing to the auto-update endpoint.
 if [[ $TAURI_EXIT -ne 0 ]]; then
-    DMG_PATH=$(find "${REPO_ROOT}/src-tauri/target/release/bundle/dmg" \
-        -maxdepth 1 -name "*.dmg" -mmin -10 2>/dev/null | head -1)
-    APP_PATH=$(find "${REPO_ROOT}/src-tauri/target/release/bundle/macos" \
-        -maxdepth 1 -name "*.app" -type d -mmin -10 2>/dev/null | head -1)
+    # Use -newer (BSD find compatible) against the pre-build stamp to avoid
+    # matching stale artifacts from a previous run.  Honour the correct profile
+    # directory so --debug builds are detected as well as --release.
+    DMG_PATH=$(find "${REPO_ROOT}/src-tauri/target/${BUILD_PROFILE}/bundle/dmg" \
+        -maxdepth 1 -name "*.dmg" -newer "${BUILD_STAMP}" 2>/dev/null | head -1)
+    APP_PATH=$(find "${REPO_ROOT}/src-tauri/target/${BUILD_PROFILE}/bundle/macos" \
+        -maxdepth 1 -name "*.app" -type d -newer "${BUILD_STAMP}" 2>/dev/null | head -1)
 
+    # Validate code-signature (codesign works for signed-but-not-notarized
+    # builds; add stapler check only when notarization was attempted).
+    SIGNING_OK=false
     if [[ -n "$DMG_PATH" && -n "$APP_PATH" ]] \
-        && xcrun stapler validate "$APP_PATH" >/dev/null 2>&1; then
+        && codesign --verify --deep --strict "$APP_PATH" >/dev/null 2>&1; then
+        SIGNING_OK=true
+        if [[ "${NOTARIZE_MODE}" != "none" ]]; then
+            xcrun stapler validate "$APP_PATH" >/dev/null 2>&1 || SIGNING_OK=false
+        fi
+    fi
+
+    if [[ "$SIGNING_OK" == "true" ]]; then
         cat >&2 <<EOF
 warning: tauri build exited ${TAURI_EXIT}, but the signed .app and .dmg are
-         present and the notarization ticket validated. The exit code is
-         from the updater-bundle signing step (TAURI_SIGNING_PRIVATE_KEY).
+         present and the signature is valid. The exit code is from the
+         updater-bundle signing step (TAURI_SIGNING_PRIVATE_KEY).
          Treating as success.
 EOF
         echo
