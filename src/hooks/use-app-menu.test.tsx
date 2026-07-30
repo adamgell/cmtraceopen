@@ -68,7 +68,12 @@ const actionMocks = vi.hoisted(() => ({
     resetLogListTextSize: vi.fn(),
     switchWorkspace: vi.fn(),
     dismissTransientDialogs: vi.fn(),
+    openRecentEntry: vi.fn(async () => undefined),
   },
+}));
+
+const recentMocks = vi.hoisted(() => ({
+  clearRecentEntries: vi.fn(async () => undefined),
 }));
 
 vi.mock("@tauri-apps/api/event", () => ({
@@ -79,6 +84,10 @@ vi.mock("./use-app-actions", () => ({
   useAppActions: () => actionMocks.current,
 }));
 
+vi.mock("../lib/recent-entries", () => ({
+  clearRecentEntries: recentMocks.clearRecentEntries,
+}));
+
 interface TestMenuPayload {
   version: number;
   menu_id: string;
@@ -87,6 +96,9 @@ interface TestMenuPayload {
   trigger: string;
   source_id: string | null;
   target_id: string | null;
+  path?: string;
+  workspace?: string;
+  kind?: "file" | "folder";
 }
 
 const initialCommandState = { ...actionMocks.current.commandState };
@@ -334,6 +346,88 @@ describe("useAppMenu", () => {
       "[app-menu] rejected unavailable workspace target",
       expect.any(Object),
     );
+  });
+
+  it("opens a recent entry in its recorded workspace", async () => {
+    renderHook(() => useAppMenu());
+    await waitFor(() => expect(eventMocks.state.callback).not.toBeNull());
+
+    useUiStore.setState({
+      currentPlatform: "windows",
+      enabledWorkspaces: ["log", "esp-diagnostics"],
+    });
+
+    await emitMenuAction({
+      action: "open_recent_entry",
+      menu_id: "recent.2.a1b2c3d4",
+      category: "file",
+      target_id: "2",
+      path: "/evidence/IME/IntuneManagementExtension.log",
+      workspace: "esp-diagnostics",
+      kind: "file",
+    });
+
+    expect(actionMocks.current.openRecentEntry).toHaveBeenCalledWith(
+      "/evidence/IME/IntuneManagementExtension.log",
+      "file",
+      "esp-diagnostics",
+      "menu",
+    );
+  });
+
+  it("ignores an open_recent_entry payload missing its resolved fields", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    renderHook(() => useAppMenu());
+    await waitFor(() => expect(eventMocks.state.callback).not.toBeNull());
+
+    await emitMenuAction({
+      action: "open_recent_entry",
+      menu_id: "recent.2.a1b2c3d4",
+      category: "file",
+      target_id: "2",
+    });
+
+    expect(actionMocks.current.openRecentEntry).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it("rejects a recent entry whose workspace is unavailable on this platform", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    renderHook(() => useAppMenu());
+    await waitFor(() => expect(eventMocks.state.callback).not.toBeNull());
+
+    useUiStore.setState({
+      currentPlatform: "macos",
+      enabledWorkspaces: ["log"],
+    });
+
+    await emitMenuAction({
+      action: "open_recent_entry",
+      menu_id: "recent.0.a1b2c3d4",
+      category: "file",
+      target_id: "0",
+      path: "/evidence/sysmon.evtx",
+      workspace: "sysmon",
+      kind: "file",
+    });
+
+    expect(actionMocks.current.openRecentEntry).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it("clears recent entries", async () => {
+    renderHook(() => useAppMenu());
+    await waitFor(() => expect(eventMocks.state.callback).not.toBeNull());
+
+    await emitMenuAction({
+      action: "clear_recent_entries",
+      menu_id: "file.recent.clear",
+      category: "file",
+    });
+
+    expect(recentMocks.clearRecentEntries).toHaveBeenCalled();
   });
 });
 
