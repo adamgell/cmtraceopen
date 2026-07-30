@@ -1,0 +1,242 @@
+{
+  "contractState": "proposedPending318",
+  "workflow": "updates",
+  "scenario": "success",
+  "stateChain": [
+    "scan",
+    "evaluate",
+    "locateSup",
+    "download",
+    "maintenanceWindow",
+    "install",
+    "reboot",
+    "report"
+  ],
+  "analysisContract": {
+    "independentReducer": true,
+    "consumesOtherReducerOutput": false,
+    "policyOutputRequired": false,
+    "crossSideCorrelationPerformed": false
+  },
+  "extractionProfile": {
+    "selectionState": "selected",
+    "profileId": "updates-client-5.00.test-v1",
+    "sourceVersionPrefix": "5.00.TEST.",
+    "keyKinds": [
+      "updateId",
+      "ciId",
+      "contentId",
+      "updateJobId",
+      "clientSafeHandle",
+      "siteCode",
+      "supHostHandle"
+    ],
+    "validatedArtifactFamilies": [
+      "client-content",
+      "client-location-services-shared",
+      "client-maintenance-window",
+      "client-policy-state",
+      "client-reboot",
+      "client-updates"
+    ]
+  },
+  "reorderedInputDeterministic": true,
+  "coverage": [
+    {
+      "logicalArtifactId": "client-content",
+      "state": "captured"
+    },
+    {
+      "logicalArtifactId": "client-location-services-shared",
+      "state": "captured"
+    },
+    {
+      "logicalArtifactId": "client-maintenance-window",
+      "state": "captured"
+    },
+    {
+      "logicalArtifactId": "client-policy-state",
+      "state": "captured"
+    },
+    {
+      "logicalArtifactId": "client-reboot",
+      "state": "captured"
+    },
+    {
+      "logicalArtifactId": "client-updates",
+      "state": "captured"
+    },
+    {
+      "logicalArtifactId": "client-windows-update-supplemental",
+      "state": "skipped"
+    }
+  ],
+  "artifactProvenance": [
+    {
+      "artifactId": "updates-success-01-scan",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "byteLimit": 4096,
+      "limitApplied": false
+    },
+    {
+      "artifactId": "updates-success-02-sup",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "byteLimit": 4096,
+      "limitApplied": false
+    },
+    {
+      "artifactId": "updates-success-03-download",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "byteLimit": 4096,
+      "limitApplied": false
+    },
+    {
+      "artifactId": "updates-success-04-window",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "byteLimit": 4096,
+      "limitApplied": false
+    },
+    {
+      "artifactId": "updates-success-05-install",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "byteLimit": 4096,
+      "limitApplied": false
+    },
+    {
+      "artifactId": "updates-success-06-reboot",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "byteLimit": 4096,
+      "limitApplied": false
+    },
+    {
+      "artifactId": "updates-success-07-report",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "byteLimit": 4096,
+      "limitApplied": false
+    },
+    {
+      "artifactId": "updates-success-08-supplemental-skipped",
+      "captureState": "skipped",
+      "encoding": null,
+      "byteLimit": null,
+      "limitApplied": false
+    }
+  ],
+  "transactions": [
+    {
+      "transactionId": "updates:update:32300000-0000-0000-0000-000000000001",
+      "key": {
+        "updateId": "32300000-0000-0000-0000-000000000001",
+        "ciId": "CI-UPDATE-01",
+        "contentId": "CONTENT-UPDATE-01",
+        "updateJobId": "JOB-UPDATE-01",
+        "clientHandle": "safe:client:updates-01",
+        "siteCode": "LAB",
+        "supHostHandle": "safe:sup:lab-sup-01",
+        "confidence": "exact",
+        "extractionProfileId": "updates-client-5.00.test-v1"
+      },
+      "phase": "report",
+      "state": "succeeded",
+      "lastSuccessfulPhase": "report",
+      "classification": "success",
+      "confidence": "high",
+      "confidenceCeiling": "high",
+      "coverageGapArtifactIds": [],
+      "nextArtifact": null,
+      "evidence": [
+        {
+          "artifactId": "updates-success-01-scan",
+          "startLine": 1,
+          "endLine": 2
+        },
+        {
+          "artifactId": "updates-success-02-sup",
+          "startLine": 1,
+          "endLine": 1
+        },
+        {
+          "artifactId": "updates-success-03-download",
+          "startLine": 1,
+          "endLine": 1
+        },
+        {
+          "artifactId": "updates-success-04-window",
+          "startLine": 1,
+          "endLine": 1
+        },
+        {
+          "artifactId": "updates-success-05-install",
+          "startLine": 1,
+          "endLine": 1
+        },
+        {
+          "artifactId": "updates-success-06-reboot",
+          "startLine": 1,
+          "endLine": 1
+        },
+        {
+          "artifactId": "updates-success-07-report",
+          "startLine": 1,
+          "endLine": 1
+        }
+      ]
+    }
+  ],
+  "sourceLocalObservations": [],
+  "findings": [],
+  "correlationHandoff": {
+    "issue": "#333",
+    "serverPrerequisiteIssue": "#330",
+    "performed": false,
+    "timeOnlyEligible": false,
+    "topologyCompatibilityEvaluated": false,
+    "serverCauseClaimed": false,
+    "nativeAcceptanceClaimed": false,
+    "bundleCaptureHostUsedAsSupEvidence": false,
+    "counterpartReadyKeyKinds": [
+      "updateId",
+      "ciId",
+      "contentId",
+      "updateJobId",
+      "clientSafeHandle",
+      "siteCode",
+      "supHostHandle"
+    ],
+    "emittedCounterpartReadyFact": true,
+    "counterpartReadyFacts": [
+      {
+        "updateId": "32300000-0000-0000-0000-000000000001",
+        "ciId": "CI-UPDATE-01",
+        "contentId": "CONTENT-UPDATE-01",
+        "updateJobId": "JOB-UPDATE-01",
+        "clientHandle": "safe:client:updates-01",
+        "siteCode": "LAB",
+        "supHostHandle": "safe:sup:lab-sup-01",
+        "keyConfidence": "exact",
+        "correlationEligible": true,
+        "timeOnlyEligible": false,
+        "phase": "locateSup",
+        "extractionProfileId": "updates-client-5.00.test-v1",
+        "evidence": {
+          "artifactId": "updates-success-02-sup",
+          "startLine": 1,
+          "endLine": 1
+        }
+      }
+    ]
+  },
+  "prohibitedClaims": [
+    "SUP or server root cause",
+    "time-only cross-artifact causality",
+    "policy reducer dependency",
+    "native Windows acceptance"
+  ]
+}

@@ -1,0 +1,171 @@
+{
+  "contractState": "proposedPending318",
+  "workflow": "updates",
+  "scenario": "supplemental-conflict",
+  "stateChain": [
+    "scan",
+    "evaluate",
+    "locateSup",
+    "download",
+    "maintenanceWindow",
+    "install",
+    "reboot",
+    "report"
+  ],
+  "analysisContract": {
+    "independentReducer": true,
+    "consumesOtherReducerOutput": false,
+    "policyOutputRequired": false,
+    "crossSideCorrelationPerformed": false
+  },
+  "extractionProfile": {
+    "selectionState": "selected",
+    "profileId": "updates-client-5.00.test-v1",
+    "sourceVersionPrefix": "5.00.TEST.",
+    "keyKinds": [
+      "updateId",
+      "ciId",
+      "contentId",
+      "updateJobId",
+      "clientSafeHandle",
+      "siteCode",
+      "supHostHandle"
+    ],
+    "validatedArtifactFamilies": [
+      "client-updates",
+      "client-windows-update-supplemental"
+    ]
+  },
+  "reorderedInputDeterministic": true,
+  "coverage": [
+    {
+      "logicalArtifactId": "client-updates",
+      "state": "captured"
+    },
+    {
+      "logicalArtifactId": "client-windows-update-supplemental",
+      "state": "captured"
+    }
+  ],
+  "artifactProvenance": [
+    {
+      "artifactId": "updates-supplemental-conflict-01-install",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "byteLimit": 4096,
+      "limitApplied": false
+    },
+    {
+      "artifactId": "updates-supplemental-conflict-02-cbs",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "byteLimit": 4096,
+      "limitApplied": false
+    }
+  ],
+  "transactions": [
+    {
+      "transactionId": "updates:update:32300000-0000-0000-0000-000000000017",
+      "key": {
+        "updateId": "32300000-0000-0000-0000-000000000017",
+        "ciId": "CI-UPDATE-17",
+        "contentId": "CONTENT-UPDATE-17",
+        "updateJobId": "JOB-UPDATE-17",
+        "clientHandle": "safe:client:updates-17",
+        "siteCode": "LAB",
+        "supHostHandle": "safe:sup:lab-sup-01",
+        "confidence": "exact",
+        "extractionProfileId": "updates-client-5.00.test-v1"
+      },
+      "phase": "install",
+      "state": "succeeded",
+      "lastSuccessfulPhase": "install",
+      "classification": "success",
+      "confidence": "high",
+      "confidenceCeiling": "high",
+      "coverageGapArtifactIds": [],
+      "nextArtifact": null,
+      "evidence": [
+        {
+          "artifactId": "updates-supplemental-conflict-01-install",
+          "startLine": 1,
+          "endLine": 1
+        }
+      ]
+    }
+  ],
+  "sourceLocalObservations": [
+    {
+      "observationId": "updates:source-local:supplemental-conflict",
+      "key": null,
+      "keyConfidence": "none",
+      "phase": "install",
+      "state": "contradictory",
+      "classification": "lowConfidenceSymptom",
+      "confidence": "low",
+      "confidenceCeiling": "low",
+      "correlationEligible": false,
+      "lastSuccessfulPhase": "install",
+      "nextArtifact": {
+        "logicalArtifactId": "client-windows-update-supplemental",
+        "reason": "Collect the smallest bounded client-windows-update-supplemental continuation for this exact update subject."
+      },
+      "evidence": [
+        {
+          "artifactId": "updates-supplemental-conflict-02-cbs",
+          "startLine": 1,
+          "endLine": 1
+        }
+      ]
+    }
+  ],
+  "findings": [
+    {
+      "findingId": "finding:updates:supplemental-conflict",
+      "subjectId": "updates:source-local:supplemental-conflict",
+      "class": "lowConfidenceSymptom",
+      "phase": "install",
+      "lastSuccessfulPhase": "install",
+      "confidence": "low",
+      "confidenceCeiling": "low",
+      "nextArtifact": {
+        "logicalArtifactId": "client-windows-update-supplemental",
+        "reason": "Collect the smallest bounded client-windows-update-supplemental continuation for this exact update subject."
+      },
+      "evidence": [
+        {
+          "artifactId": "updates-supplemental-conflict-02-cbs",
+          "startLine": 1,
+          "endLine": 1
+        }
+      ]
+    }
+  ],
+  "correlationHandoff": {
+    "issue": "#333",
+    "serverPrerequisiteIssue": "#330",
+    "performed": false,
+    "timeOnlyEligible": false,
+    "topologyCompatibilityEvaluated": false,
+    "serverCauseClaimed": false,
+    "nativeAcceptanceClaimed": false,
+    "bundleCaptureHostUsedAsSupEvidence": false,
+    "counterpartReadyKeyKinds": [
+      "updateId",
+      "ciId",
+      "contentId",
+      "updateJobId",
+      "clientSafeHandle",
+      "siteCode",
+      "supHostHandle"
+    ],
+    "emittedCounterpartReadyFact": false,
+    "counterpartReadyFacts": []
+  },
+  "prohibitedClaims": [
+    "SUP or server root cause",
+    "time-only cross-artifact causality",
+    "policy reducer dependency",
+    "native Windows acceptance"
+  ]
+}

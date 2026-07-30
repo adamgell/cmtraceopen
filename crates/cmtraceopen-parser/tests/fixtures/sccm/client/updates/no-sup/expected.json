@@ -1,0 +1,151 @@
+{
+  "contractState": "proposedPending318",
+  "workflow": "updates",
+  "scenario": "no-sup",
+  "stateChain": [
+    "scan",
+    "evaluate",
+    "locateSup",
+    "download",
+    "maintenanceWindow",
+    "install",
+    "reboot",
+    "report"
+  ],
+  "analysisContract": {
+    "independentReducer": true,
+    "consumesOtherReducerOutput": false,
+    "policyOutputRequired": false,
+    "crossSideCorrelationPerformed": false
+  },
+  "extractionProfile": {
+    "selectionState": "selected",
+    "profileId": "updates-client-5.00.test-v1",
+    "sourceVersionPrefix": "5.00.TEST.",
+    "keyKinds": [
+      "updateId",
+      "ciId",
+      "contentId",
+      "updateJobId",
+      "clientSafeHandle",
+      "siteCode",
+      "supHostHandle"
+    ],
+    "validatedArtifactFamilies": [
+      "client-updates"
+    ]
+  },
+  "reorderedInputDeterministic": true,
+  "coverage": [
+    {
+      "logicalArtifactId": "client-location-services-shared",
+      "state": "absent"
+    },
+    {
+      "logicalArtifactId": "client-updates",
+      "state": "captured"
+    }
+  ],
+  "artifactProvenance": [
+    {
+      "artifactId": "updates-no-sup-01-scan",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "byteLimit": 4096,
+      "limitApplied": false
+    },
+    {
+      "artifactId": "updates-no-sup-02-sup-absent",
+      "captureState": "absent",
+      "encoding": null,
+      "byteLimit": null,
+      "limitApplied": false
+    }
+  ],
+  "transactions": [
+    {
+      "transactionId": "updates:update:32300000-0000-0000-0000-000000000002",
+      "key": {
+        "updateId": "32300000-0000-0000-0000-000000000002",
+        "ciId": "CI-UPDATE-02",
+        "contentId": "CONTENT-UPDATE-02",
+        "updateJobId": "JOB-UPDATE-02",
+        "clientHandle": "safe:client:updates-02",
+        "siteCode": "LAB",
+        "supHostHandle": "safe:sup:lab-sup-01",
+        "confidence": "exact",
+        "extractionProfileId": "updates-client-5.00.test-v1"
+      },
+      "phase": "locateSup",
+      "state": "incomplete",
+      "lastSuccessfulPhase": "evaluate",
+      "classification": "insufficientEvidence",
+      "confidence": "medium",
+      "confidenceCeiling": "medium",
+      "coverageGapArtifactIds": [
+        "client-location-services-shared"
+      ],
+      "nextArtifact": {
+        "logicalArtifactId": "client-location-services-shared",
+        "reason": "Collect the smallest bounded client-location-services-shared continuation for this exact update subject."
+      },
+      "evidence": [
+        {
+          "artifactId": "updates-no-sup-01-scan",
+          "startLine": 1,
+          "endLine": 2
+        }
+      ]
+    }
+  ],
+  "sourceLocalObservations": [],
+  "findings": [
+    {
+      "findingId": "finding:updates:no-sup",
+      "subjectId": "updates:update:32300000-0000-0000-0000-000000000002",
+      "class": "insufficientEvidence",
+      "phase": "locateSup",
+      "lastSuccessfulPhase": "evaluate",
+      "confidence": "medium",
+      "confidenceCeiling": "medium",
+      "nextArtifact": {
+        "logicalArtifactId": "client-location-services-shared",
+        "reason": "Collect the smallest bounded client-location-services-shared continuation for this exact update subject."
+      },
+      "evidence": [
+        {
+          "artifactId": "updates-no-sup-01-scan",
+          "startLine": 1,
+          "endLine": 2
+        }
+      ]
+    }
+  ],
+  "correlationHandoff": {
+    "issue": "#333",
+    "serverPrerequisiteIssue": "#330",
+    "performed": false,
+    "timeOnlyEligible": false,
+    "topologyCompatibilityEvaluated": false,
+    "serverCauseClaimed": false,
+    "nativeAcceptanceClaimed": false,
+    "bundleCaptureHostUsedAsSupEvidence": false,
+    "counterpartReadyKeyKinds": [
+      "updateId",
+      "ciId",
+      "contentId",
+      "updateJobId",
+      "clientSafeHandle",
+      "siteCode",
+      "supHostHandle"
+    ],
+    "emittedCounterpartReadyFact": false,
+    "counterpartReadyFacts": []
+  },
+  "prohibitedClaims": [
+    "SUP or server root cause",
+    "time-only cross-artifact causality",
+    "policy reducer dependency",
+    "native Windows acceptance"
+  ]
+}

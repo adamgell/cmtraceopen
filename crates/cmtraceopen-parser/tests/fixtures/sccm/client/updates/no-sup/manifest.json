@@ -1,0 +1,66 @@
+{
+  "sccmManifestVersion": 1,
+  "proposalOnly": true,
+  "syntheticFixture": true,
+  "bundle": {
+    "role": "client",
+    "workflow": "updates",
+    "captureHost": "LAB-CLIENT-01",
+    "siteCode": "LAB",
+    "artifactOrder": "artifactId",
+    "rotationOrder": "current,lo,numeric-ascending,timestamp-ascending"
+  },
+  "artifacts": [
+    {
+      "artifactId": "updates-no-sup-01-scan",
+      "designOnlyCatalog": {
+        "entryId": "client-updates",
+        "groupMemberships": [
+          "client-updates"
+        ]
+      },
+      "role": "client",
+      "kind": "ccmLog",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "collectionLimit": {
+        "byteLimit": 4096,
+        "limitApplied": false
+      },
+      "originalBasename": "ScanAgent.log",
+      "sanitizedSourcePath": "SYNTHETIC://root-a/CCM/Logs/ScanAgent.log",
+      "pathFingerprint": "synthetic:updates-no-sup-01-scan",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "sourceVersion": "5.00.TEST.0000",
+      "capturedUtc": "2026-07-30T03:59:59Z",
+      "bytesCopied": 769,
+      "relativePath": "evidence/client-updates/current/ScanAgent.log"
+    },
+    {
+      "artifactId": "updates-no-sup-02-sup-absent",
+      "designOnlyCatalog": {
+        "entryId": "client-location-services-shared",
+        "groupMemberships": [
+          "client-location-services-shared"
+        ]
+      },
+      "role": "client",
+      "kind": "ccmLog",
+      "captureState": "absent",
+      "originalBasename": "LocationServices.log",
+      "sanitizedSourcePath": null,
+      "pathFingerprint": null,
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": false
+      },
+      "sourceVersion": null,
+      "capturedUtc": "2026-07-30T03:59:59Z",
+      "bytesCopied": 0,
+      "relativePath": null
+    }
+  ]
+}
