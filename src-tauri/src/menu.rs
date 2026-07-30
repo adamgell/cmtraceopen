@@ -285,6 +285,12 @@ const WORKSPACE_DESCRIPTORS: &[WorkspaceDescriptor] = &[
         platform: WorkspacePlatform::All,
     },
     WorkspaceDescriptor {
+        id: "macos-jamf",
+        label: "macOS JAMF",
+        group: WorkspaceGroup::EndpointManagement,
+        platform: WorkspacePlatform::Macos,
+    },
+    WorkspaceDescriptor {
         id: "dsregcmd",
         label: "dsregcmd",
         group: WorkspaceGroup::EndpointManagement,
@@ -1937,7 +1943,7 @@ mod tests {
                 ("Analysis", vec!["log", "event-log", "timeline"]),
                 (
                     "Endpoint Management",
-                    vec!["intune", "new-intune", "esp-diagnostics"],
+                    vec!["intune", "new-intune", "esp-diagnostics", "macos-jamf"],
                 ),
                 (
                     "System & Security",
