@@ -2,7 +2,7 @@
   "name": "cmtrace-open",
   "version": "1.5.0",
   "private": true,
-  "description": "Open-source CMTrace log viewer with built-in Intune diagnostics",
+  "description": "Free, open-source CMTrace replacement: Windows log viewer with ConfigMgr/SCCM, Intune, and Autopilot ESP diagnostics",
   "scripts": {
     "frontend:dev": "vite",
     "frontend:build": "tsc && vite build",
