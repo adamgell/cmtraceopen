@@ -109,7 +109,11 @@ The corpus has 12 scenarios, 36 artifacts, and 33 evidence files totaling
 exactly 16,840 bytes. Capture states are 32 captured, one capped, one
 access-denied, and two absent. The path-and-artifact-qualified evidence content
 digest is SHA-256
-`da2191c7c103dfd829a5b725d8a08434229a2f36670e83185a8d279123ec3f12`.
+`27e0f8b6fab7bc584902718229824a45bdab9d1c9c78601e04f9d571e34c5c53`.
+The checked-in Rust contract hashes each physical file, builds sorted rows as
+`scenario NUL artifactId NUL relativePath NUL fileSha256 LF`, then hashes the
+concatenated rows. This binds both identity and bytes rather than relying on
+file length.
 
 ## Supplemental and unknown evidence
 
@@ -152,14 +156,17 @@ live ConfigMgr compatibility, or SCCM Server lab acceptance.
 
 ## Replay gates
 
-Run the preparation contract and exact corpus validator:
+Run the checked-in preparation contract:
 
 ```bash
 cargo test --locked -p cmtraceopen-parser --test sccm_client_deployment_fixture_contract
-python3 /absolute/path/to/validate_sccm_corpus.py \
-  crates/cmtraceopen-parser/tests/fixtures/sccm/client/deployment \
-  --exact-bytes
 ```
+
+That Rust target contains the runnable exact-byte/digest, inventory,
+manifest-to-coverage, no-orphan/no-alias, CCM logical-record, physical
+rotation-boundary, citation/key/timestamp, confidence-ceiling, safe-path, and
+privacy validation. It has no external script or machine-specific path
+dependency.
 
 Before merging implementation against published interfaces, also run:
 
