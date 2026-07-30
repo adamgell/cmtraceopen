@@ -45,12 +45,80 @@ fn coverage_contract_failures(artifact: &Value) -> Vec<String> {
     }
 }
 
+fn artifact_storage_failures(scenario_dir: &std::path::Path, artifact: &Value) -> Vec<String> {
+    let mut failures = Vec::new();
+    let artifact_id = artifact["artifactId"].as_str().unwrap_or("<missing>");
+    let state = artifact["captureState"].as_str().unwrap_or_default();
+
+    if matches!(state, "captured" | "capped") {
+        let Some(relative_path) = artifact["relativePath"].as_str() else {
+            return vec![format!(
+                "{state} artifact {artifact_id} must have a relativePath"
+            )];
+        };
+        let relative = std::path::Path::new(relative_path);
+        if relative.is_absolute()
+            || relative.components().any(|component| {
+                matches!(
+                    component,
+                    std::path::Component::ParentDir
+                        | std::path::Component::RootDir
+                        | std::path::Component::Prefix(_)
+                )
+            })
+        {
+            failures.push(format!(
+                "{state} artifact {artifact_id} has an unsafe relativePath {relative_path}"
+            ));
+            return failures;
+        }
+
+        let fixture_path = scenario_dir.join(relative);
+        if !fixture_path.is_file() {
+            failures.push(format!(
+                "{state} artifact {artifact_id} path does not resolve to a fixture: {}",
+                fixture_path.display()
+            ));
+            return failures;
+        }
+
+        let Some(bytes_copied) = artifact["bytesCopied"].as_u64() else {
+            failures.push(format!(
+                "{state} artifact {artifact_id} must record bytesCopied"
+            ));
+            return failures;
+        };
+        let actual_bytes = std::fs::metadata(&fixture_path)
+            .expect("validated fixture metadata is readable")
+            .len();
+        if bytes_copied != actual_bytes {
+            failures.push(format!(
+                "{state} artifact {artifact_id} bytesCopied {bytes_copied} does not match fixture length {actual_bytes}"
+            ));
+        }
+    } else if matches!(state, "absent" | "accessDenied" | "skipped" | "unsupported") {
+        if !artifact["relativePath"].is_null() {
+            failures.push(format!(
+                "{state} artifact {artifact_id} cannot have a relativePath"
+            ));
+        }
+        if artifact["bytesCopied"].as_u64() != Some(0) {
+            failures.push(format!(
+                "{state} artifact {artifact_id} must record zero bytesCopied"
+            ));
+        }
+    }
+
+    failures
+}
+
 #[test]
 fn site_core_uses_canonical_rotation_and_coverage_contracts() {
     let manifests = site_core_manifests();
     assert_eq!(manifests.len(), 9, "site-core scenario matrix changed");
 
     let mut failures = Vec::new();
+    let mut physical_artifacts = 0;
     for (scenario, manifest) in &manifests {
         let site_code = manifest["topology"]["siteCode"]
             .as_str()
@@ -69,13 +137,28 @@ fn site_core_uses_canonical_rotation_and_coverage_contracts() {
             .as_array()
             .expect("site-core artifacts are an array")
         {
+            if matches!(
+                artifact["captureState"].as_str(),
+                Some("captured" | "capped")
+            ) {
+                physical_artifacts += 1;
+            }
             failures.extend(
                 coverage_contract_failures(artifact)
                     .into_iter()
                     .map(|failure| format!("{scenario}: {failure}")),
             );
+            failures.extend(
+                artifact_storage_failures(&site_core_root().join(scenario), artifact)
+                    .into_iter()
+                    .map(|failure| format!("{scenario}: {failure}")),
+            );
         }
     }
+    assert_eq!(
+        physical_artifacts, 14,
+        "site-core physical artifact matrix changed"
+    );
 
     let rotations = manifests
         .iter()
@@ -105,28 +188,6 @@ fn site_core_uses_canonical_rotation_and_coverage_contracts() {
             "rotation-boundary: rollover relativePath must end in /sitecomp.lo_, got {relative_path}"
         ));
     }
-    let fixture_path = site_core_root()
-        .join("rotation-boundary")
-        .join(relative_path);
-    if !fixture_path.is_file() {
-        failures.push(format!(
-            "rotation-boundary: manifest path does not resolve to a fixture: {}",
-            fixture_path.display()
-        ));
-    } else {
-        let bytes_copied = rollover["bytesCopied"]
-            .as_u64()
-            .expect("captured rollover records bytesCopied");
-        let actual_bytes = std::fs::metadata(&fixture_path)
-            .expect("rollover fixture metadata is readable")
-            .len();
-        if bytes_copied != actual_bytes {
-            failures.push(format!(
-                "rotation-boundary: bytesCopied {bytes_copied} does not match fixture length {actual_bytes}"
-            ));
-        }
-    }
-
     let expected: Value = serde_json::from_str(include_str!(
         "fixtures/sccm/server/site_core/rotation-boundary/expected.json"
     ))
@@ -158,4 +219,56 @@ fn capped_artifact_cannot_claim_a_complete_fragment() {
     });
 
     assert_eq!(coverage_contract_failures(&artifact).len(), 1);
+}
+
+#[test]
+fn artifact_storage_contract_rejects_missing_mismatched_and_nonphysical_paths() {
+    let scenario_dir = site_core_root().join("healthy");
+    let wrong_size = serde_json::json!({
+        "artifactId": "wrong-size",
+        "captureState": "captured",
+        "relativePath": "evidence/sccm/server/site-core/sitecomp/current/sitecomp.log",
+        "bytesCopied": 1
+    });
+    let missing = serde_json::json!({
+        "artifactId": "missing",
+        "captureState": "captured",
+        "relativePath": "evidence/sccm/server/site-core/sitecomp/current/missing.log",
+        "bytesCopied": 1
+    });
+    let unsafe_path = serde_json::json!({
+        "artifactId": "unsafe",
+        "captureState": "captured",
+        "relativePath": "../outside.log",
+        "bytesCopied": 1
+    });
+    let missing_bytes = serde_json::json!({
+        "artifactId": "missing-bytes",
+        "captureState": "captured",
+        "relativePath": "evidence/sccm/server/site-core/sitecomp/current/sitecomp.log"
+    });
+    let nonphysical = serde_json::json!({
+        "artifactId": "absent-with-file",
+        "captureState": "absent",
+        "relativePath": "evidence/placeholder.log",
+        "bytesCopied": 1
+    });
+
+    assert_eq!(
+        artifact_storage_failures(&scenario_dir, &wrong_size).len(),
+        1
+    );
+    assert_eq!(artifact_storage_failures(&scenario_dir, &missing).len(), 1);
+    assert_eq!(
+        artifact_storage_failures(&scenario_dir, &unsafe_path).len(),
+        1
+    );
+    assert_eq!(
+        artifact_storage_failures(&scenario_dir, &missing_bytes).len(),
+        1
+    );
+    assert_eq!(
+        artifact_storage_failures(&scenario_dir, &nonphysical).len(),
+        2
+    );
 }
