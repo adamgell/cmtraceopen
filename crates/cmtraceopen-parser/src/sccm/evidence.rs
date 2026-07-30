@@ -13,15 +13,16 @@ fn sensitive_message_label_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
         Regex::new(
-            r"(?ix)
-            \b(?:
-                authorization\b
+            r#"(?ix)
+            (?:
+                ["']?\b authorization\b ["']?
                     (?:[\x20\t]*[:=][\x20\t]*|[\x20\t]+)
                     (?:[a-z][a-z0-9._-]*[\x20\t]+)?
                 |
-                bearer\b(?:[\x20\t]*[:=][\x20\t]*|[\x20\t]+)
+                ["']?\b bearer\b ["']?
+                    (?:[\x20\t]*[:=][\x20\t]*|[\x20\t]+)
                 |
-                (?:
+                ["']?\b(?:
                     shared[\x20_-]?access[\x20_-]?signature
                     | client[\x20_-]?secret
                     | (?:client|access|refresh|id|device|session)[\x20_-]?token
@@ -37,8 +38,8 @@ fn sensitive_message_label_re() -> &'static Regex {
                     | user
                     | upn
                     | sig
-                )\b(?:[\x20\t]*[:=][\x20\t]*|[\x20\t]+)
-            )",
+                )\b["']?(?:[\x20\t]*[:=][\x20\t]*|[\x20\t]+)
+            )"#,
         )
         .expect("SCCM sensitive message label regex must compile")
     })
@@ -115,7 +116,7 @@ fn sensitive_value_end(value: &str, value_start: usize) -> usize {
     remaining
         .char_indices()
         .find_map(|(offset, character)| {
-            (character.is_whitespace() || matches!(character, ',' | ';'))
+            (character.is_whitespace() || matches!(character, ',' | ';' | '&'))
                 .then_some(value_start + offset)
         })
         .unwrap_or(value.len())
@@ -237,7 +238,7 @@ mod tests {
 
     #[test]
     fn export_redaction_does_not_mutate_raw_snapshot() {
-        let raw_message = r#"Policy id={ABCDEFAB-0000-0000-0000-000000000001} failed hr=0x80070005 user=LAB\SyntheticUser token=synthetic-secret"#;
+        let raw_message = r#"Policy id={ABCDEFAB-0000-0000-0000-000000000001} failed hr=0x80070005 user=LAB\SyntheticUser token=synthetic-secret payload={"token":"synthetic-json-secret","user":"SyntheticJsonUser"} url=https://example.invalid/?token=synthetic-query-secret&status=71"#;
         let text = format!(
             r#"<![LOG[{raw_message}]LOG]!><time="10:00:00.000-240" date="07-30-2026" component="PolicyAgent" context="NT AUTHORITY\SYSTEM" type="1" thread="42" file="policyagent.cpp">"#
         );
@@ -272,8 +273,12 @@ mod tests {
         assert!(!exported_json.contains(r"NT AUTHORITY\\SYSTEM"));
         assert!(!exported_json.contains(r"LAB\\SyntheticUser"));
         assert!(!exported_json.contains("synthetic-secret"));
+        assert!(!exported_json.contains("synthetic-json-secret"));
+        assert!(!exported_json.contains("SyntheticJsonUser"));
+        assert!(!exported_json.contains("synthetic-query-secret"));
         assert!(exported.message.starts_with("[sccm-public-message-v1] "));
         assert!(exported.message.contains("hr=0x80070005"));
+        assert!(exported.message.contains("&status=71"));
         assert!(exported
             .message
             .contains("{ABCDEFAB-0000-0000-0000-000000000001}"));

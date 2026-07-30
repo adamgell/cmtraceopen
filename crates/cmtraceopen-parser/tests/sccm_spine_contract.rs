@@ -21,6 +21,34 @@ fn client_policy_artifact() -> SccmArtifact {
     }
 }
 
+fn json_value_contains_sensitive(value: &serde_json::Value, sensitive: &str) -> bool {
+    match value {
+        serde_json::Value::String(value) => value.contains(sensitive),
+        serde_json::Value::Array(values) => values
+            .iter()
+            .any(|value| json_value_contains_sensitive(value, sensitive)),
+        serde_json::Value::Object(values) => values
+            .values()
+            .any(|value| json_value_contains_sensitive(value, sensitive)),
+        _ => false,
+    }
+}
+
+fn public_json_contains_sensitive(json: &str, sensitive: &str) -> bool {
+    let decoded: serde_json::Value = serde_json::from_str(json).unwrap();
+    let encoded = serde_json::to_string(sensitive).unwrap();
+    let escaped = &encoded[1..encoded.len() - 1];
+
+    json_value_contains_sensitive(&decoded, sensitive) || json.contains(escaped)
+}
+
+fn assert_public_json_omits(json: &str, sensitive: &str) {
+    assert!(
+        !public_json_contains_sensitive(json, sensitive),
+        "{sensitive} leaked in decoded or escaped public JSON"
+    );
+}
+
 #[test]
 fn sccm_contract_is_public_and_versioned() {
     assert_eq!(SCCM_DIAGNOSTICS_SCHEMA_VERSION, 1);
@@ -288,8 +316,8 @@ fn evidence_export_is_deterministic_redacted_and_non_mutating() {
 
     assert_eq!(first, before_export);
     assert_eq!(first, second);
-    assert!(!first_json.contains(r"NT AUTHORITY\\SYSTEM"));
-    assert!(!first_json.contains(r"C:\\Windows\\CCM\\Logs"));
+    assert_public_json_omits(&first_json, r"NT AUTHORITY\SYSTEM");
+    assert_public_json_omits(&first_json, r"C:\Windows\CCM\Logs");
     assert_eq!(
         first[0].execution_context, None,
         "public export omits unkeyed context handles by default"
@@ -298,8 +326,17 @@ fn evidence_export_is_deterministic_redacted_and_non_mutating() {
     let alternate = r#"<![LOG[Synthetic user context]LOG]!><time="10:00:00.000-240" date="07-30-2026" component="PolicyAgent" context="LAB\SyntheticUser" type="1" thread="42" file="policyagent.cpp">"#;
     let alternate_evidence = normalize_ccm_artifact(client_policy_artifact(), alternate);
     let alternate_json = serde_json::to_string(&alternate_evidence).unwrap();
-    assert!(!alternate_json.contains(r"LAB\\SyntheticUser"));
+    assert_public_json_omits(&alternate_json, r"LAB\SyntheticUser");
     assert_eq!(alternate_evidence[0].execution_context, None);
+}
+
+#[test]
+fn public_json_sensitive_assertion_detects_serde_escaped_backslashes() {
+    let leaked = serde_json::json!([{"message": r"LAB\SyntheticUser"}]);
+    let json = serde_json::to_string(&leaked).unwrap();
+
+    assert!(json.contains(r"LAB\\SyntheticUser"));
+    assert!(public_json_contains_sensitive(&json, r"LAB\SyntheticUser"));
 }
 
 #[test]
@@ -327,7 +364,7 @@ fn evidence_public_message_projection_redacts_sensitive_markers_and_preserves_sa
             !message.contains(sensitive),
             "{sensitive} leaked in message"
         );
-        assert!(!json.contains(sensitive), "{sensitive} leaked in JSON");
+        assert_public_json_omits(&json, sensitive);
     }
     assert!(message.contains("[redacted:sccm-public-message-v1]"));
 }
@@ -425,15 +462,56 @@ fn evidence_public_message_projection_redacts_whitespace_delimited_credentials()
             !message.contains(sensitive),
             "{sensitive} leaked in projected message for {raw_message}"
         );
-        assert!(
-            !json.contains(sensitive),
-            "{sensitive} leaked in JSON for {raw_message}"
-        );
+        assert_public_json_omits(&json, sensitive);
         assert!(
             message.contains("[redacted:sccm-public-message-v1]"),
             "{raw_message} was not classified as sensitive"
         );
     }
+}
+
+#[test]
+fn evidence_public_message_projection_redacts_quoted_structured_keys() {
+    let cases = [
+        (
+            r#"payload={"token":"synthetic-json-token","user":"SyntheticJsonUser"} status=71"#,
+            ["synthetic-json-token", "SyntheticJsonUser"],
+            "status=71",
+        ),
+        (
+            "payload={'password':'synthetic-json-password','user':'SyntheticSingleUser'} hr=0x80070005",
+            ["synthetic-json-password", "SyntheticSingleUser"],
+            "hr=0x80070005",
+        ),
+    ];
+
+    for (raw_message, sensitive_values, safe) in cases {
+        let text = format!(
+            r#"<![LOG[{raw_message}]LOG]!><time="10:00:00.000-240" date="07-30-2026" component="PolicyAgent" context="" type="1" thread="42" file="policyagent.cpp">"#
+        );
+        let evidence = normalize_ccm_artifact(client_policy_artifact(), &text);
+        let message = &evidence[0].message;
+        let json = serde_json::to_string(&evidence).unwrap();
+
+        assert!(message.contains(safe), "{safe} was swallowed");
+        for sensitive in sensitive_values {
+            assert!(!message.contains(sensitive), "{sensitive} leaked");
+            assert_public_json_omits(&json, sensitive);
+        }
+    }
+}
+
+#[test]
+fn evidence_public_message_projection_bounds_query_values_at_ampersand() {
+    let text = r#"<![LOG[url=https://example.invalid/?token=synthetic-query-token&status=71]LOG]!><time="10:00:00.000-240" date="07-30-2026" component="PolicyAgent" context="" type="1" thread="42" file="policyagent.cpp">"#;
+
+    let evidence = normalize_ccm_artifact(client_policy_artifact(), text);
+    let message = &evidence[0].message;
+    let json = serde_json::to_string(&evidence).unwrap();
+
+    assert!(!message.contains("synthetic-query-token"));
+    assert_public_json_omits(&json, "synthetic-query-token");
+    assert!(message.contains("&status=71"));
 }
 
 #[test]
