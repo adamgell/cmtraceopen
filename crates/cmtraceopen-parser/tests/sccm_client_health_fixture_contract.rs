@@ -252,12 +252,17 @@ fn client_health_rotation_contract_failures(manifest: &Value) -> Vec<String> {
     let Some(artifacts) = manifest["artifacts"].as_array() else {
         return vec!["rotation-boundary: artifacts must be an array".to_owned()];
     };
-    let Some(rollover) = artifacts
+    let rollovers = artifacts
         .iter()
-        .find(|artifact| artifact["rotation"]["kind"] == "lo")
-    else {
-        return vec!["rotation-boundary: .lo_ artifact is missing".to_owned()];
-    };
+        .filter(|artifact| artifact["rotation"]["kind"] == "lo")
+        .collect::<Vec<_>>();
+    if rollovers.len() != 1 {
+        return vec![format!(
+            "rotation-boundary: expected exactly one .lo_ artifact, got {}",
+            rollovers.len()
+        )];
+    }
+    let rollover = rollovers[0];
 
     match rollover["originalBasename"].as_str() {
         Some("ccmsetup.lo_") => {}
@@ -360,6 +365,23 @@ fn client_health_rotation_contract_pins_full_paths() {
             .iter()
             .any(|failure| failure.contains("sanitizedSourcePath must equal")),
         "a filename-matching but provenance-changing source path must fail closed"
+    );
+
+    let mut duplicate_rollover = rotations.clone();
+    let artifacts = duplicate_rollover["artifacts"]
+        .as_array_mut()
+        .expect("rotation artifacts are an array");
+    let duplicate = artifacts
+        .iter()
+        .find(|artifact| artifact["rotation"]["kind"] == "lo")
+        .expect("rotation corpus has a .lo_ artifact")
+        .clone();
+    artifacts.push(duplicate);
+    assert!(
+        client_health_rotation_contract_failures(&duplicate_rollover)
+            .iter()
+            .any(|failure| failure.contains("exactly one .lo_ artifact")),
+        "a duplicate .lo_ artifact must fail closed"
     );
 }
 
