@@ -1,0 +1,53 @@
+{
+  "sccmManifestVersion": 1,
+  "bundleRole": "server",
+  "syntheticFixture": true,
+  "scenario": "inbox-backlog",
+  "topology": {
+    "captureHost": "LAB-CM01",
+    "rolesObserved": [
+      "siteServer"
+    ],
+    "siteCode": "LAB"
+  },
+  "artifacts": [
+    {
+      "artifactId": "inbox-backlog-sitecomp-current",
+      "role": "siteServer",
+      "sourceGroup": "server-sitecomp",
+      "sourceKind": "ccmLog",
+      "originalPath": "REDACTED",
+      "originalBasename": "sitecomp.log",
+      "configuredPath": true,
+      "rotation": {
+        "kind": "current"
+      },
+      "rotationLineage": "sitecomp.log",
+      "captureState": "captured",
+      "sourceVersion": "5.00.TEST",
+      "collectedUtc": "2026-07-30T14:21:00Z",
+      "encoding": "utf-8",
+      "relativePath": "evidence/sccm/server/site-core/sitecomp/current/sitecomp.log",
+      "bytesCopied": 1000
+    },
+    {
+      "artifactId": "inbox-backlog-statmgr-absent",
+      "role": "siteServer",
+      "sourceGroup": "server-status",
+      "sourceKind": "ccmLog",
+      "originalPath": "REDACTED",
+      "originalBasename": "statmgr.log",
+      "configuredPath": false,
+      "rotation": {
+        "kind": "current"
+      },
+      "rotationLineage": "statmgr.log",
+      "captureState": "absent",
+      "sourceVersion": "5.00.TEST",
+      "collectedUtc": "2026-07-30T14:21:00Z",
+      "encoding": null,
+      "relativePath": null,
+      "bytesCopied": 0
+    }
+  ]
+}

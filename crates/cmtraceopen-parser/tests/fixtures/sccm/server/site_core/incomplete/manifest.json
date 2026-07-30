@@ -1,0 +1,73 @@
+{
+  "sccmManifestVersion": 1,
+  "bundleRole": "server",
+  "syntheticFixture": true,
+  "scenario": "incomplete",
+  "topology": {
+    "captureHost": "LAB-CM01",
+    "rolesObserved": [
+      "siteServer"
+    ],
+    "siteCode": "LAB"
+  },
+  "artifacts": [
+    {
+      "artifactId": "incomplete-sitecomp-capped",
+      "role": "siteServer",
+      "sourceGroup": "server-sitecomp",
+      "sourceKind": "ccmLog",
+      "originalPath": "REDACTED",
+      "originalBasename": "sitecomp.log",
+      "configuredPath": true,
+      "rotation": {
+        "kind": "current"
+      },
+      "rotationLineage": "sitecomp.log",
+      "captureState": "capped",
+      "captureLimitBytes": 834,
+      "sourceVersion": "5.00.TEST",
+      "collectedUtc": "2026-07-30T15:11:00Z",
+      "encoding": "utf-8",
+      "relativePath": "evidence/sccm/server/site-core/sitecomp/current/sitecomp.log",
+      "bytesCopied": 834
+    },
+    {
+      "artifactId": "incomplete-statesys-absent",
+      "role": "siteServer",
+      "sourceGroup": "server-status",
+      "sourceKind": "ccmLog",
+      "originalPath": "REDACTED",
+      "originalBasename": "statesys.log",
+      "configuredPath": false,
+      "rotation": {
+        "kind": "current"
+      },
+      "rotationLineage": "statesys.log",
+      "captureState": "absent",
+      "sourceVersion": "5.00.TEST",
+      "collectedUtc": "2026-07-30T15:11:00Z",
+      "encoding": null,
+      "relativePath": null,
+      "bytesCopied": 0
+    },
+    {
+      "artifactId": "incomplete-statmgr-access-denied",
+      "role": "siteServer",
+      "sourceGroup": "server-status",
+      "sourceKind": "ccmLog",
+      "originalPath": "REDACTED",
+      "originalBasename": "statmgr.log",
+      "configuredPath": true,
+      "rotation": {
+        "kind": "current"
+      },
+      "rotationLineage": "statmgr.log",
+      "captureState": "accessDenied",
+      "sourceVersion": "5.00.TEST",
+      "collectedUtc": "2026-07-30T15:11:00Z",
+      "encoding": null,
+      "relativePath": null,
+      "bytesCopied": 0
+    }
+  ]
+}

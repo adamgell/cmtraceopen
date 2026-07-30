@@ -1,0 +1,57 @@
+{
+  "sccmManifestVersion": 1,
+  "bundleRole": "server",
+  "syntheticFixture": true,
+  "scenario": "rotation-boundary",
+  "topology": {
+    "captureHost": "LAB-CM01",
+    "rolesObserved": [
+      "siteServer"
+    ],
+    "siteCode": "LAB"
+  },
+  "artifacts": [
+    {
+      "artifactId": "rotation-boundary-sitecomp-current",
+      "syntheticFixture": true,
+      "role": "siteServer",
+      "sourceGroup": "server-sitecomp",
+      "sourceKind": "ccmLog",
+      "originalPath": "REDACTED",
+      "originalBasename": "sitecomp.log",
+      "configuredPath": true,
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": false
+      },
+      "rotationLineage": "sitecomp.log",
+      "captureState": "captured",
+      "sourceVersion": "5.00.TEST",
+      "collectedUtc": "2026-07-30T15:01:00Z",
+      "encoding": "utf-8",
+      "relativePath": "evidence/sccm/server/site-core/sitecomp/current/sitecomp.log",
+      "bytesCopied": 216
+    },
+    {
+      "artifactId": "rotation-boundary-sitecomp-lo",
+      "syntheticFixture": true,
+      "role": "siteServer",
+      "sourceGroup": "server-sitecomp",
+      "sourceKind": "ccmLog",
+      "originalPath": "REDACTED",
+      "originalBasename": "sitecomp.log.lo_",
+      "configuredPath": true,
+      "rotation": {
+        "kind": "loUnderscore",
+        "fragmentComplete": false
+      },
+      "rotationLineage": "sitecomp.log",
+      "captureState": "captured",
+      "sourceVersion": "5.00.TEST",
+      "collectedUtc": "2026-07-30T15:01:00Z",
+      "encoding": "utf-8",
+      "relativePath": "evidence/sccm/server/site-core/sitecomp/lo_/sitecomp.log.lo_",
+      "bytesCopied": 196
+    }
+  ]
+}

@@ -1,0 +1,86 @@
+{
+  "expectedContractVersion": 1,
+  "scenario": "status-processing-failure",
+  "profile": {
+    "id": "sccm-site-core",
+    "version": 1,
+    "stability": "experimental"
+  },
+  "results": [
+    {
+      "resultId": "site-core/LAB/SMS_EXECUTIVE/SC-STATUSFAIL-001",
+      "transactionKey": {
+        "profileId": "sccm-site-core",
+        "profileVersion": 1,
+        "siteCode": "LAB",
+        "componentId": "SMS_EXECUTIVE",
+        "workItemId": "SC-STATUSFAIL-001"
+      },
+      "state": "terminalFailure",
+      "lastSuccessfulPhase": "statusOrStateProcessing",
+      "findingClass": "confirmedFailure",
+      "confidence": "high",
+      "confidenceCeiling": "high",
+      "evidence": [
+        {
+          "artifactId": "status-processing-failure-sitecomp-current",
+          "entryId": "status-processing-failure-sitecomp-current:1-1",
+          "lineStart": 1,
+          "lineEnd": 1
+        },
+        {
+          "artifactId": "status-processing-failure-sitecomp-current",
+          "entryId": "status-processing-failure-sitecomp-current:2-2",
+          "lineStart": 2,
+          "lineEnd": 2
+        },
+        {
+          "artifactId": "status-processing-failure-sitecomp-current",
+          "entryId": "status-processing-failure-sitecomp-current:3-3",
+          "lineStart": 3,
+          "lineEnd": 3
+        },
+        {
+          "artifactId": "status-processing-failure-statmgr-current",
+          "entryId": "status-processing-failure-statmgr-current:1-1",
+          "lineStart": 1,
+          "lineEnd": 1
+        },
+        {
+          "artifactId": "status-processing-failure-statmgr-current",
+          "entryId": "status-processing-failure-statmgr-current:2-2",
+          "lineStart": 2,
+          "lineEnd": 2,
+          "terminal": true
+        }
+      ],
+      "coverageGapArtifactIds": [],
+      "nextArtifacts": []
+    }
+  ],
+  "unlinkedObservations": [],
+  "coverageGaps": [],
+  "prohibitedClaims": [
+    "absentDownstreamRole",
+    "clientImpact",
+    "crossSideCausality"
+  ],
+  "ordering": {
+    "resultsBy": [
+      "resultId"
+    ],
+    "evidenceBy": [
+      "artifactId",
+      "lineStart",
+      "lineEnd"
+    ],
+    "coverageGapsBy": [
+      "artifactId"
+    ],
+    "nextArtifactsBy": [
+      "logicalName",
+      "role",
+      "reasonCode"
+    ]
+  }
+}

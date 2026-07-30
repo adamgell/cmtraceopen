@@ -1,0 +1,92 @@
+{
+  "expectedContractVersion": 1,
+  "scenario": "malformed",
+  "profile": {
+    "id": "sccm-site-core",
+    "version": 1,
+    "stability": "experimental"
+  },
+  "results": [],
+  "unlinkedObservations": [
+    {
+      "observationId": "malformed-status-record",
+      "state": "parseGap",
+      "lastSuccessfulPhase": null,
+      "findingClass": "symptom",
+      "confidence": "low",
+      "confidenceCeiling": "low",
+      "evidence": [
+        {
+          "artifactId": "malformed-statmgr-current",
+          "entryId": "malformed-statmgr-current:1-1",
+          "lineStart": 1,
+          "lineEnd": 1,
+          "completeLogicalRecord": false
+        }
+      ],
+      "coverageGapArtifactIds": [
+        "malformed-statmgr-current"
+      ],
+      "nextArtifacts": [
+        {
+          "logicalName": "server-status",
+          "role": "siteServer",
+          "reasonCode": "complete-status-record-required",
+          "basenames": [
+            "statmgr.log"
+          ],
+          "rotations": [
+            "current"
+          ],
+          "maxArtifacts": 1,
+          "scope": {
+            "rotationLineage": "statmgr.log"
+          }
+        }
+      ]
+    }
+  ],
+  "coverageGaps": [
+    {
+      "artifactId": "malformed-statmgr-current",
+      "state": "parseFailed",
+      "diagnosticMeaning": "coverageOnly",
+      "evidence": {
+        "entryId": "malformed-statmgr-current:1-1",
+        "lineStart": 1,
+        "lineEnd": 1,
+        "completeLogicalRecord": false
+      }
+    }
+  ],
+  "adversarialAssertions": {
+    "transactionCount": 0,
+    "componentKeyAdmitted": false,
+    "terminalMayBeInferred": false,
+    "confirmedFailure": false,
+    "highConfidenceCause": false
+  },
+  "prohibitedClaims": [
+    "absentDownstreamRole",
+    "clientImpact",
+    "crossSideCausality"
+  ],
+  "ordering": {
+    "resultsBy": [
+      "resultId"
+    ],
+    "evidenceBy": [
+      "artifactId",
+      "lineStart",
+      "lineEnd"
+    ],
+    "coverageGapsBy": [
+      "artifactId"
+    ],
+    "nextArtifactsBy": [
+      "logicalName",
+      "role",
+      "reasonCode"
+    ]
+  }
+}

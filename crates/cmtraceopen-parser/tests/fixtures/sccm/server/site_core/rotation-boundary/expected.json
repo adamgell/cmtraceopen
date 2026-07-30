@@ -1,0 +1,111 @@
+{
+  "expectedContractVersion": 1,
+  "scenario": "rotation-boundary",
+  "profile": {
+    "id": "sccm-site-core",
+    "version": 1,
+    "stability": "experimental"
+  },
+  "results": [],
+  "unlinkedObservations": [
+    {
+      "observationId": "rotation-boundary-fragments",
+      "state": "parseGap",
+      "lastSuccessfulPhase": null,
+      "findingClass": "insufficientEvidence",
+      "confidence": "none",
+      "confidenceCeiling": "none",
+      "evidence": [
+        {
+          "artifactId": "rotation-boundary-sitecomp-current",
+          "entryId": "rotation-boundary-sitecomp-current:1-1",
+          "lineStart": 1,
+          "lineEnd": 1,
+          "completeLogicalRecord": false
+        },
+        {
+          "artifactId": "rotation-boundary-sitecomp-lo",
+          "entryId": "rotation-boundary-sitecomp-lo:1-1",
+          "lineStart": 1,
+          "lineEnd": 1,
+          "completeLogicalRecord": false
+        }
+      ],
+      "coverageGapArtifactIds": [
+        "rotation-boundary-sitecomp-current",
+        "rotation-boundary-sitecomp-lo"
+      ],
+      "nextArtifacts": [
+        {
+          "logicalName": "server-sitecomp",
+          "role": "siteServer",
+          "reasonCode": "complete-logical-record-required",
+          "basenames": [
+            "sitecomp.log",
+            "sitecomp.log.lo_"
+          ],
+          "rotations": [
+            "current",
+            "loUnderscore"
+          ],
+          "maxArtifacts": 2,
+          "scope": {
+            "rotationLineage": "sitecomp.log"
+          }
+        }
+      ]
+    }
+  ],
+  "coverageGaps": [
+    {
+      "artifactId": "rotation-boundary-sitecomp-current",
+      "state": "parseFailed",
+      "diagnosticMeaning": "coverageOnly",
+      "evidence": {
+        "entryId": "rotation-boundary-sitecomp-current:1-1",
+        "lineStart": 1,
+        "lineEnd": 1
+      }
+    },
+    {
+      "artifactId": "rotation-boundary-sitecomp-lo",
+      "state": "parseFailed",
+      "diagnosticMeaning": "coverageOnly",
+      "evidence": {
+        "entryId": "rotation-boundary-sitecomp-lo:1-1",
+        "lineStart": 1,
+        "lineEnd": 1
+      }
+    }
+  ],
+  "adversarialAssertions": {
+    "transactionCount": 0,
+    "phaseMayAdvance": false,
+    "terminalMayBeInferred": false,
+    "crossRotationFragmentJoin": false,
+    "highConfidenceCause": false
+  },
+  "prohibitedClaims": [
+    "absentDownstreamRole",
+    "clientImpact",
+    "crossSideCausality"
+  ],
+  "ordering": {
+    "resultsBy": [
+      "resultId"
+    ],
+    "evidenceBy": [
+      "artifactId",
+      "lineStart",
+      "lineEnd"
+    ],
+    "coverageGapsBy": [
+      "artifactId"
+    ],
+    "nextArtifactsBy": [
+      "logicalName",
+      "role",
+      "reasonCode"
+    ]
+  }
+}
