@@ -1,10 +1,53 @@
-use cmtraceopen_parser::models::log_entry::ParserKind;
+use cmtraceopen_parser::models::log_entry::{LogFormat, ParserKind};
 use cmtraceopen_parser::parser::detect::detect_parser;
 use cmtraceopen_parser::sccm::{
-    classify_artifact_name, declared_source_catalog, SccmArtifact, SccmArtifactFamily,
-    SccmCoverageState, SccmFindingClass, SccmRole, SccmRotation, SccmUnknownRotation,
-    SCCM_DIAGNOSTICS_SCHEMA_VERSION,
+    classify_artifact_name, declared_source_catalog, normalize_ccm_artifact, SccmArtifact,
+    SccmArtifactFamily, SccmCoverageState, SccmFindingClass, SccmRole, SccmRotation,
+    SccmTimeOrderingState, SccmUnknownRotation, SCCM_DIAGNOSTICS_SCHEMA_VERSION,
 };
+
+fn client_policy_artifact() -> SccmArtifact {
+    SccmArtifact {
+        artifact_id: "client-policy-agent".into(),
+        display_name: "PolicyAgent.log".into(),
+        original_path: Some(r"C:\Windows\CCM\Logs\PolicyAgent.log".into()),
+        host: Some("LAB-CLIENT-01".into()),
+        role: SccmRole::Client,
+        configmgr_version: Some("5.00.9128.1007".into()),
+        collected_at_utc: Some("2026-07-30T15:00:00Z".into()),
+        rotation: SccmRotation::Current,
+        coverage: SccmCoverageState::Captured,
+        encoding: Some("utf-8".into()),
+    }
+}
+
+fn json_value_contains_sensitive(value: &serde_json::Value, sensitive: &str) -> bool {
+    match value {
+        serde_json::Value::String(value) => value.contains(sensitive),
+        serde_json::Value::Array(values) => values
+            .iter()
+            .any(|value| json_value_contains_sensitive(value, sensitive)),
+        serde_json::Value::Object(values) => values
+            .values()
+            .any(|value| json_value_contains_sensitive(value, sensitive)),
+        _ => false,
+    }
+}
+
+fn public_json_contains_sensitive(json: &str, sensitive: &str) -> bool {
+    let decoded: serde_json::Value = serde_json::from_str(json).unwrap();
+    let encoded = serde_json::to_string(sensitive).unwrap();
+    let escaped = &encoded[1..encoded.len() - 1];
+
+    json_value_contains_sensitive(&decoded, sensitive) || json.contains(escaped)
+}
+
+fn assert_public_json_omits(json: &str, sensitive: &str) {
+    assert!(
+        !public_json_contains_sensitive(json, sensitive),
+        "{sensitive} leaked in decoded or escaped public JSON"
+    );
+}
 
 #[test]
 fn sccm_contract_is_public_and_versioned() {
@@ -20,6 +63,567 @@ fn sccm_contract_is_public_and_versioned() {
         SccmFindingClass::InsufficientEvidence.as_str(),
         "insufficientEvidence"
     );
+}
+
+#[test]
+fn public_ccm_multiline_projection_stays_compatible() {
+    let text = include_str!("fixtures/sccm/spine/multiline-policy.log");
+    let (entries, errors) =
+        cmtraceopen_parser::parser::ccm::parse_content(text, "PolicyAgent.log", None);
+    assert_eq!(errors, 0);
+    assert_eq!(
+        entries.len(),
+        1,
+        "ordinary public CCM output stays unchanged"
+    );
+    assert_eq!(entries[0].line_number, 1);
+    assert_eq!(entries[0].format, LogFormat::Ccm);
+    assert_eq!(entries[0].timezone_offset, Some(-240));
+    assert!(entries[0]
+        .message
+        .contains("{11111111-1111-1111-1111-111111111111}"));
+
+    let public_json = serde_json::to_value(&entries[0]).unwrap();
+    assert!(public_json.get("context").is_none());
+    assert!(!serde_json::to_string(&public_json)
+        .unwrap()
+        .contains(r"NT AUTHORITY\\SYSTEM"));
+}
+
+#[test]
+fn public_ccm_single_line_projection_matches_line_parser() {
+    let text = r#"<![LOG[Synthetic policy record]LOG]!><time="10:00:00.000-240" date="07-30-2026" component="PolicyAgent" context="LAB\SyntheticUser" type="1" thread="42" file="policyagent.cpp">"#;
+    let (content_entries, content_errors) =
+        cmtraceopen_parser::parser::ccm::parse_content(text, "PolicyAgent.log", None);
+    let (line_entries, line_errors) =
+        cmtraceopen_parser::parser::ccm::parse_lines(&[text], "PolicyAgent.log");
+
+    assert_eq!(content_errors, line_errors);
+    assert_eq!(
+        serde_json::to_vec(&content_entries).unwrap(),
+        serde_json::to_vec(&line_entries).unwrap()
+    );
+}
+
+#[test]
+fn public_ccm_malformed_continuation_stays_plain() {
+    let text = "<![LOG[unfinished record\ncontinuation without attributes";
+    let (entries, errors) =
+        cmtraceopen_parser::parser::ccm::parse_content(text, "PolicyAgent.log", None);
+
+    assert_eq!(errors, 2);
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0].format, LogFormat::Plain);
+    assert_eq!(entries[0].line_number, 1);
+    assert_eq!(entries[1].format, LogFormat::Plain);
+    assert_eq!(entries[1].line_number, 2);
+}
+
+#[test]
+fn public_ccm_digit_only_timestamp_tails_match_pre_spine_baseline() {
+    // Commit 463133d's public regex greedily assigned all but the final digit
+    // to milliseconds and the final digit to timezoneOffset. Preserve that
+    // observable LogEntry behavior while SCCM provenance interprets the same
+    // captured tail independently.
+    let cases = [
+        (
+            "000",
+            "07-30-2026 10:00:00.000",
+            0,
+            0,
+            "07-30-2026 10:00:00.000",
+            None,
+            SccmTimeOrderingState::OffsetMissing,
+        ),
+        (
+            "123",
+            "07-30-2026 10:00:00.012",
+            12,
+            3,
+            "07-30-2026 10:00:00.123",
+            None,
+            SccmTimeOrderingState::OffsetMissing,
+        ),
+        (
+            "000240",
+            "07-30-2026 10:00:00.000",
+            0,
+            0,
+            "07-30-2026 10:00:00.000",
+            Some(240),
+            SccmTimeOrderingState::NormalizedUtc,
+        ),
+        (
+            "1234567",
+            "07-30-2026 10:00:00.123",
+            123,
+            7,
+            "07-30-2026 10:00:00.1234567",
+            None,
+            SccmTimeOrderingState::OffsetMissing,
+        ),
+    ];
+
+    for (
+        time_tail,
+        public_display,
+        public_millis,
+        public_offset,
+        evidence_display,
+        evidence_offset,
+        evidence_state,
+    ) in cases
+    {
+        let text = format!(
+            r#"<![LOG[Tail {time_tail}]LOG]!><time="10:00:00.{time_tail}" date="07-30-2026" component="PolicyAgent" context="" type="1" thread="42" file="policyagent.cpp">"#
+        );
+        let (entries, errors) =
+            cmtraceopen_parser::parser::ccm::parse_content(&text, "PolicyAgent.log", None);
+        let evidence = normalize_ccm_artifact(client_policy_artifact(), &text);
+        let expected_public_timestamp = chrono::NaiveDate::from_ymd_opt(2026, 7, 30)
+            .unwrap()
+            .and_hms_milli_opt(10, 0, 0, public_millis)
+            .unwrap()
+            .and_utc()
+            .timestamp_millis()
+            - i64::from(public_offset) * 60_000;
+
+        assert_eq!(errors, 0, "{time_tail}");
+        assert_eq!(entries.len(), 1, "{time_tail}");
+        assert_eq!(entries[0].format, LogFormat::Ccm, "{time_tail}");
+        assert_eq!(
+            entries[0].timestamp_display.as_deref(),
+            Some(public_display),
+            "{time_tail}"
+        );
+        assert_eq!(
+            entries[0].timezone_offset,
+            Some(public_offset),
+            "{time_tail}"
+        );
+        assert_eq!(
+            entries[0].timestamp,
+            Some(expected_public_timestamp),
+            "{time_tail}"
+        );
+        assert_eq!(evidence.len(), 1, "{time_tail}");
+        assert_eq!(
+            evidence[0].timestamp.original_display.as_deref(),
+            Some(evidence_display),
+            "{time_tail}"
+        );
+        assert_eq!(
+            evidence[0].timestamp.offset_minutes, evidence_offset,
+            "{time_tail}"
+        );
+        assert_eq!(
+            evidence[0].timestamp.ordering_state, evidence_state,
+            "{time_tail}"
+        );
+    }
+}
+
+#[test]
+fn signless_ccm_offset_is_enriched_only_in_sccm_provenance() {
+    // CMTrace's documented `%03u%d` grammar permits the decimal offset to
+    // omit a sign: three millisecond digits followed by the offset. The
+    // public LogEntry keeps its pre-spine projection; only the additive SCCM
+    // timestamp provenance receives the corrected interpretation.
+    let text = r#"<![LOG[Signless source offset]LOG]!><time="10:00:00.000240" date="07-30-2026" component="PolicyAgent" context="" type="1" thread="42" file="policyagent.cpp">"#;
+    let (entries, errors) =
+        cmtraceopen_parser::parser::ccm::parse_content(text, "PolicyAgent.log", None);
+    let evidence = normalize_ccm_artifact(client_policy_artifact(), text);
+
+    assert_eq!(errors, 0);
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].format, LogFormat::Ccm);
+    assert_eq!(entries[0].timezone_offset, Some(0));
+    assert_eq!(evidence.len(), 1);
+    assert_eq!(evidence[0].timestamp.offset_minutes, Some(240));
+    assert_eq!(
+        evidence[0].timestamp.ordering_state,
+        SccmTimeOrderingState::NormalizedUtc
+    );
+    assert!(evidence[0].timestamp.utc_millis.is_some());
+}
+
+#[test]
+fn evidence_uses_one_logical_record_and_normalized_utc_ordering() {
+    let text = include_str!("fixtures/sccm/spine/multiline-policy.log");
+    let evidence = normalize_ccm_artifact(client_policy_artifact(), text);
+
+    assert_eq!(evidence.len(), 1);
+    assert_eq!(evidence[0].evidence_id, "client-policy-agent:1-2");
+    assert_eq!(evidence[0].reference.entry_id, "client-policy-agent:1-2");
+    assert_eq!(evidence[0].reference.artifact_id, "client-policy-agent");
+    assert_eq!(evidence[0].reference.line_start, Some(1));
+    assert_eq!(evidence[0].reference.line_end, Some(2));
+    assert_eq!(
+        evidence[0].ccm_source_file.as_deref(),
+        Some("policyagent.cpp")
+    );
+    assert_eq!(
+        evidence[0].timestamp.original_display.as_deref(),
+        Some("07-30-2026 10:00:00.000")
+    );
+    assert_eq!(evidence[0].timestamp.offset_minutes, Some(-240));
+    assert_eq!(
+        evidence[0].timestamp.ordering_state,
+        SccmTimeOrderingState::NormalizedUtc
+    );
+    assert!(evidence[0].timestamp.utc_millis.is_some());
+}
+
+#[test]
+fn evidence_missing_or_invalid_time_provenance_is_not_comparable() {
+    let cases = [
+        (
+            r#"<![LOG[No source offset]LOG]!><time="10:00:00.1234567" date="07-30-2026" component="PolicyAgent" context="" type="1" thread="42" file="policyagent.cpp">"#,
+            SccmTimeOrderingState::OffsetMissing,
+            None,
+        ),
+        (
+            r#"<![LOG[Invalid source offset]LOG]!><time="10:00:00.000+99999" date="07-30-2026" component="PolicyAgent" context="" type="1" thread="42" file="policyagent.cpp">"#,
+            SccmTimeOrderingState::OffsetInvalid,
+            Some(99999),
+        ),
+        (
+            r#"<![LOG[Invalid local date]LOG]!><time="10:00:00.000-240" date="13-40-2026" component="PolicyAgent" context="" type="1" thread="42" file="policyagent.cpp">"#,
+            SccmTimeOrderingState::TimestampMissing,
+            Some(-240),
+        ),
+    ];
+
+    for (text, expected_state, expected_offset) in cases {
+        let evidence = normalize_ccm_artifact(client_policy_artifact(), text);
+        assert_eq!(evidence.len(), 1, "{expected_state:?}");
+        assert_eq!(
+            evidence[0].timestamp.ordering_state, expected_state,
+            "{text}"
+        );
+        assert_eq!(evidence[0].timestamp.offset_minutes, expected_offset);
+        assert_eq!(evidence[0].timestamp.utc_millis, None);
+    }
+}
+
+#[test]
+fn evidence_export_is_deterministic_redacted_and_non_mutating() {
+    let text = include_str!("fixtures/sccm/spine/multiline-policy.log");
+    let first = normalize_ccm_artifact(client_policy_artifact(), text);
+    let before_export = first.clone();
+    let first_json = serde_json::to_string(&first).unwrap();
+    let second = normalize_ccm_artifact(client_policy_artifact(), text);
+
+    assert_eq!(first, before_export);
+    assert_eq!(first, second);
+    assert_public_json_omits(&first_json, r"NT AUTHORITY\SYSTEM");
+    assert_public_json_omits(&first_json, r"C:\Windows\CCM\Logs");
+    assert_eq!(
+        first[0].execution_context, None,
+        "public export omits unkeyed context handles by default"
+    );
+
+    let alternate = r#"<![LOG[Synthetic user context]LOG]!><time="10:00:00.000-240" date="07-30-2026" component="PolicyAgent" context="LAB\SyntheticUser" type="1" thread="42" file="policyagent.cpp">"#;
+    let alternate_evidence = normalize_ccm_artifact(client_policy_artifact(), alternate);
+    let alternate_json = serde_json::to_string(&alternate_evidence).unwrap();
+    assert_public_json_omits(&alternate_json, r"LAB\SyntheticUser");
+    assert_eq!(alternate_evidence[0].execution_context, None);
+}
+
+#[test]
+fn public_json_sensitive_assertion_detects_serde_escaped_backslashes() {
+    let leaked = serde_json::json!([{"message": r"LAB\SyntheticUser"}]);
+    let json = serde_json::to_string(&leaked).unwrap();
+
+    assert!(json.contains(r"LAB\\SyntheticUser"));
+    assert!(public_json_contains_sensitive(&json, r"LAB\SyntheticUser"));
+}
+
+#[test]
+fn evidence_public_message_projection_redacts_sensitive_markers_and_preserves_safe_tokens() {
+    let assignment_id = "{ABCDEFAB-0000-0000-0000-000000000001}";
+    let text = format!(
+        r#"<![LOG[Policy id={assignment_id} failed hr=0x80070005 user=LAB\SyntheticUser credential="synthetic credential with spaces" token=synthetic-secret]LOG]!><time="10:00:00.000-240" date="07-30-2026" component="PolicyAgent" context="" type="1" thread="42" file="policyagent.cpp">"#
+    );
+
+    let first = normalize_ccm_artifact(client_policy_artifact(), &text);
+    let second = normalize_ccm_artifact(client_policy_artifact(), &text);
+    let message = &first[0].message;
+    let json = serde_json::to_string(&first).unwrap();
+
+    assert_eq!(first, second);
+    assert!(message.starts_with("[sccm-public-message-v1] "));
+    assert!(message.contains(assignment_id));
+    assert!(message.contains("hr=0x80070005"));
+    for sensitive in [
+        r"LAB\SyntheticUser",
+        "synthetic credential with spaces",
+        "synthetic-secret",
+    ] {
+        assert!(
+            !message.contains(sensitive),
+            "{sensitive} leaked in message"
+        );
+        assert_public_json_omits(&json, sensitive);
+    }
+    assert!(message.contains("[redacted:sccm-public-message-v1]"));
+}
+
+#[test]
+fn evidence_public_message_projection_fails_closed_without_path_or_code_false_positives() {
+    let assignment_id = "{ABCDEFAB-0000-0000-0000-000000000001}";
+    let text = format!(
+        r#"<![LOG[Caller LAB\SyntheticUser; Authorization: Bearer synthetic-bearer; client_secret="synthetic; leaked-credential-fragment"; sig=synthetic-signature; clientToken=synthetic-client-token; Path C:\Windows\CCM\Logs\PolicyAgent.log Policy id={assignment_id} status=71]LOG]!><time="10:00:00.000-240" date="07-30-2026" component="PolicyAgent" context="" type="1" thread="42" file="policyagent.cpp">"#
+    );
+
+    let evidence = normalize_ccm_artifact(client_policy_artifact(), &text);
+    let message = &evidence[0].message;
+
+    assert!(message.starts_with("[sccm-public-message-v1] "));
+    assert!(message.contains(r"C:\Windows\CCM\Logs\PolicyAgent.log"));
+    assert!(message.contains(assignment_id));
+    assert!(message.contains("status=71"));
+    for sensitive in [
+        r"LAB\SyntheticUser",
+        "synthetic-bearer",
+        "leaked-credential-fragment",
+        "synthetic-signature",
+        "synthetic-client-token",
+    ] {
+        assert!(!message.contains(sensitive), "{sensitive} leaked");
+    }
+}
+
+#[test]
+fn evidence_public_message_projection_redacts_unterminated_sensitive_values_to_end() {
+    let assignment_id = "{ABCDEFAB-0000-0000-0000-000000000001}";
+    let text = format!(
+        r#"<![LOG[Policy id={assignment_id} hr=0x80070005 client_secret="synthetic; leaked-unterminated-tail]LOG]!><time="10:00:00.000-240" date="07-30-2026" component="PolicyAgent" context="" type="1" thread="42" file="policyagent.cpp">"#
+    );
+
+    let evidence = normalize_ccm_artifact(client_policy_artifact(), &text);
+    let message = &evidence[0].message;
+
+    assert!(message.starts_with("[sccm-public-message-v1] "));
+    assert!(message.contains(assignment_id));
+    assert!(message.contains("hr=0x80070005"));
+    assert!(message.ends_with("[redacted:sccm-public-message-v1]"));
+    assert!(!message.contains("leaked-unterminated-tail"));
+}
+
+#[test]
+fn evidence_public_message_projection_redacts_whitespace_delimited_credentials() {
+    let cases = [
+        (
+            "Authorization Bearer synthetic-auth-token",
+            "synthetic-auth-token",
+        ),
+        (
+            r#"Authorization Bearer "synthetic quoted auth token""#,
+            "synthetic quoted auth token",
+        ),
+        (
+            "Bearer synthetic-standalone-token",
+            "synthetic-standalone-token",
+        ),
+        (
+            "Bearer 'synthetic quoted bearer token'",
+            "synthetic quoted bearer token",
+        ),
+        (
+            "client_secret synthetic-client-secret",
+            "synthetic-client-secret",
+        ),
+        (
+            r#"client_secret "synthetic quoted client secret""#,
+            "synthetic quoted client secret",
+        ),
+        ("sig synthetic-signature", "synthetic-signature"),
+        (
+            "clientToken synthetic-client-token",
+            "synthetic-client-token",
+        ),
+        ("credential synthetic-credential", "synthetic-credential"),
+        (
+            "credential 'synthetic quoted credential'",
+            "synthetic quoted credential",
+        ),
+    ];
+
+    for (raw_message, sensitive) in cases {
+        let text = format!(
+            r#"<![LOG[{raw_message}]LOG]!><time="10:00:00.000-240" date="07-30-2026" component="PolicyAgent" context="" type="1" thread="42" file="policyagent.cpp">"#
+        );
+        let evidence = normalize_ccm_artifact(client_policy_artifact(), &text);
+        let message = &evidence[0].message;
+        let json = serde_json::to_string(&evidence).unwrap();
+
+        assert!(
+            !message.contains(sensitive),
+            "{sensitive} leaked in projected message for {raw_message}"
+        );
+        assert_public_json_omits(&json, sensitive);
+        assert!(
+            message.contains("[redacted:sccm-public-message-v1]"),
+            "{raw_message} was not classified as sensitive"
+        );
+    }
+}
+
+#[test]
+fn evidence_public_message_projection_redacts_quoted_structured_keys() {
+    let cases = [
+        (
+            r#"payload={"token":"synthetic-json-token","user":"SyntheticJsonUser"} status=71"#,
+            ["synthetic-json-token", "SyntheticJsonUser"],
+            "status=71",
+        ),
+        (
+            "payload={'password':'synthetic-json-password','user':'SyntheticSingleUser'} hr=0x80070005",
+            ["synthetic-json-password", "SyntheticSingleUser"],
+            "hr=0x80070005",
+        ),
+    ];
+
+    for (raw_message, sensitive_values, safe) in cases {
+        let text = format!(
+            r#"<![LOG[{raw_message}]LOG]!><time="10:00:00.000-240" date="07-30-2026" component="PolicyAgent" context="" type="1" thread="42" file="policyagent.cpp">"#
+        );
+        let evidence = normalize_ccm_artifact(client_policy_artifact(), &text);
+        let message = &evidence[0].message;
+        let json = serde_json::to_string(&evidence).unwrap();
+
+        assert!(message.contains(safe), "{safe} was swallowed");
+        for sensitive in sensitive_values {
+            assert!(!message.contains(sensitive), "{sensitive} leaked");
+            assert_public_json_omits(&json, sensitive);
+        }
+    }
+}
+
+#[test]
+fn evidence_public_message_projection_bounds_query_values_at_ampersand() {
+    let text = r#"<![LOG[url=https://example.invalid/?token=synthetic-query-token&status=71]LOG]!><time="10:00:00.000-240" date="07-30-2026" component="PolicyAgent" context="" type="1" thread="42" file="policyagent.cpp">"#;
+
+    let evidence = normalize_ccm_artifact(client_policy_artifact(), text);
+    let message = &evidence[0].message;
+    let json = serde_json::to_string(&evidence).unwrap();
+
+    assert!(!message.contains("synthetic-query-token"));
+    assert_public_json_omits(&json, "synthetic-query-token");
+    assert!(message.contains("&status=71"));
+}
+
+#[test]
+fn evidence_public_message_projection_fails_closed_for_unterminated_whitespace_values() {
+    let cases = [
+        (
+            r#"Authorization Bearer "synthetic-unterminated-auth"#,
+            "synthetic-unterminated-auth",
+        ),
+        (
+            "Bearer 'synthetic-unterminated-bearer",
+            "synthetic-unterminated-bearer",
+        ),
+        (
+            r#"client_secret "synthetic-unterminated-client-secret"#,
+            "synthetic-unterminated-client-secret",
+        ),
+        (
+            "credential 'synthetic-unterminated-credential",
+            "synthetic-unterminated-credential",
+        ),
+    ];
+
+    for (raw_message, sensitive) in cases {
+        let text = format!(
+            r#"<![LOG[Policy hr=0x80070005 {raw_message}]LOG]!><time="10:00:00.000-240" date="07-30-2026" component="PolicyAgent" context="" type="1" thread="42" file="policyagent.cpp">"#
+        );
+        let evidence = normalize_ccm_artifact(client_policy_artifact(), &text);
+        let message = &evidence[0].message;
+
+        assert!(message.contains("hr=0x80070005"), "{raw_message}");
+        assert!(
+            message.ends_with("[redacted:sccm-public-message-v1]"),
+            "{raw_message}"
+        );
+        assert!(!message.contains(sensitive), "{sensitive} leaked");
+    }
+}
+
+#[test]
+fn evidence_public_message_projection_bounds_unquoted_values_before_safe_evidence() {
+    let assignment_id = "{ABCDEFAB-0000-0000-0000-000000000001}";
+    let text = format!(
+        r#"<![LOG[client_secret=synthetic-client-secret hr=0x80070005 sig synthetic-signature Policy id={assignment_id} clientToken:synthetic-client-token Path C:\Windows\CCM\Logs\PolicyAgent.log credential synthetic-credential status=71]LOG]!><time="10:00:00.000-240" date="07-30-2026" component="PolicyAgent" context="" type="1" thread="42" file="policyagent.cpp">"#
+    );
+
+    let evidence = normalize_ccm_artifact(client_policy_artifact(), &text);
+    let message = &evidence[0].message;
+
+    for sensitive in [
+        "synthetic-client-secret",
+        "synthetic-signature",
+        "synthetic-client-token",
+        "synthetic-credential",
+    ] {
+        assert!(!message.contains(sensitive), "{sensitive} leaked");
+    }
+    for safe in [
+        "hr=0x80070005",
+        assignment_id,
+        r"C:\Windows\CCM\Logs\PolicyAgent.log",
+        "status=71",
+    ] {
+        assert!(message.contains(safe), "{safe} was swallowed");
+    }
+}
+
+#[test]
+fn evidence_public_message_projection_redacts_local_and_upn_identities_without_path_noise() {
+    let text = r#"<![LOG[Caller .\LocalUser; UPN Synthetic.User@contoso.example; package package@1.2.3; Path C:\Windows\CCM\Logs\PolicyAgent.log; Relative .\Cache\Policy.bin; UNC \\LAB-CM01\SMS_CCM\Logs\MP.log]LOG]!><time="10:00:00.000-240" date="07-30-2026" component="PolicyAgent" context="" type="1" thread="42" file="policyagent.cpp">"#;
+
+    let evidence = normalize_ccm_artifact(client_policy_artifact(), text);
+    let message = &evidence[0].message;
+
+    for sensitive in [r".\LocalUser", "Synthetic.User@contoso.example"] {
+        assert!(!message.contains(sensitive), "{sensitive} leaked");
+    }
+    for safe in [
+        "package@1.2.3",
+        r"C:\Windows\CCM\Logs\PolicyAgent.log",
+        r".\Cache\Policy.bin",
+        r"\\LAB-CM01\SMS_CCM\Logs\MP.log",
+    ] {
+        assert!(message.contains(safe), "{safe} was falsely redacted");
+    }
+}
+
+#[test]
+fn evidence_public_message_projection_redacts_colon_delimited_windows_identities() {
+    for sensitive in [r"LAB\SyntheticUser", r".\LocalUser"] {
+        let raw_message = format!(
+            r#"Caller:{sensitive}; Path C:\Windows\CCM\Logs\PolicyAgent.log; Relative .\Cache\Policy.bin; UNC \\LAB-CM01\SMS_CCM\Logs\MP.log; status=71"#
+        );
+        let text = format!(
+            r#"<![LOG[{raw_message}]LOG]!><time="10:00:00.000-240" date="07-30-2026" component="PolicyAgent" context="" type="1" thread="42" file="policyagent.cpp">"#
+        );
+
+        let evidence = normalize_ccm_artifact(client_policy_artifact(), &text);
+        let message = &evidence[0].message;
+        let json = serde_json::to_string(&evidence).unwrap();
+
+        assert!(!message.contains(sensitive), "{sensitive} leaked");
+        assert_public_json_omits(&json, sensitive);
+        for safe in [
+            r"C:\Windows\CCM\Logs\PolicyAgent.log",
+            r".\Cache\Policy.bin",
+            r"\\LAB-CM01\SMS_CCM\Logs\MP.log",
+            "status=71",
+        ] {
+            assert!(message.contains(safe), "{safe} was falsely redacted");
+        }
+    }
 }
 
 #[test]

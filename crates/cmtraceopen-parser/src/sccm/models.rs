@@ -97,6 +97,53 @@ impl SccmFindingClass {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SccmTimeOrderingState {
+    NormalizedUtc,
+    OffsetMissing,
+    OffsetInvalid,
+    TimestampMissing,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SccmTimestamp {
+    pub original_display: Option<String>,
+    pub offset_minutes: Option<i32>,
+    pub utc_millis: Option<i64>,
+    pub ordering_state: SccmTimeOrderingState,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SccmEvidenceRef {
+    pub artifact_id: String,
+    pub entry_id: String,
+    pub line_start: Option<u32>,
+    pub line_end: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SccmSensitiveHandle {
+    pub scheme: String,
+    pub value: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SccmEvidence {
+    pub evidence_id: String,
+    pub reference: SccmEvidenceRef,
+    pub role: SccmRole,
+    pub component: Option<String>,
+    pub ccm_source_file: Option<String>,
+    pub message: String,
+    pub timestamp: SccmTimestamp,
+    pub execution_context: Option<SccmSensitiveHandle>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum SccmRotation {
     Current,
