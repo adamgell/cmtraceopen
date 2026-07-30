@@ -25,9 +25,10 @@ fn server_intake_manifests() -> Vec<(String, Value)> {
                 .to_string_lossy()
                 .into_owned();
             let contents = std::fs::read_to_string(scenario_dir.join("manifest.json"))
-                .expect("scenario manifest is readable");
-            let manifest =
-                serde_json::from_str(&contents).expect("scenario manifest contains valid JSON");
+                .unwrap_or_else(|error| panic!("{scenario}: manifest is readable: {error}"));
+            let manifest = serde_json::from_str(&contents).unwrap_or_else(|error| {
+                panic!("{scenario}: manifest contains valid JSON: {error}")
+            });
             (scenario, manifest)
         })
         .collect()

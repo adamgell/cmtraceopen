@@ -5,8 +5,8 @@ focused Rust fixture-contract test enforces their site-code, rotation-path, and
 byte-integrity invariants, but no production native reader consumes them yet.
 Every value is synthetic, deterministic, and privacy-safe:
 
-- permitted topology labels are `LAB-CM01`, `LAB-MP01`, `LAB-DP01`, and the
-  exact synthetic three-character site code `LAB`;
+- permitted topology host labels are `LAB-CM01`, `LAB-MP01`, and `LAB-DP01`;
+- the exact synthetic three-character site code is `LAB`;
 - raw source paths are replaced by `REDACTED_*` markers;
 - configured roots use deterministic opaque `synthetic:path:*` fingerprints;
 - every manifest declares `syntheticFixture: true` and `proposalOnly: true`;
