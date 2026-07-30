@@ -34,13 +34,8 @@ pub fn is_dns_evtx(path: &Path) -> bool {
     };
 
     for record in parser.records_json().take(5).flatten() {
-        if let Ok(json) = serde_json::from_str::<Value>(&record.data) {
-            let provider = json["Event"]["System"]["Provider"]["#attributes"]["Name"]
-                .as_str()
-                .unwrap_or("");
-            if provider == DNS_PROVIDER {
-                return true;
-            }
+        if serialized_record_is_dns_provider(&record.data) {
+            return true;
         }
     }
     false
@@ -76,88 +71,16 @@ pub fn parse_evtx(path: &str) -> Result<ParseResult, String> {
             }
         };
 
-        let json: Value = match serde_json::from_str(&record.data) {
-            Ok(v) => v,
-            Err(_) => {
-                parse_errors += 1;
-                continue;
+        match parse_serialized_record(&record.data, path, id) {
+            Ok(Some(entry)) => {
+                entries.push(entry);
+                id += 1;
             }
-        };
-
-        let system = &json["Event"]["System"];
-
-        // Only process DNS Server events
-        let provider = system["Provider"]["#attributes"]["Name"]
-            .as_str()
-            .unwrap_or("");
-        if provider != DNS_PROVIDER {
-            continue;
+            Ok(None) => {}
+            Err(()) => {
+                parse_errors += 1;
+            }
         }
-
-        let event_id = extract_event_id(system);
-        let event_data = &json["Event"]["EventData"];
-
-        let (timestamp_ms, timestamp_display) = parse_evtx_timestamp(
-            system["TimeCreated"]["#attributes"]["SystemTime"]
-                .as_str()
-                .unwrap_or(""),
-        );
-
-        let (message, query_name, query_type, response_code, zone_name, source_ip, severity) =
-            extract_event_fields(event_id, event_data);
-
-        entries.push(LogEntry {
-            id,
-            line_number: id as u32 + 1,
-            message,
-            component: Some("DNSServer".to_string()),
-            timestamp: timestamp_ms,
-            timestamp_display,
-            severity,
-            thread: None,
-            thread_display: None,
-            source_file: None,
-            format: LogFormat::DnsAudit,
-            file_path: path.to_string(),
-            timezone_offset: None,
-            error_code_spans: Vec::new(),
-            ip_address: None,
-            host_name: None,
-            mac_address: None,
-            result_code: None,
-            gle_code: None,
-            setup_phase: None,
-            operation_name: None,
-            http_method: None,
-            uri_stem: None,
-            uri_query: None,
-            status_code: None,
-            sub_status: None,
-            time_taken_ms: None,
-            client_ip: None,
-            server_ip: None,
-            user_agent: None,
-            server_port: None,
-            username: None,
-            win32_status: None,
-            query_name,
-            query_type,
-            response_code,
-            dns_direction: None,
-            dns_protocol: None,
-            source_ip,
-            dns_flags: None,
-            dns_event_id: Some(event_id),
-            zone_name,
-            entry_kind: None,
-            whatif: None,
-            section_name: None,
-            section_color: None,
-            iteration: None,
-            tags: None,
-        });
-
-        id += 1;
     }
 
     super::annotate_error_code_spans(&mut entries);
@@ -188,6 +111,93 @@ pub fn parse_evtx(path: &str) -> Result<ParseResult, String> {
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
+
+fn serialized_record_is_dns_provider(serialized: &str) -> bool {
+    serde_json::from_str::<Value>(serialized)
+        .ok()
+        .and_then(|json| {
+            json["Event"]["System"]["Provider"]["#attributes"]["Name"]
+                .as_str()
+                .map(|provider| provider == DNS_PROVIDER)
+        })
+        .unwrap_or(false)
+}
+
+fn parse_serialized_record(
+    serialized: &str,
+    file_path: &str,
+    id: u64,
+) -> Result<Option<LogEntry>, ()> {
+    let json: Value = serde_json::from_str(serialized).map_err(|_| ())?;
+    let system = &json["Event"]["System"];
+    let provider = system["Provider"]["#attributes"]["Name"]
+        .as_str()
+        .unwrap_or("");
+    if provider != DNS_PROVIDER {
+        return Ok(None);
+    }
+
+    let event_id = extract_event_id(system);
+    let event_data = &json["Event"]["EventData"];
+    let (timestamp_ms, timestamp_display) = parse_evtx_timestamp(
+        system["TimeCreated"]["#attributes"]["SystemTime"]
+            .as_str()
+            .unwrap_or(""),
+    );
+    let (message, query_name, query_type, response_code, zone_name, source_ip, severity) =
+        extract_event_fields(event_id, event_data);
+
+    Ok(Some(LogEntry {
+        id,
+        line_number: id as u32 + 1,
+        message,
+        component: Some("DNSServer".to_string()),
+        timestamp: timestamp_ms,
+        timestamp_display,
+        severity,
+        thread: None,
+        thread_display: None,
+        source_file: None,
+        format: LogFormat::DnsAudit,
+        file_path: file_path.to_string(),
+        timezone_offset: None,
+        error_code_spans: Vec::new(),
+        ip_address: None,
+        host_name: None,
+        mac_address: None,
+        result_code: None,
+        gle_code: None,
+        setup_phase: None,
+        operation_name: None,
+        http_method: None,
+        uri_stem: None,
+        uri_query: None,
+        status_code: None,
+        sub_status: None,
+        time_taken_ms: None,
+        client_ip: None,
+        server_ip: None,
+        user_agent: None,
+        server_port: None,
+        username: None,
+        win32_status: None,
+        query_name,
+        query_type,
+        response_code,
+        dns_direction: None,
+        dns_protocol: None,
+        source_ip,
+        dns_flags: None,
+        dns_event_id: Some(event_id),
+        zone_name,
+        entry_kind: None,
+        whatif: None,
+        section_name: None,
+        section_color: None,
+        iteration: None,
+        tags: None,
+    }))
+}
 
 /// Extract the EventID from the EVTX System block.
 ///
@@ -475,6 +485,22 @@ fn extract_generic(event_id: u32, data: &Value) -> EventFields {
 mod tests {
     use super::*;
 
+    const DNS_CREATE_RECORD: &str = r##"{
+      "Event": {
+        "System": {
+          "Provider": {"#attributes": {"Name": "Microsoft-Windows-DNSServer"}},
+          "EventID": 515,
+          "TimeCreated": {"#attributes": {"SystemTime": "2026-07-29T14:00:00.000Z"}}
+        },
+        "EventData": {
+          "NAME": "host.example.test",
+          "Type": "1",
+          "Zone": "example.test",
+          "TTL": "3600"
+        }
+      }
+    }"##;
+
     fn make_event_data(fields: &[(&str, &str)]) -> Value {
         let mut map = serde_json::Map::new();
         for (k, v) in fields {
@@ -578,5 +604,35 @@ mod tests {
 
         assert_eq!(millis, None);
         assert_eq!(display, None);
+    }
+
+    #[test]
+    fn serialized_dns_record_maps_provider_event_and_fields() {
+        let entry = parse_serialized_record(DNS_CREATE_RECORD, "dns-audit.evtx", 7)
+            .expect("valid JSON")
+            .expect("DNS record");
+        assert_eq!(entry.id, 7);
+        assert_eq!(entry.line_number, 8);
+        assert_eq!(entry.dns_event_id, Some(515));
+        assert_eq!(entry.query_name.as_deref(), Some("host.example.test"));
+        assert_eq!(entry.query_type.as_deref(), Some("A"));
+        assert_eq!(entry.zone_name.as_deref(), Some("example.test"));
+        assert!(entry.timestamp.is_some());
+    }
+
+    #[test]
+    fn serialized_non_dns_record_is_filtered_without_error() {
+        let record = DNS_CREATE_RECORD.replace(
+            "Microsoft-Windows-DNSServer",
+            "Microsoft-Windows-OtherProvider",
+        );
+        assert!(parse_serialized_record(&record, "other.evtx", 0)
+            .expect("valid JSON")
+            .is_none());
+    }
+
+    #[test]
+    fn malformed_serialized_record_is_a_parse_error() {
+        assert!(parse_serialized_record("{not-json", "dns-audit.evtx", 0).is_err());
     }
 }

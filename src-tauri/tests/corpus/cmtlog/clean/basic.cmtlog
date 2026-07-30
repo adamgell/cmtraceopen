@@ -1,0 +1,4 @@
+<![LOG[Parser contract]LOG]!><time="10:00:00.000+000" date="07-29-2026" component="__HEADER__" context="" type="1" thread="0" file="" script="ParserContract.ps1" version="1.0.0" runid="test-run" mode="Normal" ps_version="7.4.0">
+<![LOG[Detection]LOG]!><time="10:00:01.000+000" date="07-29-2026" component="__SECTION__" context="" type="1" thread="0" file="" color="#5b9aff">
+<![LOG[Iteration 1]LOG]!><time="10:00:02.000+000" date="07-29-2026" component="__ITERATION__" context="" type="1" thread="0" file="" iteration="1/1" color="#a78bfa">
+<![LOG[Policy present]LOG]!><time="10:00:03.000+000" date="07-29-2026" component="ParserContract" context="" type="0" thread="42" file="" section="detection" iteration="1/1" tag="contract:clean" whatif="1">
