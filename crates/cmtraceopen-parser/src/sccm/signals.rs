@@ -88,7 +88,7 @@ pub fn extract_signals(message: &str) -> Vec<SccmSignal> {
                 let raw = value.as_str();
                 let numeric = parse_numeric(raw);
                 let (error_description, error_category) = numeric
-                    .map(|_| lookup_error_code(raw))
+                    .map(|numeric| lookup_error_code(&format!("0x{numeric:08X}")))
                     .filter(|result| result.found)
                     .map(|result| (Some(result.description), Some(result.category)))
                     .unwrap_or((None, None));

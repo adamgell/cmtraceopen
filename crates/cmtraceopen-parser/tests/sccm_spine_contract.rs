@@ -3,7 +3,8 @@ use cmtraceopen_parser::parser::detect::detect_parser;
 use cmtraceopen_parser::sccm::{
     classify_artifact_name, declared_source_catalog, extract_signals, normalize_ccm_artifact,
     SccmArtifact, SccmArtifactFamily, SccmCoverageState, SccmFindingClass, SccmRole, SccmRotation,
-    SccmSignalKind, SccmTimeOrderingState, SccmUnknownRotation, SCCM_DIAGNOSTICS_SCHEMA_VERSION,
+    SccmSignal, SccmSignalKind, SccmTimeOrderingState, SccmUnknownRotation,
+    SCCM_DIAGNOSTICS_SCHEMA_VERSION,
 };
 
 fn client_policy_artifact() -> SccmArtifact {
@@ -135,9 +136,22 @@ fn signal_extractor_preserves_unknown_exit_and_gle_values() {
     assert!(signals
         .iter()
         .all(|signal| signal.error_description.is_none() || !signal.raw.is_empty()));
+    assert!(signals[0].error_description.is_some());
     assert_eq!(signals[1].numeric, Some(0xDEADBEEF));
     assert_eq!(signals[1].error_description, None);
     assert_eq!(signals[1].error_category, None);
+}
+
+#[test]
+fn signal_extractor_does_not_enrich_decimal_values_as_unprefixed_hex() {
+    let signals = extract_signals("status=80004005");
+
+    assert_eq!(signals.len(), 1);
+    assert_eq!(signals[0].kind, SccmSignalKind::Status);
+    assert_eq!(signals[0].raw, "80004005");
+    assert_eq!(signals[0].numeric, Some(80_004_005));
+    assert_eq!(signals[0].error_description, None);
+    assert_eq!(signals[0].error_category, None);
 }
 
 #[test]
@@ -200,6 +214,38 @@ fn signal_extractor_is_deterministic_and_serializes_camel_case() {
     assert!(json[0]["errorCategory"].is_string());
     assert!(json[0]["start"].is_number());
     assert!(json[0]["end"].is_number());
+    assert_eq!(
+        json,
+        serde_json::json!([
+            {
+                "kind": "hResult",
+                "raw": "0x80004005",
+                "numeric": 2_147_500_037_u32,
+                "start": 8,
+                "end": 18,
+                "errorDescription": "E_FAIL - Unspecified failure",
+                "errorCategory": "Windows"
+            },
+            {
+                "kind": "status",
+                "raw": "4294967296",
+                "numeric": null,
+                "start": 27,
+                "end": 37,
+                "errorDescription": null,
+                "errorCategory": null
+            }
+        ])
+    );
+
+    let decoded: Vec<SccmSignal> = serde_json::from_value(json.clone()).unwrap();
+    assert_eq!(decoded, first);
+    assert_eq!(serde_json::to_value(&decoded).unwrap(), json);
+
+    let kind_json = serde_json::to_string(&SccmSignalKind::Gle).unwrap();
+    assert_eq!(kind_json, r#""gle""#);
+    let decoded_kind: SccmSignalKind = serde_json::from_str(&kind_json).unwrap();
+    assert_eq!(decoded_kind, SccmSignalKind::Gle);
 }
 
 #[test]
