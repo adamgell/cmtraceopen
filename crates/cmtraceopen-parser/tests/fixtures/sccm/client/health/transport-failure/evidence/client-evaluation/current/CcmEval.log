@@ -1,0 +1,2 @@
+# SYNTHETIC FIXTURE: LAB-CLIENT-01 only
+<![LOG[Client service evaluation succeeded clientGuid=44444444-4444-4444-4444-444444444444]LOG]!><time="01:40:01.000+000" date="07-30-2026" component="CcmEval" context="" type="1" thread="1" file="ccmeval.cc:1">

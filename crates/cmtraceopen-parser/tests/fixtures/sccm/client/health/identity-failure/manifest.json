@@ -1,0 +1,13 @@
+{
+  "sccmManifestVersion": 1,
+  "proposalOnly": true,
+  "syntheticFixture": true,
+  "scenario": "identity-failure",
+  "bundle": {"role":"client","captureHost":"LAB-CLIENT-01","siteCode":"CONTOSO","artifactOrder":"logicalArtifactId,pathFingerprint,rotationRank,originalBasename","rotationOrder":"current,lo,numeric-ascending,timestamp-ascending"},
+  "artifacts": [
+    {"artifactId":"client-ccmsetup","role":"client","kind":"ccmLog","captureState":"captured","originalBasename":"ccmsetup.log","sanitizedSourcePath":"SYNTHETIC://root-a/ccmsetup/Logs/ccmsetup.log","pathFingerprint":"health-identity-ccmsetup","rotation":{"kind":"current","fragmentComplete":true},"sourceVersion":"5.00.TEST.0000","capturedUtc":"2026-07-30T01:20:00Z","bytesCopied":256,"relativePath":"evidence/client-ccmsetup/current/ccmsetup.log"},
+    {"artifactId":"client-evaluation","role":"client","kind":"ccmLog","captureState":"captured","originalBasename":"CcmEval.log","sanitizedSourcePath":"SYNTHETIC://root-a/CCM/Logs/CcmEval.log","pathFingerprint":"health-identity-evaluation","rotation":{"kind":"current","fragmentComplete":true},"sourceVersion":"5.00.TEST.0000","capturedUtc":"2026-07-30T01:20:01Z","bytesCopied":256,"relativePath":"evidence/client-evaluation/current/CcmEval.log"},
+    {"artifactId":"client-identity","role":"client","kind":"ccmLog","captureState":"captured","originalBasename":"ClientIDManagerStartup.log","sanitizedSourcePath":"SYNTHETIC://root-a/CCM/Logs/ClientIDManagerStartup.log","pathFingerprint":"health-identity-failure","rotation":{"kind":"current","fragmentComplete":true},"sourceVersion":"5.00.TEST.0000","capturedUtc":"2026-07-30T01:20:02Z","bytesCopied":256,"relativePath":"evidence/client-identity/current/ClientIDManagerStartup.log"},
+    {"artifactId":"client-location","role":"client","kind":"ccmLog","captureState":"absent","originalBasename":"LocationServices.log","sanitizedSourcePath":null,"pathFingerprint":"health-identity-location","rotation":{"kind":"current","fragmentComplete":true},"sourceVersion":"5.00.TEST.0000","capturedUtc":"2026-07-30T01:20:03Z","bytesCopied":0,"relativePath":null}
+  ]
+}

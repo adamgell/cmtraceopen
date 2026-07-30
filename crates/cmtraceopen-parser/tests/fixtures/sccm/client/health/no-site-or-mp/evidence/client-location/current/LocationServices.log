@@ -1,0 +1,4 @@
+# SYNTHETIC FIXTURE: LAB-CLIENT-01 only
+<![LOG[Location query started clientGuid=33333333-3333-3333-3333-333333333333]LOG]!><time="01:30:03.000+000" date="07-30-2026" component="LocationServices" context="" type="1" thread="1" file="location.cc:1">
+<![LOG[Generic network warning error=0x80072EFD]LOG]!><time="01:30:03.500+000" date="07-30-2026" component="CcmMessaging" context="" type="2" thread="1" file="messaging.cc:2">
+<![LOG[Unrelated text mentions mp-unrelated.contoso.invalid]LOG]!><time="01:30:03.900+000" date="07-30-2026" component="LocationServices" context="" type="1" thread="1" file="location.cc:3">

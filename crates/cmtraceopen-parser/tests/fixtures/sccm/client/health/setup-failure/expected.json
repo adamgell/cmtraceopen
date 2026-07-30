@@ -1,0 +1,10 @@
+{
+  "contractState": "proposedPending318And319",
+  "scenario": "setup-failure",
+  "workflow": "health",
+  "workflowDiagnosisExpected": true,
+  "lastSuccessfulPhase": null,
+  "findings": [{"findingId":"health-setup-terminal","class":"confirmedFailure","phase":"setup","role":"client","confidence":"high","fixtureEvidence":[{"artifactId":"client-ccmsetup","entryId":"entry-000001"}],"coverageGapArtifactIds":[],"nextArtifacts":[],"mustNotClaim":["service failure","identity failure","management point cause"]}],
+  "coverage": [{"logicalArtifactId":"client-ccmsetup","state":"captured"},{"logicalArtifactId":"client-evaluation","state":"absent"},{"logicalArtifactId":"client-identity","state":"absent"},{"logicalArtifactId":"client-location","state":"absent"}],
+  "assertions": ["terminal setup evidence is profile-validated", "no later same-key bootstrap success exists"]
+}

@@ -1,0 +1,10 @@
+{
+  "contractState": "proposedPending318And319",
+  "scenario": "transport-failure",
+  "workflow": "health",
+  "workflowDiagnosisExpected": true,
+  "lastSuccessfulPhase": "managementPoint",
+  "findings": [{"findingId":"health-transport-terminal","class":"confirmedFailure","phase":"transport","role":"client","confidence":"high","fixtureEvidence":[{"artifactId":"client-location","entryId":"entry-000003"},{"artifactId":"client-location","entryId":"entry-000004"}],"coverageGapArtifactIds":[],"nextArtifacts":[],"mustNotClaim":["management point caused the failure","server-side failure","network root cause"]}],
+  "coverage": [{"logicalArtifactId":"client-ccmsetup","state":"captured"},{"logicalArtifactId":"client-evaluation","state":"captured"},{"logicalArtifactId":"client-identity","state":"captured"},{"logicalArtifactId":"client-location","state":"captured"}],
+  "assertions": ["terminal response shares validated requestId and managementPointHost with request", "finding is limited to the client transport observation"]
+}

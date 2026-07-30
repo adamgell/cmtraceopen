@@ -1,0 +1,10 @@
+{
+  "contractState": "proposedPending318And319",
+  "scenario": "identity-failure",
+  "workflow": "health",
+  "workflowDiagnosisExpected": true,
+  "lastSuccessfulPhase": "service",
+  "findings": [{"findingId":"health-identity-terminal","class":"confirmedFailure","phase":"identity","role":"client","confidence":"high","fixtureEvidence":[{"artifactId":"client-identity","entryId":"entry-000001"}],"coverageGapArtifactIds":[],"nextArtifacts":[],"mustNotClaim":["site assignment failure","management point failure","management point cause"]}],
+  "coverage": [{"logicalArtifactId":"client-ccmsetup","state":"captured"},{"logicalArtifactId":"client-evaluation","state":"captured"},{"logicalArtifactId":"client-identity","state":"captured"},{"logicalArtifactId":"client-location","state":"absent"}],
+  "assertions": ["identity terminal record carries the validated clientGuid", "site and MP are not inferred after identity failure"]
+}
