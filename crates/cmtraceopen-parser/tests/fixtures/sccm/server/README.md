@@ -1,11 +1,12 @@
 # Synthetic SCCM server intake fixtures
 
-These fixtures prepare issue #335 while #318 owns the shared SCCM schema. They
-are intentionally not connected to a Rust test target yet. Every value is
-synthetic, deterministic, and privacy-safe:
+These fixtures prepare issue #335 while #318 owns the shared SCCM schema. A
+focused Rust fixture-contract test enforces their site-code, rotation-path, and
+byte-integrity invariants, but no production native reader consumes them yet.
+Every value is synthetic, deterministic, and privacy-safe:
 
-- permitted topology labels are `LAB-CM01`, `LAB-MP01`, `LAB-DP01`, and
-  `CONTOSO`;
+- permitted topology labels are `LAB-CM01`, `LAB-MP01`, `LAB-DP01`, and the
+  exact synthetic three-character site code `LAB`;
 - raw source paths are replaced by `REDACTED_*` markers;
 - configured roots use deterministic opaque `synthetic:path:*` fingerprints;
 - every manifest declares `syntheticFixture: true` and `proposalOnly: true`;
