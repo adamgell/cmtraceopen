@@ -16,8 +16,14 @@ jobs:
     name: Update winget package
     runs-on: windows-latest
     environment: release
-    permissions: {}
+    permissions:
+      contents: read
     steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
       - name: Install komac
         shell: pwsh
         run: |
@@ -46,15 +52,50 @@ jobs:
           "url_x64_msi=$base/CMTrace-Open_${version}_x64.msi" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
           "url_arm64_msi=$base/CMTrace-Open_${version}_arm64.msi" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
-      - name: Submit to winget-pkgs
+      # Generated locally rather than submitted directly, so the locale metadata
+      # komac cannot manage (see .github/winget/locale-metadata.yaml) can be
+      # applied before the pull request is opened.
+      - name: Generate manifests
         shell: pwsh
         env:
           GITHUB_TOKEN: ${{ secrets.WINGET_PAT }}
         run: |
+          $out = Join-Path $env:RUNNER_TEMP 'winget-manifests'
+          New-Item -ItemType Directory -Path $out -Force | Out-Null
+
           komac update AdamGell.CMTraceOpen `
             --version ${{ steps.release.outputs.version }} `
             --urls ${{ steps.release.outputs.url_x64_exe }} `
                    ${{ steps.release.outputs.url_arm64_exe }} `
                    ${{ steps.release.outputs.url_x64_msi }} `
                    ${{ steps.release.outputs.url_arm64_msi }} `
-            --submit
+            --dry-run `
+            --output-directory $out
+          if ($LASTEXITCODE -ne 0) { throw "komac update failed with exit code $LASTEXITCODE" }
+
+          Write-Host "Generated manifests:"
+          Get-ChildItem -Path $out -Recurse -File | ForEach-Object { Write-Host "  $($_.FullName)" }
+
+          "output_dir=$out" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+        id: generate
+
+      - name: Apply locale metadata
+        shell: pwsh
+        run: |
+          ./.github/scripts/Set-WingetLocaleMetadata.ps1 `
+            -ManifestDirectory "${{ steps.generate.outputs.output_dir }}" `
+            -MetadataPath ./.github/winget/locale-metadata.yaml
+
+      - name: Submit to winget-pkgs
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ secrets.WINGET_PAT }}
+        run: |
+          # Submit the directory that actually holds the manifests, so the layout
+          # komac chose under --output-directory does not have to be hardcoded.
+          $manifest = Get-ChildItem -Path "${{ steps.generate.outputs.output_dir }}" -Recurse -Filter '*.locale.en-US.yaml' -File |
+            Select-Object -First 1
+          if (-not $manifest) { throw "No locale manifest found to submit" }
+
+          komac submit $manifest.Directory.FullName --yes
+          if ($LASTEXITCODE -ne 0) { throw "komac submit failed with exit code $LASTEXITCODE" }
