@@ -50,9 +50,13 @@ impl SccmFindingClass {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(tag = "kind", content = "value", rename_all = "camelCase")]
 pub enum SccmRotation {
     Current,
+    LoUnderscore,
+    Numbered(u32),
+    Timestamped(String),
+    Unknown(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
