@@ -29,6 +29,22 @@ fn site_core_manifests() -> Vec<(String, Value)> {
         .collect()
 }
 
+fn coverage_contract_failures(artifact: &Value) -> Vec<String> {
+    let state = artifact["captureState"].as_str().unwrap_or_default();
+    if matches!(
+        state,
+        "absent" | "accessDenied" | "capped" | "skipped" | "unsupported"
+    ) && artifact["rotation"]["fragmentComplete"] == true
+    {
+        vec![format!(
+            "{state} artifact {} cannot be a complete fragment",
+            artifact["artifactId"].as_str().unwrap_or("<missing>")
+        )]
+    } else {
+        Vec::new()
+    }
+}
+
 #[test]
 fn site_core_uses_canonical_rotation_and_coverage_contracts() {
     let manifests = site_core_manifests();
@@ -53,15 +69,11 @@ fn site_core_uses_canonical_rotation_and_coverage_contracts() {
             .as_array()
             .expect("site-core artifacts are an array")
         {
-            let state = artifact["captureState"].as_str().unwrap_or_default();
-            if matches!(state, "absent" | "accessDenied" | "skipped" | "unsupported")
-                && artifact["rotation"]["fragmentComplete"] == true
-            {
-                failures.push(format!(
-                    "{scenario}: noncaptured artifact {} cannot be a complete fragment",
-                    artifact["artifactId"].as_str().unwrap_or("<missing>")
-                ));
-            }
+            failures.extend(
+                coverage_contract_failures(artifact)
+                    .into_iter()
+                    .map(|failure| format!("{scenario}: {failure}")),
+            );
         }
     }
 
@@ -135,4 +147,15 @@ fn site_core_uses_canonical_rotation_and_coverage_contracts() {
     }
 
     assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn capped_artifact_cannot_claim_a_complete_fragment() {
+    let artifact = serde_json::json!({
+        "artifactId": "capped-probe",
+        "captureState": "capped",
+        "rotation": {"kind": "current", "fragmentComplete": true}
+    });
+
+    assert_eq!(coverage_contract_failures(&artifact).len(), 1);
 }
