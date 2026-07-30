@@ -33,9 +33,19 @@ to a semantic reducer as a complete logical record.
 Expected records are future-test contracts, not current serialized API claims:
 
 - `contractState` remains `proposedPending318And319`.
-- `fixtureEvidence` uses deterministic fixture-local entry IDs. #318/#319 must
-  define the public reader and evidence-ID projection before these become
-  compiled assertions.
+- Every physical candidate has a globally unique `artifactId`; the logical
+  #319 design-only catalog identity is separately preserved as
+  `designOnlyCatalog.entryId`.
+- `LocationServices.log` is captured once per scenario as
+  `client-location-services-shared`, with sorted `groupMemberships` of
+  `client-content` and `client-location`. Health consumes only the
+  `client-location` membership.
+- Captured artifacts record exact `bytesCopied`, `encoding: "utf-8"`, and a
+  `collectionLimit`; non-captures use zero bytes and null capture-only fields.
+  Every usable record timestamp is at or before `capturedUtc`.
+- `fixtureEvidence` uses the physical artifact ID plus an exact fixture-local
+  entry ID and physical line range. #318/#319 must define the public reader and
+  evidence-ID projection before these become compiled assertions.
 - `nextArtifacts` is always the smallest logical client source that can answer
   the unresolved hop. An absence or coverage gap creates only
   `insufficientEvidence`, never a client failure.
@@ -63,8 +73,10 @@ bundle reader and makes direct assertions (not permissive snapshots):
 
 1. Normalize complete CCM logical records source-locally and reject records
    from `fragmentComplete: false` or malformed fragments before key extraction.
-2. Classify only the four #319 health source groups: `client-ccmsetup`,
-   `client-evaluation`, `client-identity`, and `client-location`.
+2. Classify only the #319 health memberships: `client-ccmsetup`,
+   `client-evaluation`, `client-identity`, and `client-location`. The shared
+   `client-location-services-shared` catalog entry is one physical capture,
+   not a second health-specific copy.
 3. Apply only a reviewed ConfigMgr/artifact-family extraction profile. Unknown
    versions or message patterns retain low-confidence safe evidence and cannot
    establish a terminal state or validated correlation key.
@@ -99,7 +111,7 @@ finding summary/title is client-side and contains none of `server`,
 | Normalized complete logical records, source-local entry IDs, safe evidence redaction, and bundle evidence ordering | #318 evidence ingest/export contract | Unresolved. |
 | `SccmPhase`, `SccmConfidence`, finding builder validation, evidence refs, artifact requests, and workflow analysis serialization | #318 shared finding/workflow contract | Unresolved. |
 | Versioned health message profiles and validated client/site/MP/request/bootstrap key extraction | #318 key/profile contract plus #320 review | Unresolved; no regex or heuristic is frozen by this corpus. |
-| Recognition of the four client health logical source groups and their coverage projection | #319 client catalog/intake contract | Unresolved. |
+| Recognition of the four client health logical memberships, including the shared `client-location-services-shared` entry, and their coverage projection | #319 client catalog/intake contract | Unresolved. |
 
 The currently visible #318 work establishes coverage/rotation model beginnings
 only; it does not authorize assumptions about the items above. Until all rows
@@ -113,6 +125,9 @@ proposed manifests against speculative APIs.
 - `SYNTHETIC://` is opaque provenance. No real endpoint path, user, SID,
   certificate, token, tenant, serial, deployment, or customer log content is
   permitted.
+- The synthetic marker is embedded in the first semantic CCM record, never a
+  marker-only line. A closing rotation fragment intentionally has no standalone
+  marker or invented semantic record.
 - Fixed timestamps and byte counts are intentional. A future reader must not
   add dynamic IDs, current time, temporary paths, or external error-database
   wording to expected output.

@@ -1,2 +1,1 @@
-# SYNTHETIC FIXTURE: LAB-CLIENT-01 only
-<![LOG[Client service evaluation succeeded clientGuid=22222222-2222-2222-2222-222222222222]LOG]!><time="01:20:01.000+000" date="07-30-2026" component="CcmEval" context="" type="1" thread="1" file="ccmeval.cc:1">
+<![LOG[# SYNTHETIC FIXTURE: LAB-CLIENT-01 only; Client service evaluation succeeded clientGuid=22222222-2222-2222-2222-222222222222]LOG]!><time="01:20:01.000+000" date="07-30-2026" component="CcmEval" context="" type="1" thread="1" file="ccmeval.cc:1">

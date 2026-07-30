@@ -1,5 +1,4 @@
-# SYNTHETIC FIXTURE: LAB-CLIENT-01 only
-<![LOG[Site assignment succeeded siteCode=CONTOSO clientGuid=11111111-1111-1111-1111-111111111111]LOG]!><time="01:00:03.000+000" date="07-30-2026" component="LocationServices" context="" type="1" thread="1" file="location.cc:1">
+<![LOG[# SYNTHETIC FIXTURE: LAB-CLIENT-01 only; Site assignment succeeded siteCode=CONTOSO clientGuid=11111111-1111-1111-1111-111111111111]LOG]!><time="01:00:03.000+000" date="07-30-2026" component="LocationServices" context="" type="1" thread="1" file="location.cc:1">
 <![LOG[Management point selected managementPointHost=mp-lab.contoso.invalid siteCode=CONTOSO]LOG]!><time="01:00:04.000+000" date="07-30-2026" component="LocationServices" context="" type="1" thread="1" file="location.cc:2">
 <![LOG[Transport request started requestId=REQ-TEST-001 managementPointHost=mp-lab.contoso.invalid]LOG]!><time="01:00:05.000+000" date="07-30-2026" component="CcmMessaging" context="" type="1" thread="1" file="messaging.cc:1">
 <![LOG[Transport response completed requestId=REQ-TEST-001 managementPointHost=mp-lab.contoso.invalid status=200]LOG]!><time="01:00:06.000+000" date="07-30-2026" component="CcmMessaging" context="" type="1" thread="1" file="messaging.cc:2">

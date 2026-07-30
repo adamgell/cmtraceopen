@@ -1,2 +1,1 @@
-# SYNTHETIC FIXTURE: LAB-CLIENT-01 only
-<![LOG[Bootstrap completed bootstrapId=BOOT-TEST-060 clientGuid=66666666-6666-6666-6666-666666666666]LOG]!><time="02:20:00.000+000" date="07-30-2026" component="ccmsetup" context="" type="1" thread="1" file="ccmsetup.cc:1">
+<![LOG[# SYNTHETIC FIXTURE: LAB-CLIENT-01 only; Bootstrap completed bootstrapId=BOOT-TEST-060 clientGuid=66666666-6666-6666-6666-666666666666]LOG]!><time="02:20:00.000+000" date="07-30-2026" component="ccmsetup" context="" type="1" thread="1" file="ccmsetup.cc:1">

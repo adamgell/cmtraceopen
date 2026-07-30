@@ -4,7 +4,9 @@
   "workflow": "health",
   "workflowDiagnosisExpected": true,
   "lastSuccessfulPhase": null,
-  "findings": [{"findingId":"health-setup-rotation-boundary","class":"insufficientEvidence","phase":"setup","role":"client","confidence":"low","fixtureEvidence":[],"coverageGapArtifactIds":["client-ccmsetup"],"nextArtifacts":[{"logicalArtifactId":"client-ccmsetup","reason":"capture a complete bootstrap logical record without a rotation boundary"}],"mustNotClaim":["setup success","setup failure","correlation key from split record"]}],
+  "findings": [
+    {"findingId":"health-setup-rotation-boundary","class":"insufficientEvidence","phase":"setup","role":"client","confidence":"low","fixtureEvidence":[],"coverageGapArtifactIds":["health-rotation-boundary-ccmsetup-current","health-rotation-boundary-ccmsetup-lo"],"nextArtifacts":[{"logicalArtifactId":"client-ccmsetup","reason":"capture a complete bootstrap logical record without a rotation boundary"}],"mustNotClaim":["setup success","setup failure","correlation key from split record"]}
+  ],
   "coverage": [{"logicalArtifactId":"client-ccmsetup","state":"captured"},{"logicalArtifactId":"client-evaluation","state":"absent"},{"logicalArtifactId":"client-identity","state":"absent"},{"logicalArtifactId":"client-location","state":"absent"}],
-  "assertions": ["each split fragment remains source-local", "a record reconstructed across rotations cannot advance or fail the state machine"]
+  "assertions": ["each split fragment remains source-local","a record reconstructed across rotations cannot advance or fail the state machine"]
 }

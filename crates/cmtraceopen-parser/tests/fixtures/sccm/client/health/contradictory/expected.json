@@ -4,7 +4,9 @@
   "workflow": "health",
   "workflowDiagnosisExpected": true,
   "lastSuccessfulPhase": null,
-  "findings": [{"findingId":"health-setup-contradictory","class":"symptom","phase":"setup","role":"client","confidence":"low","fixtureEvidence":[{"artifactId":"client-ccmsetup","entryId":"entry-000001"},{"artifactId":"client-ccmsetup","entryId":"entry-000002"}],"coverageGapArtifactIds":[],"nextArtifacts":[{"logicalArtifactId":"client-ccmsetup","reason":"capture a complete ordered bootstrap sequence for one validated bootstrapId"}],"mustNotClaim":["recovered setup","confirmed setup failure","management point cause"]}],
+  "findings": [
+    {"findingId":"health-setup-contradictory","class":"symptom","phase":"setup","role":"client","confidence":"low","fixtureEvidence":[{"artifactId":"health-contradictory-ccmsetup-current","entryId":"entry-000001","lineStart":1,"lineEnd":1},{"artifactId":"health-contradictory-ccmsetup-current","entryId":"entry-000002","lineStart":2,"lineEnd":2}],"coverageGapArtifactIds":[],"nextArtifacts":[{"logicalArtifactId":"client-ccmsetup","reason":"capture a complete ordered bootstrap sequence for one validated bootstrapId"}],"mustNotClaim":["recovered setup","confirmed setup failure","management point cause"]}
+  ],
   "coverage": [{"logicalArtifactId":"client-ccmsetup","state":"captured"},{"logicalArtifactId":"client-evaluation","state":"absent"},{"logicalArtifactId":"client-identity","state":"absent"},{"logicalArtifactId":"client-location","state":"absent"}],
-  "assertions": ["later success with bootstrapId BOOT-TEST-B cannot recover terminal BOOT-TEST-A", "same-key ordered recovery is a separate focused mutation"]
+  "assertions": ["later success with bootstrapId BOOT-TEST-B cannot recover terminal BOOT-TEST-A","same-key ordered recovery is a separate focused mutation"]
 }

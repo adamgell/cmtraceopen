@@ -4,7 +4,9 @@
   "workflow": "health",
   "workflowDiagnosisExpected": true,
   "lastSuccessfulPhase": "service",
-  "findings": [{"findingId":"health-identity-coverage-gap","class":"insufficientEvidence","phase":"identity","role":"client","confidence":"low","fixtureEvidence":[],"coverageGapArtifactIds":["client-identity"],"nextArtifacts":[{"logicalArtifactId":"client-identity","reason":"capture the identity registration outcome with readable source coverage"}],"mustNotClaim":["identity failure","site assignment failure","management point cause"]}],
+  "findings": [
+    {"findingId":"health-identity-coverage-gap","class":"insufficientEvidence","phase":"identity","role":"client","confidence":"low","fixtureEvidence":[],"coverageGapArtifactIds":["health-incomplete-identity-access-denied"],"nextArtifacts":[{"logicalArtifactId":"client-identity","reason":"capture the identity registration outcome with readable source coverage"}],"mustNotClaim":["identity failure","site assignment failure","management point cause"]}
+  ],
   "coverage": [{"logicalArtifactId":"client-ccmsetup","state":"captured"},{"logicalArtifactId":"client-evaluation","state":"captured"},{"logicalArtifactId":"client-identity","state":"accessDenied"},{"logicalArtifactId":"client-location","state":"absent"}],
-  "assertions": ["accessDenied is explicit coverage, not a failure diagnosis", "the smallest next artifact is client-identity"]
+  "assertions": ["accessDenied is explicit coverage, not a failure diagnosis","the smallest next artifact is client-identity"]
 }
