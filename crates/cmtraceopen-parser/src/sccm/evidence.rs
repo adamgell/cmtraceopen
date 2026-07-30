@@ -1,8 +1,112 @@
 use crate::parser::ccm::{CcmLogicalRecord, CcmTimestampParse, CcmTimestampParseState};
+use regex::Regex;
+use std::sync::OnceLock;
 
 use super::models::{
     SccmArtifact, SccmEvidence, SccmEvidenceRef, SccmRole, SccmTimeOrderingState, SccmTimestamp,
 };
+
+const PUBLIC_MESSAGE_PROFILE: &str = "sccm-public-message-v1";
+const PUBLIC_MESSAGE_REDACTION: &str = "[redacted:sccm-public-message-v1]";
+
+fn sensitive_message_label_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
+        Regex::new(
+            r"(?i)\b(?:authorization|shared[_-]?access[_-]?signature|client[_-]?secret|(?:client|access|refresh|id|device|session)[_-]?token|api[_-]?key|account[_-]?key|credential|password|passwd|secret|token|username|user|sig)\b\s*(?::|=)\s*",
+        )
+        .expect("SCCM sensitive message label regex must compile")
+    })
+}
+
+fn windows_identity_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
+        Regex::new(r"(?i)\b(?:NT AUTHORITY|[A-Z0-9][A-Z0-9._-]*)\\[A-Z0-9][A-Z0-9._$-]*\b")
+            .expect("SCCM Windows identity regex must compile")
+    })
+}
+
+/// Profile v1 is a deterministic, parser-only public projection. It removes
+/// recognized identity and secret-bearing values while leaving diagnostic
+/// codes and approved structured keys outside those values unchanged. It does
+/// not imply native collector validation.
+fn project_public_message_v1(raw: &str) -> String {
+    let redacted = redact_sensitive_segments(raw);
+    let projected = redact_windows_identities(&redacted);
+
+    format!("[{PUBLIC_MESSAGE_PROFILE}] {projected}")
+}
+
+fn redact_sensitive_segments(value: &str) -> String {
+    let mut projected = String::with_capacity(value.len());
+    let mut copied_through = 0;
+    let mut search_from = 0;
+
+    while let Some(label) = sensitive_message_label_re().find_at(value, search_from) {
+        projected.push_str(&value[copied_through..label.start()]);
+        projected.push_str(PUBLIC_MESSAGE_REDACTION);
+
+        let value_end = sensitive_value_end(value, label.end());
+        copied_through = value_end;
+        search_from = value_end;
+    }
+
+    projected.push_str(&value[copied_through..]);
+    projected
+}
+
+fn sensitive_value_end(value: &str, value_start: usize) -> usize {
+    let remaining = &value[value_start..];
+    let Some(first) = remaining.chars().next() else {
+        return value.len();
+    };
+
+    if matches!(first, '"' | '\'') {
+        let quote_width = first.len_utf8();
+        let mut escaped = false;
+        for (offset, character) in remaining[quote_width..].char_indices() {
+            if escaped {
+                escaped = false;
+            } else if character == '\\' {
+                escaped = true;
+            } else if character == first {
+                return value_start + quote_width + offset + character.len_utf8();
+            }
+        }
+
+        return value.len();
+    }
+
+    remaining
+        .char_indices()
+        .find_map(|(offset, character)| {
+            matches!(character, ',' | ';' | '\r' | '\n').then_some(value_start + offset)
+        })
+        .unwrap_or(value.len())
+}
+
+fn redact_windows_identities(value: &str) -> String {
+    let mut projected = String::with_capacity(value.len());
+    let mut copied_through = 0;
+
+    for matched in windows_identity_re().find_iter(value) {
+        let preceding = value[..matched.start()].chars().next_back();
+        let following = value[matched.end()..].chars().next();
+        let path_adjacent =
+            matches!(preceding, Some('\\' | '/' | ':')) || matches!(following, Some('\\' | '/'));
+        if path_adjacent {
+            continue;
+        }
+
+        projected.push_str(&value[copied_through..matched.start()]);
+        projected.push_str(PUBLIC_MESSAGE_REDACTION);
+        copied_through = matched.end();
+    }
+
+    projected.push_str(&value[copied_through..]);
+    projected
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct SccmRawEvidenceSnapshot {
@@ -51,7 +155,7 @@ impl SccmRawEvidenceSnapshot {
             role: self.role.clone(),
             component: self.component.clone(),
             ccm_source_file: self.ccm_source_file.clone(),
-            message: self.message.clone(),
+            message: project_public_message_v1(&self.message),
             timestamp: self.timestamp.clone(),
             // Raw execution context remains available only to this
             // crate-private snapshot. A public handle requires a separately
@@ -91,8 +195,11 @@ mod tests {
     use crate::sccm::models::{SccmCoverageState, SccmRole, SccmRotation};
 
     #[test]
-    fn export_redaction_does_not_mutate_raw_context_snapshot() {
-        let text = include_str!("../../tests/fixtures/sccm/spine/multiline-policy.log");
+    fn export_redaction_does_not_mutate_raw_snapshot() {
+        let raw_message = r#"Policy id={ABCDEFAB-0000-0000-0000-000000000001} failed hr=0x80070005 user=LAB\SyntheticUser token=synthetic-secret"#;
+        let text = format!(
+            r#"<![LOG[{raw_message}]LOG]!><time="10:00:00.000-240" date="07-30-2026" component="PolicyAgent" context="NT AUTHORITY\SYSTEM" type="1" thread="42" file="policyagent.cpp">"#
+        );
         let artifact = SccmArtifact {
             artifact_id: "client-policy-agent".into(),
             display_name: "PolicyAgent.log".into(),
@@ -105,7 +212,7 @@ mod tests {
             coverage: SccmCoverageState::Captured,
             encoding: Some("utf-8".into()),
         };
-        let record = scan_logical_records(text, &artifact.display_name)
+        let record = scan_logical_records(&text, &artifact.display_name)
             .into_iter()
             .next()
             .expect("fixture contains one CCM record");
@@ -119,9 +226,16 @@ mod tests {
             snapshot.raw_execution_context.as_deref(),
             Some(r"NT AUTHORITY\SYSTEM")
         );
-        assert!(!serde_json::to_string(&exported)
-            .unwrap()
-            .contains(r"NT AUTHORITY\\SYSTEM"));
+        assert_eq!(snapshot.message, raw_message);
+        let exported_json = serde_json::to_string(&exported).unwrap();
+        assert!(!exported_json.contains(r"NT AUTHORITY\\SYSTEM"));
+        assert!(!exported_json.contains(r"LAB\\SyntheticUser"));
+        assert!(!exported_json.contains("synthetic-secret"));
+        assert!(exported.message.starts_with("[sccm-public-message-v1] "));
+        assert!(exported.message.contains("hr=0x80070005"));
+        assert!(exported
+            .message
+            .contains("{ABCDEFAB-0000-0000-0000-000000000001}"));
         assert_eq!(exported.execution_context, None);
     }
 }

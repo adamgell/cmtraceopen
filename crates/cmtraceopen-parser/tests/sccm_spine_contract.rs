@@ -228,6 +228,78 @@ fn evidence_export_is_deterministic_redacted_and_non_mutating() {
 }
 
 #[test]
+fn evidence_public_message_projection_redacts_sensitive_markers_and_preserves_safe_tokens() {
+    let assignment_id = "{ABCDEFAB-0000-0000-0000-000000000001}";
+    let text = format!(
+        r#"<![LOG[Policy id={assignment_id} failed hr=0x80070005 user=LAB\SyntheticUser credential="synthetic credential with spaces" token=synthetic-secret]LOG]!><time="10:00:00.000-240" date="07-30-2026" component="PolicyAgent" context="" type="1" thread="42" file="policyagent.cpp">"#
+    );
+
+    let first = normalize_ccm_artifact(client_policy_artifact(), &text);
+    let second = normalize_ccm_artifact(client_policy_artifact(), &text);
+    let message = &first[0].message;
+    let json = serde_json::to_string(&first).unwrap();
+
+    assert_eq!(first, second);
+    assert!(message.starts_with("[sccm-public-message-v1] "));
+    assert!(message.contains(assignment_id));
+    assert!(message.contains("hr=0x80070005"));
+    for sensitive in [
+        r"LAB\SyntheticUser",
+        "synthetic credential with spaces",
+        "synthetic-secret",
+    ] {
+        assert!(
+            !message.contains(sensitive),
+            "{sensitive} leaked in message"
+        );
+        assert!(!json.contains(sensitive), "{sensitive} leaked in JSON");
+    }
+    assert!(message.contains("[redacted:sccm-public-message-v1]"));
+}
+
+#[test]
+fn evidence_public_message_projection_fails_closed_without_path_or_code_false_positives() {
+    let assignment_id = "{ABCDEFAB-0000-0000-0000-000000000001}";
+    let text = format!(
+        r#"<![LOG[Caller LAB\SyntheticUser; Authorization: Bearer synthetic-bearer; client_secret="synthetic; leaked-credential-fragment"; sig=synthetic-signature; clientToken=synthetic-client-token; Path C:\Windows\CCM\Logs\PolicyAgent.log Policy id={assignment_id} status=71]LOG]!><time="10:00:00.000-240" date="07-30-2026" component="PolicyAgent" context="" type="1" thread="42" file="policyagent.cpp">"#
+    );
+
+    let evidence = normalize_ccm_artifact(client_policy_artifact(), &text);
+    let message = &evidence[0].message;
+
+    assert!(message.starts_with("[sccm-public-message-v1] "));
+    assert!(message.contains(r"C:\Windows\CCM\Logs\PolicyAgent.log"));
+    assert!(message.contains(assignment_id));
+    assert!(message.contains("status=71"));
+    for sensitive in [
+        r"LAB\SyntheticUser",
+        "synthetic-bearer",
+        "leaked-credential-fragment",
+        "synthetic-signature",
+        "synthetic-client-token",
+    ] {
+        assert!(!message.contains(sensitive), "{sensitive} leaked");
+    }
+}
+
+#[test]
+fn evidence_public_message_projection_redacts_unterminated_sensitive_values_to_end() {
+    let assignment_id = "{ABCDEFAB-0000-0000-0000-000000000001}";
+    let text = format!(
+        r#"<![LOG[Policy id={assignment_id} hr=0x80070005 client_secret="synthetic; leaked-unterminated-tail]LOG]!><time="10:00:00.000-240" date="07-30-2026" component="PolicyAgent" context="" type="1" thread="42" file="policyagent.cpp">"#
+    );
+
+    let evidence = normalize_ccm_artifact(client_policy_artifact(), &text);
+    let message = &evidence[0].message;
+
+    assert!(message.starts_with("[sccm-public-message-v1] "));
+    assert!(message.contains(assignment_id));
+    assert!(message.contains("hr=0x80070005"));
+    assert!(message.ends_with("[redacted:sccm-public-message-v1]"));
+    assert!(!message.contains("leaked-unterminated-tail"));
+}
+
+#[test]
 fn serde_roles_are_string_backed_and_future_tolerant() {
     assert_eq!(
         serde_json::to_string(&SccmRole::ManagementPoint).unwrap(),
