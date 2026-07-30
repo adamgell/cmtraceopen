@@ -38,9 +38,14 @@ For every `captured` or `capped` artifact, `bytesCopied` equals the physical
 evidence-file length, `encoding` is `utf-8`, and `collectionLimit` states both
 the byte limit and whether it applied; `expected.json` mirrors those values in
 `artifactProvenance`. Noncapture artifacts remain `bytesCopied: 0` with a null
-relative path and do not invent capture provenance. The capped evidence is
-exactly 128 bytes, is explicitly truncated and fragment-incomplete, retains
-the marker inside those bytes, and is not a complete CCM record.
+relative path and do not invent capture provenance. An applied cap counts
+inclusive raw source bytes before decoding and retains that exact source
+prefix, even when the last byte splits a text or logical-record boundary. The
+collector never appends a truncation marker or repairs/replaces bytes. The
+capped evidence is exactly 128 bytes, is explicitly truncated and
+fragment-incomplete, retains the pre-existing synthetic marker inside those
+bytes, and is not a complete CCM record. Expected data locks its exact byte
+count and SHA-256.
 
 The first line of every evidence file must contain the literal
 `SYNTHETIC FIXTURE` plus scenario-specific coverage text; CCM files put it

@@ -107,6 +107,16 @@ fixtures mirror those fields by physical artifact ID. Noncapture states carry
 zero bytes and a null relative path without invented encoding/limit
 provenance.
 
+An applied byte cap is inclusive and counts raw source bytes before decoding.
+The captured payload is the exact source prefix through `byteLimit`, even when
+the boundary splits a multibyte sequence, physical line, or logical CCM
+record. The collector does not append a textual truncation marker, decode and
+repair the prefix, or replace boundary bytes. It records
+`bytesCopied == file size == byteLimit`, `fragmentComplete: false`, and an
+exact digest suitable for fixture verification. Any decoding or parse failure
+remains a coverage state and cannot turn error-looking retained text into a
+terminal finding.
+
 Capture states in this proposed SCCM extension are `captured`, `absent`,
 `accessDenied`, `capped`, `skipped`, `unsafePath`, `unsupported`, and
 `legacyUnknownDetail`. They must be projected to the eventual #318 coverage
