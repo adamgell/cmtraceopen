@@ -120,8 +120,9 @@ proposed manifests against speculative APIs.
 
 ## Privacy and replay rules
 
-- Every identifier is synthetic: `LAB-CLIENT-01`, `CONTOSO`, RFC-style UUIDs,
-  `.invalid` hosts, `BOOT-TEST-*`, and `REQ-TEST-*` are fixture tokens only.
+- Every identifier is synthetic: `LAB-CLIENT-01`, exact three-character site
+  code `LAB`, RFC-style UUIDs, `.invalid` hosts, `BOOT-TEST-*`, and
+  `REQ-TEST-*` are fixture tokens only.
 - `SYNTHETIC://` is opaque provenance. No real endpoint path, user, SID,
   certificate, token, tenant, serial, deployment, or customer log content is
   permitted.
