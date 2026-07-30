@@ -1,6 +1,8 @@
+use cmtraceopen_parser::models::log_entry::ParserKind;
+use cmtraceopen_parser::parser::detect::detect_parser;
 use cmtraceopen_parser::sccm::{
-    SccmArtifact, SccmCoverageState, SccmFindingClass, SccmRole, SccmRotation,
-    SCCM_DIAGNOSTICS_SCHEMA_VERSION,
+    classify_artifact_name, SccmArtifact, SccmArtifactFamily, SccmCoverageState, SccmFindingClass,
+    SccmRole, SccmRotation, SCCM_DIAGNOSTICS_SCHEMA_VERSION,
 };
 
 #[test]
@@ -88,4 +90,115 @@ fn artifact_manifest_fixture_preserves_each_coverage_state() {
         Some(r"C:\Windows\CCM\Logs\PolicyAgent.log")
     );
     assert_eq!(artifacts[3].encoding, None);
+}
+
+#[test]
+fn catalog_classifies_client_policy_without_changing_ccm_parser_kind() {
+    let class = classify_artifact_name("PolicyAgent.log", SccmRole::Client);
+    assert_eq!(class.family, SccmArtifactFamily::ClientPolicy);
+    assert_eq!(class.logical_name, "policyAgent");
+    assert!(class.uses_ccm_records);
+
+    let ccm = r#"<![LOG[Synthetic policy record]LOG]!><time="10:00:00.000-240" date="07-30-2026" component="PolicyAgent" context="" type="1" thread="42" file="policyagent.cpp">"#;
+    assert_eq!(
+        detect_parser("PolicyAgent.log", ccm).parser,
+        ParserKind::Ccm
+    );
+}
+
+#[test]
+fn catalog_recognizes_rotated_client_log_by_base_name() {
+    let class = classify_artifact_name("AppEnforce.log.3", SccmRole::Client);
+    assert_eq!(class.family, SccmArtifactFamily::ClientApplication);
+    assert_eq!(class.rotation, SccmRotation::Numbered(3));
+}
+
+#[test]
+fn catalog_leaves_unrecognized_sources_explicitly_unknown() {
+    let class = classify_artifact_name("CustomVendorHook.log", SccmRole::Client);
+    assert_eq!(
+        class.family,
+        SccmArtifactFamily::Unknown("customVendorHook".into())
+    );
+    assert!(!class.supported_for_diagnosis);
+}
+
+#[test]
+fn catalog_recognizes_every_declared_initial_source_for_its_role() {
+    let declared = [
+        ("CCMSetup.log", SccmRole::Client),
+        ("CcmEval.log", SccmRole::Client),
+        ("CcmExec.log", SccmRole::Client),
+        ("CcmRestart.log", SccmRole::Client),
+        ("ClientIDManagerStartup.log", SccmRole::Client),
+        ("ClientLocation.log", SccmRole::Client),
+        ("LocationServices.log", SccmRole::Client),
+        ("CcmMessaging.log", SccmRole::Client),
+        ("PolicyAgent.log", SccmRole::Client),
+        ("PolicyAgentProvider.log", SccmRole::Client),
+        ("PolicyEvaluator.log", SccmRole::Client),
+        ("Scheduler.log", SccmRole::Client),
+        ("CAS.log", SccmRole::Client),
+        ("ContentTransferManager.log", SccmRole::Client),
+        ("DataTransferService.log", SccmRole::Client),
+        ("AppIntentEval.log", SccmRole::Client),
+        ("AppDiscovery.log", SccmRole::Client),
+        ("AppEnforce.log", SccmRole::Client),
+        ("ScanAgent.log", SccmRole::Client),
+        ("WUAHandler.log", SccmRole::Client),
+        ("UpdatesDeployment.log", SccmRole::Client),
+        ("UpdatesHandler.log", SccmRole::Client),
+        ("UpdatesStore.log", SccmRole::Client),
+        ("smsts.log", SccmRole::Client),
+        ("sitecomp.log", SccmRole::SiteServer),
+        ("hman.log", SccmRole::SiteServer),
+        ("statmgr.log", SccmRole::SiteServer),
+        ("statesys.log", SccmRole::SiteServer),
+        ("MP_CliReg.log", SccmRole::ManagementPoint),
+        ("MP_GetAuth.log", SccmRole::ManagementPoint),
+        ("MP_GetPolicy.log", SccmRole::ManagementPoint),
+        ("MP_Location.log", SccmRole::ManagementPoint),
+        ("MP_RegistrationManager.log", SccmRole::ManagementPoint),
+        ("mpcontrol.log", SccmRole::ManagementPoint),
+        ("distmgr.log", SccmRole::SiteServer),
+        ("PkgXferMgr.log", SccmRole::SiteServer),
+        ("SMSDPProv.log", SccmRole::DistributionPoint),
+        ("PullDP.log", SccmRole::DistributionPoint),
+        ("WCM.log", SccmRole::SoftwareUpdatePoint),
+        ("WSUSCtrl.log", SccmRole::SoftwareUpdatePoint),
+        ("wsyncmgr.log", SccmRole::SoftwareUpdatePoint),
+        ("SUPSetup.log", SccmRole::SoftwareUpdatePoint),
+        ("replmgr.log", SccmRole::SiteServer),
+        ("rcmctrl.log", SccmRole::SiteServer),
+        ("sender.log", SccmRole::SiteServer),
+        ("despool.log", SccmRole::SiteServer),
+        ("Smsprov.log", SccmRole::Provider),
+        ("AdminService.log", SccmRole::Provider),
+    ];
+
+    for (name, role) in declared {
+        let class = classify_artifact_name(name, role.clone());
+        assert_eq!(class.role, role, "role changed for {name}");
+        assert!(
+            !matches!(class.family, SccmArtifactFamily::Unknown(_)),
+            "{name} was not catalogued"
+        );
+        assert!(class.uses_ccm_records, "{name} lost CCM framing");
+        assert!(class.supported_for_diagnosis, "{name} became unsupported");
+    }
+}
+
+#[test]
+fn catalog_requires_a_declared_role_and_rotation_shape() {
+    let wrong_role = classify_artifact_name("PolicyAgent.log", SccmRole::SiteServer);
+    assert!(matches!(wrong_role.family, SccmArtifactFamily::Unknown(_)));
+    assert!(!wrong_role.supported_for_diagnosis);
+
+    let rotated = classify_artifact_name("AppEnforce.lo_", SccmRole::Client);
+    assert_eq!(rotated.family, SccmArtifactFamily::ClientApplication);
+    assert_eq!(rotated.rotation, SccmRotation::LoUnderscore);
+
+    let backup = classify_artifact_name("PolicyAgent.log.backup", SccmRole::Client);
+    assert!(matches!(backup.family, SccmArtifactFamily::Unknown(_)));
+    assert!(!backup.supported_for_diagnosis);
 }
