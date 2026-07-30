@@ -1,0 +1,9 @@
+{
+  "contractState": "proposedPending318",
+  "scenario": "access-denied",
+  "workflowDiagnosisExpected": false,
+  "coverage": [{"logicalArtifactId":"client-policy-agent","state":"accessDenied"},{"logicalArtifactId":"client-policy-state","state":"captured"}],
+  "artifactProvenance": [{"artifactId":"fixture-access-policy-state-root-a-current","encoding":"utf-8","byteLimit":4096,"limitApplied":false}],
+  "requests": [{"logicalArtifactId":"client-policy-agent","reason":"Access must be provided for the bounded policy-agent source group."}],
+  "prohibitedClaims": ["policy failed", "management point failure"]
+}

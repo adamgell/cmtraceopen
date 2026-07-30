@@ -1,0 +1,46 @@
+{
+  "contractState": "proposedPending318",
+  "scenario": "collision",
+  "workflowDiagnosisExpected": false,
+  "coverage": [
+    {
+      "logicalArtifactId": "client-app-enforce",
+      "state": "captured",
+      "physicalArtifactCount": 2
+    }
+  ],
+  "artifactProvenance": [
+    {
+      "artifactId": "fixture-collision-app-enforce-root-a-current",
+      "encoding": "utf-8",
+      "byteLimit": 4096,
+      "limitApplied": false
+    },
+    {
+      "artifactId": "fixture-collision-app-enforce-root-b-current",
+      "encoding": "utf-8",
+      "byteLimit": 4096,
+      "limitApplied": false
+    }
+  ],
+  "preservedPhysicalArtifacts": [
+    {
+      "artifactId": "fixture-collision-app-enforce-root-a-current",
+      "pathFingerprint": "synthetic-collision-root-a",
+      "relativePath": "evidence/client-app-enforce/root-a/current/AppEnforce.log"
+    },
+    {
+      "artifactId": "fixture-collision-app-enforce-root-b-current",
+      "pathFingerprint": "synthetic-collision-root-b",
+      "relativePath": "evidence/client-app-enforce/root-b/current/AppEnforce.log"
+    }
+  ],
+  "assertions": {
+    "distinctArtifactIds": true,
+    "distinctPathFingerprints": true,
+    "distinctRelativePaths": true,
+    "mergedByBasename": false,
+    "overwrittenByBasename": false
+  },
+  "requests": []
+}

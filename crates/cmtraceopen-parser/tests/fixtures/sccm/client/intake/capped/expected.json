@@ -1,0 +1,13 @@
+{
+  "contractState": "proposedPending318",
+  "scenario": "capped",
+  "workflowDiagnosisExpected": false,
+  "coverage": [{"logicalArtifactId":"client-content","state":"capped","fragmentComplete":false,"truncated":true}],
+  "artifactProvenance": [{"artifactId":"fixture-capped-content-root-a-current","encoding":"utf-8","byteLimit":128,"limitApplied":true,"bytesCopied":128,"sha256":"3253f6c4bc7d74bd2dbdadbe2f6543ff61a57161f85f650869b1292556270114"}],
+  "rawByteCountedBeforeDecoding": true,
+  "exactSourcePrefix": true,
+  "collectorInjectedMarker": false,
+  "logicalRecordParseable": false,
+  "requests": [{"logicalArtifactId":"client-content","reason":"Recapture the bounded content group with sufficient approved limits."}],
+  "prohibitedClaims": ["content transfer terminal failure", "distribution point failure"]
+}

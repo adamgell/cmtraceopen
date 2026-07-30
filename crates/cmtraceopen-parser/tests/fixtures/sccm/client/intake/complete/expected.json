@@ -1,0 +1,40 @@
+{
+  "contractState": "proposedPending318",
+  "scenario": "complete",
+  "workflowDiagnosisExpected": false,
+  "coverage": [
+    {"logicalArtifactId":"client-app-enforce","state":"captured"},
+    {"logicalArtifactId":"client-app-intent","state":"captured"},
+    {"logicalArtifactId":"client-ccmsetup","state":"captured"},
+    {"logicalArtifactId":"client-content","state":"captured"},
+    {"logicalArtifactId":"client-evaluation","state":"captured"},
+    {"logicalArtifactId":"client-identity","state":"captured"},
+    {"logicalArtifactId":"client-location","state":"captured"},
+    {"logicalArtifactId":"client-policy-agent","state":"captured"},
+    {"logicalArtifactId":"client-policy-state","state":"captured"},
+    {"logicalArtifactId":"client-updates","state":"captured"},
+    {"logicalArtifactId":"client-windows-update-supplemental","state":"captured"}
+  ],
+  "artifactProvenance": [
+    {"artifactId":"fixture-complete-app-enforce-root-a-current","encoding":"utf-8","byteLimit":4096,"limitApplied":false},
+    {"artifactId":"fixture-complete-app-intent-root-a-current","encoding":"utf-8","byteLimit":4096,"limitApplied":false},
+    {"artifactId":"fixture-complete-ccmsetup-root-a-current","encoding":"utf-8","byteLimit":4096,"limitApplied":false},
+    {"artifactId":"fixture-complete-content-root-a-current","encoding":"utf-8","byteLimit":4096,"limitApplied":false},
+    {"artifactId":"fixture-complete-evaluation-root-a-current","encoding":"utf-8","byteLimit":4096,"limitApplied":false},
+    {"artifactId":"fixture-complete-identity-root-a-current","encoding":"utf-8","byteLimit":4096,"limitApplied":false},
+    {"artifactId":"fixture-complete-location-services-root-a-current","encoding":"utf-8","byteLimit":4096,"limitApplied":false},
+    {"artifactId":"fixture-complete-policy-agent-root-a-current","encoding":"utf-8","byteLimit":4096,"limitApplied":false},
+    {"artifactId":"fixture-complete-policy-state-root-a-current","encoding":"utf-8","byteLimit":4096,"limitApplied":false},
+    {"artifactId":"fixture-complete-updates-root-a-current","encoding":"utf-8","byteLimit":4096,"limitApplied":false},
+    {"artifactId":"fixture-complete-update-supplemental-root-a-current","encoding":"utf-8","byteLimit":4096,"limitApplied":false}
+  ],
+  "physicalArtifactAssertions": [
+    {
+      "artifactId": "fixture-complete-location-services-root-a-current",
+      "catalogEntryId": "client-location-services-shared",
+      "groupMemberships": ["client-content", "client-location"],
+      "physicalCaptureCount": 1
+    }
+  ],
+  "requests": []
+}
