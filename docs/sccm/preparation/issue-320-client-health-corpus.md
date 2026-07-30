@@ -115,7 +115,7 @@ finding summary/title is client-side and contains none of `server`,
 
 The currently visible #318 work establishes coverage/rotation model beginnings
 only; it does not authorize assumptions about the items above. Until all rows
-are mapped, no production reducer or compiling test may deserialize these
+are mapped, no production reducer or compiled test may deserialize these
 proposed manifests against speculative APIs.
 
 ## Privacy and replay rules
