@@ -70,6 +70,25 @@ function toNativeMenuLabel(label: string): string {
   return normalizedLabel;
 }
 
+/**
+ * Workspaces whose open path actually reports failure, and are therefore the
+ * only ones safe to record into the Recent menu.
+ *
+ * `log` goes through `loadLogWorkspaceSource`, which returns a boolean, and
+ * `dsregcmd` rethrows after failing. Every other workspace's `onOpenSource`
+ * catches the error, writes it into its own store, and resolves normally — so
+ * from here a failed open is indistinguishable from a successful one, and
+ * recording would put files that never opened into Recent.
+ */
+const RECORDABLE_WORKSPACES: ReadonlySet<WorkspaceId> = new Set<WorkspaceId>([
+  "log",
+  "dsregcmd",
+]);
+
+function isRecordableWorkspace(workspace: WorkspaceId): boolean {
+  return RECORDABLE_WORKSPACES.has(workspace);
+}
+
 async function inferPathKind(
   path: string,
 ): Promise<"file" | "folder" | "unknown"> {
@@ -377,7 +396,9 @@ export function useAppActions(): AppActionHandlers {
         return;
       }
 
-      void recordRecentSource(source, workspace);
+      if (isRecordableWorkspace(workspace)) {
+        void recordRecentSource(source, workspace);
+      }
     },
     [loadLogWorkspaceSource],
   );
@@ -403,7 +424,6 @@ export function useAppActions(): AppActionHandlers {
           source,
           "drag-drop.path-open",
         );
-        void recordRecentSource(source, activeWorkspace);
         return;
       }
 
@@ -412,7 +432,6 @@ export function useAppActions(): AppActionHandlers {
           "../workspaces/deployment/deployment-store"
         );
         await useDeploymentStore.getState().analyzeFolder(path);
-        void recordRecentPath(path, "deployment");
         return;
       }
 
@@ -421,7 +440,9 @@ export function useAppActions(): AppActionHandlers {
       await loadPathAsLogSource(path, {
         fallbackToFolder: true,
       });
-      void recordRecentPath(path, activeWorkspace);
+      if (isRecordableWorkspace(activeWorkspace)) {
+        void recordRecentPath(path, activeWorkspace);
+      }
     },
     [activeWorkspace],
   );
