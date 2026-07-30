@@ -16,11 +16,12 @@ Each scenario has `manifest.json` and `expected.json`. `Captured` and `Capped`
 artifacts also have minimal evidence at the exact bundle-relative path named by
 their manifest. `Absent`, `AccessDenied`, `Skipped`, and `Unsupported`
 artifacts have a null/omitted `relativePath`, zero `bytesCopied`, and no
-evidence placeholder. Manifest artifact IDs and non-null relative paths must be
-unique; expected source lists are canonicalized by role, source ID, path
-fingerprint, rotation order, basename, then artifact ID. The expected data
-documents only intake classification/coverage and never a role-health or
-client-causality finding.
+evidence placeholder. Artifact IDs are unique across every manifest artifact,
+captured or non-captured; non-null relative paths are also unique. Expected
+source lists are canonicalized by producer role/host, source ID, workflow
+subject, path fingerprint, rotation order, basename, then artifact ID. The
+expected data documents only intake classification/coverage and never a
+role-health or client-causality finding.
 
 The current preparation shape is provisional:
 
@@ -39,6 +40,9 @@ Validation must parse every JSON file and then walk every manifest artifact:
 - `Captured`/`Capped`: `relativePath` is non-null, resolves beneath its
   scenario directory, contains a `SYNTHETIC` marker, and its file byte length
   equals `bytesCopied`.
+- Every captured/capped artifact carries deterministic `encoding` and
+  `collectionLimit` provenance; expected data repeats those assertions.
+  Non-captured states omit those fields.
 - Complete captured records use all required CCM attributes (`time`, `date`,
   `component`, `context`, `type`, `thread`, and `file`) and contain
   `SYNTHETIC FIXTURE` inside the first record message. The deliberately capped
@@ -47,6 +51,13 @@ Validation must parse every JSON file and then walk every manifest artifact:
   omitted and `bytesCopied` is zero.
 - Every file beneath a scenario's `evidence/` tree is referenced by exactly one
   artifact. This rejects stale flat placeholders and unmanifested captures.
+- Complete record timestamps never exceed `collectedUtc`; timestamped rotation
+  names/values match their record instant. Unknown/invalid offsets remain
+  coverage gaps rather than receiving invented UTC.
+- Producer role/host topology is distinct from optional workflow subject.
+  Known site-server control logs cannot be relabeled as DP/SUP producers.
+- The configured-root collision scenario has two same-basename artifacts with
+  distinct fingerprints, opaque root segments, IDs, contents, and references.
 - Canonical artifact ordering, unique artifact IDs/paths, topology privacy
   markers, top-level synthetic/proposal markers, redacted original paths, and
   `synthetic:path:*` fingerprints remain stable.

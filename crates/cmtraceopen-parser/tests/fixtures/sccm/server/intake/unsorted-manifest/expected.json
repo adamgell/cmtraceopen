@@ -4,8 +4,13 @@
   "normalizedOutputByteIdenticalWhenReordered": true,
   "deterministicEvidenceIds": "pending #318 deterministic evidence contract",
   "coverage": [
-    { "role": "managementPoint", "sourceId": "server-mp-policy", "state": "captured" },
-    { "role": "siteServer", "sourceId": "server-sitecomp", "state": "captured" },
-    { "role": "siteServer", "sourceId": "server-status", "state": "captured" }
+    { "producerRole": "managementPoint", "sourceId": "server-mp-policy", "state": "captured" },
+    { "producerRole": "siteServer", "sourceId": "server-sitecomp", "state": "captured" },
+    { "producerRole": "siteServer", "sourceId": "server-status", "state": "captured" }
+  ],
+  "artifactProvenance": [
+    { "artifactId": "a-mp-policy", "encoding": "utf-8", "byteLimit": 4096, "limitApplied": false },
+    { "artifactId": "b-sitecomp", "encoding": "utf-8", "byteLimit": 4096, "limitApplied": false },
+    { "artifactId": "z-site-status", "encoding": "utf-8", "byteLimit": 4096, "limitApplied": false }
   ]
 }

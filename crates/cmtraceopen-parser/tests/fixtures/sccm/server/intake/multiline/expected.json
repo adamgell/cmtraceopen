@@ -1,6 +1,7 @@
 {
   "pre318ExpectedVersion": 1,
   "evidence": [{ "artifactId": "mp-policy-multiline", "lineRange": { "start": 1, "end": 2 }, "logicalRecordCount": 1 }],
-  "coverage": [{ "role": "managementPoint", "sourceId": "server-mp-policy", "state": "captured" }],
+  "coverage": [{ "producerRole": "managementPoint", "sourceId": "server-mp-policy", "state": "captured" }],
+  "artifactProvenance": [{ "artifactId": "mp-policy-multiline", "encoding": "utf-8", "byteLimit": 4096, "limitApplied": false }],
   "partialPhysicalFragmentCreatesTerminalResult": false
 }

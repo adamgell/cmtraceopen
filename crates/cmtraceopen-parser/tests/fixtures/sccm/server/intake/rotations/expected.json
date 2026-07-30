@@ -1,8 +1,14 @@
 {
   "pre318ExpectedVersion": 1,
   "lineageId": "mp-policy-rotation",
-  "canonicalRotationArtifactIds": ["mp-policy-ts-20260729", "mp-policy-numbered-2", "mp-policy-lo", "mp-policy-current"],
+  "canonicalRotationArtifactIds": ["mp-policy-ts-20260729-235700", "mp-policy-numbered-2", "mp-policy-lo", "mp-policy-current"],
   "uniqueRelativePaths": true,
   "collisionSafe": true,
-  "coverage": [{ "role": "managementPoint", "sourceId": "server-mp-policy", "state": "captured" }]
+  "coverage": [{ "producerRole": "managementPoint", "sourceId": "server-mp-policy", "state": "captured" }],
+  "artifactProvenance": [
+    { "artifactId": "mp-policy-ts-20260729-235700", "encoding": "utf-8", "byteLimit": 4096, "limitApplied": false },
+    { "artifactId": "mp-policy-numbered-2", "encoding": "utf-8", "byteLimit": 4096, "limitApplied": false },
+    { "artifactId": "mp-policy-lo", "encoding": "utf-8", "byteLimit": 4096, "limitApplied": false },
+    { "artifactId": "mp-policy-current", "encoding": "utf-8", "byteLimit": 4096, "limitApplied": false }
+  ]
 }

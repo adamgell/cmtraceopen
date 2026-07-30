@@ -1,6 +1,7 @@
 {
   "pre318ExpectedVersion": 1,
-  "coverage": [{ "role": "distributionPoint", "sourceId": "server-dp-distribution", "state": "absent", "gap": "candidate absent only" }],
+  "coverage": [{ "producerRole": "siteServer", "workflowSubjectRole": "distributionPoint", "sourceId": "server-dp-distribution", "state": "absent", "gap": "candidate absent only" }],
+  "nonCapturedProvenance": { "encoding": "omitted", "collectionLimit": "omitted" },
   "rolesObserved": ["siteServer"],
   "roleHealthFinding": "none",
   "forbiddenConclusion": "distribution point broken or absent"

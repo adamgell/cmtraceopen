@@ -1,12 +1,18 @@
 {
   "pre318ExpectedVersion": 1,
   "privacy": "synthetic",
-  "canonicalArtifactIds": ["dp-dist-current", "mp-policy-current", "sitecomp-current", "sup-sync-current"],
+  "canonicalArtifactIds": ["mp-policy-current", "dp-dist-current", "sitecomp-current", "sup-sync-current"],
   "coverage": [
-    { "role": "distributionPoint", "sourceId": "server-dp-distribution", "state": "captured" },
-    { "role": "managementPoint", "sourceId": "server-mp-policy", "state": "captured" },
-    { "role": "siteServer", "sourceId": "server-sitecomp", "state": "captured" },
-    { "role": "softwareUpdatePoint", "sourceId": "server-sup-sync", "state": "captured" }
+    { "producerRole": "managementPoint", "sourceId": "server-mp-policy", "state": "captured" },
+    { "producerRole": "siteServer", "workflowSubjectRole": "distributionPoint", "sourceId": "server-dp-distribution", "state": "captured" },
+    { "producerRole": "siteServer", "sourceId": "server-sitecomp", "state": "captured" },
+    { "producerRole": "siteServer", "workflowSubjectRole": "softwareUpdatePoint", "sourceId": "server-sup-sync", "state": "captured" }
+  ],
+  "artifactProvenance": [
+    { "artifactId": "mp-policy-current", "encoding": "utf-8", "byteLimit": 4096, "limitApplied": false },
+    { "artifactId": "dp-dist-current", "encoding": "utf-8", "byteLimit": 4096, "limitApplied": false },
+    { "artifactId": "sitecomp-current", "encoding": "utf-8", "byteLimit": 4096, "limitApplied": false },
+    { "artifactId": "sup-sync-current", "encoding": "utf-8", "byteLimit": 4096, "limitApplied": false }
   ],
   "roleHealthFinding": "none"
 }

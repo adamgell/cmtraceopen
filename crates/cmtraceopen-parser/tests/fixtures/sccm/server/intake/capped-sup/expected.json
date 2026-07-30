@@ -1,6 +1,7 @@
 {
   "pre318ExpectedVersion": 1,
-  "coverage": [{ "role": "softwareUpdatePoint", "sourceId": "server-sup-sync", "state": "capped", "truncated": true }],
+  "coverage": [{ "producerRole": "siteServer", "workflowSubjectRole": "softwareUpdatePoint", "sourceId": "server-sup-sync", "state": "capped", "truncated": true }],
+  "artifactProvenance": [{ "artifactId": "sup-sync-capped", "encoding": "utf-8", "byteLimit": 64, "limitApplied": true }],
   "logicalRecordParseable": false,
   "terminalSoftwareUpdatePointHealth": false,
   "nextArtifactRequest": "bounded recapture of server-sup-sync with a cap sufficient for complete logical records"

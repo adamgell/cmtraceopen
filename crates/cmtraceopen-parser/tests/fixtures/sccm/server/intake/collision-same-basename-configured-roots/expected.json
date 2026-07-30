@@ -1,0 +1,18 @@
+{
+  "pre318ExpectedVersion": 1,
+  "canonicalArtifactIds": ["mp-policy-root-a-current", "mp-policy-root-b-current"],
+  "coverage": [{ "producerRole": "managementPoint", "sourceId": "server-mp-policy", "state": "captured", "configuredRootInstances": 2 }],
+  "collisionAssertions": {
+    "sameBasename": "MP_GetPolicy.log",
+    "distinctPathFingerprints": true,
+    "distinctOpaqueRootSegments": true,
+    "neitherOverwritten": true,
+    "notMerged": true,
+    "normalizedArtifactCount": 2,
+    "exactReferencesResolve": true
+  },
+  "artifactProvenance": [
+    { "artifactId": "mp-policy-root-a-current", "encoding": "utf-8", "byteLimit": 4096, "limitApplied": false },
+    { "artifactId": "mp-policy-root-b-current", "encoding": "utf-8", "byteLimit": 4096, "limitApplied": false }
+  ]
+}

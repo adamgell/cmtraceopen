@@ -1,6 +1,7 @@
 {
   "pre318ExpectedVersion": 1,
-  "coverage": [{ "role": "managementPoint", "sourceId": "server-mp-policy", "state": "accessDenied" }],
+  "coverage": [{ "producerRole": "managementPoint", "sourceId": "server-mp-policy", "state": "accessDenied" }],
+  "nonCapturedProvenance": { "encoding": "omitted", "collectionLimit": "omitted" },
   "nextArtifactRequest": "read-only capture of server-mp-policy from the observed management point",
   "terminalManagementPointDiagnosis": false
 }
