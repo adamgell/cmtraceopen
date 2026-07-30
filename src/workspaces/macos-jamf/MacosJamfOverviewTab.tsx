@@ -8,6 +8,11 @@ function formatBool(b: boolean) {
 export function MacosJamfOverviewTab() {
   const env = useJamfStore((s) => s.environment.data);
   const status = useJamfStore((s) => s.environment.status);
+  const error = useJamfStore((s) => s.environment.error);
+  // Distinguish failure from loading; the banner above carries the retry.
+  if (status === "error") {
+    return <div>Failed to load JAMF environment{error ? `: ${error}` : "."}</div>;
+  }
   if (status === "loading" || !env) return <div>Loading...</div>;
 
   return (

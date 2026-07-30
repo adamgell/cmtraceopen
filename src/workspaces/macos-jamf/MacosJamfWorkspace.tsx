@@ -1,4 +1,4 @@
-import { Suspense, useEffect } from "react";
+import { Suspense, useCallback, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 
 import { useJamfStore } from "./jamf-store";
@@ -20,18 +20,20 @@ export function MacosJamfWorkspace() {
   const finish = useJamfStore((s) => s.finishLoad);
   const fail = useJamfStore((s) => s.failLoad);
 
+  const loadEnvironment = useCallback(async () => {
+    begin("environment");
+    try {
+      const env = await invoke<JamfEnvironment>("jamf_collect_environment");
+      finish("environment", env);
+    } catch (e) {
+      fail("environment", e instanceof Error ? e.message : String(e));
+    }
+  }, [begin, finish, fail]);
+
   useEffect(() => {
     if (envSlice.status !== "idle") return;
-    void (async () => {
-      begin("environment");
-      try {
-        const env = await invoke<JamfEnvironment>("jamf_collect_environment");
-        finish("environment", env);
-      } catch (e) {
-        fail("environment", e instanceof Error ? e.message : String(e));
-      }
-    })();
-  }, [envSlice.status, begin, finish, fail]);
+    void loadEnvironment();
+  }, [envSlice.status, loadEnvironment]);
 
   const tabBody = (() => {
     switch (activeTab) {
@@ -55,6 +57,8 @@ export function MacosJamfWorkspace() {
       <MacosJamfEnvironmentBanner
         environment={envSlice.data ?? null}
         loading={envSlice.status === "loading"}
+        error={envSlice.status === "error" ? envSlice.error : null}
+        onRetry={() => void loadEnvironment()}
       />
       <MacosJamfTabStrip active={activeTab} onChange={setActiveTab} />
       <Suspense fallback={<div>Loading...</div>}>{tabBody}</Suspense>

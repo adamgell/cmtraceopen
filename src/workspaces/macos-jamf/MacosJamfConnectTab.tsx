@@ -27,16 +27,27 @@ export function MacosJamfConnectTab() {
     }
   };
 
+  // `installed` is false until the environment slice resolves, so a first pass
+  // can mark this tab notInstalled before detection has actually run. Without
+  // the second clause that state was terminal: the idle guard blocked any
+  // retry, the store outlives unmounts, and this branch renders no Reload.
   useEffect(() => {
-    if (slice.status === "idle") void reload();
+    if (slice.status === "idle" || (installed && slice.status === "notInstalled")) {
+      void reload();
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [installed]);
+  }, [installed, slice.status]);
 
   if (slice.status === "notInstalled") {
     return (
       <div>
         <Subtitle2>JAMF Connect not detected</Subtitle2>
-        <Caption1>Install /Applications/JAMF Connect.app to populate this view.</Caption1>
+        <Caption1>
+          Install JAMF Connect to populate this view.
+        </Caption1>
+        <div style={{ marginTop: 8 }}>
+          <Button onClick={reload}>Re-check</Button>
+        </div>
       </div>
     );
   }

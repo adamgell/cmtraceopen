@@ -13,6 +13,7 @@ export function MacosJamfProfilesTab() {
   const finish = useJamfStore((s) => s.finishLoad);
   const fail = useJamfStore((s) => s.failLoad);
   const orgFromEnv = useJamfStore((s) => s.environment.data?.mdmOrganization ?? null);
+  const envStatus = useJamfStore((s) => s.environment.status);
   const [selected, setSelected] = useState<MacosMdmProfile | null>(null);
 
   const reload = async () => {
@@ -27,10 +28,12 @@ export function MacosJamfProfilesTab() {
     }
   };
 
+  // Wait for the environment before the first fetch: `expectedOrganization`
+  // comes from it, and firing on mount pinned the request to a null org.
   useEffect(() => {
-    if (slice.status === "idle") void reload();
+    if (envStatus !== "loading" && slice.status === "idle") void reload();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [envStatus]);
 
   if (slice.status === "loading") return <div>Listing profiles...</div>;
   if (slice.status === "error")
