@@ -20,7 +20,8 @@
       "originalBasename": "sitecomp.log",
       "configuredPath": true,
       "rotation": {
-        "kind": "current"
+        "kind": "current",
+        "fragmentComplete": false
       },
       "rotationLineage": "sitecomp.log",
       "captureState": "capped",

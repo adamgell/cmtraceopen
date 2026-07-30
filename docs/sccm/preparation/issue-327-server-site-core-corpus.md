@@ -123,9 +123,10 @@ shape:
   copied bytes;
 - `captured` and `capped` artifacts have a non-null relative path and exact
   local evidence;
-- a captured physical fragment that is not a complete logical record declares
-  `rotation.fragmentComplete: false`; capture success never implies parse
-  completeness;
+- every referenced physical artifact whose expected evidence identifies an
+  incomplete logical record declares `rotation.fragmentComplete: false`,
+  whether its capture state is `captured` or `capped`; capture success never
+  implies parse completeness;
 - `absent`, `accessDenied`, `skipped`, `unsupported`, and `parseFailed`
   artifacts have no relative path and zero copied bytes; and
 - artifacts are sorted by `artifactId`.
@@ -211,6 +212,9 @@ When #318 and #335 are reviewed, the production test for each scenario must:
    normalized output;
 6. validate every cited artifact and line range;
 7. prove `ConfirmedFailure` / `High` always cites its terminal record;
-8. prove coverage states do not become success or failure facts; and
-9. prove no client-impact, downstream-role-absence, or cross-side causal claim
+8. prove coverage states do not become success or failure facts;
+9. prove every expected evidence reference with
+   `completeLogicalRecord: false` maps to a manifest artifact with
+   `rotation.fragmentComplete: false`; and
+10. prove no client-impact, downstream-role-absence, or cross-side causal claim
    escapes the role-local analyzer.
