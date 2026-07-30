@@ -1,13 +1,8 @@
 use crate::parser::ccm::{CcmLogicalRecord, CcmTimestampParse, CcmTimestampParseState};
 
 use super::models::{
-    SccmArtifact, SccmEvidence, SccmEvidenceRef, SccmRole, SccmSensitiveHandle,
-    SccmTimeOrderingState, SccmTimestamp,
+    SccmArtifact, SccmEvidence, SccmEvidenceRef, SccmRole, SccmTimeOrderingState, SccmTimestamp,
 };
-
-const CONTEXT_HANDLE_SCHEME: &str = "sccm-context-fnv1a64-v1";
-const FNV1A64_OFFSET_BASIS: u64 = 0xcbf29ce484222325;
-const FNV1A64_PRIME: u64 = 0x00000100000001b3;
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct SccmRawEvidenceSnapshot {
@@ -58,11 +53,10 @@ impl SccmRawEvidenceSnapshot {
             ccm_source_file: self.ccm_source_file.clone(),
             message: self.message.clone(),
             timestamp: self.timestamp.clone(),
-            execution_context: self
-                .raw_execution_context
-                .as_deref()
-                .filter(|context| !context.trim().is_empty())
-                .map(sensitive_context_handle),
+            // Raw execution context remains available only to this
+            // crate-private snapshot. A public handle requires a separately
+            // reviewed keyed scheme and explicit caller-provided key.
+            execution_context: None,
         }
     }
 }
@@ -86,23 +80,6 @@ impl From<CcmTimestampParseState> for SccmTimeOrderingState {
             CcmTimestampParseState::OffsetInvalid => Self::OffsetInvalid,
             CcmTimestampParseState::TimestampMissing => Self::TimestampMissing,
         }
-    }
-}
-
-fn sensitive_context_handle(context: &str) -> SccmSensitiveHandle {
-    let mut hash = FNV1A64_OFFSET_BASIS;
-    for byte in b"sccm-context-v1\0"
-        .iter()
-        .copied()
-        .chain(context.as_bytes().iter().copied())
-    {
-        hash ^= u64::from(byte);
-        hash = hash.wrapping_mul(FNV1A64_PRIME);
-    }
-
-    SccmSensitiveHandle {
-        scheme: CONTEXT_HANDLE_SCHEME.to_string(),
-        value: format!("{hash:016x}"),
     }
 }
 
@@ -145,6 +122,6 @@ mod tests {
         assert!(!serde_json::to_string(&exported)
             .unwrap()
             .contains(r"NT AUTHORITY\\SYSTEM"));
-        assert!(exported.execution_context.is_some());
+        assert_eq!(exported.execution_context, None);
     }
 }

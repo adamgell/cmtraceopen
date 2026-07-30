@@ -93,15 +93,55 @@ fn public_ccm_malformed_continuation_stays_plain() {
 
 #[test]
 fn public_ccm_record_without_offset_keeps_legacy_projection() {
-    let text = r#"<![LOG[No source offset]LOG]!><time="10:00:00.000" date="07-30-2026" component="PolicyAgent" context="" type="1" thread="42" file="policyagent.cpp">"#;
+    // A nonzero seven-digit fraction proves that the parser does not steal
+    // the final fractional digit as a signless timezone offset.
+    let text = r#"<![LOG[No source offset]LOG]!><time="10:00:00.1234567" date="07-30-2026" component="PolicyAgent" context="" type="1" thread="42" file="policyagent.cpp">"#;
     let (entries, errors) =
         cmtraceopen_parser::parser::ccm::parse_content(text, "PolicyAgent.log", None);
+    let evidence = normalize_ccm_artifact(client_policy_artifact(), text);
 
     assert_eq!(errors, 0);
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].format, LogFormat::Ccm);
     assert!(entries[0].timestamp.is_some());
+    assert_eq!(
+        entries[0].timestamp_display.as_deref(),
+        Some("07-30-2026 10:00:00.123")
+    );
     assert_eq!(entries[0].timezone_offset, Some(0));
+    assert_eq!(evidence.len(), 1);
+    assert_eq!(
+        evidence[0].timestamp.original_display.as_deref(),
+        Some("07-30-2026 10:00:00.1234567")
+    );
+    assert_eq!(evidence[0].timestamp.offset_minutes, None);
+    assert_eq!(
+        evidence[0].timestamp.ordering_state,
+        SccmTimeOrderingState::OffsetMissing
+    );
+    assert_eq!(evidence[0].timestamp.utc_millis, None);
+}
+
+#[test]
+fn signless_ccm_offset_remains_explicit_for_public_and_evidence_paths() {
+    // CMTrace's documented `%03u%d` grammar permits the decimal offset to
+    // omit a sign: three millisecond digits followed by the offset.
+    let text = r#"<![LOG[Signless source offset]LOG]!><time="10:00:00.000240" date="07-30-2026" component="PolicyAgent" context="" type="1" thread="42" file="policyagent.cpp">"#;
+    let (entries, errors) =
+        cmtraceopen_parser::parser::ccm::parse_content(text, "PolicyAgent.log", None);
+    let evidence = normalize_ccm_artifact(client_policy_artifact(), text);
+
+    assert_eq!(errors, 0);
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].format, LogFormat::Ccm);
+    assert_eq!(entries[0].timezone_offset, Some(240));
+    assert_eq!(evidence.len(), 1);
+    assert_eq!(evidence[0].timestamp.offset_minutes, Some(240));
+    assert_eq!(
+        evidence[0].timestamp.ordering_state,
+        SccmTimeOrderingState::NormalizedUtc
+    );
+    assert!(evidence[0].timestamp.utc_millis.is_some());
 }
 
 #[test]
@@ -135,7 +175,7 @@ fn evidence_uses_one_logical_record_and_normalized_utc_ordering() {
 fn evidence_missing_or_invalid_time_provenance_is_not_comparable() {
     let cases = [
         (
-            r#"<![LOG[No source offset]LOG]!><time="10:00:00.000" date="07-30-2026" component="PolicyAgent" context="" type="1" thread="42" file="policyagent.cpp">"#,
+            r#"<![LOG[No source offset]LOG]!><time="10:00:00.1234567" date="07-30-2026" component="PolicyAgent" context="" type="1" thread="42" file="policyagent.cpp">"#,
             SccmTimeOrderingState::OffsetMissing,
             None,
         ),
@@ -175,21 +215,16 @@ fn evidence_export_is_deterministic_redacted_and_non_mutating() {
     assert_eq!(first, second);
     assert!(!first_json.contains(r"NT AUTHORITY\\SYSTEM"));
     assert!(!first_json.contains(r"C:\\Windows\\CCM\\Logs"));
-    let handle = first[0]
-        .execution_context
-        .as_ref()
-        .expect("non-empty raw context receives a redacted handle");
-    assert_eq!(handle.scheme, "sccm-context-fnv1a64-v1");
-    assert_eq!(handle.value.len(), 16);
+    assert_eq!(
+        first[0].execution_context, None,
+        "public export omits unkeyed context handles by default"
+    );
 
     let alternate = r#"<![LOG[Synthetic user context]LOG]!><time="10:00:00.000-240" date="07-30-2026" component="PolicyAgent" context="LAB\SyntheticUser" type="1" thread="42" file="policyagent.cpp">"#;
     let alternate_evidence = normalize_ccm_artifact(client_policy_artifact(), alternate);
     let alternate_json = serde_json::to_string(&alternate_evidence).unwrap();
     assert!(!alternate_json.contains(r"LAB\\SyntheticUser"));
-    assert_ne!(
-        alternate_evidence[0].execution_context,
-        first[0].execution_context
-    );
+    assert_eq!(alternate_evidence[0].execution_context, None);
 }
 
 #[test]

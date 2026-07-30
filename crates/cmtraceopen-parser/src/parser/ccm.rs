@@ -24,7 +24,7 @@ fn ccm_re() -> &'static Regex {
     CELL.get_or_init(|| {
         Regex::new(concat!(
             r#"<!\[LOG\[(?P<msg>[\s\S]*?)\]LOG\]!>"#,
-            r#"<time="(?P<h>\d{1,2}):(?P<m>\d{1,2}):(?P<s>\d{1,2})\.(?P<ms>\d+)(?P<tz>[+-]*\d+)""#,
+            r#"<time="(?P<h>\d{1,2}):(?P<m>\d{1,2}):(?P<s>\d{1,2})\.(?P<time_tail>\d+(?:[+-]\d+)?)""#,
             r#"\s+date="(?P<mon>\d{1,2})-(?P<day>\d{1,2})-(?P<yr>\d{4})""#,
             r#"\s+component="(?P<comp>[^"]*)""#,
             r#"\s+context="(?P<context>[^"]*)""#,
@@ -168,6 +168,28 @@ pub(crate) fn truncate_subsecond_to_millis(value: &str) -> Option<u32> {
     } else {
         value.parse().ok()
     }
+}
+
+/// Split CCM's fractional-second field from its optional timezone offset.
+///
+/// A signed offset is self-delimiting. The documented legacy `%03u%d`
+/// grammar also permits a signless three-digit offset after exactly three
+/// millisecond digits. Other digit-only tails are fractional seconds with no
+/// source offset, including the seven-digit precision emitted by IME logs.
+fn split_ccm_time_tail(value: &str) -> (&str, Option<&str>) {
+    if let Some(index) = value
+        .as_bytes()
+        .iter()
+        .position(|byte| matches!(byte, b'+' | b'-'))
+    {
+        return (&value[..index], Some(&value[index..]));
+    }
+
+    if value.len() == 6 {
+        return (&value[..3], Some(&value[3..]));
+    }
+
+    (value, None)
 }
 
 /// Convert a naive local datetime + optional timezone offset (in minutes) to UTC epoch millis.
@@ -384,17 +406,23 @@ fn scan_ccm_content(content: &str, file_path: &str, mode: CcmScanMode) -> CcmSca
 /// Parse named captures from a CCM regex match into a CcmParsed struct.
 fn parse_captures(caps: &regex::Captures<'_>) -> Option<CcmParsed> {
     let msg = caps.name("msg").map(|m| m.as_str().to_string())?;
-    let h: u32 = caps.name("h")?.as_str().parse().ok()?;
-    let m: u32 = caps.name("m")?.as_str().parse().ok()?;
-    let s: u32 = caps.name("s")?.as_str().parse().ok()?;
-    let ms_str = caps.name("ms")?.as_str();
+    let h_text = caps.name("h")?.as_str();
+    let m_text = caps.name("m")?.as_str();
+    let s_text = caps.name("s")?.as_str();
+    let h: u32 = h_text.parse().ok()?;
+    let m: u32 = m_text.parse().ok()?;
+    let s: u32 = s_text.parse().ok()?;
+    let time_tail = caps.name("time_tail")?.as_str();
+    let (ms_str, timezone_text) = split_ccm_time_tail(time_tail);
     let ms = truncate_subsecond_to_millis(ms_str)?;
-    let timezone_text = caps.name("tz")?.as_str();
-    let parsed_timezone = timezone_text.parse::<i32>().ok();
-    let timezone_is_explicit = timezone_text.starts_with('+') || timezone_text.starts_with('-');
-    let mon: u32 = caps.name("mon")?.as_str().parse().ok()?;
-    let day: u32 = caps.name("day")?.as_str().parse().ok()?;
-    let yr: i32 = caps.name("yr")?.as_str().parse().ok()?;
+    let parsed_timezone = timezone_text.and_then(|value| value.parse::<i32>().ok());
+    let timezone_is_explicit = timezone_text.is_some();
+    let mon_text = caps.name("mon")?.as_str();
+    let day_text = caps.name("day")?.as_str();
+    let yr_text = caps.name("yr")?.as_str();
+    let mon: u32 = mon_text.parse().ok()?;
+    let day: u32 = day_text.parse().ok()?;
+    let yr: i32 = yr_text.parse().ok()?;
     let comp = caps.name("comp").map(|m| m.as_str().to_string());
     let context = caps.name("context").map(|m| m.as_str().to_string());
     // Preserve absent/empty/unparseable type as `None` so it falls back to
@@ -429,7 +457,9 @@ fn parse_captures(caps: &regex::Captures<'_>) -> Option<CcmParsed> {
         CcmTimestampParseState::OffsetInvalid
     };
     let timestamp_parse = CcmTimestampParse {
-        original_display: timestamp_display.clone(),
+        original_display: Some(format!(
+            "{mon_text}-{day_text}-{yr_text} {h_text}:{m_text}:{s_text}.{ms_str}"
+        )),
         offset_minutes: timezone_is_explicit.then_some(parsed_timezone).flatten(),
         utc_millis: normalized_timestamp,
         ordering_state,
@@ -448,7 +478,7 @@ fn parse_captures(caps: &regex::Captures<'_>) -> Option<CcmParsed> {
         timezone_offset: parsed_timezone.unwrap_or_default(),
         context,
         timestamp_parse,
-        public_compatible: parsed_timezone.is_some(),
+        public_compatible: timezone_text.is_none() || parsed_timezone.is_some(),
     })
 }
 
