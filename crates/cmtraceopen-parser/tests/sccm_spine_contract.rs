@@ -1,4 +1,4 @@
-use cmtraceopen_parser::models::log_entry::ParserKind;
+use cmtraceopen_parser::models::log_entry::{LogFormat, ParserKind};
 use cmtraceopen_parser::parser::detect::detect_parser;
 use cmtraceopen_parser::sccm::{
     classify_artifact_name, declared_source_catalog, SccmArtifact, SccmArtifactFamily,
@@ -20,6 +20,73 @@ fn sccm_contract_is_public_and_versioned() {
         SccmFindingClass::InsufficientEvidence.as_str(),
         "insufficientEvidence"
     );
+}
+
+#[test]
+fn public_ccm_multiline_projection_stays_compatible() {
+    let text = include_str!("fixtures/sccm/spine/multiline-policy.log");
+    let (entries, errors) =
+        cmtraceopen_parser::parser::ccm::parse_content(text, "PolicyAgent.log", None);
+    assert_eq!(errors, 0);
+    assert_eq!(
+        entries.len(),
+        1,
+        "ordinary public CCM output stays unchanged"
+    );
+    assert_eq!(entries[0].line_number, 1);
+    assert_eq!(entries[0].format, LogFormat::Ccm);
+    assert_eq!(entries[0].timezone_offset, Some(-240));
+    assert!(entries[0]
+        .message
+        .contains("{11111111-1111-1111-1111-111111111111}"));
+
+    let public_json = serde_json::to_value(&entries[0]).unwrap();
+    assert!(public_json.get("context").is_none());
+    assert!(!serde_json::to_string(&public_json)
+        .unwrap()
+        .contains(r"NT AUTHORITY\\SYSTEM"));
+}
+
+#[test]
+fn public_ccm_single_line_projection_matches_line_parser() {
+    let text = r#"<![LOG[Synthetic policy record]LOG]!><time="10:00:00.000-240" date="07-30-2026" component="PolicyAgent" context="LAB\SyntheticUser" type="1" thread="42" file="policyagent.cpp">"#;
+    let (content_entries, content_errors) =
+        cmtraceopen_parser::parser::ccm::parse_content(text, "PolicyAgent.log", None);
+    let (line_entries, line_errors) =
+        cmtraceopen_parser::parser::ccm::parse_lines(&[text], "PolicyAgent.log");
+
+    assert_eq!(content_errors, line_errors);
+    assert_eq!(
+        serde_json::to_vec(&content_entries).unwrap(),
+        serde_json::to_vec(&line_entries).unwrap()
+    );
+}
+
+#[test]
+fn public_ccm_malformed_continuation_stays_plain() {
+    let text = "<![LOG[unfinished record\ncontinuation without attributes";
+    let (entries, errors) =
+        cmtraceopen_parser::parser::ccm::parse_content(text, "PolicyAgent.log", None);
+
+    assert_eq!(errors, 2);
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0].format, LogFormat::Plain);
+    assert_eq!(entries[0].line_number, 1);
+    assert_eq!(entries[1].format, LogFormat::Plain);
+    assert_eq!(entries[1].line_number, 2);
+}
+
+#[test]
+fn public_ccm_record_without_offset_keeps_legacy_projection() {
+    let text = r#"<![LOG[No source offset]LOG]!><time="10:00:00.000" date="07-30-2026" component="PolicyAgent" context="" type="1" thread="42" file="policyagent.cpp">"#;
+    let (entries, errors) =
+        cmtraceopen_parser::parser::ccm::parse_content(text, "PolicyAgent.log", None);
+
+    assert_eq!(errors, 0);
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].format, LogFormat::Ccm);
+    assert!(entries[0].timestamp.is_some());
+    assert_eq!(entries[0].timezone_offset, Some(0));
 }
 
 #[test]
