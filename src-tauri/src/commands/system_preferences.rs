@@ -1,4 +1,25 @@
 use serde::Serialize;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// Mirrors the always-on-top state last applied to the main window. Native
+/// modal dialogs owned by other processes (the Entra WAM broker) are not
+/// promoted to topmost by our window, so an always-on-top main window buries
+/// them; callers that raise such a dialog need to know whether to drop the pin
+/// for the duration.
+static ALWAYS_ON_TOP: AtomicBool = AtomicBool::new(false);
+
+/// Whether the main window is currently pinned always-on-top.
+#[cfg(target_os = "windows")]
+pub(crate) fn always_on_top_enabled() -> bool {
+    ALWAYS_ON_TOP.load(Ordering::Relaxed)
+}
+
+/// Record the always-on-top state without going through the command (used when
+/// a native dialog temporarily suspends and then restores the pin).
+#[cfg(target_os = "windows")]
+pub(crate) fn remember_always_on_top(enabled: bool) {
+    ALWAYS_ON_TOP.store(enabled, Ordering::Relaxed);
+}
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -88,6 +109,10 @@ pub fn set_always_on_top<R: tauri::Runtime>(
         window.set_always_on_top(enabled).map_err(|error| {
             crate::error::AppError::Internal(format!("failed to set always-on-top: {error}"))
         })?;
+        // Only mirror state the window actually accepted; a stale mirror would
+        // make the interactive-auth guard drop a pin that is not set, or leave
+        // one set that buries the broker dialog.
+        ALWAYS_ON_TOP.store(enabled, Ordering::Relaxed);
     }
 
     if let Some(menu) = app.menu() {
