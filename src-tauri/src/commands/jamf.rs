@@ -14,11 +14,22 @@ pub fn jamf_collect_environment() -> Result<JamfEnvironment, AppError> {
     crate::jamf::detect::collect_environment_impl()
 }
 
+/// Treats `Some("")` the same as `None`, so a cleared input field falls back to
+/// the canonical path instead of trying to open the current directory. Expands a
+/// leading `~/` against `$HOME`.
+fn resolve_path(path: Option<String>, default: impl FnOnce() -> PathBuf) -> PathBuf {
+    path.map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .map(|s| match s.strip_prefix("~/") {
+            Some(rest) => paths::home_dir().join(rest),
+            None => PathBuf::from(s),
+        })
+        .unwrap_or_else(default)
+}
+
 #[tauri::command]
 pub fn jamf_parse_policy_log(path: Option<String>) -> Result<JamfPolicyLogResult, AppError> {
-    let p = path
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(paths::JAMF_LOG));
+    let p = resolve_path(path, || PathBuf::from(paths::JAMF_LOG));
     crate::jamf::policy_log::parse_policy_log_impl(&p)
 }
 
@@ -26,24 +37,13 @@ pub fn jamf_parse_policy_log(path: Option<String>) -> Result<JamfPolicyLogResult
 pub fn jamf_parse_self_service_log(
     path: Option<String>,
 ) -> Result<Vec<JamfSelfServiceEvent>, AppError> {
-    let p = path
-        .filter(|s| !s.is_empty())
-        .map(|s| {
-            if let Some(rest) = s.strip_prefix("~/") {
-                paths::home_dir().join(rest)
-            } else {
-                PathBuf::from(s)
-            }
-        })
-        .unwrap_or_else(paths::self_service_log_file);
+    let p = resolve_path(path, paths::self_service_log_file);
     crate::jamf::self_service::parse_self_service_log_impl(&p)
 }
 
 #[tauri::command]
 pub fn jamf_parse_connect_log(path: Option<String>) -> Result<Vec<JamfConnectEvent>, AppError> {
-    let p = path
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(paths::JAMF_CONNECT_LOG_SYSTEM));
+    let p = resolve_path(path, || PathBuf::from(paths::JAMF_CONNECT_LOG_SYSTEM));
     crate::jamf::connect::parse_connect_log_impl(&p)
 }
 
