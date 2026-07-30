@@ -1,0 +1,14 @@
+{
+  "sccmManifestVersion": 1,
+  "syntheticFixture": true,
+  "proposalOnly": true,
+  "privacy": { "synthetic": true, "rawPaths": "redacted" },
+  "bundleRole": "server",
+  "topology": { "captureHost": "LAB-CM01", "siteCode": "CONTOSO", "rolesObserved": ["siteServer", "managementPoint"] },
+  "inputOrderIsDeliberatelyUnsorted": true,
+  "artifacts": [
+    { "artifactId": "z-site-status", "producerRole": "siteServer", "producerHostHandle": "synthetic:host:site-01", "sourceId": "server-status", "sourceKind": "ccmLog", "sourceVersion": "5.00.TEST", "originalPath": "REDACTED_SITE_ROOT_B", "originalBasename": "statmgr.log", "configuredPathProvenance": { "state": "configured", "pathFingerprint": "synthetic:path:z-site" }, "rotation": { "kind": "current", "lineageId": "site-status-z" }, "captureState": "captured", "encoding": "utf-8", "collectionLimit": { "byteLimit": 4096, "limitApplied": false }, "collectedUtc": "2026-07-30T00:09:00Z", "relativePath": "evidence/sccm/server/site-server/server-status/current/statmgr.log", "bytesCopied": 167 },
+    { "artifactId": "a-mp-policy", "producerRole": "managementPoint", "producerHostHandle": "synthetic:host:mp-01", "sourceId": "server-mp-policy", "sourceKind": "ccmLog", "sourceVersion": "5.00.TEST", "originalPath": "REDACTED_MP_ROOT_A", "originalBasename": "MP_GetPolicy.log", "configuredPathProvenance": { "state": "configured", "pathFingerprint": "synthetic:path:a-mp" }, "rotation": { "kind": "current", "lineageId": "mp-policy-a" }, "captureState": "captured", "encoding": "utf-8", "collectionLimit": { "byteLimit": 4096, "limitApplied": false }, "collectedUtc": "2026-07-30T00:09:00Z", "relativePath": "evidence/sccm/server/management-point/server-mp-policy/current/MP_GetPolicy.log", "bytesCopied": 176 },
+    { "artifactId": "b-sitecomp", "producerRole": "siteServer", "producerHostHandle": "synthetic:host:site-01", "sourceId": "server-sitecomp", "sourceKind": "ccmLog", "sourceVersion": "5.00.TEST", "originalPath": "REDACTED_SITE_ROOT_A", "originalBasename": "sitecomp.log", "configuredPathProvenance": { "state": "configured", "pathFingerprint": "synthetic:path:a-site" }, "rotation": { "kind": "current", "lineageId": "sitecomp-a" }, "captureState": "captured", "encoding": "utf-8", "collectionLimit": { "byteLimit": 4096, "limitApplied": false }, "collectedUtc": "2026-07-30T00:09:00Z", "relativePath": "evidence/sccm/server/site-server/server-sitecomp/current/sitecomp.log", "bytesCopied": 180 }
+  ]
+}

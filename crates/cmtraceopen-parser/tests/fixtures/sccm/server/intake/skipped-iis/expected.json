@@ -1,0 +1,7 @@
+{
+  "pre318ExpectedVersion": 1,
+  "coverage": [{ "producerRole": "managementPoint", "sourceId": "server-mp-iis", "state": "skipped", "requiredness": "optionalSupplemental" }],
+  "nonCapturedProvenance": { "encoding": "omitted", "collectionLimit": "omitted" },
+  "requiredSourceFailure": false,
+  "roleHealthFinding": "none"
+}
