@@ -63,10 +63,16 @@ confirm the app launches:
 ```bash
 HOMEBREW_NO_INSTALL_FROM_API=1 brew install --cask adamgell/casktest/cmtrace-open
 brew uninstall --cask adamgell/casktest/cmtrace-open
-brew zap --cask adamgell/casktest/cmtrace-open
+brew uninstall --zap --cask adamgell/casktest/cmtrace-open
 ```
 
-`brew zap` deletes the paths in the `zap trash:` stanza, which are the real user data
+There is no `brew zap` command; zapping is `brew uninstall --zap`.
+
+This round-trip has been run and verified against this cask: a plain `brew uninstall` removes
+the app and leaves user data intact, and `--zap` additionally trashes exactly the four paths
+in the `zap trash:` stanza, no more and no fewer.
+
+`brew uninstall --zap` deletes the paths in the `zap trash:` stanza, which are the real user data
 directories: markers, recent files, window state, logs, and WebKit local storage. Do not run
 it on a machine whose CMTrace Open data you want to keep. `brew install --cask` also fails if
 `/Applications/CMTrace Open.app` already exists from a manual DMG install; remove it first.

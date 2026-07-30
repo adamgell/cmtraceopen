@@ -70,7 +70,7 @@ jobs:
                    ${{ steps.release.outputs.url_x64_msi }} `
                    ${{ steps.release.outputs.url_arm64_msi }} `
             --dry-run `
-            --output-directory $out
+            --output $out
           if ($LASTEXITCODE -ne 0) { throw "komac update failed with exit code $LASTEXITCODE" }
 
           Write-Host "Generated manifests:"
