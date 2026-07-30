@@ -267,6 +267,18 @@ fn catalog_recognizes_rotated_client_log_by_base_name() {
 }
 
 #[test]
+fn catalog_recognizes_standard_lo_rollback_name_by_canonical_log_basename() {
+    let class = classify_artifact_name("CcmExec.lo_", SccmRole::Client);
+
+    assert_eq!(class.basename, "CcmExec.log");
+    assert_eq!(class.logical_name, "ccmExec");
+    assert_eq!(class.family, SccmArtifactFamily::ClientHealth);
+    assert_eq!(class.rotation, SccmRotation::LoUnderscore);
+    assert!(class.uses_ccm_records);
+    assert!(class.supported_for_diagnosis);
+}
+
+#[test]
 fn catalog_leaves_unrecognized_sources_explicitly_unknown() {
     let class = classify_artifact_name("CustomVendorHook.log", SccmRole::Client);
     assert_eq!(
@@ -345,6 +357,8 @@ fn catalog_rejects_every_role_not_declared_by_the_exact_table() {
 fn catalog_rotation_grammar_accepts_only_canonical_suffixes() {
     let canonical = [
         ("AppEnforce.log", SccmRotation::Current),
+        ("AppEnforce.lo_", SccmRotation::LoUnderscore),
+        ("AppEnforce.LO_", SccmRotation::LoUnderscore),
         ("AppEnforce.log.lo_", SccmRotation::LoUnderscore),
         ("AppEnforce.LOG.LO_", SccmRotation::LoUnderscore),
         ("AppEnforce.log.3", SccmRotation::Numbered(3)),
@@ -366,7 +380,6 @@ fn catalog_rotation_grammar_accepts_only_canonical_suffixes() {
     }
 
     let rejected = [
-        ("AppEnforce.lo_", ".lo_"),
         ("AppEnforce.log.0", ".0"),
         ("AppEnforce.log.03", ".03"),
         ("AppEnforce.log.4294967296", ".4294967296"),

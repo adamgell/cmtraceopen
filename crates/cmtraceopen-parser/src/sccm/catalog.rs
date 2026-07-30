@@ -499,8 +499,8 @@ impl<'a> ParsedArtifactName<'a> {
         if lowercase.ends_with(".lo_") {
             return Self {
                 basename: &name[..name.len() - ".lo_".len()],
-                rotation: unknown_filename_suffix(".lo_"),
-                rotation_supported: false,
+                rotation: SccmRotation::LoUnderscore,
+                rotation_supported: true,
             };
         }
 
