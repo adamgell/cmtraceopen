@@ -379,6 +379,31 @@ collection, or same-minute events into causal proof. When evidence is
 incomplete, the output explicitly names the next smallest artifact bundle to
 collect.
 
+### Version, framing, and time controls
+
+Correlation and signal extraction operate only after the raw parser has
+reassembled a logical record. A physical-line split, a rotation boundary, or
+unmatched tail text must never cause a partial record to become a key-bearing
+event.
+
+SCCM provenance retains the reported ConfigMgr version when the artifact
+exposes it, the original local timestamp/display, and the parsed offset. The
+existing raw CCM timestamp is normalized to UTC for ordering; SCCM analysis
+must preserve the local form for evidence display and mark an unknown or
+invalid offset as unresolved rather than inventing cross-host ordering.
+
+Correlation-key extractors are versioned heuristics, not protocol guarantees.
+Each rule declares the source/version family it was validated against. A rule
+that cannot safely extract a stable key produces an evidence/coverage gap or
+low-confidence candidate, never a silent guessed match. When a source family
+shows release-specific wording, stable promotion requires fixtures from at
+least two observed versions.
+
+The first cross-side release is incremental: policy-to-MP and
+content-to-DP pairs can ship as soon as both sides have validated contracts.
+The broader correlation issue expands that graph; it does not block all
+client/server value until every SCCM workflow exists.
+
 ## Skeleton PR scope
 
 The skeleton PR will:
@@ -406,6 +431,11 @@ issue owns a source bundle, classifier/normalizer rules, correlation keys,
 terminal states, findings, coverage gaps, sanitized multifile fixtures, and
 acceptance assertions. It is deliberately not one issue per raw .log file,
 because most Windows client and many server logs reuse the CCM grammar.
+
+The dependency gates are deliberate: shared contracts complete first; client
+and server intake then proceed in parallel; each domain workflow depends on
+its own intake foundation; and cross-side correlation first delivers the
+validated policy-to-MP and content-to-DP pairs before expanding.
 
 Open these SCCM issues in this dependency order:
 
@@ -531,6 +561,12 @@ one completed workflow, one terminal or blocked workflow, one contradictory or
 incomplete-evidence case, stable-correlation tests, and an assertion that the
 finding cites its exact supporting entries. A high-confidence diagnosis must
 not pass from a single severity/error-string match.
+
+Key and signal extraction tests operate on logical records, not physical lines.
+Cross-side tests normalize timestamps to UTC while retaining original local
+evidence. A rule that encounters an unvalidated version or unresolved time
+offset must lower confidence or request evidence rather than manufacture a
+causal ordering.
 
 ## Non-goals
 
