@@ -3,11 +3,16 @@
 [package]
 name = "cmtrace-open"
 version = "1.5.0"
-description = "Open-source CMTrace log viewer with Intune diagnostics"
+description = "Free, open-source CMTrace replacement: Windows log viewer with ConfigMgr/SCCM, Intune, and Autopilot ESP diagnostics, DSRegCmd triage, and real-time tailing."
 authors = ["Adam Gell"]
 license = "MIT"
 edition = "2021"
 rust-version = "1.88"
+repository = "https://github.com/adamgell/cmtraceopen"
+homepage = "https://cmtraceopen.com"
+readme = "README.md"
+keywords = ["cmtrace", "log-viewer", "sccm", "intune", "tauri"]
+categories = ["gui", "development-tools::debugging", "os::windows-apis"]
 
 [lib]
 name = "app_lib"
@@ -30,7 +35,7 @@ macos-diag = ["dep:plist"]
 secureboot = ["dep:tempfile"]
 
 [dependencies]
-cmtraceopen-parser = { path = "../crates/cmtraceopen-parser" }
+cmtraceopen-parser = { path = "../crates/cmtraceopen-parser", version = "0.1" }
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
