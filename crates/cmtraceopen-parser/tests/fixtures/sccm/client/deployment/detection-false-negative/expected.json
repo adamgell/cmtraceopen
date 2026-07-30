@@ -1,0 +1,28 @@
+{
+  "contractState":"proposedPending318And319",
+  "workflow":"deployment",
+  "scenario":"detection-false-negative",
+  "stateChain":["intent","requirements","locateContent","transfer","cache","enforce","detect","report"],
+  "analysisContract":{"independentReducer":true,"consumesPolicyReducerOutput":false,"policyCoverageRequired":false,"crossSideCorrelationPerformed":false},
+  "extractionProfile":{"selectionState":"selected","profileId":"deployment-client-5.00.test-v1","sourceVersionPrefix":"5.00.TEST.","contentVersionRequired":true,"keyKinds":["assignmentId","bitsJobId","ciId","contentId","contentVersion","distributionPointHostHandle","exitCode","packageId","productCode","requestId"],"validatedArtifactFamilies":["client-app-enforce","client-app-intent","client-content"]},
+  "reorderedInputDeterministic":true,
+  "coverage":[{"logicalArtifactId":"client-app-enforce","state":"captured"},{"logicalArtifactId":"client-app-intent","state":"captured"},{"logicalArtifactId":"client-content","state":"captured"}],
+  "artifactProvenance":[
+    {"artifactId":"deployment-detection-false-negative-content-current","bytesCopied":759,"encoding":"utf-8","byteLimit":4096,"limitApplied":false},
+    {"artifactId":"deployment-detection-false-negative-detect-current","bytesCopied":345,"encoding":"utf-8","byteLimit":4096,"limitApplied":false},
+    {"artifactId":"deployment-detection-false-negative-enforce-current","bytesCopied":350,"encoding":"utf-8","byteLimit":4096,"limitApplied":false},
+    {"artifactId":"deployment-detection-false-negative-intent-current","bytesCopied":532,"encoding":"utf-8","byteLimit":4096,"limitApplied":false},
+    {"artifactId":"deployment-detection-false-negative-transfer-current","bytesCopied":702,"encoding":"utf-8","byteLimit":4096,"limitApplied":false}
+  ],
+  "transactions":[{
+    "transactionId":"deployment:assignment:10000000-0000-0000-0000-000000000010",
+    "key":{"keyProfileKind":"assignmentCiContentTopology","assignmentId":"10000000-0000-0000-0000-000000000010","ciId":"20000000-0000-0000-0000-000000001010","packageId":"LAB00010","contentId":"30000000-0000-0000-0000-000000002010","contentVersion":10,"distributionPointHostHandle":"safe:dp:lab-dp-01","requestId":"40000000-0000-0000-0000-000000003010","bitsJobId":"50000000-0000-0000-0000-000000004010","productCode":"60000000-0000-0000-0000-000000005010","exitCode":"0","confidence":"exact","extractionProfileId":"deployment-client-5.00.test-v1"},
+    "counterpartReadyFact":{"factKind":"clientContentRequest","phase":"locateContent","extractionProfileId":"deployment-client-5.00.test-v1","packageId":"LAB00010","contentId":"30000000-0000-0000-0000-000000002010","contentVersion":10,"distributionPointHostHandle":"safe:dp:lab-dp-01","requestId":"40000000-0000-0000-0000-000000003010","timestampProvenance":{"kind":"explicitOffset","offsetMinutes":0,"normalizedUtc":"2026-07-30T04:30:02Z"},"evidence":{"artifactId":"deployment-detection-false-negative-content-current","startLine":1,"endLine":1}},
+    "phase":"detect","state":"detectionMismatch","lastSuccessfulPhase":"enforce","classification":"symptom","confidence":"medium","confidenceCeiling":"medium","coverageGapArtifactIds":[],"nextArtifact":null,
+    "evidence":[{"artifactId":"deployment-detection-false-negative-content-current","startLine":1,"endLine":2},{"artifactId":"deployment-detection-false-negative-detect-current","startLine":1,"endLine":1},{"artifactId":"deployment-detection-false-negative-enforce-current","startLine":1,"endLine":1},{"artifactId":"deployment-detection-false-negative-intent-current","startLine":1,"endLine":2},{"artifactId":"deployment-detection-false-negative-transfer-current","startLine":1,"endLine":2}]
+  }],
+  "sourceLocalObservations":[],
+  "findings":[],
+  "correlationHandoff":{"issue":"#333","performed":false,"timeOnlyEligible":false,"topologyCompatibilityEvaluated":false,"serverCauseClaimed":false,"counterpartReadyKeyKinds":["contentId","contentVersion","distributionPointHostHandle","packageId","requestId"],"emittedCounterpartReadyFact":true},
+  "prohibitedClaims":["installer failed","distribution point or server root cause","detection mismatch proves content failure"]
+}
