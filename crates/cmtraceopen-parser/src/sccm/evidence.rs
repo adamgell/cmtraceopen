@@ -13,7 +13,32 @@ fn sensitive_message_label_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
         Regex::new(
-            r"(?i)\b(?:authorization|shared[_-]?access[_-]?signature|client[_-]?secret|(?:client|access|refresh|id|device|session)[_-]?token|api[_-]?key|account[_-]?key|credential|password|passwd|secret|token|username|user|sig)\b\s*(?::|=)\s*",
+            r"(?ix)
+            \b(?:
+                authorization\b
+                    (?:[\x20\t]*[:=][\x20\t]*|[\x20\t]+)
+                    (?:[a-z][a-z0-9._-]*[\x20\t]+)?
+                |
+                bearer\b(?:[\x20\t]*[:=][\x20\t]*|[\x20\t]+)
+                |
+                (?:
+                    shared[\x20_-]?access[\x20_-]?signature
+                    | client[\x20_-]?secret
+                    | (?:client|access|refresh|id|device|session)[\x20_-]?token
+                    | api[\x20_-]?key
+                    | account[\x20_-]?key
+                    | user[\x20_-]?principal[\x20_-]?name
+                    | credential
+                    | password
+                    | passwd
+                    | secret
+                    | token
+                    | username
+                    | user
+                    | upn
+                    | sig
+                )\b(?:[\x20\t]*[:=][\x20\t]*|[\x20\t]+)
+            )",
         )
         .expect("SCCM sensitive message label regex must compile")
     })
@@ -22,8 +47,16 @@ fn sensitive_message_label_re() -> &'static Regex {
 fn windows_identity_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
-        Regex::new(r"(?i)\b(?:NT AUTHORITY|[A-Z0-9][A-Z0-9._-]*)\\[A-Z0-9][A-Z0-9._$-]*\b")
+        Regex::new(r"(?i)(?:\b(?:NT AUTHORITY|[A-Z0-9][A-Z0-9._-]*)|\.)\\[A-Z0-9][A-Z0-9._$-]*\b")
             .expect("SCCM Windows identity regex must compile")
+    })
+}
+
+fn email_identity_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
+        Regex::new(r"(?i)\b[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}\b")
+            .expect("SCCM email identity regex must compile")
     })
 }
 
@@ -33,7 +66,8 @@ fn windows_identity_re() -> &'static Regex {
 /// not imply native collector validation.
 fn project_public_message_v1(raw: &str) -> String {
     let redacted = redact_sensitive_segments(raw);
-    let projected = redact_windows_identities(&redacted);
+    let identities_redacted = redact_windows_identities(&redacted);
+    let projected = redact_email_identities(&identities_redacted);
 
     format!("[{PUBLIC_MESSAGE_PROFILE}] {projected}")
 }
@@ -81,7 +115,8 @@ fn sensitive_value_end(value: &str, value_start: usize) -> usize {
     remaining
         .char_indices()
         .find_map(|(offset, character)| {
-            matches!(character, ',' | ';' | '\r' | '\n').then_some(value_start + offset)
+            (character.is_whitespace() || matches!(character, ',' | ';'))
+                .then_some(value_start + offset)
         })
         .unwrap_or(value.len())
 }
@@ -106,6 +141,12 @@ fn redact_windows_identities(value: &str) -> String {
 
     projected.push_str(&value[copied_through..]);
     projected
+}
+
+fn redact_email_identities(value: &str) -> String {
+    email_identity_re()
+        .replace_all(value, PUBLIC_MESSAGE_REDACTION)
+        .into_owned()
 }
 
 #[derive(Debug, Clone, PartialEq)]
