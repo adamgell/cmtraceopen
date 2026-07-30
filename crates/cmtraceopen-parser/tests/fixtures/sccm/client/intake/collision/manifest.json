@@ -19,13 +19,15 @@
       "role": "client",
       "kind": "ccmLog",
       "captureState": "captured",
+      "encoding": "utf-8",
+      "collectionLimit": {"byteLimit": 4096, "limitApplied": false},
       "originalBasename": "AppEnforce.log",
       "sanitizedSourcePath": "SYNTHETIC://root-a/CCM/Logs/AppEnforce.log",
       "pathFingerprint": "synthetic-collision-root-a",
       "rotation": {"kind": "current", "fragmentComplete": true},
       "sourceVersion": "5.00.TEST.0000",
       "capturedUtc": "2026-07-30T00:05:00Z",
-      "bytesCopied": 128,
+      "bytesCopied": 180,
       "relativePath": "evidence/client-app-enforce/root-a/current/AppEnforce.log"
     },
     {
@@ -37,13 +39,15 @@
       "role": "client",
       "kind": "ccmLog",
       "captureState": "captured",
+      "encoding": "utf-8",
+      "collectionLimit": {"byteLimit": 4096, "limitApplied": false},
       "originalBasename": "AppEnforce.log",
       "sanitizedSourcePath": "SYNTHETIC://root-b/CCM/Logs/AppEnforce.log",
       "pathFingerprint": "synthetic-collision-root-b",
       "rotation": {"kind": "current", "fragmentComplete": true},
       "sourceVersion": "5.00.TEST.0000",
       "capturedUtc": "2026-07-30T00:05:01Z",
-      "bytesCopied": 128,
+      "bytesCopied": 180,
       "relativePath": "evidence/client-app-enforce/root-b/current/AppEnforce.log"
     }
   ]

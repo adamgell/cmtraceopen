@@ -3,6 +3,11 @@
   "scenario": "rotations",
   "workflowDiagnosisExpected": false,
   "coverage": [{"logicalArtifactId":"client-app-enforce","state":"captured","fragmentCount":3,"rotationOrder":["current","lo","numbered:2"],"distinctPathFingerprints":3}],
+  "artifactProvenance": [
+    {"artifactId":"fixture-rotations-app-enforce-root-a-current","encoding":"utf-8","byteLimit":4096,"limitApplied":false},
+    {"artifactId":"fixture-rotations-app-enforce-root-a-lo","encoding":"utf-8","byteLimit":4096,"limitApplied":false},
+    {"artifactId":"fixture-rotations-app-enforce-root-b-numbered-2","encoding":"utf-8","byteLimit":4096,"limitApplied":false}
+  ],
   "requests": [],
   "assertions": ["Each rotation fragment retains its physical artifact ID and path fingerprint.", "No phase, key, or finding is inferred from rotation grouping alone."]
 }

@@ -81,13 +81,15 @@ than being guessed.
     "role": "client",
     "kind": "ccmLog",
     "captureState": "captured",
+    "encoding": "utf-8",
+    "collectionLimit": {"byteLimit": 4096, "limitApplied": false},
     "originalBasename": "AppEnforce.log",
     "sanitizedSourcePath": "SYNTHETIC://root-a/CCM/Logs/AppEnforce.log",
     "pathFingerprint": "synthetic-root-a-app-enforce-current",
     "rotation": {"kind": "current", "fragmentComplete": true},
     "sourceVersion": "5.00.TEST.0000",
     "capturedUtc": "2026-07-30T00:00:00Z",
-    "bytesCopied": 128,
+    "bytesCopied": 177,
     "relativePath": "evidence/client-app-enforce/current/AppEnforce.log"
   }]
 }
@@ -98,6 +100,12 @@ fixture-design labels, not proposed final #318 field names. They make the
 single-capture/multi-consumer invariant reviewable until #318 provides the
 actual representation. `artifactId` denotes one physical candidate/fragment
 record and must be unique within a bundle; it is not a logical group ID.
+For captured and capped artifacts, `bytesCopied` is the exact copied-file byte
+length, `encoding` is explicit, and `collectionLimit` distinguishes the
+configured limit from whether it actually truncated the file. Expected
+fixtures mirror those fields by physical artifact ID. Noncapture states carry
+zero bytes and a null relative path without invented encoding/limit
+provenance.
 
 Capture states in this proposed SCCM extension are `captured`, `absent`,
 `accessDenied`, `capped`, `skipped`, `unsafePath`, `unsupported`, and
@@ -131,6 +139,8 @@ filesystem access, globbing in the pure crate, or redefinition of CCM.
   other by basename.
 - `.lo_`, `.N`, and a documented timestamp suffix are rotations only of an
   explicit allowed basename. `.backup` and arbitrary suffixes are unsupported.
+- Complete record timestamps must be valid and no later than `capturedUtc`.
+  Canonical evidence basenames retain `.log.lo_` and `.log.N` spellings.
 - A rotation split at either logical-record boundary carries
   `fragmentComplete: false`; it can provide raw-safe coverage but cannot create
   a key, phase transition, or terminal finding by itself.
@@ -147,7 +157,7 @@ filesystem access, globbing in the pure crate, or redefinition of CCM.
 | `collision` | Two current `AppEnforce.log` candidates from distinct roots retain unique IDs, fingerprints, and paths. | Both physical artifacts survive; basename does not overwrite or merge them. |
 | `missing-root` | No configured client root was discovered. | Every curated source is absent coverage; never “client not installed.” |
 | `access-denied` | `client-policy-agent` has denied access while all other represented sources remain distinct. | Policy readiness requests only `client-policy-agent`; no policy failure. |
-| `capped` | `client-content` retains a capped tail containing error-looking text. | Deployment readiness is insufficient; tail cannot establish a terminal condition. |
+| `capped` | `client-content` retains exactly 128 bytes of a marker-bearing, incomplete fragment containing error-looking text. | Deployment readiness is insufficient; the fragment cannot parse as a complete record or establish a terminal condition. |
 | `skipped` (design-only) | An optional supplemental source is intentionally disabled. | Preserve an intentional skip, distinct from absence/failure. |
 | `unsafe-path` (design-only) | A reparse/symlink escapes an allow-listed root. | Reject capture, record `unsafePath`, and request a safe configured root. |
 | `legacy-mapping` (design-only) | Generic legacy `collected`/`missing` have explicit client provenance; `failed` has none. | Map only the first two; retain `legacyUnknownDetail` for failed. |
@@ -171,13 +181,16 @@ separate acceptance gate.
 - `SYNTHETIC://` paths are opaque fixture provenance, never real Windows paths.
   No customer hostname, user, SID, tenant, certificate, token, serial, actual
   deployment name, or customer log line is permitted.
-- All timestamps, byte counts, and record text are fixed. Evidence is minimal,
-  deterministic, and has no semantic assertion beyond stated coverage.
+- All timestamps, exact byte counts, encodings, collection limits, and record
+  text are fixed. Evidence is minimal, deterministic, and has no semantic
+  assertion beyond stated coverage.
 - Each manifest has `proposalOnly: true` and `syntheticFixture: true`. The first
-  line of every evidence file contains the literal `SYNTHETIC FIXTURE`: CCM
-  fixtures place it inside the first CCM record, while non-CCM supplemental
-  fixtures use it as plain text. A production collector must not treat the
-  marker as a real SCCM file format.
+  line of every evidence file contains the literal `SYNTHETIC FIXTURE` plus
+  scenario-specific coverage text: complete CCM fixtures place it inside the
+  first CCM record, the capped fixture retains it in an intentionally
+  incomplete 128-byte fragment, and non-CCM supplemental fixtures use it as
+  plain text. A production collector must not treat the marker as a real SCCM
+  file format.
 - `expected.json` asserts explicit coverage and requests. Its `contractState`
   is `proposedPending318`, so no fixture suggests that interface names, enum
   spellings, or schema fields are final.

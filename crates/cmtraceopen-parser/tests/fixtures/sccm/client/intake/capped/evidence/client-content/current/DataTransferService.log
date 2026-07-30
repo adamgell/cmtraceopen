@@ -1,1 +1,1 @@
-<![LOG[SYNTHETIC FIXTURE coverage only: error-looking tail must not diagnose 0x80000001]LOG]!><time="00:03:00.000+000" date="7-30-2026" component="Synthetic" context="" type="3" thread="1" file="synthetic.cc:1">
+<![LOG[SYNTHETIC FIXTURE capped: error-looking 0x80000001; coverage only]LOG]!><time="00:02:59.000+000" date="7-30-2026" [cut]!

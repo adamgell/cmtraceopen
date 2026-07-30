@@ -15,6 +15,19 @@
     {"logicalArtifactId":"client-updates","state":"captured"},
     {"logicalArtifactId":"client-windows-update-supplemental","state":"captured"}
   ],
+  "artifactProvenance": [
+    {"artifactId":"fixture-complete-app-enforce-root-a-current","encoding":"utf-8","byteLimit":4096,"limitApplied":false},
+    {"artifactId":"fixture-complete-app-intent-root-a-current","encoding":"utf-8","byteLimit":4096,"limitApplied":false},
+    {"artifactId":"fixture-complete-ccmsetup-root-a-current","encoding":"utf-8","byteLimit":4096,"limitApplied":false},
+    {"artifactId":"fixture-complete-content-root-a-current","encoding":"utf-8","byteLimit":4096,"limitApplied":false},
+    {"artifactId":"fixture-complete-evaluation-root-a-current","encoding":"utf-8","byteLimit":4096,"limitApplied":false},
+    {"artifactId":"fixture-complete-identity-root-a-current","encoding":"utf-8","byteLimit":4096,"limitApplied":false},
+    {"artifactId":"fixture-complete-location-services-root-a-current","encoding":"utf-8","byteLimit":4096,"limitApplied":false},
+    {"artifactId":"fixture-complete-policy-agent-root-a-current","encoding":"utf-8","byteLimit":4096,"limitApplied":false},
+    {"artifactId":"fixture-complete-policy-state-root-a-current","encoding":"utf-8","byteLimit":4096,"limitApplied":false},
+    {"artifactId":"fixture-complete-updates-root-a-current","encoding":"utf-8","byteLimit":4096,"limitApplied":false},
+    {"artifactId":"fixture-complete-update-supplemental-root-a-current","encoding":"utf-8","byteLimit":4096,"limitApplied":false}
+  ],
   "physicalArtifactAssertions": [
     {
       "artifactId": "fixture-complete-location-services-root-a-current",
