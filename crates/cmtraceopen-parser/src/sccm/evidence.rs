@@ -130,7 +130,7 @@ fn redact_windows_identities(value: &str) -> String {
         let preceding = value[..matched.start()].chars().next_back();
         let following = value[matched.end()..].chars().next();
         let path_adjacent =
-            matches!(preceding, Some('\\' | '/' | ':')) || matches!(following, Some('\\' | '/'));
+            matches!(preceding, Some('\\' | '/')) || matches!(following, Some('\\' | '/'));
         if path_adjacent {
             continue;
         }

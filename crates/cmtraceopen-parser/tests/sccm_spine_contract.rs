@@ -600,6 +600,33 @@ fn evidence_public_message_projection_redacts_local_and_upn_identities_without_p
 }
 
 #[test]
+fn evidence_public_message_projection_redacts_colon_delimited_windows_identities() {
+    for sensitive in [r"LAB\SyntheticUser", r".\LocalUser"] {
+        let raw_message = format!(
+            r#"Caller:{sensitive}; Path C:\Windows\CCM\Logs\PolicyAgent.log; Relative .\Cache\Policy.bin; UNC \\LAB-CM01\SMS_CCM\Logs\MP.log; status=71"#
+        );
+        let text = format!(
+            r#"<![LOG[{raw_message}]LOG]!><time="10:00:00.000-240" date="07-30-2026" component="PolicyAgent" context="" type="1" thread="42" file="policyagent.cpp">"#
+        );
+
+        let evidence = normalize_ccm_artifact(client_policy_artifact(), &text);
+        let message = &evidence[0].message;
+        let json = serde_json::to_string(&evidence).unwrap();
+
+        assert!(!message.contains(sensitive), "{sensitive} leaked");
+        assert_public_json_omits(&json, sensitive);
+        for safe in [
+            r"C:\Windows\CCM\Logs\PolicyAgent.log",
+            r".\Cache\Policy.bin",
+            r"\\LAB-CM01\SMS_CCM\Logs\MP.log",
+            "status=71",
+        ] {
+            assert!(message.contains(safe), "{safe} was falsely redacted");
+        }
+    }
+}
+
+#[test]
 fn serde_roles_are_string_backed_and_future_tolerant() {
     assert_eq!(
         serde_json::to_string(&SccmRole::ManagementPoint).unwrap(),
