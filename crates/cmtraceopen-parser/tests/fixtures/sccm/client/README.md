@@ -7,11 +7,13 @@ compiled test fixtures. Every identity, path, timestamp, byte count, UUID, and
 log record is deterministic and synthetic.
 
 Privacy markers: manifests require `syntheticFixture: true` and
-`proposalOnly: true`; evidence files use only `LAB-CLIENT-01`, `CONTOSO`, fake
-package/content IDs, or RFC-style test UUIDs; `SYNTHETIC://` is opaque fixture
-provenance. Never replace these files with a copied client log. No user, SID,
-tenant, certificate, token, serial, production deployment name, customer host,
-or real source path may be committed.
+`proposalOnly: true`; issue #319 intake evidence uses only `LAB-CLIENT-01`, the
+exact synthetic three-character site code `LAB`, fake package/content IDs, or
+RFC-style test UUIDs; `SYNTHETIC://` is opaque fixture provenance. Workflow
+corpora own their issue-scoped identifier contracts. Never replace these files
+with a copied client log. No user, SID, tenant, certificate, token, serial,
+production deployment name, customer host, or real source path may be
+committed.
 
 `complete` covers all first-pass catalog groups and represents
 `LocationServices.log` once with stable `client-content` and `client-location`

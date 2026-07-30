@@ -68,7 +68,7 @@ than being guessed.
   "bundle": {
     "role": "client",
     "captureHost": "LAB-CLIENT-01",
-    "siteCode": "CONTOSO",
+    "siteCode": "LAB",
     "artifactOrder": "designOnlyCatalog.entryId,pathFingerprint,rotationRank,originalBasename,artifactId",
     "rotationOrder": "current,lo,numeric-ascending,timestamp-ascending"
   },
@@ -150,7 +150,8 @@ filesystem access, globbing in the pure crate, or redefinition of CCM.
 - `.lo_`, `.N`, and a documented timestamp suffix are rotations only of an
   explicit allowed basename. `.backup` and arbitrary suffixes are unsupported.
 - Complete record timestamps must be valid and no later than `capturedUtc`.
-  Canonical evidence basenames retain `.log.lo_` and `.log.N` spellings.
+  Canonical evidence basenames retain replacement-extension `.lo_` and
+  numbered `.log.N` spellings.
 - A rotation split at either logical-record boundary carries
   `fragmentComplete: false`; it can provide raw-safe coverage but cannot create
   a key, phase transition, or terminal finding by itself.
@@ -186,8 +187,9 @@ separate acceptance gate.
 
 ## Fixture privacy and sanitization
 
-- Fixtures use only `LAB-CLIENT-01`, `CONTOSO`, RFC-style test UUIDs, and fake
-  `APP-TEST-001`, `CONTENT-TEST-001`, and `KB0000000` tokens.
+- Fixtures use only `LAB-CLIENT-01`, the exact synthetic site code `LAB`,
+  RFC-style test UUIDs, and fake `APP-TEST-001`, `CONTENT-TEST-001`, and
+  `KB0000000` tokens.
 - `SYNTHETIC://` paths are opaque fixture provenance, never real Windows paths.
   No customer hostname, user, SID, tenant, certificate, token, serial, actual
   deployment name, or customer log line is permitted.
