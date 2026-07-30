@@ -42,7 +42,7 @@
           "reasonCode": "complete-logical-record-required",
           "basenames": [
             "sitecomp.log",
-            "sitecomp.log.lo_"
+            "sitecomp.lo_"
           ],
           "rotations": [
             "current",
