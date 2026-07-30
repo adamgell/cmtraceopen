@@ -33,7 +33,7 @@ fn coverage_contract_failures(artifact: &Value) -> Vec<String> {
     let state = artifact["captureState"].as_str().unwrap_or_default();
     if matches!(
         state,
-        "absent" | "accessDenied" | "capped" | "skipped" | "unsupported"
+        "absent" | "accessDenied" | "capped" | "skipped" | "unsupported" | "parseFailed"
     ) && artifact["rotation"]["fragmentComplete"] == true
     {
         vec![format!(
@@ -96,7 +96,10 @@ fn artifact_storage_failures(scenario_dir: &std::path::Path, artifact: &Value) -
                 "{state} artifact {artifact_id} bytesCopied {bytes_copied} does not match fixture length {actual_bytes}"
             ));
         }
-    } else if matches!(state, "absent" | "accessDenied" | "skipped" | "unsupported") {
+    } else if matches!(
+        state,
+        "absent" | "accessDenied" | "skipped" | "unsupported" | "parseFailed"
+    ) {
         if !artifact["relativePath"].is_null() {
             failures.push(format!(
                 "{state} artifact {artifact_id} cannot have a relativePath"
@@ -222,7 +225,7 @@ fn capped_artifact_cannot_claim_a_complete_fragment() {
 }
 
 #[test]
-fn artifact_storage_contract_rejects_missing_mismatched_and_nonphysical_paths() {
+fn artifact_storage_contract_rejects_missing_mismatched_and_unsafe_paths() {
     let scenario_dir = site_core_root().join("healthy");
     let wrong_size = serde_json::json!({
         "artifactId": "wrong-size",
@@ -247,13 +250,6 @@ fn artifact_storage_contract_rejects_missing_mismatched_and_nonphysical_paths() 
         "captureState": "captured",
         "relativePath": "evidence/sccm/server/site-core/sitecomp/current/sitecomp.log"
     });
-    let nonphysical = serde_json::json!({
-        "artifactId": "absent-with-file",
-        "captureState": "absent",
-        "relativePath": "evidence/placeholder.log",
-        "bytesCopied": 1
-    });
-
     assert_eq!(
         artifact_storage_failures(&scenario_dir, &wrong_size).len(),
         1
@@ -267,8 +263,35 @@ fn artifact_storage_contract_rejects_missing_mismatched_and_nonphysical_paths() 
         artifact_storage_failures(&scenario_dir, &missing_bytes).len(),
         1
     );
-    assert_eq!(
-        artifact_storage_failures(&scenario_dir, &nonphysical).len(),
-        2
-    );
+}
+
+#[test]
+fn nonphysical_states_cannot_claim_files_or_complete_fragments() {
+    let scenario_dir = site_core_root().join("healthy");
+    for state in [
+        "absent",
+        "accessDenied",
+        "skipped",
+        "unsupported",
+        "parseFailed",
+    ] {
+        let artifact = serde_json::json!({
+            "artifactId": format!("{state}-with-file"),
+            "captureState": state,
+            "relativePath": "evidence/placeholder.log",
+            "bytesCopied": 1,
+            "rotation": {"kind": "current", "fragmentComplete": true}
+        });
+
+        assert_eq!(
+            coverage_contract_failures(&artifact).len(),
+            1,
+            "{state} completeness"
+        );
+        assert_eq!(
+            artifact_storage_failures(&scenario_dir, &artifact).len(),
+            2,
+            "{state} physical storage"
+        );
+    }
 }
