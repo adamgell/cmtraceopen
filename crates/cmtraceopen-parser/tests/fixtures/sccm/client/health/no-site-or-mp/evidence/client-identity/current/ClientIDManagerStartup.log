@@ -1,0 +1,1 @@
+<![LOG[# SYNTHETIC FIXTURE: LAB-CLIENT-01 only; Identity registration succeeded clientGuid=33333333-3333-3333-3333-333333333333]LOG]!><time="01:30:02.000+000" date="07-30-2026" component="ClientIDManagerStartup" context="" type="1" thread="1" file="clientid.cc:1">

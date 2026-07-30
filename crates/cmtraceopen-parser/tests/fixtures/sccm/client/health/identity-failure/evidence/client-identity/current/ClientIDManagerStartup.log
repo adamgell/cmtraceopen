@@ -1,0 +1,1 @@
+<![LOG[# SYNTHETIC FIXTURE: LAB-CLIENT-01 only; Identity registration terminal failure clientGuid=22222222-2222-2222-2222-222222222222 error=0x80004005]LOG]!><time="01:20:02.000+000" date="07-30-2026" component="ClientIDManagerStartup" context="" type="3" thread="1" file="clientid.cc:20">

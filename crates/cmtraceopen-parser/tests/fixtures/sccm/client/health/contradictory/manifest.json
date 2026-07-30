@@ -1,0 +1,13 @@
+{
+  "sccmManifestVersion": 1,
+  "proposalOnly": true,
+  "syntheticFixture": true,
+  "scenario": "contradictory",
+  "bundle": {"role":"client","captureHost":"LAB-CLIENT-01","siteCode":"CONTOSO","artifactOrder":"designOnlyCatalog.entryId,pathFingerprint,rotationRank,originalBasename,artifactId","rotationOrder":"current,lo,numeric-ascending,timestamp-ascending"},
+  "artifacts": [
+    {"artifactId":"health-contradictory-ccmsetup-current","designOnlyCatalog":{"entryId":"client-ccmsetup","groupMemberships":["client-ccmsetup"]},"role":"client","kind":"ccmLog","captureState":"captured","encoding":"utf-8","collectionLimit":{"byteLimit":4096,"limitApplied":false},"originalBasename":"ccmsetup.log","sanitizedSourcePath":"SYNTHETIC://root-a/ccmsetup/Logs/ccmsetup.log","pathFingerprint":"synthetic-root-a-health-contradictory-ccmsetup-current","rotation":{"kind":"current","fragmentComplete":true},"sourceVersion":"5.00.TEST.0000","capturedUtc":"2026-07-30T01:50:02Z","bytesCopied":461,"relativePath":"evidence/client-ccmsetup/current/ccmsetup.log"},
+    {"artifactId":"health-contradictory-evaluation-absent","designOnlyCatalog":{"entryId":"client-evaluation","groupMemberships":["client-evaluation"]},"role":"client","kind":"ccmLog","captureState":"absent","encoding":null,"collectionLimit":null,"originalBasename":"CcmEval.log","sanitizedSourcePath":null,"pathFingerprint":"synthetic-candidate-health-contradictory-evaluation-absent","rotation":{"kind":"current","fragmentComplete":true},"sourceVersion":"5.00.TEST.0000","capturedUtc":"2026-07-30T01:50:01Z","bytesCopied":0,"relativePath":null},
+    {"artifactId":"health-contradictory-identity-absent","designOnlyCatalog":{"entryId":"client-identity","groupMemberships":["client-identity"]},"role":"client","kind":"ccmLog","captureState":"absent","encoding":null,"collectionLimit":null,"originalBasename":"ClientIDManagerStartup.log","sanitizedSourcePath":null,"pathFingerprint":"synthetic-candidate-health-contradictory-identity-absent","rotation":{"kind":"current","fragmentComplete":true},"sourceVersion":"5.00.TEST.0000","capturedUtc":"2026-07-30T01:50:02Z","bytesCopied":0,"relativePath":null},
+    {"artifactId":"health-contradictory-location-services-absent","designOnlyCatalog":{"entryId":"client-location-services-shared","groupMemberships":["client-content","client-location"]},"role":"client","kind":"ccmLog","captureState":"absent","encoding":null,"collectionLimit":null,"originalBasename":"LocationServices.log","sanitizedSourcePath":null,"pathFingerprint":"synthetic-candidate-health-contradictory-location-services-absent","rotation":{"kind":"current","fragmentComplete":true},"sourceVersion":"5.00.TEST.0000","capturedUtc":"2026-07-30T01:50:03Z","bytesCopied":0,"relativePath":null}
+  ]
+}

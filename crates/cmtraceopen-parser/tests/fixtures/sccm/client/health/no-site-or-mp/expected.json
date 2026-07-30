@@ -1,0 +1,13 @@
+{
+  "contractState": "proposedPending318And319",
+  "scenario": "no-site-or-mp",
+  "workflow": "health",
+  "workflowDiagnosisExpected": true,
+  "lastSuccessfulPhase": "identity",
+  "findings": [
+    {"findingId":"health-site-assignment-insufficient","class":"insufficientEvidence","phase":"siteAssignment","role":"client","confidence":"low","fixtureEvidence":[{"artifactId":"health-no-site-or-mp-location-services-current","entryId":"entry-000001","lineStart":1,"lineEnd":1}],"coverageGapArtifactIds":[],"nextArtifacts":[{"logicalArtifactId":"client-location","reason":"capture a complete site-assignment and MP-response sequence"}],"mustNotClaim":["client is unassigned","management point is unavailable","management point cause"]},
+    {"findingId":"health-unkeyed-transport-symptom","class":"symptom","phase":"transport","role":"client","confidence":"low","fixtureEvidence":[{"artifactId":"health-no-site-or-mp-location-services-current","entryId":"entry-000002","lineStart":2,"lineEnd":2},{"artifactId":"health-no-site-or-mp-location-services-current","entryId":"entry-000003","lineStart":3,"lineEnd":3}],"coverageGapArtifactIds":[],"nextArtifacts":[],"mustNotClaim":["transport failure","management point failure","management point cause"]}
+  ],
+  "coverage": [{"logicalArtifactId":"client-ccmsetup","state":"captured"},{"logicalArtifactId":"client-evaluation","state":"captured"},{"logicalArtifactId":"client-identity","state":"captured"},{"logicalArtifactId":"client-location","state":"captured"}],
+  "assertions": ["same-minute unkeyed network error is a symptom only","hostname-shaped unrelated text is not MP evidence"]
+}
