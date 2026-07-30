@@ -1,7 +1,6 @@
 use std::path::Path;
-use std::process::{Command, Output};
-use std::sync::mpsc;
-use std::time::Duration;
+use std::process::{Command, Output, Stdio};
+use std::time::{Duration, Instant};
 
 use crate::error::AppError;
 use crate::jamf::models::{JamfDirectoryStatus, JamfEnvironment};
@@ -10,34 +9,55 @@ use crate::macos_diag::models::FdaStatus;
 
 const JAMF_VERSION_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// Runs a command, giving up after `timeout`.
+/// Runs a command, killing it if it outlives `timeout`.
 ///
 /// `/usr/local/bin/jamf` talks to the JSS, so it can block for a long time on a
 /// degraded network — and this runs inside a Tauri command, where blocking
-/// stalls the caller. The work happens on a helper thread so a wedged process
-/// cannot hold the IPC call open; if it times out we abandon the thread rather
-/// than leaving a half-read pipe, which is the safer trade for a read-only
-/// diagnostic.
+/// stalls the caller. Own the child rather than detaching the work, so a wedged
+/// process is reaped instead of being left behind on every collection.
 fn output_with_timeout(program: &str, args: &[&str], timeout: Duration) -> Option<Output> {
-    let (tx, rx) = mpsc::channel();
-    let program = program.to_string();
-    let args: Vec<String> = args.iter().map(|s| (*s).to_string()).collect();
-    let spawn_program = program.clone();
-    std::thread::spawn(move || {
-        let _ = tx.send(Command::new(&spawn_program).args(&args).output());
-    });
-    match rx.recv_timeout(timeout) {
-        Ok(Ok(output)) => Some(output),
-        Ok(Err(e)) => {
+    let mut child = match Command::new(program)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(e) => {
             log::warn!("failed to run {program:?}: {e}");
-            None
+            return None;
         }
-        Err(_) => {
-            log::warn!("{program:?} exceeded {timeout:?}; abandoning");
-            None
+    };
+
+    let deadline = Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) => {
+                if Instant::now() >= deadline {
+                    log::warn!("{program:?} exceeded {timeout:?}; terminating");
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return None;
+                }
+                std::thread::sleep(POLL_INTERVAL);
+            }
+            Err(e) => {
+                log::warn!("failed to wait on {program:?}: {e}");
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
         }
     }
+
+    // Safe to drain only now that the child has exited: these commands emit far
+    // less than a pipe buffer, so it cannot have blocked on a full pipe.
+    child.wait_with_output().ok()
 }
+
+const POLL_INTERVAL: Duration = Duration::from_millis(20);
 
 pub fn collect_environment_impl() -> Result<JamfEnvironment, AppError> {
     let jamf_installed = Path::new(paths::JAMF_BINARY).is_file();
@@ -111,10 +131,12 @@ fn scan_directories() -> JamfDirectoryStatus {
         jamf_log: Path::new(paths::JAMF_LOG).is_file(),
         jamf_app_support: Path::new(paths::JAMF_APP_SUPPORT).is_dir(),
         jamf_receipts: Path::new(paths::JAMF_RECEIPTS).is_dir(),
-        jamf_user_logs: paths::jamf_user_logs_dir().is_dir(),
-        self_service_log: paths::self_service_log_file().is_file(),
+        // Absent HOME means the per-user sources are simply not locatable, which
+        // reads the same as "not present" to the caller.
+        jamf_user_logs: paths::jamf_user_logs_dir().is_some_and(|p| p.is_dir()),
+        self_service_log: paths::self_service_log_file().is_some_and(|p| p.is_file()),
         connect_log: Path::new(paths::JAMF_CONNECT_LOG_SYSTEM).is_file(),
-        connect_user_logs: paths::connect_user_logs_dir().is_dir(),
+        connect_user_logs: paths::connect_user_logs_dir().is_some_and(|p| p.is_dir()),
     }
 }
 

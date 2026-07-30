@@ -16,20 +16,33 @@ pub fn jamf_collect_environment() -> Result<JamfEnvironment, AppError> {
 
 /// Treats `Some("")` the same as `None`, so a cleared input field falls back to
 /// the canonical path instead of trying to open the current directory. Expands a
-/// leading `~/` against `$HOME`.
-fn resolve_path(path: Option<String>, default: impl FnOnce() -> PathBuf) -> PathBuf {
-    path.map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .map(|s| match s.strip_prefix("~/") {
-            Some(rest) => paths::home_dir().join(rest),
-            None => PathBuf::from(s),
-        })
-        .unwrap_or_else(default)
+/// leading `~/` against `$HOME`, leaving it literal when `HOME` is unavailable.
+///
+/// Returns `None` only when the caller asked for a default that cannot be
+/// located (a per-user path with no resolvable home).
+fn resolve_path(
+    path: Option<String>,
+    default: impl FnOnce() -> Option<PathBuf>,
+) -> Option<PathBuf> {
+    match path.map(|s| s.trim().to_string()).filter(|s| !s.is_empty()) {
+        Some(s) => match s.strip_prefix("~/") {
+            Some(rest) => paths::home_dir().map(|h| h.join(rest)),
+            None => Some(PathBuf::from(s)),
+        },
+        None => default(),
+    }
+}
+
+fn missing_home() -> AppError {
+    AppError::Io(std::io::Error::new(
+        std::io::ErrorKind::NotFound,
+        "HOME is not set, so the per-user JAMF log path cannot be resolved",
+    ))
 }
 
 #[tauri::command]
 pub fn jamf_parse_policy_log(path: Option<String>) -> Result<JamfPolicyLogResult, AppError> {
-    let p = resolve_path(path, || PathBuf::from(paths::JAMF_LOG));
+    let p = resolve_path(path, || Some(PathBuf::from(paths::JAMF_LOG))).ok_or_else(missing_home)?;
     crate::jamf::policy_log::parse_policy_log_impl(&p)
 }
 
@@ -37,13 +50,14 @@ pub fn jamf_parse_policy_log(path: Option<String>) -> Result<JamfPolicyLogResult
 pub fn jamf_parse_self_service_log(
     path: Option<String>,
 ) -> Result<Vec<JamfSelfServiceEvent>, AppError> {
-    let p = resolve_path(path, paths::self_service_log_file);
+    let p = resolve_path(path, paths::self_service_log_file).ok_or_else(missing_home)?;
     crate::jamf::self_service::parse_self_service_log_impl(&p)
 }
 
 #[tauri::command]
 pub fn jamf_parse_connect_log(path: Option<String>) -> Result<Vec<JamfConnectEvent>, AppError> {
-    let p = resolve_path(path, || PathBuf::from(paths::JAMF_CONNECT_LOG_SYSTEM));
+    let p = resolve_path(path, || Some(PathBuf::from(paths::JAMF_CONNECT_LOG_SYSTEM)))
+        .ok_or_else(missing_home)?;
     crate::jamf::connect::parse_connect_log_impl(&p)
 }
 
@@ -53,11 +67,16 @@ pub fn jamf_scan_logs() -> Result<JamfLogScanResult, AppError> {
     let mut scanned: Vec<String> = Vec::new();
     let mut total: u64 = 0;
 
-    let candidates: Vec<PathBuf> = vec![
-        paths::jamf_app_logs_dir(),
+    // Per-user directories drop out when HOME is unavailable rather than
+    // resolving somewhere shared.
+    let candidates: Vec<PathBuf> = [
+        Some(paths::jamf_app_logs_dir()),
         paths::jamf_user_logs_dir(),
         paths::connect_user_logs_dir(),
-    ];
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
 
     for dir in candidates {
         let dir_str = dir.to_string_lossy();

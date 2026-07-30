@@ -57,25 +57,34 @@ pub fn jamf_app_logs_dir() -> PathBuf {
     PathBuf::from("/Library/Application Support/JAMF/Logs")
 }
 
-pub fn home_dir() -> PathBuf {
-    PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string()))
+/// The invoking user's home directory, or `None` when `HOME` is unset, empty or
+/// not valid Unicode.
+///
+/// This previously fell back to `/tmp`, which silently pointed every per-user
+/// path at a world-writable shared directory — the wrong place to read
+/// diagnostics from, and the wrong place to teach callers to look. Callers
+/// should skip the per-user sources instead.
+pub fn home_dir() -> Option<PathBuf> {
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .filter(|p| !p.as_os_str().is_empty())
 }
 
 /// Verified-real path: `~/Library/Logs/JAMF` contains `selfservice.log`,
 /// `selfservice_debug.log`, and (when JAMF Connect is installed) per-user
 /// JAMF Connect logs.
-pub fn jamf_user_logs_dir() -> PathBuf {
-    home_dir().join("Library/Logs/JAMF")
+pub fn jamf_user_logs_dir() -> Option<PathBuf> {
+    home_dir().map(|h| h.join("Library/Logs/JAMF"))
 }
 
-pub fn self_service_log_file() -> PathBuf {
-    jamf_user_logs_dir().join("selfservice.log")
+pub fn self_service_log_file() -> Option<PathBuf> {
+    jamf_user_logs_dir().map(|d| d.join("selfservice.log"))
 }
 
-pub fn self_service_debug_log_file() -> PathBuf {
-    jamf_user_logs_dir().join("selfservice_debug.log")
+pub fn self_service_debug_log_file() -> Option<PathBuf> {
+    jamf_user_logs_dir().map(|d| d.join("selfservice_debug.log"))
 }
 
-pub fn connect_user_logs_dir() -> PathBuf {
-    jamf_user_logs_dir().join("JAMF Connect")
+pub fn connect_user_logs_dir() -> Option<PathBuf> {
+    jamf_user_logs_dir().map(|d| d.join("JAMF Connect"))
 }
