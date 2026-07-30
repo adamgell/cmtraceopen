@@ -192,6 +192,25 @@ fn split_ccm_time_tail(value: &str) -> (&str, Option<&str>) {
     (value, None)
 }
 
+/// Reproduce the pre-SCCM-spine public regex projection.
+///
+/// The legacy `(?P<ms>\d+)(?P<tz>[+-]*\d+)` captures greedily assigned the
+/// final digit of an unsigned tail to `timezoneOffset`. Public `LogEntry`
+/// callers retain that observable behavior; the SCCM envelope uses
+/// `split_ccm_time_tail` above for corrected provenance.
+fn split_legacy_public_time_tail(value: &str) -> Option<(&str, &str)> {
+    if let Some(index) = value
+        .as_bytes()
+        .iter()
+        .position(|byte| matches!(byte, b'+' | b'-'))
+    {
+        return (index > 0).then_some((&value[..index], &value[index..]));
+    }
+
+    let split_at = value.len().checked_sub(1)?;
+    (split_at > 0).then_some((&value[..split_at], &value[split_at..]))
+}
+
 /// Convert a naive local datetime + optional timezone offset (in minutes) to UTC epoch millis.
 /// Falls back to treating naive as UTC if the offset is invalid or overflows.
 pub(crate) fn naive_to_utc_millis(
@@ -436,8 +455,25 @@ fn parse_captures(caps: &regex::Captures<'_>) -> Option<CcmParsed> {
     let file = caps.name("file").map(|m| m.as_str().to_string());
 
     let severity = severity_from_type_field(typ, &msg);
-    let (timestamp, timestamp_display) =
-        build_timestamp(mon, day, yr, h, m, s, ms, parsed_timezone);
+    let public_timestamp = split_legacy_public_time_tail(time_tail).and_then(
+        |(public_ms_text, public_timezone_text)| {
+            let public_ms = truncate_subsecond_to_millis(public_ms_text)?;
+            let public_timezone = public_timezone_text.parse::<i32>().ok()?;
+            let (timestamp, timestamp_display) =
+                build_timestamp(mon, day, yr, h, m, s, public_ms, Some(public_timezone));
+            Some((timestamp, timestamp_display, public_timezone))
+        },
+    );
+    let public_compatible = public_timestamp.is_some();
+    let (timestamp, timestamp_display, timezone_offset) = public_timestamp.unwrap_or_else(|| {
+        let (timestamp, timestamp_display) =
+            build_timestamp(mon, day, yr, h, m, s, ms, parsed_timezone);
+        (
+            timestamp,
+            timestamp_display,
+            parsed_timezone.unwrap_or_default(),
+        )
+    });
     let naive = chrono::NaiveDate::from_ymd_opt(yr, mon, day)
         .and_then(|date| date.and_hms_milli_opt(h, m, s, ms));
     let normalized_timestamp = if timezone_is_explicit {
@@ -475,10 +511,10 @@ fn parse_captures(caps: &regex::Captures<'_>) -> Option<CcmParsed> {
         thread: thr,
         thread_display,
         source_file: file,
-        timezone_offset: parsed_timezone.unwrap_or_default(),
+        timezone_offset,
         context,
         timestamp_parse,
-        public_compatible: timezone_text.is_none() || parsed_timezone.is_some(),
+        public_compatible,
     })
 }
 
