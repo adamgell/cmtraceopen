@@ -31,9 +31,7 @@
       "siteCode",
       "supHostHandle"
     ],
-    "validatedArtifactFamilies": [
-      "client-updates"
-    ]
+    "validatedArtifactFamilies": []
   },
   "reorderedInputDeterministic": true,
   "coverage": [

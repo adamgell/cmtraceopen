@@ -54,8 +54,7 @@
       "sanitizedSourcePath": null,
       "pathFingerprint": null,
       "rotation": {
-        "kind": "current",
-        "fragmentComplete": false
+        "kind": "current"
       },
       "sourceVersion": null,
       "capturedUtc": "2026-07-30T03:59:59Z",

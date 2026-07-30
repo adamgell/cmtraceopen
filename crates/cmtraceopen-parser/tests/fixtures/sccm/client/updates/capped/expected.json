@@ -41,6 +41,14 @@
     {
       "logicalArtifactId": "client-content",
       "state": "capped"
+    },
+    {
+      "logicalArtifactId": "client-location-services-shared",
+      "state": "captured"
+    },
+    {
+      "logicalArtifactId": "client-updates",
+      "state": "captured"
     }
   ],
   "artifactProvenance": [
@@ -178,6 +186,12 @@
         "timeOnlyEligible": false,
         "phase": "locateSup",
         "extractionProfileId": "updates-client-5.00.test-v1",
+        "timestampProvenance": {
+          "normalizedUtc": "2026-07-30T13:00:02.000Z",
+          "utcMillis": 1785416402000,
+          "offsetMinutes": 0,
+          "orderingState": "normalizedUtc"
+        },
         "evidence": {
           "artifactId": "updates-capped-02-sup",
           "startLine": 1,

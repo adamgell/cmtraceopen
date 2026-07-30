@@ -92,6 +92,11 @@ range. Complete logical CCM records are one or more physical lines only when
 the manifest proves a complete fragment; the partial rotation/capped inputs
 cannot yield an entry/key/terminal fact.
 
+Correlation-ready facts bind their normalized UTC instant, numeric offset, and
+ordering state to the cited complete CCM record. An unavailable SUP handle is
+represented as `null`; it is never inferred from the capture host, another
+transaction, or a timestamp.
+
 ## Supplemental servicing boundary
 
 CBS, DISM, Windows Update, and ReportingEvents evidence remains separately
@@ -157,6 +162,9 @@ stable, reviewed source facts and #333 defines the pairwise contract.
 All 17 scenarios use role `client`, capture host `LAB-CLIENT-01`, exact site
 code `LAB`, `SYNTHETIC://` provenance, deterministic artifact IDs, sorted
 artifact/coverage/transaction arrays, and stable synthetic keys/handles.
+Expected coverage and artifact provenance are exact, one-to-one projections of
+the manifest. Absent/skipped sources omit physical-fragment completeness, and
+validated profile families are derived only from compatible captured evidence.
 
 The corpus contains:
 
@@ -201,5 +209,5 @@ npx tsc --noEmit
 ```
 
 Native Windows source discovery/capture is not exercised by this slice. Issue
-#323 must remain open for production implementation, shared-interface review,
+`#323` must remain open for production implementation, shared-interface review,
 and eventual authorized development-client validation.

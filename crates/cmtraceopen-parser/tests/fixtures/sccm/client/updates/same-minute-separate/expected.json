@@ -61,7 +61,7 @@
         "updateJobId": "JOB-UPDATE-15",
         "clientHandle": "safe:client:updates-15",
         "siteCode": "LAB",
-        "supHostHandle": "safe:sup:lab-sup-01",
+        "supHostHandle": null,
         "confidence": "exact",
         "extractionProfileId": "updates-client-5.00.test-v1"
       },
@@ -90,7 +90,7 @@
         "updateJobId": "JOB-UPDATE-16",
         "clientHandle": "safe:client:updates-16",
         "siteCode": "LAB",
-        "supHostHandle": "safe:sup:lab-sup-01",
+        "supHostHandle": null,
         "confidence": "exact",
         "extractionProfileId": "updates-client-5.00.test-v1"
       },

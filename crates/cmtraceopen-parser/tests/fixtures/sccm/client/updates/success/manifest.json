@@ -222,8 +222,7 @@
       "sanitizedSourcePath": "SYNTHETIC://root-a/WindowsUpdate/ReportingEvents.log",
       "pathFingerprint": "synthetic:updates-success-08-supplemental-skipped",
       "rotation": {
-        "kind": "current",
-        "fragmentComplete": false
+        "kind": "current"
       },
       "sourceVersion": "5.00.TEST.0000",
       "capturedUtc": "2026-07-30T02:59:59Z",

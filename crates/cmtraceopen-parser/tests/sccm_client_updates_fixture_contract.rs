@@ -1,6 +1,11 @@
+use chrono::{DateTime, SecondsFormat, Utc};
 use cmtraceopen_parser::{
     models::log_entry::LogFormat,
     parser::{parse_content_with_selection, ResolvedParser},
+    sccm::{
+        normalize_ccm_artifact, SccmArtifact, SccmCoverageState, SccmEvidence, SccmRole,
+        SccmRotation, SccmTimeOrderingState,
+    },
 };
 use serde_json::Value;
 use std::{
@@ -20,8 +25,25 @@ const STATE_CHAIN: [&str; 8] = [
 ];
 const EXPECTED_ARTIFACTS: usize = 51;
 const EXPECTED_PHYSICAL_FILES: usize = 43;
+const EXPECTED_PHYSICAL_BYTES: u64 = 23_142;
+const EXPECTED_PHYSICAL_LINES: u64 = 61;
+const EXPECTED_COMPLETE_CCM_RECORDS: usize = 57;
+const EXPECTED_PARTIAL_FILES: usize = 2;
+const EXPECTED_CAPPED_FILES: usize = 1;
 const EXPECTED_CORPUS_FNV1A64: u64 = 0x1ff6_72e5_1adb_eb52;
+const EXPECTED_CORPUS_SHA256: &str =
+    "b7670821f385f90eb0178528480307f617c508c28abacf21e927d30ed3bdffef";
 const EXPECTED_CAPPED_CONTENT: &[u8] = b"<![LOG[SYNTHETIC FIXTURE updates capped: ContentId=CONTENT-UPDATE-CAP-001 error-looking 0x80000001 coverage only]LOG]!><time=\"1\n";
+const SHA256_ROUND_CONSTANTS: [u32; 64] = [
+    0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+    0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+    0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+    0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+    0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+    0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+    0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+    0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+];
 
 #[derive(Clone, Copy)]
 struct ScenarioContract {
@@ -65,7 +87,11 @@ const SCENARIOS: [ScenarioContract; 17] = [
         confidence_ceiling: "medium",
         last_successful_phase: Some("locateSup"),
         next_artifact: Some("client-content"),
-        coverage: &[("client-content", "capped")],
+        coverage: &[
+            ("client-content", "capped"),
+            ("client-location-services-shared", "captured"),
+            ("client-updates", "captured"),
+        ],
         counterpart_facts: 1,
     },
     ScenarioContract {
@@ -361,7 +387,7 @@ fn optional_json_string(value: &Value, field: &str) -> Option<String> {
     value[field].as_str().map(str::to_owned)
 }
 
-fn sorted_strings(values: &Value, field: &str) -> Vec<String> {
+fn string_array(values: &Value, field: &str) -> Vec<String> {
     values[field]
         .as_array()
         .unwrap_or_else(|| panic!("{field} must be an array"))
@@ -383,6 +409,23 @@ fn subject<'a>(expected: &'a Value, contract: &ScenarioContract) -> &'a Value {
     }
 }
 
+fn manifest_identity_failures(manifest: &Value, scenario: &str) -> Vec<String> {
+    let mut failures = Vec::new();
+    if manifest["sccmManifestVersion"] != 1
+        || manifest["proposalOnly"] != true
+        || manifest["syntheticFixture"] != true
+        || manifest["bundle"]["role"] != "client"
+        || manifest["bundle"]["workflow"] != "updates"
+        || manifest["bundle"]["captureHost"] != "LAB-CLIENT-01"
+        || manifest["bundle"]["siteCode"] != "LAB"
+    {
+        failures.push(format!(
+            "{scenario}: manifest identity/proposal boundary drifted"
+        ));
+    }
+    failures
+}
+
 fn expected_boundary_failures(expected: &Value, contract: &ScenarioContract) -> Vec<String> {
     let mut failures = Vec::new();
     let scenario = contract.name;
@@ -395,7 +438,7 @@ fn expected_boundary_failures(expected: &Value, contract: &ScenarioContract) -> 
     if expected["workflow"] != "updates" || expected["scenario"] != scenario {
         failures.push(format!("{scenario}: workflow/scenario identity drifted"));
     }
-    let state_chain = sorted_strings(expected, "stateChain");
+    let state_chain = string_array(expected, "stateChain");
     if state_chain != STATE_CHAIN {
         failures.push(format!("{scenario}: state chain drifted: {state_chain:?}"));
     }
@@ -517,22 +560,24 @@ fn expected_boundary_failures(expected: &Value, contract: &ScenarioContract) -> 
     let coverage = expected["coverage"]
         .as_array()
         .expect("coverage must be an array");
-    let coverage_ids = coverage
+    let coverage_pairs = coverage
         .iter()
-        .map(|entry| json_string(entry, "logicalArtifactId"))
+        .map(|entry| {
+            (
+                json_string(entry, "logicalArtifactId"),
+                json_string(entry, "state"),
+            )
+        })
         .collect::<Vec<_>>();
-    let mut sorted_coverage_ids = coverage_ids.clone();
-    sorted_coverage_ids.sort();
-    if coverage_ids != sorted_coverage_ids {
-        failures.push(format!("{scenario}: coverage must be sorted"));
-    }
-    for (logical_id, state) in contract.coverage {
-        if !coverage
-            .iter()
-            .any(|entry| entry["logicalArtifactId"] == *logical_id && entry["state"] == *state)
-        {
-            failures.push(format!("{scenario}: missing coverage {logical_id}={state}"));
-        }
+    let expected_coverage_pairs = contract
+        .coverage
+        .iter()
+        .map(|(logical_id, state)| ((*logical_id).to_owned(), (*state).to_owned()))
+        .collect::<Vec<_>>();
+    if coverage_pairs != expected_coverage_pairs {
+        failures.push(format!(
+            "{scenario}: coverage projection drifted: expected {expected_coverage_pairs:?}, got {coverage_pairs:?}"
+        ));
     }
 
     let handoff = &expected["correlationHandoff"];
@@ -578,7 +623,7 @@ fn expected_boundary_failures(expected: &Value, contract: &ScenarioContract) -> 
         }
     }
 
-    let prohibited = sorted_strings(expected, "prohibitedClaims").join("\n");
+    let prohibited = string_array(expected, "prohibitedClaims").join("\n");
     for required in [
         "SUP or server root cause",
         "time-only cross-artifact causality",
@@ -645,90 +690,847 @@ fn expected_boundary_failures(expected: &Value, contract: &ScenarioContract) -> 
     failures
 }
 
+#[derive(Clone)]
+struct IndexedArtifact {
+    manifest: Value,
+    physical_lines: Vec<String>,
+    complete_ccm_records: Vec<SccmEvidence>,
+}
+
+fn safe_evidence_relative_path(relative_path: &str) -> bool {
+    let relative = Path::new(relative_path);
+    relative_path.starts_with("evidence/")
+        && !relative.is_absolute()
+        && !relative_path.contains('\\')
+        && !relative.components().any(|component| {
+            matches!(
+                component,
+                std::path::Component::ParentDir
+                    | std::path::Component::RootDir
+                    | std::path::Component::Prefix(_)
+            )
+        })
+}
+
+fn sccm_coverage_state(state: &str) -> Option<SccmCoverageState> {
+    match state {
+        "captured" => Some(SccmCoverageState::Captured),
+        "absent" => Some(SccmCoverageState::Absent),
+        "accessDenied" => Some(SccmCoverageState::AccessDenied),
+        "capped" => Some(SccmCoverageState::Capped),
+        "skipped" => Some(SccmCoverageState::Skipped),
+        "unsupported" => Some(SccmCoverageState::Unsupported),
+        "parseFailed" => Some(SccmCoverageState::ParseFailed),
+        _ => None,
+    }
+}
+
+fn evidence_index(
+    scenario_dir: &Path,
+    manifest: &Value,
+) -> (BTreeMap<String, IndexedArtifact>, Vec<String>) {
+    let mut index = BTreeMap::new();
+    let mut failures = Vec::new();
+    let Some(artifacts) = manifest["artifacts"].as_array() else {
+        return (
+            index,
+            vec!["manifest artifacts must be an array".to_owned()],
+        );
+    };
+
+    for artifact in artifacts {
+        let Some(artifact_id) = artifact["artifactId"].as_str() else {
+            failures.push("manifest artifactId must be a string".to_owned());
+            continue;
+        };
+        let mut physical_lines = Vec::new();
+        let mut complete_ccm_records = Vec::new();
+        if let Some(relative_path) = artifact["relativePath"].as_str() {
+            if safe_evidence_relative_path(relative_path) {
+                let path = scenario_dir.join(relative_path);
+                if let Ok(contents) = std::fs::read_to_string(&path) {
+                    physical_lines = contents.lines().map(str::to_owned).collect();
+                    if artifact["captureState"] == "captured"
+                        && artifact["rotation"]["fragmentComplete"] == true
+                        && artifact["kind"] == "ccmLog"
+                    {
+                        let Some(display_name) = artifact["originalBasename"].as_str() else {
+                            failures
+                                .push(format!("{artifact_id}: originalBasename must be a string"));
+                            continue;
+                        };
+                        let Some(coverage) = artifact["captureState"]
+                            .as_str()
+                            .and_then(sccm_coverage_state)
+                        else {
+                            failures.push(format!(
+                                "{artifact_id}: captureState cannot build SCCM evidence"
+                            ));
+                            continue;
+                        };
+                        complete_ccm_records = normalize_ccm_artifact(
+                            SccmArtifact {
+                                artifact_id: artifact_id.to_owned(),
+                                display_name: display_name.to_owned(),
+                                original_path: artifact["sanitizedSourcePath"]
+                                    .as_str()
+                                    .map(str::to_owned),
+                                host: None,
+                                role: SccmRole::Client,
+                                configmgr_version: artifact["sourceVersion"]
+                                    .as_str()
+                                    .map(str::to_owned),
+                                collected_at_utc: artifact["capturedUtc"]
+                                    .as_str()
+                                    .map(str::to_owned),
+                                rotation: SccmRotation::Current,
+                                coverage,
+                                encoding: artifact["encoding"].as_str().map(str::to_owned),
+                            },
+                            &contents,
+                        );
+                    }
+                }
+            }
+        }
+
+        if index
+            .insert(
+                artifact_id.to_owned(),
+                IndexedArtifact {
+                    manifest: artifact.clone(),
+                    physical_lines,
+                    complete_ccm_records,
+                },
+            )
+            .is_some()
+        {
+            failures.push(format!("{artifact_id}: artifact ID is duplicated"));
+        }
+    }
+
+    (index, failures)
+}
+
+fn citation_triples(
+    value: &Value,
+    label: &str,
+    failures: &mut Vec<String>,
+) -> Vec<(String, u64, u64)> {
+    let Some(citations) = value.as_array() else {
+        failures.push(format!("{label}: evidence citations must be an array"));
+        return Vec::new();
+    };
+    citations
+        .iter()
+        .filter_map(|citation| {
+            let Some(artifact_id) = citation["artifactId"].as_str() else {
+                failures.push(format!("{label}: citation artifactId must be a string"));
+                return None;
+            };
+            let Some(start_line) = citation["startLine"].as_u64() else {
+                failures.push(format!("{label}: citation startLine must be an integer"));
+                return None;
+            };
+            let Some(end_line) = citation["endLine"].as_u64() else {
+                failures.push(format!("{label}: citation endLine must be an integer"));
+                return None;
+            };
+            Some((artifact_id.to_owned(), start_line, end_line))
+        })
+        .collect()
+}
+
+fn citation_failures(
+    label: &str,
+    citations: &Value,
+    index: &BTreeMap<String, IndexedArtifact>,
+) -> Vec<String> {
+    let mut failures = Vec::new();
+    for (artifact_id, start_line, end_line) in citation_triples(citations, label, &mut failures) {
+        let Some(artifact) = index.get(&artifact_id) else {
+            failures.push(format!(
+                "{label}: same-scenario citation references unknown artifact {artifact_id}"
+            ));
+            continue;
+        };
+        let line_count = artifact.physical_lines.len() as u64;
+        if line_count == 0 {
+            failures.push(format!(
+                "{label}: same-scenario citation references nonphysical artifact {artifact_id}"
+            ));
+        } else if start_line == 0 || end_line < start_line || end_line > line_count {
+            failures.push(format!(
+                "{label}: same-scenario citation {artifact_id}:{start_line}-{end_line} exceeds {line_count} lines"
+            ));
+        }
+    }
+    failures
+}
+
+fn cited_complete_records<'a>(
+    citations: &Value,
+    index: &'a BTreeMap<String, IndexedArtifact>,
+) -> Vec<&'a SccmEvidence> {
+    let mut ignored_failures = Vec::new();
+    citation_triples(citations, "cited records", &mut ignored_failures)
+        .into_iter()
+        .flat_map(|(artifact_id, start_line, end_line)| {
+            index
+                .get(&artifact_id)
+                .into_iter()
+                .flat_map(move |artifact| {
+                    artifact.complete_ccm_records.iter().filter(move |record| {
+                        record.reference.line_start.is_some_and(|line| {
+                            u64::from(line) >= start_line
+                                && record
+                                    .reference
+                                    .line_end
+                                    .is_some_and(|end| u64::from(end) <= end_line)
+                        })
+                    })
+                })
+        })
+        .collect()
+}
+
+fn exact_message_field<'a>(message: &'a str, field: &str) -> Option<&'a str> {
+    message.split_ascii_whitespace().find_map(|token| {
+        let (name, value) = token.split_once('=')?;
+        (name == field).then(|| value.trim_matches(['{', '}']))
+    })
+}
+
+fn expected_transaction_gaps(scenario: &str) -> &'static [&'static str] {
+    match scenario {
+        "access-denied" => &["client-updates"],
+        "capped" => &["client-content"],
+        "incomplete" | "maintenance-window" => &["client-maintenance-window"],
+        "invalid-offset" => &["client-updates"],
+        "no-sup" => &["client-location-services-shared"],
+        "reboot-pending" => &["client-reboot"],
+        _ => &[],
+    }
+}
+
+fn transaction_binding_failures(
+    scenario: &str,
+    expected: &Value,
+    index: &BTreeMap<String, IndexedArtifact>,
+) -> Vec<String> {
+    let mut failures = Vec::new();
+    let Some(transactions) = expected["transactions"].as_array() else {
+        return vec![format!("{scenario}: transactions must be an array")];
+    };
+    let profile_id = expected["extractionProfile"]["profileId"].as_str();
+    let source_prefix = expected["extractionProfile"]["sourceVersionPrefix"].as_str();
+    let key_fields = [
+        ("updateId", "UpdateId"),
+        ("ciId", "CiId"),
+        ("contentId", "ContentId"),
+        ("updateJobId", "UpdateJobId"),
+        ("clientHandle", "ClientHandle"),
+        ("siteCode", "SiteCode"),
+    ];
+
+    for transaction in transactions {
+        let transaction_id = transaction["transactionId"]
+            .as_str()
+            .unwrap_or("<missing-transaction-id>");
+        failures.extend(citation_failures(
+            transaction_id,
+            &transaction["evidence"],
+            index,
+        ));
+        let cited_records = cited_complete_records(&transaction["evidence"], index);
+        let compatible_records = cited_records
+            .iter()
+            .copied()
+            .filter(|record| {
+                index
+                    .get(&record.reference.artifact_id)
+                    .and_then(|artifact| artifact.manifest["sourceVersion"].as_str())
+                    .zip(source_prefix)
+                    .is_some_and(|(version, prefix)| version.starts_with(prefix))
+            })
+            .collect::<Vec<_>>();
+        let key = &transaction["key"];
+        for (json_field, message_field) in key_fields {
+            let Some(value) = key[json_field].as_str() else {
+                failures.push(format!(
+                    "{scenario}: exact transaction key {transaction_id} has missing/non-string {json_field}"
+                ));
+                continue;
+            };
+            if !compatible_records
+                .iter()
+                .any(|record| exact_message_field(&record.message, message_field) == Some(value))
+            {
+                failures.push(format!(
+                    "{scenario}: exact transaction key {transaction_id} {json_field}={value:?} is not bound to cited profile-compatible CCM evidence"
+                ));
+            }
+        }
+        if key["confidence"] != "exact"
+            || key["extractionProfileId"].as_str() != profile_id
+            || key["siteCode"] != "LAB"
+            || key["updateId"].as_str().is_none_or(|update_id| {
+                transaction["transactionId"] != format!("updates:update:{update_id}")
+            })
+        {
+            failures.push(format!(
+                "{scenario}: exact transaction key metadata drifted for {transaction_id}"
+            ));
+        }
+
+        let sup_handle_present = key
+            .as_object()
+            .is_some_and(|object| object.contains_key("supHostHandle"));
+        match key["supHostHandle"].as_str() {
+            Some(sup_handle) => {
+                let exact_location = compatible_records.iter().any(|record| {
+                    index
+                        .get(&record.reference.artifact_id)
+                        .is_some_and(|artifact| {
+                            artifact.manifest["designOnlyCatalog"]["entryId"]
+                                == "client-location-services-shared"
+                                && record.message.contains("LocateSup selected")
+                                && exact_message_field(&record.message, "SupHostHandle")
+                                    == Some(sup_handle)
+                        })
+                });
+                if !exact_location {
+                    failures.push(format!(
+                        "{scenario}: SUP handle without LocateSup evidence is not exact"
+                    ));
+                }
+            }
+            None if sup_handle_present && key["supHostHandle"].is_null() => {}
+            None => failures.push(format!(
+                "{scenario}: unavailable supHostHandle must be represented as null"
+            )),
+        }
+
+        let actual_gaps = string_array(transaction, "coverageGapArtifactIds");
+        if actual_gaps != expected_transaction_gaps(scenario) {
+            failures.push(format!(
+                "{scenario}: coverage gaps drifted for {transaction_id}: {actual_gaps:?}"
+            ));
+        }
+    }
+    failures
+}
+
+fn finding_binding_failures(scenario: &str, expected: &Value) -> Vec<String> {
+    let mut failures = Vec::new();
+    let mut subjects = BTreeMap::new();
+    for transaction in expected["transactions"].as_array().into_iter().flatten() {
+        if let Some(id) = transaction["transactionId"].as_str() {
+            subjects.insert(id, transaction);
+        }
+    }
+    for observation in expected["sourceLocalObservations"]
+        .as_array()
+        .into_iter()
+        .flatten()
+    {
+        if let Some(id) = observation["observationId"].as_str() {
+            subjects.insert(id, observation);
+        }
+    }
+
+    for finding in expected["findings"].as_array().into_iter().flatten() {
+        let Some(subject_id) = finding["subjectId"].as_str() else {
+            failures.push(format!("{scenario}: finding subjectId must be a string"));
+            continue;
+        };
+        let Some(subject) = subjects.get(subject_id) else {
+            failures.push(format!(
+                "{scenario}: finding/subject binding references unknown {subject_id}"
+            ));
+            continue;
+        };
+        if finding["class"] != subject["classification"]
+            || finding["phase"] != subject["phase"]
+            || finding["lastSuccessfulPhase"] != subject["lastSuccessfulPhase"]
+            || finding["confidence"] != subject["confidence"]
+            || finding["confidenceCeiling"] != subject["confidenceCeiling"]
+            || finding["nextArtifact"] != subject["nextArtifact"]
+            || finding["evidence"] != subject["evidence"]
+        {
+            failures.push(format!(
+                "{scenario}: finding/subject binding drifted for {subject_id}"
+            ));
+        }
+    }
+    failures
+}
+
+fn conservative_outcome_failures(scenario: &str, expected: &Value) -> Vec<String> {
+    let mut failures = Vec::new();
+    if scenario == "supplemental-conflict" {
+        let observation = &expected["sourceLocalObservations"][0];
+        let finding = &expected["findings"][0];
+        let transaction = &expected["transactions"][0];
+        if observation["confidence"] != "low"
+            || observation["confidenceCeiling"] != "low"
+            || observation["correlationEligible"] != false
+            || finding["confidence"] != "low"
+            || finding["confidenceCeiling"] != "low"
+            || transaction["phase"] != "install"
+            || transaction["state"] != "succeeded"
+            || transaction["classification"] != "success"
+        {
+            failures.push(
+                "supplemental-conflict: conservative confidence/outcome boundary drifted"
+                    .to_owned(),
+            );
+        }
+    }
+    if scenario == "invalid-offset" {
+        let transaction = &expected["transactions"][0];
+        let finding = &expected["findings"][0];
+        if transaction["confidence"] != "low"
+            || transaction["confidenceCeiling"] != "low"
+            || finding["confidence"] != "low"
+            || finding["confidenceCeiling"] != "low"
+            || transaction["ordering"]["crossArtifactComparable"] != false
+            || transaction["ordering"]["highConfidenceEligible"] != false
+            || transaction["ordering"]["reason"] != "invalidOffset"
+        {
+            failures.push(
+                "invalid-offset: conservative confidence/ordering boundary drifted".to_owned(),
+            );
+        }
+    }
+    if scenario == "same-minute-separate" {
+        let transactions = &expected["transactions"];
+        let first = &transactions[0];
+        let second = &transactions[1];
+        let separate = first["transactionId"]
+            == "updates:update:32300000-0000-0000-0000-000000000015"
+            && first["key"]["updateId"] == "32300000-0000-0000-0000-000000000015"
+            && first["phase"] == "report"
+            && first["state"] == "succeeded"
+            && first["classification"] == "success"
+            && first["evidence"]
+                == serde_json::json!([{
+                    "artifactId": "updates-same-minute-separate-01-updates",
+                    "startLine": 1,
+                    "endLine": 1
+                }])
+            && second["transactionId"] == "updates:update:32300000-0000-0000-0000-000000000016"
+            && second["key"]["updateId"] == "32300000-0000-0000-0000-000000000016"
+            && second["phase"] == "install"
+            && second["state"] == "failed"
+            && second["classification"] == "confirmedFailure"
+            && second["evidence"]
+                == serde_json::json!([{
+                    "artifactId": "updates-same-minute-separate-01-updates",
+                    "startLine": 2,
+                    "endLine": 2
+                }]);
+        if !separate {
+            failures
+                .push("same-minute-separate: same-minute transaction outcomes drifted".to_owned());
+        }
+    }
+    failures
+}
+
+fn manifest_artifact_kind_failures(artifact: &Value) -> Vec<String> {
+    let artifact_id = artifact["artifactId"].as_str().unwrap_or("<missing>");
+    let group = artifact["designOnlyCatalog"]["entryId"].as_str();
+    let basename = artifact["originalBasename"].as_str();
+    let expected_kind = if basename == Some("CBS.log") {
+        "cbsLog"
+    } else {
+        "ccmLog"
+    };
+    if group.is_none()
+        || (group != Some("client-windows-update-supplemental") && artifact["kind"] != "ccmLog")
+        || artifact["kind"] != expected_kind
+    {
+        vec![format!(
+            "{artifact_id}: artifact kind {:?} is incompatible with group/basename",
+            artifact["kind"]
+        )]
+    } else {
+        Vec::new()
+    }
+}
+
+fn coverage_state_for_artifact(artifact: &Value) -> Option<String> {
+    let state = artifact["captureState"].as_str()?;
+    if state == "captured" && artifact["rotation"]["fragmentComplete"] == false {
+        Some("partial".to_owned())
+    } else {
+        Some(state.to_owned())
+    }
+}
+
+fn coverage_projection(manifest: &Value) -> (Value, Vec<String>) {
+    let mut states_by_family = BTreeMap::<String, BTreeSet<String>>::new();
+    let mut failures = Vec::new();
+    let Some(artifacts) = manifest["artifacts"].as_array() else {
+        return (
+            Value::Array(Vec::new()),
+            vec!["coverage projection requires manifest artifacts".to_owned()],
+        );
+    };
+    for artifact in artifacts {
+        let Some(state) = coverage_state_for_artifact(artifact) else {
+            failures.push("coverage projection found invalid captureState".to_owned());
+            continue;
+        };
+        let Some(groups) = artifact["designOnlyCatalog"]["groupMemberships"].as_array() else {
+            failures.push("coverage projection found invalid groupMemberships".to_owned());
+            continue;
+        };
+        for group in groups {
+            let Some(group) = group.as_str() else {
+                failures.push("coverage projection found non-string family".to_owned());
+                continue;
+            };
+            states_by_family
+                .entry(group.to_owned())
+                .or_default()
+                .insert(state.clone());
+        }
+    }
+
+    let mut projection = Vec::new();
+    for (family, mut states) in states_by_family {
+        if states.len() > 1 {
+            states.remove("captured");
+        }
+        if states.len() != 1 {
+            failures.push(format!(
+                "coverage projection has conflicting states for {family}: {states:?}"
+            ));
+            continue;
+        }
+        let state = states
+            .into_iter()
+            .next()
+            .expect("one projected coverage state remains");
+        projection.push(serde_json::json!({
+            "logicalArtifactId": family,
+            "state": state
+        }));
+    }
+    (Value::Array(projection), failures)
+}
+
+fn artifact_provenance_projection(manifest: &Value) -> (Value, Vec<String>) {
+    let mut projection = Vec::new();
+    let mut failures = Vec::new();
+    let Some(artifacts) = manifest["artifacts"].as_array() else {
+        return (
+            Value::Array(projection),
+            vec!["artifact provenance requires manifest artifacts".to_owned()],
+        );
+    };
+    for artifact in artifacts {
+        let Some(artifact_id) = artifact["artifactId"].as_str() else {
+            failures.push("artifact provenance found invalid artifactId".to_owned());
+            continue;
+        };
+        let Some(capture_state) = artifact["captureState"].as_str() else {
+            failures.push(format!(
+                "{artifact_id}: artifact provenance found invalid captureState"
+            ));
+            continue;
+        };
+        let physical = matches!(capture_state, "captured" | "capped");
+        let encoding = if physical {
+            artifact["encoding"].clone()
+        } else {
+            Value::Null
+        };
+        let byte_limit = if physical {
+            artifact["collectionLimit"]["byteLimit"].clone()
+        } else {
+            Value::Null
+        };
+        let limit_applied = if physical {
+            artifact["collectionLimit"]["limitApplied"].clone()
+        } else {
+            Value::Bool(false)
+        };
+        projection.push(serde_json::json!({
+            "artifactId": artifact_id,
+            "captureState": capture_state,
+            "encoding": encoding,
+            "byteLimit": byte_limit,
+            "limitApplied": limit_applied
+        }));
+    }
+    (Value::Array(projection), failures)
+}
+
+fn profile_binding_failures(manifest: &Value, expected: &Value, scenario: &str) -> Vec<String> {
+    let mut failures = Vec::new();
+    let profile = &expected["extractionProfile"];
+    let validated_families = string_array(profile, "validatedArtifactFamilies");
+    if profile["selectionState"] == "unvalidatedVersion" {
+        if !validated_families.is_empty() {
+            failures.push(format!(
+                "{scenario}: source profile/version cannot validate families for an unknown profile"
+            ));
+        }
+        return failures;
+    }
+    let Some(prefix) = profile["sourceVersionPrefix"].as_str() else {
+        return vec![format!(
+            "{scenario}: source profile/version prefix must be a string"
+        )];
+    };
+    let Some(artifacts) = manifest["artifacts"].as_array() else {
+        return vec![format!(
+            "{scenario}: source profile/version requires manifest artifacts"
+        )];
+    };
+    let derived = artifacts
+        .iter()
+        .filter(|artifact| {
+            artifact["captureState"] == "captured"
+                && artifact["rotation"]["fragmentComplete"] == true
+                && artifact["kind"] == "ccmLog"
+                && artifact["sourceVersion"]
+                    .as_str()
+                    .is_some_and(|version| version.starts_with(prefix))
+        })
+        .filter_map(|artifact| artifact["designOnlyCatalog"]["entryId"].as_str())
+        .map(str::to_owned)
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    if validated_families != derived {
+        failures.push(format!(
+            "{scenario}: source profile/version family projection drifted: expected {derived:?}, got {validated_families:?}"
+        ));
+    }
+    failures
+}
+
+fn manifest_expected_binding_failures(
+    scenario_dir: &Path,
+    manifest: &Value,
+    expected: &Value,
+    scenario: &str,
+) -> Vec<String> {
+    let mut failures = manifest_identity_failures(manifest, scenario);
+    let Some(artifacts) = manifest["artifacts"].as_array() else {
+        failures.push(format!("{scenario}: manifest artifacts must be an array"));
+        return failures;
+    };
+    let artifact_ids = artifacts
+        .iter()
+        .filter_map(|artifact| artifact["artifactId"].as_str())
+        .collect::<Vec<_>>();
+    let mut sorted_ids = artifact_ids.clone();
+    sorted_ids.sort_unstable();
+    if artifact_ids != sorted_ids
+        || artifact_ids.iter().collect::<BTreeSet<_>>().len() != artifact_ids.len()
+    {
+        failures.push(format!(
+            "{scenario}: manifest artifact IDs must be unique and sorted"
+        ));
+    }
+    for artifact in artifacts {
+        failures.extend(
+            manifest_artifact_failures(scenario_dir, artifact)
+                .into_iter()
+                .map(|failure| format!("{scenario}: {failure}")),
+        );
+        failures.extend(
+            manifest_artifact_kind_failures(artifact)
+                .into_iter()
+                .map(|failure| format!("{scenario}: {failure}")),
+        );
+    }
+
+    let (derived_coverage, coverage_failures) = coverage_projection(manifest);
+    failures.extend(
+        coverage_failures
+            .into_iter()
+            .map(|failure| format!("{scenario}: {failure}")),
+    );
+    if expected["coverage"] != derived_coverage {
+        failures.push(format!(
+            "{scenario}: coverage projection does not match the manifest"
+        ));
+    }
+
+    let (derived_provenance, provenance_failures) = artifact_provenance_projection(manifest);
+    failures.extend(
+        provenance_failures
+            .into_iter()
+            .map(|failure| format!("{scenario}: {failure}")),
+    );
+    if expected["artifactProvenance"] != derived_provenance {
+        failures.push(format!(
+            "{scenario}: artifact provenance does not match the manifest one-to-one"
+        ));
+    }
+    failures.extend(profile_binding_failures(manifest, expected, scenario));
+
+    let (index, index_failures) = evidence_index(scenario_dir, manifest);
+    failures.extend(
+        index_failures
+            .into_iter()
+            .map(|failure| format!("{scenario}: {failure}")),
+    );
+    failures.extend(transaction_binding_failures(scenario, expected, &index));
+    for observation in expected["sourceLocalObservations"]
+        .as_array()
+        .into_iter()
+        .flatten()
+    {
+        failures.extend(citation_failures(
+            observation["observationId"]
+                .as_str()
+                .unwrap_or("<missing-observation-id>"),
+            &observation["evidence"],
+            &index,
+        ));
+    }
+    for finding in expected["findings"].as_array().into_iter().flatten() {
+        failures.extend(citation_failures(
+            finding["findingId"]
+                .as_str()
+                .unwrap_or("<missing-finding-id>"),
+            &finding["evidence"],
+            &index,
+        ));
+    }
+    failures.extend(finding_binding_failures(scenario, expected));
+    failures.extend(conservative_outcome_failures(scenario, expected));
+    failures
+}
+
 fn counterpart_source_failures(
     scenario_dir: &Path,
     manifest: &Value,
     expected: &Value,
 ) -> Vec<String> {
     let mut failures = Vec::new();
-    let Some(artifacts) = manifest["artifacts"].as_array() else {
-        return vec!["manifest artifacts must be an array".to_owned()];
-    };
     let Some(facts) = expected["correlationHandoff"]["counterpartReadyFacts"].as_array() else {
         return vec!["counterpartReadyFacts must be an array".to_owned()];
     };
+    let Some(transactions) = expected["transactions"].as_array() else {
+        return vec!["transactions must be an array".to_owned()];
+    };
+    let (index, _) = evidence_index(scenario_dir, manifest);
+    let source_prefix = expected["extractionProfile"]["sourceVersionPrefix"].as_str();
+    let fact_fields = [
+        ("updateId", "UpdateId"),
+        ("ciId", "CiId"),
+        ("contentId", "ContentId"),
+        ("updateJobId", "UpdateJobId"),
+        ("clientHandle", "ClientHandle"),
+        ("siteCode", "SiteCode"),
+        ("supHostHandle", "SupHostHandle"),
+    ];
 
     for fact in facts {
+        if fact["keyConfidence"] != "exact"
+            || fact["correlationEligible"] != true
+            || fact["timeOnlyEligible"] != false
+            || fact["extractionProfileId"] != expected["extractionProfile"]["profileId"]
+            || fact["phase"] != "locateSup"
+        {
+            failures.push("counterpart fact exact/correlation metadata drifted".to_owned());
+        }
+
+        let mut exact_values = Vec::new();
+        for (json_field, message_field) in fact_fields {
+            let Some(value) = fact[json_field].as_str() else {
+                failures.push(format!(
+                    "exact counterpart key field {json_field} must be a string"
+                ));
+                continue;
+            };
+            exact_values.push((json_field, message_field, value));
+        }
+        let matching_transaction = fact["updateId"].as_str().and_then(|update_id| {
+            transactions
+                .iter()
+                .find(|transaction| transaction["key"]["updateId"] == update_id)
+        });
+        if matching_transaction.is_none_or(|transaction| {
+            exact_values
+                .iter()
+                .any(|(json_field, _, value)| transaction["key"][*json_field] != **value)
+        }) {
+            failures.push(
+                "exact counterpart key does not match one exact client transaction".to_owned(),
+            );
+        }
+
+        let citations = Value::Array(vec![fact["evidence"].clone()]);
+        failures.extend(citation_failures("counterpart fact", &citations, &index));
         let Some(artifact_id) = fact["evidence"]["artifactId"].as_str() else {
             failures.push(
                 "counterpart fact needs explicit LocationServices LocateSup evidence".to_owned(),
             );
             continue;
         };
-        let Some(artifact) = artifacts
-            .iter()
-            .find(|artifact| artifact["artifactId"] == artifact_id)
-        else {
+        let Some(artifact) = index.get(artifact_id) else {
             failures.push(format!(
                 "{artifact_id}: counterpart fact needs explicit LocationServices LocateSup evidence"
             ));
             continue;
         };
-        let is_complete_location_source = artifact["designOnlyCatalog"]["entryId"]
+        let is_complete_location_source = artifact.manifest["designOnlyCatalog"]["entryId"]
             == "client-location-services-shared"
-            && artifact["kind"] == "ccmLog"
-            && artifact["captureState"] == "captured"
-            && artifact["rotation"]["fragmentComplete"] == true
-            && artifact["originalBasename"] == "LocationServices.log";
-        let start_line = fact["evidence"]["startLine"].as_u64();
-        let end_line = fact["evidence"]["endLine"].as_u64();
-        let Some(relative_path) = artifact["relativePath"].as_str() else {
+            && artifact.manifest["kind"] == "ccmLog"
+            && artifact.manifest["captureState"] == "captured"
+            && artifact.manifest["rotation"]["fragmentComplete"] == true
+            && artifact.manifest["originalBasename"] == "LocationServices.log"
+            && artifact.manifest["sourceVersion"]
+                .as_str()
+                .zip(source_prefix)
+                .is_some_and(|(version, prefix)| version.starts_with(prefix));
+        let cited_records = cited_complete_records(&citations, &index);
+        if !is_complete_location_source || cited_records.len() != 1 {
             failures.push(format!(
                 "{artifact_id}: counterpart fact needs explicit LocationServices LocateSup evidence"
             ));
             continue;
-        };
-        let cited_line = start_line
-            .filter(|line| Some(*line) == end_line && *line > 0)
-            .and_then(|line| {
-                std::fs::read_to_string(scenario_dir.join(relative_path))
-                    .ok()?
-                    .lines()
-                    .nth((line - 1) as usize)
-                    .map(str::to_owned)
-            });
-        let direct_markers = [
-            format!(
-                "UpdateId={{{}}}",
-                fact["updateId"].as_str().unwrap_or_default()
-            ),
-            format!("CiId={}", fact["ciId"].as_str().unwrap_or_default()),
-            format!(
-                "ContentId={}",
-                fact["contentId"].as_str().unwrap_or_default()
-            ),
-            format!(
-                "UpdateJobId={}",
-                fact["updateJobId"].as_str().unwrap_or_default()
-            ),
-            format!(
-                "ClientHandle={}",
-                fact["clientHandle"].as_str().unwrap_or_default()
-            ),
-            format!("SiteCode={}", fact["siteCode"].as_str().unwrap_or_default()),
-            format!(
-                "SupHostHandle={}",
-                fact["supHostHandle"].as_str().unwrap_or_default()
-            ),
-        ];
-        if !is_complete_location_source
-            || cited_line.as_deref().is_none_or(|line| {
-                !line.contains("LocateSup selected")
-                    || direct_markers.iter().any(|marker| !line.contains(marker))
+        }
+        let record = cited_records[0];
+        if !record.message.contains("LocateSup selected")
+            || exact_values.iter().any(|(_, message_field, value)| {
+                exact_message_field(&record.message, message_field) != Some(*value)
             })
         {
             failures.push(format!(
-                "{artifact_id}: counterpart fact needs explicit LocationServices LocateSup evidence"
+                "{artifact_id}: exact counterpart key is not bound to the cited LocateSup record"
+            ));
+        }
+
+        let usable_timestamp = match (
+            &record.timestamp.ordering_state,
+            record.timestamp.utc_millis,
+            record.timestamp.offset_minutes,
+        ) {
+            (SccmTimeOrderingState::NormalizedUtc, Some(utc_millis), Some(offset_minutes)) => {
+                DateTime::<Utc>::from_timestamp_millis(utc_millis).map(|timestamp| {
+                    serde_json::json!({
+                        "normalizedUtc": timestamp.to_rfc3339_opts(SecondsFormat::Millis, true),
+                        "utcMillis": utc_millis,
+                        "offsetMinutes": offset_minutes,
+                        "orderingState": "normalizedUtc"
+                    })
+                })
+            }
+            _ => None,
+        };
+        if usable_timestamp.as_ref() != Some(&fact["timestampProvenance"]) {
+            failures.push(format!(
+                "{artifact_id}: counterpart timestamp provenance is missing, unusable, or not bound to the cited CCM record"
             ));
         }
     }
@@ -736,19 +1538,48 @@ fn counterpart_source_failures(
     failures
 }
 
+fn scenario_semantic_failures(
+    scenario_dir: &Path,
+    manifest: &Value,
+    expected: &Value,
+    contract: &ScenarioContract,
+) -> Vec<String> {
+    let mut failures =
+        manifest_expected_binding_failures(scenario_dir, manifest, expected, contract.name);
+    failures.extend(expected_boundary_failures(expected, contract));
+    failures.extend(counterpart_source_failures(
+        scenario_dir,
+        manifest,
+        expected,
+    ));
+    failures
+}
+
 fn manifest_artifact_failures(scenario_dir: &Path, artifact: &Value) -> Vec<String> {
     let mut failures = Vec::new();
     let artifact_id = artifact["artifactId"].as_str().unwrap_or("<missing>");
     let state = artifact["captureState"].as_str().unwrap_or("<missing>");
-    let fragment_complete = artifact["rotation"]["fragmentComplete"]
-        .as_bool()
-        .unwrap_or(false);
+    let fragment_complete_field = artifact
+        .get("rotation")
+        .and_then(Value::as_object)
+        .and_then(|rotation| rotation.get("fragmentComplete"));
+    let fragment_complete = fragment_complete_field.and_then(Value::as_bool);
     let physical = matches!(state, "captured" | "capped");
 
+    if physical && fragment_complete.is_none() {
+        failures.push(format!(
+            "{artifact_id}: physical artifact must declare fragmentComplete"
+        ));
+    }
+    if matches!(state, "absent" | "skipped") && fragment_complete_field.is_some() {
+        failures.push(format!(
+            "{artifact_id}: nonphysical rotation fragmentComplete must be omitted for {state}"
+        ));
+    }
     if matches!(
         state,
         "absent" | "accessDenied" | "capped" | "skipped" | "unsupported" | "parseFailed"
-    ) && fragment_complete
+    ) && fragment_complete == Some(true)
     {
         failures.push(format!(
             "{artifact_id}: {state} coverage cannot claim a complete fragment"
@@ -762,18 +1593,7 @@ fn manifest_artifact_failures(scenario_dir: &Path, artifact: &Value) -> Vec<Stri
             )];
         };
         let relative = Path::new(relative_path);
-        if !relative_path.starts_with("evidence/")
-            || relative.is_absolute()
-            || relative_path.contains('\\')
-            || relative.components().any(|component| {
-                matches!(
-                    component,
-                    std::path::Component::ParentDir
-                        | std::path::Component::RootDir
-                        | std::path::Component::Prefix(_)
-                )
-            })
-        {
+        if !safe_evidence_relative_path(relative_path) {
             failures.push(format!(
                 "{artifact_id}: unsafe relativePath {relative_path}"
             ));
@@ -799,9 +1619,15 @@ fn manifest_artifact_failures(scenario_dir: &Path, artifact: &Value) -> Vec<Stri
         if artifact["encoding"] != "utf-8" {
             failures.push(format!("{artifact_id}: physical evidence must be UTF-8"));
         }
-        let byte_limit = artifact["collectionLimit"]["byteLimit"]
-            .as_u64()
-            .unwrap_or_default();
+        let byte_limit = match artifact["collectionLimit"]["byteLimit"].as_u64() {
+            Some(byte_limit) => byte_limit,
+            None => {
+                failures.push(format!(
+                    "{artifact_id}: physical artifact must declare byteLimit"
+                ));
+                0
+            }
+        };
         if byte_limit < actual {
             failures.push(format!(
                 "{artifact_id}: byteLimit {byte_limit} is below {actual}"
@@ -851,20 +1677,6 @@ fn manifest_artifact_failures(scenario_dir: &Path, artifact: &Value) -> Vec<Stri
     failures
 }
 
-fn artifact_matches_coverage(artifact: &Value, logical_id: &str, state: &str) -> bool {
-    let memberships = artifact["designOnlyCatalog"]["groupMemberships"]
-        .as_array()
-        .expect("groupMemberships must be an array");
-    if !memberships.iter().any(|value| value == logical_id) {
-        return false;
-    }
-    if state == "partial" {
-        artifact["captureState"] == "captured" && artifact["rotation"]["fragmentComplete"] == false
-    } else {
-        artifact["captureState"] == state
-    }
-}
-
 fn visit_files(root: &Path, files: &mut Vec<PathBuf>) {
     if !root.exists() {
         return;
@@ -910,6 +1722,101 @@ fn fnv1a64(bytes: &[u8], mut hash: u64) -> u64 {
     hash
 }
 
+fn sha256(bytes: &[u8]) -> [u8; 32] {
+    let bit_length = (bytes.len() as u64)
+        .checked_mul(8)
+        .expect("fixture byte length fits SHA-256");
+    let mut padded = bytes.to_vec();
+    padded.push(0x80);
+    while padded.len() % 64 != 56 {
+        padded.push(0);
+    }
+    padded.extend_from_slice(&bit_length.to_be_bytes());
+
+    let mut state = [
+        0x6a09e667u32,
+        0xbb67ae85,
+        0x3c6ef372,
+        0xa54ff53a,
+        0x510e527f,
+        0x9b05688c,
+        0x1f83d9ab,
+        0x5be0cd19,
+    ];
+    for chunk in padded.chunks_exact(64) {
+        let mut words = [0u32; 64];
+        for (index, word) in words.iter_mut().take(16).enumerate() {
+            let offset = index * 4;
+            *word = u32::from_be_bytes([
+                chunk[offset],
+                chunk[offset + 1],
+                chunk[offset + 2],
+                chunk[offset + 3],
+            ]);
+        }
+        for index in 16..64 {
+            let sigma0 = words[index - 15].rotate_right(7)
+                ^ words[index - 15].rotate_right(18)
+                ^ (words[index - 15] >> 3);
+            let sigma1 = words[index - 2].rotate_right(17)
+                ^ words[index - 2].rotate_right(19)
+                ^ (words[index - 2] >> 10);
+            words[index] = words[index - 16]
+                .wrapping_add(sigma0)
+                .wrapping_add(words[index - 7])
+                .wrapping_add(sigma1);
+        }
+
+        let [mut a, mut b, mut c, mut d, mut e, mut f, mut g, mut h] = state;
+        for index in 0..64 {
+            let sum1 = e.rotate_right(6) ^ e.rotate_right(11) ^ e.rotate_right(25);
+            let choose = (e & f) ^ ((!e) & g);
+            let temporary1 = h
+                .wrapping_add(sum1)
+                .wrapping_add(choose)
+                .wrapping_add(SHA256_ROUND_CONSTANTS[index])
+                .wrapping_add(words[index]);
+            let sum0 = a.rotate_right(2) ^ a.rotate_right(13) ^ a.rotate_right(22);
+            let majority = (a & b) ^ (a & c) ^ (b & c);
+            let temporary2 = sum0.wrapping_add(majority);
+
+            h = g;
+            g = f;
+            f = e;
+            e = d.wrapping_add(temporary1);
+            d = c;
+            c = b;
+            b = a;
+            a = temporary1.wrapping_add(temporary2);
+        }
+
+        state[0] = state[0].wrapping_add(a);
+        state[1] = state[1].wrapping_add(b);
+        state[2] = state[2].wrapping_add(c);
+        state[3] = state[3].wrapping_add(d);
+        state[4] = state[4].wrapping_add(e);
+        state[5] = state[5].wrapping_add(f);
+        state[6] = state[6].wrapping_add(g);
+        state[7] = state[7].wrapping_add(h);
+    }
+
+    let mut digest = [0u8; 32];
+    for (index, word) in state.iter().enumerate() {
+        digest[index * 4..index * 4 + 4].copy_from_slice(&word.to_be_bytes());
+    }
+    digest
+}
+
+fn hex_digest(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut output = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        output.push(HEX[(byte >> 4) as usize] as char);
+        output.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    output
+}
+
 #[test]
 fn software_update_fixture_matrix_pins_independent_conservative_outcomes() {
     let actual_scenarios = scenario_directories();
@@ -928,55 +1835,11 @@ fn software_update_fixture_matrix_pins_independent_conservative_outcomes() {
         let manifest = read_json(&scenario_dir.join("manifest.json"));
         let expected = read_json(&scenario_dir.join("expected.json"));
 
-        if manifest["sccmManifestVersion"] != 1
-            || manifest["proposalOnly"] != true
-            || manifest["syntheticFixture"] != true
-            || manifest["bundle"]["role"] != "client"
-            || manifest["bundle"]["workflow"] != "updates"
-            || manifest["bundle"]["captureHost"] != "LAB-CLIENT-01"
-            || manifest["bundle"]["siteCode"] != "LAB"
-        {
-            failures.push(format!(
-                "{}: manifest identity/proposal boundary drifted",
-                contract.name
-            ));
-        }
-
-        let artifacts = manifest["artifacts"]
-            .as_array()
-            .expect("manifest artifacts must be an array");
-        let artifact_ids = artifacts
-            .iter()
-            .map(|artifact| json_string(artifact, "artifactId"))
-            .collect::<Vec<_>>();
-        let mut sorted_artifact_ids = artifact_ids.clone();
-        sorted_artifact_ids.sort();
-        if artifact_ids != sorted_artifact_ids {
-            failures.push(format!(
-                "{}: manifest artifacts must be sorted by artifactId",
-                contract.name
-            ));
-        }
-        if artifact_ids.iter().collect::<BTreeSet<_>>().len() != artifact_ids.len() {
-            failures.push(format!("{}: artifact IDs must be unique", contract.name));
-        }
-
-        for (logical_id, state) in contract.coverage {
-            if !artifacts
-                .iter()
-                .any(|artifact| artifact_matches_coverage(artifact, logical_id, state))
-            {
-                failures.push(format!(
-                    "{}: manifest does not support expected coverage {logical_id}={state}",
-                    contract.name
-                ));
-            }
-        }
-        failures.extend(expected_boundary_failures(&expected, contract));
-        failures.extend(counterpart_source_failures(
+        failures.extend(scenario_semantic_failures(
             &scenario_dir,
             &manifest,
             &expected,
+            contract,
         ));
     }
 
@@ -990,12 +1853,17 @@ fn software_update_fixture_bytes_paths_lines_and_ccm_records_are_exact() {
     let mut declared_files = BTreeSet::new();
     let mut physical_files = Vec::new();
     let mut corpus_items = Vec::new();
-    let mut line_counts = BTreeMap::new();
+    let mut physical_bytes = 0u64;
+    let mut physical_lines = 0u64;
+    let mut complete_ccm_records = 0usize;
+    let mut partial_files = 0usize;
+    let mut capped_files = 0usize;
 
     for contract in &SCENARIOS {
         let scenario_dir = updates_root().join(contract.name);
         let manifest = read_json(&scenario_dir.join("manifest.json"));
         let expected = read_json(&scenario_dir.join("expected.json"));
+        let mut line_counts = BTreeMap::new();
         let artifacts = manifest["artifacts"]
             .as_array()
             .expect("manifest artifacts must be an array");
@@ -1016,6 +1884,7 @@ fn software_update_fixture_bytes_paths_lines_and_ccm_records_are_exact() {
             let bytes = std::fs::read(&full_path).unwrap_or_else(|error| {
                 panic!("{} must be readable: {error}", full_path.display())
             });
+            physical_bytes += bytes.len() as u64;
             if !bytes
                 .windows(b"SYNTHETIC FIXTURE".len())
                 .any(|window| window == b"SYNTHETIC FIXTURE")
@@ -1056,7 +1925,15 @@ fn software_update_fixture_bytes_paths_lines_and_ccm_records_are_exact() {
                 }
             }
             let lines = contents.lines().count() as u64;
+            physical_lines += lines;
             line_counts.insert(artifact_id.clone(), lines);
+            if artifact["captureState"] == "capped" {
+                capped_files += 1;
+            } else if artifact["captureState"] == "captured"
+                && artifact["rotation"]["fragmentComplete"] == false
+            {
+                partial_files += 1;
+            }
 
             if artifact["kind"] == "ccmLog" {
                 let parsed =
@@ -1074,6 +1951,7 @@ fn software_update_fixture_bytes_paths_lines_and_ccm_records_are_exact() {
                             contract.name, artifact_id
                         ));
                     }
+                    complete_ccm_records += parsed.entries.len();
                 } else if parsed.parse_errors == 0 {
                     failures.push(format!(
                         "{}: {} partial/capped fixture unexpectedly parsed complete",
@@ -1130,8 +2008,32 @@ fn software_update_fixture_bytes_paths_lines_and_ccm_records_are_exact() {
         physical_set, declared_files,
         "#323 evidence has a missing manifest reference or orphan file"
     );
+    assert_eq!(
+        physical_bytes, EXPECTED_PHYSICAL_BYTES,
+        "#323 physical evidence byte total drifted"
+    );
+    assert_eq!(
+        physical_lines, EXPECTED_PHYSICAL_LINES,
+        "#323 physical evidence line total drifted"
+    );
+    assert_eq!(
+        complete_ccm_records, EXPECTED_COMPLETE_CCM_RECORDS,
+        "#323 complete CCM record total drifted"
+    );
+    assert_eq!(
+        partial_files, EXPECTED_PARTIAL_FILES,
+        "#323 partial-fragment file total drifted"
+    );
+    assert_eq!(
+        capped_files, EXPECTED_CAPPED_FILES,
+        "#323 capped file total drifted"
+    );
 
     corpus_items.sort_by(|left, right| left.0.cmp(&right.0));
+    let per_file_hashes = corpus_items
+        .iter()
+        .map(|(relative_path, bytes)| format!("{relative_path} {}", hex_digest(&sha256(bytes))))
+        .collect::<Vec<_>>();
     let corpus_hash =
         corpus_items
             .iter()
@@ -1141,15 +2043,34 @@ fn software_update_fixture_bytes_paths_lines_and_ccm_records_are_exact() {
                 fnv1a64(bytes, hash)
             });
     assert_eq!(
-        corpus_hash, EXPECTED_CORPUS_FNV1A64,
-        "#323 path-qualified evidence corpus drifted"
+        corpus_hash,
+        EXPECTED_CORPUS_FNV1A64,
+        "#323 path-qualified evidence corpus FNV drifted; per-file SHA-256:\n{}",
+        per_file_hashes.join("\n")
+    );
+    let mut corpus_sha_input = Vec::new();
+    for (relative_path, bytes) in &corpus_items {
+        corpus_sha_input.extend_from_slice(relative_path.as_bytes());
+        corpus_sha_input.push(0);
+        corpus_sha_input.extend_from_slice(bytes);
+    }
+    assert_eq!(
+        hex_digest(&sha256(&corpus_sha_input)),
+        EXPECTED_CORPUS_SHA256,
+        "#323 path-qualified evidence corpus SHA-256 drifted; per-file SHA-256:\n{}",
+        per_file_hashes.join("\n")
     );
 
     let capped = std::fs::read(
         updates_root().join("capped/evidence/client-content/current/DataTransferService.log"),
     )
     .expect("capped update fixture is readable");
-    assert_eq!(capped, EXPECTED_CAPPED_CONTENT);
+    assert_eq!(
+        capped,
+        EXPECTED_CAPPED_CONTENT,
+        "#323 capped content drifted; actual SHA-256 {}",
+        hex_digest(&sha256(&capped))
+    );
 
     let rotation_manifest = read_json(&updates_root().join("rotation-boundary/manifest.json"));
     let rollovers = rotation_manifest["artifacts"]
@@ -1169,6 +2090,29 @@ fn software_update_fixture_bytes_paths_lines_and_ccm_records_are_exact() {
         rollover["sanitizedSourcePath"],
         "SYNTHETIC://root-a/CCM/Logs/ScanAgent.lo_"
     );
+    let rotation_dir = updates_root().join("rotation-boundary/evidence/client-updates");
+    let current_fragment = std::fs::read_to_string(rotation_dir.join("current/ScanAgent.log"))
+        .expect("current rotation fragment is readable");
+    let lo_fragment = std::fs::read_to_string(rotation_dir.join("lo/ScanAgent.lo_"))
+        .expect(".lo_ rotation fragment is readable");
+    for joined in [
+        format!("{current_fragment}{lo_fragment}"),
+        format!("{lo_fragment}{current_fragment}"),
+    ] {
+        let parsed =
+            parse_content_with_selection(&joined, "joined-rotation.log", &ResolvedParser::ccm());
+        assert_eq!(
+            parsed.parse_errors, 2,
+            "physical rotation fragments must retain both CCM parse errors"
+        );
+        assert!(
+            parsed
+                .entries
+                .iter()
+                .all(|entry| entry.format != LogFormat::Ccm),
+            "physical rotation fragments must never join into a logical CCM record"
+        );
+    }
 
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
@@ -1178,7 +2122,9 @@ fn software_update_fixture_contract_rejects_coverage_and_causality_mutations() {
     let scenario_dir = updates_root().join("success");
     let mut wrong_site = read_json(&scenario_dir.join("manifest.json"));
     wrong_site["bundle"]["siteCode"] = Value::String("ABC".to_owned());
-    assert_ne!(wrong_site["bundle"]["siteCode"], "LAB");
+    assert!(manifest_identity_failures(&wrong_site, "success")
+        .iter()
+        .any(|failure| failure.contains("manifest identity")));
 
     let capped_dir = updates_root().join("capped");
     let capped_manifest = read_json(&capped_dir.join("manifest.json"));
@@ -1264,5 +2210,175 @@ fn software_update_fixture_contract_rejects_coverage_and_causality_mutations() {
         counterpart_source_failures(&success_dir, &success_manifest, &wrong_sup_source)
             .iter()
             .any(|failure| failure.contains("explicit LocationServices LocateSup evidence"))
+    );
+}
+
+#[test]
+fn software_update_fixture_contract_rejects_review_adversarial_mutations() {
+    fn failures_for(scenario: &str, manifest: &Value, expected: &Value) -> Vec<String> {
+        let contract = SCENARIOS
+            .iter()
+            .find(|contract| contract.name == scenario)
+            .expect("scenario contract exists");
+        scenario_semantic_failures(&updates_root().join(scenario), manifest, expected, contract)
+    }
+
+    fn assert_rejected(failures: &[String], marker: &str) {
+        assert!(
+            failures.iter().any(|failure| failure.contains(marker)),
+            "expected rejection containing {marker:?}, got:\n{}",
+            failures.join("\n")
+        );
+    }
+
+    let success_dir = updates_root().join("success");
+    let success_manifest = read_json(&success_dir.join("manifest.json"));
+    let success_expected = read_json(&success_dir.join("expected.json"));
+
+    let mut wrong_key = success_expected.clone();
+    wrong_key["transactions"][0]["key"]["updateId"] =
+        Value::String("32300000-0000-0000-0000-000000009999".to_owned());
+    wrong_key["transactions"][0]["key"]["ciId"] = Value::String("CI-DRIFT".to_owned());
+    wrong_key["transactions"][0]["key"]["updateJobId"] = Value::String("JOB-DRIFT".to_owned());
+    assert_rejected(
+        &failures_for("success", &success_manifest, &wrong_key),
+        "exact transaction key",
+    );
+
+    let mut foreign_citation = success_expected.clone();
+    foreign_citation["transactions"][0]["evidence"][0]["artifactId"] =
+        Value::String("updates-access-denied-01-scan".to_owned());
+    assert_rejected(
+        &failures_for("success", &success_manifest, &foreign_citation),
+        "same-scenario citation",
+    );
+
+    let mut conflicting_coverage = success_expected.clone();
+    conflicting_coverage["coverage"]
+        .as_array_mut()
+        .expect("coverage is an array")
+        .push(serde_json::json!({
+            "logicalArtifactId": "client-updates",
+            "state": "absent"
+        }));
+    assert_rejected(
+        &failures_for("success", &success_manifest, &conflicting_coverage),
+        "coverage projection",
+    );
+
+    let mut wrong_gap = success_expected.clone();
+    wrong_gap["transactions"][0]["coverageGapArtifactIds"] = serde_json::json!(["client-updates"]);
+    assert_rejected(
+        &failures_for("success", &success_manifest, &wrong_gap),
+        "coverage gaps",
+    );
+
+    let mut wrong_provenance = success_expected.clone();
+    wrong_provenance["artifactProvenance"][0]["captureState"] = Value::String("absent".to_owned());
+    assert_rejected(
+        &failures_for("success", &success_manifest, &wrong_provenance),
+        "artifact provenance",
+    );
+
+    let mut wrong_kind_manifest = success_manifest.clone();
+    wrong_kind_manifest["artifacts"][0]["kind"] = Value::String("cbsLog".to_owned());
+    assert_rejected(
+        &failures_for("success", &wrong_kind_manifest, &success_expected),
+        "artifact kind",
+    );
+
+    let mut wrong_version_manifest = success_manifest.clone();
+    wrong_version_manifest["artifacts"][1]["sourceVersion"] =
+        Value::String("9.99.UNKNOWN".to_owned());
+    assert_rejected(
+        &failures_for("success", &wrong_version_manifest, &success_expected),
+        "source profile/version",
+    );
+
+    let mut bogus_timestamp = success_expected.clone();
+    bogus_timestamp["correlationHandoff"]["counterpartReadyFacts"][0]["timestampProvenance"] = serde_json::json!({
+        "normalizedUtc": "2099-01-01T00:00:00.000Z",
+        "utcMillis": 4070908800000_i64,
+        "offsetMinutes": 840,
+        "orderingState": "normalizedUtc"
+    });
+    assert_rejected(
+        &failures_for("success", &success_manifest, &bogus_timestamp),
+        "counterpart timestamp provenance",
+    );
+
+    let mut prefix_key = success_expected.clone();
+    prefix_key["correlationHandoff"]["counterpartReadyFacts"][0]["ciId"] =
+        Value::String("CI-UPDATE".to_owned());
+    assert_rejected(
+        &failures_for("success", &success_manifest, &prefix_key),
+        "exact counterpart key",
+    );
+
+    let mut wrong_site = success_manifest.clone();
+    wrong_site["bundle"]["siteCode"] = Value::String("ABC".to_owned());
+    assert_rejected(
+        &failures_for("success", &wrong_site, &success_expected),
+        "manifest identity",
+    );
+
+    let supplemental_dir = updates_root().join("supplemental-conflict");
+    let supplemental_manifest = read_json(&supplemental_dir.join("manifest.json"));
+    let mut elevated_supplemental = read_json(&supplemental_dir.join("expected.json"));
+    elevated_supplemental["sourceLocalObservations"][0]["confidence"] =
+        Value::String("high".to_owned());
+    elevated_supplemental["sourceLocalObservations"][0]["confidenceCeiling"] =
+        Value::String("high".to_owned());
+    elevated_supplemental["findings"][0]["confidence"] = Value::String("high".to_owned());
+    elevated_supplemental["findings"][0]["confidenceCeiling"] = Value::String("high".to_owned());
+    assert_rejected(
+        &failures_for(
+            "supplemental-conflict",
+            &supplemental_manifest,
+            &elevated_supplemental,
+        ),
+        "conservative confidence",
+    );
+
+    let invalid_dir = updates_root().join("invalid-offset");
+    let invalid_manifest = read_json(&invalid_dir.join("manifest.json"));
+    let mut elevated_invalid = read_json(&invalid_dir.join("expected.json"));
+    elevated_invalid["findings"][0]["confidence"] = Value::String("high".to_owned());
+    elevated_invalid["findings"][0]["confidenceCeiling"] = Value::String("high".to_owned());
+    assert_rejected(
+        &failures_for("invalid-offset", &invalid_manifest, &elevated_invalid),
+        "conservative confidence",
+    );
+
+    let same_minute_dir = updates_root().join("same-minute-separate");
+    let same_minute_manifest = read_json(&same_minute_dir.join("manifest.json"));
+    let mut merged_outcome = read_json(&same_minute_dir.join("expected.json"));
+    merged_outcome["transactions"][1]["state"] = Value::String("succeeded".to_owned());
+    merged_outcome["transactions"][1]["classification"] = Value::String("success".to_owned());
+    assert_rejected(
+        &failures_for(
+            "same-minute-separate",
+            &same_minute_manifest,
+            &merged_outcome,
+        ),
+        "same-minute transaction outcomes",
+    );
+
+    let no_sup_dir = updates_root().join("no-sup");
+    let no_sup_manifest = read_json(&no_sup_dir.join("manifest.json"));
+    let no_sup_expected = read_json(&no_sup_dir.join("expected.json"));
+    let mut invented_sup = no_sup_expected.clone();
+    invented_sup["transactions"][0]["key"]["supHostHandle"] =
+        Value::String("safe:sup:lab-sup-01".to_owned());
+    assert_rejected(
+        &failures_for("no-sup", &no_sup_manifest, &invented_sup),
+        "SUP handle without LocateSup",
+    );
+
+    let mut nonphysical_fragment = no_sup_manifest.clone();
+    nonphysical_fragment["artifacts"][1]["rotation"]["fragmentComplete"] = Value::Bool(false);
+    assert_rejected(
+        &failures_for("no-sup", &nonphysical_fragment, &no_sup_expected),
+        "nonphysical rotation fragmentComplete",
     );
 }

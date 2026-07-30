@@ -43,9 +43,15 @@ capability information, never proof of success/failure.
 
 Future counterpart-ready facts are emitted only when the synthetic
 `updates-client-5.00.test-v1` profile directly supplies exact update/CI/content
-and safe client/site/SUP handles. They remain client facts for future #330/#333
-work. Time alone is never eligible, topology is not evaluated here, and no
-server cause is claimed.
+and safe client/site/SUP handles. Their timestamp provenance must equal the
+normalized cited CCM record; an unavailable SUP handle remains `null`. They
+remain client facts for future #330/#333 work. Time alone is never eligible,
+topology is not evaluated here, and no server cause is claimed.
+
+Expected coverage and artifact provenance are exact, one-to-one projections of
+the manifest. Absent/skipped sources do not claim physical-fragment
+completeness, and profile families are validated only from compatible captured
+evidence.
 
 ## Replay
 
@@ -61,5 +67,6 @@ cargo check --locked -p cmtraceopen-parser --target wasm32-unknown-unknown
 The focused contract validates the exact 17-scenario directory set, 51
 manifest artifacts, 43 physical files, capture-state rules, safe paths,
 manifest byte counts, no orphans, physical evidence line references, CCM
-framing, exact rollover paths, the capped payload, stable outcome labels,
-independent-reducer boundary, and correlation-safe facts.
+framing, exact rollover paths, the capped payload, exact corpus hashes and
+record totals, stable outcome labels, independent-reducer boundary, and
+correlation-safe facts.

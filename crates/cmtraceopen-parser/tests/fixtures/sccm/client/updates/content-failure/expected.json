@@ -179,6 +179,12 @@
         "timeOnlyEligible": false,
         "phase": "locateSup",
         "extractionProfileId": "updates-client-5.00.test-v1",
+        "timestampProvenance": {
+          "normalizedUtc": "2026-07-30T06:00:02.000Z",
+          "utcMillis": 1785391202000,
+          "offsetMinutes": 0,
+          "orderingState": "normalizedUtc"
+        },
         "evidence": {
           "artifactId": "updates-content-failure-02-sup",
           "startLine": 1,

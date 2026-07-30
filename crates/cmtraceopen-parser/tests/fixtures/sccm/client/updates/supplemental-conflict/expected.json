@@ -32,8 +32,7 @@
       "supHostHandle"
     ],
     "validatedArtifactFamilies": [
-      "client-updates",
-      "client-windows-update-supplemental"
+      "client-updates"
     ]
   },
   "reorderedInputDeterministic": true,
@@ -73,7 +72,7 @@
         "updateJobId": "JOB-UPDATE-17",
         "clientHandle": "safe:client:updates-17",
         "siteCode": "LAB",
-        "supHostHandle": "safe:sup:lab-sup-01",
+        "supHostHandle": null,
         "confidence": "exact",
         "extractionProfileId": "updates-client-5.00.test-v1"
       },

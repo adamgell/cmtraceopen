@@ -71,7 +71,7 @@
         ]
       },
       "role": "client",
-      "kind": "ccmLog",
+      "kind": "cbsLog",
       "captureState": "unsupported",
       "originalBasename": "CBS.log",
       "sanitizedSourcePath": "SYNTHETIC://root-a/Windows/Logs/CBS/CBS.log",
