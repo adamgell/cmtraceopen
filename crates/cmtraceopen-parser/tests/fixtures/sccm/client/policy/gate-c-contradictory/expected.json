@@ -11,7 +11,8 @@
   "artifactProvenance": [
     {"artifactId":"policy-gate-c-agent-current","encoding":"utf-8","byteLimit":4096,"limitApplied":false},
     {"artifactId":"policy-gate-c-scheduler-current","encoding":"utf-8","byteLimit":4096,"limitApplied":false},
-    {"artifactId":"policy-gate-c-evaluate-current","encoding":"utf-8","byteLimit":4096,"limitApplied":false},
+    {"artifactId":"policy-gate-c-evaluate-failure","encoding":"utf-8","byteLimit":4096,"limitApplied":false},
+    {"artifactId":"policy-gate-c-evaluate-success","encoding":"utf-8","byteLimit":4096,"limitApplied":false},
     {"artifactId":"policy-gate-c-report-current","encoding":"utf-8","byteLimit":4096,"limitApplied":false}
   ],
   "transactions": [
@@ -28,7 +29,8 @@
       "nextArtifact": {"logicalArtifactId":"client-policy-state","reason":"Recapture bounded CIAgent evidence to resolve the same-instant evaluation contradiction."},
       "evidence": [
         {"artifactId":"policy-gate-c-agent-current","startLine":1,"endLine":3},
-        {"artifactId":"policy-gate-c-evaluate-current","startLine":1,"endLine":2},
+        {"artifactId":"policy-gate-c-evaluate-failure","startLine":1,"endLine":1},
+        {"artifactId":"policy-gate-c-evaluate-success","startLine":1,"endLine":1},
         {"artifactId":"policy-gate-c-scheduler-current","startLine":1,"endLine":1}
       ]
     },
@@ -45,7 +47,7 @@
       "nextArtifact": null,
       "evidence": [
         {"artifactId":"policy-gate-c-agent-current","startLine":4,"endLine":6},
-        {"artifactId":"policy-gate-c-evaluate-current","startLine":3,"endLine":3},
+        {"artifactId":"policy-gate-c-evaluate-success","startLine":2,"endLine":2},
         {"artifactId":"policy-gate-c-report-current","startLine":1,"endLine":1},
         {"artifactId":"policy-gate-c-scheduler-current","startLine":2,"endLine":2}
       ]
@@ -62,7 +64,10 @@
       "confidence": "low",
       "confidenceCeiling": "low",
       "nextArtifact": {"logicalArtifactId":"client-policy-state","reason":"Recapture bounded CIAgent evidence to resolve the same-instant evaluation contradiction."},
-      "evidence": [{"artifactId":"policy-gate-c-evaluate-current","startLine":1,"endLine":2}]
+      "evidence": [
+        {"artifactId":"policy-gate-c-evaluate-failure","startLine":1,"endLine":1},
+        {"artifactId":"policy-gate-c-evaluate-success","startLine":1,"endLine":1}
+      ]
     },
     {
       "findingId": "finding:gate-c-b-reporting-failure",
@@ -78,8 +83,13 @@
   ],
   "contradictionContract": {
     "sameTimestampSameKeyRemainsContradictory": true,
+    "sameNormalizedInstantSameKeyIndependentArtifactsRemainContradictory": true,
+    "sameValidatedProfileAndTopology": true,
     "sameMinuteDifferentKeysRemainSeparate": true,
-    "inputOrderCannotResolveCrossArtifactTie": true
+    "sourceLocalOrderAvailable": false,
+    "lineageOrderAvailable": false,
+    "inputOrderCannotResolveCrossArtifactTie": true,
+    "timeOnlyCausalityProhibited": true
   },
   "correlationHandoff": {"issue":"#333","performed":false},
   "prohibitedClaims": ["management point or server root cause","cross-side correlation or #333 conclusion","device-wide transaction merging"]

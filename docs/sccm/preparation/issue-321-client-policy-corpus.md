@@ -50,8 +50,9 @@ cannot prove success or failure.
 
 Each artifact retains a globally unique synthetic physical ID, one catalog
 entry, one sorted membership, a synthetic path handle, a distinct path
-fingerprint, exact basename/rotation metadata, and one relative evidence path.
-`captured` and `capped` artifacts declare `encoding: utf-8`, an explicit
+fingerprint, and exact basename/rotation metadata. Captured artifacts also
+retain one relative evidence path. `captured` and `capped` artifacts declare
+`encoding: utf-8`, an explicit
 `collectionLimit`, and a `bytesCopied` value equal to the physical file.
 Noncapture artifacts use zero bytes and a null relative path without invented
 encoding or limit provenance.
@@ -60,8 +61,11 @@ Complete evidence files are forced through the existing CCM grammar. The
 literal `SYNTHETIC FIXTURE` appears inside the first semantic CCM record and is
 never a marker-only line. A split rotation sets `fragmentComplete: false`; no
 individual fragment can yield a complete record, key, phase, or terminal
-finding. Every complete record timestamp is valid and no later than its
-artifact's `capturedUtc`.
+finding. A syntactically complete record may still carry an invalid offset.
+Valid offsets normalize to UTC and must be no later than the artifact's
+`capturedUtc`; the original display and offset remain cited. Invalid or unknown
+offsets remain raw, non-comparable ordering evidence with no normalized UTC
+instant and cannot raise confidence.
 
 ## Version-profiled key contract
 
@@ -94,22 +98,26 @@ Such evidence cannot be attached later by time or by some other reducer.
 3. Same-key success/failure facts at the same resolved instant across
    independent physical sources remain contradictory when no trusted ordering
    resolves them. The confidence ceiling is low.
-4. Same-minute facts with different exact keys remain separate transactions.
+4. Normalize valid offsets before ordering. An invalid/unknown offset cannot
+   order evidence across artifacts, and matching display time alone cannot
+   create causality or raise confidence.
+5. Same-minute facts with different exact keys remain separate transactions.
    They never qualify or overwrite one another.
-5. `Deferred` maps to `blockedOrDeferred`, never `confirmedFailure`.
-6. A terminal failure names only the client phase evidenced. It does not infer
+6. `Deferred` maps to `blockedOrDeferred`, never `confirmedFailure`.
+7. A terminal failure names only the client phase evidenced. It does not infer
    management-point authentication, availability, or server root cause.
-7. An incomplete path requests the smallest catalog group:
+8. An incomplete path requests the smallest catalog group:
    `client-policy-agent` for Request through Schedule and
    `client-policy-state` for Evaluate/Report.
-8. Reordering manifest artifacts or evidence inputs must produce byte-equal
+9. Reordering manifest artifacts or evidence inputs must produce byte-equal
    normalized analysis after #318 supplies the normalizer.
 
 ## Scenario matrix
 
 | Scenario | Expected result | Last successful phase | Bounded next artifact |
 | --- | --- | --- | --- |
-| `complete` | Success through Report; an earlier same-key Download failure is superseded by a later explicit Download success. | Report | None |
+| `complete` | Clean success through Report with no failure or recovery branch. | Report | None |
+| `recovery` | Success through Report after an ordered same-exact-key Download failure then explicit later Download success. | Report | None |
 | `request-auth-failure` | Client Request failure with missing location coverage; no MP cause. | None | `client-location` |
 | `download-failure` | Confirmed client Download failure. | Request | None |
 | `persist-failure` | Confirmed client Persist failure. | Download | None |
@@ -119,7 +127,17 @@ Such evidence cannot be attached later by time or by some other reducer.
 | `rotation-split` | Keyless low-confidence insufficient evidence. | None | `client-policy-agent` |
 | `malformed` | Keyless low-confidence symptom under an unvalidated version. | None | `client-policy-agent` |
 | `incomplete` | Exact transaction stops at Schedule because policy-state coverage is absent. | Schedule | `client-policy-state` |
-| `gate-c-contradictory` | Assignment A retains an unresolved same-instant Evaluate contradiction; unrelated assignment B remains a separate Report failure. | A: Schedule; B: Evaluate | A: `client-policy-state`; B: none |
+| `multiline` | Clean success with Request framed as one complete logical CCM record across two physical lines. | Report | None |
+| `contradictory-offset` | Assignment A orders valid offsets by normalized UTC despite reversed display order; assignment B stays low/contradictory because one offset is invalid and non-comparable. Same-display-time different keys remain isolated. | A: Report; B: Schedule | A: none; B: `client-policy-state` |
+| `gate-c-contradictory` | Assignment A retains an unresolved same-normalized-instant Evaluate contradiction across independent physical artifacts with no source-local or lineage order; unrelated assignment B remains a separate Report failure. | A: Schedule; B: Evaluate | A: `client-policy-state`; B: none |
+
+The repaired corpus contains 14 scenarios, 41 artifacts (39 captured and 2
+noncapture), 39 evidence files, 69 complete CCM records, 2 deliberately
+incomplete rotation fragments, 14 exact transactions, 12 nonsuccess findings,
+and 2 keyless source-local observations. The 39 evidence files total exactly
+19,310 bytes. The focused byte coordinator's path-and-artifact-qualified
+aggregate SHA-256 is
+`7b6ccd0693cce1d10643ba95ff6d284f4b5593eb9784269babc2f1217b570dd2`.
 
 ## Expected-output preparation labels
 
@@ -134,6 +152,9 @@ Each `expected.json` includes:
 - a bounded `nextArtifact` object or explicit `null`;
 - one finding per nonsuccess subject;
 - capture-provenance assertions by physical artifact ID;
+- full physical-line spans for complete multiline logical records;
+- preserved display/offset plus normalized or explicitly non-comparable
+  ordering provenance;
 - deterministic reordered-input expectation; and
 - prohibited management-point/server, #333, and device-wide merge claims.
 
@@ -163,8 +184,10 @@ Before implementation, map these design labels to the published #318/#319
 contracts. Then load each fixture through the public reader, run only the
 independent policy reducer, repeat with reversed/shuffled input, and compare
 normalized output. Validate JSON, exact bytes, paths/references/no orphans,
-privacy, forced CCM grammar, partial boundaries, chronology, key/profile
-ceilings, parser regression tests, strict Clippy, wasm32, and TypeScript.
+privacy, forced CCM grammar, multiline framing, partial boundaries, valid
+offset normalization, invalid-offset non-comparability, chronology,
+key/profile ceilings, parser regression tests, strict Clippy, wasm32, and
+TypeScript.
 
 #318 and #319 remain explicit blockers for compiled policy tests. #333 is a
 later correlation handoff, not a blocker that authorizes cross-side behavior

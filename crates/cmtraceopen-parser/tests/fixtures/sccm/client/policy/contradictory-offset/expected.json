@@ -1,0 +1,93 @@
+{
+  "contractState": "proposedPending318",
+  "workflow": "policy",
+  "scenario": "contradictory-offset",
+  "stateChain": ["request","download","persist","schedule","evaluate","report"],
+  "analysisContract": {"independentReducer":true,"consumesOtherReducerOutput":false,"crossSideCorrelationPerformed":false},
+  "extractionProfile": {"selectionState":"selected","profileId":"policy-client-5.00.test-v1","sourceVersionPrefix":"5.00.TEST.","keyKinds":["assignmentId","policyId"],"validatedArtifactFamilies":["client-policy-agent","client-policy-state"]},
+  "reorderedInputDeterministic": true,
+  "coverage": [{"logicalArtifactId":"client-policy-agent","state":"captured"},{"logicalArtifactId":"client-policy-state","state":"captured"}],
+  "artifactProvenance": [
+    {"artifactId":"policy-offset-agent-current","encoding":"utf-8","byteLimit":4096,"limitApplied":false},
+    {"artifactId":"policy-offset-scheduler-current","encoding":"utf-8","byteLimit":4096,"limitApplied":false},
+    {"artifactId":"policy-offset-evaluate-invalid","encoding":"utf-8","byteLimit":4096,"limitApplied":false},
+    {"artifactId":"policy-offset-evaluate-valid","encoding":"utf-8","byteLimit":4096,"limitApplied":false},
+    {"artifactId":"policy-offset-report-current","encoding":"utf-8","byteLimit":4096,"limitApplied":false}
+  ],
+  "transactions": [
+    {
+      "transactionId": "policy:assignment:25252525-2525-2525-2525-252525252525",
+      "key": {"assignmentId":"25252525-2525-2525-2525-252525252525","policyId":"b7b7b7b7-b7b7-b7b7-b7b7-b7b7b7b7b7b7","confidence":"exact","extractionProfileId":"policy-client-5.00.test-v1"},
+      "phase": "report",
+      "state": "succeeded",
+      "lastSuccessfulPhase": "report",
+      "classification": "success",
+      "confidence": "high",
+      "confidenceCeiling": "high",
+      "coverageGapArtifactIds": [],
+      "nextArtifact": null,
+      "evidence": [
+        {"artifactId":"policy-offset-agent-current","startLine":1,"endLine":3},
+        {"artifactId":"policy-offset-evaluate-valid","startLine":1,"endLine":1},
+        {"artifactId":"policy-offset-report-current","startLine":1,"endLine":1},
+        {"artifactId":"policy-offset-scheduler-current","startLine":1,"endLine":1}
+      ]
+    },
+    {
+      "transactionId": "policy:assignment:26262626-2626-2626-2626-262626262626",
+      "key": {"assignmentId":"26262626-2626-2626-2626-262626262626","policyId":"b8b8b8b8-b8b8-b8b8-b8b8-b8b8b8b8b8b8","confidence":"exact","extractionProfileId":"policy-client-5.00.test-v1"},
+      "phase": "evaluate",
+      "state": "contradictory",
+      "lastSuccessfulPhase": "schedule",
+      "classification": "contradictoryEvidence",
+      "confidence": "low",
+      "confidenceCeiling": "low",
+      "coverageGapArtifactIds": [],
+      "nextArtifact": {"logicalArtifactId":"client-policy-state","reason":"Recapture bounded policy-state evidence with a valid timestamp offset; do not order by display time."},
+      "evidence": [
+        {"artifactId":"policy-offset-agent-current","startLine":4,"endLine":6},
+        {"artifactId":"policy-offset-evaluate-invalid","startLine":1,"endLine":1},
+        {"artifactId":"policy-offset-evaluate-valid","startLine":2,"endLine":2},
+        {"artifactId":"policy-offset-scheduler-current","startLine":2,"endLine":2}
+      ]
+    }
+  ],
+  "sourceLocalObservations": [],
+  "findings": [
+    {
+      "findingId": "finding:policy-offset-noncomparable",
+      "subjectId": "policy:assignment:26262626-2626-2626-2626-262626262626",
+      "class": "contradictoryEvidence",
+      "phase": "evaluate",
+      "lastSuccessfulPhase": "schedule",
+      "confidence": "low",
+      "confidenceCeiling": "low",
+      "nextArtifact": {"logicalArtifactId":"client-policy-state","reason":"Recapture bounded policy-state evidence with a valid timestamp offset; do not order by display time."},
+      "evidence": [
+        {"artifactId":"policy-offset-evaluate-invalid","startLine":1,"endLine":1},
+        {"artifactId":"policy-offset-evaluate-valid","startLine":2,"endLine":2}
+      ]
+    }
+  ],
+  "offsetOrderingContract": {
+    "validOffsetsNormalizeToUtc": true,
+    "originalDisplayAndOffsetPreserved": true,
+    "invalidOffsetsAreNonComparable": true,
+    "displayTimeCoincidenceRaisesConfidence": false,
+    "sameDisplayMinuteDifferentKeysRemainSeparate": true,
+    "timeOnlyCausalityProhibited": true,
+    "orderedEvidence": [
+      {"artifactId":"policy-offset-agent-current","startLine":1,"endLine":1,"originalDisplay":"7-30-2026 15:00:00.000+060","originalOffset":"+060","normalizedUtc":"2026-07-30T14:00:00.000Z"},
+      {"artifactId":"policy-offset-agent-current","startLine":2,"endLine":2,"originalDisplay":"7-30-2026 14:01:00.000+000","originalOffset":"+000","normalizedUtc":"2026-07-30T14:01:00.000Z"}
+    ],
+    "nonComparableEvidence": [
+      {"artifactId":"policy-offset-evaluate-invalid","startLine":1,"endLine":1,"originalDisplay":"7-30-2026 15:04:00.000+9999","originalOffset":"+9999","normalizedUtc":null,"comparable":false,"confidenceCeiling":"low"}
+    ],
+    "sameDisplayTimeEvidence": [
+      {"artifactId":"policy-offset-agent-current","startLine":1,"endLine":1},
+      {"artifactId":"policy-offset-agent-current","startLine":4,"endLine":4}
+    ]
+  },
+  "correlationHandoff": {"issue":"#333","performed":false},
+  "prohibitedClaims": ["management point or server root cause","cross-side correlation or #333 conclusion","device-wide transaction merging"]
+}

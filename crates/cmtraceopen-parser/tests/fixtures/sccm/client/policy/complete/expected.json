@@ -25,7 +25,7 @@
     "coverageGapArtifactIds": [],
     "nextArtifact": null,
     "evidence": [
-      {"artifactId":"policy-complete-agent-current","startLine":1,"endLine":4},
+      {"artifactId":"policy-complete-agent-current","startLine":1,"endLine":3},
       {"artifactId":"policy-complete-evaluate-current","startLine":1,"endLine":1},
       {"artifactId":"policy-complete-report-current","startLine":1,"endLine":1},
       {"artifactId":"policy-complete-scheduler-current","startLine":1,"endLine":1}
@@ -33,14 +33,6 @@
   }],
   "sourceLocalObservations": [],
   "findings": [],
-  "recovery": {
-    "phase": "download",
-    "sameExactKey": true,
-    "laterTerminalSuccess": true,
-    "recoveryProven": true,
-    "failureEvidence": {"artifactId":"policy-complete-agent-current","startLine":2,"endLine":2},
-    "successEvidence": {"artifactId":"policy-complete-agent-current","startLine":3,"endLine":3}
-  },
   "correlationHandoff": {"issue":"#333","performed":false},
   "prohibitedClaims": ["management point or server root cause","cross-side correlation or #333 conclusion","device-wide transaction merging"]
 }
