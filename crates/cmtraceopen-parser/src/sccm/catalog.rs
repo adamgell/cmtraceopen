@@ -1,9 +1,10 @@
-use serde::{Deserialize, Serialize};
+use chrono::NaiveDateTime;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde_json::Value;
 
-use super::{SccmRole, SccmRotation};
+use super::{SccmRole, SccmRotation, SccmUnknownRotation};
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SccmArtifactFamily {
     ClientSetup,
     ClientHealth,
@@ -25,9 +26,72 @@ pub enum SccmArtifactFamily {
     Unknown(String),
 }
 
+impl SccmArtifactFamily {
+    fn serialized_name(&self) -> &str {
+        match self {
+            Self::ClientSetup => "clientSetup",
+            Self::ClientHealth => "clientHealth",
+            Self::ClientIdentity => "clientIdentity",
+            Self::ClientLocation => "clientLocation",
+            Self::ClientPolicy => "clientPolicy",
+            Self::ClientContent => "clientContent",
+            Self::ClientApplication => "clientApplication",
+            Self::ClientUpdates => "clientUpdates",
+            Self::ClientTaskSequence => "clientTaskSequence",
+            Self::SiteComponent => "siteComponent",
+            Self::SiteStatus => "siteStatus",
+            Self::ManagementPoint => "managementPoint",
+            Self::DistributionPoint => "distributionPoint",
+            Self::SoftwareUpdatePoint => "softwareUpdatePoint",
+            Self::Hierarchy => "hierarchy",
+            Self::Provider => "provider",
+            Self::AdminService => "adminService",
+            Self::Unknown(value) => value,
+        }
+    }
+}
+
+impl Serialize for SccmArtifactFamily {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(self.serialized_name())
+    }
+}
+
+impl<'de> Deserialize<'de> for SccmArtifactFamily {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Ok(match String::deserialize(deserializer)? {
+            value if value == "clientSetup" => Self::ClientSetup,
+            value if value == "clientHealth" => Self::ClientHealth,
+            value if value == "clientIdentity" => Self::ClientIdentity,
+            value if value == "clientLocation" => Self::ClientLocation,
+            value if value == "clientPolicy" => Self::ClientPolicy,
+            value if value == "clientContent" => Self::ClientContent,
+            value if value == "clientApplication" => Self::ClientApplication,
+            value if value == "clientUpdates" => Self::ClientUpdates,
+            value if value == "clientTaskSequence" => Self::ClientTaskSequence,
+            value if value == "siteComponent" => Self::SiteComponent,
+            value if value == "siteStatus" => Self::SiteStatus,
+            value if value == "managementPoint" => Self::ManagementPoint,
+            value if value == "distributionPoint" => Self::DistributionPoint,
+            value if value == "softwareUpdatePoint" => Self::SoftwareUpdatePoint,
+            value if value == "hierarchy" => Self::Hierarchy,
+            value if value == "provider" => Self::Provider,
+            value if value == "adminService" => Self::AdminService,
+            value => Self::Unknown(value),
+        })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SccmSourceCatalogEntry {
+    pub basename: String,
     pub logical_name: String,
     pub role: SccmRole,
     pub family: SccmArtifactFamily,
@@ -329,34 +393,72 @@ const SOURCE_CATALOG: &[CatalogSpec] = &[
     CatalogSpec {
         basename: "AdminService",
         logical_name: "adminService",
-        role: SccmRole::Provider,
+        role: SccmRole::AdminService,
         family: SccmArtifactFamily::AdminService,
+    },
+];
+
+struct CatalogRoleAlias {
+    basename: &'static str,
+    role: SccmRole,
+}
+
+const ADDITIONAL_ALLOWED_ROLES: &[CatalogRoleAlias] = &[
+    CatalogRoleAlias {
+        basename: "distmgr",
+        role: SccmRole::DistributionPoint,
+    },
+    CatalogRoleAlias {
+        basename: "PkgXferMgr",
+        role: SccmRole::DistributionPoint,
+    },
+    CatalogRoleAlias {
+        basename: "SMSDPProv",
+        role: SccmRole::SiteServer,
+    },
+    CatalogRoleAlias {
+        basename: "PullDP",
+        role: SccmRole::SiteServer,
+    },
+    CatalogRoleAlias {
+        basename: "WCM",
+        role: SccmRole::WsUs,
+    },
+    CatalogRoleAlias {
+        basename: "WSUSCtrl",
+        role: SccmRole::WsUs,
+    },
+    CatalogRoleAlias {
+        basename: "wsyncmgr",
+        role: SccmRole::WsUs,
+    },
+    CatalogRoleAlias {
+        basename: "SUPSetup",
+        role: SccmRole::WsUs,
     },
 ];
 
 pub fn classify_artifact_name(name: &str, role: SccmRole) -> SccmSourceCatalogEntry {
     let parsed = ParsedArtifactName::from_name(name);
-    let known = if parsed.is_log_name {
-        SOURCE_CATALOG.iter().find(|entry| {
-            entry.basename.eq_ignore_ascii_case(parsed.basename) && entry.role == role
-        })
-    } else {
-        None
-    };
+    let known = SOURCE_CATALOG.iter().find(|entry| {
+        entry.basename.eq_ignore_ascii_case(parsed.basename) && role_is_allowed(entry, &role)
+    });
 
     if let Some(entry) = known {
         return SccmSourceCatalogEntry {
+            basename: format!("{}.log", entry.basename),
             logical_name: entry.logical_name.to_string(),
             role,
             family: entry.family.clone(),
             rotation: parsed.rotation,
             uses_ccm_records: true,
-            supported_for_diagnosis: true,
+            supported_for_diagnosis: parsed.rotation_supported,
         };
     }
 
     let logical_name = lower_camel_identifier(parsed.basename);
     SccmSourceCatalogEntry {
+        basename: format!("{}.log", parsed.basename),
         family: SccmArtifactFamily::Unknown(logical_name.clone()),
         logical_name,
         role,
@@ -366,84 +468,174 @@ pub fn classify_artifact_name(name: &str, role: SccmRole) -> SccmSourceCatalogEn
     }
 }
 
+pub fn declared_source_catalog() -> Vec<SccmSourceCatalogEntry> {
+    let mut declared = Vec::with_capacity(SOURCE_CATALOG.len() + ADDITIONAL_ALLOWED_ROLES.len());
+
+    for entry in SOURCE_CATALOG {
+        declared.push(declared_catalog_entry(entry, entry.role.clone()));
+        for alias in ADDITIONAL_ALLOWED_ROLES
+            .iter()
+            .filter(|alias| alias.basename.eq_ignore_ascii_case(entry.basename))
+        {
+            declared.push(declared_catalog_entry(entry, alias.role.clone()));
+        }
+    }
+
+    declared
+}
+
+fn declared_catalog_entry(entry: &CatalogSpec, role: SccmRole) -> SccmSourceCatalogEntry {
+    SccmSourceCatalogEntry {
+        basename: format!("{}.log", entry.basename),
+        logical_name: entry.logical_name.to_string(),
+        role,
+        family: entry.family.clone(),
+        rotation: SccmRotation::Current,
+        uses_ccm_records: true,
+        supported_for_diagnosis: true,
+    }
+}
+
+fn role_is_allowed(entry: &CatalogSpec, role: &SccmRole) -> bool {
+    entry.role == *role
+        || ADDITIONAL_ALLOWED_ROLES
+            .iter()
+            .any(|alias| alias.basename.eq_ignore_ascii_case(entry.basename) && alias.role == *role)
+}
+
 struct ParsedArtifactName<'a> {
     basename: &'a str,
     rotation: SccmRotation,
-    is_log_name: bool,
+    rotation_supported: bool,
 }
 
 impl<'a> ParsedArtifactName<'a> {
     fn from_name(name: &'a str) -> Self {
         let lowercase = name.to_ascii_lowercase();
 
-        if lowercase.ends_with(".log.lo_") {
+        if lowercase.ends_with(".log") {
             return Self {
-                basename: &name[..name.len() - ".log.lo_".len()],
-                rotation: SccmRotation::LoUnderscore,
-                is_log_name: true,
+                basename: &name[..name.len() - ".log".len()],
+                rotation: SccmRotation::Current,
+                rotation_supported: true,
+            };
+        }
+
+        if let Some(separator) = lowercase.rfind(".log.") {
+            let suffix = &name[separator + ".log.".len()..];
+            let lowercase_suffix = &lowercase[separator + ".log.".len()..];
+            let rotation = if lowercase_suffix == "lo_" {
+                Some(SccmRotation::LoUnderscore)
+            } else if is_canonical_rotation_number(suffix) {
+                suffix.parse::<u32>().ok().map(SccmRotation::Numbered)
+            } else if is_canonical_rotation_timestamp(suffix) {
+                Some(SccmRotation::Timestamped(suffix.to_string()))
+            } else {
+                None
+            };
+
+            if let Some(rotation) = rotation {
+                return Self {
+                    basename: &name[..separator],
+                    rotation,
+                    rotation_supported: true,
+                };
+            }
+
+            return Self {
+                basename: &name[..separator],
+                rotation: unknown_filename_suffix(&name[separator + ".log".len()..]),
+                rotation_supported: false,
             };
         }
 
         if lowercase.ends_with(".lo_") {
             return Self {
                 basename: &name[..name.len() - ".lo_".len()],
-                rotation: SccmRotation::LoUnderscore,
-                is_log_name: true,
+                rotation: unknown_filename_suffix(".lo_"),
+                rotation_supported: false,
             };
         }
 
-        if let Some(separator) = lowercase.rfind(".log.") {
-            let suffix = &lowercase[separator + ".log.".len()..];
-            if !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_digit()) {
-                if let Ok(number) = suffix.parse::<u32>() {
-                    return Self {
-                        basename: &name[..separator],
-                        rotation: SccmRotation::Numbered(number),
-                        is_log_name: true,
-                    };
-                }
-            }
-        }
-
-        if lowercase.ends_with(".log") {
+        if let Some(separator) = name.rfind('.') {
             return Self {
-                basename: &name[..name.len() - ".log".len()],
-                rotation: SccmRotation::Current,
-                is_log_name: true,
+                basename: &name[..separator],
+                rotation: unknown_filename_suffix(&name[separator..]),
+                rotation_supported: false,
             };
         }
 
         Self {
             basename: name,
-            rotation: SccmRotation::Current,
-            is_log_name: false,
+            rotation: unknown_filename_suffix(""),
+            rotation_supported: false,
         }
     }
 }
 
+fn is_canonical_rotation_number(value: &str) -> bool {
+    value
+        .as_bytes()
+        .first()
+        .is_some_and(|first| first.is_ascii_digit() && *first != b'0')
+        && value.bytes().all(|byte| byte.is_ascii_digit())
+        && value.parse::<u32>().is_ok()
+}
+
+/// Timestamped rotations use exactly `YYYYMMDD-HHMMSS` in the artifact filename.
+fn is_canonical_rotation_timestamp(value: &str) -> bool {
+    value.len() == "YYYYMMDD-HHMMSS".len()
+        && NaiveDateTime::parse_from_str(value, "%Y%m%d-%H%M%S")
+            .is_ok_and(|timestamp| timestamp.format("%Y%m%d-%H%M%S").to_string() == value)
+}
+
+fn unknown_filename_suffix(raw_suffix: &str) -> SccmRotation {
+    SccmRotation::Unknown(SccmUnknownRotation {
+        kind: "filenameSuffix".to_string(),
+        value: Some(Value::String(raw_suffix.to_string())),
+    })
+}
+
 fn lower_camel_identifier(value: &str) -> String {
-    let mut result = String::new();
-    let mut capitalize_next = false;
+    let mut words = value
+        .split(|character: char| !character.is_alphanumeric())
+        .filter(|word| !word.is_empty());
+    let Some(first) = words.next() else {
+        return "unknown".to_string();
+    };
 
-    for character in value.chars() {
-        if !character.is_alphanumeric() {
-            capitalize_next = !result.is_empty();
-            continue;
-        }
-
-        if result.is_empty() {
-            result.extend(character.to_lowercase());
-        } else if capitalize_next {
-            result.extend(character.to_uppercase());
-            capitalize_next = false;
-        } else {
-            result.push(character);
+    let mut result = lower_leading_initialism(first);
+    for word in words {
+        let mut characters = word.chars();
+        if let Some(first) = characters.next() {
+            result.extend(first.to_uppercase());
+            result.extend(characters);
         }
     }
+    result
+}
 
-    if result.is_empty() {
-        "unknown".to_string()
+fn lower_leading_initialism(word: &str) -> String {
+    let characters: Vec<char> = word.chars().collect();
+    let uppercase_run = characters
+        .iter()
+        .take_while(|character| character.is_uppercase())
+        .count();
+    let lowercase_count = if uppercase_run > 1
+        && uppercase_run < characters.len()
+        && characters[uppercase_run].is_lowercase()
+    {
+        uppercase_run - 1
     } else {
-        result
+        uppercase_run
+    };
+
+    let mut result = String::new();
+    for character in &characters[..lowercase_count] {
+        result.extend(character.to_lowercase());
     }
+    for character in &characters[lowercase_count..] {
+        result.push(*character);
+    }
+    result
 }
