@@ -166,6 +166,12 @@ pub fn validate_workspace(workspace: &str, available: &[&str]) -> Result<(), Str
 pub struct RecentEntriesState {
     config_dir: PathBuf,
     entries: Mutex<Vec<RecentEntry>>,
+    /// Serializes writes to `recent-entries.json`.
+    ///
+    /// Held only by `persist`, never together with a mutation of `entries`, so
+    /// it cannot reintroduce main-thread stalls: `snapshot()` still only ever
+    /// waits on the (I/O-free) `entries` lock.
+    persist_lock: Mutex<()>,
 }
 
 impl RecentEntriesState {
@@ -186,6 +192,7 @@ impl RecentEntriesState {
         Self {
             config_dir,
             entries: Mutex::new(pruned),
+            persist_lock: Mutex::new(()),
         }
     }
 
@@ -196,20 +203,41 @@ impl RecentEntriesState {
         }
     }
 
+    /// Write the current list to disk.
+    ///
+    /// Two constraints pull in opposite directions here, and this is what
+    /// satisfies both:
+    ///
+    /// * The `entries` lock must not be held across file I/O.
+    ///   `handle_menu_event` calls `snapshot()` on the main thread, so holding
+    ///   it across a write — or worse, across `prune_entries`' `metadata()`
+    ///   calls against a dead network path — stalls the UI.
+    /// * Writes must not lose updates. Tauri commands run concurrently, so two
+    ///   overlapping mutations could otherwise persist out of order and leave
+    ///   an older list on disk than the one in memory.
+    ///
+    /// So writes take their own lock, and the snapshot is re-read *inside* it.
+    /// Whatever a writer persists is the newest state as of its turn, which
+    /// makes a stale overwrite impossible without ever coupling the two locks.
+    fn persist(&self) -> Result<(), String> {
+        let _guard = self
+            .persist_lock
+            .lock()
+            .map_err(|error| format!("recent entries persist lock poisoned: {error}"))?;
+
+        save_entries(&self.config_dir, &self.snapshot())
+    }
+
     pub fn push(&self, entry: RecentEntry) -> Result<(), String> {
-        let to_persist = {
+        {
             let mut entries = self
                 .entries
                 .lock()
                 .map_err(|error| format!("recent entries lock poisoned: {error}"))?;
             push_entry(&mut entries, entry);
-            entries.clone()
-        };
+        }
 
-        // Persist outside the lock: `handle_menu_event` calls `snapshot()` on
-        // the main thread, so holding the guard across file I/O would stall
-        // the UI for as long as the write takes.
-        save_entries(&self.config_dir, &to_persist)
+        self.persist()
     }
 
     /// Drop entries that are provably gone, without holding the lock across
@@ -248,7 +276,7 @@ impl RecentEntriesState {
             .filter(|key| !survivors.contains(key))
             .collect();
 
-        let to_persist = {
+        {
             let mut entries = self
                 .entries
                 .lock()
@@ -256,10 +284,9 @@ impl RecentEntriesState {
             entries.retain(|entry| {
                 !dropped.contains(&(normalize_path(&entry.path), entry.workspace.clone()))
             });
-            entries.clone()
-        };
+        }
 
-        save_entries(&self.config_dir, &to_persist)
+        self.persist()
     }
 
     pub fn clear(&self) -> Result<(), String> {
@@ -271,7 +298,7 @@ impl RecentEntriesState {
             entries.clear();
         }
 
-        save_entries(&self.config_dir, &[])
+        self.persist()
     }
 }
 
@@ -459,6 +486,45 @@ mod tests {
     fn validate_workspace_rejects_unknown_ids() {
         assert!(validate_workspace("log", &["log", "intune"]).is_ok());
         assert!(validate_workspace("not-a-workspace", &["log", "intune"]).is_err());
+    }
+
+    #[test]
+    fn concurrent_pushes_all_survive_on_disk() {
+        // Writes happen outside the entries lock so the main thread never
+        // stalls on I/O, which means two overlapping pushes could otherwise
+        // persist out of order and leave an older list on disk. persist()
+        // re-snapshots under its own lock to make that impossible.
+        use std::sync::Arc;
+        use std::thread;
+
+        let dir = tempdir().expect("tempdir");
+        let state = Arc::new(RecentEntriesState::load(
+            dir.path().to_path_buf(),
+            &["log"],
+        ));
+
+        let threads: Vec<_> = (0..8)
+            .map(|index| {
+                let state = Arc::clone(&state);
+                thread::spawn(move || {
+                    state
+                        .push(entry(&format!("/racer-{index}.log"), "log"))
+                        .expect("push");
+                })
+            })
+            .collect();
+
+        for handle in threads {
+            handle.join().expect("thread panicked");
+        }
+
+        let in_memory = state.snapshot();
+        let on_disk = load_entries(dir.path());
+        assert_eq!(in_memory.len(), 8);
+        assert_eq!(
+            on_disk, in_memory,
+            "the last write must reflect the final in-memory list, not a stale snapshot"
+        );
     }
 
     #[test]
