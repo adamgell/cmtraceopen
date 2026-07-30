@@ -1,0 +1,35 @@
+{
+  "contractState": "proposedPending318And319",
+  "workflow": "taskSequence",
+  "scenario": "completed",
+  "stateChain": ["start","preflight","diskOrImage","setupWindows","installClient","installSoftware","postAction","complete"],
+  "analysisContract": {"independentReducer":true,"consumesAppOrPolicyReducerOutput":false,"crossSideCorrelationPerformed":false,"nativeAcceptanceClaimed":false},
+  "extractionProfile": {"id":"task-sequence-client-5.00.test-v1","status":"matched"},
+  "reorderedInputDeterministic": true,
+  "coverage": [{"logicalArtifactId":"client-task-sequence-smsts","state":"captured","pathClasses":["client"]}],
+  "artifactProvenance": [
+    {"artifactId":"task-sequence-completed-smsts-current","bytesCopied":391,"pathClass":"client","sanitizedSourcePath":"SYNTHETIC://client/CCM/Logs/smsts.log","smstsLogPathEvidence":"SYNTHETIC://client/CCM/Logs/smsts.log","rotationKind":"current","fragmentComplete":true,"relocationOrdinal":0}
+  ],
+  "transactions": [
+    {
+      "transactionId": "task-sequence-005",
+      "key": {"keyProfileKind":"executionPackageAdvertisementContext","executionId":"72400000-0000-0000-0000-000000000005","taskSequencePackageId":"LAB00324","advertisementId":"LAB20305","runContext":"osd","confidence":"exact","extractionProfileId":"task-sequence-client-5.00.test-v1"},
+      "evidence": [{"artifactId":"task-sequence-completed-smsts-current","startLine":1,"endLine":1}],
+      "pathSequence": [{"artifactId":"task-sequence-completed-smsts-current","pathClass":"client","relocationOrdinal":0}],
+      "timestampProvenance": {"orderingState":"normalizedUtc","offsetMinutes":0,"normalizedUtc":"2026-07-30T01:04:01Z"},
+      "orderingEvidence": {"artifactId":"task-sequence-completed-smsts-current","startLine":1,"endLine":1},
+      "coverageGapArtifactIds": [],
+      "nextArtifact": null,
+      "phase": "complete",
+      "state": "succeeded",
+      "lastSuccessfulPhase": "complete",
+      "classification": "success",
+      "confidence": "high",
+      "confidenceCeiling": "high",
+      "terminalEvidence": {"artifactId":"task-sequence-completed-smsts-current","startLine":1,"endLine":1}
+    }
+  ],
+  "sourceLocalObservations": [],
+  "findings": [],
+  "correlationBoundary": {"scope":"clientOnly","joinFields":["executionId","taskSequencePackageId","advertisementId","runContext"],"forbiddenJoinFields":["filename","path","timestamp","displayName"]}
+}

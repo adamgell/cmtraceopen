@@ -1,0 +1,17 @@
+{
+  "contractState": "proposedPending318And319",
+  "workflow": "taskSequence",
+  "scenario": "incomplete",
+  "stateChain": ["start","preflight","diskOrImage","setupWindows","installClient","installSoftware","postAction","complete"],
+  "analysisContract": {"independentReducer":true,"consumesAppOrPolicyReducerOutput":false,"crossSideCorrelationPerformed":false,"nativeAcceptanceClaimed":false},
+  "extractionProfile": {"id":null,"status":"notObserved"},
+  "reorderedInputDeterministic": true,
+  "coverage": [{"logicalArtifactId":"client-task-sequence-smsts","state":"absent","pathClasses":["unknown"]}],
+  "artifactProvenance": [],
+  "transactions": [],
+  "sourceLocalObservations": [],
+  "findings": [
+    {"findingId":"smsts-coverage-absent","classification":"insufficientEvidence","evidence":[],"coverageGapArtifactIds":["task-sequence-incomplete-smsts-absent"],"serverCauseClaimed":false,"appOrPolicyCauseClaimed":false,"nativeAcceptanceClaimed":false,"boundedNextArtifact":{"logicalArtifactId":"client-task-sequence-smsts","pathClass":"unknown","reason":"Collect smsts evidence from the active task sequence path and report its capture state."}}
+  ],
+  "correlationBoundary": {"scope":"coverageOnly","joinFields":[],"forbiddenJoinFields":["filename","path","timestamp","displayName"]}
+}

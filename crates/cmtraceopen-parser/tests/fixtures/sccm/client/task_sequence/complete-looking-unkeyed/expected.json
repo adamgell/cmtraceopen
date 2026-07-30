@@ -1,0 +1,21 @@
+{
+  "contractState": "proposedPending318And319",
+  "workflow": "taskSequence",
+  "scenario": "complete-looking-unkeyed",
+  "stateChain": ["start","preflight","diskOrImage","setupWindows","installClient","installSoftware","postAction","complete"],
+  "analysisContract": {"independentReducer":true,"consumesAppOrPolicyReducerOutput":false,"crossSideCorrelationPerformed":false,"nativeAcceptanceClaimed":false},
+  "extractionProfile": {"id":"task-sequence-client-5.00.test-v1","status":"matched"},
+  "reorderedInputDeterministic": true,
+  "coverage": [{"logicalArtifactId":"client-task-sequence-smsts","state":"captured","pathClasses":["client"]}],
+  "artifactProvenance": [
+    {"artifactId":"task-sequence-complete-looking-unkeyed-smsts-current","bytesCopied":318,"pathClass":"client","sanitizedSourcePath":"SYNTHETIC://client/CCM/Logs/smsts.log","smstsLogPathEvidence":"SYNTHETIC://client/CCM/Logs/smsts.log","rotationKind":"current","fragmentComplete":true,"relocationOrdinal":0}
+  ],
+  "transactions": [],
+  "sourceLocalObservations": [
+    {"observationId":"complete-looking-unkeyed-source-local","artifactId":"task-sequence-complete-looking-unkeyed-smsts-current","keyConfidence":"none","confidence":"low","confidenceCeiling":"low","correlationEligible":false,"phaseHint":"complete","stateHint":"succeeded","evidence":{"artifactId":"task-sequence-complete-looking-unkeyed-smsts-current","startLine":1,"endLine":1},"reason":"A filename, path, timestamp, or display name cannot substitute for the missing exact execution key."}
+  ],
+  "findings": [
+    {"findingId":"complete-looking-unkeyed-insufficient","classification":"insufficientEvidence","evidence":[{"artifactId":"task-sequence-complete-looking-unkeyed-smsts-current","startLine":1,"endLine":1}],"coverageGapArtifactIds":[],"serverCauseClaimed":false,"appOrPolicyCauseClaimed":false,"nativeAcceptanceClaimed":false}
+  ],
+  "correlationBoundary": {"scope":"sourceLocalOnly","joinFields":[],"forbiddenJoinFields":["filename","path","timestamp","displayName"]}
+}

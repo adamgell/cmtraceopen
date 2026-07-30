@@ -1,0 +1,11 @@
+{
+  "sccmManifestVersion": 1,
+  "proposalOnly": true,
+  "syntheticFixture": true,
+  "scenario": "rotation-boundary",
+  "bundle": {"role":"client","workflow":"taskSequence","siteCode":"LAB"},
+  "artifacts": [
+    {"artifactId":"task-sequence-rotation-boundary-current","designOnlyCatalog":{"entryId":"client-task-sequence-smsts","groupMemberships":["client-task-sequence-smsts"]},"role":"client","kind":"ccmLog","captureState":"captured","encoding":"utf-8","collectionLimit":{"byteLimit":4096,"limitApplied":false},"originalBasename":"smsts.log","sanitizedSourcePath":"SYNTHETIC://client/CCM/Logs/smsts.log","smstsLogPathEvidence":"SYNTHETIC://client/CCM/Logs/smsts.log","pathFingerprint":"synthetic:rotation-boundary:client","pathClass":"client","rotation":{"kind":"current","fragmentComplete":false},"relocationOrdinal":0,"sourceVersion":"5.00.TEST.0000","capturedUtc":"2026-07-30T01:30:06Z","bytesCopied":141,"relativePath":"evidence/client-task-sequence-smsts/client/current/smsts.log"},
+    {"artifactId":"task-sequence-rotation-boundary-lo","designOnlyCatalog":{"entryId":"client-task-sequence-smsts","groupMemberships":["client-task-sequence-smsts"]},"role":"client","kind":"ccmLog","captureState":"captured","encoding":"utf-8","collectionLimit":{"byteLimit":4096,"limitApplied":false},"originalBasename":"smsts.lo_","sanitizedSourcePath":"SYNTHETIC://client/CCM/Logs/smsts.log","smstsLogPathEvidence":"SYNTHETIC://client/CCM/Logs/smsts.log","pathFingerprint":"synthetic:rotation-boundary:client","pathClass":"client","rotation":{"kind":"lo","fragmentComplete":false},"relocationOrdinal":0,"sourceVersion":"5.00.TEST.0000","capturedUtc":"2026-07-30T01:30:05Z","bytesCopied":259,"relativePath":"evidence/client-task-sequence-smsts/client/lo/smsts.lo_"}
+  ]
+}

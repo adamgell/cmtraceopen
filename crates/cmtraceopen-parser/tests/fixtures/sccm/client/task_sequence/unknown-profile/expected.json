@@ -1,0 +1,21 @@
+{
+  "contractState": "proposedPending318And319",
+  "workflow": "taskSequence",
+  "scenario": "unknown-profile",
+  "stateChain": ["start","preflight","diskOrImage","setupWindows","installClient","installSoftware","postAction","complete"],
+  "analysisContract": {"independentReducer":true,"consumesAppOrPolicyReducerOutput":false,"crossSideCorrelationPerformed":false,"nativeAcceptanceClaimed":false},
+  "extractionProfile": {"id":null,"status":"unknownVersionRejected"},
+  "reorderedInputDeterministic": true,
+  "coverage": [{"logicalArtifactId":"client-task-sequence-smsts","state":"captured","pathClasses":["unknown"]}],
+  "artifactProvenance": [
+    {"artifactId":"task-sequence-unknown-profile-smsts-current","bytesCopied":401,"pathClass":"unknown","sanitizedSourcePath":"SYNTHETIC://unknown/observed/smsts.log","smstsLogPathEvidence":"SYNTHETIC://unknown/observed/smsts.log","rotationKind":"current","fragmentComplete":true,"relocationOrdinal":0}
+  ],
+  "transactions": [],
+  "sourceLocalObservations": [
+    {"observationId":"unknown-profile-source-local","artifactId":"task-sequence-unknown-profile-smsts-current","keyConfidence":"candidate","confidence":"low","confidenceCeiling":"low","correlationEligible":false,"phaseHint":"preflight","stateHint":"inProgress","evidence":{"artifactId":"task-sequence-unknown-profile-smsts-current","startLine":1,"endLine":1},"reason":"Key-looking fields from an unrecognized source version cannot be promoted by an unverified extraction profile."}
+  ],
+  "findings": [
+    {"findingId":"unknown-profile-insufficient","classification":"insufficientEvidence","evidence":[{"artifactId":"task-sequence-unknown-profile-smsts-current","startLine":1,"endLine":1}],"coverageGapArtifactIds":[],"serverCauseClaimed":false,"appOrPolicyCauseClaimed":false,"nativeAcceptanceClaimed":false,"boundedNextArtifact":{"logicalArtifactId":"client-task-sequence-smsts","pathClass":"unknown","reason":"Add a reviewed extraction profile for the observed version before correlation."}}
+  ],
+  "correlationBoundary": {"scope":"sourceLocalOnly","joinFields":[],"forbiddenJoinFields":["filename","path","timestamp","displayName"]}
+}
