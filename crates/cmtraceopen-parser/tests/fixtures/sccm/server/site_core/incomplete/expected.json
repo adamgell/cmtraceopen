@@ -1,0 +1,112 @@
+{
+  "expectedContractVersion": 1,
+  "scenario": "incomplete",
+  "profile": {
+    "id": "sccm-site-core",
+    "version": 1,
+    "stability": "experimental"
+  },
+  "results": [
+    {
+      "resultId": "site-core/LAB/SMS_EXECUTIVE/SC-INCOMPLETE-001",
+      "transactionKey": {
+        "profileId": "sccm-site-core",
+        "profileVersion": 1,
+        "siteCode": "LAB",
+        "componentId": "SMS_EXECUTIVE",
+        "workItemId": "SC-INCOMPLETE-001"
+      },
+      "state": "incomplete",
+      "lastSuccessfulPhase": "componentWork",
+      "findingClass": "insufficientEvidence",
+      "confidence": "none",
+      "confidenceCeiling": "none",
+      "evidence": [
+        {
+          "artifactId": "incomplete-sitecomp-capped",
+          "entryId": "incomplete-sitecomp-capped:1-1",
+          "lineStart": 1,
+          "lineEnd": 1
+        },
+        {
+          "artifactId": "incomplete-sitecomp-capped",
+          "entryId": "incomplete-sitecomp-capped:2-2",
+          "lineStart": 2,
+          "lineEnd": 2
+        }
+      ],
+      "coverageGapArtifactIds": [
+        "incomplete-sitecomp-capped",
+        "incomplete-statesys-absent",
+        "incomplete-statmgr-access-denied"
+      ],
+      "nextArtifacts": [
+        {
+          "logicalName": "server-sitecomp",
+          "role": "siteServer",
+          "reasonCode": "capped-before-next-phase",
+          "basenames": [
+            "sitecomp.log"
+          ],
+          "rotations": [
+            "current"
+          ],
+          "maxArtifacts": 1,
+          "maxBytesPerArtifact": 4096,
+          "scope": {
+            "componentId": "SMS_EXECUTIVE",
+            "workItemId": "SC-INCOMPLETE-001"
+          }
+        }
+      ]
+    }
+  ],
+  "unlinkedObservations": [],
+  "coverageGaps": [
+    {
+      "artifactId": "incomplete-sitecomp-capped",
+      "state": "capped",
+      "diagnosticMeaning": "coverageOnly",
+      "evidence": {
+        "artifactId": "incomplete-sitecomp-capped",
+        "entryId": "incomplete-sitecomp-capped:3-3",
+        "lineStart": 3,
+        "lineEnd": 3,
+        "completeLogicalRecord": false
+      }
+    },
+    {
+      "artifactId": "incomplete-statesys-absent",
+      "state": "absent",
+      "diagnosticMeaning": "coverageOnly"
+    },
+    {
+      "artifactId": "incomplete-statmgr-access-denied",
+      "state": "accessDenied",
+      "diagnosticMeaning": "coverageOnly"
+    }
+  ],
+  "prohibitedClaims": [
+    "absentDownstreamRole",
+    "clientImpact",
+    "crossSideCausality"
+  ],
+  "ordering": {
+    "resultsBy": [
+      "resultId"
+    ],
+    "evidenceBy": [
+      "artifactId",
+      "lineStart",
+      "lineEnd"
+    ],
+    "coverageGapsBy": [
+      "artifactId"
+    ],
+    "nextArtifactsBy": [
+      "logicalName",
+      "role",
+      "reasonCode"
+    ]
+  }
+}

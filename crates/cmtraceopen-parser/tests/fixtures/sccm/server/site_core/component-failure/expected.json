@@ -1,0 +1,82 @@
+{
+  "expectedContractVersion": 1,
+  "scenario": "component-failure",
+  "profile": {
+    "id": "sccm-site-core",
+    "version": 1,
+    "stability": "experimental"
+  },
+  "results": [
+    {
+      "resultId": "site-core/LAB/SMS_EXECUTIVE/SC-COMPFAIL-001",
+      "transactionKey": {
+        "profileId": "sccm-site-core",
+        "profileVersion": 1,
+        "siteCode": "LAB",
+        "componentId": "SMS_EXECUTIVE",
+        "workItemId": "SC-COMPFAIL-001"
+      },
+      "state": "terminalFailure",
+      "lastSuccessfulPhase": "componentWork",
+      "findingClass": "confirmedFailure",
+      "confidence": "high",
+      "confidenceCeiling": "high",
+      "evidence": [
+        {
+          "artifactId": "component-failure-sitecomp-current",
+          "entryId": "component-failure-sitecomp-current:1-1",
+          "lineStart": 1,
+          "lineEnd": 1
+        },
+        {
+          "artifactId": "component-failure-sitecomp-current",
+          "entryId": "component-failure-sitecomp-current:2-2",
+          "lineStart": 2,
+          "lineEnd": 2
+        },
+        {
+          "artifactId": "component-failure-sitecomp-current",
+          "entryId": "component-failure-sitecomp-current:3-3",
+          "lineStart": 3,
+          "lineEnd": 3,
+          "terminal": true
+        }
+      ],
+      "coverageGapArtifactIds": [
+        "component-failure-statmgr-absent"
+      ],
+      "nextArtifacts": []
+    }
+  ],
+  "unlinkedObservations": [],
+  "coverageGaps": [
+    {
+      "artifactId": "component-failure-statmgr-absent",
+      "state": "absent",
+      "diagnosticMeaning": "coverageOnly"
+    }
+  ],
+  "prohibitedClaims": [
+    "absentDownstreamRole",
+    "clientImpact",
+    "crossSideCausality"
+  ],
+  "ordering": {
+    "resultsBy": [
+      "resultId"
+    ],
+    "evidenceBy": [
+      "artifactId",
+      "lineStart",
+      "lineEnd"
+    ],
+    "coverageGapsBy": [
+      "artifactId"
+    ],
+    "nextArtifactsBy": [
+      "logicalName",
+      "role",
+      "reasonCode"
+    ]
+  }
+}

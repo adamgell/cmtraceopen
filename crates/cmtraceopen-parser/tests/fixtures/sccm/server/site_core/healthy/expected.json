@@ -1,0 +1,85 @@
+{
+  "expectedContractVersion": 1,
+  "scenario": "healthy",
+  "profile": {
+    "id": "sccm-site-core",
+    "version": 1,
+    "stability": "experimental"
+  },
+  "results": [
+    {
+      "resultId": "site-core/LAB/SMS_EXECUTIVE/SC-HEALTH-001",
+      "transactionKey": {
+        "profileId": "sccm-site-core",
+        "profileVersion": 1,
+        "siteCode": "LAB",
+        "componentId": "SMS_EXECUTIVE",
+        "workItemId": "SC-HEALTH-001"
+      },
+      "state": "healthy",
+      "lastSuccessfulPhase": "healthyOrTerminal",
+      "findingClass": null,
+      "confidence": "high",
+      "confidenceCeiling": "high",
+      "evidence": [
+        {
+          "artifactId": "healthy-sitecomp-current",
+          "entryId": "healthy-sitecomp-current:1-1",
+          "lineStart": 1,
+          "lineEnd": 1
+        },
+        {
+          "artifactId": "healthy-sitecomp-current",
+          "entryId": "healthy-sitecomp-current:2-2",
+          "lineStart": 2,
+          "lineEnd": 2
+        },
+        {
+          "artifactId": "healthy-sitecomp-current",
+          "entryId": "healthy-sitecomp-current:3-3",
+          "lineStart": 3,
+          "lineEnd": 3
+        },
+        {
+          "artifactId": "healthy-statmgr-current",
+          "entryId": "healthy-statmgr-current:1-1",
+          "lineStart": 1,
+          "lineEnd": 1
+        },
+        {
+          "artifactId": "healthy-statmgr-current",
+          "entryId": "healthy-statmgr-current:2-2",
+          "lineStart": 2,
+          "lineEnd": 2
+        }
+      ],
+      "coverageGapArtifactIds": [],
+      "nextArtifacts": []
+    }
+  ],
+  "unlinkedObservations": [],
+  "coverageGaps": [],
+  "prohibitedClaims": [
+    "absentDownstreamRole",
+    "clientImpact",
+    "crossSideCausality"
+  ],
+  "ordering": {
+    "resultsBy": [
+      "resultId"
+    ],
+    "evidenceBy": [
+      "artifactId",
+      "lineStart",
+      "lineEnd"
+    ],
+    "coverageGapsBy": [
+      "artifactId"
+    ],
+    "nextArtifactsBy": [
+      "logicalName",
+      "role",
+      "reasonCode"
+    ]
+  }
+}

@@ -1,0 +1,36 @@
+{
+  "sccmManifestVersion": 1,
+  "bundleRole": "server",
+  "syntheticFixture": true,
+  "scenario": "malformed",
+  "topology": {
+    "captureHost": "LAB-CM01",
+    "rolesObserved": [
+      "siteServer"
+    ],
+    "siteCode": "LAB"
+  },
+  "artifacts": [
+    {
+      "artifactId": "malformed-statmgr-current",
+      "syntheticFixture": true,
+      "role": "siteServer",
+      "sourceGroup": "server-status",
+      "sourceKind": "ccmLog",
+      "originalPath": "REDACTED",
+      "originalBasename": "statmgr.log",
+      "configuredPath": true,
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": false
+      },
+      "rotationLineage": "statmgr.log",
+      "captureState": "captured",
+      "sourceVersion": "5.00.TEST",
+      "collectedUtc": "2026-07-30T15:21:00Z",
+      "encoding": "utf-8",
+      "relativePath": "evidence/sccm/server/site-core/status/current/statmgr.log",
+      "bytesCopied": 215
+    }
+  ]
+}

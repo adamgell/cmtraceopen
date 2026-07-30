@@ -1,0 +1,100 @@
+{
+  "expectedContractVersion": 1,
+  "scenario": "inbox-backlog",
+  "profile": {
+    "id": "sccm-site-core",
+    "version": 1,
+    "stability": "experimental"
+  },
+  "results": [
+    {
+      "resultId": "site-core/LAB/SMS_EXECUTIVE/SC-BACKLOG-001",
+      "transactionKey": {
+        "profileId": "sccm-site-core",
+        "profileVersion": 1,
+        "siteCode": "LAB",
+        "componentId": "SMS_EXECUTIVE",
+        "workItemId": "SC-BACKLOG-001"
+      },
+      "state": "blockedOrDeferred",
+      "lastSuccessfulPhase": "componentWork",
+      "findingClass": "blockedOrDeferred",
+      "confidence": "low",
+      "confidenceCeiling": "low",
+      "evidence": [
+        {
+          "artifactId": "inbox-backlog-sitecomp-current",
+          "entryId": "inbox-backlog-sitecomp-current:1-1",
+          "lineStart": 1,
+          "lineEnd": 1
+        },
+        {
+          "artifactId": "inbox-backlog-sitecomp-current",
+          "entryId": "inbox-backlog-sitecomp-current:2-2",
+          "lineStart": 2,
+          "lineEnd": 2
+        },
+        {
+          "artifactId": "inbox-backlog-sitecomp-current",
+          "entryId": "inbox-backlog-sitecomp-current:3-3",
+          "lineStart": 3,
+          "lineEnd": 3,
+          "terminal": false
+        }
+      ],
+      "coverageGapArtifactIds": [
+        "inbox-backlog-statmgr-absent"
+      ],
+      "nextArtifacts": [
+        {
+          "logicalName": "server-status",
+          "role": "siteServer",
+          "reasonCode": "matching-status-terminal-evidence-missing",
+          "basenames": [
+            "statmgr.log"
+          ],
+          "rotations": [
+            "current",
+            "loUnderscore"
+          ],
+          "maxArtifacts": 2,
+          "scope": {
+            "componentId": "SMS_EXECUTIVE",
+            "workItemId": "SC-BACKLOG-001"
+          }
+        }
+      ]
+    }
+  ],
+  "unlinkedObservations": [],
+  "coverageGaps": [
+    {
+      "artifactId": "inbox-backlog-statmgr-absent",
+      "state": "absent",
+      "diagnosticMeaning": "coverageOnly"
+    }
+  ],
+  "prohibitedClaims": [
+    "absentDownstreamRole",
+    "clientImpact",
+    "crossSideCausality"
+  ],
+  "ordering": {
+    "resultsBy": [
+      "resultId"
+    ],
+    "evidenceBy": [
+      "artifactId",
+      "lineStart",
+      "lineEnd"
+    ],
+    "coverageGapsBy": [
+      "artifactId"
+    ],
+    "nextArtifactsBy": [
+      "logicalName",
+      "role",
+      "reasonCode"
+    ]
+  }
+}
