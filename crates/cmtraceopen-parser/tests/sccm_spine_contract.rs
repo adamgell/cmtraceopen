@@ -354,63 +354,75 @@ fn catalog_rotation_grammar_preserves_unknown_suffix_and_initialism() {
 }
 
 #[test]
-fn catalog_role_matrix_preserves_supplied_dp_and_sup_roles() {
-    let dp_sources = [
-        "distmgr.log",
-        "PkgXferMgr.log",
-        "SMSDPProv.log",
-        "PullDP.log",
+fn catalog_requires_exact_producer_roles_for_server_workflow_sources() {
+    let cases = [
+        (
+            "distmgr.log",
+            SccmRole::SiteServer,
+            SccmArtifactFamily::DistributionPoint,
+        ),
+        (
+            "PkgXferMgr.log",
+            SccmRole::SiteServer,
+            SccmArtifactFamily::DistributionPoint,
+        ),
+        (
+            "SMSDPProv.log",
+            SccmRole::DistributionPoint,
+            SccmArtifactFamily::DistributionPoint,
+        ),
+        (
+            "PullDP.log",
+            SccmRole::DistributionPoint,
+            SccmArtifactFamily::DistributionPoint,
+        ),
+        (
+            "WCM.log",
+            SccmRole::SiteServer,
+            SccmArtifactFamily::SoftwareUpdatePoint,
+        ),
+        (
+            "wsyncmgr.log",
+            SccmRole::SiteServer,
+            SccmArtifactFamily::SoftwareUpdatePoint,
+        ),
+        (
+            "WSUSCtrl.log",
+            SccmRole::SoftwareUpdatePoint,
+            SccmArtifactFamily::SoftwareUpdatePoint,
+        ),
+        (
+            "SUPSetup.log",
+            SccmRole::SoftwareUpdatePoint,
+            SccmArtifactFamily::SoftwareUpdatePoint,
+        ),
+        (
+            "AdminService.log",
+            SccmRole::Provider,
+            SccmArtifactFamily::AdminService,
+        ),
     ];
-    let dp_roles = [SccmRole::SiteServer, SccmRole::DistributionPoint];
-    assert_role_matrix(
-        &dp_sources,
-        &dp_roles,
-        SccmArtifactFamily::DistributionPoint,
-    );
 
-    let sup_sources = ["WCM.log", "WSUSCtrl.log", "wsyncmgr.log", "SUPSetup.log"];
-    let sup_roles = [SccmRole::SoftwareUpdatePoint, SccmRole::WsUs];
-    assert_role_matrix(
-        &sup_sources,
-        &sup_roles,
-        SccmArtifactFamily::SoftwareUpdatePoint,
-    );
-}
+    for (source, producer_role, family) in cases {
+        let class = classify_artifact_name(source, producer_role.clone());
+        assert_eq!(class.role, producer_role, "{source}");
+        assert_eq!(class.family, family, "{source}");
+        assert!(class.uses_ccm_records, "{source}");
+        assert!(class.supported_for_diagnosis, "{source}");
 
-#[test]
-fn catalog_role_matrix_keeps_admin_service_distinct_from_provider() {
-    let admin = classify_artifact_name("AdminService.log", SccmRole::AdminService);
-    assert_eq!(admin.role, SccmRole::AdminService);
-    assert_eq!(admin.family, SccmArtifactFamily::AdminService);
-    assert!(admin.supported_for_diagnosis);
-
-    let provider = classify_artifact_name("AdminService.log", SccmRole::Provider);
-    assert_eq!(provider.role, SccmRole::Provider);
-    assert!(matches!(provider.family, SccmArtifactFamily::Unknown(_)));
-    assert!(!provider.supported_for_diagnosis);
-}
-
-fn assert_role_matrix(
-    sources: &[&str],
-    allowed_roles: &[SccmRole],
-    expected_family: SccmArtifactFamily,
-) {
-    for source in sources {
         for role in &known_roles() {
-            let class = classify_artifact_name(source, role.clone());
-            if allowed_roles.contains(role) {
-                assert_eq!(class.role, *role, "{source}");
-                assert_eq!(class.family, expected_family, "{source} / {role:?}");
-                assert!(class.uses_ccm_records, "{source} / {role:?}");
-                assert!(class.supported_for_diagnosis, "{source} / {role:?}");
-            } else {
-                assert_eq!(class.role, *role, "{source}");
-                assert!(
-                    matches!(class.family, SccmArtifactFamily::Unknown(_)),
-                    "{source} / {role:?}"
-                );
-                assert!(!class.supported_for_diagnosis, "{source} / {role:?}");
+            if *role == producer_role {
+                continue;
             }
+
+            let class = classify_artifact_name(source, role.clone());
+            assert_eq!(class.role, *role, "{source}");
+            assert!(
+                matches!(class.family, SccmArtifactFamily::Unknown(_)),
+                "{source} accepted non-producer role {role:?}"
+            );
+            assert!(!class.uses_ccm_records, "{source} / {role:?}");
+            assert!(!class.supported_for_diagnosis, "{source} / {role:?}");
         }
     }
 }
@@ -720,24 +732,8 @@ fn expected_catalog_tuples() -> Vec<ExpectedCatalogTuple> {
             true,
         ),
         (
-            "distmgr.log",
-            SccmRole::DistributionPoint,
-            "distmgr",
-            SccmArtifactFamily::DistributionPoint,
-            true,
-            true,
-        ),
-        (
             "PkgXferMgr.log",
             SccmRole::SiteServer,
-            "pkgXferMgr",
-            SccmArtifactFamily::DistributionPoint,
-            true,
-            true,
-        ),
-        (
-            "PkgXferMgr.log",
-            SccmRole::DistributionPoint,
             "pkgXferMgr",
             SccmArtifactFamily::DistributionPoint,
             true,
@@ -752,14 +748,6 @@ fn expected_catalog_tuples() -> Vec<ExpectedCatalogTuple> {
             true,
         ),
         (
-            "SMSDPProv.log",
-            SccmRole::SiteServer,
-            "smsDpProv",
-            SccmArtifactFamily::DistributionPoint,
-            true,
-            true,
-        ),
-        (
             "PullDP.log",
             SccmRole::DistributionPoint,
             "pullDp",
@@ -768,24 +756,8 @@ fn expected_catalog_tuples() -> Vec<ExpectedCatalogTuple> {
             true,
         ),
         (
-            "PullDP.log",
+            "WCM.log",
             SccmRole::SiteServer,
-            "pullDp",
-            SccmArtifactFamily::DistributionPoint,
-            true,
-            true,
-        ),
-        (
-            "WCM.log",
-            SccmRole::SoftwareUpdatePoint,
-            "wcm",
-            SccmArtifactFamily::SoftwareUpdatePoint,
-            true,
-            true,
-        ),
-        (
-            "WCM.log",
-            SccmRole::WsUs,
             "wcm",
             SccmArtifactFamily::SoftwareUpdatePoint,
             true,
@@ -800,24 +772,8 @@ fn expected_catalog_tuples() -> Vec<ExpectedCatalogTuple> {
             true,
         ),
         (
-            "WSUSCtrl.log",
-            SccmRole::WsUs,
-            "wsusCtrl",
-            SccmArtifactFamily::SoftwareUpdatePoint,
-            true,
-            true,
-        ),
-        (
             "wsyncmgr.log",
-            SccmRole::SoftwareUpdatePoint,
-            "wsyncmgr",
-            SccmArtifactFamily::SoftwareUpdatePoint,
-            true,
-            true,
-        ),
-        (
-            "wsyncmgr.log",
-            SccmRole::WsUs,
+            SccmRole::SiteServer,
             "wsyncmgr",
             SccmArtifactFamily::SoftwareUpdatePoint,
             true,
@@ -826,14 +782,6 @@ fn expected_catalog_tuples() -> Vec<ExpectedCatalogTuple> {
         (
             "SUPSetup.log",
             SccmRole::SoftwareUpdatePoint,
-            "supSetup",
-            SccmArtifactFamily::SoftwareUpdatePoint,
-            true,
-            true,
-        ),
-        (
-            "SUPSetup.log",
-            SccmRole::WsUs,
             "supSetup",
             SccmArtifactFamily::SoftwareUpdatePoint,
             true,
@@ -881,7 +829,7 @@ fn expected_catalog_tuples() -> Vec<ExpectedCatalogTuple> {
         ),
         (
             "AdminService.log",
-            SccmRole::AdminService,
+            SccmRole::Provider,
             "adminService",
             SccmArtifactFamily::AdminService,
             true,

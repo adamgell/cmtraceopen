@@ -339,7 +339,7 @@ const SOURCE_CATALOG: &[CatalogSpec] = &[
     CatalogSpec {
         basename: "WCM",
         logical_name: "wcm",
-        role: SccmRole::SoftwareUpdatePoint,
+        role: SccmRole::SiteServer,
         family: SccmArtifactFamily::SoftwareUpdatePoint,
     },
     CatalogSpec {
@@ -351,7 +351,7 @@ const SOURCE_CATALOG: &[CatalogSpec] = &[
     CatalogSpec {
         basename: "wsyncmgr",
         logical_name: "wsyncmgr",
-        role: SccmRole::SoftwareUpdatePoint,
+        role: SccmRole::SiteServer,
         family: SccmArtifactFamily::SoftwareUpdatePoint,
     },
     CatalogSpec {
@@ -393,56 +393,16 @@ const SOURCE_CATALOG: &[CatalogSpec] = &[
     CatalogSpec {
         basename: "AdminService",
         logical_name: "adminService",
-        role: SccmRole::AdminService,
+        role: SccmRole::Provider,
         family: SccmArtifactFamily::AdminService,
-    },
-];
-
-struct CatalogRoleAlias {
-    basename: &'static str,
-    role: SccmRole,
-}
-
-const ADDITIONAL_ALLOWED_ROLES: &[CatalogRoleAlias] = &[
-    CatalogRoleAlias {
-        basename: "distmgr",
-        role: SccmRole::DistributionPoint,
-    },
-    CatalogRoleAlias {
-        basename: "PkgXferMgr",
-        role: SccmRole::DistributionPoint,
-    },
-    CatalogRoleAlias {
-        basename: "SMSDPProv",
-        role: SccmRole::SiteServer,
-    },
-    CatalogRoleAlias {
-        basename: "PullDP",
-        role: SccmRole::SiteServer,
-    },
-    CatalogRoleAlias {
-        basename: "WCM",
-        role: SccmRole::WsUs,
-    },
-    CatalogRoleAlias {
-        basename: "WSUSCtrl",
-        role: SccmRole::WsUs,
-    },
-    CatalogRoleAlias {
-        basename: "wsyncmgr",
-        role: SccmRole::WsUs,
-    },
-    CatalogRoleAlias {
-        basename: "SUPSetup",
-        role: SccmRole::WsUs,
     },
 ];
 
 pub fn classify_artifact_name(name: &str, role: SccmRole) -> SccmSourceCatalogEntry {
     let parsed = ParsedArtifactName::from_name(name);
-    let known = SOURCE_CATALOG.iter().find(|entry| {
-        entry.basename.eq_ignore_ascii_case(parsed.basename) && role_is_allowed(entry, &role)
-    });
+    let known = SOURCE_CATALOG
+        .iter()
+        .find(|entry| entry.basename.eq_ignore_ascii_case(parsed.basename) && entry.role == role);
 
     if let Some(entry) = known {
         return SccmSourceCatalogEntry {
@@ -469,16 +429,10 @@ pub fn classify_artifact_name(name: &str, role: SccmRole) -> SccmSourceCatalogEn
 }
 
 pub fn declared_source_catalog() -> Vec<SccmSourceCatalogEntry> {
-    let mut declared = Vec::with_capacity(SOURCE_CATALOG.len() + ADDITIONAL_ALLOWED_ROLES.len());
+    let mut declared = Vec::with_capacity(SOURCE_CATALOG.len());
 
     for entry in SOURCE_CATALOG {
         declared.push(declared_catalog_entry(entry, entry.role.clone()));
-        for alias in ADDITIONAL_ALLOWED_ROLES
-            .iter()
-            .filter(|alias| alias.basename.eq_ignore_ascii_case(entry.basename))
-        {
-            declared.push(declared_catalog_entry(entry, alias.role.clone()));
-        }
     }
 
     declared
@@ -494,13 +448,6 @@ fn declared_catalog_entry(entry: &CatalogSpec, role: SccmRole) -> SccmSourceCata
         uses_ccm_records: true,
         supported_for_diagnosis: true,
     }
-}
-
-fn role_is_allowed(entry: &CatalogSpec, role: &SccmRole) -> bool {
-    entry.role == *role
-        || ADDITIONAL_ALLOWED_ROLES
-            .iter()
-            .any(|alias| alias.basename.eq_ignore_ascii_case(entry.basename) && alias.role == *role)
 }
 
 struct ParsedArtifactName<'a> {
