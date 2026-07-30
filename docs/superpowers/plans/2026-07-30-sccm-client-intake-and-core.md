@@ -19,7 +19,7 @@
 - The SCCM Client native bundle gets an additive, versioned SCCM manifest/extension. Its reader must tolerate a generic legacy manifest and map only unambiguous legacy states; no existing generic bundle consumer may break.
 - An absent source means only absent coverage. It must create an `InsufficientEvidence`/coverage result, never an assertion that the client is healthy, targeted, not targeted, or failing.
 - Unknown client version, unknown message pattern, malformed logical record, or split rotation must lower confidence and retain raw-safe evidence rather than extrapolating a workflow state.
-- Use only synthetic fixture identities: `LAB-CLIENT-01`, `CONTOSO`, RFC-style UUIDs, fake package/content IDs, and no customer paths, users, SIDs, tokens, certificates, tenant IDs, serials, or real deployment names.
+- Use only synthetic fixture identities: `LAB-CLIENT-01`, the three-character site code `LAB`, RFC-style UUIDs, fake package/content IDs, and no customer paths, users, SIDs, tokens, certificates, tenant IDs, serials, or real deployment names.
 - Windows SCCM Client collection behavior is accepted only on Windows CI and the development client. macOS validates deterministic pure parser and native test-double behavior, not Windows filesystem/ACL semantics.
 
 ---
@@ -217,7 +217,7 @@ Paths for candidate discovery are platform/native concerns. Current client opera
 Write focused tests that deserialize the fixture manifest through the public SCCM bundle reader and assert these exact outcomes:
 
   - `complete`: all baseline health/policy/deployment/update source groups are `Captured`; output has zero absence-caused finding requests.
-  - `rotations`: `AppEnforce.log`, `AppEnforce.log.lo_`, and `AppEnforce.log.2` map to one logical client-app-enforce group with three ordered fragments and no filename collision.
+  - `rotations`: `AppEnforce.log`, `AppEnforce.lo_`, and `AppEnforce.log.2` map to one logical client-app-enforce group with three ordered fragments and no filename collision.
   - `missing-root`: no client root is discovered; every expected source group gets `Absent` and only an intake/coverage assessment, never "client not installed".
   - `access-denied`: `client-policy-agent` is `AccessDenied`; policy readiness reports a bounded request for that group and does not emit a policy-failure diagnosis.
   - `capped`: `client-content` is `Capped`; deployment readiness remains insufficient even when a retained tail contains an error-looking record.
@@ -362,7 +362,7 @@ The writer must use a dedicated file such as `sccm-manifest.json` or an additive
 
 ```text
 evidence/sccm/client/client-app-enforce/current/AppEnforce.log
-evidence/sccm/client/client-app-enforce/lo/AppEnforce.log.lo_
+evidence/sccm/client/client-app-enforce/lo/AppEnforce.lo_
 evidence/sccm/client/client-app-enforce/numbered-2/AppEnforce.log.2
 ```
 
