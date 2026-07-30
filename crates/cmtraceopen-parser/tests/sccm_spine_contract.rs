@@ -1,10 +1,12 @@
 use cmtraceopen_parser::models::log_entry::{LogFormat, ParserKind};
 use cmtraceopen_parser::parser::detect::detect_parser;
 use cmtraceopen_parser::sccm::{
-    classify_artifact_name, declared_source_catalog, extract_signals, normalize_ccm_artifact,
-    SccmArtifact, SccmArtifactFamily, SccmCoverageState, SccmFindingClass, SccmRole, SccmRotation,
-    SccmSignal, SccmSignalKind, SccmTimeOrderingState, SccmUnknownRotation,
-    SCCM_DIAGNOSTICS_SCHEMA_VERSION,
+    classify_artifact_name, declared_source_catalog, extract_keys, extract_signals,
+    normalize_ccm_artifact, normalize_key, SccmArtifact, SccmArtifactFamily,
+    SccmCorrelationKeyKind, SccmCoverageState, SccmEvidence, SccmEvidenceRef,
+    SccmExtractionGapKind, SccmExtractionProfile, SccmExtractionProfileMaturity, SccmFindingClass,
+    SccmKeyConfidence, SccmKeyExtractionResult, SccmRole, SccmRotation, SccmSignal, SccmSignalKind,
+    SccmTimeOrderingState, SccmTimestamp, SccmUnknownRotation, SCCM_DIAGNOSTICS_SCHEMA_VERSION,
 };
 
 fn client_policy_artifact() -> SccmArtifact {
@@ -19,6 +21,29 @@ fn client_policy_artifact() -> SccmArtifact {
         rotation: SccmRotation::Current,
         coverage: SccmCoverageState::Captured,
         encoding: Some("utf-8".into()),
+    }
+}
+
+fn evidence_with_message(message: &str) -> SccmEvidence {
+    SccmEvidence {
+        evidence_id: "client-policy-agent:1-1".into(),
+        reference: SccmEvidenceRef {
+            artifact_id: "client-policy-agent".into(),
+            entry_id: "client-policy-agent:1-1".into(),
+            line_start: Some(1),
+            line_end: Some(1),
+        },
+        role: SccmRole::Client,
+        component: Some("PolicyAgent".into()),
+        ccm_source_file: Some("policyagent.cpp".into()),
+        message: message.into(),
+        timestamp: SccmTimestamp {
+            original_display: None,
+            offset_minutes: None,
+            utc_millis: None,
+            ordering_state: SccmTimeOrderingState::TimestampMissing,
+        },
+        execution_context: None,
     }
 }
 
@@ -246,6 +271,342 @@ fn signal_extractor_is_deterministic_and_serializes_camel_case() {
     assert_eq!(kind_json, r#""gle""#);
     let decoded_kind: SccmSignalKind = serde_json::from_str(&kind_json).unwrap();
     assert_eq!(decoded_kind, SccmSignalKind::Gle);
+}
+
+#[test]
+fn key_normalization_is_stable_across_case_and_brace_variants() {
+    let left = normalize_key(
+        SccmCorrelationKeyKind::AssignmentId,
+        "{ABCDEFAB-0000-0000-0000-000000000001}",
+    );
+    let right = normalize_key(
+        SccmCorrelationKeyKind::AssignmentId,
+        "abcdefab-0000-0000-0000-000000000001",
+    );
+
+    assert_eq!(left.normalized, right.normalized);
+    assert_eq!(left.confidence, SccmKeyConfidence::Exact);
+}
+
+#[test]
+fn key_normalization_covers_each_declared_lexical_kind() {
+    let cases = [
+        (
+            SccmCorrelationKeyKind::AssignmentId,
+            "{ABCDEFAB-0000-0000-0000-000000000001}",
+            "abcdefab-0000-0000-0000-000000000001",
+        ),
+        (
+            SccmCorrelationKeyKind::ClientGuid,
+            "GUID:{ABCDEFAB-0000-0000-0000-000000000002}",
+            "abcdefab-0000-0000-0000-000000000002",
+        ),
+        (SccmCorrelationKeyKind::PackageId, "lab00001", "LAB00001"),
+        (
+            SccmCorrelationKeyKind::ContentId,
+            "Content_ABC-123",
+            "content_abc-123",
+        ),
+        (SccmCorrelationKeyKind::SiteCode, "lab", "LAB"),
+        (
+            SccmCorrelationKeyKind::ServerHost,
+            "MP01.LAB.LOCAL.",
+            "mp01.lab.local",
+        ),
+        (SccmCorrelationKeyKind::CiId, "00042", "42"),
+        (
+            SccmCorrelationKeyKind::UpdateId,
+            "{ABCDEFAB-0000-0000-0000-000000000003}",
+            "abcdefab-0000-0000-0000-000000000003",
+        ),
+        (SccmCorrelationKeyKind::KbId, "kb5034441", "KB5034441"),
+        (
+            SccmCorrelationKeyKind::BitsJobId,
+            "{ABCDEFAB-0000-0000-0000-000000000004}",
+            "abcdefab-0000-0000-0000-000000000004",
+        ),
+        (
+            SccmCorrelationKeyKind::TaskSequenceExecutionId,
+            "{ABCDEFAB-0000-0000-0000-000000000005}",
+            "abcdefab-0000-0000-0000-000000000005",
+        ),
+        (
+            SccmCorrelationKeyKind::RequestId,
+            "{ABCDEFAB-0000-0000-0000-000000000006}",
+            "abcdefab-0000-0000-0000-000000000006",
+        ),
+        (
+            SccmCorrelationKeyKind::TopicId,
+            "{ABCDEFAB-0000-0000-0000-000000000007}",
+            "abcdefab-0000-0000-0000-000000000007",
+        ),
+        (SccmCorrelationKeyKind::StateMessageId, "00071", "71"),
+    ];
+
+    for (kind, raw, expected) in cases {
+        let key = normalize_key(kind, raw);
+        assert_eq!(key.normalized, expected, "{raw}");
+        assert_eq!(key.confidence, SccmKeyConfidence::Exact, "{raw}");
+    }
+}
+
+#[test]
+fn key_normalization_malformed_values_are_low_confidence_only() {
+    for (kind, raw) in [
+        (SccmCorrelationKeyKind::AssignmentId, "{not-a-guid}"),
+        (SccmCorrelationKeyKind::PackageId, "LAB001"),
+        (SccmCorrelationKeyKind::ServerHost, "bad..host"),
+        (SccmCorrelationKeyKind::KbId, "KB-not-numeric"),
+    ] {
+        assert_eq!(
+            normalize_key(kind, raw).confidence,
+            SccmKeyConfidence::Low,
+            "{raw}"
+        );
+    }
+}
+
+#[test]
+fn key_extraction_unvalidated_version_cannot_emit_exact_extracted_key() {
+    let result = extract_keys(
+        &evidence_with_message("Policy id={ABCDEFAB-0000-0000-0000-000000000001}"),
+        &SccmExtractionProfile::for_version(Some("unobserved-version")),
+    );
+
+    assert!(result.keys.is_empty());
+    assert_eq!(
+        result.gaps[0].kind,
+        SccmExtractionGapKind::UnvalidatedVersion
+    );
+    assert_eq!(
+        result.gaps[0].candidate_raw.as_deref(),
+        Some("{ABCDEFAB-0000-0000-0000-000000000001}")
+    );
+}
+
+#[test]
+fn key_extraction_missing_version_is_an_explicit_gap_not_a_key() {
+    let result = extract_keys(
+        &evidence_with_message("package id=LAB00001"),
+        &SccmExtractionProfile::for_version(None),
+    );
+
+    assert!(result.keys.is_empty());
+    assert_eq!(result.gaps[0].kind, SccmExtractionGapKind::MissingVersion);
+    assert_eq!(result.gaps[0].candidate_raw.as_deref(), Some("LAB00001"));
+}
+
+#[test]
+fn key_extraction_unvalidated_and_missing_versions_preserve_every_candidate_gap() {
+    let evidence = evidence_with_message(
+        "package id=LAB00001; site code=LAB; \
+         assignment id={ABCDEFAB-0000-0000-0000-000000000001}",
+    );
+
+    for (profile, expected_gap_kind) in [
+        (
+            SccmExtractionProfile::for_version(Some("unobserved-version")),
+            SccmExtractionGapKind::UnvalidatedVersion,
+        ),
+        (
+            SccmExtractionProfile::for_version(None),
+            SccmExtractionGapKind::MissingVersion,
+        ),
+    ] {
+        let first = extract_keys(&evidence, &profile);
+        let second = extract_keys(&evidence, &profile);
+
+        assert_eq!(first, second);
+        assert!(first.keys.is_empty());
+        assert_eq!(first.gaps.len(), 3);
+        assert!(first.gaps.iter().all(|gap| gap.kind == expected_gap_kind));
+        assert_eq!(
+            first
+                .gaps
+                .iter()
+                .map(|gap| (gap.candidate_kind.clone(), gap.candidate_raw.as_deref()))
+                .collect::<Vec<_>>(),
+            vec![
+                (Some(SccmCorrelationKeyKind::PackageId), Some("LAB00001")),
+                (Some(SccmCorrelationKeyKind::SiteCode), Some("LAB")),
+                (
+                    Some(SccmCorrelationKeyKind::AssignmentId),
+                    Some("{ABCDEFAB-0000-0000-0000-000000000001}")
+                ),
+            ]
+        );
+        assert!(first
+            .gaps
+            .iter()
+            .all(|gap| gap.evidence == evidence.reference));
+    }
+}
+
+#[test]
+fn key_extraction_rejects_truncated_prefixes_from_invalid_structured_values() {
+    let overlong_content_id = "a".repeat(129);
+    let invalid_guid = "{ABCDEFAB-0000-0000-0000-000000000001}extra";
+    let invalid_host = "mp01.lab.local_suffix";
+    let evidence = evidence_with_message(&format!(
+        "assignment id={invalid_guid}; content id={overlong_content_id}; \
+         server host={invalid_host}"
+    ));
+
+    let result = extract_keys(
+        &evidence,
+        &SccmExtractionProfile::for_version(Some("5.00.9128.1007")),
+    );
+
+    assert!(result.keys.is_empty());
+    assert_eq!(
+        result
+            .gaps
+            .iter()
+            .filter(|gap| gap.kind == SccmExtractionGapKind::MalformedCandidate)
+            .map(|gap| gap.candidate_raw.as_deref())
+            .collect::<Vec<_>>(),
+        vec![
+            Some(invalid_guid),
+            Some(overlong_content_id.as_str()),
+            Some(invalid_host),
+        ]
+    );
+}
+
+#[test]
+fn key_profile_single_observed_version_stays_experimental_and_low_confidence() {
+    let profile = SccmExtractionProfile::for_version(Some("5.00.9128.1007"));
+    let evidence = evidence_with_message(
+        "Policy id={ABCDEFAB-0000-0000-0000-000000000001}; \
+         package id=LAB00001; site code=LAB",
+    );
+    let result = extract_keys(&evidence, &profile);
+
+    assert_eq!(
+        profile.maturity,
+        SccmExtractionProfileMaturity::Experimental
+    );
+    assert_eq!(profile.configmgr_version_prefixes, vec!["5.00.9128."]);
+    assert!(profile.validated_artifact_families.is_empty());
+    assert_eq!(result.keys.len(), 3);
+    assert!(result
+        .keys
+        .iter()
+        .all(|key| key.confidence == SccmKeyConfidence::Low));
+    assert!(result.keys.iter().all(|key| {
+        !matches!(
+            key.confidence,
+            SccmKeyConfidence::Strong | SccmKeyConfidence::Exact
+        )
+    }));
+    assert_eq!(
+        result.gaps[0].kind,
+        SccmExtractionGapKind::ExperimentalProfile
+    );
+    assert_eq!(
+        SccmExtractionProfile::for_version(Some("5.00.9135.1000")).maturity,
+        SccmExtractionProfileMaturity::Unvalidated
+    );
+}
+
+#[test]
+fn key_profile_version_selection_rejects_malformed_or_prefix_collision_versions() {
+    for version in ["5.00.9128.not-observed", "5.00.91280.1007", "5.00.9128"] {
+        assert_eq!(
+            SccmExtractionProfile::for_version(Some(version)).maturity,
+            SccmExtractionProfileMaturity::Unvalidated,
+            "{version}"
+        );
+    }
+}
+
+#[test]
+fn key_extraction_covers_declared_labels_in_message_order() {
+    let evidence = evidence_with_message(
+        "assignment id={ABCDEFAB-0000-0000-0000-000000000001}; \
+         client guid=GUID:{ABCDEFAB-0000-0000-0000-000000000002}; \
+         package id=LAB00001; content id=Content_ABC-123; site code=lab; \
+         server host=MP01.LAB.LOCAL.; ci id=00042; \
+         update id={ABCDEFAB-0000-0000-0000-000000000003}; kb id=KB5034441; \
+         bits job id={ABCDEFAB-0000-0000-0000-000000000004}; \
+         task sequence execution id={ABCDEFAB-0000-0000-0000-000000000005}; \
+         request id={ABCDEFAB-0000-0000-0000-000000000006}; \
+         topic id={ABCDEFAB-0000-0000-0000-000000000007}; state message id=00071",
+    );
+    let result = extract_keys(
+        &evidence,
+        &SccmExtractionProfile::for_version(Some("5.00.9128.1007")),
+    );
+
+    assert_eq!(
+        result
+            .keys
+            .iter()
+            .map(|key| key.kind.clone())
+            .collect::<Vec<_>>(),
+        vec![
+            SccmCorrelationKeyKind::AssignmentId,
+            SccmCorrelationKeyKind::ClientGuid,
+            SccmCorrelationKeyKind::PackageId,
+            SccmCorrelationKeyKind::ContentId,
+            SccmCorrelationKeyKind::SiteCode,
+            SccmCorrelationKeyKind::ServerHost,
+            SccmCorrelationKeyKind::CiId,
+            SccmCorrelationKeyKind::UpdateId,
+            SccmCorrelationKeyKind::KbId,
+            SccmCorrelationKeyKind::BitsJobId,
+            SccmCorrelationKeyKind::TaskSequenceExecutionId,
+            SccmCorrelationKeyKind::RequestId,
+            SccmCorrelationKeyKind::TopicId,
+            SccmCorrelationKeyKind::StateMessageId,
+        ]
+    );
+}
+
+#[test]
+fn key_profile_forged_stable_profile_cannot_emit_strong_or_exact_keys() {
+    let mut profile = SccmExtractionProfile::for_version(Some("5.00.9128.1007"));
+    profile.maturity = SccmExtractionProfileMaturity::Stable;
+
+    let result = extract_keys(&evidence_with_message("package id=LAB00001"), &profile);
+
+    assert!(result.keys.is_empty());
+    assert_eq!(
+        result.gaps[0].kind,
+        SccmExtractionGapKind::UnvalidatedProfile
+    );
+}
+
+#[test]
+fn key_profile_and_extraction_result_have_deterministic_json_round_trips() {
+    let profile = SccmExtractionProfile::for_version(Some("5.00.9128.1007"));
+    let evidence = evidence_with_message("Policy id={ABCDEFAB-0000-0000-0000-000000000001}");
+    let first = extract_keys(&evidence, &profile);
+    let second = extract_keys(&evidence, &profile);
+
+    assert_eq!(first, second);
+    assert_eq!(
+        serde_json::to_value(&profile).unwrap(),
+        serde_json::json!({
+            "profileId": "sccm-keys-5.00.9128-experimental-v1",
+            "configmgrVersionPrefixes": ["5.00.9128."],
+            "validatedArtifactFamilies": [],
+            "selectedConfigmgrVersion": "5.00.9128.1007",
+            "maturity": "experimental"
+        })
+    );
+
+    let profile_json = serde_json::to_string(&profile).unwrap();
+    assert_eq!(
+        serde_json::from_str::<SccmExtractionProfile>(&profile_json).unwrap(),
+        profile
+    );
+
+    let result_json = serde_json::to_string(&first).unwrap();
+    assert_eq!(
+        serde_json::from_str::<SccmKeyExtractionResult>(&result_json).unwrap(),
+        first
+    );
 }
 
 #[test]
