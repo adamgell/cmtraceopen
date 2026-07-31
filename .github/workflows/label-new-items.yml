@@ -8,6 +8,11 @@ on:
 
 permissions:
   issues: write
+  # Labelling a pull request needs `pull-requests: write` even though the REST
+  # path is /issues/{n}/labels. Without it the pull_request_target runs 403 with
+  # "Resource not accessible by integration", because this block replaces the
+  # repository default (which is read-only).
+  pull-requests: write
 
 jobs:
   label:
