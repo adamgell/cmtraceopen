@@ -551,8 +551,10 @@ fn public_identity_contract_retains_only_reviewed_synthetic_and_opaque_forms() {
         .expect("raw native context is intentionally not projected"),
     )
     .expect("assessment serializes");
-    assert!(!serialized.contains("RealUser"));
-    assert!(!serialized.contains("realuser.corp"));
+    let serialized_casefolded = serialized.to_ascii_lowercase();
+    assert!(!serialized_casefolded.contains("realuser"));
+    assert!(!serialized_casefolded.contains("realuser.corp"));
+    assert!(!serialized_casefolded.contains(r"c:\users"));
 
     let mut oversized_timestamp = synthetic_artifact("invalid-time", "PolicyAgent.log");
     oversized_timestamp.artifact.collected_at_utc =
@@ -635,30 +637,106 @@ fn ambiguous_identity_or_nonclient_role_fails_closed() {
 #[test]
 fn identity_bearing_relative_paths_fail_before_public_projection() {
     let unsafe_relative_paths = [
-        "evidence/client-RealUser/PolicyAgent.log",
-        "evidence/client-corp-example-test/PolicyAgent.log",
-        "evidence/client-app-enforce/root-realuser/current/AppEnforce.log",
-        "evidence/client-app-enforce/root-corp-example-test/current/AppEnforce.log",
-        "evidence/client-app-enforce/timestamped-20241340-296199/AppEnforce.log.20241340-296199",
-        "evidence/client-policy-agent/RealUser@example.test/PolicyAgent.log",
-        "evidence/client-policy-agent/Users/RealUser/PolicyAgent.log",
-        "evidence/client-policy-agent/home/real-user/PolicyAgent.log",
-        "evidence/client-policy-agent/corp.example.test/PolicyAgent.log",
-        "evidence/client-policy-agent/profile=RealUser/PolicyAgent.log",
-        "evidence/client-policy-agent/LAB%5CRealUser/PolicyAgent.log",
-        "evidence/client-policy-agent/Real User/PolicyAgent.log",
-        "evidence/client-policy-agent/résumé-real-user/PolicyAgent.log",
-        "evidence/client-policy-agent/\0/PolicyAgent.log",
-        "evidence/client-policy-agent/../PolicyAgent.log",
-        "evidence/client-policy-agent/..",
-        "evidence/client-policy-agent/.",
-        "/evidence/client-policy-agent/current/PolicyAgent.log",
-        "evidence/client-policy-agent/C:/Users/RealUser/PolicyAgent.log",
-        "evidence/client-policy-agent/LAB\\RealUser/PolicyAgent.log",
+        (
+            "PolicyAgent.log",
+            SccmRotation::Current,
+            "evidence/client-RealUser/PolicyAgent.log",
+        ),
+        (
+            "PolicyAgent.log",
+            SccmRotation::Current,
+            "evidence/client-corp-example-test/PolicyAgent.log",
+        ),
+        (
+            "AppEnforce.log",
+            SccmRotation::Current,
+            "evidence/client-app-enforce/root-realuser/current/AppEnforce.log",
+        ),
+        (
+            "AppEnforce.log",
+            SccmRotation::Current,
+            "evidence/client-app-enforce/root-corp-example-test/current/AppEnforce.log",
+        ),
+        (
+            "PolicyAgent.log",
+            SccmRotation::Current,
+            "evidence/client-policy-agent/RealUser@example.test/PolicyAgent.log",
+        ),
+        (
+            "PolicyAgent.log",
+            SccmRotation::Current,
+            "evidence/client-policy-agent/Users/RealUser/PolicyAgent.log",
+        ),
+        (
+            "PolicyAgent.log",
+            SccmRotation::Current,
+            "evidence/client-policy-agent/home/real-user/PolicyAgent.log",
+        ),
+        (
+            "PolicyAgent.log",
+            SccmRotation::Current,
+            "evidence/client-policy-agent/corp.example.test/PolicyAgent.log",
+        ),
+        (
+            "PolicyAgent.log",
+            SccmRotation::Current,
+            "evidence/client-policy-agent/profile=RealUser/PolicyAgent.log",
+        ),
+        (
+            "PolicyAgent.log",
+            SccmRotation::Current,
+            "evidence/client-policy-agent/LAB%5CRealUser/PolicyAgent.log",
+        ),
+        (
+            "PolicyAgent.log",
+            SccmRotation::Current,
+            "evidence/client-policy-agent/Real User/PolicyAgent.log",
+        ),
+        (
+            "PolicyAgent.log",
+            SccmRotation::Current,
+            "evidence/client-policy-agent/résumé-real-user/PolicyAgent.log",
+        ),
+        (
+            "PolicyAgent.log",
+            SccmRotation::Current,
+            "evidence/client-policy-agent/\0/PolicyAgent.log",
+        ),
+        (
+            "PolicyAgent.log",
+            SccmRotation::Current,
+            "evidence/client-policy-agent/../PolicyAgent.log",
+        ),
+        (
+            "PolicyAgent.log",
+            SccmRotation::Current,
+            "evidence/client-policy-agent/..",
+        ),
+        (
+            "PolicyAgent.log",
+            SccmRotation::Current,
+            "evidence/client-policy-agent/.",
+        ),
+        (
+            "PolicyAgent.log",
+            SccmRotation::Current,
+            "/evidence/client-policy-agent/current/PolicyAgent.log",
+        ),
+        (
+            "PolicyAgent.log",
+            SccmRotation::Current,
+            "evidence/client-policy-agent/C:/Users/RealUser/PolicyAgent.log",
+        ),
+        (
+            "PolicyAgent.log",
+            SccmRotation::Current,
+            "evidence/client-policy-agent/LAB\\RealUser/PolicyAgent.log",
+        ),
     ];
 
-    for relative_path in unsafe_relative_paths {
-        let mut artifact = synthetic_artifact("unsafe-relative", "PolicyAgent.log");
+    for (display_name, rotation, relative_path) in unsafe_relative_paths {
+        let mut artifact = synthetic_artifact("unsafe-relative", display_name);
+        artifact.artifact.rotation = rotation;
         artifact.path_fingerprint = Some("synthetic:policy-current".to_owned());
         artifact.relative_path = Some(relative_path.to_owned());
 
@@ -670,6 +748,22 @@ fn identity_bearing_relative_paths_fail_before_public_projection() {
             "identity-bearing path reached the public assessment: {relative_path:?} => {result:?}"
         );
     }
+
+    let mut malformed_timestamp =
+        synthetic_artifact("unsafe-relative", "AppEnforce.log.20241340-296199");
+    malformed_timestamp.artifact.rotation = SccmRotation::Timestamped("20241340-296199".to_owned());
+    malformed_timestamp.path_fingerprint = Some("synthetic:app-enforce-current".to_owned());
+    malformed_timestamp.relative_path = Some(
+        "evidence/client-app-enforce/timestamped-20241340-296199/AppEnforce.log.20241340-296199"
+            .to_owned(),
+    );
+    assert_eq!(
+        assess_client_intake(&SccmClientIntakeBundle {
+            artifacts: vec![malformed_timestamp],
+        }),
+        Err(SccmClientIntakeError::InvalidRotation),
+        "malformed timestamp rotation must fail on its own metadata contract"
+    );
 }
 
 #[test]
@@ -768,12 +862,58 @@ fn unsafe_path_fingerprints_fail_before_public_projection() {
 }
 
 #[test]
+fn sha256_path_fingerprints_require_exactly_64_lowercase_hex_characters() {
+    for digest in ["a".repeat(16), "a".repeat(63), "a".repeat(65)] {
+        let mut artifact = synthetic_artifact("unsafe-fingerprint", "PolicyAgent.log");
+        artifact.path_fingerprint = Some(format!("sha256:{digest}"));
+
+        assert_eq!(
+            assess_client_intake(&SccmClientIntakeBundle {
+                artifacts: vec![artifact],
+            }),
+            Err(SccmClientIntakeError::InvalidPathFingerprint),
+            "non-SHA-256 digest length was accepted: {}",
+            digest.len()
+        );
+    }
+
+    let mut artifact = synthetic_artifact("approved-fingerprint", "PolicyAgent.log");
+    artifact.path_fingerprint = Some(format!("sha256:{}", "a".repeat(64)));
+    assert!(assess_client_intake(&SccmClientIntakeBundle {
+        artifacts: vec![artifact],
+    })
+    .is_ok());
+}
+
+#[test]
+fn numbered_synthetic_path_fingerprints_accept_only_a_short_numeric_suffix() {
+    let mut numbered = synthetic_artifact("approved-fingerprint", "AppEnforce.log.3");
+    numbered.artifact.rotation = SccmRotation::Numbered(3);
+    numbered.path_fingerprint = Some("synthetic:app-enforce-numbered-3".to_owned());
+    numbered.relative_path =
+        Some("evidence/client-app-enforce/numbered-3/AppEnforce.log.3".to_owned());
+    assert!(assess_client_intake(&SccmClientIntakeBundle {
+        artifacts: vec![numbered],
+    })
+    .is_ok());
+
+    let mut oversized = synthetic_artifact("unsafe-fingerprint", "AppEnforce.log");
+    oversized.path_fingerprint = Some("synthetic:app-enforce-numbered-123".to_owned());
+    assert_eq!(
+        assess_client_intake(&SccmClientIntakeBundle {
+            artifacts: vec![oversized],
+        }),
+        Err(SccmClientIntakeError::InvalidPathFingerprint)
+    );
+}
+
+#[test]
 fn approved_namespaced_path_fingerprints_remain_accepted() {
     let approved_fingerprints = [
         "synthetic-root-a-current",
         "synthetic:policy-current",
         "synthetic:path:client-root-a",
-        "sha256:0123456789abcdef",
+        "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
     ];
 
     for fingerprint in approved_fingerprints {
