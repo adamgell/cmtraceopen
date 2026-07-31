@@ -108,6 +108,26 @@ fn assessment(scenario: &str) -> cmtraceopen_parser::sccm::SccmClientIntakeAsses
     assess_client_intake(&load_bundle(scenario)).expect("fixture intake is valid")
 }
 
+fn synthetic_artifact(artifact_id: &str, display_name: &str) -> SccmClientIntakeArtifact {
+    SccmClientIntakeArtifact {
+        artifact: SccmArtifact {
+            artifact_id: artifact_id.to_owned(),
+            display_name: display_name.to_owned(),
+            original_path: None,
+            host: None,
+            role: SccmRole::Client,
+            configmgr_version: Some("5.00.TEST.0000".to_owned()),
+            collected_at_utc: Some("2026-07-30T00:00:00Z".to_owned()),
+            rotation: SccmRotation::Current,
+            coverage: SccmCoverageState::Captured,
+            encoding: Some("utf-8".to_owned()),
+        },
+        path_fingerprint: Some(format!("synthetic-{artifact_id}")),
+        relative_path: Some(format!("evidence/unknown/{display_name}")),
+        fragment_complete: Some(true),
+    }
+}
+
 #[test]
 fn complete_client_intake_covers_every_declared_group_without_a_diagnosis() {
     let declared = declared_client_source_groups();
@@ -247,28 +267,11 @@ fn basename_collisions_preserve_distinct_artifacts_and_bundle_paths() {
 
 #[test]
 fn unknown_and_lookalike_names_are_retained_as_unsupported_not_reclassified() {
-    let artifact = |artifact_id: &str, display_name: &str| SccmClientIntakeArtifact {
-        artifact: SccmArtifact {
-            artifact_id: artifact_id.to_owned(),
-            display_name: display_name.to_owned(),
-            original_path: None,
-            host: None,
-            role: SccmRole::Client,
-            configmgr_version: Some("5.00.TEST.0000".to_owned()),
-            collected_at_utc: Some("2026-07-30T00:00:00Z".to_owned()),
-            rotation: SccmRotation::Current,
-            coverage: SccmCoverageState::Captured,
-            encoding: Some("utf-8".to_owned()),
-        },
-        path_fingerprint: Some(format!("synthetic-{artifact_id}")),
-        relative_path: Some(format!("evidence/unknown/{display_name}")),
-        fragment_complete: Some(true),
-    };
     let bundle = SccmClientIntakeBundle {
         artifacts: vec![
-            artifact("custom", "CustomVendorHook.log"),
-            artifact("lookalike", "PolicyAgent.log.backup"),
-            artifact("unknown-lo", "CustomVendorHook.lo_"),
+            synthetic_artifact("custom", "CustomVendorHook.log"),
+            synthetic_artifact("lookalike", "PolicyAgent.log.backup"),
+            synthetic_artifact("unknown-lo", "CustomVendorHook.lo_"),
         ],
     };
     let intake = assess_client_intake(&bundle).expect("unknown intake");
@@ -283,6 +286,92 @@ fn unknown_and_lookalike_names_are_retained_as_unsupported_not_reclassified() {
         .expect("policy group")
         .fragments
         .is_empty());
+}
+
+#[test]
+fn malformed_rotation_and_public_provenance_values_fail_closed() {
+    let mut invalid_rotation = synthetic_artifact("invalid-rotation", "AppEnforce.log.2026-bad");
+    invalid_rotation.artifact.rotation = SccmRotation::Timestamped("2026-bad".to_owned());
+    assert!(assess_client_intake(&SccmClientIntakeBundle {
+        artifacts: vec![invalid_rotation],
+    })
+    .is_err());
+
+    let mut unsafe_basename =
+        synthetic_artifact("unsafe-basename", r"C:\Users\RealUser\PolicyAgent.log");
+    unsafe_basename.relative_path =
+        Some("evidence/unknown/unsafe-basename/PolicyAgent.log".to_owned());
+    assert!(assess_client_intake(&SccmClientIntakeBundle {
+        artifacts: vec![unsafe_basename],
+    })
+    .is_err());
+
+    let mut invalid_time = synthetic_artifact("invalid-time", "PolicyAgent.log");
+    invalid_time.artifact.collected_at_utc = Some(r"C:\Users\RealUser".to_owned());
+    invalid_time.relative_path = Some("evidence/client-policy-agent/PolicyAgent.log".to_owned());
+    assert!(assess_client_intake(&SccmClientIntakeBundle {
+        artifacts: vec![invalid_time],
+    })
+    .is_err());
+
+    let mut invalid_version = synthetic_artifact("invalid-version", "PolicyAgent.log");
+    invalid_version.artifact.configmgr_version = Some("5.00.TEST/C:\\RealUser".to_owned());
+    invalid_version.relative_path = Some("evidence/client-policy-agent/PolicyAgent.log".to_owned());
+    assert!(assess_client_intake(&SccmClientIntakeBundle {
+        artifacts: vec![invalid_version],
+    })
+    .is_err());
+}
+
+#[test]
+fn fragment_completeness_and_every_path_fingerprint_are_explicit_and_unambiguous() {
+    let mut missing_completeness = synthetic_artifact("missing-completeness", "PolicyAgent.log");
+    missing_completeness.relative_path =
+        Some("evidence/client-policy-agent/PolicyAgent.log".to_owned());
+    missing_completeness.fragment_complete = None;
+    assert!(assess_client_intake(&SccmClientIntakeBundle {
+        artifacts: vec![missing_completeness],
+    })
+    .is_err());
+
+    let mut invented_physical_state = synthetic_artifact("denied", "PolicyAgent.log");
+    invented_physical_state.artifact.coverage = SccmCoverageState::AccessDenied;
+    invented_physical_state.relative_path = None;
+    assert!(assess_client_intake(&SccmClientIntakeBundle {
+        artifacts: vec![invented_physical_state],
+    })
+    .is_err());
+
+    let mut first = synthetic_artifact("denied-one", "PolicyAgent.log");
+    first.artifact.coverage = SccmCoverageState::AccessDenied;
+    first.relative_path = None;
+    first.fragment_complete = Some(false);
+    let mut second = synthetic_artifact("denied-two", "CIAgent.log");
+    second.artifact.coverage = SccmCoverageState::AccessDenied;
+    second.relative_path = None;
+    second.fragment_complete = Some(false);
+    second.path_fingerprint = first.path_fingerprint.clone();
+    assert!(assess_client_intake(&SccmClientIntakeBundle {
+        artifacts: vec![first, second],
+    })
+    .is_err());
+}
+
+#[test]
+fn unsupported_physical_artifacts_retain_safe_provenance_without_raw_host_or_path() {
+    let mut artifact = synthetic_artifact("custom", "CustomVendorHook.log");
+    artifact.artifact.original_path = Some(r"C:\Users\RealUser\CustomVendorHook.log".to_owned());
+    artifact.artifact.host = Some("real-user-host.example".to_owned());
+    let intake = assess_client_intake(&SccmClientIntakeBundle {
+        artifacts: vec![artifact],
+    })
+    .expect("unknown physical artifact remains representable");
+    let serialized = serde_json::to_string(&intake).expect("intake JSON");
+
+    assert!(serialized.contains("synthetic-custom"));
+    assert!(serialized.contains("evidence/unknown/CustomVendorHook.log"));
+    assert!(!serialized.contains("RealUser"));
+    assert!(!serialized.contains("real-user-host"));
 }
 
 #[test]
