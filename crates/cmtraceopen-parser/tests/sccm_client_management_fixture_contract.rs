@@ -3414,3 +3414,78 @@ fn network_identifier_token_mutations_fail_closed() {
         "network-identifier token mutations were accepted: {accepted:?}"
     );
 }
+
+#[test]
+fn sid_authority_variant_mutations_fail_closed() {
+    let entra_sid = "s-1-12-1-1004336348-1177238915-682003330-512";
+    let capability_sid = "s-1-15-3-1024-2044478260";
+    let mut accepted = Vec::new();
+
+    let (observed_root, observed_manifest, observed_expected) =
+        load_contract("software-center-observed");
+
+    let mut sid_observation_id = observed_expected.clone();
+    sid_observation_id["sourceLocalObservations"][0]["observationId"] =
+        Value::String(entra_sid.to_owned());
+    if mutation_was_accepted(
+        "software-center-observed",
+        &observed_root,
+        &observed_manifest,
+        &sid_observation_id,
+    ) {
+        accepted.push("Entra-authority SID as a public observation id");
+    }
+
+    let mut sid_claim = observed_expected;
+    sid_claim["sourceLocalObservations"][0]["claim"] =
+        Value::String(format!("Observed records remain under {entra_sid} markers."));
+    if mutation_was_accepted(
+        "software-center-observed",
+        &observed_root,
+        &observed_manifest,
+        &sid_claim,
+    ) {
+        accepted.push("Entra-authority SID inside a public observation claim");
+    }
+
+    let (script_root, script_manifest, mut sid_transaction_id) = load_contract("script-success");
+    sid_transaction_id["transactions"][0]["transactionId"] =
+        Value::String(capability_sid.to_owned());
+    if mutation_was_accepted(
+        "script-success",
+        &script_root,
+        &script_manifest,
+        &sid_transaction_id,
+    ) {
+        accepted.push("capability-authority SID as a public transaction id");
+    }
+
+    let (deferred_root, deferred_manifest, mut sid_reason) =
+        load_contract("notification-deferred");
+    sid_reason["transactions"][0]["nextArtifact"]["reason"] = Value::String(format!(
+        "Collect the bounded continuation for {capability_sid} records."
+    ));
+    if mutation_was_accepted(
+        "notification-deferred",
+        &deferred_root,
+        &deferred_manifest,
+        &sid_reason,
+    ) {
+        accepted.push("capability-authority SID inside a next-artifact request reason");
+    }
+
+    assert!(
+        accepted.is_empty(),
+        "SID authority variant mutations were accepted: {accepted:?}"
+    );
+
+    // Boundary controls: bare s-1-5 carries no subauthority run and is not a SID.
+    assert!(
+        public_free_text_is_safe("Access remained denied for the s-1-5 authority marker."),
+        "bare s-1-5 free text must stay accepted"
+    );
+    assert!(
+        public_identifier_is_safe("software-center-observed-s-1-5"),
+        "bare s-1-5 identifier suffix must stay accepted"
+    );
+}
