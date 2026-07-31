@@ -205,6 +205,12 @@ pub struct RecordClassification {
     /// True when the record looks like platform-script execution but matched no
     /// signal rule. The reducer turns this into a coverage flag, never a state.
     pub execution_shaped_but_unmatched: bool,
+    /// False when the record belongs to another workload sharing the same log.
+    ///
+    /// The primary IME log carries every workload's records. An out-of-scope
+    /// record is not an *unclassified script record*; counting it as one would
+    /// make platform-script coverage look worse the busier the device is.
+    pub in_scope: bool,
 }
 
 impl RecordClassification {
@@ -218,6 +224,7 @@ impl RecordClassification {
             attempt: None,
             exit_token: None,
             execution_shaped_but_unmatched: false,
+            in_scope: false,
         }
     }
 
@@ -365,6 +372,7 @@ pub fn classify_record(
     if !component_is_in_scope(source_kind, component) {
         return result;
     }
+    result.in_scope = true;
 
     let (policy_id, run_id) = extract_ids(message);
     result.policy_id = policy_id;
@@ -688,6 +696,17 @@ mod tests {
         );
         assert_eq!(result.signal, ScriptSignal::Unclassified);
         assert_eq!(result.policy_id, None);
+    }
+
+    #[test]
+    fn out_of_scope_records_are_marked_out_of_scope() {
+        let result = classify_record(
+            ScriptSourceKind::IntuneManagementExtension,
+            Some("Win32App"),
+            &format!("Get policies for policy {POLICY}"),
+        );
+        assert!(!result.in_scope);
+        assert!(ime("Processing policy with id = 11111111-1111-4111-8111-111111111111").in_scope);
     }
 
     #[test]

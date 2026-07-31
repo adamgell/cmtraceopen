@@ -145,6 +145,13 @@ fn assert_scenario(scenario: &str) -> ScriptAnalysis {
         "{scenario}: unknown version flag"
     );
 
+    if let Some(count) = expected.get("unclassifiedRecords") {
+        assert_eq!(
+            value["coverage"]["unclassifiedRecords"], *count,
+            "{scenario}: unclassified record count"
+        );
+    }
+
     if let Some(rule) = expected.get("messageMustContain") {
         let id = rule["observationId"].as_str().expect("observationId");
         let text = rule["text"].as_str().expect("text");
@@ -342,6 +349,25 @@ fn a_record_without_an_offset_reports_no_normalized_utc() {
 #[test]
 fn a_retained_output_artifact_satisfies_the_output_evidence_request() {
     assert_scenario("nonzero-exit-with-retained-artifact");
+}
+
+/// The primary IME log is shared by every Intune workload. Another workload's
+/// records must neither create a script transaction nor make script coverage
+/// look worse -- otherwise a busy device reports worse coverage than a quiet one.
+#[test]
+fn other_workload_records_in_the_shared_ime_log_are_ignored() {
+    let analysis = assert_scenario("shared-ime-log-other-workload");
+    assert_eq!(analysis.transactions.len(), 1);
+    assert_eq!(analysis.coverage.unclassified_records, 0);
+}
+
+/// A completion record whose code could not be read leaves the transaction in
+/// `exitedNonZero`. Continuing to display an earlier attempt's `0` next to that
+/// state would be a contradiction the evidence does not support.
+#[test]
+fn a_later_completion_without_a_readable_code_clears_the_earlier_one() {
+    let analysis = assert_scenario("later-completion-without-readable-code");
+    assert!(analysis.transactions[0].exit_token.is_none());
 }
 
 // -- Cross-cutting contract -------------------------------------------------

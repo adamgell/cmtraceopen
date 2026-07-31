@@ -402,7 +402,11 @@ pub fn analyze_script_bundle(inputs: &[ScriptSourceInput]) -> ScriptAnalysis {
             if classification.execution_shaped_but_unmatched {
                 unknown_version_observed = true;
             }
-            if classification.signal == ScriptSignal::Unclassified
+            // Only in-scope records can be "unclassified script records". A
+            // Win32App line in the shared IME log is another workload's
+            // evidence, not a gap in this one's coverage.
+            if classification.in_scope
+                && classification.signal == ScriptSignal::Unclassified
                 && classification.policy_id.is_none()
             {
                 unclassified_records += 1;
@@ -611,10 +615,14 @@ fn reduce_transaction(
 
         // The exit token always reflects the most recent completion record, so
         // a retry that finally succeeds does not keep reporting the old code.
+        //
+        // This assigns unconditionally, including `None`. A later completion
+        // whose code we could not read leaves the transaction in
+        // `ExitedNonZero`; continuing to display the previous attempt's `0`
+        // alongside that state would be a contradiction the evidence does not
+        // support.
         if classification.signal == ScriptSignal::ExecutionCompleted {
-            if let Some(token) = &classification.exit_token {
-                exit_token = Some(token.clone());
-            }
+            exit_token = classification.exit_token.clone();
         }
     }
 
