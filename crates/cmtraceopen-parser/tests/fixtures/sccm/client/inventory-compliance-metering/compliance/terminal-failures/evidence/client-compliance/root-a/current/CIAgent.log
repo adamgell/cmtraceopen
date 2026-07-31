@@ -1,0 +1,1 @@
+<![LOG[SYNTHETIC FIXTURE Family=compliance CiId=CI-010 BaselineId=BASELINE-010 StateId=STATE-010 ResourceHandle=safe:resource:compliance-010 Phase=Evaluate Disposition=Failed Terminal=true ErrorCode=0x80004005]LOG]!><time="01:10:00.000+000" date="7-30-2026" component="CIAgent" context="" type="3" thread="325" file="">
