@@ -278,10 +278,23 @@ impl CaptureSetBuilder {
         }
 
         let Some(version) = schema_version else {
+            // `schema_version` is `None` for two different reasons, and a
+            // support engineer needs to tell them apart from the coverage
+            // detail alone: the field was absent, or it was present but too
+            // large for `u32`. Reporting "does not declare" for a header that
+            // plainly declares one sends the reader looking for the wrong thing.
+            let declared = u64_field(&header, "schemaVersion");
+            let detail = match declared {
+                Some(raw) => format!(
+                    "capture header declares `schemaVersion` {raw}, which is outside the \
+                     representable range for a schema version; records are preserved unreduced"
+                ),
+                None => "capture header does not declare `schemaVersion`".to_string(),
+            };
             self.push_coverage(
                 PortalCoverageStatus::UnsupportedSchemaVersion,
                 PortalCoverageScope::Capture,
-                "capture header does not declare `schemaVersion`".to_string(),
+                detail,
                 None,
                 None,
             );

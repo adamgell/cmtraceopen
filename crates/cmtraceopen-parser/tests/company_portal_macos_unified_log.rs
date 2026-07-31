@@ -1200,6 +1200,24 @@ fn out_of_range_schema_version_is_unsupported_not_wrapped() {
         "the schema id is valid, so this must not be an unknown-schema refusal"
     );
 
+    // The detail must say the version was out of range, not that none was
+    // declared: the header plainly declares one, and telling a support engineer
+    // otherwise sends them looking for the wrong thing.
+    let detail = capture
+        .coverage
+        .iter()
+        .find(|e| e.status == PortalCoverageStatus::UnsupportedSchemaVersion)
+        .map(|e| e.detail.clone())
+        .expect("an unsupported-version coverage entry");
+    assert!(
+        detail.contains("4294967297"),
+        "the declared value must be reported: {detail}"
+    );
+    assert!(
+        !detail.contains("does not declare"),
+        "the header does declare a version: {detail}"
+    );
+
     // The guard does not over-reject: the declared version is still readable.
     let supported_header = format!(
         r#"{{"schemaId":"{PORTAL_UNIFIED_LOG_SCHEMA_ID}","schemaVersion":{PORTAL_UNIFIED_LOG_SCHEMA_VERSION}}}"#
