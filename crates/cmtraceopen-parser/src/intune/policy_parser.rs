@@ -238,6 +238,7 @@ mod tests {
             timestamp_utc: None,
             message: msg.to_string(),
             component: Some("AppWorkload".to_string()),
+            thread: None,
         }
     }
 

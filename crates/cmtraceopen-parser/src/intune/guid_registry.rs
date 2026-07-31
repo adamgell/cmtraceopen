@@ -435,6 +435,7 @@ mod tests {
             timestamp_utc: None,
             message: msg.to_string(),
             component: None,
+            thread: None,
         }
     }
 

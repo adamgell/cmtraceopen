@@ -1696,6 +1696,7 @@ mod tests {
             timestamp_utc: Some(timestamp.to_string()),
             message: message.to_string(),
             component: None,
+            thread: None,
         }
     }
 
@@ -1708,6 +1709,7 @@ mod tests {
                 timestamp_utc: Some("2026-03-12T11:16:42.332Z".to_string()),
                 message: "Assignment evaluation failed for app with id: a1b2c3d4-e5f6-7890-abcd-ef1234567890".to_string(),
                 component: None,
+                thread: None,
             }],
             "C:/Logs/AppActionProcessor.log",
             &empty_registry(),
