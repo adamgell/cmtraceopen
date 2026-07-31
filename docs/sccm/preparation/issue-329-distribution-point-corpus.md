@@ -64,8 +64,9 @@ contain records for both. A physical site-server source is captured once;
 changing its path fingerprint or destination cannot duplicate it merely to
 attach another workflow-subject handle. Each admitted logical record must
 carry an exact DP handle from the bounded manifest topology.
-An explicit multi-DP handle array is parsed element by element; malformed,
-unknown, duplicate, or primary-omitting entries cannot be projected away.
+Every manifest carries an explicit DP handle array parsed element by element;
+missing, malformed, unknown, duplicate, or primary-omitting entries cannot be
+projected away.
 
 ## State and exact-key contract
 

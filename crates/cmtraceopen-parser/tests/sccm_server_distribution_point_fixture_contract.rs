@@ -375,28 +375,29 @@ fn validate_manifest(
         failures.push("manifest topology is not the exact synthetic LAB DP".to_owned());
     }
     let mut distribution_point_handles = Vec::new();
-    match manifest["topology"].get("distributionPointHandles") {
-        None => distribution_point_handles.push(EXACT_DP.to_owned()),
-        Some(value) => match value.as_array() {
-            Some(values) => {
-                for value in values {
-                    match value.as_str() {
-                        Some(handle)
-                            if !handle.is_empty() && matches!(handle, EXACT_DP | EXACT_DP_02) =>
-                        {
-                            distribution_point_handles.push(handle.to_owned());
-                        }
-                        Some(handle) => failures.push(format!(
-                            "distributionPointHandles contains unknown handle {handle}"
-                        )),
-                        None => failures.push(
-                            "distributionPointHandles entries must be nonempty strings".to_owned(),
-                        ),
+    match required_array(
+        &manifest["topology"],
+        "distributionPointHandles",
+        "topology",
+    ) {
+        Ok(values) => {
+            for value in values {
+                match value.as_str() {
+                    Some(handle)
+                        if !handle.is_empty() && matches!(handle, EXACT_DP | EXACT_DP_02) =>
+                    {
+                        distribution_point_handles.push(handle.to_owned());
                     }
+                    Some(handle) => failures.push(format!(
+                        "distributionPointHandles contains unknown handle {handle}"
+                    )),
+                    None => failures.push(
+                        "distributionPointHandles entries must be nonempty strings".to_owned(),
+                    ),
                 }
             }
-            None => failures.push("distributionPointHandles must be an array".to_owned()),
-        },
+        }
+        Err(error) => failures.push(error),
     }
     let original_handle_order = distribution_point_handles.clone();
     distribution_point_handles.sort();
@@ -2318,6 +2319,15 @@ fn distribution_point_handles_are_typed_known_unique_and_complete() {
     missing_primary["topology"]["distributionPointHandles"] = json!(["safe:dp:lab-dp-02"]);
     if mutation_was_accepted("healthy-package", &missing_primary, &healthy_expected) {
         accepted.push("distribution-point topology omitted its primary handle");
+    }
+
+    let mut missing_handle_array = healthy_manifest.clone();
+    missing_handle_array["topology"]
+        .as_object_mut()
+        .expect("topology is an object")
+        .remove("distributionPointHandles");
+    if mutation_was_accepted("healthy-package", &missing_handle_array, &healthy_expected) {
+        accepted.push("distribution-point topology omitted its exact handle array");
     }
 
     assert!(

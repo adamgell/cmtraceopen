@@ -3,7 +3,7 @@
   "proposalOnly": true,
   "syntheticFixture": true,
   "bundle": {"bundleRole": "server", "workflow": "distributionPoint", "capturedUtc": "2026-07-30T12:30:00Z"},
-  "topology": {"siteCode": "LAB", "distributionPointHandle": "safe:dp:lab-dp-01", "rolesObserved": ["distributionPoint", "siteServer"]},
+  "topology": {"siteCode": "LAB", "distributionPointHandle": "safe:dp:lab-dp-01", "distributionPointHandles": ["safe:dp:lab-dp-01"], "rolesObserved": ["distributionPoint", "siteServer"]},
   "artifacts": [
     {
       "artifactId": "dp-distribution-failure-01-distmgr",

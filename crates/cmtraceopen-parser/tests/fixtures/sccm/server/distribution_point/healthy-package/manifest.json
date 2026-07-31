@@ -10,6 +10,7 @@
   "topology": {
     "siteCode": "LAB",
     "distributionPointHandle": "safe:dp:lab-dp-01",
+    "distributionPointHandles": ["safe:dp:lab-dp-01"],
     "rolesObserved": ["distributionPoint", "siteServer"]
   },
   "artifacts": [
