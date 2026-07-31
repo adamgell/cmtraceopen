@@ -1534,6 +1534,43 @@ fn schema_failures(scenario: &str, manifest: &Value, expected: &Value) -> Vec<St
                 );
             }
         }
+        if transaction["state"] == "failed" {
+            let failure_sequence_is_exact = match scenario {
+                "provider-authz-denied" | "admin-service-auth-failure" => {
+                    phase_dispositions
+                        == [
+                            ("receive", "succeeded", false),
+                            ("authenticateOrAuthorize", "failed", false),
+                            ("recordOutcome", "failed", true),
+                        ]
+                }
+                "provider-query-failure" => {
+                    phase_dispositions
+                        == [
+                            ("receive", "succeeded", false),
+                            ("authenticateOrAuthorize", "succeeded", false),
+                            ("executeProviderOperation", "failed", false),
+                            ("recordOutcome", "failed", true),
+                        ]
+                }
+                "admin-service-backend-failure" => {
+                    phase_dispositions
+                        == [
+                            ("receive", "succeeded", false),
+                            ("authenticateOrAuthorize", "succeeded", false),
+                            ("route", "succeeded", false),
+                            ("executeBackendOperation", "failed", false),
+                            ("recordOutcome", "failed", true),
+                        ]
+                }
+                _ => false,
+            };
+            if !failure_sequence_is_exact {
+                failures.push(
+                    "phase-specific failure omits or reorders its exact failed phase".to_owned(),
+                );
+            }
+        }
     }
     let mut sorted_transaction_ids = transaction_ids.clone();
     sorted_transaction_ids.sort_unstable();
