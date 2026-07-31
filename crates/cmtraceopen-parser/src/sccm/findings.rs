@@ -819,7 +819,14 @@ fn reason_scope_is_within_catalog_artifact(
         return false;
     }
 
-    request_clauses(reason).all(|clause| {
+    let clauses = request_clauses(reason).collect::<Vec<_>>();
+    let has_collection_directive = clauses.iter().any(|clause| {
+        tokenize_request_reason(clause)
+            .iter()
+            .any(|token| is_collection_action(token.text))
+    });
+
+    clauses.into_iter().all(|clause| {
         let tokens = tokenize_request_reason(clause);
         let identity_ranges = exact_collectable_identity_ranges(clause, authorization);
         let is_confirmation = tokens.first().is_some_and(|token| token.text == "confirm");
@@ -830,6 +837,12 @@ fn reason_scope_is_within_catalog_artifact(
             confirmation_clause_is_non_authorizing(&tokens, &identity_ranges)
         } else if contains_collection_directive {
             collection_clause_is_catalog_bounded(clause, &tokens, &identity_ranges)
+        } else if has_collection_directive {
+            // An authorized action cannot lend its identity to another
+            // strong-punctuation clause. Keep evidence context attached as a
+            // bounded narrative suffix instead of treating a second command
+            // as non-authorizing prose.
+            false
         } else {
             narrative_clause_has_no_collection_scope(&tokens)
         }
@@ -1080,7 +1093,7 @@ fn collection_action_has_exact_catalog_target(
     {
         trailing.next();
     }
-    let trailing = trailing.collect::<Vec<_>>();
+    let trailing = trailing.copied().collect::<Vec<_>>();
     if trailing.is_empty() {
         return true;
     }
@@ -1092,6 +1105,9 @@ fn collection_action_has_exact_catalog_target(
         return true;
     }
     if !is_collection_narrative_introducer(trailing[0].text) {
+        return false;
+    }
+    if !narrative_tokens_are_non_authorizing(clause, &trailing, identity_ranges) {
         return false;
     }
 
@@ -1257,6 +1273,99 @@ fn narrative_clause_has_no_collection_scope(tokens: &[RequestReasonToken<'_>]) -
                     "file" | "files" | "log" | "logs" | "record" | "records"
                 ))
     })
+}
+
+fn narrative_tokens_are_non_authorizing(
+    clause: &str,
+    tokens: &[RequestReasonToken<'_>],
+    identity_ranges: &[(usize, usize)],
+) -> bool {
+    narrative_clause_has_no_collection_scope(tokens)
+        && !has_unbound_dotted_target(clause, tokens, identity_ranges)
+        && !tokens
+            .iter()
+            .any(|token| is_collection_scope_nominal(token.text))
+        && !has_unbound_passive_artifact_request(tokens, identity_ranges)
+}
+
+fn is_collection_scope_nominal(token: &str) -> bool {
+    matches!(
+        token,
+        "collection" | "collections" | "inclusion" | "inclusions" | "traversal" | "traversals"
+    )
+}
+
+fn has_unbound_passive_artifact_request(
+    tokens: &[RequestReasonToken<'_>],
+    identity_ranges: &[(usize, usize)],
+) -> bool {
+    tokens.iter().enumerate().any(|(index, token)| {
+        is_passive_auxiliary(token.text)
+            && tokens.get(index + 1).is_some()
+            && !passive_subject_is_evidence(tokens, index + 1, identity_ranges)
+    })
+}
+
+fn passive_subject_is_evidence(
+    tokens: &[RequestReasonToken<'_>],
+    predicate_index: usize,
+    identity_ranges: &[(usize, usize)],
+) -> bool {
+    let auxiliary_index = tokens[..predicate_index]
+        .iter()
+        .rposition(|token| is_passive_auxiliary(token.text));
+    let Some(auxiliary_index) = auxiliary_index else {
+        return false;
+    };
+    let subject_start = tokens[..auxiliary_index]
+        .iter()
+        .rposition(|token| {
+            is_collection_narrative_introducer(token.text) || is_action_coordinator(token.text)
+        })
+        .map_or(0, |index| index + 1);
+
+    tokens[subject_start..auxiliary_index].iter().any(|token| {
+        token_is_covered_by_identity(token, identity_ranges)
+            || is_evidence_narrative_subject(token.text)
+    })
+}
+
+fn is_passive_auxiliary(token: &str) -> bool {
+    matches!(
+        token,
+        "are"
+            | "be"
+            | "been"
+            | "being"
+            | "is"
+            | "must"
+            | "need"
+            | "needs"
+            | "should"
+            | "was"
+            | "were"
+    )
+}
+
+fn is_evidence_narrative_subject(token: &str) -> bool {
+    matches!(
+        token,
+        "access"
+            | "assignment"
+            | "coverage"
+            | "error"
+            | "evaluation"
+            | "evidence"
+            | "failure"
+            | "finding"
+            | "outcome"
+            | "policy"
+            | "request"
+            | "response"
+            | "source"
+            | "state"
+            | "status"
+    )
 }
 
 fn is_wide_scope_token(token: &str) -> bool {

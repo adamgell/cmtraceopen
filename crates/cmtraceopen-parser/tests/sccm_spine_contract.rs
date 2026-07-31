@@ -332,10 +332,20 @@ const REVIEW_UNBOUND_COLLECTION_TARGET_REASONS: [&str; 10] = [
     "Collect PolicyAgent.log and retrieve credentials.",
 ];
 
-const REVIEW_SAFE_COLLECTION_NARRATIVE_REASONS: [&str; 3] = [
+const REVIEW_SAFE_COLLECTION_NARRATIVE_REASONS: [&str; 4] = [
     "Collect PolicyAgent.log because the policy evaluation reported an error.",
     "Collect PolicyAgent.log for review of the reported assignment error.",
     "Collect PolicyAgent.log after the reported policy error.",
+    "Policy evidence was not captured.",
+];
+
+const REVIEW_NON_AUTHORIZING_COLLECTION_LANGUAGE_REASONS: [&str; 6] = [
+    "Collect PolicyAgent.log; retrieve secrets.txt.",
+    "Collect PolicyAgent.log. Fetch credentials.",
+    "Collect PolicyAgent.log; preserve secrets.txt.",
+    "Collect PolicyAgent.log for collection of credentials.",
+    "Collect PolicyAgent.log because secrets must be copied.",
+    "Collect PolicyAgent.log after credentials were archived.",
 ];
 
 const REVIEW_EXACT_MP_ARTIFACT_REQUESTS: [(&str, &str); 5] = [
@@ -1951,6 +1961,48 @@ fn finding_review_safe_collection_narratives_pass_at_every_public_boundary() {
     assert!(
         rejected.is_empty(),
         "rejected safe collection narratives: {rejected:#?}"
+    );
+}
+
+#[test]
+fn finding_review_non_authorizing_collection_language_fails_at_every_public_boundary() {
+    let canonical = finding_with_gap_and_request("review-non-authorizing-language-parity");
+    let mut accepted = Vec::new();
+
+    for reason in REVIEW_NON_AUTHORIZING_COLLECTION_LANGUAGE_REASONS {
+        let builder = SccmFindingBuilder::new("review-non-authorizing-language-builder")
+            .class(SccmFindingClass::Symptom)
+            .phase(SccmPhase::Policy)
+            .role(SccmRole::Client)
+            .severity(Severity::Warning)
+            .confidence(SccmConfidence::Low)
+            .evidence(vec![finding_evidence_ref("artifact-a", "entry-a")])
+            .next_artifact(finding_request("policyAgent", SccmRole::Client, reason))
+            .build();
+        if builder.err() != Some(SccmFindingValidationError::InvalidArtifactRequestReason) {
+            accepted.push(format!("builder: {reason}"));
+        }
+
+        let mut direct = canonical.clone();
+        direct.next_artifacts[0].reason = reason.into();
+        if direct.validate().err() != Some(SccmFindingValidationError::InvalidArtifactRequestReason)
+        {
+            accepted.push(format!("direct validate: {reason}"));
+        }
+        if serde_json::to_value(&direct).is_ok() {
+            accepted.push(format!("serializer: {reason}"));
+        }
+
+        let mut json = serde_json::to_value(&canonical).unwrap();
+        json["nextArtifacts"][0]["reason"] = serde_json::json!(reason);
+        if serde_json::from_value::<SccmFinding>(json).is_ok() {
+            accepted.push(format!("deserializer: {reason}"));
+        }
+    }
+
+    assert!(
+        accepted.is_empty(),
+        "accepted non-authorizing collection language: {accepted:#?}"
     );
 }
 
