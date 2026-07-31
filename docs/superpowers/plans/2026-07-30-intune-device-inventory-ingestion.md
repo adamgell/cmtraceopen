@@ -39,10 +39,7 @@
 
 ### Tests and fixtures
 
-- Create `crates/cmtraceopen-parser/tests/intune_device_inventory.rs`: pure public-API and collision contract.
-- Create `crates/cmtraceopen-parser/tests/fixtures/intune/device/windows/inventory/harvester.log`.
-- Create `crates/cmtraceopen-parser/tests/fixtures/intune/device/windows/inventory/InventoryAdaptor.log_`.
-- Create `crates/cmtraceopen-parser/tests/fixtures/intune/device/windows/inventory/rotation-failure.log`.
+- Create `crates/cmtraceopen-parser/tests/intune_device_inventory.rs`: pure public-API, dispatcher, and collision contract using inline synthetic samples.
 - Modify `src-tauri/tests/parser_regression_corpus.rs`: application integration snapshot.
 - Modify `src-tauri/tests/parser_supported_formats.rs`: supported-format contract.
 - Modify `src/types/log.ts`: serialized parser unions.
@@ -91,21 +88,23 @@ All three use `LogFormat::Timestamped`. Harvester selects
 
 ---
 
-### Task 1: Add the sanitized public parser contract
+### Task 1: Implement the pure Device Inventory parser with a green contract
 
 **Files:**
 - Create: `crates/cmtraceopen-parser/tests/intune_device_inventory.rs`
-- Create: `crates/cmtraceopen-parser/tests/fixtures/intune/device/windows/inventory/harvester.log`
-- Create: `crates/cmtraceopen-parser/tests/fixtures/intune/device/windows/inventory/InventoryAdaptor.log_`
-- Create: `crates/cmtraceopen-parser/tests/fixtures/intune/device/windows/inventory/rotation-failure.log`
+- Create: `crates/cmtraceopen-parser/src/intune/device/mod.rs`
+- Create: `crates/cmtraceopen-parser/src/intune/device/windows/mod.rs`
+- Create: `crates/cmtraceopen-parser/src/intune/device/windows/inventory.rs`
+- Modify: `crates/cmtraceopen-parser/src/intune/mod.rs`
 
 **Interfaces:**
-- Consumes: the planned `intune::device::windows::inventory` API.
-- Produces: a failing executable contract for all three dialects and collisions.
+- Consumes: `LogEntry`, `LogFormat`, `Severity`, `chrono`, and `regex`.
+- Produces: the green public `DeviceInventoryLogDialect`, `detect_dialect`,
+  and `parse_content` contract for all three dialects.
 
-- [ ] **Step 1: Add minimal synthetic fixtures**
+- [ ] **Step 1: Write failing public-API tests with inline synthetic samples**
 
-Use these shapes, with synthetic identifiers only:
+Define these minimal synthetic strings directly in the test file:
 
 ```text
 7/30/2026 6:00:53 AM [Information] Completed harvesting signed policies: 118 succeeded, 0 failed to collect.
@@ -125,33 +124,31 @@ System.IO.IOException: The process cannot access the file.
    at Synthetic.Inventory.Rotate()
 ```
 
-- [ ] **Step 2: Write the failing public-API tests**
+- [ ] **Step 2: Assert the direct pure-module contract**
 
-The test must assert:
+Call the planned public module directly:
 
 ```rust
-let (result, selection) = cmtraceopen_parser::parser::parse_content(
+let (entries, parse_errors) =
+    cmtraceopen_parser::intune::device::windows::inventory::parse_content(
     HARVESTER,
-    r"C:\Program Files\Microsoft Device Inventory Agent\Logs\IntuneInventoryHarvesterLog.log",
-    HARVESTER.len() as u64,
+    "IntuneInventoryHarvesterLog.log",
+    DeviceInventoryLogDialect::Harvester,
 );
-assert_eq!(selection.parser, ParserKind::IntuneDeviceInventory);
+assert_eq!(parse_errors, 0);
+assert_eq!(entries[0].severity, Severity::Info);
 assert_eq!(
-    selection.specialization,
-    Some(ParserSpecialization::IntuneDeviceInventoryHarvester)
-);
-assert_eq!(result.entries[0].severity, Severity::Info);
-assert_eq!(
-    result.entries[0].message,
+    entries[0].message,
     "Completed harvesting signed policies: 118 succeeded, 0 failed to collect."
 );
-assert_eq!(result.entries[1].severity, Severity::Warning);
-assert_eq!(result.entries[2].severity, Severity::Error);
+assert_eq!(entries[1].severity, Severity::Warning);
+assert_eq!(entries[2].severity, Severity::Error);
 ```
 
 Add equivalent assertions for Adaptor PID `8604`, two logical entries, embedded
-JSON, rotation-failure stack framing, and path-only/generic-timestamp
-collisions.
+JSON, rotation-failure stack framing, dialect detection, path-only rejection,
+unknown levels, CRLF normalization, orphan continuations, and truncated final
+records.
 
 - [ ] **Step 3: Run the focused test and verify RED**
 
@@ -161,31 +158,9 @@ Run:
 cargo test --locked -p cmtraceopen-parser --test intune_device_inventory
 ```
 
-Expected: compilation fails because `intune::device` and the new parser
-variants do not exist.
+Expected: compilation fails because `intune::device` does not exist.
 
-- [ ] **Step 4: Commit the failing contract**
-
-```bash
-git add -f crates/cmtraceopen-parser/tests/intune_device_inventory.rs crates/cmtraceopen-parser/tests/fixtures/intune/device/windows/inventory
-git commit -m "test(intune): define Device Inventory log contracts"
-```
-
----
-
-### Task 2: Implement the pure Device Inventory parser
-
-**Files:**
-- Create: `crates/cmtraceopen-parser/src/intune/device/mod.rs`
-- Create: `crates/cmtraceopen-parser/src/intune/device/windows/mod.rs`
-- Create: `crates/cmtraceopen-parser/src/intune/device/windows/inventory.rs`
-- Modify: `crates/cmtraceopen-parser/src/intune/mod.rs`
-
-**Interfaces:**
-- Consumes: `LogEntry`, `LogFormat`, `Severity`, `chrono`, and `regex`.
-- Produces: `DeviceInventoryLogDialect`, `detect_dialect`, and `parse_content`.
-
-- [ ] **Step 1: Export the canonical hierarchy**
+- [ ] **Step 4: Export the canonical hierarchy**
 
 ```rust
 // intune/mod.rs
@@ -198,7 +173,7 @@ pub mod windows;
 pub mod inventory;
 ```
 
-- [ ] **Step 2: Implement strict dialect signatures**
+- [ ] **Step 5: Implement strict signatures and parsing**
 
 Use lazily initialized regexes with these anchors:
 
@@ -208,87 +183,52 @@ r"^\[(?P<timestamp>[A-Z][a-z]{2} [A-Z][a-z]{2} +\d{1,2} \d{2}:\d{2}:\d{2} \d{4})
 r"^(?P<timestamp>\d{4}-\d{2}-\d{2}T[^ ]+) (?P<message>.*)$"
 ```
 
-`detect_dialect` requires two positive Harvester or Adaptor headers unless a
-matching Device Inventory filename supplies the path hint. Rotation Failure
-requires an ISO header plus `IOException`, `Exception`, `rotate`, or
-`rotation` evidence. A path hint without matching content returns `None`.
+Parse Harvester dates with `%m/%d/%Y %I:%M:%S %p` and map Information,
+Warning, and Error directly to `Severity::Info`, `Severity::Warning`, and
+`Severity::Error`. Implement Adaptor PID extraction, JSON continuation
+framing, rotation-failure exception framing, orphan preservation, and
+`detect_dialect`. Require two Harvester/Adaptor headers unless a matching
+filename provides the path hint; path alone never matches. Keep the parser
+pure and set every emitted entry's format to `LogFormat::Timestamped`.
 
-- [ ] **Step 3: Implement Harvester parsing**
-
-Map levels exactly:
-
-```rust
-let severity = match level {
-    "Information" => Severity::Info,
-    "Warning" => Severity::Warning,
-    "Error" => Severity::Error,
-    _ => unreachable!("regex restricts producer levels"),
-};
-```
-
-Parse `%m/%d/%Y %I:%M:%S %p`, strip only the first level token, preserve a
-secondary `[Registry]` token, and emit malformed lines as plain entries while
-incrementing `parse_errors`.
-
-- [ ] **Step 4: Implement logical framing**
-
-For Adaptor, start a record on the bracketed timestamp/PID header and append
-non-header lines with `\n`. For Rotation Failure, start on a valid ISO header
-and append exception/stack lines. Emit an orphan continuation as a preserved
-entry with one parse error.
-
-Set:
-
-```rust
-entry.thread = Some(pid);
-entry.thread_display = Some(pid.to_string());
-entry.format = LogFormat::Timestamped;
-entry.line_number = header_line_number;
-```
-
-Use Info as the Adaptor default. Mark a Rotation Failure record Error only when
-the framed record contains explicit rotation failure or exception evidence.
-
-- [ ] **Step 5: Add module-local unit tests**
-
-Cover unknown level rejection, one-line samples, CRLF normalization, orphan
-continuations, and truncated final records directly in `inventory.rs`.
-
-- [ ] **Step 6: Run the module tests**
+- [ ] **Step 6: Run the focused test and verify GREEN**
 
 ```bash
-cargo test --locked -p cmtraceopen-parser --lib intune::device::windows::inventory
+cargo test --locked -p cmtraceopen-parser --test intune_device_inventory
 ```
 
-Expected: module-local tests pass; the public integration test still fails
-because dispatcher variants are absent.
+Expected: every direct public-module test passes with pristine output.
 
-- [ ] **Step 7: Commit the pure module**
+- [ ] **Step 7: Commit the green task**
 
 ```bash
-git add crates/cmtraceopen-parser/src/intune
+git add crates/cmtraceopen-parser/src/intune crates/cmtraceopen-parser/tests/intune_device_inventory.rs
 git commit -m "feat(intune): parse Device Inventory log dialects"
 ```
 
 ---
 
-### Task 3: Integrate parser selection and serialization
+### Task 2: Integrate parser selection and serialization
 
 **Files:**
 - Modify: `crates/cmtraceopen-parser/src/models/log_entry.rs`
 - Modify: `crates/cmtraceopen-parser/src/parser/detect.rs`
 - Modify: `crates/cmtraceopen-parser/src/parser/mod.rs`
 - Modify: `src/types/log.ts`
+- Modify: `crates/cmtraceopen-parser/tests/intune_device_inventory.rs`
 
 **Interfaces:**
-- Consumes: Task 2's dialect detector and parser.
+- Consumes: Task 1's dialect detector and parser.
 - Produces: stable dedicated parser-selection metadata in Rust and TypeScript.
 
 - [ ] **Step 1: Add the serialized variants**
 
 Add `IntuneDeviceInventory` to `ParserKind` and `ParserImplementation`. Add the
 three specialization variants exactly as declared in the Interfaces section.
-Mirror their camelCase names in `src/types/log.ts`.
+Mirror their camelCase names in `src/types/log.ts`. Extend
+`intune_device_inventory.rs` with dispatcher assertions for parser,
+implementation, specialization, compatibility format, record framing, and
+generic timestamp/path-only collisions.
 
 - [ ] **Step 2: Add a resolved-parser constructor**
 
@@ -361,13 +301,13 @@ Expected: both commands pass.
 - [ ] **Step 7: Commit dispatcher integration**
 
 ```bash
-git add crates/cmtraceopen-parser/src/models/log_entry.rs crates/cmtraceopen-parser/src/parser/detect.rs crates/cmtraceopen-parser/src/parser/mod.rs src/types/log.ts
+git add crates/cmtraceopen-parser/src/models/log_entry.rs crates/cmtraceopen-parser/src/parser/detect.rs crates/cmtraceopen-parser/src/parser/mod.rs src/types/log.ts crates/cmtraceopen-parser/tests/intune_device_inventory.rs
 git commit -m "feat(parser): detect Device Inventory formats"
 ```
 
 ---
 
-### Task 4: Add application parser regression coverage
+### Task 3: Add application parser regression coverage
 
 **Files:**
 - Create: `src-tauri/tests/corpus/intune_device_inventory/clean/IntuneInventoryHarvesterLog.log`
@@ -376,7 +316,7 @@ git commit -m "feat(parser): detect Device Inventory formats"
 - Modify: `src-tauri/tests/parser_supported_formats.rs`
 
 **Interfaces:**
-- Consumes: dedicated parser selections from Task 3.
+- Consumes: dedicated parser selections from Task 2.
 - Produces: app-level regression snapshots and supported-format enumeration.
 
 - [ ] **Step 1: Add synthetic app fixtures**
@@ -408,7 +348,7 @@ git commit -m "test(parser): cover Device Inventory formats"
 
 ---
 
-### Task 5: Add Device Inventory known sources
+### Task 4: Add Device Inventory known sources
 
 **Files:**
 - Modify: `src-tauri/src/commands/known_sources.rs`
@@ -465,7 +405,7 @@ git commit -m "feat(intune): add Device Inventory known sources"
 
 ---
 
-### Task 6: Register the `.log_` Windows association
+### Task 5: Register the `.log_` Windows association
 
 **Files:**
 - Modify: `src-tauri/src/commands/file_association.rs`
@@ -507,7 +447,7 @@ git commit -m "feat(windows): associate Device Inventory log rotations"
 
 ---
 
-### Task 7: Preserve logical records during tailing
+### Task 6: Preserve logical records during tailing
 
 **Files:**
 - Modify: `src-tauri/src/watcher/tail.rs`
@@ -564,7 +504,7 @@ git commit -m "fix(tail): preserve Device Inventory logical records"
 
 ---
 
-### Task 8: Complete documentation and verification
+### Task 7: Complete documentation and verification
 
 **Files:**
 - Modify: `crates/cmtraceopen-parser/README.md`
