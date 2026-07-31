@@ -10,7 +10,7 @@
       "confidence": "high",
       "exitDecimal": null,
       "exitRaw": null,
-      "nextEvidenceRequest": "retained script output artifact for this policy and run",
+      "nextEvidenceRequest": "AgentExecutor.log context around the failed launch, and the IntuneManagementExtension.log record for this policy",
       "bitness": "unknown"
     }
   ],

@@ -1,5 +1,5 @@
 {
-  "description": "A nonzero exit with a retained error artifact: the outcome is reported, not diagnosed.",
+  "description": "A nonzero exit whose output was captured by an in-log record: the outcome is reported, not diagnosed. The retained artifact form is covered by nonzero-exit-with-retained-artifact.",
   "artifacts": [
     {
       "artifactId": "agent",

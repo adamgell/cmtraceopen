@@ -247,7 +247,15 @@ fn parse_exit_token(raw: &str) -> ScriptExitToken {
         let value = digits.parse::<i64>().ok();
         let signed = value.map(|v| if negative { -v } else { v });
         // Render the hex form for the unsigned 32-bit view operators expect.
-        let hex_text = signed.map(|v| format!("0x{:08X}", v as u32));
+        // A value outside that view gets no hex form at all: truncating it
+        // would print a different number than the log recorded.
+        let hex_text = signed
+            .and_then(|v| {
+                u32::try_from(v)
+                    .ok()
+                    .or_else(|| i32::try_from(v).ok().map(|v| v as u32))
+            })
+            .map(|v| format!("0x{v:08X}"));
         (signed, hex_text)
     };
 
@@ -317,7 +325,32 @@ fn extract_ids(message: &str) -> (Option<String>, Option<String>) {
 /// `source_kind` gates which vocabulary applies: an `AgentExecutor` phrase in
 /// the primary IME log is not treated as an execution record, because the two
 /// files describe different halves of the lifecycle.
-pub fn classify_record(source_kind: ScriptSourceKind, message: &str) -> RecordClassification {
+/// Components whose records belong to the platform-script workload.
+///
+/// The primary IME log is shared by every workload. `Win32App` confirms that a
+/// *file* is the IME log, but a `Win32App` record saying "Get policies" is app
+/// deployment, not a platform script -- classifying it here would invent a
+/// script transaction out of another workload's evidence.
+const SCRIPT_SCOPE_COMPONENTS: &[&str] = &["PowerShell", "IntuneManagementExtension"];
+
+fn component_is_in_scope(source_kind: ScriptSourceKind, component: Option<&str>) -> bool {
+    let expected: &[&str] = match source_kind {
+        ScriptSourceKind::IntuneManagementExtension => SCRIPT_SCOPE_COMPONENTS,
+        ScriptSourceKind::AgentExecutor => &["AgentExecutor"],
+        _ => return false,
+    };
+    component.is_some_and(|component| {
+        expected
+            .iter()
+            .any(|candidate| candidate.eq_ignore_ascii_case(component))
+    })
+}
+
+pub fn classify_record(
+    source_kind: ScriptSourceKind,
+    component: Option<&str>,
+    message: &str,
+) -> RecordClassification {
     let mut result = RecordClassification::empty();
 
     // Identifiers are only extracted from a *confirmed* platform-script source.
@@ -329,10 +362,7 @@ pub fn classify_record(source_kind: ScriptSourceKind, message: &str) -> RecordCl
     // the other direction: it is remediation evidence, and until #360 defines
     // the handoff, letting it carry a key would attach remediation records to a
     // platform-script transaction.
-    if !matches!(
-        source_kind,
-        ScriptSourceKind::AgentExecutor | ScriptSourceKind::IntuneManagementExtension
-    ) {
+    if !component_is_in_scope(source_kind, component) {
         return result;
     }
 
@@ -445,11 +475,19 @@ mod tests {
     const RUN: &str = "66666666-7777-8888-9999-000000000000";
 
     fn agent(message: &str) -> RecordClassification {
-        classify_record(ScriptSourceKind::AgentExecutor, message)
+        classify_record(
+            ScriptSourceKind::AgentExecutor,
+            Some("AgentExecutor"),
+            message,
+        )
     }
 
     fn ime(message: &str) -> RecordClassification {
-        classify_record(ScriptSourceKind::IntuneManagementExtension, message)
+        classify_record(
+            ScriptSourceKind::IntuneManagementExtension,
+            Some("PowerShell"),
+            message,
+        )
     }
 
     #[test]
@@ -587,6 +625,7 @@ mod tests {
     fn health_scripts_records_never_classify_as_a_script_signal() {
         let result = classify_record(
             ScriptSourceKind::HealthScripts,
+            Some("HealthScripts"),
             "Powershell execution is done, exitCode = 1",
         );
         assert_eq!(result.signal, ScriptSignal::Unclassified);
@@ -620,6 +659,7 @@ mod tests {
         // GUID could mint a transaction.
         let result = classify_record(
             ScriptSourceKind::Unknown,
+            Some("AgentExecutor"),
             &format!(r"Powershell script is: C:\\Policies\\Scripts\\{POLICY}_{RUN}.ps1"),
         );
         assert_eq!(result.policy_id, None);
@@ -631,9 +671,45 @@ mod tests {
     fn health_scripts_records_carry_no_key_into_a_script_transaction() {
         let result = classify_record(
             ScriptSourceKind::HealthScripts,
+            Some("HealthScripts"),
             &format!("Remediation for PolicyId = {POLICY}"),
         );
         assert_eq!(result.policy_id, None);
+    }
+
+    #[test]
+    fn a_win32app_record_in_the_ime_log_is_not_a_platform_script_signal() {
+        // The primary IME log is shared by every workload. Only script-scope
+        // components may produce a script signal or a policy key.
+        let result = classify_record(
+            ScriptSourceKind::IntuneManagementExtension,
+            Some("Win32App"),
+            &format!("Get policies for policy {POLICY}"),
+        );
+        assert_eq!(result.signal, ScriptSignal::Unclassified);
+        assert_eq!(result.policy_id, None);
+    }
+
+    #[test]
+    fn a_record_without_a_component_cannot_produce_a_signal() {
+        let result = classify_record(
+            ScriptSourceKind::IntuneManagementExtension,
+            None,
+            &format!("Processing policy with id = {POLICY}"),
+        );
+        assert_eq!(result.signal, ScriptSignal::Unclassified);
+        assert_eq!(result.policy_id, None);
+    }
+
+    #[test]
+    fn out_of_range_exit_codes_get_no_truncated_hex_view() {
+        // 4294967297 truncates to 1 in a u32 cast; printing 0x00000001 would
+        // report a different number than the log recorded.
+        let result = agent("Powershell execution is done, exitCode = 4294967297");
+        let token = result.exit_token.unwrap();
+        assert_eq!(token.decimal, Some(4_294_967_297));
+        assert_eq!(token.hex_text, None);
+        assert_eq!(token.raw_text, "4294967297");
     }
 
     #[test]

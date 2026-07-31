@@ -23,6 +23,14 @@ pub struct ImeLine {
     /// in for display, but it is derived from the *parsing machine's* local
     /// offset in that case, so consumers that need trustworthy ordering must
     /// check this field rather than assume `timestamp_utc` is source-accurate.
+    ///
+    /// This field reports provenance; it does not change `timestamp_utc`.
+    /// Existing consumers such as `download_stats` and `event_tracker` still
+    /// take `timestamp_utc` unconditionally and therefore remain
+    /// machine-timezone dependent for offset-less records. That is pre-existing
+    /// behaviour and is deliberately left alone here: changing how the Intune
+    /// workspace orders records is a behavioural change that belongs in its own
+    /// commit with its own regression coverage, not in a field addition.
     pub timezone_offset: Option<i32>,
 }
 

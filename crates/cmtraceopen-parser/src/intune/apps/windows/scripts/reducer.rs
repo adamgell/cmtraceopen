@@ -18,7 +18,9 @@ use super::models::{
     ScriptTransaction, ScriptTransactionKey,
 };
 use super::rules::{classify_record, RecordClassification};
-use super::sources::{classify_artifact, output_artifact_identity, ScriptSourceInput};
+use super::sources::{
+    candidate_source_kind, classify_artifact, output_artifact_identity, ScriptSourceInput,
+};
 
 /// Render a CCM offset in minutes as `+HH:MM` / `-HH:MM`.
 fn format_offset(minutes: i32) -> String {
@@ -303,9 +305,15 @@ fn next_evidence_request(state: ScriptState, has_output_evidence: bool) -> Optio
         ScriptState::Launched => {
             Some("AgentExecutor.log rotation containing the execution result".to_string())
         }
-        ScriptState::ExitedNonZero | ScriptState::TimedOut | ScriptState::FailedToLaunch
-            if !has_output_evidence =>
-        {
+        // A process that never started cannot have written script output, so
+        // asking for it would send an operator after an artifact that does not
+        // exist. Ask for the surrounding launch context instead.
+        ScriptState::FailedToLaunch => Some(
+            "AgentExecutor.log context around the failed launch, and the \
+             IntuneManagementExtension.log record for this policy"
+                .to_string(),
+        ),
+        ScriptState::ExitedNonZero | ScriptState::TimedOut if !has_output_evidence => {
             Some("retained script output artifact for this policy and run".to_string())
         }
         ScriptState::ExitedZero | ScriptState::ExitedNonZero => {
@@ -367,6 +375,20 @@ pub fn analyze_script_bundle(inputs: &[ScriptSourceInput]) -> ScriptAnalysis {
     let mut output_artifact_keys: BTreeSet<(String, String)> = BTreeSet::new();
 
     for (artifact_index, input) in inputs.iter().enumerate() {
+        // A retained output artifact is evidence by its identity alone. Its
+        // contents are raw script stdout/stderr -- unbounded and frequently
+        // sensitive -- so they are registered, never parsed. The check is on
+        // the *name* and runs before parsing, because parsing first and
+        // discarding after would pay full time and peak memory for data the
+        // module has just promised never to read.
+        if candidate_source_kind(input) == ScriptSourceKind::ScriptOutput {
+            artifacts.push(classify_artifact(input, &[]));
+            if let Some(identity) = output_artifact_identity(input) {
+                output_artifact_keys.insert(identity);
+            }
+            continue;
+        }
+
         let lines = parse_ime_content(&input.content);
         let components: Vec<Option<String>> =
             lines.iter().map(|line| line.component.clone()).collect();
@@ -374,18 +396,9 @@ pub fn analyze_script_bundle(inputs: &[ScriptSourceInput]) -> ScriptAnalysis {
         let source_kind = artifact.source_kind;
         artifacts.push(artifact);
 
-        // A retained output artifact is evidence by its identity alone. Its
-        // contents are raw script stdout/stderr -- unbounded and frequently
-        // sensitive -- so they are registered, never parsed.
-        if source_kind == ScriptSourceKind::ScriptOutput {
-            if let Some(identity) = output_artifact_identity(input) {
-                output_artifact_keys.insert(identity);
-            }
-            continue;
-        }
-
         for (record_index, line) in lines.iter().enumerate() {
-            let classification = classify_record(source_kind, &line.message);
+            let classification =
+                classify_record(source_kind, line.component.as_deref(), &line.message);
             if classification.execution_shaped_but_unmatched {
                 unknown_version_observed = true;
             }

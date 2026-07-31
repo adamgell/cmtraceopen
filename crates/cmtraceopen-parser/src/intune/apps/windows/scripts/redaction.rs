@@ -41,9 +41,14 @@ fn upn_re() -> &'static Regex {
 fn user_path_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
+        // The segment is bounded by the path separator, a quote, or the end of
+        // the line -- not by whitespace. Windows permits spaces in profile
+        // directory names, and bounding on `\s` masked only the first word:
+        // `C:\Users\John Doe\...` leaked "Doe" into the export.
+        //
         // The leading `[` exclusion is what makes the projection idempotent:
         // an already-masked `[user:...]` segment must not be masked again.
-        Regex::new(r"(?i)(?P<prefix>[\\/]Users[\\/])(?P<user>[^\\/\s\x22\[][^\\/\s\x22]*)")
+        Regex::new(r"(?i)(?P<prefix>[\\/]Users[\\/])(?P<user>[^\\/\r\n\x22\[][^\\/\r\n\x22]*)")
             .expect("user path regex must compile")
     })
 }
@@ -76,7 +81,17 @@ pub fn redact_text(value: &str) -> String {
     });
 
     let masked = user_path_re().replace_all(&masked, |caps: &regex::Captures<'_>| {
-        format!("{}{}", &caps["prefix"], stable_token("user", &caps["user"]))
+        // Trailing whitespace is not part of the profile name; keeping it out
+        // of the hashed value means `C:\Users\John Doe ` and `C:\Users\John Doe`
+        // still resolve to the same user.
+        let user = caps["user"].trim_end();
+        let trailing = &caps["user"][user.len()..];
+        format!(
+            "{}{}{}",
+            &caps["prefix"],
+            stable_token("user", user),
+            trailing
+        )
     });
 
     command_line_re()
@@ -187,6 +202,22 @@ mod tests {
         let once = redact_text(r"adele.vance@contoso.example at C:\Users\adele.vance\a.ps1");
         let twice = redact_text(&once);
         assert_eq!(once, twice);
+    }
+
+    #[test]
+    fn a_profile_name_containing_a_space_is_fully_masked() {
+        // Windows allows spaces in profile directory names. Bounding the
+        // segment on whitespace leaked everything after the first word.
+        let redacted = redact_text(r"C:\Users\John Doe\AppData\Local\Temp\out.txt");
+        assert!(!redacted.contains("John"), "got {redacted:?}");
+        assert!(!redacted.contains("Doe"), "got {redacted:?}");
+        assert!(redacted.ends_with(r"\AppData\Local\Temp\out.txt"));
+    }
+
+    #[test]
+    fn a_spaced_profile_name_is_still_idempotent() {
+        let once = redact_text(r"C:\Users\John Doe\a.ps1");
+        assert_eq!(once, redact_text(&once));
     }
 
     #[test]

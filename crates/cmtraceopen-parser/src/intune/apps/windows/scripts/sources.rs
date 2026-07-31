@@ -134,6 +134,14 @@ fn candidate_from_name(file_name: &str) -> ScriptSourceKind {
     }
 }
 
+/// The source kind a file name suggests, before any content is read.
+///
+/// Exposed so a caller can decide not to parse an artifact at all -- which is
+/// what the reducer does for retained script output.
+pub fn candidate_source_kind(input: &ScriptSourceInput) -> ScriptSourceKind {
+    candidate_from_name(&input.file_name)
+}
+
 /// Does any record component confirm the candidate?
 fn components_confirm(candidate: ScriptSourceKind, components: &[Option<String>]) -> bool {
     let expected: &[&str] = match candidate {
