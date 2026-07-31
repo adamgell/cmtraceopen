@@ -46,9 +46,16 @@ pub enum PortalSourceKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum PortalDetectionConfidence {
-    /// Structure and process signature both confirmed on a validated version.
+    /// Structure and process signature both confirmed, and no version banner
+    /// contradicted them.
+    ///
+    /// A banner is not required: rotated members routinely carry no banner at
+    /// all, and demoting them would punish evidence for being a continuation
+    /// file. Check [`PortalAppVersion::support`] when you need to know whether a
+    /// version was actually declared.
     Confirmed,
-    /// Structure and process signature confirmed, version family not validated.
+    /// Structure and process signature confirmed, but a version banner was
+    /// present and named a family no committed fixture covers.
     Probable,
     /// Signature present but the record structure is mostly unusable.
     Low,

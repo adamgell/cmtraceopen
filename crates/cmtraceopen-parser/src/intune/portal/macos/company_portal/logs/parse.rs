@@ -89,6 +89,14 @@ fn parse_with_notes(
     source: &PortalLogSource,
     mut notes: Vec<PortalCoverageNote>,
 ) -> PortalLogParse {
+    // A caller that decoded a BOM-marked file themselves and used the text API
+    // hands us a leading U+FEFF. It is an encoding artifact, not log content:
+    // left in place it breaks the record grammar on line 1, so the first record
+    // silently degrades to Unframed and both detection and coverage skew. The
+    // bytes entry point already strips the BOM before decoding, so doing it here
+    // makes the two public APIs agree instead of disagreeing by one record.
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+
     let detection = detect_company_portal_macos_log(text, Some(&source.file_path));
     let lines = split_physical_lines(text);
     let total_lines = lines.len() as u32;

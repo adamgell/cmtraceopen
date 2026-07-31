@@ -729,6 +729,57 @@ fn empty_and_blank_input_is_reported_not_guessed() {
     );
 }
 
+/// A caller that decodes a BOM-marked file itself and uses the text API must get
+/// the same records as the bytes API. Left in place, the BOM breaks the record
+/// grammar on line 1 and the first record degrades to Unframed.
+#[test]
+fn text_api_tolerates_a_leading_bom_like_the_bytes_api() {
+    let source = PortalLogSource::new(log_path("basic-records", "CompanyPortal.log"));
+
+    let plain = parse_company_portal_macos_log(BASIC, &source);
+    let bommed = parse_company_portal_macos_log(&format!("\u{feff}{BASIC}"), &source);
+
+    assert_eq!(
+        bommed.coverage.parsed_record_count,
+        plain.coverage.parsed_record_count
+    );
+    assert_eq!(bommed.coverage.unframed_record_count, 0);
+    assert_eq!(bommed.records.len(), plain.records.len());
+    assert_eq!(bommed.records[0].message, plain.records[0].message);
+    assert!(!bommed.records[0].raw_text.value.starts_with('\u{feff}'));
+
+    // And the bytes API keeps agreeing with it.
+    let via_bytes = parse_company_portal_macos_log_bytes(
+        &[b"\xef\xbb\xbf".to_vec(), BASIC.as_bytes().to_vec()].concat(),
+        &source,
+    );
+    assert_eq!(
+        via_bytes.coverage.parsed_record_count,
+        plain.coverage.parsed_record_count
+    );
+}
+
+/// `Confirmed` does not mean "a version banner was validated". Rotated members
+/// carry no banner and must not be demoted for it.
+#[test]
+fn confirmed_confidence_does_not_require_a_version_banner() {
+    let no_banner = "2026-05-12 08:14:20:104 | CompanyPortal | I | 261510 | SignInViewModel | Sign-in state refreshed\n\
+                     2026-05-12 08:14:21:200 | CompanyPortal | W | 261510 | NetworkService | Retrying request\n";
+    let parse = parse_company_portal_macos_log(
+        no_banner,
+        &PortalLogSource::new(log_path("rotation", "CompanyPortal-3.log")),
+    );
+
+    assert_eq!(
+        parse.detection.confidence,
+        PortalDetectionConfidence::Confirmed
+    );
+    // The absence of a banner is reported separately, so a consumer that needs a
+    // declared version can still tell.
+    assert_eq!(parse.app_version.support, PortalVersionSupport::NotDeclared);
+    assert!(parse.app_version.raw_text.is_none());
+}
+
 #[test]
 fn fixture_root_layout_is_versioned_by_scenario() {
     // Documents the on-disk contract the include_* macros above depend on.
