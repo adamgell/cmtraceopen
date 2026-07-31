@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 4,
+  "capture": {
+    "capturedAtUtc": "2027-01-05T18:40:00.0000000Z",
+    "adapterVersion": "cmtraceopen-collector-appx/4",
+    "commandStatus": "completed",
+    "windowsBuild": "10.0.28000.0",
+    "powerShellVersion": "7.6.1",
+    "locale": "en-GB",
+    "source": "json",
+    "scopeCoverage": [
+      { "scope": "allUsers", "status": "complete", "detail": null },
+      { "scope": "containerUser", "status": "complete", "detail": null }
+    ],
+    "error": null
+  },
+  "packageGroups": [
+    {
+      "groupKind": "msixBundle",
+      "members": [
+        {
+          "name": "Microsoft.CompanyPortal",
+          "version": "14.0.0.0",
+          "trustTier": "sealedStore"
+        }
+      ]
+    }
+  ]
+}
