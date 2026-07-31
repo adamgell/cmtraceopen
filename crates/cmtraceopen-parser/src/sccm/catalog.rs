@@ -309,7 +309,7 @@ const SOURCE_CATALOG: &[CatalogSpec] = &[
     CatalogSpec {
         basename: "mpcontrol",
         logical_name: "mpcontrol",
-        role: SccmRole::ManagementPoint,
+        role: SccmRole::SiteServer,
         family: SccmArtifactFamily::ManagementPoint,
     },
     CatalogSpec {

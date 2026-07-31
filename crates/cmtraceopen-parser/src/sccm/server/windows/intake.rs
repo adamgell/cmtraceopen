@@ -12,6 +12,9 @@ use crate::sccm::{
 
 use super::catalog::{classify_declared_server_source, expected_family, SccmServerSourceKind};
 
+type PathFingerprintKey = (String, String, String, String);
+type CanonicalArtifactIdentity = (String, String, String, String, String, String, String);
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SccmServerArtifactPayload {
     pub manifest_artifact_id: String,
@@ -160,6 +163,7 @@ pub fn assess_server_intake(
     let mut manifest_artifact_ids = BTreeSet::new();
     let mut relative_paths = BTreeSet::new();
     let mut path_fingerprint_lineages = BTreeMap::new();
+    let mut canonical_artifact_identities = BTreeSet::new();
     let mut prepared = Vec::with_capacity(manifest.artifacts.len());
     for artifact in manifest.artifacts {
         if !manifest_artifact_ids.insert(artifact.artifact_id.clone()) {
@@ -171,6 +175,7 @@ pub fn assess_server_intake(
             &topology.roles_observed,
             &mut relative_paths,
             &mut path_fingerprint_lineages,
+            &mut canonical_artifact_identities,
             &payload_by_id,
         )?;
         prepared.push(normalized);
@@ -365,7 +370,8 @@ fn normalize_artifact(
     synthetic_fixture: bool,
     roles_observed: &[SccmRole],
     relative_paths: &mut BTreeSet<String>,
-    path_fingerprint_lineages: &mut BTreeMap<(String, String, String, String), String>,
+    path_fingerprint_lineages: &mut BTreeMap<PathFingerprintKey, String>,
+    canonical_artifact_identities: &mut BTreeSet<CanonicalArtifactIdentity>,
     payload_by_id: &BTreeMap<&str, &[u8]>,
 ) -> Result<PreparedArtifact, SccmServerIntakeError> {
     let source_version =
@@ -477,6 +483,29 @@ fn normalize_artifact(
             path_fingerprint_lineages
                 .insert(path_fingerprint_key, artifact.rotation.lineage_id.clone());
         }
+    }
+
+    let canonical_identity = (
+        role_sort_key(&artifact.producer_role).to_owned(),
+        artifact.source_id.clone(),
+        workflow_subject_role
+            .as_ref()
+            .map(role_sort_key)
+            .unwrap_or_default()
+            .to_owned(),
+        artifact
+            .configured_path_provenance
+            .path_fingerprint
+            .to_ascii_lowercase(),
+        artifact.rotation.lineage_id.clone(),
+        original_basename
+            .as_deref()
+            .unwrap_or_default()
+            .to_ascii_lowercase(),
+        rotation_sort_key(rotation.as_ref()),
+    );
+    if !canonical_artifact_identities.insert(canonical_identity) {
+        return Err(SccmServerIntakeError::DuplicateArtifact);
     }
 
     let configured_path_state =
