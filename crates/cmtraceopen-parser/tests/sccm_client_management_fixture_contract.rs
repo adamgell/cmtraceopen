@@ -3128,3 +3128,30 @@ fn public_surface_privacy_mutations_fail_closed() {
         "public surface privacy mutations were accepted: {accepted:?}"
     );
 }
+
+#[test]
+fn duplicate_coverage_gap_ownership_mutations_fail_closed() {
+    let mut accepted = Vec::new();
+
+    for scenario in ["co-management-unknown", "software-center-insufficient"] {
+        let (scenario_root, manifest, mut expected) = load_contract(scenario);
+        let gaps = expected["ownership"]["coverageGapArtifactIds"]
+            .as_array_mut()
+            .expect("ownership coverage gaps are an array");
+        let duplicate = gaps
+            .first()
+            .expect("scenario declares an ownership coverage gap")
+            .clone();
+        gaps.insert(0, duplicate);
+        if mutation_was_accepted(scenario, &scenario_root, &manifest, &expected) {
+            accepted.push(format!(
+                "{scenario} adjacent duplicate ownership coverage gap"
+            ));
+        }
+    }
+
+    assert!(
+        accepted.is_empty(),
+        "duplicate coverage gap mutations were accepted: {accepted:?}"
+    );
+}
