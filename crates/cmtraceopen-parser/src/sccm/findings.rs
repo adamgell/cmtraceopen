@@ -839,10 +839,9 @@ fn reason_scope_is_within_catalog_artifact(
             collection_clause_is_catalog_bounded(clause, &tokens, &identity_ranges)
         } else if has_collection_directive {
             // An authorized action cannot lend its identity to another
-            // strong-punctuation clause. Keep evidence context attached as a
-            // bounded narrative suffix instead of treating a second command
-            // as non-authorizing prose.
-            false
+            // strong-punctuation clause. Only independently safe evidence
+            // observations remain non-authorizing.
+            narrative_clause_is_safe_observation(clause, &tokens, &identity_ranges)
         } else {
             narrative_clause_has_no_collection_scope(&tokens)
         }
@@ -1275,6 +1274,21 @@ fn narrative_clause_has_no_collection_scope(tokens: &[RequestReasonToken<'_>]) -
     })
 }
 
+fn narrative_clause_is_safe_observation(
+    clause: &str,
+    tokens: &[RequestReasonToken<'_>],
+    identity_ranges: &[(usize, usize)],
+) -> bool {
+    narrative_tokens_are_non_authorizing(clause, tokens, identity_ranges)
+        && tokens.iter().any(|token| {
+            token_is_covered_by_identity(token, identity_ranges)
+                || is_evidence_narrative_subject(token.text)
+        })
+        && tokens
+            .iter()
+            .any(|token| is_evidence_narrative_predicate(token.text))
+}
+
 fn narrative_tokens_are_non_authorizing(
     clause: &str,
     tokens: &[RequestReasonToken<'_>],
@@ -1366,6 +1380,32 @@ fn is_evidence_narrative_subject(token: &str) -> bool {
             | "state"
             | "status"
     )
+}
+
+fn is_evidence_narrative_predicate(token: &str) -> bool {
+    is_passive_auxiliary(token)
+        || matches!(
+            token,
+            "available"
+                | "capped"
+                | "captured"
+                | "denied"
+                | "failed"
+                | "had"
+                | "has"
+                | "have"
+                | "malformed"
+                | "missing"
+                | "partial"
+                | "provided"
+                | "recorded"
+                | "reported"
+                | "required"
+                | "skipped"
+                | "succeeded"
+                | "unavailable"
+                | "unsupported"
+        )
 }
 
 fn is_wide_scope_token(token: &str) -> bool {

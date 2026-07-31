@@ -348,6 +348,12 @@ const REVIEW_NON_AUTHORIZING_COLLECTION_LANGUAGE_REASONS: [&str; 6] = [
     "Collect PolicyAgent.log after credentials were archived.",
 ];
 
+const REVIEW_SAFE_STRONG_PUNCTUATION_NARRATIVE_REASONS: [&str; 3] = [
+    "Collect PolicyAgent.log; policy evidence was not captured.",
+    "Collect PolicyAgent.log. The policy evaluation reported an error.",
+    "Collect PolicyAgent.log; the assignment error was reported.",
+];
+
 const REVIEW_EXACT_MP_ARTIFACT_REQUESTS: [(&str, &str); 5] = [
     ("mpCliReg", "Collect the complete MP_CliReg.log file."),
     ("mpGetAuth", "Collect the complete MP_GetAuth.log file."),
@@ -2003,6 +2009,47 @@ fn finding_review_non_authorizing_collection_language_fails_at_every_public_boun
     assert!(
         accepted.is_empty(),
         "accepted non-authorizing collection language: {accepted:#?}"
+    );
+}
+
+#[test]
+fn finding_review_safe_strong_punctuation_narratives_pass_at_every_public_boundary() {
+    let canonical = finding_with_gap_and_request("review-safe-strong-narrative-parity");
+    let mut rejected = Vec::new();
+
+    for reason in REVIEW_SAFE_STRONG_PUNCTUATION_NARRATIVE_REASONS {
+        let builder = SccmFindingBuilder::new("review-safe-strong-narrative-builder")
+            .class(SccmFindingClass::Symptom)
+            .phase(SccmPhase::Policy)
+            .role(SccmRole::Client)
+            .severity(Severity::Warning)
+            .confidence(SccmConfidence::Low)
+            .evidence(vec![finding_evidence_ref("artifact-a", "entry-a")])
+            .next_artifact(finding_request("policyAgent", SccmRole::Client, reason))
+            .build();
+        if let Err(error) = builder {
+            rejected.push(format!("builder ({error:?}): {reason}"));
+        }
+
+        let mut direct = canonical.clone();
+        direct.next_artifacts[0].reason = reason.into();
+        if let Err(error) = direct.validate() {
+            rejected.push(format!("direct validate ({error:?}): {reason}"));
+        }
+        if serde_json::to_value(&direct).is_err() {
+            rejected.push(format!("serializer: {reason}"));
+        }
+
+        let mut json = serde_json::to_value(&canonical).unwrap();
+        json["nextArtifacts"][0]["reason"] = serde_json::json!(reason);
+        if serde_json::from_value::<SccmFinding>(json).is_err() {
+            rejected.push(format!("deserializer: {reason}"));
+        }
+    }
+
+    assert!(
+        rejected.is_empty(),
+        "rejected safe strong-punctuation narratives: {rejected:#?}"
     );
 }
 
