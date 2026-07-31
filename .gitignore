@@ -29,6 +29,15 @@ docs/
 # Test logs
 Logs/
 
+# ...but not source. `Logs/` is matched case-insensitively on macOS and Windows,
+# so it silently swallowed the `logs` leaf modules of the Intune Company Portal
+# tree (epic #356). Those built locally, where the untracked files still exist,
+# and would have failed on a fresh checkout the moment a parent `mod.rs`
+# declared `pub mod logs;`. Re-include the directories first: git cannot
+# re-include a file whose parent directory is still excluded.
+!crates/cmtraceopen-parser/src/**/logs/
+!crates/cmtraceopen-parser/src/**/logs/**
+
 # Playwright artifacts (HTML reports, run results, MCP browser session output)
 playwright-report/
 test-results/
