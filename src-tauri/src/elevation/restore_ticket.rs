@@ -49,7 +49,14 @@ pub struct RestoreTicket {
     pub workspace: AppWorkspace,
     pub target: RestoreTarget,
     pub reason: ElevationReason,
-    /// Set on the restored request so a second failure cannot offer elevation again.
+    /// Marks the restored request as a retry, so a second failure offers
+    /// troubleshooting instead of another elevation prompt.
+    ///
+    /// Always true on a minted ticket: a ticket exists only because a restart
+    /// was requested, so consuming one always means "this is the attempt after
+    /// elevation". It is a field rather than an implicit truth so the frontend
+    /// reads the loop guard from the ticket rather than inferring it from the
+    /// ticket's mere presence.
     pub retry_attempted: bool,
 }
 

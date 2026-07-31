@@ -49,8 +49,7 @@ impl Drop for InFlightGuard {
 ///
 /// Nested causes stay nested rather than flattened: both this enum and its
 /// sources are internally tagged on `kind`, so flattening would collide.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Error)]
-#[serde(tag = "kind", rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum ElevationCommandError {
     #[error("another administrator restart is already in progress")]
     AlreadyInProgress,
@@ -62,6 +61,44 @@ pub enum ElevationCommandError {
     Relaunch { source: RelaunchError },
     #[error("the application state directory is unavailable")]
     StateDirectoryUnavailable,
+}
+
+impl ElevationCommandError {
+    fn kind(&self) -> &'static str {
+        match self {
+            Self::AlreadyInProgress => "alreadyInProgress",
+            Self::InvalidRequest { .. } => "invalidRequest",
+            Self::TicketUnavailable => "ticketUnavailable",
+            Self::Relaunch { .. } => "relaunch",
+            Self::StateDirectoryUnavailable => "stateDirectoryUnavailable",
+        }
+    }
+}
+
+/// Serialized by hand so a top-level `message` always rides along.
+///
+/// The derived internally-tagged form emitted only `kind` plus a nested cause,
+/// and the frontend's error normalizer reads only own, top-level string
+/// properties: it never recurses. A launch failure therefore reached the user as
+/// the humanized variant name, the bare word "Relaunch", with the real reason
+/// stranded inside `source`. The nested cause is still emitted for callers that
+/// want it; `message` is what actually gets rendered.
+impl Serialize for ElevationCommandError {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+
+        let mut map = serializer.serialize_map(None)?;
+        map.serialize_entry("kind", self.kind())?;
+        map.serialize_entry("message", &self.to_string())?;
+        match self {
+            Self::InvalidRequest { reason } => map.serialize_entry("reason", reason)?,
+            Self::Relaunch { source } => map.serialize_entry("source", source)?,
+            Self::AlreadyInProgress
+            | Self::TicketUnavailable
+            | Self::StateDirectoryUnavailable => {}
+        }
+        map.end()
+    }
 }
 
 impl From<ElevationValidationError> for ElevationCommandError {
@@ -275,5 +312,53 @@ mod tests {
         let error = ElevationCommandError::from(ElevationValidationError::RelativePath);
         let json = serde_json::to_value(&error).expect("serialize");
         assert_eq!(json["kind"], "invalidRequest");
+    }
+
+    #[test]
+    fn every_command_error_carries_a_top_level_message() {
+        // The frontend normalizer reads only own, top-level string properties and
+        // never recurses into a nested cause. Without `message` here the user was
+        // shown the humanized variant name, i.e. the bare word "Relaunch".
+        let errors = [
+            ElevationCommandError::AlreadyInProgress,
+            ElevationCommandError::from(ElevationValidationError::RelativePath),
+            ElevationCommandError::TicketUnavailable,
+            ElevationCommandError::from(RelaunchError::LaunchFailed {
+                message: "administrator restart task failed".to_string(),
+            }),
+            ElevationCommandError::StateDirectoryUnavailable,
+        ];
+
+        for error in errors {
+            let expected = error.to_string();
+            let json = serde_json::to_value(&error).expect("serialize");
+
+            assert_eq!(
+                json["message"], expected,
+                "{} lost its message",
+                error.kind()
+            );
+            assert!(
+                json["message"].as_str().is_some_and(|m| !m.is_empty()),
+                "{} serialized an empty message",
+                error.kind()
+            );
+        }
+    }
+
+    #[test]
+    fn a_nested_cause_is_still_available_alongside_the_message() {
+        let error = ElevationCommandError::from(RelaunchError::LaunchFailed {
+            message: "ShellExecute refused".to_string(),
+        });
+        let json = serde_json::to_value(&error).expect("serialize");
+
+        assert_eq!(json["kind"], "relaunch");
+        assert_eq!(json["source"]["kind"], "launchFailed");
+        // The rendered text is the flat one, and it carries the real reason.
+        assert!(json["message"]
+            .as_str()
+            .expect("message")
+            .contains("ShellExecute refused"));
     }
 }

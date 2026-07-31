@@ -123,13 +123,27 @@ export async function requestElevatedRestart(
   })();
 
   inFlight = attempt;
+
+  let outcome: ElevationOutcome;
   try {
-    return await attempt;
-  } finally {
-    // Keep the guard set after a successful launch: the process is exiting and
-    // a late click must not start a second request during teardown.
+    outcome = await attempt;
+  } catch (error) {
+    // `attempt` converts every failure into an outcome, so this is unreachable
+    // in practice. Release the guard anyway rather than wedging the app shut if
+    // that contract is ever broken.
+    inFlight = null;
+    throw error;
+  }
+
+  // Deliberately leave the guard set after a successful launch. The process is
+  // exiting, and the ESP banner calls this coordinator directly rather than
+  // through the confirmation dialog, so nothing else would stop a late click
+  // from raising a second UAC prompt during teardown.
+  if (outcome.status !== "launched") {
     inFlight = null;
   }
+
+  return outcome;
 }
 
 /** Human-readable status text for the outcomes a caller may still be around to show. */

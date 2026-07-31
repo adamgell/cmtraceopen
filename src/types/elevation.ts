@@ -23,7 +23,7 @@ export type ElevationReason =
 export type RestoreTarget =
   | { kind: "workspace" }
   | { kind: "file"; path: string }
-  | { kind: "folder"; path: string; aggregate?: boolean }
+  | { kind: "folder"; path: string }
   | { kind: "knownSource"; sourceId: string };
 
 export interface ElevationRequest {

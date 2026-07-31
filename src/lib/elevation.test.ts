@@ -106,6 +106,25 @@ describe("elevation coordinator", () => {
     expect(await first).toEqual({ status: "launched" });
   });
 
+  it("stays latched after a launch so teardown cannot raise a second prompt", async () => {
+    restartAsAdministratorMock.mockResolvedValue({
+      launched: true,
+      reason: "launched",
+    });
+
+    expect(await requestElevatedRestart(menuRequest)).toEqual({
+      status: "launched",
+    });
+
+    // The process is exiting. The ESP banner calls this coordinator directly
+    // rather than through the confirmation dialog, so the guard here is the only
+    // thing standing between a late click and a second UAC prompt.
+    expect(await requestElevatedRestart(menuRequest)).toEqual({
+      status: "busy",
+    });
+    expect(restartAsAdministratorMock).toHaveBeenCalledOnce();
+  });
+
   it("allows a fresh request once the previous one settles", async () => {
     restartAsAdministratorMock.mockResolvedValue({
       launched: false,

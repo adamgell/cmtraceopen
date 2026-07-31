@@ -88,12 +88,13 @@ pub enum RestoreTarget {
     /// Reopen one file through the normal log-source path.
     File { path: PathBuf },
     /// Reopen one folder through the normal folder-source path.
-    Folder {
-        path: PathBuf,
-        /// Whether the original request aggregated the folder into one view.
-        #[serde(default)]
-        aggregate: bool,
-    },
+    ///
+    /// No aggregate/browser discriminator rides along. Opening a folder without
+    /// a selected file always produces the aggregated view, and the frontend has
+    /// no folder mode a `false` flag could select, so a flag here would be
+    /// written and then ignored. Restoring the path reproduces exactly what
+    /// opening that folder does.
+    Folder { path: PathBuf },
     /// Reopen a catalog entry by stable identifier, not by expanded path.
     KnownSource { source_id: String },
 }
@@ -195,9 +196,8 @@ impl ElevationRequest {
             RestoreTarget::File { path } => RestoreTarget::File {
                 path: validate_restore_path(&path)?,
             },
-            RestoreTarget::Folder { path, aggregate } => RestoreTarget::Folder {
+            RestoreTarget::Folder { path } => RestoreTarget::Folder {
                 path: validate_restore_path(&path)?,
-                aggregate,
             },
             RestoreTarget::KnownSource { source_id } => RestoreTarget::KnownSource {
                 source_id: validate_source_id(&source_id)?,

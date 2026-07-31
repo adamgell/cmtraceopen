@@ -45,9 +45,11 @@ export function useFileAssociation() {
       }),
     ])
       .then(async ([paths, workspace, ticket]) => {
-        if (ticket) {
+        if (ticket?.retryAttempted) {
           // Mark before restoring: if the restored source is still denied, the
           // failure must offer troubleshooting rather than a second prompt.
+          // Read from the ticket rather than inferring it from the ticket's
+          // presence, so the loop guard has one source of truth.
           markElevationRetryAttempted();
         }
 

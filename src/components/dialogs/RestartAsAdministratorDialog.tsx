@@ -11,10 +11,14 @@ import {
 /**
  * The single confirmation shown before CMTrace Open requests UAC.
  *
- * Both entry points — File > Restart as Administrator and the Access Denied
- * recovery prompt — render through here, so there is exactly one place where a
- * user click turns into a backend elevation call. The reason carried on the
- * request changes only the wording; the backend call is identical.
+ * File > Restart as Administrator and the Access Denied recovery prompt both
+ * render through here, so neither can reach the backend without a second,
+ * deliberate click. The reason carried on the request changes only the wording;
+ * the backend call is identical.
+ *
+ * The ESP coverage banner is the one caller that does not route through this
+ * dialog. Its button is already an explicit, labelled affordance rather than a
+ * failure the user did not ask for, so it calls the coordinator directly.
  *
  * On a successful launch the dialog intentionally stays up in a pending state:
  * the current process is exiting, and swapping to a success message the user

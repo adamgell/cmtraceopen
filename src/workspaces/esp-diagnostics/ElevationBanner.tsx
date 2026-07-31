@@ -5,6 +5,7 @@ import {
   WarningShieldRegular,
 } from "@fluentui/react-icons";
 import { requestElevatedRestart } from "../../lib/elevation";
+import { buildElevationRequest } from "../../lib/elevation-request";
 import {
   LOG_MONOSPACE_FONT_FAMILY,
   LOG_UI_FONT_FAMILY,
@@ -27,11 +28,14 @@ export function ElevationBanner({ elevation }: ElevationBannerProps) {
   // coordinator, which never throws and collapses concurrent requests.
   const restart = async () => {
     setActionState("requesting");
-    const outcome = await requestElevatedRestart({
-      reason: "coverageRecommended",
-      workspace: "esp-diagnostics",
-      target: { kind: "workspace" },
-    });
+    const outcome = await requestElevatedRestart(
+      buildElevationRequest({
+        reason: "coverageRecommended",
+        workspace: "esp-diagnostics",
+        // A coverage recommendation, not a source retry: workspace only.
+        source: null,
+      }),
+    );
     switch (outcome.status) {
       case "launched":
         setActionState("requested");
