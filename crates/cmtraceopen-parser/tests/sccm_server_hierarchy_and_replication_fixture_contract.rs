@@ -3256,3 +3256,21 @@ fn hierarchy_coderabbit_5ead896_target_topology_requires_present_handles() {
         "two absent target handles cannot satisfy exact topology"
     );
 }
+
+#[test]
+fn hierarchy_coderabbit_878a051_control_requests_include_target_rcmctrl() {
+    let mut manifest =
+        read_json("absent-remote-source", "manifest.json").expect("absent manifest loads");
+    let mut expected =
+        read_json("absent-remote-source", "expected.json").expect("absent expected loads");
+    manifest["artifacts"][1]["sourceId"] = serde_json::json!("server-hierarchy-control");
+    manifest["artifacts"][1]["originalBasename"] = serde_json::json!("rcmctrl.log");
+    expected["artifactRequests"][0]["sourceId"] = serde_json::json!("server-hierarchy-control");
+    expected["artifactRequests"][0]["basenames"] = serde_json::json!(["rcmctrl.log"]);
+
+    let failures = artifact_request_failures("absent-remote-source", &manifest, &expected);
+    assert!(
+        failures.is_empty(),
+        "target-side rcmctrl coverage request is exact: {failures:?}"
+    );
+}
