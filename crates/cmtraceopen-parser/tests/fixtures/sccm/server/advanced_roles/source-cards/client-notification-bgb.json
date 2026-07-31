@@ -1,0 +1,81 @@
+{
+  "cardSchemaVersion": "1.0.0",
+  "cardId": "client-notification-bgb",
+  "cardVersion": "1.0.0",
+  "family": "Server-side client notification and BGB diagnostics",
+  "roleScope": [
+    "clientNotificationServer",
+    "managementPoint"
+  ],
+  "candidateBasenames": [
+    "BgbServer.log"
+  ],
+  "pathClasses": [
+    "configuredRoleLogRoot",
+    "siteServerLogs"
+  ],
+  "rawParserFamily": "ccm",
+  "sourceVersionScope": {
+    "state": "unknown",
+    "allowedPrefixes": []
+  },
+  "capture": {
+    "classification": "optional",
+    "maxBytes": 4194304,
+    "accessPolicy": "leastPrivilegeNoEscalation",
+    "rotationPolicy": {
+      "kinds": [
+        "current",
+        "lo_"
+      ],
+      "maxFiles": 2
+    }
+  },
+  "privacy": {
+    "sensitivity": "high",
+    "classes": [
+      "deviceIdentity",
+      "notificationPayload",
+      "userIdentity"
+    ],
+    "redactionRequired": true,
+    "publicProjection": [
+      "captureState",
+      "cardId",
+      "coverageState",
+      "roleScope"
+    ],
+    "rawSensitiveFieldProjection": []
+  },
+  "expectedHealthyEvidence": "A future validated rule must cite a server-side notification request and terminal acknowledgement with an exact, sanitized notification key.",
+  "terminalFailureEvidence": "A future terminal rule must cite an explicit server-side rejection or delivery exhaustion and distinguish it from client-side notification evidence.",
+  "correlationPolicy": {
+    "keyState": "unvalidated",
+    "allowedKeyKinds": [],
+    "timeOnlyEligible": false,
+    "topologyRequired": true
+  },
+  "fixtureIds": [],
+  "ownerIssue": "#334",
+  "promotion": {
+    "state": "candidate",
+    "observedEvidenceIds": [],
+    "implementationIssue": null,
+    "productionReducer": null,
+    "deferredReason": null
+  },
+  "semanticPolicy": {
+    "captureGuidanceOnly": true,
+    "canCreateTransactions": false,
+    "canCreateFailureFindings": false
+  },
+  "nextEvidence": [
+    "Record sanitized server-role, configured-path, and source-version provenance without assuming the candidate basename exists.",
+    "Validate server versus client notification keys using independent synthetic fixtures before defining any correlation."
+  ],
+  "supersession": {
+    "state": "active",
+    "supersedes": [],
+    "supersededBy": null
+  }
+}

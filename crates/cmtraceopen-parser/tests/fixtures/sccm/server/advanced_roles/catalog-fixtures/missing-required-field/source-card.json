@@ -1,0 +1,72 @@
+{
+  "cardSchemaVersion": "1.0.0",
+  "cardId": "missing-owner-source",
+  "cardVersion": "1.0.0",
+  "family": "Synthetic malformed source missing required ownership",
+  "roleScope": [
+    "syntheticRole"
+  ],
+  "candidateBasenames": [
+    "SyntheticRole.log"
+  ],
+  "pathClasses": [
+    "configuredRoleLogRoot"
+  ],
+  "rawParserFamily": "ccm",
+  "sourceVersionScope": {
+    "state": "unknown",
+    "allowedPrefixes": []
+  },
+  "capture": {
+    "classification": "optional",
+    "maxBytes": 1024,
+    "accessPolicy": "leastPrivilegeNoEscalation",
+    "rotationPolicy": {
+      "kinds": [
+        "current"
+      ],
+      "maxFiles": 1
+    }
+  },
+  "privacy": {
+    "sensitivity": "low",
+    "classes": [],
+    "redactionRequired": false,
+    "publicProjection": [
+      "captureState",
+      "cardId",
+      "coverageState",
+      "roleScope"
+    ],
+    "rawSensitiveFieldProjection": []
+  },
+  "expectedHealthyEvidence": "A future validated synthetic rule would require an exact request key and explicit terminal success evidence.",
+  "terminalFailureEvidence": "A future validated synthetic rule would require an exact request key and explicit terminal failure evidence.",
+  "correlationPolicy": {
+    "keyState": "unvalidated",
+    "allowedKeyKinds": [],
+    "timeOnlyEligible": false,
+    "topologyRequired": true
+  },
+  "fixtureIds": [],
+  "promotion": {
+    "state": "candidate",
+    "observedEvidenceIds": [],
+    "implementationIssue": null,
+    "productionReducer": null,
+    "deferredReason": null
+  },
+  "semanticPolicy": {
+    "captureGuidanceOnly": true,
+    "canCreateTransactions": false,
+    "canCreateFailureFindings": false
+  },
+  "nextEvidence": [
+    "Add explicit issue ownership before this malformed source card can be accepted."
+  ],
+  "supersession": {
+    "state": "active",
+    "supersedes": [],
+    "supersededBy": null
+  }
+}
