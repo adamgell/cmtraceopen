@@ -1265,7 +1265,7 @@ fn management_point_exact_labels_reject_hyphenated_prefixes() {
 }
 
 #[test]
-fn successful_counterpart_handoff_cites_the_decisive_success() {
+fn successful_counterpart_handoff_requires_the_decisive_fact_to_prove_the_policy_key() {
     let mut bundle = load_bundle("healthy-policy");
     let deferred = bundle
         .evidence
@@ -1310,16 +1310,25 @@ fn successful_counterpart_handoff_cites_the_decisive_success() {
     assert_eq!(transaction["phase"], "recordOutcome");
     assert_eq!(transaction["confidence"], "high");
 
-    let counterpart = analysis["counterpartReadyFacts"]
+    assert!(
+        analysis["counterpartReadyFacts"]
+            .as_array()
+            .expect("counterpart facts")
+            .is_empty(),
+        "a decisive record without PolicyId cannot prove an exact policy counterpart key"
+    );
+
+    let baseline = analysis_value(&load_bundle("healthy-policy"));
+    let counterpart = baseline["counterpartReadyFacts"]
         .as_array()
         .expect("counterpart facts")
         .iter()
         .find(|fact| fact["state"] == "succeeded")
-        .expect("successful counterpart");
+        .expect("baseline successful counterpart");
     assert_eq!(counterpart["classification"], "success");
     assert_eq!(
         counterpart["evidence"]["lineStart"], 4,
-        "the success handoff must cite the decisive successful record"
+        "the policy-bearing decisive success must remain correlation eligible"
     );
     assert!(
         counterpart["terminalEvidence"].is_null(),
