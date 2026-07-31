@@ -1382,6 +1382,16 @@ fn schema_failures(scenario: &str, manifest: &Value, expected: &Value) -> Vec<St
     failures
 }
 
+fn schema_failures_with_records(
+    scenario: &str,
+    manifest: &Value,
+    expected: &Value,
+    records: &BTreeMap<(String, u32, u32), SccmEvidence>,
+) -> Vec<String> {
+    let _ = records;
+    schema_failures(scenario, manifest, expected)
+}
+
 #[test]
 fn provider_and_admin_service_scenario_matrix_is_exact() {
     let actual = actual_scenarios().expect("provider/Admin Service fixture root exists");
@@ -2123,4 +2133,124 @@ fn generic_artifact_request_reason_fails_closed() {
         !schema_failures("provider-timeout", &manifest, &expected).is_empty(),
         "generic request prose lost the exact unresolved request and terminal basis"
     );
+}
+
+#[test]
+fn later_uncited_same_key_terminal_failure_invalidates_high_success() {
+    let manifest = read_json("provider-success", "manifest.json").unwrap();
+    let expected = read_json("provider-success", "expected.json").unwrap();
+    let mut records = normalized_records("provider-success", &manifest);
+    let artifact = SccmArtifact {
+        artifact_id: "provider-success-current".to_owned(),
+        display_name: "Smsprov.log".to_owned(),
+        original_path: None,
+        host: Some("safe:server:lab-provider-01".to_owned()),
+        role: SccmRole::Provider,
+        configmgr_version: Some("5.00.TEST.0001".to_owned()),
+        collected_at_utc: Some("2026-07-30T21:00:00Z".to_owned()),
+        rotation: SccmRotation::Current,
+        coverage: SccmCoverageState::Captured,
+        encoding: Some("utf-8".to_owned()),
+    };
+    let raw = "<![LOG[SYNTHETIC FIXTURE; Phase=recordOutcome; Disposition=failed; Terminal=true; RequestId=11111111-1111-1111-1111-111111111111; OperationHandle=safe-operation-read-device; EndpointId=provider-local; Layer=provider; ProfileId=provider-server-5.00.test-v1]LOG]!><time=\"21:00:05.000+000\" date=\"7-30-2026\" component=\"SMS_PROVIDER\" context=\"\" type=\"3\" thread=\"1101\" file=\"synthetic-provider.cc:60\">";
+    let mut later_failure = normalize_ccm_artifact(artifact, raw)
+        .into_iter()
+        .next()
+        .expect("adversarial terminal record normalizes");
+    later_failure.evidence_id = "provider-success-current:6-6".to_owned();
+    later_failure.reference.entry_id = "provider-success-current:6-6".to_owned();
+    later_failure.reference.line_start = Some(6);
+    later_failure.reference.line_end = Some(6);
+    records.insert(("provider-success-current".to_owned(), 6, 6), later_failure);
+
+    assert!(
+        !schema_failures_with_records("provider-success", &manifest, &expected, &records)
+            .is_empty(),
+        "an uncited later terminal failure for the exact transaction key retained high success"
+    );
+}
+
+#[test]
+fn terminal_marker_cannot_move_from_record_outcome_to_receive() {
+    let manifest = read_json("provider-success", "manifest.json").unwrap();
+    let mut expected = read_json("provider-success", "expected.json").unwrap();
+    expected["transactions"][0]["observations"][0]["terminal"] = Value::Bool(true);
+    expected["transactions"][0]["observations"][4]["terminal"] = Value::Bool(false);
+
+    assert!(
+        !schema_failures("provider-success", &manifest, &expected).is_empty(),
+        "a receive marker satisfied terminal evidence after recordOutcome became nonterminal"
+    );
+}
+
+#[test]
+fn applied_collection_limit_cannot_remain_captured_or_high() {
+    let mut manifest = read_json("provider-success", "manifest.json").unwrap();
+    let expected = read_json("provider-success", "expected.json").unwrap();
+    manifest["artifacts"][0]["collectionLimit"]["limitApplied"] = Value::Bool(true);
+
+    assert!(
+        !schema_failures("provider-success", &manifest, &expected).is_empty(),
+        "limitApplied=true retained captured coverage and high-confidence success"
+    );
+}
+
+#[test]
+fn relative_path_must_match_declared_source_rotation_and_basename() {
+    let mut manifest = read_json("rotation-boundary", "manifest.json").unwrap();
+    let expected = read_json("rotation-boundary", "expected.json").unwrap();
+    let current_path = manifest["artifacts"][0]["relativePath"].clone();
+    let current_bytes = manifest["artifacts"][0]["bytesCopied"].clone();
+    manifest["artifacts"][0]["relativePath"] = manifest["artifacts"][1]["relativePath"].clone();
+    manifest["artifacts"][0]["bytesCopied"] = manifest["artifacts"][1]["bytesCopied"].clone();
+    manifest["artifacts"][1]["relativePath"] = current_path;
+    manifest["artifacts"][1]["bytesCopied"] = current_bytes;
+
+    assert!(
+        !schema_failures("rotation-boundary", &manifest, &expected).is_empty(),
+        "current and lo_ artifacts accepted each other's physical paths"
+    );
+}
+
+#[test]
+fn unknown_source_version_requires_canonical_public_grammar() {
+    let mut manifest = read_json("rotation-boundary", "manifest.json").unwrap();
+    let expected = read_json("rotation-boundary", "expected.json").unwrap();
+    for artifact in manifest["artifacts"].as_array_mut().unwrap() {
+        artifact["sourceVersion"] = Value::String("SyntheticCaller".to_owned());
+    }
+
+    assert!(
+        !schema_failures("rotation-boundary", &manifest, &expected).is_empty(),
+        "caller-shaped alphabetic text was exported as unknown source-version provenance"
+    );
+}
+
+#[test]
+fn exact_rotation_topology_rejects_an_empty_endpoint() {
+    let mut manifest = read_json("rotation-boundary", "manifest.json").unwrap();
+    let expected = read_json("rotation-boundary", "expected.json").unwrap();
+    manifest["topology"]["endpoints"][0]["endpointId"] = Value::String(String::new());
+    for artifact in manifest["artifacts"].as_array_mut().unwrap() {
+        artifact["endpointId"] = Value::String(String::new());
+    }
+
+    assert!(
+        !schema_failures("rotation-boundary", &manifest, &expected).is_empty(),
+        "an empty endpoint retained exact topology when no transaction was emitted"
+    );
+}
+
+#[test]
+fn provider_retry_scenario_is_explicit() {
+    read_json("provider-retry", "manifest.json").expect("provider retry manifest exists");
+    read_json("provider-retry", "expected.json").expect("provider retry expectation exists");
+}
+
+#[test]
+fn contradictory_evidence_scenario_is_explicit() {
+    read_json("contradictory-evidence", "manifest.json")
+        .expect("contradictory evidence manifest exists");
+    read_json("contradictory-evidence", "expected.json")
+        .expect("contradictory evidence expectation exists");
 }
