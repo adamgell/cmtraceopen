@@ -12,9 +12,9 @@ use crate::sccm::{
 
 const MAX_ARTIFACT_ID_CHARS: usize = 160;
 const MAX_BASENAME_CHARS: usize = 160;
-const MAX_METADATA_TOKEN_CHARS: usize = 128;
 const MAX_PATH_IDENTITY_CHARS: usize = 512;
 const MAX_SYNTHETIC_FINGERPRINT_TOKENS: usize = 10;
+const OPAQUE_ROTATION_KIND_V1: &str = "cmtraceopen.rotation.opaque.v1";
 // Synthetic fingerprints are fixture-only provenance. Keep their vocabulary
 // finite so the public field cannot become an arbitrary user/context channel.
 // Extending this list is a privacy-contract change that requires review.
@@ -686,22 +686,14 @@ fn is_safe_unknown_rotation(rotation: &SccmRotation) -> bool {
         return true;
     };
 
-    is_safe_metadata_token(&unknown.kind)
-        && unknown.value.as_ref().is_none_or(|value| match value {
-            serde_json::Value::Null | serde_json::Value::Bool(_) | serde_json::Value::Number(_) => {
-                true
-            }
-            serde_json::Value::String(value) => is_safe_metadata_token(value),
-            serde_json::Value::Array(_) | serde_json::Value::Object(_) => false,
+    unknown.kind == OPAQUE_ROTATION_KIND_V1
+        && unknown.value.as_ref().is_some_and(|value| {
+            value.as_str().is_some_and(|value| {
+                value
+                    .strip_prefix("sha256:")
+                    .is_some_and(|digest| digest.len() == 64 && is_lowercase_hex_handle(digest))
+            })
         })
-}
-
-fn is_safe_metadata_token(value: &str) -> bool {
-    !value.is_empty()
-        && value.chars().count() <= MAX_METADATA_TOKEN_CHARS
-        && value
-            .chars()
-            .all(|character| character.is_ascii_alphanumeric() || "-._".contains(character))
 }
 
 fn is_safe_configmgr_version(value: &str) -> bool {
