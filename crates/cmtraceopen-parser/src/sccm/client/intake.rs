@@ -843,7 +843,11 @@ fn is_expected_client_bundle_group(
     match matching_groups.as_slice() {
         [] => group == "unknown",
         [matching_group] => group == matching_group.logical_artifact_id,
-        _ => group == "client-location-services-shared" && display_name == "LocationServices.log",
+        _ => {
+            group == "client-location-services-shared"
+                && expected_rotated_name("LocationServices.log", rotation)
+                    .is_some_and(|expected| expected == display_name)
+        }
     }
 }
 
