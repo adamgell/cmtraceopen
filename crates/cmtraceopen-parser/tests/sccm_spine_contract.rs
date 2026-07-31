@@ -1,12 +1,16 @@
-use cmtraceopen_parser::models::log_entry::{LogFormat, ParserKind};
+use cmtraceopen_parser::models::log_entry::{LogFormat, ParserKind, Severity};
 use cmtraceopen_parser::parser::detect::detect_parser;
 use cmtraceopen_parser::sccm::{
     classify_artifact_name, declared_source_catalog, extract_keys, extract_signals,
-    normalize_ccm_artifact, normalize_key, SccmArtifact, SccmArtifactFamily,
-    SccmCorrelationKeyKind, SccmCoverageState, SccmEvidence, SccmEvidenceRef,
-    SccmExtractionGapKind, SccmExtractionProfile, SccmExtractionProfileMaturity, SccmFindingClass,
-    SccmKeyConfidence, SccmKeyExtractionResult, SccmRole, SccmRotation, SccmSignal, SccmSignalKind,
-    SccmTimeOrderingState, SccmTimestamp, SccmUnknownRotation, SCCM_DIAGNOSTICS_SCHEMA_VERSION,
+    normalize_ccm_artifact, normalize_key, SccmArtifact, SccmArtifactFamily, SccmArtifactRequest,
+    SccmConfidence, SccmCorrelationKey, SccmCorrelationKeyKind, SccmCoverageState, SccmEvidence,
+    SccmEvidenceRef, SccmExtractionGapKind, SccmExtractionProfile, SccmExtractionProfileMaturity,
+    SccmFinding, SccmFindingBuilder, SccmFindingClass, SccmFindingCoverageGap,
+    SccmFindingValidationError, SccmKeyConfidence, SccmKeyExtractionResult, SccmPhase, SccmRole,
+    SccmRotation, SccmSignal, SccmSignalKind, SccmTerminalEvidence, SccmTerminalEvidenceKind,
+    SccmTimeOrderingState, SccmTimestamp, SccmUnknownRotation,
+    MAX_SCCM_ARTIFACT_REQUEST_REASON_CHARS, MAX_SCCM_NEXT_ARTIFACT_REQUESTS,
+    SCCM_DIAGNOSTICS_SCHEMA_VERSION,
 };
 
 fn client_policy_artifact() -> SccmArtifact {
@@ -45,6 +49,3464 @@ fn evidence_with_message(message: &str) -> SccmEvidence {
         },
         execution_context: None,
     }
+}
+
+fn finding_evidence_ref(artifact_id: &str, entry_id: &str) -> SccmEvidenceRef {
+    SccmEvidenceRef {
+        artifact_id: artifact_id.into(),
+        entry_id: entry_id.into(),
+        line_start: Some(1),
+        line_end: Some(1),
+    }
+}
+
+fn finding_key(
+    kind: SccmCorrelationKeyKind,
+    raw: &str,
+    normalized: &str,
+    confidence: SccmKeyConfidence,
+    extraction_profile_id: Option<&str>,
+    evidence: SccmEvidenceRef,
+) -> SccmCorrelationKey {
+    SccmCorrelationKey {
+        kind,
+        raw: raw.into(),
+        normalized: normalized.into(),
+        confidence,
+        extraction_profile_id: extraction_profile_id.map(str::to_owned),
+        evidence: Some(evidence),
+        start: None,
+        end: None,
+    }
+}
+
+fn finding_client_gap(artifact_id: &str, coverage: SccmCoverageState) -> SccmFindingCoverageGap {
+    SccmFindingCoverageGap {
+        artifact_id: artifact_id.into(),
+        role: SccmRole::Client,
+        coverage,
+    }
+}
+
+fn finding_request(logical_id: &str, role: SccmRole, reason: &str) -> SccmArtifactRequest {
+    SccmArtifactRequest {
+        logical_id: logical_id.into(),
+        role,
+        reason: reason.into(),
+    }
+}
+
+fn finding_with_gap_and_request(finding_id: &str) -> SccmFinding {
+    SccmFindingBuilder::new(finding_id)
+        .class(SccmFindingClass::Symptom)
+        .phase(SccmPhase::Policy)
+        .role(SccmRole::Client)
+        .severity(Severity::Warning)
+        .confidence(SccmConfidence::Low)
+        .evidence(vec![finding_evidence_ref("artifact-a", "entry-a")])
+        .coverage_gap(finding_client_gap(
+            "client-policy-agent",
+            SccmCoverageState::AccessDenied,
+        ))
+        .next_artifact(finding_request(
+            "policyAgent",
+            SccmRole::Client,
+            "Confirm the bounded policy request outcome.",
+        ))
+        .build()
+        .unwrap()
+}
+
+const ROOTED_ARTIFACT_REQUEST_REASONS: [&str; 7] = [
+    r"Collect C:\ for related evidence.",
+    r"Collect C:\Windows\CCM\Logs\PolicyAgent.log.",
+    r"Collect C:/Windows/CCM/Logs/PolicyAgent.log.",
+    "Collect / for related evidence.",
+    "Collect /var/log/sccm/PolicyAgent.log.",
+    r"Collect \\server\share\PolicyAgent.log.",
+    "Collect //server/share/PolicyAgent.log.",
+];
+
+const COMPACT_UNBOUNDED_ARTIFACT_REQUEST_REASONS: [&str; 5] = [
+    "Collect allfiles.",
+    "Collect everydirectory.",
+    "Scan entiredisk.",
+    "Search wholefilesystem.",
+    "Collect every log on the system.",
+];
+
+const ORDER_INDEPENDENT_UNBOUNDED_ARTIFACT_REQUEST_REASONS: [&str; 12] = [
+    "Every log on the system must be collected.",
+    "Request all files on the system.",
+    "Obtain every directory from the machine.",
+    "Copy the entire filesystem for review.",
+    "Enumerate all folders under the client.",
+    "Download all logs from the device.",
+    "Archive the whole disk.",
+    "All files from every directory are required.",
+    "Collect all of the files.",
+    "Scan every single directory.",
+    "Collect PolicyAgent.log plus logs at root.",
+    "Collect PolicyAgent.log plus systemwide collection scope.",
+];
+
+const BOUNDED_NARRATIVE_ARTIFACT_REQUESTS: [(&str, &str); 5] = [
+    ("smsts", "Collect the full disk imaging Task Sequence log."),
+    (
+        "policyAgent",
+        "Confirm the whole-disk encryption status recorded in PolicyAgent.log.",
+    ),
+    (
+        "policyAgent",
+        "Confirm the system-wide assignment recorded in PolicyAgent.log.",
+    ),
+    (
+        "policyAgent",
+        "Confirm recursive retry behavior recorded in PolicyAgent.log.",
+    ),
+    (
+        "policyAgent",
+        "Confirm all files were downloaded, as recorded in PolicyAgent.log.",
+    ),
+];
+
+const REVIEW_UNBOUNDED_ARTIFACT_REQUEST_REASONS: [&str; 19] = [
+    "System-wide logs are required.",
+    "Systemwide logs are required.",
+    "Drive-wide files are requested.",
+    "Logs from the filesystem root are required.",
+    "The filesystem root must be archived.",
+    "Recursive collection of system logs is required.",
+    "Recursive traversal of the filesystem is required.",
+    "All files were downloaded; collect them, as recorded in PolicyAgent.log.",
+    "Archive the whole disk; encryption is recorded in PolicyAgent.log.",
+    "Collect the full disk; imaging is recorded in Smsts.log.",
+    "Collect the full disk imaging Task Sequence log recursively across directories.",
+    "Collect the full disk imaging Task Sequence log and include recursive directory traversal.",
+    "Collect the full disk imaging Task Sequence log; include folders recursively.",
+    "Collect the full disk imaging Task Sequence log using recursion across folders.",
+    "Confirm all files were downloaded, as recorded in PolicyAgent.log, with recursive directory inclusion.",
+    "Confirm all files were downloaded, as recorded in PolicyAgent.log; recursive traversal across directories is also required.",
+    "Collect the full disk imaging Task Sequence log plus system-wide logs.",
+    "Collect the full disk imaging Task Sequence log plus systemwide logs.",
+    "Confirm all files were downloaded, as recorded in PolicyAgent.log, plus logs from the filesystem root.",
+];
+
+const REVIEW_BOUNDED_NAMED_ARTIFACT_REQUESTS: [(&str, &str); 14] = [
+    ("policyAgent", "Collect the complete PolicyAgent.log file."),
+    ("policyAgent", "Collect every cited PolicyAgent.log entry."),
+    (
+        "policyAgent",
+        "Confirm all assignment IDs in the cited PolicyAgent.log record.",
+    ),
+    (
+        "dataTransferService",
+        "Confirm complete file download status in DataTransferService.log.",
+    ),
+    ("policyAgent", "Collect all rotations of PolicyAgent.log."),
+    (
+        "policyAgent",
+        "Confirm every retry in PolicyAgent.log for assignment A.",
+    ),
+    (
+        "policyAgent",
+        "Collect the whole PolicyAgent.log record cited by entry A.",
+    ),
+    (
+        "policyAgent",
+        "Confirm the full client policy in PolicyAgent.log.",
+    ),
+    ("smsts", "Collect the complete Task Sequence log."),
+    (
+        "dataTransferService",
+        "Confirm all content files were downloaded, as recorded in DataTransferService.log.",
+    ),
+    (
+        "dataTransferService",
+        "Confirm all of the files were downloaded, as recorded in DataTransferService.log.",
+    ),
+    (
+        "dataTransferService",
+        "Confirm every file was downloaded, as recorded in DataTransferService.log.",
+    ),
+    ("smsts", "Confirm the full disk-image status in Smsts.log."),
+    (
+        "smsts",
+        "Collect the complete disk imaging Task Sequence log.",
+    ),
+];
+
+const REVIEW_EXPANDED_UNBOUNDED_ARTIFACT_REQUEST_REASONS: [&str; 49] = [
+    "Recursively; collect PolicyAgent.log.",
+    "Collect PolicyAgent.log. Recursively.",
+    "Collect PolicyAgent.log! Recursively.",
+    "Collect PolicyAgent.log; this request also applies recursively.",
+    "Collect PolicyAgent.log; use recursion.",
+    "Use recursion; collect PolicyAgent.log.",
+    "Collect PolicyAgent.log; recurse.",
+    "Recurse; collect PolicyAgent.log.",
+    "Collect PolicyAgent.log; scan the filesystem.",
+    "Scan the filesystem; collect PolicyAgent.log.",
+    "Collect PolicyAgent.log; traverse directories.",
+    "Collect PolicyAgent.log; enumerate the filesystem.",
+    "Collect PolicyAgent.log; archive the filesystem.",
+    "Collect PolicyAgent.log; search system logs.",
+    "Collect PolicyAgent.log; gather device logs.",
+    "Collect PolicyAgent.log; capture machine files.",
+    "Collect PolicyAgent.log; logs from the machine.",
+    "Collect PolicyAgent.log; across the filesystem.",
+    "Collect PolicyAgent.log; throughout the system.",
+    "Collect PolicyAgent.log; from root.",
+    "At root; collect PolicyAgent.log.",
+    "Collect PolicyAgent.log; device root.",
+    "Collect PolicyAgent.log; systemwide.",
+    "System-wide; collect PolicyAgent.log.",
+    "Collect PolicyAgent.log; sitewide.",
+    "Collect PolicyAgent.log; across all systems.",
+    "Collect PolicyAgent.log; from every machine.",
+    "Collect PolicyAgent.log; the entire system.",
+    "Collect PolicyAgent.log; all data.",
+    "Collect PolicyAgent.log; all records on the system.",
+    "Collect PolicyAgent.log; everything from the system.",
+    "Collect PolicyAgent.log; capture everything.",
+    "Collect PolicyAgent.log; download all data.",
+    "Collect PolicyAgent.log; collect related files.",
+    "Collect all disks, status is recorded in PolicyAgent.log.",
+    "Collect every drive, encryption status is recorded in PolicyAgent.log.",
+    "Collect all files, download status is recorded in PolicyAgent.log.",
+    "Collect the whole filesystem status from PolicyAgent.log.",
+    "Collect complete machine status files recorded in PolicyAgent.log.",
+    "Collect C:.",
+    "Collect D: for evidence.",
+    "Collect %SYSTEMROOT%.",
+    "Collect %WINDIR%.",
+    "Collect %SystemDrive%.",
+    "Collect $env:SystemRoot.",
+    "Collect ../PolicyAgent.log.",
+    r"Collect ..\PolicyAgent.log.",
+    "Collect Logs/../PolicyAgent.log.",
+    "Collect PolicyAgent.log; recursively.",
+];
+
+const REVIEW_LOOKALIKE_ARTIFACT_REQUEST_REASONS: [&str; 4] = [
+    "Collect every PolicyAgent-backup.log file.",
+    "Collect every PolicyAgent.log.backup file.",
+    "Collect every PolicyAgent—backup.log file.",
+    "Collect every PolicyAgent backup file.",
+];
+
+const REVIEW_UNQUALIFIED_COLLECTION_ACTION_REASONS: [&str; 15] = [
+    "Archive diagnostics.zip.",
+    "Capture the registry.",
+    "Collect unrelated.log.",
+    "Copy database.db.",
+    "Download package.bin.",
+    "Enumerate registry keys.",
+    "Export credentials.json.",
+    "Gather diagnostics.",
+    "Inspect arbitrary.txt.",
+    "Obtain secrets.txt.",
+    "Read config.ini.",
+    "Scan unrelated.log.",
+    "Search temp files.",
+    "Traverse cache.",
+    "Walk the directory tree.",
+];
+
+const REVIEW_COORDINATED_UNQUALIFIED_ACTION_REASONS: [&str; 3] = [
+    "Collect PolicyAgent.log and archive.",
+    "Collect PolicyAgent.log then scan.",
+    "Collect PolicyAgent.log plus export.",
+];
+
+const REVIEW_UNBOUND_COLLECTION_TARGET_REASONS: [&str; 10] = [
+    "Collect secrets.txt because PolicyAgent.log reported an error.",
+    "Collect PolicyAgent.log and retrieve secrets.txt.",
+    "Collect credentials.json since PolicyAgent.log recorded a failure.",
+    "Collect evidence.zip after PolicyAgent.log reported a failure.",
+    "Collect credentials because PolicyAgent.log reported an error.",
+    "Collect PolicyAgent.log then retrieve credentials.json.",
+    "Collect PolicyAgent.log plus fetch credentials.json.",
+    "Collect PolicyAgent.log and preserve secrets.txt.",
+    "Collect PolicyAgent.log, retrieve secrets.txt.",
+    "Collect PolicyAgent.log and retrieve credentials.",
+];
+
+const REVIEW_SAFE_COLLECTION_NARRATIVE_REASONS: [&str; 4] = [
+    "Collect PolicyAgent.log because the policy evaluation reported an error.",
+    "Collect PolicyAgent.log for review of the reported assignment error.",
+    "Collect PolicyAgent.log after the reported policy error.",
+    "Policy evidence was not captured.",
+];
+
+const REVIEW_NON_AUTHORIZING_COLLECTION_LANGUAGE_REASONS: [&str; 6] = [
+    "Collect PolicyAgent.log; retrieve secrets.txt.",
+    "Collect PolicyAgent.log. Fetch credentials.",
+    "Collect PolicyAgent.log; preserve secrets.txt.",
+    "Collect PolicyAgent.log for collection of credentials.",
+    "Collect PolicyAgent.log because secrets must be copied.",
+    "Collect PolicyAgent.log after credentials were archived.",
+];
+
+const REVIEW_SAFE_STRONG_PUNCTUATION_NARRATIVE_REASONS: [&str; 3] = [
+    "Collect PolicyAgent.log; policy evidence was not captured.",
+    "Collect PolicyAgent.log. The policy evaluation reported an error.",
+    "Collect PolicyAgent.log; the assignment error was reported.",
+];
+
+const REVIEW_EVIDENCE_SUBJECT_UNBOUND_PASSIVE_REASONS: [&str; 3] = [
+    "Collect PolicyAgent.log; policy evidence must include credentials.",
+    "Collect PolicyAgent.log; policy evidence needs credentials.",
+    "Collect PolicyAgent.log. Policy evidence needs to include secrets.",
+];
+
+const REVIEW_STANDALONE_AND_INFLECTED_COLLECTION_REASONS: [&str; 6] = [
+    "Retrieve secrets.txt.",
+    "Fetch credentials.json.",
+    "Preserve secrets.txt.",
+    "Acquire credentials.json.",
+    "Collect PolicyAgent.log for fetching credentials.",
+    "Collect PolicyAgent.log after retrieving credentials.",
+];
+
+const REVIEW_UNRECOGNIZED_CONFIRMATION_REQUEST_REASONS: [&str; 10] = [
+    "Confirm retrieve secrets.txt.",
+    "Confirm acquire credentials.json.",
+    "Confirm fetch credentials.json.",
+    "Confirm preserve secrets.txt.",
+    "Confirm retrieving credentials.",
+    "Confirm fetching secrets.",
+    "Confirm preservation of secrets.txt.",
+    "Confirm collection of credentials.json.",
+    "Confirm PolicyAgent.log after retrieving credentials.",
+    "Confirm PolicyAgent.log for fetching credentials.",
+];
+
+const REVIEW_PASSIVE_UNBOUNDED_CONFIRMATION_REASONS: [&str; 36] = [
+    "Confirm all files are required for status in PolicyAgent.log.",
+    "Confirm every file must be provided for download status in PolicyAgent.log.",
+    "Confirm the whole disk is required for imaging status in Smsts.log.",
+    "Confirm the full disk must be provided for imaging status in Smsts.log.",
+    "Confirm PolicyAgent.log status must include all files.",
+    "Confirm Smsts.log imaging status must provide the full disk.",
+    "Confirm PolicyAgent.log status must have all files provided.",
+    "Confirm Smsts.log imaging status must have the full disk provided.",
+    "Confirm PolicyAgent.log status has all files provided.",
+    "Confirm PolicyAgent.log status has every file provided.",
+    "Confirm all files have provided status in PolicyAgent.log.",
+    "Confirm Smsts.log imaging status has the full disk provided.",
+    "Confirm PolicyAgent.log status had every file.",
+    "Confirm PolicyAgent.log status has all files.",
+    "Confirm PolicyAgent.log status have every file.",
+    "Confirm PolicyAgent.log status are all files.",
+    "Confirm PolicyAgent.log status be all files.",
+    "Confirm PolicyAgent.log status been all files.",
+    "Confirm PolicyAgent.log status being all files.",
+    "Confirm Smsts.log imaging status is the full disk.",
+    "Confirm Smsts.log imaging status was the full disk.",
+    "Confirm Smsts.log imaging status were the full disk.",
+    "Confirm Smsts.log imaging status has the full disk.",
+    "Confirm every file had status in PolicyAgent.log.",
+    "Confirm every file has status in PolicyAgent.log.",
+    "Confirm all files have status in PolicyAgent.log.",
+    "Confirm all files are in PolicyAgent.log status.",
+    "Confirm all files be in PolicyAgent.log status.",
+    "Confirm all files have been in PolicyAgent.log status.",
+    "Confirm all files are being in PolicyAgent.log status.",
+    "Confirm the full disk is in Smsts.log imaging status.",
+    "Confirm the full disk was in Smsts.log imaging status.",
+    "Confirm the full disk were in Smsts.log imaging status.",
+    "Confirm the full disk has imaging status in Smsts.log.",
+    "Confirm all files, have status in PolicyAgent.log.",
+    "Confirm the full disk, has imaging status in Smsts.log.",
+];
+
+const REVIEW_BOUNDED_AUXILIARY_CONFIRMATION_REASONS: [(&str, &str); 10] = [
+    (
+        "policyAgent",
+        "Confirm PolicyAgent.log status had evidence.",
+    ),
+    (
+        "policyAgent",
+        "Confirm PolicyAgent.log status has evidence.",
+    ),
+    ("policyAgent", "Confirm PolicyAgent.log files have status."),
+    (
+        "policyAgent",
+        "Confirm PolicyAgent.log files are downloaded.",
+    ),
+    (
+        "policyAgent",
+        "Confirm PolicyAgent.log status should be available.",
+    ),
+    (
+        "policyAgent",
+        "Confirm PolicyAgent.log status has been available.",
+    ),
+    (
+        "policyAgent",
+        "Confirm PolicyAgent.log status is being reported.",
+    ),
+    (
+        "policyAgent",
+        "Confirm PolicyAgent.log status is available.",
+    ),
+    (
+        "policyAgent",
+        "Confirm PolicyAgent.log status was available.",
+    ),
+    (
+        "policyAgent",
+        "Confirm PolicyAgent.log files were downloaded.",
+    ),
+];
+
+const REVIEW_EXACT_MP_ARTIFACT_REQUESTS: [(&str, &str); 5] = [
+    ("mpCliReg", "Collect the complete MP_CliReg.log file."),
+    ("mpGetAuth", "Collect the complete MP_GetAuth.log file."),
+    ("mpGetPolicy", "Collect the complete MP_GetPolicy.log file."),
+    ("mpLocation", "Collect the complete MP_Location.log file."),
+    (
+        "mpRegistrationManager",
+        "Collect the complete MP_RegistrationManager.log file.",
+    ),
+];
+
+#[derive(Clone, Copy, Debug)]
+enum FindingEvidenceAliasSurface {
+    TopLevel,
+    Terminal,
+    CorrelationKey,
+}
+
+fn finding_with_evidence_alias(
+    finding_id: &str,
+    alias_surface: Option<FindingEvidenceAliasSurface>,
+) -> Result<SccmFinding, SccmFindingValidationError> {
+    let mut top_level = finding_evidence_ref("artifact-a", "entry-a");
+    let mut terminal = top_level.clone();
+    let mut key = top_level.clone();
+    match alias_surface {
+        Some(FindingEvidenceAliasSurface::TopLevel) => {
+            top_level.artifact_id = " artifact-a ".into();
+            top_level.entry_id = " entry-a ".into();
+        }
+        Some(FindingEvidenceAliasSurface::Terminal) => {
+            terminal.artifact_id = " artifact-a ".into();
+            terminal.entry_id = " entry-a ".into();
+        }
+        Some(FindingEvidenceAliasSurface::CorrelationKey) => {
+            key.artifact_id = " artifact-a ".into();
+            key.entry_id = " entry-a ".into();
+        }
+        None => {}
+    }
+
+    SccmFindingBuilder::new(finding_id)
+        .class(SccmFindingClass::ConfirmedFailure)
+        .phase(SccmPhase::Policy)
+        .role(SccmRole::Client)
+        .severity(Severity::Error)
+        .confidence(SccmConfidence::High)
+        .evidence(vec![top_level])
+        .terminal_evidence(vec![SccmTerminalEvidence::observed_failure(terminal)])
+        .correlation_keys(vec![finding_key(
+            SccmCorrelationKeyKind::AssignmentId,
+            "{ABCDEFAB-0000-0000-0000-000000000001}",
+            "abcdefab-0000-0000-0000-000000000001",
+            SccmKeyConfidence::Low,
+            Some("sccm-keys-experimental-v1"),
+            key,
+        )])
+        .build()
+}
+
+fn apply_evidence_alias(finding: &mut SccmFinding, surface: FindingEvidenceAliasSurface) {
+    match surface {
+        FindingEvidenceAliasSurface::TopLevel => {
+            finding.evidence[0].artifact_id = " artifact-a ".into();
+            finding.evidence[0].entry_id = " entry-a ".into();
+        }
+        FindingEvidenceAliasSurface::Terminal => {
+            finding.terminal_evidence[0].reference.artifact_id = " artifact-a ".into();
+            finding.terminal_evidence[0].reference.entry_id = " entry-a ".into();
+        }
+        FindingEvidenceAliasSurface::CorrelationKey => {
+            let reference = finding.correlation_keys[0].evidence.as_mut().unwrap();
+            reference.artifact_id = " artifact-a ".into();
+            reference.entry_id = " entry-a ".into();
+        }
+    }
+}
+
+fn apply_evidence_alias_json(
+    finding: &mut serde_json::Value,
+    surface: FindingEvidenceAliasSurface,
+) {
+    match surface {
+        FindingEvidenceAliasSurface::TopLevel => {
+            finding["evidence"][0]["artifactId"] = serde_json::json!(" artifact-a ");
+            finding["evidence"][0]["entryId"] = serde_json::json!(" entry-a ");
+        }
+        FindingEvidenceAliasSurface::Terminal => {
+            finding["terminalEvidence"][0]["reference"]["artifactId"] =
+                serde_json::json!(" artifact-a ");
+            finding["terminalEvidence"][0]["reference"]["entryId"] = serde_json::json!(" entry-a ");
+        }
+        FindingEvidenceAliasSurface::CorrelationKey => {
+            finding["correlationKeys"][0]["evidence"]["artifactId"] =
+                serde_json::json!(" artifact-a ");
+            finding["correlationKeys"][0]["evidence"]["entryId"] = serde_json::json!(" entry-a ");
+        }
+    }
+}
+
+fn assert_evidence_alias_is_rejected(surface: FindingEvidenceAliasSurface) {
+    let mut mismatches = Vec::new();
+
+    if finding_with_evidence_alias("builder-evidence-alias", Some(surface)).err()
+        != Some(SccmFindingValidationError::InvalidEvidenceReference)
+    {
+        mismatches.push("builder did not return InvalidEvidenceReference");
+    }
+
+    let mut direct = finding_with_evidence_alias("direct-evidence-alias", None).unwrap();
+    apply_evidence_alias(&mut direct, surface);
+    if direct.validate().err() != Some(SccmFindingValidationError::InvalidEvidenceReference) {
+        mismatches.push("direct validate did not return InvalidEvidenceReference");
+    }
+    if serde_json::to_value(&direct).is_ok() {
+        mismatches.push("validating serializer accepted the alias");
+    }
+
+    let canonical = finding_with_evidence_alias("deserialized-evidence-alias", None).unwrap();
+    let mut json = serde_json::to_value(canonical).unwrap();
+    apply_evidence_alias_json(&mut json, surface);
+    if serde_json::from_value::<SccmFinding>(json).is_ok() {
+        mismatches.push("deserializer accepted the alias");
+    }
+
+    assert!(mismatches.is_empty(), "{surface:?}: {mismatches:?}");
+}
+
+#[test]
+fn finding_confirmed_failure_requires_terminal_evidence() {
+    let result = SccmFindingBuilder::new("app-enforcement-failed")
+        .class(SccmFindingClass::ConfirmedFailure)
+        .phase(SccmPhase::Enforcement)
+        .role(SccmRole::Client)
+        .severity(Severity::Error)
+        .confidence(SccmConfidence::High)
+        .evidence(vec![finding_evidence_ref(
+            "client-app-enforce",
+            "client-app-enforce:1-1",
+        )])
+        .build();
+
+    assert_eq!(
+        result.unwrap_err(),
+        SccmFindingValidationError::MissingTerminalEvidence
+    );
+}
+
+#[test]
+fn finding_insufficient_evidence_requires_next_artifact_request() {
+    let result = SccmFindingBuilder::new("missing-policy-log")
+        .class(SccmFindingClass::InsufficientEvidence)
+        .phase(SccmPhase::Policy)
+        .role(SccmRole::Client)
+        .severity(Severity::Warning)
+        .confidence(SccmConfidence::Low)
+        .coverage_gap(finding_client_gap(
+            "client-policy-agent",
+            SccmCoverageState::Absent,
+        ))
+        .build();
+
+    assert_eq!(
+        result.unwrap_err(),
+        SccmFindingValidationError::MissingNextArtifactRequest
+    );
+}
+
+#[test]
+fn finding_high_confirmed_failure_accepts_a_cited_terminal_failure() {
+    let evidence = finding_evidence_ref("client-app-enforce", "client-app-enforce:9-9");
+    let finding = SccmFindingBuilder::new("app-enforcement-failed")
+        .class(SccmFindingClass::ConfirmedFailure)
+        .phase(SccmPhase::Enforcement)
+        .role(SccmRole::Client)
+        .severity(Severity::Error)
+        .confidence(SccmConfidence::High)
+        .evidence(vec![evidence.clone()])
+        .terminal_evidence(vec![SccmTerminalEvidence::observed_failure(
+            evidence.clone(),
+        )])
+        .build()
+        .unwrap();
+
+    assert_eq!(finding.evidence, vec![evidence.clone()]);
+    assert_eq!(finding.terminal_evidence[0].reference, evidence);
+    assert_eq!(
+        finding.terminal_evidence[0].kind,
+        SccmTerminalEvidenceKind::ObservedFailure
+    );
+}
+
+#[test]
+fn finding_rejects_unknown_phase_values_that_shadow_declared_names() {
+    for phase in ["policy", "content", "enforcement"] {
+        let result = SccmFindingBuilder::new(format!("shadowed-{phase}"))
+            .class(SccmFindingClass::Symptom)
+            .phase(SccmPhase::Unknown(phase.into()))
+            .role(SccmRole::Client)
+            .severity(Severity::Warning)
+            .confidence(SccmConfidence::Low)
+            .evidence(vec![finding_evidence_ref(
+                "client-policy-agent",
+                "policy:1-1",
+            )])
+            .build();
+
+        assert_eq!(
+            result.unwrap_err(),
+            SccmFindingValidationError::MissingRequiredField,
+            "{phase}"
+        );
+    }
+}
+
+#[test]
+fn finding_forged_unregistered_profile_is_rejected() {
+    let first = finding_evidence_ref("client-policy-agent", "policy:10-10");
+    let second = finding_evidence_ref("mp-get-policy", "mp-policy:20-20");
+    let result = SccmFindingBuilder::new("policy-request-failed")
+        .class(SccmFindingClass::ConfirmedFailure)
+        .phase(SccmPhase::Policy)
+        .role(SccmRole::Client)
+        .severity(Severity::Error)
+        .confidence(SccmConfidence::High)
+        .evidence(vec![second.clone(), first.clone()])
+        .correlation_keys(vec![
+            finding_key(
+                SccmCorrelationKeyKind::AssignmentId,
+                "{ABCDEFAB-0000-0000-0000-000000000001}",
+                "abcdefab-0000-0000-0000-000000000001",
+                SccmKeyConfidence::Exact,
+                Some("sccm-keys-stable-v1"),
+                first,
+            ),
+            finding_key(
+                SccmCorrelationKeyKind::AssignmentId,
+                "abcdefab-0000-0000-0000-000000000001",
+                "abcdefab-0000-0000-0000-000000000001",
+                SccmKeyConfidence::Strong,
+                Some("sccm-keys-stable-v1"),
+                second,
+            ),
+        ])
+        .build();
+
+    assert_eq!(
+        result.unwrap_err(),
+        SccmFindingValidationError::InvalidCorrelationKey
+    );
+}
+
+#[test]
+fn finding_review_invalid_profiled_keys_fail_at_every_public_boundary() {
+    let evidence = finding_evidence_ref("artifact-a", "entry-a");
+    let mut malformed = finding_key(
+        SccmCorrelationKeyKind::PackageId,
+        "",
+        "",
+        SccmKeyConfidence::Exact,
+        Some("sccm-keys-stable-v1"),
+        evidence.clone(),
+    );
+    malformed.start = Some(9);
+    malformed.end = Some(3);
+    let cases = [
+        (
+            "exact-without-profile",
+            finding_key(
+                SccmCorrelationKeyKind::AssignmentId,
+                "{ABCDEFAB-0000-0000-0000-000000000001}",
+                "abcdefab-0000-0000-0000-000000000001",
+                SccmKeyConfidence::Exact,
+                None,
+                evidence.clone(),
+            ),
+        ),
+        (
+            "strong-with-unknown-profile",
+            finding_key(
+                SccmCorrelationKeyKind::ContentId,
+                "ContentABC",
+                "contentabc",
+                SccmKeyConfidence::Strong,
+                Some("sccm-keys-unknown-v1"),
+                evidence.clone(),
+            ),
+        ),
+        ("malformed-values-and-spans", malformed),
+    ];
+    let canonical = finding_with_gap_and_request("review-invalid-key-parity");
+    let mut accepted = Vec::new();
+
+    for (label, key) in cases {
+        let builder = SccmFindingBuilder::new(format!("review-invalid-key-{label}"))
+            .class(SccmFindingClass::Symptom)
+            .phase(SccmPhase::Policy)
+            .role(SccmRole::Client)
+            .severity(Severity::Warning)
+            .confidence(SccmConfidence::Low)
+            .evidence(vec![evidence.clone()])
+            .correlation_keys(vec![key.clone()])
+            .build();
+        if builder.err() != Some(SccmFindingValidationError::InvalidCorrelationKey) {
+            accepted.push(format!(
+                "builder did not return InvalidCorrelationKey: {label}"
+            ));
+        }
+
+        let mut direct = canonical.clone();
+        direct.correlation_keys = vec![key.clone()];
+        if direct.validate().err() != Some(SccmFindingValidationError::InvalidCorrelationKey) {
+            accepted.push(format!(
+                "direct validate did not return InvalidCorrelationKey: {label}"
+            ));
+        }
+        if serde_json::to_value(&direct).is_ok() {
+            accepted.push(format!("serializer: {label}"));
+        }
+
+        let mut json = serde_json::to_value(&canonical).unwrap();
+        json["correlationKeys"] = serde_json::to_value([key]).unwrap();
+        if serde_json::from_value::<SccmFinding>(json).is_ok() {
+            accepted.push(format!("deserializer: {label}"));
+        }
+    }
+
+    assert!(
+        accepted.is_empty(),
+        "accepted invalid profiled keys: {accepted:#?}"
+    );
+}
+
+#[test]
+fn finding_unregistered_exact_duplicate_keys_are_rejected() {
+    let evidence = finding_evidence_ref("client-policy-agent", "policy:10-10");
+    let key = finding_key(
+        SccmCorrelationKeyKind::AssignmentId,
+        "{ABCDEFAB-0000-0000-0000-000000000001}",
+        "abcdefab-0000-0000-0000-000000000001",
+        SccmKeyConfidence::Exact,
+        Some("sccm-keys-stable-v1"),
+        evidence.clone(),
+    );
+    let result = SccmFindingBuilder::new("duplicated-corroboration")
+        .class(SccmFindingClass::ConfirmedFailure)
+        .phase(SccmPhase::Policy)
+        .role(SccmRole::Client)
+        .severity(Severity::Error)
+        .confidence(SccmConfidence::High)
+        .evidence(vec![evidence])
+        .correlation_keys(vec![key.clone(), key])
+        .build();
+
+    assert_eq!(
+        result.unwrap_err(),
+        SccmFindingValidationError::InvalidCorrelationKey
+    );
+}
+
+#[test]
+fn finding_same_minute_keyless_evidence_never_counts_as_high_confidence() {
+    let result = SccmFindingBuilder::new("same-minute-is-not-causation")
+        .class(SccmFindingClass::ConfirmedFailure)
+        .phase(SccmPhase::Content)
+        .role(SccmRole::Client)
+        .severity(Severity::Error)
+        .confidence(SccmConfidence::High)
+        .evidence(vec![
+            finding_evidence_ref("client-content", "client-content:12:00"),
+            finding_evidence_ref("server-content", "server-content:12:00"),
+        ])
+        .build();
+
+    assert_eq!(
+        result.unwrap_err(),
+        SccmFindingValidationError::MissingTerminalEvidence
+    );
+}
+
+#[test]
+fn finding_unregistered_strong_or_exact_key_profiles_are_rejected() {
+    let first = finding_evidence_ref("client-content", "client-content:1-1");
+    let second = finding_evidence_ref("server-content", "server-content:1-1");
+    let cases = [
+        (
+            "mismatched-normalized-keys",
+            finding_key(
+                SccmCorrelationKeyKind::ContentId,
+                "ContentABC",
+                "contentabc",
+                SccmKeyConfidence::Strong,
+                Some("sccm-keys-stable-v1"),
+                first.clone(),
+            ),
+            finding_key(
+                SccmCorrelationKeyKind::ContentId,
+                "ContentXYZ",
+                "contentxyz",
+                SccmKeyConfidence::Strong,
+                Some("sccm-keys-stable-v1"),
+                second.clone(),
+            ),
+        ),
+        (
+            "mismatched-key-profiles",
+            finding_key(
+                SccmCorrelationKeyKind::ContentId,
+                "ContentABC",
+                "contentabc",
+                SccmKeyConfidence::Strong,
+                Some("sccm-keys-stable-v1"),
+                first.clone(),
+            ),
+            finding_key(
+                SccmCorrelationKeyKind::ContentId,
+                "contentabc",
+                "contentabc",
+                SccmKeyConfidence::Exact,
+                Some("sccm-keys-stable-v2"),
+                second.clone(),
+            ),
+        ),
+    ];
+
+    for (finding_id, first_key, second_key) in cases {
+        let result = SccmFindingBuilder::new(finding_id)
+            .class(SccmFindingClass::ConfirmedFailure)
+            .phase(SccmPhase::Content)
+            .role(SccmRole::Client)
+            .severity(Severity::Error)
+            .confidence(SccmConfidence::High)
+            .evidence(vec![first.clone(), second.clone()])
+            .correlation_keys(vec![first_key, second_key])
+            .build();
+
+        assert_eq!(
+            result.unwrap_err(),
+            SccmFindingValidationError::InvalidCorrelationKey,
+            "{finding_id}"
+        );
+    }
+}
+
+#[test]
+fn finding_rejects_key_or_terminal_refs_that_are_not_cited() {
+    let cited = finding_evidence_ref("client-policy-agent", "policy:1-1");
+    let missing = finding_evidence_ref("client-policy-agent", "policy:2-2");
+
+    let key_result = SccmFindingBuilder::new("uncited-key")
+        .class(SccmFindingClass::Symptom)
+        .phase(SccmPhase::Policy)
+        .role(SccmRole::Client)
+        .severity(Severity::Warning)
+        .confidence(SccmConfidence::Low)
+        .evidence(vec![cited.clone()])
+        .correlation_keys(vec![finding_key(
+            SccmCorrelationKeyKind::AssignmentId,
+            "{ABCDEFAB-0000-0000-0000-000000000001}",
+            "abcdefab-0000-0000-0000-000000000001",
+            SccmKeyConfidence::Low,
+            Some("sccm-keys-experimental-v1"),
+            missing.clone(),
+        )])
+        .build();
+    assert_eq!(
+        key_result.unwrap_err(),
+        SccmFindingValidationError::CorrelationKeyEvidenceNotCited
+    );
+
+    let terminal_result = SccmFindingBuilder::new("uncited-terminal")
+        .class(SccmFindingClass::ConfirmedFailure)
+        .phase(SccmPhase::Policy)
+        .role(SccmRole::Client)
+        .severity(Severity::Error)
+        .confidence(SccmConfidence::High)
+        .evidence(vec![cited])
+        .terminal_evidence(vec![SccmTerminalEvidence::observed_failure(missing)])
+        .build();
+    assert_eq!(
+        terminal_result.unwrap_err(),
+        SccmFindingValidationError::TerminalEvidenceNotCited
+    );
+}
+
+#[test]
+fn finding_nested_references_use_shared_identity_validation() {
+    let cited = finding_evidence_ref("client-policy-agent", "policy:1-1");
+    let invalid = SccmEvidenceRef {
+        artifact_id: " ".into(),
+        entry_id: "policy:2-2".into(),
+        line_start: Some(2),
+        line_end: Some(2),
+    };
+
+    let terminal_result = SccmFindingBuilder::new("invalid-terminal-reference")
+        .class(SccmFindingClass::Symptom)
+        .phase(SccmPhase::Policy)
+        .role(SccmRole::Client)
+        .severity(Severity::Warning)
+        .confidence(SccmConfidence::Low)
+        .evidence(vec![cited.clone()])
+        .terminal_evidence(vec![SccmTerminalEvidence::observed_failure(
+            invalid.clone(),
+        )])
+        .build();
+    assert_eq!(
+        terminal_result.unwrap_err(),
+        SccmFindingValidationError::InvalidEvidenceReference
+    );
+
+    let key_result = SccmFindingBuilder::new("invalid-key-reference")
+        .class(SccmFindingClass::Symptom)
+        .phase(SccmPhase::Policy)
+        .role(SccmRole::Client)
+        .severity(Severity::Warning)
+        .confidence(SccmConfidence::Low)
+        .evidence(vec![cited])
+        .correlation_keys(vec![finding_key(
+            SccmCorrelationKeyKind::AssignmentId,
+            "{ABCDEFAB-0000-0000-0000-000000000001}",
+            "abcdefab-0000-0000-0000-000000000001",
+            SccmKeyConfidence::Low,
+            Some("sccm-keys-experimental-v1"),
+            invalid,
+        )])
+        .build();
+    assert_eq!(
+        key_result.unwrap_err(),
+        SccmFindingValidationError::InvalidEvidenceReference
+    );
+}
+
+#[test]
+fn finding_evidence_reference_line_ranges_are_integral() {
+    let cases = [
+        ("missing-end", Some(1), None),
+        ("missing-start", None, Some(1)),
+        ("zero-start", Some(0), Some(1)),
+        ("reversed", Some(2), Some(1)),
+    ];
+
+    for (label, line_start, line_end) in cases {
+        let result = SccmFindingBuilder::new(format!("invalid-range-{label}"))
+            .class(SccmFindingClass::Symptom)
+            .phase(SccmPhase::Policy)
+            .role(SccmRole::Client)
+            .severity(Severity::Warning)
+            .confidence(SccmConfidence::Low)
+            .evidence(vec![SccmEvidenceRef {
+                artifact_id: "client-policy-agent".into(),
+                entry_id: "policy:1-1".into(),
+                line_start,
+                line_end,
+            }])
+            .build();
+
+        assert_eq!(
+            result.unwrap_err(),
+            SccmFindingValidationError::InvalidEvidenceReference,
+            "{label}"
+        );
+    }
+}
+
+#[test]
+fn finding_evidence_reference_allows_an_unavailable_line_range() {
+    let finding = SccmFindingBuilder::new("line-range-unavailable")
+        .class(SccmFindingClass::Symptom)
+        .phase(SccmPhase::Policy)
+        .role(SccmRole::Client)
+        .severity(Severity::Warning)
+        .confidence(SccmConfidence::Low)
+        .evidence(vec![SccmEvidenceRef {
+            artifact_id: "client-policy-agent".into(),
+            entry_id: "policy:logical-record".into(),
+            line_start: None,
+            line_end: None,
+        }])
+        .build()
+        .unwrap();
+
+    serde_json::to_value(finding).unwrap();
+}
+
+#[test]
+fn finding_serialization_canonicalizes_public_collection_mutation() {
+    let first = finding_evidence_ref("artifact-a", "entry-a");
+    let second = finding_evidence_ref("artifact-b", "entry-b");
+    let mut finding = SccmFindingBuilder::new("mutated-order")
+        .class(SccmFindingClass::Symptom)
+        .phase(SccmPhase::Policy)
+        .role(SccmRole::Client)
+        .severity(Severity::Warning)
+        .confidence(SccmConfidence::Low)
+        .evidence(vec![first.clone(), second.clone()])
+        .terminal_evidence(vec![
+            SccmTerminalEvidence::observed_failure(first.clone()),
+            SccmTerminalEvidence::observed_failure(second.clone()),
+        ])
+        .coverage_gaps(vec![
+            finding_client_gap("artifact-gap-a", SccmCoverageState::AccessDenied),
+            finding_client_gap("artifact-gap-b", SccmCoverageState::Capped),
+        ])
+        .correlation_keys(vec![
+            finding_key(
+                SccmCorrelationKeyKind::AssignmentId,
+                "{ABCDEFAB-0000-0000-0000-000000000001}",
+                "abcdefab-0000-0000-0000-000000000001",
+                SccmKeyConfidence::Low,
+                Some("sccm-keys-experimental-v1"),
+                first,
+            ),
+            finding_key(
+                SccmCorrelationKeyKind::PackageId,
+                "LAB00001",
+                "LAB00001",
+                SccmKeyConfidence::Low,
+                Some("sccm-keys-experimental-v1"),
+                second,
+            ),
+        ])
+        .next_artifacts(vec![
+            finding_request(
+                "policyAgent",
+                SccmRole::Client,
+                "Confirm the bounded policy request outcome.",
+            ),
+            finding_request(
+                "policyEvaluator",
+                SccmRole::Client,
+                "Confirm the bounded policy evaluation outcome.",
+            ),
+        ])
+        .build()
+        .unwrap();
+
+    let expected = serde_json::to_value(&finding).unwrap();
+    fn scramble<T: Clone>(values: &mut Vec<T>) {
+        values.reverse();
+        values.push(values[0].clone());
+    }
+    scramble(&mut finding.evidence);
+    scramble(&mut finding.terminal_evidence);
+    scramble(&mut finding.coverage_gaps);
+    scramble(&mut finding.correlation_keys);
+    scramble(&mut finding.next_artifacts);
+
+    assert_eq!(serde_json::to_value(finding).unwrap(), expected);
+}
+
+#[test]
+fn finding_rejects_conflicting_ranges_for_one_logical_evidence_identity() {
+    let first = SccmEvidenceRef {
+        artifact_id: "artifact-a".into(),
+        entry_id: "entry-a".into(),
+        line_start: Some(1),
+        line_end: Some(1),
+    };
+    let conflicting = SccmEvidenceRef {
+        line_start: Some(2),
+        line_end: Some(2),
+        ..first.clone()
+    };
+    let top_level = SccmFindingBuilder::new("conflicting-top-level-ranges")
+        .class(SccmFindingClass::Symptom)
+        .phase(SccmPhase::Policy)
+        .role(SccmRole::Client)
+        .severity(Severity::Warning)
+        .confidence(SccmConfidence::Low)
+        .evidence(vec![first.clone(), conflicting.clone()])
+        .build();
+    let terminal = SccmFindingBuilder::new("conflicting-terminal-range")
+        .class(SccmFindingClass::Symptom)
+        .phase(SccmPhase::Policy)
+        .role(SccmRole::Client)
+        .severity(Severity::Warning)
+        .confidence(SccmConfidence::Low)
+        .evidence(vec![first.clone()])
+        .terminal_evidence(vec![SccmTerminalEvidence::observed_failure(
+            conflicting.clone(),
+        )])
+        .build();
+    let key = SccmFindingBuilder::new("conflicting-key-range")
+        .class(SccmFindingClass::Symptom)
+        .phase(SccmPhase::Policy)
+        .role(SccmRole::Client)
+        .severity(Severity::Warning)
+        .confidence(SccmConfidence::Low)
+        .evidence(vec![first])
+        .correlation_keys(vec![finding_key(
+            SccmCorrelationKeyKind::AssignmentId,
+            "{ABCDEFAB-0000-0000-0000-000000000001}",
+            "abcdefab-0000-0000-0000-000000000001",
+            SccmKeyConfidence::Low,
+            Some("sccm-keys-experimental-v1"),
+            conflicting,
+        )])
+        .build();
+
+    for (label, result) in [
+        ("top-level", top_level),
+        ("terminal", terminal),
+        ("correlation-key", key),
+    ] {
+        assert_eq!(
+            result.unwrap_err(),
+            SccmFindingValidationError::ConflictingEvidenceReference,
+            "{label}"
+        );
+    }
+
+    let mut mutated = SccmFindingBuilder::new("mutated-conflicting-range")
+        .class(SccmFindingClass::Symptom)
+        .phase(SccmPhase::Policy)
+        .role(SccmRole::Client)
+        .severity(Severity::Warning)
+        .confidence(SccmConfidence::Low)
+        .evidence(vec![SccmEvidenceRef {
+            artifact_id: "artifact-a".into(),
+            entry_id: "entry-a".into(),
+            line_start: Some(1),
+            line_end: Some(1),
+        }])
+        .build()
+        .unwrap();
+    mutated.evidence.push(SccmEvidenceRef {
+        artifact_id: " artifact-a ".into(),
+        entry_id: " entry-a ".into(),
+        line_start: Some(2),
+        line_end: Some(2),
+    });
+    assert_eq!(
+        mutated.validate().unwrap_err(),
+        SccmFindingValidationError::InvalidEvidenceReference
+    );
+}
+
+#[test]
+fn finding_deserialization_prioritizes_conflicting_evidence_identity_ranges() {
+    let evidence = finding_evidence_ref("artifact-a", "entry-a");
+    let finding = SccmFindingBuilder::new("conflicting-deserialized-range")
+        .class(SccmFindingClass::ConfirmedFailure)
+        .phase(SccmPhase::Enforcement)
+        .role(SccmRole::Client)
+        .severity(Severity::Error)
+        .confidence(SccmConfidence::High)
+        .evidence(vec![evidence.clone()])
+        .terminal_evidence(vec![SccmTerminalEvidence::observed_failure(evidence)])
+        .build()
+        .unwrap();
+    let mut json = serde_json::to_value(finding).unwrap();
+    json["terminalEvidence"][0]["reference"]["lineStart"] = serde_json::json!(2);
+    json["terminalEvidence"][0]["reference"]["lineEnd"] = serde_json::json!(2);
+
+    let error = serde_json::from_value::<SccmFinding>(json)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("ConflictingEvidenceReference"), "{error}");
+}
+
+#[test]
+fn finding_serialization_prioritizes_conflicting_evidence_identity_ranges() {
+    let evidence = finding_evidence_ref("artifact-a", "entry-a");
+    let mut finding = SccmFindingBuilder::new("conflicting-serialized-range")
+        .class(SccmFindingClass::Symptom)
+        .phase(SccmPhase::Policy)
+        .role(SccmRole::Client)
+        .severity(Severity::Warning)
+        .confidence(SccmConfidence::Low)
+        .evidence(vec![evidence.clone()])
+        .correlation_keys(vec![finding_key(
+            SccmCorrelationKeyKind::AssignmentId,
+            "{ABCDEFAB-0000-0000-0000-000000000001}",
+            "abcdefab-0000-0000-0000-000000000001",
+            SccmKeyConfidence::Low,
+            Some("sccm-keys-experimental-v1"),
+            evidence,
+        )])
+        .build()
+        .unwrap();
+    let key_reference = finding.correlation_keys[0].evidence.as_mut().unwrap();
+    key_reference.line_start = Some(2);
+    key_reference.line_end = Some(2);
+
+    let error = serde_json::to_string(&finding).unwrap_err().to_string();
+    assert!(error.contains("ConflictingEvidenceReference"), "{error}");
+}
+
+#[test]
+fn finding_rejects_top_level_evidence_identity_whitespace_aliases() {
+    assert_evidence_alias_is_rejected(FindingEvidenceAliasSurface::TopLevel);
+}
+
+#[test]
+fn finding_rejects_terminal_evidence_identity_whitespace_aliases() {
+    assert_evidence_alias_is_rejected(FindingEvidenceAliasSurface::Terminal);
+}
+
+#[test]
+fn finding_rejects_correlation_key_evidence_identity_whitespace_aliases() {
+    assert_evidence_alias_is_rejected(FindingEvidenceAliasSurface::CorrelationKey);
+}
+
+#[test]
+fn finding_rejects_noncanonical_opaque_ids_across_public_boundaries() {
+    let mut mismatches = Vec::new();
+
+    if finding_with_evidence_alias(" finding-id ", None).err()
+        != Some(SccmFindingValidationError::MissingRequiredField)
+    {
+        mismatches.push("builder accepted a noncanonical finding ID");
+    }
+    let mut finding_id = finding_with_evidence_alias("finding-id", None).unwrap();
+    finding_id.finding_id = " finding-id ".into();
+    if finding_id.validate().err() != Some(SccmFindingValidationError::MissingRequiredField) {
+        mismatches.push("direct validate accepted a noncanonical finding ID");
+    }
+    if serde_json::to_value(&finding_id).is_ok() {
+        mismatches.push("serializer accepted a noncanonical finding ID");
+    }
+    let mut finding_id_json =
+        serde_json::to_value(finding_with_evidence_alias("finding-id-json", None).unwrap())
+            .unwrap();
+    finding_id_json["findingId"] = serde_json::json!(" finding-id-json ");
+    if serde_json::from_value::<SccmFinding>(finding_id_json).is_ok() {
+        mismatches.push("deserializer accepted a noncanonical finding ID");
+    }
+
+    let gap_builder = SccmFindingBuilder::new("noncanonical-gap-id")
+        .class(SccmFindingClass::Symptom)
+        .phase(SccmPhase::Policy)
+        .role(SccmRole::Client)
+        .severity(Severity::Warning)
+        .confidence(SccmConfidence::Low)
+        .evidence(vec![finding_evidence_ref("artifact-a", "entry-a")])
+        .coverage_gap(finding_client_gap(
+            " client-policy-agent ",
+            SccmCoverageState::AccessDenied,
+        ))
+        .build();
+    if gap_builder.err() != Some(SccmFindingValidationError::InvalidCoverageGap) {
+        mismatches.push("builder accepted a noncanonical coverage-gap artifact ID");
+    }
+    let mut gap = finding_with_gap_and_request("noncanonical-gap-direct");
+    gap.coverage_gaps[0].artifact_id = " client-policy-agent ".into();
+    if gap.validate().err() != Some(SccmFindingValidationError::InvalidCoverageGap) {
+        mismatches.push("direct validate accepted a noncanonical coverage-gap artifact ID");
+    }
+    if serde_json::to_value(&gap).is_ok() {
+        mismatches.push("serializer accepted a noncanonical coverage-gap artifact ID");
+    }
+    let mut gap_json =
+        serde_json::to_value(finding_with_gap_and_request("noncanonical-gap-json")).unwrap();
+    gap_json["coverageGaps"][0]["artifactId"] = serde_json::json!(" client-policy-agent ");
+    if serde_json::from_value::<SccmFinding>(gap_json).is_ok() {
+        mismatches.push("deserializer accepted a noncanonical coverage-gap artifact ID");
+    }
+
+    let request_builder = SccmFindingBuilder::new("noncanonical-request-id")
+        .class(SccmFindingClass::Symptom)
+        .phase(SccmPhase::Policy)
+        .role(SccmRole::Client)
+        .severity(Severity::Warning)
+        .confidence(SccmConfidence::Low)
+        .evidence(vec![finding_evidence_ref("artifact-a", "entry-a")])
+        .next_artifact(finding_request(
+            " policyAgent ",
+            SccmRole::Client,
+            " Confirm the bounded policy request outcome. ",
+        ))
+        .build();
+    if request_builder.err() != Some(SccmFindingValidationError::UndeclaredArtifactRequest) {
+        mismatches.push("builder accepted a noncanonical request logical ID");
+    }
+    let mut request = finding_with_gap_and_request("noncanonical-request-direct");
+    request.next_artifacts[0].logical_id = " policyAgent ".into();
+    request.next_artifacts[0].reason = " Confirm the bounded policy request outcome. ".into();
+    if request.validate().err() != Some(SccmFindingValidationError::UndeclaredArtifactRequest) {
+        mismatches.push("direct validate did not reject a noncanonical request logical ID");
+    }
+    if serde_json::to_value(&request).is_ok() {
+        mismatches.push("serializer accepted a noncanonical request logical ID");
+    }
+    let mut request_json =
+        serde_json::to_value(finding_with_gap_and_request("noncanonical-request-json")).unwrap();
+    request_json["nextArtifacts"][0]["logicalId"] = serde_json::json!(" policyAgent ");
+    request_json["nextArtifacts"][0]["reason"] =
+        serde_json::json!(" Confirm the bounded policy request outcome. ");
+    if serde_json::from_value::<SccmFinding>(request_json).is_ok() {
+        mismatches.push("deserializer accepted a noncanonical request logical ID");
+    }
+
+    assert!(mismatches.is_empty(), "{mismatches:#?}");
+}
+
+#[test]
+fn finding_rejects_whitespace_wrapped_declared_phase_shadow() {
+    let result = SccmFindingBuilder::new("wrapped-phase-shadow")
+        .class(SccmFindingClass::Symptom)
+        .phase(SccmPhase::Unknown(" policy ".into()))
+        .role(SccmRole::Client)
+        .severity(Severity::Warning)
+        .confidence(SccmConfidence::Low)
+        .evidence(vec![finding_evidence_ref("artifact-a", "entry-a")])
+        .build();
+
+    assert_eq!(
+        result.unwrap_err(),
+        SccmFindingValidationError::MissingRequiredField
+    );
+
+    let mut mutated = SccmFindingBuilder::new("direct-wrapped-phase-shadow")
+        .class(SccmFindingClass::Symptom)
+        .phase(SccmPhase::Policy)
+        .role(SccmRole::Client)
+        .severity(Severity::Warning)
+        .confidence(SccmConfidence::Low)
+        .evidence(vec![finding_evidence_ref("artifact-a", "entry-a")])
+        .build()
+        .unwrap();
+    mutated.phase = SccmPhase::Unknown(" policy ".into());
+    assert_eq!(
+        mutated.validate().unwrap_err(),
+        SccmFindingValidationError::MissingRequiredField
+    );
+}
+
+#[test]
+fn finding_deserialization_rejects_whitespace_wrapped_declared_phase_shadow() {
+    let finding = SccmFindingBuilder::new("deserialized-wrapped-phase-shadow")
+        .class(SccmFindingClass::Symptom)
+        .phase(SccmPhase::Policy)
+        .role(SccmRole::Client)
+        .severity(Severity::Warning)
+        .confidence(SccmConfidence::Low)
+        .evidence(vec![finding_evidence_ref("artifact-a", "entry-a")])
+        .build()
+        .unwrap();
+    let mut json = serde_json::to_value(finding).unwrap();
+    json["phase"] = serde_json::json!(" policy ");
+
+    assert!(serde_json::from_value::<SccmFinding>(json).is_err());
+}
+
+#[test]
+fn finding_serialization_rejects_whitespace_wrapped_declared_phase_shadow() {
+    let mut finding = SccmFindingBuilder::new("serialized-wrapped-phase-shadow")
+        .class(SccmFindingClass::Symptom)
+        .phase(SccmPhase::Policy)
+        .role(SccmRole::Client)
+        .severity(Severity::Warning)
+        .confidence(SccmConfidence::Low)
+        .evidence(vec![finding_evidence_ref("artifact-a", "entry-a")])
+        .build()
+        .unwrap();
+    finding.phase = SccmPhase::Unknown(" policy ".into());
+
+    assert!(serde_json::to_value(finding).is_err());
+}
+
+#[test]
+fn finding_rejects_noncanonical_future_phase_whitespace() {
+    let result = SccmFindingBuilder::new("noncanonical-future-phase")
+        .class(SccmFindingClass::Symptom)
+        .phase(SccmPhase::Unknown(" futurePhase ".into()))
+        .role(SccmRole::Client)
+        .severity(Severity::Warning)
+        .confidence(SccmConfidence::Low)
+        .evidence(vec![finding_evidence_ref("artifact-a", "entry-a")])
+        .build();
+
+    assert_eq!(
+        result.unwrap_err(),
+        SccmFindingValidationError::MissingRequiredField
+    );
+
+    let mut mutated = SccmFindingBuilder::new("direct-noncanonical-future-phase")
+        .class(SccmFindingClass::Symptom)
+        .phase(SccmPhase::Unknown("futurePhase".into()))
+        .role(SccmRole::Client)
+        .severity(Severity::Warning)
+        .confidence(SccmConfidence::Low)
+        .evidence(vec![finding_evidence_ref("artifact-a", "entry-a")])
+        .build()
+        .unwrap();
+    mutated.phase = SccmPhase::Unknown(" futurePhase ".into());
+    assert_eq!(
+        mutated.validate().unwrap_err(),
+        SccmFindingValidationError::MissingRequiredField
+    );
+    assert!(serde_json::to_value(&mutated).is_err());
+
+    let mut json = serde_json::to_value(
+        SccmFindingBuilder::new("deserialized-noncanonical-future-phase")
+            .class(SccmFindingClass::Symptom)
+            .phase(SccmPhase::Unknown("futurePhase".into()))
+            .role(SccmRole::Client)
+            .severity(Severity::Warning)
+            .confidence(SccmConfidence::Low)
+            .evidence(vec![finding_evidence_ref("artifact-a", "entry-a")])
+            .build()
+            .unwrap(),
+    )
+    .unwrap();
+    json["phase"] = serde_json::json!(" futurePhase ");
+    assert!(serde_json::from_value::<SccmFinding>(json).is_err());
+}
+
+#[test]
+fn finding_phase_unknown_values_require_canonical_standalone_serde() {
+    for value in ["", " ", " policy ", " futurePhase "] {
+        assert!(
+            serde_json::to_string(&SccmPhase::Unknown(value.into())).is_err(),
+            "serialized {value:?}"
+        );
+        let wire = serde_json::to_string(value).unwrap();
+        assert!(
+            serde_json::from_str::<SccmPhase>(&wire).is_err(),
+            "deserialized {value:?}"
+        );
+    }
+    for value in ["policy", "content", "enforcement"] {
+        assert!(
+            serde_json::to_string(&SccmPhase::Unknown(value.into())).is_err(),
+            "shadowed {value:?}"
+        );
+    }
+
+    let phase = SccmPhase::Unknown("futurePhase".into());
+    let wire = serde_json::to_string(&phase).unwrap();
+    assert_eq!(serde_json::from_str::<SccmPhase>(&wire).unwrap(), phase);
+
+    let finding = SccmFindingBuilder::new("canonical-future-phase")
+        .class(SccmFindingClass::Symptom)
+        .phase(phase)
+        .role(SccmRole::Client)
+        .severity(Severity::Warning)
+        .confidence(SccmConfidence::Low)
+        .evidence(vec![finding_evidence_ref("artifact-a", "entry-a")])
+        .build()
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(finding).unwrap()["phase"],
+        "futurePhase"
+    );
+}
+
+#[test]
+fn finding_terminal_evidence_kind_unknown_values_require_canonical_standalone_serde() {
+    for value in ["", " ", " futureTerminalKind "] {
+        assert!(
+            serde_json::to_string(&SccmTerminalEvidenceKind::Unknown(value.into())).is_err(),
+            "serialized {value:?}"
+        );
+        let wire = serde_json::to_string(value).unwrap();
+        assert!(
+            serde_json::from_str::<SccmTerminalEvidenceKind>(&wire).is_err(),
+            "deserialized {value:?}"
+        );
+    }
+    assert!(
+        serde_json::to_string(&SccmTerminalEvidenceKind::Unknown("observedFailure".into()))
+            .is_err()
+    );
+
+    let future = SccmTerminalEvidenceKind::Unknown("futureTerminalKind".into());
+    let wire = serde_json::to_string(&future).unwrap();
+    assert_eq!(
+        serde_json::from_str::<SccmTerminalEvidenceKind>(&wire).unwrap(),
+        future
+    );
+}
+
+#[test]
+fn finding_role_unknown_values_cannot_shadow_declared_roles() {
+    for value in ["", " ", " futureRole "] {
+        assert!(
+            serde_json::to_string(&SccmRole::Unknown(value.into())).is_err(),
+            "{value:?}"
+        );
+        let wire = serde_json::to_string(value).unwrap();
+        assert!(
+            serde_json::from_str::<SccmRole>(&wire).is_err(),
+            "{value:?}"
+        );
+    }
+
+    for value in [
+        "client",
+        "siteServer",
+        "managementPoint",
+        "distributionPoint",
+        "softwareUpdatePoint",
+        "wsUs",
+        "provider",
+        "adminService",
+    ] {
+        assert!(
+            serde_json::to_string(&SccmRole::Unknown(value.into())).is_err(),
+            "{value:?}"
+        );
+    }
+
+    let future = SccmRole::Unknown("futureRole".into());
+    let wire = serde_json::to_string(&future).unwrap();
+    assert_eq!(serde_json::from_str::<SccmRole>(&wire).unwrap(), future);
+}
+
+#[test]
+fn finding_validates_finding_gap_and_request_roles_before_other_rules() {
+    let top_level = SccmFindingBuilder::new("invalid-top-level-role")
+        .class(SccmFindingClass::Symptom)
+        .phase(SccmPhase::Policy)
+        .role(SccmRole::Unknown("client".into()))
+        .severity(Severity::Warning)
+        .confidence(SccmConfidence::Low)
+        .evidence(vec![finding_evidence_ref("artifact-a", "entry-a")])
+        .build();
+    let gap = SccmFindingBuilder::new("invalid-gap-role")
+        .class(SccmFindingClass::Symptom)
+        .phase(SccmPhase::Policy)
+        .role(SccmRole::Client)
+        .severity(Severity::Warning)
+        .confidence(SccmConfidence::Low)
+        .evidence(vec![finding_evidence_ref("artifact-a", "entry-a")])
+        .coverage_gap(SccmFindingCoverageGap {
+            artifact_id: "client-policy-agent".into(),
+            role: SccmRole::Unknown("client".into()),
+            coverage: SccmCoverageState::AccessDenied,
+        })
+        .build();
+    let request = SccmFindingBuilder::new("invalid-request-role")
+        .class(SccmFindingClass::Symptom)
+        .phase(SccmPhase::Policy)
+        .role(SccmRole::Client)
+        .severity(Severity::Warning)
+        .confidence(SccmConfidence::Low)
+        .evidence(vec![finding_evidence_ref("artifact-a", "entry-a")])
+        .next_artifact(finding_request(
+            "policyAgent",
+            SccmRole::Unknown("client".into()),
+            "Confirm the bounded policy request outcome.",
+        ))
+        .build();
+
+    for (label, result) in [
+        ("finding", top_level),
+        ("coverage-gap", gap),
+        ("artifact-request", request),
+    ] {
+        assert_eq!(
+            result.unwrap_err(),
+            SccmFindingValidationError::InvalidRole,
+            "{label}"
+        );
+    }
+}
+
+#[test]
+fn finding_deserialization_validates_finding_gap_and_request_roles() {
+    let json =
+        serde_json::to_value(finding_with_gap_and_request("invalid-deserialized-role")).unwrap();
+    let mut cases = Vec::new();
+
+    let mut top_level = json.clone();
+    top_level["role"] = serde_json::json!(" client ");
+    cases.push(("finding", top_level));
+
+    let mut gap = json.clone();
+    gap["coverageGaps"][0]["role"] = serde_json::json!(" client ");
+    cases.push(("coverage-gap", gap));
+
+    let mut request = json;
+    request["nextArtifacts"][0]["role"] = serde_json::json!(" client ");
+    cases.push(("artifact-request", request));
+
+    for (label, case) in cases {
+        let error = serde_json::from_value::<SccmFinding>(case)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("InvalidRole"), "{label}: {error}");
+    }
+}
+
+#[test]
+fn finding_serialization_validates_finding_gap_and_request_roles() {
+    let finding = finding_with_gap_and_request("invalid-serialized-role");
+    let mut cases = Vec::new();
+
+    let mut top_level = finding.clone();
+    top_level.role = SccmRole::Unknown("client".into());
+    cases.push(("finding", top_level));
+
+    let mut gap = finding.clone();
+    gap.coverage_gaps[0].role = SccmRole::Unknown("client".into());
+    cases.push(("coverage-gap", gap));
+
+    let mut request = finding;
+    request.next_artifacts[0].role = SccmRole::Unknown("client".into());
+    cases.push(("artifact-request", request));
+
+    for (label, case) in cases {
+        let error = serde_json::to_string(&case).unwrap_err().to_string();
+        assert!(error.contains("InvalidRole"), "{label}: {error}");
+    }
+}
+
+#[test]
+fn finding_artifact_requests_reject_structurally_unbounded_reasons() {
+    let reasons = [
+        "Collect every file on the system.",
+        "Scan the full disk for related evidence.",
+        "Collect the complete C: drive.",
+        "Walk all directories under C:.",
+        "Collect drive-wide logs.",
+        "Collect drive wide logs.",
+        "Collect drivewide logs.",
+        "Collect sitewide logs.",
+        "Recursively collect PolicyAgent.log.",
+        "Collect from the filesystem root.",
+        "Use a glob for matching log files.",
+        r"Collect C:\Windows\CCM\Logs\*.log.",
+    ];
+    let mut accepted = Vec::new();
+
+    for reason in reasons
+        .into_iter()
+        .chain(ROOTED_ARTIFACT_REQUEST_REASONS)
+        .chain(COMPACT_UNBOUNDED_ARTIFACT_REQUEST_REASONS)
+        .chain(ORDER_INDEPENDENT_UNBOUNDED_ARTIFACT_REQUEST_REASONS)
+    {
+        let result = SccmFindingBuilder::new("unbounded-structural-request")
+            .class(SccmFindingClass::Symptom)
+            .phase(SccmPhase::Policy)
+            .role(SccmRole::Client)
+            .severity(Severity::Warning)
+            .confidence(SccmConfidence::Low)
+            .evidence(vec![finding_evidence_ref("artifact-a", "entry-a")])
+            .next_artifact(finding_request("policyAgent", SccmRole::Client, reason))
+            .build();
+
+        if result.err() != Some(SccmFindingValidationError::InvalidArtifactRequestReason) {
+            accepted.push(reason);
+        }
+    }
+
+    assert!(
+        accepted.is_empty(),
+        "accepted unbounded reasons: {accepted:#?}"
+    );
+}
+
+#[test]
+fn finding_artifact_requests_accept_specific_bounded_reasons() {
+    let existing = [
+        ("policyAgent", "Confirm the bounded policy request outcome."),
+        (
+            "policyAgent",
+            "Collect the PolicyAgent record cited by assignment A.",
+        ),
+        (
+            "policyAgent",
+            "Confirm the root cause recorded by PolicyAgent.",
+        ),
+        (
+            "policyAgent",
+            "Confirm the disk status code recorded in PolicyAgent.log.",
+        ),
+        ("smsts", "Collect the disk imaging Task Sequence log."),
+        (
+            "policyAgent",
+            "Collect Logs/PolicyAgent.log from the bounded bundle.",
+        ),
+        (
+            "policyAgent",
+            r"Collect Logs\PolicyAgent.log from the bounded bundle.",
+        ),
+    ];
+    let canonical = finding_with_gap_and_request("bounded-reason-parity");
+    let mut rejected = Vec::new();
+
+    for (logical_id, reason) in existing
+        .into_iter()
+        .chain(BOUNDED_NARRATIVE_ARTIFACT_REQUESTS)
+    {
+        if SccmFindingBuilder::new("bounded-structural-request")
+            .class(SccmFindingClass::Symptom)
+            .phase(SccmPhase::Policy)
+            .role(SccmRole::Client)
+            .severity(Severity::Warning)
+            .confidence(SccmConfidence::Low)
+            .evidence(vec![finding_evidence_ref("artifact-a", "entry-a")])
+            .next_artifact(finding_request(logical_id, SccmRole::Client, reason))
+            .build()
+            .is_err()
+        {
+            rejected.push(format!("builder: {reason}"));
+        }
+
+        let mut direct = canonical.clone();
+        direct.next_artifacts[0] = finding_request(logical_id, SccmRole::Client, reason);
+        if direct.validate().is_err() {
+            rejected.push(format!("direct validate: {reason}"));
+        }
+        if serde_json::to_value(&direct).is_err() {
+            rejected.push(format!("serializer: {reason}"));
+        }
+
+        let mut json = serde_json::to_value(&canonical).unwrap();
+        json["nextArtifacts"][0] =
+            serde_json::to_value(finding_request(logical_id, SccmRole::Client, reason)).unwrap();
+        if serde_json::from_value::<SccmFinding>(json).is_err() {
+            rejected.push(format!("deserializer: {reason}"));
+        }
+    }
+
+    assert!(
+        rejected.is_empty(),
+        "rejected bounded reasons: {rejected:#?}"
+    );
+}
+
+#[test]
+fn finding_artifact_request_bounds_apply_to_deserialization_and_serialization() {
+    let finding = finding_with_gap_and_request("request-boundary-parity");
+    let mut accepted = Vec::new();
+    for reason in ROOTED_ARTIFACT_REQUEST_REASONS
+        .into_iter()
+        .chain([
+            "Collect every file on the system.",
+            "Scan the full disk for related evidence.",
+        ])
+        .chain(COMPACT_UNBOUNDED_ARTIFACT_REQUEST_REASONS)
+        .chain(ORDER_INDEPENDENT_UNBOUNDED_ARTIFACT_REQUEST_REASONS)
+    {
+        let mut direct = finding.clone();
+        direct.next_artifacts[0].reason = reason.into();
+        if direct.validate().err() != Some(SccmFindingValidationError::InvalidArtifactRequestReason)
+        {
+            accepted.push(format!("direct validate: {reason}"));
+        }
+
+        let mut json = serde_json::to_value(&finding).unwrap();
+        json["nextArtifacts"][0]["reason"] = serde_json::json!(reason);
+        if serde_json::from_value::<SccmFinding>(json).is_ok() {
+            accepted.push(format!("deserializer: {reason}"));
+        }
+
+        let mut mutated = finding.clone();
+        mutated.next_artifacts[0].reason = reason.into();
+        if serde_json::to_string(&mutated).is_ok() {
+            accepted.push(format!("serializer: {reason}"));
+        }
+    }
+
+    assert!(
+        accepted.is_empty(),
+        "accepted unbounded request boundaries: {accepted:#?}"
+    );
+}
+
+#[test]
+fn finding_review_unbounded_scope_matrix_fails_at_every_public_boundary() {
+    let canonical = finding_with_gap_and_request("review-unbounded-scope-parity");
+    let mut accepted = Vec::new();
+
+    for reason in REVIEW_UNBOUNDED_ARTIFACT_REQUEST_REASONS {
+        let builder = SccmFindingBuilder::new("review-unbounded-scope-builder")
+            .class(SccmFindingClass::Symptom)
+            .phase(SccmPhase::Policy)
+            .role(SccmRole::Client)
+            .severity(Severity::Warning)
+            .confidence(SccmConfidence::Low)
+            .evidence(vec![finding_evidence_ref("artifact-a", "entry-a")])
+            .next_artifact(finding_request("policyAgent", SccmRole::Client, reason))
+            .build();
+        if builder.err() != Some(SccmFindingValidationError::InvalidArtifactRequestReason) {
+            accepted.push(format!("builder: {reason}"));
+        }
+
+        let mut direct = canonical.clone();
+        direct.next_artifacts[0].reason = reason.into();
+        if direct.validate().err() != Some(SccmFindingValidationError::InvalidArtifactRequestReason)
+        {
+            accepted.push(format!("direct validate: {reason}"));
+        }
+        if serde_json::to_value(&direct).is_ok() {
+            accepted.push(format!("serializer: {reason}"));
+        }
+
+        let mut json = serde_json::to_value(&canonical).unwrap();
+        json["nextArtifacts"][0]["reason"] = serde_json::json!(reason);
+        if serde_json::from_value::<SccmFinding>(json).is_ok() {
+            accepted.push(format!("deserializer: {reason}"));
+        }
+    }
+
+    assert!(
+        accepted.is_empty(),
+        "accepted reviewed unbounded request boundaries: {accepted:#?}"
+    );
+}
+
+#[test]
+fn finding_review_bounded_named_artifact_matrix_passes_every_public_boundary() {
+    let canonical = finding_with_gap_and_request("review-bounded-scope-parity");
+    let mut rejected = Vec::new();
+
+    for (logical_id, reason) in REVIEW_BOUNDED_NAMED_ARTIFACT_REQUESTS {
+        let builder = SccmFindingBuilder::new("review-bounded-scope-builder")
+            .class(SccmFindingClass::Symptom)
+            .phase(SccmPhase::Policy)
+            .role(SccmRole::Client)
+            .severity(Severity::Warning)
+            .confidence(SccmConfidence::Low)
+            .evidence(vec![finding_evidence_ref("artifact-a", "entry-a")])
+            .next_artifact(finding_request(logical_id, SccmRole::Client, reason))
+            .build();
+        if builder.is_err() {
+            rejected.push(format!("builder: {logical_id}: {reason}"));
+        }
+
+        let mut direct = canonical.clone();
+        direct.next_artifacts[0] = finding_request(logical_id, SccmRole::Client, reason);
+        if direct.validate().is_err() {
+            rejected.push(format!("direct validate: {logical_id}: {reason}"));
+        }
+        if serde_json::to_value(&direct).is_err() {
+            rejected.push(format!("serializer: {logical_id}: {reason}"));
+        }
+
+        let mut json = serde_json::to_value(&canonical).unwrap();
+        json["nextArtifacts"][0] =
+            serde_json::to_value(finding_request(logical_id, SccmRole::Client, reason)).unwrap();
+        if serde_json::from_value::<SccmFinding>(json).is_err() {
+            rejected.push(format!("deserializer: {logical_id}: {reason}"));
+        }
+    }
+
+    assert!(
+        rejected.is_empty(),
+        "rejected reviewed bounded request boundaries: {rejected:#?}"
+    );
+}
+
+#[test]
+fn finding_review_expanded_unbounded_scope_fails_at_every_public_boundary() {
+    let canonical = finding_with_gap_and_request("review-expanded-unbounded-scope-parity");
+    let mut accepted = Vec::new();
+
+    for reason in REVIEW_EXPANDED_UNBOUNDED_ARTIFACT_REQUEST_REASONS {
+        let builder = SccmFindingBuilder::new("review-expanded-unbounded-scope-builder")
+            .class(SccmFindingClass::Symptom)
+            .phase(SccmPhase::Policy)
+            .role(SccmRole::Client)
+            .severity(Severity::Warning)
+            .confidence(SccmConfidence::Low)
+            .evidence(vec![finding_evidence_ref("artifact-a", "entry-a")])
+            .next_artifact(finding_request("policyAgent", SccmRole::Client, reason))
+            .build();
+        if builder.err() != Some(SccmFindingValidationError::InvalidArtifactRequestReason) {
+            accepted.push(format!("builder: {reason}"));
+        }
+
+        let mut direct = canonical.clone();
+        direct.next_artifacts[0].reason = reason.into();
+        if direct.validate().err() != Some(SccmFindingValidationError::InvalidArtifactRequestReason)
+        {
+            accepted.push(format!("direct validate: {reason}"));
+        }
+        if serde_json::to_value(&direct).is_ok() {
+            accepted.push(format!("serializer: {reason}"));
+        }
+
+        let mut json = serde_json::to_value(&canonical).unwrap();
+        json["nextArtifacts"][0]["reason"] = serde_json::json!(reason);
+        if serde_json::from_value::<SccmFinding>(json).is_ok() {
+            accepted.push(format!("deserializer: {reason}"));
+        }
+    }
+
+    assert!(
+        accepted.is_empty(),
+        "accepted expanded unbounded request boundaries: {accepted:#?}"
+    );
+}
+
+#[test]
+fn finding_review_lookalike_identity_fails_at_every_public_boundary() {
+    let canonical = finding_with_gap_and_request("review-lookalike-identity-parity");
+    let mut accepted = Vec::new();
+
+    for reason in REVIEW_LOOKALIKE_ARTIFACT_REQUEST_REASONS {
+        let builder = SccmFindingBuilder::new("review-lookalike-identity-builder")
+            .class(SccmFindingClass::Symptom)
+            .phase(SccmPhase::Policy)
+            .role(SccmRole::Client)
+            .severity(Severity::Warning)
+            .confidence(SccmConfidence::Low)
+            .evidence(vec![finding_evidence_ref("artifact-a", "entry-a")])
+            .next_artifact(finding_request("policyAgent", SccmRole::Client, reason))
+            .build();
+        if builder.err() != Some(SccmFindingValidationError::InvalidArtifactRequestReason) {
+            accepted.push(format!("builder: {reason}"));
+        }
+
+        let mut direct = canonical.clone();
+        direct.next_artifacts[0].reason = reason.into();
+        if direct.validate().err() != Some(SccmFindingValidationError::InvalidArtifactRequestReason)
+        {
+            accepted.push(format!("direct validate: {reason}"));
+        }
+        if serde_json::to_value(&direct).is_ok() {
+            accepted.push(format!("serializer: {reason}"));
+        }
+
+        let mut json = serde_json::to_value(&canonical).unwrap();
+        json["nextArtifacts"][0]["reason"] = serde_json::json!(reason);
+        if serde_json::from_value::<SccmFinding>(json).is_ok() {
+            accepted.push(format!("deserializer: {reason}"));
+        }
+    }
+
+    assert!(
+        accepted.is_empty(),
+        "accepted lookalike artifact request boundaries: {accepted:#?}"
+    );
+}
+
+#[test]
+fn finding_review_unqualified_collection_actions_fail_at_every_public_boundary() {
+    let canonical = finding_with_gap_and_request("review-unqualified-action-parity");
+    let mut accepted = Vec::new();
+
+    for reason in REVIEW_UNQUALIFIED_COLLECTION_ACTION_REASONS {
+        let builder = SccmFindingBuilder::new("review-unqualified-action-builder")
+            .class(SccmFindingClass::Symptom)
+            .phase(SccmPhase::Policy)
+            .role(SccmRole::Client)
+            .severity(Severity::Warning)
+            .confidence(SccmConfidence::Low)
+            .evidence(vec![finding_evidence_ref("artifact-a", "entry-a")])
+            .next_artifact(finding_request("policyAgent", SccmRole::Client, reason))
+            .build();
+        if builder.err() != Some(SccmFindingValidationError::InvalidArtifactRequestReason) {
+            accepted.push(format!("builder: {reason}"));
+        }
+
+        let mut direct = canonical.clone();
+        direct.next_artifacts[0].reason = reason.into();
+        if direct.validate().err() != Some(SccmFindingValidationError::InvalidArtifactRequestReason)
+        {
+            accepted.push(format!("direct validate: {reason}"));
+        }
+        if serde_json::to_value(&direct).is_ok() {
+            accepted.push(format!("serializer: {reason}"));
+        }
+
+        let mut json = serde_json::to_value(&canonical).unwrap();
+        json["nextArtifacts"][0]["reason"] = serde_json::json!(reason);
+        if serde_json::from_value::<SccmFinding>(json).is_ok() {
+            accepted.push(format!("deserializer: {reason}"));
+        }
+    }
+
+    assert!(
+        accepted.is_empty(),
+        "accepted unqualified collection action boundaries: {accepted:#?}"
+    );
+}
+
+#[test]
+fn finding_review_coordinated_unqualified_actions_fail_at_every_public_boundary() {
+    let canonical = finding_with_gap_and_request("review-coordinated-action-parity");
+    let mut accepted = Vec::new();
+
+    for reason in REVIEW_COORDINATED_UNQUALIFIED_ACTION_REASONS {
+        let builder = SccmFindingBuilder::new("review-coordinated-action-builder")
+            .class(SccmFindingClass::Symptom)
+            .phase(SccmPhase::Policy)
+            .role(SccmRole::Client)
+            .severity(Severity::Warning)
+            .confidence(SccmConfidence::Low)
+            .evidence(vec![finding_evidence_ref("artifact-a", "entry-a")])
+            .next_artifact(finding_request("policyAgent", SccmRole::Client, reason))
+            .build();
+        if builder.err() != Some(SccmFindingValidationError::InvalidArtifactRequestReason) {
+            accepted.push(format!("builder: {reason}"));
+        }
+
+        let mut direct = canonical.clone();
+        direct.next_artifacts[0].reason = reason.into();
+        if direct.validate().err() != Some(SccmFindingValidationError::InvalidArtifactRequestReason)
+        {
+            accepted.push(format!("direct validate: {reason}"));
+        }
+        if serde_json::to_value(&direct).is_ok() {
+            accepted.push(format!("serializer: {reason}"));
+        }
+
+        let mut json = serde_json::to_value(&canonical).unwrap();
+        json["nextArtifacts"][0]["reason"] = serde_json::json!(reason);
+        if serde_json::from_value::<SccmFinding>(json).is_ok() {
+            accepted.push(format!("deserializer: {reason}"));
+        }
+    }
+
+    assert!(
+        accepted.is_empty(),
+        "accepted coordinated unqualified action boundaries: {accepted:#?}"
+    );
+}
+
+#[test]
+fn finding_review_unbound_collection_targets_fail_at_every_public_boundary() {
+    let canonical = finding_with_gap_and_request("review-unbound-target-parity");
+    let mut accepted = Vec::new();
+
+    for reason in REVIEW_UNBOUND_COLLECTION_TARGET_REASONS {
+        let builder = SccmFindingBuilder::new("review-unbound-target-builder")
+            .class(SccmFindingClass::Symptom)
+            .phase(SccmPhase::Policy)
+            .role(SccmRole::Client)
+            .severity(Severity::Warning)
+            .confidence(SccmConfidence::Low)
+            .evidence(vec![finding_evidence_ref("artifact-a", "entry-a")])
+            .next_artifact(finding_request("policyAgent", SccmRole::Client, reason))
+            .build();
+        if builder.err() != Some(SccmFindingValidationError::InvalidArtifactRequestReason) {
+            accepted.push(format!("builder: {reason}"));
+        }
+
+        let mut direct = canonical.clone();
+        direct.next_artifacts[0].reason = reason.into();
+        if direct.validate().err() != Some(SccmFindingValidationError::InvalidArtifactRequestReason)
+        {
+            accepted.push(format!("direct validate: {reason}"));
+        }
+        if serde_json::to_value(&direct).is_ok() {
+            accepted.push(format!("serializer: {reason}"));
+        }
+
+        let mut json = serde_json::to_value(&canonical).unwrap();
+        json["nextArtifacts"][0]["reason"] = serde_json::json!(reason);
+        if serde_json::from_value::<SccmFinding>(json).is_ok() {
+            accepted.push(format!("deserializer: {reason}"));
+        }
+    }
+
+    assert!(
+        accepted.is_empty(),
+        "accepted unbound collection target boundaries: {accepted:#?}"
+    );
+}
+
+#[test]
+fn finding_review_safe_collection_narratives_pass_at_every_public_boundary() {
+    let canonical = finding_with_gap_and_request("review-safe-narrative-parity");
+    let mut rejected = Vec::new();
+
+    for reason in REVIEW_SAFE_COLLECTION_NARRATIVE_REASONS {
+        let builder = SccmFindingBuilder::new("review-safe-narrative-builder")
+            .class(SccmFindingClass::Symptom)
+            .phase(SccmPhase::Policy)
+            .role(SccmRole::Client)
+            .severity(Severity::Warning)
+            .confidence(SccmConfidence::Low)
+            .evidence(vec![finding_evidence_ref("artifact-a", "entry-a")])
+            .next_artifact(finding_request("policyAgent", SccmRole::Client, reason))
+            .build();
+        if let Err(error) = builder {
+            rejected.push(format!("builder ({error:?}): {reason}"));
+        }
+
+        let mut direct = canonical.clone();
+        direct.next_artifacts[0].reason = reason.into();
+        if let Err(error) = direct.validate() {
+            rejected.push(format!("direct validate ({error:?}): {reason}"));
+        }
+        if serde_json::to_value(&direct).is_err() {
+            rejected.push(format!("serializer: {reason}"));
+        }
+
+        let mut json = serde_json::to_value(&canonical).unwrap();
+        json["nextArtifacts"][0]["reason"] = serde_json::json!(reason);
+        if serde_json::from_value::<SccmFinding>(json).is_err() {
+            rejected.push(format!("deserializer: {reason}"));
+        }
+    }
+
+    assert!(
+        rejected.is_empty(),
+        "rejected safe collection narratives: {rejected:#?}"
+    );
+}
+
+#[test]
+fn finding_review_non_authorizing_collection_language_fails_at_every_public_boundary() {
+    let canonical = finding_with_gap_and_request("review-non-authorizing-language-parity");
+    let mut accepted = Vec::new();
+
+    for reason in REVIEW_NON_AUTHORIZING_COLLECTION_LANGUAGE_REASONS {
+        let builder = SccmFindingBuilder::new("review-non-authorizing-language-builder")
+            .class(SccmFindingClass::Symptom)
+            .phase(SccmPhase::Policy)
+            .role(SccmRole::Client)
+            .severity(Severity::Warning)
+            .confidence(SccmConfidence::Low)
+            .evidence(vec![finding_evidence_ref("artifact-a", "entry-a")])
+            .next_artifact(finding_request("policyAgent", SccmRole::Client, reason))
+            .build();
+        if builder.err() != Some(SccmFindingValidationError::InvalidArtifactRequestReason) {
+            accepted.push(format!("builder: {reason}"));
+        }
+
+        let mut direct = canonical.clone();
+        direct.next_artifacts[0].reason = reason.into();
+        if direct.validate().err() != Some(SccmFindingValidationError::InvalidArtifactRequestReason)
+        {
+            accepted.push(format!("direct validate: {reason}"));
+        }
+        if serde_json::to_value(&direct).is_ok() {
+            accepted.push(format!("serializer: {reason}"));
+        }
+
+        let mut json = serde_json::to_value(&canonical).unwrap();
+        json["nextArtifacts"][0]["reason"] = serde_json::json!(reason);
+        if serde_json::from_value::<SccmFinding>(json).is_ok() {
+            accepted.push(format!("deserializer: {reason}"));
+        }
+    }
+
+    assert!(
+        accepted.is_empty(),
+        "accepted non-authorizing collection language: {accepted:#?}"
+    );
+}
+
+#[test]
+fn finding_review_safe_strong_punctuation_narratives_pass_at_every_public_boundary() {
+    let canonical = finding_with_gap_and_request("review-safe-strong-narrative-parity");
+    let mut rejected = Vec::new();
+
+    for reason in REVIEW_SAFE_STRONG_PUNCTUATION_NARRATIVE_REASONS {
+        let builder = SccmFindingBuilder::new("review-safe-strong-narrative-builder")
+            .class(SccmFindingClass::Symptom)
+            .phase(SccmPhase::Policy)
+            .role(SccmRole::Client)
+            .severity(Severity::Warning)
+            .confidence(SccmConfidence::Low)
+            .evidence(vec![finding_evidence_ref("artifact-a", "entry-a")])
+            .next_artifact(finding_request("policyAgent", SccmRole::Client, reason))
+            .build();
+        if let Err(error) = builder {
+            rejected.push(format!("builder ({error:?}): {reason}"));
+        }
+
+        let mut direct = canonical.clone();
+        direct.next_artifacts[0].reason = reason.into();
+        if let Err(error) = direct.validate() {
+            rejected.push(format!("direct validate ({error:?}): {reason}"));
+        }
+        if serde_json::to_value(&direct).is_err() {
+            rejected.push(format!("serializer: {reason}"));
+        }
+
+        let mut json = serde_json::to_value(&canonical).unwrap();
+        json["nextArtifacts"][0]["reason"] = serde_json::json!(reason);
+        if serde_json::from_value::<SccmFinding>(json).is_err() {
+            rejected.push(format!("deserializer: {reason}"));
+        }
+    }
+
+    assert!(
+        rejected.is_empty(),
+        "rejected safe strong-punctuation narratives: {rejected:#?}"
+    );
+}
+
+#[test]
+fn finding_review_evidence_subject_cannot_authorize_passive_target_at_any_public_boundary() {
+    let canonical = finding_with_gap_and_request("review-evidence-passive-target-parity");
+    let mut accepted = Vec::new();
+
+    for reason in REVIEW_EVIDENCE_SUBJECT_UNBOUND_PASSIVE_REASONS {
+        let builder = SccmFindingBuilder::new("review-evidence-passive-target-builder")
+            .class(SccmFindingClass::Symptom)
+            .phase(SccmPhase::Policy)
+            .role(SccmRole::Client)
+            .severity(Severity::Warning)
+            .confidence(SccmConfidence::Low)
+            .evidence(vec![finding_evidence_ref("artifact-a", "entry-a")])
+            .next_artifact(finding_request("policyAgent", SccmRole::Client, reason))
+            .build();
+        if builder.err() != Some(SccmFindingValidationError::InvalidArtifactRequestReason) {
+            accepted.push(format!("builder: {reason}"));
+        }
+
+        let mut direct = canonical.clone();
+        direct.next_artifacts[0].reason = reason.into();
+        if direct.validate().err() != Some(SccmFindingValidationError::InvalidArtifactRequestReason)
+        {
+            accepted.push(format!("direct validate: {reason}"));
+        }
+        if serde_json::to_value(&direct).is_ok() {
+            accepted.push(format!("serializer: {reason}"));
+        }
+
+        let mut json = serde_json::to_value(&canonical).unwrap();
+        json["nextArtifacts"][0]["reason"] = serde_json::json!(reason);
+        if serde_json::from_value::<SccmFinding>(json).is_ok() {
+            accepted.push(format!("deserializer: {reason}"));
+        }
+    }
+
+    assert!(
+        accepted.is_empty(),
+        "accepted evidence-subject passive targets: {accepted:#?}"
+    );
+}
+
+#[test]
+fn finding_review_standalone_and_inflected_collection_requests_fail_at_every_public_boundary() {
+    let canonical = finding_with_gap_and_request("review-standalone-inflected-parity");
+    let mut accepted = Vec::new();
+
+    for reason in REVIEW_STANDALONE_AND_INFLECTED_COLLECTION_REASONS {
+        let builder = SccmFindingBuilder::new("review-standalone-inflected-builder")
+            .class(SccmFindingClass::Symptom)
+            .phase(SccmPhase::Policy)
+            .role(SccmRole::Client)
+            .severity(Severity::Warning)
+            .confidence(SccmConfidence::Low)
+            .evidence(vec![finding_evidence_ref("artifact-a", "entry-a")])
+            .next_artifact(finding_request("policyAgent", SccmRole::Client, reason))
+            .build();
+        if builder.err() != Some(SccmFindingValidationError::InvalidArtifactRequestReason) {
+            accepted.push(format!("builder: {reason}"));
+        }
+
+        let mut direct = canonical.clone();
+        direct.next_artifacts[0].reason = reason.into();
+        if direct.validate().err() != Some(SccmFindingValidationError::InvalidArtifactRequestReason)
+        {
+            accepted.push(format!("direct validate: {reason}"));
+        }
+        if serde_json::to_value(&direct).is_ok() {
+            accepted.push(format!("serializer: {reason}"));
+        }
+
+        let mut json = serde_json::to_value(&canonical).unwrap();
+        json["nextArtifacts"][0]["reason"] = serde_json::json!(reason);
+        if serde_json::from_value::<SccmFinding>(json).is_ok() {
+            accepted.push(format!("deserializer: {reason}"));
+        }
+    }
+
+    assert!(
+        accepted.is_empty(),
+        "accepted standalone or inflected collection requests: {accepted:#?}"
+    );
+}
+
+#[test]
+fn finding_review_unrecognized_confirmation_requests_fail_at_every_public_boundary() {
+    let canonical = finding_with_gap_and_request("review-confirmation-request-parity");
+    let mut accepted = Vec::new();
+
+    for reason in REVIEW_UNRECOGNIZED_CONFIRMATION_REQUEST_REASONS {
+        let builder = SccmFindingBuilder::new("review-confirmation-request-builder")
+            .class(SccmFindingClass::Symptom)
+            .phase(SccmPhase::Policy)
+            .role(SccmRole::Client)
+            .severity(Severity::Warning)
+            .confidence(SccmConfidence::Low)
+            .evidence(vec![finding_evidence_ref("artifact-a", "entry-a")])
+            .next_artifact(finding_request("policyAgent", SccmRole::Client, reason))
+            .build();
+        if builder.err() != Some(SccmFindingValidationError::InvalidArtifactRequestReason) {
+            accepted.push(format!("builder: {reason}"));
+        }
+
+        let mut direct = canonical.clone();
+        direct.next_artifacts[0].reason = reason.into();
+        if direct.validate().err() != Some(SccmFindingValidationError::InvalidArtifactRequestReason)
+        {
+            accepted.push(format!("direct validate: {reason}"));
+        }
+        if serde_json::to_value(&direct).is_ok() {
+            accepted.push(format!("serializer: {reason}"));
+        }
+
+        let mut json = serde_json::to_value(&canonical).unwrap();
+        json["nextArtifacts"][0]["reason"] = serde_json::json!(reason);
+        if serde_json::from_value::<SccmFinding>(json).is_ok() {
+            accepted.push(format!("deserializer: {reason}"));
+        }
+    }
+
+    assert!(
+        accepted.is_empty(),
+        "accepted unrecognized confirmation requests: {accepted:#?}"
+    );
+}
+
+#[test]
+fn finding_review_passive_unbounded_confirmation_requests_fail_at_every_public_boundary() {
+    let canonical = finding_with_gap_and_request("review-passive-confirmation-parity");
+    let mut accepted = Vec::new();
+
+    for reason in REVIEW_PASSIVE_UNBOUNDED_CONFIRMATION_REASONS {
+        let logical_id = if reason.contains("Smsts.log") {
+            "smsts"
+        } else {
+            "policyAgent"
+        };
+        let builder = SccmFindingBuilder::new("review-passive-confirmation-builder")
+            .class(SccmFindingClass::Symptom)
+            .phase(SccmPhase::Policy)
+            .role(SccmRole::Client)
+            .severity(Severity::Warning)
+            .confidence(SccmConfidence::Low)
+            .evidence(vec![finding_evidence_ref("artifact-a", "entry-a")])
+            .next_artifact(finding_request(logical_id, SccmRole::Client, reason))
+            .build();
+        if builder.err() != Some(SccmFindingValidationError::InvalidArtifactRequestReason) {
+            accepted.push(format!("builder: {reason}"));
+        }
+
+        let mut direct = canonical.clone();
+        direct.next_artifacts[0] = finding_request(logical_id, SccmRole::Client, reason);
+        if direct.validate().err() != Some(SccmFindingValidationError::InvalidArtifactRequestReason)
+        {
+            accepted.push(format!("direct validate: {reason}"));
+        }
+        if serde_json::to_value(&direct).is_ok() {
+            accepted.push(format!("serializer: {reason}"));
+        }
+
+        let mut json = serde_json::to_value(&canonical).unwrap();
+        json["nextArtifacts"][0] =
+            serde_json::to_value(finding_request(logical_id, SccmRole::Client, reason)).unwrap();
+        if serde_json::from_value::<SccmFinding>(json).is_ok() {
+            accepted.push(format!("deserializer: {reason}"));
+        }
+    }
+
+    assert!(
+        accepted.is_empty(),
+        "accepted passive unbounded confirmation requests: {accepted:#?}"
+    );
+}
+
+#[test]
+fn finding_review_bounded_auxiliary_confirmations_pass_at_every_public_boundary() {
+    let canonical = finding_with_gap_and_request("review-bounded-auxiliary-parity");
+    let mut rejected = Vec::new();
+
+    for (logical_id, reason) in REVIEW_BOUNDED_AUXILIARY_CONFIRMATION_REASONS {
+        let builder = SccmFindingBuilder::new("review-bounded-auxiliary-builder")
+            .class(SccmFindingClass::Symptom)
+            .phase(SccmPhase::Policy)
+            .role(SccmRole::Client)
+            .severity(Severity::Warning)
+            .confidence(SccmConfidence::Low)
+            .evidence(vec![finding_evidence_ref("artifact-a", "entry-a")])
+            .next_artifact(finding_request(logical_id, SccmRole::Client, reason))
+            .build();
+        if builder.is_err() {
+            rejected.push(format!("builder: {reason}"));
+        }
+
+        let mut direct = canonical.clone();
+        direct.next_artifacts[0] = finding_request(logical_id, SccmRole::Client, reason);
+        if direct.validate().is_err() {
+            rejected.push(format!("direct validate: {reason}"));
+        }
+        if serde_json::to_value(&direct).is_err() {
+            rejected.push(format!("serializer: {reason}"));
+        }
+
+        let mut json = serde_json::to_value(&canonical).unwrap();
+        json["nextArtifacts"][0] =
+            serde_json::to_value(finding_request(logical_id, SccmRole::Client, reason)).unwrap();
+        if serde_json::from_value::<SccmFinding>(json).is_err() {
+            rejected.push(format!("deserializer: {reason}"));
+        }
+    }
+
+    assert!(
+        rejected.is_empty(),
+        "rejected bounded auxiliary confirmations: {rejected:#?}"
+    );
+}
+
+#[test]
+fn finding_review_exact_mp_identity_passes_every_public_boundary() {
+    let canonical = finding_with_gap_and_request("review-exact-mp-identity-parity");
+    let mut rejected = Vec::new();
+
+    for (logical_id, reason) in REVIEW_EXACT_MP_ARTIFACT_REQUESTS {
+        let builder = SccmFindingBuilder::new("review-exact-mp-identity-builder")
+            .class(SccmFindingClass::Symptom)
+            .phase(SccmPhase::Policy)
+            .role(SccmRole::ManagementPoint)
+            .severity(Severity::Warning)
+            .confidence(SccmConfidence::Low)
+            .evidence(vec![finding_evidence_ref("artifact-a", "entry-a")])
+            .next_artifact(finding_request(
+                logical_id,
+                SccmRole::ManagementPoint,
+                reason,
+            ))
+            .build();
+        if let Err(error) = builder {
+            rejected.push(format!("builder ({error:?}): {logical_id}: {reason}"));
+        }
+
+        let mut direct = canonical.clone();
+        direct.next_artifacts[0] = finding_request(logical_id, SccmRole::ManagementPoint, reason);
+        if let Err(error) = direct.validate() {
+            rejected.push(format!(
+                "direct validate ({error:?}): {logical_id}: {reason}"
+            ));
+        }
+        if serde_json::to_value(&direct).is_err() {
+            rejected.push(format!("serializer: {logical_id}: {reason}"));
+        }
+
+        let mut json = serde_json::to_value(&canonical).unwrap();
+        json["nextArtifacts"][0] = serde_json::to_value(finding_request(
+            logical_id,
+            SccmRole::ManagementPoint,
+            reason,
+        ))
+        .unwrap();
+        if serde_json::from_value::<SccmFinding>(json).is_err() {
+            rejected.push(format!("deserializer: {logical_id}: {reason}"));
+        }
+    }
+
+    assert!(
+        rejected.is_empty(),
+        "rejected exact MP artifact request boundaries: {rejected:#?}"
+    );
+}
+
+#[test]
+fn finding_review_every_exact_catalog_identity_passes_at_every_public_boundary() {
+    let canonical = finding_with_gap_and_request("review-exact-catalog-identity-parity");
+    let mut rejected = Vec::new();
+
+    for source in declared_source_catalog() {
+        let reasons = [
+            format!("Collect the complete {} file.", source.basename),
+            format!("Collect the complete {}.log file.", source.logical_name),
+        ];
+
+        for reason in reasons {
+            let request = finding_request(&source.logical_name, source.role.clone(), &reason);
+            let builder = SccmFindingBuilder::new("review-exact-catalog-identity-builder")
+                .class(SccmFindingClass::Symptom)
+                .phase(SccmPhase::Policy)
+                .role(source.role.clone())
+                .severity(Severity::Warning)
+                .confidence(SccmConfidence::Low)
+                .evidence(vec![finding_evidence_ref("artifact-a", "entry-a")])
+                .next_artifact(request.clone())
+                .build();
+            if let Err(error) = builder {
+                rejected.push(format!(
+                    "builder ({error:?}): {}: {reason}",
+                    source.logical_name
+                ));
+            }
+
+            let mut direct = canonical.clone();
+            direct.next_artifacts[0] = request.clone();
+            if let Err(error) = direct.validate() {
+                rejected.push(format!(
+                    "direct validate ({error:?}): {}: {reason}",
+                    source.logical_name
+                ));
+            }
+            if serde_json::to_value(&direct).is_err() {
+                rejected.push(format!("serializer: {}: {reason}", source.logical_name));
+            }
+
+            let mut json = serde_json::to_value(&canonical).unwrap();
+            json["nextArtifacts"][0] = serde_json::to_value(request).unwrap();
+            if serde_json::from_value::<SccmFinding>(json).is_err() {
+                rejected.push(format!("deserializer: {}: {reason}", source.logical_name));
+            }
+        }
+    }
+
+    assert!(
+        rejected.is_empty(),
+        "rejected exact catalog artifact request boundaries: {rejected:#?}"
+    );
+}
+
+#[test]
+fn finding_review_percentages_are_not_environment_paths_at_every_public_boundary() {
+    let reason = "Collect PolicyAgent.log after 50% and before 60% completion.";
+    let canonical = finding_with_gap_and_request("review-percentage-path-parity");
+    let mut rejected = Vec::new();
+
+    let builder = SccmFindingBuilder::new("review-percentage-path-builder")
+        .class(SccmFindingClass::Symptom)
+        .phase(SccmPhase::Policy)
+        .role(SccmRole::Client)
+        .severity(Severity::Warning)
+        .confidence(SccmConfidence::Low)
+        .evidence(vec![finding_evidence_ref("artifact-a", "entry-a")])
+        .next_artifact(finding_request("policyAgent", SccmRole::Client, reason))
+        .build();
+    if let Err(error) = builder {
+        rejected.push(format!("builder ({error:?})"));
+    }
+
+    let mut direct = canonical.clone();
+    direct.next_artifacts[0].reason = reason.into();
+    if let Err(error) = direct.validate() {
+        rejected.push(format!("direct validate ({error:?})"));
+    }
+    if serde_json::to_value(&direct).is_err() {
+        rejected.push("serializer".into());
+    }
+
+    let mut json = serde_json::to_value(&canonical).unwrap();
+    json["nextArtifacts"][0]["reason"] = serde_json::json!(reason);
+    if serde_json::from_value::<SccmFinding>(json).is_err() {
+        rejected.push("deserializer".into());
+    }
+
+    assert!(
+        rejected.is_empty(),
+        "rejected non-environment percentages: {rejected:#?}"
+    );
+}
+
+#[test]
+fn finding_rejects_a_correlation_key_without_an_evidence_ref() {
+    let cited = finding_evidence_ref("client-policy-agent", "policy:1-1");
+    let mut key = finding_key(
+        SccmCorrelationKeyKind::AssignmentId,
+        "{ABCDEFAB-0000-0000-0000-000000000001}",
+        "abcdefab-0000-0000-0000-000000000001",
+        SccmKeyConfidence::Low,
+        Some("sccm-keys-experimental-v1"),
+        cited.clone(),
+    );
+    key.evidence = None;
+
+    let result = SccmFindingBuilder::new("missing-key-evidence")
+        .class(SccmFindingClass::Symptom)
+        .phase(SccmPhase::Policy)
+        .role(SccmRole::Client)
+        .severity(Severity::Warning)
+        .confidence(SccmConfidence::Low)
+        .evidence(vec![cited])
+        .correlation_keys(vec![key])
+        .build();
+
+    assert_eq!(
+        result.unwrap_err(),
+        SccmFindingValidationError::CorrelationKeyMissingEvidence
+    );
+}
+
+#[test]
+fn finding_low_profiled_or_unprofiled_keys_never_corroborate_high_confidence() {
+    let first = finding_evidence_ref("client-content", "client-content:1-1");
+    let second = finding_evidence_ref("server-content", "server-content:1-1");
+    let cases = [
+        (
+            "low-profiled-keys",
+            Some("sccm-keys-experimental-v1"),
+            SccmKeyConfidence::Low,
+        ),
+        ("low-unprofiled-keys", None, SccmKeyConfidence::Low),
+    ];
+
+    for (finding_id, profile, confidence) in cases {
+        let result = SccmFindingBuilder::new(finding_id)
+            .class(SccmFindingClass::ConfirmedFailure)
+            .phase(SccmPhase::Content)
+            .role(SccmRole::Client)
+            .severity(Severity::Error)
+            .confidence(SccmConfidence::High)
+            .evidence(vec![first.clone(), second.clone()])
+            .correlation_keys(vec![
+                finding_key(
+                    SccmCorrelationKeyKind::ContentId,
+                    "ContentABC",
+                    "contentabc",
+                    confidence.clone(),
+                    profile,
+                    first.clone(),
+                ),
+                finding_key(
+                    SccmCorrelationKeyKind::ContentId,
+                    "contentabc",
+                    "contentabc",
+                    confidence.clone(),
+                    profile,
+                    second.clone(),
+                ),
+            ])
+            .build();
+
+        assert_eq!(
+            result.unwrap_err(),
+            SccmFindingValidationError::MissingTerminalEvidence,
+            "{finding_id}"
+        );
+    }
+}
+
+#[test]
+fn finding_rejects_forged_terminal_markers() {
+    let evidence = finding_evidence_ref("client-app-enforce", "client-app-enforce:1-1");
+    let result = SccmFindingBuilder::new("forged-terminal")
+        .class(SccmFindingClass::ConfirmedFailure)
+        .phase(SccmPhase::Enforcement)
+        .role(SccmRole::Client)
+        .severity(Severity::Error)
+        .confidence(SccmConfidence::High)
+        .evidence(vec![evidence.clone()])
+        .terminal_evidence(vec![SccmTerminalEvidence {
+            reference: evidence,
+            kind: SccmTerminalEvidenceKind::Unknown("observedFailure".into()),
+        }])
+        .build();
+
+    assert_eq!(
+        result.unwrap_err(),
+        SccmFindingValidationError::InvalidTerminalEvidence
+    );
+}
+
+#[test]
+fn finding_likely_contributor_is_capped_without_terminal_corroboration() {
+    let evidence = finding_evidence_ref("client-policy-agent", "policy:1-1");
+    let high = SccmFindingBuilder::new("likely-contributor-high")
+        .class(SccmFindingClass::LikelyContributor)
+        .phase(SccmPhase::Policy)
+        .role(SccmRole::Client)
+        .severity(Severity::Warning)
+        .confidence(SccmConfidence::High)
+        .evidence(vec![evidence.clone()])
+        .build();
+    assert_eq!(
+        high.unwrap_err(),
+        SccmFindingValidationError::LikelyContributorConfidenceTooHigh
+    );
+
+    let moderate = SccmFindingBuilder::new("likely-contributor-moderate")
+        .class(SccmFindingClass::LikelyContributor)
+        .phase(SccmPhase::Policy)
+        .role(SccmRole::Client)
+        .severity(Severity::Warning)
+        .confidence(SccmConfidence::Moderate)
+        .evidence(vec![evidence.clone()])
+        .build()
+        .unwrap();
+    assert_eq!(moderate.confidence, SccmConfidence::Moderate);
+
+    let terminal = SccmFindingBuilder::new("likely-contributor-terminal")
+        .class(SccmFindingClass::LikelyContributor)
+        .phase(SccmPhase::Policy)
+        .role(SccmRole::Client)
+        .severity(Severity::Error)
+        .confidence(SccmConfidence::High)
+        .evidence(vec![evidence.clone()])
+        .terminal_evidence(vec![SccmTerminalEvidence::observed_failure(evidence)])
+        .build()
+        .unwrap();
+    assert_eq!(terminal.confidence, SccmConfidence::High);
+}
+
+#[test]
+fn finding_evidence_less_claims_are_rejected() {
+    let result = SccmFindingBuilder::new("unsupported-success-claim")
+        .class(SccmFindingClass::Symptom)
+        .phase(SccmPhase::Policy)
+        .role(SccmRole::Client)
+        .severity(Severity::Success)
+        .confidence(SccmConfidence::High)
+        .build();
+
+    assert_eq!(
+        result.unwrap_err(),
+        SccmFindingValidationError::MissingEvidenceOrCoverageGap
+    );
+}
+
+#[test]
+fn finding_access_denied_coverage_only_cannot_substantiate_an_outcome_class() {
+    let canonical = SccmFindingBuilder::new("access-denied-insufficient-evidence")
+        .class(SccmFindingClass::InsufficientEvidence)
+        .phase(SccmPhase::Policy)
+        .role(SccmRole::Client)
+        .severity(Severity::Warning)
+        .confidence(SccmConfidence::Low)
+        .coverage_gap(finding_client_gap(
+            "client-policy-agent",
+            SccmCoverageState::AccessDenied,
+        ))
+        .next_artifact(finding_request(
+            "policyAgent",
+            SccmRole::Client,
+            "Policy evidence was not captured.",
+        ))
+        .build()
+        .unwrap();
+    let cases = [
+        (SccmFindingClass::Symptom, SccmConfidence::High, "symptom"),
+        (
+            SccmFindingClass::LikelyContributor,
+            SccmConfidence::Moderate,
+            "likelyContributor",
+        ),
+        (
+            SccmFindingClass::ConfirmedFailure,
+            SccmConfidence::Moderate,
+            "confirmedFailure",
+        ),
+        (
+            SccmFindingClass::BlockedOrDeferred,
+            SccmConfidence::Low,
+            "blockedOrDeferred",
+        ),
+    ];
+    let mut accepted = Vec::new();
+
+    for (class, confidence, label) in cases {
+        let builder = SccmFindingBuilder::new(format!("access-denied-builder-{label}"))
+            .class(class.clone())
+            .phase(SccmPhase::Policy)
+            .role(SccmRole::Client)
+            .severity(Severity::Warning)
+            .confidence(confidence)
+            .coverage_gap(finding_client_gap(
+                "client-policy-agent",
+                SccmCoverageState::AccessDenied,
+            ))
+            .next_artifact(finding_request(
+                "policyAgent",
+                SccmRole::Client,
+                "Policy evidence was not captured.",
+            ))
+            .build();
+        if builder.err() != Some(SccmFindingValidationError::MissingEvidenceOrCoverageGap) {
+            accepted.push(format!("builder: {label}"));
+        }
+
+        let mut direct = canonical.clone();
+        direct.class = class;
+        direct.confidence = confidence;
+        if direct.validate().err() != Some(SccmFindingValidationError::MissingEvidenceOrCoverageGap)
+        {
+            accepted.push(format!("direct validate: {label}"));
+        }
+        if serde_json::to_value(&direct).is_ok() {
+            accepted.push(format!("serializer: {label}"));
+        }
+
+        let mut json = serde_json::to_value(&canonical).unwrap();
+        json["class"] = serde_json::json!(label);
+        json["confidence"] = serde_json::to_value(direct.confidence).unwrap();
+        if serde_json::from_value::<SccmFinding>(json).is_ok() {
+            accepted.push(format!("deserializer: {label}"));
+        }
+    }
+
+    assert!(
+        accepted.is_empty(),
+        "coverage-only access denial substantiated outcome classes: {accepted:#?}"
+    );
+}
+
+#[test]
+fn finding_insufficient_evidence_requires_an_explicit_noncaptured_gap() {
+    let request = finding_request(
+        "policyAgent",
+        SccmRole::Client,
+        "Policy evidence was not captured.",
+    );
+    let missing_gap = SccmFindingBuilder::new("missing-gap")
+        .class(SccmFindingClass::InsufficientEvidence)
+        .phase(SccmPhase::Policy)
+        .role(SccmRole::Client)
+        .severity(Severity::Warning)
+        .confidence(SccmConfidence::Low)
+        .next_artifact(request.clone())
+        .build();
+    assert_eq!(
+        missing_gap.unwrap_err(),
+        SccmFindingValidationError::MissingCoverageGap
+    );
+
+    let captured_is_not_a_gap = SccmFindingBuilder::new("captured-is-not-gap")
+        .class(SccmFindingClass::InsufficientEvidence)
+        .phase(SccmPhase::Policy)
+        .role(SccmRole::Client)
+        .severity(Severity::Warning)
+        .confidence(SccmConfidence::Low)
+        .coverage_gap(finding_client_gap(
+            "client-policy-agent",
+            SccmCoverageState::Captured,
+        ))
+        .next_artifact(request)
+        .build();
+    assert_eq!(
+        captured_is_not_a_gap.unwrap_err(),
+        SccmFindingValidationError::InvalidCoverageGap
+    );
+}
+
+#[test]
+fn finding_rejects_conflicting_coverage_for_one_artifact_identity() {
+    let first = finding_client_gap("client-policy-agent", SccmCoverageState::Absent);
+    let conflicts = [
+        (
+            "state",
+            vec![
+                first.clone(),
+                finding_client_gap("client-policy-agent", SccmCoverageState::AccessDenied),
+            ],
+        ),
+        (
+            "role",
+            vec![
+                first.clone(),
+                SccmFindingCoverageGap {
+                    artifact_id: "client-policy-agent".into(),
+                    role: SccmRole::ManagementPoint,
+                    coverage: SccmCoverageState::Absent,
+                },
+            ],
+        ),
+    ];
+    let mut accepted = Vec::new();
+
+    for (label, gaps) in conflicts {
+        let builder = SccmFindingBuilder::new(format!("conflicting-coverage-builder-{label}"))
+            .class(SccmFindingClass::Symptom)
+            .phase(SccmPhase::Policy)
+            .role(SccmRole::Client)
+            .severity(Severity::Warning)
+            .confidence(SccmConfidence::Low)
+            .evidence(vec![finding_evidence_ref("artifact-a", "entry-a")])
+            .coverage_gaps(gaps.clone())
+            .build();
+        if builder.err() != Some(SccmFindingValidationError::InvalidCoverageGap) {
+            accepted.push(format!("builder: {label}"));
+        }
+
+        let mut direct =
+            finding_with_gap_and_request(&format!("conflicting-coverage-direct-{label}"));
+        direct.coverage_gaps = gaps.clone();
+        if direct.validate().err() != Some(SccmFindingValidationError::InvalidCoverageGap) {
+            accepted.push(format!("direct validate: {label}"));
+        }
+        if serde_json::to_value(&direct).is_ok() {
+            accepted.push(format!("serializer: {label}"));
+        }
+
+        let mut json = serde_json::to_value(finding_with_gap_and_request(&format!(
+            "conflicting-coverage-json-{label}"
+        )))
+        .unwrap();
+        json["coverageGaps"] = serde_json::to_value(gaps).unwrap();
+        if serde_json::from_value::<SccmFinding>(json).is_ok() {
+            accepted.push(format!("deserializer: {label}"));
+        }
+    }
+
+    assert!(
+        accepted.is_empty(),
+        "accepted conflicting coverage: {accepted:#?}"
+    );
+
+    let duplicate = finding_client_gap("client-policy-agent", SccmCoverageState::AccessDenied);
+    let built = SccmFindingBuilder::new("duplicate-coverage-builder")
+        .class(SccmFindingClass::Symptom)
+        .phase(SccmPhase::Policy)
+        .role(SccmRole::Client)
+        .severity(Severity::Warning)
+        .confidence(SccmConfidence::Low)
+        .evidence(vec![finding_evidence_ref("artifact-a", "entry-a")])
+        .coverage_gaps(vec![duplicate.clone(), duplicate.clone()])
+        .build()
+        .unwrap();
+    assert_eq!(built.coverage_gaps, vec![duplicate.clone()]);
+
+    let mut direct = built.clone();
+    direct.coverage_gaps = vec![duplicate.clone(), duplicate];
+    direct.validate().unwrap();
+    let serialized = serde_json::to_value(&direct).unwrap();
+    assert_eq!(serialized["coverageGaps"].as_array().unwrap().len(), 1);
+    let deserialized = serde_json::from_value::<SccmFinding>(serialized).unwrap();
+    assert_eq!(deserialized.coverage_gaps.len(), 1);
+}
+
+#[test]
+fn finding_artifact_requests_require_declared_logical_id_and_role() {
+    for invalid_id in [
+        "client-policy-agent",
+        r"C:\",
+        "D:/",
+        "/",
+        "*",
+        "**/*.log",
+        "whole disk",
+        "PolicyAgent.log",
+    ] {
+        let result = SccmFindingBuilder::new("invalid-request-id")
+            .class(SccmFindingClass::InsufficientEvidence)
+            .phase(SccmPhase::Policy)
+            .role(SccmRole::Client)
+            .severity(Severity::Warning)
+            .confidence(SccmConfidence::Low)
+            .coverage_gap(finding_client_gap(
+                "client-policy-agent",
+                SccmCoverageState::Absent,
+            ))
+            .next_artifact(finding_request(
+                invalid_id,
+                SccmRole::Client,
+                "Policy evidence was not captured.",
+            ))
+            .build();
+        assert_eq!(
+            result.unwrap_err(),
+            SccmFindingValidationError::UndeclaredArtifactRequest,
+            "{invalid_id}"
+        );
+    }
+
+    let role_mismatch = SccmFindingBuilder::new("invalid-request-role")
+        .class(SccmFindingClass::InsufficientEvidence)
+        .phase(SccmPhase::Policy)
+        .role(SccmRole::Client)
+        .severity(Severity::Warning)
+        .confidence(SccmConfidence::Low)
+        .coverage_gap(finding_client_gap(
+            "client-policy-agent",
+            SccmCoverageState::Absent,
+        ))
+        .next_artifact(finding_request(
+            "policyAgent",
+            SccmRole::ManagementPoint,
+            "Policy evidence was not captured.",
+        ))
+        .build();
+    assert_eq!(
+        role_mismatch.unwrap_err(),
+        SccmFindingValidationError::ArtifactRequestRoleMismatch
+    );
+}
+
+#[test]
+fn finding_artifact_requests_require_nonempty_bounded_reasons_and_count() {
+    for reason in ["", "   ", ".", ";", "!?"] {
+        let result = SccmFindingBuilder::new("empty-request-reason")
+            .class(SccmFindingClass::InsufficientEvidence)
+            .phase(SccmPhase::Policy)
+            .role(SccmRole::Client)
+            .severity(Severity::Warning)
+            .confidence(SccmConfidence::Low)
+            .coverage_gap(finding_client_gap(
+                "client-policy-agent",
+                SccmCoverageState::Absent,
+            ))
+            .next_artifact(finding_request("policyAgent", SccmRole::Client, reason))
+            .build();
+        assert_eq!(
+            result.unwrap_err(),
+            SccmFindingValidationError::InvalidArtifactRequestReason
+        );
+    }
+
+    let overlong_reason = "x".repeat(MAX_SCCM_ARTIFACT_REQUEST_REASON_CHARS + 1);
+    let overlong = SccmFindingBuilder::new("overlong-request-reason")
+        .class(SccmFindingClass::InsufficientEvidence)
+        .phase(SccmPhase::Policy)
+        .role(SccmRole::Client)
+        .severity(Severity::Warning)
+        .confidence(SccmConfidence::Low)
+        .coverage_gap(finding_client_gap(
+            "client-policy-agent",
+            SccmCoverageState::Absent,
+        ))
+        .next_artifact(finding_request(
+            "policyAgent",
+            SccmRole::Client,
+            &overlong_reason,
+        ))
+        .build();
+    assert_eq!(
+        overlong.unwrap_err(),
+        SccmFindingValidationError::InvalidArtifactRequestReason
+    );
+
+    let requests = (0..=MAX_SCCM_NEXT_ARTIFACT_REQUESTS)
+        .map(|index| {
+            finding_request(
+                "policyAgent",
+                SccmRole::Client,
+                &format!("Bounded request {index}"),
+            )
+        })
+        .collect();
+    let too_many = SccmFindingBuilder::new("too-many-requests")
+        .class(SccmFindingClass::InsufficientEvidence)
+        .phase(SccmPhase::Policy)
+        .role(SccmRole::Client)
+        .severity(Severity::Warning)
+        .confidence(SccmConfidence::Low)
+        .coverage_gap(finding_client_gap(
+            "client-policy-agent",
+            SccmCoverageState::Absent,
+        ))
+        .next_artifacts(requests)
+        .build();
+    assert_eq!(
+        too_many.unwrap_err(),
+        SccmFindingValidationError::TooManyArtifactRequests
+    );
+}
+
+#[test]
+fn finding_artifact_request_raw_cardinality_precedes_exact_deduplication() {
+    let canonical = finding_with_gap_and_request("duplicate-request-cardinality");
+    let request = canonical.next_artifacts[0].clone();
+    let duplicated = vec![request; MAX_SCCM_NEXT_ARTIFACT_REQUESTS + 1];
+
+    let builder = SccmFindingBuilder::new("duplicate-request-builder")
+        .class(SccmFindingClass::InsufficientEvidence)
+        .phase(SccmPhase::Policy)
+        .role(SccmRole::Client)
+        .severity(Severity::Warning)
+        .confidence(SccmConfidence::Low)
+        .coverage_gap(finding_client_gap(
+            "client-policy-agent",
+            SccmCoverageState::AccessDenied,
+        ))
+        .next_artifacts(duplicated.clone())
+        .build();
+    assert_eq!(
+        builder.unwrap_err(),
+        SccmFindingValidationError::TooManyArtifactRequests
+    );
+
+    let mut direct = canonical.clone();
+    direct.next_artifacts = duplicated;
+    assert_eq!(
+        direct.validate().unwrap_err(),
+        SccmFindingValidationError::TooManyArtifactRequests
+    );
+
+    let mut json = serde_json::to_value(canonical).unwrap();
+    let request_json = json["nextArtifacts"][0].clone();
+    json["nextArtifacts"] =
+        serde_json::Value::Array(vec![request_json; MAX_SCCM_NEXT_ARTIFACT_REQUESTS + 1]);
+    assert!(serde_json::from_value::<SccmFinding>(json).is_err());
+
+    let error = serde_json::to_string(&direct).unwrap_err().to_string();
+    assert!(error.contains("TooManyArtifactRequests"), "{error}");
+}
+
+#[test]
+fn finding_artifact_requests_reject_unbounded_reason_language_and_globs() {
+    for reason in [
+        "Collect the entire drive.",
+        "Search the whole disk for related evidence.",
+        "Collect all files recursively.",
+        "Recursively scan the client logs.",
+        "Collect C:\\**\\*.log.",
+    ] {
+        let result = SccmFindingBuilder::new("unbounded-request-reason")
+            .class(SccmFindingClass::InsufficientEvidence)
+            .phase(SccmPhase::Policy)
+            .role(SccmRole::Client)
+            .severity(Severity::Warning)
+            .confidence(SccmConfidence::Low)
+            .coverage_gap(finding_client_gap(
+                "client-policy-agent",
+                SccmCoverageState::Absent,
+            ))
+            .next_artifact(finding_request("policyAgent", SccmRole::Client, reason))
+            .build();
+
+        assert_eq!(
+            result.unwrap_err(),
+            SccmFindingValidationError::InvalidArtifactRequestReason,
+            "{reason}"
+        );
+    }
+}
+
+#[test]
+fn finding_deserialization_rejects_unsound_high_and_forged_terminal_state() {
+    let evidence = finding_evidence_ref("client-app-enforce", "client-app-enforce:1-1");
+    let sound = SccmFindingBuilder::new("sound-terminal")
+        .class(SccmFindingClass::ConfirmedFailure)
+        .phase(SccmPhase::Enforcement)
+        .role(SccmRole::Client)
+        .severity(Severity::Error)
+        .confidence(SccmConfidence::High)
+        .evidence(vec![evidence.clone()])
+        .terminal_evidence(vec![SccmTerminalEvidence::observed_failure(evidence)])
+        .build()
+        .unwrap();
+
+    let mut keyless_high = serde_json::to_value(&sound).unwrap();
+    keyless_high["terminalEvidence"] = serde_json::json!([]);
+    assert!(serde_json::from_value::<SccmFinding>(keyless_high).is_err());
+
+    let mut forged_terminal = serde_json::to_value(&sound).unwrap();
+    forged_terminal["terminalEvidence"][0]["kind"] = serde_json::json!("forgedFailure");
+    assert!(serde_json::from_value::<SccmFinding>(forged_terminal).is_err());
+}
+
+#[test]
+fn finding_builder_rejects_blank_self_attesting_terminal_identity() {
+    let invalid = SccmEvidenceRef {
+        artifact_id: String::new(),
+        entry_id: "   ".into(),
+        line_start: None,
+        line_end: None,
+    };
+    let result = SccmFindingBuilder::new("blank-terminal-builder")
+        .class(SccmFindingClass::ConfirmedFailure)
+        .phase(SccmPhase::Enforcement)
+        .role(SccmRole::Client)
+        .severity(Severity::Error)
+        .confidence(SccmConfidence::High)
+        .evidence(vec![invalid.clone()])
+        .terminal_evidence(vec![SccmTerminalEvidence::observed_failure(invalid)])
+        .build();
+
+    assert_eq!(
+        result.unwrap_err(),
+        SccmFindingValidationError::InvalidEvidenceReference
+    );
+}
+
+#[test]
+fn finding_deserialization_rejects_blank_self_attesting_terminal_identity() {
+    let evidence = finding_evidence_ref("client-app-enforce", "client-app-enforce:1-1");
+    let finding = SccmFindingBuilder::new("blank-terminal-deserialize")
+        .class(SccmFindingClass::ConfirmedFailure)
+        .phase(SccmPhase::Enforcement)
+        .role(SccmRole::Client)
+        .severity(Severity::Error)
+        .confidence(SccmConfidence::High)
+        .evidence(vec![evidence.clone()])
+        .terminal_evidence(vec![SccmTerminalEvidence::observed_failure(evidence)])
+        .build()
+        .unwrap();
+    let mut json = serde_json::to_value(finding).unwrap();
+    json["evidence"][0]["artifactId"] = serde_json::json!(" ");
+    json["evidence"][0]["entryId"] = serde_json::json!("");
+    json["terminalEvidence"][0]["reference"]["artifactId"] = serde_json::json!(" ");
+    json["terminalEvidence"][0]["reference"]["entryId"] = serde_json::json!("");
+
+    assert!(serde_json::from_value::<SccmFinding>(json).is_err());
+}
+
+#[test]
+fn finding_serialization_rejects_blank_self_attesting_terminal_identity() {
+    let evidence = finding_evidence_ref("client-app-enforce", "client-app-enforce:1-1");
+    let mut finding = SccmFindingBuilder::new("blank-terminal-serialize")
+        .class(SccmFindingClass::ConfirmedFailure)
+        .phase(SccmPhase::Enforcement)
+        .role(SccmRole::Client)
+        .severity(Severity::Error)
+        .confidence(SccmConfidence::High)
+        .evidence(vec![evidence.clone()])
+        .terminal_evidence(vec![SccmTerminalEvidence::observed_failure(evidence)])
+        .build()
+        .unwrap();
+    finding.evidence[0].artifact_id = " ".into();
+    finding.evidence[0].entry_id.clear();
+    finding.terminal_evidence[0].reference.artifact_id = " ".into();
+    finding.terminal_evidence[0].reference.entry_id.clear();
+
+    assert!(serde_json::to_value(finding).is_err());
+}
+
+#[test]
+fn finding_serialization_rejects_post_build_invalid_mutation() {
+    let evidence = finding_evidence_ref("client-app-enforce", "client-app-enforce:1-1");
+    let mut finding = SccmFindingBuilder::new("mutated-confirmed-failure")
+        .class(SccmFindingClass::ConfirmedFailure)
+        .phase(SccmPhase::Enforcement)
+        .role(SccmRole::Client)
+        .severity(Severity::Error)
+        .confidence(SccmConfidence::High)
+        .evidence(vec![evidence.clone()])
+        .terminal_evidence(vec![SccmTerminalEvidence::observed_failure(evidence)])
+        .build()
+        .unwrap();
+    finding.terminal_evidence.clear();
+
+    assert!(serde_json::to_value(finding).is_err());
+}
+
+#[test]
+fn finding_deserialization_sorts_and_deduplicates_terminal_evidence() {
+    let first = finding_evidence_ref("artifact-a", "entry-a");
+    let second = finding_evidence_ref("artifact-b", "entry-b");
+    let finding = SccmFindingBuilder::new("terminal-ordering")
+        .class(SccmFindingClass::ConfirmedFailure)
+        .phase(SccmPhase::Enforcement)
+        .role(SccmRole::Client)
+        .severity(Severity::Error)
+        .confidence(SccmConfidence::High)
+        .evidence(vec![first.clone(), second.clone()])
+        .terminal_evidence(vec![SccmTerminalEvidence::observed_failure(first.clone())])
+        .build()
+        .unwrap();
+    let first_terminal =
+        serde_json::to_value(SccmTerminalEvidence::observed_failure(first)).unwrap();
+    let second_terminal =
+        serde_json::to_value(SccmTerminalEvidence::observed_failure(second)).unwrap();
+    let mut json = serde_json::to_value(finding).unwrap();
+    json["terminalEvidence"] =
+        serde_json::json!([second_terminal, first_terminal.clone(), first_terminal]);
+
+    let normalized: SccmFinding = serde_json::from_value(json).unwrap();
+    assert_eq!(normalized.terminal_evidence.len(), 2);
+    assert_eq!(
+        normalized.terminal_evidence[0].reference.artifact_id,
+        "artifact-a"
+    );
+    assert_eq!(
+        normalized.terminal_evidence[1].reference.artifact_id,
+        "artifact-b"
+    );
+}
+
+#[test]
+fn finding_deserialization_rejects_raw_execution_context_fields() {
+    let evidence = finding_evidence_ref("client-policy-agent", "policy:1-1");
+    let finding = SccmFindingBuilder::new("no-raw-context")
+        .class(SccmFindingClass::Symptom)
+        .phase(SccmPhase::Policy)
+        .role(SccmRole::Client)
+        .severity(Severity::Warning)
+        .confidence(SccmConfidence::Low)
+        .evidence(vec![evidence])
+        .build()
+        .unwrap();
+    let mut json = serde_json::to_value(finding).unwrap();
+    json["executionContext"] = serde_json::json!(r"LAB\SyntheticUser");
+
+    assert!(serde_json::from_value::<SccmFinding>(json).is_err());
+}
+
+#[test]
+fn finding_deserialization_rejects_unknown_fields_recursively() {
+    let evidence = finding_evidence_ref("client-policy-agent", "policy:1-1");
+    let finding = SccmFindingBuilder::new("strict-finding-wire")
+        .class(SccmFindingClass::Symptom)
+        .phase(SccmPhase::Policy)
+        .role(SccmRole::Client)
+        .severity(Severity::Warning)
+        .confidence(SccmConfidence::Low)
+        .evidence(vec![evidence.clone()])
+        .terminal_evidence(vec![SccmTerminalEvidence::observed_failure(
+            evidence.clone(),
+        )])
+        .coverage_gap(finding_client_gap(
+            "client-policy-agent",
+            SccmCoverageState::AccessDenied,
+        ))
+        .correlation_keys(vec![finding_key(
+            SccmCorrelationKeyKind::AssignmentId,
+            "{ABCDEFAB-0000-0000-0000-000000000001}",
+            "abcdefab-0000-0000-0000-000000000001",
+            SccmKeyConfidence::Low,
+            Some("sccm-keys-experimental-v1"),
+            evidence,
+        )])
+        .next_artifact(finding_request(
+            "policyAgent",
+            SccmRole::Client,
+            "Confirm the bounded policy request outcome.",
+        ))
+        .build()
+        .unwrap();
+    let json = serde_json::to_value(finding).unwrap();
+
+    let mut cases = Vec::new();
+
+    let mut nested_evidence = json.clone();
+    nested_evidence["evidence"][0]["executionContext"] = serde_json::json!(r"LAB\SyntheticUser");
+    cases.push(("evidence", nested_evidence));
+
+    let mut terminal_evidence = json.clone();
+    terminal_evidence["terminalEvidence"][0]["executionContext"] =
+        serde_json::json!(r"LAB\SyntheticUser");
+    cases.push(("terminal evidence", terminal_evidence));
+
+    let mut terminal_reference = json.clone();
+    terminal_reference["terminalEvidence"][0]["reference"]["executionContext"] =
+        serde_json::json!(r"LAB\SyntheticUser");
+    cases.push(("terminal reference", terminal_reference));
+
+    let mut coverage_gap = json.clone();
+    coverage_gap["coverageGaps"][0]["executionContext"] = serde_json::json!(r"LAB\SyntheticUser");
+    cases.push(("coverage gap", coverage_gap));
+
+    let mut correlation_key = json.clone();
+    correlation_key["correlationKeys"][0]["executionContext"] =
+        serde_json::json!(r"LAB\SyntheticUser");
+    cases.push(("correlation key", correlation_key));
+
+    let mut correlation_key_reference = json.clone();
+    correlation_key_reference["correlationKeys"][0]["evidence"]["executionContext"] =
+        serde_json::json!(r"LAB\SyntheticUser");
+    cases.push(("correlation key reference", correlation_key_reference));
+
+    let mut artifact_request = json;
+    artifact_request["nextArtifacts"][0]["executionContext"] =
+        serde_json::json!(r"LAB\SyntheticUser");
+    cases.push(("artifact request", artifact_request));
+
+    for (label, case) in cases {
+        assert!(
+            serde_json::from_value::<SccmFinding>(case).is_err(),
+            "{label} accepted an undeclared nested field"
+        );
+    }
+}
+
+#[test]
+fn finding_output_is_sorted_deduplicated_camel_case_and_round_trippable() {
+    let first = finding_evidence_ref("artifact-a", "entry-a");
+    let second = finding_evidence_ref("artifact-b", "entry-b");
+    let package_key = finding_key(
+        SccmCorrelationKeyKind::PackageId,
+        "LAB00001",
+        "LAB00001",
+        SccmKeyConfidence::Low,
+        Some("sccm-keys-experimental-v1"),
+        second.clone(),
+    );
+    let assignment_key = finding_key(
+        SccmCorrelationKeyKind::AssignmentId,
+        "{ABCDEFAB-0000-0000-0000-000000000001}",
+        "abcdefab-0000-0000-0000-000000000001",
+        SccmKeyConfidence::Low,
+        Some("sccm-keys-experimental-v1"),
+        first.clone(),
+    );
+
+    let finding = SccmFindingBuilder::new("blocked-policy")
+        .class(SccmFindingClass::BlockedOrDeferred)
+        .phase(SccmPhase::Unknown("futurePhase".into()))
+        .role(SccmRole::Client)
+        .severity(Severity::Warning)
+        .confidence(SccmConfidence::Moderate)
+        .title("Policy processing is blocked")
+        .summary("Synthetic evidence does not expose execution context.")
+        .evidence(vec![second.clone(), first.clone(), second.clone()])
+        .correlation_keys(vec![
+            package_key.clone(),
+            assignment_key.clone(),
+            package_key,
+        ])
+        .coverage_gaps(vec![
+            finding_client_gap("artifact-z", SccmCoverageState::Capped),
+            finding_client_gap("artifact-c", SccmCoverageState::AccessDenied),
+            finding_client_gap("artifact-z", SccmCoverageState::Capped),
+        ])
+        .next_artifacts(vec![
+            finding_request(
+                "policyEvaluator",
+                SccmRole::Client,
+                "Confirm the bounded policy evaluation outcome.",
+            ),
+            finding_request(
+                "policyAgent",
+                SccmRole::Client,
+                "Confirm the bounded policy request outcome.",
+            ),
+            finding_request(
+                "policyEvaluator",
+                SccmRole::Client,
+                "Confirm the bounded policy evaluation outcome.",
+            ),
+        ])
+        .build()
+        .unwrap();
+
+    assert_eq!(finding.evidence, vec![first, second]);
+    assert_eq!(
+        finding
+            .correlation_keys
+            .iter()
+            .map(|key| key.kind.clone())
+            .collect::<Vec<_>>(),
+        vec![
+            SccmCorrelationKeyKind::AssignmentId,
+            SccmCorrelationKeyKind::PackageId,
+        ]
+    );
+    assert_eq!(
+        finding
+            .coverage_gaps
+            .iter()
+            .map(|gap| gap.artifact_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["artifact-c", "artifact-z"]
+    );
+    assert_eq!(
+        finding
+            .next_artifacts
+            .iter()
+            .map(|request| request.logical_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["policyAgent", "policyEvaluator"]
+    );
+
+    let json = serde_json::to_value(&finding).unwrap();
+    assert_eq!(json["findingId"], "blocked-policy");
+    assert_eq!(json["class"], "blockedOrDeferred");
+    assert_eq!(json["phase"], "futurePhase");
+    assert!(json.get("coverageGaps").is_some());
+    assert!(json.get("correlationKeys").is_some());
+    assert!(json.get("nextArtifacts").is_some());
+    assert!(json.get("executionContext").is_none());
+    assert!(!serde_json::to_string(&json)
+        .unwrap()
+        .contains("SyntheticUser"));
+
+    let round_trip: SccmFinding = serde_json::from_value(json).unwrap();
+    assert_eq!(round_trip, finding);
+    round_trip.validate().unwrap();
 }
 
 fn json_value_contains_sensitive(value: &serde_json::Value, sensitive: &str) -> bool {
@@ -1392,6 +4854,99 @@ fn evidence_public_message_projection_redacts_colon_delimited_windows_identities
             assert!(message.contains(safe), "{safe} was falsely redacted");
         }
     }
+}
+
+#[test]
+fn evidence_public_message_projection_redacts_path_adjacent_windows_identities() {
+    let cases: [(&str, &[&str]); 3] = [
+        (
+            r"Caller LAB\SyntheticUser\subdirectory",
+            &["Caller", "subdirectory"],
+        ),
+        (
+            r"Profile C:\Users\LAB\SyntheticUser\profile.dat",
+            &[r"C:\Users\", "profile.dat"],
+        ),
+        (
+            r"Home \\server\users\LAB\SyntheticUser\cache",
+            &[r"\\server\users\", "cache"],
+        ),
+    ];
+    let mut violations = Vec::new();
+
+    for (raw_message, safe_fragments) in cases {
+        let text = format!(
+            r#"<![LOG[{raw_message}]LOG]!><time="10:00:00.000-240" date="07-30-2026" component="PolicyAgent" context="" type="1" thread="42" file="policyagent.cpp">"#
+        );
+        let first = normalize_ccm_artifact(client_policy_artifact(), &text);
+        let second = normalize_ccm_artifact(client_policy_artifact(), &text);
+        let message = &first[0].message;
+        let json = serde_json::to_string(&first).unwrap();
+
+        assert_eq!(first, second, "{raw_message}");
+        if message.contains(r"LAB\SyntheticUser")
+            || public_json_contains_sensitive(&json, r"LAB\SyntheticUser")
+        {
+            violations.push(format!("identity leaked: {raw_message}"));
+        }
+        if !message.contains("[redacted:sccm-public-message-v1]") {
+            violations.push(format!("identity was not classified: {raw_message}"));
+        }
+        for safe in safe_fragments {
+            if !message.contains(safe) {
+                violations.push(format!("{safe} was swallowed: {raw_message}"));
+            }
+        }
+    }
+
+    assert!(
+        violations.is_empty(),
+        "path-adjacent identity projection violations: {violations:#?}"
+    );
+}
+
+#[test]
+fn evidence_public_projection_redacts_identity_on_every_string_surface() {
+    let raw_message = r#"Profile C:\Profiles\LAB\SyntheticUser\profile.dat; Home \\server\home\LAB\SyntheticHomeUser\cache; Local C:\Profiles\.\LocalUser\profile.dat; account={"domain":"LAB","accountName":"SyntheticJsonUser"}; sam={"domain":"LAB","samAccountName":"SyntheticSamUser"}; localUser=LocalStructuredUser; status=71"#;
+    let text = format!(
+        r#"<![LOG[{raw_message}]LOG]!><time="10:00:00.000-240" date="07-30-2026" component="LAB\ComponentUser" context="" type="1" thread="42" file="LAB\FileUser">"#
+    );
+    let first = normalize_ccm_artifact(client_policy_artifact(), &text);
+    let second = normalize_ccm_artifact(client_policy_artifact(), &text);
+    let json = serde_json::to_string(&first).unwrap();
+    let evidence = &first[0];
+
+    assert_eq!(first, second);
+    for sensitive in [
+        "SyntheticUser",
+        "SyntheticHomeUser",
+        "LocalUser",
+        "SyntheticJsonUser",
+        "SyntheticSamUser",
+        "LocalStructuredUser",
+        "ComponentUser",
+        "FileUser",
+    ] {
+        assert_public_json_omits(&json, sensitive);
+    }
+    assert!(evidence.message.contains("status=71"));
+    assert!(evidence
+        .message
+        .contains("[redacted:sccm-public-message-v1]"));
+    assert!(
+        evidence
+            .component
+            .as_deref()
+            .is_some_and(|value| value.contains("[redacted:sccm-public-message-v1]")),
+        "component identity was not classified"
+    );
+    assert!(
+        evidence
+            .ccm_source_file
+            .as_deref()
+            .is_some_and(|value| value.contains("[redacted:sccm-public-message-v1]")),
+        "CCM source-file identity was not classified"
+    );
 }
 
 #[test]
