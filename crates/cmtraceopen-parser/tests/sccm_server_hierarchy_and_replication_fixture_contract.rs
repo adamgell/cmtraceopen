@@ -2,8 +2,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::DateTime;
 use cmtraceopen_parser::sccm::{
-    classify_artifact_name, normalize_ccm_artifact, SccmArtifact, SccmArtifactFamily,
-    SccmCoverageState, SccmEvidence, SccmRole, SccmRotation, SccmTimeOrderingState,
+    classify_artifact_name, normalize_ccm_artifact, normalize_key, SccmArtifact,
+    SccmArtifactFamily, SccmCorrelationKeyKind, SccmCoverageState, SccmEvidence, SccmKeyConfidence,
+    SccmRole, SccmRotation, SccmTimeOrderingState,
 };
 use serde_json::Value;
 
@@ -34,6 +35,8 @@ const STATE_CHAIN: &[&str] = &[
 const EXACT_PROFILE: &str = "hierarchy-server-5.00.test-v1";
 const EXACT_SOURCE_VERSION: &str = "5.00.TEST.0001";
 const MAX_OPAQUE_ID_BYTES: usize = 128;
+const MAX_SAFE_PATH_BYTES: usize = 512;
+const MAX_SAFE_PATH_SEGMENT_BYTES: usize = 128;
 
 fn corpus_root() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -86,10 +89,12 @@ fn safe_prefixed_opaque_id(value: &str, prefix: &str) -> bool {
 
 fn safe_segmented_path(value: &str, prefix: &str) -> bool {
     value.strip_prefix(prefix).is_some_and(|suffix| {
-        !suffix.is_empty()
+        value.len() <= MAX_SAFE_PATH_BYTES
+            && !suffix.is_empty()
             && !suffix.contains('\\')
             && suffix.split('/').all(|segment| {
                 !segment.is_empty()
+                    && segment.len() <= MAX_SAFE_PATH_SEGMENT_BYTES
                     && !matches!(segment, "." | "..")
                     && segment.bytes().all(|byte| {
                         byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-')
@@ -99,12 +104,9 @@ fn safe_segmented_path(value: &str, prefix: &str) -> bool {
 }
 
 fn safe_server_handle(value: &str) -> bool {
-    value.strip_prefix("safe:server:").is_some_and(|payload| {
-        !payload.is_empty()
-            && payload
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
-    })
+    value
+        .strip_prefix("safe:server:")
+        .is_some_and(safe_opaque_id)
 }
 
 fn artifact_path_matches_basename(artifact: &Value, field: &str, prefix: &str) -> bool {
@@ -177,8 +179,31 @@ fn parse_fixture_fields(message: &str) -> Result<BTreeMap<String, String>, Strin
         {
             return Err(format!("fixture field {name} contains unsupported syntax"));
         }
+        let shared_key_is_exact = |kind| {
+            let key = normalize_key(kind, value);
+            key.confidence == SccmKeyConfidence::Exact && key.normalized == value
+        };
+        let field_is_profile_valid = match name {
+            "MessageId" | "LinkId" => shared_key_is_exact(SccmCorrelationKeyKind::ContentId),
+            "OriginSite" | "TargetSite" => shared_key_is_exact(SccmCorrelationKeyKind::SiteCode),
+            "ProfileId" => value == EXACT_PROFILE,
+            "Phase" => STATE_CHAIN.contains(&value),
+            "Disposition" => matches!(value, "succeeded" | "failed" | "retrying"),
+            "Terminal" => matches!(value, "true" | "false"),
+            _ => false,
+        };
+        if !field_is_profile_valid {
+            return Err(format!("fixture field {name} is outside the exact profile"));
+        }
         if fields.insert(name.to_owned(), value.to_owned()).is_some() {
             return Err(format!("duplicate fixture field {name}"));
+        }
+    }
+    if let (Some(disposition), Some(terminal)) = (fields.get("Disposition"), fields.get("Terminal"))
+    {
+        let terminal = terminal == "true";
+        if !observation_disposition_is_coherent(disposition, terminal) {
+            return Err("disposition and terminal fields are incoherent".to_owned());
         }
     }
     Ok(fields)
