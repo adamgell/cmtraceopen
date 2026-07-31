@@ -397,6 +397,7 @@ fn identity_bearing_relative_paths_fail_before_public_projection() {
         "evidence/client-corp-example-test/PolicyAgent.log",
         "evidence/client-app-enforce/root-realuser/current/AppEnforce.log",
         "evidence/client-app-enforce/root-corp-example-test/current/AppEnforce.log",
+        "evidence/client-app-enforce/timestamped-20241340-296199/AppEnforce.log.20241340-296199",
         "evidence/client-policy-agent/RealUser@example.test/PolicyAgent.log",
         "evidence/client-policy-agent/Users/RealUser/PolicyAgent.log",
         "evidence/client-policy-agent/home/real-user/PolicyAgent.log",
