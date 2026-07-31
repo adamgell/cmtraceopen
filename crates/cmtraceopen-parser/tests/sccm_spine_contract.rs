@@ -373,6 +373,106 @@ fn finding_rejects_key_or_terminal_refs_that_are_not_cited() {
 }
 
 #[test]
+fn finding_nested_references_use_shared_identity_validation() {
+    let cited = finding_evidence_ref("client-policy-agent", "policy:1-1");
+    let invalid = SccmEvidenceRef {
+        artifact_id: " ".into(),
+        entry_id: "policy:2-2".into(),
+        line_start: Some(2),
+        line_end: Some(2),
+    };
+
+    let terminal_result = SccmFindingBuilder::new("invalid-terminal-reference")
+        .class(SccmFindingClass::Symptom)
+        .phase(SccmPhase::Policy)
+        .role(SccmRole::Client)
+        .severity(Severity::Warning)
+        .confidence(SccmConfidence::Low)
+        .evidence(vec![cited.clone()])
+        .terminal_evidence(vec![SccmTerminalEvidence::observed_failure(
+            invalid.clone(),
+        )])
+        .build();
+    assert_eq!(
+        terminal_result.unwrap_err(),
+        SccmFindingValidationError::InvalidEvidenceReference
+    );
+
+    let key_result = SccmFindingBuilder::new("invalid-key-reference")
+        .class(SccmFindingClass::Symptom)
+        .phase(SccmPhase::Policy)
+        .role(SccmRole::Client)
+        .severity(Severity::Warning)
+        .confidence(SccmConfidence::Low)
+        .evidence(vec![cited])
+        .correlation_keys(vec![finding_key(
+            SccmCorrelationKeyKind::AssignmentId,
+            "{ABCDEFAB-0000-0000-0000-000000000001}",
+            "abcdefab-0000-0000-0000-000000000001",
+            SccmKeyConfidence::Low,
+            Some("sccm-keys-experimental-v1"),
+            invalid,
+        )])
+        .build();
+    assert_eq!(
+        key_result.unwrap_err(),
+        SccmFindingValidationError::InvalidEvidenceReference
+    );
+}
+
+#[test]
+fn finding_evidence_reference_line_ranges_are_integral() {
+    let cases = [
+        ("missing-end", Some(1), None),
+        ("missing-start", None, Some(1)),
+        ("zero-start", Some(0), Some(1)),
+        ("reversed", Some(2), Some(1)),
+    ];
+
+    for (label, line_start, line_end) in cases {
+        let result = SccmFindingBuilder::new(format!("invalid-range-{label}"))
+            .class(SccmFindingClass::Symptom)
+            .phase(SccmPhase::Policy)
+            .role(SccmRole::Client)
+            .severity(Severity::Warning)
+            .confidence(SccmConfidence::Low)
+            .evidence(vec![SccmEvidenceRef {
+                artifact_id: "client-policy-agent".into(),
+                entry_id: "policy:1-1".into(),
+                line_start,
+                line_end,
+            }])
+            .build();
+
+        assert_eq!(
+            result.unwrap_err(),
+            SccmFindingValidationError::InvalidEvidenceReference,
+            "{label}"
+        );
+    }
+}
+
+#[test]
+fn finding_evidence_reference_allows_an_unavailable_line_range() {
+    let finding = SccmFindingBuilder::new("line-range-unavailable")
+        .class(SccmFindingClass::Symptom)
+        .phase(SccmPhase::Policy)
+        .role(SccmRole::Client)
+        .severity(Severity::Warning)
+        .confidence(SccmConfidence::Low)
+        .evidence(vec![SccmEvidenceRef {
+            artifact_id: "client-policy-agent".into(),
+            entry_id: "policy:logical-record".into(),
+            line_start: None,
+            line_end: None,
+        }])
+        .build()
+        .unwrap();
+
+    serde_json::to_value(finding).unwrap();
+}
+
+#[test]
 fn finding_rejects_a_correlation_key_without_an_evidence_ref() {
     let cited = finding_evidence_ref("client-policy-agent", "policy:1-1");
     let mut key = finding_key(
@@ -744,6 +844,73 @@ fn finding_deserialization_rejects_unsound_high_and_forged_terminal_state() {
     let mut forged_terminal = serde_json::to_value(&sound).unwrap();
     forged_terminal["terminalEvidence"][0]["kind"] = serde_json::json!("forgedFailure");
     assert!(serde_json::from_value::<SccmFinding>(forged_terminal).is_err());
+}
+
+#[test]
+fn finding_builder_rejects_blank_self_attesting_terminal_identity() {
+    let invalid = SccmEvidenceRef {
+        artifact_id: String::new(),
+        entry_id: "   ".into(),
+        line_start: None,
+        line_end: None,
+    };
+    let result = SccmFindingBuilder::new("blank-terminal-builder")
+        .class(SccmFindingClass::ConfirmedFailure)
+        .phase(SccmPhase::Enforcement)
+        .role(SccmRole::Client)
+        .severity(Severity::Error)
+        .confidence(SccmConfidence::High)
+        .evidence(vec![invalid.clone()])
+        .terminal_evidence(vec![SccmTerminalEvidence::observed_failure(invalid)])
+        .build();
+
+    assert_eq!(
+        result.unwrap_err(),
+        SccmFindingValidationError::InvalidEvidenceReference
+    );
+}
+
+#[test]
+fn finding_deserialization_rejects_blank_self_attesting_terminal_identity() {
+    let evidence = finding_evidence_ref("client-app-enforce", "client-app-enforce:1-1");
+    let finding = SccmFindingBuilder::new("blank-terminal-deserialize")
+        .class(SccmFindingClass::ConfirmedFailure)
+        .phase(SccmPhase::Enforcement)
+        .role(SccmRole::Client)
+        .severity(Severity::Error)
+        .confidence(SccmConfidence::High)
+        .evidence(vec![evidence.clone()])
+        .terminal_evidence(vec![SccmTerminalEvidence::observed_failure(evidence)])
+        .build()
+        .unwrap();
+    let mut json = serde_json::to_value(finding).unwrap();
+    json["evidence"][0]["artifactId"] = serde_json::json!(" ");
+    json["evidence"][0]["entryId"] = serde_json::json!("");
+    json["terminalEvidence"][0]["reference"]["artifactId"] = serde_json::json!(" ");
+    json["terminalEvidence"][0]["reference"]["entryId"] = serde_json::json!("");
+
+    assert!(serde_json::from_value::<SccmFinding>(json).is_err());
+}
+
+#[test]
+fn finding_serialization_rejects_blank_self_attesting_terminal_identity() {
+    let evidence = finding_evidence_ref("client-app-enforce", "client-app-enforce:1-1");
+    let mut finding = SccmFindingBuilder::new("blank-terminal-serialize")
+        .class(SccmFindingClass::ConfirmedFailure)
+        .phase(SccmPhase::Enforcement)
+        .role(SccmRole::Client)
+        .severity(Severity::Error)
+        .confidence(SccmConfidence::High)
+        .evidence(vec![evidence.clone()])
+        .terminal_evidence(vec![SccmTerminalEvidence::observed_failure(evidence)])
+        .build()
+        .unwrap();
+    finding.evidence[0].artifact_id = " ".into();
+    finding.evidence[0].entry_id.clear();
+    finding.terminal_evidence[0].reference.artifact_id = " ".into();
+    finding.terminal_evidence[0].reference.entry_id.clear();
+
+    assert!(serde_json::to_value(finding).is_err());
 }
 
 #[test]

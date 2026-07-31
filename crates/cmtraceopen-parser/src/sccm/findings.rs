@@ -367,6 +367,7 @@ impl<'de> Deserialize<'de> for SccmFinding {
 impl SccmFinding {
     pub fn validate(&self) -> Result<(), SccmFindingValidationError> {
         validate_required_text(self)?;
+        validate_all_evidence_references(self)?;
         validate_coverage_gaps(&self.coverage_gaps)?;
         validate_artifact_requests(&self.next_artifacts)?;
 
@@ -412,6 +413,7 @@ impl SccmFinding {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SccmFindingValidationError {
     MissingRequiredField,
+    InvalidEvidenceReference,
     MissingEvidenceOrCoverageGap,
     MissingTerminalEvidence,
     InvalidTerminalEvidence,
@@ -579,6 +581,47 @@ fn validate_required_text(finding: &SccmFinding) -> Result<(), SccmFindingValida
         || matches!(&finding.phase, SccmPhase::Unknown(value) if is_known_phase_name(value))
     {
         return Err(SccmFindingValidationError::MissingRequiredField);
+    }
+    Ok(())
+}
+
+fn validate_all_evidence_references(
+    finding: &SccmFinding,
+) -> Result<(), SccmFindingValidationError> {
+    for reference in finding
+        .evidence
+        .iter()
+        .chain(
+            finding
+                .terminal_evidence
+                .iter()
+                .map(|terminal| &terminal.reference),
+        )
+        .chain(
+            finding
+                .correlation_keys
+                .iter()
+                .filter_map(|key| key.evidence.as_ref()),
+        )
+    {
+        validate_evidence_reference(reference)?;
+    }
+    Ok(())
+}
+
+fn validate_evidence_reference(
+    reference: &SccmEvidenceRef,
+) -> Result<(), SccmFindingValidationError> {
+    let valid_line_range = match (reference.line_start, reference.line_end) {
+        (None, None) => true,
+        (Some(start), Some(end)) => start > 0 && end >= start,
+        _ => false,
+    };
+    if reference.artifact_id.trim().is_empty()
+        || reference.entry_id.trim().is_empty()
+        || !valid_line_range
+    {
+        return Err(SccmFindingValidationError::InvalidEvidenceReference);
     }
     Ok(())
 }
