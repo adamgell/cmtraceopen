@@ -1350,16 +1350,18 @@ fn validate_expected(
         let confidence_ceiling =
             required_string(transaction, "confidenceCeiling", transaction_id).unwrap_or("invalid");
 
-        let gap_ids = transaction["coverageGapArtifactIds"]
-            .as_array()
+        let gap_values = transaction["coverageGapArtifactIds"].as_array();
+        let gap_ids = gap_values
             .map(|values| values.iter().filter_map(Value::as_str).collect::<Vec<_>>())
             .unwrap_or_default();
         let mut sorted_gap_ids = gap_ids.clone();
         sorted_gap_ids.sort_unstable();
         sorted_gap_ids.dedup();
-        if gap_ids != sorted_gap_ids {
+        if gap_values.is_none_or(|values| values.len() != gap_ids.len())
+            || gap_ids != sorted_gap_ids
+        {
             failures.push(format!(
-                "{transaction_id} coverage gaps are not sorted/unique"
+                "{transaction_id} coverage gaps are not exact sorted strings"
             ));
         }
         let expected_gap_ids = parsed
@@ -1523,16 +1525,19 @@ fn validate_expected(
         {
             failures.push(format!("{observation_id} is not safely source-local"));
         }
-        let artifact_ids = observation["artifactIds"]
-            .as_array()
+        let artifact_id_values = observation["artifactIds"].as_array();
+        let artifact_ids = artifact_id_values
             .map(|values| values.iter().filter_map(Value::as_str).collect::<Vec<_>>())
             .unwrap_or_default();
         let mut sorted_artifact_ids = artifact_ids.clone();
         sorted_artifact_ids.sort_unstable();
         sorted_artifact_ids.dedup();
-        if artifact_ids.is_empty() || artifact_ids != sorted_artifact_ids {
+        if artifact_id_values.is_none_or(|values| values.len() != artifact_ids.len())
+            || artifact_ids.is_empty()
+            || artifact_ids != sorted_artifact_ids
+        {
             failures.push(format!(
-                "{observation_id} artifact IDs are not sorted/unique"
+                "{observation_id} artifact IDs are not exact sorted strings"
             ));
         }
         let artifacts = artifact_ids
@@ -2222,6 +2227,29 @@ fn required_phase_identity_and_manifest_strings_fail_closed() {
         .push(json!(7));
     if mutation_was_accepted("sync-success", &success_manifest, &non_string_state) {
         accepted.push("non-string state-chain entry");
+    }
+
+    let mut non_string_gap = success_expected.clone();
+    non_string_gap["transactions"][transaction]["coverageGapArtifactIds"]
+        .as_array_mut()
+        .expect("coverage gaps are mutable")
+        .push(json!(7));
+    if mutation_was_accepted("sync-success", &success_manifest, &non_string_gap) {
+        accepted.push("non-string transaction coverage-gap ID");
+    }
+
+    let mut non_string_source_local_artifact = rotation_expected.clone();
+    let rotation_split = source_local_index(&rotation_expected, "rotation-01-split");
+    non_string_source_local_artifact["sourceLocalObservations"][rotation_split]["artifactIds"]
+        .as_array_mut()
+        .expect("source-local artifact IDs are mutable")
+        .push(json!(7));
+    if mutation_was_accepted(
+        "rotation-boundary",
+        &rotation_manifest,
+        &non_string_source_local_artifact,
+    ) {
+        accepted.push("non-string source-local artifact ID");
     }
 
     assert!(
