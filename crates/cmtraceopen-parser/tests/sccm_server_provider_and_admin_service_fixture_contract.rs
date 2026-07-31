@@ -97,6 +97,14 @@ fn safe_opaque_token(value: &str, prefix: &str, max_suffix_len: usize) -> bool {
     })
 }
 
+fn safe_synthetic_lineage(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+}
+
 fn expected_sanitized_source_path(
     source_id: Option<&str>,
     rotation: &Value,
@@ -118,27 +126,35 @@ fn expected_sanitized_source_path(
     }
 }
 
-fn public_projection_contains_sensitive_shape(value: &Value) -> bool {
+fn exported_projection_contains_private_shape(value: &Value) -> bool {
     match value {
         Value::String(value) => {
             let value = value.to_ascii_lowercase();
-            [
-                "@",
-                "bearer",
-                "select ",
-                "http://",
-                "https://",
-                "/adminservice",
-            ]
-            .iter()
-            .any(|term| value.contains(term))
+            value.chars().any(char::is_control)
+                || value.contains('@')
+                || value.contains('\\')
+                || [
+                    "bearer ",
+                    "select ",
+                    "delete ",
+                    "insert ",
+                    "update ",
+                    "drop ",
+                    "http://",
+                    "https://",
+                    "ghp_",
+                    "github_pat_",
+                    "eyj",
+                ]
+                .iter()
+                .any(|term| value.contains(term))
         }
         Value::Array(values) => values
             .iter()
-            .any(public_projection_contains_sensitive_shape),
+            .any(exported_projection_contains_private_shape),
         Value::Object(values) => values
             .values()
-            .any(public_projection_contains_sensitive_shape),
+            .any(exported_projection_contains_private_shape),
         _ => false,
     }
 }
@@ -325,22 +341,52 @@ fn expected_transaction_ids(scenario: &str) -> &'static [&'static str] {
     }
 }
 
-fn expected_outcomes(scenario: &str) -> &'static [(&'static str, &'static str, &'static str)] {
+fn expected_outcomes(
+    scenario: &str,
+) -> &'static [(&'static str, &'static str, &'static str, &'static str)] {
     match scenario {
         "admin-service-auth-failure" | "admin-service-backend-failure" => {
-            &[("failed", "confirmedFailure", "high")]
+            &[("failed", "confirmedFailure", "high", "high")]
         }
         "admin-service-success" | "iis-supplemental" | "provider-success" => {
-            &[("succeeded", "success", "high")]
+            &[("succeeded", "success", "high", "high")]
         }
         "privacy-redaction" => &[
-            ("succeeded", "success", "high"),
-            ("succeeded", "success", "high"),
+            ("succeeded", "success", "high", "high"),
+            ("succeeded", "success", "high", "high"),
         ],
         "provider-authz-denied" | "provider-query-failure" => {
-            &[("failed", "confirmedFailure", "high")]
+            &[("failed", "confirmedFailure", "high", "high")]
         }
-        "provider-timeout" | "incomplete" => &[("incomplete", "insufficientEvidence", "low")],
+        "provider-timeout" | "incomplete" => {
+            &[("incomplete", "insufficientEvidence", "low", "low")]
+        }
+        "rotation-boundary" => &[],
+        _ => &[],
+    }
+}
+
+fn expected_public_summaries(scenario: &str) -> &'static [&'static str] {
+    match scenario {
+        "admin-service-auth-failure" => &["Admin Service authentication was explicitly rejected."],
+        "admin-service-backend-failure" => {
+            &["Admin Service recorded an explicit backend operation failure."]
+        }
+        "admin-service-success" => {
+            &["Admin Service request completed with explicit terminal evidence."]
+        }
+        "iis-supplemental" => &["Admin Service evidence independently records a terminal success."],
+        "incomplete" => {
+            &["Admin Service evidence stops before an explicit response or terminal outcome."]
+        }
+        "privacy-redaction" => &[
+            "Admin Service privacy fixture completed with redacted public evidence.",
+            "Provider privacy fixture completed with redacted public evidence.",
+        ],
+        "provider-authz-denied" => &["Provider authorization was explicitly denied."],
+        "provider-query-failure" => &["Provider operation recorded an explicit terminal failure."],
+        "provider-success" => &["Provider operation completed with explicit terminal evidence."],
+        "provider-timeout" => &["Provider evidence stops before an explicit terminal outcome."],
         "rotation-boundary" => &[],
         _ => &[],
     }
@@ -435,10 +481,36 @@ fn expected_source_local_ids(scenario: &str) -> &'static [&'static str] {
     }
 }
 
-fn expected_requested_sources(scenario: &str) -> &'static [&'static str] {
+fn expected_source_local_reasons(scenario: &str) -> &'static [&'static str] {
     match scenario {
-        "incomplete" => &["server-admin-service"],
-        "provider-timeout" | "rotation-boundary" => &["server-provider"],
+        "iis-supplemental" => &[
+            "Scoped IIS evidence is optional context and cannot create an Admin Service transaction.",
+        ],
+        "privacy-redaction" => &[
+            "Caller and endpoint details remain outside public keys and summaries.",
+            "Caller, authorization, and query details remain outside public keys and summaries.",
+        ],
+        "rotation-boundary" => {
+            &["Split rotation fragments and an unknown version cannot form an exact request key."]
+        }
+        _ => &[],
+    }
+}
+
+fn expected_artifact_requests(scenario: &str) -> &'static [(&'static str, &'static str)] {
+    match scenario {
+        "incomplete" => &[(
+            "server-admin-service",
+            "Capture the bounded Admin Service source lineage for the exact request key and terminal outcome.",
+        )],
+        "provider-timeout" => &[(
+            "server-provider",
+            "Capture the bounded Provider source lineage for the exact request key and terminal outcome.",
+        )],
+        "rotation-boundary" => &[(
+            "server-provider",
+            "Capture one bounded complete Provider rotation with known version provenance.",
+        )],
         _ => &[],
     }
 }
@@ -591,6 +663,7 @@ fn schema_failures(scenario: &str, manifest: &Value, expected: &Value) -> Vec<St
     let mut sanitized_sources = BTreeSet::new();
     let mut artifact_endpoint_ids = BTreeSet::new();
     let mut physical_line_counts = BTreeMap::new();
+    let mut artifact_rotation_provenance = BTreeMap::new();
     for artifact in artifacts.into_iter().flatten() {
         if !object_has_only(
             artifact,
@@ -680,7 +753,7 @@ fn schema_failures(scenario: &str, manifest: &Value, expected: &Value) -> Vec<St
             || rotation(&artifact["rotation"]).is_none()
             || artifact["rotation"]["lineageId"]
                 .as_str()
-                .is_none_or(str::is_empty)
+                .is_none_or(|value| !safe_synthetic_lineage(value))
             || coverage_state(artifact["captureState"].as_str().unwrap_or_default()).is_none()
         {
             failures.push(format!("{artifact_id}: invalid typed provenance"));
@@ -746,6 +819,30 @@ fn schema_failures(scenario: &str, manifest: &Value, expected: &Value) -> Vec<St
                 (source_id.to_owned(), layer.to_owned()),
             );
         }
+        if let (
+            Some(source_id),
+            Some(endpoint_id),
+            Some(producer_host),
+            Some(lineage_id),
+            Some(kind),
+        ) = (
+            source_id,
+            endpoint_id,
+            producer_host,
+            artifact["rotation"]["lineageId"].as_str(),
+            artifact["rotation"]["kind"].as_str(),
+        ) {
+            artifact_rotation_provenance.insert(
+                artifact_id.to_owned(),
+                (
+                    source_id.to_owned(),
+                    endpoint_id.to_owned(),
+                    producer_host.to_owned(),
+                    lineage_id.to_owned(),
+                    kind.to_owned(),
+                ),
+            );
+        }
         artifact_physical_state.insert(
             artifact_id.to_owned(),
             (
@@ -787,8 +884,10 @@ fn schema_failures(scenario: &str, manifest: &Value, expected: &Value) -> Vec<St
     {
         failures.push("expected output loses its preparation boundary".to_owned());
     }
-    if public_projection_contains_sensitive_shape(expected) {
-        failures.push("public projection contains a sensitive raw shape".to_owned());
+    if exported_projection_contains_private_shape(manifest)
+        || exported_projection_contains_private_shape(expected)
+    {
+        failures.push("exported projection contains a private raw shape".to_owned());
     }
 
     let profiles = expected["profiles"].as_array();
@@ -894,6 +993,7 @@ fn schema_failures(scenario: &str, manifest: &Value, expected: &Value) -> Vec<St
     let mut transaction_ids = Vec::new();
     let mut all_observation_ids = Vec::new();
     let mut outcomes = Vec::new();
+    let mut public_summaries = Vec::new();
     for transaction in transactions.into_iter().flatten() {
         if !object_has_only(
             transaction,
@@ -930,7 +1030,11 @@ fn schema_failures(scenario: &str, manifest: &Value, expected: &Value) -> Vec<St
             transaction["state"].as_str().unwrap_or_default(),
             transaction["classification"].as_str().unwrap_or_default(),
             transaction["confidence"].as_str().unwrap_or_default(),
+            transaction["confidenceCeiling"]
+                .as_str()
+                .unwrap_or_default(),
         ));
+        public_summaries.push(transaction["publicSummary"].as_str().unwrap_or_default());
         let layer = transaction["layer"].as_str().unwrap_or_default();
         let key = &transaction["key"];
         let request_id = key["requestId"].as_str();
@@ -985,6 +1089,21 @@ fn schema_failures(scenario: &str, manifest: &Value, expected: &Value) -> Vec<St
                 || !gap_ids.is_empty())
         {
             failures.push("high confidence bypasses time/terminal/coverage gates".to_owned());
+        }
+        let evidence_confidence_ceiling = if transaction["timestampOrdering"] == "usable"
+            && transaction["terminalEvidence"] == true
+            && gap_ids.is_empty()
+            && transaction["state"] != "incomplete"
+        {
+            "high"
+        } else {
+            "low"
+        };
+        if transaction["confidenceCeiling"] != evidence_confidence_ceiling {
+            failures.push(
+                "confidence ceiling diverges from time/terminal/coverage/completeness gates"
+                    .to_owned(),
+            );
         }
         if transaction["publicSummary"].as_str().is_none_or(|summary| {
             summary.is_empty()
@@ -1047,6 +1166,23 @@ fn schema_failures(scenario: &str, manifest: &Value, expected: &Value) -> Vec<St
                 failures.push("transaction observation lacks cited evidence".to_owned());
             }
             for reference in references.into_iter().flatten() {
+                let start = reference["startLine"]
+                    .as_u64()
+                    .and_then(|line| u32::try_from(line).ok());
+                let end = reference["endLine"]
+                    .as_u64()
+                    .and_then(|line| u32::try_from(line).ok());
+                let physical_range_is_valid = reference["artifactId"]
+                    .as_str()
+                    .zip(start)
+                    .zip(end)
+                    .is_some_and(|((artifact_id, start), end)| {
+                        start > 0
+                            && end >= start
+                            && physical_line_counts
+                                .get(artifact_id)
+                                .is_some_and(|line_count| u64::from(end) <= *line_count)
+                    });
                 if !object_has_only(reference, &["artifactId", "startLine", "endLine"])
                     || reference["artifactId"]
                         .as_str()
@@ -1063,19 +1199,13 @@ fn schema_failures(scenario: &str, manifest: &Value, expected: &Value) -> Vec<St
                                 state != "captured" || *complete != Some(true)
                             })
                     })
-                    || reference["startLine"].as_u64().is_none_or(|line| line == 0)
-                    || reference["endLine"]
-                        .as_u64()
-                        .zip(reference["startLine"].as_u64())
-                        .is_none_or(|(end, start)| end < start)
+                    || !physical_range_is_valid
                 {
                     failures.push("transaction evidence reference is malformed".to_owned());
                 }
-                if let (Some(artifact_id), Some(start), Some(end)) = (
-                    reference["artifactId"].as_str(),
-                    reference["startLine"].as_u64(),
-                    reference["endLine"].as_u64(),
-                ) {
+                if let (Some(artifact_id), Some(start), Some(end)) =
+                    (reference["artifactId"].as_str(), start, end)
+                {
                     if !cited_references.insert((artifact_id, start, end)) {
                         failures.push("transaction evidence reference is duplicated".to_owned());
                     }
@@ -1104,12 +1234,14 @@ fn schema_failures(scenario: &str, manifest: &Value, expected: &Value) -> Vec<St
         || transaction_ids != expected_transaction_ids(scenario)
         || all_observation_ids != expected_observation_ids(scenario)
         || outcomes != expected_outcomes(scenario)
+        || public_summaries != expected_public_summaries(scenario)
     {
         failures.push("transaction identity/cardinality matrix changed".to_owned());
     }
 
     let source_local = expected["sourceLocalObservations"].as_array();
     let mut source_local_ids = Vec::new();
+    let mut source_local_reasons = Vec::new();
     for observation in source_local.into_iter().flatten() {
         if !object_has_only(
             observation,
@@ -1132,6 +1264,9 @@ fn schema_failures(scenario: &str, manifest: &Value, expected: &Value) -> Vec<St
         {
             failures.push("source-local observation is not closed and noncorrelatable".to_owned());
         }
+        if let Some(reason) = observation["reason"].as_str() {
+            source_local_reasons.push(reason);
+        }
         if let Some(id) = observation["observationId"].as_str() {
             if id.is_empty() {
                 failures.push("source-local observation ID is empty".to_owned());
@@ -1145,6 +1280,7 @@ fn schema_failures(scenario: &str, manifest: &Value, expected: &Value) -> Vec<St
             failures.push("source-local observation lacks evidence".to_owned());
         }
         let mut cited_references = BTreeSet::new();
+        let mut cited_artifact_ids = Vec::new();
         for reference in references.into_iter().flatten() {
             let artifact_id = reference["artifactId"].as_str();
             let start = reference["startLine"].as_u64();
@@ -1173,9 +1309,33 @@ fn schema_failures(scenario: &str, manifest: &Value, expected: &Value) -> Vec<St
                 failures.push("source-local evidence reference is malformed".to_owned());
             }
             if let (Some(artifact_id), Some(start), Some(end)) = (artifact_id, start, end) {
+                cited_artifact_ids.push(artifact_id);
                 if !cited_references.insert((artifact_id, start, end)) {
                     failures.push("source-local evidence reference is duplicated".to_owned());
                 }
+            }
+        }
+        if observation["kind"] == "rotationFragment" {
+            let mut shared_lineage = BTreeSet::new();
+            let mut rotation_kinds = BTreeSet::new();
+            for artifact_id in &cited_artifact_ids {
+                if let Some((source_id, endpoint_id, host, lineage_id, kind)) =
+                    artifact_rotation_provenance.get(*artifact_id)
+                {
+                    shared_lineage.insert((source_id, endpoint_id, host, lineage_id));
+                    rotation_kinds.insert(kind.as_str());
+                }
+            }
+            if cited_artifact_ids.len() != 2
+                || shared_lineage.len() != 1
+                || rotation_kinds.len() != 2
+                || !rotation_kinds.contains("current")
+                || !rotation_kinds.contains("lo_")
+            {
+                failures.push(
+                    "split rotation evidence does not share source/endpoint/host/lineage"
+                        .to_owned(),
+                );
             }
         }
     }
@@ -1185,46 +1345,38 @@ fn schema_failures(scenario: &str, manifest: &Value, expected: &Value) -> Vec<St
     if source_local.is_none()
         || source_local_ids != sorted_source_local_ids
         || source_local_ids != expected_source_local_ids(scenario)
+        || source_local_reasons != expected_source_local_reasons(scenario)
     {
         failures.push("source-local observation IDs are not sorted and unique".to_owned());
     }
 
     let requests = expected["artifactRequests"].as_array();
-    let mut requested_sources = Vec::new();
+    let mut requested_artifacts = Vec::new();
     for request in requests.into_iter().flatten() {
         if !object_has_only(request, &["logicalArtifactId", "reason"])
             || !matches!(
                 request["logicalArtifactId"].as_str(),
                 Some("server-provider" | "server-admin-service" | "server-admin-service-iis")
             )
-            || request["reason"].as_str().is_none_or(|reason| {
-                reason.is_empty()
-                    || [
-                        "all logs",
-                        "entire",
-                        "arbitrary",
-                        "database",
-                        "registry",
-                        "drive",
-                    ]
-                    .iter()
-                    .any(|term| reason.to_ascii_lowercase().contains(term))
-            })
+            || request["reason"].as_str().is_none_or(str::is_empty)
         {
             failures.push("artifact request is not exact and bounded".to_owned());
         }
-        if let Some(source) = request["logicalArtifactId"].as_str() {
-            requested_sources.push(source);
+        if let (Some(source), Some(reason)) = (
+            request["logicalArtifactId"].as_str(),
+            request["reason"].as_str(),
+        ) {
+            requested_artifacts.push((source, reason));
         }
     }
-    let mut sorted_requested_sources = requested_sources.clone();
-    sorted_requested_sources.sort_unstable();
-    sorted_requested_sources.dedup();
+    let mut sorted_requested_artifacts = requested_artifacts.clone();
+    sorted_requested_artifacts.sort_unstable();
+    sorted_requested_artifacts.dedup();
     if requests.is_none()
-        || requested_sources != sorted_requested_sources
-        || requested_sources != expected_requested_sources(scenario)
+        || requested_artifacts != sorted_requested_artifacts
+        || requested_artifacts != expected_artifact_requests(scenario)
     {
-        failures.push("artifact requests are not sorted and unique".to_owned());
+        failures.push("artifact requests are not exact sorted bounded contracts".to_owned());
     }
 
     failures
@@ -1372,6 +1524,9 @@ fn request_transactions_are_exact_cited_ordered_and_layer_local() {
                     transaction["state"].as_str().unwrap_or_default(),
                     transaction["classification"].as_str().unwrap_or_default(),
                     transaction["confidence"].as_str().unwrap_or_default(),
+                    transaction["confidenceCeiling"]
+                        .as_str()
+                        .unwrap_or_default(),
                 )
             })
             .collect::<Vec<_>>();
@@ -1400,11 +1555,25 @@ fn request_transactions_are_exact_cited_ordered_and_layer_local() {
                     .expect("evidence is an array")
                 {
                     let artifact_id = reference["artifactId"].as_str().unwrap_or_default();
-                    let record_key = (
-                        artifact_id.to_owned(),
-                        reference["startLine"].as_u64().unwrap_or_default() as u32,
-                        reference["endLine"].as_u64().unwrap_or_default() as u32,
-                    );
+                    let Some(start_line) = reference["startLine"]
+                        .as_u64()
+                        .and_then(|line| u32::try_from(line).ok())
+                    else {
+                        failures.push(format!(
+                            "{scenario}/{observation_id}: citation start line exceeds u32"
+                        ));
+                        continue;
+                    };
+                    let Some(end_line) = reference["endLine"]
+                        .as_u64()
+                        .and_then(|line| u32::try_from(line).ok())
+                    else {
+                        failures.push(format!(
+                            "{scenario}/{observation_id}: citation end line exceeds u32"
+                        ));
+                        continue;
+                    };
+                    let record_key = (artifact_id.to_owned(), start_line, end_line);
                     let Some(record) = records.get(&record_key) else {
                         failures.push(format!(
                             "{scenario}/{observation_id}: citation is not one logical CCM record"
@@ -1876,4 +2045,82 @@ fn review_privacy_topology_profile_and_citation_mutations_fail_closed() {
     }
 
     assert!(accepted.is_empty(), "accepted mutations: {accepted:#?}");
+}
+
+#[test]
+fn overflowing_transaction_citation_lines_fail_closed() {
+    let manifest = read_json("provider-success", "manifest.json").unwrap();
+    let mut expected = read_json("provider-success", "expected.json").unwrap();
+    let wrapped_line = u64::from(u32::MAX) + 2;
+    expected["transactions"][0]["observations"][0]["evidence"][0]["startLine"] =
+        Value::from(wrapped_line);
+    expected["transactions"][0]["observations"][0]["evidence"][0]["endLine"] =
+        Value::from(wrapped_line);
+
+    assert!(
+        !schema_failures("provider-success", &manifest, &expected).is_empty(),
+        "u64 citation lines that wrap to a different u32 logical record were accepted"
+    );
+}
+
+#[test]
+fn exported_manifest_and_expected_strings_fail_closed_on_private_shapes() {
+    let manifest = read_json("provider-success", "manifest.json").unwrap();
+    let expected = read_json("provider-success", "expected.json").unwrap();
+    let mut accepted = Vec::new();
+
+    let mut private_manifest = manifest.clone();
+    private_manifest["artifacts"][0]["rotation"]["lineageId"] =
+        Value::String("synthetic.user@example.invalid".to_owned());
+    if schema_failures("provider-success", &private_manifest, &expected).is_empty() {
+        accepted.push("manifest rotation lineage containing an email identity");
+    }
+
+    let mut private_expected = expected.clone();
+    private_expected["transactions"][0]["publicSummary"] = Value::String(
+        r"CONTOSO\alice issued DELETE FROM SMS_R_System with ghp_abcdefghijklmnopqrstuvwxyz0123456789"
+            .to_owned(),
+    );
+    if schema_failures("provider-success", &manifest, &private_expected).is_empty() {
+        accepted.push("public summary containing identity, query, and token shapes");
+    }
+
+    assert!(accepted.is_empty(), "accepted mutations: {accepted:#?}");
+}
+
+#[test]
+fn split_rotation_members_with_divergent_lineage_fail_closed() {
+    let mut manifest = read_json("rotation-boundary", "manifest.json").unwrap();
+    let expected = read_json("rotation-boundary", "expected.json").unwrap();
+    manifest["artifacts"][1]["rotation"]["lineageId"] =
+        Value::String("different-lineage".to_owned());
+
+    assert!(
+        !schema_failures("rotation-boundary", &manifest, &expected).is_empty(),
+        "one source-local split rotation accepted divergent lineage provenance"
+    );
+}
+
+#[test]
+fn incomplete_invalid_offset_transaction_cannot_claim_high_ceiling() {
+    let manifest = read_json("provider-timeout", "manifest.json").unwrap();
+    let mut expected = read_json("provider-timeout", "expected.json").unwrap();
+    expected["transactions"][0]["confidenceCeiling"] = Value::String("high".to_owned());
+
+    assert!(
+        !schema_failures("provider-timeout", &manifest, &expected).is_empty(),
+        "incomplete invalid-offset evidence accepted a high confidence ceiling"
+    );
+}
+
+#[test]
+fn generic_artifact_request_reason_fails_closed() {
+    let manifest = read_json("provider-timeout", "manifest.json").unwrap();
+    let mut expected = read_json("provider-timeout", "expected.json").unwrap();
+    expected["artifactRequests"][0]["reason"] = Value::String("Collect logs.".to_owned());
+
+    assert!(
+        !schema_failures("provider-timeout", &manifest, &expected).is_empty(),
+        "generic request prose lost the exact unresolved request and terminal basis"
+    );
 }
