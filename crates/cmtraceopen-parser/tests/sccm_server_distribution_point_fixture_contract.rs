@@ -36,6 +36,63 @@ const EXACT_DP: &str = "safe:dp:lab-dp-01";
 const EXACT_DP_02: &str = "safe:dp:lab-dp-02";
 const EXACT_SITE_SERVER: &str = "safe:server:lab-pri-01";
 const EXACT_CLIENT: &str = "safe:client:lab-client-01";
+const APPROVED_PATH_FINGERPRINTS: &[&str] = &[
+    "synthetic:absent-distmgr",
+    "synthetic:absent-provider",
+    "synthetic:client-only-data-transfer",
+    "synthetic:client-only-server-absent",
+    "synthetic:distribution-failure",
+    "synthetic:healthy-distmgr",
+    "synthetic:healthy-pkgxfer",
+    "synthetic:healthy-provider",
+    "synthetic:incomplete-distmgr",
+    "synthetic:incomplete-pkgxfer",
+    "synthetic:incomplete-provider",
+    "synthetic:retry-distmgr",
+    "synthetic:retry-pkgxfer",
+    "synthetic:rotation-current",
+    "synthetic:rotation-lo",
+    "synthetic:rotation-malformed",
+    "synthetic:serve-distmgr",
+    "synthetic:serve-pkgxfer",
+    "synthetic:serve-provider",
+    "synthetic:serve-status",
+    "synthetic:validation-distmgr",
+    "synthetic:validation-pkgxfer",
+    "synthetic:validation-provider",
+    "synthetic:version-distmgr",
+    "synthetic:version-pkgxfer",
+    "synthetic:version-provider",
+    "synthetic:version-provider-dp02",
+];
+const APPROVED_ROTATION_LINEAGES: &[&str] = &[
+    "absent-distmgr",
+    "absent-provider",
+    "client-only-data-transfer",
+    "client-only-server-absent",
+    "distribution-failure",
+    "healthy-distmgr",
+    "healthy-pkgxfer",
+    "healthy-provider",
+    "incomplete-distmgr",
+    "incomplete-pkgxfer",
+    "incomplete-provider",
+    "retry-distmgr",
+    "retry-pkgxfer",
+    "rotation-distmgr",
+    "rotation-provider",
+    "serve-distmgr",
+    "serve-pkgxfer",
+    "serve-provider",
+    "serve-status",
+    "validation-distmgr",
+    "validation-pkgxfer",
+    "validation-provider",
+    "version-distmgr",
+    "version-pkgxfer",
+    "version-provider",
+    "version-provider-dp02",
+];
 
 fn corpus_root() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -193,8 +250,10 @@ struct ParsedArtifact {
     state: String,
     source_id: String,
     role: String,
+    producer_host_handle: String,
     basename: String,
     workflow_subject_handle: Option<String>,
+    workflow_subject_basis: Option<String>,
     rotation_kind: String,
     rotation_lineage: String,
     fragment_complete: Option<bool>,
@@ -206,6 +265,16 @@ struct ParsedScenario {
     evidence: BTreeMap<(String, u32, u32), SccmEvidence>,
     physical_evidence: BTreeSet<(String, u32, u32)>,
     distribution_point_handles: BTreeSet<String>,
+}
+
+fn artifact_applies_to_distribution_point(
+    artifact: &ParsedArtifact,
+    distribution_point_handle: &str,
+) -> bool {
+    artifact.workflow_subject_handle.as_deref() == Some(distribution_point_handle)
+        || (artifact.workflow_subject_handle.is_none()
+            && artifact.workflow_subject_basis.as_deref() == Some("manifestTopology")
+            && artifact.role == "siteServer")
 }
 
 fn parse_fixture_fields(message: &str) -> Result<BTreeMap<String, String>, String> {
@@ -316,13 +385,60 @@ fn sanitized_source_path_is_bounded(source_path: &str, basename: &str, rotation:
 }
 
 fn path_fingerprint_is_safe(path_fingerprint: &str) -> bool {
-    path_fingerprint
-        .strip_prefix("synthetic:")
-        .is_some_and(|suffix| {
+    path_fingerprint.len() <= 64 && APPROVED_PATH_FINGERPRINTS.contains(&path_fingerprint)
+}
+
+fn rotation_lineage_is_safe(rotation_lineage: &str) -> bool {
+    rotation_lineage.len() <= 64 && APPROVED_ROTATION_LINEAGES.contains(&rotation_lineage)
+}
+
+fn transaction_observation_id_is_safe(observation_id: &str) -> bool {
+    observation_id.len() <= 64
+        && observation_id
+            .as_bytes()
+            .get(..2)
+            .is_some_and(|prefix| prefix.iter().all(u8::is_ascii_digit))
+        && observation_id.as_bytes().get(2) == Some(&b'-')
+        && observation_id.as_bytes().get(3..).is_some_and(|suffix| {
             !suffix.is_empty()
                 && suffix
-                    .bytes()
-                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+                    .iter()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || *byte == b'-')
+        })
+}
+
+fn source_local_observation_id_is_safe(observation_id: &str) -> bool {
+    observation_id.len() <= 64
+        && (observation_id
+            .strip_prefix("client-control-")
+            .is_some_and(|suffix| {
+                suffix.len() == 2 && suffix.bytes().all(|byte| byte.is_ascii_digit())
+            })
+            || observation_id
+                .strip_prefix("rotation-")
+                .is_some_and(|suffix| {
+                    suffix.split_once('-').is_some_and(|(ordinal, label)| {
+                        ordinal.len() == 2
+                            && ordinal.bytes().all(|byte| byte.is_ascii_digit())
+                            && !label.is_empty()
+                            && label.bytes().all(|byte| {
+                                byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-'
+                            })
+                    })
+                }))
+}
+
+fn raw_fixture_bytes_are_sanitized(content: &str) -> bool {
+    !content.is_empty()
+        && content.lines().all(|line| {
+            let lower = line.to_ascii_lowercase();
+            !line.is_empty()
+                && line.contains("SYNTHETIC FIXTURE")
+                && !line.contains(['@', '\\'])
+                && !lower.contains("/users/")
+                && !lower.contains("secret=")
+                && !lower.contains("password=")
+                && !lower.contains("token=")
         })
 }
 
@@ -634,14 +750,24 @@ fn validate_manifest(
             ));
         }
         let rotation_kind = artifact["rotation"]["kind"].as_str();
-        let rotation_lineage =
-            match required_nonempty_string(&artifact["rotation"], "lineageId", &context) {
-                Ok(value) => value.to_owned(),
-                Err(error) => {
-                    failures.push(error);
-                    String::new()
+        let rotation_lineage = match required_nonempty_string(
+            &artifact["rotation"],
+            "lineageId",
+            &context,
+        ) {
+            Ok(value) => {
+                if !rotation_lineage_is_safe(value) {
+                    failures.push(format!(
+                            "{artifact_id} rotation lineage is not a bounded declared synthetic identity"
+                        ));
                 }
-            };
+                value.to_owned()
+            }
+            Err(error) => {
+                failures.push(error);
+                String::new()
+            }
+        };
         let physical_capture = matches!(state, "captured" | "capped" | "parseFailed");
         let artifact_collected_utc = match required_string(artifact, "collectedUtc", &context)
             .and_then(|value| {
@@ -801,9 +927,19 @@ fn validate_manifest(
                     "{artifact_id} has incoherent raw-byte collection-limit provenance"
                 ));
             }
-            let content = String::from_utf8_lossy(&bytes);
-            if !content.contains("SYNTHETIC FIXTURE") {
-                failures.push(format!("{artifact_id} lacks a synthetic fixture marker"));
+            let content = match std::str::from_utf8(&bytes) {
+                Ok(value) => value,
+                Err(error) => {
+                    failures.push(format!(
+                        "{artifact_id} is not valid UTF-8 under its declared encoding: {error}"
+                    ));
+                    ""
+                }
+            };
+            if !raw_fixture_bytes_are_sanitized(content) {
+                failures.push(format!(
+                    "{artifact_id} contains non-synthetic or identity-bearing raw fixture bytes"
+                ));
             }
             for (line_index, _) in content.lines().enumerate() {
                 let Ok(line_number) = u32::try_from(line_index + 1) else {
@@ -835,7 +971,7 @@ fn validate_manifest(
                     coverage: coverage_model.clone(),
                     encoding: encoding.map(str::to_owned),
                 };
-                let normalized = normalize_ccm_artifact(artifact_model, &content);
+                let normalized = normalize_ccm_artifact(artifact_model, content);
                 if fragment_complete == Some(false) && !normalized.is_empty() {
                     failures.push(format!(
                         "{artifact_id} exposes a logical record from an incomplete rotation fragment"
@@ -952,8 +1088,10 @@ fn validate_manifest(
                     state: state.to_owned(),
                     source_id: source_id.to_owned(),
                     role: role.to_owned(),
+                    producer_host_handle: producer_host_handle.unwrap_or_default().to_owned(),
                     basename: basename.to_owned(),
                     workflow_subject_handle: workflow_subject_handle.map(str::to_owned),
+                    workflow_subject_basis: workflow_subject_basis.map(str::to_owned),
                     rotation_kind: artifact["rotation"]["kind"]
                         .as_str()
                         .unwrap_or_default()
@@ -1265,6 +1403,17 @@ fn validate_expected(
                 continue;
             }
         };
+        let required_incomplete_artifact_ids = parsed
+            .artifacts
+            .iter()
+            .filter(|(_, artifact)| {
+                artifact.source_id == "server-dp-distribution"
+                    && artifact_has_incomplete_coverage(artifact)
+                    && artifact_applies_to_distribution_point(artifact, &key_fields["DpHandle"])
+            })
+            .map(|(artifact_id, _)| artifact_id.as_str())
+            .collect::<BTreeSet<_>>();
+        let has_unresolved_required_coverage = !required_incomplete_artifact_ids.is_empty();
         let expected_id = format!(
             "dp:{}:{}:v{}:{}",
             key_fields["PackageId"],
@@ -1312,6 +1461,7 @@ fn validate_expected(
         let mut terminal_success_phase = None;
         let mut terminal_failure = false;
         let mut terminal_deferred = false;
+        let mut observed_after_terminal_failure = false;
         let mut cites_capped_evidence = false;
         let mut previous_utc = i64::MIN;
         let mut previous_phase = 0usize;
@@ -1327,6 +1477,11 @@ fn validate_expected(
             if !seen_observation_ids.insert(observation_id) {
                 failures.push(format!(
                     "{transaction_id} contains duplicate observationId {observation_id}"
+                ));
+            }
+            if !transaction_observation_id_is_safe(observation_id) {
+                failures.push(format!(
+                    "{transaction_id} contains an unbounded or identity-bearing observationId"
                 ));
             }
             let phase = required_string(observation, "phase", observation_id).unwrap_or("invalid");
@@ -1437,6 +1592,9 @@ fn validate_expected(
                 }
                 previous_utc = utc;
             }
+            if terminal_failure {
+                observed_after_terminal_failure = true;
+            }
             match (disposition, terminal) {
                 ("succeeded", true) => {
                     latest_success = latest_success.max(phase_index);
@@ -1482,12 +1640,15 @@ fn validate_expected(
                     && computed_last_success == Some("serveOrReport")
                     && !terminal_failure
                     && !cites_capped_evidence
+                    && !has_unresolved_required_coverage
                     && confidence == "high"
                     && confidence_ceiling == "high" => {}
             ("failed", "confirmedFailure")
                 if terminal_failure
                     && !terminal_success
+                    && !observed_after_terminal_failure
                     && !cites_capped_evidence
+                    && !has_unresolved_required_coverage
                     && confidence == "high"
                     && confidence_ceiling == "high" => {}
             ("deferred", "blockedOrDeferred")
@@ -1495,6 +1656,7 @@ fn validate_expected(
                     && !terminal_failure
                     && !terminal_success
                     && !cites_capped_evidence
+                    && !has_unresolved_required_coverage
                     && confidence == "medium"
                     && confidence_ceiling == "medium" => {}
             ("incomplete", "insufficientEvidence")
@@ -1532,6 +1694,12 @@ fn validate_expected(
                 "{transaction_id} coverage gaps must be sorted and unique"
             ));
         }
+        let declared_gap_ids = gap_ids.iter().copied().collect::<BTreeSet<_>>();
+        if declared_gap_ids != required_incomplete_artifact_ids {
+            failures.push(format!(
+                "{transaction_id} coverage gaps are not the exact required DP-bound source gaps"
+            ));
+        }
         for artifact_id in &gap_ids {
             match parsed.artifacts.get(*artifact_id) {
                 Some(artifact) if artifact_has_incomplete_coverage(artifact) => {}
@@ -1552,13 +1720,13 @@ fn validate_expected(
                     "{transaction_id} incomplete state lacks a bounded noncomplete next source"
                 ));
             }
-            let declared_gap_ids = gap_ids.iter().copied().collect::<BTreeSet<_>>();
             let expected_gap_ids = parsed
                 .artifacts
                 .iter()
                 .filter(|(_, artifact)| {
                     Some(artifact.source_id.as_str()) == next_source
                         && artifact_has_incomplete_coverage(artifact)
+                        && artifact_applies_to_distribution_point(artifact, &key_fields["DpHandle"])
                 })
                 .map(|(artifact_id, _)| artifact_id.as_str())
                 .collect::<BTreeSet<_>>();
@@ -1620,6 +1788,9 @@ fn validate_expected(
             failures.push(format!(
                 "source-local observations contain duplicate observationId {observation_id}"
             ));
+        }
+        if !source_local_observation_id_is_safe(observation_id) {
+            failures.push("source-local observationId is unbounded or identity-bearing".to_owned());
         }
         reject_unknown_fields(
             observation,
@@ -1756,6 +1927,26 @@ fn validate_expected(
                     .iter()
                     .map(|artifact| artifact.source_id.as_str())
                     .collect::<BTreeSet<_>>();
+                let roles = artifacts
+                    .iter()
+                    .map(|artifact| artifact.role.as_str())
+                    .collect::<BTreeSet<_>>();
+                let producers = artifacts
+                    .iter()
+                    .map(|artifact| artifact.producer_host_handle.as_str())
+                    .collect::<BTreeSet<_>>();
+                let basenames = artifacts
+                    .iter()
+                    .map(|artifact| artifact.basename.to_ascii_lowercase())
+                    .collect::<BTreeSet<_>>();
+                let workflow_subject_handles = artifacts
+                    .iter()
+                    .map(|artifact| artifact.workflow_subject_handle.as_deref())
+                    .collect::<BTreeSet<_>>();
+                let workflow_subject_bases = artifacts
+                    .iter()
+                    .map(|artifact| artifact.workflow_subject_basis.as_deref())
+                    .collect::<BTreeSet<_>>();
                 let lineages = artifacts
                     .iter()
                     .map(|artifact| artifact.rotation_lineage.as_str())
@@ -1767,6 +1958,11 @@ fn validate_expected(
                 cited_artifact_ids == unique_artifact_ids
                     && artifacts.len() >= 2
                     && source_ids.len() == 1
+                    && roles.len() == 1
+                    && producers.len() == 1
+                    && basenames.len() == 1
+                    && workflow_subject_handles.len() == 1
+                    && workflow_subject_bases.len() == 1
                     && lineages.len() == 1
                     && lineages.first().is_some_and(|lineage| !lineage.is_empty())
                     && rotation_kinds.len() >= 2
