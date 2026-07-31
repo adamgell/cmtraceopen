@@ -179,6 +179,10 @@ fn expected_transaction_projection(expected: &Value) -> Vec<Value> {
         .expect("expected transactions")
         .iter()
         .map(|transaction| {
+            let next_artifact_logical_ids = transaction["nextArtifact"]["logicalArtifactId"]
+                .as_str()
+                .map(|_| vec![transaction["nextArtifact"]["logicalArtifactId"].clone()])
+                .unwrap_or_default();
             json!({
                 "transactionId": transaction["transactionId"],
                 "phase": transaction["phase"],
@@ -187,7 +191,7 @@ fn expected_transaction_projection(expected: &Value) -> Vec<Value> {
                 "classification": transaction["classification"],
                 "confidence": transaction["confidence"],
                 "coverageGapArtifactIds": transaction["coverageGapArtifactIds"],
-                "nextArtifactLogicalId": transaction["nextArtifact"]["logicalArtifactId"],
+                "nextArtifactLogicalIds": next_artifact_logical_ids,
             })
         })
         .collect()
@@ -199,6 +203,15 @@ fn actual_transaction_projection(analysis: &Value) -> Vec<Value> {
         .expect("analysis transactions")
         .iter()
         .map(|transaction| {
+            let next_artifact_logical_ids = transaction["nextArtifacts"]
+                .as_array()
+                .map(|requests| {
+                    requests
+                        .iter()
+                        .map(|request| request["logicalArtifactId"].clone())
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
             json!({
                 "transactionId": transaction["transactionId"],
                 "phase": transaction["phase"],
@@ -207,11 +220,7 @@ fn actual_transaction_projection(analysis: &Value) -> Vec<Value> {
                 "classification": transaction["classification"],
                 "confidence": transaction["confidence"],
                 "coverageGapArtifactIds": transaction["coverageGapArtifactIds"],
-                "nextArtifactLogicalId": transaction["nextArtifacts"]
-                    .as_array()
-                    .and_then(|requests| requests.first())
-                    .map(|request| request["logicalArtifactId"].clone())
-                    .unwrap_or(Value::Null),
+                "nextArtifactLogicalIds": next_artifact_logical_ids,
             })
         })
         .collect()
@@ -328,14 +337,21 @@ fn source_local_projection(value: &Value, actual: bool) -> Vec<Value> {
         .expect("source-local observations")
         .iter()
         .map(|observation| {
-            let next_logical_id = if actual {
+            let next_logical_ids = if actual {
                 observation["nextArtifacts"]
                     .as_array()
-                    .and_then(|requests| requests.first())
-                    .map(|request| request["logicalArtifactId"].clone())
-                    .unwrap_or(Value::Null)
+                    .map(|requests| {
+                        requests
+                            .iter()
+                            .map(|request| request["logicalArtifactId"].clone())
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default()
             } else {
-                observation["nextArtifact"]["logicalArtifactId"].clone()
+                observation["nextArtifact"]["logicalArtifactId"]
+                    .as_str()
+                    .map(|_| vec![observation["nextArtifact"]["logicalArtifactId"].clone()])
+                    .unwrap_or_default()
             };
             json!({
                 "observationId": observation["observationId"],
@@ -343,7 +359,7 @@ fn source_local_projection(value: &Value, actual: bool) -> Vec<Value> {
                 "classification": observation["classification"],
                 "confidence": observation["confidence"],
                 "correlationEligible": observation["correlationEligible"],
-                "nextArtifactLogicalId": next_logical_id,
+                "nextArtifactLogicalIds": next_logical_ids,
             })
         })
         .collect()
@@ -1108,10 +1124,9 @@ fn management_point_event_markers_require_an_exact_delimiter() {
         .iter_mut()
         .find(|evidence| evidence.message.contains("Record outcome succeeded"))
         .expect("record outcome");
-    outcome.message = outcome.message.replace(
-        "Record outcome succeeded",
-        "Record outcome succeededness",
-    );
+    outcome.message = outcome
+        .message
+        .replace("Record outcome succeeded", "Record outcome succeededness");
 
     assert_no_high_success(
         &analysis_value(&bundle),
@@ -1134,10 +1149,7 @@ fn management_point_conflicting_evidence_identity_reuse_fails_closed() {
                 "a8111111-1111-1111-1111-111111111111",
                 "a8999999-9999-9999-9999-999999999999",
             )
-            .replace(
-                "safe:client:mp-healthy-01",
-                "safe:client:mp-conflicting-99",
-            );
+            .replace("safe:client:mp-healthy-01", "safe:client:mp-conflicting-99");
     }
     bundle.evidence.extend(conflicting);
 

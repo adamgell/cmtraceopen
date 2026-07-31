@@ -304,6 +304,7 @@ pub fn analyze_management_point(bundle: &SccmManagementPointBundle) -> SccmManag
         }
         if !source_is_admitted(source)
             || !evidence_reference_fits_source(evidence, source)
+            || !evidence_identity_is_unique(bundle, evidence)
             || evidence.role != SccmRole::ManagementPoint
             || !topology_is_valid
         {
@@ -628,74 +629,39 @@ fn resolve_phase<'a>(facts: &[&'a ManagementPointFact]) -> PhaseDecision<'a> {
         };
     }
 
-    let latest_failure = latest_fact(
-        facts
-            .iter()
-            .copied()
-            .filter(|fact| fact.outcome == FactOutcome::Failed && fact.terminal),
-    );
-    let latest_success = latest_fact(
-        facts
-            .iter()
-            .copied()
-            .filter(|fact| fact.outcome == FactOutcome::Succeeded),
-    );
+    let Some(latest) = latest_fact(facts.iter().copied()) else {
+        return PhaseDecision {
+            kind: PhaseDecisionKind::UnusableTime,
+            decisive: facts.to_vec(),
+            ordering_millis: None,
+        };
+    };
+    let instant = latest.timestamp.utc_millis;
+    let same_instant = facts
+        .iter()
+        .copied()
+        .filter(|fact| fact.timestamp.utc_millis == instant)
+        .collect::<Vec<_>>();
+    if same_instant
+        .iter()
+        .any(|fact| fact.outcome != latest.outcome)
+    {
+        return PhaseDecision {
+            kind: PhaseDecisionKind::Contradictory,
+            decisive: same_instant,
+            ordering_millis: instant,
+        };
+    }
 
-    match (latest_failure, latest_success) {
-        (Some(failure), Some(success))
-            if failure.timestamp.utc_millis == success.timestamp.utc_millis =>
-        {
-            let instant = failure.timestamp.utc_millis;
-            PhaseDecision {
-                kind: PhaseDecisionKind::Contradictory,
-                decisive: facts
-                    .iter()
-                    .copied()
-                    .filter(|fact| fact.timestamp.utc_millis == instant)
-                    .collect(),
-                ordering_millis: instant,
-            }
-        }
-        (Some(failure), Some(success))
-            if success.timestamp.utc_millis > failure.timestamp.utc_millis =>
-        {
-            PhaseDecision {
-                kind: PhaseDecisionKind::Succeeded,
-                decisive: vec![success],
-                ordering_millis: success.timestamp.utc_millis,
-            }
-        }
-        (Some(failure), _) => PhaseDecision {
-            kind: PhaseDecisionKind::Failed,
-            decisive: vec![failure],
-            ordering_millis: failure.timestamp.utc_millis,
+    PhaseDecision {
+        kind: match latest.outcome {
+            FactOutcome::Succeeded => PhaseDecisionKind::Succeeded,
+            FactOutcome::Failed if latest.terminal => PhaseDecisionKind::Failed,
+            FactOutcome::Deferred => PhaseDecisionKind::Deferred,
+            FactOutcome::Failed => PhaseDecisionKind::UnusableTime,
         },
-        (None, Some(success)) => PhaseDecision {
-            kind: PhaseDecisionKind::Succeeded,
-            decisive: vec![success],
-            ordering_millis: success.timestamp.utc_millis,
-        },
-        (None, None) => {
-            let latest_deferred = latest_fact(
-                facts
-                    .iter()
-                    .copied()
-                    .filter(|fact| fact.outcome == FactOutcome::Deferred),
-            );
-            if let Some(deferred) = latest_deferred {
-                PhaseDecision {
-                    kind: PhaseDecisionKind::Deferred,
-                    decisive: vec![deferred],
-                    ordering_millis: deferred.timestamp.utc_millis,
-                }
-            } else {
-                PhaseDecision {
-                    kind: PhaseDecisionKind::UnusableTime,
-                    decisive: facts.to_vec(),
-                    ordering_millis: None,
-                }
-            }
-        }
+        decisive: vec![latest],
+        ordering_millis: instant,
     }
 }
 
@@ -858,7 +824,7 @@ fn parse_fact(
     }
 
     let request_id = normalize_uuid(&token_value(message, "RequestId")?)?;
-    let policy_id = match token_value(message, "PolicyId") {
+    let policy_id = match validated_token_value(message, "PolicyId")? {
         Some(value) => Some(normalize_uuid(&value)?),
         None => None,
     };
@@ -895,17 +861,17 @@ fn parse_phase_outcome(
     let deferred = FactOutcome::Deferred;
 
     match producer {
-        "MP_GetAuth" if lowercase.starts_with("receive request succeeded") => {
+        "MP_GetAuth" if has_event_marker(&lowercase, "receive request succeeded") => {
             Some((SccmManagementPointPhase::ReceiveRequest, succeeded, false))
         }
-        "MP_GetAuth" if lowercase.starts_with("authenticate succeeded") => {
+        "MP_GetAuth" if has_event_marker(&lowercase, "authenticate succeeded") => {
             Some((SccmManagementPointPhase::Authenticate, succeeded, false))
         }
-        "MP_GetAuth" if lowercase.starts_with("authenticate failed terminal") => {
+        "MP_GetAuth" if has_event_marker(&lowercase, "authenticate failed terminal") => {
             Some((SccmManagementPointPhase::Authenticate, failed, true))
         }
         "MP_CliReg" | "MP_RegistrationManager"
-            if lowercase.starts_with("register or identify succeeded") =>
+            if has_event_marker(&lowercase, "register or identify succeeded") =>
         {
             Some((
                 SccmManagementPointPhase::RegisterOrIdentify,
@@ -914,47 +880,58 @@ fn parse_phase_outcome(
             ))
         }
         "MP_CliReg" | "MP_RegistrationManager"
-            if lowercase.starts_with("register or identify failed terminal") =>
+            if has_event_marker(&lowercase, "register or identify failed terminal") =>
         {
             Some((SccmManagementPointPhase::RegisterOrIdentify, failed, true))
         }
-        "MP_Location" if lowercase.starts_with("resolve location succeeded") => Some((
+        "MP_Location" if has_event_marker(&lowercase, "resolve location succeeded") => Some((
             SccmManagementPointPhase::ResolveLocationOrPolicy,
             succeeded,
             false,
         )),
-        "MP_Location" if lowercase.starts_with("resolve location failed terminal") => Some((
-            SccmManagementPointPhase::ResolveLocationOrPolicy,
-            failed,
-            true,
-        )),
-        "MP_GetPolicy" if lowercase.starts_with("resolve policy succeeded") => Some((
+        "MP_Location" if has_event_marker(&lowercase, "resolve location failed terminal") => {
+            Some((
+                SccmManagementPointPhase::ResolveLocationOrPolicy,
+                failed,
+                true,
+            ))
+        }
+        "MP_GetPolicy" if has_event_marker(&lowercase, "resolve policy succeeded") => Some((
             SccmManagementPointPhase::ResolveLocationOrPolicy,
             succeeded,
             false,
         )),
-        "MP_GetPolicy" if lowercase.starts_with("resolve policy failed terminal") => Some((
+        "MP_GetPolicy" if has_event_marker(&lowercase, "resolve policy failed terminal") => Some((
             SccmManagementPointPhase::ResolveLocationOrPolicy,
             failed,
             true,
         )),
-        "MP_GetPolicy" if lowercase.starts_with("respond deferred") => {
+        "MP_GetPolicy" if has_event_marker(&lowercase, "respond deferred") => {
             Some((SccmManagementPointPhase::Respond, deferred, false))
         }
-        "MP_GetPolicy" if lowercase.starts_with("respond succeeded") => {
+        "MP_GetPolicy" if has_event_marker(&lowercase, "respond succeeded") => {
             Some((SccmManagementPointPhase::Respond, succeeded, false))
         }
-        "MP_GetPolicy" if lowercase.starts_with("respond failed terminal") => {
+        "MP_GetPolicy" if has_event_marker(&lowercase, "respond failed terminal") => {
             Some((SccmManagementPointPhase::Respond, failed, true))
         }
-        "MP_GetPolicy" if lowercase.starts_with("record outcome succeeded") => {
+        "MP_GetPolicy" if has_event_marker(&lowercase, "record outcome succeeded") => {
             Some((SccmManagementPointPhase::RecordOutcome, succeeded, false))
         }
-        "MP_GetPolicy" if lowercase.starts_with("record outcome failed terminal") => {
+        "MP_GetPolicy" if has_event_marker(&lowercase, "record outcome failed terminal") => {
             Some((SccmManagementPointPhase::RecordOutcome, failed, true))
         }
         _ => None,
     }
+}
+
+fn has_event_marker(message: &str, marker: &str) -> bool {
+    message.strip_prefix(marker).is_some_and(|suffix| {
+        suffix
+            .chars()
+            .next()
+            .is_none_or(|character| character.is_ascii_whitespace())
+    })
 }
 
 fn event_payload(message: &str) -> Option<&str> {
@@ -1000,9 +977,10 @@ fn is_supplemental_source(source: &SccmManagementPointSource) -> bool {
                 .eq_ignore_ascii_case("mpcontrol.log"))
 }
 
-fn token_value(message: &str, label: &str) -> Option<String> {
+fn validated_token_value(message: &str, label: &str) -> Option<Option<String>> {
     let lowercase = message.to_ascii_lowercase();
     let needle = format!("{}=", label.to_ascii_lowercase());
+    let mut value = None;
     for (label_start, _) in lowercase.match_indices(&needle) {
         let exact_label_boundary = label_start == 0
             || message[..label_start]
@@ -1014,28 +992,36 @@ fn token_value(message: &str, label: &str) -> Option<String> {
         }
 
         let remainder = &message[label_start + needle.len()..];
-        if let Some(braced) = remainder.strip_prefix('{') {
+        let parsed = if let Some(braced) = remainder.strip_prefix('{') {
             let end = braced.find('}')?;
             let suffix = &braced[end + 1..];
             let exact_value_boundary = suffix.chars().next().is_none_or(|character| {
                 character.is_whitespace() || matches!(character, ',' | ';' | '&')
             });
-            if exact_value_boundary && end > 0 {
-                return Some(braced[..end].to_owned());
+            if !exact_value_boundary || end == 0 {
+                return None;
             }
-            continue;
-        }
-
-        let end = remainder
-            .find(|character: char| {
-                character.is_whitespace() || matches!(character, ',' | ';' | '&')
-            })
-            .unwrap_or(remainder.len());
-        if end > 0 {
-            return Some(remainder[..end].to_owned());
+            braced[..end].to_owned()
+        } else {
+            let end = remainder
+                .find(|character: char| {
+                    character.is_whitespace() || matches!(character, ',' | ';' | '&')
+                })
+                .unwrap_or(remainder.len());
+            if end == 0 {
+                return None;
+            }
+            remainder[..end].to_owned()
+        };
+        if value.replace(parsed).is_some() {
+            return None;
         }
     }
-    None
+    Some(value)
+}
+
+fn token_value(message: &str, label: &str) -> Option<String> {
+    validated_token_value(message, label)?
 }
 
 fn normalize_uuid(value: &str) -> Option<String> {
@@ -1104,6 +1090,25 @@ fn artifact_id_is_unique(bundle: &SccmManagementPointBundle, artifact_id: &str) 
         .sources
         .iter()
         .filter(|source| source.artifact.artifact_id == artifact_id)
+        .take(2)
+        .count()
+        == 1
+}
+
+fn evidence_identity_is_unique(
+    bundle: &SccmManagementPointBundle,
+    evidence: &SccmEvidence,
+) -> bool {
+    bundle
+        .evidence
+        .iter()
+        .filter(|candidate| {
+            candidate.evidence_id == evidence.evidence_id
+                || candidate.reference.entry_id == evidence.reference.entry_id
+                || (candidate.reference.artifact_id == evidence.reference.artifact_id
+                    && candidate.reference.line_start == evidence.reference.line_start
+                    && candidate.reference.line_end == evidence.reference.line_end)
+        })
         .take(2)
         .count()
         == 1
@@ -1254,15 +1259,12 @@ fn append_rejected_observations(
         return;
     }
 
-    let evidence_by_id = bundle
-        .evidence
-        .iter()
-        .map(|evidence| (evidence.reference.entry_id.as_str(), evidence))
-        .collect::<BTreeMap<_, _>>();
     let unrelated = rejected.iter().any(|reference| {
-        evidence_by_id
-            .get(reference.entry_id.as_str())
-            .is_some_and(|evidence| {
+        bundle
+            .evidence
+            .iter()
+            .filter(|evidence| evidence.reference == *reference)
+            .any(|evidence| {
                 token_value(&evidence.message, "RequestId").is_none()
                     && (token_value(&evidence.message, "AssignmentId").is_some()
                         || token_value(&evidence.message, "ClientId").is_some())
