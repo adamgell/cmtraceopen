@@ -20,9 +20,6 @@ crates/**/target/
 .DS_Store
 Thumbs.db
 
-# Internal docs (specs, plans, mockups)
-docs/
-
 # Brainstorming artifacts
 .superpowers/
 
