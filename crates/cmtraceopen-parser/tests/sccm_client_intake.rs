@@ -141,7 +141,7 @@ fn synthetic_artifact(artifact_id: &str, display_name: &str) -> SccmClientIntake
 }
 
 fn serialized_json_contains_windows_user_root(serialized_casefolded: &str) -> bool {
-    serialized_casefolded.contains(r"c:\users")
+    serialized_casefolded.contains(r"c:\\users")
 }
 
 #[test]
@@ -601,7 +601,9 @@ fn public_identity_contract_retains_only_reviewed_synthetic_and_opaque_forms() {
     let serialized_casefolded = serialized.to_ascii_lowercase();
     assert!(!serialized_casefolded.contains("realuser"));
     assert!(!serialized_casefolded.contains("realuser.corp"));
-    assert!(!serialized_casefolded.contains(r"c:\users"));
+    assert!(!serialized_json_contains_windows_user_root(
+        &serialized_casefolded
+    ));
 
     let mut oversized_timestamp = synthetic_artifact("invalid-time", "PolicyAgent.log");
     oversized_timestamp.artifact.collected_at_utc =
@@ -910,7 +912,13 @@ fn unsafe_path_fingerprints_fail_before_public_projection() {
 
 #[test]
 fn sha256_path_fingerprints_require_exactly_64_lowercase_hex_characters() {
-    for digest in ["a".repeat(16), "a".repeat(63), "a".repeat(65)] {
+    for digest in [
+        "a".repeat(16),
+        "a".repeat(63),
+        "a".repeat(65),
+        "A".repeat(64),
+        "g".repeat(64),
+    ] {
         let mut artifact = synthetic_artifact("unsafe-fingerprint", "PolicyAgent.log");
         artifact.path_fingerprint = Some(format!("sha256:{digest}"));
 
@@ -919,8 +927,7 @@ fn sha256_path_fingerprints_require_exactly_64_lowercase_hex_characters() {
                 artifacts: vec![artifact],
             }),
             Err(SccmClientIntakeError::InvalidPathFingerprint),
-            "non-SHA-256 digest length was accepted: {}",
-            digest.len()
+            "invalid SHA-256 digest was accepted: {digest:?}"
         );
     }
 
