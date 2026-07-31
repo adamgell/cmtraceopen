@@ -443,6 +443,41 @@ fn health_server_role_identity_collisions_do_not_change_client_analysis() {
 }
 
 #[test]
+fn health_cross_role_shared_artifact_id_cannot_select_an_order_authority() {
+    let baseline = load_bundle("success");
+    let expected = serde_json::to_string(&analyze_client_health(&baseline))
+        .expect("baseline client analysis JSON");
+
+    let mut forward = baseline.clone();
+    let mut server_artifact = baseline
+        .artifacts
+        .iter()
+        .find(|artifact| artifact.artifact_id == "health-success-ccmsetup-current")
+        .expect("success fixture ccmsetup artifact")
+        .clone();
+    server_artifact.display_name = "MP_GetPolicy.log".to_owned();
+    server_artifact.role = SccmRole::ManagementPoint;
+    forward.artifacts.push(server_artifact);
+
+    let mut reversed = forward.clone();
+    reversed.artifacts.reverse();
+    reversed.evidence.reverse();
+
+    let forward_json = serde_json::to_string(&analyze_client_health(&forward))
+        .expect("forward cross-role collision analysis JSON");
+    let reversed_json = serde_json::to_string(&analyze_client_health(&reversed))
+        .expect("reversed cross-role collision analysis JSON");
+    assert_eq!(
+        forward_json, reversed_json,
+        "artifact vector order must not select an authority for a duplicate identity"
+    );
+    assert_eq!(
+        forward_json, expected,
+        "server-role artifacts reusing a client artifact id must stay invisible to admission"
+    );
+}
+
+#[test]
 fn health_equal_time_opposing_transport_outcomes_are_contradictory() {
     fn with_failure_artifact_id(artifact_id: &str) -> SccmNormalizedBundle {
         let mut bundle = load_bundle("success");
