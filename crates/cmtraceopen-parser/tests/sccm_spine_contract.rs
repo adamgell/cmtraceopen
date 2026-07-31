@@ -382,6 +382,13 @@ const REVIEW_UNRECOGNIZED_CONFIRMATION_REQUEST_REASONS: [&str; 10] = [
     "Confirm PolicyAgent.log for fetching credentials.",
 ];
 
+const REVIEW_PASSIVE_UNBOUNDED_CONFIRMATION_REASONS: [&str; 4] = [
+    "Confirm all files are required for status in PolicyAgent.log.",
+    "Confirm every file must be provided for download status in PolicyAgent.log.",
+    "Confirm the whole disk is required for imaging status in Smsts.log.",
+    "Confirm the full disk must be provided for imaging status in Smsts.log.",
+];
+
 const REVIEW_EXACT_MP_ARTIFACT_REQUESTS: [(&str, &str); 5] = [
     ("mpCliReg", "Collect the complete MP_CliReg.log file."),
     ("mpGetAuth", "Collect the complete MP_GetAuth.log file."),
@@ -598,7 +605,7 @@ fn finding_rejects_unknown_phase_values_that_shadow_declared_names() {
 }
 
 #[test]
-fn finding_forged_unregistered_profile_never_authorizes_high_corroboration() {
+fn finding_forged_unregistered_profile_is_rejected() {
     let first = finding_evidence_ref("client-policy-agent", "policy:10-10");
     let second = finding_evidence_ref("mp-get-policy", "mp-policy:20-20");
     let result = SccmFindingBuilder::new("policy-request-failed")
@@ -630,12 +637,93 @@ fn finding_forged_unregistered_profile_never_authorizes_high_corroboration() {
 
     assert_eq!(
         result.unwrap_err(),
-        SccmFindingValidationError::MissingTerminalEvidence
+        SccmFindingValidationError::InvalidCorrelationKey
     );
 }
 
 #[test]
-fn finding_duplicate_one_ref_never_counts_as_two_ref_corroboration() {
+fn finding_review_invalid_profiled_keys_fail_at_every_public_boundary() {
+    let evidence = finding_evidence_ref("artifact-a", "entry-a");
+    let mut malformed = finding_key(
+        SccmCorrelationKeyKind::PackageId,
+        "",
+        "",
+        SccmKeyConfidence::Exact,
+        Some("sccm-keys-stable-v1"),
+        evidence.clone(),
+    );
+    malformed.start = Some(9);
+    malformed.end = Some(3);
+    let cases = [
+        (
+            "exact-without-profile",
+            finding_key(
+                SccmCorrelationKeyKind::AssignmentId,
+                "{ABCDEFAB-0000-0000-0000-000000000001}",
+                "abcdefab-0000-0000-0000-000000000001",
+                SccmKeyConfidence::Exact,
+                None,
+                evidence.clone(),
+            ),
+        ),
+        (
+            "strong-with-unknown-profile",
+            finding_key(
+                SccmCorrelationKeyKind::ContentId,
+                "ContentABC",
+                "contentabc",
+                SccmKeyConfidence::Strong,
+                Some("sccm-keys-unknown-v1"),
+                evidence.clone(),
+            ),
+        ),
+        ("malformed-values-and-spans", malformed),
+    ];
+    let canonical = finding_with_gap_and_request("review-invalid-key-parity");
+    let mut accepted = Vec::new();
+
+    for (label, key) in cases {
+        let builder = SccmFindingBuilder::new(format!("review-invalid-key-{label}"))
+            .class(SccmFindingClass::Symptom)
+            .phase(SccmPhase::Policy)
+            .role(SccmRole::Client)
+            .severity(Severity::Warning)
+            .confidence(SccmConfidence::Low)
+            .evidence(vec![evidence.clone()])
+            .correlation_keys(vec![key.clone()])
+            .build();
+        if builder.err() != Some(SccmFindingValidationError::InvalidCorrelationKey) {
+            accepted.push(format!(
+                "builder did not return InvalidCorrelationKey: {label}"
+            ));
+        }
+
+        let mut direct = canonical.clone();
+        direct.correlation_keys = vec![key.clone()];
+        if direct.validate().err() != Some(SccmFindingValidationError::InvalidCorrelationKey) {
+            accepted.push(format!(
+                "direct validate did not return InvalidCorrelationKey: {label}"
+            ));
+        }
+        if serde_json::to_value(&direct).is_ok() {
+            accepted.push(format!("serializer: {label}"));
+        }
+
+        let mut json = serde_json::to_value(&canonical).unwrap();
+        json["correlationKeys"] = serde_json::to_value([key]).unwrap();
+        if serde_json::from_value::<SccmFinding>(json).is_ok() {
+            accepted.push(format!("deserializer: {label}"));
+        }
+    }
+
+    assert!(
+        accepted.is_empty(),
+        "accepted invalid profiled keys: {accepted:#?}"
+    );
+}
+
+#[test]
+fn finding_unregistered_exact_duplicate_keys_are_rejected() {
     let evidence = finding_evidence_ref("client-policy-agent", "policy:10-10");
     let key = finding_key(
         SccmCorrelationKeyKind::AssignmentId,
@@ -657,7 +745,7 @@ fn finding_duplicate_one_ref_never_counts_as_two_ref_corroboration() {
 
     assert_eq!(
         result.unwrap_err(),
-        SccmFindingValidationError::MissingTerminalEvidence
+        SccmFindingValidationError::InvalidCorrelationKey
     );
 }
 
@@ -682,7 +770,7 @@ fn finding_same_minute_keyless_evidence_never_counts_as_high_confidence() {
 }
 
 #[test]
-fn finding_mismatched_keys_or_profiles_never_corroborate_high_confidence() {
+fn finding_unregistered_strong_or_exact_key_profiles_are_rejected() {
     let first = finding_evidence_ref("client-content", "client-content:1-1");
     let second = finding_evidence_ref("server-content", "server-content:1-1");
     let cases = [
@@ -739,7 +827,7 @@ fn finding_mismatched_keys_or_profiles_never_corroborate_high_confidence() {
 
         assert_eq!(
             result.unwrap_err(),
-            SccmFindingValidationError::MissingTerminalEvidence,
+            SccmFindingValidationError::InvalidCorrelationKey,
             "{finding_id}"
         );
     }
@@ -2208,6 +2296,54 @@ fn finding_review_unrecognized_confirmation_requests_fail_at_every_public_bounda
 }
 
 #[test]
+fn finding_review_passive_unbounded_confirmation_requests_fail_at_every_public_boundary() {
+    let canonical = finding_with_gap_and_request("review-passive-confirmation-parity");
+    let mut accepted = Vec::new();
+
+    for reason in REVIEW_PASSIVE_UNBOUNDED_CONFIRMATION_REASONS {
+        let logical_id = if reason.contains("Smsts.log") {
+            "smsts"
+        } else {
+            "policyAgent"
+        };
+        let builder = SccmFindingBuilder::new("review-passive-confirmation-builder")
+            .class(SccmFindingClass::Symptom)
+            .phase(SccmPhase::Policy)
+            .role(SccmRole::Client)
+            .severity(Severity::Warning)
+            .confidence(SccmConfidence::Low)
+            .evidence(vec![finding_evidence_ref("artifact-a", "entry-a")])
+            .next_artifact(finding_request(logical_id, SccmRole::Client, reason))
+            .build();
+        if builder.err() != Some(SccmFindingValidationError::InvalidArtifactRequestReason) {
+            accepted.push(format!("builder: {reason}"));
+        }
+
+        let mut direct = canonical.clone();
+        direct.next_artifacts[0] = finding_request(logical_id, SccmRole::Client, reason);
+        if direct.validate().err() != Some(SccmFindingValidationError::InvalidArtifactRequestReason)
+        {
+            accepted.push(format!("direct validate: {reason}"));
+        }
+        if serde_json::to_value(&direct).is_ok() {
+            accepted.push(format!("serializer: {reason}"));
+        }
+
+        let mut json = serde_json::to_value(&canonical).unwrap();
+        json["nextArtifacts"][0] =
+            serde_json::to_value(finding_request(logical_id, SccmRole::Client, reason)).unwrap();
+        if serde_json::from_value::<SccmFinding>(json).is_ok() {
+            accepted.push(format!("deserializer: {reason}"));
+        }
+    }
+
+    assert!(
+        accepted.is_empty(),
+        "accepted passive unbounded confirmation requests: {accepted:#?}"
+    );
+}
+
+#[test]
 fn finding_review_exact_mp_identity_passes_every_public_boundary() {
     let canonical = finding_with_gap_and_request("review-exact-mp-identity-parity");
     let mut rejected = Vec::new();
@@ -2384,16 +2520,16 @@ fn finding_rejects_a_correlation_key_without_an_evidence_ref() {
 }
 
 #[test]
-fn finding_low_or_unprofiled_keys_never_corroborate_high_confidence() {
+fn finding_low_profiled_or_unprofiled_keys_never_corroborate_high_confidence() {
     let first = finding_evidence_ref("client-content", "client-content:1-1");
     let second = finding_evidence_ref("server-content", "server-content:1-1");
     let cases = [
         (
-            "low-keys",
+            "low-profiled-keys",
             Some("sccm-keys-experimental-v1"),
             SccmKeyConfidence::Low,
         ),
-        ("unprofiled-keys", None, SccmKeyConfidence::Exact),
+        ("low-unprofiled-keys", None, SccmKeyConfidence::Low),
     ];
 
     for (finding_id, profile, confidence) in cases {
@@ -4519,6 +4655,55 @@ fn evidence_public_message_projection_redacts_colon_delimited_windows_identities
             assert!(message.contains(safe), "{safe} was falsely redacted");
         }
     }
+}
+
+#[test]
+fn evidence_public_message_projection_redacts_path_adjacent_windows_identities() {
+    let cases: [(&str, &[&str]); 3] = [
+        (
+            r"Caller LAB\SyntheticUser\subdirectory",
+            &["Caller", "subdirectory"],
+        ),
+        (
+            r"Profile C:\Users\LAB\SyntheticUser\profile.dat",
+            &[r"C:\Users\", "profile.dat"],
+        ),
+        (
+            r"Home \\server\users\LAB\SyntheticUser\cache",
+            &[r"\\server\users\", "cache"],
+        ),
+    ];
+    let mut violations = Vec::new();
+
+    for (raw_message, safe_fragments) in cases {
+        let text = format!(
+            r#"<![LOG[{raw_message}]LOG]!><time="10:00:00.000-240" date="07-30-2026" component="PolicyAgent" context="" type="1" thread="42" file="policyagent.cpp">"#
+        );
+        let first = normalize_ccm_artifact(client_policy_artifact(), &text);
+        let second = normalize_ccm_artifact(client_policy_artifact(), &text);
+        let message = &first[0].message;
+        let json = serde_json::to_string(&first).unwrap();
+
+        assert_eq!(first, second, "{raw_message}");
+        if message.contains(r"LAB\SyntheticUser")
+            || public_json_contains_sensitive(&json, r"LAB\SyntheticUser")
+        {
+            violations.push(format!("identity leaked: {raw_message}"));
+        }
+        if !message.contains("[redacted:sccm-public-message-v1]") {
+            violations.push(format!("identity was not classified: {raw_message}"));
+        }
+        for safe in safe_fragments {
+            if !message.contains(safe) {
+                violations.push(format!("{safe} was swallowed: {raw_message}"));
+            }
+        }
+    }
+
+    assert!(
+        violations.is_empty(),
+        "path-adjacent identity projection violations: {violations:#?}"
+    );
 }
 
 #[test]

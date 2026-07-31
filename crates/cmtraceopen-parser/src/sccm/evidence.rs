@@ -53,6 +53,16 @@ fn windows_identity_re() -> &'static Regex {
     })
 }
 
+fn windows_user_path_identity_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
+        Regex::new(
+            r"(?i)(?:^|[\\/])users[\\/](?P<identity>(?:NT AUTHORITY|[A-Z0-9][A-Z0-9._-]*|\.)\\[A-Z0-9][A-Z0-9._$-]*\b)",
+        )
+        .expect("SCCM Windows user-path identity regex must compile")
+    })
+}
+
 fn email_identity_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
@@ -125,19 +135,37 @@ fn sensitive_value_end(value: &str, value_start: usize) -> usize {
 fn redact_windows_identities(value: &str) -> String {
     let mut projected = String::with_capacity(value.len());
     let mut copied_through = 0;
+    let mut identity_ranges = windows_identity_re()
+        .find_iter(value)
+        .filter_map(|matched| {
+            let preceding = value[..matched.start()].chars().next_back();
+            let following = value[matched.end()..].chars().next();
+            let begins_relative_path =
+                matched.as_str().starts_with(r".\") && matches!(following, Some('\\' | '/'));
+            (!matches!(preceding, Some('\\' | '/')) && !begins_relative_path)
+                .then_some((matched.start(), matched.end()))
+        })
+        .collect::<Vec<_>>();
+    identity_ranges.extend(
+        windows_user_path_identity_re()
+            .captures_iter(value)
+            .filter_map(|captures| {
+                captures
+                    .name("identity")
+                    .map(|matched| (matched.start(), matched.end()))
+            }),
+    );
+    identity_ranges.sort_unstable();
+    identity_ranges.dedup();
 
-    for matched in windows_identity_re().find_iter(value) {
-        let preceding = value[..matched.start()].chars().next_back();
-        let following = value[matched.end()..].chars().next();
-        let path_adjacent =
-            matches!(preceding, Some('\\' | '/')) || matches!(following, Some('\\' | '/'));
-        if path_adjacent {
+    for (start, end) in identity_ranges {
+        if start < copied_through {
             continue;
         }
 
-        projected.push_str(&value[copied_through..matched.start()]);
+        projected.push_str(&value[copied_through..start]);
         projected.push_str(PUBLIC_MESSAGE_REDACTION);
-        copied_through = matched.end();
+        copied_through = end;
     }
 
     projected.push_str(&value[copied_through..]);

@@ -8,6 +8,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use crate::models::log_entry::Severity;
 
 use super::catalog::declared_source_catalog;
+use super::keys::normalize_key;
 use super::models::{
     SccmCorrelationKey, SccmCorrelationKeyKind, SccmCoverageState, SccmEvidenceRef,
     SccmFindingClass, SccmKeyConfidence, SccmRole,
@@ -459,6 +460,7 @@ pub enum SccmFindingValidationError {
     TerminalEvidenceNotCited,
     CorrelationKeyMissingEvidence,
     CorrelationKeyEvidenceNotCited,
+    InvalidCorrelationKey,
     LikelyContributorConfidenceTooHigh,
     MissingCoverageGap,
     InvalidCoverageGap,
@@ -1187,6 +1189,7 @@ fn confirmation_clause_is_non_authorizing(
         || tokens
             .iter()
             .any(|token| is_collection_scope_nominal(token.text))
+        || has_passive_unbounded_confirmation_request(tokens, identity_ranges)
         || !confirmation_tokens_match_defined_form(tokens, identity_ranges)
     {
         return false;
@@ -1257,6 +1260,46 @@ fn confirmation_clause_is_non_authorizing(
         }
     }
     true
+}
+
+fn has_passive_unbounded_confirmation_request(
+    tokens: &[RequestReasonToken<'_>],
+    identity_ranges: &[(usize, usize)],
+) -> bool {
+    tokens
+        .iter()
+        .enumerate()
+        .any(|(auxiliary_index, auxiliary)| {
+            if !is_passive_auxiliary(auxiliary.text) {
+                return false;
+            }
+
+            let subject = &tokens[1..auxiliary_index];
+            let has_broad_target = subject.iter().any(|token| is_broad_quantifier(token.text))
+                && subject.iter().any(|token| {
+                    is_collection_target(token.text)
+                        && !token_is_covered_by_identity(token, identity_ranges)
+                });
+            if !has_broad_target {
+                return false;
+            }
+
+            matches!(auxiliary.text, "must" | "need" | "needs" | "should")
+                || tokens[auxiliary_index + 1..].iter().any(|token| {
+                    matches!(
+                        token.text,
+                        "archived"
+                            | "captured"
+                            | "collected"
+                            | "copied"
+                            | "exported"
+                            | "gathered"
+                            | "included"
+                            | "provided"
+                            | "required"
+                    )
+                })
+        })
 }
 
 fn confirmation_tokens_match_defined_form(
@@ -1979,6 +2022,37 @@ fn validate_correlation_key_evidence(
     correlation_keys: &[SccmCorrelationKey],
 ) -> Result<(), SccmFindingValidationError> {
     for key in correlation_keys {
+        let normalized = normalize_key(key.kind.clone(), &key.raw);
+        let has_canonical_value = !key.raw.is_empty()
+            && key.raw.trim() == key.raw
+            && !key.normalized.is_empty()
+            && key.normalized.trim() == key.normalized
+            && normalized.confidence == SccmKeyConfidence::Exact
+            && normalized.normalized == key.normalized;
+        let has_valid_span = match (key.start, key.end) {
+            (None, None) => true,
+            (Some(start), Some(end)) => {
+                start < end && end - start == key.raw.encode_utf16().count()
+            }
+            _ => false,
+        };
+        let has_canonical_profile = key
+            .extraction_profile_id
+            .as_deref()
+            .is_none_or(is_canonical_opaque_id);
+        let has_valid_confidence = matches!(key.confidence, SccmKeyConfidence::Low)
+            || key
+                .extraction_profile_id
+                .as_deref()
+                .is_some_and(is_registered_stable_profile);
+        if !has_canonical_value
+            || !has_valid_span
+            || !has_canonical_profile
+            || !has_valid_confidence
+        {
+            return Err(SccmFindingValidationError::InvalidCorrelationKey);
+        }
+
         let Some(reference) = &key.evidence else {
             return Err(SccmFindingValidationError::CorrelationKeyMissingEvidence);
         };
