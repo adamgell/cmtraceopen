@@ -188,6 +188,7 @@ pub fn analyze_client_health(bundle: &SccmNormalizedBundle) -> SccmHealthAnalysi
     let artifacts_by_id = bundle
         .artifacts
         .iter()
+        .filter(|artifact| artifact.role == SccmRole::Client)
         .map(|artifact| (artifact.artifact_id.as_str(), artifact))
         .collect::<BTreeMap<_, _>>();
     let mut facts = bundle
