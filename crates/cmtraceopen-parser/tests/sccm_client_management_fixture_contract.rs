@@ -392,22 +392,18 @@ fn public_free_text_is_safe(value: &str) -> bool {
                 '.' | ',' | ';' | ':' | '!' | '?' | '(' | ')' | '[' | ']' | '{' | '}' | '"' | '\''
             )
         });
-        let mut labels = token.split('.');
-        let Some(first) = labels.next() else {
+        let labels = token.split('.').collect::<Vec<_>>();
+        if labels.iter().any(|label| label.is_empty()) {
             return false;
-        };
-        let remaining = labels.collect::<Vec<_>>();
-        !first.is_empty()
-            && !remaining.is_empty()
-            && remaining.iter().all(|label| {
-                !label.is_empty()
-                    && label
-                        .bytes()
-                        .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
-            })
-            && remaining.last().is_some_and(|suffix| {
-                suffix.len() >= 2 && suffix.bytes().all(|b| b.is_ascii_alphabetic())
-            })
+        }
+        // Two or more dots with non-empty labels is network-identifier shaped
+        // (dotted quads, multi-label hostnames) regardless of label charset.
+        if labels.len() >= 3 {
+            return true;
+        }
+        labels.len() == 2
+            && labels[1].len() >= 2
+            && labels[1].bytes().all(|byte| byte.is_ascii_alphabetic())
     })
 }
 
