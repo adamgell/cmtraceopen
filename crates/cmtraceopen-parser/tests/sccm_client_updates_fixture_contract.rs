@@ -3366,7 +3366,7 @@ fn software_update_fixture_contract_rejects_phase_provenance_privacy_and_shape_m
     ));
 
     type ShapeMutation = (&'static str, fn(&mut Value), &'static str);
-    let shape_mutations: [ShapeMutation; 6] = [
+    let shape_mutations: [ShapeMutation; 12] = [
         (
             "stateChain object",
             |expected: &mut Value| expected["stateChain"] = serde_json::json!({}),
@@ -3398,6 +3398,43 @@ fn software_update_fixture_contract_rejects_phase_provenance_privacy_and_shape_m
                 expected["extractionProfile"]["validatedArtifactFamilies"] = serde_json::json!({})
             },
             "validatedArtifactFamilies must be an array",
+        ),
+        (
+            "counterpartReadyFacts object",
+            |expected: &mut Value| {
+                expected["correlationHandoff"]["counterpartReadyFacts"] = serde_json::json!({})
+            },
+            "counterpartReadyFacts must be an array",
+        ),
+        (
+            "correlationHandoff scalar",
+            |expected: &mut Value| {
+                expected["correlationHandoff"] = serde_json::json!("no-handoff")
+            },
+            "counterpartReadyFacts must be an array",
+        ),
+        (
+            "non-string transactionId",
+            |expected: &mut Value| expected["transactions"][0]["transactionId"] = serde_json::json!(323),
+            "transactionId must be a string",
+        ),
+        (
+            "non-string transaction state",
+            |expected: &mut Value| expected["transactions"][0]["state"] = serde_json::json!(false),
+            "primary subject outcome drifted",
+        ),
+        (
+            "non-array prohibitedClaims",
+            |expected: &mut Value| expected["prohibitedClaims"] = serde_json::json!("no claims"),
+            "prohibitedClaims must be an array",
+        ),
+        (
+            "string coverageGapArtifactIds",
+            |expected: &mut Value| {
+                expected["transactions"][0]["coverageGapArtifactIds"] =
+                    serde_json::json!("client-updates")
+            },
+            "coverageGapArtifactIds must be an array",
         ),
     ];
     for (label, mutate, marker) in shape_mutations {
@@ -3439,6 +3476,16 @@ fn software_update_fixture_contract_rejects_phase_provenance_privacy_and_shape_m
         "supplemental-conflict: subject is missing",
     ));
 
+    let mut non_string_subject_id = read_json(&install_dir.join("expected.json"));
+    non_string_subject_id["findings"][0]["subjectId"] = serde_json::json!(808);
+    mutations.push((
+        "non-string finding subjectId",
+        install_scenario.to_owned(),
+        read_json(&install_dir.join("manifest.json")),
+        non_string_subject_id,
+        "subjectId must be a string",
+    ));
+
     let mut missing_rejections = Vec::new();
     for (label, scenario, manifest, expected, marker) in mutations {
         match validate_without_panicking(&scenario, &manifest, &expected) {
@@ -3448,6 +3495,51 @@ fn software_update_fixture_contract_rejects_phase_provenance_privacy_and_shape_m
                 failures.join(" | ")
             )),
             Err(error) => missing_rejections.push(format!("{label} in {scenario}: {error}")),
+        }
+    }
+
+    let malformed_shapes = serde_json::json!({
+        "stringField": 323,
+        "arrayField": "not-an-array",
+        "mixedArray": ["ok", 323]
+    });
+    let helper_probes: Vec<(&str, Box<dyn Fn() + '_>)> = vec![
+        (
+            "json_string on non-string field",
+            Box::new(|| {
+                let _ = json_string(&malformed_shapes, "stringField");
+            }),
+        ),
+        (
+            "json_string on missing field",
+            Box::new(|| {
+                let _ = json_string(&malformed_shapes, "absentField");
+            }),
+        ),
+        (
+            "string_array on non-array field",
+            Box::new(|| {
+                let _ = string_array(&malformed_shapes, "arrayField");
+            }),
+        ),
+        (
+            "string_array on mixed values",
+            Box::new(|| {
+                let _ = string_array(&malformed_shapes, "mixedArray");
+            }),
+        ),
+        (
+            "string_array on missing field",
+            Box::new(|| {
+                let _ = string_array(&malformed_shapes, "absentField");
+            }),
+        ),
+    ];
+    for (label, probe) in &helper_probes {
+        if std::panic::catch_unwind(std::panic::AssertUnwindSafe(probe)).is_err() {
+            missing_rejections.push(format!(
+                "{label}: shape helper panicked on caller-controlled JSON"
+            ));
         }
     }
 
