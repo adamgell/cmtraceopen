@@ -13,8 +13,8 @@
       "observationId": "inventory-rotation-split",
       "kind": "rotationSplit",
       "artifactIds": [
-        "inventory-rotation-boundary-agent-lo",
-        "inventory-rotation-boundary-report-current"
+        "inventory-rotation-boundary-agent-current",
+        "inventory-rotation-boundary-agent-lo"
       ],
       "confidenceCeiling": "low",
       "correlationEligible": false,
@@ -23,12 +23,12 @@
   ],
   "coverage": [
     {
-      "artifactId": "inventory-rotation-boundary-agent-lo",
+      "artifactId": "inventory-rotation-boundary-agent-current",
       "logicalArtifactId": "client-inventory",
       "state": "partial"
     },
     {
-      "artifactId": "inventory-rotation-boundary-report-current",
+      "artifactId": "inventory-rotation-boundary-agent-lo",
       "logicalArtifactId": "client-inventory",
       "state": "partial"
     }

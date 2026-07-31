@@ -30,21 +30,25 @@ in one complete, unambiguous CCM logical envelope. Required key and semantic
 fields cannot be duplicated or conflict, and phase/disposition/terminal/result
 semantics must come from the same source record. A field borrowed from another
 envelope, line, artifact, root, rotation, or workflow cannot complete a key.
+The structured CCM vocabulary is family-closed, and each admitted source owns
+only its reviewed phases; inventory cannot borrow compliance evaluation
+semantics to synthesize a predecessor.
 The profile identifiers in this corpus are deliberately test-only:
 
 - `sccm-client-inventory-5.00.test-v1`
 - `sccm-client-compliance-5.00.test-v1`
 - `sccm-client-metering-5.00.test-v1`
 
-An unknown source version has no fallback profile. It remains a source-local,
-low-confidence observation and a coverage/profile gap.
+Source versions are bounded canonical tokens before any prefix-based profile
+selection. An unknown source version has no fallback profile. It remains a
+source-local, low-confidence observation and a coverage/profile gap.
 
 ## Fixture matrix
 
 The fixture root is
 `crates/cmtraceopen-parser/tests/fixtures/sccm/client/inventory-compliance-metering`.
 It contains 20 scenarios, 54 manifest artifacts, and 42 physical evidence files
-(16,820 bytes). The deterministic fixture digest is `409f976350ffbc05`.
+(16,814 bytes). The deterministic fixture digest is `26c8cf8aee0741a2`.
 
 | Family | Scenarios | Contract coverage |
 | --- | --- | --- |
@@ -65,7 +69,8 @@ The manifest is SCCM-specific preparation data and does not overload generic
 `ArtifactStatus` semantics. It preserves:
 
 - a synthetic bundle ID, client role, sanitized capture host, and site code;
-- exact physical artifact identity and logical workflow membership;
+- exact, bounded, control-free artifact identity scoped to its family/scenario
+  and logical workflow membership;
 - original basename, sanitized attempted source path, and path fingerprint;
 - current or `.lo` rotation identity and fragment completeness;
 - explicit `captured`, `absent`, `accessDenied`, `capped`, `skipped`,
@@ -77,7 +82,12 @@ The manifest is SCCM-specific preparation data and does not overload generic
 Nonphysical states have no evidence path and zero copied bytes. An absent source
 does not invent path, fingerprint, or version identity. Duplicate basenames from
 different roots remain separate when their sanitized paths, fingerprints, and
-relative paths are distinct.
+relative paths are distinct. One `(captureHost, sanitizedSourcePath, rotation)`
+tuple cannot be declared as contradictory capture states, and each synthetic
+root label must match its path fingerprint and physical relative path.
+`captured`/`parseFailed` rows have an unapplied cap and no truncation field;
+only `capped` rows may carry an applied cap plus truncation. Nonphysical rows
+cannot invent encoding, cap, or truncation provenance.
 
 The proposed #319 preparation schema keeps
 `rotation: {"kind": "current", "fragmentComplete": false}` on noncapture rows.
@@ -91,7 +101,8 @@ The expected contract keeps output deterministic and preparation-only:
 - every coverage row is an exact artifact-level projection of the manifest;
 - every transaction is bound to one unique workflow/profile/exact-key identity;
 - every evidence reference names a manifest artifact and valid line range, and
-  manifest artifacts plus output arrays use canonical stable ordering;
+  cited physical lines are globally unique and non-overlapping; manifest
+  artifacts plus output arrays use canonical stable ordering;
 - transaction citations contain complete raw CCM records whose additive SCCM
   timestamp provenance normalizes to UTC no later than the artifact's canonical
   `capturedUtc`;
@@ -103,7 +114,10 @@ The expected contract keeps output deterministic and preparation-only:
   invent next-artifact requests;
 - `findings` remains empty until production reducers are authorized;
 - source-local observations use a closed kind/artifact/claim schema, have a low
-  confidence ceiling, and are not correlation eligible;
+  confidence ceiling, are not correlation eligible, and cannot repeat one
+  `(kind, artifact)` membership under another observation ID;
+- `rotationSplit` requires `current` and `.lo` partial artifacts from one
+  synthetic root, canonical basename, source version, and exact family key;
 - next-artifact requests name one admitted logical group and basename, never an
   arbitrary path, drive, volume, wildcard, or recursive scan.
 
@@ -130,12 +144,23 @@ of:
 
 - client-to-server role swaps and workflow/log-family source injection;
 - unsafe relative paths, incorrect byte counts, and cross-root fingerprint
-  aliasing;
+  aliasing, root collapse, fingerprint swaps, or contradictory source
+  identities;
+- capture-state schema drift such as applied caps on `captured` rows or retained
+  byte metadata on nonphysical rows;
 - cross-family key fields, uncited key values, and phase borrowing from another
   record;
 - embedded/look-alike key labels that contain an expected label as a substring;
-- duplicate/conflicting structured fields, nested CCM envelopes, and compliance
-  result types borrowed from another source record;
+- duplicate/conflicting or unknown structured fields, nested CCM envelopes,
+  source-to-phase violations, and compliance result types borrowed from another
+  source record;
+- blank, control-bearing, overlong, or foreign-scope artifact, transaction, and
+  observation identities;
+- empty, control-bearing, whitespace-bearing, or malformed source-version
+  tokens before profile selection;
+- duplicate source-local `(kind, artifact)` memberships and rotation splits
+  whose root, canonical basename, version, or exact key differs;
+- overlapping or duplicate physical evidence-line identity;
 - uncited predecessor `lastSuccessfulPhase` claims on confirmed failures;
 - high-confidence output from an unknown source profile or invalid timestamp
   offset;
@@ -158,6 +183,9 @@ of:
 - reversed manifest, transaction, evidence, coverage, observation, or
   observation-artifact arrays;
 - missing, altered, or spurious next-artifact requests.
+
+The file projection also canonicalizes Windows `\` separators to manifest `/`
+separators before comparing the physical evidence set.
 
 This mutation layer is independent of the positive fixture assertions, so an
 internally consistent edit to both a manifest and its expected file cannot

@@ -49,8 +49,8 @@
       "kind": "ccmLog",
       "captureState": "accessDenied",
       "originalBasename": "CITaskMgr.log",
-      "sanitizedSourcePath": "SYNTHETIC://root-a/CCM/Logs/CITaskMgr.log",
-      "pathFingerprint": "synthetic-compliance-coverage-states-access-denied-root-a",
+      "sanitizedSourcePath": "SYNTHETIC://root-b/CCM/Logs/CITaskMgr.log",
+      "pathFingerprint": "synthetic-compliance-coverage-states-access-denied-root-b",
       "rotation": {
         "kind": "current",
         "fragmentComplete": false
