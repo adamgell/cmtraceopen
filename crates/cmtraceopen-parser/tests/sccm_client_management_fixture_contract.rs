@@ -3036,3 +3036,67 @@ fn overlapping_evidence_citation_mutations_fail_closed() {
         "overlapping evidence citation mutations were accepted: {accepted:?}"
     );
 }
+
+#[test]
+fn public_surface_privacy_mutations_fail_closed() {
+    let mut accepted = Vec::new();
+
+    let (observed_root, observed_manifest, observed_expected) =
+        load_contract("software-center-observed");
+
+    let mut alternate_drive_claim = observed_expected.clone();
+    alternate_drive_claim["sourceLocalObservations"][0]["claim"] =
+        Value::String("Observed under D:/Profiles/RealUser remains source local.".to_owned());
+    if mutation_was_accepted(
+        "software-center-observed",
+        &observed_root,
+        &observed_manifest,
+        &alternate_drive_claim,
+    ) {
+        accepted.push("alternate drive-letter path in a public observation claim");
+    }
+
+    let mut unc_claim = observed_expected.clone();
+    unc_claim["sourceLocalObservations"][0]["claim"] = Value::String(
+        "Observed under //LAB-CLIENT-01/share/RealUser remains source local.".to_owned(),
+    );
+    if mutation_was_accepted(
+        "software-center-observed",
+        &observed_root,
+        &observed_manifest,
+        &unc_claim,
+    ) {
+        accepted.push("UNC share path in a public observation claim");
+    }
+
+    let mut identity_observation_id = observed_expected.clone();
+    identity_observation_id["sourceLocalObservations"][0]["observationId"] =
+        Value::String("software-center-observed-D:/Users/RealUser".to_owned());
+    if mutation_was_accepted(
+        "software-center-observed",
+        &observed_root,
+        &observed_manifest,
+        &identity_observation_id,
+    ) {
+        accepted.push("identity-bearing public observation id");
+    }
+
+    let (deferred_root, deferred_manifest, mut deferred_expected) =
+        load_contract("notification-deferred");
+    deferred_expected["transactions"][0]["nextArtifact"]["reason"] = Value::String(
+        "Collect D:/Profiles/RealUser for the same exact notification key.".to_owned(),
+    );
+    if mutation_was_accepted(
+        "notification-deferred",
+        &deferred_root,
+        &deferred_manifest,
+        &deferred_expected,
+    ) {
+        accepted.push("alternate drive-letter path in a next-artifact request reason");
+    }
+
+    assert!(
+        accepted.is_empty(),
+        "public surface privacy mutations were accepted: {accepted:?}"
+    );
+}
