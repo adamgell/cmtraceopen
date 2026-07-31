@@ -2973,6 +2973,37 @@ fn software_update_fixture_rejects_cbs_log_with_configmgr_source_version() {
 }
 
 #[test]
+fn software_update_fixture_rejects_keyless_observation_phase_success_claims() {
+    let scenario = "supplemental-conflict";
+    let scenario_dir = updates_root().join(scenario);
+    let manifest = read_json(&scenario_dir.join("manifest.json"));
+    let base_expected = read_json(&scenario_dir.join("expected.json"));
+    let contract = SCENARIOS
+        .iter()
+        .find(|contract| contract.name == scenario)
+        .expect("supplemental-conflict contract exists");
+
+    let mut phase_claiming = base_expected.clone();
+    phase_claiming["sourceLocalObservations"][0]["lastSuccessfulPhase"] =
+        Value::String("install".to_owned());
+    phase_claiming["findings"][0]["lastSuccessfulPhase"] = Value::String("install".to_owned());
+    let failures = scenario_semantic_failures(&scenario_dir, &manifest, &phase_claiming, contract);
+    assert!(
+        failures.iter().any(|failure| {
+            failure.contains("keyless observation cannot claim a lastSuccessfulPhase")
+        }),
+        "null-key observation claiming lastSuccessfulPhase validated clean:\n{}",
+        failures.join("\n")
+    );
+
+    assert!(
+        base_expected["sourceLocalObservations"][0]["lastSuccessfulPhase"].is_null()
+            && base_expected["findings"][0]["lastSuccessfulPhase"].is_null(),
+        "shipped supplemental-conflict observation/finding must not claim a lastSuccessfulPhase"
+    );
+}
+
+#[test]
 fn software_update_fixture_rejects_cross_record_exact_key_chimeras() {
     let scenario_dir = updates_root().join("same-minute-separate");
     let manifest = read_json(&scenario_dir.join("manifest.json"));
