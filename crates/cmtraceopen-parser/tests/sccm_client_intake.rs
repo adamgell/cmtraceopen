@@ -140,6 +140,19 @@ fn synthetic_artifact(artifact_id: &str, display_name: &str) -> SccmClientIntake
     }
 }
 
+fn synthetic_marker(
+    artifact_id: &str,
+    display_name: &str,
+    coverage: SccmCoverageState,
+) -> SccmClientIntakeArtifact {
+    let mut artifact = synthetic_artifact(artifact_id, display_name);
+    artifact.artifact.coverage = coverage;
+    artifact.path_fingerprint = None;
+    artifact.relative_path = None;
+    artifact.fragment_complete = Some(false);
+    artifact
+}
+
 fn serialized_json_contains_windows_user_root(serialized_casefolded: &str) -> bool {
     serialized_casefolded.contains(r"c:\\users")
 }
@@ -294,6 +307,176 @@ fn capped_cas_fragment_cannot_claim_complete() {
         }),
         Err(SccmClientIntakeError::InvalidFragmentCompleteness),
         "a capped physical fragment cannot claim complete public provenance"
+    );
+}
+
+#[test]
+fn captured_cas_fragment_cannot_admit_an_incomplete_capture() {
+    let mut contradictory = synthetic_artifact("content-a", "CAS.log");
+    contradictory.relative_path = Some("evidence/client-content/current/CAS.log".to_owned());
+    contradictory.fragment_complete = Some(false);
+
+    assert_eq!(
+        assess_client_intake(&SccmClientIntakeBundle {
+            artifacts: vec![contradictory],
+        }),
+        Err(SccmClientIntakeError::InvalidFragmentCompleteness),
+        "a captured physical fragment admitting an incomplete capture must fail closed; \
+         Capped exists to represent an incomplete capture"
+    );
+}
+
+#[test]
+fn mixed_captured_and_absent_group_reports_the_capture_and_names_the_absent_source() {
+    let mut captured = synthetic_artifact("content-a", "CAS.log");
+    captured.relative_path = Some("evidence/client-content/current/CAS.log".to_owned());
+    let absent = synthetic_marker(
+        "content-transfer-absent",
+        "ContentTransferManager.log",
+        SccmCoverageState::Absent,
+    );
+
+    let intake = assess_client_intake(&SccmClientIntakeBundle {
+        artifacts: vec![captured, absent],
+    })
+    .expect("a mixed captured and absent client-content group is representable");
+
+    let group = intake.group("client-content").expect("content group");
+    assert_eq!(
+        group.coverage,
+        SccmCoverageState::Captured,
+        "a captured fragment must never coexist with an all-absent group claim"
+    );
+    assert_eq!(group.fragments.len(), 2);
+
+    let gaps: Vec<_> = intake
+        .coverage_gaps
+        .iter()
+        .filter(|gap| gap.logical_artifact_id == "client-content")
+        .collect();
+    assert_eq!(gaps.len(), 1, "one per-source gap for the absent sibling");
+    assert_eq!(gaps[0].coverage, SccmCoverageState::Absent);
+    assert_eq!(
+        gaps[0].reason,
+        "No artifact for client source ContentTransferManager.log was supplied alongside \
+         this group's physical evidence."
+    );
+    assert!(
+        gaps.iter()
+            .all(|gap| gap.reason
+                != "No artifact for this bounded client source group was supplied."),
+        "the gap must name the absent source instead of claiming the whole group was unsupplied"
+    );
+}
+
+#[test]
+fn mixed_captured_and_access_denied_group_reports_the_capture_and_names_the_denied_source() {
+    let mut captured = synthetic_artifact("content-a", "CAS.log");
+    captured.relative_path = Some("evidence/client-content/current/CAS.log".to_owned());
+    let mut denied = synthetic_marker(
+        "content-denied",
+        "DataTransferService.log",
+        SccmCoverageState::AccessDenied,
+    );
+    denied.path_fingerprint = Some("synthetic:content-denied".to_owned());
+
+    let intake = assess_client_intake(&SccmClientIntakeBundle {
+        artifacts: vec![captured, denied],
+    })
+    .expect("a mixed captured and access-denied client-content group is representable");
+
+    let group = intake.group("client-content").expect("content group");
+    assert_eq!(
+        group.coverage,
+        SccmCoverageState::Captured,
+        "an access-denied sibling marker must not erase the captured evidence"
+    );
+    assert_eq!(group.fragments.len(), 2);
+
+    let gaps: Vec<_> = intake
+        .coverage_gaps
+        .iter()
+        .filter(|gap| gap.logical_artifact_id == "client-content")
+        .collect();
+    assert_eq!(gaps.len(), 1, "one per-source gap for the denied sibling");
+    assert_eq!(gaps[0].coverage, SccmCoverageState::AccessDenied);
+    assert_eq!(
+        gaps[0].reason,
+        "Access was denied for client source DataTransferService.log alongside \
+         this group's physical evidence."
+    );
+}
+
+#[test]
+fn mixed_capped_and_absent_group_keeps_the_capped_capture_and_names_the_absent_source() {
+    let mut capped = synthetic_artifact("content-capped", "DataTransferService.log");
+    capped.artifact.coverage = SccmCoverageState::Capped;
+    capped.path_fingerprint = Some("synthetic:content-capped".to_owned());
+    capped.relative_path =
+        Some("evidence/client-content/current/DataTransferService.log".to_owned());
+    capped.fragment_complete = Some(false);
+    let absent = synthetic_marker("content-absent", "CAS.log", SccmCoverageState::Absent);
+
+    let intake = assess_client_intake(&SccmClientIntakeBundle {
+        artifacts: vec![capped, absent],
+    })
+    .expect("a mixed capped and absent client-content group is representable");
+
+    let group = intake.group("client-content").expect("content group");
+    assert_eq!(
+        group.coverage,
+        SccmCoverageState::Capped,
+        "the physical capped capture defines the group coverage, not the absent sibling"
+    );
+    assert_eq!(group.fragments.len(), 2);
+
+    let gaps: Vec<_> = intake
+        .coverage_gaps
+        .iter()
+        .filter(|gap| gap.logical_artifact_id == "client-content")
+        .collect();
+    assert_eq!(
+        gaps.len(),
+        2,
+        "the capped group gap and the per-source absent gap are both explicit"
+    );
+    assert_eq!(gaps[0].coverage, SccmCoverageState::Capped);
+    assert_eq!(
+        gaps[0].reason,
+        "The bounded client source group reached its capture limit."
+    );
+    assert_eq!(gaps[1].coverage, SccmCoverageState::Absent);
+    assert_eq!(
+        gaps[1].reason,
+        "No artifact for client source CAS.log was supplied alongside \
+         this group's physical evidence."
+    );
+}
+
+#[test]
+fn duplicate_nonphysical_markers_for_the_same_source_fail_closed() {
+    let first = synthetic_marker("missing-one", "PolicyAgent.log", SccmCoverageState::Absent);
+    let second = synthetic_marker("missing-two", "PolicyAgent.log", SccmCoverageState::Absent);
+    assert_eq!(
+        assess_client_intake(&SccmClientIntakeBundle {
+            artifacts: vec![first, second],
+        }),
+        Err(SccmClientIntakeError::DuplicateArtifactId),
+        "the same missing source must not be double-declared under differing caller labels"
+    );
+
+    let absent = synthetic_marker("missing-one", "PolicyAgent.log", SccmCoverageState::Absent);
+    let denied = synthetic_marker(
+        "denied-one",
+        "PolicyAgent.log",
+        SccmCoverageState::AccessDenied,
+    );
+    assert_eq!(
+        assess_client_intake(&SccmClientIntakeBundle {
+            artifacts: vec![absent, denied],
+        }),
+        Err(SccmClientIntakeError::DuplicateArtifactId),
+        "contradictory marker states for the same source must not both project as fragments"
     );
 }
 
