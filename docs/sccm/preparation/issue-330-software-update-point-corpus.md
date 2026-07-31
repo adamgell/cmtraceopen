@@ -45,10 +45,11 @@ profile-defined contract, not a supported native collector.
 Every manifest preserves the site code, opaque SUP and WSUS handles, observed
 roles, producer role and host handle, workflow subject, exact source and
 basename, grammar, synthetic source version, sanitized path/fingerprint,
-rotation lineage/completeness, collection timestamp, capture state, encoding,
-byte cap, exact copied-byte count, and collision-safe evidence destination.
-Nonphysical states omit encoding, byte, limit, relative-path, and fragment
-completion facts.
+rotation lineage, collection timestamp, and capture state. Physical artifact
+records additionally preserve encoding, fragment completeness, byte cap, exact
+copied-byte count, and a collision-safe evidence destination. Nonphysical
+states omit encoding, byte, limit, relative-path, and fragment completion
+facts.
 
 An absent or access-denied default candidate is source coverage only. It cannot
 erase an observed SUP role or prove the role healthy, failed, broken,
