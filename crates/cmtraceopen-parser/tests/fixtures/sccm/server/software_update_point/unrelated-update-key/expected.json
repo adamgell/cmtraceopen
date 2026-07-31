@@ -1,0 +1,48 @@
+{
+  "contractState": "proposedPendingReviewed318And335",
+  "workflow": "softwareUpdatePoint",
+  "scenario": "unrelated-update-key",
+  "stateChain": ["configure","synchronize","importOrProcessMetadata","validateWsus","publishAvailability","healthyOrTerminal"],
+  "analysisContract": {"independentReducer":true,"consumesClientOutput":false,"crossSideCorrelationPerformed":false},
+  "extractionProfile": {"selectionState":"selectedSynthetic","profileId":"sup-server-5.00.test-v1","validatedRole":"softwareUpdatePoint"},
+  "roleAssessment": {"softwareUpdatePointObserved":true,"roleAbsentInferred":false,"missingDefaultPathInterpretation":"sourceCoverageOnly"},
+  "coverage": [
+    {"artifactId":"unrelated-01-client","state":"captured"},
+    {"artifactId":"unrelated-02-wcm","state":"captured"},
+    {"artifactId":"unrelated-03-wsync","state":"captured"},
+    {"artifactId":"unrelated-04-wsus","state":"captured"}
+  ],
+  "transactions": [{
+    "transactionId": "sup:sync-08:LAB:safe:sup:lab-sup-01:update-server-a",
+    "key": {"syncRunId":"sync-08","siteCode":"LAB","supHandle":"safe:sup:lab-sup-01","updateId":"update-server-a","kbId":"KB5000001","confidence":"exact","extractionProfileId":"sup-server-5.00.test-v1"},
+    "topologyCompatibility": "exact",
+    "correlationEligible": true,
+    "state": "succeeded",
+    "classification": "success",
+    "confidence": "high",
+    "confidenceCeiling": "high",
+    "lastSuccessfulPhase": "healthyOrTerminal",
+    "nextSourceId": null,
+    "coverageGapArtifactIds": [],
+    "observations": [
+      {"observationId":"sync-08-01-configure","phase":"configure","disposition":"succeeded","terminal":false,"evidence":[{"artifactId":"unrelated-02-wcm","startLine":1,"endLine":1}]},
+      {"observationId":"sync-08-02-synchronize","phase":"synchronize","disposition":"succeeded","terminal":false,"evidence":[{"artifactId":"unrelated-03-wsync","startLine":1,"endLine":1}]},
+      {"observationId":"sync-08-03-import","phase":"importOrProcessMetadata","disposition":"succeeded","terminal":false,"evidence":[{"artifactId":"unrelated-03-wsync","startLine":2,"endLine":2}]},
+      {"observationId":"sync-08-04-validate","phase":"validateWsus","disposition":"succeeded","terminal":false,"evidence":[{"artifactId":"unrelated-04-wsus","startLine":1,"endLine":1}]},
+      {"observationId":"sync-08-05-publish","phase":"publishAvailability","disposition":"succeeded","terminal":false,"evidence":[{"artifactId":"unrelated-03-wsync","startLine":3,"endLine":3}]},
+      {"observationId":"sync-08-06-terminal","phase":"healthyOrTerminal","disposition":"succeeded","terminal":true,"evidence":[{"artifactId":"unrelated-04-wsus","startLine":2,"endLine":2}]}
+    ]
+  }],
+  "sourceLocalObservations": [{
+    "observationId": "unrelated-client-01",
+    "classification": "ignoredClientEvidence",
+    "confidence": "low",
+    "confidenceCeiling": "low",
+    "correlationEligible": false,
+    "artifactIds": ["unrelated-01-client"],
+    "evidence": [{"artifactId":"unrelated-01-client","startLine":1,"endLine":1}]
+  }],
+  "artifactRequests": [],
+  "clientCausalClaims": [],
+  "correlationHandoff": {"issue":"#333","performed":false,"timeOnlyEligible":false}
+}
