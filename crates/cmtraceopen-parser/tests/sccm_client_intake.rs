@@ -251,6 +251,35 @@ fn missing_access_denied_and_capped_sources_remain_exact_coverage_states() {
 }
 
 #[test]
+fn capped_cas_fragment_cannot_claim_complete() {
+    let contradictory = SccmClientIntakeArtifact {
+        artifact: SccmArtifact {
+            artifact_id: "fixture-content-capped".to_owned(),
+            display_name: "CAS.log".to_owned(),
+            original_path: None,
+            host: None,
+            role: SccmRole::Client,
+            configmgr_version: Some("5.00.TEST.0000".to_owned()),
+            collected_at_utc: Some("2026-07-30T00:03:00Z".to_owned()),
+            rotation: SccmRotation::Current,
+            coverage: SccmCoverageState::Capped,
+            encoding: Some("utf-8".to_owned()),
+        },
+        path_fingerprint: Some("synthetic:content-capped".to_owned()),
+        relative_path: Some("evidence/client-content/current/CAS.log".to_owned()),
+        fragment_complete: Some(true),
+    };
+
+    assert_eq!(
+        assess_client_intake(&SccmClientIntakeBundle {
+            artifacts: vec![contradictory],
+        }),
+        Err(SccmClientIntakeError::InvalidFragmentCompleteness),
+        "a capped physical fragment cannot claim complete public provenance"
+    );
+}
+
+#[test]
 fn basename_collisions_preserve_distinct_artifacts_and_bundle_paths() {
     let intake = assessment("collision");
     let group = intake
