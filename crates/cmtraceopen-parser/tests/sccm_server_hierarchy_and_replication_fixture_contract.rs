@@ -3365,7 +3365,17 @@ fn hierarchy_coderabbit_0a6ba32_identity_matrices_reject_unknown_scenarios() {
 fn hierarchy_coderabbit_d78dc49_complete_lo_owns_send_phase() {
     let mut manifest = read_json("healthy-link", "manifest.json").expect("healthy manifest loads");
     manifest["artifacts"][1]["originalBasename"] = serde_json::json!("sender.lo_");
+    manifest["artifacts"][1]["sanitizedSourcePath"] =
+        serde_json::json!("SYNTHETIC://configured-root/LAB/Logs/sender.lo_");
+    manifest["artifacts"][1]["pathFingerprint"] = serde_json::json!("synthetic:healthy-sender-lo");
     manifest["artifacts"][1]["rotation"]["kind"] = serde_json::json!("loUnderscore");
+    manifest["artifacts"][1]["relativePath"] =
+        serde_json::json!("evidence/server-hierarchy-transfer/origin/lo_/sender.lo_");
+
+    assert!(artifact_is_exact_candidate(
+        &manifest,
+        &manifest["artifacts"][1]
+    ));
 
     let groups = hierarchy_candidate_groups("healthy-link", &manifest)
         .expect("candidate projection remains deterministic");
@@ -3376,5 +3386,42 @@ fn hierarchy_coderabbit_d78dc49_complete_lo_owns_send_phase() {
                 && fact.rotation_kind == "loUnderscore"
         }),
         "a complete admitted sender.lo_ record must not be silently skipped"
+    );
+
+    let mut relabeled_basename =
+        read_json("healthy-link", "manifest.json").expect("healthy manifest loads");
+    relabeled_basename["artifacts"][1]["originalBasename"] = serde_json::json!("sender.lo_");
+    assert!(
+        !artifact_is_exact_candidate(&relabeled_basename, &relabeled_basename["artifacts"][1]),
+        "a basename-only relabel cannot create a rotated candidate"
+    );
+
+    let mut mismatched_relative_path = manifest.clone();
+    mismatched_relative_path["artifacts"][1]["relativePath"] =
+        serde_json::json!("evidence/server-hierarchy-transfer/origin/current/sender.log");
+    assert!(
+        !artifact_is_exact_candidate(
+            &mismatched_relative_path,
+            &mismatched_relative_path["artifacts"][1]
+        ),
+        "relativePath must close against originalBasename"
+    );
+
+    let mut mismatched_sanitized_path = manifest.clone();
+    mismatched_sanitized_path["artifacts"][1]["sanitizedSourcePath"] =
+        serde_json::json!("SYNTHETIC://configured-root/LAB/Logs/sender.log");
+    assert!(
+        !artifact_is_exact_candidate(
+            &mismatched_sanitized_path,
+            &mismatched_sanitized_path["artifacts"][1]
+        ),
+        "sanitizedSourcePath must close against originalBasename"
+    );
+
+    let mut mismatched_rotation = manifest;
+    mismatched_rotation["artifacts"][1]["rotation"]["kind"] = serde_json::json!("current");
+    assert!(
+        !artifact_is_exact_candidate(&mismatched_rotation, &mismatched_rotation["artifacts"][1]),
+        "the sender.lo_ basename requires the canonical loUnderscore rotation"
     );
 }
