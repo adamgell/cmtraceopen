@@ -16,10 +16,10 @@
         "metering-coverage-states-absent",
         "metering-coverage-states-access-denied",
         "metering-coverage-states-capped",
-        "metering-coverage-states-skipped",
-        "metering-coverage-states-unsupported",
         "metering-coverage-states-malformed",
-        "metering-coverage-states-partial"
+        "metering-coverage-states-partial",
+        "metering-coverage-states-skipped",
+        "metering-coverage-states-unsupported"
       ],
       "confidenceCeiling": "low",
       "correlationEligible": false,
@@ -43,16 +43,6 @@
       "state": "capped"
     },
     {
-      "artifactId": "metering-coverage-states-skipped",
-      "logicalArtifactId": "client-metering",
-      "state": "skipped"
-    },
-    {
-      "artifactId": "metering-coverage-states-unsupported",
-      "logicalArtifactId": "client-metering",
-      "state": "unsupported"
-    },
-    {
       "artifactId": "metering-coverage-states-malformed",
       "logicalArtifactId": "client-metering",
       "state": "parseFailed"
@@ -61,6 +51,16 @@
       "artifactId": "metering-coverage-states-partial",
       "logicalArtifactId": "client-metering",
       "state": "partial"
+    },
+    {
+      "artifactId": "metering-coverage-states-skipped",
+      "logicalArtifactId": "client-metering",
+      "state": "skipped"
+    },
+    {
+      "artifactId": "metering-coverage-states-unsupported",
+      "logicalArtifactId": "client-metering",
+      "state": "unsupported"
     }
   ],
   "findings": [],

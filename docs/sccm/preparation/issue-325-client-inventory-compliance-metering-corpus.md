@@ -25,10 +25,12 @@ The names above are preparation candidates, not production admission. A later
 catalog change must be table-driven and backed by sanitized source evidence plus
 a reviewed extraction profile. Generic message keyword scanning is prohibited.
 
-Each proposed exact key is accepted only when every field co-occurs in one
-complete cited CCM logical record. A field borrowed from another line, artifact,
-root, rotation, or workflow cannot complete a key. The profile identifiers in
-this corpus are deliberately test-only:
+Each proposed exact key is accepted only when every field co-occurs exactly once
+in one complete, unambiguous CCM logical envelope. Required key and semantic
+fields cannot be duplicated or conflict, and phase/disposition/terminal/result
+semantics must come from the same source record. A field borrowed from another
+envelope, line, artifact, root, rotation, or workflow cannot complete a key.
+The profile identifiers in this corpus are deliberately test-only:
 
 - `sccm-client-inventory-5.00.test-v1`
 - `sccm-client-compliance-5.00.test-v1`
@@ -87,19 +89,21 @@ contract instead of inventing a workflow-local variant.
 The expected contract keeps output deterministic and preparation-only:
 
 - every coverage row is an exact artifact-level projection of the manifest;
-- every transaction is bound to one workflow and one versioned exact-key
-  profile;
-- every evidence reference names a manifest artifact and valid line range;
+- every transaction is bound to one unique workflow/profile/exact-key identity;
+- every evidence reference names a manifest artifact and valid line range, and
+  manifest artifacts plus output arrays use canonical stable ordering;
 - transaction citations contain complete raw CCM records whose additive SCCM
   timestamp provenance normalizes to UTC no later than the artifact's canonical
   `capturedUtc`;
-- `lastSuccessfulPhase` follows the declared family phase order, and a
-  confirmed failure requests exactly the bounded next artifact for that phase;
+- `lastSuccessfulPhase` is present only when cited exact-key terminal
+  success/evaluation evidence supports it; a failure-only citation cannot
+  synthesize a predecessor phase;
+- a confirmed failure requests exactly the bounded next artifact for its phase;
 - successful, recovering, evaluative, and symptom-only transactions do not
   invent next-artifact requests;
 - `findings` remains empty until production reducers are authorized;
-- source-local observations have a low confidence ceiling and are not
-  correlation eligible;
+- source-local observations use a closed kind/artifact/claim schema, have a low
+  confidence ceiling, and are not correlation eligible;
 - next-artifact requests name one admitted logical group and basename, never an
   arbitrary path, drive, volume, wildcard, or recursive scan.
 
@@ -130,6 +134,9 @@ of:
 - cross-family key fields, uncited key values, and phase borrowing from another
   record;
 - embedded/look-alike key labels that contain an expected label as a substring;
+- duplicate/conflicting structured fields, nested CCM envelopes, and compliance
+  result types borrowed from another source record;
+- uncited predecessor `lastSuccessfulPhase` claims on confirmed failures;
 - high-confidence output from an unknown source profile or invalid timestamp
   offset;
 - medium-confidence recovery from an unknown profile or unusable offset;
@@ -140,10 +147,16 @@ of:
   artifact's canonical capture time;
 - phase-order claims that skip ahead, including a collect failure claiming that
   report already succeeded;
+- coverage and rotation observation kinds that do not match cited artifact
+  states, unknown output fields, noncanonical claims, or rewritten prohibited
+  claims;
 - promotion of missing coverage to captured evidence;
 - promotion of noncompliance to confirmed failure;
-- same-minute key borrowing between distinct root artifacts;
+- duplicate exact transaction identities, collapsed same-minute root paths, and
+  same-minute key borrowing between distinct root artifacts;
 - merging same-minute inventory and compliance terminal failures;
+- reversed manifest, transaction, evidence, coverage, observation, or
+  observation-artifact arrays;
 - missing, altered, or spurious next-artifact requests.
 
 This mutation layer is independent of the positive fixture assertions, so an

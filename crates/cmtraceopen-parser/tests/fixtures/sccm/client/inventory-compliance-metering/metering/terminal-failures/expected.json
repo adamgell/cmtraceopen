@@ -55,7 +55,7 @@
       "state": "failed",
       "classification": "confirmedFailure",
       "confidence": "high",
-      "lastSuccessfulPhase": "Collect",
+      "lastSuccessfulPhase": null,
       "evidence": [
         {
           "artifactId": "metering-terminal-failures-report-current",
@@ -86,7 +86,7 @@
       "state": "failed",
       "classification": "confirmedFailure",
       "confidence": "high",
-      "lastSuccessfulPhase": "Aggregate",
+      "lastSuccessfulPhase": null,
       "evidence": [
         {
           "artifactId": "metering-terminal-failures-report-current",

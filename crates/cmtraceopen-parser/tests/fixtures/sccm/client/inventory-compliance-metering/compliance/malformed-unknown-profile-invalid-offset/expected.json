@@ -10,6 +10,16 @@
   "transactions": [],
   "sourceLocalObservations": [
     {
+      "observationId": "compliance-invalid-offset",
+      "kind": "invalidOffset",
+      "artifactIds": [
+        "compliance-malformed-unknown-profile-invalid-offset-invalid-offset"
+      ],
+      "confidenceCeiling": "low",
+      "correlationEligible": false,
+      "claim": "Invalid timestamp offset cannot support ordered or high-confidence workflow claims."
+    },
+    {
       "observationId": "compliance-malformed",
       "kind": "malformedRecord",
       "artifactIds": [
@@ -28,19 +38,14 @@
       "confidenceCeiling": "low",
       "correlationEligible": false,
       "claim": "Unknown source version has no selected extraction profile."
-    },
-    {
-      "observationId": "compliance-invalid-offset",
-      "kind": "invalidOffset",
-      "artifactIds": [
-        "compliance-malformed-unknown-profile-invalid-offset-invalid-offset"
-      ],
-      "confidenceCeiling": "low",
-      "correlationEligible": false,
-      "claim": "Invalid timestamp offset cannot support ordered or high-confidence workflow claims."
     }
   ],
   "coverage": [
+    {
+      "artifactId": "compliance-malformed-unknown-profile-invalid-offset-invalid-offset",
+      "logicalArtifactId": "client-compliance",
+      "state": "captured"
+    },
     {
       "artifactId": "compliance-malformed-unknown-profile-invalid-offset-malformed",
       "logicalArtifactId": "client-compliance",
@@ -48,11 +53,6 @@
     },
     {
       "artifactId": "compliance-malformed-unknown-profile-invalid-offset-unknown-version",
-      "logicalArtifactId": "client-compliance",
-      "state": "captured"
-    },
-    {
-      "artifactId": "compliance-malformed-unknown-profile-invalid-offset-invalid-offset",
       "logicalArtifactId": "client-compliance",
       "state": "captured"
     }

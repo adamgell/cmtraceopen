@@ -16,10 +16,10 @@
         "inventory-coverage-states-absent",
         "inventory-coverage-states-access-denied",
         "inventory-coverage-states-capped",
-        "inventory-coverage-states-skipped",
-        "inventory-coverage-states-unsupported",
         "inventory-coverage-states-malformed",
-        "inventory-coverage-states-partial"
+        "inventory-coverage-states-partial",
+        "inventory-coverage-states-skipped",
+        "inventory-coverage-states-unsupported"
       ],
       "confidenceCeiling": "low",
       "correlationEligible": false,
@@ -43,16 +43,6 @@
       "state": "capped"
     },
     {
-      "artifactId": "inventory-coverage-states-skipped",
-      "logicalArtifactId": "client-inventory",
-      "state": "skipped"
-    },
-    {
-      "artifactId": "inventory-coverage-states-unsupported",
-      "logicalArtifactId": "client-inventory",
-      "state": "unsupported"
-    },
-    {
       "artifactId": "inventory-coverage-states-malformed",
       "logicalArtifactId": "client-inventory",
       "state": "parseFailed"
@@ -61,6 +51,16 @@
       "artifactId": "inventory-coverage-states-partial",
       "logicalArtifactId": "client-inventory",
       "state": "partial"
+    },
+    {
+      "artifactId": "inventory-coverage-states-skipped",
+      "logicalArtifactId": "client-inventory",
+      "state": "skipped"
+    },
+    {
+      "artifactId": "inventory-coverage-states-unsupported",
+      "logicalArtifactId": "client-inventory",
+      "state": "unsupported"
     }
   ],
   "findings": [],

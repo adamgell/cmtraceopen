@@ -90,52 +90,6 @@
       "truncated": true
     },
     {
-      "artifactId": "compliance-coverage-states-skipped",
-      "designOnlyCatalog": {
-        "entryId": "client-compliance",
-        "groupMemberships": [
-          "client-compliance"
-        ]
-      },
-      "role": "client",
-      "kind": "ccmLog",
-      "captureState": "skipped",
-      "originalBasename": "DCMReporting.log",
-      "sanitizedSourcePath": "SYNTHETIC://root-a/CCM/Logs/DCMReporting.log",
-      "pathFingerprint": "synthetic-compliance-coverage-states-skipped-root-a",
-      "rotation": {
-        "kind": "current",
-        "fragmentComplete": false
-      },
-      "sourceVersion": "5.00.TEST.325",
-      "capturedUtc": "2026-07-30T04:00:00Z",
-      "bytesCopied": 0,
-      "relativePath": null
-    },
-    {
-      "artifactId": "compliance-coverage-states-unsupported",
-      "designOnlyCatalog": {
-        "entryId": "client-compliance",
-        "groupMemberships": [
-          "client-compliance"
-        ]
-      },
-      "role": "client",
-      "kind": "ccmLog",
-      "captureState": "unsupported",
-      "originalBasename": "StateMessage.log",
-      "sanitizedSourcePath": "SYNTHETIC://root-a/CCM/Logs/StateMessage.log",
-      "pathFingerprint": "synthetic-compliance-coverage-states-unsupported-root-a",
-      "rotation": {
-        "kind": "current",
-        "fragmentComplete": false
-      },
-      "sourceVersion": "5.00.TEST.325",
-      "capturedUtc": "2026-07-30T04:00:00Z",
-      "bytesCopied": 0,
-      "relativePath": null
-    },
-    {
       "artifactId": "compliance-coverage-states-malformed",
       "designOnlyCatalog": {
         "entryId": "client-compliance",
@@ -190,6 +144,52 @@
         "byteLimit": 4096,
         "limitApplied": false
       }
+    },
+    {
+      "artifactId": "compliance-coverage-states-skipped",
+      "designOnlyCatalog": {
+        "entryId": "client-compliance",
+        "groupMemberships": [
+          "client-compliance"
+        ]
+      },
+      "role": "client",
+      "kind": "ccmLog",
+      "captureState": "skipped",
+      "originalBasename": "DCMReporting.log",
+      "sanitizedSourcePath": "SYNTHETIC://root-a/CCM/Logs/DCMReporting.log",
+      "pathFingerprint": "synthetic-compliance-coverage-states-skipped-root-a",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": false
+      },
+      "sourceVersion": "5.00.TEST.325",
+      "capturedUtc": "2026-07-30T04:00:00Z",
+      "bytesCopied": 0,
+      "relativePath": null
+    },
+    {
+      "artifactId": "compliance-coverage-states-unsupported",
+      "designOnlyCatalog": {
+        "entryId": "client-compliance",
+        "groupMemberships": [
+          "client-compliance"
+        ]
+      },
+      "role": "client",
+      "kind": "ccmLog",
+      "captureState": "unsupported",
+      "originalBasename": "StateMessage.log",
+      "sanitizedSourcePath": "SYNTHETIC://root-a/CCM/Logs/StateMessage.log",
+      "pathFingerprint": "synthetic-compliance-coverage-states-unsupported-root-a",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": false
+      },
+      "sourceVersion": "5.00.TEST.325",
+      "capturedUtc": "2026-07-30T04:00:00Z",
+      "bytesCopied": 0,
+      "relativePath": null
     }
   ]
 }

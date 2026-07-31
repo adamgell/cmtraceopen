@@ -15,34 +15,6 @@
   },
   "artifacts": [
     {
-      "artifactId": "metering-rotation-boundary-report-lo",
-      "designOnlyCatalog": {
-        "entryId": "client-metering",
-        "groupMemberships": [
-          "client-metering"
-        ]
-      },
-      "role": "client",
-      "kind": "ccmLog",
-      "captureState": "captured",
-      "originalBasename": "SWMTRReportGen.log.lo",
-      "sanitizedSourcePath": "SYNTHETIC://root-a/CCM/Logs/SWMTRReportGen.log.lo",
-      "pathFingerprint": "synthetic-metering-rotation-boundary-report-lo-root-a",
-      "rotation": {
-        "kind": "lo",
-        "fragmentComplete": false
-      },
-      "sourceVersion": "5.00.TEST.325",
-      "capturedUtc": "2026-07-30T04:00:00Z",
-      "bytesCopied": 327,
-      "relativePath": "evidence/client-metering/root-a/lo/SWMTRReportGen.log.lo",
-      "encoding": "utf-8",
-      "collectionLimit": {
-        "byteLimit": 4096,
-        "limitApplied": false
-      }
-    },
-    {
       "artifactId": "metering-rotation-boundary-report-current",
       "designOnlyCatalog": {
         "entryId": "client-metering",
@@ -64,6 +36,34 @@
       "capturedUtc": "2026-07-30T04:00:00Z",
       "bytesCopied": 323,
       "relativePath": "evidence/client-metering/root-a/current/SWMTRReportGen.log",
+      "encoding": "utf-8",
+      "collectionLimit": {
+        "byteLimit": 4096,
+        "limitApplied": false
+      }
+    },
+    {
+      "artifactId": "metering-rotation-boundary-report-lo",
+      "designOnlyCatalog": {
+        "entryId": "client-metering",
+        "groupMemberships": [
+          "client-metering"
+        ]
+      },
+      "role": "client",
+      "kind": "ccmLog",
+      "captureState": "captured",
+      "originalBasename": "SWMTRReportGen.log.lo",
+      "sanitizedSourcePath": "SYNTHETIC://root-a/CCM/Logs/SWMTRReportGen.log.lo",
+      "pathFingerprint": "synthetic-metering-rotation-boundary-report-lo-root-a",
+      "rotation": {
+        "kind": "lo",
+        "fragmentComplete": false
+      },
+      "sourceVersion": "5.00.TEST.325",
+      "capturedUtc": "2026-07-30T04:00:00Z",
+      "bytesCopied": 327,
+      "relativePath": "evidence/client-metering/root-a/lo/SWMTRReportGen.log.lo",
       "encoding": "utf-8",
       "collectionLimit": {
         "byteLimit": 4096,

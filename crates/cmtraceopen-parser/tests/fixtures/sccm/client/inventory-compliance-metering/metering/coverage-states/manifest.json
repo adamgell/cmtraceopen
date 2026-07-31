@@ -90,52 +90,6 @@
       "truncated": true
     },
     {
-      "artifactId": "metering-coverage-states-skipped",
-      "designOnlyCatalog": {
-        "entryId": "client-metering",
-        "groupMemberships": [
-          "client-metering"
-        ]
-      },
-      "role": "client",
-      "kind": "ccmLog",
-      "captureState": "skipped",
-      "originalBasename": "SWMTRReportGen.log",
-      "sanitizedSourcePath": "SYNTHETIC://root-d/CCM/Logs/SWMTRReportGen.log",
-      "pathFingerprint": "synthetic-metering-coverage-states-skipped-root-d",
-      "rotation": {
-        "kind": "current",
-        "fragmentComplete": false
-      },
-      "sourceVersion": "5.00.TEST.325",
-      "capturedUtc": "2026-07-30T04:00:00Z",
-      "bytesCopied": 0,
-      "relativePath": null
-    },
-    {
-      "artifactId": "metering-coverage-states-unsupported",
-      "designOnlyCatalog": {
-        "entryId": "client-metering",
-        "groupMemberships": [
-          "client-metering"
-        ]
-      },
-      "role": "client",
-      "kind": "ccmLog",
-      "captureState": "unsupported",
-      "originalBasename": "SWMTRReportGen.log",
-      "sanitizedSourcePath": "SYNTHETIC://root-e/CCM/Logs/SWMTRReportGen.log",
-      "pathFingerprint": "synthetic-metering-coverage-states-unsupported-root-e",
-      "rotation": {
-        "kind": "current",
-        "fragmentComplete": false
-      },
-      "sourceVersion": "5.00.TEST.325",
-      "capturedUtc": "2026-07-30T04:00:00Z",
-      "bytesCopied": 0,
-      "relativePath": null
-    },
-    {
       "artifactId": "metering-coverage-states-malformed",
       "designOnlyCatalog": {
         "entryId": "client-metering",
@@ -190,6 +144,52 @@
         "byteLimit": 4096,
         "limitApplied": false
       }
+    },
+    {
+      "artifactId": "metering-coverage-states-skipped",
+      "designOnlyCatalog": {
+        "entryId": "client-metering",
+        "groupMemberships": [
+          "client-metering"
+        ]
+      },
+      "role": "client",
+      "kind": "ccmLog",
+      "captureState": "skipped",
+      "originalBasename": "SWMTRReportGen.log",
+      "sanitizedSourcePath": "SYNTHETIC://root-d/CCM/Logs/SWMTRReportGen.log",
+      "pathFingerprint": "synthetic-metering-coverage-states-skipped-root-d",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": false
+      },
+      "sourceVersion": "5.00.TEST.325",
+      "capturedUtc": "2026-07-30T04:00:00Z",
+      "bytesCopied": 0,
+      "relativePath": null
+    },
+    {
+      "artifactId": "metering-coverage-states-unsupported",
+      "designOnlyCatalog": {
+        "entryId": "client-metering",
+        "groupMemberships": [
+          "client-metering"
+        ]
+      },
+      "role": "client",
+      "kind": "ccmLog",
+      "captureState": "unsupported",
+      "originalBasename": "SWMTRReportGen.log",
+      "sanitizedSourcePath": "SYNTHETIC://root-e/CCM/Logs/SWMTRReportGen.log",
+      "pathFingerprint": "synthetic-metering-coverage-states-unsupported-root-e",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": false
+      },
+      "sourceVersion": "5.00.TEST.325",
+      "capturedUtc": "2026-07-30T04:00:00Z",
+      "bytesCopied": 0,
+      "relativePath": null
     }
   ]
 }

@@ -55,7 +55,7 @@
       "state": "failed",
       "classification": "confirmedFailure",
       "confidence": "high",
-      "lastSuccessfulPhase": "Evaluate",
+      "lastSuccessfulPhase": null,
       "evidence": [
         {
           "artifactId": "compliance-terminal-failures-remediate-current",
@@ -86,7 +86,7 @@
       "state": "failed",
       "classification": "confirmedFailure",
       "confidence": "high",
-      "lastSuccessfulPhase": "Remediate",
+      "lastSuccessfulPhase": null,
       "evidence": [
         {
           "artifactId": "compliance-terminal-failures-report-current",

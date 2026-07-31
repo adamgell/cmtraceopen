@@ -13,8 +13,8 @@
       "observationId": "metering-rotation-split",
       "kind": "rotationSplit",
       "artifactIds": [
-        "metering-rotation-boundary-report-lo",
-        "metering-rotation-boundary-report-current"
+        "metering-rotation-boundary-report-current",
+        "metering-rotation-boundary-report-lo"
       ],
       "confidenceCeiling": "low",
       "correlationEligible": false,
@@ -23,12 +23,12 @@
   ],
   "coverage": [
     {
-      "artifactId": "metering-rotation-boundary-report-lo",
+      "artifactId": "metering-rotation-boundary-report-current",
       "logicalArtifactId": "client-metering",
       "state": "partial"
     },
     {
-      "artifactId": "metering-rotation-boundary-report-current",
+      "artifactId": "metering-rotation-boundary-report-lo",
       "logicalArtifactId": "client-metering",
       "state": "partial"
     }

@@ -15,7 +15,8 @@ Every scenario contains:
 - `manifest.json`: additive SCCM-specific artifact, coverage, rotation, cap,
   source-version, and provenance design;
 - `expected.json`: proposed exact-key transaction or source-local coverage
-  outcomes with cited evidence;
+  outcomes with cited evidence, closed non-causal schemas, evidence-backed phase
+  state, and canonical output ordering;
 - optional `evidence/`: raw CCM transport records or deliberately incomplete
   synthetic input.
 

@@ -15,6 +15,34 @@
   },
   "artifacts": [
     {
+      "artifactId": "compliance-malformed-unknown-profile-invalid-offset-invalid-offset",
+      "designOnlyCatalog": {
+        "entryId": "client-compliance",
+        "groupMemberships": [
+          "client-compliance"
+        ]
+      },
+      "role": "client",
+      "kind": "ccmLog",
+      "captureState": "captured",
+      "originalBasename": "DCMReporting.log",
+      "sanitizedSourcePath": "SYNTHETIC://root-a/CCM/Logs/DCMReporting.log",
+      "pathFingerprint": "synthetic-compliance-malformed-unknown-profile-invalid-offset-invalid-offset-root-a",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "sourceVersion": "5.00.TEST.325",
+      "capturedUtc": "2026-07-30T04:00:00Z",
+      "bytesCopied": 647,
+      "relativePath": "evidence/client-compliance/root-a/current/DCMReporting.log",
+      "encoding": "utf-8",
+      "collectionLimit": {
+        "byteLimit": 4096,
+        "limitApplied": false
+      }
+    },
+    {
       "artifactId": "compliance-malformed-unknown-profile-invalid-offset-malformed",
       "designOnlyCatalog": {
         "entryId": "client-compliance",
@@ -64,34 +92,6 @@
       "capturedUtc": "2026-07-30T04:00:00Z",
       "bytesCopied": 329,
       "relativePath": "evidence/client-compliance/root-a/current/CITaskMgr.log",
-      "encoding": "utf-8",
-      "collectionLimit": {
-        "byteLimit": 4096,
-        "limitApplied": false
-      }
-    },
-    {
-      "artifactId": "compliance-malformed-unknown-profile-invalid-offset-invalid-offset",
-      "designOnlyCatalog": {
-        "entryId": "client-compliance",
-        "groupMemberships": [
-          "client-compliance"
-        ]
-      },
-      "role": "client",
-      "kind": "ccmLog",
-      "captureState": "captured",
-      "originalBasename": "DCMReporting.log",
-      "sanitizedSourcePath": "SYNTHETIC://root-a/CCM/Logs/DCMReporting.log",
-      "pathFingerprint": "synthetic-compliance-malformed-unknown-profile-invalid-offset-invalid-offset-root-a",
-      "rotation": {
-        "kind": "current",
-        "fragmentComplete": true
-      },
-      "sourceVersion": "5.00.TEST.325",
-      "capturedUtc": "2026-07-30T04:00:00Z",
-      "bytesCopied": 647,
-      "relativePath": "evidence/client-compliance/root-a/current/DCMReporting.log",
       "encoding": "utf-8",
       "collectionLimit": {
         "byteLimit": 4096,
