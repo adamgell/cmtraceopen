@@ -946,6 +946,38 @@ fn reordered_scenarios_encode_opposite_order_input_evidence() {
 }
 
 #[test]
+fn adversarial_reordered_input_mutations_fail_closed() {
+    let error = check_mutated_matrix(POLICY_MATRIX_FIXTURE, &POLICY_SPEC, |matrix| {
+        let order_a =
+            scenario_slot(matrix, "policy-reordered-input-a")["orderedInputEvidence"].clone();
+        scenario_slot(matrix, "policy-reordered-input-b")["orderedInputEvidence"] = order_a;
+    })
+    .expect_err("the B case must replay A's evidence in opposite order, not the same order");
+    assert!(error.contains("reordered"), "{error}");
+
+    let error = check_mutated_matrix(POLICY_MATRIX_FIXTURE, &POLICY_SPEC, |matrix| {
+        scenario_slot(matrix, "policy-reordered-input-b")["clientFixtureRef"] =
+            Value::String("synthetic:policy-divergent-client".to_owned());
+    })
+    .expect_err("the A/B pair must reorder one input set, not compare different inputs");
+    assert!(error.contains("reordered"), "{error}");
+
+    let error = check_mutated_matrix(POLICY_MATRIX_FIXTURE, &POLICY_SPEC, |matrix| {
+        scenario_slot(matrix, "policy-reordered-input-a")["orderedInputEvidence"] =
+            serde_json::json!([]);
+    })
+    .expect_err("a reordered-input guard without encoded ordered evidence is undemonstrated");
+    assert!(error.contains("reordered"), "{error}");
+
+    let error = check_mutated_matrix(POLICY_MATRIX_FIXTURE, &POLICY_SPEC, |matrix| {
+        scenario_slot(matrix, "policy-reordered-input-a")["orderedInputEvidence"][0] =
+            Value::String("policy-request-assignments".to_owned());
+    })
+    .expect_err("ordered evidence entries must be side-tagged synthetic tokens");
+    assert!(error.contains("reordered"), "{error}");
+}
+
+#[test]
 fn adversarial_neutralized_guard_state_mutations_fail_closed() {
     let neutralizations: [(&str, &[(&str, &str)]); 9] = [
         ("policy-same-time-no-key", &[("keyRelation", "exact")]),
