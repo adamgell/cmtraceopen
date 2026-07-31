@@ -1357,6 +1357,284 @@ fn finding_rejects_noncanonical_opaque_ids_across_public_boundaries() {
     assert!(mismatches.is_empty(), "{mismatches:#?}");
 }
 
+fn bounded_finding_with_id(finding_id: &str) -> Result<SccmFinding, SccmFindingValidationError> {
+    SccmFindingBuilder::new(finding_id)
+        .class(SccmFindingClass::Symptom)
+        .phase(SccmPhase::Policy)
+        .role(SccmRole::Client)
+        .severity(Severity::Warning)
+        .confidence(SccmConfidence::Low)
+        .evidence(vec![finding_evidence_ref("artifact-a", "entry-a")])
+        .build()
+}
+
+#[test]
+fn finding_rejects_overlong_opaque_ids_across_public_boundaries() {
+    let mut mismatches: Vec<String> = Vec::new();
+    let overlong_id = "a".repeat(257);
+    let bounded_id = "a".repeat(256);
+
+    if bounded_finding_with_id(&overlong_id).err()
+        != Some(SccmFindingValidationError::MissingRequiredField)
+    {
+        mismatches.push("builder accepted an overlong finding ID".into());
+    }
+
+    for (label, artifact_id, entry_id) in [
+        ("artifact ID", overlong_id.as_str(), "entry-a"),
+        ("entry ID", "artifact-a", overlong_id.as_str()),
+    ] {
+        let result = SccmFindingBuilder::new("overlong-evidence-id")
+            .class(SccmFindingClass::Symptom)
+            .phase(SccmPhase::Policy)
+            .role(SccmRole::Client)
+            .severity(Severity::Warning)
+            .confidence(SccmConfidence::Low)
+            .evidence(vec![finding_evidence_ref(artifact_id, entry_id)])
+            .build();
+        if result.err() != Some(SccmFindingValidationError::InvalidEvidenceReference) {
+            mismatches.push(format!("builder accepted an overlong evidence {label}"));
+        }
+    }
+
+    let gap_result = SccmFindingBuilder::new("overlong-gap-artifact-id")
+        .class(SccmFindingClass::Symptom)
+        .phase(SccmPhase::Policy)
+        .role(SccmRole::Client)
+        .severity(Severity::Warning)
+        .confidence(SccmConfidence::Low)
+        .evidence(vec![finding_evidence_ref("artifact-a", "entry-a")])
+        .coverage_gap(finding_client_gap(
+            &overlong_id,
+            SccmCoverageState::AccessDenied,
+        ))
+        .build();
+    if gap_result.err() != Some(SccmFindingValidationError::InvalidCoverageGap) {
+        mismatches.push("builder accepted an overlong coverage-gap artifact ID".into());
+    }
+
+    let key_evidence = finding_evidence_ref("artifact-a", "entry-a");
+    let key_result = SccmFindingBuilder::new("overlong-key-profile-id")
+        .class(SccmFindingClass::Symptom)
+        .phase(SccmPhase::Policy)
+        .role(SccmRole::Client)
+        .severity(Severity::Warning)
+        .confidence(SccmConfidence::Low)
+        .evidence(vec![key_evidence.clone()])
+        .correlation_keys(vec![finding_key(
+            SccmCorrelationKeyKind::AssignmentId,
+            "{ABCDEFAB-0000-0000-0000-000000000001}",
+            "abcdefab-0000-0000-0000-000000000001",
+            SccmKeyConfidence::Low,
+            Some(overlong_id.as_str()),
+            key_evidence,
+        )])
+        .build();
+    if key_result.err() != Some(SccmFindingValidationError::InvalidCorrelationKey) {
+        mismatches.push("builder accepted an overlong correlation-key profile ID".into());
+    }
+
+    let mut direct = bounded_finding_with_id("overlong-direct").unwrap();
+    direct.finding_id = overlong_id.clone();
+    if direct.validate().err() != Some(SccmFindingValidationError::MissingRequiredField) {
+        mismatches.push("direct validate accepted an overlong finding ID".into());
+    }
+    if serde_json::to_value(&direct).is_ok() {
+        mismatches.push("serializer accepted an overlong finding ID".into());
+    }
+
+    let canonical_json =
+        serde_json::to_value(bounded_finding_with_id("overlong-json").unwrap()).unwrap();
+    let mut finding_id_json = canonical_json.clone();
+    finding_id_json["findingId"] = serde_json::json!(overlong_id);
+    if serde_json::from_value::<SccmFinding>(finding_id_json).is_ok() {
+        mismatches.push("deserializer accepted an overlong finding ID".into());
+    }
+    for field in ["artifactId", "entryId"] {
+        let mut evidence_json = canonical_json.clone();
+        evidence_json["evidence"][0][field] = serde_json::json!(overlong_id);
+        if serde_json::from_value::<SccmFinding>(evidence_json).is_ok() {
+            mismatches.push(format!(
+                "deserializer accepted an overlong evidence {field}"
+            ));
+        }
+    }
+
+    let bounded = SccmFindingBuilder::new(bounded_id.as_str())
+        .class(SccmFindingClass::Symptom)
+        .phase(SccmPhase::Policy)
+        .role(SccmRole::Client)
+        .severity(Severity::Warning)
+        .confidence(SccmConfidence::Low)
+        .evidence(vec![finding_evidence_ref(&bounded_id, &bounded_id)])
+        .build();
+    match bounded {
+        Ok(bounded) => {
+            let json = serde_json::to_value(&bounded).unwrap();
+            if serde_json::from_value::<SccmFinding>(json).ok().as_ref() != Some(&bounded) {
+                mismatches.push("bound-length opaque IDs did not round trip".into());
+            }
+        }
+        Err(error) => {
+            mismatches.push(format!(
+                "builder rejected bound-length opaque IDs: {error:?}"
+            ));
+        }
+    }
+
+    assert!(mismatches.is_empty(), "{mismatches:#?}");
+}
+
+#[test]
+fn finding_rejects_overlong_display_text_across_public_boundaries() {
+    let mut mismatches: Vec<String> = Vec::new();
+    let overlong_title = "t".repeat(513);
+    let overlong_summary = "s".repeat(2049);
+
+    for (label, title, summary) in [
+        ("title", overlong_title.as_str(), "bounded summary"),
+        ("summary", "bounded title", overlong_summary.as_str()),
+    ] {
+        let result = SccmFindingBuilder::new("overlong-display-text")
+            .class(SccmFindingClass::Symptom)
+            .phase(SccmPhase::Policy)
+            .role(SccmRole::Client)
+            .severity(Severity::Warning)
+            .confidence(SccmConfidence::Low)
+            .title(title)
+            .summary(summary)
+            .evidence(vec![finding_evidence_ref("artifact-a", "entry-a")])
+            .build();
+        if result.err() != Some(SccmFindingValidationError::MissingRequiredField) {
+            mismatches.push(format!("builder accepted an overlong {label}"));
+        }
+    }
+
+    let mut direct = bounded_finding_with_id("overlong-title-direct").unwrap();
+    direct.title = overlong_title.clone();
+    if direct.validate().err() != Some(SccmFindingValidationError::MissingRequiredField) {
+        mismatches.push("direct validate accepted an overlong title".into());
+    }
+    if serde_json::to_value(&direct).is_ok() {
+        mismatches.push("serializer accepted an overlong title".into());
+    }
+    let mut direct = bounded_finding_with_id("overlong-summary-direct").unwrap();
+    direct.summary = overlong_summary.clone();
+    if direct.validate().err() != Some(SccmFindingValidationError::MissingRequiredField) {
+        mismatches.push("direct validate accepted an overlong summary".into());
+    }
+    if serde_json::to_value(&direct).is_ok() {
+        mismatches.push("serializer accepted an overlong summary".into());
+    }
+
+    let canonical_json =
+        serde_json::to_value(bounded_finding_with_id("overlong-text-json").unwrap()).unwrap();
+    for (field, value) in [("title", &overlong_title), ("summary", &overlong_summary)] {
+        let mut json = canonical_json.clone();
+        json[field] = serde_json::json!(value);
+        if serde_json::from_value::<SccmFinding>(json).is_ok() {
+            mismatches.push(format!("deserializer accepted an overlong {field}"));
+        }
+    }
+
+    let bounded = SccmFindingBuilder::new("bound-length-display-text")
+        .class(SccmFindingClass::Symptom)
+        .phase(SccmPhase::Policy)
+        .role(SccmRole::Client)
+        .severity(Severity::Warning)
+        .confidence(SccmConfidence::Low)
+        .title("t".repeat(512))
+        .summary("s".repeat(2048))
+        .evidence(vec![finding_evidence_ref("artifact-a", "entry-a")])
+        .build();
+    match bounded {
+        Ok(bounded) => {
+            let json = serde_json::to_value(&bounded).unwrap();
+            if serde_json::from_value::<SccmFinding>(json).ok().as_ref() != Some(&bounded) {
+                mismatches.push("bound-length display text did not round trip".into());
+            }
+        }
+        Err(error) => {
+            mismatches.push(format!(
+                "builder rejected bound-length display text: {error:?}"
+            ));
+        }
+    }
+
+    assert!(mismatches.is_empty(), "{mismatches:#?}");
+}
+
+fn finding_with_ci_key_value(
+    finding_id: &str,
+    digits: &str,
+) -> Result<SccmFinding, SccmFindingValidationError> {
+    let key_evidence = finding_evidence_ref("artifact-a", "entry-a");
+    SccmFindingBuilder::new(finding_id)
+        .class(SccmFindingClass::Symptom)
+        .phase(SccmPhase::Policy)
+        .role(SccmRole::Client)
+        .severity(Severity::Warning)
+        .confidence(SccmConfidence::Low)
+        .evidence(vec![key_evidence.clone()])
+        .correlation_keys(vec![finding_key(
+            SccmCorrelationKeyKind::CiId,
+            digits,
+            digits,
+            SccmKeyConfidence::Low,
+            Some("sccm-keys-experimental-v1"),
+            key_evidence,
+        )])
+        .build()
+}
+
+#[test]
+fn finding_rejects_overlong_correlation_key_values() {
+    let mut mismatches: Vec<String> = Vec::new();
+    let overlong_digits = "1".repeat(257);
+    let bounded_digits = "1".repeat(256);
+
+    if finding_with_ci_key_value("overlong-key-value", &overlong_digits).err()
+        != Some(SccmFindingValidationError::InvalidCorrelationKey)
+    {
+        mismatches.push("builder accepted an overlong correlation-key value".into());
+    }
+
+    let mut direct = finding_with_ci_key_value("overlong-key-value-direct", "71").unwrap();
+    direct.correlation_keys[0].raw = overlong_digits.clone();
+    direct.correlation_keys[0].normalized = overlong_digits.clone();
+    if direct.validate().err() != Some(SccmFindingValidationError::InvalidCorrelationKey) {
+        mismatches.push("direct validate accepted an overlong correlation-key value".into());
+    }
+    if serde_json::to_value(&direct).is_ok() {
+        mismatches.push("serializer accepted an overlong correlation-key value".into());
+    }
+
+    let mut json =
+        serde_json::to_value(finding_with_ci_key_value("overlong-key-value-json", "71").unwrap())
+            .unwrap();
+    json["correlationKeys"][0]["raw"] = serde_json::json!(overlong_digits);
+    json["correlationKeys"][0]["normalized"] = serde_json::json!(overlong_digits);
+    if serde_json::from_value::<SccmFinding>(json).is_ok() {
+        mismatches.push("deserializer accepted an overlong correlation-key value".into());
+    }
+
+    match finding_with_ci_key_value("bound-length-key-value", &bounded_digits) {
+        Ok(bounded) => {
+            let json = serde_json::to_value(&bounded).unwrap();
+            if serde_json::from_value::<SccmFinding>(json).ok().as_ref() != Some(&bounded) {
+                mismatches.push("bound-length correlation-key value did not round trip".into());
+            }
+        }
+        Err(error) => {
+            mismatches.push(format!(
+                "builder rejected a bound-length correlation-key value: {error:?}"
+            ));
+        }
+    }
+
+    assert!(mismatches.is_empty(), "{mismatches:#?}");
+}
+
 #[test]
 fn finding_rejects_whitespace_wrapped_declared_phase_shadow() {
     let result = SccmFindingBuilder::new("wrapped-phase-shadow")
