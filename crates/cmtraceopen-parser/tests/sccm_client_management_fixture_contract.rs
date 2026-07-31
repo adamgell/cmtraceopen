@@ -352,21 +352,34 @@ fn source_version_matches_selected_profile(value: &str) -> bool {
         .is_some_and(|suffix| suffix.len() == 4 && suffix.bytes().all(|byte| byte.is_ascii_digit()))
 }
 
-fn public_observation_claim_is_safe(value: &str) -> bool {
-    if value.len() > 512
+fn public_identifier_is_safe(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 96
+        && value.split('-').all(|segment| {
+            !segment.is_empty()
+                && segment
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
+        })
+}
+
+fn public_free_text_is_safe(value: &str) -> bool {
+    if value.trim() != value
+        || value.is_empty()
+        || value.len() > 240
         || value.chars().any(char::is_control)
-        || value.contains(['\\', '@'])
-        || value.contains("://")
     {
         return false;
     }
 
-    let lower = value.to_ascii_lowercase();
-    if lower.contains("/users/")
-        || lower.contains("/home/")
-        || lower.contains("s-1-5-")
-        || lower.contains("c:/")
-    {
+    if !value.bytes().all(|byte| {
+        byte.is_ascii_alphanumeric()
+            || matches!(byte, b' ' | b'.' | b',' | b';' | b'\'' | b'-' | b'(' | b')')
+    }) {
+        return false;
+    }
+
+    if value.to_ascii_lowercase().contains("s-1-5-") {
         return false;
     }
 
@@ -1415,6 +1428,11 @@ fn validate_contract(
     let mut transaction_order = Vec::new();
     for transaction in transactions {
         let transaction_id = required_string(transaction, "transactionId", "transaction")?;
+        if !public_identifier_is_safe(transaction_id) {
+            return Err(format!(
+                "transaction id {transaction_id} is outside the closed public identifier grammar"
+            ));
+        }
         require_exact_object_fields(
             transaction,
             &[
@@ -1683,6 +1701,11 @@ fn validate_contract(
                 let reason = next["reason"]
                     .as_str()
                     .ok_or_else(|| format!("{transaction_id} next reason is not a string"))?;
+                if !public_free_text_is_safe(reason) {
+                    return Err(format!(
+                        "{transaction_id} next artifact reason leaks identity or path data"
+                    ));
+                }
                 let lower_reason = reason.to_ascii_lowercase();
                 if reason.trim() != reason
                     || reason.len() > 240
@@ -1722,6 +1745,11 @@ fn validate_contract(
     let mut observation_order = Vec::new();
     for observation in observations {
         let observation_id = required_string(observation, "observationId", "observation")?;
+        if !public_identifier_is_safe(observation_id) {
+            return Err(format!(
+                "observation id {observation_id} is outside the closed public identifier grammar"
+            ));
+        }
         require_exact_object_fields(
             observation,
             &[
@@ -1800,7 +1828,7 @@ fn validate_contract(
                 "{observation_id} makes an unsupported causal claim"
             ));
         }
-        if !public_observation_claim_is_safe(claim) {
+        if !public_free_text_is_safe(claim) {
             return Err(format!(
                 "{observation_id} contains unsafe public identity or path data"
             ));
