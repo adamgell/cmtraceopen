@@ -40,7 +40,11 @@ pub fn classify_line(line: &str) -> Option<CompanyPortalLineClassification> {
 
 /// Check whether a line matches the Company Portal Windows log record grammar.
 ///
-/// House-convention matcher used by `parser::detect` and by tests.
+/// The boolean convenience form of [`classify_line`], kept to match the
+/// `matches_*_record` house convention used by the other dedicated parsers.
+/// `parser::detect` calls [`classify_line`] directly rather than this, because
+/// it needs the returned classification to count validated app versions, not
+/// just a yes/no.
 pub fn matches_company_portal_log_record(line: &str) -> bool {
     classify_line(line).is_some()
 }

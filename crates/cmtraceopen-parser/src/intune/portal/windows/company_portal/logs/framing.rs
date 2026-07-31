@@ -5,8 +5,16 @@
 //!
 //! Whether Company Portal ever writes a payload across several lines is not
 //! established by any published evidence. `V1` therefore uses the reading that
-//! is lossless either way: a line that does not open a record belongs to the
-//! record above it.
+//! is lossless either way: a non-empty line that does not open a record belongs
+//! to the record above it.
+//!
+//! Two exceptions, stated here because the rest of the module claims
+//! losslessness: trailing whitespace is stripped from every line before the
+//! record test (a record starts in column 0, so the test has to run on the
+//! trimmed line), and a blank line is dropped rather than appended as a
+//! continuation. Neither is reversible from `raw_text`. If a real multi-line
+//! payload containing a blank line is ever observed, the blank-line skip is the
+//! rule that has to change.
 //!
 //! A line that *does* look like a record start but fails validation is not a
 //! continuation — it closes the previous record and is reported as a malformed
