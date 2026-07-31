@@ -1,0 +1,60 @@
+{
+  "sccmManifestVersion": 1,
+  "contractState": "proposedPending318And319",
+  "proposalOnly": true,
+  "syntheticFixture": true,
+  "scenario": "notification-received",
+  "workflowFamily": "notification",
+  "bundle": {
+    "bundleId": "sccm-326-notification-received",
+    "captureHost": "LAB-CLIENT-01",
+    "role": "client",
+    "siteCode": "LAB"
+  },
+  "artifacts": [
+    {
+      "artifactId": "notification-received-current",
+      "role": "client",
+      "logicalArtifactId": "client-notification",
+      "sourceName": "CcmNotificationAgent.log",
+      "catalogState": "admitted",
+      "parserEligible": true,
+      "captureState": "captured",
+      "relativePath": "evidence/client-notification/current/CcmNotificationAgent.log",
+      "sanitizedSourcePath": "SYNTHETIC://client/management/notification-received/CcmNotificationAgent.log",
+      "pathFingerprint": "safe:path:326:notification-received",
+      "sourceVersion": "5.00.TEST.3260",
+      "encoding": "utf-8",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "collectionLimit": {
+        "capped": false,
+        "limitBytes": null
+      }
+    },
+    {
+      "artifactId": "notification-received-owner",
+      "role": "client",
+      "logicalArtifactId": "client-co-management",
+      "sourceName": "CoManagementHandler.log",
+      "catalogState": "admitted",
+      "parserEligible": true,
+      "captureState": "captured",
+      "relativePath": "evidence/client-co-management/current/CoManagementHandler.log",
+      "sanitizedSourcePath": "SYNTHETIC://client/management/notification-received/CoManagementHandler.log",
+      "pathFingerprint": "safe:path:326:notification-received-owner",
+      "sourceVersion": "5.00.TEST.3260",
+      "encoding": "utf-8",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "collectionLimit": {
+        "capped": false,
+        "limitBytes": null
+      }
+    }
+  ]
+}

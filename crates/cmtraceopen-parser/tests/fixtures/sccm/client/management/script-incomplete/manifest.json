@@ -1,0 +1,82 @@
+{
+  "sccmManifestVersion": 1,
+  "contractState": "proposedPending318And319",
+  "proposalOnly": true,
+  "syntheticFixture": true,
+  "scenario": "script-incomplete",
+  "workflowFamily": "scripts",
+  "bundle": {
+    "bundleId": "sccm-326-script-incomplete",
+    "captureHost": "LAB-CLIENT-01",
+    "role": "client",
+    "siteCode": "LAB"
+  },
+  "artifacts": [
+    {
+      "artifactId": "script-incomplete-current",
+      "role": "client",
+      "logicalArtifactId": "client-scripts",
+      "sourceName": "Scripts.log",
+      "catalogState": "admitted",
+      "parserEligible": true,
+      "captureState": "capped",
+      "relativePath": "evidence/client-scripts/current/Scripts.log",
+      "sanitizedSourcePath": "SYNTHETIC://client/management/script-incomplete/Scripts.log",
+      "pathFingerprint": "safe:path:326:script-incomplete-current",
+      "sourceVersion": "5.00.TEST.3260",
+      "encoding": "utf-8",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": false
+      },
+      "collectionLimit": {
+        "capped": true,
+        "limitBytes": 128
+      }
+    },
+    {
+      "artifactId": "script-incomplete-lo",
+      "role": "client",
+      "logicalArtifactId": "client-scripts",
+      "sourceName": "Scripts.lo_",
+      "catalogState": "admitted",
+      "parserEligible": true,
+      "captureState": "captured",
+      "relativePath": "evidence/client-scripts/lo/Scripts.lo_",
+      "sanitizedSourcePath": "SYNTHETIC://client/management/script-incomplete/Scripts.lo_",
+      "pathFingerprint": "safe:path:326:script-incomplete-lo",
+      "sourceVersion": "5.00.TEST.3260",
+      "encoding": "utf-8",
+      "rotation": {
+        "kind": "lo",
+        "fragmentComplete": false
+      },
+      "collectionLimit": {
+        "capped": false,
+        "limitBytes": null
+      }
+    },
+    {
+      "artifactId": "script-incomplete-owner",
+      "role": "client",
+      "logicalArtifactId": "client-co-management",
+      "sourceName": "CoManagementHandler.log",
+      "catalogState": "admitted",
+      "parserEligible": true,
+      "captureState": "captured",
+      "relativePath": "evidence/client-co-management/current/CoManagementHandler.log",
+      "sanitizedSourcePath": "SYNTHETIC://client/management/script-incomplete/CoManagementHandler.log",
+      "pathFingerprint": "safe:path:326:script-incomplete-owner",
+      "sourceVersion": "5.00.TEST.3260",
+      "encoding": "utf-8",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "collectionLimit": {
+        "capped": false,
+        "limitBytes": null
+      }
+    }
+  ]
+}

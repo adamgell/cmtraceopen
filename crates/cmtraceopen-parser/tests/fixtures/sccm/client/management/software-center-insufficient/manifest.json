@@ -1,0 +1,104 @@
+{
+  "sccmManifestVersion": 1,
+  "contractState": "proposedPending318And319",
+  "proposalOnly": true,
+  "syntheticFixture": true,
+  "scenario": "software-center-insufficient",
+  "workflowFamily": "softwareCenter",
+  "bundle": {
+    "bundleId": "sccm-326-software-center-insufficient",
+    "captureHost": "LAB-CLIENT-01",
+    "role": "client",
+    "siteCode": "LAB"
+  },
+  "artifacts": [
+    {
+      "artifactId": "software-center-insufficient-absent",
+      "role": "client",
+      "logicalArtifactId": "client-software-center",
+      "sourceName": "SCClient_SYNTHETIC_1.log",
+      "catalogState": "candidateUnsupported",
+      "parserEligible": false,
+      "captureState": "absent",
+      "relativePath": null,
+      "sanitizedSourcePath": null,
+      "pathFingerprint": null,
+      "sourceVersion": null,
+      "encoding": null,
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": false
+      },
+      "collectionLimit": {
+        "capped": false,
+        "limitBytes": null
+      }
+    },
+    {
+      "artifactId": "software-center-insufficient-malformed",
+      "role": "client",
+      "logicalArtifactId": "client-software-center",
+      "sourceName": "SCClient_SYNTHETIC_2.log",
+      "catalogState": "candidateUnsupported",
+      "parserEligible": false,
+      "captureState": "parseFailed",
+      "relativePath": "evidence/client-software-center/current/SCClient_SYNTHETIC_2.log",
+      "sanitizedSourcePath": "SYNTHETIC://client/management/software-center-insufficient/SCClient_SYNTHETIC_2.log",
+      "pathFingerprint": "safe:path:326:software-center-malformed",
+      "sourceVersion": "5.00.TEST.3260",
+      "encoding": "utf-8",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": false
+      },
+      "collectionLimit": {
+        "capped": false,
+        "limitBytes": null
+      }
+    },
+    {
+      "artifactId": "software-center-insufficient-owner",
+      "role": "client",
+      "logicalArtifactId": "client-co-management",
+      "sourceName": "CoManagementHandler.log",
+      "catalogState": "admitted",
+      "parserEligible": true,
+      "captureState": "absent",
+      "relativePath": null,
+      "sanitizedSourcePath": null,
+      "pathFingerprint": null,
+      "sourceVersion": null,
+      "encoding": null,
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": false
+      },
+      "collectionLimit": {
+        "capped": false,
+        "limitBytes": null
+      }
+    },
+    {
+      "artifactId": "software-center-insufficient-unsupported",
+      "role": "client",
+      "logicalArtifactId": "client-software-center",
+      "sourceName": "SCNotify_SYNTHETIC_1.log",
+      "catalogState": "candidateUnsupported",
+      "parserEligible": false,
+      "captureState": "unsupported",
+      "relativePath": null,
+      "sanitizedSourcePath": "SYNTHETIC://client/management/software-center-insufficient/SCNotify_SYNTHETIC_1.log",
+      "pathFingerprint": "safe:path:326:software-center-unsupported",
+      "sourceVersion": null,
+      "encoding": null,
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": false
+      },
+      "collectionLimit": {
+        "capped": false,
+        "limitBytes": null
+      }
+    }
+  ]
+}
