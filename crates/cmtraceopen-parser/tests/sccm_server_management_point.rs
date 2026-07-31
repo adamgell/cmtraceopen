@@ -3,8 +3,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use cmtraceopen_parser::sccm::server::windows::{
-    analyze_management_point, SccmManagementPointBundle, SccmManagementPointSource,
-    SccmManagementPointTopology,
+    analyze_management_point, declared_server_source_catalog, SccmManagementPointBundle,
+    SccmManagementPointSource, SccmManagementPointTopology,
 };
 use cmtraceopen_parser::sccm::{
     declared_source_catalog, normalize_ccm_artifact, SccmArtifact, SccmArtifactFamily,
@@ -127,16 +127,17 @@ fn load_bundle(scenario: &str) -> SccmManagementPointBundle {
     let mut sources = Vec::new();
     let mut evidence = Vec::new();
     for source in manifest.artifacts {
-        assert_eq!(
-            source.role, "managementPoint",
-            "MP fixtures must preserve their server role"
-        );
+        let producer_role = match source.role.as_str() {
+            "managementPoint" => SccmRole::ManagementPoint,
+            "siteServer" => SccmRole::SiteServer,
+            other => panic!("unsupported MP fixture producer role {other}"),
+        };
         let artifact = SccmArtifact {
             artifact_id: source.artifact_id,
             display_name: source.original_basename,
             original_path: None,
             host: None,
-            role: SccmRole::ManagementPoint,
+            role: producer_role,
             configmgr_version: source.source_version,
             collected_at_utc: source.collected_utc,
             rotation: rotation(&source.rotation),
@@ -639,7 +640,7 @@ fn failed_counterpart_handoff_cites_the_decided_terminal_failure() {
 
 #[test]
 fn management_point_catalog_declares_every_reducer_source() {
-    let sources = declared_source_catalog()
+    let mp_produced = declared_source_catalog()
         .into_iter()
         .filter(|source| {
             source.role == SccmRole::ManagementPoint
@@ -647,21 +648,44 @@ fn management_point_catalog_declares_every_reducer_source() {
         })
         .map(|source| (source.basename, source.logical_name))
         .collect::<BTreeSet<_>>();
-
-    for expected in [
+    let expected_mp_produced = [
         ("MP_CliReg.log", "mpCliReg"),
         ("MP_GetAuth.log", "mpGetAuth"),
         ("MP_GetPolicy.log", "mpGetPolicy"),
         ("MP_Location.log", "mpLocation"),
         ("MP_RegistrationManager.log", "mpRegistrationManager"),
-        ("mpcontrol.log", "mpcontrol"),
-    ] {
-        let expected = (expected.0.to_owned(), expected.1.to_owned());
-        assert!(
-            sources.contains(&expected),
-            "missing MP source {expected:?}"
-        );
-    }
+    ]
+    .into_iter()
+    .map(|(basename, logical_name)| (basename.to_owned(), logical_name.to_owned()))
+    .collect::<BTreeSet<_>>();
+    assert_eq!(
+        mp_produced, expected_mp_produced,
+        "the MP-produced reducer sources are exactly the MP_* family"
+    );
+
+    let control = declared_source_catalog()
+        .into_iter()
+        .find(|source| source.basename == "mpcontrol.log")
+        .expect("mpcontrol.log stays declared in the shared catalog");
+    assert_eq!(
+        control.role,
+        SccmRole::SiteServer,
+        "mpcontrol.log is produced by the site-server MP control workflow"
+    );
+    assert_eq!(control.family, SccmArtifactFamily::ManagementPoint);
+
+    let subject_row = declared_server_source_catalog()
+        .iter()
+        .find(|spec| {
+            spec.source_id == "server-mp-policy" && spec.producer_role == SccmRole::SiteServer
+        })
+        .expect("subject-scoped mpcontrol server source row");
+    assert_eq!(
+        subject_row.workflow_subject_role,
+        Some(SccmRole::ManagementPoint),
+        "mpcontrol is evidence about the Management Point, not by it"
+    );
+    assert_eq!(subject_row.logical_names, ["mpcontrol"].as_slice());
 }
 
 fn analysis_value(bundle: &SccmManagementPointBundle) -> Value {
@@ -1436,5 +1460,76 @@ fn management_point_transaction_citations_do_not_span_rejected_records() {
         analysis_value(&bundle),
         first,
         "disjoint exact citations must be stable under bundle reversal"
+    );
+}
+
+#[test]
+fn site_server_mpcontrol_never_shapes_management_point_coverage_states() {
+    for control_coverage in [SccmCoverageState::Captured, SccmCoverageState::AccessDenied] {
+        let mut bundle = load_bundle("iis-supplemental");
+        bundle
+            .evidence
+            .retain(|evidence| evidence.reference.artifact_id != "mp-iis-policy-current");
+        bundle
+            .sources
+            .retain(|source| source.artifact.artifact_id != "mp-iis-policy-current");
+        let control = bundle
+            .sources
+            .iter_mut()
+            .find(|source| source.artifact.artifact_id == "mp-iis-control-current")
+            .expect("subject-scoped mpcontrol source");
+        assert_eq!(
+            control.artifact.role,
+            SccmRole::SiteServer,
+            "the fixture must model mpcontrol as site-server-produced"
+        );
+        control.artifact.coverage = control_coverage.clone();
+
+        let analysis = analysis_value(&bundle);
+        assert_eq!(
+            analysis["coverageGaps"],
+            json!([{
+                "logicalArtifactId": "server-mp-policy",
+                "role": "managementPoint",
+                "state": "absent",
+            }]),
+            "{control_coverage:?}: a site-server mpcontrol capture must not \
+             masquerade as MP-produced policy coverage"
+        );
+    }
+}
+
+#[test]
+fn mp_produced_mpcontrol_claims_fail_closed_as_rejected_evidence() {
+    let mut bundle = load_bundle("iis-supplemental");
+    let control = bundle
+        .sources
+        .iter_mut()
+        .find(|source| source.artifact.artifact_id == "mp-iis-control-current")
+        .expect("subject-scoped mpcontrol source");
+    control.artifact.role = SccmRole::ManagementPoint;
+    for evidence in &mut bundle.evidence {
+        if evidence.reference.artifact_id == "mp-iis-control-current" {
+            evidence.role = SccmRole::ManagementPoint;
+        }
+    }
+
+    let analysis = analysis_value(&bundle);
+    assert!(
+        analysis["sourceLocalObservations"]
+            .as_array()
+            .expect("source-local observations")
+            .iter()
+            .any(|observation| {
+                observation["classification"] == "lowConfidenceSymptom"
+                    && observation["correlationEligible"] == false
+                    && observation["evidence"]
+                        .as_array()
+                        .expect("observation evidence")
+                        .iter()
+                        .any(|reference| reference["artifactId"] == "mp-iis-control-current")
+            }),
+        "an mpcontrol source claiming MP production is a contract violation \
+         and must surface as rejected evidence, not silent supplemental input"
     );
 }
