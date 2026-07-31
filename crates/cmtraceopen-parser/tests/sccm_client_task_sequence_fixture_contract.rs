@@ -2267,6 +2267,55 @@ fn adversarial_contract_mutations_fail_closed() {
 }
 
 #[test]
+fn last_successful_phase_requires_the_admissible_observed_phase() {
+    for scenario in [
+        "terminal-preflight",
+        "client-installed",
+        "reboot-continuation",
+    ] {
+        let scenario_root = task_sequence_root().join(scenario);
+        let manifest = read_json(&scenario_root.join("manifest.json"));
+        let mut expected = read_json(&scenario_root.join("expected.json"));
+        expected["transactions"][0]["lastSuccessfulPhase"] = Value::String("complete".to_owned());
+
+        let error = validate_contract(scenario, &scenario_root, &manifest, &expected)
+            .expect_err("an uncited later phase cannot become the last successful phase");
+        assert!(error.contains("lastSuccessfulPhase"), "{scenario}: {error}");
+    }
+}
+
+#[test]
+fn exact_key_kind_is_bound_to_the_task_sequence_profile() {
+    let scenario = "completed";
+    let scenario_root = task_sequence_root().join(scenario);
+    let manifest = read_json(&scenario_root.join("manifest.json"));
+    let mut expected = read_json(&scenario_root.join("expected.json"));
+    expected["transactions"][0]["key"]["keyProfileKind"] =
+        Value::String("filenameTimestamp".to_owned());
+
+    let error = validate_contract(scenario, &scenario_root, &manifest, &expected)
+        .expect_err("an exact key cannot advertise an unrelated profile kind");
+    assert!(error.contains("keyProfileKind"), "{error}");
+}
+
+#[test]
+fn transaction_evidence_order_is_canonical_and_unique() {
+    let scenario = "relocated-fragments";
+    let scenario_root = task_sequence_root().join(scenario);
+    let manifest = read_json(&scenario_root.join("manifest.json"));
+    let mut expected = read_json(&scenario_root.join("expected.json"));
+    let evidence = expected["transactions"][0]["evidence"]
+        .as_array_mut()
+        .expect("transaction evidence is an array");
+    let last = evidence.len() - 1;
+    evidence.swap(0, last);
+
+    let error = validate_contract(scenario, &scenario_root, &manifest, &expected)
+        .expect_err("transaction evidence must retain canonical relocation order");
+    assert!(error.contains("evidence order"), "{error}");
+}
+
+#[test]
 fn coherent_review_mutations_fail_closed() {
     let mut accepted = Vec::new();
 
