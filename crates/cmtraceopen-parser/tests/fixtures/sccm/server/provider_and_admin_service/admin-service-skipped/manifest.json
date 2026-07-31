@@ -1,0 +1,44 @@
+{
+  "sccmManifestVersion": 1,
+  "proposalOnly": true,
+  "syntheticFixture": true,
+  "scenario": "admin-service-skipped",
+  "bundle": {
+    "bundleRole": "server",
+    "workflow": "providerAndAdminService",
+    "capturedUtc": "2026-07-31T11:30:00Z"
+  },
+  "topology": {
+    "siteCode": "LAB",
+    "rolesObserved": ["provider"],
+    "endpoints": [
+      {
+        "endpointId": "admin-service-lab",
+        "layer": "adminService",
+        "hostHandle": "safe:server:lab-provider-01",
+        "producerRole": "provider"
+      }
+    ]
+  },
+  "artifacts": [
+    {
+      "artifactId": "coverage-admin-skipped",
+      "sourceId": "server-admin-service",
+      "producerRole": "provider",
+      "layer": "adminService",
+      "producerHostHandle": "safe:server:lab-provider-01",
+      "endpointId": "admin-service-lab",
+      "diagnosticUse": "primary",
+      "originalBasename": "AdminService.log",
+      "sanitizedSourcePath": "SYNTHETIC://configured-root/LAB/Logs/AdminService.log",
+      "pathFingerprint": "synthetic:admin-skipped",
+      "rotation": {
+        "kind": "current",
+        "lineageId": "admin-skipped"
+      },
+      "captureState": "skipped",
+      "sourceVersion": "5.00.UNKNOWN",
+      "collectedUtc": "2026-07-31T11:30:00Z"
+    }
+  ]
+}

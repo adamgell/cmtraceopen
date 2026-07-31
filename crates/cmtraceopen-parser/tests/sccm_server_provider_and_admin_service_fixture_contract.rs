@@ -9,10 +9,14 @@ use cmtraceopen_parser::sccm::{
 };
 use serde_json::Value;
 
-const SCENARIOS: [&str; 13] = [
+const SCENARIOS: [&str; 20] = [
+    "admin-service-access-denied",
     "admin-service-auth-failure",
     "admin-service-backend-failure",
+    "admin-service-parse-failed",
+    "admin-service-skipped",
     "admin-service-success",
+    "blocked-deferred",
     "contradictory-evidence",
     "iis-supplemental",
     "incomplete",
@@ -20,6 +24,9 @@ const SCENARIOS: [&str; 13] = [
     "provider-authz-denied",
     "provider-query-failure",
     "provider-retry",
+    "provider-source-absent",
+    "provider-source-capped",
+    "provider-source-unsupported",
     "provider-success",
     "provider-timeout",
     "rotation-boundary",
@@ -355,6 +362,9 @@ fn expected_transaction_ids(scenario: &str) -> &'static [&'static str] {
         "admin-service-success" => &[
             "adminService:55555555-5555-5555-5555-555555555555:safe-operation-admin-read:admin-service-lab",
         ],
+        "blocked-deferred" => &[
+            "adminService:eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee:safe-operation-admin-deferred:admin-service-lab",
+        ],
         "contradictory-evidence" => &[
             "provider:dddddddd-dddd-dddd-dddd-dddddddddddd:safe-operation-contradictory:provider-local",
         ],
@@ -410,6 +420,7 @@ fn expected_outcomes(
         "provider-timeout" | "incomplete" => {
             &[("incomplete", "insufficientEvidence", "low", "low")]
         }
+        "blocked-deferred" => &[("incomplete", "insufficientEvidence", "low", "low")],
         "rotation-boundary" => &[],
         _ => &[],
     }
@@ -423,6 +434,9 @@ fn expected_public_summaries(scenario: &str) -> &'static [&'static str] {
         }
         "admin-service-success" => {
             &["Admin Service request completed with explicit terminal evidence."]
+        }
+        "blocked-deferred" => {
+            &["Admin Service evidence records a blocked or deferred request without a terminal outcome."]
         }
         "contradictory-evidence" => &[
             "Provider evidence contains contradictory terminal outcomes for one exact request key.",
@@ -447,9 +461,13 @@ fn expected_public_summaries(scenario: &str) -> &'static [&'static str] {
 
 fn expected_artifact_ids(scenario: &str) -> &'static [&'static str] {
     match scenario {
+        "admin-service-access-denied" => &["coverage-admin-access-denied"],
         "admin-service-auth-failure" => &["admin-auth-current"],
         "admin-service-backend-failure" => &["admin-backend-current"],
+        "admin-service-parse-failed" => &["coverage-admin-parse-failed"],
+        "admin-service-skipped" => &["coverage-admin-skipped"],
         "admin-service-success" => &["admin-success-current"],
+        "blocked-deferred" => &["blocked-deferred-admin-current"],
         "contradictory-evidence" => &["contradictory-provider-current"],
         "iis-supplemental" => &["admin-iis-current", "iis-supplemental-current"],
         "incomplete" => &["incomplete-admin-current"],
@@ -457,6 +475,9 @@ fn expected_artifact_ids(scenario: &str) -> &'static [&'static str] {
         "provider-authz-denied" => &["provider-authz-current"],
         "provider-query-failure" => &["provider-query-current"],
         "provider-retry" => &["provider-retry-current"],
+        "provider-source-absent" => &["coverage-provider-absent"],
+        "provider-source-capped" => &["coverage-provider-capped"],
+        "provider-source-unsupported" => &["coverage-provider-unsupported"],
         "provider-success" => &["provider-success-current"],
         "provider-timeout" => &["provider-timeout-current"],
         "rotation-boundary" => &["rotation-01-current", "rotation-02-lo"],
@@ -485,6 +506,10 @@ fn expected_observation_ids(scenario: &str) -> &'static [&'static str] {
             "admin-success-04-backend",
             "admin-success-05-respond",
             "admin-success-06-outcome",
+        ],
+        "blocked-deferred" => &[
+            "blocked-deferred-01-receive",
+            "blocked-deferred-02-deferred",
         ],
         "contradictory-evidence" => &[
             "contradictory-01-receive",
@@ -570,6 +595,22 @@ fn expected_source_local_reasons(scenario: &str) -> &'static [&'static str] {
 
 fn expected_artifact_requests(scenario: &str) -> &'static [(&'static str, &'static str)] {
     match scenario {
+        "admin-service-access-denied" => &[(
+            "server-admin-service",
+            "Capture bounded Admin Service evidence after access is authorized; access-denied coverage is not an outcome.",
+        )],
+        "admin-service-parse-failed" => &[(
+            "server-admin-service",
+            "Recapture or repair the bounded Admin Service source; malformed evidence is coverage, not an outcome.",
+        )],
+        "admin-service-skipped" => &[(
+            "server-admin-service",
+            "Capture the bounded Admin Service source; skipped coverage does not establish a workflow outcome.",
+        )],
+        "blocked-deferred" => &[(
+            "server-admin-service",
+            "Capture the bounded Admin Service source lineage through an explicit terminal outcome after the blocked or deferred phase.",
+        )],
         "incomplete" => &[(
             "server-admin-service",
             "Capture the bounded Admin Service source lineage for the exact request key and terminal outcome.",
@@ -577,6 +618,18 @@ fn expected_artifact_requests(scenario: &str) -> &'static [(&'static str, &'stat
         "provider-timeout" => &[(
             "server-provider",
             "Capture the bounded Provider source lineage for the exact request key and terminal outcome.",
+        )],
+        "provider-source-absent" => &[(
+            "server-provider",
+            "Capture the bounded Provider source; absent coverage does not establish a workflow outcome.",
+        )],
+        "provider-source-capped" => &[(
+            "server-provider",
+            "Recapture the bounded Provider source without truncating the required transaction evidence.",
+        )],
+        "provider-source-unsupported" => &[(
+            "server-provider",
+            "Use a supported versioned Provider source profile before evaluating request outcomes.",
         )],
         "contradictory-evidence" => &[(
             "server-provider",
@@ -592,9 +645,13 @@ fn expected_artifact_requests(scenario: &str) -> &'static [(&'static str, &'stat
 
 fn expected_profile_layers(scenario: &str) -> &'static [&'static str] {
     match scenario {
-        "admin-service-auth-failure"
+        "admin-service-access-denied"
+        | "admin-service-auth-failure"
         | "admin-service-backend-failure"
+        | "admin-service-parse-failed"
+        | "admin-service-skipped"
         | "admin-service-success"
+        | "blocked-deferred"
         | "iis-supplemental"
         | "incomplete" => &["adminService"],
         "privacy-redaction" => &["adminService", "provider"],
@@ -602,6 +659,9 @@ fn expected_profile_layers(scenario: &str) -> &'static [&'static str] {
         | "contradictory-evidence"
         | "provider-query-failure"
         | "provider-retry"
+        | "provider-source-absent"
+        | "provider-source-capped"
+        | "provider-source-unsupported"
         | "provider-success"
         | "provider-timeout"
         | "rotation-boundary" => &["provider"],
@@ -1637,6 +1697,23 @@ fn provider_and_admin_service_scenario_matrix_is_exact() {
 }
 
 #[test]
+fn preparation_state_records_reviewed_dependencies_as_available() {
+    let mut stale = Vec::new();
+    for scenario in SCENARIOS {
+        let expected =
+            read_json(scenario, "expected.json").unwrap_or_else(|error| panic!("{error}"));
+        if expected["contractState"] != "preparationOnlyReviewedDependenciesAvailable" {
+            stale.push(scenario);
+        }
+    }
+
+    assert!(
+        stale.is_empty(),
+        "preparation outputs still claim reviewed #318/#335 dependencies are pending: {stale:#?}"
+    );
+}
+
+#[test]
 fn provider_and_admin_service_sources_are_layered_and_role_exact() {
     let provider = classify_artifact_name("Smsprov.log", SccmRole::Provider);
     assert_eq!(provider.family, SccmArtifactFamily::Provider);
@@ -1978,6 +2055,80 @@ fn privacy_iis_and_missing_source_controls_stay_conservative() {
     let incomplete = read_json("incomplete", "expected.json").unwrap();
     assert_eq!(
         incomplete["artifactRequests"][0]["logicalArtifactId"],
+        "server-admin-service"
+    );
+}
+
+#[test]
+fn noncaptured_malformed_and_blocked_deferred_coverage_are_not_outcomes() {
+    let coverage_cases = [
+        (
+            "admin-service-access-denied",
+            "accessDenied",
+            "adminService",
+            "server-admin-service",
+        ),
+        (
+            "admin-service-parse-failed",
+            "parseFailed",
+            "adminService",
+            "server-admin-service",
+        ),
+        (
+            "admin-service-skipped",
+            "skipped",
+            "adminService",
+            "server-admin-service",
+        ),
+        (
+            "provider-source-absent",
+            "absent",
+            "provider",
+            "server-provider",
+        ),
+        (
+            "provider-source-capped",
+            "capped",
+            "provider",
+            "server-provider",
+        ),
+        (
+            "provider-source-unsupported",
+            "unsupported",
+            "provider",
+            "server-provider",
+        ),
+    ];
+
+    for (scenario, state, layer, request) in coverage_cases {
+        let expected = read_json(scenario, "expected.json").unwrap();
+        assert_eq!(expected["coverage"][0]["state"], state, "{scenario}");
+        assert_eq!(expected["coverage"][0]["layer"], layer, "{scenario}");
+        assert_eq!(
+            expected["transactions"],
+            serde_json::json!([]),
+            "{scenario}"
+        );
+        assert_eq!(
+            expected["artifactRequests"][0]["logicalArtifactId"], request,
+            "{scenario}"
+        );
+        assert_eq!(
+            expected["crossSideCausalClaims"],
+            serde_json::json!([]),
+            "{scenario}"
+        );
+    }
+
+    let blocked = read_json("blocked-deferred", "expected.json").unwrap();
+    let transaction = &blocked["transactions"][0];
+    assert_eq!(transaction["state"], "incomplete");
+    assert_eq!(transaction["classification"], "insufficientEvidence");
+    assert_eq!(transaction["confidence"], "low");
+    assert_eq!(transaction["terminalEvidence"], false);
+    assert_eq!(transaction["observations"][1]["disposition"], "pending");
+    assert_eq!(
+        blocked["artifactRequests"][0]["logicalArtifactId"],
         "server-admin-service"
     );
 }
@@ -2625,6 +2776,111 @@ fn provider_retry_requires_an_explicit_retryable_failure_then_recovery() {
     assert!(
         !schema_failures("provider-retry", &manifest, &expected).is_empty(),
         "a nominal success sequence replaced the explicit retryable failure"
+    );
+}
+
+#[test]
+fn high_success_requires_every_layer_phase_in_order() {
+    let cases = [
+        (
+            "provider-success",
+            1_usize,
+            "authenticateOrAuthorize",
+            "receive",
+        ),
+        (
+            "admin-service-success",
+            2_usize,
+            "route",
+            "authenticateOrAuthorize",
+        ),
+    ];
+    let mut accepted = Vec::new();
+
+    for (scenario, observation_index, required_phase, replacement_phase) in cases {
+        let manifest = read_json(scenario, "manifest.json").unwrap();
+        let mut expected = read_json(scenario, "expected.json").unwrap();
+        let mut records = normalized_records(scenario, &manifest);
+        assert!(
+            schema_failures_with_records(scenario, &manifest, &expected, &records).is_empty(),
+            "{scenario}: baseline contract is invalid"
+        );
+
+        let observation = &mut expected["transactions"][0]["observations"][observation_index];
+        observation["phase"] = Value::String(replacement_phase.to_owned());
+        let artifact_id = observation["evidence"][0]["artifactId"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let start_line =
+            u32::try_from(observation["evidence"][0]["startLine"].as_u64().unwrap()).unwrap();
+        let end_line =
+            u32::try_from(observation["evidence"][0]["endLine"].as_u64().unwrap()).unwrap();
+        let record = records
+            .get_mut(&(artifact_id, start_line, end_line))
+            .expect("paired logical record exists");
+        record.message = record.message.replacen(
+            &format!("Phase={required_phase}"),
+            &format!("Phase={replacement_phase}"),
+            1,
+        );
+
+        if schema_failures_with_records(scenario, &manifest, &expected, &records).is_empty() {
+            accepted.push(scenario);
+        }
+    }
+
+    assert!(
+        accepted.is_empty(),
+        "paired high-success records omitted required phases: {accepted:#?}"
+    );
+}
+
+#[test]
+fn provider_retry_recovery_is_bound_to_the_failed_phase() {
+    let scenario = "provider-retry";
+    let manifest = read_json(scenario, "manifest.json").unwrap();
+    let mut expected = read_json(scenario, "expected.json").unwrap();
+    let mut records = normalized_records(scenario, &manifest);
+    assert!(
+        schema_failures_with_records(scenario, &manifest, &expected, &records).is_empty(),
+        "provider-retry baseline contract is invalid"
+    );
+
+    let observation = &mut expected["transactions"][0]["observations"][0];
+    observation["disposition"] = Value::String("retryableFailure".to_owned());
+    let artifact_id = observation["evidence"][0]["artifactId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let start_line =
+        u32::try_from(observation["evidence"][0]["startLine"].as_u64().unwrap()).unwrap();
+    let end_line = u32::try_from(observation["evidence"][0]["endLine"].as_u64().unwrap()).unwrap();
+    let record = records
+        .get_mut(&(artifact_id, start_line, end_line))
+        .expect("paired retry logical record exists");
+    record.message =
+        record
+            .message
+            .replacen("Disposition=succeeded", "Disposition=retryableFailure", 1);
+
+    assert!(
+        !schema_failures_with_records(scenario, &manifest, &expected, &records).is_empty(),
+        "an unrecovered receive-phase retryable failure retained terminal high success"
+    );
+}
+
+#[test]
+fn rejected_fixture_segment_diagnostic_omits_raw_value() {
+    let sensitive = "private-credential-value";
+    let message = format!(
+        "[sccm-public-message-v1] SYNTHETIC FIXTURE; Phase=receive; AuthorizationHeader {sensitive}"
+    );
+    let error = parse_fixture_fields(&message).expect_err("malformed fixture segment is rejected");
+
+    assert!(
+        !error.contains(sensitive),
+        "rejected fixture diagnostic echoed a raw private value: {error}"
     );
 }
 

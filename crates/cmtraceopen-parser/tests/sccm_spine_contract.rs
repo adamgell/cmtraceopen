@@ -4647,6 +4647,16 @@ fn evidence_public_message_projection_redacts_provider_handles_in_all_positions(
             "private-auth-tail",
             None,
         ),
+        (
+            "AuthorizationHeader=Custom private-credential-value; status=81",
+            "private-credential-value",
+            Some("status=81"),
+        ),
+        (
+            "QueryHandle=SELECT 1; DROP TABLE private_object; status=80",
+            "DROP TABLE private_object",
+            Some("status=80"),
+        ),
     ];
 
     for (raw_message, sensitive, safe_tail) in cases {

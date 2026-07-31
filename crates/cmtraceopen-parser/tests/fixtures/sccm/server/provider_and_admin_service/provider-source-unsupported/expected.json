@@ -1,0 +1,28 @@
+{
+  "contractState": "proposedPendingReviewed318And335",
+  "workflow": "providerAndAdminService",
+  "scenario": "provider-source-unsupported",
+  "profiles": [
+    {
+      "layer": "provider",
+      "selectionState": "unknownVersion"
+    }
+  ],
+  "coverage": [
+    {
+      "artifactId": "coverage-provider-unsupported",
+      "state": "unsupported",
+      "sourceId": "server-provider",
+      "layer": "provider"
+    }
+  ],
+  "transactions": [],
+  "sourceLocalObservations": [],
+  "artifactRequests": [
+    {
+      "logicalArtifactId": "server-provider",
+      "reason": "Use a supported versioned Provider source profile before evaluating request outcomes."
+    }
+  ],
+  "crossSideCausalClaims": []
+}

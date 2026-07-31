@@ -1,0 +1,78 @@
+{
+  "contractState": "proposedPendingReviewed318And335",
+  "workflow": "providerAndAdminService",
+  "scenario": "blocked-deferred",
+  "profiles": [
+    {
+      "layer": "adminService",
+      "selectionState": "selectedSynthetic",
+      "profileId": "admin-service-server-5.00.test-v1"
+    }
+  ],
+  "coverage": [
+    {
+      "artifactId": "blocked-deferred-admin-current",
+      "state": "captured",
+      "sourceId": "server-admin-service",
+      "layer": "adminService"
+    }
+  ],
+  "transactions": [
+    {
+      "transactionId": "adminService:eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee:safe-operation-admin-deferred:admin-service-lab",
+      "layer": "adminService",
+      "key": {
+        "requestId": "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee",
+        "operationHandle": "safe-operation-admin-deferred",
+        "endpointId": "admin-service-lab",
+        "confidence": "exact",
+        "extractionProfileId": "admin-service-server-5.00.test-v1"
+      },
+      "topologyCompatibility": "exact",
+      "timestampOrdering": "usable",
+      "state": "incomplete",
+      "classification": "insufficientEvidence",
+      "confidence": "low",
+      "confidenceCeiling": "low",
+      "terminalEvidence": false,
+      "coverageGapArtifactIds": [],
+      "publicSummary": "Admin Service evidence records a blocked or deferred request without a terminal outcome.",
+      "observations": [
+        {
+          "observationId": "blocked-deferred-01-receive",
+          "phase": "receive",
+          "disposition": "succeeded",
+          "terminal": false,
+          "evidence": [
+            {
+              "artifactId": "blocked-deferred-admin-current",
+              "startLine": 1,
+              "endLine": 1
+            }
+          ]
+        },
+        {
+          "observationId": "blocked-deferred-02-deferred",
+          "phase": "route",
+          "disposition": "pending",
+          "terminal": false,
+          "evidence": [
+            {
+              "artifactId": "blocked-deferred-admin-current",
+              "startLine": 2,
+              "endLine": 2
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "sourceLocalObservations": [],
+  "artifactRequests": [
+    {
+      "logicalArtifactId": "server-admin-service",
+      "reason": "Capture the bounded Admin Service source lineage through an explicit terminal outcome after the blocked or deferred phase."
+    }
+  ],
+  "crossSideCausalClaims": []
+}
