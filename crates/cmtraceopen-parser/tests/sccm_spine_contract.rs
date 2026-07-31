@@ -236,6 +236,94 @@ const REVIEW_BOUNDED_NAMED_ARTIFACT_REQUESTS: [(&str, &str); 14] = [
     ),
 ];
 
+const REVIEW_EXPANDED_UNBOUNDED_ARTIFACT_REQUEST_REASONS: [&str; 49] = [
+    "Recursively; collect PolicyAgent.log.",
+    "Collect PolicyAgent.log. Recursively.",
+    "Collect PolicyAgent.log! Recursively.",
+    "Collect PolicyAgent.log; this request also applies recursively.",
+    "Collect PolicyAgent.log; use recursion.",
+    "Use recursion; collect PolicyAgent.log.",
+    "Collect PolicyAgent.log; recurse.",
+    "Recurse; collect PolicyAgent.log.",
+    "Collect PolicyAgent.log; scan the filesystem.",
+    "Scan the filesystem; collect PolicyAgent.log.",
+    "Collect PolicyAgent.log; traverse directories.",
+    "Collect PolicyAgent.log; enumerate the filesystem.",
+    "Collect PolicyAgent.log; archive the filesystem.",
+    "Collect PolicyAgent.log; search system logs.",
+    "Collect PolicyAgent.log; gather device logs.",
+    "Collect PolicyAgent.log; capture machine files.",
+    "Collect PolicyAgent.log; logs from the machine.",
+    "Collect PolicyAgent.log; across the filesystem.",
+    "Collect PolicyAgent.log; throughout the system.",
+    "Collect PolicyAgent.log; from root.",
+    "At root; collect PolicyAgent.log.",
+    "Collect PolicyAgent.log; device root.",
+    "Collect PolicyAgent.log; systemwide.",
+    "System-wide; collect PolicyAgent.log.",
+    "Collect PolicyAgent.log; sitewide.",
+    "Collect PolicyAgent.log; across all systems.",
+    "Collect PolicyAgent.log; from every machine.",
+    "Collect PolicyAgent.log; the entire system.",
+    "Collect PolicyAgent.log; all data.",
+    "Collect PolicyAgent.log; all records on the system.",
+    "Collect PolicyAgent.log; everything from the system.",
+    "Collect PolicyAgent.log; capture everything.",
+    "Collect PolicyAgent.log; download all data.",
+    "Collect PolicyAgent.log; collect related files.",
+    "Collect all disks, status is recorded in PolicyAgent.log.",
+    "Collect every drive, encryption status is recorded in PolicyAgent.log.",
+    "Collect all files, download status is recorded in PolicyAgent.log.",
+    "Collect the whole filesystem status from PolicyAgent.log.",
+    "Collect complete machine status files recorded in PolicyAgent.log.",
+    "Collect C:.",
+    "Collect D: for evidence.",
+    "Collect %SYSTEMROOT%.",
+    "Collect %WINDIR%.",
+    "Collect %SystemDrive%.",
+    "Collect $env:SystemRoot.",
+    "Collect ../PolicyAgent.log.",
+    r"Collect ..\PolicyAgent.log.",
+    "Collect Logs/../PolicyAgent.log.",
+    "Collect PolicyAgent.log; recursively.",
+];
+
+const REVIEW_LOOKALIKE_ARTIFACT_REQUEST_REASONS: [&str; 4] = [
+    "Collect every PolicyAgent-backup.log file.",
+    "Collect every PolicyAgent.log.backup file.",
+    "Collect every PolicyAgent—backup.log file.",
+    "Collect every PolicyAgent backup file.",
+];
+
+const REVIEW_UNQUALIFIED_COLLECTION_ACTION_REASONS: [&str; 15] = [
+    "Archive diagnostics.zip.",
+    "Capture the registry.",
+    "Collect unrelated.log.",
+    "Copy database.db.",
+    "Download package.bin.",
+    "Enumerate registry keys.",
+    "Export credentials.json.",
+    "Gather diagnostics.",
+    "Inspect arbitrary.txt.",
+    "Obtain secrets.txt.",
+    "Read config.ini.",
+    "Scan unrelated.log.",
+    "Search temp files.",
+    "Traverse cache.",
+    "Walk the directory tree.",
+];
+
+const REVIEW_EXACT_MP_ARTIFACT_REQUESTS: [(&str, &str); 5] = [
+    ("mpCliReg", "Collect the complete MP_CliReg.log file."),
+    ("mpGetAuth", "Collect the complete MP_GetAuth.log file."),
+    ("mpGetPolicy", "Collect the complete MP_GetPolicy.log file."),
+    ("mpLocation", "Collect the complete MP_Location.log file."),
+    (
+        "mpRegistrationManager",
+        "Collect the complete MP_RegistrationManager.log file.",
+    ),
+];
+
 #[derive(Clone, Copy, Debug)]
 enum FindingEvidenceAliasSurface {
     TopLevel,
@@ -1193,6 +1281,32 @@ fn finding_phase_unknown_values_require_canonical_standalone_serde() {
 }
 
 #[test]
+fn finding_terminal_evidence_kind_unknown_values_require_canonical_standalone_serde() {
+    for value in ["", " ", " futureTerminalKind "] {
+        assert!(
+            serde_json::to_string(&SccmTerminalEvidenceKind::Unknown(value.into())).is_err(),
+            "serialized {value:?}"
+        );
+        let wire = serde_json::to_string(value).unwrap();
+        assert!(
+            serde_json::from_str::<SccmTerminalEvidenceKind>(&wire).is_err(),
+            "deserialized {value:?}"
+        );
+    }
+    assert!(
+        serde_json::to_string(&SccmTerminalEvidenceKind::Unknown("observedFailure".into()))
+            .is_err()
+    );
+
+    let future = SccmTerminalEvidenceKind::Unknown("futureTerminalKind".into());
+    let wire = serde_json::to_string(&future).unwrap();
+    assert_eq!(
+        serde_json::from_str::<SccmTerminalEvidenceKind>(&wire).unwrap(),
+        future
+    );
+}
+
+#[test]
 fn finding_role_unknown_values_cannot_shadow_declared_roles() {
     for value in ["", " ", " futureRole "] {
         assert!(
@@ -1561,6 +1675,279 @@ fn finding_review_bounded_named_artifact_matrix_passes_every_public_boundary() {
     assert!(
         rejected.is_empty(),
         "rejected reviewed bounded request boundaries: {rejected:#?}"
+    );
+}
+
+#[test]
+fn finding_review_expanded_unbounded_scope_fails_at_every_public_boundary() {
+    let canonical = finding_with_gap_and_request("review-expanded-unbounded-scope-parity");
+    let mut accepted = Vec::new();
+
+    for reason in REVIEW_EXPANDED_UNBOUNDED_ARTIFACT_REQUEST_REASONS {
+        let builder = SccmFindingBuilder::new("review-expanded-unbounded-scope-builder")
+            .class(SccmFindingClass::Symptom)
+            .phase(SccmPhase::Policy)
+            .role(SccmRole::Client)
+            .severity(Severity::Warning)
+            .confidence(SccmConfidence::Low)
+            .evidence(vec![finding_evidence_ref("artifact-a", "entry-a")])
+            .next_artifact(finding_request("policyAgent", SccmRole::Client, reason))
+            .build();
+        if builder.err() != Some(SccmFindingValidationError::InvalidArtifactRequestReason) {
+            accepted.push(format!("builder: {reason}"));
+        }
+
+        let mut direct = canonical.clone();
+        direct.next_artifacts[0].reason = reason.into();
+        if direct.validate().err() != Some(SccmFindingValidationError::InvalidArtifactRequestReason)
+        {
+            accepted.push(format!("direct validate: {reason}"));
+        }
+        if serde_json::to_value(&direct).is_ok() {
+            accepted.push(format!("serializer: {reason}"));
+        }
+
+        let mut json = serde_json::to_value(&canonical).unwrap();
+        json["nextArtifacts"][0]["reason"] = serde_json::json!(reason);
+        if serde_json::from_value::<SccmFinding>(json).is_ok() {
+            accepted.push(format!("deserializer: {reason}"));
+        }
+    }
+
+    assert!(
+        accepted.is_empty(),
+        "accepted expanded unbounded request boundaries: {accepted:#?}"
+    );
+}
+
+#[test]
+fn finding_review_lookalike_identity_fails_at_every_public_boundary() {
+    let canonical = finding_with_gap_and_request("review-lookalike-identity-parity");
+    let mut accepted = Vec::new();
+
+    for reason in REVIEW_LOOKALIKE_ARTIFACT_REQUEST_REASONS {
+        let builder = SccmFindingBuilder::new("review-lookalike-identity-builder")
+            .class(SccmFindingClass::Symptom)
+            .phase(SccmPhase::Policy)
+            .role(SccmRole::Client)
+            .severity(Severity::Warning)
+            .confidence(SccmConfidence::Low)
+            .evidence(vec![finding_evidence_ref("artifact-a", "entry-a")])
+            .next_artifact(finding_request("policyAgent", SccmRole::Client, reason))
+            .build();
+        if builder.err() != Some(SccmFindingValidationError::InvalidArtifactRequestReason) {
+            accepted.push(format!("builder: {reason}"));
+        }
+
+        let mut direct = canonical.clone();
+        direct.next_artifacts[0].reason = reason.into();
+        if direct.validate().err() != Some(SccmFindingValidationError::InvalidArtifactRequestReason)
+        {
+            accepted.push(format!("direct validate: {reason}"));
+        }
+        if serde_json::to_value(&direct).is_ok() {
+            accepted.push(format!("serializer: {reason}"));
+        }
+
+        let mut json = serde_json::to_value(&canonical).unwrap();
+        json["nextArtifacts"][0]["reason"] = serde_json::json!(reason);
+        if serde_json::from_value::<SccmFinding>(json).is_ok() {
+            accepted.push(format!("deserializer: {reason}"));
+        }
+    }
+
+    assert!(
+        accepted.is_empty(),
+        "accepted lookalike artifact request boundaries: {accepted:#?}"
+    );
+}
+
+#[test]
+fn finding_review_unqualified_collection_actions_fail_at_every_public_boundary() {
+    let canonical = finding_with_gap_and_request("review-unqualified-action-parity");
+    let mut accepted = Vec::new();
+
+    for reason in REVIEW_UNQUALIFIED_COLLECTION_ACTION_REASONS {
+        let builder = SccmFindingBuilder::new("review-unqualified-action-builder")
+            .class(SccmFindingClass::Symptom)
+            .phase(SccmPhase::Policy)
+            .role(SccmRole::Client)
+            .severity(Severity::Warning)
+            .confidence(SccmConfidence::Low)
+            .evidence(vec![finding_evidence_ref("artifact-a", "entry-a")])
+            .next_artifact(finding_request("policyAgent", SccmRole::Client, reason))
+            .build();
+        if builder.err() != Some(SccmFindingValidationError::InvalidArtifactRequestReason) {
+            accepted.push(format!("builder: {reason}"));
+        }
+
+        let mut direct = canonical.clone();
+        direct.next_artifacts[0].reason = reason.into();
+        if direct.validate().err() != Some(SccmFindingValidationError::InvalidArtifactRequestReason)
+        {
+            accepted.push(format!("direct validate: {reason}"));
+        }
+        if serde_json::to_value(&direct).is_ok() {
+            accepted.push(format!("serializer: {reason}"));
+        }
+
+        let mut json = serde_json::to_value(&canonical).unwrap();
+        json["nextArtifacts"][0]["reason"] = serde_json::json!(reason);
+        if serde_json::from_value::<SccmFinding>(json).is_ok() {
+            accepted.push(format!("deserializer: {reason}"));
+        }
+    }
+
+    assert!(
+        accepted.is_empty(),
+        "accepted unqualified collection action boundaries: {accepted:#?}"
+    );
+}
+
+#[test]
+fn finding_review_exact_mp_identity_passes_every_public_boundary() {
+    let canonical = finding_with_gap_and_request("review-exact-mp-identity-parity");
+    let mut rejected = Vec::new();
+
+    for (logical_id, reason) in REVIEW_EXACT_MP_ARTIFACT_REQUESTS {
+        let builder = SccmFindingBuilder::new("review-exact-mp-identity-builder")
+            .class(SccmFindingClass::Symptom)
+            .phase(SccmPhase::Policy)
+            .role(SccmRole::ManagementPoint)
+            .severity(Severity::Warning)
+            .confidence(SccmConfidence::Low)
+            .evidence(vec![finding_evidence_ref("artifact-a", "entry-a")])
+            .next_artifact(finding_request(
+                logical_id,
+                SccmRole::ManagementPoint,
+                reason,
+            ))
+            .build();
+        if let Err(error) = builder {
+            rejected.push(format!("builder ({error:?}): {logical_id}: {reason}"));
+        }
+
+        let mut direct = canonical.clone();
+        direct.next_artifacts[0] = finding_request(logical_id, SccmRole::ManagementPoint, reason);
+        if let Err(error) = direct.validate() {
+            rejected.push(format!(
+                "direct validate ({error:?}): {logical_id}: {reason}"
+            ));
+        }
+        if serde_json::to_value(&direct).is_err() {
+            rejected.push(format!("serializer: {logical_id}: {reason}"));
+        }
+
+        let mut json = serde_json::to_value(&canonical).unwrap();
+        json["nextArtifacts"][0] = serde_json::to_value(finding_request(
+            logical_id,
+            SccmRole::ManagementPoint,
+            reason,
+        ))
+        .unwrap();
+        if serde_json::from_value::<SccmFinding>(json).is_err() {
+            rejected.push(format!("deserializer: {logical_id}: {reason}"));
+        }
+    }
+
+    assert!(
+        rejected.is_empty(),
+        "rejected exact MP artifact request boundaries: {rejected:#?}"
+    );
+}
+
+#[test]
+fn finding_review_every_exact_catalog_identity_passes_at_every_public_boundary() {
+    let canonical = finding_with_gap_and_request("review-exact-catalog-identity-parity");
+    let mut rejected = Vec::new();
+
+    for source in declared_source_catalog() {
+        let reasons = [
+            format!("Collect the complete {} file.", source.basename),
+            format!("Collect the complete {}.log file.", source.logical_name),
+        ];
+
+        for reason in reasons {
+            let request = finding_request(&source.logical_name, source.role.clone(), &reason);
+            let builder = SccmFindingBuilder::new("review-exact-catalog-identity-builder")
+                .class(SccmFindingClass::Symptom)
+                .phase(SccmPhase::Policy)
+                .role(source.role.clone())
+                .severity(Severity::Warning)
+                .confidence(SccmConfidence::Low)
+                .evidence(vec![finding_evidence_ref("artifact-a", "entry-a")])
+                .next_artifact(request.clone())
+                .build();
+            if let Err(error) = builder {
+                rejected.push(format!(
+                    "builder ({error:?}): {}: {reason}",
+                    source.logical_name
+                ));
+            }
+
+            let mut direct = canonical.clone();
+            direct.next_artifacts[0] = request.clone();
+            if let Err(error) = direct.validate() {
+                rejected.push(format!(
+                    "direct validate ({error:?}): {}: {reason}",
+                    source.logical_name
+                ));
+            }
+            if serde_json::to_value(&direct).is_err() {
+                rejected.push(format!("serializer: {}: {reason}", source.logical_name));
+            }
+
+            let mut json = serde_json::to_value(&canonical).unwrap();
+            json["nextArtifacts"][0] = serde_json::to_value(request).unwrap();
+            if serde_json::from_value::<SccmFinding>(json).is_err() {
+                rejected.push(format!("deserializer: {}: {reason}", source.logical_name));
+            }
+        }
+    }
+
+    assert!(
+        rejected.is_empty(),
+        "rejected exact catalog artifact request boundaries: {rejected:#?}"
+    );
+}
+
+#[test]
+fn finding_review_percentages_are_not_environment_paths_at_every_public_boundary() {
+    let reason = "Collect PolicyAgent.log after 50% and before 60% completion.";
+    let canonical = finding_with_gap_and_request("review-percentage-path-parity");
+    let mut rejected = Vec::new();
+
+    let builder = SccmFindingBuilder::new("review-percentage-path-builder")
+        .class(SccmFindingClass::Symptom)
+        .phase(SccmPhase::Policy)
+        .role(SccmRole::Client)
+        .severity(Severity::Warning)
+        .confidence(SccmConfidence::Low)
+        .evidence(vec![finding_evidence_ref("artifact-a", "entry-a")])
+        .next_artifact(finding_request("policyAgent", SccmRole::Client, reason))
+        .build();
+    if let Err(error) = builder {
+        rejected.push(format!("builder ({error:?})"));
+    }
+
+    let mut direct = canonical.clone();
+    direct.next_artifacts[0].reason = reason.into();
+    if let Err(error) = direct.validate() {
+        rejected.push(format!("direct validate ({error:?})"));
+    }
+    if serde_json::to_value(&direct).is_err() {
+        rejected.push("serializer".into());
+    }
+
+    let mut json = serde_json::to_value(&canonical).unwrap();
+    json["nextArtifacts"][0]["reason"] = serde_json::json!(reason);
+    if serde_json::from_value::<SccmFinding>(json).is_err() {
+        rejected.push("deserializer".into());
+    }
+
+    assert!(
+        rejected.is_empty(),
+        "rejected non-environment percentages: {rejected:#?}"
     );
 }
 

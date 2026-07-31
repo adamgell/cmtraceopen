@@ -108,6 +108,15 @@ impl SccmTerminalEvidenceKind {
             Self::Unknown(value) => value,
         }
     }
+
+    fn has_canonical_serialized_form(&self) -> bool {
+        match self {
+            Self::Unknown(value) => {
+                !value.is_empty() && value.trim() == value && value != "observedFailure"
+            }
+            Self::ObservedFailure => true,
+        }
+    }
 }
 
 impl Serialize for SccmTerminalEvidenceKind {
@@ -115,9 +124,9 @@ impl Serialize for SccmTerminalEvidenceKind {
     where
         S: Serializer,
     {
-        if matches!(self, Self::Unknown(value) if value == "observedFailure") {
+        if !self.has_canonical_serialized_form() {
             return Err(S::Error::custom(
-                "unknown terminal evidence kind must not shadow observedFailure",
+                "unknown terminal evidence kind must be canonical and must not shadow observedFailure",
             ));
         }
         serializer.serialize_str(self.serialized_name())
@@ -129,10 +138,16 @@ impl<'de> Deserialize<'de> for SccmTerminalEvidenceKind {
     where
         D: Deserializer<'de>,
     {
-        Ok(match String::deserialize(deserializer)? {
+        let kind = match String::deserialize(deserializer)? {
             value if value == "observedFailure" => Self::ObservedFailure,
             value => Self::Unknown(value),
-        })
+        };
+        if !kind.has_canonical_serialized_form() {
+            return Err(D::Error::custom(
+                "unknown terminal evidence kind must be canonical and must not shadow observedFailure",
+            ));
+        }
+        Ok(kind)
     }
 }
 
@@ -752,6 +767,14 @@ fn is_bounded_request_reason(
     }
 
     let lowercase = trimmed.to_ascii_lowercase();
+    let authorization = CatalogArtifactRequestScope {
+        basename: requested_basename,
+        logical_id: requested_logical_id,
+        task_sequence_alias: requested_logical_id.eq_ignore_ascii_case("smsts"),
+    };
+    if !reason_scope_is_within_catalog_artifact(&lowercase, &authorization) {
+        return false;
+    }
     let clauses_are_bounded = request_clauses(&lowercase).all(|clause| {
         !has_unbounded_request_scope(clause, requested_basename, requested_logical_id)
     });
@@ -768,6 +791,367 @@ fn contains_rooted_path(reason: &str) -> bool {
                     b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_' | b'-' | b'.'
                 ))
     })
+}
+
+// The reason remains descriptive text: authorization comes only from the
+// catalog entry already selected by logical ID and role. Each clause is
+// evaluated independently so punctuation cannot lend a later modifier either
+// collection intent or an artifact identity from another clause.
+#[derive(Clone, Copy)]
+struct CatalogArtifactRequestScope<'a> {
+    basename: &'a str,
+    logical_id: &'a str,
+    task_sequence_alias: bool,
+}
+
+#[derive(Clone, Copy)]
+struct RequestReasonToken<'a> {
+    text: &'a str,
+    start: usize,
+    end: usize,
+}
+
+fn reason_scope_is_within_catalog_artifact(
+    reason: &str,
+    authorization: &CatalogArtifactRequestScope<'_>,
+) -> bool {
+    if has_unbounded_path_form(reason) {
+        return false;
+    }
+
+    request_clauses(reason).all(|clause| {
+        let tokens = tokenize_request_reason(clause);
+        let identity_ranges = exact_collectable_identity_ranges(clause, authorization);
+        let is_confirmation = tokens.first().is_some_and(|token| token.text == "confirm");
+        let contains_collection_directive =
+            tokens.iter().any(|token| is_collection_action(token.text));
+
+        if is_confirmation {
+            confirmation_clause_is_non_authorizing(&tokens, &identity_ranges)
+        } else if contains_collection_directive {
+            collection_clause_is_catalog_bounded(&tokens, &identity_ranges)
+        } else {
+            narrative_clause_has_no_collection_scope(&tokens)
+        }
+    })
+}
+
+fn has_unbounded_path_form(reason: &str) -> bool {
+    contains_rooted_path(reason)
+        || contains_drive_designator(reason)
+        || contains_environment_path(reason)
+        || reason
+            .as_bytes()
+            .windows(3)
+            .any(|window| matches!(window, b"../" | b"..\\"))
+}
+
+fn contains_drive_designator(reason: &str) -> bool {
+    let bytes = reason.as_bytes();
+    bytes.windows(2).enumerate().any(|(index, pair)| {
+        pair[0].is_ascii_alphabetic()
+            && pair[1] == b':'
+            && (index == 0
+                || !matches!(
+                    bytes[index - 1],
+                    b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_'
+                ))
+    })
+}
+
+fn contains_environment_path(reason: &str) -> bool {
+    let percent_offsets = reason
+        .match_indices('%')
+        .map(|(index, _)| index)
+        .collect::<Vec<_>>();
+    let has_percent_expansion = percent_offsets.windows(2).any(|pair| {
+        let variable = &reason[pair[0] + 1..pair[1]];
+        !variable.is_empty()
+            && variable
+                .chars()
+                .all(|character| character.is_ascii_alphanumeric() || character == '_')
+    });
+    has_percent_expansion || reason.contains("$env:")
+}
+
+fn tokenize_request_reason(reason: &str) -> Vec<RequestReasonToken<'_>> {
+    let mut tokens = Vec::new();
+    let mut token_start = None;
+
+    for (index, character) in reason.char_indices() {
+        if character.is_ascii_alphanumeric() || character == '_' {
+            token_start.get_or_insert(index);
+        } else if let Some(start) = token_start.take() {
+            tokens.push(RequestReasonToken {
+                text: &reason[start..index],
+                start,
+                end: index,
+            });
+        }
+    }
+    if let Some(start) = token_start {
+        tokens.push(RequestReasonToken {
+            text: &reason[start..],
+            start,
+            end: reason.len(),
+        });
+    }
+    tokens
+}
+
+fn exact_collectable_identity_ranges(
+    reason: &str,
+    authorization: &CatalogArtifactRequestScope<'_>,
+) -> Vec<(usize, usize)> {
+    let basename = catalog_log_stem(authorization.basename).to_ascii_lowercase();
+    let logical_id = authorization.logical_id.to_ascii_lowercase();
+    let mut aliases = vec![
+        format!("{basename}.log"),
+        format!("{logical_id}.log"),
+        format!("{basename} file"),
+        format!("{logical_id} file"),
+        format!("{basename} record"),
+        format!("{logical_id} record"),
+        format!("logs/{basename}.log"),
+        format!(r"logs\{basename}.log"),
+    ];
+    if authorization.task_sequence_alias {
+        aliases.extend([
+            "task sequence log".to_owned(),
+            "disk imaging task sequence log".to_owned(),
+            "disk-image task sequence log".to_owned(),
+        ]);
+    }
+    aliases.sort_by_key(|alias| std::cmp::Reverse(alias.len()));
+    aliases.dedup();
+
+    let mut ranges = aliases
+        .iter()
+        .flat_map(|alias| exact_alias_ranges(reason, alias))
+        .collect::<Vec<_>>();
+    for terminal_alias in [basename, logical_id] {
+        ranges.extend(exact_terminal_alias_ranges(reason, &terminal_alias));
+    }
+    ranges.sort_unstable();
+    ranges.dedup();
+    ranges
+}
+
+fn exact_alias_ranges(reason: &str, alias: &str) -> Vec<(usize, usize)> {
+    reason
+        .match_indices(alias)
+        .filter_map(|(start, matched)| {
+            let end = start + matched.len();
+            exact_identity_boundary(reason, start, end).then_some((start, end))
+        })
+        .collect()
+}
+
+fn exact_terminal_alias_ranges(reason: &str, alias: &str) -> Vec<(usize, usize)> {
+    reason
+        .match_indices(alias)
+        .filter_map(|(start, matched)| {
+            let end = start + matched.len();
+            (exact_identity_boundary(reason, start, end) && reason[end..].trim().is_empty())
+                .then_some((start, end))
+        })
+        .collect()
+}
+
+fn exact_identity_boundary(reason: &str, start: usize, end: usize) -> bool {
+    let before = reason[..start].chars().next_back();
+    let after = reason[end..].chars().next();
+    before.is_none_or(|character| !is_identity_continuation(character))
+        && after.is_none_or(|character| !is_identity_continuation(character))
+}
+
+fn catalog_log_stem(basename: &str) -> &str {
+    basename.strip_suffix(".log").unwrap_or(basename)
+}
+
+fn is_identity_continuation(character: char) -> bool {
+    character.is_ascii_alphanumeric()
+        || matches!(
+            character,
+            '_' | '-'
+                | '.'
+                | '\u{2010}'
+                | '\u{2011}'
+                | '\u{2012}'
+                | '\u{2013}'
+                | '\u{2014}'
+                | '\u{2015}'
+                | '\u{2212}'
+        )
+}
+
+fn collection_clause_is_catalog_bounded(
+    tokens: &[RequestReasonToken<'_>],
+    identity_ranges: &[(usize, usize)],
+) -> bool {
+    if identity_ranges.is_empty() {
+        return false;
+    }
+
+    tokens.iter().enumerate().all(|(index, token)| {
+        if token_is_covered_by_identity(token, identity_ranges) {
+            return true;
+        }
+        if is_external_collection_container(token.text)
+            || matches!(token.text, "data" | "everything")
+        {
+            return false;
+        }
+        if matches!(token.text, "file" | "files" | "log" | "logs") {
+            return token_is_adjacent_to_identity(tokens, index, identity_ranges);
+        }
+        true
+    })
+}
+
+fn confirmation_clause_is_non_authorizing(
+    tokens: &[RequestReasonToken<'_>],
+    identity_ranges: &[(usize, usize)],
+) -> bool {
+    let has_identity = !identity_ranges.is_empty();
+    let has_retry = tokens.iter().any(|token| token.text == "retry");
+    let has_root_cause = tokens
+        .windows(2)
+        .any(|pair| pair[0].text == "root" && pair[1].text == "cause");
+    let has_assignment_or_policy = tokens
+        .iter()
+        .any(|token| matches!(token.text, "assignment" | "policy"));
+    let has_state_observation = tokens.iter().any(|token| {
+        matches!(
+            token.text,
+            "download" | "downloaded" | "encryption" | "image" | "imaging" | "state" | "status"
+        )
+    });
+    let has_download_observation = tokens
+        .iter()
+        .any(|token| matches!(token.text, "downloaded" | "state" | "status"));
+
+    for token in tokens {
+        if is_collection_action(token.text)
+            && !(token.text == "download" && has_identity && has_download_observation)
+        {
+            return false;
+        }
+        if token.text.starts_with("recurs") && !(has_identity && has_retry) {
+            return false;
+        }
+        if token.text.starts_with("root") && !(has_identity && has_root_cause) {
+            return false;
+        }
+        if is_wide_scope_token(token.text) && !(has_identity && has_assignment_or_policy) {
+            return false;
+        }
+        if matches!(
+            token.text,
+            "directory"
+                | "directories"
+                | "drive"
+                | "drives"
+                | "filesystem"
+                | "filesystems"
+                | "folder"
+                | "folders"
+                | "volume"
+                | "volumes"
+                | "data"
+                | "everything"
+        ) {
+            return false;
+        }
+        if matches!(token.text, "disk" | "disks" | "file" | "files")
+            && !token_is_covered_by_identity(token, identity_ranges)
+            && !(has_identity && has_state_observation)
+        {
+            return false;
+        }
+        if matches!(
+            token.text,
+            "client" | "device" | "machine" | "site" | "system"
+        ) && !(has_identity && (has_assignment_or_policy || has_state_observation))
+        {
+            return false;
+        }
+    }
+    true
+}
+
+fn narrative_clause_has_no_collection_scope(tokens: &[RequestReasonToken<'_>]) -> bool {
+    let has_broad_scope = tokens.iter().any(|token| is_broad_quantifier(token.text));
+    !tokens.iter().any(|token| {
+        token.text.starts_with("recurs")
+            || token.text.starts_with("root")
+            || is_wide_scope_token(token.text)
+            || is_external_collection_container(token.text)
+            || matches!(token.text, "data" | "everything")
+            || (has_broad_scope
+                && matches!(
+                    token.text,
+                    "file" | "files" | "log" | "logs" | "record" | "records"
+                ))
+    })
+}
+
+fn is_wide_scope_token(token: &str) -> bool {
+    token == "wide"
+        || token
+            .strip_suffix("wide")
+            .is_some_and(|prefix| !prefix.is_empty())
+}
+
+fn is_external_collection_container(token: &str) -> bool {
+    matches!(
+        token,
+        "client"
+            | "clients"
+            | "device"
+            | "devices"
+            | "directory"
+            | "directories"
+            | "disk"
+            | "disks"
+            | "drive"
+            | "drives"
+            | "filesystem"
+            | "filesystems"
+            | "folder"
+            | "folders"
+            | "machine"
+            | "machines"
+            | "site"
+            | "sites"
+            | "system"
+            | "systems"
+            | "volume"
+            | "volumes"
+    )
+}
+
+fn token_is_covered_by_identity(
+    token: &RequestReasonToken<'_>,
+    identity_ranges: &[(usize, usize)],
+) -> bool {
+    identity_ranges
+        .iter()
+        .any(|(start, end)| token.start >= *start && token.end <= *end)
+}
+
+fn token_is_adjacent_to_identity(
+    tokens: &[RequestReasonToken<'_>],
+    token_index: usize,
+    identity_ranges: &[(usize, usize)],
+) -> bool {
+    token_index
+        .checked_sub(1)
+        .and_then(|index| tokens.get(index))
+        .is_some_and(|token| token_is_covered_by_identity(token, identity_ranges))
+        || tokens
+            .get(token_index + 1)
+            .is_some_and(|token| token_is_covered_by_identity(token, identity_ranges))
 }
 
 fn request_clauses(reason: &str) -> impl Iterator<Item = &str> {
@@ -801,7 +1185,7 @@ fn has_unbounded_request_scope(
     requested_logical_id: &str,
 ) -> bool {
     let tokens = clause
-        .split(|character: char| !character.is_ascii_alphanumeric())
+        .split(|character: char| !character.is_ascii_alphanumeric() && character != '_')
         .filter(|token| !token.is_empty())
         .collect::<Vec<_>>();
 
@@ -818,16 +1202,21 @@ fn has_unbounded_request_scope(
 fn is_collection_action(token: &str) -> bool {
     matches!(
         token,
-        "collect"
+        "archive"
+            | "capture"
+            | "collect"
+            | "copy"
+            | "download"
+            | "enumerate"
+            | "export"
+            | "gather"
+            | "inspect"
+            | "obtain"
+            | "read"
             | "scan"
             | "search"
             | "walk"
             | "traverse"
-            | "capture"
-            | "export"
-            | "gather"
-            | "inspect"
-            | "read"
     )
 }
 
@@ -866,7 +1255,9 @@ fn is_collection_container(token: &str) -> bool {
     matches!(
         token,
         "client"
+            | "clients"
             | "device"
+            | "devices"
             | "directory"
             | "directories"
             | "disk"
@@ -878,8 +1269,11 @@ fn is_collection_container(token: &str) -> bool {
             | "folder"
             | "folders"
             | "machine"
+            | "machines"
             | "site"
+            | "sites"
             | "system"
+            | "systems"
             | "volume"
             | "volumes"
     )
@@ -997,7 +1391,7 @@ fn requested_artifact_identity_ranges(
     requested_basename: &str,
     requested_logical_id: &str,
 ) -> Vec<(usize, usize)> {
-    let basename = normalize_catalog_identity(requested_basename);
+    let basename = normalize_catalog_identity(catalog_log_stem(requested_basename));
     let logical_id = normalize_catalog_identity(requested_logical_id);
     let mut ranges = tokens
         .iter()
@@ -1017,7 +1411,7 @@ fn requested_artifact_identity_ranges(
 fn normalize_catalog_identity(identity: &str) -> String {
     identity
         .chars()
-        .filter(|character| character.is_ascii_alphanumeric())
+        .filter(|character| character.is_ascii_alphanumeric() || *character == '_')
         .flat_map(char::to_lowercase)
         .collect()
 }
@@ -1062,7 +1456,7 @@ fn target_is_bounded_to_requested_artifact(
                         .any(|token| matches!(*token, "encryption" | "status")))
         }
         "file" | "files" => identity_precedes_target || is_state_observation,
-        "logs" => identity_precedes_target,
+        "log" | "logs" => identity_precedes_target,
         _ => true,
     }
 }
