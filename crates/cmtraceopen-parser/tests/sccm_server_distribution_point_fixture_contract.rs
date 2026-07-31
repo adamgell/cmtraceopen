@@ -3711,6 +3711,78 @@ fn later_same_key_success_prevents_stale_high_terminal_failure() {
 }
 
 #[test]
+fn uncited_later_same_key_terminal_failure_invalidates_high_success() {
+    let temporary = temporary_scenario("healthy-package");
+    let mut manifest = read_json("healthy-package", "manifest.json").expect("manifest loads");
+    let expected = read_json("healthy-package", "expected.json").expect("expected loads");
+    let relative_path = manifest["artifacts"][2]["relativePath"]
+        .as_str()
+        .expect("provider artifact has a path")
+        .to_owned();
+    let fixture_path = temporary.root.join(&relative_path);
+    let mut contents =
+        std::fs::read_to_string(&fixture_path).expect("provider fixture is readable");
+    contents.push_str(
+        "<![LOG[SYNTHETIC FIXTURE; Phase=validate; Disposition=failed; Terminal=true; PackageId=LAB00001; ContentId=content-alpha; ContentVersion=1; SiteCode=LAB; DpHandle=safe:dp:lab-dp-01; ProfileId=dp-server-5.00.test-v1]LOG]!><time=\"12:00:06.000+000\" date=\"07-30-2026\" component=\"SMSDPProv\" context=\"\" type=\"3\" thread=\"103\" file=\"smsdpprov.cpp:304\">\n",
+    );
+    std::fs::write(&fixture_path, contents).expect("later terminal failure is written");
+    refresh_artifact_bytes(&mut manifest, 2, &temporary.root);
+
+    assert!(
+        !mutation_at_root_was_accepted("healthy-package", &temporary.root, &manifest, &expected,),
+        "an uncited later same-key terminal failure retained stale high success"
+    );
+}
+
+#[test]
+fn admitted_distribution_point_producers_require_the_observed_role() {
+    let mut manifest = read_json("healthy-package", "manifest.json").expect("manifest loads");
+    let mut expected = read_json("healthy-package", "expected.json").expect("expected loads");
+    manifest["topology"]["rolesObserved"] = json!(["siteServer"]);
+    expected["roleAssessment"]["distributionPointObserved"] = json!(false);
+
+    assert!(
+        !mutation_was_accepted("healthy-package", &manifest, &expected),
+        "DP-produced evidence retained high success while the DP role was not observed"
+    );
+}
+
+#[test]
+fn distribution_point_observed_is_a_required_boolean() {
+    let manifest =
+        read_json("client-only-looking-request", "manifest.json").expect("manifest loads");
+    let expected =
+        read_json("client-only-looking-request", "expected.json").expect("expected loads");
+    let mut accepted = Vec::new();
+
+    let mut missing = expected.clone();
+    missing["roleAssessment"]
+        .as_object_mut()
+        .expect("role assessment is an object")
+        .remove("distributionPointObserved");
+    if mutation_was_accepted("client-only-looking-request", &manifest, &missing) {
+        accepted.push("missing");
+    }
+
+    for (shape, value) in [
+        ("null", Value::Null),
+        ("string", json!("false")),
+        ("number", json!(0)),
+    ] {
+        let mut malformed = expected.clone();
+        malformed["roleAssessment"]["distributionPointObserved"] = value;
+        if mutation_was_accepted("client-only-looking-request", &manifest, &malformed) {
+            accepted.push(shape);
+        }
+    }
+
+    assert!(
+        accepted.is_empty(),
+        "distributionPointObserved accepted non-Boolean shapes: {accepted:?}"
+    );
+}
+
+#[test]
 fn incomplete_transaction_gaps_are_bound_to_the_exact_distribution_point() {
     let mut manifest = read_json("incomplete", "manifest.json").expect("manifest loads");
     let expected = read_json("incomplete", "expected.json").expect("expected loads");
