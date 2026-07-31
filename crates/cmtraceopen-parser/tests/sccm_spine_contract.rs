@@ -161,6 +161,29 @@ fn finding_high_confirmed_failure_accepts_a_cited_terminal_failure() {
 }
 
 #[test]
+fn finding_rejects_unknown_phase_values_that_shadow_declared_names() {
+    for phase in ["policy", "content", "enforcement"] {
+        let result = SccmFindingBuilder::new(format!("shadowed-{phase}"))
+            .class(SccmFindingClass::Symptom)
+            .phase(SccmPhase::Unknown(phase.into()))
+            .role(SccmRole::Client)
+            .severity(Severity::Warning)
+            .confidence(SccmConfidence::Low)
+            .evidence(vec![finding_evidence_ref(
+                "client-policy-agent",
+                "policy:1-1",
+            )])
+            .build();
+
+        assert_eq!(
+            result.unwrap_err(),
+            SccmFindingValidationError::MissingRequiredField,
+            "{phase}"
+        );
+    }
+}
+
+#[test]
 fn finding_forged_unregistered_profile_never_authorizes_high_corroboration() {
     let first = finding_evidence_ref("client-policy-agent", "policy:10-10");
     let second = finding_evidence_ref("mp-get-policy", "mp-policy:20-20");
@@ -773,6 +796,83 @@ fn finding_deserialization_rejects_raw_execution_context_fields() {
     json["executionContext"] = serde_json::json!(r"LAB\SyntheticUser");
 
     assert!(serde_json::from_value::<SccmFinding>(json).is_err());
+}
+
+#[test]
+fn finding_deserialization_rejects_unknown_fields_recursively() {
+    let evidence = finding_evidence_ref("client-policy-agent", "policy:1-1");
+    let finding = SccmFindingBuilder::new("strict-finding-wire")
+        .class(SccmFindingClass::Symptom)
+        .phase(SccmPhase::Policy)
+        .role(SccmRole::Client)
+        .severity(Severity::Warning)
+        .confidence(SccmConfidence::Low)
+        .evidence(vec![evidence.clone()])
+        .terminal_evidence(vec![SccmTerminalEvidence::observed_failure(
+            evidence.clone(),
+        )])
+        .coverage_gap(finding_client_gap(
+            "client-policy-agent",
+            SccmCoverageState::AccessDenied,
+        ))
+        .correlation_keys(vec![finding_key(
+            SccmCorrelationKeyKind::AssignmentId,
+            "{ABCDEFAB-0000-0000-0000-000000000001}",
+            "abcdefab-0000-0000-0000-000000000001",
+            SccmKeyConfidence::Low,
+            Some("sccm-keys-experimental-v1"),
+            evidence,
+        )])
+        .next_artifact(finding_request(
+            "policyAgent",
+            SccmRole::Client,
+            "Confirm the bounded policy request outcome.",
+        ))
+        .build()
+        .unwrap();
+    let json = serde_json::to_value(finding).unwrap();
+
+    let mut cases = Vec::new();
+
+    let mut nested_evidence = json.clone();
+    nested_evidence["evidence"][0]["executionContext"] = serde_json::json!(r"LAB\SyntheticUser");
+    cases.push(("evidence", nested_evidence));
+
+    let mut terminal_evidence = json.clone();
+    terminal_evidence["terminalEvidence"][0]["executionContext"] =
+        serde_json::json!(r"LAB\SyntheticUser");
+    cases.push(("terminal evidence", terminal_evidence));
+
+    let mut terminal_reference = json.clone();
+    terminal_reference["terminalEvidence"][0]["reference"]["executionContext"] =
+        serde_json::json!(r"LAB\SyntheticUser");
+    cases.push(("terminal reference", terminal_reference));
+
+    let mut coverage_gap = json.clone();
+    coverage_gap["coverageGaps"][0]["executionContext"] = serde_json::json!(r"LAB\SyntheticUser");
+    cases.push(("coverage gap", coverage_gap));
+
+    let mut correlation_key = json.clone();
+    correlation_key["correlationKeys"][0]["executionContext"] =
+        serde_json::json!(r"LAB\SyntheticUser");
+    cases.push(("correlation key", correlation_key));
+
+    let mut correlation_key_reference = json.clone();
+    correlation_key_reference["correlationKeys"][0]["evidence"]["executionContext"] =
+        serde_json::json!(r"LAB\SyntheticUser");
+    cases.push(("correlation key reference", correlation_key_reference));
+
+    let mut artifact_request = json;
+    artifact_request["nextArtifacts"][0]["executionContext"] =
+        serde_json::json!(r"LAB\SyntheticUser");
+    cases.push(("artifact request", artifact_request));
+
+    for (label, case) in cases {
+        assert!(
+            serde_json::from_value::<SccmFinding>(case).is_err(),
+            "{label} accepted an undeclared nested field"
+        );
+    }
 }
 
 #[test]

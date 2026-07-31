@@ -15,6 +15,8 @@ use super::models::{
 pub const MAX_SCCM_ARTIFACT_REQUEST_REASON_CHARS: usize = 240;
 pub const MAX_SCCM_NEXT_ARTIFACT_REQUESTS: usize = 16;
 const MAX_SCCM_COVERAGE_GAP_ARTIFACT_ID_CHARS: usize = 256;
+// Intentionally empty: no extraction profile is verified as stable enough to
+// authorize key-only High confidence. Adding one requires contract review.
 const REGISTERED_STABLE_CORRELATION_PROFILE_IDS: &[&str] = &[];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -179,11 +181,111 @@ struct SccmFindingWire {
     confidence: SccmConfidence,
     title: String,
     summary: String,
-    evidence: Vec<SccmEvidenceRef>,
-    terminal_evidence: Vec<SccmTerminalEvidence>,
-    coverage_gaps: Vec<SccmFindingCoverageGap>,
-    correlation_keys: Vec<SccmCorrelationKey>,
-    next_artifacts: Vec<SccmArtifactRequest>,
+    evidence: Vec<SccmEvidenceRefWire>,
+    terminal_evidence: Vec<SccmTerminalEvidenceWire>,
+    coverage_gaps: Vec<SccmFindingCoverageGapWire>,
+    correlation_keys: Vec<SccmCorrelationKeyWire>,
+    next_artifacts: Vec<SccmArtifactRequestWire>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SccmEvidenceRefWire {
+    artifact_id: String,
+    entry_id: String,
+    line_start: Option<u32>,
+    line_end: Option<u32>,
+}
+
+impl From<SccmEvidenceRefWire> for SccmEvidenceRef {
+    fn from(wire: SccmEvidenceRefWire) -> Self {
+        Self {
+            artifact_id: wire.artifact_id,
+            entry_id: wire.entry_id,
+            line_start: wire.line_start,
+            line_end: wire.line_end,
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SccmTerminalEvidenceWire {
+    reference: SccmEvidenceRefWire,
+    kind: SccmTerminalEvidenceKind,
+}
+
+impl From<SccmTerminalEvidenceWire> for SccmTerminalEvidence {
+    fn from(wire: SccmTerminalEvidenceWire) -> Self {
+        Self {
+            reference: wire.reference.into(),
+            kind: wire.kind,
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SccmFindingCoverageGapWire {
+    artifact_id: String,
+    role: SccmRole,
+    coverage: SccmCoverageState,
+}
+
+impl From<SccmFindingCoverageGapWire> for SccmFindingCoverageGap {
+    fn from(wire: SccmFindingCoverageGapWire) -> Self {
+        Self {
+            artifact_id: wire.artifact_id,
+            role: wire.role,
+            coverage: wire.coverage,
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SccmCorrelationKeyWire {
+    kind: SccmCorrelationKeyKind,
+    raw: String,
+    normalized: String,
+    confidence: SccmKeyConfidence,
+    extraction_profile_id: Option<String>,
+    evidence: Option<SccmEvidenceRefWire>,
+    start: Option<usize>,
+    end: Option<usize>,
+}
+
+impl From<SccmCorrelationKeyWire> for SccmCorrelationKey {
+    fn from(wire: SccmCorrelationKeyWire) -> Self {
+        Self {
+            kind: wire.kind,
+            raw: wire.raw,
+            normalized: wire.normalized,
+            confidence: wire.confidence,
+            extraction_profile_id: wire.extraction_profile_id,
+            evidence: wire.evidence.map(Into::into),
+            start: wire.start,
+            end: wire.end,
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SccmArtifactRequestWire {
+    logical_id: String,
+    role: SccmRole,
+    reason: String,
+}
+
+impl From<SccmArtifactRequestWire> for SccmArtifactRequest {
+    fn from(wire: SccmArtifactRequestWire) -> Self {
+        Self {
+            logical_id: wire.logical_id,
+            role: wire.role,
+            reason: wire.reason,
+        }
+    }
 }
 
 impl<'de> Deserialize<'de> for SccmFinding {
@@ -204,11 +306,11 @@ impl<'de> Deserialize<'de> for SccmFinding {
             confidence: wire.confidence,
             title: wire.title,
             summary: wire.summary,
-            evidence: wire.evidence,
-            terminal_evidence: wire.terminal_evidence,
-            coverage_gaps: wire.coverage_gaps,
-            correlation_keys: wire.correlation_keys,
-            next_artifacts: wire.next_artifacts,
+            evidence: wire.evidence.into_iter().map(Into::into).collect(),
+            terminal_evidence: wire.terminal_evidence.into_iter().map(Into::into).collect(),
+            coverage_gaps: wire.coverage_gaps.into_iter().map(Into::into).collect(),
+            correlation_keys: wire.correlation_keys.into_iter().map(Into::into).collect(),
+            next_artifacts: wire.next_artifacts.into_iter().map(Into::into).collect(),
         };
         normalize_finding(&mut finding);
         finding.validate().map_err(|error| {
@@ -430,6 +532,7 @@ fn validate_required_text(finding: &SccmFinding) -> Result<(), SccmFindingValida
         || finding.title.trim().is_empty()
         || finding.summary.trim().is_empty()
         || matches!(&finding.phase, SccmPhase::Unknown(value) if value.trim().is_empty())
+        || matches!(&finding.phase, SccmPhase::Unknown(value) if is_known_phase_name(value))
     {
         return Err(SccmFindingValidationError::MissingRequiredField);
     }
