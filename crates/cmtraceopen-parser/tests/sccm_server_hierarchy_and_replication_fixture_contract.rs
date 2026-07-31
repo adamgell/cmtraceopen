@@ -162,60 +162,196 @@ fn parse_fixture_fields(message: &str) -> Result<BTreeMap<String, String>, Strin
     Ok(fields)
 }
 
+fn exact_source_tuple(source_id: &str, basename: &str, direction: &str, role: &str) -> bool {
+    role == "siteServer"
+        && matches!(
+            (source_id, basename, direction),
+            ("server-hierarchy-control", "replmgr.log", "origin")
+                | ("server-hierarchy-control", "rcmctrl.log", "target")
+                | (
+                    "server-hierarchy-transfer",
+                    "sender.log" | "sender.lo_",
+                    "origin"
+                )
+                | ("server-hierarchy-transfer", "despool.log", "target")
+        )
+}
+
+fn artifact_has_exact_source_tuple(artifact: &Value) -> bool {
+    artifact["sourceId"]
+        .as_str()
+        .zip(artifact["originalBasename"].as_str())
+        .zip(artifact["direction"].as_str())
+        .zip(artifact["producerRole"].as_str())
+        .is_some_and(|(((source_id, basename), direction), role)| {
+            exact_source_tuple(source_id, basename, direction, role)
+        })
+}
+
+fn target_host_for_site<'a>(manifest: &'a Value, site: &str) -> Option<&'a str> {
+    let hosts = std::iter::once((
+        manifest["topology"]["targetSiteCode"].as_str(),
+        manifest["topology"]["targetHostHandle"].as_str(),
+    ))
+    .chain(
+        manifest["topology"]["additionalTargets"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|target| (target["siteCode"].as_str(), target["hostHandle"].as_str())),
+    )
+    .filter_map(|(candidate_site, host)| (candidate_site == Some(site)).then_some(host).flatten())
+    .collect::<BTreeSet<_>>();
+    (hosts.len() == 1)
+        .then(|| hosts.into_iter().next())
+        .flatten()
+}
+
+fn artifact_matches_topology(manifest: &Value, artifact: &Value) -> bool {
+    match (
+        artifact["direction"].as_str(),
+        artifact["producerHostHandle"].as_str(),
+    ) {
+        (Some("origin"), Some(host)) => {
+            manifest["topology"]["originHostHandle"].as_str() == Some(host)
+        }
+        (Some("target"), Some(host)) => {
+            std::iter::once(manifest["topology"]["targetHostHandle"].as_str())
+                .chain(
+                    manifest["topology"]["additionalTargets"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .map(|target| target["hostHandle"].as_str()),
+                )
+                .flatten()
+                .any(|target_host| target_host == host)
+        }
+        _ => false,
+    }
+}
+
+fn record_matches_topology(
+    manifest: &Value,
+    artifact: &Value,
+    fields: &BTreeMap<String, String>,
+) -> bool {
+    let Some(origin_site) = fields.get("OriginSite").map(String::as_str) else {
+        return false;
+    };
+    let Some(target_site) = fields.get("TargetSite").map(String::as_str) else {
+        return false;
+    };
+    if manifest["topology"]["originSiteCode"].as_str() != Some(origin_site) {
+        return false;
+    }
+    match artifact["direction"].as_str() {
+        Some("origin") => {
+            artifact_matches_topology(manifest, artifact)
+                && target_host_for_site(manifest, target_site).is_some()
+        }
+        Some("target") => {
+            artifact["producerHostHandle"].as_str() == target_host_for_site(manifest, target_site)
+        }
+        _ => false,
+    }
+}
+
+fn artifact_is_exact_candidate(manifest: &Value, artifact: &Value) -> bool {
+    artifact["captureState"] == "captured"
+        && artifact["sourceVersion"] == EXACT_SOURCE_VERSION
+        && artifact["collectedUtc"]
+            .as_str()
+            .is_some_and(|value| DateTime::parse_from_rfc3339(value).is_ok())
+        && artifact["encoding"] == "utf-8"
+        && artifact["bytesCopied"].as_u64().is_some()
+        && artifact["collectionLimit"]["byteLimit"].as_u64().is_some()
+        && artifact["collectionLimit"]["limitApplied"]
+            .as_bool()
+            .is_some()
+        && artifact["relativePath"]
+            .as_str()
+            .is_some_and(|value| safe_segmented_path(value, "evidence/"))
+        && artifact["pathFingerprint"].as_str().is_some_and(|value| {
+            value
+                .strip_prefix("synthetic:")
+                .is_some_and(|suffix| !suffix.is_empty())
+        })
+        && rotation(&artifact["rotation"]).is_some()
+        && artifact["rotation"]["lineageId"]
+            .as_str()
+            .is_some_and(|value| !value.is_empty())
+        && artifact["rotation"]["fragmentComplete"] == true
+        && artifact_has_exact_source_tuple(artifact)
+        && artifact_matches_topology(manifest, artifact)
+}
+
 fn normalized_records(
     scenario: &str,
     manifest: &Value,
 ) -> BTreeMap<(String, u32, u32), SccmEvidence> {
+    try_normalized_records(scenario, manifest).expect("fixture records normalize")
+}
+
+fn try_normalized_records(
+    scenario: &str,
+    manifest: &Value,
+) -> Result<BTreeMap<(String, u32, u32), SccmEvidence>, String> {
     let mut records = BTreeMap::new();
-    for artifact in manifest["artifacts"]
+    let artifacts = manifest["artifacts"]
         .as_array()
-        .expect("manifest artifacts are an array")
-    {
-        let state = artifact["captureState"].as_str().unwrap_or_default();
+        .ok_or_else(|| format!("{scenario}: manifest artifacts are an array"))?;
+    for artifact in artifacts {
+        let state = required_string(artifact, "captureState", scenario)?;
         if !matches!(state, "captured" | "capped") {
             continue;
         }
-        let artifact_id = artifact["artifactId"]
-            .as_str()
-            .expect("artifact ID is a string");
-        let relative_path = artifact["relativePath"]
-            .as_str()
-            .expect("physical artifact has a relative path");
+        let artifact_id = required_string(artifact, "artifactId", scenario)?;
+        let relative_path = required_string(artifact, "relativePath", scenario)?;
+        if !safe_segmented_path(relative_path, "evidence/") {
+            return Err(format!(
+                "{scenario}/{artifact_id}: physical evidence path is safe"
+            ));
+        }
         let content = std::fs::read_to_string(corpus_root().join(scenario).join(relative_path))
-            .expect("fixture evidence is readable UTF-8");
+            .map_err(|error| {
+                format!("{scenario}/{artifact_id}: fixture evidence is readable UTF-8: {error}")
+            })?;
         let model = SccmArtifact {
             artifact_id: artifact_id.to_owned(),
             display_name: artifact["originalBasename"]
                 .as_str()
-                .expect("artifact basename is a string")
+                .ok_or_else(|| format!("{scenario}/{artifact_id}: artifact basename is a string"))?
                 .to_owned(),
             original_path: None,
             host: artifact["producerHostHandle"].as_str().map(str::to_owned),
             role: SccmRole::SiteServer,
             configmgr_version: artifact["sourceVersion"].as_str().map(str::to_owned),
             collected_at_utc: artifact["collectedUtc"].as_str().map(str::to_owned),
-            rotation: rotation(&artifact["rotation"]).expect("rotation is valid"),
-            coverage: coverage_state(state).expect("coverage is valid"),
-            encoding: Some("utf-8".to_owned()),
+            rotation: rotation(&artifact["rotation"])
+                .ok_or_else(|| format!("{scenario}/{artifact_id}: rotation is valid"))?,
+            coverage: coverage_state(state)
+                .ok_or_else(|| format!("{scenario}/{artifact_id}: coverage is valid"))?,
+            encoding: artifact["encoding"].as_str().map(str::to_owned),
         };
         for record in normalize_ccm_artifact(model, &content) {
-            let line_start = record
-                .reference
-                .line_start
-                .expect("normalized evidence has a start line");
-            let line_end = record
-                .reference
-                .line_end
-                .expect("normalized evidence has an end line");
-            assert!(
-                records
-                    .insert((artifact_id.to_owned(), line_start, line_end), record)
-                    .is_none(),
-                "{scenario}: duplicate physical logical evidence"
-            );
+            let line_start = record.reference.line_start.ok_or_else(|| {
+                format!("{scenario}/{artifact_id}: normalized evidence has a start line")
+            })?;
+            let line_end = record.reference.line_end.ok_or_else(|| {
+                format!("{scenario}/{artifact_id}: normalized evidence has an end line")
+            })?;
+            if records
+                .insert((artifact_id.to_owned(), line_start, line_end), record)
+                .is_some()
+            {
+                return Err(format!(
+                    "{scenario}/{artifact_id}: duplicate physical logical evidence"
+                ));
+            }
         }
     }
-    records
+    Ok(records)
 }
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, serde::Serialize)]
@@ -254,15 +390,18 @@ struct HierarchyCandidateGroup {
 
 fn hierarchy_candidate_groups(
     scenario: &str,
-    artifacts: &[Value],
+    manifest: &Value,
 ) -> Result<Vec<HierarchyCandidateGroup>, String> {
     let mut grouped_facts =
         BTreeMap::<HierarchyCandidateKey, BTreeSet<HierarchyCandidateFact>>::new();
+    let artifacts = manifest["artifacts"]
+        .as_array()
+        .ok_or_else(|| format!("{scenario}: artifacts are an array"))?;
     for artifact in artifacts {
-        let state = required_string(artifact, "captureState", scenario)?;
-        if !matches!(state, "captured" | "capped") {
+        if !artifact_is_exact_candidate(manifest, artifact) {
             continue;
         }
+        let state = required_string(artifact, "captureState", scenario)?;
         let artifact_id = required_string(artifact, "artifactId", scenario)?;
         let basename = required_string(artifact, "originalBasename", scenario)?;
         let relative_path = required_string(artifact, "relativePath", scenario)?;
@@ -298,6 +437,9 @@ fn hierarchy_candidate_groups(
             encoding: Some("utf-8".to_owned()),
         };
         for record in normalize_ccm_artifact(model, &content) {
+            if record.timestamp.ordering_state != SccmTimeOrderingState::NormalizedUtc {
+                continue;
+            }
             let Ok(fields) = parse_fixture_fields(&record.message) else {
                 continue;
             };
@@ -325,7 +467,10 @@ fn hierarchy_candidate_groups(
             let Some(terminal) = fields.get("Terminal") else {
                 continue;
             };
-            if extraction_profile_id != EXACT_PROFILE || !phase_is_owned_by(basename, phase) {
+            if extraction_profile_id != EXACT_PROFILE
+                || !phase_is_owned_by(basename, phase)
+                || !record_matches_topology(manifest, artifact, &fields)
+            {
                 continue;
             }
             let terminal = match terminal.as_str() {
@@ -373,8 +518,8 @@ fn hierarchy_candidate_groups(
         .collect())
 }
 
-fn hierarchy_candidate_bytes(scenario: &str, artifacts: &[Value]) -> Result<Vec<u8>, String> {
-    serde_json::to_vec(&hierarchy_candidate_groups(scenario, artifacts)?)
+fn hierarchy_candidate_bytes(scenario: &str, manifest: &Value) -> Result<Vec<u8>, String> {
+    serde_json::to_vec(&hierarchy_candidate_groups(scenario, manifest)?)
         .map_err(|error| format!("{scenario}: candidate output serializes: {error}"))
 }
 
@@ -386,6 +531,92 @@ fn phase_is_owned_by(basename: &str, phase: &str) -> bool {
             | ("despool.log", "receive" | "process" | "healthyOrTerminal")
             | ("rcmctrl.log", "acknowledge" | "healthyOrTerminal")
     )
+}
+
+fn evidence_reference_key(reference: &Value) -> Option<(String, u32, u32)> {
+    let artifact_id = reference["artifactId"]
+        .as_str()
+        .filter(|value| !value.is_empty())?
+        .to_owned();
+    let line_start = reference["startLine"]
+        .as_u64()
+        .and_then(|value| u32::try_from(value).ok())?;
+    let line_end = reference["endLine"]
+        .as_u64()
+        .and_then(|value| u32::try_from(value).ok())?;
+    (line_start <= line_end).then_some((artifact_id, line_start, line_end))
+}
+
+fn observation_matches_record(
+    manifest: &Value,
+    artifact: &Value,
+    transaction: &Value,
+    observation: &Value,
+    record: &SccmEvidence,
+) -> bool {
+    let Ok(fields) = parse_fixture_fields(&record.message) else {
+        return false;
+    };
+    let key = &transaction["key"];
+    fields.get("MessageId").map(String::as_str) == key["messageId"].as_str()
+        && fields.get("LinkId").map(String::as_str) == key["linkId"].as_str()
+        && fields.get("OriginSite").map(String::as_str) == key["originSiteCode"].as_str()
+        && fields.get("TargetSite").map(String::as_str) == key["targetSiteCode"].as_str()
+        && fields.get("ProfileId").map(String::as_str) == Some(EXACT_PROFILE)
+        && fields.get("Phase").map(String::as_str) == observation["phase"].as_str()
+        && fields.get("Disposition").map(String::as_str) == observation["disposition"].as_str()
+        && fields.get("Terminal").map(String::as_str)
+            == observation["terminal"]
+                .as_bool()
+                .map(|terminal| if terminal { "true" } else { "false" })
+        && artifact["originalBasename"]
+            .as_str()
+            .zip(observation["phase"].as_str())
+            .is_some_and(|(basename, phase)| phase_is_owned_by(basename, phase))
+        && artifact_has_exact_source_tuple(artifact)
+        && record_matches_topology(manifest, artifact, &fields)
+}
+
+fn transaction_semantics_are_coherent(transaction: &Value) -> bool {
+    let Some(observations) = transaction["observations"].as_array() else {
+        return false;
+    };
+    let mut retrying = false;
+    let mut terminal_success = false;
+    let mut terminal_failure = false;
+    for observation in observations {
+        let Some(disposition) = observation["disposition"].as_str() else {
+            return false;
+        };
+        let Some(terminal) = observation["terminal"].as_bool() else {
+            return false;
+        };
+        if !matches!(disposition, "succeeded" | "failed" | "retrying") {
+            return false;
+        }
+        retrying |= disposition == "retrying";
+        terminal_success |= terminal && disposition == "succeeded";
+        terminal_failure |= terminal && disposition == "failed";
+    }
+    let terminal_evidence = terminal_success || terminal_failure;
+    if transaction["terminalEvidence"].as_bool() != Some(terminal_evidence) {
+        return false;
+    }
+
+    let (state, classification) = if transaction["timestampOrdering"] != "usable" {
+        ("incomplete", "insufficientEvidence")
+    } else if terminal_failure {
+        ("failed", "confirmedFailure")
+    } else if terminal_success && retrying {
+        ("recovered", "success")
+    } else if terminal_success {
+        ("succeeded", "success")
+    } else if retrying {
+        ("deferred", "blockedOrDeferred")
+    } else {
+        ("incomplete", "insufficientEvidence")
+    };
+    transaction["state"] == state && transaction["classification"] == classification
 }
 
 fn expected_transaction_ids(scenario: &str) -> &'static [&'static str] {
@@ -465,12 +696,18 @@ fn declared_target_site_codes(manifest: &Value) -> BTreeSet<&str> {
         .collect()
 }
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 struct ArtifactRequestBasis {
     source_id: String,
     direction: String,
     target_site_code: String,
     basenames: Vec<String>,
+}
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+struct ArtifactRequestContract {
+    basis: ArtifactRequestBasis,
+    reason_code: String,
 }
 
 fn exact_request_direction(directions: &BTreeSet<&str>) -> Option<String> {
@@ -660,6 +897,46 @@ fn invalid_offset_request_basis(scenario: &str, manifest: &Value) -> Option<Arti
     })
 }
 
+fn derived_artifact_requests(
+    scenario: &str,
+    manifest: &Value,
+) -> BTreeSet<ArtifactRequestContract> {
+    let mut requests = BTreeSet::new();
+    for source_id in ["server-hierarchy-control", "server-hierarchy-transfer"] {
+        for reason_code in ["coverageAbsent", "coverageCapped", "coverageRotationSplit"] {
+            if let Some(basis) = coverage_request_basis(manifest, source_id, reason_code) {
+                requests.insert(ArtifactRequestContract {
+                    basis,
+                    reason_code: reason_code.to_owned(),
+                });
+            }
+        }
+    }
+    if let Some(basis) = invalid_offset_request_basis(scenario, manifest) {
+        requests.insert(ArtifactRequestContract {
+            basis,
+            reason_code: "invalidOffset".to_owned(),
+        });
+    }
+    requests
+}
+
+fn declared_artifact_request(request: &Value) -> Option<ArtifactRequestContract> {
+    Some(ArtifactRequestContract {
+        basis: ArtifactRequestBasis {
+            source_id: request["sourceId"].as_str()?.to_owned(),
+            direction: request["direction"].as_str()?.to_owned(),
+            target_site_code: request["targetSiteCode"].as_str()?.to_owned(),
+            basenames: request["basenames"]
+                .as_array()?
+                .iter()
+                .map(|value| value.as_str().map(str::to_owned))
+                .collect::<Option<Vec<_>>>()?,
+        },
+        reason_code: request["reasonCode"].as_str()?.to_owned(),
+    })
+}
+
 fn artifact_request_failures(scenario: &str, manifest: &Value, expected: &Value) -> Vec<String> {
     let mut failures = Vec::new();
     let Some(requests) = expected["artifactRequests"].as_array() else {
@@ -756,6 +1033,18 @@ fn artifact_request_failures(scenario: &str, manifest: &Value, expected: &Value)
         }
     }
 
+    let declared_requests = requests
+        .iter()
+        .filter_map(declared_artifact_request)
+        .collect::<BTreeSet<_>>();
+    if declared_requests.len() != requests.len()
+        || declared_requests != derived_artifact_requests(scenario, manifest)
+    {
+        failures.push(format!(
+            "{scenario}: artifact requests are not the complete derived bounded set"
+        ));
+    }
+
     failures
 }
 
@@ -787,6 +1076,18 @@ fn identity_and_schema_failures(scenario: &str, manifest: &Value, expected: &Val
         ],
     ) {
         failures.push("manifest contains an unsupported field or shape".to_owned());
+    }
+    if manifest["sccmManifestVersion"] != 1
+        || manifest["proposalOnly"] != true
+        || manifest["syntheticFixture"] != true
+        || manifest["scenario"] != scenario
+        || manifest["bundle"]["bundleRole"] != "server"
+        || manifest["bundle"]["workflow"] != "hierarchyAndReplication"
+        || manifest["bundle"]["capturedUtc"]
+            .as_str()
+            .is_none_or(|value| DateTime::parse_from_rfc3339(value).is_err())
+    {
+        failures.push("manifest loses the versioned synthetic preparation boundary".to_owned());
     }
     let topology = &manifest["topology"];
     let origin_host = topology["originHostHandle"].as_str();
@@ -891,6 +1192,7 @@ fn identity_and_schema_failures(scenario: &str, manifest: &Value, expected: &Val
         }
         if artifact["producerRole"] != "siteServer"
             || !matches!(artifact["direction"].as_str(), Some("origin" | "target"))
+            || !artifact_has_exact_source_tuple(artifact)
             || artifact["sourceVersion"].as_str() != Some(EXACT_SOURCE_VERSION)
             || artifact["collectedUtc"]
                 .as_str()
@@ -1100,6 +1402,23 @@ fn identity_and_schema_failures(scenario: &str, manifest: &Value, expected: &Val
             .push("expected output enables unsupported production/correlation state".to_owned());
     }
 
+    let normalized = match try_normalized_records(scenario, manifest) {
+        Ok(records) => records,
+        Err(error) => {
+            failures.push(error);
+            BTreeMap::new()
+        }
+    };
+    let artifact_by_id = artifacts
+        .into_iter()
+        .flatten()
+        .filter_map(|artifact| {
+            artifact["artifactId"]
+                .as_str()
+                .map(|artifact_id| (artifact_id, artifact))
+        })
+        .collect::<BTreeMap<_, _>>();
+
     let transactions = expected["transactions"].as_array();
     let transaction_ids = transactions
         .into_iter()
@@ -1169,6 +1488,10 @@ fn identity_and_schema_failures(scenario: &str, manifest: &Value, expected: &Val
         {
             failures.push("transaction key is outside declared topology".to_owned());
         }
+        if !transaction_semantics_are_coherent(transaction) {
+            failures
+                .push("transaction state/classification is not derived from its facts".to_owned());
+        }
         let gap_values = transaction["coverageGapArtifactIds"].as_array();
         let gap_ids = gap_values
             .map(|values| {
@@ -1221,6 +1544,7 @@ fn identity_and_schema_failures(scenario: &str, manifest: &Value, expected: &Val
             failures
                 .push("high confidence bypasses topology/time/terminal/coverage gates".to_owned());
         }
+        let mut cited_gap_ids = BTreeSet::new();
         let observations = transaction["observations"].as_array();
         for observation in observations.into_iter().flatten() {
             if !object_has_only(
@@ -1247,19 +1571,57 @@ fn identity_and_schema_failures(scenario: &str, manifest: &Value, expected: &Val
             }
             for reference in references.into_iter().flatten() {
                 if !object_has_only(reference, &["artifactId", "startLine", "endLine"])
-                    || reference["artifactId"].as_str().is_none_or(str::is_empty)
-                    || reference["startLine"]
-                        .as_u64()
-                        .and_then(|value| u32::try_from(value).ok())
-                        .is_none()
-                    || reference["endLine"]
-                        .as_u64()
-                        .and_then(|value| u32::try_from(value).ok())
-                        .is_none()
+                    || evidence_reference_key(reference).is_none()
                 {
                     failures.push("evidence reference is not exact and typed".to_owned());
+                    continue;
+                }
+                let reference_key =
+                    evidence_reference_key(reference).expect("typed reference was checked");
+                let Some(artifact) = artifact_by_id.get(reference_key.0.as_str()).copied() else {
+                    failures.push(
+                        "transaction evidence does not name one manifest artifact".to_owned(),
+                    );
+                    continue;
+                };
+                if artifact["captureState"] != "captured"
+                    || artifact["rotation"]["fragmentComplete"] != true
+                {
+                    cited_gap_ids.insert(reference_key.0.clone());
+                }
+                let Some(record) = normalized.get(&reference_key) else {
+                    failures.push(
+                        "transaction evidence does not close against one logical record".to_owned(),
+                    );
+                    continue;
+                };
+                if !observation_matches_record(manifest, artifact, transaction, observation, record)
+                {
+                    failures.push(
+                        "transaction observation semantics diverge from cited evidence".to_owned(),
+                    );
+                }
+                if transaction["confidence"] == "high"
+                    && record.timestamp.ordering_state != SccmTimeOrderingState::NormalizedUtc
+                {
+                    failures.push(
+                        "high transaction cites evidence without usable timestamp provenance"
+                            .to_owned(),
+                    );
                 }
             }
+        }
+        let declared_gap_ids = gap_ids.iter().copied().collect::<BTreeSet<_>>();
+        if cited_gap_ids
+            .iter()
+            .any(|artifact_id| !declared_gap_ids.contains(artifact_id.as_str()))
+        {
+            failures.push(
+                "cited incomplete coverage is missing from the derived transaction gaps".to_owned(),
+            );
+        }
+        if transaction["confidence"] == "high" && !cited_gap_ids.is_empty() {
+            failures.push("high transaction cites incomplete coverage".to_owned());
         }
     }
     let observation_ids = transactions
@@ -1311,23 +1673,78 @@ fn identity_and_schema_failures(scenario: &str, manifest: &Value, expected: &Val
         {
             failures.push("source-local artifact IDs are not exact closed identities".to_owned());
         }
+        let source_local_artifacts = source_local_artifact_ids
+            .iter()
+            .map(|artifact_id| artifact_by_id.get(artifact_id).copied())
+            .collect::<Option<Vec<_>>>()
+            .unwrap_or_default();
+        let classification = observation["classification"].as_str();
+        let exact_backing = match classification {
+            Some("coverageOnly") => {
+                !source_local_artifacts.is_empty()
+                    && source_local_artifacts.iter().all(|artifact| {
+                        artifact["captureState"] == "capped"
+                            && artifact["rotation"]["fragmentComplete"] == false
+                    })
+            }
+            Some("rotationSplit") => {
+                let lineages = source_local_artifacts
+                    .iter()
+                    .filter_map(|artifact| artifact["rotation"]["lineageId"].as_str())
+                    .collect::<BTreeSet<_>>();
+                let basenames = source_local_artifacts
+                    .iter()
+                    .filter_map(|artifact| artifact["originalBasename"].as_str())
+                    .collect::<BTreeSet<_>>();
+                source_local_artifacts.len() == 2
+                    && lineages.len() == 1
+                    && basenames == BTreeSet::from(["sender.lo_", "sender.log"])
+                    && source_local_artifacts.iter().all(|artifact| {
+                        artifact["captureState"] == "captured"
+                            && artifact["rotation"]["fragmentComplete"] == false
+                    })
+            }
+            Some("topologyMismatch") => {
+                !source_local_artifacts.is_empty()
+                    && source_local_artifacts.iter().all(|artifact| {
+                        artifact["captureState"] == "captured"
+                            && artifact["rotation"]["fragmentComplete"] == true
+                    })
+            }
+            _ => false,
+        };
+        if observation["confidence"] != "low"
+            || observation["correlationEligible"] != false
+            || !exact_backing
+        {
+            failures.push(
+                "source-local observation exceeds its exact low-confidence backing".to_owned(),
+            );
+        }
         let references = observation["evidence"].as_array();
-        if references.is_none() {
-            failures.push("source-local evidence is not an array".to_owned());
+        if references.is_none()
+            || matches!(classification, Some("coverageOnly" | "rotationSplit"))
+                && references.is_some_and(|values| !values.is_empty())
+            || classification == Some("topologyMismatch") && references.is_none_or(Vec::is_empty)
+        {
+            failures.push("source-local evidence does not match its classification".to_owned());
         }
         for reference in references.into_iter().flatten() {
             if !object_has_only(reference, &["artifactId", "startLine", "endLine"])
-                || reference["artifactId"].as_str().is_none_or(str::is_empty)
-                || reference["startLine"]
-                    .as_u64()
-                    .and_then(|value| u32::try_from(value).ok())
-                    .is_none()
-                || reference["endLine"]
-                    .as_u64()
-                    .and_then(|value| u32::try_from(value).ok())
-                    .is_none()
+                || evidence_reference_key(reference).is_none()
             {
                 failures.push("source-local evidence reference is not exact and typed".to_owned());
+                continue;
+            }
+            let reference_key =
+                evidence_reference_key(reference).expect("typed reference was checked");
+            if !source_local_artifact_ids.contains(&reference_key.0.as_str())
+                || !normalized.contains_key(&reference_key)
+            {
+                failures.push(
+                    "source-local evidence does not close against its declared artifacts"
+                        .to_owned(),
+                );
             }
         }
     }
@@ -1394,11 +1811,14 @@ fn hierarchy_candidates_are_deterministic_and_collision_resistant() {
             "{scenario}: artifact IDs are unique"
         );
 
-        let canonical = hierarchy_candidate_bytes(scenario, artifacts)
+        let canonical = hierarchy_candidate_bytes(scenario, &manifest)
             .unwrap_or_else(|error| panic!("{scenario}: {error}"));
-        let mut reversed_artifacts = artifacts.clone();
-        reversed_artifacts.reverse();
-        let reversed = hierarchy_candidate_bytes(scenario, &reversed_artifacts)
+        let mut reversed_manifest = manifest.clone();
+        reversed_manifest["artifacts"]
+            .as_array_mut()
+            .expect("artifacts are mutable")
+            .reverse();
+        let reversed = hierarchy_candidate_bytes(scenario, &reversed_manifest)
             .unwrap_or_else(|error| panic!("{scenario}: {error}"));
         assert_eq!(
             canonical, reversed,
@@ -1421,8 +1841,10 @@ fn hierarchy_candidates_are_deterministic_and_collision_resistant() {
         "fragmentComplete": true
     });
     artifacts.push(collision);
-    let groups =
-        hierarchy_candidate_groups("healthy-link", &artifacts).expect("candidates project");
+    let mut collision_manifest = manifest.clone();
+    collision_manifest["artifacts"] = Value::Array(artifacts.clone());
+    let groups = hierarchy_candidate_groups("healthy-link", &collision_manifest)
+        .expect("candidates project");
     let exact_groups = groups
         .iter()
         .filter(|group| {
@@ -1455,11 +1877,14 @@ fn hierarchy_candidates_are_deterministic_and_collision_resistant() {
         colliding_sender_facts[0].rotation_kind,
         colliding_sender_facts[1].rotation_kind
     );
-    let canonical =
-        hierarchy_candidate_bytes("healthy-link", &artifacts).expect("candidates serialize");
-    artifacts.reverse();
-    let reversed =
-        hierarchy_candidate_bytes("healthy-link", &artifacts).expect("candidates serialize");
+    let canonical = hierarchy_candidate_bytes("healthy-link", &collision_manifest)
+        .expect("candidates serialize");
+    collision_manifest["artifacts"]
+        .as_array_mut()
+        .expect("artifacts are mutable")
+        .reverse();
+    let reversed = hierarchy_candidate_bytes("healthy-link", &collision_manifest)
+        .expect("candidates serialize");
     assert_eq!(
         canonical, reversed,
         "provenance collision changed canonical candidate bytes"
@@ -1484,13 +1909,8 @@ fn generic_ccm_site_code_token_cannot_create_a_hierarchy_candidate() {
         parse_fixture_fields(&record.message).is_err(),
         "generic CCM text must not satisfy the exact hierarchy grammar"
     );
-    let candidates = hierarchy_candidate_groups(
-        scenario,
-        manifest["artifacts"]
-            .as_array()
-            .expect("generic artifacts are an array"),
-    )
-    .expect("generic artifacts project safely");
+    let candidates =
+        hierarchy_candidate_groups(scenario, &manifest).expect("generic artifacts project safely");
     assert!(
         candidates.is_empty(),
         "a site-code-looking token alone created a hierarchy candidate"
@@ -2650,163 +3070,161 @@ fn hierarchy_review_4826454819_mutations_fail_closed() {
         read_json("absent-remote-source", "expected.json").expect("absent expected loads");
 
     let mut accepted = Vec::new();
-    let mut audit = |label: &'static str, scenario: &str, manifest: &Value, expected: &Value| {
-        if identity_and_schema_failures(scenario, manifest, expected).is_empty() {
-            accepted.push(label);
-        }
-    };
     let mut candidate_acceptances = Vec::new();
-
-    let mut capped_terminal_manifest = healthy_manifest.clone();
-    capped_terminal_manifest["artifacts"][3]["captureState"] = serde_json::json!("capped");
-    let mut capped_terminal_expected = healthy_expected.clone();
-    capped_terminal_expected["coverage"][3]["state"] = serde_json::json!("capped");
-    audit(
-        "high transaction cited capped terminal evidence without a gap",
-        "healthy-link",
-        &capped_terminal_manifest,
-        &capped_terminal_expected,
-    );
-
-    let mut denied_terminal_manifest = healthy_manifest.clone();
-    denied_terminal_manifest["artifacts"][3]["captureState"] = serde_json::json!("accessDenied");
-    let denied_terminal_artifact = denied_terminal_manifest["artifacts"][3]
-        .as_object_mut()
-        .expect("terminal artifact is mutable");
-    for physical_field in ["relativePath", "bytesCopied", "encoding", "collectionLimit"] {
-        denied_terminal_artifact.remove(physical_field);
-    }
-    denied_terminal_artifact["rotation"]
-        .as_object_mut()
-        .expect("terminal rotation is mutable")
-        .remove("fragmentComplete");
-    let mut denied_terminal_expected = healthy_expected.clone();
-    denied_terminal_expected["coverage"][3]["state"] = serde_json::json!("accessDenied");
-    audit(
-        "high transaction cited access-denied terminal evidence without a gap",
-        "healthy-link",
-        &denied_terminal_manifest,
-        &denied_terminal_expected,
-    );
-
-    let mut partial_terminal_manifest = healthy_manifest.clone();
-    partial_terminal_manifest["artifacts"][3]["rotation"]["fragmentComplete"] =
-        serde_json::json!(false);
-    audit(
-        "high transaction cited an incomplete terminal fragment without a gap",
-        "healthy-link",
-        &partial_terminal_manifest,
-        &healthy_expected,
-    );
-
-    let mut relabeled_failure = healthy_expected.clone();
-    let terminal_observation = &mut relabeled_failure["transactions"][0]["observations"][6];
-    terminal_observation["disposition"] = serde_json::json!("failed");
-    terminal_observation["evidence"] = serde_json::json!([{
-        "artifactId": "healthy-02-sender",
-        "startLine": 1,
-        "endLine": 1
-    }]);
-    relabeled_failure["transactions"][0]["state"] = serde_json::json!("failed");
-    relabeled_failure["transactions"][0]["classification"] = serde_json::json!("confirmedFailure");
-    audit(
-        "successful evidence was relabeled and recited as a confirmed failure",
-        "healthy-link",
-        &healthy_manifest,
-        &relabeled_failure,
-    );
-
-    let mut sender_moved_to_target = healthy_manifest.clone();
-    sender_moved_to_target["artifacts"][1]["direction"] = serde_json::json!("target");
-    sender_moved_to_target["artifacts"][1]["producerHostHandle"] =
-        healthy_manifest["topology"]["targetHostHandle"].clone();
-    audit(
-        "origin sender evidence moved to the target direction",
-        "healthy-link",
-        &sender_moved_to_target,
-        &healthy_expected,
-    );
-
-    let mut sender_wrong_source = healthy_manifest.clone();
-    sender_wrong_source["artifacts"][1]["sourceId"] = serde_json::json!("server-hierarchy-control");
-    audit(
-        "sender evidence was relabeled as a control source",
-        "healthy-link",
-        &sender_wrong_source,
-        &healthy_expected,
-    );
-
-    let mut sender_wrong_basename = healthy_manifest.clone();
-    sender_wrong_basename["artifacts"][1]["originalBasename"] = serde_json::json!("despool.log");
-    audit(
-        "origin sender evidence was relabeled with a target-only basename",
-        "healthy-link",
-        &sender_wrong_basename,
-        &healthy_expected,
-    );
-
-    let mut out_of_profile_sender = healthy_manifest.clone();
-    out_of_profile_sender["artifacts"][1]["sourceVersion"] = serde_json::json!("5.00.TEST.9999");
-    if hierarchy_candidate_groups(
-        "healthy-link",
-        out_of_profile_sender["artifacts"]
-            .as_array()
-            .expect("artifacts are an array"),
-    )
-    .expect("candidate projection remains deterministic")
-    .iter()
-    .flat_map(|group| &group.facts)
-    .any(|fact| fact.artifact_id == "healthy-02-sender")
     {
-        candidate_acceptances.push("out-of-profile sender entered an exact candidate");
+        let mut audit =
+            |label: &'static str, scenario: &str, manifest: &Value, expected: &Value| {
+                if identity_and_schema_failures(scenario, manifest, expected).is_empty() {
+                    accepted.push(label);
+                }
+            };
+
+        let mut capped_terminal_manifest = healthy_manifest.clone();
+        capped_terminal_manifest["artifacts"][3]["captureState"] = serde_json::json!("capped");
+        let mut capped_terminal_expected = healthy_expected.clone();
+        capped_terminal_expected["coverage"][3]["state"] = serde_json::json!("capped");
+        audit(
+            "high transaction cited capped terminal evidence without a gap",
+            "healthy-link",
+            &capped_terminal_manifest,
+            &capped_terminal_expected,
+        );
+
+        let mut denied_terminal_manifest = healthy_manifest.clone();
+        denied_terminal_manifest["artifacts"][3]["captureState"] =
+            serde_json::json!("accessDenied");
+        let denied_terminal_artifact = denied_terminal_manifest["artifacts"][3]
+            .as_object_mut()
+            .expect("terminal artifact is mutable");
+        for physical_field in ["relativePath", "bytesCopied", "encoding", "collectionLimit"] {
+            denied_terminal_artifact.remove(physical_field);
+        }
+        denied_terminal_artifact["rotation"]
+            .as_object_mut()
+            .expect("terminal rotation is mutable")
+            .remove("fragmentComplete");
+        let mut denied_terminal_expected = healthy_expected.clone();
+        denied_terminal_expected["coverage"][3]["state"] = serde_json::json!("accessDenied");
+        audit(
+            "high transaction cited access-denied terminal evidence without a gap",
+            "healthy-link",
+            &denied_terminal_manifest,
+            &denied_terminal_expected,
+        );
+
+        let mut partial_terminal_manifest = healthy_manifest.clone();
+        partial_terminal_manifest["artifacts"][3]["rotation"]["fragmentComplete"] =
+            serde_json::json!(false);
+        audit(
+            "high transaction cited an incomplete terminal fragment without a gap",
+            "healthy-link",
+            &partial_terminal_manifest,
+            &healthy_expected,
+        );
+
+        let mut relabeled_failure = healthy_expected.clone();
+        let terminal_observation = &mut relabeled_failure["transactions"][0]["observations"][6];
+        terminal_observation["disposition"] = serde_json::json!("failed");
+        terminal_observation["evidence"] = serde_json::json!([{
+            "artifactId": "healthy-02-sender",
+            "startLine": 1,
+            "endLine": 1
+        }]);
+        relabeled_failure["transactions"][0]["state"] = serde_json::json!("failed");
+        relabeled_failure["transactions"][0]["classification"] =
+            serde_json::json!("confirmedFailure");
+        audit(
+            "successful evidence was relabeled and recited as a confirmed failure",
+            "healthy-link",
+            &healthy_manifest,
+            &relabeled_failure,
+        );
+
+        let mut sender_moved_to_target = healthy_manifest.clone();
+        sender_moved_to_target["artifacts"][1]["direction"] = serde_json::json!("target");
+        sender_moved_to_target["artifacts"][1]["producerHostHandle"] =
+            healthy_manifest["topology"]["targetHostHandle"].clone();
+        audit(
+            "origin sender evidence moved to the target direction",
+            "healthy-link",
+            &sender_moved_to_target,
+            &healthy_expected,
+        );
+
+        let mut sender_wrong_source = healthy_manifest.clone();
+        sender_wrong_source["artifacts"][1]["sourceId"] =
+            serde_json::json!("server-hierarchy-control");
+        audit(
+            "sender evidence was relabeled as a control source",
+            "healthy-link",
+            &sender_wrong_source,
+            &healthy_expected,
+        );
+
+        let mut sender_wrong_basename = healthy_manifest.clone();
+        sender_wrong_basename["artifacts"][1]["originalBasename"] =
+            serde_json::json!("despool.log");
+        audit(
+            "origin sender evidence was relabeled with a target-only basename",
+            "healthy-link",
+            &sender_wrong_basename,
+            &healthy_expected,
+        );
+
+        let mut out_of_profile_sender = healthy_manifest.clone();
+        out_of_profile_sender["artifacts"][1]["sourceVersion"] =
+            serde_json::json!("5.00.TEST.9999");
+        if hierarchy_candidate_groups("healthy-link", &out_of_profile_sender)
+            .expect("candidate projection remains deterministic")
+            .iter()
+            .flat_map(|group| &group.facts)
+            .any(|fact| fact.artifact_id == "healthy-02-sender")
+        {
+            candidate_acceptances.push("out-of-profile sender entered an exact candidate");
+        }
+
+        let mut partial_sender = healthy_manifest.clone();
+        partial_sender["artifacts"][1]["rotation"]["fragmentComplete"] = serde_json::json!(false);
+        if hierarchy_candidate_groups("healthy-link", &partial_sender)
+            .expect("candidate projection remains deterministic")
+            .iter()
+            .flat_map(|group| &group.facts)
+            .any(|fact| fact.artifact_id == "healthy-02-sender")
+        {
+            candidate_acceptances.push("incomplete sender fragment entered an exact candidate");
+        }
+
+        let mut escalated_source_local = incomplete_expected.clone();
+        escalated_source_local["sourceLocalObservations"][0]["confidence"] =
+            serde_json::json!("high");
+        escalated_source_local["sourceLocalObservations"][0]["correlationEligible"] =
+            serde_json::json!(true);
+        audit(
+            "capped source-local evidence became high and correlation eligible",
+            "incomplete",
+            &incomplete_manifest,
+            &escalated_source_local,
+        );
+
+        let mut missing_required_request = absent_expected.clone();
+        missing_required_request["artifactRequests"] = serde_json::json!([]);
+        audit(
+            "required absent-coverage request was deleted",
+            "absent-remote-source",
+            &absent_manifest,
+            &missing_required_request,
+        );
+
+        let mut production_labeled_fixture = healthy_manifest.clone();
+        production_labeled_fixture["proposalOnly"] = serde_json::json!(false);
+        production_labeled_fixture["syntheticFixture"] = serde_json::json!(false);
+        audit(
+            "synthetic proposal fixture was relabeled as production evidence",
+            "healthy-link",
+            &production_labeled_fixture,
+            &healthy_expected,
+        );
     }
-
-    let mut partial_sender = healthy_manifest.clone();
-    partial_sender["artifacts"][1]["rotation"]["fragmentComplete"] = serde_json::json!(false);
-    if hierarchy_candidate_groups(
-        "healthy-link",
-        partial_sender["artifacts"]
-            .as_array()
-            .expect("artifacts are an array"),
-    )
-    .expect("candidate projection remains deterministic")
-    .iter()
-    .flat_map(|group| &group.facts)
-    .any(|fact| fact.artifact_id == "healthy-02-sender")
-    {
-        candidate_acceptances.push("incomplete sender fragment entered an exact candidate");
-    }
-
-    let mut escalated_source_local = incomplete_expected.clone();
-    escalated_source_local["sourceLocalObservations"][0]["confidence"] = serde_json::json!("high");
-    escalated_source_local["sourceLocalObservations"][0]["correlationEligible"] =
-        serde_json::json!(true);
-    audit(
-        "capped source-local evidence became high and correlation eligible",
-        "incomplete",
-        &incomplete_manifest,
-        &escalated_source_local,
-    );
-
-    let mut missing_required_request = absent_expected.clone();
-    missing_required_request["artifactRequests"] = serde_json::json!([]);
-    audit(
-        "required absent-coverage request was deleted",
-        "absent-remote-source",
-        &absent_manifest,
-        &missing_required_request,
-    );
-
-    let mut production_labeled_fixture = healthy_manifest.clone();
-    production_labeled_fixture["proposalOnly"] = serde_json::json!(false);
-    production_labeled_fixture["syntheticFixture"] = serde_json::json!(false);
-    audit(
-        "synthetic proposal fixture was relabeled as production evidence",
-        "healthy-link",
-        &production_labeled_fixture,
-        &healthy_expected,
-    );
-    drop(audit);
     accepted.extend(candidate_acceptances);
 
     assert!(
