@@ -621,6 +621,53 @@ fn check_pair_registry(registry: &PairRegistry) -> Result<(), String> {
     Ok(())
 }
 
+const POLICY_MATRIX_FIXTURE: &str = "policy_management_point/adversarial-matrix.json";
+const CONTENT_MATRIX_FIXTURE: &str = "content_distribution_point/adversarial-matrix.json";
+
+fn check_mutated_matrix(
+    fixture: &str,
+    spec: &MatrixSpec,
+    mutate: impl FnOnce(&mut Value),
+) -> Result<(), String> {
+    let mut value = read_json(&corpus_root().join(fixture));
+    mutate(&mut value);
+    let matrix: ScenarioMatrix = typed(value)?;
+    check_matrix_contract(&matrix, spec)
+}
+
+fn scenario_slot<'a>(matrix: &'a mut Value, scenario_id: &str) -> &'a mut Value {
+    matrix["scenarios"]
+        .as_array_mut()
+        .expect("scenario matrix fixture has a scenarios array")
+        .iter_mut()
+        .find(|scenario| scenario["scenarioId"] == scenario_id)
+        .unwrap_or_else(|| panic!("scenario {scenario_id} exists in the fixture"))
+}
+
+#[test]
+fn adversarial_projection_privacy_mutations_fail_closed() {
+    let error = check_mutated_matrix(POLICY_MATRIX_FIXTURE, &POLICY_SPEC, |matrix| {
+        scenario_slot(matrix, "policy-redaction")["expectedPublicProjection"]["rawIdentity"] =
+            Value::String("LAB\\SyntheticUser".to_owned());
+    })
+    .expect_err("a decoded declared private marker cannot enter the public projection");
+    assert!(error.contains("policy-redaction"), "{error}");
+
+    let error = check_mutated_matrix(POLICY_MATRIX_FIXTURE, &POLICY_SPEC, |matrix| {
+        scenario_slot(matrix, "policy-invalid-offset")["expectedPublicProjection"]
+            ["evidencePath"] = Value::String("C:\\Windows\\CCM\\Logs\\PolicyAgent.log".to_owned());
+    })
+    .expect_err("an undeclared raw Windows path cannot enter the public projection");
+    assert!(error.contains("policy-invalid-offset"), "{error}");
+
+    let error = check_mutated_matrix(POLICY_MATRIX_FIXTURE, &POLICY_SPEC, |matrix| {
+        scenario_slot(matrix, "policy-redaction")["expectedPublicProjection"]
+            ["LAB\\SyntheticUser"] = Value::Bool(true);
+    })
+    .expect_err("a decoded private marker cannot hide inside a projection key");
+    assert!(error.contains("policy-redaction"), "{error}");
+}
+
 #[test]
 fn correlation_preparation_contains_no_production_module() {
     assert!(
