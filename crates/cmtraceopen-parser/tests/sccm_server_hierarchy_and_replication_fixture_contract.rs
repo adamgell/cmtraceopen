@@ -3295,3 +3295,26 @@ fn hierarchy_coderabbit_878a051_shared_predicates_stay_narrow() {
         "deferred is a transaction state, not a source observation disposition"
     );
 }
+
+#[test]
+fn hierarchy_coderabbit_0a6ba32_rotation_uses_shared_wire_kind() {
+    let manifest =
+        read_json("rotation-boundary", "manifest.json").expect("rotation manifest loads");
+    let archived = &manifest["artifacts"][1];
+
+    assert_eq!(
+        archived["rotation"]["kind"], "loUnderscore",
+        "the .lo_ filename uses the shared SccmRotation wire tag"
+    );
+    assert_eq!(
+        rotation(&archived["rotation"]),
+        Some(SccmRotation::LoUnderscore)
+    );
+
+    let mut legacy_kind = archived["rotation"].clone();
+    legacy_kind["kind"] = serde_json::json!("lo_");
+    assert!(
+        rotation(&legacy_kind).is_none(),
+        "the #331 fixture contract must not preserve a private rotation alias"
+    );
+}
