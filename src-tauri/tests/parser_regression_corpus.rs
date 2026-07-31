@@ -726,3 +726,42 @@ fn test_dns_debug_rcodes_fixture_severity() {
     assert_eq!(parsed.entries[2].severity, "Warning"); // NXDOMAIN
     assert_eq!(parsed.entries[3].severity, "Error"); // SERVFAIL
 }
+
+#[test]
+fn intune_device_inventory_corpus_selects_and_frames_harvester_and_adaptor_records() {
+    let harvester = parse_fixture("intune_device_inventory/clean/IntuneInventoryHarvesterLog.log");
+    assert_parsed_selection(
+        &harvester,
+        "IntuneDeviceInventory",
+        "IntuneDeviceInventory",
+        "Dedicated",
+        "Structured",
+        "PhysicalLine",
+        "Timestamped",
+    );
+    assert_specialization(&harvester.selection, Some("IntuneDeviceInventoryHarvester"));
+    assert_eq!(harvester.total_lines, 3);
+    assert_eq!(harvester.parse_errors, 0);
+    assert_eq!(harvester.entries.len(), 3);
+    assert_eq!(harvester.entries[1].severity, "Warning");
+
+    let adaptor = parse_fixture("intune_device_inventory/clean/InventoryAdaptor.log_");
+    assert_parsed_selection(
+        &adaptor,
+        "IntuneDeviceInventory",
+        "IntuneDeviceInventory",
+        "Dedicated",
+        "Structured",
+        "LogicalRecord",
+        "Timestamped",
+    );
+    assert_specialization(&adaptor.selection, Some("IntuneDeviceInventoryAdaptor"));
+    assert_eq!(adaptor.total_lines, 3);
+    assert_eq!(adaptor.parse_errors, 0);
+    assert_eq!(adaptor.entries.len(), 2);
+    assert_eq!(adaptor.entries[0].line_number, 1);
+    assert_eq!(
+        adaptor.entries[0].message,
+        "Adapter result:\n{\"Status\":200,\"HResult\":\"0x00000000\",\"Data\":{\"Example\":\"value\"}}"
+    );
+}
