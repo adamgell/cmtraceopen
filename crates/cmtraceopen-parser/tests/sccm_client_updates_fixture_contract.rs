@@ -621,7 +621,9 @@ fn expected_boundary_failures(expected: &Value, contract: &ScenarioContract) -> 
     let facts = match handoff["counterpartReadyFacts"].as_array() {
         Some(facts) => facts,
         None => {
-            failures.push(format!("{scenario}: counterpartReadyFacts must be an array"));
+            failures.push(format!(
+                "{scenario}: counterpartReadyFacts must be an array"
+            ));
             &empty_facts
         }
     };
@@ -906,9 +908,11 @@ fn citation_triples(
 
 fn evidence_refs_cite_unique_records(references: &[(String, u64, u64)]) -> bool {
     let mut cited_records = BTreeSet::new();
-    references.iter().all(|(artifact_id, start_line, end_line)| {
-        (*start_line..=*end_line).all(|line| cited_records.insert((artifact_id.clone(), line)))
-    })
+    references
+        .iter()
+        .all(|(artifact_id, start_line, end_line)| {
+            (*start_line..=*end_line).all(|line| cited_records.insert((artifact_id.clone(), line)))
+        })
 }
 
 fn citation_failures(
@@ -1579,8 +1583,7 @@ fn manifest_artifact_kind_failures(artifact: &Value) -> Vec<String> {
             artifact["kind"]
         ));
     }
-    if matches!(expected_kind, "cbsLog" | "supplementalLog")
-        && !artifact["sourceVersion"].is_null()
+    if matches!(expected_kind, "cbsLog" | "supplementalLog") && !artifact["sourceVersion"].is_null()
     {
         failures.push(format!(
             "{artifact_id}: {expected_kind} sourceVersion must be null"
@@ -3721,14 +3724,14 @@ fn software_update_fixture_contract_rejects_phase_provenance_privacy_and_shape_m
         ),
         (
             "correlationHandoff scalar",
-            |expected: &mut Value| {
-                expected["correlationHandoff"] = serde_json::json!("no-handoff")
-            },
+            |expected: &mut Value| expected["correlationHandoff"] = serde_json::json!("no-handoff"),
             "counterpartReadyFacts must be an array",
         ),
         (
             "non-string transactionId",
-            |expected: &mut Value| expected["transactions"][0]["transactionId"] = serde_json::json!(323),
+            |expected: &mut Value| {
+                expected["transactions"][0]["transactionId"] = serde_json::json!(323)
+            },
             "transactionId must be a string",
         ),
         (
