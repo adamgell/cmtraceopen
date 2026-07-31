@@ -5,6 +5,7 @@ use chrono::DateTime;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use crate::sccm::rotation::is_canonical_rotation_timestamp;
 use crate::sccm::{
     SccmArtifact, SccmCoverageState, SccmRole, SccmRotation, SCCM_DIAGNOSTICS_SCHEMA_VERSION,
 };
@@ -686,16 +687,5 @@ fn is_safe_rotation_path_segment(value: &str) -> bool {
         })
         || value
             .strip_prefix("timestamped-")
-            .is_some_and(is_safe_timestamp_path_segment)
-}
-
-fn is_safe_timestamp_path_segment(value: &str) -> bool {
-    value.len() == 15
-        && value.bytes().enumerate().all(|(index, byte)| {
-            if index == 8 {
-                byte == b'-'
-            } else {
-                byte.is_ascii_digit()
-            }
-        })
+            .is_some_and(is_canonical_rotation_timestamp)
 }
