@@ -1697,7 +1697,7 @@ fn counterpart_source_failures(
     ];
 
     for fact in facts {
-        if expected["correlationHandoff"]["topologyCompatibilityEvaluated"] == false
+        if expected["correlationHandoff"]["topologyCompatibilityEvaluated"].as_bool() != Some(true)
             && (fact
                 .as_object()
                 .is_some_and(|fact| fact.contains_key("topologyCompatible"))
@@ -2940,6 +2940,29 @@ fn software_update_fixture_rejects_unevaluated_topology_claims_and_eligibility()
             Value::Bool(false);
         expected["correlationHandoff"]["counterpartReadyFacts"][0]["topologyCompatible"] = value;
         let failures = scenario_semantic_failures(&scenario_dir, &manifest, &expected, contract);
+        if !failures
+            .iter()
+            .any(|failure| failure.contains("unevaluated topology compatibility"))
+        {
+            missing_rejections.push(format!("{label}: {}", failures.join(" | ")));
+        }
+    }
+
+    for label in ["missing-evaluation", "null-evaluation"] {
+        let mut expected = base_expected.clone();
+        expected["correlationHandoff"]["counterpartReadyFacts"][0]["correlationEligible"] =
+            Value::Bool(false);
+        expected["correlationHandoff"]["counterpartReadyFacts"][0]["topologyCompatible"] =
+            Value::Bool(true);
+        if label == "missing-evaluation" {
+            expected["correlationHandoff"]
+                .as_object_mut()
+                .expect("correlation handoff is an object")
+                .remove("topologyCompatibilityEvaluated");
+        } else {
+            expected["correlationHandoff"]["topologyCompatibilityEvaluated"] = Value::Null;
+        }
+        let failures = counterpart_source_failures(&scenario_dir, &manifest, &expected);
         if !failures
             .iter()
             .any(|failure| failure.contains("unevaluated topology compatibility"))
