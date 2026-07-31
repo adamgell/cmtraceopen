@@ -68,11 +68,14 @@ fn activity_id_re() -> &'static Regex {
 }
 
 /// Structural fields of one record head.
+///
+/// The timestamp is carried as source text only. Deriving an instant or a
+/// rendered form is the projection's job (`parse::to_log_entries`), which works
+/// from `PortalTimestamp::raw_text`; computing them here as well would be per
+/// record work that nothing reads.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PortalRecordHead {
     pub raw_timestamp: String,
-    pub timestamp_millis: Option<i64>,
-    pub timestamp_display: String,
     pub process: String,
     pub severity_letter: String,
     pub thread_id: Option<u32>,
@@ -83,43 +86,27 @@ pub(crate) struct PortalRecordHead {
 /// Parse a physical line as a record head. Returns `None` when the line does not
 /// satisfy the full grammar.
 pub(crate) fn parse_record_head(line: &str) -> Option<PortalRecordHead> {
-    let caps = record_head_re().captures(line.trim_end())?;
-
-    let num = |i: usize| -> u32 {
-        caps.get(i)
-            .and_then(|m| m.as_str().parse().ok())
-            .unwrap_or(0)
-    };
-    let year: i32 = caps
-        .get(1)
-        .and_then(|m| m.as_str().parse().ok())
-        .unwrap_or(0);
-    let (month, day, hour, minute, second, millis) =
-        (num(2), num(3), num(4), num(5), num(6), num(7));
-
-    let timestamp_millis = chrono::NaiveDate::from_ymd_opt(year, month, day)
-        .and_then(|d| d.and_hms_milli_opt(hour, minute, second, millis))
-        .map(|dt| dt.and_utc().timestamp_millis());
+    let trimmed = line.trim_end();
+    let caps = record_head_re().captures(trimmed)?;
 
     // `raw_timestamp` must be the source text, not a re-rendering of the parsed
     // numbers. The grammar tolerates multiple spaces or a tab between the date
     // and the time, so reconstructing with a single space silently rewrote the
     // evidence that `PortalTimestamp::raw_text` promises to preserve verbatim.
     // Take the matched span from the first date group to the last time group.
-    let trimmed = line.trim_end();
     let raw_timestamp = match (caps.get(1), caps.get(7)) {
         (Some(first), Some(last)) => trimmed[first.start()..last.end()].to_string(),
-        _ => format!(
-            "{year:04}-{month:02}-{day:02} {hour:02}:{minute:02}:{second:02}:{millis:03}"
-        ),
+        // Both groups are mandatory in the grammar, so this is unreachable
+        // today. Falling back beats panicking if the pattern is ever edited.
+        _ => trimmed
+            .split_whitespace()
+            .take(2)
+            .collect::<Vec<_>>()
+            .join(" "),
     };
 
     Some(PortalRecordHead {
         raw_timestamp,
-        timestamp_millis,
-        timestamp_display: format!(
-            "{year:04}-{month:02}-{day:02} {hour:02}:{minute:02}:{second:02}.{millis:03}"
-        ),
         process: caps
             .get(8)
             .map(|m| m.as_str().trim())

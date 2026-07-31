@@ -36,11 +36,20 @@ fn looks_like_unified_log_ndjson(line: &str) -> bool {
         && (trimmed.contains("\"processImagePath\"") || trimmed.contains("\"subsystem\""))
 }
 
+/// Allocation-free: this runs for every sampled line of every candidate
+/// artifact, and `to_ascii_lowercase` allocated a fresh `String` per check.
+fn starts_with_ignore_ascii_case(haystack: &str, prefix: &str) -> bool {
+    haystack
+        .as_bytes()
+        .get(..prefix.len())
+        .is_some_and(|head| head.eq_ignore_ascii_case(prefix.as_bytes()))
+}
+
 fn looks_like_diagnostic_report_header(line: &str) -> bool {
     let trimmed = line.trim();
     trimmed.eq_ignore_ascii_case("Company Portal Diagnostic Report")
-        || trimmed.to_ascii_lowercase().starts_with("report id:")
-        || trimmed.to_ascii_lowercase().starts_with("included files:")
+        || starts_with_ignore_ascii_case(trimmed, "report id:")
+        || starts_with_ignore_ascii_case(trimmed, "included files:")
 }
 
 /// Detect what a candidate artifact actually is.
