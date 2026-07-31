@@ -1174,3 +1174,255 @@ fn management_point_conflicting_evidence_identity_reuse_fails_closed() {
         "ambiguous evidence identities must have deterministic public handling"
     );
 }
+
+#[test]
+fn management_point_overlapping_physical_ranges_fail_closed_deterministically() {
+    let mut bundle = load_bundle("healthy-policy");
+    for evidence in &mut bundle.evidence {
+        if evidence.reference.artifact_id != "mp-healthy-policy-current" {
+            continue;
+        }
+        match evidence.reference.line_start {
+            Some(1) => {
+                evidence.reference.line_start = Some(2);
+                evidence.reference.line_end = Some(3);
+                evidence.reference.entry_id = "mp-review-overlap-a".to_owned();
+                evidence.evidence_id = evidence.reference.entry_id.clone();
+            }
+            Some(2) => {
+                evidence.reference.line_start = Some(3);
+                evidence.reference.line_end = Some(4);
+                evidence.reference.entry_id = "mp-review-overlap-b".to_owned();
+                evidence.evidence_id = evidence.reference.entry_id.clone();
+            }
+            _ => {}
+        }
+    }
+
+    let first = analysis_value(&bundle);
+    assert_no_high_success(&first, "overlapping physical logical records");
+
+    bundle.evidence.reverse();
+    assert_eq!(
+        analysis_value(&bundle),
+        first,
+        "overlap quarantine must not depend on bundle order"
+    );
+}
+
+#[test]
+fn management_point_exact_labels_reject_hyphenated_prefixes() {
+    let mut accepted = Vec::new();
+    for label in [
+        "RequestId",
+        "PolicyId",
+        "ClientHandle",
+        "SiteCode",
+        "MPHandle",
+    ] {
+        let mut bundle = load_bundle("healthy-policy");
+        for evidence in &mut bundle.evidence {
+            evidence.message = evidence
+                .message
+                .replace(&format!("{label}="), &format!("Not-{label}="));
+        }
+        if analysis_value(&bundle)["transactions"]
+            .as_array()
+            .expect("transactions")
+            .iter()
+            .any(|transaction| {
+                transaction["state"] == "succeeded" && transaction["confidence"] == "high"
+            })
+        {
+            accepted.push(label);
+        }
+    }
+
+    let mut failure = load_bundle("auth-failure");
+    let terminal = failure
+        .evidence
+        .iter_mut()
+        .find(|evidence| evidence.message.contains("Authenticate failed terminal"))
+        .expect("terminal authentication failure");
+    terminal.message = terminal.message.replace("Result=", "Not-Result=");
+    if analysis_value(&failure)["transactions"]
+        .as_array()
+        .expect("transactions")
+        .iter()
+        .any(|transaction| {
+            transaction["state"] == "failed"
+                && transaction["classification"] == "confirmedFailure"
+                && transaction["confidence"] == "high"
+        })
+    {
+        accepted.push("Result");
+    }
+
+    assert!(
+        accepted.is_empty(),
+        "hyphen-prefixed exact-profile labels were accepted: {accepted:?}"
+    );
+}
+
+#[test]
+fn successful_counterpart_handoff_cites_the_decisive_success() {
+    let mut bundle = load_bundle("healthy-policy");
+    let deferred = bundle
+        .evidence
+        .iter_mut()
+        .find(|evidence| {
+            evidence
+                .message
+                .contains("Respond deferred retry scheduled")
+        })
+        .expect("deferred response");
+    deferred.message = deferred.message.replace(
+        "Respond deferred retry scheduled",
+        "Respond succeeded before recovered outcome",
+    );
+
+    let earlier_outcome = bundle
+        .evidence
+        .iter_mut()
+        .find(|evidence| evidence.message.contains("Respond succeeded after retry"))
+        .expect("earlier response");
+    earlier_outcome.message = earlier_outcome.message.replace(
+        "Respond succeeded after retry",
+        "Record outcome failed terminal Result=0x80004005",
+    );
+
+    let decisive_success = bundle
+        .evidence
+        .iter_mut()
+        .find(|evidence| evidence.message.contains("Record outcome succeeded"))
+        .expect("decisive successful outcome");
+    decisive_success.message = decisive_success
+        .message
+        .replace(" PolicyId={a8111111-1111-1111-1111-111111111111}", "");
+
+    let analysis = analysis_value(&bundle);
+    let transaction = analysis["transactions"]
+        .as_array()
+        .expect("transactions")
+        .iter()
+        .find(|transaction| transaction["state"] == "succeeded")
+        .expect("recovered successful transaction");
+    assert_eq!(transaction["phase"], "recordOutcome");
+    assert_eq!(transaction["confidence"], "high");
+
+    let counterpart = analysis["counterpartReadyFacts"]
+        .as_array()
+        .expect("counterpart facts")
+        .iter()
+        .find(|fact| fact["state"] == "succeeded")
+        .expect("successful counterpart");
+    assert_eq!(counterpart["classification"], "success");
+    assert_eq!(
+        counterpart["evidence"]["lineStart"], 4,
+        "the success handoff must cite the decisive successful record"
+    );
+    assert!(
+        counterpart["terminalEvidence"].is_null(),
+        "successful handoff cannot advertise terminal-failure evidence"
+    );
+}
+
+#[test]
+fn management_point_result_codes_must_match_the_event_outcome() {
+    let mut nonzero_success = load_bundle("healthy-policy");
+    nonzero_success
+        .evidence
+        .iter_mut()
+        .find(|evidence| evidence.message.contains("Record outcome succeeded"))
+        .expect("successful outcome")
+        .message
+        .push_str(" Result=0x80004005");
+    assert_no_high_success(
+        &analysis_value(&nonzero_success),
+        "nonzero terminal result on a success marker",
+    );
+
+    let mut zero_success = load_bundle("healthy-policy");
+    zero_success
+        .evidence
+        .iter_mut()
+        .find(|evidence| evidence.message.contains("Record outcome succeeded"))
+        .expect("successful outcome")
+        .message
+        .push_str(" Result=0x00000000");
+    let zero_success_analysis = analysis_value(&zero_success);
+    assert!(
+        zero_success_analysis["transactions"]
+            .as_array()
+            .expect("transactions")
+            .iter()
+            .any(|transaction| {
+                transaction["state"] == "succeeded" && transaction["confidence"] == "high"
+            }),
+        "an explicit zero result must remain compatible with success"
+    );
+
+    let mut zero_failure = load_bundle("auth-failure");
+    let failure = zero_failure
+        .evidence
+        .iter_mut()
+        .find(|evidence| evidence.message.contains("Authenticate failed terminal"))
+        .expect("terminal authentication failure");
+    failure.message = failure
+        .message
+        .replace("Result=0x80010001", "Result=0x00000000");
+    assert!(
+        analysis_value(&zero_failure)["transactions"]
+            .as_array()
+            .expect("transactions")
+            .iter()
+            .all(|transaction| transaction["classification"] != "confirmedFailure"),
+        "an explicit zero result cannot substantiate a terminal failure"
+    );
+}
+
+#[test]
+fn management_point_transaction_citations_do_not_span_rejected_records() {
+    let mut bundle = load_bundle("healthy-policy");
+    let rejected = bundle
+        .evidence
+        .iter_mut()
+        .find(|evidence| {
+            evidence.reference.artifact_id == "mp-healthy-policy-current"
+                && evidence.reference.line_start == Some(2)
+        })
+        .expect("second policy record");
+    rejected.message = rejected
+        .message
+        .replace("RequestId=", "MalformedRequestId=");
+
+    let first = analysis_value(&bundle);
+    let transaction = first["transactions"]
+        .as_array()
+        .expect("transactions")
+        .iter()
+        .find(|transaction| {
+            transaction["state"] == "succeeded" && transaction["confidence"] == "high"
+        })
+        .expect("remaining exact records still prove success");
+    assert!(
+        transaction["evidence"]
+            .as_array()
+            .expect("transaction evidence")
+            .iter()
+            .filter(|reference| reference["artifactId"] == "mp-healthy-policy-current")
+            .all(|reference| {
+                let start = reference["lineStart"].as_u64().expect("line start");
+                let end = reference["lineEnd"].as_u64().expect("line end");
+                !(start <= 2 && 2 <= end)
+            }),
+        "transaction citation absorbed a rejected logical record"
+    );
+
+    bundle.evidence.reverse();
+    assert_eq!(
+        analysis_value(&bundle),
+        first,
+        "disjoint exact citations must be stable under bundle reversal"
+    );
+}
