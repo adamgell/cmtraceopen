@@ -62,7 +62,7 @@
         "kind": "current",
         "fragmentComplete": true
       },
-      "sourceVersion": "5.00.TEST.0000",
+      "sourceVersion": null,
       "capturedUtc": "2026-07-30T18:59:59Z",
       "bytesCopied": 117,
       "relativePath": "evidence/client-windows-update-supplemental/current/CBS.log"

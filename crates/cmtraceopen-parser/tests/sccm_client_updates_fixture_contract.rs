@@ -1559,9 +1559,11 @@ fn manifest_artifact_kind_failures(artifact: &Value) -> Vec<String> {
             artifact["kind"]
         ));
     }
-    if artifact["kind"] == "supplementalLog" && !artifact["sourceVersion"].is_null() {
+    if matches!(expected_kind, "cbsLog" | "supplementalLog")
+        && !artifact["sourceVersion"].is_null()
+    {
         failures.push(format!(
-            "{artifact_id}: supplementalLog sourceVersion must be null"
+            "{artifact_id}: {expected_kind} sourceVersion must be null"
         ));
     }
     failures
