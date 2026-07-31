@@ -844,6 +844,49 @@ fn adversarial_fixture_ref_and_ownership_mutations_fail_closed() {
 }
 
 #[test]
+fn adversarial_neutralized_guard_state_mutations_fail_closed() {
+    let neutralizations: [(&str, &[(&str, &str)]); 9] = [
+        ("policy-same-time-no-key", &[("keyRelation", "exact")]),
+        ("policy-conflicting-key", &[("keyRelation", "exact")]),
+        ("policy-topology-mismatch", &[("topology", "compatible")]),
+        ("policy-unknown-profile", &[("profileState", "validated")]),
+        (
+            "policy-invalid-offset",
+            &[("timestampProvenance", "usable")],
+        ),
+        ("policy-rotation-split", &[("rotation", "complete")]),
+        ("policy-partial-capture", &[("coverage", "complete")]),
+        (
+            "policy-unrelated-terminal-error",
+            &[("terminalRelation", "corroborating")],
+        ),
+        (
+            "policy-version-mismatch",
+            &[("profileState", "validated"), ("keyRelation", "exact")],
+        ),
+    ];
+    for (scenario_id, edits) in neutralizations {
+        let error = check_mutated_matrix(POLICY_MATRIX_FIXTURE, &POLICY_SPEC, |matrix| {
+            let scenario = scenario_slot(matrix, scenario_id);
+            for (field, neutral) in edits {
+                scenario[*field] = Value::String((*neutral).to_owned());
+            }
+        })
+        .expect_err(&format!(
+            "{scenario_id}: neutralized inputs cannot keep the guard label green"
+        ));
+        assert!(error.contains(scenario_id), "{error}");
+    }
+
+    let error = check_mutated_matrix(CONTENT_MATRIX_FIXTURE, &CONTENT_SPEC, |matrix| {
+        scenario_slot(matrix, "content-client-only")["coverage"] =
+            Value::String("complete".to_owned());
+    })
+    .expect_err("an absent server counterpart cannot claim complete coverage");
+    assert!(error.contains("content-client-only"), "{error}");
+}
+
+#[test]
 fn adversarial_projection_privacy_mutations_fail_closed() {
     let error = check_mutated_matrix(POLICY_MATRIX_FIXTURE, &POLICY_SPEC, |matrix| {
         scenario_slot(matrix, "policy-redaction")["expectedPublicProjection"]["rawIdentity"] =
