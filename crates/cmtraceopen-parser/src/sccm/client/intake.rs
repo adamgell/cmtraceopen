@@ -611,9 +611,21 @@ fn is_safe_metadata_token(value: &str) -> bool {
 }
 
 fn is_safe_path_identity(value: &str) -> bool {
-    !value.is_empty()
-        && value.chars().count() <= MAX_PATH_IDENTITY_CHARS
-        && value.split(':').all(is_safe_path_segment)
+    if value.is_empty() || value.chars().count() > MAX_PATH_IDENTITY_CHARS {
+        return false;
+    }
+
+    if let Some(payload) = value.strip_prefix("synthetic-") {
+        return is_safe_path_segment(payload);
+    }
+
+    match value.split_once(':') {
+        Some(("synthetic", payload)) => {
+            !payload.is_empty() && payload.split(':').all(is_safe_path_segment)
+        }
+        Some(("sha256", digest)) => is_lowercase_hex_handle(digest),
+        _ => false,
+    }
 }
 
 fn is_safe_relative_path(value: &str) -> bool {
@@ -669,12 +681,15 @@ fn is_safe_root_path_segment(value: &str) -> bool {
     value.strip_prefix("root-").is_some_and(|root| {
         // `root-a` and `root-b` are committed synthetic collision fixtures.
         // Native adapters use an opaque lowercase hexadecimal handle.
-        matches!(root, "a" | "b")
-            || (matches!(root.len(), 16 | 64)
-                && root
-                    .bytes()
-                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)))
+        matches!(root, "a" | "b") || is_lowercase_hex_handle(root)
     })
+}
+
+fn is_lowercase_hex_handle(value: &str) -> bool {
+    matches!(value.len(), 16 | 64)
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 fn is_safe_rotation_path_segment(value: &str) -> bool {
