@@ -1,6 +1,6 @@
 use cmtraceopen_parser::sccm::server::windows::{assess_server_intake, SccmServerArtifactPayload};
 use cmtraceopen_parser::sccm::{SccmCoverageState, SccmRole, SccmRotation};
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 
 fn intake_root() -> PathBuf {
@@ -238,6 +238,77 @@ fn server_intake_reserves_windows_equivalent_paths_and_fingerprints() {
     assert!(
         assess_server_intake(&serialize_manifest(&exact_collision), &payloads).is_err(),
         "exact destination paths must collide"
+    );
+}
+
+#[test]
+fn server_intake_rejects_mp_produced_mpcontrol_without_workflow_subject() {
+    let (manifest_json, payloads) = load_bundle("complete-multi-role");
+    let mut manifest = manifest_value(&manifest_json);
+    let artifact = manifest["artifacts"]
+        .as_array_mut()
+        .expect("artifacts are an array")
+        .iter_mut()
+        .find(|artifact| artifact["artifactId"] == "mp-policy-current")
+        .expect("MP policy artifact is present");
+    artifact["originalBasename"] = Value::String("mpcontrol.log".to_owned());
+    artifact["relativePath"] = Value::String(
+        "evidence/sccm/server/management-point/server-mp-policy/current/mpcontrol.log".to_owned(),
+    );
+
+    assert!(
+        assess_server_intake(&serialize_manifest(&manifest), &payloads).is_err(),
+        "mpcontrol is not physically produced by the Management Point role"
+    );
+}
+
+#[test]
+fn server_intake_accepts_site_server_mpcontrol_with_management_point_subject() {
+    let (manifest_json, payloads) = load_bundle("complete-multi-role");
+    let mut manifest = manifest_value(&manifest_json);
+    let artifact = manifest["artifacts"]
+        .as_array_mut()
+        .expect("artifacts are an array")
+        .iter_mut()
+        .find(|artifact| artifact["artifactId"] == "mp-policy-current")
+        .expect("MP policy artifact is present");
+    artifact["producerRole"] = Value::String("siteServer".to_owned());
+    artifact["producerHostHandle"] = Value::String("synthetic:host:site-01".to_owned());
+    artifact["workflowSubject"] = json!({ "role": "managementPoint" });
+    artifact["originalBasename"] = Value::String("mpcontrol.log".to_owned());
+    artifact["relativePath"] = Value::String(
+        "evidence/sccm/server/site-server/server-mp-policy/subject-management-point/current/mpcontrol.log"
+            .to_owned(),
+    );
+
+    let assessment = assess_server_intake(&serialize_manifest(&manifest), &payloads)
+        .expect("site-server-produced MP control evidence is assessed");
+    let mpcontrol = assessment
+        .artifacts
+        .iter()
+        .find(|artifact| artifact.artifact_id == "mp-policy-current")
+        .expect("MP control artifact is retained");
+    assert_eq!(mpcontrol.producer_role, SccmRole::SiteServer);
+    assert_eq!(
+        mpcontrol.workflow_subject_role,
+        Some(SccmRole::ManagementPoint)
+    );
+    assert_eq!(mpcontrol.source_id, "server-mp-policy");
+}
+
+#[test]
+fn server_intake_rejects_relabelled_duplicate_canonical_artifact_identity() {
+    let (manifest_json, payloads) = load_bundle("collision-same-basename-configured-roots");
+    let mut manifest = manifest_value(&manifest_json);
+    let fingerprint =
+        manifest["artifacts"][0]["configuredPathProvenance"]["pathFingerprint"].clone();
+    let lineage = manifest["artifacts"][0]["rotation"]["lineageId"].clone();
+    manifest["artifacts"][1]["configuredPathProvenance"]["pathFingerprint"] = fingerprint;
+    manifest["artifacts"][1]["rotation"]["lineageId"] = lineage;
+
+    assert!(
+        assess_server_intake(&serialize_manifest(&manifest), &payloads).is_err(),
+        "caller-chosen artifact and root labels must not duplicate one canonical identity"
     );
 }
 
