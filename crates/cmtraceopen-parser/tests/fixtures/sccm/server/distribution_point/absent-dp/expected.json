@@ -1,0 +1,20 @@
+{
+  "contractState": "proposedPendingReviewed318And335",
+  "workflow": "distributionPoint",
+  "scenario": "absent-dp",
+  "stateChain": ["receiveContent", "distribute", "transfer", "validate", "makeAvailable", "serveOrReport"],
+  "analysisContract": {"independentReducer": true, "consumesClientOutput": false, "crossSideCorrelationPerformed": false},
+  "extractionProfile": {"selectionState": "selectedSynthetic", "profileId": "dp-server-5.00.test-v1", "validatedRole": "distributionPoint"},
+  "roleAssessment": {"distributionPointObserved": true, "roleAbsentInferred": false, "missingDefaultPathInterpretation": "sourceCoverageOnly"},
+  "coverage": [
+    {"artifactId": "dp-absent-01-distmgr", "state": "absent"},
+    {"artifactId": "dp-absent-02-provider", "state": "absent"}
+  ],
+  "transactions": [],
+  "sourceLocalObservations": [],
+  "artifactRequests": [
+    {"sourceId": "server-dp-distribution", "reasonCode": "coverageAbsent"}
+  ],
+  "clientCausalClaims": [],
+  "correlationHandoff": {"issue": "#333", "performed": false, "timeOnlyEligible": false}
+}

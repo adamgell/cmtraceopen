@@ -1,0 +1,37 @@
+{
+  "contractState": "proposedPendingReviewed318And335",
+  "workflow": "distributionPoint",
+  "scenario": "transfer-retry",
+  "stateChain": ["receiveContent", "distribute", "transfer", "validate", "makeAvailable", "serveOrReport"],
+  "analysisContract": {"independentReducer": true, "consumesClientOutput": false, "crossSideCorrelationPerformed": false},
+  "extractionProfile": {"selectionState": "selectedSynthetic", "profileId": "dp-server-5.00.test-v1", "validatedRole": "distributionPoint"},
+  "roleAssessment": {"distributionPointObserved": true, "roleAbsentInferred": false, "missingDefaultPathInterpretation": "sourceCoverageOnly"},
+  "coverage": [
+    {"artifactId": "dp-transfer-retry-01-distmgr", "state": "captured"},
+    {"artifactId": "dp-transfer-retry-02-pkgxfer", "state": "captured"}
+  ],
+  "transactions": [
+    {
+      "transactionId": "dp:LAB00003:content-gamma:v1:safe:dp:lab-dp-01",
+      "key": {"packageId": "LAB00003", "contentId": "content-gamma", "contentVersion": 1, "siteCode": "LAB", "distributionPointHandle": "safe:dp:lab-dp-01", "confidence": "exact", "extractionProfileId": "dp-server-5.00.test-v1"},
+      "topologyCompatibility": "exact",
+      "correlationEligible": true,
+      "state": "deferred",
+      "classification": "blockedOrDeferred",
+      "confidence": "medium",
+      "confidenceCeiling": "medium",
+      "lastSuccessfulPhase": "distribute",
+      "nextSourceId": null,
+      "coverageGapArtifactIds": [],
+      "observations": [
+        {"observationId": "01-receive", "phase": "receiveContent", "disposition": "succeeded", "terminal": false, "evidence": [{"artifactId": "dp-transfer-retry-01-distmgr", "startLine": 1, "endLine": 1}]},
+        {"observationId": "02-distribute", "phase": "distribute", "disposition": "succeeded", "terminal": false, "evidence": [{"artifactId": "dp-transfer-retry-01-distmgr", "startLine": 2, "endLine": 2}]},
+        {"observationId": "03-transfer-retry", "phase": "transfer", "disposition": "retrying", "terminal": false, "evidence": [{"artifactId": "dp-transfer-retry-02-pkgxfer", "startLine": 1, "endLine": 1}]}
+      ]
+    }
+  ],
+  "sourceLocalObservations": [],
+  "artifactRequests": [],
+  "clientCausalClaims": [],
+  "correlationHandoff": {"issue": "#333", "performed": false, "timeOnlyEligible": false}
+}
