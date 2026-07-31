@@ -127,6 +127,139 @@ const ROOTED_ARTIFACT_REQUEST_REASONS: [&str; 7] = [
     "Collect //server/share/PolicyAgent.log.",
 ];
 
+const COMPACT_UNBOUNDED_ARTIFACT_REQUEST_REASONS: [&str; 5] = [
+    "Collect allfiles.",
+    "Collect everydirectory.",
+    "Scan entiredisk.",
+    "Search wholefilesystem.",
+    "Collect every log on the system.",
+];
+
+const BOUNDED_NARRATIVE_ARTIFACT_REQUEST_REASONS: [&str; 5] = [
+    "Collect the full disk imaging Task Sequence log.",
+    "Confirm the whole-disk encryption status recorded in PolicyAgent.log.",
+    "Confirm the system-wide assignment recorded in PolicyAgent.log.",
+    "Confirm recursive retry behavior recorded in PolicyAgent.log.",
+    "Confirm all files were downloaded, as recorded in PolicyAgent.log.",
+];
+
+#[derive(Clone, Copy, Debug)]
+enum FindingEvidenceAliasSurface {
+    TopLevel,
+    Terminal,
+    CorrelationKey,
+}
+
+fn finding_with_evidence_alias(
+    finding_id: &str,
+    alias_surface: Option<FindingEvidenceAliasSurface>,
+) -> Result<SccmFinding, SccmFindingValidationError> {
+    let mut top_level = finding_evidence_ref("artifact-a", "entry-a");
+    let mut terminal = top_level.clone();
+    let mut key = top_level.clone();
+    match alias_surface {
+        Some(FindingEvidenceAliasSurface::TopLevel) => {
+            top_level.artifact_id = " artifact-a ".into();
+            top_level.entry_id = " entry-a ".into();
+        }
+        Some(FindingEvidenceAliasSurface::Terminal) => {
+            terminal.artifact_id = " artifact-a ".into();
+            terminal.entry_id = " entry-a ".into();
+        }
+        Some(FindingEvidenceAliasSurface::CorrelationKey) => {
+            key.artifact_id = " artifact-a ".into();
+            key.entry_id = " entry-a ".into();
+        }
+        None => {}
+    }
+
+    SccmFindingBuilder::new(finding_id)
+        .class(SccmFindingClass::ConfirmedFailure)
+        .phase(SccmPhase::Policy)
+        .role(SccmRole::Client)
+        .severity(Severity::Error)
+        .confidence(SccmConfidence::High)
+        .evidence(vec![top_level])
+        .terminal_evidence(vec![SccmTerminalEvidence::observed_failure(terminal)])
+        .correlation_keys(vec![finding_key(
+            SccmCorrelationKeyKind::AssignmentId,
+            "{ABCDEFAB-0000-0000-0000-000000000001}",
+            "abcdefab-0000-0000-0000-000000000001",
+            SccmKeyConfidence::Low,
+            Some("sccm-keys-experimental-v1"),
+            key,
+        )])
+        .build()
+}
+
+fn apply_evidence_alias(finding: &mut SccmFinding, surface: FindingEvidenceAliasSurface) {
+    match surface {
+        FindingEvidenceAliasSurface::TopLevel => {
+            finding.evidence[0].artifact_id = " artifact-a ".into();
+            finding.evidence[0].entry_id = " entry-a ".into();
+        }
+        FindingEvidenceAliasSurface::Terminal => {
+            finding.terminal_evidence[0].reference.artifact_id = " artifact-a ".into();
+            finding.terminal_evidence[0].reference.entry_id = " entry-a ".into();
+        }
+        FindingEvidenceAliasSurface::CorrelationKey => {
+            let reference = finding.correlation_keys[0].evidence.as_mut().unwrap();
+            reference.artifact_id = " artifact-a ".into();
+            reference.entry_id = " entry-a ".into();
+        }
+    }
+}
+
+fn apply_evidence_alias_json(
+    finding: &mut serde_json::Value,
+    surface: FindingEvidenceAliasSurface,
+) {
+    match surface {
+        FindingEvidenceAliasSurface::TopLevel => {
+            finding["evidence"][0]["artifactId"] = serde_json::json!(" artifact-a ");
+            finding["evidence"][0]["entryId"] = serde_json::json!(" entry-a ");
+        }
+        FindingEvidenceAliasSurface::Terminal => {
+            finding["terminalEvidence"][0]["reference"]["artifactId"] =
+                serde_json::json!(" artifact-a ");
+            finding["terminalEvidence"][0]["reference"]["entryId"] = serde_json::json!(" entry-a ");
+        }
+        FindingEvidenceAliasSurface::CorrelationKey => {
+            finding["correlationKeys"][0]["evidence"]["artifactId"] =
+                serde_json::json!(" artifact-a ");
+            finding["correlationKeys"][0]["evidence"]["entryId"] = serde_json::json!(" entry-a ");
+        }
+    }
+}
+
+fn assert_evidence_alias_is_rejected(surface: FindingEvidenceAliasSurface) {
+    let mut mismatches = Vec::new();
+
+    if finding_with_evidence_alias("builder-evidence-alias", Some(surface)).err()
+        != Some(SccmFindingValidationError::InvalidEvidenceReference)
+    {
+        mismatches.push("builder did not return InvalidEvidenceReference");
+    }
+
+    let mut direct = finding_with_evidence_alias("direct-evidence-alias", None).unwrap();
+    apply_evidence_alias(&mut direct, surface);
+    if direct.validate().err() != Some(SccmFindingValidationError::InvalidEvidenceReference) {
+        mismatches.push("direct validate did not return InvalidEvidenceReference");
+    }
+    if serde_json::to_value(&direct).is_ok() {
+        mismatches.push("validating serializer accepted the alias");
+    }
+
+    let canonical = finding_with_evidence_alias("deserialized-evidence-alias", None).unwrap();
+    let mut json = serde_json::to_value(canonical).unwrap();
+    apply_evidence_alias_json(&mut json, surface);
+    if serde_json::from_value::<SccmFinding>(json).is_ok() {
+        mismatches.push("deserializer accepted the alias");
+    }
+
+    assert!(mismatches.is_empty(), "{surface:?}: {mismatches:?}");
+}
+
 #[test]
 fn finding_confirmed_failure_requires_terminal_evidence() {
     let result = SccmFindingBuilder::new("app-enforcement-failed")
@@ -652,7 +785,7 @@ fn finding_rejects_conflicting_ranges_for_one_logical_evidence_identity() {
     });
     assert_eq!(
         mutated.validate().unwrap_err(),
-        SccmFindingValidationError::ConflictingEvidenceReference
+        SccmFindingValidationError::InvalidEvidenceReference
     );
 }
 
@@ -708,49 +841,110 @@ fn finding_serialization_prioritizes_conflicting_evidence_identity_ranges() {
 }
 
 #[test]
-fn finding_canonicalizes_evidence_identity_whitespace() {
-    let top_level = SccmEvidenceRef {
-        artifact_id: " artifact-a ".into(),
-        entry_id: " entry-a ".into(),
-        line_start: Some(1),
-        line_end: Some(1),
-    };
-    let terminal = SccmEvidenceRef {
-        artifact_id: "artifact-a ".into(),
-        entry_id: "entry-a".into(),
-        ..top_level.clone()
-    };
-    let key = SccmEvidenceRef {
-        artifact_id: " artifact-a".into(),
-        entry_id: " entry-a".into(),
-        ..top_level.clone()
-    };
-    let finding = SccmFindingBuilder::new("canonical-evidence-identity")
-        .class(SccmFindingClass::ConfirmedFailure)
+fn finding_rejects_top_level_evidence_identity_whitespace_aliases() {
+    assert_evidence_alias_is_rejected(FindingEvidenceAliasSurface::TopLevel);
+}
+
+#[test]
+fn finding_rejects_terminal_evidence_identity_whitespace_aliases() {
+    assert_evidence_alias_is_rejected(FindingEvidenceAliasSurface::Terminal);
+}
+
+#[test]
+fn finding_rejects_correlation_key_evidence_identity_whitespace_aliases() {
+    assert_evidence_alias_is_rejected(FindingEvidenceAliasSurface::CorrelationKey);
+}
+
+#[test]
+fn finding_rejects_noncanonical_opaque_ids_across_public_boundaries() {
+    let mut mismatches = Vec::new();
+
+    if finding_with_evidence_alias(" finding-id ", None).err()
+        != Some(SccmFindingValidationError::MissingRequiredField)
+    {
+        mismatches.push("builder accepted a noncanonical finding ID");
+    }
+    let mut finding_id = finding_with_evidence_alias("finding-id", None).unwrap();
+    finding_id.finding_id = " finding-id ".into();
+    if finding_id.validate().err() != Some(SccmFindingValidationError::MissingRequiredField) {
+        mismatches.push("direct validate accepted a noncanonical finding ID");
+    }
+    if serde_json::to_value(&finding_id).is_ok() {
+        mismatches.push("serializer accepted a noncanonical finding ID");
+    }
+    let mut finding_id_json =
+        serde_json::to_value(finding_with_evidence_alias("finding-id-json", None).unwrap())
+            .unwrap();
+    finding_id_json["findingId"] = serde_json::json!(" finding-id-json ");
+    if serde_json::from_value::<SccmFinding>(finding_id_json).is_ok() {
+        mismatches.push("deserializer accepted a noncanonical finding ID");
+    }
+
+    let gap_builder = SccmFindingBuilder::new("noncanonical-gap-id")
+        .class(SccmFindingClass::Symptom)
         .phase(SccmPhase::Policy)
         .role(SccmRole::Client)
-        .severity(Severity::Error)
-        .confidence(SccmConfidence::High)
-        .evidence(vec![top_level])
-        .terminal_evidence(vec![SccmTerminalEvidence::observed_failure(terminal)])
-        .correlation_keys(vec![finding_key(
-            SccmCorrelationKeyKind::AssignmentId,
-            "{ABCDEFAB-0000-0000-0000-000000000001}",
-            "abcdefab-0000-0000-0000-000000000001",
-            SccmKeyConfidence::Low,
-            Some("sccm-keys-experimental-v1"),
-            key,
-        )])
-        .build()
-        .unwrap();
+        .severity(Severity::Warning)
+        .confidence(SccmConfidence::Low)
+        .evidence(vec![finding_evidence_ref("artifact-a", "entry-a")])
+        .coverage_gap(finding_client_gap(
+            " client-policy-agent ",
+            SccmCoverageState::AccessDenied,
+        ))
+        .build();
+    if gap_builder.err() != Some(SccmFindingValidationError::InvalidCoverageGap) {
+        mismatches.push("builder accepted a noncanonical coverage-gap artifact ID");
+    }
+    let mut gap = finding_with_gap_and_request("noncanonical-gap-direct");
+    gap.coverage_gaps[0].artifact_id = " client-policy-agent ".into();
+    if gap.validate().err() != Some(SccmFindingValidationError::InvalidCoverageGap) {
+        mismatches.push("direct validate accepted a noncanonical coverage-gap artifact ID");
+    }
+    if serde_json::to_value(&gap).is_ok() {
+        mismatches.push("serializer accepted a noncanonical coverage-gap artifact ID");
+    }
+    let mut gap_json =
+        serde_json::to_value(finding_with_gap_and_request("noncanonical-gap-json")).unwrap();
+    gap_json["coverageGaps"][0]["artifactId"] = serde_json::json!(" client-policy-agent ");
+    if serde_json::from_value::<SccmFinding>(gap_json).is_ok() {
+        mismatches.push("deserializer accepted a noncanonical coverage-gap artifact ID");
+    }
 
-    assert_eq!(finding.evidence[0].artifact_id, "artifact-a");
-    assert_eq!(finding.evidence[0].entry_id, "entry-a");
-    assert_eq!(finding.terminal_evidence[0].reference, finding.evidence[0]);
-    assert_eq!(
-        finding.correlation_keys[0].evidence.as_ref(),
-        Some(&finding.evidence[0])
-    );
+    let request_builder = SccmFindingBuilder::new("noncanonical-request-id")
+        .class(SccmFindingClass::Symptom)
+        .phase(SccmPhase::Policy)
+        .role(SccmRole::Client)
+        .severity(Severity::Warning)
+        .confidence(SccmConfidence::Low)
+        .evidence(vec![finding_evidence_ref("artifact-a", "entry-a")])
+        .next_artifact(finding_request(
+            " policyAgent ",
+            SccmRole::Client,
+            " Confirm the bounded policy request outcome. ",
+        ))
+        .build();
+    if request_builder.err() != Some(SccmFindingValidationError::UndeclaredArtifactRequest) {
+        mismatches.push("builder accepted a noncanonical request logical ID");
+    }
+    let mut request = finding_with_gap_and_request("noncanonical-request-direct");
+    request.next_artifacts[0].logical_id = " policyAgent ".into();
+    request.next_artifacts[0].reason = " Confirm the bounded policy request outcome. ".into();
+    if request.validate().err() != Some(SccmFindingValidationError::UndeclaredArtifactRequest) {
+        mismatches.push("direct validate did not reject a noncanonical request logical ID");
+    }
+    if serde_json::to_value(&request).is_ok() {
+        mismatches.push("serializer accepted a noncanonical request logical ID");
+    }
+    let mut request_json =
+        serde_json::to_value(finding_with_gap_and_request("noncanonical-request-json")).unwrap();
+    request_json["nextArtifacts"][0]["logicalId"] = serde_json::json!(" policyAgent ");
+    request_json["nextArtifacts"][0]["reason"] =
+        serde_json::json!(" Confirm the bounded policy request outcome. ");
+    if serde_json::from_value::<SccmFinding>(request_json).is_ok() {
+        mismatches.push("deserializer accepted a noncanonical request logical ID");
+    }
+
+    assert!(mismatches.is_empty(), "{mismatches:#?}");
 }
 
 #[test]
@@ -764,7 +958,25 @@ fn finding_rejects_whitespace_wrapped_declared_phase_shadow() {
         .evidence(vec![finding_evidence_ref("artifact-a", "entry-a")])
         .build();
 
-    assert!(result.is_err());
+    assert_eq!(
+        result.unwrap_err(),
+        SccmFindingValidationError::MissingRequiredField
+    );
+
+    let mut mutated = SccmFindingBuilder::new("direct-wrapped-phase-shadow")
+        .class(SccmFindingClass::Symptom)
+        .phase(SccmPhase::Policy)
+        .role(SccmRole::Client)
+        .severity(Severity::Warning)
+        .confidence(SccmConfidence::Low)
+        .evidence(vec![finding_evidence_ref("artifact-a", "entry-a")])
+        .build()
+        .unwrap();
+    mutated.phase = SccmPhase::Unknown(" policy ".into());
+    assert_eq!(
+        mutated.validate().unwrap_err(),
+        SccmFindingValidationError::MissingRequiredField
+    );
 }
 
 #[test]
@@ -801,18 +1013,86 @@ fn finding_serialization_rejects_whitespace_wrapped_declared_phase_shadow() {
 }
 
 #[test]
-fn finding_canonicalizes_future_phase_whitespace() {
-    let finding = SccmFindingBuilder::new("canonical-future-phase")
+fn finding_rejects_noncanonical_future_phase_whitespace() {
+    let result = SccmFindingBuilder::new("noncanonical-future-phase")
         .class(SccmFindingClass::Symptom)
         .phase(SccmPhase::Unknown(" futurePhase ".into()))
         .role(SccmRole::Client)
         .severity(Severity::Warning)
         .confidence(SccmConfidence::Low)
         .evidence(vec![finding_evidence_ref("artifact-a", "entry-a")])
+        .build();
+
+    assert_eq!(
+        result.unwrap_err(),
+        SccmFindingValidationError::MissingRequiredField
+    );
+
+    let mut mutated = SccmFindingBuilder::new("direct-noncanonical-future-phase")
+        .class(SccmFindingClass::Symptom)
+        .phase(SccmPhase::Unknown("futurePhase".into()))
+        .role(SccmRole::Client)
+        .severity(Severity::Warning)
+        .confidence(SccmConfidence::Low)
+        .evidence(vec![finding_evidence_ref("artifact-a", "entry-a")])
         .build()
         .unwrap();
+    mutated.phase = SccmPhase::Unknown(" futurePhase ".into());
+    assert_eq!(
+        mutated.validate().unwrap_err(),
+        SccmFindingValidationError::MissingRequiredField
+    );
+    assert!(serde_json::to_value(&mutated).is_err());
 
-    assert_eq!(finding.phase, SccmPhase::Unknown("futurePhase".into()));
+    let mut json = serde_json::to_value(
+        SccmFindingBuilder::new("deserialized-noncanonical-future-phase")
+            .class(SccmFindingClass::Symptom)
+            .phase(SccmPhase::Unknown("futurePhase".into()))
+            .role(SccmRole::Client)
+            .severity(Severity::Warning)
+            .confidence(SccmConfidence::Low)
+            .evidence(vec![finding_evidence_ref("artifact-a", "entry-a")])
+            .build()
+            .unwrap(),
+    )
+    .unwrap();
+    json["phase"] = serde_json::json!(" futurePhase ");
+    assert!(serde_json::from_value::<SccmFinding>(json).is_err());
+}
+
+#[test]
+fn finding_phase_unknown_values_require_canonical_standalone_serde() {
+    for value in ["", " ", " policy ", " futurePhase "] {
+        assert!(
+            serde_json::to_string(&SccmPhase::Unknown(value.into())).is_err(),
+            "serialized {value:?}"
+        );
+        let wire = serde_json::to_string(value).unwrap();
+        assert!(
+            serde_json::from_str::<SccmPhase>(&wire).is_err(),
+            "deserialized {value:?}"
+        );
+    }
+    for value in ["policy", "content", "enforcement"] {
+        assert!(
+            serde_json::to_string(&SccmPhase::Unknown(value.into())).is_err(),
+            "shadowed {value:?}"
+        );
+    }
+
+    let phase = SccmPhase::Unknown("futurePhase".into());
+    let wire = serde_json::to_string(&phase).unwrap();
+    assert_eq!(serde_json::from_str::<SccmPhase>(&wire).unwrap(), phase);
+
+    let finding = SccmFindingBuilder::new("canonical-future-phase")
+        .class(SccmFindingClass::Symptom)
+        .phase(phase)
+        .role(SccmRole::Client)
+        .severity(Severity::Warning)
+        .confidence(SccmConfidence::Low)
+        .evidence(vec![finding_evidence_ref("artifact-a", "entry-a")])
+        .build()
+        .unwrap();
     assert_eq!(
         serde_json::to_value(finding).unwrap()["phase"],
         "futurePhase"
@@ -969,8 +1249,13 @@ fn finding_artifact_requests_reject_structurally_unbounded_reasons() {
         "Use a glob for matching log files.",
         r"Collect C:\Windows\CCM\Logs\*.log.",
     ];
+    let mut accepted = Vec::new();
 
-    for reason in reasons.into_iter().chain(ROOTED_ARTIFACT_REQUEST_REASONS) {
+    for reason in reasons
+        .into_iter()
+        .chain(ROOTED_ARTIFACT_REQUEST_REASONS)
+        .chain(COMPACT_UNBOUNDED_ARTIFACT_REQUEST_REASONS)
+    {
         let result = SccmFindingBuilder::new("unbounded-structural-request")
             .class(SccmFindingClass::Symptom)
             .phase(SccmPhase::Policy)
@@ -981,17 +1266,20 @@ fn finding_artifact_requests_reject_structurally_unbounded_reasons() {
             .next_artifact(finding_request("policyAgent", SccmRole::Client, reason))
             .build();
 
-        assert_eq!(
-            result.unwrap_err(),
-            SccmFindingValidationError::InvalidArtifactRequestReason,
-            "{reason}"
-        );
+        if result.err() != Some(SccmFindingValidationError::InvalidArtifactRequestReason) {
+            accepted.push(reason);
+        }
     }
+
+    assert!(
+        accepted.is_empty(),
+        "accepted unbounded reasons: {accepted:#?}"
+    );
 }
 
 #[test]
 fn finding_artifact_requests_accept_specific_bounded_reasons() {
-    for reason in [
+    let existing = [
         "Confirm the bounded policy request outcome.",
         "Collect the PolicyAgent record cited by assignment A.",
         "Confirm the root cause recorded by PolicyAgent.",
@@ -999,8 +1287,15 @@ fn finding_artifact_requests_accept_specific_bounded_reasons() {
         "Collect the disk imaging Task Sequence log.",
         "Collect Logs/PolicyAgent.log from the bounded bundle.",
         r"Collect Logs\PolicyAgent.log from the bounded bundle.",
-    ] {
-        SccmFindingBuilder::new("bounded-structural-request")
+    ];
+    let canonical = finding_with_gap_and_request("bounded-reason-parity");
+    let mut rejected = Vec::new();
+
+    for reason in existing
+        .into_iter()
+        .chain(BOUNDED_NARRATIVE_ARTIFACT_REQUEST_REASONS)
+    {
+        if SccmFindingBuilder::new("bounded-structural-request")
             .class(SccmFindingClass::Symptom)
             .phase(SccmPhase::Policy)
             .role(SccmRole::Client)
@@ -1009,35 +1304,69 @@ fn finding_artifact_requests_accept_specific_bounded_reasons() {
             .evidence(vec![finding_evidence_ref("artifact-a", "entry-a")])
             .next_artifact(finding_request("policyAgent", SccmRole::Client, reason))
             .build()
-            .unwrap();
+            .is_err()
+        {
+            rejected.push(format!("builder: {reason}"));
+        }
+
+        let mut direct = canonical.clone();
+        direct.next_artifacts[0].reason = reason.into();
+        if direct.validate().is_err() {
+            rejected.push(format!("direct validate: {reason}"));
+        }
+        if serde_json::to_value(&direct).is_err() {
+            rejected.push(format!("serializer: {reason}"));
+        }
+
+        let mut json = serde_json::to_value(&canonical).unwrap();
+        json["nextArtifacts"][0]["reason"] = serde_json::json!(reason);
+        if serde_json::from_value::<SccmFinding>(json).is_err() {
+            rejected.push(format!("deserializer: {reason}"));
+        }
     }
+
+    assert!(
+        rejected.is_empty(),
+        "rejected bounded reasons: {rejected:#?}"
+    );
 }
 
 #[test]
 fn finding_artifact_request_bounds_apply_to_deserialization_and_serialization() {
     let finding = finding_with_gap_and_request("request-boundary-parity");
-    for reason in ROOTED_ARTIFACT_REQUEST_REASONS.into_iter().chain([
-        "Collect every file on the system.",
-        "Scan the full disk for related evidence.",
-    ]) {
+    let mut accepted = Vec::new();
+    for reason in ROOTED_ARTIFACT_REQUEST_REASONS
+        .into_iter()
+        .chain([
+            "Collect every file on the system.",
+            "Scan the full disk for related evidence.",
+        ])
+        .chain(COMPACT_UNBOUNDED_ARTIFACT_REQUEST_REASONS)
+    {
+        let mut direct = finding.clone();
+        direct.next_artifacts[0].reason = reason.into();
+        if direct.validate().err() != Some(SccmFindingValidationError::InvalidArtifactRequestReason)
+        {
+            accepted.push(format!("direct validate: {reason}"));
+        }
+
         let mut json = serde_json::to_value(&finding).unwrap();
         json["nextArtifacts"][0]["reason"] = serde_json::json!(reason);
-        let deserialize_error = serde_json::from_value::<SccmFinding>(json)
-            .unwrap_err()
-            .to_string();
-        assert!(
-            deserialize_error.contains("InvalidArtifactRequestReason"),
-            "{reason}: {deserialize_error}"
-        );
+        if serde_json::from_value::<SccmFinding>(json).is_ok() {
+            accepted.push(format!("deserializer: {reason}"));
+        }
 
         let mut mutated = finding.clone();
         mutated.next_artifacts[0].reason = reason.into();
-        let serialize_error = serde_json::to_string(&mutated).unwrap_err().to_string();
-        assert!(
-            serialize_error.contains("InvalidArtifactRequestReason"),
-            "{reason}: {serialize_error}"
-        );
+        if serde_json::to_string(&mutated).is_ok() {
+            accepted.push(format!("serializer: {reason}"));
+        }
     }
+
+    assert!(
+        accepted.is_empty(),
+        "accepted unbounded request boundaries: {accepted:#?}"
+    );
 }
 
 #[test]
@@ -1359,6 +1688,46 @@ fn finding_artifact_requests_require_nonempty_bounded_reasons_and_count() {
         too_many.unwrap_err(),
         SccmFindingValidationError::TooManyArtifactRequests
     );
+}
+
+#[test]
+fn finding_artifact_request_raw_cardinality_precedes_exact_deduplication() {
+    let canonical = finding_with_gap_and_request("duplicate-request-cardinality");
+    let request = canonical.next_artifacts[0].clone();
+    let duplicated = vec![request; MAX_SCCM_NEXT_ARTIFACT_REQUESTS + 1];
+
+    let builder = SccmFindingBuilder::new("duplicate-request-builder")
+        .class(SccmFindingClass::InsufficientEvidence)
+        .phase(SccmPhase::Policy)
+        .role(SccmRole::Client)
+        .severity(Severity::Warning)
+        .confidence(SccmConfidence::Low)
+        .coverage_gap(finding_client_gap(
+            "client-policy-agent",
+            SccmCoverageState::AccessDenied,
+        ))
+        .next_artifacts(duplicated.clone())
+        .build();
+    assert_eq!(
+        builder.unwrap_err(),
+        SccmFindingValidationError::TooManyArtifactRequests
+    );
+
+    let mut direct = canonical.clone();
+    direct.next_artifacts = duplicated;
+    assert_eq!(
+        direct.validate().unwrap_err(),
+        SccmFindingValidationError::TooManyArtifactRequests
+    );
+
+    let mut json = serde_json::to_value(canonical).unwrap();
+    let request_json = json["nextArtifacts"][0].clone();
+    json["nextArtifacts"] =
+        serde_json::Value::Array(vec![request_json; MAX_SCCM_NEXT_ARTIFACT_REQUESTS + 1]);
+    assert!(serde_json::from_value::<SccmFinding>(json).is_err());
+
+    let error = serde_json::to_string(&direct).unwrap_err().to_string();
+    assert!(error.contains("TooManyArtifactRequests"), "{error}");
 }
 
 #[test]

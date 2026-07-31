@@ -46,6 +46,15 @@ impl SccmPhase {
             Self::Unknown(value) => value,
         }
     }
+
+    fn has_canonical_serialized_form(&self) -> bool {
+        match self {
+            Self::Unknown(value) => {
+                !value.is_empty() && value.trim() == value && !is_known_phase_name(value)
+            }
+            _ => true,
+        }
+    }
 }
 
 impl Serialize for SccmPhase {
@@ -53,9 +62,9 @@ impl Serialize for SccmPhase {
     where
         S: Serializer,
     {
-        if matches!(self, Self::Unknown(value) if is_known_phase_name(value)) {
+        if !self.has_canonical_serialized_form() {
             return Err(S::Error::custom(
-                "unknown SCCM phase must not shadow a declared phase",
+                "unknown SCCM phase must be canonical and must not shadow a declared phase",
             ));
         }
         serializer.serialize_str(self.serialized_name())
@@ -67,12 +76,18 @@ impl<'de> Deserialize<'de> for SccmPhase {
     where
         D: Deserializer<'de>,
     {
-        Ok(match String::deserialize(deserializer)? {
+        let phase = match String::deserialize(deserializer)? {
             value if value == "policy" => Self::Policy,
             value if value == "content" => Self::Content,
             value if value == "enforcement" => Self::Enforcement,
             value => Self::Unknown(value),
-        })
+        };
+        if !phase.has_canonical_serialized_form() {
+            return Err(D::Error::custom(
+                "unknown SCCM phase must be canonical and must not shadow a declared phase",
+            ));
+        }
+        Ok(phase)
     }
 }
 
@@ -193,6 +208,9 @@ impl Serialize for SccmFinding {
     where
         S: Serializer,
     {
+        self.validate().map_err(|error| {
+            S::Error::custom(format!("invalid SCCM finding contract: {error:?}"))
+        })?;
         let mut normalized = self.clone();
         normalize_finding(&mut normalized);
         normalized.validate().map_err(|error| {
@@ -580,11 +598,10 @@ impl SccmFindingBuilder {
 }
 
 fn validate_required_text(finding: &SccmFinding) -> Result<(), SccmFindingValidationError> {
-    if finding.finding_id.trim().is_empty()
+    if !is_canonical_opaque_id(&finding.finding_id)
         || finding.title.trim().is_empty()
         || finding.summary.trim().is_empty()
-        || matches!(&finding.phase, SccmPhase::Unknown(value) if value.trim().is_empty())
-        || matches!(&finding.phase, SccmPhase::Unknown(value) if is_known_phase_name(value))
+        || !finding.phase.has_canonical_serialized_form()
     {
         return Err(SccmFindingValidationError::MissingRequiredField);
     }
@@ -628,7 +645,7 @@ fn validate_all_evidence_references(
         )
     {
         validate_evidence_reference(reference)?;
-        let identity = (reference.artifact_id.trim(), reference.entry_id.trim());
+        let identity = (reference.artifact_id.as_str(), reference.entry_id.as_str());
         let range = (reference.line_start, reference.line_end);
         if ranges_by_identity
             .insert(identity, range)
@@ -648,8 +665,8 @@ fn validate_evidence_reference(
         (Some(start), Some(end)) => start > 0 && end >= start,
         _ => false,
     };
-    if reference.artifact_id.trim().is_empty()
-        || reference.entry_id.trim().is_empty()
+    if !is_canonical_opaque_id(&reference.artifact_id)
+        || !is_canonical_opaque_id(&reference.entry_id)
         || !valid_line_range
     {
         return Err(SccmFindingValidationError::InvalidEvidenceReference);
@@ -661,7 +678,7 @@ fn validate_coverage_gaps(
     coverage_gaps: &[SccmFindingCoverageGap],
 ) -> Result<(), SccmFindingValidationError> {
     if coverage_gaps.iter().any(|gap| {
-        gap.artifact_id.trim().is_empty()
+        !is_canonical_opaque_id(&gap.artifact_id)
             || gap.artifact_id.chars().count() > MAX_SCCM_COVERAGE_GAP_ARTIFACT_ID_CHARS
             || gap.coverage == SccmCoverageState::Captured
     }) {
@@ -679,6 +696,9 @@ fn validate_artifact_requests(
 
     let catalog = declared_source_catalog();
     for request in requests {
+        if !is_canonical_opaque_id(&request.logical_id) {
+            return Err(SccmFindingValidationError::UndeclaredArtifactRequest);
+        }
         if !is_bounded_request_reason(&request.reason) {
             return Err(SccmFindingValidationError::InvalidArtifactRequestReason);
         }
@@ -728,73 +748,143 @@ fn has_unbounded_request_scope(reason: &str) -> bool {
         .split(|character: char| !character.is_ascii_alphanumeric())
         .filter(|token| !token.is_empty())
         .collect::<Vec<_>>();
-    let has_token = |candidates: &[&str]| tokens.iter().any(|token| candidates.contains(token));
-    let is_wide_scope_token = |token: &str| {
-        matches!(
-            token,
-            "drivewide" | "diskwide" | "volumewide" | "filesystemwide" | "sitewide" | "systemwide"
-        )
-    };
-    let is_scope_token = |token: &str| {
-        matches!(
-            token,
-            "drive" | "disk" | "volume" | "filesystem" | "site" | "system"
-        )
-    };
-    let has_wide_scope = tokens.iter().any(|token| is_wide_scope_token(token))
+
+    tokens.iter().any(|token| is_compact_unbounded_scope(token))
         || tokens
-            .windows(2)
-            .any(|pair| is_scope_token(pair[0]) && pair[1] == "wide");
+            .iter()
+            .any(|token| matches!(*token, "glob" | "globs" | "globbing"))
+        || has_recursive_collection_scope(&tokens)
+        || has_wide_collection_scope(&tokens)
+        || has_root_collection_scope(&tokens)
+        || has_broad_collection_scope(&tokens)
+}
 
-    if has_wide_scope
-        || tokens.iter().any(|token| token.starts_with("recurs"))
-        || has_token(&["glob", "globs", "globbing"])
-    {
-        return true;
+fn is_collection_action(token: &str) -> bool {
+    matches!(
+        token,
+        "collect"
+            | "scan"
+            | "search"
+            | "walk"
+            | "traverse"
+            | "capture"
+            | "export"
+            | "gather"
+            | "inspect"
+            | "read"
+    )
+}
+
+fn is_collection_target(token: &str) -> bool {
+    matches!(
+        token,
+        "file"
+            | "files"
+            | "directory"
+            | "directories"
+            | "folder"
+            | "folders"
+            | "drive"
+            | "drives"
+            | "disk"
+            | "disks"
+            | "volume"
+            | "volumes"
+            | "filesystem"
+            | "filesystems"
+            | "log"
+            | "logs"
+            | "artifact"
+            | "artifacts"
+            | "evidence"
+    )
+}
+
+fn is_compact_unbounded_scope(token: &str) -> bool {
+    ["all", "every", "entire", "whole", "full", "complete"]
+        .iter()
+        .any(|prefix| token.strip_prefix(prefix).is_some_and(is_collection_target))
+}
+
+fn has_nearby_collection_action_before(tokens: &[&str], index: usize) -> bool {
+    let start = index.saturating_sub(4);
+    tokens[start..index]
+        .iter()
+        .any(|token| is_collection_action(token))
+}
+
+fn has_recursive_collection_scope(tokens: &[&str]) -> bool {
+    tokens.iter().enumerate().any(|(index, token)| {
+        token.starts_with("recurs")
+            && (has_nearby_collection_action_before(tokens, index)
+                || tokens
+                    .iter()
+                    .skip(index + 1)
+                    .take(2)
+                    .any(|candidate| is_collection_action(candidate)))
+    })
+}
+
+fn has_wide_collection_scope(tokens: &[&str]) -> bool {
+    tokens.iter().enumerate().any(|(index, token)| {
+        let compound = matches!(
+            *token,
+            "drivewide" | "diskwide" | "volumewide" | "filesystemwide" | "sitewide" | "systemwide"
+        ) && tokens
+            .get(index + 1)
+            .is_some_and(|target| is_collection_target(target));
+        let separated = matches!(
+            *token,
+            "drive" | "disk" | "volume" | "filesystem" | "site" | "system"
+        ) && tokens.get(index + 1) == Some(&"wide")
+            && tokens
+                .get(index + 2)
+                .is_some_and(|target| is_collection_target(target));
+
+        (compound || separated) && has_nearby_collection_action_before(tokens, index)
+    })
+}
+
+fn has_root_collection_scope(tokens: &[&str]) -> bool {
+    tokens.iter().enumerate().any(|(root_index, token)| {
+        if *token != "root" {
+            return false;
+        }
+        tokens.iter().enumerate().any(|(target_index, target)| {
+            is_collection_target(target)
+                && root_index.abs_diff(target_index) <= 2
+                && has_nearby_collection_action_before(tokens, root_index.min(target_index))
+        })
+    })
+}
+
+fn has_broad_collection_scope(tokens: &[&str]) -> bool {
+    for (action_index, action) in tokens.iter().enumerate() {
+        if !is_collection_action(action) {
+            continue;
+        }
+        for broad_index in (action_index + 1)..tokens.len().min(action_index + 4) {
+            if !matches!(
+                tokens[broad_index],
+                "all" | "every" | "entire" | "whole" | "full" | "complete"
+            ) {
+                continue;
+            }
+            for target_index in (broad_index + 1)..tokens.len().min(broad_index + 4) {
+                if !is_collection_target(tokens[target_index]) {
+                    continue;
+                }
+                if matches!(tokens[target_index], "disk" | "disks")
+                    && tokens
+                        .get(target_index + 1)
+                        .is_some_and(|descriptor| matches!(*descriptor, "imaging" | "encryption"))
+                {
+                    break;
+                }
+                return true;
+            }
+        }
     }
-
-    let has_broad_quantifier = has_token(&["all", "every", "entire", "whole", "full", "complete"]);
-    let has_filesystem_target = has_token(&[
-        "file",
-        "files",
-        "directory",
-        "directories",
-        "folder",
-        "folders",
-        "drive",
-        "drives",
-        "disk",
-        "disks",
-        "volume",
-        "volumes",
-        "filesystem",
-        "filesystems",
-    ]);
-    if has_broad_quantifier && has_filesystem_target {
-        return true;
-    }
-
-    let has_root_target = has_token(&["root"])
-        && has_token(&[
-            "directory",
-            "directories",
-            "folder",
-            "folders",
-            "drive",
-            "drives",
-            "disk",
-            "disks",
-            "volume",
-            "volumes",
-            "filesystem",
-            "filesystems",
-            "path",
-            "paths",
-        ]);
-    if has_root_target {
-        return true;
-    }
-
     false
 }
 
@@ -886,29 +976,14 @@ fn evidence_identity(reference: &SccmEvidenceRef) -> (&str, &str) {
     (&reference.artifact_id, &reference.entry_id)
 }
 
+fn is_canonical_opaque_id(value: &str) -> bool {
+    !value.is_empty() && value.trim() == value
+}
+
 fn normalize_finding(finding: &mut SccmFinding) {
-    finding.finding_id = finding.finding_id.trim().to_owned();
     finding.title = finding.title.trim().to_owned();
     finding.summary = finding.summary.trim().to_owned();
-    if let SccmPhase::Unknown(value) = &mut finding.phase {
-        *value = value.trim().to_owned();
-    }
-    for reference in &mut finding.evidence {
-        normalize_evidence_reference(reference);
-    }
-    for terminal in &mut finding.terminal_evidence {
-        normalize_evidence_reference(&mut terminal.reference);
-    }
-    for key in &mut finding.correlation_keys {
-        if let Some(reference) = &mut key.evidence {
-            normalize_evidence_reference(reference);
-        }
-    }
-    for gap in &mut finding.coverage_gaps {
-        gap.artifact_id = gap.artifact_id.trim().to_owned();
-    }
     for request in &mut finding.next_artifacts {
-        request.logical_id = request.logical_id.trim().to_owned();
         request.reason = request.reason.trim().to_owned();
     }
 
@@ -926,11 +1001,6 @@ fn normalize_finding(finding: &mut SccmFinding) {
 
     finding.next_artifacts.sort_by(compare_artifact_requests);
     finding.next_artifacts.dedup();
-}
-
-fn normalize_evidence_reference(reference: &mut SccmEvidenceRef) {
-    reference.artifact_id = reference.artifact_id.trim().to_owned();
-    reference.entry_id = reference.entry_id.trim().to_owned();
 }
 
 fn compare_evidence_refs(left: &SccmEvidenceRef, right: &SccmEvidenceRef) -> Ordering {
