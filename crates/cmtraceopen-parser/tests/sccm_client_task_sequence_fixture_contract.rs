@@ -346,6 +346,31 @@ fn artifact_effective_state(artifact: &Value) -> Result<String, String> {
     }
 }
 
+fn smsts_log_paths(contents: &str) -> BTreeSet<String> {
+    contents
+        .match_indices("_SMSTSLogPath=")
+        .filter_map(|(start, _)| {
+            let value = &contents[start + "_SMSTSLogPath=".len()..];
+            let end = value
+                .find(|character: char| character.is_whitespace() || character == ']')
+                .unwrap_or(value.len());
+            (end > 0).then(|| value[..end].to_owned())
+        })
+        .collect()
+}
+
+fn path_class_for_sanitized_path(path: &str) -> Option<&'static str> {
+    [
+        ("SYNTHETIC://client/", "client"),
+        ("SYNTHETIC://full-os/", "fullOs"),
+        ("SYNTHETIC://setup/", "setup"),
+        ("SYNTHETIC://unknown/", "unknown"),
+        ("SYNTHETIC://winpe/", "winpe"),
+    ]
+    .into_iter()
+    .find_map(|(prefix, path_class)| path.starts_with(prefix).then_some(path_class))
+}
+
 fn combine_coverage_states(states: &[String]) -> Result<String, String> {
     if states.iter().any(|state| state == "captured") {
         return Ok("captured".to_owned());
@@ -478,6 +503,8 @@ fn validate_manifest_and_storage(
     let mut referenced_files = BTreeSet::new();
     let mut logical_states = BTreeMap::<String, Vec<String>>::new();
     let mut logical_paths = BTreeMap::<String, BTreeSet<String>>::new();
+    let mut observed_paths_by_fingerprint = BTreeMap::<String, BTreeSet<String>>::new();
+    let mut captured_path_claims = Vec::<(String, String, String, String)>::new();
 
     for artifact in artifacts {
         let artifact_id = artifact["artifactId"]
@@ -562,6 +589,14 @@ fn validate_manifest_and_storage(
                     "{scenario}/{artifact_id}: captured provenance metadata drifted"
                 ));
             }
+            let captured_utc = artifact["capturedUtc"]
+                .as_str()
+                .expect("capturedUtc was checked as a string");
+            if chrono::DateTime::parse_from_rfc3339(captured_utc).is_err() {
+                return Err(format!(
+                    "{scenario}/{artifact_id}: capturedUtc is not RFC 3339"
+                ));
+            }
             let relative_path = artifact["relativePath"]
                 .as_str()
                 .ok_or_else(|| format!("{scenario}/{artifact_id}: captured path is missing"))?;
@@ -618,13 +653,32 @@ fn validate_manifest_and_storage(
             }
             let contents = std::fs::read_to_string(&fixture_path)
                 .map_err(|error| format!("{relative_path} is not UTF-8: {error}"))?;
-            if artifact["rotation"]["fragmentComplete"] == true
-                && !contents.contains("SYNTHETIC FIXTURE")
-            {
+            let (entries, errors) = parse_content(&contents, relative_path, None);
+            let normalized = normalized_evidence(scenario_root, artifact)?;
+            let has_complete_ccm = errors == 0
+                && !normalized.is_empty()
+                && entries.iter().any(|entry| entry.format == LogFormat::Ccm);
+            let fragment_complete = artifact["rotation"]["fragmentComplete"]
+                .as_bool()
+                .ok_or_else(|| {
+                    format!("{scenario}/{artifact_id}: fragmentComplete is not a Boolean")
+                })?;
+            if fragment_complete != has_complete_ccm {
                 return Err(format!(
-                    "{scenario}/{artifact_id}: complete evidence lacks synthetic marker"
+                    "{scenario}/{artifact_id}: fragmentComplete is not bound to physical CCM grammar"
                 ));
             }
+            let fingerprint = path_fingerprint.to_owned();
+            observed_paths_by_fingerprint
+                .entry(fingerprint.clone())
+                .or_default()
+                .extend(smsts_log_paths(&contents));
+            captured_path_claims.push((
+                artifact_id.to_owned(),
+                fingerprint,
+                sanitized_path.to_owned(),
+                path_class.to_owned(),
+            ));
         } else if artifact["relativePath"].is_string()
             || artifact["sanitizedSourcePath"].is_string()
             || artifact["smstsLogPathEvidence"].is_string()
@@ -634,6 +688,26 @@ fn validate_manifest_and_storage(
         {
             return Err(format!(
                 "{scenario}/{artifact_id}: noncapture artifact invents physical provenance"
+            ));
+        } else if path_class != "unknown" {
+            return Err(format!(
+                "{scenario}/{artifact_id}: noncapture pathClass must remain unknown"
+            ));
+        }
+    }
+
+    for (artifact_id, fingerprint, sanitized_path, path_class) in captured_path_claims {
+        let observed_paths = observed_paths_by_fingerprint
+            .get(&fingerprint)
+            .ok_or_else(|| format!("{scenario}/{artifact_id}: no _SMSTSLogPath evidence"))?;
+        if observed_paths.len() != 1 || !observed_paths.contains(&sanitized_path) {
+            return Err(format!(
+                "{scenario}/{artifact_id}: sanitized _SMSTSLogPath is not bound to physical evidence"
+            ));
+        }
+        if path_class_for_sanitized_path(&sanitized_path) != Some(path_class.as_str()) {
+            return Err(format!(
+                "{scenario}/{artifact_id}: pathClass is not bound to _SMSTSLogPath evidence"
             ));
         }
     }
@@ -691,6 +765,41 @@ fn validate_contract(
                 .ok_or_else(|| "artifactId is not a string".to_owned())
         })
         .collect::<Result<BTreeMap<_, _>, _>>()?;
+
+    let captured_artifacts = artifacts
+        .iter()
+        .filter(|artifact| artifact["captureState"] == "captured")
+        .collect::<Vec<_>>();
+    let reviewed_profile_matches = !captured_artifacts.is_empty()
+        && captured_artifacts.iter().all(|artifact| {
+            artifact["sourceVersion"] == "5.00.TEST.0000" && artifact["pathClass"] != "unknown"
+        });
+    let (derived_profile_id, derived_profile_status) = if captured_artifacts.is_empty() {
+        (None, "notObserved")
+    } else if reviewed_profile_matches {
+        let has_partial_fragment = captured_artifacts
+            .iter()
+            .any(|artifact| artifact["rotation"]["fragmentComplete"] == false);
+        (
+            Some("task-sequence-client-5.00.test-v1"),
+            if has_partial_fragment {
+                "matchedAfterControlledJoinOnly"
+            } else {
+                "matched"
+            },
+        )
+    } else {
+        (None, "unknownVersionRejected")
+    };
+    let extraction_profile_id = expected["extractionProfile"]["id"].as_str();
+    let extraction_profile_status = expected["extractionProfile"]["status"].as_str();
+    if extraction_profile_id != derived_profile_id
+        || extraction_profile_status != Some(derived_profile_status)
+    {
+        return Err(format!(
+            "{scenario}: extraction profile is not bound to sourceVersion/pathClass evidence"
+        ));
+    }
 
     let mut declared_coverage = BTreeMap::new();
     for coverage in expected["coverage"]
@@ -846,8 +955,8 @@ fn validate_contract(
             }
         }
         if key.get("confidence").and_then(Value::as_str) != Some("exact")
-            || key.get("extractionProfileId").and_then(Value::as_str)
-                != Some("task-sequence-client-5.00.test-v1")
+            || key.get("extractionProfileId").and_then(Value::as_str) != extraction_profile_id
+            || extraction_profile_id.is_none()
         {
             return Err(format!(
                 "{transaction_id}: exact key is not profile-qualified"
@@ -927,25 +1036,32 @@ fn validate_contract(
             ));
         }
 
-        let mut expected_path_sequence = Vec::new();
-        for path_item in transaction["pathSequence"]
+        let path_items = transaction["pathSequence"]
             .as_array()
-            .ok_or_else(|| format!("{transaction_id}: pathSequence is not an array"))?
-        {
+            .ok_or_else(|| format!("{transaction_id}: pathSequence is not an array"))?;
+        let mut declared_path_sequence = Vec::new();
+        let mut evidence_path_sequence = Vec::new();
+        let mut path_artifact_ids = BTreeSet::new();
+        for path_item in path_items {
             let artifact_id = path_item["artifactId"]
                 .as_str()
                 .ok_or_else(|| format!("{transaction_id}: path artifactId is missing"))?;
+            if !path_artifact_ids.insert(artifact_id) {
+                return Err(format!(
+                    "{transaction_id}: pathSequence repeats artifact {artifact_id}"
+                ));
+            }
             let artifact = artifacts_by_id
                 .get(artifact_id)
                 .ok_or_else(|| format!("{transaction_id}: unknown path artifact {artifact_id}"))?;
-            if !evidence_refs
+            let evidence_ref = evidence_refs
                 .iter()
-                .any(|evidence_ref| evidence_ref["artifactId"] == artifact_id)
-            {
-                return Err(format!(
-                    "{transaction_id}: path artifact {artifact_id} is not key-bound cited evidence"
-                ));
-            }
+                .find(|evidence_ref| evidence_ref["artifactId"] == artifact_id)
+                .ok_or_else(|| {
+                    format!(
+                        "{transaction_id}: path artifact {artifact_id} is not key-bound cited evidence"
+                    )
+                })?;
             if path_item["pathClass"] != artifact["pathClass"]
                 || path_item["relocationOrdinal"] != artifact["relocationOrdinal"]
             {
@@ -953,19 +1069,70 @@ fn validate_contract(
                     "{transaction_id}: path provenance does not match {artifact_id}"
                 ));
             }
-            expected_path_sequence.push((
+            declared_path_sequence.push((
                 path_item["relocationOrdinal"]
                     .as_u64()
                     .ok_or_else(|| format!("{transaction_id}: relocationOrdinal is missing"))?,
                 artifact_id.to_owned(),
             ));
+            let start_line = evidence_ref["startLine"]
+                .as_u64()
+                .ok_or_else(|| format!("{transaction_id}: path evidence startLine is missing"))?
+                as u32;
+            let end_line = evidence_ref["endLine"]
+                .as_u64()
+                .ok_or_else(|| format!("{transaction_id}: path evidence endLine is missing"))?
+                as u32;
+            let normalized = normalized_evidence(scenario_root, artifact)?;
+            let evidence = normalized
+                .iter()
+                .find(|item| {
+                    item.reference.line_start == Some(start_line)
+                        && item.reference.line_end == Some(end_line)
+                })
+                .ok_or_else(|| {
+                    format!(
+                        "{transaction_id}: path citation for {artifact_id} is not one complete CCM record"
+                    )
+                })?;
+            evidence_path_sequence.push((evidence.timestamp.utc_millis, artifact_id.to_owned()));
         }
-        let mut sorted_path_sequence = expected_path_sequence.clone();
-        sorted_path_sequence.sort();
-        if expected_path_sequence != sorted_path_sequence {
+        let declared_artifact_order = declared_path_sequence
+            .iter()
+            .map(|(_, artifact_id)| artifact_id.as_str())
+            .collect::<Vec<_>>();
+        let relocation_ordinals = declared_path_sequence
+            .iter()
+            .map(|(ordinal, _)| *ordinal)
+            .collect::<Vec<_>>();
+        if relocation_ordinals != (0..declared_path_sequence.len() as u64).collect::<Vec<_>>() {
             return Err(format!(
-                "{transaction_id}: path sequence is not deterministic"
+                "{transaction_id}: relocation ordinals are not contiguous evidence order"
             ));
+        }
+        if evidence_path_sequence.len() > 1 {
+            let mut derived_order = evidence_path_sequence
+                .into_iter()
+                .map(|(utc_millis, artifact_id)| {
+                    utc_millis
+                        .map(|utc_millis| (utc_millis, artifact_id))
+                        .ok_or_else(|| {
+                            format!(
+                                "{transaction_id}: relocation order lacks normalized timestamp evidence"
+                            )
+                        })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            derived_order.sort();
+            let derived_artifact_order = derived_order
+                .iter()
+                .map(|(_, artifact_id)| artifact_id.as_str())
+                .collect::<Vec<_>>();
+            if declared_artifact_order != derived_artifact_order {
+                return Err(format!(
+                    "{transaction_id}: relocation order is not derived from cited evidence"
+                ));
+            }
         }
 
         let timestamp = &transaction["timestampProvenance"];
@@ -1028,7 +1195,10 @@ fn validate_contract(
                 ));
             }
         }
-        if let Some(next_artifact) = transaction["nextArtifact"].as_object() {
+        if !transaction["nextArtifact"].is_null() {
+            let next_artifact = transaction["nextArtifact"]
+                .as_object()
+                .ok_or_else(|| format!("{transaction_id}: next artifact is not an object"))?;
             if next_artifact["logicalArtifactId"] != "client-task-sequence-smsts"
                 || !PATH_CLASSES.contains(
                     &next_artifact["pathClass"]
@@ -1043,10 +1213,63 @@ fn validate_contract(
             }
         }
 
-        if transaction["classification"] == "confirmedFailure" {
-            if transaction["state"] != "failed" || transaction["terminalEvidence"].is_null() {
+        let classification = transaction["classification"]
+            .as_str()
+            .ok_or_else(|| format!("{transaction_id}: classification is not a string"))?;
+        let confidence = transaction["confidence"]
+            .as_str()
+            .ok_or_else(|| format!("{transaction_id}: confidence is not a string"))?;
+        let confidence_ceiling = transaction["confidenceCeiling"]
+            .as_str()
+            .ok_or_else(|| format!("{transaction_id}: confidenceCeiling is not a string"))?;
+        if confidence != confidence_ceiling || !matches!(confidence, "low" | "medium" | "high") {
+            return Err(format!(
+                "{transaction_id}: confidence exceeds or does not match its ceiling"
+            ));
+        }
+        let ordering_state = timestamp["orderingState"]
+            .as_str()
+            .ok_or_else(|| format!("{transaction_id}: orderingState is not a string"))?;
+        if ordering_state != "normalizedUtc" && confidence != "low" {
+            return Err(format!(
+                "{transaction_id}: non-normalized timestamp cannot exceed Low confidence"
+            ));
+        }
+
+        let terminal_state = match classification {
+            "success"
+                if phase == "complete"
+                    && state == "succeeded"
+                    && last_successful_phase == "complete"
+                    && confidence == "high" =>
+            {
+                Some("succeeded")
+            }
+            "confirmedFailure" if state == "failed" && confidence == "high" => Some("failed"),
+            "blockedOrDeferred"
+                if state == "blockedOrDeferred"
+                    && matches!(confidence, "low" | "medium")
+                    && transaction["terminalEvidence"].is_null() =>
+            {
+                None
+            }
+            "insufficientEvidence"
+                if state == "inProgress"
+                    && matches!(confidence, "low" | "medium")
+                    && transaction["terminalEvidence"].is_null() =>
+            {
+                None
+            }
+            _ => {
                 return Err(format!(
-                    "{transaction_id}: confirmed failure lacks terminal evidence"
+                    "{transaction_id}: classification/state/confidence semantics are invalid"
+                ));
+            }
+        };
+        if let Some(terminal_state) = terminal_state {
+            if transaction["terminalEvidence"].is_null() {
+                return Err(format!(
+                    "{transaction_id}: terminal outcome lacks terminal evidence"
                 ));
             }
             if !evidence_refs
@@ -1062,9 +1285,12 @@ fn validate_contract(
                 &artifacts_by_id,
                 &transaction["terminalEvidence"],
             )?;
-            if !terminal_text.contains("terminal=true") || !terminal_text.contains("state=failed") {
+            if !terminal_text.contains("terminal=true")
+                || !terminal_text.contains(&format!("state={terminal_state}"))
+                || !terminal_text.contains(&format!("phase={phase}"))
+            {
                 return Err(format!(
-                    "{transaction_id}: terminal citation is not a terminal failure record"
+                    "{transaction_id}: terminal citation does not prove the terminal outcome"
                 ));
             }
         }
@@ -1118,6 +1344,17 @@ fn validate_contract(
         let finding_id = finding["findingId"]
             .as_str()
             .ok_or_else(|| "findingId is not a string".to_owned())?;
+        let finding_object = finding
+            .as_object()
+            .ok_or_else(|| format!("{finding_id}: finding is not an object"))?;
+        if finding_object
+            .keys()
+            .any(|field| field.to_ascii_lowercase().contains("notasksequence"))
+        {
+            return Err(format!(
+                "{finding_id}: absent coverage cannot become a no-run claim"
+            ));
+        }
         let evidence = finding["evidence"]
             .as_array()
             .ok_or_else(|| format!("{finding_id}: evidence is not an array"))?;
@@ -1125,6 +1362,67 @@ fn validate_contract(
         if evidence.is_empty() && coverage_gaps.is_empty() {
             return Err(format!(
                 "{finding_id}: finding has neither evidence nor coverage"
+            ));
+        }
+        for evidence_ref in evidence {
+            evidence_text(scenario_root, &artifacts_by_id, evidence_ref)?;
+        }
+        for artifact_id in &coverage_gaps {
+            let artifact = artifacts_by_id
+                .get(artifact_id.as_str())
+                .ok_or_else(|| format!("{finding_id}: unknown coverage gap {artifact_id}"))?;
+            if artifact_effective_state(artifact)? == "captured" {
+                return Err(format!(
+                    "{finding_id}: complete artifact {artifact_id} is a coverage gap"
+                ));
+            }
+        }
+        if !finding["boundedNextArtifact"].is_null() {
+            let next_artifact = finding["boundedNextArtifact"]
+                .as_object()
+                .ok_or_else(|| format!("{finding_id}: next artifact is not an object"))?;
+            if next_artifact["logicalArtifactId"] != "client-task-sequence-smsts"
+                || !PATH_CLASSES.contains(
+                    &next_artifact["pathClass"]
+                        .as_str()
+                        .ok_or_else(|| format!("{finding_id}: next pathClass is missing"))?,
+                )
+                || !next_artifact["reason"].is_string()
+            {
+                return Err(format!(
+                    "{finding_id}: next artifact request is not bounded"
+                ));
+            }
+        }
+        let classification = finding["classification"]
+            .as_str()
+            .ok_or_else(|| format!("{finding_id}: classification is not a string"))?;
+        let outcome_is_transaction_bound = match classification {
+            "success" | "confirmedFailure" => transactions.iter().any(|transaction| {
+                transaction["classification"] == classification
+                    && !transaction["terminalEvidence"].is_null()
+                    && evidence
+                        .iter()
+                        .any(|evidence_ref| evidence_ref == &transaction["terminalEvidence"])
+            }),
+            "blockedOrDeferred" => transactions.iter().any(|transaction| {
+                transaction["classification"] == "blockedOrDeferred"
+                    && transaction["evidence"]
+                        .as_array()
+                        .is_some_and(|transaction_evidence| {
+                            evidence.iter().any(|evidence_ref| {
+                                transaction_evidence
+                                    .iter()
+                                    .any(|transaction_ref| transaction_ref == evidence_ref)
+                            })
+                        })
+            }),
+            "insufficientEvidence" => true,
+            _ => false,
+        };
+        if !outcome_is_transaction_bound {
+            return Err(format!(
+                "{finding_id}: finding outcome is not bound to terminal/keyed transaction evidence"
             ));
         }
         if finding["serverCauseClaimed"] != false
@@ -1747,4 +2045,223 @@ fn adversarial_contract_mutations_fail_closed() {
     let error = validate_contract("terminal-preflight", &failure_root, &manifest, &expected)
         .expect_err("confirmed failure requires cited terminal evidence");
     assert!(error.contains("terminal"), "{error}");
+}
+
+#[test]
+fn coherent_review_mutations_fail_closed() {
+    let mut accepted = Vec::new();
+
+    let completed_root = task_sequence_root().join("completed");
+    let completed_manifest = read_json(&completed_root.join("manifest.json"));
+    let completed_expected = read_json(&completed_root.join("expected.json"));
+
+    let mut manifest = completed_manifest.clone();
+    let mut expected = completed_expected.clone();
+    manifest["artifacts"][0]["pathClass"] = Value::String("setup".to_owned());
+    expected["coverage"][0]["pathClasses"] = serde_json::json!(["setup"]);
+    expected["artifactProvenance"][0]["pathClass"] = Value::String("setup".to_owned());
+    expected["transactions"][0]["pathSequence"][0]["pathClass"] = Value::String("setup".to_owned());
+    if validate_contract("completed", &completed_root, &manifest, &expected).is_ok() {
+        accepted.push("pathClass drift");
+    }
+
+    let mut manifest = completed_manifest.clone();
+    let mut expected = completed_expected.clone();
+    let drifted_path = Value::String("SYNTHETIC://client/drift/smsts.log".to_owned());
+    manifest["artifacts"][0]["sanitizedSourcePath"] = drifted_path.clone();
+    manifest["artifacts"][0]["smstsLogPathEvidence"] = drifted_path.clone();
+    expected["artifactProvenance"][0]["sanitizedSourcePath"] = drifted_path.clone();
+    expected["artifactProvenance"][0]["smstsLogPathEvidence"] = drifted_path;
+    if validate_contract("completed", &completed_root, &manifest, &expected).is_ok() {
+        accepted.push("_SMSTSLogPath drift");
+    }
+
+    let mut manifest = completed_manifest.clone();
+    manifest["artifacts"][0]["sourceVersion"] = Value::String("5.00.UNKNOWN.0000".to_owned());
+    if validate_contract("completed", &completed_root, &manifest, &completed_expected).is_ok() {
+        accepted.push("sourceVersion drift");
+    }
+
+    let mut expected = completed_expected.clone();
+    expected["extractionProfile"]["id"] =
+        Value::String("task-sequence-client-9.99.drift-v1".to_owned());
+    if validate_contract("completed", &completed_root, &completed_manifest, &expected).is_ok() {
+        accepted.push("extraction profile drift");
+    }
+
+    let mut manifest = completed_manifest.clone();
+    manifest["artifacts"][0]["capturedUtc"] = Value::String("not-a-timestamp".to_owned());
+    if validate_contract("completed", &completed_root, &manifest, &completed_expected).is_ok() {
+        accepted.push("invalid capturedUtc");
+    }
+
+    let rotation_root = task_sequence_root().join("rotation-boundary");
+    let mut manifest = read_json(&rotation_root.join("manifest.json"));
+    let mut expected = read_json(&rotation_root.join("expected.json"));
+    let lo_index = manifest["artifacts"]
+        .as_array()
+        .expect("rotation artifacts are an array")
+        .iter()
+        .position(|artifact| artifact["rotation"]["kind"] == "lo")
+        .expect("rotation corpus has smsts.lo_");
+    manifest["artifacts"][lo_index]["rotation"]["fragmentComplete"] = Value::Bool(true);
+    let lo_id = manifest["artifacts"][lo_index]["artifactId"].clone();
+    let provenance_index = expected["artifactProvenance"]
+        .as_array()
+        .expect("rotation provenance is an array")
+        .iter()
+        .position(|item| item["artifactId"] == lo_id)
+        .expect("rotation provenance contains smsts.lo_");
+    expected["artifactProvenance"][provenance_index]["fragmentComplete"] = Value::Bool(true);
+    expected["coverage"][0]["state"] = Value::String("captured".to_owned());
+    if validate_contract("rotation-boundary", &rotation_root, &manifest, &expected).is_ok() {
+        accepted.push("partial smsts.lo_ promoted complete");
+    }
+
+    let relocated_root = task_sequence_root().join("relocated-fragments");
+    let mut manifest = read_json(&relocated_root.join("manifest.json"));
+    let mut expected = read_json(&relocated_root.join("expected.json"));
+    manifest["artifacts"][1]["relocationOrdinal"] = Value::from(2);
+    manifest["artifacts"][2]["relocationOrdinal"] = Value::from(1);
+    expected["artifactProvenance"][1]["relocationOrdinal"] = Value::from(2);
+    expected["artifactProvenance"][2]["relocationOrdinal"] = Value::from(1);
+    expected["transactions"][0]["pathSequence"][1]["relocationOrdinal"] = Value::from(2);
+    expected["transactions"][0]["pathSequence"][2]["relocationOrdinal"] = Value::from(1);
+    expected["transactions"][0]["pathSequence"]
+        .as_array_mut()
+        .expect("path sequence is an array")
+        .swap(1, 2);
+    if validate_contract("relocated-fragments", &relocated_root, &manifest, &expected).is_ok() {
+        accepted.push("relocation order drift");
+    }
+
+    let unkeyed_root = task_sequence_root().join("complete-looking-unkeyed");
+    let unkeyed_manifest = read_json(&unkeyed_root.join("manifest.json"));
+    let mut expected = read_json(&unkeyed_root.join("expected.json"));
+    expected["findings"][0]["classification"] = Value::String("success".to_owned());
+    if validate_contract(
+        "complete-looking-unkeyed",
+        &unkeyed_root,
+        &unkeyed_manifest,
+        &expected,
+    )
+    .is_ok()
+    {
+        accepted.push("unkeyed evidence promoted success");
+    }
+
+    let mut expected = completed_expected.clone();
+    expected["transactions"][0]["terminalEvidence"] = Value::Null;
+    if validate_contract("completed", &completed_root, &completed_manifest, &expected).is_ok() {
+        accepted.push("success without terminal citation");
+    }
+
+    let nonterminal_root = task_sequence_root().join("client-installed");
+    let nonterminal_manifest = read_json(&nonterminal_root.join("manifest.json"));
+    let mut expected = read_json(&nonterminal_root.join("expected.json"));
+    expected["findings"][0]["classification"] = Value::String("confirmedFailure".to_owned());
+    if validate_contract(
+        "client-installed",
+        &nonterminal_root,
+        &nonterminal_manifest,
+        &expected,
+    )
+    .is_ok()
+    {
+        accepted.push("nonterminal finding promoted confirmedFailure");
+    }
+
+    let invalid_offset_root = task_sequence_root().join("invalid-offset");
+    let invalid_offset_manifest = read_json(&invalid_offset_root.join("manifest.json"));
+    let mut expected = read_json(&invalid_offset_root.join("expected.json"));
+    expected["transactions"][0]["confidence"] = Value::String("high".to_owned());
+    expected["transactions"][0]["confidenceCeiling"] = Value::String("high".to_owned());
+    if validate_contract(
+        "invalid-offset",
+        &invalid_offset_root,
+        &invalid_offset_manifest,
+        &expected,
+    )
+    .is_ok()
+    {
+        accepted.push("invalid offset promoted High");
+    }
+
+    let unknown_root = task_sequence_root().join("unknown-profile");
+    let unknown_manifest = read_json(&unknown_root.join("manifest.json"));
+    let mut expected = read_json(&unknown_root.join("expected.json"));
+    let winpe_expected = read_json(&task_sequence_root().join("winpe").join("expected.json"));
+    let mut transaction = winpe_expected["transactions"][0].clone();
+    transaction["transactionId"] = Value::String("task-sequence-016".to_owned());
+    transaction["key"]["executionId"] =
+        Value::String("72400000-0000-0000-0000-000000000016".to_owned());
+    transaction["key"]["advertisementId"] = Value::String("LAB20316".to_owned());
+    transaction["evidence"][0]["artifactId"] =
+        Value::String("task-sequence-unknown-profile-smsts-current".to_owned());
+    transaction["pathSequence"][0]["artifactId"] =
+        Value::String("task-sequence-unknown-profile-smsts-current".to_owned());
+    transaction["pathSequence"][0]["pathClass"] = Value::String("unknown".to_owned());
+    transaction["orderingEvidence"]["artifactId"] =
+        Value::String("task-sequence-unknown-profile-smsts-current".to_owned());
+    transaction["timestampProvenance"]["normalizedUtc"] =
+        Value::String("2026-07-30T01:46:00Z".to_owned());
+    transaction["nextArtifact"] = Value::Null;
+    transaction["confidence"] = Value::String("high".to_owned());
+    transaction["confidenceCeiling"] = Value::String("high".to_owned());
+    expected["extractionProfile"] = serde_json::json!({
+        "id": "task-sequence-client-5.00.test-v1",
+        "status": "matched"
+    });
+    expected["transactions"] = serde_json::json!([transaction]);
+    expected["sourceLocalObservations"] = serde_json::json!([]);
+    if validate_contract(
+        "unknown-profile",
+        &unknown_root,
+        &unknown_manifest,
+        &expected,
+    )
+    .is_ok()
+    {
+        accepted.push("unknown source promoted exact High");
+    }
+
+    let incomplete_root = task_sequence_root().join("incomplete");
+    let incomplete_manifest = read_json(&incomplete_root.join("manifest.json"));
+    let mut expected = read_json(&incomplete_root.join("expected.json"));
+    expected["findings"][0]["boundedNextArtifact"] = serde_json::json!({
+        "logicalArtifactId": "all-device-artifacts",
+        "pathClass": "everywhere",
+        "reason": "Collect everything."
+    });
+    if validate_contract(
+        "incomplete",
+        &incomplete_root,
+        &incomplete_manifest,
+        &expected,
+    )
+    .is_ok()
+    {
+        accepted.push("unbounded finding request");
+    }
+
+    let mut expected = read_json(&incomplete_root.join("expected.json"));
+    expected["findings"][0]["classification"] = Value::String("success".to_owned());
+    expected["findings"][0]["noTaskSequenceRan"] = Value::Bool(true);
+    if validate_contract(
+        "incomplete",
+        &incomplete_root,
+        &incomplete_manifest,
+        &expected,
+    )
+    .is_ok()
+    {
+        accepted.push("absent coverage promoted success/no-run");
+    }
+
+    assert!(
+        accepted.is_empty(),
+        "validate_contract accepted {} coherent review mutations: {}",
+        accepted.len(),
+        accepted.join(", ")
+    );
 }
