@@ -680,6 +680,72 @@ fn scenario_slot<'a>(matrix: &'a mut Value, scenario_id: &str) -> &'a mut Value 
         .unwrap_or_else(|| panic!("scenario {scenario_id} exists in the fixture"))
 }
 
+fn check_mutated_registry(mutate: impl FnOnce(&mut Value)) -> Result<(), String> {
+    let mut value = read_json(&corpus_root().join("pair-registry.json"));
+    mutate(&mut value);
+    let registry: PairRegistry = typed(value)?;
+    check_pair_registry(&registry)
+}
+
+fn pair_slot<'a>(registry: &'a mut Value, pair_id: &str) -> &'a mut Value {
+    registry["pairs"]
+        .as_array_mut()
+        .expect("pair registry fixture has a pairs array")
+        .iter_mut()
+        .find(|pair| pair["pairId"] == pair_id)
+        .unwrap_or_else(|| panic!("pair {pair_id} exists in the registry"))
+}
+
+#[test]
+fn adversarial_fixture_ref_and_ownership_mutations_fail_closed() {
+    let error = check_mutated_matrix(CONTENT_MATRIX_FIXTURE, &CONTENT_SPEC, |matrix| {
+        scenario_slot(matrix, "content-invalid-offset")["serverFixtureRef"] = Value::String(
+            "repo:crates/cmtraceopen-parser/tests/fixtures/sccm/client/deployment/success"
+                .to_owned(),
+        );
+    })
+    .expect_err("the pending #329 server corpus cannot be replaced by a merged client corpus");
+    assert!(error.contains("content-invalid-offset"), "{error}");
+
+    let error = check_mutated_matrix(CONTENT_MATRIX_FIXTURE, &CONTENT_SPEC, |matrix| {
+        scenario_slot(matrix, "content-conflicting-key")["serverFixtureRef"] =
+            Value::String("synthetic:content-divergent-server".to_owned());
+    })
+    .expect_err("the pending #329 server side cannot dodge into a synthetic ref");
+    assert!(error.contains("content-conflicting-key"), "{error}");
+
+    let error = check_mutated_matrix(POLICY_MATRIX_FIXTURE, &POLICY_SPEC, |matrix| {
+        scenario_slot(matrix, "policy-conflicting-key")["serverFixtureRef"] = Value::String(
+            "repo:crates/cmtraceopen-parser/tests/fixtures/sccm/client/policy/complete".to_owned(),
+        );
+    })
+    .expect_err("a server fixture ref cannot cite a client-side corpus directory");
+    assert!(error.contains("policy-conflicting-key"), "{error}");
+
+    let error = check_mutated_matrix(POLICY_MATRIX_FIXTURE, &POLICY_SPEC, |matrix| {
+        scenario_slot(matrix, "policy-conflicting-key")["serverFixtureRef"] =
+            Value::String("issue:#328:healthy-policy".to_owned());
+    })
+    .expect_err("a merged upstream side cannot claim a pending issue ref");
+    assert!(error.contains("policy-conflicting-key"), "{error}");
+
+    let error = check_mutated_registry(|registry| {
+        pair_slot(registry, "content-distribution-point")["serverIssue"] =
+            Value::String("#328".to_owned());
+    })
+    .expect_err("the content pair server issue is pinned to #329");
+    assert!(error.contains("content-distribution-point"), "{error}");
+
+    let error = check_mutated_registry(|registry| {
+        pair_slot(registry, "content-distribution-point")["blockers"] = serde_json::json!([
+            "#318 finding interface exact-head review pending",
+            "#322 public fact interface not implemented"
+        ]);
+    })
+    .expect_err("the content pair must stay honest about #329 pending acceptance");
+    assert!(error.contains("content-distribution-point"), "{error}");
+}
+
 #[test]
 fn adversarial_projection_privacy_mutations_fail_closed() {
     let error = check_mutated_matrix(POLICY_MATRIX_FIXTURE, &POLICY_SPEC, |matrix| {
