@@ -409,6 +409,35 @@ fn check_scenario(scenario: &ScenarioContract, spec: &MatrixSpec) -> Result<(), 
         .map_err(|error| format!("{scenario_id}: {error}"))?;
     check_fixture_ref(&scenario.server_fixture_ref, &spec.server_side, "server")
         .map_err(|error| format!("{scenario_id}: {error}"))?;
+    if !scenario.ordered_input_evidence.is_empty() {
+        if scenario.ordered_input_evidence.len() < 2 {
+            return Err(format!(
+                "{scenario_id}: reordered input evidence needs at least two entries"
+            ));
+        }
+        for entry in &scenario.ordered_input_evidence {
+            let side_tagged = entry
+                .strip_prefix("client:")
+                .or_else(|| entry.strip_prefix("server:"))
+                .is_some_and(is_synthetic_slug);
+            if !side_tagged {
+                return Err(format!(
+                    "{scenario_id}: reordered evidence entry {entry} is not a side-tagged synthetic token"
+                ));
+            }
+        }
+        for side in ["client:", "server:"] {
+            if !scenario
+                .ordered_input_evidence
+                .iter()
+                .any(|entry| entry.starts_with(side))
+            {
+                return Err(format!(
+                    "{scenario_id}: reordered evidence must include the {side} side"
+                ));
+            }
+        }
+    }
     if scenario.guard_ids.is_empty() || !is_sorted_unique(&scenario.guard_ids) {
         return Err(format!(
             "{scenario_id}: guard IDs must be nonempty, sorted, and unique"
@@ -586,10 +615,7 @@ fn guard_demonstrated(guard: &str, scenario: &ScenarioContract) -> bool {
         }
         "partial-capture" => scenario.coverage == CoverageState::Partial,
         "redaction-boundary" => !scenario.private_input_markers.is_empty(),
-        "reordered-input" => {
-            scenario.scenario_id.ends_with("-reordered-input-a")
-                || scenario.scenario_id.ends_with("-reordered-input-b")
-        }
+        "reordered-input" => !scenario.ordered_input_evidence.is_empty(),
         "rotation-split" => scenario.rotation == RotationState::Split,
         "same-time-no-key" => {
             scenario.key_relation == KeyRelation::Missing
@@ -632,6 +658,79 @@ fn check_matrix_contract(matrix: &ScenarioMatrix, spec: &MatrixSpec) -> Result<(
     if exercised_guards != GUARD_IDS.into_iter().collect() {
         return Err(format!(
             "{}: every shared guard needs a pair-specific adversarial scenario",
+            spec.workflow
+        ));
+    }
+    check_reordered_pair(matrix, spec)?;
+    Ok(())
+}
+
+/// The reordered A/B cases must feed one identical input set through two
+/// opposite evidence orders and still pin one deterministic contract.
+fn check_reordered_pair(matrix: &ScenarioMatrix, spec: &MatrixSpec) -> Result<(), String> {
+    let reordered = matrix
+        .scenarios
+        .iter()
+        .filter(|scenario| scenario.guard_ids.contains(&"reordered-input".to_owned()))
+        .collect::<Vec<_>>();
+    let [first, second] = reordered.as_slice() else {
+        return Err(format!(
+            "{}: exactly two reordered-input scenarios are required",
+            spec.workflow
+        ));
+    };
+    if first.client_fixture_ref != second.client_fixture_ref
+        || first.server_fixture_ref != second.server_fixture_ref
+    {
+        return Err(format!(
+            "{}: reordered scenarios must share identical fixture refs",
+            spec.workflow
+        ));
+    }
+    if first.profile_state != second.profile_state
+        || first.key_relation != second.key_relation
+        || first.topology != second.topology
+        || first.timestamp_provenance != second.timestamp_provenance
+        || first.coverage != second.coverage
+        || first.rotation != second.rotation
+        || first.terminal_relation != second.terminal_relation
+    {
+        return Err(format!(
+            "{}: reordered scenarios must share identical input state",
+            spec.workflow
+        ));
+    }
+    if second.ordered_input_evidence == first.ordered_input_evidence {
+        return Err(format!(
+            "{}: reordered cases must not present the same order twice",
+            spec.workflow
+        ));
+    }
+    let reversed = first
+        .ordered_input_evidence
+        .iter()
+        .rev()
+        .cloned()
+        .collect::<Vec<_>>();
+    if second.ordered_input_evidence != reversed {
+        return Err(format!(
+            "{}: reordered case B must replay case A's evidence in opposite order",
+            spec.workflow
+        ));
+    }
+    if first.expected != second.expected {
+        return Err(format!(
+            "{}: reordered scenarios must pin one expected result",
+            spec.workflow
+        ));
+    }
+    let projection_a = serde_json::to_string(&first.expected_public_projection)
+        .expect("expected public projection serializes");
+    let projection_b = serde_json::to_string(&second.expected_public_projection)
+        .expect("expected public projection serializes");
+    if projection_a != projection_b {
+        return Err(format!(
+            "{}: reordered scenarios must serialize one deterministic public projection",
             spec.workflow
         ));
     }
