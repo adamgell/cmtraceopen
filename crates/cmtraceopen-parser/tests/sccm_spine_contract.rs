@@ -382,7 +382,7 @@ const REVIEW_UNRECOGNIZED_CONFIRMATION_REQUEST_REASONS: [&str; 10] = [
     "Confirm PolicyAgent.log for fetching credentials.",
 ];
 
-const REVIEW_PASSIVE_UNBOUNDED_CONFIRMATION_REASONS: [&str; 12] = [
+const REVIEW_PASSIVE_UNBOUNDED_CONFIRMATION_REASONS: [&str; 23] = [
     "Confirm all files are required for status in PolicyAgent.log.",
     "Confirm every file must be provided for download status in PolicyAgent.log.",
     "Confirm the whole disk is required for imaging status in Smsts.log.",
@@ -395,6 +395,57 @@ const REVIEW_PASSIVE_UNBOUNDED_CONFIRMATION_REASONS: [&str; 12] = [
     "Confirm PolicyAgent.log status has every file provided.",
     "Confirm all files have provided status in PolicyAgent.log.",
     "Confirm Smsts.log imaging status has the full disk provided.",
+    "Confirm PolicyAgent.log status had every file.",
+    "Confirm PolicyAgent.log status has all files.",
+    "Confirm PolicyAgent.log status have every file.",
+    "Confirm PolicyAgent.log status are all files.",
+    "Confirm PolicyAgent.log status be all files.",
+    "Confirm PolicyAgent.log status been all files.",
+    "Confirm PolicyAgent.log status being all files.",
+    "Confirm Smsts.log imaging status is the full disk.",
+    "Confirm Smsts.log imaging status was the full disk.",
+    "Confirm Smsts.log imaging status were the full disk.",
+    "Confirm Smsts.log imaging status has the full disk.",
+];
+
+const REVIEW_BOUNDED_AUXILIARY_CONFIRMATION_REASONS: [(&str, &str); 10] = [
+    (
+        "policyAgent",
+        "Confirm PolicyAgent.log status had evidence.",
+    ),
+    (
+        "policyAgent",
+        "Confirm PolicyAgent.log status has evidence.",
+    ),
+    ("policyAgent", "Confirm PolicyAgent.log files have status."),
+    (
+        "policyAgent",
+        "Confirm PolicyAgent.log files are downloaded.",
+    ),
+    (
+        "policyAgent",
+        "Confirm PolicyAgent.log status should be available.",
+    ),
+    (
+        "policyAgent",
+        "Confirm PolicyAgent.log status has been available.",
+    ),
+    (
+        "policyAgent",
+        "Confirm PolicyAgent.log status is being reported.",
+    ),
+    (
+        "policyAgent",
+        "Confirm PolicyAgent.log status is available.",
+    ),
+    (
+        "policyAgent",
+        "Confirm PolicyAgent.log status was available.",
+    ),
+    (
+        "policyAgent",
+        "Confirm PolicyAgent.log files were downloaded.",
+    ),
 ];
 
 const REVIEW_EXACT_MP_ARTIFACT_REQUESTS: [(&str, &str); 5] = [
@@ -2348,6 +2399,48 @@ fn finding_review_passive_unbounded_confirmation_requests_fail_at_every_public_b
     assert!(
         accepted.is_empty(),
         "accepted passive unbounded confirmation requests: {accepted:#?}"
+    );
+}
+
+#[test]
+fn finding_review_bounded_auxiliary_confirmations_pass_at_every_public_boundary() {
+    let canonical = finding_with_gap_and_request("review-bounded-auxiliary-parity");
+    let mut rejected = Vec::new();
+
+    for (logical_id, reason) in REVIEW_BOUNDED_AUXILIARY_CONFIRMATION_REASONS {
+        let builder = SccmFindingBuilder::new("review-bounded-auxiliary-builder")
+            .class(SccmFindingClass::Symptom)
+            .phase(SccmPhase::Policy)
+            .role(SccmRole::Client)
+            .severity(Severity::Warning)
+            .confidence(SccmConfidence::Low)
+            .evidence(vec![finding_evidence_ref("artifact-a", "entry-a")])
+            .next_artifact(finding_request(logical_id, SccmRole::Client, reason))
+            .build();
+        if builder.is_err() {
+            rejected.push(format!("builder: {reason}"));
+        }
+
+        let mut direct = canonical.clone();
+        direct.next_artifacts[0] = finding_request(logical_id, SccmRole::Client, reason);
+        if direct.validate().is_err() {
+            rejected.push(format!("direct validate: {reason}"));
+        }
+        if serde_json::to_value(&direct).is_err() {
+            rejected.push(format!("serializer: {reason}"));
+        }
+
+        let mut json = serde_json::to_value(&canonical).unwrap();
+        json["nextArtifacts"][0] =
+            serde_json::to_value(finding_request(logical_id, SccmRole::Client, reason)).unwrap();
+        if serde_json::from_value::<SccmFinding>(json).is_err() {
+            rejected.push(format!("deserializer: {reason}"));
+        }
+    }
+
+    assert!(
+        rejected.is_empty(),
+        "rejected bounded auxiliary confirmations: {rejected:#?}"
     );
 }
 

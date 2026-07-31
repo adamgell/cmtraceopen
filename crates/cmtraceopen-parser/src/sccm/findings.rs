@@ -1287,8 +1287,18 @@ fn has_passive_unbounded_confirmation_request(
                 return false;
             }
 
+            let predicate = &tokens[auxiliary_index + 1..];
+            let broad_target_follows_auxiliary = predicate
+                .iter()
+                .any(|token| is_broad_quantifier(token.text))
+                && predicate.iter().any(|token| {
+                    is_collection_target(token.text)
+                        && !token_is_covered_by_identity(token, identity_ranges)
+                });
+
             matches!(auxiliary.text, "must" | "need" | "needs" | "should")
-                || tokens[auxiliary_index + 1..].iter().any(|token| {
+                || broad_target_follows_auxiliary
+                || predicate.iter().any(|token| {
                     matches!(
                         token.text,
                         "archived"
