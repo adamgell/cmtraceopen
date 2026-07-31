@@ -10,7 +10,7 @@ use crate::models::log_entry::{LogEntry, LogFormat, Severity};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeviceInventoryLogDialect {
     Harvester,
-    Adaptor,
+    InventoryAdaptor,
     RotationFailure,
 }
 
@@ -51,7 +51,7 @@ fn rotation_re() -> &'static Regex {
 ///
 /// A filename can lower the Harvester or Adaptor confidence threshold to one matching
 /// header, but it is never sufficient without a matching content header.
-pub fn detect_dialect(content: &str, file_path: &str) -> Option<DeviceInventoryLogDialect> {
+pub fn detect_dialect(file_path: &str, content: &str) -> Option<DeviceInventoryLogDialect> {
     let harvester_headers = count_headers(content, harvester_re());
     if harvester_headers >= 2
         || (harvester_headers >= 1 && has_filename_hint(file_path, "intuneinventoryharvesterlog"))
@@ -61,12 +61,12 @@ pub fn detect_dialect(content: &str, file_path: &str) -> Option<DeviceInventoryL
 
     let adaptor_headers = count_headers(content, adaptor_re());
     if adaptor_headers >= 2
-        || (adaptor_headers >= 1 && has_filename_hint(file_path, "intuneinventoryadapterlog"))
+        || (adaptor_headers >= 1 && has_filename_hint(file_path, "inventoryadaptor"))
     {
-        return Some(DeviceInventoryLogDialect::Adaptor);
+        return Some(DeviceInventoryLogDialect::InventoryAdaptor);
     }
 
-    if count_headers(content, rotation_re()) >= 1 {
+    if has_rotation_failure_signature(content) {
         return Some(DeviceInventoryLogDialect::RotationFailure);
     }
 
@@ -75,17 +75,20 @@ pub fn detect_dialect(content: &str, file_path: &str) -> Option<DeviceInventoryL
 
 /// Parse a complete Device Inventory log using the already-selected dialect.
 pub fn parse_content(
-    content: &str,
     file_path: &str,
+    content: &str,
     dialect: DeviceInventoryLogDialect,
 ) -> (Vec<LogEntry>, u32) {
-    let mut records = Vec::new();
+    let mut records: Vec<LogEntry> = Vec::new();
     let mut parse_errors = 0;
 
     for (index, raw_line) in content.lines().enumerate() {
         let line_number = (index + 1) as u32;
         let line = raw_line.trim_end_matches('\r');
         if line.is_empty() {
+            if let Some(previous) = records.last_mut() {
+                previous.message.push('\n');
+            }
             continue;
         }
 
@@ -93,7 +96,7 @@ pub fn parse_content(
             DeviceInventoryLogDialect::Harvester => harvester_re()
                 .captures(line)
                 .map(|caps| parse_harvester(&caps, line_number)),
-            DeviceInventoryLogDialect::Adaptor => adaptor_re()
+            DeviceInventoryLogDialect::InventoryAdaptor => adaptor_re()
                 .captures(line)
                 .map(|caps| parse_adaptor(&caps, line_number)),
             DeviceInventoryLogDialect::RotationFailure => rotation_re()
@@ -137,6 +140,20 @@ fn count_headers(content: &str, regex: &Regex) -> usize {
         .map(|line| line.trim_end_matches('\r'))
         .filter(|line| regex.is_match(line))
         .count()
+}
+
+fn has_rotation_failure_signature(content: &str) -> bool {
+    content
+        .lines()
+        .map(|line| line.trim_end_matches('\r'))
+        .filter_map(|line| rotation_re().captures(line))
+        .any(|captures| {
+            captures.name("message").is_some_and(|message| {
+                message
+                    .as_str()
+                    .contains("Failed to rotate Device Inventory")
+            })
+        })
 }
 
 fn has_filename_hint(file_path: &str, expected_stem: &str) -> bool {

@@ -14,8 +14,8 @@ const ROTATION_FAILURE: &str = "2026-07-30T13:05:01.1234567-04:00 Failed to rota
 #[test]
 fn parses_harvester_headers_with_direct_severity_mapping() {
     let (entries, parse_errors) = parse_content(
-        HARVESTER,
         "IntuneInventoryHarvesterLog.log",
+        HARVESTER,
         DeviceInventoryLogDialect::Harvester,
     );
 
@@ -36,9 +36,9 @@ fn parses_harvester_headers_with_direct_severity_mapping() {
 #[test]
 fn frames_adaptor_json_as_part_of_its_logical_record() {
     let (entries, parse_errors) = parse_content(
+        "InventoryAdaptor.log",
         ADAPTOR,
-        "IntuneInventoryAdapterLog.log",
-        DeviceInventoryLogDialect::Adaptor,
+        DeviceInventoryLogDialect::InventoryAdaptor,
     );
 
     assert_eq!(parse_errors, 0);
@@ -59,8 +59,8 @@ fn frames_adaptor_json_as_part_of_its_logical_record() {
 #[test]
 fn frames_rotation_failure_exception_stack() {
     let (entries, parse_errors) = parse_content(
-        ROTATION_FAILURE,
         "IntuneDeviceInventory.log",
+        ROTATION_FAILURE,
         DeviceInventoryLogDialect::RotationFailure,
     );
 
@@ -81,25 +81,72 @@ fn detects_content_with_two_headers_or_a_matching_path_hint_but_never_path_alone
         "7/30/2026 6:00:53 AM [Information] Completed harvesting signed policies: 118 succeeded, 0 failed to collect.";
 
     assert_eq!(
-        detect_dialect(HARVESTER, "unrelated.log"),
+        detect_dialect("unrelated.log", HARVESTER),
         Some(DeviceInventoryLogDialect::Harvester)
     );
     assert_eq!(
-        detect_dialect(one_harvester_header, "IntuneInventoryHarvesterLog.log"),
+        detect_dialect("IntuneInventoryHarvesterLog.log", one_harvester_header),
         Some(DeviceInventoryLogDialect::Harvester)
     );
-    assert_eq!(detect_dialect(one_harvester_header, "unrelated.log"), None);
+    assert_eq!(detect_dialect("unrelated.log", one_harvester_header), None);
     assert_eq!(
-        detect_dialect("ordinary text", "IntuneInventoryHarvesterLog.log"),
+        detect_dialect("IntuneInventoryHarvesterLog.log", "ordinary text"),
         None
     );
     assert_eq!(
-        detect_dialect(ADAPTOR, "unrelated.log"),
-        Some(DeviceInventoryLogDialect::Adaptor)
+        detect_dialect("unrelated.log", ADAPTOR),
+        Some(DeviceInventoryLogDialect::InventoryAdaptor)
     );
     assert_eq!(
-        detect_dialect(ROTATION_FAILURE, "unrelated.log"),
+        detect_dialect("InventoryAdaptor.log", ADAPTOR.lines().next().unwrap()),
+        Some(DeviceInventoryLogDialect::InventoryAdaptor)
+    );
+    assert_eq!(
+        detect_dialect("unrelated.log", ROTATION_FAILURE),
         Some(DeviceInventoryLogDialect::RotationFailure)
+    );
+}
+
+#[test]
+fn rejects_generic_iso_timestamp_content_as_rotation_failure() {
+    let generic_iso = "2026-07-30T13:05:01.1234567-04:00 Completed an unrelated service operation.";
+
+    assert_eq!(detect_dialect("unrelated.log", generic_iso), None);
+}
+
+#[test]
+fn preserves_blank_lines_inside_adaptor_json_continuations() {
+    let content = "[Thu Jul 30 13:05:01 2026][8604] - Adapter result:\n{\n\n  \"Status\": 200\n}\n[Thu Jul 30 13:05:03 2026][8604] - Completed action.";
+
+    let (entries, parse_errors) = parse_content(
+        "InventoryAdaptor.log",
+        content,
+        DeviceInventoryLogDialect::InventoryAdaptor,
+    );
+
+    assert_eq!(parse_errors, 0);
+    assert_eq!(entries.len(), 2);
+    assert_eq!(
+        entries[0].message,
+        "Adapter result:\n{\n\n  \"Status\": 200\n}"
+    );
+}
+
+#[test]
+fn preserves_blank_lines_inside_rotation_stack_continuations() {
+    let content = "2026-07-30T13:05:01.1234567-04:00 Failed to rotate Device Inventory log.\nSystem.IO.IOException: The process cannot access the file.\n\n   at Synthetic.Inventory.Rotate()";
+
+    let (entries, parse_errors) = parse_content(
+        "IntuneDeviceInventory.log",
+        content,
+        DeviceInventoryLogDialect::RotationFailure,
+    );
+
+    assert_eq!(parse_errors, 0);
+    assert_eq!(entries.len(), 1);
+    assert_eq!(
+        entries[0].message,
+        "Failed to rotate Device Inventory log.\nSystem.IO.IOException: The process cannot access the file.\n\n   at Synthetic.Inventory.Rotate()"
     );
 }
 
@@ -108,8 +155,8 @@ fn preserves_unknown_levels_orphans_crlf_and_truncated_final_records() {
     let content = "orphan before a record\r\n7/30/2026 6:00:53 AM [Verbose] Not a recognized level.\r\n7/30/2026 6:00:54 AM [Information] First recognized record.\r\ntrailing continuation\r\n7/30/2026 6:00:55 AM [Warning] Truncated final record.";
 
     let (entries, parse_errors) = parse_content(
-        content,
         "IntuneInventoryHarvesterLog.log",
+        content,
         DeviceInventoryLogDialect::Harvester,
     );
 
