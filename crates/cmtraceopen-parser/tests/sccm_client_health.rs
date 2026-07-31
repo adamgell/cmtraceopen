@@ -994,6 +994,7 @@ fn health_terminal_chronology_and_recovery_are_source_local_and_ordered() {
     earlier_response.reference.line_start = Some(4);
     earlier_response.reference.line_end = Some(4);
     earlier_response.reference.entry_id = "earlier-success".to_owned();
+    earlier_response.evidence_id = "evidence:health-earlier-success".to_owned();
     later_failure.evidence.push(earlier_response);
     let later_failure_analysis = analyze_client_health(&later_failure);
     if later_failure_analysis.last_successful_phase == Some(SccmHealthPhase::Transport)
@@ -1016,6 +1017,7 @@ fn health_terminal_chronology_and_recovery_are_source_local_and_ordered() {
     response.reference.line_start = Some(5);
     response.reference.line_end = Some(5);
     response.reference.entry_id = "later-recovery".to_owned();
+    response.evidence_id = "evidence:health-later-recovery".to_owned();
     later_recovery.evidence.push(response);
     let recovery_analysis = analyze_client_health(&later_recovery);
     if recovery_analysis.last_successful_phase != Some(SccmHealthPhase::Transport)
@@ -1042,6 +1044,7 @@ fn health_same_key_setup_recovery_does_not_cross_bootstrap_identity() {
     recovery.reference.line_start = Some(2);
     recovery.reference.line_end = Some(2);
     recovery.reference.entry_id = "same-bootstrap-recovery".to_owned();
+    recovery.evidence_id = "evidence:health-same-bootstrap-recovery".to_owned();
     recovered.evidence.push(recovery);
     let recovered_analysis = analyze_client_health(&recovered);
     assert_eq!(
@@ -1060,6 +1063,7 @@ fn health_same_key_setup_recovery_does_not_cross_bootstrap_identity() {
     unrelated_success.reference.line_start = Some(2);
     unrelated_success.reference.line_end = Some(2);
     unrelated_success.reference.entry_id = "different-bootstrap-success".to_owned();
+    unrelated_success.evidence_id = "evidence:health-different-bootstrap-success".to_owned();
     different_bootstrap.evidence.push(unrelated_success);
     let unrelated_analysis = analyze_client_health(&different_bootstrap);
     assert_eq!(unrelated_analysis.last_successful_phase, None);

@@ -167,6 +167,24 @@ pub fn analyze_client_health(bundle: &SccmNormalizedBundle) -> SccmHealthAnalysi
         return finalize_health_analysis(None, vec![finding]);
     }
 
+    if let Some((phase, source_group)) = duplicate_evidence_scope(bundle) {
+        let finding = insufficient_finding(
+            "health-evidence-identity-collision",
+            phase,
+            None,
+            "Evidence identities are not unique",
+            "Duplicate evidence identifiers or references make logical-record authority ambiguous, so no workflow outcome was evaluated.",
+            Vec::new(),
+            vec![SccmFindingCoverageGap {
+                artifact_id: source_group.to_owned(),
+                role: SccmRole::Client,
+                coverage: SccmCoverageState::ParseFailed,
+            }],
+            request_for_phase(phase),
+        );
+        return finalize_health_analysis(None, vec![finding]);
+    }
+
     let artifacts_by_id = bundle
         .artifacts
         .iter()
@@ -444,7 +462,7 @@ pub fn analyze_client_health(bundle: &SccmNormalizedBundle) -> SccmHealthAnalysi
 
     match resolve_transport(&facts, management_point_host, management_point_fact) {
         TransportResolution::Succeeded { started, response } => {
-            if !chain_has_known_inversion(&[
+            let chain = [
                 setup_fact,
                 service_fact,
                 identity_fact,
@@ -452,10 +470,24 @@ pub fn analyze_client_health(bundle: &SccmNormalizedBundle) -> SccmHealthAnalysi
                 management_point_fact,
                 started,
                 response,
-            ]) {
+            ];
+            if chain_has_usable_order(&chain) {
                 last_successful_phase = Some(SccmHealthPhase::Transport);
                 return finalize_health_analysis(last_successful_phase, findings);
             }
+            findings.push(local_symptom_finding(
+                "health-transport-chronology-uncertain",
+                SccmHealthPhase::Transport,
+                last_successful_phase,
+                "Client transport chronology is not usable",
+                "A successful-looking transport exchange cannot be ordered through the complete client-side prerequisite chain.",
+                chain
+                    .iter()
+                    .map(|fact| fact.reference.clone())
+                    .collect(),
+                Some(request_for_phase(SccmHealthPhase::Transport)),
+            ));
+            return finalize_health_analysis(last_successful_phase, findings);
         }
         TransportResolution::Failed { started, failure } => {
             if chain_has_usable_order(&[
@@ -557,6 +589,71 @@ fn duplicate_artifact_scope(
     Some((phase, source_group))
 }
 
+fn duplicate_evidence_scope(
+    bundle: &SccmNormalizedBundle,
+) -> Option<(SccmHealthPhase, &'static str)> {
+    let mut id_counts = BTreeMap::<&str, usize>::new();
+    let mut reference_counts = BTreeMap::<(&str, &str, Option<u32>, Option<u32>), usize>::new();
+    for evidence in &bundle.evidence {
+        *id_counts.entry(evidence.evidence_id.as_str()).or_default() += 1;
+        *reference_counts
+            .entry((
+                evidence.reference.artifact_id.as_str(),
+                evidence.reference.entry_id.as_str(),
+                evidence.reference.line_start,
+                evidence.reference.line_end,
+            ))
+            .or_default() += 1;
+    }
+
+    let collision_artifact_ids = bundle
+        .evidence
+        .iter()
+        .filter(|evidence| {
+            id_counts
+                .get(evidence.evidence_id.as_str())
+                .is_some_and(|count| *count > 1)
+                || reference_counts
+                    .get(&(
+                        evidence.reference.artifact_id.as_str(),
+                        evidence.reference.entry_id.as_str(),
+                        evidence.reference.line_start,
+                        evidence.reference.line_end,
+                    ))
+                    .is_some_and(|count| *count > 1)
+        })
+        .map(|evidence| evidence.reference.artifact_id.as_str())
+        .collect::<BTreeSet<_>>();
+    if collision_artifact_ids.is_empty() {
+        return None;
+    }
+
+    let phase = bundle
+        .artifacts
+        .iter()
+        .filter(|artifact| collision_artifact_ids.contains(artifact.artifact_id.as_str()))
+        .map(|artifact| {
+            match classify_artifact_name(&artifact.display_name, SccmRole::Client).family {
+                SccmArtifactFamily::ClientSetup => SccmHealthPhase::Setup,
+                SccmArtifactFamily::ClientHealth => SccmHealthPhase::Service,
+                SccmArtifactFamily::ClientIdentity => SccmHealthPhase::Identity,
+                SccmArtifactFamily::ClientLocation => SccmHealthPhase::SiteAssignment,
+                _ => SccmHealthPhase::Setup,
+            }
+        })
+        .min()
+        .unwrap_or(SccmHealthPhase::Setup);
+    let source_group = match phase {
+        SccmHealthPhase::Setup => CLIENT_SETUP_GROUP,
+        SccmHealthPhase::Service => CLIENT_EVALUATION_GROUP,
+        SccmHealthPhase::Identity => CLIENT_IDENTITY_GROUP,
+        SccmHealthPhase::SiteAssignment
+        | SccmHealthPhase::ManagementPoint
+        | SccmHealthPhase::Transport => CLIENT_LOCATION_GROUP,
+    };
+    Some((phase, source_group))
+}
+
 fn resolve_setup(facts: &[HealthFact]) -> SetupResolution<'_> {
     let successes = facts
         .iter()
@@ -583,8 +680,7 @@ fn resolve_setup(facts: &[HealthFact]) -> SetupResolution<'_> {
     let mut unrecovered_failures = Vec::new();
     for (failure, bootstrap_id) in &failures {
         let recovered = successes.iter().any(|(success, success_id, _)| {
-            success_id == bootstrap_id
-                && is_later_in_same_artifact(&failure.reference, &success.reference)
+            success_id == bootstrap_id && fact_is_strictly_before(failure, success)
         });
         if !recovered {
             unrecovered_failures.push(*failure);
@@ -798,12 +894,6 @@ fn known_inversion(earlier: &HealthFact, later: &HealthFact) -> bool {
     compare_fact_order(earlier, later) == Some(std::cmp::Ordering::Greater)
 }
 
-fn chain_has_known_inversion(facts: &[&HealthFact]) -> bool {
-    facts
-        .windows(2)
-        .any(|pair| known_inversion(pair[0], pair[1]))
-}
-
 fn chain_has_usable_order(facts: &[&HealthFact]) -> bool {
     facts
         .windows(2)
@@ -821,7 +911,7 @@ fn parse_health_fact(evidence: &SccmEvidence, artifact: &SccmArtifact) -> Option
     }
 
     let catalog = classify_artifact_name(&artifact.display_name, SccmRole::Client);
-    if !catalog.supported_for_diagnosis {
+    if !catalog.supported_for_diagnosis || artifact.rotation != catalog.rotation {
         return None;
     }
     let message = evidence.message.as_str();
@@ -982,7 +1072,7 @@ fn field_value<'a>(message: &'a str, key: &str) -> Option<&'a str> {
     let marker = format!("{key}=");
     let mut matches = message
         .match_indices(&marker)
-        .filter(|(index, _)| *index == 0 || !message.as_bytes()[index - 1].is_ascii_alphanumeric());
+        .filter(|(index, _)| *index == 0 || message.as_bytes()[index - 1].is_ascii_whitespace());
     let (first, _) = matches.next()?;
     if matches.next().is_some() {
         return None;
@@ -1081,14 +1171,6 @@ fn valid_public_id(value: &str) -> bool {
         && value.chars().all(|character| {
             character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | ':')
         })
-}
-
-fn is_later_in_same_artifact(earlier: &SccmEvidenceRef, later: &SccmEvidenceRef) -> bool {
-    earlier.artifact_id == later.artifact_id
-        && earlier
-            .line_end
-            .zip(later.line_start)
-            .is_some_and(|(earlier_end, later_start)| later_start > earlier_end)
 }
 
 fn artifacts_for_family(
