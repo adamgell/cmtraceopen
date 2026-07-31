@@ -452,6 +452,15 @@ fn validate_card(card: &SourceCard) -> Validation {
         {
             issues.push("deprecatedCardRequiresSuccessor".to_owned());
         }
+        SupersessionState::Deprecated
+            if card
+                .supersession
+                .superseded_by
+                .as_deref()
+                .is_some_and(|successor| !is_card_id(successor) || successor == card.card_id) =>
+        {
+            issues.push("supersessionSuccessorInvalid".to_owned());
+        }
         _ => {}
     }
 
@@ -518,6 +527,12 @@ fn validate_card(card: &SourceCard) -> Validation {
         }
         PromotionState::Unknown(_) => issues.push("unknownPromotionState".to_owned()),
     }
+    if matches!(card.promotion.state, PromotionState::RuleValidated)
+        && (card.correlation_policy.key_state != KeyState::Validated
+            || !nonempty_sorted(&card.correlation_policy.allowed_key_kinds))
+    {
+        issues.push("ruleValidatedKeyPolicyInvalid".to_owned());
+    }
 
     let guidance_only = matches!(
         card.promotion.state,
@@ -542,13 +557,36 @@ fn validate_card(card: &SourceCard) -> Validation {
 
     issues.sort();
     issues.dedup();
-    let admitted_to_semantic_catalog =
-        issues.is_empty() && matches!(card.promotion.state, PromotionState::RuleValidated);
+    let admitted_to_semantic_catalog = issues.is_empty()
+        && matches!(card.promotion.state, PromotionState::RuleValidated)
+        && card.supersession.state == SupersessionState::Active;
     Validation {
         valid: issues.is_empty(),
         admitted_to_semantic_catalog,
         issues,
     }
+}
+
+fn validate_card_with_inventory(card: &SourceCard, inventory: &BTreeSet<String>) -> Validation {
+    let mut validation = validate_card(card);
+    if card.supersession.state == SupersessionState::Deprecated
+        && card
+            .supersession
+            .superseded_by
+            .as_ref()
+            .is_some_and(|successor| !inventory.contains(successor))
+    {
+        validation
+            .issues
+            .push("supersessionSuccessorMissing".to_owned());
+    }
+    validation.issues.sort();
+    validation.issues.dedup();
+    validation.valid = validation.issues.is_empty();
+    validation.admitted_to_semantic_catalog = validation.valid
+        && matches!(card.promotion.state, PromotionState::RuleValidated)
+        && card.supersession.state == SupersessionState::Active;
+    validation
 }
 
 fn validate_path(path: &Path) -> Validation {
@@ -585,11 +623,24 @@ fn advanced_role_source_card_inventory_is_exact_and_sorted() {
 #[test]
 fn candidate_catalog_is_typed_private_and_not_semantically_admitted() {
     let root = corpus_root().join("source-cards");
+    let cards = SOURCE_CARDS
+        .iter()
+        .map(|filename| {
+            load_card(&root.join(filename)).unwrap_or_else(|error| panic!("{filename}: {error}"))
+        })
+        .collect::<Vec<_>>();
+    let inventory = cards
+        .iter()
+        .map(|card| card.card_id.clone())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        inventory.len(),
+        cards.len(),
+        "source-card IDs must be unique"
+    );
     let mut card_ids = Vec::new();
-    for filename in SOURCE_CARDS {
-        let path = root.join(filename);
-        let card = load_card(&path).unwrap_or_else(|error| panic!("{filename}: {error}"));
-        let validation = validate_card(&card);
+    for (filename, card) in SOURCE_CARDS.into_iter().zip(cards) {
+        let validation = validate_card_with_inventory(&card, &inventory);
         assert!(
             validation.valid,
             "{filename}: {}",
@@ -693,14 +744,38 @@ fn deprecation_requires_an_explicit_successor_and_never_panics() {
         .issues
         .contains(&"deprecatedCardRequiresSuccessor".to_owned()));
 
+    card.source_version_scope.state = SourceVersionState::Scoped;
+    card.source_version_scope.allowed_prefixes = vec!["5.00.".to_owned()];
+    card.correlation_policy.key_state = KeyState::Validated;
+    card.correlation_policy.allowed_key_kinds = vec!["requestId".to_owned()];
+    card.fixture_ids = vec!["advanced-role-rule-success".to_owned()];
+    card.promotion.state = PromotionState::RuleValidated;
+    card.promotion.observed_evidence_ids = vec!["sanitized-lab-role-path-version-001".to_owned()];
+    card.promotion.implementation_issue = Some("#400".to_owned());
+    card.promotion.production_reducer = Some("sccm.server.synthetic.reduce".to_owned());
+    card.semantic_policy.capture_guidance_only = false;
+    card.semantic_policy.can_create_transactions = true;
+    card.semantic_policy.can_create_failure_findings = true;
+    card.supersession.superseded_by = Some("missing-successor".to_owned());
+    let inventory = [card.card_id.clone()].into_iter().collect();
+    let dangling = validate_card_with_inventory(&card, &inventory);
+    assert!(dangling
+        .issues
+        .contains(&"supersessionSuccessorMissing".to_owned()));
+    assert!(!dangling.admitted_to_semantic_catalog);
+
     card.supersession.superseded_by = Some("advanced-role-successor".to_owned());
-    let valid = validate_card(&card);
+    let inventory = [card.card_id.clone(), "advanced-role-successor".to_owned()]
+        .into_iter()
+        .collect();
+    let valid = validate_card_with_inventory(&card, &inventory);
     assert!(!valid
         .issues
-        .contains(&"deprecatedCardRequiresSuccessor".to_owned()));
+        .contains(&"supersessionSuccessorMissing".to_owned()));
+    assert!(valid.valid, "an existing successor keeps the card valid");
     assert!(
         !valid.admitted_to_semantic_catalog,
-        "deprecation metadata cannot promote a candidate source"
+        "deprecation metadata cannot admit even a RuleValidated source"
     );
 }
 
@@ -737,4 +812,11 @@ fn only_a_fully_linked_rule_validated_card_is_semantically_admitted() {
     let blocked = validate_card(&card);
     assert_eq!(blocked.issues, ["ruleValidatedMetadataInvalid"]);
     assert!(!blocked.admitted_to_semantic_catalog);
+
+    card.promotion.implementation_issue = Some("#400".to_owned());
+    card.correlation_policy.key_state = KeyState::Unvalidated;
+    card.correlation_policy.allowed_key_kinds.clear();
+    let unvalidated_key = validate_card(&card);
+    assert_eq!(unvalidated_key.issues, ["ruleValidatedKeyPolicyInvalid"]);
+    assert!(!unvalidated_key.admitted_to_semantic_catalog);
 }

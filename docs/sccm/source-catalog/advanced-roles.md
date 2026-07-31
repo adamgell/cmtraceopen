@@ -43,7 +43,7 @@ Candidate names must be confirmed against configured role provenance before prom
 
 ## Determinism and lifecycle
 
-Catalog filenames and card IDs are sorted and unique. Nested role, basename, path, privacy, version-prefix, fixture, key, and supersession lists are also sorted where ordering affects serialization or comparison. Active cards cannot name a successor. Deprecated cards must name an explicit successor, and supersession metadata cannot promote a card.
+Catalog filenames and card IDs are sorted and unique. Nested role, basename, path, privacy, version-prefix, fixture, key, and supersession lists are also sorted where ordering affects serialization or comparison. Active cards cannot name a successor. Deprecated cards must name a valid successor present in the catalog and can never be semantically admitted. Supersession metadata cannot promote a card.
 
 The synthetic catalog-fixture matrix proves:
 
@@ -52,7 +52,8 @@ The synthetic catalog-fixture matrix proves:
 - a candidate cannot declare a production reducer or diagnostic capabilities;
 - high-sensitivity data cannot disable redaction or project raw sensitive fields;
 - unknown parser and promotion values are retained for review and rejected;
-- deprecation without an explicit successor is rejected.
+- RuleValidated admission still requires validated, nonempty, deterministic key kinds;
+- deprecation without an existing catalog successor is rejected, and deprecated cards remain outside semantic admission.
 
 ## Native validation boundary
 
