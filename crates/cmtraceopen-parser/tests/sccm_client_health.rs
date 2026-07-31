@@ -462,15 +462,39 @@ fn health_guid_matching_is_case_insensitive() {
     let original = "11111111-1111-1111-1111-111111111111";
     let lowercase = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
     let uppercase = "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA";
+    let original_occurrences = bundle
+        .evidence
+        .iter()
+        .filter(|evidence| evidence.message.contains(original))
+        .count();
+    assert!(
+        original_occurrences > 0,
+        "success fixture must contain the original client GUID"
+    );
     for evidence in &mut bundle.evidence {
         evidence.message = evidence.message.replace(original, lowercase);
     }
+    assert!(
+        bundle
+            .evidence
+            .iter()
+            .all(|evidence| !evidence.message.contains(original)),
+        "every original client GUID occurrence must be mutated"
+    );
     let setup = bundle
         .evidence
         .iter_mut()
         .find(|evidence| evidence.message.contains("Bootstrap completed"))
         .expect("success fixture setup evidence");
+    assert!(
+        setup.message.contains(lowercase),
+        "setup evidence must carry the lowercase mutation before case splitting"
+    );
     setup.message = setup.message.replace(lowercase, uppercase);
+    assert!(
+        setup.message.contains(uppercase) && !setup.message.contains(lowercase),
+        "setup evidence must carry only the uppercase client GUID mutation"
+    );
 
     assert_eq!(
         analyze_client_health(&bundle).last_successful_phase,
@@ -543,8 +567,139 @@ fn health_same_guid_identity_success_recovers_prior_failure() {
     );
     assert!(has_high_confirmed_failure(&different_guid));
     assert_eq!(
+        unrelated_analysis.findings.len(),
+        1,
+        "an unrelated identity GUID must preserve exactly one identity failure finding"
+    );
+    assert_eq!(
         unrelated_analysis.findings[0].finding.finding_id,
         "health-identity-terminal"
+    );
+}
+
+#[test]
+fn health_quoted_terminal_marker_cannot_create_a_high_failure() {
+    let mut bundle = load_bundle("transport-failure");
+    assert!(
+        has_high_confirmed_failure(&bundle),
+        "the unmodified terminal fixture must prove the mutation is meaningful"
+    );
+    replace_first_message(
+        &mut bundle,
+        "Transport terminal failure",
+        "Narrative quotes Transport terminal failure",
+    );
+
+    let analysis = analyze_client_health(&bundle);
+    assert!(!has_high_confirmed_failure(&bundle));
+    assert_eq!(
+        analysis.last_successful_phase,
+        Some(SccmHealthPhase::ManagementPoint)
+    );
+    assert_eq!(analysis.findings.len(), 1);
+    assert_eq!(
+        analysis.findings[0].finding.finding_id,
+        "health-transport-insufficient"
+    );
+}
+
+#[test]
+fn health_later_normalized_utc_identity_success_recovers_across_canonical_rotation() {
+    let mut bundle = load_bundle("identity-failure");
+    let original_identity_id = bundle
+        .artifacts
+        .iter()
+        .find(|artifact| {
+            artifact
+                .display_name
+                .eq_ignore_ascii_case("ClientIDManagerStartup.log")
+        })
+        .expect("identity failure current artifact")
+        .artifact_id
+        .clone();
+    let rotated_identity_id = "health-identity-failure-identity-lo";
+    let current_identity_id = "health-identity-recovery-identity-current";
+
+    let rotated_artifact = bundle
+        .artifacts
+        .iter_mut()
+        .find(|artifact| artifact.artifact_id == original_identity_id)
+        .expect("identity failure artifact");
+    rotated_artifact.artifact_id = rotated_identity_id.to_owned();
+    rotated_artifact.display_name = "ClientIDManagerStartup.lo_".to_owned();
+    rotated_artifact.rotation = SccmRotation::LoUnderscore;
+    let mut current_artifact = rotated_artifact.clone();
+    current_artifact.artifact_id = current_identity_id.to_owned();
+    current_artifact.display_name = "ClientIDManagerStartup.log".to_owned();
+    current_artifact.rotation = SccmRotation::Current;
+    bundle.artifacts.push(current_artifact);
+
+    for evidence in &mut bundle.evidence {
+        evidence.timestamp.ordering_state = SccmTimeOrderingState::NormalizedUtc;
+        evidence.timestamp.utc_millis = Some(if evidence.message.contains("Bootstrap completed") {
+            10
+        } else if evidence
+            .message
+            .contains("Client service evaluation succeeded")
+        {
+            20
+        } else {
+            30
+        });
+        if evidence.reference.artifact_id == original_identity_id {
+            evidence.evidence_id = "evidence:health-identity-failure-rotation".to_owned();
+            evidence.reference.artifact_id = rotated_identity_id.to_owned();
+            evidence.reference.entry_id = "identity-failure-rotation".to_owned();
+        }
+    }
+    assert!(
+        has_high_confirmed_failure(&bundle),
+        "the canonical rotation failure must remain terminal before recovery is added"
+    );
+
+    let mut recovery = bundle
+        .evidence
+        .iter()
+        .find(|evidence| evidence.reference.artifact_id == rotated_identity_id)
+        .expect("rotated identity failure evidence")
+        .clone();
+    recovery.evidence_id = "evidence:health-identity-recovery-current".to_owned();
+    recovery.reference.artifact_id = current_identity_id.to_owned();
+    recovery.reference.entry_id = "identity-recovery-current".to_owned();
+    recovery.timestamp.utc_millis = Some(40);
+    recovery.message = recovery
+        .message
+        .replace(
+            "[redacted:sccm-public-message-v1] terminal failure",
+            "[redacted:sccm-public-message-v1] succeeded",
+        )
+        .replace(" error=0x80004005", "");
+    assert!(
+        recovery
+            .message
+            .contains("[redacted:sccm-public-message-v1] succeeded clientGuid="),
+        "recovery mutation must create the exact supported success marker"
+    );
+    bundle.evidence.push(recovery);
+
+    let analysis = analyze_client_health(&bundle);
+    assert_eq!(
+        analysis.last_successful_phase,
+        Some(SccmHealthPhase::Identity)
+    );
+    assert!(!has_high_confirmed_failure(&bundle));
+    assert!(analysis
+        .findings
+        .iter()
+        .all(|finding| finding.finding.finding_id != "health-identity-terminal"));
+
+    let mut reversed = bundle.clone();
+    reversed.artifacts.reverse();
+    reversed.evidence.reverse();
+    assert_eq!(
+        serde_json::to_string(&analyze_client_health(&reversed)).expect("reversed analysis JSON"),
+        serde_json::to_string(&analysis).expect("forward analysis JSON"),
+        "canonical rotation recovery must not depend on vector order"
     );
 }
 
@@ -613,7 +768,7 @@ fn health_fixture_validator_requires_every_expected_line_range() {
 
 #[test]
 fn health_adversarial_inputs_cannot_create_terminal_or_success_outcomes() {
-    let mut accepted = Vec::new();
+    let mut accepted = Vec::<String>::new();
 
     let mut zero_setup_error = load_bundle("setup-failure");
     replace_first_message(
@@ -622,7 +777,7 @@ fn health_adversarial_inputs_cannot_create_terminal_or_success_outcomes() {
         "error=0x00000000",
     );
     if has_high_confirmed_failure(&zero_setup_error) {
-        accepted.push("zero setup error accepted as terminal");
+        accepted.push("zero setup error accepted as terminal".to_owned());
     }
 
     let mut zero_transport_status = load_bundle("success");
@@ -630,7 +785,7 @@ fn health_adversarial_inputs_cannot_create_terminal_or_success_outcomes() {
     if analyze_client_health(&zero_transport_status).last_successful_phase
         == Some(SccmHealthPhase::Transport)
     {
-        accepted.push("zero transport status accepted as success");
+        accepted.push("zero transport status accepted as success".to_owned());
     }
 
     let mut mismatched_client = load_bundle("success");
@@ -642,7 +797,7 @@ fn health_adversarial_inputs_cannot_create_terminal_or_success_outcomes() {
     if analyze_client_health(&mismatched_client).last_successful_phase
         != Some(SccmHealthPhase::Setup)
     {
-        accepted.push("mismatched client GUID advanced the phase chain");
+        accepted.push("mismatched client GUID advanced the phase chain".to_owned());
     }
 
     let mut unsafe_host = load_bundle("success");
@@ -655,7 +810,7 @@ fn health_adversarial_inputs_cannot_create_terminal_or_success_outcomes() {
         analyze_client_health(&unsafe_host).last_successful_phase,
         Some(SccmHealthPhase::ManagementPoint | SccmHealthPhase::Transport)
     ) {
-        accepted.push("unsafe raw host advanced management-point evidence");
+        accepted.push("unsafe raw host advanced management-point evidence".to_owned());
     }
 
     let mut wrong_source = load_bundle("success");
@@ -666,7 +821,7 @@ fn health_adversarial_inputs_cannot_create_terminal_or_success_outcomes() {
         .expect("success fixture evaluation artifact");
     evaluation_artifact.display_name = "LocationServices.log".to_owned();
     if analyze_client_health(&wrong_source).last_successful_phase != Some(SccmHealthPhase::Setup) {
-        accepted.push("source-phase mismatch advanced service evidence");
+        accepted.push("source-phase mismatch advanced service evidence".to_owned());
     }
 
     let mut unknown_profile = load_bundle("identity-failure");
@@ -674,7 +829,7 @@ fn health_adversarial_inputs_cannot_create_terminal_or_success_outcomes() {
         artifact.configmgr_version = Some("5.00.UNKNOWN.0000".to_owned());
     }
     if has_high_confirmed_failure(&unknown_profile) {
-        accepted.push("unknown extraction profile created high failure");
+        accepted.push("unknown extraction profile created high failure".to_owned());
     }
 
     let mut missing_profile = load_bundle("identity-failure");
@@ -682,7 +837,7 @@ fn health_adversarial_inputs_cannot_create_terminal_or_success_outcomes() {
         artifact.configmgr_version = None;
     }
     if has_high_confirmed_failure(&missing_profile) {
-        accepted.push("missing extraction profile created high failure");
+        accepted.push("missing extraction profile created high failure".to_owned());
     }
 
     let mut access_denied_identity = load_bundle("identity-failure");
@@ -703,7 +858,7 @@ fn health_adversarial_inputs_cannot_create_terminal_or_success_outcomes() {
         .evidence
         .retain(|evidence| evidence.reference.artifact_id != identity_id);
     if has_high_confirmed_failure(&access_denied_identity) {
-        accepted.push("access-denied source created high failure");
+        accepted.push("access-denied source created high failure".to_owned());
     }
 
     let mut capped_success = load_bundle("success");
@@ -714,7 +869,7 @@ fn health_adversarial_inputs_cannot_create_terminal_or_success_outcomes() {
         .last_successful_phase
         .is_some()
     {
-        accepted.push("capped sources created a successful phase");
+        accepted.push("capped sources created a successful phase".to_owned());
     }
 
     for coverage in [
@@ -731,21 +886,9 @@ fn health_adversarial_inputs_cannot_create_terminal_or_success_outcomes() {
             .last_successful_phase
             .is_some()
         {
-            accepted.push(match coverage {
-                SccmCoverageState::Partial => {
-                    "non-captured coverage Partial created a successful phase"
-                }
-                SccmCoverageState::Skipped => {
-                    "non-captured coverage Skipped created a successful phase"
-                }
-                SccmCoverageState::Unsupported => {
-                    "non-captured coverage Unsupported created a successful phase"
-                }
-                SccmCoverageState::ParseFailed => {
-                    "non-captured coverage ParseFailed created a successful phase"
-                }
-                _ => "unexpected non-captured coverage created a successful phase",
-            });
+            accepted.push(format!(
+                "non-captured coverage {coverage:?} created a successful phase"
+            ));
         }
     }
 
@@ -758,7 +901,7 @@ fn health_adversarial_inputs_cannot_create_terminal_or_success_outcomes() {
     if analyze_client_health(&mismatched_request).last_successful_phase
         == Some(SccmHealthPhase::Transport)
     {
-        accepted.push("mismatched request key created transport success");
+        accepted.push("mismatched request key created transport success".to_owned());
     }
 
     let mut unsafe_request = load_bundle("success");
@@ -768,7 +911,7 @@ fn health_adversarial_inputs_cannot_create_terminal_or_success_outcomes() {
     if analyze_client_health(&unsafe_request).last_successful_phase
         == Some(SccmHealthPhase::Transport)
     {
-        accepted.push("out-of-profile request key created transport success");
+        accepted.push("out-of-profile request key created transport success".to_owned());
     }
 
     assert!(
