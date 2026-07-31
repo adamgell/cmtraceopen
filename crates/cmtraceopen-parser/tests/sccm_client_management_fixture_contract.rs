@@ -411,9 +411,11 @@ fn public_free_text_is_safe(value: &str) -> bool {
 
 fn evidence_refs_cite_unique_records(references: &[(String, u64, u64)]) -> bool {
     let mut cited_records = BTreeSet::new();
-    references.iter().all(|(artifact_id, start_line, end_line)| {
-        (*start_line..=*end_line).all(|line| cited_records.insert((artifact_id.clone(), line)))
-    })
+    references
+        .iter()
+        .all(|(artifact_id, start_line, end_line)| {
+            (*start_line..=*end_line).all(|line| cited_records.insert((artifact_id.clone(), line)))
+        })
 }
 
 fn string_array(value: &Value, context: &str) -> Result<Vec<String>, String> {
@@ -1316,7 +1318,9 @@ fn validate_contract(
         return Err("ownership evidence is duplicated or not deterministically sorted".to_owned());
     }
     if !evidence_refs_cite_unique_records(&ownership_ref_order) {
-        return Err("ownership evidence ranges overlap and double-count a logical record".to_owned());
+        return Err(
+            "ownership evidence ranges overlap and double-count a logical record".to_owned(),
+        );
     }
     if ownership_class != "UnknownOwnership" {
         let workload = required_string(ownership, "workload", "ownership")?;
