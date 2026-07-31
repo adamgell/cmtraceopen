@@ -1389,8 +1389,9 @@ fn validate_contract(
     )?;
     let mut sorted_ownership_gap_ids = ownership_gap_ids.clone();
     sorted_ownership_gap_ids.sort();
+    sorted_ownership_gap_ids.dedup();
     if ownership_gap_ids != sorted_ownership_gap_ids {
-        return Err("ownership coverage gaps are not sorted".to_owned());
+        return Err("ownership coverage gaps are duplicated or not sorted".to_owned());
     }
     for artifact_id in ownership_gap_ids {
         let artifact = artifacts_by_id
@@ -1672,8 +1673,11 @@ fn validate_contract(
         )?;
         let mut sorted_gap_ids = coverage_gap_ids.clone();
         sorted_gap_ids.sort();
+        sorted_gap_ids.dedup();
         if coverage_gap_ids != sorted_gap_ids {
-            return Err(format!("{transaction_id} coverage gaps are not sorted"));
+            return Err(format!(
+                "{transaction_id} coverage gaps are duplicated or not sorted"
+            ));
         }
         for artifact_id in coverage_gap_ids {
             let artifact = artifacts_by_id
