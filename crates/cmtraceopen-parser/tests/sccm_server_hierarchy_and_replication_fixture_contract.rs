@@ -3232,3 +3232,26 @@ fn hierarchy_review_4826454819_mutations_fail_closed() {
         "review 4826454819 mutations were accepted: {accepted:?}"
     );
 }
+
+#[test]
+fn hierarchy_coderabbit_5ead896_target_topology_requires_present_handles() {
+    let mut manifest = read_json("healthy-link", "manifest.json").expect("healthy manifest loads");
+    let mut target_artifact = manifest["artifacts"][2].clone();
+    manifest["topology"]
+        .as_object_mut()
+        .expect("topology is mutable")
+        .remove("targetHostHandle");
+    target_artifact
+        .as_object_mut()
+        .expect("target artifact is mutable")
+        .remove("producerHostHandle");
+    let fields = BTreeMap::from([
+        ("OriginSite".to_owned(), "LAB".to_owned()),
+        ("TargetSite".to_owned(), "CHD".to_owned()),
+    ]);
+
+    assert!(
+        !record_matches_topology(&manifest, &target_artifact, &fields),
+        "two absent target handles cannot satisfy exact topology"
+    );
+}
