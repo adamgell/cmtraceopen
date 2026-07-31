@@ -101,7 +101,8 @@ capture chronology. Time alone is not a join key.
 
 `captured`, `absent`, `accessDenied`, `capped`, `skipped`, `unsupported`, and
 `parseFailed` remain distinct manifest states. Expected coverage is the exact
-sorted projection of physical artifact IDs and states.
+sorted projection of all manifest artifact IDs and states, including
+nonphysical coverage outcomes.
 
 Requests use only a catalogued source ID and one of:
 

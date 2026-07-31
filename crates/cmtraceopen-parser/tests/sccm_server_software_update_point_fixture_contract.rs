@@ -68,6 +68,52 @@ fn required_bool(value: &Value, field: &str, context: &str) -> Result<bool, Stri
         .ok_or_else(|| format!("{context}.{field} must be a boolean"))
 }
 
+fn index_by_identifier(array: &Value, field: &str, identifier: &str, context: &str) -> usize {
+    array
+        .as_array()
+        .unwrap_or_else(|| panic!("{context} is an array"))
+        .iter()
+        .position(|value| value[field] == identifier)
+        .unwrap_or_else(|| panic!("{context} contains {field}={identifier}"))
+}
+
+fn artifact_index(manifest: &Value, artifact_id: &str) -> usize {
+    index_by_identifier(
+        &manifest["artifacts"],
+        "artifactId",
+        artifact_id,
+        "manifest.artifacts",
+    )
+}
+
+fn transaction_index(expected: &Value, transaction_id: &str) -> usize {
+    index_by_identifier(
+        &expected["transactions"],
+        "transactionId",
+        transaction_id,
+        "expected.transactions",
+    )
+}
+
+fn observation_index(expected: &Value, transaction_id: &str, observation_id: &str) -> usize {
+    let transaction = transaction_index(expected, transaction_id);
+    index_by_identifier(
+        &expected["transactions"][transaction]["observations"],
+        "observationId",
+        observation_id,
+        "transaction.observations",
+    )
+}
+
+fn source_local_index(expected: &Value, observation_id: &str) -> usize {
+    index_by_identifier(
+        &expected["sourceLocalObservations"],
+        "observationId",
+        observation_id,
+        "expected.sourceLocalObservations",
+    )
+}
+
 fn reject_unknown_fields(
     value: &Value,
     allowed: &[&str],
@@ -1193,8 +1239,15 @@ fn validate_expected(
             ("failed", "confirmedFailure")
                 if terminal_failure
                     && !terminal_success
+                    && gap_ids.is_empty()
                     && confidence == "high"
                     && confidence_ceiling == "high" => {}
+            ("failed", "confirmedFailure")
+                if terminal_failure
+                    && !terminal_success
+                    && optional_only_gap
+                    && confidence == "medium"
+                    && confidence_ceiling == "medium" => {}
             ("deferred", "blockedOrDeferred")
                 if deferred_seen
                     && !terminal_failure
@@ -1584,14 +1637,18 @@ fn exact_keys_terminal_evidence_and_client_causality_fail_closed() {
     let manifest = read_json("sync-success", "manifest.json").expect("manifest loads");
     let expected = read_json("sync-success", "expected.json").expect("expected loads");
     let mut accepted = Vec::new();
+    let transaction_id = "sup:sync-01:LAB:safe:sup:lab-sup-01";
+    let transaction = transaction_index(&expected, transaction_id);
 
     let mut key_alias = expected.clone();
-    key_alias["transactions"][0]["key"]["syncRunId"] = json!("sync-other");
+    key_alias["transactions"][transaction]["key"]["syncRunId"] = json!("sync-other");
     if mutation_was_accepted("sync-success", &manifest, &key_alias) {
         accepted.push("transaction key diverged from every cited record");
     }
     let mut terminal_removed = expected.clone();
-    terminal_removed["transactions"][0]["observations"][5]["terminal"] = json!(false);
+    let terminal_observation = observation_index(&expected, transaction_id, "sync-01-06-terminal");
+    terminal_removed["transactions"][transaction]["observations"][terminal_observation]
+        ["terminal"] = json!(false);
     if mutation_was_accepted("sync-success", &manifest, &terminal_removed) {
         accepted.push("success survived without cited terminal evidence");
     }
@@ -1613,6 +1670,8 @@ fn coverage_role_nonphysical_and_capture_time_fail_closed() {
     let manifest = read_json("incomplete", "manifest.json").expect("manifest loads");
     let expected = read_json("incomplete", "expected.json").expect("expected loads");
     let mut accepted = Vec::new();
+    let wcm = artifact_index(&manifest, "incomplete-01-wcm");
+    let denied = artifact_index(&manifest, "incomplete-02-wsync-denied");
 
     let mut role_inferred = expected.clone();
     role_inferred["roleAssessment"]["softwareUpdatePointObserved"] = json!(false);
@@ -1621,12 +1680,12 @@ fn coverage_role_nonphysical_and_capture_time_fail_closed() {
         accepted.push("missing sources erased an observed SUP role");
     }
     let mut host_alias = manifest.clone();
-    host_alias["artifacts"][0]["producerHostHandle"] = json!(EXACT_SUP);
+    host_alias["artifacts"][wcm]["producerHostHandle"] = json!(EXACT_SUP);
     if mutation_was_accepted("incomplete", &host_alias, &expected) {
         accepted.push("site-server producer collapsed onto the SUP subject");
     }
     let mut physical_invention = manifest.clone();
-    physical_invention["artifacts"][1]["collectionLimit"] =
+    physical_invention["artifacts"][denied]["collectionLimit"] =
         json!({"byteLimit": 4096, "limitApplied": false});
     if mutation_was_accepted("incomplete", &physical_invention, &expected) {
         accepted.push("access-denied artifact invented physical collection provenance");
@@ -1654,20 +1713,26 @@ fn source_local_semantics_ordering_and_transaction_uniqueness_fail_closed() {
     let unrelated_expected =
         read_json("unrelated-update-key", "expected.json").expect("expected loads");
     let mut accepted = Vec::new();
+    let rotation_split = source_local_index(&rotation_expected, "rotation-01-split");
+    let malformed = source_local_index(&rotation_expected, "rotation-02-malformed");
+    let ignored_client = source_local_index(&unrelated_expected, "unrelated-client-01");
+    let unrelated_transaction_id = "sup:sync-08:LAB:safe:sup:lab-sup-01:update-server-a";
+    let unrelated_transaction = transaction_index(&unrelated_expected, unrelated_transaction_id);
 
     let mut split_as_client = rotation_expected.clone();
-    split_as_client["sourceLocalObservations"][0]["classification"] =
+    split_as_client["sourceLocalObservations"][rotation_split]["classification"] =
         json!("ignoredClientEvidence");
     if mutation_was_accepted("rotation-boundary", &rotation_manifest, &split_as_client) {
         accepted.push("server rotation split was relabeled as client evidence");
     }
     let mut malformed_as_split = rotation_expected.clone();
-    malformed_as_split["sourceLocalObservations"][1]["classification"] = json!("rotationSplit");
+    malformed_as_split["sourceLocalObservations"][malformed]["classification"] =
+        json!("rotationSplit");
     if mutation_was_accepted("rotation-boundary", &rotation_manifest, &malformed_as_split) {
         accepted.push("parse-failed evidence was relabeled as rotation split");
     }
     let mut client_as_malformed = unrelated_expected.clone();
-    client_as_malformed["sourceLocalObservations"][0]["classification"] =
+    client_as_malformed["sourceLocalObservations"][ignored_client]["classification"] =
         json!("malformedEvidence");
     if mutation_was_accepted(
         "unrelated-update-key",
@@ -1677,7 +1742,7 @@ fn source_local_semantics_ordering_and_transaction_uniqueness_fail_closed() {
         accepted.push("client evidence was relabeled as malformed server evidence");
     }
     let mut reversed = unrelated_expected.clone();
-    reversed["transactions"][0]["observations"]
+    reversed["transactions"][unrelated_transaction]["observations"]
         .as_array_mut()
         .expect("observations are mutable")
         .reverse();
@@ -1685,7 +1750,7 @@ fn source_local_semantics_ordering_and_transaction_uniqueness_fail_closed() {
         accepted.push("reversed observations were accepted");
     }
     let mut duplicated = unrelated_expected.clone();
-    let duplicate = duplicated["transactions"][0].clone();
+    let duplicate = duplicated["transactions"][unrelated_transaction].clone();
     duplicated["transactions"]
         .as_array_mut()
         .expect("transactions are mutable")
@@ -1704,13 +1769,20 @@ fn source_local_semantics_ordering_and_transaction_uniqueness_fail_closed() {
 fn physical_collisions_unknown_fields_and_update_key_borrowing_fail_closed() {
     let manifest = read_json("unrelated-update-key", "manifest.json").expect("manifest loads");
     let expected = read_json("unrelated-update-key", "expected.json").expect("expected loads");
+    let rotation_manifest =
+        read_json("rotation-boundary", "manifest.json").expect("manifest loads");
+    let rotation_expected =
+        read_json("rotation-boundary", "expected.json").expect("expected loads");
     let mut accepted = Vec::new();
 
-    let mut collision = manifest.clone();
-    collision["artifacts"][1]["relativePath"] = collision["artifacts"][0]["relativePath"].clone();
-    collision["artifacts"][1]["originalBasename"] =
-        collision["artifacts"][0]["originalBasename"].clone();
-    if mutation_was_accepted("unrelated-update-key", &collision, &expected) {
+    let current = artifact_index(&rotation_manifest, "rotation-01-current");
+    let lo = artifact_index(&rotation_manifest, "rotation-02-lo");
+    let mut collision = rotation_manifest.clone();
+    collision["artifacts"][lo]["relativePath"] =
+        collision["artifacts"][current]["relativePath"].clone();
+    collision["artifacts"][lo]["bytesCopied"] =
+        collision["artifacts"][current]["bytesCopied"].clone();
+    if mutation_was_accepted("rotation-boundary", &collision, &rotation_expected) {
         accepted.push("physical evidence destination collision");
     }
     let mut unknown_cause = expected.clone();
@@ -1719,7 +1791,11 @@ fn physical_collisions_unknown_fields_and_update_key_borrowing_fail_closed() {
         accepted.push("unknown causal field");
     }
     let mut borrowed_update = expected.clone();
-    borrowed_update["transactions"][0]["key"]["updateId"] = json!("update-client-b");
+    let transaction = transaction_index(
+        &expected,
+        "sup:sync-08:LAB:safe:sup:lab-sup-01:update-server-a",
+    );
+    borrowed_update["transactions"][transaction]["key"]["updateId"] = json!("update-client-b");
     if mutation_was_accepted("unrelated-update-key", &manifest, &borrowed_update) {
         accepted.push("client update identity was borrowed into the server transaction");
     }
@@ -1749,6 +1825,8 @@ fn scenario_cardinality_rotation_shape_and_provenance_fail_closed() {
     let unrelated_expected =
         read_json("unrelated-update-key", "expected.json").expect("expected loads");
     let mut accepted = Vec::new();
+    let success_transaction_id = "sup:sync-01:LAB:safe:sup:lab-sup-01";
+    let success_transaction = transaction_index(&success_expected, success_transaction_id);
 
     let mut missing_transaction = success_expected.clone();
     missing_transaction["transactions"] = json!([]);
@@ -1756,9 +1834,16 @@ fn scenario_cardinality_rotation_shape_and_provenance_fail_closed() {
         accepted.push("required scenario transaction was deleted");
     }
     let mut duplicate_evidence = success_expected.clone();
-    let duplicate_reference =
-        duplicate_evidence["transactions"][0]["observations"][0]["evidence"][0].clone();
-    duplicate_evidence["transactions"][0]["observations"][0]["evidence"]
+    let configure_observation = observation_index(
+        &success_expected,
+        success_transaction_id,
+        "sync-01-01-configure",
+    );
+    let duplicate_reference = duplicate_evidence["transactions"][success_transaction]
+        ["observations"][configure_observation]["evidence"][0]
+        .clone();
+    duplicate_evidence["transactions"][success_transaction]["observations"][configure_observation]
+        ["evidence"]
         .as_array_mut()
         .expect("evidence is mutable")
         .push(duplicate_reference);
@@ -1766,9 +1851,13 @@ fn scenario_cardinality_rotation_shape_and_provenance_fail_closed() {
         accepted.push("one physical logical record was cited twice");
     }
     let mut omitted_gap = supplemental_expected.clone();
-    omitted_gap["transactions"][0]["coverageGapArtifactIds"] = json!([]);
-    omitted_gap["transactions"][0]["confidence"] = json!("high");
-    omitted_gap["transactions"][0]["confidenceCeiling"] = json!("high");
+    let supplemental_transaction = transaction_index(
+        &supplemental_expected,
+        "sup:sync-07:LAB:safe:sup:lab-sup-01",
+    );
+    omitted_gap["transactions"][supplemental_transaction]["coverageGapArtifactIds"] = json!([]);
+    omitted_gap["transactions"][supplemental_transaction]["confidence"] = json!("high");
+    omitted_gap["transactions"][supplemental_transaction]["confidenceCeiling"] = json!("high");
     if mutation_was_accepted(
         "supplemental-wsus-skipped",
         &supplemental_manifest,
@@ -1783,18 +1872,20 @@ fn scenario_cardinality_rotation_shape_and_provenance_fail_closed() {
         accepted.push("uncatalogued topology role was accepted");
     }
     let mut duplicate_fingerprint = success_manifest.clone();
-    duplicate_fingerprint["artifacts"][1]["pathFingerprint"] =
-        duplicate_fingerprint["artifacts"][0]["pathFingerprint"].clone();
+    let wcm = artifact_index(&success_manifest, "sync-success-01-wcm");
+    let wsync = artifact_index(&success_manifest, "sync-success-02-wsync");
+    duplicate_fingerprint["artifacts"][wsync]["pathFingerprint"] =
+        duplicate_fingerprint["artifacts"][wcm]["pathFingerprint"].clone();
     if mutation_was_accepted("sync-success", &duplicate_fingerprint, &success_expected) {
         accepted.push("two physical artifacts shared one path fingerprint");
     }
     let mut shaped_current = success_manifest.clone();
-    shaped_current["artifacts"][0]["rotation"]["value"] = json!("lo_");
+    shaped_current["artifacts"][wcm]["rotation"]["value"] = json!("lo_");
     if mutation_was_accepted("sync-success", &shaped_current, &success_expected) {
         accepted.push("current rotation accepted an incompatible value");
     }
     let mut missing_fragment_state = success_manifest.clone();
-    missing_fragment_state["artifacts"][0]["rotation"]
+    missing_fragment_state["artifacts"][wcm]["rotation"]
         .as_object_mut()
         .expect("rotation is mutable")
         .remove("fragmentComplete");
@@ -1802,7 +1893,8 @@ fn scenario_cardinality_rotation_shape_and_provenance_fail_closed() {
         accepted.push("physical artifact omitted fragment completeness");
     }
     let mut late_parse_failure = rotation_manifest.clone();
-    late_parse_failure["artifacts"][2]["collectedUtc"] = json!("2026-07-30T20:00:00Z");
+    let malformed = artifact_index(&rotation_manifest, "rotation-03-malformed");
+    late_parse_failure["artifacts"][malformed]["collectedUtc"] = json!("2026-07-30T20:00:00Z");
     if mutation_was_accepted("rotation-boundary", &late_parse_failure, &rotation_expected) {
         accepted.push("parse-failed artifact was collected after its bundle");
     }
@@ -1834,4 +1926,55 @@ fn scenario_cardinality_rotation_shape_and_provenance_fail_closed() {
         accepted.is_empty(),
         "scenario/rotation/provenance mutations were accepted: {accepted:?}"
     );
+}
+
+#[test]
+fn terminal_failure_with_optional_gap_has_a_medium_confidence_ceiling() {
+    let mut manifest =
+        read_json("wcm-configuration-failure", "manifest.json").expect("manifest loads");
+    manifest["artifacts"]
+        .as_array_mut()
+        .expect("artifacts are mutable")
+        .push(json!({
+            "artifactId": "wcm-failure-02-wsus-health",
+            "sourceId": "server-sup-wsus",
+            "producerRole": "wsUs",
+            "producerHostHandle": EXACT_WSUS,
+            "workflowSubjectRole": "softwareUpdatePoint",
+            "workflowSubjectHandle": EXACT_SUP,
+            "sourceKind": "profileDefined",
+            "originalBasename": "WsusHealth.json",
+            "sanitizedSourcePath": "SYNTHETIC://configured-root/WSUS/WsusHealth.json",
+            "pathFingerprint": "synthetic:wcm-failure-wsus-health",
+            "rotation": {
+                "kind": "current",
+                "lineageId": "wcm-failure-wsus-health"
+            },
+            "captureState": "skipped",
+            "sourceVersion": "5.00.TEST.0001",
+            "collectedUtc": "2026-07-30T18:00:00Z"
+        }));
+
+    let mut expected =
+        read_json("wcm-configuration-failure", "expected.json").expect("expected loads");
+    expected["coverage"]
+        .as_array_mut()
+        .expect("coverage is mutable")
+        .push(json!({
+            "artifactId": "wcm-failure-02-wsus-health",
+            "state": "skipped"
+        }));
+    let transaction = transaction_index(&expected, "sup:sync-02:LAB:safe:sup:lab-sup-01");
+    expected["transactions"][transaction]["coverageGapArtifactIds"] =
+        json!(["wcm-failure-02-wsus-health"]);
+
+    assert!(
+        validate_scenario_values("wcm-configuration-failure", &manifest, &expected).is_err(),
+        "high-confidence terminal failure survived an explicit optional coverage gap"
+    );
+
+    expected["transactions"][transaction]["confidence"] = json!("medium");
+    expected["transactions"][transaction]["confidenceCeiling"] = json!("medium");
+    validate_scenario_values("wcm-configuration-failure", &manifest, &expected)
+        .unwrap_or_else(|failures| panic!("{}", failures.join("\n")));
 }
