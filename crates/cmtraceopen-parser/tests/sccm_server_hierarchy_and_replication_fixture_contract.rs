@@ -3272,3 +3272,31 @@ fn hierarchy_coderabbit_878a051_control_requests_include_target_rcmctrl() {
         "target-side rcmctrl coverage request is exact: {failures:?}"
     );
 }
+
+#[test]
+fn hierarchy_coderabbit_878a051_shared_predicates_stay_narrow() {
+    let manifest = read_json("healthy-link", "manifest.json").expect("healthy manifest loads");
+    let artifact = manifest["artifacts"][1].clone();
+    assert!(artifact_has_exact_public_provenance(&artifact));
+
+    let mut unsafe_host = artifact.clone();
+    unsafe_host["producerHostHandle"] = serde_json::json!("safe:server:bad/path");
+    assert!(!artifact_has_exact_public_provenance(&unsafe_host));
+
+    let mut unadmitted_version = artifact;
+    unadmitted_version["sourceVersion"] = serde_json::json!("5.00.TEST.9999");
+    assert!(!artifact_has_exact_public_provenance(&unadmitted_version));
+
+    for (disposition, terminal) in [
+        ("succeeded", false),
+        ("succeeded", true),
+        ("failed", true),
+        ("retrying", false),
+    ] {
+        assert!(observation_disposition_is_coherent(disposition, terminal));
+    }
+    assert!(
+        !observation_disposition_is_coherent("deferred", false),
+        "deferred is a transaction state, not a source observation disposition"
+    );
+}
