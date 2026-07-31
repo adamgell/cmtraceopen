@@ -4653,6 +4653,11 @@ fn evidence_public_message_projection_redacts_provider_handles_in_all_positions(
             Some("status=81"),
         ),
         (
+            "AuthorizationToken=private-auth-token-value; status=82",
+            "private-auth-token-value",
+            Some("status=82"),
+        ),
+        (
             "QueryHandle=SELECT 1; DROP TABLE private_object; status=80",
             "DROP TABLE private_object",
             Some("status=80"),

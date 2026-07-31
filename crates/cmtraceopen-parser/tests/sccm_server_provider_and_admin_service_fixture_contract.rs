@@ -2937,15 +2937,23 @@ fn provider_retry_recovery_is_bound_to_the_failed_phase() {
 #[test]
 fn rejected_fixture_segment_diagnostic_omits_raw_value() {
     let sensitive = "private-credential-value";
-    let message = format!(
-        "[sccm-public-message-v1] SYNTHETIC FIXTURE; Phase=receive; AuthorizationHeader {sensitive}"
-    );
-    let error = parse_fixture_fields(&message).expect_err("malformed fixture segment is rejected");
+    let messages = [
+        format!(
+            "[sccm-public-message-v1] SYNTHETIC FIXTURE; Phase=receive; AuthorizationHeader {sensitive}"
+        ),
+        format!(
+            "[sccm-public-message-v1] SYNTHETIC FIXTURE; Phase=receive; Bearer {sensitive}=1"
+        ),
+    ];
 
-    assert!(
-        !error.contains(sensitive),
-        "rejected fixture diagnostic echoed a raw private value: {error}"
-    );
+    for message in messages {
+        let error =
+            parse_fixture_fields(&message).expect_err("malformed fixture segment is rejected");
+        assert!(
+            !error.contains(sensitive),
+            "rejected fixture diagnostic echoed a raw private value: {error}"
+        );
+    }
 }
 
 #[test]

@@ -413,4 +413,54 @@ mod tests {
             .contains("{ABCDEFAB-0000-0000-0000-000000000001}"));
         assert_eq!(exported.execution_context, None);
     }
+
+    #[test]
+    fn export_merges_overlapping_identity_ranges_without_mutating_raw_snapshot() {
+        let raw_identity = r"users\ADMIN\secret";
+        let raw_message = format!("Profile {raw_identity}; status=71");
+        let text = format!(
+            r#"<![LOG[{raw_message}]LOG]!><time="10:00:00.000-240" date="07-30-2026" component="{raw_identity}" context="" type="1" thread="42" file="{raw_identity}">"#
+        );
+        let artifact = SccmArtifact {
+            artifact_id: "client-policy-agent".into(),
+            display_name: "PolicyAgent.log".into(),
+            original_path: None,
+            host: None,
+            role: SccmRole::Client,
+            configmgr_version: None,
+            collected_at_utc: None,
+            rotation: SccmRotation::Current,
+            coverage: SccmCoverageState::Captured,
+            encoding: Some("utf-8".into()),
+        };
+        let record = scan_logical_records(&text, &artifact.display_name)
+            .into_iter()
+            .next()
+            .expect("fixture contains one CCM record");
+        let snapshot = SccmRawEvidenceSnapshot::from_record(&artifact, record);
+        let before = snapshot.clone();
+
+        let exported = snapshot.export();
+        let exported_json = serde_json::to_string(&exported).unwrap();
+
+        assert_eq!(snapshot, before);
+        assert!(snapshot.message.contains(raw_identity));
+        assert_eq!(snapshot.component.as_deref(), Some(raw_identity));
+        assert_eq!(snapshot.ccm_source_file.as_deref(), Some(raw_identity));
+        for private_segment in ["ADMIN", "secret"] {
+            assert!(
+                !exported_json.contains(private_segment),
+                "{private_segment} leaked after overlapping identity projection"
+            );
+        }
+        assert!(exported.message.contains("status=71"));
+        assert!(exported
+            .component
+            .as_deref()
+            .is_some_and(|value| value.contains(PUBLIC_MESSAGE_REDACTION)));
+        assert!(exported
+            .ccm_source_file
+            .as_deref()
+            .is_some_and(|value| value.contains(PUBLIC_MESSAGE_REDACTION)));
+    }
 }
