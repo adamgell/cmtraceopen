@@ -673,6 +673,60 @@ fn identity_bearing_relative_paths_fail_before_public_projection() {
 }
 
 #[test]
+fn shared_location_services_path_binding_preserves_every_canonical_rotation() {
+    let rotations = [
+        ("LocationServices.log", SccmRotation::Current, "current"),
+        ("LocationServices.lo_", SccmRotation::LoUnderscore, "lo"),
+        (
+            "LocationServices.log.2",
+            SccmRotation::Numbered(2),
+            "numbered-2",
+        ),
+        (
+            "LocationServices.log.20260730-030405",
+            SccmRotation::Timestamped("20260730-030405".to_owned()),
+            "timestamped-20260730-030405",
+        ),
+    ];
+
+    for (display_name, rotation, rotation_segment) in rotations {
+        let mut artifact = synthetic_artifact("valid-location", display_name);
+        artifact.artifact.rotation = rotation;
+        artifact.path_fingerprint = Some("synthetic:location-services-current".to_owned());
+        artifact.relative_path = Some(format!(
+            "evidence/client-location-services-shared/{rotation_segment}/{display_name}"
+        ));
+
+        let assessment = assess_client_intake(&SccmClientIntakeBundle {
+            artifacts: vec![artifact],
+        })
+        .unwrap_or_else(|error| {
+            panic!(
+                "canonical shared LocationServices rotation was rejected: {display_name}: {error}"
+            )
+        });
+
+        assert_eq!(assessment.physical_artifacts.len(), 1);
+        assert_eq!(
+            assessment
+                .group("client-content")
+                .expect("content group")
+                .fragments
+                .len(),
+            1
+        );
+        assert_eq!(
+            assessment
+                .group("client-location")
+                .expect("location group")
+                .fragments
+                .len(),
+            1
+        );
+    }
+}
+
+#[test]
 fn unsafe_path_fingerprints_fail_before_public_projection() {
     let unsafe_fingerprints = [
         "realuser",
