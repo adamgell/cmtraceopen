@@ -704,6 +704,84 @@ fn package_state_redacted_export_masks_paths_and_user_identifiers_without_mutati
     assert_eq!(redacted_package_state_export(&safe), safe);
 }
 
+#[test]
+fn package_state_redacted_export_stays_idempotent_beyond_nine_identifiers() {
+    // Pseudonyms are numbered by sort position, and "[redacted-user-10]" sorts
+    // before "[redacted-user-1]" because '0' < ']'. So a second pass must treat
+    // an already-redacted value as terminal. Otherwise ten or more identifiers
+    // get renumbered and the projection stops being idempotent. Two identifiers
+    // cannot catch this: single digits sort the same either way.
+    const IDENTIFIER_COUNT: usize = 12;
+
+    let rows: Vec<String> = (0..IDENTIFIER_COUNT)
+        .map(|index| {
+            format!(
+                r#"{{
+                    "name": "Microsoft.CompanyPortal",
+                    "familyName": "Microsoft.CompanyPortal_8wekyb3d8bbwe",
+                    "fullName": "Microsoft.CompanyPortal_11.2.401.0_x64__8wekyb3d8bbwe",
+                    "version": "11.2.401.0",
+                    "architecture": "x64",
+                    "signatureKind": "store",
+                    "status": "ok",
+                    "installState": "installed",
+                    "scopes": ["currentUser"],
+                    "userIdentifier": {{
+                        "value": "CONTOSO\\user{index:02}",
+                        "sensitivity": "restricted"
+                    }},
+                    "app": "companyPortal"
+                }}"#
+            )
+        })
+        .collect();
+
+    let capture = parse(&format!(
+        r#"{{
+            "schemaVersion": 1,
+            "capture": {{
+                "capturedAtUtc": "2026-07-14T09:41:07.1000000Z",
+                "adapterVersion": "cmtraceopen-collector-appx/1",
+                "commandStatus": "completed",
+                "source": "json",
+                "scopeCoverage": [
+                    {{ "scope": "allUsers", "status": "complete", "detail": null }}
+                ]
+            }},
+            "packages": [{}]
+        }}"#,
+        rows.join(",")
+    ));
+
+    let once = redacted_package_state_export(&capture);
+    let twice = redacted_package_state_export(&once);
+    assert_eq!(
+        twice, once,
+        "projection must stay idempotent past nine identifiers"
+    );
+
+    // Renumbering would still produce distinct labels, so distinctness alone
+    // does not prove idempotence. Assert it anyway: collapsing two users onto
+    // one pseudonym would be the worse failure.
+    let labels: BTreeSet<&str> = once
+        .packages
+        .iter()
+        .filter_map(|row| row.user_identifier.as_ref())
+        .map(|identifier| identifier.value.as_str())
+        .collect();
+    assert_eq!(
+        labels.len(),
+        IDENTIFIER_COUNT,
+        "every identifier must keep a distinct pseudonym"
+    );
+
+    let safe_json = serde_json::to_string(&once).expect("projection must serialize");
+    assert!(
+        !safe_json.contains("CONTOSO"),
+        "redacted export still leaks a domain: {safe_json}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Fixture layout guard
 // ---------------------------------------------------------------------------

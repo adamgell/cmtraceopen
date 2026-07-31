@@ -193,5 +193,13 @@ mod tests {
             command.is_ascii(),
             "adapter command must be ASCII; PowerShell 5.1 mis-parses non-ASCII literals"
         );
+        // Every other JSON-emitting command in this profile carries a "json"
+        // hint, and the evidence-bundle dialog searches on it. Omitting it here
+        // would leave this artifact undiscoverable by that search.
+        assert!(
+            item.parse_hints.iter().any(|hint| hint == "json"),
+            "JSON-emitting adapters must declare a json parse hint: {:?}",
+            item.parse_hints
+        );
     }
 }
