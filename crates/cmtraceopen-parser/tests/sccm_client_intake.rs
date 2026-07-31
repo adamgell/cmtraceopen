@@ -344,6 +344,36 @@ fn captured_cas_fragment_cannot_admit_an_incomplete_capture() {
 }
 
 #[test]
+fn parse_failed_fragment_completeness_is_intentionally_two_valued() {
+    // ParseFailed is the one physical state where both completeness values
+    // carry meaning: `true` records a fully copied source that could not be
+    // normalized, `false` records a truncated copy that also failed to
+    // parse. Both must stay representable so neither situation is forced to
+    // misdeclare itself as the other.
+    for (fragment_complete, artifact_id) in [(true, "complete"), (false, "incomplete")] {
+        let mut unparseable = synthetic_artifact(artifact_id, "PolicyAgent.log");
+        unparseable.artifact.coverage = SccmCoverageState::ParseFailed;
+        unparseable.fragment_complete = Some(fragment_complete);
+
+        let intake = assess_client_intake(&SccmClientIntakeBundle {
+            artifacts: vec![unparseable],
+        })
+        .unwrap_or_else(|error| {
+            panic!("parse-failed completeness {fragment_complete} was rejected: {error}")
+        });
+
+        let group = intake.group("client-policy-agent").expect("policy group");
+        assert_eq!(group.coverage, SccmCoverageState::ParseFailed);
+        assert_eq!(group.fragments.len(), 1);
+        assert_eq!(
+            group.fragments[0].fragment_complete,
+            Some(fragment_complete),
+            "declared parse-failed completeness must project unchanged"
+        );
+    }
+}
+
+#[test]
 fn mixed_captured_and_absent_group_reports_the_capture_and_names_the_absent_source() {
     let mut captured = synthetic_artifact("content-a", "CAS.log");
     captured.relative_path = Some("evidence/client-content/current/CAS.log".to_owned());
@@ -523,6 +553,148 @@ fn absent_markers_with_distinct_path_fingerprints_remain_distinct_sources() {
         group.fragments.len(),
         2,
         "per-root absence claims with distinct fingerprints are distinct sources"
+    );
+}
+
+#[test]
+fn unpinned_marker_for_a_physically_declared_source_fails_closed() {
+    // Round-6 review repro: one captured PolicyAgent.log plus one absent
+    // marker for the same source (current rotation, no path fingerprint)
+    // previously produced an assessment claiming no artifact for the source
+    // was supplied while serializing the captured PolicyAgent.log fragment.
+    // The marker's canonical identity must intersect the physical
+    // declaration for the source and fail closed instead.
+    let captured = synthetic_artifact("policy", "PolicyAgent.log");
+    let absent = synthetic_marker("missing-one", "PolicyAgent.log", SccmCoverageState::Absent);
+
+    assert_eq!(
+        assess_client_intake(&SccmClientIntakeBundle {
+            artifacts: vec![captured.clone(), absent.clone()],
+        }),
+        Err(SccmClientIntakeError::CollidingPhysicalIdentity),
+        "an unpinned absent marker for a captured source is a self-contradiction"
+    );
+    assert_eq!(
+        assess_client_intake(&SccmClientIntakeBundle {
+            artifacts: vec![absent, captured],
+        }),
+        Err(SccmClientIntakeError::CollidingPhysicalIdentity),
+        "declaration order must not reopen the marker-versus-physical collision"
+    );
+}
+
+#[test]
+fn no_marker_may_share_basename_and_rotation_with_a_physical_declaration() {
+    // An absent, denied, or skipped claim about a source is disproved by
+    // physical evidence for the same source identity (basename plus
+    // rotation), so the collision is rejected regardless of whether the
+    // marker pins itself to a distinct configured root via a fingerprint.
+    for marker_coverage in [
+        SccmCoverageState::Absent,
+        SccmCoverageState::AccessDenied,
+        SccmCoverageState::Skipped,
+    ] {
+        let captured = synthetic_artifact("policy", "PolicyAgent.log");
+        let mut pinned =
+            synthetic_marker("missing-one", "PolicyAgent.log", marker_coverage.clone());
+        pinned.path_fingerprint = Some("synthetic:policy-root-b".to_owned());
+
+        assert_eq!(
+            assess_client_intake(&SccmClientIntakeBundle {
+                artifacts: vec![captured.clone(), pinned.clone()],
+            }),
+            Err(SccmClientIntakeError::CollidingPhysicalIdentity),
+            "marker state {marker_coverage:?} must not coexist with captured evidence \
+             for the same source identity"
+        );
+        assert_eq!(
+            assess_client_intake(&SccmClientIntakeBundle {
+                artifacts: vec![pinned, captured],
+            }),
+            Err(SccmClientIntakeError::CollidingPhysicalIdentity),
+            "declaration order must not reopen the pinned marker collision"
+        );
+    }
+
+    let mut capped = synthetic_artifact("capped-one", "PolicyAgent.log");
+    capped.artifact.coverage = SccmCoverageState::Capped;
+    capped.fragment_complete = Some(false);
+    let mut pinned = synthetic_marker("missing-one", "PolicyAgent.log", SccmCoverageState::Absent);
+    pinned.path_fingerprint = Some("synthetic:policy-root-b".to_owned());
+    assert_eq!(
+        assess_client_intake(&SccmClientIntakeBundle {
+            artifacts: vec![capped, pinned],
+        }),
+        Err(SccmClientIntakeError::CollidingPhysicalIdentity),
+        "a capped capture is still physical evidence that a marker cannot contradict"
+    );
+}
+
+#[test]
+fn unpinned_and_pinned_markers_for_the_same_source_fail_closed() {
+    // A fingerprint-less marker claims the whole declared source, so it
+    // must collide with any other declaration for that source identity,
+    // including a marker pinned to one configured root. The sibling server
+    // intake removes this ambiguity by making the path fingerprint
+    // mandatory on every declaration; the client contract keeps optional
+    // marker fingerprints for the committed all-absent fixture bundles, so
+    // identity intersection is the fail-closed equivalent here. Documented
+    // follow-up: converge the client contract on mandatory fingerprints to
+    // remove the remaining client/server asymmetry.
+    let unpinned = synthetic_marker("missing-one", "PolicyAgent.log", SccmCoverageState::Absent);
+    let mut pinned = synthetic_marker("missing-two", "PolicyAgent.log", SccmCoverageState::Absent);
+    pinned.path_fingerprint = Some("synthetic:policy-root-a".to_owned());
+
+    assert_eq!(
+        assess_client_intake(&SccmClientIntakeBundle {
+            artifacts: vec![unpinned.clone(), pinned.clone()],
+        }),
+        Err(SccmClientIntakeError::DuplicateArtifactId),
+        "an unpinned and a pinned marker must not double-declare one source"
+    );
+    assert_eq!(
+        assess_client_intake(&SccmClientIntakeBundle {
+            artifacts: vec![pinned, unpinned],
+        }),
+        Err(SccmClientIntakeError::DuplicateArtifactId),
+        "declaration order must not reopen the marker double-declaration"
+    );
+}
+
+#[test]
+fn markers_for_distinct_rotations_of_a_captured_source_remain_representable() {
+    // The collision is scoped to one source identity: a marker for a
+    // genuinely distinct source (here the numbered rotation of the same
+    // basename) still coexists with the captured current rotation and
+    // surfaces as a per-source gap that the fragments array corroborates.
+    let captured = synthetic_artifact("policy", "PolicyAgent.log");
+    let mut rotated_absent = synthetic_marker(
+        "missing-one",
+        "PolicyAgent.log.2",
+        SccmCoverageState::Absent,
+    );
+    rotated_absent.artifact.rotation = SccmRotation::Numbered(2);
+
+    let intake = assess_client_intake(&SccmClientIntakeBundle {
+        artifacts: vec![captured, rotated_absent],
+    })
+    .expect("a marker for a distinct rotation of a captured source stays representable");
+
+    let group = intake.group("client-policy-agent").expect("policy group");
+    assert_eq!(group.coverage, SccmCoverageState::Captured);
+    assert_eq!(group.fragments.len(), 2);
+
+    let gaps: Vec<_> = intake
+        .coverage_gaps
+        .iter()
+        .filter(|gap| gap.logical_artifact_id == "client-policy-agent")
+        .collect();
+    assert_eq!(gaps.len(), 1, "one per-source gap for the absent rotation");
+    assert_eq!(gaps[0].coverage, SccmCoverageState::Absent);
+    assert_eq!(
+        gaps[0].reason,
+        "No artifact for client source PolicyAgent.log.2 was supplied alongside \
+         this group's physical evidence."
     );
 }
 
