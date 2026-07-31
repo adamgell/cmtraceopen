@@ -3798,6 +3798,127 @@ fn hierarchy_nonterminal_transactions_cannot_advertise_high_confidence_ceiling()
 }
 
 #[test]
+fn hierarchy_candidate_facts_preserve_shared_timestamp_provenance_shape() {
+    let manifest = read_json("healthy-link", "manifest.json").expect("healthy manifest loads");
+    let groups = hierarchy_candidate_groups("healthy-link", &manifest)
+        .expect("healthy candidate projection succeeds");
+    let serialized = serde_json::to_value(&groups).expect("candidate groups serialize");
+    let sender_fact = serialized
+        .as_array()
+        .into_iter()
+        .flatten()
+        .flat_map(|group| group["facts"].as_array().into_iter().flatten())
+        .find(|fact| fact["artifactId"] == "healthy-02-sender")
+        .expect("sender candidate fact exists");
+    let records = normalized_records("healthy-link", &manifest);
+    let sender_record = records
+        .get(&("healthy-02-sender".to_owned(), 1, 1))
+        .expect("sender logical record exists");
+
+    assert_eq!(
+        sender_fact["timestamp"],
+        serde_json::to_value(&sender_record.timestamp).expect("shared timestamp serializes"),
+        "candidate facts must retain the shared timestamp provenance without reshaping it"
+    );
+    assert_eq!(
+        sender_fact["timestamp"]
+            .as_object()
+            .expect("timestamp is an object")
+            .keys()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from([
+            "offsetMinutes",
+            "orderingState",
+            "originalDisplay",
+            "utcMillis",
+        ]),
+        "candidate timestamps must expose the exact shared provenance fields"
+    );
+}
+
+#[test]
+fn hierarchy_identity_bearing_safe_looking_values_are_domain_separated_before_serialization() {
+    let mut manifest = read_json("healthy-link", "manifest.json").expect("healthy manifest loads");
+    manifest["topology"]["originHostHandle"] = serde_json::json!("safe:server:RealUser");
+    for artifact in manifest["artifacts"]
+        .as_array_mut()
+        .expect("artifacts are an array")
+        .iter_mut()
+        .filter(|artifact| artifact["direction"] == "origin")
+    {
+        artifact["producerHostHandle"] = serde_json::json!("safe:server:RealUser");
+    }
+    manifest["artifacts"][1]["pathFingerprint"] = serde_json::json!("synthetic:RealUser");
+
+    let groups = hierarchy_candidate_groups("healthy-link", &manifest)
+        .expect("identity-bearing safe-looking values fail closed deterministically");
+    let sender = groups
+        .iter()
+        .flat_map(|group| &group.facts)
+        .find(|fact| fact.artifact_id == "healthy-02-sender")
+        .expect("mutated sender still produces a safely tokenized candidate");
+    let host_digest = sender
+        .producer_host_handle
+        .strip_prefix("sccm-provenance:v1:producer-host:sha256:")
+        .expect("producer host uses its versioned domain");
+    let path_digest = sender
+        .path_fingerprint
+        .strip_prefix("sccm-provenance:v1:path-fingerprint:sha256:")
+        .expect("path fingerprint uses its versioned domain");
+
+    for digest in [host_digest, path_digest] {
+        assert_eq!(digest.len(), 64, "SHA-256 token has a fixed width");
+        assert!(
+            digest
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f')),
+            "SHA-256 token is lowercase hexadecimal"
+        );
+    }
+    assert_ne!(
+        sender.producer_host_handle, sender.path_fingerprint,
+        "equal-looking inputs must remain separated by provenance domain"
+    );
+    let serialized = serde_json::to_string(&groups).expect("candidate groups serialize");
+    assert!(
+        !serialized.contains("RealUser"),
+        "identity-bearing input reached serialized candidate output"
+    );
+}
+
+#[test]
+fn hierarchy_equal_utc_requires_same_artifact_and_forward_physical_lines() {
+    let expected = read_json("healthy-link", "expected.json").expect("healthy expected loads");
+    let mut cross_artifact =
+        read_json("healthy-link", "manifest.json").expect("healthy manifest loads");
+    cross_artifact["artifacts"][2]["relativePath"] = serde_json::json!(
+        "evidence/server-hierarchy-transfer/target/equal-instant/despool.log"
+    );
+
+    let cross_artifact_failures =
+        identity_and_schema_failures("healthy-link", &cross_artifact, &expected);
+    assert!(
+        cross_artifact_failures
+            .iter()
+            .any(|failure| failure.contains("equal UTC across distinct artifacts")),
+        "equal UTC on sender/despool artifacts retained a usable/high ordering ceiling: {cross_artifact_failures:?}"
+    );
+
+    let mut same_artifact =
+        read_json("healthy-link", "manifest.json").expect("healthy manifest loads");
+    same_artifact["artifacts"][0]["relativePath"] = serde_json::json!(
+        "evidence/server-hierarchy-control/origin/equal-instant/replmgr.log"
+    );
+    let same_artifact_failures =
+        identity_and_schema_failures("healthy-link", &same_artifact, &expected);
+    assert!(
+        same_artifact_failures.is_empty(),
+        "equal UTC on forward physical lines of one artifact must remain usable: {same_artifact_failures:?}"
+    );
+}
+
+#[test]
 fn hierarchy_readme_distinguishes_metadata_from_raw_ccm_evidence() {
     let readme = include_str!("fixtures/sccm/server/hierarchy_and_replication/README.md");
 
