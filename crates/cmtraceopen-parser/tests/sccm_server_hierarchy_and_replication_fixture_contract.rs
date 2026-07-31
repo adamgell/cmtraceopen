@@ -990,15 +990,13 @@ fn artifact_request_failures(scenario: &str, manifest: &Value, expected: &Value)
         let mut sorted_basenames = basenames.clone();
         sorted_basenames.sort_unstable();
         sorted_basenames.dedup();
-        let source_owns_basenames = match source_id {
-            Some("server-hierarchy-control") => basenames
-                .iter()
-                .all(|basename| matches!(*basename, "replmgr.log")),
-            Some("server-hierarchy-transfer") => basenames
-                .iter()
-                .all(|basename| matches!(*basename, "sender.log" | "sender.lo_" | "despool.log")),
-            _ => false,
-        };
+        let source_owns_basenames = source_id.is_some_and(|source_id| {
+            basenames.iter().all(|basename| {
+                ["origin", "target"].iter().any(|direction| {
+                    exact_source_tuple(source_id, basename, direction, "siteServer")
+                })
+            })
+        });
         if request["producerRole"] != "siteServer"
             || !matches!(direction, Some("origin" | "target" | "both"))
             || target_site.is_none_or(|site| !target_sites.contains(site))
