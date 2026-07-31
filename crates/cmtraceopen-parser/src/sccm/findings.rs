@@ -1295,6 +1295,9 @@ fn has_passive_unbounded_confirmation_request(
                     is_collection_target(token.text)
                         && !token_is_covered_by_identity(token, identity_ranges)
                 });
+            let has_explicit_bounded_state_observation = !broad_target_follows_auxiliary
+                && !identity_ranges.is_empty()
+                && predicate.iter().any(|token| token.text == "downloaded");
 
             matches!(auxiliary.text, "must" | "need" | "needs" | "should")
                 || broad_target_follows_auxiliary
@@ -1312,6 +1315,7 @@ fn has_passive_unbounded_confirmation_request(
                             | "required"
                     )
                 })
+                || !has_explicit_bounded_state_observation
         })
 }
 
