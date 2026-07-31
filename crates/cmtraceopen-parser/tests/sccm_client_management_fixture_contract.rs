@@ -2762,16 +2762,43 @@ fn version_and_physical_identity_provenance_mutations_fail_closed() {
     .expect("the bounded synthetic source contract remains valid");
     let mut accepted = Vec::new();
 
-    let mut malformed_version = script_manifest.clone();
-    malformed_version["artifacts"][0]["sourceVersion"] =
+    let coherent_unknown_profile_expected = |artifact_id: &str| {
+        let mut expected = script_expected.clone();
+        expected["extractionProfile"]["selectionState"] =
+            Value::String("unknownProfile".to_owned());
+        expected["sourceLocalObservations"] = serde_json::json!([{
+            "observationId": format!("{artifact_id}-unknown-profile"),
+            "kind": "unknownProfile",
+            "claim": "The synthetic source version cannot select a validated extraction profile.",
+            "confidenceCeiling": "low",
+            "correlationEligible": false,
+            "artifactIds": [artifact_id],
+        }]);
+        expected
+    };
+
+    let mut malformed_transaction_version = script_manifest.clone();
+    malformed_transaction_version["artifacts"][0]["sourceVersion"] =
         Value::String("5.00.TEST.UNKNOWN".to_owned());
     if mutation_was_accepted(
         "script-success",
         &script_root,
-        &malformed_version,
-        &script_expected,
+        &malformed_transaction_version,
+        &coherent_unknown_profile_expected("script-success-current"),
     ) {
-        accepted.push("malformed source version retained selected profile");
+        accepted.push("malformed transaction source version retained high confidence");
+    }
+
+    let mut malformed_ownership_version = script_manifest.clone();
+    malformed_ownership_version["artifacts"][1]["sourceVersion"] =
+        Value::String("5.00.TEST.UNKNOWN".to_owned());
+    if mutation_was_accepted(
+        "script-success",
+        &script_root,
+        &malformed_ownership_version,
+        &coherent_unknown_profile_expected("script-success-owner"),
+    ) {
+        accepted.push("malformed ownership source version retained high confidence");
     }
 
     let mut leaking_fingerprint = script_manifest.clone();
