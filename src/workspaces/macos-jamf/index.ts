@@ -1,17 +1,13 @@
-// src/workspaces/macos-diag/index.ts
 import { lazy } from "react";
 import type { WorkspaceDefinition } from "../types";
 
-export { ProfileDrilldown } from "./ProfileDrilldown";
-export type { ProfileDrilldownProps } from "./ProfileDrilldown";
-
-export const macosDiagWorkspace: WorkspaceDefinition = {
-  id: "macos-diag",
-  label: "macOS Diagnostics",
+export const jamfWorkspace: WorkspaceDefinition = {
+  id: "macos-jamf",
+  label: "macOS JAMF",
   platforms: ["macos"],
   component: lazy(() =>
-    import("./MacosDiagWorkspace").then((m) => ({
-      default: m.MacosDiagWorkspace,
+    import("./MacosJamfWorkspace").then((m) => ({
+      default: m.MacosJamfWorkspace,
     }))
   ),
   sidebar: lazy(() =>
@@ -21,8 +17,6 @@ export const macosDiagWorkspace: WorkspaceDefinition = {
   ),
   fileFilters: [
     { name: "Log Files", extensions: ["log"] },
-    { name: "Old Log Files", extensions: ["lo_"] },
-    { name: "Registry Files", extensions: ["reg"] },
     { name: "All Files", extensions: ["*"] },
   ],
   actionLabels: {
