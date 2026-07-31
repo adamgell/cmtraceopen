@@ -658,17 +658,21 @@ fn is_safe_path_segment(value: &str) -> bool {
 
 fn is_safe_client_bundle_group(value: &str) -> bool {
     value == "unknown"
-        || value
-            .strip_prefix("client-")
-            .is_some_and(is_safe_path_segment)
+        || value == "client-location-services-shared"
+        || CLIENT_SOURCE_GROUPS
+            .iter()
+            .any(|group| group.logical_artifact_id == value)
 }
 
 fn is_safe_root_path_segment(value: &str) -> bool {
     value.strip_prefix("root-").is_some_and(|root| {
-        !root.is_empty()
-            && root
-                .bytes()
-                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+        // `root-a` and `root-b` are committed synthetic collision fixtures.
+        // Native adapters use an opaque lowercase hexadecimal handle.
+        matches!(root, "a" | "b")
+            || (matches!(root.len(), 16 | 64)
+                && root
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)))
     })
 }
 
