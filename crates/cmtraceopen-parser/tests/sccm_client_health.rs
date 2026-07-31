@@ -351,6 +351,231 @@ fn replace_first_message(bundle: &mut SccmNormalizedBundle, from: &str, to: &str
 }
 
 #[test]
+fn health_duplicate_artifact_ids_fail_closed_without_order_authority() {
+    let mut forward = load_bundle("success");
+    let mut duplicate = forward
+        .artifacts
+        .iter()
+        .find(|artifact| artifact.display_name.eq_ignore_ascii_case("CcmEval.log"))
+        .expect("success fixture evaluation artifact")
+        .clone();
+    duplicate.coverage = SccmCoverageState::AccessDenied;
+    forward.artifacts.push(duplicate);
+
+    let mut reverse = forward.clone();
+    reverse.artifacts.reverse();
+
+    let forward_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        analyze_client_health(&forward)
+    }));
+    let reverse_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        analyze_client_health(&reverse)
+    }));
+    assert!(
+        forward_result.is_ok() && reverse_result.is_ok(),
+        "duplicate public artifact identities must fail closed without panicking"
+    );
+
+    let forward_analysis = forward_result.expect("forward duplicate analysis");
+    let reverse_analysis = reverse_result.expect("reverse duplicate analysis");
+    assert_eq!(forward_analysis.last_successful_phase, None);
+    assert_eq!(forward_analysis.findings.len(), 1);
+    assert_eq!(
+        forward_analysis.findings[0].finding.finding_id,
+        "health-artifact-identity-collision"
+    );
+    assert_eq!(
+        forward_analysis.findings[0].finding.class,
+        SccmFindingClass::InsufficientEvidence
+    );
+    assert_eq!(
+        serde_json::to_string(&forward_analysis).expect("forward duplicate JSON"),
+        serde_json::to_string(&reverse_analysis).expect("reverse duplicate JSON"),
+        "artifact vector order must not select an authority for a duplicate identity"
+    );
+}
+
+#[test]
+fn health_equal_time_opposing_transport_outcomes_are_contradictory() {
+    fn with_failure_artifact_id(artifact_id: &str) -> SccmNormalizedBundle {
+        let mut bundle = load_bundle("success");
+        let mut failure_artifact = bundle
+            .artifacts
+            .iter()
+            .find(|artifact| artifact.display_name == "LocationServices.log")
+            .expect("success fixture location artifact")
+            .clone();
+        failure_artifact.artifact_id = artifact_id.to_owned();
+        failure_artifact.display_name = "CcmMessaging.log".to_owned();
+        bundle.artifacts.push(failure_artifact);
+
+        let mut failure = bundle
+            .evidence
+            .iter()
+            .find(|evidence| evidence.message.contains("Transport response completed"))
+            .expect("success fixture transport response")
+            .clone();
+        failure.evidence_id = format!("evidence:{artifact_id}:equal-time-failure");
+        failure.reference.artifact_id = artifact_id.to_owned();
+        failure.reference.entry_id = "equal-time-failure".to_owned();
+        failure.reference.line_start = Some(1);
+        failure.reference.line_end = Some(1);
+        failure.message = failure
+            .message
+            .replace("Transport response completed", "Transport terminal failure")
+            .replace("status=200", "error=0x80072EFD");
+        bundle.evidence.push(failure);
+        bundle
+    }
+
+    let failure_sorts_first = with_failure_artifact_id("aaa-health-equal-time-messaging");
+    let failure_sorts_last = with_failure_artifact_id("zzz-health-equal-time-messaging");
+
+    for bundle in [&failure_sorts_first, &failure_sorts_last] {
+        let analysis = analyze_client_health(bundle);
+        assert_eq!(
+            analysis.last_successful_phase,
+            Some(SccmHealthPhase::ManagementPoint)
+        );
+        assert_eq!(analysis.findings.len(), 1);
+        assert_eq!(
+            analysis.findings[0].finding.finding_id,
+            "health-transport-contradictory"
+        );
+        assert_eq!(analysis.findings[0].finding.confidence, SccmConfidence::Low);
+        assert!(!has_high_confirmed_failure(bundle));
+    }
+
+    assert_eq!(
+        serde_json::to_string(&analyze_client_health(&failure_sorts_first))
+            .expect("first artifact ordering JSON"),
+        serde_json::to_string(&analyze_client_health(&failure_sorts_last))
+            .expect("last artifact ordering JSON"),
+        "opaque artifact identity ordering must not select an equal-time outcome"
+    );
+}
+
+#[test]
+fn health_guid_matching_is_case_insensitive() {
+    let mut bundle = load_bundle("success");
+    let original = "11111111-1111-1111-1111-111111111111";
+    let lowercase = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+    let uppercase = "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA";
+    for evidence in &mut bundle.evidence {
+        evidence.message = evidence.message.replace(original, lowercase);
+    }
+    let setup = bundle
+        .evidence
+        .iter_mut()
+        .find(|evidence| evidence.message.contains("Bootstrap completed"))
+        .expect("success fixture setup evidence");
+    setup.message = setup.message.replace(lowercase, uppercase);
+
+    assert_eq!(
+        analyze_client_health(&bundle).last_successful_phase,
+        Some(SccmHealthPhase::Transport),
+        "hex case must not split one validated client GUID"
+    );
+}
+
+#[test]
+fn health_same_guid_identity_success_recovers_prior_failure() {
+    let mut bundle = load_bundle("identity-failure");
+    let mut recovery = bundle
+        .evidence
+        .iter()
+        .find(|evidence| evidence.message.contains("terminal failure clientGuid="))
+        .expect("identity failure evidence")
+        .clone();
+    recovery.evidence_id = "evidence:health-identity-recovery".to_owned();
+    recovery.reference.entry_id = "identity-recovery".to_owned();
+    recovery.reference.line_start = Some(2);
+    recovery.reference.line_end = Some(2);
+    recovery.message = recovery
+        .message
+        .replace(
+            "[redacted:sccm-public-message-v1] terminal failure",
+            "[redacted:sccm-public-message-v1] succeeded",
+        )
+        .replace(" error=0x80004005", "");
+    bundle.evidence.push(recovery);
+
+    let analysis = analyze_client_health(&bundle);
+    assert_eq!(
+        analysis.last_successful_phase,
+        Some(SccmHealthPhase::Identity)
+    );
+    assert!(!has_high_confirmed_failure(&bundle));
+    assert!(analysis
+        .findings
+        .iter()
+        .all(|finding| finding.finding.finding_id != "health-identity-terminal"));
+}
+
+#[test]
+fn health_embedded_error_field_is_not_an_exact_terminal_token() {
+    let mut bundle = load_bundle("transport-failure");
+    replace_first_message(&mut bundle, "error=0x80072EFD", "httperror=0x80072EFD");
+
+    let analysis = analyze_client_health(&bundle);
+    assert!(!has_high_confirmed_failure(&bundle));
+    assert_eq!(
+        analysis.last_successful_phase,
+        Some(SccmHealthPhase::ManagementPoint)
+    );
+    assert_eq!(analysis.findings.len(), 1);
+    assert_eq!(
+        analysis.findings[0].finding.finding_id,
+        "health-transport-insufficient"
+    );
+}
+
+#[test]
+fn health_fixture_validator_requires_every_expected_line_range() {
+    let analysis = json!({
+        "findings": [{
+            "findingId": "health-test-finding",
+            "class": "symptom",
+            "confidence": "low",
+            "evidence": [{
+                "artifactId": "health-test-artifact",
+                "entryId": "entry-000001",
+                "lineStart": 1,
+                "lineEnd": 1
+            }],
+            "terminalEvidence": []
+        }]
+    });
+    let expected = json!({
+        "findings": [{
+            "findingId": "health-test-finding",
+            "fixtureEvidence": [
+                {
+                    "artifactId": "health-test-artifact",
+                    "entryId": "entry-000001",
+                    "lineStart": 1,
+                    "lineEnd": 1
+                },
+                {
+                    "artifactId": "health-test-artifact",
+                    "entryId": "entry-000002",
+                    "lineStart": 2,
+                    "lineEnd": 2
+                }
+            ]
+        }]
+    });
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        assert_finding_evidence_matches_contract("validator-probe", &analysis, &expected);
+    }));
+    assert!(
+        result.is_err(),
+        "one actual reference must not satisfy two expected ranges in one artifact"
+    );
+}
+
+#[test]
 fn health_adversarial_inputs_cannot_create_terminal_or_success_outcomes() {
     let mut accepted = Vec::new();
 
@@ -644,6 +869,11 @@ fn health_same_key_setup_recovery_does_not_cross_bootstrap_identity() {
     different_bootstrap.evidence.push(unrelated_success);
     let unrelated_analysis = analyze_client_health(&different_bootstrap);
     assert_eq!(unrelated_analysis.last_successful_phase, None);
+    assert_eq!(
+        unrelated_analysis.findings.len(),
+        1,
+        "different bootstrap IDs must yield exactly one setup finding"
+    );
     assert_eq!(
         unrelated_analysis.findings[0].finding.finding_id,
         "health-setup-contradictory"
