@@ -2318,6 +2318,21 @@ fn exact_content_version_dp_topology_and_terminal_evidence_fail_closed() {
 }
 
 #[test]
+fn every_observation_requires_an_explicit_typed_terminal_marker() {
+    let manifest = read_json("healthy-package", "manifest.json").expect("manifest loads");
+    let mut expected = read_json("healthy-package", "expected.json").expect("expected loads");
+    expected["transactions"][0]["observations"][0]
+        .as_object_mut()
+        .expect("nonterminal observation is an object")
+        .remove("terminal");
+
+    assert!(
+        !mutation_was_accepted("healthy-package", &manifest, &expected),
+        "nonterminal observation without terminal was accepted"
+    );
+}
+
+#[test]
 fn coverage_role_and_rotation_states_fail_closed() {
     let absent_manifest = read_json("absent-dp", "manifest.json").expect("manifest loads");
     let absent_expected = read_json("absent-dp", "expected.json").expect("expected loads");
