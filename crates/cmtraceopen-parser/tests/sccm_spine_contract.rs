@@ -5715,7 +5715,7 @@ fn expected_catalog_tuples() -> Vec<ExpectedCatalogTuple> {
         ),
         (
             "mpcontrol.log",
-            SccmRole::ManagementPoint,
+            SccmRole::SiteServer,
             "mpcontrol",
             SccmArtifactFamily::ManagementPoint,
             true,
