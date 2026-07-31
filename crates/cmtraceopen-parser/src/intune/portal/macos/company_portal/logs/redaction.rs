@@ -60,11 +60,17 @@ fn url_re() -> &'static Regex {
     })
 }
 
+/// Unicode-aware so a non-ASCII identity is redacted too.
+///
+/// An ASCII-only class does not merely truncate a non-ASCII address, it misses
+/// it entirely: in `elodie` with an accented first letter there is no word
+/// boundary between the accented character and the next, so the leading `\b`
+/// never anchors and the whole address exports verbatim. `\w` is Unicode-aware
+/// in this regex engine, which closes that hole.
 fn email_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
-        Regex::new(r"(?i)\b[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}\b")
-            .expect("email pattern must compile")
+        Regex::new(r"(?i)[\w.%+\-]+@[\w.\-]+\.\w{2,}").expect("email pattern must compile")
     })
 }
 

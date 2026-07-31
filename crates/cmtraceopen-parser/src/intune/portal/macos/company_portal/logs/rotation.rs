@@ -37,16 +37,23 @@ pub fn rotation_member_from_file_name(file_name: &str) -> PortalRotationMember {
         };
     };
 
-    let index = caps
-        .get(1)
-        .or_else(|| caps.get(2))
-        .and_then(|m| m.as_str().parse::<u32>().ok())
-        .unwrap_or(0);
+    // `is_current` comes from the *absence* of a digit group, not from the
+    // parsed value. The digit group is unbounded, so `CompanyPortal-99999999999.log`
+    // overflows `u32`; deriving currency from `index == 0` after an
+    // `unwrap_or(0)` would mark that old member as the live file and sort it
+    // newest. A digit group that will not parse still means "not the live file",
+    // and an absurdly large index is definitionally very old, so it saturates to
+    // `u32::MAX` and sorts oldest.
+    let digits = caps.get(1).or_else(|| caps.get(2));
+    let (rotation_index, is_current) = match digits {
+        None => (0, true),
+        Some(matched) => (matched.as_str().parse::<u32>().unwrap_or(u32::MAX), false),
+    };
 
     PortalRotationMember {
         file_name: Some(file_name.to_string()),
-        rotation_index: Some(index),
-        is_current: index == 0,
+        rotation_index: Some(rotation_index),
+        is_current,
     }
 }
 
@@ -84,10 +91,15 @@ pub fn order_rotation_members_oldest_first(
     ordered
 }
 
-/// Merge parsed rotation members into one chronologically ordered entry list.
+/// Merge parsed rotation members into one entry list, oldest member first.
 ///
-/// Members are ordered oldest first by rotation index; entries keep their
-/// within-file order, and `id` is reassigned sequentially across the merged set.
+/// The ordering is by rotation index only. This function never reads
+/// `entry.timestamp`, so the result is **not** guaranteed to be chronological:
+/// members whose file name is not a recognized rotation form sort last no matter
+/// what their records say, and records already out of order inside a single file
+/// stay out of order. Callers that need true chronological order must sort by
+/// timestamp themselves. Entries keep their within-file order and `id` is
+/// reassigned sequentially across the merged set.
 pub fn merge_rotated_log_entries(parses: &[PortalLogParse]) -> Vec<LogEntry> {
     let mut ordered: Vec<&PortalLogParse> = parses.iter().collect();
     ordered.sort_by_key(|parse| oldest_first_key(&parse.rotation));

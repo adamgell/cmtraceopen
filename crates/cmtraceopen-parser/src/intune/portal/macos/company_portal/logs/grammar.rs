@@ -101,10 +101,21 @@ pub(crate) fn parse_record_head(line: &str) -> Option<PortalRecordHead> {
         .and_then(|d| d.and_hms_milli_opt(hour, minute, second, millis))
         .map(|dt| dt.and_utc().timestamp_millis());
 
-    Some(PortalRecordHead {
-        raw_timestamp: format!(
+    // `raw_timestamp` must be the source text, not a re-rendering of the parsed
+    // numbers. The grammar tolerates multiple spaces or a tab between the date
+    // and the time, so reconstructing with a single space silently rewrote the
+    // evidence that `PortalTimestamp::raw_text` promises to preserve verbatim.
+    // Take the matched span from the first date group to the last time group.
+    let trimmed = line.trim_end();
+    let raw_timestamp = match (caps.get(1), caps.get(7)) {
+        (Some(first), Some(last)) => trimmed[first.start()..last.end()].to_string(),
+        _ => format!(
             "{year:04}-{month:02}-{day:02} {hour:02}:{minute:02}:{second:02}:{millis:03}"
         ),
+    };
+
+    Some(PortalRecordHead {
+        raw_timestamp,
         timestamp_millis,
         timestamp_display: format!(
             "{year:04}-{month:02}-{day:02} {hour:02}:{minute:02}:{second:02}.{millis:03}"

@@ -808,6 +808,133 @@ fn fatal_severity_letter_maps_to_error() {
     }
 }
 
+/// The rotation digit group is unbounded, so an absurd index overflows `u32`.
+/// Deriving `is_current` from the parsed value marked such a member as the live
+/// file and sorted the oldest member newest.
+#[test]
+fn unparsable_rotation_index_is_not_treated_as_the_current_log() {
+    let huge = rotation_member_from_file_name("CompanyPortal-99999999999.log");
+    assert!(
+        !huge.is_current,
+        "a member with a digit group is never the live file"
+    );
+    assert_eq!(huge.rotation_index, Some(u32::MAX));
+
+    let current = rotation_member_from_file_name("CompanyPortal.log");
+    assert!(current.is_current);
+    assert_eq!(current.rotation_index, Some(0));
+
+    // The saturated member is the oldest, so it sorts first, not last.
+    let ordered = order_rotation_members_oldest_first(&[
+        rotation_member_from_file_name("CompanyPortal.log"),
+        rotation_member_from_file_name("CompanyPortal-99999999999.log"),
+        rotation_member_from_file_name("CompanyPortal-1.log"),
+    ]);
+    let names: Vec<&str> = ordered
+        .iter()
+        .map(|m| m.file_name.as_deref().unwrap_or(""))
+        .collect();
+    assert_eq!(
+        names,
+        vec![
+            "CompanyPortal-99999999999.log",
+            "CompanyPortal-1.log",
+            "CompanyPortal.log"
+        ]
+    );
+}
+
+/// Rotation cuts at a byte boundary, so a member can open with a long run of
+/// continuation lines. Sampling only the first `DETECTION_SAMPLE_LINES` physical
+/// lines classified such a file as `Unrecognized` and dropped every record.
+#[test]
+fn rotated_member_with_long_leading_continuation_run_is_still_recognized() {
+    let mut text = String::new();
+    for i in 0..250 {
+        text.push_str(&format!("    continuation payload line {i}\n"));
+    }
+    text.push_str(
+        "2026-05-12 08:14:20:104 | CompanyPortal | I | 261510 | SignInViewModel | Sign-in state refreshed\n",
+    );
+
+    let parse = parse_company_portal_macos_log(
+        &text,
+        &PortalLogSource::new(log_path("rotation", "CompanyPortal-1.log")),
+    );
+
+    assert_eq!(
+        parse.detection.source_kind,
+        PortalSourceKind::CompanyPortalMacosAppLog
+    );
+    assert_eq!(parse.coverage.parsed_record_count, 1);
+    assert_full_line_coverage(&parse);
+
+    // An artifact with no record start anywhere is still rejected.
+    let never = parse_company_portal_macos_log(
+        &"    just continuation text\n".repeat(250),
+        &PortalLogSource::new(log_path("rotation", "CompanyPortal-1.log")),
+    );
+    assert_ne!(
+        never.detection.source_kind,
+        PortalSourceKind::CompanyPortalMacosAppLog
+    );
+}
+
+/// `PortalTimestamp::raw_text` must be the source text. The grammar tolerates
+/// multiple spaces and tabs, which a reconstructed value silently rewrote.
+#[test]
+fn raw_timestamp_preserves_the_source_spacing() {
+    let spaced =
+        "2026-05-12  08:14:20:104 | CompanyPortal | I | 261510 | SignInViewModel | Spaced\n";
+    let parse = parse_company_portal_macos_log(
+        spaced,
+        &PortalLogSource::new(log_path("basic-records", "CompanyPortal.log")),
+    );
+
+    assert_eq!(parse.coverage.parsed_record_count, 1);
+    let timestamp = parse.records[0]
+        .timestamp
+        .as_ref()
+        .expect("a well-formed record carries a timestamp");
+    assert_eq!(
+        timestamp.raw_text, "2026-05-12  08:14:20:104",
+        "raw_text must keep the original spacing, not a re-rendering"
+    );
+    // The grammar carries no timezone, so the record stays Local and is never
+    // normalized to UTC. Preserving the raw spacing must not change that.
+    assert_eq!(timestamp.kind, PortalTimestampKind::Local);
+    assert!(timestamp.normalized_utc.is_none());
+
+    // The irregular spacing still resolves to the same instant downstream.
+    let entries = to_log_entries(&parse);
+    assert_eq!(entries.len(), 1);
+    assert!(entries[0].timestamp.is_some());
+    assert_eq!(
+        entries[0].timestamp_display.as_deref(),
+        Some("2026-05-12 08:14:20.104")
+    );
+}
+
+/// An ASCII-only email class does not truncate a non-ASCII address, it misses it
+/// entirely, because the leading word boundary never anchors.
+#[test]
+fn non_ascii_identities_are_redacted() {
+    let text = "2026-05-12 08:14:20:104 | CompanyPortal | I | 261510 | SignInViewModel | Signed in as \u{e9}lodie.dupont@contoso.example\n";
+    let parse = parse_company_portal_macos_log(
+        text,
+        &PortalLogSource::new(log_path("basic-records", "CompanyPortal.log")),
+    );
+    let export = redacted_export_projection(&parse);
+    let json = serde_json::to_string(&export).expect("export must serialize");
+
+    assert!(
+        !json.contains("lodie.dupont"),
+        "non-ASCII identity leaked: {json}"
+    );
+    assert!(!json.contains("contoso.example"));
+    assert!(json.contains("[redacted:email:"));
+}
+
 #[test]
 fn fixture_root_layout_is_versioned_by_scenario() {
     // Documents the on-disk contract the include_* macros above depend on.

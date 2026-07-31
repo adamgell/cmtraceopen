@@ -49,7 +49,32 @@ fn looks_like_diagnostic_report_header(line: &str) -> bool {
 /// cannot change the resulting [`PortalSourceKind`].
 pub fn detect_company_portal_macos_log(text: &str, path_hint: Option<&str>) -> PortalDetection {
     let lines = split_physical_lines(text);
-    let sample: Vec<&str> = lines.iter().copied().take(DETECTION_SAMPLE_LINES).collect();
+    let mut sample: Vec<&str> = lines.iter().copied().take(DETECTION_SAMPLE_LINES).collect();
+
+    // Rotation cuts a file at a byte boundary, not a record boundary, so a
+    // rotated member can open with a long run of continuation lines from a
+    // payload that began in the previous member. When the head window shows no
+    // evidence of any kind, re-anchor the sample at the first line that looks
+    // like a record start instead of declaring the whole file unrecognized and
+    // dropping every record in it. This stays content-only: the re-anchor is
+    // driven by the text, never by the path hint, and it only runs when the head
+    // window was entirely inconclusive, so the NDJSON and diagnostic-report
+    // negatives still decide from the head as before.
+    let head_window_inconclusive = sample.iter().all(|line| {
+        !looks_like_record_start(line)
+            && !looks_like_unified_log_ndjson(line)
+            && !looks_like_diagnostic_report_header(line)
+    });
+    if head_window_inconclusive {
+        if let Some(first_start) = lines.iter().position(|line| looks_like_record_start(line)) {
+            sample = lines
+                .iter()
+                .copied()
+                .skip(first_start)
+                .take(DETECTION_SAMPLE_LINES)
+                .collect();
+        }
+    }
 
     let mut record_start_lines = 0u32;
     let mut record_head_lines = 0u32;

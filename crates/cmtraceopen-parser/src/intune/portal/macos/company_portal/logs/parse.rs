@@ -444,15 +444,27 @@ pub fn to_log_entries(parse: &PortalLogParse) -> Vec<LogEntry> {
 
 /// `YYYY-MM-DD HH:MM:SS:mmm` (source form) to `YYYY-MM-DD HH:MM:SS.mmm`
 /// (display form used by the other timestamped parsers).
+/// Collapse the whitespace inside a raw timestamp to a single space.
+///
+/// `PortalTimestamp::raw_text` holds the source text verbatim, and the grammar
+/// permits several spaces or a tab between the date and the time. Evidence
+/// should keep that, but a rendered timestamp should not inherit it, so
+/// everything derived from `raw_text` normalizes first.
+fn canonical_timestamp(raw: &str) -> String {
+    raw.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 fn display_timestamp(raw: &str) -> String {
-    match raw.rfind(':') {
-        Some(position) => format!("{}.{}", &raw[..position], &raw[position + 1..]),
-        None => raw.to_string(),
+    let canonical = canonical_timestamp(raw);
+    match canonical.rfind(':') {
+        Some(position) => format!("{}.{}", &canonical[..position], &canonical[position + 1..]),
+        None => canonical,
     }
 }
 
 fn timestamp_millis(raw_timestamp: &str) -> Option<i64> {
-    chrono::NaiveDateTime::parse_from_str(raw_timestamp, "%Y-%m-%d %H:%M:%S:%3f")
+    let canonical = canonical_timestamp(raw_timestamp);
+    chrono::NaiveDateTime::parse_from_str(&canonical, "%Y-%m-%d %H:%M:%S:%3f")
         .ok()
         .map(|dt| dt.and_utc().timestamp_millis())
 }
