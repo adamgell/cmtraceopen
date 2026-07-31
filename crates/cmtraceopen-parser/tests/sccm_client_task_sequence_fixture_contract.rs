@@ -2357,6 +2357,70 @@ fn transaction_evidence_order_is_canonical_and_unique() {
 }
 
 #[test]
+fn source_local_observation_ids_must_be_unique() {
+    let scenario = "unknown-profile";
+    let scenario_root = task_sequence_root().join(scenario);
+    let manifest = read_json(&scenario_root.join("manifest.json"));
+    let mut expected = read_json(&scenario_root.join("expected.json"));
+    let duplicate = expected["sourceLocalObservations"][0].clone();
+    expected["sourceLocalObservations"]
+        .as_array_mut()
+        .expect("source-local observations are an array")
+        .push(duplicate);
+
+    let error = validate_contract(scenario, &scenario_root, &manifest, &expected)
+        .expect_err("sorted duplicate observation IDs must fail closed");
+    assert!(error.contains("observation IDs"), "{error}");
+}
+
+#[test]
+fn finding_ids_must_be_unique() {
+    let scenario = "winpe";
+    let scenario_root = task_sequence_root().join(scenario);
+    let manifest = read_json(&scenario_root.join("manifest.json"));
+    let mut expected = read_json(&scenario_root.join("expected.json"));
+    let duplicate = expected["findings"][0].clone();
+    expected["findings"]
+        .as_array_mut()
+        .expect("findings are an array")
+        .push(duplicate);
+
+    let error = validate_contract(scenario, &scenario_root, &manifest, &expected)
+        .expect_err("sorted duplicate finding IDs must fail closed");
+    assert!(error.contains("finding IDs"), "{error}");
+}
+
+#[test]
+fn complete_winpe_record_may_have_no_smsts_path_observation() {
+    let scenario = "winpe";
+    let temporary = copy_scenario_to_temporary_root(scenario, "no-smsts-path-token");
+    let mut manifest = read_json(&temporary.root.join("manifest.json"));
+    let mut expected = read_json(&temporary.root.join("expected.json"));
+    let relative_path = manifest["artifacts"][0]["relativePath"]
+        .as_str()
+        .expect("WinPE artifact has a relative path");
+    let evidence_path = temporary.root.join(relative_path);
+    let original = std::fs::read_to_string(&evidence_path).expect("WinPE evidence is readable");
+    let without_path = original.replace(
+        " _SMSTSLogPath=SYNTHETIC://winpe/Windows/temp/smstslog/smsts.log",
+        "",
+    );
+    assert_ne!(
+        without_path, original,
+        "the path token mutation is effective"
+    );
+    std::fs::write(&evidence_path, &without_path).expect("mutated evidence is writable");
+
+    manifest["artifacts"][0]["bytesCopied"] = Value::from(without_path.len() as u64);
+    manifest["artifacts"][0]["smstsLogPathEvidence"] = Value::Null;
+    expected["artifactProvenance"][0]["bytesCopied"] = Value::from(without_path.len() as u64);
+    expected["artifactProvenance"][0]["smstsLogPathEvidence"] = Value::Null;
+
+    validate_contract(scenario, &temporary.root, &manifest, &expected)
+        .expect("a complete logical CCM record may lack an observed _SMSTSLogPath");
+}
+
+#[test]
 fn coherent_review_mutations_fail_closed() {
     let mut accepted = Vec::new();
 
