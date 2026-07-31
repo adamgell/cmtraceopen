@@ -9,8 +9,8 @@ import subprocess
 from typing import Any
 
 
-QUERY = r"""
-query($owner: String!, $repo: String!, $number: Int!, $threads: String, $reviews: String) {
+REVIEWS_QUERY = r"""
+query($owner: String!, $repo: String!, $number: Int!, $cursor: String) {
   repository(owner: $owner, name: $repo) {
     pullRequest(number: $number) {
       number
@@ -18,7 +18,7 @@ query($owner: String!, $repo: String!, $number: Int!, $threads: String, $reviews
       headRefOid
       isDraft
       reviewDecision
-      reviews(first: 100, after: $reviews) {
+      reviews(first: 100, after: $cursor) {
         pageInfo { hasNextPage endCursor }
         nodes {
           id
@@ -29,7 +29,16 @@ query($owner: String!, $repo: String!, $number: Int!, $threads: String, $reviews
           commit { oid }
         }
       }
-      reviewThreads(first: 100, after: $threads) {
+    }
+  }
+}
+"""
+
+THREADS_QUERY = r"""
+query($owner: String!, $repo: String!, $number: Int!, $cursor: String) {
+  repository(owner: $owner, name: $repo) {
+    pullRequest(number: $number) {
+      reviewThreads(first: 100, after: $cursor) {
         pageInfo { hasNextPage endCursor }
         nodes {
           id
@@ -73,12 +82,10 @@ def current_pr() -> tuple[str, str, int]:
     )
 
 
-def fetch(owner: str, repo: str, number: int) -> dict[str, Any]:
-    reviews: list[dict[str, Any]] = []
-    threads: list[dict[str, Any]] = []
-    reviews_cursor: str | None = None
-    threads_cursor: str | None = None
+def paginate(query: str, owner: str, repo: str, number: int, connection_path: tuple[str, ...]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    nodes: list[dict[str, Any]] = []
     metadata: dict[str, Any] | None = None
+    cursor: str | None = None
 
     while True:
         command = [
@@ -88,46 +95,52 @@ def fetch(owner: str, repo: str, number: int) -> dict[str, Any]:
             "-F", f"repo={repo}",
             "-F", f"number={number}",
         ]
-        if reviews_cursor:
-            command += ["-F", f"reviews={reviews_cursor}"]
-        if threads_cursor:
-            command += ["-F", f"threads={threads_cursor}"]
+        if cursor:
+            command += ["-F", f"cursor={cursor}"]
 
-        payload = run_json(command, QUERY)
+        payload = run_json(command, query)
         if payload.get("errors"):
             raise SystemExit(json.dumps(payload["errors"], indent=2))
 
         pr = payload["data"]["repository"]["pullRequest"]
         if metadata is None:
-            metadata = {
-                "number": pr["number"],
-                "url": pr["url"],
-                "head_sha": pr["headRefOid"],
-                "is_draft": pr["isDraft"],
-                "review_decision": pr["reviewDecision"],
-            }
+            metadata = pr
 
-        review_page = pr["reviews"]
-        thread_page = pr["reviewThreads"]
-        reviews.extend(review_page.get("nodes") or [])
-        threads.extend(thread_page.get("nodes") or [])
-        reviews_cursor = (
-            review_page["pageInfo"]["endCursor"]
-            if review_page["pageInfo"]["hasNextPage"] else None
+        connection = pr
+        for key in connection_path:
+            connection = connection[key]
+        nodes.extend(connection.get("nodes") or [])
+        cursor = (
+            connection["pageInfo"]["endCursor"]
+            if connection["pageInfo"]["hasNextPage"] else None
         )
-        threads_cursor = (
-            thread_page["pageInfo"]["endCursor"]
-            if thread_page["pageInfo"]["hasNextPage"] else None
-        )
-        if not reviews_cursor and not threads_cursor:
+        if not cursor:
             break
 
     assert metadata is not None
+    return metadata, nodes
+
+
+def fetch(owner: str, repo: str, number: int) -> dict[str, Any]:
+    pr_metadata, reviews = paginate(REVIEWS_QUERY, owner, repo, number, ("reviews",))
+    _, threads = paginate(THREADS_QUERY, owner, repo, number, ("reviewThreads",))
+
+    metadata = {
+        "number": pr_metadata["number"],
+        "url": pr_metadata["url"],
+        "head_sha": pr_metadata["headRefOid"],
+        "is_draft": pr_metadata["isDraft"],
+        "review_decision": pr_metadata["reviewDecision"],
+    }
+
     reviews = list({review["id"]: review for review in reviews}.values())
     threads = list({thread["id"]: thread for thread in threads}.values())
     copilot_reviews = [review for review in reviews if is_copilot(review.get("author"))]
     copilot_reviews.sort(key=lambda review: review.get("submittedAt") or "")
-    unresolved = [thread for thread in threads if not thread["isResolved"]]
+    unresolved = [
+        thread for thread in threads
+        if not thread["isResolved"] and not thread["isOutdated"]
+    ]
     unresolved_copilot = [thread for thread in unresolved if thread_has_copilot(thread)]
 
     return {
