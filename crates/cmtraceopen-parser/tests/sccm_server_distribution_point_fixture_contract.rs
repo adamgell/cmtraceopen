@@ -1473,6 +1473,7 @@ fn validate_expected(
         }
 
         let mut latest_success: Option<usize> = None;
+        let mut latest_outcome: Option<(&str, bool)> = None;
         let mut terminal_success = false;
         let mut terminal_success_phase = None;
         let mut terminal_failure = false;
@@ -1635,6 +1636,7 @@ fn validate_expected(
                     "{observation_id} uses an incoherent disposition/terminal pair"
                 )),
             }
+            latest_outcome = Some((disposition, terminal));
         }
 
         let computed_last_success = latest_success.map(|index| STATE_CHAIN[index]);
@@ -1655,6 +1657,7 @@ fn validate_expected(
         match (state, classification) {
             ("succeeded", "success")
                 if terminal_success
+                    && latest_outcome == Some(("succeeded", true))
                     && terminal_success_phase
                         == STATE_CHAIN
                             .iter()
@@ -1675,6 +1678,7 @@ fn validate_expected(
                     && confidence_ceiling == "high" => {}
             ("deferred", "blockedOrDeferred")
                 if terminal_deferred
+                    && matches!(latest_outcome, Some(("deferred" | "retrying", false)))
                     && !terminal_failure
                     && !terminal_success
                     && !cites_capped_evidence
