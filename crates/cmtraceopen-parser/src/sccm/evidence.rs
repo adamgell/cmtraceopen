@@ -28,6 +28,10 @@ fn sensitive_message_label_re() -> &'static Regex {
                     | (?:client|access|refresh|id|device|session)[\x20_-]?token
                     | api[\x20_-]?key
                     | account[\x20_-]?key
+                    | samaccountname
+                    | accountname
+                    | localuser
+                    | identity
                     | user[\x20_-]?principal[\x20_-]?name
                     | credential
                     | password
@@ -48,8 +52,10 @@ fn sensitive_message_label_re() -> &'static Regex {
 fn windows_identity_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
-        Regex::new(r"(?i)(?:\b(?:NT AUTHORITY|[A-Z0-9][A-Z0-9._-]*)|\.)\\[A-Z0-9][A-Z0-9._$-]*\b")
-            .expect("SCCM Windows identity regex must compile")
+        Regex::new(
+            r"(?i)(?:\b(?:NT AUTHORITY|[A-Z0-9][A-Z0-9._-]*)|\.)(?:\\)+[A-Z0-9][A-Z0-9._$-]*\b",
+        )
+        .expect("SCCM Windows identity regex must compile")
     })
 }
 
@@ -57,7 +63,14 @@ fn windows_user_path_identity_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
         Regex::new(
-            r"(?i)(?:^|[\\/])users[\\/](?P<identity>(?:NT AUTHORITY|[A-Z0-9][A-Z0-9._-]*|\.)\\[A-Z0-9][A-Z0-9._$-]*\b)",
+            r"(?ix)
+            (?:^|[\\/]+)
+            (?:users|profiles|home|documents[\x20_-]+and[\x20_-]+settings)
+            [\\/]+
+            (?P<identity>
+                (?:(?:NT[\x20]+AUTHORITY|[A-Z0-9][A-Z0-9._-]*|\.)[\\/]+)?
+                [A-Z0-9][A-Z0-9._$-]*\b
+            )",
         )
         .expect("SCCM Windows user-path identity regex must compile")
     })
@@ -76,11 +89,13 @@ fn email_identity_re() -> &'static Regex {
 /// codes and approved structured keys outside those values unchanged. It does
 /// not imply native collector validation.
 fn project_public_message_v1(raw: &str) -> String {
+    format!("[{PUBLIC_MESSAGE_PROFILE}] {}", project_public_text_v1(raw))
+}
+
+fn project_public_text_v1(raw: &str) -> String {
     let redacted = redact_sensitive_segments(raw);
     let identities_redacted = redact_windows_identities(&redacted);
-    let projected = redact_email_identities(&identities_redacted);
-
-    format!("[{PUBLIC_MESSAGE_PROFILE}] {projected}")
+    redact_email_identities(&identities_redacted)
 }
 
 fn redact_sensitive_segments(value: &str) -> String {
@@ -223,8 +238,8 @@ impl SccmRawEvidenceSnapshot {
             evidence_id: self.evidence_id.clone(),
             reference: self.reference.clone(),
             role: self.role.clone(),
-            component: self.component.clone(),
-            ccm_source_file: self.ccm_source_file.clone(),
+            component: self.component.as_deref().map(project_public_text_v1),
+            ccm_source_file: self.ccm_source_file.as_deref().map(project_public_text_v1),
             message: project_public_message_v1(&self.message),
             timestamp: self.timestamp.clone(),
             // Raw execution context remains available only to this

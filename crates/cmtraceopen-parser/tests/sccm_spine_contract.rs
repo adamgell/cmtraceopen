@@ -382,7 +382,7 @@ const REVIEW_UNRECOGNIZED_CONFIRMATION_REQUEST_REASONS: [&str; 10] = [
     "Confirm PolicyAgent.log for fetching credentials.",
 ];
 
-const REVIEW_PASSIVE_UNBOUNDED_CONFIRMATION_REASONS: [&str; 8] = [
+const REVIEW_PASSIVE_UNBOUNDED_CONFIRMATION_REASONS: [&str; 12] = [
     "Confirm all files are required for status in PolicyAgent.log.",
     "Confirm every file must be provided for download status in PolicyAgent.log.",
     "Confirm the whole disk is required for imaging status in Smsts.log.",
@@ -391,6 +391,10 @@ const REVIEW_PASSIVE_UNBOUNDED_CONFIRMATION_REASONS: [&str; 8] = [
     "Confirm Smsts.log imaging status must provide the full disk.",
     "Confirm PolicyAgent.log status must have all files provided.",
     "Confirm Smsts.log imaging status must have the full disk provided.",
+    "Confirm PolicyAgent.log status has all files provided.",
+    "Confirm PolicyAgent.log status has every file provided.",
+    "Confirm all files have provided status in PolicyAgent.log.",
+    "Confirm Smsts.log imaging status has the full disk provided.",
 ];
 
 const REVIEW_EXACT_MP_ARTIFACT_REQUESTS: [(&str, &str); 5] = [
@@ -2651,6 +2655,91 @@ fn finding_evidence_less_claims_are_rejected() {
 }
 
 #[test]
+fn finding_access_denied_coverage_only_cannot_substantiate_an_outcome_class() {
+    let canonical = SccmFindingBuilder::new("access-denied-insufficient-evidence")
+        .class(SccmFindingClass::InsufficientEvidence)
+        .phase(SccmPhase::Policy)
+        .role(SccmRole::Client)
+        .severity(Severity::Warning)
+        .confidence(SccmConfidence::Low)
+        .coverage_gap(finding_client_gap(
+            "client-policy-agent",
+            SccmCoverageState::AccessDenied,
+        ))
+        .next_artifact(finding_request(
+            "policyAgent",
+            SccmRole::Client,
+            "Policy evidence was not captured.",
+        ))
+        .build()
+        .unwrap();
+    let cases = [
+        (SccmFindingClass::Symptom, SccmConfidence::High, "symptom"),
+        (
+            SccmFindingClass::LikelyContributor,
+            SccmConfidence::Moderate,
+            "likelyContributor",
+        ),
+        (
+            SccmFindingClass::ConfirmedFailure,
+            SccmConfidence::Moderate,
+            "confirmedFailure",
+        ),
+        (
+            SccmFindingClass::BlockedOrDeferred,
+            SccmConfidence::Low,
+            "blockedOrDeferred",
+        ),
+    ];
+    let mut accepted = Vec::new();
+
+    for (class, confidence, label) in cases {
+        let builder = SccmFindingBuilder::new(format!("access-denied-builder-{label}"))
+            .class(class.clone())
+            .phase(SccmPhase::Policy)
+            .role(SccmRole::Client)
+            .severity(Severity::Warning)
+            .confidence(confidence)
+            .coverage_gap(finding_client_gap(
+                "client-policy-agent",
+                SccmCoverageState::AccessDenied,
+            ))
+            .next_artifact(finding_request(
+                "policyAgent",
+                SccmRole::Client,
+                "Policy evidence was not captured.",
+            ))
+            .build();
+        if builder.err() != Some(SccmFindingValidationError::MissingEvidenceOrCoverageGap) {
+            accepted.push(format!("builder: {label}"));
+        }
+
+        let mut direct = canonical.clone();
+        direct.class = class;
+        direct.confidence = confidence;
+        if direct.validate().err() != Some(SccmFindingValidationError::MissingEvidenceOrCoverageGap)
+        {
+            accepted.push(format!("direct validate: {label}"));
+        }
+        if serde_json::to_value(&direct).is_ok() {
+            accepted.push(format!("serializer: {label}"));
+        }
+
+        let mut json = serde_json::to_value(&canonical).unwrap();
+        json["class"] = serde_json::json!(label);
+        json["confidence"] = serde_json::to_value(direct.confidence).unwrap();
+        if serde_json::from_value::<SccmFinding>(json).is_ok() {
+            accepted.push(format!("deserializer: {label}"));
+        }
+    }
+
+    assert!(
+        accepted.is_empty(),
+        "coverage-only access denial substantiated outcome classes: {accepted:#?}"
+    );
+}
+
+#[test]
 fn finding_insufficient_evidence_requires_an_explicit_noncaptured_gap() {
     let request = finding_request(
         "policyAgent",
@@ -4707,6 +4796,50 @@ fn evidence_public_message_projection_redacts_path_adjacent_windows_identities()
     assert!(
         violations.is_empty(),
         "path-adjacent identity projection violations: {violations:#?}"
+    );
+}
+
+#[test]
+fn evidence_public_projection_redacts_identity_on_every_string_surface() {
+    let raw_message = r#"Profile C:\Profiles\LAB\SyntheticUser\profile.dat; Home \\server\home\LAB\SyntheticHomeUser\cache; Local C:\Profiles\.\LocalUser\profile.dat; account={"domain":"LAB","accountName":"SyntheticJsonUser"}; sam={"domain":"LAB","samAccountName":"SyntheticSamUser"}; localUser=LocalStructuredUser; status=71"#;
+    let text = format!(
+        r#"<![LOG[{raw_message}]LOG]!><time="10:00:00.000-240" date="07-30-2026" component="LAB\ComponentUser" context="" type="1" thread="42" file="LAB\FileUser">"#
+    );
+    let first = normalize_ccm_artifact(client_policy_artifact(), &text);
+    let second = normalize_ccm_artifact(client_policy_artifact(), &text);
+    let json = serde_json::to_string(&first).unwrap();
+    let evidence = &first[0];
+
+    assert_eq!(first, second);
+    for sensitive in [
+        "SyntheticUser",
+        "SyntheticHomeUser",
+        "LocalUser",
+        "SyntheticJsonUser",
+        "SyntheticSamUser",
+        "LocalStructuredUser",
+        "ComponentUser",
+        "FileUser",
+    ] {
+        assert_public_json_omits(&json, sensitive);
+    }
+    assert!(evidence.message.contains("status=71"));
+    assert!(evidence
+        .message
+        .contains("[redacted:sccm-public-message-v1]"));
+    assert!(
+        evidence
+            .component
+            .as_deref()
+            .is_some_and(|value| value.contains("[redacted:sccm-public-message-v1]")),
+        "component identity was not classified"
+    );
+    assert!(
+        evidence
+            .ccm_source_file
+            .as_deref()
+            .is_some_and(|value| value.contains("[redacted:sccm-public-message-v1]")),
+        "CCM source-file identity was not classified"
     );
 }
 

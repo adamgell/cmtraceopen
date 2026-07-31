@@ -413,7 +413,10 @@ impl SccmFinding {
             return Err(SccmFindingValidationError::MissingCoverageGap);
         }
 
-        if self.evidence.is_empty() && self.coverage_gaps.is_empty() {
+        if self.evidence.is_empty()
+            && (self.coverage_gaps.is_empty()
+                || self.class != SccmFindingClass::InsufficientEvidence)
+        {
             return Err(SccmFindingValidationError::MissingEvidenceOrCoverageGap);
         }
 
@@ -1580,6 +1583,9 @@ fn is_passive_auxiliary(token: &str) -> bool {
             | "be"
             | "been"
             | "being"
+            | "had"
+            | "has"
+            | "have"
             | "is"
             | "must"
             | "need"
