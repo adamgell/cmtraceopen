@@ -114,7 +114,10 @@ The outcome rules are conservative:
   source-local observations whose classification is bound to exact physical
   role, capture state, lineage, rotation kind, and fragment completeness;
   every source-local artifact ID is a nonempty typed string bound to that
-  physical manifest; and
+  physical manifest, and every source-local observation cites a nonempty
+  closed array of exact physical artifact/line ranges. A raw physical citation
+  does not make a fragment or malformed record transaction- or
+  correlation-eligible; and
 - a client-only download record cannot become a DP transaction or DP failure.
 
 ## Coverage and request contract

@@ -13,8 +13,8 @@
   ],
   "transactions": [],
   "sourceLocalObservations": [
-    {"observationId": "rotation-01-split", "classification": "rotationSplit", "confidence": "low", "confidenceCeiling": "low", "correlationEligible": false, "artifactIds": ["dp-rotation-01-current-fragment", "dp-rotation-02-lo-fragment"], "evidence": []},
-    {"observationId": "rotation-02-malformed", "classification": "malformedEvidence", "confidence": "low", "confidenceCeiling": "low", "correlationEligible": false, "artifactIds": ["dp-rotation-03-malformed"], "evidence": []}
+    {"observationId": "rotation-01-split", "classification": "rotationSplit", "confidence": "low", "confidenceCeiling": "low", "correlationEligible": false, "artifactIds": ["dp-rotation-01-current-fragment", "dp-rotation-02-lo-fragment"], "evidence": [{"artifactId": "dp-rotation-01-current-fragment", "startLine": 1, "endLine": 1}, {"artifactId": "dp-rotation-02-lo-fragment", "startLine": 1, "endLine": 1}]},
+    {"observationId": "rotation-02-malformed", "classification": "malformedEvidence", "confidence": "low", "confidenceCeiling": "low", "correlationEligible": false, "artifactIds": ["dp-rotation-03-malformed"], "evidence": [{"artifactId": "dp-rotation-03-malformed", "startLine": 1, "endLine": 1}]}
   ],
   "artifactRequests": [
     {"sourceId": "server-dp-distribution", "reasonCode": "coverageMalformed"},

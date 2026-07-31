@@ -204,6 +204,7 @@ struct ParsedArtifact {
 struct ParsedScenario {
     artifacts: BTreeMap<String, ParsedArtifact>,
     evidence: BTreeMap<(String, u32, u32), SccmEvidence>,
+    physical_evidence: BTreeSet<(String, u32, u32)>,
     distribution_point_handles: BTreeSet<String>,
 }
 
@@ -479,6 +480,7 @@ fn validate_manifest(
 
     let mut parsed_artifacts = BTreeMap::new();
     let mut evidence_by_reference = BTreeMap::new();
+    let mut physical_evidence_by_reference = BTreeSet::new();
     let mut relative_paths = BTreeSet::new();
     let mut physical_source_identities = BTreeSet::new();
     let mut path_fingerprints = BTreeSet::new();
@@ -744,11 +746,24 @@ fn validate_manifest(
                     "{artifact_id} has incoherent raw-byte collection-limit provenance"
                 ));
             }
-            if !String::from_utf8_lossy(&bytes).contains("SYNTHETIC FIXTURE") {
+            let content = String::from_utf8_lossy(&bytes);
+            if !content.contains("SYNTHETIC FIXTURE") {
                 failures.push(format!("{artifact_id} lacks a synthetic fixture marker"));
             }
+            for (line_index, _) in content.lines().enumerate() {
+                let Ok(line_number) = u32::try_from(line_index + 1) else {
+                    failures.push(format!(
+                        "{artifact_id} has more physical lines than an evidence reference can address"
+                    ));
+                    break;
+                };
+                physical_evidence_by_reference.insert((
+                    artifact_id.to_owned(),
+                    line_number,
+                    line_number,
+                ));
+            }
             if matches!(state, "captured" | "capped") {
-                let content = String::from_utf8_lossy(&bytes);
                 let artifact_model = SccmArtifact {
                     artifact_id: artifact_id.to_owned(),
                     display_name: basename.to_owned(),
@@ -887,6 +902,7 @@ fn validate_manifest(
         Ok(ParsedScenario {
             artifacts: parsed_artifacts,
             evidence: evidence_by_reference,
+            physical_evidence: physical_evidence_by_reference,
             distribution_point_handles,
         })
     } else {
@@ -906,6 +922,22 @@ fn evidence_for<'a>(
             key.0, key.1, key.2
         )
     })
+}
+
+fn physical_evidence_for(
+    parsed: &ParsedScenario,
+    reference: &Value,
+    context: &str,
+) -> Result<(), String> {
+    let key = evidence_reference_key(reference, context)?;
+    if parsed.physical_evidence.contains(&key) {
+        Ok(())
+    } else {
+        Err(format!(
+            "{context} does not cite an exact physical line: {}:{}-{}",
+            key.0, key.1, key.2
+        ))
+    }
 }
 
 fn evidence_reference_key(reference: &Value, context: &str) -> Result<(String, u32, u32), String> {
@@ -1529,10 +1561,19 @@ fn validate_expected(
                 ));
             }
         }
-        let references = observation["evidence"]
-            .as_array()
-            .map(Vec::as_slice)
-            .unwrap_or_default();
+        let references = match required_array(observation, "evidence", observation_id) {
+            Ok(values) if !values.is_empty() => values,
+            Ok(_) => {
+                failures.push(format!(
+                    "{observation_id} has no cited physical source-local evidence"
+                ));
+                &[]
+            }
+            Err(error) => {
+                failures.push(error);
+                &[]
+            }
+        };
         let mut cited_artifact_ids = BTreeSet::new();
         for reference in references {
             reject_unknown_fields(
@@ -1560,7 +1601,7 @@ fn validate_expected(
                     "{observation_id} consumes one physical evidence reference more than once"
                 ));
             }
-            if let Err(error) = evidence_for(parsed, reference, observation_id) {
+            if let Err(error) = physical_evidence_for(parsed, reference, observation_id) {
                 failures.push(error);
             }
         }
@@ -1570,8 +1611,7 @@ fn validate_expected(
             .collect::<Vec<_>>();
         let semantic_match = match classification {
             Some("ignoredClientEvidence") => {
-                !references.is_empty()
-                    && cited_artifact_ids == unique_artifact_ids
+                cited_artifact_ids == unique_artifact_ids
                     && artifacts.iter().all(|artifact| {
                         artifact.role == "client"
                             && artifact.source_id == "client-content-control"
@@ -1591,7 +1631,7 @@ fn validate_expected(
                     .iter()
                     .map(|artifact| artifact.rotation_kind.as_str())
                     .collect::<BTreeSet<_>>();
-                references.is_empty()
+                cited_artifact_ids == unique_artifact_ids
                     && artifacts.len() >= 2
                     && source_ids.len() == 1
                     && lineages.len() == 1
@@ -1604,7 +1644,7 @@ fn validate_expected(
                     })
             }
             Some("malformedEvidence") => {
-                references.is_empty()
+                cited_artifact_ids == unique_artifact_ids
                     && !artifacts.is_empty()
                     && artifacts.iter().all(|artifact| {
                         artifact.role != "client" && artifact.state == "parseFailed"
@@ -2533,6 +2573,146 @@ fn source_local_artifact_ids_are_strict_strings_across_classifications() {
     assert!(
         accepted.is_empty(),
         "malformed source-local physical artifact IDs were accepted: {accepted:?}"
+    );
+}
+
+#[test]
+fn source_local_evidence_is_typed_nonempty_closed_and_physical() {
+    let client_manifest =
+        read_json("client-only-looking-request", "manifest.json").expect("manifest loads");
+    let client_expected =
+        read_json("client-only-looking-request", "expected.json").expect("expected loads");
+    let rotation_manifest =
+        read_json("rotation-boundary", "manifest.json").expect("manifest loads");
+    let rotation_expected =
+        read_json("rotation-boundary", "expected.json").expect("expected loads");
+    let surfaces = [
+        (
+            "ignoredClientEvidence",
+            "client-only-looking-request",
+            &client_manifest,
+            &client_expected,
+            0usize,
+            json!([{
+                "artifactId": "dp-client-control-01-data-transfer",
+                "startLine": 1,
+                "endLine": 1
+            }]),
+        ),
+        (
+            "rotationSplit",
+            "rotation-boundary",
+            &rotation_manifest,
+            &rotation_expected,
+            0usize,
+            json!([
+                {
+                    "artifactId": "dp-rotation-01-current-fragment",
+                    "startLine": 1,
+                    "endLine": 1
+                },
+                {
+                    "artifactId": "dp-rotation-02-lo-fragment",
+                    "startLine": 1,
+                    "endLine": 1
+                }
+            ]),
+        ),
+        (
+            "malformedEvidence",
+            "rotation-boundary",
+            &rotation_manifest,
+            &rotation_expected,
+            1usize,
+            json!([{
+                "artifactId": "dp-rotation-03-malformed",
+                "startLine": 1,
+                "endLine": 1
+            }]),
+        ),
+    ];
+    let non_array_shapes = [
+        ("null", Value::Null),
+        ("boolean", json!(true)),
+        ("numeric", json!(7)),
+        ("string", json!("not-an-evidence-array")),
+        ("object", json!({"unexpected": "value"})),
+    ];
+    let mut accepted = Vec::new();
+
+    for (surface, scenario, manifest, expected, observation_index, valid_evidence) in surfaces {
+        for (shape, invalid_evidence) in &non_array_shapes {
+            let mut mutated = expected.clone();
+            mutated["sourceLocalObservations"][observation_index]["evidence"] =
+                invalid_evidence.clone();
+            if mutation_was_accepted(scenario, manifest, &mutated) {
+                accepted.push(format!("{surface} accepted {shape} evidence"));
+            }
+        }
+
+        let mut empty = expected.clone();
+        empty["sourceLocalObservations"][observation_index]["evidence"] = json!([]);
+        if mutation_was_accepted(scenario, manifest, &empty) {
+            accepted.push(format!("{surface} accepted an empty evidence array"));
+        }
+
+        let mut mixed = expected.clone();
+        let mut mixed_entries = valid_evidence
+            .as_array()
+            .expect("valid source-local evidence is an array")
+            .clone();
+        mixed_entries.extend([
+            Value::Null,
+            json!(true),
+            json!(7),
+            json!("not-an-evidence-reference"),
+            json!({"unexpected": "value"}),
+        ]);
+        mixed["sourceLocalObservations"][observation_index]["evidence"] =
+            Value::Array(mixed_entries);
+        if mutation_was_accepted(scenario, manifest, &mixed) {
+            accepted.push(format!("{surface} accepted a mixed evidence array"));
+        }
+
+        let mut open_reference = expected.clone();
+        open_reference["sourceLocalObservations"][observation_index]["evidence"] =
+            valid_evidence.clone();
+        open_reference["sourceLocalObservations"][observation_index]["evidence"][0]["unexpected"] =
+            json!("value");
+        if mutation_was_accepted(scenario, manifest, &open_reference) {
+            accepted.push(format!(
+                "{surface} accepted an open evidence-reference object"
+            ));
+        }
+
+        let mut missing_line = expected.clone();
+        missing_line["sourceLocalObservations"][observation_index]["evidence"] =
+            valid_evidence.clone();
+        missing_line["sourceLocalObservations"][observation_index]["evidence"][0]
+            .as_object_mut()
+            .expect("evidence reference is an object")
+            .remove("endLine");
+        if mutation_was_accepted(scenario, manifest, &missing_line) {
+            accepted.push(format!(
+                "{surface} accepted an incomplete evidence reference"
+            ));
+        }
+
+        let mut unbound_line = expected.clone();
+        unbound_line["sourceLocalObservations"][observation_index]["evidence"] =
+            valid_evidence.clone();
+        unbound_line["sourceLocalObservations"][observation_index]["evidence"][0]["startLine"] =
+            json!(99);
+        unbound_line["sourceLocalObservations"][observation_index]["evidence"][0]["endLine"] =
+            json!(99);
+        if mutation_was_accepted(scenario, manifest, &unbound_line) {
+            accepted.push(format!("{surface} accepted an unbound physical line"));
+        }
+    }
+
+    assert!(
+        accepted.is_empty(),
+        "malformed source-local evidence was accepted: {accepted:?}"
     );
 }
 

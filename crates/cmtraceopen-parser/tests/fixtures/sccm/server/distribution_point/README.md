@@ -19,6 +19,9 @@ exact DP/content/version identity from each normalized logical CCM record.
 - Rotation lineage/fragment fields, observation IDs, evidence references, and
   coverage-gap IDs fail closed on malformed, empty, duplicate, or reused
   values.
+- Every source-local observation cites a nonempty closed array of exact raw
+  physical artifact/line ranges. Citing a fragment or malformed raw line does
+  not promote it to a logical transaction or make it correlation-eligible.
 - Missing, denied, malformed, capped, or split evidence is coverage only.
 - Client records and timestamps alone never establish a DP transaction or
   cross-side cause.
