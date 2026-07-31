@@ -1,7 +1,11 @@
-use cmtraceopen_parser::models::log_entry::LogFormat;
+use cmtraceopen_parser::sccm::{
+    normalize_ccm_artifact, SccmArtifact, SccmCoverageState, SccmRole, SccmRotation,
+    SccmTimeOrderingState, SccmTimestamp, SccmUnknownRotation,
+};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 const INVENTORY_SCENARIOS: [&str; 6] = [
     "coverage-states",
@@ -314,6 +318,91 @@ fn walk_files(root: &Path) -> Result<Vec<PathBuf>, String> {
     Ok(files)
 }
 
+static TEMP_SCENARIO_SEQUENCE: AtomicUsize = AtomicUsize::new(0);
+
+struct TemporaryScenario {
+    root: PathBuf,
+}
+
+impl TemporaryScenario {
+    fn copy_from(source: &Path, label: &str) -> Self {
+        let sequence = TEMP_SCENARIO_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!(
+            "cmtraceopen-sccm-325-{}-{sequence}-{label}",
+            std::process::id()
+        ));
+        std::fs::create_dir(&root)
+            .unwrap_or_else(|error| panic!("{} can be created: {error}", root.display()));
+
+        for source_file in walk_files(source).expect("source scenario is readable") {
+            let relative = source_file
+                .strip_prefix(source)
+                .expect("scenario file is below source root");
+            let destination = root.join(relative);
+            std::fs::create_dir_all(
+                destination
+                    .parent()
+                    .expect("scenario copy destination has a parent"),
+            )
+            .expect("scenario copy parent can be created");
+            std::fs::copy(&source_file, &destination).unwrap_or_else(|error| {
+                panic!(
+                    "{} can be copied to {}: {error}",
+                    source_file.display(),
+                    destination.display()
+                )
+            });
+        }
+
+        Self { root }
+    }
+}
+
+impl Drop for TemporaryScenario {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.root);
+    }
+}
+
+fn rewrite_artifact_evidence(
+    scenario_root: &Path,
+    manifest: &mut Value,
+    artifact_index: usize,
+    contents: &str,
+) {
+    let artifact = &mut manifest["artifacts"][artifact_index];
+    let relative_path = artifact["relativePath"]
+        .as_str()
+        .expect("rewritten artifact has a relativePath");
+    std::fs::write(scenario_root.join(relative_path), contents)
+        .expect("temporary evidence can be rewritten");
+    artifact["bytesCopied"] = json!(contents.len() as u64);
+}
+
+fn copied_inventory_recovery_with_time_replacements(
+    label: &str,
+    replacements: &[(&str, &str)],
+) -> (TemporaryScenario, Value, Value) {
+    let (source_root, mut manifest, expected) =
+        load_contract("inventory", "recovery-contradictory");
+    let temporary = TemporaryScenario::copy_from(&source_root, label);
+    let relative_path = manifest["artifacts"][0]["relativePath"]
+        .as_str()
+        .expect("recovery artifact has a relativePath");
+    let mut contents = std::fs::read_to_string(temporary.root.join(relative_path))
+        .expect("temporary recovery evidence is readable");
+    for (from, to) in replacements {
+        assert!(
+            contents.contains(from),
+            "recovery fixture contains replacement source {from}"
+        );
+        contents = contents.replace(from, to);
+    }
+    rewrite_artifact_evidence(&temporary.root, &mut manifest, 0, &contents);
+    manifest["artifacts"][0]["capturedUtc"] = json!("2026-07-30T11:00:00Z");
+    (temporary, manifest, expected)
+}
+
 fn validate_relative_path(relative_path: &str, artifact_id: &str) -> Result<(), String> {
     let path = Path::new(relative_path);
     if path.is_absolute()
@@ -400,11 +489,96 @@ fn validate_next_artifact(
     Ok(())
 }
 
+fn expected_next_artifact(
+    family: &str,
+    phase: &str,
+    classification: &str,
+) -> Result<Option<Value>, String> {
+    if classification != "confirmedFailure" {
+        return Ok(None);
+    }
+
+    let source_basename = match (family, phase) {
+        ("inventory", "Collect") => "InventoryAgent.log",
+        ("inventory", "Provider" | "Serialize") => "InventoryProvider.log",
+        ("inventory", "Queue" | "Report") => "InventoryAgentProvider.log",
+        ("compliance", "Evaluate") => "CIAgent.log",
+        ("compliance", "Remediate") => "DCMAgent.log",
+        ("compliance", "Report") => "DCMReporting.log",
+        ("metering", "Collect" | "Aggregate" | "Report") => "SWMTRReportGen.log",
+        _ => {
+            return Err(format!(
+                "no bounded nextArtifact contract for {family}/{phase}"
+            ))
+        }
+    };
+
+    Ok(Some(json!({
+        "logicalArtifactId": expected_logical_artifact(family)?,
+        "sourceBasename": source_basename,
+        "reason": format!(
+            "Inspect the same exact {family} key in this admitted {family} source."
+        )
+    })))
+}
+
+fn expected_last_successful_phase(
+    family: &str,
+    phase: &str,
+    classification: &str,
+) -> Result<Option<&'static str>, String> {
+    let phases = admitted_phases(family)?;
+    let phase_index = phases
+        .iter()
+        .position(|candidate| *candidate == phase)
+        .ok_or_else(|| format!("{family} phase {phase} is not admitted"))?;
+
+    match classification {
+        "confirmedFailure" => Ok(phase_index.checked_sub(1).map(|index| phases[index])),
+        "success" | "recovery" | "evaluationResult" => Ok(Some(phases[phase_index])),
+        "symptom" => Ok(None),
+        other => Err(format!(
+            "{family}/{phase} has unsupported last-success classification {other}"
+        )),
+    }
+}
+
+fn additive_artifact(artifact: &Value) -> Result<SccmArtifact, String> {
+    let artifact_id = required_string(artifact, "artifactId", "artifact")?;
+    let rotation = match required_string(&artifact["rotation"], "kind", artifact_id)? {
+        "current" => SccmRotation::Current,
+        "lo" => SccmRotation::Unknown(SccmUnknownRotation {
+            kind: "lo".to_owned(),
+            value: None,
+        }),
+        other => return Err(format!("{artifact_id} has unsupported rotation {other}")),
+    };
+
+    Ok(SccmArtifact {
+        artifact_id: artifact_id.to_owned(),
+        display_name: required_string(artifact, "originalBasename", artifact_id)?.to_owned(),
+        original_path: artifact["sanitizedSourcePath"].as_str().map(str::to_owned),
+        host: Some("LAB-CLIENT-01".to_owned()),
+        role: SccmRole::Client,
+        configmgr_version: artifact["sourceVersion"].as_str().map(str::to_owned),
+        collected_at_utc: artifact["capturedUtc"].as_str().map(str::to_owned),
+        rotation,
+        coverage: SccmCoverageState::Captured,
+        encoding: artifact["encoding"].as_str().map(str::to_owned),
+    })
+}
+
+struct CitedEvidenceRecord {
+    raw_record: String,
+    source_version: String,
+    timestamp: SccmTimestamp,
+}
+
 fn evidence_record_texts(
     scenario_root: &Path,
     artifacts_by_id: &BTreeMap<String, &Value>,
     evidence_refs: &[Value],
-) -> Result<Vec<(String, i32, String, i64)>, String> {
+) -> Result<Vec<CitedEvidenceRecord>, String> {
     let mut records = Vec::new();
     for evidence_ref in evidence_refs {
         let artifact_id = required_string(evidence_ref, "artifactId", "evidence reference")?;
@@ -419,6 +593,11 @@ fn evidence_record_texts(
         let relative_path = required_string(artifact, "relativePath", artifact_id)?;
         let contents = std::fs::read_to_string(scenario_root.join(relative_path))
             .map_err(|error| format!("{artifact_id} evidence is readable: {error}"))?;
+        let additive_artifact = additive_artifact(artifact)?;
+        let captured_utc = required_string(artifact, "capturedUtc", artifact_id)?;
+        let captured_utc_millis = chrono::DateTime::parse_from_rfc3339(captured_utc)
+            .map_err(|error| format!("{artifact_id} capturedUtc is invalid: {error}"))?
+            .timestamp_millis();
         let lines = contents.lines().collect::<Vec<_>>();
         let start = evidence_ref["startLine"]
             .as_u64()
@@ -435,34 +614,41 @@ fn evidence_record_texts(
             ));
         }
         for (offset, line) in lines[start - 1..end].iter().enumerate() {
-            let (entries, errors) =
-                cmtraceopen_parser::parser::ccm::parse_content(line, artifact_id, None);
-            if errors != 0
-                || entries.len() != 1
-                || entries[0].format != LogFormat::Ccm
-                || entries[0].line_number != 1
+            let normalized = normalize_ccm_artifact(additive_artifact.clone(), line);
+            if normalized.len() != 1
+                || normalized[0].reference.line_start != Some(1)
+                || normalized[0].reference.line_end != Some(1)
             {
                 return Err(format!(
                     "{artifact_id}:{} is not one complete CCM record",
                     start + offset
                 ));
             }
-            let offset_minutes = entries[0]
-                .timezone_offset
-                .ok_or_else(|| format!("{artifact_id}:{} has no source offset", start + offset))?;
-            let timestamp = entries[0].timestamp.ok_or_else(|| {
-                format!(
-                    "{artifact_id}:{} has no usable source timestamp",
+            let timestamp = normalized[0].timestamp.clone();
+            let Some(utc_millis) = timestamp.utc_millis else {
+                return Err(format!(
+                    "{artifact_id}:{} lacks normalized additive SCCM timestamp provenance",
                     start + offset
-                )
-            })?;
+                ));
+            };
+            if timestamp.ordering_state != SccmTimeOrderingState::NormalizedUtc {
+                return Err(format!(
+                    "{artifact_id}:{} lacks normalized additive SCCM timestamp provenance",
+                    start + offset
+                ));
+            }
+            if utc_millis > captured_utc_millis {
+                return Err(format!(
+                    "{artifact_id}:{} complete cited timestamp is after capturedUtc",
+                    start + offset
+                ));
+            }
             let source_version = required_string(artifact, "sourceVersion", artifact_id)?;
-            records.push((
-                (*line).to_owned(),
-                offset_minutes,
-                source_version.to_owned(),
+            records.push(CitedEvidenceRecord {
+                raw_record: (*line).to_owned(),
+                source_version: source_version.to_owned(),
                 timestamp,
-            ));
+            });
         }
     }
     Ok(records)
@@ -671,12 +857,9 @@ fn validate_contract(
 
             if capture_state == "captured" && artifact["rotation"]["fragmentComplete"] == true {
                 let contents = std::str::from_utf8(&bytes).expect("validated UTF-8");
-                let (entries, _) =
-                    cmtraceopen_parser::parser::ccm::parse_content(contents, artifact_id, None);
-                if entries.iter().any(|entry| {
-                    entry
-                        .timezone_offset
-                        .is_some_and(|offset| offset.abs() > 1_439)
+                let evidence = normalize_ccm_artifact(additive_artifact(artifact)?, contents);
+                if evidence.iter().any(|record| {
+                    record.timestamp.ordering_state == SccmTimeOrderingState::OffsetInvalid
                 }) {
                     invalid_offset_artifacts.insert(artifact_id.to_owned());
                 }
@@ -942,17 +1125,21 @@ fn validate_contract(
                 "{transaction_id} has invalid {family} phase {phase}"
             ));
         }
-        if let Some(last_phase) = transaction["lastSuccessfulPhase"].as_str() {
-            if !phases.contains(&last_phase) {
+        let last_successful_phase =
+            if let Some(last_phase) = transaction["lastSuccessfulPhase"].as_str() {
+                if !phases.contains(&last_phase) {
+                    return Err(format!(
+                        "{transaction_id} lastSuccessfulPhase {last_phase} is invalid"
+                    ));
+                }
+                Some(last_phase)
+            } else if !transaction["lastSuccessfulPhase"].is_null() {
                 return Err(format!(
-                    "{transaction_id} lastSuccessfulPhase {last_phase} is invalid"
+                    "{transaction_id} lastSuccessfulPhase is neither string nor null"
                 ));
-            }
-        } else if !transaction["lastSuccessfulPhase"].is_null() {
-            return Err(format!(
-                "{transaction_id} lastSuccessfulPhase is neither string nor null"
-            ));
-        }
+            } else {
+                None
+            };
         let evidence_refs = transaction["evidence"]
             .as_array()
             .ok_or_else(|| format!("{transaction_id} evidence is not an array"))?;
@@ -960,10 +1147,10 @@ fn validate_contract(
             return Err(format!("{transaction_id} has no cited evidence"));
         }
         let records = evidence_record_texts(scenario_root, &artifacts_by_id, evidence_refs)?;
-        for (record, _, _, _) in &records {
+        for record in &records {
             for field in required_fields {
                 let value = key[*field].as_str().expect("validated key string");
-                if !record_contains_exact_key_pair(record, field, value) {
+                if !record_contains_exact_key_pair(&record.raw_record, field, value) {
                     return Err(format!(
                         "{transaction_id} {field} is not co-located in every cited CCM record"
                     ));
@@ -972,7 +1159,7 @@ fn validate_contract(
         }
         if !records
             .iter()
-            .any(|(record, _, _, _)| record_contains_exact_key_pair(record, "Phase", phase))
+            .any(|record| record_contains_exact_key_pair(&record.raw_record, "Phase", phase))
         {
             return Err(format!(
                 "{transaction_id} phase {phase} is not bound to cited evidence"
@@ -980,21 +1167,33 @@ fn validate_contract(
         }
 
         let confidence = required_string(transaction, "confidence", transaction_id)?;
-        if records.iter().any(|(_, offset, version, _)| {
-            offset.abs() > 1_439 || !version.starts_with("5.00.TEST.")
-        }) {
+        if records
+            .iter()
+            .any(|record| !record.source_version.starts_with("5.00.TEST."))
+        {
             return Err(format!(
-                "{transaction_id} exact-key transaction lacks usable offset/profile provenance"
+                "{transaction_id} exact-key transaction lacks selected profile provenance"
             ));
         }
         let state = required_string(transaction, "state", transaction_id)?;
         let classification = required_string(transaction, "classification", transaction_id)?;
+        let expected_last_successful_phase =
+            expected_last_successful_phase(family, phase, classification)?;
+        if last_successful_phase != expected_last_successful_phase {
+            return Err(format!(
+                "{transaction_id} lastSuccessfulPhase {last_successful_phase:?} != required {expected_last_successful_phase:?}"
+            ));
+        }
         let has_phase_record = |disposition: &str, terminal: bool| {
-            records.iter().any(|(record, _, _, _)| {
-                record_contains_exact_key_pair(record, "Phase", phase)
-                    && record_contains_exact_key_pair(record, "Disposition", disposition)
+            records.iter().any(|record| {
+                record_contains_exact_key_pair(&record.raw_record, "Phase", phase)
                     && record_contains_exact_key_pair(
-                        record,
+                        &record.raw_record,
+                        "Disposition",
+                        disposition,
+                    )
+                    && record_contains_exact_key_pair(
+                        &record.raw_record,
                         "Terminal",
                         if terminal { "true" } else { "false" },
                     )
@@ -1002,12 +1201,12 @@ fn validate_contract(
         };
         let terminal_dispositions = records
             .iter()
-            .filter(|(record, _, _, _)| {
-                record_contains_exact_key_pair(record, "Phase", phase)
-                    && record_contains_exact_key_pair(record, "Terminal", "true")
+            .filter(|record| {
+                record_contains_exact_key_pair(&record.raw_record, "Phase", phase)
+                    && record_contains_exact_key_pair(&record.raw_record, "Terminal", "true")
             })
-            .flat_map(|(record, _, _, _)| {
-                record_exact_token_values(record, "Disposition")
+            .flat_map(|record| {
+                record_exact_token_values(&record.raw_record, "Disposition")
                     .into_iter()
                     .map(str::to_owned)
             })
@@ -1051,8 +1250,12 @@ fn validate_contract(
                     || phase != "Evaluate"
                     || confidence != "high"
                     || !has_phase_record(disposition, true)
-                    || !records.iter().any(|(record, _, _, _)| {
-                        record_contains_exact_key_pair(record, "ResultType", "Evaluation")
+                    || !records.iter().any(|record| {
+                        record_contains_exact_key_pair(
+                            &record.raw_record,
+                            "ResultType",
+                            "Evaluation",
+                        )
                     })
                 {
                     return Err(format!(
@@ -1072,22 +1275,48 @@ fn validate_contract(
                 }
                 let latest_failure = records
                     .iter()
-                    .filter(|(record, _, _, _)| {
-                        record_contains_exact_key_pair(record, "Phase", phase)
-                            && record_contains_exact_key_pair(record, "Disposition", "Failed")
-                            && record_contains_exact_key_pair(record, "Terminal", "true")
+                    .filter(|record| {
+                        record_contains_exact_key_pair(&record.raw_record, "Phase", phase)
+                            && record_contains_exact_key_pair(
+                                &record.raw_record,
+                                "Disposition",
+                                "Failed",
+                            )
+                            && record_contains_exact_key_pair(
+                                &record.raw_record,
+                                "Terminal",
+                                "true",
+                            )
                     })
-                    .map(|(_, _, _, timestamp)| *timestamp)
+                    .map(|record| {
+                        record
+                            .timestamp
+                            .utc_millis
+                            .expect("normalized timestamp checked during evidence loading")
+                    })
                     .max()
                     .expect("terminal failure checked above");
                 let earliest_success = records
                     .iter()
-                    .filter(|(record, _, _, _)| {
-                        record_contains_exact_key_pair(record, "Phase", phase)
-                            && record_contains_exact_key_pair(record, "Disposition", "Succeeded")
-                            && record_contains_exact_key_pair(record, "Terminal", "true")
+                    .filter(|record| {
+                        record_contains_exact_key_pair(&record.raw_record, "Phase", phase)
+                            && record_contains_exact_key_pair(
+                                &record.raw_record,
+                                "Disposition",
+                                "Succeeded",
+                            )
+                            && record_contains_exact_key_pair(
+                                &record.raw_record,
+                                "Terminal",
+                                "true",
+                            )
                     })
-                    .map(|(_, _, _, timestamp)| *timestamp)
+                    .map(|record| {
+                        record
+                            .timestamp
+                            .utc_millis
+                            .expect("normalized timestamp checked during evidence loading")
+                    })
                     .min()
                     .expect("terminal success checked above");
                 if earliest_success <= latest_failure {
@@ -1135,6 +1364,22 @@ fn validate_contract(
             }
         }
         validate_next_artifact(family, transaction_id, &transaction["nextArtifact"])?;
+        let required_next_artifact = expected_next_artifact(family, phase, classification)?;
+        match (
+            required_next_artifact,
+            transaction["nextArtifact"].is_null(),
+        ) {
+            (Some(_), true) => {
+                return Err(format!("{transaction_id} erased required nextArtifact"))
+            }
+            (None, false) => return Err(format!("{transaction_id} has spurious nextArtifact")),
+            (Some(required), false) if transaction["nextArtifact"] != required => {
+                return Err(format!(
+                    "{transaction_id} nextArtifact differs from required bounded request"
+                ))
+            }
+            _ => {}
+        }
     }
     if scenario_semantics != required_scenario_semantics(family, scenario)? {
         return Err(format!(
@@ -1459,6 +1704,188 @@ fn review_blocker_missing_capture_timestamp_is_rejected() {
 }
 
 #[test]
+fn independent_review_blocker_cited_timestamp_cannot_follow_capture() {
+    let (scenario_root, mut manifest, expected) = load_contract("inventory", "success");
+    for artifact in manifest["artifacts"]
+        .as_array_mut()
+        .expect("manifest artifacts are an array")
+    {
+        artifact["capturedUtc"] = json!("2026-07-30T00:00:00Z");
+    }
+    assert_rejected_with(
+        "complete cited record after capture",
+        "inventory",
+        "success",
+        &scenario_root,
+        &manifest,
+        &expected,
+        "after capturedUtc",
+    );
+}
+
+#[test]
+fn independent_review_blocker_failed_scenarios_require_exact_next_artifacts() {
+    let mut failures = Vec::new();
+    for family in ["inventory", "compliance", "metering"] {
+        let (scenario_root, manifest, expected) = load_contract(family, "terminal-failures");
+        for transaction_index in 0..expected["transactions"]
+            .as_array()
+            .expect("transactions are an array")
+            .len()
+        {
+            let phase = expected["transactions"][transaction_index]["phase"]
+                .as_str()
+                .expect("phase is a string");
+            let mut mutated = expected.clone();
+            mutated["transactions"][transaction_index]["nextArtifact"] = Value::Null;
+            match validate_contract(
+                family,
+                "terminal-failures",
+                &scenario_root,
+                &manifest,
+                &mutated,
+            ) {
+                Err(error) if error.contains("required nextArtifact") => {}
+                Err(error) => failures.push(format!("{family}/{phase}: wrong rejection: {error}")),
+                Ok(()) => failures.push(format!("{family}/{phase}: erased request was accepted")),
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn independent_review_blocker_nonfailures_reject_spurious_next_artifacts() {
+    let mut failures = Vec::new();
+    for (family, scenario) in [
+        ("inventory", "success"),
+        ("inventory", "recovery-contradictory"),
+        ("inventory", "same-minute-collision"),
+        ("compliance", "success"),
+        ("compliance", "noncompliant-result"),
+        ("compliance", "remediation-success"),
+        ("compliance", "recovery-contradictory"),
+        ("compliance", "same-minute-collision"),
+        ("metering", "success"),
+        ("metering", "recovery-contradictory"),
+        ("metering", "same-minute-collision"),
+    ] {
+        let (scenario_root, manifest, expected) = load_contract(family, scenario);
+        for transaction_index in 0..expected["transactions"]
+            .as_array()
+            .expect("transactions are an array")
+            .len()
+        {
+            let transaction_id = expected["transactions"][transaction_index]["transactionId"]
+                .as_str()
+                .expect("transactionId is a string");
+            let mut mutated = expected.clone();
+            mutated["transactions"][transaction_index]["nextArtifact"] = json!({
+                "logicalArtifactId": expected_logical_artifact(family).expect("known family"),
+                "sourceBasename": admitted_sources(family).expect("known family")[0],
+                "reason": "Inspect the same exact key in this admitted workflow source."
+            });
+            match validate_contract(family, scenario, &scenario_root, &manifest, &mutated) {
+                Err(error) if error.contains("spurious nextArtifact") => {}
+                Err(error) => failures.push(format!("{transaction_id}: wrong rejection: {error}")),
+                Ok(()) => failures.push(format!("{transaction_id}: spurious request was accepted")),
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn independent_review_blocker_last_success_respects_family_phase_order() {
+    let (scenario_root, manifest, mut expected) = load_contract("inventory", "terminal-failures");
+    expected["transactions"][0]["lastSuccessfulPhase"] = json!("Report");
+    assert_rejected_with(
+        "Collect failure claims later Report success",
+        "inventory",
+        "terminal-failures",
+        &scenario_root,
+        &manifest,
+        &expected,
+        "lastSuccessfulPhase",
+    );
+}
+
+#[test]
+fn independent_review_blocker_recovery_uses_additive_signless_offset_ordering() {
+    let (temporary, manifest, expected) = copied_inventory_recovery_with_time_replacements(
+        "signless-offset",
+        &[
+            ("time=\"01:20:00.000+000\"", "time=\"10:00:00.000240\""),
+            ("time=\"01:20:01.000+000\"", "time=\"07:00:00.000+000\""),
+        ],
+    );
+    validate_contract(
+        "inventory",
+        "recovery-contradictory",
+        &temporary.root,
+        &manifest,
+        &expected,
+    )
+    .unwrap_or_else(|error| {
+        panic!("valid signless +240 SCCM provenance must order recovery: {error}")
+    });
+}
+
+#[test]
+fn independent_review_blocker_missing_additive_timestamp_provenance_is_rejected() {
+    let (temporary, manifest, expected) = copied_inventory_recovery_with_time_replacements(
+        "missing-offset",
+        &[
+            ("time=\"01:20:00.000+000\"", "time=\"06:00:00.0001234\""),
+            ("time=\"01:20:01.000+000\"", "time=\"07:00:00.000+000\""),
+        ],
+    );
+    assert_rejected_with(
+        "recovery with missing additive offset",
+        "inventory",
+        "recovery-contradictory",
+        &temporary.root,
+        &manifest,
+        &expected,
+        "normalized additive SCCM timestamp provenance",
+    );
+}
+
+#[test]
+fn independent_review_blocker_invalid_additive_timestamp_provenance_is_rejected() {
+    let (temporary, manifest, mut expected) = copied_inventory_recovery_with_time_replacements(
+        "invalid-offset",
+        &[
+            ("time=\"01:20:00.000+000\"", "time=\"06:00:00.000+99999\""),
+            ("time=\"01:20:01.000+000\"", "time=\"07:00:00.000+000\""),
+        ],
+    );
+    let artifact_id = manifest["artifacts"][0]["artifactId"]
+        .as_str()
+        .expect("artifactId is a string");
+    expected["sourceLocalObservations"]
+        .as_array_mut()
+        .expect("sourceLocalObservations are an array")
+        .push(json!({
+            "observationId": "inventory-recovery-invalid-offset",
+            "kind": "invalidOffset",
+            "artifactIds": [artifact_id],
+            "confidenceCeiling": "low",
+            "correlationEligible": false,
+            "claim": "Invalid source offset cannot support ordered recovery."
+        }));
+    assert_rejected_with(
+        "recovery with invalid additive offset",
+        "inventory",
+        "recovery-contradictory",
+        &temporary.root,
+        &manifest,
+        &expected,
+        "normalized additive SCCM timestamp provenance",
+    );
+}
+
+#[test]
 fn dynamic_evidence_mutations_cannot_fabricate_exact_or_high_confidence_facts() {
     let (scenario_root, manifest, expected) = load_contract("inventory", "success");
 
@@ -1677,6 +2104,7 @@ fn review_blocker_opposing_terminal_records_cannot_be_promoted_high() {
     promoted_failure["transactions"][0]["state"] = json!("failed");
     promoted_failure["transactions"][0]["classification"] = json!("confirmedFailure");
     promoted_failure["transactions"][0]["confidence"] = json!("high");
+    promoted_failure["transactions"][0]["lastSuccessfulPhase"] = json!("Queue");
     assert_rejected_with(
         "opposing terminals promoted to confirmed failure",
         "inventory",

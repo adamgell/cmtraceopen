@@ -33,7 +33,7 @@
         "fragmentComplete": false
       },
       "sourceVersion": null,
-      "capturedUtc": "2026-07-30T01:00:00Z",
+      "capturedUtc": "2026-07-30T04:00:00Z",
       "bytesCopied": 0,
       "relativePath": null
     },
@@ -56,7 +56,7 @@
         "fragmentComplete": false
       },
       "sourceVersion": "5.00.TEST.325",
-      "capturedUtc": "2026-07-30T01:00:00Z",
+      "capturedUtc": "2026-07-30T04:00:00Z",
       "bytesCopied": 0,
       "relativePath": null
     },
@@ -79,7 +79,7 @@
         "fragmentComplete": false
       },
       "sourceVersion": "5.00.TEST.325",
-      "capturedUtc": "2026-07-30T01:00:00Z",
+      "capturedUtc": "2026-07-30T04:00:00Z",
       "bytesCopied": 59,
       "relativePath": "evidence/client-compliance/root-a/current/DCMAgent.log",
       "encoding": "utf-8",
@@ -108,7 +108,7 @@
         "fragmentComplete": false
       },
       "sourceVersion": "5.00.TEST.325",
-      "capturedUtc": "2026-07-30T01:00:00Z",
+      "capturedUtc": "2026-07-30T04:00:00Z",
       "bytesCopied": 0,
       "relativePath": null
     },
@@ -131,7 +131,7 @@
         "fragmentComplete": false
       },
       "sourceVersion": "5.00.TEST.325",
-      "capturedUtc": "2026-07-30T01:00:00Z",
+      "capturedUtc": "2026-07-30T04:00:00Z",
       "bytesCopied": 0,
       "relativePath": null
     },
@@ -154,7 +154,7 @@
         "fragmentComplete": false
       },
       "sourceVersion": "5.00.TEST.325",
-      "capturedUtc": "2026-07-30T01:00:00Z",
+      "capturedUtc": "2026-07-30T04:00:00Z",
       "bytesCopied": 42,
       "relativePath": "evidence/client-compliance/root-a/current/CIAgent.log",
       "encoding": "utf-8",
@@ -182,7 +182,7 @@
         "fragmentComplete": false
       },
       "sourceVersion": "5.00.TEST.325",
-      "capturedUtc": "2026-07-30T01:00:00Z",
+      "capturedUtc": "2026-07-30T04:00:00Z",
       "bytesCopied": 60,
       "relativePath": "evidence/client-compliance/root-a/current/CITaskMgr.log",
       "encoding": "utf-8",

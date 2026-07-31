@@ -90,7 +90,13 @@ The expected contract keeps output deterministic and preparation-only:
 - every transaction is bound to one workflow and one versioned exact-key
   profile;
 - every evidence reference names a manifest artifact and valid line range;
-- transaction citations contain complete raw CCM records;
+- transaction citations contain complete raw CCM records whose additive SCCM
+  timestamp provenance normalizes to UTC no later than the artifact's canonical
+  `capturedUtc`;
+- `lastSuccessfulPhase` follows the declared family phase order, and a
+  confirmed failure requests exactly the bounded next artifact for that phase;
+- successful, recovering, evaluative, and symptom-only transactions do not
+  invent next-artifact requests;
 - `findings` remains empty until production reducers are authorized;
 - source-local observations have a low confidence ceiling and are not
   correlation eligible;
@@ -127,11 +133,18 @@ of:
 - high-confidence output from an unknown source profile or invalid timestamp
   offset;
 - medium-confidence recovery from an unknown profile or unusable offset;
+- recovery ordering through the additive SCCM timestamp envelope, including a
+  signless `+240` CCM offset whose legacy public projection is `Some(0)`;
+- recovery promotion when additive timestamp provenance is missing or invalid;
+- a cited complete record whose normalized timestamp is later than the
+  artifact's canonical capture time;
+- phase-order claims that skip ahead, including a collect failure claiming that
+  report already succeeded;
 - promotion of missing coverage to captured evidence;
 - promotion of noncompliance to confirmed failure;
 - same-minute key borrowing between distinct root artifacts;
 - merging same-minute inventory and compliance terminal failures;
-- unbounded next-artifact requests.
+- missing, altered, or spurious next-artifact requests.
 
 This mutation layer is independent of the positive fixture assertions, so an
 internally consistent edit to both a manifest and its expected file cannot

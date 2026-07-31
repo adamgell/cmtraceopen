@@ -33,7 +33,7 @@
         "fragmentComplete": false
       },
       "sourceVersion": "5.00.TEST.325",
-      "capturedUtc": "2026-07-30T01:00:00Z",
+      "capturedUtc": "2026-07-30T04:00:00Z",
       "bytesCopied": 42,
       "relativePath": "evidence/client-compliance/root-a/current/CIAgent.log",
       "encoding": "utf-8",
@@ -61,7 +61,7 @@
         "fragmentComplete": true
       },
       "sourceVersion": "9.99.UNKNOWN",
-      "capturedUtc": "2026-07-30T01:00:00Z",
+      "capturedUtc": "2026-07-30T04:00:00Z",
       "bytesCopied": 329,
       "relativePath": "evidence/client-compliance/root-a/current/CITaskMgr.log",
       "encoding": "utf-8",
@@ -89,7 +89,7 @@
         "fragmentComplete": true
       },
       "sourceVersion": "5.00.TEST.325",
-      "capturedUtc": "2026-07-30T01:00:00Z",
+      "capturedUtc": "2026-07-30T04:00:00Z",
       "bytesCopied": 647,
       "relativePath": "evidence/client-compliance/root-a/current/DCMReporting.log",
       "encoding": "utf-8",
