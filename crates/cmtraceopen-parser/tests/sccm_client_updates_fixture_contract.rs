@@ -904,12 +904,20 @@ fn citation_triples(
         .collect()
 }
 
+fn evidence_refs_cite_unique_records(references: &[(String, u64, u64)]) -> bool {
+    let mut cited_records = BTreeSet::new();
+    references.iter().all(|(artifact_id, start_line, end_line)| {
+        (*start_line..=*end_line).all(|line| cited_records.insert((artifact_id.clone(), line)))
+    })
+}
+
 fn citation_failures(
     label: &str,
     citations: &Value,
     index: &BTreeMap<String, IndexedArtifact>,
 ) -> Vec<String> {
     let mut failures = Vec::new();
+    let mut in_bounds = Vec::new();
     for (artifact_id, start_line, end_line) in citation_triples(citations, label, &mut failures) {
         let Some(artifact) = index.get(&artifact_id) else {
             failures.push(format!(
@@ -926,7 +934,14 @@ fn citation_failures(
             failures.push(format!(
                 "{label}: same-scenario citation {artifact_id}:{start_line}-{end_line} exceeds {line_count} lines"
             ));
+        } else {
+            in_bounds.push((artifact_id, start_line, end_line));
         }
+    }
+    if !evidence_refs_cite_unique_records(&in_bounds) {
+        failures.push(format!(
+            "{label}: evidence ranges overlap and double-count a cited record"
+        ));
     }
     failures
 }
