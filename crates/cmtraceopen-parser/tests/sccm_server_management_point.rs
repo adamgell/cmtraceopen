@@ -294,16 +294,26 @@ fn assert_transaction_contract(scenario: &str, analysis: &Value, expected: &Valu
         for expected_reference in expected_ranges {
             assert!(
                 actual_references.iter().any(|reference| {
-                    reference["artifactId"] == expected_reference["artifactId"]
+                    reference_is_within_expected_ranges(
+                        reference,
+                        std::slice::from_ref(expected_reference),
+                    )
                 }),
-                "{scenario}: {transaction_id} omitted expected artifact evidence"
+                "{scenario}: {transaction_id} omitted an expected evidence range"
             );
         }
 
         let observations = actual["observations"]
             .as_array()
             .expect("transaction observations");
-        assert!(!observations.is_empty(), "{scenario}: observations");
+        assert_eq!(
+            observations.len(),
+            expected_transaction["observations"]
+                .as_array()
+                .expect("expected transaction observations")
+                .len(),
+            "{scenario}: observation count"
+        );
         assert!(observations.iter().all(|observation| {
             observation["evidence"]
                 .as_array()
@@ -561,6 +571,21 @@ fn management_point_counterpart_handoff_requires_an_exact_policy_key() {
             .expect("counterpart facts")
             .is_empty(),
         "a matching-looking client key cannot become an MP counterpart fact"
+    );
+
+    let failed = serde_json::to_value(analyze_management_point(&load_bundle("policy-failure")))
+        .expect("policy failure analysis");
+    let failed_fact = failed["counterpartReadyFacts"]
+        .as_array()
+        .expect("counterpart facts")
+        .iter()
+        .find(|fact| fact["state"] == "failed")
+        .expect("failed policy counterpart fact");
+    assert_eq!(failed_fact["classification"], "confirmedFailure");
+    assert_eq!(failed_fact["confidence"], "high");
+    assert_eq!(
+        failed_fact["terminalEvidence"], failed_fact["evidence"],
+        "a failed handoff must identify its terminal evidence"
     );
 }
 
@@ -871,4 +896,71 @@ fn management_point_output_never_exports_input_paths_hosts_or_raw_messages() {
             "public MP output leaked {prohibited}"
         );
     }
+}
+
+#[test]
+fn management_point_duplicate_artifact_ids_are_ambiguous_not_order_authoritative() {
+    let mut first = load_bundle("healthy-policy");
+    let mut duplicate = first
+        .sources
+        .iter()
+        .find(|source| source.producer == "MP_GetPolicy")
+        .expect("policy source")
+        .clone();
+    duplicate.artifact.configmgr_version = Some("5.00.UNKNOWN.0000".to_owned());
+    first.sources.push(duplicate);
+
+    let mut second = first.clone();
+    second.sources.reverse();
+    let first_analysis = analysis_value(&first);
+    let second_analysis = analysis_value(&second);
+    assert_eq!(
+        first_analysis, second_analysis,
+        "duplicate artifact handling must not depend on vector order"
+    );
+    assert_no_high_success(&first_analysis, "duplicate artifact identity");
+}
+
+#[test]
+fn management_point_site_codes_are_canonicalized_for_counterpart_keys() {
+    let mut bundle = load_bundle("healthy-policy");
+    bundle.topology.site_code = "lab".to_owned();
+    for evidence in &mut bundle.evidence {
+        evidence.message = evidence.message.replace("SiteCode={LAB}", "SiteCode={lab}");
+    }
+
+    let analysis = analysis_value(&bundle);
+    assert_eq!(analysis["transactions"][0]["state"], "succeeded");
+    assert_eq!(analysis["transactions"][0]["key"]["siteCode"], "LAB");
+    assert_eq!(
+        analysis["counterpartReadyFacts"][0]["key"]["siteCode"],
+        "LAB"
+    );
+}
+
+#[test]
+fn management_point_missing_captured_phase_is_not_reported_as_an_absent_artifact() {
+    let mut bundle = load_bundle("healthy-policy");
+    let response = bundle
+        .evidence
+        .iter_mut()
+        .find(|evidence| evidence.message.contains("Respond succeeded after retry"))
+        .expect("response success evidence");
+    response.message = response.message.replace(
+        "Respond succeeded after retry",
+        "Respond candidate retained without an outcome",
+    );
+
+    let analysis = analysis_value(&bundle);
+    assert_no_high_success(&analysis, "missing captured response outcome");
+    assert!(
+        analysis["coverageGaps"]
+            .as_array()
+            .expect("coverage gaps")
+            .iter()
+            .any(|gap| {
+                gap["logicalArtifactId"] == "server-mp-policy" && gap["state"] == "parseFailed"
+            }),
+        "captured-but-unusable phase evidence is not an absent artifact"
+    );
 }
