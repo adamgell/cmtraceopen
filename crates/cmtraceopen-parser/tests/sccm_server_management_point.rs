@@ -590,6 +590,35 @@ fn management_point_counterpart_handoff_requires_an_exact_policy_key() {
 }
 
 #[test]
+fn failed_counterpart_handoff_cites_the_decided_terminal_failure() {
+    let mut bundle = load_bundle("policy-failure");
+    let later_outcome = bundle
+        .evidence
+        .iter_mut()
+        .find(|evidence| {
+            evidence.reference.artifact_id == "mp-policy-response-current"
+                && evidence.reference.line_start == Some(5)
+        })
+        .expect("later policy evidence");
+    later_outcome.message = "Record outcome succeeded RequestId={28555555-5555-5555-5555-555555555555} PolicyId={a8555555-5555-5555-5555-555555555555} ClientHandle={safe:client:mp-policy-primary-05} SiteCode={LAB} MPHandle={safe:mp:lab-mp-01}".to_owned();
+
+    let analysis = analysis_value(&bundle);
+    let failed_fact = analysis["counterpartReadyFacts"]
+        .as_array()
+        .expect("counterpart facts")
+        .iter()
+        .find(|fact| fact["state"] == "failed")
+        .expect("failed policy counterpart fact");
+
+    assert_eq!(failed_fact["phase"], "respond");
+    assert_eq!(failed_fact["evidence"]["lineStart"], 2);
+    assert_eq!(
+        failed_fact["terminalEvidence"], failed_fact["evidence"],
+        "a later successful fact cannot masquerade as terminal failure evidence"
+    );
+}
+
+#[test]
 fn management_point_catalog_declares_every_reducer_source() {
     let sources = declared_source_catalog()
         .into_iter()
