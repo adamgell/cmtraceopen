@@ -152,8 +152,7 @@ pub struct SccmArtifactRequest {
     pub reason: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq)]
 pub struct SccmFinding {
     pub finding_id: String,
     pub class: SccmFindingClass,
@@ -168,6 +167,51 @@ pub struct SccmFinding {
     pub coverage_gaps: Vec<SccmFindingCoverageGap>,
     pub correlation_keys: Vec<SccmCorrelationKey>,
     pub next_artifacts: Vec<SccmArtifactRequest>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SccmFindingSerializeWire<'a> {
+    finding_id: &'a str,
+    class: &'a SccmFindingClass,
+    phase: &'a SccmPhase,
+    role: &'a SccmRole,
+    severity: &'a Severity,
+    confidence: &'a SccmConfidence,
+    title: &'a str,
+    summary: &'a str,
+    evidence: &'a [SccmEvidenceRef],
+    terminal_evidence: &'a [SccmTerminalEvidence],
+    coverage_gaps: &'a [SccmFindingCoverageGap],
+    correlation_keys: &'a [SccmCorrelationKey],
+    next_artifacts: &'a [SccmArtifactRequest],
+}
+
+impl Serialize for SccmFinding {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        self.validate().map_err(|error| {
+            S::Error::custom(format!("invalid SCCM finding contract: {error:?}"))
+        })?;
+        SccmFindingSerializeWire {
+            finding_id: &self.finding_id,
+            class: &self.class,
+            phase: &self.phase,
+            role: &self.role,
+            severity: &self.severity,
+            confidence: &self.confidence,
+            title: &self.title,
+            summary: &self.summary,
+            evidence: &self.evidence,
+            terminal_evidence: &self.terminal_evidence,
+            coverage_gaps: &self.coverage_gaps,
+            correlation_keys: &self.correlation_keys,
+            next_artifacts: &self.next_artifacts,
+        }
+        .serialize(serializer)
+    }
 }
 
 #[derive(Deserialize)]

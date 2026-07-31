@@ -747,6 +747,24 @@ fn finding_deserialization_rejects_unsound_high_and_forged_terminal_state() {
 }
 
 #[test]
+fn finding_serialization_rejects_post_build_invalid_mutation() {
+    let evidence = finding_evidence_ref("client-app-enforce", "client-app-enforce:1-1");
+    let mut finding = SccmFindingBuilder::new("mutated-confirmed-failure")
+        .class(SccmFindingClass::ConfirmedFailure)
+        .phase(SccmPhase::Enforcement)
+        .role(SccmRole::Client)
+        .severity(Severity::Error)
+        .confidence(SccmConfidence::High)
+        .evidence(vec![evidence.clone()])
+        .terminal_evidence(vec![SccmTerminalEvidence::observed_failure(evidence)])
+        .build()
+        .unwrap();
+    finding.terminal_evidence.clear();
+
+    assert!(serde_json::to_value(finding).is_err());
+}
+
+#[test]
 fn finding_deserialization_sorts_and_deduplicates_terminal_evidence() {
     let first = finding_evidence_ref("artifact-a", "entry-a");
     let second = finding_evidence_ref("artifact-b", "entry-b");
