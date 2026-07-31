@@ -543,7 +543,7 @@ fn phase_is_owned_by(basename: &str, phase: &str) -> bool {
     matches!(
         (basename, phase),
         ("replmgr.log", "initiate" | "queueOrSerialize")
-            | ("sender.log", "send")
+            | ("sender.log" | "sender.lo_", "send")
             | ("despool.log", "receive" | "process" | "healthyOrTerminal")
             | ("rcmctrl.log", "acknowledge" | "healthyOrTerminal")
     )
