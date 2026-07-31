@@ -827,7 +827,7 @@ fn reason_scope_is_within_catalog_artifact(
             tokens.iter().any(|token| is_collection_action(token.text));
 
         if is_confirmation {
-            confirmation_clause_is_non_authorizing(&tokens, &identity_ranges)
+            confirmation_clause_is_non_authorizing(clause, &tokens, &identity_ranges)
         } else if contains_collection_directive {
             collection_clause_is_catalog_bounded(clause, &tokens, &identity_ranges)
         } else {
@@ -1179,9 +1179,19 @@ fn has_unbound_dotted_target(
 }
 
 fn confirmation_clause_is_non_authorizing(
+    clause: &str,
     tokens: &[RequestReasonToken<'_>],
     identity_ranges: &[(usize, usize)],
 ) -> bool {
+    if has_unbound_dotted_target(clause, tokens, identity_ranges)
+        || tokens
+            .iter()
+            .any(|token| is_collection_scope_nominal(token.text))
+        || !confirmation_tokens_match_defined_form(tokens, identity_ranges)
+    {
+        return false;
+    }
+
     let has_identity = !identity_ranges.is_empty();
     let has_retry = tokens.iter().any(|token| token.text == "retry");
     let has_root_cause = tokens
@@ -1247,6 +1257,77 @@ fn confirmation_clause_is_non_authorizing(
         }
     }
     true
+}
+
+fn confirmation_tokens_match_defined_form(
+    tokens: &[RequestReasonToken<'_>],
+    identity_ranges: &[(usize, usize)],
+) -> bool {
+    let Some((confirmation, body)) = tokens.split_first() else {
+        return false;
+    };
+    if confirmation.text != "confirm" {
+        return false;
+    }
+
+    let has_subject = body.iter().any(|token| {
+        token_is_covered_by_identity(token, identity_ranges)
+            || is_evidence_narrative_subject(token.text)
+            || matches!(
+                token.text,
+                "behavior"
+                    | "cause"
+                    | "content"
+                    | "download"
+                    | "encryption"
+                    | "image"
+                    | "imaging"
+                    | "retry"
+            )
+    });
+    has_subject
+        && body.iter().all(|token| {
+            token_is_covered_by_identity(token, identity_ranges)
+                || is_evidence_narrative_subject(token.text)
+                || is_evidence_narrative_predicate(token.text)
+                || matches!(
+                    token.text,
+                    "a" | "all"
+                        | "as"
+                        | "behavior"
+                        | "bounded"
+                        | "by"
+                        | "cause"
+                        | "cited"
+                        | "client"
+                        | "code"
+                        | "complete"
+                        | "content"
+                        | "disk"
+                        | "download"
+                        | "downloaded"
+                        | "encryption"
+                        | "every"
+                        | "file"
+                        | "files"
+                        | "for"
+                        | "full"
+                        | "ids"
+                        | "image"
+                        | "imaging"
+                        | "in"
+                        | "not"
+                        | "of"
+                        | "record"
+                        | "recursive"
+                        | "retry"
+                        | "root"
+                        | "system"
+                        | "the"
+                        | "whole"
+                        | "wide"
+                )
+        })
 }
 
 fn narrative_clause_has_no_collection_scope(tokens: &[RequestReasonToken<'_>]) -> bool {
