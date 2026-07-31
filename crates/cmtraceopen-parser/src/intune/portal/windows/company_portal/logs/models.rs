@@ -2,7 +2,10 @@
 //!
 //! Serde recipe follows the ESP module: `rename_all = "camelCase"`, no
 //! `skip_serializing_if`, determinism from declaration order. Every type that
-//! can fail to parse keeps the original text so nothing observed is lost.
+//! can fail to parse keeps its source text, so a record the grammar cannot read
+//! is still reported rather than dropped. See [`super::framing`] for the two
+//! documented exceptions to byte-for-byte fidelity (trailing whitespace and
+//! blank lines).
 
 use serde::{Deserialize, Serialize};
 
@@ -75,13 +78,19 @@ pub struct CompanyPortalSeverity {
 }
 
 /// How far a record timestamp could be resolved.
+///
+/// Only resolved timestamps are represented. A field that has the right shape
+/// but is not a real instant (`2026-13-45T99:99:99.0000000Z`) does not produce
+/// a timestamp at all: `parse_utc_instant` rejects it, the record is framed as
+/// [`FramedRecordKind::Malformed`], and it reaches the document with
+/// `timestamp: None` plus a coverage row. There is deliberately no "invalid
+/// instant" variant, because a half-resolved timestamp would be a claim the
+/// evidence does not support.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum CompanyPortalTimestampKind {
     /// Resolved to an absolute UTC instant.
     Utc,
-    /// The field had the right shape but is not a real instant.
-    Invalid,
 }
 
 /// A record timestamp. `raw_text` is always the field exactly as written.
@@ -196,7 +205,8 @@ pub struct CompanyPortalLogRecord {
     /// a null scenario; it is kept as the string it is, not turned into an
     /// absent field.
     pub scenario: Option<String>,
-    /// Field 5 — monotonic sequence value. Not proven to be a thread id, so it
+    /// Field 5 — unsigned integer whose semantics are unproven. It is *not*
+    /// asserted to be monotonic, and it is not proven to be a thread id, so it
     /// is never mapped onto a thread column.
     pub sequence: Option<u64>,
     /// Field 6 — correlation/activity identifier.
@@ -208,7 +218,11 @@ pub struct CompanyPortalLogRecord {
     /// Field 8 onward, verbatim, including any nested legacy ConfigMgr trace
     /// text and its own day-first date.
     pub message: String,
-    /// The record's original text, including continuation lines.
+    /// The record's source text, head plus any continuation lines, joined with
+    /// `\n`. Trailing whitespace is stripped from each line before framing (a
+    /// record starts in column 0, so that test has to run on the trimmed line),
+    /// and blank lines are not carried. Nothing else is altered: the nested
+    /// legacy ConfigMgr trace text and its day-first date survive verbatim.
     pub raw_text: String,
 }
 

@@ -153,7 +153,7 @@ fn build_coverage(
         },
         detail: Some(format!(
             "{} read {parsed_count} of {total_records} record(s) with grammar V1; \
-             {unreadable} record(s) did not match and are preserved verbatim.",
+             {unreadable} record(s) did not match and are preserved as source text.",
             file.file_name
         )),
     });
