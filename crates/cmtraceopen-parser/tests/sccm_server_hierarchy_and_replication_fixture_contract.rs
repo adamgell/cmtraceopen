@@ -94,6 +94,15 @@ fn safe_server_handle(value: &str) -> bool {
     })
 }
 
+fn artifact_path_matches_basename(artifact: &Value, field: &str, prefix: &str) -> bool {
+    artifact["originalBasename"]
+        .as_str()
+        .zip(artifact[field].as_str())
+        .is_some_and(|(basename, path)| {
+            safe_segmented_path(path, prefix) && path.rsplit('/').next() == Some(basename)
+        })
+}
+
 fn coverage_state(value: &str) -> Option<SccmCoverageState> {
     match value {
         "captured" => Some(SccmCoverageState::Captured),
@@ -192,15 +201,28 @@ fn artifact_has_exact_public_provenance(artifact: &Value) -> bool {
     artifact["producerHostHandle"]
         .as_str()
         .is_some_and(safe_server_handle)
-        && artifact["sanitizedSourcePath"]
-            .as_str()
-            .is_some_and(|value| safe_segmented_path(value, "SYNTHETIC://"))
+        && artifact_path_matches_basename(artifact, "sanitizedSourcePath", "SYNTHETIC://")
         && artifact["pathFingerprint"].as_str().is_some_and(|value| {
             value
                 .strip_prefix("synthetic:")
                 .is_some_and(|suffix| !suffix.is_empty())
         })
         && artifact["sourceVersion"].as_str() == Some(EXACT_SOURCE_VERSION)
+}
+
+fn artifact_has_canonical_basename_rotation(artifact: &Value) -> bool {
+    matches!(
+        (
+            artifact["originalBasename"].as_str(),
+            artifact["rotation"]["kind"].as_str(),
+            artifact["rotation"].get("value"),
+        ),
+        (
+            Some("replmgr.log" | "sender.log" | "despool.log" | "rcmctrl.log"),
+            Some("current"),
+            None,
+        ) | (Some("sender.lo_"), Some("loUnderscore"), None)
+    )
 }
 
 fn target_host_for_site<'a>(manifest: &'a Value, site: &str) -> Option<&'a str> {
@@ -275,7 +297,7 @@ fn record_matches_topology(
 
 fn artifact_is_exact_candidate(manifest: &Value, artifact: &Value) -> bool {
     artifact["captureState"] == "captured"
-        && artifact["sourceVersion"] == EXACT_SOURCE_VERSION
+        && artifact_has_exact_public_provenance(artifact)
         && artifact["collectedUtc"]
             .as_str()
             .is_some_and(|value| DateTime::parse_from_rfc3339(value).is_ok())
@@ -285,15 +307,9 @@ fn artifact_is_exact_candidate(manifest: &Value, artifact: &Value) -> bool {
         && artifact["collectionLimit"]["limitApplied"]
             .as_bool()
             .is_some()
-        && artifact["relativePath"]
-            .as_str()
-            .is_some_and(|value| safe_segmented_path(value, "evidence/"))
-        && artifact["pathFingerprint"].as_str().is_some_and(|value| {
-            value
-                .strip_prefix("synthetic:")
-                .is_some_and(|suffix| !suffix.is_empty())
-        })
+        && artifact_path_matches_basename(artifact, "relativePath", "evidence/")
         && rotation(&artifact["rotation"]).is_some()
+        && artifact_has_canonical_basename_rotation(artifact)
         && artifact["rotation"]["lineageId"]
             .as_str()
             .is_some_and(|value| !value.is_empty())
@@ -836,17 +852,9 @@ fn coverage_request_basis(
             .iter()
             .map(|artifact| artifact["rotation"]["lineageId"].as_str())
             .collect::<Option<BTreeSet<_>>>()?;
-        let canonical_rotation = matching.iter().all(|artifact| {
-            matches!(
-                (
-                    artifact["originalBasename"].as_str(),
-                    artifact["rotation"]["kind"].as_str(),
-                    artifact["rotation"].get("value"),
-                ),
-                (Some("sender.log"), Some("current"), None)
-                    | (Some("sender.lo_"), Some("loUnderscore"), None)
-            )
-        });
+        let canonical_rotation = matching
+            .iter()
+            .all(|artifact| artifact_has_canonical_basename_rotation(artifact));
         let canonical_basenames =
             BTreeSet::from(["sender.lo_".to_owned(), "sender.log".to_owned()]);
         if matching.len() != 2
@@ -1227,6 +1235,7 @@ fn identity_and_schema_failures(scenario: &str, manifest: &Value, expected: &Val
             || !matches!(artifact["direction"].as_str(), Some("origin" | "target"))
             || !artifact_has_exact_source_tuple(artifact)
             || !artifact_has_exact_public_provenance(artifact)
+            || !artifact_has_canonical_basename_rotation(artifact)
             || artifact["collectedUtc"]
                 .as_str()
                 .is_none_or(|value| DateTime::parse_from_rfc3339(value).is_err())
@@ -1267,7 +1276,7 @@ fn identity_and_schema_failures(scenario: &str, manifest: &Value, expected: &Val
         match state {
             Some("captured" | "capped" | "parseFailed") => {
                 let relative_path = artifact["relativePath"].as_str();
-                if relative_path.is_none_or(|value| !safe_segmented_path(value, "evidence/"))
+                if !artifact_path_matches_basename(artifact, "relativePath", "evidence/")
                     || relative_path
                         .map(str::to_ascii_lowercase)
                         .is_none_or(|value| !destinations.insert(value))
@@ -1869,14 +1878,18 @@ fn hierarchy_candidates_are_deterministic_and_collision_resistant() {
         .expect("healthy artifacts are an array")
         .clone();
     let mut collision = artifacts[1].clone();
-    collision["artifactId"] = Value::String("healthy-05-sender-numbered".to_owned());
-    collision["pathFingerprint"] = Value::String("synthetic:healthy-sender-numbered".to_owned());
+    collision["artifactId"] = Value::String("healthy-05-sender-lo".to_owned());
+    collision["originalBasename"] = Value::String("sender.lo_".to_owned());
+    collision["sanitizedSourcePath"] =
+        Value::String("SYNTHETIC://configured-root/LAB/Logs/sender.lo_".to_owned());
+    collision["pathFingerprint"] = Value::String("synthetic:healthy-sender-lo".to_owned());
     collision["rotation"] = serde_json::json!({
-        "kind": "numbered",
-        "value": 1,
-        "lineageId": "healthy-sender-numbered",
+        "kind": "loUnderscore",
+        "lineageId": "healthy-sender-lo",
         "fragmentComplete": true
     });
+    collision["relativePath"] =
+        Value::String("evidence/server-hierarchy-transfer/origin/lo_/sender.lo_".to_owned());
     artifacts.push(collision);
     let mut collision_manifest = manifest.clone();
     collision_manifest["artifacts"] = Value::Array(artifacts.clone());
@@ -2075,7 +2088,9 @@ fn hierarchy_manifest_sources_and_physical_evidence_are_bounded() {
                     "{context}: source escapes the raw CCM hierarchy catalog"
                 ));
             }
-            if !artifact_has_exact_public_provenance(artifact) {
+            if !artifact_has_exact_public_provenance(artifact)
+                || !artifact_has_canonical_basename_rotation(artifact)
+            {
                 failures.push(format!("{context}: unsafe or empty provenance"));
             }
             if artifact["pathFingerprint"]
@@ -2096,7 +2111,7 @@ fn hierarchy_manifest_sources_and_physical_evidence_are_bounded() {
             let physical = matches!(state, "captured" | "capped" | "parseFailed");
             if physical {
                 let relative_path = artifact["relativePath"].as_str().unwrap_or_default();
-                if !safe_segmented_path(relative_path, "evidence/")
+                if !artifact_path_matches_basename(artifact, "relativePath", "evidence/")
                     || !destinations.insert(relative_path.to_ascii_lowercase())
                     || artifact["encoding"] != "utf-8"
                     || artifact["bytesCopied"].as_u64().is_none()
