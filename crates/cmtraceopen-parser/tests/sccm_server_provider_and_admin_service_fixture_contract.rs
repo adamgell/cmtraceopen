@@ -275,7 +275,9 @@ fn parse_fixture_fields(message: &str) -> Result<BTreeMap<String, String>, Strin
             .split_once('=')
             .ok_or_else(|| format!("fixture field at segment {segment_index} is not Name=Value"))?;
         if !allowed.contains(&name) || value.is_empty() {
-            return Err(format!("unsupported or empty fixture field {name}"));
+            return Err(format!(
+                "unsupported or empty fixture field at segment {segment_index}"
+            ));
         }
         if matches!(name, "CallerHandle" | "QueryHandle" | "Authorization") {
             if value != "[redacted:sccm-public-message-v1]" {

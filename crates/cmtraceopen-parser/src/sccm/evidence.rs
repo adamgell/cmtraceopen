@@ -259,11 +259,18 @@ fn redact_windows_identities(value: &str) -> String {
     identity_ranges.sort_unstable();
     identity_ranges.dedup();
 
+    let mut merged_ranges: Vec<(usize, usize)> = Vec::with_capacity(identity_ranges.len());
     for (start, end) in identity_ranges {
-        if start < copied_through {
-            continue;
+        if let Some((_, merged_end)) = merged_ranges.last_mut() {
+            if start <= *merged_end {
+                *merged_end = (*merged_end).max(end);
+                continue;
+            }
         }
+        merged_ranges.push((start, end));
+    }
 
+    for (start, end) in merged_ranges {
         projected.push_str(&value[copied_through..start]);
         projected.push_str(PUBLIC_MESSAGE_REDACTION);
         copied_through = end;
@@ -417,7 +424,7 @@ mod tests {
     #[test]
     fn export_merges_overlapping_identity_ranges_without_mutating_raw_snapshot() {
         let raw_identity = r"users\ADMIN\secret";
-        let raw_message = format!("Profile {raw_identity}; status=71");
+        let raw_message = format!("{raw_identity}; status=71");
         let text = format!(
             r#"<![LOG[{raw_message}]LOG]!><time="10:00:00.000-240" date="07-30-2026" component="{raw_identity}" context="" type="1" thread="42" file="{raw_identity}">"#
         );
